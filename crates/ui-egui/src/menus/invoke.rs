@@ -359,6 +359,18 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
         // Only interactive creation opens the Color Picker; it creates the layer on OK,
         // so Cancel leaves neither an orphan layer nor an undo/redo history entry.
         // Explicit parameters continue straight to the engine.
+        "image.fillSelection" | "image.removeObject" | "image.expandCanvas" | "image.replaceBackground" if params.as_object().is_none_or(|o| o.is_empty()) => {
+            let dialog = crate::dialogs::generate_ui::open_edit(app, id)?;
+            Ok(json!({"dialog": dialog}))
+        }
+        "image.generate" if params.as_object().is_none_or(|o| o.is_empty()) => {
+            let dialog = crate::dialogs::generate_ui::open(app)?;
+            Ok(json!({"dialog": dialog}))
+        }
+        "layer.backgroundFill" if params.as_object().is_none_or(|o| o.is_empty()) => {
+            let dialog = crate::dialogs::background_fill_ui::open(app)?;
+            Ok(json!({"dialog": dialog}))
+        }
         "layer.newFillLayer.solidColor" if params.as_object().is_none_or(|o| o.is_empty()) => {
             let dialog = crate::solid_fill_ui::open_new(app).ok_or("no document is open")?;
             Ok(json!({"dialog": dialog}))

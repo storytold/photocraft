@@ -101,6 +101,20 @@ fn no_command_panics_or_hangs_on_adversarial_params() {
             {
                 o.insert("dryRun".into(), json!(true));
             }
+            // Exercise inference command validation without sending real model jobs.
+            if matches!(
+                spec.id,
+                "image.generate"
+                    | "image.fillSelection"
+                    | "image.removeObject"
+                    | "image.expandCanvas"
+                    | "image.replaceBackground"
+                    | "select.subjectEnki"
+                    | "layer.removeBackgroundEnki"
+            ) && let Some(o) = p.as_object_mut()
+            {
+                o.insert("dryRun".into(), json!(true));
+            }
             let p = &p;
             if let Err(why) = run_guarded(spec.id, p) {
                 bad.push(format!("{} [{why}] <- {p}", spec.id));

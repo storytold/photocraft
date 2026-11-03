@@ -136,7 +136,15 @@ pub fn field_width(avail: f32, cols: usize, label_w: f32) -> f32 {
 /// subject selection, type layers its conversions, shapes and smart objects their own.
 pub fn quick_actions(content: &LayerContent) -> &'static [(&'static str, &'static str)] {
     match content {
-        LayerContent::Raster(_) => &[("Remove Background", "layer.removeBackground"), ("Select Subject", "select.subject")],
+        LayerContent::Raster(_) => &[
+            ("Remove Background", "layer.removeBackground"),
+            ("Select Subject", "select.subject"),
+            ("Subject with Enki", "select.subjectEnki"),
+            ("Remove Background with Enki", "layer.removeBackgroundEnki"),
+            ("Replace Background", "image.replaceBackground"),
+            ("Background Fill…", "layer.backgroundFill"),
+            ("Generate Image…", "image.generate"),
+        ],
         LayerContent::Text(_) => &[
             ("Convert to Shape", "type.convertToShape"),
             ("Convert to Paragraph Text", "type.convertToParagraphText"),
@@ -149,6 +157,8 @@ pub fn quick_actions(content: &LayerContent) -> &'static [(&'static str, &'stati
             ("Edit Contents", "layer.smartObjects.editContents"),
             ("Convert to Layers", "layer.smartObjects.convertToLayers"),
             ("Rasterize Smart Object", "layer.rasterize.smartObject"),
+            ("Background Fill…", "layer.backgroundFill"),
+            ("Generate Image…", "image.generate"),
         ],
         LayerContent::Group(_) => &[("Ungroup Layers", "layer.ungroupLayers"), ("Convert to Smart Object", "layer.smartObjects.convertToSmartObject")],
         LayerContent::Fill(_) => &[("Rasterize Fill Content", "layer.rasterize.fillContent")],
