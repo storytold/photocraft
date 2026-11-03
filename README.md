@@ -35,11 +35,6 @@
   <img src="docs/images/photocraft-demo.jpg" alt="ShotoPhopEX editing Hokusai's The Great Wave: type layers, a drop shadow, Vibrance and Curves adjustment layers, and the Curves editor over the histogram" width="100%">
 </p>
 
-<!--
-  Generative screenshots go here (docs/images/genai/): Generative Fill with its Variations strip,
-  Generate Image in the Generate panel, Remove with one stroke, Split into Layers, Select by text.
--->
-
 ShotoPhopEX is a fork of [PhotoCraft](https://github.com/storytold/photocraft), the clean-room,
 pure-Rust reimplementation of a professional layered image editor. Upstream deliberately left
 generative AI out. This fork puts it in, the way a working artist wants it: every result lands on
@@ -67,6 +62,50 @@ on.
     <td width="25%" valign="top">
       <h3>🤖 Agent-ready</h3>
       Every generative action is a command, so the UI, the CLI and an MCP server can all drive it.
+    </td>
+  </tr>
+</table>
+
+## 🎬 See it work
+
+Everything below was recorded in the app on an RTX 5090. The photo itself was made in the app
+with Qwen-Image-2.1, so no stock image is involved.
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/images/genai/select-subject.gif" alt="Select, Subject: SAM 3.1 finds the woman in the photo and draws marching ants around her in about two seconds" width="100%">
+      <b>Select › Subject with SAM 3.1.</b> One click, and the selection is ready in 2.2 s on a
+      cold start or 0.6 s once the model is loaded.
+    </td>
+    <td width="50%" valign="top">
+      <img src="docs/images/genai/generative-edit.gif" alt="The Generate panel in Edit mode: the prompt make the jacket red is typed, a live preview sharpens, and three red-jacket variations appear" width="100%">
+      <b>Edit inside a selection.</b> Type "make the jacket red" and watch the live preview.
+      Three variations take 17.7 s, and each one lands on its own masked layer.
+    </td>
+  </tr>
+</table>
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/images/genai/generate-panel.png" alt="The Generate panel in Image mode with a prompt and the finished 1024 by 1024 photo of a woman in a yellow rain jacket walking a golden retriever" width="100%">
+      <b>Generate Image</b> with Qwen-Image-2.1, 1024×1024 in 13.2 s.
+    </td>
+    <td width="50%" valign="top">
+      <img src="docs/images/genai/generative-fill.png" alt="The edit result with the jacket now red, the selection still active and the Variations counter on 2 of 3" width="100%">
+      <b>Variations.</b> Flip between results, and keep the one you like.
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/images/genai/remove-before-after.png" alt="Before and after: an orange post beside the fence is gone after one Remove stroke, and the railing continues" width="100%">
+      <b>Remove</b> with one stroke: the orange post is gone and the railing carries on (4.6 s).
+    </td>
+    <td width="50%" valign="top">
+      <img src="docs/images/genai/split-layers.png" alt="Split into Layers: the woman on her own layer, moved left, over a cleanly filled background layer" width="100%">
+      <b>Split into Layers.</b> The subject comes out on its own layer over a filled background,
+      so you can move her (8.6 s).
     </td>
   </tr>
 </table>

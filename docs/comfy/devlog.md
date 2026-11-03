@@ -4,6 +4,21 @@ Newest entry first. Terse: what landed, numbers, what is still open. Upstream ke
 the gitignored `log/devlog.md`; this one is tracked so the next session (any machine, any agent)
 can pick up.
 
+## 2026-11-03: README screenshots and GIFs of the generative tools
+
+Captured in the app on the owner's 5090 (0.20.1 release exe, its own settings copy, driven over
+the control protocol). The base photo was made in the app with Qwen-Image-2.1, so no stock image is
+used. The images are in `docs/images/genai/`: select-subject.gif (SAM 3.1), generative-edit.gif
+("make the jacket red", live preview, 3 variations), generate-panel.png, generative-fill.png,
+remove-before-after.png and split-layers.png. A "See it work" section in the README replaces the
+hidden placeholder. Warm timings: Generate 1024² 13.2 s, Select Subject 2.2 s cold / 0.6 s,
+Edit ×3 17.7 s, Remove 4.6 s, Split 8.6 s (6.5 s of that is the fill).
+Open: the Variations strip draws only its first tile, and clicking tiles 2–3 does nothing
+(ui.inspect reports all three rects). The Edit panel estimated ~2 min for a 17.7 s run. Split
+found only the woman; the dog stayed in the background layer. A straight Remove stroke along a
+thin post brought back a similar post, while a loop around it worked. A split bench harness closed
+every PhotoCraft window between rounds; the Split thread has since fixed that.
+
 ## 2026-11-03: AnyPaint fill speed pass (the prompt writer on Krea 2's own encoder)
 
 Measured in the app (scratch instance, the owner's prefs, portrait / street / coast, seed 42).
