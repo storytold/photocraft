@@ -8,6 +8,7 @@ use photocraft_doc::{Document, Layer, LayerContent};
 use photocraft_geom::{Rect, Size};
 use photocraft_io::{
     BandRenderer, CpuRenderer, ExportOptions, IoError, RenderBand, RenderError, export_flat, export_flat_with_renderer, export_png_streamed_with_renderer,
+    export_preview_png_with_renderer,
 };
 use photocraft_raster::{Interrupt, Surface};
 
@@ -99,6 +100,28 @@ fn custom_cpu_renderer_matches_default_export() {
 
     assert_eq!(def.bytes, res.bytes);
     assert_eq!(def.warnings, res.warnings);
+}
+
+#[test]
+fn renderer_preview_is_8bit_rgba_while_saved_export_keeps_depth() {
+    let mut doc = Document::with_background("preview16", Size::new(64, 48), ColorMode::Rgb, SampleType::U16, Color::WHITE);
+    let mut s = Surface::new(doc.pixel_format());
+    s.fill_rect(Rect::new(8, 8, 56, 40), &[0.2, 0.4, 0.8, 0.5]);
+    doc.layers.push(Layer::new("top", LayerContent::Raster(s)));
+
+    let mut preview_renderer = CpuRenderer;
+    let preview = export_preview_png_with_renderer(&doc, Some(&mut preview_renderer)).expect("preview export");
+    let img = photocraft_codecs::decode(&preview.bytes).expect("decode preview");
+    assert_eq!((img.width(), img.height()), (64, 48));
+    assert_eq!(img.layout(), photocraft_codecs::ChannelLayout::Rgba, "a preview is always RGBA");
+    assert_eq!(img.sample_type(), photocraft_codecs::SampleType::U8, "a preview is always 8-bit");
+
+    // A saved export keeps the document's native depth: the preview conversion is preview-only.
+    let opts = ExportOptions::default();
+    let mut save_renderer = CpuRenderer;
+    let saved = export_flat_with_renderer(&doc, Format::Png, &opts, &Interrupt::NONE, Some(&mut save_renderer)).expect("saved export");
+    let saved_img = photocraft_codecs::decode(&saved.bytes).expect("decode saved export");
+    assert_eq!(saved_img.sample_type(), photocraft_codecs::SampleType::U16, "saved exports keep the document's depth");
 }
 
 #[test]
