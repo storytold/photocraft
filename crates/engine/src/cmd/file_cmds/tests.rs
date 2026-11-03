@@ -1267,6 +1267,10 @@ fn file_info_keeps_a_packet_whose_rdf_end_tag_is_spaced_or_prefixed() {
         format!(
             r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><RDF xmlns="{NS}"><Description about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:CreatorTool="Other App"/></RDF></x:xmpmeta>"#
         ),
+        // Whitespace around the declaration's `=` (REC-xml 3.1 allows it) still binds the prefix.
+        format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><r:RDF xmlns:r = "{NS}"><r:Description r:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:CreatorTool="Other App"/></r:RDF></x:xmpmeta>"#
+        ),
     ];
     for packet in cases {
         let out = write_file_info(Some(&packet), &json!({"authorTitle": "Artist"}));
@@ -1278,6 +1282,14 @@ fn file_info_keeps_a_packet_whose_rdf_end_tag_is_spaced_or_prefixed() {
             assert!(desc.contains(&format!("xmlns:{p}=\"")) || packet.contains(&format!("xmlns:{p}=\"")), "prefix {p} unbound: {desc}");
         }
     }
+    // A `</rdf:RDF>` that only appears inside a comment must not be taken as the packet's end
+    // tag: the edit inserts before the real one, keeping it inside the RDF element (#11116).
+    let commented = format!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="{NS}"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:CreatorTool="Other App"/></rdf:RDF><!-- </rdf:RDF> --></x:xmpmeta>"#
+    );
+    let out = write_file_info(Some(&commented), &json!({"authorTitle": "Artist"}));
+    assert!(out.find("AuthorsPosition").unwrap() < out.find("<!--").unwrap(), "the edit is not inside the comment: {out}");
+    assert_eq!(read_file_info(Some(&out))["authorTitle"], "Artist");
     // A packet with no RDF end tag at all (self-closing) still gets the canonical packet.
     let selfclosed = format!(r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="{NS}"/></x:xmpmeta>"#);
     let out = write_file_info(Some(&selfclosed), &json!({"authorTitle": "Artist"}));

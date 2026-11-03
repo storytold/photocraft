@@ -258,9 +258,10 @@ pub fn camera_data(exif: Option<&[u8]>, xmp: Option<&str>) -> Value {
 const RDF_NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 
 /// The byte range of the packet's RDF end tag, or `None` when it has none. XML allows
-/// whitespace before a closing tag's `>` (REC-xml 2.4) and RDF allows any prefix — or none —
-/// bound for its namespace (RDF XML Syntax 5.1), so `</rdf:RDF >`, `</r:RDF>` and `</RDF>`
-/// match just like `</rdf:RDF>` (#11116).
+/// whitespace around a declaration's `=` and before a closing tag's `>` (REC-xml 2.4), and RDF
+/// allows any prefix — or none — bound for its namespace (RDF XML Syntax 5.1), so `</rdf:RDF >`,
+/// `</r:RDF>` and `</RDF>` match just like `</rdf:RDF>` (#11116). Text inside `<!-- -->` comments
+/// never counts as an end tag, so the writer always inserts inside the RDF element.
 fn rdf_end_tag(x: &str) -> Option<(usize, usize)> {
     // Which element names can close the RDF element: `NAME:RDF` for every prefix this packet
     // binds to the RDF namespace, plus the bare `RDF` when it is bound as the default.
@@ -272,9 +273,12 @@ fn rdf_end_tag(x: &str) -> Option<(usize, usize)> {
         let head = &x[..at];
         // The URI sits in an attribute value; the declaration is the token before its quote.
         let Some(quote) = head.rfind(['"', '\'']) else { continue };
-        let before = &head[..quote];
+        // `xmlns:r = "…"` (whitespace around the `=`) binds as validly as `xmlns:r="…"`, so the
+        // token ends at the `=` itself, whatever whitespace surrounds it.
+        let before = head[..quote].trim_end();
+        let Some(before) = before.strip_suffix('=').map(str::trim_end) else { continue };
         let decl_start = before.rfind([' ', '\t', '\r', '\n', '<']).map(|k| k + 1).unwrap_or(0);
-        let Some(decl) = before[decl_start..].strip_suffix('=') else { continue };
+        let decl = &before[decl_start..];
         if let Some(p) = decl.strip_prefix("xmlns:").filter(|p| !p.is_empty()) {
             let name = format!("{p}:RDF");
             if !names.contains(&name) {
@@ -284,11 +288,19 @@ fn rdf_end_tag(x: &str) -> Option<(usize, usize)> {
             names.push("RDF".to_string());
         }
     }
-    // Rightmost match per candidate name; a well-formed packet has exactly one RDF end tag.
-    for name in names {
-        let mut before = x.len();
-        while let Some(at) = x[..before].rfind("</") {
-            before = at;
+    // One reverse pass over every `</` match, whatever the number of bound prefixes; a match
+    // inside a comment is not an end tag. A well-formed packet has exactly one RDF end tag.
+    let in_comment = |at: usize| match x[..at].rfind("<!--") {
+        Some(open) => !x[open + 4..at].contains("-->"),
+        None => false,
+    };
+    let mut before = x.len();
+    while let Some(at) = x[..before].rfind("</") {
+        before = at;
+        if in_comment(at) {
+            continue;
+        }
+        for name in &names {
             let Some(after) = x[at + 2..].strip_prefix(name.as_str()) else { continue };
             let tail = after.trim_start_matches([' ', '\t', '\r', '\n']);
             if tail.starts_with('>') {
@@ -297,6 +309,24 @@ fn rdf_end_tag(x: &str) -> Option<(usize, usize)> {
         }
     }
     None
+}
+
+/// Whether the RDF element's own start tag binds the `rdf` prefix above `at`, so a description
+/// inserted there can inherit the declaration (#11116). A binding only a nested element declares
+/// does not reach the insertion point, and neither does one that is merely somewhere in the
+/// packet; when in doubt the writer re-declares, which is always valid.
+fn rdf_bound_above(x: &str, at: usize) -> bool {
+    let mut from = 0;
+    while let Some(rel) = x[from..at].find("<rdf:RDF") {
+        let start = from + rel;
+        let Some(end) = x[start..at].find('>') else { break };
+        let tag = &x[start..start + end];
+        if tag.contains(&format!("xmlns:rdf=\"{RDF_NS}\"")) || tag.contains(&format!("xmlns:rdf='{RDF_NS}'")) {
+            return true;
+        }
+        from = start + 8;
+    }
+    false
 }
 
 /// Rewrites only changed File Info fields of an XMP packet (creating one when there is none),
@@ -355,14 +385,13 @@ pub fn write_file_info(xmp: Option<&str>, info: &Value) -> String {
         body.push_str(&format!("   <xmpRights:WebStatement>{}</xmpRights:WebStatement>\n", xml_escape(u)));
     }
     if !body.is_empty() {
-        // The inserted description uses the `rdf:` prefix, so it must bind it itself unless
-        // the surrounding packet binds that prefix the same way (#11116).
-        let packet_binds_rdf = x.contains(&format!("xmlns:rdf=\"{RDF_NS}\"")) || x.contains(&format!("xmlns:rdf='{RDF_NS}'"));
-        let desc = format!(
-            "  <rdf:Description rdf:about=\"\"{} xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:photoshop=\"http://ns.adobe.com/photoshop/1.0/\" xmlns:xmpRights=\"http://ns.adobe.com/xap/1.0/rights/\">\n{body}  </rdf:Description>\n ",
-            if packet_binds_rdf { String::new() } else { format!(" xmlns:rdf=\"{RDF_NS}\"") }
-        );
         let at = rdf_end_tag(&x).map(|(a, _)| a).unwrap_or(x.len());
+        // The inserted description uses the `rdf:` prefix, so it must bind that prefix itself
+        // unless the RDF element's own start tag already binds it above the insertion point (#11116).
+        let bind = if rdf_bound_above(&x, at) { String::new() } else { format!(" xmlns:rdf=\"{RDF_NS}\"") };
+        let desc = format!(
+            "  <rdf:Description rdf:about=\"\"{bind} xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:photoshop=\"http://ns.adobe.com/photoshop/1.0/\" xmlns:xmpRights=\"http://ns.adobe.com/xap/1.0/rights/\">\n{body}  </rdf:Description>\n "
+        );
         x.insert_str(at, &desc);
     }
     x
