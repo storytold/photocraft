@@ -23,3 +23,12 @@ fn brushed_refine_survives_extreme_params() {
     let p = RefineParams { radius: 1e30, feather: f32::MAX, smooth: f32::MAX, ..RefineParams::default() };
     let _ = refine_mask_brushed(&sampler, &mask, Rect::new(16, 16, 48, 48), canvas, &p, brush.as_ref());
 }
+
+#[test]
+fn halo_and_spread_add_every_term_for_moderate_params() {
+    // radius 5 -> guided-filter radius 5, so the edge term is max(5, 2 * 5) = 10; smooth 50 and
+    // feather 4 give sigmas 2 and 2, so 3 * sigma = 6 each.
+    let p = RefineParams { radius: 5.0, smooth: 50.0, feather: 4.0, ..RefineParams::default() };
+    assert_eq!(p.halo(), 10 + 6 + 6 + 2);
+    assert_eq!(p.spread(), 5 + 6 + 6 + 1);
+}
