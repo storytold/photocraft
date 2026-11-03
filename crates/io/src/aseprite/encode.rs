@@ -240,7 +240,8 @@ fn require_opaque_background(sprite: &Sprite, id: LayerId, ctl: &Interrupt<'_>) 
             for y in bounds[1]..bounds[3] {
                 let start = (y as usize * 256 + bounds[0] as usize) * bpp;
                 let end = (y as usize * 256 + bounds[2] as usize) * bpp;
-                let row = tile.bytes().get(start..end).ok_or_else(|| invalid("invalid Background tile length"))?;
+                let bytes = tile.bytes();
+                let row = bytes.get(start..end).ok_or_else(|| invalid("invalid Background tile length"))?;
                 if row.chunks_exact(bpp).any(|p| p.last().copied() != Some(255)) {
                     return Err(invalid(
                         "Aseprite Background layers must be opaque in every frame; convert the Background to an ordinary layer before exporting",

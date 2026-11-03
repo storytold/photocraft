@@ -348,7 +348,8 @@ fn validate_indices(
         for y in bounds[1]..bounds[3] {
             let start = y as usize * 256 + bounds[0] as usize;
             let end = y as usize * 256 + bounds[2] as usize;
-            let row = tile.bytes().get(start..end).ok_or("invalid sprite index tile length")?;
+            let bytes = tile.bytes();
+            let row = bytes.get(start..end).ok_or("invalid sprite index tile length")?;
             if row.iter().any(|v| usize::from(*v) >= palette_len) {
                 return Err("sprite pixel refers to a missing palette entry".into());
             }

@@ -151,10 +151,17 @@ fn aseprite_native_and_psd_round_trips_preserve_pixels_and_layers() {
     let doc = r.document;
     for ext in ["pcraft", "psd"] {
         let out = photocraft_io::export(&doc, ext, &Default::default()).unwrap();
+        if ext == "psd" {
+            assert!(out.warnings.iter().any(|w| w.contains("selected sprite frame")));
+            let encoded = photocraft_io::encode_with(&doc, ext, &Default::default(), &photocraft_raster::Interrupt::NONE).unwrap();
+            assert!(encoded.warnings.iter().any(|w| w.contains("selected sprite frame")));
+        }
         let back = photocraft_io::import(&format!("back.{ext}"), &out.bytes).unwrap().document;
         assert_eq!(back.layers.len(), doc.layers.len());
         assert_eq!(back.layers[1].children().unwrap()[0].name, "Top");
-        for (a, b) in photocraft_compose::flatten(&doc).px.iter().zip(photocraft_compose::flatten(&back).px) {
+        let original = photocraft_compose::flatten(&doc);
+        let reopened = photocraft_compose::flatten(&back);
+        for (a, b) in original.px.iter().zip(&reopened.px) {
             for c in 0..4 {
                 assert!((a[c] - b[c]).abs() < 1.0 / 255.0 + 1e-6, "{ext}: {a:?} != {b:?}")
             }

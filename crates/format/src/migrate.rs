@@ -1,42 +1,28 @@
 //! Manifest migrations. Each step upgrades the raw JSON from version `n` to
 //! `n + 1`, so old bundles keep loading as the schema evolves.
 
-use serde_json::Value;
+use crate::FormatError;
 
-use crate::manifest::FORMAT_VERSION;
-use crate::{FormatError, Result};
-
-pub(crate) type Step = fn(&mut Value) -> Result<()>;
+pub(crate) type Step = craft_pcraft_format::Step<FormatError>;
 
 /// Version 2 adds optional sprite state; version 1 needs no structural migration.
 pub(crate) const STEPS: &[Step] = &[|_| Ok(())];
 
-/// Upgrade `v` in place to `target` using `steps`.
-pub(crate) fn migrate_with(v: &mut Value, steps: &[Step], target: u32) -> Result<u32> {
-    let found = v.get("format_version").and_then(Value::as_u64).ok_or_else(|| FormatError::corrupt("manifest has no format_version"))?;
-    let found = u32::try_from(found).map_err(|_| FormatError::corrupt("format_version out of range"))?;
-    if found == 0 {
-        return Err(FormatError::corrupt("format_version 0 is invalid"));
-    }
-    if found > target {
-        return Err(FormatError::TooNew { found, supported: target });
-    }
-    for ver in found..target {
-        let step = steps.get(ver as usize - 1).ok_or_else(|| FormatError::Unsupported(format!("no migration from format {ver}")))?;
-        step(v)?;
-        v["format_version"] = Value::from(ver + 1);
-    }
-    Ok(found)
-}
-
-pub(crate) fn migrate(v: &mut Value) -> Result<u32> {
-    migrate_with(v, STEPS, FORMAT_VERSION)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use crate::Result;
+    use crate::manifest::FORMAT_VERSION;
+    use serde_json::{Value, json};
+
+    /// Upgrade `v` in place to `target` using `steps`, with craft-pcraft-format's runner.
+    fn migrate_with(v: &mut Value, steps: &[Step], target: u32) -> Result<u32> {
+        craft_pcraft_format::migrate(v, steps, target)
+    }
+
+    fn migrate(v: &mut Value) -> Result<u32> {
+        migrate_with(v, STEPS, FORMAT_VERSION)
+    }
 
     fn rename_title(v: &mut Value) -> Result<()> {
         let t = v["document"]["title"].take();
@@ -85,15 +71,16 @@ mod tests {
 #[cfg(test)]
 mod sprite_version_tests {
     use super::*;
+    use crate::manifest::FORMAT_VERSION;
     use serde_json::json;
 
     #[test]
     fn version_one_reader_refuses_sprite_version_and_current_reader_keeps_old_manifests() {
         let mut sprite = json!({"format_version": 2, "document": {"sprite": {"current": 0}}});
-        assert!(matches!(migrate_with(&mut sprite, &[], 1), Err(FormatError::TooNew { found: 2, supported: 1 })));
-        assert_eq!(migrate(&mut sprite).unwrap(), 2);
+        assert!(matches!(craft_pcraft_format::migrate(&mut sprite, &[], 1), Err(FormatError::TooNew { found: 2, supported: 1 })));
+        assert_eq!(craft_pcraft_format::migrate(&mut sprite, STEPS, FORMAT_VERSION).unwrap(), 2);
         let mut old = json!({"format_version": 1, "document": {"name": "Static"}});
-        assert_eq!(migrate(&mut old).unwrap(), 1);
+        assert_eq!(craft_pcraft_format::migrate(&mut old, STEPS, FORMAT_VERSION).unwrap(), 1);
         assert_eq!(old["document"]["name"], "Static");
         assert_eq!(old["format_version"], 2);
     }

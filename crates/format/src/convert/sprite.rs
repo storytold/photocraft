@@ -168,7 +168,7 @@ mod tests {
             pixels: SurfaceM {
                 format: PixelFormat::RGBA8,
                 default: "00000000".into(),
-                tiles: (0..1025).map(|i| TileRef { tx: i % 33, ty: i / 33, hash: format!("{:064x}", if unique { i } else { 0 }) }).collect(),
+                tiles: (0..1025).map(|i| TileRef::new(i % 33, i / 33, format!("{:064x}", if unique { i } else { 0 }))).collect(),
             },
             indices: None,
             opacity: 255,
@@ -226,7 +226,7 @@ mod tests {
         combined.frames[0].cels[0].indices = Some(SurfaceM {
             format: PixelFormat::new(photocraft_color::ColorMode::Grayscale, photocraft_color::SampleType::U8, false),
             default: "00".into(),
-            tiles: vec![TileRef { tx: 0, ty: 0, hash: format!("{:064x}", 1025) }],
+            tiles: vec![TileRef::new(0, 0, format!("{:064x}", 1025))],
         });
         assert!(check_tile_budget(&combined).unwrap_err().to_string().contains("256 MiB"), "index planes share the same budget");
         let mut repeated = exact.clone();
