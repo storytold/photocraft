@@ -1,5 +1,8 @@
 use super::source::{SourceImage, buffer_to_surface, cache_key, cache_put, source_bytes};
-use super::*;
+use super::{
+    Affine, Arc, BlendMode, Document, EngineError, Homography, Layer, LayerContent, LayerId, PLACED_KEYS, Rect, Result, Session, Size, SmartContentsId,
+    SmartObject, SmartSource, Surface, Value, encode_source, json, layer_param, other, translate_surface,
+};
 
 /// Rounds float noise off a composed transform (scale 0.1 then 10 should be exactly 1), so
 /// repeated transforms land back on exact, lossless placements.
@@ -56,7 +59,7 @@ pub(crate) fn shift_smart(sm: &mut SmartObject, dx: i32, dy: i32) {
 
 /// Forget PSD placed-layer data that no longer describes the smart object (its source changed):
 /// PSD export then writes fresh placed-layer blocks and embeds the new source.
-pub(super) fn detach_psd(l: &mut Layer) {
+pub(crate) fn detach_psd(l: &mut Layer) {
     if let LayerContent::Smart(sm) = &mut l.content {
         sm.psd_raw = None;
     }
@@ -194,8 +197,8 @@ pub fn layers_to_smart(doc: &Document, name: &str, layers: Vec<Layer>) -> Result
 }
 
 pub(super) fn convert(s: &mut Session, p: &Value) -> Result<Value> {
-    let ids = match p.get("layer").and_then(Value::as_u64) {
-        Some(id) => vec![LayerId(id)],
+    let ids = match crate::commands::explicit_layer(s, p)? {
+        Some(id) => vec![id],
         None => crate::layer_multi_cmds::selected(s),
     };
     let new_id = s.edit("Convert to Smart Object", |doc, active| {
