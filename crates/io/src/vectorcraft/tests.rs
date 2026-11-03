@@ -166,6 +166,40 @@ fn a_canceled_open_stops_drawing() {
     assert!(matches!(e, IoError::Cancelled), "{e:?}");
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn cancellation_requested_after_drawing_starts_reaches_the_renderer() {
+    let requested = AtomicBool::new(false);
+    let cancel = || requested.load(Ordering::Relaxed);
+    let result = with_render_cancellation(&Interrupt::cancel_only(&cancel), |settings| {
+        let flag = settings.cancelled.as_ref().unwrap();
+        assert!(!flag.load(Ordering::Relaxed), "the draw starts before cancellation");
+        requested.store(true, Ordering::Relaxed);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !flag.load(Ordering::Relaxed) && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        if flag.load(Ordering::Relaxed) { Err(raster::Error::Cancelled) } else { Ok(()) }
+    });
+    assert!(matches!(result, Err(raster::Error::Cancelled)));
+}
+
+#[test]
+fn scale_limits_reuse_the_same_bytes_and_recheck_changed_or_invalid_sources() {
+    let a = file(Some(&pdf(83, 47, 1)));
+    let b = file(Some(&pdf(83, 48, 1)));
+    let before = SCALE_LIMIT_READS.with(|n| n.get());
+    let limit = scale_limit(&a).unwrap();
+    assert_eq!(scale_limit(&a.clone()).unwrap(), limit);
+    assert_eq!(SCALE_LIMIT_READS.with(|n| n.get()), before + 1);
+    scale_limit(&b).unwrap();
+    assert_eq!(SCALE_LIMIT_READS.with(|n| n.get()), before + 2);
+    for _ in 0..2 {
+        assert!(scale_limit(b"not a VectorCraft file").is_err());
+    }
+    assert_eq!(SCALE_LIMIT_READS.with(|n| n.get()), before + 4, "errors are not cached");
+}
+
 #[test]
 fn premultiplied_pixels_become_straight_alpha() {
     let mut px = [128, 64, 0, 128, 10, 20, 30, 255, 0, 0, 0, 0];

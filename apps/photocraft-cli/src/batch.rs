@@ -71,7 +71,10 @@ pub(crate) fn batch(a: &BatchArgs, out: &mut dyn Write, err: &mut dyn Write) -> 
     // `--format .jpg` names outputs `<stem>.jpg`, as `--format jpg` does (#490).
     let format = a.export.format.as_deref().map(|f| f.strip_prefix('.').unwrap_or(f));
     for input in &inputs {
-        let ext = format.map(str::to_owned).or_else(|| input.extension().map(|e| e.to_string_lossy().into_owned())).unwrap_or_else(|| "png".into());
+        let ext = format.map(str::to_owned).unwrap_or_else(|| {
+            let ext = input.extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_else(|| "png".into());
+            if photocraft_io::vectorcraft::EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()) { "psd".into() } else { ext }
+        });
         let stem = input.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
         let target = out_dir.join(format!("{stem}.{ext}"));
         let target_text = target.to_string_lossy();
@@ -138,6 +141,44 @@ mod batch_action_set_tests {
     use super::*;
     use crate::test_support::{Invoke, invoke};
     use serde_json::Value;
+
+    #[test]
+    fn vectorcraft_batch_outputs_default_to_psd_and_honor_an_explicit_format() {
+        let dir = std::env::temp_dir().join(format!("photocraft-cli-vectorcraft-batch-{}", std::process::id()));
+        let path = |name: &str| dir.join(name).to_string_lossy().to_string();
+        std::fs::create_dir_all(dir.join("in")).unwrap();
+        let content = "1 0 0 rg 0 0 4 6 re f";
+        let pdf = format!(
+            "%PDF-1.7\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 8 6] /Contents 4 0 R >>\nendobj\n4 0 obj\n<< /Length {} >>\nstream\n{content}\nendstream\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n",
+            content.len()
+        );
+        let mut file = format!(
+            r#"{{"format":"vectorcraft","version":4,"pdf":{{"mime":"application/pdf","blob":[0,{}]}},"document":{{"artboards":[],"layers":[]}}}}"#,
+            pdf.len()
+        )
+        .into_bytes();
+        file.extend_from_slice(b"\n\0VCBLOBS\0");
+        file.extend_from_slice(pdf.as_bytes());
+        for name in ["logo.vectorcraft", "legacy.DRAWCRAFT"] {
+            std::fs::write(dir.join("in").join(name), &file).unwrap();
+        }
+        std::fs::write(dir.join("actions.json"), "[]").unwrap();
+        for (folder, ext, format) in [("default", "psd", None), ("explicit", "png", Some(".png"))] {
+            let (actions, input, output) = (path("actions.json"), path("in"), path(folder));
+            let mut args = vec!["batch", "--actions", &actions, "--in", &input, "--out", &output];
+            if let Some(format) = format {
+                args.extend(["--format", format]);
+            }
+            let Invoke { code, stdout, stderr } = invoke(&args);
+            assert_eq!(code, 0, "{stdout}{stderr}");
+            assert!(stdout.contains("2 succeeded, 0 failed"), "{stdout}");
+            for stem in ["logo", "legacy"] {
+                let opened = photocraft_io::import("output", &std::fs::read(dir.join(folder).join(format!("{stem}.{ext}"))).unwrap()).unwrap();
+                assert_eq!((opened.document.size.width, opened.document.size.height), (8, 6));
+            }
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     /// A batched action that plays another action of its set finds it in every file's session; a
     /// failure inside the called action fails the file, and a self-call stops instead of looping.

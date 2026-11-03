@@ -4,12 +4,14 @@
 //! reads the file and `craft-pdf` draws the page. A file without that PDF is refused with an
 //! error that names the option. Placed, the file becomes an embedded or linked smart object,
 //! drawn again from the PDF at its placement scale ([`import_scaled`]).
+//! Desktop cancellation is polled during drawing; extraction and PDF parsing cannot currently
+//! be interrupted.
 
 #[cfg(test)]
 mod tests;
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use craft_doc::{Limits, RenditionKind};
 use craft_pdf::interpret::InterpreterSettings;
@@ -97,14 +99,44 @@ pub fn import_scaled(name: &str, bytes: &[u8], scale: f32, ctl: &Interrupt) -> R
 }
 
 /// The largest `scale` [`import_scaled`] draws the file's first artboard at without reaching
-/// `craft-pdf`'s raster limits, read from the carried PDF without drawing it.
+/// `craft-pdf`'s raster limits, read from the carried PDF without drawing it. Successful results
+/// are cached by source bytes, keeping at most 32 documents without retaining their bytes.
 pub fn scale_limit(bytes: &[u8]) -> Result<f32, IoError> {
+    let key = *blake3::hash(bytes).as_bytes();
+    {
+        let mut cache = SCALE_LIMIT_CACHE.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(i) = cache.iter().position(|(k, _)| *k == key) {
+            let entry = cache.remove(i);
+            let value = entry.1;
+            cache.push(entry);
+            return Ok(value);
+        }
+    }
+    let limit = read_scale_limit(bytes)?;
+    let mut cache = SCALE_LIMIT_CACHE.lock().unwrap_or_else(PoisonError::into_inner);
+    // Another thread may have read the same document while the lock was released.
+    cache.retain(|(k, _)| *k != key);
+    if cache.len() >= 32 {
+        cache.remove(0);
+    }
+    cache.push((key, limit));
+    Ok(limit)
+}
+
+static SCALE_LIMIT_CACHE: Mutex<Vec<([u8; 32], f32)>> = Mutex::new(Vec::new());
+
+fn read_scale_limit(bytes: &[u8]) -> Result<f32, IoError> {
+    #[cfg(test)]
+    SCALE_LIMIT_READS.with(|n| n.set(n.get() + 1));
     let pdf = carried_pdf(bytes)?;
     let pages = pdf.pages();
     let (_, w, h) = first_page(pages)?;
     let (open_w, open_h) = opened_size(w, h);
     Ok(relative_limit(open_w, open_h))
 }
+
+#[cfg(test)]
+thread_local! { static SCALE_LIMIT_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
 
 /// The largest scale relative to a `w` × `h` pixel opened size that keeps the drawn size within
 /// `craft-pdf`'s raster limits.
@@ -162,14 +194,18 @@ pub fn max_scale(w: f32, h: f32) -> f32 {
 /// Draw `page`, stopping when `ctl` is canceled. The renderer polls a flag between operators;
 /// off wasm, a scoped thread sets that flag from `ctl` while the page is drawn.
 fn render(page: &Page<'_>, options: &Options, ctl: &Interrupt) -> Result<Raster, raster::Error> {
+    with_render_cancellation(ctl, |settings| raster::render(page, &RenderCache::new(), settings, options))
+}
+
+/// Forward cancellation while a draw is running, as well as before it starts.
+fn with_render_cancellation<T>(ctl: &Interrupt, draw: impl FnOnce(&InterpreterSettings) -> Result<T, raster::Error>) -> Result<T, raster::Error> {
     if ctl.cancelled() {
         return Err(raster::Error::Cancelled);
     }
     let cancelled = Arc::new(AtomicBool::new(false));
     let settings = InterpreterSettings { cancelled: Some(cancelled.clone()), ..InterpreterSettings::default() };
-    let draw = || raster::render(page, &RenderCache::new(), &settings, options);
     if cfg!(target_arch = "wasm32") {
-        return draw();
+        return draw(&settings);
     }
     let done = AtomicBool::new(false);
     std::thread::scope(|sc| {
@@ -183,7 +219,7 @@ fn render(page: &Page<'_>, options: &Options, ctl: &Interrupt) -> Result<Raster,
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
         });
-        let r = draw();
+        let r = draw(&settings);
         done.store(true, Ordering::Relaxed);
         r
     })
