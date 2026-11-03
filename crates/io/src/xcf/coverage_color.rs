@@ -1,22 +1,16 @@
-//! Shared native-conversion helpers; mapping registration follows separately.
-
-#[allow(unused_imports)]
+//! Ordinary native color-adjustment parameter decoding for import-time coverage.
+//! This converts command data to existing document types; native compose owns all math.
 use photocraft_doc::{Adjustment, adjust::HueRange};
-
-#[allow(unused_imports)]
 use serde_json::Value;
 
 type Result<T> = std::result::Result<T, String>;
-
 const RANGES: [&str; 6] = ["reds", "yellows", "greens", "cyans", "blues", "magentas"];
-
 const BW_DEFAULTS: [f32; 6] = [40., 60., 40., 60., 20., 80.];
 
 /// Treat absent and null native parameters alike, matching the ordinary native adjustment defaults.
 fn field<'a>(p: &'a Value, key: &str) -> Option<&'a Value> {
     p.get(key).filter(|v| !v.is_null())
 }
-
 /// Decode a finite native parameter and apply the native field bounds; wrong types and nonfinite values fail.
 fn number(p: &Value, key: &str, default: f32, lo: f32, hi: f32) -> Result<f32> {
     match field(p, key) {
@@ -24,7 +18,6 @@ fn number(p: &Value, key: &str, default: f32, lo: f32, hi: f32) -> Result<f32> {
         Some(v) => v.as_f64().filter(|v| v.is_finite()).map(|v| (v as f32).clamp(lo, hi)).ok_or_else(|| format!("Native {key} must be a finite number")),
     }
 }
-
 /// Read a native boolean with its default while rejecting supplied values of other types.
 fn boolean(p: &Value, key: &str, default: bool) -> Result<bool> {
     match field(p, key) {
@@ -32,7 +25,6 @@ fn boolean(p: &Value, key: &str, default: bool) -> Result<bool> {
         Some(v) => v.as_bool().ok_or_else(|| format!("Native {key} must be boolean")),
     }
 }
-
 /// Require exactly the declared number of finite native coefficients and apply the adapter magnitude bound.
 fn array<const N: usize>(v: &Value, key: &str) -> Result<[f32; N]> {
     let input = v.as_array().filter(|a| a.len() == N).ok_or_else(|| format!("Native {key} needs exactly {N} numbers"))?;
@@ -42,7 +34,6 @@ fn array<const N: usize>(v: &Value, key: &str) -> Result<[f32; N]> {
     }
     Ok(output)
 }
-
 /// Accept native hexadecimal or numeric RGB paint parameters, validating their shape and applying native color-component bounds.
 fn color(p: &Value, key: &str, default: [f32; 3]) -> Result<[f32; 3]> {
     let Some(v) = field(p, key) else { return Ok(default) };
@@ -149,4 +140,108 @@ pub(super) fn adjustment(command: &str, p: &Value) -> Option<Result<Adjustment>>
             }
         })
     })())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use photocraft_color::{ColorMode, SampleType};
+    use photocraft_geom::Rect;
+    use serde_json::json;
+
+    /// Require a successful owned color-adjustment adapter when constructing the unit-test subject.
+    fn decode(id: &str, params: Value) -> Adjustment {
+        adjustment(id, &params).unwrap().unwrap()
+    }
+    /// Compare all five color adapters with independently authored native adjustment data and rendered output at each depth.
+    #[test]
+    fn five_native_color_adapters_match_independently_authored_native_adjustments_at_all_depths() {
+        let mut ranges = HueRange::defaults();
+        ranges[0].hue = 17.;
+        ranges[0].saturation = -23.;
+        ranges[0].lightness = 9.;
+        ranges[0].bounds = [-60., -20., 20., 60.];
+        let cases = [
+            ("image.adjustments.vibrance", json!({"vibrance":37,"saturation":-12}), Adjustment::Vibrance { vibrance: 37., saturation: -12. }),
+            (
+                "image.adjustments.blackWhite",
+                json!({"reds":13,"blues":91,"tint":true,"tintColor":"#336699"}),
+                Adjustment::BlackWhite { weights: [13., 60., 40., 60., 91., 80.], tint: Some([0.2, 0.4, 0.6]) },
+            ),
+            (
+                "image.adjustments.colorBalance",
+                json!({"shadows":[10,-20,30],"highlights":[-15,25,-35],"preserveLuminosity":false}),
+                Adjustment::ColorBalance { shadows: [10., -20., 30.], midtones: [0.; 3], highlights: [-15., 25., -35.], preserve_luminosity: false },
+            ),
+            (
+                "image.adjustments.photoFilter",
+                json!({"color":[0.25,0.5,0.75],"density":40,"preserveLuminosity":false}),
+                Adjustment::PhotoFilter { color: [0.25, 0.5, 0.75], density: 0.4, preserve_luminosity: false },
+            ),
+            (
+                "image.adjustments.hueSaturation",
+                json!({"hue":-25,"saturation":38,"lightness":-12,"reds":{"hue":17,"saturation":-23,"lightness":9,"range":[-60,-20,20,60]}}),
+                Adjustment::HueSaturation { hue: -25., saturation: 38., lightness: -12., colorize: false, ranges },
+            ),
+        ];
+        for (id, params, expected) in cases {
+            let actual = decode(id, params);
+            assert_eq!(actual, expected, "{id}");
+            for mode in [ColorMode::Rgb, ColorMode::Grayscale] {
+                for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+                    let input = vec![[0.13, 0.42, 0.87, 0.25], [0.9, 0.2, 0.1, 1.], [-0.5, 1.5, 0.25, 0.]];
+                    let mut a = photocraft_compose::Buffer { rect: Rect::new(0, 0, 3, 1), px: input.clone() };
+                    let mut b = photocraft_compose::Buffer { rect: a.rect, px: input };
+                    let transfer = photocraft_compose::adjust::Transfer::for_document(mode, depth);
+                    let sample = (depth == SampleType::F32).then_some(depth);
+                    photocraft_compose::adjust::apply_in(&actual, &mut a, transfer, sample, mode);
+                    photocraft_compose::adjust::apply_in(&expected, &mut b, transfer, sample, mode);
+                    assert_eq!(a.px, b.px, "{id}/{mode:?}/{depth:?}");
+                    assert!(a.px.iter().flatten().all(|v| v.is_finite()));
+                }
+            }
+        }
+    }
+    /// Check null/default handling and bounded native colorize fields match the ordinary native parameter policy.
+    #[test]
+    fn ordinary_defaults_nulls_colorize_and_native_field_clamping_are_preserved() {
+        assert_eq!(decode("image.adjustments.blackWhite", json!({})), Adjustment::BlackWhite { weights: BW_DEFAULTS, tint: None });
+        assert_eq!(
+            decode("image.adjustments.photoFilter", json!({"color":null,"density":null})),
+            Adjustment::PhotoFilter { color: [236. / 255., 138. / 255., 0.], density: 0.25, preserve_luminosity: true }
+        );
+        let Adjustment::HueSaturation { hue, saturation, lightness, colorize, .. } =
+            decode("image.adjustments.hueSaturation", json!({"colorize":true,"hue":400,"lightness":-200}))
+        else {
+            panic!("native hue")
+        };
+        assert_eq!((hue, saturation, lightness, colorize), (360., 25., -100., true));
+        let Adjustment::ColorBalance { shadows, .. } = decode("image.adjustments.colorBalance", json!({"shadows":[-300,20,400]})) else {
+            panic!("native balance")
+        };
+        assert_eq!(shadows, [-100., 20., 100.]);
+    }
+    /// Reject malformed owned parameters while leaving commands outside this adapter available to their proper owner.
+    #[test]
+    fn malformed_native_parameters_fail_and_unowned_commands_are_not_claimed() {
+        for id in ["blackWhite", "colorBalance", "hueSaturation", "photoFilter", "vibrance"] {
+            assert!(adjustment(&format!("image.adjustments.{id}"), &json!([])).unwrap().is_err());
+        }
+        for (id, p) in [
+            ("blackWhite", json!({"tint":1})),
+            ("blackWhite", json!({"reds":"50"})),
+            ("colorBalance", json!({"shadows":[1,2]})),
+            ("colorBalance", json!({"preserveLuminosity":1})),
+            ("hueSaturation", json!({"reds":true})),
+            ("hueSaturation", json!({"blues":{"range":[1,2,3]}})),
+            ("photoFilter", json!({"color":"éabcde"})),
+            ("photoFilter", json!({"filter":"sepia"})),
+            ("photoFilter", json!({"color":[1,null,0]})),
+            ("vibrance", json!({"vibrance":false})),
+        ] {
+            assert!(adjustment(&format!("image.adjustments.{id}"), &p).unwrap().is_err(), "{id}");
+        }
+        assert!(adjustment("source:operation", &json!({})).is_none());
+        assert!(adjustment("image.adjustments.shadowsHighlights", &json!({})).is_none());
+    }
 }

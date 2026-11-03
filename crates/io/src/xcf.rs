@@ -17,21 +17,13 @@
 //! The reader is written from the specification and from files GIMP 3.2 writes; no GIMP code.
 
 mod color;
+mod conversion;
 mod coverage;
 mod coverage_color;
+#[cfg(test)]
+mod coverage_effect_tests;
 mod coverage_geometry;
 mod coverage_spatial;
-mod native_alignment;
-mod native_displacement;
-mod native_effects;
-mod native_masks;
-mod native_snapshot;
-#[cfg(test)]
-mod native_stage_tests;
-
-mod conversion;
-// Parsed fields stay inert until native mapping slices land.
-#[allow(dead_code)]
 mod effects;
 #[cfg(test)]
 mod historical_precision_tests;
@@ -39,6 +31,13 @@ mod metadata;
 mod metadata_packets;
 #[cfg(test)]
 mod metadata_tests;
+mod native_alignment;
+mod native_displacement;
+mod native_effects;
+mod native_masks;
+mod native_snapshot;
+#[cfg(test)]
+mod native_stage_tests;
 mod paths;
 mod resources;
 #[cfg(test)]
@@ -480,7 +479,6 @@ struct Image<'a> {
     base_type: u32,
     colormap: Vec<[u8; 3]>,
     budget: usize,
-    native_source_budget: usize,
     /// Remaining allowance for copied layer metadata (names, item paths). Repeated layer
     /// offsets referencing one record with a large name would otherwise allocate an owned
     /// copy per reference, multiplying a small file into gigabytes of retained metadata.
@@ -492,6 +490,7 @@ struct Image<'a> {
     initial_view: crate::initial_view::NativeInitialView,
     resolution_dpi: f32,
     pending_effects: Vec<PendingLayerEffects>,
+    native_source_budget: usize,
     path_tattoos: HashMap<u32, Option<usize>>,
     pending_vectors: Vec<(photocraft_doc::LayerId, usize, paths::VectorStyle)>,
 }
@@ -698,8 +697,6 @@ impl<'a> Image<'a> {
         self.report_coverage_effects_with(owner, pointers, &state.applied, &state.masks, committed, ctl)
     }
 
-    /// Applies stored coverage stages in order, preserving usable pixels and reporting optional stages that
-    /// cannot be mapped.
     /// A distinct source identity for the ordinary native mask on a layer effect.
     /// Call after the parent stage result is known, retaining raw display/unknown props.
     fn layer_effect_mask_outcome(&mut self, parent: usize, offset: usize, name: &str, properties: &[Prop<'a>], committed: bool) -> Result<usize> {
@@ -736,11 +733,13 @@ impl<'a> Image<'a> {
         Ok(outcome)
     }
 
+    /// Applies stored coverage stages in order, preserving usable pixels and reporting optional stages that
+    /// cannot be mapped.
     fn apply_coverage_stack(
         &mut self,
         pointers: &[usize],
         surface: &mut Surface,
-        _bounds: Rect,
+        bounds: Rect,
         depth: usize,
         state: &mut CoverageTranslation<'a>,
         ctl: &Interrupt<'_>,
@@ -784,16 +783,22 @@ impl<'a> Image<'a> {
             } else {
                 self.coverage_auxiliary(effect.mask_offset, depth + 1, state, ctl).map(|value| value.map(Some))
             };
-            let result: std::result::Result<(Surface, String), effects::MappingFailure> = match auxiliary {
+            let result = match auxiliary {
                 Err(IoError::Cancelled) => return Err(IoError::Cancelled),
                 Err(error) => Err(effects::MappingFailure {
                     reason: ConversionReason::InvalidOptionalData,
                     message: format!("Source auxiliary coverage could not be converted; operation remains inactive: {error}"),
                 }),
                 Ok(Err(failure)) => Err(failure),
-                Ok(Ok(_mask)) => {
-                    Err(effects::MappingFailure::from("Native coverage conversion is not implemented; original coverage and source records are preserved"))
-                }
+                Ok(Ok(mask)) => coverage::apply(
+                    surface,
+                    bounds,
+                    &effect,
+                    mask.as_ref(),
+                    self.precision.linear,
+                    &mut coverage::Budgets { workspace: &mut self.native_source_budget, metadata: &mut self.meta_budget },
+                    ctl,
+                )?,
             };
             match result {
                 Ok((converted, mut notes)) => {
@@ -1339,7 +1344,6 @@ pub(crate) fn import_with_sample_order(
         base_type,
         colormap,
         budget: MAX_PIXEL_BYTES,
-        native_source_budget: MAX_PIXEL_BYTES,
         meta_budget: MAX_METADATA_BYTES,
         warnings,
         outcomes: conversion::Outcomes::new(version)?,
@@ -1347,6 +1351,7 @@ pub(crate) fn import_with_sample_order(
         initial_view: Default::default(),
         resolution_dpi: image_props.iter().find(|p| p.kind == 19).and_then(|p| be_f32(p.data)).filter(|v| v.is_finite() && *v > 0.0).unwrap_or(72.0),
         pending_effects: Vec::new(),
+        native_source_budget: MAX_PIXEL_BYTES,
         path_tattoos: HashMap::new(),
         pending_vectors: Vec::new(),
     };

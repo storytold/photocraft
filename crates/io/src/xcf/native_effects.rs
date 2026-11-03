@@ -502,7 +502,6 @@ fn direct_layer_bytes(layer: &Layer, depth: usize, remaining_nodes: &mut usize, 
 /// The first counter covers native resources plus their retained representation;
 /// the second covers metadata only. Pixel payloads never consume metadata allowance.
 /// Shared resources may be counted again conservatively; this is not a whole-RSS estimate.
-#[cfg(test)]
 pub(super) fn retained_mapping_bytes(mapping: &NativeMapping, ctl: &Interrupt<'_>) -> Result<(usize, usize)> {
     macro_rules! retained_metadata {
         ($state:expr, $value:expr) => {{

@@ -1411,6 +1411,96 @@ mod tests {
         assert_eq!(branches[1].filters[0].command, "image.adjustments.curves");
         assert_eq!(branches[1].filters[1].params["radius"], 5.);
     }
+    #[test]
+    /// Check cell shapes, phase, ratios, and background against native editable geometry and actual native
+    /// mean-color operations.
+    fn pixelize_grid_shapes_background_full_domain_and_native_means_are_editable() {
+        use photocraft_doc::{LayerContent, PathOp};
+        for norm in 0..=2 {
+            let effect = StoredEffect::test(
+                "gegl:pixelize",
+                vec![
+                    int("size-x", 4),
+                    int("size-y", 3),
+                    int("offset-x", -1),
+                    int("offset-y", 1),
+                    number("ratio-x", 0.5),
+                    Argument { name: "norm", value: ArgumentValue::Enum(norm) },
+                ],
+            );
+            let mapped = map(&effect, &context()).unwrap().unwrap();
+            let Some(NativeStructure::Composite { branches }) = mapped.structure else { panic!("cells") };
+            assert_eq!(branches.len(), 7);
+            assert_eq!(branches[1].filter_frame, Some(Rect::new(0, 0, 3, 1)));
+            let background = branches[0].vector_mask.as_ref().unwrap();
+            assert_eq!(background.path.subpaths.len(), 7);
+            assert!(background.path.subpaths.iter().skip(1).all(|p| p.op == PathOp::Subtract));
+            let path = &branches[1].vector_mask.as_ref().unwrap().path;
+            assert_eq!(path.subpaths[0].knots.len(), 4);
+            assert_eq!(path.subpaths[0].knots.iter().any(|k| k.smooth), norm == 1);
+        }
+        for args in [vec![int("size-x", i32::MAX), int("size-y", i32::MAX)], vec![int("offset-x", i32::MIN), int("offset-y", i32::MAX)]] {
+            assert!(map(&StoredEffect::test("gegl:pixelize", args), &context()).unwrap().is_ok());
+        }
+        let ambiguous = [0, 0, 128, 63, 0, 0, 128, 63, 0, 0, 128, 63, 0, 0, 128, 63];
+        let background =
+            || Argument { name: "background", value: ArgumentValue::Color(Some(ColorLiteral { encoding: "RGBA float", pixels: &ambiguous, profile: &[] })) };
+        assert!(map(&StoredEffect::test("gegl:pixelize", vec![background()]), &context()).unwrap().is_ok());
+        assert!(map(&StoredEffect::test("gegl:pixelize", vec![background(), number("ratio-x", 0.5)]), &context()).unwrap().is_err());
+        for sample in [SampleType::U8, SampleType::U16, SampleType::F32] {
+            let bounds = Rect::new(0, 0, 4, 1);
+            let format = photocraft_color::PixelFormat::new(ColorMode::Grayscale, sample, false);
+            let mut source = photocraft_raster::Surface::new(format);
+            source.write_region(bounds, &[0., 0.25, 0.5, 1.]);
+            let effect = StoredEffect::test("gegl:pixelize", vec![int("size-x", 2), int("size-y", 1)]);
+            let mut workspace = crate::xcf::MAX_PIXEL_BYTES;
+            let mut metadata = crate::xcf::MAX_METADATA_BYTES;
+            let (actual, _) = super::super::super::coverage::apply(
+                &source,
+                bounds,
+                &effect,
+                None,
+                false,
+                &mut super::super::super::coverage::Budgets { workspace: &mut workspace, metadata: &mut metadata },
+                &photocraft_raster::Interrupt::NONE,
+            )
+            .unwrap()
+            .unwrap();
+            let raw = source.read_region(bounds);
+            let a = (raw[0] + raw[1]) * 0.5;
+            let b = (raw[2] + raw[3]) * 0.5;
+            let mut expected = photocraft_raster::Surface::new(format);
+            expected.write_region(bounds, &[a, a, b, b]);
+            for (a, b) in actual.read_region(bounds).iter().zip(expected.read_region(bounds)) {
+                assert!((a - b).abs() < 1e-5, "{sample:?}: {a} vs {b}");
+            }
+            let mut doc = photocraft_doc::Document::new("native geometry", photocraft_geom::Size::new(4, 1), ColorMode::Grayscale, sample);
+            let mapping = map(
+                &effect,
+                &MappingContext { mode: ColorMode::Grayscale, target_profile: None, native_filter_bounds: bounds, owner_bounds: bounds, ..context() },
+            )
+            .unwrap()
+            .unwrap();
+            let Some(NativeStructure::Composite { branches }) = mapping.structure else { panic!("cells") };
+            for branch in branches {
+                let mut layer = photocraft_doc::Layer::raster("editable mask", format);
+                layer.vector_mask = branch.vector_mask;
+                if let Some(fill) = branch.fill {
+                    layer.content = LayerContent::Fill(fill);
+                }
+                doc.layers.push(layer);
+            }
+            let bytes = photocraft_format::save_to_bytes(&doc, &Default::default()).unwrap();
+            let reopened = photocraft_format::load_from_bytes(&bytes).unwrap();
+            assert_eq!(reopened.layers[1].vector_mask, doc.layers[1].vector_mask);
+        }
+        let small = MappingContext { remaining_generation_bytes: 0, ..context() };
+        assert!(map(&StoredEffect::test("gegl:pixelize", vec![number("ratio-x", 0.5)]), &small).unwrap().is_err());
+        let dense = MappingContext { native_filter_bounds: Rect::new(0, 0, 200, 200), ..context() };
+        let fallback = map(&StoredEffect::test("gegl:pixelize", vec![int("size-x", 2), int("size-y", 2)]), &dense).unwrap().unwrap();
+        assert_eq!(fallback.filters[0].command, "filter.pixelate.mosaic");
+        assert!(map(&StoredEffect::test("gegl:pixelize", vec![int("size-x", 2), int("size-y", 2), number("ratio-x", 0.5)]), &dense).unwrap().is_err());
+    }
 
     #[test]
     /// Verify these structural adapters keep native editability while reporting source controls replaced by
