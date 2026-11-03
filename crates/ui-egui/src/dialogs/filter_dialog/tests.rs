@@ -1047,6 +1047,17 @@ fn proxy_previews_scale_only_lengths() {
     assert_eq!(preview_factor("filter.pixelate.mosaic", &json!({"cellSize": "x"}), 4), 4);
     let (k, diff) = error("filter.pixelate.mosaic", json!({"cellSize": 10.0}));
     assert!(k == 2 && diff < 0.01, "Mosaic: {diff}");
+    // Roundness at a fractional radius: at 6.5 px, k = 3 reaches floor(2.17) = 2 proxy px along an
+    // axis (6 px), where k = 4 reached floor(1.63) = 1 (4 px), so the chosen factor previews closer
+    // to what OK applies than k = 4 did (#10474).
+    for cmd in ["filter.other.minimum", "filter.other.maximum"] {
+        let p = json!({"radius": 6.5, "preserve": "roundness"});
+        let (k, diff) = error(cmd, p.clone());
+        let applied = preview_document(&doc, Some(bg), cmd, &p, 1).unwrap();
+        let at_four = preview_document(&doc, Some(bg), cmd, &p, 4).unwrap();
+        let four = mean_abs(&every_kth(&applied, 4), &every_kth(&at_four, 1));
+        assert!(k == 3 && diff < four, "{cmd}: k = {k} differs by {diff}, k = 4 by {four}");
+    }
     // Minimum and Maximum keep at least one proxy pixel of radius (#10474), and a large radius
     // keeps a proxy instead of a full-size preview that costs minutes at radius 500. Both keep
     // their whole-pixel radius within 1 px of OK's. Squareness rounds: 6 px is 2 proxy px at k = 3
