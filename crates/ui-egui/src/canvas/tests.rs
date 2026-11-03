@@ -2782,6 +2782,31 @@ fn spot_healing_trail_is_the_coverage_the_heal_uses() {
 }
 
 #[test]
+fn selection_brush_trail_shows_brush_hardness_live() {
+    let ctx = egui::Context::default();
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.run("file.new", json!({"width": 120, "height": 60})).unwrap();
+    let brush = json!({"size": 30, "hardness": 0.0});
+    app.run("tools.setBrush", json!({ "brush": brush })).unwrap();
+    app.ui.tool = Tool::SelectionBrush;
+    tool_event(&mut app, ToolEvent::Down { x: 50.0, y: 30.0, pressure: 1.0 }, egui::Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Move { x: 70.0, y: 30.0, pressure: 1.0 }, egui::Modifiers::NONE);
+    drag_preview_shapes(&mut app, &ctx, 12.0);
+
+    let trail = app.trail.as_ref().expect("trail exists during drag");
+    let mut soft = 0;
+    for y in 0..60 {
+        for x in 0..120 {
+            let got = trail.coverage(x, y);
+            if got > 0 && got < 200 {
+                soft += 1;
+            }
+        }
+    }
+    assert!(soft > 50, "Selection Brush live trail has soft falloff pixels during drag");
+}
+
+#[test]
 fn layer_style_dialog_previews_live_and_cancel_restores() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 16, "height": 16})).unwrap();

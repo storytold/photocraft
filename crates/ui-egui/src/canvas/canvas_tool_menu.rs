@@ -461,6 +461,7 @@ pub fn applies(tool: Tool) -> bool {
             // Its brush is set from the options bar's chip; the canvas right-click is the
             // selection menu, as in Photoshop (#7268).
             | Tool::QuickSelection
+            | Tool::SelectionBrush
     ) || path_menu(tool)
 }
 

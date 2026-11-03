@@ -142,6 +142,7 @@ pub fn tool_icon(t: Tool) -> &'static str {
         Tool::Burn => "flame",
         Tool::Sponge => "cloud",
         Tool::QuickSelection => "quick-selection",
+        Tool::SelectionBrush => "selection-brush",
         Tool::ObjectSelection => "square-dashed-mouse-pointer",
         Tool::Pen => "pen-tool",
         Tool::FreeformPen => "pen-freeform",

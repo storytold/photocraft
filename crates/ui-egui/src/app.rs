@@ -117,6 +117,7 @@ impl PhotocraftApp {
             redraws: Default::default(),
             kept: Default::default(),
             color_range: None,
+            selection_brush_overlay: None,
             adjust_preview: None,
             live_adjust_preview: None,
             synthetic: Vec::new(),

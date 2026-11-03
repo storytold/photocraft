@@ -47,6 +47,7 @@ pub fn is_selection_tool(tool: Tool) -> bool {
             | Tool::MagicWand
             | Tool::QuickSelection
             | Tool::ObjectSelection
+            | Tool::SelectionBrush
     )
 }
 
@@ -54,8 +55,8 @@ pub fn is_selection_tool(tool: Tool) -> bool {
 /// 2 Subtract, 3 Intersect) and the held modifiers: exactly what the tool's gesture will use.
 pub fn selection_mode(tool: Tool, bar: u8, m: egui::Modifiers) -> &'static str {
     match tool {
-        // Quick Selection always adds (⌥ subtracts), like Photoshop's after the first stroke.
-        Tool::QuickSelection => {
+        // Quick Selection and Selection Brush add by default (⌥ subtracts).
+        Tool::QuickSelection | Tool::SelectionBrush => {
             if m.alt {
                 "subtract"
             } else {

@@ -249,7 +249,10 @@ fn paint_selection_outline(app: &mut PhotocraftApp, input: SelectionPaintInput<'
         Some(Some((proxy, k))) => (proxy.selection.as_ref(), (*k).max(1)),
     };
     // Selection outline: true boundary, animated marching ants (cached per revision).
-    if let Some(sel) = outlined.filter(|_| app.ui.view.shows(app.ui.view.show.selection_edges) && !polygon_replaces_selection(app)) {
+    // While on Selection Brush Tool, suppress marching ants so only the colored markup shows.
+    if let Some(sel) =
+        outlined.filter(|_| app.ui.view.shows(app.ui.view.show.selection_edges) && !polygon_replaces_selection(app) && app.ui.tool != Tool::SelectionBrush)
+    {
         // Trace at display resolution over the visible part only; key by the mask's tile identity
         // (not the document revision) so unrelated edits don't re-trace it. The step is in
         // device pixels per document pixel (`View::zoom`, not the point zoom), so a 1 px
@@ -504,6 +507,7 @@ fn paint_canvas(
         }
     }
     crate::color_range_ui::paint_selection_preview(app, ctx, painter, doc.id, img_rect, flip);
+    paint_selection_brush_overlay(app, ctx, painter, view, &xf, doc, flip);
     // Artboards: pasteboard between the boards, outlines and names (artboard_ui.rs).
     if doc.has_artboards() {
         let t = crate::theme::Tokens::get(ctx);
@@ -562,6 +566,98 @@ fn paint_canvas(
     let ants = paint_selection_outline(app, SelectionPaintInput { ctx, painter, ui, view, xf, rect, doc, idx });
 
     (beyond, layer_edges, edge_rect, ants)
+}
+
+fn paint_selection_brush_overlay(
+    app: &mut PhotocraftApp,
+    ctx: &egui::Context,
+    painter: &egui::Painter,
+    view: &View,
+    xf: &ViewXform,
+    doc: &photocraft_doc::Document,
+    flip: bool,
+) {
+    if app.ui.tool != Tool::SelectionBrush {
+        return;
+    }
+    let Some(sel) = &doc.selection else {
+        return;
+    };
+    let bounds = doc.bounds();
+    if bounds.is_empty() {
+        return;
+    }
+    let color = app.ui.tool_options.selection_brush_color;
+    let opacity = app.ui.tool_options.selection_brush_opacity.clamp(0.0, 100.0) / 100.0;
+    if opacity <= 0.001 {
+        return;
+    }
+    let color_key = (color[0] as u64) | ((color[1] as u64) << 8) | ((color[2] as u64) << 16) | (((opacity * 255.0) as u64) << 24);
+    let key = crate::surface_fingerprint(sel) ^ color_key;
+
+    let is_fresh = matches!(&app.selection_brush_overlay, Some((d, k, _)) if *d == doc.id && *k == key);
+    if !is_fresh {
+        let (w, h) = (bounds.width() as usize, bounds.height() as usize);
+        let factor = (w.max(h)).max(1).div_ceil(4096).max(1) as u32;
+        let tw = w.div_ceil(factor as usize);
+        let th = h.div_ceil(factor as usize);
+        let (r, g, b) = (color[0], color[1], color[2]);
+
+        let mut vals = vec![0.0f32; tw * th];
+        if factor == 1 {
+            sel.read_region_into(bounds, &mut vals);
+        } else {
+            let mut row = vec![0.0f32; tw];
+            let mut offset = 0;
+            for y in 0..th {
+                sel.sample_row_strided(bounds.y0 + (y as u32 * factor) as i32, bounds.x0, factor as i32, 0, &mut row);
+                vals[offset..offset + tw].copy_from_slice(&row);
+                offset += tw;
+            }
+        }
+
+        let pixels: Vec<Color32> = vals
+            .into_iter()
+            .map(|v| {
+                let cov = v.clamp(0.0, 1.0);
+                if cov > 0.001 {
+                    let a = (cov * opacity * 255.0).round().clamp(1.0, 255.0) as u8;
+                    Color32::from_rgba_unmultiplied(r, g, b, a)
+                } else {
+                    Color32::TRANSPARENT
+                }
+            })
+            .collect();
+
+        let img = egui::ColorImage::new([tw, th], pixels);
+        match &mut app.selection_brush_overlay {
+            Some((d, k, tex)) if *d == doc.id => {
+                tex.set(img, egui::TextureOptions::LINEAR);
+                *k = key;
+            }
+            slot => {
+                let tex = ctx.load_texture("selection-brush-overlay", img, egui::TextureOptions::LINEAR);
+                *slot = Some((doc.id, key, tex));
+            }
+        }
+    }
+
+    if let Some((_, _, tex)) = &app.selection_brush_overlay {
+        if view.rotation.abs() > 0.05 {
+            paint_mapped_image_at(
+                painter,
+                xf,
+                tex.id(),
+                Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)),
+                [bounds.x0 as f32, bounds.y0 as f32],
+                [bounds.width() as f32, bounds.height() as f32],
+                Color32::WHITE,
+            );
+        } else {
+            let uv = if flip { Rect::from_min_max(pos2(1.0, 0.0), pos2(0.0, 1.0)) } else { Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)) };
+            painter.image(tex.id(), xf.doc_rect(bounds), uv, Color32::WHITE);
+        }
+    }
 }
 
 struct CanvasNavigationInput<'a> {
@@ -1472,7 +1568,7 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
                 pipette_cursor(ui.ctx(), p)
             }
         }
-        t if t.is_brushlike() || t == Tool::QuickSelection => {
+        t if t.is_brushlike() || t == Tool::QuickSelection || t == Tool::SelectionBrush => {
             // Preferences › Cursors: brush tip outline (normal = the 50% contour, or
             // full size), precise crosshair, or the standard pointer.
             use photocraft_engine::prefs::PaintingCursor;
@@ -1606,7 +1702,7 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
     let held = crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers));
     let mods = app.drag.as_ref().map_or(held, |d| d.modifiers);
     if let Some(b) = crate::tool_feedback::badge(app, tool, mods) {
-        crate::tool_feedback::draw_badge(painter, p, b, tool == Tool::QuickSelection);
+        crate::tool_feedback::draw_badge(painter, p, b, tool == Tool::QuickSelection || tool == Tool::SelectionBrush);
     }
     // ⇧ after a stroke: the straight line a click would paint (#257).
     crate::stroke_constraint::draw_line_preview(app, painter, xf, p, tool, held.shift);
