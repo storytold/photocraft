@@ -279,6 +279,18 @@ mod tests {
         assert!(!h.state().flat_copy_docs.contains(&doc));
     }
 
+    /// Closing a document drops its flat-copy note.
+    #[test]
+    fn closing_a_document_forgets_its_flat_copy() {
+        let (mut h, _) = harness("unused.png");
+        let doc = h.state().active_doc_id().unwrap();
+        h.state_mut().flat_copy_docs.insert(doc);
+        h.state_mut().run("file.close", json!({})).unwrap();
+        h.run_steps(3);
+        assert!(h.state().session.documents().iter().all(|d| d.doc.id != doc), "closed");
+        assert!(!h.state().flat_copy_docs.contains(&doc));
+    }
+
     /// A plain document loses nothing to a flat file, so there's nothing for the close prompt to say.
     #[test]
     fn an_automation_flat_save_of_a_plain_document_is_not_a_flat_copy() {
