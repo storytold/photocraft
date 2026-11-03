@@ -176,3 +176,55 @@ fn failed_workspace_write_keeps_export_diagnostics_for_the_caller() {
     );
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Overrides only `drain_diagnostics`: [`BandRenderer::push_diagnostic`] keeps its default no-op,
+/// as most custom renderers leave it.
+struct DrainOnlyRenderer;
+
+impl BandRenderer for DrainOnlyRenderer {
+    fn render_bands(
+        &mut self,
+        doc: &Document,
+        rect: Rect,
+        band_rows: i32,
+        ctl: &photocraft_raster::Interrupt<'_>,
+        sink: &mut dyn FnMut(RenderBand) -> Result<(), IoError>,
+    ) -> Result<(), RenderError> {
+        let mut cpu = CpuRenderer;
+        cpu.render_bands(doc, rect, band_rows, ctl, sink)
+    }
+
+    fn drain_diagnostics(&mut self) -> Vec<String> {
+        Vec::new()
+    }
+}
+
+#[test]
+fn failed_workspace_write_keeps_export_warnings_with_a_drain_only_renderer() {
+    let dir = std::env::temp_dir().join(format!("photocraft-workspace-warnings-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    let root = dir.join("root");
+    fs::create_dir_all(&root).unwrap();
+
+    let workspace = AuthorizedWorkspace::new(Some(&root), Some(&root)).expect("authorized workspace");
+    let mut h = Headless::with_workspace(workspace);
+    let mut doc = Document::with_background("test", Size::new(32, 24), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+    let mut top = doc.layers[0].clone();
+    top.name = "top".into();
+    doc.layers.push(top);
+    h.session.open_document(doc, None);
+    h.set_renderer(Some(Box::new(DrainOnlyRenderer)));
+
+    // Outside the authorized root: the export succeeds, then its write is refused.
+    let outside = dir.join("outside.png");
+    let res = h.save(None, Some(&outside), Some("png"), &Default::default());
+    assert!(res.is_err(), "a write outside the workspace must fail: {res:?}");
+    let diagnostics = h.drain_diagnostics();
+    assert!(
+        diagnostics.iter().any(|d| d.contains("flattened")),
+        "the export warnings must survive a failed workspace write when the renderer ignores pushed diagnostics: {diagnostics:?}"
+    );
+    let again = h.drain_diagnostics();
+    assert!(again.is_empty(), "the export warnings must drain exactly once: {again:?}");
+    let _ = fs::remove_dir_all(&dir);
+}

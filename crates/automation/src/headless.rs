@@ -15,7 +15,7 @@ use crate::{AuthorizedWorkspace, AutomationError, files};
 fn untrusted(filesystem: Filesystem) -> Headless {
     let mut session = Session::new();
     session.authorize = Some(authorize_engine_step);
-    Headless { session, writers: HashMap::new(), filesystem, renderer: None }
+    Headless { session, writers: HashMap::new(), filesystem, renderer: None, pending_diagnostics: Vec::new() }
 }
 
 enum Filesystem {
@@ -31,6 +31,10 @@ pub struct Headless {
     writers: HashMap<u64, PcraftWriter>,
     filesystem: Filesystem,
     renderer: Option<Box<dyn photocraft_io::BandRenderer>>,
+    /// Export warnings kept when a capability-scoped write fails: the next
+    /// [`Headless::drain_diagnostics`] still reports them, whatever the renderer does with
+    /// [`photocraft_io::BandRenderer::push_diagnostic`].
+    pending_diagnostics: Vec<String>,
 }
 
 impl Default for Headless {
@@ -49,7 +53,7 @@ impl Headless {
     /// not a remote automation client, supplies these host paths. Nested
     /// `actions.play` steps are not re-checked: this caller is already trusted.
     pub fn trusted_local() -> Self {
-        Self { session: Session::new(), writers: HashMap::new(), filesystem: Filesystem::TrustedLocal, renderer: None }
+        Self { session: Session::new(), writers: HashMap::new(), filesystem: Filesystem::TrustedLocal, renderer: None, pending_diagnostics: Vec::new() }
     }
 
     /// Create an automation session with capability-scoped file access.
@@ -74,9 +78,14 @@ impl Headless {
         self.renderer.as_mut().map(|b| &mut **b as &mut dyn photocraft_io::BandRenderer)
     }
 
-    /// Drain diagnostics from the active renderer if any.
+    /// Drain diagnostics from the active renderer if any, and the export warnings a failed
+    /// capability-scoped write kept. Each is returned once.
     pub fn drain_diagnostics(&mut self) -> Vec<String> {
-        self.renderer.as_mut().map_or_else(Vec::new, |r| r.drain_diagnostics())
+        let mut drained = std::mem::take(&mut self.pending_diagnostics);
+        if let Some(renderer) = self.renderer.as_mut() {
+            drained.extend(renderer.drain_diagnostics());
+        }
+        drained
     }
 
     #[cfg(all(feature = "gpu", not(target_arch = "wasm32")))]
@@ -354,13 +363,10 @@ impl Headless {
                     self.renderer.as_mut().map(|b| &mut **b as &mut dyn photocraft_io::BandRenderer),
                 )?;
                 if let Err(error) = workspace.write(target_text, &bytes) {
-                    // Requeue the export diagnostics so the caller still reports them with the
-                    // write error, as the local save path does.
-                    if let Some(renderer) = self.renderer.as_mut() {
-                        for warning in warnings {
-                            renderer.push_diagnostic(warning);
-                        }
-                    }
+                    // Keep the export diagnostics for the caller, as the local save path does:
+                    // they are reported with the write error and by the next drain, even when the
+                    // renderer's `push_diagnostic` is the default no-op.
+                    self.pending_diagnostics.extend(warnings);
                     return Err(error);
                 }
                 warnings

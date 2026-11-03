@@ -443,7 +443,7 @@ PhotoCraft foundation PR 1 adds an optional, additive headless GPU rendering bac
 
 - **Supported Matrix:**
   - Color modes: RGB and Grayscale (including ICC profile conversions and working spaces).
-  - Depth: 8-bit unsigned integer. 16-bit unsigned integer and 32-bit floating point documents use the CPU compositor: band readback uploads half-precision textures, which cannot preserve their samples.
+  - Depth: 8-bit unsigned integer. 16-bit unsigned integer and 32-bit floating point documents use the CPU compositor: layer content is uploaded as half-precision textures, which cannot preserve their samples.
   - Features: Straight-alpha transparency, Photoshop blend modes, opacity × fill opacity, layer masks, vector masks, clipping groups, isolated/pass-through groups, adjustments, solid/gradient fills, and GPU-supported layer effects.
   - Targets: Flat raster exports (PNG, JPEG, TIFF, WebP, etc.) and automation `render_png` previews.
 
