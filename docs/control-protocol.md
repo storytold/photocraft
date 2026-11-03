@@ -28,8 +28,7 @@ The first request on every TCP connection must authenticate. No other method is 
 {"id": 2, "ok": true, "result": {"authenticated": true}}
 ```
 
-Both proofs are lowercase hex HMAC-SHA256, keyed by the token's 64 lowercase hex characters (as ASCII), over `<label>\n<clientNonce>\n<serverNonce>` with both nonces lowercase and `
-` a newline byte. The label is `photocraft-control-v1 server` for `serverProof` and `photocraft-control-v1 client` for `proof`. The client checks `serverProof` and, when it does not match, closes the connection without sending `auth`. After a challenge only `auth {proof}` is accepted.
+Both proofs are lowercase hex HMAC-SHA256, keyed by the token's 64 lowercase hex characters (as ASCII), over `<label>\n<clientNonce>\n<serverNonce>` with both nonces lowercase and `\n` a newline byte (0x0A). The label is `photocraft-control-v1 server` for `serverProof` and `photocraft-control-v1 client` for `proof`. The client checks `serverProof` and, when it does not match, closes the connection without sending `auth`. After a challenge only `auth {proof}` is accepted.
 
 **Token authentication** is the original single frame, still accepted for scripts:
 
