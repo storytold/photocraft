@@ -190,6 +190,7 @@ pub fn place_bytes(s: &mut Session, name: &str, bytes: Vec<u8>, linked: Option<S
     // placement has no smart-object render later to perform this conversion for it.
     let mut px = if vectorcraft && !smart {
         use photocraft_cms::{Builtin, Intent, Transform};
+        use photocraft_color::ColorMode;
         let profile = crate::color_cmds::document_profile(&d.doc);
         if d.doc.mode == ColorMode::Rgb && profile.to_bytes().as_ref() == Builtin::Srgb.profile().to_bytes().as_ref() {
             flattened_checked(&src, fmt, "file.place")?
