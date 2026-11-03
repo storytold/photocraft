@@ -648,6 +648,31 @@ fn video_frames_to_layers_takes_every_gif_frame() {
     let mut s = session();
     let r = s.execute("file.import.videoFramesToLayers", json!({"path": path})).unwrap();
     assert_eq!(r["layers"], 4);
+    assert_eq!(r["warnings"].as_array().unwrap().len(), 0, "a whole file stays quiet");
+}
+
+#[test]
+fn a_truncated_gif_import_is_reported_as_salvaged() {
+    // #11113: the codecs keep the frames before the damage; the command must still disclose
+    // that the animation arrived shortened, not report a plain success.
+    let dir = tmpdir("gifcut");
+    let path = format!("{dir}/anim.gif");
+    write_gif(&path, 8, 8, &[([255, 0, 0], 5), ([0, 255, 0], 5), ([0, 0, 255], 5)]);
+    let mut bytes = std::fs::read(&path).unwrap();
+    // Cut the tail, as the issue's witness did: the last frame's payload is gone.
+    bytes.truncate(bytes.len() - 4);
+    std::fs::write(&path, &bytes).unwrap();
+    let mut s = session();
+    let r = s.execute("layer.videoLayers.newVideoLayerFromFile", json!({"path": path})).unwrap();
+    let frames = r["frames"].as_u64().unwrap();
+    assert!((1..3).contains(&frames), "some but not all frames survived: {frames}");
+    let w = r["warnings"].as_array().unwrap();
+    assert_eq!(w.len(), 1, "{w:?}");
+    assert!(w[0].as_str().unwrap().contains("ends early"), "{w:?}");
+    // The other shared-loader callers disclose it too.
+    let mut t = session();
+    let r = t.execute("file.import.videoFramesToLayers", json!({"path": &path})).unwrap();
+    assert_eq!(r["warnings"].as_array().unwrap().len(), 1, "{r}");
 }
 
 // ------------------------------------------------------------------ animated WebP footage (#1198)
