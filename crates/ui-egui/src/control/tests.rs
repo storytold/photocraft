@@ -1414,6 +1414,7 @@ fn automation_confirming_a_file_writing_dialog_is_judged_as_its_file_command() {
 fn automation_saving_from_the_unsaved_changes_prompt_is_judged_as_file_save() {
     // The desktop policy (crates/automation/src/workspace.rs) lets automation close documents
     // but refuses every file command that reads or writes a file, File › Save included.
+    /// The desktop policy's verdict on file commands: only the in-memory ones run.
     fn policy(id: &str, _: &Value) -> photocraft_engine::Result<()> {
         if id.starts_with("file.") && !matches!(id, "file.new" | "file.close" | "file.closeAll" | "file.closeOthers") {
             Err(photocraft_engine::EngineError::Other(format!("automation command `{id}` is disabled")))

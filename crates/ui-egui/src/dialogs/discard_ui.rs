@@ -256,6 +256,8 @@ fn couldnt_save(e: String) -> String {
     if e == crate::file_dialog::CANCELLED { e } else { format!("Couldn't save: {e}") }
 }
 
+/// Draws the unsaved-changes (or Revert) prompt while one is pending and acts on the button the
+/// user picks; a refused or failed answer is reported in the status bar and the prompt stays.
 pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // Save can ask for a path and then TIFF or Targa Options, and then write in the background.
     // Wait for all three; cancellation or a failed save brings us back.
