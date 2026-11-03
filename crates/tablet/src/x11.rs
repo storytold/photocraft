@@ -21,7 +21,7 @@ use x11rb::protocol::xinput::{self, ConnectionExt as _, DeviceClassData, DeviceT
 use x11rb::protocol::xproto::ConnectionExt as _;
 use x11rb::rust_connection::RustConnection;
 
-use crate::xi::{Device, State, fp3232, valuators};
+use crate::xi::{Device, State, diagnostic_name, fp3232, valuators};
 use crate::{Error, Sample, Update, deliver};
 
 /// `XIAllDevices`: select for every device, slaves included.
@@ -155,22 +155,8 @@ fn query_warning(warnings: &mut u8, message: std::fmt::Arguments<'_>) {
 /// Log the initial pen inventory on the reader thread, after its creation succeeded.
 fn log_tablet_devices(devices: &[Device]) {
     const MAX_PENS: usize = 16;
-    const MAX_NAME_CHARS: usize = 128;
     let total = devices.iter().filter(|d| d.is_tablet()).count();
-    let pens: Vec<_> = devices
-        .iter()
-        .filter(|d| d.is_tablet())
-        .take(MAX_PENS)
-        .map(|d| {
-            let mut chars = d.name.chars();
-            let mut name: String = chars.by_ref().take(MAX_NAME_CHARS).collect();
-            if chars.next().is_some() {
-                let _ = name.pop();
-                name.push('…');
-            }
-            format!("{name} (id {})", d.id)
-        })
-        .collect();
+    let pens: Vec<_> = devices.iter().filter(|d| d.is_tablet()).take(MAX_PENS).map(|d| format!("{} (id {})", diagnostic_name(&d.name), d.id)).collect();
     if pens.is_empty() {
         log::info!("tablet: XInput2 reader started; no pen devices with an Abs Pressure valuator yet");
         return;

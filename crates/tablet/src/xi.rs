@@ -115,6 +115,19 @@ impl Device {
     }
 }
 
+/// A device name for the bounded, single-line XInput inventory diagnostic.
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn diagnostic_name(name: &str) -> String {
+    const MAX_NAME_CHARS: usize = 128;
+    let mut chars = name.chars();
+    let mut name: String = chars.by_ref().take(MAX_NAME_CHARS).collect();
+    if chars.next().is_some() {
+        let _ = name.pop();
+        name.push('…');
+    }
+    name
+}
+
 /// The values a raw event carries: valuator numbers set in `mask` (32 per word, LSB first)
 /// paired, in order, with `values`. Extra mask bits beyond the values are ignored.
 pub fn valuators<'a>(mask: &'a [u32], values: &'a [f64]) -> impl Iterator<Item = (u16, f64)> + 'a {
@@ -187,6 +200,35 @@ pub fn fp3232(integral: i32, frac: u32) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn diagnostic_name_escapes_control_characters() {
+        let raw = "Pen eraser\nInjected\r\t\u{1b}[31m";
+        let device = wacom(9, raw);
+        let formatted = diagnostic_name(&device.name);
+        assert_eq!(formatted, r"Pen eraser\nInjected\r\t\u{1b}[31m");
+        assert!(!formatted.chars().any(char::is_control));
+        assert_eq!(device.name, raw);
+        assert!(device.eraser);
+    }
+
+    #[test]
+    fn diagnostic_name_preserves_plain_unicode_empty_and_truncation() {
+        for name in ["", "Wacom 绘图笔 Café🙂"] {
+            assert_eq!(diagnostic_name(name), name);
+        }
+        assert_eq!(diagnostic_name(&"笔".repeat(128)), "笔".repeat(128));
+        assert_eq!(diagnostic_name(&"笔".repeat(129)), format!("{}…", "笔".repeat(127)));
+    }
+
+    #[test]
+    fn diagnostic_name_caps_the_escaped_output() {
+        assert_eq!(diagnostic_name(&"\t".repeat(64)), r"\t".repeat(64));
+        let formatted = diagnostic_name(&"\t".repeat(65));
+        assert_eq!(formatted.chars().count(), 128);
+        assert!(formatted.ends_with('…'));
+        assert!(!formatted.chars().any(char::is_control));
+    }
 
     fn wacom(id: u16, name: &str) -> Device {
         Device::new(
