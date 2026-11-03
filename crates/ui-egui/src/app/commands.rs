@@ -108,6 +108,14 @@ impl PhotocraftApp {
                 None
             };
             if let Some(mode) = paste_as {
+                // Reject options the engine's explicit-mode validation rejects before an OS
+                // import can replace the current clip and then have the command fail.
+                if ["inPlace", "clampToCanvas", "document", "layer", "layers", "path"].iter().any(|key| params.get(key).is_some()) {
+                    return Err("explicit Paste modes do not support these placement or target options".into());
+                }
+                if params.get("target").is_some_and(|target| target.as_str() != Some("pixels")) {
+                    return Err("explicit Paste requires the layer composite target".into());
+                }
                 // Pixels can come from the bitmap when the SVG can't be read; vectors can't.
                 // A refresh above (the path clipboard's intercept or the menu) already read the
                 // OS clipboard: for pixels its import stands, and an unchanged older SVG must

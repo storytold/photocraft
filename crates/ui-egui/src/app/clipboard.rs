@@ -80,9 +80,9 @@ impl PhotocraftApp {
         // The freshness guard orders OS bitmaps by `os_clip_sig`: record the actual clipboard
         // bitmap's signature, not this SVG's own raster mirror, so a later Paste As pixels
         // recognizes an unchanged clipboard bitmap instead of importing it over a newer path
-        // clip. A read failure or malformed image keeps the mirror's signature — a baseline
-        // of uncertain scope beats none at all.
-        self.os_clip_sig = self
+        // clip. Only learn the bitmap while the SVG read is still current: if the clipboard
+        // changed between the reads, that bitmap is newer and must not look already observed.
+        let bitmap_sig = self
             .services
             .clipboard_get_image
             .as_mut()
@@ -91,8 +91,11 @@ impl PhotocraftApp {
                 let rgba = u64::from(*w).checked_mul(u64::from(*h)).and_then(|n| n.checked_mul(4));
                 *w > 0 && *h > 0 && *w <= i32::MAX as u32 && *h <= i32::MAX as u32 && rgba == Some(bytes.len() as u64)
             })
-            .map(|(w, h, bytes)| clip_signature(w, h, &bytes))
-            .or(Some(mirror_sig));
+            .map(|(w, h, bytes)| clip_signature(w, h, &bytes));
+        let bitmap_is_current =
+            bitmap_sig.is_some() && self.services.clipboard_get_svg.as_mut().and_then(|get| get().ok().flatten()).is_some_and(|current| current == source);
+        // A failed read, malformed image or clipboard change keeps the mirror's signature.
+        self.os_clip_sig = bitmap_sig.filter(|_| bitmap_is_current).or(Some(mirror_sig));
         self.os_clip_svg = clip.svg.clone();
         // One clipboard: an imported SVG replaces a path clip, like any installed clip.
         self.session.path_clipboard = None;

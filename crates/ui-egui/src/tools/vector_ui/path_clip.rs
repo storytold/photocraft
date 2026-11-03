@@ -66,12 +66,15 @@ pub(crate) fn intercept(app: &mut PhotocraftApp, id: &str, params: &Value) -> Op
     // content) alone, and learns the baseline it needs to order the two clips. Routing then
     // dispatches whatever is still the freshest clip. A successful refresh installed the
     // newest OS clip: the paste dispatch below must not re-import over it (like the menu's
-    // paste in `invoke`). An invalid `as` is rejected by the dispatch below, so it must not
-    // import here either: the rejection would still clear the path clip.
+    // paste in `invoke`). A request the explicit-mode dispatch rejects (an invalid `as`,
+    // placement/target options or a non-pixel target) must not import here either: the
+    // rejection would still clear the path clip. `target: "pixels"` is supported and refreshes.
     if id == "edit.paste"
         && app.session.path_clipboard.is_some()
         && app.services.clipboard_get_image.is_some()
         && params.get("as").is_none_or(|mode| matches!(mode.as_str(), Some("pixels" | "path" | "shape")))
+        && ["inPlace", "clampToCanvas", "document", "layer", "layers", "path"].iter().all(|key| params.get(key).is_none())
+        && params.get("target").is_none_or(|target| target.as_str() == Some("pixels"))
         && !app.clip_read_for_paste
         && app.import_os_clipboard().unwrap_or(false)
     {
@@ -437,10 +440,11 @@ mod tests {
         assert!(app.session.path_clipboard.is_none(), "and the changed bitmap displaced the path clip");
     }
 
-    /// An invalid `as` is rejected by the paste dispatch — the rejection must not run the
-    /// path clipboard's refresh import, which would clear the path clip as a side effect.
+    /// A Paste As request rejected by the engine must not run the path clipboard's refresh
+    /// import, which would clear the path clip as a side effect. The supported layer-composite
+    /// target still refreshes.
     #[test]
-    fn an_invalid_as_leaves_the_path_clip_alone() {
+    fn invalid_paste_as_requests_leave_the_path_clip_alone() {
         let image: OsImage = std::sync::Arc::default();
         let read = image.clone();
         let services = crate::Services { clipboard_get_image: Some(Box::new(move || Ok(read.lock().unwrap().clone()))), ..Default::default() };
@@ -459,8 +463,24 @@ mod tests {
         *image.lock().unwrap() = Some((2, 1, vec![0, 255, 0, 255, 0, 255, 0, 255]));
         let err = app.run("edit.paste", json!({"as": "bogus"})).unwrap_err();
         assert!(err.contains("`as` must be"), "{err}");
-        assert!(app.session.path_clipboard.is_some(), "the rejected command must not clear the path clip");
-        assert!(app.session.clipboard.is_none(), "and must not install the OS image either");
+        for params in [
+            json!({"as": "pixels", "inPlace": true}),
+            json!({"as": "pixels", "clampToCanvas": false}),
+            json!({"as": "pixels", "document": 1}),
+            json!({"as": "pixels", "layer": 1}),
+            json!({"as": "pixels", "layers": [1]}),
+            json!({"as": "pixels", "path": "work"}),
+            json!({"as": "pixels", "target": "mask"}),
+        ] {
+            let err = app.run("edit.paste", params.clone()).unwrap_err();
+            assert!(err.contains("explicit Paste"), "{params}: {err}");
+            assert!(app.session.path_clipboard.is_some(), "{params}: the rejected command must not clear the path clip");
+            assert!(app.session.clipboard.is_none(), "{params}: and must not install the OS image either");
+        }
+        // `target: "pixels"` is the supported explicit-mode target, so its refresh still runs.
+        app.run("edit.paste", json!({"as": "pixels", "target": "pixels"})).unwrap();
+        assert!(app.session.path_clipboard.is_none(), "the supported request imported the changed OS image");
+        assert_eq!(app.session.clipboard.as_ref().unwrap().surface.rgba(0, 0), [0.0, 1.0, 0.0, 1.0]);
     }
 
     /// Paste As path asks for vectors: when the path clipboard's refresh installed a changed OS
@@ -489,6 +509,7 @@ mod tests {
         app.run("edit.paste", json!({"as": "path"})).unwrap();
         let clip = app.session.clipboard.as_ref().expect("Paste As path leaves a clipboard");
         assert!(clip.svg.is_some(), "Paste As path read the unchanged OS SVG after the refresh");
+        assert!(saved(&app, "Pasted Path 1").is_some(), "Paste As path inserted the imported vectors into the document");
         assert!(app.session.path_clipboard.is_none(), "the OS clip displaced the path clip on the way");
     }
 
