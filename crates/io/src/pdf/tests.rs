@@ -315,7 +315,7 @@ fn text_outside_the_vector_prefix_does_not_consume_the_selection_font() {
 
 #[test]
 fn a_text_layer_refused_at_emission_keeps_the_upper_vectors_and_stays_raster() {
-    use photocraft_doc::{TextLayer, TextShape};
+    use photocraft_doc::{TextLayer, text::TextShape};
     let mut d = doc(ColorMode::Rgb);
     d.size = Size { width: 128, height: 48 };
     let fmt = d.pixel_format();
