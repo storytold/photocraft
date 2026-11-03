@@ -464,6 +464,7 @@ fn batch_runs_an_action_recorded_with_the_type_tool() {
         app.run("type.edit", json!({"layer": id, "replace": {"start": i, "end": i, "text": c.to_string()}, "coalesce": "typing"})).unwrap();
     }
     app.run("actions.stop", json!({})).unwrap();
+    app.run("file.saveACopy", json!({"path": dir.join("ref.png").to_string_lossy()})).unwrap();
     assert_eq!(crate::actions::selected_action(&app).map(|a| a.steps.len()), Some(1), "one step for the typing");
     // CodeRabbit on #10730: and that step makes the layer with the text typed.
     assert_eq!(crate::actions::selected_action(&app).and_then(|a| a.steps.first()).map(|(_, p)| p["text"].clone()), Some(json!("Hi")));
@@ -480,6 +481,10 @@ fn batch_runs_an_action_recorded_with_the_type_tool() {
         let pixels = |folder: &str| photocraft_codecs::decode(&std::fs::read(dir.join(folder).join(name)).unwrap()).unwrap().data().to_vec();
         assert_ne!(pixels("out"), pixels("in"), "{name}: the text was laid on it");
     }
+    // CodeRabbit on #10730: all of it, as typed by hand: the document the action was recorded
+    // on (the same image, with the text typed into it) has the pixels Batch wrote.
+    let decoded = |path: std::path::PathBuf| photocraft_codecs::decode(&std::fs::read(path).unwrap()).unwrap().data().to_vec();
+    assert_eq!(decoded(dir.join("out").join("a.png")), decoded(dir.join("ref.png")), "Batch laid the whole text, as it was typed by hand");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
