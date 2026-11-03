@@ -588,15 +588,7 @@ pub(crate) fn char_style(base: &[Option<&E>], d: &E, fonts: &[String], k: f32) -
     s.discretionary_ligatures = flag("DLigatures").unwrap_or(false);
     for (key, tag) in OPENTYPE_KEYS {
         if flag(key) == Some(true) {
-            push_feature(&mut s, tag);
-        }
-    }
-    // Krita / Illustrator write `/FigureStyle` as an int for the four width×height numeral combos
-    // (Photoshop's UI historically only toggled OldStyle). Expand it after the bool keys so a
-    // file that carries both does not duplicate tags.
-    if let Some(code) = g("FigureStyle").and_then(E::as_i64) {
-        for tag in figure_style_tags(code) {
-            push_feature(&mut s, tag);
+            s.features.push(photocraft_doc::text::FontFeature { tag: tag.to_string(), value: 1 });
         }
     }
     s.kerning = if flag("AutoKerning") == Some(false) { Kerning::Off } else { Kerning::Metrics };
@@ -797,71 +789,13 @@ pub(crate) fn postscript_for(s: &CharStyle) -> String {
 
 /// EngineData style keys for the Type › OpenType toggles and the OpenType feature each one turns
 /// on (the standard and discretionary ligature keys map to dedicated [`CharStyle`] fields).
-///
-/// `lnum` / `pnum` / `tnum` are written as bools so PhotoCraft round-trips every Numerals menu
-/// choice; Photoshop's EngineData historically only had `OldStyle` (`onum`), with the four
-/// width×height combos in the integer [`figure_style_from_features`] / `FigureStyle` field.
-pub const OPENTYPE_KEYS: [(&str, &str); 11] = [
+pub const OPENTYPE_KEYS: [(&str, &str); 8] = [
     ("ContextualLigatures", "calt"),
     ("Swash", "swsh"),
     ("OldStyle", "onum"),
-    ("LiningFigures", "lnum"),
-    ("ProportionalFigures", "pnum"),
-    ("TabularFigures", "tnum"),
     ("StylisticAlternates", "salt"),
     ("Titling", "titl"),
     ("Ornaments", "ornm"),
     ("Ordinals", "ordn"),
     ("Fractions", "frac"),
 ];
-
-/// Tags enabled by EngineData `/FigureStyle` (Krita / Illustrator): 0 none, 1 tabular+lining,
-/// 2 proportional+oldstyle, 3 proportional+lining, 4 tabular+oldstyle.
-pub fn figure_style_tags(code: i64) -> &'static [&'static str] {
-    match code {
-        1 => &["tnum", "lnum"],
-        2 => &["pnum", "onum"],
-        3 => &["pnum", "lnum"],
-        4 => &["tnum", "onum"],
-        _ => &[],
-    }
-}
-
-/// Inverse of [`figure_style_tags`]: exact Numerals combos only (singles stay on the bool keys).
-pub fn figure_style_from_features(features: &[photocraft_doc::text::FontFeature]) -> i64 {
-    let on = |tag: &str| features.iter().any(|f| f.tag == tag && f.value > 0);
-    match (on("tnum"), on("lnum"), on("pnum"), on("onum")) {
-        (true, true, false, false) => 1,
-        (false, false, true, true) => 2,
-        (false, true, true, false) => 3,
-        (true, false, false, true) => 4,
-        _ => 0,
-    }
-}
-
-fn push_feature(s: &mut CharStyle, tag: &str) {
-    if !s.features.iter().any(|f| f.tag == tag) {
-        s.features.push(photocraft_doc::text::FontFeature { tag: tag.to_string(), value: 1 });
-    }
-}
-
-#[cfg(test)]
-mod figure_style_tests {
-    use super::{figure_style_from_features, figure_style_tags};
-    use photocraft_doc::text::FontFeature;
-
-    fn feats(tags: &[&str]) -> Vec<FontFeature> {
-        tags.iter().map(|t| FontFeature { tag: (*t).into(), value: 1 }).collect()
-    }
-
-    #[test]
-    fn figure_style_round_trips_exact_combos() {
-        for code in 1..=4 {
-            let tags = figure_style_tags(code);
-            assert_eq!(figure_style_from_features(&feats(tags)), code);
-        }
-        assert_eq!(figure_style_from_features(&feats(&["lnum"])), 0);
-        assert_eq!(figure_style_from_features(&feats(&["onum"])), 0);
-        assert_eq!(figure_style_tags(0), &[] as &[&str]);
-    }
-}

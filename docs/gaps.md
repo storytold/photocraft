@@ -527,7 +527,7 @@ what an agent can't finish alone.
 | 2026-10-11 | minor | G13: Czech dynamic UI text localized; engine messages and native review remain open |
 | 2026-10-11 | minor | G8: triple/quadruple/five-click type selection done (TYPE-218-8, #3493); Type evidence recounted |
 | 2026-10-11 | minor | G4: Pattern Stamp and Background Eraser draw live, Spot Healing shows a dark overlay while dragging (#3754); only the Mixer Brush is left of TOOL-213-7 |
-| 2026-11-03 | minor | G8: Type › OpenType › Numerals submenu landed (TYPE-218-5); PSD EngineData now round-trips `lnum`/`pnum`/`tnum`/`onum` (+ `/FigureStyle` combos); Stylistic Sets and font-feature greying still missing |
+| 2026-11-03 | minor | G8: Type › OpenType › Numerals submenu landed (TYPE-218-5); Stylistic Sets and font-feature greying still missing |
 | 2026-10-11 | minor | G8: Character panel OpenType buttons landed (TYPE-218-5, #3752); Numerals and Stylistic Sets submenus still missing |
 | 2026-10-11 | minor | G10: one-page flattened PDF write shipped (io::pdf, #3401); FILE-215-10 now partial |
 | 2026-10-10 | minor | G2: recorded Tilt-Shift computation/filtered-proxy measurements and limits; gap and estimate remain open
