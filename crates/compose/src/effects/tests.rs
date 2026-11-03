@@ -1047,3 +1047,11 @@ fn shifting_by_hostile_distances_does_not_overflow() {
         assert_eq!(s.v.len(), 144);
     }
 }
+
+/// A plane with no pixels but a huge other dimension must not size scratch from it.
+#[test]
+fn an_empty_distance_transform_allocates_nothing() {
+    let (d, n) = edt_nearest(&[], 0, 1 << 30);
+    assert!(d.is_empty() && n.is_empty());
+    assert!(edt(&[], 1 << 30, 0).is_empty());
+}
