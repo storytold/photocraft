@@ -271,6 +271,7 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 ctx.request_repaint();
             }
             let filter = crate::layer_filter_ui::Filter::of(&app.ui);
+            let group_ids = filter.group_ids(&doc);
             let fx_collapsed = app.session.active().map(|d| d.fx_collapsed.clone()).unwrap_or_default();
             crate::layer_row_ui::begin(ui.ctx());
             // The drawn rows, top to bottom (#1721): the space between them and below the last
@@ -281,7 +282,7 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 if !photocraft_engine::select_extra_cmds::isolation_shows(&doc, &isolated, l.id) {
                     continue;
                 }
-                if !filter.shows(l) {
+                if !filter.shows_in(&group_ids, l) { 
                     continue;
                 }
                 let row = RowSel { selected: selection.contains(&l.id), primary: active == Some(l.id), multi: selection.len() > 1 };

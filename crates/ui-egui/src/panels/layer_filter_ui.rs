@@ -3,6 +3,8 @@
 //! picks one blend mode. The criteria live in `UiState` (`layer_filter*`), so the control channel
 //! can read and set them.
 
+use std::collections::HashSet;
+
 use photocraft_color::BlendMode;
 use photocraft_doc::{Layer, LayerContent};
 use serde::{Deserialize, Serialize};
@@ -18,6 +20,7 @@ pub enum FilterBy {
     Kind,
     Name,
     Mode,
+    Group,
 }
 
 /// The filter criteria, copied out of `UiState` for one frame of the Layers panel.
@@ -42,6 +45,7 @@ impl Filter {
             FilterBy::Kind => !self.kinds.is_empty(),
             FilterBy::Name => !self.name.trim().is_empty(),
             FilterBy::Mode => true,
+            FilterBy::Group => true,
         }
     }
 
@@ -54,7 +58,25 @@ impl Filter {
             FilterBy::Kind => self.kinds.iter().any(|k| k == kind(l)),
             FilterBy::Name => l.name.to_lowercase().contains(&self.name.trim().to_lowercase()),
             FilterBy::Mode => l.blend == self.mode,
+            FilterBy::Group => true,
         }
+    }
+
+    pub fn show_all(&self) -> bool {
+        self.active() && self.by != FilterBy::Group
+    }
+
+    /// The layers the Group filter lists, worked out once per frame (empty for other filters).
+    pub fn group_ids(&self, doc: &photocraft_doc::Document) -> HashSet<u64> {
+        if self.by == FilterBy::Group { group::listed(doc) } else { HashSet::new() }
+    }
+
+    /// Like [`Filter::shows`], with the Group filter's precomputed ids from [`Filter::group_ids`].
+    pub fn shows_in(&self, groups: &HashSet<u64>, l: &Layer) -> bool {
+        if self.by == FilterBy::Group {
+            return groups.contains(&l.id.0);
+        }
+        self.shows(l)
     }
 }
 
@@ -72,7 +94,7 @@ pub fn patched(current: &UiState, v: &serde_json::Value) -> Result<Filter, Strin
     let mut f =
         Filter { by: current.layer_filter_by, kinds: current.layer_filter.clone(), name: current.layer_filter_name.clone(), mode: current.layer_filter_mode };
     if let Some(by) = o.get("by") {
-        f.by = serde_json::from_value(by.clone()).map_err(|_| "layerFilter.by must be kind, name or mode".to_string())?;
+        f.by = serde_json::from_value(by.clone()).map_err(|_| "layerFilter.by must be kind, name, mode or group".to_string())?;
     }
     if let Some(kinds) = o.get("kinds") {
         let list = kinds.as_array().ok_or("layerFilter.kinds must be a list")?;
@@ -122,7 +144,7 @@ fn kind(l: &Layer) -> &'static str {
 pub fn bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
-        let by = [(FilterBy::Kind, tl!("Kind")), (FilterBy::Name, tl!("Name")), (FilterBy::Mode, tl!("Mode"))];
+        let by = [(FilterBy::Kind, tl!("Kind")), (FilterBy::Name, tl!("Name")), (FilterBy::Mode, tl!("Mode")), (FilterBy::Group, tl!("Group"))];
         widgets::dropdown(ui, "layer-filter-by", tl!("Kind"), &mut app.ui.layer_filter_by, &by, 64.0);
         ui.add_space(4.0);
         match app.ui.layer_filter_by {
@@ -153,9 +175,19 @@ pub fn bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 let width = ui.available_width().max(96.0);
                 widgets::dropdown(ui, "layer-filter-mode", tl!("Mode"), &mut app.ui.layer_filter_mode, &modes, width);
             }
+            FilterBy::Group => {} 
         }
     });
 }
+
+mod group;
+
+#[cfg(test)]
+mod tests;
+mod group;
+
+#[cfg(test)]
+mod group_tests;
 
 #[cfg(test)]
 mod tests;
