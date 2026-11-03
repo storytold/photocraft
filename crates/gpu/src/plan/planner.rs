@@ -14,7 +14,17 @@ pub(super) struct Planner<'a> {
     /// Layers planned so far, counting a layer each time it is planned (a clipped pass-through
     /// group is planned twice).
     visits: usize,
+    /// Gradient lookup tables built so far (64 KiB of host memory each, kept in the plan).
+    luts: std::cell::Cell<usize>,
 }
+
+/// Most gradient lookup tables one plan keeps (64 MiB): a nested clipped pass-through group
+/// plans its gradient fills again at every level, each with its own table.
+const MAX_PLAN_LUTS: usize = 1024;
+
+/// Most accumulator slots one plan may hold live at once: every slot is a chunk-sized texture
+/// (`cells.rs`), and nested isolated groups keep their ancestors' slots live.
+pub(super) const MAX_PLAN_SLOTS: u32 = 32;
 
 /// Most layer plannings one document may take: a pass-through group with clipped layers is
 /// planned twice, so groups nested in one another double the work at every level.
@@ -179,7 +189,16 @@ fn check_effect_gradients(items: &[&Effect]) -> Result<(), Unsupported> {
 
 impl<'a> Planner<'a> {
     pub(super) fn new(cx: DocCtx<'a>) -> Self {
-        Planner { passes: Vec::new(), free: Vec::new(), refs: Vec::new(), cx, fx: Vec::new(), checkpoints: Vec::new(), visits: 0 }
+        Planner {
+            passes: Vec::new(),
+            free: Vec::new(),
+            refs: Vec::new(),
+            cx,
+            fx: Vec::new(),
+            checkpoints: Vec::new(),
+            visits: 0,
+            luts: std::cell::Cell::new(0),
+        }
     }
 
     pub(super) fn finish(self, root: Slot) -> Plan<'a> {
@@ -707,6 +726,10 @@ impl<'a> Planner<'a> {
                 // position hash, see the shader).
                 let quantum = photocraft_compose::adjustment_quantum(self.cx.depth).unwrap_or(0.0);
                 p.params[2] = [offset.0, offset.1, quantum, if *dither { 1.0 } else { 0.0 }];
+                self.luts.set(self.luts.get() + 1);
+                if self.luts.get() > MAX_PLAN_LUTS {
+                    return Err(Unsupported("too many gradient fills to plan for the GPU (composited on the CPU)".into()));
+                }
                 let ramp = photocraft_compose::gradient_fill::Ramp::new(f);
                 let mut rows = vec![[0.0f32; 4096]; 4];
                 for k in 0..4096 {
