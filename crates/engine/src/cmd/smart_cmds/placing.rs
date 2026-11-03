@@ -270,3 +270,63 @@ pub(super) fn via_copy(s: &mut Session, p: &Value) -> Result<Value> {
         Ok(json!({"layer": new_id.0}))
     })
 }
+
+/// Whether `sm` is placed other than at its own size and orientation (scaled, rotated, skewed,
+/// distorted) or warped: what Reset Transform takes back.
+pub(super) fn is_transformed(sm: &SmartObject) -> bool {
+    let near = |a: f64, b: f64| (a - b).abs() < 1e-9;
+    let m = sm.transform.m;
+    sm.warp.is_some() || sm.perspective.is_some() || !(near(m[0], 1.0) && near(m[1], 0.0) && near(m[2], 0.0) && near(m[3], 1.0))
+}
+
+/// Layer › Smart Objects › Reset Transform: the contents at their own size and orientation, with no
+/// warp, centred where the smart object is now (Photoshop: "the bounding box resets to its
+/// original proportions and orientation"). One step; the filter mask follows the change.
+pub(super) fn reset_transform(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "layer.smartObjects.resetTransform";
+    let id = layer_param(s, p)?;
+    let st = s.active().ok_or(EngineError::NoDocument)?;
+    let LayerContent::Smart(sm) = &st.doc.layer(id).ok_or(EngineError::NoLayer(id))?.content else {
+        return Err(EngineError::BadParams { cmd: CMD.into(), msg: "the layer is not a smart object".into() });
+    };
+    if !is_transformed(sm) {
+        return Ok(json!({"layer": id.0, "changed": false}));
+    }
+    let layer = st.doc.layer(id).ok_or(EngineError::NoLayer(id))?;
+    let locks = layer.locks.union(crate::transform_cmds::group_locks(&st.doc, id));
+    if locks.position || locks.all {
+        return Err(EngineError::Other(format!("layer \"{}\" is locked", layer.name)));
+    }
+    let b = super::rendering::source_box(&st.doc, sm).ok_or_else(|| EngineError::Other("the smart object's contents can't be read".into()))?;
+    let old = placement(sm);
+    let (cx, cy) = old.apply((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0);
+    if !(cx.is_finite() && cy.is_finite()) {
+        return Err(EngineError::Other("the smart object's transform is degenerate".into()));
+    }
+    // Centred where it is, on whole pixels so the contents land unresampled.
+    let (dx, dy) = ((cx - (b[0] + b[2]) / 2.0).round(), (cy - (b[1] + b[3]) / 2.0).round());
+    let new = Homography([1.0, 0.0, dx, 0.0, 1.0, dy, 0.0, 0.0, 1.0]);
+    // Back at full size: refused before allocating when that would make an absurd layer.
+    let src = Rect::new(b[0].floor() as i32, b[1].floor() as i32, b[2].ceil() as i32, b[3].ceil() as i32);
+    crate::transform_cmds::check_budget(src, &new, "Reset Transform", st.doc.pixel_format())?;
+    // The filter mask and the linked masks follow the contents, from where the placement and the
+    // warp showed them.
+    let follow = crate::warp_cmds::contents_move(old, sm.warp.clone(), new, None)?;
+    s.edit("Reset Transform", move |doc, _| {
+        let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
+        let LayerContent::Smart(sm) = &mut l.content else { return Err(EngineError::Other("not a smart object".into())) };
+        sm.warp = None;
+        set_placement(sm, new);
+        if let Some(m) = &mut sm.filter_mask {
+            m.surface = photocraft_algo::warp::warp_mesh_gray_with(
+                &m.surface,
+                &follow,
+                photocraft_algo::warp::Fold::IN_PLACE,
+                photocraft_algo::transform::Interp::Bilinear,
+            );
+        }
+        crate::warp_cmds::move_linked_masks(l, &follow);
+        super::refresh(doc, id).map(|_| ())
+    })?;
+    Ok(json!({"layer": id.0, "changed": true}))
+}

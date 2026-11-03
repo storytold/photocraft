@@ -1363,3 +1363,33 @@ fn crop_menu_rows_act_like_the_options_bar() {
     choose(&mut app, &ctx, CROP_CANCEL);
     assert!(!crate::crop_ui::pending(&app));
 }
+
+/// #8927: right-click in Warp mode opens the transform menu too (it opened the tool's own
+/// right-click panel), with Warp checked; Rotate and Flip stay greyed while warping, and a box
+/// mode leaves Warp for that mode.
+#[test]
+fn right_click_in_warp_mode_opens_the_transform_menu() {
+    let mut app = app();
+    app.ui.tool = Tool::Brush;
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("select.rect", json!({"x": 4, "y": 6, "width": 10, "height": 8})).unwrap();
+    app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    app.run("select.deselect", json!({})).unwrap();
+    let mut h = harness(app);
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "edit.transform.warp", json!({})).unwrap();
+    h.run_steps(2);
+    assert!(h.state().ui.transform.as_ref().unwrap().warp.is_some());
+    let center = h.state().last_canvas_rect.center();
+    right_click(&mut h, center, Modifiers::NONE);
+    assert!(h.state().ui.brush_picker.is_none(), "not the tool's own right-click");
+    let menu = h.state().ui.canvas_tool_menu.clone().expect("the transform menu");
+    assert!(menu.transform);
+    assert!(mode_checked(h.state(), &menu, "edit.transform.warp"));
+    assert!(!mode_checked(h.state(), &menu, "edit.freeTransform"));
+    assert!(!entry_enabled(h.state(), &menu, "edit.transform.rotate90Cw"), "Rotate turns the box, not the mesh");
+    assert!(available(h.state(), &menu, "edit.transform.distort"), "Distort is offered");
+    choose(h.state_mut(), &ctx, "edit.transform.distort");
+    let t = h.state().ui.transform.as_ref().expect("still transforming");
+    assert!(t.warp.is_none() && t.mode == crate::state::TransformMode::Distort, "left Warp for Distort: {}", h.state().ui.status);
+}

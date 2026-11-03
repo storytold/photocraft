@@ -95,8 +95,23 @@ pub fn draw_content(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
     let (display, _) = crate::canvas::canvas_display(app, &pv.doc, output);
     // Selection tint and lone mask/channel values are UI diagnostics, not document colors.
     let display = display.as_deref().filter(|_| !t.selection && t.target.is_none() && t.path.is_none());
+    // A warp in a smart object's contents' space is drawn from the unplaced contents.
+    // The texels and the box (in the warp's space) they cover.
+    let texels = |contents_space: bool, r: [f64; 4]| match pv.contents.as_ref().filter(|_| contents_space) {
+        Some((tex, covers)) => (tex, *covers),
+        None => (&pv.texture, r),
+    };
     if let Some(w) = &t.warp {
-        draw_warp_content(painter, xf, t, w, pv, display);
+        draw_warp_content(painter, xf, t.rect, w, &|p| t.warp_to_doc(p), t.interpolation == "nearest", texels(t.warp_place.is_some(), t.rect), pv, display);
+        return;
+    }
+    // A warp kept from Warp mode: the box transforms the warped result (one session).
+    if let Some(w) = t.held_doc_warp() {
+        draw_warp_content(painter, xf, w.bounds, &w, &|p| p, t.interpolation == "nearest", texels(false, w.bounds), pv, display);
+        return;
+    }
+    if let Some(w) = &t.held_warp {
+        draw_warp_content(painter, xf, w.bounds, w, &t.held_to_doc(), t.interpolation == "nearest", texels(true, w.bounds), pv, display);
         return;
     }
     let ctx = painter.ctx();
@@ -151,6 +166,16 @@ pub fn draw_content(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
 /// more than the frame (the styles of a box over several layers reach past it, [`Several`]),
 /// where the frame's transform takes the texture's rect.
 pub(super) fn texture_quad(t: &TransformSession, pv: &TransformPreview) -> [[f64; 2]; 4] {
+    // A box that opened on a smart object's placement takes the texels from where they were.
+    // Only while the box still goes from there: Warp and Undo can leave it upright again.
+    if let Some(placed) = pv.placed.filter(|_| t.start.is_some())
+        && let Some(h) = Homography::quad_to_quad(t.start_quad(), t.quad)
+    {
+        return placed.map(|[x, y]| {
+            let (a, b) = h.apply(x, y);
+            [a, b]
+        });
+    }
     let Some(sv) = pv.several.as_ref().filter(|sv| sv.rect != sv.frame) else { return t.quad };
     let Some(h) = Homography::rect_to_quad(t.rect, t.quad) else { return t.quad };
     corners([sv.rect.x0, sv.rect.y0, sv.rect.x1, sv.rect.y1].map(f64::from)).map(|[x, y]| {
@@ -166,7 +191,8 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
     let scr = |q: [f64; 2]| xf.to_screen(q[0] as f32, q[1] as f32);
     if let Some(w) = &t.warp {
         let over_canvas = painter.ctx().input(|i| i.pointer.hover_pos()).filter(|p| xf.rect.contains(*p)).map(|p| xf.to_doc(p));
-        let at = pv.split_pointer.or(over_canvas);
+        // The split pointer is kept in the warp's space (a smart object's contents, #8927).
+        let at = pv.split_pointer.map(|p| t.warp_to_doc(p)).or(over_canvas);
         // The same keys as `cursor`, sticky ones included, so the guide matches the pointer.
         let mods = crate::workspace_ui::sticky_mods(app, painter.ctx().input(|i| i.modifiers));
         let alt = mods.alt || mods.command;
@@ -174,12 +200,13 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
             let tool = pv.split_tool.or_else(|| {
                 (alt || pv.split_quick).then(|| {
                     let m = w.to_mesh(1, 1);
-                    quick_split_kind(&m, w.bounds, m.param_at(p))
+                    let q = t.doc_to_warp(p);
+                    quick_split_kind(&m, w.bounds, m.param_at(q), t.warp_unit(q))
                 })
             });
             tool.map(|tool| (tool, p))
         });
-        draw_warp_overlay(painter, xf, w, pv, guide);
+        draw_warp_overlay(painter, xf, t, w, pv, guide);
         return;
     }
     if pv.committing.is_some() {
@@ -240,6 +267,24 @@ pub(crate) fn carries_selection_of(app: &PhotocraftApp, document: DocId) -> bool
     matches!((&app.ui.transform, &app.transform_preview), (Some(t), Some(pv)) if pv.doc.id == document && carries_selection(app, t))
 }
 
+/// The selection outline bent by a warp, per outline segment its points in the document, and
+/// what it was mapped for ([`TransformPreview::ants`]).
+pub(crate) type BentAnts = (AntsKey, Vec<Vec<[f64; 2]>>);
+
+/// What the selection outline bent by a warp was mapped for.
+#[derive(Clone, PartialEq)]
+pub(crate) struct AntsKey {
+    warp: Option<Warp>,
+    place: Option<[f64; 9]>,
+    held: Option<Warp>,
+    held_place: Option<[f64; 9]>,
+    quad: [[f64; 2]; 4],
+    start: [[f64; 2]; 4],
+    origin: Option<(Warp, [f64; 9])>,
+    segs: (usize, Option<crate::outline::Segment>, Option<crate::outline::Segment>),
+    piece: f64,
+}
+
 /// The marching ants where the open box puts them (#5297): the selection follows a move, scale,
 /// rotation, skew, distort, perspective or warp while it is made, to where applying it leaves it.
 /// `segs` is the outline of `document`'s selection at rest. The ants are returned as shapes for
@@ -257,25 +302,90 @@ pub(crate) fn selection_ants(
     let scr = |(x, y): (f64, f64)| xf.to_screen(x as f32, y as f32);
     let doc = |p: [i32; 2]| [f64::from(p[0]), f64::from(p[1])];
     let along = |a: [f64; 2], b: [f64; 2], k: f64| [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k];
-    if let Some(w) = &t.warp {
+    // A smart object's warp (being edited, or held under the box) moves the outline as it moves
+    // the contents: from what Warp opened on to the warp shown now (#8927).
+    let contents = match (&t.warp, t.warp_place, &t.held_warp, t.held_place, &t.warp_origin) {
+        (Some(w), Some(place), _, _, Some((w0, p0))) => {
+            photocraft_engine::warp_cmds::contents_move(Homography(*p0), Some(w0.clone()), Homography(place), Some(w.clone())).ok()
+        }
+        (None, _, Some(w), Some(place), Some((w0, p0))) => {
+            photocraft_engine::warp_cmds::contents_move(Homography(*p0), Some(w0.clone()), t.box_move().mul(&Homography(place)), Some(w.clone())).ok()
+        }
+        _ => None,
+    };
+    // A layer's warp held under the box: as the box leaves it, as the commit applies it.
+    let held = t.held_doc_warp().filter(|_| t.warp.is_none());
+    let warp_map;
+    let bent: Option<&dyn Fn(f64, f64) -> (f64, f64)> = match (&contents, t.warp.as_ref().or(held.as_ref())) {
+        (Some(f), _) => Some(f),
+        (None, Some(w)) => {
+            warp_map = |x: f64, y: f64| w.map(x, y);
+            Some(&warp_map)
+        }
+        _ => None,
+    };
+    if let Some(map) = bent {
         // A warp bends the outline's straight runs: each is drawn in pieces about 8 points long.
         let piece = (8.0 / f64::from(xf.zoom.max(1e-3))).max(1.0);
-        let lines = segs.iter().flat_map(|(a, b)| {
-            let (a, b) = (doc(*a), doc(*b));
-            let n = (((b[0] - a[0]).abs() + (b[1] - a[1]).abs()) / piece).ceil().clamp(1.0, 256.0) as usize;
-            let at = move |i: usize| {
-                let p = along(a, b, i as f64 / n as f64);
-                scr(w.map(p[0], p[1]))
-            };
-            (0..n).map(move |i| (at(i), at(i + 1)))
-        });
+        let key = AntsKey {
+            warp: t.warp.clone(),
+            place: t.warp_place,
+            held: t.held_warp.clone(),
+            held_place: t.held_place,
+            quad: t.quad,
+            start: t.start_quad(),
+            origin: t.warp_origin.clone(),
+            segs: (segs.len(), segs.first().copied(), segs.last().copied()),
+            piece,
+        };
+        let cache = app.transform_preview.as_ref().map(|pv| &pv.ants);
+        let mut held_cache = cache.map(|c| c.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+        let fresh = match held_cache.as_deref() {
+            Some(Some((k, _))) => *k != key,
+            _ => true,
+        };
+        let computed;
+        let runs: &[Vec<[f64; 2]>] = if fresh {
+            let pts: Vec<Vec<[f64; 2]>> = segs
+                .iter()
+                .map(|(a, b)| {
+                    let (a, b) = (doc(*a), doc(*b));
+                    let n = (((b[0] - a[0]).abs() + (b[1] - a[1]).abs()) / piece).ceil().clamp(1.0, 256.0) as usize;
+                    (0..=n)
+                        .map(|i| {
+                            let p = along(a, b, i as f64 / n as f64);
+                            let (x, y) = map(p[0], p[1]);
+                            [x, y]
+                        })
+                        .collect()
+                })
+                .collect();
+            match held_cache.as_deref_mut() {
+                Some(slot) => &slot.insert((key, pts)).1,
+                None => {
+                    computed = pts;
+                    &computed
+                }
+            }
+        } else {
+            held_cache.as_deref().and_then(|c| c.as_ref()).map_or(&[][..], |(_, pts)| pts.as_slice())
+        };
+        let lines = runs.iter().flat_map(|run| run.windows(2).map(|w| (scr((w[0][0], w[0][1])), scr((w[1][0], w[1][1])))));
         Some(crate::canvas::marching_ants_line_shapes(painter, lines, time))
-    } else if let Some(h) = Homography::rect_to_quad(t.rect, t.quad) {
+    } else if let Some(h) = Homography::quad_to_quad(t.start_quad(), t.quad) {
+        // The box's move since it opened (from a smart object's placement, or its rect).
+        let s = t.start_quad();
+        let r = [
+            s.iter().map(|p| p[0]).fold(f64::MAX, f64::min),
+            s.iter().map(|p| p[1]).fold(f64::MAX, f64::min),
+            s.iter().map(|p| p[0]).fold(f64::MIN, f64::max),
+            s.iter().map(|p| p[1]).fold(f64::MIN, f64::max),
+        ];
         // Past a Distort's horizon the outline has no place, like the pixels (#4863): a run that
         // crosses it stops short of it, where its points are still a finite way off.
-        let front = h.front_side(t.rect);
+        let front = h.front_side(r);
         let depth = |p: [f64; 2]| front * h.w(p[0], p[1]);
-        let near = corners(t.rect).iter().map(|c| depth(*c)).fold(0.0, f64::max) * 1e-3;
+        let near = corners(r).iter().map(|c| depth(*c)).fold(0.0, f64::max) * 1e-3;
         let lines = segs.iter().filter_map(|(a, b)| {
             let (mut a, mut b) = (doc(*a), doc(*b));
             let (da, db) = (depth(a), depth(b));
@@ -301,7 +411,7 @@ pub(crate) fn selection_ants(
 /// and fill are the layer's as they are now, so edits made while the box is open show.
 pub(crate) fn styled_frame(app: &PhotocraftApp, zoom: f32, dragging: bool) -> Option<(&crate::transform_fx::StyledPreview, crate::transform_fx::Frame<'_>)> {
     let (t, pv) = (app.ui.transform.as_ref()?, app.transform_preview.as_ref()?);
-    let styled = pv.styled.as_ref().filter(|_| t.warp.is_none())?;
+    let styled = pv.styled.as_ref().filter(|_| t.warp.is_none() && t.held_warp.is_none())?;
     let st = app.session.active().filter(|st| st.doc.id == pv.doc.id)?;
     let layer = st.doc.layer(LayerId(t.layer)).filter(|l| l.visible && photocraft_compose::effects::has_effects(l))?;
     let frame = crate::transform_fx::Frame {
@@ -309,7 +419,7 @@ pub(crate) fn styled_frame(app: &PhotocraftApp, zoom: f32, dragging: bool) -> Op
         layer,
         revision: st.revision,
         texels: &pv.texture,
-        quad: t.quad,
+        quad: texture_quad(t, pv),
         quad_scale: quad_scale(t),
         nearest: t.interpolation == "nearest",
         zoom,
@@ -497,28 +607,49 @@ fn draw_warp_points(painter: &egui::Painter, m: &BezierMesh, scr: impl Fn([f64; 
 }
 
 /// The warped pixels and the layers above them ([`draw_content`] for a warp).
+/// `r` is the warp's own box, `texels` the texture and the box in the warp's space it covers, and
+/// `to_doc` where its points show: through a smart object's placement, and for a warp kept from
+/// Warp mode the box's move too.
+#[allow(clippy::too_many_arguments)]
 fn draw_warp_content(
     painter: &egui::Painter,
     xf: &ViewXform,
-    t: &TransformSession,
+    r: [f64; 4],
     w: &Warp,
+    to_doc: &dyn Fn([f64; 2]) -> [f64; 2],
+    nearest: bool,
+    (texels, covers): (&crate::transform_tex::PreviewTextures, [f64; 4]),
     pv: &TransformPreview,
     display: Option<&photocraft_engine::display_color::CanvasDisplay>,
 ) {
-    let r = t.rect;
     let m = w.to_mesh(1, 1);
     let (us, vs) = crate::warp_preview::samples(&m, xf.zoom as f64);
-    let (tex, uv) = pv.texture.pick_display(painter.ctx(), xf.zoom * painter.ctx().pixels_per_point(), 1.0, t.interpolation == "nearest", display);
+    let (tex, uv) = texels.pick_display(painter.ctx(), xf.zoom * painter.ctx().pixels_per_point(), 1.0, nearest, display);
     let mut mesh = egui::Mesh::with_texture(tex);
     let tint = Color32::from_white_alpha((pv.opacity.clamp(0.0, 1.0) * 255.0) as u8);
+    let along = |k: f64, lo: f64, hi: f64| if hi > lo { (k - lo) / (hi - lo) } else { 0.0 };
     for v in &vs {
         for u in &us {
-            let (x, y) = w.map(r[0] + u * (r[2] - r[0]), r[1] + v * (r[3] - r[1]));
-            mesh.vertices.push(egui::epaint::Vertex { pos: pos2(x as f32, y as f32), uv: pos2(*u as f32 * uv[0], *v as f32 * uv[1]), color: tint });
+            let (sx, sy) = (r[0] + u * (r[2] - r[0]), r[1] + v * (r[3] - r[1]));
+            let (x, y) = w.map(sx, sy);
+            // A smart object's warp is in its contents' space: shown through its placement.
+            let [x, y] = to_doc([x, y]);
+            let tex = pos2((along(sx, covers[0], covers[2]) * f64::from(uv[0])) as f32, (along(sy, covers[1], covers[3]) * f64::from(uv[1])) as f32);
+            mesh.vertices.push(egui::epaint::Vertex { pos: pos2(x as f32, y as f32), uv: tex, color: tint });
         }
     }
     let pos: Vec<[f32; 2]> = mesh.vertices.iter().map(|v| [v.pos.x, v.pos.y]).collect();
-    let rest: Vec<[f32; 2]> = vs.iter().flat_map(|v| us.iter().map(move |u| [(r[0] + u * (r[2] - r[0])) as f32, (r[1] + v * (r[3] - r[1])) as f32])).collect();
+    // Where each vertex sits without the warp, as the engine orders a fold's layers: a smart
+    // object's through its placement.
+    let rest: Vec<[f32; 2]> = vs
+        .iter()
+        .flat_map(|v| {
+            us.iter().map(move |u| {
+                let q = to_doc([r[0] + u * (r[2] - r[0]), r[1] + v * (r[3] - r[1])]);
+                [q[0] as f32, q[1] as f32]
+            })
+        })
+        .collect();
     mesh.indices = crate::warp_preview::triangle_order(&pos, &rest, us.len());
     painter.add(clip_to_canvas(mesh, canvas_size(pv), |p| xf.to_screen(p.x, p.y)));
     if let Some(a) = &pv.above {
@@ -527,8 +658,12 @@ fn draw_warp_content(
 }
 
 /// The warp grid, its control points and split guides ([`draw_overlay`] for a warp).
-fn draw_warp_overlay(painter: &egui::Painter, xf: &ViewXform, w: &Warp, pv: &TransformPreview, guide: Option<(SplitTool, [f64; 2])>) {
-    let scr = |q: [f64; 2]| xf.to_screen(q[0] as f32, q[1] as f32);
+fn draw_warp_overlay(painter: &egui::Painter, xf: &ViewXform, t: &TransformSession, w: &Warp, pv: &TransformPreview, guide: Option<(SplitTool, [f64; 2])>) {
+    // The grid's points are in the warp's space; a smart object's show through its placement.
+    let scr = |q: [f64; 2]| {
+        let q = t.warp_to_doc(q);
+        xf.to_screen(q[0] as f32, q[1] as f32)
+    };
     let m = w.to_mesh(1, 1);
     let accent = crate::theme::Tokens::get(painter.ctx()).accent;
     // Transform Path › Warp: the path drawn through the warp.
@@ -583,7 +718,7 @@ fn draw_warp_overlay(painter: &egui::Painter, xf: &ViewXform, w: &Warp, pv: &Tra
         draw_warp_points(painter, &m, scr, pv, line);
     }
     if let Some((tool, p)) = guide {
-        let (s, t) = m.param_at(p);
+        let (s, t) = m.param_at(t.doc_to_warp(p));
         let under = Stroke::new(3.0, Color32::BLACK);
         let over = Stroke::new(1.25, Color32::WHITE);
         let mut strokes = Vec::new();

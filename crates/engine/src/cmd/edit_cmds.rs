@@ -826,17 +826,23 @@ fn transform_again_params(s: &Session, ids: &[LayerId]) -> Result<Value> {
     let (rect, quad) = (last.get("rect").cloned(), last.get("quad").cloned());
     let mut p = json!({"interpolation": last.get("interpolation").cloned().unwrap_or(json!("bicubic"))});
     match (rect, quad, last.get("matrix").cloned()) {
-        (Some(r), Some(q), _) => {
+        (r, Some(q), _) if r.is_some() || last.get("from").is_some() => {
             let v = |x: &Value| -> Vec<f64> { x.as_array().map(|a| a.iter().filter_map(Value::as_f64).collect()).unwrap_or_default() };
-            let r = v(&r);
+            let r = r.as_ref().map(v).unwrap_or_default();
             let q: Vec<Vec<f64>> = q.as_array().map(|a| a.iter().map(v).collect()).unwrap_or_default();
-            if r.len() != 4 || q.len() != 4 || q.iter().any(|row| row.len() < 2) {
+            if q.len() != 4 || q.iter().any(|row| row.len() < 2) {
                 return Err(EngineError::Other("the last transform can't be repeated".into()));
             }
-            let h = photocraft_algo::transform::Homography::rect_to_quad(
-                [r[0], r[1], r[2], r[3]],
-                [[q[0][0], q[0][1]], [q[1][0], q[1][1]], [q[2][0], q[2][1]], [q[3][0], q[3][1]]],
-            )
+            let q = [[q[0][0], q[0][1]], [q[1][0], q[1][1]], [q[2][0], q[2][1]], [q[3][0], q[3][1]]];
+            // A box that opened on a smart object's placement transformed from `from` (#3649).
+            let from: Option<Vec<Vec<f64>>> = last.get("from").and_then(Value::as_array).map(|a| a.iter().map(v).collect());
+            let h = match from.filter(|f| f.len() == 4 && f.iter().all(|row| row.len() >= 2)) {
+                Some(f) => {
+                    photocraft_algo::transform::Homography::quad_to_quad([[f[0][0], f[0][1]], [f[1][0], f[1][1]], [f[2][0], f[2][1]], [f[3][0], f[3][1]]], q)
+                }
+                None if r.len() == 4 => photocraft_algo::transform::Homography::rect_to_quad([r[0], r[1], r[2], r[3]], q),
+                None => None,
+            }
             .ok_or(EngineError::Other("the last transform can't be repeated".into()))?;
             let d = s.active().ok_or(EngineError::NoDocument)?;
             d.doc.layer(active_id(s)?).ok_or(EngineError::Other("no active layer".into()))?;

@@ -270,9 +270,16 @@ fn edit_contents_is_available_only_for_smart_objects() {
     s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
     let ids: Vec<_> = entries(&layer(&s), false, false).into_iter().flatten().map(|e| e.1).collect();
     let edit = ids.iter().position(|id| *id == "layer.smartObjects.editContents").expect("Edit Contents entry");
+    // Reset Transform follows Edit Contents, as in Photoshop's layer menu.
     assert_eq!(
-        ids[edit + 1..edit + 5],
-        ["layer.smartObjects.replaceContents", "layer.smartObjects.relinkToFile", "layer.smartObjects.convertToLayers", "layer.rasterize.smartObject"]
+        ids[edit + 1..edit + 6],
+        [
+            "layer.smartObjects.resetTransform",
+            "layer.smartObjects.replaceContents",
+            "layer.smartObjects.relinkToFile",
+            "layer.smartObjects.convertToLayers",
+            "layer.rasterize.smartObject"
+        ]
     );
 }
 

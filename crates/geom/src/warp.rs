@@ -523,6 +523,128 @@ const CYLINDER_SHAPE: [[f64; 4]; 41] = [
 /// columns: sample). Exact rational values.
 const BERN_INV: [[f64; 4]; 4] = [[1.0, 0.0, 0.0, 0.0], [-5.0 / 6.0, 3.0, -1.5, 1.0 / 3.0], [1.0 / 3.0, -1.5, 3.0, -5.0 / 6.0], [0.0, 0.0, 0.0, 1.0]];
 
+/// [`BezierMesh::param_at`] for many points: the coarse search's samples are bucketed by where
+/// they land once, so each point looks only at the samples around it, not at all of them.
+#[derive(Clone, Debug)]
+pub struct MeshInverse {
+    mesh: BezierMesh,
+    /// The coarse samples: where `(s, t)` lands, and `(s, t)`.
+    samples: Vec<([f64; 2], f64, f64)>,
+    /// `side × side` buckets of sample indices, over the samples' box from `origin`.
+    buckets: Vec<Vec<u32>>,
+    origin: [f64; 2],
+    cell: f64,
+    side: usize,
+}
+
+impl MeshInverse {
+    /// The samples per side of the coarse search, as [`BezierMesh::param_at`]'s.
+    const N: usize = 48;
+    const SIDE: usize = 32;
+
+    pub fn new(mesh: BezierMesh) -> Self {
+        let n = Self::N;
+        let mut samples = Vec::with_capacity((n + 1) * (n + 1));
+        for j in 0..=n {
+            for i in 0..=n {
+                let (s, t) = (i as f64 / n as f64, j as f64 / n as f64);
+                samples.push((mesh.eval(s, t), s, t));
+            }
+        }
+        let finite = samples.iter().map(|q| q.0).filter(|q| q[0].is_finite() && q[1].is_finite());
+        let b = finite.fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, q| [b[0].min(q[0]), b[1].min(q[1]), b[2].max(q[0]), b[3].max(q[1])]);
+        let side = Self::SIDE;
+        let span = (b[2] - b[0]).max(b[3] - b[1]);
+        let cell = if span.is_finite() && span > 0.0 { span / side as f64 } else { 1.0 };
+        let origin = if b[0] <= b[2] { [b[0], b[1]] } else { [0.0, 0.0] };
+        let mut buckets = vec![Vec::new(); side * side];
+        for (k, (q, _, _)) in samples.iter().enumerate() {
+            if let Some(c) = Self::bucket(origin, cell, side, *q)
+                && let Some(v) = buckets.get_mut(c[1] * side + c[0])
+            {
+                v.push(k as u32);
+            }
+        }
+        MeshInverse { mesh, samples, buckets, origin, cell, side }
+    }
+
+    /// The bucket `q` falls in, clamped onto the grid; `None` for a non-finite point.
+    fn bucket(origin: [f64; 2], cell: f64, side: usize, q: [f64; 2]) -> Option<[usize; 2]> {
+        let at = |v: f64, o: f64| ((v - o) / cell).floor().clamp(0.0, (side - 1) as f64) as usize;
+        (q[0].is_finite() && q[1].is_finite()).then(|| [at(q[0], origin[0]), at(q[1], origin[1])])
+    }
+
+    /// The mesh this inverts.
+    pub fn mesh(&self) -> &BezierMesh {
+        &self.mesh
+    }
+
+    /// As [`BezierMesh::param_at`]: the nearest coarse sample, searched outwards ring by ring of
+    /// buckets until none left unsearched can be nearer, then Newton steps.
+    pub fn param_at(&self, p: [f64; 2]) -> (f64, f64) {
+        let Some(c) = Self::bucket(self.origin, self.cell, self.side, p) else { return (0.5, 0.5) };
+        let (cx, cy, side) = (c[0] as i64, c[1] as i64, self.side as i64);
+        let mut best = (0.5, 0.5, f64::MAX);
+        let visit = |x: i64, y: i64, best: &mut (f64, f64, f64)| {
+            let Some(v) = self.buckets.get((y * side + x) as usize) else { return };
+            for &k in v {
+                let Some((q, s, t)) = self.samples.get(k as usize) else { continue };
+                let d = (q[0] - p[0]).powi(2) + (q[1] - p[1]).powi(2);
+                if d < best.2 || (d == best.2 && k < self.index_of(best.0, best.1)) {
+                    *best = (*s, *t, d);
+                }
+            }
+        };
+        let (o, cell) = (self.origin, self.cell);
+        for r in 0..side {
+            let (x0, x1, y0, y1) = (cx - r, cx + r, cy - r, cy + r);
+            // The ring's buckets on the grid: its top and bottom rows, then its sides between.
+            for x in x0.max(0)..=x1.min(side - 1) {
+                if y0 >= 0 {
+                    visit(x, y0, &mut best);
+                }
+                if y1 < side && y1 != y0 {
+                    visit(x, y1, &mut best);
+                }
+            }
+            for y in (y0 + 1).max(0)..=(y1 - 1).min(side - 1) {
+                if x0 >= 0 {
+                    visit(x0, y, &mut best);
+                }
+                if x1 < side && x1 != x0 {
+                    visit(x1, y, &mut best);
+                }
+            }
+            // The nearest an unsearched bucket can be: past a side of the searched square that
+            // isn't the grid's edge (a point off the grid is past the edge it is off).
+            let mut bound = f64::INFINITY;
+            if x0 > 0 {
+                bound = bound.min(p[0] - (o[0] + x0 as f64 * cell));
+            }
+            if x1 < side - 1 {
+                bound = bound.min(o[0] + (x1 + 1) as f64 * cell - p[0]);
+            }
+            if y0 > 0 {
+                bound = bound.min(p[1] - (o[1] + y0 as f64 * cell));
+            }
+            if y1 < side - 1 {
+                bound = bound.min(o[1] + (y1 + 1) as f64 * cell - p[1]);
+            }
+            let bound = bound.max(0.0);
+            if bound == f64::INFINITY || best.2 <= bound * bound {
+                break;
+            }
+        }
+        self.mesh.refine(p, best.0, best.1)
+    }
+
+    /// The sample index of `(s, t)`, so equally near samples are picked as `param_at`'s scan does.
+    fn index_of(&self, s: f64, t: f64) -> u32 {
+        let n = Self::N as f64;
+        ((t * n).round() * (n + 1.0) + (s * n).round()) as u32
+    }
+}
+
 /// A grid of bicubic Bezier patches over the unit square of a source box.
 ///
 /// `us`/`vs` are the patch boundaries in the box's normalised coordinates (`0..=1`, increasing,
@@ -739,7 +861,12 @@ impl BezierMesh {
                 }
             }
         }
-        let (mut s, mut t) = (best.0, best.1);
+        self.refine(p, best.0, best.1)
+    }
+
+    /// Newton steps from `(s, t)` towards the surface point nearest `p`, kept on the mesh.
+    fn refine(&self, p: [f64; 2], s: f64, t: f64) -> (f64, f64) {
+        let (mut s, mut t) = (s, t);
         for _ in 0..12 {
             let h = 1e-5;
             let q = self.eval(s, t);

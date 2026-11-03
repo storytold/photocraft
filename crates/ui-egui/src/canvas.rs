@@ -869,8 +869,9 @@ fn handle_canvas_tool_menus(app: &mut PhotocraftApp, input: &CanvasToolInput<'_>
     let tool = input.tool;
     let transform_owns_pointer = input.transform_owns_pointer;
     // Right-click while transforming: switch the box's mode (Free Transform, Scale, Rotate,
-    // Skew, Distort, Perspective, Warp), or rotate or flip the box.
-    let transforming = app.ui.transform.as_ref().is_some_and(|t| t.warp.is_none());
+    // Skew, Distort, Perspective, Warp), or rotate or flip the box. Also in Warp mode, to leave it
+    // for another mode.
+    let transforming = app.ui.transform.is_some();
     if response.secondary_clicked()
         && transforming
         && let Some(p) = response.interact_pointer_pos()

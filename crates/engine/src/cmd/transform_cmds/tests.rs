@@ -907,3 +907,48 @@ fn a_stroked_soft_shapes_frame_matches_the_hard_shapes() {
         assert_eq!(boxes(&s), hard, "{align} at {x}: Feather alone leaves the frame");
     }
 }
+
+/// `from` (#3649): a box that opened on a rotated smart object's placement and was moved 10 px
+/// moves it 10 px, with its rotation untouched; without `from` the same quad would be read from
+/// the upright rect. Bad `from` values are refused without a History step.
+#[test]
+fn from_transforms_from_where_the_box_started() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 100, "height": 100})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("select.rect", json!({"x": 30, "y": 40, "width": 40, "height": 20})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    s.execute("edit.transform", json!({"rotate": 30})).unwrap();
+    let placement = |s: &Session| {
+        let st = s.active().unwrap();
+        let LayerContent::Smart(sm) = &st.doc.layer(st.active_layer.unwrap()).unwrap().content else { panic!("smart") };
+        crate::smart_cmds::placement(sm)
+    };
+    let before = placement(&s);
+    let placed = [[0.0, 0.0], [40.0, 0.0], [40.0, 20.0], [0.0, 20.0]].map(|[x, y]: [f64; 2]| {
+        let (a, b) = before.apply(x, y);
+        [a, b]
+    });
+    let moved = placed.map(|[x, y]| [x + 10.0, y]);
+    let steps = s.active().unwrap().history.past_len();
+    for bad in [json!([[0, 0], [1, 0], [1, 1]]), json!("corners"), json!([[0, 0], [1, 0], [1, 1], ["x", 1]]), json!([[0, 0], [0, 0], [0, 0], [0, 0]])] {
+        assert!(s.execute("edit.transform", json!({"from": bad, "quad": moved})).is_err(), "accepted from = {bad}");
+    }
+    assert!(s.execute("edit.transform", json!({"from": placed})).is_err(), "`from` without `quad`");
+    assert_eq!(s.active().unwrap().history.past_len(), steps);
+    s.execute("edit.transform", json!({"from": placed, "quad": moved})).unwrap();
+    let after = placement(&s);
+    for (x, y) in [(0.0, 0.0), (40.0, 20.0), (13.0, 7.0)] {
+        let (a, b) = (before.apply(x, y), after.apply(x, y));
+        assert!((b.0 - a.0 - 10.0).abs() < 1e-6 && (b.1 - a.1).abs() < 1e-6, "({x}, {y}): {a:?} -> {b:?}");
+    }
+    // Transform Again repeats the move, not the quad read from the upright rect.
+    s.execute("edit.transform.again", json!({})).unwrap();
+    let again = placement(&s);
+    for (x, y) in [(0.0, 0.0), (40.0, 20.0)] {
+        let (a, b) = (before.apply(x, y), again.apply(x, y));
+        assert!((b.0 - a.0 - 20.0).abs() < 1e-6 && (b.1 - a.1).abs() < 1e-6, "again ({x}, {y}): {a:?} -> {b:?}");
+    }
+}

@@ -621,6 +621,14 @@ fn invoke_view_command(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p
             if app.ui.transform.is_none() {
                 crate::transform_tool::begin(app, ctx)?;
             }
+            // From Warp mode back to the box, as the options bar's toggle does. A warp that can't
+            // be kept under the box (Warp Text, Transform Selection, a path) isn't dropped unasked.
+            if app.ui.transform.as_ref().is_some_and(|transform| transform.warp.is_some()) {
+                if !crate::transform_tool::holds_warp(app) {
+                    return Err("this warp can't switch to another mode: press Enter to apply it or Esc to cancel it first".into());
+                }
+                crate::transform_tool::leave_warp(app);
+            }
             if let Some(transform) = app.ui.transform.as_mut() {
                 transform.mode = crate::state::TransformMode::for_command(id);
             }
@@ -637,6 +645,8 @@ fn invoke_view_command(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p
             if app.ui.transform.as_ref().is_some_and(|transform| transform.warp.is_some()) && params.get("warp").is_none() =>
         {
             let at = params.get("at").and_then(Value::as_array).and_then(|array| Some([array.first()?.as_f64()?, array.get(1)?.as_f64()?]));
+            // `at` is a document point; a smart object's mesh is in its contents' space (#8927).
+            let at = at.map(|p| app.ui.transform.as_ref().map_or(p, |t| t.doc_to_warp(p)));
             Some(crate::transform_tool::split(app, id, at).map(|_| json!({"transform": app.ui.transform})))
         }
         "edit.transform.warpGrid" if app.ui.transform.as_ref().is_some_and(|transform| transform.warp.is_some()) && params.get("warp").is_none() => {

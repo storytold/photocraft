@@ -457,3 +457,30 @@ fn locate_binary_search_matches_linear_scan() {
     }
     assert_eq!(BezierMesh::locate(&knots, f64::NAN), linear(f64::NAN));
 }
+
+/// The bucketed inverse finds what `param_at`'s full scan finds, inside and outside a bent mesh,
+/// and survives a mesh with nothing finite in it.
+#[test]
+fn mesh_inverse_matches_param_at() {
+    let mut m = BezierMesh::identity(B, 2, 2);
+    m.points[5] = [50.0, 10.0];
+    m.points[24] = [90.0, 60.0];
+    let inv = MeshInverse::new(m.clone());
+    for j in -4..=24 {
+        for i in -4..=24 {
+            let p = [B[0] + f64::from(i) * 6.0, B[1] + f64::from(j) * 3.0];
+            let (a, b) = (m.param_at(p), inv.param_at(p));
+            let (qa, qb) = (m.eval(a.0, a.1), m.eval(b.0, b.1));
+            let (da, db) = ((qa[0] - p[0]).hypot(qa[1] - p[1]), (qb[0] - p[0]).hypot(qb[1] - p[1]));
+            assert!(db <= da + 1e-6, "{p:?}: {a:?} ({da}) vs {b:?} ({db})");
+        }
+    }
+    // Far off the mesh (a mask across a document much larger than the object), still the nearest.
+    for p in [[-5000.0, 30.0], [6000.0, -4000.0], [60.0, 9000.0]] {
+        let (a, b) = (m.param_at(p), inv.param_at(p));
+        let (qa, qb) = (m.eval(a.0, a.1), m.eval(b.0, b.1));
+        assert!((qb[0] - p[0]).hypot(qb[1] - p[1]) <= (qa[0] - p[0]).hypot(qa[1] - p[1]) + 1e-6, "{p:?}");
+    }
+    let bad = BezierMesh { points: vec![[f64::NAN, f64::INFINITY]; m.points.len()], ..m };
+    let _ = MeshInverse::new(bad).param_at([1.0, 2.0]);
+}

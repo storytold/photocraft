@@ -26,20 +26,22 @@ pub(super) fn single_patch(mesh: &BezierMesh) -> bool {
     mesh.us.len() == 2 && mesh.vs.len() == 2
 }
 
-/// The surface parameters under `p` when it is inside the warped mesh, else None.
-pub(super) fn surface_at(mesh: &BezierMesh, p: [f64; 2]) -> Option<(f64, f64)> {
+/// The surface parameters under `p` when it is inside the warped mesh, else None. `unit` is one
+/// document pixel in the mesh's space ([`crate::state::TransformSession::warp_unit`]).
+pub(super) fn surface_at(mesh: &BezierMesh, p: [f64; 2], unit: f64) -> Option<(f64, f64)> {
     let (s, t) = mesh.param_at(p);
     let q = mesh.eval(s, t);
-    ((q[0] - p[0]).hypot(q[1] - p[1]) < 1.0).then_some((s, t))
+    ((q[0] - p[0]).hypot(q[1] - p[1]) < unit).then_some((s, t))
 }
 
 /// Ctrl-click (or Option-click) picks the split: crosswise in the open, and the perpendicular
-/// split when the pointer's grid position `(s, t)` is close to an existing grid line.
-pub(super) fn quick_split_kind(mesh: &BezierMesh, bounds: [f64; 4], (s, t): (f64, f64)) -> SplitTool {
+/// split when the pointer's grid position `(s, t)` is close to an existing grid line. `unit` is
+/// one document pixel in the mesh's space.
+pub(super) fn quick_split_kind(mesh: &BezierMesh, bounds: [f64; 4], (s, t): (f64, f64), unit: f64) -> SplitTool {
     let w = (bounds[2] - bounds[0]).abs().max(1.0);
     let h = (bounds[3] - bounds[1]).abs().max(1.0);
-    let su = (8.0 / w).clamp(0.02, 0.12);
-    let sv = (8.0 / h).clamp(0.02, 0.12);
+    let su = (8.0 * unit / w).clamp(0.02, 0.12);
+    let sv = (8.0 * unit / h).clamp(0.02, 0.12);
     let thirds = single_patch(mesh);
     let near = |knots: &[f64], v: f64, tol: f64| {
         knots.iter().any(|k| *k > 0.0 && *k < 1.0 && (k - v).abs() < tol) || (thirds && [1.0 / 3.0, 2.0 / 3.0].iter().any(|k| (k - v).abs() < tol))
@@ -51,17 +53,20 @@ pub(super) fn quick_split_kind(mesh: &BezierMesh, bounds: [f64; 4], (s, t): (f64
     }
 }
 
-/// The cursor for a split armed at grid position `(s, t)` of warp grid `m`: the arrow across the
+/// The cursor for a split armed at grid position `(s, t)` of warp grid `m` (shown through
+/// `to_doc`): the arrow across the
 /// split line as it looks on screen. A vertical split line runs along the grid's columns and is
 /// placed by moving across them, in the grid's own direction there, so the arrow turns with a
 /// turned or bent grid and with the view.
-pub(super) fn split_cursor(m: &BezierMesh, tool: SplitTool, (s, t): (f64, f64), xf: &ViewXform) -> CursorIcon {
+pub(super) fn split_cursor(m: &BezierMesh, tool: SplitTool, (s, t): (f64, f64), xf: &ViewXform, to_doc: &dyn Fn([f64; 2]) -> [f64; 2]) -> CursorIcon {
     let e = 1e-3;
     let (a, b) = match tool {
         SplitTool::Vertical => (m.eval((s - e).max(0.0), t), m.eval((s + e).min(1.0), t)),
         SplitTool::Horizontal => (m.eval(s, (t - e).max(0.0)), m.eval(s, (t + e).min(1.0))),
         SplitTool::Cross => return CursorIcon::Crosshair,
     };
+    // Where they show: a smart object's grid is drawn through its placement.
+    let (a, b) = (to_doc(a), to_doc(b));
     crate::tool_cursor::resize([b[0] - a[0], b[1] - a[1]], xf)
 }
 
@@ -95,9 +100,9 @@ fn split_gesture(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) 
             let kind = if let Some(tool) = armed {
                 Some(tool)
             } else if quick {
-                app.ui.transform.as_ref().and_then(|t| t.warp.as_ref()).map(|w| {
+                app.ui.transform.as_ref().and_then(|t| t.warp.as_ref().map(|w| (t, w))).map(|(t, w)| {
                     let m = w.to_mesh(1, 1);
-                    quick_split_kind(&m, w.bounds, m.param_at([x, y]))
+                    quick_split_kind(&m, w.bounds, m.param_at([x, y]), t.warp_unit([x, y]))
                 })
             } else {
                 None
@@ -121,6 +126,14 @@ pub(super) fn warp_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tol: f64, mod
     if warps_type(app) {
         return;
     }
+    // A smart object's warp is in its contents' space (#8927): the pointer is taken there.
+    let (ev, tol, unit) = match app.ui.transform.as_ref().filter(|t| t.warp_place.is_some()) {
+        Some(t) => {
+            let scale = t.warp_scale_at(event_point(ev));
+            (to_warp_space(t, ev), tol / scale, 1.0 / scale)
+        }
+        None => (ev, tol, 1.0),
+    };
     if split_gesture(app, ev, mods) {
         return;
     }
@@ -132,7 +145,7 @@ pub(super) fn warp_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tol: f64, mod
             let custom = if w.mesh.is_none() || w.style != WarpStyle::Custom { Warp::custom(w.to_mesh(1, 1), w.bounds) } else { w.clone() };
             let pts0 = custom.mesh.as_ref().map(|m| m.points.clone()).unwrap_or_default();
             pv.warp_drag = warp_hit(&custom, [x, y], tol).map(|index| WarpDrag::Point { index, start: [x, y], pts0: pts0.clone() }).or_else(|| {
-                let (s, t) = surface_at(custom.mesh.as_ref()?, [x, y])?;
+                let (s, t) = surface_at(custom.mesh.as_ref()?, [x, y], unit)?;
                 Some(WarpDrag::Surface { s, t, start: [x, y], pts0 })
             });
             if pv.warp_drag.is_some() {
@@ -149,6 +162,23 @@ pub(super) fn warp_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tol: f64, mod
                 pv.warp_drag = None;
             }
         }
+    }
+}
+
+/// The document point of a pointer event.
+fn event_point(ev: ToolEvent) -> [f64; 2] {
+    match ev {
+        ToolEvent::Down { x, y, .. } | ToolEvent::Move { x, y, .. } | ToolEvent::Up { x, y } => [x, y],
+    }
+}
+
+/// `ev` with its point in the warp's own space ([`TransformSession::doc_to_warp`]).
+fn to_warp_space(t: &super::TransformSession, ev: ToolEvent) -> ToolEvent {
+    let [x, y] = t.doc_to_warp(event_point(ev));
+    match ev {
+        ToolEvent::Down { pressure, .. } => ToolEvent::Down { x, y, pressure },
+        ToolEvent::Move { pressure, .. } => ToolEvent::Move { x, y, pressure },
+        ToolEvent::Up { .. } => ToolEvent::Up { x, y },
     }
 }
 

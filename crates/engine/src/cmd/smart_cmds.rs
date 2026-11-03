@@ -151,11 +151,12 @@ use filters::smart_mut;
 pub(crate) use filters::{add_smart_filter, filter_mask_paintable, filter_mask_surface, refresh_after_filter_mask_edit};
 use filters::{blending_options, delete_filter, edit_filters, move_filter, set_filter_params, set_filter_visible, smart, transfer_filters};
 pub(crate) use placing::detach_psd;
-use placing::{convert, shift_layer, via_copy};
+use placing::{convert, is_transformed, reset_transform, shift_layer, via_copy};
 pub use placing::{layer_to_smart, layers_to_smart, placement};
 pub(crate) use placing::{set_placement, shift_smart, transform_placement};
 #[cfg(test)]
 pub(crate) use rendering::DISPLAY_NATIVE_HASH_BYTES;
+pub(crate) use rendering::refresh_in;
 use rendering::refresh_or_fail;
 pub(crate) use rendering::source_box;
 #[cfg(test)]
@@ -197,6 +198,14 @@ pub fn specs() -> Vec<CommandSpec> {
             r##"{"layer":id?} → opens the contents as a new document; saving (layer.smartObjects.saveContents) or closing it updates the smart object"##,
             has_smart,
             edit_contents
+        ),
+        spec!(
+            "layer.smartObjects.resetTransform",
+            "Reset Transform",
+            SO,
+            r##"{"layer":id?} → back to the contents' own size and orientation, no warp, centred where it is"##,
+            |s| active_smart(s).and_then(|sm| if is_transformed(sm) { Ok(()) } else { Err("the smart object isn't transformed".into()) }),
+            reset_transform
         ),
         spec!("layer.smartObjects.saveContents", "Save Contents", &[], "{} (in an Edit Contents document)", is_smart_child, |s, _| {
             let i = s.active_index().ok_or(EngineError::NoDocument)?;

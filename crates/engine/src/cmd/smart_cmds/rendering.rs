@@ -424,7 +424,7 @@ pub fn refresh(doc: &mut Document, id: LayerId) -> Result<bool> {
     refresh_in(doc, id, &JobCtx::new())
 }
 
-fn refresh_in(doc: &mut Document, id: LayerId, ctx: &JobCtx) -> Result<bool> {
+pub(crate) fn refresh_in(doc: &mut Document, id: LayerId, ctx: &JobCtx) -> Result<bool> {
     let mut l = doc.layer(id).cloned().ok_or(EngineError::NoLayer(id))?;
     if !matches!(l.content, LayerContent::Smart(_)) {
         return Err(other("the layer is not a smart object"));

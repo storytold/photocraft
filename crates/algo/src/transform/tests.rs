@@ -342,3 +342,18 @@ fn homography_is_identity() {
     assert!(!Homography([1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]).is_identity());
     assert!(!Homography([1.0, 0.1, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]).is_identity());
 }
+
+#[test]
+fn quad_to_quad_moves_each_corner_onto_its_partner() {
+    let from = [[10.0, 5.0], [60.0, 0.0], [70.0, 40.0], [5.0, 30.0]];
+    let to = [[0.0, 0.0], [100.0, 10.0], [90.0, 80.0], [-5.0, 60.0]];
+    let h = Homography::quad_to_quad(from, to).unwrap();
+    for (a, b) in from.iter().zip(to) {
+        let (x, y) = h.apply(a[0], a[1]);
+        assert!((x - b[0]).abs() < 1e-9 && (y - b[1]).abs() < 1e-9, "{a:?} went to ({x}, {y}), not {b:?}");
+    }
+    let same = Homography::quad_to_quad(from, from).unwrap();
+    let (x, y) = same.apply(33.0, 17.0);
+    assert!((x - 33.0).abs() < 1e-9 && (y - 17.0).abs() < 1e-9, "a box left where it started moves nothing");
+    assert!(Homography::quad_to_quad([[0.0, 0.0]; 4], to).is_none(), "a collapsed quad has no transform");
+}
