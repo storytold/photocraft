@@ -1009,6 +1009,24 @@ mod streaming_tests {
     }
 
     #[test]
+    fn a_nan_dual_hardness_or_spacing_paints_as_the_default() {
+        let pts = path();
+        let mut explicit = BrushSettings { size: 10.0, ..BrushSettings::default() };
+        explicit.dual_brush.enabled = true;
+        explicit.dual_brush.size = 6.0;
+        explicit.dual_brush.hardness = 1.0;
+        explicit.dual_brush.spacing = 0.25;
+        let (_, want_dual) = streamed(&explicit, &pts, 1000);
+        assert!(!want_dual.is_empty());
+        let mut broken = explicit.clone();
+        broken.dual_brush.spacing = f32::NAN;
+        assert_eq!(streamed(&broken, &pts, 1000).1, want_dual);
+        broken.dual_brush.hardness = f32::NAN;
+        let b = broken.bounded_for_render();
+        assert_eq!((b.dual_brush.hardness, b.dual_brush.spacing), (1.0, 0.25));
+    }
+
+    #[test]
     fn a_point_without_a_position_does_not_poison_a_smoothed_stroke() {
         let mut brush = BrushSettings { size: 8.0, ..BrushSettings::default() };
         brush.smoothing.amount = 0.6;
