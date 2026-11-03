@@ -60,12 +60,12 @@ architecture and the PSD writer are the serial parts.
 
 | Component | Weight | Ours / Photoshop | % | Kind |
 |---|---:|---|---:|---|
-| Menu commands | 30% | 631 / 631 catalog items dispatch a live command (628 / 628 on 2026-10-10) | 100% | measured (`cargo xtask parity`) |
+| Menu commands | 30% | 632 / 632 catalog items dispatch a live command (631 / 631 on 2026-10-12; 628 / 628 on 2026-10-10) | 100% | measured (`cargo xtask parity`) |
 | Toolbox tools | 15% | 59 / 68 (Photoshop's 67 `.kys` tools plus Remove, Triangle, Curvature Pen; minus legacy Rounded Rectangle and Targeted Adjustment) | 87% | measured (`Tool` enum in `ui-egui/src/state.rs`, `TOOL_SECTIONS` in `panels.rs`) |
 | Panels | 10% | 30 / 35 Window-menu panels | 86% | measured (`view_cmds.rs`, panel modules) |
 | Filters and adjustments | 10% | every Filter and Image › Adjustments item live; Filter Gallery 47 looks | 100% | measured (menu catalog) |
 | File formats (usage-weighted) | 15% | 13 of 31 Photoshop formats supported in Photoshop's directions, 4 partial; the common ones (PSD/PSB, TIFF, JPEG, PNG, WebP) all present | ~80% (48% by count) | measured list, estimated weights ([file-format-parity.md](file-format-parity.md)) |
-| AI / generative | 10% | classical Select Subject/Sky, Remove tool, Content-Aware; no Generative Fill/Expand, Neural Filters, Sky Replacement, Super Zoom | ~15% | estimated |
+| AI / generative | 10% | classical Select Subject/Sky, Remove tool, Content-Aware; Generative Fill through the Craft suite's shared AI layer (#41); no Generative Expand, Neural Filters, Sky Replacement, Super Zoom | ~15% | estimated |
 | Ecosystem (plug-ins, scripting, libraries) | 10% | WebAssembly plug-ins, CLI, MCP, actions, `.atn` load/save (112 events); no .8BF, UXP/ExtendScript, Libraries | ~20% | estimated |
 | **Weighted** | 100% | | **~76%** | |
 
@@ -585,7 +585,7 @@ See [method, raw measurements and reproduction](five-algorithm-performance.md).
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-02 | minor | AI / generative: Edit › Generative Fill through the Craft suite's shared AI layer, with consent before anything is sent (#41); percentages and estimates unchanged |
+| 2026-11-02 | minor | AI / generative: Edit › Generative Fill through the Craft suite's shared AI layer, with consent before anything is sent (#41), in the dimension row too; Menu commands row at the measured 632 / 632; percentages and estimates unchanged |
 | 2026-11-01 | minor | UI / UX and Workspace rows: 11 of 183 preferences do nothing (was 12); Graphics Adapter always worked, but startup read it by raw JSON key, which the scorecard audit can't see. Percentages and estimates unchanged |
 | 2026-10-27 | minor | Smooth/Feather command reads and replacement use selection bounds plus blur reach; full-canvas reference and release comparisons extended; percentages and scorecard budgets unchanged |
 | 2026-10-26 | minor | Expand/Contract/Border distance work, mask reads and replacement cropped to nonzero bounds; bounded distances for radii ≤5; 36 MP exact-output comparisons improve 1.54–37.82× across eight cases; percentages, estimates and scorecard budgets unchanged |

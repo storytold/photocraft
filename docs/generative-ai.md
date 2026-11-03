@@ -51,7 +51,8 @@ is what tests do so they never touch a person's real settings.
 ## Using it
 
 1. Make a selection, then Edit › Generative Fill… (or the selection tools' Generative Fill…
-   button, shown only while the tool can run). Describe what to put there, or leave the prompt
+   button, shown while the tool can run, or before that when Preferences › Integrations › Always
+   show the Generative Fill… button is on, when it opens the setup). Describe what to put there, or leave the prompt
    empty to continue the surrounding picture through the selection, which removes what was
    there. The dialog says which model is used and whether it runs online, and before anything
    starts, how many variations Generate makes and as how many requests to which connection
@@ -185,8 +186,10 @@ web build doesn't offer it.
 
 The shared layer is asked whether the tool can run each time it is about to be used (menu
 enablement, the dialog, the options bar), not once at start-up, since the person may change
-their choice in another Craft app meanwhile (PhotoCraft reuses an answer for at most a second, so
-drawing the menus doesn't read the settings every frame). When it can't, the menu item is greyed,
+their choice in another Craft app meanwhile (PhotoCraft reuses an answer for about a second, so
+drawing the menus doesn't read the settings every frame, and reads it again on a worker thread,
+since the read reaches the keychain, which can block while an unlock prompt is open; only with no
+answer yet, or right after a change made in PhotoCraft's own setup, is it read on the spot). When it can't, the menu item is greyed,
 the reason is the layer's own sentence, and Preferences › AI Integrations is where to fix it.
 
 A fill that fails keeps its tag and row until Retry (sent again as it was started, with the model
