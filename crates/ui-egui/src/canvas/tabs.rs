@@ -269,6 +269,9 @@ pub(super) fn tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
                 ui.painter().rect_filled(xr, 4.0, t.hover);
             }
             crate::icons::paint(ui, xr, "x", 11.0, if xresp.hovered() { t.text } else { t.text_faint });
+            // A name cut to the maximum width has all of it in the tooltip, as a document tab does.
+            let cut = natural.get(i).copied().unwrap_or(0.0) > r.width() + 0.5;
+            let resp = if cut { resp.on_hover_text(name.as_str()) } else { resp };
             if xresp.on_hover_text(tl!("Cancel opening")).clicked() {
                 cancel_open = Some(*job);
             } else if resp.clicked() {
@@ -645,6 +648,8 @@ fn pro_tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
         xresp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Close")));
         crate::icons::paint(ui, xr, "x", 10.0, if xresp.hovered() { t.text } else { t.text_faint });
         ui.painter().galley_with_override_text_color(at, g, if sel { t.text } else { t.text_faint });
+        let cut = natural.get(i).copied().unwrap_or(0.0) > r.width() + 0.5;
+        let resp = if cut { resp.on_hover_text(title.as_str()) } else { resp };
         if xresp.on_hover_text(tl!("Cancel opening")).clicked() {
             cancel_open = Some(*job);
         } else if resp.clicked() {

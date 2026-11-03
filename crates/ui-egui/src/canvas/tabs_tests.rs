@@ -222,17 +222,45 @@ fn elided_on_strip(h: &Harness<'_, PhotocraftApp>) -> bool {
 
 /// The texts painted on the strip, as laid out (a cut text ends where its '…' is).
 fn texts_on_strip(h: &Harness<'_, PhotocraftApp>) -> Vec<String> {
-    fn collect(shape: &egui::Shape, strip: egui::Rect, out: &mut Vec<String>) {
+    texts_in(h, strip(h).rect, false)
+}
+
+/// The texts painted in `area` (tooltips included), as laid out; with `whole_only`, only the ones
+/// egui did not cut short (an elided galley still holds its whole text).
+fn texts_in(h: &Harness<'_, PhotocraftApp>, area: egui::Rect, whole_only: bool) -> Vec<String> {
+    fn collect(shape: &egui::Shape, area: egui::Rect, whole_only: bool, out: &mut Vec<String>) {
         match shape {
-            egui::Shape::Text(text) if strip.intersects(text.visual_bounding_rect()) => out.push(text.galley.text().to_owned()),
-            egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| collect(shape, strip, out)),
+            egui::Shape::Text(text) if area.intersects(text.visual_bounding_rect()) && !(whole_only && text.galley.elided) => {
+                out.push(text.galley.text().to_owned());
+            }
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| collect(shape, area, whole_only, out)),
             _ => {}
         }
     }
-    let strip = strip(h).rect;
     let mut out = Vec::new();
-    h.output().shapes.iter().for_each(|shape| collect(&shape.shape, strip, &mut out));
+    h.output().shapes.iter().for_each(|shape| collect(&shape.shape, area, whole_only, &mut out));
     out
+}
+
+/// #11131: a file still opening in the background has its tab kept to the maximum width as well,
+/// and hovering the cut tab shows the whole name, as on a document tab.
+#[test]
+fn a_cut_opening_tab_shows_its_whole_name_on_hover() {
+    let long = format!("{}.png", "a-long-file-name-copied-from-a-web-address-".repeat(2));
+    for theme in ThemeKind::ALL {
+        let mut h = harness(1, theme);
+        let job = photocraft_engine::jobs::JobId(7);
+        h.state_mut().jobs.opens.push(crate::jobs_ui::OpenTab { job, name: long.clone(), path: None, slot: None, order: None });
+        h.run_steps(2);
+        let whole = texts_in(&h, strip(&h).rect, true);
+        assert!(whole.iter().all(|t| !t.contains(long.as_str())), "{theme:?}: the opening tab is cut: {whole:?}");
+        assert!(texts_on_strip(&h).iter().any(|t| t.starts_with("a-long")), "{theme:?}: the opening tab is drawn");
+        let (_, doc_tab) = *strip(&h).tabs.first().expect("the document's tab");
+        h.input_mut().events.push(egui::Event::PointerMoved(egui::pos2(doc_tab.right() + 40.0, doc_tab.center().y)));
+        h.run_steps(4);
+        let shown = texts_in(&h, egui::Rect::EVERYTHING, true);
+        assert!(shown.iter().any(|t| t.contains(long.as_str())), "{theme:?}: no tooltip with the whole name: {shown:?}");
+    }
 }
 
 /// #11131: a tab cut to the maximum width cuts the document's name only; what follows it (the
