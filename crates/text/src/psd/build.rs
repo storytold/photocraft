@@ -1,4 +1,4 @@
-use super::edit::{TEMPLATE_NODES, edited_object, fits, is_stub, names_one_frame, new_object, pad_frames, td_edited_object, with_modes};
+use super::edit::{TEMPLATE_NODES, copies_fit, edited_object, fits, is_stub, names_one_frame, new_object, pad_frames, td_edited_object, with_modes};
 use super::import::{OPENTYPE_KEYS, TXT2_FEATURES, TXT2_STYLISTIC_SETS, kern_units, manual, object_frame, pair_runs, parse_txt2, postscript_for, real};
 use super::{
     AntiAlias, Caps, CharStyle, Color, ColorMode, D, Descriptor, E, FontBaseline, Id, Kerning, Orientation, ParagraphStyle, TextAlign, TextLayer, TextShape,
@@ -213,6 +213,9 @@ fn txt2_style_runs(layer: &TextLayer, base: &E, fonts: &mut Vec<E>, dpi: f32) ->
     let k = if dpi.is_finite() && dpi > 0.0 { dpi / 72.0 } else { 1.0 };
     let runs = layer.char_runs();
     let spans = char_spans(layer);
+    if !copies_fit(base, spans.len()) {
+        return None;
+    }
     let default = CharStyle::default();
     let mut out = Vec::with_capacity(spans.len());
     let mut looked_up = std::collections::HashMap::new();
@@ -472,9 +475,13 @@ fn td_restyled(entry: &E, layer: &TextLayer, fonts: &mut Vec<E>, dpi: f32) -> Op
     }
     let k = if dpi.is_finite() && dpi > 0.0 { dpi / 72.0 } else { 1.0 };
     let runs = layer.char_runs();
+    let spans = char_spans(layer);
+    if !copies_fit(base, spans.len()) {
+        return None;
+    }
     let default = CharStyle::default();
     let mut out = Vec::new();
-    for (ri, n) in char_spans(layer) {
+    for (ri, n) in spans {
         let s = runs.get(ri).map_or(&default, |r| &r.style);
         let mut run = base.clone();
         let features = run.get_mut("RunData")?.get_mut("StyleSheet")?.get_mut("Features")?;

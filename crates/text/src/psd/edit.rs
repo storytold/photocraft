@@ -13,6 +13,22 @@ const MAX_REFIT_RUN_NODES: usize = 16_384;
 
 const MAX_REFIT_RUN_BYTES: usize = 1 << 20;
 
+/// Cumulative node and string-byte budgets for the style runs copied from one preserved run while
+/// restyling (`txt2_style_runs`, `td_restyled`, [`with_modes`]): a template within
+/// [`TEMPLATE_NODES`] can still hold long strings, copied once per output run.
+const MAX_COPIED_NODES: usize = 1 << 22;
+const MAX_COPIED_BYTES: usize = 64 << 20;
+
+/// Whether `copies` copies of `v` fit [`MAX_COPIED_NODES`] and [`MAX_COPIED_BYTES`].
+pub(super) fn copies_fit(v: &E, copies: usize) -> bool {
+    let (mut nodes, mut bytes) = (MAX_COPIED_NODES, MAX_COPIED_BYTES);
+    if !fits_budget(v, &mut nodes, &mut bytes) {
+        return false;
+    }
+    let (n, b) = (MAX_COPIED_NODES - nodes, MAX_COPIED_BYTES - bytes);
+    n.checked_mul(copies).is_some_and(|t| t <= MAX_COPIED_NODES) && b.checked_mul(copies).is_some_and(|t| t <= MAX_COPIED_BYTES)
+}
+
 /// Whether `v` holds at most `budget` values, counting down `budget` (stops at the first one over).
 pub(super) fn fits(v: &E, budget: &mut usize) -> bool {
     let Some(left) = budget.checked_sub(1) else { return false };
@@ -251,10 +267,14 @@ pub(super) fn with_modes(runs: &[E], modes: &[(i64, usize)]) -> Option<Vec<E>> {
         return None;
     }
     let mut out = Vec::with_capacity(runs.len());
+    let (mut nodes, mut bytes) = (MAX_COPIED_NODES, MAX_COPIED_BYTES);
     let (mut mi, mut mode_end) = (0usize, modes.first()?.1);
     let mut at = 0usize;
     for (run, len) in runs.iter().zip(lens) {
         if len == 0 {
+            if !fits_budget(run, &mut nodes, &mut bytes) {
+                return None;
+            }
             out.push(run.clone());
             continue;
         }
@@ -266,6 +286,10 @@ pub(super) fn with_modes(runs: &[E], modes: &[(i64, usize)]) -> Option<Vec<E>> {
             }
             let piece_end = end.min(mode_end);
             if piece_end <= at {
+                return None;
+            }
+            // Every mode boundary inside the run copies it again.
+            if !fits_budget(run, &mut nodes, &mut bytes) {
                 return None;
             }
             let mut piece = run.clone();
@@ -317,4 +341,33 @@ pub fn set_text_index(tysh: &[u8], index: i32) -> Option<Vec<u8>> {
         }
     }
     Some(write_tysh(&t))
+}
+
+#[cfg(test)]
+mod copy_budget_tests {
+    use super::{E, MAX_COPIED_BYTES, copies_fit, with_modes};
+
+    /// `<< /0 << /0 << /6 << /11 1 /99 (filler) >> >> >> /1 len >>`, a Txt2 style run.
+    fn run(len: i64, filler: usize) -> E {
+        let style = E::Dict(vec![("11".into(), E::Int(1)), ("99".into(), E::String("x".repeat(filler)))]);
+        let inner = E::Dict(vec![("6".into(), style)]);
+        E::Dict(vec![("0".into(), E::Dict(vec![("0".into(), inner)])), ("1".into(), E::Int(len))])
+    }
+
+    #[test]
+    fn copies_of_a_large_preserved_run_are_refused() {
+        assert!(copies_fit(&run(1, 16), 1000));
+        let big = run(1, 1 << 20);
+        assert!(copies_fit(&big, 63));
+        assert!(!copies_fit(&big, MAX_COPIED_BYTES >> 20), "64 copies of 1 MiB pass the byte budget");
+        assert!(!copies_fit(&big, usize::MAX));
+    }
+
+    #[test]
+    fn mode_splits_stop_at_the_copy_budget() {
+        // One run, 1 MiB of preserved text, split at every one of 200 mode boundaries.
+        let modes: Vec<(i64, usize)> = (0..200).map(|i| (i % 2, 1)).collect();
+        assert!(with_modes(&[run(200, 1 << 20)], &modes).is_none());
+        assert_eq!(with_modes(&[run(200, 16)], &modes).map(|v| v.len()), Some(200));
+    }
 }
