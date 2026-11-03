@@ -1229,9 +1229,8 @@ impl Preferences {
             // directly: a batch of thousands of bindings must not serialise and parse the whole
             // preferences for each (`keyboardShortcuts.set`).
             (Some(id), Value::String(s)) if !s.is_empty() => {
-                let value = Value::String(normalize_shortcut(s).ok_or_else(|| format!("`{s}` is not a valid shortcut"))?);
-                check_value(path, &value)?;
-                let Value::String(normalized) = value else { unreachable!() };
+                let normalized = normalize_shortcut(s).ok_or_else(|| format!("`{s}` is not a valid shortcut"))?;
+                check_value(path, &Value::String(normalized.clone()))?;
                 self.shortcuts.insert(id.to_string(), normalized);
                 return Ok(());
             }
