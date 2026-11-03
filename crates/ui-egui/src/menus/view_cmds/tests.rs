@@ -476,6 +476,9 @@ fn batch_runs_an_action_recorded_with_the_type_tool() {
     assert!(r.get("failed").is_none_or(|f| f.as_array().is_some_and(Vec::is_empty)), "{r}");
     for name in ["a.png", "b.png"] {
         assert!(dir.join("out").join(name).is_file(), "{name} saved: {r}");
+        // CodeRabbit on #10730: the action ran on each file: the typed text is in its pixels.
+        let pixels = |folder: &str| photocraft_codecs::decode(&std::fs::read(dir.join(folder).join(name)).unwrap()).unwrap().data().to_vec();
+        assert_ne!(pixels("out"), pixels("in"), "{name}: the text was laid on it");
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -510,9 +513,11 @@ fn a_batch_that_fails_on_its_files_says_which_and_why() {
     assert!(notice.error && notice.title.ends_with("2 files failed"), "{}", notice.title);
     let path = |name: &str| format!("{}: ", dir.join("in").join(name).to_string_lossy());
     assert!(notice.lines[0].starts_with(&path("a.png")) && notice.lines[1].starts_with(&path("b.png")), "{:?}", notice.lines);
-    // CodeRabbit on #10730: each with its reason after the path.
-    for (line, name) in notice.lines.iter().zip(["a.png", "b.png"]) {
-        assert!(line.strip_prefix(&path(name)).is_some_and(|why| !why.trim().is_empty()), "{line}");
+    // CodeRabbit on #10730: each line is its file's error, word for word, path then reason.
+    let errors = r["errors"].as_array().unwrap();
+    for (line, e) in notice.lines.iter().zip(errors) {
+        assert!(!e["error"].as_str().unwrap_or_default().trim().is_empty(), "{e}");
+        assert_eq!(*line, format!("{}: {}", e["file"].as_str().unwrap(), e["error"].as_str().unwrap()));
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
