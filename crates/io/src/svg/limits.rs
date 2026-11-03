@@ -344,6 +344,8 @@ impl Walk {
             Kind::GaussianBlur(b) if b.std_dev_x().get() * sx >= 2.0 || b.std_dev_y().get() * sy >= 2.0 => 1.0,
             Kind::GaussianBlur(_) => 2.0,
             Kind::Blend(_) | Kind::Composite(_) | Kind::DisplacementMap(_) => 2.0,
+            // A tile of the source graphic converts and tiles two copies.
+            Kind::Tile(t) if matches!(t.input(), usvg::filter::Input::SourceGraphic) => 2.0,
             Kind::DropShadow(_) => 4.0,
             _ => 1.0,
         };
@@ -355,9 +357,11 @@ impl Walk {
             if let Kind::Image(fe) = primitive.kind() {
                 // What an feImage draws sees the results kept so far.
                 let bytes = own * 4.0 + slot * (i + 1) as f64;
-                let nested = Cx { live: cx.live + bytes, layer: region, cap: 25.0 * region, depth: cx.depth + 1, nest: cx.nest + 1, ..cx };
+                let (sx, sy) = ts.get_scale();
+                let scaled = tiny_skia::Transform::from_scale(sx, sy);
+                let nested = Cx { live: cx.live + bytes, layer: region, cap: region, depth: cx.depth + 1, nest: cx.nest + 1, ..cx };
                 deeper(nested)?;
-                let inside = self.shared(key(std::ptr::from_ref(fe) as usize, ts, nested), nested, |w| w.nodes(fe.root().children(), ts, nested))?;
+                let inside = self.shared(key(std::ptr::from_ref(fe) as usize, scaled, nested), nested, |w| w.nodes(fe.root().children(), scaled, nested))?;
                 profile = profile.max(inside.under(bytes, [1, 0, 0, 1]));
             }
         }

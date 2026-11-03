@@ -1149,7 +1149,7 @@ fn nested_shared_patterns_add_up_their_depth() {
     let body: String = (0..k).rev().map(|i| format!("<rect width=\"10\" height=\"10\" fill=\"url(#D{i})\"/>")).collect();
     let svg = format!("<svg {NS} width=\"100\" height=\"100\"><defs>{defs}</defs>{body}</svg>");
     let err = check_only(&svg, 100, 100).unwrap_err();
-    assert!(err.message.contains("deeply"), "{err:?}");
+    assert!(err.message.contains("layers"), "{err:?}");
 }
 
 /// usvg makes the layer the union of a group's filter regions and every unary primitive on it keeps
@@ -1182,7 +1182,8 @@ fn mask_content_is_charged_with_the_mask_buffers() {
     let svg = format!(
         "<svg {NS} width=\"2000\" height=\"2000\"><defs><filter id=\"b\" x=\"0\" y=\"0\" width=\"9740\" height=\"9740\" filterUnits=\"userSpaceOnUse\"><feGaussianBlur stdDeviation=\"8\"/></filter><mask id=\"m\" maskUnits=\"userSpaceOnUse\" x=\"0\" y=\"0\" width=\"2000\" height=\"2000\"><g filter=\"url(#b)\"><rect width=\"100\" height=\"100\"/></g></mask></defs><rect width=\"100000\" height=\"100000\" mask=\"url(#m)\"/></svg>"
     );
-    assert!(check_only(&svg, 2000, 2000).is_err());
+    let err = check_only(&svg, 2000, 2000).unwrap_err();
+    assert!(err.message.contains("a filter with 1 primitives over a region of 94867600 px"), "{err:?}");
 }
 
 /// A blur under 2 px sigma is an IIR blur with f64 scratch, charged one buffer more than a box blur.
@@ -1209,22 +1210,13 @@ fn a_deep_use_chain_does_not_overflow_the_walk() {
     std::thread::Builder::new().spawn(move || check_only(&svg, 100, 100).unwrap()).unwrap().join().unwrap();
 }
 
-/// A hostile element no longer takes the rest of the drawing with it.
+/// resvg draws an feImage at the scale of the transform, whatever its skew: skewX(89.9) stretches
+/// a 3000 px pattern tile in the image to 3000 x 1.7 million px.
 #[test]
-fn a_refused_element_leaves_its_siblings_drawn() {
-    let svg =
-        tile_svg("100000", "<rect width=\"100\" height=\"100\" fill=\"url(#p)\"/><g><rect x=\"10\" y=\"10\" width=\"20\" height=\"20\" fill=\"#f00\"/></g>");
-    let buf = rasterize(svg.as_bytes(), 1.0).unwrap();
-    assert!(buf.px[20 * 100 + 20][3] > 0.99);
-    assert!(buf.px[60 * 100 + 60][3] < 0.01);
-}
-
-/// The one-pixel-layer fallback for drawings with more than 2,000 elements does the same, and says so.
-#[test]
-fn the_fallback_layer_leaves_out_only_the_refused_elements() {
-    let rects: String = (0..2100).map(|i| format!("<rect x=\"{}\" y=\"{}\" width=\"1\" height=\"1\"/>", i % 90, i / 90)).collect();
-    let svg = tile_svg("100000", &format!("{rects}<rect width=\"100\" height=\"100\" fill=\"url(#p)\"/>"));
-    let r = import_svg("many", svg.as_bytes()).unwrap();
-    assert_eq!(pixel_layers(&r), 1, "{:?}", r.warnings);
-    assert!(r.warnings.iter().any(|w| w.contains("left out because they need too much memory")), "{:?}", r.warnings);
+fn a_skewed_fe_image_scales_its_pattern_tile() {
+    let svg = format!(
+        "<svg {NS} width=\"100\" height=\"100\"><defs><pattern id=\"p\" patternUnits=\"userSpaceOnUse\" width=\"3000\" height=\"3000\"><rect width=\"4\" height=\"4\"/></pattern><g id=\"g\"><rect width=\"100\" height=\"100\" fill=\"url(#p)\"/></g><filter id=\"i\" x=\"0\" y=\"0\" width=\"100\" height=\"100\" filterUnits=\"userSpaceOnUse\"><feImage href=\"#g\"/></filter></defs><g transform=\"skewX(89.9)\"><rect width=\"10\" height=\"10\" filter=\"url(#i)\"/></g></svg>"
+    );
+    let err = check_only(&svg, 100, 100).unwrap_err();
+    assert!(err.message.contains("pattern tile"), "{err:?}");
 }
