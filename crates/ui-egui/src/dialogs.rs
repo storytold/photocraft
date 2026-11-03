@@ -984,6 +984,9 @@ fn confirm_preflight(app: &mut PhotocraftApp, id: u64) -> Result<(), String> {
         }
         crate::guide_layout_ui::validate(app, &d.fields)?;
     }
+    if let Some(d) = app.ui.dialogs.iter().find(|d| d.id == id).filter(|d| crate::preset_group_prompt::owns(&d.fields)) {
+        crate::preset_group_prompt::replace_choice(&d.fields)?;
+    }
     Ok(())
 }
 
