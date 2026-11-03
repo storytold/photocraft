@@ -1809,8 +1809,9 @@ fn capture_expand_dialog_variants() {
     let _gpu = photocraft_testkit::gpu_lock();
     std::fs::create_dir_all(&directory).unwrap();
     let fake = photocraft_genai::fake::FakeNative::start().unwrap();
-    // (name, picture, sides, advanced and negative open)
-    let cases: [(&str, (u32, u32), [u32; 4], bool); 6] = [
+    /// (name, picture, sides, advanced and negative open)
+    type Case = (&'static str, (u32, u32), [u32; 4], bool);
+    let cases: [Case; 6] = [
         ("portrait-none", (452, 678), [0, 0, 0, 0], false),
         ("portrait-25", (452, 678), [113, 170, 113, 170], false),
         ("landscape-wide", (4000, 2250), [1200, 0, 1200, 0], false),
