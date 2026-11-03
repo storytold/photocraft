@@ -32,6 +32,18 @@ fn stroke_backwards_compatible() {
 }
 
 #[test]
+fn a_stroke_from_far_off_the_canvas_paints_only_what_reaches_it() {
+    // Dabs that cannot reach the canvas are not rasterized (their coverage is never read).
+    let mut s = session(80, 80);
+    let r = s.execute("paint.stroke", json!({"points": [[-100_000, 20], [70, 20], [70, 60]], "size": 6, "color": "#0000ff", "brush": {"hardness": 0.5, "smoothing": {"amount": 0.0}}})).unwrap();
+    assert!(rgba(&s, 40, 20)[3] > 0.9, "the part on the canvas is painted: {:?} {r}", rgba(&s, 40, 20));
+    assert!(rgba(&s, 70, 50)[3] > 0.9);
+    assert_eq!(rgba(&s, 40, 40)[3], 0.0);
+    let d: Vec<i64> = r["damage"].as_array().unwrap().iter().map(|v| v.as_i64().unwrap()).collect();
+    assert!(d[0] > -100, "the damage does not span the off-canvas path: {r}");
+}
+
+#[test]
 fn fill_fills_the_enclosed_region_not_the_outline() {
     // #3659: a closed gesture with `fill` paints the interior, not a ring.
     let mut s = session(60, 60);
@@ -1157,7 +1169,9 @@ fn out_of_range_scatter_is_rejected_and_the_maximum_still_paints() {
         s.execute("tools.setBrush", json!({ "brush": patch })).unwrap();
         let r = s.execute("paint.stroke", stroke.clone()).unwrap();
         let d: Vec<i64> = r["damage"].as_array().unwrap().iter().map(|v| v.as_i64().unwrap()).collect();
-        assert!(d[0].abs() < 1000 && d[1].abs() < 1000 && d[2] > 0 && d[3] > 0, "{r}");
+        // A dab scattered clear of the canvas is not rasterized, so its damage is empty.
+        let off_canvas = d[2] == 0 && d[3] == 0;
+        assert!(off_canvas || (d[0].abs() < 1000 && d[1].abs() < 1000 && d[2] > 0 && d[3] > 0), "{r}");
     }
     // Control: 200 % scatter paints where it did before the cap (the soft default tip reaches a
     // little past its radius).

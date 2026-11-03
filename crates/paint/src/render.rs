@@ -740,6 +740,33 @@ pub struct StrokeRenderer {
     dual_buf: Vec<Dab>,
     all_dabs: Option<Vec<Dab>>,
     regions: RegionPool,
+    /// Dabs whose rectangle misses this one are not rasterized (see [`with_clip`](Self::with_clip)).
+    clip: Option<Rect>,
+    /// Dab-rectangle pixels the stroke may still rasterize (see [`MAX_STROKE_DAB_AREA`]).
+    area_left: u64,
+}
+
+/// Most dab-rectangle pixels one stroke rasterizes: past it the stroke stops painting, so a very
+/// large brush at the finest spacing over a very long path costs bounded time and memory instead
+/// of growing with path length times brush area. A soft round dab costs about 1.2 ns per pixel on
+/// an idle four-thread machine, so the limit is a few seconds of work. 2^31 pixels is, for
+/// example, 10 000 dabs of a 500 px brush (a 50 000 px path at 1 % spacing) or 50 000 dabs of a
+/// 200 px brush; a 20 000 px scribble with a 500 px brush at 5 % spacing uses a fifth of it.
+pub const MAX_STROKE_DAB_AREA: u64 = 1 << 31;
+
+/// Whether a dab with rectangle `rect` is painted: it reaches `clip` and fits `area_left`, which
+/// it is charged against. An over-budget dab ends the stroke's painting for good.
+fn admit(clip: Option<Rect>, area_left: &mut u64, rect: Rect) -> bool {
+    if *area_left == 0 || rect.is_empty() || clip.is_some_and(|c| c.intersect(&rect).is_empty()) {
+        return false;
+    }
+    let area = u64::from(rect.width()) * u64::from(rect.height());
+    if area > *area_left {
+        *area_left = 0;
+        return false;
+    }
+    *area_left -= area;
+    true
 }
 
 /// The tile buffers [`StrokeRenderer::composite`] works in, kept from one composite to the next:
@@ -845,6 +872,8 @@ impl StrokeRenderer {
                         dual_buf: Vec::new(),
                         all_dabs: None,
                         regions: RegionPool::default(),
+                        clip: p.clip,
+                        area_left: p.area_left,
                     })
                 }
                 Some(m) => {
@@ -897,7 +926,28 @@ impl StrokeRenderer {
             dual_buf: Vec::new(),
             all_dabs: None,
             regions: RegionPool::default(),
+            clip: None,
+            area_left: MAX_STROKE_DAB_AREA,
         }
+    }
+
+    /// Only paint where a dab can reach inside `clip` (the target's paintable area): a dab whose
+    /// rectangle misses it is counted but not rasterized, and allocates no coverage tiles. Pixels
+    /// inside `clip` come out exactly as without it.
+    pub fn with_clip(mut self, clip: Rect) -> Self {
+        self.clip = Some(clip);
+        self
+    }
+
+    /// Override the dab-area budget ([`MAX_STROKE_DAB_AREA`]) for this stroke.
+    pub fn with_dab_area_budget(mut self, pixels: u64) -> Self {
+        self.area_left = pixels;
+        self
+    }
+
+    /// Whether the stroke has stopped painting because it used up its dab-area budget.
+    pub fn budget_exhausted(&self) -> bool {
+        self.area_left == 0
     }
 
     /// Keep a copy of every primary dab (for tests and sequential tools).
@@ -923,6 +973,9 @@ impl StrokeRenderer {
         let mut native = [0.0f32; 8];
         for d in &dabs {
             let rect = self.ctx.dab_rect(d, false);
+            if !admit(self.clip, &mut self.area_left, rect) {
+                continue;
+            }
             // Wet Edges acts on the whole stroke (#2088): the dab records how deep it reaches each
             // pixel and the stroke darkens its own rim when composited, not every dab's.
             self.ctx.rasterize_into(d, false, rect, &mut self.scratch, wet.then_some(&mut self.depth_scratch));
@@ -940,6 +993,9 @@ impl StrokeRenderer {
         if let Some(dm) = self.dual.as_mut() {
             for d in &duals {
                 let rect = self.ctx.dab_rect(d, true);
+                if !admit(self.clip, &mut self.area_left, rect) {
+                    continue;
+                }
                 self.ctx.rasterize(d, true, rect, &mut self.scratch);
                 dm.accumulate(rect, &self.scratch, 1.0, None, None);
             }
@@ -1028,6 +1084,8 @@ impl StrokeRenderer {
             dual_buf: duals,
             all_dabs: None,
             regions: RegionPool::default(),
+            clip: self.clip,
+            area_left: self.area_left,
         };
         t.raster_pending();
         // Tiles whose coverage the tail doesn't change still composite the same: redraw them all.
@@ -1284,11 +1342,27 @@ pub fn render_stroke(
     lock_transparency: bool,
     zoom: f32,
 ) -> Rect {
+    render_stroke_clipped(target, brush, points, selection, lock_transparency, zoom, None)
+}
+
+/// [`render_stroke`] that only rasterizes dabs reaching `clip` (see [`StrokeRenderer::with_clip`]).
+pub fn render_stroke_clipped(
+    target: &mut Surface,
+    brush: &BrushSettings,
+    points: &[StrokePoint],
+    selection: Option<&Surface>,
+    lock_transparency: bool,
+    zoom: f32,
+    clip: Option<Rect>,
+) -> Rect {
     if points.is_empty() {
         return Rect::EMPTY;
     }
     let pre = target.clone();
     let mut r = StrokeRenderer::new(brush, Some(target.format()), zoom);
+    if let Some(c) = clip {
+        r = r.with_clip(c);
+    }
     r.push(points);
     r.finish();
     r.composite(&pre, target, selection, lock_transparency, true)
@@ -1363,3 +1437,6 @@ mod reference;
 
 #[cfg(test)]
 mod coverage_tests;
+
+#[cfg(test)]
+mod budget_tests;
