@@ -103,6 +103,9 @@ pub(crate) fn set_resolution(doc: &mut Document, dpi: f32) {
             photocraft_doc::text::TextShape::Area { path } => *path = path.transform(&grow),
             photocraft_doc::text::TextShape::Point => {}
         }
+        if let Some(baseline) = t.psd_first_baseline.as_mut() {
+            baseline.offset_px = grown(baseline.offset_px, k);
+        }
         retag_text(dpi, t);
     });
 }

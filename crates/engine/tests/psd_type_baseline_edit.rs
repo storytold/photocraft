@@ -107,17 +107,40 @@ fn entering_psd_type_edit_without_typing_keeps_the_recorded_baseline() {
 #[test]
 fn invalid_native_psd_baseline_does_not_hide_the_first_line() {
     let mut imported = photocraft_io::import("baseline.psd", &synthetic_psd()).unwrap().document;
-    let LayerContent::Text(layer) = &mut imported.layers[0].content else { panic!("type layer") };
     let expected = {
+        let LayerContent::Text(layer) = &imported.layers[0].content else { panic!("type layer") };
         let mut without_hint = layer.clone();
         without_hint.psd_first_baseline = None;
         photocraft_text::TextEngine::new().layout(&without_hint, 72.0).lines[0].baseline
     };
-    layer.psd_first_baseline.as_mut().unwrap().offset_px = 1000.0;
-    let native = photocraft_io::export(&imported, "baseline.pcraft", &Default::default()).unwrap().bytes;
-    let reopened = photocraft_io::import("baseline.pcraft", &native).unwrap().document;
-    let LayerContent::Text(layer) = &reopened.layers[0].content else { panic!("type layer") };
-    let layout = photocraft_text::TextEngine::new().layout(layer, 72.0);
+    for offset in [1000.0, -1000.0] {
+        let LayerContent::Text(layer) = &mut imported.layers[0].content else { panic!("type layer") };
+        layer.psd_first_baseline.as_mut().unwrap().offset_px = offset;
+        let native = photocraft_io::export(&imported, "baseline.pcraft", &Default::default()).unwrap().bytes;
+        let reopened = photocraft_io::import("baseline.pcraft", &native).unwrap().document;
+        let LayerContent::Text(layer) = &reopened.layers[0].content else { panic!("type layer") };
+        let layout = photocraft_text::TextEngine::new().layout(layer, 72.0);
+        assert_eq!(layout.lines.len(), 1, "offset {offset}");
+        assert_eq!(layout.lines[0].baseline, expected, "offset {offset}");
+    }
+}
+
+#[test]
+fn resolution_change_scales_imported_psd_baseline_with_its_box() {
+    let imported = photocraft_io::import("baseline.psd", &synthetic_psd()).unwrap().document;
+    let id = imported.layers[0].id;
+    let mut session = Session::new();
+    session.add_document(imported, None);
+    let before = text(&session, id).psd_first_baseline.as_ref().unwrap().offset_px;
+    session.execute("image.imageSize", json!({"resolution": 144.0, "resample": "none"})).unwrap();
+    let layer = text(&session, id);
+    let after = layer.psd_first_baseline.as_ref().unwrap().offset_px;
+    assert!((after - before * 2.0).abs() <= 0.001);
+    let TextShape::Box { y, .. } = layer.shape else { panic!("text box") };
+    let layout = photocraft_text::TextEngine::new().layout(layer, 144.0);
     assert_eq!(layout.lines.len(), 1);
-    assert_eq!(layout.lines[0].baseline, expected);
+    assert!((layout.lines[0].baseline - y - after).abs() <= 0.001);
+    session.execute("type.edit", json!({"layer": id.0})).unwrap();
+    assert_eq!(text(&session, id).text, "Hello");
+    assert!(text(&session, id).cache.as_ref().unwrap().content_bounds().height() > 0);
 }
