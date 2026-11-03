@@ -1209,6 +1209,8 @@ impl Session {
         }
         crate::param_check::check(spec, &params)?;
         crate::filters::validate_params(id, &params)?;
+        // A paused action owns its capture before preparatory document effects too.
+        crate::actions_cmds::playback::admit(self, id)?;
         // A floating selection drops before any other command (Undo puts it back instead).
         if let Some(v) = crate::float_cmds::before_command(self, id)? {
             return Ok(Started::Done(v));

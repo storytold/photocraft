@@ -67,6 +67,16 @@ fn visible(s: &Session, draft: &Draft) -> Result<Action> {
     Ok(value)
 }
 
+/// Complete owned preview input, including completed steps not yet flushed from capture.
+pub(super) fn preview_value(s: &Session, id: u64) -> Result<Action> {
+    let draft = s.actions.editor.as_ref().filter(|draft| draft.id == id).ok_or_else(|| bad(GET, "this editor is no longer open"))?;
+    visible(s, draft)
+}
+
+pub(super) fn preview_matches(s: &Session, id: u64, snapshot: &Action) -> bool {
+    s.actions.editor.as_ref().is_some_and(|draft| draft.id == id && &draft.value == snapshot)
+}
+
 /// Structured inspection serializes the complete Action, not a metadata whitelist.
 fn view(draft: &Draft, value: &Action) -> Value {
     json!({"draft":draft.id, "action":value, "shortcut":draft.shortcut,

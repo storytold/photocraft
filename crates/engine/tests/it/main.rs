@@ -2,6 +2,7 @@
 
 mod action_metadata;
 mod actions_editor_draft;
+mod actions_owned_preview;
 mod affinity;
 mod artboard_export_names;
 mod atn_action_colors;

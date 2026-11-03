@@ -1038,6 +1038,11 @@ fn confirm_command_more(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, Str
 pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
     confirm_preflight(app, id)?;
     let d = app.ui.close_dialog(id).ok_or_else(|| format!("no dialog {id}"))?;
+    let fields = d.fields.clone();
+    crate::actions::with_step_gate(app, &fields, Some(id), |app| confirm_closed(app, d))
+}
+
+fn confirm_closed(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, String> {
     match d.kind {
         DialogKind::NewDocument => {
             let r = app.run("file.new", crate::new_doc_ui::command_params(&d.fields));

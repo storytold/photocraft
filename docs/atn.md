@@ -65,18 +65,28 @@ The backend editor commands keep one complete action draft outside the live libr
   restore an old library snapshot, erase the journal or undo document edits made
   while recording. Old editor identities cannot mutate a reopened editor.
 
-Descriptions and icons currently persist in the native Actions library. ATN sidecar
+Descriptions and icons temporarily persist through the existing native JSON Actions
+library compatibility path, with defaults for older files. The required #11066 library
+migration makes ATN with the measured sidecar the sole writable persisted library.
+Legacy JSON is then a one-time migration input with a preserved backup, without
+continued dual writing or new JSON-only metadata handling.
+Actions belong to that library, not to `.pcraft` documents. ATN sidecar
 writing remains unimplemented, so ATN export refuses actions with a nonempty description
 or icon even when `skipUnsupported` is set; that option only permits omitting unsupported
 steps. Classic actions without this metadata retain their existing export behavior.
-The separate `.pcraft` document attachment requirement remains unresolved.
 
 This is the backend increment for #10946, not the completed editor page. The UI's
-Save/Discard/Cancel confirmation policy and its suspended-recording adapter remain
-separate work. In particular, the legacy shell playback continuation carries a
-library index, so direct shell playback refuses an active draft recording until
-the editor UI owns that continuation. Headless `Session::execute(actions.play)`
-already suspends/restores either recorder and captures one named call. No #10766
+Save/Discard/Cancel confirmation policy and page integration remain separate work.
+The shell's owned preview adapter retains the complete unpublished snapshot, original
+step indices and flags, authorization gate and step budget across dialogs. It resumes
+the parent tail after a nested preview call pauses. Preview executes normal document
+commands, with no temporary library row, definition Save, self-call or document rollback.
+New definition edits wait for the owning step dialog to finish or cancel. A preview
+waits for existing jobs before taking capture; jobs started by its step dialogs retain
+the normal completion/failure and foreign-take handling. The raw legacy `begin_playback`
+entry still refuses an active draft recorder; the owned adapter suspends it explicitly.
+Headless `Session::execute(actions.play)` and deliberate shell library calls capture
+one named call in either recorder. No #10766
 or #10965 implementation is implicitly imported by this backend.
 
 ## Supported events (144)

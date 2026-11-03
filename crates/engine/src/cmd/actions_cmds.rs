@@ -23,6 +23,7 @@ use crate::commands::CommandSpec;
 use crate::{EngineError, Result, Session};
 
 pub mod editor;
+pub mod playback;
 
 /// A command temporarily owns the recorder while its nested commands run.
 pub(crate) enum Recording {
@@ -134,6 +135,11 @@ pub struct ActionState {
     /// An unpublished editor value. Neither it nor its capture is part of actions.json.
     #[serde(skip)]
     pub editor: Option<editor::Draft>,
+    /// The shell owns a capture/preview across a step dialog. The opaque lease releases it.
+    #[serde(skip)]
+    pub held_playback: Option<u64>,
+    #[serde(skip)]
+    pub playback_nonce: u64,
     /// Journal length when recording started, and the action index being recorded into.
     #[serde(skip)]
     pub recording: Option<(usize, usize)>,
@@ -662,7 +668,7 @@ fn play(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 pub(crate) fn not_playing(s: &Session, cmd: &str) -> Result<()> {
-    if s.actions.playing > 0 { Err(bad(cmd, "cannot edit actions during playback")) } else { Ok(()) }
+    if s.actions.playing > 0 || s.actions.held_playback.is_some() { Err(bad(cmd, "cannot edit actions during playback")) } else { Ok(()) }
 }
 
 /// Move to a final zero-based index, either in an action's steps or in the action list.
