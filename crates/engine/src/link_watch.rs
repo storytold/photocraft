@@ -157,6 +157,19 @@ impl Session {
         }
         let mut updated = Vec::new();
         for (path, ids) in changed {
+            // A preserved id can repeat in a file: only a layer the changed file is the source
+            // of follows it, never another layer that borrowed the id.
+            let Some(doc) = self.active().map(|d| d.doc.clone()) else { break };
+            let ids: Vec<u64> = ids
+                .into_iter()
+                .filter(|id| {
+                    doc.layer(LayerId(*id))
+                        .is_some_and(|l| matches!(&l.content, LayerContent::Smart(sm) if matches!(&sm.source, SmartSource::Linked { path: p } if *p == path)))
+                })
+                .collect();
+            if ids.is_empty() {
+                continue;
+            }
             let r = self.edit("Update Modified Content", |d, _| {
                 for id in &ids {
                     if !crate::smart_cmds::refresh(d, LayerId(*id))? {
@@ -246,6 +259,30 @@ mod tests {
         assert!(is(centre(&s), RED));
         assert_eq!(s.execute("layer.smartObjects.updateChanged", json!({})).unwrap(), json!({"updated": []}));
         assert!(is(centre(&s), RED));
+    }
+
+    #[test]
+    fn a_layer_that_borrowed_a_changed_files_layer_id_is_not_refreshed() {
+        let d = dir("borrowed-id");
+        let (red, other) = (d.join("red.png"), d.join("other.png"));
+        std::fs::write(&red, png(10, 10, "#ff0000")).unwrap();
+        std::fs::write(&other, png(10, 10, "#00ff00")).unwrap();
+        let (mut s, id) = placed(&red);
+        s.execute("file.placeLinked", json!({"path": other.to_string_lossy()})).unwrap();
+        // A file can preserve one layer id on two layers: the layer of the other file takes the
+        // red layer's id and ends up first in the walk.
+        let borrowed = s.active().unwrap().active_layer.unwrap();
+        s.edit("borrow id", |doc, _| {
+            let mut l = doc.remove(borrowed).ok_or(EngineError::Other("no layer".into()))?;
+            l.id = super::LayerId(id);
+            doc.layers.insert(0, l);
+            Ok(())
+        })
+        .unwrap();
+        s.execute("layer.smartObjects.updateChanged", json!({})).unwrap();
+        save(&red, &png(10, 10, "#0000ff"));
+        // The change to red.png reaches no layer: the only layer with its id is sourced elsewhere.
+        assert_eq!(s.execute("layer.smartObjects.updateChanged", json!({})).unwrap(), json!({"updated": []}));
     }
 
     #[test]

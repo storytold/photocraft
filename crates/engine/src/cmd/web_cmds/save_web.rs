@@ -172,6 +172,9 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
     if let Some(authorize) = s.authorize {
         authorize(cmd, p)?;
     }
+    // The writer API runs outside `Session::execute`: carry the session's gate into the temporary
+    // sessions `web_document` resizes in, so a re-rendered linked file is read under it.
+    let _authorization = crate::jobs::render_authorization_scope(s.authorize);
     // Settings are checked first, so a refused export leaves a floating selection where it is.
     let st = WebSettings::from_params(p, cmd)?;
     // Direct platform calls must export the moved selection as it appears on the canvas,
