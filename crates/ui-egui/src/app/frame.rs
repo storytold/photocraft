@@ -19,12 +19,18 @@ impl PhotocraftApp {
         self.last_frame_start_ms = gpu_canvas::now_ms();
     }
 
+    /// Returns whether the system is fully initialized (fonts ready and text engine available).
+    pub fn system_ready(&self) -> bool {
+        self.fonts_ready && photocraft_text::try_shared().is_some()
+    }
+
     /// Returns whether application shortcuts are suppressed by an actively rendered splash screen.
     ///
     /// Shortcuts remain available during the initial appearance delay (when [`crate::splash::SplashState::time_until_appearance`]
-    /// is `Some`) and are suppressed only on frames where the splash screen is actually visible.
+    /// is `Some`), when notices are posted, or when system initialization has completed (`system_ready`).
     pub fn splash_shortcuts_blocked(&self, now: f64) -> bool {
-        self.ui.notices.is_empty()
+        !self.system_ready()
+            && self.ui.notices.is_empty()
             && self.synthetic.is_empty()
             && self.synthetic_batch.is_none()
             && self.splash.as_ref().is_some_and(|s| s.should_render(now))
@@ -199,12 +205,12 @@ impl PhotocraftApp {
             s.dismiss();
             ctx.request_repaint();
         }
+        let system_ready = self.system_ready();
         if let Some(splash) = &mut self.splash {
             splash.ensure_started(now);
             // Closes immediately when ready and never waits for an artificial timer.
             // In the web build or whenever notices arrive (e.g. preset warnings), dismiss immediately so failures are never hidden.
             let has_failures_or_notices = !self.ui.notices.is_empty();
-            let system_ready = self.fonts_ready && photocraft_text::try_shared().is_some();
             if has_failures_or_notices || system_ready || !splash.is_active(now) {
                 splash.dismiss();
                 self.splash = None;

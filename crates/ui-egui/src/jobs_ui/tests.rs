@@ -1082,8 +1082,10 @@ fn splash_shortcuts_gate_allows_shortcuts_during_appear_delay_and_suppresses_whe
         "shortcuts must remain available during appearance delay when splash is not visible"
     );
 
-    // 2. Splash past appearance delay: actually rendering on screen.
+    // 2. Splash past appearance delay while system is not ready: actually rendering on screen.
     // should_render is true, time_until_appearance is None.
+    h.state_mut().fonts_ready = false;
+    assert!(!h.state().system_ready());
     let rendered_now = now + crate::splash::SPLASH_APPEAR_DELAY + 0.1;
     let mut splash_rendered = crate::splash::SplashState::new();
     splash_rendered.start_time = now;
@@ -1091,7 +1093,7 @@ fn splash_shortcuts_gate_allows_shortcuts_during_appear_delay_and_suppresses_whe
     assert!(splash_rendered.should_render(rendered_now));
     h.state_mut().splash = Some(splash_rendered);
 
-    // Shortcuts are suppressed while splash renders
+    // Shortcuts are suppressed while splash renders before system is ready
     assert!(
         h.state().splash_shortcuts_blocked(rendered_now),
         "shortcuts must be suppressed on frames where splash is rendered"
@@ -1123,6 +1125,16 @@ fn splash_shortcuts_gate_allows_shortcuts_during_appear_delay_and_suppresses_whe
     assert!(
         !h.state().splash_shortcuts_blocked(rendered_now),
         "shortcuts must not be blocked when notices are present"
+    );
+    h.state_mut().ui.notices.clear();
+
+    // 6. System readiness unblocks shortcuts matching splash dismissal in ui_frame
+    let _ = photocraft_text::shared();
+    h.state_mut().fonts_ready = true;
+    assert!(h.state().system_ready());
+    assert!(
+        !h.state().splash_shortcuts_blocked(rendered_now),
+        "shortcuts must be unblocked once system is ready"
     );
 }
 
