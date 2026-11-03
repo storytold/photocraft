@@ -621,6 +621,7 @@ fn the_pointer_belongs_to_another_window_from_its_report_until_this_one_hears_it
 #[test]
 fn pen_bitmaps_render_all_six_variants_with_exact_outline_and_hotspots_at_each_scale() {
     let anchor = convert_point_anchor_centre();
+    assert_eq!(super::PenVariant::Standard.hotspot_in_box(), vec2(2.3, 2.3), "the full-size pen nib is at (2.3, 2.3)");
     assert_eq!(super::PenVariant::ConvertPoint.hotspot_in_box(), vec2(12.0, 7.0), "match the painted Convert Point apex");
     assert_eq!(anchor, vec2(12.0, 7.0), "convert-point.svg anchor square centre");
     assert_eq!(super::PenVariant::ConvertPoint.hotspot_in_box(), anchor, "the Convert Point hotspot is the SVG anchor square centre");
@@ -676,11 +677,18 @@ fn pen_variants_have_distinct_hotspots_and_geometry() {
     assert_ne!(standard.rgba, delete.rgba, "Delete Anchor keeps its minus badge");
     assert_ne!(add.rgba, delete.rgba, "the two anchor badges differ");
 
-    // Pin the tool-to-variant and variant-to-icon mappings so a swapped badge cannot pass.
-    assert_eq!(super::PenVariant::from_tool(Tool::AddAnchorPoint), Some(super::PenVariant::AddAnchor));
-    assert_eq!(super::PenVariant::from_tool(Tool::DeleteAnchorPoint), Some(super::PenVariant::DeleteAnchor));
-    assert_eq!(super::PenVariant::AddAnchor.icon_name(), "pen-add-anchor", "Add Anchor uses the plus badge");
-    assert_eq!(super::PenVariant::DeleteAnchor.icon_name(), "pen-delete-anchor", "Delete Anchor uses the minus badge");
+    // Pin every tool-to-variant and variant-to-icon mapping so a swapped glyph cannot pass.
+    for (tool, variant, icon) in [
+        (Tool::Pen, super::PenVariant::Standard, "pen-tool"),
+        (Tool::FreeformPen, super::PenVariant::Freeform, "pen-freeform"),
+        (Tool::CurvaturePen, super::PenVariant::Curvature, "pen-curvature"),
+        (Tool::AddAnchorPoint, super::PenVariant::AddAnchor, "pen-add-anchor"),
+        (Tool::DeleteAnchorPoint, super::PenVariant::DeleteAnchor, "pen-delete-anchor"),
+        (Tool::ConvertPoint, super::PenVariant::ConvertPoint, "convert-point"),
+    ] {
+        assert_eq!(super::PenVariant::from_tool(tool), Some(variant), "{tool:?} maps to its Pen variant");
+        assert_eq!(variant.icon_name(), icon, "{variant:?} uses its own icon");
+    }
 }
 
 /// The Convert Point glyph's anchor-square centre, read from the SVG's `<rect>` so a moved square
@@ -888,9 +896,13 @@ fn partial_alpha_pen_rgb_recovers_source_glyph_coverage() {
             partial_alpha.push((variant, scale, checked));
         }
     }
-    // Some glyph/scale pairs composite every edge opaquely; report the per-pair counts so a
-    // minimum can be pinned once CI has shown which pairs always keep translucent edges.
-    assert!(partial_alpha.iter().any(|&(_, _, count)| count > 0), "exercise actual translucent foreground edges: {partial_alpha:?}");
+    // Some glyph/scale pairs composite every edge opaquely; each variant must still keep a
+    // translucent edge at one of the scales.
+    for variant in super::PenVariant::all() {
+        let counts: Vec<_> = partial_alpha.iter().filter(|(v, _, _)| *v == variant).map(|&(_, scale, count)| (scale, count)).collect();
+        let total: usize = counts.iter().map(|&(_, count)| count).sum();
+        assert!(total > 0, "{variant:?} has no translucent edge sample at any scale: {counts:?}");
+    }
 }
 
 // Exercise the benchmark's actual allocation-admission helper in normal library CI;
