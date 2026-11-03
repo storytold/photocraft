@@ -330,6 +330,19 @@ fn every_colour_mode_saves_or_mattes_its_transparency() {
                     let back = import("t.tif", &r.bytes).unwrap().document;
                     assert_eq!(back.mode, mode, "{case}");
                     if t == Some(false) {
+                        // The merged image (what other readers show) is matted on the mode's own
+                        // white, flat or layered: CMYK paper is no ink, Lab white L* 100 with a*
+                        // and b* at their midpoint.
+                        let white: &[f32] = match mode {
+                            ColorMode::Cmyk => &[0.0, 0.0, 0.0, 0.0],
+                            ColorMode::Lab => &[1.0, 128.0 / 255.0, 128.0 / 255.0],
+                            ColorMode::Grayscale => &[1.0],
+                            _ => &[1.0, 1.0, 1.0],
+                        };
+                        let f = img.convert(img.layout(), photocraft_codecs::SampleType::F32);
+                        let merged = f.to_f32_samples().unwrap();
+                        assert_eq!(img.layout().channels(), white.len(), "{case}");
+                        assert!(merged.iter().zip(white).all(|(a, b)| (a - b).abs() < 1e-2), "{case}: merged {:?} vs {white:?}", &merged[..white.len()]);
                         // The corner was transparent: now the mode's white, read back opaque.
                         let LayerContent::Raster(s) = &back.layers[0].content else { panic!("raster") };
                         let want = photocraft_raster::from_rgba(&back.pixel_format(), [1.0, 1.0, 1.0, 1.0]);

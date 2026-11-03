@@ -76,25 +76,35 @@ fn every_depth_layout_and_compression() {
     }
 }
 
-#[test]
-fn colour_is_weighted_by_alpha() {
-    // 2×2 RGBA: one opaque red pixel, three transparent white ones. The level's one pixel is red
-    // at a quarter alpha, not pink.
-    let px = [[255u8, 0, 0, 255], [255, 255, 255, 0], [255, 255, 255, 0], [255, 255, 255, 0]];
+/// A 128×128 image of 2×2 tiles, one `opaque` pixel and three `clear` ones (alpha last), and the
+/// first pixel of its first reduced level.
+fn first_level_pixel(layout: ChannelLayout, opaque: &[u8], clear: &[u8]) -> Vec<u8> {
+    let tile = [opaque, clear, clear, clear];
     let mut data = Vec::new();
     for _ in 0..64 {
         for x in 0..128 {
-            data.extend_from_slice(&px[x % 2]);
+            data.extend_from_slice(tile[x % 2]);
         }
         for x in 0..128 {
-            data.extend_from_slice(&px[2 + x % 2]);
+            data.extend_from_slice(tile[2 + x % 2]);
         }
     }
-    let img = Image::from_raw(128, 128, ChannelLayout::Rgba, SampleType::U8, data).unwrap();
+    let img = Image::from_raw(128, 128, layout, SampleType::U8, data).unwrap();
     let bytes = encode(&img, Format::Tiff, &pyramid()).unwrap();
     let level = decode_tiff_page(&bytes, 1, &DecodeOptions::default()).unwrap();
-    assert_eq!(level.dimensions(), (64, 64));
-    assert_eq!(&level.data()[..4], &[255, 0, 0, 64]);
+    assert_eq!(level.dimensions(), (64, 64), "{layout:?}");
+    assert_eq!(level.layout(), layout);
+    level.data()[..layout.channels()].to_vec()
+}
+
+#[test]
+fn colour_is_weighted_by_alpha() {
+    // One opaque pixel and three transparent ones of another colour: the level keeps the opaque
+    // colour at a quarter alpha. Unweighted, the transparent colour would bleed in (pink, not red).
+    assert_eq!(first_level_pixel(ChannelLayout::Rgba, &[255, 0, 0, 255], &[255, 255, 255, 0]), [255, 0, 0, 64]);
+    // Gray and CMYK reach the same path with other channel counts.
+    assert_eq!(first_level_pixel(ChannelLayout::GrayA, &[40, 255], &[255, 0]), [40, 64]);
+    assert_eq!(first_level_pixel(ChannelLayout::CmykA, &[200, 10, 30, 90, 255], &[0, 0, 0, 0, 0]), [200, 10, 30, 90, 64]);
 }
 
 #[test]
