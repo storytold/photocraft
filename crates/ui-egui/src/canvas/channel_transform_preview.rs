@@ -297,7 +297,7 @@ pub(crate) fn texture(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, 
         preview.recovered(&mut app.ui.status, &mut app.ui.status_error);
     }
     let key = (view.clone(), look, display_key);
-    if preview.textures.get(&output).is_none_or(|entry| entry.view.as_ref() != Some(&key)) {
+    if preview.shown.scratch_health().is_ok() && preview.textures.get(&output).is_none_or(|entry| entry.view.as_ref() != Some(&key)) {
         let generation = photocraft_raster::spill::read_error_generation();
         let image = limit_image(preview.image(&view, look, display.as_deref()), ctx.input(|i| i.max_texture_side));
         let view = photocraft_engine::channel_transform::check_capture(&preview.shown, generation).is_ok().then_some(key);
@@ -312,6 +312,17 @@ pub(crate) fn texture(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, 
             }
         }
     }
+    // Keep the previous image while its source is unreadable. Re-compositing it on
+    // every pointer frame would retry all failed display tiles outside the bounded
+    // retry gate above. A window with no previous image gets a transparent placeholder.
+    preview.textures.entry(output).or_insert_with(|| CpuTexture {
+        view: None,
+        texture: ctx.load_texture(
+            format!("channel-transform-{}-{:?}", t.session, output),
+            ColorImage::new([1, 1], vec![Color32::TRANSPARENT]),
+            TextureOptions::LINEAR,
+        ),
+    });
     if preview.retry_after > 0.0 || [&preview.native, &preview.base, &preview.shown].iter().any(|doc| doc.scratch_health().is_err()) {
         ctx.request_repaint_after(std::time::Duration::from_millis(250));
     }

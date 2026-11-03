@@ -113,7 +113,14 @@ fn cpu_texture_retry() {
     assert!(a.ui.status_error);
     assert!(a.transform_preview.as_ref().unwrap().channel.as_ref().unwrap().textures[&None].view.is_none(), "failed display reads cannot be memoized");
     ctx.tex_manager().write().take_delta().clear();
+    for _ in 0..3 {
+        texture(&mut a, &ctx, 0, None).unwrap();
+        let mut delta = ctx.tex_manager().write().take_delta();
+        assert!(delta.set.is_empty(), "failed display pixels cannot be rebuilt on every pointer frame");
+        delta.clear();
+    }
     damaged.restore();
+    a.transform_preview.as_mut().unwrap().channel.as_mut().unwrap().retry_after = 0.0;
     texture(&mut a, &ctx, 0, None).unwrap();
     texture(&mut a, &ctx, 0, None).unwrap();
     assert!(a.transform_preview.as_ref().unwrap().channel.as_ref().unwrap().textures[&None].view.is_some());
