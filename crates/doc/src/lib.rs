@@ -657,6 +657,10 @@ pub struct Layer {
     /// PSD layer id (`lyid`), kept so ids stay stable across round trips.
     /// Cleared by [`Layer::duplicate`].
     pub psd_id: Option<u32>,
+    /// The layer record's rect as read from a PSD. Export writes it again while the pixels
+    /// still fit inside it, so a resave doesn't crop margins the file stored, as Photoshop
+    /// keeps them.
+    pub psd_rect: Option<Rect>,
     /// Photoshop-rendered pixels for fill layers (see [`FillCache`]).
     pub fill_cache: Option<FillCache>,
     /// Layer › Link Layers: layers sharing a link group move together. `None` = not linked.
@@ -705,6 +709,7 @@ impl Layer {
             content,
             psd_blocks: Vec::new(),
             psd_id: None,
+            psd_rect: None,
             fill_cache: None,
             link_group: None,
             excluded_channels: 0,

@@ -208,6 +208,9 @@ pub struct LayerM {
     /// (4-char key as hex, blob)
     pub psd_blocks: Vec<(String, Hash)>,
     pub psd_id: Option<u32>,
+    /// The PSD layer record's rect (missing in older files = none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub psd_rect: Option<photocraft_doc::Rect>,
     pub fill_cache: Option<FillCacheM>,
     /// Link Layers group (`None` = not linked).
     #[serde(default)]

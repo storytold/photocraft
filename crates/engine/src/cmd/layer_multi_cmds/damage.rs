@@ -135,7 +135,7 @@ fn alpha_channels_equal(a: &photocraft_doc::AlphaChannel, b: &photocraft_doc::Al
 /// compared here: the caller walks into them, so an edit inside a group damages only the
 /// edited child's extent, not the whole group's. The destructure is exhaustive, so a new
 /// `Layer` field fails to compile until it is classified: compared, or explicitly ignored
-/// (name, locks, label, `psd_blocks`, `psd_id`, link group, XMP — none of them composite; video
+/// (name, locks, label, `psd_blocks`, `psd_id`, `psd_rect`, link group, XMP — none of them composite; video
 /// bails out earlier in the walk).
 fn layer_pixels_equal(a: &Layer, b: &Layer) -> bool {
     layer_pixels_cmp(a, b, &mut |x, y, _| surfaces_equal(x, y))
@@ -161,6 +161,7 @@ fn layer_pixels_cmp(a: &Layer, b: &Layer, surf: SurfaceCmp) -> bool {
         content,
         psd_blocks: _,
         psd_id: _,
+        psd_rect: _,
         fill_cache,
         link_group: _,
         excluded_channels,

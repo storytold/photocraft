@@ -76,6 +76,7 @@ pub fn rich_doc(mode: ColorMode, depth: SampleType) -> Document {
     paint.psd_blocks.push((*b"vmsk", blob(4, 40)));
     paint.psd_blocks.push((*b"lnsr", blob(5, 4)));
     paint.psd_id = Some(42);
+    paint.psd_rect = Some(photocraft_doc::Rect::new(-3, 2, 40, 31));
 
     let mut inner = Layer::raster("Inner", pf);
     scribble(inner.surface_mut().unwrap(), 6, hdr);
