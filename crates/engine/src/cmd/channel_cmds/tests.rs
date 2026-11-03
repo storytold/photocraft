@@ -1081,14 +1081,14 @@ fn history_mask_command_session() -> (Session, usize) {
     s.edit("seed mask Paint history source", |doc, _| {
         let mask = doc.layer_mut(layer_id).unwrap().mask.as_mut().unwrap();
         let flattened = Surface::with_default(PixelFormat::GRAY8, &[0.2]);
-        let paint_surface = Surface::with_default(PixelFormat::RGBA8, &[0.8, 0.8, 0.8, 1.0]);
-        mask.surface = flattened.clone();
+        // A white Paint layer at 62.5% opacity composites over the 0.2 base to 0.7.
+        let paint_surface = Surface::with_default(PixelFormat::RGBA8, &[1.0, 1.0, 1.0, 0.625]);
         mask.paint = Some(Stack {
             base: flattened,
             layers: vec![Paint {
                 name: "Historical Paint".into(),
                 // Keep the active editable source distinct from the flattened mask snapshot.
-                visible: false,
+                visible: true,
                 opacity: 1.0,
                 blend: photocraft_color::BlendMode::Normal,
                 surface: paint_surface,
@@ -1120,7 +1120,7 @@ fn history_fill_samples_the_flattened_historical_mask() {
     let active = s.active().unwrap();
     let mask = active.doc.layer(active.active_layer.unwrap()).unwrap().mask.as_ref().unwrap();
     let sample = mask.surface.sample_channel(20, 15, 0);
-    assert!((sample - 0.2).abs() < 0.02, "History Fill must use the flattened mask, got {sample}");
+    assert!((sample - 0.7).abs() < 0.02, "History Fill must use the flattened mask, got {sample}");
 }
 
 #[test]
@@ -1130,7 +1130,7 @@ fn history_brush_samples_the_flattened_historical_mask() {
     let active = s.active().unwrap();
     let mask = active.doc.layer(active.active_layer.unwrap()).unwrap().mask.as_ref().unwrap();
     let sample = mask.surface.sample_channel(20, 15, 0);
-    assert!((sample - 0.2).abs() < 0.08, "History Brush must use the flattened mask, got {sample}");
+    assert!((sample - 0.7).abs() < 0.08, "History Brush must use the flattened mask, got {sample}");
 }
 
 #[test]

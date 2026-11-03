@@ -132,9 +132,9 @@ use tabs::{dots, paint_dots};
 #[cfg(test)]
 use tabs::{main_canvas_document, move_target_after_filter};
 #[cfg(test)]
-pub(crate) use textures::detail_plan;
-#[cfg(test)]
 pub(crate) use textures::cpu_damage_since;
+#[cfg(test)]
+pub(crate) use textures::detail_plan;
 pub(crate) use textures::{DetailPlan, damage_since, effect_reach, ensure_texture_in_view, retain_gpu_documents, shown_as_document};
 pub use textures::{MAX_TEXTURE, ensure_texture};
 #[cfg(test)]

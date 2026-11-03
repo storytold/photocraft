@@ -102,6 +102,24 @@ fn legacy_scalar_mask_blend_roundtrips_in_native_documents() {
 }
 
 #[test]
+fn empty_mask_paint_stack_roundtrips_in_native_documents() {
+    use photocraft_color::PixelFormat;
+    use photocraft_doc::{LayerMask, mask_paint::Stack};
+    use photocraft_raster::Surface;
+
+    let mut doc = rich_doc(ColorMode::Rgb, SampleType::U8);
+    let base = Surface::with_default(PixelFormat::GRAY8, &[0.35]);
+    let mut mask = LayerMask::hide_all();
+    mask.surface = base.clone();
+    mask.paint = Some(Stack { base, layers: Vec::new(), active: 0 });
+    doc.layers.first_mut().unwrap().mask = Some(mask);
+
+    let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+    let loaded = load_from_bytes(&bytes).unwrap();
+    assert_eq!(loaded, doc, "empty editable mask stacks with active index zero are valid");
+}
+
+#[test]
 fn custom_shape_stroke_roundtrip_keeps_every_style_field() {
     for mode in MODES {
         for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {

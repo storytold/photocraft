@@ -437,7 +437,7 @@ impl Loader<'_> {
 
     fn mask_paint(&mut self, m: &MaskM) -> Result<Option<photocraft_doc::mask_paint::Stack>> {
         let Some(s) = &m.paint else { return Ok(None) };
-        if s.layers.len() > 256 || s.active >= s.layers.len() {
+        if s.layers.len() > 256 || (s.layers.is_empty() && s.active != 0) || (!s.layers.is_empty() && s.active >= s.layers.len()) {
             return Err(crate::FormatError::Corrupt("invalid mask paint stack".into()));
         }
         let base = self.surface(&s.base)?;

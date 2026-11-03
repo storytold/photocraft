@@ -461,6 +461,16 @@ impl UvState {
 fn err(message: impl Into<String>) -> EngineError {
     EngineError::Other(message.into())
 }
+fn previous_uv_documents(s: &Session) -> Vec<DocId> {
+    if s.uv.scene.is_none() {
+        return Vec::new();
+    }
+    if s.uv_workspace.active {
+        return s.documents().iter().map(|st| st.doc.id).collect();
+    }
+    let owned: std::collections::HashSet<_> = s.uv.all_bindings().flatten().copied().chain(s.uv.saved_revisions.keys().copied()).collect();
+    s.documents().iter().filter(|st| owned.contains(&st.doc.id)).map(|st| st.doc.id).collect()
+}
 fn mesh(s: &Session) -> std::result::Result<(), String> {
     if s.uv.scene.is_some() { Ok(()) } else { Err("Import a UV-mapped model first".into()) }
 }
@@ -798,7 +808,7 @@ pub(super) fn load_scene(source: &str, uv_set: usize) -> Result<(Scene, Option<c
 }
 fn import(s: &mut Session, p: &Value) -> Result<Value> {
     require_active_uv_bank(s)?;
-    let previous: Vec<_> = s.documents().iter().filter(|_| s.uv_workspace.active && s.uv.scene.is_some()).map(|st| st.doc.id).collect();
+    let previous = previous_uv_documents(s);
     let source = model_path(p)?;
     let uv_set = uint(p, "uvSet", 0)?;
     let (mut scene, source_stamp, directory) = load_scene(&source, uv_set)?;
@@ -1633,7 +1643,7 @@ fn project_save(s: &mut Session, p: &Value) -> Result<Value> {
 }
 fn project_load(s: &mut Session, p: &Value) -> Result<Value> {
     require_active_uv_bank(s)?;
-    let previous: Vec<_> = s.documents().iter().filter(|_| s.uv_workspace.active && s.uv.scene.is_some()).map(|st| st.doc.id).collect();
+    let previous = previous_uv_documents(s);
     let project_path = path(p)?;
     let project_directory = std::path::absolute(model_directory(project_path)).map_err(|e| err(e.to_string()))?;
     let project_export_root = project_directory.canonicalize().ok();

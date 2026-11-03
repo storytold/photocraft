@@ -10,6 +10,35 @@ fn fixture() -> Session {
     s
 }
 #[test]
+fn headless_import_and_project_reload_collect_owned_clean_uv_documents() {
+    let mut s = Session::new();
+    let model = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../uv/tests/fixtures/two-shells.obj");
+    s.execute("uv.model.import", json!({"path":model})).unwrap();
+    s.execute("uv.texture.create", json!({"width":16,"height":16})).unwrap();
+    let first_texture = s.active().unwrap().doc.id;
+
+    s.execute("file.new", json!({"width":8,"height":8})).unwrap();
+    let ordinary = s.active().unwrap().doc.id;
+    assert!(!s.active().unwrap().is_dirty(), "fixture ordinary document must be clean");
+    s.execute("uv.model.import", json!({"path":model})).unwrap();
+    assert!(!s.documents().iter().any(|st| st.doc.id == first_texture), "headless reimport should close the prior clean UV texture");
+    let ordinary = s.documents().iter().find(|st| st.doc.id == ordinary).expect("reimport should preserve an unrelated ordinary document");
+    assert!(!ordinary.is_dirty(), "reimport should keep the ordinary document clean");
+
+    let mut project_session = Session::new();
+    project_session.execute("uv.model.import", json!({"path":model})).unwrap();
+    project_session.execute("uv.texture.create", json!({"width":16,"height":16})).unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("headless.pcuv");
+    project_session.execute("uv.project.save", json!({"path":project})).unwrap();
+    let document_count = project_session.documents().len();
+    for _ in 0..3 {
+        project_session.execute("uv.project.load", json!({"path":project})).unwrap();
+        assert_eq!(project_session.documents().len(), document_count, "headless project reload must not accumulate old UV documents");
+        assert!(!project_session.uv.has_unsaved_project(project_session.uv_documents()));
+    }
+}
+#[test]
 fn relative_texture_and_project_paths_preserve_the_original_export_destination() {
     let cwd = std::env::current_dir().unwrap();
     let temp = tempfile::tempdir_in(&cwd).unwrap();
