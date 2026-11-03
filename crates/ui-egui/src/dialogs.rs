@@ -682,7 +682,6 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             crate::field_tab::begin(ui.ctx());
             if let Some(done) = dialog_body(app, ui, &d, &mut fields, id, interactive) {
                 outcome = Some(done);
-
             }
             crate::field_tab::end(ui.ctx(), tab);
             if let Some(Value::String(key)) = fields.remove(BROWSE_FIELD) {
