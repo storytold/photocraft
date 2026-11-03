@@ -597,3 +597,10 @@ cameraRaw	Yellow	पीला
 @plural	{n} action file loaded|{n} action files loaded	{n} एक्शन फ़ाइल लोड हुई|{n} एक्शन फ़ाइलें लोड हुईं
 	{set} from {file} replaced the one from {earlier}	{file} के सेट {set} ने {earlier} वाले सेट की जगह ले ली
 @plural	{n} file could not be loaded: {errors}|{n} files could not be loaded: {errors}	{n} फ़ाइल लोड नहीं हो सकी: {errors}|{n} फ़ाइलें लोड नहीं हो सकीं: {errors}
+
+# TIFF Options: compression, image pyramid and transparency (#8827)
+	Image Compression	इमेज संपीड़न
+	Save Image Pyramid	इमेज पिरामिड सहेजें
+	Save Transparency	पारदर्शिता सहेजें
+	LZW	LZW
+	ZIP	ZIP

@@ -4027,3 +4027,10 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Màu điểm dừng
 	Shapes can't use patterns yet	Hình chưa thể dùng mẫu tô
 	Edit Brush…	Chỉnh sửa cọ…
+
+# TIFF Options: compression, image pyramid and transparency (#8827)
+	Image Compression	Nén hình ảnh
+	Save Image Pyramid	Lưu kim tự tháp hình ảnh
+	Save Transparency	Lưu độ trong suốt
+	LZW	LZW
+	ZIP	ZIP

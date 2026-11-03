@@ -4717,3 +4717,10 @@ shape	Appearance	Оформление
 	Stop Color	Цвет контрольной точки
 	Shapes can't use patterns yet	Фигуры пока не могут использовать узоры
 	Edit Brush…	Изменить кисть…
+
+# TIFF Options: compression, image pyramid and transparency (#8827)
+	Image Compression	Сжатие изображения
+	Save Image Pyramid	Сохранить пирамиду изображения
+	Save Transparency	Сохранить прозрачность
+	LZW	LZW
+	ZIP	ZIP

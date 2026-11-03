@@ -4599,3 +4599,10 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Boja tačke
 	Shapes can't use patterns yet	Oblici još ne mogu da koriste šare
 	Edit Brush…	Uredi četkicu…
+
+# TIFF Options: compression, image pyramid and transparency (#8827)
+	Image Compression	Kompresija slike
+	Save Image Pyramid	Sačuvaj piramidu slike
+	Save Transparency	Sačuvaj providnost
+	LZW	LZW
+	ZIP	ZIP

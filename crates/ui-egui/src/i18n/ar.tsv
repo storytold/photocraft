@@ -3549,3 +3549,10 @@ curves	Smooth	تنعيم
 	The path was kept as the Work Path	تم الاحتفاظ بالمسار كمسار عمل
 	The path was discarded	تم تجاهل المسار
 	Edit Brush…	تحرير الفرشاة…
+
+# TIFF Options: compression, image pyramid and transparency (#8827)
+	Image Compression	ضغط الصورة
+	Save Image Pyramid	حفظ هرم الصورة
+	Save Transparency	حفظ الشفافية
+	LZW	LZW
+	ZIP	ZIP

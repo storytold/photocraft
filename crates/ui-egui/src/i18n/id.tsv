@@ -3543,3 +3543,10 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Solid Color	Warna Solid
 	Tint Color	Warna Tint
 	Edit Brush…	Edit Kuas…
+
+# TIFF Options: compression, image pyramid and transparency (#8827)
+	Image Compression	Kompresi Gambar
+	Save Image Pyramid	Simpan Piramida Gambar
+	Save Transparency	Simpan Transparansi
+	LZW	LZW
+	ZIP	ZIP

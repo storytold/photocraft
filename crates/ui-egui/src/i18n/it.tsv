@@ -4632,3 +4632,10 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Colore del punto
 	Shapes can't use patterns yet	Le forme non possono ancora usare pattern
 	Edit Brush…	Modifica pennello…
+
+# TIFF Options: compression, image pyramid and transparency (#8827)
+	Image Compression	Compressione immagine
+	Save Image Pyramid	Salva piramide immagine
+	Save Transparency	Salva trasparenza
+	LZW	LZW
+	ZIP	ZIP
