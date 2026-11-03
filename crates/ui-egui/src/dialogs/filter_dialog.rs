@@ -572,6 +572,14 @@ pub fn open(app: &mut PhotocraftApp, command: &str) -> Option<u64> {
         fields.insert("__groupModels".into(), json!(app.session.prefs().integrations.group_models_by_family));
         fields.insert("__autoModel".into(), json!(crate::generate_panel::auto_name(app, page)));
     }
+    // The generative dialogs show the picture's size (Expand's diagram, Generate Image's Auto)
+    // and whether a selection confines the result.
+    if generative::COMMANDS.contains(&command)
+        && let Some(d) = app.session.active()
+    {
+        fields.insert(generative::DOC_SIZE.into(), json!([d.doc.size.width, d.doc.size.height]));
+        fields.insert(generative::SELECTION.into(), json!(d.doc.selection.as_ref().is_some_and(|s| !s.content_bounds().is_empty())));
+    }
     if parse_spec(spec.params).iter().any(|p| p.kind == Kind::Document) {
         // The document picker lists every open document (params refer to them by index).
         let names: Vec<String> = app.session.documents().iter().map(|d| d.doc.name.clone()).collect();
@@ -861,7 +869,43 @@ fn replace_color_result(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
 }
 
 /// Dialog body for filter commands.
+/// A generative dialog's model picker (Auto, then the page's templates), in place of the hidden
+/// `template` field; an empty choice leaves `template` unset (the preferences' default).
+pub(crate) fn model_pill(ui: &mut egui::Ui, f: &mut Map<String, Value>, cmd: &str, width: f32) {
+    let items: Vec<crate::model_picker::Item> = f
+        .get("__models")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .map(|v| crate::model_picker::Item {
+                    id: v["id"].as_str().unwrap_or_default().to_string(),
+                    name: v["name"].as_str().unwrap_or_default().to_string(),
+                    family: v["family"].as_str().unwrap_or_default().to_string(),
+                    description: v["description"].as_str().unwrap_or_default().to_string(),
+                    research: v["research"].as_bool().unwrap_or(false),
+                    allowed: v["allowed"].as_bool().unwrap_or(false),
+                    installed: v["installed"].as_bool(),
+                    eta: None,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let group = f.get("__groupModels").and_then(Value::as_bool).unwrap_or(true);
+    let mut current = f.get("template").and_then(Value::as_str).unwrap_or_default().to_string();
+    let auto = f.get("__autoModel").and_then(Value::as_str).map(str::to_string);
+    crate::model_picker::pill(ui, &format!("flt-{cmd}"), &items, &mut current, auto.as_deref(), group, width);
+    if current.is_empty() {
+        f.remove("template");
+    } else {
+        f.insert("template".into(), json!(current));
+    }
+}
+
 pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
+    if generative::owns(f) {
+        generative::body(ui, f);
+        return;
+    }
     let t = Tokens::get(ui.ctx());
     let cmd = f.get("__command").and_then(Value::as_str).unwrap_or_default().to_string();
     // Plug-in dialogs carry their own spec (from the plug-in's manifest).
@@ -884,36 +928,10 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         }
         match p.kind {
             Kind::Json if p.key == "template" && f.contains_key("__models") => {
-                let items: Vec<crate::model_picker::Item> = f
-                    .get("__models")
-                    .and_then(Value::as_array)
-                    .map(|a| {
-                        a.iter()
-                            .map(|v| crate::model_picker::Item {
-                                id: v["id"].as_str().unwrap_or_default().to_string(),
-                                name: v["name"].as_str().unwrap_or_default().to_string(),
-                                family: v["family"].as_str().unwrap_or_default().to_string(),
-                                description: v["description"].as_str().unwrap_or_default().to_string(),
-                                research: v["research"].as_bool().unwrap_or(false),
-                                allowed: v["allowed"].as_bool().unwrap_or(false),
-                                installed: v["installed"].as_bool(),
-                                eta: None,
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                let group = f.get("__groupModels").and_then(Value::as_bool).unwrap_or(true);
-                let mut current = f.get("template").and_then(Value::as_str).unwrap_or_default().to_string();
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new(tl!("Model")).color(t.text_dim));
-                    let auto = f.get("__autoModel").and_then(Value::as_str);
-                    crate::model_picker::pill(ui, &format!("flt-{cmd}"), &items, &mut current, auto, group, 220.0);
+                    model_pill(ui, f, &cmd, 220.0);
                 });
-                if current.is_empty() {
-                    f.remove("template");
-                } else {
-                    f.insert("template".into(), json!(current));
-                }
             }
             Kind::Range { min, max, default } => {
                 let mut v = f.get(&p.key).and_then(Value::as_f64).unwrap_or(default as f64) as f32;
@@ -1430,6 +1448,9 @@ impl FilterPreviewKey {
             && self.k == other.k
     }
 }
+
+mod generative;
+pub(crate) use generative::{can_confirm as generative_can_confirm, ok_label as generative_ok_label, owns as is_generative};
 
 #[cfg(test)]
 mod tests;

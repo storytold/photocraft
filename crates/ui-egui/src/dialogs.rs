@@ -448,7 +448,8 @@ fn button_row(
     } else {
         let ok_label = ok_label(d);
         // Dialogs that need an input first (a preset name, a selection) grey OK out.
-        let can_ok = crate::crop_presets::can_confirm(app, fields) && crate::stack_dialog::can_confirm(fields);
+        let can_ok =
+            crate::crop_presets::can_confirm(app, fields) && crate::stack_dialog::can_confirm(fields) && crate::filter_dialog::generative_can_confirm(fields);
         let ok = DialogButton::new(ButtonRole::Default, ok_label, 84.0).enabled(can_ok);
         // Photoshop: holding Alt turns Cancel into Reset (the dialog stays open).
         // Dialogs opt in via `dialog_alt_reset::supported` (per marker).
@@ -529,7 +530,7 @@ fn ok_label(d: &Dialog) -> &'static str {
     } else if d.fields.contains_key("__export") {
         tl!("Export")
     } else {
-        crate::file_ui::ok_label(&d.fields).unwrap_or(tl!("OK"))
+        crate::file_ui::ok_label(&d.fields).or_else(|| crate::filter_dialog::generative_ok_label(&d.fields)).unwrap_or(tl!("OK"))
     }
 }
 
@@ -645,6 +646,12 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             } else if let Some(w) = crate::file_ui::dialog_width(&d.fields) {
                 ui.set_min_width(w);
                 ui.set_max_width(w);
+            }
+            // The generative dialogs (Generate Image, Generative Fill…) are one width, so the
+            // prompt box and the segmented rows line up from one to the next.
+            if crate::filter_dialog::is_generative(&d.fields) {
+                ui.set_min_width(420.0);
+                ui.set_max_width(420.0);
             }
             // Duplicate Layer… is a fixed small grid (labels + 260 pt fields ≈ 352 pt):
             // the generic 380 pt minimum left a dead strip on its right.

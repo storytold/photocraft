@@ -55,6 +55,30 @@ out a second person.
   `template` and the qwen-layered/split template are gone. Open: hair edges are the detector's
   refined mask, so fine wisps clip; Refine Edge on the subject layer helps.
 
+## 2026-11-02: the generative dialogs redesigned
+
+- The Edit menu's Generative Fill, Generate Image, Generative Expand, Generative Edit, Remove
+  Background and Split into Layers dialogs were the generic schema form (a one-line prompt, a
+  slider per number stuck at 0 for "the model's own", every switch in spec order). They now share
+  one layout with the Generate panel (`dialogs/filter_dialog/generative.rs`): a line on what the
+  command makes, the prompt in a framed box that opens with the keyboard in it (negative prompt
+  folded under it), Settings as labelled rows with segmented controls (Model, Output, Size,
+  Variations, Layers, Tries, Edge, Widen, the switches with tooltips), and Steps, Guidance and
+  Context under Advanced with Auto/Custom. OK says what it does (Generate, Expand, Remove
+  Background, Split); the dialogs are 420 pt wide.
+- Expand gets its four sides around a to-scale diagram with one-click amounts (10 %, 25 %, 50 %
+  on every side, 16:9, 1:1, Clear) and the new canvas size beside the title; OK is greyed until a
+  side grows (an untouched form ran and failed with "nothing to add"). `margin` stays unsent
+  (the expand template's own).
+- Edge shows on Generative Edit only with a selection (it does nothing without one). The body is
+  spec-driven: Split's new spec (layers 2..8 + prompt, PR #37) draws without changes, and a
+  parameter it has no place for gets a plain row under Advanced. Fields, Remember settings and
+  `ui.dialog.set` are unchanged.
+- Generative Angles' window: the camera's words under the orbit, Height and Distance as segmented
+  controls, Variations 1–4, a full-width Generate, the missing-LoRA note as a callout.
+- `capture_generative_dialog_snapshots` writes every dialog in Pro Medium and Pro Light to PNGs
+  when `PHOTOCRAFT_GENERATIVE_DIALOG_SNAPSHOTS` is set. New strings are English-only for now.
+
 ## 2026-11-01 (night): Split can try several seeds and keep the best-separated
 
 - With the dialog fixed, the owner's picture still split badly at most seeds. ComfyUI's own

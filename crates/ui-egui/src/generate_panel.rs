@@ -826,11 +826,11 @@ fn compact_row(app: &mut PhotocraftApp, ui: &mut egui::Ui, _t: &Tokens, action: 
 }
 
 /// Height of the panel's controls (segmented controls, the model pill).
-const ROW_H: f32 = 26.0;
+pub(crate) const ROW_H: f32 = 26.0;
 /// The settings' label column.
-const LABEL_W: f32 = 64.0;
+pub(crate) const LABEL_W: f32 = 64.0;
 /// Space between the panel's sections.
-const SECTION_GAP: f32 = 12.0;
+pub(crate) const SECTION_GAP: f32 = 12.0;
 
 /// The full form, top to bottom: the mode switch, what blocks the mode (a callout), the
 /// references, the prompt composer (its own toolbar: Enhance, the large editor, the counter), the
@@ -905,7 +905,7 @@ fn full(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: &Tokens, action: &mut Opt
 }
 
 /// One option of a [`segmented`] control.
-struct Seg<'a, T> {
+pub(crate) struct Seg<'a, T> {
     value: T,
     label: &'a str,
     icon: Option<&'static str>,
@@ -913,14 +913,14 @@ struct Seg<'a, T> {
 }
 
 impl<'a, T> Seg<'a, T> {
-    fn new(value: T, label: &'a str) -> Self {
+    pub(crate) fn new(value: T, label: &'a str) -> Self {
         Self { value, label, icon: None, tip: None }
     }
-    fn icon(mut self, icon: &'static str) -> Self {
+    pub(crate) fn icon(mut self, icon: &'static str) -> Self {
         self.icon = Some(icon);
         self
     }
-    fn tip(mut self, tip: &'a str) -> Self {
+    pub(crate) fn tip(mut self, tip: &'a str) -> Self {
         self.tip = Some(tip);
         self
     }
@@ -929,7 +929,7 @@ impl<'a, T> Seg<'a, T> {
 /// A segmented control `width` wide (0: the available width): equal segments in one track, the
 /// chosen one raised. A segment too narrow for its icon and label shows the icon alone (the label
 /// moves to the tooltip). Returns the option clicked, when it is not the current one.
-fn segmented<T: PartialEq + Clone>(ui: &mut egui::Ui, current: &T, options: &[Seg<'_, T>], width: f32) -> Option<T> {
+pub(crate) fn segmented<T: PartialEq + Clone>(ui: &mut egui::Ui, current: &T, options: &[Seg<'_, T>], width: f32) -> Option<T> {
     let t = Tokens::get(ui.ctx());
     let width = if width > 0.0 { width } else { ui.available_width() };
     let (track, track_resp) = ui.allocate_exact_size(vec2(width, ROW_H), Sense::hover());
@@ -1011,7 +1011,7 @@ fn mode_switch(ui: &mut egui::Ui, mode: &str, action: &mut Option<Action>) {
 }
 
 /// A section's title in small capitals, with an optional note at the right (a count).
-fn section(ui: &mut egui::Ui, t: &Tokens, title: &str, right: Option<(String, egui::Color32)>) {
+pub(crate) fn section(ui: &mut egui::Ui, t: &Tokens, title: &str, right: Option<(String, egui::Color32)>) {
     ui.horizontal(|ui| {
         ui.label(RichText::new(title.to_uppercase()).font(crate::theme::semibold(10.5)).color(t.text_faint));
         if let Some((note, color)) = right {
@@ -1023,7 +1023,7 @@ fn section(ui: &mut egui::Ui, t: &Tokens, title: &str, right: Option<(String, eg
 }
 
 /// A tinted note with an icon (what blocks the mode, the first-run Models folder).
-fn callout(ui: &mut egui::Ui, t: &Tokens, icon: &str, text: &str, color: egui::Color32) {
+pub(crate) fn callout(ui: &mut egui::Ui, t: &Tokens, icon: &str, text: &str, color: egui::Color32) {
     egui::Frame::new()
         .fill(color.gamma_multiply(0.12))
         .stroke(Stroke::new(1.0, color.gamma_multiply(0.45)))
@@ -1041,7 +1041,7 @@ fn callout(ui: &mut egui::Ui, t: &Tokens, icon: &str, text: &str, color: egui::C
 }
 
 /// A chevron and a label that open and close what follows (the negative prompt).
-fn disclosure(ui: &mut egui::Ui, t: &Tokens, label: &str, open: bool) -> egui::Response {
+pub(crate) fn disclosure(ui: &mut egui::Ui, t: &Tokens, label: &str, open: bool) -> egui::Response {
     let galley = ui.painter().layout_no_wrap(label.to_string(), FontId::proportional(12.0), t.text_dim);
     let (rect, resp) = ui.allocate_exact_size(vec2(18.0 + galley.size().x, 20.0), Sense::click());
     let color = if resp.hovered() { t.text } else { t.text_dim };
@@ -1112,7 +1112,7 @@ fn composer(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: &Tokens, mode: &str, 
 
 /// One settings row: the name in a fixed column (elided when a translation is longer), then
 /// the control in the rest of the width.
-fn setting_row(ui: &mut egui::Ui, label: &str, add: impl FnOnce(&mut egui::Ui)) {
+pub(crate) fn setting_row(ui: &mut egui::Ui, label: &str, add: impl FnOnce(&mut egui::Ui)) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 6.0;
         ui.allocate_ui_with_layout(vec2(LABEL_W, ROW_H), egui::Layout::left_to_right(egui::Align::Center), |ui| {
