@@ -134,6 +134,22 @@ fn on_keeps_transparency_ahead_of_spot_channels() {
     }
 }
 
+/// Channel names outside ASCII survive a save with Save Transparency on, flat and layered: the
+/// Unicode names (1045) carry them, after the transparency's entry.
+#[test]
+fn on_keeps_non_ascii_channel_names() {
+    let mut doc = art(SampleType::U8, true);
+    doc.channels[0].name = "Blå".into();
+    let gray = PixelFormat::new(ColorMode::Grayscale, SampleType::U8, false);
+    doc.channels.push(AlphaChannel::new("Máscara 2", Surface::new(gray)));
+    for layers in [false, true] {
+        let r = save(&doc, layers, Some(true));
+        let back = import("t.tif", &r.bytes).unwrap().document;
+        assert_eq!(back.channels.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["Blå", "Máscara 2"], "layers {layers}");
+        assert!(back.channels[0].spot.is_some(), "layers {layers}: the spot keeps its ink");
+    }
+}
+
 #[test]
 fn on_keeps_a_quick_mask_in_place() {
     let mut doc = art(SampleType::U8, true);

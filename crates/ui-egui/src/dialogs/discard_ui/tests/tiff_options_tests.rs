@@ -217,16 +217,16 @@ fn recorded_scripted_plain_save_of_a_tiff_has_no_path() {
     let ctx = h.ctx.clone();
     crate::menus::invoke(h.state_mut(), &ctx, "file.saveAs", json!({"path": "own.tif", "tiffCompression": "none"})).unwrap();
     h.state_mut().run("actions.record", json!({})).unwrap();
-    crate::menus::invoke(h.state_mut(), &ctx, "file.save", json!({"tiffCompression": "lzw", "tiffPyramid": true})).unwrap();
+    crate::menus::invoke(h.state_mut(), &ctx, "file.save", json!({"tiffCompression": "lzw", "tiffTransparency": false, "tiffPyramid": true})).unwrap();
     h.run_steps(3);
     assert!(h.state().tiff_options.is_none(), "the script answered");
     h.state_mut().run("actions.stop", json!({})).unwrap();
-    assert_eq!(h.state().session.actions.list[0].steps, [("file.save".into(), json!({"tiffCompression": "lzw", "tiffPyramid": true}))]);
+    assert_eq!(h.state().session.actions.list[0].steps, [("file.save".into(), json!({"tiffCompression": "lzw", "tiffTransparency": false, "tiffPyramid": true}))]);
     crate::menus::invoke(h.state_mut(), &ctx, "file.saveAs", json!({"path": "other.tif", "tiffCompression": "none"})).unwrap();
     writes.borrow_mut().clear();
     let played = h.state_mut().run("actions.play", json!({"action": 0})).unwrap();
     assert!(played.get("failed").is_none(), "{played}");
-    assert_eq!(writes.borrow().as_slice(), &[("other.tif".to_string(), asked("lzw", None, true, true))]);
+    assert_eq!(writes.borrow().as_slice(), &[("other.tif".to_string(), asked("lzw", Some(false), true, true))]);
 }
 
 /// OK writes the waiting document with its own save settings, even after another tab became
