@@ -216,6 +216,43 @@ pub fn apply_txt2_frame(layer: &mut TextLayer, tysh: &[u8], txt2: &E) {
     }
 }
 
+/// Photoshop's rendered `Txt2` line records the first baseline of paragraph type. Use it for
+/// editable layout when the object still matches this layer. Font metric substitutes (notably
+/// the cap-height fallback of a face without Latin `d`) can otherwise put the caret and the
+/// first redraw above the PSD's cached pixels even with the exact font installed (#10999).
+pub fn apply_txt2_baseline(layer: &mut TextLayer, tysh: &[u8], txt2: &E) {
+    let TextShape::Box { y, height, .. } = layer.shape else { return };
+    if layer.orientation != Orientation::Horizontal || !y.is_finite() || !height.is_finite() || height <= 0.0 {
+        return;
+    }
+    let Some((t, _)) = layer_frame(layer, tysh, txt2, false) else { return };
+    let Some(D::Integer(index)) = t.text.get("TextIndex") else { return };
+    let Some(object) = usize::try_from(*index).ok().and_then(|i| txt2.path(&["1", "1"]).and_then(E::as_array)?.get(i)) else {
+        return;
+    };
+    let Some(mut node) = object.path(&["1", "2"]).and_then(E::as_array).and_then(|a| a.first()) else { return };
+    // PC → frame → region → region → line in Photoshop's rendered tree. Bound the walk;
+    // malformed or other writer-specific structures simply keep the font-based layout.
+    let mut line = None;
+    for _ in 0..8 {
+        if node.get("99").and_then(E::as_str) == Some("L") {
+            line = Some(node);
+            break;
+        }
+        let Some(next) = node.get("6").and_then(E::as_array).and_then(|a| a.first()) else { break };
+        node = next;
+    }
+    let Some(line) = line else { return };
+    let Some(baseline) = line.get("10").and_then(E::as_f64) else { return };
+    let Some(origin_y) = line.path(&["0", "0"]).and_then(E::as_array).and_then(|a| a.get(1)).and_then(E::as_f64) else { return };
+    let offset = baseline - f64::from(y);
+    if (baseline - origin_y).abs() > 0.02 || offset < -0.5 || offset > f64::from(height) + 0.5 || offset > f64::from(f32::MAX) {
+        return;
+    }
+    let Some(style) = layer.char_runs().first().map(|r| r.style.clone()) else { return };
+    layer.psd_first_baseline = Some(photocraft_doc::text::PsdFirstBaseline { offset_px: offset as f32, style });
+}
+
 /// OpenType settings of a `Txt2` style that are on/off flags, by style key, as Photoshop
 /// writes them (each turned on alone in the Character panel's OpenType settings and read back):
 /// `/20` Contextual Alternates, `/23` Fractions, `/24` Ordinals, `/25` Swash, `/26` Titling

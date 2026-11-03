@@ -112,6 +112,29 @@ pub struct CharStyle {
     pub style_sheet: Option<u32>,
 }
 
+/// Photoshop's first line position for an imported paragraph text frame. `Txt2` records the
+/// baseline in text-space pixels; keeping the source style lets layout discard it if the font
+/// metrics are edited. Native text layers have no such hint.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PsdFirstBaseline {
+    pub offset_px: f32,
+    pub style: CharStyle,
+}
+
+impl PsdFirstBaseline {
+    pub fn matches(&self, style: &CharStyle) -> bool {
+        self.offset_px.is_finite()
+            && self.style.font_family == style.font_family
+            && self.style.postscript_name == style.postscript_name
+            && self.style.weight == style.weight
+            && self.style.italic == style.italic
+            && self.style.size_pt == style.size_pt
+            && self.style.variations == style.variations
+            && self.style.caps == style.caps
+            && self.style.baseline == style.baseline
+    }
+}
+
 impl Default for CharStyle {
     fn default() -> Self {
         Self {

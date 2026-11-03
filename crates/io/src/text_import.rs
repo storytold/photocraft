@@ -63,6 +63,9 @@ pub(crate) fn prepare(doc: &mut Document, txt2: Option<&photocraft_text::engine_
                         t.sync_summary();
                     }
                     photocraft_text::psd::refine_legacy_point_origin(t, dpi, eng, txt2);
+                    if let (Some(txt2), Some(raw)) = (txt2, t.psd_raw.clone()) {
+                        photocraft_text::psd::apply_txt2_baseline(t, &raw, txt2);
+                    }
                     if t.cache.is_none() {
                         render_bounded(eng, t, dpi, format);
                     }

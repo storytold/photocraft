@@ -298,6 +298,14 @@ impl Layouter {
             // places its own lines (`area` below).
             TextShape::Point | TextShape::Path { .. } | TextShape::Area { .. } => ((0.0, 0.0, 0.0, 0.0), false),
         };
+        let psd_first_baseline = if is_box && !vertical {
+            t.psd_first_baseline
+                .as_ref()
+                .and_then(|b| runs.first().filter(|r| b.matches(&r.style)).map(|_| box_rect.1 + b.offset_px))
+                .filter(|baseline| baseline.is_finite())
+        } else {
+            None
+        };
         // Area type: the shape its lines wrap inside. A path that encloses nothing (only from a
         // hostile file; `type.fillPath` refuses one) lays out as point text.
         let area = match &t.shape {
@@ -317,6 +325,7 @@ impl Layouter {
             // Box and area text wrap, align within their lines and hide what doesn't fit.
             wraps: is_box || area.is_some(),
             box_rect,
+            psd_first_baseline,
             area,
         };
         let mut flow = Flow::default();
@@ -375,6 +384,7 @@ struct Env<'a> {
     /// Box and area text wrap, align within their lines and hide what doesn't fit.
     wraps: bool,
     box_rect: (f32, f32, f32, f32),
+    psd_first_baseline: Option<f32>,
     area: Option<crate::area::AreaShape>,
 }
 
