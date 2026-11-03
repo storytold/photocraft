@@ -16,15 +16,17 @@ the existing command on a temporary COW document only when parameters change. Th
 is changed only by the ordinary command after successful confirmation. Rounded ruler text that
 was left untouched preserves the exact original position.
 
-This external dependency is an explicit exception in CI's Git-source allowlist, restricted to
-the package name, version, repository and full commit. Both external projects are dual licensed
-MIT OR Apache-2.0. The integration is proposed for review; upstream adoption requires maintainer
-approval, including this source-policy exception.
+The branch currently pins the contributor's Git repository. PhotoCraft's source check
+rejects that pin. Maintainers need to choose an organisation-controlled source or
+approve a documented vendoring route before this integration can land. Both external
+projects use MIT OR Apache-2.0.
 
 ## Running the scenarios
 
 The [interaction-check](https://github.com/PerchAnton/interaction-check) runner is development-only;
-Python is not a PhotoCraft runtime dependency. CI checks it out at the immutable revision below.
+Python is not a PhotoCraft runtime dependency. To run the scenarios locally, use the
+revision below. Automated execution is proposed in
+[craft-common-actions #84](https://github.com/storytold/craft-common-actions/pull/84).
 The adapter belongs to PhotoCraft and calls the shipped dialog handlers, control field setter,
 egui canvas/dialog frames, engine commands and history. Expectations are never passed to the
 adapter. These are semantic integration checks, not a substitute for screenshot or pointer tests.
