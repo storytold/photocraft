@@ -109,7 +109,9 @@ The app's top bar (`panels::title_bar`) starts with the brand mark (the app icon
 
 The toolbar scrolls its tool rows when two columns still exceed the available height. Foreground
 and background colours stay visible below those rows, together with the Quick Mask and Screen
-Mode controls in every theme. Long options rows scroll horizontally. Both scrollers bring newly focused
+Mode controls in every theme. The options bar keeps Flip Horizontal and Flip Vertical buttons
+at its trailing edge. They use the Edit › Transform commands on the selected pixels or active
+layer, and turn an open Free Transform box in place. Long options rows scroll horizontally. Both scrollers bring newly focused
 controls into view and retain the existing tool actions and popups.
 
 The offscreen regression fixture uses production panels, fonts and SVG loaders across every

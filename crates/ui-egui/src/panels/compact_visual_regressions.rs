@@ -33,6 +33,32 @@ fn toolbar_harness_sized(kind: theme::ThemeKind, scale: f32, height: f32) -> egu
 }
 
 #[test]
+fn flip_controls_remain_visible_in_a_narrow_options_bar() {
+    for kind in theme::ThemeKind::ALL {
+        for direction in [crate::direction::Dir::Ltr, crate::direction::Dir::Rtl] {
+            let _direction = crate::direction::direction_scope(direction);
+            let mut harness = egui_kittest::Harness::builder().with_size(vec2(320.0, 360.0)).build_ui_state(
+                |ui, app: &mut PhotocraftApp| {
+                    if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                        options_bar(app, ui);
+                    }
+                },
+                PhotocraftApp::new(photocraft_engine::Session::new(), Default::default()),
+            );
+            PhotocraftApp::setup_context(&harness.ctx, kind);
+            harness.run_steps(2);
+            let tool = harness.get_by_label("Move Tool").rect();
+            for label in ["Flip Horizontal", "Flip Vertical"] {
+                let rect = harness.get_by_label(label).rect();
+                assert!(rect.left() >= 0.0 && rect.right() <= 320.0, "{kind:?} {direction:?}: {label} is outside the narrow options bar: {rect:?}");
+                let trailing = if direction == crate::direction::Dir::Rtl { rect.center().x < tool.center().x } else { rect.center().x > tool.center().x };
+                assert!(trailing, "{kind:?} {direction:?}: {label} should follow the tool options");
+            }
+        }
+    }
+}
+
+#[test]
 fn compact_toolbar_scrolls_to_and_activates_the_last_tool() {
     for kind in theme::ThemeKind::ALL {
         for scale in [1.0, 1.5, 2.0] {
@@ -292,7 +318,8 @@ fn tab_focus_reveals_the_final_narrow_tool_option() {
                     _ => None,
                 })
                 .expect("the final option remains painted");
-            assert!(clip.contains_rect(label), "{kind:?} at {scale}x: Tab leaves the focused final option outside {clip:?}: {label:?}");
+            let focused_rect = harness.ctx.memory(|memory| memory.focused()).and_then(|id| harness.ctx.read_response(id)).map(|response| response.rect);
+            assert!(clip.contains_rect(label), "{kind:?} at {scale}x: Tab leaves the focused final option outside {clip:?}: {label:?}; focus {focused_rect:?}");
             let previous = if pro { harness.state().ui.tool_options.pencil_auto_erase } else { harness.state().session.tools.brush.pressure_opacity };
             harness.key_press(egui::Key::Space);
             harness.run_steps(3);
@@ -506,7 +533,7 @@ fn narrow_tool_options_can_scroll_to_the_last_control() {
                         egui::Shape::Text(text) if text.galley.job.text.contains(last_label) => Some((shape.clip_rect, text)),
                         _ => None,
                     })
-                    .expect("scrolling reaches the final tool control");
+                    .unwrap_or_else(|| panic!("{kind:?} at {width} / {scale}x: scrolling reaches the final tool control"));
                 assert!(
                     clip.contains_rect(label.visual_bounding_rect()),
                     "{kind:?} at {width}: final control is clipped: {:?} / {clip:?}",

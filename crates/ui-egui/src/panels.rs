@@ -1357,6 +1357,95 @@ mod toolbar_tests {
         }
     }
 
+    #[test]
+    fn every_theme_has_flip_controls_in_the_options_bar() {
+        for kind in crate::theme::ThemeKind::ALL {
+            let h = flip_harness(PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default()), kind);
+            for label in ["Flip Horizontal", "Flip Vertical"] {
+                assert!(h.query_by_label(label).is_some(), "{kind:?}: no {label:?} button");
+            }
+        }
+    }
+
+    fn flip_harness(app: PhotocraftApp, kind: crate::theme::ThemeKind) -> egui_kittest::Harness<'static, PhotocraftApp> {
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(800.0, 600.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    options_bar(app, ui);
+                }
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, kind);
+        h.run_steps(2);
+        h
+    }
+
+    fn asymmetric_layer() -> PhotocraftApp {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.session.execute("file.new", json!({"width": 16, "height": 16})).unwrap();
+        app.sync_views();
+        app.session.execute("layer.new.layer", json!({})).unwrap();
+        app.session
+            .edit("paint", |doc, active| {
+                let surface = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+                surface.fill_rect(photocraft_geom::Rect::new(2, 3, 6, 7), &[1.0, 0.0, 0.0, 1.0]);
+                surface.fill_rect(photocraft_geom::Rect::new(2, 3, 3, 4), &[0.0, 1.0, 0.0, 1.0]);
+                Ok(())
+            })
+            .unwrap();
+        app
+    }
+
+    fn layer_pixel(app: &PhotocraftApp, x: i32, y: i32) -> [f32; 4] {
+        let state = app.session.active().unwrap();
+        let surface = state.doc.layer(state.active_layer.unwrap()).unwrap().surface().unwrap();
+        let mut pixel = [0.0; 4];
+        surface.read_pixel(x, y, &mut pixel);
+        pixel
+    }
+
+    #[test]
+    fn options_bar_flip_buttons_use_the_menu_commands_for_layer_and_selection() {
+        let green = [0.0, 1.0, 0.0, 1.0];
+        let mut h = flip_harness(asymmetric_layer(), crate::theme::ThemeKind::Studio);
+        let before = h.state().session.active().unwrap().history.past_len();
+        h.get_by_label("Flip Horizontal").click();
+        h.run_steps(2);
+        assert_eq!(layer_pixel(h.state(), 5, 3), green);
+        h.get_by_label("Flip Vertical").click();
+        h.run_steps(2);
+        assert_eq!(layer_pixel(h.state(), 5, 6), green);
+        assert_eq!(h.state().session.active().unwrap().history.past_len(), before + 2);
+        h.state_mut().run("edit.undo", json!({})).unwrap();
+        assert_eq!(layer_pixel(h.state(), 5, 3), green);
+
+        let mut h = flip_harness(asymmetric_layer(), crate::theme::ThemeKind::Studio);
+        h.state_mut().run("select.rect", json!({"x": 0, "y": 0, "width": 10, "height": 10})).unwrap();
+        h.run_steps(2);
+        h.get_by_label("Flip Horizontal").click();
+        h.run_steps(2);
+        assert_eq!(layer_pixel(h.state(), 7, 3), green, "the selection's bounds set the flip axis");
+        h.state_mut().run("edit.undo", json!({})).unwrap();
+        assert_eq!(layer_pixel(h.state(), 2, 3), green);
+    }
+
+    #[test]
+    fn options_bar_flip_buttons_turn_an_open_transform_box() {
+        let mut h = flip_harness(asymmetric_layer(), crate::theme::ThemeKind::Studio);
+        let ctx = h.ctx.clone();
+        crate::transform_tool::begin(h.state_mut(), &ctx).unwrap();
+        h.run_steps(2);
+        let before = h.state().session.active().unwrap().history.past_len();
+        let quad = h.state().ui.transform.as_ref().unwrap().quad;
+        h.get_by_label("Flip Horizontal").click();
+        h.run_steps(2);
+        assert_ne!(h.state().ui.transform.as_ref().unwrap().quad, quad);
+        assert_eq!(h.state().session.active().unwrap().history.past_len(), before, "the button changes the box until Commit");
+        crate::transform_tool::commit(h.state_mut());
+        assert_eq!(layer_pixel(h.state(), 5, 3), [0.0, 1.0, 0.0, 1.0]);
+    }
+
     // Regression test for #2241: Quick Mask and Screen Mode ignored the two-column toolbar and
     // stayed stacked in one column; in two columns they sit side by side.
     #[test]
