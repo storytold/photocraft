@@ -116,3 +116,16 @@ fn group_is_set_by_name_through_the_control_channel() {
     assert_eq!(f.by, FilterBy::Group);
     assert!(super::patched(&ui, &json!({"by": "nope"})).is_err());
 }
+
+#[test]
+fn lists_empty_groups() {
+    let mut s = new_session();
+
+    s.execute("layer.new.group", json!({"name": "Empty Group"})).unwrap();
+
+    assert_eq!(
+        listed(&s.active().unwrap().doc),
+        ["Empty Group"],
+        "empty groups should appear in the Group filter"
+    );
+}
