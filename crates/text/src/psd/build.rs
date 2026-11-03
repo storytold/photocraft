@@ -1,4 +1,4 @@
-use super::edit::{TEMPLATE_NODES, copies_fit, edited_object, fits, is_stub, names_one_frame, new_object, pad_frames, td_edited_object, with_modes};
+use super::edit::{TEMPLATE_NODES, compact, copies_fit, edited_object, fits, is_stub, names_one_frame, new_object, pad_frames, td_edited_object, with_modes};
 use super::import::{OPENTYPE_KEYS, TXT2_FEATURES, TXT2_STYLISTIC_SETS, kern_units, manual, object_frame, pair_runs, parse_txt2, postscript_for, real};
 use super::{
     AntiAlias, Caps, CharStyle, Color, ColorMode, D, Descriptor, E, FontBaseline, Id, Kerning, Orientation, ParagraphStyle, TextAlign, TextLayer, TextShape,
@@ -213,9 +213,15 @@ fn txt2_style_runs(layer: &TextLayer, base: &E, fonts: &mut Vec<E>, dpi: f32) ->
     let k = if dpi.is_finite() && dpi > 0.0 { dpi / 72.0 } else { 1.0 };
     let runs = layer.char_runs();
     let spans = char_spans(layer);
-    if !copies_fit(base, spans.len()) {
-        return None;
-    }
+    // A template too large to copy once per run is compacted rather than given up on: falling
+    // back would keep the file's old style runs, so the edit would not reach the saved file.
+    let compacted;
+    let base = if copies_fit(base, spans.len()) {
+        base
+    } else {
+        compacted = compact(base, &["0", "0", "6"]).filter(|c| copies_fit(c, spans.len()))?;
+        &compacted
+    };
     let default = CharStyle::default();
     let mut out = Vec::with_capacity(spans.len());
     let mut looked_up = std::collections::HashMap::new();
@@ -476,9 +482,15 @@ fn td_restyled(entry: &E, layer: &TextLayer, fonts: &mut Vec<E>, dpi: f32) -> Op
     let k = if dpi.is_finite() && dpi > 0.0 { dpi / 72.0 } else { 1.0 };
     let runs = layer.char_runs();
     let spans = char_spans(layer);
-    if !copies_fit(base, spans.len()) {
-        return None;
-    }
+    // As in `txt2_style_runs`: compact a template too large to copy per run, so the edit still
+    // reaches this copy instead of the entry keeping its old style.
+    let compacted;
+    let base = if copies_fit(base, spans.len()) {
+        base
+    } else {
+        compacted = compact(base, &["RunData", "StyleSheet", "Features"]).filter(|c| copies_fit(c, spans.len()))?;
+        &compacted
+    };
     let default = CharStyle::default();
     let mut out = Vec::new();
     for (ri, n) in spans {
@@ -707,7 +719,23 @@ pub fn build_txt2_at(objects: &[(i32, &TextLayer)], previous: Option<&[u8]>, dpi
             .then(|| model.path(&["6", "0"]).and_then(E::as_array).and_then(<[E]>::first).cloned())
             .flatten()
             .and_then(|base| txt2_style_runs(layer, &base, &mut fonts, dpi));
-        let file_runs = reuse.then(|| model.path(&["6", "0"]).and_then(E::as_array)).flatten().and_then(|runs| with_modes(runs, &modes));
+        // The file's own runs, moved out of the model (it gets the runs written below), so keeping
+        // them copies nothing.
+        let file_runs = if reuse && styled.is_none() {
+            model
+                .get_mut("6")
+                .and_then(|r| r.get_mut("0"))
+                .and_then(|r| match std::mem::replace(r, E::Array(Vec::new())) {
+                    E::Array(runs) => Some(runs),
+                    other => {
+                        *r = other;
+                        None
+                    }
+                })
+                .and_then(|runs| with_modes(runs, &modes))
+        } else {
+            None
+        };
         let runs = styled.or(file_runs).unwrap_or_else(|| {
             modes
                 .iter()
@@ -1047,4 +1075,34 @@ pub fn build_tysh(layer: &TextLayer, dpi: f32, ink: Option<[f32; 4]>) -> Vec<u8>
     let warped = warp.as_ref().is_some_and(|w| enum_value(w, "warpStyle").is_some_and(|s| s != "warpNone"));
     let bounds = if warped { [l, t, r, b] } else { [0.0; 4] };
     write_tysh(&TySh { transform: layer.transform, text, warp, bounds })
+}
+
+#[cfg(test)]
+mod copy_budget_tests {
+    use super::{CharStyle, E, TextLayer, txt2_style_runs};
+    use photocraft_doc::text::TextRun;
+
+    /// A style edit on a layer whose template holds an oversized value still writes the layer's
+    /// style (from the compacted template), rather than giving up and keeping the old runs.
+    #[test]
+    fn an_oversized_template_still_takes_the_new_style() {
+        let style = E::Dict(vec![("1".into(), E::Real(12.0)), ("99".into(), E::String("x".repeat(1 << 20)))]);
+        let base = E::Dict(vec![("0".into(), E::Dict(vec![("0".into(), E::Dict(vec![("6".into(), style)]))])), ("1".into(), E::Int(1))]);
+        // 100 single-letter runs alternating sizes: 100 copies of 1 MiB are past the budget.
+        let text = "ab".repeat(50);
+        let runs = (0..100).map(|i| TextRun { len: 1, style: CharStyle { size_pt: if i % 2 == 0 { 30.0 } else { 40.0 }, ..Default::default() } }).collect();
+        let layer = TextLayer { text, runs, ..Default::default() };
+        let out = txt2_style_runs(&layer, &base, &mut Vec::new(), 72.0).expect("styled runs");
+        assert!(out.len() >= 100);
+        assert!(out.iter().all(|r| r.path(&["0", "0", "6", "99"]).is_none()));
+        let size = |r: &E| {
+            r.path(&["0", "0", "6", "1"]).and_then(|v| match v {
+                E::Real(f) => Some(*f),
+                E::Int(i) => Some(*i as f64),
+                _ => None,
+            })
+        };
+        assert_eq!(size(&out[0]), Some(30.0));
+        assert_eq!(size(&out[1]), Some(40.0));
+    }
 }
