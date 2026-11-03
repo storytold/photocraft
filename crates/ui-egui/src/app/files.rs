@@ -302,7 +302,7 @@ impl PhotocraftApp {
         // ([`jpeg_options_ui::plain_save_step`]); the Targa and DDS answers as given.
         let mut step = jpeg_options_ui::plain_save_step(choices.jpeg);
         FormatChoices { jpeg: None, ..choices }.record(&mut step);
-        self.session.journal.push(("file.save".into(), step));
+        self.journal_save(is_pending(&r), ("file.save".into(), step));
         Ok(r)
     }
 
@@ -315,11 +315,23 @@ impl PhotocraftApp {
             step["tiffLayers"] = layers.into();
         }
         choices.record(&mut step);
-        self.session.journal.push(("file.saveAs".into(), step));
+        self.journal_save(is_pending(&r), ("file.saveAs".into(), step));
         Ok(r)
     }
 
+    /// Journal a save's `step` once its file is written (#7889): now for a save that finished,
+    /// or when the background save just started (`pending`) succeeds, so a failed or cancelled
+    /// save never reaches an action being recorded.
+    pub(crate) fn journal_save(&mut self, pending: bool, step: (String, Value)) {
+        let started = self.jobs.last_started.filter(|_| pending);
+        match started.and_then(|job| self.jobs.saves.iter_mut().find(|s| s.job == job)) {
+            Some(save) => save.journal = Some(step),
+            None => self.session.journal.push(step),
+        }
+    }
+
     /// Re-label the Save As just journaled for `path` as File › Save (see [`Self::save_dialog_flow`]),
+    /// or the one a background save to `path` will journal when it ends,
     /// keeping its Targa, DDS or JPEG answer so playback writes the file the same way. A save
     /// parked behind Targa, DDS or JPEG Options hasn't been journaled yet: it is recorded as
     /// File › Save once answered.
@@ -335,7 +347,12 @@ impl PhotocraftApp {
         }
         // Only the path goes: a script's format answer stays, so a replay writes the file it is
         // played on the same way. Any other answer (TIFF layers) keeps the Save As.
-        if let Some(last) = self.session.journal.last_mut()
+        let pending = self.jobs.saves.iter_mut().find(|s| !s.ended && s.path == path).and_then(|s| s.journal.as_mut());
+        let last = match pending {
+            Some(step) => Some(step),
+            None => self.session.journal.last_mut(),
+        };
+        if let Some(last) = last
             && last.0 == "file.saveAs"
             && last.1.get("path").and_then(Value::as_str) == Some(path)
             && let Some(step) = last.1.as_object()
@@ -447,11 +464,17 @@ impl PhotocraftApp {
     /// `None` when the save went to a background job (#2017), which finishes it in
     /// [`jobs_ui::tick`].
     pub(crate) fn write_document(&mut self, path: String, settings: &ExportSettings, copy: bool) -> Result<Option<(String, Vec<String>)>, String> {
+        // While an action records, write at once, as its playback does (#7889): the save's
+        // step then lands in that recording in call order, and only once the file is written,
+        // whatever the recording does while a background save would still be running.
         if self.background_jobs
+            && self.session.actions.recording.is_none()
             && let Some(save) = self.services.save_file.clone()
         {
             return jobs_ui::start_save(self, path, settings.clone(), copy, save, false);
         }
+        // A background save started before the recording may still be writing this file.
+        jobs_ui::may_save(self, &path)?;
         let st = self.session.active().ok_or("no document")?;
         let (doc, written, previous) = (st.doc.id, st.revision, st.saved_revision);
         let export = self.services.export.as_ref().ok_or("no exporter configured")?;
@@ -598,8 +621,9 @@ impl PhotocraftApp {
     /// the save.
     pub(crate) fn write_answered_save(&mut self, ctx: &egui::Context, doc: DocId, path: String, settings: &ExportSettings, copy: bool, step: (&str, Value)) {
         let written = self.with_document(doc, |app| app.write_document(path, settings, copy));
-        if written.is_ok() {
-            self.session.journal.push((step.0.into(), step.1));
+        if let Ok(w) = &written {
+            // Once written (#7889).
+            self.journal_save(w.is_none(), (step.0.into(), step.1));
         }
         match written {
             Err(e) => {
@@ -683,6 +707,11 @@ const NEW_DOCUMENT: &str = "file.new";
 /// New Document fields its OK remembers (#1810): the size, resolution, mode, depth, background and
 /// display units. Not the name, the preset or the clipboard size.
 const NEW_DOCUMENT_REMEMBERED: [&str; 8] = ["width", "height", "resolution", "mode", "depth", "background", "__unit", "__resUnit"];
+
+/// A save's result says it went to a background job that hasn't written the file yet.
+fn is_pending(r: &Value) -> bool {
+    r.get("pending").and_then(Value::as_bool) == Some(true)
+}
 
 /// A remembered value the dialog can show (a corrupt preference is ignored).
 fn remembered_new_document_value(key: &str, v: &serde_json::Value) -> bool {
