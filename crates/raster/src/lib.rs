@@ -162,8 +162,13 @@ impl Tile {
         }
         let ts = TILE_SIZE as usize;
         let covered = |px: &[u8]| px.get(bpp - alpha_bytes..).is_some_and(|a| a.iter().any(|&b| b != 0));
+        // An untouched row of a clear tile is all zero bytes: a few block compares skip it.
+        let zero = vec![0u8; ts * bpp];
         let (mut x0, mut y0, mut x1, mut y1) = (usize::MAX, usize::MAX, 0usize, 0usize);
         for (y, row) in self.data.chunks_exact(ts * bpp).enumerate() {
+            if first_difference(row, &zero).is_none() {
+                continue;
+            }
             let Some(first) = row.chunks_exact(bpp).position(covered) else { continue };
             let Some(last) = row.chunks_exact(bpp).rposition(covered) else { continue };
             x0 = x0.min(first);

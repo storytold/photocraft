@@ -393,9 +393,6 @@ fn resize_pass(s: &Surface, pass: Pass, canvas: Option<Rect>, budget: usize) -> 
     let x_lo = hx.iter().filter(|t| !t.weights.is_empty()).map(|t| t.start).min().unwrap_or(area.x0);
     let x_hi = hx.iter().map(|t| t.start + t.weights.len() as i32).max().unwrap_or(area.x0).max(x_lo);
     let mut def = s.default_pixel();
-    // The default pixel's colour range (unpremultiplied): where each band's colour bound starts.
-    let colours = n - usize::from(alpha);
-    let (def_lo, def_hi) = def.iter().take(colours).fold((f32::INFINITY, f32::NEG_INFINITY), |(l, h), &v| (l.min(v), h.max(v)));
     premultiply(&mut def, n, alpha);
     let dw = dst.width() as usize;
     const BAND: usize = 64;
@@ -436,7 +433,6 @@ fn resize_pass(s: &Surface, pass: Pass, canvas: Option<Rect>, budget: usize) -> 
             }
         };
         let mut rows = Vec::new();
-        let (mut lo, mut hi) = (def_lo, def_hi);
         let mut hrows = Vec::new();
         let mut y = y_lo;
         while y < y_hi {
@@ -447,15 +443,6 @@ fn resize_pass(s: &Surface, pass: Pass, canvas: Option<Rect>, budget: usize) -> 
                     let c1 = (c0 + rows_per_read).min(y1);
                     let read = Rect::new(x_lo, c0, x_hi, c1);
                     s.read_region_into(read, &mut rows);
-                    for px in rows.chunks_exact(n) {
-                        // A clear pixel carries no colour.
-                        if !alpha || px.last().is_some_and(|&a| a > 0.0) {
-                            for &v in px.iter().take(colours) {
-                                lo = lo.min(v);
-                                hi = hi.max(v);
-                            }
-                        }
-                    }
                     premultiply(&mut rows, n, alpha);
                     hrows.clear();
                     hrows.resize((c1 - c0) as usize * dw * n, 0.0);
@@ -492,19 +479,9 @@ fn resize_pass(s: &Surface, pass: Pass, canvas: Option<Rect>, budget: usize) -> 
         // an overshoot first left the colour at its overshoot, which the next pass weighed against a
         // smaller alpha and darkened the edge of a white shape on transparency (#10639).
         unpremultiply(&mut res, n, alpha);
-        // Ringing can leave a tiny alpha, so dividing it out gives colours far outside the source's;
-        // below full alpha the colour is bound to the colours this band read, widened to 0..1.
         if alpha {
-            let (c_lo, c_hi) = (lo.min(0.0), hi.max(1.0));
             for px in res.chunks_exact_mut(n) {
-                if let Some((a, rgb)) = px.split_last_mut() {
-                    *a = a.clamp(0.0, 1.0);
-                    if *a < 1.0 {
-                        for v in rgb {
-                            *v = v.clamp(c_lo, c_hi);
-                        }
-                    }
-                }
+                px[n - 1] = px[n - 1].clamp(0.0, 1.0);
             }
         }
         (Rect::new(dst.x0, dst.y0 + b0 as i32, dst.x1, dst.y0 + b1 as i32), res)
