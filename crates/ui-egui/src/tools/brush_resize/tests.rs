@@ -422,3 +422,26 @@ fn stylus_barrel_button_resizes_with_alt_and_never_samples_color() {
     h.run_steps(2);
     assert!(h.state().brush_resize.is_none());
 }
+
+/// Liquify density keeps its radius-bounded preview; the paint engine's soft-brush reach is
+/// deliberately used only by the paint HUD.
+#[test]
+fn liquify_density_preview_stays_inside_its_radius() {
+    let ctx = egui::Context::default();
+    let radius = 50.0;
+    let mut output = ctx.run_ui(Default::default(), |ui| {
+        let painter = ui.painter().with_clip_rect(egui::Rect::from_center_size(Pos2::ZERO, vec2(400.0, 400.0)));
+        liquify_tip_preview(&painter, Pos2::ZERO, radius, 0.0, Color32::RED);
+    });
+    output.textures_delta.clear();
+    let mesh = output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Mesh(mesh) => Some(mesh),
+            _ => None,
+        })
+        .expect("the Liquify preview is drawn");
+    assert!(mesh.vertices.iter().all(|v| v.pos.to_vec2().length() <= radius + 0.01));
+    assert!(mesh.vertices.iter().any(|v| v.pos.to_vec2().length() >= radius - 0.01));
+}

@@ -86,6 +86,9 @@ impl Headless {
         match method {
             "engine.execute" => {
                 let id = str_of(&p, "command").ok_or_else(|| bad("engine.execute needs `command`"))?;
+                if METHODS.contains(&id) && photocraft_engine::commands::find(id).is_none() {
+                    return Err(bad(photocraft_engine::command_hints::protocol_method_as_command(id)));
+                }
                 let wait = p.get("wait").and_then(Value::as_bool).unwrap_or(true);
                 self.command_start(id, p.get("params").cloned().unwrap_or(Value::Null), wait)
             }
@@ -123,8 +126,14 @@ impl Headless {
             "doc.new" => self.command_run("file.new", p),
             "doc.save" => {
                 let tga_bits = photocraft_engine::file_cmds::tga_bits_param(&p, "doc.save").map_err(|e| bad(e.to_string()))?;
-                let mut opts =
-                    photocraft_io::ExportOptions { tiff_layers: p.get("tiffLayers").and_then(Value::as_bool).unwrap_or(false), tga_bits, ..Default::default() };
+                let mut opts = photocraft_io::ExportOptions {
+                    tiff_layers: p.get("tiffLayers").and_then(Value::as_bool).unwrap_or(false),
+                    tga_bits,
+                    pcraft_full_composite: photocraft_engine::file_cmds::pcraft_full_composite_param(&p, "doc.save")
+                        .map_err(|e| bad(e.to_string()))?
+                        .unwrap_or(false),
+                    ..Default::default()
+                };
                 opts.encode.dpx_bits = photocraft_engine::file_cmds::dpx_bits_param(&p, "doc.save").map_err(|e| bad(e.to_string()))?;
                 opts.encode.dds = photocraft_engine::file_cmds::dds_param(&p, "doc.save").map_err(|e| bad(e.to_string()))?.unwrap_or_default();
                 match p.get("quality") {
@@ -186,7 +195,7 @@ impl Headless {
             "doc.close" => self.close(index_of(&p)?),
             "batch" => self.batch(&p),
             "methods" => Ok(json!(METHODS)),
-            other => Err(bad(format!("unknown method `{other}` (try `methods`)"))),
+            other => Err(bad(format!("{} (try `methods`)", photocraft_engine::command_hints::unknown_method(other, METHODS)))),
         }
     }
 
