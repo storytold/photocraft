@@ -393,6 +393,11 @@ const ENHANCE_SCENE_SYSTEM: &str = "You see a picture. Describe all of it in one
 /// The user turn of [`EnhanceKind::Scene`].
 const ENHANCE_SCENE_REQUEST: &str = "Describe this picture.";
 
+/// The seed of an Expand's scene caption: fixed, so the same picture gets the same caption
+/// whatever the expand's own seed, and a re-roll reuses the encoded prompt and references
+/// instead of paying a new encode (the in-app benchmark, 2026-11-03: every new seed missed).
+const EXPAND_CAPTION_SEED: u64 = 0x5EED_CA9;
+
 /// The user turn of [`EnhanceKind::Backdrop`].
 const ENHANCE_BACKDROP_REQUEST: &str = "Describe the background of this picture.";
 
@@ -4055,7 +4060,7 @@ fn run_expand(s: &mut Session, p: &Value) -> Result<Value> {
                     let (rw, rh) = matte_request_size(seen.width, seen.height);
                     let seen = if (rw, rh) == (seen.width, seen.height) { seen } else { resize_rgba8(&seen, rw, rh)? };
                     ctx.progress(0.0, "Describing the picture");
-                    enhance_prompt(thinker.as_ref(), EnhanceKind::Scene, ENHANCE_SCENE_REQUEST, Some(&seen), None, seed, &JobProgress::span(ctx, 0.0, 0.03))
+                    enhance_prompt(thinker.as_ref(), EnhanceKind::Scene, ENHANCE_SCENE_REQUEST, Some(&seen), None, EXPAND_CAPTION_SEED, &JobProgress::span(ctx, 0.0, 0.03))
                         .ok()
                         .flatten()
                         .unwrap_or_default()
