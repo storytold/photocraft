@@ -1799,3 +1799,60 @@ fn generative_dialog_body_keeps_auto_values() {
         }
     }
 }
+
+/// Generative Expand's dialog over pictures of several shapes and amounts, as PNGs in the folder
+/// that `PHOTOCRAFT_GENERATIVE_DIALOG_SNAPSHOTS` names (pixel review; skipped without it).
+#[test]
+fn capture_expand_dialog_variants() {
+    use egui_kittest::Harness;
+    let Some(directory) = std::env::var_os("PHOTOCRAFT_GENERATIVE_DIALOG_SNAPSHOTS").map(std::path::PathBuf::from) else { return };
+    let _gpu = photocraft_testkit::gpu_lock();
+    std::fs::create_dir_all(&directory).unwrap();
+    let fake = photocraft_genai::fake::FakeNative::start().unwrap();
+    // (name, picture, sides, advanced and negative open)
+    let cases: [(&str, (u32, u32), [u32; 4], bool); 6] = [
+        ("portrait-none", (452, 678), [0, 0, 0, 0], false),
+        ("portrait-25", (452, 678), [113, 170, 113, 170], false),
+        ("landscape-wide", (4000, 2250), [1200, 0, 1200, 0], false),
+        ("tall-right", (800, 3000), [0, 0, 2200, 0], false),
+        ("square-top", (1024, 1024), [0, 512, 0, 0], true),
+        ("tiny-huge", (64, 64), [4096, 4096, 4096, 4096], false),
+    ];
+    for kind in [crate::theme::ThemeKind::ProMedium, crate::theme::ThemeKind::ProLight] {
+        for (name, (w, h), sides, open_all) in cases {
+            let mut s = photocraft_engine::Session::new();
+            s.execute("file.new", json!({"width": w, "height": h})).unwrap();
+            let url = fake.url.clone();
+            s.edit_prefs(|p| {
+                p.integrations.models_path = url;
+                p.integrations.runtime_path = "fake".into();
+            });
+            let mut app = PhotocraftApp::new(s, crate::Services::default());
+            app.sync_views();
+            let id = open(&mut app, "generate.expand").unwrap();
+            let d = app.ui.dialogs.iter_mut().find(|d| d.id == id).unwrap();
+            for (k, v) in ["left", "top", "right", "bottom"].into_iter().zip(sides) {
+                d.fields.insert(k.into(), json!(v));
+            }
+            if open_all {
+                d.fields.insert("__advanced".into(), json!(true));
+                d.fields.insert("__showNegative".into(), json!(true));
+                d.fields.insert("prompt".into(), json!("more of the beach, the sea continuing to the horizon"));
+            }
+            let mut harness = Harness::builder().with_size(egui::vec2(640.0, 900.0)).with_pixels_per_point(1.5).wgpu().build_ui_state(
+                |ui, app: &mut PhotocraftApp| {
+                    if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("semibold".into()))) {
+                        return;
+                    }
+                    let t = crate::theme::Tokens::get(ui.ctx());
+                    ui.painter().rect_filled(ui.max_rect(), 0.0, t.canvas);
+                    crate::dialogs::show(app, ui.ctx());
+                },
+                app,
+            );
+            PhotocraftApp::setup_context(&harness.ctx, kind);
+            harness.run_steps(8);
+            harness.render().unwrap().save(directory.join(format!("expand-{name}-{}.png", kind.id()))).unwrap();
+        }
+    }
+}
