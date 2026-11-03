@@ -88,7 +88,7 @@ pub(crate) fn copy(s: &mut Session, p: &Value) -> Result<Option<Value>> {
     // One clipboard: a pixel clip replaces a path clip, as a path clip replaces it.
     let (resolution, source) = (Some(doc.resolution_dpi), Some(doc.id));
     s.path_clipboard = None;
-    s.clipboard = Some(Clip { components: None, surface, bounds, layers: None, resolution, source });
+    s.clipboard = Some(Clip { svg: None, components: None, surface, bounds, layers: None, resolution, source });
     Ok(Some(json!({"bounds": [bounds.x0, bounds.y0, bounds.width(), bounds.height()], "channel": k})))
 }
 
@@ -198,7 +198,8 @@ pub(crate) fn copy_colors(s: &mut Session, p: &Value, colors: crate::color_chann
     // One clipboard: a pixel clip replaces a path clip, as a path clip replaces it.
     let (resolution, source) = (Some(st.doc.resolution_dpi), Some(st.doc.id));
     s.path_clipboard = None;
-    s.clipboard = Some(Clip { surface, bounds: area, layers: None, resolution, source, components: (colors.len() > 1).then(|| colors.indices().collect()) });
+    s.clipboard =
+        Some(Clip { svg: None, surface, bounds: area, layers: None, resolution, source, components: (colors.len() > 1).then(|| colors.indices().collect()) });
     Ok(json!({"bounds":[area.x0,area.y0,area.width(),area.height()],"colors":colors.indices().collect::<Vec<_>>()}))
 }
 

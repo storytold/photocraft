@@ -84,8 +84,11 @@ pub(crate) fn intercept(app: &mut PhotocraftApp, id: &str, params: &Value) -> Op
             Some(r)
         }
         // A path clip pastes into the active document only; with none open the OS clipboard
-        // (a new document from its image) is the only route, as usual.
-        "edit.paste" if app.session.path_clipboard.is_some() && app.session.active().is_some() && params.get("target").is_none() => {
+        // (a new document from its image) is the only route, as usual. `as` (Paste As: pixels,
+        // path, shape) and an explicit `target` address the paste elsewhere and pass through.
+        "edit.paste"
+            if app.session.path_clipboard.is_some() && app.session.active().is_some() && params.get("target").is_none() && params.get("as").is_none() =>
+        {
             // An explicit centre wins; otherwise Photoshop centres the paste on the view.
             let mut p = if params.get("center").is_some() { params.clone() } else { view_center(app).map_or_else(|| json!({}), |c| json!({"center": c})) };
             // Photoshop pastes into the path selected in the Paths panel; only with nothing
@@ -288,6 +291,22 @@ mod tests {
         let anchors: Vec<_> = saved(&app, "Pasted Path").unwrap().subpaths[0].knots.iter().map(|k| k.anchor).collect();
         assert_eq!(anchors[0], photocraft_geom::Point::new(25.0, 25.0), "the paste re-centred the component on (30, 30)");
         drop(a);
+    }
+
+    /// Paste As (`as`: pixels/path/shape) and explicit params keep their own dispatch even with a
+    /// path clip set: the one-clipboard paste intercept only takes the plain paste.
+    #[test]
+    fn paste_as_routes_past_the_path_clipboard() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 40, "height": 40})).unwrap();
+        app.run("path.set", json!({"name": "work", "path": {"subpaths": [{"closed": true, "knots": [[5, 5], [15, 5], [15, 15], [5, 15]]}]}})).unwrap();
+        app.run("path.copy", json!({"name": "work", "subpaths": [0]})).unwrap();
+        assert!(app.session.path_clipboard.is_some());
+        // Paste As with nothing on the OS clipboard: an error about the empty paste, and the
+        // path clip untouched — the request was not rerouted to path.paste.
+        assert!(app.run("edit.paste", json!({"as": "pixels"})).is_err());
+        assert!(app.session.path_clipboard.is_some(), "Paste As leaves the path clip alone");
+        assert!(saved(&app, "Pasted Path").is_none(), "no path was pasted");
     }
 
     /// A pixel clip pastes as pixels even beside a path component selection: the one clipboard

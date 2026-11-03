@@ -11,7 +11,71 @@ pub(crate) fn clip_signature(w: u32, h: u32, px: &[u8]) -> u64 {
     sig
 }
 
+/// The bitmap signature of the clip's raster mirror, byte-identical to what
+/// [`PhotocraftApp::import_os_clipboard`] computes for the same pixels: the two import paths
+/// must agree, or the freshness guard between them never fires.
+fn svg_clip_signature(clip: &photocraft_engine::edit_cmds::Clip) -> u64 {
+    let b = clip.bounds;
+    let (w, h) = (b.width(), b.height());
+    if w == 0 || h == 0 {
+        return (u64::from(w) << 32) | u64::from(h);
+    }
+    let mut px = vec![[0u8; 4]; w as usize * h as usize];
+    clip.surface.read_rgba8_into(b, &mut px);
+    clip_signature(w, h, &px.into_iter().flatten().collect::<Vec<u8>>())
+}
+
 impl PhotocraftApp {
+    /// Capture SVG and its raster mirror together; failures leave the previous copy intact.
+    pub(super) fn import_os_svg_clipboard(&mut self) -> Result<bool, String> {
+        let Some(get) = self.services.clipboard_get_svg.as_mut() else { return Ok(false) };
+        let source = match get() {
+            Ok(source) => source,
+            Err(_) if self.clip_unmirrored && !self.clip_external && self.session.clipboard.is_some() => return Ok(false),
+            Err(error) => {
+                self.ui.status = error.clone();
+                self.ui.status_error = true;
+                return Err(error);
+            }
+        };
+        let Some(source) = source else {
+            self.os_clip_svg = None;
+            // Bitmap equality cannot prove that an earlier external vector source is current.
+            if self.clip_external && self.session.clipboard.as_ref().is_some_and(|clip| clip.svg.is_some()) {
+                self.session.clipboard = None;
+                self.os_clip_sig = None;
+                self.clip_external = false;
+                self.clip_unmirrored = true;
+            }
+            return Ok(false);
+        };
+        // Already imported, or a newer internal copy: either stays until the external bytes
+        // change. A raster mirror an ordinary paste took of these bytes is not their vectors.
+        let holds_vectors_or_newer = self.session.clipboard.as_ref().is_some_and(|clip| clip.svg.is_some() || !self.clip_external);
+        if self.os_clip_svg.as_deref().is_some_and(|old| old == &source) && holds_vectors_or_newer {
+            return Ok(true);
+        }
+        let clip = photocraft_engine::edit_cmds::Clip::from_svg(&source).map_err(|error| {
+            let error = error.to_string();
+            self.ui.status = error.clone();
+            self.ui.status_error = true;
+            error
+        })?;
+        self.os_clip_sig = Some(svg_clip_signature(&clip));
+        self.os_clip_svg = clip.svg.clone();
+        self.session.clipboard = Some(clip);
+        self.clip_external = true;
+        self.clip_unmirrored = false;
+        Ok(true)
+    }
+
+    /// The SVG bytes on the OS clipboard right now, read on an explicit paste without importing
+    /// them; `None` when there is no SVG service or the read fails (nothing is known then).
+    fn os_svg_now(&mut self) -> Option<Option<std::sync::Arc<Vec<u8>>>> {
+        let get = self.services.clipboard_get_svg.as_mut()?;
+        get().ok().map(|source| source.map(std::sync::Arc::new))
+    }
+
     /// Mirror the session clipboard onto the OS clipboard (RGBA8).
     pub(super) fn export_os_clipboard(&mut self) {
         self.clip_unmirrored = true;
@@ -27,6 +91,7 @@ impl PhotocraftApp {
         clip.surface.read_rgba8_into(b, &mut px);
         let bytes: Vec<u8> = px.into_iter().flatten().collect();
         if set(b.width(), b.height(), &bytes).is_ok() {
+            self.os_clip_svg = None;
             self.os_clip_sig = Some(clip_signature(b.width(), b.height(), &bytes));
             self.clip_unmirrored = false;
         }
@@ -77,7 +142,19 @@ impl PhotocraftApp {
             *w > 0 && *h > 0 && *w <= i32::MAX as u32 && *h <= i32::MAX as u32 && rgba == Some(bytes.len() as u64)
         });
         let Some((w, h, bytes)) = image else {
-            if self.os_clip_sig.take().is_some() && !self.clip_unmirrored {
+            if self.clip_unmirrored && !self.clip_external && self.session.clipboard.is_some() {
+                self.os_clip_sig = None;
+                // Keep remembering an SVG only while it is still there (an SVG-only clipboard),
+                // so a later copy of the same bytes in another app is imported again.
+                if let Some(now) = self.os_svg_now()
+                    && now != self.os_clip_svg
+                {
+                    self.os_clip_svg = None;
+                }
+                return Ok(false);
+            }
+            self.os_clip_svg = None;
+            if (self.os_clip_sig.take().is_some() || self.clip_external) && !self.clip_unmirrored {
                 self.session.clipboard = None;
                 self.clip_external = false;
                 self.clip_unmirrored = true;
@@ -104,7 +181,10 @@ impl PhotocraftApp {
         // One clipboard: imported pixels replace a path clip, like a path clip replaces them.
         self.session.path_clipboard = None;
         self.session.clipboard =
-            Some(photocraft_engine::edit_cmds::Clip { components: None, surface, bounds: r, layers: None, resolution: None, source: None });
+            Some(photocraft_engine::edit_cmds::Clip { components: None, surface, bounds: r, layers: None, resolution: None, source: None, svg: None });
+        // The SVG that came with this image (a vector app puts both): a later internal copy is
+        // newer than it, so Paste As must not bring it back while it is unchanged.
+        self.os_clip_svg = self.os_svg_now().flatten();
         self.os_clip_sig = Some(sig);
         self.clip_external = true;
         self.clip_unmirrored = false;
