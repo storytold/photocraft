@@ -102,6 +102,16 @@ fn shared_filter_mask_cache_keeps_each_layers_switches_in_both_orders() {
                 *shared.layers_mut() = records;
                 let bytes = shared.to_bytes().unwrap();
                 let mut doc = import(extension, &bytes).unwrap().document;
+                if nonwhite {
+                    let first = &smart(&doc, "switches0").filter_mask.as_ref().unwrap().surface;
+                    assert!(first.tile_count() > 0, "the sharing witness must contain stored mask pixels");
+                    for index in 1..switches.len() {
+                        let other = &smart(&doc, &format!("switches{index}")).filter_mask.as_ref().unwrap().surface;
+                        for (coord, tile) in first.tiles() {
+                            assert!(Arc::ptr_eq(tile, other.tile(*coord).unwrap()), "one placed ID must share mask pixel storage across switches");
+                        }
+                    }
+                }
                 for save in 0..2 {
                     for (index, (enabled, linked)) in switches.into_iter().enumerate() {
                         let name = format!("switches{index}");

@@ -160,6 +160,11 @@ pub fn filter_stack(fx: &Descriptor) -> FilterStack {
 /// (`filterMaskExtendWithWhite`), as a grayscale mask of `sample` depth. `Ok(None)` when the
 /// item has no mask or it is all white with default switches; `Err` when it can't be decoded.
 pub fn mask_from_item(item: &FilterEffectsItem, sample: SampleType, stack: &FilterStack) -> Result<Option<LayerMask>, String> {
+    Ok(mask_surface_from_item(item, sample)?.and_then(|surface| mask_from_surface(surface, stack)))
+}
+
+/// Decode the shared pixel payload without discarding white coverage needed by other layers.
+pub(crate) fn mask_surface_from_item(item: &FilterEffectsItem, sample: SampleType) -> Result<Option<Surface>, String> {
     if item.mask.is_none() {
         return Ok(None);
     }
@@ -175,11 +180,16 @@ pub fn mask_from_item(item: &FilterEffectsItem, sample: SampleType, stack: &Filt
     surface.write_interleaved(GeomRect::new(rect.left, rect.top, rect.right, rect.bottom), &bytes);
     photocraft_raster::scratch::give(bytes);
     surface.prune();
+    Ok(Some(surface))
+}
+
+/// Apply a layer's switches after cloning the cached surface, whose tile payloads stay shared.
+pub(crate) fn mask_from_surface(surface: Surface, stack: &FilterStack) -> Option<LayerMask> {
     // Only default white masks are equivalent to None: None would lose disabled/linked state.
     if surface.content_bounds().is_empty() && stack.mask_enabled && !stack.mask_linked {
-        return Ok(None);
+        return None;
     }
-    Ok(Some(LayerMask { surface, enabled: stack.mask_enabled, linked: stack.mask_linked, density: 1.0, feather: 0.0 }))
+    Some(LayerMask { surface, enabled: stack.mask_enabled, linked: stack.mask_linked, density: 1.0, feather: 0.0 })
 }
 
 /// The unfiltered placed pixels of an `FEid` item (the inverse of [`feid_item`]), in `fmt`: colour
