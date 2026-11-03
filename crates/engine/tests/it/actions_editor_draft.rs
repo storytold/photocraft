@@ -120,7 +120,7 @@ fn malformed_requests_and_collisions_fail_without_partial_save() {
     let (mut s, store) = session();
     let draft = open(&mut s, json!({"action":"Original"}));
     let original = s.actions.clone();
-    for params in [json!({"shortcut":"not a key"}), json!({"color":"@atn-color:65535"}), json!({"name":5}), json!({"description":"not implemented"})] {
+    for params in [json!({"shortcut":"not a key"}), json!({"color":"@atn-color:65535"}), json!({"name":5}), json!({"futureMetadata":"not implemented"})] {
         assert!(editor(&mut s, "update", draft, params).is_err());
         assert_eq!(s.actions, original);
     }

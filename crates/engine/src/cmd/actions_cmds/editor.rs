@@ -160,12 +160,19 @@ fn shortcut(text: &str, old: &str) -> Result<String> {
 
 /// Stage current metadata fields; future backend fields remain in the complete clone untouched.
 fn update(s: &mut Session, p: &Value) -> Result<Value> {
-    fields(p, &["draft", "name", "color", "shortcut"], UPDATE)?;
+    fields(p, &["draft", "name", "description", "icon", "color", "shortcut"], UPDATE)?;
     not_playing(s, UPDATE)?;
     let draft = owned(s, p, UPDATE)?;
     let mut next = draft.clone();
     if let Some(value) = p.get("name") {
         next.value.name = name(value, Some(&next.value.name), UPDATE)?;
+    }
+    if let Some(value) = p.get("description") {
+        next.value.description = value.as_str().ok_or_else(|| bad(UPDATE, "`description` must be a string"))?.to_string();
+    }
+    if let Some(value) = p.get("icon") {
+        // An unknown identifier is retained metadata; the picker can use a neutral display fallback.
+        next.value.icon = value.as_str().ok_or_else(|| bad(UPDATE, "`icon` must be a string"))?.to_string();
     }
     if let Some(value) = p.get("color") {
         let color = value.as_str().ok_or_else(|| bad(UPDATE, "`color` must be a string"))?;
@@ -523,7 +530,7 @@ pub(super) fn specs() -> Vec<CommandSpec> {
         command(
             UPDATE,
             "Update Action Draft",
-            r#"{"draft":id,"name":str?,"color":str?,"shortcut":str?} → draft view. Stage only; measured colours or unchanged opaque original; shortcut empty or Cmd/Shift+F1..F15."#,
+            r#"{"draft":id,"name":str?,"description":str?,"icon":str?,"color":str?,"shortcut":str?} → draft view. Stage only; preserve description and raw icon text, including unknown identifiers. Measured colours or unchanged opaque original; shortcut empty or Cmd/Shift+F1..F15."#,
             update,
         ),
         command(

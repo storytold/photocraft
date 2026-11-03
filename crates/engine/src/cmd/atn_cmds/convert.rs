@@ -228,6 +228,11 @@ pub fn export(
     let mut skipped = Vec::new();
     let mut file = AtnFile { name: UnicodeString::new_nul(set), expanded: true, actions: Vec::new(), warnings: Vec::new(), ..Default::default() };
     for a in actions {
+        // Until sidecar writing is implemented, never silently discard editor metadata.
+        // skipUnsupported applies to steps, not the action's description or icon.
+        if !a.description.is_empty() || !a.icon.is_empty() {
+            return Err(format!("action `{}` has editor metadata that requires ATN sidecar support", a.name));
+        }
         let color = color_to_atn(&a.color).ok_or_else(|| format!("action `{}` has an invalid colour", a.name))?;
         let mut out = AtnAction { name: UnicodeString::new_nul(&a.name), expanded: false, color, ..Default::default() };
         if let Some((n, shift, command)) = function_keys.iter().find(|(n, _)| n == &a.name).and_then(|(_, key)| parse_function_key(key)) {

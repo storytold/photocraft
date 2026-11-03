@@ -42,9 +42,10 @@ The backend editor commands keep one complete action draft outside the live libr
   prepares a new value with an optional `name` and `set`, without creating a row.
   It returns a `draft` identity; subsequent mutations must supply that identity.
 - `actions.editor.get {draft?}` reports the complete action, proposed shortcut,
-  dirty/recording state and opening library revision. `update {draft,name?,color?,shortcut?}`
-  stages current metadata. Description/icon fields and sidecar handling are a later phase;
-  unsupported fields fail explicitly rather than being silently lost.
+  dirty/recording state and opening library revision. `update {draft,name?,description?,icon?,color?,shortcut?}`
+  stages metadata without publishing it. Description and raw icon text are retained,
+  including unknown icon identifiers; non-string values fail without changing the draft.
+  Native Actions libraries default both fields to empty when loading older files.
 - `actions.editor.step {draft,op,step,...}` stages insert, replace, delete, move,
   duplicate, enabled and dialog operations. Moved flags follow their steps. Opaque
   unedited original steps, flags and imported colours are retained.
@@ -63,6 +64,12 @@ The backend editor commands keep one complete action draft outside the live libr
 - `actions.editor.discard {draft}` drops only that draft and capture. It does not
   restore an old library snapshot, erase the journal or undo document edits made
   while recording. Old editor identities cannot mutate a reopened editor.
+
+Descriptions and icons currently persist in the native Actions library. ATN sidecar
+writing remains unimplemented, so ATN export refuses actions with a nonempty description
+or icon even when `skipUnsupported` is set; that option only permits omitting unsupported
+steps. Classic actions without this metadata retain their existing export behavior.
+The separate `.pcraft` document attachment requirement remains unresolved.
 
 This is the backend increment for #10946, not the completed editor page. The UI's
 Save/Discard/Cancel confirmation policy and its suspended-recording adapter remain

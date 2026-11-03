@@ -39,6 +39,12 @@ fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Action {
     pub name: String,
+    /// Free-form editor description. Older native action libraries have no description.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    /// Raw editor glyph identifier; empty uses the default glyph. Keep unknown identifiers verbatim.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub icon: String,
     #[serde(default)]
     pub steps: Vec<(String, Value)>,
     /// Indices of steps excluded from playback (unchecked in the Actions panel).
@@ -83,7 +89,16 @@ pub(crate) fn color_to_atn(color: &str) -> Option<u16> {
 
 impl Action {
     pub fn new(name: impl Into<String>, steps: Vec<(String, Value)>) -> Self {
-        Self { name: name.into(), steps, disabled: BTreeSet::new(), dialogs: BTreeSet::new(), set: None, color: String::new() }
+        Self {
+            name: name.into(),
+            description: String::new(),
+            icon: String::new(),
+            steps,
+            disabled: BTreeSet::new(),
+            dialogs: BTreeSet::new(),
+            set: None,
+            color: String::new(),
+        }
     }
 
     /// Apply `f` to every per-step index set (`disabled`, `dialogs`) after steps moved.
@@ -429,7 +444,9 @@ fn get(s: &mut Session, p: &Value) -> Result<Value> {
     let idx = resolve(&s.actions.list, p, "actions.get")?;
     let action = &s.actions.list[idx];
     let steps: Vec<Value> = action.steps.iter().map(|(id, params)| json!([id, params])).collect();
-    Ok(json!({"name": action.name, "steps": steps, "disabled": action.disabled, "dialogs": action.dialogs, "set": action.set, "color": action.color}))
+    Ok(
+        json!({"name": action.name, "description": action.description, "icon": action.icon, "steps": steps, "disabled": action.disabled, "dialogs": action.dialogs, "set": action.set, "color": action.color}),
+    )
 }
 
 fn record(s: &mut Session, p: &Value) -> Result<Value> {
@@ -887,7 +904,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Get Action",
             menu: &[],
             shortcut: None,
-            params: r##"{"action":name|index} → {name, steps:[[id, params]…], disabled:[step…], dialogs:[step…], set:name|null, color:str} (steps is the shape file.automate.batch and droplets take; disabled lists the 0-based steps playback skips; dialogs the steps whose dialog Photoshop would show; set the action set from Load Actions; color is a measured action swatch, empty, or reserved @atn-color:N metadata preserving an unknown imported u16 index)"##,
+            params: r##"{"action":name|index} → {name, description:str, icon:str, steps:[[id, params]…], disabled:[step…], dialogs:[step…], set:name|null, color:str} (steps is the shape file.automate.batch and droplets take; disabled lists the 0-based steps playback skips; dialogs the steps whose dialog Photoshop would show; set the action set from Load Actions; color is a measured action swatch, empty, or reserved @atn-color:N metadata preserving an unknown imported u16 index)"##,
             enabled: always,
             run: get,
             journal: false,
