@@ -14,7 +14,17 @@ use crate::commands::CommandSpec;
 use crate::{EngineError, Result, Session};
 
 mod validation;
-pub(crate) use validation::validate_params;
+/// Route coverage and HDR requests to strict native decoders before applying the ordinary filter validation rules to
+/// other commands.
+pub(crate) fn validate_params(id: &str, p: &Value) -> Result<()> {
+    if crate::coverage_cmds::owns(id) {
+        crate::coverage_cmds::params(id, p).map(|_| ())
+    } else if id == crate::hdr_filter::ID {
+        crate::hdr_filter::params(p).map(|_| ())
+    } else {
+        validation::validate_params(id, p)
+    }
+}
 
 fn f(p: &Value, k: &str, d: f32) -> f32 {
     p.get(k).and_then(Value::as_f64).map_or(d, |v| v as f32)
@@ -80,12 +90,19 @@ fn preset(id: &str) -> Option<(&'static str, FilterParams)> {
 /// (Photoshop dialog units). Stored smart filters and previews retain their tolerant decoding;
 /// new command invocations pass through `validate_params` before any document changes.
 pub fn params_for(id: &str, p: &Value) -> Option<FilterParams> {
+    if id == crate::hdr_filter::ID {
+        return crate::hdr_filter::params(p).ok().map(FilterParams::HdrToning);
+    }
+    if crate::coverage_cmds::owns(id) {
+        return crate::coverage_cmds::params(id, p).ok();
+    }
     if let Some((_, fp)) = preset(id) {
         return Some(fp);
     }
     Some(match id {
         "filter.blur.gaussianBlur" => FilterParams::GaussianBlur { radius: f(p, "radius", 1.0).clamp(0.1, 1000.0) },
         "filter.blur.boxBlur" => FilterParams::BoxBlur { radius: f(p, "radius", 1.0).clamp(1.0, 2000.0) },
+        "filter.blur.average" => FilterParams::Average,
         "filter.blur.motionBlur" => FilterParams::MotionBlur { angle: f(p, "angle", 0.0), distance: f(p, "distance", 10.0).clamp(1.0, 2000.0) },
         "filter.blur.radialBlur" => FilterParams::RadialBlur {
             amount: f(p, "amount", 10.0).clamp(1.0, 100.0),
@@ -199,9 +216,38 @@ pub(crate) fn apply_filter_to_surface_in(
     ctx: &crate::jobs::JobCtx,
 ) -> Result<Option<photocraft_raster::Surface>> {
     ctx.check()?;
+    let cancelled = || ctx.cancelled();
+    let ctl = photocraft_raster::Interrupt::cancel_only(&cancelled);
+    replay_with_interrupt(id, params, surf, bounds, selection, canvas, &ctl)
+}
+
+/// The shared replay kernel also admits deterministic cancellation probes in regression tests.
+fn replay_with_interrupt(
+    id: &str,
+    params: &Value,
+    surf: &photocraft_raster::Surface,
+    bounds: photocraft_geom::Rect,
+    selection: Option<&photocraft_raster::Surface>,
+    canvas: photocraft_geom::Rect,
+    ctl: &photocraft_raster::Interrupt<'_>,
+) -> Result<Option<photocraft_raster::Surface>> {
+    ctl.check().map_err(|_| EngineError::Cancelled)?;
     // Replays bypass command dispatch; nested paths must still obey the requesting session's
     // authority, including adjustment LUTs and plug-ins, before any resolver can read them.
     crate::jobs::authorize_render_command(id, params)?;
+    if id == "layer.matting.removeBlackMatte" {
+        if !params.as_object().is_some_and(|m| m.is_empty()) {
+            return Err(EngineError::BadParams { cmd: id.into(), msg: "native Remove Black Matte replay takes empty params".into() });
+        }
+        return crate::layer_menu_cmds::remove_black_matte_surface_in(surf, canvas, ctl).map(Some);
+    }
+    if crate::coverage_cmds::owns(id) {
+        crate::coverage_cmds::params(id, params)?;
+    }
+    if id == crate::hdr_filter::ID {
+        crate::hdr_filter::params(params)?;
+    }
+
     // Liquify / Puppet Warp / Perspective Warp smart filters (distort_cmds).
     if let Some(out) = crate::distort_cmds::apply_to_surface(id, params, surf, canvas) {
         return Ok(Some(out));
@@ -222,9 +268,7 @@ pub(crate) fn apply_filter_to_surface_in(
     // A map that can no longer be read (moved or deleted since) leaves the pixels alone, like an
     // unknown filter; the command itself already refused an unreadable map when it was added.
     // The stack owns progress across filters; this operation only inherits cancellation.
-    let cancelled = || ctx.cancelled();
-    let ctl = photocraft_raster::Interrupt::cancel_only(&cancelled);
-    match crate::filters_ext::resolve_map_path(&mut fp, params, &ctl) {
+    match crate::filters_ext::resolve_map_path(&mut fp, params, ctl) {
         Err(EngineError::Cancelled) => return Err(EngineError::Cancelled),
         Err(e) if matches!(fp, FilterParams::CustomShapeBlur { .. }) => return Err(e),
         Err(_) => return Ok(None),
@@ -233,7 +277,38 @@ pub(crate) fn apply_filter_to_surface_in(
     let sel_bounds = selection.map(photocraft_raster::Surface::content_bounds);
     let content = surf.content_bounds();
     let area = algo::output_area(&fp, content, bounds, sel_bounds);
-    algo::try_apply_in_with(surf, &fp, area, bounds, selection, canvas.union(&content), &ctl).map(Some).map_err(filter_error)
+    if let FilterParams::HdrToning(options) = &fp {
+        return algo::tone::checked_hdr::apply_with(surf, options, area, bounds, selection, ctl).map(Some).map_err(crate::hdr_filter::error);
+    }
+    if let FilterParams::Percentile(options) = &fp {
+        return algo::rank::apply_with(surf, options, area, canvas.union(&content), selection, ctl).map(Some).map_err(crate::coverage_cmds::error);
+    }
+    if let FilterParams::ChannelNoise(options) = &fp {
+        return algo::channel_noise::apply_with(surf, options, area, canvas.union(&content), selection, ctl).map(Some).map_err(crate::coverage_cmds::error);
+    }
+    if let FilterParams::Convolution(options) = &fp {
+        return algo::convolution::apply_with(surf, options, area, canvas.union(&content), selection, ctl).map(Some).map_err(crate::coverage_cmds::error);
+    }
+    if matches!(fp, FilterParams::Average) {
+        return algo::average::apply_with(surf, area, bounds, selection, ctl).map(Some).map_err(crate::coverage_cmds::error);
+    }
+    if let Some(operation) = crate::coverage_cmds::operation(&fp) {
+        return algo::coverage::apply_with(surf, operation, area, canvas.union(&content), selection, ctl).map(Some).map_err(crate::coverage_cmds::error);
+    }
+    algo::try_apply_in_with(surf, &fp, area, bounds, selection, canvas.union(&content), ctl).map(Some).map_err(filter_error)
+}
+
+#[cfg(test)]
+pub(crate) fn replay_with_cancellation_probe(
+    id: &str,
+    params: &Value,
+    surf: &photocraft_raster::Surface,
+    bounds: photocraft_geom::Rect,
+    selection: Option<&photocraft_raster::Surface>,
+    canvas: photocraft_geom::Rect,
+    ctl: &photocraft_raster::Interrupt<'_>,
+) -> Result<Option<photocraft_raster::Surface>> {
+    replay_with_interrupt(id, params, surf, bounds, selection, canvas, ctl)
 }
 
 /// Preserve checked native diagnostics; legacy kernels retain their working-data failure.
@@ -265,6 +340,8 @@ fn edits_transparency(filter: &FilterParams, layer: &Layer) -> bool {
         ) || layer.surface().is_none_or(|surface| surface.format().alpha))
 }
 
+/// Resolve session inputs, then apply an undoable cancellable native filter to the selected surface or editable Smart
+/// stack under effective locks.
 pub(crate) fn run_filter(s: &mut Session, id: &str, p: &Value) -> Result<Value> {
     validate_params(id, p)?;
     // Session state some filters read (colours) becomes explicit params; external inputs resolve here.
@@ -298,6 +375,32 @@ pub(crate) fn run_filter(s: &mut Session, id: &str, p: &Value) -> Result<Value> 
             let filter = |surf: &photocraft_raster::Surface, fp: &FilterParams, area, bounds, sel: Option<&photocraft_raster::Surface>, extent| {
                 let _working = photocraft_raster::memory::try_reserve_operation(algo::working_bytes(fp, area, bounds, surf.format().channels()))
                     .map_err(EngineError::Other)?;
+                if let FilterParams::Convolution(options) = fp {
+                    return ctx
+                        .stage(0.1, 1.0, &msg, |ctl| algo::convolution::apply_with(surf, options, area, extent, sel, ctl))
+                        .map_err(crate::coverage_cmds::error);
+                }
+                if matches!(fp, FilterParams::Average) {
+                    return ctx.stage(0.1, 1.0, &msg, |ctl| algo::average::apply_with(surf, area, bounds, sel, ctl)).map_err(crate::coverage_cmds::error);
+                }
+                if let FilterParams::ChannelNoise(options) = fp {
+                    return ctx
+                        .stage(0.1, 1.0, &msg, |ctl| algo::channel_noise::apply_with(surf, options, area, extent, sel, ctl))
+                        .map_err(crate::coverage_cmds::error);
+                }
+                if let FilterParams::Percentile(options) = fp {
+                    return ctx.stage(0.1, 1.0, &msg, |ctl| algo::rank::apply_with(surf, options, area, extent, sel, ctl)).map_err(crate::coverage_cmds::error);
+                }
+                if let FilterParams::HdrToning(options) = fp {
+                    return ctx
+                        .stage(0.1, 1.0, &msg, |ctl| algo::tone::checked_hdr::apply_with(surf, options, area, bounds, sel, ctl))
+                        .map_err(crate::hdr_filter::error);
+                }
+                if let Some(operation) = crate::coverage_cmds::operation(fp) {
+                    return ctx
+                        .stage(0.1, 1.0, &msg, |ctl| algo::coverage::apply_with(surf, operation, area, extent, sel, ctl))
+                        .map_err(crate::coverage_cmds::error);
+                }
                 ctx.stage(0.1, 1.0, &msg, |ctl| algo::try_apply_in_with(surf, fp, area, bounds, sel, extent, ctl)).map_err(filter_error)
             };
             let selection = doc.selection.clone();
@@ -564,7 +667,12 @@ pub fn specs() -> Vec<CommandSpec> {
 /// such as the Filter Gallery record the layer they ran on, and Last Filter applies to the
 /// current layer, as in Photoshop (#1270).
 pub fn last_filter(s: &Session) -> Option<(String, Value)> {
-    let (id, mut params) = s.journal.iter().rev().find(|(id, _)| params_for(id, &Value::Null).is_some() && id.starts_with("filter.")).cloned()?;
+    let (id, mut params) = s
+        .journal
+        .iter()
+        .rev()
+        .find(|(id, _)| (id == crate::hdr_filter::ID || crate::coverage_cmds::owns(id) || params_for(id, &Value::Null).is_some()) && id.starts_with("filter."))
+        .cloned()?;
     if let Value::Object(m) = &mut params {
         m.remove("layer");
         m.remove("target");

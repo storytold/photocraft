@@ -38,6 +38,8 @@ const MAX_BACKGROUND_JOBS: usize = 16;
 
 type Authorization = fn(&str, &Value) -> Result<()>;
 
+pub(crate) mod render_proof;
+
 thread_local! {
     // Smart-filter rendering has no Session argument. Carry the requesting session's gate
     // through synchronous rendering and explicitly reinstall it on background workers.
@@ -70,7 +72,8 @@ pub(crate) fn authorize_render_command(id: &str, params: &Value) -> Result<()> {
     match RENDER_AUTHORIZATION.with(std::cell::Cell::get) {
         Some(gate) => gate(id, params),
         None => Ok(()),
-    }
+    }?;
+    render_proof::record(id, params)
 }
 
 /// Whether the work on this thread is done for an untrusted session (a gate is installed).
@@ -580,7 +583,14 @@ pub struct Jobs {
     draining: Vec<Draining>,
     /// The context inline job work runs under (see [`Session::set_inline_job_ctx`]).
     inline: Option<JobCtx>,
+    historical_xcf: Vec<historical_xcf_open::Held>,
+    next_historical_xcf: u64,
 }
+
+#[path = "historical_xcf_open.rs"]
+mod historical_xcf_open;
+
+pub(crate) use historical_xcf_open::command as open_command;
 
 const RECENT: usize = 16;
 
@@ -611,7 +621,8 @@ pub enum Started {
 /// Commands that never edit the active document, allowed while a job runs on it.
 fn independent_of_document(id: &str) -> bool {
     const PREFIXES: &[&str] = &["jobs.", "tools.", "view.", "window.", "help.", "brush.presets.", "gradient.presets."];
-    const IDS: &[&str] = &["file.new", "file.close", "file.closeAll", "edit.preferences", "edit.colorSettings", "edit.keyboardShortcuts", "edit.menus"];
+    const IDS: &[&str] =
+        &["file.new", "file.open", "file.close", "file.closeAll", "edit.preferences", "edit.colorSettings", "edit.keyboardShortcuts", "edit.menus"];
     PREFIXES.iter().any(|p| id.starts_with(p)) || IDS.contains(&id)
 }
 
@@ -650,6 +661,59 @@ fn import_path(
     _: &mut Option<photocraft_io::FileIdentity>,
 ) -> std::result::Result<(photocraft_io::ImportResult, bool), photocraft_io::IoError> {
     Err(photocraft_io::IoError::Read(format!("cannot open paths on the web: {path}")))
+}
+
+/// An open source either keeps encoded bytes for a possible XCF decision or streams PSD channels.
+enum AcquiredOpenSource {
+    Bytes(Arc<Vec<u8>>),
+    #[cfg(any(unix, windows))]
+    Psd(photocraft_psd::Source),
+}
+
+/// Sniff exactly the upstream PSD signature without retaining the entire PSD file. Other formats
+/// keep one bounded byte snapshot, which a historical XCF decision can reuse without reopening.
+#[cfg(any(unix, windows))]
+fn acquire_open_path(
+    name: &str,
+    path: &str,
+    ctl: &Interrupt,
+    expected: Option<&photocraft_io::FileIdentity>,
+) -> std::result::Result<AcquiredOpenSource, photocraft_io::IoError> {
+    let read_failed = |error: std::io::Error| photocraft_io::IoError::Read(format!("{path}: {error}"));
+    ctl.check().map_err(|_| photocraft_io::IoError::Cancelled)?;
+    let source = photocraft_psd::FileSource::open(std::path::Path::new(path)).map_err(read_failed)?;
+    let identity = photocraft_io::FileIdentity::of_handle(source.file()).map_err(read_failed)?;
+    if expected.is_some_and(|expected| expected != &identity) {
+        return Err(photocraft_io::IoError::SourceChanged);
+    }
+    let native = name
+        .rsplit(['/', '\\'])
+        .next()
+        .and_then(|name| name.rsplit_once('.'))
+        .is_some_and(|(base, ext)| !base.is_empty() && ext.eq_ignore_ascii_case(photocraft_format::EXTENSION));
+    let mut magic = [0u8; 4];
+    if !native && photocraft_psd::ReadAt::read_at(&source, 0, &mut magic).is_ok() && photocraft_io::is_psd(&magic) {
+        return Ok(AcquiredOpenSource::Psd(photocraft_psd::Source::new(source)));
+    }
+    let mut file = source.file();
+    std::io::Seek::rewind(&mut file).map_err(read_failed)?;
+    let bytes = photocraft_format::read::read_all(&mut file, photocraft_psd::ReadAt::len(&source)).map_err(read_failed)?;
+    if photocraft_io::FileIdentity::of_handle(source.file()).map_err(read_failed)? != identity {
+        return Err(photocraft_io::IoError::SourceChanged);
+    }
+    ctl.check().map_err(|_| photocraft_io::IoError::Cancelled)?;
+    Ok(AcquiredOpenSource::Bytes(Arc::new(bytes)))
+}
+
+/// Filesystem paths are unavailable in browser builds; callers must supply encoded bytes.
+#[cfg(not(any(unix, windows)))]
+fn acquire_open_path(
+    _: &str,
+    path: &str,
+    _: &Interrupt,
+    _: Option<&photocraft_io::FileIdentity>,
+) -> std::result::Result<AcquiredOpenSource, photocraft_io::IoError> {
+    Err(photocraft_io::IoError::Read(format!("cannot open paths on this platform: {path}")))
 }
 
 /// Run a job-capable command's heavy part. `work` runs on a worker thread when the command was
@@ -1100,6 +1164,20 @@ impl Session {
         self.start_job(command, json!({"name": name}), &label, true, move |ctx| crate::file_cmds::prepare_place(input, ctx), crate::file_cmds::apply_place)
     }
 
+    /// Start a user open on a worker while retaining source-path identity and allowing an explicit historical
+    /// sample-order prompt.
+    pub fn start_open_for_user_with_path(&mut self, name: &str, source: OpenSource, path: Option<String>) -> Result<Started> {
+        historical_xcf_open::interactive(self, name, source, path, true)
+    }
+
+    /// Use the same interactive open transaction synchronously and refuse an unexpected background-job result.
+    pub fn open_for_user_inline(&mut self, name: &str, source: OpenSource, path: Option<String>) -> Result<Value> {
+        match historical_xcf_open::interactive(self, name, source, path, false)? {
+            Started::Done(value) => Ok(value),
+            Started::Job(_) => Err(EngineError::Other("inline file open unexpectedly started a job".into())),
+        }
+    }
+
     /// Decodes a file in a job and optionally holds damaged PSD content for
     /// interactive confirmation while leaving headless opens non-interactive.
     // Keep the worker and apply closures together with their execution options.
@@ -1114,149 +1192,8 @@ impl Session {
         expected_fingerprint: Option<SourceFingerprint>,
         background: bool,
     ) -> Result<Started> {
-        let label = format!("Opening {name}");
-        let name_w = name.to_string();
-        let name_a = name.to_string();
-        let mut opts = import_options(self.prefs());
-        opts.psd_high_memory_approved = approve_high_memory;
-        opts.psd_approved_estimate = approved_estimate;
-        let test_memory_scope = photocraft_io::memory::TestMemoryScope::capture();
-        enum WorkResult {
-            Decoded(Box<(photocraft_io::ImportResult, bool)>),
-            PreflightNeeded { required: u64, soft_limit: u64, hard_limit: u64, available_ram: Option<u64>, source: OpenSource, fingerprint: SourceFingerprint },
-        }
-        self.start_job_with_spawn(
-            OPEN_JOB,
-            json!({"name": name}),
-            &label,
-            false,
-            background,
-            move |ctx| {
-                let _test_memory = test_memory_scope.enter();
-                ctx.progress(0.0, "Reading");
-
-                // An in-memory source's identity is its shared buffer, known before decoding. A
-                // path's identity can only come from the handle the verified import opens, so
-                // that import compares it against `expected_fingerprint` itself, before reading
-                // any pixel and again after its memory preflight.
-                let initial_fingerprint = match &source {
-                    OpenSource::Bytes(_) => Some(SourceFingerprint::of(&source)?),
-                    OpenSource::Path(_) => None,
-                };
-                if let Some(expected) = &expected_fingerprint
-                    && let Some(current) = &initial_fingerprint
-                    && !expected.matches(current)
-                {
-                    return Err(EngineError::SourceChanged { name: name_w.clone() });
-                }
-
-                let outcome = match source {
-                    OpenSource::Bytes(bytes) => {
-                        ctx.check()?;
-                        ctx.progress(0.02, "Decoding");
-                        let res = ctx.stage(0.02, 0.95, "Decoding", |ctl| photocraft_io::import_for_open_with(&name_w, &bytes, &opts, ctl));
-                        match res {
-                            Ok(imported) => WorkResult::Decoded(Box::new(imported)),
-                            Err(photocraft_io::IoError::PsdApprovalRequired { required, soft_limit, hard_limit, available_ram }) if confirm_damage => {
-                                // The buffer cannot change while it is decoded, so the identity
-                                // captured before reading is still exact.
-                                let fingerprint = initial_fingerprint.clone().ok_or_else(|| EngineError::Other("missing source identity".into()))?;
-                                WorkResult::PreflightNeeded { required, soft_limit, hard_limit, available_ram, source: OpenSource::Bytes(bytes), fingerprint }
-                            }
-                            Err(photocraft_io::IoError::PsdApprovalRequired { required, soft_limit, hard_limit, available_ram }) => {
-                                return Err(EngineError::PsdApprovalRequired { name: name_w.clone(), required, soft_limit, hard_limit, available_ram });
-                            }
-                            Err(photocraft_io::IoError::Cancelled) => return Err(EngineError::Cancelled),
-                            Err(e) => return Err(crate::error::io_open_error(&name_w, e)),
-                        }
-                    }
-                    OpenSource::Path(p) => {
-                        let mut opened = None;
-                        let res = ctx.stage(0.0, 0.95, "Decoding", |ctl| import_path(&name_w, &p, &opts, expected_fingerprint.as_ref(), ctl, &mut opened));
-                        match res {
-                            Ok(imported) => WorkResult::Decoded(Box::new(imported)),
-                            Err(photocraft_io::IoError::PsdApprovalRequired { required, soft_limit, hard_limit, available_ram }) if confirm_damage => {
-                                // This identity is the one read from the handle that was
-                                // estimated, and the verified import refused a handle that is
-                                // not the approved file or changed while preflighting.
-                                let identity = opened.ok_or_else(|| EngineError::Other(format!("{p}: the file's identity could not be read")))?;
-                                let fingerprint = SourceFingerprint::path(p.clone(), identity);
-                                WorkResult::PreflightNeeded { required, soft_limit, hard_limit, available_ram, source: OpenSource::Path(p), fingerprint }
-                            }
-                            Err(photocraft_io::IoError::PsdApprovalRequired { required, soft_limit, hard_limit, available_ram }) => {
-                                return Err(EngineError::PsdApprovalRequired { name: name_w.clone(), required, soft_limit, hard_limit, available_ram });
-                            }
-                            Err(photocraft_io::IoError::Cancelled) => return Err(EngineError::Cancelled),
-                            Err(e) => return Err(crate::error::io_open_error(&name_w, e)),
-                        }
-                    }
-                };
-
-                match &outcome {
-                    WorkResult::PreflightNeeded { .. } => Ok(outcome),
-                    WorkResult::Decoded(imported) => {
-                        ctx.progress(0.95, "Preparing layers");
-                        warm_layer_bounds(&imported.0.document, || ctx.check())?;
-                        if crate::type_extra_cmds::has_type_layers(&imported.0.document) {
-                            ctx.progress(0.97, "Loading fonts");
-                            let _ = photocraft_text::shared();
-                            ctx.check()?;
-                        }
-                        Ok(outcome)
-                    }
-                }
-            },
-            move |s, outcome| match outcome {
-                WorkResult::PreflightNeeded { required, soft_limit, hard_limit, available_ram, source, fingerprint } => {
-                    // The warning follows the capacity measured for this estimate: an unknown
-                    // capacity carries no fabricated number, and above the threshold it also
-                    // says the process or tab may run out of memory. The UI shows both.
-                    let capacity_unknown = available_ram.is_none();
-                    let uncertain_capacity = photocraft_io::memory::uncertain_capacity_warning(required, available_ram);
-                    let id = s.store_pending_preflight(PendingPsdPreflight {
-                        id: 0,
-                        name: name_a.clone(),
-                        source,
-                        fingerprint,
-                        required,
-                        soft_limit,
-                        hard_limit,
-                        available_ram,
-                        confirm_damage,
-                    })?;
-                    Ok(json!({
-                        "pendingPreflight": id,
-                        "name": name_a,
-                        "estimated": required,
-                        "softLimit": soft_limit,
-                        "hardLimit": hard_limit,
-                        "availableRam": available_ram,
-                        "capacityUnknown": capacity_unknown,
-                        "uncertainCapacityWarning": uncertain_capacity,
-                    }))
-                }
-                WorkResult::Decoded(imported) => {
-                    let (mut r, damaged) = *imported;
-                    crate::file_cmds::tag_exr_colorspace(s, &name_a, &mut r.document);
-                    crate::file_cmds::raw_defaults(s, &r.warnings, &mut r.document);
-                    let raw = r.warnings.iter().any(|w| w.contains(photocraft_io::raw::DEVELOPED_NOTE));
-                    let damaged = confirm_damage && damaged;
-                    let question = s.color.open_question(&r.document).filter(|_| !raw);
-                    if damaged || question.is_some() {
-                        let held = s.hold_open(r.document, r.source_read_only);
-                        return Ok(json!({"held": held, "name": name_a, "warnings": r.warnings, "color": question, "damaged": damaged}));
-                    }
-                    let (index, color) = s.open_document(r.document, None);
-                    let id = s.documents().get(index).ok_or(EngineError::NoDocument)?.doc.id;
-                    if let Some(st) = s.active_mut() {
-                        st.source_read_only = r.source_read_only;
-                    }
-                    Ok(json!({"document": index, "docId": id.0, "name": name_a, "warnings": r.warnings, "color": color}))
-                }
-            },
-        )
+        historical_xcf_open::start(self, name, source, confirm_damage, approve_high_memory, approved_estimate, expected_fingerprint, background)
     }
-
     /// Start a job that isn't an engine command (opening a file, a shell operation, a test's fake
     /// job): `work` runs on a worker, `apply` on this thread when [`Session::poll_jobs`] or
     /// [`Session::wait_job`] picks the result up. `command` and `params` identify it in

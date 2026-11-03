@@ -1,5 +1,7 @@
-use super::open::import_at_raw_ppi;
-use super::paths::{extension, file_name, join, list_files, list_images, read_file, stem, write_file};
+use super::open::import_source_at_raw_ppi;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+use super::paths::openable_name;
+use super::paths::{check_import_destination, compound_xcf_name, extension, file_name, join, list_files, list_images, read_file, stem, write_file};
 use super::processing::parse_steps;
 use super::save::{SaveOpts, encode, save_doc, save_doc_as};
 use super::{Arc, Document, EngineError, Result, Session, Value, batch_naming, json, str_param};
@@ -172,15 +174,26 @@ pub(crate) fn process_tree(
 /// The format Batch's "Save in the same format" writes for `path`: its own, or PSD for a file
 /// PhotoCraft only opens.
 pub fn same_format(path: &str) -> String {
-    const IMPORT_ONLY: &[&str] =
-        &["pdn", "kra", "krz", "af", "afdesign", "afphoto", "afpub", "heic", "heif", "hif", "svg", "svgz", "cin", "pcx", "xpm", "xcf", "xcfgz", "gz", "psdt"];
+    const IMPORT_ONLY: &[&str] = &[
+        "pdn", "kra", "krz", "af", "afdesign", "afphoto", "afpub", "heic", "heif", "hif", "svg", "svgz", "cin", "pcx", "xpm", "xcf", "xcfgz", "xcfbz2",
+        "xcfxz", "gz", "psdt",
+    ];
     let ext = extension(path).unwrap_or_else(|| "png".into());
     let no_writer = photocraft_codecs::from_extension(&ext).is_some_and(|f| !f.caps().write);
-    if photocraft_io::raw::EXTENSIONS.contains(&ext.as_str()) || IMPORT_ONLY.contains(&ext.as_str()) || no_writer { "psd".into() } else { ext }
+    if compound_xcf_name(&file_name(path).to_ascii_lowercase())
+        || photocraft_io::raw::EXTENSIONS.contains(&ext.as_str())
+        || IMPORT_ONLY.contains(&ext.as_str())
+        || no_writer
+    {
+        "psd".into()
+    } else {
+        ext
+    }
 }
 
 #[cfg(test)]
 #[test]
+/// Writable and import-only suffixes choose the right output format without treating folder dots as extensions.
 fn same_format_takes_the_file_names_extension() {
     assert_eq!(same_format("/in/a.PNG"), "png");
     assert_eq!(same_format("/in/IMG_0001.ARW"), "psd");
@@ -199,6 +212,9 @@ fn same_format_takes_the_file_names_extension() {
     }
     assert_eq!(same_format("/in/a.pam"), "pam");
     assert_eq!(same_format("/in/a.dds"), "dds");
+    for source in ["a.xcf", "a.XCF.GZ", "a.xcfgz", "a.xcf.bz2", "a.xcfbz2", "a.xcf.xz", "a.xcfxz"] {
+        assert_eq!(same_format(source), "psd", "{source} is import-only");
+    }
     // No extension in the file name: PNG, not the path after a dot in a folder name.
     assert_eq!(same_format("/in/v1.2/scan"), "png");
     assert_eq!(same_format("C:\\in.d\\scan"), "png");
@@ -229,7 +245,19 @@ impl FileFailure {
     }
 }
 
-/// Run one source through its action and output pipeline while finalizing only that document's owned history scope.
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[test]
+/// Supported compound XCF names are discoverable without admitting unrelated compressed archives.
+fn batch_discovery_accepts_xcf_wrappers_without_claiming_unrelated_archives() {
+    for source in ["a.XCF.GZ", "a.xcfgz", "a.XCF.BZ2", "a.xcfbz2", "a.xcf.xz", "a.xcfxz"] {
+        assert!(openable_name(source), "{source}");
+    }
+    for other in ["a.gz", "a.bz2", "a.xz", "a.xcf.zip", "a.xcf.bz2.tmp"] {
+        assert!(!openable_name(other), "{other}");
+    }
+}
+
+/// Process scratch documents with captured raw defaults, inherited authority and source-safe output paths.
 fn process_outputs<'a>(
     s: &Session,
     outputs: impl IntoIterator<Item = (&'a str, String)>,
@@ -239,10 +267,12 @@ fn process_outputs<'a>(
     // The scratch sessions have default preferences; a raw opens at the user's Raw Defaults.
     let raw_ppi = s.prefs().raw_defaults.resolution;
     let action_prefs = s.prefs().actions.clone();
+    let _authority = crate::jobs::render_authorization_scope(s.authorize);
     let mut files = Vec::new();
     let mut errors = Vec::new();
     let mut written = OutputClaims::default();
     let run = |scratch: &mut Session, out: &str| {
+        scratch.authorize = s.authorize;
         scratch.prefs.edit(|prefs| prefs.actions = action_prefs.clone());
         f(scratch, out).map_err(FileFailure::from)
     };
@@ -292,11 +322,18 @@ fn process_one(
             (input.prepare)(&mut scratch, path)?;
         } else {
             let bytes = read_file(path)?;
-            let doc = import_at_raw_ppi(raw_ppi, &file_name(path), &bytes)?;
-            scratch.add_document(doc, Some(path.to_string()));
+            let (doc, read_only) = import_source_at_raw_ppi(raw_ppi, &file_name(path), &bytes)?;
+            scratch.add_document(doc, (!read_only).then(|| path.to_string()));
+            if let Some(state) = scratch.active_mut() {
+                state.source_read_only = read_only;
+                state.protected_import_source = read_only.then(|| path.to_string());
+            }
         }
         if let Some(ctx) = options.ctx {
             ctx.publish_batch_preview(path, scratch.active().map(|state| state.doc.clone()));
+        }
+        if let Some(state) = scratch.active() {
+            check_import_destination(state, out)?;
         }
         let saved_by_action = f(&mut scratch, out)?;
         if saved_by_action {
@@ -311,6 +348,7 @@ fn process_one(
             }
         }
         let d = scratch.active().ok_or(EngineError::NoDocument)?;
+        check_import_destination(d, out)?;
         let warnings = if let Some(format) = options.format {
             let ext = if format == "same" { same_format(path) } else { format.trim_start_matches('.').to_ascii_lowercase() };
             if let Some(ctx) = options.ctx { save_batch_doc(&d.doc, out, &ext, save, ctx)? } else { save_doc_as(&d.doc, out, &ext, save)? }
@@ -863,6 +901,8 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
             // Whether this input's source opened read-only; Save and Close must not replace it.
             let read_only_source = std::cell::Cell::new(false);
             let prepare = |scratch: &mut Session, path: &str| -> Result<()> {
+                scratch.authorize = authorize;
+                let _authority = crate::jobs::render_authorization_scope(authorize);
                 read_only_source.set(false);
                 #[cfg(not(target_arch = "wasm32"))]
                 if check_folder_format && !super::paths::openable_name(path) {
@@ -893,7 +933,11 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
                     } else {
                         let (doc, read_only) = super::open::import_source_at_raw_ppi(raw_ppi, &file_name(path), &bytes)?;
                         read_only_source.set(read_only);
-                        scratch.add_document(doc, Some(path.to_string()));
+                        scratch.add_document(doc, (!read_only).then(|| path.to_string()));
+                        if let Some(state) = scratch.active_mut() {
+                            state.source_read_only = read_only;
+                            state.protected_import_source = read_only.then(|| path.to_string());
+                        }
                     }
                 }
                 Ok(())
@@ -906,6 +950,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
                     .as_ref()
                     .map(|binding| binding.path.clone())
                     .or_else(|| scratch.active().and_then(|state| state.path.clone()))
+                    .or_else(|| scratch.active().and_then(|state| state.protected_import_source.clone()))
                     .unwrap_or_default();
                 let encode_format = if format == "same" { same_format(&source_path) } else { format.trim_start_matches('.').to_ascii_lowercase() };
                 // Save and Close writes over the source, so its bytes must be the source's own

@@ -17,7 +17,7 @@ pub(crate) struct BatchOpen {
 /// Replace only the file choice before either authorization gate; malformed params stay invalid.
 pub(crate) fn batch_open_params(s: &Session, id: &str, params: &Value) -> Option<Value> {
     let binding = s.batch_open.as_ref()?;
-    if !matches!(id, "file.openAs" | "file.openExrParts") || !(params.is_object() || params.is_null()) {
+    if !matches!(id, "file.open" | "file.openAs" | "file.openExrParts") || !(params.is_object() || params.is_null()) {
         return None;
     }
     let mut effective = if params.is_null() { super::json!({}) } else { params.clone() };
@@ -55,9 +55,11 @@ pub(crate) fn import_with_options(name: &str, bytes: &[u8], opts: &photocraft_io
 /// Batch's scratch sessions use [`import_at_raw_ppi`]): a developed raw gets Preferences › Raw
 /// Defaults › Resolution, as it does through File › Open.
 pub(crate) fn import_opened(s: &Session, name: &str, bytes: &[u8]) -> Result<Document> {
+    let _authority = crate::jobs::render_authorization_scope(s.authorize);
     import_at_raw_ppi(s.prefs().raw_defaults.resolution, name, bytes)
 }
 
+/// Apply captured raw resolution and prepare native editable caches before returning imported data.
 pub(super) fn import_at_raw_ppi(raw_ppi: f64, name: &str, bytes: &[u8]) -> Result<Document> {
     import_source_at_raw_ppi(raw_ppi, name, bytes).map(|(doc, _)| doc)
 }
@@ -68,6 +70,7 @@ pub(super) fn import_source_at_raw_ppi(raw_ppi: f64, name: &str, bytes: &[u8]) -
     let r = import_result(name, bytes)?;
     let mut doc = r.document;
     raw_resolution(raw_ppi, &r.warnings, &mut doc);
+    crate::import_prepare::prepare_imported_document(&mut doc, &crate::jobs::JobCtx::new())?;
     Ok((doc, r.source_read_only))
 }
 
@@ -142,7 +145,12 @@ pub(super) fn revert(s: &mut Session) -> Result<Value> {
 /// linear) — the working space ACES render pipelines write. Only the io default is
 /// replaced; an embedded or EXIF-declared profile is kept untouched.
 pub(crate) fn tag_exr_colorspace(s: &Session, name: &str, doc: &mut Document) {
-    if !name.to_ascii_lowercase().ends_with(".exr") || !s.prefs.get().file_handling.exr_aces_cg {
+    tag_exr_colorspace_with_policy(s.prefs.get().file_handling.exr_aces_cg, name, doc);
+}
+
+/// Apply a captured EXR preference before worker-side color conversion, preserving declared profiles.
+pub(crate) fn tag_exr_colorspace_with_policy(exr_aces_cg: bool, name: &str, doc: &mut Document) {
+    if !name.to_ascii_lowercase().ends_with(".exr") || !exr_aces_cg {
         return;
     }
     let linear = photocraft_cms::Builtin::LinearSrgb.profile().to_bytes();
@@ -163,9 +171,23 @@ pub(crate) fn raw_open_resolution(s: &Session) -> f64 {
     s.batch_open.as_ref().map_or_else(|| s.prefs().raw_defaults.resolution, |binding| binding.raw_ppi)
 }
 
-fn raw_resolution(ppi: f64, warnings: &[String], doc: &mut Document) {
+/// Apply captured raw resolution only to developed imports and finite preference values.
+pub(crate) fn raw_resolution(ppi: f64, warnings: &[String], doc: &mut Document) {
     if ppi.is_finite() && warnings.iter().any(|w| w.contains(photocraft_io::raw::DEVELOPED_NOTE)) {
         doc.resolution_dpi = ppi.clamp(1.0, 10_000.0) as f32;
+    }
+}
+
+/// Parse an explicit per-open historical XCF sample choice. It is never a preference.
+pub fn historical_xcf_sample_order(params: &Value, command: &str) -> Result<Option<photocraft_io::HistoricalXcfSampleOrder>> {
+    match params.get("historicalXcfSampleOrder") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) => match value.as_str() {
+            "little-endian" => Ok(Some(photocraft_io::HistoricalXcfSampleOrder::LittleEndian)),
+            "big-endian" => Ok(Some(photocraft_io::HistoricalXcfSampleOrder::BigEndian)),
+            _ => Err(EngineError::Other(format!("{command}: historicalXcfSampleOrder must be little-endian or big-endian"))),
+        },
+        _ => Err(EngineError::Other(format!("{command}: historicalXcfSampleOrder must be a string"))),
     }
 }
 
@@ -186,12 +208,38 @@ pub fn open_bytes_as_with_options(
     path: Option<String>,
     approve_high_memory: bool,
 ) -> Result<Value> {
+    open_bytes_as_with_policy(s, name, bytes, as_ext, path, approve_high_memory, None)
+}
+
+/// Decode with the explicit historical sample order, without granting high-memory approval.
+pub fn open_bytes_as_with_sample_order(
+    s: &mut Session,
+    name: &str,
+    bytes: &[u8],
+    as_ext: Option<&str>,
+    path: Option<String>,
+    sample_order: Option<photocraft_io::HistoricalXcfSampleOrder>,
+) -> Result<Value> {
+    open_bytes_as_with_policy(s, name, bytes, as_ext, path, false, sample_order)
+}
+
+/// Keep independent per-open sample interpretation and high-memory consent on the shared decoder.
+fn open_bytes_as_with_policy(
+    s: &mut Session,
+    name: &str,
+    bytes: &[u8],
+    as_ext: Option<&str>,
+    path: Option<String>,
+    approve_high_memory: bool,
+    sample_order: Option<photocraft_io::HistoricalXcfSampleOrder>,
+) -> Result<Value> {
     crate::allocation::checkpoint("importing document")?;
     let decode_name = match as_ext {
         Some(ext) => format!("{}.{}", stem(name), ext.trim_start_matches('.')),
         None => name.to_string(),
     };
     let mut opts = crate::jobs::import_options(s.prefs());
+    opts.historical_xcf_sample_order = sample_order;
     opts.psd_high_memory_approved = approve_high_memory;
     opts.psd_approved_estimate = None;
     let raw = super::raw_open::prepare(s, &decode_name, path.as_deref(), bytes)?;
@@ -207,6 +255,9 @@ pub fn open_bytes_as_with_options(
     let mut doc = r.document;
     tag_exr_colorspace(s, &decode_name, &mut doc);
     raw_defaults(s, &r.warnings, &mut doc);
+    if let Some(view) = &r.initial_view {
+        view.validate(&doc).map_err(|e| EngineError::Other(e.to_string()))?;
+    }
     let path = match template_name(s, name) {
         Some(untitled) => {
             doc.name = untitled;
@@ -221,16 +272,20 @@ pub fn open_bytes_as_with_options(
         return Err(EngineError::Other(format!("{name}: a color profile question requires interactive opening or suppressWarnings")));
     }
     // Color Settings policies (preserve / convert / discard the embedded profile).
-    let (i, color) = s.open_document(doc, path.filter(|_| !r.source_read_only));
+    let protected = path.as_ref().filter(|_| r.source_read_only).cloned();
+    let (i, color) = s.open_imported_document(doc, path.filter(|_| !r.source_read_only), &crate::jobs::JobCtx::new())?;
+    s.apply_import_initial_view(r.initial_view)?;
     if let Some(st) = s.active_mut() {
         st.source_read_only = r.source_read_only;
+        st.protected_import_source = protected;
     }
     if let Some(settings) = raw_settings {
         super::raw_open::finish(s, settings)?;
     }
     batch_open_notice(s, name, &r.warnings, &color);
     // Import notes (e.g. how a camera raw was developed, or that only its preview opened).
-    Ok(json!({"document": i, "color": color, "warnings": r.warnings}))
+    let conversion = s.active().map(|st| crate::import_report_cmds::summary(st.doc.metadata.import_conversion.as_ref())).unwrap_or(Value::Null);
+    Ok(json!({"document": i, "color": color, "warnings": r.warnings, "importConversion": conversion}))
 }
 
 /// Open the selected file with its decoder options and record its Batch source identity.
@@ -245,7 +300,8 @@ pub(super) fn open_as(s: &mut Session, p: &Value) -> Result<Value> {
         }
     };
     let bytes = read_file(&path)?;
-    let result = open_bytes_as_with_options(s, &path, &bytes, as_ext, Some(path.clone()), approve_high_memory)?;
+    let sample_order = historical_xcf_sample_order(p, "file.openAs")?;
+    let result = open_bytes_as_with_policy(s, &path, &bytes, as_ext, Some(path.clone()), approve_high_memory, sample_order)?;
     remember_batch_open(s);
     Ok(result)
 }
@@ -394,6 +450,7 @@ impl PlaceInput {
             }
         };
         let mut opts = crate::jobs::import_options(prefs);
+        opts.historical_xcf_sample_order = historical_xcf_sample_order(p, if linked.is_some() { "file.placeLinked" } else { "file.placeEmbedded" })?;
         opts.psd_high_memory_approved = approve;
         opts.psd_approved_estimate = None;
         Ok(Self {
@@ -458,6 +515,19 @@ pub(crate) fn prepare_place(input: PlaceInput, ctx: &JobCtx) -> Result<Prepared>
     // Refuse before decoding if the operation cannot fit.
     crate::memory_gate::ensure(&format!("place \u{201c}{}\u{201d}", file_name(&name)), crate::memory_gate::place_need(&bytes, fmt.bytes_per_pixel()))?;
     let doc = doc.filter(|_| frame.is_some() || photocraft_io::is_svg_input(&name, &bytes));
+    // Only an explicit sample interpretation needs an extra probe. Its normalized native
+    // source must survive later Smart replay, including when a frame renders the contents again.
+    let normalize_historical = if (smart || frame.is_some()) && opts.historical_xcf_sample_order.is_some() {
+        let request = ctx
+            .stage(0.0, 0.05, "Checking historical sample order", |ctl| photocraft_io::historical_xcf_sample_order_request_with(&name, &bytes, ctl))
+            .map_err(|error| if ctx.cancelled() { EngineError::Cancelled } else { crate::error::io_open_error(&name, error) })?;
+        if request.is_some() && linked.is_some() {
+            return Err(EngineError::Other("Historical high-depth XCF linked contents cannot retain a sample byte-order choice. Open the XCF with the chosen byte order, save it as .pcraft, then use Place Linked on that native file.".into()));
+        }
+        request.is_some()
+    } else {
+        false
+    };
     let imported = ctx.stage(0.0, 0.6, "Decoding", |ctl| photocraft_io::import_with_options_and_interrupt(&name, &bytes, &opts, ctl)).map_err(|e| match e {
         photocraft_io::IoError::Cancelled => EngineError::Cancelled,
         e => crate::error::io_open_error(&name, e),
@@ -468,7 +538,14 @@ pub(crate) fn prepare_place(input: PlaceInput, ctx: &JobCtx) -> Result<Prepared>
         )));
     }
     ctx.check()?;
-    let src = imported.document;
+    let mut src = imported.document;
+    crate::import_prepare::prepare_imported_document(&mut src, ctx)?;
+    let normalized = if normalize_historical {
+        crate::allocation::checkpoint("normalizing historical placed contents")?;
+        Some(crate::smart_cmds::encode_source(&src)?)
+    } else {
+        None
+    };
     let (w, h) = (src.size.width as f64, src.size.height as f64);
     let scale = match f64_param(&p, "scale") {
         Some(k) => (k / 100.0).max(1e-4),
@@ -517,9 +594,10 @@ pub(crate) fn prepare_place(input: PlaceInput, ctx: &JobCtx) -> Result<Prepared>
     let smart = smart || frame.is_some();
     let label = if linked.is_some() { "Place Linked" } else { PLACE_EMBEDDED };
     let content = if smart {
-        let source = match linked {
-            Some(path) => SmartSource::Linked { path },
-            None => SmartSource::Embedded { file_name: file_name(&name), bytes: Arc::new(bytes) },
+        let source = match (linked, normalized) {
+            (Some(path), _) => SmartSource::Linked { path },
+            (None, Some(native)) => SmartSource::Embedded { file_name: format!("{}.pcraft", stem(&name)), bytes: Arc::new(native) },
+            (None, None) => SmartSource::Embedded { file_name: file_name(&name), bytes: Arc::new(bytes) },
         };
         let mut so = SmartObject::new(source, placement, px);
         // A vector source (SVG) and a frame's image render at their placement scale instead of as
