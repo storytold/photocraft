@@ -26,6 +26,11 @@ pub(crate) struct SaveOpts {
     pub dpx_bits: Option<photocraft_io::DpxBits>,
     /// TIFF: the image compression (`"tiffCompression": "none" | "lzw" | "zip"`); unset, none.
     pub tiff_compression: Option<photocraft_codecs::TiffCompression>,
+    /// TIFF: Save Transparency (`"tiffTransparency": bool`); unset, the transparency is kept
+    /// unless the document has alpha or spot channels ([`photocraft_io::ExportOptions::tiff_transparency`]).
+    pub tiff_transparency: Option<bool>,
+    /// TIFF: Save Image Pyramid (`"tiffPyramid": bool`); unset, off.
+    pub tiff_pyramid: bool,
     /// DDS: the compression and whether to write the mip chain (`"ddsCompression"`,
     /// `"ddsMipmaps"`); unset, uncompressed without mipmaps.
     pub dds: photocraft_io::DdsOptions,
@@ -52,6 +57,8 @@ impl Default for SaveOpts {
             tga_bits: None,
             dpx_bits: None,
             tiff_compression: None,
+            tiff_transparency: None,
+            tiff_pyramid: false,
             dds: photocraft_io::DdsOptions::default(),
             pdf_spot_plates: true,
             image_previews: true,
@@ -77,6 +84,8 @@ impl SaveOpts {
             tga_bits: tga_bits_param(p, cmd)?,
             dpx_bits: dpx_bits_param(p, cmd)?,
             tiff_compression: tiff_compression_param(p, cmd)?,
+            tiff_transparency: tiff_bool_param(p, "tiffTransparency", cmd)?,
+            tiff_pyramid: tiff_bool_param(p, "tiffPyramid", cmd)?.unwrap_or(false),
             dds: dds_param(p, cmd)?.unwrap_or_default(),
             pdf_spot_plates: pdf_spot_plates_param(p, cmd)?,
             image_previews: file_handling.image_previews != crate::prefs::Ask::Never,
@@ -147,6 +156,17 @@ pub fn tiff_compression_param(p: &Value, cmd: &str) -> Result<Option<photocraft_
     }
 }
 
+/// A TIFF Options checkbox in `p`: `"tiffTransparency"` (Save Transparency) or `"tiffPyramid"`
+/// (Save Image Pyramid), `true` or `false`; absent or null: unset. Anything else is a bad
+/// parameter of command `cmd` (#8827).
+pub fn tiff_bool_param(p: &Value, key: &str, cmd: &str) -> Result<Option<bool>> {
+    match p.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Bool(b)) => Ok(Some(*b)),
+        Some(v) => Err(EngineError::BadParams { cmd: cmd.into(), msg: format!("`{key}` must be true or false, got {v}") }),
+    }
+}
+
 /// The JPEG format in `p` (`"jpegFormat": "baseline" | "optimized" | "progressive"`; absent or
 /// null: Baseline). Anything else is a bad parameter of command `cmd`. Shared like
 /// [`tga_bits_param`].
@@ -209,6 +229,7 @@ pub(crate) fn encode(doc: &Document, path: &str, save: impl Into<SaveOpts>) -> R
     let save = save.into();
     let mut opts = photocraft_io::ExportOptions {
         tiff_layers: save.tiff_layers,
+        tiff_transparency: save.tiff_transparency,
         tga_bits: save.tga_bits,
         pdf_spot_plates: save.pdf_spot_plates,
         image_previews: save.image_previews,
@@ -227,6 +248,7 @@ pub(crate) fn encode(doc: &Document, path: &str, save: impl Into<SaveOpts>) -> R
     if let Some(c) = save.tiff_compression {
         opts.encode.tiff_compression = c;
     }
+    opts.encode.tiff_pyramid = save.tiff_pyramid;
     opts.encode.dds = save.dds;
     if let Some(q) = save.quality {
         let q = jpeg_quality(q);
