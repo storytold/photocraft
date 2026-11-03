@@ -288,14 +288,15 @@ impl PhotocraftApp {
     }
 
     /// Re-label the Save As just journaled for `path` as File › Save (see [`Self::save_dialog_flow`]),
-    /// keeping its Targa, DDS or JPEG answer so playback writes the file the same way. A save
-    /// parked behind Targa, DDS or JPEG Options hasn't been journaled yet: it is recorded as
+    /// keeping its Targa, DDS, JPEG or TIFF answer so playback writes the file the same way. A save
+    /// parked behind Targa, DDS, JPEG or TIFF Options hasn't been journaled yet: it is recorded as
     /// File › Save once answered.
     pub(crate) fn journal_as_plain_save(&mut self, path: &str) {
         let parked = [
             self.targa_options.as_mut().map(|p| (&p.path, &mut p.record)),
             self.dds_options.as_mut().map(|p| (&p.path, &mut p.record)),
             self.jpeg_options.as_mut().map(|p| (&p.path, &mut p.record)),
+            self.tiff_options.as_mut().map(|p| (&p.path, &mut p.record)),
         ];
         if let Some((_, record)) = parked.into_iter().flatten().find(|(p, record)| p.as_str() == path && **record == "file.saveAs") {
             *record = "file.save";
@@ -559,7 +560,7 @@ impl PhotocraftApp {
         self.tiff_options.is_some() || self.targa_options.is_some() || self.dds_options.is_some() || self.jpeg_options.is_some()
     }
 
-    /// Writes a save that waited on a format prompt (Targa, DDS or JPEG Options) once answered:
+    /// Writes a save that waited on a format prompt (Targa, DDS, JPEG or TIFF Options) once answered:
     /// journals `step` as its command (`file.saveAs` for Save As, `file.saveACopy` for Save a
     /// Copy, `file.save` for a plain Save), so an action being recorded keeps it with this answer
     /// (#2032, #4373), reports a failure in the status bar, and releases a close prompt waiting on

@@ -221,12 +221,16 @@ pub fn confirm(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
     app.tiff_remembered = Remembered { compression: p.compression, pyramid: p.pyramid };
     let choice = choice(&p);
-    let mut step = serde_json::json!({"path": p.path});
+    // A plain Save writes whichever file the action is played on (#3531): no path.
+    let mut step = if p.record == "file.save" { serde_json::json!({}) } else { serde_json::json!({"path": p.path}) };
     if let Some(layers) = choice.layers {
         step["tiffLayers"] = layers.into();
     }
     choice.record(&mut step);
-    let settings = choice.apply(app.save_settings());
+    // The waiting document's own settings (its path resolves linked smart objects), even if
+    // another tab is active now. Closed meanwhile, the write below reports it.
+    let settings = app.with_document(p.doc, |app| Ok(app.save_settings())).unwrap_or_else(|_| app.save_settings());
+    let settings = choice.apply(settings);
     app.write_answered_save(ctx, p.doc, p.path, &settings, p.copy || p.discard_layers, (p.record, step));
 }
 

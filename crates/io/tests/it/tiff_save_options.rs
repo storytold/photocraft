@@ -131,6 +131,26 @@ fn on_keeps_a_quick_mask_in_place() {
     }
 }
 
+/// Past 16 channels a layered TIFF keeps the first 16. With Save Transparency on, the name and
+/// DisplayInfo lists hold the transparency ahead of them, so trimming keeps 17 entries and
+/// every channel still opens under its own name (they used to shift by one).
+#[test]
+fn on_past_sixteen_channels_keeps_each_channels_name() {
+    let mut doc = art(SampleType::U8, false);
+    let gray = PixelFormat::new(ColorMode::Grayscale, SampleType::U8, false);
+    for i in 1..=18 {
+        doc.channels.push(AlphaChannel::new(format!("Alpha {i}"), Surface::new(gray)));
+    }
+    let r = save(&doc, true, Some(true));
+    assert!(r.warnings.iter().any(|w| w.contains("18 extra channels") && w.contains("first 16")), "{:?}", r.warnings);
+    let img = photocraft_codecs::decode(&r.bytes).unwrap();
+    assert!(img.layout().has_alpha());
+    assert_eq!(img.meta.extra_samples.len(), 16);
+    let back = import("t.tif", &r.bytes).unwrap().document;
+    let want: Vec<String> = (1..=16).map(|i| format!("Alpha {i}")).collect();
+    assert_eq!(back.channels.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), want.iter().map(String::as_str).collect::<Vec<_>>());
+}
+
 #[test]
 fn on_without_transparency_writes_no_alpha() {
     // An opaque document has no transparency to save.

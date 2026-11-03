@@ -181,6 +181,65 @@ fn save_a_copy_asks_and_replays() {
     assert_eq!(writes.borrow().as_slice(), &[("copy.tif".to_string(), asked("zip", None, false, true))]);
 }
 
+/// File › Save confirming the document's own TIFF asks TIFF Options, and an action being
+/// recorded keeps it as a plain Save (no path) with the answer: played back, it writes the TIFF
+/// the action is played on, not the one it was recorded on (#3531).
+#[test]
+fn recorded_plain_save_of_a_tiff_writes_the_file_it_is_played_on() {
+    let _gpu = photocraft_testkit::gpu_lock();
+    let (mut h, writes) = tiff_app("white", "own.tif");
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "file.saveAs", json!({"path": "own.tif", "tiffCompression": "none"})).unwrap();
+    h.state_mut().run("actions.record", json!({})).unwrap();
+    crate::menus::invoke(h.state_mut(), &ctx, "file.save", json!({})).unwrap();
+    h.run_steps(4);
+    assert!(h.state().tiff_options.is_some(), "confirming its own TIFF asks TIFF Options");
+    h.get_by_label("LZW").click();
+    h.run_steps(2);
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    h.state_mut().run("actions.stop", json!({})).unwrap();
+    assert_eq!(h.state().session.actions.list[0].steps, [("file.save".into(), json!({"tiffCompression": "lzw"}))]);
+    crate::menus::invoke(h.state_mut(), &ctx, "file.saveAs", json!({"path": "other.tif", "tiffCompression": "none"})).unwrap();
+    writes.borrow_mut().clear();
+    let played = h.state_mut().run("actions.play", json!({"action": 0})).unwrap();
+    assert!(played.get("failed").is_none(), "{played}");
+    assert!(h.state().tiff_options.is_none(), "playback doesn't ask");
+    assert_eq!(writes.borrow().as_slice(), &[("other.tif".to_string(), asked("lzw", None, false, true))]);
+}
+
+/// OK writes the waiting document with its own save settings, even after another tab became
+/// active: its path is what linked smart objects resolve against.
+#[test]
+fn confirm_uses_the_waiting_documents_settings_not_the_active_tabs() {
+    let _gpu = photocraft_testkit::gpu_lock();
+    let (mut h, _) = tiff_app("white", "unused.tif");
+    let seen: Rc<RefCell<Vec<Option<std::path::PathBuf>>>> = Rc::default();
+    let saw = seen.clone();
+    h.state_mut().services.export = Some(Box::new(move |_, _, s| {
+        saw.borrow_mut().push(s.document_path.clone());
+        Ok((Vec::new(), Vec::new()))
+    }));
+    h.state_mut().save_as(Some("a.tif".into())).unwrap();
+    h.run_steps(4);
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    let a = h.state().active_doc_id().unwrap();
+    assert_eq!(h.state().session.active().unwrap().path.as_deref(), Some("a.tif"));
+    h.state_mut().run("file.new", json!({"width": 8, "height": 8, "background": "white"})).unwrap();
+    h.state_mut().sync_views();
+    let b = h.state().active_doc_id().unwrap();
+    h.state_mut().refocus(a).unwrap();
+    h.state_mut().save_as(Some("b.tif".into())).unwrap();
+    h.run_steps(4);
+    assert!(h.state().tiff_options.is_some());
+    h.state_mut().refocus(b).unwrap();
+    seen.borrow_mut().clear();
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert_eq!(seen.borrow().as_slice(), &[Some(std::path::PathBuf::from("a.tif"))]);
+}
+
 /// Scripted saves that pass TIFF answers skip the prompt; a bad one is an error, not a save.
 #[test]
 fn scripted_tiff_answers_skip_the_prompt() {

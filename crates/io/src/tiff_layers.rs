@@ -349,8 +349,10 @@ pub(crate) fn export_layered(doc: &Document, opts: &ExportOptions, ctl: &photocr
     }
     // Past MAX_EXTRA_SAMPLES the TIFF stores only the first `kept` channels: the name and
     // DisplayInfo resources describe just those, and a Quick Mask among the rest is dropped.
+    // With the transparency written, those lists hold it ahead of the channels, and the
+    // channels sit one sample later in the IFD.
     if extra_n > kept {
-        keep_first_channels(&mut resources, kept, cc);
+        keep_first_channels(&mut resources, kept + usize::from(write_alpha), cc);
     }
     let resources = resources_to_bytes(&resources)?;
     let ifd_channels = cc + usize::from(write_alpha);
@@ -714,7 +716,11 @@ fn matte_and_drop_alpha(img: &mut Image) -> bool {
     let white_f: f32 = if cmyk { 0.0 } else { 1.0 };
     // Lab's white is L* 100 with a* and b* 0, which PhotoCraft holds mid-range (`(0 + 128) / 255`).
     let lab = img.layout().is_lab();
-    let mut out = Vec::with_capacity(img.data().len() / stride * keep);
+    // Out of memory keeps the transparency (the caller warns) rather than aborting the app.
+    let mut out = Vec::new();
+    if out.try_reserve_exact(img.data().len() / stride * keep).is_err() {
+        return false;
+    }
     for px in img.data().chunks_exact(stride) {
         let Some(color) = px.get(..keep) else { return false };
         let Some(alpha) = px.get(keep..keep.saturating_add(bps)) else { return false };
