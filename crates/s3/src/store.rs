@@ -120,7 +120,7 @@ fn key(pool: &str, document: &str, path: &str) -> String {
 
 /// Stores one object unless the pool already has it.
 fn upload(client: &Client, pool: &str, object: &BundleObject<'_>) -> Result<Stored> {
-    match client.put(&format!("{pool}{}", object.path()), &object.compressed(), Condition::IfAbsent)? {
+    match client.put(&format!("{pool}{}", object.path()), &object.compressed()?, Condition::IfAbsent)? {
         Put::Done { .. } => Ok(Stored::Written),
         Put::PreconditionFailed => Ok(Stored::Reused),
         Put::Conflicting => Err(io_error(format!("S3 PUT `{}`: another upload of it was in progress; save again", object.path()))),
