@@ -221,7 +221,10 @@ fn recorded_scripted_plain_save_of_a_tiff_has_no_path() {
     h.run_steps(3);
     assert!(h.state().tiff_options.is_none(), "the script answered");
     h.state_mut().run("actions.stop", json!({})).unwrap();
-    assert_eq!(h.state().session.actions.list[0].steps, [("file.save".into(), json!({"tiffCompression": "lzw", "tiffTransparency": false, "tiffPyramid": true}))]);
+    assert_eq!(
+        h.state().session.actions.list[0].steps,
+        [("file.save".into(), json!({"tiffCompression": "lzw", "tiffTransparency": false, "tiffPyramid": true}))]
+    );
     crate::menus::invoke(h.state_mut(), &ctx, "file.saveAs", json!({"path": "other.tif", "tiffCompression": "none"})).unwrap();
     writes.borrow_mut().clear();
     let played = h.state_mut().run("actions.play", json!({"action": 0})).unwrap();
