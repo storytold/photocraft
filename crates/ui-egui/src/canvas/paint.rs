@@ -6,7 +6,7 @@ use super::gesture::constrained_polygon_point;
 use super::strokes::{EngineStroke, SPOT_HEALING_TRAIL, draw_smoothing_string, strokes_live};
 use super::textures::texture_side;
 use super::view_xform::ViewXform;
-use super::*;
+use super::{Color32, DRect, Document, Mesh, PhotocraftApp, Pos2, Rect, Stroke, TextureOptions, Tool, json, pos2, vec2};
 
 /// A texture mapped over the `size` document area starting at `origin` (follows a rotated view).
 pub(super) fn paint_mapped_image_at(painter: &egui::Painter, xf: &ViewXform, tex: egui::TextureId, uv: Rect, origin: [f32; 2], size: [f32; 2], tint: Color32) {
@@ -140,7 +140,13 @@ fn paint_mapped_quad(painter: &egui::Painter, xf: &ViewXform, origin: [f32; 2], 
 
 /// Draw boundary segments as marching ants: white base, black dashes phased along x + y.
 pub(super) fn marching_ants_segments(painter: &egui::Painter, xf: &ViewXform, segs: &[crate::outline::Segment], time: f64) {
-    marching_ants_mapped(painter, segs, time, |p| xf.to_screen(p[0] as f32, p[1] as f32));
+    painter.extend(marching_ants_segment_shapes(painter, xf, segs, time));
+}
+
+/// [`marching_ants_segments`] as shapes, not yet drawn (`ants::shapes_for`).
+pub(super) fn marching_ants_segment_shapes(painter: &egui::Painter, xf: &ViewXform, segs: &[crate::outline::Segment], time: f64) -> Vec<egui::Shape> {
+    let lines = segs.iter().map(|(a, b)| (xf.to_screen(a[0] as f32, a[1] as f32), xf.to_screen(b[0] as f32, b[1] as f32)));
+    marching_ants_line_shapes(painter, lines, time)
 }
 
 /// [`marching_ants_segments`] with each outline point placed on screen by `to_screen` (a
@@ -175,6 +181,11 @@ pub(crate) fn clip_line(r: Rect, a: Pos2, b: Pos2) -> Option<(Pos2, Pos2)> {
 /// in device pixels like Photoshop's (`crate::ants`, #7489).
 pub(crate) fn marching_ants_lines(painter: &egui::Painter, lines: impl Iterator<Item = (Pos2, Pos2)>, time: f64) {
     crate::ants::draw(painter, lines, time, true);
+}
+
+/// [`marching_ants_lines`] as shapes, not yet drawn (`ants::shapes_for`).
+pub(crate) fn marching_ants_line_shapes(painter: &egui::Painter, lines: impl Iterator<Item = (Pos2, Pos2)>, time: f64) -> Vec<egui::Shape> {
+    crate::ants::shapes_for(painter, lines, time, true)
 }
 
 /// Photoshop crop overlay: the `shield` outside (`crop_shield::fill`; none when disabled), bright
@@ -528,11 +539,16 @@ pub(super) fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter
             let size = [st.doc.size.width, st.doc.size.height];
             let doc_rect = xf.doc_rect(st.doc.bounds());
             let trail = app.trail.get_or_insert_with(|| crate::stroke_trail::Trail::new(size));
-            if t == Tool::SpotHealing {
-                // What the heal covers, dab by dab: soft edges, pressure and shape dynamics (#2364).
-                trail.feed_dabs(&d.points, || photocraft_engine::retouch_cmds::stroke_brush(&app.session.tools.brush, &json!({})));
-            } else {
-                trail.feed(&d.points, app.session.tools.brush.size);
+            let brush = || photocraft_engine::retouch_cmds::stroke_brush(&app.session.tools.brush, &json!({}));
+            match t {
+                // Quick Selection reads the brush's size alone (`select.quick`).
+                Tool::QuickSelection => trail.feed(&d.points, app.session.tools.brush.size),
+                // Remove removes every pixel a dab touches, so its whole reach is tinted: a soft
+                // tip's reaches well past the nominal radius.
+                Tool::Remove => trail.feed_reach(&d.points, brush),
+                // What the stroke covers, dab by dab: soft edges, pressure and shape dynamics
+                // (Spot Healing #2364; the Mixer Brush, and a tool whose live stroke didn't start).
+                _ => trail.feed_dabs(&d.points, brush),
             }
             trail.draw(painter, doc_rect, xf.flip, col);
         }

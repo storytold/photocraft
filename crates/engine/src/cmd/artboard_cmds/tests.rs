@@ -400,6 +400,116 @@ fn red_at(s: &Session, x: i32, y: i32) -> bool {
     px[0] > 0.99 && px[1] < 0.01 && px[3] > 0.99
 }
 
+fn content(s: &Session, id: LayerId) -> Rect {
+    doc(s).layer(id).unwrap().surface().unwrap().content_bounds()
+}
+
+/// Board "A" at (10, 10, 50, 50) holding a red square at (10..30)², and an empty board "B" at
+/// (200, 20, 240, 60), so B's origin is (190, 10) from A's.
+fn two_boards(s: &mut Session) -> (LayerId, LayerId, LayerId) {
+    let red = add_square(s, Rect::new(10, 10, 30, 30), [1.0, 0.0, 0.0, 1.0]);
+    let a = LayerId(s.execute("layer.new.artboardFromLayers", json!({"name": "A"})).unwrap()["layer"].as_u64().unwrap());
+    s.execute("layer.artboard.set", json!({"width": 40, "height": 40})).unwrap();
+    let b = LayerId(s.execute("layer.new.artboard", json!({"rect": [200, 20, 40, 40], "name": "B"})).unwrap()["layer"].as_u64().unwrap());
+    assert_eq!(doc(s).artboard_of(red), Some(a));
+    (red, a, b)
+}
+
+/// Dragging a layer from one artboard onto another in the Layers panel (`layer.moveTo`) put it in
+/// the other board's group but left it at its old canvas position, outside the board it now
+/// belonged to, so the board clipped it away until it was moved by hand. The layer keeps its place
+/// on its board instead: it shifts by the offset between the two boards' origins.
+#[test]
+fn moving_a_layer_to_another_artboard_keeps_its_place_on_the_board() {
+    for depth in [8, 16, 32] {
+        let mut s = session(depth);
+        let (red, a, b) = two_boards(&mut s);
+        let steps = s.active().unwrap().history.past_len();
+
+        s.execute("layer.moveTo", json!({"layer": red.0, "target": b.0, "position": "into"})).unwrap();
+        assert_eq!(doc(&s).artboard_of(red), Some(b), "{depth}");
+        assert_eq!(content(&s, red), Rect::new(200, 20, 220, 40), "{depth}: same spot on board B");
+        assert!(red_at(&s, 205, 25), "{depth}: shows on board B");
+        assert!(!red_at(&s, 15, 15), "{depth}: and has left board A");
+        assert_eq!(s.active().unwrap().history.past_len(), steps + 1, "{depth}: one undo step for the move and the shift");
+
+        // Back again: the reverse offset.
+        s.execute("layer.moveTo", json!({"layer": red.0, "target": a.0, "position": "into"})).unwrap();
+        assert_eq!(doc(&s).artboard_of(red), Some(a), "{depth}");
+        assert_eq!(content(&s, red), Rect::new(10, 10, 30, 30), "{depth}");
+        assert!(red_at(&s, 15, 15), "{depth}");
+
+        // Undo takes the layer and its shift back together.
+        s.undo();
+        assert_eq!(doc(&s).artboard_of(red), Some(b), "{depth}");
+        assert_eq!(content(&s, red), Rect::new(200, 20, 220, 40), "{depth}");
+    }
+}
+
+/// ⌥-dragging a layer onto another board: the copy lands in place on that board, the original stays.
+#[test]
+fn copying_a_layer_to_another_artboard_keeps_its_place_on_the_board() {
+    let mut s = session(8);
+    let (red, a, b) = two_boards(&mut s);
+    let r = s.execute("layer.moveTo", json!({"layer": red.0, "target": b.0, "position": "into", "copy": true})).unwrap();
+    let copy = LayerId(r["layer"].as_u64().unwrap());
+    assert_eq!(doc(&s).artboard_of(copy), Some(b));
+    assert_eq!(content(&s, copy), Rect::new(200, 20, 220, 40));
+    assert_eq!(doc(&s).artboard_of(red), Some(a));
+    assert_eq!(content(&s, red), Rect::new(10, 10, 30, 30), "the original stays put");
+    assert!(red_at(&s, 15, 15) && red_at(&s, 205, 25));
+}
+
+/// Only a layer going from one board to another is shifted: one reordered inside its own board,
+/// or taken out of every board, or put into one from outside, keeps its canvas position as before.
+#[test]
+fn only_a_move_between_two_artboards_shifts_the_layer() {
+    let mut s = session(8);
+    let (red, a, b) = two_boards(&mut s);
+    // Out to the top level (above board B): no board on either side of the shift.
+    s.execute("layer.moveTo", json!({"layer": red.0, "target": b.0, "position": "above"})).unwrap();
+    assert_eq!(doc(&s).artboard_of(red), None);
+    assert_eq!(content(&s, red), Rect::new(10, 10, 30, 30));
+    // And in from outside any board: nothing says where it belongs on the board, so it stays.
+    s.execute("layer.moveTo", json!({"layer": red.0, "target": b.0, "position": "into"})).unwrap();
+    assert_eq!(doc(&s).artboard_of(red), Some(b));
+    assert_eq!(content(&s, red), Rect::new(10, 10, 30, 30));
+    // Dropped back on its own board's group: still the same board, so no shift.
+    s.execute("layer.moveTo", json!({"layer": red.0, "target": b.0, "position": "into"})).unwrap();
+    assert_eq!(content(&s, red), Rect::new(10, 10, 30, 30));
+    // Moving a board beside another carries its own rect, as before.
+    let before = doc(&s).layer(a).unwrap().artboard().unwrap().rect;
+    s.execute("layer.moveTo", json!({"layer": a.0, "target": b.0, "position": "above"})).unwrap();
+    assert_eq!(doc(&s).layer(a).unwrap().artboard().unwrap().rect, before);
+}
+
+/// A position-locked layer is not moved by a drag between boards (it still changes parent).
+#[test]
+fn a_position_locked_layer_keeps_its_canvas_position_between_artboards() {
+    let mut s = session(8);
+    let (red, _a, b) = two_boards(&mut s);
+    s.execute("layer.select", json!({"layer": red.0})).unwrap();
+    s.execute("layer.lockLayers", json!({"position": true})).unwrap();
+    s.execute("layer.moveTo", json!({"layer": red.0, "target": b.0, "position": "into"})).unwrap();
+    assert_eq!(doc(&s).artboard_of(red), Some(b));
+    assert_eq!(content(&s, red), Rect::new(10, 10, 30, 30));
+}
+
+/// A layer whose position is locked only through the board it leaves (the lock is on the board,
+/// not the layer) is not moved either: it was locked when the drag began (#10489 review).
+#[test]
+fn a_layer_locked_through_its_board_keeps_its_canvas_position_between_artboards() {
+    let mut s = session(8);
+    let (red, a, b) = two_boards(&mut s);
+    s.execute("layer.select", json!({"layer": a.0})).unwrap();
+    s.execute("layer.lockLayers", json!({"position": true})).unwrap();
+    assert!(!doc(&s).layer(red).unwrap().locks.position, "the layer itself is unlocked");
+    assert!(doc(&s).effective_locks(red).position, "but locked through its board");
+    s.execute("layer.moveTo", json!({"layer": red.0, "target": b.0, "position": "into"})).unwrap();
+    assert_eq!(doc(&s).artboard_of(red), Some(b));
+    assert_eq!(content(&s, red), Rect::new(10, 10, 30, 30));
+}
+
 #[test]
 fn duplicate_artboard_lands_beside_the_original_with_its_contents() {
     // #1531: the copy sat exactly on the original, so nothing visible happened.
@@ -689,4 +799,44 @@ fn new_document_with_an_artboard() {
     s.execute("file.new", json!({"width": 20, "height": 10, "artboard": false})).unwrap();
     assert!(doc(&s).artboards().is_empty());
     assert!(s.execute("file.new", json!({"artboard": "yes"})).is_err());
+}
+
+/// #9087: Artboard from Layers takes a size of the user's own, from the layers' top left; 0 or
+/// none keeps their bounds on that axis, and a negative size is refused.
+#[test]
+fn artboard_from_layers_takes_a_custom_size() {
+    for (params, want) in [
+        (json!({"width": 108, "height": 135}), [10, 10, 108, 135]),
+        (json!({"width": 0, "height": 0}), [10, 10, 20, 20]),
+        (json!({"width": 60}), [10, 10, 60, 20]),
+    ] {
+        let mut s = session(8);
+        add_square(&mut s, Rect::new(10, 10, 30, 30), [1.0, 0.0, 0.0, 1.0]);
+        let r = s.execute("layer.new.artboardFromLayers", params.clone()).unwrap();
+        assert_eq!(r["rect"], json!(want), "{params}");
+    }
+    let mut s = session(8);
+    add_square(&mut s, Rect::new(10, 10, 30, 30), [1.0, 0.0, 0.0, 1.0]);
+    assert!(s.execute("layer.new.artboardFromLayers", json!({"width": -5})).is_err());
+    // `int` rounds -0.4 to 0, which would otherwise keep the bounds.
+    assert!(s.execute("layer.new.artboardFromLayers", json!({"height": -0.4})).is_err());
+    assert!(doc(&s).artboards().is_empty(), "a refused size changes nothing");
+    assert_eq!(s.execute("layer.new.artboardFromLayers", json!({"name": ""})).unwrap()["rect"], json!([10, 10, 20, 20]));
+    assert_eq!(doc(&s).artboards()[0].1, "Artboard 1", "an empty name gives Artboard N");
+}
+
+/// The dialog's defaults (#9087): the selected layers' size and the board's name, as the command
+/// makes it with no size; the canvas when the layers have no pixels.
+#[test]
+fn from_layers_defaults_are_the_selected_layers_size() {
+    let mut s = session(8);
+    add_square(&mut s, Rect::new(10, 10, 30, 40), [1.0, 0.0, 0.0, 1.0]);
+    assert_eq!(from_layers_defaults(&s), Some(("Artboard 1".to_string(), [20, 30])));
+    s.execute("layer.new.artboardFromLayers", json!({})).unwrap();
+    add_square(&mut s, Rect::new(50, 5, 60, 10), [1.0, 0.0, 0.0, 1.0]);
+    assert_eq!(from_layers_defaults(&s), Some(("Artboard 2".to_string(), [10, 5])));
+    let mut s = session(8);
+    s.execute("layer.new.layer", json!({})).unwrap();
+    assert_eq!(from_layers_defaults(&s), Some(("Artboard 1".to_string(), [100, 80])), "an empty layer: the canvas");
+    assert_eq!(from_layers_defaults(&Session::new()), None);
 }
