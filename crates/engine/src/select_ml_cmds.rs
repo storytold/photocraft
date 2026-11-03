@@ -118,6 +118,9 @@ struct Plan {
     fill_holes: bool,
     /// …and soften its edge with a feather of this radius.
     soften: f32,
+    /// A single click's other meaning (`candidate`): SAM's three answers to one point, the best
+    /// first (0, the default) then the other two largest first (whole person, shirt, pocket).
+    candidate: Option<u32>,
 }
 
 /// Most pixels a detector mask may be widened or shrunk by.
@@ -271,7 +274,12 @@ fn plan(s: &Session, cmd: &str, p: &Value) -> Result<Plan> {
     let grow = opt_num(cmd, p, "grow", -MAX_GROW, MAX_GROW)?.unwrap_or(0.0) as f32;
     let fill_holes = opt_bool(cmd, p, "fillHoles", false)?;
     let soften = opt_num(cmd, p, "soften", 0.0, MAX_SOFTEN)?.unwrap_or(0.0) as f32;
-    Ok(Plan { common, mode, instance, threshold, all_layers, points, negatives, bbox, refine, probe, grow, fill_holes, soften })
+    let candidate = match opt_num(cmd, p, "candidate", 0.0, 2.0)? {
+        None => None,
+        Some(x) if x.fract() == 0.0 => Some(x as u32),
+        Some(_) => return Err(bad(cmd, "`candidate` must be 0, 1 or 2")),
+    };
+    Ok(Plan { common, mode, instance, threshold, all_layers, points, negatives, bbox, refine, probe, grow, fill_holes, soften, candidate })
 }
 
 /// Bounding box of the pixels with coverage ≥ 0.5, in document coordinates, and their count.
@@ -327,6 +335,8 @@ struct Prompting {
     bbox: Option<Rect>,
     /// How many instances the detector may return (none: its default, one).
     max_detections: Option<usize>,
+    /// A single click's other meaning ([`Plan::candidate`]).
+    candidate: Option<u32>,
 }
 
 /// Ask the detector: the masks it returned, at the request size.
@@ -361,6 +371,9 @@ fn detect(
     }
     if pr.declared.contains("negatives") {
         params.insert("negatives".to_string(), Value::String(scaled(&pr.negatives)));
+    }
+    if let Some(c) = pr.candidate.filter(|_| pr.points.len() + pr.negatives.len() == 1) {
+        params.insert("candidate".to_string(), json!(c));
     }
     if let Some(b) = pr.bbox.filter(|_| pr.declared.contains("bx")) {
         let x0 = (f64::from(b.x0) * sx).floor().clamp(0.0, f64::from(rw.saturating_sub(2)));
@@ -524,6 +537,7 @@ fn prompting(plan: &Plan) -> Prompting {
         negatives: plan.negatives.clone(),
         bbox: plan.bbox,
         max_detections: None,
+        candidate: plan.candidate,
     }
 }
 
@@ -542,7 +556,7 @@ fn probe_coverage(s: &Session, id: u64) -> Option<Vec<f32>> {
 fn run_select(s: &mut Session, cmd: &str, p: &Value, label_prefix: &str) -> Result<Value> {
     let plan = plan(s, cmd, p)?;
     // A kept probe: the click applies what the hover found, no server round trip.
-    if let Some(cov) = plan.probe.and_then(|id| probe_coverage(s, id)) {
+    if let Some(cov) = plan.probe.filter(|_| plan.candidate.is_none()).and_then(|id| probe_coverage(s, id)) {
         let Plan { mode, all_layers, refine, grow, fill_holes, soften, .. } = plan;
         let (bounds, count, selected) = s.edit(label_prefix, |doc, active| {
             let area = doc.bounds();
@@ -771,6 +785,7 @@ fn prompting_for(s: &Session, cmd: &str, template: &str, prompt: &str) -> Option
         negatives: Vec::new(),
         bbox: None,
         max_detections: None,
+        candidate: None,
     };
     Some((backend, server, prompting))
 }
@@ -930,7 +945,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Select by Point",
             menu: &[],
             shortcut: None,
-            params: r#"{"x":int?,"y":int?,"points":[[x,y]]?,"negativePoints":[[x,y]]?,"box":[x,y,w,h]?,"mode":"replace|add|subtract|intersect","threshold":0..1=0.5,"sampleAllLayers":bool=true,"refine":bool=false,"grow":-256..256=0,"fillHoles":bool=false,"soften":0..64=0,"probe":{u64?},"template":{id?="sam3.1/segment-point", "sam3.1/segment-box" with a box},"model":{file?}} → {"selected","count","instances":[{"index","bounds":[x,y,w,h],"pixels"}],"ms","probe"?} (the object under the point(s) (x/y or points, up to 64), kept clear of negativePoints and searched for inside box, through SAM 3.1's prompts; probe = apply a mask select.probe kept for this document instead of asking the server (stale or unknown probes are ignored and the server asked); refine softens the hard edge; grow widens the mask by that many pixels (negative shrinks it), fillHoles fills the gaps it encloses, soften feathers its edge, in that order; a background job; needs the native worker with the SAM 3.1 checkpoint)"#,
+            params: r#"{"x":int?,"y":int?,"points":[[x,y]]?,"negativePoints":[[x,y]]?,"box":[x,y,w,h]?,"mode":"replace|add|subtract|intersect","threshold":0..1=0.5,"sampleAllLayers":bool=true,"refine":bool=false,"grow":-256..256=0,"fillHoles":bool=false,"soften":0..64=0,"candidate":{0..2?},"probe":{u64?},"template":{id?="sam3.1/segment-point", "sam3.1/segment-box" with a box},"model":{file?}} → {"selected","count","instances":[{"index","bounds":[x,y,w,h],"pixels"}],"ms","probe"?} (the object under the point(s) (x/y or points, up to 64), kept clear of negativePoints and searched for inside box, through SAM 3.1's prompts; candidate = a single click's other meanings: SAM's three answers to one point, 0 the best (the default), then the other two largest first (the whole person, the shirt, the pocket), the Object Selection tool's Next Match (Tab); probe = apply a mask select.probe kept for this document instead of asking the server (stale or unknown probes are ignored and the server asked); refine softens the hard edge; grow widens the mask by that many pixels (negative shrinks it), fillHoles fills the gaps it encloses, soften feathers its edge, in that order; a background job; needs the native worker with the SAM 3.1 checkpoint)"#,
             enabled,
             run: run_by_point,
             journal: true,
