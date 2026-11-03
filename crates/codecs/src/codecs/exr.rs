@@ -339,7 +339,7 @@ fn stage_image(mut image: Image, header: &exr::meta::header::Header) -> Result<I
     let (dw, dh, dx, dy, staged) = part_canvas(header, w as usize, h as usize)?;
     let sx = i64::from(header.own_attributes.layer_position.0);
     let sy = i64::from(header.own_attributes.layer_position.1);
-    if !staged || (dw == w as u32 && dh == h as u32 && sx == dx && sy == dy) {
+    if !staged || (dw == w && dh == h && sx == dx && sy == dy) {
         return Ok(image);
     }
     let ex = dx.checked_add(i64::from(dw)).ok_or_else(|| err("EXR display-window x bound overflows"))?;
