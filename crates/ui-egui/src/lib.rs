@@ -888,6 +888,8 @@ mod status_bar_tests;
 mod stroke_timing_tests;
 
 #[cfg(test)]
+mod arrange_click_tests;
+#[cfg(test)]
 mod polygon_lasso_tests;
 
 #[cfg(test)]

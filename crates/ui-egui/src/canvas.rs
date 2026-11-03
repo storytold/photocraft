@@ -1907,8 +1907,9 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     // Under an open dialog the canvas widget is inert, but the image still pans and zooms.
     let under_dialog = !app.ui.dialogs.is_empty();
     let free_hover = under_dialog && crate::dialogs::free_pointer_over(&ctx, rect).is_some();
-    // A press on the canvas while a tool letter is held makes that tool temporary (#2672).
-    if !under_dialog && ctx.input(|i| i.pointer.any_pressed() && i.pointer.interact_pos().is_some_and(|p| rect.contains(p))) {
+    // A press on the canvas while a tool letter is held makes that tool temporary (#2672). A
+    // press on a menu or popup over it isn't one (#11010).
+    if !under_dialog && ctx.input(|i| i.pointer.any_pressed()) && ui.rect_contains_pointer(rect) {
         crate::spring_tools::note_canvas_press(app);
     }
     let bars_id = egui::Id::unique(("pc-canvas-bars-hover", idx));
