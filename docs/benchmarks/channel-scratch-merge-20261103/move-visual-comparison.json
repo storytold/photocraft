@@ -1,0 +1,56 @@
+[
+  {
+    "case": "channel-cpu.png",
+    "size": [
+      1000,
+      700
+    ],
+    "identical": true,
+    "maximum_difference": 0
+  },
+  {
+    "case": "channel-gpu.png",
+    "size": [
+      1000,
+      700
+    ],
+    "identical": true,
+    "maximum_difference": 0
+  },
+  {
+    "case": "set-cpu.png",
+    "size": [
+      1000,
+      700
+    ],
+    "identical": true,
+    "maximum_difference": 0
+  },
+  {
+    "case": "set-gpu.png",
+    "size": [
+      1000,
+      700
+    ],
+    "identical": true,
+    "maximum_difference": 0
+  },
+  {
+    "case": "whole-cpu.png",
+    "size": [
+      1000,
+      700
+    ],
+    "identical": true,
+    "maximum_difference": 0
+  },
+  {
+    "case": "whole-gpu.png",
+    "size": [
+      1000,
+      700
+    ],
+    "identical": true,
+    "maximum_difference": 0
+  }
+]

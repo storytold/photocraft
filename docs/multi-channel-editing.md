@@ -545,3 +545,65 @@ The regression restores the file without manually reloading tiles and exercises 
 sample depths, an interior scalar proxy tile, off-canvas RGB samples and subsequent Move
 damage rectangles. The test runs in an isolated process because scratch configuration is
 process-wide.
+
+
+### Scratch merge measurements, 2026-11-03
+
+The reviewed pre-merge build `e5e5f49a6` was compared with tested code `d2db062b3`,
+which includes main `655295b2a` and the scratch integration. Both use the identical
+release harnesses, a synthetic 24 MP RGB8 document, completed 1000 × 700 offscreen
+frames, software Vulkan llvmpipe and two Rayon/software-renderer workers. These
+measurements include all merged upstream changes; they do not isolate the cost of
+the integration guards or compare against bare main. No physical GPU was used.
+
+An initial two-component Move increase was repeated with all three accelerated
+Move cases and their whole-layer control. CPU transforms were also repeated with
+all targets and the composite control. No samples were excluded: Move has nine
+processes per build/target in accelerated mode (81 warm frames) and three in CPU
+mode (27 frames); Transform has three accelerated processes (27 frames per geometry)
+and six CPU processes (54 frames). Build order alternates, and confirmation Move
+cases rotate within each round. Builds and tests were idle while timing.
+
+| Move path | Before p50 / p95, ms | After p50 / p95, ms | p50 change |
+|---|---:|---:|---:|
+| One channel / GPU enabled | 19.83 / 24.48 | 20.02 / 24.49 | +1.0% |
+| Red + Blue / GPU enabled | 19.62 / 24.15 | 20.14 / 24.25 | +2.6% |
+| Whole-layer control / GPU enabled | 335.75 / 371.66 | 332.85 / 378.16 | -0.9% |
+| One channel / CPU preview | 153.19 / 167.32 | 160.83 / 178.01 | +5.0% |
+| Red + Blue / CPU preview | 207.40 / 219.22 | 214.78 / 228.97 | +3.6% |
+| Whole-layer control / CPU preview | 128.34 / 138.52 | 135.11 / 141.71 | +5.3% |
+
+Transform medians follow; Warp uses the harness's 1 × 1 affine-patch deformation.
+Tail values and every raw frame are in the linked summaries.
+
+| Target / preview renderer | Affine before → after, ms | Warp before → after, ms |
+|---|---:|---:|
+| Composite control / GPU enabled | 12.77 → 12.46 | 17.74 → 17.59 |
+| Red, all visible / GPU enabled | 21.53 → 21.47 | 57.72 → 58.10 |
+| Red only / GPU enabled | 21.05 → 20.83 | 57.65 → 57.47 |
+| Red + Blue, all visible / GPU enabled | 21.38 → 21.25 | 65.18 → 65.34 |
+| Red + Blue only / GPU enabled | 21.58 → 21.64 | 65.34 → 65.28 |
+| Composite control / CPU | 11.75 → 11.96 | 16.45 → 16.57 |
+| Red, all visible / CPU | 75.67 → 76.84 | 94.67 → 106.80 |
+| Red only / CPU | 107.80 → 109.17 | 128.59 → 139.78 |
+| Red + Blue, all visible / CPU | 127.40 → 131.91 | 168.94 → 190.31 |
+| Red + Blue only / CPU | 172.07 → 176.18 | 212.80 → 236.69 |
+
+Accelerated channel Transform medians changed by at most 1.1%, and accelerated
+channel Move by +1.0% / +2.6%. CPU Move changes (+3.6% to +5.0%) were similar to
+the whole-layer control (+5.3%). CPU channel Warp remained 8.7% to 12.8% slower
+after the main merge, including the confirmation runs; this is an observed
+fallback limitation, not an unchanged-performance claim. These software-renderer
+runs do not establish a hardware-GPU guarantee or statistical equivalence.
+
+All six Move and ten Warp before/after screenshots were byte-identical within
+each renderer; representative screenshots were inspected. The final quick
+performance gate passed with no enforced failures and was uncontended. Its
+automatic regression comparison was skipped because the committed baseline is
+from another machine; non-enforced budget overruns remain in that report.
+
+[Environment, commands and quick-gate provenance](benchmarks/channel-scratch-merge-20261103/environment.json),
+[Move summary](benchmarks/channel-scratch-merge-20261103/move-summary.json),
+[Move raw frames](benchmarks/channel-scratch-merge-20261103/move-samples.json),
+[Transform summary](benchmarks/channel-scratch-merge-20261103/transform-summary.json),
+[Transform raw frames](benchmarks/channel-scratch-merge-20261103/transform-samples.json).

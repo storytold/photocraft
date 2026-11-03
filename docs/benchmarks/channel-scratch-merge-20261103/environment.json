@@ -1,0 +1,63 @@
+{
+  "date": "2026-11-03",
+  "before_code": "e5e5f49a6cc6694545a5dc9fbe162463ce7974f0",
+  "after_code": "d2db062b3ea5b0a82a6297f7fee671d57100623b",
+  "merged_main": "655295b2a2c400bded0640f5d97367000a057b2e",
+  "cpu": "AMD Ryzen 7 9700X",
+  "adapter": "Vulkan llvmpipe (software only)",
+  "rayon_workers": 2,
+  "software_gpu_workers": 2,
+  "compiler": "rustc 1.99.0 (b940084d7 2026-09-28)",
+  "profile": "release, thin LTO, one codegen unit",
+  "scope": "Main integration compared with reviewed pre-merge feature build; not a comparison against bare upstream main or physical GPU.",
+  "fixture": "6000x4000 RGB8; 1000x700 completed offscreen frames",
+  "move": "9 interleaved processes/build/target for shader mode, 3 for CPU mode; 9 warm frames/process, step 21; one component, Red+Blue, whole-layer control",
+  "transform": "3 interleaved processes/build for shader mode, 6 for CPU mode; 9 warm frames/target/geometry; composite, Red all visible, Red-only, Red+Blue all visible, Red+Blue-only; affine and 1x1 affine-patch Warp",
+  "p95": "sorted[floor(0.95*(n-1))]",
+  "confirmation_reason": "Initial two-component shader Move and CPU Warp timings rose. All shader Move cases and all CPU transform cases, including whole-layer controls, were repeated; initial and confirmation samples are retained.",
+  "commands": [
+    "cargo +1.99.0 build --release -p photocraft-ui-egui --example channel_move_gpu_bench --example channel_transform_gpu_bench",
+    "env RAYON_NUM_THREADS=2 LP_NUM_THREADS=2 WGPU_BACKEND=vulkan VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json LIBGL_ALWAYS_SOFTWARE=1 GALLIUM_DRIVER=llvmpipe __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json __GLX_VENDOR_LIBRARY_NAME=mesa target/release/examples/channel_move_gpu_bench --step 21 [--set | --whole] [--cpu]",
+    "env RAYON_NUM_THREADS=2 LP_NUM_THREADS=2 WGPU_BACKEND=vulkan VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json LIBGL_ALWAYS_SOFTWARE=1 GALLIUM_DRIVER=llvmpipe __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json __GLX_VENDOR_LIBRARY_NAME=mesa target/release/examples/channel_transform_gpu_bench --sets [--cpu]"
+  ],
+  "harness_sha256": {
+    "crates/ui-egui/examples/channel_move_gpu_bench.rs": "6cc17cedfe96dcd3e66527500f4269d143a54671903a3c80eccadda0d6d6ccf0",
+    "crates/ui-egui/examples/channel_transform_gpu_bench.rs": "305f6f5f051bd7fa2773ae1030a51872814392528f90d2c7a23b11cc3916fb07"
+  },
+  "quick_gate": {
+    "commit": "d2db062b3ea5b0a82a6297f7fee671d57100623b",
+    "dirty": false,
+    "contended": false,
+    "failures": [],
+    "baseline_note": "baseline is from machine class `macos-aarch64-apple-m4-pro-apple-m4-pro`, this is `linux-x86-64-amd-ryzen-7-9700x-8-core-processor-llvmpipe-llvm-21-1-8-256-bits`: regression check skipped",
+    "mode": "quick",
+    "load_avg_start": [
+      3.25,
+      3.48,
+      3.29
+    ],
+    "load_avg_end": [
+      4.08,
+      3.72,
+      3.42
+    ]
+  },
+  "runtime_environment": {
+    "RAYON_NUM_THREADS": "2",
+    "LP_NUM_THREADS": "2",
+    "WGPU_BACKEND": "vulkan",
+    "VK_DRIVER_FILES": "/usr/share/vulkan/icd.d/lvp_icd.json",
+    "VK_ICD_FILENAMES": "/usr/share/vulkan/icd.d/lvp_icd.json",
+    "LIBGL_ALWAYS_SOFTWARE": "1",
+    "GALLIUM_DRIVER": "llvmpipe",
+    "__EGL_VENDOR_LIBRARY_FILENAMES": "/usr/share/glvnd/egl_vendor.d/50_mesa.json",
+    "__GLX_VENDOR_LIBRARY_NAME": "mesa"
+  },
+  "runtime_environment_note": "Actual Ubuntu/Mesa paths used in every timing process; other distributions must point the Vulkan and EGL variables at their installed software driver manifests.",
+  "build_environment": {
+    "CARGO_BUILD_JOBS": "1",
+    "CARGO_INCREMENTAL": "0",
+    "CRAFT_FONTS_REQUIRED": "1",
+    "CRAFT_FONTS_DIR": "A populated craft-fonts checkout, shared by both builds; see docs/development.md, Fonts."
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "before_head": "e5e5f49a6cc6694545a5dc9fbe162463ce7974f0",
+  "after_head": "d2db062b3ea5b0a82a6297f7fee671d57100623b",
+  "binaries": {
+    "before": "0a14170771497f241f4d73c258670881c566173d2daa7bc066610f70155a2c75",
+    "after": "cab8bc166747e8cba594e7118afdcf6558dcc2ed3afbb626f989e1c43f6af155"
+  },
+  "initial_fixture": "24MP RGB8; 1000x700 completed offscreen frames; software Vulkan llvmpipe; 2 Rayon/software GPU workers; 3 before/after interleaved processes each CPU/GPU; 9 frames per affine/Warp geometry per5targets; 1080 raw frames",
+  "confirmation": "Move shader cases: six additional interleaved pairs, rotating case order. Transform CPU cases: three additional interleaved pairs, alternating build order. Both phases retained without sample exclusion."
+}

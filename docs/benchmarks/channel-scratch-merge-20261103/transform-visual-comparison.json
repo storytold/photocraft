@@ -1,0 +1,92 @@
+[
+  {
+    "case": "cpu-composite-warp.png",
+    "size": [
+      1000,
+      700
+    ],
+    "identical": true,
+    "maximum_difference": 0
+  },
+  {
+    "case": "cpu-red-all-visible-warp.png",
+    "size": [
+      1000,
+      700
+    ],
+    "identical": true,
+    "maximum_difference": 0
+  },
+  {
+    "case": "cpu-red-blue-all-visible-warp.png",
+    "size": [
+      1000,
+      700
+    ],
+    "identical": true,
+    "maximum_difference": 0
+  },
+  {
+    "case": "cpu-red-blue-only-warp.png",
+    "size": [
+      1000,
+      700
+    ],
+    "identical": true,
+    "maximum_difference": 0
+  },
+  {
+    "case": "cpu-red-only-warp.png",
+    "size": [
+      1000,
+      700
+    ],
+    "identical": true,
+    "maximum_difference": 0
+  },
+  {
+    "case": "gpu-composite-warp.png",
+    "size": [
+      1000,
+      700
+    ],
+    "identical": true,
+    "maximum_difference": 0
+  },
+  {
+    "case": "gpu-red-all-visible-warp.png",
+    "size": [
+      1000,
+      700
+    ],
+    "identical": true,
+    "maximum_difference": 0
+  },
+  {
+    "case": "gpu-red-blue-all-visible-warp.png",
+    "size": [
+      1000,
+      700
+    ],
+    "identical": true,
+    "maximum_difference": 0
+  },
+  {
+    "case": "gpu-red-blue-only-warp.png",
+    "size": [
+      1000,
+      700
+    ],
+    "identical": true,
+    "maximum_difference": 0
+  },
+  {
+    "case": "gpu-red-only-warp.png",
+    "size": [
+      1000,
+      700
+    ],
+    "identical": true,
+    "maximum_difference": 0
+  }
+]
