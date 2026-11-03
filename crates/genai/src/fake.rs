@@ -69,6 +69,9 @@ pub struct State {
     pub pictures: Vec<crate::Rgba8>,
     pub cancellations: u32,
     pub frees: u32,
+    /// A fill or edit ran since the last detector run: the fake's fills remove what they
+    /// cover (unless `echo` hands the picture back), so the next detector run finds nothing.
+    pub removed: bool,
 }
 static BACKENDS: OnceLock<Mutex<BTreeMap<String, Weak<NativeBackend>>>> = OnceLock::new();
 pub(crate) fn backend(key: &str) -> Option<Arc<NativeBackend>> {
@@ -184,6 +187,9 @@ impl Engine for FakeEngine {
                     }
                 }
             }
+            if req.task == "fill" || req.task == "edit" {
+                state.removed = !self.options.echo;
+            }
             state.runs.push(RecordedRun {
                 run: req.clone(),
                 request: serde_json::to_value(req).map_err(|e| EngineError::new(ErrorKind::Internal, e.to_string()))?,
@@ -248,6 +254,9 @@ impl Engine for FakeEngine {
                 pictures.push(drawn.swap_remove(0));
             }
             return Ok((DoneInfo { images: descriptors, texts: Vec::new(), seed: req.seed, elapsed_ms: 0 }, pictures));
+        }
+        if req.task == "segment" && std::mem::take(&mut self.state.lock().unwrap_or_else(PoisonError::into_inner).removed) {
+            return Ok((DoneInfo { images: Vec::new(), texts: Vec::new(), seed: req.seed, elapsed_ms: 0 }, Vec::new()));
         }
         let (descriptors, pictures) = self.draw(req, blobs)?;
         Ok((DoneInfo { images: descriptors, texts: Vec::new(), seed: req.seed, elapsed_ms: 0 }, pictures))

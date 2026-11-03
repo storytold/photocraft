@@ -1659,16 +1659,10 @@ fn a_generative_dialog_never_turns_an_optional_range_into_its_minimum() {
             assert!(!segment.trim_end().ends_with('?') || segment.contains('='), "{command}.{}: an optional range with no default ({segment})", p.key);
         }
     }
-    assert!(
-        parse_spec(photocraft_engine::commands::find("generate.splitLayers").map(|c| c.params).unwrap_or_default())
-            .iter()
-            .all(|p| p.key != "maxPixels" || !matches!(p.kind, Kind::Range { .. })),
-        "Split's maxPixels is left to the engine (its 640-px working size), not a slider"
-    );
-    // Split's Tries is a real slider whose default is the engine's (one seed; more keep the best).
-    let tries = parse_spec(photocraft_engine::commands::find("generate.splitLayers").map(|c| c.params).unwrap_or_default())
-        .into_iter()
-        .find(|p| p.key == "tries")
-        .map(|p| p.kind);
-    assert!(matches!(tries, Some(Kind::Range { min, max, default }) if min == 1.0 && max == 4.0 && default == 1.0), "{tries:?}");
+    // Split into Layers (SAM 3.1 + Fill since 2026-11-02): Layers is a slider from the
+    // background and one subject up, and nothing of the layered model is left in the dialog.
+    let split = parse_spec(photocraft_engine::commands::find("generate.splitLayers").map(|c| c.params).unwrap_or_default());
+    let layers = split.iter().find(|p| p.key == "layers").map(|p| p.kind.clone());
+    assert!(matches!(layers, Some(Kind::Range { min, max, default }) if min == 2.0 && max == 8.0 && default == 3.0), "{layers:?}");
+    assert!(split.iter().all(|p| !["tries", "maxPixels", "steps", "guidance", "template", "model"].contains(&p.key.as_str())));
 }

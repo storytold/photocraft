@@ -43,8 +43,14 @@ fn session(url: &str) -> Session {
 
 /// The fake answers with alpha 255 inside the middle half of the image (x 16..48, y 12..36 on
 /// the canvas), 0 outside.
+/// The fake without ViTMatte's weights (with them, Remove Background's `auto` goes to the
+/// detector and ViTMatte first).
+fn no_vitmatte() -> Vec<String> {
+    vec!["model.safetensors".into()]
+}
+
 fn matte_server() -> FakeNative {
-    FakeNative::start_with(Options { matte: Some([0.25, 0.25, 0.75, 0.75]), ..Options::default() }).unwrap()
+    FakeNative::start_with(Options { matte: Some([0.25, 0.25, 0.75, 0.75]), missing_files: no_vitmatte(), ..Options::default() }).unwrap()
 }
 
 fn mask_at(s: &Session, id: LayerId, x: i32, y: i32) -> f32 {
@@ -152,7 +158,7 @@ fn remove_background_validates_and_runs_the_research_matte_by_name() {
     assert_eq!(s.execute(REMOVE_BG, json!({"template": "qwen-2.1/matte"})).unwrap()["template"], "qwen-2.1/matte");
     s.edit_prefs(|p| p.integrations.allow_research_models = true);
     // A fully transparent answer: the model "kept nothing", and nothing changes.
-    let empty = FakeNative::start_with(Options { matte: Some([0.0, 0.0, 0.0, 0.0]), ..Options::default() }).unwrap();
+    let empty = FakeNative::start_with(Options { matte: Some([0.0, 0.0, 0.0, 0.0]), missing_files: no_vitmatte(), ..Options::default() }).unwrap();
     let mut s = session(&empty.url);
     let e = s.execute(REMOVE_BG, json!({})).unwrap_err().to_string();
     assert!(e.contains("kept nothing"), "{e}");
@@ -162,7 +168,7 @@ fn remove_background_validates_and_runs_the_research_matte_by_name() {
 #[test]
 fn without_the_research_opt_in_remove_background_uses_the_permissive_detector() {
     // The fake detector "finds" the centre quarter: x 16..48, y 12..36 on 64×48.
-    let fake = FakeNative::start().unwrap();
+    let fake = FakeNative::start_with(Options { missing_files: no_vitmatte(), ..Options::default() }).unwrap();
     let mut s = session(&fake.url);
     s.edit_prefs(|p| p.integrations.allow_research_models = false);
     let id = s.active().unwrap().active_layer.unwrap();
@@ -192,7 +198,9 @@ fn without_the_research_opt_in_remove_background_uses_the_permissive_detector() 
     assert!(s.active().unwrap().doc.selection.is_some());
     assert_eq!(fake.state().runs[2].request["prompt"], "the main subject");
     // Research allowed but the 2.1 files missing: `auto` still falls back to the detector.
-    let bare = FakeNative::start_with(Options { missing_files: vec!["qwen_image_2.1_bf16.safetensors".into()], ..Options::default() }).unwrap();
+    let bare =
+        FakeNative::start_with(Options { missing_files: vec!["qwen_image_2.1_bf16.safetensors".into(), "model.safetensors".into()], ..Options::default() })
+            .unwrap();
     let mut s = session(&bare.url);
     let r = s.execute(REMOVE_BG, json!({"prompt": "the boat"})).unwrap();
     assert_eq!(r["template"], "sam3.1/segment");
@@ -224,4 +232,20 @@ fn a_transparent_generate_image_asks_the_template_for_it_and_keeps_the_alpha() {
     let e = s.execute(IMAGE, json!({"prompt": "x", "transparent": true})).unwrap_err();
     assert!(matches!(e, EngineError::BadParams { .. }) && e.to_string().contains("transparency"), "{e}");
     assert!(matches!(s.execute(IMAGE, json!({"prompt": "x", "transparent": "yes"})), Err(EngineError::BadParams { .. })));
+}
+
+#[test]
+fn with_vitmatte_remove_background_auto_goes_to_the_detector_and_vitmatte() {
+    // The fake detector "finds" the centre quarter; ViTMatte (the fake) answers opaque, so the
+    // mask is the detector's grown by the trimap's band, solid inside, nothing far out.
+    let fake = FakeNative::start().unwrap();
+    let mut s = session(&fake.url);
+    let id = s.active().unwrap().active_layer.unwrap();
+    let r = s.execute(REMOVE_BG, json!({})).unwrap();
+    assert_eq!(r["template"], "sam3.1/segment", "{r}");
+    assert_eq!(r["vitmatte"], true, "{r}");
+    assert_eq!(mask_at(&s, id, 32, 24), 1.0);
+    assert_eq!(mask_at(&s, id, 0, 0), 0.0);
+    let st = fake.state();
+    assert!(st.runs.iter().any(|r| r.request["model"] == "vitmatte/refine" && r.request["mask"].is_object()), "ViTMatte with a trimap");
 }
