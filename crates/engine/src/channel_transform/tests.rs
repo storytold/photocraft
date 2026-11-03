@@ -1084,35 +1084,129 @@ fn channel_warp_prices_output_before_extracting_native_planes() {
 
 #[test]
 fn a_small_selection_can_transform_a_large_sparse_scalar_surface() {
-    for target in [json!("mask"), json!({"channel":0}), json!("quickMask")] {
-        let mut s = session(ColorMode::Rgb, SampleType::F32);
-        if target == "mask" {
-            s.execute("layer.layerMask.hideAll", json!({})).unwrap();
-        } else if target == "quickMask" {
-            s.execute("select.editInQuickMaskMode", json!({})).unwrap();
-        } else {
-            s.execute("channel.new", json!({"fill":"black"})).unwrap();
+    for command in ["edit.transform", "edit.transform.warp"] {
+        for target in [json!("mask"), json!({"channel":0}), json!("quickMask")] {
+            let mut s = session(ColorMode::Rgb, SampleType::F32);
+            if target == "mask" {
+                s.execute("layer.layerMask.hideAll", json!({})).unwrap();
+            } else if target == "quickMask" {
+                s.execute("select.editInQuickMaskMode", json!({})).unwrap();
+            } else {
+                s.execute("channel.new", json!({"fill":"black"})).unwrap();
+            }
+            let params = json!({"target":target});
+            s.edit("sparse scalar", |doc, layer| {
+                let (surface, _) = crate::channel_cmds::target_surface(doc, *layer, &params)?;
+                *surface = Surface::new(surface.format());
+                surface.write_pixel(0, 0, &[1.0]);
+                surface.write_pixel(20000, 6000, &[0.5]);
+                let mut selected = Surface::new(photocraft_color::PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false));
+                selected.write_pixel(0, 0, &[1.0]);
+                doc.selection = Some(selected);
+                Ok(())
+            })
+            .unwrap();
+            let st = s.active().unwrap();
+            assert_eq!(source_bounds(&st.doc, st.active_layer, &params).unwrap(), Some(Rect::new(0, 0, 1, 1)));
+            let mut transform = params.clone();
+            if command == "edit.transform.warp" {
+                let rect = [0.0, 0.0, 1.0, 1.0];
+                transform["warp"] = json!(Warp::custom(BezierMesh::identity(rect, 1, 1).map_points(|p| [p[0] + 2.0, p[1]]), rect));
+            } else {
+                transform["dx"] = json!(2);
+            }
+            transform["interpolation"] = json!("nearest");
+            s.execute(command, transform).unwrap();
+            let st = s.active().unwrap();
+            let surface = crate::channel_cmds::read_target_surface(&st.doc, st.active_layer, &params).unwrap();
+            assert_eq!(surface.sample_channel(0, 0, 0), 0.0);
+            assert_eq!(surface.sample_channel(2, 0, 0), 1.0);
+            assert!((surface.sample_channel(20000, 6000, 0) - 0.5).abs() < 0.005, "unselected distant samples stay put");
         }
-        let params = json!({"target":target});
-        s.edit("sparse scalar", |doc, layer| {
-            let (surface, _) = crate::channel_cmds::target_surface(doc, *layer, &params)?;
-            *surface = Surface::new(surface.format());
-            surface.write_pixel(0, 0, &[1.0]);
-            surface.write_pixel(20000, 6000, &[0.5]);
-            let mut selected = Surface::new(photocraft_color::PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false));
-            selected.write_pixel(0, 0, &[1.0]);
-            doc.selection = Some(selected);
-            Ok(())
-        })
-        .unwrap();
-        let mut transform = params.clone();
-        transform["dx"] = json!(2);
-        transform["interpolation"] = json!("nearest");
-        s.execute("edit.transform", transform).unwrap();
-        let st = s.active().unwrap();
-        let surface = crate::channel_cmds::read_target_surface(&st.doc, st.active_layer, &params).unwrap();
-        assert_eq!(surface.sample_channel(0, 0, 0), 0.0);
-        assert_eq!(surface.sample_channel(2, 0, 0), 1.0);
-        assert!((surface.sample_channel(20000, 6000, 0) - 0.5).abs() < 0.005, "unselected distant samples stay put");
+    }
+}
+
+#[test]
+fn colour_source_collection_respects_memory_usage_before_capture_even_for_tiny_outputs() {
+    for (size, colors) in [(Size::new(2048, 2048), vec![0, 2]), (Size::new(12, 8193), vec![0, 1, 2])] {
+        for command in ["edit.transform", "edit.transform.warp"] {
+            let mut s = session(ColorMode::Rgb, SampleType::F32);
+            Arc::make_mut(&mut s.active_mut().unwrap().doc).size = size;
+            let st = s.active().unwrap();
+            let before = st.doc.clone();
+            let history = st.history.past_len();
+            let params = json!({"target":{"colors":colors}});
+            let rect = [0.0, 0.0, f64::from(size.width), f64::from(size.height)];
+            let matrix = [12.0 / rect[2], 0.0, 0.0, 8.0 / rect[3], 0.0, 0.0];
+            let warp = Warp::custom(BezierMesh::identity(rect, 1, 1).map_points(|p| [p[0] * matrix[0], p[1] * matrix[3]]), rect);
+            // One native source fits the 20 MiB test limit; the selected collection does not.
+            let single = json!({"target":{"color":0}});
+            source_bounds(&st.doc, st.active_layer, &single).unwrap();
+            crate::warp_cmds::check_channel_warp_geometry(&st.doc, st.active_layer, &single, rect, &warp).unwrap();
+            assert!(source_bounds(&st.doc, st.active_layer, &params).unwrap_err().to_string().contains("Memory Usage"));
+            assert!(
+                crate::warp_cmds::check_channel_warp_geometry(&st.doc, st.active_layer, &params, rect, &warp).unwrap_err().to_string().contains("Memory Usage")
+            );
+            assert!(AffinePreviewBounds::new(before.clone(), st.active_layer, &params, s.tools.background).is_err());
+            let mut edit = params;
+            if command == "edit.transform.warp" {
+                edit["warp"] = json!(warp);
+            } else {
+                edit["matrix"] = json!(matrix);
+            }
+            crate::allocation::fail_next_for_test();
+            let result = s.execute(command, edit);
+            assert!(crate::allocation::capacity::<u8>(1, "source pricing probe").is_err(), "source pricing must precede native capture");
+            assert!(result.unwrap_err().to_string().contains("Memory Usage"));
+            assert!(Arc::ptr_eq(&before, &s.active().unwrap().doc));
+            assert_eq!(s.active().unwrap().history.past_len(), history);
+        }
+    }
+}
+
+#[test]
+fn malformed_scalar_surface_formats_are_refused_before_dense_capture() {
+    for format in [PixelFormat::new(ColorMode::Grayscale, SampleType::F32, true), PixelFormat::new(ColorMode::Rgb, SampleType::F32, false)] {
+        for target in [json!("mask"), json!({"channel":0}), json!("quickMask")] {
+            for command in ["edit.transform", "edit.transform.warp"] {
+                let mut s = session(ColorMode::Rgb, SampleType::F32);
+                if target == "mask" {
+                    s.execute("layer.layerMask.hideAll", json!({})).unwrap();
+                } else if target == "quickMask" {
+                    s.execute("select.editInQuickMaskMode", json!({})).unwrap();
+                } else {
+                    s.execute("channel.new", json!({"fill":"black"})).unwrap();
+                }
+                let params = json!({"target":target});
+                s.edit("malformed scalar", |doc, layer| {
+                    let (surface, _) = crate::channel_cmds::target_surface(doc, *layer, &params)?;
+                    *surface = Surface::new(format);
+                    let pixel = vec![0.5; format.channels()];
+                    surface.write_pixel(0, 0, &pixel);
+                    surface.write_pixel(20_000, 6_000, &pixel);
+                    let mut selected = Surface::new(PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false));
+                    selected.write_pixel(0, 0, &[1.0]);
+                    doc.selection = Some(selected);
+                    Ok(())
+                })
+                .unwrap();
+                let before = s.active().unwrap().doc.clone();
+                let history = s.active().unwrap().history.past_len();
+                assert!(source_bounds(&before, s.active().unwrap().active_layer, &params).unwrap_err().to_string().contains("one component"));
+                let mut edit = params;
+                if command == "edit.transform.warp" {
+                    let rect = [0.0, 0.0, 1.0, 1.0];
+                    edit["warp"] = json!(Warp::custom(BezierMesh::identity(rect, 1, 1).map_points(|p| [p[0] + 2.0, p[1]]), rect));
+                } else {
+                    edit["dx"] = json!(2);
+                }
+                crate::allocation::fail_next_for_test();
+                let result = s.execute(command, edit);
+                assert!(crate::allocation::capacity::<u8>(1, "malformed scalar probe").is_err());
+                assert!(result.is_err());
+                assert!(Arc::ptr_eq(&before, &s.active().unwrap().doc));
+                assert_eq!(s.active().unwrap().history.past_len(), history);
+            }
+        }
     }
 }

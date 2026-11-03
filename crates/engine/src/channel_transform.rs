@@ -166,14 +166,22 @@ pub(crate) fn native_area(doc: &Document, layer: Option<LayerId>) -> Result<Rect
 }
 
 /// Bound the aggregate native source buffers before extraction or opening an interactive box.
-fn source_budget(doc: &Document, layer: Option<LayerId>, colors: crate::color_channels::ColorChannels) -> Result<()> {
+fn source_budget(doc: &Document, layer: Option<LayerId>, colors: crate::color_channels::ColorChannels) -> Result<u64> {
     let id = layer.ok_or_else(|| bad("no active layer"))?;
     let fmt = doc.layer(id).and_then(|l| l.surface()).ok_or_else(|| bad("colour transforms require a raster layer"))?.format();
     let bytes = tiled_pixels(native_area(doc, layer)?).and_then(|n| n.checked_mul(fmt.sample.bytes() as u64)).and_then(|n| n.checked_mul(colors.len() as u64));
     if bytes.is_none_or(|n| n > 512 * 1024 * 1024) {
         return Err(bad("channel transform sources exceed the 512 MiB working buffer limit"));
     }
-    Ok(())
+    let bytes = bytes.ok_or_else(|| bad("channel transform source size overflow"))?;
+    crate::transform_cmds::check_source_budget(bytes)?;
+    Ok(bytes)
+}
+
+/// The native scalar sources retained together during a colour transform. A small output
+/// or selection does not reduce the full native planes extracted by the worker.
+pub(crate) fn retained_source_bytes(doc: &Document, layer: Option<LayerId>, params: &Value) -> Result<u64> {
+    crate::color_channels::explicit(params, crate::channel_cmds::color_count(doc))?.map_or(Ok(0), |colors| source_budget(doc, layer, colors))
 }
 
 /// A captured scalar source and its original native extent. Writes of earlier components
@@ -358,7 +366,9 @@ fn source_bounds_inner(doc: &Document, layer: Option<LayerId>, p: &Value) -> Res
     }
     crate::transform_cmds::lone_target(doc, layer, p)?
         .map(|surface| {
-            validate_area(surface.content_bounds())?;
+            if doc.selection.is_none() {
+                validate_area(surface.content_bounds())?;
+            }
             bounds(doc, layer, surface, p)
         })
         .transpose()
@@ -377,7 +387,7 @@ fn tiled_pixels(r: Rect) -> Option<u64> {
 }
 
 /// Reject enormous scalar buffers, including tile padding, before resampling.
-pub(crate) fn validate_area(r: Rect) -> Result<()> {
+pub fn validate_area(r: Rect) -> Result<()> {
     if u64::from(r.width()).saturating_mul(u64::from(r.height())) > 100_000_000 {
         return Err(bad("channel transform exceeds the 100 megapixel working area limit"));
     }

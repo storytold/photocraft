@@ -20,6 +20,7 @@ pub(crate) struct Preview {
     layer: Option<LayerId>,
     background: [f32; 4],
     factor: u32,
+    display_factor: u32,
     geometry: Value,
     failed: Option<String>,
     reported_error: Option<String>,
@@ -43,7 +44,7 @@ impl Preview {
     pub(crate) fn new(doc: &Document, layer: Option<LayerId>, background: [f32; 4], reduced: bool) -> Result<Self, String> {
         let generation = photocraft_raster::spill::read_error_generation();
         // Effects and vector masks need document-space geometry, so retain full resolution there.
-        let factor = if photocraft_compose::proxy::proxy_faithful(doc) { crate::proxy::preview_factor(doc, reduced) } else { 1 };
+        let (factor, display_factor) = preview_scales(doc, reduced)?;
         let base = Arc::new(crate::proxy::proxy_document(doc, factor));
         photocraft_engine::channel_transform::check_capture(doc, generation).map_err(|e| e.to_string())?;
         Ok(Self {
@@ -55,6 +56,7 @@ impl Preview {
             layer,
             background,
             factor,
+            display_factor,
             geometry: Value::Null,
             failed: None,
             reported_error: None,
@@ -181,14 +183,16 @@ impl Preview {
 
     /// Composite the captured pixels through the current eyes without changing the source.
     fn image(&self, view: &ChannelView, look: crate::channel_view::Look, display: Option<&photocraft_engine::display_color::CanvasDisplay>) -> ColorImage {
-        let overlay = match crate::channel_view::render_for_display(&self.shown, view, self.shown.bounds(), 1, look, self.layer, display) {
-            // Solo/partial colour views already contain the opaque composite. Do not render it twice.
-            Some(pixels) if pixels.iter().all(|p| p.a() == 255) => {
-                return ColorImage::new([self.shown.size.width as usize, self.shown.size.height as usize], pixels);
-            }
-            overlay => overlay,
-        };
-        let buffer = photocraft_compose::flatten(&self.shown);
+        let size = [self.shown.size.width.div_ceil(self.display_factor) as usize, self.shown.size.height.div_ceil(self.display_factor) as usize];
+        let overlay =
+            match crate::channel_view::render_for_display_bounded(&self.shown, view, self.shown.bounds(), self.display_factor, look, self.layer, display) {
+                // Solo/partial colour views already contain the opaque composite. Do not render it twice.
+                Some(pixels) if pixels.iter().all(|p| p.a() == 255) => {
+                    return ColorImage::new(size, pixels);
+                }
+                overlay => overlay,
+            };
+        let buffer = if self.display_factor == 1 { photocraft_compose::flatten(&self.shown) } else { sampled_composite(&self.shown, self.display_factor) };
         let mut image = crate::canvas::display_image(display, &buffer);
         let pixels = &mut image.pixels;
         if let Some(overlay) = overlay {
@@ -202,6 +206,59 @@ impl Preview {
         }
         image
     }
+}
+
+/// A dense proxy of a sparse surface can traverse an enormous empty bounding rectangle.
+/// Keep those sources sparse and resample only the selected native region; reduce their
+/// displayed image separately. Ordinary captures retain their existing proxy path.
+fn preview_scales(doc: &Document, reduced: bool) -> Result<(u32, u32), String> {
+    let factor = if photocraft_compose::proxy::proxy_faithful(doc) { crate::proxy::preview_factor(doc, reduced) } else { 1 };
+    let mut sparse = false;
+    doc.for_each_surface(|surface| {
+        if !sparse && photocraft_engine::channel_transform::validate_area(photocraft_compose::bounds::content_bounds(surface)).is_err() {
+            sparse = true;
+        }
+    });
+    if !sparse {
+        return Ok((factor, 1));
+    }
+    // Band compositing bounds row storage independently from the sparse source's extent.
+    if doc.size.width == 0 || doc.size.height == 0 || doc.size.area() > 100_000_000 || u64::from(doc.size.width) * 16 > 16 << 20 {
+        return Err("Could not transform: the sparse preview canvas exceeds its working area limit".into());
+    }
+    // render_bands rounds upward to full render tiles, even on very wide canvases.
+    let rows = (photocraft_compose::band_rows_for(doc.size.width, 1) as u64).min(u64::from(doc.size.height));
+    if u64::from(doc.size.width).saturating_mul(rows).saturating_mul(16) > 64 << 20 {
+        return Err("Could not transform: the sparse preview band exceeds its memory limit".into());
+    }
+    let display = crate::proxy::preview_factor(doc, reduced).max(doc.size.width.div_ceil(4096)).max(doc.size.height.div_ceil(4096));
+    if !reduced && doc.size.area().saturating_mul(20) > 512 << 20 {
+        return Err("Could not transform: the sparse preview exceeds its memory limit; enable Low Resolution Previews".into());
+    }
+    Ok((1, if reduced { display } else { 1 }))
+}
+
+/// Sample the native composite in bounded bands without materializing the native canvas.
+fn sampled_composite(doc: &Document, factor: u32) -> photocraft_compose::Buffer {
+    let bounds = doc.bounds();
+    let width = bounds.width().div_ceil(factor);
+    let height = bounds.height().div_ceil(factor);
+    let mut out = photocraft_compose::Buffer::transparent(photocraft_geom::Rect::new(0, 0, width as i32, height as i32));
+    let step = factor as i32;
+    let _ = photocraft_compose::render_bands(doc, bounds, 1, |band| -> Result<(), std::convert::Infallible> {
+        let first = band.rect.y0 + (bounds.y0 - band.rect.y0).rem_euclid(step);
+        for y in (first..band.rect.y1).step_by(factor as usize) {
+            for x in (bounds.x0..bounds.x1).step_by(factor as usize) {
+                let index = ((y - bounds.y0) / step) as usize * width as usize + ((x - bounds.x0) / step) as usize;
+                let native_index = (y - band.rect.y0) as usize * band.rect.width() as usize + (x - band.rect.x0) as usize;
+                if let (Some(pixel), Some(native)) = (out.px.get_mut(index), band.px.get(native_index)) {
+                    *pixel = *native;
+                }
+            }
+        }
+        Ok(())
+    });
+    out
 }
 
 /// Keep uploads within the renderer's limit, including very long, narrow documents.

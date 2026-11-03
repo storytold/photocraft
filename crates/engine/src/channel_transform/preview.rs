@@ -18,6 +18,7 @@ pub struct AffinePreviewBounds {
     source: Rect,
     original: Option<Rect>,
     exact: Option<Vec<Rect>>,
+    retained_source_bytes: u64,
 }
 
 impl AffinePreviewBounds {
@@ -30,8 +31,8 @@ impl AffinePreviewBounds {
 
     fn capture(doc: Arc<Document>, layer: Option<LayerId>, params: &Value, background: [f32; 4]) -> Result<Self> {
         let colors = crate::color_channels::explicit(params, crate::channel_cmds::color_count(&doc))?;
+        let retained_source_bytes = colors.map_or(Ok(0), |colors| source_budget(&doc, layer, colors))?;
         let (source, format, original) = if let Some(colors) = colors {
-            source_budget(&doc, layer, colors)?;
             let area = native_area(&doc, layer)?;
             validate_area(area)?;
             let surface = doc.layer(layer.ok_or_else(|| bad("no active layer"))?).and_then(|l| l.surface()).ok_or_else(|| bad("missing raster"))?;
@@ -45,11 +46,12 @@ impl AffinePreviewBounds {
         };
         let source = doc.selection.as_ref().map_or(source, Surface::content_bounds);
         let exact = (colors.is_none() || doc.selection.is_some()).then(|| vec![source]);
-        Ok(Self { doc, layer, colors, background, format, source, original, exact })
+        Ok(Self { doc, layer, colors, background, format, source, original, exact, retained_source_bytes })
     }
 
     pub fn check(&mut self, h: &Homography) -> Result<()> {
         super::retry_capture(&self.doc)?;
+        crate::transform_cmds::check_source_budget(self.retained_source_bytes)?;
         if let Some(selection) = &self.doc.selection {
             crate::transform_cmds::check_channel_geometry(self.source, selection.format(), h, None).map_err(|e| bad(e.to_string()))?;
         }

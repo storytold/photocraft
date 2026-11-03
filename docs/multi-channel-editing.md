@@ -607,3 +607,25 @@ from another machine; non-enforced budget overruns remain in that report.
 [Move raw frames](benchmarks/channel-scratch-merge-20261103/move-samples.json),
 [Transform summary](benchmarks/channel-scratch-merge-20261103/transform-summary.json),
 [Transform raw frames](benchmarks/channel-scratch-merge-20261103/transform-samples.json).
+
+
+### Selected sparse scalar targets and source admission
+
+A selected mask, saved channel or Quick Mask is framed and checked using its selected
+region. Unselected distant samples remain stationary. Scalar transform targets must
+contain one component without alpha; malformed layouts are refused before capture.
+
+All retained native colour planes are priced together, including tile padding and
+their actual sample depth, against Memory Usage and the existing 512 MiB source cap.
+Each resampled output retains its separate Memory Usage check, since outputs are
+written one at a time. These limits do not describe the entire process's peak memory.
+Affine previews cache immutable source-byte estimates and recheck the current limit;
+Warp preview and commit use the same admission.
+
+When reducing a sparse source would traverse an excessive bounding rectangle, the
+preview keeps its sparse native snapshot and resamples only the selected region.
+The displayed image is sampled separately in bounded bands, including partial-colour
+views after eye changes. This fallback admits canvases up to 100 MP and bands up to
+64 MiB; oversized canvases are refused before allocation. With Low Resolution
+Previews disabled, its native display also has a 512 MiB working limit. Normal
+captures retain their existing reduced-source path.

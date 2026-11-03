@@ -29,7 +29,9 @@ fn composite_bands_keep_the_downsample_grid() {
                 })
             })
             .collect();
-        assert_eq!(composite(doc, rect, factor), expected, "factor {factor}");
+        for band_rows in [0, 1] {
+            assert_eq!(composite(doc, rect, factor, band_rows), expected, "factor {factor}, band rows {band_rows}");
+        }
     }
 }
 
@@ -75,7 +77,7 @@ fn channel_eyes_reuse_composite_until_pixels_change() {
         1,
         Look::default(),
         st.active_layer,
-        CompositeSource { cached: Some(&refreshed.pixels), fresh: &mut unused, display: None },
+        CompositeSource { cached: Some(&refreshed.pixels), fresh: &mut unused, display: None, band_rows: 0 },
     )
     .unwrap();
     assert_eq!(actual, expected, "reused pixels must preserve channel colours");

@@ -480,6 +480,7 @@ fn check_scalar_budget(doc: &Document, layer: Option<LayerId>, params: &Value, f
 }
 
 fn check_scalar_output(doc: &Document, layer: Option<LayerId>, params: &Value, b: [f64; 4]) -> Result<()> {
+    crate::channel_transform::retained_source_bytes(doc, layer, params)?;
     if crate::channel_transform::is_color(params) {
         let original = crate::channel_transform::native_area(doc, layer)?;
         let output = Rect::new(b[0].floor() as i32, b[1].floor() as i32, b[2].ceil() as i32, b[3].ceil() as i32).inflate(1);
@@ -527,6 +528,7 @@ fn scalar_frame(rect: [f64; 4], w: &Warp) -> Result<(Rect, [f64; 4])> {
 pub fn check_channel_warp_geometry(doc: &Document, layer: Option<LayerId>, params: &Value, rect: [f64; 4], warp: &Warp) -> Result<()> {
     let (frame, hull) = scalar_frame(rect, warp)?;
     if warp.is_identity() {
+        crate::channel_transform::retained_source_bytes(doc, layer, params)?;
         return Ok(());
     }
     // A custom Bezier surface stays inside its control hull for UVs in 0..1.

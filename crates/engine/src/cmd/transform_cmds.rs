@@ -229,7 +229,7 @@ pub(crate) fn move_gray_selected_with(
 /// linked mask; an ordinary layer transform still carries its linked masks.
 pub fn lone_target<'a>(doc: &'a Document, layer: Option<LayerId>, p: &Value) -> Result<Option<&'a Surface>> {
     use crate::channel_cmds::Target;
-    match crate::channel_cmds::target_of(p) {
+    let surface = match crate::channel_cmds::target_of(p) {
         Target::Pixels => Ok(None),
         Target::Mask => {
             let id = layer.ok_or_else(|| EngineError::Other("no active layer".into()))?;
@@ -245,7 +245,11 @@ pub fn lone_target<'a>(doc: &'a Document, layer: Option<LayerId>, p: &Value) -> 
             .map(|c| Some(&c.surface))
             .ok_or_else(|| EngineError::Other(format!("no alpha channel {i} (document has {})", doc.channels.len()))),
         Target::QuickMask => doc.quick_mask.as_ref().map(|c| Some(&c.surface)).ok_or_else(|| EngineError::Other("not in Quick Mask mode".into())),
+    }?;
+    if surface.is_some_and(|s| s.format().alpha || s.format().channels() != 1) {
+        return Err(bad("a mask or channel transform requires one component without alpha"));
     }
+    Ok(surface)
 }
 
 /// [`lone_target`], mutably.
@@ -358,7 +362,7 @@ pub fn transform_bounds_of(doc: &Document, ids: &[LayerId]) -> Rect {
     ids.iter().filter_map(|id| doc.layer(*id)).map(|l| transform_bounds(doc, l)).filter(|b| !b.is_empty()).fold(Rect::EMPTY, |a, b| a.union(&b))
 }
 
-/// The memory (bytes) a single Free Transform warp's result may take: Preferences › Performance ›
+/// The memory (bytes) one Free Transform result or retained colour-source collection may take: Preferences › Performance ›
 /// Memory Usage, which [`Session::apply_prefs`] sets, rather than a fixed 2³⁰ px, so a stitched
 /// layer of a few gigapixels transforms on a machine that has the memory for it (#7807). Only the
 /// size of the result counts, not where it lands, so moving a layer far off the canvas stays
@@ -413,6 +417,20 @@ fn check_budget_with_limit(src: Rect, h: &Homography, what: &str, format: PixelF
 
 pub(crate) fn check_output_budget(w: u64, h: u64, what: &str, format: PixelFormat) -> Result<()> {
     check_output_budget_with_limit(w, h, what, format, active_budget())
+}
+
+/// Captured colour planes coexist, unlike their resampled results, which are written one
+/// at a time. Price that source collection separately against the same Memory Usage limit.
+pub(crate) fn check_source_budget(bytes: u64) -> Result<()> {
+    let limit = active_budget();
+    if bytes > limit {
+        return Err(EngineError::Other(format!(
+            "too large to transform: captured channel sources would need {} MB, more than the {} MB Memory Usage allows (Preferences › Performance); the document was not changed",
+            bytes.div_ceil(1 << 20),
+            limit >> 20,
+        )));
+    }
+    Ok(())
 }
 
 fn check_output_budget_with_limit(w: u64, ht: u64, what: &str, format: PixelFormat, budget: u64) -> Result<()> {

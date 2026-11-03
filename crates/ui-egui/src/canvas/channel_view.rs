@@ -36,6 +36,7 @@ struct CompositeSource<'a> {
     cached: Option<&'a [[f32; 4]]>,
     fresh: &'a mut Option<Vec<[f32; 4]>>,
     display: Option<&'a photocraft_engine::display_color::CanvasDisplay>,
+    band_rows: i32,
 }
 
 pub struct Cache {
@@ -110,11 +111,11 @@ impl Look {
 
 /// Composite RGBA (over white, like Photoshop's channel views) at `factor` stride.
 /// Render in bands instead of allocating a full-resolution float composite to sample a preview.
-fn composite(doc: &Document, r: Rect, factor: u32) -> Vec<[f32; 4]> {
+fn composite(doc: &Document, r: Rect, factor: u32, band_rows: i32) -> Vec<[f32; 4]> {
     let (w, h) = (r.width().div_ceil(factor), r.height().div_ceil(factor));
     let mut out = Vec::with_capacity((w * h) as usize);
     let f = factor as i32;
-    let _ = photocraft_compose::render_bands(doc, r, 0, |band| -> Result<(), ()> {
+    let _ = photocraft_compose::render_bands(doc, r, band_rows, |band| -> Result<(), ()> {
         let first = band.rect.y0 + (r.y0 - band.rect.y0).rem_euclid(f);
         for y in (first..band.rect.y1).step_by(factor as usize) {
             for x in (r.x0..r.x1).step_by(factor as usize) {
@@ -132,7 +133,7 @@ fn composite(doc: &Document, r: Rect, factor: u32) -> Vec<[f32; 4]> {
 /// or `None` when the plain composite is all there is to show.
 pub fn render(doc: &Document, v: &ChannelView, r: Rect, factor: u32, look: Look, active: Option<photocraft_doc::LayerId>) -> Option<Vec<Color32>> {
     let mut unused = None;
-    render_with_source(doc, v, r, factor, look, active, CompositeSource { cached: None, fresh: &mut unused, display: None })
+    render_with_source(doc, v, r, factor, look, active, CompositeSource { cached: None, fresh: &mut unused, display: None, band_rows: 0 })
 }
 
 /// As [`render`], but colour-manage the opaque colour-component base before screen-space alpha,
@@ -147,7 +148,21 @@ pub(crate) fn render_for_display(
     display: Option<&photocraft_engine::display_color::CanvasDisplay>,
 ) -> Option<Vec<Color32>> {
     let mut unused = None;
-    render_with_source(doc, v, r, factor, look, active, CompositeSource { cached: None, fresh: &mut unused, display })
+    render_with_source(doc, v, r, factor, look, active, CompositeSource { cached: None, fresh: &mut unused, display, band_rows: 0 })
+}
+
+/// Channel-transform previews bound native band storage even when sampling an unreduced document.
+pub(crate) fn render_for_display_bounded(
+    doc: &Document,
+    v: &ChannelView,
+    r: Rect,
+    factor: u32,
+    look: Look,
+    active: Option<photocraft_doc::LayerId>,
+    display: Option<&photocraft_engine::display_color::CanvasDisplay>,
+) -> Option<Vec<Color32>> {
+    let mut unused = None;
+    render_with_source(doc, v, r, factor, look, active, CompositeSource { cached: None, fresh: &mut unused, display, band_rows: 1 })
 }
 
 fn render_with_source(
@@ -221,7 +236,7 @@ fn render_with_source(
         let fmt = doc.pixel_format();
         let mode = fmt.mode;
         let shown: Vec<usize> = (0..colors).filter(|k| v.color_visible(*k)).collect();
-        let computed = if source.cached.is_some_and(|px| px.len() == n) { None } else { Some(composite(doc, r, factor)) };
+        let computed = if source.cached.is_some_and(|px| px.len() == n) { None } else { Some(composite(doc, r, factor, source.band_rows)) };
         let pixels = source.cached.filter(|px| px.len() == n).or(computed.as_deref())?;
         let converted = pixels
             .iter()
@@ -410,7 +425,8 @@ pub fn ensure_for_display(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usi
     let b = doc.bounds();
     let cached = app.channel_views.get(&id).and_then(|c| c.source.as_ref()).map(|s| s.pixels.as_slice());
     let mut fresh = None;
-    let px = render_with_source(&doc, &view, b, factor, look, active, CompositeSource { cached, fresh: &mut fresh, display: display.as_deref() })?;
+    let px =
+        render_with_source(&doc, &view, b, factor, look, active, CompositeSource { cached, fresh: &mut fresh, display: display.as_deref(), band_rows: 0 })?;
     let new_source = fresh.is_some();
     let size = [b.width().div_ceil(factor) as usize, b.height().div_ceil(factor) as usize];
     let img = egui::ColorImage::new(size, px);

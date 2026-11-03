@@ -384,10 +384,11 @@ fn tiled_storage_limits_reject_extreme_aspect_ratios_before_materialization() {
     assert!(validate_area(Rect::new(0, 0, 1_000_000, 1)).is_err());
     assert!(validate_area(Rect::new(0, 0, 10_000, 10_000)).is_ok(), "a normal 100 MP frame still fits the existing area limit");
     assert!(validate_area(Rect::new(-1_000_000, 0, -999_999, 1)).is_ok(), "a distant small frame stays sparse");
-    // The intended 36 MP, three-component F32 workflow remains admitted.
+    // Dense storage with more logical pixels than the thin case fits both caps. The
+    // production-sized 36 MP probe lives in the isolated UI budget test.
     s = session(ColorMode::Cmyk, SampleType::F32);
     let mut doc = (*s.active().unwrap().doc).clone();
-    doc.size = photocraft_doc::Size::new(6000, 6000);
+    doc.size = photocraft_doc::Size::new(1024, 1024);
     assert!(source_bounds(&doc, s.active().unwrap().active_layer, &json!({"target":{"colors":[0,1,2]}})).is_ok());
 }
 

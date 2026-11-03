@@ -2052,6 +2052,58 @@ fn channel_transform_warp_is_enabled_in_both_menus_without_retargeting_or_commit
 }
 
 #[test]
+fn selected_scalar_channel_transform_opens_over_distant_sparse_mask_samples() {
+    use photocraft_color::{ColorMode, PixelFormat, SampleType};
+    use photocraft_geom::Rect;
+    use photocraft_raster::Surface;
+    for target in [json!("mask"), json!({"channel":0}), json!("quickMask")] {
+        let mut app = app_with_square(64, Rect::new(8, 8, 24, 24));
+        if target == "mask" {
+            app.run("layer.layerMask.revealAll", json!({})).unwrap();
+            app.run("channel.target", json!({"channel":"mask"})).unwrap();
+            app.run("view.layerMask", json!({"mode":"gray"})).unwrap();
+        } else if target == "quickMask" {
+            app.run("select.editInQuickMaskMode", json!({"on":true})).unwrap();
+        } else {
+            app.run("channel.new", json!({})).unwrap();
+            app.run("channel.target", json!({"channel":0})).unwrap();
+        }
+        app.session
+            .edit("distant scalar samples", |doc, layer| {
+                let surface = if target == "mask" {
+                    &mut doc.layer_mut(layer.unwrap()).unwrap().mask.as_mut().unwrap().surface
+                } else if target == "quickMask" {
+                    &mut doc.quick_mask.as_mut().unwrap().surface
+                } else {
+                    &mut doc.channels[0].surface
+                };
+                *surface = Surface::new(surface.format());
+                surface.write_pixel(8, 8, &[1.0]);
+                surface.write_pixel(20_000, 6_000, &[0.5]);
+                let mut selection = Surface::new(PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false));
+                selection.fill_rect(Rect::new(8, 8, 24, 24), &[1.0]);
+                doc.selection = Some(selection);
+                Ok(())
+            })
+            .unwrap();
+        let st = app.session.active().unwrap();
+        let (before, eyes) = (st.doc.clone(), st.channel_view.clone());
+        let ctx = egui::Context::default();
+        begin(&mut app, &ctx).unwrap_or_else(|e| panic!("{target}: {e}"));
+        let transform = app.ui.transform.as_ref().unwrap();
+        assert_eq!(transform.rect, [8.0, 8.0, 24.0, 24.0]);
+        assert_eq!(transform.target, Some(target));
+        assert!(photocraft_engine::channel_transform::locked(&app.session));
+        enter_warp(&mut app, &ctx);
+        assert!(app.ui.transform.as_ref().unwrap().warp.is_some());
+        cancel(&mut app);
+        assert!(Arc::ptr_eq(&before, &app.session.active().unwrap().doc));
+        assert_eq!(app.session.active().unwrap().channel_view, eyes);
+        assert!(!photocraft_engine::channel_transform::locked(&app.session));
+    }
+}
+
+#[test]
 fn right_click_menu_offers_warp_for_a_path() {
     // Photoshop's Transform Path menu has Warp too (#3027).
     let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
