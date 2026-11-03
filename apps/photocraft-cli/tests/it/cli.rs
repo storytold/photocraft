@@ -1805,6 +1805,7 @@ fn tiff_options_choose_compression_transparency_and_pyramid() {
         assert!(err.contains(flag) && err.contains(expected), "{flag} {bad}: {err}");
         assert!(!out.exists(), "{flag} {bad} wrote a file");
     }
+}
 
 /// `responsive-batch` writes one artboard variant per preset into a per-document folder.
 #[test]
