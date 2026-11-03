@@ -102,8 +102,9 @@ fn captures(s: &Session, p: &Value) -> Result<Vec<Arc<Capture>>> {
 pub(super) fn save_enabled(s: &Session) -> std::result::Result<(), String> {
     match s.generative_layer() {
         Some(g) if !s.genai_state.captures.of(g).is_empty() => Ok(()),
+        // Whatever layer is active: the failed fill's row offers it (with `fill`).
+        _ if s.genai_state.fills.iter().any(|f| f.status.capture().is_some()) => Ok(()),
         Some(_) => Err(format!("nothing is kept for this generative layer: only the last {KEEP} fills of this session keep what they sent and got back")),
-        None if s.genai_state.fills.iter().any(|f| f.status.capture().is_some()) => Ok(()),
         None => Err("select a generative layer first".into()),
     }
 }
