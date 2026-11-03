@@ -772,6 +772,8 @@ fn accelerated_label_scrubs_go_further_when_fast() {
     }
     let mut h = build(Some(true));
     assert_eq!(drag(&mut h, slow_moves), 120.0, "a slow drag stays a step a point");
+    let mid = drag(&mut h, 20); // 120 points over 0.2 s, about 600 points a second
+    assert!(mid > 120.0 && mid < 300.0, "an intermediate drag follows the curve, not the cap: {mid}");
     let fast = drag(&mut h, fast_moves);
     assert!(fast > 200.0, "a fast drag goes further: {fast}");
     assert!(fast <= 120.0 * super::scrub::SCRUB_ACCEL_MAX, "and no further than the cap: {fast}");
