@@ -379,6 +379,7 @@ impl Fetch for LoadFetch<'_> {
         Ok(data)
     }
 
+    /// Fetch a content-addressed blob under the load options' per-blob limit.
     fn blob(&mut self, hash: &str) -> Result<Arc<Vec<u8>>> {
         self.blob_bounded(hash, self.opts.max_blob_bytes)
     }
@@ -425,7 +426,14 @@ fn admit_canvas(size: photocraft_geom::Size, opts: &LoadOptions) -> Result<()> {
     Ok(())
 }
 
+/// Load a checked native bundle while discarding the internal decoded-byte accounting result.
 pub(crate) fn load(src: &dyn ByteSource, opts: &LoadOptions) -> Result<Document> {
+    load_measured(src, opts).map(|(doc, _)| doc)
+}
+
+/// Admit native canvas dimensions and return both the reconstructed document and the bytes actually fetched for its
+/// content.
+pub(crate) fn load_measured(src: &dyn ByteSource, opts: &LoadOptions) -> Result<(Document, u64)> {
     let m = read_manifest(src, opts)?;
     admit_canvas(m.document.size, opts)?;
     let mut fetch = LoadFetch { src, opts: *opts, total: 0, blobs: HashMap::new() };
@@ -437,7 +445,8 @@ pub(crate) fn load(src: &dyn ByteSource, opts: &LoadOptions) -> Result<Document>
         legacy_linked_contents: HashMap::new(),
         tiles: HashMap::new(),
     };
-    loader.document(&m.document)
+    let document = loader.document(&m.document)?;
+    Ok((document, fetch.total))
 }
 
 // ---------------------------------------------------------------------------
@@ -1061,6 +1070,8 @@ impl PcraftWriter {
         self.lock_wait = wait;
     }
 
+    /// Validate nesting, bounded conversion reports and finite manifest data, then collect content-addressed objects
+    /// while pruning expired hash-cache entries. Preview encoding is scheduled separately by the save path.
     fn prepare(&mut self, doc: &Document, opts: &SaveOptions) -> Result<Prepared> {
         doc.scratch_health().map_err(FormatError::corrupt)?;
         let generation = photocraft_raster::spill::read_error_generation();
@@ -1079,7 +1090,7 @@ impl PcraftWriter {
         self.blob_hash_cache.retain(|_, (w, _)| w.strong_count() > 0);
         convert::check_nesting(&doc.layers)?;
         let mut c = Collect { hash_cache: Some(&mut self.hash_cache), blob_hash_cache: Some(&mut self.blob_hash_cache), ..Default::default() };
-        let document = convert::doc_m(doc, &mut c);
+        let document = convert::doc_m(doc, &mut c)?;
         let mut model = Manifest::new(format!("photocraft-format {}", env!("CARGO_PKG_VERSION")), document);
         model.thumbnail = opts.thumbnail.as_ref().map(|_| THUMB.to_owned());
         model.composite = opts.composite.as_ref().map(|_| COMPOSITE.to_owned());
@@ -1510,6 +1521,34 @@ fn previews_follow_the_manifest_with_the_bytes_of_a_serial_encode() {
     assert!(!dir.join(FULL_COMPOSITE).exists());
     assert!(dir.join(COMPOSITE).exists());
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Keep bounded report blobs and their validation on the parallel-preview ZIP path, independently checking serialized preview bytes.
+#[cfg(test)]
+#[test]
+fn parallel_previews_preserve_conversion_blobs_and_propagate_report_limits() {
+    use photocraft_doc::import_conversion::{ImportConversion, MAX_CONVERSION_ATTACHMENTS};
+    let mut doc = Document::new("Report with previews", photocraft_geom::Size::new(3, 2), photocraft_color::ColorMode::Rgb, SampleType::U16);
+    let record = Arc::new(b"future inert report".to_vec());
+    let attachment = Arc::new(vec![7, 19, 31]);
+    let report = Arc::new(ImportConversion::Opaque { schema_version: 2, record: record.clone(), attachments: vec![attachment.clone()] });
+    doc.metadata.import_conversion = Some(report.clone());
+    let opts = SaveOptions { thumbnail: Some(Rgba8Image::new(2, 1)), composite: Some(Rgba8Image::new(3, 2)), ..Default::default() };
+    let mut writer = PcraftWriter::new();
+    let (bytes, stats) = writer.save_zip(&doc, &opts).unwrap();
+    assert_eq!(stats.blobs_total, 2, "the inert record and attachment remain content-addressed blobs");
+    let archive = ZipReader::new(&bytes).unwrap();
+    assert_eq!(archive.read_by_name(THUMB, usize::MAX).unwrap(), png(opts.thumbnail.as_ref().unwrap()).unwrap());
+    assert_eq!(archive.read_by_name(COMPOSITE, usize::MAX).unwrap(), png(opts.composite.as_ref().unwrap()).unwrap());
+    let (reopened, decoded) = crate::load_from_bytes_measured(&bytes, &LoadOptions::default()).unwrap();
+    assert_eq!(reopened.metadata.import_conversion, Some(report.clone()));
+    assert!(decoded >= (record.len() + attachment.len()) as u64, "report blobs remain included in measured decode admission");
+    doc.metadata.import_conversion =
+        Some(Arc::new(ImportConversion::Opaque { schema_version: 2, record, attachments: vec![attachment; MAX_CONVERSION_ATTACHMENTS + 1] }));
+    assert!(matches!(writer.save_zip(&doc, &opts), Err(FormatError::LimitExceeded(_))), "fallible manifest collection must not discard report limits");
+    doc.metadata.import_conversion = Some(report);
+    let recovered = writer.save_zip(&doc, &opts).unwrap().0;
+    assert_eq!(crate::load_from_bytes(&recovered).unwrap().metadata.import_conversion, doc.metadata.import_conversion);
 }
 
 #[cfg(test)]
