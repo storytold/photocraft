@@ -927,9 +927,11 @@ pub(super) fn draw_smoothing_string(painter: &egui::Painter, xf: &ViewXform, (br
 /// the canvas then refreshes only what it hadn't shown yet (`CommittedStroke`).
 pub(super) fn commit_brush_stroke(app: &mut PhotocraftApp, d: &Drag) {
     let live = app.live_stroke.take();
-    let mut p = stroke_params(app, d, &app.stylus.stroke_points(&d.points));
-    if !d.breaks.is_empty() {
-        p["breaks"] = json!(d.breaks);
+    let points = app.stylus.stroke_points(&d.points);
+    let mut p = stroke_params(app, d, &points);
+    let breaks = valid_segment_breaks(&d.breaks, points.len());
+    if !breaks.is_empty() {
+        p["breaks"] = json!(breaks);
     }
     if let Some(seed) = live.as_ref().and_then(|l| l.stroke.seed()) {
         p["seed"] = json!(seed);
@@ -986,6 +988,29 @@ pub(super) fn commit_brush_stroke(app: &mut PhotocraftApp, d: &Drag) {
         let shown = CommittedStroke { doc, revision: 0, key, damage, relayout: DRect::EMPTY };
         // Raw preview key 0 = the document itself (its colour display folded in).
         shown_as_document(app, doc, |k| shown.since(k).is_some());
+    }
+}
+
+fn valid_segment_breaks(breaks: &[usize], points_len: usize) -> Vec<usize> {
+    let mut valid = Vec::with_capacity(breaks.len());
+    for &index in breaks {
+        if index > 0 && index < points_len && valid.last().is_none_or(|previous| index > *previous) {
+            valid.push(index);
+        }
+    }
+    valid
+}
+
+#[cfg(test)]
+mod segment_break_tests {
+    use super::valid_segment_breaks;
+
+    #[test]
+    fn removes_duplicate_out_of_range_and_unordered_break_indices() {
+        assert_eq!(valid_segment_breaks(&[0, 2, 2, 5, 4, 8], 8), [2, 5]);
+        assert_eq!(valid_segment_breaks(&[0, 1], 2), [1]);
+        assert!(valid_segment_breaks(&[0], 2).is_empty());
+        assert!(valid_segment_breaks(&[], 0).is_empty());
     }
 }
 

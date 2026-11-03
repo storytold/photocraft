@@ -136,7 +136,7 @@ pub(crate) use targeting::{
     is_channel_target, is_spot_target, mask_stack_geometry_enabled, mask_target_enabled, restrict_to_color, routed, target_of, target_surface,
     targeted_channel,
 };
-pub use targeting::{follows_filter_mask, follows_target, read_target_surface};
+pub use targeting::{follows_filter_mask, follows_target, read_history_target_surface, read_target_surface};
 pub(crate) use view::fix_view;
 pub use view::{ChannelTarget, ChannelView, QuickMaskOptions, color_names, composite_name};
 

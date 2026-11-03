@@ -1038,6 +1038,40 @@ fn channel_target_layer_mask_and_vector_mask() {
 }
 
 #[test]
+fn history_mask_sources_read_the_flattened_mask_not_the_active_paint_surface() {
+    let mut s = session();
+    s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+    let layer_id = s.active().unwrap().active_layer.unwrap();
+    let state = s.active_mut().unwrap();
+    let doc = std::sync::Arc::make_mut(&mut state.doc);
+    let mask = doc.layer_mut(layer_id).unwrap().mask.as_mut().unwrap();
+    let flattened = mask.surface.clone();
+    let paint_surface = Surface::with_default(PixelFormat::RGBA8, &[0.0; 4]);
+    mask.paint = Some(photocraft_doc::mask_paint::Stack {
+        base: flattened,
+        layers: vec![photocraft_doc::mask_paint::Paint {
+            name: "Paint".into(),
+            visible: true,
+            opacity: 1.0,
+            blend: BlendMode::Normal,
+            surface: paint_surface,
+            fill_map: None,
+            fill_map_size: [0, 0],
+            fill_bounds: None,
+            kind: photocraft_doc::mask_paint::EffectKind::Paint,
+        }],
+        active: 0,
+    });
+
+    let params = json!({"target": "mask"});
+    let ordinary_source = read_target_surface(doc, Some(layer_id), &params).unwrap();
+    let history_source = read_history_target_surface(doc, Some(layer_id), &params).unwrap();
+    let mask = doc.layer(layer_id).unwrap().mask.as_ref().unwrap();
+    assert!(std::ptr::eq(history_source, &mask.surface));
+    assert!(std::ptr::eq(ordinary_source, &mask.paint.as_ref().unwrap().layers[0].surface));
+}
+
+#[test]
 fn clear_with_a_colour_channel_targeted_clears_only_that_channel() {
     let near = |a: &[f32], b: &[f32]| a.len() == b.len() && a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-3);
     // The Background, then a normal layer (Delete there can't make one channel transparent).

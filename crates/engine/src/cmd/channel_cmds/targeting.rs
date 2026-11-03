@@ -92,6 +92,16 @@ pub fn read_target_surface<'a>(doc: &'a Document, layer: Option<LayerId>, p: &Va
     }
 }
 
+/// Read a surface from a historical document. A mask target uses the flattened mask so History
+/// Fill and History Brush sample the same result the user sees, including editable mask effects.
+pub fn read_history_target_surface<'a>(doc: &'a Document, layer: Option<LayerId>, p: &Value) -> Result<&'a Surface> {
+    if target_of(p) == Target::Mask {
+        let id = layer.ok_or_else(|| EngineError::Other("no active layer".into()))?;
+        return doc.layer(id).and_then(|layer| layer.mask.as_ref()).map(|mask| &mask.surface).ok_or(EngineError::NoLayer(id));
+    }
+    read_target_surface(doc, layer, p)
+}
+
 /// The grayscale surface filters and adjustments edit instead of the layer's pixels (made explicit
 /// over the canvas), if the params target one: an alpha channel, the Quick Mask, or the mask of
 /// `layer`.

@@ -199,6 +199,9 @@ fn id(n: NodeHandle<'_>) -> Option<i64> {
 fn text<'a>(n: NodeHandle<'a>, name: &str) -> Option<&'a str> {
     string(child(n, name)?, 0)
 }
+fn is_indexed_reference_mode(reference: Option<&str>) -> bool {
+    matches!(reference, Some("IndexToDirect" | "Index"))
+}
 fn floats(n: NodeHandle<'_>, name: &str) -> Result<Vec<f64>> {
     let values = child(n, name).and_then(|n| n.attributes().first());
     match values {
@@ -380,7 +383,7 @@ pub(super) fn load(bytes: &[u8], uv_set: usize) -> Result<Scene> {
             .nth(uv_set)
             .ok_or_else(|| Error(format!("FBX mesh has no UV set {uv_set}; unwrap it before import")))?;
         let uv_values = floats(uv, "UV")?;
-        let uv_indices = if text(uv, "ReferenceInformationType") == Some("IndexToDirect") { Some(ints(uv, "UVIndex")?) } else { None };
+        let uv_indices = if is_indexed_reference_mode(text(uv, "ReferenceInformationType")) { Some(ints(uv, "UVIndex")?) } else { None };
         let mapping = text(uv, "MappingInformationType").unwrap_or("ByPolygonVertex");
         let normals = child(geometry, "LayerElementNormal");
         let normal_values = normals.map(|n| floats(n, "Normals")).transpose()?.unwrap_or_default();
@@ -507,6 +510,14 @@ pub(super) fn load(bytes: &[u8], uv_set: usize) -> Result<Scene> {
 #[cfg(test)]
 mod preflight_tests {
     use super::*;
+
+    #[test]
+    fn legacy_and_current_indexed_reference_modes_are_recognized() {
+        assert!(is_indexed_reference_mode(Some("IndexToDirect")));
+        assert!(is_indexed_reference_mode(Some("Index")));
+        assert!(!is_indexed_reference_mode(Some("Direct")));
+        assert!(!is_indexed_reference_mode(None));
+    }
 
     fn file_with_attributes(attribute_count: u32, declared_attribute_bytes: u32, attributes: &[u8]) -> Vec<u8> {
         const NODE_HEADER: usize = 13;

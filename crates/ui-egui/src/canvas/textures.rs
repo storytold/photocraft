@@ -618,8 +618,6 @@ pub(super) fn ensure_gpu(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usiz
         app.perf.gpu_upload_bytes = r.gpu_upload_bytes;
         app.perf.gpu_passes = r.gpu_passes;
         app.perf.gpu_chunks = r.gpu_chunks;
-    } else {
-        app.perf.gpu_fallback = r.fallback.map(|reason| reason.to_string());
     }
     let Some(cache) = app.canvases.get_mut(&(id, GPU_OUTPUT)) else { return true };
     cache.revision = revision;
