@@ -424,6 +424,18 @@ fn a_running_job_holds_the_display() {
     assert!(paint_view(&mut app, &ctx, &view(10.0)).is_some(), "back once the job is done");
 }
 
+/// Closing the last document drops the display's cache: no canvas is left to paint it away.
+#[test]
+fn closing_the_last_document_drops_the_cache() {
+    let ctx = egui::Context::default();
+    let mut app = ramp_app(ColorMode::Rgb, SampleType::U8);
+    open_levels(&mut app, json!({"inBlack": 100}), Some("shadows"));
+    assert!(paint_view(&mut app, &ctx, &view(10.0)).is_some());
+    app.run("file.close", json!({})).unwrap();
+    assert!(app.session.documents().is_empty());
+    assert!(app.levels_clipping.is_none());
+}
+
 /// A Smart Filter's Levels dialog edits the filter, not the layer's pixels: no display, and its
 /// cache goes as if no Levels dialog were open, even over a pixel layer.
 #[test]
