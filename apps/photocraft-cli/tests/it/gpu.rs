@@ -216,6 +216,8 @@ fn diagnostics_preserve_clean_stdout_and_emit_to_stderr() {
     assert!(out_png.is_file());
     // Convert emits no stdout; diagnostics must go to stderr
     assert!(o.stdout.is_empty(), "convert stdout must remain completely empty, got: {:?}", String::from_utf8_lossy(&o.stdout));
+    let stderr = String::from_utf8_lossy(&o.stderr);
+    assert!(stderr.contains("falling back to CPU"), "single-layer convert must report its CPU fallback on stderr: {stderr}");
 
     let _ = std::fs::remove_dir_all(&d);
 }

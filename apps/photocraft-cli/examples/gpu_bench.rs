@@ -158,11 +158,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
         if !warm_durations.is_empty() {
             let avg_warm: f64 = warm_durations.iter().map(|d| d.as_secs_f64()).sum::<f64>() / (warm_durations.len() as f64);
-            println!(
-                "| GPU Warm (avg) | {:.2} ms | {:.2}x | Reused device context and pipeline caches ({adapter_note}) |",
-                avg_warm * 1000.0,
-                cpu_dur.as_secs_f64() / avg_warm
-            );
+            // Runs that fell back to the CPU are excluded from the average: say how many.
+            let note = match warm_fallback_note(warm_runs, warm_fallbacks) {
+                Some(fallbacks) => format!("Reused device context and pipeline caches ({adapter_note}); {fallbacks} (excluded from the average)"),
+                None => format!("Reused device context and pipeline caches ({adapter_note})"),
+            };
+            println!("| GPU Warm (avg) | {:.2} ms | {:.2}x | {note} |", avg_warm * 1000.0, cpu_dur.as_secs_f64() / avg_warm);
         } else if let Some(note) = warm_fallback_note(warm_runs, warm_fallbacks) {
             println!("| GPU Warm | N/A | N/A | {note} |");
         } else {
