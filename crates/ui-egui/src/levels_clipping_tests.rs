@@ -234,6 +234,39 @@ fn paint_view(app: &mut PhotocraftApp, ctx: &egui::Context, xf: &ViewXform) -> O
     Some(image(&c.stats, &thr, end))
 }
 
+/// A view at one device pixel per document pixel whose visible document rect (with
+/// `visible_doc_rect`'s 2 px margin) is exactly `x0..x1` × `y0..y1`.
+fn xf_over(x0: i32, x1: i32, y0: i32, y1: i32) -> ViewXform {
+    let size = egui::vec2((x1 - x0 - 4) as f32, (y1 - y0 - 4) as f32);
+    ViewXform {
+        rect: egui::Rect::from_min_size(egui::Pos2::ZERO, size),
+        zoom: 1.0,
+        center: [(x0 + x1) as f32 / 2.0, (y0 + y1) as f32 / 2.0],
+        flip: false,
+        rotation: 0.0,
+        aspect: 1.0,
+    }
+}
+
+/// Snapping the area to the block grid can widen it by up to a block; the blocks grow until the
+/// snapped area still fits the texture limit (here a 2048 px device limit) on both sides.
+#[test]
+fn the_snapped_area_fits_the_texture_limit() {
+    let bounds = Rect::new(0, 0, 20000, 20000);
+    let (r, f) = view_area(&xf_over(1, 4097, 0, 100), bounds, 1.0, 2048).unwrap();
+    assert_eq!((r.x0, f), (0, 3), "4096 px from x 1: blocks of 2 would need 2049");
+    for (x0, y0) in [(0, 0), (1, 1), (2, 3), (5, 7), (1023, 2047)] {
+        for span in 4090..4100 {
+            let (x1, y1) = (x0 + span, y0 + span / 2);
+            let (r, f) = view_area(&xf_over(x0, x1, y0, y1), bounds, 1.0, 2048).unwrap();
+            let fi = f as i32;
+            assert!(r.width().div_ceil(f) <= 2048 && r.height().div_ceil(f) <= 2048, "{x0},{y0} span {span}: {r:?} / {f}");
+            assert!(r.x0 % fi == 0 && r.y0 % fi == 0, "snapped to the grid: {r:?} / {f}");
+            assert!(r.x0 <= x0 && r.y0 <= y0 && r.x1 >= x1 && r.y1 >= y1, "covers the view: {r:?}");
+        }
+    }
+}
+
 /// How many meshes among `shapes` (shape lists included) draw texture `tex`.
 fn meshes_with(shapes: &[egui::epaint::ClippedShape], tex: egui::TextureId) -> usize {
     fn count(s: &egui::Shape, tex: egui::TextureId) -> usize {
