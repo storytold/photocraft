@@ -232,7 +232,9 @@ fn without_extended_xmp(b: &[u8]) -> Option<Vec<u8>> {
     if drop.is_empty() {
         return None;
     }
-    let mut out = Vec::with_capacity(b.len());
+    // Reserve what is kept, not the input: the dropped fragments may be most of it.
+    let kept = b.len().saturating_sub(drop.iter().map(|r| r.end - r.start).sum::<usize>());
+    let mut out = Vec::with_capacity(kept);
     let mut at = 0;
     for r in drop {
         out.extend_from_slice(b.get(at..r.start)?);
