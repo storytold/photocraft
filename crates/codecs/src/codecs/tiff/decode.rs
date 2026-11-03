@@ -487,17 +487,30 @@ const TAG_JPEG_TABLES: u16 = 347;
 /// segments from costing chunks x segments.
 const MAX_JPEG_CHUNK_MARKERS: usize = 256;
 
+/// Fill bytes (`0xFF` runs before a marker) all JPEG chunks of a TIFF may scan together. Each
+/// distinct chunk offset rescans its own run, so this bounds the total work.
+const MAX_JPEG_FILL_BYTES: usize = 1 << 24;
+
 /// The frame header (width, height, components) of a JPEG stream: `Ok(None)` when it has none
 /// before its first scan, `Err` when more than [`MAX_JPEG_CHUNK_MARKERS`] segments come first.
-fn jpeg_frame(b: &[u8]) -> Result<Option<(usize, usize, usize)>, CodecError> {
-    let be16 = |at: usize| b.get(at..at + 2).and_then(|v| <[u8; 2]>::try_from(v).ok()).map(|v| usize::from(u16::from_be_bytes(v)));
+fn jpeg_frame(b: &[u8], fill: &mut usize) -> Result<Option<(usize, usize, usize)>, CodecError> {
     if b.get(..2) != Some(&[0xFF, 0xD8][..]) {
         return Ok(None);
     }
-    let mut i = 2;
+    jpeg_frame_from(b, 2, fill)
+}
+
+/// [`jpeg_frame`] from byte `start` on, with no SOI check. `fill` counts the fill bytes scanned.
+fn jpeg_frame_from(b: &[u8], start: usize, fill: &mut usize) -> Result<Option<(usize, usize, usize)>, CodecError> {
+    let be16 = |at: usize| b.get(at..at + 2).and_then(|v| <[u8; 2]>::try_from(v).ok()).map(|v| usize::from(u16::from_be_bytes(v)));
+    let mut i = start;
     for _ in 0..MAX_JPEG_CHUNK_MARKERS {
         while b.get(i) == Some(&0xFF) && b.get(i + 1) == Some(&0xFF) {
             i += 1;
+            *fill += 1;
+            if *fill > MAX_JPEG_FILL_BYTES {
+                return Err(CodecError::LimitExceeded("JPEG strips or tiles scan too many fill bytes".into()));
+            }
         }
         if b.get(i) != Some(&0xFF) {
             return Ok(None);
@@ -533,15 +546,21 @@ fn check_jpeg_chunks(
 ) -> Result<(), CodecError> {
     let mut chunks: Vec<(u64, u64)> = (0..expected).filter_map(|i| Some((f.uint(offsets, i)?, f.uint(sizes, i)?))).collect();
     chunks.sort_unstable();
-    chunks.dedup_by_key(|c| c.0);
+    // Entries sharing an offset but not a byte count are different chunks: check each one.
+    chunks.dedup();
     let len = f.b.len() as u64;
+    let mut fill = 0;
     for (at, n) in chunks {
         let end = at.saturating_add(n).min(len);
         let Some(data) = usize::try_from(at).ok().zip(usize::try_from(end).ok()).and_then(|(a, e)| f.b.get(a..e)) else { continue };
-        let frame = match jpeg_frame(data)? {
+        let mut frame = match jpeg_frame(data, &mut fill)? {
             Some(frame) => Some(frame),
-            None => tables.map(jpeg_frame).transpose()?.flatten(),
+            None => tables.map(|t| jpeg_frame(t, &mut fill)).transpose()?.flatten(),
         };
+        // Without SOI, the tiff crate drops the chunk's first two bytes, so a frame at offset 2 is decoded.
+        if frame.is_none() && data.get(..2) != Some(&[0xFF, 0xD8][..]) {
+            frame = jpeg_frame_from(data, 2, &mut fill)?;
+        }
         let Some((w, h, nc)) = frame else { continue };
         if w > nominal.0 || h > nominal.1 {
             return Err(err(format!("a {w}x{h} JPEG frame in a {}x{} strip or tile", nominal.0, nominal.1)));
