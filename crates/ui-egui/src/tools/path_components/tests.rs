@@ -480,7 +480,7 @@ fn the_selection_dies_on_reorder_or_partition_change_even_at_same_counts() {
 #[test]
 fn a_type_path_component_selection_survives_unrelated_edits() {
     let mut app = app();
-    app.run("type.create", json!({"x": 20, "y": 70, "text": "Hello path", "size": 36, "color": "#000000"})).unwrap();
+    let layer = app.run("type.create", json!({"x": 20, "y": 70, "text": "Hello path", "size": 36, "color": "#000000"})).unwrap()["layer"].as_u64().unwrap();
     app.run("path.set", json!({"name": "work", "path": {"subpaths": [{"closed": false, "knots": [[150, 10], [150, 110]]}]}})).unwrap();
     app.run("type.attachToPath", json!({"start": 4})).unwrap();
     app.ui.tool = Tool::PathSelection;
@@ -489,4 +489,24 @@ fn a_type_path_component_selection_survives_unrelated_edits() {
     assert!(matches!(r, PathRef::TypePath(_)) && heads == vec![0]);
     app.run("path.set", json!({"name": "Other", "path": {"subpaths": [{"closed": true, "knots": [[5, 5], [10, 5], [10, 10]]}]}})).unwrap();
     assert!(super::selected(&app).is_some(), "an unrelated edit keeps the Type Path selection");
+    // A structural edit of the Type Path itself clears the selection (the signature mismatches).
+    app.run("path.addAnchor", json!({"name": "layer", "layer": layer, "typePath": true, "subpath": 0, "knot": 0, "t": 0.5})).unwrap();
+    assert!(super::selected(&app).is_none(), "a structural Type Path edit clears the selection");
+}
+
+/// A drag-move re-signs the selection: the stored signature hashes the moved geometry, so a
+/// later unrelated edit keeps the selection (review on the selection-fix PR).
+#[test]
+fn a_move_re_signs_the_selection_so_unrelated_edits_keep_it() {
+    let mut app = app();
+    square(&mut app, 20.0, 20.0, 120.0);
+    app.ui.tool_options.pen_path_op = "combine".into();
+    square(&mut app, 60.0, 60.0, 40.0);
+    let (id, _) = shape(&app);
+    app.ui.tool = Tool::PathSelection;
+    crate::path_components::press(&mut app, [80.0, 80.0], false);
+    super::move_selected(&mut app, [10.0, 0.0]).expect("the move runs").unwrap();
+    assert!(super::selected(&app).is_some(), "the move keeps the selection");
+    app.run("shape.edit", json!({"layer": id.0, "fill": "#0000ff"})).unwrap();
+    assert!(super::selected(&app).is_some(), "a colour edit after the move keeps it too");
 }

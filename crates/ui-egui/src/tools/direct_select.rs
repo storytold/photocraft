@@ -157,6 +157,25 @@ pub(crate) fn still_valid(app: &PhotocraftApp, ds: &DirectSelection) -> bool {
         || component_selection_matches(app, ds)
 }
 
+/// The live path `target` addresses on the active document, if it still exists.
+pub(crate) fn path_of(app: &PhotocraftApp, target: &PathRef) -> Option<photocraft_doc::Path> {
+    let st = app.session.active()?;
+    match target {
+        PathRef::Layer(id) => st.doc.layer(photocraft_doc::LayerId(*id)).and_then(|l| match &l.content {
+            photocraft_doc::LayerContent::Shape(sh) => Some(sh.path.clone()),
+            _ => l.vector_mask.as_ref().map(|m| m.path.clone()),
+        }),
+        PathRef::Work => st.doc.work_path.clone(),
+        PathRef::Saved(i) => st.doc.paths.get(*i).map(|p| p.path.clone()),
+        // The stored id is the layer whose Type Path this is; resolving by it confirms the match.
+        PathRef::TypePath(id) => st.doc.layer(photocraft_doc::LayerId(*id)).and_then(|l| match &l.content {
+            photocraft_doc::LayerContent::Text(t) => photocraft_engine::type_extra_cmds::type_path(t),
+            _ => None,
+        }),
+        PathRef::Pen => None,
+    }
+}
+
 /// A Path Selection component selection outlives history revisions: the path's structure (its
 /// knot counts) is what the stored indices address. Valid while the target path still exists on
 /// the same document and carries the same signature.
@@ -172,21 +191,7 @@ fn component_selection_matches(app: &PhotocraftApp, ds: &DirectSelection) -> boo
     if st.doc.id != owner.document {
         return false;
     }
-    let path = match target {
-        PathRef::Layer(id) => st.doc.layer(photocraft_doc::LayerId(*id)).and_then(|l| match &l.content {
-            photocraft_doc::LayerContent::Shape(sh) => Some(sh.path.clone()),
-            _ => l.vector_mask.as_ref().map(|m| m.path.clone()),
-        }),
-        PathRef::Work => st.doc.work_path.clone(),
-        PathRef::Saved(i) => st.doc.paths.get(*i).map(|p| p.path.clone()),
-        // The stored id is the layer whose Type Path this is; resolving by it confirms the match.
-        PathRef::TypePath(id) => st.doc.layer(photocraft_doc::LayerId(*id)).and_then(|l| match &l.content {
-            photocraft_doc::LayerContent::Text(t) => photocraft_engine::type_extra_cmds::type_path(t),
-            _ => None,
-        }),
-        PathRef::Pen => None,
-    };
-    path.is_some_and(|p| crate::path_components::selection_signature(&p) == *sig)
+    path_of(app, target).is_some_and(|p| crate::path_components::selection_signature(&p) == *sig)
 }
 
 /// Clear stale anchors and gestures, keeping the pointer until the old release arrives. True

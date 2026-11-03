@@ -213,7 +213,13 @@ pub(crate) fn move_selected(app: &mut PhotocraftApp, d: [f64; 2]) -> Option<Resu
     let mut params = r.params(app);
     params["anchors"] = json!(app.ui.direct_selection.anchors);
     params["move"] = json!(d);
-    Some(run_selected_command(app, "path.moveAnchors", params))
+    let moved = run_selected_command(app, "path.moveAnchors", params);
+    if moved.is_ok() {
+        // The geometry changed: re-sign the selection, so later unrelated edits keep it (the
+        // signature must hash the moved path, not the press-time one).
+        app.ui.direct_selection.signature = crate::direct_select::path_of(app, &r).map(|p| selection_signature(&p));
+    }
+    Some(moved)
 }
 
 /// Do `+` and `-` pick a Path Operation with `tool`? The tools whose options bar has the menu.
