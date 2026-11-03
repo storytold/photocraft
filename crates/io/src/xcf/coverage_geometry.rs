@@ -1,9 +1,6 @@
-//! Shared native-conversion helpers; mapping registration follows separately.
-
-#[allow(unused_imports)]
+//! Decoders for ordinary native geometry filters on imported coverage surfaces.
+//! These consume PhotoCraft parameters, never source-operation names or resources.
 use photocraft_algo::{FilterParams as F, GalleryEffect, GalleryFilter, LensType, SpherizeMode, UndefinedAreas};
-
-#[allow(unused_imports)]
 use serde_json::Value;
 
 /// Reads a finite geometry scalar within the native command's bounds, defaulting only missing keys.
@@ -14,7 +11,6 @@ fn number(p: &Value, key: &str, default: f64, low: f64, high: f64) -> Result<f64
     };
     if v.is_finite() && (low..=high).contains(&v) { Ok(v) } else { Err(format!("Native {key} is outside its finite range")) }
 }
-
 /// Reads optional native text without coercing malformed present values into defaults.
 fn text<'a>(p: &'a Value, key: &str, default: &'a str) -> Result<&'a str, String> {
     match p.get(key) {
@@ -22,7 +18,6 @@ fn text<'a>(p: &'a Value, key: &str, default: &'a str) -> Result<&'a str, String
         Some(v) => v.as_str().ok_or_else(|| format!("Native {key} is not text")),
     }
 }
-
 /// Reads a native Boolean with explicit missing-value behavior and type rejection.
 fn flag(p: &Value, key: &str, default: bool) -> Result<bool, String> {
     match p.get(key) {
@@ -30,7 +25,6 @@ fn flag(p: &Value, key: &str, default: bool) -> Result<bool, String> {
         Some(v) => v.as_bool().ok_or_else(|| format!("Native {key} is not boolean")),
     }
 }
-
 /// Rejects external geometry resource locators so coverage replay cannot resolve files or document
 /// references.
 fn local(p: &Value) -> Result<(), String> {
@@ -44,7 +38,6 @@ fn local(p: &Value) -> Result<(), String> {
     }
     Ok(())
 }
-
 /// Maps the native undefined-area text choice to its exact existing sampling policy.
 fn undefined(p: &Value, default: &str) -> Result<UndefinedAreas, String> {
     match text(p, "undefinedAreas", default)? {
@@ -54,7 +47,6 @@ fn undefined(p: &Value, default: &str) -> Result<UndefinedAreas, String> {
         _ => Err("Native undefinedAreas choice is invalid".into()),
     }
 }
-
 /// Reads the native deterministic seed as a bounded unsigned integer.
 fn seed(p: &Value) -> Result<u32, String> {
     match p.get("seed") {
@@ -212,4 +204,120 @@ pub(super) fn lens_correction(p: &Value) -> Result<photocraft_algo::lens::LensCo
         angle: number(p, "angle", 0., -f64::MAX, f64::MAX)?,
         scale: number(p, "scale", 100., 50., 150.)?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use photocraft_color::{ColorMode, PixelFormat, SampleType};
+    use photocraft_geom::Rect;
+    use photocraft_raster::{Interrupt, Surface};
+    use serde_json::json;
+
+    /// Builds a deterministic native surface with nonuniform samples for geometry adapter comparisons.
+    fn source(sample: SampleType) -> Surface {
+        let mut s = Surface::new(PixelFormat::new(ColorMode::Grayscale, sample, false));
+        s.write_region(Rect::new(0, 0, 12, 9), &(0..108).map(|v| ((v * 17) % 107) as f32 / 106.).collect::<Vec<_>>());
+        s
+    }
+    #[test]
+    /// Compares decoded controls and transformed coverage against independent native geometry operators at
+    /// each depth.
+    fn decoders_match_independent_native_parameters_and_coverage_at_all_depths() {
+        let mut texture = GalleryEffect::new(GalleryFilter::Texturizer);
+        texture.set("relief", 7.);
+        texture.set("scaling", 125.);
+        assert!(texture.set_choice("texture", "brick"));
+        assert!(texture.set_choice("light", "left"));
+        texture.set("invert", 1.);
+        let map = photocraft_algo::Image { rect: Rect::new(0, 0, 2, 2), ch: 3, data: vec![0., 1., 0.5, 1., 0., 0.5, 0.25, 0.75, 0.5, 0.75, 0.25, 0.5] };
+        let displace = crate::smart_map::displace_embed_map(&json!({"horizontal":2.,"vertical":-3.,"fit":"tile","undefinedAreas":"wrap"}), &map).unwrap();
+        let embedded = crate::smart_map::displace_embedded_map(&displace).unwrap();
+        let cases = [
+            ("filter.distort.pinch", json!({"amount":-25.}), F::Pinch { amount: -25. }),
+            ("filter.distort.twirl", json!({"angle":120.}), F::Twirl { angle: 120. }),
+            ("filter.distort.spherize", json!({"amount":-60.,"mode":"verticalOnly"}), F::Spherize { amount: -60., mode: SpherizeMode::VerticalOnly }),
+            (
+                "filter.other.offset",
+                json!({"horizontal":2,"vertical":-3,"undefinedAreas":"wrap"}),
+                F::Offset { horizontal: 2, vertical: -3, undefined: UndefinedAreas::Wrap },
+            ),
+            ("filter.pixelate.crystallize", json!({"cellSize":4.,"seed":u32::MAX}), F::Crystallize { cell_size: 4., seed: u32::MAX }),
+            (
+                "filter.render.lensFlare",
+                json!({"brightness":80.,"centerX":0.3,"centerY":0.7,"lens":"prime35"}),
+                F::LensFlare { brightness: 80., center_x: 0.3, center_y: 0.7, lens: LensType::Prime35 },
+            ),
+            (
+                "filter.gallery.texturizer",
+                json!({"texture":"brick","light":"left","scaling":125.,"relief":7.,"invert":true}),
+                F::FilterGallery { effects: vec![texture] },
+            ),
+            (
+                "filter.distort.displace",
+                displace,
+                F::Displace { horizontal: 2., vertical: -3., stretch: false, undefined: UndefinedAreas::Wrap, map: Some(embedded) },
+            ),
+        ];
+        let bounds = Rect::new(0, 0, 12, 9);
+        for (id, params, expected) in cases {
+            let decoded = filter(id, &params).unwrap().unwrap();
+            assert_eq!(decoded, expected, "{id}");
+            for sample in [SampleType::U8, SampleType::U16, SampleType::F32] {
+                let src = source(sample);
+                let actual = photocraft_algo::apply_in_with(&src, &decoded, bounds, bounds, None, bounds, &Interrupt::NONE).unwrap();
+                let reference = photocraft_algo::apply_in_with(&src, &expected, bounds, bounds, None, bounds, &Interrupt::NONE).unwrap();
+                assert_eq!(actual.read_region(bounds), reference.read_region(bounds), "{id}:{sample:?}");
+                assert!(actual.read_region(bounds).iter().all(|v| v.is_finite()));
+            }
+        }
+    }
+    #[test]
+    /// Verifies Lens Flare uses established native defaults and explicit controls without a source-resource
+    /// lookup.
+    fn lens_decodes_native_defaults_and_resolved_parameters_without_source_resources() {
+        use photocraft_algo::lens::{EdgeMode, LensCorrection};
+        assert_eq!(lens_correction(&json!({})).unwrap(), LensCorrection::default());
+        let params = json!({"distortion":23.,"vignetteAmount":-15.,"scale":110.,"angle":4.,"edge":"color","edgeColor":[0.2,0.4,0.6,1.]});
+        let expected =
+            LensCorrection { distortion: 23., vignette_amount: -15., scale: 110., angle: 4., edge: EdgeMode::Color([0.2, 0.4, 0.6, 1.]), ..Default::default() };
+        let actual = lens_correction(&params).unwrap();
+        assert_eq!(actual, expected);
+        let bounds = Rect::new(0, 0, 12, 9);
+        for sample in [SampleType::U8, SampleType::U16, SampleType::F32] {
+            let src = source(sample);
+            assert_eq!(
+                photocraft_algo::lens::correct(&src, bounds, &actual).read_region(bounds),
+                photocraft_algo::lens::correct(&src, bounds, &expected).read_region(bounds)
+            );
+        }
+    }
+    #[test]
+    /// Checks unavailable locators and hostile geometry values fail before native replay can silently
+    /// substitute defaults.
+    fn rejects_external_resources_malformed_types_and_nonfinite_or_outside_native_domains() {
+        assert!(filter("unrecognized", &json!({})).is_none());
+        for (id, params) in [
+            ("filter.distort.displace", json!({"mapPath":"C:/private/source.psd"})),
+            ("filter.distort.displace", json!({"__displacePsd":"00"})),
+            ("filter.distort.twirl", json!({"angle":1e300})),
+            ("filter.distort.pinch", json!({"amount":"10"})),
+            ("filter.distort.spherize", json!({"mode":"unknown"})),
+            ("filter.other.offset", json!({"horizontal":2147483648u64})),
+            ("filter.pixelate.crystallize", json!({"seed":-1})),
+            ("filter.gallery.texturizer", json!({"invert":1})),
+            ("filter.render.lensFlare", json!({"centerX":2.})),
+        ] {
+            assert!(filter(id, &params).unwrap().is_err(), "{id}:{params}");
+        }
+        for p in [
+            json!({"profile":"auto"}),
+            json!({"autoScale":true}),
+            json!({"edgeColor":[1.,2.,3.],"edge":"color"}),
+            json!({"scale":1e300}),
+            json!({"correctCA":0}),
+        ] {
+            assert!(lens_correction(&p).is_err(), "{p}");
+        }
+    }
 }

@@ -701,6 +701,98 @@ mod tests {
         }
     }
 
+    /// Compares smooth alpha conversion with native coverage behavior while preserving stored color and runtime depth.
+    #[test]
+    fn alpha_smooth_curve_is_a_native_transfer_preserving_stored_color_axes_and_depth() {
+        use photocraft_color::{PixelFormat, SampleType};
+        use photocraft_doc::{
+            Adjustment,
+            adjust::{CurvePoint, ToneSpace},
+        };
+        let raw = "(channel alpha) (curve (curve-type smooth) (points 6 0 1 0.5 0.2 1 0))";
+        let config = parse_config(raw, &mut (32 << 20)).unwrap();
+        let source = StoredEffect::test("gimp:curves", vec![Argument { name: "config", value: ArgumentValue::Config(config) }]);
+        let native = map(&source, &context(ColorMode::Rgb)).unwrap().unwrap();
+        assert_eq!(native.filters.len(), 1);
+        assert_eq!(native.filters[0].command, "filter.other.alphaCurve");
+        let values: Vec<f32> = native.filters[0].params["values"].as_array().unwrap().iter().map(|value| value.as_f64().unwrap() as f32).collect();
+        assert_eq!(values.len(), 256);
+        assert!(values.iter().all(|value| value.is_finite() && (0.0..=1.0).contains(value)));
+        let mut expected = photocraft_compose::Buffer {
+            rect: photocraft_geom::Rect::new(0, 0, 256, 1),
+            px: (0..256)
+                .map(|i| {
+                    let value = i as f32 / 255.;
+                    [value, value, value, 1.]
+                })
+                .collect(),
+        };
+        let curve = Adjustment::Curves {
+            master: vec![CurvePoint { input: 0., output: 1. }, CurvePoint { input: 0.5, output: 0.2 }, CurvePoint { input: 1., output: 0. }],
+            per_channel: std::array::from_fn(|_| Vec::new()),
+            space: ToneSpace::Rgb,
+            black: Vec::new(),
+            pencil: false,
+        };
+        photocraft_compose::adjust::apply_in(
+            &curve,
+            &mut expected,
+            photocraft_compose::adjust::Transfer::Gamma(1.),
+            Some(SampleType::F32),
+            ColorMode::Grayscale,
+        );
+        assert_eq!(values, expected.px.iter().map(|pixel| pixel[0]).collect::<Vec<_>>());
+        for sample in SampleType::ALL {
+            for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab] {
+                let format = PixelFormat::new(mode, sample, true);
+                let bounds = photocraft_geom::Rect::new(0, 0, 3, 1);
+                let mut input = photocraft_raster::Surface::new(format);
+                let mut pixels = Vec::new();
+                for alpha in [0., 128. / 255., 1.] {
+                    let mut pixel = vec![0.4; format.channels()];
+                    *pixel.last_mut().unwrap() = alpha;
+                    pixels.extend(pixel);
+                }
+                input.write_region(bounds, &pixels);
+                let result = photocraft_algo::coverage::apply_with(
+                    &input,
+                    photocraft_algo::coverage::Operation::AlphaCurve(&values),
+                    bounds,
+                    bounds,
+                    None,
+                    &photocraft_raster::Interrupt::NONE,
+                )
+                .unwrap();
+                for x in 0..3 {
+                    let before = input.pixel(x, 0);
+                    let after = result.pixel(x, 0);
+                    assert_eq!(&after[..after.len() - 1], &before[..before.len() - 1], "{mode:?} {sample:?}");
+                }
+                assert_eq!(result.pixel(0, 0).last().copied(), Some(1.));
+                assert_eq!(result.pixel(2, 0).last().copied(), Some(0.));
+            }
+        }
+        let mut document = photocraft_doc::Document::new("Native alpha curve", photocraft_geom::Size::new(3, 1), ColorMode::Rgb, SampleType::F32);
+        let mut source_document = document.clone();
+        let mut pixels = photocraft_raster::Surface::new(source_document.pixel_format());
+        pixels.fill_rect(source_document.bounds(), &[0.4, 0.5, 0.6, 1.]);
+        source_document.layers.push(photocraft_doc::Layer::new("Original native pixels", photocraft_doc::LayerContent::Raster(pixels)));
+        let source_bytes = photocraft_format::save_to_bytes(&source_document, &Default::default()).unwrap();
+        let mut smart = photocraft_doc::SmartObject::new(
+            photocraft_doc::SmartSource::Embedded { file_name: "native.pcraft".into(), bytes: std::sync::Arc::new(source_bytes) },
+            photocraft_geom::Affine::IDENTITY,
+            None,
+        );
+        smart.smart_filters = native.filters.clone();
+        document.layers.push(photocraft_doc::Layer::new("Native Alpha Curve", photocraft_doc::LayerContent::Smart(smart)));
+        let bytes = photocraft_format::save_to_bytes(&document, &Default::default()).unwrap();
+        let reopened = photocraft_format::load_from_bytes(&bytes).unwrap();
+        let photocraft_doc::LayerContent::Smart(smart) = &reopened.layers[0].content else {
+            panic!("native smart data");
+        };
+        assert_eq!(smart.smart_filters, native.filters);
+    }
+
     /// Checks alpha map sampling is independent of existing native RGB curve filters.
     #[test]
     fn free_alpha_curve_uses_native_map_sampling_and_keeps_rgb_filters_unchanged() {
