@@ -35,8 +35,9 @@ impl GpuPolicy {
         if args.no_gpu {
             return Ok(Self { enabled: false });
         }
-        match std::env::var("PHOTOCRAFT_GPU") {
-            Ok(val) => {
+        match std::env::var_os("PHOTOCRAFT_GPU") {
+            Some(val) => {
+                let val = val.to_string_lossy();
                 let trimmed = val.trim();
                 if trimmed.is_empty() || trimmed == "0" {
                     Ok(Self { enabled: false })
@@ -46,7 +47,7 @@ impl GpuPolicy {
                     Err(format!("invalid value '{trimmed}' for 'PHOTOCRAFT_GPU': expected '1' or '0'"))
                 }
             }
-            Err(_) => Ok(Self { enabled: false }),
+            None => Ok(Self { enabled: false }),
         }
     }
 
@@ -94,6 +95,7 @@ impl BandRenderer for DisabledGpuRenderer {
         _doc: &photocraft_doc::Document,
         _rect: photocraft_doc::Rect,
         _band_rows: i32,
+        _ctl: &photocraft_raster::Interrupt<'_>,
         _sink: &mut dyn FnMut(photocraft_io::RenderBand) -> Result<(), photocraft_io::IoError>,
     ) -> Result<(), photocraft_io::RenderError> {
         Err(photocraft_io::RenderError::Unavailable("GPU support is not compiled in this build (compile with --features gpu)".into()))

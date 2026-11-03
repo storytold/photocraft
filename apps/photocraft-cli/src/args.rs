@@ -455,7 +455,10 @@ fn check_gpu_env(cmd: &mut clap::Command, m: &ArgMatches) -> Result<(), clap::Er
     if m.value_source("gpu") == Some(ValueSource::CommandLine) || m.value_source("no_gpu") == Some(ValueSource::CommandLine) {
         return Ok(());
     }
-    if let Ok(v) = std::env::var("PHOTOCRAFT_GPU") {
+    if let Some(v) = std::env::var_os("PHOTOCRAFT_GPU") {
+        // A non-UTF-8 value is still a value other than empty, "0" or "1": reject it rather
+        // than silently treating it as unset and running on the CPU.
+        let v = v.to_string_lossy();
         let trimmed = v.trim();
         if !trimmed.is_empty() && trimmed != "1" && trimmed != "0" {
             return Err(ServerOptionError::GpuVar(trimmed.to_string()).into_clap(cmd));

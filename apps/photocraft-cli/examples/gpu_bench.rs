@@ -123,6 +123,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 3. GPU Warm Runs
     let mut warm_durations = Vec::with_capacity(warm_runs);
+    let mut warm_fallbacks = 0usize;
     if gpu_succeeded && !is_fallback && warm_runs > 0 {
         for run in 1..=warm_runs {
             print!("Benchmarking GPU warm export (run {run}/{warm_runs})... ");
@@ -130,6 +131,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let warm_res = files::save_with_renderer(&doc, &gpu_warm_out, Some("png"), &opts, None, Some(&mut gpu_renderer))?;
             let d = t0.elapsed();
             if warm_res.iter().any(|w| w.contains("falling back to CPU")) {
+                warm_fallbacks += 1;
                 println!("{:.2} ms (FALLBACK TO CPU)", d.as_secs_f64() * 1000.0);
             } else {
                 println!("{:.2} ms", d.as_secs_f64() * 1000.0);
@@ -161,6 +163,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 avg_warm * 1000.0,
                 cpu_dur.as_secs_f64() / avg_warm
             );
+        } else if let Some(note) = warm_fallback_note(warm_runs, warm_fallbacks) {
+            println!("| GPU Warm | N/A | N/A | {note} |");
         } else {
             println!("| GPU Warm | N/A | N/A | Not measured (0 warm runs requested) |");
         }
@@ -168,6 +172,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let _ = std::fs::remove_dir_all(&tmp_dir);
     Ok(())
+}
+
+/// The warm-run summary note when every measured warm run fell back to the CPU.
+fn warm_fallback_note(warm_runs: usize, warm_fallbacks: usize) -> Option<String> {
+    (warm_fallbacks > 0).then(|| format!("{warm_fallbacks} of {warm_runs} warm runs fell back to CPU"))
 }
 
 fn sample_doc(w: u32, h: u32, layer_count: usize) -> Document {
@@ -200,5 +209,12 @@ mod tests {
             let doc = sample_doc(width, height, 2);
             assert_eq!(doc.size, Size::new(width, height));
         }
+    }
+
+    #[test]
+    fn warm_summary_reports_fallbacks_instead_of_zero_runs() {
+        assert_eq!(warm_fallback_note(3, 3).as_deref(), Some("3 of 3 warm runs fell back to CPU"));
+        assert_eq!(warm_fallback_note(3, 1).as_deref(), Some("1 of 3 warm runs fell back to CPU"));
+        assert_eq!(warm_fallback_note(0, 0), None);
     }
 }

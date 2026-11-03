@@ -103,6 +103,10 @@ pub(crate) fn batch(a: &BatchArgs, out: &mut dyn Write, err: &mut dyn Write) -> 
             Ok(serde_json::from_value(r["warnings"].clone()).unwrap_or_default())
         })();
         let diags = h.drain_diagnostics();
+        // Release the item's GPU caches before the renderer moves on to the next file.
+        if h.session.active_index().is_some() {
+            let _ = h.close(None);
+        }
         if let Some(recovered) = h.take_renderer() {
             renderer = Some(recovered);
         }
@@ -114,7 +118,10 @@ pub(crate) fn batch(a: &BatchArgs, out: &mut dyn Write, err: &mut dyn Write) -> 
                 // Each file's own export warnings (e.g. transparency composited over white) are
                 // reported for that file, even when an earlier file had the same warning.
                 warn_all(err, &ws);
-                warn_dedup(err, &diags, &mut seen_warnings);
+                // A fallback diagnostic can also be in this file's export warnings; report it
+                // once, through the per-file warnings above, not twice.
+                let pending: Vec<String> = diags.into_iter().filter(|d| !ws.contains(d)).collect();
+                warn_dedup(err, &pending, &mut seen_warnings);
             }
             Err(e) => {
                 failed += 1;
@@ -242,10 +249,11 @@ mod tests {
             doc: &Document,
             rect: Rect,
             band_rows: i32,
+            ctl: &photocraft_raster::Interrupt<'_>,
             sink: &mut dyn FnMut(RenderBand) -> Result<(), IoError>,
         ) -> Result<(), RenderError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
-            photocraft_io::CpuRenderer.render_bands(doc, rect, band_rows, sink)
+            photocraft_io::CpuRenderer.render_bands(doc, rect, band_rows, ctl, sink)
         }
     }
 

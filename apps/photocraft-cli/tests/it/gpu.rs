@@ -68,6 +68,25 @@ fn gpu_env_var_validation() {
     let _ = std::fs::remove_dir_all(&d);
 }
 
+#[cfg(unix)]
+#[test]
+fn gpu_env_var_rejects_a_non_utf8_value() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    let d = tmp("env_non_utf8");
+    let in_png = d.join("in.png");
+    let out_png = d.join("out.png");
+    write_png(&in_png, 16, 16);
+
+    let bad = OsString::from_vec(vec![0xff, 0xfe]);
+    let o = bin().env("PHOTOCRAFT_GPU", bad).args(["convert", in_png.to_str().unwrap(), out_png.to_str().unwrap()]).output().unwrap();
+    assert_eq!(o.status.code(), Some(2), "a non-UTF-8 PHOTOCRAFT_GPU must be a usage error");
+    let stderr = String::from_utf8_lossy(&o.stderr);
+    assert!(stderr.contains("PHOTOCRAFT_GPU"), "the usage error must name the variable: {stderr}");
+    let _ = std::fs::remove_dir_all(&d);
+}
+
 #[test]
 fn explicit_flags_override_environment() {
     let d = tmp("override");
@@ -177,6 +196,8 @@ fn batch_recovers_renderer_after_failed_item_and_preserves_gpu_policy() {
 
     assert!(stdout.contains("1 succeeded, 1 failed"), "stdout: {stdout}");
     assert!(stderr.contains("FAIL"), "stderr must report failing item: {stderr}");
+    let markers = ["GPU adapter:", "no GPU adapter available", "could not build GPU compositor", "falling back to CPU"];
+    assert!(markers.iter().any(|marker| stderr.contains(marker)), "--gpu must reach the batch renderer: {stderr}");
     assert!(out_dir.join("02_valid.png").is_file(), "second item must have been saved successfully");
 
     let _ = std::fs::remove_dir_all(&d);
