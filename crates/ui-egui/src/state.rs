@@ -716,7 +716,11 @@ mod tests {
         assert!(!Tool::RedEye.is_brushlike());
         assert_eq!(Tool::from_name("patternStamp"), Some(Tool::PatternStamp));
         assert_eq!(Tool::from_name("Pattern Stamp Tool"), Some(Tool::PatternStamp));
-        assert_eq!(Tool::ALL.len(), 68);
+        assert_eq!(Tool::from_name("Selection Brush Tool"), Some(Tool::SelectionBrush));
+        assert_eq!(Tool::from_name("selectionBrush"), Some(Tool::SelectionBrush));
+        assert_eq!(Tool::SelectionBrush.key(), 'L');
+        assert!(Tool::SelectionBrush.is_brushlike());
+        assert_eq!(Tool::ALL.len(), 69);
     }
 
     fn vector_tool_names_parse() {

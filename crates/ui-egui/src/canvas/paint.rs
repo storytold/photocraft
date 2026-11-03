@@ -522,11 +522,16 @@ pub(super) fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter
                 draw_smoothing_string(painter, xf, s);
             }
         }
-        t if t.is_brushlike() || t == Tool::QuickSelection => {
+        t if t.is_brushlike() || t == Tool::QuickSelection || t == Tool::SelectionBrush => {
             // Retouching strokes preview as a translucent trail of the brush footprint: a mask,
             // not a brush-wide egui polyline (which zoomed in tessellates into wedges, #189).
             let col = match t {
                 Tool::QuickSelection => Color32::from_white_alpha(40),
+                Tool::SelectionBrush => {
+                    let [r, g, b] = app.ui.tool_options.selection_brush_color;
+                    let a = (app.ui.tool_options.selection_brush_opacity.clamp(1.0, 100.0) / 100.0 * 255.0).round() as u8;
+                    Color32::from_rgba_unmultiplied(r, g, b, a)
+                }
                 // The Remove Tool tints what it will remove, like Photoshop's.
                 Tool::Remove => crate::theme::Tokens::get(painter.ctx()).danger.gamma_multiply(0.45),
                 // Photoshop paints the area to heal in half-opaque dark grey while dragging; a faint
@@ -541,13 +546,13 @@ pub(super) fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter
             let trail = app.trail.get_or_insert_with(|| crate::stroke_trail::Trail::new(size));
             let brush = || photocraft_engine::retouch_cmds::stroke_brush(&app.session.tools.brush, &json!({}));
             match t {
-                // Quick Selection reads the brush's size alone (`select.quick`).
+                // Quick Selection reads the brush's size alone.
                 Tool::QuickSelection => trail.feed(&d.points, app.session.tools.brush.size),
                 // Remove removes every pixel a dab touches, so its whole reach is tinted: a soft
                 // tip's reaches well past the nominal radius.
                 Tool::Remove => trail.feed_reach(&d.points, brush),
                 // What the stroke covers, dab by dab: soft edges, pressure and shape dynamics
-                // (Spot Healing #2364; the Mixer Brush, and a tool whose live stroke didn't start).
+                // (Selection Brush, Spot Healing #2364, the Mixer Brush, etc).
                 _ => trail.feed_dabs(&d.points, brush),
             }
             trail.draw(painter, doc_rect, xf.flip, col);

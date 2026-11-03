@@ -173,6 +173,19 @@ pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], m
             report_smart_result(app, r, tl!("Quick Selection found nothing there"));
             return true;
         }
+        Tool::SelectionBrush => {
+            let size = app.session.tools.brush.size;
+            let hardness = (app.session.tools.brush.hardness * 100.0).clamp(0.0, 100.0);
+            let mode = if mods.alt { "subtract" } else { "add" };
+            let xy: Vec<[f64; 2]> = points.iter().map(|q| [q[0], q[1]]).collect();
+            let (sample_all, enhance) = (o.sample_all.quick_selection, o.enhance_edge);
+            let r = app.run(
+                "select.brush",
+                json!({"points": xy, "size": size, "hardness": hardness, "mode": mode, "enhanceEdge": enhance, "sampleAllLayers": sample_all}),
+            );
+            report_smart_result(app, r, tl!("Selection Brush applied"));
+            return true;
+        }
         _ => return false,
     };
     p["points"] = pts;
@@ -689,6 +702,21 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         Tool::QuickSelection => {
             crate::widgets::checkbox(ui, &mut o.sample_all.quick_selection, tl!("Sample All Layers"));
             crate::widgets::checkbox(ui, &mut o.enhance_edge, tl!("Enhance Edge"));
+            opt(ui, &crate::i18n::fmt(tl!("{key} to subtract"), &[("key", &crate::shortcuts::pretty("Alt"))]));
+            crate::widgets::vline(ui, 22.0);
+            if crate::widgets::secondary_button(ui, tl!("Select Subject"), 0.0).clicked() {
+                let r = app.run("select.subject", json!({}));
+                report_smart_result(app, r, tl!("No subject found — try Object Selection or the Lasso"));
+            }
+        }
+        Tool::SelectionBrush => {
+            opt(ui, tl!("Overlay:"));
+            crate::widgets::color_edit_button_srgb(ui, &mut o.selection_brush_color, &crate::color_picker_ui::title_for(tl!("Overlay Color")));
+            opt(ui, tl!("Opacity"));
+            crate::widgets::value_field(ui, &mut o.selection_brush_opacity, 1.0..=100.0, "%", 50.0);
+            crate::widgets::vline(ui, 22.0);
+            crate::widgets::checkbox(ui, &mut o.sample_all.quick_selection, tl!("Sample All Layers"));
+            crate::widgets::checkbox(ui, &mut o.enhance_edge, tl!("Auto-Detect (Enhance Edge)"));
             opt(ui, &crate::i18n::fmt(tl!("{key} to subtract"), &[("key", &crate::shortcuts::pretty("Alt"))]));
             crate::widgets::vline(ui, 22.0);
             if crate::widgets::secondary_button(ui, tl!("Select Subject"), 0.0).clicked() {

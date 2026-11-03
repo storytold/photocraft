@@ -700,3 +700,179 @@ fn refine_edge_rejects_bad_edits_and_keeps_the_selection() {
         assert_eq!(sel_bytes(&s, 80, 40), before, "{bad}");
     }
 }
+
+#[test]
+fn selection_brush_add_subtract_and_replace() {
+    let mut s = two_regions(8);
+    // 1. Paint a stroke with Selection Brush
+    let r = s
+        .execute(
+            "select.brush",
+            json!({
+                "points": [[20, 20], [80, 20]],
+                "size": 20,
+                "hardness": 100,
+                "mode": "add"
+            }),
+        )
+        .unwrap();
+    assert_eq!(r["selected"], true);
+    assert_eq!(r["changed"], true);
+    // Centre of stroke is fully selected
+    assert!(cov(&s, 50, 20) > 0.9);
+    // Far away is not selected
+    assert_eq!(cov(&s, 50, 80), 0.0);
+
+    // 2. Subtract from the selection
+    let r2 = s
+        .execute(
+            "select.brush",
+            json!({
+                "points": [[50, 20]],
+                "size": 24,
+                "hardness": 100,
+                "mode": "subtract"
+            }),
+        )
+        .unwrap();
+    assert_eq!(r2["selected"], true);
+    // Subtracted point is now unselected
+    assert_eq!(cov(&s, 50, 20), 0.0);
+    // Other parts of original stroke remain selected
+    assert!(cov(&s, 25, 20) > 0.9);
+
+    // 3. Replace mode
+    s.execute(
+        "select.brush",
+        json!({
+            "points": [[100, 60]],
+            "size": 16,
+            "hardness": 100,
+            "mode": "replace"
+        }),
+    )
+    .unwrap();
+    assert_eq!(cov(&s, 25, 20), 0.0);
+    assert!(cov(&s, 100, 60) > 0.9);
+}
+
+#[test]
+fn selection_brush_hardness_falloff() {
+    let mut s = two_regions(8);
+    // Soft brush (hardness 0)
+    s.execute(
+        "select.brush",
+        json!({
+            "points": [[50, 50]],
+            "size": 30,
+            "hardness": 0,
+            "mode": "replace"
+        }),
+    )
+    .unwrap();
+    let center = cov(&s, 50, 50);
+    let mid = cov(&s, 58, 50);
+    let edge = cov(&s, 64, 50);
+    assert!(center > mid && mid > edge);
+}
+
+#[test]
+fn selection_brush_closed_loop_auto_fill() {
+    let mut s = two_regions(8);
+    // Draw a closed loop outline: points encircling (50, 50)
+    s.execute(
+        "select.brush",
+        json!({
+            "points": [
+                [30, 30],
+                [70, 30],
+                [70, 70],
+                [30, 70],
+                [30, 30]
+            ],
+            "size": 8,
+            "hardness": 100,
+            "mode": "replace"
+        }),
+    )
+    .unwrap();
+
+    // The boundary is selected:
+    assert!(cov(&s, 30, 30) > 0.9);
+    assert!(cov(&s, 70, 30) > 0.9);
+    // The interior center (50, 50) was NOT brushed directly, but is automatically filled by closed loop detection!
+    assert!(cov(&s, 50, 50) > 0.9);
+    // Every pixel from stroke boundary to interior is solid (> 0.9) with zero blank line / seam dip:
+    for x in 30..=70 {
+        assert!(cov(&s, x, 30) > 0.9);
+        assert!(cov(&s, x, 50) > 0.9);
+    }
+    // The exterior outside the loop (10, 10) is NOT filled:
+    assert_eq!(cov(&s, 10, 10), 0.0);
+}
+
+#[test]
+fn selection_brush_open_stroke_does_not_fill_interior() {
+    let mut s = two_regions(8);
+    // Draw an open U-shaped stroke (endpoints [30, 30] and [30, 70] are 40 px apart):
+    s.execute(
+        "select.brush",
+        json!({
+            "points": [
+                [30, 30],
+                [70, 30],
+                [70, 70],
+                [30, 70]
+            ],
+            "size": 8,
+            "hardness": 100,
+            "mode": "replace"
+        }),
+    )
+    .unwrap();
+
+    // The boundary is selected:
+    assert!(cov(&s, 70, 30) > 0.9);
+    assert!(cov(&s, 70, 70) > 0.9);
+    // The interior center (50, 50) must remain unfilled for an open stroke:
+    assert_eq!(cov(&s, 50, 50), 0.0);
+}
+
+#[test]
+fn selection_brush_closed_loop_soft_hardness_preserves_outer_falloff() {
+    let mut s = two_regions(8);
+    // Draw a closed loop outline encircling (50, 50) with size 20 and hardness 0 (soft edge)
+    s.execute(
+        "select.brush",
+        json!({
+            "points": [
+                [30, 30],
+                [70, 30],
+                [70, 70],
+                [30, 70],
+                [30, 30]
+            ],
+            "size": 20,
+            "hardness": 0,
+            "mode": "replace"
+        }),
+    )
+    .unwrap();
+
+    // The interior is 100% solidly filled and merged without any gaps:
+    assert!(cov(&s, 50, 50) > 0.99);
+    assert!(cov(&s, 60, 50) > 0.99);
+    assert!(cov(&s, 70, 50) > 0.99); // on the centerline
+
+    // On the outside of the loop (x > 70 at y = 50), the soft falloff is 100% preserved!
+    // It must NOT be flattened to 1.0!
+    let c70 = cov(&s, 70, 50);
+    let c74 = cov(&s, 74, 50);
+    let c77 = cov(&s, 77, 50);
+    let c82 = cov(&s, 82, 50);
+
+    assert!(c70 > c74, "centerline ({c70}) must be greater than outer falloff at x=74 ({c74})");
+    assert!(c74 > c77, "outer falloff at x=74 ({c74}) must be greater than at x=77 ({c77})");
+    assert!(c77 > 0.0, "outer falloff at x=77 ({c77}) must still have soft coverage");
+    assert_eq!(c82, 0.0, "beyond brush radius at x=82 must be 0.0");
+}

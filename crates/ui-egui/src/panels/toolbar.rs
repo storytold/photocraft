@@ -10,7 +10,7 @@ pub(super) const TOOL_SECTIONS: &[&[&[Tool]]] = &[
     &[&[Tool::Move, Tool::Artboard]],
     &[
         &[Tool::RectMarquee, Tool::EllipseMarquee, Tool::SingleRowMarquee, Tool::SingleColumnMarquee],
-        &[Tool::Lasso, Tool::PolygonLasso, Tool::MagneticLasso],
+        &[Tool::Lasso, Tool::PolygonLasso, Tool::MagneticLasso, Tool::SelectionBrush],
         &[Tool::ObjectSelection, Tool::QuickSelection, Tool::MagicWand],
         &[Tool::Crop, Tool::PerspectiveCrop, Tool::Slice, Tool::SliceSelect],
         &[Tool::Frame],

@@ -119,6 +119,134 @@ fn quick_selection(s: &mut Session, p: &Value) -> Result<Value> {
     apply(s, "Quick Selection", region.as_ref(), m)
 }
 
+fn selection_brush(s: &mut Session, p: &Value) -> Result<Value> {
+    let pts = points(p);
+    if pts.is_empty() {
+        return Err(bad("select.brush", "needs at least one point"));
+    }
+    let size = f(p, "size", 30.0).clamp(1.0, 5000.0);
+    let hardness = f(p, "hardness", 100.0).clamp(0.0, 100.0);
+    let m = match p.get("mode").and_then(Value::as_str).unwrap_or("add") {
+        "subtract" => SelectionMode::Subtract,
+        "replace" | "new" => SelectionMode::Replace,
+        "intersect" => SelectionMode::Intersect,
+        _ => SelectionMode::Add,
+    };
+    let enhance = b(p, "enhanceEdge", false);
+    let all_layers = b(p, "sampleAllLayers", false);
+
+    let mut closed_pts;
+    let mut connect_to = None;
+    let mut loop_start_idx = None;
+
+    if pts.len() >= 4
+        && let Some(last) = pts.last().copied()
+    {
+        let close_dist = (size * 2.0).max(36.0);
+        let close_dist2 = close_dist * close_dist;
+        let limit = (pts.len() / 2).max(1);
+        let mut best_d2 = f32::MAX;
+        for (idx, p) in pts.iter().enumerate().take(limit) {
+            let dx = p.0 - last.0;
+            let dy = p.1 - last.1;
+            let d2 = dx * dx + dy * dy;
+            if d2 <= close_dist2 && d2 < best_d2 {
+                best_d2 = d2;
+                connect_to = Some(*p);
+                loop_start_idx = Some(idx);
+            }
+        }
+    }
+
+    let stroke_pts = if let Some(target) = connect_to {
+        closed_pts = pts.clone();
+        if let Some(last) = closed_pts.last()
+            && (last.0 - target.0).hypot(last.1 - target.1) > 0.01
+        {
+            closed_pts.push(target);
+        }
+        &closed_pts[..]
+    } else {
+        &pts[..]
+    };
+
+    let doc_bounds = s.active().ok_or(EngineError::NoDocument)?.doc.bounds();
+    let brush_shape = matting::brush_surface(stroke_pts, size, hardness, doc_bounds);
+    let Some(mut brush_surf) = brush_shape else {
+        let selected = s.active().ok_or(EngineError::NoDocument)?.doc.selection.is_some();
+        return Ok(json!({ "selected": selected, "changed": false }));
+    };
+
+    // Auto-fill interior when a closed loop outline is detected:
+    // We rasterize the polygon defined by the stroke centerline loop and merge with combine_sparse(max).
+    // This guarantees:
+    // 1) The interior merges 100% seamlessly with the stroke (zero blank lines or gaps).
+    // 2) The outer edge of the stroke is completely untouched outside the polygon, preserving 100% of the authentic brush hardness!
+    if let (Some(target), Some(start_idx)) = (connect_to, loop_start_idx) {
+        let mut poly_pts = pts[start_idx..].to_vec();
+        if let Some(last) = poly_pts.last()
+            && (last.0 - target.0).hypot(last.1 - target.1) > 0.01
+        {
+            poly_pts.push(target);
+        }
+        if poly_pts.len() > 3
+            && let (Some(first), Some(last)) = (poly_pts.first(), poly_pts.last())
+            && (first.0 - last.0).hypot(first.1 - last.1) < 0.01
+        {
+            poly_pts.pop();
+        }
+        if poly_pts.len() >= 3
+            && let Some(poly_surf) = photocraft_algo::selection::polygon_surface(&poly_pts, doc_bounds)
+        {
+            brush_surf = photocraft_algo::selection::combine_sparse(&brush_surf, &poly_surf, doc_bounds, f32::max);
+        }
+    }
+
+    if enhance {
+        let refined = with_sampler(s, all_layers, |smp, _doc| {
+            let bbox = brush_surf.content_bounds().intersect(&doc_bounds);
+            if bbox.is_empty() {
+                return None;
+            }
+            matting::refine_mask(smp, &matting::surface_reader(&brush_surf), bbox, doc_bounds, &ENHANCE)
+        })?;
+        if let Some(r) = refined {
+            brush_surf = matting::region_surface(&r);
+        }
+    }
+
+    let bbox = brush_surf.content_bounds();
+    let selected = s.edit("Selection Brush", |doc, _| {
+        let canvas = doc.bounds();
+        let new_sel = match (m, doc.selection.as_ref()) {
+            (SelectionMode::Replace, _) => Some(brush_surf),
+            (SelectionMode::Add, None) => Some(brush_surf),
+            (SelectionMode::Add, Some(old)) => {
+                let out = photocraft_algo::selection::combine_sparse(old, &brush_surf, canvas, f32::max);
+                (!out.content_bounds().is_empty()).then_some(out)
+            }
+            (SelectionMode::Subtract, None) => None,
+            (SelectionMode::Subtract, Some(old)) => {
+                let out = photocraft_algo::selection::combine_sparse(old, &brush_surf, canvas, |a, b| (a - b).max(0.0));
+                (!out.content_bounds().is_empty()).then_some(out)
+            }
+            (SelectionMode::Intersect, None) => None,
+            (SelectionMode::Intersect, Some(old)) => {
+                let out = photocraft_algo::selection::combine_sparse(old, &brush_surf, canvas, f32::min);
+                (!out.content_bounds().is_empty()).then_some(out)
+            }
+        };
+        doc.selection = new_sel;
+        Ok(doc.selection.is_some())
+    })?;
+
+    Ok(json!({
+        "selected": selected,
+        "changed": true,
+        "bounds": [bbox.x0, bbox.y0, bbox.width() as i32, bbox.height() as i32]
+    }))
+}
+
 fn rect_param(p: &Value) -> Option<Rect> {
     let a = p.get("rect")?.as_array()?;
     let v: Vec<f64> = a.iter().filter_map(Value::as_f64).collect();
@@ -524,6 +652,14 @@ macro_rules! spec {
 /// Smart selection command specs.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
+        spec!(
+            "select.brush",
+            "Selection Brush",
+            [],
+            r##"{"points":[[x,y],…],"size":px=30,"hardness":0..100=100,"mode":"add|subtract|replace|intersect"="add","sampleAllLayers":bool=false,"enhanceEdge":bool=false}"##,
+            has_doc,
+            selection_brush
+        ),
         spec!(
             "select.quick",
             "Quick Selection",

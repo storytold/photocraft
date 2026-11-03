@@ -14,6 +14,7 @@ pub enum Tool {
     Lasso,
     PolygonLasso,
     MagneticLasso,
+    SelectionBrush,
     MagicWand,
     Crop,
     PerspectiveCrop,
@@ -79,7 +80,7 @@ pub enum Tool {
 }
 
 impl Tool {
-    pub const ALL: [Tool; 68] = [
+    pub const ALL: [Tool; 69] = [
         Tool::Move,
         Tool::Artboard,
         Tool::RectMarquee,
@@ -89,6 +90,7 @@ impl Tool {
         Tool::Lasso,
         Tool::PolygonLasso,
         Tool::MagneticLasso,
+        Tool::SelectionBrush,
         Tool::MagicWand,
         Tool::Crop,
         Tool::PerspectiveCrop,
@@ -173,6 +175,7 @@ impl Tool {
             Tool::Lasso => "Lasso Tool",
             Tool::PolygonLasso => "Polygonal Lasso Tool",
             Tool::MagneticLasso => "Magnetic Lasso Tool",
+            Tool::SelectionBrush => "Selection Brush Tool",
             Tool::MagicWand => "Magic Wand Tool",
             Tool::Crop => "Crop Tool",
             Tool::PerspectiveCrop => "Perspective Crop Tool",
@@ -257,6 +260,7 @@ impl Tool {
                 | Tool::Dodge
                 | Tool::Burn
                 | Tool::Sponge
+                | Tool::SelectionBrush
         )
     }
     /// Photoshop default single-key shortcut (`'\0'` = none, e.g. the Blur group).
@@ -267,7 +271,7 @@ impl Tool {
             Tool::Brush | Tool::Pencil | Tool::MixerBrush | Tool::ColorReplacement => 'B',
             Tool::Eraser | Tool::BackgroundEraser | Tool::MagicEraser => 'E',
             Tool::Eyedropper | Tool::ColorSampler | Tool::Ruler | Tool::Note | Tool::Count => 'I',
-            Tool::Lasso | Tool::PolygonLasso | Tool::MagneticLasso => 'L',
+            Tool::Lasso | Tool::PolygonLasso | Tool::MagneticLasso | Tool::SelectionBrush => 'L',
             Tool::MagicWand => 'W',
             Tool::Crop | Tool::PerspectiveCrop | Tool::Slice | Tool::SliceSelect => 'C',
             Tool::Frame => 'K',

@@ -258,6 +258,15 @@ pub struct ToolOptions {
     pub art_history_area: f32,
     #[serde(default)]
     pub art_history_tolerance: f32,
+    /// Selection Brush Tool: overlay color (Photoshop default red [255, 0, 0]) and opacity % (default 50%).
+    #[serde(default = "default_selection_brush_color")]
+    pub selection_brush_color: [u8; 3],
+    #[serde(default = "fifty")]
+    pub selection_brush_opacity: f32,
+}
+
+fn default_selection_brush_color() -> [u8; 3] {
+    [255, 0, 0]
 }
 
 fn default_art_history_style() -> String {
@@ -352,7 +361,7 @@ impl SampleAllLayers {
     pub fn slot(&mut self, tool: Tool) -> Option<&mut bool> {
         Some(match tool {
             Tool::MagicWand => &mut self.magic_wand,
-            Tool::QuickSelection => &mut self.quick_selection,
+            Tool::QuickSelection | Tool::SelectionBrush => &mut self.quick_selection,
             Tool::ObjectSelection => &mut self.object_selection,
             Tool::PaintBucket => &mut self.paint_bucket,
             Tool::MagicEraser => &mut self.magic_eraser,
@@ -488,6 +497,8 @@ impl Default for ToolOptions {
             art_history_style: default_art_history_style(),
             art_history_area: 50.0,
             art_history_tolerance: 0.0,
+            selection_brush_color: default_selection_brush_color(),
+            selection_brush_opacity: 50.0,
         }
     }
 }

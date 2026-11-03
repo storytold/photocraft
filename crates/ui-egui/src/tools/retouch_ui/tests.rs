@@ -852,3 +852,33 @@ fn art_history_stroke_runs_the_command() {
     drag(&mut app, Tool::ArtHistoryBrush);
     assert_eq!(app.session.journal.last().map(|(id, _)| id.as_str()), Some("paint.artHistoryBrush"));
 }
+
+#[test]
+fn selection_brush_stroke_runs_the_command() {
+    let mut app = app();
+    stripes(&mut app, 4, "pixels");
+    drag(&mut app, Tool::SelectionBrush);
+    assert_eq!(app.session.journal.last().map(|(id, _)| id.as_str()), Some("select.brush"));
+    assert!(app.session.active().unwrap().doc.selection.is_some());
+}
+
+#[test]
+fn selection_brush_forwards_mode_hardness_size_and_points() {
+    for (mods, mode) in [(egui::Modifiers::NONE, "add"), (egui::Modifiers::ALT, "subtract")] {
+        let mut app = app();
+        app.run("tools.setBrush", json!({"brush": {"size": 16, "hardness": 0.4}})).unwrap();
+        stripes(&mut app, 4, "pixels");
+        app.ui.tool = Tool::SelectionBrush;
+        tool_event(&mut app, ToolEvent::Down { x: 10.0, y: 30.0, pressure: 1.0 }, mods);
+        tool_event(&mut app, ToolEvent::Move { x: 50.0, y: 30.0, pressure: 1.0 }, mods);
+        tool_event(&mut app, ToolEvent::Up { x: 50.0, y: 30.0 }, mods);
+        assert!(!app.ui.status_error, "{}", app.ui.status);
+        let (id, p) = app.session.journal.last().unwrap();
+        assert_eq!(id, "select.brush");
+        assert_eq!(p["mode"], mode);
+        assert_eq!(p["size"].as_f64(), Some(16.0));
+        assert!((p["hardness"].as_f64().unwrap() - 40.0).abs() < 1e-6);
+        let xs: Vec<f64> = p["points"].as_array().unwrap().iter().map(|q| q[0].as_f64().unwrap()).collect();
+        assert!(xs.len() >= 2 && xs[0] < xs[xs.len() - 1]);
+    }
+}
