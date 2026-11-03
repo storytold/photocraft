@@ -4638,3 +4638,20 @@ cameraRaw	Tone Histogram	ტონების ჰისტოგრამა
 cameraRaw	Vignetting	ვინიეტირება
 cameraRaw	White Balance: As Shot	თეთრის ბალანსი: როგორც გადაღებულია
 	No matching fonts	შესაბამისი შრიფტები არ არის
+	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	არასწორი რიცხვითი მნიშვნელობა. საჭიროა მთელი რიცხვი {min}%-დან {max}%-მდე. ჩასმულია წინა მნიშვნელობა.
+	Recently Used Colors	ბოლოს გამოყენებული ფერები
+	Shapes can't use patterns yet	ფიგურებს პატერნების გამოყენება ჯერ არ შეუძლიათ
+	Stop Color	გადასვლის წერტილის ფერი
+	{set} from {file} replaced the one from {earlier}	{file}-დან {set}-მა ჩაანაცვლა {earlier}-დან ჩატვირთული
+@plural	{n} action file loaded|{n} action files loaded	ჩატვირთულია მოქმედებების ფაილი: {n}
+@plural	{n} file could not be loaded: {errors}|{n} files could not be loaded: {errors}	ვერ ჩაიტვირთა ფაილი: {n} — {errors}
+smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded source; format-specific features may change.	AI/PDF/EPS შიგთავსი SVG-ის სახით დარედაქტირდება. შენახვა ჩაანაცვლებს ჩაშენებულ წყაროს; ფორმატისთვის დამახასიათებელი შესაძლებლობები შეიძლება შეიცვალოს.
+smartSvg	Choose executable…	შესრულებადი ფაილის არჩევა…
+smartSvg	Choose the application used to edit this SVG:	აირჩიეთ აპლიკაცია, რომლითაც ეს SVG დარედაქტირდება:
+smartSvg	Edit SVG Smart Object	SVG ჭკვიანი ობიექტის რედაქტირება
+smartSvg	Other application	სხვა აპლიკაცია
+smartSvg	PhotoCraft (internal editor)	PhotoCraft (ჩაშენებული რედაქტორი)
+smartSvg	SVG editor opened. Save the SVG to update this Smart Object.	SVG-რედაქტორი გაიხსნა. ამ ჭკვიანი ობიექტის განსაახლებლად შეინახეთ SVG.
+smartSvg	Save to the opened SVG file. Each saved change becomes one undo step in PhotoCraft.	შეინახეთ გახსნილ SVG ფაილში. ყოველი შენახული ცვლილება PhotoCraft-ში ერთ დაბრუნების ნაბიჯად იქცევა.
+smartSvg	Stop syncing this Smart Object	ამ ჭკვიანი ობიექტის სინქრონიზაციის შეწყვეტა
+smartSvg	Updates wait while another document or an editing dialog is active.	განახლება დაელოდება, სანამ სხვა დოკუმენტი ან რედაქტირების დიალოგი აქტიურია.
