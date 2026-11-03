@@ -113,17 +113,38 @@ fn folder(f: &Map<String, Value>) -> &str {
 const RELIST_SECS: f64 = 1.0;
 
 /// The images in the chosen folder at time `now` (seconds), listed when the folder changes and
-/// then at most every `RELIST_SECS` (not every frame: a folder can be large or on a slow share),
-/// kept in the fields for `can_confirm`.
+/// then `RELIST_SECS` after the last listing finished (not every frame: a folder can be large or
+/// on a slow share), kept in the fields for `can_confirm`.
 fn folder_images(f: &mut Map<String, Value>, now: f64) -> Vec<String> {
+    relist(f, now, |dir| {
+        let start = web_time::Instant::now();
+        let images = photocraft_engine::file_cmds::list_images(dir).map_err(|e| e.to_string());
+        (images, start.elapsed().as_secs_f64())
+    })
+}
+
+/// `folder_images` with the listing `list` (images or the error, and the seconds it took). A
+/// listing that fails keeps its error in `__listError`, shown under the folder.
+fn relist(f: &mut Map<String, Value>, now: f64, list: impl FnOnce(&str) -> (Result<Vec<String>, String>, f64)) -> Vec<String> {
     let dir = folder(f).to_string();
     let listed_at = f.get("__listedAt").and_then(Value::as_f64);
     let stale = listed_at.is_none_or(|t| (now - t).abs() >= RELIST_SECS);
     if stale || f.get("__listed").and_then(Value::as_str) != Some(dir.as_str()) {
-        let images = if dir.is_empty() { Vec::new() } else { photocraft_engine::file_cmds::list_images(&dir).unwrap_or_default() };
-        f.insert("__images".into(), json!(images));
+        let (images, took) = if dir.is_empty() { (Ok(Vec::new()), 0.0) } else { list(&dir) };
+        match images {
+            Ok(images) => {
+                f.insert("__images".into(), json!(images));
+                f.remove("__listError");
+            }
+            Err(e) => {
+                f.insert("__images".into(), json!([]));
+                f.insert("__listError".into(), json!(e));
+            }
+        }
         f.insert("__listed".into(), json!(dir));
-        f.insert("__listedAt".into(), json!(now));
+        // Timed from when the listing finished, so a listing slower than RELIST_SECS isn't
+        // repeated on every frame.
+        f.insert("__listedAt".into(), json!(now + took));
     }
     f.get("__images").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default()
 }
@@ -259,6 +280,9 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                 ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
                     if folder_mode && !folder(f).is_empty() {
                         ui.label(RichText::new(folder(f)).color(t.text_dim));
+                        if let Some(e) = f.get("__listError").and_then(Value::as_str) {
+                            ui.label(RichText::new(e).color(t.danger));
+                        }
                     }
                     for (i, p) in shown.iter().enumerate() {
                         // Document names are shown as they are (one may contain a slash).

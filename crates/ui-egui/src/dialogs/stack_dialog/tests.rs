@@ -460,3 +460,45 @@ fn photomerge_alt_reset_restores_the_options() {
     }
     assert_eq!(f["files"], json!(["a.png", "b.png"]), "the source files stay");
 }
+
+/// A listing slower than RELIST_SECS waits RELIST_SECS from when it finished, not from the frame
+/// it started in, so a slow folder isn't listed again on every frame.
+#[test]
+fn a_slow_folder_is_not_listed_every_frame() {
+    let mut f = Map::new();
+    f.insert("folder".into(), json!("/slow/share"));
+    let listings = std::cell::Cell::new(0);
+    let slow = |_: &str| {
+        listings.set(listings.get() + 1);
+        (Ok(vec!["a.png".to_string(), "b.png".to_string()]), 1.5)
+    };
+    assert_eq!(relist(&mut f, 0.0, slow).len(), 2);
+    // The next frame starts once the listing is done, 1.5 s later.
+    relist(&mut f, 1.6, slow);
+    relist(&mut f, 2.4, slow);
+    assert_eq!(listings.get(), 1, "within RELIST_SECS of the listing's end");
+    relist(&mut f, 2.6, slow);
+    assert_eq!(listings.get(), 2, "RELIST_SECS after the listing's end");
+}
+
+/// A folder that can't be listed shows why under it; the error goes once it lists again.
+#[test]
+fn a_folder_that_cannot_be_read_says_why() {
+    let missing = std::env::temp_dir().join(format!("photocraft-photomerge-missing-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&missing);
+    let (mut h, _) = harness(vec![]);
+    let id = open_photomerge(h.state_mut());
+    let d = h.state_mut().ui.dialog_mut(id).unwrap();
+    d.fields.insert("use".into(), json!("folder"));
+    d.fields.insert("folder".into(), json!(missing.to_string_lossy()));
+    h.run_steps(2);
+    let error = dialog(&h).unwrap().1.get("__listError").and_then(Value::as_str).map(str::to_string).expect("the listing error");
+    assert!(h.query_by_label(&error).is_some(), "{error} is shown");
+    assert!(h.get_by_label("OK").accesskit_node().is_disabled());
+
+    let (dir, _) = panorama_pngs("readable-again");
+    h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("folder".into(), json!(dir));
+    h.run_steps(2);
+    assert!(!dialog(&h).unwrap().1.contains_key("__listError"));
+    assert!(h.query_by_label(&error).is_none());
+}
