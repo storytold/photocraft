@@ -857,21 +857,21 @@ fn generative_expand_paints_a_frame_dragged_beyond_the_canvas() {
     let doc = &app.session.active().unwrap().doc;
     assert_eq!((doc.size.width, doc.size.height), (264, 100));
     assert_eq!(doc.layers.last().unwrap().name, "Generative Expand");
-    // With no prompt, the background is described first, then the expand runs.
-    assert_eq!(fake.state().runs.len(), 2);
-    assert_eq!(fake.state().runs[1].run.task, "expand", "the expand request");
+    // With no prompt, the background and the cut edges are asked first, then the expand runs.
+    assert_eq!(fake.state().runs.len(), 3);
+    assert_eq!(fake.state().runs[2].run.task, "expand", "the expand request");
     // Part inside, part beyond: crop to the inside first, then expand by the overhang.
     app.ui.crop_rect = Some([64.0, 0.0, 328.0, 100.0]);
     crate::canvas::commit_crop(&mut app);
     let doc = &app.session.active().unwrap().doc;
     assert_eq!((doc.size.width, doc.size.height), (264, 100), "200 inside + 64 beyond");
-    assert_eq!(fake.state().runs.len(), 4);
+    assert_eq!(fake.state().runs.len(), 6);
     // Option off: a plain crop, nothing generated.
     app.ui.tool_options.crop_generative = false;
     app.ui.crop_rect = Some([0.0, 0.0, 300.0, 100.0]);
     crate::canvas::commit_crop(&mut app);
     assert_eq!(app.session.active().unwrap().doc.size.width, 300);
-    assert_eq!(fake.state().runs.len(), 4);
+    assert_eq!(fake.state().runs.len(), 6);
 }
 
 #[test]
