@@ -848,6 +848,8 @@ fn ui_set_rejects_unknown_fields_before_changing_anything() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     let ctx = egui::Context::default();
     app.set_theme(&ctx, ThemeKind::StudioLight);
+    // Not the default tool, so a rejected `"tool": "move"` that still applied would show.
+    app.ui.tool = Tool::Brush;
     // `dark` was advertised to MCP clients but never read; a typo looked like success too.
     for params in [json!({"dark": true}), json!({"thme": "classic"}), json!({"tool": "move", "dark": true})] {
         let r = call(&mut app, &ctx, "ui.set", params.clone());
