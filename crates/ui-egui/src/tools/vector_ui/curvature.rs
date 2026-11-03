@@ -25,7 +25,13 @@ pub(super) fn curvature_refresh(pen: &mut PenPath, closed: bool) {
         }
         if smooth && keep_in != keep_out {
             let (kept, bent) = if keep_in { (1, 2) } else { (2, 1) };
-            if let Some(h) = in_line(k[0], k[kept], k[bent]) {
+            // A kept handle on its anchor gives no direction: the kept segment arrives along its
+            // other control point, else from the neighbouring anchor, so the bent handle goes on
+            // that way and the join is still smooth (CodeRabbit on #10744).
+            let across =
+                if keep_in { i.checked_sub(1).and_then(|j| pen.fixed.get(j)).map(|n| [n[2], n[0]]) } else { pen.fixed.get(i + 1).map(|n| [n[1], n[0]]) };
+            let toward = std::iter::once(k[kept]).chain(across.into_iter().flatten());
+            if let Some(h) = toward.filter_map(|from| in_line(k[0], from, k[bent])).next() {
                 k[bent] = h;
             }
         }

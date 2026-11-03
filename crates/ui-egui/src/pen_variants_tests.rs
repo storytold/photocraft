@@ -312,7 +312,10 @@ fn a_smooth_endpoint_carried_on_stays_smooth() {
     crate::vector_ui::pen_commit(&mut app, false);
     let work = work_path(&app);
     assert_eq!(work.subpaths.len(), 1, "the same subpath, extended");
-    assert!(work.subpaths[0].knots[1].smooth, "{:?}", work.subpaths[0].knots[1]);
+    let join = &work.subpaths[0].knots[1];
+    assert!(join.smooth, "{join:?}");
+    let (a, b) = ([join.anchor.x - join.in_ctrl.x, join.anchor.y - join.in_ctrl.y], [join.out_ctrl.x - join.anchor.x, join.out_ctrl.y - join.anchor.y]);
+    assert!(b[0].hypot(b[1]) > 1.0 && (a[0] * b[1] - a[1] * b[0]).abs() < 1e-6 && a[0] * b[0] + a[1] * b[1] > 0.0, "stored in line: {join:?}");
 }
 
 /// CodeRabbit on #10744: a curved path carried on from its first endpoint runs backwards, each
@@ -323,14 +326,16 @@ fn a_curved_path_carries_on_from_its_first_endpoint_with_its_handles_swapped() {
     use photocraft_geom::Point;
     let mut app = app(Tool::CurvaturePen);
     let start = Knot::smooth(Point::new(20.0, 20.0), Point::new(10.0, 30.0), Point::new(30.0, 10.0));
-    set_work_path(&mut app, vec![Subpath { closed: false, knots: vec![start, Knot::corner(80.0, 80.0)], op: Default::default() }]);
+    let middle = Knot::smooth(Point::new(50.0, 60.0), Point::new(40.0, 50.0), Point::new(60.0, 70.0));
+    set_work_path(&mut app, vec![Subpath { closed: false, knots: vec![start, middle, Knot::corner(80.0, 80.0)], op: Default::default() }]);
     select_anchor(&mut app, crate::direct_select::PathRef::Work, [0, 0]);
     click(&mut app, 0.0, 100.0);
     let pen = app.ui.pen.as_ref().expect("the path is carried on");
     assert_eq!(pen.resumes.as_ref().map(|r| r.index), Some(0));
     let anchors: Vec<[f64; 2]> = pen.knots.iter().map(|k| k[0]).collect();
-    assert_eq!(anchors, [[80.0, 80.0], [20.0, 20.0], [0.0, 100.0]], "backwards, then the new anchor");
-    assert_eq!(pen.knots[1][1], [30.0, 10.0], "the endpoint's handle towards the path: its old outgoing one");
+    assert_eq!(anchors, [[80.0, 80.0], [50.0, 60.0], [20.0, 20.0], [0.0, 100.0]], "backwards, then the new anchor");
+    assert_eq!((pen.knots[1][1], pen.knots[1][2]), ([60.0, 70.0], [40.0, 50.0]), "the curved middle knot's handles are swapped");
+    assert_eq!(pen.knots[2][1], [30.0, 10.0], "the endpoint's handle towards the path: its old outgoing one");
 }
 
 /// CodeRabbit on #10744: a double-click on a knot of the path carried on (not the endpoint it
@@ -342,9 +347,26 @@ fn toggling_a_carried_knot_changes_nothing() {
     set_work_path(&mut app, vec![Subpath::polyline(&[(20.0, 20.0), (80.0, 20.0), (80.0, 80.0)])]);
     select_anchor(&mut app, crate::direct_select::PathRef::Work, [0, 2]);
     click(&mut app, 140.0, 120.0);
-    let before = app.ui.pen.as_ref().map(|p| p.unlinked.clone());
+    let before = app.ui.pen.as_ref().map(|p| (p.unlinked.clone(), p.knots.clone()));
     crate::vector_ui::curvature_toggle(&mut app, 80.0, 20.0);
-    assert_eq!(app.ui.pen.as_ref().map(|p| p.unlinked.clone()), before, "the old corner stays as it was");
+    assert_eq!(app.ui.pen.as_ref().map(|p| (p.unlinked.clone(), p.knots.clone())), before, "the old corner stays as it was, handles and all");
+}
+
+/// CodeRabbit on #10744: the corner endpoint carried on from, toggled smooth, has no incoming
+/// handle to line up with: its outgoing handle goes on the way the straight segment arrives.
+#[test]
+fn a_corner_endpoint_toggled_smooth_goes_on_the_way_its_segment_arrives() {
+    use photocraft_doc::vector::Subpath;
+    let mut app = app(Tool::CurvaturePen);
+    set_work_path(&mut app, vec![Subpath::polyline(&[(20.0, 20.0), (80.0, 20.0), (80.0, 80.0)])]);
+    select_anchor(&mut app, crate::direct_select::PathRef::Work, [0, 2]);
+    click(&mut app, 140.0, 120.0);
+    crate::vector_ui::curvature_toggle(&mut app, 80.0, 80.0);
+    let pen = app.ui.pen.as_ref().expect("the path is carried on");
+    assert!(!pen.unlinked.contains(&2), "the endpoint is smooth now");
+    let [anchor, _, out] = pen.knots[2];
+    // The segment arrives straight down from (80, 20): the handle goes on straight down.
+    assert!((out[0] - anchor[0]).abs() < 1e-6 && out[1] > anchor[1] + 1.0, "{:?}", pen.knots[2]);
 }
 
 /// CodeRabbit on #10744: in Path mode the Pen carries on the work path, so an endpoint selected
