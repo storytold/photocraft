@@ -151,6 +151,56 @@ pub(super) fn ops(prepared: &PreparedText<'_>, mode: ColorMode, selection_font: 
     layout_ops(prepared.layer, mode, channels, &prepared.layout, selection_font)
 }
 
+/// Write one glyph outline as PDF path operators, refusing any coordinate or derived Bézier
+/// control that is not finite. A quadratic's cubic controls come from finite differences, which
+/// can overflow even when the endpoints are finite.
+fn write_path_elements(out: &mut String, elements: &[photocraft_text::render::PathEl]) -> Option<()> {
+    let mut cur = [0.0f64, 0.0f64];
+    for el in elements {
+        match *el {
+            photocraft_text::render::PathEl::MoveTo([x, y]) => {
+                if !x.is_finite() || !y.is_finite() {
+                    return None;
+                }
+                cur = [x, y];
+                writeln!(out, "{x} {y} m").ok()?;
+            }
+            photocraft_text::render::PathEl::LineTo([x, y]) => {
+                if !x.is_finite() || !y.is_finite() {
+                    return None;
+                }
+                cur = [x, y];
+                writeln!(out, "{x} {y} l").ok()?;
+            }
+            photocraft_text::render::PathEl::QuadTo([cx, cy], [x, y]) => {
+                if !cx.is_finite() || !cy.is_finite() || !x.is_finite() || !y.is_finite() {
+                    return None;
+                }
+                let c1x = cur[0] + 2.0 / 3.0 * (cx - cur[0]);
+                let c1y = cur[1] + 2.0 / 3.0 * (cy - cur[1]);
+                let c2x = x + 2.0 / 3.0 * (cx - x);
+                let c2y = y + 2.0 / 3.0 * (cy - y);
+                if !c1x.is_finite() || !c1y.is_finite() || !c2x.is_finite() || !c2y.is_finite() {
+                    return None;
+                }
+                cur = [x, y];
+                writeln!(out, "{c1x} {c1y} {c2x} {c2y} {x} {y} c").ok()?;
+            }
+            photocraft_text::render::PathEl::CurveTo([c1x, c1y], [c2x, c2y], [x, y]) => {
+                if !c1x.is_finite() || !c1y.is_finite() || !c2x.is_finite() || !c2y.is_finite() || !x.is_finite() || !y.is_finite() {
+                    return None;
+                }
+                cur = [x, y];
+                writeln!(out, "{c1x} {c1y} {c2x} {c2y} {x} {y} c").ok()?;
+            }
+            photocraft_text::render::PathEl::Close => {
+                writeln!(out, "h").ok()?;
+            }
+        }
+    }
+    Some(())
+}
+
 fn layout_ops(
     layer: &TextLayer,
     mode: ColorMode,
@@ -175,46 +225,7 @@ fn layout_ops(
             write_fill_color(&mut out, &color, mode, channels)?;
             current_color = Some(color);
         }
-        let mut cur = [0.0f64, 0.0f64];
-        for el in &glyph.elements {
-            match *el {
-                photocraft_text::render::PathEl::MoveTo([x, y]) => {
-                    if !x.is_finite() || !y.is_finite() {
-                        return None;
-                    }
-                    cur = [x, y];
-                    writeln!(out, "{x} {y} m").ok()?;
-                }
-                photocraft_text::render::PathEl::LineTo([x, y]) => {
-                    if !x.is_finite() || !y.is_finite() {
-                        return None;
-                    }
-                    cur = [x, y];
-                    writeln!(out, "{x} {y} l").ok()?;
-                }
-                photocraft_text::render::PathEl::QuadTo([cx, cy], [x, y]) => {
-                    if !cx.is_finite() || !cy.is_finite() || !x.is_finite() || !y.is_finite() {
-                        return None;
-                    }
-                    let c1x = cur[0] + 2.0 / 3.0 * (cx - cur[0]);
-                    let c1y = cur[1] + 2.0 / 3.0 * (cy - cur[1]);
-                    let c2x = x + 2.0 / 3.0 * (cx - x);
-                    let c2y = y + 2.0 / 3.0 * (cy - y);
-                    cur = [x, y];
-                    writeln!(out, "{c1x} {c1y} {c2x} {c2y} {x} {y} c").ok()?;
-                }
-                photocraft_text::render::PathEl::CurveTo([c1x, c1y], [c2x, c2y], [x, y]) => {
-                    if !c1x.is_finite() || !c1y.is_finite() || !c2x.is_finite() || !c2y.is_finite() || !x.is_finite() || !y.is_finite() {
-                        return None;
-                    }
-                    cur = [x, y];
-                    writeln!(out, "{c1x} {c1y} {c2x} {c2y} {x} {y} c").ok()?;
-                }
-                photocraft_text::render::PathEl::Close => {
-                    writeln!(out, "h").ok()?;
-                }
-            }
-        }
+        write_path_elements(&mut out, &glyph.elements)?;
         writeln!(out, "f*").ok()?;
     }
 
@@ -414,6 +425,22 @@ mod tests {
         };
         let ops = text_ops(&layer, ColorMode::Rgb, 72.0).unwrap();
         assert!(ops.contains("h\nf\n"));
+    }
+
+    #[test]
+    fn quadratic_cubic_controls_that_overflow_are_refused() {
+        use photocraft_text::render::PathEl;
+        // Finite endpoints whose difference is not finite: 1e308 - -1e308 overflows.
+        let mut out = String::new();
+        let overflowing = [PathEl::MoveTo([1e308, 0.0]), PathEl::QuadTo([-1e308, 0.0], [1e308, 0.0])];
+        assert!(write_path_elements(&mut out, &overflowing).is_none(), "a non-finite derived control must be refused");
+        assert!(!out.contains(" c\n"), "no cubic with a non-finite control is written:\n{out}");
+
+        // A representable quadratic still becomes the equivalent cubic.
+        let mut out = String::new();
+        let normal = [PathEl::MoveTo([0.0, 0.0]), PathEl::QuadTo([30.0, 60.0], [60.0, 0.0])];
+        assert!(write_path_elements(&mut out, &normal).is_some());
+        assert!(out.contains("20 40 40 40 60 0 c\n"), "{out}");
     }
 
     #[test]

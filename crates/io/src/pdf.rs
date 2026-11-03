@@ -190,7 +190,8 @@ fn print_pdf_with_vectors(page: &PrintPage, vectors: &str, selection_font: &sele
 }
 
 /// The vector operators for the contiguous visible top prefix of `doc`, top to bottom, with the
-/// indices of the layers they replace, and the selection font covering exactly their text.
+/// indices of the layers they replace, and the selection font covering their text (plus, when a
+/// lower candidate is rejected during emission, that layer's unused characters).
 /// Hidden and blocked layers contribute no characters, so they cannot exhaust the font's codes.
 fn collect_vectors(doc: &Document) -> (Vec<(usize, String)>, selection::SelectionFont) {
     enum Candidate<'a> {
@@ -251,9 +252,8 @@ fn collect_vectors(doc: &Document) -> (Vec<(usize, String)>, selection::Selectio
             Candidate::Ops(ops) => ops,
             Candidate::Text(prepared) => match text::ops(&prepared, doc.mode, &selection_font) {
                 Some(ops) => ops,
-                // `prepare` already accepted this layer; keep the whole page raster rather than
-                // emitting some vectors while hiding only part of their sources.
-                None => return (Vec::new(), selection::SelectionFont::default()),
+                // Keep the successful upper vectors; this layer and everything below stay raster.
+                None => break,
             },
         };
         layers.push((index, ops));

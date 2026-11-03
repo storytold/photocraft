@@ -314,6 +314,65 @@ fn text_outside_the_vector_prefix_does_not_consume_the_selection_font() {
 }
 
 #[test]
+fn a_text_layer_refused_at_emission_keeps_the_upper_vectors_and_stays_raster() {
+    use photocraft_doc::{TextLayer, TextShape};
+    let mut d = doc(ColorMode::Rgb);
+    d.size = Size { width: 128, height: 48 };
+    let fmt = d.pixel_format();
+    d.layers = vec![Layer::new("Paper", LayerContent::Raster(solid(fmt, 0, 0, 128, 48, &[1.0, 1.0, 1.0, 1.0])))];
+    // A box too short for its paragraph: the layout hides the overflow, so `prepare` accepts
+    // the layer (its checks only see placed clusters) while emission refuses it, because the
+    // hidden, unpainted source text would otherwise show up in the selection plane.
+    let mut lower = Layer::new(
+        "Lower text",
+        LayerContent::Text(TextLayer {
+            text: "The quick brown fox jumps over the lazy dog again and again".into(),
+            font_family: "Inter".into(),
+            size_pt: 12.0,
+            color: photocraft_color::Color::rgb(1.0, 0.0, 0.0),
+            shape: TextShape::Box { x: 0.0, y: 0.0, width: 100.0, height: 30.0 },
+            transform: photocraft_geom::Affine::translate(2.0, 10.0),
+            ..Default::default()
+        }),
+    );
+    // The compositor consumes the text cache maintained by the engine/UI.
+    if let LayerContent::Text(text) = &mut lower.content {
+        photocraft_text::TextEngine::new().render_layer(text, d.resolution_dpi, fmt);
+    }
+    // Pin the fixture to the intended path: accepted by `prepare`, refused by `ops`.
+    let LayerContent::Text(lower_text) = &lower.content else { panic!("the fixture is a text layer") };
+    let prepared = super::text::prepare(lower_text, ColorMode::Rgb, d.resolution_dpi).expect("prepare accepts the truncated box");
+    let lower_font = super::selection::SelectionFont::new(std::iter::once(lower_text.text.as_str()));
+    assert!(super::text::ops(&prepared, ColorMode::Rgb, &lower_font).is_none(), "emission must refuse the unrepresented source text");
+    d.layers.push(lower);
+    d.layers.push(Layer::new(
+        "Top text",
+        LayerContent::Text(TextLayer {
+            text: "Hi".into(),
+            font_family: "Inter".into(),
+            size_pt: 12.0,
+            color: photocraft_color::Color::rgb(0.0, 1.0, 0.0),
+            ..Default::default()
+        }),
+    ));
+    let pdf = export(&d).unwrap().bytes;
+    check_structure(&pdf);
+    let content = String::from_utf8(stream_after(&pdf, "/Contents 4 0 R")).unwrap();
+    assert!(content.contains("/ActualText <FEFF0048"), "the upper text stays vector:\n{content}");
+    assert!(content.contains("0 1 0 rg"), "the upper text keeps its fill:\n{content}");
+    assert!(content.contains("/FSelect"), "the selection font survives the refused layer");
+    assert!(!content.contains("1 0 0 rg"), "the refused layer must not be vector:\n{content}");
+    assert!(!content.contains("/ActualText <FEFF0054"), "its text must stay out of the selection plane:\n{content}");
+    let parsed = lopdf::Document::load_mem(&pdf).unwrap();
+    assert_eq!(parsed.extract_text(&[1]).unwrap().trim(), "Hi", "only the upper text is selectable");
+    let img = stream_after(&pdf, "/Subtype /Image");
+    assert!(
+        img.chunks(3).any(|p| i16::from(p[0]) - i16::from(p[1]) > 8 && i16::from(p[0]) - i16::from(p[2]) > 8),
+        "the refused red text stays visible in the raster backdrop"
+    );
+}
+
+#[test]
 fn multiline_text_keeps_its_paragraph_breaks_in_the_selection() {
     use photocraft_doc::TextLayer;
     let mut d = doc(ColorMode::Rgb);
