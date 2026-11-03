@@ -93,7 +93,8 @@ fn explicit_flags_override_environment() {
     let stderr = String::from_utf8_lossy(&o.stderr);
     // The renderer reports either its adapter, an unavailable adapter, or (in a build without
     // GPU support) that GPU rendering was requested; the CPU default emits none of these.
-    assert!(stderr.contains("GPU"), "explicit --gpu must reach the renderer when the environment disables it: {stderr}");
+    let markers = ["GPU adapter:", "no GPU adapter available", "could not build GPU compositor", "falling back to CPU"];
+    assert!(markers.iter().any(|marker| stderr.contains(marker)), "explicit --gpu must reach the renderer when the environment disables it: {stderr}");
 
     // Explicit flag overrides even bad environment value
     let out3 = d.join("out3.png");

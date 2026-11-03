@@ -189,3 +189,16 @@ fn sample_doc(w: u32, h: u32, layer_count: usize) -> Document {
 
     doc
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn synthetic_documents_allow_one_pixel_dimensions() {
+        for (width, height) in [(1, 1), (1, 16), (16, 1)] {
+            let doc = sample_doc(width, height, 2);
+            assert_eq!(doc.size, Size::new(width, height));
+        }
+    }
+}
