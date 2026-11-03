@@ -317,8 +317,7 @@ pub fn resolve(doc: &Document) -> Vec<ResolvedSlice> {
     let base = base_name(doc);
     let rects: Vec<Rect> = doc.slices.list.iter().take(MAX_RESOLVED_SLICES).map(|s| s.rect).collect();
     let (owned, free) = partition(doc.bounds(), &rects);
-    let mut all: Vec<(Option<usize>, Rect)> =
-        owned.into_iter().enumerate().flat_map(|(i, pieces)| pieces.into_iter().map(move |p| (Some(i), p))).collect();
+    let mut all: Vec<(Option<usize>, Rect)> = owned.into_iter().enumerate().flat_map(|(i, pieces)| pieces.into_iter().map(move |p| (Some(i), p))).collect();
     all.extend(free.into_iter().map(|r| (None, r)));
     all.sort_by_key(|(_, r)| (r.y0, r.x0));
     let single = all.len() == 1;
@@ -530,8 +529,7 @@ mod tests {
                 })
                 .collect();
             let (owned, free) = partition(canvas, &rects);
-            let got: Vec<(usize, Rect)> =
-                owned.into_iter().enumerate().flat_map(|(i, ps)| ps.into_iter().map(move |p| (i, p))).collect();
+            let got: Vec<(usize, Rect)> = owned.into_iter().enumerate().flat_map(|(i, ps)| ps.into_iter().map(move |p| (i, p))).collect();
             let (want, want_free) = reference_resolve(canvas, &rects);
             assert_eq!(got, want, "pieces for {rects:?}");
             assert_eq!(free, want_free, "auto slices for {rects:?}");
