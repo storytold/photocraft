@@ -155,18 +155,18 @@ impl Tile {
     /// Tile-local half-open bounds of the pixels whose alpha (the last `alpha_bytes` bytes of each
     /// `bpp`-byte pixel) is not all zero bytes, or `None` when every pixel is clear. Works on the
     /// raw bytes. A negative-zero f32 alpha has a non-zero byte, so it counts as covered: that is
-    /// conservative, never too tight.
+    /// conservative, never too tight. A layout that cannot describe the tile's pixels gives the
+    /// whole tile, for the same reason.
     pub fn alpha_bounds(&self, bpp: usize, alpha_bytes: usize) -> Option<(u16, u16, u16, u16)> {
-        if bpp == 0 || alpha_bytes == 0 || alpha_bytes > bpp {
-            return None;
-        }
         let ts = TILE_SIZE as usize;
+        if bpp == 0 || alpha_bytes == 0 || alpha_bytes > bpp || self.data.len() != ts * ts * bpp {
+            return Some((0, 0, ts as u16, ts as u16));
+        }
         let covered = |px: &[u8]| px.get(bpp - alpha_bytes..).is_some_and(|a| a.iter().any(|&b| b != 0));
-        // An untouched row of a clear tile is all zero bytes: a few block compares skip it.
-        let zero = vec![0u8; ts * bpp];
         let (mut x0, mut y0, mut x1, mut y1) = (usize::MAX, usize::MAX, 0usize, 0usize);
         for (y, row) in self.data.chunks_exact(ts * bpp).enumerate() {
-            if first_difference(row, &zero).is_none() {
+            // An untouched row of a clear tile is all zero bytes.
+            if row.iter().all(|&b| b == 0) {
                 continue;
             }
             let Some(first) = row.chunks_exact(bpp).position(covered) else { continue };

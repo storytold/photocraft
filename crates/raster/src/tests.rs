@@ -876,6 +876,19 @@ fn covered_bounds_skips_interior_tiles() {
 }
 
 #[test]
+fn alpha_bounds_with_a_bad_layout_keeps_the_whole_tile() {
+    let mut s = Surface::new(PixelFormat::RGBA8);
+    s.fill_rect(Rect::new(0, 0, 4, 4), &[1.0, 1.0, 1.0, 0.0]);
+    let whole = Some((0, 0, TILE_SIZE as u16, TILE_SIZE as u16));
+    for (_, t) in s.tiles() {
+        assert_eq!(t.alpha_bounds(4, 1), None);
+        for (bpp, alpha) in [(0, 1), (4, 0), (4, 5), (3, 1)] {
+            assert_eq!(t.alpha_bounds(bpp, alpha), whole, "{bpp} {alpha}");
+        }
+    }
+}
+
+#[test]
 fn fallible_interleaved_writes_match_encoded_pixels_and_reject_bad_lengths() {
     for sample in [SampleType::U8, SampleType::U16, SampleType::F32] {
         let format = PixelFormat::new(ColorMode::Rgb, sample, true);

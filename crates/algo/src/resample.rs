@@ -359,7 +359,7 @@ fn resize_with_budget(s: &Surface, sx: f64, sy: f64, filter: Resample, canvas: O
     }
     let mut out = cur.unwrap_or_else(|| s.clone());
     if filter == Resample::PreserveDetails && (sx > 1.0 || sy > 1.0) {
-        let dst = out.content_bounds();
+        let dst = out.covered_bounds();
         let p = crate::FilterParams::UnsharpMask { amount: 30.0, radius: 0.6 * sx.max(sy) as f32, threshold: 0.0 };
         let area = crate::output_area(&p, dst, dst, None);
         out = crate::apply(&out, &p, area, dst, None);
