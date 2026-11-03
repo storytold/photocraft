@@ -553,18 +553,7 @@ impl NumeralsStyle {
 
     /// Parse a `type.openType.numerals.*` suffix.
     pub fn from_id(id: &str) -> Option<Self> {
-        Some(match id {
-            "default" => Self::Default,
-            "lining" => Self::Lining,
-            "oldstyle" => Self::Oldstyle,
-            "proportional" => Self::Proportional,
-            "tabular" => Self::Tabular,
-            "proportionalLining" => Self::ProportionalLining,
-            "tabularLining" => Self::TabularLining,
-            "proportionalOldstyle" => Self::ProportionalOldstyle,
-            "tabularOldstyle" => Self::TabularOldstyle,
-            _ => return None,
-        })
+        Self::ALL.into_iter().find(|style| style.id() == id)
     }
 
     /// Every Numerals menu item, in menu order.
@@ -605,41 +594,34 @@ pub fn feature_on(st: &photocraft_doc::text::CharStyle, tag: &str) -> bool {
     }
 }
 
+/// The character style at character `ci` of `t`: its run's, or past the end the last run's.
+fn style_at(t: &TextLayer, ci: usize) -> Option<photocraft_doc::text::CharStyle> {
+    let at = byte_index(&t.text, ci);
+    let mut end = 0usize;
+    let mut last = None;
+    for run in t.char_runs() {
+        end = end.saturating_add(run.len);
+        if at < end {
+            return Some(run.style);
+        }
+        last = Some(run.style);
+    }
+    last
+}
+
 /// Is the OpenType toggle `tag` on at character `ci` of `t`? Past the end it reads the last run.
 pub fn feature_on_at(t: &TextLayer, ci: usize, tag: &str) -> bool {
-    let at = byte_index(&t.text, ci);
-    let runs = t.char_runs();
-    let mut end = 0usize;
-    let run = runs.iter().find(|r| {
-        end = end.saturating_add(r.len);
-        at < end
-    });
-    run.or(runs.last()).is_some_and(|r| feature_on(&r.style, tag))
+    style_at(t, ci).is_some_and(|st| feature_on(&st, tag))
 }
 
 /// Which Numerals menu item matches `st`'s figure tags? `None` when the mix is not a menu item.
 pub fn numerals_style_of(st: &photocraft_doc::text::CharStyle) -> Option<NumeralsStyle> {
-    let on = |tag: &str| feature_on(st, tag);
-    let (lnum, onum, pnum, tnum) = (on("lnum"), on("onum"), on("pnum"), on("tnum"));
-    NumeralsStyle::ALL.into_iter().find(|style| {
-        let tags = style.tags();
-        (lnum == tags.contains(&"lnum"))
-            && (onum == tags.contains(&"onum"))
-            && (pnum == tags.contains(&"pnum"))
-            && (tnum == tags.contains(&"tnum"))
-    })
+    NumeralsStyle::ALL.into_iter().find(|style| NUMERAL_FEATURE_TAGS.iter().all(|tag| feature_on(st, tag) == style.tags().contains(tag)))
 }
 
 /// Numerals style at character `ci` of `t` (same run pick as [`feature_on_at`]).
 pub fn numerals_style_at(t: &TextLayer, ci: usize) -> Option<NumeralsStyle> {
-    let at = byte_index(&t.text, ci);
-    let runs = t.char_runs();
-    let mut end = 0usize;
-    let run = runs.iter().find(|r| {
-        end = end.saturating_add(r.len);
-        at < end
-    });
-    run.or(runs.last()).and_then(|r| numerals_style_of(&r.style))
+    style_at(t, ci).and_then(|st| numerals_style_of(&st))
 }
 
 fn set_feature(st: &mut photocraft_doc::text::CharStyle, tag: &str, on: bool) {
