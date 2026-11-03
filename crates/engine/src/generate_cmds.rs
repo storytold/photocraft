@@ -3479,7 +3479,7 @@ pub(crate) fn side_by_side(left: &Rgba8, right: &Rgba8) -> Result<Rgba8> {
 /// Everything of `img` outside `inner` flat [`PREFILL`] grey (the Outpaint LoRA's canvas).
 fn grey_outside(img: &mut Rgba8, inner: Rect) {
     let w = img.width as i32;
-    for (i, px) in img.data.chunks_exact_mut(4).enumerate() {
+    for (i, px) in img.data.as_chunks_mut::<4>().0.iter_mut().enumerate() {
         let (x, y) = (i as i32 % w, i as i32 / w);
         if !(x >= inner.x0 && x < inner.x1 && y >= inner.y0 && y < inner.y1) {
             px.copy_from_slice(&PREFILL);
