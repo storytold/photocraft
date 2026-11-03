@@ -629,3 +629,97 @@ views after eye changes. This fallback admits canvases up to 100 MP and bands up
 64 MiB; oversized canvases are refused before allocation. With Low Resolution
 Previews disabled, its native display also has a 512 MiB working limit. Normal
 captures retain their existing reduced-source path.
+
+### Final main integration measurements, 2026-11-03
+
+Tested code `48bbe4cb7` includes main `e3a84b628`, retained-source Memory Usage
+checks and selected sparse-scalar previews. The baseline is the earlier tested
+integration `d2db062b3` (main `655295b2a`). This comparison includes upstream
+changes, including viewport streaming; it does not isolate a single fix or
+compare the feature against bare main.
+
+Both builds use the same release harnesses, 6000 × 4000 RGB8 synthetic document,
+1000 × 700 completed offscreen frames and software Vulkan llvmpipe, with two
+Rayon/software-renderer workers. Three interleaved processes per build/target/renderer
+provide 27 warm frames per case/geometry. All 324 Move and 1080 Transform frames
+are retained. Builds and tests were idle during these timings. Warp uses the
+harness's 1 × 1 affine-patch deformation.
+
+| Move path | Before p50 / p95, ms | After p50 / p95, ms | p50 change |
+|---|---:|---:|---:|
+| One channel / GPU enabled | 20.14 / 23.12 | 18.66 / 23.56 | -7.4% |
+| Red + Blue / GPU enabled | 18.86 / 23.49 | 19.19 / 23.63 | +1.7% |
+| Whole-layer control / GPU enabled | 339.66 / 371.31 | 341.73 / 395.24 | +0.6% |
+| One channel / CPU preview | 166.46 / 190.65 | 173.03 / 189.82 | +3.9% |
+| Red + Blue / CPU preview | 211.25 / 224.56 | 217.60 / 241.25 | +3.0% |
+| Whole-layer control / CPU preview | 137.56 / 143.70 | 124.19 / 132.96 | -9.7% |
+
+| Target / preview renderer | Affine before → after, ms | Warp before → after, ms |
+|---|---:|---:|
+| Composite control / GPU enabled | 12.07 → 12.18 | 17.10 → 17.35 |
+| Red, all visible / GPU enabled | 20.89 → 21.18 | 57.34 → 58.61 |
+| Red only / GPU enabled | 20.50 → 20.00 | 57.15 → 56.65 |
+| Red + Blue, all visible / GPU enabled | 20.74 → 20.35 | 63.73 → 84.58 |
+| Red + Blue only / GPU enabled | 20.65 → 20.36 | 63.32 → 84.38 |
+| Composite control / CPU | 11.49 → 11.66 | 16.36 → 16.05 |
+| Red, all visible / CPU | 76.00 → 75.56 | 104.05 → 102.99 |
+| Red only / CPU | 106.99 → 103.85 | 139.16 → 135.15 |
+| Red + Blue, all visible / CPU | 130.25 → 130.82 | 186.82 → 186.06 |
+| Red + Blue only / CPU | 174.08 → 172.55 | 232.03 → 228.71 |
+
+Two-channel software Warp rose by 32.7% to 33.3% in the primary comparison,
+while accelerated affine and single-channel Warp medians stayed within 2.5%.
+CPU Transform medians changed by less than 3%; CPU Move rose by 3.0% / 3.9%,
+while its whole-layer control fell by 9.7%. These are observations from a small
+software-renderer run, not statistical equivalence or a hardware-GPU guarantee.
+The two-channel Warp slowdown is unresolved; no code cause has been isolated.
+The identical shared WGSL source is embedded in both binaries; this does not
+prove generated SPIR-V or driver machine code is identical.
+
+The earlier main-655 CPU Warp slowdown above remains a separate comparison;
+this run starts from that integration and does not erase the earlier result.
+The intermediate `49257cd75` measurements are retained separately, since main
+advanced during validation. Its standard quick gate was stopped during compilation,
+and no quick-gate pass is claimed for that intermediate build.
+
+The confirmation used the same binaries and all five targets, including the
+composite control, with `MESA_SHADER_CACHE_DISABLE=true`: another 540 frames in
+three interleaved processes per build, retained separately from the primary
+samples. No samples were excluded.
+
+| Cache-disabled Warp target | Before p50 / p95, ms | After p50 / p95, ms |
+|---|---:|---:|
+| Composite control | 16.92 / 17.42 | 16.98 / 17.66 |
+| Red, all visible | 57.02 / 59.06 | 56.58 / 57.88 |
+| Red only | 56.22 / 57.68 | 56.22 / 57.20 |
+| Red + Blue, all visible | 63.66 / 65.88 | 83.72 / 85.49 |
+| Red + Blue only | 63.96 / 65.90 | 84.02 / 86.08 |
+
+The two-component slowdown persisted at 31.4% to 31.5% with the cache disabled;
+single-component and composite Warp controls stayed within 0.8%.
+[Confirmation summary](benchmarks/channel-main-memory-20261103/warp-confirm-summary.json),
+[raw frames](benchmarks/channel-main-memory-20261103/warp-confirm-samples.json),
+[confirmation environment](benchmarks/channel-main-memory-20261103/warp-confirm-provenance.json).
+
+
+All sixteen before/after benchmark screenshots are byte-identical within each
+renderer, and representative CPU/GPU captures were inspected. The final snapshot
+passed 3,263 engine, 4,961 UI and 421 compose tests (8,645 total, 46 ignored), strict
+all-target Clippy, formatting, layering, wasm/HEIF, doctests and adversarial commands.
+The conditional corpus check skipped unchanged corpus paths relative to main.
+Software GL passed 58 Transform and 43 Move tests; Vulkan matrices passed on the
+reported llvmpipe adapter. Two fresh independent integration reviews found no
+actionable issues. Windows/DX12 still needs fresh CI verification.
+
+The standard `cargo +1.99.0 xtask perf --quick` run completed uncontended with
+no enforced failures. Automatic regression comparison was skipped because its
+stored baseline is from a different machine; non-enforced overruns remain in the
+[full report](benchmarks/channel-main-memory-20261103/quick-perf.json).
+A 6 MP synthetic mask with feathered selected pixels and a distant sparse sample
+was also inspected before transformation, during affine translation and in Warp.
+
+[Environment and validation provenance](benchmarks/channel-main-memory-20261103/environment.json),
+[Move summary](benchmarks/channel-main-memory-20261103/move-summary.json),
+[Move raw frames](benchmarks/channel-main-memory-20261103/move-samples.json),
+[Transform summary](benchmarks/channel-main-memory-20261103/transform-summary.json),
+[Transform raw frames](benchmarks/channel-main-memory-20261103/transform-samples.json).

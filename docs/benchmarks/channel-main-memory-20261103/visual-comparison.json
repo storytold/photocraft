@@ -1,0 +1,130 @@
+[
+  {
+    "case": "move-before-channel-cpu.png",
+    "size": [
+      1000,
+      700
+    ],
+    "identical": true
+  },
+  {
+    "case": "move-before-channel-gpu.png",
+    "size": [
+      1000,
+      700
+    ],
+    "identical": true
+  },
+  {
+    "case": "move-before-set-cpu.png",
+    "size": [
+      1000,
+      700
+    ],
+    "identical": true
+  },
+  {
+    "case": "move-before-set-gpu.png",
+    "size": [
+      1000,
+      700
+    ],
+    "identical": true
+  },
+  {
+    "case": "move-before-whole-cpu.png",
+    "size": [
+      1000,
+      700
+    ],
+    "identical": true
+  },
+  {
+    "case": "move-before-whole-gpu.png",
+    "size": [
+      1000,
+      700
+    ],
+    "identical": true
+  },
+  {
+    "case": "transform-before-cpu-composite-warp.png",
+    "size": [
+      1000,
+      700
+    ],
+    "identical": true
+  },
+  {
+    "case": "transform-before-cpu-red-all-visible-warp.png",
+    "size": [
+      1000,
+      700
+    ],
+    "identical": true
+  },
+  {
+    "case": "transform-before-cpu-red-blue-all-visible-warp.png",
+    "size": [
+      1000,
+      700
+    ],
+    "identical": true
+  },
+  {
+    "case": "transform-before-cpu-red-blue-only-warp.png",
+    "size": [
+      1000,
+      700
+    ],
+    "identical": true
+  },
+  {
+    "case": "transform-before-cpu-red-only-warp.png",
+    "size": [
+      1000,
+      700
+    ],
+    "identical": true
+  },
+  {
+    "case": "transform-before-gpu-composite-warp.png",
+    "size": [
+      1000,
+      700
+    ],
+    "identical": true
+  },
+  {
+    "case": "transform-before-gpu-red-all-visible-warp.png",
+    "size": [
+      1000,
+      700
+    ],
+    "identical": true
+  },
+  {
+    "case": "transform-before-gpu-red-blue-all-visible-warp.png",
+    "size": [
+      1000,
+      700
+    ],
+    "identical": true
+  },
+  {
+    "case": "transform-before-gpu-red-blue-only-warp.png",
+    "size": [
+      1000,
+      700
+    ],
+    "identical": true
+  },
+  {
+    "case": "transform-before-gpu-red-only-warp.png",
+    "size": [
+      1000,
+      700
+    ],
+    "identical": true
+  }
+]

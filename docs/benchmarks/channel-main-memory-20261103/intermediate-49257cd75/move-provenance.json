@@ -1,0 +1,15 @@
+{
+  "before_build": {
+    "head": "d2db062b3ea5b0a82a6297f7fee671d57100623b"
+  },
+  "candidate_head": "49257cd750b3bd8a27b2752b2b5782447ef18f1c",
+  "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "binaries": {
+    "before": "4447113d2eee04f93085f9c96baa11121ca110369196cf8f5d4a7079a387a759",
+    "after": "3499f415529611100e9ec2ed3c81b68f2efc811b888b9ffa01474305f1ba3e0e"
+  },
+  "adapter": "Vulkan llvmpipe",
+  "rayon_workers": 2,
+  "software_gpu_workers": 2,
+  "fixture": "24 MP RGB8; completed 1000x700 offscreen frames; step 21; 3 processes per case; 9 warm frames per process; before/after interleaved"
+}

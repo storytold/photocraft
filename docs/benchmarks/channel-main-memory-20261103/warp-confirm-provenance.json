@@ -1,0 +1,13 @@
+{
+  "before": "d2db062b3ea5b0a82a6297f7fee671d57100623b",
+  "after": "48bbe4cb76df443c6651f13ab64ab8292178881a",
+  "runtime_override": {
+    "MESA_SHADER_CACHE_DISABLE": "true"
+  },
+  "other_runtime_environment": "same as primary matched comparison",
+  "sampling": "3 interleaved processes/build; all5targets;9affine+9Warpframes/process;540frames; no exclusions",
+  "binaries": {
+    "before": "cab8bc166747e8cba594e7118afdcf6558dcc2ed3afbb626f989e1c43f6af155",
+    "after": "33340cc2584a368ad50a11242a9cca8a54f09ed84560b79c0e87cbde33e9413c"
+  }
+}

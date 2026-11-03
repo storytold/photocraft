@@ -1,0 +1,9 @@
+{
+  "before_head": "d2db062b3ea5b0a82a6297f7fee671d57100623b",
+  "after_head": "49257cd750b3bd8a27b2752b2b5782447ef18f1c",
+  "binaries": {
+    "before": "cab8bc166747e8cba594e7118afdcf6558dcc2ed3afbb626f989e1c43f6af155",
+    "after": "a1c54559ee9309f854a7588f2a6761ebe1cb869dcf41035271ba83d473ab143e"
+  },
+  "fixture": "24MP RGB8; 1000x700 completed offscreen frames; software Vulkan llvmpipe; 2 Rayon/software GPU workers; 3 before/after interleaved processes each CPU/GPU; 9 frames per affine/Warp geometry per5targets; 1080 raw frames"
+}

@@ -1,0 +1,539 @@
+{
+  "cpu": "AMD Ryzen 7 9700X",
+  "adapter": "Vulkan llvmpipe (software only)",
+  "rayon_workers": 2,
+  "software_gpu_workers": 2,
+  "compiler": "rustc 1.99.0 (b940084d7 2026-09-28)",
+  "profile": "release, thin LTO, one codegen unit",
+  "fixture": "6000x4000 RGB8; 1000x700 completed offscreen frames",
+  "p95": "sorted[floor(0.95*(n-1))]",
+  "commands": [
+    "cargo +1.99.0 build --release -p photocraft-ui-egui --example channel_move_gpu_bench --example channel_transform_gpu_bench",
+    "env RAYON_NUM_THREADS=2 LP_NUM_THREADS=2 WGPU_BACKEND=vulkan VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json LIBGL_ALWAYS_SOFTWARE=1 GALLIUM_DRIVER=llvmpipe __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json __GLX_VENDOR_LIBRARY_NAME=mesa target/release/examples/channel_move_gpu_bench --step 21 [--set | --whole] [--cpu]",
+    "env RAYON_NUM_THREADS=2 LP_NUM_THREADS=2 WGPU_BACKEND=vulkan VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json LIBGL_ALWAYS_SOFTWARE=1 GALLIUM_DRIVER=llvmpipe __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json __GLX_VENDOR_LIBRARY_NAME=mesa target/release/examples/channel_transform_gpu_bench --sets [--cpu]"
+  ],
+  "runtime_environment": {
+    "RAYON_NUM_THREADS": "2",
+    "LP_NUM_THREADS": "2",
+    "WGPU_BACKEND": "vulkan",
+    "VK_DRIVER_FILES": "/usr/share/vulkan/icd.d/lvp_icd.json",
+    "VK_ICD_FILENAMES": "/usr/share/vulkan/icd.d/lvp_icd.json",
+    "LIBGL_ALWAYS_SOFTWARE": "1",
+    "GALLIUM_DRIVER": "llvmpipe",
+    "__EGL_VENDOR_LIBRARY_FILENAMES": "/usr/share/glvnd/egl_vendor.d/50_mesa.json",
+    "__GLX_VENDOR_LIBRARY_NAME": "mesa"
+  },
+  "runtime_environment_note": "Actual Ubuntu/Mesa paths used in every timing process; other distributions must point the Vulkan and EGL variables at their installed software driver manifests.",
+  "build_environment": {
+    "CARGO_BUILD_JOBS": "1",
+    "CARGO_INCREMENTAL": "0",
+    "CRAFT_FONTS_REQUIRED": "1",
+    "CRAFT_FONTS_DIR": "A populated craft-fonts checkout, shared by both builds; see docs/development.md, Fonts."
+  },
+  "harness_sha256": {
+    "crates/ui-egui/examples/channel_move_gpu_bench.rs": "6cc17cedfe96dcd3e66527500f4269d143a54671903a3c80eccadda0d6d6ccf0",
+    "crates/ui-egui/examples/channel_transform_gpu_bench.rs": "305f6f5f051bd7fa2773ae1030a51872814392528f90d2c7a23b11cc3916fb07"
+  },
+  "date": "2026-11-03",
+  "before_code": "d2db062b3ea5b0a82a6297f7fee671d57100623b",
+  "after_code": "48bbe4cb76df443c6651f13ab64ab8292178881a",
+  "merged_main": "e3a84b628dc7bb6b9cd821ee089fa3775f9ad67b",
+  "source_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "scope": "Final main snapshot compared with prior validated main655 integration, including viewport streaming, upstream import/memory changes and retained-source/sparse-scalar review fixes. Both builds use software Vulkan, not a physical GPU.",
+  "sampling": "3 interleaved processes/build/target/renderer, 9 warm frames/process/case/geometry. 324 Move and 1080 affine/Warp completed frames; no sample exclusion.",
+  "binaries": {
+    "move": {
+      "before": "4447113d2eee04f93085f9c96baa11121ca110369196cf8f5d4a7079a387a759",
+      "after": "d37b46d5bb02f80a8aa847c26f84597b71821c44990242ba65150e6121126e29"
+    },
+    "transform": {
+      "before": "cab8bc166747e8cba594e7118afdcf6558dcc2ed3afbb626f989e1c43f6af155",
+      "after": "33340cc2584a368ad50a11242a9cca8a54f09ed84560b79c0e87cbde33e9413c"
+    }
+  },
+  "baseline_build": {
+    "record": {
+      "label": "release-benches",
+      "command": [
+        "cargo",
+        "+1.99.0",
+        "build",
+        "-j1",
+        "--release",
+        "-p",
+        "photocraft-ui-egui",
+        "--example",
+        "channel_move_gpu_bench",
+        "--example",
+        "channel_transform_gpu_bench"
+      ],
+      "head": "d2db062b3ea5b0a82a6297f7fee671d57100623b",
+      "exit_code": 0,
+      "seconds": 887.5144626010442,
+      "source_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "code_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "code_unchanged": true,
+      "source_unchanged": true,
+      "log": "plan/merge-main-20261103-655295b2/release-benches.log"
+    },
+    "committed_harness_sha256": {
+      "crates/ui-egui/examples/channel_move_gpu_bench.rs": "6cc17cedfe96dcd3e66527500f4269d143a54671903a3c80eccadda0d6d6ccf0",
+      "crates/ui-egui/examples/channel_transform_gpu_bench.rs": "305f6f5f051bd7fa2773ae1030a51872814392528f90d2c7a23b11cc3916fb07"
+    },
+    "retained_artifacts": {
+      "move": {
+        "published_provenance_file": "docs/benchmarks/channel-scratch-merge-20261103/move-provenance.json",
+        "sha256": "4cb946e092e160647f5988a25d1fb49984d852d9e01463da0a07e8ac4ddaf843",
+        "previous_after_binary_sha256": "4447113d2eee04f93085f9c96baa11121ca110369196cf8f5d4a7079a387a759"
+      },
+      "transform": {
+        "published_provenance_file": "docs/benchmarks/channel-scratch-merge-20261103/transform-provenance.json",
+        "sha256": "2d1856928c90f738db06f9f3f7ca6fed37eef85f9c4b0eb8b9987f8e1efb793e",
+        "previous_after_binary_sha256": "cab8bc166747e8cba594e7118afdcf6558dcc2ed3afbb626f989e1c43f6af155"
+      }
+    },
+    "note": "Retained artifacts match the previously published after-build hashes. The original successful release-build record has a clean immutable source commit; harness bytes are verified against that commit as well as the current checkout."
+  },
+  "quick_gate": {
+    "commit": "48bbe4cb76df443c6651f13ab64ab8292178881a",
+    "dirty": false,
+    "contended": false,
+    "failures": [],
+    "baseline_note": "baseline is from machine class `macos-aarch64-apple-m4-pro-apple-m4-pro`, this is `linux-x86-64-amd-ryzen-7-9700x-8-core-processor-llvmpipe-llvm-21-1-8-256-bits`: regression check skipped",
+    "mode": "quick",
+    "load_avg_start": [
+      3.29,
+      5.41,
+      6.99
+    ],
+    "load_avg_end": [
+      4.53,
+      3.64,
+      3.94
+    ]
+  },
+  "validation": {
+    "code": "48bbe4cb76df443c6651f13ab64ab8292178881a",
+    "functional": {
+      "head": "48bbe4cb76df443c6651f13ab64ab8292178881a",
+      "all_functional_gates_passed": true,
+      "totals": {
+        "compose": [
+          421,
+          0,
+          2
+        ],
+        "engine": [
+          3263,
+          0,
+          22
+        ],
+        "UI": [
+          4961,
+          0,
+          22
+        ]
+      }
+    },
+    "gates": [
+      {
+        "label": "fmt",
+        "command": [
+          "cargo",
+          "+1.99.0",
+          "fmt",
+          "--all",
+          "--",
+          "--check"
+        ],
+        "head": "48bbe4cb76df443c6651f13ab64ab8292178881a",
+        "exit_code": 0,
+        "seconds": 6.217780912062153,
+        "source_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "code_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "code_unchanged": true,
+        "source_unchanged": true,
+        "log": "plan/merge-main-20261103-e3a84b628/fmt.log"
+      },
+      {
+        "label": "clippy",
+        "command": [
+          "cargo",
+          "+1.99.0",
+          "clippy",
+          "-j1",
+          "-p",
+          "photocraft-engine",
+          "-p",
+          "photocraft-ui-egui",
+          "-p",
+          "photocraft-compose",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "head": "48bbe4cb76df443c6651f13ab64ab8292178881a",
+        "exit_code": 0,
+        "seconds": 80.7785403819289,
+        "source_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "code_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "code_unchanged": true,
+        "source_unchanged": true,
+        "log": "plan/merge-main-20261103-e3a84b628/clippy.log"
+      },
+      {
+        "label": "tests",
+        "command": [
+          "cargo",
+          "+1.99.0",
+          "test",
+          "-j1",
+          "-p",
+          "photocraft-engine",
+          "-p",
+          "photocraft-ui-egui",
+          "-p",
+          "photocraft-compose",
+          "--lib",
+          "--tests"
+        ],
+        "head": "48bbe4cb76df443c6651f13ab64ab8292178881a",
+        "exit_code": 0,
+        "seconds": 1295.2029752089875,
+        "source_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "code_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "code_unchanged": true,
+        "source_unchanged": true,
+        "log": "plan/merge-main-20261103-e3a84b628/tests.log"
+      },
+      {
+        "label": "doctests",
+        "command": [
+          "cargo",
+          "+1.99.0",
+          "test",
+          "-j1",
+          "-p",
+          "photocraft-engine",
+          "-p",
+          "photocraft-ui-egui",
+          "--doc"
+        ],
+        "head": "48bbe4cb76df443c6651f13ab64ab8292178881a",
+        "exit_code": 0,
+        "seconds": 117.20797464088537,
+        "source_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "code_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "code_unchanged": true,
+        "source_unchanged": true,
+        "log": "plan/merge-main-20261103-e3a84b628/doctests.log"
+      },
+      {
+        "label": "layers",
+        "command": [
+          "cargo",
+          "+1.99.0",
+          "xtask",
+          "layers"
+        ],
+        "head": "48bbe4cb76df443c6651f13ab64ab8292178881a",
+        "exit_code": 0,
+        "seconds": 0.12409620301332325,
+        "source_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "code_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "code_unchanged": true,
+        "source_unchanged": true,
+        "log": "plan/merge-main-20261103-e3a84b628/layers.log"
+      },
+      {
+        "label": "wasm",
+        "command": [
+          "cargo",
+          "+1.99.0",
+          "xtask",
+          "wasm"
+        ],
+        "head": "48bbe4cb76df443c6651f13ab64ab8292178881a",
+        "exit_code": 0,
+        "seconds": 21.16346439300105,
+        "source_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "code_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "code_unchanged": true,
+        "source_unchanged": true,
+        "log": "plan/merge-main-20261103-e3a84b628/wasm.log"
+      },
+      {
+        "label": "panic-hunt",
+        "command": [
+          "cargo",
+          "+1.99.0",
+          "test",
+          "-j1",
+          "-p",
+          "photocraft-engine",
+          "--test",
+          "panic_hunt",
+          "--",
+          "--ignored"
+        ],
+        "head": "48bbe4cb76df443c6651f13ab64ab8292178881a",
+        "exit_code": 0,
+        "seconds": 191.82201804500073,
+        "source_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "code_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "code_unchanged": true,
+        "source_unchanged": true,
+        "log": "plan/merge-main-20261103-e3a84b628/panic-hunt.log"
+      },
+      {
+        "label": "corpus-changed",
+        "command": [
+          "cargo",
+          "+1.99.0",
+          "xtask",
+          "test-corpus",
+          "--changed"
+        ],
+        "head": "48bbe4cb76df443c6651f13ab64ab8292178881a",
+        "exit_code": 0,
+        "seconds": 0.13727114396169782,
+        "source_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "code_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "code_unchanged": true,
+        "source_unchanged": true,
+        "log": "plan/merge-main-20261103-e3a84b628/corpus-changed.log"
+      },
+      {
+        "label": "release-benches",
+        "command": [
+          "cargo",
+          "+1.99.0",
+          "build",
+          "-j1",
+          "--release",
+          "-p",
+          "photocraft-ui-egui",
+          "--example",
+          "channel_move_gpu_bench",
+          "--example",
+          "channel_transform_gpu_bench"
+        ],
+        "head": "48bbe4cb76df443c6651f13ab64ab8292178881a",
+        "exit_code": 0,
+        "seconds": 801.1872782969149,
+        "source_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "code_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "code_unchanged": true,
+        "source_unchanged": true,
+        "log": "plan/merge-main-20261103-e3a84b628/release-benches.log"
+      },
+      {
+        "label": "channel-gl",
+        "command": [
+          "env",
+          "WGPU_BACKEND=gl",
+          "WGPU_BACKENDS=gl",
+          "target/debug/deps/photocraft_ui_egui-bf376f7647bd1d4c",
+          "channel_transform",
+          "--nocapture"
+        ],
+        "head": "48bbe4cb76df443c6651f13ab64ab8292178881a",
+        "exit_code": 0,
+        "seconds": 8.153692692983896,
+        "source_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "code_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "code_unchanged": true,
+        "source_unchanged": true,
+        "log": "plan/merge-main-20261103-e3a84b628/channel-gl.log"
+      },
+      {
+        "label": "move-gl",
+        "command": [
+          "env",
+          "WGPU_BACKEND=gl",
+          "WGPU_BACKENDS=gl",
+          "target/debug/deps/photocraft_ui_egui-bf376f7647bd1d4c",
+          "canvas::move_ui::tests",
+          "--nocapture"
+        ],
+        "head": "48bbe4cb76df443c6651f13ab64ab8292178881a",
+        "exit_code": 0,
+        "seconds": 4.369301642058417,
+        "source_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "code_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "code_unchanged": true,
+        "source_unchanged": true,
+        "log": "plan/merge-main-20261103-e3a84b628/move-gl.log"
+      },
+      {
+        "label": "vulkan-matrix",
+        "command": [
+          "target/debug/deps/photocraft_ui_egui-bf376f7647bd1d4c",
+          "gpu_colour_preview_matches_cpu_for_depth_selection_geometry_and_eyes",
+          "--nocapture"
+        ],
+        "head": "48bbe4cb76df443c6651f13ab64ab8292178881a",
+        "exit_code": 0,
+        "seconds": 35.16382314090151,
+        "source_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "code_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "code_unchanged": true,
+        "source_unchanged": true,
+        "log": "plan/merge-main-20261103-e3a84b628/vulkan-matrix.log"
+      },
+      {
+        "label": "vulkan-move-matrix",
+        "command": [
+          "target/debug/deps/photocraft_ui_egui-bf376f7647bd1d4c",
+          "gpu_channel_move_matches_native_commit_and_tracks_visibility",
+          "--nocapture"
+        ],
+        "head": "48bbe4cb76df443c6651f13ab64ab8292178881a",
+        "exit_code": 0,
+        "seconds": 0.3785992260091007,
+        "source_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "code_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "code_unchanged": true,
+        "source_unchanged": true,
+        "log": "plan/merge-main-20261103-e3a84b628/vulkan-move-matrix.log"
+      },
+      {
+        "label": "matched-move",
+        "command": [
+          "python3",
+          "plan/merge-main-20261103-e3a84b628/matched-move-bench.py"
+        ],
+        "head": "48bbe4cb76df443c6651f13ab64ab8292178881a",
+        "exit_code": 0,
+        "seconds": 75.98240781901404,
+        "source_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "code_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "code_unchanged": true,
+        "source_unchanged": true,
+        "log": "plan/merge-main-20261103-e3a84b628/matched-move.log"
+      },
+      {
+        "label": "matched-transform",
+        "command": [
+          "python3",
+          "plan/merge-main-20261103-e3a84b628/matched-transform-bench.py"
+        ],
+        "head": "48bbe4cb76df443c6651f13ab64ab8292178881a",
+        "exit_code": 0,
+        "seconds": 100.2926684449194,
+        "source_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "code_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "code_unchanged": true,
+        "source_unchanged": true,
+        "log": "plan/merge-main-20261103-e3a84b628/matched-transform.log"
+      },
+      {
+        "label": "quick-perf",
+        "command": [
+          "cargo",
+          "+1.99.0",
+          "xtask",
+          "perf",
+          "--quick"
+        ],
+        "head": "48bbe4cb76df443c6651f13ab64ab8292178881a",
+        "exit_code": 0,
+        "seconds": 1489.764586564037,
+        "source_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "code_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "code_unchanged": true,
+        "source_unchanged": true,
+        "log": "plan/merge-main-20261103-e3a84b628/quick-perf.log"
+      },
+      {
+        "label": "sparse-snapshot-2",
+        "command": [
+          "cargo",
+          "+1.99.0",
+          "run",
+          "-j1",
+          "-p",
+          "photocraft-ui-egui",
+          "--example",
+          "codex_sparse_snapshot_temp",
+          "--",
+          "plan/merge-main-20261103-e3a84b628/sparse-preview"
+        ],
+        "head": "48bbe4cb76df443c6651f13ab64ab8292178881a",
+        "exit_code": 0,
+        "seconds": 3.307744269957766,
+        "source_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "code_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "code_unchanged": true,
+        "source_unchanged": true,
+        "log": "plan/merge-main-20261103-e3a84b628/sparse-snapshot-2.log"
+      }
+    ],
+    "local_helper_attempts": [
+      {
+        "label": "sparse-snapshot",
+        "command": [
+          "cargo",
+          "+1.99.0",
+          "run",
+          "-j1",
+          "-p",
+          "photocraft-ui-egui",
+          "--example",
+          "codex_sparse_snapshot_temp",
+          "--",
+          "plan/merge-main-20261103-e3a84b628/sparse-preview"
+        ],
+        "head": "48bbe4cb76df443c6651f13ab64ab8292178881a",
+        "exit_code": 101,
+        "seconds": 230.151819169987,
+        "source_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "code_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "code_unchanged": true,
+        "source_unchanged": true,
+        "log": "plan/merge-main-20261103-e3a84b628/sparse-snapshot.log"
+      }
+    ],
+    "local_helper_note": "An untracked screenshot helper initially imported a private module (E0603). Only its import was corrected to the existing public re-export; the sparse-snapshot-2 record is the successful retry. Product sources were unchanged throughout."
+  },
+  "confirmation_reason": "Two-component software Warp rose in the primary run. All accelerated targets and the composite control were repeated with Mesa shader caching disabled; these separate-environment samples are retained separately, with none excluded.",
+  "shader_source": {
+    "path": "crates/ui-egui/src/canvas/channel_transform_gpu.wgsl",
+    "sha256": "01ab95144021e3c203a1f0826183244d6a666677682db20573af9e2401e871c7",
+    "identical_in_both_source_commits": true,
+    "binary_containment": {
+      "before": {
+        "binary_sha256": "cab8bc166747e8cba594e7118afdcf6558dcc2ed3afbb626f989e1c43f6af155",
+        "exact_shader_offset": 58239659
+      },
+      "after": {
+        "binary_sha256": "33340cc2584a368ad50a11242a9cca8a54f09ed84560b79c0e87cbde33e9413c",
+        "exact_shader_offset": 58252051
+      }
+    },
+    "note": "Containment rechecked during publication against the recorded binary hashes. This verifies source bytes, not generated SPIR-V or driver machine code. No timing cause has been isolated."
+  },
+  "intermediate_observation": {
+    "after_code": "49257cd750b3bd8a27b2752b2b5782447ef18f1c",
+    "before_code": "d2db062b3ea5b0a82a6297f7fee671d57100623b",
+    "path": "intermediate-49257cd75",
+    "note": "Complete initial matched samples retained separately. Main advanced again during validation, so final tables use the later merged code. The standard quick gate on the intermediate build was stopped during compilation; no quick-gate pass is claimed for it."
+  },
+  "sparse_visual": {
+    "fixture": "3000x2000 RGB8 with grayscale layer mask, feathered600x600 selection, far sample at(100000000,6000); CPU preview rendered offscreen via software Vulkan; before/affine/Warp captures inspected",
+    "helper_sha256": "9f77efe16999a89ebdbb5af228064195dd13b3dba0af94d20eec98ef369c9a7b",
+    "captures": {
+      "before": "1104eed7aa47d4c7e73c03f6ff7bd0fe2db98ad905d4807398030e9c6d2828c7",
+      "affine": "f65e1538482078e6420e6bc5db5f92ac1ce2a8b112141635265b3257869c43ba",
+      "warp": "62914b0424b1381eb65139ffe228c62b3475b6e5f2e1eafa65ba2dec6b22e85b"
+    }
+  },
+  "upstream_merge_check": {
+    "tested_main": "e3a84b628dc7bb6b9cd821ee089fa3775f9ad67b",
+    "newer_main": "292ce6ab55a3c18636fe599cfbddc20ebc32cea9",
+    "newer_change": "Minimum/Maximum filter preview scaling",
+    "git_merge_tree_exit_code": 0,
+    "note": "One upstream commit arrived during validation; the tested snapshot still merges cleanly. It is not included in the measured source snapshot."
+  }
+}
