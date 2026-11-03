@@ -333,9 +333,20 @@ impl PhotocraftApp {
     /// Place a file's bytes as a smart object layer (File › Place; `linked`: Place Linked, to that
     /// path), for files that weren't read from a path the command can read.
     pub(crate) fn place_bytes(&mut self, name: &str, bytes: Vec<u8>, linked: Option<String>) -> Result<serde_json::Value, String> {
+        let is_linked = linked.is_some();
         let r = photocraft_engine::file_cmds::place_bytes(&mut self.session, name, bytes, linked, &serde_json::json!({})).map_err(|e| e.to_string());
         self.sync_views();
+        if let Ok(result) = &r {
+            self.report_place_warnings(result, is_linked);
+        }
         r
+    }
+
+    /// Keep Place's import warnings visible, as Open's warnings are.
+    pub(crate) fn report_place_warnings(&mut self, result: &serde_json::Value, linked: bool) {
+        let warnings: Vec<String> = result["warnings"].as_array().into_iter().flatten().filter_map(|w| w.as_str().map(str::to_owned)).collect();
+        let what = if linked { tl!("Place Linked") } else { tl!("Place Embedded") };
+        notices::io_warnings(self, what, &warnings);
     }
 
     /// Handle the OS requests queued since the last frame.

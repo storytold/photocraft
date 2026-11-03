@@ -11,6 +11,35 @@ use std::rc::Rc;
 /// Writes recorded by the fake writer: (path, bytes).
 type Written = Rc<RefCell<Vec<(String, Vec<u8>)>>>;
 
+#[test]
+fn vectorcraft_place_shows_import_warnings_from_bytes_and_commands() {
+    let pdf = b"%PDF-1.7\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 4 4] >>\nendobj\n4 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 4 4] >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n";
+    let mut bytes = format!(
+        r#"{{"format":"vectorcraft","version":4,"pdf":{{"mime":"application/pdf","blob":[0,{}]}},"document":{{"artboards":[],"layers":[]}}}}"#,
+        pdf.len()
+    )
+    .into_bytes();
+    bytes.extend_from_slice(b"\n\0VCBLOBS\0");
+    bytes.extend_from_slice(pdf);
+    let dir = std::env::temp_dir().join(format!("photocraft-place-warnings-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("Pages.vectorcraft");
+    std::fs::write(&path, &bytes).unwrap();
+    for command in [false, true] {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
+        app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+        let r = if command {
+            app.run("file.placeEmbedded", json!({"path": path})).unwrap()
+        } else {
+            app.place_bytes("Pages.vectorcraft", bytes.clone(), None).unwrap()
+        };
+        assert!(r["warnings"].as_array().is_some_and(|w| !w.is_empty()), "{r}");
+        assert!(app.ui.notices.iter().any(|n| n.lines.iter().any(|line| line.contains("2 artboards"))));
+        assert!(app.ui.status.contains("2 artboards"), "{}", app.ui.status);
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// An app whose importer names the document after the file (like `photocraft-io`) and reports a
 /// warning for names containing "warn", and fails for bytes "bad"; the exporter warns for ".png"
 /// and the writer records what it wrote. Its file dialogs answer with `answers`, in order.

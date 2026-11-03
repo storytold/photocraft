@@ -566,6 +566,27 @@ fn place_vectorcraft_draws_the_carried_pdf() {
     assert!(e.to_string().contains("Create PDF-Compatible File"), "{e}");
 }
 
+#[test]
+fn place_vectorcraft_returns_import_warnings() {
+    let mut bytes = vectorcraft_file(40, 20, "0 0 1");
+    let marker = b"\n\0VCBLOBS\0";
+    let at = bytes.windows(marker.len()).position(|w| w == marker).unwrap();
+    let pdf = String::from_utf8(bytes[at + marker.len()..].to_vec())
+        .unwrap()
+        .replace("/Kids [3 0 R] /Count 1", "/Kids [3 0 R 5 0 R] /Count 2")
+        .replace("trailer", "5 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 40 20] /Contents 4 0 R >>\nendobj\ntrailer");
+    let mut header: Value = serde_json::from_slice(&bytes[..at]).unwrap();
+    header["pdf"]["blob"] = json!([0, pdf.len()]);
+    bytes = serde_json::to_vec(&header).unwrap();
+    bytes.extend_from_slice(marker);
+    bytes.extend_from_slice(pdf.as_bytes());
+    for smart in [false, true] {
+        let mut s = session(100, 100, 8);
+        let r = place_bytes(&mut s, "Pages.vectorcraft", bytes.clone(), None, &json!({"smartObject": smart})).unwrap();
+        assert!(r["warnings"].as_array().unwrap().iter().any(|w| w.as_str().is_some_and(|s| s.contains("first of") && s.contains("2 artboards"))), "{r}");
+    }
+}
+
 /// A VectorCraft smart object's sRGB colors are converted into the document's profile when it is
 /// drawn again for its placement, and each profile keeps its own drawing.
 #[test]
