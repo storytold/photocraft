@@ -1034,12 +1034,16 @@ fn proxy_previews_scale_only_lengths() {
     let (k, diff) = error("filter.pixelate.mosaic", json!({"cellSize": 10.0}));
     assert!(k == 2 && diff < 0.01, "Mosaic: {diff}");
     // Minimum and Maximum keep at least one proxy pixel of radius (#10474), and a large radius
-    // keeps the full proxy instead of a full-size preview that costs minutes at radius 500.
+    // keeps a proxy instead of a full-size preview that costs minutes at radius 500. Squareness
+    // also keeps its rounded radius within 1 px of OK's: 6 px is 2 proxy px at k = 3 (6 px), not
+    // at k = 4 (8 px); 50 px is 17 at k = 3 (51 px), not 13 at k = 4 (52 px).
+    let factors = |cmd: &str, preserve: &str| {
+        [0.2, 1.5, 2.5, 3.9, 6.0, 50.0, 500.0, 9999.0].map(|radius| preview_factor(cmd, &json!({"radius": radius, "preserve": preserve}), 4))
+    };
     for cmd in ["filter.other.minimum", "filter.other.maximum"] {
-        for preserve in ["squareness", "roundness"] {
-            let k = |radius: f64| preview_factor(cmd, &json!({"radius": radius, "preserve": preserve}), 4);
-            assert_eq!([k(0.2), k(1.5), k(2.5), k(3.9), k(50.0), k(500.0)], [1, 1, 2, 3, 4, 4], "{cmd} {preserve}");
-        }
+        assert_eq!(factors(cmd, "squareness"), [1, 1, 2, 3, 3, 3, 4, 4], "{cmd} squareness");
+        assert_eq!(factors(cmd, "roundness"), [1, 1, 2, 3, 4, 4, 4, 4], "{cmd} roundness");
+        assert_eq!(preview_factor(cmd, &json!({"radius": 6.0}), 4), 3, "{cmd}: Squareness is the default");
         assert_eq!(preview_factor(cmd, &json!({"radius": "x"}), 4), 4, "{cmd}: a junk radius keeps the proxy");
     }
     // Tree's and Picture Frame's sizes are relative, not pixels (and not shown as "px").
