@@ -3013,6 +3013,52 @@ fn mask_blur_reach_grows_damage_and_partial_thumbnail_matches_full_refresh() {
 }
 
 #[test]
+fn cpu_canvas_damage_expands_mask_blur_once_for_main_and_detail_textures() {
+    use photocraft_color::PixelFormat;
+    use photocraft_doc::mask_paint::{EffectKind, Paint, Stack};
+    use photocraft_geom::Rect;
+    use photocraft_raster::Surface;
+
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 256, "height": 128})).unwrap();
+    app.run("layer.layerMask.revealAll", json!({})).unwrap();
+    let layer = app.session.active().unwrap().active_layer.unwrap();
+    app.session
+        .edit("seed a mask Blur stack", |doc, _| {
+            let mask = doc.layer_mut(layer).unwrap().mask.as_mut().unwrap();
+            let base = Surface::with_default(PixelFormat::GRAY8, &[0.5]);
+            mask.surface = base.clone();
+            mask.paint = Some(Stack {
+                base,
+                layers: vec![Paint {
+                    name: "Blur".into(),
+                    visible: true,
+                    opacity: 1.0,
+                    blend: photocraft_color::BlendMode::Normal,
+                    surface: Surface::with_default(PixelFormat::RGBA8, &[0.0, 0.0, 0.0, 0.0]),
+                    fill_map: None,
+                    fill_map_size: [0, 0],
+                    fill_bounds: None,
+                    kind: EffectKind::Blur { radius: 7 },
+                }],
+                active: 0,
+            });
+            Ok(())
+        })
+        .unwrap();
+
+    let revision = app.session.active().unwrap().revision;
+    let raw = Rect::new(120, 60, 121, 61);
+    app.session.active_mut().unwrap().last_damage = Some(raw);
+    let damage = crate::canvas::cpu_damage_since(&app, 0, (revision - 1, 0), (revision, 0), 0).unwrap();
+    assert_eq!(damage, raw.inflate(7), "the main and detail CPU textures need one Blur margin");
+
+    let empty = Rect::new(120, 60, 120, 60);
+    app.session.active_mut().unwrap().last_damage = Some(empty);
+    assert_eq!(crate::canvas::cpu_damage_since(&app, 0, (revision - 1, 0), (revision, 0), 0), Some(empty));
+}
+
+#[test]
 fn tab_reorder_keeps_floating_documents_in_place() {
     let visible = [0, 2];
     assert_eq!(move_target_after_filter(&visible, 0, 1, 3), 2);

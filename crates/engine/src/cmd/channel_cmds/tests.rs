@@ -1134,6 +1134,47 @@ fn history_brush_samples_the_flattened_historical_mask() {
 }
 
 #[test]
+fn perspective_crop_rejects_editable_mask_stacks_before_changing_geometry() {
+    use photocraft_color::PixelFormat;
+    use photocraft_doc::mask_paint::{EffectKind, Paint, Stack};
+
+    let mut guarded = session();
+    guarded.execute("layer.layerMask.revealAll", json!({})).unwrap();
+    let layer_id = guarded.active().unwrap().active_layer.unwrap();
+    guarded
+        .edit("add editable mask Paint stack", |doc, _| {
+            let mask = doc.layer_mut(layer_id).unwrap().mask.as_mut().unwrap();
+            mask.paint = Some(Stack {
+                base: mask.surface.clone(),
+                layers: vec![Paint {
+                    name: "Paint".into(),
+                    visible: false,
+                    opacity: 1.0,
+                    blend: photocraft_color::BlendMode::Normal,
+                    surface: Surface::with_default(PixelFormat::RGBA8, &[0.0, 0.0, 0.0, 0.0]),
+                    fill_map: None,
+                    fill_map_size: [0, 0],
+                    fill_bounds: None,
+                    kind: EffectKind::Paint,
+                }],
+                active: 0,
+            });
+            Ok(())
+        })
+        .unwrap();
+    let before = guarded.active().unwrap().doc.bounds();
+    let params = json!({"corners": [[0, 0], [40, 0], [40, 20], [0, 20]], "width": 40, "height": 20});
+    let error = guarded.execute("image.perspectiveCrop", params.clone()).unwrap_err();
+    assert!(error.to_string().contains("editable mask Paint effects"), "{error}");
+    assert_eq!(guarded.active().unwrap().doc.bounds(), before, "refusal must happen before geometry changes");
+    assert!(guarded.active().unwrap().doc.layer(layer_id).unwrap().mask.as_ref().unwrap().paint.is_some());
+
+    let mut unguarded = session();
+    unguarded.execute("image.perspectiveCrop", params).unwrap();
+    assert_eq!(unguarded.active().unwrap().doc.bounds().size(), before.size());
+}
+
+#[test]
 fn clear_with_a_colour_channel_targeted_clears_only_that_channel() {
     let near = |a: &[f32], b: &[f32]| a.len() == b.len() && a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-3);
     // The Background, then a normal layer (Delete there can't make one channel transparent).

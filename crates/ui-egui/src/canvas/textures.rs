@@ -120,9 +120,9 @@ pub(crate) fn ensure_texture_in_view(
     view: Option<InView>,
 ) -> Option<CpuTextures> {
     let output = display;
-    let (revision, last_damage, id) = {
+    let (revision, id) = {
         let st = app.session.documents().get(idx)?;
-        (st.revision, st.last_damage.map(|r| if r.is_empty() { r } else { r.inflate(effect_reach(&st.doc.layers)) }), st.doc.id)
+        (st.revision, st.doc.id)
     };
     let (mut doc, mut preview_key) = display_doc(app, idx);
     // A filter dialog's live preview: the GPU canvas draws it from its own texture, but this CPU
@@ -152,7 +152,7 @@ pub(crate) fn ensure_texture_in_view(
     }
     let (display, display_key) = canvas_display(app, &doc, output);
     let seen = app.canvases.get(&cache_key(id, output)).map(|c| (c.tex_revision, c.tex_preview_key));
-    let damage = seen.and_then(|seen| damage_since(app, idx, seen, (revision, preview_key), display_key, last_damage)).filter(|_| !reduced);
+    let damage = seen.and_then(|seen| cpu_damage_since(app, idx, seen, (revision, preview_key), display_key)).filter(|_| !reduced);
     // The detail texture can lag the whole-document one (made or moved later): its own damage.
     let detail_seen = view.and_then(|v| {
         let c = app.canvases.get(&cache_key(id, output))?;
@@ -160,7 +160,7 @@ pub(crate) fn ensure_texture_in_view(
     });
     let detail_damage = match detail_seen {
         Some(s) if Some(s) == seen => damage,
-        Some(s) => damage_since(app, idx, s, (revision, preview_key), display_key, last_damage),
+        Some(s) => cpu_damage_since(app, idx, s, (revision, preview_key), display_key),
         None => None,
     };
     let preview_key = preview_key ^ display_key;
@@ -406,6 +406,13 @@ pub(crate) fn damage_since(app: &PhotocraftApp, idx: usize, seen: (u64, u64), no
     let l = live_stroke(app, idx).filter(|l| seen.0 == now.0 && l.display_key() == now.1)?;
     let r = l.since(seen.1 ^ display_key)?;
     Some(if r.is_empty() { r } else { r.inflate(effect_reach(&l.stroke.doc().layers)) })
+}
+
+/// CPU canvas textures pass the journal's raw damage. `damage_since` applies effect margins once
+/// for both the main texture and its detail texture.
+pub(crate) fn cpu_damage_since(app: &PhotocraftApp, idx: usize, seen: (u64, u64), now: (u64, u64), display_key: u64) -> Option<DRect> {
+    let last_damage = app.session.documents().get(idx).and_then(|state| state.last_damage);
+    damage_since(app, idx, seen, now, display_key, last_damage)
 }
 
 /// Document `doc`'s canvas caches showed a preview that the edit just committed reproduces

@@ -178,6 +178,7 @@ pub(crate) fn mask_stack_geometry_enabled(s: &Session, id: &str, p: &Value) -> O
             | "image.crop"
             | "image.trim"
             | "image.rotation.arbitrary"
+            | "image.perspectiveCrop"
             | "image.imageRotation.flipCanvasHorizontal"
             | "image.imageRotation.flipCanvasVertical"
             | "image.imageRotation.180"

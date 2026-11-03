@@ -27,6 +27,9 @@ struct SampledComposite {
     content: u64,
     preview_key: u64,
     factor: u32,
+    /// Identifies the immutable document snapshot. A UV mask-cache refresh replaces the document
+    /// without changing its content revision, but does change pixels used by the composite.
+    document: std::sync::Weak<Document>,
     pixels: Vec<[f32; 4]>,
 }
 
@@ -338,6 +341,7 @@ pub fn ensure(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize) -> Optio
         view.layer_mask = Some(photocraft_engine::mask_view_cmds::LayerMaskView { layer, filter: false, mode: MaskViewMode::Gray });
     }
     let (revision, last_damage) = (st.revision, st.last_damage);
+    let source_document = std::sync::Arc::downgrade(&st.doc);
     let content = revision.wrapping_sub(st.view_revision);
     let id = st.doc.id.0;
     if view.is_plain(&st.doc) {
@@ -377,10 +381,15 @@ pub fn ensure(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize) -> Optio
     );
     #[cfg(not(feature = "uv-workbench"))]
     let factor = doc.size.width.max(doc.size.height).div_ceil(max_side).max(1);
-    // A live preview can mutate the same Arc in place. Content revision and preview_key, not
-    // pointer identity, determine whether these flattened pixels are still current.
+    // A live preview can mutate the same Arc in place, so content revision and preview_key still
+    // guard that path. Document identity also catches cache-only refreshes that replace pixels
+    // while leaving the content revision unchanged.
     if let Some(c) = app.channel_views.get_mut(&id) {
-        if let Some(s) = c.source.as_mut().filter(|s| s.factor == factor && s.content == content && s.preview_key == preview_key) {
+        if let Some(s) = c
+            .source
+            .as_mut()
+            .filter(|s| s.factor == factor && s.content == content && s.preview_key == preview_key && std::sync::Weak::ptr_eq(&s.document, &source_document))
+        {
             s.revision = revision;
         } else {
             c.source = None;
@@ -461,12 +470,12 @@ pub fn ensure(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize) -> Optio
             c.factor = factor;
             c.valid = true;
             if let Some(pixels) = fresh.take() {
-                c.source = Some(SampledComposite { revision, content, preview_key, factor, pixels });
+                c.source = Some(SampledComposite { revision, content, preview_key, factor, document: source_document.clone(), pixels });
             }
         }
         _ => {
             let tex = ctx.load_texture(format!("channel-view-{id}"), img, TextureOptions::LINEAR);
-            let source = fresh.map(|pixels| SampledComposite { revision, content, preview_key, factor, pixels });
+            let source = fresh.map(|pixels| SampledComposite { revision, content, preview_key, factor, document: source_document, pixels });
             app.channel_views.insert(id, Cache { revision, key, preview_key, factor, valid: true, tex, source });
         }
     }

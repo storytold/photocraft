@@ -23,7 +23,7 @@ The main area shows the ordinary 2D texture editor, a depth-tested orthographic/
 3D model view, or both side by side. Either view can use a separate native window (embedded
 window fallback on hosts without native viewports). UV boundaries remain on bound 2D texture documents, including
 normal-map documents. The left-rail shell selection tool consumes clicks before the brush; selecting an ordinary
-tool restores texture editing. Shift adds, Alt subtracts in 2D; Ctrl subtracts in 3D, where Alt is reserved for navigation. Hide UV leaves selection/layer masks intact.
+tool restores texture editing. Shift adds, Alt subtracts in 2D; Ctrl (⌘ on macOS) subtracts in 3D, where Alt is reserved for navigation. Hide UV leaves selection/layer masks intact.
 
 Static binary FBX 7.4+ and OBJ/MTL import preserves control-point identity, per-corner UV,
 authored split normals, materials, external/embedded base-color and normal textures.
@@ -229,7 +229,7 @@ PBR math follows the public [Khronos metallic/roughness specification](https://g
 
 PBR source caches now propagate native compositor damage through linear CMS and retained half-float GPU subregion updates/mips. Small strokes retain full-sized image/encoded-map allocations and leave untouched texels alone; skipped/stale hints fall back to a full refresh. Commit and undo damage are respected. 2D autoscroll requires the 2D canvas to own tool input; a live mapped 3D stroke is excluded, including both split-view orders.
 
-Scene input/save is capped separately at 2 GiB; mesh import remains 256 MiB. The previous shared cap prevented a real 372 MiB character scene with twelve 4K maps from being saved again. Atomic overwrite is retained. Optional, bounded view metadata (64 KiB, depth 16) preserves camera/PBR/Normal settings, channel and layout, per-bound-document 2D transforms and an HDR/EXR reference (new container saves also embed the panorama bytes). Original texture source paths survive project load and resave; texture pixels and layers remain embedded. Old version-1 projects without these fields still open. Save errors are retained in the UV workspace. The external character diagnostic reads source assets in place and saves/deletes only its D-drive temporary copy.
+Scene input/save is capped separately at 2 GiB; mesh import remains 256 MiB. The previous shared cap prevented a real 372 MiB character scene with twelve 4K maps from being saved again. Atomic overwrite is retained. Optional, bounded view metadata (64 KiB, depth 16) preserves camera/PBR/Normal settings, channel and layout, per-bound-document 2D transforms and an HDR/EXR reference (new container saves also embed the panorama bytes). Original texture source paths survive project load and resave; texture pixels and layers remain embedded. Old version-1 projects without these fields still open. Save errors are retained in the UV workspace. The external character diagnostic reads source assets in place and saves/deletes only its temporary copy in the system temporary directory.
 
 
 ## Texture writeback, separate 2D map and shell rectangles (2026-10-22)
@@ -238,7 +238,7 @@ File > 3D Import > Export Textures (formerly Save All Textures) finishes an acti
 
 The right side of the view toolbar now selects the 2D map separately, without a Material entry. Changing a global 3D map follows it in 2D; choosing the 2D map leaves the 3D display mode alone. Choosing Material retains the current 2D map. The selected 2D map remains the native editable document/paint target. Both channel preferences round-trip in scene view metadata.
 
-The UV shell tool supports LMB rectangle drags in the texture canvas and model viewport. Its options choose touched or entirely enclosed shells; Shift adds and Ctrl subtracts (Alt subtraction remains available for 2D clicks). Rectangle picking operates on the active material/texture set, using exact triangle/rectangle intersections. In 3D, Visible only selects front-facing visible fragments; Through mesh also selects occluded and back-facing portions. The mask is rasterized once on release. Single shell clicks, transformed 2D canvases and Maya navigation retain their existing routes.
+The UV shell tool supports LMB rectangle drags in the texture canvas and model viewport. Its options choose touched or entirely enclosed shells; Shift adds and Ctrl (⌘ on macOS) subtracts (Alt subtraction remains available for 2D clicks). Rectangle picking operates on the active material/texture set, using exact triangle/rectangle intersections. In 3D, Visible only selects front-facing visible fragments; Through mesh also selects occluded and back-facing portions. The mask is rasterized once on release. Single-shell clicks, transformed 2D canvases and Maya navigation retain their existing routes.
 
 Clone Stamp/Healing source picking in 3D uses Ctrl+LMB so Alt+LMB remains Maya orbit. The temporary Ctrl Move tool no longer intercepts the source pick. Clone Stamp shares its native source image/transform/overlay settings with a UV-triangle projection on the model; a BVH visibility query rejects occluded preview triangles without GPU readback. Retouch painting retains Paint UV mode.
 
@@ -249,7 +249,7 @@ Validation on 2026-10-22: 42 focused native UV/UI tests, 19 clone/retouch checks
 
 Controlled two-island 4K U16 seam benchmark (four surface samples per frame, CPU brush + PBR source-cache refresh, excluding GPU presentation): Paint UV 5.96 ms average / 6.93 ms maximum, Paint Wrap 8.92 / 9.82 ms. At most 4,140 / 2,450 texels are recomposited; adjacent update rectangles merge, distant islands remain separate. These are synthetic processing timings, not full-frame performance on a production mesh.
 
-The 24 MP RGB selection microbenchmark compares the original parallel processing of all tiles with skipping zero-coverage tiles: 275.62 ms versus 9.36 ms in the optimized test profile, for Invert through a 32×32 selection, with pixel equality checked. The standalone release example `uv_selected_adjustment_bench` runs actual Levels commands plus history on a 6000×4000 document: warm p50 9.34 ms (8-bit), 11.97 ms (16-bit), 10.03 ms (32f), excluding canvas refresh. No user assets are opened by these benchmarks; build/temp/perf output uses the D-drive build tree.
+The 24 MP RGB selection microbenchmark compares the original parallel processing of all tiles with skipping zero-coverage tiles: 275.62 ms versus 9.36 ms in the optimized test profile, for Invert through a 32×32 selection, with pixel equality checked. The standalone release example `uv_selected_adjustment_bench` runs actual Levels commands plus history on a 6000×4000 document: warm p50 9.34 ms (8-bit), 11.97 ms (16-bit), 10.03 ms (32f), excluding canvas refresh. No user assets are opened by these benchmarks; build, temporary and performance output uses the configured build directory.
 
 
 ## Project containers and isolated 3D documents (2026-10-22)
