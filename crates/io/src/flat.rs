@@ -572,7 +572,7 @@ fn document_to_preview_with_renderer(doc: &Document, warnings: &mut Vec<String>,
 /// exports still keep the document's native depth. Like the CPU preview, it carries no export
 /// metadata (EXIF, XMP or resolution).
 pub fn export_preview_png_with_renderer(doc: &Document, renderer: Option<&mut dyn BandRenderer>) -> Result<ExportResult, IoError> {
-    if let Some(mut r) = renderer {
+    if let Some(r) = renderer {
         let mut warnings = Vec::new();
         match document_to_preview_with_renderer(doc, &mut warnings, Some(&mut *r)) {
             Ok(img) => {
@@ -904,7 +904,7 @@ pub fn export_flat_with_renderer(
     format: Format,
     opts: &ExportOptions,
     ctl: &photocraft_raster::Interrupt,
-    renderer: Option<&mut dyn BandRenderer>,
+    mut renderer: Option<&mut dyn BandRenderer>,
 ) -> Result<ExportResult, IoError> {
     if let Some(mut r) = export_mode_specific(doc, format, opts)? {
         // Palette PNG/BMP and Duotone exports render on their own paths before the renderer
