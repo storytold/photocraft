@@ -10,7 +10,7 @@
 //! stops and direction in the layer's own gradient fill, with a warning that the exact geometry
 //! is not kept.
 
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use photocraft_color::blend::BlendMode;
 use photocraft_color::{Color, ColorMode, PixelFormat, SampleType};
@@ -109,6 +109,11 @@ const MAX_RECURSION: usize = 200;
 /// a few thousand deep (70 KB of `<g>`) overflows a 2 MB thread stack, an abort no guard can
 /// catch; real drawings stay under a hundred levels.
 pub const MAX_XML_DEPTH: usize = 512;
+/// Shallow parsing stays on the caller; deeper accepted markup must not consume its small platform stack.
+const INLINE_XML_DEPTH: usize = 128;
+/// A constant native parsing allowance, independent of source size and bounded by `MAX_XML_DEPTH`.
+#[cfg(not(target_arch = "wasm32"))]
+const PARSER_STACK_BYTES: usize = 8 << 20;
 /// Largest `.svgz` accepted once inflated (a 1.5 MB gzip can hold 1.5 GB of whitespace).
 pub const MAX_INFLATED_BYTES: u64 = 128 << 20;
 
@@ -283,12 +288,48 @@ fn font_resolver() -> usvg::FontResolver<'static> {
     usvg::FontResolver::default()
 }
 
+/// Runs accepted deep parsing on one bounded native worker, including its embedded-image callbacks.
+/// Spawn/join failures are errors; wasm rejects deep parsing because it cannot isolate the recursive parser.
+fn parse_at_depth<T: Send>(depth: usize, isolated: bool, parse: impl FnOnce(bool) -> Result<T, IoError> + Send) -> Result<T, IoError> {
+    if isolated || depth <= INLINE_XML_DEPTH {
+        return parse(isolated);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::thread::scope(|scope| {
+            let worker = std::thread::Builder::new()
+                .name("photocraft-svg-parse".into())
+                .stack_size(PARSER_STACK_BYTES)
+                .spawn_scoped(scope, move || parse(true))
+                .map_err(|error| IoError::Svg(format!("could not start the bounded SVG parser worker: {error}")))?;
+            worker.join().map_err(|_| IoError::Svg("the bounded SVG parser worker failed; the drawing was not opened".into()))?
+        })
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        Err(IoError::Svg(format!(
+            "SVG parsing deeper than {INLINE_XML_DEPTH} levels requires the native app's isolated parser; simplify the drawing or open it in PhotoCraft desktop"
+        )))
+    }
+}
+
+/// Supplies bounded parsing options to direct resolver tests without changing their existing interface.
+#[cfg(test)]
+fn options(fontdb: Arc<usvg::fontdb::Database>, depth_left: usize) -> usvg::Options<'static> {
+    options_with_isolation(fontdb, depth_left, false, Arc::new(Mutex::new(None)))
+}
+
 /// Parse options for an untrusted drawing. `<image href>` resolves only `data:` URLs: a file path
 /// or relative href is never read, so opening an SVG cannot pull local files (`/etc/...`,
 /// `~/.ssh/...`) into the document. Embedded SVG images get no `<image>` resolution at all
 /// (`usvg` already blanks it for sub-SVGs). An embedded SVG may nest `depth_left` levels: it is
 /// parsed on top of the drawing's own recursion, so the two depths share [`MAX_XML_DEPTH`].
-fn options(fontdb: Arc<usvg::fontdb::Database>, depth_left: usize) -> usvg::Options<'static> {
+fn options_with_isolation(
+    fontdb: Arc<usvg::fontdb::Database>,
+    depth_left: usize,
+    isolated: bool,
+    parser_error: Arc<Mutex<Option<IoError>>>,
+) -> usvg::Options<'static> {
     let default_resolver = usvg::ImageHrefResolver::default_data_resolver();
     let resolve_data: usvg::ImageHrefDataResolverFn<'static> = Box::new(move |mime, data, opts| {
         // Reject embedded images whose decoded RGBA storage would exceed the budget before
@@ -316,10 +357,23 @@ fn options(fontdb: Arc<usvg::fontdb::Database>, depth_left: usize) -> usvg::Opti
                 Ok(std::borrow::Cow::Owned(xml)) if !xml.starts_with(&[0x1f, 0x8b]) => ("image/svg+xml", Arc::new(xml)),
                 _ => return None,
             };
-            if nesting_depth(&xml, depth_left) > depth_left {
+            let depth = nesting_depth(&xml, depth_left);
+            if depth > depth_left {
                 return None;
             }
-            return default_resolver(mime, xml, opts);
+            // An already isolated outer parse lends its fixed stack to the child. Otherwise a
+            // deep child gets one worker of its own; usvg disables further embedded images there.
+            let shared_depth = MAX_XML_DEPTH.saturating_sub(depth_left).saturating_add(depth);
+            return match parse_at_depth(shared_depth, isolated, |_| Ok(default_resolver(mime, xml, opts))) {
+                Ok(image) => image,
+                Err(error) => {
+                    let mut failure = parser_error.lock().unwrap_or_else(PoisonError::into_inner);
+                    if failure.is_none() {
+                        *failure = Some(error);
+                    }
+                    None
+                }
+            };
         }
         default_resolver(mime, data, opts)
     });
@@ -360,13 +414,20 @@ fn parse_with(bytes: &[u8], fonts: fn() -> Arc<usvg::fontdb::Database>) -> Resul
     let has_text = xml.windows(4).any(|w| w == b"text");
     let fontdb = if has_text { fonts() } else { Arc::new(usvg::fontdb::Database::new()) };
     let fontless_text = has_text && fontdb.faces().next().is_none();
-    let opt = options(fontdb, MAX_XML_DEPTH.saturating_sub(depth));
     // Parse the already-bounded-and-decoded text with from_str, not from_data: from_data
     // re-checks the gzip magic and would decompress a second time without our size limit if
     // the inflated content happened to start with a nested gzip stream.
     let text = std::str::from_utf8(&xml).map_err(|_| IoError::Svg("the SVG is not valid UTF-8".into()))?;
-    let tree = usvg::Tree::from_str(text, &opt).map_err(|e| IoError::Svg(e.to_string()))?;
-    Ok(Parsed { tree, fontless_text })
+    let parser_error = Arc::new(Mutex::new(None));
+    parse_at_depth(depth, false, |isolated| {
+        let opt = options_with_isolation(fontdb, MAX_XML_DEPTH.saturating_sub(depth), isolated, Arc::clone(&parser_error));
+        let tree = usvg::Tree::from_str(text, &opt);
+        if let Some(error) = parser_error.lock().unwrap_or_else(PoisonError::into_inner).take() {
+            return Err(error);
+        }
+        let tree = tree.map_err(|error| IoError::Svg(error.to_string()))?;
+        Ok(Parsed { tree, fontless_text })
+    })
 }
 
 const MAX_BOUNDED_SVG_BYTES: u64 = 16 << 20;
@@ -515,6 +576,7 @@ fn bounded_data_image(
     budget: &Arc<Mutex<ImageBudget>>,
     depth: usize,
     xml_left: usize,
+    isolated: bool,
 ) -> Option<usvg::ImageKind> {
     if budget.lock().unwrap_or_else(std::sync::PoisonError::into_inner).error.is_some() {
         return None;
@@ -527,7 +589,7 @@ fn bounded_data_image(
         }
         // A budget overrun inside the image is already recorded; any other failure (not an
         // SVG, nested deeper than the drawing left room for) only leaves the image out.
-        let Ok(tree) = parse_image_bounded(&data, budget.clone(), depth + 1, xml_left) else {
+        let Ok(tree) = parse_image_bounded(&data, budget.clone(), depth + 1, xml_left, isolated) else {
             return unreadable_image(budget, "can't parse an embedded SVG image");
         };
         let mut counter = budget.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -565,8 +627,8 @@ fn bounded_data_image(
 }
 
 /// [`parse_image_bounded_with`] using the shared system font database.
-fn parse_image_bounded(bytes: &[u8], budget: Arc<Mutex<ImageBudget>>, depth: usize, xml_left: usize) -> Result<usvg::Tree, IoError> {
-    parse_image_bounded_with(bytes, budget, depth, xml_left, fonts)
+fn parse_image_bounded(bytes: &[u8], budget: Arc<Mutex<ImageBudget>>, depth: usize, xml_left: usize, isolated: bool) -> Result<usvg::Tree, IoError> {
+    parse_image_bounded_with(bytes, budget, depth, xml_left, fonts, isolated)
 }
 
 /// Parse one (possibly gzip-compressed) SVG at nesting `depth` against `budget`: the byte,
@@ -583,6 +645,7 @@ fn parse_image_bounded_with(
     depth: usize,
     xml_left: usize,
     fonts: fn() -> Arc<usvg::fontdb::Database>,
+    isolated: bool,
 ) -> Result<usvg::Tree, IoError> {
     let overrun = |error: IoError| {
         image_error(&budget, error.to_string());
@@ -609,33 +672,37 @@ fn parse_image_bounded_with(
     if nesting > xml_left {
         return Err(IoError::Svg(format!("elements are nested more than {xml_left} levels deep")));
     }
-    let has_text = xml.windows(4).any(|w| w == b"text");
-    let fontdb = if has_text { fonts() } else { Arc::new(usvg::fontdb::Database::new()) };
-    if has_text && fontdb.faces().next().is_none() {
-        budget.lock().unwrap_or_else(std::sync::PoisonError::into_inner).fontless_text = true;
-    }
-    // The resolver below replaces `options`' own, so its embedded-SVG depth argument is unused.
-    let mut opt = options(fontdb, 0);
-    let shared = budget.clone();
-    let image_xml_left = xml_left.saturating_sub(nesting);
-    opt.image_href_resolver.resolve_data = Box::new(move |mime, data, options| bounded_data_image(mime, data, options, &shared, depth, image_xml_left));
-    // The bounded inflate above is the only decompression step. from_data would detect a
-    // nested gzip payload and inflate it again without the source-byte limit.
-    let text = std::str::from_utf8(&xml).map_err(|_| IoError::Svg("the SVG is not valid UTF-8".into()))?;
-    let tree = usvg::Tree::from_str(text, &opt);
-    if let Some(error) = budget.lock().unwrap_or_else(std::sync::PoisonError::into_inner).error.clone() {
-        return Err(IoError::Svg(error));
-    }
-    let tree = tree.map_err(|e| IoError::Svg(e.to_string()))?;
-    // Include nested SVG trees too. Paint servers can reuse one parsed raster in many
-    // drawing nodes, so the work estimate must not assume every source is decoded once.
-    let nodes = u64::try_from(count_nodes_with_limit(tree.root(), true, usize::MAX, false)).unwrap_or(u64::MAX);
-    let mut counter = budget.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    counter.draw_nodes = counter.draw_nodes.saturating_add(nodes);
-    let (raster, svg) = repeatable_image_resources(&tree);
-    counter.repeatable_raster |= raster;
-    counter.repeatable_svg |= svg;
-    Ok(tree)
+    let shared_depth = MAX_XML_DEPTH.saturating_sub(xml_left).saturating_add(nesting);
+    parse_at_depth(shared_depth, isolated, |isolated| {
+        let has_text = xml.windows(4).any(|w| w == b"text");
+        let fontdb = if has_text { fonts() } else { Arc::new(usvg::fontdb::Database::new()) };
+        if has_text && fontdb.faces().next().is_none() {
+            budget.lock().unwrap_or_else(std::sync::PoisonError::into_inner).fontless_text = true;
+        }
+        // The resolver below replaces `options`' own, so its embedded-SVG depth argument is unused.
+        let mut opt = options_with_isolation(fontdb, 0, isolated, Arc::new(Mutex::new(None)));
+        let shared = budget.clone();
+        let image_xml_left = xml_left.saturating_sub(nesting);
+        opt.image_href_resolver.resolve_data =
+            Box::new(move |mime, data, options| bounded_data_image(mime, data, options, &shared, depth, image_xml_left, isolated));
+        // The bounded inflate above is the only decompression step. from_data would detect a
+        // nested gzip payload and inflate it again without the source-byte limit.
+        let text = std::str::from_utf8(&xml).map_err(|_| IoError::Svg("the SVG is not valid UTF-8".into()))?;
+        let tree = usvg::Tree::from_str(text, &opt);
+        if let Some(error) = budget.lock().unwrap_or_else(std::sync::PoisonError::into_inner).error.clone() {
+            return Err(IoError::Svg(error));
+        }
+        let tree = tree.map_err(|e| IoError::Svg(e.to_string()))?;
+        // Include nested SVG trees too. Paint servers can reuse one parsed raster in many
+        // drawing nodes, so the work estimate must not assume every source is decoded once.
+        let nodes = u64::try_from(count_nodes_with_limit(tree.root(), true, usize::MAX, false)).unwrap_or(u64::MAX);
+        let mut counter = budget.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        counter.draw_nodes = counter.draw_nodes.saturating_add(nodes);
+        let (raster, svg) = repeatable_image_resources(&tree);
+        counter.repeatable_raster |= raster;
+        counter.repeatable_svg |= svg;
+        Ok(tree)
+    })
 }
 
 /// Used paint/effect resources can decode an image once per use. Ordinary paths, gradients,
@@ -740,7 +807,7 @@ fn parse_bounded_work_with(bytes: &[u8], max_pixels: u64, strict: bool, fonts: f
         strict,
         error: None,
     }));
-    let tree = parse_image_bounded_with(bytes, budget.clone(), 0, MAX_XML_DEPTH, fonts)?;
+    let tree = parse_image_bounded_with(bytes, budget.clone(), 0, MAX_XML_DEPTH, fonts, false)?;
     let counter = budget.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let decoded = max_pixels.min(MAX_RASTER_PIXELS).saturating_sub(counter.pixels);
     Ok(ParsedWork {

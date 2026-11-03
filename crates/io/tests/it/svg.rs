@@ -388,6 +388,32 @@ fn an_embedded_svg_gets_only_the_nesting_depth_the_drawing_left() {
         .unwrap();
 }
 
+/// Accepted maximum-depth markup and deep embedded drawings must render correctly on the caller's unchanged small stack.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn accepted_deep_svg_and_embedded_children_do_not_exhaust_a_small_caller_stack() {
+    std::thread::Builder::new()
+        .stack_size(1 << 20)
+        .spawn(|| {
+            let top = nested(svg::MAX_XML_DEPTH - 1);
+            let imported = open(&top);
+            assert!(close(px(&imported.document, 4, 4), [0., 0., 0., 1.]), "near-limit top-level shape must remain visible");
+            let (_, _, pixels) = svg::rasterize_rgba8(top.as_bytes()).unwrap();
+            assert_eq!(&pixels[(4 * 8 + 4) * 4..(4 * 8 + 4) * 4 + 4], &[0, 0, 0, 255]);
+            // The outer drawing alone is shallow. Its decoded child must receive the same
+            // isolation as a deep top-level drawing, without increasing the shared depth cap.
+            for inner in [126, 500] {
+                let url = base64_data_url("image/svg+xml", nested(inner).as_bytes());
+                let embedded = format!("<svg {NS} width=\"8\" height=\"8\"><g><image width=\"8\" height=\"8\" href=\"{url}\"/></g></svg>");
+                let imported = open(&embedded);
+                assert!(close(px(&imported.document, 4, 4), [0., 0., 0., 1.]), "shallow outer/deep child {inner} must remain visible");
+            }
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
 /// 8 000 nested groups (70 KB) overflowed the XML parser's recursion on a 2 MB thread stack, an
 /// abort nothing can catch. It is an error now, found before the parser runs; the thread here
 /// has a small stack so a regression aborts the test instead of passing by luck.
