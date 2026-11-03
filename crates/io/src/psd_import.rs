@@ -64,9 +64,9 @@ pub(crate) struct Ctx<'a> {
     pub txt2: Option<photocraft_text::engine_data::Value>,
     /// Smart-filter caches from the global `FEid`/`FXid` blocks (filter masks, by placed id).
     pub filter_effects: Vec<photocraft_psd::filter_effects::FilterEffectsItem>,
-    /// Filter masks already decoded, by placed id: every layer of a source reads the same item, and
-    /// a surface clones by sharing its tiles.
-    pub filter_masks: std::collections::HashMap<String, Option<LayerMask>>,
+    /// Filter masks already decoded, by placed id and per-layer switches. Layers can share an
+    /// FEid item without sharing switches; repeated masks clone by sharing their surface tiles.
+    pub filter_masks: std::collections::HashMap<(String, bool, bool), Option<LayerMask>>,
     /// The same for the unfiltered pixels the mask mixes back in.
     pub unfiltered: std::collections::HashMap<String, Option<Surface>>,
     /// Pixel bytes retained in [`Self::unfiltered`], held under [`MAX_UNFILTERED_BYTES`].
@@ -405,7 +405,8 @@ impl Ctx<'_> {
     /// document coordinates, white beyond its bounds (`filterMaskExtendWithWhite`). An all-white
     /// mask with default enabled/unlinked switches is no mask.
     fn filter_mask(&mut self, placed: &str, stack: &crate::smart_map::FilterStack, name: &str) -> Option<LayerMask> {
-        if let Some(done) = self.filter_masks.get(placed) {
+        let key = (placed.to_string(), stack.mask_enabled, stack.mask_linked);
+        if let Some(done) = self.filter_masks.get(&key) {
             return done.clone();
         }
         let item = self.filter_effects.iter().find(|i| i.id == placed)?;
@@ -416,7 +417,7 @@ impl Ctx<'_> {
                 None
             }
         };
-        self.filter_masks.insert(placed.to_string(), mask.clone());
+        self.filter_masks.insert(key, mask.clone());
         mask
     }
 
