@@ -66,10 +66,12 @@ pub(crate) fn intercept(app: &mut PhotocraftApp, id: &str, params: &Value) -> Op
     // content) alone, and learns the baseline it needs to order the two clips. Routing then
     // dispatches whatever is still the freshest clip. A successful refresh installed the
     // newest OS clip: the paste dispatch below must not re-import over it (like the menu's
-    // paste in `invoke`).
+    // paste in `invoke`). An invalid `as` is rejected by the dispatch below, so it must not
+    // import here either: the rejection would still clear the path clip.
     if id == "edit.paste"
         && app.session.path_clipboard.is_some()
         && app.services.clipboard_get_image.is_some()
+        && params.get("as").is_none_or(|mode| matches!(mode.as_str(), Some("pixels" | "path" | "shape")))
         && !app.clip_read_for_paste
         && app.import_os_clipboard().unwrap_or(false)
     {
@@ -433,5 +435,90 @@ mod tests {
         assert_eq!(clip.bounds, photocraft_geom::Rect::new(0, 0, 2, 1));
         assert_eq!(clip.surface.rgba(0, 0), [0.0, 1.0, 0.0, 1.0], "Paste As pixels imported the changed bitmap");
         assert!(app.session.path_clipboard.is_none(), "and the changed bitmap displaced the path clip");
+    }
+
+    /// An invalid `as` is rejected by the paste dispatch — the rejection must not run the
+    /// path clipboard's refresh import, which would clear the path clip as a side effect.
+    #[test]
+    fn an_invalid_as_leaves_the_path_clip_alone() {
+        let image: OsImage = std::sync::Arc::default();
+        let read = image.clone();
+        let services = crate::Services { clipboard_get_image: Some(Box::new(move || Ok(read.lock().unwrap().clone()))), ..Default::default() };
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        app.run("file.new", json!({"width": 200, "height": 200})).unwrap();
+        // Establish the signature baseline: a first paste imports the OS image (no path clip
+        // yet), so a later change imports immediately instead of only learning the baseline.
+        *image.lock().unwrap() = Some((2, 1, vec![0, 0, 255, 255, 0, 0, 255, 255]));
+        app.run("edit.paste", json!({})).unwrap();
+        app.ui.tool = Tool::Pen;
+        app.ui.tool_options.vector_mode = "shape".into();
+        square(&mut app, 20.0, 20.0, 50.0);
+        let (id, _) = shape(&app);
+        app.run("path.copy", json!({"name": "layer", "layer": id.0, "subpaths": [0]})).unwrap();
+        // The OS image changed: the refresh would import it — and clear the path clip.
+        *image.lock().unwrap() = Some((2, 1, vec![0, 255, 0, 255, 0, 255, 0, 255]));
+        let err = app.run("edit.paste", json!({"as": "bogus"})).unwrap_err();
+        assert!(err.contains("`as` must be"), "{err}");
+        assert!(app.session.path_clipboard.is_some(), "the rejected command must not clear the path clip");
+        assert!(app.session.clipboard.is_none(), "and must not install the OS image either");
+    }
+
+    /// Paste As path asks for vectors: when the path clipboard's refresh installed a changed OS
+    /// bitmap (which carries none), the unchanged OS SVG is still read and pasted.
+    #[test]
+    fn paste_as_path_after_a_refresh_imports_the_unchanged_os_svg() {
+        const SOURCE: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20"><path d="M2 2 L38 2 L38 18 L2 18 Z" fill="#335577"/></svg>"##;
+        let image: OsImage = std::sync::Arc::default();
+        let read = image.clone();
+        let services = crate::Services {
+            clipboard_get_svg: Some(Box::new(|| Ok(Some(SOURCE.as_bytes().to_vec())))),
+            clipboard_get_image: Some(Box::new(move || Ok(read.lock().unwrap().clone()))),
+            ..Default::default()
+        };
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        app.run("file.new", json!({"width": 200, "height": 200})).unwrap();
+        app.run("edit.paste", json!({"as": "shape"})).unwrap();
+        // A newer path clip.
+        app.ui.tool = Tool::Pen;
+        app.ui.tool_options.vector_mode = "shape".into();
+        square(&mut app, 20.0, 20.0, 50.0);
+        let (id, _) = shape(&app);
+        app.run("path.copy", json!({"name": "layer", "layer": id.0, "subpaths": [0]})).unwrap();
+        // The OS bitmap changed: the refresh installs it (no vectors) and the path clip yields.
+        *image.lock().unwrap() = Some((2, 1, vec![0, 255, 0, 255, 0, 255, 0, 255]));
+        app.run("edit.paste", json!({"as": "path"})).unwrap();
+        let clip = app.session.clipboard.as_ref().expect("Paste As path leaves a clipboard");
+        assert!(clip.svg.is_some(), "Paste As path read the unchanged OS SVG after the refresh");
+        assert!(app.session.path_clipboard.is_none(), "the OS clip displaced the path clip on the way");
+    }
+
+    /// An SVG import records the actual OS bitmap's signature, not its own raster mirror's: an
+    /// unchanged clipboard bitmap must not be imported over a newer path clip on Paste As pixels.
+    #[test]
+    fn an_unchanged_clipboard_bitmap_survives_paste_as_beside_a_path_clip() {
+        const SOURCE: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20"><path d="M2 2 L38 2 L38 18 L2 18 Z" fill="#335577"/></svg>"##;
+        // The OS clipboard holds the SVG and a bitmap that is not the SVG's raster mirror
+        // (for example replaced after the copy in another app).
+        let image: OsImage = std::sync::Arc::default();
+        let read = image.clone();
+        let services = crate::Services {
+            clipboard_get_svg: Some(Box::new(|| Ok(Some(SOURCE.as_bytes().to_vec())))),
+            clipboard_get_image: Some(Box::new(move || Ok(read.lock().unwrap().clone()))),
+            ..Default::default()
+        };
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        app.run("file.new", json!({"width": 200, "height": 200})).unwrap();
+        *image.lock().unwrap() = Some((2, 1, vec![0, 0, 255, 255, 0, 0, 255, 255]));
+        app.run("edit.paste", json!({"as": "shape"})).unwrap();
+        // A newer path clip.
+        app.ui.tool = Tool::Pen;
+        app.ui.tool_options.vector_mode = "shape".into();
+        square(&mut app, 20.0, 20.0, 50.0);
+        let (id, _) = shape(&app);
+        app.run("path.copy", json!({"name": "layer", "layer": id.0, "subpaths": [0]})).unwrap();
+        // Paste As pixels with the bitmap unchanged since the SVG import.
+        let _ = app.run("edit.paste", json!({"as": "pixels"}));
+        assert!(app.session.path_clipboard.is_some(), "the unchanged clipboard bitmap must not displace the newer path clip");
+        assert!(app.session.clipboard.is_none(), "and nothing was imported to paste");
     }
 }

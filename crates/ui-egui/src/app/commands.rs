@@ -110,9 +110,11 @@ impl PhotocraftApp {
             if let Some(mode) = paste_as {
                 // Pixels can come from the bitmap when the SVG can't be read; vectors can't.
                 // A refresh above (the path clipboard's intercept or the menu) already read the
-                // OS clipboard: its import stands, and an unchanged older SVG must not
-                // replace the clip it installed.
-                let (imported, svg_error) = if clip_read {
+                // OS clipboard: for pixels its import stands, and an unchanged older SVG must
+                // not replace the clip it installed. Vectors still read the OS SVG — a changed
+                // OS bitmap installed by the refresh carries none, while the clipboard may
+                // still hold the vector source this mode asks for.
+                let (imported, svg_error) = if clip_read && mode == "pixels" {
                     (true, None)
                 } else {
                     match self.import_os_svg_clipboard() {

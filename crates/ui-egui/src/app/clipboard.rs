@@ -76,7 +76,23 @@ impl PhotocraftApp {
             self.ui.status_error = true;
             error
         })?;
-        self.os_clip_sig = Some(svg_clip_signature(&clip));
+        let mirror_sig = svg_clip_signature(&clip);
+        // The freshness guard orders OS bitmaps by `os_clip_sig`: record the actual clipboard
+        // bitmap's signature, not this SVG's own raster mirror, so a later Paste As pixels
+        // recognizes an unchanged clipboard bitmap instead of importing it over a newer path
+        // clip. A read failure or malformed image keeps the mirror's signature — a baseline
+        // of uncertain scope beats none at all.
+        self.os_clip_sig = self
+            .services
+            .clipboard_get_image
+            .as_mut()
+            .and_then(|get| get().ok().flatten())
+            .filter(|(w, h, bytes)| {
+                let rgba = u64::from(*w).checked_mul(u64::from(*h)).and_then(|n| n.checked_mul(4));
+                *w > 0 && *h > 0 && *w <= i32::MAX as u32 && *h <= i32::MAX as u32 && rgba == Some(bytes.len() as u64)
+            })
+            .map(|(w, h, bytes)| clip_signature(w, h, &bytes))
+            .or(Some(mirror_sig));
         self.os_clip_svg = clip.svg.clone();
         // One clipboard: an imported SVG replaces a path clip, like any installed clip.
         self.session.path_clipboard = None;
