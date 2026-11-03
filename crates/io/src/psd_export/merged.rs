@@ -15,11 +15,15 @@ pub(super) fn merged_planes(doc: &Document, fmt: &PixelFormat, cmyk: bool, matte
     merged_planes_in_bands(doc, fmt, cmyk, matte, MERGED_BAND_PIXELS, ctl)
 }
 
-/// Pixels per band of the merged composite: an eighth of [`photocraft_compose::BAND_PIXELS`]. The
-/// planes it fills hold the whole image already, so a band's float pixels and their converted
-/// parts are the save's peak on top of them (#6607); smaller bands cut that and render the same
-/// pixels (bands are whole tiles).
-const MERGED_BAND_PIXELS: u64 = photocraft_compose::BAND_PIXELS / 8;
+/// Use the compositor's default band budget natively; keep browser working buffers smaller.
+const MERGED_BAND_PIXELS: u64 = if cfg!(target_arch = "wasm32") { photocraft_compose::BAND_PIXELS / 8 } else { photocraft_compose::BAND_PIXELS };
+
+fn plane_buffer(doc: &Document, plane: usize, channels: usize) -> Vec<u8> {
+    let extra = doc.channels.len().saturating_add(usize::from(doc.quick_mask.is_some())).min(56 - channels);
+    let mut out = photocraft_raster::scratch::take_cap(plane * (channels + extra));
+    out.resize(plane * channels, 0);
+    out
+}
 
 /// [`merged_planes`] (its composite path) rendered in bands of about `band_pixels`.
 fn merged_planes_in_bands(doc: &Document, fmt: &PixelFormat, cmyk: bool, matte: bool, band_pixels: u64, ctl: &Interrupt) -> (Vec<u8>, bool, bool) {
@@ -28,7 +32,7 @@ fn merged_planes_in_bands(doc: &Document, fmt: &PixelFormat, cmyk: bool, matte: 
     let bps = sample.bytes();
     let n = doc.size.area() as usize;
     let plane = n * bps;
-    let mut planes = vec![0u8; plane * (cc + 1)];
+    let mut planes = plane_buffer(doc, plane, cc + 1);
     let (mut has_alpha, mut translucent) = (false, false);
     let white = photocraft_raster::from_rgba(fmt, [1.0, 1.0, 1.0, 1.0]);
     let canvas = doc.bounds();
@@ -54,7 +58,7 @@ fn merged_planes_in_bands(doc: &Document, fmt: &PixelFormat, cmyk: bool, matte: 
         }
         // Converted and encoded on all cores. The composite came through the document's CMYK
         // profile: convert back through it too.
-        let flags = crate::pixels::par_map(ranges.into_iter().zip(slots).collect(), |(range, mut out)| {
+        let flags = crate::pixels::par_map_cpu(ranges.into_iter().zip(slots).collect(), |(range, mut out)| {
             let px = band.px.get(range).unwrap_or(&[]);
             let k = Encode { fmt, cc, matte, cmyk, lab16, white: &white };
             photocraft_color::convert::with_cmyk_space(space.as_ref(), || match sample {
@@ -139,43 +143,57 @@ fn merged_ink_planes(doc: &Document, sample: SampleType, matte: bool, ctl: &Inte
     let bps = sample.bytes();
     let n = doc.size.area() as usize;
     let plane = n * bps;
-    let mut planes = vec![0u8; plane * 5];
+    let mut planes = plane_buffer(doc, plane, 5);
     let (mut has_alpha, mut translucent) = (false, false);
     let canvas = doc.bounds();
     let w = canvas.width() as usize;
     let rows = canvas.height().max(1) as f32;
     // A cancelled export leaves the rest blank (the caller discards it), so the result stands either way.
-    let _ = photocraft_compose::cmyk::render_cmyk_bands(doc, canvas, 0, |band| -> Result<(), ()> {
+    let band_rows = i32::try_from((MERGED_BAND_PIXELS / u64::from(canvas.width().max(1))).max(1)).unwrap_or(i32::MAX);
+    let _ = photocraft_compose::cmyk::render_cmyk_bands(doc, canvas, band_rows, |band| -> Result<(), ()> {
         if ctl.cancelled() {
             return Err(());
         }
-        // Retain alpha whenever it differs from opaque at the stored precision.
-        has_alpha |= band.px.iter().any(|p| match sample {
-            SampleType::U8 => q255(p[4]) < 255,
-            SampleType::U16 => (p[4].clamp(0.0, 1.0) * 65535.0 + 0.5) as u16 != u16::MAX,
-            SampleType::F32 => p[4] != 1.0,
-        });
-        translucent |= band.px.iter().any(|p| p[4] < 1.0);
         let start = (band.rect.y0 - canvas.y0) as usize * w;
-        let parts = crate::pixels::par_map(crate::pixels::bands(band.px.len()), |range| {
-            let mut out: Vec<Vec<u8>> = (0..5).map(|_| Vec::with_capacity(range.len() * bps)).collect();
-            for p in band.px.get(range.clone()).unwrap_or(&[]) {
-                for (c, o) in out.iter_mut().enumerate() {
+        let ranges = crate::pixels::bands(band.px.len());
+        let mut slots: Vec<Vec<&mut [u8]>> = ranges.iter().map(|_| Vec::with_capacity(5)).collect();
+        for chunk in planes.chunks_mut(plane.max(1)).take(5) {
+            let Some(mut rest) = chunk.get_mut(start * bps..(start + band.px.len()) * bps) else { continue };
+            for (slot, range) in slots.iter_mut().zip(&ranges) {
+                let Some((part, tail)) = rest.split_at_mut_checked(range.len() * bps) else { break };
+                slot.push(part);
+                rest = tail;
+            }
+        }
+        let flags = crate::pixels::par_map_cpu(ranges.into_iter().zip(slots).collect(), |(range, mut out)| {
+            let px = band.px.get(range).unwrap_or(&[]);
+            let (mut alpha, mut translucent) = (false, false);
+            for (c, dst) in out.iter_mut().enumerate() {
+                for (dst, p) in dst.chunks_exact_mut(bps).zip(px) {
                     // Inks matted against white paper (no ink) like Photoshop (see
                     // `pixels::matte`), and stored inverted as PSD's CMYK is.
-                    let v = if c < 4 { 1.0 - if matte { crate::pixels::matte(p[c], p[4], 0.0) } else { p[c] } } else { p[4] };
-                    encode_be(v, sample, o);
+                    let Some(&ink) = p.get(c) else { continue };
+                    let v = if c < 4 { 1.0 - if matte { crate::pixels::matte(ink, p[4], 0.0) } else { ink } } else { p[4] };
+                    match sample {
+                        SampleType::U8 => dst.copy_from_slice(&[(v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8]),
+                        SampleType::U16 => dst.copy_from_slice(&((v.clamp(0.0, 1.0) * 65535.0 + 0.5) as u16).to_be_bytes()),
+                        SampleType::F32 => dst.copy_from_slice(&v.to_be_bytes()),
+                    }
+                    if c == 4 {
+                        alpha |= match sample {
+                            SampleType::U8 => q255(p[4]) < 255,
+                            SampleType::U16 => (p[4].clamp(0.0, 1.0) * 65535.0 + 0.5) as u16 != u16::MAX,
+                            SampleType::F32 => p[4] != 1.0,
+                        };
+                        translucent |= p[4] < 1.0;
+                    }
                 }
             }
-            (range.start, out)
+            (alpha, translucent)
         });
-        for (at, part) in parts {
-            for (c, src) in part.iter().enumerate() {
-                let o = c * plane + (start + at) * bps;
-                if let Some(dst) = planes.get_mut(o..o + src.len()) {
-                    dst.copy_from_slice(src);
-                }
-            }
+        for (alpha, trans) in flags {
+            has_alpha |= alpha;
+            translucent |= trans;
         }
         ctl.progress((band.rect.y1 - canvas.y0) as f32 / rows);
         Ok(())
@@ -211,9 +229,41 @@ mod tests {
     use photocraft_doc::{Layer, LayerContent};
     use photocraft_raster::Surface;
 
+    #[test]
+    fn saved_channels_fit_without_moving_the_merged_planes() {
+        let mut doc = Document::new("extra", photocraft_geom::Size::new(13, 7), ColorMode::Cmyk, SampleType::F32);
+        doc.channels.push(photocraft_doc::AlphaChannel::new("saved", Surface::new(PixelFormat::GRAY8)));
+        doc.quick_mask = Some(photocraft_doc::AlphaChannel::new("quick", Surface::new(PixelFormat::GRAY8)));
+        let plane = doc.size.area() as usize * 4;
+        let mut bytes = plane_buffer(&doc, plane, 5);
+        let ptr = bytes.as_ptr();
+        bytes.resize(plane * 7, 0);
+        assert_eq!(bytes.as_ptr(), ptr);
+    }
+
     fn previous_merged_planes(doc: &Document, fmt: &PixelFormat, cmyk: bool, matte: bool) -> (Vec<u8>, bool, bool) {
-        if cmyk && let Some(planes) = merged_ink_planes(doc, fmt.sample, matte, &Interrupt::NONE) {
-            return planes;
+        if cmyk {
+            let mut planes = vec![Vec::new(); 5];
+            let (mut alpha, mut translucent) = (false, false);
+            if photocraft_compose::cmyk::render_cmyk_bands(doc, doc.bounds(), 0, |band| -> Result<(), ()> {
+                for p in &band.px {
+                    alpha |= match fmt.sample {
+                        SampleType::U8 => q255(p[4]) < 255,
+                        SampleType::U16 => (p[4].clamp(0.0, 1.0) * 65535.0 + 0.5) as u16 != u16::MAX,
+                        SampleType::F32 => p[4] != 1.0,
+                    };
+                    translucent |= p[4] < 1.0;
+                    for (c, out) in planes.iter_mut().enumerate() {
+                        let v = if c < 4 { 1.0 - if matte { crate::pixels::matte(p[c], p[4], 0.0) } else { p[c] } } else { p[4] };
+                        encode_be(v, fmt.sample, out);
+                    }
+                }
+                Ok(())
+            })
+            .is_some()
+            {
+                return (planes.concat(), alpha, translucent);
+            }
         }
         let sample = fmt.sample;
         let cc = fmt.mode.color_channels();
@@ -283,9 +333,7 @@ mod tests {
         }
     }
 
-    /// #6607: the merged composite is rendered in smaller bands than the default to keep a save's
-    /// peak down; the planes are the same however tall the bands are, effects that reach across a
-    /// band's edge (shadows) and translucent pixels included.
+    /// Shadows and translucent pixels must encode identically across band boundaries.
     #[test]
     fn the_merged_image_is_the_same_in_any_band_height() {
         use photocraft_doc::{Effect, Shadow};

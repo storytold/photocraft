@@ -332,11 +332,13 @@ fn prepare_merged_planes<'a>(
     let mode = if duotone { PsdMode::Duotone } else { psd_mode(fmt.mode) };
     let header = Header::new(ex.version, doc.size.width, doc.size.height, channels, psd_depth(sample), mode);
     let compression = if sample == SampleType::F32 { Compression::Raw } else { opts.merged_compression };
-    let image_data = ImageData::encode(compression, &planes, &header).or_else(|_| ImageData::encode(Compression::Raw, &planes, &header)).unwrap_or(ImageData {
-        compression: Compression::Raw,
-        data: planes,
-        stored: None,
-    });
+    let image_data = if compression == Compression::Raw {
+        ImageData::new(Compression::Raw, planes.into_boxed_slice().into_vec())
+    } else {
+        ImageData::encode(compression, &planes, &header)
+            .or_else(|_| ImageData::encode(Compression::Raw, &planes, &header))
+            .unwrap_or(ImageData::new(Compression::Raw, planes))
+    };
     let image_data = match &ex.stage {
         Some(stage) => stage.image(image_data),
         None => image_data,
@@ -473,4 +475,44 @@ pub(super) fn mask_parameters(user: Option<(f32, f32)>, vector: Option<(f32, f32
         | u8::from(p.vector_density.is_some()) << 2
         | u8::from(p.vector_feather.is_some()) << 3;
     (flags != 0).then_some(MaskParameters { flags, ..p })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn raw_merged_planes_match_the_borrowed_encoder() {
+        for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab] {
+            for sample in SampleType::ALL {
+                for alpha in [0.4, 1.0] {
+                    let mut doc = Document::new("raw", photocraft_geom::Size::new(13, 7), mode, sample);
+                    let fmt = doc.pixel_format();
+                    let mut layer = photocraft_doc::Layer::raster("pixels", fmt);
+                    let mut pixel = vec![0.25; fmt.channels()];
+                    *pixel.last_mut().unwrap() = alpha;
+                    layer.surface_mut().unwrap().fill_rect(doc.bounds(), &pixel);
+                    doc.layers.push(layer);
+                    let (mut planes, has_alpha, _) = merged_planes(&doc, &fmt, cmyk_of(&fmt), false, &Interrupt::NONE);
+                    if !has_alpha {
+                        planes.truncate(mode.color_channels() * doc.size.area() as usize * sample.bytes());
+                    }
+                    if alpha < 1.0 {
+                        for _ in 0..2 {
+                            let mask_fmt = PixelFormat::new(ColorMode::Grayscale, sample, false);
+                            doc.channels.push(photocraft_doc::AlphaChannel::new("extra", photocraft_raster::Surface::with_default(mask_fmt, &[0.5])));
+                            for _ in 0..doc.size.area() {
+                                crate::pixels::encode_be(0.5, sample, &mut planes);
+                            }
+                        }
+                    }
+                    let opts = PsdExportOptions { merged_compression: Compression::Raw, merged_matte: false, ..Default::default() };
+                    let (file, warnings) = document_to_psd_with(&doc, &opts);
+                    assert!(warnings.is_empty(), "{warnings:?}");
+                    assert_eq!(file.image_data.data.capacity(), file.image_data.data.len());
+                    assert_eq!(file.image_data, ImageData::encode(Compression::Raw, &planes, &file.header).unwrap(), "{mode:?} {sample:?} alpha {alpha}");
+                }
+            }
+        }
+    }
 }
