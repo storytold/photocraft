@@ -196,22 +196,22 @@ pub(crate) fn layers(bytes: &[u8], limits: &Limits) -> Result<Vec<CryptomatteLay
     Ok(out)
 }
 
-/// Every `cryptomatte/<key>/` key of a header, in file order, without duplicates.
+/// Every `cryptomatte/<key>/` key of a header, sorted, without duplicates. The header's
+/// attributes are a hash map, so sorting is what makes the first key naming a layer (and so the
+/// name [`layers`] lists) the same on every read.
 fn cryptomatte_keys(other: &std::collections::HashMap<exr::meta::attribute::Text, exr::meta::attribute::AttributeValue>) -> Vec<String> {
-    let mut keys = Vec::new();
-    // Track seen keys in a set: the attribute names are file-controlled, so membership with
-    // keys.iter().any() is O(n^2) in the number of distinct `cryptomatte/<key>/<field>`
-    // groups. The Vec still records file order; the set only answers "seen before".
-    let mut seen = std::collections::HashSet::new();
+    // A set, not keys.iter().any(): the attribute names are file-controlled, so a linear
+    // membership test is O(n^2) in the number of distinct `cryptomatte/<key>/<field>` groups.
+    let mut keys = std::collections::BTreeSet::new();
     for name in other.keys() {
         let full = name.to_string();
         let Some(rest) = full.strip_prefix("cryptomatte/") else { continue };
         let Some((key, _field)) = rest.split_once('/') else { continue };
-        if !key.is_empty() && seen.insert(key.to_string()) {
-            keys.push(key.to_string());
+        if !key.is_empty() {
+            keys.insert(key.to_string());
         }
     }
-    keys
+    keys.into_iter().collect()
 }
 
 /// Decodes the samples of the Cryptomatte layer called `layer_name` (a
@@ -222,7 +222,7 @@ pub(crate) fn decode(bytes: &[u8], layer_name: &str, limits: &Limits) -> Result<
     let found = layers(bytes, limits)?;
     let layer = found
         .iter()
-        .find(|l| l.name.eq_ignore_ascii_case(layer_name))
+        .find(|l| normalize_layer(&l.name) == normalize_layer(layer_name))
         .ok_or_else(|| CodecError::unsupported(F, format!("no Cryptomatte layer named {layer_name}")))?;
     // Also caps all parts' declared sizes together, like every other flat decode.
     let meta = super::exr::read_meta(bytes, limits)?;
