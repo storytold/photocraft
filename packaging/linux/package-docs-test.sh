@@ -37,7 +37,7 @@ with tempfile.TemporaryDirectory(prefix="photocraft-package-docs-") as temporary
     fixture.mkdir()
     # Keep the real scripts, metadata, icons and document bytes. Only replace the binary
     # build and AppImage download/tool boundary; no real tool or runtime is downloaded.
-    for name in ("packaging", "assets/app-icon/hicolor", "docs/mcp.md", "docs/control-protocol.md", "Cargo.toml", "README.md", "LICENSE", "LICENSE-MIT", "LICENSE-APACHE", "COPYRIGHT"):
+    for name in ("packaging", "assets/app-icon/hicolor", "docs/mcp.md", "docs/control-protocol.md", "Cargo.toml", "README.md", "LICENSE", "LICENSE-MIT", "LICENSE-APACHE", "COPYRIGHT", "NOTICE", "ATTRIBUTION.md"):
         source, destination = root / name, fixture / name
         if not source.exists():
             continue
@@ -109,7 +109,9 @@ for index, arg in enumerate(args[:-1]):
     for suffix, directory in ((".yml", fixture), (".bundle.yml", bundle)):
         manifest = yaml.safe_load((root / f"packaging/linux/flatpak/ai.storyteller.photocraft{suffix}").read_text())
         app = temp / ("flatpak-source" if suffix == ".yml" else "flatpak-bundle")
-        for command in manifest["modules"][0]["build-commands"]:
+        # Other modules, such as cups-client, build their own sources; only photocraft is checked here.
+        module = next(m for m in manifest["modules"] if isinstance(m, dict) and m.get("name") == "photocraft")
+        for command in module["build-commands"]:
             # Redirect only the sandbox output root, preserving the manifest's commands.
             command = command.replace("/app/", shlex.quote(str(app)) + "/")
             run(["bash", "-euo", "pipefail", "-c", command], directory, env)
