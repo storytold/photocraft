@@ -403,7 +403,7 @@ impl Ctx<'_> {
 
     /// The filter mask of the smart object whose `placed` id is `placed`, from the `FEid` cache:
     /// document coordinates, white beyond its bounds (`filterMaskExtendWithWhite`). An all-white
-    /// mask is no mask.
+    /// mask with default enabled/unlinked switches is no mask.
     fn filter_mask(&mut self, placed: &str, stack: &crate::smart_map::FilterStack, name: &str) -> Option<LayerMask> {
         if let Some(done) = self.filter_masks.get(placed) {
             return done.clone();
