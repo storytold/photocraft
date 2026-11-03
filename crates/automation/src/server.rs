@@ -195,6 +195,10 @@ pub struct SaveParams {
     /// (a Multichannel document as plates alone). On by default; false writes the image only.
     #[serde(default, rename = "pdfSpotPlates")]
     pub pdf_spot_plates: Option<bool>,
+    /// .pcraft: request the flattened document at its canvas size as `composite/full.png`.
+    /// The save may omit it; check the manifest's `full_composite` member. Off by default.
+    #[serde(default, rename = "pcraftFullComposite")]
+    pub pcraft_full_composite: Option<bool>,
     #[serde(default)]
     pub index: Option<usize>,
 }
@@ -796,7 +800,7 @@ impl PhotocraftMcp {
     }
 
     #[tool(description = "Save the document. `.pcraft` is the lossless native format (incremental); other extensions \
-        (psd, png, jpg, tif, webp, exr, …) export. Without `path` only a PSD, PSB or .pcraft document is written back to its own         file. Returns warnings about anything the format cannot hold.")]
+        (psd, png, jpg, tif, webp, exr, …) export. Without `path` only a PSD, PSB or .pcraft document is written back to its own         file. `pcraftFullComposite` requests `composite/full.png`, which may be omitted; check the manifest's `full_composite` member. Returns warnings about anything the format cannot hold.")]
     async fn doc_save(&self, Parameters(p): Parameters<SaveParams>) -> Result<CallToolResult, McpError> {
         self.save_impl(p).await
     }
@@ -1083,6 +1087,7 @@ impl PhotocraftMcp {
                 p.format.is_some().then_some("format"),
                 p.quality.is_some().then_some("quality"),
                 p.tiff_layers.then_some("tiffLayers"),
+                p.pcraft_full_composite.is_some().then_some("pcraftFullComposite"),
                 dpx_bits.is_some().then_some("dpxBits"),
                 p.pdf_spot_plates.is_some().then_some("pdfSpotPlates"),
                 p.index.is_some().then_some("index"),
@@ -1114,6 +1119,7 @@ impl PhotocraftMcp {
                     tiff_layers: p.tiff_layers,
                     tga_bits,
                     pdf_spot_plates: p.pdf_spot_plates.unwrap_or(true),
+                    pcraft_full_composite: p.pcraft_full_composite.unwrap_or(false),
                     ..Default::default()
                 };
                 opts.encode.dpx_bits = dpx_bits;
