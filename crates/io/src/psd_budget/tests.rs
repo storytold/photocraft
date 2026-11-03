@@ -1,6 +1,133 @@
 use super::*;
 use photocraft_psd::{ColorMode, Compression, Version, testgen};
 
+fn rle_channel(id: i16, width: usize, height: usize, version: Version) -> ChannelData {
+    let mut row = Vec::new();
+    let mut remaining = width;
+    while remaining >= 3 {
+        let run = remaining.min(128);
+        row.push((1i16 - run as i16) as u8);
+        row.push(0);
+        remaining -= run;
+    }
+    if remaining > 0 {
+        row.push((remaining - 1) as u8);
+        row.resize(row.len() + remaining, 0);
+    }
+
+    let count_bytes = if version.is_psb() { 4 } else { 2 };
+    let mut data = Vec::with_capacity(height * (count_bytes + row.len()));
+    for _ in 0..height {
+        if version.is_psb() {
+            data.extend_from_slice(&(row.len() as u32).to_be_bytes());
+        } else {
+            data.extend_from_slice(&(row.len() as u16).to_be_bytes());
+        }
+    }
+    for _ in 0..height {
+        data.extend_from_slice(&row);
+    }
+    ChannelData::new(id, Some(Compression::Rle), data)
+}
+
+fn large_rle_layer(width: u32, height: u32, version: Version) -> PsdFile {
+    let mut file = testgen::small(version, Compression::Rle);
+    let rec = file.layers_mut().first_mut().unwrap();
+    rec.rect = Rect::from_xywh(-6_440, -125, width, height);
+    for channel in &mut rec.channels {
+        if (0..=2).contains(&channel.id) || channel.id == CHANNEL_TRANSPARENCY {
+            *channel = rle_channel(channel.id, width as usize, height as usize, version);
+        }
+    }
+    file
+}
+
+#[test]
+fn rle_layer_workspace_tracks_band_and_overlapping_channel_buffers() {
+    let file = large_rle_layer(18_246, 12_179, Version::Psd);
+    let rec = file.layers().first().unwrap();
+    let (width, height) = rec.rect.size().unwrap();
+    let workspace = rle_layer_workspace(rec, width, height, 3, 1, &file).unwrap();
+
+    assert!(workspace < 128 << 20, "RLE band workspace should stay bounded: {workspace}");
+    assert!(workspace > (18_246u64 * 256 * 4 * 2), "planar and interleaved bands overlap");
+}
+
+#[test]
+fn psb_rle_workspace_uses_four_byte_row_counts() {
+    let file = large_rle_layer(1_024, 2_048, Version::Psb);
+    let rec = file.layers().first().unwrap();
+    let (width, height) = rec.rect.size().unwrap();
+    let workspace = rle_layer_workspace(rec, width, height, 3, 1, &file).unwrap();
+
+    assert!(workspace < 64 << 20, "PSB RLE should use bounded row bands: {workspace}");
+    assert!(check(&file, DEFAULT_PSD_IMPORT_PIXEL_BYTES).is_ok());
+}
+
+#[test]
+fn zip_layer_keeps_the_existing_whole_plane_workspace_guard() {
+    for compression in [Compression::Zip, Compression::ZipPrediction] {
+        let mut file = large_rle_layer(18_246, 12_179, Version::Psd);
+        for channel in &mut file.layers_mut()[0].channels {
+            if (0..=2).contains(&channel.id) || channel.id == CHANNEL_TRANSPARENCY {
+                channel.compression = Some(compression);
+            }
+        }
+        let rec = file.layers().first().unwrap();
+        let (width, height) = rec.rect.size().unwrap();
+
+        assert_eq!(rle_layer_workspace(rec, width, height, 3, 1, &file), None);
+        assert!(matches!(check(&file, DEFAULT_PSD_IMPORT_PIXEL_BYTES), Err(IoError::PsdImportBudget { .. })));
+    }
+}
+
+#[test]
+fn malformed_rle_row_table_keeps_the_conservative_estimate() {
+    let mut file = large_rle_layer(18_246, 12_179, Version::Psd);
+    file.layers_mut()[0].channels.iter_mut().find(|channel| channel.id == 0).unwrap().data.truncate(8);
+    let rec = file.layers().first().unwrap();
+    let (width, height) = rec.rect.size().unwrap();
+
+    assert_eq!(rle_layer_workspace(rec, width, height, 3, 1, &file), None);
+    assert!(matches!(check(&file, DEFAULT_PSD_IMPORT_PIXEL_BYTES), Err(IoError::PsdImportBudget { .. })));
+}
+
+#[test]
+fn rle_mask_tracks_tile_rows_and_zip_mask_keeps_full_plane_guard() {
+    let mut rle_mask = testgen::small(Version::Psd, Compression::Rle);
+    let rec = rle_mask.layers_mut().first_mut().unwrap();
+    if let photocraft_psd::layer::MaskData::Mask(mask) = &mut rec.mask {
+        mask.rect = Rect::from_xywh(0, 0, 4_096, 2_048);
+    } else {
+        panic!("fixture needs a parsed mask");
+    }
+    let mask_channel = rec.channels.iter_mut().find(|channel| channel.id == CHANNEL_USER_MASK).unwrap();
+    *mask_channel = rle_channel(CHANNEL_USER_MASK, 4_096, 2_048, Version::Psd);
+    let rle_workspace =
+        rle_mask_workspace(rle_mask.layers()[0].channel(CHANNEL_USER_MASK).unwrap(), Rect::from_xywh(0, 0, 4_096, 2_048), 1, Version::Psd).unwrap();
+
+    let mut zip_mask = rle_mask.clone();
+    zip_mask.layers_mut()[0].channels.iter_mut().find(|channel| channel.id == CHANNEL_USER_MASK).unwrap().compression = Some(Compression::Zip);
+    let zip_channel = zip_mask.layers()[0].channel(CHANNEL_USER_MASK).unwrap();
+    assert_eq!(rle_mask_workspace(zip_channel, Rect::from_xywh(0, 0, 4_096, 2_048), 1, Version::Psd), None);
+    let pixels = 4_096u64 * 2_048;
+    let zip_workspace = mul(pixels, 7).unwrap() + inflate_scratch(pixels, 1).unwrap();
+    assert!(zip_workspace > rle_workspace);
+}
+
+#[test]
+fn large_rle_layer_fits_without_decoding_or_changing_retained_tiles() {
+    let file = large_rle_layer(18_246, 12_179, Version::Psd);
+    let estimate = super::estimate(&file).unwrap();
+    assert!(estimate.total_bytes <= DEFAULT_PSD_IMPORT_PIXEL_BYTES, "{}", estimate.total_bytes);
+    assert!(check(&file, DEFAULT_PSD_IMPORT_PIXEL_BYTES).is_ok());
+
+    let rec = file.layers().first().unwrap();
+    let mut surface = ImportBudget::default();
+    surface.surface(rec.rect, 4, 1).unwrap();
+    assert_eq!(surface.retained, 937_689_088);
+}
+
 #[test]
 fn retained_storage_is_summed_but_workspace_is_reused() {
     let mut budget = ImportBudget::default();

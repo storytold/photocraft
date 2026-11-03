@@ -490,8 +490,9 @@ fn raw_and_rle_mask_sources_are_read_in_bands() {
                         assert_eq!(*reads, [17, 256, 256, 71].map(|rows| 5 * rows * usize::from(depth / 8)).to_vec())
                     }
                     Compression::Rle => {
-                        assert_eq!(reads.len(), 5, "one index read and four payload bands: {reads:?}");
-                        assert_eq!(reads[0], 600 * 4, "PSB row index");
+                        assert_eq!(reads.len(), 6, "preflight and decoder index reads plus four payload bands: {reads:?}");
+                        assert_eq!(reads[0], 600 * 4, "preflight PSB row-count scan");
+                        assert_eq!(reads[1], 600 * 4, "decoder PSB row index");
                     }
                     _ => panic!("unexpected test case"),
                 }
