@@ -32,8 +32,8 @@ pub use edit::{set_text_index, text_index, txt2_object_count};
 #[cfg(test)]
 use import::MAX_ENGINE_RUNS;
 pub use import::{
-    OPENTYPE_KEYS, TXT2_FEATURES, TXT2_STYLISTIC_SETS, apply_txt2, apply_txt2_frame, apply_txt2_path, parse_txt2, refine_legacy_point_origin,
-    text_layer_from_tysh,
+    OPENTYPE_KEYS, TXT2_FEATURES, TXT2_STYLISTIC_SETS, apply_txt2, apply_txt2_baseline, apply_txt2_frame, apply_txt2_path, parse_txt2,
+    refine_legacy_point_origin, text_layer_from_tysh,
 };
 pub(crate) use import::{arr_f, char_style, para_style, postscript_for, utf16_to_byte_lengths};
 

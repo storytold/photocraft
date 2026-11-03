@@ -371,7 +371,7 @@ impl Para<'_> {
             (None, None) if env.is_box && env.vertical => -(box_x + box_w) + ascent,
             // Photoshop's "first baseline: ascent": the top of the tallest ascender
             // (height of 'd') touches the box top, not the font's hhea ascent.
-            (None, None) if env.is_box => box_y + first_ascent(line).unwrap_or(ascent),
+            (None, None) if env.is_box => env.psd_first_baseline.unwrap_or_else(|| box_y + first_ascent(line).unwrap_or(ascent)),
             (None, None) => 0.0,
             (None, Some(b)) => b + leading + flow.pending_space,
         };

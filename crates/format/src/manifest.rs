@@ -271,6 +271,8 @@ pub enum ContentM {
         antialias: text::AntiAlias,
         #[serde(default)]
         warp: Option<text::TextWarp>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        psd_first_baseline: Option<text::PsdFirstBaseline>,
     },
     Shape {
         fill: Option<Fill>,
