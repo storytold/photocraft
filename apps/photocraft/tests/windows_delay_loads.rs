@@ -7,6 +7,7 @@
 /// Loaded on first use by the print commands, which check them first.
 const PRINT_ONLY: [&str; 2] = ["windows.data.pdf.dll", "prntvpt.dll"];
 
+/// The built exe names each print-only DLL in its delay-load table, never its import table.
 #[test]
 fn print_only_system_dlls_are_delay_loaded() {
     let exe = std::fs::read(env!("CARGO_BIN_EXE_photocraft")).unwrap();
@@ -30,6 +31,7 @@ struct Pe<'a> {
 }
 
 impl<'a> Pe<'a> {
+    /// Reads the PE headers and section table of a PE32+ image, panicking (a test) on any other.
     fn parse(bytes: &'a [u8]) -> Self {
         let pe = u32_at(bytes, 0x3c) as usize;
         assert_eq!(&bytes[pe..pe + 4], b"PE\0\0");
@@ -48,6 +50,7 @@ impl<'a> Pe<'a> {
         Pe { bytes, sections, directories: optional + 112 }
     }
 
+    /// The file offset of relative virtual address `rva`, through the section that holds it.
     fn offset(&self, rva: u32) -> usize {
         let &(va, _, raw) = self.sections.iter().find(|&&(va, size, _)| rva >= va && rva < va + size).unwrap();
         (rva - va + raw) as usize
@@ -73,10 +76,12 @@ impl<'a> Pe<'a> {
     }
 }
 
+/// The little-endian `u16` at byte offset `at`.
 fn u16_at(b: &[u8], at: usize) -> u16 {
     u16::from_le_bytes([b[at], b[at + 1]])
 }
 
+/// The little-endian `u32` at byte offset `at`.
 fn u32_at(b: &[u8], at: usize) -> u32 {
     u32::from_le_bytes([b[at], b[at + 1], b[at + 2], b[at + 3]])
 }

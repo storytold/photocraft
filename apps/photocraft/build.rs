@@ -4,6 +4,7 @@
 //! cross-compile from macOS or Linux still links, unless `PHOTOCRAFT_REQUIRE_WINRES=1` (set by the
 //! release workflow) turns it into an error.
 
+/// Embeds the Windows resources and delay-loads the print-only system DLLs (#5884, #8272).
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=../../assets/app-icon/photocraft.ico");

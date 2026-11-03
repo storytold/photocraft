@@ -5,6 +5,7 @@
 //! unless `PHOTOCRAFT_REQUIRE_WINRES=1` (set by the release packaging script) turns it into a
 //! build error.
 
+/// Embeds the Windows resources and delay-loads the print-only system DLLs (#8272).
 fn main() -> std::io::Result<()> {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=../../assets/app-icon/photocraft.ico");
