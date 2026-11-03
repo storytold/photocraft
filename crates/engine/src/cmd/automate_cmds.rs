@@ -407,6 +407,8 @@ fn write_shim(_: &str) -> Result<String> {
 /// Runs a droplet file on inputs (files and/or folders).
 fn run_droplet(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.automate.runDroplet";
+    // Checked before the droplet file is read, so a droplet that runs itself stops at the limit.
+    crate::file_cmds::check_batch_depth(s, cmd)?;
     let path = p.get("droplet").or_else(|| p.get("path")).and_then(Value::as_str).ok_or_else(|| bad(cmd, "missing \"droplet\""))?;
     let v: Value = serde_json::from_slice(&read_file(path)?).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
     if v.get("photocraftDroplet").is_none() {

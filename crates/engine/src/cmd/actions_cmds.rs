@@ -83,6 +83,9 @@ pub struct ActionsFile {
 
 pub const MAX_PLAYBACK_STEPS: u64 = 100_000;
 
+/// How deep batches and droplets may run inside one another (a droplet whose steps run a droplet).
+pub const MAX_BATCH_DEPTH: u8 = 4;
+
 /// Actions list and the recording / playback flags. Only `list` is persisted.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -100,6 +103,10 @@ pub struct ActionState {
     /// Number of steps executed by the current top-level playback tree.
     #[serde(skip)]
     pub playback_steps: u64,
+    /// How many batches (`file.automate.batch`, and droplets through it) are running inside one
+    /// another: each runs its steps in a scratch session that carries this on, plus one.
+    #[serde(skip)]
+    pub batch_depth: u8,
     /// How many scripts (`file.scripts.browse`) are running inside one another.
     #[serde(skip)]
     pub script_depth: u8,
@@ -225,6 +232,22 @@ pub fn consume_playback_step(s: &mut Session) -> bool {
         true
     }
 }
+
+/// Steps of the playback tree the next `actions.play` starts in has charged so far: a top-level
+/// call starts a new tree ([`begin_playback`] resets the counter).
+fn playback_steps_used(s: &Session) -> u64 {
+    if s.actions.playing > 0 { s.actions.playback_steps } else { 0 }
+}
+
+/// Steps of `action` playback walks past without running them: the ones before `from` and the
+/// disabled ones after it. [`begin_playback`] charges them, so every stored step costs one unit
+/// of the playback budget once per call, run or not.
+fn skipped_steps(action: &Action, from: usize) -> u64 {
+    let len = action.steps.len();
+    let from = from.min(len);
+    let disabled = action.disabled.range(from..len).count();
+    u64::try_from(from.saturating_add(disabled)).unwrap_or(u64::MAX)
+}
 /// View-only menu commands recorded by the desktop shell. Headless playback reports
 /// them as unsupported instead of silently dropping them; Batch and droplets skip them.
 pub fn shell_view_command(id: &str) -> bool {
@@ -237,6 +260,13 @@ pub fn playback_plan(s: &Session, p: &Value) -> Result<(Action, usize)> {
         return Err(bad("actions.play", "an action is already playing"));
     }
     let idx = resolve(&s.actions.list, p, "actions.play")?;
+    // Every stored step of the call is charged to the playback tree (run, disabled or skipped),
+    // so refuse a call whose steps no longer fit before copying it: repeated calls to a large
+    // action would otherwise copy and walk it each time for free.
+    let len = s.actions.list.get(idx).map_or(0, |a| a.steps.len());
+    if playback_steps_used(s).saturating_add(u64::try_from(len).unwrap_or(u64::MAX)) > MAX_PLAYBACK_STEPS {
+        return Err(bad("actions.play", format!("action playback exceeded the {MAX_PLAYBACK_STEPS}-step limit")));
+    }
     let action = s.actions.list.get(idx).cloned().ok_or_else(|| bad("actions.play", "no such action"))?;
     if s.actions.playback_stack.iter().any(|name| name == &action.name) || s.actions.recording.is_some_and(|(_, i)| i == idx) {
         return Err(bad("actions.play", format!("recursive action call to `{}`", action.name)));
@@ -485,10 +515,17 @@ fn run_recorded(s: &mut Session, action: &Action, from: usize) -> (u64, Option<V
 
 /// Suspend recording while a called action executes. Keep its commands in the journal
 /// for diagnostics, but record just the named call in the parent action.
-pub fn begin_playback(s: &mut Session, action: &Action) -> Result<Option<(usize, usize)>> {
+pub fn begin_playback(s: &mut Session, action: &Action, from: usize) -> Result<Option<(usize, usize)>> {
     flush_recording(s)?;
     if s.actions.playing == 0 {
         s.actions.playback_steps = 0;
+    }
+    // The steps that run are charged one by one as they run; the ones walked past are charged
+    // here ([`playback_plan`] checked that the whole action fits).
+    let skipped = skipped_steps(action, from);
+    s.actions.playback_steps = s.actions.playback_steps.saturating_add(skipped);
+    if s.actions.script_depth > 0 {
+        s.actions.script_steps = s.actions.script_steps.saturating_add(skipped);
     }
     let recording = s.actions.recording.take();
     s.actions.playing = s.actions.playing.saturating_add(1);
@@ -529,7 +566,7 @@ pub fn nested_failure(id: &str, value: &Value) -> Option<String> {
 
 fn play(s: &mut Session, p: &Value) -> Result<Value> {
     let (action, from) = playback_plan(s, p)?;
-    let recording = begin_playback(s, &action)?;
+    let recording = begin_playback(s, &action, from)?;
     let (ran, failed) = run_recorded(s, &action, from);
     finish_playback(s, recording, &action, from);
     Ok(match failed {
@@ -868,5 +905,36 @@ mod security_tests {
         session.actions.playback_steps = MAX_PLAYBACK_STEPS - 1;
         assert!(consume_playback_step(&mut session));
         assert!(!consume_playback_step(&mut session));
+    }
+
+    /// An action of mostly disabled steps, called over and over from a parent, is charged for
+    /// every step it stores, so the calls stop at the shared limit instead of each copying and
+    /// walking the whole action for free.
+    #[test]
+    fn disabled_steps_are_charged_to_the_playback_budget() {
+        let mut session = Session::new();
+        let mut child = Action::new("Child", (0..1000).map(|_| ("select.all".to_string(), json!({}))).collect());
+        child.disabled = (0..1000).collect();
+        let calls = MAX_PLAYBACK_STEPS as usize / 1000 * 2;
+        let parent = Action::new("Parent", (0..calls).map(|_| ("actions.play".to_string(), json!({"action": "Child"}))).collect());
+        session.actions.list.push(child);
+        session.actions.list.push(parent);
+        let r = session.execute("actions.play", json!({"action": "Parent"})).unwrap();
+        let failed = r["failed"]["error"].as_str().unwrap();
+        assert!(failed.contains("step limit"), "{failed}");
+        // Each call charges its 1000 stored steps plus the Play step itself.
+        let ran = r["ran"].as_u64().unwrap();
+        assert!(ran < MAX_PLAYBACK_STEPS / 1000, "{ran}");
+    }
+
+    #[test]
+    fn steps_before_from_are_charged() {
+        let action = Action::new("A", (0..10).map(|_| ("select.all".to_string(), json!({}))).collect());
+        assert_eq!(skipped_steps(&action, 7), 7);
+        assert_eq!(skipped_steps(&action, 50), 10);
+        let mut disabled = action.clone();
+        disabled.disabled = [1, 8, 9, 40].into_iter().collect();
+        assert_eq!(skipped_steps(&disabled, 7), 9);
+        assert_eq!(skipped_steps(&disabled, 0), 3);
     }
 }
