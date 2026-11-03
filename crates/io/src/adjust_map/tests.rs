@@ -651,6 +651,32 @@ fn cmyk_channel_mixer_blocks_round_trip_with_four_ink_outputs() {
     }
 }
 
+/// A mixer whose outputs don't match the document's mode is reshaped to the mode's own before it
+/// is written, so the reopened `mixr` block reads back as what was saved (no black output
+/// borrowed from the gray record, no CMYK block kept raw in an RGB file).
+#[test]
+fn channel_mixers_are_reshaped_to_the_document_mode() {
+    let rgb = Adjustment::ChannelMixer { matrix: [[0.0, 1.0, 0.0, 0.1], [1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 1.0, -0.2]], monochrome: false, cmyk: None };
+    let Some(ink) = mixer_for(&rgb, Channels::Cmyk) else { panic!("an RGB mixer in CMYK is reshaped") };
+    let Adjustment::ChannelMixer { cmyk: Some(rows), .. } = &ink else { panic!("{ink:?}") };
+    assert_eq!(*rows, [[0.0, 1.0, 0.0, 0.0, 0.1], [1.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0, -0.2], [0.0, 0.0, 0.0, 1.0, 0.0]]);
+    let b = write(&ink);
+    assert_eq!(parse(&b[0].0, &b[0].1, None, Channels::Cmyk), ink);
+    let cmyk = Adjustment::ChannelMixer {
+        matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]],
+        monochrome: true,
+        cmyk: Some([[0.3, 0.3, 0.3, 1.0, 0.05], [0.0, 1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0, 0.0]]),
+    };
+    let Some(screen) = mixer_for(&cmyk, Channels::Rgb) else { panic!("a CMYK mixer in RGB is reshaped") };
+    assert_eq!(screen, Adjustment::ChannelMixer { matrix: [[0.3, 0.3, 0.3, 0.05], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]], monochrome: true, cmyk: None });
+    let b = write(&screen);
+    assert_eq!(parse(&b[0].0, &b[0].1, None, Channels::Rgb), screen);
+    // Matching shapes and other adjustments are left alone.
+    assert_eq!(mixer_for(&rgb, Channels::Rgb), None);
+    assert_eq!(mixer_for(&cmyk, Channels::Cmyk), None);
+    assert_eq!(mixer_for(&Adjustment::Invert, Channels::Cmyk), None);
+}
+
 fn vdesc(d: Descriptor) -> Vec<u8> {
     VersionedDescriptor::new(d).to_bytes()
 }

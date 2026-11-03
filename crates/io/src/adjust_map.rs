@@ -696,6 +696,33 @@ fn levels_write(v: &mut Vec<u8>, c: &LevelsChannel) {
     put16(v, (c.gamma * 100.0).round().clamp(1.0, 999.0) as u16);
 }
 
+/// The Channel Mixer `adj` reshaped for a document whose `mixr` records are `channels`, or None
+/// when it already has that shape (or is not a mixer). A PSD stores no output shape: a CMYK
+/// document reads four ink records and every other mode three RGB records, so a mixer of the
+/// other shape could not be read back as it is. An RGB mixer in a CMYK document becomes ink
+/// outputs on the stored channel values (cyan from the red row, magenta from green, yellow
+/// from blue, sources red, green, blue as cyan, magenta, yellow) with black passed through; a
+/// CMYK mixer elsewhere keeps its cyan, magenta and yellow rows as red, green and blue without
+/// the black source. Either is an approximation, so the caller warns.
+pub fn mixer_for(adj: &Adjustment, channels: Channels) -> Option<Adjustment> {
+    let Adjustment::ChannelMixer { matrix, monochrome, cmyk } = adj else { return None };
+    match (cmyk, channels == Channels::Cmyk) {
+        (None, true) => {
+            let mut rows = photocraft_doc::adjust::CMYK_MIXER_IDENTITY;
+            for (row, m) in rows.iter_mut().zip(matrix) {
+                *row = [m[0], m[1], m[2], 0.0, m[3]];
+            }
+            let matrix = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]];
+            Some(Adjustment::ChannelMixer { matrix, monochrome: *monochrome, cmyk: Some(rows) })
+        }
+        (Some(rows), false) => {
+            let matrix = std::array::from_fn(|i| rows.get(i).map_or([0.0; 4], |r| [r[0], r[1], r[2], r[4]]));
+            Some(Adjustment::ChannelMixer { matrix, monochrome: *monochrome, cmyk: None })
+        }
+        _ => None,
+    }
+}
+
 /// Serializes an adjustment into its PSD blocks: `(key, data)` pairs
 /// (Brightness/Contrast also writes a `CgEd` descriptor). Every evaluated kind has an
 /// encoding; the result is empty only for an [`Adjustment::Unsupported`] with a malformed key.

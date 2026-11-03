@@ -473,7 +473,14 @@ impl Ex {
                     || matches!(a, photocraft_doc::Adjustment::Unsupported { raw: r, .. } if raw.iter().any(|(k, d)| own == Some(&k[..]) && d[..] == r[..]));
                 if !keep {
                     raw.retain(|(k, _)| !adjust_map::ADJUSTMENT_KEYS.contains(&k) && k != b"CgEd" && own != Some(&k[..]));
-                    let w = adjust_map::write(a);
+                    // A Channel Mixer whose outputs don't match the document's mode has no
+                    // PSD encoding that reads back as it is: save its nearest equivalent.
+                    let reshaped = adjust_map::mixer_for(a, channels);
+                    if reshaped.is_some() {
+                        let shape = if channels == adjust_map::Channels::Cmyk { "cyan, magenta, yellow and black" } else { "red, green and blue" };
+                        self.warnings.push(format!("layer \"{}\": Channel Mixer saved with {shape} outputs, the document mode's own", l.name));
+                    }
+                    let w = adjust_map::write(reshaped.as_ref().unwrap_or(a));
                     if w.is_empty() {
                         self.warnings.push(format!("layer \"{}\": {} adjustment is not yet written to PSD", l.name, a.label()));
                     }
