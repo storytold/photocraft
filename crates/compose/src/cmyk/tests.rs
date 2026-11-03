@@ -1205,10 +1205,30 @@ fn doc_at(depth: SampleType, w: u32, h: u32) -> Document {
 /// A special blend mode's Fill below 100% on an adjustment layer changes the blend itself and
 /// leaves coverage to Opacity, as the RGB compositor mixes it (#9501); the split route runs that
 /// compositor on stand-ins, so both ink routes agree, at 8 and 16 bits. Clipped onto a base,
-/// Fill stays coverage, exactly as the compositor's `composite_atop_any` does.
+/// Fill stays coverage, exactly as the compositor's `composite_atop_any` does. Each structure is
+/// also checked alone over its own paper, and every prefix of the combined stack, so a
+/// disagreement names the layer it starts at.
 #[test]
 fn special_fill_adjustments_agree_with_the_split_route() {
     use photocraft_doc::adjust::LevelsChannel;
+
+    /// The split route gives the exact path's inks on `d`, saying where they first differ.
+    fn check_routes(d: &Document, ctx: &str) {
+        eprintln!("{ctx}: checking split against exact");
+        assert!(supports(d) && split::supports(d), "{ctx}: unsupported document");
+        let via = split_render(d);
+        let exact = render_cmyk(d, via.rect).unwrap_or_else(|| panic!("{ctx}: supported"));
+        let width = via.rect.width() as usize;
+        for (i, (g, w)) in via.px.iter().zip(&exact.px).enumerate() {
+            let differs = (g[4] - w[4]).abs() > 1e-5 || (w[4] > 1e-4 && (0..4).any(|c| (g[c] - w[c]).abs() > 1e-5));
+            if differs {
+                let (x, y) = (via.rect.x0 + (i % width) as i32, via.rect.y0 + (i / width) as i32);
+                panic!("{ctx}: ({x},{y}) split {g:?} vs exact {w:?}");
+            }
+        }
+        eprintln!("{ctx}: split and exact agree");
+    }
+
     let d0 = LevelsChannel::default;
     for depth in [SampleType::U8, SampleType::U16] {
         let cmyka = PixelFormat { mode: ColorMode::Cmyk, sample: depth, alpha: true };
@@ -1228,7 +1248,7 @@ fn special_fill_adjustments_agree_with_the_split_route() {
         }
         // LinearDodge Levels and Posterize, each with a low Fill.
         for adj in [cmyk_levels(LevelsChannel { in_white: 0.6, gamma: 1.7, ..d0() }, d0()), Adjustment::Posterize { levels: 3 }] {
-            let mut a = adjustment(adj);
+            let mut a = adjustment(adj.clone());
             a.blend = BlendMode::LinearDodge;
             a.fill_opacity = 0.2;
             // Through a pass-through group: the adjustment acts on the backdrop below it.
@@ -1242,9 +1262,28 @@ fn special_fill_adjustments_agree_with_the_split_route() {
             // Clipped onto a pixel base: Fill is coverage there.
             let mut clipped = a.clone();
             clipped.clipped = true;
+            let base = pix(&[(Rect::new(0, 0, 6, 4), [0.3, 0.1, 0.5, 0.2, 0.9])]);
+
+            // Each structure on its own, over its own paper.
+            let mut pass_doc = doc_at(depth, 6, 4);
+            pass_doc.layers.extend([paper_l.clone(), pass.clone()]);
+            check_routes(&pass_doc, &format!("depth {depth:?}, {adj:?}, pass-through group alone"));
+            let mut iso_doc = doc_at(depth, 6, 4);
+            iso_doc.layers.extend([paper_l.clone(), iso.clone()]);
+            check_routes(&iso_doc, &format!("depth {depth:?}, {adj:?}, isolated group alone"));
+            let mut clipped_doc = doc_at(depth, 6, 4);
+            clipped_doc.layers.extend([paper_l.clone(), base.clone(), clipped.clone()]);
+            check_routes(&clipped_doc, &format!("depth {depth:?}, {adj:?}, clipped onto a base alone"));
+
+            // The combined stack, one layer at a time.
             let mut d = doc_at(depth, 6, 4);
-            d.layers.extend([paper_l.clone(), pass, iso, pix(&[(Rect::new(0, 0, 6, 4), [0.3, 0.1, 0.5, 0.2, 0.9])]), clipped]);
-            assert_routes_agree(&d);
+            let steps =
+                [("paper", paper_l.clone()), ("pass-through adjustment", pass), ("isolated group", iso), ("alpha base", base), ("clipped adjustment", clipped)];
+            let total = steps.len();
+            for (n, (name, l)) in steps.into_iter().enumerate() {
+                d.layers.push(l);
+                check_routes(&d, &format!("depth {depth:?}, {adj:?}, combined prefix {}/{total} ({name})", n + 1));
+            }
             if depth == SampleType::U8 {
                 assert_matches_reference(&d);
             }
