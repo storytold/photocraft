@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    Document, EngineError, Layer, LayerId, PixelFormat, Rect, Result, Session, Surface, Value, bad, bool_or, from_rgba_into, int, json, pixel_layer,
+    pixel_layer_id, str_or, to_rgba, writable_surface,
+};
 
 // ------------------------------------------------------------------ Content-Aware Fill
 
@@ -380,8 +383,8 @@ fn content_aware_fill_as(s: &mut Session, p: &Value, cmd: &'static str, label: &
     use photocraft_algo::content_aware::fill_owned;
     // The workspace names the layer it opened on: after an Apply to a new layer that one is
     // active, but the fill still samples the original.
-    let id = match p.get("layer").and_then(Value::as_u64) {
-        Some(l) => pixel_layer_id(s, LayerId(l)),
+    let id = match crate::commands::explicit_layer(s, p)? {
+        Some(layer) => pixel_layer_id(s, layer),
         None => pixel_layer(s),
     }
     .map_err(EngineError::Other)?;
@@ -503,7 +506,7 @@ fn apply_content_aware_fill(s: &mut Session, label: &str, id: LayerId, output: &
                     s.write_region(window, &px);
                     s.prune();
                 }
-                let nid = doc.insert_above(Some(id), l);
+                let nid = crate::layer_place::insert_new(doc, Some(id), l, crate::layer_place::Place::Above);
                 *active = Some(nid);
                 return Ok(nid);
             }
