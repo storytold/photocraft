@@ -167,7 +167,14 @@ impl PhotocraftApp {
     /// inline on wasm): the reading stays off the UI thread for big files either way.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn open_path_deep(&mut self, path: &str) -> Result<Vec<String>, String> {
-        crate::jobs_ui::start_open_deep(self, &display_name(path), Some(path.to_string()), photocraft_engine::jobs::OpenSource::Path(path.to_string()), None, None)?;
+        crate::jobs_ui::start_open_deep(
+            self,
+            &display_name(path),
+            Some(path.to_string()),
+            photocraft_engine::jobs::OpenSource::Path(path.to_string()),
+            None,
+            None,
+        )?;
         Ok(Vec::new())
     }
 

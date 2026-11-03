@@ -284,7 +284,14 @@ pub fn start_open(
 }
 
 /// [`start_open`] for deep EXRs: the document keeps its depth data (a deep layer).
-pub fn start_open_deep(app: &mut PhotocraftApp, name: &str, path: Option<String>, source: OpenSource, slot: Option<usize>, order: Option<OpenOrder>) -> Result<(), String> {
+pub fn start_open_deep(
+    app: &mut PhotocraftApp,
+    name: &str,
+    path: Option<String>,
+    source: OpenSource,
+    slot: Option<usize>,
+    order: Option<OpenOrder>,
+) -> Result<(), String> {
     start_open_inner(app, name, path, source, slot, order, true)
 }
 
@@ -298,7 +305,8 @@ fn start_open_inner(
     deep: bool,
 ) -> Result<(), String> {
     let name = &app.open_name(name);
-    let started = if deep { app.session.start_open_deep(name, source) } else { app.session.start_open_for_user_with_background(name, source, app.background_jobs) };
+    let started =
+        if deep { app.session.start_open_deep(name, source) } else { app.session.start_open_for_user_with_background(name, source, app.background_jobs) };
     match started.map_err(|e| e.to_string())? {
         // Inline (wasm, or background jobs off): finish now, like a background open that ended at
         // once. A preflight keeps the slot and set order in its memory prompt.
