@@ -44,27 +44,34 @@ struct SourceReader {
 }
 
 impl SourceReader {
-    fn all(&self) -> &[u8] {
+    fn len(&self) -> usize {
         match &self.source {
-            Source::Tile(t) => t.bytes(),
-            Source::Blob(b) => b.as_slice(),
-            Source::Owned(v) => v.as_slice(),
+            Source::Tile(t) => t.len(),
+            Source::Blob(b) => b.len(),
+            Source::Owned(v) => v.len(),
         }
     }
+}
 
-    fn len(&self) -> usize {
-        self.all().len()
+/// Copies the source bytes from `pos` into `buf`, returning how many were copied.
+fn read_from(all: &[u8], pos: usize, buf: &mut [u8]) -> usize {
+    let rest = all.get(pos..).unwrap_or(&[]);
+    let n = rest.len().min(buf.len());
+    if let (Some(dst), Some(src)) = (buf.get_mut(..n), rest.get(..n)) {
+        dst.copy_from_slice(src);
     }
+    n
 }
 
 impl Read for SourceReader {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let all = self.all();
-        let rest = all.get(self.pos..).unwrap_or(&[]);
-        let n = rest.len().min(buf.len());
-        if let (Some(dst), Some(src)) = (buf.get_mut(..n), rest.get(..n)) {
-            dst.copy_from_slice(src);
-        }
+        // A tile's bytes are borrowed only for this call, so its scratch-disk backing may
+        // page out between reads (a later read reloads it).
+        let n = match &self.source {
+            Source::Tile(t) => read_from(&t.bytes(), self.pos, buf),
+            Source::Blob(b) => read_from(b, self.pos, buf),
+            Source::Owned(v) => read_from(v, self.pos, buf),
+        };
         self.pos += n;
         Ok(n)
     }
@@ -105,7 +112,7 @@ impl Compressor {
     fn object(&mut self, obj: &Object) -> Vec<u8> {
         let source = match obj {
             Object::Tile(tile, _) if cfg!(target_endian = "little") => Source::Tile(Arc::clone(tile)),
-            Object::Tile(tile, sample) => Source::Owned(tile_le(tile, *sample).into_owned()),
+            Object::Tile(tile, sample) => Source::Owned(tile_le(tile, *sample).to_vec()),
             Object::Blob(blob) => Source::Blob(Arc::clone(blob)),
         };
         self.run(source)
@@ -505,13 +512,32 @@ impl Sink for Collect<'_> {
     }
 }
 
-fn tile_le(t: &Tile, sample: SampleType) -> std::borrow::Cow<'_, [u8]> {
+/// A tile's bytes in little-endian order: the tile itself (kept in memory while this lives), or
+/// a byte-swapped copy on big-endian machines.
+enum LeBytes<'a> {
+    Native(photocraft_raster::TileBytes<'a>),
+    Swapped(Vec<u8>),
+    Borrowed(&'a [u8]),
+}
+
+impl std::ops::Deref for LeBytes<'_> {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        match self {
+            LeBytes::Native(b) => b,
+            LeBytes::Swapped(b) => b,
+            LeBytes::Borrowed(b) => b,
+        }
+    }
+}
+
+fn tile_le(t: &Tile, sample: SampleType) -> LeBytes<'_> {
     if cfg!(target_endian = "big") {
         let mut b = t.bytes().to_vec();
         swap_to_le(&mut b, sample);
-        std::borrow::Cow::Owned(b)
+        LeBytes::Swapped(b)
     } else {
-        std::borrow::Cow::Borrowed(t.bytes())
+        LeBytes::Native(t.bytes())
     }
 }
 
@@ -558,6 +584,20 @@ struct Hashes {
 pub struct BundleObject<'a> {
     path: &'a str,
     object: &'a Object,
+    scratch: Scratch<'a>,
+}
+
+/// The document a save reads tiles from, and the scratch read-error generation at its start.
+#[derive(Clone, Copy)]
+struct Scratch<'a> {
+    doc: &'a Document,
+    generation: u64,
+}
+
+impl Scratch<'_> {
+    fn check(self) -> Result<()> {
+        scratch_ok(self.doc, self.generation)
+    }
 }
 
 impl BundleObject<'_> {
@@ -571,13 +611,20 @@ impl BundleObject<'_> {
     }
 
     /// The bytes the object stands for, uncompressed (tile samples little-endian).
-    pub fn content(&self) -> std::borrow::Cow<'_, [u8]> {
+    pub fn content(&self) -> impl std::ops::Deref<Target = [u8]> + '_ {
         self.object.content()
     }
 
-    /// What a store keeps: [`Self::content`] as one zstd frame.
-    pub fn compressed(&self) -> Vec<u8> {
-        self.object.compressed(&mut Compressor::new())
+    /// What a store keeps: [`Self::content`] as one zstd frame. Fails when a tile's scratch
+    /// storage could not be read, so a store never keeps placeholder bytes under the tile's hash.
+    pub fn compressed(&self) -> Result<Vec<u8>> {
+        self.compressed_with(&mut Compressor::new())
+    }
+
+    fn compressed_with(&self, compressor: &mut Compressor) -> Result<Vec<u8>> {
+        let data = self.object.compressed(compressor);
+        self.scratch.check()?;
+        Ok(data)
     }
 }
 
@@ -788,7 +835,7 @@ impl BundleStore for ZipStore {
             None => {
                 let data = match self.fresh.remove(object.path) {
                     Some(data) => data,
-                    None => Arc::new(object.object.compressed(self.compressor.get_or_insert_with(Compressor::new))),
+                    None => Arc::new(object.compressed_with(self.compressor.get_or_insert_with(Compressor::new))?),
                 };
                 (object.path.to_owned(), data, Stored::Written)
             }
@@ -918,7 +965,7 @@ impl DirStore {
                 return Ok(Stored::Reused);
             }
         }
-        write_bundle_file(dir, &object_path, &obj.compressed(save.compressor.get_or_insert_with(Compressor::new)), fs)?;
+        write_bundle_file(dir, &object_path, &object.compressed_with(save.compressor.get_or_insert_with(Compressor::new))?, fs)?;
         let written = path_signature(&object_path)?;
         if let Some(cache) = &mut self.verified {
             match written {
@@ -1149,6 +1196,14 @@ struct Prepared {
     stats: SaveStats,
 }
 
+/// Refuse to write pixels of `doc` that are unreadable now, or that may have been read as a
+/// placeholder because some tile failed or recovered since `generation` (the save's start).
+/// Other documents' scratch failures do not block this save.
+fn scratch_ok(doc: &Document, generation: u64) -> Result<()> {
+    doc.scratch_health().map_err(FormatError::corrupt)?;
+    photocraft_raster::spill::check_since(generation).map_err(FormatError::corrupt)
+}
+
 impl Prepared {
     /// Takes the full-size composite out of the manifest when `previews` does not hold it.
     fn match_previews(&mut self, previews: &[(&str, Vec<u8>)]) -> Result<()> {
@@ -1180,10 +1235,10 @@ impl Object {
     }
 
     /// The bytes this object stores (tiles little-endian).
-    fn content(&self) -> std::borrow::Cow<'_, [u8]> {
+    fn content(&self) -> LeBytes<'_> {
         match self {
             Object::Tile(tile, sample) => tile_le(tile, *sample),
-            Object::Blob(blob) => std::borrow::Cow::Borrowed(blob.as_slice()),
+            Object::Blob(blob) => LeBytes::Borrowed(blob.as_slice()),
         }
     }
 }
@@ -1509,7 +1564,8 @@ fn par_compress<'a>(objects: &[&BundleObject<'a>]) -> Result<Vec<Compressed<'a>>
     let threads = if cfg!(target_arch = "wasm32") { 1 } else { std::thread::available_parallelism().map_or(1, |n| n.get()).clamp(1, 32) };
     if threads < 2 || objects.len() < 2 {
         let mut compressor = Compressor::new();
-        return Ok(objects.iter().map(|o| (o.path, Arc::new(o.object.compressed(&mut compressor)))).collect());
+        let out = objects.iter().map(|o| (o.path, Arc::new(o.object.compressed(&mut compressor)))).collect();
+        return scratch_checked(objects, out);
     }
     let next = std::sync::atomic::AtomicUsize::new(0);
     std::thread::scope(|sc| {
@@ -1534,8 +1590,16 @@ fn par_compress<'a>(objects: &[&BundleObject<'a>]) -> Result<Vec<Compressed<'a>>
         for r in joined {
             out.extend(r.map_err(|_| FormatError::Io(std::io::Error::other("compression worker panicked")))?);
         }
-        Ok(out)
+        scratch_checked(objects, out)
     })
+}
+
+/// `out`, unless a tile `objects` read failed while it was compressed (one check for the batch).
+fn scratch_checked<'a>(objects: &[&BundleObject<'a>], out: Vec<Compressed<'a>>) -> Result<Vec<Compressed<'a>>> {
+    if let Some(o) = objects.first() {
+        o.scratch.check()?;
+    }
+    Ok(out)
 }
 
 /// The cached objects this save re-verifies even though their signature is unchanged:
@@ -1563,13 +1627,26 @@ fn rolling_recheck(cache: Option<&DirectoryVerificationCache>, budget: u64, obje
 }
 
 impl Prepared {
-    fn bundle_objects(&self) -> Vec<BundleObject<'_>> {
-        self.objects.iter().map(|(path, object)| BundleObject { path, object }).collect()
+    fn bundle_objects<'a>(&'a self, scratch: Scratch<'a>) -> Vec<BundleObject<'a>> {
+        self.objects.iter().map(|(path, object)| BundleObject { path, object, scratch }).collect()
     }
 }
 
 impl Hashes {
     fn prepare(&mut self, doc: &Document, opts: &SaveOptions) -> Result<Prepared> {
+        doc.scratch_health().map_err(FormatError::corrupt)?;
+        let generation = photocraft_raster::spill::read_error_generation();
+        let prepared = self.prepare_inner(doc, opts);
+        if let Err(error) = photocraft_raster::spill::check_since(generation) {
+            // Failed reads may have hashed display placeholders. Never reuse those hashes
+            // when the original backing becomes readable and the same writer retries.
+            self.tiles.clear();
+            return Err(FormatError::corrupt(error));
+        }
+        prepared
+    }
+
+    fn prepare_inner(&mut self, doc: &Document, opts: &SaveOptions) -> Result<Prepared> {
         self.tiles.retain(|_, (w, _)| w.strong_count() > 0);
         self.blobs.retain(|_, (w, _)| w.strong_count() > 0);
         convert::check_nesting(&doc.layers)?;
@@ -1589,6 +1666,7 @@ impl Hashes {
         for (h, b) in c.blobs {
             objects.insert(blob_path(&h).ok_or_else(|| invalid(&h))?, Object::Blob(b));
         }
+        doc.scratch_health().map_err(FormatError::corrupt)?;
         Ok(Prepared { manifest, model, full_composite, objects, stats })
     }
 
@@ -1618,6 +1696,7 @@ impl Hashes {
         store: &mut S,
         commit: impl FnOnce(&mut S, &mut Prepared) -> Result<usize>,
     ) -> Result<SaveStats> {
+        let scratch = Scratch { doc, generation: photocraft_raster::spill::read_error_generation() };
         // Another thread encodes the previews while the document is collected and the store
         // plans its objects.
         let (previews, prepared) = beside(
@@ -1625,7 +1704,7 @@ impl Hashes {
             || previews(opts),
             || -> Result<_> {
                 let p = self.prepare(doc, opts)?;
-                store.plan(&p.bundle_objects())?;
+                store.plan(&p.bundle_objects(scratch))?;
                 Ok(p)
             },
         );
@@ -1633,7 +1712,7 @@ impl Hashes {
         let previews = previews?;
         p.match_previews(&previews)?;
         let mut stats = p.stats;
-        for object in p.bundle_objects() {
+        for object in p.bundle_objects(scratch) {
             match (store.object(&object)?, object.is_tile()) {
                 (Stored::Written, true) => stats.tiles_written += 1,
                 (Stored::Written, false) => stats.blobs_written += 1,
@@ -1641,6 +1720,8 @@ impl Hashes {
                 (Stored::Reused, false) => {}
             }
         }
+        // Nothing read from a failed scratch tile gets published.
+        scratch.check()?;
         for (name, data) in previews {
             store.preview(name, data)?;
         }

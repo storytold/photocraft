@@ -160,7 +160,7 @@ impl BundleStore for MemoryStore {
         if self.files.contains_key(object.path()) {
             return Ok(Stored::Reused);
         }
-        self.files.insert(object.path().to_owned(), object.compressed());
+        self.files.insert(object.path().to_owned(), object.compressed()?);
         Ok(Stored::Written)
     }
 
