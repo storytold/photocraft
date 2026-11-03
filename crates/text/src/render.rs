@@ -2,7 +2,7 @@
 
 use photocraft_color::{Color, PixelFormat, SampleType};
 use photocraft_doc::text::AntiAlias;
-use photocraft_geom::{Affine, Rect};
+use photocraft_geom::{Affine, Rect, TILE_SIZE};
 use photocraft_raster::Surface;
 use skrifa::instance::{LocationRef, NormalizedCoord, Size};
 use skrifa::outline::DrawSettings;
@@ -44,6 +44,14 @@ fn fits_raster_budget(w: usize, h: usize, stride: usize, sample: SampleType, bol
         deep.checked_add(coverage)
     });
     peak.is_some_and(|b| b <= max_bytes)
+}
+
+/// Whether the whole tiles the output surface stores for `rect` fit `max_bytes`. A thin rectangle
+/// (an extreme transform of short text) crosses many tiles while holding few pixels, so the pixel
+/// budget alone doesn't bound them.
+fn fits_tile_budget(rect: Rect, format: PixelFormat, max_bytes: u64) -> bool {
+    let tile_px = (TILE_SIZE as u64).pow(2);
+    rect.tile_count().checked_mul(tile_px).and_then(|px| px.checked_mul(format.bytes_per_pixel() as u64)).is_some_and(|b| b <= max_bytes)
 }
 
 /// A zeroed buffer, or `None` when its bytes cannot be reserved.
@@ -374,7 +382,7 @@ pub(crate) fn rasterize_passes(
     let n = format.mode.color_channels();
     let stride = n + 1;
     let any_bold = colors.iter().any(|&(_, b)| b);
-    if !fits_raster_budget(w, h, stride, format.sample, any_bold, MAX_RASTER_BYTES) {
+    if !fits_raster_budget(w, h, stride, format.sample, any_bold, MAX_RASTER_BYTES) || !fits_tile_budget(rect, format, MAX_RASTER_BYTES) {
         return nothing(format);
     }
     // Premultiplied accumulation.
@@ -568,9 +576,21 @@ pub fn outlines(layout: &TextLayout, transform: &Affine, warp: Option<&Warp>) ->
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_PIXELS, fits_raster_budget, rect_from_bounds, zeroed};
-    use photocraft_color::SampleType;
+    use super::{MAX_PIXELS, fits_raster_budget, fits_tile_budget, rect_from_bounds, zeroed};
+    use photocraft_color::{PixelFormat, SampleType};
     use photocraft_geom::Rect;
+
+    #[test]
+    fn a_thin_rectangle_is_charged_for_the_tiles_it_crosses() {
+        let format = PixelFormat::RGBA8;
+        // One pixel high, 2^24 wide: 16 Mi pixels, but 65536 tiles of 256 KiB (16 GiB).
+        let thin = Rect::new(0, 0, 1 << 24, 1);
+        assert!(!fits_tile_budget(thin, format, 4 << 30));
+        // The same pixels in a square fit in 16 MiB of tiles.
+        let square = Rect::new(0, 0, 4096, 4096);
+        assert!(fits_tile_budget(square, format, 64 << 20));
+        assert!(!fits_tile_budget(square, format, (64 << 20) - 1), "the allowance is exact");
+    }
 
     #[test]
     fn bounds_are_clipped_without_overflow_and_oversized_rectangles_rejected() {
