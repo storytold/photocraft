@@ -3,7 +3,7 @@ use super::{Action, DEFAULT_SET, EngineError, Result, Session, Value, bad, json}
 
 pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "actions.load";
-    if s.actions.recording.is_some() || s.actions.playing > 0 {
+    if s.actions.recording_active() || s.actions.playing > 0 {
         return Err(bad(cmd, "stop recording or playing before loading actions"));
     }
     let encoding = match p.get("encoding") {

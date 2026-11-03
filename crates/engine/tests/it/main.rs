@@ -1,5 +1,6 @@
 //! The crate's integration tests, linked into one test binary.
 
+mod actions_editor_draft;
 mod affinity;
 mod artboard_export_names;
 mod atn_action_colors;

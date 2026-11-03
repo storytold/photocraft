@@ -22,6 +22,14 @@ use serde_json::{Value, json};
 use crate::commands::CommandSpec;
 use crate::{EngineError, Result, Session};
 
+pub mod editor;
+
+/// A command temporarily owns the recorder while its nested commands run.
+pub(crate) enum Recording {
+    Classic(usize, usize),
+    Draft { from: usize, owner: u64, take: u64 },
+}
+
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: cmd.into(), msg: msg.into() }
 }
@@ -108,6 +116,9 @@ pub const MAX_PLAYBACK_STEPS: u64 = 100_000;
 #[serde(default)]
 pub struct ActionState {
     pub list: Vec<Action>,
+    /// An unpublished editor value. Neither it nor its capture is part of actions.json.
+    #[serde(skip)]
+    pub editor: Option<editor::Draft>,
     /// Journal length when recording started, and the action index being recorded into.
     #[serde(skip)]
     pub recording: Option<(usize, usize)>,
@@ -143,7 +154,7 @@ pub struct ActionState {
 
 /// Visibility gestures name a layer for replay, since document-local ids change on another image.
 pub(crate) fn recorded_params(s: &Session, id: &str, mut p: Value) -> Value {
-    if s.actions.recording.is_none() || id != "layer.setProps" || p.get("visible").is_none() {
+    if !s.actions.recording_active() || id != "layer.setProps" || p.get("visible").is_none() {
         return p;
     }
     let Some(st) = s.active() else { return p };
@@ -192,6 +203,51 @@ pub fn playback_params(s: &Session, id: &str, p: &Value) -> Result<Value> {
 impl ActionState {
     pub(crate) fn touch(&mut self) {
         self.rev = self.rev.saturating_add(1);
+    }
+
+    /// Both destinations use the same normalized command journal and job-take ownership.
+    pub fn recording_active(&self) -> bool {
+        self.recording.is_some() || self.editor.as_ref().is_some_and(|draft| draft.recording.is_some())
+    }
+
+    /// Start of the active recorder's pending journal slice.
+    pub(crate) fn recording_cursor(&self) -> Option<usize> {
+        self.recording.map(|(from, _)| from).or_else(|| self.editor.as_ref().and_then(|draft| draft.recording))
+    }
+
+    /// Suspend either destination so a compound command records one logical step.
+    pub(crate) fn take_recording(&mut self) -> Option<Recording> {
+        if let Some((from, index)) = self.recording.take() {
+            return Some(Recording::Classic(from, index));
+        }
+        let draft = self.editor.as_mut()?;
+        let from = draft.recording.take()?;
+        Some(Recording::Draft { from, owner: draft.id, take: self.take })
+    }
+
+    /// Restore only the capture still owned by this command; never revive an ended draft.
+    pub(crate) fn restore_capture(&mut self, held: Option<Recording>) {
+        if self.recording_active() {
+            return;
+        }
+        match held {
+            Some(Recording::Classic(from, index)) => self.recording = Some((from, index)),
+            Some(Recording::Draft { from, owner, take }) if self.take == take => {
+                if let Some(draft) = self.editor.as_mut().filter(|draft| draft.id == owner) {
+                    draft.recording = Some(from);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Skip an older job's journal entry without losing this take's own pending steps.
+    pub(crate) fn advance_recording(&mut self, to: usize) {
+        if let Some((from, _)) = &mut self.recording {
+            *from = to;
+        } else if let Some(from) = self.editor.as_mut().and_then(|draft| draft.recording.as_mut()) {
+            *from = to;
+        }
     }
 }
 
@@ -378,7 +434,7 @@ fn get(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn record(s: &mut Session, p: &Value) -> Result<Value> {
     not_playing(s, "actions.record")?;
-    if s.actions.recording.is_some() {
+    if s.actions.recording_active() {
         return Err(bad("actions.record", "already recording; stop first"));
     }
     let idx = if p.get("action").is_some() {
@@ -424,7 +480,7 @@ pub fn pending_steps(s: &Session, action: usize) -> impl Iterator<Item = &(Strin
 }
 
 pub(crate) fn flush_recording(s: &mut Session) -> Result<()> {
-    let Some((_, idx)) = s.actions.recording else { return Ok(()) };
+    let Some((_, idx)) = s.actions.recording else { return editor::flush(s) };
     if idx >= s.actions.list.len() {
         return Err(bad("actions.stop", "the action being recorded no longer exists"));
     }
@@ -506,6 +562,12 @@ fn run_recorded(s: &mut Session, action: &Action, from: usize) -> (u64, Option<V
 /// Suspend recording while a called action executes. Keep its commands in the journal
 /// for diagnostics, but record just the named call in the parent action.
 pub fn begin_playback(s: &mut Session, action: &Action) -> Result<Option<(usize, usize)>> {
+    // The old shell continuation carries a library index, not a draft owner. The editor
+    // must stop before using that route; the headless play command suspends the draft
+    // itself and records a named call without a shell continuation.
+    if s.actions.editor.as_ref().is_some_and(|draft| draft.recording.is_some()) {
+        return Err(bad("actions.play", "stop draft recording before shell playback"));
+    }
     flush_recording(s)?;
     if s.actions.playing == 0 {
         s.actions.playback_steps = 0;
@@ -527,6 +589,10 @@ pub fn finish_playback(s: &mut Session, recording: Option<(usize, usize)>, actio
 /// Resume recording into action `idx` and journal the named call that suspended it.
 pub fn restore_recording(s: &mut Session, idx: usize, action: &str, from: usize) {
     s.actions.recording = Some((s.journal.len(), idx));
+    journal_call(s, action, from);
+}
+
+fn journal_call(s: &mut Session, action: &str, from: usize) {
     let mut params = json!({"action": action});
     if from > 0 {
         params["from"] = json!(from);
@@ -549,9 +615,29 @@ pub fn nested_failure(id: &str, value: &Value) -> Option<String> {
 
 fn play(s: &mut Session, p: &Value) -> Result<Value> {
     let (action, from) = playback_plan(s, p)?;
-    let recording = begin_playback(s, &action)?;
+    // actions.play journals its own named call, rather than using dispatch's journaled
+    // command suspension. Flush earlier draft steps before hiding its capture here.
+    let draft = if s.actions.editor.as_ref().is_some_and(|draft| draft.recording.is_some()) {
+        flush_recording(s)?;
+        s.actions.take_recording()
+    } else {
+        None
+    };
+    let recording = match begin_playback(s, &action) {
+        Ok(recording) => recording,
+        Err(error) => {
+            s.actions.restore_capture(draft);
+            return Err(error);
+        }
+    };
     let (ran, failed) = run_recorded(s, &action, from);
     finish_playback(s, recording, &action, from);
+    if let Some(Recording::Draft { owner, take, .. }) = draft {
+        s.actions.restore_capture(Some(Recording::Draft { from: s.journal.len(), owner, take }));
+        if s.actions.take == take && s.actions.editor.as_ref().is_some_and(|draft| draft.id == owner && draft.recording.is_some()) {
+            journal_call(s, &action.name, from);
+        }
+    }
     Ok(match failed {
         Some(f) => json!({"action": action.name, "ran": ran, "failed": f}),
         None => json!({"action": action.name, "ran": ran}),
@@ -703,6 +789,15 @@ fn toggle(s: &mut Session, p: &Value) -> Result<Value> {
 /// Prefix of the persisted shortcut override that plays a named action (`actions.play:<name>`).
 pub const PLAY_SHORTCUT_PREFIX: &str = "actions.play:";
 
+/// Named action references shared by Rename and an editor's prepared Save.
+fn call_keys(id: &str) -> &'static [&'static str] {
+    match id {
+        "actions.play" => &["action"],
+        "actions.conditional" => &["then", "else"],
+        _ => &[],
+    }
+}
+
 /// Rename an action in place. Nested `actions.play` steps and `actions.conditional` branches
 /// that call it by name, and its function-key binding, follow the new name so nothing silently
 /// stops working.
@@ -722,15 +817,10 @@ fn rename(s: &mut Session, p: &Value) -> Result<Value> {
     if s.actions.list.iter().any(|a| a.name == name) {
         return Err(bad("actions.rename", "an action with this name already exists"));
     }
-    let pending = s.actions.recording.map_or(s.journal.len(), |(start, _)| start);
+    let pending = s.actions.recording_cursor().unwrap_or(s.journal.len());
     let calls = s.actions.list.iter_mut().flat_map(|a| a.steps.iter_mut()).chain(s.journal.iter_mut().skip(pending));
     for (id, params) in calls {
-        let keys: &[&str] = match id.as_str() {
-            "actions.play" => &["action"],
-            "actions.conditional" => &["then", "else"],
-            _ => &[],
-        };
-        for key in keys {
+        for key in call_keys(id) {
             if params.get(*key).and_then(Value::as_str) == Some(old.as_str()) {
                 params[*key] = json!(name);
             }
@@ -771,7 +861,7 @@ fn set_color(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 pub fn specs() -> Vec<CommandSpec> {
-    vec![
+    let mut specs = vec![
         CommandSpec {
             id: "actions.move",
             label: "Move Action or Step",
@@ -872,7 +962,9 @@ pub fn specs() -> Vec<CommandSpec> {
             run: set_color,
             journal: false,
         },
-    ]
+    ];
+    specs.extend(editor::specs());
+    specs
 }
 
 #[cfg(test)]

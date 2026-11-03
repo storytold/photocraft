@@ -30,7 +30,7 @@ fn index(p: &Value, key: &str, cmd: &str) -> Result<Option<usize>> {
 
 /// Whether `id` can be a step: a registered command, a Play Action call, or one of the desktop
 /// shell's recorded save/view commands.
-fn is_step_command(id: &str) -> bool {
+pub(crate) fn is_step_command(id: &str) -> bool {
     crate::commands::find(id).is_some() || id == "actions.play" || crate::actions_cmds::shell_save_command(id) || crate::actions_cmds::shell_view_command(id)
 }
 

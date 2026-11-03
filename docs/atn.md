@@ -34,6 +34,44 @@ It survives library reloads and ATN export, but cannot be selected with
 indices use a neutral theme card in Classic Button Mode until their swatches are
 provided by the newer editor. This header support does not parse an action sidecar.
 
+## Unpublished action editor backend
+
+The backend editor commands keep one complete action draft outside the live library:
+
+- `actions.editor.open {action}` copies an existing action. With no `action`, it
+  prepares a new value with an optional `name` and `set`, without creating a row.
+  It returns a `draft` identity; subsequent mutations must supply that identity.
+- `actions.editor.get {draft?}` reports the complete action, proposed shortcut,
+  dirty/recording state and opening library revision. `update {draft,name?,color?,shortcut?}`
+  stages current metadata. Description/icon fields and sidecar handling are a later phase;
+  unsupported fields fail explicitly rather than being silently lost.
+- `actions.editor.step {draft,op,step,...}` stages insert, replace, delete, move,
+  duplicate, enabled and dialog operations. Moved flags follow their steps. Opaque
+  unedited original steps, flags and imported colours are retained.
+- `actions.editor.record` / `stop` capture normalized logical commands into the
+  draft, including named calls and job-take ownership, without publishing a placeholder.
+  Completed pending steps are visible immediately. Classic `actions.record` / `stop`
+  retain their existing immediate-library behavior and require no editor Save.
+- `actions.editor.save {draft}` validates the opening action/revision and action
+  shortcut namespace before one logical definition/reference/shortcut update. It
+  ends its own capture when publishing. Collisions and stale state leave the draft
+  and committed components intact. Save ends an empty capture too, while leaving
+  unchanged committed definitions, shortcuts and revisions alone; an untouched
+  default new draft remains unpublished. Shortcut conflicts follow Classic assignment,
+  including its `removeConflicts:false` behavior for alternates. The preset store keeps its existing I/O
+  warning/retry behavior, not a new multi-file durable transaction.
+- `actions.editor.discard {draft}` drops only that draft and capture. It does not
+  restore an old library snapshot, erase the journal or undo document edits made
+  while recording. Old editor identities cannot mutate a reopened editor.
+
+This is the backend increment for #10946, not the completed editor page. The UI's
+Save/Discard/Cancel confirmation policy and its suspended-recording adapter remain
+separate work. In particular, the legacy shell playback continuation carries a
+library index, so direct shell playback refuses an active draft recording until
+the editor UI owns that continuation. Headless `Session::execute(actions.play)`
+already suspends/restores either recorder and captures one named call. No #10766
+or #10965 implementation is implicitly imported by this backend.
+
 ## Supported events (144)
 
 | Code | String ID | Label | PhotoCraft command(s) |
