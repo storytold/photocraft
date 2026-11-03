@@ -1,5 +1,7 @@
 use std::fmt;
 
+use photocraft_color::SampleType;
+
 use super::textures::Stats;
 use super::{Compositor, Document, Rect, Unsupported};
 
@@ -30,6 +32,10 @@ impl<E> From<Unsupported> for ReadbackError<E> {
 
 /// Default maximum bytes of staging buffer memory in flight during band readback (32 MiB).
 pub const DEFAULT_MAX_STAGING_BYTES: usize = 32 << 20;
+
+/// How long a readback waits for submitted GPU work before treating the device as lost: a
+/// headless export has no user to cancel a wedged GPU, so it must never block forever.
+pub const READBACK_WAIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Blocking readback of a composite (native tests and tools).
 #[cfg(not(target_arch = "wasm32"))]
@@ -122,6 +128,12 @@ where
     let rect = rect.intersect(&doc.bounds());
     if rect.is_empty() {
         return Ok(());
+    }
+    // Band readback goes through a half-precision staging texture on every adapter, so values
+    // above 65504 become infinity and the rest lose mantissa bits. Keep F32 exports on the CPU
+    // compositor, where the writer receives the document's full precision.
+    if doc.depth == SampleType::F32 {
+        return Err(ReadbackError::Unsupported("32-bit float documents need the CPU compositor".into()));
     }
 
     let bpp = if comp.acc_format() == wgpu::TextureFormat::Rgba32Float { 16u64 } else { 8u64 };
@@ -233,13 +245,14 @@ where
         }
 
         match comp.health() {
-            Some(h) if !h.wait(device, None) => {
-                return Err(ReadbackError::DeviceLost(h.fault().map_or_else(|| "GPU device lost".into(), |f| f.to_string())));
+            Some(h) if !h.wait_timeout(device, None, READBACK_WAIT_TIMEOUT) => {
+                let message = h.fault().map_or_else(|| format!("GPU readback did not finish within {} s", READBACK_WAIT_TIMEOUT.as_secs()), |f| f.to_string());
+                return Err(ReadbackError::DeviceLost(message));
             }
             Some(_) => {}
             None => {
                 let poll = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    device.poll(wgpu::PollType::Wait { submission_index: None, timeout: Some(std::time::Duration::from_secs(30)) })
+                    device.poll(wgpu::PollType::Wait { submission_index: None, timeout: Some(READBACK_WAIT_TIMEOUT) })
                 }));
                 match poll {
                     Ok(Ok(_)) => {}

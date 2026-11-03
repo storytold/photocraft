@@ -404,7 +404,13 @@ impl Headless {
     pub fn close(&mut self, index: Option<usize>) -> Result<Value, AutomationError> {
         let i = self.doc_index(index)?;
         if let Some(d) = self.session.close(i) {
-            self.writers.remove(&d.doc.id.0);
+            let id = d.doc.id;
+            self.writers.remove(&id.0);
+            // Release this document's GPU caches now instead of keeping them until another
+            // document renders or the server exits.
+            if let Some(r) = self.renderer.as_mut() {
+                r.forget_document(id);
+            }
         }
         // The closed document's buffers went to the scratch pool: hand them back to the OS.
         photocraft_raster::scratch::release();

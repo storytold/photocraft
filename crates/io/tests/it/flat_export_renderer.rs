@@ -1,6 +1,5 @@
-//! Tests for custom [`BandRenderer`] injection, complete CPU retry, and atomic save preservation.
+//! Tests for custom [`BandRenderer`] injection, complete CPU retry, and renderer error handling.
 
-use std::fs;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use photocraft_codecs::Format;
@@ -153,25 +152,21 @@ fn encoder_and_sink_failures_are_not_retried_on_cpu() {
         fn render_bands(
             &mut self,
             _doc: &Document,
-            rect: Rect,
+            _rect: Rect,
             _band_rows: i32,
-            sink: &mut dyn FnMut(RenderBand) -> Result<(), IoError>,
+            _sink: &mut dyn FnMut(RenderBand) -> Result<(), IoError>,
         ) -> Result<(), RenderError> {
-            let res = sink(RenderBand { rect, pixels: vec![[1.0; 4]; rect.width() as usize * rect.height() as usize] });
-            match res {
-                Ok(()) => Ok(()),
-                Err(e) => Err(RenderError::sink(e)),
-            }
+            Err(RenderError::sink(IoError::Unsupported("test sink failure".into())))
         }
     }
 
     let doc = synthetic_doc();
     let opts = ExportOptions::default();
-    // Simulate interrupt cancellation during encode
+    // A non-cancellation sink error with no interrupt: a CPU retry would succeed with `Ok`, so
+    // this assertion fails if the error is ever retried on the CPU.
     let mut renderer = SinkFailingRenderer;
-    let cancelled_interrupt = Interrupt::cancel_only(&|| true);
-    let res = export_flat_with_renderer(&doc, Format::Png, &opts, &cancelled_interrupt, Some(&mut renderer));
-    assert!(matches!(res, Err(IoError::Cancelled)), "sink cancellation must not trigger CPU retry");
+    let res = export_flat_with_renderer(&doc, Format::Png, &opts, &Interrupt::NONE, Some(&mut renderer));
+    assert!(matches!(res, Err(IoError::Unsupported(_))), "sink error must propagate without a CPU retry: {res:?}");
 }
 
 #[test]
@@ -204,23 +199,11 @@ fn streamed_png_retries_on_cpu_upon_renderer_failure() {
 }
 
 #[test]
-fn atomic_save_preserves_prior_file_on_fatal_failure() {
-    let dir = std::env::temp_dir().join(format!("photocraft-atomic-save-test-{}", std::process::id()));
-    let _ = fs::create_dir_all(&dir);
-    let target_path = dir.join("preserved.txt");
-    let original_bytes = b"prior uncorrupted file contents";
-    fs::write(&target_path, original_bytes).expect("initial write");
-
-    // Attempt an atomic write with an invalid format or simulated error
+fn unknown_export_format_is_rejected() {
     let doc = synthetic_doc();
     let opts = ExportOptions::default();
 
-    // Calling export on an unknown format should fail before touching the file
+    // `export` takes a name or bare extension; an unknown one fails before any codec runs.
     let export_err = photocraft_io::export(&doc, "invalid_unknown_extension_xyz", &opts);
     assert!(export_err.is_err());
-
-    // File must remain exactly as before
-    let read_back = fs::read(&target_path).expect("readback");
-    assert_eq!(read_back, original_bytes);
-    let _ = fs::remove_dir_all(&dir);
 }

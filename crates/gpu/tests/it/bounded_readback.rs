@@ -212,6 +212,19 @@ fn bounded_readback_preserves_effect_halos_across_seams() {
 }
 
 #[test]
+fn float_documents_are_rejected_before_readback() {
+    let Some((ctx, mut comp, _lock)) = test_gpu() else { return };
+    let doc = Document::with_background("f32", Size::new(64, 64), ColorMode::Rgb, SampleType::F32, Color::WHITE);
+    let mut called = false;
+    let res = render_bands(&mut comp, ctx.device(), ctx.queue(), &doc, doc.bounds(), 16, 64 * 1024, |_rect, _px| {
+        called = true;
+        Ok::<(), std::convert::Infallible>(())
+    });
+    assert!(matches!(res, Err(ReadbackError::Unsupported(_))), "F32 must be rejected before readback: {res:?}");
+    assert!(!called, "no band may be read for a 32-bit float document");
+}
+
+#[test]
 fn bounded_readback_handles_empty_rect() {
     let Some((ctx, mut comp, _lock)) = test_gpu() else { return };
     let doc = sample_doc(100, 100);

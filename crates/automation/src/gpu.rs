@@ -197,4 +197,8 @@ impl BandRenderer for GpuRenderer {
     fn push_diagnostic(&mut self, diagnostic: String) {
         self.push_diag(diagnostic);
     }
+
+    fn forget_document(&mut self, doc: DocId) {
+        self.forget_doc(doc);
+    }
 }

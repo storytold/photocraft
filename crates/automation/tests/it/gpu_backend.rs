@@ -35,11 +35,20 @@ mod tests {
         let full_png = h.render_png(None, 0).expect("full render_png");
         let full_img = decode(&full_png).expect("decode full");
         assert_eq!((full_img.width(), full_img.height()), (120, 80));
+        let diagnostics = h.drain_diagnostics();
 
         // Scaled preview (max_side = 40)
         let thumb_png = h.render_png(None, 40).expect("thumbnail render_png");
         let thumb_img = decode(&thumb_png).expect("decode thumbnail");
         assert_eq!((thumb_img.width(), thumb_img.height()), (40, 27));
+
+        // Skip when this host has no usable GPU: then the full-size render legitimately used
+        // the CPU path instead, and there is no GPU result to check.
+        if diagnostics.iter().any(|d| d.contains("no GPU adapter available") || d.contains("could not build GPU compositor")) {
+            return;
+        }
+        assert!(diagnostics.iter().any(|d| d.contains("GPU adapter:")), "GPU was not initialized: {diagnostics:?}");
+        assert!(!diagnostics.iter().any(|d| d.contains("GPU rendering unavailable")), "full-size render fell back to CPU: {diagnostics:?}");
     }
 
     #[test]
@@ -114,8 +123,10 @@ mod tests {
         let is_software = gpu_renderer.is_software();
         println!("GPU parity verified using adapter '{adapter}' (software: {is_software})");
 
-        // Matrix: SampleType (U8, U16, F32) x Alpha modes (opaque background, translucent document)
-        for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        // Matrix: SampleType (U8, U16) x Alpha modes (opaque background, translucent document).
+        // F32 is deliberately excluded: band readback is half-precision, so it must reject F32
+        // and let the export fall back to the CPU (checked below).
+        for depth in [SampleType::U8, SampleType::U16] {
             for with_alpha in [false, true] {
                 let doc = if with_alpha {
                     let mut d = Document::new("translucent", Size::new(96, 96), ColorMode::Rgb, depth);
@@ -162,6 +173,14 @@ mod tests {
                 }
             }
         }
+
+        // 32-bit float needs the CPU compositor: band readback would quantise it to half.
+        let f32_doc = make_test_doc(64, 64, SampleType::F32);
+        let f32_res = gpu_renderer.render_bands(&f32_doc, f32_doc.bounds(), 16, &mut |_| Ok::<(), photocraft_io::IoError>(()));
+        assert!(
+            matches!(f32_res, Err(photocraft_io::RenderError::Unsupported(_))),
+            "F32 documents must be rejected so the export falls back to CPU: {f32_res:?}"
+        );
     }
 
     #[test]

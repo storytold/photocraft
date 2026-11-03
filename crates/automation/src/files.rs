@@ -167,13 +167,9 @@ pub fn render_png_with_renderer(doc: &Document, max_side: u32, mut renderer: Opt
     if let Some(r) = renderer.as_mut()
         && (target_w, target_h) == (doc.size.width, doc.size.height)
     {
-        let res = photocraft_io::export_flat_with_renderer(
-            doc,
-            photocraft_codecs::Format::Png,
-            &Default::default(),
-            &photocraft_raster::Interrupt::NONE,
-            Some(&mut **r),
-        );
+        // 8-bit RGBA whatever the document's depth, like the CPU preview path: a 16-bit
+        // document's preview must not be twice as large as the one it previews.
+        let res = photocraft_io::export_preview_png_with_renderer(doc, Some(&mut **r));
         match res {
             Ok(res) => {
                 for w in res.warnings {

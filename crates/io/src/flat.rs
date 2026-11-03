@@ -553,6 +553,50 @@ fn document_to_image_for_with_renderer(
     Ok(Image::from_raw(w, h, layout, src.sample, data)?.with_icc(src.icc.clone()).with_meta(src.meta()))
 }
 
+/// The document composited as an 8-bit RGBA image, through `renderer` when one is supplied.
+fn document_to_preview_with_renderer(doc: &Document, warnings: &mut Vec<String>, renderer: Option<&mut dyn BandRenderer>) -> Result<Image, IoError> {
+    let src = FlatSource::preview(doc, warnings)?;
+    let (w, h) = (doc.size.width, doc.size.height);
+    let pixels = (w as usize).checked_mul(h as usize).ok_or_else(|| IoError::Unsupported("image too large".into()))?;
+    let mut data = try_buffer(pixels, ChannelLayout::Rgba.channels())?;
+    src.bands(true, renderer, |_, band, _| {
+        data.extend_from_slice(&band);
+        Ok(())
+    })?;
+    Ok(Image::from_raw(w, h, ChannelLayout::Rgba, CSample::U8, data)?)
+}
+
+/// A full-size preview as an 8-bit RGBA PNG: what [`photocraft_compose::thumbnail`] returns at
+/// the document's own size, rendered through `renderer` when one is supplied. Keeping previews
+/// at 8-bit RGBA stops a 16-bit document's preview from outgrowing the preview size limit; saved
+/// exports still keep the document's native depth. Like the CPU preview, it carries no export
+/// metadata (EXIF, XMP or resolution).
+pub fn export_preview_png_with_renderer(doc: &Document, renderer: Option<&mut dyn BandRenderer>) -> Result<ExportResult, IoError> {
+    if let Some(mut r) = renderer {
+        let mut warnings = Vec::new();
+        match document_to_preview_with_renderer(doc, &mut warnings, Some(&mut *r)) {
+            Ok(img) => {
+                // Leave queued diagnostics in the renderer when encoding fails, as a flat
+                // export does, so the caller can still report the fallback reason.
+                let mut res = encode_image(&img, Format::Png, &ExportOptions::default(), warnings)?;
+                res.warnings.extend(r.drain_diagnostics());
+                return Ok(res);
+            }
+            Err(IoError::Render(render_err)) if render_err.is_retryable() => {
+                let fallback_warning = format!("GPU rendering unavailable ({render_err}); falling back to CPU");
+                r.push_diagnostic(fallback_warning.clone());
+                let mut cpu_result = export_preview_png_with_renderer(doc, None)?;
+                cpu_result.warnings.push(fallback_warning);
+                return Ok(cpu_result);
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    let mut warnings = Vec::new();
+    let img = document_to_preview_with_renderer(doc, &mut warnings, None)?;
+    encode_image(&img, Format::Png, &ExportOptions::default(), warnings)
+}
+
 /// How a document becomes flat codec pixels, a band of rows at a time: [`document_to_image`]
 /// gathers the bands into one image, a streamed PNG export ([`export_png_streamed`]) encodes each
 /// band as it is rendered.
@@ -626,6 +670,20 @@ impl<'a> FlatSource<'a> {
         }
         let mode = if fmt.mode == ColorMode::Grayscale { ColorMode::Grayscale } else { ColorMode::Rgb };
         Ok(Self { doc, native: None, mode, sample, inks: false, space: None, icc, rows: 0 })
+    }
+
+    /// The full-size preview source: the composite as 8-bit RGBA whatever the document's model
+    /// and depth, matching [`photocraft_compose::thumbnail`] at the document's own size. Nothing
+    /// is written to `warnings`: previews do not report flattening or colour conversion, which
+    /// describe exports, not the image on screen.
+    fn preview(doc: &'a Document, _warnings: &mut Vec<String>) -> Result<Self, IoError> {
+        let mut ignored = Vec::new();
+        let mut src = Self::new(doc, &mut ignored, false, false)?;
+        src.native = None;
+        src.sample = CSample::U8;
+        src.mode = ColorMode::Rgb;
+        src.rows = 0;
+        Ok(src)
     }
 
     fn layout(&self, alpha: bool) -> ChannelLayout {
@@ -848,7 +906,18 @@ pub fn export_flat_with_renderer(
     ctl: &photocraft_raster::Interrupt,
     renderer: Option<&mut dyn BandRenderer>,
 ) -> Result<ExportResult, IoError> {
-    if let Some(r) = export_mode_specific(doc, format, opts)? {
+    if let Some(mut r) = export_mode_specific(doc, format, opts)? {
+        // Palette PNG/BMP and Duotone exports render on their own paths before the renderer
+        // branch: say so, or `--gpu` would silently do nothing for them.
+        if let Some(renderer) = &mut renderer {
+            let why = match doc.mode {
+                ColorMode::Indexed => "palette (Indexed Color) PNG/BMP export uses the CPU compositor",
+                ColorMode::Duotone => "Duotone export uses the CPU compositor",
+                _ => "this export uses the CPU compositor",
+            };
+            renderer.push_diagnostic(format!("GPU rendering unsupported: {why}; falling back to CPU"));
+            r.warnings.extend(renderer.drain_diagnostics());
+        }
         return Ok(r);
     }
     if format == Format::Png && streams_png(doc) {
@@ -874,8 +943,11 @@ pub fn export_flat_with_renderer(
                 if format == Format::Tiff {
                     warnings.extend(crate::tiff_layers::stamp_flat_channels(doc, &mut img));
                 }
-                warnings.extend(r.drain_diagnostics());
-                return encode_image(&img, format, opts, warnings);
+                // Drain only once encoding succeeded: if it fails, the queued diagnostics stay
+                // with the renderer for the caller to report alongside the error.
+                let mut res = encode_image(&img, format, opts, warnings)?;
+                res.warnings.extend(r.drain_diagnostics());
+                return Ok(res);
             }
             Err(IoError::Render(render_err)) if render_err.is_retryable() => {
                 let fallback_warning = format!("GPU rendering unavailable ({render_err}); falling back to CPU");

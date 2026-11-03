@@ -1,6 +1,6 @@
 //! Renderer contract and band provider interface for headless composition and export.
 
-use photocraft_doc::Document;
+use photocraft_doc::{DocId, Document};
 use photocraft_geom::Rect;
 
 use crate::IoError;
@@ -84,6 +84,10 @@ pub trait BandRenderer: Send {
 
     /// Record a diagnostic message on this renderer.
     fn push_diagnostic(&mut self, _diagnostic: String) {}
+
+    /// Drop cached state for a document that was closed or replaced. The default does nothing:
+    /// renderers without per-document caches stay ready for the next document.
+    fn forget_document(&mut self, _doc: DocId) {}
 }
 
 /// Default reference band renderer using `photocraft-compose`.

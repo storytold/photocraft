@@ -245,6 +245,30 @@ impl DeviceHealth {
             self.lost_by_poll();
         }
     }
+
+    /// Like [`Self::wait`], but bounded: returns whether the submitted work finished within
+    /// `timeout`. `false` also when the poll itself failed, the device faulted, or the device
+    /// stopped responding without reporting a loss, so a caller never blocks forever on a
+    /// wedged GPU (headless export has no user to cancel it).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn wait_timeout(&self, device: &wgpu::Device, index: Option<wgpu::SubmissionIndex>, timeout: std::time::Duration) -> bool {
+        if !self.is_ok() {
+            return false;
+        }
+        let poll =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| device.poll(wgpu::PollType::Wait { submission_index: index, timeout: Some(timeout) })));
+        match poll {
+            Ok(Ok(_)) => self.is_ok(),
+            Ok(Err(e)) => {
+                log::warn!("wgpu poll: {e}");
+                false
+            }
+            Err(_) => {
+                self.lost_by_poll();
+                false
+            }
+        }
+    }
 }
 
 /// The fault a wgpu error stands for. Errors about invalid or lost objects follow a device loss
