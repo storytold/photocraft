@@ -15,6 +15,8 @@ const SHADER: &str = include_str!("mask_stack_gpu.wgsl");
 const MAX_MASK_FILL_MAP_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_MASK_GPU_WORKING_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_MASK_CPU_SYNC_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_MASK_BRUSH_READBACK_OUTPUT_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_MASK_BRUSH_READBACK_STAGING_BYTES: u64 = 128 * 1024 * 1024;
 
 /// Reusable pipelines for rendering editable mask stacks to a caller-owned GPU target.
 pub struct MaskStackRenderer {
@@ -407,14 +409,15 @@ impl MaskStackRenderer {
         if preview.stroke_dirty.is_empty() {
             return Ok(Vec::new());
         }
+        validate_mask_brush_readback(&preview.stroke_dirty, preview.size, device.limits().max_buffer_size)?;
         let texture = &preview.output;
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("pc_mask_brush_release_readback") });
         let mut buffers = Vec::with_capacity(preview.stroke_dirty.len());
         for rect in &preview.stroke_dirty {
-            let row = (rect.width() * 8).div_ceil(256) * 256;
+            let (row, staging_bytes, _) = mask_brush_readback_layout(*rect, preview.size, device.limits().max_buffer_size)?;
             let buffer = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("pc_mask_brush_release_patch"),
-                size: u64::from(row) * u64::from(rect.height()),
+                size: staging_bytes,
                 usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
                 mapped_at_creation: false,
             });
@@ -1033,6 +1036,47 @@ fn validate_render_inputs(device: &wgpu::Device, request: &CachedRender<'_>) -> 
 
 fn should_skip_render(force_render: bool, config_changed: bool, base_changed: bool, shell_changed: bool, no_changed_regions: bool) -> bool {
     !force_render && !config_changed && !base_changed && !shell_changed && no_changed_regions
+}
+
+fn mask_brush_readback_layout(rect: Rect, size: [u32; 2], max_buffer_size: u64) -> Result<(u32, u64, u64), String> {
+    if rect.x0 < 0
+        || rect.y0 < 0
+        || rect.x1 <= rect.x0
+        || rect.y1 <= rect.y0
+        || i64::from(rect.x1) > i64::from(size[0])
+        || i64::from(rect.y1) > i64::from(size[1])
+    {
+        return Err("GPU mask brush readback region is invalid".into());
+    }
+    let width = u64::from(rect.width());
+    let height = u64::from(rect.height());
+    let output_bytes =
+        width.checked_mul(height).and_then(|pixels| pixels.checked_mul(4)).ok_or_else(|| "GPU mask brush readback output size overflow".to_owned())?;
+    let unpadded_row = width.checked_mul(8).ok_or_else(|| "GPU mask brush readback row size overflow".to_owned())?;
+    let padded_row = unpadded_row.checked_add(255).map(|row| row / 256 * 256).ok_or_else(|| "GPU mask brush readback row size overflow".to_owned())?;
+    let staging_bytes = padded_row.checked_mul(height).ok_or_else(|| "GPU mask brush staging size overflow".to_owned())?;
+    let row = u32::try_from(padded_row).map_err(|_| "GPU mask brush readback row exceeds the copy layout limit".to_owned())?;
+    if staging_bytes > max_buffer_size {
+        return Err("GPU mask brush staging buffer exceeds the device limit".into());
+    }
+    Ok((row, staging_bytes, output_bytes))
+}
+
+fn validate_mask_brush_readback(rects: &[Rect], size: [u32; 2], max_buffer_size: u64) -> Result<(), String> {
+    let mut output_bytes = 0u64;
+    let mut staging_bytes = 0u64;
+    for rect in rects {
+        let (_, staging, output) = mask_brush_readback_layout(*rect, size, max_buffer_size)?;
+        output_bytes = output_bytes.checked_add(output).ok_or_else(|| "GPU mask brush readback output size overflow".to_owned())?;
+        staging_bytes = staging_bytes.checked_add(staging).ok_or_else(|| "GPU mask brush staging size overflow".to_owned())?;
+    }
+    if output_bytes > MAX_MASK_BRUSH_READBACK_OUTPUT_BYTES {
+        return Err("GPU mask brush readback output exceeds the 64 MiB limit".into());
+    }
+    if staging_bytes > MAX_MASK_BRUSH_READBACK_STAGING_BYTES {
+        return Err("GPU mask brush staging exceeds the 128 MiB limit".into());
+    }
+    Ok(())
 }
 
 fn validate_stack_allocation_budget(stack: &Stack, size: [u32; 2]) -> Result<(), String> {
@@ -1884,5 +1928,39 @@ mod mask_stack_gpu_tests {
         let touching = expanded_regions(&regions, 257, 0, bounds);
         assert_eq!(touching.len(), 1);
         assert_eq!(touching[0], bounds);
+    }
+
+    #[test]
+    fn brush_readback_accepts_exact_output_and_padded_staging_limits() {
+        let max_buffer_size = MAX_MASK_BRUSH_READBACK_STAGING_BYTES;
+        let rect = Rect::new(0, 0, 4096, 4096);
+        let (row, staging, output) = mask_brush_readback_layout(rect, [4096, 4096], max_buffer_size).unwrap();
+        assert_eq!(row, 32_768);
+        assert_eq!(staging, MAX_MASK_BRUSH_READBACK_STAGING_BYTES);
+        assert_eq!(output, MAX_MASK_BRUSH_READBACK_OUTPUT_BYTES);
+        assert!(validate_mask_brush_readback(&[rect], [4096, 4096], max_buffer_size).is_ok());
+        let left = Rect::new(0, 0, 2048, 4096);
+        let right = Rect::new(2048, 0, 4096, 4096);
+        assert!(validate_mask_brush_readback(&[left, right], [4096, 4096], max_buffer_size).is_ok());
+        assert!(validate_mask_brush_readback(&[left, right, left], [4096, 4096], max_buffer_size).is_err());
+    }
+
+    #[test]
+    fn brush_readback_accounts_for_skinny_rect_row_padding_and_device_limit() {
+        let rect = Rect::new(0, 0, 1, 4096);
+        let (_, staging, output) = mask_brush_readback_layout(rect, [1, 4096], 1 << 20).unwrap();
+        assert_eq!(output, 16_384);
+        assert_eq!(staging, 1 << 20);
+        assert!(validate_mask_brush_readback(&[rect], [1, 4096], (1 << 20) - 1).is_err());
+    }
+
+    #[test]
+    fn brush_readback_rejects_over_budget_invalid_and_overflowing_layouts() {
+        let over_budget = Rect::new(0, 0, 4097, 4096);
+        assert!(validate_mask_brush_readback(&[over_budget], [4097, 4096], u64::MAX).is_err());
+        assert!(validate_mask_brush_readback(&[Rect::new(-1, 0, 1, 1)], [8, 8], u64::MAX).is_err());
+        assert!(validate_mask_brush_readback(&[Rect::new(7, 0, 9, 1)], [8, 8], u64::MAX).is_err());
+        let extreme = Rect::new(0, 0, i32::MAX, i32::MAX);
+        assert!(mask_brush_readback_layout(extreme, [i32::MAX as u32, i32::MAX as u32], u64::MAX).is_err_and(|error| error.contains("overflow")));
     }
 }

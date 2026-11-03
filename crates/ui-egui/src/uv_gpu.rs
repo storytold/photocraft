@@ -22,7 +22,7 @@ const DEPTH: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 const STRIDE: u64 = 72;
 type Key = (u64, u64, u64, u64);
 fn gray_mask_map_key(generation: u64, size: [u32; 2]) -> Key {
-    (generation, u64::from(size[0]), u64::from(size[1]), 0x4752_4159_4d41_50)
+    (generation, u64::from(size[0]), u64::from(size[1]), 0x0047_5241_594d_4150)
 }
 fn gray_mask_source_identity(key: Key, owner: u64, shell: u64, configuration_key: u64) -> (Key, u64, u64, u64) {
     (key, owner, shell, configuration_key)
@@ -403,6 +403,14 @@ impl Renderer {
             }
             return;
         };
+        if source.brush_preview.is_none() && self.gray_mask_brush_identity.take().is_some() {
+            // Cancel before the ordinary stack render below so its stable-owner cache rebuilds
+            // the canonical output immediately instead of briefly retaining transient dabs.
+            self.fail_gray_mask_brush_if_pending("Gray mask brush preview disappeared");
+            self.mask_stack_renderer.cancel_mask_brush_preview();
+            self.gray_mask_brush_readback_done = None;
+            self.gray_mask_source_key = None;
+        }
         let size = [source.document.size.width, source.document.size.height];
         let scope_changed = self.gray_mask_materials != source.materials;
         self.gray_mask_materials = source.materials.clone();
@@ -582,7 +590,7 @@ impl Renderer {
             if let Err(error) = self.mask_stack_renderer.begin_round_mask_brush_preview(
                 &self.rs.device,
                 &self.rs.queue,
-                photocraft_gpu::MaskBrushPreviewRequest { owner_key: input.stroke_key, size, stack, base_paint: base, settings: *settings },
+                photocraft_gpu::MaskBrushPreviewRequest { owner_key: source.owner_key, size, stack, base_paint: base, settings: *settings },
             ) {
                 log::warn!("Could not start GPU Gray mask brush preview; using CPU stroke path: {error}");
                 Self::fail_gray_mask_brush_input(input, error);
@@ -806,9 +814,9 @@ impl Renderer {
                                 // destination or leave the previous revision active.
                                 let fallback_doc = crate::gpu_canvas::materialize_paint_masks(&request.doc);
                                 let rendered = photocraft_compose::render(&fallback_doc, fallback_doc.bounds());
+                                let pixels = rendered.into_px();
                                 let rgba = if request.linear_srgb {
-                                    rendered
-                                        .px
+                                    pixels
                                         .into_iter()
                                         .map(|mut p| {
                                             for c in &mut p[..3] {
@@ -818,7 +826,7 @@ impl Renderer {
                                         })
                                         .collect()
                                 } else {
-                                    rendered.px
+                                    pixels
                                 };
                                 let image = Image { width: request.doc.size.width as usize, height: request.doc.size.height as usize, rgba };
                                 let empty = self.map_single(None, Key::default(), true, None, None)?;
@@ -2216,13 +2224,13 @@ mod tests {
         let layer_id = masked_layer.id;
         masked_layer.mask = Some(mask);
         document.layers.push(masked_layer);
-        let document = Arc::new(document);
+        let mut document = Arc::new(document);
 
         let pending_dabs = Arc::new(Mutex::new(VecDeque::from([photocraft_gpu::MaskRoundDab { center: [16.0, 16.0], radius: 5.0, alpha: 1.0, opacity: 1.0 }])));
         let failed = Arc::new(AtomicBool::new(false));
         let patches = Arc::new(Mutex::new(None));
         let release_requested = Arc::new(AtomicBool::new(false));
-        let source = |key, begin, document: Arc<photocraft_doc::Document>| GrayMaskGpuSource {
+        let source = |key, stroke_key, begin, active: bool, document: Arc<photocraft_doc::Document>| GrayMaskGpuSource {
             document,
             layer: layer_id,
             shell_ids: Arc::new(vec![1; (size[0] * size[1]) as usize]),
@@ -2230,35 +2238,44 @@ mod tests {
             shell_key: 200,
             materials: BTreeSet::new(),
             key: (1, key, 0, 0),
-            brush_preview: Some(GrayMaskGpuBrushInput {
-                stroke_key: 300,
-                begin,
-                pending_dabs: Arc::clone(&pending_dabs),
-                release_requested: Arc::clone(&release_requested),
-                failed: Arc::clone(&failed),
-                patches: Arc::clone(&patches),
-            }),
+            brush_preview: if active {
+                Some(GrayMaskGpuBrushInput {
+                    stroke_key,
+                    begin,
+                    pending_dabs: Arc::clone(&pending_dabs),
+                    release_requested: Arc::clone(&release_requested),
+                    failed: Arc::clone(&failed),
+                    patches: Arc::clone(&patches),
+                })
+            } else {
+                None
+            },
         };
         let settings = photocraft_gpu::MaskBrushSettings { hardness: 0.8, stroke_opacity: 1.0, color: [1.0; 4] };
         renderer.set_gray_mask_source(Some(&source(
             1,
+            300,
             Some((photocraft_raster::Surface::with_default(photocraft_color::PixelFormat::RGBA8, &[0.0; 4]), settings)),
+            true,
             Arc::clone(&document),
         )));
         assert!(!failed.load(Ordering::Acquire));
         let stable_map = Arc::clone(renderer.gray_mask_map.as_ref().unwrap());
 
         pending_dabs.lock().unwrap().push_back(photocraft_gpu::MaskRoundDab { center: [19.0, 16.0], radius: 4.0, alpha: 0.7, opacity: 0.8 });
-        renderer.set_gray_mask_source(Some(&source(2, None, Arc::clone(&document))));
+        renderer.set_gray_mask_source(Some(&source(2, 300, None, true, Arc::clone(&document))));
         assert!(!failed.load(Ordering::Acquire));
         assert!(Arc::ptr_eq(&stable_map, renderer.gray_mask_map.as_ref().unwrap()), "live dabs should update the stable material texture");
         assert!(pending_dabs.lock().unwrap().is_empty(), "only successfully submitted Dabs are drained");
         let preview_pixels = read_rgba16f(&renderer, &stable_map.texture, 0);
 
-        let final_patches = renderer.read_gray_mask_brush_patches().unwrap();
+        release_requested.store(true, Ordering::Release);
+        renderer.set_gray_mask_source(Some(&source(3, 300, None, true, Arc::clone(&document))));
+        assert_eq!(renderer.gray_mask_brush_readback_done, Some(300), "release readback belongs to the active stroke");
+        let final_patches = patches.lock().unwrap().take().unwrap().unwrap();
         assert!(!final_patches.is_empty());
         let mut expected_stack = document.layer(layer_id).unwrap().mask.as_ref().unwrap().paint.as_ref().unwrap().clone();
-        for patch in final_patches {
+        for patch in &final_patches {
             let pixels: Vec<f32> = patch.pixels_rgba8.iter().map(|byte| f32::from(*byte) / 255.0).collect();
             expected_stack.layers[0].surface.write_region(patch.rect, &pixels);
         }
@@ -2281,6 +2298,44 @@ mod tests {
                     "pixel {index}, channel {channel}: preview={} full={}",
                     preview[channel],
                     full[channel]
+                );
+            }
+        }
+
+        for patch in &final_patches {
+            let pixels: Vec<f32> = patch.pixels_rgba8.iter().map(|byte| f32::from(*byte) / 255.0).collect();
+            Arc::make_mut(&mut document).layer_mut(layer_id).unwrap().mask.as_mut().unwrap().paint.as_mut().unwrap().layers[0]
+                .surface
+                .write_region(patch.rect, &pixels);
+        }
+        renderer.set_gray_mask_source(Some(&source(4, 300, None, false, Arc::clone(&document))));
+        let committed_pixels = read_rgba16f(&renderer, &stable_map.texture, 0);
+        for (index, (actual, expected)) in committed_pixels.iter().zip(&full_pixels).enumerate() {
+            for channel in 0..4 {
+                assert!(
+                    (actual[channel] - expected[channel]).abs() < 0.002,
+                    "cancel/commit restoration pixel {index}, channel {channel}: {actual:?} vs {expected:?}"
+                );
+            }
+        }
+
+        pending_dabs.lock().unwrap().push_back(photocraft_gpu::MaskRoundDab { center: [8.0, 16.0], radius: 3.0, alpha: 1.0, opacity: 1.0 });
+        *patches.lock().unwrap() = None;
+        release_requested.store(false, Ordering::Release);
+        renderer.set_gray_mask_source(Some(&source(5, 301, Some((expected_stack.layers[0].surface.clone(), settings)), true, Arc::clone(&document))));
+        assert_eq!(renderer.gray_mask_brush_readback_done, None, "a prior stroke readback cannot satisfy a new stroke");
+        assert!(!failed.load(Ordering::Acquire));
+        assert!(Arc::ptr_eq(&stable_map, renderer.gray_mask_map.as_ref().unwrap()), "consecutive strokes reuse the owner cache target");
+        let second_preview = read_rgba16f(&renderer, &stable_map.texture, 0);
+        assert!(second_preview.iter().zip(&full_pixels).any(|(actual, expected)| (actual[0] - expected[0]).abs() > 0.002));
+
+        renderer.set_gray_mask_source(Some(&source(6, 301, None, false, Arc::clone(&document))));
+        let cancelled_pixels = read_rgba16f(&renderer, &stable_map.texture, 0);
+        for (index, (actual, expected)) in cancelled_pixels.iter().zip(&full_pixels).enumerate() {
+            for channel in 0..4 {
+                assert!(
+                    (actual[channel] - expected[channel]).abs() < 0.002,
+                    "cancel restores canonical output at pixel {index}, channel {channel}: {actual:?} vs {expected:?}"
                 );
             }
         }

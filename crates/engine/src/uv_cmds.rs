@@ -19,29 +19,31 @@ use std::{
 
 type PaddingCacheKey = (usize, u32, u32, i32, i32, usize, u64);
 
-// Aggregate worst-case decoded and retained surfaces (five 32-bit channels, two copies).
-const UV_TEXTURE_IMPORT_BUDGET_BYTES: u64 = 3 << 30;
+// Peak work plus already-resident documents (five 32-bit channels and two pixel copies).
+const UV_TEXTURE_PEAK_BUDGET_BYTES: u64 = 3 << 30;
+// Bound cumulative decoder work independently of resident documents.
+const UV_TEXTURE_DECODE_WORK_BUDGET_BYTES: u64 = 3 << 30;
+const UV_TEXTURE_RESIDENT_BUDGET_BYTES: u64 = 3 << 30;
 const UV_TEXTURE_MAX_SOURCE_BYTES: u64 = photocraft_uv::MAX_FILE_BYTES;
 // Unique compressed inputs are capped in total, and the remaining aggregate cap is checked
 // against each file's metadata before its body is allocated.
 const UV_TEXTURE_TOTAL_SOURCE_BYTES: u64 = 1 << 30;
+// same-file identity keys retain one open file handle each until model import completes.
+const UV_TEXTURE_MAX_IDENTITY_HANDLES: usize = 256;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 enum UvTextureKey {
-    Path(String),
+    File(Arc<same_file::Handle>),
+    FailedPath(String),
     Embedded(usize),
 }
 
 type UvTextureResult = std::result::Result<usize, String>;
 type UvTextureCache = std::collections::HashMap<UvTextureKey, UvTextureResult>;
-type ImportedUvTexture = (Document, bool, Vec<String>);
+type ImportedUvTexture = (Document, bool, Vec<String>, u64);
 
-fn uv_texture_key(path: Option<&str>, embedded: Option<&Arc<[u8]>>) -> Option<UvTextureKey> {
-    if let Some(bytes) = embedded {
-        Some(UvTextureKey::Embedded(Arc::as_ptr(bytes) as *const u8 as usize))
-    } else {
-        path.map(|path| UvTextureKey::Path(path.to_owned()))
-    }
+fn uv_texture_key(embedded: Option<&Arc<[u8]>>) -> Option<UvTextureKey> {
+    embedded.map(|bytes| UvTextureKey::Embedded(Arc::as_ptr(bytes) as *const u8 as usize))
 }
 
 fn cached_uv_texture<F>(cache: &mut UvTextureCache, key: UvTextureKey, decode: F) -> UvTextureResult
@@ -54,6 +56,28 @@ where
     let result = decode();
     cache.insert(key, result.clone());
     result
+}
+
+fn reserve_uv_texture_identity(cache: &mut UvTextureCache, budget: &mut UvTextureBudget, key: &UvTextureKey, path: &str) -> Option<UvTextureResult> {
+    if matches!(key, UvTextureKey::File(_) | UvTextureKey::FailedPath(_)) {
+        if let Some(result) = cache.get(&UvTextureKey::FailedPath(path.to_owned())) {
+            return Some(result.clone());
+        }
+    }
+    if cache.contains_key(key) || !matches!(key, UvTextureKey::File(_)) {
+        return None;
+    }
+    if budget.identity_handles >= UV_TEXTURE_MAX_IDENTITY_HANDLES {
+        let failure = UvTextureKey::FailedPath(path.to_owned());
+        return Some(
+            cache
+                .entry(failure)
+                .or_insert_with(|| Err(format!("model references exceed the {UV_TEXTURE_MAX_IDENTITY_HANDLES}-file identity-cache limit")))
+                .clone(),
+        );
+    }
+    budget.identity_handles += 1;
+    None
 }
 
 fn uv_texture_preflight(bytes: &[u8], remaining: u64) -> std::result::Result<u64, String> {
@@ -90,36 +114,55 @@ fn uv_texture_preflight(bytes: &[u8], remaining: u64) -> std::result::Result<u64
 
 #[derive(Default)]
 struct UvTextureBudget {
-    reserved_bytes: u64,
-    source_bytes: u64,
+    resident_bytes: u64,
+    encoded_work_bytes: u64,
+    decode_work_bytes: u64,
+    identity_handles: usize,
 }
 
-fn import_uv_texture(name: &str, bytes: &[u8], budget: &mut UvTextureBudget) -> std::result::Result<ImportedUvTexture, String> {
-    let byte_len = u64::try_from(bytes.len()).map_err(|_| "texture file size is not representable".to_owned())?;
-    let total_sources = budget.source_bytes.checked_add(byte_len).ok_or_else(|| "automatic texture input budget overflowed".to_owned())?;
-    if total_sources > UV_TEXTURE_TOTAL_SOURCE_BYTES {
-        budget.source_bytes = UV_TEXTURE_TOTAL_SOURCE_BYTES;
+fn charge_texture_source_work(budget: &mut UvTextureBudget, byte_len: u64) -> std::result::Result<(), String> {
+    if byte_len > UV_TEXTURE_MAX_SOURCE_BYTES {
+        return Err(format!("texture file exceeds the {} MiB automatic import limit", UV_TEXTURE_MAX_SOURCE_BYTES >> 20));
+    }
+    let total = budget.encoded_work_bytes.checked_add(byte_len).ok_or_else(|| "automatic texture input budget overflowed".to_owned())?;
+    if total > UV_TEXTURE_TOTAL_SOURCE_BYTES {
         return Err("model textures exceed the 1 GiB total automatic input budget".to_owned());
     }
-    budget.source_bytes = total_sources;
-    let remaining = UV_TEXTURE_IMPORT_BUDGET_BYTES.checked_sub(budget.reserved_bytes).ok_or_else(|| "automatic texture memory budget overflowed".to_owned())?;
-    let reserve = uv_texture_preflight(bytes, remaining)?;
-    budget.reserved_bytes = budget.reserved_bytes.checked_add(reserve).ok_or_else(|| "automatic texture memory budget overflowed".to_owned())?;
+    budget.encoded_work_bytes = total;
+    Ok(())
+}
+
+fn reserve_texture_decode_work(budget: &mut UvTextureBudget, reserve: u64) -> std::result::Result<(), String> {
+    let total = budget.decode_work_bytes.checked_add(reserve).ok_or_else(|| "automatic texture decode-work budget overflowed".to_owned())?;
+    if total > UV_TEXTURE_DECODE_WORK_BUDGET_BYTES {
+        return Err("model textures exceed the 3 GiB total automatic decode-work budget".to_owned());
+    }
+    budget.decode_work_bytes = total;
+    Ok(())
+}
+
+fn import_uv_texture(name: &str, bytes: &[u8], budget: &mut UvTextureBudget, source_work_charged: bool) -> std::result::Result<ImportedUvTexture, String> {
+    let byte_len = u64::try_from(bytes.len()).map_err(|_| "texture file size is not representable".to_owned())?;
+    if !source_work_charged {
+        charge_texture_source_work(budget, byte_len)?;
+    }
+    let peak_remaining =
+        UV_TEXTURE_PEAK_BUDGET_BYTES.checked_sub(budget.resident_bytes).ok_or_else(|| "automatic texture peak budget overflowed".to_owned())?;
+    let reserve = uv_texture_preflight(bytes, peak_remaining)?;
+    // Charge before invoking the decoder; failed/corrupt sources still consume work budget.
+    reserve_texture_decode_work(budget, reserve)?;
     let options = photocraft_io::ImportOptions { psd_max_pixel_bytes: reserve / 2, ..Default::default() };
     let imported = photocraft_io::import_with_options(name, bytes, &options).map_err(|e| e.to_string())?;
     if imported.preview_only {
         return Err("texture is preview only; assign it explicitly".to_owned());
     }
     let actual_storage = uv_document_storage(&imported.document).ok_or_else(|| "texture document storage size overflowed".to_owned())?;
-    let actual_reserve = actual_storage.checked_mul(2).ok_or_else(|| "texture document storage estimate overflowed".to_owned())?;
-    if actual_reserve > reserve {
-        let additional = actual_reserve - reserve;
-        if additional > UV_TEXTURE_IMPORT_BUDGET_BYTES.saturating_sub(budget.reserved_bytes) {
-            return Err("texture document exceeds the remaining automatic import memory budget".to_owned());
-        }
-        budget.reserved_bytes = budget.reserved_bytes.checked_add(additional).ok_or_else(|| "automatic texture memory budget overflowed".to_owned())?;
+    let resident_total = budget.resident_bytes.checked_add(actual_storage).ok_or_else(|| "texture document storage estimate overflowed".to_owned())?;
+    if resident_total > UV_TEXTURE_RESIDENT_BUDGET_BYTES {
+        return Err("texture document exceeds the remaining automatic resident-document budget".to_owned());
     }
-    Ok((imported.document, imported.source_read_only, imported.warnings))
+    budget.resident_bytes = resident_total;
+    Ok((imported.document, imported.source_read_only, imported.warnings, actual_storage))
 }
 
 fn uv_surface_storage(surface: &Surface, seen: &mut std::collections::HashSet<usize>) -> Option<u64> {
@@ -490,6 +533,12 @@ fn read_opened_file(file: std::fs::File, limit: u64) -> Result<Vec<u8>> {
     }
     Ok(bytes)
 }
+#[cfg(not(target_arch = "wasm32"))]
+fn read_import_texture_source(file: std::fs::File, reserved_len: u64, budget: &mut UvTextureBudget) -> std::result::Result<Arc<[u8]>, String> {
+    let read_limit = UV_TEXTURE_TOTAL_SOURCE_BYTES.saturating_sub(budget.encoded_work_bytes).min(UV_TEXTURE_MAX_SOURCE_BYTES);
+    charge_texture_source_work(budget, reserved_len)?;
+    read_opened_file(file, reserved_len.min(read_limit)).map(Arc::<[u8]>::from).map_err(|error| error.to_string())
+}
 #[cfg(target_arch = "wasm32")]
 fn read(_path: &str) -> Result<Vec<u8>> {
     Err(err("UV file import is available in native builds only"))
@@ -605,22 +654,26 @@ impl ModelDirectory {
         String::new()
     }
     #[cfg(not(target_arch = "wasm32"))]
-    fn read(&self, path: &str) -> Result<Vec<u8>> {
-        self.read_with_limit(path, photocraft_uv::MAX_FILE_BYTES)
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    fn read_with_limit(&self, path: &str, limit: u64) -> Result<Vec<u8>> {
+    fn open_texture_file(&self, path: &str) -> Result<(std::fs::File, same_file::Handle, u64)> {
         let relative = Path::new(path).strip_prefix(&self.directory).map_err(|_| err("Texture must stay inside the model directory"))?;
         let file = self.open_relative(relative).map_err(|e| err(e.to_string()))?;
-        read_opened_file(file, limit.min(photocraft_uv::MAX_FILE_BYTES))
+        let len = file.metadata().map_err(|e| err(e.to_string()))?.len();
+        let identity = same_file::Handle::from_file(file.try_clone().map_err(|e| err(e.to_string()))?).map_err(|e| err(e.to_string()))?;
+        Ok((file, identity, len))
     }
     #[cfg(target_arch = "wasm32")]
     fn read(&self, path: &str) -> Result<Vec<u8>> {
         read(path)
     }
     #[cfg(target_arch = "wasm32")]
-    fn read_with_limit(&self, _path: &str, _limit: u64) -> Result<Vec<u8>> {
+    fn open_texture_file(&self, _path: &str) -> Result<(std::fs::File, same_file::Handle, u64)> {
         Err(err("UV file import is available in native builds only"))
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    fn read(&self, path: &str) -> Result<Vec<u8>> {
+        let relative = Path::new(path).strip_prefix(&self.directory).map_err(|_| err("Texture must stay inside the model directory"))?;
+        let file = self.open_relative(relative).map_err(|e| err(e.to_string()))?;
+        read_opened_file(file, photocraft_uv::MAX_FILE_BYTES)
     }
     #[cfg(not(target_arch = "wasm32"))]
     fn sibling_files(&self) -> std::io::Result<(Vec<PathBuf>, bool)> {
@@ -750,7 +803,7 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
     let uv_set = uint(p, "uvSet", 0)?;
     let (mut scene, source_stamp, directory) = load_scene(&source, uv_set)?;
     let topology = Topology::build(&scene).map_err(|e| err(e.to_string()))?;
-    let mut documents = Vec::<(Document, Option<String>, bool)>::new();
+    let mut documents = Vec::<(Document, Option<String>, bool, u64)>::new();
     let mut texture_cache = UvTextureCache::new();
     let mut texture_budget = UvTextureBudget::default();
     let mut slot_bindings = Vec::<(Channel, usize, usize)>::new();
@@ -767,33 +820,58 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
         for (channel, filename, embedded) in requested {
-            let Some(key) = uv_texture_key(filename, embedded) else { continue };
             let display_name = filename.unwrap_or("embedded.png");
             let path = filename.filter(|_| embedded.is_none());
-            let result = cached_uv_texture(&mut texture_cache, key, || {
-                if texture_budget.source_bytes >= UV_TEXTURE_TOTAL_SOURCE_BYTES {
-                    return Err("model textures exceed the 1 GiB total automatic input budget".to_owned());
+            let (key, file_info, open_error) = if let Some(key) = uv_texture_key(embedded) {
+                (key, None, None)
+            } else if let Some(filename) = filename {
+                match directory.open_texture_file(filename) {
+                    Ok((file, identity, len)) => (UvTextureKey::File(Arc::new(identity)), Some((file, len)), None),
+                    Err(error) => (UvTextureKey::FailedPath(filename.to_owned()), None, Some(error.to_string())),
                 }
-                if texture_budget.reserved_bytes >= UV_TEXTURE_IMPORT_BUDGET_BYTES {
-                    return Err("model textures exceed the 3 GiB total automatic import memory budget".to_owned());
-                }
-                let owned_bytes = if embedded.is_some() {
-                    None
-                } else {
-                    let remaining_source = UV_TEXTURE_TOTAL_SOURCE_BYTES.saturating_sub(texture_budget.source_bytes);
-                    match filename.and_then(|path| directory.read_with_limit(path, remaining_source).ok()) {
-                        Some(bytes) => Some(Arc::<[u8]>::from(bytes)),
-                        None => return Err("texture file is missing or unreadable; assign it explicitly".to_owned()),
+            } else {
+                continue;
+            };
+            let identity_limit_result = reserve_uv_texture_identity(&mut texture_cache, &mut texture_budget, &key, filename.unwrap_or("embedded"));
+            let result = if let Some(result) = identity_limit_result {
+                result
+            } else {
+                cached_uv_texture(&mut texture_cache, key, || {
+                    if let Some(error) = open_error {
+                        return Err(format!("texture file is missing or unreadable: {error}"));
                     }
-                };
-                let bytes = embedded.or(owned_bytes.as_ref());
-                let Some(bytes) = bytes else { return Err("texture bytes are unavailable; assign it explicitly".to_owned()) };
-                let (document, read_only, warnings) = import_uv_texture(display_name, bytes, &mut texture_budget)?;
-                scene.warnings.extend(warnings);
-                let document_index = documents.len();
-                documents.push((document, path.filter(|_| !read_only).map(str::to_owned), read_only));
-                Ok(document_index)
-            });
+                    let embedded_bytes = if let Some(bytes) = embedded {
+                        charge_texture_source_work(
+                            &mut texture_budget,
+                            u64::try_from(bytes.len()).map_err(|_| "texture file size is not representable".to_owned())?,
+                        )?;
+                        Some(Arc::clone(bytes))
+                    } else {
+                        None
+                    };
+                    if embedded_bytes.is_none() && texture_budget.encoded_work_bytes >= UV_TEXTURE_TOTAL_SOURCE_BYTES {
+                        return Err("model textures exceed the 1 GiB total automatic input budget".to_owned());
+                    }
+                    if texture_budget.resident_bytes >= UV_TEXTURE_PEAK_BUDGET_BYTES {
+                        return Err("model textures exceed the 3 GiB total automatic peak-memory budget".to_owned());
+                    }
+                    if texture_budget.decode_work_bytes >= UV_TEXTURE_DECODE_WORK_BUDGET_BYTES {
+                        return Err("model textures exceed the 3 GiB total automatic decode-work budget".to_owned());
+                    }
+                    let bytes = if let Some((file, len)) = file_info {
+                        read_import_texture_source(file, len, &mut texture_budget)?
+                    } else if let Some(bytes) = embedded_bytes {
+                        bytes
+                    } else {
+                        return Err("texture bytes are unavailable; assign it explicitly".to_owned());
+                    };
+                    let (document, read_only, warnings, storage) = import_uv_texture(display_name, &bytes, &mut texture_budget, true)?;
+                    scene.warnings.extend(warnings);
+                    let document_index = documents.len();
+                    documents.push((document, path.filter(|_| !read_only).map(str::to_owned), read_only, storage));
+                    Ok(document_index)
+                })
+            };
             match result {
                 Ok(document_index) => slot_bindings.push((channel, material_index, document_index)),
                 Err(reason) => {
@@ -802,13 +880,15 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
     }
+    // Release file-identity handles after preparation, before the first session mutation.
+    drop(texture_cache);
     let mut bindings = vec![None; scene.materials.len()];
     let mut normal_bindings = vec![None; scene.materials.len()];
     let mut project_export_guards = std::collections::HashMap::new();
     let mut valid_slots = Vec::with_capacity(slot_bindings.len());
     for slot in slot_bindings {
         let (channel, material_index, document_index) = slot;
-        if channel == Channel::Normal && documents.get(document_index).is_some_and(|(document, _, _)| document.mode != ColorMode::Rgb) {
+        if channel == Channel::Normal && documents.get(document_index).is_some_and(|(document, _, _, _)| document.mode != ColorMode::Rgb) {
             if let Some(material) = scene.materials.get(material_index) {
                 scene.warnings.push(format!("{}: normal map must be RGB; assign a replacement", material.name));
             }
@@ -817,8 +897,13 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     let used_documents: std::collections::HashSet<_> = valid_slots.iter().map(|(_, _, index)| *index).collect();
+    for (document_index, (_, _, _, storage)) in documents.iter().enumerate() {
+        if !used_documents.contains(&document_index) {
+            texture_budget.resident_bytes = texture_budget.resident_bytes.saturating_sub(*storage);
+        }
+    }
     let mut texture_ids = Vec::with_capacity(documents.len());
-    for (document_index, (document, path, read_only)) in documents.into_iter().enumerate() {
+    for (document_index, (document, path, read_only, _)) in documents.into_iter().enumerate() {
         if !used_documents.contains(&document_index) {
             texture_ids.push(None);
             continue;

@@ -600,7 +600,7 @@ fn refresh_with_lighting(app: &mut PhotocraftApp, ctx: &egui::Context, cache: &m
         let (w, h) = ((f64::from(doc.size.width) * scale).round().max(1.0) as u32, (f64::from(doc.size.height) * scale).round().max(1.0) as u32);
         let buffer = photocraft_compose::render_reduced(&doc, w, h);
         if let Some(dst) = cache.opacity.get_mut(material) {
-            *dst = Some(Image { width: w as usize, height: h as usize, rgba: buffer.px });
+            *dst = Some(Image { width: w as usize, height: h as usize, rgba: buffer.into_px() });
         }
         if let Some(dst) = cache.opacity_keys.get_mut(material) {
             *dst = key;
@@ -840,17 +840,18 @@ fn refresh_with_lighting(app: &mut PhotocraftApp, ctx: &egui::Context, cache: &m
             let buffer = photocraft_compose::render_reduced_damage(&doc, w, h, rect);
             cpu_compose_ms += crate::gpu_canvas::now_ms() - compose_started;
             let image = display.to_rgba8(&buffer);
+            let buffer_rect = buffer.rect;
             let mut rgba: Vec<[f32; 4]> = if matches!(map_kind, Channel::Color | Channel::Emissive) {
                 image.pixels.as_chunks::<4>().0.iter().map(|p| p.map(|v| f32::from(v) / 255.0)).collect()
             } else {
-                buffer.px
+                buffer.into_px()
             };
             if opacity_key.0 != 0
                 && let Some(opacity) = cache.opacity.get(material).and_then(Option::as_ref)
             {
                 for (i, pixel) in rgba.iter_mut().enumerate() {
-                    let x = buffer.rect.x0 as usize + i % buffer.rect.width() as usize;
-                    let y = buffer.rect.y0 as usize + i / buffer.rect.width() as usize;
+                    let x = buffer_rect.x0 as usize + i % buffer_rect.width() as usize;
+                    let y = buffer_rect.y0 as usize + i / buffer_rect.width() as usize;
                     let sample = preview::sample(opacity, [(x as f64 + 0.5) / f64::from(w), 1.0 - (y as f64 + 0.5) / f64::from(h)]);
                     pixel[3] *= sample[0].clamp(0.0, 1.0) * sample[3].clamp(0.0, 1.0);
                 }
@@ -858,14 +859,14 @@ fn refresh_with_lighting(app: &mut PhotocraftApp, ctx: &egui::Context, cache: &m
             if masked {
                 // Keep the unmasked material image so a live mask Fill can update its overlay
                 // independently of the document compositor.
-                patch_image(&mut cache.mask_base[material], [w, h], buffer.rect, rgba.clone())?;
+                patch_image(&mut cache.mask_base[material], [w, h], buffer_rect, rgba.clone())?;
                 let factor = doc.size.width.max(doc.size.height).div_ceil(w.max(h)).max(1);
                 crate::uv_mask::overlay(app, index, &doc, rect, [w, h], &mut rgba, factor);
             }
             if let Some(t) = cache.textures.get_mut(material) {
-                patch_image(t, [w, h], buffer.rect, rgba)?;
+                patch_image(t, [w, h], buffer_rect, rgba)?;
             }
-            hints.push(region(buffer.rect));
+            hints.push(region(buffer_rect));
         }
         if old.0 == key.0
             && let Some(gpu) = &mut cache.gpu
@@ -928,9 +929,10 @@ fn refresh_with_lighting(app: &mut PhotocraftApp, ctx: &egui::Context, cache: &m
             let compose_started = crate::gpu_canvas::now_ms();
             let buffer = photocraft_compose::render_reduced_damage(&doc, w, h, rect);
             cpu_compose_ms += crate::gpu_canvas::now_ms() - compose_started;
-            hints.push(region(buffer.rect));
+            let buffer_rect = buffer.rect;
+            hints.push(region(buffer_rect));
             if let Some(image) = cache.normals.get_mut(material) {
-                patch_image(image, [w, h], buffer.rect, buffer.px)?;
+                patch_image(image, [w, h], buffer_rect, buffer.into_px())?;
             }
         }
         if old.0 == key.0

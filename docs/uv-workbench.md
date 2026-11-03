@@ -27,10 +27,15 @@ tool restores texture editing. Shift adds, Alt subtracts in 2D; Ctrl subtracts i
 
 Static binary FBX 7.4+ and OBJ/MTL import preserves control-point identity, per-corner UV,
 authored split normals, materials, external/embedded base-color and normal textures.
-Automatic material-map loading shares one decoded document for repeated texture references and
-is bounded to 256 MiB per source file, 1 GiB of unique encoded inputs, and a conservative 3 GiB
-aggregate decoded/document-surface reservation. The memory estimate allows five 32-bit channels
-and two simultaneous pixel copies, including tile padding; it admits a single aligned 8K map.
+Automatic material-map loading shares one decoded document by opened-file identity and is bounded
+to 256 MiB per source file, 1 GiB of unique encoded inputs, a 3 GiB cumulative decode-work estimate,
+and 3 GiB of retained texture-document storage. Before each decode, the projected peak for existing
+documents plus the new texture is also capped at 3 GiB. Failed decodes consume encoded-input and
+decode-work budgets, but not the retained-document budget. The import cache retains at most 256
+external file identities using open file handles; additional unique files remain unbound with a
+warning, while aliases of already cached files keep reusing the shared document. These maps can
+still be assigned explicitly. The memory estimate allows five 32-bit channels and two simultaneous
+pixel copies, including tile padding; it admits a single aligned 8K map.
 Automatically referenced files must be recognized flat raster images with safely readable
 dimensions. Other formats remain unbound with a warning and can be assigned through the texture
 cards; explicit texture opening and assignment keep their existing behavior.

@@ -227,7 +227,7 @@ pub(crate) fn refresh_impl_with_budget(app: &mut PhotocraftApp, maps: &mut Surfa
                     transform.convert_f32(buffer.px.as_flattened(), 4, dst.as_flattened_mut(), 4, true);
                     dst
                 } else {
-                    buffer.px
+                    buffer.into_px()
                 };
                 if let Some(v) = maps.images[kind].get_mut(material) {
                     crate::uv_ui::patch_image(v, [doc.size.width, doc.size.height], rect, rgba)?;

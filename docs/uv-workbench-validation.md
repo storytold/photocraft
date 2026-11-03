@@ -167,3 +167,21 @@ The `uv-workbench` engine Clippy run still reports cognitive complexity in the e
 `cargo xtask test-corpus` did not pass. Its release `photocraft-io --lib` test executable aborted with Windows `STATUS_STACK_OVERFLOW` in `svg::tests::bounded_embedded_svg_gets_only_the_nesting_depth_the_drawing_left`. A direct release-binary isolation reproduced that failure. The no-HEIF integration binary also aborts in `svg::an_embedded_svg_gets_only_the_nesting_depth_the_drawing_left` on its explicit 1 MiB worker stack, even with `RUST_MIN_STACK=16777216` (the test sets its own stack size). The failing SVG source and test files are byte-identical to `fab871d`; the baseline binary was not rerun, so this is not recorded as a runtime baseline reproduction. The pinned `usvg` 0.45.1 converter recursively visits nested groups, which is consistent with the failure at the current 512-element XML-depth limit. No SVG source or assertion was changed for this follow-up.
 
 The fresh snapshot was rendered with `cargo run --offline -p photocraft-ui-egui --example snapshot --locked -- --out D:/PhotoCraft-UV-build/Temp/ci-canvas-smoke.png --size 1100x700 --scale 1 --script '[["engine.execute",{"command":"file.new","params":{"width":256,"height":256,"background":"white"}}],["ui.set",{"tool":"eyedropper"}]]'`. The image was inspected visually. Validation logs and the snapshot remain under `D:/PhotoCraft-UV-build/Temp/` and are not committed.
+
+## 2026-11-03 PR #8805 review follow-up on updated main
+
+The PR branch includes upstream main at `c6af3dcb98b17ceeb38dbf9fd200e6a684a088f1` through merge commit `0a454c9f`.
+
+| Check | Result |
+|---|---|
+| `cargo fmt --all -- --check` and `git diff --check` | Passed after the final local changes |
+| `cargo xtask layers` | Passed, 32 crates |
+| `cargo xtask wasm` | Passed, 25 crates plus `photocraft-codecs --features heif`; existing unused-code warnings remain |
+| `cargo clippy --workspace --all-targets --locked --features heif -- -D warnings` | Passed |
+| GPU readback boundary tests | 3 passed; real GPU brush readback integration passed; strict GPU Clippy passed |
+| `cargo test -p photocraft-engine --features uv-workbench --lib uv_cmds::import_budget_tests --locked -j6` | 16 passed, 0 failed, including source growth and embedded-cache regressions |
+| Focused UI brush-preview test | 1 passed, 0 failed, including the updated-main `Buffer::into_px` compatibility changes |
+
+The separate UV-feature strict Clippy checks remain blocked by existing diagnostics outside these review fixes: engine cognitive complexity at `crates/engine/src/uv_mask_paint_cmds.rs:357` (38/30), plus existing UV/UI lint findings. The workspace strict-Clippy command above passes for the default feature set with HEIF.
+
+This follow-up did not rerun `cargo xtask test-corpus`; the 2026-11-02 SVG stack-overflow result and its scope limitation remain as recorded above.
