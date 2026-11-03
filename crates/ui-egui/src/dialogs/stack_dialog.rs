@@ -115,6 +115,9 @@ fn folder(f: &Map<String, Value>) -> &str {
 /// How often (seconds) the chosen folder is listed again, for files added or removed meanwhile.
 const RELIST_SECS: f64 = 1.0;
 
+/// How long (seconds) the dialog waits for a listing before it says a folder isn't answering.
+const PATIENCE_SECS: f64 = 5.0;
+
 /// A folder's images, or why it can't be read.
 type FolderListing = Result<Vec<String>, String>;
 
@@ -126,14 +129,15 @@ fn list_folder(dir: &str) -> FolderListing {
 }
 
 /// The folder listing of one dialog kept between frames (as the Color Lookup panel's LUT folder
-/// scan): the folder and Browse… generation it is for, when the last listing started, and the
-/// listing in flight, if any.
+/// scan): the folder and Browse… generation it is for, when the last listing started (or came
+/// back), the listing in flight, if any, and since when the dialog has been waiting for one.
 #[derive(Clone, Default)]
 struct FolderScan {
     folder: String,
     generation: u64,
     started: Option<f64>,
     pending: Option<Pending>,
+    waiting: Option<f64>,
 }
 
 /// Most folder listings running at once, over all dialogs. A listing stalled on a dead share
@@ -149,7 +153,9 @@ enum Started {
     Running(Pending),
     /// `MAX_LISTINGS` are running: try again shortly.
     Busy,
-    /// No worker thread (the web, or the system refused one): list inline.
+    /// The system refused a worker thread: why.
+    Failed(String),
+    /// No worker threads (the web, which has no folders): list inline.
     NoThread,
 }
 
@@ -159,10 +165,11 @@ fn scan_key(id: u64) -> egui::Id {
 
 /// The images in the chosen folder of dialog `id`, kept in the fields (`__images`, or
 /// `__listError` when the folder can't be read) for the list and `can_confirm`. The folder is
-/// listed when it changes, after Browse…, and again `RELIST_SECS` after a listing started, but
-/// never while one is running: on a worker when `background` (the desktop app: a slow share must
-/// not stall the window; `__listing` is set meanwhile), inline otherwise (tests, and the web,
-/// which has no folders). No repaint is scheduled for it: an idle dialog doesn't poll a share.
+/// listed when it changes, after Browse…, and again `RELIST_SECS` after the last listing came
+/// back, but never while one is running: on a worker when `background` (the desktop app: a slow
+/// share must not stall the window; `__listing` is set meanwhile, and `__listSlow` once that has
+/// taken `PATIENCE_SECS`), inline otherwise (tests, and the web, which has no folders). No repaint
+/// is scheduled for relisting: an idle dialog doesn't poll a share.
 fn folder_images(ui: &egui::Ui, f: &mut Map<String, Value>, id: u64, background: bool, list: Lister) -> Vec<String> {
     let ctx = ui.ctx();
     let key = scan_key(id);
@@ -178,16 +185,30 @@ fn folder_images(ui: &egui::Ui, f: &mut Map<String, Value>, id: u64, background:
     } else if let Some(done) = scan.pending.as_ref().and_then(|p| p.lock().unwrap_or_else(PoisonError::into_inner).take()) {
         store(f, &dir, done);
         scan.pending = None;
+        scan.waiting = None;
+        // From when it came back, as inline: a listing slower than RELIST_SECS isn't repeated
+        // back to back.
+        scan.started = Some(now);
     }
     let mut busy = false;
     if !dir.is_empty() && scan.pending.is_none() && scan.started.is_none_or(|at| (now - at).abs() >= RELIST_SECS) {
         scan.started = Some(now);
         match if background { start(ctx, &dir, list) } else { Started::NoThread } {
-            Started::Running(pending) => scan.pending = Some(pending),
+            Started::Running(pending) => {
+                scan.pending = Some(pending);
+                scan.waiting.get_or_insert(now);
+            }
             Started::Busy => {
                 scan.started = None;
                 busy = true;
+                scan.waiting.get_or_insert(now);
                 ctx.request_repaint_after(std::time::Duration::from_millis(250));
+            }
+            // Not inline on the UI thread instead (a stalled share would freeze the window): say
+            // why, and try again in RELIST_SECS.
+            Started::Failed(e) => {
+                store(f, &dir, Err(e));
+                scan.waiting = None;
             }
             Started::NoThread => {
                 let took = web_time::Instant::now();
@@ -202,6 +223,16 @@ fn folder_images(ui: &egui::Ui, f: &mut Map<String, Value>, id: u64, background:
         f.insert("__listing".into(), json!(true));
     } else {
         f.remove("__listing");
+        scan.waiting = None;
+    }
+    let waited = scan.waiting.map_or(0.0, |since| (now - since).max(0.0));
+    if scan.waiting.is_some() && waited >= PATIENCE_SECS {
+        f.insert("__listSlow".into(), json!(true));
+    } else {
+        f.remove("__listSlow");
+        if scan.waiting.is_some() && !folder_listed(f) {
+            ctx.request_repaint_after(std::time::Duration::from_secs_f64(PATIENCE_SECS - waited));
+        }
     }
     ctx.data_mut(|m| m.insert_temp(key, scan));
     if folder_listed(f) { images(f) } else { Vec::new() }
@@ -237,15 +268,18 @@ fn start(ctx: &egui::Context, dir: &str, list: Lister) -> Started {
     }
     let running = RunningListing;
     let result: Pending = Arc::new(Mutex::new(None));
-    let (slot, ctx, dir) = (Arc::clone(&result), ctx.clone(), dir.to_string());
+    let (slot, ctx, owned) = (Arc::clone(&result), ctx.clone(), dir.to_string());
     let spawned = std::thread::Builder::new().name("photocraft-folder-listing".into()).spawn(move || {
         let _running = running;
-        let r = std::panic::catch_unwind(|| list(&dir)).unwrap_or_else(|_| Err(format!("{dir}: listing the folder failed")));
+        let r = std::panic::catch_unwind(|| list(&owned)).unwrap_or_else(|_| Err(format!("{owned}: listing the folder failed")));
         *slot.lock().unwrap_or_else(PoisonError::into_inner) = Some(r);
         ctx.request_repaint();
     });
     // A thread that didn't start dropped its `RunningListing` with the closure.
-    if spawned.is_ok() { Started::Running(result) } else { Started::NoThread }
+    match spawned {
+        Ok(_) => Started::Running(result),
+        Err(e) => Started::Failed(format!("{dir}: couldn't start reading the folder ({e})")),
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -421,6 +455,9 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                                 ui.add(egui::Spinner::new().size(12.0));
                                 ui.label(RichText::new(tl!("Reading…")).color(t.text_dim));
                             });
+                            if f.contains_key("__listSlow") {
+                                ui.label(RichText::new(tl!("A folder is not answering. Still waiting…")).color(t.warning));
+                            }
                         }
                     }
                     for (i, p) in shown.iter().enumerate() {

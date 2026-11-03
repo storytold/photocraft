@@ -444,6 +444,7 @@ fn photomerge_alt_reset_restores_the_options() {
     let (mut h, _) = harness(vec![]);
     let id = open_photomerge(h.state_mut());
     let fresh = dialog(&h).unwrap().1;
+    assert_eq!(fresh["layout"], json!("auto"), "the default layout");
     let d = h.state_mut().ui.dialog_mut(id).unwrap();
     d.fields.insert("files".into(), json!(["a.png", "b.png"]));
     d.fields.insert("layout".into(), json!("cylindrical"));
@@ -520,11 +521,24 @@ fn until_listed(ctx: &egui::Context, f: &mut Map<String, Value>, time: f64) -> V
     until_listed_of(ctx, 1, f, time)
 }
 
+/// `LISTINGS_RUNNING` once it is `n` (threads whose listing is back may still be ending), or
+/// after 5 s.
+fn running_settled_at(n: usize) -> usize {
+    for _ in 0..250 {
+        if LISTINGS_RUNNING.load(std::sync::atomic::Ordering::SeqCst) == n {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    LISTINGS_RUNNING.load(std::sync::atomic::Ordering::SeqCst)
+}
+
 /// In the app a folder is listed on a worker: a listing that hangs doesn't hold up frames, nor
 /// the folder Browse… picks next; back in Use: Folder, OK waits for a new listing; at most
-/// MAX_LISTINGS run at once; the folder is listed again RELIST_SECS after a listing started,
-/// never two at once, and the last listing stays shown meanwhile. (One test: the hung listings
-/// and the running count are shared.)
+/// MAX_LISTINGS run at once; a dialog waiting PATIENCE_SECS for its listing or for a place says
+/// a folder isn't answering; the folder is listed again RELIST_SECS after the last listing came
+/// back, never two at once, and the last listing stays shown meanwhile. (One test: the hung
+/// listings and the running count are shared.)
 #[test]
 fn a_slow_folder_is_listed_off_the_ui_thread() {
     use std::sync::atomic::Ordering::SeqCst;
@@ -553,13 +567,7 @@ fn a_slow_folder_is_listed_off_the_ui_thread() {
 
     // The hung listing and more on other dialogs fill MAX_LISTINGS; then another waits. (The
     // listing just back may still be ending its thread.)
-    for _ in 0..250 {
-        if LISTINGS_RUNNING.load(SeqCst) == 1 {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    }
-    assert_eq!(LISTINGS_RUNNING.load(SeqCst), 1, "the hung listing");
+    assert_eq!(running_settled_at(1), 1, "the hung listing");
     let mut others: Vec<Map<String, Value>> = (0..MAX_LISTINGS).map(|_| Map::from_iter([("folder".to_string(), json!("/hung"))])).collect();
     for (i, g) in others.iter_mut().enumerate() {
         listing_frame_of(&ctx, 10 + i as u64, g, 2.3);
@@ -570,24 +578,34 @@ fn a_slow_folder_is_listed_off_the_ui_thread() {
     listing_frame_of(&ctx, waiting_id, waiting, 2.4);
     assert!(waiting.contains_key("__listing") && !waiting.contains_key("__listed"), "{waiting:?}");
     assert_eq!(LISTINGS_RUNNING.load(SeqCst), MAX_LISTINGS, "no thread while MAX_LISTINGS run");
+
+    // PATIENCE_SECS on, the hung listing and the dialog waiting for a place say so.
+    let first = others.first_mut().unwrap();
+    listing_frame_of(&ctx, 10, first, 2.3 + PATIENCE_SECS - 0.1);
+    assert!(!first.contains_key("__listSlow"), "{first:?}");
+    listing_frame_of(&ctx, 10, first, 2.3 + PATIENCE_SECS);
+    assert!(first.contains_key("__listSlow"), "{first:?}");
+    let waiting = others.last_mut().unwrap();
+    listing_frame_of(&ctx, waiting_id, waiting, 2.3 + PATIENCE_SECS);
+    assert!(waiting.contains_key("__listSlow"), "{waiting:?}");
     HUNG_RELEASED.store(true, SeqCst);
-    assert_eq!(until_listed_of(&ctx, waiting_id, waiting, 2.5), ["/hung/a.png", "/hung/b.png"], "listed once a listing ended");
-    for _ in 0..250 {
-        if LISTINGS_RUNNING.load(SeqCst) == 0 {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    }
-    assert_eq!(LISTINGS_RUNNING.load(SeqCst), 0, "every listing gave its place back");
+    assert_eq!(until_listed_of(&ctx, waiting_id, waiting, 2.4 + PATIENCE_SECS), ["/hung/a.png", "/hung/b.png"], "listed once a listing ended");
+    assert!(!waiting.contains_key("__listSlow"), "{waiting:?}");
+    assert_eq!(running_settled_at(0), 0, "every listing gave its place back");
     let listings = LISTINGS.load(SeqCst);
 
-    // RELIST_SECS after that listing started (2.2 s): listed again, the last listing shown
-    // meanwhile; not before.
-    listing_frame(&ctx, &mut f, 3.1);
-    assert_eq!(LISTINGS.load(SeqCst), listings);
-    assert_eq!(listing_frame(&ctx, &mut f, 3.3), ["/share/a.png", "/share/b.png"], "kept while listing again");
-    until_listed(&ctx, &mut f, 3.4);
+    // A listing slower than RELIST_SECS (from 20 s, back at 21.5 s) is listed again RELIST_SECS
+    // after it came back, not at once; the last listing stays shown meanwhile.
+    listing_frame(&ctx, &mut f, 20.0);
+    assert!(f.contains_key("__listing"), "{f:?}");
+    assert_eq!(until_listed(&ctx, &mut f, 21.5), ["/share/a.png", "/share/b.png"]);
     assert_eq!(LISTINGS.load(SeqCst), listings + 1);
+    listing_frame(&ctx, &mut f, 22.4);
+    assert!(!f.contains_key("__listing"), "not listed again on the frame it came back");
+    assert_eq!(LISTINGS.load(SeqCst), listings + 1);
+    assert_eq!(listing_frame(&ctx, &mut f, 22.6), ["/share/a.png", "/share/b.png"], "kept while listing again");
+    until_listed(&ctx, &mut f, 22.7);
+    assert_eq!(LISTINGS.load(SeqCst), listings + 2);
 }
 
 /// Inline, a listing slower than RELIST_SECS waits RELIST_SECS from when it finished, so it
