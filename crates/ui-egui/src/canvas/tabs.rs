@@ -200,7 +200,7 @@ pub(super) fn tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
             let natural_w = natural.get(i).copied().unwrap_or(0.0);
             let meta_g = ui.painter().layout_no_wrap(meta, meta_font.clone(), t.text_faint);
             let name_max = (r.width() - STUDIO_TAB_PAD + STUDIO_TAB_GAP - meta_g.size().x).max(1.0);
-            let name_g = crate::tab_strip::elided(ui, &name, font.clone(), t.text, name_max);
+            let name_g = crate::tab_strip::elided(ui, &cut_name(ui, &name, &st.doc.name, &font, name_max), font.clone(), t.text, name_max);
             // The title was cut: the tooltip has the rest of it.
             let cut = name_g.size().x + 0.5 < natural_w - STUDIO_TAB_PAD + STUDIO_TAB_GAP - meta_g.size().x;
             let resp = ui.interact(r, ui.scope_id().with(("dtab", doc)), Sense::click_and_drag());
@@ -484,6 +484,30 @@ fn fit_doc_tabs(natural: &[f32], selected: usize, avail: f32) -> crate::tab_stri
     crate::tab_strip::fit(&capped, selected, avail, widest, crate::tab_strip::CHEVRON_W)
 }
 
+/// `title` within `max_w`, cut the way Photoshop cuts a tab: `name`, which starts the title, loses
+/// its end and gets '…', while the rest of the title (the zoom, the mode, the unsaved '*', a save's
+/// progress) stays whole (#11131). A title that doesn't start with `name`, or that fits, is
+/// returned as it is; the caller's [`crate::tab_strip::elided`] cuts whatever is still too wide.
+fn cut_name(ui: &egui::Ui, title: &str, name: &str, font: &egui::FontId, max_w: f32) -> String {
+    let width = |text: String| ui.painter().layout_no_wrap(text, font.clone(), egui::Color32::WHITE).size().x;
+    let Some(rest) = title.strip_prefix(name).filter(|_| !name.is_empty()) else { return title.to_owned() };
+    if width(title.to_owned()) <= max_w {
+        return title.to_owned();
+    }
+    let cut = |keep: usize| format!("{}…{rest}", name.chars().take(keep).collect::<String>());
+    // The most characters of the name that still fit, found by bisection.
+    let (mut lo, mut hi) = (0, name.chars().count());
+    while lo < hi {
+        let mid = lo + (hi - lo).div_ceil(2);
+        if width(cut(mid)) <= max_w {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    cut(lo)
+}
+
 /// Photoshop's tab title: "name @ 50% (Layer 1, RGB/8)", "(Layer 1, Layer Mask/8)" when the mask
 /// is targeted, "(Quick Mask/8)" in Quick Mask mode; the Background layer's name is omitted.
 pub(super) fn pro_tab_title(app: &PhotocraftApp, i: usize) -> String {
@@ -519,8 +543,9 @@ fn studio_tab_name(app: &PhotocraftApp, st: &photocraft_engine::DocState) -> Str
 }
 
 /// Photoshop document tabs: "name @ 33.3% (RGB/8)" on a dark strip; active tab matches panels.
-/// Tabs keep their whole titles, and the ones that don't fit move into a » menu at the end of the
-/// strip; the active document's tab always stays on the strip (#1276, #4487).
+/// Tabs keep their whole titles up to [`MAX_DOC_TAB_W`] (a longer name is cut, #11131), and the
+/// ones that don't fit move into a » menu at the end of the strip; the active document's tab
+/// always stays on the strip (#1276, #4487).
 fn pro_tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
     let t = crate::theme::Tokens::get(ui.ctx());
     let documents = docked_document_indices(app);
@@ -561,7 +586,9 @@ fn pro_tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
     for &(i, r) in placed.iter().filter(|(i, _)| *i < tab_count) {
         let Some(&doc) = documents.get(i) else { continue };
         let Some(title) = titles.get(i) else { continue };
-        let g = crate::tab_strip::elided(ui, title, font.clone(), t.text, (r.width() - DOC_TAB_PAD).max(1.0));
+        let name = app.session.documents().get(doc).map_or("", |st| st.doc.name.as_str());
+        let max_w = (r.width() - DOC_TAB_PAD).max(1.0);
+        let g = crate::tab_strip::elided(ui, &cut_name(ui, title, name, &font, max_w), font.clone(), t.text, max_w);
         let resp = ui.interact(r, ui.scope_id().with(("ptab", doc)), Sense::click_and_drag());
         let sel = Some(i) == active;
         if sel {
@@ -577,7 +604,7 @@ fn pro_tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
         let (xr, at) = pro_tab_layout(r, g.size().y, mac);
         let xresp = ui.interact(xr, ui.scope_id().with(("ptabx", doc)), Sense::click());
         // Painted: name the tab and its × for accessibility (and so tests and agents can find them).
-        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, sel, g.text()));
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, sel, title.as_str()));
         xresp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Close")));
         crate::icons::paint(ui, xr, "x", 10.0, if xresp.hovered() { t.text } else { t.text_faint });
         ui.painter().galley_with_override_text_color(at, g, if sel { t.text } else { t.text_faint });
@@ -600,9 +627,10 @@ fn pro_tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
         doc_tabs.push((doc, r));
     }
     for &(i, r) in placed.iter().filter(|(i, _)| *i >= tab_count) {
-        let Some((job, _, frac)) = opening.get(i - tab_count) else { continue };
+        let Some((job, name, frac)) = opening.get(i - tab_count) else { continue };
         let Some(title) = titles.get(i) else { continue };
-        let g = crate::tab_strip::elided(ui, title, font.clone(), t.text, (r.width() - DOC_TAB_PAD).max(1.0));
+        let max_w = (r.width() - DOC_TAB_PAD).max(1.0);
+        let g = crate::tab_strip::elided(ui, &cut_name(ui, title, name, &font, max_w), font.clone(), t.text, max_w);
         let resp = ui.interact(r, ui.scope_id().with(("ptabjob", job.0)), Sense::click());
         let sel = app.jobs.focus == Some(*job);
         if sel {

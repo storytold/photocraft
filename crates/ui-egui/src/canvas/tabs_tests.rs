@@ -220,6 +220,40 @@ fn elided_on_strip(h: &Harness<'_, PhotocraftApp>) -> bool {
     h.output().shapes.iter().any(|shape| elided(&shape.shape, strip))
 }
 
+/// The texts painted on the strip, as laid out (a cut text ends where its '…' is).
+fn texts_on_strip(h: &Harness<'_, PhotocraftApp>) -> Vec<String> {
+    fn collect(shape: &egui::Shape, strip: egui::Rect, out: &mut Vec<String>) {
+        match shape {
+            egui::Shape::Text(text) if strip.intersects(text.visual_bounding_rect()) => out.push(text.galley.text().to_owned()),
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| collect(shape, strip, out)),
+            _ => {}
+        }
+    }
+    let strip = strip(h).rect;
+    let mut out = Vec::new();
+    h.output().shapes.iter().for_each(|shape| collect(&shape.shape, strip, &mut out));
+    out
+}
+
+/// #11131: a tab cut to the maximum width cuts the document's name only; what follows it (the
+/// zoom, the mode and the unsaved '*') stays whole, as on Photoshop's tabs.
+#[test]
+fn a_cut_tab_keeps_the_rest_of_its_title_after_the_name() {
+    let long = format!("{}.png", "a-long-file-name-copied-from-a-web-address-".repeat(2));
+    for theme in ThemeKind::ALL {
+        let mut h = harness(1, theme);
+        h.state_mut().run("file.new", json!({"width": 400, "height": 300, "name": long})).unwrap();
+        h.state_mut().run("layer.new.layer", json!({})).unwrap();
+        h.run_steps(2);
+        let pro = crate::theme::Tokens::get(&h.ctx).pro;
+        let doc = h.state().session.active_index().unwrap();
+        let rest = if pro { pro_tab_title(h.state(), doc).strip_prefix(long.as_str()).unwrap().to_owned() } else { " *".to_owned() };
+        assert!(rest.ends_with('*'), "{theme:?}: the document is unsaved: {rest}");
+        let texts = texts_on_strip(&h);
+        assert!(texts.iter().any(|t| t.contains('…') && t.ends_with(rest.as_str())), "{theme:?}: a cut name followed by {rest:?} in {texts:?}");
+    }
+}
+
 /// #4487: a crowded strip keeps whole names on the tabs it shows and moves the rest into the »
 /// menu instead of shrinking them all, and the menu lists every open document with the active one
 /// checked, as Photoshop's does.
