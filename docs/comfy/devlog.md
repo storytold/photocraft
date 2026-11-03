@@ -4,6 +4,22 @@ Newest entry first. Terse: what landed, numbers, what is still open. Upstream ke
 the gitignored `log/devlog.md`; this one is tracked so the next session (any machine, any agent)
 can pick up.
 
+## 2026-11-03: upstream PhotoCraft 0.20 (v0.20.1) merged
+
+Upstream tagged 0.20 as `v0.20.1` (no `v0.20.0` tag); merged it into `photoshopex` (267 commits
+since v0.19.0, 4 conflicts). The ShotoPhopEX name, the link cleanup and the generative tools
+are unchanged; no ComfyUI code came back.
+
+- `main.rs` (GUI and CLI): the `--engine` worker check still runs first, then upstream's new
+  `malloc_tuning::apply()` (#8743), so a worker process is never re-executed by it.
+- `jobs.rs`: upstream's draining jobs now release the scratch pool; the Generations library's
+  progress, poll and started/inline hooks are kept around upstream's new `let out = match`.
+- `hi.tsv` merged and deduplicated.
+
+**Still open**
+
+- Merge the PR into `photoshopex`, then rebuild and run the GPU tests on the 5090.
+
 ## 2026-11-02: Split's hair edges from ViTMatte
 
 Split's subjects clipped hair (SAM's mask is hard; the classical refine only moves the edge a
