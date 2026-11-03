@@ -226,9 +226,14 @@ fn view(zoom: f32) -> ViewXform {
     }
 }
 
+/// [`paint`] in a frame of its own (so its mesh doesn't spill into a later frame's shapes), then
+/// the colours of the blocks it shows.
 fn paint_view(app: &mut PhotocraftApp, ctx: &egui::Context, xf: &ViewXform) -> Option<Vec<Color32>> {
-    let painter = egui::Painter::new(ctx.clone(), egui::LayerId::background(), egui::Rect::EVERYTHING);
-    paint(app, ctx, &painter, xf, 0);
+    let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+        let painter = egui::Painter::new(ui.ctx().clone(), egui::LayerId::background(), egui::Rect::EVERYTHING);
+        paint(app, ui.ctx(), &painter, xf, 0);
+    });
+    out.textures_delta.clear();
     let c = app.levels_clipping.as_ref()?;
     let (end, thr) = c.drawn?;
     Some(image(&c.stats, &thr, end))
@@ -283,6 +288,21 @@ fn a_huge_display_grows_the_blocks() {
     }
 }
 
+/// The main canvas's view of the 16×8 document at 10 device pixels per pixel.
+fn main_view(app: &mut PhotocraftApp) -> crate::state::View {
+    app.sync_views();
+    crate::state::View { zoom: 10.0, center: [8.0, 4.0], fit_pending: false, fill_pending: false, ..app.ui.views[0].clone() }
+}
+
+/// The shapes of one 160×80 canvas frame of document 0 in `view`.
+fn canvas_frame(ctx: &egui::Context, app: &mut PhotocraftApp, view: &crate::state::View, primary: bool) -> Vec<egui::epaint::ClippedShape> {
+    let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+        crate::canvas::canvas_view(app, ui, 0, egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(160.0, 80.0)), view.clone(), primary);
+    });
+    out.textures_delta.clear();
+    out.shapes
+}
+
 /// How many meshes among `shapes` (shape lists included) draw texture `tex`.
 fn meshes_with(shapes: &[egui::epaint::ClippedShape], tex: egui::TextureId) -> usize {
     fn count(s: &egui::Shape, tex: egui::TextureId) -> usize {
@@ -302,21 +322,13 @@ fn only_the_main_canvas_draws_the_display() {
     let ctx = egui::Context::default();
     let mut app = ramp_app(ColorMode::Rgb, SampleType::U8);
     open_levels(&mut app, json!({"inBlack": 100}), Some("shadows"));
-    app.sync_views();
-    let main = crate::state::View { zoom: 10.0, center: [8.0, 4.0], fit_pending: false, fill_pending: false, ..app.ui.views[0].clone() };
+    let main = main_view(&mut app);
     let other = crate::state::View { zoom: 0.25, ..main.clone() };
-    let frame = |app: &mut PhotocraftApp, view: &crate::state::View, primary: bool| {
-        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
-            crate::canvas::canvas_view(app, ui, 0, egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(160.0, 80.0)), view.clone(), primary);
-        });
-        out.textures_delta.clear();
-        out.shapes
-    };
-    let shapes = frame(&mut app, &main, true);
+    let shapes = canvas_frame(&ctx, &mut app, &main, true);
     let cache = app.levels_clipping.as_ref().expect("the main canvas builds the display");
     let (key, tex) = (cache.key, cache.tex.as_ref().map(egui::TextureHandle::id).expect("its texture"));
     assert_eq!(meshes_with(&shapes, tex), 1, "the main canvas draws the display");
-    let shapes = frame(&mut app, &other, false);
+    let shapes = canvas_frame(&ctx, &mut app, &other, false);
     assert_eq!(meshes_with(&shapes, tex), 0, "an extra window doesn't draw it");
     assert_eq!(app.levels_clipping.as_ref().map(|c| c.key), Some(key), "nor replaces the main canvas's cache");
 }
@@ -355,9 +367,17 @@ fn paint_shows_the_target_clipping_for_the_view() {
         paint_view(&mut app, &ctx, &view(0.25)).unwrap();
         assert_eq!(app.levels_clipping.as_ref().unwrap().stats.factor, 4);
         assert_eq!(app.levels_clipping.as_ref().unwrap().stats.size, [4, 2]);
-        // Off: nothing drawn; closed: the cache goes.
+        // Off with the dialog still open: the cached texture stays but no canvas frame draws it.
+        let main = main_view(&mut app);
+        let shapes = canvas_frame(&ctx, &mut app, &main, true);
+        let tex = app.levels_clipping.as_ref().and_then(|c| c.tex.as_ref()).map(egui::TextureHandle::id).unwrap();
+        assert_eq!(meshes_with(&shapes, tex), 1, "{mode:?} {depth:?}: on, it draws");
         app.ui.dialog_mut(id).unwrap().fields.insert(FIELD.into(), Value::Null);
         assert!(request(&app, 0).is_none());
+        let shapes = canvas_frame(&ctx, &mut app, &main, true);
+        assert_eq!(meshes_with(&shapes, tex), 0, "{mode:?} {depth:?}: off, it draws nothing");
+        assert!(app.levels_clipping.is_some(), "{mode:?} {depth:?}: the cache stays while the dialog is open");
+        // Closed: the cache goes.
         app.ui.close_dialog(id);
         paint_view(&mut app, &ctx, &view(10.0));
         assert!(app.levels_clipping.is_none(), "{mode:?} {depth:?}");
