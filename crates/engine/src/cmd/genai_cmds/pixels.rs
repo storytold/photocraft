@@ -10,6 +10,7 @@ use photocraft_color::{ColorMode, PixelFormat, SampleType};
 use photocraft_doc::{Document, Layer};
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;
+use serde::Serialize;
 
 use crate::{EngineError, Result};
 
@@ -332,26 +333,61 @@ fn tone(curve: &[f32; BINS], p: &mut [f32]) {
     }
 }
 
+/// Whether a result's colours were matched to the photo around the selection
+/// ([`match_surroundings`]), and if not, why.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(tag = "state", rename_all = "camelCase")]
+pub enum ColourMatch {
+    /// Matched. `drift` is the mean difference outside the selection before matching (0..1),
+    /// `changed` the share of that area the model redrew rather than relit (percent), and
+    /// `shadows`, `midtones` and `highlights` the brightness change taken out at those levels.
+    Matched { drift: f64, changed: f64, shadows: f32, midtones: f32, highlights: f32 },
+    /// Skipped: too little of the area sent lies outside the selection to measure the drift.
+    TooLittleOutside,
+    /// Skipped: the result differs from the original around the selection by more than colour
+    /// drift explains (reframed, restyled), so it was left as it came back.
+    TooDifferent { drift: f64, limit: f64 },
+}
+
+impl ColourMatch {
+    /// Did matching not run?
+    pub fn skipped(&self) -> bool {
+        !matches!(self, ColourMatch::Matched { .. })
+    }
+}
+
+/// The mean difference (0..1) between `px` (RGBA at the reference size) and the original outside
+/// the selection, weighted by how far outside each pixel is; `None` when too little is outside.
+fn outside_drift(px: &[f32], r: &Reference) -> Option<f64> {
+    let n = (r.w as usize).saturating_mul(r.h as usize);
+    if px.len() != n * 4 || r.original.len() != n * 3 || r.coverage.len() != n {
+        return None;
+    }
+    let outside = |i: usize| f64::from(1.0 - r.coverage[i].clamp(0.0, 1.0));
+    let weight: f64 = (0..n).map(outside).sum();
+    if weight < 16.0 {
+        return None;
+    }
+    let diff: f64 = (0..n).map(|i| outside(i) * (0..3).map(|c| f64::from((px[i * 4 + c] - r.original[i * 3 + c]).abs())).sum::<f64>()).sum();
+    Some(diff / (weight * 3.0))
+}
+
 /// Take out the colour drift a model adds when it redraws the whole image, so the fill meets the
 /// photo around it without a seam. Everything outside the selection should have come back
 /// unchanged; comparing it with the original measures the drift. First a tone curve on brightness
 /// (models relight: shadows lifted, highlights kept), hue untouched, fitted again without the pixels the model
 /// actually changed (an object it moved), then
 /// what is left at the edge carried smoothly inward by push-pull, as Photoshop's fills blend into
-/// their surroundings. `px` is RGBA (0..1) at the reference size.
-pub(super) fn match_surroundings(px: &mut [f32], r: &Reference) -> String {
+/// their surroundings. `px` is RGBA (0..1) at the reference size. Says whether it ran.
+pub(super) fn match_surroundings(px: &mut [f32], r: &Reference) -> ColourMatch {
     let (w, h) = (r.w as usize, r.h as usize);
     let mut outside: Vec<f32> = r.coverage.iter().map(|c| 1.0 - c.clamp(0.0, 1.0)).collect();
     let weight: f64 = outside.iter().map(|&o| f64::from(o)).sum();
-    if weight < 16.0 || px.len() != w * h * 4 {
-        return "not matched: too little outside the selection".into();
-    }
+    let Some(drift) = outside_drift(px, r) else { return ColourMatch::TooLittleOutside };
     // A result that doesn't resemble the original around the selection (reframed, restyled) is
     // left alone rather than forced onto it.
-    let diff: f64 = (0..w * h).map(|i| f64::from(outside[i]) * (0..3).map(|c| f64::from((px[i * 4 + c] - r.original[i * 3 + c]).abs())).sum::<f64>()).sum();
-    let drift = diff / (weight * 3.0);
     if drift > MAX_DRIFT {
-        return format!("not matched: mean difference outside the selection {drift:.3} > {MAX_DRIFT}");
+        return ColourMatch::TooDifferent { drift, limit: MAX_DRIFT };
     }
     let target: Vec<f32> = r.original.as_chunks::<3>().0.iter().map(|p| luma(p)).collect();
     let fit = |px: &[f32], wt: &[f32]| fit_curve(&px.as_chunks::<4>().0.iter().map(|p| luma(p)).collect::<Vec<_>>(), &target, wt);
@@ -379,13 +415,8 @@ pub(super) fn match_surroundings(px: &mut [f32], r: &Reference) -> String {
         }
     }
     let curve = if outside.iter().map(|&o| f64::from(o)).sum::<f64>() >= 16.0 { fit(px, &outside) } else { first };
-    let stats = format!(
-        "mean difference outside the selection {drift:.3}; {:.0}% of it changed; brightness change in shadows/midtones/highlights: {:+.3}/{:+.3}/{:+.3}",
-        100.0 * changed / weight,
-        curve[BINS / 8],
-        curve[BINS / 2],
-        curve[BINS * 7 / 8]
-    );
+    let stats =
+        ColourMatch::Matched { drift, changed: 100.0 * changed / weight, shadows: curve[BINS / 8], midtones: curve[BINS / 2], highlights: curve[BINS * 7 / 8] };
     for p in px.as_chunks_mut::<4>().0 {
         tone(&curve, p);
     }
@@ -425,25 +456,90 @@ pub(super) fn decode(bytes: &[u8]) -> Result<(Surface, Rect)> {
     Ok((s, r))
 }
 
-/// A returned picture, colour-matched to the original around the selection, scaled into `area`
-/// in document coordinates.
-fn place(bytes: &[u8], area: Rect, reference: &Reference) -> Result<Surface> {
-    let (got, full) = decode(bytes)?;
+/// How far (in log space) a result's shape may be from the area's and still count as the same
+/// shape: 2 %, more than a model's rounding to a multiple of 8 or 64 pixels.
+const SAME_SHAPE: f64 = 0.02;
+
+/// How a returned picture was lined up with the area sent.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(tag = "state", rename_all = "camelCase")]
+pub enum Framing {
+    /// It came back the area's shape (within 2 %) and was scaled to it.
+    Same,
+    /// Another shape. Its centre, cut to the area's shape, lined up with the picture around the
+    /// selection (the model had added to the sides), so that is what was used.
+    Centre { returned: [u32; 2], sent: [u32; 2] },
+    /// Another shape, but the whole of it lined up with the picture around the selection once
+    /// scaled to the area (the model had resized what it was sent), so it was scaled.
+    Scaled { returned: [u32; 2], sent: [u32; 2] },
+}
+
+/// The largest rect of `w`:`h`'s shape centred in `full`.
+fn centred(full: Rect, w: u32, h: u32) -> Rect {
+    let (fw, fh) = (u64::from(full.width()), u64::from(full.height()));
+    let (w, h) = (u64::from(w.max(1)), u64::from(h.max(1)));
+    if fw * h > fh * w {
+        let cw = ((fh * w + h / 2) / h).clamp(1, fw) as i32;
+        let x0 = full.x0 + (full.width() as i32 - cw) / 2;
+        Rect::new(x0, full.y0, x0 + cw, full.y1)
+    } else {
+        let ch = ((fw * h + w / 2) / w).clamp(1, fh) as i32;
+        let y0 = full.y0 + (full.height() as i32 - ch) / 2;
+        Rect::new(full.x0, y0, full.x1, y0 + ch)
+    }
+}
+
+/// `got` (of size `full`) at the request size, and how it was lined up. A result the area's shape
+/// is scaled. Another shape is never just stretched: its centre cut to the area's shape and the
+/// whole of it scaled are each compared with the picture around the selection, and the one that
+/// lines up is used; when neither does (or too little is outside the selection to tell), the
+/// variation is refused with the reason.
+fn frame(got: &Surface, full: Rect, r: &Reference) -> std::result::Result<(Vec<f32>, Framing), String> {
+    let at = Rect::from_xywh(0, 0, r.w, r.h);
+    let shape = |w: u32, h: u32| (f64::from(w.max(1)) / f64::from(h.max(1))).ln();
+    if (shape(full.width(), full.height()) - shape(r.w, r.h)).abs() <= SAME_SHAPE {
+        return Ok((scaled(got, full, r.w, r.h).read_region(at), Framing::Same));
+    }
+    let (returned, sent) = ([full.width(), full.height()], [r.w, r.h]);
+    let centre = scaled(got, centred(full, r.w, r.h), r.w, r.h).read_region(at);
+    let whole = scaled(got, full, r.w, r.h).read_region(at);
+    let fits = |px: &[f32]| outside_drift(px, r).filter(|d| *d <= MAX_DRIFT);
+    let best = match (fits(&centre), fits(&whole)) {
+        (Some(c), Some(w)) if w < c => Some((whole, Framing::Scaled { returned, sent })),
+        (Some(_), _) => Some((centre, Framing::Centre { returned, sent })),
+        (None, Some(_)) => Some((whole, Framing::Scaled { returned, sent })),
+        (None, None) => None,
+    };
+    best.ok_or_else(|| {
+        format!(
+            "the AI service returned a {}×{} picture for a {}×{} area, framed so that it doesn't line up with the picture around the selection; that variation was not placed",
+            returned[0], returned[1], sent[0], sent[1]
+        )
+    })
+}
+
+/// A returned picture placed: its pixels in document coordinates, and how it was lined up and
+/// colour-matched.
+pub(super) struct Placed {
+    pub(super) surface: Surface,
+    pub(super) framing: Framing,
+    pub(super) colour: ColourMatch,
+}
+
+/// A returned picture, lined up with the area sent ([`frame`]), colour-matched to the original
+/// around the selection, scaled into `area` in document coordinates. `Err` says why it can't be
+/// placed (unreadable, framed differently).
+pub(super) fn place(bytes: &[u8], area: Rect, reference: &Reference) -> std::result::Result<Placed, String> {
+    let (got, full) = decode(bytes).map_err(|e| e.to_string())?;
     let r = Rect::from_xywh(0, 0, reference.w, reference.h);
-    let mut at_request = scaled(&got, full, reference.w, reference.h);
-    let mut px = at_request.read_region(r);
-    // The figures it returns describe the fit, for tests.
-    match_surroundings(&mut px, reference);
+    let (mut px, framing) = frame(&got, full, reference)?;
+    let colour = match_surroundings(&mut px, reference);
+    let mut at_request = Surface::new(got.format());
     at_request.write_region(r, &px);
     let fitted = scaled(&at_request, r, area.width(), area.height());
     let mut placed = Surface::new(fitted.format());
     placed.write_region(area, &fitted.read_region(Rect::from_xywh(0, 0, area.width(), area.height())));
-    Ok(placed)
-}
-
-/// Place every result.
-pub(super) fn place_all(results: &[Vec<u8>], area: Rect, reference: &Reference) -> Result<Vec<Surface>> {
-    results.iter().map(|b| place(b, area, reference)).collect()
+    Ok(Placed { surface: placed, framing, colour })
 }
 
 pub(super) fn variation_layer(doc: &Document, pixels: &Surface, n: usize, visible: bool) -> Result<Layer> {

@@ -47,7 +47,8 @@ mod remote;
 pub use areas::MAX_AREAS;
 pub use queue::MAX_PARALLEL;
 
-use pixels::{Reference, other};
+pub use pixels::{ColourMatch, Framing};
+use pixels::{Placed, Reference, other};
 
 pub const FILL: &str = "edit.generativeFill";
 pub const SELECT_VARIATION: &str = "layer.generative.selectVariation";
@@ -138,6 +139,23 @@ pub(crate) struct GenState {
     next_fill: u64,
     /// Turns at the service, shared by every fill and Generate More.
     turns: Arc<queue::Turns>,
+    /// How each variation made in this session was lined up and colour-matched, by its layer.
+    notes: std::collections::HashMap<LayerId, VariationNote>,
+}
+
+/// How a variation was placed: how the returned picture was lined up with the area sent, and
+/// whether its colours were matched to the photo around the selection (and if not, why).
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct VariationNote {
+    pub framing: Framing,
+    pub colour: ColourMatch,
+}
+
+impl VariationNote {
+    /// How `p` was placed.
+    fn of(p: &Placed) -> VariationNote {
+        VariationNote { framing: p.framing.clone(), colour: p.colour.clone() }
+    }
 }
 
 /// A fill that hasn't landed (Generate More included).
@@ -491,7 +509,7 @@ fn fill_work(
     ai: &dyn crate::genai::GenerativeAi,
     turns: &queue::Turns,
     status: &FillStatus,
-) -> Result<(Vec<Surface>, Arc<Prepared>)> {
+) -> Result<(Vec<Placed>, Arc<Prepared>)> {
     let prepared = input.prepared(ctx)?;
     ctx.check()?;
     // The plan the person agreed to, or a fresh one from the model chosen now.
@@ -520,7 +538,21 @@ fn fill_work(
     };
     ctx.check()?;
     ctx.progress(0.9, "Placing the results");
-    let placed = pixels::place_all(&results, input.area, &prepared.reference)?;
+    // A picture that can't be placed (unreadable, framed differently) is dropped like a failed
+    // variation, as long as another one is placed.
+    let mut placed = Vec::new();
+    let mut refused = None;
+    for bytes in &results {
+        match pixels::place(bytes, input.area, &prepared.reference) {
+            Ok(p) => placed.push(p),
+            Err(e) => {
+                refused.get_or_insert(e);
+            }
+        }
+    }
+    if let (true, Some(why)) = (placed.is_empty(), refused) {
+        return Err(failed(status, &AiFailure::new(AiErrorKind::Provider, why)));
+    }
     Ok((placed, prepared))
 }
 
@@ -533,7 +565,7 @@ fn failed(status: &FillStatus, f: &AiFailure) -> EngineError {
 /// Fill `id`'s results arrive (on its document): a new group masked by the selection, one layer
 /// per variation with the first showing, above the layer that was active when it started; or,
 /// for Generate More, more variations in the generative layer. One undo step.
-fn land(s: &mut Session, id: u64, placed: Vec<Surface>, prepared: Arc<Prepared>) -> Result<Value> {
+fn land(s: &mut Session, id: u64, placed: Vec<Placed>, prepared: Arc<Prepared>) -> Result<Value> {
     // Discarded meanwhile.
     let i = s.genai_state.fills.iter().position(|f| f.id == id).ok_or(EngineError::Cancelled)?;
     let fill = s.genai_state.fills.remove(i);
@@ -545,7 +577,7 @@ fn land(s: &mut Session, id: u64, placed: Vec<Surface>, prepared: Arc<Prepared>)
     if let Some(group) = input.into {
         let ids = s.edit("Generate More", |doc, _| {
             let have = doc.layer(group).and_then(Layer::children).map(<[Layer]>::len).ok_or_else(|| other("the generative layer is gone"))?;
-            let new = placed.iter().enumerate().map(|(i, px)| pixels::variation_layer(doc, px, have + i + 1, i == 0)).collect::<Result<Vec<_>>>()?;
+            let new = placed.iter().enumerate().map(|(i, p)| pixels::variation_layer(doc, &p.surface, have + i + 1, i == 0)).collect::<Result<Vec<_>>>()?;
             let ids: Vec<u64> = new.iter().map(|l| l.id.0).collect();
             let layers = doc.layer_mut(group).and_then(Layer::children_mut).ok_or_else(|| other("the generative layer is gone"))?;
             // The first new variation shows, as when the layer was made.
@@ -555,12 +587,13 @@ fn land(s: &mut Session, id: u64, placed: Vec<Surface>, prepared: Arc<Prepared>)
             layers.extend(new);
             Ok(ids)
         })?;
-        return Ok(json!({"layer": group.0, "variations": ids, "fill": id}));
+        let matching = note_variations(s, &ids, &placed);
+        return Ok(json!({"layer": group.0, "variations": ids, "matching": matching, "fill": id}));
     }
     let (group, ids) = s.edit(LABEL, |doc, active| {
         // Photoshop's generative layer holds its variations; here that is a group masked by
         // the selection with one layer per variation, the first one showing.
-        let children = placed.iter().enumerate().map(|(i, px)| pixels::variation_layer(doc, px, i + 1, i == 0)).collect::<Result<Vec<_>>>()?;
+        let children = placed.iter().enumerate().map(|(i, p)| pixels::variation_layer(doc, &p.surface, i + 1, i == 0)).collect::<Result<Vec<_>>>()?;
         let ids: Vec<u64> = children.iter().map(|l| l.id.0).collect();
         let mut group = Layer::group(input.name.clone(), children);
         group.mask = Some(LayerMask { surface: input.sel.clone(), ..LayerMask::reveal_all() });
@@ -574,7 +607,18 @@ fn land(s: &mut Session, id: u64, placed: Vec<Surface>, prepared: Arc<Prepared>)
     })?;
     let area = input.area;
     s.genai_state.sources.insert(group, Arc::new(Source { prompt: input.prompt.clone(), area, prepared }));
-    Ok(json!({"layer": group.0, "variations": ids, "bounds": [area.x0, area.y0, area.width(), area.height()], "fill": id}))
+    let matching = note_variations(s, &ids, &placed);
+    Ok(json!({"layer": group.0, "variations": ids, "bounds": [area.x0, area.y0, area.width(), area.height()], "matching": matching, "fill": id}))
+}
+
+/// Keep how each new variation (layer `ids`, in `placed`'s order) was placed, for Properties, and
+/// return it for the command's result.
+fn note_variations(s: &mut Session, ids: &[u64], placed: &[Placed]) -> Vec<VariationNote> {
+    let notes: Vec<VariationNote> = placed.iter().map(VariationNote::of).collect();
+    for (id, note) in ids.iter().zip(&notes) {
+        s.genai_state.notes.insert(LayerId(*id), note.clone());
+    }
+    notes
 }
 
 fn fill_param(p: &Value, cmd: &str) -> Result<u64> {
@@ -708,6 +752,12 @@ impl Session {
     /// The prompt a generative layer was made with.
     pub fn generative_prompt(&self, id: LayerId) -> Option<&str> {
         self.genai_state.sources.get(&id).map(|s| s.prompt.as_str())
+    }
+
+    /// How variation layer `id` was placed (lined up and colour-matched), when it was made in this
+    /// session.
+    pub fn generative_variation_note(&self, id: LayerId) -> Option<&VariationNote> {
+        self.genai_state.notes.get(&id)
     }
 }
 

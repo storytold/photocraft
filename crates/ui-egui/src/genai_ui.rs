@@ -11,6 +11,7 @@
 
 use photocraft_doc::{Layer, LayerId};
 use photocraft_engine::genai::AiStatus;
+use photocraft_engine::genai_cmds::{ColourMatch, Framing, VariationNote};
 use serde_json::{Map, Value, json};
 
 use crate::PhotocraftApp;
@@ -404,6 +405,14 @@ pub fn variations_section(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             }
         });
     });
+    // How the variation showing was placed, when it wasn't plainly (colour matching skipped, the
+    // service's picture framed differently).
+    if let Some(note) = children.iter().find(|v| v.visible).and_then(|v| app.session.generative_variation_note(v.id)) {
+        for line in note_lines(note) {
+            ui.add_space(2.0);
+            faint(ui, &line);
+        }
+    }
     if let Some(i) = chosen
         && let Err(e) = app.run(SELECT_VARIATION, json!({"layer": group_id.0, "index": i}))
     {
@@ -423,6 +432,43 @@ pub fn variations_section(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     ui.add_space(6.0);
     crate::widgets::hairline(ui);
     ui.add_space(4.0);
+}
+
+/// What a person should know about how a variation was placed: nothing when it came back the
+/// area's shape and its colours were matched.
+pub(crate) fn note_lines(note: &VariationNote) -> Vec<String> {
+    let mut lines = Vec::new();
+    match note.colour {
+        ColourMatch::Matched { .. } => {}
+        ColourMatch::TooDifferent { .. } => lines.push(
+            tl!("Colour matching was skipped for this variation: the picture around the selection came back too different to match it safely.").to_owned(),
+        ),
+        ColourMatch::TooLittleOutside => {
+            lines.push(tl!("Colour matching was skipped for this variation: too little of the picture lies outside the selection to measure.").to_owned())
+        }
+    }
+    let size = |s: [u32; 2]| format!("{}×{}", s[0], s[1]);
+    match note.framing {
+        Framing::Same => {}
+        Framing::Centre { returned, sent } => lines.push(crate::i18n::fmt(
+            tl!("The service returned a {returned} picture for a {sent} area; its centre was used."),
+            &[("returned", &size(returned)), ("sent", &size(sent))],
+        )),
+        Framing::Scaled { returned, sent } => lines.push(crate::i18n::fmt(
+            tl!("The service returned a {returned} picture for a {sent} area; it lined up with the picture around the selection once scaled."),
+            &[("returned", &size(returned)), ("sent", &size(sent))],
+        )),
+    }
+    lines
+}
+
+/// The status line's addition for a fill that landed: how many of its variations had colour
+/// matching skipped, if any (`matching` is the command result's list).
+pub(crate) fn skipped_note(matching: Option<&Value>) -> Option<String> {
+    let n = matching?.as_array()?.iter().filter(|m| m.pointer("/colour/state").and_then(Value::as_str).is_some_and(|s| s != "matched")).count() as u64;
+    (n > 0).then(|| {
+        crate::i18n::trn(crate::i18n::current(), n, "Colour matching was skipped for {n} variation.", "Colour matching was skipped for {n} variations.")
+    })
 }
 
 #[cfg(test)]

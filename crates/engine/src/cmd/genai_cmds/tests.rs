@@ -25,6 +25,8 @@ struct Fake {
     /// it as a model would, every channel moved by this much (a model's colour drift).
     echo: Option<i16>,
     size: Option<(u32, u32)>,
+    /// With `echo`: return the picture framed differently from what was sent.
+    reframe: Option<Reframe>,
     fail: Option<AiFailure>,
     jpeg: bool,
     busy: usize,
@@ -51,6 +53,7 @@ fn fake(color: [u8; 3]) -> Fake {
         delay: std::time::Duration::ZERO,
         echo: None,
         size: None,
+        reframe: None,
         fail: None,
         jpeg: false,
         busy: 0,
@@ -165,6 +168,47 @@ impl FillPlan for FakePlan {
     }
 }
 
+/// How the fake reframes what it echoes.
+#[derive(Clone, Copy)]
+enum Reframe {
+    /// Grey columns this wide added on each side, as a model that adds to the picture does.
+    Pad(u32),
+    /// Resized to this size, as a model that stretches what it was sent does.
+    Stretch(u32, u32),
+}
+
+/// `px` (RGBA, `w`×`h`) reframed.
+fn reframed(px: Vec<u8>, w: u32, h: u32, how: Option<Reframe>) -> (Vec<u8>, u32, u32) {
+    match how {
+        None => (px, w, h),
+        Some(Reframe::Pad(k)) => {
+            let nw = w + 2 * k;
+            let out = (0..h)
+                .flat_map(|y| (0..nw).map(move |x| (x, y)))
+                .flat_map(|(x, y)| {
+                    if x < k || x >= k + w {
+                        [128, 128, 128, 255]
+                    } else {
+                        let i = ((y * w + x - k) * 4) as usize;
+                        [px[i], px[i + 1], px[i + 2], px[i + 3]]
+                    }
+                })
+                .collect();
+            (out, nw, h)
+        }
+        Some(Reframe::Stretch(nw, nh)) => {
+            let out = (0..nh)
+                .flat_map(|y| (0..nw).map(move |x| (x, y)))
+                .flat_map(|(x, y)| {
+                    let i = (((y * h / nh) * w + x * w / nw) * 4) as usize;
+                    [px[i], px[i + 1], px[i + 2], px[i + 3]]
+                })
+                .collect();
+            (out, nw, nh)
+        }
+    }
+}
+
 /// What the fake model returns for job `n`.
 fn answer(f: &Fake, r: &FillRequest, n: usize) -> Vec<u8> {
     let img = codecs::decode(&r.source_png).unwrap().convert(ChannelLayout::Rgba, CodecSample::U8);
@@ -188,7 +232,8 @@ fn answer(f: &Fake, r: &FillRequest, n: usize) -> Vec<u8> {
                 c => (i16::from(if masked(i) { around[c] } else { v }) + d).clamp(0, 255) as u8,
             })
             .collect();
-        let out = Image::from_u8(img.width(), img.height(), ChannelLayout::Rgba, px).unwrap();
+        let (px, w, h) = reframed(px, img.width(), img.height(), f.reframe);
+        let out = Image::from_u8(w, h, ChannelLayout::Rgba, px).unwrap();
         return codecs::encode(&out, Format::Png, &Default::default()).unwrap();
     }
     let color = if f.vary { [f.color[0].wrapping_add(n as u8 * 60), f.color[1], f.color[2]] } else { f.color };
@@ -632,7 +677,7 @@ fn drift_that_varies_across_the_image_leaves_no_seam() {
         })
         .collect();
     let stats = match_surroundings(&mut px, &reference);
-    assert!(stats.starts_with("mean difference"), "{stats}");
+    assert!(matches!(stats, ColourMatch::Matched { .. }), "{stats:?}");
     let worst = (0..n).filter(|&i| inside(i)).map(|i| (px[i * 4] - 0.5).abs()).fold(0.0f32, f32::max);
     assert!(worst < 0.02, "worst {worst}");
 }

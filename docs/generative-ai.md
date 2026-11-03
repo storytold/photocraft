@@ -110,10 +110,22 @@ computer for a model that runs on it. The shared layer reads the key only when a
 the OS keychain, and sends it to that address and nowhere else. Its job log records which app,
 which connection, what kind of data and how long, never the prompt's text.
 
-The result is colour-matched to the photo around the selection (models relight what they
+Each returned picture is first lined up with the area sent. One the area's shape (within 2 %)
+is scaled to it. One of another shape is never just stretched: its centre cut to the area's
+shape, and the whole of it scaled, are each compared with the picture around the selection, and
+the one that lines up is used (a model that added to the sides, or one that resized what it was
+sent); when neither lines up, that variation is refused with the sizes in the message, like a
+variation that failed at the service, and the fill fails only if none is left.
+
+The result is then colour-matched to the photo around the selection (models relight what they
 redraw: a tone curve fitted outside the selection is undone, and what is left at the edge is
 carried smoothly inward), scaled back into the area, and composited only inside the selection
-through the group's mask.
+through the group's mask. Matching is skipped when the picture around the selection came back
+too different (a mean difference over 0.25: reframed or restyled) or too little of the area lies
+outside the selection. Skipping is never silent: the status line says how many variations it
+skipped when a fill lands, Properties › Variations says so under the variation showing (and when
+its picture was cut to its centre or scaled to line up), and the command's result has
+`matching`, one `{framing, colour}` per variation.
 
 ## Consent
 

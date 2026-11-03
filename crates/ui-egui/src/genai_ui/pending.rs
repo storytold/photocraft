@@ -612,9 +612,14 @@ pub fn on_job_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: &JobEvent) 
                 .get("layer")
                 .and_then(Value::as_u64)
                 .and_then(|id| app.session.documents().iter().find_map(|st| st.doc.layer(LayerId(id))).map(|l| l.name.clone()));
-            app.ui.status = match name {
+            let done = match name {
                 Some(n) => crate::i18n::fmt(tl!("Generated {name}"), &[("name", &n)]),
                 None => tl!("Generative Fill").to_owned(),
+            };
+            // Colour matching skipped is said, not left for the person to notice.
+            app.ui.status = match super::skipped_note(v.get("matching")) {
+                Some(note) => format!("{done} · {note}"),
+                None => done,
             };
             app.ui.status_error = false;
         }
