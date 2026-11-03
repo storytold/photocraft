@@ -241,7 +241,11 @@ fn write_folder(folder: &str, files: &[(String, Vec<u8>)]) -> Result<String> {
         .ok_or_else(|| EngineError::Other(format!("{folder} already holds diagnostics from this second")))?;
     std::fs::create_dir(&dir).map_err(|e| EngineError::Other(format!("{}: {e}", dir.display())))?;
     for (name, bytes) in files {
-        crate::file_cmds::write_file(&dir.join(name).to_string_lossy(), bytes)?;
+        if let Err(e) = crate::file_cmds::write_file(&dir.join(name).to_string_lossy(), bytes) {
+            // This call made `dir`: take it away rather than leave half the files in it.
+            let _ = std::fs::remove_dir_all(&dir);
+            return Err(e);
+        }
     }
     Ok(dir.to_string_lossy().into_owned())
 }
@@ -249,4 +253,17 @@ fn write_folder(folder: &str, files: &[(String, Vec<u8>)]) -> Result<String> {
 #[cfg(target_arch = "wasm32")]
 fn write_folder(folder: &str, _: &[(String, Vec<u8>)]) -> Result<String> {
     Err(EngineError::Other(format!("cannot write to {folder}: Save Fill Diagnostics needs the desktop app")))
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    #[test]
+    fn a_failed_write_leaves_no_folder_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        let files = vec![("first.txt".to_owned(), b"one".to_vec()), ("sec\0ond.txt".to_owned(), b"two".to_vec())];
+        assert!(super::write_folder(&dir.path().to_string_lossy(), &files).is_err());
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0, "the half-written folder is taken away");
+        let ok = super::write_folder(&dir.path().to_string_lossy(), &files[..1]).unwrap();
+        assert!(std::path::Path::new(&ok).join("first.txt").is_file());
+    }
 }
