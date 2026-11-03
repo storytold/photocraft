@@ -544,6 +544,10 @@ fn check_jpeg_chunks(
     nominal: (usize, usize),
     cap: usize,
 ) -> Result<(), CodecError> {
+    // The list below holds 16 bytes per chunk; bound it by the scratch cap, not only by the file size.
+    if expected.saturating_mul(16) > cap as u64 {
+        return Err(CodecError::LimitExceeded(format!("{expected} JPEG strips or tiles")));
+    }
     let mut chunks: Vec<(u64, u64)> = (0..expected).filter_map(|i| Some((f.uint(offsets, i)?, f.uint(sizes, i)?))).collect();
     chunks.sort_unstable();
     // Entries sharing an offset but not a byte count are different chunks: check each one.
