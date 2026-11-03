@@ -1,0 +1,98 @@
+//! #10930: before the first change to a crop frame the reference application shows only a dashed
+//! outline with grey handles, with no shield and no overlay in any show mode. The shield and the
+//! overlay start with the first change and stay until the crop is committed or cancelled. These
+//! test the decisions the canvas draws from (`current_guides`, `crop_shield::current`,
+//! `frame_look`), driven by real Crop gestures through the control channel.
+
+use photocraft_ui_egui::control::{ControlRequest, handle};
+use photocraft_ui_egui::crop_overlay::{FrameLook, OverlayShow, current_guides, frame_look};
+use photocraft_ui_egui::{PhotocraftApp, Tool};
+use serde_json::{Value, json};
+
+fn control(app: &mut PhotocraftApp, method: &str, params: Value) {
+    let ctx = egui::Context::default();
+    let (req, _rx) = ControlRequest::new(method, params);
+    handle(app, &ctx, &req);
+    app.sync_views();
+}
+
+/// A document with the Crop tool showing its untouched default frame, overlay mode `show`.
+fn crop_app(show: OverlayShow) -> PhotocraftApp {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.run("file.new", json!({"width": 200, "height": 120})).unwrap();
+    app.sync_views();
+    app.ui.tool = Tool::Crop;
+    app.ui.tool_options.crop_overlay_show = show;
+    photocraft_ui_egui::crop_ui::ensure_frame(&mut app);
+    assert!(app.ui.crop_rect.is_some(), "the Crop tool shows a frame");
+    app
+}
+
+/// What the canvas would draw now: (guides shown, shield shown, outline look).
+fn drawn(app: &PhotocraftApp) -> (bool, bool, FrameLook) {
+    let ctx = egui::Context::default();
+    let guides = !current_guides(app, 300.0, 200.0).is_empty();
+    let shield = photocraft_ui_egui::crop_shield::current(app, &ctx).is_some();
+    (guides, shield, frame_look(app))
+}
+
+/// Press inside the untouched frame and drag: that draws a new frame, the first change.
+fn press_and_drag(app: &mut PhotocraftApp) {
+    control(app, "ui.pointer", json!({"tool": "Crop", "events": [{"kind": "down", "x": 50, "y": 40}, {"kind": "move", "x": 150, "y": 90}]}));
+}
+
+fn release(app: &mut PhotocraftApp) {
+    control(app, "ui.pointer", json!({"tool": "Crop", "events": [{"kind": "up", "x": 150, "y": 90}]}));
+}
+
+const MODES: [OverlayShow; 3] = [OverlayShow::Always, OverlayShow::Auto, OverlayShow::Never];
+
+#[test]
+fn an_untouched_frame_shows_only_a_dashed_outline_in_every_show_mode() {
+    for show in MODES {
+        let app = crop_app(show);
+        assert_eq!(drawn(&app), (false, false, FrameLook::Untouched), "{show:?}: no overlay, no shield, dashed outline");
+    }
+}
+
+#[test]
+fn the_shield_and_the_overlay_start_with_the_first_change() {
+    // (mode, overlay while dragging, overlay after release with the crop still pending)
+    for (show, dragging, released) in [(OverlayShow::Always, true, true), (OverlayShow::Auto, true, false), (OverlayShow::Never, false, false)] {
+        let mut app = crop_app(show);
+        press_and_drag(&mut app);
+        assert_eq!(drawn(&app), (dragging, true, FrameLook::Started), "{show:?} mid-drag: shield on, solid outline");
+        release(&mut app);
+        assert!(app.ui.crop_rect.is_some(), "{show:?}: the crop is still pending after release");
+        assert_eq!(drawn(&app), (released, true, FrameLook::Started), "{show:?} after release: the shield stays until commit or cancel");
+    }
+}
+
+#[test]
+fn committing_or_cancelling_brings_back_the_untouched_look() {
+    for show in MODES {
+        let mut app = crop_app(show);
+        press_and_drag(&mut app);
+        release(&mut app);
+        photocraft_ui_egui::canvas::commit_crop(&mut app);
+        photocraft_ui_egui::crop_ui::ensure_frame(&mut app);
+        assert_eq!(drawn(&app), (false, false, FrameLook::Untouched), "{show:?} after commit: a new untouched frame");
+
+        press_and_drag(&mut app);
+        release(&mut app);
+        assert!(drawn(&app).1, "{show:?}: a second crop starts again");
+        photocraft_ui_egui::crop_ui::cancel(&mut app);
+        photocraft_ui_egui::crop_ui::ensure_frame(&mut app);
+        assert_eq!(drawn(&app), (false, false, FrameLook::Untouched), "{show:?} after cancel: a new untouched frame");
+    }
+}
+
+#[test]
+fn classic_mode_keeps_the_look_it_had() {
+    // Classic Mode wasn't measured, so it keeps its solid white outline, shield and overlay rule.
+    let mut app = crop_app(OverlayShow::Always);
+    app.ui.tool_options.crop_shield.classic_mode = true;
+    let (guides, shield, look) = drawn(&app);
+    assert_eq!(look, FrameLook::Classic);
+    assert!(guides && shield, "Classic Mode shows its overlay and shield as before, even untouched");
+}

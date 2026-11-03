@@ -14,6 +14,7 @@ mod color_managed_canvas;
 mod crop_beyond_canvas;
 mod crop_default_mode;
 mod crop_defaults;
+mod crop_frame_look;
 mod crop_popup_keys;
 mod custom_print_paper;
 mod display_shadows;

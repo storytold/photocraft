@@ -112,6 +112,10 @@ pub fn canvas_color(app: &PhotocraftApp, ctx: &egui::Context) -> Color32 {
 
 /// The shield over the pending crop box now ([`fill`]).
 pub fn current(app: &PhotocraftApp, ctx: &egui::Context) -> Option<Color32> {
+    // No shield before the crop has started: an untouched frame shows only itself (#10930).
+    if !crate::crop_overlay::crop_started(app) {
+        return None;
+    }
     fill(&app.ui.tool_options.crop_shield, canvas_color(app, ctx), app.crop.drag.is_some())
 }
 
@@ -311,6 +315,8 @@ mod tests {
     #[test]
     fn match_canvas_is_the_black_full_screen_pasteboard() {
         let mut app = crop_app();
+        // A shield shows only once the crop has started (#10930); this test is about its colour.
+        app.crop.default_frame = false;
         let ctx = egui::Context::default();
         let theme_canvas = crate::theme::Tokens::get(&ctx).canvas;
         assert_ne!(theme_canvas, Color32::BLACK);
