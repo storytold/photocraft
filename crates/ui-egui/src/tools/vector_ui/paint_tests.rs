@@ -235,9 +235,8 @@ fn shape_paint_hex_input_keeps_partial_text_and_preserves_alpha() {
         h.run_steps(3);
         let id = h.state().ui.dialogs.last().expect("the Color Picker dialog").id;
         let opened = h.state().ui.dialogs.last().unwrap().fields["color"].clone();
-        // Hex edits keep the destination's representation: float RGB for this picker in a
-        // float document, legacy hex before float-picker support. Both encode the exact RGB.
-        let chosen = if opened.is_array() { json!([18.0_f32 / 255.0, 171.0_f32 / 255.0, 239.0_f32 / 255.0]) } else { json!("#12abef") };
+        assert!(opened.is_array(), "a 32-bit shape paint picker opens float RGB");
+        let chosen = json!([18.0_f32 / 255.0, 171.0_f32 / 255.0, 239.0_f32 / 255.0]);
         focus_hex(&mut h);
         for ch in "12AB".chars() {
             h.event(Event::Text(ch.to_string()));
