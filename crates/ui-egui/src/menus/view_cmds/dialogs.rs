@@ -364,11 +364,8 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
                     let r = app.run(&cmd, json!({"path": path}));
                     if let Ok(v) = &r {
                         // #11113: footage salvaged from a truncated GIF or WebP must say so.
-                        let w: Vec<String> = v["warnings"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_owned).collect();
-                        if !w.is_empty() {
-                            let what = crate::i18n::fmt(crate::i18n::t("Imported {name}"), &[("name", &crate::file_open::display_name(&path))]);
-                            crate::notices::io_warnings(app, &what, &w);
-                        }
+                        let what = crate::i18n::fmt(crate::i18n::t("Imported {name}"), &[("name", &crate::file_open::display_name(&path))]);
+                        crate::notices::footage_warnings(app, v, &what);
                     }
                     if r.is_ok() && app.session.active().is_some_and(|d| d.doc.timeline.is_some()) {
                         app.ui.timeline.open = true;

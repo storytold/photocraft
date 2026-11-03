@@ -218,7 +218,16 @@ fn invoke_file_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, 
             }
         }
         "file.import.videoFramesToLayers" if params.get("path").and_then(Value::as_str).is_none() => {
-            app.ask_folder(|app, path| app.run("file.import.videoFramesToLayers", json!({"path": path})).map_err(|e| e.to_string()))
+            app.ask_folder(|app, path| {
+                let r = app.run("file.import.videoFramesToLayers", json!({"path": &path}));
+                if let Ok(v) = &r {
+                    // #11113: a truncated GIF or WebP in the folder salvages its early frames;
+                    // the command's warning says the animation arrived shortened.
+                    let what = crate::i18n::fmt(crate::i18n::t("Imported {name}"), &[("name", &crate::file_open::display_name(&path))]);
+                    crate::notices::footage_warnings(app, v, &what);
+                }
+                r.map_err(|e| e.to_string())
+            })
         }
         // File > Import > Variable Data Sets… asks for the CSV (#8816); with a `path` the engine reads it itself.
         "file.import.variableDataSets" if params.get("path").and_then(Value::as_str).is_none() => {
@@ -464,6 +473,13 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
         {
             let kind = &ls["layer.layerStyle.".len()..];
             crate::layer_style::open(app, Some(kind)).map(|d| json!({"dialog": d})).ok_or_else(|| "no active layer".to_string())
+        }
+        "layer.videoLayers.reloadFrame" => {
+            let r = app.run(id, params)?;
+            // #11113: reloading a clip salvaged from a truncated GIF or WebP discloses the loss,
+            // as the import and replace-footage paths do.
+            crate::notices::footage_warnings(app, &r, crate::i18n::t("Reloaded the footage"));
+            Ok(r)
         }
         _ => app.run(id, params),
     }
