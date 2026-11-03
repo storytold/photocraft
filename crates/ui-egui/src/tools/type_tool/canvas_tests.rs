@@ -3315,6 +3315,28 @@ fn clicking_inside_a_shape_starts_area_type_in_one_step() {
     assert!(app.session.active().unwrap().doc.layer(id).is_none());
 }
 
+/// #10714: a closed shape is an area type target even when another layer is active and no
+/// selection or work path exists.
+#[test]
+fn clicking_inside_an_inactive_shape_starts_area_type() {
+    use photocraft_doc::text::TextShape;
+    let mut app = new_app();
+    let shape = ellipse_layer(&mut app);
+    app.run("layer.new.layer", json!({})).unwrap();
+    assert_ne!(app.session.active().unwrap().active_layer, Some(LayerId(shape)), "another layer is active");
+    assert_eq!(path_target(&app, 400.0, 350.0), Some(PathClick::Area { shape: Some(shape) }));
+    assert_eq!(super::hover_path_target(&mut app, 400.0, 350.0, false), Some(PathClick::Area { shape: Some(shape) }));
+    click_at(&mut app, 400.0, 350.0);
+    let id = LayerId(app.ui.text_edit.as_ref().expect("editing").layer);
+    assert!(matches!(text_layer(&app.session.active().unwrap().doc, id).unwrap().shape, TextShape::Area { .. }));
+    // A hidden shape is not a target.
+    let mut app = new_app();
+    let shape = ellipse_layer(&mut app);
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("layer.setProps", json!({"layer": shape, "visible": false})).unwrap();
+    assert!(path_target(&app, 400.0, 350.0).is_none());
+}
+
 #[test]
 fn clicking_on_a_path_outline_starts_type_on_the_path_where_clicked() {
     use photocraft_doc::text::TextShape;
