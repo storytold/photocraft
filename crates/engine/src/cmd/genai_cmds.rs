@@ -71,7 +71,8 @@ pub const NO_AI: &str = "Generative Fill needs the PhotoCraft desktop app.";
 /// Longest side sent; larger areas are scaled down for the request and the result is scaled back
 /// up.
 const UPLOAD_SIDE: u32 = 2048;
-const DEFAULT_VARIATIONS: usize = 3;
+/// Variations a fill makes when not told: three, as Photoshop makes, each its own request.
+pub const DEFAULT_VARIATIONS: usize = 3;
 const MAX_VARIATIONS: u64 = 4;
 /// Longest prompt, in bytes.
 pub const MAX_PROMPT: usize = 8_000;

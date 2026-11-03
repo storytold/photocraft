@@ -31,7 +31,7 @@ struct Fake {
 
 fn fake() -> Fake {
     Fake {
-        status: Mutex::new(AiStatus::Ready { model: "Fill One".into(), connection: "Fake".into(), local: false }),
+        status: Mutex::new(AiStatus::Ready { model: "Fill One".into(), connection: "Fake".into(), local: false, billing: Default::default() }),
         color: [255, 0, 0],
         delay: std::time::Duration::ZERO,
         remote: false,
@@ -225,7 +225,7 @@ fn unavailable_greys_the_menu_item_and_says_why() {
 /// set up; before that only if the person turned it on, and then it opens the setup.
 #[test]
 fn the_options_bar_button_shows_once_set_up_or_when_asked_for() {
-    let ready = AiStatus::Ready { model: "M".into(), connection: "C".into(), local: true };
+    let ready = AiStatus::Ready { model: "M".into(), connection: "C".into(), local: true, billing: Default::default() };
     let not_set_up = AiStatus::Unavailable { reason: "No model is chosen.".into() };
     for (status, always, shown) in [(ready.clone(), false, true), (ready, true, true), (not_set_up.clone(), false, false), (not_set_up, true, true)] {
         let (mut app, f) = app_with(fake());
@@ -274,7 +274,7 @@ fn the_prompt_dialog_runs_the_fill_and_remembers_the_prompt() {
     app.run("select.rect", json!({"x": 8, "y": 8, "width": 16, "height": 16})).unwrap();
     let id = open_prompt_dialog(&mut app);
     let fields = &app.ui.dialogs.iter().find(|d| d.id == id).unwrap().fields;
-    assert_eq!(ok_label(fields), Some("Generate"));
+    assert_eq!(ok_label(fields).as_deref(), Some("Generate 3"), "says how many it makes");
     assert_eq!(fields["__command"], FILL, "automation confirming it is judged as the command");
     assert!(can_confirm(&app, fields));
     app.ui.dialog_mut(id).unwrap().fields.insert("prompt".into(), json!("a red square"));
@@ -327,7 +327,7 @@ fn consent_is_asked_before_anything_is_sent_and_this_time_is_not_remembered() {
     assert_eq!(fields["destination"], "https://fake.example");
     assert_eq!(fields["__command"], AGREE, "automation confirming it is refused as `layer.generative.agree`");
     assert_eq!(fields["items"].as_array().unwrap().len(), 3);
-    assert_eq!(ok_label(&fields), Some("Send"));
+    assert_eq!(ok_label(&fields).as_deref(), Some("Send"));
     assert_eq!(cancel_label(&fields), Some("Don't Send"));
     // It shows where, what (with sizes) and the four choices.
     let mut h = harness(

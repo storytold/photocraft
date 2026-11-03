@@ -14,15 +14,15 @@ use std::time::{Duration, Instant};
 
 use craft_ai_client::{AiClient, ConnectionManager, GroupState, KeyState, RoleStatus, SaveError, ToolDesk};
 use craft_ai_core::{
-    AiError, AppId, ConnectionDraft, ConnectionId, ConsentLedger, ErrorKind, Event, InputRole, JobState, Locality, ModelId, PRESETS, Payload, PayloadKind,
-    Request, Role,
+    AiError, AppId, Billing, ConnectionDraft, ConnectionId, ConsentLedger, ErrorKind, Event, InputRole, JobState, Locality, ModelId, PRESETS, Payload,
+    PayloadKind, Request, Role,
 };
 use craft_ai_native::ConsentFile;
 use craft_ai_native::secrets::{EnvStore, KeychainStore, LayeredStore, SecretStore};
 use craft_ai_native::shared::SharedStore;
 use photocraft_engine::genai::{
-    AiErrorKind, AiFailure, AiStatus, ConnectionProblem, ConnectionRow, ConsentTerm, Disclosure, FillJob, FillPlan, FillRequest, GenerativeAi, JobPoll,
-    ModelRow, SentInput, SentItem, SentKind, ServiceKind, SetupView, SharedAi,
+    AiBilling, AiErrorKind, AiFailure, AiStatus, ConnectionProblem, ConnectionRow, ConsentTerm, Disclosure, FillJob, FillPlan, FillRequest, GenerativeAi,
+    JobPoll, ModelRow, SentInput, SentItem, SentKind, ServiceKind, SetupView, SharedAi,
 };
 
 /// The app id the launcher knows PhotoCraft by: consent and per-app choices are kept under it.
@@ -147,7 +147,17 @@ impl GenerativeAi for CraftAi {
             return s.clone();
         }
         let s = match self.client.status(&self.role) {
-            RoleStatus::Ready(r) => AiStatus::Ready { model: r.model_label, connection: r.connection_label, local: r.locality == Locality::Local },
+            RoleStatus::Ready(r) => AiStatus::Ready {
+                model: r.model_label,
+                connection: r.connection_label,
+                local: r.locality == Locality::Local,
+                billing: match r.billing {
+                    Billing::Free => AiBilling::Free,
+                    Billing::Metered => AiBilling::Metered,
+                    Billing::SubscriptionAllowance => AiBilling::Subscription,
+                    Billing::Unknown => AiBilling::Unknown,
+                },
+            },
             RoleStatus::Unavailable { reason } => AiStatus::Unavailable { reason },
         };
         *cached = Some((Instant::now(), s.clone()));

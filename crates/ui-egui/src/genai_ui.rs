@@ -10,7 +10,7 @@
 //! person's agreement for a destination off this computer (`consent`).
 
 use photocraft_doc::{Layer, LayerId};
-use photocraft_engine::genai::AiStatus;
+use photocraft_engine::genai::{AiBilling, AiStatus};
 use photocraft_engine::genai_cmds::{ColourMatch, Framing, VariationNote};
 use serde_json::{Map, Value, json};
 
@@ -116,11 +116,12 @@ pub fn owns(fields: &Map<String, Value>) -> bool {
     fields.contains_key(PROMPT_MARK) || fields.contains_key(CONSENT_MARK)
 }
 
-pub fn ok_label(fields: &Map<String, Value>) -> Option<&'static str> {
+/// The default button's label: Generate with the number of variations it makes, or Send.
+pub fn ok_label(fields: &Map<String, Value>) -> Option<std::borrow::Cow<'static, str>> {
     if fields.contains_key(PROMPT_MARK) {
-        Some(tl!("Generate"))
+        Some(crate::i18n::fmt(tl!("Generate {n}"), &[("n", &request_count(fields).to_string())]).into())
     } else if fields.contains_key(CONSENT_MARK) {
-        Some(tl!("Send"))
+        Some(tl!("Send").into())
     } else {
         None
     }
@@ -177,7 +178,7 @@ fn faint(ui: &mut egui::Ui, text: &str) {
 /// Where the chosen model runs and what that means for what is sent, in a line.
 fn status_lines(ui: &mut egui::Ui, status: &AiStatus) {
     match status {
-        AiStatus::Ready { model, connection, local } => {
+        AiStatus::Ready { model, connection, local, .. } => {
             faint(ui, &crate::i18n::fmt(tl!("Generative Fill uses {model} ({connection})."), &[("model", model), ("connection", connection)]));
             faint(
                 ui,
@@ -233,7 +234,48 @@ fn prompt_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, V
     }
     areas_section(ui, f);
     ui.add_space(8.0);
+    cost_lines(ui, &status, request_count(f));
+    ui.add_space(2.0);
     status_lines(ui, &status);
+}
+
+/// How many variations, each its own request, Generate makes from the prompt dialog's fields:
+/// three, for each separate area when they are filled on their own.
+pub(crate) fn request_count(f: &Map<String, Value>) -> u64 {
+    let per = photocraft_engine::genai_cmds::DEFAULT_VARIATIONS as u64;
+    let areas = f.get("__areas").and_then(Value::as_u64).unwrap_or(0);
+    let separate = f.get("separate").and_then(Value::as_bool).unwrap_or(true);
+    if separate && (2..=MAX_SEPARATE as u64).contains(&areas) { per * areas } else { per }
+}
+
+/// What Generate is about to do, before it is pressed: how many variations, as how many requests
+/// to which connection, and how the connection says they are paid for (never a price: PhotoCraft
+/// doesn't know one).
+pub(crate) fn cost_text(status: &AiStatus, n: u64) -> Vec<String> {
+    let AiStatus::Ready { connection, local, billing, .. } = status else { return Vec::new() };
+    let lang = crate::i18n::current();
+    let what = if *local {
+        crate::i18n::trn(lang, n, "Makes {n} variation on this computer, with {connection}.", "Makes {n} variations on this computer, with {connection}.")
+    } else {
+        crate::i18n::trn(lang, n, "Makes {n} variation: {n} request to {connection}.", "Makes {n} variations: {n} separate requests to {connection}.")
+    };
+    let mut lines = vec![crate::i18n::fmt(&what, &[("connection", connection)])];
+    let paid = match (billing, *local) {
+        (AiBilling::Metered, _) => Some(tl!("Each request is billed by the service.")),
+        (AiBilling::Subscription, _) => Some(tl!("Each request uses your subscription allowance.")),
+        (AiBilling::Free, false) => Some(tl!("The connection is set up as free of charge.")),
+        (AiBilling::Unknown, false) => Some(tl!("Check the service's own terms for what each request costs.")),
+        (AiBilling::Free | AiBilling::Unknown, true) => None,
+    };
+    lines.extend(paid.map(str::to_owned));
+    lines
+}
+
+fn cost_lines(ui: &mut egui::Ui, status: &AiStatus, n: u64) {
+    let t = crate::theme::Tokens::get(ui.ctx());
+    for line in cost_text(status, n) {
+        ui.add(egui::Label::new(egui::RichText::new(line).color(t.text).size(12.5)).wrap());
+    }
 }
 
 /// The selection's separate areas (several objects selected together): fill each on its own, side

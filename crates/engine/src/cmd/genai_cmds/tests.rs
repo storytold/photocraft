@@ -58,7 +58,7 @@ fn fake(color: [u8; 3]) -> Fake {
         jpeg: false,
         busy: 0,
         remote: false,
-        status: Mutex::new(AiStatus::Ready { model: "Fake 1".into(), connection: "Fake".into(), local: true }),
+        status: Mutex::new(AiStatus::Ready { model: "Fake 1".into(), connection: "Fake".into(), local: true, billing: Default::default() }),
         remembered: AtomicBool::new(false),
         agreed: Mutex::new(Vec::new()),
         calls: AtomicUsize::new(0),
@@ -326,7 +326,7 @@ fn unavailable_greys_the_tool_out_with_the_layers_reason_and_sends_nothing() {
     assert_eq!(s.generative_status(), AiStatus::Unavailable { reason: reason.into() });
     assert_eq!(f.plans.load(Ordering::SeqCst), 0, "nothing was even planned");
     // It's asked again each time: once ready, the tool is on.
-    *f.status.lock().unwrap() = AiStatus::Ready { model: "M".into(), connection: "C".into(), local: false };
+    *f.status.lock().unwrap() = AiStatus::Ready { model: "M".into(), connection: "C".into(), local: false, billing: Default::default() };
     assert!(s.is_enabled(FILL));
     assert_eq!(s.execute(FILLS, json!({})).unwrap()["status"]["state"], "ready");
 }

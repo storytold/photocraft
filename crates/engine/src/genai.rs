@@ -32,9 +32,26 @@ pub enum AiStatus {
         connection: String,
         /// Runs on this computer: nothing leaves it.
         local: bool,
+        /// How the connection says it is paid for (each request, for a metered one).
+        billing: AiBilling,
     },
     /// It can't. `reason` is a sentence for a person, shown as it is (not as an error).
     Unavailable { reason: String },
+}
+
+/// How a connection is paid for, as the shared layer records it. PhotoCraft never knows a price.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AiBilling {
+    /// Free of charge.
+    Free,
+    /// Each request is billed by the service.
+    Metered,
+    /// Requests use a subscription's allowance.
+    Subscription,
+    /// Not recorded: the service's own terms say.
+    #[default]
+    Unknown,
 }
 
 impl AiStatus {

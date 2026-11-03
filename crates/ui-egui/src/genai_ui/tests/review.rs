@@ -52,3 +52,24 @@ fn save_fill_diagnostics_asks_for_a_folder_and_writes_there() {
     assert!(!offers_diagnostics(&web, group));
     assert!(crate::menus::invoke(&mut web, &ctx, SAVE, json!({})).is_err());
 }
+
+#[test]
+fn the_prompt_says_how_many_requests_go_where_and_how_they_are_paid_for() {
+    let ready = |local, billing| AiStatus::Ready { model: "Fill One".into(), connection: "OpenAI".into(), local, billing };
+    let metered = cost_text(&ready(false, AiBilling::Metered), 3);
+    assert_eq!(metered, ["Makes 3 variations: 3 separate requests to OpenAI.", "Each request is billed by the service."]);
+    assert_eq!(cost_text(&ready(false, AiBilling::Unknown), 3)[1], "Check the service's own terms for what each request costs.");
+    assert_eq!(cost_text(&ready(true, AiBilling::Free), 3), ["Makes 3 variations on this computer, with OpenAI."]);
+    assert!(cost_text(&AiStatus::Unavailable { reason: "no".into() }, 3).is_empty());
+    // Several areas filled on their own: three for each.
+    let mut f = Map::new();
+    f.insert(PROMPT_MARK.into(), json!(true));
+    f.insert("__areas".into(), json!(4));
+    assert_eq!(request_count(&f), 12);
+    assert_eq!(ok_label(&f).as_deref(), Some("Generate 12"));
+    f.insert("separate".into(), json!(false));
+    assert_eq!(request_count(&f), 3, "filled as one");
+    f.insert("separate".into(), json!(true));
+    f.insert("__areas".into(), json!(MAX_SEPARATE + 1));
+    assert_eq!(request_count(&f), 3, "too many to fill one by one: filled as one");
+}

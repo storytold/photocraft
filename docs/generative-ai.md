@@ -53,7 +53,12 @@ is what tests do so they never touch a person's real settings.
 1. Make a selection, then Edit › Generative Fill… (or the selection tools' Generative Fill…
    button, shown only while the tool can run). Describe what to put there, or leave the prompt
    empty to continue the surrounding picture through the selection, which removes what was
-   there. The dialog says which model is used and whether it runs online.
+   there. The dialog says which model is used and whether it runs online, and before anything
+   starts, how many variations Generate makes and as how many requests to which connection
+   ("Makes 3 variations: 3 separate requests to OpenAI."; three for each area filled on its own)
+   and how the connection says they are paid for (billed by the service per request, a
+   subscription's allowance, free, or check the service's terms: the shared layer records how a
+   connection is billed, never a price). Its button says the number too (Generate 3).
 2. If the model runs off this computer and nothing on file covers it, PhotoCraft asks first (see
    [Consent](#consent)). Nothing is sent until the person agrees.
 3. Three variations come back, as in Photoshop. They land in a new group named after the prompt

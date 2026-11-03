@@ -14,7 +14,7 @@ use craft_ai_native::secrets::{MemoryStore, SecretStore};
 use craft_ai_native::shared::SharedStore;
 use photocraft_codecs::{ChannelLayout, Format, Image};
 use photocraft_engine::Session;
-use photocraft_engine::genai::{AiErrorKind, AiStatus, ConnectionProblem, ConsentTerm, FillRequest, GenerativeAi, JobPoll, SentInput, ServiceKind};
+use photocraft_engine::genai::{AiBilling, AiErrorKind, AiStatus, ConnectionProblem, ConsentTerm, FillRequest, GenerativeAi, JobPoll, SentInput, ServiceKind};
 use photocraft_engine::genai_cmds::{AGREE, FILL, FILLS};
 use serde_json::json;
 
@@ -154,7 +154,7 @@ fn nothing_chosen_is_unavailable_and_nothing_is_planned() {
 fn the_suite_default_is_ready_and_a_remote_model_needs_consent_first() {
     let scene = Scene::new(true, true);
     let ai = scene.ai(Some(Answer::Picture(png(4, 4, [255, 0, 0]))));
-    assert_eq!(ai.status(), AiStatus::Ready { model: "Fill One".into(), connection: "Fake (online)".into(), local: false });
+    assert_eq!(ai.status(), AiStatus::Ready { model: "Fill One".into(), connection: "Fake (online)".into(), local: false, billing: AiBilling::Metered });
     let plan = ai.plan(request()).unwrap();
     // What the consent prompt shows: where, and what (kinds and sizes).
     let d = plan.disclosure();

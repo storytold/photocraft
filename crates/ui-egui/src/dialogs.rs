@@ -451,7 +451,7 @@ fn button_row(
         let ok_label = ok_label(d);
         // Dialogs that need an input first (a preset name, a selection) grey OK out.
         let can_ok = crate::crop_presets::can_confirm(app, fields) && crate::stack_dialog::can_confirm(fields) && crate::genai_ui::can_confirm(app, fields);
-        let ok = DialogButton::new(ButtonRole::Default, ok_label, 84.0).enabled(can_ok);
+        let ok = DialogButton::new(ButtonRole::Default, &ok_label, 84.0).enabled(can_ok);
         // Photoshop: holding Alt turns Cancel into Reset (the dialog stays open).
         // Dialogs opt in via `dialog_alt_reset::supported` (per marker).
         let reset = ui.input(|i| i.modifiers.alt) && crate::dialog_alt_reset::supported(fields);
@@ -521,23 +521,23 @@ fn button_row(
 }
 
 /// The default button's label: what OK means for this dialog.
-fn ok_label(d: &Dialog) -> &'static str {
+fn ok_label(d: &Dialog) -> std::borrow::Cow<'static, str> {
     if d.kind == DialogKind::NewDocument {
-        tl!("Create")
+        tl!("Create").into()
     } else if crate::open_prompt::owns_memory(&d.fields) {
-        tl!("Open anyway")
+        tl!("Open anyway").into()
     } else if crate::open_prompt::owns_damage(&d.fields) {
-        tl!("Continue")
+        tl!("Continue").into()
     } else if crate::delete_layer_prompt::owns(&d.fields) {
-        tl!("Delete")
+        tl!("Delete").into()
     } else if crate::disk_change_prompt::owns(&d.fields) || crate::replace_prompt::owns(&d.fields) {
-        tl!("Replace")
+        tl!("Replace").into()
     } else if d.fields.contains_key("__export") {
-        tl!("Export")
+        tl!("Export").into()
     } else if let Some(label) = crate::genai_ui::ok_label(&d.fields) {
         label
     } else {
-        crate::file_ui::ok_label(&d.fields).unwrap_or(tl!("OK"))
+        crate::file_ui::ok_label(&d.fields).unwrap_or(tl!("OK")).into()
     }
 }
 
