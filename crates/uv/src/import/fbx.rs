@@ -519,6 +519,117 @@ mod preflight_tests {
         assert!(!is_indexed_reference_mode(None));
     }
 
+    fn fbx_string(value: &str) -> Vec<u8> {
+        let mut out = vec![b'S'];
+        out.extend_from_slice(&(value.len() as u32).to_le_bytes());
+        out.extend_from_slice(value.as_bytes());
+        out
+    }
+
+    fn fbx_i64(value: i64) -> Vec<u8> {
+        let mut out = vec![b'L'];
+        out.extend_from_slice(&value.to_le_bytes());
+        out
+    }
+
+    fn fbx_array<T>(tag: u8, values: &[T], encode: impl Fn(&T, &mut Vec<u8>)) -> Vec<u8> {
+        let mut data = Vec::new();
+        for value in values {
+            encode(value, &mut data);
+        }
+        let mut out = vec![tag];
+        out.extend_from_slice(&(values.len() as u32).to_le_bytes());
+        out.extend_from_slice(&0_u32.to_le_bytes());
+        out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        out.extend_from_slice(&data);
+        out
+    }
+
+    struct FbxNode {
+        name: String,
+        attrs: Vec<Vec<u8>>,
+        children: Vec<FbxNode>,
+    }
+
+    fn fbx_node(name: &str, attrs: Vec<Vec<u8>>, children: Vec<FbxNode>) -> FbxNode {
+        FbxNode { name: name.into(), attrs, children }
+    }
+
+    fn append_fbx_node(bytes: &mut Vec<u8>, node: &FbxNode) {
+        let start = bytes.len();
+        bytes.resize(start + 13, 0);
+        bytes[start + 12] = node.name.len() as u8;
+        bytes.extend_from_slice(node.name.as_bytes());
+        let attr_start = bytes.len();
+        for attr in &node.attrs {
+            bytes.extend_from_slice(attr);
+        }
+        let attr_len = bytes.len() - attr_start;
+        for child in &node.children {
+            append_fbx_node(bytes, child);
+        }
+        if !node.children.is_empty() {
+            bytes.extend_from_slice(&[0; 13]);
+        }
+        let end = bytes.len() as u32;
+        bytes[start..start + 4].copy_from_slice(&end.to_le_bytes());
+        bytes[start + 4..start + 8].copy_from_slice(&(node.attrs.len() as u32).to_le_bytes());
+        bytes[start + 8..start + 12].copy_from_slice(&(attr_len as u32).to_le_bytes());
+        bytes[start + 12] = node.name.len() as u8;
+    }
+
+    fn indexed_uv_fbx(reference: &str) -> Vec<u8> {
+        let mut version = vec![b'I'];
+        version.extend_from_slice(&101_i32.to_le_bytes());
+        let uv_layer = fbx_node(
+            "LayerElementUV",
+            vec![],
+            vec![
+                fbx_node("Version", vec![version], vec![]),
+                fbx_node("Name", vec![fbx_string("UVChannel_1")], vec![]),
+                fbx_node("MappingInformationType", vec![fbx_string("ByPolygonVertex")], vec![]),
+                fbx_node("ReferenceInformationType", vec![fbx_string(reference)], vec![]),
+                fbx_node("UV", vec![fbx_array(b'd', &[0.1_f64, 0.2, 0.3, 0.4, 0.5, 0.6], |v, o| o.extend_from_slice(&v.to_le_bytes()))], vec![]),
+                fbx_node("UVIndex", vec![fbx_array(b'i', &[2_i32, 0, 1], |v, o| o.extend_from_slice(&v.to_le_bytes()))], vec![]),
+            ],
+        );
+        let vertices = fbx_array(b'd', &[0.0_f64, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0], |v, o| o.extend_from_slice(&v.to_le_bytes()));
+        let polygons = fbx_array(b'i', &[0_i32, 1, -3], |v, o| o.extend_from_slice(&v.to_le_bytes()));
+        let objects = fbx_node(
+            "Objects",
+            vec![],
+            vec![
+                fbx_node(
+                    "Geometry",
+                    vec![fbx_i64(1), fbx_string("Geometry::Triangle"), fbx_string("Mesh")],
+                    vec![fbx_node("Vertices", vec![vertices], vec![]), fbx_node("PolygonVertexIndex", vec![polygons], vec![]), uv_layer],
+                ),
+                fbx_node("Model", vec![fbx_i64(2), fbx_string("Model::Triangle"), fbx_string("Mesh")], vec![]),
+            ],
+        );
+        let connections = fbx_node("Connections", vec![], vec![fbx_node("C", vec![fbx_string("OO"), fbx_i64(1), fbx_i64(2)], vec![])]);
+        let mut bytes = b"Kaydara FBX Binary  \0\x1a\0".to_vec();
+        bytes.extend_from_slice(&7400_u32.to_le_bytes());
+        append_fbx_node(&mut bytes, &objects);
+        append_fbx_node(&mut bytes, &connections);
+        bytes.extend_from_slice(&[0; 13]);
+        bytes
+    }
+
+    #[test]
+    fn loader_uses_uv_indices_for_legacy_index_reference_mode() {
+        let bytes = indexed_uv_fbx("Index");
+        let tree = AnyTree::from_seekable_reader(std::io::Cursor::new(bytes.clone())).unwrap();
+        let AnyTree::V7400(_, tree, _) = tree else { panic!("test fixture should be FBX 7.4") };
+        let geometry = child(tree.root(), "Objects").unwrap().first_child_by_name("Geometry").unwrap();
+        let uv = child(geometry, "LayerElementUV").unwrap();
+        assert_eq!(text(uv, "ReferenceInformationType"), Some("Index"));
+        assert_eq!(ints(uv, "UVIndex").unwrap(), [2, 0, 1]);
+        let scene = load(&bytes, 0).unwrap();
+        let uvs = scene.triangles[0].corners.map(|corner| corner.uv);
+        assert_eq!(uvs, [[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]]);
+    }
+
     fn file_with_attributes(attribute_count: u32, declared_attribute_bytes: u32, attributes: &[u8]) -> Vec<u8> {
         const NODE_HEADER: usize = 13;
         const END_MARKER: usize = NODE_HEADER;

@@ -1003,7 +1003,10 @@ fn valid_segment_breaks(breaks: &[usize], points_len: usize) -> Vec<usize> {
 
 #[cfg(test)]
 mod segment_break_tests {
-    use super::valid_segment_breaks;
+    use super::{commit_brush_stroke, valid_segment_breaks};
+    use crate::{PhotocraftApp, Services, Tool, canvas::Drag};
+    use egui::Modifiers;
+    use serde_json::json;
 
     #[test]
     fn removes_duplicate_out_of_range_and_unordered_break_indices() {
@@ -1011,6 +1014,21 @@ mod segment_break_tests {
         assert_eq!(valid_segment_breaks(&[0, 1], 2), [1]);
         assert!(valid_segment_breaks(&[0], 2).is_empty());
         assert!(valid_segment_breaks(&[], 0).is_empty());
+    }
+
+    #[test]
+    fn committed_stroke_uses_sanitized_breaks_after_stylus_conversion() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
+        app.run("file.new", json!({"width":32,"height":24})).unwrap();
+        app.ui.tool = Tool::Brush;
+        let mut drag = Drag::new(Tool::Brush, [4.0, 8.0], vec![[4.0, 8.0, 1.0], [8.0, 8.0, 1.0], [12.0, 8.0, 1.0], [16.0, 8.0, 1.0]], Modifiers::NONE, false);
+        drag.breaks = vec![0, 2, 2, 9];
+
+        commit_brush_stroke(&mut app, &drag);
+
+        let params = app.session.journal.iter().rev().find(|(id, _)| id == "paint.stroke").map(|(_, params)| params).expect("committed paint.stroke");
+        assert_eq!(params["breaks"], json!([2]));
+        assert_eq!(params["points"].as_array().unwrap().len(), drag.points.len());
     }
 }
 
