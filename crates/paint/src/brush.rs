@@ -702,6 +702,15 @@ impl BrushSettings {
         brush.dual_brush.size = safe_size(brush.dual_brush.size);
         brush.scattering.scatter.jitter = safe_scatter(brush.scattering.scatter.jitter);
         brush.dual_brush.scatter = safe_scatter(brush.dual_brush.scatter);
+        // A NaN here would paint fully opaque (`f32::min` returns the other operand) or not at all;
+        // it falls back to the default (the values of `BrushSettings::default` and `DualBrush::default`). Finite values, whatever their range, are left as they are.
+        let finite_or = |v: f32, d: f32| if v.is_finite() { v } else { d };
+        brush.opacity = finite_or(brush.opacity, 1.0);
+        brush.flow = finite_or(brush.flow, 1.0);
+        brush.hardness = finite_or(brush.hardness, 1.0);
+        brush.spacing = finite_or(brush.spacing, 0.1);
+        brush.dual_brush.hardness = finite_or(brush.dual_brush.hardness, 1.0);
+        brush.dual_brush.spacing = finite_or(brush.dual_brush.spacing, 0.25);
         brush
     }
 
