@@ -54,8 +54,13 @@ pub fn procedural_pattern(style: PatternStyle, size: u32, seed: u32, t: &Texture
     let bytes = |e: &PatternEntry| e.image.data.len() * 4;
     if image.data.len() * 4 <= PATTERN_MAX_BYTES / 2 {
         let mut cache = PATTERNS.lock().unwrap_or_else(PoisonError::into_inner);
-        if !cache.iter().any(|e| e.key == key) {
-            cache.push(PatternEntry { key, image: Arc::clone(&image) });
+        // Another thread may have built the same key meanwhile: keep its image, but it was just asked for.
+        match cache.iter().position(|e| e.key == key) {
+            Some(i) => {
+                let e = cache.remove(i);
+                cache.push(e);
+            }
+            None => cache.push(PatternEntry { key, image: Arc::clone(&image) }),
         }
         while cache.len() > PATTERN_MAX_ENTRIES || cache.iter().map(bytes).sum::<usize>() > PATTERN_MAX_BYTES {
             cache.remove(0);
@@ -76,15 +81,33 @@ mod tests {
         let mut fresh = crate::procedural::pattern(PatternStyle::Noise, 64, 3);
         fresh.data.iter_mut().for_each(|v| *v = base.level(*v));
         assert_eq!(a.data, fresh.data);
-        for other in [
-            procedural_pattern(PatternStyle::Canvas, 64, 3, &base),
-            procedural_pattern(PatternStyle::Noise, 32, 3, &base),
-            procedural_pattern(PatternStyle::Noise, 64, 4, &base),
-            procedural_pattern(PatternStyle::Noise, 64, 3, &Texture { invert: true, ..base.clone() }),
-            procedural_pattern(PatternStyle::Noise, 64, 3, &Texture { brightness: 0.5, ..base.clone() }),
-            procedural_pattern(PatternStyle::Noise, 64, 3, &Texture { contrast: 0.5, ..base.clone() }),
-        ] {
-            assert!(!Arc::ptr_eq(&a, &other));
+        let variants = [
+            (PatternStyle::Canvas, 64, 3, base.clone()),
+            (PatternStyle::Noise, 32, 3, base.clone()),
+            (PatternStyle::Noise, 64, 4, base.clone()),
+            (PatternStyle::Noise, 64, 3, Texture { invert: true, ..base.clone() }),
+            (PatternStyle::Noise, 64, 3, Texture { brightness: 0.5, ..base.clone() }),
+            (PatternStyle::Noise, 64, 3, Texture { contrast: 0.5, ..base.clone() }),
+        ];
+        for (style, size, seed, texture) in variants {
+            // Look the base up again so it is the newest entry and still cached when the variant is
+            // asked for; a key that ignored the changed input would then hand back the base image.
+            procedural_pattern(PatternStyle::Noise, 64, 3, &base);
+            let other = procedural_pattern(style, size, seed, &texture);
+            assert!(!Arc::ptr_eq(&a, &other) && other.data != a.data, "{style:?} {size} {seed}");
         }
+    }
+
+    /// The cache holds a few entries: the oldest one goes first. Seeds are used by no other test, so
+    /// no hit can refresh `first`.
+    #[test]
+    fn pattern_cache_evicts_the_oldest_entry_past_its_limit() {
+        let base = Texture::default();
+        let first = procedural_pattern(PatternStyle::Noise, 16, 90_001, &base);
+        assert!(Arc::ptr_eq(&first, &procedural_pattern(PatternStyle::Noise, 16, 90_001, &base)));
+        for seed in 90_002..90_002 + PATTERN_MAX_ENTRIES as u32 {
+            procedural_pattern(PatternStyle::Noise, 16, seed, &base);
+        }
+        assert!(!Arc::ptr_eq(&first, &procedural_pattern(PatternStyle::Noise, 16, 90_001, &base)));
     }
 }
