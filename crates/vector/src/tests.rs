@@ -614,3 +614,13 @@ fn gradient_stops_are_found_by_bisection_and_agree_with_a_scan() {
     }
     assert!(started.elapsed().as_secs() < 5, "{:?}", started.elapsed());
 }
+
+#[test]
+fn feathered_fill_plane_is_bounded_by_the_mask_budget() {
+    // 512 MiB / 12 bytes a pixel: about 44.7 Mpx.
+    assert!(fits_feather_budget(6000, 7000));
+    assert!(!fits_feather_budget(7000, 7000));
+    // Two contours at opposite corners of a 300000 px canvas.
+    assert!(!fits_feather_budget(300_000, 300_000));
+    assert!(!fits_feather_budget(usize::MAX, usize::MAX));
+}
