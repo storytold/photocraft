@@ -311,7 +311,8 @@ impl PatternImage {
     pub fn sample_bilinear_wrap(&self, x0: f32, y0: f32, tx: f32, ty: f32) -> f32 {
         // Past 2^24 `x0 + 1.0` rounds back to `x0`, so the neighbour is not `x0 + 1` any more.
         const EXACT: f32 = 16_777_216.0;
-        if !(x0.abs() < EXACT && y0.abs() < EXACT) {
+        // `rem_euclid` below is on `i32`, so a side past `i32::MAX` takes the `i64` path, like the coordinates past 2^24.
+        if !(x0.abs() < EXACT && y0.abs() < EXACT) || self.width.max(self.height) > i32::MAX as usize {
             let a = self.sample_wrap(x0, y0) + (self.sample_wrap(x0 + 1.0, y0) - self.sample_wrap(x0, y0)) * tx;
             let b = self.sample_wrap(x0, y0 + 1.0) + (self.sample_wrap(x0 + 1.0, y0 + 1.0) - self.sample_wrap(x0, y0 + 1.0)) * tx;
             return a + (b - a) * ty;
