@@ -32,6 +32,8 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
     // One `json!` this size is at the macro recursion limit; further keys are added below it.
     let mut snapshot = json!({
         "window": {"width": screen.width(), "height": screen.height(), "pixelsPerPoint": ctx.pixels_per_point()},
+        "scratch": photocraft_raster::spill::stats(),
+        "memory": photocraft_raster::memory::stats(),
         "tool": app.ui.tool,
         "toolOptions": app.ui.tool_options,
         "perspectiveCrop": app.ui.perspective_crop,
