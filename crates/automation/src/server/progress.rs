@@ -134,8 +134,9 @@ impl PhotocraftMcp {
         let cancel = waiter.context.as_ref().map(|context| context.ct.clone());
         // The guard is armed under the lock that starts the job: when the request is dropped while
         // the start still waits for the lock, the closure's output is dropped unread and cancels it.
+        let poll = id != "jobs.cancel";
         let mut guard = match self
-            .headless_op(move |h| {
+            .headless_op_with_poll(poll, move |h| {
                 if cancel.as_ref().is_some_and(|token| token.is_cancelled()) {
                     return Err(photocraft_engine::EngineError::Cancelled.into());
                 }

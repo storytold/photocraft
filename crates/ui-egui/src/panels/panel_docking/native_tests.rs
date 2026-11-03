@@ -378,7 +378,7 @@ fn a_file_dropped_on_a_panel_window_opens_as_a_document() {
     // An importer that names the document after the file, as photocraft-io does.
     let import = |name: &str, _: &[u8], _: &photocraft_io::ImportOptions| {
         let size = photocraft_geom::Size::new(4, 4);
-        Ok((photocraft_doc::Document::new(name, size, photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8), Vec::new()))
+        Ok(crate::test_import_result(photocraft_doc::Document::new(name, size, photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8), Vec::new()))
     };
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services { import: Some(Box::new(import)), ..Default::default() });
     app.run("file.new", json!({"width": 64, "height": 48})).unwrap();

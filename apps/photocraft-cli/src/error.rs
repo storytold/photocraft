@@ -7,6 +7,8 @@ use crate::actions::ActionsError;
 /// Why a subcommand failed: printed as `error: {e}`, exit 1.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum CliError {
+    #[error("the output is the import-only source; choose another native or export destination")]
+    ImportOnlySource,
     #[error(transparent)]
     Automation(#[from] AutomationError),
     #[error(transparent)]
@@ -34,6 +36,12 @@ pub(crate) enum CliError {
     OutIsIn(PathBuf),
     #[error("--naming: {0}")]
     Naming(String),
+    /// A batch must not replace an unread selected input, including through a filesystem alias.
+    #[error("batch output {} is another selected input {}; choose a different output folder, format or name", output.display(), input.display())]
+    OutIsSelectedInput { output: PathBuf, input: PathBuf },
+    /// Identity inspection must succeed before the batch can safely start writing.
+    #[error("could not inspect batch file {}: {source}", path.display())]
+    InspectBatchFile { path: PathBuf, source: std::io::Error },
     #[error("{0}")]
     BatchOption(String),
     #[error("{0} file(s) failed")]
