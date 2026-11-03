@@ -53,6 +53,8 @@ fn click(h: &mut Harness<'static, (PhotocraftApp, bool)>, automation: bool) {
     h.run_steps(2);
 }
 
+/// A synthetic click on a Home recent row outside the automation roots is refused and reported
+/// as `file.openRecent.0`, like the menu item; the user's own click opens the file.
 #[test]
 fn synthetic_click_on_a_home_recent_row_is_judged_as_open_recent() {
     let dir = std::env::temp_dir().join(format!("pc-home-recent-gate-{}", std::process::id()));
