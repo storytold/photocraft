@@ -1322,6 +1322,7 @@ fn embed_color_profile_tags_an_untagged_document_srgb() {
 #[test]
 fn timestamp_quick_export_preserves_source_and_all_formats() {
     let dir = tempfile::tempdir().unwrap();
+    let other = tempfile::tempdir().unwrap();
     let own = dir.path().join("写真.edit_2.png");
     std::fs::write(&own, b"original").unwrap();
     let mut s = session(8);
@@ -1330,11 +1331,12 @@ fn timestamp_quick_export_preserves_source_and_all_formats() {
     for ext in ["png", "jpg", "gif", "webp", "exr"] {
         s.execute("prefs.set", json!({"path": "export.quickExportFormat", "value": ext})).unwrap();
         let mut kept: Vec<(std::path::PathBuf, Vec<u8>)> = Vec::new();
-        for explicit in [false, true] {
-            let base = dir.path().join(format!("写真.edit_2.{ext}"));
-            let params = if explicit { json!({"path": base}) } else { json!({}) };
+        for destination in [None, Some(dir.path()), Some(other.path())] {
+            let base = destination.unwrap_or(dir.path()).join(format!("写真.edit_2.{ext}"));
+            let params = if destination.is_some() { json!({"path": base}) } else { json!({}) };
             let result = s.execute("file.export.quickExport", params).unwrap();
             let out = std::path::Path::new(result["path"].as_str().unwrap());
+            assert_eq!(out.parent(), base.parent());
             assert_ne!(out, base);
             assert_eq!(out.extension().unwrap(), ext);
             assert!(out.file_stem().unwrap().to_str().unwrap().starts_with("写真.edit_2_"));
