@@ -448,9 +448,18 @@ fn view_show_edit_pins_hides_the_pins() {
         out.textures_delta.clear();
         out.shapes.iter().filter(|s| matches!(&s.shape, egui::Shape::Circle(c) if c.fill == PIN_FILL)).count()
     };
+    // CodeRabbit on #10551: what is no pin (the mesh) stays drawn when the pins hide.
+    let mesh = |app: &PhotocraftApp| {
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| crate::distort_ui::draw_overlay(app, ui.painter(), &xf));
+        out.textures_delta.clear();
+        out.shapes.iter().filter(|s| !matches!(&s.shape, egui::Shape::Circle(_))).count()
+    };
     assert_eq!(pins(&app), 2);
+    let shown = mesh(&app);
+    assert!(shown > 0, "the mesh is drawn");
     app.ui.view.show.edit_pins = false;
     assert_eq!(pins(&app), 0, "Edit Pins off");
+    assert_eq!(mesh(&app), shown, "the mesh is still drawn");
     app.ui.view.show.edit_pins = true;
     app.ui.view.extras = false;
     assert_eq!(pins(&app), 0, "Extras off");
@@ -520,4 +529,7 @@ fn a_pin_hidden_mid_drag_stays_where_it_was() {
     pointer(&mut app, ToolEvent::Up { x: 50.0, y: 55.0 }, egui::Modifiers::NONE);
     assert_eq!(dst(&app), [30.0, 40.0], "so does the release");
     assert!(app.distort.puppet.as_ref().unwrap().drag.is_none(), "the release ends the drag");
+    // CodeRabbit on #10551: one step, which undo takes back to before the drag.
+    assert!(app.distort.puppet.as_mut().unwrap().undo());
+    assert_eq!(dst(&app), [25.0, 40.0], "undo puts the pin back where the drag began");
 }
