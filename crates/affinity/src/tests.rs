@@ -328,6 +328,9 @@ mod archive {
         // Exactly the budget is allowed: the second table is walked (and fails on missing data).
         file[files..files + 4].copy_from_slice(&((1u32 << 25) - 2).to_le_bytes());
         assert!(matches!(Archive::open(&file, Limits::default()), Err(Error::Malformed(_))));
+        // Directory records count too: one more (after the file count and 8 bytes) is over.
+        file[files + 12..files + 14].copy_from_slice(&1u16.to_le_bytes());
+        assert_eq!(Archive::open(&file, Limits::default()).unwrap_err(), Error::Limit("too many allocation records"));
     }
 
     #[test]
