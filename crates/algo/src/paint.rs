@@ -10,7 +10,23 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FillMode {
     Blend(BlendMode),
+    /// [`FillMode::Blend`] into the colour pixels of a 32-bit float document: values above 1 stay
+    /// where the float blend keeps them ([`blend::composite_hdr`], #11126). On other surfaces it is
+    /// [`FillMode::Blend`].
+    BlendColor(BlendMode),
     Clear,
+}
+
+impl FillMode {
+    /// The mode for a colour target (`color`), which a float document fills with the float blend;
+    /// masks and channels hold coverage and keep [`FillMode::Blend`].
+    pub fn for_target(self, color: bool) -> Self {
+        match self {
+            FillMode::Blend(m) if color => FillMode::BlendColor(m),
+            FillMode::BlendColor(m) if !color => FillMode::Blend(m),
+            other => other,
+        }
+    }
 }
 
 /// Gradient tool shape.
@@ -77,6 +93,7 @@ fn composite_area(
     // so their copy-on-write storage (and GPU residency) survives.
     let fmt = s.format();
     let n = fmt.channels();
+    let float = fmt.sample == photocraft_color::SampleType::F32;
     let tiles: Vec<Rect> = area.tiles().map(|tc| tc.rect().intersect(&area)).filter(|r| !r.is_empty()).collect();
     let src: &Surface = s;
     let work = |r: &Rect| -> Option<(Rect, Vec<f32>)> {
@@ -98,8 +115,8 @@ fn composite_area(
                 let px = &mut region[i..i + n];
                 let d = photocraft_raster::to_rgba(&fmt, px);
                 let o = match mode {
-                    FillMode::Blend(m) if lock_transparency => blend::composite_atop(m, d, color(x, y), k),
-                    FillMode::Blend(m) => blend::composite(m, d, color(x, y), k),
+                    FillMode::Blend(m) => blend::composite_as(false, lock_transparency, m, d, color(x, y), k),
+                    FillMode::BlendColor(m) => blend::composite_as(float, lock_transparency, m, d, color(x, y), k),
                     // Locked transparency keeps the alpha, so Clear leaves the pixel as it is.
                     FillMode::Clear if lock_transparency => d,
                     FillMode::Clear => [d[0], d[1], d[2], d[3] * (1.0 - k.min(1.0))],
@@ -108,7 +125,7 @@ fn composite_area(
                 // A colour picked as CMYK inks replaces fully covered pixels of a CMYK target as it is.
                 if let Some(i) = inks
                     && fmt.mode == photocraft_color::ColorMode::Cmyk
-                    && mode == FillMode::Blend(BlendMode::Normal)
+                    && matches!(mode, FillMode::Blend(BlendMode::Normal) | FillMode::BlendColor(BlendMode::Normal))
                     && k >= 1.0
                 {
                     enc[..4].copy_from_slice(&i);
@@ -141,7 +158,7 @@ pub fn paint_gradient(
     stops: &[(f32, [f32; 4])],
     reverse: bool,
     opacity: f32,
-    blend_mode: BlendMode,
+    blend_mode: FillMode,
     dither: bool,
     selection: Option<&Surface>,
     lock_transparency: bool,
@@ -149,7 +166,7 @@ pub fn paint_gradient(
     composite_area(
         s,
         area,
-        FillMode::Blend(blend_mode),
+        blend_mode,
         |x, y| opacity * selection.map_or(1.0, |m| m.sample_channel(x, y, 0)),
         |x, y| {
             let t = tool_gradient_t(shape, from, to, x as f32 + 0.5, y as f32 + 0.5);
@@ -293,7 +310,7 @@ mod tests {
             &[(0.0, [0.0, 0.0, 0.0, 1.0]), (1.0, [1.0, 1.0, 1.0, 1.0])],
             false,
             1.0,
-            BlendMode::Normal,
+            FillMode::Blend(BlendMode::Normal),
             false,
             Some(&sel),
             false,
@@ -312,7 +329,20 @@ mod tests {
                 let a = Rect::new(0, 0, 4, 1);
                 s.fill_rect(a, &[1.0, 1.0, 1.0, 0.5]);
                 let black = [0.0, 0.0, 0.0, 1.0];
-                paint_gradient(&mut s, a, (0.0, 0.0), (4.0, 0.0), GradientShape::Linear, &[(0.0, black), (1.0, black)], false, 0.5, mode, false, None, true);
+                paint_gradient(
+                    &mut s,
+                    a,
+                    (0.0, 0.0),
+                    (4.0, 0.0),
+                    GradientShape::Linear,
+                    &[(0.0, black), (1.0, black)],
+                    false,
+                    0.5,
+                    FillMode::Blend(mode),
+                    false,
+                    None,
+                    true,
+                );
                 let p = s.rgba(2, 0);
                 assert!((p[0] - 0.5).abs() < 0.01 && (p[3] - 0.5).abs() < 0.01, "{fmt:?} {mode:?} {p:?}");
             }

@@ -55,7 +55,9 @@ pub fn fade_surface(before: &Surface, after: &mut Surface, area: Rect, mode: Ble
         } else {
             let rb = to_rgba(&fmt, pb);
             let ra = to_rgba(&fmt, pa);
-            let blended = photocraft_color::blend::composite(mode, rb, ra, 1.0);
+            // Only colour pixels get here (a mask or channel is one channel): a float document
+            // keeps light above white (#11126).
+            let blended = photocraft_color::blend::composite_as(fmt.sample == photocraft_color::SampleType::F32, false, mode, rb, ra, 1.0);
             let mut o = [0.0f32; 4];
             lerp_premul(&rb, &blended, &mut o, true);
             let mut enc = [0.0f32; 8];

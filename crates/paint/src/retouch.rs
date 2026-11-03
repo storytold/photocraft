@@ -187,7 +187,9 @@ pub fn over_native(fmt: &PixelFormat, dst: &mut [f32], src: &[f32], k: f32, lock
 /// Composite a paint image through a coverage map onto `target`.
 ///
 /// `paint` must cover `rect`; `cov` has one value per pixel of `rect`. The per-pixel weight is
-/// `cov × opacity × selection`. Non-normal blend modes composite in straight RGBA (W3C formula).
+/// `cov × opacity × selection`. Non-normal blend modes composite in straight RGBA (W3C formula),
+/// with the float blend when `color` (a layer's colour pixels) and the target is 32-bit float, so
+/// values above 1 stay (#11126).
 #[allow(clippy::too_many_arguments)]
 pub fn apply_coverage(
     target: &mut Surface,
@@ -198,11 +200,13 @@ pub fn apply_coverage(
     lock_transparency: bool,
     paint: &Region,
     blend: BlendMode,
+    color: bool,
 ) -> Rect {
     if rect.is_empty() {
         return Rect::EMPTY;
     }
     let fmt = target.format();
+    let float_color = color && fmt.sample == photocraft_color::SampleType::F32;
     let n = fmt.channels();
     let mut region = target.read_region(rect);
     let w = rect.width() as usize;
@@ -225,8 +229,7 @@ pub fn apply_coverage(
         } else {
             let d = to_rgba(&fmt, px);
             let s = to_rgba(&fmt, src);
-            let o =
-                if lock_transparency { photocraft_color::blend::composite_atop(blend, d, s, k) } else { photocraft_color::blend::composite(blend, d, s, k) };
+            let o = photocraft_color::blend::composite_as(float_color, lock_transparency, blend, d, s, k);
             let mut enc = [0.0f32; 8];
             from_rgba_into(&fmt, o, &mut enc);
             px.copy_from_slice(&enc[..n]);
@@ -487,10 +490,28 @@ mod tests {
             let mut paint = Region::new(r, fmt.channels());
             let n = fmt.channels();
             paint.data.iter_mut().enumerate().for_each(|(i, v)| *v = if fmt.alpha && i % n == n - 1 { 1.0 } else { 0.8 });
-            apply_coverage(&mut s, r, &cov, 1.0, None, false, &paint, BlendMode::Normal);
+            apply_coverage(&mut s, r, &cov, 1.0, None, false, &paint, BlendMode::Normal, false);
             let p = s.pixel(20, 20);
             assert!(p[..n - 1].iter().all(|v| (v - 0.8).abs() < 1e-2) && p[n - 1] == 1.0, "{fmt:?} {p:?}");
             assert!((s.pixel(40, 40)[0] - 0.2).abs() < 1e-2);
+        }
+    }
+
+    /// #11126: the retouch tools' composite (Clone Stamp, History Brush, Healing Brush, Pattern
+    /// Stamp) keeps light above white on a 32-bit layer's colour, and stops at 1 elsewhere.
+    #[test]
+    fn coverage_composite_keeps_float_light_on_colour_only() {
+        for (fmt, color, want) in [(PixelFormat::RGBA32F, true, 1.25), (PixelFormat::RGBA32F, false, 1.0), (PixelFormat::RGBA16, true, 1.0)] {
+            for lock in [false, true] {
+                let mut s = Surface::new(fmt);
+                let r = Rect::new(0, 0, 4, 4);
+                s.fill_rect(r, &[0.75, 0.75, 0.75, 1.0]);
+                let mut paint = Region::new(r, 4);
+                paint.data.chunks_mut(4).for_each(|p| p.copy_from_slice(&[0.5, 0.5, 0.5, 1.0]));
+                apply_coverage(&mut s, r, &[1.0; 16], 1.0, None, lock, &paint, BlendMode::LinearDodge, color);
+                let v = s.rgba(1, 1)[0];
+                assert!((v - want).abs() < 1e-3, "{fmt:?} colour {color} lock {lock}: {v}");
+            }
         }
     }
 
@@ -504,7 +525,7 @@ mod tests {
                 let r = Rect::new(0, 0, 4, 4);
                 let mut paint = Region::new(r, 4);
                 paint.data.chunks_mut(4).for_each(|p| p.copy_from_slice(&[0.0, 0.0, 0.0, 1.0]));
-                apply_coverage(&mut s, r, &[1.0; 16], 0.5, None, true, &paint, mode);
+                apply_coverage(&mut s, r, &[1.0; 16], 0.5, None, true, &paint, mode, false);
                 let p = s.rgba(1, 1);
                 assert!((p[0] - 0.5).abs() < 0.01 && (p[3] - 0.5).abs() < 0.01, "{fmt:?} {mode:?} {p:?}");
             }

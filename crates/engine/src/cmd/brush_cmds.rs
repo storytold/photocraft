@@ -12,7 +12,7 @@ use photocraft_paint::mixer::{MixerSettings, MixerState};
 use photocraft_paint::replace::{Limits, ReplaceMode, ReplaceSettings, Sampling, apply_color_replacement, color_replacement_effect};
 use photocraft_paint::tile::PREVIEW_SIDE;
 use photocraft_paint::{
-    BrushPreset, BrushSettings, GrayTile, Pattern, PresetCaptures, StoredTile, Stroke, StrokePoint, StrokeRenderer, TipShape, render_stroke,
+    BrushPreset, BrushSettings, GrayTile, Pattern, PresetCaptures, StoredTile, Stroke, StrokePoint, StrokeRenderer, TipShape, render_stroke_to,
 };
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
@@ -290,6 +290,8 @@ fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushS
             let sel = doc.selection.clone();
             let table = crate::mode_cmds::paint_color_table(doc, p);
             let (surf, lock) = crate::channel_cmds::target_surface(doc, id, p)?;
+            // A layer's colour, not a mask or channel: a float document keeps light above white.
+            let color = crate::channel_cmds::is_color_target(p);
             let mut brush = brush;
             erase_locked(&mut brush, lock, bg);
             if auto_erase {
@@ -305,22 +307,24 @@ fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushS
                     .filter(|p| crate::symmetry_cmds::SymmetryAxis::has_distinct_mirror(&pts, p))
                     .map(|p| {
                         let mut renderer = StrokeRenderer::new(&brush, Some(surf.format()), zoom);
+                        renderer.ctx.color_target = color;
                         renderer.push(p);
                         renderer.finish();
                         renderer
                     })
                     .collect();
                 if copies.is_empty() {
-                    render_stroke(surf, &brush, &pts, sel.as_ref(), lock, zoom)
+                    render_stroke_to(surf, &brush, &pts, sel.as_ref(), lock, zoom, color)
                 } else {
                     let pre = surf.clone();
                     let mut original = StrokeRenderer::new(&brush, Some(surf.format()), zoom);
+                    original.ctx.color_target = color;
                     original.push(&pts);
                     original.finish();
                     original.composite_union_many(&copies, &pre, surf, sel.as_ref(), lock)
                 }
             } else {
-                render_stroke(surf, &brush, &pts, sel.as_ref(), lock, zoom)
+                render_stroke_to(surf, &brush, &pts, sel.as_ref(), lock, zoom, color)
             };
             if let (Some(table), Some(pre)) = (&table, &unpainted) {
                 crate::mode_cmds::keep_in_color_table(table, pre, surf, damage);
@@ -509,7 +513,7 @@ fn fill_region(s: &mut Session, p: &Value, label: &str, brush: BrushSettings, pt
                 }
             }
             let coverage = photocraft_algo::selection::mask_to_surface(&cov, bounds);
-            crate::fill_cmds::blend_color_mask(surf, bounds, color, picked, &coverage, mode, opacity, lock)?;
+            crate::fill_cmds::blend_color_mask(surf, bounds, color, picked, &coverage, mode, opacity, lock, crate::channel_cmds::is_color_target(p))?;
             Ok(bounds)
         })
     })?;
@@ -619,9 +623,15 @@ impl LiveStroke {
             let fg = table.as_ref().map_or(fg, |t| crate::mode_cmds::table_color(t, fg));
             apply_auto_erase(&mut brush, surf, pts.first(), fg, s.tools.background);
         }
-        let renderer = StrokeRenderer::new(&brush, Some(surf.format()), zoom);
+        let color = crate::channel_cmds::is_color_target(p);
+        let new_renderer = || {
+            let mut r = StrokeRenderer::new(&brush, Some(surf.format()), zoom);
+            r.ctx.color_target = color;
+            r
+        };
+        let renderer = new_renderer();
         let symmetry = s.active().and_then(|st| st.symmetry.clone());
-        let mirrors: Vec<_> = (0..symmetry.as_ref().map_or(0, |s| s.mirror_count())).map(|_| StrokeRenderer::new(&brush, Some(surf.format()), zoom)).collect();
+        let mirrors: Vec<_> = (0..symmetry.as_ref().map_or(0, |s| s.mirror_count())).map(|_| new_renderer()).collect();
         let mirror_distinct = vec![false; mirrors.len()];
         let pre = surf.clone();
         let mut live = Self {
