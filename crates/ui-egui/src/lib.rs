@@ -165,6 +165,7 @@ pub use dialogs::new_layer_ui;
 pub use dialogs::open_prompt;
 pub use dialogs::palette;
 pub(crate) use dialogs::pattern_fill_ui;
+pub use dialogs::preset_group_prompt;
 pub use dialogs::rasterize_prompt;
 pub use dialogs::replace_prompt;
 use dialogs::rgb_histogram;
@@ -252,10 +253,10 @@ pub(crate) use services::SAVE_OPTIONS_OPEN;
 pub(crate) use services::saved_revision_after_write;
 pub use services::{
     AdoptAutosaveFn, AppendTextFn, AutomationCommandFn, AutomationOpenPcraftFn, AutomationReadFn, AutomationWriteFn, AutosaveFn, AutosaveResultsFn, CapsLockFn,
-    CaptionStyleFn, ClipboardGetFn, ClipboardSetFn, ClipboardUnreadableFn, CursorPosFn, DiscardAutosaveFn, EncodePngFn, ExportFn, ExportSettings,
-    ExternalSvgEditor, ExternalSvgSession, ExternalVectorSave, ExternalVectorSource, FileStamp, FileStampFn, FormatChoices, ImportFn, Inbox, LoadTextFn,
-    OpenExternalSvgFn, OpenUrlFn, OsEventsFn, PhotoshopShortcutsFn, QuitFn, RecoverFn, Recoverable, RightButtonDownFn, SameFileFn, SaveFileFn, SaveTextFn,
-    Services, SystemThemeFn, WindowFrameFn, WriteFn,
+    CaptionStyleFn, ClipboardGetFn, ClipboardGetSvgFn, ClipboardSetFn, ClipboardUnreadableFn, CursorPosFn, DiscardAutosaveFn, EncodePngFn, ExportFn,
+    ExportSettings, ExternalSvgEditor, ExternalSvgSession, ExternalVectorSave, ExternalVectorSource, FileStamp, FileStampFn, FormatChoices, ImportFn, Inbox,
+    LoadTextFn, OpenExternalSvgFn, OpenUrlFn, OsEventsFn, PhotoshopShortcutsFn, QuitFn, RecoverFn, Recoverable, RightButtonDownFn, SameFileFn, SaveFileFn,
+    SaveTextFn, Services, SystemThemeFn, WindowFrameFn, WriteFn,
 };
 pub use text::bidi_text;
 pub use text::cjk_fonts;
@@ -592,6 +593,8 @@ pub struct PhotocraftApp {
     pub(crate) pending_after_prompt: Option<(String, serde_json::Value)>,
     /// Last mirrored or imported OS image; this can predate the current internal copy.
     os_clip_sig: Option<u64>,
+    /// Last observed SVG bytes, to distinguish an unchanged OS source from a newer internal copy.
+    os_clip_svg: Option<std::sync::Arc<Vec<u8>>>,
     /// The session copy, if any, need not track the OS clipboard. An older OS signature is kept
     /// to recognize unchanged system contents when exporting a newer copy failed or was disabled.
     clip_unmirrored: bool,
@@ -686,6 +689,8 @@ pub struct PhotocraftApp {
     /// Files read but not opened yet: the first waits on its profile prompt, the rest behind it
     /// (see `open_prompt`).
     pub(crate) held_opens: std::collections::VecDeque<open_prompt::Held>,
+    /// A brush or gradient file waiting on the group-name prompt (see `preset_group_prompt`).
+    pub(crate) held_preset_import: Option<preset_group_prompt::Held>,
     /// Set once the user has agreed to quit, so the resulting close request goes through.
     pub(crate) allow_close: bool,
     /// Pen pressure/tilt from the platform (see `stylus`).
