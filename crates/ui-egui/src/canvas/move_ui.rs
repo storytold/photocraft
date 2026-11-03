@@ -293,6 +293,7 @@ pub(crate) fn channel_texture(app: &mut PhotocraftApp, idx: usize, output: Optio
         });
     }
     let p = app.move_gpu_preview.as_mut()?;
+    photocraft_engine::channel_cmds::color_move_destination(p.bounds, offset.0, offset.1).ok()?;
     let rect = [p.bounds.x0, p.bounds.y0, p.bounds.x1, p.bounds.y1].map(f64::from);
     let quad =
         [[rect[0], rect[1]], [rect[2], rect[1]], [rect[2], rect[3]], [rect[0], rect[3]]].map(|[x, y]| [x + f64::from(offset.0), y + f64::from(offset.1)]);
@@ -435,7 +436,7 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
     if offset == (0, 0) && p.offsets.is_empty() {
         return None;
     }
-    if p.offsets.last() != Some(&offset) || (channel.is_some() && p.background != background) {
+    if p.shown.is_none() || p.offsets.last() != Some(&offset) || (channel.is_some() && p.background != background) {
         let t0 = crate::gpu_canvas::now_ms();
         let moved = match channel {
             Some((id, colors)) => {

@@ -305,8 +305,8 @@ pub(crate) fn restrict_to_color(before: &Document, after: &mut Document, id: Lay
 /// The Move tool with colour channel `k` targeted (#6068): shift that channel of layer `id` by
 /// (`dx`, `dy`) and leave the other channels and the layer's transparency where they are, as
 /// Photoshop moves one channel. Where the channel moves away from it takes the background colour's
-/// value for it, as Clear does with a channel targeted (#2720); values moved past the layer's
-/// pixels are dropped. Only pixel layers have colour channels to move.
+/// value for it, as Clear does with a channel targeted (#2720). Shifted samples may extend past
+/// the original content; transparency and other components remain stationary.
 pub fn move_color_channel(doc: &mut Document, id: LayerId, k: usize, dx: i32, dy: i32, background: [f32; 4]) -> Result<()> {
     let count = doc.layer(id).and_then(Layer::surface).map_or_else(|| color_count(doc), |s| s.format().mode.color_channels());
     let colors = crate::color_channels::ColorChannels::from_indices([k], count)?;
@@ -335,7 +335,8 @@ pub fn move_color_channels(
     if area.is_empty() || (dx == 0 && dy == 0) {
         return Ok(());
     }
-    crate::channel_transform::validate_area(area)?;
+    let destination = color_move_destination(area, dx, dy)?;
+    let work = area.union(&destination);
     let native = photocraft_color::convert::with_cmyk_space(space.as_ref(), || from_rgba(&fmt, background));
     let bpp = fmt.bytes_per_pixel();
     let bytes = fmt.sample.bytes();
@@ -347,9 +348,13 @@ pub fn move_color_channels(
     // The snapshot keeps source samples intact while changed tiles copy on write. Work a tile at
     // a time so a large channel move never needs two full-document pixel buffers.
     let source = surf.clone();
-    for tile in area.tiles() {
+    for tile in work.tiles() {
         let tile_rect = tile.rect();
-        let r = tile_rect.intersect(&area);
+        let r = tile_rect.intersect(&destination);
+        let cleared = tile_rect.intersect(&area);
+        if r.is_empty() && cleared.is_empty() {
+            continue;
+        }
         // Widen before subtracting: a hostile command may provide i32::MIN as an offset.
         let sx0 = (i64::from(r.x0) - i64::from(dx)).max(i64::from(area.x0));
         let sy0 = (i64::from(r.y0) - i64::from(dy)).max(i64::from(area.y0));
@@ -363,9 +368,9 @@ pub fn move_color_channels(
         };
         let data = surf.try_tile_mut(tile)?.bytes_mut();
         let tile_width = photocraft_geom::TILE_SIZE as usize;
-        let width = r.width() as usize;
-        for y in r.y0..r.y1 {
-            let base = (((y - tile_rect.y0) as usize) * tile_width + (r.x0 - tile_rect.x0) as usize) * bpp;
+        let width = cleared.width() as usize;
+        for y in cleared.y0..cleared.y1 {
+            let base = (((y - tile_rect.y0) as usize) * tile_width + (cleared.x0 - tile_rect.x0) as usize) * bpp;
             let row = data.get_mut(base..base + width * bpp).ok_or_else(|| bad("layer.translate", "missing destination row"))?;
             for &offset in &offsets {
                 let end = offset + bytes;
@@ -394,6 +399,21 @@ pub fn move_color_channels(
     }
     surf.prune();
     Ok(())
+}
+
+/// Validate native Move reach and the complete writeback area before either preview or edit.
+pub fn color_move_destination(area: Rect, dx: i32, dy: i32) -> Result<Rect> {
+    crate::channel_transform::validate_area(area)?;
+    let shifted = |value: i32, offset: i32| value.checked_add(offset).ok_or_else(|| bad("layer.translate", "channel move coordinates are out of range"));
+    let destination = Rect::new(shifted(area.x0, dx)?, shifted(area.y0, dy)?, shifted(area.x1, dx)?, shifted(area.y1, dy)?);
+    if [area.x0, area.y0, area.x1, area.y1, destination.x0, destination.y0, destination.x1, destination.y1]
+        .iter()
+        .any(|v| i64::from(*v).unsigned_abs() > 1 << 28)
+    {
+        return Err(bad("layer.translate", "channel move coordinates are out of range"));
+    }
+    crate::channel_transform::validate_area(area.union(&destination))?;
+    Ok(destination)
 }
 
 /// Clear (Delete) with colour channel `k` of layer `id` targeted (#2720): fill the selected area

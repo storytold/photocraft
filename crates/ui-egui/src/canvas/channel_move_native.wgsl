@@ -13,7 +13,8 @@ fn source_at(at: vec2<i32>) -> vec4<f32> {
     var value = Sample(0.0);
     if all(src >= vec2<i32>(p.rect.xy)) && all(src < vec2<i32>(p.rect.zw)) {
         let rgba = source_at(src);
-        for (var i = 0u; i < COMPONENTS; i++) { value[i] = rgba[color_index(i)]; }
+        value[0] = rgba[color_index(0u)];
+        if COMPONENTS != 1u { value[1] = rgba.g; value[COMPONENTS-1u] = rgba.b; }
         value[COMPONENTS] = 1.0;
     }
     return finish(at, value);

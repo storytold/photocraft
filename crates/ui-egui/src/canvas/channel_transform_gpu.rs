@@ -895,6 +895,54 @@ mod tests {
     use photocraft_geom::warp::{BezierMesh, Warp};
 
     #[test]
+    fn scalar_and_set_shaders_have_no_dynamically_indexed_stores_for_fxc() {
+        use wgpu::naga::{Arena, Block, Expression, Statement};
+        fn dynamic(pointer: wgpu::naga::Handle<Expression>, expressions: &Arena<Expression>) -> bool {
+            match expressions[pointer] {
+                Expression::Access { .. } => true,
+                Expression::AccessIndex { base, .. } => dynamic(base, expressions),
+                _ => false,
+            }
+        }
+        fn check(block: &Block, expressions: &Arena<Expression>) {
+            for statement in block {
+                match statement {
+                    Statement::Store { pointer, .. } => assert!(!dynamic(*pointer, expressions), "FXC cannot compile a dynamically indexed store"),
+                    Statement::Block(inner) => check(inner, expressions),
+                    Statement::If { accept, reject, .. } => {
+                        check(accept, expressions);
+                        check(reject, expressions);
+                    }
+                    Statement::Switch { cases, .. } => {
+                        for case in cases {
+                            check(&case.body, expressions);
+                        }
+                    }
+                    Statement::Loop { body, continuing, .. } => {
+                        check(body, expressions);
+                        check(continuing, expressions);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        for multiple in [false, true] {
+            for source in [shader_source(multiple).unwrap().into_owned(), native_move::shader_source(multiple).unwrap()] {
+                let module = wgpu::naga::front::wgsl::parse_str(&source).expect("valid WGSL");
+                wgpu::naga::valid::Validator::new(wgpu::naga::valid::ValidationFlags::all(), wgpu::naga::valid::Capabilities::all())
+                    .validate(&module)
+                    .expect("valid specialized shader");
+                for (_, function) in module.functions.iter() {
+                    check(&function.body, &function.expressions);
+                }
+                for entry in &module.entry_points {
+                    check(&entry.function.body, &entry.function.expressions);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn shader_specialization_accepts_both_checkout_line_endings() {
         let lf = include_str!("channel_transform_gpu.wgsl").replace("\r\n", "\n");
         let crlf = lf.replace('\n', "\r\n");

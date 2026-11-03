@@ -420,7 +420,9 @@ GPU previews retain pending WebGPU validation until both scopes settle, reject t
 perspective horizons as commit, and apply display encoding to partial linear-RGB views.
 Unsupported sources use the CPU preview. Display-profile and background-colour changes
 invalidate the corresponding view caches. Deferred native and web canvas drops retain their
-original destination document.
+original destination document. Inactive destinations keep their queue until the document
+is active again; closing the destination discards those drops. Eligible active-document
+drops are processed without reordering another document's queue.
 
 Affine channel extraction runs inside the cancellable worker. Scalar affine resampling,
 selected lifting/compositing and the selection outline share its interruption flag. Isolated
@@ -480,3 +482,52 @@ the native sample-phase regressions compare like-for-like texels instead.
 See [summary](benchmarks/channel-move-native-20261102/summary.json),
 [raw frames](benchmarks/channel-move-native-20261102/samples.json) and
 [environment and provenance](benchmarks/channel-move-native-20261102/environment.json).
+
+
+### Review follow-ups (2026-11-03)
+
+Windows' legacy HLSL compiler rejects dynamically indexed vector stores in the channel
+shader. Scalar and colour-set shader variants now use fixed component stores, including
+the native Move shader. A Naga IR regression checks every generated variant for this
+portability constraint.
+
+Reduced channel, mask and Quick Mask previews price native geometry before returning a
+GPU texture, using the same reach, output-memory and writeback-area limits as commit.
+Affine preflight normally uses enclosing source bounds. When those overestimate a sparse
+colour component, exact encoded-component bounds are captured once and reused for later
+geometry changes. Custom Warp normally prices its control hull without traversing the
+full native mesh grid. Refused geometry retains the previous pixels and editable handles;
+visibility and display changes still refresh that preview.
+
+Unselected colour Move writes the union of the original and shifted native content,
+preserving shifted samples beyond the previous bounds while keeping other components
+and transparency stationary. Its GPU preview checks the same native work-area limits.
+The explicit `layer.translate` selection flag carries the outline for a single component;
+selected colour-set moves always carry their selected samples and outline together once.
+
+
+Before merging main `655295b2a`, the reviewed fixes were compared with published
+`8d695d4b2` on the same 24 MP fixture, software Vulkan adapter and two-worker setup.
+Each row has three processes and 27 warm completed frames per build, interleaved
+before/after. Times are p50 / p95 in milliseconds.
+
+| Move target / renderer | Published build | Reviewed fixes |
+|---|---:|---:|
+| One component / shader | 18.25 / 21.42 | 18.81 / 21.19 |
+| Red + Blue / shader | 18.70 / 21.48 | 18.07 / 21.36 |
+| Whole layer control / shader | 283.55 / 290.29 | 289.90 / 302.58 |
+| One component / CPU | 143.71 / 162.17 | 141.85 / 159.40 |
+| Red + Blue / CPU | 194.22 / 220.02 | 200.75 / 217.25 |
+| Whole layer control / CPU | 107.09 / 119.22 | 117.60 / 149.15 |
+
+Channel medians changed by approximately −3.3% to +3.4%, with no material channel
+slowdown observed in this run. The unchanged whole-layer CPU control varied by +9.8%,
+so these measurements do not establish a speedup. Source uploads remain cached; native
+preflight adds bounded geometry checks to ordinary GPU drags. The six matched Move
+captures were pixel-identical within each renderer. These figures describe the recorded
+pre-merge build, rather than later upstream scratch-storage changes.
+
+[Raw Move frames](benchmarks/channel-review-20261103/move-samples.json),
+[summary](benchmarks/channel-review-20261103/move-summary.json),
+[environment and source/binary provenance](benchmarks/channel-review-20261103/environment.json),
+and [24 MP affine/Warp frames](benchmarks/channel-review-20261103/transform-samples.json).

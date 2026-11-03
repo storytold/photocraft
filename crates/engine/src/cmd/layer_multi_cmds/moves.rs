@@ -167,7 +167,7 @@ pub fn translate(s: &mut Session, p: &Value) -> Result<Value> {
         None
     };
     if let Some(colors) = color {
-        return translate_color_channel(s, p, colors, dx, dy);
+        return translate_color_channel(s, p, colors, dx, dy, carry);
     }
     let roots = match crate::commands::explicit_layer(s, p)? {
         Some(id) => vec![id],
@@ -216,7 +216,7 @@ pub fn translate(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// Move the captured native components on the named or active layer in one history step.
 /// Linked layers stay put; selected pixels and their outline move together.
-fn translate_color_channel(s: &mut Session, p: &Value, colors: crate::color_channels::ColorChannels, dx: i32, dy: i32) -> Result<Value> {
+fn translate_color_channel(s: &mut Session, p: &Value, colors: crate::color_channels::ColorChannels, dx: i32, dy: i32, carry: bool) -> Result<Value> {
     let id = match crate::commands::explicit_layer(s, p)? {
         Some(id) => id,
         None => s.active().and_then(|d| d.active_layer).ok_or_else(|| EngineError::Other("no active layer".into()))?,
@@ -232,7 +232,12 @@ fn translate_color_channel(s: &mut Session, p: &Value, colors: crate::color_chan
         if locks.pixels {
             return Err(EngineError::Other("the target layer is pixel-locked".into()));
         }
-        crate::channel_cmds::move_color_channels(doc, id, colors, dx, dy, background)
+        let selected_pixels = colors.len() > 1 && doc.selection.is_some();
+        crate::channel_cmds::move_color_channels(doc, id, colors, dx, dy, background)?;
+        if carry && !selected_pixels {
+            doc.selection = doc.selection.as_ref().map(|sel| shift_surface(sel, dx, dy));
+        }
+        Ok(())
     })?;
     Ok(Value::Null)
 }

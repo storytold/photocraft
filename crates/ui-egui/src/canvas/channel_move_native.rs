@@ -3,7 +3,7 @@
 
 use super::{
     Arc, ChannelView, Document, FLOAT, LayerId, OUTPUT, Pipelines, Preview, RenderState, SampleType, TransformSession, UNIFORM_BYTES, Validated, bytes,
-    render_pass, shader_source, source, supports_channels, validated, wgpu,
+    render_pass, shader_source as transform_shader_source, source, supports_channels, validated, wgpu,
 };
 
 fn write_bytes(rs: &RenderState, texture: &wgpu::Texture, width: u32, y: u32, rows: u32, plane: u32, data: &[u8]) -> Option<()> {
@@ -54,11 +54,17 @@ pub(super) fn input_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     })
 }
 
+pub(super) fn shader_source(multiple: bool) -> Option<String> {
+    Some(
+        transform_shader_source(multiple)?
+            .into_owned()
+            .replace("var source: texture_2d<f32>;", "var source: texture_2d_array<u32>;")
+            .replace("fn source_at(at: vec2<i32>) -> vec4<f32> { return textureLoad(source, at, 0); }", include_str!("channel_move_native.wgsl")),
+    )
+}
+
 fn pipeline(device: &wgpu::Device, inputs: &wgpu::BindGroupLayout, multiple: bool) -> Option<wgpu::RenderPipeline> {
-    let base = shader_source(multiple)?.into_owned();
-    let source = base
-        .replace("var source: texture_2d<f32>;", "var source: texture_2d_array<u32>;")
-        .replace("fn source_at(at: vec2<i32>) -> vec4<f32> { return textureLoad(source, at, 0); }", include_str!("channel_move_native.wgsl"));
+    let source = shader_source(multiple)?;
     let shader =
         device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("native channel Move"), source: wgpu::ShaderSource::Wgsl(source.into()) });
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {

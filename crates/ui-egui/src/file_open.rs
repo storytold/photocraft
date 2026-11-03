@@ -313,14 +313,15 @@ impl PhotocraftApp {
     /// transform is in progress (so several files are placed and transformed one after another).
     pub(crate) fn place_next_dropped(&mut self, ctx: &egui::Context) {
         while self.ui.transform.is_none() && !photocraft_engine::channel_transform::locked(&self.session) {
-            let Some(next) = self.drop_places.pop_front() else { return };
-            let document = match &next {
+            let document = |next: &DropPlace| match next {
                 DropPlace::File(document, _) | DropPlace::Bytes(document, _, _) => *document,
             };
-            // A queued drop belongs to the canvas it landed on, including asynchronous reads.
-            if self.session.active().is_none_or(|st| st.doc.id != document) {
-                continue;
-            }
+            let docs = self.session.documents();
+            self.drop_places.retain(|next| docs.iter().any(|st| st.doc.id == document(next)));
+            let Some(active) = self.session.active().map(|st| st.doc.id) else { return };
+            // Leave other open documents' entries in order, without blocking this canvas.
+            let Some(index) = self.drop_places.iter().position(|next| document(next) == active) else { return };
+            let Some(next) = self.drop_places.remove(index) else { return };
             let (name, placed) = match next {
                 DropPlace::File(_, f) if f.path().is_absolute() => {
                     (dropped_name(&f), path_text(f.path(), false).and_then(|path| self.run("file.placeEmbedded", serde_json::json!({"path": path}))))

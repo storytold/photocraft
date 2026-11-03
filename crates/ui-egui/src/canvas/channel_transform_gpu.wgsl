@@ -32,13 +32,14 @@ fn background(c: u32) -> f32 {
     return p.fill[c];
 }
 fn pack(value: Sample) -> vec4<f32> {
-    var out = vec4(0.0);
-    for (var i = 0u; i <= COMPONENTS; i++) { out[i] = value[i]; }
+    var out = vec4(value[0], value[1], 0.0, 0.0);
+    if COMPONENTS != 1u { out.z = value[COMPONENTS-1u]; out.w = value[COMPONENTS]; }
     return out;
 }
 fn unpack(value: vec4<f32>) -> Sample {
     var out = Sample(0.0);
-    for (var i = 0u; i <= COMPONENTS; i++) { out[i] = value[i]; }
+    out[0] = value.x; out[1] = value.y;
+    if COMPONENTS != 1u { out[COMPONENTS-1u] = value.z; out[COMPONENTS] = value.w; }
     return out;
 }
 fn lifted(pos: vec2<i32>, repeat_edge: bool) -> Sample {
@@ -49,7 +50,8 @@ fn lifted(pos: vec2<i32>, repeat_edge: bool) -> Sample {
     let alpha = quant(textureLoad(selection, at, 0).r);
     let pixel = source_at(at);
     var value = Sample(0.0);
-    for (var i = 0u; i < COMPONENTS; i++) { value[i] = pixel[color_index(i)] * alpha; }
+    value[0] = pixel[color_index(0u)] * alpha;
+    if COMPONENTS != 1u { value[1] = pixel.y * alpha; value[COMPONENTS-1u] = pixel.z * alpha; }
     value[COMPONENTS] = alpha;
     return value;
 }
@@ -88,7 +90,8 @@ fn sample_at(at: vec2<f32>, footprint: vec2<f32>, repeat_edge: bool) -> Sample {
     var out = Sample(0.0);
     // Divide by the original alpha: bicubic alpha can overshoot clipped coverage.
     if value[COMPONENTS] > 0.000001 {
-        for (var i = 0u; i < COMPONENTS; i++) { out[i] = quant(value[i] / value[COMPONENTS]); }
+        out[0] = quant(value[0] / value[COMPONENTS]);
+        if COMPONENTS != 1u { out[1] = quant(value[1] / value[COMPONENTS]); out[COMPONENTS-1u] = quant(value[COMPONENTS-1u] / value[COMPONENTS]); }
     }
     out *= a;
     out[COMPONENTS] = a;
@@ -103,18 +106,26 @@ fn merge_color(at: vec2<i32>, rgba: vec4<f32>, transformed: Sample, slot: u32, c
     let rest = quant(rgba[c] * (1.0-weight) + fill * weight);
     var value = rgba[c];
     if p.opts.w == 0.0 { value = quant(transformed[slot] + rest * (1.0-transformed[COMPONENTS])); }
-    if p.opts.w == 2.0 && all(vec2<f32>(at) >= p.bounds.xy) && all(vec2<f32>(at) < p.bounds.zw) {
-        // Move fills vacated samples inside the original layer's content rectangle.
-        value = quant(transformed[slot] + fill * (1.0-transformed[COMPONENTS]));
+    if p.opts.w == 2.0 {
+        // Only the old content is cleared; shifted samples can land outside it.
+        let inside = all(vec2<f32>(at) >= p.bounds.xy) && all(vec2<f32>(at) < p.bounds.zw);
+        value = quant(transformed[slot] + select(rgba[c], fill, inside) * (1.0-transformed[COMPONENTS]));
     }
     return value;
 }
 fn finish(at: vec2<i32>, transformed: Sample) -> vec4<f32> {
     var rgba = source_at(at);
     let mask = u32(p.size.z); let weight = textureLoad(selection, at, 0).r;
-    for (var slot = 0u; slot < COMPONENTS; slot++) {
-        let c = color_index(slot);
-        if COMPONENTS == 1u || (mask & (1u << c)) != 0u { rgba[c] = merge_color(at, rgba, transformed, slot, c, weight); }
+    // FXC cannot address dynamically indexed vector stores emitted by the HLSL backend.
+    // Constant component writes also let scalar specialization remove the unused work.
+    if COMPONENTS == 1u {
+        let c = color_index(0u);
+        let value = merge_color(at, rgba, transformed, 0u, c, weight);
+        rgba = vec4(select(rgba.r, value, c == 0u), select(rgba.g, value, c == 1u), select(rgba.b, value, c == 2u), rgba.a);
+    } else {
+        if (mask & 1u) != 0u { rgba.r = merge_color(at, rgba, transformed, 0u, 0u, weight); }
+        if (mask & 2u) != 0u { rgba.g = merge_color(at, rgba, transformed, 1u, 1u, weight); }
+        if (mask & 4u) != 0u { rgba.b = merge_color(at, rgba, transformed, 2u, 2u, weight); }
     }
     rgba.a = clamp(rgba.a * p.view.z, 0.0, 1.0);
     let visible = u32(p.view.x);
@@ -126,7 +137,7 @@ fn finish(at: vec2<i32>, transformed: Sample) -> vec4<f32> {
             if p.view.w != 0.0 { rgb = srgb(rgb); }
             return vec4(clamp(rgb, vec3(0.0), vec3(1.0)), 1.0);
         }
-        for (var i = 0u; i < 3u; i++) { if (visible & (1u << i)) == 0u { rgb[i] = 0.0; } }
+        rgb = vec3(select(0.0, rgb.r, (visible & 1u) != 0u), select(0.0, rgb.g, (visible & 2u) != 0u), select(0.0, rgb.b, (visible & 4u) != 0u));
         if p.view.w != 0.0 { rgb = srgb(rgb); }
         return vec4(clamp(rgb, vec3(0.0), vec3(1.0)), 1.0);
     }

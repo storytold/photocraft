@@ -1208,9 +1208,14 @@ fn delayed_canvas_drop_never_places_into_a_different_document() {
     let documents: Vec<_> = app.session.documents().iter().map(|st| st.doc.clone()).collect();
     app.drop_places.push_back(crate::file_open::DropPlace::Bytes(origin, "late.png".into(), png_bytes(2, 2)));
     app.place_next_dropped(&egui::Context::default());
-    assert!(app.drop_places.is_empty());
+    assert_eq!(app.drop_places.len(), 1, "the inactive document keeps its drop");
     assert!(app.ui.transform.is_none());
     assert!(app.session.documents().iter().zip(documents).all(|(st, doc)| std::sync::Arc::ptr_eq(&st.doc, &doc)));
+    assert!(app.session.set_active(0));
+    app.place_next_dropped(&egui::Context::default());
+    assert!(app.drop_places.is_empty());
+    assert!(app.ui.transform.is_some());
+    assert_eq!(app.session.active().unwrap().doc.layers.len(), 2);
 }
 
 #[test]
@@ -1228,10 +1233,43 @@ fn native_canvas_drop_queued_during_a_channel_transform_does_not_follow_a_tab_sw
     let other = app.session.active().unwrap().doc.clone();
     crate::transform_tool::end_if_left(&mut app);
     app.place_next_dropped(&ctx);
-    assert!(app.drop_places.is_empty());
+    assert_eq!(app.drop_places.len(), 1);
     assert!(app.ui.transform.is_none());
     assert!(std::sync::Arc::ptr_eq(&original, &app.session.documents()[0].doc));
     assert!(std::sync::Arc::ptr_eq(&other, &app.session.active().unwrap().doc));
+    assert!(app.session.set_active(0));
+    app.place_next_dropped(&ctx);
+    assert!(app.drop_places.is_empty());
+    assert!(app.ui.transform.is_some());
+}
+
+#[test]
+fn inactive_drop_queues_preserve_order_and_do_not_block_active_documents() {
+    let mut app = app_with_canvas();
+    let ctx = egui::Context::default();
+    let first = app.session.active().unwrap().doc.id;
+    app.session.add_document(Document::new("other", Size::new(8, 8), ColorMode::Rgb, SampleType::U8), None);
+    let second = app.session.active().unwrap().doc.id;
+    for (id, name) in [(first, "first.png"), (second, "other.png"), (first, "last.png")] {
+        app.drop_places.push_back(crate::file_open::DropPlace::Bytes(id, name.into(), png_bytes(2, 2)));
+    }
+    app.place_next_dropped(&ctx);
+    assert!(app.ui.transform.is_some());
+    assert_eq!(app.drop_places.len(), 2);
+    let names: Vec<_> = app
+        .drop_places
+        .iter()
+        .map(|p| match p {
+            crate::file_open::DropPlace::Bytes(_, name, _) => name.as_str(),
+            _ => panic!("byte fixture"),
+        })
+        .collect();
+    assert_eq!(names, ["first.png", "last.png"]);
+    crate::transform_tool::cancel(&mut app);
+    app.session.close(0).unwrap();
+    app.place_next_dropped(&ctx);
+    assert!(app.drop_places.is_empty(), "closed documents release queued bytes");
+    assert!(app.ui.transform.is_none());
 }
 
 #[test]

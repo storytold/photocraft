@@ -932,29 +932,52 @@ fn transform(s: &mut Session, p: &Value) -> Result<Value> {
 /// Validate the captured native planes in the worker, before any write is published.
 fn validate_planes(doc: &Document, planes: &[crate::channel_transform::Plane], h: &Homography) -> Result<()> {
     for plane in planes {
-        let surface = &plane.surface;
-        let source = doc.selection.as_ref().map_or_else(|| surface.content_bounds(), Surface::content_bounds);
-        crate::channel_transform::validate_area(source)?;
-        let source_corners = [
-            [f64::from(source.x0), f64::from(source.y0)],
-            [f64::from(source.x1), f64::from(source.y0)],
-            [f64::from(source.x1), f64::from(source.y1)],
-            [f64::from(source.x0), f64::from(source.y1)],
-        ];
-        let denominators = source_corners.map(|[x, y]| h.0[6] * x + h.0[7] * y + h.0[8]);
-        if denominators.iter().any(|v| !v.is_finite() || v.abs() < 1e-12) || denominators.iter().any(|v| v.signum() != denominators[0].signum()) {
-            return Err(bad("channel transform crosses a perspective horizon"));
-        }
-        let points = source_corners.map(|[x, y]| h.apply(x, y));
-        let b = points
-            .iter()
-            .fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |b, &(x, y)| [b[0].min(x), b[1].min(y), b[2].max(x), b[3].max(y)]);
-        if b.iter().any(|v| !v.is_finite() || v.abs() > f64::from(1 << 28)) {
-            return Err(bad("channel transform coordinates are out of range"));
-        }
-        // Report the user's transform-memory budget before the additional tile-padding cap.
-        check_budget(source, h, "mask or channel", surface.format())?;
-        crate::channel_transform::validate_area(Rect::new(b[0].floor() as i32, b[1].floor() as i32, b[2].ceil() as i32, b[3].ceil() as i32))?;
+        let source = doc.selection.as_ref().map_or_else(|| plane.surface.content_bounds(), Surface::content_bounds);
+        check_channel_geometry(source, plane.surface.format(), h, plane.original_area())?;
+    }
+    Ok(())
+}
+
+/// The native scalar output limits shared by commits and interactive preview preflight.
+/// This performs only bounded geometry arithmetic; it allocates no source or output pixels.
+pub fn check_channel_geometry(source: Rect, format: PixelFormat, h: &Homography, original: Option<Rect>) -> Result<()> {
+    crate::channel_transform::validate_area(source)?;
+    let source_corners = [
+        [f64::from(source.x0), f64::from(source.y0)],
+        [f64::from(source.x1), f64::from(source.y0)],
+        [f64::from(source.x1), f64::from(source.y1)],
+        [f64::from(source.x0), f64::from(source.y1)],
+    ];
+    let denominators = source_corners.map(|[x, y]| h.0[6] * x + h.0[7] * y + h.0[8]);
+    if denominators.iter().any(|v| !v.is_finite() || v.abs() < 1e-12) || denominators.iter().any(|v| v.signum() != denominators[0].signum()) {
+        return Err(bad("channel transform crosses a perspective horizon"));
+    }
+    let points = source_corners.map(|[x, y]| h.apply(x, y));
+    let b = points
+        .iter()
+        .fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |b, &(x, y)| [b[0].min(x), b[1].min(y), b[2].max(x), b[3].max(y)]);
+    if b.iter().any(|v| !v.is_finite() || v.abs() > f64::from(1 << 28)) {
+        return Err(bad("channel transform coordinates are out of range"));
+    }
+    // Report the user's transform-memory budget before the additional tile-padding cap.
+    check_budget(source, h, "mask or channel", format)?;
+    crate::channel_transform::validate_area(Rect::new(b[0].floor() as i32, b[1].floor() as i32, b[2].ceil() as i32, b[3].ceil() as i32))?;
+    if let Some(original) = original {
+        let m = h.0;
+        let integer_translation = m[0] == m[8]
+            && m[4] == m[8]
+            && m[1] == 0.0
+            && m[3] == 0.0
+            && m[6] == 0.0
+            && m[7] == 0.0
+            && (m[2] / m[8]).fract() == 0.0
+            && (m[5] / m[8]).fract() == 0.0;
+        let output = if integer_translation {
+            Rect::new(b[0].floor() as i32, b[1].floor() as i32, b[2].ceil() as i32, b[3].ceil() as i32)
+        } else {
+            photocraft_algo::transform::warp_output_bounds(source, h).unwrap_or(Rect::EMPTY)
+        };
+        crate::channel_transform::validate_area(original.union(&output))?;
     }
     Ok(())
 }
@@ -1044,7 +1067,7 @@ pub fn specs() -> Vec<CommandSpec> {
         label: "Free Transform",
         menu: &[],
         shortcut: None,
-        params: r##"{"layer":id|name?,"layers":[id,…]? (several whole layers; mutually exclusive with layer or a channel target; default for pixels = selected layers except Background),"rect":[x0,y0,x1,y1]? (source frame; default = target content ∩ selection),"quad":[[x,y]×4]? (where the frame's corners go, clockwise from top-left),"matrix":[a,b,c,d,e,f]? (affine alternative),"scaleX":%?,"scaleY":%?,"rotate":deg?,"dx":px?,"dy":px?,"reference":"center|topLeft|top|topRight|left|right|bottomLeft|bottom|bottomRight"|[x,y]="center" (relative alternative: scale and rotate about this point, then move),"interpolation":"bicubic|bilinear|nearest|bicubicSharper|bicubicSmoother|bicubicAutomatic"="bicubic" (Photoshop's bicubic variants render as Bicubic),"target":"pixels"|"mask"|"quickMask"|{"channel":i}|{"color":i}|{"colors":[i,…]}=Channels panel target (selected colour components share one geometry and selection outline; a single component, mask including linked masks, alpha/spot channel or Quick Mask transforms alone; an explicit layer without target transforms the layer)}"##,
+        params: r##"{"layer":id|name?,"layers":[id,…]? (several whole layers; mutually exclusive with layer or a channel target; default for pixels = selected layers except Background),"rect":[x0,y0,x1,y1]? (source frame; default = raster pixels: layer content intersected with selection; group, text, shape or smart pixels: whole layer; mask or saved channel: selection bounds if present, otherwise target content; colour: native sample area intersected with selection. Relative reference points use this frame),"quad":[[x,y]×4]? (where the frame's corners go, clockwise from top-left),"matrix":[a,b,c,d,e,f]? (affine alternative),"scaleX":%?,"scaleY":%?,"rotate":deg?,"dx":px?,"dy":px?,"reference":"center|topLeft|top|topRight|left|right|bottomLeft|bottom|bottomRight"|[x,y]="center" (relative alternative: scale and rotate about this point, then move),"interpolation":"bicubic|bilinear|nearest|bicubicSharper|bicubicSmoother|bicubicAutomatic"="bicubic" (Photoshop's bicubic variants render as Bicubic),"target":"pixels"|"mask"|"quickMask"|{"channel":i}|{"color":i}|{"colors":[i,…]}=Channels panel target (selected colour components share one geometry and selection outline; a single component, mask including linked masks, alpha/spot channel or Quick Mask transforms alone; an explicit layer without target transforms the layer)}"##,
         enabled: has_layer,
         journal: true,
         run: transform,

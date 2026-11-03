@@ -129,7 +129,7 @@ fn canonical_target(colors: crate::color_channels::ColorChannels) -> Value {
 
 /// Native stored samples can extend beyond the canvas. Use raw sample bounds, including
 /// colour hidden under transparent alpha; compositing bounds would discard those samples.
-fn native_area(doc: &Document, layer: Option<LayerId>) -> Result<Rect> {
+pub(crate) fn native_area(doc: &Document, layer: Option<LayerId>) -> Result<Rect> {
     let id = layer.ok_or_else(|| bad("no active layer"))?;
     let surface = doc.layer(id).and_then(|l| l.surface()).ok_or_else(|| bad("colour transforms require a raster layer"))?;
     Ok(doc.bounds().union(&photocraft_compose::bounds::content_bounds(surface)))
@@ -155,6 +155,10 @@ pub(crate) struct Plane {
 }
 
 impl Plane {
+    pub(crate) fn original_area(&self) -> Option<Rect> {
+        self.area
+    }
+
     pub(crate) fn write(&self, doc: &mut Document, layer: Option<LayerId>, moved: Surface, ctl: &photocraft_raster::Interrupt) -> Result<()> {
         write_plane_with_interrupt(doc, layer, &self.params, moved, self.area, ctl)
     }
@@ -217,6 +221,9 @@ pub(crate) fn move_selected_colors(
     doc.selection = Some(selection.translated(dx, dy, bounds));
     Ok(())
 }
+
+mod preview;
+pub use preview::AffinePreviewBounds;
 
 pub fn color_index(p: &Value) -> Result<Option<usize>> {
     let Some(target) = p.get("target") else { return Ok(None) };
@@ -429,3 +436,6 @@ mod tests;
 
 #[cfg(test)]
 mod set_tests;
+
+#[cfg(test)]
+mod move_review_tests;

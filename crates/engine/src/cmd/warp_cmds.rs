@@ -476,6 +476,15 @@ fn check_scalar_budget(doc: &Document, layer: Option<LayerId>, params: &Value, f
             b = [b[0].min(u), b[1].min(v), b[2].max(u), b[3].max(v)];
         }
     }
+    check_scalar_output(doc, layer, params, b)
+}
+
+fn check_scalar_output(doc: &Document, layer: Option<LayerId>, params: &Value, b: [f64; 4]) -> Result<()> {
+    if crate::channel_transform::is_color(params) {
+        let original = crate::channel_transform::native_area(doc, layer)?;
+        let output = Rect::new(b[0].floor() as i32, b[1].floor() as i32, b[2].ceil() as i32, b[3].ceil() as i32).inflate(1);
+        crate::channel_transform::validate_area(original.union(&output))?;
+    }
     let width = (b[2].ceil() - b[0].floor()).max(0.0) as u64;
     let height = (b[3].ceil() - b[1].floor()).max(0.0) as u64;
     let fmt = if crate::channel_transform::is_color(params) {
@@ -493,6 +502,48 @@ fn check_scalar_budget(doc: &Document, layer: Option<LayerId>, params: &Value, f
         crate::transform_cmds::check_output_budget(width.saturating_add(2), height.saturating_add(2), "mask or channel", format)?;
     }
     Ok(())
+}
+
+/// Validate a scalar Warp frame without allocating raster pixels.
+fn scalar_frame(rect: [f64; 4], w: &Warp) -> Result<(Rect, [f64; 4])> {
+    if rect.iter().any(|v| !v.is_finite() || v.abs() > f64::from(1 << 28)) || rect[2] <= rect[0] || rect[3] <= rect[1] {
+        return Err(bad("edit.transform.warp", "warp frame is empty or out of range"));
+    }
+    let frame = Rect::new(rect[0].floor() as i32, rect[1].floor() as i32, rect[2].ceil() as i32, rect[3].ceil() as i32);
+    crate::channel_transform::validate_area(frame)?;
+    let mesh = w.to_mesh(1, 1);
+    let b = mesh
+        .points
+        .iter()
+        .fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |b, v| [b[0].min(v[0]), b[1].min(v[1]), b[2].max(v[0]), b[3].max(v[1])]);
+    if mesh.points.iter().flatten().any(|v| !v.is_finite() || v.abs() > f64::from(1 << 28)) {
+        return Err(bad("edit.transform.warp", "warp coordinates are out of range"));
+    }
+    crate::channel_transform::validate_area(Rect::new(b[0].floor() as i32, b[1].floor() as i32, b[2].ceil() as i32, b[3].ceil() as i32))?;
+    Ok((frame, b))
+}
+
+/// Native metadata/output pricing shared with interactive channel previews.
+pub fn check_channel_warp_geometry(doc: &Document, layer: Option<LayerId>, params: &Value, rect: [f64; 4], warp: &Warp) -> Result<()> {
+    let (frame, hull) = scalar_frame(rect, warp)?;
+    if warp.is_identity() {
+        return Ok(());
+    }
+    // A custom Bezier surface stays inside its control hull for UVs in 0..1.
+    // Price that enclosing box first: ordinary interactive drags need no native mesh-grid
+    // traversal. An unusually large hull falls back to the exact worker pricing below.
+    let bounds = warp.bounds;
+    if matches!(warp.style, WarpStyle::Custom | WarpStyle::Cylinder)
+        && warp.mesh.is_some()
+        && f64::from(frame.x0) >= bounds[0]
+        && f64::from(frame.y0) >= bounds[1]
+        && f64::from(frame.x1) <= bounds[2]
+        && f64::from(frame.y1) <= bounds[3]
+        && check_scalar_output(doc, layer, params, hull).is_ok()
+    {
+        return Ok(());
+    }
+    check_scalar_budget(doc, layer, params, frame, warp, &Interrupt::NONE).map_err(|e| bad("edit.transform.warp", e.to_string()))
 }
 
 fn apply(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
@@ -528,19 +579,7 @@ fn apply(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
         if p.get("rect").is_none() && p.get("warp").is_some() {
             rect = w.bounds;
         }
-        if rect.iter().any(|v| !v.is_finite() || v.abs() > f64::from(1 << 28)) || rect[2] <= rect[0] || rect[3] <= rect[1] {
-            return Err(bad(cmd, "warp frame is empty or out of range"));
-        }
-        let frame = Rect::new(rect[0].floor() as i32, rect[1].floor() as i32, rect[2].ceil() as i32, rect[3].ceil() as i32);
-        crate::channel_transform::validate_area(frame)?;
-        let mesh = w.to_mesh(1, 1);
-        let b = mesh.points.iter().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |b, v| {
-            [b[0].min(v[0]), b[1].min(v[1]), b[2].max(v[0]), b[3].max(v[1])]
-        });
-        if mesh.points.iter().flatten().any(|v| !v.is_finite() || v.abs() > f64::from(1 << 28)) {
-            return Err(bad(cmd, "warp coordinates are out of range"));
-        }
-        crate::channel_transform::validate_area(Rect::new(b[0].floor() as i32, b[1].floor() as i32, b[2].ceil() as i32, b[3].ceil() as i32))?;
+        let (frame, _) = scalar_frame(rect, &w)?;
         if w.is_identity() {
             return Ok(json!({"changed": false}));
         }

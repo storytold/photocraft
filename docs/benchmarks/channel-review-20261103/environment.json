@@ -1,0 +1,21 @@
+{
+  "before_build": {
+    "head": "b7da5b28280a46f8266d9ef1b03c80f08123eaa9",
+    "code_diff_sha256": "4eee6e5225bd7a5b7d0880f2500aceba9163979549e0d564f5396723fa39e770",
+    "published_equivalent": "8d695d4b28430fedc20dbd78b7a5dcb9aacc9f11"
+  },
+  "published_head": "8d695d4b28430fedc20dbd78b7a5dcb9aacc9f11",
+  "diff_sha256": "416857e337821836a13e1cbea840b28b0290d7744e76b20749ef5f4c1334cd56",
+  "binaries": {
+    "before": "e597c17d93ca9e327174715a04b09f588b6cd02ba622534f1b310e89a8ec76d3",
+    "after": "fed5803075cfb0d2246a5846c436afbf02942a3bbb1b2b663a8a2ae25fd0aea5"
+  },
+  "adapter": "Vulkan llvmpipe",
+  "rayon_workers": 2,
+  "software_gpu_workers": 2,
+  "fixture": "24 MP RGB8; completed 1000x700 offscreen frames; step 21; 3 processes per case; 9 warm frames per process; before/after interleaved",
+  "date": "2026-11-03",
+  "scope": "Review fixes measured before merging main 655295b2a; candidate parent 8d695d4b2 plus reviewed Rust/WGSL diff",
+  "code_diff_sha256": "6f58985b31521e5f1af44b87b4ee207dd502d15bc7ca9fb77bd5b0b8c4dd0577",
+  "percentile": "p95 uses sorted[floor(0.95*(n-1))]"
+}

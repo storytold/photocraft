@@ -14,6 +14,9 @@ use crate::state::TransformSession;
 
 pub(crate) struct Preview {
     base: Arc<Document>,
+    native: Arc<Document>,
+    affine_bounds: Option<(Value, photocraft_engine::channel_transform::AffinePreviewBounds)>,
+    checked: Option<(TransformSession, u64, Result<(), String>)>,
     layer: Option<LayerId>,
     background: [f32; 4],
     factor: u32,
@@ -24,6 +27,9 @@ pub(crate) struct Preview {
     textures: HashMap<Option<u32>, CpuTexture>,
     gpu: Option<crate::channel_transform_gpu::Preview>,
     gpu_attempted: bool,
+    /// GPU-only frames don't resample `shown`. Replay this geometry once if native
+    /// preflight later refuses a drag, so CPU fallback retains the last visible placement.
+    gpu_geometry: Option<TransformSession>,
 }
 
 struct CpuTexture {
@@ -38,6 +44,9 @@ impl Preview {
         let factor = if photocraft_compose::proxy::proxy_faithful(doc) { crate::proxy::preview_factor(doc, reduced) } else { 1 };
         let base = Arc::new(crate::proxy::proxy_document(doc, factor));
         Self {
+            native: Arc::new(doc.clone()),
+            affine_bounds: None,
+            checked: None,
             shown: base.clone(),
             base,
             layer,
@@ -49,6 +58,7 @@ impl Preview {
             textures: HashMap::new(),
             gpu: None,
             gpu_attempted: false,
+            gpu_geometry: None,
         }
     }
 
@@ -67,6 +77,41 @@ impl Preview {
         {
             status.clear();
             *status_error = false;
+        }
+    }
+
+    fn check_native(&mut self, t: &TransformSession) -> Result<(), String> {
+        let budget = photocraft_engine::transform_cmds::budget();
+        if let Some((old, limit, result)) = &self.checked
+            && old == t
+            && *limit == budget
+        {
+            return result.clone();
+        }
+        let params = json!({"target":t.target});
+        let result = if let Some(warp) = &t.warp {
+            photocraft_engine::warp_cmds::check_channel_warp_geometry(&self.native, self.layer, &params, t.rect, warp)
+        } else {
+            self.check_affine(t, &params)
+        };
+        let stable = matches!(&result, Ok(_) | Err(photocraft_engine::EngineError::BadParams { .. }));
+        let result = result.map_err(|e| e.to_string());
+        if stable {
+            self.checked = Some((t.clone(), budget, result.clone()));
+        }
+        result
+    }
+
+    fn check_affine(&mut self, t: &TransformSession, params: &Value) -> photocraft_engine::Result<()> {
+        if self.affine_bounds.as_ref().is_none_or(|(old, _)| old != params) {
+            let bounds = photocraft_engine::channel_transform::AffinePreviewBounds::new(self.native.clone(), self.layer, params, self.background)?;
+            self.affine_bounds = Some((params.clone(), bounds));
+        }
+        let h = photocraft_algo::transform::Homography::rect_to_quad(t.rect, t.quad)
+            .ok_or_else(|| photocraft_engine::EngineError::BadParams { cmd: "edit.transform".into(), msg: "degenerate quad".into() })?;
+        match &mut self.affine_bounds {
+            Some((_, bounds)) => bounds.check(&h),
+            None => Err(photocraft_engine::EngineError::Other("missing native preview bounds".into())),
         }
     }
 
@@ -110,6 +155,7 @@ impl Preview {
         self.shown = session.active().ok_or("no channel preview document")?.doc.clone();
         self.geometry = params;
         self.failed = None;
+        self.gpu_geometry = None;
         for entry in self.textures.values_mut() {
             entry.view = None;
         }
@@ -183,8 +229,16 @@ pub(crate) fn texture(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, 
         && view.shown_layer_mask(&preview.base).is_none()
         && (0..preview.base.channels.len()).all(|i| !view.alpha_shown(i))
         && (preview.base.quick_mask.is_none() || view.quick_mask_hidden);
-    let mut refused = None;
-    if let Some(gpu) = &app.gpu
+    let mut refused = preview.check_native(t).err();
+    if let Some(error) = &mut refused
+        && let Some(last) = preview.gpu_geometry.take()
+        && let Err(replay) = preview.update(&last)
+    {
+        preview.gpu_geometry = Some(last);
+        *error = format!("{error}; could not restore the last preview: {replay}");
+    }
+    if refused.is_none()
+        && let Some(gpu) = &app.gpu
         && gpu.health().is_ok()
         && fast_view
         && photocraft_engine::channel_transform::is_color(&json!({"target":t.target}))
@@ -203,6 +257,7 @@ pub(crate) fn texture(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, 
                 }
             }
             if refused.is_none() {
+                preview.gpu_geometry = Some(t.clone());
                 return Some(tex);
             }
         }
@@ -1056,7 +1111,7 @@ mod tests {
         let shown = preview.shown.clone();
         let error = preview.update(&t).unwrap_err();
         assert!(error.contains("perspective horizon"), "{error}");
-        assert!(preview.failed.is_some());
+        assert!(preview.failed.is_some() || preview.checked.as_ref().is_some_and(|(_, _, result)| result.is_err()));
         assert_eq!(preview.update(&t), Err(error));
         assert!(Arc::ptr_eq(&shown, &preview.shown));
         preview.update(&valid).unwrap();
@@ -1690,7 +1745,7 @@ mod tests {
             let expected = preview.image(&st.channel_view, crate::channel_view::Look::of(&a.session), display.as_deref());
             assert_eq!(actual, expected.pixels, "{target}/horizon={horizon}/{channel}={visible}");
             assert!(Arc::ptr_eq(&shown, &preview.shown), "eye changes cannot replace the last valid transformed pixels");
-            assert!(preview.failed.is_some());
+            assert!(preview.failed.is_some() || preview.checked.as_ref().is_some_and(|(_, _, result)| result.is_err()));
             assert_eq!(a.ui.transform, geometry);
             assert!(Arc::ptr_eq(&before, &st.doc));
             assert_eq!(st.history.past_len(), history);
@@ -1815,3 +1870,6 @@ mod tests {
 
 #[cfg(test)]
 mod set_tests;
+
+#[cfg(test)]
+mod limits_tests;

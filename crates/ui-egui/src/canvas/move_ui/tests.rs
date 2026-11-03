@@ -47,6 +47,11 @@ fn gpu_channel_move_matches_native_commit_and_tracks_visibility() {
             let m = egui::Modifiers::NONE;
             crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 260.0, y: 16.0, pressure: 1.0 }, m);
             let mut cached_texture = None;
+            let before = app.session.active().unwrap().doc.clone();
+            crate::canvas::tool_event(&mut app, ToolEvent::Move { x: 100_000_260.0, y: 16.0, pressure: 1.0 }, m);
+            assert!(super::channel_texture(&mut app, 0, None).is_none(), "native work-area overflow cannot return a GPU preview");
+            assert!(!super::gpu_showing(&app, 0));
+            assert!(std::sync::Arc::ptr_eq(&before, &app.session.active().unwrap().doc));
             for (dx, visible) in [(1, false), (17, true), (-3, false)] {
                 crate::canvas::tool_event(&mut app, ToolEvent::Move { x: 260.0 + f64::from(dx), y: 16.0, pressure: 1.0 }, m);
                 for name in ["red", "green", "blue"] {
@@ -554,6 +559,26 @@ fn photo(width: u32, height: u32, depth: u32) -> PhotocraftApp {
     app.ui.extras.snap = false;
     app.ui.view.show.smart_guides = false;
     app
+}
+
+#[test]
+fn refused_cpu_channel_move_recovers_at_the_previous_valid_offset() {
+    for colors in [vec![1], vec![0, 2]] {
+        let mut app = photo(100, 100, 8);
+        app.session.execute("channel.target", json!({"colors":colors})).unwrap();
+        let before = app.session.active().unwrap().doc.clone();
+        let m = egui::Modifiers::NONE;
+        crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 50.0, y: 50.0, pressure: 1.0 }, m);
+        crate::canvas::tool_event(&mut app, ToolEvent::Move { x: 55.0, y: 50.0, pressure: 1.0 }, m);
+        let (good, key) = super::display_doc(&mut app, 0).unwrap();
+        crate::canvas::tool_event(&mut app, ToolEvent::Move { x: 10_000_050.0, y: 50.0, pressure: 1.0 }, m);
+        assert!(super::display_doc(&mut app, 0).is_none());
+        crate::canvas::tool_event(&mut app, ToolEvent::Move { x: 55.0, y: 50.0, pressure: 1.0 }, m);
+        let (recovered, next) = super::display_doc(&mut app, 0).expect("returning to the previous good offset must redraw");
+        assert_ne!(key, next, "the recovered frame receives a fresh damage key");
+        assert_eq!(recovered.layers[1].surface(), good.layers[1].surface());
+        assert!(std::sync::Arc::ptr_eq(&before, &app.session.active().unwrap().doc));
+    }
 }
 
 /// Mid-drag by (37, 11): is the layer shown at the pointer?

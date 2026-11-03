@@ -1300,12 +1300,15 @@ fn move_with_a_colour_channel_targeted_moves_only_that_channel() {
     assert_eq!(px(&s, 1, 1), vec![0.0, red_block[1], red_block[2], 1.0]);
     // Elsewhere the red is the gray's, moved along from (10, 5).
     assert_eq!(px(&s, 20, 10), gray);
-    assert_eq!(bounds(&s), before_bounds, "the layer itself does not move");
+    assert_eq!(bounds(&s), before_bounds.union(&before_bounds.translate(10, 5)), "shifted colour samples extend the native bounds");
+    assert_eq!(px(&s, 49, 24), vec![gray[0], 0.0, 0.0, 0.0], "off-canvas red survives while transparency and other components stay put");
     let entries = s.active().unwrap().history.entries();
     assert_eq!(entries.len(), steps + 1);
     assert!(entries.last().unwrap().to_string().contains("Move"), "{entries:?}");
     // One undo puts the channel back.
     s.undo();
+    assert_eq!(bounds(&s), before_bounds);
+    assert_eq!(px(&s, 49, 24), vec![0.0; 4]);
     assert_eq!(px(&s, 1, 1), red_block);
     assert_eq!(px(&s, 11, 6), gray);
     // With the composite targeted the Move tool moves the layer again.
@@ -1443,9 +1446,9 @@ fn move_channel_crosses_tiles_and_handles_extreme_offsets() {
         assert_eq!(shifted.sample_channel(x, 0, 1).to_bits(), original.sample_channel(x, 0, 1).to_bits());
     }
     s.undo();
-    s.execute("layer.translate", json!({"dx":i32::MIN})).unwrap();
-    let shifted = s.active().unwrap().doc.layer(id).unwrap().surface().unwrap();
-    assert_eq!(shifted.sample_channel(128, 0, 0), 1.0, "no source remains in bounds; white background fills red");
+    let before = s.active().unwrap().doc.clone();
+    assert!(s.execute("layer.translate", json!({"dx":i32::MIN})).is_err());
+    assert!(std::sync::Arc::ptr_eq(&before, &s.active().unwrap().doc), "unrepresentable moves are refused rather than silently dropping samples");
 }
 
 /// Split Channels closes the original, so as in the reference application it splits only an

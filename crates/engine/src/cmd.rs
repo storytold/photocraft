@@ -942,7 +942,7 @@ fn build() -> Vec<CommandSpec> {
             "Move Layer",
             [],
             None,
-            r##"{"layer":id?,"dx":i32,"dy":i32,"units":"px"|"pt"="px" (pt: points, whole pixels at the document's resolution),"target":"pixels"|"mask"|{"color":index}|{"colors":[index,…]}?,"selection":bool=false} (no layer/target: follow the Channels panel; colour targets move only their native samples, with several-component pixel selections constraining the edit and moving the outline once; explicit layer without target moves the whole layer; no layer: every selected layer; linked layers follow whole-layer moves; an unlinked target mask moves alone; selection: move the selection in the same step)"##,
+            r##"{"layer":id?,"dx":i32,"dy":i32,"units":"px"|"pt"="px" (pt: points, whole pixels at the document's resolution),"target":"pixels"|"mask"|{"color":index}|{"colors":[index,…]}?,"selection":bool=false} (no layer/target: follow the Channels panel; colour targets move only their native samples, with several-component pixel selections constraining the edit and moving the outline once; explicit layer without target moves the whole layer; no layer: every selected layer; linked layers follow whole-layer moves; an unlinked target mask moves alone; selection: carry the selection outline for whole-layer and single-component moves; several-component selected-pixel edits always carry their outline once)"##,
             has_layer,
             crate::layer_multi_cmds::translate
         ),
