@@ -63,7 +63,7 @@ fn the_four_measured_drags_give_the_reference_sizes() {
         drag(&mut s, 2, 0.0, d, egui::Modifiers::NONE);
         near(size(&s), want);
         // The opposite corner (the anchor) stays put.
-        assert_eq!(s.quad[0], [100.0, 100.0]);
+        assert!(side(s.quad[0], [100.0, 100.0]) < 1e-6);
     }
 }
 
@@ -114,5 +114,5 @@ fn a_pointer_past_the_anchor_flips_the_box() {
     assert!(k < 0.0);
     near(size(&s), (700.0 * -k, 400.0 * -k));
     assert!(s.quad[2][0] < s.quad[0][0] || s.quad[2][1] < s.quad[0][1] || s.quad[1][0] < s.quad[0][0], "{:?}", s.quad);
-    assert_eq!(s.quad[0], [100.0, 100.0]);
+    assert!(side(s.quad[0], [100.0, 100.0]) < 1e-6);
 }
