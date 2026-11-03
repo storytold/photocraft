@@ -1385,7 +1385,7 @@ fn selecting_another_layer_applies_the_transform_and_the_next_one_follows() {
     assert_eq!((t.layer, t.rect), (second.0, [40.0, 40.0, 56.0, 60.0]), "the next box is on the selected layer");
 }
 
-/// The screen rectangle the marching ants cover as [`draw_selection`] paints them over the
+/// The screen rectangle the marching ants cover as [`selection_ants`] places them over the
 /// active document's selection; `None` when it leaves them to the canvas.
 fn ants_bounds(app: &PhotocraftApp, xf: &ViewXform) -> Option<egui::Rect> {
     let st = app.session.active().unwrap();
@@ -1395,7 +1395,9 @@ fn ants_bounds(app: &PhotocraftApp, xf: &ViewXform) -> Option<egui::Rect> {
     let mut drawn = false;
     let mut output = ctx.run_ui(Default::default(), |ui| {
         let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("ants-test")));
-        drawn = draw_selection(app, &painter, xf, st.doc.id, &segs, 0.0);
+        let ants = selection_ants(app, &painter, xf, st.doc.id, &segs, 0.0);
+        drawn = ants.is_some();
+        painter.extend(ants.unwrap_or_default());
     });
     output.textures_delta.clear();
     // The ants are a mesh of straight dashes and line shapes for the slanted ones.
@@ -2949,6 +2951,38 @@ fn targeted_unlinked_mask_transforms_alone_through_the_box() {
     begin(&mut app, &ctx).unwrap();
     enter_warp(&mut app, &egui::Context::default());
     assert!(app.ui.transform.as_ref().unwrap().warp.is_none());
+}
+
+#[test]
+fn mask_view_keeps_move_and_transform_available_behind_a_colour_set() {
+    for view in ["gray", "overlay"] {
+        let mut app = masked_app(false);
+        app.run("channel.target", json!({"colors":[0,2]})).unwrap();
+        app.run("view.layerMask", json!({"mode":view})).unwrap();
+        assert!(crate::menus::is_enabled(&app, "edit.freeTransform"));
+        let st = app.session.active().unwrap();
+        let layer = st.active_layer.unwrap();
+        let original = st.doc.layer(layer).unwrap().surface().unwrap().clone();
+        begin(&mut app, &egui::Context::default()).unwrap();
+        let transform = app.ui.transform.as_mut().unwrap();
+        assert_eq!(transform.target, Some(json!("mask")));
+        transform.quad = transform.quad.map(|[x, y]| [x + 20.0, y]);
+        commit(&mut app);
+        assert!(!app.ui.status_error, "{}", app.ui.status);
+        app.ui.tool = crate::state::Tool::Move;
+        app.ui.tool_options.move_auto_select = false;
+        app.ui.extras.snap = false;
+        app.ui.view.show.smart_guides = false;
+        let mods = egui::Modifiers::NONE;
+        crate::canvas::tool_event(&mut app, crate::canvas::ToolEvent::Down { x: 28.0, y: 30.0, pressure: 1.0 }, mods);
+        crate::canvas::tool_event(&mut app, crate::canvas::ToolEvent::Move { x: 38.0, y: 30.0, pressure: 1.0 }, mods);
+        crate::canvas::tool_event(&mut app, crate::canvas::ToolEvent::Up { x: 38.0, y: 30.0 }, mods);
+        assert!(!app.ui.status_error, "{}", app.ui.status);
+        let actual = app.session.active().unwrap().doc.layer(layer).unwrap();
+        assert_eq!(actual.surface().unwrap(), &original);
+        let mask = &actual.mask.as_ref().unwrap().surface;
+        assert!(mask.sample_channel(24, 30, 0) > 0.99 && mask.sample_channel(40, 30, 0) < 0.01, "only the mask moved");
+    }
 }
 
 #[test]
