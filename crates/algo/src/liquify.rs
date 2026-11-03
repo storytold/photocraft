@@ -481,18 +481,20 @@ impl LiquifyField {
         }
         let (gx0, gy0) = self.to_grid(c[0] - r, c[1] - r);
         let (gx1, gy1) = self.to_grid(c[0] + r, c[1] + r);
-        let i0 = gx0.floor().max(0.0) as usize;
-        let j0 = gy0.floor().max(0.0) as usize;
-        let i1 = (gx1.ceil().max(-1.0) as isize).min(self.w as isize - 1);
-        let j1 = (gy1.ceil().max(-1.0) as isize).min(self.h as isize - 1);
+        // Held to the grid before the casts: a brush at an absurd position saturates a bare cast to
+        // usize::MAX, which wraps negative as an isize and slips past the emptiness check below.
+        let i0 = gx0.floor().clamp(0.0, self.w as f64) as usize;
+        let j0 = gy0.floor().clamp(0.0, self.h as f64) as usize;
+        let i1 = (gx1.ceil().clamp(-1.0, self.w as f64) as isize).min(self.w as isize - 1);
+        let j1 = (gy1.ceil().clamp(-1.0, self.h as f64) as isize).min(self.h as isize - 1);
         if i1 < i0 as isize || j1 < j0 as isize {
             return Rect::EMPTY;
         }
         let (i1, j1) = (i1 as usize, j1 as usize);
         // Snapshot of the affected nodes plus a margin (sampling reads around them).
-        let m = ((delta[0].abs().max(delta[1].abs()) + r * 0.2) / self.cell).ceil() as usize + 2;
+        let m = (((delta[0].abs().max(delta[1].abs()) + r * 0.2) / self.cell).ceil() as usize).saturating_add(2);
         let (si0, sj0) = (i0.saturating_sub(m), j0.saturating_sub(m));
-        let (si1, sj1) = ((i1 + m).min(self.w - 1), (j1 + m).min(self.h - 1));
+        let (si1, sj1) = (i1.saturating_add(m).min(self.w - 1), j1.saturating_add(m).min(self.h - 1));
         let sw = si1 - si0 + 1;
         let sh = sj1 - sj0 + 1;
         let mut snap = Vec::with_capacity(sw * sh);
@@ -586,8 +588,14 @@ impl LiquifyField {
             self.d[idx] = d;
             self.freeze[idx] = f;
         }
-        let pad = r.ceil() as i32 + 2;
-        Rect::new(c[0].floor() as i32 - pad, c[1].floor() as i32 - pad, c[0].ceil() as i32 + pad, c[1].ceil() as i32 + pad).intersect(&self.bounds)
+        let pad = (r.ceil() as i32).saturating_add(2);
+        Rect::new(
+            (c[0].floor() as i32).saturating_sub(pad),
+            (c[1].floor() as i32).saturating_sub(pad),
+            (c[0].ceil() as i32).saturating_add(pad),
+            (c[1].ceil() as i32).saturating_add(pad),
+        )
+        .intersect(&self.bounds)
     }
 
     /// Replays strokes on a fresh field.
