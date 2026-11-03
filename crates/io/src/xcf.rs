@@ -581,13 +581,17 @@ fn label(tag: u32) -> LabelColor {
     }
 }
 
-/// Writes `px` (its channels matching `surface`'s) at `x, y` of the document.
-fn write_pixels(surface: &mut Surface, px: &Pixels, x: i32, y: i32) -> Result<()> {
+/// Writes `px` (its channels matching `surface`'s) at `x, y` of the document, charging the
+/// tiles that creates to `budget`: the drawable was admitted by its logical samples, and a
+/// narrow drawable (or one referenced by many layer pointers) stores far more in whole tiles.
+fn write_pixels(surface: &mut Surface, px: &Pixels, x: i32, y: i32, budget: &mut usize) -> Result<()> {
     let (w, h) = (px.width as i32, px.height as i32);
     let rect = Rect::new(x, y, x.checked_add(w).ok_or_else(|| invalid("offset overflow"))?, y.checked_add(h).ok_or_else(|| invalid("offset overflow"))?);
     if surface.channels() != px.channels || px.data.len() != (px.width as usize) * (px.height as usize) * px.channels {
         return Err(invalid("pixel data does not match the drawable"));
     }
+    let tiles = usize::try_from(photocraft_raster::tile_storage_bytes(rect, &surface.format())).unwrap_or(usize::MAX);
+    *budget = budget.checked_sub(tiles).ok_or_else(|| invalid("the layers exceed the 1 GiB pixel limit"))?;
     surface.write_region(rect, &px.data);
     surface.prune();
     Ok(())
@@ -780,7 +784,7 @@ pub(crate) fn import(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<Im
         ctl.check().map_err(|_| IoError::Cancelled)?;
         let (name, cprops, px) = image.channel(ptr, ctl)?;
         let mut surface = Surface::new(mask_fmt);
-        write_pixels(&mut surface, &px, 0, 0)?;
+        write_pixels(&mut surface, &px, 0, 0, &mut image.budget)?;
         if cprops.iter().any(|p| p.kind == 4) {
             selection = Some(surface);
         } else {
@@ -1069,7 +1073,7 @@ impl<'a> Image<'a> {
                 px = Pixels { width: px.width, height: px.height, channels: n + 1, data };
             }
             let mut surface = Surface::new(fmt);
-            write_pixels(&mut surface, &px, x, y)?;
+            write_pixels(&mut surface, &px, x, y, &mut self.budget)?;
             layer.content = LayerContent::Raster(surface);
             if !alpha {
                 layer.locks.transparency = true;
@@ -1078,7 +1082,7 @@ impl<'a> Image<'a> {
         if mptr != 0 {
             let (_mname, _mprops, px) = self.channel(mptr, ctl)?;
             let mut surface = Surface::new(mask_fmt);
-            write_pixels(&mut surface, &px, x, y)?;
+            write_pixels(&mut surface, &px, x, y, &mut self.budget)?;
             layer.mask = Some(LayerMask { surface, enabled: apply_mask, linked: true, density: 1.0, feather: 0.0 });
         }
         let linear = composite_space.unsigned_abs() == 1 || blend_space.unsigned_abs() == 1;

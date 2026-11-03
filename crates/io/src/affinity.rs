@@ -580,7 +580,8 @@ impl Builder {
         let exact = a == 1.0 && d == 1.0 && b == 0.0 && c == 0.0 && e.fract() == 0.0 && f.fract() == 0.0;
         let inv = m.inverse()?;
         let (rw, rh) = (r.width() as usize, r.height() as usize);
-        if !charge(&mut self.pixel_budget, (rw as u64).saturating_mul(rh as u64).saturating_mul(channels as u64)) {
+        // The surface keeps whole tiles: a narrow image stores up to 256 times its pixels.
+        if !charge(&mut self.pixel_budget, photocraft_raster::tile_storage_bytes(r, &format)) {
             self.warn("the document's images need more pixel memory than the import allows; the rest were left out");
             return None;
         }

@@ -1415,7 +1415,8 @@ impl Conv {
             (b.bottom() + reach).ceil() as i32,
         )
         .intersect(&self.canvas);
-        let pixels = u64::from(area.width()) * u64::from(area.height());
+        // Whole tiles, as the cache stores them: a narrow shape keeps far more than its area.
+        let pixels = area.tile_count() * (photocraft_geom::TILE_SIZE as u64).pow(2);
         if self.can_retain_pixels(pixels) {
             sh.cache = Some(photocraft_vector::render_shape(&sh, self.fmt, self.canvas));
             let bytes = pixels * self.fmt.bytes_per_pixel() as u64;
@@ -1490,6 +1491,8 @@ impl Conv {
             self.note("raster-size", "SVG: an element too large to rasterise was dropped".to_string());
             return None;
         }
+        // The layer keeps whole tiles over its box, however narrow the box.
+        let pixels = Rect::new(x0, y0, x1, y1).tile_count() * (photocraft_geom::TILE_SIZE as u64).pow(2);
         if !self.can_retain_pixels(pixels) {
             return None;
         }

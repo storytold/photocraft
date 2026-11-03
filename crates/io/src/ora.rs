@@ -374,7 +374,7 @@ pub(crate) fn csample(depth: SampleType) -> CSample {
 }
 
 /// Builds the document tree bottom-to-top (stack.xml lists the topmost node first).
-fn build(nodes: Vec<Node>, images: &[Image], fmt: PixelFormat, ctl: &Interrupt<'_>) -> Result<Vec<Layer>> {
+fn build(nodes: Vec<Node>, images: &[Image], fmt: PixelFormat, budget: &mut usize, ctl: &Interrupt<'_>) -> Result<Vec<Layer>> {
     let mut out = Vec::with_capacity(nodes.len());
     for node in nodes.into_iter().rev() {
         ctl.check().map_err(|_| IoError::Cancelled)?;
@@ -388,6 +388,10 @@ fn build(nodes: Vec<Node>, images: &[Image], fmt: PixelFormat, ctl: &Interrupt<'
                     if rect.width() != w || rect.height() != h || px.data().len() != (w as usize) * (h as usize) * fmt.bytes_per_pixel() {
                         return Err(invalid("layer image does not fit its position"));
                     }
+                    // Admitted by decoded size; the surface stores whole tiles, many more for a
+                    // narrow image or one offset across tile edges.
+                    let tiles = usize::try_from(photocraft_raster::tile_storage_bytes(rect, &fmt)).unwrap_or(usize::MAX);
+                    *budget = budget.checked_sub(tiles).ok_or_else(|| invalid("decoded layers exceed the 1 GiB limit"))?;
                     surface.write_interleaved(rect, px.data());
                     surface.prune();
                 }
@@ -395,7 +399,7 @@ fn build(nodes: Vec<Node>, images: &[Image], fmt: PixelFormat, ctl: &Interrupt<'
                 out.push(layer);
             }
             Node::Group { mut layer, children } => {
-                let children = build(children, images, fmt, ctl)?;
+                let children = build(children, images, fmt, budget, ctl)?;
                 if let Some(c) = layer.children_mut() {
                     *c = children;
                 }
@@ -448,7 +452,7 @@ pub(crate) fn import(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<Im
     }
     let fmt = PixelFormat::new(ColorMode::Rgb, depth, true);
     let mut document = Document::new(name, Size::new(w, h), ColorMode::Rgb, depth);
-    document.layers = build(nodes, &reader.images, fmt, ctl)?;
+    document.layers = build(nodes, &reader.images, fmt, &mut reader.budget, ctl)?;
     let xres = num(image, "xres", 72.0)?;
     let yres = num(image, "yres", xres)?;
     if xres > 0.0 && xres < 1.0e6 {

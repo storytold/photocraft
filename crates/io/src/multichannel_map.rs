@@ -48,6 +48,11 @@ pub(crate) fn import(file: &PsdFile, all: &[u8], doc: &mut Document, names: &[St
         return Err(crate::IoError::Unsupported("multichannel channel depth does not match its pixel layout".into()));
     }
     let fmt = PixelFormat::new(ColorMode::Grayscale, depth, false);
+    // Each channel keeps whole tiles: a narrow file stores up to 256 times its planes.
+    let tiles = photocraft_raster::tile_storage_bytes(Rect::from_xywh(0, 0, h.width, h.height), &fmt).saturating_mul(u64::from(h.channels));
+    if tiles > crate::psd_budget::DEFAULT_PSD_IMPORT_PIXEL_BYTES {
+        return Err(crate::IoError::PsdImportBudget { required: tiles, limit: crate::psd_budget::DEFAULT_PSD_IMPORT_PIXEL_BYTES });
+    }
     for k in 0..usize::from(h.channels) {
         let start = k.checked_mul(plane).ok_or_else(invalid)?;
         let end = start.checked_add(plane).ok_or_else(invalid)?;
