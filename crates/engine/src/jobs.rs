@@ -61,7 +61,6 @@ fn read_path(path: &str) -> Result<Vec<u8>> {
     Err(EngineError::Other(format!("cannot open paths on the web: {path}")))
 }
 
-
 impl AuthorizationScope {
     fn enter(gate: Option<Authorization>) -> Self {
         Self(RENDER_AUTHORIZATION.with(|current| current.replace(gate.or(current.get()))))
@@ -1041,7 +1040,6 @@ pub struct PendingPsdPreflight {
     pub available_ram: Option<u64>,
     pub confirm_damage: bool,
 }
-
 
 impl Session {
     /// Run the heavy part of inline (not background) job commands under `ctx`, so another thread
