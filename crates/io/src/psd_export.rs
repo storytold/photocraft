@@ -12,7 +12,7 @@ use photocraft_raster::{Interrupt, Surface};
 
 use crate::adjust_map;
 use crate::blocks;
-use crate::pixels::{deinterleave, encode_be, psd_depth};
+use crate::pixels::{encode_be, psd_depth, surface_planes};
 use crate::psd_import::REGENERATED;
 
 mod banded;
@@ -163,10 +163,6 @@ fn psd_background(doc: &Document) -> Option<photocraft_doc::LayerId> {
 /// as pixels instead.
 const MAX_NESTING: u32 = 8;
 
-fn h_of(r: photocraft_geom::Rect) -> usize {
-    r.height() as usize
-}
-
 fn psd_mode(m: ColorMode) -> PsdMode {
     match m {
         ColorMode::Grayscale => PsdMode::Grayscale,
@@ -208,7 +204,7 @@ impl Ex<'_> {
         (-1..self.cc as i16).map(|id| self.encode(id, &[], 0, 0)).collect()
     }
 
-    fn pixel_channels(&self, s: &Surface, name: &str) -> (PsdRect, Vec<ChannelData>, Vec<String>) {
+    fn pixel_channels(&self, s: &Surface, name: &str, include_alpha: bool) -> (PsdRect, Vec<ChannelData>, Vec<String>) {
         let mut warnings = Vec::new();
         let s = if s.format() != self.fmt {
             warnings.push(format!("layer \"{name}\": pixels converted from {:?} to {:?}", s.format(), self.fmt));
@@ -227,29 +223,14 @@ impl Ex<'_> {
         if dense > banded::banded_from() {
             return (to_psd_rect(r), self.banded_channels(&s, r), warnings);
         }
-        // The interleaved gather is the sequential pass for full-canvas layers, so it runs
-        // in row bands on all cores and the band results concatenate in order.
-        let row_len = r.width() as usize;
-        let bands = crate::pixels::bands(h_of(r));
-        let parts =
-            crate::pixels::par_map(bands, |rows| s.to_interleaved(photocraft_geom::Rect::new(r.x0, r.y0 + rows.start as i32, r.x1, r.y0 + rows.end as i32)));
-        let mut bytes = Vec::with_capacity(row_len * h_of(r) * s.format().bytes_per_pixel());
-        for part in parts {
-            bytes.extend_from_slice(&part);
-            // Free gathered bands before allocating channel planes below; pooling them here
-            // retains another layer-sized allocation throughout deinterleave.
-        }
-        if self.fmt.mode == ColorMode::Lab && self.fmt.sample == SampleType::U16 {
-            crate::pixels::lab16_chroma(&mut bytes, self.cc + 1, false);
-        }
         let mut invert = vec![self.cmyk; self.cc];
         invert.push(false);
-        let planes = deinterleave(&bytes, self.cc + 1, self.fmt.sample, &invert);
-        drop(bytes);
+        let planes =
+            surface_planes(&s, r, self.cc + usize::from(include_alpha), &invert, self.fmt.mode == ColorMode::Lab && self.fmt.sample == SampleType::U16);
         let (w, h) = (r.width() as usize, r.height() as usize);
         // Alpha (-1) first, then the colour channels; each compressed on its own thread.
         let order: Vec<(i16, &Vec<u8>)> =
-            std::iter::once((-1, &planes[self.cc])).chain(planes.iter().take(self.cc).enumerate().map(|(c, p)| (c as i16, p))).collect();
+            planes.get(self.cc).map(|p| (-1, p)).into_iter().chain(planes.iter().take(self.cc).enumerate().map(|(c, p)| (c as i16, p))).collect();
         let ch = crate::pixels::par_map(order, |(id, plane)| self.encode(id, plane, w, h));
         (to_psd_rect(r), ch, warnings)
     }
@@ -259,7 +240,7 @@ impl Ex<'_> {
         let default = s.default_pixel().first().copied().unwrap_or(0.0);
         let r = s.content_bounds();
         let (w, h) = (r.width() as usize, r.height() as usize);
-        let plane = if r.is_empty() { Vec::new() } else { deinterleave(&s.to_interleaved(r), 1, self.mask_fmt.sample, &[false]).remove(0) };
+        let plane = if r.is_empty() { Vec::new() } else { surface_planes(&s, r, 1, &[false], false).remove(0) };
         let mut flags = 0u8;
         if !m.linked {
             flags |= PsdMask::FLAG_RELATIVE;
@@ -303,7 +284,7 @@ impl Ex<'_> {
     fn record(&mut self, l: &Layer, extra: Vec<TaggedBlock>, pixels: Option<&Surface>) -> LayerRecord {
         let id = self.layer_id(l);
         let (rect, mut channels, warnings) = match pixels {
-            Some(s) => self.pixel_channels(s, &l.name),
+            Some(s) => self.pixel_channels(s, &l.name, self.background != Some(l.id)),
             None => (PsdRect::default(), self.empty_channels(), Vec::new()),
         };
         self.warnings.extend(warnings);

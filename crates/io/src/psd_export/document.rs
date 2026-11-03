@@ -5,8 +5,8 @@ use super::resources::{global_block, guides_resource, keep_imported_resource, le
 use super::smart::{SmartOut, link_group_resource};
 use super::{
     ColorMode, Compression, Document, Ex, GlobalLayerMask, Header, ImageData, ImageResource, Interrupt, LayerContent, LayerInfo, LayerInfoPlacement,
-    MaskParameters, PixelFormat, PsdExportOptions, PsdFile, PsdMode, ResolutionInfo, SampleType, TaggedBlock, deinterleave, ids, psd_background, psd_depth,
-    psd_mode, q255, version_info_resource,
+    MaskParameters, PixelFormat, PsdExportOptions, PsdFile, PsdMode, ResolutionInfo, SampleType, TaggedBlock, ids, psd_background, psd_depth, psd_mode, q255,
+    version_info_resource,
 };
 
 /// Converts a document to a PSD file model (see [`document_to_psd_with`]).
@@ -370,13 +370,16 @@ fn append_extra_channels<'a>(
         None => None,
     };
     let canvas = doc.bounds();
+    let channel_bytes = doc.size.area() as usize * sample.bytes();
+    if let Some(bytes) = channel_bytes.checked_mul(extra.len()) {
+        // Keep raw output from retaining geometric growth slack after the planes move into it.
+        let _ = planes.try_reserve_exact(bytes);
+    }
     for channel in &extra {
         let surface = if channel.surface.format() != ex.mask_fmt { channel.surface.convert(ex.mask_fmt) } else { channel.surface.clone() };
-        let mut bytes = surface.to_interleaved(canvas);
-        if channel.spot.is_some() {
-            crate::channel_map::photoshop_spot_plane(&mut bytes, sample);
-        }
-        planes.extend(deinterleave(&bytes, 1, sample, &[false]).remove(0));
+        let start = planes.len();
+        planes.resize(start + channel_bytes, 0);
+        crate::pixels::surface_planes_into(&surface, canvas, &[channel.spot.is_some()], false, &mut [&mut planes[start..]]);
     }
     (extra, quick_mask_id)
 }

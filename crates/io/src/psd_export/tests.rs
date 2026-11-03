@@ -33,6 +33,22 @@ fn a_background_is_written_without_a_transparency_channel() {
     assert!(document_to_psd(&unlocked).layer_info.unwrap().layers[0].channels.iter().any(|c| c.id == -1));
 }
 
+#[test]
+fn background_colour_channels_match_an_unlocked_layer_at_every_depth() {
+    for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab] {
+        for depth in SampleType::ALL {
+            let mut doc = Document::with_background("bg", photocraft_geom::Size::new(13, 7), mode, depth, photocraft_color::Color::rgb(0.2, 0.4, 0.6));
+            let background = document_to_psd(&doc);
+            doc.layers[0].locks.position = false;
+            let unlocked = document_to_psd(&doc);
+            let without_alpha = |file: &PsdFile| file.layers()[0].channels.iter().filter(|c| c.id != -1).cloned().collect::<Vec<_>>();
+            assert_eq!(without_alpha(&background), without_alpha(&unlocked), "{mode:?} {depth:?}");
+            assert_eq!(background.layers()[0].channels.len(), mode.color_channels());
+            assert_eq!(unlocked.layers()[0].channels.len(), mode.color_channels() + 1);
+        }
+    }
+}
+
 /// A flat 1-bit Bitmap file (no layers) opens in Photoshop as its Background; so does it in
 /// PhotoCraft, and it is written back as one (no transparency channel).
 #[test]
