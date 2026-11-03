@@ -703,3 +703,24 @@ fn help_letters_stay_typing_while_a_zoom_is_typed() {
     letter(&mut h, c);
     assert!(is_open(&h.ctx), "{c} ran no row: Help stays open");
 }
+
+/// CodeRabbit on #10383: a frame with the switcher's Alt still reported on an F press and then
+/// Alt's release opens no menu: the press is judged where it comes, before the release.
+#[test]
+fn a_switcher_alt_letter_released_in_the_same_frame_opens_no_menu() {
+    let mut h = bar();
+    h.key_down(egui::Key::AltLeft);
+    h.run_steps(2);
+    h.event(egui::Event::WindowFocused(false));
+    h.run_steps(2);
+    h.event(egui::Event::WindowFocused(true));
+    h.run_steps(3);
+    let f = |pressed| egui::Event::Key { key: egui::Key::F, physical_key: None, pressed, repeat: false, modifiers: egui::Modifiers::ALT };
+    let alt_up = egui::Event::Key { key: egui::Key::AltLeft, physical_key: None, pressed: false, repeat: false, modifiers: egui::Modifiers::NONE };
+    // All three in one frame: the press with the switcher's Alt, then Alt's release.
+    h.input_mut().events.extend([f(true), f(false), alt_up]);
+    h.step();
+    h.run_steps(3);
+    assert_eq!(Keys::current(&h.ctx).focus, None, "no menu, no keyboard on the bar");
+    assert!(!Keys::current(&h.ctx).show_underlines(&h.ctx), "and nothing underlined");
+}

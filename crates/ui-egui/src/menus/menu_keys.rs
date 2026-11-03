@@ -298,7 +298,17 @@ impl Keys {
         // trace in `events`, and releasing Alt counted as a tap that put the keyboard on the bar;
         // Enter then opened File instead of confirming the dialog (#7481).
         let raw = ctx.input(|i| i.raw.events.clone());
+        // Letters pressed while the Alt egui reports is still the window switcher's, judged where
+        // each press comes in the frame's events: a release later in the same frame does not
+        // make an earlier press an Alt+letter (#9763, CodeRabbit on #10383).
+        let mut switcher_letters: Vec<Key> = Vec::new();
         for e in &raw {
+            if let Event::Key { key, pressed: true, modifiers, .. } = e
+                && modifiers.alt
+                && self.alt_at_focus
+            {
+                switcher_letters.push(*key);
+            }
             match e {
                 // A held Alt auto-repeats (after about half a second on Windows): only its first
                 // press starts a tap. A repeat must neither re-arm a tap that Alt+wheel or a key
@@ -383,7 +393,9 @@ impl Keys {
         // the window switcher's Alt, still reported after the focus came back with no Alt key
         // event of this window's own: that press is an ordinary key (#9763, CodeRabbit on #10383).
         let alt_letter = events.iter().filter(|_| !self.alt_at_focus).find_map(|e| match e {
-            Event::Key { key, pressed: true, modifiers, .. } if modifiers.alt && !modifiers.command && !modifiers.ctrl => key_char(*key).map(|c| (*key, c)),
+            Event::Key { key, pressed: true, modifiers, .. } if modifiers.alt && !modifiers.command && !modifiers.ctrl && !switcher_letters.contains(key) => {
+                key_char(*key).map(|c| (*key, c))
+            }
             _ => None,
         });
         if let Some((key, c)) = alt_letter
