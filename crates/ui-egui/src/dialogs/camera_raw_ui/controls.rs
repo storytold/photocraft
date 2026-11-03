@@ -210,7 +210,14 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         ui.painter().rect_filled(r, 0.0, Tokens::get(ui.ctx()).scrim);
     });
     // A window of its own (title bar, moved and resized like any window), like Adobe Camera Raw.
-    let builder = crate::os_window::builder().with_title(window_title).with_inner_size([1360.0, 900.0]).with_min_inner_size([900.0, 600.0]);
+    // Sized to the monitor (a fixed 1360×900 overflows a 1536×864 laptop screen) and centred over
+    // the main window, as Photoshop opens it.
+    let (monitor, outer) = ctx.input(|i| (i.viewport().monitor_size, i.viewport().outer_rect));
+    let size = window_size(monitor);
+    let mut builder = crate::os_window::builder().with_title(window_title).with_inner_size(size).with_min_inner_size([900.0, 600.0]);
+    if let Some(outer) = outer {
+        builder = builder.with_position(outer.center() - size / 2.0);
+    }
     let mut close = false;
     ctx.show_viewport_immediate(egui::ViewportId::from_hash_of("camera-raw-window"), builder, |ui, class| {
         if ui.ctx().input(|i| i.viewport().close_requested()) {
@@ -221,6 +228,13 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if close && app.camera_raw.is_some() {
         cancel(app);
     }
+}
+
+/// The Camera Raw window's first size: two thirds of the monitor's width and three quarters of its
+/// height, at most the full 1360×900 and at least the minimum 900×600.
+fn window_size(monitor: Option<egui::Vec2>) -> egui::Vec2 {
+    let Some(m) = monitor else { return vec2(1010.0, 630.0) };
+    vec2((m.x * 0.66).clamp(900.0, 1360.0), (m.y * 0.73).clamp(600.0, 900.0))
 }
 
 impl CameraRawDialog {
