@@ -704,6 +704,79 @@ fn dragging_a_label_scrubs_the_field_right_after_it() {
     assert_eq!(h.state().1, 100.0, "the field isn't right after the label");
 }
 
+/// Scrubby Slider Acceleration's curve: 1:1 while slow, rising with speed (never falling), capped.
+#[test]
+fn scrub_acceleration_is_one_when_slow_monotonic_and_capped() {
+    use super::scrub::{SCRUB_ACCEL_FAST, SCRUB_ACCEL_MAX, SCRUB_ACCEL_SLOW, scrub_acceleration};
+    for v in [0.0, 50.0, SCRUB_ACCEL_SLOW, -SCRUB_ACCEL_SLOW, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        assert_eq!(scrub_acceleration(v), 1.0, "{v}");
+    }
+    assert_eq!(scrub_acceleration(SCRUB_ACCEL_FAST), SCRUB_ACCEL_MAX);
+    assert_eq!(scrub_acceleration(1e9), SCRUB_ACCEL_MAX);
+    assert_eq!(scrub_acceleration(-900.0), scrub_acceleration(900.0), "either direction");
+    let mid = scrub_acceleration((SCRUB_ACCEL_SLOW + SCRUB_ACCEL_FAST) / 2.0);
+    assert!((mid - (1.0 + SCRUB_ACCEL_MAX) / 2.0).abs() < 1e-5, "{mid}");
+    let mut last = 1.0;
+    for i in 0..=400 {
+        let f = scrub_acceleration(i as f32 * 5.0);
+        assert!(f >= last && f <= SCRUB_ACCEL_MAX, "{i}: {f} after {last}");
+        last = f;
+    }
+}
+
+/// With Scrubby Slider Acceleration on, a fast label drag moves the value further than a slow
+/// one over the same distance, and a slow one stays a step a point; with it off (and in a context
+/// the app never set it in) both move exactly a step a point.
+#[test]
+fn accelerated_label_scrubs_go_further_when_fast() {
+    // A frame every 10 ms, one pointer event a frame, so the pointer's speed is known.
+    let build = |accel: Option<bool>| {
+        let mut h = Harness::builder().with_step_dt(0.01).build_ui_state(
+            |ui, v: &mut f32| {
+                ui.horizontal(|ui| {
+                    let l = ui.label("Size:");
+                    super::scrub_label(ui, &l);
+                    super::value_field(ui, v, 0.0..=10_000.0, "px", 80.0).accessible_name("Size");
+                });
+            },
+            1000.0,
+        );
+        if let Some(on) = accel {
+            super::set_scrub_acceleration(&h.ctx, on);
+        }
+        h.run();
+        h
+    };
+    // Drags 120 points right in `moves` equal moves, one a frame; returns how far the value went.
+    let drag = |h: &mut Harness<'static, f32>, moves: usize| {
+        let before = *h.state();
+        let at = h.get_by_label("Size:").rect().center();
+        h.hover_at(at);
+        h.run();
+        h.drag_at(at);
+        h.step();
+        for i in 1..=moves {
+            h.event(egui::Event::PointerMoved(at + egui::vec2(120.0 * i as f32 / moves as f32, 0.0)));
+            h.step();
+        }
+        h.drop_at(at + egui::vec2(120.0, 0.0));
+        h.run();
+        *h.state() - before
+    };
+    let slow_moves = 120; // 100 points a second
+    let fast_moves = 6; // 2000 points a second
+    for accel in [None, Some(false)] {
+        let mut h = build(accel);
+        assert_eq!(drag(&mut h, slow_moves), 120.0, "{accel:?}: slow");
+        assert_eq!(drag(&mut h, fast_moves), 120.0, "{accel:?}: fast drags stay linear");
+    }
+    let mut h = build(Some(true));
+    assert_eq!(drag(&mut h, slow_moves), 120.0, "a slow drag stays a step a point");
+    let fast = drag(&mut h, fast_moves);
+    assert!(fast > 200.0, "a fast drag goes further: {fast}");
+    assert!(fast <= 120.0 * super::scrub::SCRUB_ACCEL_MAX, "and no further than the cap: {fast}");
+}
+
 /// A right-aligned OK / Cancel / Apply row as `os` draws it: labels left to right, and the
 /// row's right edge with the window's.
 fn button_row(os: egui::os::OperatingSystem) -> (Vec<String>, f32, f32) {

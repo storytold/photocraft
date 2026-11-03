@@ -54,7 +54,9 @@ pub use panel::{
     FOOTER_BAR, chevron_icon, drop_line, footer_height, hairline, panel_footer, panel_menu_button, pill_tab, section_label, style_spectrum_popup_menu, surface,
     vline,
 };
-pub use scrub::{scrub_label, scrub_option_icon, scrub_option_label};
+#[cfg(test)]
+pub(crate) use scrub::scrub_acceleration_on;
+pub use scrub::{scrub_label, scrub_option_icon, scrub_option_label, set_scrub_acceleration};
 #[cfg(test)]
 use slider::DOUBLE_CLICK_S;
 pub use slider::{RowGestures, row_label, second_click, slider, slider_line, slider_row, slider_row_prec, slider_row_with};

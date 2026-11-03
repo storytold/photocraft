@@ -27,9 +27,45 @@ fn label_scrub_id() -> egui::Id {
     egui::Id::unique("pc-label-scrub")
 }
 
+fn scrub_acceleration_id() -> egui::Id {
+    egui::Id::unique("pc-scrub-acceleration")
+}
+
+/// Preferences › Enhanced Controls › Scrubby Slider Acceleration: when on, a fast label drag moves
+/// the value further than a slow one (see [`scrub_acceleration`]). The app sets it each frame; off
+/// without it, so a context the app never touched scrubs linearly.
+pub fn set_scrub_acceleration(ctx: &egui::Context, on: bool) {
+    ctx.data_mut(|d| d.insert_temp(scrub_acceleration_id(), on));
+}
+
+/// Whether [`set_scrub_acceleration`] turned acceleration on for `ctx` (off when never set).
+pub(crate) fn scrub_acceleration_on(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<bool>(scrub_acceleration_id())).unwrap_or(false)
+}
+
+/// Pointer speed (points a second) up to which a scrub stays one step a point.
+pub(super) const SCRUB_ACCEL_SLOW: f32 = 300.0;
+/// Pointer speed at which the scrub reaches [`SCRUB_ACCEL_MAX`].
+pub(super) const SCRUB_ACCEL_FAST: f32 = 1500.0;
+/// Most steps a point an accelerated scrub moves (before Shift / Alt).
+pub(super) const SCRUB_ACCEL_MAX: f32 = 4.0;
+
+/// How many times further an accelerated scrub moves at pointer speed `speed` (points a second,
+/// either sign): 1 up to [`SCRUB_ACCEL_SLOW`], rising linearly to [`SCRUB_ACCEL_MAX`] at
+/// [`SCRUB_ACCEL_FAST`] and capped there. Continuous and never decreasing with speed, so a drag
+/// that speeds up never moves back; a non-finite speed counts as slow.
+pub(super) fn scrub_acceleration(speed: f32) -> f32 {
+    let speed = speed.abs();
+    if !speed.is_finite() || speed <= SCRUB_ACCEL_SLOW {
+        return 1.0;
+    }
+    let t = ((speed - SCRUB_ACCEL_SLOW) / (SCRUB_ACCEL_FAST - SCRUB_ACCEL_SLOW)).min(1.0);
+    1.0 + t * (SCRUB_ACCEL_MAX - 1.0)
+}
+
 /// Makes `label` scrubby: dragging it left or right moves the value field drawn right after it on
-/// the same row (one step a point, ×10 with Shift, a tenth as fast with Alt), with Photoshop's
-/// scrubby cursor. A label with no value field right after it stays a plain label.
+/// the same row (one step a point, ×10 with Shift, a tenth as fast with Alt; further when moved
+/// fast with [`set_scrub_acceleration`] on), with Photoshop's scrubby cursor. A label with no value field right after it stays a plain label.
 pub fn scrub_label(ui: &Ui, label: &Response) -> Response {
     scrub_label_within(ui, label, 24.0)
 }
@@ -97,7 +133,14 @@ pub(super) fn label_scrub_response(ui: &Ui, resp: &Response, original_rect: Rect
             (true, Some(origin), Some(pos)) => pos.x - origin.x,
             _ => resp.drag_delta().x,
         };
-        acc += dx * rate;
+        // Acceleration scales this frame's motion by the pointer's speed. Not on the first frame:
+        // its motion is the press slop, which says nothing about speed.
+        let accelerate = !resp.drag_started() && scrub_acceleration_on(ui.ctx());
+        if accelerate {
+            acc += dx * rate * scrub_acceleration(ui.input(|i| i.pointer.velocity().x));
+        } else {
+            acc += dx * rate;
+        }
         if !acc.is_finite() {
             acc = 0.0;
         }
