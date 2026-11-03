@@ -152,7 +152,7 @@ fn an_over_limit_display_window_is_refused_before_pixel_data_is_read() {
     // One scanline chunk: y coordinate (4 bytes) + 1 pixel of RGB f32 (12 bytes).
     let cut = &full[..full.len() - 16];
     // The truncation is real: with default limits the read of pixels itself fails.
-    let error = decode(&cut).expect_err("truncated pixels fail");
+    let error = decode(cut).expect_err("truncated pixels fail");
     assert!(!matches!(error, photocraft_codecs::CodecError::LimitExceeded(_)), "truncation, not admission, fails here: {error:?}");
     let limits = Limits { max_width: 16, max_height: 16, max_pixels: 256, max_alloc: 4096 };
     let error = decode_as_with(Format::OpenExr, cut, &DecodeOptions { limits, ..Default::default() }).expect_err("oversized display canvas rejected");

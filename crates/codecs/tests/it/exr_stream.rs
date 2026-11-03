@@ -191,14 +191,14 @@ fn the_stream_route_stages_the_display_window_like_the_whole_file_decoder() {
     // A cropped render inside its stage: the canvas is the 4×4 display window and the
     // bands land at the data window's offset (1, 1).
     let bytes = stage(IntegerBounds::new((0, 0), (4, 4)), (1, 1));
-    let mut decoder = Decoder::new(Cursor::new(&bytes), &|| false).unwrap();
+    let decoder = Decoder::new(Cursor::new(&bytes), &|| false).unwrap();
     let info = decoder.info();
     assert_eq!((info.canvas_width, info.canvas_height), (4, 4));
     assert_eq!((info.offset_x, info.offset_y), (1, 1));
     assert_eq!(decode(&bytes).unwrap().dimensions(), (4, 4));
     // A window the stage cannot hold: the canvas stays the 2×2 data window, no offset.
     let bytes = stage(IntegerBounds::new((0, 0), (2, 2)), (1, 1));
-    let mut decoder = Decoder::new(Cursor::new(&bytes), &|| false).unwrap();
+    let decoder = Decoder::new(Cursor::new(&bytes), &|| false).unwrap();
     let info = decoder.info();
     assert_eq!((info.canvas_width, info.canvas_height), (2, 2));
     assert_eq!((info.offset_x, info.offset_y), (0, 0));
