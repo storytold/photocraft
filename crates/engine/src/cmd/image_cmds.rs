@@ -685,6 +685,7 @@ fn crop_with(s: &mut Session, p: &Value, keep_background: bool) -> Result<Value>
     }
     s.set_sampler_map(target.sampler_map(r));
     let extension = s.tools.background;
+    let mut filled = false;
     s.edit("Crop", |doc, active| {
         let original = doc.size;
         if unlock {
@@ -694,12 +695,15 @@ fn crop_with(s: &mut Session, p: &Value, keep_background: bool) -> Result<Value>
         // A straight crop fills all of the area past the old canvas, pixels an earlier Delete Cropped
         // Pixels off crop hid there included, as Photoshop does; only a turned frame keeps them (#8060).
         if content_aware {
-            crate::crop_fill::fill_uncovered(doc, *active, &crate::crop_fill::Coverage::crop(r, original.width, original.height))?;
+            filled = crate::crop_fill::fill_uncovered(doc, *active, &crate::crop_fill::Coverage::crop(r, original.width, original.height), delete)?;
         }
         doc.selection = None;
         target.apply(doc);
         Ok(())
     })?;
+    if filled && let Some(st) = s.active_mut() {
+        st.history.set_current_label("Content-aware Crop");
+    }
     Ok(crop_result(s, json!({ "x": r.x0, "y": r.y0, "width": r.width(), "height": r.height() })))
 }
 
@@ -864,6 +868,7 @@ fn rotated_crop(s: &mut Session, r: Rect, angle: f64, delete: bool, content_awar
     } else {
         coverage
     };
+    let mut filled = false;
     crate::analysis_cmds::compound(s, "Crop", |s| {
         // Pixels the crop deletes needn't be turned first: keeping only what lands in the frame
         // makes the rotation cost the frame's size, not the canvas's (a small turned crop of a
@@ -900,13 +905,16 @@ fn rotated_crop(s: &mut Session, r: Rect, angle: f64, delete: bool, content_awar
         s.edit("Crop", |doc, active| {
             crop_doc(doc, CMD, target, delete, extension)?;
             if content_aware {
-                crate::crop_fill::fill_uncovered(doc, *active, &coverage)?;
+                filled = crate::crop_fill::fill_uncovered(doc, *active, &coverage, delete)?;
             }
             doc.selection = None;
             crop_target.apply(doc);
             Ok(())
         })
     })?;
+    if filled && let Some(st) = s.active_mut() {
+        st.history.set_current_label("Content-aware Crop");
+    }
     Ok(crop_result(s, json!({ "x": r.x0, "y": r.y0, "width": r.width(), "height": r.height(), "angle": angle })))
 }
 

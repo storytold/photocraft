@@ -3,9 +3,10 @@
 //! strips an extension adds) is filled from its surroundings instead of holding the background
 //! colour or transparency.
 //!
-//! Which layer: the Background when the document has one (the layer the crop filled with the
-//! background colour), otherwise the active pixel layer (where the crop left transparency). Other
-//! layers keep their transparency there, as after a plain crop. Each connected piece of the
+//! Which layers: the Background and the active pixel layer, each sampled independently. Unmeasured
+//! cases (Delete Cropped Pixels off, or a hidden, locked or nonpixel active layer) retain the
+//! Background-else-active target. Other layers keep their transparency, as after a plain crop.
+//! Each connected piece of the
 //! uncovered area (each corner, each edge strip) is filled on its own, with Photoshop's sampling
 //! window around that piece, and only pixels the image covers are sampled.
 //!
@@ -38,10 +39,10 @@ pub(crate) struct Coverage {
     pub height: f64,
     /// Whether the map rotates (its resampled edge is antialiased against the background colour).
     pub rotated: bool,
-    /// The filled layer's pixels before a turned crop (original document px), set by
+    /// Each candidate target's pixels before a turned crop (original document px), set by
     /// [`Coverage::holding`]: where they lie past the old canvas they are hidden image, not
     /// uncovered area. A straight crop has none: Photoshop fills over hidden pixels there.
-    pub held: Option<Surface>,
+    pub held: Option<Vec<(LayerId, Surface)>>,
 }
 
 impl Coverage {
@@ -53,7 +54,14 @@ impl Coverage {
     /// Takes the pixels of the layer the fill will go to from `doc` before a turned crop (the
     /// surface is shared, not copied), so hidden pixels past the old canvas count as covered.
     pub fn holding(mut self, doc: &Document, active: Option<LayerId>) -> Self {
-        self.held = target_layer(doc, active).ok().and_then(|id| doc.layer(id)).and_then(|l| l.surface()).cloned();
+        self.held = Some(
+            target_layer(doc, active)
+                .ok()
+                .into_iter()
+                .chain(additional_target(doc, active))
+                .filter_map(|id| doc.layer(id).and_then(|l| l.surface()).map(|surface| (id, surface.clone())))
+                .collect(),
+        );
         self
     }
 
@@ -61,19 +69,19 @@ impl Coverage {
     /// the original canvas by at least half the pixel's projected size (exact for an unrotated
     /// crop); a rotated crop also refills the one-pixel antialiased edge, which the resampling
     /// blended with the background colour.
-    fn covered(&self, u: i32, v: i32, margin: f64) -> bool {
+    fn covered(&self, u: i32, v: i32, margin: f64, held: Option<&Surface>) -> bool {
         let [a, b, c, d, e, f] = self.map;
         let (cu, cv) = (f64::from(u) + 0.5, f64::from(v) + 0.5);
         let (x, y) = (a * cu + b * cv + e, c * cu + d * cv + f);
-        (x >= margin && y >= margin && x <= self.width - margin && y <= self.height - margin) || self.holds(x, y)
+        (x >= margin && y >= margin && x <= self.width - margin && y <= self.height - margin) || Self::holds(held, x, y)
     }
 
     /// Whether the layer held an image pixel at original document point (x, y) past the canvas
     /// (#8060): mostly opaque there and one pixel around it too (the turned edge is blended with
     /// the background colour, as at the canvas edge). Without an alpha channel
     /// hidden pixels can't be told from empty ones: nothing is held.
-    fn holds(&self, x: f64, y: f64) -> bool {
-        let Some(surf) = &self.held else { return false };
+    fn holds(held: Option<&Surface>, x: f64, y: f64) -> bool {
+        let Some(surf) = held else { return false };
         let format = surf.format();
         if !(format.alpha && x.is_finite() && y.is_finite()) {
             return false;
@@ -100,8 +108,20 @@ const UNLABELLED: u32 = u32::MAX;
 
 /// Fills the area of the cropped `doc` that `cov` says the original image doesn't cover (see the
 /// module docs). Nothing uncovered: nothing changes. Errors leave `doc` to be rolled back by the
-/// caller's history step.
-pub(crate) fn fill_uncovered(doc: &mut Document, active: Option<LayerId>, cov: &Coverage) -> Result<()> {
+/// caller's history step. Returns whether any uncovered pixels were filled, for the history name.
+pub(crate) fn fill_uncovered(doc: &mut Document, active: Option<LayerId>, cov: &Coverage, delete: bool) -> Result<bool> {
+    let first = target_layer(doc, active);
+    let additional = if delete { additional_target(doc, active) } else { None };
+    let mut filled = fill_layer(doc, first, cov, false)?;
+    if let Some(id) = additional {
+        filled |= fill_layer(doc, Ok(id), cov, true)?;
+    }
+    Ok(filled)
+}
+
+/// One target at a time keeps the label/window allocations bounded to one canvas. The caller's
+/// existing edit/compound transaction rolls every target back if a later fill fails.
+fn fill_layer(doc: &mut Document, id: Result<LayerId>, cov: &Coverage, own_pixels: bool) -> Result<bool> {
     let canvas = doc.bounds();
     let (w, h) = (canvas.width(), canvas.height());
     if u64::from(w) * u64::from(h) > MAX_PIXELS {
@@ -110,24 +130,26 @@ pub(crate) fn fill_uncovered(doc: &mut Document, active: Option<LayerId>, cov: &
     let (w, h) = (w as usize, h as usize);
     let len = w.checked_mul(h).ok_or_else(|| EngineError::Other("the crop is too large for Content-Aware fill".into()))?;
     if len == 0 {
-        return Ok(());
+        return Ok(false);
     }
     let margin = cov.margin();
+    let held = id.as_ref().ok().and_then(|id| cov.held.as_ref()?.iter().find(|(held_id, _)| held_id == id).map(|(_, surface)| surface));
     let mut labels = crate::allocation::filled(len, 0u32, "Content-Aware crop fill")?;
     labels.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
         for (x, l) in row.iter_mut().enumerate() {
-            if !cov.covered(x as i32, y as i32, margin) {
+            if !cov.covered(x as i32, y as i32, margin, held) {
                 *l = UNLABELLED;
             }
         }
     });
     if !labels.contains(&UNLABELLED) {
-        return Ok(());
+        return Ok(false);
     }
     if !labels.contains(&0) {
         return Err(EngineError::Other("Content-Aware fill needs some of the image inside the crop to sample from".into()));
     }
-    let id = target_layer(doc, active)?;
+    // Resolve an absent target only after the no-fill/sample checks, preserving the legacy path.
+    let id = id?;
     let pieces = label_components(&mut labels, w, h)?;
     let surf = doc.layer(id).and_then(|l| l.surface()).ok_or_else(|| EngineError::Other("Content-Aware fill needs a pixel layer".into()))?;
     let label = |x: i32, y: i32| -> u32 {
@@ -142,7 +164,17 @@ pub(crate) fn fill_uncovered(doc: &mut Document, active: Option<LayerId>, cov: &
         .enumerate()
         .map(|(k, bounds)| -> Result<(Rect, Vec<f32>)> {
             let k = k as u32 + 1;
-            let (window, px) = crate::fill_cmds::content_aware_native(surf, *bounds, canvas, true, SEED, |x, y| label(x, y) == k, |x, y| label(x, y) == 0)?;
+            let (window, px) = crate::fill_cmds::content_aware_native(
+                surf,
+                *bounds,
+                canvas,
+                true,
+                SEED,
+                |x, y| label(x, y) == k,
+                // A partial active layer (EdgeHalf in #10868) must extend its own image, not
+                // sample its empty canvas rows into the new strip. Keep legacy sampling intact.
+                |x, y| label(x, y) == 0 && (!own_pixels || !surf.format().alpha || surf.sample_channel(x, y, n.saturating_sub(1)) > 0.0),
+            )?;
             // The piece's bounds, its pixels from the fill and the rest as they were.
             let mut out = surf.read_region(*bounds);
             let ww = window.width() as usize;
@@ -165,7 +197,17 @@ pub(crate) fn fill_uncovered(doc: &mut Document, active: Option<LayerId>, cov: &
     for (r, px) in filled {
         surf.write_region(r, &px);
     }
-    Ok(())
+    Ok(true)
+}
+
+/// Only the measured, editable active-raster case adds a target to the Background. Ancestor
+/// visibility and locks count too; all unmeasured cases keep the original target selection.
+fn additional_target(doc: &Document, active: Option<LayerId>) -> Option<LayerId> {
+    let background = doc.background()?.id;
+    let id = active.filter(|id| *id != background)?;
+    let path = doc.path_of(id)?;
+    let layer = doc.layer_at(&path)?;
+    (matches!(layer.content, photocraft_doc::LayerContent::Raster(_)) && doc.shown_at(&path) && !doc.locks_at(&path).any()).then_some(id)
 }
 
 /// The Background, else the active pixel layer.
@@ -242,9 +284,9 @@ mod tests {
     fn unrotated_coverage_is_exact() {
         let c = Coverage::crop(Rect::new(-2, 0, 8, 4), 5, 4);
         let m = c.margin();
-        assert!(!c.covered(1, 0, m), "x = -1");
-        assert!(c.covered(2, 0, m), "x = 0");
-        assert!(c.covered(6, 0, m), "x = 4");
-        assert!(!c.covered(7, 0, m), "x = 5");
+        assert!(!c.covered(1, 0, m, None), "x = -1");
+        assert!(c.covered(2, 0, m, None), "x = 0");
+        assert!(c.covered(6, 0, m, None), "x = 4");
+        assert!(!c.covered(7, 0, m, None), "x = 5");
     }
 }
