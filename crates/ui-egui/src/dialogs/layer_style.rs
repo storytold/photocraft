@@ -550,12 +550,19 @@ pub fn drags_gradient(f: &Map<String, Value>) -> bool {
 pub fn drag_gradient(f: &mut Map<String, Value>, start: bool, total: [f64; 2], bounds: [f64; 2]) {
     const KEY: &str = "__gradientDrag";
     let Some(id) = f.get("selected").and_then(Value::as_str).map(str::to_string).filter(|_| drags_gradient(f)) else { return };
-    let Some(p) = entry(f, &id).and_then(|e| e.get("params")) else { return };
-    // The offset as stored (None: centred, never set).
-    let stored =
-        p.get("offset").and_then(Value::as_array).map(|a| [a.first().and_then(Value::as_f64).unwrap_or(0.0), a.get(1).and_then(Value::as_f64).unwrap_or(0.0)]);
+    let Some(e) = entry(f, &id) else { return };
+    // The offset the gradient shows: `offset` as stored when it is a pair of finite numbers (the
+    // only form the engine applies), else the effect's own (its `fx` snapshot), else the centre
+    // (None: never set); within ±4 of the layer's size, as the renderer keeps it, so the drag
+    // starts from where the gradient is seen.
+    let pair = |v: Option<&Value>| {
+        let a = v?.as_array().filter(|a| a.len() == 2)?;
+        let (x, y) = (a.first()?.as_f64()?, a.get(1)?.as_f64()?);
+        (x.is_finite() && y.is_finite()).then(|| [x.clamp(-4.0, 4.0), y.clamp(-4.0, 4.0)])
+    };
+    let shown = pair(e.get("params").and_then(|p| p.get("offset"))).or_else(|| pair(e.get("fx").and_then(|fx| fx.pointer("/GradientOverlay/gradient/offset"))));
     if start || f.get(KEY).is_none() {
-        f.insert(KEY.into(), json!(stored.unwrap_or([0.0, 0.0])));
+        f.insert(KEY.into(), json!(shown.unwrap_or([0.0, 0.0])));
     }
     let Some([x0, y0]) = f.get(KEY).and_then(Value::as_array).and_then(|a| Some([a.first()?.as_f64()?, a.get(1)?.as_f64()?])) else { return };
     let [w, h] = [bounds[0].max(1.0), bounds[1].max(1.0)];
@@ -566,8 +573,9 @@ pub fn drag_gradient(f: &mut Map<String, Value>, start: bool, total: [f64; 2], b
         return;
     }
     // A press that has not moved the gradient (or a drag back to where it began, with nothing
-    // written since) leaves the stored offset as it is, to its full precision.
-    if x == x0 && y == y0 && stored == Some([x0, y0]) {
+    // written since) leaves the offset as it is: a stored one to its full precision, none where
+    // there was none.
+    if x == x0 && y == y0 && shown.is_none_or(|s| s == [x0, y0]) {
         return;
     }
     set_param(f, &id, "offset", json!([(x * 1000.0).round() / 1000.0, (y * 1000.0).round() / 1000.0]));
