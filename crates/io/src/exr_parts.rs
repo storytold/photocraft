@@ -274,7 +274,7 @@ pub fn import(name: &str, bytes: &[u8], sel: &Selection) -> Result<ImportResult,
     // OpenEXR holds linear, scene-referred values (Y is linear luminance): use the profile
     // matching the selected parts' mode, as File › Open does.
     doc.icc_profile = Some(if gray_only { photocraft_cms::builtin::linear_gray().to_bytes() } else { Builtin::LinearSrgb.profile().to_bytes() });
-    Ok(ImportResult { document: doc, warnings, source_read_only: false, preview_only: false })
+    Ok(ImportResult { initial_view: None, document: doc, warnings, source_read_only: false, preview_only: false })
 }
 
 /// The additive beauty from the file's AOV groups: premultiplied RGB summed over the
