@@ -320,9 +320,64 @@ mod tests {
         assert!(app.session.clipboard.is_some() && app.session.path_clipboard.is_none(), "the pixel copy replaced the path clip");
         // Select the inner square again, so the paste runs beside a component selection.
         crate::path_components::press(&mut app, [80.0, 80.0], false);
+        let (source_id, _) = shape(&app);
         let layers = app.session.active().unwrap().doc.walk().len();
         app.run("edit.paste", json!({})).unwrap();
         assert_eq!(app.session.active().unwrap().doc.walk().len(), layers + 1, "the pixel clip pasted as a new layer");
-        assert_eq!(shape(&app).1.path.subpaths.len(), 2, "no path was touched");
+        let source = app.session.active().unwrap().doc.layer(source_id).unwrap();
+        let photocraft_doc::LayerContent::Shape(sh) = &source.content else { panic!("the source layer is no longer a shape") };
+        assert_eq!(sh.path.subpaths.len(), 2, "no path was touched");
+    }
+    /// A selected component's joined subpath copies and pastes with it: live_selection expands
+    /// the component to all its subpaths, PathOp::Join included (review on #10482).
+    #[test]
+    fn a_joined_component_copies_and_pastes_whole() {
+        let mut app = app();
+        square(&mut app, 20.0, 20.0, 120.0);
+        app.ui.tool_options.pen_path_op = "combine".into();
+        square(&mut app, 60.0, 60.0, 40.0);
+        let (id, _) = shape(&app);
+        // Join the inner square to the outer: one component spanning both subpaths.
+        let k = |x: f64, y: f64| json!({"anchor": [x, y]});
+        app.run(
+            "shape.edit",
+            json!({"layer": id.0, "path": {"subpaths": [
+                {"closed": true, "knots": [k(20.0, 20.0), k(140.0, 20.0), k(140.0, 140.0), k(20.0, 140.0)]},
+                {"closed": true, "op": "join", "knots": [k(60.0, 60.0), k(100.0, 60.0), k(100.0, 100.0), k(60.0, 100.0)]},
+            ]}}),
+        )
+        .unwrap();
+        app.ui.tool = Tool::PathSelection;
+        // Press between the squares: even-odd counts the outer subpath only there (the join's
+        // interior cancels out), so the hit lands on the one component spanning both.
+        crate::path_components::press(&mut app, [50.0, 50.0], false);
+        assert_eq!(crate::path_components::selected(&app).map(|(.., heads)| heads), Some(vec![0]), "the joined component is one");
+        app.run("edit.copy", json!({})).unwrap();
+        let clip = app.session.path_clipboard.as_ref().expect("the component is on the path clipboard");
+        assert_eq!(clip.subpaths.len(), 2, "the joined component copies both subpaths");
+        app.ui.selected_path = None;
+        app.run("edit.paste", json!({"center": [100.0, 50.0]})).unwrap();
+        let pasted = saved(&app, "Pasted Path").expect("the pasted path");
+        assert_eq!(pasted.subpaths.len(), 2, "and pastes whole");
+    }
+
+    /// With no explicit centre, Paste centres on the view: pan the view, paste with no params,
+    /// and the pasted path's control-bounds centre lands on the view centre.
+    #[test]
+    fn paste_without_a_centre_uses_the_view_centre() {
+        let (mut app, _) = two_squares_inner_selected();
+        app.run("edit.copy", json!({})).unwrap();
+        app.sync_views();
+        {
+            let v = &mut app.ui.views[0];
+            v.zoom = 1.0;
+            v.center = [60.0, 40.0];
+            v.fit_pending = false;
+        }
+        app.ui.selected_path = None;
+        app.run("edit.paste", json!({})).unwrap();
+        let pasted = saved(&app, "Pasted Path").expect("the pasted path");
+        let (x0, y0, x1, y1) = pasted.control_bounds().unwrap();
+        assert_eq!(((x0 + x1) / 2.0, (y0 + y1) / 2.0), (60.0, 40.0), "the bounds centre lands on the panned view centre");
     }
 }

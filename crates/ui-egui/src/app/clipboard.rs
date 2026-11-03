@@ -4,8 +4,13 @@ pub(crate) fn clip_signature(w: u32, h: u32, px: &[u8]) -> u64 {
     // Every byte counts: the old step_by(997) sampling could miss a change entirely in a small
     // image (a 3×2 clip samples one byte), and the freshness guard would then call a genuinely
     // newer OS clipboard image unchanged.
-    let mut sig = (w as u64) << 32 | h as u64;
-    for &b in px {
+    fold_bytes((w as u64) << 32 | h as u64, px)
+}
+
+/// Folds `bytes` into `sig`, one rolling multiply per byte; streaming callers (the SVG mirror's
+/// row-wise signature) feed chunk after chunk to stay within the same result.
+pub(crate) fn fold_bytes(mut sig: u64, bytes: &[u8]) -> u64 {
+    for &b in bytes {
         sig = (sig ^ u64::from(b)).wrapping_mul(0x9E37_79B9_7F4A_7C15);
     }
     sig
@@ -13,16 +18,22 @@ pub(crate) fn clip_signature(w: u32, h: u32, px: &[u8]) -> u64 {
 
 /// The bitmap signature of the clip's raster mirror, byte-identical to what
 /// [`PhotocraftApp::import_os_clipboard`] computes for the same pixels: the two import paths
-/// must agree, or the freshness guard between them never fires.
+/// must agree, or the freshness guard between them never fires. Row-wise, so a 24 MP mirror
+/// does not allocate the whole image twice.
 fn svg_clip_signature(clip: &photocraft_engine::edit_cmds::Clip) -> u64 {
     let b = clip.bounds;
     let (w, h) = (b.width(), b.height());
     if w == 0 || h == 0 {
         return (u64::from(w) << 32) | u64::from(h);
     }
-    let mut px = vec![[0u8; 4]; w as usize * h as usize];
-    clip.surface.read_rgba8_into(b, &mut px);
-    clip_signature(w, h, &px.into_iter().flatten().collect::<Vec<u8>>())
+    let mut sig = (u64::from(w) << 32) | u64::from(h);
+    let mut row = vec![[0u8; 4]; w as usize];
+    for y in 0..h {
+        clip.surface.read_rgba8_into(photocraft_geom::Rect::from_xywh(b.x0, b.y0 + y as i32, w, 1), &mut row);
+        let flat: Vec<u8> = row.iter().flatten().copied().collect();
+        sig = fold_bytes(sig, &flat);
+    }
+    sig
 }
 
 impl PhotocraftApp {
@@ -63,6 +74,8 @@ impl PhotocraftApp {
         })?;
         self.os_clip_sig = Some(svg_clip_signature(&clip));
         self.os_clip_svg = clip.svg.clone();
+        // One clipboard: an imported SVG replaces a path clip, like any installed clip.
+        self.session.path_clipboard = None;
         self.session.clipboard = Some(clip);
         self.clip_external = true;
         self.clip_unmirrored = false;

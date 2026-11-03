@@ -1382,3 +1382,18 @@ fn headless_diagonal_arrow_preserves_geometry_after_nonuniform_scale() {
 
     assert_eq!(info["path"], transformed["path"]);
 }
+
+#[test]
+fn layer_is_a_reserved_saved_path_name() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 40, "height": 40})).unwrap();
+    // "layer" addresses the active layer's shape path or vector mask in the path commands; a
+    // saved path by that name would be unaddressable (and the Paths panel's row for it would
+    // target the layer).
+    assert!(s.execute("path.set", json!({"name": "layer", "path": {"subpaths": [{"knots": [[1, 1], [2, 2]]}]}})).is_err());
+    assert!(s.execute("path.set", json!({"name": "Layer", "path": {"subpaths": [{"knots": [[1, 1], [2, 2]]}]}})).is_err(), "case-insensitive");
+    assert!(s.execute("path.set", json!({"name": "Sister", "path": {"subpaths": [{"knots": [[1, 1], [2, 2]]}]}})).is_ok(), "other names still work");
+    assert!(s.execute("path.rename", json!({"name": "Sister", "to": "layer"})).is_err());
+    assert!(s.execute("path.rename", json!({"name": "Sister", "to": "work"})).is_err(), "work stays reserved too");
+    assert!(s.execute("path.rename", json!({"name": "Sister", "to": "Cousin"})).is_ok());
+}
