@@ -23,12 +23,15 @@ fn has_layer(s: &Session) -> std::result::Result<(), String> {
 
 /// A reveal mask that is on inside `rect` and off (hidden) everywhere else. Filled without a
 /// dense buffer (whole tiles share one); refused when the mask's tiles, which a later depth
-/// conversion stores one by one, would pass the working budget: the selected layers' bounds
+/// conversion stores one by one, together with the GRAY8 source they are converted from, would pass the
+/// working budget: the selected layers' bounds
 /// can span far more than the canvas when their tiles lie far apart.
 fn clip_mask(rect: Rect, depth: photocraft_color::SampleType) -> Result<LayerMask> {
     let mut mask = LayerMask::hide_all();
     if !rect.is_empty() {
-        crate::allocation::check_dense(rect, depth.bytes() as u64, "the frame's mask")?;
+        // Both the GRAY8 source (1 B) and the depth-sized copy (`depth` B) are live while `mask_at_depth`
+        // converts, each counted as dense, which holds for partial edge tiles too.
+        crate::allocation::check_dense(rect, (depth.bytes() as u64).saturating_add(1), "the frame's mask")?;
         mask.surface.fill_rect(rect, &[1.0]);
         mask.surface.prune();
     }
@@ -310,5 +313,19 @@ mod tests {
     fn needs_a_selected_layer() {
         let mut s = Session::new();
         assert!(s.execute("layer.new.frameFromLayers", json!({})).is_err());
+    }
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+
+    /// The GRAY8 source is live beside the depth-sized copy: 5 B per pixel at F32, which a
+    /// 40,000 × 47,000 px frame (7.5 GB at 4 B) no longer fits.
+    #[test]
+    fn the_frame_mask_budget_counts_the_gray8_source_too() {
+        let rect = Rect::new(0, 0, 40_000, 47_000);
+        let e = clip_mask(rect, photocraft_color::SampleType::F32).err().map(|e| e.to_string());
+        assert!(e.is_some_and(|e| e.contains("working memory")));
     }
 }

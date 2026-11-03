@@ -146,6 +146,13 @@ fn ref_planes(doc: &Document, layer: Option<LayerId>, active: Option<LayerId>, r
     let colors = color_count(doc);
     Ok(match r {
         ChanRef::Composite | ChanRef::Color(_) => {
+            // After `native_pixels` returns its `n` samples per pixel, the colour planes (and for
+            // one channel the toned plane) are built beside them: check that peak first, as
+            // `native_pixels` only checks its own.
+            let n = doc.pixel_format().channels() as u64;
+            let toned = u64::from(matches!(r, ChanRef::Color(_)));
+            let planes = (colors as u64).saturating_add(toned).saturating_mul(4);
+            crate::allocation::check_dense(area, n.saturating_mul(4).saturating_add(planes), "reading this channel source")?;
             let (px, n) = native_pixels(doc, layer)?;
             let planes: Vec<Vec<f32>> = (0..colors).map(|c| px.chunks_exact(n).map(|p| p[c]).collect()).collect();
             match r {

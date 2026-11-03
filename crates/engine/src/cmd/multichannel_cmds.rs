@@ -127,8 +127,16 @@ fn to_multichannel(s: &mut Session, _p: &Value) -> Result<Value> {
         // Every ink is built as dense planes over the whole canvas (the flattened image, its
         // colour planes, the inverted densities and each clamped channel), however few tiles
         // the document stores: refuse a canvas past the working budget before allocating.
+        // Per pixel: the flattened image (16 B), its colour planes (4 B each), and per ink an f32
+        // density and the stored plane (up to 4 B at F32). A Duotone has one colour channel but
+        // as many inks as it lists.
         let cc = doc.pixel_format().mode.color_channels() as u64;
-        crate::allocation::check_dense(doc.bounds(), cc.saturating_mul(12).saturating_add(16), "converting to Multichannel")?;
+        let inks = match (&doc.duotone, doc.mode) {
+            (Some(d), ColorMode::Duotone) if !d.inks.is_empty() => d.inks.len() as u64,
+            _ => cc,
+        };
+        let per_px = cc.saturating_mul(4).saturating_add(inks.saturating_mul(8)).saturating_add(16);
+        crate::allocation::check_dense(doc.bounds(), per_px, "converting to Multichannel")?;
         let inks = inks_of(doc);
         let mut channels: Vec<AlphaChannel> = inks
             .iter()
@@ -196,10 +204,14 @@ pub(crate) fn convert_from(s: &mut Session, mode: ColorMode, _p: &Value) -> Resu
         let canvas = doc.bounds();
         // The interleaved output, the rendered look (straight RGBA f32) and one ink plane at a
         // time, all over the canvas: refuse a canvas past the working budget before allocating.
+        // The appearance branch also holds the stored surface (up to 4 B per sample) while `shown`
+        // and the interleaved output are alive; the reinterpret branch drops each plane first.
         let out_cc = mode.color_channels() as u64;
-        crate::allocation::check_dense(canvas, out_cc.saturating_add(1).saturating_mul(4).saturating_add(20), "converting from Multichannel")?;
-        let n = canvas.width() as usize * canvas.height() as usize;
         let reinterpret = matches!((mode, inks.len()), (ColorMode::Rgb | ColorMode::Lab, 3) | (ColorMode::Cmyk, 4) | (ColorMode::Grayscale, 1));
+        let samples = out_cc.saturating_add(1).saturating_mul(4);
+        let stored = if reinterpret { 0 } else { samples };
+        crate::allocation::check_dense(canvas, samples.saturating_add(20).saturating_add(stored), "converting from Multichannel")?;
+        let n = canvas.width() as usize * canvas.height() as usize;
         // The printed look, rendered before the inks leave the document.
         let shown = (!reinterpret).then(|| {
             let mut d = doc.clone();

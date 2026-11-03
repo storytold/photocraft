@@ -80,3 +80,18 @@ fn multichannel_on_a_huge_empty_canvas_is_refused() {
     s.execute("file.new", json!({"width": 300_000, "height": 300_000, "background": "transparent"})).unwrap();
     refused(&mut s, "image.mode.multichannel", json!({}));
 }
+
+/// A quadtone keeps an f32 density and a stored plane for each of its four inks beside the
+/// flattened image: 52 B per pixel, past the budget at 15,000 × 15,000 px where one colour
+/// channel's 28 B would have passed.
+#[test]
+fn multichannel_counts_every_duotone_ink() {
+    use photocraft_color::ColorMode;
+    use photocraft_doc::{Duotone, DuotoneInk};
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 15_000, "height": 15_000, "background": "transparent"})).unwrap();
+    let doc = Arc::make_mut(&mut s.active_mut().unwrap().doc);
+    doc.mode = ColorMode::Duotone;
+    doc.duotone = Some(Duotone { inks: (0..4).map(|i| DuotoneInk::new(format!("ink {i}"), [0.0; 3])).collect(), psd_raw: None });
+    refused(&mut s, "image.mode.multichannel", json!({}));
+}
