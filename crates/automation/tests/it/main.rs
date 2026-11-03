@@ -11,6 +11,7 @@ mod layered_save_dirty;
 mod mcp;
 mod mcp_wire;
 mod missing_font_warnings;
+mod native_full_composite;
 mod native_save_name;
 mod openraster;
 mod raw_defaults;
