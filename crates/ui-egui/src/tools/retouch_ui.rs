@@ -313,6 +313,17 @@ pub fn patch_drags_selection(app: &PhotocraftApp, at: [f64; 2], mods: egui::Modi
     sel.sample_channel(at[0].floor() as i32, at[1].floor() as i32, 0) > 0.0
 }
 
+/// A Patch or Content-Aware Move lasso that makes a new selection is being drawn: the selection it
+/// replaces is hidden from the press on, as in Photoshop, rather than shown beside the new outline
+/// until the release (#11024). Adding, subtracting and intersecting keep it visible.
+pub fn patch_replaces_selection(app: &PhotocraftApp) -> bool {
+    app.drag.as_ref().is_some_and(|d| {
+        matches!(d.tool, Tool::Patch | Tool::ContentAwareMove)
+            && !patch_drags_selection(app, d.start, d.modifiers)
+            && crate::canvas::selection_mode(app, d.modifiers) == "replace"
+    })
+}
+
 /// Whole-pixel offset for a drag from `start` to `end`, limited so the dragged outline stays on the
 /// canvas (the engine rejects a patch or move that leaves it).
 pub fn patch_offset(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) -> [i32; 2] {

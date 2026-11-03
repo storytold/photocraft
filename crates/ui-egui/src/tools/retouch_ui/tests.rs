@@ -377,6 +377,66 @@ fn patch_tool_lassoes_then_drags_the_patch() {
     assert!(px[0] > 0.95 && px[1] > 0.95 && px[2] > 0.95, "blemish patched with the white background: {px:?}");
 }
 
+/// #11024: a new Patch (or Content-Aware Move) lasso hides the selection it replaces from the
+/// press on, and the release leaves only the new area selected. ⇧ keeps the old one and adds.
+#[test]
+fn a_new_patch_lasso_hides_and_replaces_the_old_selection() {
+    let lasso = |app: &mut PhotocraftApp, x0: f64, m: egui::Modifiers, release: bool| {
+        tool_event(app, ToolEvent::Down { x: x0, y: 20.0, pressure: 1.0 }, m);
+        for [x, y] in [[x0 + 16.0, 20.0], [x0 + 16.0, 40.0], [x0, 40.0]] {
+            tool_event(app, ToolEvent::Move { x, y, pressure: 1.0 }, m);
+        }
+        if release {
+            tool_event(app, ToolEvent::Up { x: x0, y: 40.0 }, m);
+        }
+    };
+    let selected = |app: &PhotocraftApp, x: i32| app.session.active().unwrap().doc.selection.as_ref().is_some_and(|s| s.sample_channel(x, 30, 0) > 0.0);
+    for tool in [Tool::Patch, Tool::ContentAwareMove] {
+        let mut app = app();
+        app.ui.tool = tool;
+        lasso(&mut app, 10.0, egui::Modifiers::NONE, true);
+        assert!(selected(&app, 18), "{tool:?}: the first lasso made a selection");
+        assert!(!patch_replaces_selection(&app), "{tool:?}: nothing is being drawn");
+
+        lasso(&mut app, 60.0, egui::Modifiers::NONE, false);
+        assert!(patch_replaces_selection(&app), "{tool:?}: the old outline is hidden while the new one is drawn");
+        tool_event(&mut app, ToolEvent::Up { x: 60.0, y: 40.0 }, egui::Modifiers::NONE);
+        assert!(!patch_replaces_selection(&app), "{tool:?}: the new selection shows after the release");
+        assert!(selected(&app, 68) && !selected(&app, 18), "{tool:?}: the new area replaced the old one");
+
+        lasso(&mut app, 10.0, egui::Modifiers::SHIFT, false);
+        assert!(!patch_replaces_selection(&app), "{tool:?}: ⇧ adds, so the old outline stays");
+        tool_event(&mut app, ToolEvent::Up { x: 10.0, y: 40.0 }, egui::Modifiers::SHIFT);
+        assert!(selected(&app, 68) && selected(&app, 18), "{tool:?}: ⇧ added to the selection");
+    }
+}
+
+/// #11024: the Patch and Content-Aware Move cursors show + with ⇧ and − with ⌥, like the Lasso's,
+/// but nothing over the selection without them, where a press drags the patch.
+#[test]
+fn patch_cursor_shows_the_selection_mode_badge() {
+    use crate::tool_feedback::{Badge, badge};
+    let (none, shift, alt) = (egui::Modifiers::NONE, egui::Modifiers::SHIFT, egui::Modifiers::ALT);
+    for tool in [Tool::Patch, Tool::ContentAwareMove] {
+        let mut app = app();
+        app.ui.tool = tool;
+        app.hover_doc = Some([80.0, 30.0]);
+        assert_eq!(badge(&app, tool, shift), Some(Badge::Add), "{tool:?}");
+        assert_eq!(badge(&app, tool, alt), None, "{tool:?}: nothing selected, so ⌥ has nothing to subtract");
+        assert_eq!(badge(&app, tool, none), None, "{tool:?}: a new selection has no badge");
+
+        app.run("select.rect", json!({"x": 10, "y": 20, "width": 20, "height": 20})).unwrap();
+        assert_eq!(badge(&app, tool, shift), Some(Badge::Add), "{tool:?}");
+        assert_eq!(badge(&app, tool, alt), Some(Badge::Subtract), "{tool:?}");
+        assert_eq!(badge(&app, tool, egui::Modifiers::SHIFT | egui::Modifiers::ALT), Some(Badge::Intersect), "{tool:?}");
+        app.ui.selection_mode = 1;
+        assert_eq!(badge(&app, tool, none), Some(Badge::Add), "{tool:?}: the options-bar mode outside the selection");
+        app.hover_doc = Some([20.0, 30.0]);
+        assert_eq!(badge(&app, tool, none), None, "{tool:?}: a press over the selection drags the patch");
+        assert_eq!(badge(&app, tool, shift), Some(Badge::Add), "{tool:?}: ⇧ over the selection adds");
+    }
+}
+
 #[test]
 fn patch_tool_content_aware_fills_from_where_it_is_dropped() {
     let mut app = app();

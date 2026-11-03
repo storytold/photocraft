@@ -91,8 +91,9 @@ pub fn selection_mode(tool: Tool, bar: u8, m: egui::Modifiers) -> &'static str {
 /// only draws a marquee from its centre). An options-bar Subtract or Intersect is kept (#1106).
 pub fn document_selection_mode(app: &PhotocraftApp, tool: Tool, m: egui::Modifiers) -> &'static str {
     let mode = selection_mode(tool, app.ui.selection_mode, m);
-    let selected = app.session.active().and_then(|st| st.doc.selection.as_ref()).is_some_and(|s| !s.content_bounds().is_empty());
-    if m.alt && !selected && matches!(mode, "subtract" | "intersect") && selection_mode(tool, app.ui.selection_mode, egui::Modifiers::NONE) == "replace" {
+    // Scanned last: the canvas asks every frame while a Patch lasso is drawn or hovered.
+    let selected = || app.session.active().and_then(|st| st.doc.selection.as_ref()).is_some_and(|s| !s.content_bounds().is_empty());
+    if m.alt && matches!(mode, "subtract" | "intersect") && selection_mode(tool, app.ui.selection_mode, egui::Modifiers::NONE) == "replace" && !selected() {
         "replace"
     } else {
         mode
@@ -116,6 +117,15 @@ pub fn badge(app: &PhotocraftApp, tool: Tool, m: egui::Modifiers) -> Option<Badg
     // The Pen over the active path with Auto Add/Delete on: what a click would do (#4144).
     if let Some(p) = app.hover_doc.filter(|_| tool == Tool::Pen) {
         return crate::anchor_tools::pen_auto(app, tool, m, p).map(|(t, ..)| if t == Tool::AddAnchorPoint { Badge::Add } else { Badge::Subtract });
+    }
+    // Patch and Content-Aware Move lasso their area in the Lasso's mode (⇧ adds, ⌥ subtracts,
+    // #11024). Over the selection without them a press drags the patch, which combines nothing.
+    if matches!(tool, Tool::Patch | Tool::ContentAwareMove) {
+        let at = app.drag.as_ref().filter(|d| d.tool == tool).map(|d| d.start).or(app.hover_doc);
+        if at.is_some_and(|p| crate::retouch_ui::patch_drags_selection(app, p, m)) {
+            return None;
+        }
+        return Badge::from_mode(document_selection_mode(app, Tool::Lasso, m));
     }
     if !is_selection_tool(tool) {
         return None;
