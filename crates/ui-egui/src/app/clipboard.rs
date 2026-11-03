@@ -37,8 +37,24 @@ fn svg_clip_signature(clip: &photocraft_engine::edit_cmds::Clip) -> u64 {
 }
 
 impl PhotocraftApp {
+    /// The signature of the OS clipboard bitmap, or `None` when it is absent, unreadable or
+    /// malformed.
+    fn os_bitmap_signature(&mut self) -> Option<u64> {
+        self.services
+            .clipboard_get_image
+            .as_mut()
+            .and_then(|get| get().ok().flatten())
+            .filter(|(w, h, bytes)| {
+                let rgba = u64::from(*w).checked_mul(u64::from(*h)).and_then(|n| n.checked_mul(4));
+                *w > 0 && *h > 0 && *w <= i32::MAX as u32 && *h <= i32::MAX as u32 && rgba == Some(bytes.len() as u64)
+            })
+            .map(|(w, h, bytes)| clip_signature(w, h, &bytes))
+    }
+
     /// Capture SVG and its raster mirror together; failures leave the previous copy intact.
     pub(super) fn import_os_svg_clipboard(&mut self) -> Result<bool, String> {
+        // Baseline before the SVG read, so a bitmap change between the reads is detected.
+        let bitmap_before = self.os_bitmap_signature();
         let Some(get) = self.services.clipboard_get_svg.as_mut() else { return Ok(false) };
         let source = match get() {
             Ok(source) => source,
@@ -80,22 +96,14 @@ impl PhotocraftApp {
         // The freshness guard orders OS bitmaps by `os_clip_sig`: record the actual clipboard
         // bitmap's signature, not this SVG's own raster mirror, so a later Paste As pixels
         // recognizes an unchanged clipboard bitmap instead of importing it over a newer path
-        // clip. Only learn the bitmap while the SVG read is still current: if the clipboard
-        // changed between the reads, that bitmap is newer and must not look already observed.
-        let bitmap_sig = self
-            .services
-            .clipboard_get_image
-            .as_mut()
-            .and_then(|get| get().ok().flatten())
-            .filter(|(w, h, bytes)| {
-                let rgba = u64::from(*w).checked_mul(u64::from(*h)).and_then(|n| n.checked_mul(4));
-                *w > 0 && *h > 0 && *w <= i32::MAX as u32 && *h <= i32::MAX as u32 && rgba == Some(bytes.len() as u64)
-            })
-            .map(|(w, h, bytes)| clip_signature(w, h, &bytes));
-        let bitmap_is_current =
-            bitmap_sig.is_some() && self.services.clipboard_get_svg.as_mut().and_then(|get| get().ok().flatten()).is_some_and(|current| current == source);
+        // clip. Only learn the bitmap when both bitmap reads agree and the SVG read is still
+        // current: if either changed, the newer contents must not look already observed.
+        let bitmap_after = self.os_bitmap_signature();
+        let bitmap_is_current = bitmap_before.is_some()
+            && bitmap_before == bitmap_after
+            && self.services.clipboard_get_svg.as_mut().and_then(|get| get().ok().flatten()).is_some_and(|current| current == source);
         // A failed read, malformed image or clipboard change keeps the mirror's signature.
-        self.os_clip_sig = bitmap_sig.filter(|_| bitmap_is_current).or(Some(mirror_sig));
+        self.os_clip_sig = bitmap_after.filter(|_| bitmap_is_current).or(Some(mirror_sig));
         self.os_clip_svg = clip.svg.clone();
         // One clipboard: an imported SVG replaces a path clip, like any installed clip.
         self.session.path_clipboard = None;

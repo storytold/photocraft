@@ -135,36 +135,41 @@ fn explicit_pixel_paste_still_reads_raster_clipboards() {
     assert!(app.session.clipboard.as_ref().unwrap().svg.is_none());
 }
 
-/// The clipboard changes between the SVG read and the bitmap read: the SVG import must not
-/// record that newer bitmap as already observed, or the next Paste would skip it.
+/// The bitmap changes between the SVG read and the bitmap read, with the SVG unchanged or
+/// changed: the SVG import must not record that newer bitmap as already observed, or the next
+/// Paste would skip it.
 #[test]
 fn an_svg_import_does_not_learn_a_bitmap_from_a_newer_clipboard() {
-    let svg = Arc::new(Mutex::new(CLIP_SVG.as_bytes().to_vec()));
-    let image = OsClip::default();
-    let first_read = Arc::new(Mutex::new(true));
-    let (s, i, first) = (svg.clone(), image.clone(), first_read.clone());
-    let read_image = image.clone();
-    let services = Services {
-        clipboard_get_svg: Some(Box::new(move || {
-            let source = s.lock().unwrap().clone();
-            let mut first = first.lock().unwrap();
-            if *first {
-                *first = false;
-                *s.lock().unwrap() = CLIP_SVG.replace("<path", "<!-- newer clipboard --><path").into_bytes();
-                *i.lock().unwrap() = Some((2, 1, vec![0, 255, 0, 255, 0, 255, 0, 255]));
-            }
-            Ok(Some(source))
-        })),
-        clipboard_get_image: Some(Box::new(move || Ok(read_image.lock().unwrap().clone()))),
-        ..Default::default()
-    };
-    let mut app = PhotocraftApp::new(Session::new(), services);
-    app.run("file.new", json!({"width": 24, "height": 20})).unwrap();
-    app.run("edit.paste", json!({"as": "shape"})).unwrap();
-    app.run("edit.paste", json!({})).unwrap();
-    let clip = app.session.clipboard.as_ref().unwrap();
-    assert!(clip.svg.is_none(), "the newer OS bitmap was not skipped as already observed");
-    assert_eq!(clip.surface.rgba(0, 0), [0.0, 1.0, 0.0, 1.0]);
+    for svg_changes in [false, true] {
+        let svg = Arc::new(Mutex::new(CLIP_SVG.as_bytes().to_vec()));
+        let image = OsClip::default();
+        let first_read = Arc::new(Mutex::new(true));
+        let (s, i, first) = (svg.clone(), image.clone(), first_read.clone());
+        let read_image = image.clone();
+        let services = Services {
+            clipboard_get_svg: Some(Box::new(move || {
+                let source = s.lock().unwrap().clone();
+                let mut first = first.lock().unwrap();
+                if *first {
+                    *first = false;
+                    if svg_changes {
+                        *s.lock().unwrap() = CLIP_SVG.replace("<path", "<!-- newer clipboard --><path").into_bytes();
+                    }
+                    *i.lock().unwrap() = Some((2, 1, vec![0, 255, 0, 255, 0, 255, 0, 255]));
+                }
+                Ok(Some(source))
+            })),
+            clipboard_get_image: Some(Box::new(move || Ok(read_image.lock().unwrap().clone()))),
+            ..Default::default()
+        };
+        let mut app = PhotocraftApp::new(Session::new(), services);
+        app.run("file.new", json!({"width": 24, "height": 20})).unwrap();
+        app.run("edit.paste", json!({"as": "shape"})).unwrap();
+        app.run("edit.paste", json!({})).unwrap();
+        let clip = app.session.clipboard.as_ref().unwrap();
+        assert!(clip.svg.is_none(), "svg_changes={svg_changes}: the newer OS bitmap was not skipped as already observed");
+        assert_eq!(clip.surface.rgba(0, 0), [0.0, 1.0, 0.0, 1.0]);
+    }
 }
 
 #[test]
