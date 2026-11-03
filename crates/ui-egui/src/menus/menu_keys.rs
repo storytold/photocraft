@@ -392,8 +392,15 @@ impl Keys {
         // Alt+letter opens that menu, open or not (an open one switches), as on Windows. Not with
         // the window switcher's Alt, still reported after the focus came back with no Alt key
         // event of this window's own: that press is an ordinary key (#9763, CodeRabbit on #10383).
+        // Each switcher press is skipped once, in order, so a real Alt+letter of the same key
+        // later in the frame still opens its menu (CodeRabbit on #10383).
+        let mut skip = switcher_letters;
         let alt_letter = events.iter().filter(|_| !self.alt_at_focus).find_map(|e| match e {
-            Event::Key { key, pressed: true, modifiers, .. } if modifiers.alt && !modifiers.command && !modifiers.ctrl && !switcher_letters.contains(key) => {
+            Event::Key { key, pressed: true, modifiers, .. } if modifiers.alt && !modifiers.command && !modifiers.ctrl => {
+                if let Some(i) = skip.iter().position(|k| k == key) {
+                    skip.remove(i);
+                    return None;
+                }
                 key_char(*key).map(|c| (*key, c))
             }
             _ => None,

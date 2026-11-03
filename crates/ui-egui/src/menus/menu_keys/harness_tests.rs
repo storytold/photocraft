@@ -724,3 +724,28 @@ fn a_switcher_alt_letter_released_in_the_same_frame_opens_no_menu() {
     assert_eq!(Keys::current(&h.ctx).focus, None, "no menu, no keyboard on the bar");
     assert!(!Keys::current(&h.ctx).show_underlines(&h.ctx), "and nothing underlined");
 }
+
+/// CodeRabbit on #10383: in one frame, the switcher's Alt+F, Alt's release, then a real Alt+F:
+/// the switcher's press is skipped and the real one opens File.
+#[test]
+fn a_real_alt_letter_after_a_switcher_one_in_the_same_frame_opens_its_menu() {
+    let mut h = bar();
+    h.key_down(egui::Key::AltLeft);
+    h.run_steps(2);
+    h.event(egui::Event::WindowFocused(false));
+    h.run_steps(2);
+    h.event(egui::Event::WindowFocused(true));
+    h.run_steps(3);
+    let key = |key, pressed, modifiers| egui::Event::Key { key, physical_key: None, pressed, repeat: false, modifiers };
+    let alt = egui::Modifiers::ALT;
+    h.input_mut().events.extend([
+        key(egui::Key::F, true, alt),
+        key(egui::Key::F, false, alt),
+        key(egui::Key::AltLeft, false, egui::Modifiers::NONE),
+        key(egui::Key::AltLeft, true, alt),
+        key(egui::Key::F, true, alt),
+    ]);
+    h.step();
+    h.run_steps(3);
+    assert!(Keys::current(&h.ctx).show_underlines(&h.ctx), "the real Alt+F opened File");
+}
