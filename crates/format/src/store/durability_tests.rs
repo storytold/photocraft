@@ -25,6 +25,8 @@ struct PublicationFault {
     stage: FailAt,
     armed: Cell<bool>,
     synced: RefCell<Vec<PathBuf>>,
+    /// Fail with this raw OS error instead of a generic one (a share refusing the flush, #9440).
+    raw_error: Option<i32>,
 }
 
 impl AtomicFs for PublicationFault {
@@ -53,7 +55,10 @@ impl AtomicFs for PublicationFault {
             FailAt::Manifest => dir == self.root && std::fs::read(dir.join(MANIFEST))? != self.old_manifest,
         };
         if fail && self.armed.replace(false) {
-            return Err(io::Error::other("injected publication flush failure"));
+            return Err(match self.raw_error {
+                Some(code) => io::Error::from_raw_os_error(code),
+                None => io::Error::other("injected publication flush failure"),
+            });
         }
         RealFs.sync_dir(dir)
     }
@@ -89,6 +94,7 @@ fn failed_bundle_publication_retains_old_objects_and_same_writer_retry_is_durabl
             stage,
             armed: Cell::new(true),
             synced: RefCell::new(Vec::new()),
+            raw_error: None,
         };
 
         let error = writer.save_dir_with(&new, &dir, &SaveOptions::default(), &fs).unwrap_err();
@@ -112,6 +118,42 @@ fn failed_bundle_publication_retains_old_objects_and_same_writer_retry_is_durabl
             );
         }
         assert!(old_objects.iter().all(|(p, _)| !dir.join(p).exists()), "cleanup resumes after the durable retry");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+/// #9440: a network share refuses the object-directory flush with `ERROR_INVALID_FUNCTION` (1).
+/// That counts as flushed, so the bundle save succeeds; `ERROR_ACCESS_DENIED` (5) still fails it.
+#[test]
+fn an_unsupported_object_directory_flush_still_saves_the_bundle() {
+    for (code, saves) in [(1, true), (50, true), (5, false)] {
+        let dir = std::env::temp_dir().join(format!("pcraft-smb-flush-{}-{code}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir(&dir).unwrap();
+        let dir = std::fs::canonicalize(dir).unwrap();
+        let mut doc = Document::new("smb", Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
+        let mut layer = Layer::raster("pixels", doc.pixel_format());
+        layer.surface_mut().unwrap().write_pixel(0, 0, &[1.0, 0.0, 0.0, 1.0]);
+        doc.layers.push(layer);
+        doc.metadata.exif = Some(Arc::new(vec![1; 100]));
+        let mut writer = PcraftWriter::new();
+        writer.save_dir(&doc, &dir, &SaveOptions::default()).unwrap();
+        let mut new = doc.clone();
+        new.name = "smb, saved again".into();
+        let fs = PublicationFault {
+            old_manifest: std::fs::read(dir.join(MANIFEST)).unwrap(),
+            root: dir.clone(),
+            stage: FailAt::Tiles,
+            armed: Cell::new(true),
+            synced: RefCell::new(Vec::new()),
+            raw_error: Some(code),
+        };
+        let result = writer.save_dir_with(&new, &dir, &SaveOptions::default(), &fs);
+        assert!(!fs.armed.get(), "code {code}: the tiles barrier was reached");
+        assert_eq!(result.is_ok(), saves, "code {code}: {result:?}");
+        if saves {
+            assert_eq!(crate::load_path(&dir).unwrap(), new, "code {code}: the new manifest is published");
+        }
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
