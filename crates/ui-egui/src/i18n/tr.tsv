@@ -3951,6 +3951,9 @@ cameraData	Lens	Lens
 @plural	{n} step has no PhotoCraft equivalent yet|{n} steps have no PhotoCraft equivalent yet	{n} adımın PhotoCraft’ta henüz karşılığı yok
 @plural	Saved {n} action to {file}|Saved {n} actions to {file}	{n} eylem {file} dosyasına kaydedildi
 @plural	{n} step with no Photoshop equivalent left out|{n} steps with no Photoshop equivalent left out	Photoshop karşılığı olmayan {n} adım atlandı
+@plural	{n} action file loaded|{n} action files loaded	{n} eylem dosyası yüklendi
+	{set} from {file} replaced the one from {earlier}	{file} dosyasındaki {set} kümesi, {earlier} dosyasındakinin yerini aldı
+@plural	{n} file could not be loaded: {errors}|{n} files could not be loaded: {errors}	{n} dosya yüklenemedi: {errors}
 	Starting serial	Başlangıç sıra numarası
 	Insert Stop…	Durdurma Ekle…
 	Save Set…	Seti Kaydet…
@@ -4048,6 +4051,7 @@ cameraData	Lens	Lens
 	Chisel Soft	Yumuşak Keski
 	Open color-less EXR as ACEScg	Renk bilgisi olmayan EXR'yi ACEScg olarak aç
 	Do not append "copy" to filename when saving a copy	Kopya kaydederken dosya adına "copy" ekleme
+	Save Full-Size Composite in .pcraft Files	.pcraft dosyalarına tam boyutlu bileşik görüntüyü kaydet
 	Edit Selected Guides	Seçili Kılavuzları Düzenle
 	Clear Selected Guides	Seçili Kılavuzları Temizle
 	Bicubic Automatic	Bikübik Otomatik
