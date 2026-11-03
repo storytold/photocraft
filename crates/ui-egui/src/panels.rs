@@ -51,6 +51,7 @@ mod navigator;
 mod options_bar;
 pub(super) mod panel_docking;
 mod panel_state;
+pub(super) mod peek;
 pub mod preset_panels;
 mod properties;
 pub mod props_layout;

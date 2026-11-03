@@ -49,6 +49,11 @@ pub struct Panels {
     /// What Tab hid (toolbar, options bar, dock), so a second Tab brings back just those.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hidden_by_tab: Option<[bool; 3]>,
+    /// The dock Shift+Tab hid, kept apart from `hidden_by_tab` so Tab and Shift+Tab stay
+    /// distinct hide sources (#4096 rework): a dock Shift+Tab hid peeks back on hover,
+    /// exactly like one Tab hid, and Tab showing the dock again clears it.
+    #[serde(default)]
+    pub dock_hidden_by_shift_tab: bool,
     /// Tab in Full Screen Mode shows the menu bar, toolbar, options bar and dock over the canvas
     /// (#6760). Only a view of the moment: not saved, and the panels' own flags stay untouched.
     #[serde(skip)]
@@ -84,6 +89,7 @@ impl Default for Panels {
             toolbar_double: false,
             dock: true,
             hidden_by_tab: None,
+            dock_hidden_by_shift_tab: false,
             full_screen_chrome: false,
             rail: true,
             menu_bar: true,

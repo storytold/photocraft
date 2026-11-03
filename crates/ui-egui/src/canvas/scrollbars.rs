@@ -148,6 +148,18 @@ pub fn bar_rects(rect: Rect, horizontal: bool, vertical: bool) -> (Option<Rect>,
     (h, v)
 }
 
+/// The temp key for the flags [`last_drawn`] reads.
+fn drawn_id() -> Id {
+    Id::unique("canvas-scrollbars-drawn")
+}
+
+/// Which bars the canvas's `show` drew on its last call (horizontal, vertical): (false,
+/// false) when it drew nothing, or before any call. The peek reads last frame's flags, one
+/// frame of lag, the same lag the canvas rect already has (#4096 rework).
+pub(crate) fn last_drawn(ctx: &egui::Context) -> (bool, bool) {
+    ctx.data(|d| d.get_temp::<(bool, bool)>(drawn_id())).unwrap_or((false, false))
+}
+
 /// Show the scrollbars of the canvas `rect` and apply their drags and page clicks to `view`.
 /// `flip` is View › Flip Horizontal (the bar then runs the other way through the image);
 /// `aspect` is the displayed pixel aspect ratio (a document pixel is that many points wider per
@@ -165,8 +177,12 @@ pub fn show(ui: &Ui, rect: Rect, view: &mut View, flip: bool, aspect: f32, overs
     let ex = Span::of(w as f32, hx(view.center[0]), rect.width() / aspect, zoom).map(with_extent);
     let ey = Span::of(h as f32, view.center[1], rect.height(), zoom).map(with_extent);
     if ex.is_none() && ey.is_none() {
+        // No bar drew: the peek's edge trigger must know, not assume (#4096 rework).
+        ui.ctx().data_mut(|d| d.insert_temp(drawn_id(), (false, false)));
         return false;
     }
+    // The bars that actually drew this frame, for the peek's edge trigger (#4096 rework).
+    ui.ctx().data_mut(|d| d.insert_temp(drawn_id(), (ex.is_some(), ey.is_some())));
     let (hr, vr) = bar_rects(rect, ex.is_some(), ey.is_some());
     let t = crate::theme::Tokens::get(ui.ctx());
     let painter = ui.painter_at(rect);

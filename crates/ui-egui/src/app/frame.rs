@@ -300,6 +300,14 @@ impl PhotocraftApp {
             });
             panels::properties_window(self, &ctx);
         }
+        // Auto-show hidden panels (#4096 rework): the pointer at the canvas edge brings back
+        // panels Tab or Shift+Tab hid, as an overlay over the canvas. The peek only draws
+        // when the main dock does not (dock hidden, not tabbed in), so the two DockAreas
+        // never draw in the same frame.
+        let peek = crate::peek::compute_peek(self, &ctx, chrome, tabbed_in);
+        if peek.toolbar || peek.dock {
+            crate::peek::draw_peek(self, &ctx, &peek);
+        }
         brush_panel::window(self, &ctx);
         preset_panels::windows(self, &ctx);
         gradient_ui::editor_window(self, &ctx);

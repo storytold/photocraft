@@ -742,6 +742,11 @@ fn toggle_panels(app: &mut PhotocraftApp) -> Result<Value, String> {
         }
         _ => (panels.toolbar, panels.options_bar, panels.dock) = (true, true, true),
     }
+    // Tab showing the dock again ends the Shift+Tab hide: the two hide sources stay
+    // distinct, and a dock Tab hid keeps its own source (#4096 rework).
+    if panels.dock {
+        panels.dock_hidden_by_shift_tab = false;
+    }
     Ok(Value::Null)
 }
 
@@ -767,6 +772,12 @@ fn toggle_panel(app: &mut PhotocraftApp, id: &str) -> Result<Value, String> {
         _ => return Err(format!("unknown panel in {id}")),
     };
     *slot = !*slot;
+    // Shift+Tab hides the dock (the only caller of `window.toggle.dock` is that shortcut,
+    // besides tests and a menu checkmark read): record it as its own hide source, apart
+    // from Tab's `hidden_by_tab`, so a Shift+Tab-hidden dock peeks back (#4096 rework).
+    if key == "dock" {
+        panels.dock_hidden_by_shift_tab = !*slot;
+    }
     if let Some(group) = crate::dock::Group::from_key(key).filter(|group| group.shown(&app.ui.panels)) {
         crate::dock::reveal(app, group);
     }
