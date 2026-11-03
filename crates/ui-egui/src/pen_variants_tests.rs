@@ -309,9 +309,10 @@ fn a_smooth_endpoint_carried_on_stays_smooth() {
     assert!(b[0].hypot(b[1]) > 1.0, "the outgoing handle bends into the new segment: {out_ctrl:?}");
     assert!((a[0] * b[1] - a[1] * b[0]).abs() < 1e-6 && a[0] * b[0] + a[1] * b[1] > 0.0, "in line: {knots:?}");
     // CodeRabbit on #10744: committed, the join is stored as a smooth knot.
-    crate::vector_ui::pen_commit(&mut app, false);
+    assert!(crate::vector_ui::pen_commit(&mut app, false), "the commit goes through");
     let work = work_path(&app);
     assert_eq!(work.subpaths.len(), 1, "the same subpath, extended");
+    assert_eq!(work.subpaths[0].knots.len(), 3, "carried on by the new anchor");
     let join = &work.subpaths[0].knots[1];
     assert!(join.smooth, "{join:?}");
     let (a, b) = ([join.anchor.x - join.in_ctrl.x, join.anchor.y - join.in_ctrl.y], [join.out_ctrl.x - join.anchor.x, join.out_ctrl.y - join.anchor.y]);
