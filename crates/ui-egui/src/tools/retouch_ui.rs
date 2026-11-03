@@ -807,6 +807,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             // or a box selects, Ctrl-click refines, a phrase selects by text (Enter). Without
             // one, the classical rectangle only.
             let mut by_text = false;
+            let mut next_match = false;
             if server {
                 // New: click or box an object. Refine: add spots to the last one (⌥ excludes).
                 for (on, label, tip) in [
@@ -817,6 +818,10 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                         o.object_refine = on;
                     }
                 }
+                // A click can mean the whole person, the shirt or the pocket: cycle through them.
+                next_match = crate::widgets::secondary_button(ui, tl!("Next Match"), 0.0)
+                    .on_hover_text(tl!("Swap the last click's object for the next thing it could mean (the whole, a part, a smaller part)"))
+                    .clicked();
                 crate::widgets::vline(ui, 22.0);
                 crate::widgets::checkbox(ui, &mut o.object_finder, tl!("Object finder"))
                     .on_hover_text(tl!("Show what a click would select while the pointer rests"));
@@ -841,7 +846,9 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             }
             crate::widgets::vline(ui, 22.0);
             let subject = crate::widgets::secondary_button(ui, tl!("Select Subject"), 0.0).clicked();
-            if by_text {
+            if next_match {
+                crate::object_select::next_match(app);
+            } else if by_text {
                 let _ = select_by_text(app);
             } else if subject {
                 let _ = select_subject(app);

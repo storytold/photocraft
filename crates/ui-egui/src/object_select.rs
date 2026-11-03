@@ -71,6 +71,8 @@ pub struct LastQuery {
     pub negatives: Vec<[f64; 2]>,
     pub bbox: Option<[f64; 4]>,
     pub mode: String,
+    /// Which of a single click's meanings it selected (`candidate`; 0 the detector's best).
+    pub candidate: u32,
     /// The document's history length after it ran (another edit since ends the refinement).
     pub past_len: usize,
 }
@@ -352,7 +354,7 @@ pub fn finish(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2], mods: egu
     match app.run("select.byPoint", q) {
         Ok(_) => {
             if let (Some(doc), Some(past_len)) = (doc, app.session.active().map(|d| d.history.past_len())) {
-                app.ui.object_select.last = Some(LastQuery { doc, positives, negatives: Vec::new(), bbox, mode: mode.to_string(), past_len });
+                app.ui.object_select.last = Some(LastQuery { doc, positives, negatives: Vec::new(), bbox, mode: mode.to_string(), candidate: 0, past_len });
             }
             // The picture's selection changed under the probe; the next pause asks again.
             app.ui.object_select.probe = None;
@@ -401,6 +403,40 @@ fn refine_last(app: &mut PhotocraftApp, point: [f64; 2], include: bool) -> bool 
     true
 }
 
+/// Next Match: the last single click asked again for its next meaning (SAM's three answers to
+/// one point: the best, then the other two largest first), replacing its result; a notice when
+/// the last selection was not a single click of this tool.
+pub fn next_match(app: &mut PhotocraftApp) {
+    let current = app.session.active().map(|d| (d.doc.id, d.history.past_len()));
+    let Some(last) = app
+        .ui
+        .object_select
+        .last
+        .clone()
+        .filter(|l| current == Some((l.doc, l.past_len)) && l.positives.len() == 1 && l.negatives.is_empty() && l.bbox.is_none())
+    else {
+        crate::notices::post(app, tl!("Click an object first; Next Match swaps what that click selected"), Vec::new(), false, None);
+        return;
+    };
+    if app.run("edit.undo", json!({})).is_err() {
+        return;
+    }
+    let mut next = last.clone();
+    next.candidate = (last.candidate + 1) % 3;
+    let o = &app.ui.tool_options;
+    let mut q = json!({"mode": next.mode, "sampleAllLayers": o.sample_all.object_selection, "refine": o.refine_edge, "points": next.positives, "candidate": next.candidate});
+    mask_stack(app, &mut q);
+    match app.run("select.byPoint", q) {
+        Ok(_) => {
+            next.past_len = app.session.active().map_or(0, |d| d.history.past_len());
+            app.ui.object_select.last = Some(next);
+            app.ui.object_select.probe = None;
+            app.ui.object_select.hover = None;
+        }
+        Err(e) => crate::notices::error(app, e),
+    }
+}
+
 /// `ui.inspect.objectSelect`.
 pub fn inspect(app: &PhotocraftApp) -> Value {
     let o = &app.ui.object_select;
@@ -408,7 +444,7 @@ pub fn inspect(app: &PhotocraftApp) -> Value {
         "probe": o.probe.as_ref().map(|p| json!({"id": p.id, "cell": p.cell, "bounds": p.bounds})),
         "pending": o.pending.map(|(j, c)| json!({"job": j, "cell": c})),
         "probesAsked": o.probes_asked,
-        "last": o.last.as_ref().map(|l| json!({"positives": l.positives, "negatives": l.negatives, "box": l.bbox, "mode": l.mode})),
+        "last": o.last.as_ref().map(|l| json!({"positives": l.positives, "negatives": l.negatives, "box": l.bbox, "mode": l.mode, "candidate": l.candidate})),
         "online": o.online.as_ref().map(|(_, ok, _)| *ok),
         "refineMode": app.ui.tool_options.object_refine,
     })

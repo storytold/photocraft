@@ -619,7 +619,7 @@ pub fn angle_instruction(rotation: u32, tilt: i32, zoom: u32) -> Option<String> 
 pub(crate) fn native21_auto(s: &Session, command: &str, removal: bool) -> Option<&'static str> {
     let t = match command {
         FILL if removal => "qwen-2.1/edit",
-        FILL => "qwen-2.1/fill",
+        FILL => NATIVE21_FILL,
         // Expand stays on 2511's own tiers: its sampler keeps the picture's latent outside the
         // mask, while 2.1 samples the whole canvas from noise and drew the subject again over
         // the picture even with a backdrop-only prompt on four sides (2026-11-03).
@@ -628,6 +628,14 @@ pub(crate) fn native21_auto(s: &Session, command: &str, removal: bool) -> Option
     };
     (s.prefs().integrations.allow_research_models && loras::runs_native(s, t)).then_some(t)
 }
+
+/// The 2.1 fill `auto` falls back to on the native worker.
+const NATIVE21_FILL: &str = "qwen-2.1/fill";
+/// What `auto` runs for a prompted fill on the native worker with research-only models allowed:
+/// Krea 2 with the AnyPaint LoRA when the worker serves it (its files and the LoRA there), else
+/// the 2.1 fill. Measured in the app 2026-11-03 on three photos: AnyPaint swapped the blouse,
+/// the bicycle and the pine cleanly in 1.1–3.2 s warm, the 2.1 fill in 10.6–13.3 s.
+pub const NATIVE_FILL_ORDER: &[&str] = &["krea2-turbo/fill", NATIVE21_FILL];
 
 /// The crop a removal on Qwen-Image-2.1 goes out at when `maxPixels` is left at the default:
 /// 0.75 MP, the size the 2.1 removal runs were measured at (1 MP is 2511's).
@@ -1741,7 +1749,9 @@ fn plan_fill(s: &Session, p: &Value) -> Result<FillPlan> {
     {
         as_edit = opt_bool(FILL, p, "fillAsEdit", false)?;
         base = if as_edit { native21_auto(s, EDIT, false).unwrap_or(t).to_string() } else { t.to_string() };
-        auto = false;
+        // A prompted fill still picks inside the job: Krea 2 AnyPaint when the worker serves it
+        // ([`NATIVE_FILL_ORDER`]), else this 2.1 fill.
+        auto = !as_edit;
     }
     // A fill from references on the native worker: the 2.1 edit template, which takes nine
     // references beside the picture, instead of 2511's fill-ref on ComfyUI (the Rust rebuild,
@@ -3530,7 +3540,7 @@ fn run_fill(s: &mut Session, p: &Value) -> Result<Value> {
         command: if as_edit { EDIT } else { FILL },
         template_id: template.meta.id.clone(),
         auto,
-        auto_order: auto_order(FILL, quality(s)),
+        auto_order: if template.meta.id == NATIVE21_FILL { NATIVE_FILL_ORDER } else { auto_order(FILL, quality(s)) },
         prompt,
         negative,
         seed,
