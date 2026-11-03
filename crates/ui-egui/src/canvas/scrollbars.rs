@@ -346,7 +346,8 @@ mod tests {
         let mut v = View { zoom: 1.0, center: [100.0, 450.0], doc_size: [600, 600], rotation: 45.0, ..Default::default() };
         let size = vec2(900.0, 900.0);
         assert!(clamp_view_with_aspect(&mut v, size, 1.0, 1.0));
-        let xf = crate::canvas::ViewXform { rect: Rect::from_min_size(Pos2::ZERO, size), zoom: 1.0, center: v.center, flip: false, rotation: v.rotation, aspect: 1.0 };
+        let rect = Rect::from_min_size(Pos2::ZERO, size);
+        let xf = crate::canvas::ViewXform { rect, zoom: 1.0, center: v.center, flip: false, rotation: v.rotation, aspect: 1.0 };
         let c = xf.image_bounds(v.doc_size).center();
         assert!((c - xf.rect.center()).length() < 1e-2, "centred: {c:?}");
         assert!(!clamp_view_with_aspect(&mut v, size, 1.0, 1.0), "stable: no repaint loop");
