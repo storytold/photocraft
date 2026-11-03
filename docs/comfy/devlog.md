@@ -4,6 +4,17 @@ Newest entry first. Terse: what landed, numbers, what is still open. Upstream ke
 the gitignored `log/devlog.md`; this one is tracked so the next session (any machine, any agent)
 can pick up.
 
+## 2026-11-03: genai-native pinned at 780b73e (MOSS loads on every core, the chat head cached)
+
+genai-native #28 gathers MOSS-Image's INT8 linears from a mapping on every core: a warm load of
+both files went from 7.5 s to 4–5 s, with the same bytes. #29 keeps the chat head's Q8_0 blocks on
+disk: a head load went from 1.6 s to 0.25 s, which takes 1.1–1.3 s off a swap-back Remove in the
+app. #23 (drop the head before the text encoder) is closed: the Upscale after a Remove is
+0.94–1.04 GB short, more than the 0.65 GB head. Numbers: benchmarks.md 5k. Also on 2026-11-03:
+comfy-photocraft #45 fixes the CMYK split-route proptest (special-eight adjustments below 100% Fill).
+Open: most of the MOSS load's remaining 4 s is the upload; overlapping it with the next module's
+gather is untried. Rebuilding the owner's exe waits on the coordinator.
+
 ## 2026-11-03: README screenshots and GIFs of the generative tools
 
 Captured in the app on the owner's 5090 (0.20.1 release exe, its own settings copy, driven over
