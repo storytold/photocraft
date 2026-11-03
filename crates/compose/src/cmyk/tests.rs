@@ -214,11 +214,23 @@ fn ref_adjust(adj: &Adjustment, p: Cmyka) -> Cmyka {
 }
 
 /// An adjustment layer `l` (adjusting `p`, then `clipped` onto that) mixed into `p` in its blend
-/// mode by its opacity and mask; coverage stays.
-fn ref_adjusted(l: &Layer, adj: &Adjustment, clipped: &[Layer], p: Cmyka, x: i32, y: i32) -> Cmyka {
+/// mode by its opacity and mask; coverage stays. In the stack (`in_stack`), one of the special
+/// eight below 100% Fill blends the adjustment pulled toward the mode's neutral colour
+/// (`psblend::blend_rgb_fill`, on each ink's brightness) and Opacity alone is the mix, as the RGB
+/// compositor does (#9501); a clipped adjustment mixes Fill as coverage.
+fn ref_adjusted(l: &Layer, adj: &Adjustment, clipped: &[Layer], p: Cmyka, x: i32, y: i32, in_stack: bool) -> Cmyka {
     let mut a = ref_adjust(adj, p);
     if p[4] > 0.0 {
         a = ref_clip(clipped, a, x, y);
+    }
+    if in_stack && l.fill_opacity < 1.0 && crate::psblend::fill_is_special(l.blend) {
+        let (f, k) = (l.fill_opacity.clamp(0.0, 1.0), l.opacity * ref_mask(l, x, y));
+        let mut o = p;
+        for c in 0..4 {
+            let m = 1.0 - crate::psblend::blend_rgb_fill(l.blend, [1.0 - p[c]; 3], [1.0 - a[c]; 3], f)[0];
+            o[c] = p[c] + (m - p[c]) * k;
+        }
+        return o;
     }
     let k = l.opacity * l.fill_opacity * ref_mask(l, x, y);
     if l.blend == BlendMode::Dissolve {
@@ -236,7 +248,7 @@ fn ref_adjusted(l: &Layer, adj: &Adjustment, clipped: &[Layer], p: Cmyka, x: i32
 fn ref_clip(clipped: &[Layer], mut content: Cmyka, x: i32, y: i32) -> Cmyka {
     for c in clipped.iter().filter(|c| c.visible) {
         if let LayerContent::Adjustment(adj) = &c.content {
-            content = ref_adjusted(c, adj, &[], content, x, y);
+            content = ref_adjusted(c, adj, &[], content, x, y, false);
         } else if content[4] > 0.0 {
             let a = content[4];
             let r = over_layer(c, [content[0], content[1], content[2], content[3], 1.0], ref_own(c, x, y), c.opacity * c.fill_opacity, Some((x, y)));
@@ -292,7 +304,7 @@ fn ref_layer(l: &Layer, clipped: &[Layer], x: i32, y: i32, b: Cmyka) -> Cmyka {
             o[4] = a;
             return o;
         }
-        LayerContent::Adjustment(adj) => return ref_adjusted(l, adj, clipped, b, x, y),
+        LayerContent::Adjustment(adj) => return ref_adjusted(l, adj, clipped, b, x, y, true),
         LayerContent::Group(g) => {
             let mut c = ref_stack(&g.children, x, y, [0.0; 5]);
             c[4] *= ref_mask(l, x, y);
@@ -1856,5 +1868,63 @@ fn every_cmyk_route_rounds_after_an_adjustment_layer() {
         let display = crate::render(&d, rect).px[0][3];
         let export = render_cmyk(&d, rect).unwrap_or_else(|| panic!("supported")).px[0][4];
         assert_eq!((display, export), (105.0 / 255.0, 105.0 / 255.0), "opacity {opacity}");
+    }
+}
+
+/// An adjustment layer in one of the special eight below 100% Fill, in the stack and clipped:
+/// the split route (the RGB compositor on each ink) and the exact path agree on both. The exact
+/// path mixed the stack's adjustment with Fill as coverage, where the compositor blends it at
+/// that Fill (#9501), and left 0.21 of yellow ink on the first (proptest seed, 2026-11-03).
+#[test]
+fn a_special_eight_adjustment_below_full_fill_agrees_with_the_split_route() {
+    let posterize = |fill: f32, clipped: bool| LayerSpec::Pixels {
+        kind: Kind::Adjust(AdjSpec::Posterize(2)),
+        blend: BlendMode::LinearDodge,
+        fills: vec![(Rect::new(0, 0, 1, 1), [0.0; 5])],
+        opacity: 1.0,
+        fill,
+        clipped,
+        visible: true,
+        mask: None,
+    };
+    let pixels = |kind: Kind, ink: Cmyka, fill: f32, clipped: bool| LayerSpec::Pixels {
+        kind,
+        blend: BlendMode::Normal,
+        fills: vec![(Rect::new(0, 0, 1, 1), ink)],
+        opacity: 1.0,
+        fill,
+        clipped,
+        visible: true,
+        mask: None,
+    };
+    let group = |children: Vec<LayerSpec>, pass_through: bool| LayerSpec::Group {
+        children,
+        pass_through,
+        blend: BlendMode::Normal,
+        opacity: 1.0,
+        fill: 1.0,
+        mask: None,
+    };
+    let cases = [
+        // In the stack (a pass-through group's), over a clipped white at 63% Fill on yellow.
+        group(
+            vec![
+                pixels(Kind::Solid, [0.0, 0.0, 1.0, 0.0, 1.0], 1.0, false),
+                group(vec![pixels(Kind::Raster, [0.0, 0.0, 0.0, 0.0, 1.0], 0.6292596, true), posterize(0.44114584, false)], true),
+            ],
+            false,
+        ),
+        // Clipped onto a pixel layer: Fill stays coverage on both routes.
+        group(vec![pixels(Kind::Raster, [0.0, 0.0, 0.3146968, 0.0, 1.0], 1.0, false), posterize(0.8239596, true)], false),
+    ];
+    for (n, top) in cases.into_iter().enumerate() {
+        let mut d = doc(3, 2);
+        d.layers = vec![build(&top)];
+        assert!(supports(&d) && split::supports(&d), "case {n}");
+        let via = split_render(&d);
+        let exact = render_cmyk(&d, via.rect).unwrap_or_else(|| panic!("supported"));
+        for (i, (g, w)) in via.px.iter().zip(&exact.px).enumerate() {
+            assert!((0..5).all(|c| (g[c] - w[c]).abs() <= 1e-5), "case {n}, pixel {i}: {g:?} vs {w:?}");
+        }
     }
 }
