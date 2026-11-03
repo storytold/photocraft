@@ -747,5 +747,6 @@ fn a_real_alt_letter_after_a_switcher_one_in_the_same_frame_opens_its_menu() {
     ]);
     h.step();
     h.run_steps(3);
-    assert!(Keys::current(&h.ctx).show_underlines(&h.ctx), "the real Alt+F opened File");
+    // `underline` is set only by a menu opened from the keyboard (Alt held shows underlines too).
+    assert!(Keys::current(&h.ctx).underline, "the real Alt+F opened File");
 }
