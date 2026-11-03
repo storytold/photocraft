@@ -19,7 +19,7 @@ pub fn dropdown_literal<T: PartialEq + Clone>(ui: &mut Ui, id: &str, name: &str,
 pub fn dropdown_sections<T: PartialEq + Clone>(ui: &mut Ui, id: &str, name: &str, current: &mut T, options: &[(Option<T>, &str)], width: f32) -> bool {
     let label = options.iter().find(|(value, _)| value.as_ref() == Some(current)).map(|(_, label)| *label).unwrap_or("—");
     let mut changed = false;
-    let response = egui::ComboBox::from_id_salt(id).selected_text(label).width(width).height(420.0).icon(chevron_icon).show_ui(ui, |ui| {
+    let response = craft_ui::ComboBox::from_id_salt(id).selected_text(label).width(width).height(420.0).icon(chevron_icon).show_ui(ui, |ui| {
         fit_widest_option(ui, options.iter().map(|(_, label)| *label));
         for (value, label) in options {
             if let Some(value) = value {
@@ -33,7 +33,7 @@ pub fn dropdown_sections<T: PartialEq + Clone>(ui: &mut Ui, id: &str, name: &str
         }
     });
     let response = response.response.accessible_name(name);
-    if ui.is_enabled() && egui::ComboBox::is_open(ui.ctx(), response.id) {
+    if ui.is_enabled() && craft_ui::ComboBox::is_open(ui.ctx(), response.id) {
         // A cached popup can otherwise stay below a modal brought forward on the opening
         // pointer press. Keep its visible rows above the dialog on every layout pass.
         ui.ctx().move_to_top(egui::LayerId::new(egui::Order::Foreground, response.id.with("popup")));
@@ -325,6 +325,7 @@ pub fn dropdown_with_tooltips<T: PartialEq + Clone>(ui: &mut Ui, id: &str, name:
 #[cfg(test)]
 mod section_dropdown_tests {
     use super::*;
+    use egui::vec2;
     use egui_kittest::{Harness, kittest::Queryable};
 
     #[test]
