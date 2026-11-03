@@ -283,6 +283,8 @@ fn command_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: 
         _ if crate::open_prompt::owns_damage(fields) => crate::open_prompt::damage_body(ui, fields),
         _ if crate::guide_layout_ui::owns(fields) => outcome = crate::guide_layout_ui::body(app, ui, fields, interactive),
         _ if crate::brush_preset_dialog::owns(fields) => outcome = crate::brush_preset_dialog::body(app, ui, fields, interactive),
+        _ if generate_ui::owns(fields) => generate_ui::body(app, ui, fields),
+        _ if background_fill_ui::owns(fields) => background_fill_ui::body(app, ui, fields),
         _ if crate::fill_ui::owns(fields) => crate::fill_ui::body(app, ui, fields),
         _ if crate::pattern_fill_ui::owns(fields) => crate::pattern_fill_ui::body(app, ui, fields),
         _ if crate::stroke_ui::owns(fields) => crate::stroke_ui::body(ui, fields),
@@ -835,6 +837,8 @@ type Fields = serde_json::Map<String, Value>;
 /// The markers [`confirm`] and [`cancel`] choose a dialog's handler by: keys the code opening a
 /// dialog puts in its fields. Keep in step with the arms of `confirm`.
 const ROUTES: &[fn(&Fields) -> bool] = &[
+    generate_ui::owns,
+    background_fill_ui::owns,
     crate::guide_layout_ui::owns,
     crate::brush_preset_dialog::owns,
     crate::fill_ui::owns,
@@ -1114,6 +1118,7 @@ pub fn open_command_dialog(app: &mut PhotocraftApp, command: &str, label: &str) 
 pub mod adjust_dialog;
 pub mod adjust_editors;
 pub mod adjust_preview;
+pub(crate) mod background_fill_ui;
 pub(crate) mod bitmap_dialog;
 pub mod blur_pins;
 pub mod brush_preset_dialog;
@@ -1146,6 +1151,7 @@ pub(super) mod filter_preview_ui;
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) mod filter_preview_worker;
 pub mod gallery_ui;
+pub(crate) mod generate_ui;
 pub mod guide_layout_ui;
 pub mod history_options_ui;
 pub mod jpeg_options_ui;

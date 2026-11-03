@@ -777,3 +777,48 @@ retain custom collapse settings and Timeline visibility.
 ### Select the layer under the pointer
 
 Assign **Select Layer Under Cursor** in Keyboard Shortcuts to choose the topmost visible, pickable layer beneath the canvas pointer. Empty pixels and points outside the document leave the selection unchanged; dialogs, strokes and brush-resize gestures block it. The command follows zoom, pan, view rotation and horizontal flipping. Agents can invoke `ui.menu.invoke {"id":"layer.selectUnderCursor"}` after moving the screen pointer with `ui.move {"x": ..., "y": ...}`. The command has no default shortcut.
+## Background replacement beneath a subject mask
+
+`layer.backgroundFill` is an engine command, available to the CLI and MCP as well as
+Properties › Quick Actions. The subject needs an enabled layer or vector mask.
+Use the existing `select.subject`, then refine the selection and apply
+`layer.layerMask.revealSelection`, or use `layer.removeBackground` for automatic masking.
+Those subject-detection operations currently use classical algorithms.
+
+```json
+{"id":"layer.backgroundFill","params":{"kind":"solid","color":"#223344"}}
+{"id":"layer.backgroundFill","params":{"kind":"gradient","color":"#223344","to":"#ddeeff","angle":90}}
+{"id":"layer.backgroundFill","params":{"kind":"image","sourceLayer":42}}
+```
+
+Use these objects as `engine.execute` params on the control channel.
+Colour/gradient creates a full-canvas editable fill directly beneath the subject,
+independent of the current selection. Image mode moves an existing pixel or Smart Object
+layer beneath it and keeps that image's size and position; add it with File › Place Embedded
+first. Locked layers and clipping groups are rejected. Each operation is one undo step.
+The optional `layer` and `document` ids bind requests to the intended subject/document.
+
+`ui.menu.invoke {"id":"layer.backgroundFill"}` opens its dialog. Fields `kind`, `color`,
+`to`, `angle` and `sourceLayer` can be changed through `ui.dialog.set`, then committed with
+`ui.dialog.confirm` or discarded with `ui.dialog.cancel`.
+
+## Source-aware image edits
+
+`image.fillSelection`, `image.removeObject` and `image.expandCanvas` are Linux-native engine
+commands, also available through Image-menu dialogs. They require Enki masked-edit revision 1;
+an older runtime is rejected before receiving source image bytes. All results are new masked
+root layers with one undo step; original layers remain intact. Cancellation/error does not apply
+an edit. Start with `Session::start`/the UI job path for progress and cancellation.
+
+Fill/Remove take `prompt` (optional for Remove), `model` (empty: editing recommendation),
+`negative`, `seed`, optional `steps`, `cfg`, `strength`, and an optional bound `document` id.
+They preserve the current selection and use its weights. A selection wider or taller than
+1024 is rejected; smaller selections in large documents receive bounded surrounding context.
+Expand instead takes integer `left`, `right`, `top`, `bottom` margins, each 0–512, plus the same
+sampling controls. Final dimensions must be 64–1024 per side, multiples of 8. Static pixel/group
+documents without effects, video, artboards or dissolve blending are supported initially.
+
+All three accept `dryRun: true`: validate and return the planned region without inference or
+history changes. This also keeps automated adversarial-input checks from submitting real jobs.
+Results report `layer`, `seed`, `model`, and `[x,y,width,height]` in `region`. Model output quality
+and rights are separate from pixel preservation; inspect/refine the new layer and its mask.
