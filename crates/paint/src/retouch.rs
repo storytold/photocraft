@@ -614,6 +614,23 @@ mod tests {
         }
     }
 
+    /// A region without channels is left alone: the carry buffers would be chunked by zero.
+    #[test]
+    fn smudge_leaves_a_zero_channel_region_alone() {
+        let mut s = Surface::new(PixelFormat::RGBA8);
+        s.fill_rect(Rect::new(0, 0, 60, 40), &[1.0, 1.0, 1.0, 1.0]);
+        let st = stroke(&[(20.0, 20.0), (40.0, 20.0)], 12.0, 1.0);
+        let mut sm = Smudge::new(0.8, None, 12.0);
+        let mut calls = 0;
+        apply_dab_stroke(&mut s, &st, None, false, 0, |w, fp| {
+            let mut empty = Region::new(w.rect, 0);
+            sm.dab(&mut empty, fp);
+            assert!(empty.data.is_empty() && sm.carry.is_none(), "no carry is built for zero channels");
+            calls += 1;
+        });
+        assert!(calls > 0);
+    }
+
     /// The pre-optimisation `Smudge::dab` (one `Vec` per carry pixel, per-pixel pick-up), kept as an oracle.
     fn reference_dab(sm: &mut Smudge, work: &mut Region, fp: &Footprint) {
         let (r, n) = (sm.radius, work.ch);
