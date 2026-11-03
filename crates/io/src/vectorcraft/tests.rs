@@ -168,7 +168,11 @@ fn a_canceled_open_stops_drawing() {
 
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
-fn cancellation_requested_after_drawing_starts_reaches_the_renderer() {
+fn cancellation_after_the_draw_callback_starts_reaches_the_pdf_renderer() {
+    let pdf = carried_pdf(&file(Some(&pdf(80, 40, 1)))).unwrap();
+    let pages = pdf.pages();
+    let (page, _, _) = first_page(pages).unwrap();
+    let options = Options { scale: [1.0; 2], size: Some([80, 40]), ..Options::default() };
     let requested = AtomicBool::new(false);
     let cancel = || requested.load(Ordering::Relaxed);
     let result = with_render_cancellation(&Interrupt::cancel_only(&cancel), |settings| {
@@ -179,7 +183,7 @@ fn cancellation_requested_after_drawing_starts_reaches_the_renderer() {
         while !flag.load(Ordering::Relaxed) && std::time::Instant::now() < deadline {
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
-        if flag.load(Ordering::Relaxed) { Err(raster::Error::Cancelled) } else { Ok(()) }
+        raster::render(page, &RenderCache::new(), settings, &options)
     });
     assert!(matches!(result, Err(raster::Error::Cancelled)));
 }

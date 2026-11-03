@@ -173,7 +173,10 @@ mod batch_action_set_tests {
             assert_eq!(code, 0, "{stdout}{stderr}");
             assert!(stdout.contains("2 succeeded, 0 failed"), "{stdout}");
             for stem in ["logo", "legacy"] {
-                let opened = photocraft_io::import("output", &std::fs::read(dir.join(folder).join(format!("{stem}.{ext}"))).unwrap()).unwrap();
+                let bytes = std::fs::read(dir.join(folder).join(format!("{stem}.{ext}"))).unwrap();
+                let signature: &[u8] = if ext == "png" { b"\x89PNG\r\n\x1a\n" } else { b"8BPS" };
+                assert!(bytes.starts_with(signature), "{stem}.{ext} has the wrong encoding");
+                let opened = photocraft_io::import("output", &bytes).unwrap();
                 assert_eq!((opened.document.size.width, opened.document.size.height), (8, 6));
             }
         }
