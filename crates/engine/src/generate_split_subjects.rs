@@ -270,11 +270,16 @@ const FILL_TRIES: u32 = 3;
 
 /// Of a detection on the filled background, the share inside the hole at which it counts as
 /// the subject painted back (a person beside the hole overlaps it little).
-const LEFT_IN_HOLE: f32 = 0.5;
+const LEFT_IN_HOLE: f32 = 0.3;
+
+/// The smallest share of the hole a detection inside it must cover to count: a quarter let a
+/// person in the hole's corner through (about 18 % of it, on all three seeds of the
+/// 12-megapixel portrait, measured in the app 2026-11-03); a few percent still ignores specks.
+const LEFT_MIN_SHARE: f32 = 0.03;
 
 /// Whether the detector (asked for what found the subjects) still finds a subject in the hole
 /// of the picture as it is now (the fill over it): a detection mostly inside the hole and at
-/// least a quarter of the hole's size. Nothing found is a clean fill.
+/// least [`LEFT_MIN_SHARE`] of the hole. Nothing found is a clean fill.
 fn subject_left_in(
     finder: &crate::select_ml_cmds::SubjectFinder,
     doc: &photocraft_doc::Document,
@@ -301,7 +306,7 @@ fn subject_left_in(
                 }
             }
         }
-        on > 0 && inside as f32 >= LEFT_IN_HOLE * on as f32 && inside * 4 >= holed
+        on > 0 && inside as f32 >= LEFT_IN_HOLE * on as f32 && inside as f32 >= LEFT_MIN_SHARE * holed as f32
     }))
 }
 
