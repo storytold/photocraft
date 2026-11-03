@@ -1318,6 +1318,7 @@ fn embed_color_profile_tags_an_untagged_document_srgb() {
     }
 }
 
+/// Export every supported format to distinct paths while preserving the source and earlier outputs.
 #[test]
 fn timestamp_quick_export_preserves_source_and_all_formats() {
     let dir = tempfile::tempdir().unwrap();

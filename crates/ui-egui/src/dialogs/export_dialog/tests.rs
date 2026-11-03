@@ -14,6 +14,7 @@ fn ico_export_is_available_and_rejects_oversize_output() {
 
 use super::*;
 
+/// Pass the selected Default or Timestamp filename to the browser download writer.
 #[test]
 fn browser_quick_export_download_uses_selected_naming() {
     use std::cell::RefCell;

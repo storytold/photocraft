@@ -1082,6 +1082,7 @@ fn the_web_build_caps_memory_usage() {
     }
 }
 
+/// Preserve old preferences while validating, persisting and resetting the naming choice.
 #[test]
 fn quick_export_naming_defaults_persists_validates_and_resets() {
     for (old, quality) in [(json!({}), Export::default().jpeg_quality), (json!({"export": {"jpegQuality": 42}}), 42)] {

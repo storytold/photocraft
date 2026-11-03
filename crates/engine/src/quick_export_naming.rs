@@ -9,6 +9,7 @@ pub fn timestamped_path(path: &Path) -> crate::Result<PathBuf> {
     timestamped_path_at(path, &chrono::Local::now())
 }
 
+/// Format a supplied date and time, rejecting directory-style destinations.
 fn timestamped_path_at<T: chrono::TimeZone>(path: &Path, time: &chrono::DateTime<T>) -> crate::Result<PathBuf>
 where
     T::Offset: std::fmt::Display,
@@ -32,6 +33,7 @@ mod tests {
     use super::*;
     use chrono::TimeZone;
 
+    /// Preserve filename components and zero-pad milliseconds in the timestamp.
     #[test]
     fn timestamp_preserves_components_and_pads_milliseconds() {
         let time = chrono::FixedOffset::east_opt(3600).unwrap().with_ymd_and_hms(2026, 11, 3, 10, 52, 27).unwrap() + chrono::Duration::milliseconds(7);
@@ -46,6 +48,7 @@ mod tests {
         assert!(timestamped_path_at(Path::new("/"), &time).is_err());
     }
 
+    /// Reject directory aliases before path normalization hides the missing filename.
     #[test]
     fn timestamp_rejects_directory_style_paths() {
         let time = chrono::Utc.with_ymd_and_hms(2026, 11, 3, 0, 0, 0).unwrap();
@@ -62,6 +65,7 @@ mod tests {
         assert_eq!(timestamped_path_at(Path::new("photo\\"), &time).unwrap(), Path::new("photo\\_20261103-000000-000"));
     }
 
+    /// Preserve non-Unicode filename bytes while rejecting directory-style suffixes.
     #[cfg(unix)]
     #[test]
     fn timestamp_preserves_non_unicode_names() {

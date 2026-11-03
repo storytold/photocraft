@@ -2045,6 +2045,7 @@ fn reset_section_on_type_keeps_the_favourite_fonts() {
     assert_eq!(stored(&store)["type"]["favoriteFonts"], json!(["Bebas Neue"]));
 }
 
+/// Keep the naming control's labels and position consistent with the Export preferences.
 #[test]
 fn quick_export_naming_uses_exact_labels_and_follows_location() {
     assert_eq!(humanize("quickExportNaming"), "Quick export naming");
@@ -2056,6 +2057,7 @@ fn quick_export_naming_uses_exact_labels_and_follows_location() {
     assert!(text.find("quickExportNaming").unwrap() < text.find("jpegQuality").unwrap());
 }
 
+/// Apply Timestamp through the existing preference dropdown interaction.
 #[test]
 fn quick_export_naming_dropdown_changes_the_existing_preference_value() {
     use egui_kittest::{Harness, kittest::Queryable};

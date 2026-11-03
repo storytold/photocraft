@@ -1038,6 +1038,7 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
     confirm_document(app, f, false)
 }
 
+/// Confirm a document export, optionally timestamping the filename returned by the save picker.
 fn confirm_document(app: &mut PhotocraftApp, f: &Map<String, Value>, timestamp: bool) -> Result<Value, String> {
     remember(app, f);
     if let Some(layers) = f.get("__layers").and_then(Value::as_array) {
@@ -1174,7 +1175,7 @@ pub fn quick_export_png(app: &mut PhotocraftApp) -> Result<Value, String> {
     quick_export_download(app, &f)
 }
 
-// Browser collisions are handled by the download service, not by the document exporter.
+/// Download Quick Export using the naming preference; the browser handles filesystem collisions.
 fn quick_export_download(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
     let timestamp = app.session.prefs().export.quick_export_naming == photocraft_engine::prefs::QuickExportNaming::Timestamp;
     confirm_document(app, f, timestamp)

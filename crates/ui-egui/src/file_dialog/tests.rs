@@ -3,6 +3,7 @@ use crate::{Services, menus};
 use std::cell::RefCell;
 use std::rc::Rc;
 
+/// Keep the source intact when Timestamp naming uses Ask or Same Folder.
 #[test]
 fn timestamp_quick_export_ask_and_same_folder_preserve_original() {
     let dir = tempfile::tempdir().unwrap();

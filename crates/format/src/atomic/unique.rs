@@ -17,6 +17,7 @@ struct Staged<'a> {
     cleanup_pending: bool,
 }
 impl Drop for Staged<'_> {
+    /// Clean up private staging on early returns.
     fn drop(&mut self) {
         if self.cleanup_pending {
             let _ = self.fs.remove(&self.path);
@@ -24,11 +25,13 @@ impl Drop for Staged<'_> {
     }
 }
 
+/// Write fallback bytes and flush them with the platform sync policy.
 fn write_and_sync(output: &mut File, bytes: &[u8]) -> io::Result<()> {
     output.write_all(bytes)?;
     sync_file(output)
 }
 
+/// Publish without replacement, with injectable link and write operations for failure tests.
 fn write_unique_with(
     fs: &dyn AtomicFs,
     path: &Path,
@@ -129,6 +132,7 @@ mod tests {
         assert!(!std::fs::read_dir(dir).unwrap().any(|e| e.unwrap().file_name().to_string_lossy().ends_with(".tmp")));
     }
 
+    /// Fill the first collision gap without changing existing files on either publication path.
     #[test]
     fn exclusive_publication_fills_gaps_with_and_without_hard_links() {
         for fallback in [false, true] {
@@ -145,6 +149,7 @@ mod tests {
         }
     }
 
+    /// Release staging before fallback creation, including a competing claim on the base name.
     #[test]
     fn fallback_releases_staging_before_creating_output_and_retries_collisions() {
         struct FallbackFs {
@@ -160,6 +165,7 @@ mod tests {
             fn rename(&self, _: &Path, _: &Path) -> io::Result<()> {
                 panic!("exclusive publication must never replace")
             }
+            /// Optionally claim the base name at staging removal to simulate a competing export.
             fn remove(&self, path: &Path) -> io::Result<()> {
                 self.removed_before_output.set(!self.target.exists());
                 RealFs.remove(path)?;
@@ -198,6 +204,7 @@ mod tests {
         }
     }
 
+    /// Keep concurrent exports distinct and complete with and without hard-link support.
     #[test]
     fn concurrent_exports_publish_distinct_complete_files() {
         for fallback in [false, true] {
@@ -225,6 +232,7 @@ mod tests {
         removals: Cell<usize>,
     }
     impl AtomicFs for FailingFs {
+        /// Optionally fail after staging creation so error cleanup is observable.
         fn write_new(&self, path: &Path, bytes: &[u8]) -> io::Result<()> {
             RealFs.write_new(path, bytes)?;
             if self.stage { Err(io::ErrorKind::StorageFull.into()) } else { Ok(()) }
@@ -244,6 +252,7 @@ mod tests {
         }
     }
 
+    /// Clean staging once and avoid another export after publication succeeds.
     #[test]
     fn failures_cleanup_staging_and_never_retry_after_publication() {
         let dir = TempDir::new("unique-errors");
@@ -263,6 +272,7 @@ mod tests {
         assert_no_temp(&dir.0);
     }
 
+    /// Reject invalid destinations without creating directories or changing existing files.
     #[test]
     fn invalid_paths_and_long_names_fail_without_touching_existing_files() {
         let dir = TempDir::new("unique-invalid");
@@ -283,6 +293,7 @@ mod tests {
         assert_no_temp(&dir.0);
     }
 
+    /// Keep partial outputs and replacement files when writes or syncs fail, without retrying.
     #[test]
     fn fallback_failures_preserve_partial_outputs_and_replacements_without_retrying() {
         for replace in [false, true] {
@@ -319,6 +330,7 @@ mod tests {
         }
     }
 
+    /// Treat dangling symlinks as occupied names while preserving non-Unicode filename bytes.
     #[cfg(unix)]
     #[test]
     fn dangling_symlink_is_a_collision_and_non_unicode_paths_are_preserved() {
