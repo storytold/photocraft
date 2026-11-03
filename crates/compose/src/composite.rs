@@ -408,6 +408,7 @@ pub(crate) fn composite_layer_plain(layer: &Layer, clipped: &[Layer], backdrop: 
             blend_into(&mut without, &iso, BlendMode::Normal, opacity);
             let mut with = before;
             blend_into(&mut with, &clipped_iso, BlendMode::Normal, opacity);
+            let hdr = cx.depth == photocraft_color::SampleType::F32;
             for ((p, w), wo) in backdrop.px.iter_mut().zip(&with.px).zip(&without.px) {
                 // Work premultiplied so transparent areas stay consistent.
                 let pa = p[3];
@@ -417,7 +418,15 @@ pub(crate) fn composite_layer_plain(layer: &Layer, clipped: &[Layer], backdrop: 
                 }
                 pm[3] += w[3] - wo[3];
                 let a = pm[3].clamp(0.0, 1.0);
-                *p = if a > 0.0 { [(pm[0] / a).clamp(0.0, 1.0), (pm[1] / a).clamp(0.0, 1.0), (pm[2] / a).clamp(0.0, 1.0), a] } else { [0.0; 4] };
+                *p = if a > 0.0 {
+                    let channel = |c: usize| {
+                        let value = pm[c] / a;
+                        if hdr { value } else { value.clamp(0.0, 1.0) }
+                    };
+                    [channel(0), channel(1), channel(2), a]
+                } else {
+                    [0.0; 4]
+                };
             }
         }
         return;
