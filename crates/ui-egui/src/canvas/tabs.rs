@@ -270,7 +270,8 @@ pub(super) fn tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
             }
             crate::icons::paint(ui, xr, "x", 11.0, if xresp.hovered() { t.text } else { t.text_faint });
             // A name cut to the maximum width has all of it in the tooltip, as a document tab does.
-            let cut = natural.get(i).copied().unwrap_or(0.0) > r.width() + 0.5;
+            // The natural width carries the gap between tabs; the tab's rect doesn't.
+            let cut = natural.get(i).copied().unwrap_or(0.0) > r.width() + STUDIO_TAB_GAP + 0.5;
             let resp = if cut { resp.on_hover_text(name.as_str()) } else { resp };
             if xresp.on_hover_text(tl!("Cancel opening")).clicked() {
                 cancel_open = Some(*job);

@@ -263,6 +263,25 @@ fn a_cut_opening_tab_shows_its_whole_name_on_hover() {
     }
 }
 
+/// #11131: an opening tab that shows its whole name has no tooltip repeating it, as a document tab.
+#[test]
+fn a_whole_opening_tab_shows_no_tooltip_on_hover() {
+    let short = "short.png";
+    for theme in ThemeKind::ALL {
+        let mut h = harness(1, theme);
+        let job = photocraft_engine::jobs::JobId(7);
+        h.state_mut().jobs.opens.push(crate::jobs_ui::OpenTab { job, name: short.to_owned(), path: None, slot: None, order: None });
+        h.run_steps(2);
+        let on_strip = texts_in(&h, strip(&h).rect, true).iter().filter(|t| t.contains(short)).count();
+        assert_eq!(on_strip, 1, "{theme:?}: the opening tab shows its whole name");
+        let (_, doc_tab) = *strip(&h).tabs.first().expect("the document's tab");
+        h.input_mut().events.push(egui::Event::PointerMoved(egui::pos2(doc_tab.right() + 40.0, doc_tab.center().y)));
+        h.run_steps(4);
+        let shown: Vec<String> = texts_in(&h, egui::Rect::EVERYTHING, true).into_iter().filter(|t| t.contains(short)).collect();
+        assert_eq!(shown.len(), 1, "{theme:?}: a tooltip repeats the whole name: {shown:?}");
+    }
+}
+
 /// #11131: a tab cut to the maximum width cuts the document's name only; what follows it (the
 /// zoom, the mode and the unsaved '*') stays whole, as on Photoshop's tabs.
 #[test]
