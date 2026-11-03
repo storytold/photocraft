@@ -3479,6 +3479,7 @@ fn channel_jobs_restore_the_guard_but_cancelled_jobs_close_the_box() {
             label: "Warp".into(),
             document: Some(before.id),
             outcome: if cancelled { JobOutcome::Cancelled } else { JobOutcome::Failed("synthetic refusal".into()) },
+            error: (!cancelled).then(|| photocraft_engine::EngineError::Other("synthetic refusal".into())),
         };
         crate::transform_tool::on_job_event(&mut a, &event);
         assert!(Arc::ptr_eq(&before, &a.session.active().unwrap().doc));
