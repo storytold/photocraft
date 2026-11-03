@@ -48,7 +48,14 @@ pub struct SpellDialog {
     pub change_to: String,
     pub all_layers: bool,
     pub message: String,
+    /// The token of the action playback that opened the dialog at a Check Spelling step: Done
+    /// continues it ([`crate::actions::resume`]).
+    #[serde(skip)]
+    pub resume: Option<u64>,
 }
+
+/// The `dialog` that Check Spelling's results and a playback paused at its step name.
+pub const SPELLING: &str = "checkSpelling";
 
 const IDS: [&str; 6] = [
     "type.panels.characterStyles",
@@ -373,8 +380,8 @@ fn options_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, paragraph: bool, s
     let defined = |attrs: &Value, k: &str| attrs.get(k).is_some();
     // Preferences ▸ Type ▸ Font Preview Size sizes the family picker's samples.
     let preview = app.session.prefs().type_.font_preview;
-    // The fonts the pickers hoist to the top (Preferences ▸ Type ▸ Recent Fonts).
-    let recents = app.ui.recent_fonts.clone();
+    // The font picker's favourites and recent fonts; a star clicked in it is applied below.
+    let mut library = crate::type_tool::FontLibrary::of(app);
     // Preferences ▸ Units & Rulers ▸ Type: the model stores points; the fields may show pixels
     // (by the document's resolution) or millimetres.
     let (type_unit, unit_label) = crate::type_tool::type_unit(app);
@@ -402,8 +409,12 @@ fn options_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, paragraph: bool, s
             ui.add_enabled_ui(on, |ui| match kind {
                 "font" => {
                     let mut f = v.as_str().unwrap_or("").to_string();
-                    if family_picker(ui, &format!("style-font-{paragraph}-{id}"), &mut f, preview, &recents) {
-                        set = Some(json!({ panel: f }));
+                    if family_picker(ui, &format!("style-font-{paragraph}-{id}"), &mut f, preview, &mut library) {
+                        // A style picked under the family's ">" comes with it.
+                        set = Some(match library.picked_style.take() {
+                            Some(style) => json!({ panel: f, "fontStyle": style }),
+                            None => json!({ panel: f }),
+                        });
                     }
                 }
                 "pt" | "num" | "leading" => {
@@ -502,6 +513,7 @@ fn options_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, paragraph: bool, s
             }
         }
     });
+    library.finish(app);
     if let Some(attrs) = set {
         let _ = run(app, &format!("{prefix}.set"), json!({ "id": id, "attrs": attrs }));
     }
@@ -524,13 +536,19 @@ fn options_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, paragraph: bool, s
     }
 }
 
-/// Searchable family combo box.
-fn family_picker(ui: &mut egui::Ui, salt: &str, current: &mut String, preview: photocraft_engine::prefs::FontPreview, recents: &[String]) -> bool {
+/// Searchable family combo box, starring and listing first the fonts of `library`.
+fn family_picker(
+    ui: &mut egui::Ui,
+    salt: &str,
+    current: &mut String,
+    preview: photocraft_engine::prefs::FontPreview,
+    library: &mut crate::type_tool::FontLibrary,
+) -> bool {
     if !crate::type_tool::fonts_ready(ui, 140.0) {
         return false;
     }
     let mut shown = if current.is_empty() { photocraft_text::fonts::DEFAULT_FAMILY.to_string() } else { current.clone() };
-    let changed = crate::type_tool::family_picker_in(ui, salt, &mut shown, 140.0, &crate::type_tool::families(), preview, recents);
+    let changed = crate::type_tool::family_picker_in(ui, salt, &mut shown, 140.0, &crate::type_tool::families(), preview, library);
     if changed {
         *current = shown;
     }
@@ -624,10 +642,14 @@ pub fn glyphs_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // Font family + style.
     ui.horizontal(|ui| {
         let mut f = family.clone();
-        if family_picker(ui, "glyph-family", &mut f, app.session.prefs().type_.font_preview, &app.ui.recent_fonts) {
+        let mut library = crate::type_tool::FontLibrary::of(app);
+        let picked = family_picker(ui, "glyph-family", &mut f, app.session.prefs().type_.font_preview, &mut library);
+        let picked_style = library.picked_style.take();
+        library.finish(app);
+        if picked {
             app.note_recent_font(&f);
             app.ui.type_panels.glyph_family = f;
-            app.ui.type_panels.glyph_style = tl!("Regular").into();
+            app.ui.type_panels.glyph_style = picked_style.unwrap_or_else(|| tl!("Regular").into());
         }
         let styles = crate::type_tool::styles(&family);
         let mut s = style.clone();
@@ -751,13 +773,33 @@ fn refresh_spelling(app: &mut PhotocraftApp) {
     }
 }
 
-/// Opens Edit › Check Spelling (returns the misspellings).
+/// Opens Edit › Check Spelling (returns the misspellings). Opening it again while an action waits
+/// at a Check Spelling step keeps that action's token, so Done still continues it.
 pub fn open_spelling(app: &mut PhotocraftApp, all_layers: bool) -> Result<Value, String> {
     app.session.execute("edit.checkSpelling", json!({ "action": "list", "allLayers": all_layers })).map_err(|e| e.to_string())?;
-    app.ui.type_panels.spell = Some(SpellDialog { all_layers, ..Default::default() });
+    let resume = app.ui.type_panels.spell.as_ref().and_then(|d| d.resume);
+    app.ui.type_panels.spell = Some(SpellDialog { all_layers, resume, ..Default::default() });
     refresh_spelling(app);
     let d = app.ui.type_panels.spell.as_ref().map(|d| d.items.clone()).unwrap_or_default();
-    Ok(json!({ "dialog": "checkSpelling", "misspellings": d }))
+    Ok(json!({ "dialog": SPELLING, "misspellings": d }))
+}
+
+/// Done: an action being recorded gets one Check Spelling step with Check All Layers as the dialog
+/// has it, and an action paused at a Check Spelling step continues on the document it was playing
+/// on. When recording the step fails, the status keeps that error with the playback's outcome.
+pub fn close_spelling(app: &mut PhotocraftApp) {
+    let Some(d) = app.ui.type_panels.spell.take() else { return };
+    let mut recording_error = None;
+    if app.session.actions.recording.is_some() && run(app, "edit.checkSpelling", json!({ "allLayers": d.all_layers })).is_none() {
+        recording_error = Some(app.ui.status.clone());
+    }
+    if let Some(token) = d.resume {
+        let _ = crate::actions::resume_spelling(app, token);
+        if let Some(error) = recording_error {
+            app.ui.status = format!("{error} ({})", app.ui.status);
+            app.ui.status_error = true;
+        }
+    }
 }
 
 fn spelling_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
@@ -860,7 +902,7 @@ fn spelling_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let Some(a) = act else { return };
     let word = item.as_ref().and_then(|i| i["word"].as_str()).unwrap_or("").to_string();
     match a {
-        "done" => app.ui.type_panels.spell = None,
+        "done" => close_spelling(app),
         "relist" => {
             if let Some(s) = app.ui.type_panels.spell.as_mut() {
                 s.index = 0;
@@ -947,6 +989,25 @@ mod tests {
         assert_eq!(d.change_to, "The");
         // Headless calls with an action go to the engine.
         assert!(menu(&mut app, "edit.checkSpelling", &json!({"action": "list"})).is_none());
+    }
+
+    #[test]
+    fn recording_the_dialog_records_one_step_with_its_dialog_on() {
+        let mut app = app_with_text("Teh cat");
+        app.run("actions.record", json!({"name": "Spell"})).unwrap();
+        menu(&mut app, "edit.checkSpelling", &json!({})).unwrap().unwrap();
+        let item = app.ui.type_panels.spell.as_ref().unwrap().items[0].clone();
+        // Change, as the dialog's Change button runs it, then untick Check All Layers and press Done.
+        let change = json!({"action": "change", "layer": item["layer"], "start": item["start"], "end": item["end"], "word": "Teh", "replace": "The"});
+        run(&mut app, "edit.checkSpelling", change).unwrap();
+        refresh_spelling(&mut app);
+        app.ui.type_panels.spell.as_mut().unwrap().all_layers = false;
+        close_spelling(&mut app);
+        app.run("actions.stop", json!({})).unwrap();
+        assert!(app.ui.type_panels.spell.is_none());
+        let action = &app.session.actions.list[0];
+        assert_eq!(action.steps, vec![("edit.checkSpelling".to_string(), json!({"allLayers": false}))]);
+        assert_eq!(action.dialogs.iter().copied().collect::<Vec<_>>(), [0]);
     }
 
     /// #5496: Check Spelling's close box is Done, as in Photoshop on Windows: the window closes
