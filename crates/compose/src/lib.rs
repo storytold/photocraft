@@ -32,6 +32,7 @@ pub mod pattern;
 pub mod proxy;
 pub mod psblend;
 pub mod shape_split;
+pub mod smart_mix;
 mod uniform;
 
 use photocraft_color::blend::BlendMode;
