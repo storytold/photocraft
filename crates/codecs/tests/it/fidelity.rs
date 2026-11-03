@@ -156,6 +156,13 @@ fn gif_quantizes_and_binarizes() {
     assert!(!w.contains(&W::LossyCompression));
 }
 #[test]
+fn iff_binarizes_alpha_and_reduces_16_bit() {
+    assert_eq!(warns(&test_image(ChannelLayout::Rgba, SampleType::U8), Format::Iff), vec![W::AlphaBinarized]);
+    let w = warns(&test_image(ChannelLayout::Rgb, SampleType::U16), Format::Iff);
+    assert!(w.contains(&W::DepthReduced { from: SampleType::U16, to: SampleType::U8 }));
+    assert!(warns(&test_image(ChannelLayout::Rgb, SampleType::U8), Format::Iff).is_empty());
+}
+#[test]
 fn hdr_is_lossy() {
     assert!(warns(&test_image(ChannelLayout::Rgb, SampleType::F32), Format::Hdr).contains(&W::LossyCompression));
 }
