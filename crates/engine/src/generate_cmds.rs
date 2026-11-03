@@ -347,6 +347,8 @@ pub(crate) enum EnhanceKind {
     Subject,
     /// A picture: describe its background alone (Generative Expand with no prompt).
     Backdrop,
+    /// A picture: which of its edges cut its main subject off (Generative Expand with no prompt).
+    CutEdges,
 }
 
 /// The system turn of [`EnhanceKind::Subject`]: a short noun phrase the matte can follow.
@@ -360,6 +362,12 @@ const ENHANCE_SUBJECT_REQUEST: &str = "Name the main subject of this picture.";
 /// copy of the person into the added area; named as a backdrop with no people, 2511 continued
 /// it cleanly (Cody's portrait, in the app, 2026-11-03).
 const ENHANCE_BACKDROP_SYSTEM: &str = "You see a picture. Reply with one noun phrase of four to twelve words describing only its background and setting, leaving out every person, animal and main subject, for example \"a plain grey studio wall\" or \"an orange curtain backdrop above a red carpet\". Reply with the phrase only: no sentence, no quotes, no full stop.";
+
+/// The system turn of [`EnhanceKind::CutEdges`].
+const ENHANCE_CUT_SYSTEM: &str = "You see a picture. Say which of its edges cut off its main subject, a person, animal or object whose body runs past the frame (for example a portrait cropped at the chest is cut off at the bottom). Reply in the form \"cut off at: bottom, left\" naming the edges among top, bottom, left and right, or reply \"not cut off at all\" when the whole subject is inside the picture. Reply with that line only.";
+
+/// The user turn of [`EnhanceKind::CutEdges`].
+const ENHANCE_CUT_REQUEST: &str = "Which edges of this picture cut off its main subject?";
 
 /// The user turn of [`EnhanceKind::Backdrop`].
 const ENHANCE_BACKDROP_REQUEST: &str = "Describe the background of this picture.";
@@ -449,6 +457,7 @@ pub(crate) fn enhance_prompt(
         EnhanceKind::FillRef => ENHANCE_FILL_REF_SYSTEM.to_string(),
         EnhanceKind::Subject => ENHANCE_SUBJECT_SYSTEM.to_string(),
         EnhanceKind::Backdrop => ENHANCE_BACKDROP_SYSTEM.to_string(),
+        EnhanceKind::CutEdges => ENHANCE_CUT_SYSTEM.to_string(),
     };
     let mut params = BTreeMap::new();
     params.insert("system".to_string(), Value::String(system));
@@ -3544,6 +3553,7 @@ fn run_fill(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// What `generate.expand` asks for: how much canvas to add on each side.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct Pads {
     left: u32,
     top: u32,
@@ -3561,27 +3571,17 @@ const EXPAND_DEFAULT_PROMPT: &str = "the same background continuing outward, emp
 /// description of the picture's background, [`EnhanceKind::Backdrop`]) continuing in the
 /// direction the canvas grows, with no people.
 fn expand_backdrop_prompt(backdrop: &str, pads: &Pads) -> String {
-    let way = match (pads.left > 0, pads.top > 0, pads.right > 0, pads.bottom > 0) {
-        (false, true, false, false) => "upward",
-        (false, false, false, true) => "downward",
-        (true, false, false, false) => "to the left",
-        (false, false, true, false) => "to the right",
-        _ => "outward",
-    };
-    let b = backdrop.trim().trim_end_matches(['.', '!', ';', ',']).trim();
-    let b = b
-        .strip_prefix("the ")
-        .or_else(|| b.strip_prefix("The "))
-        .or_else(|| b.strip_prefix("a "))
-        .or_else(|| b.strip_prefix("A "))
-        .or_else(|| b.strip_prefix("an "))
-        .or_else(|| b.strip_prefix("An "))
-        .unwrap_or(b);
+    let way = expand_way(pads);
+    let b = strip_article(backdrop.trim().trim_end_matches(['.', '!', ';', ',']).trim());
     format!("the same {b} continuing {way}, empty, with no people or other subjects")
 }
 const MAX_EXPAND_SIDE: u32 = 16_384;
 
-fn plan_expand(s: &Session, p: &Value) -> Result<(FillPlan, Pads, (u32, u32), bool)> {
+/// An expand's plan: the fill plan, the pads, the grown canvas size, whether the prompt was
+/// blank (the picture is described first) and the request margin.
+type ExpandPlan = (FillPlan, Pads, (u32, u32), bool, f64);
+
+fn plan_expand(s: &Session, p: &Value) -> Result<ExpandPlan> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let (ow, oh) = (d.doc.size.width, d.doc.size.height);
     let side = |key: &str| -> Result<u32> {
@@ -3668,20 +3668,7 @@ fn plan_expand(s: &Session, p: &Value) -> Result<(FillPlan, Pads, (u32, u32), bo
     // it, see `Meta::expand_margin`), else a quarter of the longer side.
     let margin = opt_num(EXPAND, p, "margin", 0.0, 1.0)?.unwrap_or_else(|| template.meta.expand_margin.map_or(0.25, |m| f64::from(m.clamp(0.0, 1.0))));
     let edge = parse_edge(EXPAND, p)?;
-    // The request: the bounding box of the added canvas (an L or a frame when more than one
-    // side grows) plus `margin` of the picture next to it, on the new canvas.
-    let canvas = Rect::new(0, 0, nw as i32, nh as i32);
-    let old = Rect::new(pads.left as i32, pads.top as i32, (pads.left + ow) as i32, (pads.top + oh) as i32);
-    let longer = i64::from(nw.max(nh));
-    let m = (margin * longer as f64).round().clamp(0.0, 65_536.0) as i32;
-    let (l, t, r, b) = (pads.left > 0, pads.top > 0, pads.right > 0, pads.bottom > 0);
-    let added = Rect::new(
-        if l || t || b { 0 } else { old.x1.saturating_sub(m) },
-        if t || l || r { 0 } else { old.y1.saturating_sub(m) },
-        if r || t || b { canvas.x1 } else { old.x0.saturating_add(m) },
-        if b || l || r { canvas.y1 } else { old.y0.saturating_add(m) },
-    );
-    let rect = align_to_grid(added.intersect(&canvas), canvas);
+    let rect = expand_rect((ow, oh), &pads, margin);
     let pixels = u64::from(rect.width()) * u64::from(rect.height());
     if pixels > MAX_REQUEST_PIXELS {
         return Err(EngineError::Other(format!(
@@ -3716,7 +3703,112 @@ fn plan_expand(s: &Session, p: &Value) -> Result<(FillPlan, Pads, (u32, u32), bo
         pads,
         (nw, nh),
         blank,
+        margin,
     ))
+}
+
+/// An expand's request on its grown canvas: the bounding box of the added canvas (an L or a
+/// frame when more than one side grows) plus `margin` of the picture next to it.
+fn expand_rect((ow, oh): (u32, u32), pads: &Pads, margin: f64) -> Rect {
+    let (nw, nh) = (ow + pads.left + pads.right, oh + pads.top + pads.bottom);
+    let canvas = Rect::new(0, 0, nw as i32, nh as i32);
+    let old = Rect::new(pads.left as i32, pads.top as i32, (pads.left + ow) as i32, (pads.top + oh) as i32);
+    let longer = i64::from(nw.max(nh));
+    let m = (margin * longer as f64).round().clamp(0.0, 65_536.0) as i32;
+    let (l, t, r, b) = (pads.left > 0, pads.top > 0, pads.right > 0, pads.bottom > 0);
+    let added = Rect::new(
+        if l || t || b { 0 } else { old.x1.saturating_sub(m) },
+        if t || l || r { 0 } else { old.y1.saturating_sub(m) },
+        if r || t || b { canvas.x1 } else { old.x0.saturating_add(m) },
+        if b || l || r { canvas.y1 } else { old.y0.saturating_add(m) },
+    );
+    align_to_grid(added.intersect(&canvas), canvas)
+}
+
+/// The sides of a picture whose edge cuts its main subject off, from the vision-language
+/// model's answer ("bottom, left"); "not cut off" or anything else is none.
+fn cut_sides(said: &str) -> Pads {
+    let t = said.to_ascii_lowercase();
+    let has = |w: &str| u32::from(t.split(|c: char| !c.is_ascii_alphabetic()).any(|x| x == w));
+    Pads { left: has("left"), top: has("top"), right: has("right"), bottom: has("bottom") }
+}
+
+/// A blank expand's two stages when the subject runs off the picture: first every side but
+/// those facing away from the cut (its body continues there), then those (background alone).
+/// A side faces away from the cut when the picture does not cut the subject off there but does
+/// on the opposite side: above a portrait cut at the chest. Told to continue the person on
+/// every side at once, 2511 drew a second copy of her in the top band; told to paint background
+/// alone, it cut her off at the old edge; bottom, left and right with her body first, then the
+/// top as backdrop, continued her whole with no copy (Cody's portrait, in the app, 2026-11-03).
+/// `None` when no side that grows cuts the subject off.
+fn expand_stages(pads: &Pads, cut: &Pads) -> Option<(Pads, Pads)> {
+    let grows_cut =
+        (pads.left > 0 && cut.left > 0) || (pads.top > 0 && cut.top > 0) || (pads.right > 0 && cut.right > 0) || (pads.bottom > 0 && cut.bottom > 0);
+    if !grows_cut {
+        return None;
+    }
+    let later = |p: u32, here: u32, opposite: u32| if here == 0 && opposite > 0 { p } else { 0 };
+    let rest = Pads {
+        left: later(pads.left, cut.left, cut.right),
+        top: later(pads.top, cut.top, cut.bottom),
+        right: later(pads.right, cut.right, cut.left),
+        bottom: later(pads.bottom, cut.bottom, cut.top),
+    };
+    let first = Pads { left: pads.left - rest.left, top: pads.top - rest.top, right: pads.right - rest.right, bottom: pads.bottom - rest.bottom };
+    Some((first, rest))
+}
+
+/// The prompt of an expand's first stage: `subject` (the vision-language model's name for it)
+/// continuing past the cut edges in front of `backdrop`, with no one else.
+fn expand_subject_prompt(subject: &str, backdrop: Option<&str>, pads: &Pads) -> String {
+    let way = expand_way(pads);
+    let s = strip_article(subject.trim().trim_end_matches(['.', '!', ';', ',']).trim());
+    let behind =
+        backdrop.map(|b| format!(" in front of the same {}", strip_article(b.trim().trim_end_matches(['.', '!', ';', ',']).trim()))).unwrap_or_default();
+    format!("the same {s} continuing {way} naturally past the edge, the body and clothing completed{behind}, with no additional people")
+}
+
+fn strip_article(b: &str) -> &str {
+    ["the ", "The ", "a ", "A ", "an ", "An "].iter().find_map(|a| b.strip_prefix(a)).unwrap_or(b)
+}
+
+/// Which way an expand grows, in words.
+fn expand_way(pads: &Pads) -> &'static str {
+    match (pads.left > 0, pads.top > 0, pads.right > 0, pads.bottom > 0) {
+        (false, true, false, false) => "upward",
+        (false, false, false, true) => "downward",
+        (true, false, false, false) => "to the left",
+        (false, false, true, false) => "to the right",
+        _ => "outward",
+    }
+}
+
+/// The first stage's layers folded into each of the last stage's (its variations), so the
+/// result is one layer per variation as after one stage; the first stage's layers go.
+fn fold_expand_stages(doc: &mut Document, first: &[LayerId], made: &Made) -> Result<()> {
+    let shown = |doc: &Document, id: &LayerId| {
+        doc.layer(*id).cloned().map(|mut l| {
+            l.visible = true;
+            l
+        })
+    };
+    let Some(mut under) = first.first().and_then(|id| shown(doc, id)) else { return Ok(()) };
+    for id in first.iter().skip(1) {
+        if let Some(l) = shown(doc, id) {
+            under = crate::pixels::merge_down(doc, &under, &l);
+        }
+    }
+    for (id, ..) in made {
+        let Some(top) = shown(doc, id) else { continue };
+        let merged = crate::pixels::merge_down(doc, &under, &top);
+        let l = doc.layer_mut(*id).ok_or(EngineError::NoLayer(*id))?;
+        l.content = merged.content;
+        l.mask = None;
+    }
+    for id in first {
+        doc.remove(*id);
+    }
+    Ok(())
 }
 
 fn expand_enabled(s: &Session) -> std::result::Result<(), String> {
@@ -3726,34 +3818,40 @@ fn expand_enabled(s: &Session) -> std::result::Result<(), String> {
 
 /// `generate.expand`: grow the canvas and have the model paint the new area, as one undo step.
 fn run_expand(s: &mut Session, p: &Value) -> Result<Value> {
-    let (plan, pads, (nw, nh), describe) = plan_expand(s, p)?;
+    let (plan, pads, (nw, nh), describe, margin) = plan_expand(s, p)?;
     let backend = backend(s)?;
-    let FillPlan { template, prompt, negative, seed, steps, guidance, name, models, rect, variations, auto, edge, enhance, refs, grow, erase, tuning } = plan;
+    let FillPlan { template, prompt, negative, seed, steps, guidance, name, models, rect: _, variations, auto, edge, enhance, refs, grow, erase, tuning } =
+        plan;
     let label = name.clone();
-    let job = FillJob {
+    let template_id = template.meta.id.clone();
+    let auto_order = auto_order(EXPAND, quality(s));
+    let thinker = Arc::clone(&backend);
+    // One job per stage: the first (when there are two) makes one picture, the last the
+    // variations.
+    let job = move |prompt: String, variations: u32| FillJob {
         thinker: Arc::clone(&backend),
-        backend,
+        backend: Arc::clone(&backend),
         command: EXPAND,
-        template_id: template.meta.id.clone(),
+        template_id: template_id.clone(),
         auto,
-        auto_order: auto_order(EXPAND, quality(s)),
+        auto_order,
         prompt,
-        negative,
+        negative: negative.clone(),
         seed,
         steps,
         guidance,
-        name,
-        models,
+        name: name.clone(),
+        models: models.clone(),
         variations,
         edge,
         enhance,
-        refs,
+        refs: refs.clone(),
         grow,
         erase,
         rewritten: None,
         removal: false,
         prefill: false,
-        tuning,
+        tuning: tuning.clone(),
         object: None,
     };
     crate::jobs::edit_job(
@@ -3763,51 +3861,93 @@ fn run_expand(s: &mut Session, p: &Value) -> Result<Value> {
             // Canvas Size with a transparent extension: the picture moves by the left/top pads.
             let (ow, oh) = (doc.size.width, doc.size.height);
             // No prompt: the vision-language model describes the background, and the model is
-            // asked for that alone (else it paints the subject again into the new area).
-            let mut job = job;
+            // asked for that alone (else it paints the subject again into the new area). Where
+            // the picture cuts its subject off, those sides go first, asked to continue it.
+            let mut stages: Vec<(Pads, String)> = vec![(pads, prompt.clone())];
             if describe {
                 let seen = photocraft_compose::render(doc, doc.bounds()).to_rgba8();
                 let seen = Rgba8::new(seen.width, seen.height, seen.pixels).map_err(gen_err)?;
                 let (rw, rh) = matte_request_size(seen.width, seen.height);
                 let seen = if (rw, rh) == (seen.width, seen.height) { seen } else { resize_rgba8(&seen, rw, rh)? };
-                ctx.progress(0.0, "Describing the background");
-                let said = enhance_prompt(
-                    job.thinker.as_ref(),
-                    EnhanceKind::Backdrop,
-                    ENHANCE_BACKDROP_REQUEST,
-                    Some(&seen),
-                    None,
-                    job.seed,
-                    &JobProgress::span(ctx, 0.0, 0.04),
-                );
-                if let Some(b) = said.ok().flatten() {
-                    job.prompt = expand_backdrop_prompt(&b, &pads);
-                }
+                let ask = |kind: EnhanceKind, request: &str, lo: f32, hi: f32| {
+                    enhance_prompt(thinker.as_ref(), kind, request, Some(&seen), None, seed, &JobProgress::span(ctx, lo, hi)).ok().flatten()
+                };
+                ctx.progress(0.0, "Describing the picture");
+                let backdrop = ask(EnhanceKind::Backdrop, ENHANCE_BACKDROP_REQUEST, 0.0, 0.02);
+                let cut = ask(EnhanceKind::CutEdges, ENHANCE_CUT_REQUEST, 0.02, 0.03).map(|t| cut_sides(&t)).unwrap_or_default();
+                let split = expand_stages(&pads, &cut);
+                let backdrop_prompt = |p: &Pads| backdrop.as_deref().map_or_else(|| EXPAND_DEFAULT_PROMPT.to_string(), |b| expand_backdrop_prompt(b, p));
+                let subject = if split.is_some() { ask(EnhanceKind::Subject, ENHANCE_SUBJECT_REQUEST, 0.03, 0.04) } else { None };
+                stages = match (subject, split) {
+                    (Some(subject), Some((first, rest))) => {
+                        let mut v = vec![(first, expand_subject_prompt(&subject, backdrop.as_deref(), &first))];
+                        if rest != Pads::default() {
+                            v.push((rest, backdrop_prompt(&rest)));
+                        }
+                        v
+                    }
+                    _ => vec![(pads, backdrop_prompt(&pads))],
+                };
             }
-            // The document on screen keeps its size and origin until the result lands: the
-            // pictures of the run go on the request area moved back by the pads, past the canvas.
-            ctx.preview_at(rect.translate(-(pads.left as i32), -(pads.top as i32)));
-            crate::image_cmds::translate_doc(doc, EXPAND, pads.left as i32, pads.top as i32)?;
-            doc.size = Size::new(nw, nh);
-            crate::canvas_geom::refresh(doc, crate::canvas_geom::Refresh::Shapes);
-            let old = Rect::new(pads.left as i32, pads.top as i32, (pads.left + ow) as i32, (pads.top + oh) as i32);
-            // Everything in the request that is not the old picture is to be painted.
-            let (w, h) = (rect.width() as usize, rect.height() as usize);
-            let mut coverage = vec![1.0f32; w * h];
-            for y in 0..h {
-                for x in 0..w {
-                    let (cx, cy) = (rect.x0 + x as i32, rect.y0 + y as i32);
-                    if cx >= old.x0
-                        && cx < old.x1
-                        && cy >= old.y0
-                        && cy < old.y1
-                        && let Some(c) = coverage.get_mut(y * w + x)
-                    {
-                        *c = 0.0;
+            let count = stages.len();
+            let (mut shift_x, mut shift_y) = (0i32, 0i32);
+            let mut first_layers: Vec<LayerId> = Vec::new();
+            let mut first_ms = 0u64;
+            let mut last = None;
+            for (i, (stage, stage_prompt)) in stages.into_iter().enumerate() {
+                let final_stage = i + 1 == count;
+                let (cw, ch) = (doc.size.width, doc.size.height);
+                let rect = expand_rect((cw, ch), &stage, margin);
+                shift_x += stage.left as i32;
+                shift_y += stage.top as i32;
+                if count > 1 {
+                    ctx.progress(0.0, if i == 0 { "Continuing the subject" } else { "Extending the background" });
+                }
+                // The document on screen keeps its size and origin until the result lands: the
+                // pictures of the run go on the request area moved back by the pads so far.
+                ctx.preview_at(rect.translate(-shift_x, -shift_y));
+                crate::image_cmds::translate_doc(doc, EXPAND, stage.left as i32, stage.top as i32)?;
+                doc.size = Size::new(cw + stage.left + stage.right, ch + stage.top + stage.bottom);
+                crate::canvas_geom::refresh(doc, crate::canvas_geom::Refresh::Shapes);
+                let old = Rect::new(stage.left as i32, stage.top as i32, (stage.left + cw) as i32, (stage.top + ch) as i32);
+                // Everything in the request that is not the picture so far is to be painted.
+                let (w, h) = (rect.width() as usize, rect.height() as usize);
+                let mut coverage = vec![1.0f32; w * h];
+                for y in 0..h {
+                    for x in 0..w {
+                        let (cx, cy) = (rect.x0 + x as i32, rect.y0 + y as i32);
+                        if cx >= old.x0
+                            && cx < old.x1
+                            && cy >= old.y0
+                            && cy < old.y1
+                            && let Some(c) = coverage.get_mut(y * w + x)
+                        {
+                            *c = 0.0;
+                        }
                     }
                 }
+                let filled = fill_region(
+                    doc,
+                    active,
+                    ctx,
+                    job(stage_prompt, if final_stage { variations } else { 1 }),
+                    rect,
+                    coverage,
+                    Some(Outpaint { picture: old.intersect(&rect) }),
+                )?;
+                if final_stage {
+                    last = Some(filled);
+                } else {
+                    first_ms += filled.0.iter().map(|m| m.3).sum::<u64>();
+                    first_layers.extend(filled.0.iter().map(|m| m.0));
+                }
             }
-            let (made, rw, rh, request, template_id) = fill_region(doc, active, ctx, job, rect, coverage, Some(Outpaint { picture: old.intersect(&rect) }))?;
+            let (mut made, rw, rh, request, template_id) = last.ok_or_else(|| EngineError::Other("internal error: an expand without a stage".into()))?;
+            fold_expand_stages(doc, &first_layers, &made)?;
+            for m in &mut made {
+                m.3 += first_ms;
+            }
+            let old = Rect::new(pads.left as i32, pads.top as i32, (pads.left + ow) as i32, (pads.top + oh) as i32);
             Ok((made, rw, rh, request, template_id, old))
         },
         move |(made, w, h, request, template_id, old)| {

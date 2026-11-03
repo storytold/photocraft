@@ -559,9 +559,10 @@ fn expand_grows_the_canvas_and_paints_the_added_area_in_one_step() {
     assert_eq!((r["width"].as_u64(), r["height"].as_u64()), (Some(96), Some(64)));
     // First the vision-language model describes the background (no prompt was given), then
     // the expand asks for that background alone, continuing the way the canvas grows.
-    assert_eq!(st.runs.len(), 2, "the description, then the expand");
+    assert_eq!(st.runs.len(), 3, "the background, the cut edges (none here), then the expand");
     assert_eq!(st.runs[0].request["prompt"], ENHANCE_BACKDROP_REQUEST);
-    let g = &st.runs[1].request;
+    assert_eq!(st.runs[1].request["prompt"], ENHANCE_CUT_REQUEST);
+    let g = &st.runs[2].request;
     let prompt = g["prompt"].as_str().unwrap_or_default().to_string();
     assert!(prompt.contains("the same Enhanced: Describe the background of this picture continuing outward, empty, with no people"), "{prompt}");
     // The model's reference is the picture alone: the 64×48 picture at (0, 0) of the 96×64
@@ -569,8 +570,8 @@ fn expand_grows_the_canvas_and_paints_the_added_area_in_one_step() {
     assert_eq!((g["params"]["ref_x"].as_u64(), g["params"]["ref_y"].as_u64()), (Some(0), Some(0)));
     let (cw, ch) = (g["params"]["ref_w"].as_u64().unwrap(), g["params"]["ref_h"].as_u64().unwrap());
     assert!((330..=352).contains(&cw) && (240..=264).contains(&ch), "{cw}×{ch}");
-    // (pictures[0] is what the describer saw; [1] is the expand request's picture.)
-    let sent = st.pictures[1].clone();
+    // (pictures[0] and [1] are what the describer saw; [2] is the expand request's picture.)
+    let sent = st.pictures[2].clone();
     assert!(sent.data.as_chunks::<4>().0.iter().all(|p| p[3] == 255), "no transparent pixels reach the model");
     // The added canvas reaches the model continuing the picture's edge pixels (the 96×64 rect
     // goes out at 512 px wide), not as a wall of grey.
@@ -985,4 +986,59 @@ fn an_expand_without_a_prompt_asks_for_the_background_alone() {
     let st = fake.state();
     assert_eq!(st.runs.len(), 1);
     assert!(st.runs[0].request["prompt"].as_str().unwrap().contains("more sea"));
+}
+
+#[test]
+fn expand_stages_continue_the_subject_first_and_the_far_side_last() {
+    assert_eq!(cut_sides("cut off at: bottom, Left."), Pads { left: 1, top: 0, right: 0, bottom: 1 });
+    assert_eq!(cut_sides("not cut off at all"), Pads::default());
+    let all = Pads { left: 500, top: 500, right: 500, bottom: 500 };
+    // A portrait cut at the chest: everything but the top first, then the top.
+    let (first, rest) = expand_stages(&all, &Pads { bottom: 1, ..Pads::default() }).unwrap();
+    assert_eq!(first, Pads { left: 500, top: 0, right: 500, bottom: 500 });
+    assert_eq!(rest, Pads { top: 500, ..Pads::default() });
+    // Cut at the left: the right side is the far side.
+    let (first, rest) = expand_stages(&all, &Pads { left: 1, ..Pads::default() }).unwrap();
+    assert_eq!((first.right, rest.right, rest.left), (0, 500, 0));
+    // No side that grows cuts the subject off: one stage.
+    assert!(expand_stages(&Pads { top: 500, ..Pads::default() }, &Pads { bottom: 1, ..Pads::default() }).is_none());
+    assert!(expand_stages(&all, &Pads::default()).is_none());
+    let p = expand_subject_prompt("The woman in a white ruffled top.", Some("a plain warm brown studio backdrop"), &Pads { bottom: 500, ..Pads::default() });
+    assert_eq!(
+        p,
+        "the same woman in a white ruffled top continuing downward naturally past the edge, the body and clothing completed in front of the same plain warm brown studio backdrop, with no additional people"
+    );
+}
+
+#[test]
+fn a_blank_expand_of_a_cut_off_subject_runs_in_two_stages_and_leaves_one_layer() {
+    let fake = FakeNative::start_with(Options { enhanced_text: Some("cut off at: bottom".into()), ..Options::default() }).unwrap();
+    let mut s = session(&fake.url);
+    s.execute("select.deselect", json!({})).unwrap();
+    let before = composite(&s);
+    let (layers, steps) = {
+        let d = s.active().unwrap();
+        (d.doc.layers.len(), d.history.past_len())
+    };
+    let r = s.execute(EXPAND, json!({"left": 16, "top": 16, "right": 16, "bottom": 16, "seed": 5})).unwrap();
+    assert_eq!(r["canvas"], json!([96, 80]));
+    assert_eq!(r["offset"], json!([16, 16]));
+    let st = fake.state();
+    let expands: Vec<_> = st.runs.iter().filter(|r| r.run.task == "expand").collect();
+    assert_eq!(expands.len(), 2, "her body first, then the far side");
+    assert!(expands[0].request["prompt"].as_str().unwrap().contains("naturally past the edge"), "{}", expands[0].request["prompt"]);
+    assert!(expands[1].request["prompt"].as_str().unwrap().contains("continuing upward, empty"), "{}", expands[1].request["prompt"]);
+    drop(st);
+    let d = s.active().unwrap();
+    assert_eq!((d.doc.size.width, d.doc.size.height), (96, 80));
+    assert_eq!(d.doc.layers.len(), layers + 1, "the stages fold into one layer");
+    assert_eq!(d.history.past_len(), steps + 1, "one undo step");
+    let after = composite(&s);
+    assert_eq!(after.get(16 + 20, 16 + 20), before.get(20, 20), "the old picture is untouched");
+    for (x, y) in [(2, 2), (94, 2), (2, 78), (94, 78), (48, 2), (48, 78)] {
+        assert!(close(after.get(x, y), FAKE_COLOR), "painted at ({x}, {y})");
+    }
+    assert!(s.undo());
+    let d = s.active().unwrap();
+    assert_eq!((d.doc.size.width, d.doc.size.height), (64, 48));
 }
