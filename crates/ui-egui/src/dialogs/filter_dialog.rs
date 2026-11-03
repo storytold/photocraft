@@ -219,11 +219,6 @@ fn is_pixel_param_of(command: &str, key: &str) -> bool {
 ///
 /// Content-Aware Fill searches for matching patches, and the matches found on a reduced copy
 /// differ from those found at full size, so its preview would not show what OK writes (#6530).
-///
-/// Minimum and Maximum fail the same way as Dust & Scratches (#3265): their kernels measure the
-/// radius in whole pixels (Squareness rounds it, Roundness floors it, and 0 is the identity), so
-/// at k = 4 a typed radius of 1.5 px scales to 0.375 px, which becomes 0: the preview shows the
-/// untouched document while OK applies a real 1.5 px / 1 px effect (#10474).
 const FULL_RESOLUTION_PREVIEW: &[&str] = &[
     "filter.distort.ripple",
     "filter.stylize.diffuse",
@@ -235,8 +230,6 @@ const FULL_RESOLUTION_PREVIEW: &[&str] = &[
     "filter.noise.dustAndScratches",
     "filter.noise.reduceNoise",
     "filter.other.custom",
-    "filter.other.minimum",
-    "filter.other.maximum",
     "filter.video.deInterlace",
     "filter.stylize.traceContour",
     "filter.stylize.wind",
@@ -283,6 +276,16 @@ pub fn preview_factor(command: &str, params: &Value, k: u32) -> u32 {
         },
         _ => k,
     });
+    // Minimum and Maximum measure the radius in whole pixels (Squareness rounds it, Roundness
+    // floors it, and 0 is the identity), so at k = 4 a typed 1.5 px became 0.375 = 0 proxy px and
+    // the preview showed the untouched document while OK applied a real effect (#10474). Keep at
+    // least one proxy pixel of radius; a large radius still previews on the proxy.
+    if matches!(command, "filter.other.minimum" | "filter.other.maximum") {
+        return match params.get("radius").and_then(Value::as_f64) {
+            Some(v) if v.is_finite() => k.min(v.floor().clamp(1.0, f64::from(k)) as u32),
+            _ => k,
+        };
+    }
     // Mosaic rounds its cells to whole pixels: 10 px cells at k = 4 became 3 proxy px = 12 px.
     // Divide the cell size evenly instead.
     match params.get("cellSize").and_then(Value::as_f64) {

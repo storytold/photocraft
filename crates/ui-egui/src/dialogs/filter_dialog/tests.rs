@@ -955,8 +955,8 @@ fn fixed_size_filters_preview_at_the_scale_they_apply() {
         ("filter.noise.reduceNoise", json!({})),
         ("filter.other.custom", json!({"kernel": edge})),
         // #10474: Minimum and Maximum work on whole-pixel radii (`round()` / `floor()`), so at
-        // k = 4 a typed 1.5 px radius previews as 0.375 px = 0 px: the proxy shows the untouched
-        // document while OK writes a real 1.5 / 1 px effect. Same failure mode as Dust & Scratches.
+        // k = 4 a typed 1.5 px radius previewed as 0.375 px = 0 px: the proxy showed the untouched
+        // document while OK writes a real 1.5 / 1 px effect. A radius under 2 px previews at k = 1.
         ("filter.other.minimum", json!({"radius": 1.5, "preserve": "squareness"})),
         ("filter.other.minimum", json!({"radius": 1.5, "preserve": "roundness"})),
         ("filter.other.maximum", json!({"radius": 1.5, "preserve": "squareness"})),
@@ -1033,6 +1033,15 @@ fn proxy_previews_scale_only_lengths() {
     assert_eq!(preview_factor("filter.pixelate.mosaic", &json!({"cellSize": "x"}), 4), 4);
     let (k, diff) = error("filter.pixelate.mosaic", json!({"cellSize": 10.0}));
     assert!(k == 2 && diff < 0.01, "Mosaic: {diff}");
+    // Minimum and Maximum keep at least one proxy pixel of radius (#10474), and a large radius
+    // keeps the full proxy instead of a full-size preview that costs minutes at radius 500.
+    for cmd in ["filter.other.minimum", "filter.other.maximum"] {
+        for preserve in ["squareness", "roundness"] {
+            let k = |radius: f64| preview_factor(cmd, &json!({"radius": radius, "preserve": preserve}), 4);
+            assert_eq!([k(0.2), k(1.5), k(2.5), k(3.9), k(50.0), k(500.0)], [1, 1, 2, 3, 4, 4], "{cmd} {preserve}");
+        }
+        assert_eq!(preview_factor(cmd, &json!({"radius": "x"}), 4), 4, "{cmd}: a junk radius keeps the proxy");
+    }
     // Tree's and Picture Frame's sizes are relative, not pixels (and not shown as "px").
     assert!(!is_pixel_param_of("filter.render.tree", "size") && !is_pixel_param_of("filter.render.pictureFrame", "size"));
     assert!(is_pixel_param_of("filter.stylize.extrude", "size"));
