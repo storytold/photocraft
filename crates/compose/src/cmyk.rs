@@ -207,6 +207,33 @@ pub fn blend_ink(mode: BlendMode, cb: [f32; 4], cs: [f32; 4]) -> [f32; 4] {
     [ink(cmy[0], 0), ink(cmy[1], 1), ink(cmy[2], 2), ink(k[0], 3)]
 }
 
+/// [`blend_ink`] for a layer at `fill` (0..1): for the special eight
+/// ([`super::psblend::fill_is_special`]) Fill below 100% changes the blend itself
+/// ([`super::psblend::blend_rgb_fill`], on each ink's brightness); every other mode, or
+/// `fill >= 1`, is plain [`blend_ink`]. The adjustment-layer counterpart of
+/// [`composite_ink_fill`]'s blend (there is no source alpha to composite, only a result to mix).
+fn blend_ink_fill(mode: BlendMode, cb: [f32; 4], cs: [f32; 4], fill: f32) -> [f32; 4] {
+    let f = fill.clamp(0.0, 1.0);
+    if f >= 1.0 || !super::psblend::fill_is_special(mode) {
+        return blend_ink(mode, cb, cs);
+    }
+    let b = |i: usize| 1.0 - cb[i];
+    let s = |i: usize| 1.0 - cs[i];
+    let cmy = super::psblend::blend_rgb_fill(mode, [b(0), b(1), b(2)], [s(0), s(1), s(2)], f);
+    let k = super::psblend::blend_rgb_fill(mode, [b(3); 3], [s(3); 3], f);
+    // A result that is one of the inputs is that ink exactly (as in `blend_ink`).
+    let ink = |r: f32, i: usize| {
+        if r == s(i) {
+            cs[i]
+        } else if r == b(i) {
+            cb[i]
+        } else {
+            1.0 - r
+        }
+    };
+    [ink(cmy[0], 0), ink(cmy[1], 1), ink(cmy[2], 2), ink(k[0], 3)]
+}
+
 /// [`composite_ink`] for a layer with separate `opacity` and `fill`, as the RGB compositor's
 /// `psblend::composite_fill` does on each channel: for the special eight below 100% Fill the
 /// source is blended at full strength pulled toward the mode's neutral colour
@@ -401,14 +428,22 @@ fn adjust_inks(adj: &Adjustment, buf: &mut CmykBuffer, depth: SampleType) {
 }
 
 /// Mixes an adjustment's result back into `base` in the layer's blend mode, by its opacity and
-/// mask; coverage is unchanged (the compositor's adjustment mix).
-fn mix_adjusted(l: &Layer, base: &mut CmykBuffer, adjusted: &CmykBuffer, cx: &Ctx) {
+/// mask; coverage is unchanged (the compositor's adjustment mix). `fill_special` is set for an
+/// unclipped adjustment layer, where Fill below 100% in one of Photoshop's special eight
+/// ([`super::psblend::fill_is_special`]) is part of the blend and only Opacity covers the
+/// backdrop: the compositor's adjustment mix does the same (#9501). A clipped adjustment is
+/// mixed atop its base as if the base were opaque, where the compositor keeps Fill as coverage
+/// (`composite_atop_any`), so it passes `false`.
+fn mix_adjusted(l: &Layer, base: &mut CmykBuffer, adjusted: &CmykBuffer, cx: &Ctx, fill_special: bool) {
     let opacity = l.opacity * l.fill_opacity;
+    let special = fill_special && l.fill_opacity < 1.0 && super::psblend::fill_is_special(l.blend);
+    let fill = l.fill_opacity.clamp(0.0, 1.0);
+    let coverage = if special { l.opacity } else { opacity };
     let rect = base.rect;
     let w = (rect.width() as usize).max(1);
     let mv = mask_vals(l, rect, cx);
     for (i, (p, a)) in base.px.iter_mut().zip(&adjusted.px).enumerate() {
-        let k = opacity * mask_at(&mv, i);
+        let k = coverage * mask_at(&mv, i);
         if k <= 0.0 {
             continue;
         }
@@ -422,7 +457,9 @@ fn mix_adjusted(l: &Layer, base: &mut CmykBuffer, adjusted: &CmykBuffer, cx: &Ct
             }
             continue;
         }
-        let bl = blend_ink(l.blend, [p[0], p[1], p[2], p[3]], [a[0], a[1], a[2], a[3]]);
+        let cb = [p[0], p[1], p[2], p[3]];
+        let cs = [a[0], a[1], a[2], a[3]];
+        let bl = if special { blend_ink_fill(l.blend, cb, cs, fill) } else { blend_ink(l.blend, cb, cs) };
         for (v, b) in p.iter_mut().zip(bl) {
             *v = if k >= 1.0 { b } else { *v + (b - *v) * k };
         }
@@ -450,7 +487,8 @@ fn composite_clipped(clipped: &[Layer], base: &mut CmykBuffer, cx: &Ctx) {
         if let LayerContent::Adjustment(adj) = &c.content {
             let mut adjusted = base.clone();
             adjust_inks(adj, &mut adjusted, cx.depth);
-            mix_adjusted(c, base, &adjusted, cx);
+            // Clipped onto its base as if opaque: the compositor keeps Fill as coverage there.
+            mix_adjusted(c, base, &adjusted, cx, false);
             continue;
         }
         let content = layer_content(c, base.rect, cx);
@@ -554,7 +592,7 @@ fn composite_layer(l: &Layer, clipped: &[Layer], backdrop: &mut CmykBuffer, cx: 
         let mut adjusted = backdrop.clone();
         adjust_inks(adj, &mut adjusted, cx.depth);
         composite_clipped(clipped, &mut adjusted, cx);
-        mix_adjusted(l, backdrop, &adjusted, cx);
+        mix_adjusted(l, backdrop, &adjusted, cx, true);
         return;
     }
     let mut content = layer_content(l, rect, cx);
