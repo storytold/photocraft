@@ -151,3 +151,107 @@ fn selected_layer_exports_over_the_own_file_keep_the_document_unsaved() {
         assert_eq!(app.session.active().unwrap().path.as_deref(), Some("own.png"));
     }
 }
+
+#[test]
+fn copy_overwrite_uses_actual_tiff_layer_support() {
+    for mode in ["rgb", "gray", "cmyk", "lab"] {
+        for command in ["file.saveACopy", "file.saveAs"] {
+            let mut app = app_at("own.tif");
+            app.run("file.new", json!({"width": 4, "height": 4, "mode": mode})).unwrap();
+            app.run("layer.new.layer", json!({})).unwrap();
+            app.session.active_mut().unwrap().saved_to("own.tif".into());
+            let bytes = Rc::new(RefCell::new(Vec::new()));
+            let written = bytes.clone();
+            app.services.write = Some(Box::new(move |_, data| {
+                *written.borrow_mut() = data.to_vec();
+                Ok(())
+            }));
+            let reply = app.replay_save(command, &json!({"path": "own.tif", "tiffLayers": true})).unwrap();
+            assert_eq!(photocraft_codecs::tiff_photoshop_tags(&bytes.borrow()).1.is_some(), mode != "lab", "{mode}, {command}");
+            assert_eq!(app.has_unsaved_work(), mode == "lab", "{mode}, {command}");
+            assert_eq!(app.session.active().unwrap().doc.layers.len(), 2);
+            if mode == "lab" {
+                assert!(!reply["warnings"].as_array().unwrap().is_empty());
+            }
+        }
+    }
+}
+
+#[test]
+fn copy_overwrite_preserves_a_hard_link_source_but_replaces_a_symlink_target() {
+    let dir = tempfile::tempdir().unwrap();
+    for export in [false, true] {
+        for symlink in [false, true] {
+            let own = dir.path().join(format!("own-{export}-{symlink}.tif")).to_string_lossy().into_owned();
+            let alias = dir.path().join(format!("alias-{export}-{symlink}.tif")).to_string_lossy().into_owned();
+            std::fs::write(&own, b"original saved file").unwrap();
+            if symlink {
+                #[cfg(unix)]
+                std::os::unix::fs::symlink(&own, &alias).unwrap();
+                #[cfg(not(unix))]
+                continue;
+            } else {
+                std::fs::hard_link(&own, &alias).unwrap();
+            }
+            let mut app = app_at(&own);
+            app.services.write = Some(Box::new(|path, bytes| photocraft_format::atomic_write(std::path::Path::new(path), bytes).map_err(|e| e.to_string())));
+            let (command, params) = if export {
+                (crate::export_dialog::COMMAND, json!({"path": alias, "format": "tif", "scale": 50}))
+            } else {
+                ("file.saveACopy", json!({"path": alias, "tiffLayers": false}))
+            };
+            app.replay_save(command, &params).unwrap();
+            assert_eq!(app.has_unsaved_work(), symlink, "export={export}, symlink={symlink}");
+            assert_eq!(std::fs::read(&own).unwrap() == b"original saved file", !symlink);
+        }
+    }
+}
+
+#[test]
+fn copy_overwrite_refreshes_only_its_own_successful_write_stamp() {
+    for automation in [false, true] {
+        for (target, fail) in [("own.tif", false), ("own.tif", true), ("copy.tif", false)] {
+            let mut app = app_at("own.tif");
+            let stamps = Rc::new(RefCell::new(std::collections::HashMap::from([("own.tif".to_string(), 1)])));
+            let read = stamps.clone();
+            app.services.file_stamp = Some(Box::new(move |path| read.borrow().get(path).map(|len| crate::services::FileStamp { len: *len, modified: None })));
+            let doc = app.session.active().unwrap().doc.id;
+            app.remember_stamp(doc, "own.tif");
+            let written = stamps.clone();
+            let writer = move |path: &str, _: &[u8]| {
+                if fail {
+                    return Err("disk full".into());
+                }
+                written.borrow_mut().insert(path.into(), 2);
+                Ok(())
+            };
+            let params = json!({"path": target, "tiffLayers": false});
+            let reply = if automation {
+                app.services.automation_write = Some(Box::new(writer));
+                let choices = crate::FormatChoices::from_params(&params, "app.save").unwrap();
+                app.save_automation_with(Some(target.into()), choices)
+            } else {
+                app.services.write = Some(Box::new(writer));
+                app.replay_save("file.saveACopy", &params)
+            };
+            assert_eq!(reply.is_err(), fail);
+            assert!(!app.changed_on_disk(doc, "own.tif"), "the app's own write is already acknowledged");
+            assert_eq!(app.disk_stamps[&doc].0, "own.tif");
+            assert_eq!(app.disk_stamps[&doc].1.len, if target == "own.tif" && !fail { 2 } else { 1 });
+            stamps.borrow_mut().insert("own.tif".into(), 3);
+            assert!(app.changed_on_disk(doc, "own.tif"), "a later external write must still be detected");
+        }
+    }
+}
+
+#[test]
+fn copy_overwrite_from_the_tiff_prompt_uses_actual_layer_support() {
+    let mut app = app_at("own.tif");
+    app.run("file.new", json!({"width": 4, "height": 4, "mode": "lab"})).unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.session.active_mut().unwrap().saved_to("own.tif".into());
+    app.save_as(Some("own.tif".into())).unwrap();
+    assert!(!app.tiff_options.as_ref().unwrap().discard_layers);
+    crate::tiff_options_ui::confirm(&mut app, &egui::Context::default());
+    assert!(app.has_unsaved_work(), "the encoder falls back to flat TIFF despite the Layers answer");
+}

@@ -47,8 +47,8 @@ fn other(e: impl std::fmt::Display) -> EngineError {
 /// All export writers invalidate the file's savepoints only once that file was written. A later
 /// slice failure must not leave an earlier replacement looking saved.
 fn write_export(s: &mut Session, path: &str, bytes: &[u8], write: &mut dyn FnMut(&str, &[u8]) -> Result<()>) -> Result<()> {
-    let overwritten = s.savepoints_at(path);
     write(path, bytes)?;
+    let overwritten = s.savepoints_at(path);
     s.invalidate_savepoints(&overwritten);
     Ok(())
 }

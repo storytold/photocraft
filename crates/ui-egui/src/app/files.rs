@@ -284,7 +284,8 @@ impl PhotocraftApp {
         // A TIFF asks for TIFF Options (compression, pyramid, transparency, layers); the save
         // continues from the prompt, which records the step once answered.
         if choices.tiff.is_none() && tiff_options_ui::wants_prompt(self, &path) {
-            tiff_options_ui::park(self, path.clone(), false, "file.saveAs")?;
+            let copy = self.saves_copy(&path, None)?;
+            tiff_options_ui::park(self, path.clone(), copy, "file.saveAs")?;
             return Ok(serde_json::json!({"path": path, "warnings": []}));
         }
         let tiff_layers = choices.tiff.and_then(|t| t.layers);
@@ -430,7 +431,7 @@ impl PhotocraftApp {
         // so the editable document isn't marked saved after losing them (#3806).
         let st = self.session.active().ok_or("no document")?;
         let tiff = |p: &str| matches!(photocraft_engine::file_cmds::extension(p).as_deref(), Some("tif" | "tiff"));
-        let holds = photocraft_engine::file_cmds::holds_at(&st.doc, path) || tiff(path);
+        let holds = photocraft_engine::file_cmds::holds_at(&st.doc, path) || (tiff(path) && photocraft_io::tiff_layers::supports_layers(&st.doc));
         let lives_layered = st.path.as_deref().is_some_and(|p| photocraft_engine::file_cmds::saves_in_place(p) || tiff(p));
         Ok(tiff_layers == Some(false) || (!holds && (plain_raster(&st.doc).is_none() || lives_layered)))
     }
@@ -468,42 +469,50 @@ impl PhotocraftApp {
         let write = self.services.write.as_mut().ok_or("no writer configured")?;
         write(&path, &bytes)?;
         if invalidate {
-            self.invalidate_savepoint(doc);
+            self.invalidate_savepoint(doc, &path);
         }
         let revision = saved_revision_after_write(!self.services.write_unconfirmed, written, previous);
         self.saved(doc, revision, &path, &warnings, copy);
         Ok(Some((path, warnings)))
     }
 
-    /// Decide before writing: atomic replacement can break a hard-link alias. A layered copy
-    /// keeps the editable document; flat copies can change pixels, alpha or layers, so their
-    /// successful replacement invalidates the source's saved state.
+    /// A layered copy keeps the editable document; flat copies can change pixels, alpha or
+    /// layers. Recheck file identity after writing before invalidating its saved state.
     pub(crate) fn copy_overwrites_savepoint(&self, doc: &photocraft_doc::Document, path: &str, settings: &ExportSettings) -> bool {
         let Some(st) = self.session.documents().iter().find(|st| st.doc.id == doc.id) else { return false };
-        let layered = photocraft_engine::file_cmds::holds_at(doc, path) || (tiff_options_ui::is_tiff_path(path) && settings.tiff_layers);
+        let layered = photocraft_engine::file_cmds::holds_at(doc, path)
+            || (tiff_options_ui::is_tiff_path(path) && settings.tiff_layers && photocraft_io::tiff_layers::supports_layers(doc));
         st.path.as_deref().is_some_and(|own| photocraft_engine::file_cmds::same_file(own, path)) && !layered
     }
 
-    /// A successful write replaced the file behind this savepoint; undo cannot restore it.
-    pub(crate) fn invalidate_savepoint(&mut self, doc: DocId) {
-        self.session.invalidate_savepoints(&[doc]);
+    /// A successful incomplete write may have replaced this document's file. Atomic replacement
+    /// of a different hard-link entry leaves its own file intact.
+    pub(crate) fn invalidate_savepoint(&mut self, doc: DocId, path: &str) {
+        if self.session.savepoints_at(path).contains(&doc) {
+            self.session.invalidate_savepoints(&[doc]);
+        }
     }
 
-    /// Export As and layer exports may resize or replace the composite. Capture all open
-    /// documents bound to the destination before the write, then invalidate them only on success.
-    pub(crate) fn export_overwrites_savepoints(&self, path: &str) -> Vec<DocId> {
-        self.session.savepoints_at(path)
+    /// Record this app's write only when it replaced the document's bound file; a copy elsewhere
+    /// must not hide later external changes to the source.
+    pub(crate) fn remember_written_savepoint(&mut self, doc: DocId, path: &str) {
+        if let Some(own) = self.session.documents().iter().find(|st| st.doc.id == doc).and_then(|st| st.path.clone())
+            && photocraft_engine::file_cmds::same_file(&own, path)
+        {
+            self.remember_stamp(doc, &own);
+        }
     }
 
-    pub(crate) fn exported_over_savepoints(&mut self, docs: &[DocId]) {
+    /// Export As and layer exports may resize or replace the composite. Invalidate documents
+    /// still bound to the destination after the successful write.
+    pub(crate) fn exported_over_savepoints(&mut self, path: &str) {
+        let docs = self.session.savepoints_at(path);
         if docs.is_empty() {
             return;
         }
-        self.session.invalidate_savepoints(docs);
-        for &doc in docs {
-            if let Some(own) = self.session.documents().iter().find(|st| st.doc.id == doc).and_then(|st| st.path.clone()) {
-                self.remember_stamp(doc, &own);
-            }
+        self.session.invalidate_savepoints(&docs);
+        for doc in docs {
+            self.remember_written_savepoint(doc, path);
         }
         self.sync_views();
     }
@@ -606,9 +615,9 @@ impl PhotocraftApp {
             if hooks {
                 self.push_recent(path);
             }
-        } else if self.disk_stamps.get(&doc).is_some_and(|(own, _)| own == path) {
-            // A copy written over the document's own file is this app's change too.
-            self.remember_stamp(doc, path);
+        }
+        if copy || !arm {
+            self.remember_written_savepoint(doc, path);
         }
         self.ui.status_error = false;
         let what = crate::i18n::fmt(tl!("Saved {name}"), &[("name", file_open::display_name(path).as_str())]);
@@ -709,7 +718,7 @@ impl PhotocraftApp {
         let write = self.services.automation_write.as_mut().ok_or("automation write authority is not configured")?;
         write(&target, &bytes)?;
         if invalidate {
-            self.invalidate_savepoint(doc);
+            self.invalidate_savepoint(doc, &target);
         }
         self.saved_automation(doc, revision, &target, &warnings, false);
         Ok(reply(&target, &warnings))

@@ -34,3 +34,18 @@ fn quick_export_overwrites_invalidate_the_open_file_in_every_format() {
         assert!(s.active().unwrap().is_dirty(), "{ext}: export options may change the saved composite");
     }
 }
+
+#[test]
+fn copy_overwrite_quick_export_to_a_hard_link_preserves_the_original_savepoint() {
+    let dir = tempfile::tempdir().unwrap();
+    let own = dir.path().join("own.png").to_string_lossy().into_owned();
+    let alias = dir.path().join("alias.png").to_string_lossy().into_owned();
+    std::fs::write(&own, b"saved original").unwrap();
+    std::fs::hard_link(&own, &alias).unwrap();
+    let mut s = session(8);
+    s.active_mut().unwrap().saved_to(own.clone());
+    s.execute("file.export.quickExport", json!({"path": alias})).unwrap();
+    assert!(!s.active().unwrap().is_dirty());
+    assert_eq!(std::fs::read(&own).unwrap(), b"saved original");
+    assert_ne!(std::fs::read(&alias).unwrap(), b"saved original");
+}

@@ -1168,3 +1168,26 @@ fn open_identity_keeps_same_poll_results_in_the_profile_queue() {
     assert!(app.held_opens.is_empty());
     control.assert_untouched(&app);
 }
+
+#[test]
+fn background_copy_overwrite_rechecks_file_identity_after_atomic_replacement() {
+    let dir = tempfile::tempdir().unwrap();
+    let own = dir.path().join("own.tif").to_string_lossy().into_owned();
+    let alias = dir.path().join("alias.tif").to_string_lossy().into_owned();
+    std::fs::write(&own, b"saved original").unwrap();
+    std::fs::hard_link(&own, &alias).unwrap();
+    let mut h = app_harness();
+    h.state_mut().session.active_mut().unwrap().saved_to(own.clone());
+    h.state_mut().services.save_file = Some(Arc::new(|doc, path, settings, ctl| {
+        ctl.check()?;
+        let result = photocraft_io::export(doc, path, &settings.io_options()).map_err(|e| e.to_string())?;
+        photocraft_format::atomic_write(std::path::Path::new(path), &result.bytes).map_err(|e| e.to_string())?;
+        Ok(result.warnings)
+    }));
+    let settings = crate::ExportSettings { tiff_layers: false, ..Default::default() };
+    assert_eq!(h.state_mut().write_document(alias.clone(), &settings, true), Ok(None));
+    step_until(&mut h, |app| !app.saving());
+    assert!(!h.state().has_unsaved_work());
+    assert_eq!(std::fs::read(&own).unwrap(), b"saved original");
+    assert_ne!(std::fs::read(&alias).unwrap(), b"saved original");
+}

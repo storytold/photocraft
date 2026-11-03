@@ -121,8 +121,8 @@ impl crate::DocState {
 }
 
 impl Session {
-    /// Open documents whose saved file a write would replace. Capture before writing: atomic
-    /// replacement can break a hard-link alias that identified the original file.
+    /// Open documents bound to this file. Check after a successful write: atomic replacement of
+    /// a hard-link alias leaves the original file intact, while symlinks still reach the target.
     pub fn savepoints_at(&self, path: &str) -> Vec<photocraft_doc::DocId> {
         self.docs.iter().filter(|st| st.path.as_deref().is_some_and(|own| same_file(own, path))).map(|st| st.doc.id).collect()
     }

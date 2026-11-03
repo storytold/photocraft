@@ -631,8 +631,9 @@ pub(crate) fn write_copy(app: &mut PhotocraftApp, doc: &photocraft_doc::Document
     let write = app.services.write.as_mut().ok_or("no writer configured")?;
     write(path, &bytes)?;
     if invalidate {
-        app.invalidate_savepoint(doc.id);
+        app.invalidate_savepoint(doc.id, path);
     }
+    app.remember_written_savepoint(doc.id, path);
     app.detach_others_from_file(path, doc.id);
     app.sync_views();
     let template = "Saved a copy as {path}";

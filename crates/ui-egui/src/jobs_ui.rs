@@ -326,7 +326,7 @@ pub fn start_save(
         Started::Done(v) => {
             let warnings = warnings_of(&v);
             if invalidate_savepoint {
-                app.invalidate_savepoint(doc);
+                app.invalidate_savepoint(doc, &path);
             }
             if automation {
                 app.saved_automation(doc, revision, &path, &warnings, copy);
@@ -359,7 +359,7 @@ fn finish_save(app: &mut PhotocraftApp, ctx: &egui::Context, save: SaveJob, labe
     match outcome {
         JobOutcome::Done(v) => {
             if save.invalidate_savepoint {
-                app.invalidate_savepoint(save.doc);
+                app.invalidate_savepoint(save.doc, &save.path);
             }
             if save.automation {
                 app.saved_automation(save.doc, save.revision, &save.path, &warnings_of(&v), save.copy);

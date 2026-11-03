@@ -2411,3 +2411,35 @@ fn open_as_and_place_keep_the_typed_hard_budget_fields() {
         });
     });
 }
+
+#[test]
+fn copy_overwrite_marks_a_lab_tiff_unsaved_even_when_layers_are_requested() {
+    let dir = tempfile::tempdir().unwrap();
+    for depth in [8, 16, 32] {
+        let path = dir.path().join(format!("own-{depth}.tif")).to_string_lossy().into_owned();
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 4, "height": 4, "mode": "lab", "depth": depth})).unwrap();
+        s.execute("layer.new.layer", json!({})).unwrap();
+        s.active_mut().unwrap().saved_to(path.clone());
+        let reply = s.execute("file.saveACopy", json!({"path": path, "overwrite": true, "tiffLayers": true})).unwrap();
+        assert!(s.active().unwrap().is_dirty(), "depth={depth}");
+        assert!(!reply["warnings"].as_array().unwrap().is_empty());
+        assert!(photocraft_codecs::tiff_photoshop_tags(&std::fs::read(&path).unwrap()).1.is_none());
+    }
+}
+
+#[test]
+fn copy_overwrite_of_a_hard_link_leaves_the_original_savepoint_clean() {
+    let dir = tempfile::tempdir().unwrap();
+    let own = dir.path().join("own.tif").to_string_lossy().into_owned();
+    let alias = dir.path().join("alias.tif").to_string_lossy().into_owned();
+    std::fs::write(&own, b"saved original").unwrap();
+    std::fs::hard_link(&own, &alias).unwrap();
+    let mut s = session(4, 4, 8);
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.active_mut().unwrap().saved_to(own.clone());
+    s.execute("file.saveACopy", json!({"path": alias, "overwrite": true, "tiffLayers": false})).unwrap();
+    assert!(!s.active().unwrap().is_dirty());
+    assert_eq!(std::fs::read(&own).unwrap(), b"saved original");
+    assert_ne!(std::fs::read(&alias).unwrap(), b"saved original");
+}
