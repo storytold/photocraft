@@ -216,6 +216,24 @@ pub fn raw_exif(bytes: &[u8]) -> Option<Vec<u8>> {
     Some(crate::codecs::tiff_exif::block(&dirs))
 }
 
+/// [`raw_exif`] for a raw that keeps each EXIF directory as the first one of its own classic TIFF
+/// stream, as Canon CR3 does: `ifd0` holds IFD0's tags (make, model, date…), `exif` the Exif
+/// directory, `gps` the GPS directory. A stream in another byte order than the first one given is
+/// left out. `None` when none of them has these tags.
+pub fn raw_exif_from_directories(ifd0: Option<&[u8]>, exif: Option<&[u8]>, gps: Option<&[u8]>) -> Option<Vec<u8>> {
+    let dirs = crate::codecs::tiff_exif::read_directories(ifd0, exif, gps).filter(|d| d.has_directories() || !d.ifd0.is_empty())?;
+    Some(crate::codecs::tiff_exif::block(&dirs))
+}
+
+/// [`raw_exif`] for a raw whose EXIF is in the camera's JPEG, as Fujifilm RAF's is: the JPEG's
+/// APP1 EXIF without orientation or pixel dimensions (the JPEG's, not the developed image's). Only
+/// the marker segments are read, not the picture. `None` when the JPEG has none of these tags.
+pub fn raw_exif_from_jpeg(jpeg: &[u8]) -> Option<Vec<u8>> {
+    let exif = crate::codecs::jpeg::scan_metadata(jpeg).exif?;
+    let dirs = crate::codecs::tiff_exif::read_camera_jpeg(&exif).filter(|d| d.has_directories() || !d.ifd0.is_empty())?;
+    Some(crate::codecs::tiff_exif::block(&dirs))
+}
+
 /// The limits check and the orientation, shared by every decoder.
 fn finish_decode(img: Image, o: u16, opts: &DecodeOptions) -> Result<Image, CodecError> {
     let l = &opts.limits;

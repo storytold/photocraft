@@ -15,7 +15,7 @@ use std::sync::Arc;
 use photocraft_cms::{Builtin, Intent, Profile, Transform};
 use photocraft_codecs::{self as codecs, ChannelLayout, Format, Image, SampleType};
 pub use photocraft_raw::Demosaic;
-use photocraft_raw::{CameraLook, DevelopOptions, Limits, PreviewColorSpace, RawError, Reference, Sensor, WhiteBalance};
+use photocraft_raw::{CameraLook, DevelopOptions, ExifSource, Limits, PreviewColorSpace, RawError, Reference, Sensor, WhiteBalance};
 pub use photocraft_raw::{EXTENSIONS, Tone, retone};
 
 use crate::flat::image_to_document;
@@ -170,12 +170,20 @@ fn wb_gains(temperature: f32, tint: f32) -> [f64; 3] {
     photocraft_algo::camera_raw::white_balance_gains(temperature.clamp(-100.0, 100.0), tint.clamp(-100.0, 100.0)).map(f64::from)
 }
 
+/// The raw's own EXIF (camera, lens, exposure, date), for File Info's Camera Data: from its TIFF
+/// stream, a CR3's CMT boxes or a RAF's camera JPEG. It carries no orientation: the image opened
+/// from the raw is already upright.
+fn camera_exif(bytes: &[u8]) -> Option<Vec<u8>> {
+    codecs::raw_exif(bytes).or_else(|| match photocraft_raw::exif_source(bytes)? {
+        ExifSource::Directories { ifd0, exif, gps } => codecs::raw_exif_from_directories(ifd0, exif, gps),
+        ExifSource::Jpeg(jpeg) => codecs::raw_exif_from_jpeg(jpeg),
+    })
+}
+
 /// A developed raw as a 16-bit ProPhoto document, with a note saying how it was developed.
 fn developed_document(name: &str, bytes: &[u8], format: &str, dev: photocraft_raw::Developed, summary: &str) -> Result<ImportResult, IoError> {
     let mut img = Image::from_u16(dev.width, dev.height, ChannelLayout::Rgb, &dev.rgb)?;
-    // The raw's own EXIF (camera, lens, exposure, date), for File Info's Camera Data. It carries
-    // no orientation: the developed image is already upright.
-    img.meta.exif = codecs::raw_exif(bytes);
+    img.meta.exif = camera_exif(bytes);
     let mut r = image_to_document(name, &img)?;
     r.document.icc_profile = Some(Arc::new(photocraft_cms::Builtin::ProPhotoCompat.profile().to_bytes().to_vec()));
     let camera = camera_name(dev.info.make.as_deref(), dev.info.model.as_deref());
@@ -286,7 +294,7 @@ pub fn import_raw_with(name: &str, bytes: &[u8], opts: &DevelopOptions) -> Resul
             // previews as JPEG XL, like the raw data (#8125): open the largest of either kind.
             let jpeg_area = jpeg.map_or(0, |p| u64::from(p.width) * u64::from(p.height));
             let jxl = photocraft_raw::embedded_jxl_preview(bytes, &opts.limits).filter(|p| u64::from(p.width) * u64::from(p.height) > jpeg_area);
-            let (img, kind, (w, h)) = match (jxl, jpeg) {
+            let (mut img, kind, (w, h)) = match (jxl, jpeg) {
                 (Some(p), _) => {
                     let size = (p.width, p.height);
                     (jxl_preview_image(bytes, p)?, "JPEG XL", size)
@@ -294,6 +302,10 @@ pub fn import_raw_with(name: &str, bytes: &[u8], opts: &DevelopOptions) -> Resul
                 (None, Some(p)) => (upright_preview(bytes, p.jpeg, &opts.limits)?, "JPEG", (p.width, p.height)),
                 (None, None) => return Err(IoError::Raw(RawError::Unsupported(reason))),
             };
+            // The raw's camera data, when the preview carries none of its own (a CR3's doesn't).
+            if img.meta.exif.is_none() {
+                img.meta.exif = camera_exif(bytes);
+            }
             let mut r = image_to_document(name, &img)?;
             let depth = if img.sample_type() == SampleType::U8 { "8-bit" } else { "16-bit" };
             r.warnings.insert(

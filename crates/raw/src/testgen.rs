@@ -26,18 +26,33 @@ pub use tiff::{TiffBuilder, Val};
 /// A CR3 container holding one JPEG track and CMT1 orientation. It deliberately
 /// contains no CRX data: used to test explicit preview fallback and BMFF bounds.
 pub fn cr3_preview(jpeg: &[u8], orientation: u16) -> Vec<u8> {
+    cr3_preview_with_exif(jpeg, orientation, &[], &[], &[])
+}
+
+/// [`cr3_preview`] with EXIF: `ifd0` joins the orientation in CMT1, and a non-empty `exif` or
+/// `gps` is written as the first directory of a CMT2 or CMT4 box (each a little-endian TIFF).
+pub fn cr3_preview_with_exif(jpeg: &[u8], orientation: u16, ifd0: &[(u16, Val)], exif: &[(u16, Val)], gps: &[(u16, Val)]) -> Vec<u8> {
     fn bx(kind: &[u8; 4], data: &[u8]) -> Vec<u8> {
         let mut b = ((data.len() + 8) as u32).to_be_bytes().to_vec();
         b.extend_from_slice(kind);
         b.extend_from_slice(data);
         b
     }
-    fn moov(jpeg_len: usize, offset: u64, orientation: u16) -> Vec<u8> {
+    fn tiff(entries: Vec<(u16, Val)>) -> Vec<u8> {
         let mut tiff = TiffBuilder::default();
-        let ifd = tiff.ifd(vec![(274, Val::Short(vec![orientation]))]);
+        let ifd = tiff.ifd(entries);
         tiff.chain = vec![ifd];
+        tiff.build()
+    }
+    type Dirs<'a> = (&'a [(u16, Val)], &'a [(u16, Val)], &'a [(u16, Val)]);
+    fn moov(jpeg_len: usize, offset: u64, orientation: u16, (ifd0, exif, gps): Dirs<'_>) -> Vec<u8> {
         let mut meta = vec![0x85, 0xc0, 0xb6, 0x87, 0x82, 0x0f, 0x11, 0xe0, 0x81, 0x11, 0xf4, 0xce, 0x46, 0x2b, 0x6a, 0x48];
-        meta.extend(bx(b"CMT1", &tiff.build()));
+        meta.extend(bx(b"CMT1", &tiff([vec![(274, Val::Short(vec![orientation]))], ifd0.to_vec()].concat())));
+        for (kind, entries) in [(b"CMT2", exif), (b"CMT4", gps)] {
+            if !entries.is_empty() {
+                meta.extend(bx(kind, &tiff(entries.to_vec())));
+            }
+        }
         let mut entry = vec![0; 82];
         entry.extend(bx(b"JPEG", &[0; 4]));
         let mut description = vec![0, 0, 0, 0, 0, 0, 0, 1];
@@ -53,7 +68,8 @@ pub fn cr3_preview(jpeg: &[u8], orientation: u16) -> Vec<u8> {
         bx(b"moov", &[bx(b"uuid", &meta), track].concat())
     }
     let ftyp = bx(b"ftyp", b"crx \0\0\0\x01crx isom");
-    let header = moov(jpeg.len(), 0, orientation);
+    let dirs = (ifd0, exif, gps);
+    let header = moov(jpeg.len(), 0, orientation, dirs);
     let offset = ftyp.len() + header.len() + 8;
-    [ftyp, moov(jpeg.len(), offset as u64, orientation), bx(b"mdat", jpeg)].concat()
+    [ftyp, moov(jpeg.len(), offset as u64, orientation, dirs), bx(b"mdat", jpeg)].concat()
 }

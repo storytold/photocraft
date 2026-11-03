@@ -1,6 +1,6 @@
 //! Bounded CR3 container reading, independently implemented from ISO BMFF and
 //! Laurent Clévy's public format description (canon_cr3/readme.md). This extracts
-//! camera JPEGs and orientation, not CRX sensor data. Never scan compressed data
+//! camera JPEGs, orientation and the EXIF directories, not CRX sensor data. Never scan compressed data
 //! for JPEG signatures: offsets must come from a validated sample table or PRVW.
 
 use crate::preview::{Preview, candidate};
@@ -133,6 +133,10 @@ struct Found<'a> {
     previews: Vec<Preview<'a>>,
     orientation: Option<u16>,
     media: Vec<(usize, usize)>,
+    /// The CMT1 (IFD0), CMT2 (Exif) and CMT4 (GPS) TIFF streams.
+    ifd0: Option<&'a [u8]>,
+    exif: Option<&'a [u8]>,
+    gps: Option<&'a [u8]>,
 }
 
 fn walk<'a>(raw: &'a [u8], b: &'a [u8], depth: usize, budget: &mut usize, found: &mut Found<'a>) {
@@ -161,7 +165,10 @@ fn walk<'a>(raw: &'a [u8], b: &'a [u8], depth: usize, budget: &mut usize, found:
                 found.previews.push(p);
             }
         }
+        b"CMT2" => found.exif = found.exif.or(Some(item.body)),
+        b"CMT4" => found.gps = found.gps.or(Some(item.body)),
         b"CMT1" => {
+            found.ifd0 = found.ifd0.or(Some(item.body));
             if let Some(tiff) = Tiff::new(item.body)
                 && let Some(ifd) = tiff.ifd_at(tiff.first_ifd, 0)
                 && let Some(o) = tiff.tag_uint(&ifd, tag::ORIENTATION).filter(|o| (1..=8).contains(o))
@@ -195,4 +202,9 @@ pub(crate) fn previews(raw: &[u8]) -> Vec<Preview<'_>> {
 }
 pub(crate) fn orientation(raw: &[u8]) -> Option<u16> {
     read(raw).orientation
+}
+
+pub(crate) fn exif_directories(raw: &[u8]) -> Option<crate::ExifSource<'_>> {
+    let f = read(raw);
+    (f.ifd0.is_some() || f.exif.is_some() || f.gps.is_some()).then_some(crate::ExifSource::Directories { ifd0: f.ifd0, exif: f.exif, gps: f.gps })
 }
