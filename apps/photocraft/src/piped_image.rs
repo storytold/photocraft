@@ -67,7 +67,9 @@ pub(crate) fn open(app: &mut PhotocraftApp, piped: Result<&[u8], &str>) {
     match piped {
         Err(e) => app.open_failed(i18n::t("standard input"), e),
         Ok(bytes) => {
-            let name = photocraft_engine::file_cmds::untitled_name(i18n::t("Untitled"), |n| app.session.documents().iter().any(|d| d.doc.name == n));
+            // Opens still decoding hold their names too (a template opened from the command line).
+            let taken = |n: &str| app.session.documents().iter().any(|d| d.doc.name == n) || app.jobs.opens.iter().any(|o| o.name == n);
+            let name = photocraft_engine::file_cmds::untitled_name(i18n::t("Untitled"), taken);
             if let Err(e) = app.open_bytes(&name, bytes) {
                 app.open_failed(&name, &e);
             }
@@ -109,6 +111,23 @@ mod tests {
         assert_eq!(docs[1].doc.name, "Untitled-2");
         assert!(docs.iter().all(|d| d.path.is_none()), "nothing to save back to");
         assert!(!app.ui.status_error, "{}", app.ui.status);
+    }
+
+    /// #9978 review: a name an open still decoding holds (a template from the command line opens
+    /// as "Untitled-N") isn't given to the piped image too.
+    #[test]
+    fn a_piped_image_skips_the_name_of_an_open_still_decoding() {
+        let mut app = app();
+        app.jobs.opens.push(photocraft_ui_egui::jobs_ui::OpenTab {
+            job: photocraft_engine::jobs::JobId(1),
+            name: "Untitled-1".into(),
+            path: None,
+            slot: None,
+            order: None,
+        });
+        open(&mut app, Ok(&png(5, 5)));
+        let names: Vec<&str> = app.session.documents().iter().map(|d| d.doc.name.as_str()).collect();
+        assert_eq!(names, ["Untitled-2"], "{}", app.ui.status);
     }
 
     /// #9468: an empty pipe (or any failed read) and bytes that aren't an image are errors in the
