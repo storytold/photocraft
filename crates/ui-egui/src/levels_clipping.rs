@@ -280,9 +280,11 @@ struct Request {
     target: LayerId,
 }
 
-/// The open Levels dialog's fields, if any.
+/// The open Levels dialog's fields, if any. A Smart Filter's Levels (`__smartFilter`) edits the
+/// filter, not the layer's pixels, so it has no display (`adjust_preview` keeps it off the layer
+/// path too).
 fn dialog(app: &PhotocraftApp) -> Option<&Map<String, Value>> {
-    app.ui.dialogs.iter().map(|d| &d.fields).find(|f| f.get("__adjust").and_then(Value::as_str) == Some("levels"))
+    app.ui.dialogs.iter().map(|d| &d.fields).find(|f| f.get("__adjust").and_then(Value::as_str) == Some("levels") && !f.contains_key("__smartFilter"))
 }
 
 /// The display the open Levels dialog asks for on document `idx`. None when no Levels dialog

@@ -337,6 +337,21 @@ fn ineligible_documents_show_no_display() {
     assert!(request(&app, 0).is_none(), "fill layer");
 }
 
+/// A Smart Filter's Levels dialog edits the filter, not the layer's pixels: no display, and its
+/// cache goes as if no Levels dialog were open, even over a pixel layer.
+#[test]
+fn smart_filter_levels_show_no_display() {
+    let ctx = egui::Context::default();
+    let mut app = ramp_app(ColorMode::Rgb, SampleType::U8);
+    let id = open_levels(&mut app, json!({"inBlack": 100}), Some("shadows"));
+    assert!(paint_view(&mut app, &ctx, &view(10.0)).is_some(), "a plain Levels dialog shows it");
+    let layer = app.session.active().and_then(|s| s.active_layer).unwrap();
+    app.ui.dialog_mut(id).unwrap().fields.insert("__smartFilter".into(), json!({"layer": layer.0}));
+    assert!(request(&app, 0).is_none());
+    assert!(paint_view(&mut app, &ctx, &view(10.0)).is_none());
+    assert!(app.levels_clipping.is_none(), "the cache goes");
+}
+
 fn dialog_harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
     let h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
     PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
