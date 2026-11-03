@@ -1448,6 +1448,21 @@ fn automation_saving_from_the_unsaved_changes_prompt_is_judged_as_file_save() {
         assert!(app.discard.is_some(), "synthetic={synthetic}: the prompt stays up");
         assert_eq!(app.session.documents().len(), 1, "synthetic={synthetic}: the document stays open");
     }
+    // A control request whose services carry only the gate (no command callback) is judged by
+    // that gate: the policy still refuses the Save.
+    let (mut app, ctx, written, _) = prompted();
+    app.services.automation_command = None;
+    let r = call(&mut app, &ctx, "ui.dialog.confirm", json!({"dialog": crate::discard_ui::CONTROL_ID, "choice": "save"}));
+    assert!(r["error"].as_str().is_some_and(|e| e.contains("file.save")), "{r}");
+    assert!(written.borrow().is_empty() && app.discard.is_some(), "the gate alone keeps the file unwritten");
+    // Synthetic input with no policy at all fails closed instead of saving unjudged.
+    let (mut app, ctx, written, _) = prompted();
+    app.services.automation_command = None;
+    app.services.automation_authorize = None;
+    app.automation_input = true;
+    let r = crate::discard_ui::answer_control(&mut app, &ctx, "save");
+    app.automation_input = false;
+    assert!(r.is_err() && written.borrow().is_empty(), "no policy, no Save: {r:?}");
     // The user answering Save writes the document back and closes it.
     let (mut app, ctx, written, own_file) = prompted();
     crate::discard_ui::answer_control(&mut app, &ctx, "save").unwrap();

@@ -361,13 +361,22 @@ fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, doc: DocId, answer: Answe
 /// Save writes the document back over its own file, as File › Save does, so automation (a
 /// control request's gate or synthetic input) is judged for `file.save` before it runs: a client
 /// allowed to close a document can't use the prompt to write a file its policy keeps it from.
+/// The installed gate (or the services' policy) and the command callback both judge it, and
+/// with neither available the Save is refused rather than run unjudged.
 fn authorize_save(app: &PhotocraftApp) -> Result<(), String> {
-    if (app.automation_input || app.session.authorize.is_some())
-        && let Some(authorize) = app.services.automation_command.as_ref()
-    {
-        authorize("file.save", &json!({}))?;
+    if !(app.automation_input || app.session.authorize.is_some()) {
+        return Ok(());
     }
-    Ok(())
+    let params = json!({});
+    let gate = app.session.authorize.or(app.services.automation_authorize);
+    if let Some(gate) = gate {
+        gate("file.save", &params).map_err(|e| e.to_string())?;
+    }
+    match app.services.automation_command.as_ref() {
+        Some(authorize) => authorize("file.save", &params),
+        None if gate.is_some() => Ok(()),
+        None => Err("automation command `file.save` is refused: no automation policy is available to judge it".into()),
+    }
 }
 
 /// The id `ui.inspect` lists the prompt under; `ui.dialog.confirm` and `ui.dialog.cancel` answer
