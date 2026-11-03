@@ -211,16 +211,29 @@ impl DeviceHealth {
     /// wait).
     #[cfg(not(target_arch = "wasm32"))]
     pub fn wait(&self, device: &wgpu::Device, index: Option<wgpu::SubmissionIndex>) -> bool {
+        self.wait_idle(device, index);
+        self.is_ok()
+    }
+
+    /// Like [`Self::wait`], but returns whether the wait completed: `false` also when the poll
+    /// itself failed, so the work may still be running.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn wait_idle(&self, device: &wgpu::Device, index: Option<wgpu::SubmissionIndex>) -> bool {
         if !self.is_ok() {
             return false;
         }
         let poll = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| device.poll(wgpu::PollType::Wait { submission_index: index, timeout: None })));
         match poll {
-            Ok(Ok(_)) => {}
-            Ok(Err(e)) => log::warn!("wgpu poll: {e}"),
-            Err(_) => self.lost_by_poll(),
+            Ok(Ok(_)) => self.is_ok(),
+            Ok(Err(e)) => {
+                log::warn!("wgpu poll: {e}");
+                false
+            }
+            Err(_) => {
+                self.lost_by_poll();
+                false
+            }
         }
-        self.is_ok()
     }
 
     /// Non-blocking poll (reclaims staging memory), skipped once the device is unusable.
