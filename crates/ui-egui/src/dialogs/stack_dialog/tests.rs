@@ -352,20 +352,17 @@ fn photomerge_folder_needs_two_images() {
     }
     // A third image added while the dialog is open: the listing just made is kept (no listing
     // every frame), then it shows once the listing is RELIST_SECS old, or at once with Browse….
-    let listed_now = |h: &mut Harness<'_, PhotocraftApp>| {
-        let now = h.ctx.input(|i| i.time);
-        h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("__listedAt".into(), json!(now));
-    };
+    let listed_now = |h: &Harness<'_, PhotocraftApp>| listing_started(&h.ctx, id, Some(h.ctx.input(|i| i.time)));
     let extra = std::path::Path::new(&two).join("extra.png");
     std::fs::copy(std::path::Path::new(&two).join("left.png"), &extra).unwrap();
-    listed_now(&mut h);
+    listed_now(&h);
     h.run_steps(1);
     assert!(h.query_by_label("extra.png").is_none(), "the listing is kept between frames");
-    h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("__listedAt".into(), json!(-RELIST_SECS));
+    listing_started(&h.ctx, id, None);
     h.run_steps(1);
     assert!(h.query_by_label("extra.png").is_some(), "listed again after RELIST_SECS");
     std::fs::remove_file(&extra).unwrap();
-    listed_now(&mut h);
+    listed_now(&h);
     h.get_by_label("Browse…").click();
     h.run_steps(3); // the answer lands a frame later; still under RELIST_SECS (0.25 s a step)
     assert!(h.query_by_label("extra.png").is_none(), "Browse… lists the folder again at once");
@@ -461,27 +458,113 @@ fn photomerge_alt_reset_restores_the_options() {
     assert_eq!(f["files"], json!(["a.png", "b.png"]), "the source files stay");
 }
 
-/// A listing slower than RELIST_SECS waits RELIST_SECS from when it finished, not from the frame
-/// it started in, so a slow folder isn't listed again on every frame.
-#[test]
-fn a_slow_folder_is_not_listed_every_frame() {
-    let mut f = Map::new();
-    f.insert("folder".into(), json!("/slow/share"));
-    let listings = std::cell::Cell::new(0);
-    let slow = |_: &str| {
-        listings.set(listings.get() + 1);
-        (Ok(vec!["a.png".to_string(), "b.png".to_string()]), 1.5)
-    };
-    assert_eq!(relist(&mut f, 0.0, slow).len(), 2);
-    // The next frame starts once the listing is done, 1.5 s later.
-    relist(&mut f, 1.6, slow);
-    relist(&mut f, 2.4, slow);
-    assert_eq!(listings.get(), 1, "within RELIST_SECS of the listing's end");
-    relist(&mut f, 2.6, slow);
-    assert_eq!(listings.get(), 2, "RELIST_SECS after the listing's end");
+/// Sets when dialog `id`'s folder listing last started (`None`: a new one is due).
+fn listing_started(ctx: &egui::Context, id: u64, at: Option<f64>) {
+    ctx.data_mut(|m| m.get_temp_mut_or_default::<FolderScan>(scan_key(id)).started = at);
 }
 
-/// A folder that can't be listed shows why under it; the error goes once it lists again.
+/// Listings of `/hung` wait until `HUNG_RELEASED`; others don't. All are counted in `LISTINGS`.
+static HUNG_RELEASED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static LISTINGS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+fn gated_listing(dir: &str) -> Result<Vec<String>, String> {
+    use std::sync::atomic::Ordering::SeqCst;
+    LISTINGS.fetch_add(1, SeqCst);
+    // Bounded, so a failing test doesn't leave the thread behind for good.
+    for _ in 0..2000 {
+        if dir != "/hung" || HUNG_RELEASED.load(SeqCst) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    Ok(vec![format!("{dir}/a.png"), format!("{dir}/b.png")])
+}
+
+/// One frame at `time` showing `folder_images` for dialog 1 in the background.
+fn listing_frame(ctx: &egui::Context, f: &mut Map<String, Value>, time: f64) -> Vec<String> {
+    let mut shown = Vec::new();
+    let mut out = ctx.run_ui(egui::RawInput { time: Some(time), ..Default::default() }, |ui| shown = folder_images(ui, f, 1, true, gated_listing));
+    out.textures_delta.clear();
+    shown
+}
+
+/// Frames at `time` until the background listing is back (at most 5 s).
+fn until_listed(ctx: &egui::Context, f: &mut Map<String, Value>, time: f64) -> Vec<String> {
+    for _ in 0..250 {
+        let shown = listing_frame(ctx, f, time);
+        if !f.contains_key("__listing") {
+            return shown;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    panic!("the listing never came back");
+}
+
+/// In the app a folder is listed on a worker: a listing that hangs doesn't hold up frames, nor
+/// the folder Browse… picks next; the folder is listed again RELIST_SECS after a listing
+/// started, never two at once, and the last listing stays shown meanwhile.
+#[test]
+fn a_slow_folder_is_listed_off_the_ui_thread() {
+    use std::sync::atomic::Ordering::SeqCst;
+    let ctx = egui::Context::default();
+    let mut f = Map::new();
+    f.insert("folder".into(), json!("/hung"));
+    // The frame comes back while the listing hangs (inline, it would wait for it).
+    assert!(listing_frame(&ctx, &mut f, 0.0).is_empty());
+    assert!(f.contains_key("__listing") && !f.contains_key("__listed"), "{f:?}");
+    assert!(!can_confirm_folder(&f), "OK waits for the listing");
+    listing_frame(&ctx, &mut f, 2.0);
+    assert_eq!(LISTINGS.load(SeqCst), 1, "not listed again while a listing runs");
+
+    // Browse… another folder: listed at once, not after the hung one.
+    f.insert("folder".into(), json!("/share"));
+    f.insert("__listGen".into(), json!(1));
+    assert_eq!(until_listed(&ctx, &mut f, 2.1), ["/share/a.png", "/share/b.png"]);
+    assert!(can_confirm_folder(&f));
+    HUNG_RELEASED.store(true, SeqCst);
+    let listings = LISTINGS.load(SeqCst);
+
+    // RELIST_SECS after that listing started (2.1 s): listed again, the last listing shown
+    // meanwhile; not before.
+    listing_frame(&ctx, &mut f, 3.0);
+    assert_eq!(LISTINGS.load(SeqCst), listings);
+    assert_eq!(listing_frame(&ctx, &mut f, 3.2), ["/share/a.png", "/share/b.png"], "kept while listing again");
+    until_listed(&ctx, &mut f, 3.3);
+    assert_eq!(LISTINGS.load(SeqCst), listings + 1);
+}
+
+/// Inline, a listing slower than RELIST_SECS waits RELIST_SECS from when it finished, so it
+/// isn't repeated on every frame.
+#[test]
+fn a_slow_inline_listing_is_not_repeated_every_frame() {
+    static SLOW: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    fn slow(_: &str) -> Result<Vec<String>, String> {
+        SLOW.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        Ok(Vec::new())
+    }
+    let ctx = egui::Context::default();
+    let mut f = Map::new();
+    f.insert("folder".into(), json!("/slow"));
+    for time in [0.0, 1.1] {
+        let mut out = ctx.run_ui(egui::RawInput { time: Some(time), ..Default::default() }, |ui| {
+            folder_images(ui, &mut f, 2, false, slow);
+        });
+        out.textures_delta.clear();
+    }
+    assert_eq!(SLOW.load(std::sync::atomic::Ordering::SeqCst), 1, "the next frame is under RELIST_SECS after the listing ended");
+}
+
+/// `can_confirm` of a Photomerge dialog with fields `f` in Use: Folder.
+fn can_confirm_folder(f: &Map<String, Value>) -> bool {
+    let mut f = f.clone();
+    f.insert(MARK.into(), json!(true));
+    f.insert("__command".into(), json!(PHOTOMERGE));
+    f.insert("use".into(), json!("folder"));
+    can_confirm(&PhotocraftApp::new(photocraft_engine::Session::new(), Default::default()), &f)
+}
+
+/// A folder that can't be listed shows why under it; the error goes once the same folder lists.
 #[test]
 fn a_folder_that_cannot_be_read_says_why() {
     let missing = std::env::temp_dir().join(format!("photocraft-photomerge-missing-{}", std::process::id()));
@@ -495,10 +578,11 @@ fn a_folder_that_cannot_be_read_says_why() {
     let error = dialog(&h).unwrap().1.get("__listError").and_then(Value::as_str).map(str::to_string).expect("the listing error");
     assert!(h.query_by_label(&error).is_some(), "{error} is shown");
     assert!(h.get_by_label("OK").accesskit_node().is_disabled());
-
-    let (dir, _) = panorama_pngs("readable-again");
-    h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("folder".into(), json!(dir));
+    // The same folder, readable now: listed again once RELIST_SECS has passed.
+    std::fs::create_dir_all(&missing).unwrap();
+    listing_started(&h.ctx, id, None);
     h.run_steps(2);
     assert!(!dialog(&h).unwrap().1.contains_key("__listError"));
     assert!(h.query_by_label(&error).is_none());
+    std::fs::remove_dir_all(&missing).unwrap();
 }

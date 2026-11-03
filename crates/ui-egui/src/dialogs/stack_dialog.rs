@@ -6,6 +6,8 @@
 //! Vignette Removal, Geometric Distortion Correction and Content Aware Fill Transparent Areas
 //! below, and Use can also be Open Files (every open document, saved or not). OK runs the
 //! corresponding engine command with the list or the folder.
+use std::sync::{Arc, Mutex, PoisonError};
+
 use egui::{RichText, vec2};
 use serde_json::{Map, Value, json};
 
@@ -112,47 +114,129 @@ fn folder(f: &Map<String, Value>) -> &str {
 /// How often (seconds) the chosen folder is listed again, for files added or removed meanwhile.
 const RELIST_SECS: f64 = 1.0;
 
-/// The images in the chosen folder at time `now` (seconds), listed when the folder changes and
-/// then `RELIST_SECS` after the last listing finished (not every frame: a folder can be large or
-/// on a slow share), kept in the fields for `can_confirm`.
-fn folder_images(f: &mut Map<String, Value>, now: f64) -> Vec<String> {
-    relist(f, now, |dir| {
-        let start = web_time::Instant::now();
-        let images = photocraft_engine::file_cmds::list_images(dir).map_err(|e| e.to_string());
-        (images, start.elapsed().as_secs_f64())
-    })
+/// A folder's images, or why it can't be read.
+type FolderListing = Result<Vec<String>, String>;
+
+/// Lists a folder.
+type Lister = fn(&str) -> FolderListing;
+
+fn list_folder(dir: &str) -> FolderListing {
+    photocraft_engine::file_cmds::list_images(dir).map_err(|e| e.to_string())
 }
 
-/// `folder_images` with the listing `list` (images or the error, and the seconds it took). A
-/// listing that fails keeps its error in `__listError`, shown under the folder.
-fn relist(f: &mut Map<String, Value>, now: f64, list: impl FnOnce(&str) -> (Result<Vec<String>, String>, f64)) -> Vec<String> {
+/// The folder listing of one dialog kept between frames (as the Color Lookup panel's LUT folder
+/// scan): the folder and Browse… generation it is for, when the last listing started, and the
+/// listing in flight, if any.
+#[derive(Clone, Default)]
+struct FolderScan {
+    folder: String,
+    generation: u64,
+    started: Option<f64>,
+    pending: Option<Arc<Mutex<Option<FolderListing>>>>,
+}
+
+fn scan_key(id: u64) -> egui::Id {
+    egui::Id::unique(("stack-folder-listing", id))
+}
+
+/// The images in the chosen folder of dialog `id`, kept in the fields (`__images`, or
+/// `__listError` when the folder can't be read) for the list and `can_confirm`. The folder is
+/// listed when it changes, after Browse…, and again `RELIST_SECS` after a listing started, but
+/// never while one is running: on a worker when `background` (the desktop app: a slow share must
+/// not stall the window; `__listing` is set meanwhile), inline otherwise (tests, and the web,
+/// which has no folders). No repaint is scheduled for it: an idle dialog doesn't poll a share.
+fn folder_images(ui: &egui::Ui, f: &mut Map<String, Value>, id: u64, background: bool, list: Lister) -> Vec<String> {
+    let ctx = ui.ctx();
+    let key = scan_key(id);
+    let now = ui.input(|i| i.time);
     let dir = folder(f).to_string();
-    let listed_at = f.get("__listedAt").and_then(Value::as_f64);
-    let stale = listed_at.is_none_or(|t| (now - t).abs() >= RELIST_SECS);
-    if stale || f.get("__listed").and_then(Value::as_str) != Some(dir.as_str()) {
-        let (images, took) = if dir.is_empty() { (Ok(Vec::new()), 0.0) } else { list(&dir) };
-        match images {
-            Ok(images) => {
-                f.insert("__images".into(), json!(images));
-                f.remove("__listError");
-            }
-            Err(e) => {
-                f.insert("__images".into(), json!([]));
-                f.insert("__listError".into(), json!(e));
+    let generation = f.get("__listGen").and_then(Value::as_u64).unwrap_or(0);
+    let mut scan = ctx.data(|m| m.get_temp::<FolderScan>(key)).unwrap_or_default();
+    if scan.folder != dir || scan.generation != generation {
+        // Another folder, or Browse… again: drop the old listing, running or not.
+        scan = FolderScan { folder: dir.clone(), generation, ..FolderScan::default() };
+    } else if let Some(done) = scan.pending.as_ref().and_then(|p| p.lock().unwrap_or_else(PoisonError::into_inner).take()) {
+        store(f, &dir, done);
+        scan.pending = None;
+    }
+    if !dir.is_empty() && scan.pending.is_none() && scan.started.is_none_or(|at| (now - at).abs() >= RELIST_SECS) {
+        scan.started = Some(now);
+        match background.then(|| start(ctx, &dir, list)).flatten() {
+            Some(pending) => scan.pending = Some(pending),
+            None => {
+                let took = web_time::Instant::now();
+                store(f, &dir, list(&dir));
+                // From when it finished, so a listing slower than RELIST_SECS isn't repeated on
+                // every frame.
+                scan.started = Some(now + took.elapsed().as_secs_f64());
             }
         }
-        f.insert("__listed".into(), json!(dir));
-        // Timed from when the listing finished, so a listing slower than RELIST_SECS isn't
-        // repeated on every frame.
-        f.insert("__listedAt".into(), json!(now + took));
     }
+    if scan.pending.is_some() {
+        f.insert("__listing".into(), json!(true));
+    } else {
+        f.remove("__listing");
+    }
+    ctx.data_mut(|m| m.insert_temp(key, scan));
+    if folder_listed(f) { images(f) } else { Vec::new() }
+}
+
+/// Drops dialog `id`'s folder listing (Use is no longer Folder): a result coming back later is
+/// not taken for a fresh one.
+fn drop_folder_scan(ctx: &egui::Context, id: u64) {
+    ctx.data_mut(|m| m.remove::<FolderScan>(scan_key(id)));
+}
+
+/// Starts listing `dir` on a worker thread, or `None` where there are none (the web) or one can't
+/// be started.
+#[cfg(not(target_arch = "wasm32"))]
+fn start(ctx: &egui::Context, dir: &str, list: Lister) -> Option<Arc<Mutex<Option<FolderListing>>>> {
+    let result = Arc::new(Mutex::new(None));
+    let (slot, ctx, dir) = (Arc::clone(&result), ctx.clone(), dir.to_string());
+    std::thread::Builder::new()
+        .name("photocraft-folder-listing".into())
+        .spawn(move || {
+            let r = std::panic::catch_unwind(|| list(&dir)).unwrap_or_else(|_| Err(format!("{dir}: listing the folder failed")));
+            *slot.lock().unwrap_or_else(PoisonError::into_inner) = Some(r);
+            ctx.request_repaint();
+        })
+        .ok()?;
+    Some(result)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn start(_: &egui::Context, _: &str, _: Lister) -> Option<Arc<Mutex<Option<FolderListing>>>> {
+    None
+}
+
+/// Keeps the listing of `dir` in the fields.
+fn store(f: &mut Map<String, Value>, dir: &str, result: FolderListing) {
+    match result {
+        Ok(images) => {
+            f.insert("__images".into(), json!(images));
+            f.remove("__listError");
+        }
+        Err(e) => {
+            f.insert("__images".into(), json!([]));
+            f.insert("__listError".into(), json!(e));
+        }
+    }
+    f.insert("__listed".into(), json!(dir));
+}
+
+/// Whether the fields hold a listing of the chosen folder (not of one chosen before it).
+fn folder_listed(f: &Map<String, Value>) -> bool {
+    f.get("__listed").and_then(Value::as_str) == Some(folder(f))
+}
+
+/// The images of the last listing.
+fn images(f: &Map<String, Value>) -> Vec<String> {
     f.get("__images").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default()
 }
 
 /// How many images `folder_images` found in the chosen folder (0 until it has listed it).
 fn folder_image_count(f: &Map<String, Value>) -> usize {
-    let listed = f.get("__listed").and_then(Value::as_str) == Some(folder(f));
-    if listed { f.get("__images").and_then(Value::as_array).map_or(0, Vec::len) } else { 0 }
+    if folder_listed(f) { f.get("__images").and_then(Value::as_array).map_or(0, Vec::len) } else { 0 }
 }
 
 fn selected(f: &Map<String, Value>) -> Option<usize> {
@@ -200,8 +284,10 @@ fn browse(app: &mut PhotocraftApp, id: u64, folder: bool) {
         app.ask_folder(move |app, path| {
             let d = app.ui.dialog_mut(id).ok_or("the dialog was closed")?;
             d.fields.insert("folder".into(), json!(path));
-            // Choosing a folder again lists it again.
+            // Choosing a folder again lists it again, dropping a listing still running.
             d.fields.remove("__listed");
+            let generation = d.fields.get("__listGen").and_then(Value::as_u64).unwrap_or(0);
+            d.fields.insert("__listGen".into(), json!(generation.wrapping_add(1)));
             Ok(Value::Null)
         })
     } else {
@@ -265,10 +351,13 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
     let mut browse_now = false;
     ui.horizontal_top(|ui| {
         // The list: the chosen files, the images in the chosen folder, or the open documents.
+        if !folder_mode {
+            drop_folder_scan(ui.ctx(), id);
+        }
         let shown: Vec<String> = if open_mode {
             app.session.documents().iter().map(|d| d.doc.name.clone()).collect()
         } else if folder_mode {
-            folder_images(f, ui.input(|i| i.time))
+            folder_images(ui, f, id, app.background_jobs, list_folder)
         } else {
             files(f)
         };
@@ -280,8 +369,14 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                 ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
                     if folder_mode && !folder(f).is_empty() {
                         ui.label(RichText::new(folder(f)).color(t.text_dim));
-                        if let Some(e) = f.get("__listError").and_then(Value::as_str) {
+                        let listed = folder_listed(f);
+                        if let Some(e) = f.get("__listError").and_then(Value::as_str).filter(|_| listed) {
                             ui.label(RichText::new(e).color(t.danger));
+                        } else if f.contains_key("__listing") && !listed {
+                            ui.horizontal(|ui| {
+                                ui.add(egui::Spinner::new().size(12.0));
+                                ui.label(RichText::new(tl!("Reading…")).color(t.text_dim));
+                            });
                         }
                     }
                     for (i, p) in shown.iter().enumerate() {
