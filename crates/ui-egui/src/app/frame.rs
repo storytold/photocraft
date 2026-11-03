@@ -21,6 +21,10 @@ impl PhotocraftApp {
 
     /// Returns whether the system is fully initialized (fonts ready and text engine available).
     pub fn system_ready(&self) -> bool {
+        #[cfg(test)]
+        if let Some(r) = self.system_ready_override {
+            return r;
+        }
         self.fonts_ready && photocraft_text::try_shared().is_some()
     }
 

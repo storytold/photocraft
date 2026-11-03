@@ -1138,6 +1138,89 @@ fn splash_shortcuts_gate_allows_shortcuts_during_appear_delay_and_suppresses_whe
     );
 }
 
+/// Frame-level integration test: verifies that when a background job completes with an error
+/// (posting a notice) during `jobs_ui::tick` while the splash screen is visible past its appearance delay,
+/// the splash shortcut suppression is unblocked in that same frame and `shortcuts::handle` actually
+/// executes and processes queued keyboard shortcuts.
+#[test]
+fn splash_shortcuts_unblocked_when_job_fails_with_notice_during_tick() {
+    let mut h = app_harness();
+    let now = h.ctx.input(|i| i.time);
+
+    // Initial state: tool is Move.
+    h.state_mut().ui.tool = crate::Tool::Move;
+    assert_eq!(h.state().ui.tool, crate::Tool::Move);
+
+    // Configure splash past appearance delay while system readiness is pending (e.g. font scan in flight).
+    let rendered_now = now + crate::splash::SPLASH_APPEAR_DELAY + 0.1;
+    let mut splash = crate::splash::SplashState::new();
+    splash.start_time = now;
+    h.state_mut().splash = Some(splash);
+    h.state_mut().system_ready_override = Some(false);
+
+    // Verify initial condition: shortcuts are blocked while splash renders without notices.
+    assert!(
+        h.state().splash_shortcuts_blocked(rendered_now),
+        "shortcuts must be blocked while splash renders past appear delay"
+    );
+
+    // Phase 1: Verify control behavior - a key press is suppressed while splash is visible without notices.
+    h.key_press(egui::Key::B);
+    h.step();
+    assert_eq!(
+        h.state().ui.tool,
+        crate::Tool::Move,
+        "tool shortcut must not run while splash is visible without notices"
+    );
+
+    // Restore splash for Phase 2: background job completes with an error during tick.
+    let mut splash2 = crate::splash::SplashState::new();
+    splash2.start_time = now;
+    h.state_mut().splash = Some(splash2);
+
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let r = h.state_mut().session.start_job(
+        "test.failing_job",
+        json!({}),
+        "Failing Filter",
+        false,
+        move |_ctx| {
+            let _ = done_tx.send(());
+            Err(photocraft_engine::EngineError::Other("simulated worker failure".into()))
+        },
+        |_s, ()| Ok(json!({})),
+    ).unwrap();
+    let Started::Job(_id) = r else { panic!("expected background job"); };
+
+    // Wait for the worker thread to finish running and post its result into the channel.
+    let _ = done_rx.recv_timeout(Duration::from_secs(2));
+    std::thread::sleep(Duration::from_millis(50));
+
+    // Inject 'B' key press (Photoshop shortcut for Brush tool).
+    h.key_press(egui::Key::B);
+
+    // Step frame: in logic_frame, splash_shortcuts_blocked is true before tick.
+    // jobs_ui::tick runs, receives JobOutcome::Failed, posts notice to self.ui.notices.
+    // splash_visible updates to false because notices is non-empty.
+    // shortcuts::handle executes and selects Brush tool.
+    // In ui_frame, splash is dismissed due to notices.
+    h.step();
+
+    assert!(
+        !h.state().ui.notices.is_empty(),
+        "failed background job must post a notice during tick"
+    );
+    assert_eq!(
+        h.state().ui.tool,
+        crate::Tool::Brush,
+        "shortcuts::handle must execute in the frame to switch tool to Brush"
+    );
+    assert!(
+        h.state().splash.is_none(),
+        "splash must be dismissed in ui_frame when notices arrive"
+    );
+}
+
 fn identity_app() -> PhotocraftApp {
     let mut session = photocraft_engine::Session::new();
     session.execute("file.new", json!({"width": 8, "height": 6})).unwrap();

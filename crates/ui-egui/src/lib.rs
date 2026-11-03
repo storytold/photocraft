@@ -461,6 +461,8 @@ pub struct PhotocraftApp {
     /// sent again only when it changes, so idle frames don't spam the backend.
     last_window_title: String,
     fonts_ready: bool,
+    #[cfg(test)]
+    pub(crate) system_ready_override: Option<bool>,
     /// Startup splash screen showing loading progress before workspace is presented.
     pub splash: Option<splash::SplashState>,
     /// Screen rect of the main canvas last frame (for overlays and the navigator).
