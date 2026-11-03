@@ -16,12 +16,12 @@ use photocraft_algo::transform::{Homography, Interp, warp_surface};
 use photocraft_algo::warp::warp_mesh_surface;
 use photocraft_color::{ColorMode, PixelFormat, SampleType};
 use photocraft_doc::{Document, Layer, LayerContent, LayerMask, Size};
-use photocraft_geom::Rect;
+use photocraft_geom::{Rect, TILE_SIZE};
 use photocraft_raster::{Surface, to_rgba};
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
-use crate::file_cmds::{file_name, flattened, flattened_checked, import, list_images, read_file};
+use crate::file_cmds::{file_name, flattened, flattened_checked, import, import_with_options, list_images, read_file, read_file_limited};
 use crate::{EngineError, Result, Session};
 
 /// Wall-clock timer for the `ms` fields of results (always 0 on the web, where
@@ -64,18 +64,49 @@ pub(crate) struct Source {
 /// Loaded sources, the common pixel format and the first source's ICC profile.
 type Loaded = (Vec<Source>, PixelFormat, Option<std::sync::Arc<Vec<u8>>>);
 
-/// Keeps the flattened sources a Photomerge is loading inside the command's memory budget.
+/// Pixel bytes every surface `doc` holds, counting a tile shared between surfaces once.
+fn document_pixels(doc: &Document) -> usize {
+    let mut seen = std::collections::HashSet::new();
+    let mut total = 0usize;
+    doc.for_each_surface(|surface| {
+        for (_, tile) in surface.tiles() {
+            if seen.insert(std::sync::Arc::as_ptr(tile) as usize) {
+                total = total.saturating_add(tile.len());
+            }
+        }
+    });
+    total
+}
+
+/// Bytes a `w` × `h` surface allocates in `bpp`: whole 256 px tiles, as [`Surface`] stores them.
+fn surface_bytes(w: usize, h: usize, bpp: usize) -> usize {
+    if w == 0 || h == 0 {
+        return 0;
+    }
+    let side = TILE_SIZE as usize;
+    w.div_ceil(side).saturating_mul(h.div_ceil(side)).saturating_mul(side.saturating_mul(side)).saturating_mul(bpp)
+}
+
+/// `bytes` for people ("12 MiB", "900 KiB", "17 B").
+fn bytes_text(bytes: usize) -> String {
+    if bytes >= 1 << 20 {
+        format!("{} MiB", bytes >> 20)
+    } else if bytes >= 1 << 10 {
+        format!("{} KiB", bytes >> 10)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
+/// Keeps a Photomerge's sources inside the command's memory budget while they are loaded.
 ///
-/// The command's own peak estimate runs after alignment, when the canvas is known; until then
-/// every source is flattened and retained, so a large stack could exhaust memory before that
-/// check. Each source is admitted here before its surface is allocated. Two surfaces are
-/// charged: the one retained, and a same-canvas temporary for `flattened_checked` while the
-/// source document still holds its layers. A file also holds its encoded bytes during import.
-/// The import itself is admitted by the format's own memory limits (`photocraft-io::memory`).
+/// `None` (Merge to HDR Pro) has no budget and loads as before. With a budget, a file is read
+/// only up to what is left, its import is lowered to that remainder through the importer's own
+/// preflight, and the decoded document plus the surfaces flattening allocates are charged
+/// before the source is flattened.
 struct SourceLoad {
-    /// `None` keeps the previous behaviour for Merge to HDR Pro, which has no budget.
     budget: Option<usize>,
-    /// Bytes of the flattened surfaces retained so far.
+    /// Pixels of the flattened sources kept so far.
     retained: usize,
     /// Sources admitted so far (for the error message).
     count: usize,
@@ -86,64 +117,189 @@ impl SourceLoad {
         Self { budget, retained: 0, count: 0 }
     }
 
-    /// Admits one more `w × h` source in `bpp`, from a file of `encoded` bytes (zero for an
-    /// open document), or fails before its surface is allocated. Saturating math makes an
-    /// overflow exceed any finite budget rather than wrapping below it.
-    fn admit(&mut self, w: usize, h: usize, bpp: usize, encoded: usize, cmd: &str) -> Result<()> {
-        let surface = w.checked_mul(h).and_then(|px| px.checked_mul(bpp)).unwrap_or(usize::MAX);
+    /// What one more source needs while it is flattened: the document's own pixels, the source
+    /// surface, the flatten's working and output surfaces, and a file's encoded bytes.
+    fn needed(&self, doc: &Document, bpp: usize, encoded: usize) -> usize {
+        let b = doc.bounds();
+        let output = surface_bytes(b.width().max(0) as usize, b.height().max(0) as usize, bpp);
+        self.retained.saturating_add(encoded).saturating_add(document_pixels(doc)).saturating_add(output.saturating_mul(2))
+    }
+
+    fn exceeds(&self, cmd: &str, doc: &Document, bpp: usize, encoded: usize, budget: usize) -> EngineError {
+        let b = doc.bounds();
+        crate::allocation::error(
+            cmd,
+            &format!(
+                "loading {} source image(s) plus another {}×{} one needs about {}, which exceeds the {} budget; use fewer or smaller images, or raise \"memoryBudget\"",
+                self.count,
+                b.width(),
+                b.height(),
+                bytes_text(self.needed(doc, bpp, encoded)),
+                bytes_text(budget)
+            ),
+        )
+    }
+
+    /// Admits and charges one `doc` flattened in `bpp`, or fails before the flatten allocates.
+    fn admit(&mut self, cmd: &str, doc: &Document, bpp: usize, encoded: usize) -> Result<()> {
         let Some(budget) = self.budget else {
-            self.retained = self.retained.saturating_add(surface);
             self.count += 1;
             return Ok(());
         };
-        let needed = self.retained.saturating_add(surface.saturating_mul(2)).saturating_add(encoded);
-        if needed > budget {
-            let amount = |b: usize| if b >= 1 << 20 { format!("{} MiB", b >> 20) } else { format!("{} KiB", b >> 10) };
-            return Err(crate::allocation::error(
-                "Photomerge",
+        if self.needed(doc, bpp, encoded) > budget {
+            return Err(self.exceeds(cmd, doc, bpp, encoded, budget));
+        }
+        let b = doc.bounds();
+        self.retained = self.retained.saturating_add(surface_bytes(b.width().max(0) as usize, b.height().max(0) as usize, bpp));
+        self.count += 1;
+        Ok(())
+    }
+
+    /// What is left of the budget for the next source.
+    fn remaining(&self, cmd: &str) -> Result<usize> {
+        let Some(budget) = self.budget else { return Ok(usize::MAX) };
+        budget
+            .checked_sub(self.retained)
+            .filter(|left| *left > 0)
+            .ok_or_else(|| crate::allocation::error(cmd, &format!("the sources loaded so far use the whole {} budget", bytes_text(budget))))
+    }
+
+    /// Reads and imports one file, bounding the encoded read and the decode by what is left.
+    /// `None` (Merge to HDR Pro) reads and imports as before.
+    fn load_file(&mut self, s: &Session, path: &str, cmd: &str) -> Result<(String, Document, usize)> {
+        let name = file_name(path);
+        if self.budget.is_none() {
+            let bytes = read_file(path)?;
+            return Ok((name.clone(), import(&name, &bytes)?, bytes.len()));
+        }
+        let left = self.remaining(cmd)?;
+        let bytes = read_file_limited(path, u64::try_from(left).unwrap_or(u64::MAX))
+            .map_err(|e| crate::allocation::error(cmd, &format!("{e} (only {} is left of the budget for a source file's bytes)", bytes_text(left))))?;
+        let available = left.saturating_sub(bytes.len());
+        let opts = self.import_options(s, &name, &bytes, available, cmd)?;
+        let doc = import_with_options(&name, &bytes, &opts).map_err(|e| match e {
+            // The caller limit is this command's remainder, not the machine's hard limit.
+            EngineError::PsdHardBudget { required, limit, .. } if limit == u64::try_from(available).unwrap_or(u64::MAX) => crate::allocation::error(
+                cmd,
                 &format!(
-                    "loading {} source image(s) plus another {w}×{h} one needs about {}, which exceeds budget of {}; use fewer or smaller images, or raise \"memoryBudget\"",
-                    self.count,
-                    amount(needed),
-                    amount(budget)
+                    "decoding {name} needs about {}, which exceeds the {} left; use fewer or smaller images, or raise \"memoryBudget\"",
+                    bytes_text(usize::try_from(required).unwrap_or(usize::MAX)),
+                    bytes_text(available)
+                ),
+            ),
+            e => e,
+        })?;
+        Ok((name, doc, bytes.len()))
+    }
+
+    /// The importer options that lower this import to what is left after the retained sources
+    /// and the encoded buffer: the importer's own PSD/TIFF preflight, or a flat decode limit.
+    /// The decoded document and the flatten are still charged by [`Self::admit`].
+    fn import_options(&self, s: &Session, name: &str, bytes: &[u8], available: usize, cmd: &str) -> Result<photocraft_io::ImportOptions> {
+        use photocraft_io::ImportPreflight;
+        let mut opts = crate::jobs::import_options(s.prefs());
+        if available == 0 {
+            return Err(crate::allocation::error(
+                cmd,
+                &format!("the sources already loaded and {name}'s {} encoded bytes use the whole budget", bytes_text(bytes.len())),
+            ));
+        }
+        let limit = u64::try_from(available).unwrap_or(u64::MAX);
+        match photocraft_io::import_preflight(name, bytes) {
+            ImportPreflight::Psd => opts.psd_max_pixel_bytes = limit,
+            ImportPreflight::Tiff => {
+                self.admit_tiff_header(name, bytes, available, cmd)?;
+                opts.psd_max_pixel_bytes = limit;
+            }
+            ImportPreflight::Flat => {
+                // The decoded buffer, the document built from it and the flatten's output are
+                // alive together, so keep a third of the remainder for each.
+                let decode = available / 3;
+                if decode == 0 {
+                    return Err(crate::allocation::error(
+                        cmd,
+                        &format!("no room is left to decode {name} after the {} of sources already loaded", bytes_text(self.retained)),
+                    ));
+                }
+                opts.flat_max_pixel_bytes = u64::try_from(decode).unwrap_or(u64::MAX);
+            }
+            ImportPreflight::Unbounded => {
+                return Err(bad(
+                    cmd,
+                    format!(
+                        "{name}: this format has no memory estimate before decoding, so Photomerge cannot fit it into its budget; use a PSD, TIFF or flat raster file, or open it first and add the open document"
+                    ),
+                ));
+            }
+        }
+        Ok(opts)
+    }
+
+    /// Refuses a TIFF whose default page alone would not fit in `available`; a layered TIFF is
+    /// also bounded by the importer's own PSD-style preflight.
+    fn admit_tiff_header(&self, name: &str, bytes: &[u8], available: usize, cmd: &str) -> Result<()> {
+        let info = photocraft_codecs::tiff_info(bytes).map_err(|e| bad(cmd, format!("{name}: {e}")))?;
+        let page = info.default_page().and_then(|i| info.pages.get(i)).ok_or_else(|| bad(cmd, format!("{name}: the TIFF has no readable page")))?;
+        let bpp = u64::from(page.samples_per_pixel).saturating_mul(u64::from(page.bits_per_sample).div_ceil(8));
+        let needed = u64::from(page.width).saturating_mul(u64::from(page.height)).saturating_mul(bpp);
+        let available = u64::try_from(available).unwrap_or(u64::MAX);
+        if needed > available {
+            let needed = usize::try_from(needed).unwrap_or(usize::MAX);
+            let available = usize::try_from(available).unwrap_or(usize::MAX);
+            return Err(crate::allocation::error(
+                cmd,
+                &format!(
+                    "{name} needs about {} for its {}×{} page, which exceeds the {} left",
+                    bytes_text(needed),
+                    page.width,
+                    page.height,
+                    bytes_text(available)
                 ),
             ));
         }
-        self.retained = self.retained.saturating_add(surface);
-        self.count += 1;
         Ok(())
     }
 }
 
-/// Flattens the open documents and files named by `p` into common-format sources. With a
-/// `budget`, each source is admitted by [`SourceLoad`] before it is allocated; `None` (Merge to
-/// HDR Pro) only flattens, as before. `cmd` names the command in errors.
-fn load_sources(s: &Session, p: &Value, cmd: &str, budget: Option<usize>) -> Result<Loaded> {
-    let mut out = Vec::new();
-    let (mut fmt, mut icc) = (None, None);
-    let mut load = SourceLoad::new(budget);
-    let mut add = |name: String, d: &Document, encoded: usize| -> Result<()> {
+/// Sources collected so far, with the common format and the first source's ICC profile.
+#[derive(Default)]
+struct Sources {
+    out: Vec<Source>,
+    fmt: Option<PixelFormat>,
+    icc: Option<std::sync::Arc<Vec<u8>>>,
+}
+
+impl Sources {
+    /// Flattens `d` into the common format, admitted by `load` first.
+    fn add(&mut self, load: &mut SourceLoad, name: String, d: &Document, encoded: usize, cmd: &str) -> Result<()> {
         let source_fmt = d.pixel_format();
         // Registration and blending work in RGB, so the result is RGB.
-        let output_fmt = *fmt.get_or_insert_with(|| {
+        let output_fmt = *self.fmt.get_or_insert_with(|| {
             if matches!(source_fmt.mode, ColorMode::Cmyk | ColorMode::Lab | ColorMode::Multichannel) {
                 PixelFormat::new(ColorMode::Rgb, source_fmt.sample, true)
             } else {
                 source_fmt
             }
         });
-        if out.is_empty() && source_fmt.mode == output_fmt.mode {
-            icc = d.icc_profile.clone();
+        if self.out.is_empty() && source_fmt.mode == output_fmt.mode {
+            self.icc = d.icc_profile.clone();
         }
         let info = d.metadata.exif.as_ref().map(|e| exif::read(e)).unwrap_or_default();
-        let (w, h) = (d.size.width as usize, d.size.height as usize);
-        load.admit(w, h, output_fmt.bytes_per_pixel(), encoded, cmd)?;
-        out.push(Source { name, surf: flattened_checked(d, output_fmt, cmd)?, w, h, exif: info });
+        load.admit(cmd, d, output_fmt.bytes_per_pixel(), encoded)?;
+        self.out.push(Source { name, surf: flattened_checked(d, output_fmt, cmd)?, w: d.size.width as usize, h: d.size.height as usize, exif: info });
         Ok(())
-    };
+    }
+}
+
+/// Flattens the open documents and files named by `p` into common-format sources. With a
+/// `budget`, each source is read, imported and admitted by [`SourceLoad`]; `None` (Merge to HDR
+/// Pro) only flattens, as before. `cmd` names the command in errors.
+fn load_sources(s: &Session, p: &Value, cmd: &str, budget: Option<usize>) -> Result<Loaded> {
+    let mut src = Sources::default();
+    let mut load = SourceLoad::new(budget);
     if p.get("useOpenDocuments").and_then(Value::as_bool).unwrap_or(false) {
         for d in s.documents() {
-            add(d.doc.name.clone(), &d.doc, 0)?;
+            src.add(&mut load, d.doc.name.clone(), &d.doc, 0, cmd)?;
         }
     }
     let paths: Vec<String> = match p.get("paths").or_else(|| p.get("input")) {
@@ -152,15 +308,14 @@ fn load_sources(s: &Session, p: &Value, cmd: &str, budget: Option<usize>) -> Res
         _ => Vec::new(),
     };
     for path in &paths {
-        let bytes = read_file(path)?;
-        let name = file_name(path);
-        add(name.clone(), &import(&name, &bytes)?, bytes.len())?;
+        let (name, doc, encoded) = load.load_file(s, path, cmd)?;
+        src.add(&mut load, name, &doc, encoded, cmd)?;
     }
-    if out.is_empty() {
+    if src.out.is_empty() {
         return Err(bad(cmd, "pass \"paths\" (files or a folder) or \"useOpenDocuments\": true"));
     }
-    let Some(fmt) = fmt else { return Err(bad(cmd, "no readable image sources")) };
-    Ok((out, fmt, icc))
+    let Some(fmt) = src.fmt else { return Err(bad(cmd, "no readable image sources")) };
+    Ok((src.out, fmt, src.icc))
 }
 
 /// Luminance and coverage of `surf` over `area`, box-downsampled by `k`.

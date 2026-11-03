@@ -25,6 +25,18 @@ pub(crate) fn read_file(path: &str) -> Result<Vec<u8>> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+/// [`read_file`] with the caller's own byte limit: a larger file is refused without being read,
+/// for a caller that has to fit it into what is left of a memory budget.
+pub(crate) fn read_file_limited(path: &str, max: u64) -> Result<Vec<u8>> {
+    photocraft_format::read_file_limited(std::path::Path::new(path), max).map_err(|e| EngineError::Other(format!("{path}: {e}")))
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn read_file_limited(path: &str, _max: u64) -> Result<Vec<u8>> {
+    Err(EngineError::Other(format!("cannot read {path}: no file system on the web")))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 /// Every file the engine writes goes through here: crash-safe (temp file + fsync + rename, see
 /// [`photocraft_format::atomic`]), so a failed save never destroys the previous file.
 pub(crate) fn write_file(path: &str, bytes: &[u8]) -> Result<()> {

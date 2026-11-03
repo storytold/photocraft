@@ -35,6 +35,13 @@ pub fn read_file_with(path: &Path, chunk: usize) -> io::Result<Vec<u8>> {
     read_path(path, chunk, MAX_OPEN_BYTES)
 }
 
+/// [`read_file`] with the caller's own total limit, in bytes: a file larger than `max` is a
+/// `FileTooLarge` error and is not read, so a caller holding part of a budget can refuse it
+/// before reserving anything.
+pub fn read_file_limited(path: &Path, max: u64) -> io::Result<Vec<u8>> {
+    read_path(path, READ_CHUNK, max.min(MAX_OPEN_BYTES))
+}
+
 /// [`read_file_with`] with a chosen total limit (tests use small ones).
 fn read_path(path: &Path, chunk: usize, max: u64) -> io::Result<Vec<u8>> {
     #[cfg(unix)]
@@ -199,6 +206,16 @@ mod tests {
         let buf = read_all_with(&mut std::io::Cursor::new(&data), data.len() as u64, 4096, MAX_OPEN_BYTES).unwrap();
         assert_eq!(buf, data);
         assert_eq!(buf.capacity(), data.len());
+    }
+
+    #[test]
+    fn a_caller_limit_refuses_a_larger_file_before_reading_it() {
+        let data = vec![7u8; 10_000];
+        let p = temp("limited", &data);
+        assert_eq!(read_file_limited(&p, data.len() as u64).unwrap(), data, "exactly at the limit");
+        let e = read_file_limited(&p, data.len() as u64 - 1).unwrap_err();
+        assert_eq!(e.kind(), io::ErrorKind::FileTooLarge);
+        assert!(e.to_string().contains("was not read"), "{e}");
     }
 
     #[test]
