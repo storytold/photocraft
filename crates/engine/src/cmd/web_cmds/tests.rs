@@ -1317,3 +1317,39 @@ fn embed_color_profile_tags_an_untagged_document_srgb() {
         assert_eq!(profile(&off), None, "{format}");
     }
 }
+
+/// The writer API runs outside `Session::execute`: the session's gate must still reach the
+/// temporary session that resizes the document, so a linked file it refuses is not re-read.
+#[test]
+fn platform_writer_resizes_under_the_sessions_source_policy() {
+    fn deny_png_paths(_: &str, p: &Value) -> Result<()> {
+        match p.get("path").and_then(Value::as_str) {
+            Some(path) if path.ends_with(".png") => Err(other(format!("source path refused: {path}"))),
+            _ => Ok(()),
+        }
+    }
+    let dir = tmp("writer_policy");
+    let link = format!("{dir}/art.png");
+    let mut src = Session::new();
+    src.execute("file.new", json!({"width": 64, "height": 48, "background": "#ff0000"})).unwrap();
+    crate::file_cmds::save_doc(&src.active().unwrap().doc, &link, None).unwrap();
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 64, "height": 48, "background": "#ffffff"})).unwrap();
+    s.execute("file.placeLinked", json!({"path": link})).unwrap();
+    // The file changes to blue after it was placed: a resize that re-reads it would show blue.
+    src.execute("edit.fill", json!({"contents": "color", "color": "#0000ff"})).unwrap();
+    crate::file_cmds::save_doc(&src.active().unwrap().doc, &link, None).unwrap();
+    s.authorize = Some(deny_png_paths);
+    let params = json!({"format": "png24", "path": "small.png", "width": 32});
+    let mut output = Vec::new();
+    if save_for_web_with_writer(&mut s, &params, &mut |_, bytes| {
+        output.extend_from_slice(bytes);
+        Ok(())
+    })
+    .is_ok()
+    {
+        let img = photocraft_codecs::decode(&output).unwrap().convert(photocraft_codecs::ChannelLayout::Rgba, photocraft_codecs::SampleType::U8);
+        let i = (12 * 32 + 16) * 4;
+        assert_ne!(&img.data()[i..i + 3], &[0, 0, 255], "the refused file must not be re-read into the export");
+    }
+}
