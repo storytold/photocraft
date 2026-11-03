@@ -10,6 +10,7 @@ use serde_json::json;
 use crate::PhotocraftApp;
 use crate::theme::ThemeKind;
 
+use super::tabs::MAX_DOC_TAB_W;
 use super::{TabStrip, pro_tab_title};
 
 /// A real app window with `docs` documents named "ch1-pNN.png".
@@ -86,6 +87,22 @@ fn studio_tabs_overflow_into_the_same_menu() {
     let active = h.state().session.active_index().unwrap();
     let name = h.state().session.documents()[active].doc.name.clone();
     assert!(h.query_by_label(&name).is_some(), "the active tab is on the strip: {name}");
+}
+
+/// #11131: a document with a long name doesn't stretch its tab across the strip; the tab stops at
+/// a maximum width and the name is cut with '…'.
+#[test]
+fn a_long_document_name_keeps_its_tab_to_the_maximum_width() {
+    let long = format!("{}.png", "a-long-file-name-copied-from-a-web-address-".repeat(2));
+    for theme in ThemeKind::ALL {
+        let mut h = harness(1, theme);
+        h.state_mut().run("file.new", json!({"width": 400, "height": 300, "name": long})).unwrap();
+        h.run_steps(2);
+        let s = strip(&h);
+        let doc = h.state().session.active_index().unwrap();
+        let (_, r) = s.tabs.iter().find(|(d, _)| *d == doc).expect("the long tab is on the strip");
+        assert!(r.width() <= MAX_DOC_TAB_W + 0.5, "{theme:?}: the tab is {} wide", r.width());
+    }
 }
 
 #[test]

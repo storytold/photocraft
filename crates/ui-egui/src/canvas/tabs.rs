@@ -465,6 +465,9 @@ fn open_tab_clicks(
 /// Document tabs: the chrome around a title (the × and its gaps).
 const DOC_TAB_PAD: f32 = 42.0;
 
+/// The widest a document tab grows: a longer name is cut with '…' and the tooltip has all of it (#11131).
+pub(super) const MAX_DOC_TAB_W: f32 = 320.0;
+
 /// The Studio strip's tabs carried 4 pt of spacing between them and 44 pt of chrome; `fit` sees
 /// one number per tab, so the gap rides in the natural width and comes back out when painted.
 const STUDIO_TAB_PAD: f32 = 48.0;
@@ -472,11 +475,13 @@ const STUDIO_TAB_PAD: f32 = 48.0;
 const STUDIO_TAB_GAP: f32 = 4.0;
 
 /// Fit document tabs as Photoshop does (#4487): a tab never shrinks below its whole title, so the
-/// tabs that don't fit move into the » menu instead. Only the active tab, when it alone is wider
-/// than the strip, is cut.
+/// tabs that don't fit move into the » menu instead. A title longer than [`MAX_DOC_TAB_W`] is cut
+/// to that width (#11131), and only the active tab, when it alone is wider than the strip, is cut
+/// further.
 fn fit_doc_tabs(natural: &[f32], selected: usize, avail: f32) -> crate::tab_strip::TabFit {
-    let widest = natural.iter().copied().filter(|w| w.is_finite()).fold(0.0, f32::max);
-    crate::tab_strip::fit(natural, selected, avail, widest, crate::tab_strip::CHEVRON_W)
+    let capped: Vec<f32> = natural.iter().map(|w| w.min(MAX_DOC_TAB_W)).collect();
+    let widest = capped.iter().copied().filter(|w| w.is_finite()).fold(0.0, f32::max);
+    crate::tab_strip::fit(&capped, selected, avail, widest, crate::tab_strip::CHEVRON_W)
 }
 
 /// Photoshop's tab title: "name @ 50% (Layer 1, RGB/8)", "(Layer 1, Layer Mask/8)" when the mask
