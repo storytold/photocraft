@@ -458,6 +458,79 @@ fn multiband_layout(photometric: u64, has_alpha: bool, gray_alpha: bool) -> Chan
     }
 }
 
+const TAG_PREDICTOR: u16 = 317;
+const TAG_JPEG_TABLES: u16 = 347;
+/// Marker segments looked at before a JPEG chunk's frame header. Real chunks hold a handful
+/// (SOI, DRI, SOF, DHT, DQT, SOS); the cap keeps chunks that all point at one long run of
+/// segments from costing chunks x segments.
+const MAX_JPEG_CHUNK_MARKERS: usize = 256;
+
+/// The frame header (width, height, components) of a JPEG stream: `Ok(None)` when it has none
+/// before its first scan, `Err` when more than [`MAX_JPEG_CHUNK_MARKERS`] segments come first.
+fn jpeg_frame(b: &[u8]) -> Result<Option<(usize, usize, usize)>, CodecError> {
+    let be16 = |at: usize| b.get(at..at + 2).and_then(|v| <[u8; 2]>::try_from(v).ok()).map(|v| usize::from(u16::from_be_bytes(v)));
+    if b.get(..2) != Some(&[0xFF, 0xD8][..]) {
+        return Ok(None);
+    }
+    let mut i = 2;
+    for _ in 0..MAX_JPEG_CHUNK_MARKERS {
+        while b.get(i) == Some(&0xFF) && b.get(i + 1) == Some(&0xFF) {
+            i += 1;
+        }
+        if b.get(i) != Some(&0xFF) {
+            return Ok(None);
+        }
+        let Some(&code) = b.get(i + 1) else { return Ok(None) };
+        match code {
+            0xC0..=0xCF if !matches!(code, 0xC4 | 0xC8 | 0xCC) => {
+                let frame = be16(i + 5).zip(be16(i + 7)).zip(b.get(i + 9));
+                return Ok(frame.map(|((h, w), &nc)| (w, h, usize::from(nc))));
+            }
+            0xD9 | 0xDA => return Ok(None),
+            0x01 | 0xD0..=0xD8 => i += 2,
+            _ => match be16(i + 2) {
+                Some(len) => i += 2 + len,
+                None => return Ok(None),
+            },
+        }
+    }
+    Err(err("a JPEG strip or tile has too many marker segments before its frame header"))
+}
+
+/// Refuses JPEG strips or tiles whose embedded frame is larger than the strip or tile
+/// (`nominal`, unclipped) or whose decoded frame exceeds `cap` bytes. Chunks sharing an offset
+/// are checked once.
+fn check_jpeg_chunks(
+    f: &File<'_>,
+    offsets: &ifd::Entry,
+    sizes: &ifd::Entry,
+    expected: u64,
+    tables: Option<&[u8]>,
+    nominal: (usize, usize),
+    cap: usize,
+) -> Result<(), CodecError> {
+    let mut chunks: Vec<(u64, u64)> = (0..expected).filter_map(|i| Some((f.uint(offsets, i)?, f.uint(sizes, i)?))).collect();
+    chunks.sort_unstable();
+    chunks.dedup_by_key(|c| c.0);
+    let len = f.b.len() as u64;
+    for (at, n) in chunks {
+        let end = at.saturating_add(n).min(len);
+        let Some(data) = usize::try_from(at).ok().zip(usize::try_from(end).ok()).and_then(|(a, e)| f.b.get(a..e)) else { continue };
+        let frame = match jpeg_frame(data)? {
+            Some(frame) => Some(frame),
+            None => tables.map(jpeg_frame).transpose()?.flatten(),
+        };
+        let Some((w, h, nc)) = frame else { continue };
+        if w > nominal.0 || h > nominal.1 {
+            return Err(err(format!("a {w}x{h} JPEG frame in a {}x{} strip or tile", nominal.0, nominal.1)));
+        }
+        if w.checked_mul(h).and_then(|px| px.checked_mul(nc.max(1))).is_none_or(|bytes| bytes > cap) {
+            return Err(CodecError::LimitExceeded(format!("a {w}x{h} JPEG strip or tile")));
+        }
+    }
+    Ok(())
+}
+
 /// The chunk tables must match the geometry. Checked in 64 bits, before the `tiff` crate does
 /// the same arithmetic in narrower types.
 fn check_chunk_tables(f: &File<'_>, dir: &Ifd, (w, h): (u32, u32), spp: u64, planar: bool, tiled: bool) -> Result<(u64, u64, u64), CodecError> {
@@ -632,6 +705,14 @@ fn prepare(f: &File<'_>, dir: &Ifd, limits: &Limits, whole: bool) -> Result<Prep
     if let Some(e) = dir.entries.iter().find(|e| ifd::STRUCTURAL_TAGS.contains(&e.tag) && f.data(e).is_none()) {
         return Err(err(format!("tag {} points past the end of the file", e.tag)));
     }
+    // This parser reads the first entry of a tag and the `tiff` crate the last, so a repeated
+    // structural tag (a small SamplesPerPixel first, a large one last) would be checked here with
+    // one value and sized by the crate with another.
+    let mut structural: Vec<u16> = dir.entries.iter().map(|e| e.tag).filter(|t| ifd::STRUCTURAL_TAGS.contains(t)).collect();
+    structural.sort_unstable();
+    if let Some(w) = structural.windows(2).find(|w| w[0] == w[1]) {
+        return Err(err(format!("tag {} appears more than once", w[0])));
+    }
     let need = |tag: u16, name: &str| f.tag_uint(dir, tag).ok_or_else(|| err(format!("missing or unreadable {name}")));
     let w = u32::try_from(need(ifd::TAG_WIDTH, "ImageWidth")?).map_err(|_| err("ImageWidth out of range"))?;
     let h = u32::try_from(need(ifd::TAG_HEIGHT, "ImageLength")?).map_err(|_| err("ImageLength out of range"))?;
@@ -803,6 +884,25 @@ fn prepare(f: &File<'_>, dir: &Ifd, limits: &Limits, whole: bool) -> Result<Prep
         .and_then(|s| s.checked_mul(src.bytes()))
         .ok_or_else(|| CodecError::LimitExceeded("tile size".into()))?;
     let scratch_cap = chunk_bytes.saturating_mul(2).max(64 << 20).min(limits.alloc_usize());
+    // The floating-point predictor makes the `tiff` crate read each row of a tile at its full
+    // stored width (TileWidth, not clipped to the image) into a buffer of its own, outside the
+    // scratch buffer: that row must fit the same cap.
+    if f.tag_uint(dir, TAG_PREDICTOR) == Some(3) {
+        let stored_row = cw.checked_mul(chunk_spp).and_then(|n| n.checked_mul(src.bytes()));
+        if stored_row.is_none_or(|n| n > scratch_cap) {
+            return Err(CodecError::LimitExceeded(format!("a {cw} sample wide predicted tile row")));
+        }
+    }
+    // JPEG-compressed chunks (compression 7) are decoded by the `tiff` crate into a whole JPEG
+    // image sized by the embedded frame header, with no limits, before the chunk's bytes are
+    // taken. The frame must fit the strip or tile it stands for, as libtiff requires, and the
+    // scratch cap.
+    if compression == 7 {
+        let tables = dir.get(TAG_JPEG_TABLES).and_then(|e| f.data(e));
+        let (nominal_w, nominal_h) =
+            (cw, if tiled { ch } else { f.tag_uint(dir, ifd::TAG_ROWS_PER_STRIP).and_then(|r| usize::try_from(r).ok()).unwrap_or(hu) });
+        check_jpeg_chunks(f, offsets, sizes, expected, tables, (nominal_w, nominal_h), scratch_cap)?;
+    }
     let (extra_at, extras_over_limit) = extra_sample_indices(spp as usize, color, alpha_at, out_layout.has_alpha());
     let mut lay = Layout {
         w: wu,
