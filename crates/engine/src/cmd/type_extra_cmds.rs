@@ -667,9 +667,7 @@ fn toggle_opentype(s: &mut Session, p: &Value, tag: &'static str) -> Result<Valu
     } else {
         0
     };
-    let cur = representative
-        .and_then(|id| st.doc.layer(id))
-        .is_some_and(|l| matches!(&l.content, LayerContent::Text(t) if feature_on_at(t, start_char, tag)));
+    let cur = representative.and_then(|id| st.doc.layer(id)).is_some_and(|l| matches!(&l.content, LayerContent::Text(t) if feature_on_at(t, start_char, tag)));
     let on = p.get("on").and_then(Value::as_bool).unwrap_or(!cur);
     with_text_targets(s, p, "Change OpenType Feature", |t, (a, b)| {
         style_range(t, a.min(b), a.max(b), &|st| set_feature(st, tag, on));
@@ -909,63 +907,41 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("type.openType.ornaments", "Ornaments", &["Type", "OpenType"], OT, has_format_target, |s, p| toggle_opentype(s, p, "ornm")),
         spec!("type.openType.ordinals", "Ordinals", &["Type", "OpenType"], OT, has_format_target, |s, p| toggle_opentype(s, p, "ordn")),
         spec!("type.openType.fractions", "Fractions", &["Type", "OpenType"], OT, has_format_target, |s, p| toggle_opentype(s, p, "frac")),
-        spec!(
-            "type.openType.numerals.default",
-            "Default",
-            &["Type", "OpenType", "Numerals"],
-            FP,
-            has_format_target,
-            |s, p| set_numerals(s, p, NumeralsStyle::Default)
-        ),
+        spec!("type.openType.numerals.default", "Default", &["Type", "OpenType", "Numerals"], FP, has_format_target, |s, p| set_numerals(
+            s,
+            p,
+            NumeralsStyle::Default
+        )),
         spec!("type.openType.numerals.lining", "Lining", &["Type", "OpenType", "Numerals"], FP, has_format_target, |s, p| {
             set_numerals(s, p, NumeralsStyle::Lining)
         }),
         spec!("type.openType.numerals.oldstyle", "Oldstyle", &["Type", "OpenType", "Numerals"], FP, has_format_target, |s, p| {
             set_numerals(s, p, NumeralsStyle::Oldstyle)
         }),
-        spec!(
-            "type.openType.numerals.proportional",
-            "Proportional",
-            &["Type", "OpenType", "Numerals"],
-            FP,
-            has_format_target,
-            |s, p| set_numerals(s, p, NumeralsStyle::Proportional)
-        ),
+        spec!("type.openType.numerals.proportional", "Proportional", &["Type", "OpenType", "Numerals"], FP, has_format_target, |s, p| set_numerals(
+            s,
+            p,
+            NumeralsStyle::Proportional
+        )),
         spec!("type.openType.numerals.tabular", "Tabular", &["Type", "OpenType", "Numerals"], FP, has_format_target, |s, p| {
             set_numerals(s, p, NumeralsStyle::Tabular)
         }),
-        spec!(
-            "type.openType.numerals.proportionalLining",
-            "Proportional Lining",
-            &["Type", "OpenType", "Numerals"],
-            FP,
-            has_format_target,
-            |s, p| set_numerals(s, p, NumeralsStyle::ProportionalLining)
-        ),
-        spec!(
-            "type.openType.numerals.tabularLining",
-            "Tabular Lining",
-            &["Type", "OpenType", "Numerals"],
-            FP,
-            has_format_target,
-            |s, p| set_numerals(s, p, NumeralsStyle::TabularLining)
-        ),
-        spec!(
-            "type.openType.numerals.proportionalOldstyle",
-            "Proportional Oldstyle",
-            &["Type", "OpenType", "Numerals"],
-            FP,
-            has_format_target,
-            |s, p| set_numerals(s, p, NumeralsStyle::ProportionalOldstyle)
-        ),
-        spec!(
-            "type.openType.numerals.tabularOldstyle",
-            "Tabular Oldstyle",
-            &["Type", "OpenType", "Numerals"],
-            FP,
-            has_format_target,
-            |s, p| set_numerals(s, p, NumeralsStyle::TabularOldstyle)
-        ),
+        spec!("type.openType.numerals.proportionalLining", "Proportional Lining", &["Type", "OpenType", "Numerals"], FP, has_format_target, |s, p| {
+            set_numerals(s, p, NumeralsStyle::ProportionalLining)
+        }),
+        spec!("type.openType.numerals.tabularLining", "Tabular Lining", &["Type", "OpenType", "Numerals"], FP, has_format_target, |s, p| set_numerals(
+            s,
+            p,
+            NumeralsStyle::TabularLining
+        )),
+        spec!("type.openType.numerals.proportionalOldstyle", "Proportional Oldstyle", &["Type", "OpenType", "Numerals"], FP, has_format_target, |s, p| {
+            set_numerals(s, p, NumeralsStyle::ProportionalOldstyle)
+        }),
+        spec!("type.openType.numerals.tabularOldstyle", "Tabular Oldstyle", &["Type", "OpenType", "Numerals"], FP, has_format_target, |s, p| set_numerals(
+            s,
+            p,
+            NumeralsStyle::TabularOldstyle
+        )),
         spec!("type.createWorkPath", "Create Work Path", &["Type"], LP, has_text, create_work_path),
         spec!("type.convertToShape", "Convert to Shape", &["Type"], LP, has_text, convert_to_shape),
         spec!("type.rasterizeTypeLayer", "Rasterize Type Layer", &["Type"], LP, has_text, |s, p| s.execute("type.rasterize", p.clone())),

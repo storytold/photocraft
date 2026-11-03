@@ -1732,6 +1732,29 @@ fn psd_round_trips_antialias_opentype_and_warp() {
     }
 }
 
+/// Numerals menu tags (`lnum` / `onum` / `pnum` / `tnum`) survive TySh EngineData — bool keys for
+/// singles, plus `/FigureStyle` for the four width×height combos (Krita / Illustrator).
+#[test]
+fn psd_round_trips_opentype_numeral_features() {
+    let cases: &[&[&str]] = &[&["lnum"], &["onum"], &["pnum"], &["tnum"], &["lnum", "tnum"], &["onum", "pnum"], &["lnum", "pnum"], &["onum", "tnum"]];
+    for tags in cases {
+        let style = CharStyle {
+            font_family: "Inter".into(),
+            size_pt: 20.0,
+            features: tags.iter().map(|t| FontFeature { tag: (*t).into(), value: 1 }).collect(),
+            ..Default::default()
+        };
+        let t = styled("0123456789", style);
+        let bytes = crate::psd::build_tysh(&t, 72.0, None);
+        let back = crate::psd::text_layer_from_tysh(&bytes, 72.0).expect("tysh");
+        let runs = back.char_runs();
+        let mut got: Vec<String> = runs[0].style.features.iter().map(|f| f.tag.clone()).collect();
+        got.sort_unstable();
+        let want: Vec<String> = tags.iter().map(|t| (*t).to_string()).collect();
+        assert_eq!(got, want, "numeral tags {tags:?}");
+    }
+}
+
 /// A legacy-signature `TySh` (#1469): zero PointBase, `bounds` (the layout box) and `boundingBox`
 /// (the ink box, as Photoshop writes it) both around `anchor` in a remote local space, and a
 /// `transform` that cancels the remote origin.

@@ -1,5 +1,8 @@
 use super::edit::{TEMPLATE_NODES, edited_object, fits, is_stub, names_one_frame, new_object, pad_frames, td_edited_object, with_modes};
-use super::import::{OPENTYPE_KEYS, TXT2_FEATURES, TXT2_STYLISTIC_SETS, kern_units, manual, object_frame, pair_runs, parse_txt2, postscript_for, real};
+use super::import::{
+    OPENTYPE_KEYS, TXT2_FEATURES, TXT2_STYLISTIC_SETS, figure_style_from_features, kern_units, manual, object_frame, pair_runs, parse_txt2, postscript_for,
+    real,
+};
 use super::{
     AntiAlias, Caps, CharStyle, Color, ColorMode, D, Descriptor, E, FontBaseline, Id, Kerning, Orientation, ParagraphStyle, TextAlign, TextLayer, TextShape,
     TySh, UnicodeString, ed, engine_data, enum_value, enumv, parse_tysh, write_tysh,
@@ -25,6 +28,11 @@ pub(crate) fn style_sheet_data(s: &CharStyle, font: usize, k: f32) -> E {
         .filter(|(_, tag)| s.features.iter().any(|f| f.tag == *tag && f.value > 0))
         .map(|(key, _)| (key.to_string(), E::Bool(true)))
         .collect();
+    // Exact width×height numeral combos also go out as `/FigureStyle` for Krita / Illustrator.
+    let figure = figure_style_from_features(&s.features);
+    if figure != 0 {
+        opentype.push(("FigureStyle".into(), E::Int(figure)));
+    }
     let mut dict = vec![
         ("Font".into(), E::Int(font as i64)),
         ("FontSize".into(), real(s.size_pt / k)),
