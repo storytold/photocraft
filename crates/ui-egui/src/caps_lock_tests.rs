@@ -177,7 +177,7 @@ fn caps_lock_gives_the_curves_eyedroppers_the_precise_crosshair() {
     let precise = fp(&h);
     assert_eq!(precise.icon, CursorIcon::Crosshair, "Precise: the crosshair");
     // CodeRabbit on #10406: the pipette is painted, not only the icon hidden.
-    assert_ne!(standard.shapes, precise.shapes, "Standard paints the pipette");
+    assert_ne!(standard.shapes, precise.shapes, "Standard paints a cursor of its own where Precise shows the crosshair");
     assert_ne!(standard, precise, "Standard: the pipette");
     other(&mut h, "standard");
     caps(&mut h, true);
@@ -205,7 +205,7 @@ fn caps_lock_gives_the_properties_eyedroppers_the_precise_crosshair() {
     let precise = fp(&h);
     assert_eq!(precise.icon, CursorIcon::Crosshair, "Precise: the crosshair");
     // CodeRabbit on #10406: the pipette is painted, not only the icon hidden.
-    assert_ne!(standard.shapes, precise.shapes, "Standard paints the pipette");
+    assert_ne!(standard.shapes, precise.shapes, "Standard paints a cursor of its own where Precise shows the crosshair");
     other(&mut h, "standard");
     caps(&mut h, true);
     assert_eq!(fp(&h), precise, "caps lock turns the pipette into the precise crosshair");
@@ -230,7 +230,7 @@ fn caps_lock_gives_the_color_pickers_eyedropper_the_precise_crosshair() {
     let precise = fp(&h);
     assert_eq!(precise.icon, CursorIcon::Crosshair, "Precise: the crosshair");
     // CodeRabbit on #10406: the pipette is painted, not only the icon hidden.
-    assert_ne!(standard.shapes, precise.shapes, "Standard paints the pipette");
+    assert_ne!(standard.shapes, precise.shapes, "Standard paints a cursor of its own where Precise shows the crosshair");
     assert_ne!(standard, precise);
     other(&mut h, "standard");
     caps(&mut h, true);
