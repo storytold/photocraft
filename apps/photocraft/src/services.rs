@@ -18,10 +18,10 @@ mod recovery_tests;
 /// Photoshop brushes (.abr), gradients (.grd), layer styles (.asl), swatches (.aco, .act, .ase) and keyboard shortcut sets
 /// (.kys), which go to the preset libraries and Edit › Keyboard Shortcuts.
 const OPEN_EXTS: &[&str] = &[
-    "pcraft", "pdn", "ora", "xcf", "xcfgz", "gz", "kra", "krz", "psd", "psb", "psdt", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "tga", "ico",
-    "qoi", "exr", "hdr", "pbm", "pgm", "ppm", "pam", "pfm", "pcx", "dds", "xpm", "fits", "fit", "fts", "dpx", "cin", "dcm", "dicom", "dc3", "iff", "lbm",
-    "ilbm", "heic", "heif", "hif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf", "abr", "grd", "asl", "svg", "svgz", "aco", "act",
-    "ase", "kys", "af", "afdesign", "afphoto", "afpub",
+    "pcraft", "pdn", "ora", "xcf", "xcfgz", "gz", "kra", "krz", "psd", "psb", "psdt", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "dib", "tga",
+    "ico", "qoi", "exr", "hdr", "pbm", "pgm", "ppm", "pnm", "pam", "pfm", "pcx", "dds", "xpm", "fits", "fit", "fts", "dpx", "cin", "dcm", "dicom", "dc3",
+    "iff", "lbm", "ilbm", "heic", "heif", "hif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf", "abr", "grd", "asl", "svg", "svgz",
+    "aco", "act", "ase", "kys", "af", "afdesign", "afphoto", "afpub",
 ];
 const SVG_EXTS: &[&str] = &["svg", "svgz"];
 
@@ -54,14 +54,14 @@ const OPEN_FILTERS: &[(&str, &[&str])] = &[
     ("TIFF", &["tif", "tiff"]),
     ("WebP", &["webp"]),
     ("GIF", &["gif"]),
-    ("BMP", &["bmp"]),
+    ("BMP", &["bmp", "dib"]),
     ("Targa", &["tga"]),
     ("ICO", &["ico"]),
     ("QOI", &["qoi"]),
     ("PCX", &["pcx"]),
     ("DDS", &["dds"]),
     ("XPM", &["xpm"]),
-    ("Portable Bitmap", &["pbm", "pgm", "ppm", "pam", "pfm"]),
+    ("Portable Bitmap", &["pbm", "pgm", "ppm", "pnm", "pam", "pfm"]),
     ("OpenEXR", &["exr"]),
     ("Radiance HDR", &["hdr"]),
     ("FITS", &["fits", "fit", "fts"]),
@@ -91,15 +91,20 @@ const SAVE_FILTERS: &[(&str, &[&str])] = &[
     ("PhotoCraft", &["pcraft"]),
     ("OpenRaster", &["ora"]),
     ("PNG", &["png"]),
-    ("JPEG", &["jpg"]),
+    ("JPEG", &["jpg", "jpeg"]),
+    ("JPEG XL", &["jxl"]),
     ("WebP", &["webp"]),
-    ("TIFF", &["tif"]),
+    ("TIFF", &["tif", "tiff"]),
     ("Targa", &["tga"]),
     // Also in Photoshop's Save As list; ICO is PhotoCraft's own (#4357): up to 256×256, with alpha.
-    ("BMP", &["bmp"]),
+    ("BMP", &["bmp", "dib"]),
     ("GIF", &["gif"]),
     ("ICO", &["ico"]),
     ("OpenEXR", &["exr"]),
+    // The encoder picks P5, P6, P7 or PFM from the image, not from the name, so only the neutral
+    // .pnm is offered: a .pbm or .pgm name would hold pixmap data (CodeRabbit on #9775).
+    ("Netpbm", &["pnm"]),
+    ("Radiance HDR", &["hdr"]),
     ("FITS", &["fits", "fit"]),
     ("DPX", &["dpx"]),
     // Game and 3D textures; DDS Options asks for the compression and mipmaps (#1327).
@@ -112,9 +117,21 @@ const SAVE_FILTERS: &[(&str, &[&str])] = &[
 /// never swaps their extension for a document format's.
 const OTHER_SAVE_FILTERS: &[(&str, &[&str])] = &[("Color Swatches", &["aco"]), ("Color Table", &["act"]), ("Swatch Exchange", &["ase"])];
 
+/// `suggested` with a Netpbm subtype's extension (an opened .pgm) as the neutral .pnm, the name
+/// every save dialog starts from: the encoder picks P5, P6, P7 or PFM from the image, so the old
+/// suffix could name other data, and macOS and rfd keep the suggested name as it is.
+fn netpbm_as_pnm(suggested: &str) -> String {
+    let path = Path::new(suggested);
+    let subtype = path.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).is_some_and(|e| ["pbm", "pgm", "ppm", "pam", "pfm"].contains(&e.as_str()));
+    if subtype { path.with_extension("pnm").to_string_lossy().into_owned() } else { suggested.to_string() }
+}
+
 /// Lists the save dialog's file types with the `suggested` type first (added if unlisted), so the dialog keeps that extension instead of .psd.
 fn save_filters(suggested: &str) -> Vec<(String, Vec<String>)> {
     let ext = Path::new(suggested).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+    // A Netpbm subtype's name (an opened .pgm) starts on the Netpbm type as .pnm: the encoder picks
+    // the subtype from the image, so the old name could describe other data (CodeRabbit on #9775).
+    let ext = if ["pbm", "pgm", "ppm", "pam", "pfm"].contains(&ext.as_str()) { "pnm".to_string() } else { ext };
     if let Some((name, exts)) = OTHER_SAVE_FILTERS.iter().find(|(_, exts)| exts.contains(&ext.as_str())) {
         return vec![(name.to_string(), exts.iter().map(|e| e.to_string()).collect())];
     }
@@ -216,6 +233,7 @@ fn show_file_dialog(request: FileDialogRequest, parent: Option<&eframe::Frame>, 
             Box::pin(async move { picked.await.map(|folder| answer_one(folder.path(), true, FileDialogAnswer::FolderTo)) })
         }
         FileDialogRequest::Save { suggested } => {
+            let suggested = netpbm_as_pnm(&suggested);
             let filters = save_filters(&suggested);
             let name = dialog_file_name(&suggested, cfg!(windows));
             let dir = Path::new(&suggested).parent().filter(|p| !p.as_os_str().is_empty()).map(Path::to_path_buf);
@@ -343,9 +361,20 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     photocraft_format::atomic_write(path, bytes).map_err(|e| e.to_string())
 }
 
-/// [`write_atomic`] reporting the fraction written (a background save's progress, #3389).
-fn write_atomic_progress(path: &Path, bytes: &[u8], progress: &dyn Fn(f32)) -> Result<(), String> {
-    photocraft_format::atomic_write_progress(path, bytes, progress).map_err(|e| e.to_string())
+/// [`write_atomic`] for an encoded save, reporting the fraction written (a background save's
+/// progress, #3389). A PSD/PSB is serialized straight into the temporary file, so the whole file
+/// is never held in memory next to its model (#6607).
+fn write_encoded_atomic(path: &Path, encoded: &photocraft_io::Encoded, progress: &dyn Fn(f32)) -> Result<(), String> {
+    match encoded {
+        photocraft_io::Encoded::Bytes(bytes) => photocraft_format::atomic_write_progress(path, bytes, progress),
+        photocraft_io::Encoded::Psd(_) => {
+            // Only the progress bar's scale: a model whose length can't be worked out fails the
+            // write the same way, through the atomic write's "not changed" error.
+            let len = encoded.encoded_len().unwrap_or(0);
+            photocraft_format::atomic_write_stream_progress(path, len, progress, &mut |w| encoded.write_to(w))
+        }
+    }
+    .map_err(|e| e.to_string())
 }
 
 /// Whether `a` and `b` reach the same file: the same device and inode on Unix, the same final path
@@ -395,26 +424,26 @@ fn export_options(settings: &photocraft_ui_egui::ExportSettings) -> photocraft_i
 const ENCODE_SHARE: f32 = 0.85;
 
 /// A save on a worker thread (`Services::save_file` and `Services::automation_save`, #2017):
-/// encode, then write through `write`. Cancelling while encoding leaves the target untouched;
-/// once writing starts the save can't be cancelled. The encoder's progress fills the first
+/// encode, then write through `write` (a PSD/PSB is serialized as it is written). Cancelling
+/// while encoding leaves the target untouched; once writing starts the save can't be cancelled. The encoder's progress fills the first
 /// [`ENCODE_SHARE`] of the job's progress, so the status bar and tab read "Saving NN%" (#3389).
 fn save_through(
     doc: &Document,
     path: &str,
     settings: &photocraft_ui_egui::ExportSettings,
     ctl: &photocraft_ui_egui::jobs_ui::SaveCtl,
-    write: impl Fn(&str, &[u8], &dyn Fn(f32)) -> Result<(), String>,
+    write: impl Fn(&str, &photocraft_io::Encoded, &dyn Fn(f32)) -> Result<(), String>,
 ) -> Result<Vec<String>, String> {
     ctl.progress(0.0, "Encoding");
     let opts = export_options(settings);
     let cancelled = || ctl.check().is_err();
     let progress = |f: f32| ctl.progress(f * ENCODE_SHARE, "");
     let interrupt = photocraft_raster::Interrupt::new(&cancelled, &progress);
-    let r = crate::crash_guard::guard("Save", || photocraft_io::export_with(doc, path, &opts, &interrupt).map_err(|e| e.to_string()))?;
+    let r = crate::crash_guard::guard("Save", || photocraft_io::encode_with(doc, path, &opts, &interrupt).map_err(|e| e.to_string()))?;
     ctl.commit()?;
     ctl.progress(ENCODE_SHARE, "Writing");
     // The last bit is the flush and rename after the last chunk: 100% only once they're done.
-    write(path, &r.bytes, &|f| ctl.progress(ENCODE_SHARE + (0.99 - ENCODE_SHARE) * f, ""))?;
+    write(path, &r.encoded, &|f| ctl.progress(ENCODE_SHARE + (0.99 - ENCODE_SHARE) * f, ""))?;
     ctl.progress(1.0, "");
     Ok(r.warnings)
 }
@@ -425,7 +454,7 @@ fn save_file(
     settings: &photocraft_ui_egui::ExportSettings,
     ctl: &photocraft_ui_egui::jobs_ui::SaveCtl,
 ) -> Result<Vec<String>, String> {
-    save_through(doc, path, settings, ctl, |p, b, progress| write_atomic_progress(Path::new(p), b, progress))
+    save_through(doc, path, settings, ctl, |p, encoded, progress| write_encoded_atomic(Path::new(p), encoded, progress))
 }
 
 type SharedRecovery = Rc<RefCell<Option<RecoveryStore>>>;
@@ -476,6 +505,11 @@ fn recovery_services(dir: Option<PathBuf>) -> Services {
 /// panic in arboard, or in decoding a copied file, becomes the paste's (or copy's) error and the
 /// app keeps its documents.
 fn guarded_clipboard_get(mut read: impl FnMut() -> Result<Option<(u32, u32, Vec<u8>)>, String> + 'static) -> photocraft_ui_egui::ClipboardGetFn {
+    Box::new(move || crate::crash_guard::guard("Paste", &mut read))
+}
+
+/// SVG reads use the same recovery boundary as raster clipboard reads.
+fn guarded_clipboard_svg(mut read: impl FnMut() -> Result<Option<Vec<u8>>, String> + 'static) -> photocraft_ui_egui::ClipboardGetSvgFn {
     Box::new(move || crate::crash_guard::guard("Paste", &mut read))
 }
 
@@ -543,6 +577,73 @@ fn image_from_offers(offers: &[String], mut fetch: impl FnMut(&str) -> Option<Ve
     })
 }
 
+/// Largest SVG markup a paste reads from clipboard text (128 MiB, the size an `.svgz` may inflate
+/// to).
+const MAX_CLIPBOARD_SVG_BYTES: u64 = photocraft_io::svg::MAX_INFLATED_BYTES;
+
+/// The pixels of a drawing copied as SVG markup (on macOS and Linux, VectorCraft's Copy leaves
+/// only the markup, as text): one pixel per SVG unit, scaled down to the SVG import's pixel limit,
+/// as RGBA8. `None` for text that isn't SVG, markup longer than [`MAX_CLIPBOARD_SVG_BYTES`], and
+/// markup that doesn't parse.
+fn image_from_svg_text(text: &str) -> Option<(u32, u32, Vec<u8>)> {
+    if u64::try_from(text.len()).ok()? > MAX_CLIPBOARD_SVG_BYTES || !text.trim_start_matches('\u{feff}').trim_start().starts_with('<') {
+        return None;
+    }
+    crate::crash_guard::guard("Paste", || photocraft_io::svg::rasterize_rgba8(text.as_bytes()).map_err(|e| e.to_string())).ok()
+}
+
+/// What a paste reads from the OS clipboard, in this order: the first copied file that is an
+/// image (Finder also puts the file's icon on the clipboard as an image, which would otherwise
+/// paste instead of the file), the clipboard's image, then a drawing copied as SVG markup. Each
+/// read runs only when the ones before it found nothing. A read that fails, such as one of a busy
+/// clipboard, returns its error, and the reads after it don't run.
+fn clipboard_image<C>(
+    clipboard: &mut C,
+    files: impl FnOnce(&mut C) -> Result<Option<Vec<PathBuf>>, String>,
+    image: impl FnOnce(&mut C) -> Result<Option<(u32, u32, Vec<u8>)>, String>,
+    text: impl FnOnce(&mut C) -> Result<Option<String>, String>,
+) -> Result<Option<(u32, u32, Vec<u8>)>, String> {
+    if let Some(img) = files(clipboard)?.and_then(|paths| image_from_files(&paths)) {
+        return Ok(Some(img));
+    }
+    if let Some(img) = image(clipboard)? {
+        return Ok(Some(img));
+    }
+    Ok(text(clipboard)?.and_then(|text| image_from_svg_text(&text)))
+}
+
+/// One OS clipboard read as [`clipboard_image`] takes it: no content in the format asked for is
+/// `None`, and any other failure, such as a busy clipboard or a broken pipe on Wayland, is the
+/// read's error.
+fn clipboard_read<T>(read: Result<T, arboard::Error>) -> Result<Option<T>, String> {
+    match read {
+        Ok(value) => Ok(Some(value)),
+        Err(arboard::Error::ContentNotAvailable) => Ok(None),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+/// Clipboard text as [`clipboard_image`] takes it: like [`clipboard_read`], except that text that
+/// isn't UTF-8 is `None`, like other text that isn't SVG markup.
+fn clipboard_text(read: Result<String, arboard::Error>) -> Result<Option<String>, String> {
+    match read {
+        Err(arboard::Error::ConversionFailure) => Ok(None),
+        read => clipboard_read(read),
+    }
+}
+
+/// Keep SVG source for Paste As without accepting an unbounded clipboard string as a new copy.
+fn svg_clipboard_source(text: Option<String>) -> Result<Option<Vec<u8>>, String> {
+    let Some(text) = text else { return Ok(None) };
+    if !photocraft_io::svg::is_svg(text.as_bytes()) {
+        return Ok(None);
+    }
+    if text.len() > 16 << 20 {
+        return Err("SVG clipboard data exceeds the 16 MiB limit".into());
+    }
+    Ok(Some(text.into_bytes()))
+}
+
 /// The shell command that starts this install under XWayland, where winit delivers file drops
 /// (winit 0.30 has none on Wayland, #386). A Flatpak gets the X11 socket only without the Wayland
 /// one, an AppImage relaunches by its own path, and anything else is `photocraft` on the PATH.
@@ -560,12 +661,6 @@ pub fn xwayland_command(flatpak_id: Option<&str>, appimage: Option<&str>, x_disp
 #[cfg(any(target_os = "linux", test))]
 fn shell_word(s: &str) -> String {
     if s.bytes().all(|b| b.is_ascii_alphanumeric() || b"/._-+:,@".contains(&b)) { s.to_string() } else { format!("'{}'", s.replace('\'', r"'\''")) }
-}
-
-/// The release-check transport, or `None` inside Flatpak: the sandbox has no network (see the
-/// manifest's finish-args) and `flatpak update` owns updates there.
-fn update_transport(flatpak_id: Option<&std::ffi::OsStr>) -> Option<photocraft_engine::updates_cmds::CheckFn> {
-    flatpak_id.is_none().then(crate::updates::service)
 }
 
 pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) -> Services {
@@ -590,7 +685,7 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
     });
     let automation_save = automation.clone().map(|workspace| {
         std::sync::Arc::new(move |doc: &Document, path: &str, settings: &photocraft_ui_egui::ExportSettings, ctl: &photocraft_ui_egui::jobs_ui::SaveCtl| {
-            save_through(doc, path, settings, ctl, |p, b, _| workspace.write(p, b).map_err(|e| e.to_string()))
+            save_through(doc, path, settings, ctl, |p, encoded, _| workspace.write(p, &encoded.bytes().map_err(|e| e.to_string())?).map_err(|e| e.to_string()))
         }) as photocraft_ui_egui::SaveFileFn
     });
     let step: fn(&str, &serde_json::Value) -> photocraft_engine::Result<()> = photocraft_automation::workspace::authorize_desktop_engine_step;
@@ -632,7 +727,7 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
         inbox: None,
         open_url: Some(Box::new(|url: &str| open::that(url).map_err(|e| e.to_string()))),
         beep: Some(platform_beep),
-        check_updates: update_transport(std::env::var_os("FLATPAK_ID").as_deref()),
+        check_updates: Some(crate::updates::service()),
         clipboard_set_image: Some({
             let clip = clip.clone();
             guarded_clipboard_set(move |w: u32, h: u32, px: &[u8]| {
@@ -644,6 +739,7 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
                 cb.set_image(arboard::ImageData { width: w as usize, height: h as usize, bytes: std::borrow::Cow::Borrowed(px) }).map_err(|e| e.to_string())
             })
         }),
+        open_external_svg: Some(Box::new(crate::external_svg::open)),
         clipboard_get_image: Some({
             let clip = clip.clone();
             let unreadable = clip_unreadable.clone();
@@ -660,30 +756,35 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
                         slot.insert(opened.map_err(|e| e.to_string())?)
                     }
                 };
-                // Copied files first: Finder also puts the file's icon on the clipboard as an
-                // image, which would otherwise paste instead of the file.
-                match cb.get().file_list() {
-                    Ok(paths) => {
-                        if let Some(img) = image_from_files(&paths) {
-                            return Ok(Some(img));
+                clipboard_image(
+                    cb,
+                    |cb| clipboard_read(cb.get().file_list()),
+                    |cb| match cb.get_image() {
+                        Ok(img) => Ok(Some((img.width as u32, img.height as u32, img.bytes.into_owned()))),
+                        Err(error) => {
+                            #[cfg(target_os = "linux")]
+                            if let Some(image) = wayland_clipboard_image() {
+                                return Ok(Some(image));
+                            }
+                            match error {
+                                arboard::Error::ContentNotAvailable => Ok(None),
+                                _ => Err(error.to_string()),
+                            }
                         }
-                    }
-                    Err(error @ arboard::Error::ClipboardOccupied) => return Err(error.to_string()),
-                    Err(_) => {}
-                }
-                match cb.get_image() {
-                    Ok(img) => Ok(Some((img.width as u32, img.height as u32, img.bytes.into_owned()))),
-                    Err(error) => {
-                        #[cfg(target_os = "linux")]
-                        if let Some(image) = wayland_clipboard_image() {
-                            return Ok(Some(image));
-                        }
-                        match error {
-                            arboard::Error::ContentNotAvailable => Ok(None),
-                            _ => Err(error.to_string()),
-                        }
-                    }
-                }
+                    },
+                    |cb| clipboard_text(cb.get_text()),
+                )
+            })
+        }),
+        clipboard_get_svg: Some({
+            let clip = clip.clone();
+            guarded_clipboard_svg(move || {
+                let mut slot = clip.try_borrow_mut().map_err(|_| "clipboard is busy".to_string())?;
+                let cb = match slot.as_mut() {
+                    Some(c) => c,
+                    None => slot.insert(arboard::Clipboard::new().map_err(|e| e.to_string())?),
+                };
+                svg_clipboard_source(clipboard_text(cb.get_text())?)
             })
         }),
         clipboard_unreadable: Some(Box::new(move || clip_unreadable.get())),
