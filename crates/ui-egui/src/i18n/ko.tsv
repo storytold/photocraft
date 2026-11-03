@@ -1933,6 +1933,8 @@
 	Export clipboard	클립보드 내보내기
 	Extra large	아주 크게
 	File Handling	파일 처리
+	Default save format	기본 저장 형식
+	TIFF	TIFF
 	File path	파일 경로
 	Fill new type layers with placeholder	새 문자 레이어에 예시 텍스트 채우기
 	Font preview	글꼴 미리 보기
@@ -3721,7 +3723,3 @@ curves	Smooth	매끄럽게
 	Font size presets	글꼴 크기 사전 설정
 	Leading presets	행간 사전 설정
 	Tracking presets	자간 사전 설정
-
-# Default save format (Preferences › File Handling)
-	Default save format	기본 저장 형식
-	TIFF	TIFF

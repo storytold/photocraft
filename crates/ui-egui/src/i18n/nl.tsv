@@ -1917,6 +1917,8 @@
 	Export clipboard	Klembord exporteren
 	Extra large	Extra groot
 	File Handling	Bestandsverwerking
+	Default save format	Standaard opslagindeling
+	TIFF	TIFF
 	File path	Bestandspad
 	Fill new type layers with placeholder	Nieuwe tekstlagen vullen met opvultekst
 	Font preview	Voorvertoning lettertype
@@ -4261,7 +4263,3 @@ curves	Smooth	Vloeiend maken
 	Font size presets	Voorinstellingen lettergrootte
 	Leading presets	Voorinstellingen interlinie
 	Tracking presets	Voorinstellingen spatiëring
-
-# Default save format (Preferences › File Handling)
-	Default save format	Standaard opslagindeling
-	TIFF	TIFF

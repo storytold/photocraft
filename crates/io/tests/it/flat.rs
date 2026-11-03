@@ -23,6 +23,79 @@ fn pixels_eq(a: &photocraft_doc::Document, b: &photocraft_doc::Document, tol: f3
     assert!(m <= tol, "max diff {m}");
 }
 
+#[test]
+fn flat_holds_checks_jpeg_dimensions() {
+    use photocraft_codecs::Format;
+    for (width, height, fits) in [(65_535, 1, true), (1, 65_535, true), (65_536, 1, false), (1, 65_536, false)] {
+        let mut doc = single(ColorMode::Rgb, SampleType::U8, false);
+        doc.size = photocraft_geom::Size::new(width, height);
+        // Uniform implicit pixels avoid allocating a large image for the boundary test.
+        *doc.layers[0].surface_mut().unwrap() = photocraft_raster::Surface::with_default(doc.pixel_format(), &[1.0, 1.0, 1.0, 1.0]);
+        doc.layers[0].locks.transparency = true;
+        doc.layers[0].locks.position = true;
+        assert_eq!(flat_holds(&doc, Format::Jpeg), fits, "{width} x {height}");
+        assert!(flat_holds(&doc, Format::Png));
+    }
+}
+
+#[test]
+fn flat_holds_checks_pixels_instead_of_background_locks() {
+    use photocraft_codecs::Format;
+    for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk] {
+        for locked in [false, true] {
+            let mut doc = single(mode, SampleType::U8, false);
+            doc.layers[0].locks.transparency = locked;
+            doc.layers[0].locks.position = locked;
+            assert_eq!(doc.background().is_some(), locked);
+            assert!(flat_holds(&doc, Format::Jpeg), "opaque {mode:?}, locked={locked}");
+            let surface = doc.layers[0].surface_mut().unwrap();
+            let mut pixel = surface.pixel(0, 0);
+            *pixel.last_mut().unwrap() = 0.5;
+            surface.write_pixel(0, 0, &pixel);
+            assert!(!flat_holds(&doc, Format::Jpeg), "transparent {mode:?}, locked={locked}");
+        }
+    }
+}
+
+#[test]
+fn flat_holds_preserves_off_canvas_pixels_at_every_depth() {
+    use photocraft_codecs::Format;
+    for depth in SampleType::ALL {
+        for (x, y) in [(-1, 0), (0, -1), (9, 0), (0, 6)] {
+            let mut doc = single(ColorMode::Rgb, depth, false);
+            let format = if depth == SampleType::F32 { Format::Tiff } else { Format::Png };
+            // Edge tiles extend past this 9 x 6 canvas, but their blank padding is harmless.
+            assert!(flat_holds(&doc, format));
+            doc.layers[0].surface_mut().unwrap().write_pixel(x, y, &[1.0, 0.0, 0.0, 1.0]);
+            assert!(!flat_holds(&doc, format), "{depth:?}, ({x}, {y})");
+            let bytes = export(&doc, "safe.psd", &ExportOptions::default()).unwrap().bytes;
+            let back = import("safe.psd", &bytes).unwrap().document;
+            assert_eq!(back.layers[0].surface().unwrap().pixel(x, y), vec![1.0, 0.0, 0.0, 1.0]);
+        }
+    }
+}
+
+#[test]
+fn flat_holds_preserves_layer_metadata() {
+    use photocraft_codecs::Format;
+    for xmp in [false, true] {
+        let mut doc = single(ColorMode::Rgb, SampleType::U8, false);
+        if xmp {
+            doc.layers[0].xmp = Some("<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"/>".into());
+        } else {
+            doc.layers[0].psd_blocks.push((*b"test", std::sync::Arc::new(vec![1, 2, 3, 4])));
+        }
+        assert!(!flat_holds(&doc, Format::Png));
+        assert!(!flat_holds(&doc, Format::Jpeg));
+        let bytes = export(&doc, "safe.psd", &ExportOptions::default()).unwrap().bytes;
+        let back = import("safe.psd", &bytes).unwrap().document;
+        assert_eq!(back.layers[0].xmp, doc.layers[0].xmp);
+        for block in &doc.layers[0].psd_blocks {
+            assert!(back.layers[0].psd_blocks.contains(block));
+        }
+    }
+}
+
 macro_rules! codec_rt {
     ($name:ident, $ext:expr, $mode:expr, $depth:expr, $alpha:expr, $tol:expr) => {
         #[test]

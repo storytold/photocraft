@@ -1943,6 +1943,8 @@
 	Export clipboard	Esporta appunti
 	Extra large	Extra grande
 	File Handling	Gestione file
+	Default save format	Formato di salvataggio predefinito
+	TIFF	TIFF
 	File path	Percorso file
 	Fill new type layers with placeholder	Riempi nuovi livelli testo con segnaposto
 	Font preview	Anteprima font
@@ -4618,7 +4620,3 @@ shape	Appearance	Aspetto
 	Font size presets	Predefiniti dimensione font
 	Leading presets	Predefiniti interlinea
 	Tracking presets	Predefiniti spaziatura
-
-# Default save format (Preferences › File Handling)
-	Default save format	Formato di salvataggio predefinito
-	TIFF	TIFF

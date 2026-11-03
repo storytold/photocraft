@@ -2367,6 +2367,8 @@
 	Export clipboard	Экспортировать буфер обмена
 	Extra large	Очень крупный
 	File Handling	Обработка файлов
+	Default save format	Формат сохранения по умолчанию
+	TIFF	TIFF
 	File path	Путь к файлу
 	Fill new type layers with placeholder	Заполнять новые текстовые слои условным текстом
 	Font preview	Предпросмотр шрифтов
@@ -4704,7 +4706,3 @@ shape	Appearance	Оформление
 	Font size presets	Наборы размеров шрифта
 	Leading presets	Наборы интерлиньяжа
 	Tracking presets	Наборы трекинга
-
-# Default save format (Preferences › File Handling)
-	Default save format	Формат сохранения по умолчанию
-	TIFF	TIFF

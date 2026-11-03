@@ -1917,6 +1917,8 @@
 	Export clipboard	Exporter le presse-papiers
 	Extra large	Très grande
 	File Handling	Gestion des fichiers
+	Default save format	Format d'enregistrement par défaut
+	TIFF	TIFF
 	File path	Chemin du fichier
 	Fill new type layers with placeholder	Remplir les nouveaux calques de texte avec un texte de substitution
 	Font preview	Aperçu des polices
@@ -4543,7 +4545,3 @@ shape	Appearance	Apparence
 	Font size presets	Tailles de police prédéfinies
 	Leading presets	Interlignages prédéfinis
 	Tracking presets	Approches prédéfinies
-
-# Default save format (Preferences › File Handling)
-	Default save format	Format d'enregistrement par défaut
-	TIFF	TIFF

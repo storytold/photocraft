@@ -165,6 +165,52 @@ fn save_dialog_suggests_the_default_save_format() {
     assert_eq!(app.session.prefs().file_handling.default_save_format, photocraft_engine::prefs::SaveFormat::Psd);
 }
 
+#[test]
+fn default_flat_formats_preserve_layer_data() {
+    use std::sync::Arc;
+    let ctx = egui::Context::default();
+    for format in ["png", "jpg"] {
+        for case in ["locked transparency", "left", "top", "right", "bottom", "layer XMP", "PSD block", "JPEG width", "JPEG height"] {
+            let (mut app, open, written) = jpeg_app(None, false);
+            app.run("prefs.set", json!({"path": "fileHandling.defaultSaveFormat", "value": format})).unwrap();
+            let doc = Arc::make_mut(&mut app.session.active_mut().unwrap().doc);
+            let layer = &mut doc.layers[0];
+            match case {
+                "locked transparency" => {
+                    assert!(layer.locks.transparency && layer.locks.position);
+                    layer.surface_mut().unwrap().write_pixel(0, 0, &[1.0, 0.0, 0.0, 0.5]);
+                }
+                "left" | "top" | "right" | "bottom" => {
+                    let (x, y) = match case {
+                        "left" => (-1, 0),
+                        "top" => (0, -1),
+                        "right" => (doc.size.width as i32, 0),
+                        _ => (0, doc.size.height as i32),
+                    };
+                    layer.surface_mut().unwrap().write_pixel(x, y, &[1.0, 0.0, 0.0, 1.0]);
+                }
+                "layer XMP" => layer.xmp = Some("<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"/>".into()),
+                "PSD block" => layer.psd_blocks.push((*b"test", Arc::new(vec![1, 2, 3, 4]))),
+                "JPEG width" => doc.size.width = 65_536,
+                "JPEG height" => doc.size.height = 65_536,
+                _ => panic!("unknown test case: {case}"),
+            }
+            menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
+            app.poll_file_dialog(&ctx, None);
+            let expected =
+                if format == "png" && matches!(case, "locked transparency" | "JPEG width" | "JPEG height") { "My image.png" } else { "My image.psd" };
+            assert!(
+                matches!(open.borrow().as_slice(), [(FileDialogRequest::Save { suggested }, _)] if suggested == expected),
+                "{format}, {case}: {:?}",
+                open.borrow().first().map(|(r, _)| r.clone())
+            );
+            answer(&open, None);
+            app.poll_file_dialog(&ctx, None);
+            assert!(written.borrow().is_empty());
+        }
+    }
+}
+
 /// The written files, by path.
 type Files = Rc<RefCell<Vec<(String, Vec<u8>)>>>;
 

@@ -1936,6 +1936,8 @@
 	Export clipboard	Zwischenablage exportieren
 	Extra large	Extra groß
 	File Handling	Dateiverarbeitung
+	Default save format	Standardformat zum Speichern
+	TIFF	TIFF
 	File path	Dateipfad
 	Fill new type layers with placeholder	Neue Textebenen mit Platzhalter füllen
 	Font preview	Schriftvorschau
@@ -3526,7 +3528,3 @@ curves	Smooth	Glätten
 	Font size presets	Schriftgrößen-Vorgaben
 	Leading presets	Zeilenabstand-Vorgaben
 	Tracking presets	Laufweiten-Vorgaben
-
-# Default save format (Preferences › File Handling)
-	Default save format	Standardformat zum Speichern
-	TIFF	TIFF

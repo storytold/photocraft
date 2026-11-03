@@ -1460,6 +1460,8 @@ cameraRaw	Shadows	Vùng tối
 	Enhanced Controls	Điều khiển nâng cao
 	Erase	Tẩy
 	File Handling	Xử lý tệp
+	Default save format	Định dạng lưu mặc định
+	TIFF	TIFF
 	File path	Đường dẫn tệp
 	Full size tip	Đầu cọ đủ kích thước
 	Gamut warning color	Màu cảnh báo gam
@@ -4000,7 +4002,3 @@ curves	Smooth	Làm mượt
 	Font size presets	Cỡ chữ đặt sẵn
 	Leading presets	Giãn dòng đặt sẵn
 	Tracking presets	Khoảng cách chữ đặt sẵn
-
-# Default save format (Preferences › File Handling)
-	Default save format	Định dạng lưu mặc định
-	TIFF	TIFF

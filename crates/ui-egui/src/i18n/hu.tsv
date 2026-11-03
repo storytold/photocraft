@@ -3259,6 +3259,8 @@ cameraRaw	Yellow	Sárga
 	fallback	tartalék
 	Fallback: {reason}	Tartalék: {reason}
 	File Handling	Fájlkezelés
+	Default save format	Alapértelmezett mentési formátum
+	TIFF	TIFF
 	Filename	Fájlnév
 	Fill	Kitöltés
 	Fill Color	Kitöltőszín
@@ -4415,7 +4417,3 @@ cameraRaw	Yellow	Sárga
 	Font size presets	Betűméret-előbeállítások
 	Leading presets	Sorköz-előbeállítások
 	Tracking presets	Betűköz-előbeállítások
-
-# Default save format (Preferences › File Handling)
-	Default save format	Alapértelmezett mentési formátum
-	TIFF	TIFF

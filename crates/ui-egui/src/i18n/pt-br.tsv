@@ -1911,6 +1911,8 @@
 	Export clipboard	Exportar área de transferência
 	Extra large	Extragrande
 	File Handling	Manipulação de arquivos
+	Default save format	Formato de salvamento padrão
+	TIFF	TIFF
 	File path	Caminho do arquivo
 	Fill new type layers with placeholder	Preencher novas camadas de texto com texto de espaço reservado
 	Font preview	Visualização de fontes
@@ -4431,7 +4433,3 @@ layerLabel	No Color	Sem cor
 	Font size presets	Predefinições de tamanho da fonte
 	Leading presets	Predefinições de entrelinha
 	Tracking presets	Predefinições de tracking
-
-# Default save format (Preferences › File Handling)
-	Default save format	Formato de salvamento padrão
-	TIFF	TIFF

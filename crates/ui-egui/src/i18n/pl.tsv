@@ -1955,6 +1955,8 @@
 	Export clipboard	Eksportuj schowek
 	Extra large	Bardzo duży
 	File Handling	Obsługa plików
+	Default save format	Domyślny format zapisu
+	TIFF	TIFF
 	File path	Ścieżka pliku
 	Fill new type layers with placeholder	Wypełniaj nowe warstwy tekstowe tekstem zastępczym
 	Font preview	Podgląd czcionek
@@ -4122,7 +4124,3 @@ curves	Smooth	Wygładź
 	Font size presets	Ustawienia wstępne rozmiaru czcionki
 	Leading presets	Ustawienia wstępne interlinii
 	Tracking presets	Ustawienia wstępne światła
-
-# Default save format (Preferences › File Handling)
-	Default save format	Domyślny format zapisu
-	TIFF	TIFF

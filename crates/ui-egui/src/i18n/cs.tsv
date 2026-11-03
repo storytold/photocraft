@@ -1961,6 +1961,8 @@
 	Export clipboard	Exportovat schránku
 	Extra large	Velmi velká
 	File Handling	Práce se soubory
+	Default save format	Výchozí formát ukládání
+	TIFF	TIFF
 	File path	Cesta k souboru
 	Fill new type layers with placeholder	Vyplnit nové textové vrstvy zástupným textem
 	Font preview	Náhled písma
@@ -4251,7 +4253,3 @@ cameraRaw	Dehaze	Odstranění oparu
 	Font size presets	Předvolby velikosti písma
 	Leading presets	Předvolby prokladu
 	Tracking presets	Předvolby prostrkání
-
-# Default save format (Preferences › File Handling)
-	Default save format	Výchozí formát ukládání
-	TIFF	TIFF

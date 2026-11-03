@@ -1949,6 +1949,8 @@
 	Export clipboard	Exportar el portapapeles
 	Extra large	Extra grande
 	File Handling	Gestión de archivos
+	Default save format	Formato de guardado predeterminado
+	TIFF	TIFF
 	File path	Ruta del archivo
 	Fill new type layers with placeholder	Rellenar las capas de texto nuevas con texto de marcador
 	Font preview	Vista previa de fuentes
@@ -4463,7 +4465,3 @@ navigator	Zoom	Zoom
 	Font size presets	Valores predefinidos de tamaño de fuente
 	Leading presets	Valores predefinidos de interlineado
 	Tracking presets	Valores predefinidos de tracking
-
-# Default save format (Preferences › File Handling)
-	Default save format	Formato de guardado predeterminado
-	TIFF	TIFF
