@@ -159,3 +159,48 @@ fn unsupported_variants_stay_on_the_guarded_legacy_path() {
     custom.extend_from_slice(&bytes[8..]);
     assert!(matches!(Decoder::new(Cursor::new(custom), &|| false), Err(CodecError::Unsupported { .. })));
 }
+
+/// The stream route stages the same canvas as the whole-file decoder: a data window fully
+/// inside the display window opens on the display stage (bands offset onto it), anything
+/// else keeps the data window (#6271's review: File › Open and the other routes disagreed).
+#[test]
+fn the_stream_route_stages_the_display_window_like_the_whole_file_decoder() {
+    use exr::prelude::{
+        AnyChannel, AnyChannels, Blocks, Compression, Encoding, FlatSamples, ImageAttributes, IntegerBounds, Layer, LayerAttributes, LineOrder, WritableImage,
+    };
+    let stage = |display: IntegerBounds, data_position: (i32, i32)| {
+        let layer = Layer::new(
+            (2, 2),
+            LayerAttributes::named("beauty").with_position(data_position.into()),
+            Encoding { compression: Compression::ZIP1, blocks: Blocks::ScanLines, line_order: LineOrder::Increasing },
+            AnyChannels::sort(
+                vec![
+                    AnyChannel::new("R", FlatSamples::F32(vec![1.0, 2.0, 3.0, 4.0])),
+                    AnyChannel::new("G", FlatSamples::F32(vec![1.0, 2.0, 3.0, 4.0])),
+                    AnyChannel::new("B", FlatSamples::F32(vec![1.0, 2.0, 3.0, 4.0])),
+                ]
+                .into_iter()
+                .collect(),
+            ),
+        );
+        let image = exr::image::Image::from_layers(ImageAttributes::new(display), vec![layer]);
+        let mut bytes = Cursor::new(Vec::new());
+        image.write().to_buffered(&mut bytes).unwrap();
+        bytes.into_inner()
+    };
+    // A cropped render inside its stage: the canvas is the 4×4 display window and the
+    // bands land at the data window's offset (1, 1).
+    let bytes = stage(IntegerBounds::new((0, 0), (4, 4)), (1, 1));
+    let mut decoder = Decoder::new(Cursor::new(&bytes), &|| false).unwrap();
+    let info = decoder.info();
+    assert_eq!((info.canvas_width, info.canvas_height), (4, 4));
+    assert_eq!((info.offset_x, info.offset_y), (1, 1));
+    assert_eq!(decode(&bytes).unwrap().dimensions(), (4, 4));
+    // A window the stage cannot hold: the canvas stays the 2×2 data window, no offset.
+    let bytes = stage(IntegerBounds::new((0, 0), (2, 2)), (1, 1));
+    let mut decoder = Decoder::new(Cursor::new(&bytes), &|| false).unwrap();
+    let info = decoder.info();
+    assert_eq!((info.canvas_width, info.canvas_height), (2, 2));
+    assert_eq!((info.offset_x, info.offset_y), (0, 0));
+    assert_eq!(decode(&bytes).unwrap().dimensions(), (2, 2));
+}

@@ -90,6 +90,14 @@ fn metadata(r: &mut impl Read, cancel: &dyn Fn() -> bool) -> Result<Vec<u8>, Cod
 pub struct Info {
     pub width: u32,
     pub height: u32,
+    /// The canvas the document opens on and where the data window sits on it (the
+    /// whole-file decoder's `part_canvas` rule: the display window when the data window
+    /// lies fully inside it, else the data window). Bands stay in data-window
+    /// coordinates; the document places them at the offset.
+    pub canvas_width: u32,
+    pub canvas_height: u32,
+    pub offset_x: i32,
+    pub offset_y: i32,
     pub gray: bool,
     pub has_alpha: bool,
     pub all_half: bool,
@@ -171,9 +179,24 @@ impl<R: Read + Seek> Decoder<R> {
             .filter(|n| *n <= BLOCK_BYTES)
             .ok_or_else(|| limit("EXR compression block exceeds 64 MiB"))?;
         let output = (w as u64).saturating_mul(rows as u64).saturating_mul(selected.len() as u64 * 4);
+        // The same canvas rule as the whole-file decoder, so a cropped render opens on its
+        // full stage whichever route takes the file (display window only when the data
+        // window lies fully inside it; the offset then places the bands on the stage).
+        let (canvas_w, canvas_h, canvas_x, canvas_y, staged) = crate::codecs::exr::part_canvas(header, w, h)?;
+        let (canvas_width, canvas_height, offset_x, offset_y) = if staged {
+            let ox = i32::try_from(i64::from(header.own_attributes.layer_position.0) - canvas_x).map_err(|_| limit("EXR stage offset overflows i32"))?;
+            let oy = i32::try_from(i64::from(header.own_attributes.layer_position.1) - canvas_y).map_err(|_| limit("EXR stage offset overflows i32"))?;
+            (canvas_w, canvas_h, ox, oy)
+        } else {
+            (w as u32, h as u32, 0, 0)
+        };
         let info = Info {
             width: w as u32,
             height: h as u32,
+            canvas_width,
+            canvas_height,
+            offset_x,
+            offset_y,
             gray,
             has_alpha,
             all_half,

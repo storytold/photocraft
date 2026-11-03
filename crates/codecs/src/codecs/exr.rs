@@ -136,7 +136,13 @@ pub(super) fn read_meta(bytes: &[u8], limits: &Limits) -> Result<MetaData, Codec
 
 /// Header facts of one part, in file order.
 fn part_info(index: usize, header: &exr::meta::header::Header) -> ExrPartInfo {
-    let (w, h) = (u32::try_from(header.layer_size.0).unwrap_or(u32::MAX), u32::try_from(header.layer_size.1).unwrap_or(u32::MAX));
+    // List the canvas the part decodes onto (`part_canvas`), not the raw data window, so
+    // a chooser previewing via `exr_info` (io's `entries`) shows the size an import yields.
+    let (w, h) = match part_canvas(header, header.layer_size.0, header.layer_size.1) {
+        Ok((cw, ch, _, _, _)) => (cw, ch),
+        // Sizes beyond u32 stay clamped, as the old raw-data-window listing did.
+        Err(_) => (u32::try_from(header.layer_size.0).unwrap_or(u32::MAX), u32::try_from(header.layer_size.1).unwrap_or(u32::MAX)),
+    };
     let sample = |t: exr::meta::attribute::SampleType| match t {
         exr::meta::attribute::SampleType::F16 => SampleType::F16,
         // U32 channels (Arnold ID buffers) are listed as F32: exact up to 2^24.
@@ -203,6 +209,30 @@ pub(super) fn read_layer(bytes: &[u8], index: usize) -> Result<Layer<AnyChannels
     only.first_valid_layer().all_attributes().from_buffered(Cursor::new(bytes)).map(|image| image.layer_data).map_err(map_exr)
 }
 
+/// The canvas a flat part decodes onto, with that canvas's origin: (width, height, x, y,
+/// staged). The display window is the canvas only when the data window lies fully inside it —
+/// a cropped render opens on its full stage. Anything else (a part the stage cannot hold, a
+/// window shifted past its edge, a window disjoint from it) keeps the data window, so no
+/// texel is lost. Positions count, not just sizes: a same-sized window shifted by one is not
+/// contained. `deep_exr` stages by the same rule, so flat and deep files of one shot open alike.
+pub(crate) fn part_canvas(header: &exr::meta::header::Header, w: usize, h: usize) -> Result<(u32, u32, i64, i64, bool), CodecError> {
+    let display = header.shared_attributes.display_window;
+    let (dw, dh) = (
+        u32::try_from(display.size.0).map_err(|_| CodecError::LimitExceeded("EXR display-window width exceeds u32".into()))?,
+        u32::try_from(display.size.1).map_err(|_| CodecError::LimitExceeded("EXR display-window height exceeds u32".into()))?,
+    );
+    let (dx, dy) = (i64::from(display.position.0), i64::from(display.position.1));
+    let (sx, sy) = (i64::from(header.own_attributes.layer_position.0), i64::from(header.own_attributes.layer_position.1));
+    // Header positions and sizes are i32-bounded, so these i64 sums cannot overflow.
+    let contained = sx >= dx && sy >= dy && sx + w as i64 <= dx + dw as i64 && sy + h as i64 <= dy + dh as i64;
+    if contained {
+        Ok((dw, dh, dx, dy, true))
+    } else {
+        let (cw, ch) = (u32::try_from(w).map_err(|_| err("EXR width exceeds u32"))?, u32::try_from(h).map_err(|_| err("EXR height exceeds u32"))?);
+        Ok((cw, ch, sx, sy, false))
+    }
+}
+
 fn layer_to_image(layer: &Layer<AnyChannels<FlatSamples>>, header: &exr::meta::header::Header) -> Result<Image, CodecError> {
     let (w, h) = (layer.size.0, layer.size.1);
     let channels = &layer.channel_data.list;
@@ -216,75 +246,47 @@ fn layer_to_image(layer: &Layer<AnyChannels<FlatSamples>>, header: &exr::meta::h
         return Err(err("channel sample count mismatch (subsampled channels are unsupported)"));
     }
     let nc = color.len();
-    let display = header.shared_attributes.display_window;
-    let display_w = u32::try_from(display.size.0).map_err(|_| CodecError::LimitExceeded("EXR display-window width exceeds u32".into()))?;
-    let display_h = u32::try_from(display.size.1).map_err(|_| CodecError::LimitExceeded("EXR display-window height exceeds u32".into()))?;
-    // The display window stages a render that was cropped INTO it (data within the stage).
-    // A part larger than the stage (multi-part files whose first layer sized the shared
-    // display window, #5866's tests) keeps the data window as its canvas, as before.
-    let data_within = w <= display_w as usize && h <= display_h as usize;
-    let (display_w, display_h, display_x0, display_y0) = if data_within {
-        (display_w, display_h, i64::from(display.position.0), i64::from(display.position.1))
-    } else {
-        (
-            u32::try_from(w).map_err(|_| err("EXR width exceeds u32"))?,
-            u32::try_from(h).map_err(|_| err("EXR height exceeds u32"))?,
-            i64::from(header.own_attributes.layer_position.0),
-            i64::from(header.own_attributes.layer_position.1),
-        )
-    };
-    // Compute exclusive bounds in i64. IntegerBounds::end() converts the size to i32 and can
-    // panic for hostile headers, so do not use its convenience methods here.
+    let (canvas_w, canvas_h, canvas_x0, canvas_y0, staged) = part_canvas(header, w, h)?;
+    // With the containment rule the copy region is always the full data window: staged means
+    // the display window holds it whole, and otherwise the canvas is the data window itself.
+    // Its place on the canvas is the (non-negative, i32-bounded) window difference.
     let data_x0 = i64::from(layer.attributes.layer_position.0);
     let data_y0 = i64::from(layer.attributes.layer_position.1);
-    let display_x1 = display_x0.checked_add(i64::from(display_w)).ok_or_else(|| err("EXR display-window x bound overflows"))?;
-    let display_y1 = display_y0.checked_add(i64::from(display_h)).ok_or_else(|| err("EXR display-window y bound overflows"))?;
-    let data_x1 =
-        data_x0.checked_add(i64::try_from(w).map_err(|_| err("EXR data-window width exceeds i64"))?).ok_or_else(|| err("EXR data-window x bound overflows"))?;
-    let data_y1 = data_y0
-        .checked_add(i64::try_from(h).map_err(|_| err("EXR data-window height exceeds i64"))?)
-        .ok_or_else(|| err("EXR data-window y bound overflows"))?;
-    let copy_x0 = display_x0.max(data_x0);
-    let copy_y0 = display_y0.max(data_y0);
-    let copy_x1 = display_x1.min(data_x1);
-    let copy_y1 = display_y1.min(data_y1);
-    // A data window entirely outside the display window intersects it in nothing: the
-    // clamped difference is a negative i64, which `usize::try_from` would refuse ("EXR
-    // clipped width", #6271's review) — an empty copy is the valid result, not an error.
-    let copy_w = usize::try_from((copy_x1 - copy_x0).max(0)).map_err(|_| err("EXR clipped width"))?;
-    let copy_h = usize::try_from((copy_y1 - copy_y0).max(0)).map_err(|_| err("EXR clipped height"))?;
-    let source_x = usize::try_from(copy_x0.saturating_sub(data_x0)).map_err(|_| err("EXR source x offset"))?;
-    let source_y = usize::try_from(copy_y0.saturating_sub(data_y0)).map_err(|_| err("EXR source y offset"))?;
-    let target_x = usize::try_from(copy_x0.saturating_sub(display_x0)).map_err(|_| err("EXR target x offset"))?;
-    let target_y = usize::try_from(copy_y0.saturating_sub(display_y0)).map_err(|_| err("EXR target y offset"))?;
+    let target_x = usize::try_from(data_x0.saturating_sub(canvas_x0)).map_err(|_| err("EXR target x offset"))?;
+    let target_y = usize::try_from(data_y0.saturating_sub(canvas_y0)).map_err(|_| err("EXR target y offset"))?;
+    let display_w = canvas_w;
+    let display_h = canvas_h;
     let output_pixels = (display_w as usize).checked_mul(display_h as usize).ok_or_else(|| err("EXR display pixel count overflows usize"))?;
     let out_len = output_pixels.checked_mul(nc).ok_or_else(|| err("EXR display sample count overflows usize"))?;
     let mut warnings = Vec::new();
-    if display_w as usize != w || display_h as usize != h || data_x0 != display_x0 || data_y0 != display_y0 {
-        let origin_x = i32::try_from(data_x0 - display_x0).map_err(|_| err("EXR data-window x origin overflows"))?;
-        let origin_y = i32::try_from(data_y0 - display_y0).map_err(|_| err("EXR data-window y origin overflows"))?;
-        warnings.push(DecodeWarning::DisplayWindowStage { stage: (display_w, display_h), origin: (origin_x, origin_y) });
+    if staged && ((canvas_w as usize, canvas_h as usize) != (w, h) || (target_x, target_y) != (0, 0)) {
+        let origin_x = i32::try_from(target_x).map_err(|_| err("EXR data-window x origin overflows"))?;
+        let origin_y = i32::try_from(target_y).map_err(|_| err("EXR data-window y origin overflows"))?;
+        warnings.push(DecodeWarning::DisplayWindowStage { stage: (canvas_w, canvas_h), origin: (origin_x, origin_y) });
     }
     let img = if all_f16 {
         let mut out = Vec::new();
         out.try_reserve_exact(out_len).map_err(|_| CodecError::LimitExceeded("EXR display image allocation".into()))?;
         out.resize(out_len, f16::ZERO);
+        // Row-wise staging: the target offset advances once per row and the per-sample work
+        // is a copy, never a division (this loop is the whole 24-36 MP copy in the common
+        // no-staging case, where the canvas is the data window itself).
         for (ci, c) in color.iter().enumerate() {
-            if let FlatSamples::F16(v) = &c.sample_data {
-                for (src, sample) in v.iter().enumerate() {
-                    let y = src / w;
-                    let x = src % w;
-                    if x < source_x || x >= source_x.saturating_add(copy_w) || y < source_y || y >= source_y.saturating_add(copy_h) {
-                        continue;
-                    }
-                    let dst_y = target_y.saturating_add(y - source_y);
-                    let dst_x = target_x.saturating_add(x - source_x);
-                    let dst = dst_y
-                        .checked_mul(display_w as usize)
-                        .and_then(|v| v.checked_add(dst_x))
-                        .and_then(|v| v.checked_mul(nc))
-                        .and_then(|v| v.checked_add(ci))
-                        .ok_or_else(|| err("EXR target sample offset"))?;
+            let samples = match &c.sample_data {
+                FlatSamples::F16(v) => v,
+                _ => return Err(err("EXR channel sample count mismatch")),
+            };
+            for y in 0..h {
+                let row = (target_y + y)
+                    .checked_mul(display_w as usize)
+                    .and_then(|r| r.checked_add(target_x))
+                    .and_then(|r| r.checked_mul(nc))
+                    .and_then(|r| r.checked_add(ci))
+                    .ok_or_else(|| err("EXR target sample offset"))?;
+                for x in 0..w {
+                    let dst =
+                        row.checked_add(x.checked_mul(nc).ok_or_else(|| err("EXR target sample offset"))?).ok_or_else(|| err("EXR target sample offset"))?;
+                    let sample = samples.get(y * w + x).ok_or_else(|| err("EXR source sample is missing"))?;
                     *out.get_mut(dst).ok_or_else(|| err("EXR target sample is out of bounds"))? = *sample;
                 }
             }
@@ -294,27 +296,29 @@ fn layer_to_image(layer: &Layer<AnyChannels<FlatSamples>>, header: &exr::meta::h
         let mut out = Vec::new();
         out.try_reserve_exact(out_len).map_err(|_| CodecError::LimitExceeded("EXR display image allocation".into()))?;
         out.resize(out_len, 0f32);
-        for (ci, c) in color.iter().enumerate() {
-            let mut seen = 0usize;
-            for (src, sample) in c.sample_data.values_as_f32().enumerate() {
-                seen = seen.saturating_add(1);
-                let y = src / w;
-                let x = src % w;
-                if x < source_x || x >= source_x.saturating_add(copy_w) || y < source_y || y >= source_y.saturating_add(copy_h) {
-                    continue;
-                }
-                let dst_y = target_y.saturating_add(y - source_y);
-                let dst_x = target_x.saturating_add(x - source_x);
-                let dst = dst_y
-                    .checked_mul(display_w as usize)
-                    .and_then(|v| v.checked_add(dst_x))
-                    .and_then(|v| v.checked_mul(nc))
-                    .and_then(|v| v.checked_add(ci))
-                    .ok_or_else(|| err("EXR target sample offset"))?;
-                *out.get_mut(dst).ok_or_else(|| err("EXR target sample is out of bounds"))? = sample;
+        // The same row-wise walk as the f16 branch; samples may be f32, u32 (ID buffers,
+        // exact up to 2^24) or f16 leftovers of a mixed file, read per sample.
+        let sample_at = |c: &AnyChannel<FlatSamples>, i: usize| -> Option<f32> {
+            match &c.sample_data {
+                FlatSamples::F32(v) => v.get(i).copied(),
+                FlatSamples::U32(v) => v.get(i).map(|s| *s as f32),
+                FlatSamples::F16(v) => v.get(i).map(|s| s.to_f32()),
             }
-            if seen != npx {
-                return Err(err("EXR channel sample count mismatch"));
+        };
+        for (ci, c) in color.iter().enumerate() {
+            for y in 0..h {
+                let row = (target_y + y)
+                    .checked_mul(display_w as usize)
+                    .and_then(|r| r.checked_add(target_x))
+                    .and_then(|r| r.checked_mul(nc))
+                    .and_then(|r| r.checked_add(ci))
+                    .ok_or_else(|| err("EXR target sample offset"))?;
+                for x in 0..w {
+                    let dst =
+                        row.checked_add(x.checked_mul(nc).ok_or_else(|| err("EXR target sample offset"))?).ok_or_else(|| err("EXR target sample offset"))?;
+                    let sample = sample_at(c, y * w + x).ok_or_else(|| err("EXR channel sample count mismatch"))?;
+                    *out.get_mut(dst).ok_or_else(|| err("EXR target sample is out of bounds"))? = sample;
+                }
             }
         }
         Image::from_f32(display_w, display_h, layout, &out)?
@@ -329,16 +333,15 @@ fn layer_to_image(layer: &Layer<AnyChannels<FlatSamples>>, header: &exr::meta::h
 /// named-channel path, whose channel selection happens after the source layer is decoded.
 fn stage_image(mut image: Image, header: &exr::meta::header::Header) -> Result<Image, CodecError> {
     let (w, h) = image.dimensions();
-    let display = header.shared_attributes.display_window;
-    if display.size.0 == w as usize && display.size.1 == h as usize && display.position == header.own_attributes.layer_position {
-        return Ok(image);
-    }
-    let dw = u32::try_from(display.size.0).map_err(|_| CodecError::LimitExceeded("EXR display-window width exceeds u32".into()))?;
-    let dh = u32::try_from(display.size.1).map_err(|_| CodecError::LimitExceeded("EXR display-window height exceeds u32".into()))?;
-    let dx = i64::from(display.position.0);
-    let dy = i64::from(display.position.1);
+    // The same canvas rule as the whole-file decoder: only a data window fully inside the
+    // display window is staged onto it; anything else stays on its own data-window canvas,
+    // so `decode`, `decode_exr_part`, `probe` and this named-channel path agree on size.
+    let (dw, dh, dx, dy, staged) = part_canvas(header, w as usize, h as usize)?;
     let sx = i64::from(header.own_attributes.layer_position.0);
     let sy = i64::from(header.own_attributes.layer_position.1);
+    if !staged || (dw == w as u32 && dh == h as u32 && sx == dx && sy == dy) {
+        return Ok(image);
+    }
     let ex = dx.checked_add(i64::from(dw)).ok_or_else(|| err("EXR display-window x bound overflows"))?;
     let ey = dy.checked_add(i64::from(dh)).ok_or_else(|| err("EXR display-window y bound overflows"))?;
     let sex = sx.checked_add(i64::from(w)).ok_or_else(|| err("EXR data-window x bound overflows"))?;
@@ -422,23 +425,11 @@ pub(crate) fn probe(bytes: &[u8], limits: &Limits) -> Result<(u32, u32), CodecEr
         return Err(CodecError::unsupported(F, "no R/G/B or Y channels"));
     }
     let header = meta.headers.get(pick).ok_or_else(|| err("no parts"))?;
-    let display = header.shared_attributes.display_window;
-    let (dw, dh) = (
-        u32::try_from(display.size.0).map_err(|_| CodecError::LimitExceeded("EXR display-window width exceeds u32".into()))?,
-        u32::try_from(display.size.1).map_err(|_| CodecError::LimitExceeded("EXR display-window height exceeds u32".into()))?,
-    );
-    // Stage the data window's size only when the part fits the display window; a part
-    // larger than it keeps the data window (multi-part first-layer sizing, as decode does).
-    let within = header.layer_size.0 <= display.size.0 && header.layer_size.1 <= display.size.1;
+    // The canvas is what decode would open (see `part_canvas`): the display window when
+    // the part's data window lies fully inside it, else the data window.
     let ls = header.layer_size;
-    Ok(if within {
-        (dw, dh)
-    } else {
-        (
-            u32::try_from(ls.0).map_err(|_| CodecError::LimitExceeded("EXR width exceeds u32".into()))?,
-            u32::try_from(ls.1).map_err(|_| CodecError::LimitExceeded("EXR height exceeds u32".into()))?,
-        )
-    })
+    let (cw, ch, _, _, _) = part_canvas(header, ls.0, ls.1)?;
+    Ok((cw, ch))
 }
 
 /// Decode one part of a multi-part file by its index into [`info`]'s list. A file with
