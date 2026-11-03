@@ -6,6 +6,11 @@ use crate::{PhotocraftApp, state::DialogKind};
 const COMMAND: &str = "actions.replace";
 const MARK: &str = "__replaceActions";
 
+// Raw input and its base64 transport overlap during staging and decoding. Three raw bytes
+// need four encoded bytes; allow at most the shared 512 MiB input cap for both together.
+// This limits the picker, not Load Actions or the engine's separate per-file import cap.
+const MAX_PICKED_BYTES: u64 = photocraft_engine::preset_import_cmds::MAX_FILE_BYTES / 7 * 3;
+
 /// Frozen input and authority, kept out of editable and inspectable dialog fields.
 pub(crate) struct Held {
     dialog: u64,
@@ -46,7 +51,7 @@ pub(super) fn open(app: &mut PhotocraftApp) -> Result<Value, String> {
     let gate = app.session.authorize.or(if app.automation_input { app.services.automation_authorize } else { None });
     let automated = app.automation_input || gate.is_some();
     authorize(app, &json!({"confirm": true}), gate, automated)?;
-    app.pick_file_bytes_with_limit(&["atn"], Some(photocraft_engine::preset_import_cmds::MAX_FILE_BYTES), move |app, name, bytes| {
+    app.pick_file_bytes_with_limit(&["atn"], Some(MAX_PICKED_BYTES), move |app, name, bytes| {
         idle(app)?;
         if app.session.actions.rev != revision || app.held_actions_replace.is_some() {
             return Err(tl!("The actions changed. Request Replace Actions again.").into());

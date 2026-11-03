@@ -111,7 +111,11 @@ fn inserted_menu_events_roundtrip_absent_settings_and_stateless_items_execute() 
             let raw = photocraft_psd::atn::parse(&bytes).unwrap();
             assert!(raw.actions[0].items[0].descriptor.is_none());
             let imported = atn_cmds::import(&bytes).unwrap();
-            assert_eq!(imported.actions[0].steps[0], (atn_cmds::MENU_ITEM.into(), json!({"id":id,"eventKind":kind})));
+            let (command, mut params) = imported.actions[0].steps[0].clone();
+            assert!(params.as_object_mut().unwrap().remove("_atnEvent").is_some(), "the imported step retains its save-only source metadata");
+            assert_eq!((command, params), (atn_cmds::MENU_ITEM.into(), json!({"id":id,"eventKind":kind})));
+            let exported = atn_cmds::export("S", &[&imported.actions[0]], &[], false).unwrap().0;
+            assert_eq!(photocraft_psd::atn::parse(&exported).unwrap().actions[0].items, raw.actions[0].items);
             let played = s.execute("actions.play", json!({"action":"A"})).unwrap();
             assert_eq!(played.get("failed").is_none(), !atn_cmds::menu_item_needs_settings(id), "{id}: {played}");
         }

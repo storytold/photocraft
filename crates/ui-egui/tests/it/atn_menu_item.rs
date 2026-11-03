@@ -15,6 +15,71 @@ fn app() -> PhotocraftApp {
     app
 }
 
+/// Direct loads and delayed picker replies cannot replace the action a non-recording dialog owns.
+#[test]
+fn loading_actions_waits_for_a_paused_menu_step_without_recording() {
+    use photocraft_ui_egui::{FileDialogAnswer, FileDialogReply};
+    use std::{cell::RefCell, rc::Rc};
+
+    let replacement = Action::new("Menu", vec![("select.deselect".into(), json!({}))]);
+    let bytes = atn_cmds::export("Menu", &[&replacement], &[], false).unwrap().0;
+    for delayed in [false, true] {
+        for confirm in [false, true] {
+            let mut app = app();
+            let waiting: Rc<RefCell<Option<FileDialogReply>>> = Default::default();
+            let reply = waiting.clone();
+            app.services.file_dialog = Some(Box::new(move |_, _, answer| *reply.borrow_mut() = Some(answer)));
+            let mut h = Harness::builder().with_size(egui::vec2(1000.0, 760.0)).build_ui_state(
+                |ui, app| {
+                    actions::panel_menu(app, ui);
+                    app.poll_file_dialog(ui.ctx(), None);
+                },
+                app,
+            );
+            PhotocraftApp::setup_context(&h.ctx, Default::default());
+            h.run_steps(2);
+            if delayed {
+                h.get_by_role_and_label(egui::accesskit::Role::Button, "Load Actions…").click();
+                h.run_steps(3);
+                assert!(waiting.borrow().is_some());
+            }
+            let ctx = h.ctx.clone();
+            let app = h.state_mut();
+            let paused = app.run("actions.play", json!({"action":"Menu"})).unwrap();
+            let dialog = paused["paused"]["dialog"].as_u64().unwrap();
+            let before = app.session.actions.clone();
+            let document = app.session.active().unwrap().doc.clone();
+            let fields = app.ui.dialog_mut(dialog).unwrap().fields.clone();
+            assert!(before.recording.is_none(), "this pause has no suspended recording");
+            if delayed {
+                waiting.borrow_mut().take().unwrap().send(Some(FileDialogAnswer::Contents("replacement.atn".into(), bytes.clone())));
+                app.poll_file_dialog(&ctx, None);
+                assert!(app.ui.status_error);
+                assert!(app.ui.status.contains("Confirm or cancel"), "{}", app.ui.status);
+            } else {
+                let error = app.run("actions.load", json!({"data":photocraft_engine::paint::tile::b64_encode(&bytes)})).unwrap_err();
+                assert!(error.contains("Confirm or cancel"), "{error}");
+            }
+            for command in ["actions.clearAll", "actions.replace", "actions.reset"] {
+                let error = app.run(command, json!({"confirm":true,"mode":"replace"})).unwrap_err();
+                assert!(error.contains("Confirm or cancel"), "{command}: {error}");
+            }
+            assert_eq!(app.session.actions, before);
+            assert_eq!(app.session.active().unwrap().doc, document);
+            assert_eq!(app.ui.dialog_mut(dialog).unwrap().fields, fields);
+            if confirm {
+                dialogs::confirm(app, dialog).unwrap();
+                assert!(app.session.active().unwrap().doc.selection.is_some(), "the original action's tail resumes");
+            } else {
+                dialogs::cancel(app, dialog).unwrap();
+                assert!(app.session.active().unwrap().doc.selection.is_none());
+            }
+            app.run("actions.load", json!({"data":photocraft_engine::paint::tile::b64_encode(&bytes)})).unwrap();
+            assert_eq!(app.session.actions.list[0].steps, replacement.steps, "loading works after the pause ends");
+        }
+    }
+}
+
 /// The real sizing dialog cancels without edits and resumes only after confirmation.
 #[test]
 fn image_size_menu_item_opens_real_dialog_cancel_stops_and_confirm_resumes() {

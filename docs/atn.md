@@ -566,6 +566,14 @@ Measured with a folder `in` holding `a.png`, `b.png`, `notes.txt` and `sub/a.png
 
 ### Actions panel menu
 
+Loading or replacing the library, Clear All and Reset wait until any open action-step dialog is
+confirmed or cancelled, including playback without recording. Other actions in a paused set may
+still be edited; changed actions stop the remainder of the set rather than silently running replacements.
+
+The Replace Actions picker accepts files up to 230,087,532 bytes (about 219 MiB). Its raw bytes and
+base64 command data together stay below 512 MiB; parsed actions and other application memory are
+outside that bound. Load Actions and the engine's separate 512 MiB per-file import cap are unchanged.
+
 Button Mode; New Action, New Set, Duplicate, Delete, Play; Start Recording, Record Again, Insert Menu
 Item, Insert Stop, Insert Conditional, Insert Path; Action Options, Playback Options, Allow Tool
 Recording; Clear All Actions, Reset Actions, Load Actions, Replace Actions, Save Actions; the bundled sets

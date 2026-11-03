@@ -56,7 +56,7 @@ fn pick(h: &mut Harness<'static, PhotocraftApp>, picker: &Picker) {
     h.get_by_role_and_label(egui::accesskit::Role::Button, "Replace Actions…").click();
     h.run_steps(3);
     assert!(matches!(picker.borrow().as_slice(), [(FileDialogRequest::Open { multiple: false, extensions: Some(ext), max_bytes: Some(max), .. }, _)]
-        if ext == &["atn"] && *max == photocraft_engine::preset_import_cmds::MAX_FILE_BYTES));
+        if ext == &["atn"] && *max > 0 && *max + max.div_ceil(3) * 4 <= photocraft_engine::preset_import_cmds::MAX_FILE_BYTES));
 }
 
 /// Deliver a platform answer through the real continuation, without bypassing staging.

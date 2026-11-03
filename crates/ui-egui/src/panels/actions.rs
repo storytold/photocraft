@@ -825,23 +825,15 @@ fn suspended(app: &PhotocraftApp) -> bool {
     app.paused_playbacks.paused.values().any(|p| p.record.is_some())
 }
 
-/// While a step dialog holds a suspended recording, refuse what would lose its call: a new
+/// Whole-library changes cannot invalidate the action a paused dialog will resume by name. While a step dialog
+/// holds a suspended recording, also refuse what would lose its call: a new
 /// recording (the restore would find recording taken) or deleting/moving/duplicating actions (the recorded
 /// action could go away or change place). The engine checks these against `recording`, which
 /// is `None` then.
 pub(crate) fn suspended_guard(app: &PhotocraftApp, id: &str) -> Result<(), String> {
-    if matches!(
-        id,
-        "actions.record"
-            | "actions.delete"
-            | "actions.move"
-            | "actions.duplicate"
-            | "actions.clearAll"
-            | "actions.replace"
-            | "actions.load"
-            | "actions.recordAgain"
-            | "actions.reset"
-    ) && suspended(app)
+    let changes_library = matches!(id, "actions.load" | "actions.clearAll" | "actions.replace" | "actions.reset");
+    if (changes_library && !app.paused_playbacks.paused.is_empty())
+        || (matches!(id, "actions.record" | "actions.delete" | "actions.move" | "actions.duplicate" | "actions.recordAgain") && suspended(app))
     {
         return Err(tl!("Confirm or cancel the open action step dialog first").into());
     }
