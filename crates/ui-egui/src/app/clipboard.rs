@@ -1,37 +1,12 @@
-use super::PhotocraftApp;
+use super::{OsClipSignature, PhotocraftApp};
 
 pub(crate) fn clip_signature(w: u32, h: u32, px: &[u8]) -> u64 {
     // Every byte counts: the old step_by(997) sampling could miss a change entirely in a small
     // image (a 3×2 clip samples one byte), and the freshness guard would then call a genuinely
     // newer OS clipboard image unchanged.
-    fold_bytes((w as u64) << 32 | h as u64, px)
-}
-
-/// Folds `bytes` into `sig`, one rolling multiply per byte; streaming callers (the SVG mirror's
-/// row-wise signature) feed chunk after chunk to stay within the same result.
-pub(crate) fn fold_bytes(mut sig: u64, bytes: &[u8]) -> u64 {
-    for &b in bytes {
+    let mut sig = (w as u64) << 32 | h as u64;
+    for &b in px {
         sig = (sig ^ u64::from(b)).wrapping_mul(0x9E37_79B9_7F4A_7C15);
-    }
-    sig
-}
-
-/// The bitmap signature of the clip's raster mirror, byte-identical to what
-/// [`PhotocraftApp::import_os_clipboard`] computes for the same pixels: the two import paths
-/// must agree, or the freshness guard between them never fires. Row-wise, so a 24 MP mirror
-/// does not allocate the whole image twice.
-fn svg_clip_signature(clip: &photocraft_engine::edit_cmds::Clip) -> u64 {
-    let b = clip.bounds;
-    let (w, h) = (b.width(), b.height());
-    if w == 0 || h == 0 {
-        return (u64::from(w) << 32) | u64::from(h);
-    }
-    let mut sig = (u64::from(w) << 32) | u64::from(h);
-    let mut row = vec![[0u8; 4]; w as usize];
-    for y in 0..h {
-        clip.surface.read_rgba8_into(photocraft_geom::Rect::from_xywh(b.x0, b.y0 + y as i32, w, 1), &mut row);
-        let flat: Vec<u8> = row.iter().flatten().copied().collect();
-        sig = fold_bytes(sig, &flat);
     }
     sig
 }
@@ -92,18 +67,18 @@ impl PhotocraftApp {
             self.ui.status_error = true;
             error
         })?;
-        let mirror_sig = svg_clip_signature(&clip);
         // The freshness guard orders OS bitmaps by `os_clip_sig`: record the actual clipboard
-        // bitmap's signature, not this SVG's own raster mirror, so a later Paste As pixels
-        // recognizes an unchanged clipboard bitmap instead of importing it over a newer path
-        // clip. Only learn the bitmap when both bitmap reads agree and the SVG read is still
-        // current: if either changed, the newer contents must not look already observed.
+        // bitmap's signature so a later Paste As pixels recognizes an unchanged clipboard
+        // bitmap instead of importing it over a newer path clip. Only learn the bitmap when
+        // both bitmap reads agree and the SVG read is still current.
         let bitmap_after = self.os_bitmap_signature();
         let bitmap_is_current = bitmap_before.is_some()
             && bitmap_before == bitmap_after
             && self.services.clipboard_get_svg.as_mut().and_then(|get| get().ok().flatten()).is_some_and(|current| current == source);
-        // A failed read, malformed image or clipboard change keeps the mirror's signature.
-        self.os_clip_sig = bitmap_after.filter(|_| bitmap_is_current).or(Some(mirror_sig));
+        // Unlike a raster-mirror hash, Unknown cannot collide with a valid OS bitmap. It still
+        // counts as a baseline, so a bitmap appearing after this import is not an unknown-age
+        // first observation beside a path clip.
+        self.os_clip_sig = if bitmap_is_current { bitmap_after.map(OsClipSignature::Bitmap) } else { Some(OsClipSignature::Unknown) };
         self.os_clip_svg = clip.svg.clone();
         // One clipboard: an imported SVG replaces a path clip, like any installed clip.
         self.session.path_clipboard = None;
@@ -136,7 +111,7 @@ impl PhotocraftApp {
         let bytes: Vec<u8> = px.into_iter().flatten().collect();
         if set(b.width(), b.height(), &bytes).is_ok() {
             self.os_clip_svg = None;
-            self.os_clip_sig = Some(clip_signature(b.width(), b.height(), &bytes));
+            self.os_clip_sig = Some(OsClipSignature::Bitmap(clip_signature(b.width(), b.height(), &bytes)));
             self.clip_unmirrored = false;
         }
     }
@@ -209,14 +184,14 @@ impl PhotocraftApp {
         let internal = self.session.clipboard.is_some() || self.session.path_clipboard.is_some();
         // The unchanged OS image is stale when an internal clip has replaced it since (our
         // unexported pixel copy or a path component): importing would paste superseded content.
-        if self.os_clip_sig == Some(sig) && internal {
+        if self.os_clip_sig == Some(OsClipSignature::Bitmap(sig)) && internal {
             return Ok(false);
         }
         // First observation with a path clip: learn the baseline, but never displace known-fresh
         // path content with an image of unknown age. (Pixel clips keep the long-standing rule:
         // a different OS image supersedes them.)
         if !baseline_existed && self.session.path_clipboard.is_some() {
-            self.os_clip_sig = Some(sig);
+            self.os_clip_sig = Some(OsClipSignature::Bitmap(sig));
             return Ok(false);
         }
         let r = photocraft_geom::Rect::new(0, 0, w as i32, h as i32);
@@ -229,7 +204,7 @@ impl PhotocraftApp {
         // The SVG that came with this image (a vector app puts both): a later internal copy is
         // newer than it, so Paste As must not bring it back while it is unchanged.
         self.os_clip_svg = self.os_svg_now().flatten();
-        self.os_clip_sig = Some(sig);
+        self.os_clip_sig = Some(OsClipSignature::Bitmap(sig));
         self.clip_external = true;
         self.clip_unmirrored = false;
         Ok(true)

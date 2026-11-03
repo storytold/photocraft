@@ -591,8 +591,9 @@ pub struct PhotocraftApp {
     /// The filter a "Rasterize?" prompt answered for, run after the dialog closes, where the
     /// egui context is available again (rasterize_prompt).
     pub(crate) pending_after_prompt: Option<(String, serde_json::Value)>,
-    /// Last mirrored or imported OS image; this can predate the current internal copy.
-    os_clip_sig: Option<u64>,
+    /// Last mirrored or imported OS image; this can predate the current internal copy. An SVG
+    /// import records `Unknown` when no stable bitmap signature could be observed.
+    os_clip_sig: Option<app::OsClipSignature>,
     /// Last observed SVG bytes, to distinguish an unchanged OS source from a newer internal copy.
     os_clip_svg: Option<std::sync::Arc<Vec<u8>>>,
     /// The session copy, if any, need not track the OS clipboard. An older OS signature is kept

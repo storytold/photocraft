@@ -137,15 +137,21 @@ fn explicit_pixel_paste_still_reads_raster_clipboards() {
 
 /// The bitmap changes between the SVG read and the bitmap read, with the SVG unchanged or
 /// changed: the SVG import must not record that newer bitmap as already observed, or the next
-/// Paste would skip it.
+/// Paste beside a newer path clip would skip it. One bitmap is exactly the SVG's raster mirror.
 #[test]
 fn an_svg_import_does_not_learn_a_bitmap_from_a_newer_clipboard() {
-    for svg_changes in [false, true] {
+    let mirror = photocraft_engine::edit_cmds::Clip::from_svg(CLIP_SVG.as_bytes()).unwrap();
+    let bounds = mirror.bounds;
+    let mut pixels = vec![[0; 4]; bounds.size().area() as usize];
+    mirror.surface.read_rgba8_into(bounds, &mut pixels);
+    let mirror_image = (bounds.width(), bounds.height(), pixels.into_iter().flatten().collect::<Vec<u8>>());
+    for (svg_changes, bitmap_is_mirror) in [(false, false), (true, false), (false, true)] {
         let svg = Arc::new(Mutex::new(CLIP_SVG.as_bytes().to_vec()));
         let image = OsClip::default();
         let first_read = Arc::new(Mutex::new(true));
         let (s, i, first) = (svg.clone(), image.clone(), first_read.clone());
         let read_image = image.clone();
+        let mirror_image = mirror_image.clone();
         let services = Services {
             clipboard_get_svg: Some(Box::new(move || {
                 let source = s.lock().unwrap().clone();
@@ -155,7 +161,7 @@ fn an_svg_import_does_not_learn_a_bitmap_from_a_newer_clipboard() {
                     if svg_changes {
                         *s.lock().unwrap() = CLIP_SVG.replace("<path", "<!-- newer clipboard --><path").into_bytes();
                     }
-                    *i.lock().unwrap() = Some((2, 1, vec![0, 255, 0, 255, 0, 255, 0, 255]));
+                    *i.lock().unwrap() = if bitmap_is_mirror { Some(mirror_image.clone()) } else { Some((2, 1, vec![0, 255, 0, 255, 0, 255, 0, 255])) };
                 }
                 Ok(Some(source))
             })),
@@ -165,10 +171,15 @@ fn an_svg_import_does_not_learn_a_bitmap_from_a_newer_clipboard() {
         let mut app = PhotocraftApp::new(Session::new(), services);
         app.run("file.new", json!({"width": 24, "height": 20})).unwrap();
         app.run("edit.paste", json!({"as": "shape"})).unwrap();
+        app.run("path.set", json!({"name": "work", "path": {"subpaths": [{"closed": true, "knots": [[1, 1], [3, 1], [3, 3], [1, 3]]}]}})).unwrap();
+        app.run("path.copy", json!({"name": "work", "subpaths": [0]})).unwrap();
         app.run("edit.paste", json!({})).unwrap();
+        assert!(app.session.clipboard.is_some(), "svg_changes={svg_changes}, bitmap_is_mirror={bitmap_is_mirror}: the newer OS bitmap was skipped");
         let clip = app.session.clipboard.as_ref().unwrap();
-        assert!(clip.svg.is_none(), "svg_changes={svg_changes}: the newer OS bitmap was not skipped as already observed");
-        assert_eq!(clip.surface.rgba(0, 0), [0.0, 1.0, 0.0, 1.0]);
+        assert!(clip.svg.is_none(), "the imported clipboard is the bitmap, not the older SVG");
+        assert!(app.session.path_clipboard.is_none(), "the imported bitmap displaced the path clip");
+        let expected = if bitmap_is_mirror { mirror.surface.rgba(0, 0) } else { [0.0, 1.0, 0.0, 1.0] };
+        assert_eq!(clip.surface.rgba(0, 0), expected);
     }
 }
 
@@ -186,15 +197,15 @@ fn newer_internal_copies_survive_an_unchanged_external_svg() {
         };
         let mut app = PhotocraftApp::new(Session::new(), services);
         app.run("file.new", json!({"width":64,"height":64})).unwrap();
-        app.import_os_svg_clipboard().unwrap();
-        let clip = app.session.clipboard.as_ref().unwrap();
-        let b = clip.bounds;
+        let mirror = photocraft_engine::edit_cmds::Clip::from_svg(SOURCE.as_bytes()).unwrap();
+        let b = mirror.bounds;
         let mut pixels = vec![[0; 4]; b.size().area() as usize];
-        clip.surface.read_rgba8_into(b, &mut pixels);
+        mirror.surface.read_rgba8_into(b, &mut pixels);
         let bytes: Vec<_> = pixels.into_iter().flatten().collect();
+        *image.lock().unwrap() = Some((b.width(), b.height(), bytes.clone()));
+        app.import_os_svg_clipboard().unwrap();
         let signature = clipboard::clip_signature(b.width(), b.height(), &bytes);
-        assert_eq!(app.os_clip_sig, Some(signature), "the SVG mirror's signature matches the image import's, byte for byte");
-        *image.lock().unwrap() = Some((b.width(), b.height(), bytes));
+        assert_eq!(app.os_clip_sig, Some(OsClipSignature::Bitmap(signature)), "stable reads record the actual OS bitmap signature");
         app.session.edit_prefs(|prefs| prefs.general.export_clipboard = false);
         app.run("file.new", json!({"width":8,"height":6})).unwrap();
         app.run("edit.fill", json!({"color":"#0000ff"})).unwrap();
