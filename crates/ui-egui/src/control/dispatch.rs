@@ -605,6 +605,9 @@ impl PanelSet {
             app.ui.mask_target = m;
             app.ui.properties_layer = None;
             app.ui.vector_mask_target &= !m;
+            if m {
+                app.target_mask_over_colour_rows();
+            }
             app.sync_mask_targets();
         }
         if let Some(open) = self.updates_open {
