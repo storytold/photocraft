@@ -302,6 +302,7 @@ pub enum LayerContent {
 
 - **Pixels.** `raster::TiledSurface<F>` is a sparse map from `TileCoord` to `Arc<Tile<F>>`, with 256×256 tiles. Missing tiles are transparent, or take a fill value. Mutation calls `Arc::make_mut`, so it is copy-on-write.
 - **Tile generation counters** feed the GPU residency cache and the thumbnail cache.
+- **Cel animation.** `Document::sprite` stores Aseprite frames, per-frame palettes, exact index planes, links and retained format metadata. The selected frame projects into ordinary raster layers for existing tools; the session captures edits transactionally before navigation and saving. Copy-on-write frame/cel data participates in history memory accounting. Native manifests store its surfaces through the tile store and metadata through bounded blobs. See [Aseprite documents](aseprite.md) for editing and preservation rules.
 - **Mip pyramids** are derived lazily per layer, for zoomed-out views.
 - **Big documents.** The tile store is behind a `TileStore` trait: in-memory now, disk-spilling ("scratch disk") later, with LRU eviction under a global memory budget.
 - **The first milestone supports RGB and Gray, at 8/16/32f.** CMYK and Lab are modelled in the types from day one (so PSD round-trips don't lose them) but are rendered by converting to RGB until later phases.

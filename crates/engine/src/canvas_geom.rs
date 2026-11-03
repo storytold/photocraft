@@ -376,8 +376,22 @@ fn remap_pixels(doc: &mut Document, map: &dyn Fn(i32, i32) -> (i32, i32)) {
 pub(crate) fn turn_canvas(doc: &mut Document, turn: Turn) {
     let (w, h) = (doc.size.width as i32, doc.size.height as i32);
     let map = turn.pixel_map(w, h);
-    remap_pixels(doc, &map);
     let a = turn.affine(f64::from(doc.size.width), f64::from(doc.size.height));
+    // Exact indices are authoritative even when two entries have identical RGBA. Turn both
+    // source planes before capture so it sees the moved indices, not their old positions.
+    if let Some(sprite) = &mut doc.sprite {
+        for frame in &mut sprite.frames {
+            for cel in Arc::make_mut(frame).cels.values_mut() {
+                let indices = cel.indices.as_ref().map(|indices| remap_surface(indices, &map));
+                let cel = Arc::make_mut(cel);
+                cel.indices = indices;
+                cel.pixels = remap_surface(&cel.pixels, &map);
+                let b = map_box(&a, [f64::from(cel.rect.x0), f64::from(cel.rect.y0), f64::from(cel.rect.x1), f64::from(cel.rect.y1)]);
+                cel.rect = Rect::new(b[0].round() as i32, b[1].round() as i32, b[2].round() as i32, b[3].round() as i32);
+            }
+        }
+    }
+    remap_pixels(doc, &map);
     if turn.swaps() {
         doc.size = photocraft_doc::Size::new(doc.size.height, doc.size.width);
     }

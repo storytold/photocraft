@@ -59,6 +59,7 @@ pub fn document(d: &DocState) -> Value {
         "measurement": {"scale": doc.measurement.scale.describe(), "ruler": doc.measurement.ruler.map(|r| json!({"start": r.start, "end": r.end, "protractor": r.protractor})), "count": doc.measurement.count_total(), "countGroups": doc.measurement.count_groups.len()},
         "notes": doc.notes.iter().map(|n| json!({"author": n.author, "text": n.text, "position": n.position})).collect::<Vec<_>>(),
         "timeline": doc.timeline.as_ref().map(|t| json!({"fps": t.fps, "duration": t.duration, "current": t.current})),
+        "sprite":doc.sprite.as_ref().map(|s|json!({"frames":s.frames.len(),"current":s.current,"indexed":s.indexed,"durationMs":s.duration_ms(),"frameDurationMs":s.frame_duration_ms(),"tags":s.tags,"pixelAspect":s.pixel_aspect})),
         "variables": (!doc.variables.is_empty()).then(|| json!({
             "defs": doc.variables.defs.iter().map(|vd| json!({"name": vd.name, "layer": vd.layer.0})).collect::<Vec<_>>(),
             "dataSets": doc.variables.data_sets.iter().map(|s| s.name.clone()).collect::<Vec<_>>(),

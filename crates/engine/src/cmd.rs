@@ -27,9 +27,55 @@ pub struct CommandSpec {
     pub journal: bool,
 }
 
+/// Whole-canvas edits currently transform one raster projection, not every stored cel frame.
+/// Refuse animated sprites before changing samplers, pixels or history; detach a copy first.
+pub(crate) fn check_sprite_canvas_geometry(doc: &Document) -> Result<()> {
+    if doc.sprite.as_ref().is_some_and(|sprite| sprite.frames.len() > 1) {
+        return Err(EngineError::Other("canvas geometry changes require a single-frame sprite; detach a copy of the selected frame first".into()));
+    }
+    if doc.sprite.as_ref().is_some_and(|sprite| {
+        sprite.layers.iter().any(|layer| layer.flags & 64 != 0) || sprite.frames.iter().any(|frame| frame.cels.values().any(|cel| cel.precise.is_some()))
+    }) {
+        return Err(EngineError::Other("this sprite has reference layers; detach a copy before changing canvas geometry".into()));
+    }
+    if doc.sprite.as_ref().is_some_and(|sprite| sprite.layers.iter().any(|layer| sprite.tilemap_descriptor(layer.id).is_some())) {
+        return Err(EngineError::Other("this sprite retains tilemap records; rasterize its tilemaps before changing canvas geometry".into()));
+    }
+    Ok(())
+}
+
+/// Resampling/cropping cannot reconstruct the identity of equal-colored palette entries.
+/// Exact right-angle turns have their own index-plane mapping and use the ordinary guard.
+pub(crate) fn check_sprite_canvas_resampling(doc: &Document) -> Result<()> {
+    check_sprite_canvas_geometry(doc)?;
+    if doc.sprite.as_ref().is_some_and(|sprite| sprite.indexed) {
+        return Err(EngineError::Other("this sprite retains exact palette indices; detach a copy before resampling or cropping the canvas".into()));
+    }
+    Ok(())
+}
+
 /// Image › Image Rotation by a right angle or a flip (pixels, vectors, guides, … all move).
 fn turn(s: &mut Session, label: &str, t: crate::canvas_geom::Turn) -> Result<Value> {
+    if s.active().is_some_and(|d| d.doc.sprite.as_ref().is_some_and(|sp| sp.has_slices())) {
+        return Err(EngineError::Other("this sprite has retained slice coordinates; remove slices from a copy before turning the canvas".into()));
+    }
     if let Some(d) = s.active() {
+        check_sprite_canvas_geometry(&d.doc)?;
+        let edge_map = t.affine(f64::from(d.doc.size.width), f64::from(d.doc.size.height));
+        if let Some(sprite) = &d.doc.sprite {
+            for cel in sprite.frames.iter().flat_map(|frame| frame.cels.values()) {
+                for bounds in
+                    std::iter::once(cel.rect).chain(std::iter::once(cel.pixels.content_bounds())).chain(cel.indices.iter().map(Surface::content_bounds))
+                {
+                    for (x, y) in [(bounds.x0, bounds.y0), (bounds.x1, bounds.y1)] {
+                        let point = edge_map.apply(photocraft_geom::Point::new(f64::from(x), f64::from(y)));
+                        if point.x < f64::from(i32::MIN) || point.x > f64::from(i32::MAX) || point.y < f64::from(i32::MIN) || point.y > f64::from(i32::MAX) {
+                            return Err(EngineError::Other("turning this sprite would exceed the supported coordinate range".into()));
+                        }
+                    }
+                }
+            }
+        }
         let a = t.affine(f64::from(d.doc.size.width), f64::from(d.doc.size.height));
         // Sampler points are pixel indices, not pixel edges: map the pixel's centre, so the point
         // lands on the same pixel `Turn::pixel_map` moves the pixels to (`w - 1 - x`).
@@ -137,6 +183,7 @@ pub mod smart_cmds;
 pub mod smart_svg_cmds;
 pub mod smartselect_cmds;
 pub mod solid_fill_cmds;
+pub mod sprite_cmds;
 pub mod stamp_cmds;
 pub mod style_asl_cmds;
 pub mod swatch_cmds;
@@ -1387,6 +1434,7 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::migrate_cmds::specs());
     v.extend(crate::trap_cmds::specs());
     v.extend(crate::timeline_cmds::specs());
+    v.extend(sprite_cmds::specs());
     v.extend(crate::video_cmds::specs());
     v.extend(crate::jobs::specs());
     v.extend(crate::wia_cmds::specs());

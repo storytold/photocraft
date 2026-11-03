@@ -112,6 +112,10 @@ fn choose(h: &mut Harness<'_, Probe>, font: &str, accept: &str) {
         "arrow-enter" => {
             h.key_press(Key::ArrowDown);
             h.run();
+            // The query can also match system fonts ("Inter" matches "SignPainter").
+            // Return to the requested row before committing, regardless of that list.
+            h.key_press(Key::ArrowUp);
+            h.run();
             h.key_press(Key::Enter);
         }
         "click" => h.get_by_label(font).click(),

@@ -86,6 +86,11 @@ fn source(name: &str, bytes: &[u8]) -> Value {
 
 /// Import a preset file; `None` when `name` isn't one.
 pub fn open(app: &mut PhotocraftApp, name: &str, bytes: &[u8]) -> Option<Result<(), String>> {
+    // `.ase` is shared with Adobe Swatch Exchange. A sprite's signature wins, even when
+    // renamed to another preset extension, so it reaches the document importer.
+    if photocraft_io::aseprite::is_aseprite(bytes) {
+        return None;
+    }
     let (cmd, what) = match ext(name).as_str() {
         "abr" => ("brush.presets.importAbr", "brushes"),
         "grd" => ("gradient.presets.importGrd", "gradients"),
@@ -175,6 +180,21 @@ mod tests {
         assert!(is_preset_file("Debaser-ColourLibrary-Part6.PAT"));
         assert!(!is_preset_file("photo.psd"));
         assert!(!is_preset_file("abr"));
+    }
+
+    #[test]
+    fn adobe_ase_swatches_still_import_as_presets() {
+        use photocraft_psd::ase::{AseColor, AseEntry, AseFile, AseKind, AseSwatch};
+        let bytes = photocraft_psd::ase::write(&AseFile {
+            entries: vec![AseEntry::Swatch(AseSwatch { name: "Swatch".into(), color: AseColor::Rgb([1.0, 0.0, 0.0]), kind: AseKind::Process })],
+        })
+        .unwrap();
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        assert!(!photocraft_io::aseprite::is_aseprite(&bytes));
+        open(&mut app, "exchange.ase", &bytes).unwrap().unwrap();
+        assert!(app.session.documents().is_empty());
+        let swatches = app.session.execute("swatches.list", json!({})).unwrap();
+        assert!(swatches.to_string().contains("Swatch"));
     }
 
     /// Opening `Kit.abr` when the library has a "Kit" group of the user's asks first: Import as

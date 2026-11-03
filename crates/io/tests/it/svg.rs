@@ -380,8 +380,30 @@ fn an_embedded_svg_gets_only_the_nesting_depth_the_drawing_left() {
             let r = open(&embed(svg::MAX_XML_DEPTH - 1, svg::MAX_XML_DEPTH - 1));
             assert!(px(&r.document, 4, 4)[3] < 0.01, "{:?}", px(&r.document, 4, 4));
             // Within the shared budget the embedded drawing renders (its rect is black).
-            let r = open(&embed(250, 250));
+            let within = (svg::MAX_XML_DEPTH - 4) / 2;
+            let r = open(&embed(within, within));
             assert!(close(px(&r.document, 4, 4), [0.0, 0.0, 0.0, 1.0]), "{:?}", px(&r.document, 4, 4));
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+/// The old 512-level allowance reached usvg's recursive conversion and aborted on a 1 MiB
+/// stack. Reject that formerly accepted input before conversion in both import paths, while
+/// still drawing a document at the current nesting boundary on the same small stack.
+#[test]
+fn formerly_accepted_svg_depth_is_refused_before_recursive_conversion() {
+    std::thread::Builder::new()
+        .stack_size(1 << 20)
+        .spawn(|| {
+            let deep = nested(510);
+            assert!(matches!(import("deep.svg", deep.as_bytes()), Err(IoError::Svg(_))));
+            assert!(matches!(svg::rasterize_bounded(deep.as_bytes(), 1.0, 64), Err(IoError::Svg(_))));
+            let legal = nested(svg::MAX_XML_DEPTH - 2);
+            assert!(close(px(&open(&legal).document, 4, 4), [0.0, 0.0, 0.0, 1.0]));
+            let rendered = svg::rasterize_bounded(legal.as_bytes(), 1.0, 64).unwrap();
+            assert!(rendered.px[4 * 8 + 4][3] > 0.99);
         })
         .unwrap()
         .join()
@@ -509,4 +531,52 @@ fn image_hrefs_to_local_files_are_never_read() {
         open(&format!("<svg {NS} width=\"20\" height=\"20\"><image width=\"20\" height=\"20\" href=\"{}\"/></svg>", png_data_url())).document.layers[0].content,
         LayerContent::Raster(_)
     ));
+}
+
+/// A depth-limited embedded image can be omitted, but ordinary and bounded imports report it.
+#[test]
+fn omitted_embedded_svg_depth_is_reported_without_losing_valid_siblings() {
+    let inner = base64_data_url("image/svg+xml", nested(70).as_bytes());
+    let images = format!("<image width=\"8\" height=\"8\" href=\"{inner}\"/>").repeat(2);
+    let xml = format!(
+        "<svg {NS} width=\"16\" height=\"8\">{}{}{}<rect x=\"8\" width=\"8\" height=\"8\" fill=\"blue\"/></svg>",
+        "<g>".repeat(60),
+        images,
+        "</g>".repeat(60)
+    );
+    for result in [import("depth.svg", xml.as_bytes()).unwrap(), svg::import_svg_bounded("depth", xml.as_bytes(), 128).unwrap()] {
+        assert!(px(&result.document, 4, 4)[3] < 0.01);
+        assert!(close(px(&result.document, 12, 4), [0.0, 0.0, 1.0, 1.0]));
+        assert_eq!(result.warnings.iter().filter(|w| w.contains("omitted")).count(), 1, "{:?}", result.warnings);
+    }
+    let legal = format!("<svg {NS} width=\"8\" height=\"8\"><image width=\"8\" height=\"8\" href=\"{inner}\"/></svg>");
+    let result = import("legal.svg", legal.as_bytes()).unwrap();
+    assert!(px(&result.document, 4, 4)[3] > 0.99);
+    assert!(!result.warnings.iter().any(|w| w.contains("omitted")));
+}
+
+/// Corrupt compressed and malformed markup images warn once per cause, without hiding valid art.
+#[test]
+fn embedded_svg_decode_and_parse_omissions_are_both_reported() {
+    let bad_gzip = base64_data_url("image/svg+xml", &[0x1f, 0x8b, 1, 2, 3]);
+    let bad_xml = base64_data_url("image/svg+xml", b"<svg>");
+    let images = [&bad_gzip, &bad_xml, &bad_gzip].iter().map(|url| format!("<image width=\"8\" height=\"8\" href=\"{url}\"/>")).collect::<String>();
+    let xml = format!("<svg {NS} width=\"8\" height=\"8\">{images}<rect width=\"8\" height=\"8\" fill=\"blue\"/></svg>");
+    let result = import("omitted.svg", xml.as_bytes()).unwrap();
+    assert!(close(px(&result.document, 4, 4), [0.0, 0.0, 1.0, 1.0]));
+    assert_eq!(result.warnings.iter().filter(|w| w.contains("inflated")).count(), 1, "{:?}", result.warnings);
+    assert_eq!(result.warnings.iter().filter(|w| w.contains("parsed")).count(), 1, "{:?}", result.warnings);
+}
+
+/// Bounded non-strict imports report separate omission causes while deduplicating repeated ones.
+#[test]
+fn bounded_svg_reports_each_distinct_image_omission() {
+    let bmp = base64_data_url("image/bmp", b"BM");
+    let malformed_svg = base64_data_url("image/svg+xml", b"<svg>");
+    let images = [&bmp, &malformed_svg, &bmp].iter().map(|url| format!("<image width=\"8\" height=\"8\" href=\"{url}\"/>")).collect::<String>();
+    let xml = format!("<svg {NS} width=\"8\" height=\"8\">{images}<rect width=\"8\" height=\"8\" fill=\"blue\"/></svg>");
+    let result = svg::import_svg_bounded("omitted", xml.as_bytes(), 64).unwrap();
+    assert!(close(px(&result.document, 4, 4), [0.0, 0.0, 1.0, 1.0]));
+    assert_eq!(result.warnings.iter().filter(|w| w.contains("omitted")).count(), 2, "{:?}", result.warnings);
+    assert!(svg::import_svg_preview_with_work("strict", xml.as_bytes(), 64).is_err());
 }
