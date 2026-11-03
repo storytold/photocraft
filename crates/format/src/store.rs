@@ -315,13 +315,6 @@ pub(crate) fn read_manifest(src: &dyn ByteSource, opts: &LoadOptions) -> Result<
     // A number past f32's range decodes as infinity, which no save could write back (#6862).
     if let Err(crate::finite::Problem::NonFinite { path }) = crate::finite::check(&m) {
         return Err(FormatError::corrupt(format!("`{path}` is out of range")));
-        fn count_layers(layers: &[LayerM]) -> usize {
-            layers.iter().fold(layers.len(), |count, layer| match &layer.content {
-                ContentM::Group { children, .. } => count.saturating_add(count_layers(children)),
-                _ => count,
-            })
-        }
-        m.document.responsive.validate(count_layers(&m.document.layers)).map_err(|message| FormatError::LimitExceeded(message.into()))?;
     }
     fn count_layers(layers: &[LayerM]) -> usize {
         layers.iter().fold(layers.len(), |count, layer| match &layer.content {
