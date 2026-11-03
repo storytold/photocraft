@@ -47,6 +47,7 @@ fn display_mode_items(ui: &mut egui::Ui, st: &mut PresetUi, panel: &str) {
         };
         if menu_check_item(ui, selected == mode, label, true).clicked() {
             st.display_modes.insert(panel.to_owned(), mode);
+            ui.close();
         }
     }
 }
@@ -57,6 +58,7 @@ fn wrap_list_item(ui: &mut egui::Ui, st: &mut PresetUi, panel: &str) {
     let wrap = st.wrap_list.get(panel).copied().unwrap_or(true);
     if menu_check_item(ui, wrap, tl!("Wrap List"), list_mode).clicked() && list_mode {
         st.wrap_list.insert(panel.to_owned(), !wrap);
+        ui.close();
     }
 }
 
@@ -72,8 +74,11 @@ fn menu_check_item(ui: &mut egui::Ui, checked: bool, label: &str, enabled: bool)
 /// Common visibility control for the standard pickers' search row.
 fn search_toggle(ui: &mut egui::Ui, st: &mut PresetUi, panel: &str) {
     let visible = st.search_visible.entry(panel.to_string()).or_insert(true);
-    if ui.checkbox(visible, tl!("Show Search Bar")).changed() && !*visible {
-        st.search.remove(panel);
+    if ui.checkbox(visible, tl!("Show Search Bar")).changed() {
+        if !*visible {
+            st.search.remove(panel);
+        }
+        ui.close();
     }
 }
 
@@ -266,6 +271,40 @@ mod display_menu_tests {
     }
 
     #[test]
+    fn selecting_any_display_mode_closes_the_panel_menu() {
+        use crate::pickers::picker_state::PickerDisplayMode as Mode;
+
+        for mode in Mode::ALL {
+            let mut state = PresetUi::default();
+            state.display_modes.insert("test-picker".into(), Mode::SmallThumbnail);
+            let mut harness = Harness::builder().with_size(vec2(420.0, 260.0)).build_ui_state(
+                |ui, state: &mut PresetUi| {
+                    picker_menu_popup(ui, "Panel menu", egui::Vec2::ZERO, |ui| {
+                        picker_menu_contents(ui, state, "test-picker", PickerMenuOptions::for_panel("test-picker"), None);
+                    });
+                },
+                state,
+            );
+            crate::PhotocraftApp::setup_context(&harness.ctx, crate::theme::ThemeKind::ProMedium);
+            harness.run_steps(2);
+            harness.get_by_label("Panel menu").click();
+            harness.run_steps(2);
+            let label = match mode {
+                Mode::TextOnly => "Text Only",
+                Mode::SmallThumbnail => "Small Thumbnail",
+                Mode::LargeThumbnail => "Large Thumbnail",
+                Mode::SmallList => "Small List",
+                Mode::LargeList => "Large List",
+            };
+            harness.get_by_label(label).click();
+            harness.run_steps(2);
+
+            assert_eq!(harness.state().display_mode("test-picker"), mode, "the selected display mode is applied");
+            assert!(harness.query_by_label("Wrap List").is_none(), "selecting {label} closes the panel menu");
+        }
+    }
+
+    #[test]
     fn standard_picker_shell_does_not_render_a_picker_local_menu_trigger() {
         use super::{ShellOptions, shell_controls};
 
@@ -294,6 +333,7 @@ mod display_menu_tests {
         harness.get_by_label("Show Search Bar").click();
         harness.run_steps(2);
         assert_eq!(harness.state().search_visible.get("gradients"), Some(&false));
+        assert!(harness.query_by_label("Text Only").is_none(), "toggling search visibility closes the panel menu");
     }
 
     #[test]
@@ -389,6 +429,7 @@ mod display_menu_tests {
             harness.get_by_label("Wrap List").click();
             harness.run_steps(2);
             assert!(!harness.state().wrap_list_enabled("test-picker"), "Wrap List can be turned off for {mode:?}");
+            assert!(harness.query_by_label("Wrap List").is_none(), "toggling Wrap List closes the panel menu for {mode:?}");
         }
     }
 }

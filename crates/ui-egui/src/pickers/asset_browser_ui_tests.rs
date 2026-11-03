@@ -227,7 +227,13 @@ fn unwrapped_list_modes_use_full_width_and_keep_one_item_per_row() {
         let harness = harness_with_state(groups.clone(), vec2(520.0, 520.0), state);
         let first = harness.get_by_label("Unwrapped card 1").rect();
         let second = harness.get_by_label("Unwrapped card 2").rect();
+        let header = harness.get_by_label("A").rect();
         assert!(first.width() > 400.0, "unwrapped {mode:?} should span the available row: {first:?}");
+        assert!(
+            first.right() <= header.right() + 0.5 && first.right() >= header.right() - 8.0,
+            "unwrapped {mode:?} cards align with the header's visible right edge while retaining the ScrollArea scrollbar gutter: card={first:?}, header={header:?}"
+        );
+        assert!(first.left() > header.left(), "unwrapped {mode:?} cards retain their hierarchy inset");
         assert_eq!(first.left(), second.left());
         assert!(second.top() > first.top(), "unwrapped {mode:?} must keep one item per row");
     }
@@ -266,7 +272,7 @@ fn text_only_elides_long_fixed_width_labels_without_losing_the_full_accessible_n
     assert!(label.width() < row.width(), "the label is width-constrained within its full-width row: {label:?} vs {row:?}");
     harness.hover_at(label.center());
     harness.run_steps(3);
-    assert!(harness.query_by_label(name).is_some(), "the full preset name remains available to accessibility and hover help");
+    assert!(harness.query_all_by_label(name).next().is_some(), "the full preset name remains available to accessibility and hover help");
 }
 
 fn nested_group_tree() -> Vec<GroupView> {
@@ -623,9 +629,8 @@ fn mixed_tree() -> Vec<GroupView> {
 }
 
 #[test]
-fn actual_group_header_drop_prepends_for_every_header_vertical_region() {
-    // Header drop is a prepend target across the full header height, not just its disclosure icon.
-    for y in [-12.0, -5.0, 0.0, 5.0, 12.0] {
+fn actual_open_nonempty_group_header_drops_into_the_group_across_its_full_height() {
+    for y in [-12.0, -5.0, 0.0] {
         let mut h = harness(mixed_tree(), vec2(520.0, 900.0));
         drag_labels(&mut h, "C", "A", vec2(0.0, y));
         let children = &h.state().0.hierarchy_order[PANEL]["A"];
@@ -633,17 +638,33 @@ fn actual_group_header_drop_prepends_for_every_header_vertical_region() {
         assert_eq!(children.iter().filter(|entry| **entry == HierarchyOrderEntry::Group("C".into())).count(), 1);
         assert_eq!(h.state().0.parent_of(PANEL, "C"), Some("A"));
     }
+
+    for y in [5.0, 12.0] {
+        let mut h = harness(mixed_tree(), vec2(520.0, 900.0));
+        drag_labels(&mut h, "C", "A", vec2(0.0, y));
+        let children = &h.state().0.hierarchy_order[PANEL]["A"];
+        assert_eq!(children.first(), Some(&HierarchyOrderEntry::Group("C".into())), "header offset y={y}: {children:?}");
+        assert_eq!(h.state().0.parent_of(PANEL, "C"), Some("A"), "lower-half drop into an open non-empty group");
+    }
 }
 
 #[test]
-fn actual_nested_header_drop_prepends_and_preserves_the_complete_nested_path() {
-    for y in [-8.0, 0.0, 8.0] {
+fn actual_open_nested_nonempty_header_drops_into_the_group_across_its_full_height() {
+    for y in [-8.0, 0.0] {
         let mut h = harness_with_state(nested_group_tree(), vec2(520.0, 900.0), with_b_nested_in_a());
         drag_labels(&mut h, "C", "B", vec2(0.0, y));
         let b = &h.state().0.hierarchy_order[PANEL]["B"];
         assert_eq!(b.first(), Some(&HierarchyOrderEntry::Group("C".into())), "nested header offset y={y}: {b:?}");
+        assert_eq!(h.state().0.parent_of(PANEL, "B"), Some("A"));
         assert_eq!(h.state().0.parent_of(PANEL, "C"), Some("B"));
     }
+
+    let mut h = harness_with_state(nested_group_tree(), vec2(520.0, 900.0), with_b_nested_in_a());
+    drag_labels(&mut h, "C", "B", vec2(0.0, 8.0));
+    let b = &h.state().0.hierarchy_order[PANEL]["B"];
+    assert_eq!(b.first(), Some(&HierarchyOrderEntry::Group("C".into())), "lower-half drop into open non-empty B: {b:?}");
+    assert_eq!(h.state().0.parent_of(PANEL, "B"), Some("A"));
+    assert_eq!(h.state().0.parent_of(PANEL, "C"), Some("B"));
 }
 
 #[test]
@@ -683,8 +704,10 @@ fn actual_six_pixel_group_gap_selects_upper_append_and_lower_sibling_levels() {
     for offset in [-5.0, -4.0, -2.0, -1.0] {
         let mut h = harness_with_state(nested_group_tree(), vec2(520.0, 900.0), with_b_nested_in_a());
         let source = h.get_by_label("C").rect().center();
+        let parent_header = h.get_by_label("A").rect();
         let lower_header = h.get_by_label("B").rect();
-        let point = pos2(lower_header.center().x, lower_header.top() + offset);
+        let x = if offset < -3.0 { parent_header.left() + 2.0 } else { lower_header.left() + 2.0 };
+        let point = pos2(x.min(lower_header.right() - 2.0), lower_header.top() + offset);
         pointer_drag(&mut h, source, point);
         let a = &h.state().0.hierarchy_order[PANEL]["A"];
         assert_eq!(a.iter().filter(|entry| **entry == HierarchyOrderEntry::Group("C".into())).count(), 1);
@@ -700,8 +723,8 @@ fn actual_six_pixel_group_gap_selects_upper_append_and_lower_sibling_levels() {
 }
 
 #[test]
-fn actual_parent_child_group_boundary_is_drop_target_from_parent_indent_gutter() {
-    for (offset, append_into_parent) in [(-1.0, true), (1.0, false)] {
+fn actual_parent_indent_gutter_drops_into_parent_across_nested_child_header() {
+    for offset in [-1.0, 1.0] {
         let mut h = harness_with_state(nested_group_tree(), vec2(520.0, 900.0), with_b_nested_in_a());
         let source = h.get_by_label("C").rect().center();
         let parent_header = h.get_by_label("A").rect();
@@ -718,27 +741,12 @@ fn actual_parent_child_group_boundary_is_drop_target_from_parent_indent_gutter()
             h.run_steps(1);
         }
 
-        let accent = crate::theme::Tokens::get(&h.ctx).accent;
-        let ppp = h.ctx.pixels_per_point();
-        let image = h.render().expect("render parent-child boundary drop indicator");
-        let indicator_x = if append_into_parent { parent_header.left() + 2.0 } else { child_header.left() + 2.0 };
-        let x = (indicator_x * ppp).round() as u32;
-        let y = (boundary * ppp).round() as u32;
-        assert!(
-            x < image.width() && y < image.height() && image.get_pixel(x, y).0[..3] == accent.to_array()[..3],
-            "parent-child boundary should paint its matching horizontal insertion indicator; append={append_into_parent}"
-        );
         h.event(Event::PointerButton { pos: point, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
         h.run_steps(3);
 
         let children = &h.state().0.hierarchy_order[PANEL]["A"];
-        if append_into_parent {
-            assert!(children.contains(&HierarchyOrderEntry::Group("C".into())), "upper half should append into parent group A: {children:?}");
-        } else {
-            let c_index = children.iter().position(|entry| *entry == HierarchyOrderEntry::Group("C".into())).expect("C should be inserted before child B");
-            let b_index = children.iter().position(|entry| *entry == HierarchyOrderEntry::Group("B".into())).unwrap();
-            assert!(c_index < b_index, "lower half should insert before child group B: {children:?}");
-        }
+        assert!(children.contains(&HierarchyOrderEntry::Group("C".into())), "parent indent gutter appends into A at offset {offset}: {children:?}");
+        assert_eq!(h.state().0.parent_of(PANEL, "C"), Some("A"));
     }
 }
 
@@ -1349,6 +1357,52 @@ fn actual_shared_picker_passes_the_complete_mixed_selection_to_its_commit_functi
     assert_eq!(h.state().1[0].source, NodeId::group("A"));
     assert_eq!(h.state().1[0].selection, [NodeId::group("A"), NodeId::item("B", "b1")]);
     assert_eq!(h.state().1[0].position, crate::pickers::picker_browser_model::DropPosition::PrependTo { group: NodeId::group("C") });
+}
+
+#[test]
+fn actual_open_empty_group_header_bottom_half_drops_into_the_group() {
+    for list in [false, true] {
+        let mut h = harness_with_state_layout(
+            vec![group("A", Vec::new()), group("B", Vec::new()), group("C", Vec::new())],
+            vec2(520.0, 900.0),
+            PresetUi::default(),
+            list,
+        );
+        let source = h.get_by_label("A").rect().center();
+        let target_header = h.get_by_label("C").rect();
+        let target = pos2(target_header.center().x, target_header.center().y + target_header.height() * 0.25);
+
+        pointer_drag(&mut h, source, target);
+
+        assert_eq!(h.state().0.hierarchy_order[PANEL][""], [HierarchyOrderEntry::Group("B".into()), HierarchyOrderEntry::Group("C".into())]);
+        assert_eq!(
+            h.state().0.hierarchy_order[PANEL]["C"],
+            [HierarchyOrderEntry::Group("A".into())],
+            "the lower half of an open empty group header also drops into it in list={list}"
+        );
+        assert_eq!(h.state().0.parent_of(PANEL, "A"), Some("C"), "A becomes a child of C in list={list}");
+    }
+}
+
+#[test]
+fn actual_closed_group_header_bottom_half_keeps_the_sibling_after_target() {
+    for list in [false, true] {
+        let mut initial = PresetUi::default();
+        initial.toggled.insert(format!("{PANEL}/B"));
+        let mut h = harness_with_state_layout(vec![group("A", Vec::new()), group("B", Vec::new()), group("C", Vec::new())], vec2(520.0, 900.0), initial, list);
+        let source = h.get_by_label("A").rect().center();
+        let target_header = h.get_by_label("B").rect();
+        let target = pos2(target_header.center().x, target_header.bottom() - 2.0);
+
+        pointer_drag(&mut h, source, target);
+
+        assert_eq!(
+            h.state().0.hierarchy_order[PANEL][""],
+            [HierarchyOrderEntry::Group("B".into()), HierarchyOrderEntry::Group("A".into()), HierarchyOrderEntry::Group("C".into())],
+            "a closed group's lower header half remains a sibling-after target in list={list}"
+        );
+        assert_eq!(h.state().0.parent_of(PANEL, "A"), None);
+    }
 }
 
 #[test]

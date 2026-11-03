@@ -125,36 +125,44 @@ pub fn card_ex(
     body: impl FnOnce(&mut Ui, usize),
 ) -> CardResponse {
     let t = Tokens::get(ui.ctx());
-    if t.pro {
-        return pro_panel(ui, id, tabs, selected, collapsed, reorderable, body);
-    }
-    let m = body_margin(false);
-    let frame = egui::Frame::NONE
-        .fill(t.card)
-        .stroke(Stroke::new(1.0, t.card_border))
-        .corner_radius(CornerRadius::same(t.radius as u8))
-        .inner_margin(egui::Margin { bottom: if collapsed { 6 } else { m.bottom }, ..m });
-    let out = frame
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            // Registered before the tabs so they keep their clicks; drags fall through to it.
-            let strip_rect = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), 22.0));
-            let strip = ui.interact(strip_rect, ui.id().with((id, "strip")), Sense::click_and_drag());
-            // Pill tabs left of the menu button; they elide or overflow into a chevron (#151).
-            let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::hover());
-            let tip = crate::i18n::fmt(tl!("{name} options"), &[("name", tl!(tabs.get(*selected).copied().unwrap_or(id)))]);
-            let menu_rect = Rect::from_min_max(pos2(row.right() - 22.0, row.top() + 1.0), pos2(row.right(), row.bottom() - 1.0));
-            let menu = crate::icons::button(&mut ui.new_child(egui::UiBuilder::new().max_rect(menu_rect)), "ellipsis", 22.0, false, &tip);
-            let area = Rect::from_min_max(row.min, pos2((menu_rect.left() - 4.0).max(row.left()), row.bottom()));
-            let tabs_out = crate::tab_strip::pill_tabs(ui, ui.id().with((id, "tabs")), area, tabs, selected, reorderable);
-            if !collapsed {
-                ui.add_space(6.0);
-                body(ui, *selected);
-            }
-            CardResponse::new(strip, menu, tabs_out)
-        })
-        .inner;
-    ui.add_space(6.0);
+    // A card is a fixed surface, not a floating/expanding hover target. egui's hovered widget
+    // visuals carry an `expansion` value; keep that at zero for the card and its contents even if
+    // the surrounding theme opts into expanded hover affordances.
+    let previous_hover_expansion = ui.style().visuals.widgets.hovered.expansion;
+    ui.style_mut().visuals.widgets.hovered.expansion = 0.0;
+    let out = if t.pro {
+        pro_panel(ui, id, tabs, selected, collapsed, reorderable, body)
+    } else {
+        let m = body_margin(false);
+        let frame = egui::Frame::NONE
+            .fill(t.card)
+            .stroke(Stroke::new(1.0, t.card_border))
+            .corner_radius(CornerRadius::same(t.radius as u8))
+            .inner_margin(egui::Margin { bottom: if collapsed { 6 } else { m.bottom }, ..m });
+        let out = frame
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                // Registered before the tabs so they keep their clicks; drags fall through to it.
+                let strip_rect = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), 22.0));
+                let strip = ui.interact(strip_rect, ui.id().with((id, "strip")), Sense::click_and_drag());
+                // Pill tabs left of the menu button; they elide or overflow into a chevron (#151).
+                let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::hover());
+                let tip = crate::i18n::fmt(tl!("{name} options"), &[("name", tl!(tabs.get(*selected).copied().unwrap_or(id)))]);
+                let menu_rect = Rect::from_min_max(pos2(row.right() - 22.0, row.top() + 1.0), pos2(row.right(), row.bottom() - 1.0));
+                let menu = crate::icons::button(&mut ui.new_child(egui::UiBuilder::new().max_rect(menu_rect)), "ellipsis", 22.0, false, &tip);
+                let area = Rect::from_min_max(row.min, pos2((menu_rect.left() - 4.0).max(row.left()), row.bottom()));
+                let tabs_out = crate::tab_strip::pill_tabs(ui, ui.id().with((id, "tabs")), area, tabs, selected, reorderable);
+                if !collapsed {
+                    ui.add_space(6.0);
+                    body(ui, *selected);
+                }
+                CardResponse::new(strip, menu, tabs_out)
+            })
+            .inner;
+        ui.add_space(6.0);
+        out
+    };
+    ui.style_mut().visuals.widgets.hovered.expansion = previous_hover_expansion;
     out
 }
 
@@ -1812,6 +1820,37 @@ fn clean(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use egui::{Key, Modifiers};
+
+    #[test]
+    fn dock_card_hover_does_not_expand_its_contents() {
+        use egui_kittest::Harness;
+
+        for kind in [crate::theme::ThemeKind::Studio, crate::theme::ThemeKind::ProMedium] {
+            let mut h = Harness::builder().with_size(egui::vec2(260.0, 120.0)).build_ui_state(
+                |ui, state: &mut Option<(egui::Rect, f32, bool)>| {
+                    let mut selected = 0;
+                    let _ = super::card_ex(ui, "hover-card", &["Card"], &mut selected, false, false, |ui, _| {
+                        let response = ui.button("Card hover target");
+                        *state = Some((response.rect, ui.style().visuals.widgets.hovered.expansion, response.hovered()));
+                    });
+                },
+                None,
+            );
+            crate::PhotocraftApp::setup_context(&h.ctx, kind);
+            // Simulate a theme that requests a conspicuous hover expansion. Cards must opt out
+            // locally rather than relying on the current global theme default of zero.
+            h.ctx.global_style_mut(|style| style.visuals.widgets.hovered.expansion = 8.0);
+            h.run_steps(2);
+            let target = h.state().as_ref().expect("card body was rendered").0.center();
+            h.hover_at(target);
+            h.run_steps(1);
+
+            let (_, expansion, hovered) = h.state().as_ref().expect("card body was rendered");
+            assert!(hovered, "{kind:?}: pointer is over the card's button");
+            assert_eq!(*expansion, 0.0, "{kind:?}: card contents do not expand on hover");
+            assert_eq!(h.ctx.global_style().visuals.widgets.hovered.expansion, 8.0, "{kind:?}: the card override does not leak globally");
+        }
+    }
 
     #[test]
     fn checkbox_label_is_a_button_target_not_selectable_text() {

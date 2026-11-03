@@ -114,17 +114,42 @@ pub(crate) fn card_drop_hits(rect: Rect, grid: bool, target: NodeId, depth: usiz
     [DropHitRegion { hit_rect: leading, ..leading_hit }, DropHitRegion { hit_rect: trailing, ..trailing_hit }]
 }
 
-/// Capture a group header as a drop-onto target. Every point on the header prepends inside it.
-pub(crate) fn group_header_drop_hit(rect: Rect, _pointer: Pos2, target: NodeId, depth: usize, order: usize) -> DropHitRegion {
-    DropHitRegion {
-        target: None,
-        container: Some(ContainerId::Group(target)),
-        region: PointerRegion::GroupBody,
-        hit_rect: rect,
-        indicator_rect: rect,
-        depth,
-        order,
+/// An open group's entire header receives drops into the group, including its lower half.
+/// Closed groups retain the lower sibling-after target because they have no visible body.
+pub(crate) fn group_header_drop_hits(rect: Rect, target: NodeId, depth: usize, order: usize, open: bool) -> Vec<DropHitRegion> {
+    if open {
+        return vec![DropHitRegion {
+            target: None,
+            container: Some(ContainerId::Group(target)),
+            region: PointerRegion::GroupBody,
+            hit_rect: rect,
+            indicator_rect: rect,
+            depth,
+            order,
+        }];
     }
+    let middle = rect.center().y;
+    let after_marker = Rect::from_min_max(Pos2::new(rect.left(), rect.bottom() - 2.0), Pos2::new(rect.right(), rect.bottom() + 2.0));
+    vec![
+        DropHitRegion {
+            target: None,
+            container: Some(ContainerId::Group(target.clone())),
+            region: PointerRegion::GroupBody,
+            hit_rect: Rect::from_min_max(rect.min, Pos2::new(rect.right(), middle)),
+            indicator_rect: rect,
+            depth,
+            order,
+        },
+        DropHitRegion {
+            target: Some(target),
+            container: None,
+            region: PointerRegion::TrailingEdge,
+            hit_rect: Rect::from_min_max(Pos2::new(rect.left(), middle), rect.max),
+            indicator_rect: after_marker,
+            depth,
+            order: order.saturating_add(1),
+        },
+    ]
 }
 
 /// Capture a drop-at-end target spanning a group's visible subtree (e.g. the indent column).
@@ -293,7 +318,7 @@ fn group_insertion_marker_rect(rect: Rect, before: bool) -> Rect {
 mod insertion_marker_tests {
     use super::{
         GroupGapDropSpec, card_drop_hit, card_drop_hits, card_trailing_marker_rect, group_append_hit, group_drop_outline_rects, group_gap_drop_hits,
-        group_gap_upper_anchor, group_header_drop_hit, group_insertion_marker_rect, root_append_hit, root_prepend_hit,
+        group_gap_upper_anchor, group_header_drop_hits, group_insertion_marker_rect, root_append_hit, root_prepend_hit,
     };
     use crate::pickers::picker_browser_dragging::{DropIndicator, PointerRegion, resolve_drop_candidate};
     use crate::pickers::picker_browser_model::{ContainerId, DropPosition, HierarchyNode, NodeId, PickerBrowserHierarchy};
@@ -345,12 +370,24 @@ mod insertion_marker_tests {
         assert_eq!(halves[1].hit_rect.width(), 50.0);
 
         let header = Rect::from_min_max(Pos2::new(10.0, 80.0), Pos2::new(210.0, 110.0));
-        for pointer in [Pos2::new(20.0, 85.0), Pos2::new(100.0, 100.0), Pos2::new(200.0, 109.0)] {
-            let hit = group_header_drop_hit(header, pointer, NodeId::from("group"), 0, 0);
-            assert_eq!(hit.region, PointerRegion::GroupBody);
-            assert_eq!(hit.container, Some(ContainerId::Group(NodeId::from("group"))));
-            assert_eq!(hit.indicator_rect, header);
-        }
+        let [into, after] = group_header_drop_hits(header, NodeId::from("group"), 0, 0, false).try_into().unwrap();
+        assert_eq!(into.region, PointerRegion::GroupBody);
+        assert_eq!(into.container, Some(ContainerId::Group(NodeId::from("group"))));
+        assert_eq!(into.hit_rect, Rect::from_min_max(header.min, Pos2::new(header.right(), header.center().y)));
+        assert_eq!(into.indicator_rect, header);
+        assert_eq!(after.region, PointerRegion::TrailingEdge);
+        assert_eq!(after.target, Some(NodeId::from("group")));
+        assert_eq!(after.container, None);
+        assert_eq!(after.hit_rect, Rect::from_min_max(Pos2::new(header.left(), header.center().y), header.max));
+        assert_eq!(after.indicator_rect, Rect::from_min_max(Pos2::new(header.left(), header.bottom() - 2.0), Pos2::new(header.right(), header.bottom() + 2.0)));
+        assert_eq!(after.indicator_rect.width(), header.width());
+        assert_eq!(after.order, into.order + 1);
+
+        let open = group_header_drop_hits(header, NodeId::from("group"), 0, 0, true);
+        assert_eq!(open.len(), 1);
+        assert_eq!(open[0].region, PointerRegion::GroupBody);
+        assert_eq!(open[0].container, Some(ContainerId::Group(NodeId::from("group"))));
+        assert_eq!(open[0].hit_rect, header, "an open group has no lower sibling drop zone");
     }
 
     #[test]

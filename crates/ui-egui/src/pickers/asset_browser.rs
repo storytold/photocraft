@@ -13,8 +13,9 @@ use crate::pickers::asset_browser_interaction::{
     AssetDrag, ContextMenuAction, GroupGapDropSpec, HeaderDropCapabilities, HierarchyDrop, ItemDropTarget, asset_browser_header_drag_source_with_id,
     asset_browser_header_target_with_capabilities, asset_browser_item_drag_source_with_id, asset_browser_item_gesture, asset_browser_item_hierarchy_target,
     asset_browser_item_target, asset_browser_take_release, card_drop_hit, card_drop_hits, card_leading_marker_rect, card_trailing_marker_rect,
-    context_menu_target, draw_group_context_menu, draw_item_context_menu, group_append_hit, group_gap_drop_hits, group_gap_upper_anchor, group_header_drop_hit,
-    header_drop_before, hierarchy_group_drop, item_drop_after, item_row_edge_targets, paint_group_insertion_line, root_append_hit, root_prepend_hit,
+    context_menu_target, draw_group_context_menu, draw_item_context_menu, group_append_hit, group_gap_drop_hits, group_gap_upper_anchor,
+    group_header_drop_hits, header_drop_before, hierarchy_group_drop, item_drop_after, item_row_edge_targets, paint_group_insertion_line, root_append_hit,
+    root_prepend_hit,
 };
 use crate::pickers::asset_browser_items::{item_info as asset_browser_item_info, list_row as asset_browser_list_row};
 use crate::pickers::picker_browser_dragging::{
@@ -1444,6 +1445,9 @@ fn item_grid_position(index: usize, rows: usize, cols: usize, column_major: bool
 }
 fn list_layout_geometry(available_width: f32, indent: f32, height: f32, wrap: bool, fixed_width: Option<f32>, item_count: usize) -> (egui::Vec2, usize, usize) {
     let content_width = (available_width - indent).max(0.0);
+    // `available_width` is already constrained by the ScrollArea viewport, so its
+    // scrollbar gutter is preserved. The row origin is inset separately; subtract
+    // that same inset here so the row still ends at the header's right edge.
     let width = if wrap { fixed_width.map(|width| width.min(content_width)).unwrap_or(content_width) } else { content_width };
     let columns = if wrap { (content_width / width.max(1.0)).floor().max(1.0) as usize } else { 1 };
     let rows = item_count.div_ceil(columns);
@@ -1468,6 +1472,9 @@ mod display_layout_tests {
         let (unwrapped_large, large_cols, large_rows) = list_layout_geometry(900.0, 0.0, 34.0, false, Some(247.0), 7);
         assert_eq!(unwrapped_large.x, 900.0);
         assert_eq!((large_cols, large_rows), (1, 7));
+        let (indented_unwrapped, indented_cols, indented_rows) = list_layout_geometry(900.0, 41.0, 34.0, false, Some(247.0), 7);
+        assert_eq!(indented_unwrapped.x, 859.0, "the left hierarchy inset is also subtracted from row width");
+        assert_eq!((indented_cols, indented_rows), (1, 7));
         let (narrow, narrow_cols, _) = list_layout_geometry(140.0, 0.0, 20.0, true, Some(198.0), 3);
         assert_eq!(narrow.x, 140.0);
         assert_eq!(narrow_cols, 1);
@@ -1561,7 +1568,7 @@ pub(crate) fn browser_with_root_sequence(
     let display_mode = st.display_mode(panel);
     let size = display_mode.item_height();
     let list = display_mode.uses_list_layout();
-    let wrap_list = st.wrap_list_enabled(panel);
+    let wrap_list = st.wrap_list_enabled(panel) && display_mode != crate::pickers::picker_state::PickerDisplayMode::TextOnly;
     let rename_row_top = ui.cursor().top();
     advance_item_rename(st, panel);
     let item_rename = st.item_renaming.clone().filter(|rename| rename.panel == panel);
@@ -1886,7 +1893,9 @@ pub(crate) fn browser_with_root_sequence(
                         asset_browser_header_drag_source_with_id(&hresp, panel, source_id, &selection);
                     }
                     let hit_index = canonical_drop_hits.borrow().len();
-                    canonical_drop_hits.borrow_mut().push((group_header_drop_hit(header_rect, Pos2::ZERO, NodeId::group(&g.name), depth, hit_index), hresp.clone()));
+                    for hit in group_header_drop_hits(header_rect, NodeId::group(&g.name), depth, hit_index, open) {
+                        canonical_drop_hits.borrow_mut().push((hit, hresp.clone()));
+                    }
                     None
                 } else {
                     asset_browser_header_target_with_capabilities(
@@ -2105,10 +2114,9 @@ pub(crate) fn browser_with_root_sequence(
                                     asset_browser_header_drag_source_with_id(&fresp, panel, node_id.clone(), &selection);
                                 }
                                 let hit_index = canonical_drop_hits.borrow().len();
-                                canonical_drop_hits.borrow_mut().push((
-                                    group_header_drop_hit(inset_row_rect(fr, row_depth), Pos2::ZERO, node_id.clone(), row_depth, hit_index),
-                                    fresp.clone(),
-                                ));
+                                for hit in group_header_drop_hits(inset_row_rect(fr, row_depth), node_id.clone(), row_depth, hit_index, group_open) {
+                                    canonical_drop_hits.borrow_mut().push((hit, fresp.clone()));
+                                }
                             } else if !canonical_hierarchy_drag
                                 && let Some(dragged) = asset_browser_header_target_with_capabilities(
                                 ui,
@@ -2166,10 +2174,8 @@ pub(crate) fn browser_with_root_sequence(
                         let mut draw_items = |ui: &mut egui::Ui, items: &[&ItemView], group_path: &[String]| {
                             let w = ui.available_width();
                             let root_level_items = segment.root_items;
-                            // Cards are children of their containing group, so they take one
-                            // additional twenty-pixel step beyond that group's header. Apply
-                            // the same rule at every nested depth. Root-level cards are siblings
-                            // of groups and retain only their small safety inset.
+                            // Cards are children of their containing group and retain the
+                            // additional hierarchy inset at every nested depth.
                             let hierarchy_indent = row_indent(depth + group_path.len() + 1);
                             let content_indent = if root_level_items { 0.0 } else { hierarchy_indent };
                             let pad = content_indent;

@@ -78,7 +78,6 @@ pub static ICONS: &[(&str, &[u8])] = &[
     ("marquee-column", include_bytes!("../../../assets/icons/marquee-column.svg")),
     ("marquee-row", include_bytes!("../../../assets/icons/marquee-row.svg")),
     ("maximize-2", include_bytes!("../../../assets/icons/maximize-2.svg")),
-    ("menu", include_bytes!("../../../assets/icons/menu.svg")),
     ("message-square", include_bytes!("../../../assets/icons/message-square.svg")),
     ("minus", include_bytes!("../../../assets/icons/minus.svg")),
     ("moon", include_bytes!("../../../assets/icons/moon.svg")),

@@ -436,8 +436,10 @@ mod tests {
         PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
         h.run_steps(2);
         assert_eq!(h.state().ui.presets_ui.selected.get(PANEL), None);
-        let p = first_cell(&h);
-        click(&mut h, p + vec2(DEFAULT_SIZE / 2.0 + 1.0, 0.0), Modifiers::NONE);
+        let first_rect = h.get_by_label(h.state().session.presets.swatches[0].items[0].name.as_str()).rect();
+        let second_rect = h.get_by_label(&second).rect();
+        assert!((second_rect.left() - first_rect.right()).abs() <= 0.5, "adjacent swatches share an edge: first={first_rect:?}, second={second_rect:?}");
+        click(&mut h, egui::pos2(second_rect.left() + 1.0, second_rect.center().y), Modifiers::NONE);
         assert_eq!(h.state().ui.presets_ui.selected.get(PANEL), Some(&second), "the second swatch, not a gap");
     }
 
@@ -476,7 +478,7 @@ mod tests {
         assert_eq!(runs[1].style.color.to_rgba8(), [255, 255, 255, 255]);
     }
 
-    /// #4790: the footer (size slider, New Group, New, Delete) stays inside the panel however short
+    /// #4790: the footer (New Group, New, Delete) stays inside the panel however short
     /// the dock makes it: the list scrolls instead of pushing the footer out of view.
     #[test]
     fn the_footer_fits_below_a_full_list() {
@@ -487,9 +489,13 @@ mod tests {
             PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
             h.run_steps(3);
             let bottom = h.ctx.input(|i| i.viewport_rect()).max.y;
-            let slider = h.get_by_role(egui::accesskit::Role::Slider).rect().max.y;
             let delete = h.get_by_label("Delete").rect().max.y;
-            assert!(slider <= bottom + 0.5 && delete <= bottom + 0.5, "{h_px} px panel: slider ends at {slider}, Delete at {delete}, panel at {bottom}");
+            let new_item = h.get_by_label("Create new swatch").rect().max.y;
+            let new_group = h.get_by_label("Create new group").rect().max.y;
+            assert!(
+                delete <= bottom + 0.5 && new_item <= bottom + 0.5 && new_group <= bottom + 0.5,
+                "{h_px} px panel: Delete ends at {delete}, New at {new_item}, New Group at {new_group}, panel at {bottom}"
+            );
         }
     }
 
