@@ -1,9 +1,6 @@
-//! Shared native-conversion helpers; mapping registration follows separately.
-
-#[allow(unused_imports)]
+//! Import-time decoding of ordinary native spatial filter parameters.
+//! Defaults follow engine filters/filters_ext; no source operation is evaluated.
 use photocraft_algo::{self as algo, FilterParams};
-
-#[allow(unused_imports)]
 use serde_json::Value;
 
 type Result<T> = std::result::Result<T, String>;
@@ -16,19 +13,16 @@ fn fields(p: &Value, allowed: &[&str]) -> Result<()> {
     }
     Ok(())
 }
-
 /// Reads a finite native spatial scalar within its command domain, using the default only when absent.
 fn number(p: &Value, key: &str, default: f32, min: f64, max: f64) -> Result<f32> {
     let Some(v) = p.get(key) else { return Ok(default) };
     let n = v.as_f64().filter(|n| n.is_finite() && *n >= min && *n <= max).ok_or_else(|| format!("native {key} must be finite in {min}..{max}"))?;
     Ok(n as f32)
 }
-
 /// Reads an optional native Boolean and rejects present values of another type.
 fn boolean(p: &Value, key: &str, default: bool) -> Result<bool> {
     p.get(key).map_or(Ok(default), |v| v.as_bool().ok_or_else(|| format!("native {key} must be boolean")))
 }
-
 /// Validates a native text choice against the command's explicit accepted values.
 fn choice<'a>(p: &'a Value, key: &str, default: &'a str, choices: &[&str]) -> Result<&'a str> {
     let s = match p.get(key) {
@@ -37,7 +31,6 @@ fn choice<'a>(p: &'a Value, key: &str, default: &'a str, choices: &[&str]) -> Re
     };
     if choices.contains(&s) { Ok(s) } else { Err(format!("unknown native {key} choice {s}")) }
 }
-
 /// Reads a bounded native unsigned parameter without accepting fractional or signed alternatives.
 fn unsigned(p: &Value, key: &str, default: u32, min: u32, max: u32) -> Result<u32> {
     match p.get(key) {
@@ -49,7 +42,6 @@ fn unsigned(p: &Value, key: &str, default: u32, min: u32, max: u32) -> Result<u3
             .ok_or_else(|| format!("native {key} must be an integer in {min}..{max}")),
     }
 }
-
 /// Decodes a native hexadecimal or numeric paint value, preserving finite HDR color and normalized alpha
 /// constraints.
 fn color(p: &Value, key: &str, default: [f32; 4]) -> Result<[f32; 4]> {
@@ -76,7 +68,6 @@ fn color(p: &Value, key: &str, default: [f32; 4]) -> Result<[f32; 4]> {
     }
     Ok(result)
 }
-
 /// Decodes an ordinary native Iris Blur pin with separate top-level and nested parameter names.
 fn iris(p: &Value, nested: bool) -> Result<algo::IrisPin> {
     if nested {
@@ -282,4 +273,196 @@ pub(super) fn shadows_highlights(p: &Value) -> Result<algo::tone::ShadowsHighlig
         black_clip: number(p, "blackClip", d.black_clip, 0., 50.)?,
         white_clip: number(p, "whiteClip", d.white_clip, 0., 50.)?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use photocraft_color::{ColorMode, PixelFormat, SampleType};
+    use photocraft_geom::Rect;
+    use photocraft_raster::{Interrupt, Surface};
+    use serde_json::json;
+
+    /// Defines independent native command/typed-parameter pairs for the supported spatial coverage adapters.
+    fn cases() -> Vec<(&'static str, Value, FilterParams)> {
+        vec![
+            (
+                "filter.blur.lensBlur",
+                json!({"radius":1,"shape":"square","depthMap":"transparency","brightness":4,"threshold":180,"monochromatic":true,"seed":7}),
+                FilterParams::LensBlur {
+                    radius: 1.,
+                    blades: 4,
+                    curvature: 0.,
+                    rotation: 0.,
+                    depth: algo::DepthSource::Transparency,
+                    focal_distance: 0.,
+                    invert_depth: false,
+                    brightness: 4.,
+                    threshold: 180.,
+                    noise: 0.,
+                    distribution: algo::Distribution::Uniform,
+                    monochromatic: true,
+                    seed: 7,
+                    depth_map: None,
+                },
+            ),
+            (
+                "filter.blur.radialBlur",
+                json!({"amount":3,"method":"zoom","quality":"best","centerX":0.3,"centerY":0.6}),
+                FilterParams::RadialBlur { amount: 3., method: algo::RadialMethod::Zoom, quality: algo::RadialQuality::Best, center_x: 0.3, center_y: 0.6 },
+            ),
+            (
+                "filter.blur.smartBlur",
+                json!({"radius":1,"threshold":20,"quality":"low","mode":"overlayEdge"}),
+                FilterParams::SmartBlur { radius: 1., threshold: 20., quality: algo::BlurQuality::Low, mode: algo::SmartBlurMode::OverlayEdge },
+            ),
+            (
+                "filter.blurGallery.irisBlur",
+                json!({"pins":[{"x":0.3,"y":0.6,"radiusX":0.4,"radiusY":0.2,"angle":15,"roundness":20,"feather":0.2,"blur":1}]}),
+                FilterParams::IrisBlur {
+                    pins: vec![algo::IrisPin { x: 0.3, y: 0.6, radius_x: 0.4, radius_y: 0.2, angle: 15., roundness: 20., feather: 0.2, blur: 1. }],
+                },
+            ),
+            (
+                "filter.blurGallery.tiltShift",
+                json!({"blur":1,"centerX":0.3,"centerY":0.6,"angle":15,"focus":0.2,"transition":0.4}),
+                FilterParams::TiltShift { blur: 1., center_x: 0.3, center_y: 0.6, angle: 15., focus: 0.2, transition: 0.4 },
+            ),
+            (
+                "filter.noise.reduceNoise",
+                json!({"strength":1,"preserveDetails":35,"reduceColorNoise":10,"sharpenDetails":5,"removeJpegArtifact":true}),
+                FilterParams::ReduceNoise { strength: 1., preserve_details: 35., reduce_color_noise: 10., sharpen_details: 5., remove_jpeg_artifact: true },
+            ),
+            ("filter.other.maximum", json!({"radius":1,"preserve":"roundness"}), FilterParams::Maximum { radius: 1., preserve: algo::Preserve::Roundness }),
+            ("filter.other.minimum", json!({"radius":1,"preserve":"squareness"}), FilterParams::Minimum { radius: 1., preserve: algo::Preserve::Squareness }),
+            ("filter.stylize.findEdges", json!({}), FilterParams::FindEdges),
+            ("filter.stylize.emboss", json!({"angle":45,"height":2,"amount":150}), FilterParams::Emboss { angle: 45., height: 2., amount: 150. }),
+            (
+                "filter.stylize.oilPaint",
+                json!({"stylization":0.5,"cleanliness":1,"scale":0.5,"bristleDetail":2,"lighting":false,"angle":30,"shine":0}),
+                FilterParams::OilPaint { stylization: 0.5, cleanliness: 1., scale: 0.5, bristle_detail: 2., lighting: false, angle: 30., shine: 0. },
+            ),
+            (
+                "filter.stylize.tiles",
+                json!({"count":3,"maxOffset":5,"fill":"foreground","foreground":[0.2,0.4,0.6,0.8],"background":"#abcdef","seed":17}),
+                FilterParams::Tiles {
+                    count: 3,
+                    max_offset: 5.,
+                    fill: algo::TileFill::Foreground,
+                    foreground: [0.2, 0.4, 0.6, 0.8],
+                    background: [171. / 255., 205. / 255., 239. / 255., 1.],
+                    seed: 17,
+                },
+            ),
+            (
+                "filter.video.deInterlace",
+                json!({"eliminate":"evenFields","createBy":"duplication"}),
+                FilterParams::DeInterlace { eliminate_even: true, interpolate: false },
+            ),
+        ]
+    }
+
+    #[test]
+    /// Compares decoded spatial controls and resulting pixels with independently authored native operators
+    /// across depths.
+    fn native_spatial_parameters_and_pixels_match_independent_typed_counterparts() {
+        let bounds = Rect::new(-1, 2, 4, 5);
+        for (command, p, expected) in cases() {
+            let actual = filter(command, &p).unwrap().unwrap();
+            assert_eq!(actual, expected, "{command}");
+            for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+                for mode in [ColorMode::Grayscale, ColorMode::Rgb] {
+                    let fmt = PixelFormat::new(mode, depth, mode == ColorMode::Rgb);
+                    let mut source = Surface::new(fmt);
+                    let values = (0..15)
+                        .flat_map(|i| if mode == ColorMode::Grayscale { vec![i as f32 / 14.] } else { vec![i as f32 / 14., 0.25, 0.75, 0.2 + i as f32 / 20.] })
+                        .collect::<Vec<_>>();
+                    source.write_region(bounds, &values);
+                    let apply = |params| algo::apply_in_with(&source, params, bounds, bounds, None, bounds, &Interrupt::NONE).unwrap();
+                    let actual = apply(&actual);
+                    let expected = apply(&expected);
+                    assert_eq!(actual.read_region(bounds), expected.read_region(bounds), "{command}/{mode:?}/{depth:?}");
+                    assert_eq!(actual.format(), fmt);
+                    assert!(actual.read_region(bounds).iter().all(|v| v.is_finite()));
+                }
+            }
+        }
+    }
+
+    #[test]
+    /// Checks native defaults match engine behavior while malformed present values are rejected rather than
+    /// defaulted.
+    fn native_defaults_match_engine_and_bad_data_never_becomes_defaults() {
+        assert_eq!(
+            filter("filter.blur.radialBlur", &json!({})).unwrap().unwrap(),
+            FilterParams::RadialBlur { amount: 10., method: algo::RadialMethod::Spin, quality: algo::RadialQuality::Good, center_x: 0.5, center_y: 0.5 }
+        );
+        assert_eq!(filter("filter.blurGallery.irisBlur", &json!({})).unwrap().unwrap(), FilterParams::IrisBlur { pins: vec![algo::IrisPin::default()] });
+        assert_eq!(filter("filter.video.deInterlace", &json!({})).unwrap().unwrap(), FilterParams::DeInterlace { eliminate_even: false, interpolate: true });
+        assert!(filter("source:operation", &json!({})).is_none());
+        for (command, _, _) in cases() {
+            assert!(filter(command, &json!(null)).unwrap().is_err());
+            assert!(filter(command, &json!({"unexpected":1})).unwrap().is_err());
+        }
+        for (id, p) in [
+            ("filter.blur.smartBlur", json!({"radius":0.09})),
+            ("filter.blur.smartBlur", json!({"threshold":"20"})),
+            ("filter.blur.radialBlur", json!({"quality":"old"})),
+            ("filter.blur.radialBlur", json!({"centerX":2})),
+            ("filter.blur.lensBlur", json!({"depthMap":"layerMask"})),
+            ("filter.blur.lensBlur", json!({"depthMap":"channel"})),
+            ("filter.noise.reduceNoise", json!({"removeJpegArtifact":1})),
+            ("filter.stylize.tiles", json!({"count":3.5})),
+            ("filter.stylize.tiles", json!({"seed":4294967296_u64})),
+            ("filter.stylize.tiles", json!({"foreground":[0,0,0,2]})),
+            ("filter.blurGallery.irisBlur", json!({"pins":[]})),
+            ("filter.blurGallery.irisBlur", json!({"pins":vec![json!({});257]})),
+            ("filter.blurGallery.irisBlur", json!({"pins":[{"blur":501}]})),
+            ("filter.blurGallery.irisBlur", json!({"pins":[{"x":1e100}]})),
+            ("filter.blurGallery.tiltShift", json!({"transition":0})),
+            ("filter.other.maximum", json!({"preserve":"unknown"})),
+        ] {
+            assert!(filter(id, &p).unwrap().is_err(), "{id}: {p}");
+        }
+        assert!(filter("filter.blur.smartBlur", &json!({"radius":0.1,"threshold":0.1})).unwrap().is_ok());
+        assert!(filter("filter.blurGallery.irisBlur", &json!({"pins":[{"radiusX":0.001,"feather":0.99}]})).unwrap().is_ok());
+    }
+
+    #[test]
+    /// Verifies Shadows/Highlights decoding feeds the ordinary native tone operation with the expected
+    /// controls.
+    fn shadows_highlights_parameters_use_existing_native_tone_helper() {
+        let p = json!({"shadowAmount":65,"shadowTone":35,"shadowRadius":2,"highlightAmount":20,"highlightTone":60,"highlightRadius":1,"color":-15,"midtone":10,"blackClip":0,"whiteClip":0});
+        let actual = shadows_highlights(&p).unwrap();
+        let expected = algo::tone::ShadowsHighlights {
+            shadow_amount: 65.,
+            shadow_tone: 35.,
+            shadow_radius: 2.,
+            highlight_amount: 20.,
+            highlight_tone: 60.,
+            highlight_radius: 1.,
+            color: -15.,
+            midtone: 10.,
+            black_clip: 0.,
+            white_clip: 0.,
+        };
+        assert_eq!(actual, expected);
+        assert_eq!(shadows_highlights(&json!({})).unwrap(), algo::tone::ShadowsHighlights::default());
+        for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+            let mut source = Surface::new(PixelFormat::new(ColorMode::Rgb, depth, true));
+            let bounds = Rect::new(0, 0, 3, 2);
+            source.write_region(bounds, &(0..6).flat_map(|i| [i as f32 / 5., 0.25, 0.75, 0.2 + i as f32 / 8.]).collect::<Vec<_>>());
+            let mut output = source.read_region(bounds).as_chunks::<4>().0.to_vec();
+            let mut independent = output.clone();
+            algo::tone::shadows_highlights(&mut output, 3, 2, &actual);
+            algo::tone::shadows_highlights(&mut independent, 3, 2, &expected);
+            assert_eq!(output, independent);
+            for (out, original) in output.iter().zip(source.read_region(bounds).as_chunks::<4>().0) {
+                assert_eq!(out[3], original[3]);
+            }
+        }
+        for p in [json!({"shadowRadius":2501}), json!({"whiteClip":51}), json!({"color":"bad"}), json!({"unknown":true})] {
+            assert!(shadows_highlights(&p).is_err());
+        }
+    }
 }
