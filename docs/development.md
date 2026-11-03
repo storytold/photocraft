@@ -933,3 +933,26 @@ backend command without submitting; it writes a PDF only when `output` is explic
 without an output requires `dryRun: true`. Remembered print settings omit `output`, `dryRun` and
 `send`, so Print One Copy derives submission from its own output choice. Shared spooler transport
 files are automatically removed on Windows; CUPS needs none.
+
+## Quick Export filename publication
+
+Document Quick Export's `export.quickExportNaming` preference is `default` or `timestamp`.
+The shared engine formatter uses chrono local time on native platforms and its `wasmbind`
+local-time implementation in the browser. No filesystem access is required for browser naming.
+Native filesystem helpers remain separate from browser downloads.
+
+Timestamp exports stage and flush encoded bytes beside the destination, then publish with a
+non-replacing hard link. Where hard links fail, exclusive `create_new` writes protect existing
+files without a check-then-write race. This fallback exposes the newly created file during writing;
+a crash can leave it incomplete. Write errors attempt cleanup, and failures after publication
+report the written path without retrying. Directory flushing follows the ordinary atomic writer's
+platform policy. Existing save/replacement APIs are unchanged. A finite 100,000-candidate bound
+prevents an unbounded collision search. Invalid names and filesystem length limits produce errors;
+names are never truncated or converted lossily. Existing UI/command Unicode path restrictions remain.
+
+Preferences missing the field select Default. Older builds following the current Serde convention
+ignore this unknown field and may discard it when saving settings; a newer build then uses Default.
+The Ask picker retains its existing confirmation machinery; an existing base filename may
+therefore still prompt, but Timestamp publication never replaces it.
+The browser retains its PNG Quick Export service and lets the browser manage filesystem collisions.
+Its final download name may differ from the name PhotoCraft requested.

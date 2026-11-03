@@ -1,0 +1,210 @@
+use super::{AtomicFs, RealFs, sync_file, temp_name};
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
+
+const MAX_CANDIDATES: u32 = 100_000;
+
+/// Write to a free filename, adding numeric suffixes on collisions without overwriting files.
+pub fn write_unique(path: &Path, bytes: &[u8]) -> io::Result<PathBuf> {
+    write_unique_with(&RealFs, path, bytes, &|from: &Path, to: &Path| std::fs::hard_link(from, to))
+        .map_err(|e| io::Error::new(e.kind(), format!("cannot export {}: {e}", path.display())))
+}
+
+struct Staged<'a> {
+    fs: &'a dyn AtomicFs,
+    path: PathBuf,
+    cleanup_pending: bool,
+}
+impl Drop for Staged<'_> {
+    fn drop(&mut self) {
+        if self.cleanup_pending {
+            let _ = self.fs.remove(&self.path);
+        }
+    }
+}
+
+fn write_unique_with(fs: &dyn AtomicFs, path: &Path, bytes: &[u8], link: &dyn Fn(&Path, &Path) -> io::Result<()>) -> io::Result<PathBuf> {
+    let stem = path.file_stem().filter(|s| !s.is_empty()).ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Quick Export needs a filename"))?;
+    let dir = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    std::fs::create_dir_all(dir)?;
+    let mut staged = None;
+    for _ in 0..8 {
+        let tmp = dir.join(temp_name("export"));
+        match fs.write_new(&tmp, bytes) {
+            Ok(()) => {
+                staged = Some(Staged { fs, path: tmp, cleanup_pending: true });
+                break;
+            }
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(e) => {
+                let _ = fs.remove(&tmp);
+                return Err(e);
+            }
+        }
+    }
+    let mut staged = staged.ok_or_else(|| io::Error::other("could not create a Quick Export staging file"))?;
+    for suffix in 0..MAX_CANDIDATES {
+        let candidate = if suffix == 0 {
+            path.to_path_buf()
+        } else {
+            let mut name = stem.to_os_string();
+            name.push(format!("_{suffix}"));
+            if let Some(ext) = path.extension() {
+                name.push(".");
+                name.push(ext);
+            }
+            path.with_file_name(name)
+        };
+        match link(&staged.path, &candidate) {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(_) => {
+                let mut output = match std::fs::OpenOptions::new().write(true).create_new(true).open(&candidate) {
+                    Ok(file) => file,
+                    Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+                    Err(e) => return Err(e),
+                };
+                if let Err(e) = output.write_all(bytes).and_then(|()| sync_file(&output)) {
+                    drop(output);
+                    let cleanup = fs.remove(&candidate);
+                    return Err(io::Error::other(format!("could not write {}: {e}; cleanup: {cleanup:?}", candidate.display())));
+                }
+            }
+        }
+        fs.remove(&staged.path).map_err(|e| io::Error::other(format!("wrote {}, but staging cleanup failed: {e}", candidate.display())))?;
+        staged.cleanup_pending = false;
+        let synced = fs.sync_dir(dir);
+        #[cfg(not(windows))]
+        let synced = super::dir_synced(synced);
+        synced.map_err(|e| io::Error::other(format!("wrote {}, but could not confirm durability: {e}", candidate.display())))?;
+        return Ok(candidate);
+    }
+    Err(io::Error::other("Quick Export exhausted 100000 filename candidates"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+    struct TempDir(PathBuf);
+    impl TempDir {
+        fn new(tag: &str) -> Self {
+            let path = std::env::temp_dir().join(temp_name(tag));
+            std::fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+    }
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    fn assert_no_temp(dir: &Path) {
+        assert!(!std::fs::read_dir(dir).unwrap().any(|e| e.unwrap().file_name().to_string_lossy().ends_with(".tmp")));
+    }
+
+    #[test]
+    fn exclusive_publication_fills_gaps_with_and_without_hard_links() {
+        for fallback in [false, true] {
+            let dir = TempDir::new("unique");
+            for name in ["写真.edit_2.png", "写真.edit_2_1.png", "写真.edit_2_3.png"] {
+                std::fs::write(dir.0.join(name), b"original").unwrap();
+            }
+            let link = |a: &Path, b: &Path| if fallback { Err(io::ErrorKind::Unsupported.into()) } else { std::fs::hard_link(a, b) };
+            let out = write_unique_with(&RealFs, &dir.0.join("写真.edit_2.png"), b"export", &link).unwrap();
+            assert_eq!(out, dir.0.join("写真.edit_2_2.png"));
+            assert_eq!(std::fs::read(out).unwrap(), b"export");
+            assert_eq!(std::fs::read(dir.0.join("写真.edit_2.png")).unwrap(), b"original");
+            assert_no_temp(&dir.0);
+        }
+    }
+
+    #[test]
+    fn concurrent_exports_publish_distinct_complete_files() {
+        for fallback in [false, true] {
+            let dir = TempDir::new("concurrent-unique");
+            let handles: Vec<_> = (0..8u8)
+                .map(|n| {
+                    let path = dir.0.join("photo.png");
+                    std::thread::spawn(move || {
+                        let link = |a: &Path, b: &Path| if fallback { Err(io::ErrorKind::Unsupported.into()) } else { std::fs::hard_link(a, b) };
+                        let bytes = vec![n; 4096];
+                        let out = write_unique_with(&RealFs, &path, &bytes, &link).unwrap();
+                        assert_eq!(std::fs::read(&out).unwrap(), bytes);
+                        out
+                    })
+                })
+                .collect();
+            let names: std::collections::HashSet<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+            assert_eq!(names.len(), 8);
+            assert_no_temp(&dir.0);
+        }
+    }
+
+    struct FailingFs {
+        stage: bool,
+        removals: Cell<usize>,
+    }
+    impl AtomicFs for FailingFs {
+        fn write_new(&self, path: &Path, bytes: &[u8]) -> io::Result<()> {
+            RealFs.write_new(path, bytes)?;
+            if self.stage { Err(io::ErrorKind::StorageFull.into()) } else { Ok(()) }
+        }
+        fn rename(&self, _: &Path, _: &Path) -> io::Result<()> {
+            panic!("exclusive publication must never replace")
+        }
+        fn remove(&self, path: &Path) -> io::Result<()> {
+            self.removals.set(self.removals.get() + 1);
+            RealFs.remove(path)
+        }
+        fn sync_dir(&self, _: &Path) -> io::Result<()> {
+            Err(io::ErrorKind::AlreadyExists.into())
+        }
+        fn copy_metadata(&self, _: &Path, _: &Path) -> io::Result<()> {
+            panic!("existing candidate metadata must not be copied")
+        }
+    }
+
+    #[test]
+    fn failures_cleanup_staging_and_never_retry_after_publication() {
+        let dir = TempDir::new("unique-errors");
+        let path = dir.0.join("photo.png");
+        let link = |a: &Path, b: &Path| std::fs::hard_link(a, b);
+        let failed_stage = FailingFs { stage: true, removals: Cell::new(0) };
+        assert!(write_unique_with(&failed_stage, &path, b"bytes", &link).is_err());
+        assert_eq!(failed_stage.removals.get(), 1);
+        assert!(!path.exists());
+        assert_no_temp(&dir.0);
+        let failed_sync = FailingFs { stage: false, removals: Cell::new(0) };
+        let error = write_unique_with(&failed_sync, &path, b"bytes", &link).unwrap_err();
+        assert_eq!(failed_sync.removals.get(), 1);
+        assert!(error.to_string().contains("could not confirm durability"));
+        assert_eq!(std::fs::read(&path).unwrap(), b"bytes");
+        assert!(!dir.0.join("photo_1.png").exists());
+        assert_no_temp(&dir.0);
+    }
+
+    #[test]
+    fn invalid_paths_and_long_names_fail_without_touching_existing_files() {
+        let dir = TempDir::new("unique-invalid");
+        let file = dir.0.join("file");
+        std::fs::write(&file, b"original").unwrap();
+        assert!(write_unique(&file.join("photo.png"), b"bytes").is_err());
+        assert!(write_unique(&dir.0.join(format!("{}.png", "x".repeat(300))), b"bytes").is_err());
+        assert_eq!(std::fs::read(file).unwrap(), b"original");
+        assert_no_temp(&dir.0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dangling_symlink_is_a_collision_and_non_unicode_paths_are_preserved() {
+        use std::os::unix::{ffi::OsStrExt, fs::symlink};
+        let dir = TempDir::new("unique-symlink");
+        let path = dir.0.join(std::ffi::OsStr::from_bytes(b"photo_\xff.png"));
+        symlink(dir.0.join("missing"), &path).unwrap();
+        let out = write_unique(&path, b"bytes").unwrap();
+        assert_eq!(out.file_name().unwrap().as_bytes(), b"photo_\xff_1.png");
+        assert!(std::fs::symlink_metadata(path).unwrap().file_type().is_symlink());
+        assert_eq!(std::fs::read(out).unwrap(), b"bytes");
+    }
+}

@@ -777,3 +777,15 @@ retain custom collapse settings and Timeline visibility.
 ### Select the layer under the pointer
 
 Assign **Select Layer Under Cursor** in Keyboard Shortcuts to choose the topmost visible, pickable layer beneath the canvas pointer. Empty pixels and points outside the document leave the selection unchanged; dialogs, strokes and brush-resize gestures block it. The command follows zoom, pan, view rotation and horizontal flipping. Agents can invoke `ui.menu.invoke {"id":"layer.selectUnderCursor"}` after moving the screen pointer with `ui.move {"x": ..., "y": ...}`. The command has no default shortcut.
+
+## Quick Export naming
+
+`export.quickExportNaming` accepts `"default"` (the default, including old preferences) or
+`"timestamp"`. Use `prefs.get`, `prefs.set`, `prefs.reset`, or
+`file.export.exportPreferences {"quickExportNaming":"timestamp"}`. Resetting Export restores Default.
+Timestamp appends local `YYYYMMDD-HHMMSS-SSS` before the extension. Desktop document Quick Export
+uses exclusive publication and adds `_1`, `_2`, etc. on collisions; its result's `path` is the
+actual output. An explicit `path` is a naming base in Timestamp mode. Default retains existing
+replacement and source-file confirmation behaviour. Browser Quick Export passes the timestamped
+PNG name to the existing download service; the browser chooses the final filename on disk.
+Layer Quick Export and other save/export commands do not use this setting.

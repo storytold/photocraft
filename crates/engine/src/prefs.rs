@@ -88,6 +88,10 @@ choice!(LogDestination { Metadata = "metadata", TextFile = "textFile", Both = "b
 choice!(LogDetail { SessionsOnly = "sessionsOnly", Concise = "concise", Detailed = "detailed" } default Concise);
 choice!(Ask { Always = "always", Never = "never", Ask = "ask" } default Always);
 choice!(QuickExportFormat { Png = "png", Jpg = "jpg", Gif = "gif", Webp = "webp", Exr = "exr" } default Png);
+choice!(
+    /// Filename policy for document Quick Export; older preferences retain the original behaviour.
+    QuickExportNaming { Default = "default", Timestamp = "timestamp" } default Default
+);
 choice!(ExportLocation { Ask = "ask", SameFolder = "sameFolder" } default Ask);
 choice!(ExportMetadata { None = "none", Copyright = "copyright", All = "all" } default Copyright);
 choice!(
@@ -542,6 +546,8 @@ impl Default for FileHandling {
 pub struct Export {
     pub quick_export_format: QuickExportFormat,
     pub quick_export_location: ExportLocation,
+    /// Document Quick Export filenames; Default retains the original replacement behaviour.
+    pub quick_export_naming: QuickExportNaming,
     pub jpeg_quality: u32,
     /// Keep the existing lossless Quick Export default until the user opts into lossy WebP.
     pub webp_lossless: bool,
@@ -555,6 +561,7 @@ impl Default for Export {
         Self {
             quick_export_format: QuickExportFormat::Png,
             quick_export_location: ExportLocation::Ask,
+            quick_export_naming: QuickExportNaming::Default,
             jpeg_quality: 85,
             webp_lossless: true,
             webp_quality: 85,

@@ -3,6 +3,28 @@ use crate::{Services, menus};
 use std::cell::RefCell;
 use std::rc::Rc;
 
+#[test]
+fn timestamp_quick_export_ask_and_same_folder_preserve_original() {
+    let dir = tempfile::tempdir().unwrap();
+    let own = dir.path().join("photo.png").to_str().unwrap().to_owned();
+    std::fs::write(&own, b"original").unwrap();
+    let (mut app, open, _) = app();
+    app.session.active_mut().unwrap().path = Some(own.clone());
+    app.run("prefs.set", json!({"path": "export.quickExportNaming", "value": "timestamp"})).unwrap();
+    let ctx = egui::Context::default();
+    menus::invoke(&mut app, &ctx, "file.export.quickExportAsPng", Value::Null).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    answer(&open, Some(FileDialogAnswer::SaveTo(own.clone())));
+    app.poll_file_dialog(&ctx, None);
+    assert!(!app.ui.status_error, "{}", app.ui.status);
+    assert!(app.ui.status.contains("photo_"));
+    app.run("prefs.set", json!({"path": "export.quickExportLocation", "value": "sameFolder"})).unwrap();
+    menus::invoke(&mut app, &ctx, "file.export.quickExportAsPng", Value::Null).unwrap();
+    assert!(open.borrow().is_empty());
+    assert_eq!(std::fs::read(&own).unwrap(), b"original");
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 3);
+}
+
 /// The requests the fake dialog service was given, with their replies: dialogs the user is still in.
 type Open = Rc<RefCell<Vec<(FileDialogRequest, FileDialogReply)>>>;
 

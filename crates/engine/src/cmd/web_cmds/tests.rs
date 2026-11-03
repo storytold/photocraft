@@ -1317,3 +1317,27 @@ fn embed_color_profile_tags_an_untagged_document_srgb() {
         assert_eq!(profile(&off), None, "{format}");
     }
 }
+
+#[test]
+fn timestamp_quick_export_preserves_source_and_all_formats() {
+    let dir = tempfile::tempdir().unwrap();
+    let own = dir.path().join("写真.edit_2.png");
+    std::fs::write(&own, b"original").unwrap();
+    let mut s = session(8);
+    s.active_mut().unwrap().path = Some(own.to_str().unwrap().into());
+    s.execute("file.export.exportPreferences", json!({"quickExportNaming": "timestamp", "quickExportLocation": "sameFolder"})).unwrap();
+    for ext in ["png", "jpg", "gif", "webp", "exr"] {
+        s.execute("prefs.set", json!({"path": "export.quickExportFormat", "value": ext})).unwrap();
+        for explicit in [false, true] {
+            let base = dir.path().join(format!("写真.edit_2.{ext}"));
+            let params = if explicit { json!({"path": base}) } else { json!({}) };
+            let result = s.execute("file.export.quickExport", params).unwrap();
+            let out = std::path::Path::new(result["path"].as_str().unwrap());
+            assert_ne!(out, base);
+            assert_eq!(out.extension().unwrap(), ext);
+            assert!(out.file_stem().unwrap().to_str().unwrap().starts_with("写真.edit_2_"));
+            assert!(!std::fs::read(out).unwrap().is_empty());
+        }
+    }
+    assert_eq!(std::fs::read(own).unwrap(), b"original");
+}

@@ -34,6 +34,10 @@
 //! [`atomic_write_with`] takes an [`AtomicFs`] so tests can inject failures at each step.
 
 pub mod meta;
+#[cfg(not(target_arch = "wasm32"))]
+mod unique;
+#[cfg(not(target_arch = "wasm32"))]
+pub use unique::write_unique;
 
 use std::io::{self, Seek, Write};
 use std::path::{Path, PathBuf};

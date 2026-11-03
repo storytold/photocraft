@@ -59,6 +59,7 @@ pub use photocraft_paint::BrushSettings;
 pub mod cmd;
 mod doc_state;
 mod error;
+pub mod quick_export_naming;
 mod session;
 
 pub use cmd as commands;

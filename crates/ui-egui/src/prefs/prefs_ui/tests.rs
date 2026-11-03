@@ -2044,3 +2044,29 @@ fn reset_section_on_type_keeps_the_favourite_fonts() {
     assert_eq!(prefs.favorite_fonts, ["Bebas Neue"], "the favourites are kept");
     assert_eq!(stored(&store)["type"]["favoriteFonts"], json!(["Bebas Neue"]));
 }
+
+#[test]
+fn quick_export_naming_uses_exact_labels_and_follows_location() {
+    assert_eq!(humanize("quickExportNaming"), "Quick export naming");
+    assert_eq!(prefs::choices("export.quickExportNaming"), Some(["default", "timestamp"].as_slice()));
+    assert_eq!(choice_label("default"), "Default");
+    assert_eq!(choice_label("timestamp"), "Timestamp");
+    let text = serde_json::to_string(&prefs::Export::default()).unwrap();
+    assert!(text.find("quickExportLocation").unwrap() < text.find("quickExportNaming").unwrap());
+    assert!(text.find("quickExportNaming").unwrap() < text.find("jpegQuality").unwrap());
+}
+
+#[test]
+fn quick_export_naming_dropdown_changes_the_existing_preference_value() {
+    use egui_kittest::{Harness, kittest::Queryable};
+    let values = json!({"quickExportNaming": "default"}).as_object().unwrap().clone();
+    let mut h = Harness::builder()
+        .with_size(vec2(680.0, 350.0))
+        .build_ui_state(|ui, values| section_fields(ui, "export", values, &["quickExportNaming".into()], crate::i18n::Lang::EN, None, ""), values);
+    h.run_steps(2);
+    h.get_by_role(egui::accesskit::Role::ComboBox).click();
+    h.run_steps(2);
+    h.get_by_label("Timestamp").click();
+    h.run_steps(2);
+    assert_eq!(h.state()["quickExportNaming"], "timestamp");
+}
