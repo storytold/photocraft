@@ -431,6 +431,10 @@ pub(crate) fn import_tx(name: &str, bytes: &[u8], opts: &crate::ImportOptions, c
 /// page that opens, none without a size. Anything less conclusive keeps the warning, so real extra
 /// pages are never left out silently.
 fn is_mip_chain(info: &codecs::TiffInfo) -> bool {
+    // A walk that stopped early (a loop or a damaged directory) hides what came after it.
+    if !info.complete {
+        return false;
+    }
     let Some(start) = info.default_page() else { return false };
     let counted = |p: &codecs::TiffPage| p.parent.is_none() && p.kind == codecs::TiffPageKind::Page;
     if info.pages.iter().take(start).any(counted) {

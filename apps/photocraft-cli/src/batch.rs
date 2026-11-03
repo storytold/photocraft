@@ -212,6 +212,10 @@ mod batch_action_set_tests {
             invoke(&["batch", "--actions", &path("steps.json"), "--in", &path("in"), "--out", &path("out"), "--format", "png"]);
         assert_eq!(code, 0, "{stdout}{stderr}");
         assert!(dir.join("out/wall.png").is_file(), "{stdout}{stderr}");
+        // Without `--format` a texture is saved as PSD, as other formats PhotoCraft only reads.
+        let Invoke { code, stdout, stderr } = invoke(&["batch", "--actions", &path("steps.json"), "--in", &path("in"), "--out", &path("same")]);
+        assert_eq!(code, 0, "{stdout}{stderr}");
+        assert!(dir.join("same/wall.psd").is_file(), "{stdout}{stderr}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

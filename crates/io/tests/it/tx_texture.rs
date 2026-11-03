@@ -74,6 +74,21 @@ fn a_tx_whose_pages_are_not_a_mip_chain_keeps_the_pages_warning() {
 }
 
 #[test]
+fn a_mip_chain_whose_directory_walk_stops_early_keeps_the_pages_warning() {
+    // A full 4×4 → 1×1 pyramid whose last directory points back to the first: the walk stops at
+    // the loop, so whatever came after it is unknown and the warning has to stay.
+    let dirs = [level(4, 4, [200, 100, 0], 16), level(2, 2, [200, 100, 20], 16), level(1, 1, [200, 100, 40], 16)];
+    let built = build(true, false, &dirs, &[0, 1, 2]);
+    let mut bytes = built.bytes;
+    let at = usize::try_from(built.next_at[2]).unwrap();
+    bytes[at..at + 4].copy_from_slice(&u32::try_from(built.ifd_at[0]).unwrap().to_le_bytes());
+    assert!(!photocraft_codecs::tiff_info(&bytes).unwrap().complete);
+    let r = photocraft_io::import("loop.tx", &bytes).unwrap();
+    assert!(r.source_read_only);
+    assert!(r.warnings.iter().any(|w| w.starts_with("only the first")), "{:?}", r.warnings);
+}
+
+#[test]
 fn a_thumbnail_in_front_of_the_pyramid_is_skipped() {
     // NewSubfileType 1 marks a reduced copy: the full-resolution level after it opens, and the
     // pyramid that follows still counts as one.

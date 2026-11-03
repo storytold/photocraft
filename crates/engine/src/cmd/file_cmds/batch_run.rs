@@ -146,8 +146,10 @@ pub(crate) fn process_tree(
 /// The format Batch's "Save in the same format" writes for `path`: its own, or PSD for a file
 /// PhotoCraft only opens.
 pub fn same_format(path: &str) -> String {
-    const IMPORT_ONLY: &[&str] =
-        &["pdn", "kra", "krz", "af", "afdesign", "afphoto", "afpub", "heic", "heif", "hif", "svg", "svgz", "cin", "pcx", "xpm", "xcf", "xcfgz", "gz", "psdt"];
+    const IMPORT_ONLY: &[&str] = &[
+        "pdn", "kra", "krz", "af", "afdesign", "afphoto", "afpub", "heic", "heif", "hif", "svg", "svgz", "cin", "pcx", "xpm", "xcf", "xcfgz", "gz", "psdt",
+        "tx",
+    ];
     let ext = extension(path).unwrap_or_else(|| "png".into());
     let no_writer = photocraft_codecs::from_extension(&ext).is_some_and(|f| !f.caps().write);
     if photocraft_io::raw::EXTENSIONS.contains(&ext.as_str()) || IMPORT_ONLY.contains(&ext.as_str()) || no_writer { "psd".into() } else { ext }
@@ -163,7 +165,7 @@ fn same_format_takes_the_file_names_extension() {
     assert_eq!(same_format("/in/logo.svg"), "psd");
     assert_eq!(same_format("/in/scan.cin"), "psd");
     // Formats PhotoCraft opens and does not write are saved as PSD.
-    for name in ["/in/scan.dcm", "/in/scan.DICOM", "/in/scan.dc3", "/in/page.xcf", "/in/page.xcf.gz", "/in/page.xcfgz", "/in/card.psdt"] {
+    for name in ["/in/scan.dcm", "/in/scan.DICOM", "/in/scan.dc3", "/in/page.xcf", "/in/page.xcf.gz", "/in/page.xcfgz", "/in/card.psdt", "/in/wall.tx"] {
         assert_eq!(same_format(name), "psd", "{name}");
     }
     for f in photocraft_codecs::Format::ALL.into_iter().filter(|f| f.caps().read && !f.caps().write) {
