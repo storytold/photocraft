@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use craft_doc::{Limits, RenditionKind};
 use craft_pdf::interpret::InterpreterSettings;
-use craft_pdf::raster::{self, Options, Raster, RenderCache};
+use craft_pdf::raster::{self, Options, RenderCache};
 use craft_pdf::syntax::page::Page;
 use photocraft_codecs::{ChannelLayout, Image, SampleType};
 use photocraft_raster::Interrupt;
@@ -65,13 +65,19 @@ pub fn import_scaled(name: &str, bytes: &[u8], scale: f32, ctl: &Interrupt) -> R
         size = [((open_w as f32 * relative).floor().max(1.0)) as u32, ((open_h as f32 * relative).floor().max(1.0)) as u32];
     }
     let options = Options { scale: [drawn_scale; 2], size: Some(size), ..Options::default() };
-    let drawn = match render(page, &options, ctl) {
+    if ctl.cancelled() {
+        return Err(IoError::Cancelled);
+    }
+    let [width, height] = raster::dimensions(page, &options).map_err(|e| err(&format!("its PDF can't be drawn ({e})")))?;
+    let len = usize::try_from(u64::from(width) * u64::from(height) * 4).map_err(|_| err(&"its artboard is too large for this platform"))?;
+    // The renderer's size limits apply before allocation. Draw into the fallibly allocated
+    // image buffer itself, keeping no second full-size raster alive during document creation.
+    let mut rgba = crate::flat::try_buffer(len, 1)?;
+    rgba.resize(len, 0);
+    let diagnostics = match render(page, &options, ctl, &mut rgba) {
         Err(raster::Error::Cancelled) => return Err(IoError::Cancelled),
         r => r.map_err(|e| err(&format!("its PDF can't be drawn ({e})")))?,
     };
-    let (width, height) = (drawn.width, drawn.height);
-    let diagnostics = drawn.diagnostics;
-    let mut rgba: Vec<u8> = drawn.bytes().to_vec();
     unpremultiply(&mut rgba);
     let img = Image::from_raw(width, height, ChannelLayout::Rgba, SampleType::U8, rgba)?;
     let mut r = crate::flat::image_to_document(name, &img)?;
@@ -193,8 +199,8 @@ pub fn max_scale(w: f32, h: f32) -> f32 {
 
 /// Draw `page`, stopping when `ctl` is canceled. The renderer polls a flag between operators;
 /// off wasm, a scoped thread sets that flag from `ctl` while the page is drawn.
-fn render(page: &Page<'_>, options: &Options, ctl: &Interrupt) -> Result<Raster, raster::Error> {
-    with_render_cancellation(ctl, |settings| raster::render(page, &RenderCache::new(), settings, options))
+fn render(page: &Page<'_>, options: &Options, ctl: &Interrupt, buffer: &mut [u8]) -> Result<raster::Diagnostics, raster::Error> {
+    with_render_cancellation(ctl, |settings| raster::render_into(page, &RenderCache::new(), settings, options, buffer))
 }
 
 /// Forward cancellation while a draw is running, as well as before it starts.
