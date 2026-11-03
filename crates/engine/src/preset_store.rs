@@ -90,6 +90,8 @@ pub const MAX_TIP_SIDE: u32 = 16384;
 pub const MAX_TIP_SAMPLES: u64 = 1 << 26;
 /// Most group files loaded.
 pub const MAX_GROUPS: usize = 4096;
+/// Longest group name a group file may carry.
+pub const MAX_GROUP_NAME_BYTES: usize = 256;
 /// Most presets loaded from one group file.
 pub const MAX_PRESETS_PER_GROUP: usize = 50_000;
 
@@ -615,8 +617,12 @@ pub fn open(backend: Box<dyn PresetBackend>) -> Opened {
     let mut group_files: Vec<(String, u64)> = files.iter().filter(|(n, _)| !n.contains('/') && n.ends_with(&format!(".{GROUP_EXT}"))).cloned().collect();
     group_files.sort_by(|a, b| a.0.cmp(&b.0));
     if let Some(ix) = &index {
-        let pos = |n: &str| ix.groups.iter().position(|g| g == n).unwrap_or(usize::MAX);
-        group_files.sort_by_key(|(n, _)| pos(n));
+        // First occurrence wins; a map, not a scan of the index per file.
+        let mut order: HashMap<&str, usize> = HashMap::new();
+        for (i, g) in ix.groups.iter().enumerate() {
+            order.entry(g.as_str()).or_insert(i);
+        }
+        group_files.sort_by_key(|(n, _)| order.get(n.as_str()).copied().unwrap_or(usize::MAX));
     }
     if group_files.len() > MAX_GROUPS {
         warnings.push(format!("brush presets: only the first {MAX_GROUPS} of {} groups were loaded", group_files.len()));
@@ -635,6 +641,9 @@ pub fn open(backend: Box<dyn PresetBackend>) -> Opened {
                 Err(format!("unknown format `{}`", g.format))
             } else if g.version != 1 {
                 Err(format!("unsupported version {}", g.version))
+            } else if g.group.len() > MAX_GROUP_NAME_BYTES {
+                // Copied into every preset of the group.
+                Err(format!("group name of {} bytes (limit {MAX_GROUP_NAME_BYTES})", g.group.len()))
             } else if g.presets.len() > MAX_PRESETS_PER_GROUP {
                 Err(format!("{} presets (limit {MAX_PRESETS_PER_GROUP})", g.presets.len()))
             } else {
@@ -1142,9 +1151,13 @@ impl Session {
     pub fn attach_preset_store(&mut self, opened: Opened) -> Vec<String> {
         let Opened { store, presets, hidden_builtins, order, mut warnings, actions: disk, patterns } = opened;
         let builtins = crate::pattern_cmds::builtin();
+        let mut by_id: HashMap<String, usize> = HashMap::new();
+        for (i, q) in self.patterns.items.iter().enumerate() {
+            by_id.entry(q.id.clone()).or_insert(i);
+        }
         for l in patterns {
             let id = l.pattern.id.clone();
-            match self.patterns.items.iter_mut().find(|q| q.id == id) {
+            match by_id.get(&id).map(|&i| &mut self.patterns.items[i]) {
                 Some(q) if crate::pattern_cmds::is_pristine_builtin(q, &builtins) => {
                     *q = l.pattern;
                     if let Some(size) = l.full {
@@ -1157,6 +1170,7 @@ impl Session {
                     }
                 }
                 None => {
+                    by_id.insert(id.clone(), self.patterns.items.len());
                     if let Some(size) = l.full {
                         self.patterns.stored.insert(id, size);
                     }
@@ -1165,12 +1179,21 @@ impl Session {
             }
         }
         let lib = &mut self.tools.presets;
-        lib.retain(|p| !(p.builtin && hidden_builtins.iter().any(|h| h.eq_ignore_ascii_case(&p.name))));
+        let hidden: HashSet<String> = hidden_builtins.iter().map(|h| h.to_ascii_lowercase()).collect();
+        lib.retain(|p| !(p.builtin && hidden.contains(&p.name.to_ascii_lowercase())));
+        // Name -> first index, kept current as presets are added (a scan per preset is quadratic).
+        let mut by_name: HashMap<String, usize> = HashMap::new();
+        for (i, x) in lib.iter().enumerate() {
+            by_name.entry(x.name.to_ascii_lowercase()).or_insert(i);
+        }
         for p in presets {
-            match lib.iter_mut().find(|x| x.name.eq_ignore_ascii_case(&p.name)) {
-                Some(x) if x.builtin => *x = p,
+            match by_name.get(&p.name.to_ascii_lowercase()) {
+                Some(&i) if lib[i].builtin => lib[i] = p,
                 Some(_) => {}
-                None => lib.push(p),
+                None => {
+                    by_name.insert(p.name.to_ascii_lowercase(), lib.len());
+                    lib.push(p);
+                }
             }
         }
         // The saved panel order (stable: presets it doesn't name keep their order, at the end).
@@ -1188,8 +1211,9 @@ impl Session {
                 st.actions_rev = 1;
             }
         } else {
+            let mut have: HashSet<String> = self.actions.list.iter().map(|a| a.name.clone()).collect();
             for action in disk {
-                if !self.actions.list.iter().any(|have| have.name == action.name) {
+                if have.insert(action.name.clone()) {
                     self.actions.list.push(action);
                 }
             }

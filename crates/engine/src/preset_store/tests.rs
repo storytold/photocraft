@@ -296,6 +296,17 @@ fn reordering_presets_and_groups_persists() {
 }
 
 #[test]
+fn a_group_file_with_an_overlong_group_name_is_skipped() {
+    let mem = MemBackend::default();
+    let long = "g".repeat(MAX_GROUP_NAME_BYTES + 1);
+    let body = format!(r#"{{"format":"{GROUP_FORMAT}","version":1,"group":"{long}","presets":[]}}"#);
+    mem.files.lock().unwrap().insert("long-00000000.pcbrushes".into(), body.into_bytes());
+    let o = open(Box::new(mem));
+    assert!(o.presets.is_empty());
+    assert!(o.warnings.iter().any(|w| w.contains("group name")), "{:?}", o.warnings);
+}
+
+#[test]
 fn corrupt_and_oversized_files_are_skipped_with_a_warning() {
     let dir = TempDir::new("corrupt");
     let (mut s, _) = session(&dir);
