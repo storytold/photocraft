@@ -550,3 +550,19 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         _ => {}
     }
 }
+
+#[cfg(test)]
+mod window_size_tests {
+    use super::window_size;
+    use egui::vec2;
+
+    /// A 1536×864 laptop screen gets a window that fits it; big screens stop at 1360×900 and small
+    /// ones at the 900×600 minimum; an unknown monitor gets the laptop-sized default.
+    #[test]
+    fn the_first_size_fits_the_monitor() {
+        assert_eq!(window_size(Some(vec2(1536.0, 864.0))), vec2(1536.0 * 0.66, 864.0 * 0.73));
+        assert_eq!(window_size(Some(vec2(3840.0, 2160.0))), vec2(1360.0, 900.0));
+        assert_eq!(window_size(Some(vec2(1024.0, 700.0))), vec2(900.0, 600.0));
+        assert_eq!(window_size(None), vec2(1010.0, 630.0));
+    }
+}
