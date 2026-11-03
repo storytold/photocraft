@@ -600,6 +600,45 @@
    "size": 2792
   },
   {
+   "id": "org.craftspace.doom",
+   "name": "Doom",
+   "version": "1.0.0",
+   "author": "emircesur",
+   "description": "Plays Doom (Freedoom: Phase 1) on the canvas, one move per run: use a 640 x 400 RGB document (on a larger one the game takes its top-left 640 x 400) and double-click the Doom actions in Window > Actions (or press Alt+Shift+W/A/S/D, Q/E, F, Space where PhotoCraft binds keys to actions). Undo takes a move back. The game is kept in the picture.",
+   "collection": "Doom in PhotoCraft",
+   "repo": "https://github.com/emircesur/doom-in-photocraft",
+   "license": "GPL-2.0",
+   "url": "https://github.com/emircesur/doom-in-photocraft/releases/download/v1.0.1/doom-photocraft.wasm",
+   "sha256": "9e836c66f1a4ca60b6610a8eb84473035b37b4e4537261cf200ac9ba1cece933",
+   "size": 17640283
+  },
+  {
+   "id": "io.github.smyrgeorge.film-lab.convert",
+   "name": "Film Lab: Convert Negative",
+   "version": "0.3.0",
+   "author": "film-lab",
+   "description": "Converts a scanned film negative into a positive: pick a film preset, adjust exposure, brightness, contrast, temperature, tint and saturation. The companion measures the whole image for it.",
+   "collection": "Film Lab",
+   "repo": "https://github.com/smyrgeorge/film-lab",
+   "license": "MIT",
+   "url": "https://github.com/smyrgeorge/film-lab/releases/download/v0.3.0/film_lab_convert.wasm",
+   "sha256": "f5a247277dcd2459a22f00024ebcaba7aca59677e5be88477e609a80da65c19b",
+   "size": 62066
+  },
+  {
+   "id": "io.github.smyrgeorge.film-lab.convert-advanced",
+   "name": "Film Lab: Convert Negative (Advanced)",
+   "version": "0.3.0",
+   "author": "film-lab",
+   "description": "Converts a scanned film negative into a positive with every control: the film base picked from the border (0 = measured or the preset's), tone, white balance, a gray point, colour and sharpening.",
+   "collection": "Film Lab",
+   "repo": "https://github.com/smyrgeorge/film-lab",
+   "license": "MIT",
+   "url": "https://github.com/smyrgeorge/film-lab/releases/download/v0.3.0/film_lab_convert_advanced.wasm",
+   "sha256": "25f9c10312b38f459e19e234a7f5af1cc991be6c1ca8929d330c716eeedea491",
+   "size": 67880
+  },
+  {
    "id": "io.github.mitacore.posterize",
    "name": "Posterize (Plug-in)",
    "version": "1.0.0",

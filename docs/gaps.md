@@ -224,9 +224,10 @@ what an agent can't finish alone.
   sandboxed WebAssembly plug-in ABI v1 (`docs/plugins.md`), but ABI v2 (panels, progress, other
   layers) is missing (AUTO-219-6).
 - **Progress (2026-10-26):** Photoshop's Plugins menu with Browse Plugins… and Manage Plugins…: a
-  bundled catalog of 47 community ABI v1 filters from four GitHub projects, pinned by URL, size and
+  bundled catalog of 50 community ABI v1 filters from six GitHub projects, pinned by URL, size and
   SHA-256, downloaded in the background, installed and kept between runs (`plugin.store.*`). The
-  web build has no download transport yet; the catalog is updated by hand, not fetched.
+  web build has no download transport yet; the catalog is copied from
+  speedyrulz/photocraft-plugin-directory by hand, not fetched.
 - **Estimate:** 250–450 h. **Human:** .8BF needs native code under the isolated-`unsafe` rule.
 
 ## UI / UX gaps
@@ -438,7 +439,7 @@ what an agent can't finish alone.
 | 2026-10-27 | minor | Smooth/Feather command reads and replacement use selection bounds plus blur reach; full-canvas reference and release comparisons extended; percentages and scorecard budgets unchanged |
 | 2026-11-01 | minor | G9: 11 of 183 preferences do nothing (was 12): Graphics Adapter (`performance.gpuAdapter`) always worked, but startup read it by raw JSON key, which the scorecard prefs audit can't see; it now reads the typed Performance section; no estimate changed |
 | 2026-10-27 | minor | G9: 12 of 181 preferences do nothing, the scorecard's count with integration batch 9 (#9775) on main; no estimate changed |
-| 2026-10-26 | minor | G16: Plugins › Browse Plugins… / Manage Plugins… over a hash-pinned catalog of 47 GitHub-hosted ABI v1 plug-ins (RetouchCraft added 2026-11-03); no estimate changed |
+| 2026-10-26 | minor | G16: Plugins › Browse Plugins… / Manage Plugins… over a hash-pinned catalog of 50 GitHub-hosted ABI v1 plug-ins (RetouchCraft, Film Lab and Doom added 2026-11-03); no estimate changed |
 | 2026-10-26 | minor | Expand/Contract/Border distance work, mask reads and replacement cropped to nonzero bounds; bounded distances for radii ≤5; 36 MP exact-output comparisons improve 1.54–37.82× across eight cases; percentages, estimates and scorecard budgets unchanged |
 | 2026-10-26 | minor | Embedded AI/PDF/EPS save-back retains native format and a separate source-bound display preview; original sources remain undoable. Native Adobe interoperability and standalone EPS/DCS remain unverified; no corpus floor or percentage changed. |
 | 2026-10-25 | minor | Selected colour channel sets: drawing, combined and per-component Levels/Curves, adjustments and supported filters; [scope, evidence and benchmarks](multi-channel-editing.md). Move/transform remains open; percentages unchanged |
