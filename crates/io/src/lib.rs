@@ -51,6 +51,8 @@ mod exr_native;
 pub mod exr_parts;
 mod flat;
 mod gradient_bake;
+mod initial_view;
+pub use initial_view::{MAX_INITIAL_SAMPLERS, NativeImportTarget, NativeInitialView};
 pub mod guides_map;
 mod png_steps;
 pub use gradient_bake::{Method as GradientMethod, bake as bake_gradient};
@@ -113,6 +115,9 @@ pub use psd_import::{psd_to_document, psd_to_document_with};
 /// Errors from import/export.
 #[derive(Debug, thiserror::Error)]
 pub enum IoError {
+    /// Development XCF files did not record their high-depth sample byte order.
+    #[error("{0}")]
+    HistoricalXcfSampleOrderRequired(HistoricalXcfSampleOrderRequest),
     /// Paint.NET document decode failure.
     #[error("PDN: {0}")]
     Pdn(String),
@@ -191,6 +196,8 @@ impl From<RenderError> for IoError {
 /// Result of [`import`].
 #[derive(Debug, Clone)]
 pub struct ImportResult {
+    /// Optional native view hints, validated before installation and applied once on success.
+    pub initial_view: Option<NativeInitialView>,
     /// The imported document.
     pub document: Document,
     /// Human-readable notes about anything approximated or dropped.
@@ -281,6 +288,16 @@ pub(crate) fn unequal_resolution_warning(x: f64, y: f64) -> Option<String> {
 /// whose table can't be applied silently renders as the identity instead (#1763).
 pub fn open_warnings(doc: &Document) -> Vec<String> {
     let mut out = Vec::new();
+    use photocraft_doc::import_conversion::{ConversionDisposition, ImportConversion};
+    match doc.metadata.import_conversion.as_deref() {
+        Some(ImportConversion::Report(report)) if report.entries.iter().any(|entry| entry.disposition != ConversionDisposition::NativeEquivalent) => {
+            out.push("a historical import conversion report records approximations or unapplied source data; view Import Conversion Report for details".into());
+        }
+        Some(ImportConversion::Opaque { .. }) => {
+            out.push("an import conversion report from a newer version is retained without interpretation".into());
+        }
+        _ => {}
+    }
     // Iterative, so no document's nesting can make this recurse.
     let mut stack: Vec<&Layer> = doc.layers.iter().rev().collect();
     while let Some(l) = stack.pop() {
@@ -543,7 +560,7 @@ pub fn import_preflight(name: &str, bytes: &[u8]) -> ImportPreflight {
     if xcf::is_xcf(bytes) || (has_extension(name, "xcf") && photocraft_codecs::detect(bytes).is_none()) {
         return ImportPreflight::Unbounded;
     }
-    if xcf::is_gzipped_xcf(name, bytes) {
+    if bytes.starts_with(&[0x1f, 0x8b]) || bytes.starts_with(b"BZh") || bytes.starts_with(b"\xfd7zXZ\0") {
         return ImportPreflight::Unbounded;
     }
     if has_extension(name, "pdn") || bytes.starts_with(b"PDN3") {
@@ -594,6 +611,65 @@ pub fn import_with_svg_group_depth_and_interrupt(
     import_with_options_and_interrupt(name, bytes, &ImportOptions { max_group_depth, ..Default::default() }, ctl)
 }
 
+/// Explicit sample byte order for development XCF7–11 high-depth pixel data.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HistoricalXcfSampleOrder {
+    BigEndian,
+    LittleEndian,
+}
+
+impl std::fmt::Display for HistoricalXcfSampleOrder {
+    /// Formats the explicit historical sample-order choice for user and agent diagnostics.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::BigEndian => "big-endian",
+            Self::LittleEndian => "little-endian",
+        })
+    }
+}
+
+/// An explicit user decision required by a historical format ambiguity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HistoricalXcfSampleOrderRequest {
+    pub version: u32,
+    pub bits_per_sample: u32,
+}
+
+impl std::fmt::Display for HistoricalXcfSampleOrderRequest {
+    /// Explains why a historical XCF needs an explicit sample-order decision before import.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Historical XCF version {} with {}-bit samples does not record sample byte order; choose little-endian or big-endian sample byte order before importing",
+            self.version, self.bits_per_sample
+        )
+    }
+}
+
+/// Detect the historical choice without decoding drawable samples. Wrapped XCFs
+/// decode only the fixed header prefix; import validates the full stream. Unrelated files return None.
+pub fn historical_xcf_sample_order_request(name: &str, bytes: &[u8]) -> Result<Option<HistoricalXcfSampleOrderRequest>, IoError> {
+    historical_xcf_sample_order_request_with(name, bytes, &photocraft_raster::Interrupt::NONE)
+}
+
+/// Cancellable counterpart of [`historical_xcf_sample_order_request`].
+pub fn historical_xcf_sample_order_request_with(
+    name: &str,
+    bytes: &[u8],
+    ctl: &photocraft_raster::Interrupt<'_>,
+) -> Result<Option<HistoricalXcfSampleOrderRequest>, IoError> {
+    ctl.check().map_err(|_| IoError::Cancelled)?;
+    let request = if xcf::is_xcf(bytes) {
+        xcf::historical_sample_order_request(bytes)?
+    } else if let Some(inflated) = xcf::transport::header_prefix(name, bytes, ctl)? {
+        xcf::historical_sample_order_request(&inflated)?
+    } else {
+        None
+    };
+    ctl.check().map_err(|_| IoError::Cancelled)?;
+    Ok(request)
+}
+
 /// The user's settings that shape an import.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ImportOptions {
@@ -601,6 +677,9 @@ pub struct ImportOptions {
     pub max_group_depth: usize,
     /// The demosaic method camera raws are developed with.
     pub demosaic: raw::Demosaic,
+    /// Required only for multibyte development XCF7–11 samples. No default is
+    /// inferred from the current machine, file name, producer or pixel values.
+    pub historical_xcf_sample_order: Option<HistoricalXcfSampleOrder>,
     /// PSD layer/mask/merged pixel allowance, including conversion workspace, and the
     /// equivalent allowance for a layered TIFF's composite and retained decoded image. May
     /// lower the default cap; 0 uses the adaptive budget. Does not cover metadata or
@@ -629,10 +708,13 @@ pub struct ImportOptions {
 }
 
 impl Default for ImportOptions {
+    /// Uses standard native import limits and demosaicing without guessing ambiguous historical XCF sample
+    /// order.
     fn default() -> Self {
         ImportOptions {
             max_group_depth: photocraft_doc::MAX_GROUP_DEPTH,
             demosaic: raw::Demosaic::default(),
+            historical_xcf_sample_order: None,
             psd_max_pixel_bytes: 0,
             flat_max_pixel_bytes: 0,
             pdf_dpi: 300.0,
@@ -785,7 +867,7 @@ fn import_psd(
     *damaged = psd_damaged;
     document.name = name.to_string();
     text_import::prepare(&mut document, txt2.as_ref());
-    Ok(ImportResult { document, warnings, source_read_only: false, preview_only: false })
+    Ok(ImportResult { initial_view: None, document, warnings, source_read_only: false, preview_only: false })
 }
 
 /// [`import_for_open_with`] for the file at `path`. A PSD/PSB is parsed from the open file
@@ -938,7 +1020,6 @@ pub(crate) enum Route {
     Ora,
     Kra,
     Xcf,
-    GzippedXcf,
     Pdn,
     Raw,
     Svg,
@@ -975,9 +1056,6 @@ pub(crate) fn route(name: &str, bytes: &[u8]) -> Route {
     if xcf::is_xcf(bytes) || (has_extension(name, "xcf") && photocraft_codecs::detect(bytes).is_none()) {
         return Route::Xcf;
     }
-    if xcf::is_gzipped_xcf(name, bytes) {
-        return Route::GzippedXcf;
-    }
     if has_extension(name, "pdn") || bytes.starts_with(b"PDN3") {
         return Route::Pdn;
     }
@@ -998,6 +1076,12 @@ pub(crate) fn route(name: &str, bytes: &[u8]) -> Route {
 /// Dispatches format-specific importers and propagates a structured PSD damage
 /// flag alongside the ordinary best-effort import result.
 fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, opts: &ImportOptions, damaged: &mut bool) -> Result<ImportResult, IoError> {
+    // Verified XCF content wins over misleading suffixes before ordinary format routing.
+    if xcf::is_xcf(bytes) { return xcf::import_with_sample_order(name, bytes, opts.historical_xcf_sample_order, ctl); }
+    if let Some(inflated) = xcf::transport::decode(name, bytes, ctl)? {
+        return xcf::import_with_sample_order(name, &inflated, opts.historical_xcf_sample_order, ctl);
+    }
+
     // SVG content wins over a misleading `.pdf` suffix, matching the preflight (which checks SVG
     // before PDF).
     if is_svg_input(name, bytes) {
@@ -1011,14 +1095,13 @@ fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, o
     match route(name, bytes) {
         Route::Pcraft => {
             let document = photocraft_format::load_from_bytes(bytes)?;
-            Ok(ImportResult { warnings: open_warnings(&document), document, source_read_only: false, preview_only: false })
+            Ok(ImportResult { initial_view: None, warnings: open_warnings(&document), document, source_read_only: false, preview_only: false })
         }
         Route::Psd | Route::NamedPsd => import_psd(name, ctl, damaged, opts, |want, recover| PsdFile::from_bytes_and_merged_preflight(bytes, want, recover)),
         Route::Affinity => affinity::import(name, bytes),
         Route::Ora => ora::import(name, bytes, ctl),
         Route::Kra => kra::import(name, bytes, ctl),
-        Route::Xcf => xcf::import(name, bytes, ctl),
-        Route::GzippedXcf => xcf::import(name, &xcf::gunzip(bytes)?, ctl),
+        Route::Xcf => xcf::import_with_sample_order(name, bytes, opts.historical_xcf_sample_order, ctl),
         Route::Pdn => pdn::import(name, bytes, ctl),
         Route::Raw => raw::import_raw_demosaic(name, bytes, opts.demosaic),
         Route::Svg => svg::import_svg_with_group_depth(name, bytes, opts.max_group_depth),
@@ -1137,7 +1220,7 @@ fn checked_stages(
     let mut renderer = renderer;
     // `as_deref_mut` would tie the trait object's lifetime to this function's; the closure shortens it.
     #[allow(clippy::option_as_ref_deref)]
-    let r = export_stages_with_renderer(doc, name_or_ext, opts, ctl, renderer.as_mut().map(|r| -> &mut dyn BandRenderer { &mut **r }))?;
+    let mut r = export_stages_with_renderer(doc, name_or_ext, opts, ctl, renderer.as_mut().map(|r| -> &mut dyn BandRenderer { &mut **r }))?;
     if let Err(e) = photocraft_raster::spill::check_since(scratch_generation)
         .map_err(IoError::Unsupported)
         .and_then(|()| doc.scratch_health().map_err(IoError::Unsupported))
@@ -1150,6 +1233,9 @@ fn checked_stages(
             }
         }
         return Err(e);
+    }
+    if doc.metadata.import_conversion.is_some() && extension(name_or_ext) != photocraft_format::EXTENSION {
+        r.warnings.push("the import conversion report and retained source configuration are not exported in this format; save as .pcraft to keep them".into());
     }
     ctl.check().map_err(|_| IoError::Cancelled)?;
     Ok(r)

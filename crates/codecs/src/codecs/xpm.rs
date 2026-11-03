@@ -114,6 +114,16 @@ fn named(name: &str) -> Option<[u8; 3]> {
     })
 }
 
+/// Look up an exact normalized X11 name without XPM aliases or normalization.
+pub(crate) fn x11_color_rgb(name: &str) -> Option<[f32; 3]> {
+    if name.is_empty() || name.len() > 64 || !name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit()) {
+        return None;
+    }
+    let index = x11_colors::X11_COLORS.binary_search_by_key(&name, |(entry, _)| *entry).ok()?;
+    let (_, rgb) = x11_colors::X11_COLORS.get(index)?;
+    Some(rgb.map(|channel| f32::from(channel) / 255.0))
+}
+
 fn color(name: &str) -> Option<[u8; 4]> {
     if name.eq_ignore_ascii_case("none") {
         return Some([0, 0, 0, 0]);
