@@ -68,7 +68,8 @@ pub(super) fn write_sidecar(app: &mut PhotocraftApp, raw: &RawOpen, params: &Cam
         None if params.is_identity() => return,
         _ => {}
     }
-    let bytes = photocraft_io::camera_raw_xmp::save(params).into_bytes();
+    // The crop it opened with stays in the file, though the dialog has no control for it.
+    let bytes = photocraft_io::camera_raw_xmp::save_with_crop(params, raw.crop).into_bytes();
     let Some(write) = app.services.write.as_mut() else { return };
     if let Err(e) = write(&sidecar, &bytes) {
         crate::notices::error(app, crate::i18n::fmt(tl!("Could not write {name}: {error}"), &[("name", &name), ("error", &e)]));
@@ -124,7 +125,12 @@ pub(super) fn load_settings(app: &mut PhotocraftApp) -> Result<Value, String> {
         let file = crate::file_open::display_name(&name);
         let d = app.camera_raw.as_mut().ok_or(tl!("Camera Raw isn't open"))?;
         let mut next = d.params.clone();
-        let report = photocraft_io::camera_raw_xmp::load(&mut next, &bytes).map_err(|e| format!("{file}: {e}"))?;
+        let mut report = photocraft_io::camera_raw_xmp::load(&mut next, &bytes).map_err(|e| format!("{file}: {e}"))?;
+        // A crop only applies as a raw file opens; the filter has none, so it is not supported.
+        if report.crop.take().is_some() {
+            report.applied = report.applied.saturating_sub(1);
+            report.ignored.extend(photocraft_io::camera_raw_xmp::CROP_KEYS.iter().take(4).map(|k| k.to_string()));
+        }
         next.validate_changes(&d.original).map_err(|e| format!("{file}: {e}"))?;
         if d.params.point_curve != next.point_curve {
             d.curve_state = Default::default();
