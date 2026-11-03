@@ -183,7 +183,7 @@ pub(super) fn run(s: &mut Session, plan: SubjectsPlan) -> Result<Value> {
                 let background = photocraft_compose::render(doc, area).to_rgba8().pixels;
                 let fill_seed = made.first().map_or(0, |m| m.1);
                 ctx.progress(0.35 + 0.5 * (attempt as f32 + 0.9) / FILL_TRIES as f32, "Checking the background");
-                let left = subject_left_in(&finder.only(&found_by), doc, *active, &hole, ctx)?;
+                let left = subject_left_in(&finder.only(check_prompt(&found_by)), doc, *active, &hole, ctx)?;
                 for (id, ..) in &made {
                     doc.remove(*id);
                 }
@@ -243,6 +243,18 @@ pub(super) fn run(s: &mut Session, plan: SubjectsPlan) -> Result<Value> {
             })
         },
     )
+}
+
+/// What the detector is asked for on the filled background: the prompt that found the
+/// subjects when it names a kind of thing ("person", the caller's prompt), else "person". The
+/// generic prompts ("the main subject") find something on any picture: on a clean backdrop
+/// they rejected all three fills (measured in the app 2026-11-03), and the failure this check
+/// is for is a person painted back.
+fn check_prompt(found_by: &str) -> &str {
+    match found_by {
+        "the main subject" | "the foreground object" | "object" => "person",
+        p => p,
+    }
 }
 
 /// Fills tried before Split gives up on a background with the subject painted back.
@@ -408,3 +420,17 @@ const MIN_BAND: f32 = 6.0;
 const MIN_KEPT: f64 = 0.6;
 /// The matte's most mean over the rest (well away from every subject) to be trusted.
 const MAX_STRAY: f64 = 0.2;
+
+#[cfg(test)]
+mod check_tests {
+    use super::check_prompt;
+
+    #[test]
+    fn the_fill_check_asks_for_a_kind_of_thing() {
+        assert_eq!(check_prompt("the main subject"), "person");
+        assert_eq!(check_prompt("the foreground object"), "person");
+        assert_eq!(check_prompt("object"), "person");
+        assert_eq!(check_prompt("person"), "person");
+        assert_eq!(check_prompt("the lighthouse"), "the lighthouse");
+    }
+}
