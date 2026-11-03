@@ -62,7 +62,10 @@ pub(crate) fn top_level(doc: &Document, ids: &[LayerId]) -> Vec<LayerId> {
 /// Replace the layer selection without a history step (like [`Session::select_layer`]).
 pub fn set_selection(s: &mut Session, ids: Vec<LayerId>, active: Option<LayerId>, anchor: Option<LayerId>) -> Result<()> {
     let st = s.active_mut().ok_or(EngineError::NoDocument)?;
-    if let Some(bad) = ids.iter().chain(active.iter()).find(|id| st.doc.layer(**id).is_none()) {
+    // `Document::layer` walks the tree. Calling it once per selected ID made a large range
+    // selection quadratic; validate the whole batch against one document walk instead.
+    let live: std::collections::HashSet<LayerId> = st.doc.walk().into_iter().map(|(_, _, layer)| layer.id).collect();
+    if let Some(bad) = ids.iter().chain(active.iter()).find(|id| !live.contains(id)) {
         return Err(EngineError::NoLayer(*bad));
     }
     let active = active.or_else(|| ids.last().copied());
@@ -1934,6 +1937,11 @@ mod tests {
         // A second ⇧-click re-ranges from the same anchor.
         s.execute("layer.select", json!({"layer": b.0, "mode": "range"})).unwrap();
         assert_eq!(sel(&s), vec![a, b]);
+        // Reverse-direction range selection is equally immediate and remains in document order.
+        s.execute("layer.select", json!({"layer": d.0})).unwrap();
+        s.execute("layer.select", json!({"layer": a.0, "mode": "range"})).unwrap();
+        assert_eq!(sel(&s), vec![a, b, c, d]);
+        assert_eq!(s.active().unwrap().active_layer, Some(a));
         assert!(s.execute("layer.select", json!({"layer": b.0, "mode": "bogus"})).is_err());
         // Selection changes are not edits.
         let history = s.active().unwrap().history.entries().len();

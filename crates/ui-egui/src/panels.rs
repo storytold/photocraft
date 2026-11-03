@@ -2395,6 +2395,9 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let active = st.active_layer;
     let active_layer = active.and_then(|id| doc.layer(id));
     let selection = st.selected_layers();
+    // Rows are painted once each. Resolve membership once so a large Shift-selection doesn't
+    // turn the row loop into O(rows × selected layers) work.
+    let selection_set: std::collections::HashSet<LayerId> = selection.iter().copied().collect();
     let isolated = st.isolated_layers.clone();
     let mut actions: Vec<(String, Value)> = Vec::new();
 
@@ -2557,7 +2560,7 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 if !filter.shows(l) {
                     continue;
                 }
-                let row = RowSel { selected: selection.contains(&l.id), primary: active == Some(l.id), multi: selection.len() > 1 };
+                let row = RowSel { selected: selection_set.contains(&l.id), primary: active == Some(l.id), multi: selection.len() > 1 };
                 let top = ui.cursor().top();
                 drawn.push((l.id, layer_row(app, &ctx, ui, &doc, l, depth, row, &mut actions)));
                 if reveal == Some(l.id) {
@@ -6646,6 +6649,18 @@ mod layer_click_type_commit_tests {
             assert_eq!(h.state().ui.text_edit.as_ref().map(|ed| ed.layer), Some(text.0));
             preserved(h.state(), text);
         }
+    }
+
+    #[test]
+    fn reverse_shift_click_selects_the_whole_layer_range_in_one_update() {
+        let (mut h, text, other) = harness(theme::ThemeKind::ProMedium);
+        let row = h.get_by_label("Other pixels").rect();
+        // The text layer is the anchor; Other pixels is above it in the visible layer list.
+        click(&mut h, pos2(row.left() + 120.0, row.center().y), egui::Modifiers { shift: true, ..Default::default() });
+
+        let selected = h.state().session.active().unwrap().selected_layers();
+        assert_eq!(selected, vec![text, other], "reverse Shift-click must resolve the complete range at once");
+        assert_eq!(h.state().session.active().unwrap().active_layer, Some(other));
     }
 
     #[test]

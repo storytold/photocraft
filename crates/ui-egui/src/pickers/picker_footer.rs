@@ -14,9 +14,9 @@ pub(crate) struct FooterOptions<'a> {
 }
 
 impl<'a> FooterOptions<'a> {
-    /// Enable the standard new-item, new-group, delete, and size controls for a picker footer.
+    /// Enable the standard new-item, new-group, and delete controls for a picker footer.
     pub(crate) fn standard(new_tip: &'a str) -> Self {
-        Self { new_tip, size_slider: true, new_group: true, new_item: true, delete: true }
+        Self { new_tip, size_slider: false, new_group: true, new_item: true, delete: true }
     }
 }
 

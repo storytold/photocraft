@@ -868,11 +868,28 @@ struct PanelContent<'a> {
     targets: &'a mut Vec<craft_ui::docking::DropTarget<String>>,
 }
 
-fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, panel: &str) {
-    match panel {
+/// Render the shared picker's menu points and its adapter extension in either docking chrome.
+/// Taking the picker state temporarily keeps its borrow independent from domain actions on app.
+pub(crate) fn shared_picker_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, panel: &str) -> bool {
+    if !crate::pickers::preset_panels::shared_docking(&format!("window.panel.{panel}")) {
+        return false;
+    }
+    let mut state = std::mem::take(&mut app.ui.presets_ui);
+    let mut extension = |ui: &mut egui::Ui, state: &mut crate::pickers::picker_state::PresetUi, _panel: &str| match panel {
         "gradients" => crate::pickers::gradients_browser::panel_menu(app, ui),
         "patterns" => crate::pickers::pattern_browser::panel_menu(app, ui),
-        "swatches" => crate::pickers::swatches_ui::docked_panel_menu(app, ui),
+        "swatches" => crate::pickers::swatches_ui::panel_menu(app, ui, state),
+        _ => {}
+    };
+    let extension = matches!(panel, "gradients" | "patterns" | "swatches").then_some(&mut extension as crate::pickers::picker_shell::MenuContentsCallback<'_>);
+    crate::pickers::picker_shell::picker_menu_contents(ui, &mut state, panel, crate::pickers::picker_shell::PickerMenuOptions::for_panel(panel), extension);
+    app.ui.presets_ui = state;
+    true
+}
+
+fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, panel: &str) {
+    shared_picker_menu(app, ui, panel);
+    match panel {
         "layers" => {
             crate::layer_row_ui::panel_menu(app, ui);
             ui.separator();
@@ -971,6 +988,10 @@ impl craft_ui::docking::DockContent<String> for PanelContent<'_> {
         egui::Popup::menu(&resp).interactable(popup_interactable).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
             ui.set_min_width(180.0);
             panel_menu(self.app, ui, active);
+            // Docking actions are a separate section owned by this tab-bar implementation.
+            if crate::pickers::preset_panels::shared_docking(&format!("window.panel.{active}")) {
+                ui.separator();
+            }
             if ui.add_enabled(!locked, egui::Button::new(if collapsed { tl!("Expand Panel Group") } else { tl!("Collapse Panel Group") })).clicked() {
                 self.commands.push(("window.panel.group", json!({"panel":active,"operation":if collapsed {"expand"} else {"collapse"}})));
                 ui.close();

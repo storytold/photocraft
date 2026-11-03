@@ -186,13 +186,14 @@ pub(crate) fn arbitrate_hit_index(pointer: Pos2, hits: &[DropHitRegion]) -> Opti
 
 /// Paint the indicator carried by a valid resolved candidate. Invalid destinations intentionally
 /// remain visually quiet rather than drawing distracting error-colored bars.
-pub(crate) fn paint_candidate(ui: &egui::Ui, candidate: &DropCandidate, color: egui::Color32, clip_rect: Rect) {
+pub(crate) fn paint_candidate(ui: &egui::Ui, candidate: &DropCandidate, color: egui::Color32, clip_rect: Rect, layer: egui::LayerId) {
     if !candidate.is_valid() {
         return;
     }
-    // Drop feedback must sit above group headers/cards, especially for the root-leading marker
-    // which intentionally shares the first header's top border. Keep it clipped to the browser.
-    let layer = egui::LayerId::new(egui::Order::Foreground, ui.layer_id().id);
+    // The drag ghost creates/registers this Foreground layer earlier in the frame. Reuse that
+    // exact layer and append the indicator after the ghost shapes: a new Tooltip layer is not
+    // necessarily included by every offscreen renderer, while a later shape on the registered
+    // ghost layer is both ordered above the ghost and guaranteed to be tessellated with it.
     let painter = ui.ctx().layer_painter(layer).with_clip_rect(clip_rect);
     match &candidate.indicator {
         DropIndicator::InsertionLine { rect } | DropIndicator::RootAppendLine { rect } => {

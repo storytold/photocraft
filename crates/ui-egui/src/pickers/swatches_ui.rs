@@ -21,6 +21,7 @@ use crate::pickers::asset_browser::{
 };
 use crate::pickers::picker_footer::FooterOptions;
 use crate::pickers::picker_shell::{ShellOptions, picker_shell};
+use crate::pickers::picker_state::PresetUi;
 use crate::pickers::preset_commands::run;
 
 /// The browser's panel key (selection, group state and thumbnail size live under it).
@@ -104,8 +105,6 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 center_grid: false,
                 all_groups_open: true,
                 compact_context_menus: false,
-                item_size: None,
-                list_item_height: None,
                 domain_hierarchy_actions: false,
                 root_item_group: None,
             },
@@ -203,33 +202,41 @@ fn handle(app: &mut PhotocraftApp, e: BrowserAction, background: bool) {
         | BrowserAction::MoveItemToGroup { .. }
         | BrowserAction::MoveGroup { .. }
         | BrowserAction::MoveInto { .. } => {}
-        BrowserAction::NewGroup => new_group(app),
-        BrowserAction::New => new_swatch(app),
+        BrowserAction::NewGroup => new_group_from_app(app),
+        BrowserAction::New => new_swatch_from_app(app),
     }
 }
 
 /// New Swatch: the foreground colour, named and selected, then renamed in place (Photoshop asks
 /// for the name).
-fn new_swatch(app: &mut PhotocraftApp) {
-    let group = app
-        .ui
-        .presets_ui
-        .selected
-        .get(PANEL)
-        .and_then(|k| app.session.presets.swatches.iter().find(|g| g.items.iter().any(|s| &s.name == k)).map(|g| g.name.clone()));
+fn new_swatch(app: &mut PhotocraftApp, state: &mut PresetUi) {
+    let group =
+        state.selected.get(PANEL).and_then(|k| app.session.presets.swatches.iter().find(|g| g.items.iter().any(|s| &s.name == k)).map(|g| g.name.clone()));
     let p = group.map_or_else(|| json!({}), |g| json!({"group": g}));
     if let Some(r) = run(app, "swatches.add", p) {
         let name = r["name"].as_str().unwrap_or_default().to_string();
-        app.ui.presets_ui.selected.insert(PANEL.into(), name.clone());
-        app.ui.presets_ui.renaming = Some((PANEL.into(), name.clone(), name));
+        state.selected.insert(PANEL.into(), name.clone());
+        state.renaming = Some((PANEL.into(), name.clone(), name));
     }
 }
 
-fn new_group(app: &mut PhotocraftApp) {
+fn new_group(app: &mut PhotocraftApp, state: &mut PresetUi) {
     if let Some(r) = run(app, "swatches.newGroup", json!({"name": "Group"})) {
         let g = r["group"].as_str().unwrap_or_default().to_string();
-        app.ui.presets_ui.renaming = Some((PANEL.into(), format!("group:{g}"), g));
+        state.renaming = Some((PANEL.into(), format!("group:{g}"), g));
     }
+}
+
+fn new_swatch_from_app(app: &mut PhotocraftApp) {
+    let mut state = std::mem::take(&mut app.ui.presets_ui);
+    new_swatch(app, &mut state);
+    app.ui.presets_ui = state;
+}
+
+fn new_group_from_app(app: &mut PhotocraftApp) {
+    let mut state = std::mem::take(&mut app.ui.presets_ui);
+    new_group(app, &mut state);
+    app.ui.presets_ui = state;
 }
 
 /// Command params for a picked file: a real path keeps the journal small; browser files arrive
@@ -297,8 +304,10 @@ fn export_dialog(app: &mut PhotocraftApp, format: &str) -> Result<Value, String>
     })
 }
 
-/// The Swatches entries of the panel group's menu ("…").
-pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+/// Swatches domain actions for the shared picker menu. The shell inserts the boundary before this
+/// extension; separators here are intentional boundaries between create, import/export and reset
+/// action groups, not duplicates of shared-menu section separators.
+pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, state: &mut PresetUi) {
     let empty = app.session.presets.swatches.iter().all(|g| g.items.is_empty());
     let mut act: Option<&str> = None;
     if ui.button(tl!("New Swatch…")).clicked() {
@@ -328,11 +337,11 @@ pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     ui.close();
     let r = match a {
         "new" => {
-            new_swatch(app);
+            new_swatch(app, state);
             Ok(Value::Null)
         }
         "group" => {
-            new_group(app);
+            new_group(app, state);
             Ok(Value::Null)
         }
         "import" => import_dialog(app, false),
@@ -346,14 +355,6 @@ pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         app.ui.status = e;
         app.ui.status_error = true;
     }
-}
-
-/// Contribute Swatches-specific actions and its shared picker option to the docking header menu.
-pub(crate) fn docked_panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    crate::pickers::picker_shell::search_toggle(ui, &mut app.ui.presets_ui, PANEL);
-    ui.separator();
-    panel_menu(app, ui);
-    ui.separator();
 }
 
 /// The Color Picker's Add to Swatches: the picked colour, in the model the user typed it in
@@ -516,10 +517,11 @@ mod tests {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.session.tools.foreground = [0.5, 0.25, 1.0, 1.0];
         app.ui.presets_ui.selected.insert(PANEL.into(), "Dark Red".into());
-        new_swatch(&mut app);
+        let mut state = app.ui.presets_ui.clone();
+        new_swatch(&mut app, &mut state);
         let dark = app.session.presets.swatches.iter().find(|g| g.name == "Dark").unwrap();
         assert_eq!(dark.items.last().unwrap().name, "Color Swatch 1", "into the selected swatch's group");
-        assert!(app.ui.presets_ui.renaming.is_some(), "renamed in place");
+        assert!(state.renaming.is_some(), "renamed in place");
         let mut f = serde_json::Map::new();
         f.insert("color".into(), json!("#00ffff"));
         f.insert("__cmyk".into(), json!([1.0, 0.0, 0.0, 0.0]));

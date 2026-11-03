@@ -8,6 +8,47 @@ pub(crate) use super::picker_browser_data::HierarchyOrderEntry;
 use super::picker_browser_data::PickerBrowserData;
 pub(crate) use super::picker_browser_model::MAX_GROUP_DEPTH;
 
+/// Shared asset-picker presentation. Dimensions include the two-pixel card border.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum PickerDisplayMode {
+    TextOnly,
+    #[default]
+    SmallThumbnail,
+    LargeThumbnail,
+    SmallList,
+    LargeList,
+}
+
+impl PickerDisplayMode {
+    pub(crate) const ALL: [Self; 5] = [Self::TextOnly, Self::SmallThumbnail, Self::LargeThumbnail, Self::SmallList, Self::LargeList];
+
+    pub(crate) fn uses_list_layout(self) -> bool {
+        matches!(self, Self::TextOnly | Self::SmallList | Self::LargeList)
+    }
+
+    pub(crate) fn is_list(self) -> bool {
+        matches!(self, Self::TextOnly | Self::SmallList | Self::LargeList)
+    }
+
+    pub(crate) fn item_height(self) -> f32 {
+        match self {
+            Self::TextOnly | Self::SmallList => 20.0,
+            Self::SmallThumbnail => 32.0,
+            Self::LargeList => 34.0,
+            Self::LargeThumbnail => 64.0,
+        }
+    }
+
+    pub(crate) fn list_width(self) -> Option<f32> {
+        match self {
+            Self::TextOnly | Self::SmallList => Some(198.0),
+            Self::LargeList => Some(247.0),
+            _ => None,
+        }
+    }
+}
+
 /// Transient rename target for a nested group. Kept separate from the legacy string-keyed rename
 /// state so arbitrary group labels remain lossless.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -49,6 +90,15 @@ pub struct PresetUi {
     pub brush_picker: BrushPickerView,
     /// Thumbnail size per panel (px; the minimum shows a list).
     pub sizes: BTreeMap<String, f32>,
+    /// Explicit shared display mode per asset picker. Missing values retain legacy sizing.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) display_modes: BTreeMap<String, PickerDisplayMode>,
+    /// Whether list modes use fixed-width, column-major wrapping. Missing preferences default to on.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) wrap_list: BTreeMap<String, bool>,
+    /// Compact browser instances whose initial group disclosure state has been seeded.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub(crate) initialized_browsers: BTreeSet<String>,
     /// Selected preset per panel (by name / pattern id).
     pub selected: BTreeMap<String, String>,
     /// Owning root group for selections made by the shared browser. Missing entries preserve
@@ -188,6 +238,17 @@ impl std::ops::DerefMut for PresetUi {
 }
 
 impl PresetUi {
+    pub(crate) fn display_mode(&self, panel: &str) -> PickerDisplayMode {
+        self.display_modes.get(panel).copied().unwrap_or_else(|| match self.sizes.get(panel).copied() {
+            Some(size) if size <= 20.5 => PickerDisplayMode::SmallList,
+            Some(size) if size >= 48.0 => PickerDisplayMode::LargeThumbnail,
+            _ => PickerDisplayMode::SmallThumbnail,
+        })
+    }
+    pub(crate) fn wrap_list_enabled(&self, panel: &str) -> bool {
+        self.display_mode(panel).is_list() && self.wrap_list.get(panel).copied().unwrap_or(true)
+    }
+
     pub(crate) fn browser_node_selected(&self, panel: &str, id: &crate::pickers::picker_browser_model::NodeId) -> bool {
         self.browser_selection.get(panel).is_some_and(|selection| selection.contains(id))
     }
@@ -897,6 +958,74 @@ mod tests {
         assert!(!state.selected_group_path.contains_key("panel"));
     }
 
+    #[test]
+    fn shared_picker_display_modes_use_the_exact_outer_dimensions_and_widths() {
+        use super::PickerDisplayMode as Mode;
+
+        assert_eq!(Mode::ALL.len(), 5);
+        assert_eq!(Mode::TextOnly.item_height(), 20.0);
+        assert_eq!(Mode::SmallThumbnail.item_height(), 32.0);
+        assert_eq!(Mode::LargeThumbnail.item_height(), 64.0);
+        assert_eq!(Mode::SmallList.item_height(), 20.0);
+        assert_eq!(Mode::LargeList.item_height(), 34.0);
+        assert_eq!(Mode::SmallList.list_width(), Some(198.0));
+        assert_eq!(Mode::LargeList.list_width(), Some(247.0));
+        assert_eq!(Mode::TextOnly.list_width(), Some(198.0));
+    }
+
+    #[test]
+    fn display_mode_migrates_legacy_size_preferences_without_losing_list_state() {
+        use super::PickerDisplayMode as Mode;
+
+        let mut state = super::PresetUi::default();
+        assert_eq!(state.display_mode("panel"), Mode::SmallThumbnail);
+        state.sizes.insert("panel".into(), 40.0);
+        assert_eq!(state.display_mode("panel"), Mode::SmallThumbnail);
+        state.sizes.insert("panel".into(), 64.0);
+        assert_eq!(state.display_mode("panel"), Mode::LargeThumbnail);
+        state.sizes.insert("panel".into(), 20.0);
+        assert_eq!(state.display_mode("panel"), Mode::SmallList);
+        state.display_modes.insert("panel".into(), Mode::LargeList);
+        assert_eq!(state.display_mode("panel"), Mode::LargeList);
+    }
+
+    #[test]
+    fn display_mode_and_wrap_preferences_round_trip_and_legacy_state_still_deserializes() {
+        use super::PickerDisplayMode as Mode;
+
+        let mut state = super::PresetUi::default();
+        state.display_modes.insert("panel".into(), Mode::LargeList);
+        state.wrap_list.insert("panel".into(), true);
+        state.initialized_browsers.insert("compact-panel".into());
+        let encoded = serde_json::to_value(&state).expect("picker preferences serialize");
+        let restored: super::PresetUi = serde_json::from_value(encoded).expect("picker preferences deserialize");
+        assert_eq!(restored.display_mode("panel"), Mode::LargeList);
+        assert!(restored.wrap_list_enabled("panel"));
+        assert!(restored.initialized_browsers.contains("compact-panel"));
+
+        let legacy: super::PresetUi = serde_json::from_value(serde_json::json!({"sizes": {"panel": 20.0}})).expect("older saved picker state remains readable");
+        assert_eq!(legacy.display_mode("panel"), Mode::SmallList);
+        assert!(legacy.wrap_list_enabled("panel"), "legacy list preferences inherit the enabled-by-default wrapping behaviour");
+    }
+
+    #[test]
+    fn wrap_list_is_available_for_every_list_mode_but_inactive_for_thumbnails() {
+        use super::PickerDisplayMode as Mode;
+
+        assert!(Mode::SmallList.is_list());
+        assert!(Mode::LargeList.is_list());
+        assert!(Mode::TextOnly.is_list());
+        assert!(!Mode::SmallThumbnail.is_list());
+        assert!(!Mode::LargeThumbnail.is_list());
+        let mut state = super::PresetUi::default();
+        state.wrap_list.insert("panel".into(), true);
+        state.display_modes.insert("panel".into(), Mode::SmallThumbnail);
+        assert!(!state.wrap_list_enabled("panel"), "stored wrapping has no effect outside list modes");
+        state.display_modes.insert("panel".into(), Mode::SmallList);
+        assert!(state.wrap_list_enabled("panel"));
+        state.display_modes.insert("panel".into(), Mode::TextOnly);
+        assert!(state.wrap_list_enabled("panel"));
+    }
     #[test]
     fn browser_multi_selection_toggles_nodes_and_shift_selects_the_visible_interval() {
         use crate::pickers::picker_browser_model::NodeId;

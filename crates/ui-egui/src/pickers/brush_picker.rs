@@ -1,15 +1,15 @@
 //! Photoshop's Brush Preset picker: the popup that the options-bar brush chip and a right-click on
 //! the canvas open (`paint_mouse`). It is the quick picker (Size, Hardness for round tips, a search
-//! field, the gear menu and the preset library in its groups); the full editor is the Brush
+//! field and the preset library in its groups); the full editor is the Brush
 //! Settings panel (F5), which the picker and the options bar open with one click (#258).
 //!
 //! The preset browser uses the brush-specific adapter over the shared asset browser, always as
 //! cards: a click picks a preset and keeps the picker open, a double-click picks it and closes the picker
 //! (#1031); drag to reorder, right-click to rename or delete. Each card is a 2 × 2 grid — tip at
 //! the top left, stroke preview at the top right and the name in the merged bottom row (or in the
-//! stroke's cell when only the tip and the name show) — and the gear's three boxes ([`body`]'s
-//! Brush Name/Brush Stroke/Brush Tip) hide its parts, at least one always on; the footer slider
-//! scales the cards. Presentation preferences live alongside the shared browser state in
+//! stroke's cell when only the tip and the name show) — and the Brush Settings panel menu's three
+//! Brush Name/Brush Stroke/Brush Tip toggles hide its parts, at least one always on; the footer
+//! slider scales the cards. Presentation preferences live alongside the shared browser state in
 //! `UiState::presets_ui`; search, expansion, selection and presentation share one persistence path.
 //!
 //! The picker edits a copy of the brush; the caller sends the size and hardness edits through
@@ -100,7 +100,7 @@ pub fn close(ui: &mut crate::state::UiState) {
 }
 
 /// Start the shared browser's in-place rename for this exact preset occurrence. Brush commands
-/// still address names, so the gear menu only offers this action when that name is unambiguous.
+/// still address names, so the brush picker's context menu only offers this action when that name is unambiguous.
 pub(crate) fn begin_rename(preset_ui: &mut crate::pickers::picker_state::PresetUi, preset: &BrushPreset) {
     preset_ui.renaming = Some(("brush-picker".to_string(), crate::pickers::brush_browser::preview_identity(preset), preset.name.clone()));
 }
@@ -154,7 +154,7 @@ pub(crate) fn named(resp: egui::Response, label: &str) -> egui::Response {
 }
 
 /// The picker's contents: Size, Hardness (round tips only: a sampled tip has none), a search
-/// field with the Brush Settings, New Preset and gear buttons, the preset list, and the footer
+/// field with the Brush Settings and New Preset buttons, the preset list, and the footer
 /// slider that scales the cards ([`scale_slider`]). Size and Hardness sit in a block flush with
 /// the left edge, at most [`HEAD_MAX_W`] wide, so a picker dragged wider doesn't stretch them.
 /// `current` is the selected preset's name (by identity, so edits don't deselect). `size` is the
@@ -176,9 +176,10 @@ pub fn body(
     // is closed, so reopening one has the room to show it.
     ui.set_width(size.x);
     ui.set_min_height(size.y);
+    ui.set_max_height(size.y);
     let top = ui.cursor().min.y;
     // These are brush-tool controls, not part of the shared picker shell. Keep them stacked above
-    // the shell so its menu/search/browser layout stays consistent with other pickers.
+    // the shell so its header/search/browser layout stays consistent with other pickers.
     ui.vertical(|ui| {
         ui.set_max_width(ui.available_width().min(HEAD_MAX_W));
         ui.horizontal(|ui| {
@@ -205,19 +206,19 @@ pub fn body(
             dismiss_popup(&hardness);
         }
     });
+    // The Size/Hardness block sits above the shared shell, so reserve its measured height from
+    // the shell's total budget. The shell subtracts its own header/search/footer; without this
+    // outer reservation the picker grows by the height of these brush-specific controls.
     let controls_h = (ui.cursor().min.y - top).max(0.0);
-    let mut menu = |ui: &mut egui::Ui| {
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            gear_menu(ui, current, presets, &mut preset_ui.borrow_mut(), &mut picks.borrow_mut());
-            let new_tip = "Create new brush preset from the current settings";
-            let settings_tip = "Brush Settings…  (F5): every option of this brush";
-            if named(icons::button(ui, "square-plus", 24.0, false, tl!(new_tip)), "New Brush Preset").clicked() {
-                picks.borrow_mut().push(Pick::NewPreset);
-            }
-            if named(icons::button(ui, "sliders-horizontal", 24.0, false, tl!(settings_tip)), "Brush Settings…").clicked() {
-                picks.borrow_mut().push(Pick::OpenSettings);
-            }
-        });
+    let mut header = |ui: &mut egui::Ui| {
+        let new_tip = "Create new brush preset from the current settings";
+        let settings_tip = "Brush Settings…  (F5): every option of this brush";
+        if named(icons::button(ui, "square-plus", 24.0, false, tl!(new_tip)), "New Brush Preset").clicked() {
+            picks.borrow_mut().push(Pick::NewPreset);
+        }
+        if named(icons::button(ui, "sliders-horizontal", 24.0, false, tl!(settings_tip)), "Brush Settings…").clicked() {
+            picks.borrow_mut().push(Pick::OpenSettings);
+        }
     };
     let mut search = |ui: &mut egui::Ui| {
         ui.horizontal(|ui| {
@@ -245,7 +246,7 @@ pub fn body(
         ui,
         (size.y - controls_h).max(0.0),
         crate::pickers::picker_shell::CustomShellOptions {
-            panel_menu: Some(&mut menu),
+            header: Some(&mut header),
             search: if show_search { Some(&mut search) } else { None },
             footer: Some((&mut footer, FOOTER_H)),
             max_total_height: Some((size.y - controls_h).max(0.0)),
@@ -280,9 +281,9 @@ fn scale_slider(ui: &mut egui::Ui, st: &mut BrushPickerView, container_width: f3
     });
 }
 
-/// Closes any open popup (the gear menu) as soon as `resp` is grabbed: a slider or grip drag never
-/// counts as a click, so the menu's [`egui::PopupCloseBehavior::CloseOnClickOutside`] alone leaves
-/// it up — and the picker's own interaction pulls its layer in front, sinking the menu behind it.
+/// Closes any open popup as soon as `resp` is grabbed: a slider or grip drag never counts as a
+/// click, so [`egui::PopupCloseBehavior::CloseOnClickOutside`] alone can leave an overlapping
+/// context menu open while the picker's own interaction pulls its layer in front.
 fn dismiss_popup(resp: &egui::Response) {
     if resp.is_pointer_button_down_on() {
         egui::Popup::close_all(&resp.ctx);
@@ -308,8 +309,8 @@ pub fn clamp_size(size: [f32; 2], screen: egui::Vec2) -> egui::Vec2 {
 pub fn resize_grip(ui: &mut egui::Ui, frame: egui::Rect, content: egui::Vec2) -> Option<egui::Vec2> {
     let t = Tokens::get(ui.ctx());
     let grip = egui::Rect::from_min_size(frame.right_bottom() - vec2(16.0, 16.0), vec2(16.0, 16.0));
-    // The gear menu can extend over the bottom-right corner. Give the grip its own top interaction
-    // layer so it remains draggable there and can dismiss that menu, rather than letting the popup
+    // A context menu can extend over the bottom-right corner. Give the grip its own top interaction
+    // layer so it remains draggable there and can dismiss that popup, rather than letting it
     // intercept the press.
     let layer = egui::LayerId::new(egui::Order::Tooltip, ui.id().with("brush-picker-resize-layer"));
     let grip_ui = ui.new_child(egui::UiBuilder::new().layer_id(layer).max_rect(grip));
@@ -333,68 +334,6 @@ pub fn resize_grip(ui: &mut egui::Ui, frame: egui::Rect, content: egui::Vec2) ->
         let start: egui::Vec2 = grip_ui.ctx().data_mut(|d| d.get_temp(start_id)).unwrap_or(content);
         (start + resp.total_drag_delta().unwrap_or_default()).clamp(min, max)
     })
-}
-
-/// The gear: Photoshop's picker menu. A new preset, rename or delete the current one, the list's
-/// view, and Import Brushes.
-fn gear_menu(ui: &mut egui::Ui, current: Option<&str>, presets: &[BrushPreset], preset_ui: &mut crate::pickers::picker_state::PresetUi, picks: &mut Vec<Pick>) {
-    let gear = named(crate::pickers::picker_shell::picker_menu_button(ui, "Brush Preset Options"), "Brush Preset Options");
-    // The menu hangs 30 pt right of the gear, off the button's own edge; the align fallbacks still
-    // keep it on screen near the window's edge.
-    let anchor = match egui::PopupAnchor::from(&gear) {
-        egui::PopupAnchor::ParentRect(rect) => egui::PopupAnchor::ParentRect(rect.translate(vec2(30.0, 0.0))),
-        other => other,
-    };
-    egui::Popup::menu(&gear).anchor(anchor).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
-        if ui.button(tl!("New Brush Preset…")).clicked() {
-            picks.push(Pick::NewPreset);
-            ui.close();
-        }
-        ui.separator();
-        let ambiguous = current.is_some_and(|name| crate::pickers::brush_browser::is_ambiguous_preset_name(presets, name));
-        let current = current.filter(|_| !ambiguous).and_then(|name| presets.iter().find(|preset| preset.name.eq_ignore_ascii_case(name)));
-        let rename = ui.add_enabled(current.is_some(), egui::Button::new(tl!("Rename Brush…")));
-        if ambiguous {
-            rename.clone().on_hover_text("Rename unavailable because multiple brushes share this name");
-        }
-        if rename.clicked()
-            && let Some(preset) = current
-        {
-            begin_rename(preset_ui, preset);
-            ui.close();
-        }
-        let delete = ui.add_enabled(current.is_some(), egui::Button::new(tl!("Delete Brush")));
-        if ambiguous {
-            delete.clone().on_hover_text("Delete unavailable because multiple brushes share this name");
-        }
-        if delete.clicked()
-            && let Some(preset) = current
-        {
-            picks.push(Pick::List(Action::Delete(preset.name.clone())));
-            ui.close();
-        }
-        ui.separator();
-        // What a preset's card shows: a checkbox per part. At least one stays on — clicking the
-        // last checked box does nothing, since an empty card would show no brush at all.
-        let on = [preset_ui.brush_picker.show_name, preset_ui.brush_picker.show_stroke, preset_ui.brush_picker.show_tip].into_iter().filter(|b| *b).count();
-        for (flag, label) in [
-            (&mut preset_ui.brush_picker.show_name, tl!("Brush Name")),
-            (&mut preset_ui.brush_picker.show_stroke, tl!("Brush Stroke")),
-            (&mut preset_ui.brush_picker.show_tip, tl!("Brush Tip")),
-        ] {
-            let was = *flag;
-            if ui.checkbox(flag, label).changed() && was && on == 1 {
-                *flag = true;
-            }
-        }
-        ui.separator();
-        crate::pickers::picker_shell::search_toggle(ui, preset_ui, "brush-picker");
-        ui.separator();
-        if ui.button(tl!("Import Brushes…")).clicked() {
-            picks.push(Pick::Import);
-            ui.close();
-        }
-    });
 }
 
 #[cfg(test)]

@@ -605,9 +605,13 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, shown: &[Group], mut bod
                 crate::layer_row_ui::panel_menu(app, ui);
                 ui.separator();
             }
-            if tabs.get(sel) == Some(&"Swatches") {
-                crate::pickers::swatches_ui::panel_menu(app, ui);
-                ui.separator();
+            if let Some(label) = tabs.get(sel)
+                && let Some(panel) = crate::panel_docking::normalize(label)
+            {
+                if crate::panel_docking::shared_picker_menu(app, ui, panel) {
+                    // The legacy docking actions remain a separate, docking-owned section.
+                    ui.separator();
+                }
             }
             if tabs.get(sel) == Some(&"Brush Settings") {
                 crate::brush_panel::panel_menu(app, ui);

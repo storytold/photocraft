@@ -527,14 +527,56 @@ fn brush_picker_cards_floor_their_height_but_not_their_width() {
     }
 }
 
-/// The gear's menu goes the moment a slider or the resize grip is grabbed. A menu closes on a
+#[test]
+fn brush_picker_area_stays_at_its_requested_height() {
+    for viewport_height in [900.0, 560.0] {
+        let mut h = Harness::builder().with_size(vec2(1440.0, viewport_height)).with_max_steps(64).build_eframe(|cc| {
+            PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+            PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default())
+        });
+        h.state_mut().run("file.new", serde_json::json!({"width": 400, "height": 300})).unwrap();
+        h.state_mut().ui.tool = crate::state::Tool::Brush;
+        h.state_mut().ui.brush_picker = Some([300.0, 120.0]);
+        h.run_steps(12);
+
+        let rect = h.ctx.memory(|memory| memory.area_rect(crate::pickers::brush_picker::picker_id())).expect("the picker is shown");
+        assert!(
+            rect.height() <= 460.0,
+            "the 420 pt picker must stay near its requested height at {viewport_height} pt, not expand to the available screen height: {rect:?}"
+        );
+        assert!(rect.bottom() <= viewport_height, "the picker stays on screen at {viewport_height} pt: {rect:?}");
+
+        // The controls above the shell, its header/search row, and the footer slider must all stay
+        // inside the same bounded area; this catches a layout that clips the outer frame but lets
+        // one of its rows escape.
+        for label in ["Size", "Hardness", "New Brush Preset", "Brush Settings…", "Brush Preset Options", "Search Brushes"] {
+            let control = h.get_by_label(label).rect();
+            assert!(
+                rect.contains(control.min) && rect.contains(control.max),
+                "{label} stays inside the picker at {viewport_height} pt: {control:?} outside {rect:?}"
+            );
+        }
+        let mut sliders: Vec<_> = h.query_all_by_role(Role::Slider).map(|node| node.rect()).collect();
+        sliders.sort_by(|a, b| a.top().total_cmp(&b.top()));
+        assert!(sliders.len() >= 3, "Size, Hardness and footer scale sliders are present: {sliders:?}");
+        assert!(
+            sliders.iter().all(|slider| rect.contains(slider.min) && rect.contains(slider.max)),
+            "all sliders stay inside the picker: {sliders:?} outside {rect:?}"
+        );
+    }
+}
+
+/// The picker menu goes the moment a slider or the resize grip is grabbed. A menu closes on a
 /// click, and a drag never becomes one, so the menu stayed up — and the picker's own interaction
 /// pulled the picker over it. Each press is held down (no release yet, nothing classified) while
 /// the menu is checked, so only the grab itself can have closed it.
 #[test]
 fn brush_picker_menu_closes_when_a_slider_or_the_grip_is_grabbed() {
-    fn click_gear(h: &Harness<'_, PhotocraftApp>) {
-        h.query_all_by_role(Role::Button).find(|n| n.accesskit_node().label().as_deref() == Some("Brush Preset Options")).expect("the gear button").click();
+    fn click_menu(h: &Harness<'_, PhotocraftApp>) {
+        h.query_all_by_role(Role::Button)
+            .find(|n| n.accesskit_node().label().as_deref() == Some("Brush Preset Options"))
+            .expect("the picker menu button")
+            .click();
     }
     let mut h = Harness::builder().with_size(vec2(1440.0, 900.0)).with_max_steps(64).build_eframe(|cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
@@ -546,9 +588,13 @@ fn brush_picker_menu_closes_when_a_slider_or_the_grip_is_grabbed() {
     h.run_steps(8);
     let picker = h.ctx.memory(|m| m.area_rect(egui::Id::new("canvas-brush-picker"))).expect("the picker is shown");
     assert!(!egui::Popup::is_any_open(&h.ctx), "nothing open to start with");
-    click_gear(&h);
+    click_menu(&h);
     h.run_steps(2);
-    assert!(egui::Popup::is_any_open(&h.ctx), "the gear opens its menu");
+    assert!(egui::Popup::is_any_open(&h.ctx), "the picker trigger opens its menu");
+    let display = h.get_by_label("Text Only").rect();
+    let search = h.get_by_label("Show Search Bar").rect();
+    let new_preset = h.get_by_label("New Brush Preset…").rect();
+    assert!(display.bottom() <= search.top() && search.bottom() <= new_preset.top(), "shared picker controls precede the Brush Picker extension");
     // The Size slider, under the row that holds the "Size" label: the row stands as tall as its
     // 24 pt value field with the label centred in it, so the slider's middle sits 12 pt below the
     // label's, plus the style's spacing and half the slider's 18 pt — 27 pt at the 6 pt spacing.
@@ -559,9 +605,9 @@ fn brush_picker_menu_closes_when_a_slider_or_the_grip_is_grabbed() {
     assert!(!egui::Popup::is_any_open(&h.ctx), "grabbing the Size slider dismisses the menu");
     h.drop_at(slider);
     h.run_steps(2);
-    click_gear(&h);
+    click_menu(&h);
     h.run_steps(2);
-    assert!(egui::Popup::is_any_open(&h.ctx), "the gear opens its menu again");
+    assert!(egui::Popup::is_any_open(&h.ctx), "the picker trigger opens its menu again");
     // Read the frame after the menu has opened: egui can expand the containing area while the
     // popup is laid out, so the grip must be targeted from the current frame, not its old rect.
     let picker = h.ctx.memory(|m| m.area_rect(egui::Id::new("canvas-brush-picker"))).expect("the picker is shown");
@@ -629,7 +675,7 @@ fn the_brushes_tab_grid_is_centred_past_its_indent() {
     );
     PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
     h.run_steps(6);
-    rows_are_centred(&h, PANEL_LIST.indent, 2);
+    rows_are_centred(&h, crate::pickers::asset_browser_groups::row_indent(1), 2);
 }
 
 /// #4454: a card's size number sat under the tip thumbnail of any medium or large brush (the

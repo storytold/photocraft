@@ -1,24 +1,106 @@
 //! Shared layout for preset pickers, independent of the asset-specific browser and commands.
 
-pub(crate) use crate::pickers::asset_browser::MIN_THUMB;
 use crate::pickers::asset_browser::{BrowserAction, BrowserAdapter, browser};
 use crate::pickers::picker_footer::FooterOptions;
-use crate::pickers::picker_state::PresetUi;
+use crate::pickers::picker_state::{PickerDisplayMode, PresetUi};
 
 const FOOTER_GUESS: f32 = 32.0;
 type UiCallback<'a> = &'a mut dyn FnMut(&mut egui::Ui);
-type PanelOptionsCallback<'a> = &'a mut dyn FnMut(&mut egui::Ui, &mut PresetUi, &str);
+pub(crate) type MenuContentsCallback<'a> = &'a mut dyn FnMut(&mut egui::Ui, &mut PresetUi, &str);
+/// Shared menu points offered by an asset-picker shell. Consumers choose capabilities, never
+/// ordering or separators; domain actions are appended through the final extension point.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct PickerMenuOptions {
+    pub(crate) display: bool,
+    pub(crate) search_visibility: bool,
+}
 
-/// The shared preset-picker menu button. Keep the glyph consistent across asset pickers.
-pub(crate) fn picker_menu_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
-    crate::icons::button(ui, "settings", 24.0, false, tl!(label))
+impl PickerMenuOptions {
+    pub(crate) fn for_panel(panel: &str) -> Self {
+        Self { display: true, search_visibility: matches!(panel, "gradients" | "patterns" | "swatches" | "brush-picker") }
+    }
+}
+
+#[cfg(test)]
+fn picker_menu_popup(ui: &mut egui::Ui, label: &str, anchor_offset: egui::Vec2, contents: impl FnOnce(&mut egui::Ui)) {
+    let button = crate::widgets::panel_menu_button(ui, label);
+    let anchor = match egui::PopupAnchor::from(&button) {
+        egui::PopupAnchor::ParentRect(rect) if anchor_offset != egui::Vec2::ZERO => egui::PopupAnchor::ParentRect(rect.translate(anchor_offset)),
+        other => other,
+    };
+    egui::Popup::menu(&button).anchor(anchor).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+        crate::widgets::style_spectrum_popup_menu(ui);
+        contents(ui);
+    });
+}
+
+/// Render the shared display controls without owning section boundaries; the composer owns them.
+fn display_mode_items(ui: &mut egui::Ui, st: &mut PresetUi, panel: &str) {
+    let selected = st.display_mode(panel);
+    for mode in PickerDisplayMode::ALL {
+        let label = match mode {
+            PickerDisplayMode::TextOnly => tl!("Text Only"),
+            PickerDisplayMode::SmallThumbnail => tl!("Small Thumbnail"),
+            PickerDisplayMode::LargeThumbnail => tl!("Large Thumbnail"),
+            PickerDisplayMode::SmallList => tl!("Small List"),
+            PickerDisplayMode::LargeList => tl!("Large List"),
+        };
+        if menu_check_item(ui, selected == mode, label, true).clicked() {
+            st.display_modes.insert(panel.to_owned(), mode);
+        }
+    }
+}
+
+fn wrap_list_item(ui: &mut egui::Ui, st: &mut PresetUi, panel: &str) {
+    let selected = st.display_mode(panel);
+    let list_mode = selected.is_list();
+    let wrap = st.wrap_list.get(panel).copied().unwrap_or(true);
+    if menu_check_item(ui, wrap, tl!("Wrap List"), list_mode).clicked() && list_mode {
+        st.wrap_list.insert(panel.to_owned(), !wrap);
+    }
+}
+
+/// Render a checked menu row with the same fixed checkmark gutter as the application menu bar.
+fn menu_check_item(ui: &mut egui::Ui, checked: bool, label: &str, enabled: bool) -> egui::Response {
+    let text = crate::menu_keys::menu_row_text(ui, checked, label, None);
+    let enabled = enabled && ui.is_enabled();
+    let response = ui.add_enabled(enabled, egui::Button::new(text));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
+    response
 }
 
 /// Common visibility control for the standard pickers' search row.
-pub(crate) fn search_toggle(ui: &mut egui::Ui, st: &mut PresetUi, panel: &str) {
+fn search_toggle(ui: &mut egui::Ui, st: &mut PresetUi, panel: &str) {
     let visible = st.search_visible.entry(panel.to_string()).or_insert(true);
     if ui.checkbox(visible, tl!("Show Search Bar")).changed() && !*visible {
         st.search.remove(panel);
+    }
+}
+
+/// Compose a preset picker's menu. The shell owns shared points, their order, and section boundary;
+/// consumers contribute only their optional domain-specific entries.
+pub(crate) fn picker_menu_contents(ui: &mut egui::Ui, state: &mut PresetUi, panel: &str, options: PickerMenuOptions, extra: Option<MenuContentsCallback<'_>>) {
+    let mut has_shared_points = false;
+    if options.display {
+        display_mode_items(ui, state, panel);
+        ui.separator();
+        wrap_list_item(ui, state, panel);
+        has_shared_points = true;
+    }
+    if options.search_visibility {
+        if has_shared_points {
+            ui.separator();
+        }
+        search_toggle(ui, state, panel);
+        has_shared_points = true;
+    }
+    // One shell-owned boundary separates shared controls from domain extensions. The presence of
+    // an extension is the source of truth; callers never coordinate a second separator flag.
+    if let Some(extra) = extra {
+        if has_shared_points {
+            ui.separator();
+        }
+        extra(ui, state, panel);
     }
 }
 
@@ -28,10 +110,6 @@ pub(crate) fn search_toggle(ui: &mut egui::Ui, st: &mut PresetUi, panel: &str) {
 pub(crate) struct ShellOptions<'a> {
     /// Optional consumer-owned header content above the shared picker controls.
     pub(crate) header: Option<UiCallback<'a>>,
-    /// Optional consumer-owned menu button or settings controls.
-    pub(crate) panel_menu: Option<UiCallback<'a>>,
-    /// Standard-panel menu that can update the panel's persisted search visibility.
-    pub(crate) panel_options: Option<PanelOptionsCallback<'a>>,
     /// Optional search control; the consumer owns its query state and filtering.
     pub(crate) search: Option<UiCallback<'a>>,
     /// Optional recent-items strip rendered above the browser.
@@ -48,8 +126,6 @@ pub(crate) type CustomFooter<'a> = (UiCallback<'a>, f32);
 pub(crate) struct CustomShellOptions<'a> {
     /// Optional consumer-owned header content above the shared picker controls.
     pub(crate) header: Option<UiCallback<'a>>,
-    /// Optional consumer-owned menu button or settings controls.
-    pub(crate) panel_menu: Option<UiCallback<'a>>,
     /// Optional search control; the consumer owns its query state and filtering.
     pub(crate) search: Option<UiCallback<'a>>,
     /// Optional recent-items strip rendered above the browser.
@@ -64,7 +140,7 @@ pub(crate) struct CustomShellOptions<'a> {
 /// Compose the standard controls, generic browser viewport, and optional standard footer.
 pub(crate) fn picker_shell(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut BrowserAdapter<'_>, mut shell: ShellOptions<'_>) -> Vec<BrowserAction> {
     let panel = adapter.panel.to_string();
-    shell_controls(ui, &mut shell, st, &panel);
+    shell_controls(ui, &mut shell);
     if matches!(panel.as_str(), "gradients" | "swatches" | "patterns") && st.search_visible.get(&panel).copied().unwrap_or(true) {
         let query = st.search.entry(panel.clone()).or_default();
         ui.add(egui::TextEdit::singleline(query).desired_width(ui.available_width()).hint_text(tl!("Search")));
@@ -125,14 +201,9 @@ pub(crate) fn picker_shell_custom<R>(
     result
 }
 
-fn shell_controls(ui: &mut egui::Ui, shell: &mut ShellOptions<'_>, st: &mut PresetUi, panel: &str) {
+fn shell_controls(ui: &mut egui::Ui, shell: &mut ShellOptions<'_>) {
     if let Some(header) = shell.header.as_deref_mut() {
         ui.horizontal(|ui| header(ui));
-    }
-    if let Some(menu) = shell.panel_options.as_deref_mut() {
-        ui.horizontal(|ui| menu(ui, st, panel));
-    } else if let Some(menu) = shell.panel_menu.as_deref_mut() {
-        ui.horizontal(|ui| menu(ui));
     }
     if let Some(search) = shell.search.as_deref_mut() {
         search(ui);
@@ -146,13 +217,178 @@ fn shell_controls_custom(ui: &mut egui::Ui, shell: &mut CustomShellOptions<'_>) 
     if let Some(header) = shell.header.as_deref_mut() {
         ui.horizontal(|ui| header(ui));
     }
-    if let Some(menu) = shell.panel_menu.as_deref_mut() {
-        ui.horizontal(|ui| menu(ui));
-    }
     if let Some(search) = shell.search.as_deref_mut() {
         search(ui);
     }
     if let Some(recents) = shell.recents.as_deref_mut() {
         recents(ui);
+    }
+}
+
+#[cfg(test)]
+mod display_menu_tests {
+    use super::{PickerMenuOptions, picker_menu_contents, picker_menu_popup};
+    use crate::pickers::picker_state::PresetUi;
+    use egui::vec2;
+    use egui_kittest::{
+        Harness,
+        kittest::{NodeT, Queryable},
+    };
+
+    #[test]
+    fn panel_menu_trigger_exposes_all_five_display_modes_and_wrap_list() {
+        assert!(crate::icons::exists("align-justify") && crate::icons::exists("ellipsis"), "the shared trigger uses each theme's panel-menu glyph");
+        let mut harness = Harness::builder().with_size(vec2(420.0, 260.0)).build_ui_state(
+            |ui, state: &mut PresetUi| {
+                picker_menu_popup(ui, "Panel menu", egui::Vec2::ZERO, |ui| {
+                    picker_menu_contents(ui, state, "test-picker", PickerMenuOptions::for_panel("test-picker"), None);
+                });
+            },
+            PresetUi::default(),
+        );
+        crate::PhotocraftApp::setup_context(&harness.ctx, crate::theme::ThemeKind::ProMedium);
+        harness.run_steps(3);
+        assert_eq!(harness.get_by_label("Panel menu").rect().size(), vec2(20.0, 20.0), "the picker reuses the standard panel-menu hit area");
+        harness.get_by_label("Panel menu").click();
+        harness.run_steps(2);
+
+        let modes = ["Text Only", "Small Thumbnail", "Large Thumbnail", "Small List", "Large List"];
+        let mut previous_bottom = None;
+        for label in modes {
+            let rect = harness.get_by_label(label).rect();
+            if let Some(bottom) = previous_bottom {
+                assert!(rect.top() >= bottom, "display modes must appear together in the requested order");
+            }
+            previous_bottom = Some(rect.bottom());
+        }
+        let wrap_rect = harness.get_by_label("Wrap List").rect();
+        assert!(wrap_rect.top() > previous_bottom.unwrap() + 4.0, "Wrap List must follow a menu separator after the display modes");
+    }
+
+    #[test]
+    fn standard_picker_shell_does_not_render_a_picker_local_menu_trigger() {
+        use super::{ShellOptions, shell_controls};
+
+        let mut harness = Harness::builder()
+            .with_size(vec2(420.0, 260.0))
+            .build_ui_state(|ui, _state: &mut PresetUi| shell_controls(ui, &mut ShellOptions::default()), PresetUi::default());
+        crate::PhotocraftApp::setup_context(&harness.ctx, crate::theme::ThemeKind::ProMedium);
+        harness.run_steps(2);
+        assert!(harness.query_by_label("Panel menu").is_none(), "the containing panel owns the only menu trigger");
+    }
+
+    #[test]
+    fn shared_picker_menu_exposes_search_visibility_for_searchable_panels() {
+        let mut harness = Harness::builder().with_size(vec2(420.0, 260.0)).build_ui_state(
+            |ui, state: &mut PresetUi| {
+                picker_menu_popup(ui, "Panel menu", egui::Vec2::ZERO, |ui| {
+                    picker_menu_contents(ui, state, "gradients", PickerMenuOptions::for_panel("gradients"), None);
+                });
+            },
+            PresetUi::default(),
+        );
+        crate::PhotocraftApp::setup_context(&harness.ctx, crate::theme::ThemeKind::ProMedium);
+        harness.run_steps(2);
+        harness.get_by_label("Panel menu").click();
+        harness.run_steps(2);
+        harness.get_by_label("Show Search Bar").click();
+        harness.run_steps(2);
+        assert_eq!(harness.state().search_visible.get("gradients"), Some(&false));
+    }
+
+    #[test]
+    fn shared_menu_orders_shell_points_before_adapter_extension() {
+        let mut harness = Harness::builder().with_size(vec2(420.0, 320.0)).build_ui_state(
+            |ui, state: &mut PresetUi| {
+                picker_menu_popup(ui, "Panel menu", egui::Vec2::ZERO, |ui| {
+                    let mut extension = |ui: &mut egui::Ui, _state: &mut PresetUi, _panel: &str| {
+                        let _ = ui.button("Adapter action");
+                    };
+                    picker_menu_contents(ui, state, "gradients", PickerMenuOptions::for_panel("gradients"), Some(&mut extension));
+                });
+            },
+            PresetUi::default(),
+        );
+        crate::PhotocraftApp::setup_context(&harness.ctx, crate::theme::ThemeKind::ProMedium);
+        harness.run_steps(2);
+        harness.get_by_label("Panel menu").click();
+        harness.run_steps(2);
+        let display = harness.get_by_label("Text Only").rect();
+        let search = harness.get_by_label("Show Search Bar").rect();
+        let adapter = harness.get_by_label("Adapter action").rect();
+        assert!(display.bottom() <= search.top(), "display controls precede search visibility");
+        assert!(search.bottom() <= adapter.top(), "the shell's extension point follows shared controls");
+    }
+
+    #[test]
+    fn panels_without_a_search_row_do_not_receive_a_search_menu_point() {
+        let mut harness = Harness::builder().with_size(vec2(420.0, 260.0)).build_ui_state(
+            |ui, state: &mut PresetUi| {
+                picker_menu_popup(ui, "Panel menu", egui::Vec2::ZERO, |ui| {
+                    picker_menu_contents(ui, state, "styles", PickerMenuOptions::for_panel("styles"), None);
+                });
+            },
+            PresetUi::default(),
+        );
+        crate::PhotocraftApp::setup_context(&harness.ctx, crate::theme::ThemeKind::ProMedium);
+        harness.run_steps(2);
+        harness.get_by_label("Panel menu").click();
+        harness.run_steps(2);
+        assert!(harness.query_by_label("Show Search Bar").is_none());
+        assert!(harness.query_by_label("Text Only").is_some());
+    }
+
+    #[test]
+    fn wrap_list_is_ineffective_and_not_mutated_outside_list_modes() {
+        use crate::pickers::picker_state::PickerDisplayMode as Mode;
+
+        for mode in [Mode::SmallThumbnail, Mode::LargeThumbnail] {
+            let mut state = PresetUi::default();
+            state.display_modes.insert("test-picker".into(), mode);
+            state.wrap_list.insert("test-picker".into(), true);
+            let mut harness = Harness::builder().with_size(vec2(420.0, 260.0)).build_ui_state(
+                |ui, state: &mut PresetUi| {
+                    picker_menu_popup(ui, "Panel menu", egui::Vec2::ZERO, |ui| {
+                        picker_menu_contents(ui, state, "test-picker", PickerMenuOptions::for_panel("test-picker"), None);
+                    });
+                },
+                state,
+            );
+            crate::PhotocraftApp::setup_context(&harness.ctx, crate::theme::ThemeKind::ProMedium);
+            harness.run_steps(2);
+            harness.get_by_label("Panel menu").click();
+            harness.run_steps(2);
+            assert_eq!(harness.state().wrap_list.get("test-picker"), Some(&true));
+            assert!(!harness.state().wrap_list_enabled("test-picker"));
+            assert!(harness.get_by_label("Wrap List").accesskit_node().is_disabled(), "Wrap List must be disabled for {mode:?}");
+            let _ = harness.get_by_label("Wrap List").rect();
+        }
+    }
+
+    #[test]
+    fn wrap_list_menu_checkbox_toggles_in_all_three_list_modes() {
+        use crate::pickers::picker_state::PickerDisplayMode as Mode;
+
+        for mode in [Mode::TextOnly, Mode::SmallList, Mode::LargeList] {
+            let mut state = PresetUi::default();
+            state.display_modes.insert("test-picker".into(), mode);
+            let mut harness = Harness::builder().with_size(vec2(420.0, 260.0)).build_ui_state(
+                |ui, state: &mut PresetUi| {
+                    picker_menu_popup(ui, "Panel menu", egui::Vec2::ZERO, |ui| {
+                        picker_menu_contents(ui, state, "test-picker", PickerMenuOptions::for_panel("test-picker"), None);
+                    });
+                },
+                state,
+            );
+            crate::PhotocraftApp::setup_context(&harness.ctx, crate::theme::ThemeKind::ProMedium);
+            harness.run_steps(2);
+            harness.get_by_label("Panel menu").click();
+            harness.run_steps(2);
+            assert!(!harness.get_by_label("Wrap List").accesskit_node().is_disabled(), "Wrap List must be enabled for {mode:?}");
+            assert!(harness.state().wrap_list_enabled("test-picker"), "Wrap List is enabled by default for {mode:?}");
+            harness.get_by_label("Wrap List").click();
+            harness.run_steps(2);
+            assert!(!harness.state().wrap_list_enabled("test-picker"), "Wrap List can be turned off for {mode:?}");
+        }
     }
 }

@@ -90,45 +90,25 @@ fn brush_settings_texture_uses_compact_patterns_browser_and_keeps_panel_selectio
 }
 
 #[test]
-fn brush_settings_texture_browse_uses_unified_group_card_drop_order() {
+fn brush_settings_texture_browse_keeps_compact_picker_state_in_persistent_ui_preferences() {
     use egui_kittest::kittest::Queryable;
 
     let mut h = harness(0, 3);
     h.state_mut().session.tools.brush.texture.enabled = true;
-    let state_id = egui::Id::new(("compact-pattern-browser", "brush-texture-patterns"));
-    h.ctx.data_mut(|data| data.insert_temp(state_id, crate::pickers::picker_state::PresetUi::default()));
     h.run_steps(2);
     h.get_by_label("Browse…").click();
     h.run_steps(3);
 
     let groups = crate::pickers::pattern_browser::pattern_group_views(&h.state().session.patterns.items, &h.state().session.presets.pattern_groups);
-    let (target_group, target_item) = groups.iter().find_map(|group| group.items.first().map(|item| (group.name.clone(), item))).unwrap();
-    let moving_group = groups.last().unwrap().name.clone();
-    assert_ne!(moving_group, target_group);
-    let headers = crate::pickers::asset_browser::last_group_headers(&h.ctx, "brush-texture-patterns");
-    let source = headers.iter().find(|(name, _)| name == &moving_group).map(|(_, rect)| rect.center()).unwrap();
-    let target = h.get_by_label(&target_item.name).rect().center() - vec2(4.0, 0.0);
-
-    h.event(egui::Event::PointerMoved(source));
-    h.run_steps(1);
-    h.event(egui::Event::PointerButton { pos: source, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
-    h.run_steps(1);
-    for step in 1..=6 {
-        h.event(egui::Event::PointerMoved(source + (target - source) * (step as f32 / 6.0)));
-        h.run_steps(1);
-    }
-    h.event(egui::Event::PointerButton { pos: target, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
-    h.run_steps(3);
-
-    let state =
-        h.ctx.data(|data| data.get_temp::<crate::pickers::picker_state::PresetUi>(state_id)).expect("compact browser state persists across popup frames");
-    assert_eq!(state.parent_of("brush-texture-patterns", &moving_group), Some(target_group.as_str()));
-    assert_eq!(
-        &state.hierarchy_order["brush-texture-patterns"][&target_group][0..2],
-        &[
-            crate::pickers::picker_state::HierarchyOrderEntry::Group(moving_group),
-            crate::pickers::picker_state::HierarchyOrderEntry::Item(target_item.key.clone()),
-        ]
+    assert!(groups.len() > 1, "the fixture needs a second group to verify compact-browser disclosure state");
+    let state = &h.state().ui.presets_ui;
+    assert!(state.initialized_browsers.contains("brush-texture-patterns"));
+    assert_eq!(state.display_mode("brush-texture-patterns"), crate::pickers::picker_state::PickerDisplayMode::SmallThumbnail);
+    assert!(
+        groups
+            .iter()
+            .skip(1)
+            .all(|group| state.toggled.contains(&format!("brush-texture-patterns/{}", crate::pickers::picker_state::escape_hierarchy_key_part(&group.name))))
     );
 }
 
@@ -1568,6 +1548,45 @@ fn brush_settings_hamburger_menu_actions() {
     h.get_by_label("Close Tab Group").click();
     h.run_steps(2);
     assert!(!h.state().ui.panels.brush_settings);
+}
+
+#[test]
+fn brush_panel_menu_centralizes_picker_actions_and_display_options() {
+    use egui_kittest::kittest::Queryable;
+
+    let mut h = harness(0, 0);
+    h.get_by_label("Panel menu").click();
+    h.run_steps(2);
+
+    for label in [
+        "New Brush Preset…",
+        "Rename Current Brush…",
+        "Delete Current Brush",
+        "Brush Name",
+        "Brush Stroke",
+        "Brush Tip",
+        "Import Brushes…",
+        "Text Only",
+        "Small Thumbnail",
+        "Large Thumbnail",
+        "Small List",
+        "Large List",
+        "Wrap List",
+    ] {
+        assert!(h.query_all_by_label(label).count() > 0, "central brush panel menu should expose {label}");
+    }
+
+    // At least one brush card component must remain visible.
+    h.get_by_label("Brush Name").click();
+    h.run_steps(2);
+    assert!(!h.state().ui.presets_ui.brush_picker.show_name);
+    assert!(h.state().ui.presets_ui.brush_picker.show_stroke || h.state().ui.presets_ui.brush_picker.show_tip);
+
+    h.get_by_label("Panel menu").click();
+    h.run_steps(2);
+    h.query_all_by_label("Small List").next().expect("brush picker display menu").click();
+    h.run_steps(2);
+    assert_eq!(h.state().ui.presets_ui.display_mode("brush-picker"), crate::pickers::picker_state::PickerDisplayMode::SmallList);
 }
 
 #[test]

@@ -224,7 +224,7 @@ fn pro_panel(
 }
 
 /// The panel menu button (hamburger in Pro, ellipsis in Studio), matching the dock and cards.
-pub fn panel_menu_button(ui: &mut Ui) -> Response {
+pub fn panel_menu_button(ui: &mut Ui, label: &str) -> Response {
     let t = Tokens::get(ui.ctx());
     let size = vec2(20.0, 20.0);
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
@@ -234,7 +234,7 @@ pub fn panel_menu_button(ui: &mut Ui) -> Response {
     } else {
         crate::icons::paint(ui, rect, "ellipsis", 14.0, tint);
     }
-    let tip = tl!("Panel menu");
+    let tip = tl!(label);
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tip));
     resp.on_hover_text(tip)
 }

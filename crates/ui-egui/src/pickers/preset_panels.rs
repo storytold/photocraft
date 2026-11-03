@@ -134,8 +134,6 @@ pub fn styles_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 center_grid: false,
                 all_groups_open: false,
                 compact_context_menus: false,
-                item_size: None,
-                list_item_height: None,
                 domain_hierarchy_actions: false,
                 root_item_group: None,
             },
@@ -214,8 +212,6 @@ pub fn shapes_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 center_grid: false,
                 all_groups_open: false,
                 compact_context_menus: false,
-                item_size: None,
-                list_item_height: None,
                 domain_hierarchy_actions: false,
                 root_item_group: None,
             },
@@ -874,8 +870,6 @@ mod tests {
                 center_grid: false,
                 all_groups_open: false,
                 compact_context_menus: false,
-                item_size: None,
-                list_item_height: None,
                 domain_hierarchy_actions: false,
                 root_item_group: None,
             },
@@ -919,8 +913,6 @@ mod tests {
                 center_grid: false,
                 all_groups_open: false,
                 compact_context_menus: false,
-                item_size: None,
-                list_item_height: None,
                 domain_hierarchy_actions: false,
                 root_item_group: None,
             },
@@ -1000,16 +992,10 @@ mod tests {
             items: vec![ItemView { key: "only".into(), name: "Only item".into(), group_path: Vec::new() }],
         }];
         let mut st = PresetUi::default();
-        let menu_calls = Rc::new(Cell::new(0));
         let search_calls = Rc::new(Cell::new(0));
         let recent_calls = Rc::new(Cell::new(0));
-        let menu_count = Rc::clone(&menu_calls);
         let search_count = Rc::clone(&search_calls);
         let recent_count = Rc::clone(&recent_calls);
-        let mut menu = move |ui: &mut egui::Ui| {
-            menu_count.set(menu_count.get() + 1);
-            ui.label("Panel menu");
-        };
         let mut search = move |ui: &mut egui::Ui| {
             search_count.set(search_count.get() + 1);
             ui.label("Search");
@@ -1029,8 +1015,6 @@ mod tests {
                 center_grid: false,
                 all_groups_open: false,
                 compact_context_menus: false,
-                item_size: None,
-                list_item_height: None,
                 domain_hierarchy_actions: false,
                 root_item_group: None,
             },
@@ -1061,7 +1045,7 @@ mod tests {
                     ui,
                     &mut st,
                     &mut adapter,
-                    ShellOptions { panel_menu: Some(&mut menu), search: Some(&mut search), recents: Some(&mut recents), footer: None, ..Default::default() },
+                    ShellOptions { search: Some(&mut search), recents: Some(&mut recents), footer: None, ..Default::default() },
                 );
                 captured_events.borrow_mut().extend(emitted);
             },
@@ -1069,7 +1053,7 @@ mod tests {
         );
         PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
         h.run_steps(3);
-        assert!(menu_calls.get() > 0 && search_calls.get() > 0 && recent_calls.get() > 0, "enabled shell slots are rendered");
+        assert!(search_calls.get() > 0 && recent_calls.get() > 0, "enabled shell controls are rendered");
         let rect = last_browser_rect(&h.ctx, "compact-library").expect("browser viewport is recorded without a footer");
         assert!(rect.height() > 200.0, "without a footer, the browser expands into the remaining panel space: {rect:?}");
         h.get_by_label("Only item").click();
@@ -1130,21 +1114,21 @@ mod tests {
         let first = groups.iter().find_map(|g| g.items.first()).expect("built-in Patterns group has an item");
         let (id, name) = (first.key.clone(), first.name.clone());
         let mut h = Harness::builder().with_size(vec2(320.0, 240.0)).build_ui_state(
-            move |ui, picked: &mut Option<String>| {
+            move |ui, state: &mut (Option<String>, PresetUi)| {
                 if !ui.ctx().fonts(|fonts| fonts.definitions().families.contains_key(&egui::FontFamily::Name("semibold".into()))) {
                     return;
                 }
-                if let Some(id) = compact_pattern_browser(ui, &patterns, &groups, "", "compact-test", 180.0) {
-                    *picked = Some(id);
+                if let Some(id) = compact_pattern_browser(ui, &patterns, &groups, "", "compact-test", 180.0, &mut state.1) {
+                    state.0 = Some(id);
                 }
             },
-            None::<String>,
+            (None::<String>, PresetUi::default()),
         );
         PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
         h.run_steps(3);
         h.get_by_label(&name).click();
         h.run_steps(2);
-        assert_eq!(h.state().as_deref(), Some(id.as_str()));
+        assert_eq!(h.state().0.as_deref(), Some(id.as_str()));
         assert!(last_browser_rect(&h.ctx, "compact-test").is_some(), "compact consumer uses the shared browser viewport");
     }
 
@@ -1158,23 +1142,22 @@ mod tests {
         assert!(groups.len() > 1, "the fixture needs a second group to toggle");
         let group = groups[1].name.clone();
         let panel = "compact-disclosure-test";
-        let state_id = egui::Id::new(("compact-pattern-browser", panel));
+        let mut initial_state = PresetUi::default();
+        initial_state.display_modes.insert(panel.into(), crate::pickers::picker_state::PickerDisplayMode::LargeList);
         let mut h = Harness::builder().with_size(vec2(320.0, 240.0)).build_ui_state(
-            move |ui, _picked: &mut Option<String>| {
+            move |ui, state: &mut (Option<String>, PresetUi)| {
                 if !ui.ctx().fonts(|fonts| fonts.definitions().families.contains_key(&egui::FontFamily::Name("semibold".into()))) {
                     return;
                 }
-                let _ = compact_pattern_browser(ui, &patterns, &groups, "", panel, 180.0);
+                let _ = compact_pattern_browser(ui, &patterns, &groups, "", panel, 180.0, &mut state.1);
             },
-            None::<String>,
+            (None::<String>, initial_state),
         );
         PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
 
         h.run_steps(3);
-        assert!(
-            h.ctx.data(|d| d.get_temp::<PresetUi>(state_id).is_some_and(|s| s.toggled.contains(&format!("{panel}/{group}")))),
-            "later groups start collapsed"
-        );
+        assert!(h.state().1.toggled.contains(&format!("{panel}/{group}")), "later groups start collapsed");
+        assert_eq!(h.state().1.display_mode(panel), crate::pickers::picker_state::PickerDisplayMode::LargeList);
 
         let header = last_group_headers(&h.ctx, panel)
             .iter()
@@ -1188,9 +1171,9 @@ mod tests {
         h.run_steps(2);
 
         let key = format!("{panel}/{group}");
-        assert!(!h.ctx.data(|d| d.get_temp::<PresetUi>(state_id).is_some_and(|s| s.toggled.contains(&key))), "clicking the group expands it");
+        assert!(!h.state().1.toggled.contains(&key), "clicking the group expands it");
         h.run_steps(2);
-        assert!(!h.ctx.data(|d| d.get_temp::<PresetUi>(state_id).is_some_and(|s| s.toggled.contains(&key))), "the next frame must retain the expanded state");
+        assert!(!h.state().1.toggled.contains(&key), "the next frame must retain the expanded state");
     }
 
     #[test]
@@ -1296,8 +1279,6 @@ mod tests {
                 center_grid: false,
                 all_groups_open: false,
                 compact_context_menus: false,
-                item_size: None,
-                list_item_height: None,
                 domain_hierarchy_actions: false,
                 root_item_group: None,
             },

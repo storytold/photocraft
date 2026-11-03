@@ -67,37 +67,36 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     ui.add_space(4.0);
     let layout = responsive_list_layout(ui);
     let filter = std::cell::RefCell::new(app.ui.brushes_panel.filter.clone());
-    let view = std::cell::Cell::new(app.ui.brushes_panel.view);
+    let preset_ui = std::cell::RefCell::new(&mut app.ui.presets_ui);
+    {
+        let mut picker_state = preset_ui.borrow_mut();
+        // Migrate the legacy two-state BrushesView only until the shared display-mode preference
+        // exists. Thereafter PickerDisplayMode is the single source of truth.
+        if !picker_state.display_modes.contains_key("brushes") {
+            picker_state
+                .sizes
+                .insert("brushes".to_owned(), if app.ui.brushes_panel.view == BrushesView::List { crate::pickers::asset_browser::MIN_THUMB } else { 40.0 });
+        }
+    }
     let mut search = |ui: &mut egui::Ui| {
-        ui.horizontal(|ui| {
-            icons::paint(ui, egui::Rect::from_min_size(ui.cursor().min + vec2(0.0, 3.0), vec2(16.0, 16.0)), "search", 14.0, t.text_faint);
-            ui.add_space(20.0);
-            let search_w = (inner_w - 112.0).clamp(90.0, inner_w - 40.0);
-            widgets::text_field(ui, ui.id().with("brush-search"), &mut filter.borrow_mut(), tl!("Search Brushes"), search_w, false);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let grid_tip = "Grid view";
-                let list_tip = "List view";
-                if icons::button(ui, "grid-2x2", 24.0, view.get() == BrushesView::Grid, tl!(grid_tip)).clicked() {
-                    view.set(BrushesView::Grid);
-                }
-                if icons::button(ui, "align-justify", 24.0, view.get() == BrushesView::List, tl!(list_tip)).clicked() {
-                    view.set(BrushesView::List);
-                }
-            });
-        });
+        icons::paint(ui, egui::Rect::from_min_size(ui.cursor().min + vec2(0.0, 3.0), vec2(16.0, 16.0)), "search", 14.0, t.text_faint);
+        ui.add_space(20.0);
+        let search_w = (inner_w - 112.0).clamp(90.0, inner_w - 40.0);
+        widgets::text_field(ui, ui.id().with("brush-search"), &mut filter.borrow_mut(), tl!("Search Brushes"), search_w, false);
     };
     let acts = picker_shell_custom(ui, layout.max_height, CustomShellOptions { search: Some(&mut search), ..Default::default() }, |ui, allocated_h| {
         app.ui.brushes_panel.filter = filter.borrow().clone();
-        app.ui.brushes_panel.view = view.get();
+        app.ui.brushes_panel.view = if preset_ui.borrow().display_mode("brushes").uses_list_layout() { BrushesView::List } else { BrushesView::Grid };
         preset_list(
             ui,
             &app.session.tools.presets,
             app.session.tools.current_preset.as_deref(),
             &mut app.ui.brushes_panel,
-            &mut app.ui.presets_ui,
+            &mut **preset_ui.borrow_mut(),
             ListLayout { max_height: allocated_h, ..layout },
         )
     });
+    drop(preset_ui);
     apply(app, acts);
     ui.add_space(4.0);
     widgets::hairline(ui);

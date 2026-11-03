@@ -445,6 +445,7 @@ fn texture(
     groups: &[crate::pickers::asset_browser::GroupView],
     selected_pattern: &str,
     picked_pattern: &mut Option<String>,
+    preset_ui: &mut crate::pickers::picker_state::PresetUi,
 ) {
     let tx = &mut b.texture;
     ui.horizontal(|ui| {
@@ -471,6 +472,7 @@ fn texture(
                                 selected_pattern,
                                 "brush-texture-patterns",
                                 browser_h,
+                                preset_ui,
                             )
                         })
                 })
@@ -618,13 +620,14 @@ fn smoothing(ui: &mut egui::Ui, b: &mut BrushSettings) {
 /// `brush.presets.setCurrent`.
 pub fn section_body(ui: &mut egui::Ui, b: &mut BrushSettings, i: usize, presets: &[BrushPreset], current: Option<&str>) -> Option<String> {
     let mut picked_pattern = None;
+    let mut preset_ui = crate::pickers::picker_state::PresetUi::default();
     section_body_with_patterns(
         ui,
         b,
         i,
         presets,
         current,
-        PatternSectionPatterns { patterns: &[], groups: &[], selected_pattern: "", picked_pattern: &mut picked_pattern },
+        PatternSectionPatterns { patterns: &[], groups: &[], selected_pattern: "", picked_pattern: &mut picked_pattern, preset_ui: &mut preset_ui },
     )
 }
 
@@ -634,6 +637,7 @@ pub(crate) struct PatternSectionPatterns<'a> {
     pub(crate) groups: &'a [crate::pickers::asset_browser::GroupView],
     pub(crate) selected_pattern: &'a str,
     pub(crate) picked_pattern: &'a mut Option<String>,
+    pub(crate) preset_ui: &'a mut crate::pickers::picker_state::PresetUi,
 }
 
 /// Brush Settings variant that exposes the shared Patterns browser for Texture while returning a
@@ -657,7 +661,15 @@ pub(crate) fn section_body_with_patterns(
     match i {
         1 => shape_dynamics(ui, b),
         2 => scattering(ui, b),
-        3 => texture(ui, b, pattern_section.patterns, pattern_section.groups, pattern_section.selected_pattern, pattern_section.picked_pattern),
+        3 => texture(
+            ui,
+            b,
+            pattern_section.patterns,
+            pattern_section.groups,
+            pattern_section.selected_pattern,
+            pattern_section.picked_pattern,
+            pattern_section.preset_ui,
+        ),
         4 => dual_brush(ui, b, presets),
         5 => color_dynamics(ui, b),
         6 => {

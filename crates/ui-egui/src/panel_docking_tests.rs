@@ -671,6 +671,140 @@ fn customized_panel_menus_and_rail_remain_reachable_after_float_and_restore() {
     );
     menu.run_steps(2);
     assert!(menu.query_all_by_label("New Swatch…").count() > 0);
+    assert!(menu.query_all_by_label("Text Only").count() > 0, "shared shell display controls precede the adapter extension");
+    assert!(menu.query_all_by_label("Show Search Bar").count() > 0, "the shared shell owns search visibility");
+}
+
+#[test]
+fn shared_picker_menu_is_scoped_and_preserves_domain_extensions() {
+    let mut ready = false;
+    let mut picker = Harness::builder().build_ui_state(
+        move |ui, app: &mut PhotocraftApp| {
+            if !ready {
+                PhotocraftApp::setup_context(ui.ctx(), crate::theme::ThemeKind::ProMedium);
+                ready = true;
+            }
+            assert!(shared_picker_menu(app, ui, "gradients"));
+        },
+        app(),
+    );
+    picker.run_steps(2);
+    assert!(picker.query_all_by_label("Text Only").count() > 0);
+    assert!(picker.query_all_by_label("Show Search Bar").count() > 0);
+    assert!(picker.query_all_by_label("Import .GRD").count() > 0, "the adapter still contributes its domain action");
+
+    let mut ready = false;
+    let mut ordinary = Harness::builder().build_ui_state(
+        move |ui, app: &mut PhotocraftApp| {
+            if !ready {
+                PhotocraftApp::setup_context(ui.ctx(), crate::theme::ThemeKind::ProMedium);
+                ready = true;
+            }
+            assert!(!shared_picker_menu(app, ui, "layers"));
+            ui.label("Ordinary panel menu host");
+        },
+        app(),
+    );
+    ordinary.run_steps(2);
+    assert_eq!(ordinary.query_all_by_label("Text Only").count(), 0, "ordinary panels retain their independent menus");
+    assert_eq!(ordinary.query_all_by_label("Show Search Bar").count(), 0);
+
+    let mut ready = false;
+    let mut ordinary_menu = Harness::builder().build_ui_state(
+        move |ui, app: &mut PhotocraftApp| {
+            if !ready {
+                PhotocraftApp::setup_context(ui.ctx(), crate::theme::ThemeKind::ProMedium);
+                ready = true;
+            }
+            panel_menu(app, ui, "brushSettings");
+        },
+        app(),
+    );
+    ordinary_menu.run_steps(2);
+    assert!(ordinary_menu.query_all_by_label("New Brush Preset…").count() > 0, "ordinary panel-specific actions remain available");
+    assert!(ordinary_menu.query_all_by_label("Clear Brush Controls").count() > 0);
+    assert_eq!(ordinary_menu.query_all_by_label("Text Only").count(), 0, "ordinary panel menus do not inherit picker controls");
+}
+
+#[test]
+fn every_supported_picker_panel_uses_the_shared_docking_composer() {
+    for panel in PRESET_PICKERS {
+        let panel_id = panel.to_owned();
+        let mut ready = false;
+        let mut picker = Harness::builder().build_ui_state(
+            move |ui, app: &mut PhotocraftApp| {
+                if !ready {
+                    PhotocraftApp::setup_context(ui.ctx(), crate::theme::ThemeKind::ProMedium);
+                    ready = true;
+                }
+                assert!(shared_picker_menu(app, ui, &panel_id), "{panel_id} is in the shared docking scope");
+            },
+            app(),
+        );
+        picker.run_steps(2);
+        assert!(picker.query_all_by_label("Text Only").count() > 0, "{panel} receives the shared display controls");
+    }
+    for panel in ["color", "layers", "properties", "brushSettings"] {
+        assert!(!crate::pickers::preset_panels::shared_docking(&format!("window.panel.{panel}")), "{panel} keeps its independent menu");
+    }
+}
+
+#[test]
+fn legacy_right_dock_menu_composes_picker_then_docking_actions_and_keeps_ordinary_menus_independent() {
+    let mut swatches_app = app();
+    swatches_app.ui.dock_tabs.color = 1;
+    let mut swatches = harness(swatches_app, vec2(1280.0, 1000.0));
+    let color_menu = crate::dock::last_strips(&swatches.ctx).into_iter().find(|strip| strip.group == Group::Color).unwrap().menu.center();
+    swatches.hover_at(color_menu);
+    swatches.event(Event::PointerButton { pos: color_menu, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    swatches.run_steps(1);
+    swatches.event(Event::PointerButton { pos: color_menu, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    swatches.run_steps(2);
+
+    let display = swatches.get_by_label("Text Only").rect();
+    let domain = swatches.get_by_label("New Swatch…").rect();
+    let last_domain = swatches.get_by_label("Reset Swatches").rect();
+    let docking = swatches.get_by_label("Float Panel").rect();
+    let group = swatches.get_by_label("Collapse Panel Group").rect();
+    assert!(display.bottom() <= domain.top(), "shared display controls precede Swatches actions");
+    assert!(domain.bottom() <= last_domain.top(), "Swatches domain action groups retain their order");
+    assert!(last_domain.bottom() < docking.top(), "all adapter actions precede the docking-owned section separator and actions");
+    assert!(docking.bottom() <= group.top(), "legacy menu actions precede right-dock group controls");
+
+    let mut ordinary_app = app();
+    ordinary_app.ui.dock_tabs.properties = 0;
+    let mut ordinary = harness(ordinary_app, vec2(1280.0, 1000.0));
+    let properties_menu = crate::dock::last_strips(&ordinary.ctx).into_iter().find(|strip| strip.group == Group::Properties).unwrap().menu.center();
+    ordinary.hover_at(properties_menu);
+    ordinary.event(Event::PointerButton { pos: properties_menu, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    ordinary.run_steps(1);
+    ordinary.event(Event::PointerButton { pos: properties_menu, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    ordinary.run_steps(2);
+    assert_eq!(ordinary.query_all_by_label("Text Only").count(), 0, "ordinary right-dock tabs do not inherit picker controls");
+    assert_eq!(ordinary.query_all_by_label("Show Search Bar").count(), 0);
+    assert!(ordinary.query_all_by_label("Float Panel").count() > 0, "ordinary docking actions remain available");
+}
+
+#[test]
+fn swatches_menu_actions_update_the_shell_owned_picker_state() {
+    let mut app = app();
+    app.ui.presets_ui.selected.insert("swatches".into(), "Dark Red".into());
+    let mut ready = false;
+    let mut menu = Harness::builder().build_ui_state(
+        move |ui, app: &mut PhotocraftApp| {
+            if !ready {
+                PhotocraftApp::setup_context(ui.ctx(), crate::theme::ThemeKind::ProMedium);
+                ready = true;
+            }
+            assert!(shared_picker_menu(app, ui, "swatches"));
+        },
+        app,
+    );
+    menu.run_steps(2);
+    menu.get_by_label("New Swatch…").click();
+    menu.run_steps(2);
+    assert_eq!(menu.state().ui.presets_ui.selected.get("swatches").map(String::as_str), Some("Color Swatch 1"));
+    assert_eq!(menu.state().ui.presets_ui.renaming.as_ref().map(|(_, name, _)| name.as_str()), Some("Color Swatch 1"));
 }
 
 fn open_floating_panel_menu(h: &mut Harness<'static, PhotocraftApp>, panel: &str) -> egui::Rect {

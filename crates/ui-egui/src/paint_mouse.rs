@@ -377,6 +377,27 @@ mod tests {
     }
 
     #[test]
+    fn right_click_picker_keeps_its_browser_viewport_when_the_library_is_empty() {
+        use egui_kittest::kittest::Queryable;
+
+        let mut h = harness(None);
+        h.state_mut().session.tools.presets.clear();
+        h.state_mut().session.tools.current_preset = None;
+        let c = h.state().last_canvas_rect.center();
+        h.event(egui::Event::PointerMoved(c));
+        h.run_steps(1);
+        press(&mut h, c, PointerButton::Secondary, true);
+        press(&mut h, c, PointerButton::Secondary, false);
+        h.run_steps(3);
+
+        let picker = h.ctx.memory(|memory| memory.area_rect(crate::pickers::brush_picker::picker_id())).expect("empty picker remains visible");
+        assert!(picker.width() > 250.0 && picker.height() > 150.0, "empty library must retain its browser viewport: {picker:?}");
+        assert!(h.query_by_label("Size").is_some(), "brush controls remain visible with no presets");
+        assert!(h.query_by_label("New Brush Preset").is_some(), "shared picker header control remains visible with no presets");
+        assert_eq!(h.state().ui.brush_picker, Some([c.x, c.y]));
+    }
+
+    #[test]
     fn click_outside_closes_the_picker() {
         let mut h = harness(None);
         let c = h.state().last_canvas_rect.center();

@@ -299,6 +299,7 @@ fn settings_tab(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                 groups: &pattern_groups,
                                 selected_pattern: &selected_pattern,
                                 picked_pattern: &mut picked_pattern,
+                                preset_ui: &mut app.ui.presets_ui,
                             },
                         )
                     } else {
@@ -314,7 +315,6 @@ fn settings_tab(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     });
     crate::pickers::pattern_browser::apply_compact_pattern_actions(
         app,
-        ui.ctx(),
         "brush-texture-patterns",
         crate::pickers::pattern_browser::take_compact_pattern_actions(ui.ctx(), "brush-texture-patterns"),
     );
@@ -414,6 +414,14 @@ pub fn copy_texture_to_other_tools(app: &mut PhotocraftApp) {
 
 /// The Brush Settings panel menu actions (hamburger menu).
 pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    crate::pickers::picker_shell::picker_menu_contents(
+        ui,
+        &mut app.ui.presets_ui,
+        "brush-picker",
+        crate::pickers::picker_shell::PickerMenuOptions::for_panel("brush-picker"),
+        None,
+    );
+    ui.separator();
     if ui.button(tl!("New Brush Preset…")).clicked() {
         let name = new_preset_name(&app.session.tools.presets);
         if run_or_status(app, "brush.presets.save", json!({ "name": name }))
@@ -424,6 +432,67 @@ pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         }
         ui.close();
     }
+    ui.separator();
+    let current = app
+        .session
+        .tools
+        .current_preset
+        .as_deref()
+        .filter(|name| !crate::pickers::brush_browser::is_ambiguous_preset_name(&app.session.tools.presets, name))
+        .and_then(|name| app.session.tools.presets.iter().find(|preset| preset.name.eq_ignore_ascii_case(name)))
+        .map(|preset| preset.name.clone());
+    if ui.add_enabled(current.is_some(), egui::Button::new(tl!("Rename Current Brush…"))).clicked()
+        && let Some(name) = current.as_ref()
+    {
+        app.ui.brushes_panel.renaming = Some(Renaming { group: false, name: name.clone(), folder: Vec::new(), text: name.clone() });
+        app.ui.brush_tab = 1;
+        ui.close();
+    }
+    if ui.add_enabled(current.is_some(), egui::Button::new(tl!("Delete Current Brush"))).clicked()
+        && let Some(name) = current
+    {
+        run_or_status(app, "brush.presets.delete", json!({ "name": name }));
+        ui.close();
+    }
+    ui.separator();
+    let visible_parts = [app.ui.presets_ui.brush_picker.show_name, app.ui.presets_ui.brush_picker.show_stroke, app.ui.presets_ui.brush_picker.show_tip]
+        .into_iter()
+        .filter(|shown| *shown)
+        .count();
+    for (shown, label) in [
+        (&mut app.ui.presets_ui.brush_picker.show_name, tl!("Brush Name")),
+        (&mut app.ui.presets_ui.brush_picker.show_stroke, tl!("Brush Stroke")),
+        (&mut app.ui.presets_ui.brush_picker.show_tip, tl!("Brush Tip")),
+    ] {
+        let was_shown = *shown;
+        if ui.checkbox(shown, label).changed() {
+            if was_shown && visible_parts == 1 {
+                *shown = true;
+            }
+            ui.close();
+        }
+    }
+    ui.separator();
+    if ui.button(tl!("Import Brushes…")).clicked() {
+        let _ = crate::preset_files_ui::import_brushes(app);
+        ui.close();
+    }
+    ui.separator();
+    crate::pickers::picker_shell::picker_menu_contents(
+        ui,
+        &mut app.ui.presets_ui,
+        "brushes",
+        crate::pickers::picker_shell::PickerMenuOptions { display: true, search_visibility: false },
+        None,
+    );
+    ui.separator();
+    crate::pickers::picker_shell::picker_menu_contents(
+        ui,
+        &mut app.ui.presets_ui,
+        "brush-texture-patterns",
+        crate::pickers::picker_shell::PickerMenuOptions { display: true, search_visibility: false },
+        None,
+    );
     ui.separator();
     if ui.button(tl!("Clear Brush Controls")).clicked() {
         let before = app.session.tools.brush.clone();
@@ -479,7 +548,7 @@ pub fn window(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     if icons::button(ui, "x", 20.0, false, tl!("Close")).clicked() {
                         open = false;
                     }
-                    let menu_btn = widgets::panel_menu_button(ui);
+                    let menu_btn = widgets::panel_menu_button(ui, "Panel menu");
                     egui::Popup::menu(&menu_btn).show(|ui| {
                         widgets::style_spectrum_popup_menu(ui);
                         ui.set_min_width(180.0);

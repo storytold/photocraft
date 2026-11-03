@@ -289,8 +289,12 @@ impl DocState {
     /// layer was changed without updating the set, the selection is just the active layer.
     pub fn selected_layers(&self) -> Vec<LayerId> {
         let Some(active) = self.active_layer else { return Vec::new() };
-        let set: &[LayerId] = if self.selected_layers.contains(&active) { &self.selected_layers } else { std::slice::from_ref(&active) };
-        self.doc.walk().into_iter().map(|(_, _, l)| l.id).filter(|id| set.contains(id)).collect()
+        // Preserve document order, but don't scan the selection Vec for every layer. A reverse
+        // Shift-click can select most of a large document; linear membership here made that
+        // otherwise-linear range operation quadratic before the panel could paint it.
+        let selected: std::collections::HashSet<LayerId> =
+            if self.selected_layers.contains(&active) { self.selected_layers.iter().copied().collect() } else { [active].into_iter().collect() };
+        self.doc.walk().into_iter().map(|(_, _, l)| l.id).filter(|id| selected.contains(id)).collect()
     }
     pub fn is_layer_selected(&self, id: LayerId) -> bool {
         self.active_layer == Some(id) || (self.active_layer.is_some_and(|a| self.selected_layers.contains(&a)) && self.selected_layers.contains(&id))

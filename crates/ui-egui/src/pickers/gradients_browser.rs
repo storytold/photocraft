@@ -120,8 +120,6 @@ pub(crate) fn gradients_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 center_grid: false,
                 all_groups_open: false,
                 compact_context_menus: false,
-                item_size: None,
-                list_item_height: None,
                 domain_hierarchy_actions: false,
                 root_item_group: Some(ROOT_ITEMS_GROUP),
             },
@@ -202,8 +200,6 @@ pub(crate) fn gradients_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
 /// Contribute the Gradients-specific actions to the shared docking header menu.
 pub(crate) fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    crate::pickers::picker_shell::search_toggle(ui, &mut app.ui.presets_ui, "gradients");
-    ui.separator();
     if ui.button(tl!("Import .GRD")).clicked() {
         crate::preset_files_ui::import_gradients_dialog(app);
         ui.close();
@@ -212,7 +208,6 @@ pub(crate) fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         run(app, "gradient.presets.reset", json!({}));
         ui.close();
     }
-    ui.separator();
 }
 
 #[cfg(test)]
