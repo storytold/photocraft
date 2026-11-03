@@ -108,7 +108,7 @@ fn grow_fill_holes_and_soften_finish_the_detectors_mask() {
 
 #[test]
 fn a_box_and_negative_points_reach_the_detector_and_refine_softens_the_edge() {
-    let fake = FakeNative::start().unwrap();
+    let fake = FakeNative::start_with(Options { missing_files: vec!["model.safetensors".into()], ..Options::default() }).unwrap();
     let mut s = session(&fake.url);
     // A box: the box template with PrimitiveBoundingBox in the request's pixels; no points.
     let r = s.execute(BY_POINT, json!({"box": [10, 8, 40, 30]})).unwrap();
@@ -360,4 +360,17 @@ fn parameters_are_validated_and_the_command_needs_a_document() {
     let sam = m["templates"].as_array().unwrap().iter().find(|t| t["id"] == "sam3.1/segment").unwrap();
     assert_eq!(sam["task"], "segment");
     assert_eq!(sam["license"], "community");
+}
+
+#[test]
+fn select_subject_takes_its_edge_from_vitmatte_when_served() {
+    // The fake's ViTMatte answers opaque: the selection is the detector's mask grown by the
+    // trimap's unknown band, solid inside, nothing far out.
+    let fake = FakeNative::start_with(Options { segments: vec![[0.25, 0.25, 0.75, 0.75]], ..Options::default() }).unwrap();
+    let mut s = session(&fake.url);
+    s.execute(SUBJECT_ML, json!({"refine": true})).unwrap();
+    let m = s.active().unwrap().doc.selection.clone().unwrap();
+    assert!(m.read_region(Rect::new(32, 24, 33, 25))[0] > 0.99);
+    assert!(m.read_region(Rect::new(0, 0, 1, 1))[0] < 0.01);
+    assert!(fake.state().runs.iter().any(|r| r.request["model"] == "vitmatte/refine"), "ViTMatte asked");
 }

@@ -1,0 +1,37 @@
+{
+  "meta": {
+    "id": "vitmatte/refine",
+    "name": "Refine Edge (ViTMatte)",
+    "family": "vitmatte",
+    "task": "matte",
+    "license": "permissive",
+    "licenseNote": "ViTMatte (hustvl, 2023) ships under the MIT licence; the app ships no weights.",
+    "needsImage": true,
+    "needsMask": true,
+    "defaults": {
+      "steps": 1,
+      "guidance": 0.0
+    },
+    "models": [
+      {
+        "placeholder": "model",
+        "folder": "vitmatte",
+        "default": "model.safetensors"
+      }
+    ],
+    "notes": "Native only (genai-native's perception engine): the picture and a trimap (the mask: 0 background, 128 unknown, 255 foreground) give an RGBA image whose alpha is the matte. The app makes the trimap from SAM 3.1's mask (an unknown band around its edge), so hair strands come out of the band. Weights: hustvl/vitmatte-* (transformers' model.safetensors + config.json) in models/vitmatte/.",
+    "creator": "hustvl",
+    "description": "Mattes hair and soft edges inside a band around a mask",
+    "badges": [],
+    "counts": {
+      "max": 1,
+      "default": 1
+    },
+    "estimatedSeconds": {
+      "base": 1,
+      "perMegapixel": 1
+    },
+    "pages": [],
+    "parameters": []
+  }
+}
