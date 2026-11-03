@@ -17,7 +17,9 @@ pub use panel_state::{
 pub use tool::Tool;
 pub use tool_options::{SampleAllLayers, ToolOptions};
 use tool_options::{default_brush_tool, default_layer_filter_mode, yes};
-pub use transform::{BoxResize, CamTransform, ContentAwareOptions, Extras, MadeLayer, TextEdit, TransformMode, TransformSession, TypeTransform};
+pub use transform::{
+    BoxResize, CamTransform, ContentAwareOptions, Extras, MadeLayer, TextEdit, TransformMode, TransformSession, TypeInsertionStyle, TypeTransform,
+};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Panels {
@@ -188,6 +190,12 @@ pub struct DocWindow {
     pub document: usize,
     pub view: View,
     pub open: bool,
+    /// This window owns the document's view; the document is removed from the main canvas.
+    #[serde(default)]
+    pub floating: bool,
+    /// Transient focus edge used to activate the document once when this viewport gains focus.
+    #[serde(skip)]
+    pub focused: bool,
     /// Where the window opens on screen (outer top-left, in points); `None` lets the OS place it.
     /// A tab dragged off the tab strip opens its window where it was dropped (#3733).
     #[serde(default)]
@@ -215,6 +223,14 @@ pub struct UiState {
     /// Inline type editing session, if any.
     #[serde(default)]
     pub text_edit: Option<TextEdit>,
+    /// Whether the text being edited overflows its paragraph box (the box's lower-right handle
+    /// shows the overflow "+").
+    /// Read by automation while a session edits that box; never written to settings.
+    #[serde(skip)]
+    pub type_box_overflow: bool,
+    /// Font for subsequent typing at this caret, separate from existing character runs.
+    #[serde(default)]
+    pub type_insertion_style: Option<TypeInsertionStyle>,
     /// Clock time in seconds when type cursor blink was last reset (e.g. on keypress/caret move).
     #[serde(skip)]
     pub caret_blink_time: f64,
@@ -273,6 +289,13 @@ pub struct UiState {
     /// its screen position (points).
     #[serde(default)]
     pub brush_picker: Option<[f32; 2]>,
+    /// The painting tools' Shift+right-click menu (Edit Brush… and the tool's Mode list,
+    /// `crate::brush_mode_menu`): screen position in points.
+    #[serde(default)]
+    pub brush_mode_menu: Option<[f32; 2]>,
+    /// The tool whose Shift+right-click menu is open: another tool closes it.
+    #[serde(default)]
+    pub brush_mode_menu_tool: Option<Tool>,
     /// The Brush Preset picker's preset list: search, collapsed groups, view, a rename in progress.
     #[serde(default = "crate::brush_picker::list_state")]
     pub brush_picker_list: crate::brush_panel::BrushesPanelState,
@@ -280,6 +303,10 @@ pub struct UiState {
     /// ([`crate::brush_picker::DEFAULT_SIZE`] before that).
     #[serde(default)]
     pub brush_picker_size: Option<[f32; 2]>,
+    /// Photoshop's HUD Color Picker (#6098), open while Shift+Alt+right-click is held on the
+    /// canvas with a painting tool (`crate::color_hud`).
+    #[serde(default)]
+    pub color_hud: Option<crate::color_hud::Hud>,
     /// Layers under the pointer, listed by a right-click on the canvas with the Move tool or
     /// ⌘/Ctrl+right-click with any tool (`layer_pick_ui`, #307).
     #[serde(default)]
@@ -322,6 +349,9 @@ pub struct UiState {
     /// Layers panel kind filter ("pixel", "adjustment", "type", "shape", "smart"); empty = all.
     #[serde(default)]
     pub layer_filter: Vec<String>,
+    /// Layers panel Smart Object filter ("linked", "missing", "embedded"); empty = all.
+    #[serde(default)]
+    pub layer_filter_smart: Vec<String>,
     /// Thumbnail dimensions, content cropping and filter-strip visibility.
     #[serde(default)]
     pub layers_panel_options: LayersPanelOptions,
@@ -337,6 +367,9 @@ pub struct UiState {
     /// Layers panel blend-mode filter.
     #[serde(default = "default_layer_filter_mode")]
     pub layer_filter_mode: photocraft_color::BlendMode,
+    /// Layers panel colour filter (#5898): the label colour listed (None: layers without one).
+    #[serde(default)]
+    pub layer_filter_color: photocraft_doc::LabelColor,
     /// Actions panel: which row is selected and which are expanded. The list lives on the session.
     #[serde(default)]
     pub actions: crate::actions::ActionsUi,
@@ -408,6 +441,10 @@ pub struct UiState {
     /// Which chip the Color panel edits, and how it shows the colour.
     #[serde(default)]
     pub color_panel: ColorPanelState,
+    /// The Color panel options as last synced with the preferences: a stored value that differs
+    /// from it was changed outside the panel (`prefs.set`, a reset) and is taken, not overwritten.
+    #[serde(skip)]
+    pub color_panel_synced: Option<serde_json::Value>,
     /// Histogram panel options: view, channel, statistics, colours, source.
     #[serde(default)]
     pub histogram_panel: crate::histogram_panel::HistogramPanelState,
@@ -488,12 +525,14 @@ pub struct UiState {
 impl Default for UiState {
     fn default() -> Self {
         Self {
-            tool: Tool::Brush,
+            tool: Tool::Move,
             group_tools: Vec::new(),
             spring: None,
             recent_files: Vec::new(),
             recent_fonts: Vec::new(),
             text_edit: None,
+            type_box_overflow: false,
+            type_insertion_style: None,
             caret_blink_time: 0.0,
             text_edit_return_tool: None,
             type_transform: None,
@@ -508,8 +547,11 @@ impl Default for UiState {
             filter_mask_target: None,
             properties_layer: None,
             brush_picker: None,
+            brush_mode_menu: None,
+            brush_mode_menu_tool: None,
             brush_picker_list: crate::brush_picker::list_state(),
             brush_picker_size: None,
+            color_hud: None,
             layer_menu: None,
             canvas_tool_menu: None,
             selected_guide: None,
@@ -532,6 +574,7 @@ impl Default for UiState {
             artboard_tool: Default::default(),
             shell: Default::default(),
             layer_filter: Vec::new(),
+            layer_filter_smart: Vec::new(),
             layers_panel_options: LayersPanelOptions::default(),
             histogram_panel: Default::default(),
             histogram_range: None,
@@ -539,6 +582,7 @@ impl Default for UiState {
             layer_filter_by: Default::default(),
             layer_filter_name: String::new(),
             layer_filter_mode: default_layer_filter_mode(),
+            layer_filter_color: Default::default(),
             pen: None,
             pen_doc: None,
             stroke_editor: None,
@@ -562,6 +606,7 @@ impl Default for UiState {
             docking_collapsed: Vec::new(),
             docking_reveal: None,
             color_panel: Default::default(),
+            color_panel_synced: None,
             brush_section: 0,
             brush_tab: 0,
             brushes_panel: Default::default(),
@@ -740,7 +785,7 @@ mod tests {
     fn ui_state_serializes() {
         let s = UiState::default();
         let v = serde_json::to_value(&s).unwrap();
-        assert_eq!(v["tool"], "Brush");
+        assert_eq!(v["tool"], "Move");
         let back: UiState = serde_json::from_value(v).unwrap();
         assert_eq!(back, s);
     }
