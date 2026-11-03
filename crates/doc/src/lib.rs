@@ -56,6 +56,19 @@ fn next_id() -> u64 {
     NEXT_ID.fetch_add(1, Ordering::Relaxed)
 }
 
+fn for_each_mask_surface(mask: &LayerMask, visit: &mut impl FnMut(&Surface)) {
+    visit(&mask.surface);
+    if let Some(stack) = &mask.paint {
+        visit(&stack.base);
+        for layer in &stack.layers {
+            visit(&layer.surface);
+            if let Some(fill_map) = &layer.fill_map {
+                visit(fill_map);
+            }
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct LayerId(pub u64);
 
@@ -1076,7 +1089,7 @@ impl Document {
                 visit(surface);
             }
             if let Some(mask) = &layer.mask {
-                visit(&mask.surface);
+                for_each_mask_surface(mask, &mut visit);
             }
             if let Some(cache) = &layer.fill_cache {
                 visit(&cache.surface);
@@ -1084,7 +1097,7 @@ impl Document {
             if let LayerContent::Smart(smart) = &layer.content
                 && let Some(mask) = &smart.filter_mask
             {
-                visit(&mask.surface);
+                for_each_mask_surface(mask, &mut visit);
             }
             if let Some(video) = &layer.video {
                 for frame in video.frames.iter().chain(video.original_frames.iter().flatten()) {
@@ -1327,6 +1340,79 @@ mod tests {
 
     fn doc() -> Document {
         Document::with_background("t", Size::new(100, 50), ColorMode::Rgb, SampleType::U8, Color::WHITE)
+    }
+
+    fn mask_with_paint_stack() -> LayerMask {
+        let mut mask = LayerMask::hide_all();
+        mask.paint = Some(mask_paint::Stack {
+            base: Surface::with_default(PixelFormat::GRAY8, &[0.2]),
+            layers: vec![
+                mask_paint::Paint {
+                    name: "Paint".into(),
+                    visible: true,
+                    opacity: 1.0,
+                    blend: BlendMode::Normal,
+                    surface: Surface::new(PixelFormat::RGBA8),
+                    fill_map: Some(Surface::with_default(PixelFormat::GRAY8, &[0.4])),
+                    fill_map_size: [1, 1],
+                    fill_bounds: None,
+                    kind: mask_paint::EffectKind::Paint,
+                },
+                mask_paint::Paint {
+                    name: "Blur".into(),
+                    visible: true,
+                    opacity: 1.0,
+                    blend: BlendMode::Normal,
+                    surface: Surface::new(PixelFormat::GRAY8),
+                    fill_map: None,
+                    fill_map_size: [0, 0],
+                    fill_bounds: None,
+                    kind: mask_paint::EffectKind::Blur { radius: 2 },
+                },
+            ],
+            active: 0,
+        });
+        mask
+    }
+
+    fn assert_mask_surfaces_are_visited(document: &Document, mask: &LayerMask) {
+        let stack = mask.paint.as_ref().unwrap();
+        let expected = [&mask.surface, &stack.base, &stack.layers[0].surface, stack.layers[0].fill_map.as_ref().unwrap(), &stack.layers[1].surface];
+        let mut visited = Vec::new();
+        document.for_each_surface(|surface| visited.push(surface as *const Surface));
+        for surface in expected {
+            let expected = surface as *const Surface;
+            assert_eq!(visited.iter().filter(|&&seen| seen == expected).count(), 1, "mask surface {expected:p} is visited exactly once");
+        }
+    }
+
+    #[test]
+    fn for_each_surface_visits_layer_mask_stack_surfaces_and_fill_maps() {
+        let mut document = doc();
+        let mut layer = Layer::raster("Masked", document.pixel_format());
+        let mask_id = layer.id;
+        layer.mask = Some(mask_with_paint_stack());
+        document.layers.push(layer);
+
+        let mask = document.layer(mask_id).unwrap().mask.as_ref().unwrap();
+        assert_mask_surfaces_are_visited(&document, mask);
+    }
+
+    #[test]
+    fn for_each_surface_visits_smart_filter_mask_stack_surfaces_and_fill_maps() {
+        let mut document = doc();
+        let source = SmartSource::Embedded { file_name: "test.png".into(), bytes: Arc::new(Vec::new()) };
+        let mut smart = SmartObject::new(source, Affine::IDENTITY, None);
+        smart.filter_mask = Some(mask_with_paint_stack());
+        let smart_layer = Layer::new("Smart", LayerContent::Smart(smart));
+        let smart_id = smart_layer.id;
+        document.layers.push(smart_layer);
+
+        if let LayerContent::Smart(smart) = &document.layer(smart_id).unwrap().content {
+            assert_mask_surfaces_are_visited(&document, smart.filter_mask.as_ref().unwrap());
+        } else {
+            panic!("the new layer remains a smart object");
+        }
     }
 
     #[test]

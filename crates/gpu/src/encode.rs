@@ -10,6 +10,22 @@ use super::{Compositor, DocId, Document, LayerId, Plan, Rect, Surface, TILE_SIZE
 
 type PatternCacheLruItem = (u64, Option<String>, Option<(DocId, LayerId, u16)>, u64);
 
+fn mask_halo_page_chunk(max_dim: u32, current_page: u32, current_chunk: u32, halo: u32) -> Result<(u32, u32), Unsupported> {
+    let tile = TILE_SIZE as u32;
+    let source_halo = halo.div_ceil(tile).saturating_mul(tile);
+    let source_side = max_dim.saturating_sub(source_halo.saturating_mul(2));
+    let work_side = max_dim.saturating_sub(halo.saturating_mul(2));
+    if source_side < tile || work_side < tile {
+        return Err(Unsupported(format!("Mask Blur halo {halo}px needs a padded source/work texture larger than the GPU limit {max_dim}px")));
+    }
+    let requested_page = max_dim.min(super::consts::PAGE).min(source_side);
+    let requested_page = 1u32 << (31 - requested_page.leading_zeros());
+    let page = current_page.min(requested_page);
+    let requested_chunk = super::consts::CHUNK.min(requested_page).min(work_side);
+    let chunk = current_chunk.min(requested_chunk).min(page);
+    Ok((page, chunk))
+}
+
 impl Compositor {
     /// Composite `region` of `doc`. Each finished chunk is passed to `sink` while its encoder is
     /// still open; the chunk texture is reused afterwards, so the sink must record any copies
@@ -306,17 +322,7 @@ impl Compositor {
     /// tile-aligned, so their margin rounds up to whole source tiles; output work uses the exact
     /// Gaussian support. A smaller page leaves room for that source margin on small adapters.
     fn configure_mask_halo(&mut self, halo: u32) -> Result<(), Unsupported> {
-        let tile = TILE_SIZE as u32;
-        let source_halo = halo.div_ceil(tile).saturating_mul(tile);
-        let source_side = self.max_dim.saturating_sub(source_halo.saturating_mul(2));
-        let work_side = self.max_dim.saturating_sub(halo.saturating_mul(2));
-        if source_side < tile || work_side < tile {
-            return Err(Unsupported(format!("Mask Blur halo {halo}px needs a padded source/work texture larger than the GPU limit {}px", self.max_dim)));
-        }
-        let requested_page = self.max_dim.min(super::consts::PAGE);
-        let page_cap = requested_page.min(source_side);
-        let page = 1u32 << (31 - page_cap.leading_zeros());
-        let chunk = super::consts::CHUNK.min(page).min(work_side);
+        let (page, chunk) = mask_halo_page_chunk(self.max_dim, self.page, self.chunk, halo)?;
         if page != self.page || chunk != self.chunk {
             self.page = page;
             self.chunk = chunk;
@@ -539,5 +545,25 @@ impl Compositor {
         let pin = surface.tiles().map(|(_, tile)| Arc::downgrade(tile)).collect();
         self.mask_fills.insert(key, CachedMaskFill { fingerprint, _pin: pin, format: surface.format(), default_bits, texture, last_used: frame, bytes });
         view
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mask_halo_paging_only_shrinks_and_respects_the_texture_limit() {
+        let original = (super::super::consts::PAGE, super::super::consts::CHUNK);
+        let blur = mask_halo_page_chunk(2048, original.0, original.1, 256).unwrap();
+        assert_eq!(blur, (1024, 1024), "Blur padding reduces a 2048 page to the available power-of-two size");
+
+        let without_blur = mask_halo_page_chunk(2048, blur.0, blur.1, 0).unwrap();
+        assert_eq!(without_blur, blur, "a zero halo must not restore page or chunk sizes");
+
+        let larger_blur = mask_halo_page_chunk(2048, blur.0, blur.1, 768).unwrap();
+        assert_eq!(larger_blur, (512, 512), "a larger halo further reduces both dimensions");
+
+        assert!(mask_halo_page_chunk(2048, blur.0, blur.1, 1024).is_err(), "insufficient padded space remains rejected");
     }
 }
