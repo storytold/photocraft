@@ -2,7 +2,7 @@
 
 use std::fs::OpenOptions;
 use std::io::{BufRead, Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
@@ -308,13 +308,6 @@ impl Read for AuthDeadlineStream {
     }
 }
 
-/// Environment-aware token inputs shared by the desktop app and CLI.
-pub fn token_inputs(supplied: Option<String>, token_file: Option<PathBuf>) -> (Option<String>, Option<PathBuf>) {
-    let supplied = supplied.or_else(|| std::env::var("PHOTOCRAFT_CONTROL_TOKEN").ok());
-    let token_file = token_file.or_else(|| std::env::var_os("PHOTOCRAFT_CONTROL_TOKEN_FILE").map(PathBuf::from));
-    (supplied, token_file)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -480,16 +473,23 @@ mod tests {
     #[test]
     fn an_authenticated_connection_outlives_the_authentication_deadline() {
         let (server, mut client) = tcp_pair();
+        // The test thread writes the first line before the deadline starts. The sender writes the
+        // second line once the connection has authenticated and the deadline has passed.
+        client.write_all(b"one\n").unwrap();
+        let limit = Duration::from_secs(1);
+        let mut reader = std::io::BufReader::new(AuthDeadlineStream::new(server, limit));
+        let deadline = Instant::now() + limit;
+        let (tx, rx) = std::sync::mpsc::channel();
         let sender = std::thread::spawn(move || {
-            client.write_all(b"one\n").unwrap();
-            std::thread::sleep(Duration::from_millis(500));
+            rx.recv().unwrap();
+            std::thread::sleep((deadline + Duration::from_millis(300)).saturating_duration_since(Instant::now()));
             client.write_all(b"two\n").unwrap();
         });
-        let mut reader = std::io::BufReader::new(AuthDeadlineStream::new(server, Duration::from_millis(200)));
         let mut line = String::new();
         assert_eq!(read_bounded_line(&mut reader, &mut line).unwrap(), LineRead::Line);
         assert_eq!(line, "one\n");
         reader.get_mut().authenticated().unwrap();
+        tx.send(()).unwrap();
         // Sent 300 ms after the deadline: only the idle timeout applies now.
         assert_eq!(read_bounded_line(&mut reader, &mut line).unwrap(), LineRead::Line);
         assert_eq!(line, "two\n");
