@@ -1251,6 +1251,40 @@ fn file_info_round_trips_through_xmp_and_psd() {
     assert_eq!(read_file_info(Some(&out))["authorTitle"], "Artist");
 }
 
+#[test]
+fn file_info_keeps_a_packet_whose_rdf_end_tag_is_spaced_or_prefixed() {
+    // #11116: only the literal `</rdf:RDF>` retained the imported packet, so the valid
+    // spellings below — XML allows whitespace before the `>`, RDF allows any declared
+    // prefix — were replaced by a blank packet and unrelated properties were lost.
+    const NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+    let cases = [
+        format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="{NS}"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:CreatorTool="Other App"/></rdf:RDF ></x:xmpmeta>"#
+        ),
+        format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><r:RDF xmlns:r="{NS}"><r:Description r:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:CreatorTool="Other App"/></r:RDF></x:xmpmeta>"#
+        ),
+        format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><RDF xmlns="{NS}"><Description about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:CreatorTool="Other App"/></RDF></x:xmpmeta>"#
+        ),
+    ];
+    for packet in cases {
+        let out = write_file_info(Some(&packet), &json!({"authorTitle": "Artist"}));
+        assert!(out.contains("xmp:CreatorTool=\"Other App\""), "the unrelated property survives: {out}");
+        assert_eq!(read_file_info(Some(&out))["authorTitle"], "Artist", "the edit landed: {out}");
+        // Whatever the packet binds, the inserted description binds every prefix it uses.
+        let desc = out[out.find("<rdf:Description rdf:about=\"\"").unwrap()..].lines().next().unwrap().to_string();
+        for p in ["rdf", "dc", "photoshop", "xmpRights"] {
+            assert!(desc.contains(&format!("xmlns:{p}=\"")) || packet.contains(&format!("xmlns:{p}=\"")), "prefix {p} unbound: {desc}");
+        }
+    }
+    // A packet with no RDF end tag at all (self-closing) still gets the canonical packet.
+    let selfclosed = format!(r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="{NS}"/></x:xmpmeta>"#);
+    let out = write_file_info(Some(&selfclosed), &json!({"authorTitle": "Artist"}));
+    assert!(out.contains("<?xpacket begin="), "the canonical packet: {out}");
+    assert_eq!(read_file_info(Some(&out))["authorTitle"], "Artist");
+}
+
 fn camera_exif() -> Vec<u8> {
     photocraft_algo::exif::build(&photocraft_algo::exif::CameraInfo {
         make: Some("SONY".into()),

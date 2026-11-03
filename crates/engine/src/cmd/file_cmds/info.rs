@@ -254,14 +254,61 @@ pub fn camera_data(exif: Option<&[u8]>, xmp: Option<&str>) -> Value {
     Value::Object(m)
 }
 
+/// The RDF namespace every XMP packet's core element belongs to.
+const RDF_NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+
+/// The byte range of the packet's RDF end tag, or `None` when it has none. XML allows
+/// whitespace before a closing tag's `>` (REC-xml 2.4) and RDF allows any prefix — or none —
+/// bound for its namespace (RDF XML Syntax 5.1), so `</rdf:RDF >`, `</r:RDF>` and `</RDF>`
+/// match just like `</rdf:RDF>` (#11116).
+fn rdf_end_tag(x: &str) -> Option<(usize, usize)> {
+    // Which element names can close the RDF element: `NAME:RDF` for every prefix this packet
+    // binds to the RDF namespace, plus the bare `RDF` when it is bound as the default.
+    let mut names: Vec<String> = Vec::new();
+    let mut from = 0;
+    while let Some(rel) = x[from..].find(RDF_NS) {
+        let at = from + rel;
+        from = at + RDF_NS.len();
+        let head = &x[..at];
+        // The URI sits in an attribute value; the declaration is the token before its quote.
+        let Some(quote) = head.rfind(['"', '\'']) else { continue };
+        let before = &head[..quote];
+        let decl_start = before.rfind([' ', '\t', '\r', '\n', '<']).map(|k| k + 1).unwrap_or(0);
+        let Some(decl) = before[decl_start..].strip_suffix('=') else { continue };
+        if let Some(p) = decl.strip_prefix("xmlns:").filter(|p| !p.is_empty()) {
+            let name = format!("{p}:RDF");
+            if !names.contains(&name) {
+                names.push(name);
+            }
+        } else if decl == "xmlns" && !names.iter().any(|n| n == "RDF") {
+            names.push("RDF".to_string());
+        }
+    }
+    // Rightmost match per candidate name; a well-formed packet has exactly one RDF end tag.
+    for name in names {
+        let mut before = x.len();
+        while let Some(at) = x[..before].rfind("</") {
+            before = at;
+            let Some(after) = x[at + 2..].strip_prefix(name.as_str()) else { continue };
+            let tail = after.trim_start_matches([' ', '\t', '\r', '\n']);
+            if tail.starts_with('>') {
+                return Some((at, x.len() - tail.len() + 1));
+            }
+        }
+    }
+    None
+}
+
 /// Rewrites only changed File Info fields of an XMP packet (creating one when there is none),
 /// keeping the other properties verbatim. Edited properties move into their own
-/// `rdf:Description` (several descriptions per packet are valid XMP).
+/// `rdf:Description` (several descriptions per packet are valid XMP). A packet whose RDF element
+/// ends in a valid but non-canonical spelling is kept too: the other properties survive a field
+/// edit whatever prefix or spacing the producer used (#11116).
 pub fn write_file_info(xmp: Option<&str>, info: &Value) -> String {
     let cur = read_file_info(xmp);
     // The dialog submits all fields, including unchanged language alternatives.
     let changed = |key: &str| info.get(key).is_some_and(|v| cur.get(key) != Some(v));
-    let mut x = xmp.filter(|s| s.contains("</rdf:RDF>")).map(str::to_string).unwrap_or_else(|| {
+    let mut x = xmp.filter(|s| rdf_end_tag(s).is_some()).map(str::to_string).unwrap_or_else(|| {
         "<?xpacket begin=\"\u{feff}\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n </rdf:RDF>\n</x:xmpmeta>\n<?xpacket end=\"w\"?>".to_string()
     });
     for (key, prop, _) in INFO_FIELDS.into_iter().chain([("copyrightStatus", "xmpRights:Marked", ""), ("copyrightUrl", "xmpRights:WebStatement", "")]) {
@@ -308,10 +355,14 @@ pub fn write_file_info(xmp: Option<&str>, info: &Value) -> String {
         body.push_str(&format!("   <xmpRights:WebStatement>{}</xmpRights:WebStatement>\n", xml_escape(u)));
     }
     if !body.is_empty() {
+        // The inserted description uses the `rdf:` prefix, so it must bind it itself unless
+        // the surrounding packet binds that prefix the same way (#11116).
+        let packet_binds_rdf = x.contains(&format!("xmlns:rdf=\"{RDF_NS}\"")) || x.contains(&format!("xmlns:rdf='{RDF_NS}'"));
         let desc = format!(
-            "  <rdf:Description rdf:about=\"\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:photoshop=\"http://ns.adobe.com/photoshop/1.0/\" xmlns:xmpRights=\"http://ns.adobe.com/xap/1.0/rights/\">\n{body}  </rdf:Description>\n "
+            "  <rdf:Description rdf:about=\"\"{} xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:photoshop=\"http://ns.adobe.com/photoshop/1.0/\" xmlns:xmpRights=\"http://ns.adobe.com/xap/1.0/rights/\">\n{body}  </rdf:Description>\n ",
+            if packet_binds_rdf { String::new() } else { format!(" xmlns:rdf=\"{RDF_NS}\"") }
         );
-        let at = x.rfind("</rdf:RDF>").unwrap_or(x.len());
+        let at = rdf_end_tag(&x).map(|(a, _)| a).unwrap_or(x.len());
         x.insert_str(at, &desc);
     }
     x
