@@ -516,7 +516,8 @@ fn has_extended_xmp(b: &[u8]) -> bool {
             Some(0x01 | 0xD0..=0xD8) => i += 2,
             Some(&code) => {
                 let Some(len) = b.get(i + 2..i + 4).map(|l| usize::from(u16::from_be_bytes([l[0], l[1]]))) else { return false };
-                if code == 0xE1 && b.get(i + 4..).is_some_and(|p| p.starts_with(EXTENDED_XMP)) {
+                // The identifier must lie inside the segment's declared payload (length counts its own two bytes).
+                if code == 0xE1 && b.get(i + 4..(i + 2 + len).min(b.len())).is_some_and(|p| p.starts_with(EXTENDED_XMP)) {
                     return true;
                 }
                 i += 2 + len;
