@@ -219,9 +219,11 @@ fn cryptomatte_keys(other: &std::collections::HashMap<exr::meta::attribute::Text
 /// other flat part decoders.
 pub(crate) fn decode(bytes: &[u8], layer_name: &str, limits: &Limits) -> Result<CryptomatteBuffer, CodecError> {
     let found = layers(bytes, limits)?;
+    // An exact name wins, so layers whose names only differ after normalising can each be asked for.
     let layer = found
         .iter()
-        .find(|l| normalize_layer(&l.name) == normalize_layer(layer_name))
+        .find(|l| l.name == layer_name)
+        .or_else(|| found.iter().find(|l| normalize_layer(&l.name) == normalize_layer(layer_name)))
         .ok_or_else(|| CodecError::unsupported(F, format!("no Cryptomatte layer named {layer_name}")))?;
     // Also caps all parts' declared sizes together, like every other flat decode.
     let meta = super::exr::read_meta(bytes, limits)?;
