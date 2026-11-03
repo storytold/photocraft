@@ -406,6 +406,8 @@ fn build(nodes: Vec<Node>, images: &[Image], fmt: PixelFormat, ctl: &Interrupt<'
     Ok(out)
 }
 
+/// Validates the OpenRaster archive and stack, then imports bounded native layers while reporting unsupported
+/// source behavior.
 pub(crate) fn import(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<ImportResult> {
     let zip = ZipReader::new(bytes).map_err(|e| invalid(e.to_string()))?;
     let mime = zip.read_by_name("mimetype", 256).map_err(|e| invalid(e.to_string()))?;
@@ -458,7 +460,7 @@ pub(crate) fn import(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<Im
     if document.layers.is_empty() {
         reader.warnings.note("the OpenRaster file has no layers");
     }
-    Ok(ImportResult { document, warnings: reader.warnings.finish(), source_read_only: false, preview_only: false })
+    Ok(ImportResult { initial_view: None, document, warnings: reader.warnings.finish(), source_read_only: false, preview_only: false })
 }
 
 // ---------------------------------------------------------------------------------------------

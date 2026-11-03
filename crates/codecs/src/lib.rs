@@ -38,6 +38,14 @@ pub use crate::codecs::tiff::{
     PhotoshopTags as TiffPhotoshopTags, TiffBands, photoshop_tags as tiff_photoshop_tags, writes_little_endian as tiff_writes_little_endian,
 };
 pub use crate::codecs::tiff_ifd::{TiffInfo, TiffPage, TiffPageKind};
+/// Look up a lowercase, space-free X11 color name as normalized RGB channels.
+/// This uses X11 values (which differ from CSS for some names) without normalization or CSS overrides.
+/// XCF's Pango markup adapter in `photocraft-io` uses this shared vocabulary for names such as
+/// `steelblue4` and applies its Pango/CSS overrides before calling this lookup. XPM parsing keeps
+/// its separate existing normalization and alias policy.
+pub fn x11_color_rgb(name: &str) -> Option<[f32; 3]> {
+    crate::codecs::xpm::x11_color_rgb(name)
+}
 pub use crate::error::CodecError;
 pub use crate::exif_color::{EXIF_COLOR_SPACE_SRGB, exif_color_space};
 pub use crate::fidelity::{FidelityWarning, fidelity_warnings, fidelity_warnings_with};

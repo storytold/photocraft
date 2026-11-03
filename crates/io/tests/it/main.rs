@@ -88,3 +88,19 @@ mod tiff_type_geometry;
 mod vector;
 mod xcf;
 mod xmp_export;
+
+mod import_initial_view;
+
+mod xcf_historical_records;
+
+mod xcf_historical_sample_order;
+
+mod xcf_native_import;
+
+mod xcf_native_paths;
+
+mod xcf_native_text;
+
+mod xcf_native_transport;
+
+mod xcf_native_variants;
