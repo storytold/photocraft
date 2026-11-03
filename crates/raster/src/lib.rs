@@ -159,7 +159,7 @@ impl Tile {
     /// whole tile, for the same reason.
     pub fn alpha_bounds(&self, bpp: usize, alpha_bytes: usize) -> Option<(u16, u16, u16, u16)> {
         let ts = TILE_SIZE as usize;
-        if bpp == 0 || alpha_bytes == 0 || alpha_bytes > bpp || self.data.len() != ts * ts * bpp {
+        if bpp == 0 || alpha_bytes == 0 || alpha_bytes > bpp || ts.checked_mul(ts).and_then(|n| n.checked_mul(bpp)) != Some(self.data.len()) {
             return Some((0, 0, ts as u16, ts as u16));
         }
         let covered = |px: &[u8]| px.get(bpp - alpha_bytes..).is_some_and(|a| a.iter().any(|&b| b != 0));

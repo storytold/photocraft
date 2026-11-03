@@ -882,7 +882,7 @@ fn alpha_bounds_with_a_bad_layout_keeps_the_whole_tile() {
     let whole = Some((0, 0, TILE_SIZE as u16, TILE_SIZE as u16));
     for (_, t) in s.tiles() {
         assert_eq!(t.alpha_bounds(4, 1), None);
-        for (bpp, alpha) in [(0, 1), (4, 0), (4, 5), (3, 1)] {
+        for (bpp, alpha) in [(0, 1), (4, 0), (4, 5), (3, 1), (usize::MAX, 1)] {
             assert_eq!(t.alpha_bounds(bpp, alpha), whole, "{bpp} {alpha}");
         }
     }
