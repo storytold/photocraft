@@ -121,7 +121,7 @@ impl SourceLoad {
     /// surface, the flatten's working and output surfaces, and a file's encoded bytes.
     fn needed(&self, doc: &Document, bpp: usize, encoded: usize) -> usize {
         let b = doc.bounds();
-        let output = surface_bytes(b.width().max(0) as usize, b.height().max(0) as usize, bpp);
+        let output = surface_bytes(b.width() as usize, b.height() as usize, bpp);
         self.retained.saturating_add(encoded).saturating_add(document_pixels(doc)).saturating_add(output.saturating_mul(2))
     }
 
@@ -150,7 +150,7 @@ impl SourceLoad {
             return Err(self.exceeds(cmd, doc, bpp, encoded, budget));
         }
         let b = doc.bounds();
-        self.retained = self.retained.saturating_add(surface_bytes(b.width().max(0) as usize, b.height().max(0) as usize, bpp));
+        self.retained = self.retained.saturating_add(surface_bytes(b.width() as usize, b.height() as usize, bpp));
         self.count += 1;
         Ok(())
     }

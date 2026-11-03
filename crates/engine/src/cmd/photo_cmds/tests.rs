@@ -490,7 +490,7 @@ fn photomerge_source_load_charges_the_document_and_both_flatten_surfaces() {
     let mut load = SourceLoad::new(Some(cost));
     assert!(load.admit(cmd, &one, bpp, 0).is_ok(), "the first source fits exactly");
     assert_eq!(load.retained, output);
-    let err = load.admit(cmd, &one, bpp, 0).err().expect("the second source exceeds the budget");
+    let err = load.admit(cmd, &one, bpp, 0).expect_err("the second source exceeds the budget");
     assert!(err.to_string().contains("not enough memory for file.automate.photomerge"), "{err}");
     assert!(err.to_string().contains("260×200"), "{err}");
     assert!(err.to_string().contains("exceeds the"), "{err}");
