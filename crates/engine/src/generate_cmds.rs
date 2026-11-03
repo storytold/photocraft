@@ -3629,9 +3629,10 @@ struct ExpandPlan {
 pub(crate) const OUTPAINT_LORA: &str = "qwen-image-2.1-outpaint-v2.safetensors";
 pub(crate) const OUTPAINT_LORA_WIDE: &str = "qwen-image-2.1-outpaint.safetensors";
 /// Viggle's Turbo LoRA for Qwen-Image-2.1 (v0.3, six steps on its own sigmas): with it and the
-/// v2 Outpaint LoRA in `loras/`, an expand runs the native worker's [`OUTPAINT_TURBO_TEMPLATE`],
-/// which stacks both itself: 2.3 to 2.8 s against 8.7 to 8.9 s for 25 steps with the Outpaint
-/// LoRA alone, close in quality (portrait, street, coast, Cody's PC, 2026-11-03).
+/// v2 Outpaint LoRA in `loras/`, an expand under Quality `fast` runs the native worker's
+/// [`OUTPAINT_TURBO_TEMPLATE`], which stacks both itself: 4 to 6 s warm against 6 to 10 s for
+/// 25 steps with a blank prompt, but softer, with a fine grid in textured new areas (pines,
+/// paving; Cody's PC, in the app, 2026-11-03), so the other qualities keep 25 steps.
 pub(crate) const OUTPAINT_TURBO_LORA: &str = "Qwen-Image-2.1-viggle-turbo-v0.3-6step-lora-r128.safetensors";
 pub(crate) const OUTPAINT_TURBO_TEMPLATE: &str = "qwen-2.1/outpaint-turbo";
 /// The 2.1 edit the plain Outpaint LoRA runs on.
@@ -3664,14 +3665,14 @@ fn outpaint_lora(s: &Session, (ow, oh): (u32, u32), (nw, nh): (u32, u32)) -> Opt
         return None;
     }
     let share = (f64::from(ow) * f64::from(oh)) / (f64::from(nw) * f64::from(nh)).max(1.0);
-    pick_outpaint_lora(|f| std::path::Path::new(&root).join("loras").join(f).is_file(), share)
+    pick_outpaint_lora(|f| std::path::Path::new(&root).join("loras").join(f).is_file(), share, quality(s) == "fast")
 }
 
-/// The route through the Outpaint LoRA files `has` finds: the six-step Turbo template when the
-/// Turbo LoRA and v2 are both there; else the 2.1 edit with the file for a picture that is
+/// The route through the Outpaint LoRA files `has` finds: the six-step Turbo template when `fast`
+/// and the Turbo LoRA and v2 are both there; else the 2.1 edit with the file for a picture that is
 /// `share` of its grown canvas (v1 first below [`OUTPAINT_WIDE_SHARE`], else v2).
-fn pick_outpaint_lora(has: impl Fn(&str) -> bool, share: f64) -> Option<OutpaintRoute> {
-    if has(OUTPAINT_LORA) && has(OUTPAINT_TURBO_LORA) {
+fn pick_outpaint_lora(has: impl Fn(&str) -> bool, share: f64, fast: bool) -> Option<OutpaintRoute> {
+    if fast && has(OUTPAINT_LORA) && has(OUTPAINT_TURBO_LORA) {
         return Some((OUTPAINT_TURBO_TEMPLATE, None, OUTPAINT_PIXELS));
     }
     let order = if share < OUTPAINT_WIDE_SHARE { [OUTPAINT_LORA_WIDE, OUTPAINT_LORA] } else { [OUTPAINT_LORA, OUTPAINT_LORA_WIDE] };

@@ -990,17 +990,19 @@ fn an_expand_without_a_prompt_asks_for_the_background_alone() {
 
 #[test]
 fn the_outpaint_lora_is_picked_by_how_much_canvas_is_added_and_prompted_with_its_trigger() {
-    // With Viggle's Turbo LoRA and v2: the six-step template, which adds both LoRAs itself.
-    assert_eq!(pick_outpaint_lora(|_| true, 0.13), Some((OUTPAINT_TURBO_TEMPLATE, None, OUTPAINT_PIXELS)));
+    // Under Quality `fast`, with Viggle's Turbo LoRA and v2: the six-step template, which adds
+    // both LoRAs itself; otherwise 25 steps.
+    assert_eq!(pick_outpaint_lora(|_| true, 0.13, true), Some((OUTPAINT_TURBO_TEMPLATE, None, OUTPAINT_PIXELS)));
+    assert_eq!(pick_outpaint_lora(|_| true, 0.6, false), Some((OUTPAINT_EDIT_TEMPLATE, Some(OUTPAINT_LORA), OUTPAINT_PIXELS)));
     assert!(photocraft_genai::template::find(OUTPAINT_TURBO_TEMPLATE).is_ok_and(|t| t.meta.task == Task::Expand && t.meta.defaults.steps == 6));
     let both = |f: &str| f != OUTPAINT_TURBO_LORA;
     // Cody's portrait, 452×678 grown by 500 on every side: 13 % of the canvas, the v1 file.
-    assert_eq!(pick_outpaint_lora(both, 0.13), Some((OUTPAINT_EDIT_TEMPLATE, Some(OUTPAINT_LORA_WIDE), OUTPAINT_WIDE_PIXELS)));
-    assert_eq!(pick_outpaint_lora(both, 0.6), Some((OUTPAINT_EDIT_TEMPLATE, Some(OUTPAINT_LORA), OUTPAINT_PIXELS)));
+    assert_eq!(pick_outpaint_lora(both, 0.13, true), Some((OUTPAINT_EDIT_TEMPLATE, Some(OUTPAINT_LORA_WIDE), OUTPAINT_WIDE_PIXELS)));
+    assert_eq!(pick_outpaint_lora(both, 0.6, true), Some((OUTPAINT_EDIT_TEMPLATE, Some(OUTPAINT_LORA), OUTPAINT_PIXELS)));
     // Whichever file is there; the Turbo LoRA alone is not enough.
-    assert_eq!(pick_outpaint_lora(|f| f == OUTPAINT_LORA, 0.13), Some((OUTPAINT_EDIT_TEMPLATE, Some(OUTPAINT_LORA), OUTPAINT_PIXELS)));
-    assert_eq!(pick_outpaint_lora(|f| f == OUTPAINT_TURBO_LORA, 0.5), None);
-    assert_eq!(pick_outpaint_lora(|_| false, 0.5), None);
+    assert_eq!(pick_outpaint_lora(|f| f == OUTPAINT_LORA, 0.13, true), Some((OUTPAINT_EDIT_TEMPLATE, Some(OUTPAINT_LORA), OUTPAINT_PIXELS)));
+    assert_eq!(pick_outpaint_lora(|f| f == OUTPAINT_TURBO_LORA, 0.5, true), None);
+    assert_eq!(pick_outpaint_lora(|_| false, 0.5, true), None);
     assert_eq!(
         outpaint_prompt(" a woman in a white ruffled top before a brown studio backdrop "),
         format!("{OUTPAINT_INSTRUCTION} Scene: a woman in a white ruffled top before a brown studio backdrop")
