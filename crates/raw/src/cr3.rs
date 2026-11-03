@@ -139,6 +139,13 @@ struct Found<'a> {
     gps: Option<&'a [u8]>,
 }
 
+/// `body` when it is a TIFF stream whose first directory reads: a damaged CMT box is passed over
+/// for a later one.
+fn readable_tiff(body: &[u8]) -> Option<&[u8]> {
+    let t = Tiff::new(body)?;
+    t.ifd_at(t.first_ifd, 0).map(|_| body)
+}
+
 fn walk<'a>(raw: &'a [u8], b: &'a [u8], depth: usize, budget: &mut usize, found: &mut Found<'a>) {
     if depth > MAX_DEPTH {
         return;
@@ -165,10 +172,10 @@ fn walk<'a>(raw: &'a [u8], b: &'a [u8], depth: usize, budget: &mut usize, found:
                 found.previews.push(p);
             }
         }
-        b"CMT2" => found.exif = found.exif.or(Some(item.body)),
-        b"CMT4" => found.gps = found.gps.or(Some(item.body)),
+        b"CMT2" => found.exif = found.exif.or_else(|| readable_tiff(item.body)),
+        b"CMT4" => found.gps = found.gps.or_else(|| readable_tiff(item.body)),
         b"CMT1" => {
-            found.ifd0 = found.ifd0.or(Some(item.body));
+            found.ifd0 = found.ifd0.or_else(|| readable_tiff(item.body));
             if let Some(tiff) = Tiff::new(item.body)
                 && let Some(ifd) = tiff.ifd_at(tiff.first_ifd, 0)
                 && let Some(o) = tiff.tag_uint(&ifd, tag::ORIENTATION).filter(|o| (1..=8).contains(o))

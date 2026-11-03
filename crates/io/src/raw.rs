@@ -302,9 +302,10 @@ pub fn import_raw_with(name: &str, bytes: &[u8], opts: &DevelopOptions) -> Resul
                 (None, Some(p)) => (upright_preview(bytes, p.jpeg, &opts.limits)?, "JPEG", (p.width, p.height)),
                 (None, None) => return Err(IoError::Raw(RawError::Unsupported(reason))),
             };
-            // The raw's camera data, when the preview carries none of its own (a CR3's doesn't).
-            if img.meta.exif.is_none() {
-                img.meta.exif = camera_exif(bytes);
+            // The raw's own camera data wins over the preview's EXIF, which may hold little more
+            // than the orientation the preview has already been turned by.
+            if let Some(exif) = camera_exif(bytes) {
+                img.meta.exif = Some(exif);
             }
             let mut r = image_to_document(name, &img)?;
             let depth = if img.sample_type() == SampleType::U8 { "8-bit" } else { "16-bit" };

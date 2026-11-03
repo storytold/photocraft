@@ -370,6 +370,75 @@ fn cr3_directories_in_another_byte_order_are_left_out() {
     assert_eq!(photocraft_codecs::raw_exif_from_directories(Some(b"not a TIFF"), None, None), None);
 }
 
+/// A CMT1 whose header reads but whose IFD0 doesn't sets no byte order: the Exif directory, in
+/// the other order, is kept rather than dropped as mismatched.
+#[test]
+fn an_unreadable_cmt1_does_not_decide_the_byte_order() {
+    let mut t = TiffBuilder { big_endian: true, ..Default::default() };
+    let ifd = t.ifd(vec![(33434, Val::Rational(vec![(1, 200)]))]);
+    t.chain = vec![ifd];
+    let exif = t.build();
+    // A little-endian header pointing at an IFD past its end.
+    let ifd0 = b"II*\0\xff\xff\0\0";
+    let block = photocraft_codecs::raw_exif_from_directories(Some(ifd0), Some(&exif), None).expect("the Exif directory");
+    assert_eq!(photocraft_algo::exif::read(&block).exposure_time, Some(1.0 / 200.0));
+}
+
+/// Each CMT box is its own stream with its own copy budget: a GPS directory near the cap doesn't
+/// crowd out the Exif directory's lens name.
+#[test]
+fn a_large_gps_directory_keeps_the_exif_directory() {
+    let tiff = |entries: Vec<(u16, Val)>| {
+        let mut t = TiffBuilder::default();
+        let ifd = t.ifd(entries);
+        t.chain = vec![ifd];
+        t.build()
+    };
+    // Just under the 4 MiB codecs copies from one stream.
+    let gps = tiff(vec![(27, Val::Undefined(vec![0; 4 * 1024 * 1024 - 16]))]);
+    let exif = tiff(vec![(42036, Val::Ascii("RF24-105mm F4 L IS USM".into()))]);
+    let block = photocraft_codecs::raw_exif_from_directories(None, Some(&exif), Some(&gps)).expect("EXIF");
+    assert_eq!(photocraft_algo::exif::read(&block).lens.as_deref(), Some("RF24-105mm F4 L IS USM"));
+}
+
+/// A CR3 preview that carries an EXIF block of its own (here only an orientation) still gets the
+/// raw's camera data.
+#[test]
+fn a_cr3_preview_with_its_own_exif_takes_the_raws_camera_data() {
+    let img = Image::from_u8(32, 20, ChannelLayout::Rgb, vec![180; 32 * 20 * 3]).unwrap();
+    let plain = photocraft_codecs::encode(&img, Format::Jpeg, &EncodeOptions::default()).unwrap();
+    let mut t = TiffBuilder::default();
+    let ifd = t.ifd(vec![(274, Val::Short(vec![1]))]);
+    t.chain = vec![ifd];
+    let app1 = [b"Exif\0\0".as_slice(), &t.build()].concat();
+    let jpeg = [&plain[..2], &[0xFF, 0xE1], &((app1.len() + 2) as u16).to_be_bytes(), &app1, &plain[2..]].concat();
+    let ifd0 = [(271, Val::Ascii("Canon".into())), (272, Val::Ascii("Canon EOS Synthetic".into()))];
+    let r = import("shot.cr3", &photocraft_raw::testgen::cr3_preview_with_exif(&jpeg, 1, &ifd0, &[], &[])).unwrap();
+    let camera = photocraft_algo::exif::read(r.document.metadata.exif.as_deref().expect("EXIF"));
+    assert_eq!((camera.make.as_deref(), camera.model.as_deref()), (Some("Canon"), Some("Canon EOS Synthetic")));
+}
+
+/// A damaged CMT2 before a good one: the good one's exposure is read.
+#[test]
+fn a_damaged_cmt2_gives_way_to_a_later_one() {
+    let img = Image::from_u8(32, 20, ChannelLayout::Rgb, vec![180; 32 * 20 * 3]).unwrap();
+    let jpeg = photocraft_codecs::encode(&img, Format::Jpeg, &EncodeOptions::default()).unwrap();
+    let tiff = |entries: Vec<(u16, Val)>| {
+        let mut t = TiffBuilder::default();
+        let ifd = t.ifd(entries);
+        t.chain = vec![ifd];
+        t.build()
+    };
+    let boxes = [
+        (*b"CMT1", tiff(vec![(271, Val::Ascii("Canon".into()))])),
+        (*b"CMT2", b"II*\0\xff\xff\0\0".to_vec()),
+        (*b"CMT2", tiff(vec![(33434, Val::Rational(vec![(1, 200)]))])),
+    ];
+    let r = import("shot.cr3", &photocraft_raw::testgen::cr3_with_boxes(&jpeg, &boxes)).unwrap();
+    let camera = photocraft_algo::exif::read(r.document.metadata.exif.as_deref().expect("EXIF"));
+    assert_eq!((camera.make.as_deref(), camera.exposure_time), (Some("Canon"), Some(1.0 / 200.0)));
+}
+
 /// A RAF's EXIF is in the camera's JPEG: the developed document keeps its camera data, without
 /// the JPEG's orientation (the developed image is already upright).
 #[test]

@@ -218,8 +218,9 @@ pub fn raw_exif(bytes: &[u8]) -> Option<Vec<u8>> {
 
 /// [`raw_exif`] for a raw that keeps each EXIF directory as the first one of its own classic TIFF
 /// stream, as Canon CR3 does: `ifd0` holds IFD0's tags (make, model, date…), `exif` the Exif
-/// directory, `gps` the GPS directory. A stream in another byte order than the first one given is
-/// left out. `None` when none of them has these tags.
+/// directory, `gps` the GPS directory. A stream whose first directory doesn't read is left out,
+/// and so is one in another byte order than the first readable one. `None` when none of them has
+/// these tags.
 pub fn raw_exif_from_directories(ifd0: Option<&[u8]>, exif: Option<&[u8]>, gps: Option<&[u8]>) -> Option<Vec<u8>> {
     let dirs = crate::codecs::tiff_exif::read_directories(ifd0, exif, gps).filter(|d| d.has_directories() || !d.ifd0.is_empty())?;
     Some(crate::codecs::tiff_exif::block(&dirs))
