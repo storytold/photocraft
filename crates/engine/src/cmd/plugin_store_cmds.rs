@@ -376,7 +376,7 @@ fn describe(store: &PluginStore, e: &Entry) -> Value {
         "id": e.id, "name": e.name, "version": e.version, "author": e.author, "description": e.description,
         "collection": e.collection, "repo": e.repo, "license": e.license, "deprecated": e.deprecated, "size": e.size,
         "installed": installed.is_some(), "installedVersion": installed,
-        "updateAvailable": installed.as_ref().is_some_and(|v| *v != e.version),
+        "updateAvailable": installed.as_ref().is_some_and(|v| is_newer(&e.version, v)),
     });
     if let (Some(job), Some(o)) = (store.jobs.get(&e.id), v.as_object_mut()) {
         let mut job = json!(job);
@@ -389,9 +389,35 @@ fn describe(store: &PluginStore, e: &Entry) -> Value {
     v
 }
 
-fn matches(e: &Entry, query: &str) -> bool {
-    let q = query.to_lowercase();
+/// Whether a listing matches a search: any of its name, description, author, collection or id
+/// contains `query`, ignoring case and surrounding spaces. The window and `plugin.store.list` share it.
+pub fn matches(e: &Entry, query: &str) -> bool {
+    let q = query.trim().to_lowercase();
     [&e.name, &e.description, &e.author, &e.collection, &e.id].iter().any(|f| f.to_lowercase().contains(&q))
+}
+
+/// Whether version `a` is newer than `b`, so a listing at `a` updates an install at `b`. Dotted
+/// numbers compare as numbers (`1.10` is newer than `1.9`, `1.0` equals `1.0.0`), and a pre-release
+/// (`2.0.0-beta`) is older than its release. Versions that aren't dotted numbers count as newer
+/// whenever they differ.
+pub fn is_newer(a: &str, b: &str) -> bool {
+    match (version_key(a), version_key(b)) {
+        (Some(a), Some(b)) => a > b,
+        _ => a.trim() != b.trim(),
+    }
+}
+
+/// `1.2.0-beta+build` as `([1, 2], false, "beta")`: trailing zeros dropped, build metadata ignored,
+/// and the flag true for a release so it sorts after its pre-releases.
+fn version_key(v: &str) -> Option<(Vec<u64>, bool, &str)> {
+    let v = v.trim();
+    let core = v.split_once('+').map_or(v, |(core, _)| core);
+    let (numbers, pre) = core.split_once('-').map_or((core, ""), |(n, pre)| (n, pre));
+    let mut parts = numbers.split('.').map(|p| p.parse::<u64>().ok()).collect::<Option<Vec<_>>>()?;
+    while parts.len() > 1 && parts.last() == Some(&0) {
+        parts.pop();
+    }
+    Some((parts, pre.is_empty(), pre))
 }
 
 fn list(s: &mut Session, p: &Value) -> Result<Value> {
@@ -405,7 +431,7 @@ fn list(s: &mut Session, p: &Value) -> Result<Value> {
     let plugins: Vec<Value> = store
         .catalog
         .iter()
-        .filter(|e| matches(e, query.trim()))
+        .filter(|e| matches(e, query))
         .filter(|e| !installed_only || registry::get(&e.id).is_some())
         .map(|e| describe(store, e))
         .collect();
@@ -438,8 +464,9 @@ fn install(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(EngineError::Other(UNAVAILABLE.into()));
     }
     for id in &ids {
-        let current = store.entry(id).map(|e| e.version.clone());
-        let up_to_date = registry::get(id).is_some_and(|p| Some(&p.manifest().version) == current.as_ref());
+        let current = store.entry(id).map(|e| e.version.clone()).unwrap_or_default();
+        // An install as new as the listing, or newer (side-loaded), isn't replaced unless asked to.
+        let up_to_date = registry::get(id).is_some_and(|p| !is_newer(&current, &p.manifest().version));
         let busy = matches!(store.jobs.get(id), Some(Job::Queued | Job::Downloading));
         if !busy && (reinstall || !up_to_date) {
             store.jobs.insert(id.clone(), Job::Queued);

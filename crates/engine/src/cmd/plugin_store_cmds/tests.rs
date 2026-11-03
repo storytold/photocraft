@@ -230,6 +230,35 @@ fn a_new_catalog_version_is_offered_as_an_update() {
 }
 
 #[test]
+fn versions_compare_as_numbers_and_releases_beat_pre_releases() {
+    for (a, b) in [("2.0.0", "1.9.9"), ("1.10", "1.9"), ("1.0.1", "1.0"), ("1.0.0", "1.0.0-beta"), ("1.0.0-beta.2", "1.0.0-beta.1"), ("0.4.0", "0.3.1")] {
+        assert!(is_newer(a, b), "{a} is newer than {b}");
+        assert!(!is_newer(b, a), "{b} is older than {a}");
+    }
+    for (a, b) in [("1.0", "1.0.0"), (" 1.2.0 ", "1.2.0+build.5"), ("x", "x"), ("", "")] {
+        assert!(!is_newer(a, b) && !is_newer(b, a), "{a:?} and {b:?} are the same version");
+    }
+    // Versions that aren't dotted numbers (or overflow one) can't be ordered: any change counts.
+    for (a, b) in [("nightly-2", "nightly-1"), ("1.x", "1.0"), ("99999999999999999999999", "1")] {
+        assert!(is_newer(a, b) && is_newer(b, a), "{a} vs {b}");
+    }
+}
+
+#[test]
+fn a_newer_side_loaded_install_isnt_offered_the_older_listing() {
+    let id = "org.test.store.sideload";
+    let (mut s, served) = session(vec![entry(id, "1.0.0", &module(id, "1.0.0"))]);
+    registry::install(Plugin::load(&module(id, "1.2.0"), Limits::default()).unwrap());
+    let l = listing(&mut s, id);
+    assert_eq!((&l["installedVersion"], &l["updateAvailable"]), (&json!("1.2.0"), &json!(false)), "{l}");
+    s.execute("plugin.store.install", json!({"id": id})).unwrap();
+    assert!(served.lock().unwrap().is_empty(), "no downgrade unless asked");
+    s.execute("plugin.store.install", json!({"id": id, "reinstall": true})).unwrap();
+    assert_eq!(served.lock().unwrap().len(), 1, "reinstall still fetches the listed version");
+    registry::remove(id);
+}
+
+#[test]
 fn downloads_beyond_the_limit_wait_their_turn() {
     let entries: Vec<Entry> = (0..MAX_RUNNING + 2).map(|k| entry(&format!("org.test.store.queue{k}"), "1", &module(&format!("org.test.store.queue{k}"), "1"))).collect();
     let ids: Vec<String> = entries.iter().map(|e| e.id.clone()).collect();

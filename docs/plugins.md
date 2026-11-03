@@ -51,12 +51,14 @@ and `plugin.store.cancel` work, and `plugin.install {"data"}` still installs a m
 The catalog was assembled on 2026-10-26 from the public repositories that ship ABI v1 modules:
 [akkk09/artcraft-store](https://github.com/akkk09/artcraft-store) (12 filters; its author marked it
 deprecated on 2026-10-17, so its listings carry `deprecated`),
-[CHJ85/PhotoCraft-Plugins](https://github.com/CHJ85/PhotoCraft-Plugins) (33, pinned to a commit) and
-[Mitacore/photocraft-plugin-posterize](https://github.com/Mitacore/photocraft-plugin-posterize) (1),
-all MIT-licensed. PhotoCraft distributes only the links and checksums, not the modules. To add a
+[CHJ85/PhotoCraft-Plugins](https://github.com/CHJ85/PhotoCraft-Plugins) (33, pinned to a commit),
+[Mitacore/photocraft-plugin-posterize](https://github.com/Mitacore/photocraft-plugin-posterize) (1)
+and, added on 2026-11-03, [shortcircuit486/retouchcraft](https://github.com/shortcircuit486/retouchcraft)
+(1), all MIT-licensed. PhotoCraft distributes only the links and checksums, not the modules. To add a
 plug-in, add a listing with its URL, size and `sha256sum`; a native-code companion
 (`kobaltgit/photocraft-companion`'s `.pcpl` packages) is a separate program, not an ABI v1 module, and
-isn't listed.
+isn't listed. `emilanderss0n/MoxoCraft` ships ABI v1 modules but has no license yet, so it isn't
+listed either.
 
 Plug-ins are installed **per process**, not per document. A smart filter recorded from a plug-in
 (`{"command": "plugin.run", "params": {"id", "params"}}`) re-runs on re-render while that plug-in is

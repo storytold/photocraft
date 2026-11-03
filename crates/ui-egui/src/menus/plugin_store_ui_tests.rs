@@ -153,13 +153,38 @@ fn an_outdated_plug_in_offers_update_and_uninstall() {
     let bytes = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../plugins/tests/fixtures/invert.wasm")).unwrap();
     let plugin = photocraft_plugins::registry::install_bytes(&bytes).unwrap();
     let mut listing = entry(plugin.id(), "Invert Test");
-    listing.version = format!("{}-newer", plugin.manifest().version);
+    listing.version = "999.0.0".into();
     let (mut app, _) = app();
     app.session.plugin_store.set_catalog(vec![listing]);
     open(&mut app, true);
     let h = harness(app);
     h.get_by_label("Update");
     h.get_by_label("Uninstall");
+}
+
+#[test]
+fn a_newer_install_is_not_offered_the_older_listing() {
+    let bytes = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../plugins/tests/fixtures/invert.wasm")).unwrap();
+    let plugin = photocraft_plugins::registry::install_bytes(&bytes).unwrap();
+    let mut listing = entry(plugin.id(), "Invert Test");
+    listing.version = "0.0.0-alpha".into();
+    let (mut app, _) = app();
+    app.session.plugin_store.set_catalog(vec![listing]);
+    open(&mut app, true);
+    let h = harness(app);
+    h.get_by_label("Uninstall");
+    assert!(h.query_by_label("Update").is_none(), "the listing would be a downgrade");
+}
+
+#[test]
+fn search_finds_a_plug_in_by_its_id() {
+    let (mut app, _) = app();
+    open(&mut app, false);
+    // Only the id has "ui.vignette": the name, description and author don't.
+    app.ui.plugin_store.query = " UI.Vignette ".into();
+    let h = harness(app);
+    h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Vignette Test");
+    assert!(h.query_by_label("Halftone Test").is_none());
 }
 
 #[test]

@@ -6,7 +6,7 @@
 
 use std::collections::BTreeSet;
 
-use photocraft_engine::plugin_store_cmds::{Entry, Job};
+use photocraft_engine::plugin_store_cmds::{Entry, Job, is_newer};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -58,20 +58,18 @@ fn state_of(app: &PhotocraftApp, e: &Entry) -> State {
     }
     match installed_version(&e.id) {
         None => State::NotInstalled,
-        Some(v) if v != e.version => State::Update,
+        // A side-loaded newer version stays put: the listing would be a downgrade.
+        Some(v) if is_newer(&e.version, &v) => State::Update,
         Some(_) => State::Installed,
     }
 }
 
-fn matches(e: &Entry, query: &str) -> bool {
-    let q = query.trim().to_lowercase();
-    q.is_empty() || [&e.name, &e.description, &e.author, &e.collection].iter().any(|f| f.to_lowercase().contains(&q))
-}
-
-/// The listings the window shows, in catalog order (grouped by collection).
+/// The listings the window shows, in catalog order (grouped by collection). The search is
+/// `plugin.store.list`'s, so an id finds its plug-in here too.
 fn visible(app: &PhotocraftApp) -> Vec<Entry> {
     let v = &app.ui.plugin_store;
-    app.session.plugin_store.catalog().iter().filter(|e| matches(e, &v.query) && (!v.installed_only || installed_version(&e.id).is_some())).cloned().collect()
+    let found = |e: &Entry| photocraft_engine::plugin_store_cmds::matches(e, &v.query);
+    app.session.plugin_store.catalog().iter().filter(|e| found(e) && (!v.installed_only || installed_version(&e.id).is_some())).cloned().collect()
 }
 
 /// What a click asked for, run after drawing (commands need `&mut app`).
