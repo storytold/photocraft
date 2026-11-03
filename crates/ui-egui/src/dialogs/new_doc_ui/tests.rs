@@ -908,7 +908,7 @@ mod dialog {
         h.state().session.presets.recent_documents.iter().map(|r| r.width).collect()
     }
 
-    /// Creating a document at the unmodified Clipboard size skips Recent, while resizing it via UI or `ui.dialog.set` records it.
+    /// Creating a document at the unmodified Clipboard size skips Recent, while customizing its size or resolution via UI or `ui.dialog.set` records it.
     #[test]
     fn a_document_at_the_clipboard_size_is_not_added_to_recent() {
         let mut h = harness();
@@ -929,6 +929,16 @@ mod dialog {
         enter(&mut h);
         assert_eq!(recent_widths(&h), [640]);
 
+        // Changing only the resolution in pixel units also records the customized Clipboard entry.
+        h.state_mut().ui.open_dialog(DialogKind::NewDocument, UiState::new_document_fields());
+        h.run_steps(3);
+        let mut f = fields(&h);
+        super::super::set_clipboard(&mut f, 590, 894);
+        super::super::set_resolution(&mut f, 300.0);
+        set_fields(&mut h, f);
+        enter(&mut h);
+        assert_eq!(recent_widths(&h), [590, 640]);
+
         // Resizing through `ui.dialog.set` also clears `__preset` and records the customized size.
         let id = h.state_mut().ui.open_dialog(DialogKind::NewDocument, UiState::new_document_fields());
         h.run_steps(3);
@@ -939,6 +949,6 @@ mod dialog {
         let ctx = h.ctx.clone();
         assert!(matches!(crate::control::handle(h.state_mut(), &ctx, &req), crate::control::Outcome::Done(ref v) if v["ok"] == true));
         enter(&mut h);
-        assert_eq!(recent_widths(&h), [720, 640]);
+        assert_eq!(recent_widths(&h), [720, 590, 640]);
     }
 }
