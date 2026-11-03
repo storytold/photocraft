@@ -621,9 +621,12 @@ pub fn missing_fonts(doc: &Document) -> Vec<String> {
     }
     let mut engine = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner());
     let mut out: Vec<String> = Vec::new();
+    // Families listed so far, so a document of many distinct missing families does not rescan
+    // the list per run while holding the shared engine.
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     for t in layers {
         for r in t.char_runs() {
-            if style_font_missing(&mut engine.fonts, &r.style) && !out.contains(&r.style.font_family) {
+            if style_font_missing(&mut engine.fonts, &r.style) && seen.insert(r.style.font_family.clone()) {
                 out.push(r.style.font_family);
             }
         }
@@ -635,8 +638,9 @@ pub fn missing_fonts(doc: &Document) -> Vec<String> {
 pub fn missing_fonts_in_layer(t: &TextLayer) -> Vec<String> {
     let mut engine = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner());
     let mut out: Vec<String> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     for r in t.char_runs() {
-        if style_font_missing(&mut engine.fonts, &r.style) && !out.contains(&r.style.font_family) {
+        if style_font_missing(&mut engine.fonts, &r.style) && seen.insert(r.style.font_family.clone()) {
             out.push(r.style.font_family);
         }
     }

@@ -403,11 +403,11 @@ fn styles(s: &Session) -> Result<TextStyles> {
 }
 
 fn char_json(d: &CharacterStyleDef, styles: &TextStyles) -> Value {
-    json!({ "id": d.id, "name": d.name, "attrs": d.attrs, "resolved": styles.resolve_char(None, Some(d.id), FAMILY) })
+    json!({ "id": d.id, "name": d.name, "attrs": d.attrs, "resolved": styles.resolve_char_def(None, Some(d), FAMILY) })
 }
 
 fn para_json(d: &ParagraphStyleDef, styles: &TextStyles) -> Value {
-    json!({ "id": d.id, "name": d.name, "paragraphAttrs": d.para_attrs, "characterAttrs": d.char_attrs, "resolved": { "paragraph": styles.resolve_para(Some(d.id)), "character": styles.resolve_char(Some(d.id), None, FAMILY) } })
+    json!({ "id": d.id, "name": d.name, "paragraphAttrs": d.para_attrs, "characterAttrs": d.char_attrs, "resolved": { "paragraph": styles.resolve_para_def(Some(d)), "character": styles.resolve_char_def(Some(d), None, FAMILY) } })
 }
 
 fn list(s: &Session, p: &Value, paragraph: bool) -> Result<Value> {

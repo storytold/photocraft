@@ -16,6 +16,9 @@ pub fn import(doc: &mut Document) -> Vec<String> {
     let mut styles = std::mem::take(&mut doc.text_styles);
     let mut char_ids: HashMap<String, u32> = styles.character.iter().map(|d| (d.name.clone(), d.id)).collect();
     let mut para_ids: HashMap<String, u32> = styles.paragraph.iter().map(|d| (d.name.clone(), d.id)).collect();
+    // The next free ids, found once: asking the styles for each new sheet scanned every style
+    // added so far (quadratic in the number of named sheets a file brings).
+    let (mut next_char, mut next_para) = (styles.next_char_id(), styles.next_para_id());
     let ids: Vec<LayerId> = doc.walk().into_iter().filter(|(_, _, l)| matches!(l.content, LayerContent::Text(_))).map(|(_, _, l)| l.id).collect();
     for id in ids {
         let Some(LayerContent::Text(t)) = doc.layer_mut(id).map(|l| &mut l.content) else { continue };
@@ -29,10 +32,11 @@ pub fn import(doc: &mut Document) -> Vec<String> {
             let id = if let Some(id) = char_ids.get(name).copied() {
                 id
             } else {
-                let Some(id) = styles.next_char_id() else {
+                let Some(id) = next_char else {
                     warnings.push(format!("character style {:?} was not imported: style id space exhausted", name));
                     continue;
                 };
+                next_char = id.checked_add(1);
                 let mut attrs = diff_attrs(st, &sh.normal_char);
                 attrs.remove("postscript_name");
                 styles.character.push(CharacterStyleDef { id, name: name.clone(), attrs });
@@ -46,10 +50,11 @@ pub fn import(doc: &mut Document) -> Vec<String> {
             let id = if let Some(id) = para_ids.get(name).copied() {
                 id
             } else {
-                let Some(id) = styles.next_para_id() else {
+                let Some(id) = next_para else {
                     warnings.push(format!("paragraph style {:?} was not imported: style id space exhausted", name));
                     continue;
                 };
+                next_para = id.checked_add(1);
                 let mut char_attrs = cs.as_ref().map(|c| diff_attrs(c, &sh.normal_char)).unwrap_or_default();
                 char_attrs.remove("postscript_name");
                 styles.paragraph.push(ParagraphStyleDef { id, name: name.clone(), para_attrs: diff_attrs(p, &sh.normal_para), char_attrs });

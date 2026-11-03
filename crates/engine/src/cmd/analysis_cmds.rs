@@ -1026,14 +1026,15 @@ fn record(s: &mut Session, p: &Value) -> Result<Value> {
     }
     s.analysis.next_measurement += 1;
     let keep = s.analysis.data_points.of(source).to_vec();
-    let mut ids = Vec::new();
+    // The new rows are the appended suffix: a fragmented selection makes many rows, and
+    // matching each against the whole log by id was quadratic.
+    let first_new = s.analysis.log.len();
     for mut m in rows {
         m.retain(|k, _| keep.iter().any(|x| x == k));
         s.analysis.next_row += 1;
-        ids.push(s.analysis.next_row);
         s.analysis.log.push(LogRow { id: s.analysis.next_row, values: m });
     }
-    let new: Vec<&LogRow> = s.analysis.log.iter().filter(|r| ids.contains(&r.id)).collect();
+    let new = &s.analysis.log[first_new..];
     Ok(json!({"source": source, "rows": new}))
 }
 

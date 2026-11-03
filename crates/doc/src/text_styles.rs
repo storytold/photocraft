@@ -167,24 +167,30 @@ impl TextStyles {
 
     /// "Character Style N" / "Paragraph Style N" with the first unused N.
     pub fn unique_name(&self, paragraph: bool, base: &str) -> String {
-        let taken = |n: &str| {
-            if paragraph {
-                n == BASIC_PARAGRAPH || self.paragraph.iter().any(|s| s.name == n)
-            } else {
-                n == NO_CHARACTER_STYLE || self.character.iter().any(|s| s.name == n)
-            }
+        // Collected once: with N occupied names the search tries up to N + 1 candidates, and
+        // scanning the styles for each was quadratic.
+        let names: std::collections::HashSet<&str> = if paragraph {
+            self.paragraph.iter().map(|s| s.name.as_str()).chain([BASIC_PARAGRAPH]).collect()
+        } else {
+            self.character.iter().map(|s| s.name.as_str()).chain([NO_CHARACTER_STYLE]).collect()
         };
-        (1..).map(|i| format!("{base} {i}")).find(|n| !taken(n)).unwrap_or_default()
+        (1..).map(|i| format!("{base} {i}")).find(|n| !names.contains(n.as_str())).unwrap_or_default()
     }
 
     /// Paragraph attributes from Basic Paragraph and `para` (a missing id falls back to Basic
     /// Paragraph). The result references `para`.
     pub fn resolve_para(&self, para: Option<u32>) -> ParagraphStyle {
+        self.resolve_para_def(para.and_then(|id| self.para_style(id)))
+    }
+
+    /// [`resolve_para`](Self::resolve_para) given the definition itself (a listing has it in
+    /// hand, and looking each up by id again is a scan of the styles per style).
+    pub fn resolve_para_def(&self, para: Option<&ParagraphStyleDef>) -> ParagraphStyle {
         let mut s = apply_attrs(&ParagraphStyle::default(), &self.basic.para_attrs).unwrap_or_default();
-        if let Some(def) = para.and_then(|id| self.para_style(id)) {
+        if let Some(def) = para {
             s = apply_attrs(&s, &def.para_attrs).unwrap_or(s);
         }
-        s.style_sheet = para.filter(|id| *id != 0 && self.para_style(*id).is_some());
+        s.style_sheet = para.map(|d| d.id).filter(|id| *id != 0);
         s
     }
 
@@ -192,16 +198,20 @@ impl TextStyles {
     /// for an unset family) ← Basic Paragraph ← paragraph style ← character style. The result
     /// references `chr`.
     pub fn resolve_char(&self, para: Option<u32>, chr: Option<u32>, default_family: &str) -> CharStyle {
+        self.resolve_char_def(para.and_then(|id| self.para_style(id)), chr.and_then(|id| self.char_style(id)), default_family)
+    }
+
+    /// [`resolve_char`](Self::resolve_char) given the definitions themselves.
+    pub fn resolve_char_def(&self, para: Option<&ParagraphStyleDef>, chr: Option<&CharacterStyleDef>, default_family: &str) -> CharStyle {
         let base = CharStyle { font_family: default_family.to_string(), ..Default::default() };
         let mut s = apply_attrs(&base, &self.basic.char_attrs).unwrap_or(base);
-        if let Some(def) = para.and_then(|id| self.para_style(id)).filter(|d| d.id != 0) {
+        if let Some(def) = para.filter(|d| d.id != 0) {
             s = apply_attrs(&s, &def.char_attrs).unwrap_or(s);
         }
-        let chr = chr.filter(|id| self.char_style(*id).is_some());
-        if let Some(def) = chr.and_then(|id| self.char_style(id)) {
+        if let Some(def) = chr {
             s = apply_attrs(&s, &def.attrs).unwrap_or(s);
         }
-        s.style_sheet = chr;
+        s.style_sheet = chr.map(|d| d.id);
         s
     }
 

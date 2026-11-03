@@ -357,6 +357,8 @@ fn remove_entries(b: &mut [u8], ifd: &Ifd0, removed: &[usize]) {
     let Some(old) = b.get(ifd.first..table_end.saturating_add(next_bytes)).map(<[u8]>::to_vec) else { return };
     let mut table = Vec::with_capacity(old.len());
     let mut kept = 0usize;
+    // Many malformed entries make both lists long: a scan of `removed` per entry was quadratic.
+    let removed: std::collections::HashSet<usize> = removed.iter().copied().collect();
     for (i, entry) in old.chunks_exact(eb).take(ifd.count).enumerate() {
         if !removed.contains(&(ifd.first + i * eb)) {
             table.extend_from_slice(entry);

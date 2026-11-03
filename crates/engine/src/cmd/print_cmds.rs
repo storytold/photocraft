@@ -18,6 +18,7 @@
 //! PostScript file (`m`/`L`/`C` path construction, `n`/`N` unpainted closed/open paths, `*u`/`*U`
 //! compound paths), following the public PostScript Language Reference and the AI3 format notes.
 
+use std::collections::{HashMap, HashSet};
 use std::io::Write as _;
 
 mod windows_marks;
@@ -1392,23 +1393,28 @@ fn package(s: &mut Session, p: &Value) -> Result<Value> {
     let links_dir = join(&folder, "Links");
     // Copy every linked file once; relink the copy of the document to the copies.
     let mut copied: Vec<(String, String)> = Vec::new();
+    // Indexes of `copied` and `missing`: a document names many links, and scanning the lists for
+    // every layer made packaging quadratic in their number.
+    let mut copied_by_source: HashMap<String, String> = HashMap::new();
+    let mut copied_names: HashSet<String> = HashSet::new();
     let mut relinks: Vec<(photocraft_doc::LayerId, String)> = Vec::new();
     let mut missing = Vec::new();
+    let mut missing_set: HashSet<String> = HashSet::new();
     for (_, _, l) in doc.walk() {
         let LayerContent::Smart(so) = &l.content else { continue };
         let SmartSource::Linked { path } = &so.source else { continue };
-        if missing.contains(path) {
+        if missing_set.contains(path) {
             continue;
         }
-        let target = match copied.iter().find(|(src, _)| src == path) {
-            Some((_, t)) => t.clone(),
+        let target = match copied_by_source.get(path) {
+            Some(t) => t.clone(),
             None => {
                 // A name no earlier copy has, ignoring case (macOS and Windows folders do): a
                 // renamed copy can't take the name of another link either. A file already in
                 // Links (an earlier package into the same folder) is never overwritten.
                 let base = file_name(path);
                 let taken = |n: &str| {
-                    copied.iter().any(|(_, t)| file_name(t).to_lowercase() == n.to_lowercase())
+                    copied_names.contains(&n.to_lowercase())
                         || std::path::Path::new(&join(&links_dir, n)).exists()
                         || std::fs::read_dir(&links_dir)
                             .ok()
@@ -1427,6 +1433,7 @@ fn package(s: &mut Session, p: &Value) -> Result<Value> {
                 // A path that is not followed is packaged as missing, like a file that is gone.
                 let Ok(file) = crate::doc_path::resolve_in(path, document.as_deref().map(std::path::Path::new)) else {
                     missing.push(path.clone());
+                    missing_set.insert(path.clone());
                     continue;
                 };
                 // Only a file PhotoCraft can place is copied; anything else is packaged as missing.
@@ -1434,10 +1441,13 @@ fn package(s: &mut Session, p: &Value) -> Result<Value> {
                     Some(bytes) => {
                         write_file(&t, &bytes)?;
                         copied.push((path.clone(), t.clone()));
+                        copied_by_source.insert(path.clone(), t.clone());
+                        copied_names.insert(fname.to_lowercase());
                         t
                     }
                     None => {
                         missing.push(path.clone());
+                        missing_set.insert(path.clone());
                         continue;
                     }
                 }

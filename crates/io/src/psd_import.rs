@@ -62,8 +62,9 @@ pub(crate) struct Ctx<'a> {
     pub dpi: f32,
     /// The parsed `Txt2` block (type settings EngineData lacks, e.g. optical kerning).
     pub txt2: Option<photocraft_text::engine_data::Value>,
-    /// Smart-filter caches from the global `FEid`/`FXid` blocks (filter masks, by placed id).
-    pub filter_effects: Vec<photocraft_psd::filter_effects::FilterEffectsItem>,
+    /// Smart-filter caches from the global `FEid`/`FXid` blocks (filter masks, by placed id;
+    /// the first item of an id wins).
+    pub filter_effects: std::collections::HashMap<String, photocraft_psd::filter_effects::FilterEffectsItem>,
     /// Filter masks already decoded, by placed id: every layer of a source reads the same item, and
     /// a surface clones by sharing its tiles.
     pub filter_masks: std::collections::HashMap<String, Option<LayerMask>>,
@@ -408,7 +409,7 @@ impl Ctx<'_> {
         if let Some(done) = self.filter_masks.get(placed) {
             return done.clone();
         }
-        let item = self.filter_effects.iter().find(|i| i.id == placed)?;
+        let item = self.filter_effects.get(placed)?;
         let mask = match crate::smart_map::mask_from_item(item, self.mask_fmt.sample, stack) {
             Ok(m) => m,
             Err(e) => {
@@ -672,7 +673,7 @@ impl Ctx<'_> {
                     None => {
                         // Every distinct source is kept until the import ends, so what they add up to is
                         // bounded: past the limit the layer keeps its stored pixels, unmixed.
-                        let item = self.filter_effects.iter().find(|i| i.id == p.placed);
+                        let item = self.filter_effects.get(&p.placed);
                         let cost = item
                             .and_then(|i| i.rect.size().ok())
                             .map_or(0, |(w, h)| (w as u64).saturating_mul(h as u64).saturating_mul(self.fmt.bytes_per_pixel() as u64));
@@ -1266,7 +1267,7 @@ fn psd_to_document_global(
         fatal_error: None,
         dpi: doc.resolution_dpi,
         txt2: global.iter().find(|(_, k, _)| k == b"Txt2").and_then(|(_, _, d)| photocraft_text::psd::parse_txt2(d)),
-        filter_effects: Vec::new(),
+        filter_effects: Default::default(),
         filter_masks: Default::default(),
         unfiltered: Default::default(),
         unfiltered_bytes: 0,
@@ -1287,7 +1288,11 @@ fn psd_to_document_global(
             return None;
         }
         match photocraft_psd::filter_effects::FilterEffects::parse(data) {
-            Ok(fx) => cx.filter_effects.extend(fx.items),
+            Ok(fx) => {
+                for item in fx.items {
+                    cx.filter_effects.entry(item.id.clone()).or_insert(item);
+                }
+            }
             Err(e) => cx.warn(format!("smart filter masks ({}) could not be read: {e}", String::from_utf8_lossy(key))),
         }
     }

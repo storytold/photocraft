@@ -48,8 +48,12 @@ pub struct AslImport {
 /// Patterns an effect list refers to: `(name, id)` in first-use order, without repeats.
 pub fn referenced_patterns(effects: &[Effect]) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = Vec::new();
+    // Seen ids and (for references without an id) names: a style of many pattern strokes must
+    // not rescan the list per reference.
+    let (mut ids, mut names): (HashSet<String>, HashSet<String>) = (HashSet::new(), HashSet::new());
     let mut push = |name: &str, id: &str| {
-        if !out.iter().any(|(n, i)| if id.is_empty() { n == name } else { i == id }) {
+        let new = if id.is_empty() { names.insert(name.to_string()) } else { ids.insert(id.to_string()) };
+        if new {
             out.push((name.to_string(), id.to_string()));
         }
     };

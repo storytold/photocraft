@@ -260,25 +260,36 @@ fn export_import(s: &mut Session, p: &Value) -> Result<Value> {
                 }
             }
             let (mut nb, mut ns) = (0, 0);
+            // Merge by name through an index built once: a file of many distinct names must not
+            // rescan the growing library for each (quadratic, on the command thread).
             if want("brushes") {
+                let mut by_name: std::collections::HashMap<String, usize> = s.tools.presets.iter().enumerate().map(|(i, x)| (x.name.clone(), i)).collect();
                 for mut b in file.brushes {
                     // Nested folders as the commands bound them (a hand-edited file can't build an
                     // absurd tree).
                     b.folder.retain(|f| !f.trim().is_empty());
                     b.folder.truncate(crate::brush_preset_cmds::MAX_FOLDER_DEPTH);
-                    match s.tools.presets.iter_mut().find(|x| x.name == b.name) {
-                        Some(x) => *x = b,
-                        None => s.tools.presets.push(b),
+                    match by_name.get(&b.name) {
+                        Some(&i) => s.tools.presets[i] = b,
+                        None => {
+                            by_name.insert(b.name.clone(), s.tools.presets.len());
+                            s.tools.presets.push(b);
+                        }
                     }
                     nb += 1;
                 }
                 s.brush_presets_changed();
             }
             if want("customShapes") {
+                let mut by_name: std::collections::HashMap<String, usize> =
+                    s.edit_state.custom_shapes.iter().enumerate().map(|(i, x)| (x.name.clone(), i)).collect();
                 for c in file.custom_shapes {
-                    match s.edit_state.custom_shapes.iter_mut().find(|x| x.name == c.name) {
-                        Some(x) => *x = c,
-                        None => s.edit_state.custom_shapes.push(c),
+                    match by_name.get(&c.name) {
+                        Some(&i) => s.edit_state.custom_shapes[i] = c,
+                        None => {
+                            by_name.insert(c.name.clone(), s.edit_state.custom_shapes.len());
+                            s.edit_state.custom_shapes.push(c);
+                        }
                     }
                     ns += 1;
                 }
