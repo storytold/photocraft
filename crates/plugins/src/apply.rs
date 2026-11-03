@@ -156,7 +156,8 @@ impl Plugin {
             }
             r
         };
-        // Large halos also include per-worker host copies: don't multiply them by every CPU.
+        // Bound both host halo copies and total Wasm linear memory across bands.
+        let concurrency = concurrency.min(self.limits().parallel_bands(workers));
         for chunk in bands.chunks(concurrency) {
             #[cfg(not(target_arch = "wasm32"))]
             let results: Vec<Result<Surface>> = {
@@ -167,7 +168,7 @@ impl Plugin {
             let results: Vec<Result<Surface>> = chunk.iter().map(run).collect();
             for r in results {
                 for (c, t) in r?.tiles() {
-                    out.tile_mut(*c).bytes_mut().copy_from_slice(t.bytes());
+                    out.tile_mut(*c).bytes_mut().copy_from_slice(&t.bytes());
                 }
             }
         }
@@ -256,7 +257,8 @@ impl Plugin {
                         v = v.clamp(0.0, 1.0);
                     }
                     if let Some(d) = out.get_mut(di + ch) {
-                        *d = o + (v - o) * k;
+                        // As a built-in edit mixes through the selection (#9483).
+                        *d = o * (1.0 - k) + v * k;
                     }
                 }
             }
@@ -444,7 +446,7 @@ fn encode_band(surface: &Surface, band: Rect, data: &[f32]) -> Surface {
     let mut s = Surface::with_default(surface.format(), &surface.default_pixel());
     for c in band.tiles() {
         if let Some(t) = surface.tile(c) {
-            s.tile_mut(c).bytes_mut().copy_from_slice(t.bytes());
+            s.tile_mut(c).bytes_mut().copy_from_slice(&t.bytes());
         } else {
             s.tile_mut(c);
         }
