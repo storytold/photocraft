@@ -35,6 +35,11 @@ struct MirrorSample {
     pen: Option<PenSample>,
     time_ms: f64,
 }
+#[derive(Clone)]
+struct PendingWrapBatch {
+    options: serde_json::Value,
+    stamps: Vec<serde_json::Value>,
+}
 #[derive(Clone, Copy)]
 enum MirrorPathPoint {
     Break,
@@ -136,6 +141,8 @@ pub(crate) struct State {
     path_release_pending: bool,
     wrap_pending: Vec<serde_json::Value>,
     wrap_options: Option<serde_json::Value>,
+    wrap_deferred: std::collections::VecDeque<PendingWrapBatch>,
+    wrap_blocked: bool,
     wrap_last_flush_ms: Option<f64>,
     /// A native mask Brush gesture stays active across disconnected UV island renderers.
     mask_segmented_live: bool,
@@ -216,25 +223,92 @@ fn tool_event(app: &mut PhotocraftApp, state: &State, event: ToolEvent, modifier
     app.native_uv_mask_gpu_disabled = native_uv_mask_gpu_disabled;
 }
 
-fn flush_wrap_samples(app: &mut PhotocraftApp, state: &mut State) {
+fn flush_wrap_samples(app: &mut PhotocraftApp, state: &mut State) -> bool {
     let now_ms = app.stylus.clock_ms;
-    flush_wrap_samples_at(app, state, now_ms);
+    flush_wrap_samples_at(app, state, now_ms)
 }
 
-fn flush_wrap_samples_at(app: &mut PhotocraftApp, state: &mut State, now_ms: f64) {
-    if state.wrap_pending.is_empty() {
-        return;
+fn flush_wrap_samples_at(app: &mut PhotocraftApp, state: &mut State, now_ms: f64) -> bool {
+    if state.wrap_pending.is_empty() && state.wrap_deferred.is_empty() {
+        return true;
     }
-    let mut params = state.wrap_options.take().unwrap_or_default();
-    if let Some(object) = params.as_object_mut() {
-        object.insert("stamps".into(), serde_json::Value::Array(std::mem::take(&mut state.wrap_pending)));
+    if let Some(options) = state.wrap_options.clone()
+        && !flush_wrap_group(app, state, &options, false)
+    {
+        return false;
     }
-    if let Err(error) = app.run("paint.uvWrap", params) {
-        app.ui.status = error;
-        app.ui.status_error = true;
+    while let Some(batch) = state.wrap_deferred.front().cloned() {
+        if !flush_wrap_group(app, state, &batch.options, true) {
+            return false;
+        }
     }
+    state.wrap_blocked = false;
     state.wrapped = true;
     state.wrap_last_flush_ms = now_ms.is_finite().then_some(now_ms);
+    true
+}
+
+fn flush_wrap_group(app: &mut PhotocraftApp, state: &mut State, options: &serde_json::Value, deferred: bool) -> bool {
+    let mut sent = 0;
+    let pending_len = if deferred { state.wrap_deferred.front().map_or(0, |batch| batch.stamps.len()) } else { state.wrap_pending.len() };
+    while sent < pending_len {
+        let count = (pending_len - sent).min(WRAP_STAMPS_PER_BATCH);
+        let stamps = if deferred {
+            state.wrap_deferred.front().map(|batch| batch.stamps[sent..sent + count].to_vec()).unwrap_or_default()
+        } else {
+            state.wrap_pending[sent..sent + count].to_vec()
+        };
+        let mut params = options.clone();
+        let Some(object) = params.as_object_mut() else {
+            app.ui.status = tl!("Could not prepare the UV paint batch").into();
+            app.ui.status_error = true;
+            return false;
+        };
+        object.insert("stamps".into(), serde_json::Value::Array(stamps));
+        match app.run("paint.uvWrap", params) {
+            Ok(_) => sent += count,
+            Err(error) => {
+                if deferred {
+                    if let Some(batch) = state.wrap_deferred.front_mut() {
+                        batch.stamps.drain(..sent);
+                        if batch.stamps.is_empty() {
+                            state.wrap_deferred.pop_front();
+                        }
+                    }
+                } else {
+                    state.wrap_pending.drain(..sent);
+                    if state.wrap_pending.is_empty() {
+                        state.wrap_options = None;
+                    }
+                }
+                state.wrap_blocked = true;
+                app.ui.status = error;
+                app.ui.status_error = true;
+                return false;
+            }
+        }
+    }
+    if deferred {
+        state.wrap_deferred.pop_front();
+    } else {
+        state.wrap_pending.clear();
+        state.wrap_options = None;
+    }
+    true
+}
+
+fn queue_wrap_stamps(app: &mut PhotocraftApp, state: &mut State, options: serde_json::Value, stamps: Vec<serde_json::Value>) -> bool {
+    let options_changed = state.wrap_options.as_ref().is_some_and(|pending| pending != &options);
+    let exceeds_batch = state.wrap_pending.len().saturating_add(stamps.len()) > WRAP_STAMPS_PER_BATCH;
+    let older_deferred = !state.wrap_deferred.is_empty() || state.wrap_blocked;
+    if (older_deferred || options_changed || exceeds_batch) && !flush_wrap_samples(app, state) {
+        state.wrap_blocked = true;
+        state.wrap_deferred.push_back(PendingWrapBatch { options, stamps });
+        return false;
+    }
+    state.wrap_options.get_or_insert(options);
+    state.wrap_pending.extend(stamps);
+    true
 }
 
 fn wrap_preview_due(mask_target: bool, last_flush_ms: Option<f64>, now_ms: f64) -> bool {
@@ -303,7 +377,9 @@ fn action_for_down(modifiers: Modifiers, tool: Tool) -> Action {
     }
 }
 pub(crate) fn pending(state: &State) -> bool {
-    state.doc.is_some() && (state.last.is_some() || state.mask_segmented_live) && state.tool.is_some_and(canvas::strokes_live)
+    !state.wrap_pending.is_empty()
+        || !state.wrap_deferred.is_empty()
+        || (state.doc.is_some() && (state.last.is_some() || state.mask_segmented_live) && state.tool.is_some_and(canvas::strokes_live))
 }
 pub(crate) fn active_document(state: &State) -> Option<photocraft_doc::DocId> {
     pending(state).then_some(state.doc).flatten()
@@ -375,18 +451,33 @@ fn end_segment(app: &mut PhotocraftApp, state: &mut State, close_contour: bool, 
         close_selection_contour(app, state);
     }
 }
-pub(crate) fn finish(app: &mut PhotocraftApp, state: &mut State) {
-    finish_inner(app, state, false);
+pub(crate) fn finish(app: &mut PhotocraftApp, state: &mut State) -> bool {
+    finish_inner(app, state, false, false)
 }
-fn finish_contour(app: &mut PhotocraftApp, state: &mut State) {
-    finish_inner(app, state, true);
+fn finish_contour(app: &mut PhotocraftApp, state: &mut State) -> bool {
+    finish_inner(app, state, true, true)
 }
-fn finish_inner(app: &mut PhotocraftApp, state: &mut State, preserve_contour: bool) {
-    flush_wrap_samples(app, state);
+fn finish_inner(app: &mut PhotocraftApp, state: &mut State, preserve_contour: bool, drained_release: bool) -> bool {
+    if !state.path_pending.is_empty()
+        || !state.deferred_pointer_events.is_empty()
+        || (state.path_release_pending && !drained_release)
+        || state.native_gpu_release_waiting
+    {
+        app.ui.status = tl!("The UV paint stroke still has input waiting to be processed. Try the command again after the stroke finishes.").into();
+        app.ui.status_error = true;
+        return false;
+    }
+    if !flush_wrap_samples(app, state) {
+        return false;
+    }
     replay_mirror_path(app, state);
     end_segment(app, state, false, true);
     if state.wrapped {
-        let _ = app.run("paint.uvWrap", json!({"end":true}));
+        if let Err(error) = app.run("paint.uvWrap", json!({"end":true})) {
+            app.ui.status = error;
+            app.ui.status_error = true;
+            return false;
+        }
     }
     let keep = preserve_contour
         && state.action == Action::Paint
@@ -403,6 +494,7 @@ fn finish_inner(app: &mut PhotocraftApp, state: &mut State, preserve_contour: bo
         *state = State { line_anchor, ..Default::default() };
     }
     app.uv_paint_key = None;
+    true
 }
 fn replay_mirror_path(app: &mut PhotocraftApp, state: &mut State) {
     let points = std::mem::take(&mut state.mirror_path);
@@ -711,17 +803,11 @@ fn sample(app: &mut PhotocraftApp, ctx: &egui::Context, state: &mut State, view:
             "target":target,
             "coalesce":app.uv_paint_key.clone().unwrap_or_else(|| "uv3d-wrap".into()),
         });
-        if state.wrap_options.as_ref().is_some_and(|pending| pending != &options) {
-            flush_wrap_samples(app, state);
-        }
-        if state.wrap_pending.len() >= WRAP_STAMPS_PER_BATCH {
-            flush_wrap_samples(app, state);
-        }
-        state.wrap_options.get_or_insert(options);
-        state.wrap_pending.push(json!({"triangle":hit.triangle,"position":hit.position,"pressure":app.stylus.pressure()}));
+        let mut stamps = vec![json!({"triangle":hit.triangle,"position":hit.position,"pressure":app.stylus.pressure()})];
         if let Some(mirrored) = mirrored_hit {
-            state.wrap_pending.push(json!({"triangle":mirrored.triangle,"position":mirrored.position,"pressure":app.stylus.pressure()}));
+            stamps.push(json!({"triangle":mirrored.triangle,"position":mirrored.position,"pressure":app.stylus.pressure()}));
         }
+        let _ = queue_wrap_stamps(app, state, options, stamps);
         return;
     }
     if state.last.is_some_and(|last| {
@@ -818,7 +904,13 @@ fn process_path(app: &mut PhotocraftApp, ctx: &egui::Context, state: &mut State,
     let Some(mut last) = state.path_last else { return 0 };
     let started = std::time::Instant::now();
     let mut processed = 0;
+    if state.wrap_blocked && !flush_wrap_samples(app, state) {
+        return 0;
+    }
     while !path_batch_exhausted(processed, limit, started.elapsed()) {
+        if state.wrap_blocked && !flush_wrap_samples(app, state) {
+            break;
+        }
         let Some(point) = next_path_point(&mut last, &mut state.path_pending) else { break };
         app.stylus.clock_ms = point.time_ms;
         app.stylus.select_raw_sample(point.pen);
@@ -827,6 +919,9 @@ fn process_path(app: &mut PhotocraftApp, ctx: &egui::Context, state: &mut State,
         app.stylus.clear_selection();
         state.path_last = Some(last);
         processed += 1;
+        if state.wrap_blocked {
+            break;
+        }
     }
     app.stylus.clear_selection();
     processed
@@ -887,6 +982,14 @@ fn use_bounded_mask_input(native_surface_input: bool, workspace_3d: bool, brush:
 
 fn defer_symmetry_path(native_surface_3d: bool, symmetry_active: bool, tool: Tool) -> bool {
     native_surface_3d && symmetry_active && matches!(tool, Tool::Brush | Tool::Pencil | Tool::Eraser)
+}
+fn defer_wrap_path(wrap: bool, action: Action, tool: Tool) -> bool {
+    wrap && action == Action::Paint && matches!(tool, Tool::Brush | Tool::Pencil | Tool::Eraser)
+}
+
+#[cfg(test)]
+pub(crate) fn pending_path_len(state: &State) -> usize {
+    state.path_pending.len()
 }
 
 fn surface_tool(tool: Tool) -> bool {
@@ -1082,7 +1185,11 @@ pub(crate) fn input(
                     }
                     flush_wrap_samples_at(app, state, now_ms);
                 }
-                finish_contour(app, state);
+                if !finish_contour(app, state) {
+                    defer_pointer_event(state, PointerEvent::Down { point, modifiers, tool: down_tool, symmetry_enabled });
+                    defer_remaining_pointer_events = true;
+                    continue;
+                }
                 static GESTURES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
                 app.uv_paint_key = Some(format!("uv3d-{}", GESTURES.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
                 app.tool_override = Some(down_tool);
@@ -1118,7 +1225,10 @@ pub(crate) fn input(
                     state.modifiers = modifiers;
                     app.tool_override = state.tool;
                     let gesture_tool = state.tool.unwrap_or(tool);
-                    if bounded_mask_path || state.surface_line_active || defer_symmetry_path(native_surface_3d, state.suppress_document_symmetry, gesture_tool)
+                    if bounded_mask_path
+                        || state.surface_line_active
+                        || defer_symmetry_path(native_surface_3d, state.suppress_document_symmetry, gesture_tool)
+                        || defer_wrap_path(view.wrap, state.action, gesture_tool)
                     {
                         state.path_pending.push_back(point);
                     } else {
@@ -1145,7 +1255,8 @@ pub(crate) fn input(
                 mask_stroke_finished |= native_mask_brush && state.held;
                 let bounded_path = bounded_mask_path
                     || state.surface_line_active
-                    || defer_symmetry_path(native_surface_3d, state.suppress_document_symmetry, state.tool.unwrap_or(tool));
+                    || defer_symmetry_path(native_surface_3d, state.suppress_document_symmetry, state.tool.unwrap_or(tool))
+                    || defer_wrap_path(view.wrap, state.action, state.tool.unwrap_or(tool));
                 if bounded_path
                     && state.held
                     && state.tool != Some(Tool::MagicWand)
@@ -1167,6 +1278,7 @@ pub(crate) fn input(
                 if bounded_mask_path
                     || state.surface_line_active
                     || defer_symmetry_path(native_surface_3d, state.suppress_document_symmetry, state.tool.unwrap_or(tool))
+                    || defer_wrap_path(view.wrap, state.action, state.tool.unwrap_or(tool))
                 {
                     state.path_release_pending = true;
                 } else {
@@ -1190,8 +1302,10 @@ pub(crate) fn input(
     if let Some(active_tool) = state.tool {
         app.tool_override = Some(active_tool);
     }
-    let bounded_path =
-        bounded_mask_path || state.surface_line_active || defer_symmetry_path(native_surface_3d, state.suppress_document_symmetry, state.tool.unwrap_or(tool));
+    let bounded_path = bounded_mask_path
+        || state.surface_line_active
+        || defer_symmetry_path(native_surface_3d, state.suppress_document_symmetry, state.tool.unwrap_or(tool))
+        || defer_wrap_path(view.wrap, state.action, state.tool.unwrap_or(tool));
     let processed = if bounded_path { process_path(app, ui.ctx(), state, &view, SURFACE_SAMPLES_PER_FRAME) } else { 0 };
     if state.suppress_document_symmetry {
         replay_mirror_path(app, state);
@@ -1460,6 +1574,31 @@ mod tests {
         assert!(!path_batch_exhausted(127, 128, std::time::Duration::from_millis(2)));
         assert!(path_batch_exhausted(128, 128, std::time::Duration::ZERO));
         assert!(path_batch_exhausted(1, 128, SURFACE_PATH_BUDGET));
+    }
+
+    #[test]
+    fn finish_keeps_acquired_input_when_path_or_pointer_events_are_queued() {
+        let _gpu = photocraft_testkit::gpu_lock();
+        let (mut app, _, _) = setup(Tool::Brush);
+        let point = PathPoint::from(egui::pos2(24.0, 36.0));
+        let mut state = State {
+            path_last: Some(point),
+            path_pending: VecDeque::from([PathPoint::from(egui::pos2(48.0, 60.0))]),
+            deferred_pointer_events: VecDeque::from([PointerEvent::Up { point, modifiers: Modifiers::NONE }]),
+            path_release_pending: true,
+            ..Default::default()
+        };
+
+        assert!(!finish(&mut app, &mut state));
+        assert_eq!(state.path_pending.len(), 1, "accepted surface samples must remain queued");
+        assert_eq!(state.deferred_pointer_events.len(), 1, "queued pointer events must remain ordered");
+        assert!(state.path_release_pending, "the pending Up must not be consumed early");
+        assert!(app.drag.is_none(), "finishing must not commit a partial stroke");
+
+        state.path_pending.clear();
+        state.deferred_pointer_events.clear();
+        state.path_release_pending = false;
+        assert!(finish(&mut app, &mut state), "the same finish barrier succeeds once acquired input has drained");
     }
 
     #[test]
@@ -2060,6 +2199,58 @@ mod tests {
         assert_eq!(app.session.active().unwrap().history.past_len(), history + 1, "the entire physical stroke remains one undo step");
         app.run("edit.undo", json!({})).unwrap();
         assert_eq!(app.session.active().unwrap().doc.layers[0].surface().unwrap(), before.layers[0].surface().unwrap());
+    }
+    #[test]
+    fn wrap_flush_splits_at_engine_limit_and_retains_failed_tail() {
+        let _gpu = photocraft_testkit::gpu_lock();
+        let (mut app, scene, g) = setup(Tool::Brush);
+        let maps = Materials::default();
+        let mut view = make_view(&scene, &g, &maps);
+        view.wrap = true;
+        let point = screen(&view, 0);
+        let at = (point - view.rect.min) / view.rect.size();
+        let hit = g.hit(&scene, view.camera, &maps, [f64::from(at.x), f64::from(at.y)], view.size).expect("sample should hit fixture mesh");
+        let stamp = json!({"triangle":hit.triangle,"position":hit.position,"pressure":1.0});
+        let options = json!({"erase":false,"pencil":false,"target":"composite","coalesce":"wrap-limit-test"});
+        let mut state = State { wrap_options: Some(options.clone()), wrap_pending: vec![stamp.clone(); WRAP_STAMPS_PER_BATCH + 1], ..Default::default() };
+
+        assert!(flush_wrap_samples_at(&mut app, &mut state, 50.0));
+        assert!(state.wrap_pending.is_empty(), "257 stamps are dispatched in two legal batches");
+        assert!(state.wrapped);
+
+        let invalid = json!({"triangle":u64::MAX,"position":hit.position,"pressure":1.0});
+        state.wrap_options = Some(options);
+        state.wrap_pending = vec![stamp; WRAP_STAMPS_PER_BATCH];
+        state.wrap_pending.push(invalid.clone());
+        assert!(!flush_wrap_samples_at(&mut app, &mut state, 60.0), "the second batch is rejected atomically");
+        assert_eq!(state.wrap_pending, [invalid], "only the successfully submitted prefix is removed");
+        assert!(state.wrapped, "the accepted wrapped stroke remains retryable");
+        state.wrap_pending[0] = json!({"triangle":hit.triangle,"position":hit.position,"pressure":1.0});
+        assert!(flush_wrap_samples_at(&mut app, &mut state, 70.0));
+        assert!(state.wrap_pending.is_empty());
+        finish(&mut app, &mut state);
+    }
+
+    #[test]
+    fn wrap_boundary_counts_source_and_mirror_stamps_before_queueing() {
+        let _gpu = photocraft_testkit::gpu_lock();
+        let (mut app, scene, g) = setup(Tool::Brush);
+        let maps = Materials::default();
+        let mut view = make_view(&scene, &g, &maps);
+        view.wrap = true;
+        let point = screen(&view, 0);
+        let at = (point - view.rect.min) / view.rect.size();
+        let hit = g.hit(&scene, view.camera, &maps, [f64::from(at.x), f64::from(at.y)], view.size).expect("sample should hit fixture mesh");
+        let stamp = json!({"triangle":hit.triangle,"position":hit.position,"pressure":1.0});
+        let options = json!({"erase":false,"pencil":false,"target":"composite","coalesce":"wrap-boundary-test"});
+        let mut state = State { wrap_options: Some(options.clone()), wrap_pending: vec![stamp.clone(); 255], ..Default::default() };
+
+        assert!(queue_wrap_stamps(&mut app, &mut state, options, vec![stamp.clone(), stamp]));
+        assert_eq!(state.wrap_pending.len(), 2, "255 queued stamps flush before a source+mirror pair is appended");
+        assert!(state.wrap_pending.len() <= WRAP_STAMPS_PER_BATCH);
+        assert!(state.wrapped, "the existing 255-stamp prefix was submitted");
+        assert!(flush_wrap_samples_at(&mut app, &mut state, 80.0));
+        finish(&mut app, &mut state);
     }
     #[test]
     fn uv_paint_respects_selection_and_hidden_materials_and_eraser() {

@@ -27,7 +27,7 @@ impl PhotocraftApp {
         }
         #[cfg(feature = "uv-workbench")]
         if matches!(id, "edit.undo" | "edit.redo") {
-            crate::uv_ui::finish_paint(self);
+            crate::uv_ui::finish_paint(self)?;
         }
 
         #[cfg(feature = "uv-workbench")]

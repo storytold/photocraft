@@ -51,9 +51,10 @@ Ctrl+D clears shell IDs and still-owned UV selection masks across map documents,
 manually replaced selections in other documents. Project manifests persist ownership using
 binding slot indices, with conservative defaults for legacy files. Shift+F5 opens native Fill
 in shell and paint modes: camera F1–F6 shortcuts require an exact unmodified key press.
-Ctrl+RMB drag changes only brush size in both 2D and 3D (feature-enabled builds). The gesture
-latches until RMB release; hardness/opacity, texture pixels, document history and Maya camera
-navigation are unaffected. Alt+RMB retains dolly navigation in 3D.
+In macOS builds with `uv-workbench` enabled, Ctrl+RMB drag changes only brush size in the 3D/UV
+workspace's 3D view and UV 2D texture view. Ordinary 2D workspaces keep their existing gestures.
+The gesture latches until RMB release; hardness/opacity, texture pixels, document history and Maya
+camera navigation are unaffected. Alt+RMB retains dolly navigation in 3D.
 
 The right dock contains material visibility and base/normal texture cards. Each card opens
 the native picker on click or accepts one local image dropped from the OS. Its ellipsis

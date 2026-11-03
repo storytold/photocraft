@@ -1,6 +1,43 @@
 //! Native channel/mask display projected through each material UV, independent of source maps.
 use crate::PhotocraftApp;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ShellMapKey {
+    generation: u64,
+    document: photocraft_doc::DocId,
+    size: [u32; 2],
+    materials: Vec<usize>,
+}
+#[derive(Clone)]
+struct CachedShellMap {
+    key: ShellMapKey,
+    ids: std::sync::Arc<Vec<u32>>,
+}
+
+/// Return the shared shell ownership map for UV materials bound to this mask document.
+/// Cache it in egui memory so Levels sampling does not rasterize the UV topology each frame.
+pub(crate) fn shell_ids_for_document(
+    app: &PhotocraftApp,
+    ctx: &egui::Context,
+    document: photocraft_doc::DocId,
+    size: [u32; 2],
+) -> Option<(Vec<usize>, std::sync::Arc<Vec<u32>>)> {
+    let scene = app.session.uv.scene.as_deref()?;
+    let topology = app.session.uv.topology.as_deref()?;
+    let materials = (0..scene.materials.len()).filter(|material| has_mask_binding(app, *material, document)).collect::<Vec<_>>();
+    if materials.is_empty() {
+        return None;
+    }
+    let key = ShellMapKey { generation: app.session.uv.generation, document, size, materials: materials.clone() };
+    let id = egui::Id::NULL.with("uv-mask-levels-shell-map");
+    if let Some(cached) = ctx.data(|data| data.get_temp::<CachedShellMap>(id)).filter(|cached| cached.key == key) {
+        return Some((materials, cached.ids));
+    }
+    let ids = std::sync::Arc::new(topology.shell_id_map_for_materials(scene, size[0], size[1], &materials, [0, 0]).ok()?);
+    ctx.data_mut(|data| data.insert_temp(id, CachedShellMap { key, ids: ids.clone() }));
+    Some((materials, ids))
+}
+
 /// Whether `material` has any source map bound to the displayed mask document. Mask display may
 /// come from Color, Roughness, Normal, or another UV channel; keep this predicate shared by the
 /// preview renderer and the paint hit-target gate.

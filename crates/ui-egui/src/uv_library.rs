@@ -15,7 +15,10 @@ struct Drag {
     id: u64,
 }
 fn place(app: &mut PhotocraftApp, id: u64) {
-    crate::uv_ui::finish_paint(app);
+    if let Err(error) = crate::uv_ui::finish_paint(app) {
+        app.ui.uv_workbench.status = error;
+        return;
+    }
     if app.ui.transform.is_some() {
         crate::transform_tool::commit(app);
     }
@@ -94,8 +97,9 @@ pub(crate) fn layers_drop(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> bool {
             && let Some(payload) = egui::DragAndDrop::take_payload::<Drag>(ui.ctx())
         {
             if let Some((_, _, layer, index)) = fill_target {
-                crate::uv_ui::finish_paint(app);
-                if let Err(error) = app.run("uv.maskPaint.fillSource", json!({"layer":layer,"index":index,"asset":payload.id})) {
+                if let Err(error) = crate::uv_ui::finish_paint(app)
+                    .and_then(|()| app.run("uv.maskPaint.fillSource", json!({"layer":layer,"index":index,"asset":payload.id})).map(|_| ()))
+                {
                     app.ui.uv_workbench.status = error;
                 }
             } else if fill_row.is_some() {

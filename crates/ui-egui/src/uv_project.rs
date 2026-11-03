@@ -87,7 +87,7 @@ pub(crate) fn save_to(app: &mut PhotocraftApp, path: String) -> Result<Value, St
     if crate::uv_lighting::pending(&app.uv_cache.lighting) {
         return Err(tl!("Wait for the environment map to finish preparing, then save the project again").into());
     }
-    uv_ui::finish_paint(app);
+    uv_ui::finish_paint(app)?;
     if let Some([x, y, _]) = app.drag.as_ref().and_then(|d| d.points.last()).copied() {
         crate::canvas::tool_event(app, crate::canvas::ToolEvent::Up { x, y }, egui::Modifiers::NONE);
     }
@@ -144,13 +144,10 @@ fn saved_view_changed(view: &Value, saved: &Value) -> bool {
     }
     without_pending_fit(view) != without_pending_fit(saved)
 }
-pub(crate) fn close(app: &mut PhotocraftApp, discard: bool) {
+pub(crate) fn close(app: &mut PhotocraftApp, discard: bool) -> Result<(), String> {
     let in_3d = app.ui.workspace == "3D";
-    uv_ui::finish_paint(app);
-    if let Err(e) = app.run("uv.project.close", json!({"discard":discard})) {
-        app.ui.status = e;
-        return;
-    }
+    uv_ui::finish_paint(app)?;
+    app.run("uv.project.close", json!({"discard":discard})).inspect_err(|e| app.ui.status = e.clone())?;
     app.ui.uv_workbench.project_path.clear();
     app.uv_cache.project = Default::default();
     app.uv_cache.library = Default::default();
@@ -161,10 +158,12 @@ pub(crate) fn close(app: &mut PhotocraftApp, discard: bool) {
         // The engine close activates and clears the UV bank before this UI transition.
         // If ordinary-bank activation fails, keep the workspace label aligned with the bank.
         app.ui.workspace = "3D".into();
-        app.ui.status = error;
+        app.ui.status = error.clone();
         app.ui.status_error = true;
+        return Err(error);
     }
     app.uv_cache.project = Default::default();
+    Ok(())
 }
 /// One project question replaces a sequence of texture-file questions.
 pub(crate) fn intercept(app: &mut PhotocraftApp, id: &str, params: &Value) -> bool {
@@ -179,7 +178,10 @@ pub(crate) fn intercept(app: &mut PhotocraftApp, id: &str, params: &Value) -> bo
     if skip && matches!(id, "file.uv.import" | "file.uv.openProject" | "uv.model.import" | "uv.project.load") {
         app.uv_cache.project.approved_replace = true;
     }
-    uv_ui::finish_paint(app);
+    if uv_ui::finish_paint(app).is_err() {
+        // Keep the pending command and project in place so the user can retry after input drains.
+        return true;
+    }
     if !skip && dirty(app) {
         if app.uv_cache.project.prompt.is_none() {
             app.uv_cache.project.prompt = Some((if native_close { "file.uv.closeProject" } else { id }.to_owned(), params.clone()));
@@ -187,7 +189,7 @@ pub(crate) fn intercept(app: &mut PhotocraftApp, id: &str, params: &Value) -> bo
         return true;
     }
     if native_close {
-        close(app, false);
+        let _ = close(app, false);
         return true;
     }
     if id == "file.exit" {

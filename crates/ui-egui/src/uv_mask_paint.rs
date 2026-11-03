@@ -78,10 +78,10 @@ fn sample_levels_at_inner(app: &mut PhotocraftApp, ctx: &egui::Context, point: [
         return false;
     };
     let (x, y) = (point[0].floor() as i32, point[1].floor() as i32);
-    let Some(sample) =
-        photocraft_compose::mask_paint::compose_prefix(stack, picker.index, photocraft_geom::Rect::new(x, y, x.saturating_add(1), y.saturating_add(1)))
-            .and_then(|values| values.first().copied())
-    else {
+    let doc_id = st.doc.id;
+    let size = st.doc.size;
+    let region = photocraft_geom::Rect::new(x, y, x.saturating_add(1), y.saturating_add(1));
+    let Some(sample) = compose_levels_prefix(app, ctx, doc_id, size, stack, picker.index, region).and_then(|values| values.first().copied()) else {
         return true;
     };
     let Some(effect) = stack.layers.get(picker.index) else { return true };
@@ -480,7 +480,7 @@ pub(crate) fn levels_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> b
     let Some(index) = selected_effect(ui.ctx(), st.doc.id.0, layer.id.0).filter(|index| *index == stack.active) else { return false };
     let Some(effect) = stack.layers.get(index) else { return false };
     let EffectKind::Levels { input_black, gamma, input_white, output_black, output_white } = &effect.kind else { return false };
-    let (doc_id, revision, size) = (st.doc.id.0, st.revision, st.doc.size);
+    let (doc, doc_id, revision, size) = (st.doc.id, st.doc.id.0, st.revision, st.doc.size);
     let (layer_id, index) = (layer.id, index);
     let effect_name = effect.name.clone();
     let mut visible = effect.visible;
@@ -498,7 +498,7 @@ pub(crate) fn levels_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> b
         .data(|data| data.get_temp::<(u64, Value)>(values_id))
         .filter(|(cached_revision, _)| *cached_revision == revision)
         .map_or_else(|| canonical.clone(), |(_, values)| values);
-    let hist = mask_levels_histogram(ui.ctx(), doc_id, revision, layer_id.0, index, stack, size);
+    let hist = mask_levels_histogram(app, ui.ctx(), doc, doc_id, revision, layer_id.0, index, stack, size);
     let cx = crate::adjust_editors::EditorCx {
         mem: egui::Id::unique(("mask-levels", doc_id, layer_id.0, index)),
         hist: Some(hist),
@@ -606,7 +606,9 @@ fn preserve_level_value(values: &Value, canonical: &Value, key: &str, original: 
 /// Sampling 32×32 spread-out 4×4 patches keeps this useful on 4k masks without recompositing the
 /// full mask on every Properties frame. The cached entry is replaced after any document revision.
 fn mask_levels_histogram(
+    app: &PhotocraftApp,
     ctx: &egui::Context,
+    doc_id: photocraft_doc::DocId,
     doc: u64,
     revision: u64,
     layer: u64,
@@ -615,8 +617,17 @@ fn mask_levels_histogram(
     size: photocraft_doc::Size,
 ) -> std::sync::Arc<crate::tone::Histograms> {
     let id = egui::Id::unique(("mask-levels-histogram", doc, layer, index));
-    if let Some((cached_revision, cached)) = ctx.data(|data| data.get_temp::<(u64, std::sync::Arc<crate::tone::Histograms>)>(id))
-        && cached_revision == revision
+    let uv_generation = app.session.uv.generation;
+    let bound_materials = app
+        .session
+        .uv
+        .scene
+        .as_deref()
+        .map(|scene| (0..scene.materials.len()).filter(|material| crate::uv_mask::has_mask_binding(app, *material, doc_id)).collect::<Vec<_>>())
+        .unwrap_or_default();
+    let cache_revision = (revision, uv_generation, bound_materials.clone());
+    if let Some((cached_revision, cached)) = ctx.data(|data| data.get_temp::<((u64, u64, Vec<usize>), std::sync::Arc<crate::tone::Histograms>)>(id))
+        && cached_revision == cache_revision
     {
         return cached;
     }
@@ -627,7 +638,7 @@ fn mask_levels_histogram(
             let x = (gx * width / 32).min((width - 1).max(0));
             let y = (gy * height / 32).min((height - 1).max(0));
             let rect = photocraft_geom::Rect::new(x, y, (x + 4).min(width), (y + 4).min(height));
-            if let Some(values) = photocraft_compose::mask_paint::compose_prefix(stack, index, rect) {
+            if let Some(values) = compose_levels_prefix(app, ctx, doc_id, size, stack, index, rect) {
                 for value in values {
                     let bin = (value.clamp(0.0, 1.0) * 255.0).round() as usize;
                     bins[bin] = bins[bin].saturating_add(1);
@@ -636,8 +647,32 @@ fn mask_levels_histogram(
         }
     }
     let cached = std::sync::Arc::new(crate::tone::Histograms { tag: doc ^ revision ^ layer ^ index as u64, ch: vec![bins], ..Default::default() });
-    ctx.data_mut(|data| data.insert_temp(id, (revision, cached.clone())));
+    ctx.data_mut(|data| data.insert_temp(id, (cache_revision, cached.clone())));
     cached
+}
+
+fn compose_levels_prefix(
+    app: &PhotocraftApp,
+    ctx: &egui::Context,
+    document: photocraft_doc::DocId,
+    size: photocraft_doc::Size,
+    stack: &photocraft_doc::mask_paint::Stack,
+    end_layer: usize,
+    region: photocraft_geom::Rect,
+) -> Option<Vec<f32>> {
+    let has_uv_binding = app
+        .session
+        .uv
+        .scene
+        .as_deref()
+        .is_some_and(|scene| (0..scene.materials.len()).any(|material| crate::uv_mask::has_mask_binding(app, material, document)));
+    if !has_uv_binding {
+        return photocraft_compose::mask_paint::compose_prefix(stack, end_layer, region);
+    }
+    let (_, ids) = crate::uv_mask::shell_ids_for_document(app, ctx, document, [size.width, size.height])?;
+    let canvas = photocraft_geom::Rect::new(0, 0, size.width as i32, size.height as i32);
+    let shell_ids = photocraft_compose::mask_paint::ShellIdMap::new(canvas, &ids)?;
+    photocraft_compose::mask_paint::compose_prefix_with_shell_ids(stack, end_layer, region, shell_ids)
 }
 
 /// Fill settings live in Properties; the rectangle itself is edited directly on the 2D canvas.
@@ -1094,6 +1129,146 @@ mod tests {
         assert_eq!(preserve_level_value(&changed, &canonical, "inBlack", source_black, 1.0 / 255.0), source_black);
         assert_eq!(preserve_level_value(&changed, &canonical, "inWhite", source_white, 1.0 / 255.0), source_white);
         assert_eq!(preserve_level_value(&changed, &canonical, "gamma", 1.25, 1.0), 1.5);
+    }
+
+    fn levels_shell_fixture()
+    -> (PhotocraftApp, egui::Context, photocraft_doc::DocId, photocraft_doc::LayerId, usize, photocraft_doc::mask_paint::Stack, Vec<u32>, [i32; 2], [i32; 2])
+    {
+        use photocraft_color::PixelFormat;
+        use photocraft_doc::mask_paint::{Paint, Stack};
+        use photocraft_raster::Surface;
+
+        let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../uv/tests/fixtures/two-shells.obj");
+        let mut session = photocraft_engine::Session::new();
+        session.execute("uv.model.import", json!({"path":source})).unwrap();
+        let mut app = PhotocraftApp::new(session, crate::Services::default());
+        app.run("uv.texture.create", json!({"channel":"baseColor","width":32,"height":32})).unwrap();
+        let (doc_id, layer_id, material) = {
+            let active = app.session.active().unwrap();
+            (active.doc.id, active.active_layer.unwrap(), app.session.uv.material)
+        };
+        let size = photocraft_doc::Size { width: 32, height: 32 };
+        let ctx = egui::Context::default();
+        let (_, shell_ids) = crate::uv_mask::shell_ids_for_document(&app, &ctx, doc_id, [size.width, size.height]).unwrap();
+        let pair = {
+            let mut closest: Option<(i32, [i32; 2], [i32; 2])> = None;
+            for y in 0..size.height as i32 {
+                for x in 0..size.width as i32 {
+                    let source_shell = shell_ids[y as usize * size.width as usize + x as usize];
+                    if source_shell == 0 {
+                        continue;
+                    }
+                    for dy in -6..=6 {
+                        for dx in -6..=6 {
+                            let distance = dx * dx + dy * dy;
+                            let (tx, ty) = (x + dx, y + dy);
+                            if distance == 0 || distance > 36 || tx < 0 || ty < 0 || tx >= size.width as i32 || ty >= size.height as i32 {
+                                continue;
+                            }
+                            let target_shell = shell_ids[ty as usize * size.width as usize + tx as usize];
+                            if target_shell != 0 && target_shell != source_shell && closest.is_none_or(|(best, ..)| distance < best) {
+                                closest = Some((distance, [x, y], [tx, ty]));
+                            }
+                        }
+                    }
+                }
+            }
+            let (_, source, target) = closest.expect("the fixture has UV shells within a 6 px blur radius");
+            (source, target)
+        };
+
+        let mut base = Surface::with_default(PixelFormat::GRAY8, &[0.0]);
+        base.write_pixel(pair.0[0], pair.0[1], &[1.0]);
+        let make_effect = |name: &str, kind| Paint {
+            name: name.into(),
+            visible: true,
+            opacity: 1.0,
+            blend: photocraft_color::BlendMode::Normal,
+            surface: Surface::with_default(PixelFormat::RGBA8, &[0.0, 0.0, 0.0, 0.0]),
+            fill_map: None,
+            fill_map_size: [0, 0],
+            fill_bounds: None,
+            kind,
+        };
+        let stack = Stack {
+            base,
+            layers: vec![
+                make_effect("Blur", EffectKind::Blur { radius: 6 }),
+                make_effect("Levels", EffectKind::Levels { input_black: 0.5, gamma: 1.0, input_white: 1.0, output_black: 0.0, output_white: 1.0 }),
+            ],
+            active: 1,
+        };
+        let mut mask = LayerMask::hide_all();
+        mask.paint = Some(stack.clone());
+        let active = app.session.active_mut().unwrap();
+        std::sync::Arc::make_mut(&mut active.doc).layer_mut(layer_id).unwrap().mask = Some(mask);
+        app.ui.tool = crate::state::Tool::Brush;
+        (app, ctx, doc_id, layer_id, material, stack, shell_ids.as_ref().clone(), pair.0, pair.1)
+    }
+
+    fn sampled_histogram(size: photocraft_doc::Size, mut compose: impl FnMut(photocraft_geom::Rect) -> Option<Vec<f32>>) -> [u32; 256] {
+        let (width, height) = (size.width as i32, size.height as i32);
+        let mut bins = [0u32; 256];
+        for gy in 0..32 {
+            for gx in 0..32 {
+                let x = (gx * width / 32).min((width - 1).max(0));
+                let y = (gy * height / 32).min((height - 1).max(0));
+                let region = photocraft_geom::Rect::new(x, y, (x + 4).min(width), (y + 4).min(height));
+                if let Some(values) = compose(region) {
+                    for value in values {
+                        let bin = (value.clamp(0.0, 1.0) * 255.0).round() as usize;
+                        bins[bin] = bins[bin].saturating_add(1);
+                    }
+                }
+            }
+        }
+        bins
+    }
+
+    #[test]
+    fn levels_picker_and_histogram_constrain_blur_to_bound_uv_shells() {
+        let _gpu = photocraft_testkit::gpu_lock();
+        let (mut app, ctx, doc_id, layer_id, material, stack, ids, source, target) = levels_shell_fixture();
+        let size = photocraft_doc::Size { width: 32, height: 32 };
+        let canvas = photocraft_geom::Rect::new(0, 0, size.width as i32, size.height as i32);
+        let shell_map = photocraft_compose::mask_paint::ShellIdMap::new(canvas, &ids).unwrap();
+        let target_region = photocraft_geom::Rect::new(target[0], target[1], target[0] + 1, target[1] + 1);
+        let expected_bound = photocraft_compose::mask_paint::compose_prefix_with_shell_ids(&stack, 1, target_region, shell_map).unwrap()[0];
+        let expected_unbound = photocraft_compose::mask_paint::compose_prefix(&stack, 1, target_region).unwrap()[0];
+        assert_eq!(expected_bound, 0.0, "a shell-aware Blur cannot carry the source texel into its neighbor");
+        assert!(expected_unbound > 0.0, "ordinary image-wide Blur demonstrates the cross-shell bleed");
+        assert_ne!(source, target);
+
+        let document_revision = app.session.active().unwrap().revision;
+        let bound_histogram = mask_levels_histogram(&app, &ctx, doc_id, doc_id.0, document_revision, layer_id.0, 1, &stack, size);
+        let expected_shell_histogram =
+            sampled_histogram(size, |region| photocraft_compose::mask_paint::compose_prefix_with_shell_ids(&stack, 1, region, shell_map));
+        let naive_histogram = sampled_histogram(size, |region| photocraft_compose::mask_paint::compose_prefix(&stack, 1, region));
+        assert_eq!(bound_histogram.ch[0], expected_shell_histogram, "the Levels histogram uses the shared shell-aware prefix");
+        assert_ne!(expected_shell_histogram, naive_histogram, "the neighboring shell changes the histogram when Blur is not constrained");
+
+        // The same document revision under a changed binding must not reuse the bound histogram.
+        app.session.uv.bindings[material] = None;
+        assert!(!crate::uv_mask::has_mask_binding(&app, material, doc_id));
+        let unbound_histogram = mask_levels_histogram(&app, &ctx, doc_id, doc_id.0, document_revision, layer_id.0, 1, &stack, size);
+        assert_eq!(unbound_histogram.ch[0], naive_histogram, "unbound masks preserve ordinary image-wide histogram composition");
+        assert!(!std::sync::Arc::ptr_eq(&bound_histogram, &unbound_histogram), "binding context participates in the histogram cache key");
+
+        app.session.uv.bindings[material] = Some(doc_id);
+        select_effect(&ctx, doc_id.0, layer_id.0, 1);
+        ctx.data_mut(|data| data.insert_temp(levels_picker_id(), LevelsPicker { doc: doc_id.0, layer: layer_id.0, index: 1, point: 0, tool: app.ui.tool }));
+        let uv = [(target[0] as f64 + 0.5) / f64::from(size.width), 1.0 - (target[1] as f64 + 0.5) / f64::from(size.height)];
+        assert!(sample_levels_at_uv(&mut app, &ctx, material, uv));
+        let picked = &app.session.active().unwrap().doc.layer(layer_id).unwrap().mask.as_ref().unwrap().paint.as_ref().unwrap().layers[1].kind;
+        let input_black = if let EffectKind::Levels { input_black, .. } = picked { *input_black } else { f32::NAN };
+        assert_eq!(input_black, expected_bound, "the 3D UV picker samples the shell-aware pre-Levels prefix");
+
+        app.run("uv.maskPaint.modify", json!({"layer":layer_id.0,"index":1,"input_black":0.5})).unwrap();
+        app.session.uv.bindings[material] = None;
+        assert!(sample_levels_at(&mut app, &ctx, [target[0] as f64 + 0.5, target[1] as f64 + 0.5]));
+        let picked = &app.session.active().unwrap().doc.layer(layer_id).unwrap().mask.as_ref().unwrap().paint.as_ref().unwrap().layers[1].kind;
+        let input_black = if let EffectKind::Levels { input_black, .. } = picked { *input_black } else { f32::NAN };
+        assert_eq!(input_black, expected_unbound, "an unbound mask picker keeps ordinary composition");
     }
 
     #[test]

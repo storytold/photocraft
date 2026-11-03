@@ -450,6 +450,9 @@ pub struct PhotocraftApp {
     /// True only while the native UV surface path feeds 3D pointer samples to a live stroke.
     #[cfg(feature = "uv-workbench")]
     pub(crate) native_uv_surface_input: bool,
+    /// Renderer availability while `uv_ui::main_view` temporarily owns the UV cache.
+    #[cfg(feature = "uv-workbench")]
+    pub(crate) native_uv_gpu_available: bool,
     /// Keep 3D UV symmetry strokes on the asynchronous CPU preview path until native GPU
     /// accumulation preserves the CPU renderer's mirrored-pass coverage semantics.
     #[cfg(feature = "uv-workbench")]

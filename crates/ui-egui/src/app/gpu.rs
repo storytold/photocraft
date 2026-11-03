@@ -58,7 +58,7 @@ impl PhotocraftApp {
 
     #[cfg(feature = "uv-workbench")]
     pub fn uv_gpu_active(&self) -> bool {
-        self.uv_cache.gpu.is_some()
+        self.uv_cache.gpu.is_some() || self.native_uv_gpu_available
     }
 
     /// Actual resident map dimensions, ordered by material (colour, normal).

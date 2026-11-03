@@ -86,14 +86,15 @@ pub(crate) fn menu(app: &mut PhotocraftApp, id: &str) -> Option<Result<Value, St
         "file.uv.saveProject" => uv_ui::save_project(app),
         "file.uv.closeProject" => {
             let discard = std::mem::take(&mut app.uv_cache.project.discard_once);
-            crate::uv_project::close(app, discard);
-            Ok(Value::Null)
+            crate::uv_project::close(app, discard).map(|()| Value::Null)
         }
         "file.uv.saveAllTextures" => {
             if let Err(e) = uv_ui::reveal(app) {
                 return Some(Err(e));
             }
-            uv_ui::finish_paint(app);
+            if let Err(error) = uv_ui::finish_paint(app) {
+                return Some(Err(error));
+            }
             if let Some([x, y, _]) = app.drag.as_ref().filter(|d| crate::canvas::strokes_live(d.tool)).and_then(|d| d.points.last()).copied() {
                 crate::canvas::tool_event(app, crate::canvas::ToolEvent::Up { x, y }, egui::Modifiers::NONE);
             }
@@ -133,7 +134,9 @@ pub(crate) fn menu(app: &mut PhotocraftApp, id: &str) -> Option<Result<Value, St
     })
 }
 fn layout(app: &mut PhotocraftApp, mode: u8) {
-    uv_ui::finish_paint(app);
+    if uv_ui::finish_paint(app).is_err() {
+        return;
+    }
     let s = &mut app.ui.uv_workbench;
     s.split_view = mode == 0;
     s.view_3d = mode != 2;
@@ -177,7 +180,9 @@ pub(crate) fn keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     }
     for (key, perspective) in [(egui::Key::F5, true), (egui::Key::F6, false)] {
         if plain_key(ctx, key) {
-            uv_ui::finish_paint(app);
+            if uv_ui::finish_paint(app).is_err() {
+                return true;
+            }
             app.ui.uv_workbench.perspective = perspective;
             return true;
         }
@@ -190,7 +195,9 @@ pub(crate) fn shell_tool(app: &mut PhotocraftApp, ui: &mut Ui, size: f32) {
     }
     let response = icons::button(ui, "square-dashed-mouse-pointer", size, app.ui.uv_workbench.select_shells, tl!("UV shell selection"));
     if response.clicked() {
-        uv_ui::finish_paint(app);
+        if uv_ui::finish_paint(app).is_err() {
+            return;
+        }
         app.ui.uv_workbench.select_shells = true;
         uv_ui::begin_polygon_selection_wireframe(&mut app.ui.uv_workbench);
         app.uv_cache.shell_tool_owner = Some(app.ui.tool);
@@ -269,7 +276,9 @@ fn bar(app: &mut PhotocraftApp, ui: &mut Ui) {
                         )
                         .clicked()
                     {
-                        uv_ui::finish_paint(app);
+                        if uv_ui::finish_paint(app).is_err() {
+                            return;
+                        }
                         app.ui.uv_workbench.perspective = p;
                         ui.close();
                     }
@@ -496,7 +505,11 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut Ui) -> bool {
             return true;
         }
         if !app.ui.uv_workbench.floating_3d {
-            uv_ui::finish_paint(app);
+            if uv_ui::finish_paint(app).is_err() {
+                // Keep the 3D view available to drain the queued samples on the next frame.
+                app.ui.uv_workbench.view_3d = true;
+                return true;
+            }
         }
         crate::canvas::uv_documents(app, ui);
         return true;
@@ -611,6 +624,7 @@ pub(crate) fn sync_workspace(app: &mut PhotocraftApp) -> Result<(), String> {
     if app.session.uv_workspace.active == active {
         return Ok(());
     }
+    uv_ui::finish_paint(app)?;
     // Commit a valid transient edit before changing banks. app.run handles stale revisions
     // without dropping the preview, and recognizes this exact command to avoid a second commit.
     if let Some(commit) = crate::uv_mask_paint_preview::pending(app) {
@@ -634,7 +648,6 @@ pub(crate) fn sync_workspace(app: &mut PhotocraftApp) -> Result<(), String> {
             uv_open: app.ui.uv_workbench.open,
         });
     }
-    uv_ui::finish_paint(app);
     app.ui.brush_picker = None;
     app.ui.uv_workbench.picker_3d = false;
     if let Some([x, y, _]) = app.drag.as_ref().and_then(|d| d.points.last()).copied() {

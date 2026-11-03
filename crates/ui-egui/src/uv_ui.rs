@@ -313,13 +313,16 @@ pub(crate) fn pending_paint(app: &PhotocraftApp) -> bool {
     crate::uv_paint::pending(&app.uv_cache.paint)
 }
 
-pub(crate) fn finish_paint(app: &mut PhotocraftApp) {
+pub(crate) fn finish_paint(app: &mut PhotocraftApp) -> Result<(), String> {
     let mut paint = std::mem::take(&mut app.uv_cache.paint);
-    crate::uv_paint::finish(app, &mut paint);
+    let finished = crate::uv_paint::finish(app, &mut paint);
     app.uv_cache.paint = paint;
+    if finished { Ok(()) } else { Err(app.ui.status.clone()) }
 }
 pub(crate) fn reimport(app: &mut PhotocraftApp) {
-    finish_paint(app);
+    if finish_paint(app).is_err() {
+        return;
+    }
     match app.run("uv.model.reimport", json!({"uvSet":app.ui.uv_workbench.uv_set})) {
         Ok(result) => {
             app.ui.uv_workbench.overlap.clear();
@@ -1017,7 +1020,7 @@ fn pick_map_file(app: &mut PhotocraftApp, kind: &'static str, material: usize, c
             "project" => ("uv.project.load", json!({"path":path})),
             _ => ("uv.texture.open", json!({"path":path,"material":material,"channel":channel.key()})),
         };
-        finish_paint(app);
+        finish_paint(app)?;
         let result = app.run(id, params);
         match &result {
             Ok(_) => {
@@ -1172,13 +1175,21 @@ fn flush_mask_settings(app: &mut PhotocraftApp, ctx: &egui::Context) {
 }
 /// Selecting a map also chooses its editable 2D document and native paint channel.
 pub(crate) fn select_view_channel(app: &mut PhotocraftApp, channel: Channel) {
+    if channel != Channel::Material && finish_paint(app).is_err() {
+        return;
+    }
     app.ui.uv_workbench.channel = channel;
     if channel != Channel::Material {
-        select_2d_channel(app, channel);
+        select_2d_channel_after_finish(app, channel);
     }
 }
 pub(crate) fn select_2d_channel(app: &mut PhotocraftApp, channel: Channel) {
-    finish_paint(app);
+    if finish_paint(app).is_err() {
+        return;
+    }
+    select_2d_channel_after_finish(app, channel);
+}
+fn select_2d_channel_after_finish(app: &mut PhotocraftApp, channel: Channel) {
     app.ui.uv_workbench.channel_2d = channel;
     if channel == Channel::Material {
         return;
@@ -1265,8 +1276,7 @@ pub(crate) fn texture_drop(app: &mut PhotocraftApp, ctx: &egui::Context, at: Opt
     let result = if files.len() != 1 {
         Err(tl!("Drop one file onto the texture slot").into())
     } else if let Some(path) = files.first().map(|f| f.path()).filter(|p| p.is_absolute()) {
-        finish_paint(app);
-        app.run("uv.texture.open", json!({"path":path,"material":material,"channel":channel.key()}))
+        finish_paint(app).and_then(|()| app.run("uv.texture.open", json!({"path":path,"material":material,"channel":channel.key()})))
     } else {
         Err(tl!("Assigning a texture requires a local file").into())
     };
@@ -1359,7 +1369,9 @@ fn material_cards(app: &mut PhotocraftApp, state: &mut State, ui: &mut egui::Ui,
                             ui.close();
                         }
                         if ui.add_enabled(app.session.active().is_some(), egui::Button::new(tl!("Use active document"))).clicked() {
-                            finish_paint(app);
+                            if finish_paint(app).is_err() {
+                                return;
+                            }
                             command(app, state, "uv.texture.bind", json!({"material":material,"channel":channel}));
                             ui.close();
                         }
@@ -1652,7 +1664,7 @@ pub(crate) fn main_view(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         app.hover_doc = None;
         app.drop_canvas_rect = None;
     }
-    let (Some(scene), Some(topology)) = (app.session.uv.scene.clone(), app.session.uv.topology.clone()) else { return };
+    let (Some(mut scene), Some(mut topology)) = (app.session.uv.scene.clone(), app.session.uv.topology.clone()) else { return };
     let mut state = std::mem::take(&mut app.ui.uv_workbench);
     let mut cache = std::mem::take(&mut app.uv_cache);
     let size = ui.available_size().max(vec2(1.0, 1.0));
@@ -1661,12 +1673,26 @@ pub(crate) fn main_view(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     cache.viewport = Some(rect);
     cache.viewport_id = Some(ui.ctx().viewport_id());
     if cache.geometry.as_ref().is_some_and(|(s, _)| !std::sync::Arc::ptr_eq(s, &scene)) {
-        crate::uv_paint::finish(app, &mut cache.paint);
-        cache.geometry = None;
-        if let Some(gpu) = &mut cache.gpu {
-            crate::canvas::remove_native_mask_gpu_renderer(app, || gpu.clear());
+        if crate::uv_paint::finish(app, &mut cache.paint) {
+            cache.geometry = None;
+            if let Some(gpu) = &mut cache.gpu {
+                crate::canvas::remove_native_mask_gpu_renderer(app, || gpu.clear());
+            }
+            cache.refreshed = None;
+        } else if let Some((source_scene, _)) = &cache.geometry {
+            // Keep processing acquired input with the geometry it was painted against. Once the
+            // queue drains, the next frame can safely replace these cached scene resources.
+            scene = source_scene.clone();
+            match photocraft_uv::topology::Topology::build(&scene) {
+                Ok(source_topology) => topology = std::sync::Arc::new(source_topology),
+                Err(error) => {
+                    state.status = error.to_string();
+                    app.ui.uv_workbench = state;
+                    app.uv_cache = cache;
+                    return;
+                }
+            }
         }
-        cache.refreshed = None;
     }
     if cache.geometry.as_ref().is_none_or(|(s, _)| !std::sync::Arc::ptr_eq(s, &scene)) {
         match photocraft_uv::prepared::Geometry::new(&scene, &topology) {
@@ -2057,6 +2083,7 @@ pub(crate) fn main_view(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if let Some((_, geometry)) = &cache.geometry {
         let uv_input_started = crate::gpu_canvas::now_ms();
         let native_uv_surface_input = std::mem::replace(&mut app.native_uv_surface_input, true);
+        let native_uv_gpu_available = std::mem::replace(&mut app.native_uv_gpu_available, cache.gpu.is_some());
         crate::uv_paint::input(
             app,
             ui,
@@ -2071,6 +2098,7 @@ pub(crate) fn main_view(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             state.paint_wrap,
         );
         app.native_uv_surface_input = native_uv_surface_input;
+        app.native_uv_gpu_available = native_uv_gpu_available;
         app.perf.span("uv.input", crate::gpu_canvas::now_ms() - uv_input_started);
     }
     if !state.status.is_empty() {
@@ -3056,6 +3084,104 @@ mod tests {
         assert!(preview_refresh_due(false, true, two_d_mask, false, true, false, false), "2D mask keeps immediate refresh");
     }
 
+    #[test]
+    fn main_view_keeps_native_mask_gpu_brush_available_and_cpu_fallback_paints() {
+        let _gpu = photocraft_testkit::gpu_lock();
+
+        fn pump(app: &mut PhotocraftApp, ctx: &egui::Context, events: Vec<egui::Event>) {
+            let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1000.0, 760.0))), events, ..Default::default() };
+            let mut output = ctx.run_ui(input, |ui| main_view(app, ui));
+            output.textures_delta.clear();
+        }
+
+        fn paint_route(with_gpu: bool) -> (bool, usize, bool) {
+            let mut app = fixture_app();
+            app.run("uv.texture.create", json!({"width":128,"height":128})).unwrap();
+            let layer = app.session.active().unwrap().active_layer.unwrap();
+            app.run("layer.layerMask.revealAll", json!({"layer":layer.0})).unwrap();
+            app.run("uv.maskPaint.add", json!({"layer":layer.0,"kind":"paint","name":"GPU paint"})).unwrap();
+            app.run("uv.maskPaint.select", json!({"layer":layer.0,"index":0})).unwrap();
+            app.run("view.layerMask", json!({"mode":"gray"})).unwrap();
+            app.ui.mask_target = true;
+            app.sync_mask_targets();
+            app.ui.tool = crate::state::Tool::Brush;
+            app.run("tools.setColors", json!({"foreground":"#ffffff"})).unwrap();
+            app.run("tools.setBrush", json!({"brush":{"size":8,"hardness":0.5,"pressureSize":false,"opacity":0.8,"flow":0.45}})).unwrap();
+            app.ui.uv_workbench.view_3d = true;
+            app.ui.uv_workbench.split_view = false;
+            app.ui.uv_workbench.select_shells = false;
+            if with_gpu {
+                let render_state = egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), Default::default());
+                app.set_uv_wgpu(render_state).unwrap();
+            }
+            assert_eq!(crate::canvas::paint_target(&app), json!("mask"), "the fixture selects its native mask target");
+            assert!(
+                app.session.active().is_some_and(|state| photocraft_engine::mask_view_cmds::current(state)
+                    .is_some_and(|view| view.mode == photocraft_engine::mask_view_cmds::MaskViewMode::Gray && !view.filter)),
+                "the fixture shows the mask in grayscale"
+            );
+            assert_eq!(app.uv_gpu_active(), with_gpu, "renderer availability before entering main_view");
+
+            let ctx = egui::Context::default();
+            pump(&mut app, &ctx, Vec::new());
+            let rect = app.uv_cache.viewport.expect("main_view registers its 3D viewport");
+            let size = [rect.width().round() as u32, rect.height().round() as u32];
+            let (scene, geometry) = app.uv_cache.geometry.as_ref().expect("main_view prepares imported geometry");
+            let camera = app.ui.uv_workbench.camera();
+            let maps = preview::Materials { colors: &app.uv_cache.textures, normals: &app.uv_cache.normals, ..Default::default() };
+            let point = geometry
+                .triangles
+                .iter()
+                .find_map(|triangle| {
+                    if triangle.material != app.session.uv.material {
+                        return None;
+                    }
+                    let center = std::array::from_fn(|axis| triangle.positions.iter().map(|p| f64::from(p[axis])).sum::<f64>() / 3.0);
+                    let normalized = geometry.project_normalized(camera, center, size)?;
+                    geometry
+                        .hit(scene, camera, &maps, normalized, size)
+                        .map(|_| rect.min + vec2(normalized[0] as f32 * rect.width(), normalized[1] as f32 * rect.height()))
+                })
+                .expect("the fixture has a visible triangle bound to its texture");
+            let revision = app.session.active().unwrap().revision;
+            pump(
+                &mut app,
+                &ctx,
+                vec![
+                    egui::Event::PointerMoved(point),
+                    egui::Event::PointerButton { pos: point, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE },
+                ],
+            );
+            assert!(app.drag.is_some(), "main_view must start the stroke at its visible hit point");
+            assert!(app.live_stroke.is_some(), "the pointer down starts a live stroke");
+            let gpu_stroke = crate::canvas::native_mask_gpu_brush_active(&app);
+            let mut delta = vec2(320.0, 0.0);
+            if point.x + delta.x >= rect.right() - 4.0 {
+                delta.x = -320.0;
+            }
+            let endpoint = point + delta;
+            pump(&mut app, &ctx, vec![egui::Event::PointerMoved(endpoint)]);
+            let queued = crate::uv_paint::pending_path_len(&app.uv_cache.paint);
+            if !with_gpu {
+                pump(
+                    &mut app,
+                    &ctx,
+                    vec![egui::Event::PointerButton { pos: endpoint, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE }],
+                );
+            }
+            (gpu_stroke, queued, app.session.active().unwrap().revision > revision || app.drag.is_some())
+        }
+
+        let (native_gpu_stroke, native_queued, _) = paint_route(true);
+        assert!(native_gpu_stroke, "main_view exposes its locally-owned UV renderer while creating the live mask stroke");
+        assert!(native_queued > 0, "native GPU mask input drains the long acquired path in bounded batches");
+
+        let (fallback_gpu_stroke, fallback_queued, fallback_painted) = paint_route(false);
+        assert!(!fallback_gpu_stroke, "missing UV renderer selects the CPU worker fallback");
+        assert_eq!(fallback_queued, 0, "CPU fallback retains its eager input path");
+        assert!(fallback_painted, "the CPU fallback completes the released mask stroke");
+    }
+
     fn anchor_world(bounds: [i32; 4], rotation: f32, moving_handle: usize) -> [f64; 2] {
         let sign = FILL_HANDLE_SIGNS[(moving_handle + 4) % 8];
         let center = [(f64::from(bounds[0]) + f64::from(bounds[2])) * 0.5, (f64::from(bounds[1]) + f64::from(bounds[3])) * 0.5];
@@ -3328,7 +3454,12 @@ mod tests {
         let before = h.state().session.documents()[index].doc.clone();
         h.state_mut().run("edit.fill", json!({"color":"#ff0000"})).unwrap();
         input_key(&mut h, egui::Key::Z, egui::Modifiers { ctrl: true, command: true, ..egui::Modifiers::NONE });
-        assert_eq!(h.state().session.documents()[index].doc.layers[0].surface(), before.layers[0].surface(), "first Ctrl+Z undoes pixels");
+        assert_eq!(
+            h.state().session.documents()[index].doc.layers[0].surface(),
+            before.layers[0].surface(),
+            "first Ctrl+Z undoes pixels; status: {}",
+            h.state().ui.status
+        );
         // Empty History plus a still-held first stroke must enable the *keyboard*
         // command before the live surface is committed by run(edit.undo).
         h.state_mut().ui.uv_workbench.paint_wrap = false;
