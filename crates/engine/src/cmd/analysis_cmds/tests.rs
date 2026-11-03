@@ -552,3 +552,11 @@ fn iso_from_unix_matches_the_old_cycle_conversion_including_beyond_chrono() {
     assert_eq!(iso_from_unix(i64::MAX), "292277026596-12-04T15:30:07Z");
     assert_eq!(iso_from_unix(i64::MIN), "-292277022657-01-27T08:29:52Z");
 }
+
+#[test]
+fn csv_text_cells_that_read_as_formulas_are_neutralised() {
+    for (cell, want) in [("=1+1", "'=1+1"), ("@SUM(A1)", "'@SUM(A1)"), ("-2+3", "'-2+3"), ("+cmd|x", "'+cmd|x"), ("-5.5", "-5.5"), ("px", "px")] {
+        assert_eq!(csv_field(&json!(cell)), want, "{cell}");
+    }
+    assert_eq!(csv_field(&json!(-5.5)), "-5.5", "numbers are not text cells");
+}

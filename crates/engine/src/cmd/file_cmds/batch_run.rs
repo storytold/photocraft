@@ -192,6 +192,8 @@ fn process_outputs<'a>(
             written.check(&out).map_err(EngineError::Other)?;
             let bytes = read_file(path)?;
             let mut scratch = Session::new();
+            // Nested commands answer to the initiating session's authorization hook.
+            scratch.authorize = s.authorize;
             let doc = import_at_raw_ppi(raw_ppi, &file_name(path), &bytes)?;
             scratch.add_document(doc, Some(path.to_string()));
             if !f(&mut scratch, &out)? {
