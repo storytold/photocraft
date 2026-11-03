@@ -185,6 +185,7 @@ impl Profile {
     /// Parses ICC profile bytes.
     pub fn parse(bytes: &[u8]) -> Result<Profile, CmsError> {
         CURVE_SAMPLES_LEFT.with(|left| left.set(MAX_CURVE_SAMPLES));
+        CLUT_VALUES_LEFT.with(|left| left.set(MAX_PROFILE_CLUT_VALUES));
         let mut p = parse_profile(bytes)?;
         p.bytes = Some(Arc::new(bytes.to_vec()));
         Ok(p)
@@ -595,6 +596,24 @@ thread_local! {
     static CURVE_SAMPLES_LEFT: std::cell::Cell<usize> = const { std::cell::Cell::new(MAX_CURVE_SAMPLES) };
 }
 
+/// CLUT values one profile may decode in all (128 MB of `f32`): the twelve LUT tags can alias
+/// one table, and each reference decodes its own copy.
+const MAX_PROFILE_CLUT_VALUES: usize = 32 << 20;
+
+thread_local! {
+    /// What is left of [`MAX_PROFILE_CLUT_VALUES`] for the profile being parsed on this thread.
+    static CLUT_VALUES_LEFT: std::cell::Cell<usize> = const { std::cell::Cell::new(MAX_PROFILE_CLUT_VALUES) };
+}
+
+/// Charges `n` decoded CLUT values to the profile being parsed.
+fn charge_clut_values(n: usize) -> Result<(), CmsError> {
+    CLUT_VALUES_LEFT.with(|left| {
+        let rest = left.get().checked_sub(n).ok_or_else(|| CmsError::Invalid("the profile's lookup tables hold too many values".into()))?;
+        left.set(rest);
+        Ok(())
+    })
+}
+
 /// Charges `n` decoded curve samples to the profile being parsed.
 fn charge_curve_samples(n: usize) -> Result<(), CmsError> {
     CURVE_SAMPLES_LEFT.with(|left| {
@@ -698,6 +717,7 @@ fn parse_lut(d: &[u8], a2b: bool) -> Result<Lut, CmsError> {
                 return Err(CmsError::Invalid("CLUT too large".into()));
             }
             let total = nodes as usize * o;
+            charge_clut_values(total)?;
             let s = r.slice(off, total * bps)?;
             let data: Vec<f32> = if wide {
                 s.as_chunks::<2>().0.iter().map(|c| u16::from_be_bytes([c[0], c[1]]) as f32 / 65535.0).collect()
@@ -803,6 +823,7 @@ fn lut_ab_clut(r: &Reader, off: usize, cin: usize, cout: usize) -> Result<Stage,
         return Err(CmsError::Invalid("CLUT too large".into()));
     }
     let total = nodes as usize * cout;
+    charge_clut_values(total)?;
     let samples = extent(off, 20, 1)?;
     let data: Vec<f32> = match prec {
         1 => r.slice(samples, total)?.iter().map(|b| *b as f32 / 255.0).collect(),
@@ -983,6 +1004,22 @@ mod tests {
 #[cfg(test)]
 mod curve_budget_tests {
     use super::*;
+
+    #[test]
+    fn aliased_cluts_are_charged_for_each_decoded_table() {
+        // A 255³ × 1 CLUT (within one table's limit) referenced by LUT tags three times.
+        let mut element = vec![255u8, 255, 255];
+        element.resize(16, 0);
+        element.extend([1, 0, 0, 0]);
+        element.extend(std::iter::repeat_n(0u8, 255 * 255 * 255));
+        let r = Reader { b: &element };
+        CLUT_VALUES_LEFT.with(|left| left.set(MAX_PROFILE_CLUT_VALUES));
+        assert!(lut_ab_clut(&r, 0, 3, 1).is_ok());
+        assert!(lut_ab_clut(&r, 0, 3, 1).is_ok());
+        assert!(lut_ab_clut(&r, 0, 3, 1).is_err(), "the third decoded copy passes the profile's allowance");
+        CLUT_VALUES_LEFT.with(|left| left.set(MAX_PROFILE_CLUT_VALUES));
+        assert!(lut_ab_clut(&r, 0, 3, 1).is_ok());
+    }
 
     #[test]
     fn aliased_curves_are_charged_for_each_decoded_table() {
