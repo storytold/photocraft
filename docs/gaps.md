@@ -60,7 +60,8 @@ what an agent can't finish alone.
   decoded whole beside the layer; layered TIFFs over the limit and huge PSBs still decode whole).
   PSD paragraph type redraw now uses a matching `Txt2` first baseline (#10999, 2026-11-03):
   with the requested face installed, the public file's edit-mode bounds move at most 1 px vertically;
-  missing-font substitution can still change its width.
+  the baseline survives resolution changes and PSD save/reopen; missing-font substitution can
+  still change its width.
   No test opens our exports in a third-party editor (FILE-216-4). Mockups whose smart object
   uses Transform Warp's Cylinder re-rendered flat after Replace Contents (#4112, fixed 2026-10-14;
   vertical cylinders and ones with perspective are still unread).
@@ -438,7 +439,7 @@ what an agent can't finish alone.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-03 | minor | G1/G3/G8: #10999 edit redraw uses the PSD first-line baseline; exact-face public-file position stays within 1 px, missing-font width mismatch remains; estimates and percentages unchanged |
+| 2026-11-03 | minor | G1/G3/G8: #10999 edit redraw uses the PSD first-line baseline, including after resolution change and PSD save/reopen; exact-face public-file position stays within 1 px, missing-font width mismatch remains; estimates and percentages unchanged |
 | 2026-10-31 | minor | G11: four Render ATN events mapped; current counts 120 supported/97 unmapped. Other Actions gaps, readiness percentages and estimates unchanged. |
 | 2026-10-31 | minor | G11: Group F action steps map to existing commands; 127 supported event IDs; action-file support remains partial; estimates unchanged |
 | 2026-10-31 | minor | G11: twelve Stylize/Pixelate ATN events mapped; current counts 128 supported/89 unmapped. Other Actions gaps, readiness percentages and estimates unchanged. |

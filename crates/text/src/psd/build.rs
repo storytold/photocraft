@@ -555,6 +555,49 @@ pub fn needs_txt2(objects: &[(i32, &TextLayer)]) -> bool {
     objects.iter().any(|(_, l)| l.char_runs().iter().any(|r| r.style.kerning == Kerning::Optical))
 }
 
+/// Keeps a preserved rendered line in the same text space as a resized PSD paragraph box.
+/// The importer requires the line baseline and origin to agree, so update them together.
+fn sync_first_baseline(object: &mut E, layer: &TextLayer) {
+    let TextShape::Box { y, height, .. } = layer.shape else { return };
+    let Some(hint) = layer.psd_first_baseline.as_ref() else { return };
+    if layer.orientation != Orientation::Horizontal
+        || !y.is_finite()
+        || !height.is_finite()
+        || height <= 0.0
+        || hint.offset_px < -0.5
+        || hint.offset_px > height + 0.5
+        || !layer.char_runs().first().is_some_and(|r| hint.matches(&r.style))
+    {
+        return;
+    }
+    let target = f64::from(y) + f64::from(hint.offset_px);
+    let Some(mut node) = object.get_mut("1").and_then(|v| v.get_mut("2")).and_then(|v| match v {
+        E::Array(items) => items.first_mut(),
+        _ => None,
+    }) else {
+        return;
+    };
+    for _ in 0..8 {
+        if node.get("99").and_then(E::as_str) == Some("L") {
+            let Some(old) = node.get("10").and_then(E::as_f64) else { return };
+            let Some(origin) = node.get("0").and_then(|v| v.get("0")).and_then(E::as_array).and_then(|a| a.get(1)).and_then(E::as_f64) else {
+                return;
+            };
+            if (old - origin).abs() > 0.02 || ((old - target).abs() <= 0.02 && (origin - target).abs() <= 0.02) {
+                return;
+            }
+            let Some(E::Array(values)) = node.get_mut("0").and_then(|v| v.get_mut("0")) else { return };
+            let Some(value) = values.get_mut(1) else { return };
+            *value = E::Real(target);
+            node.set("10", E::Real(target));
+            return;
+        }
+        let Some(E::Array(children)) = node.get_mut("6") else { return };
+        let Some(next) = children.first_mut() else { return };
+        node = next;
+    }
+}
+
 /// The document's `Txt2` block for `objects`: `(TextIndex, layer)` pairs, one text object each
 /// at the slot its `TextIndex` names (see [`set_text_index`] and [`text_index`]; unused slots are
 /// empty dictionaries), carrying the automatic kerning mode of every pair (`/11`: 0 manual,
@@ -718,6 +761,7 @@ pub fn build_txt2_at(objects: &[(i32, &TextLayer)], previous: Option<&[u8]>, dpi
             _ => model.set("6", E::Dict(vec![("0".into(), E::Array(runs))])),
         }
         object.set("0", model);
+        sync_first_baseline(&mut object, layer);
         if let Some(frame) = object_frame(&object, true) {
             frame_shapes.push((frame, &layer.shape));
         }

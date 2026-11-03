@@ -60,7 +60,8 @@ XL are missing (gap G10). Remaining: 300–500 h including PSD fidelity.
 PSD paragraph type with matching `Txt2` text and a rendered first line keeps Photoshop's
 recorded baseline for the edit-mode redraw (#10999, 2026-11-03). The public `Project.psd` with its
 exact requested face changes from 902,648,399×88 to 901,649,401×88 on entry. Its cached pixels
-remain the import and Cancel image; font substitution still changes width. No corpus floor or
+remain the import and Cancel image; the baseline also survives a resolution change, PSD save,
+reopen and another no-typing edit. Font substitution still changes width. No corpus floor or
 overall parity percentage changes.
 
 ## Camera raw
@@ -157,7 +158,7 @@ The original reference entry retains its source date and historical totals; curr
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-03 | minor | PSD paragraph type: matching `Txt2` first-line baseline drives edit layout (#10999); exact-face public file stays within 1 px vertically and 2 px in width, with no font file committed |
+| 2026-11-03 | minor | PSD paragraph type: matching `Txt2` first-line baseline drives edit layout (#10999); exact-face public file stays within 1 px vertically and 2 px in width, with no font file committed; resolution change and PSD save/reopen retain the baseline |
 | 2026-11-02 | minor | TIFF Options on Save As and Save a Copy (#8827): Image Compression (None, LZW, ZIP), Save Image Pyramid (half-size levels marked reduced-resolution, down to 64 px, alpha-weighted; +45 ms on a 30 MP RGB/8 save), Save Transparency (on: transparency kept ahead of alpha and spot channels, `MTrn` in a layered file; off: matted on white) and Discard Layers and Save a Copy. Scripts, `doc.save`, MCP `save` and the CLI (`--tiff-transparency`, `--tiff-pyramid`) take the same answers. JPEG compression, Pixel Order and Byte Order not offered |
 | 2026-11-01 | minor | `.atn`: event reference [atn.md](atn.md): the 117 supported events, and measured keys, defaults, ranges and enum values for 101 events not mapped yet |
 | 2026-10-31 | minor | `.atn` Group B: four Render events load, play and save; 120 supported and 97 unmapped. Supported-table columns corrected against the event registry; the original 117/101 reference entry remains historical. |
