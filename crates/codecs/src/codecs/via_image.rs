@@ -158,6 +158,8 @@ fn ico_png_profiles_fit(b: &[u8], limits: &Limits) -> Result<(), CodecError> {
     offsets.sort_unstable();
     offsets.dedup();
     let mut total = 0u64;
+    // Chunk offsets already walked by any start: a walk from here repeats the earlier one, so stop.
+    let mut visited = std::collections::HashSet::new();
     for start in offsets {
         if b.get(start..start.saturating_add(8)) != Some(&PNG_SIGNATURE[..]) {
             continue;
@@ -165,6 +167,9 @@ fn ico_png_profiles_fit(b: &[u8], limits: &Limits) -> Result<(), CodecError> {
         // Chunks up to the image data: the png crate parses iCCP only before IDAT.
         let mut at = start + 8;
         while let (Some(len), Some(kind)) = (be32(at), b.get(at.saturating_add(4)..at.saturating_add(8))) {
+            if !visited.insert(at) {
+                break;
+            }
             let data_at = at + 8;
             let Some(data) = usize::try_from(len).ok().and_then(|n| b.get(data_at..data_at.checked_add(n)?)) else { break };
             match kind {
