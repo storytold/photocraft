@@ -34,14 +34,16 @@ let out = encode(&img, Format::Tiff, &EncodeOptions::default())?;
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
 | PNG | yes | yes | U8, U16 | Gray, GrayA, RGB, RGBA | yes | yes (iCCP) | yes (eXIf) | yes (iTXt `XML:com.adobe.xmp`) | yes (pHYs) | yes (tEXt/zTXt/iTXt) | no | `png` |
 | JPEG | yes | yes | U8 | Gray, RGB, CMYK | no | yes (multi-segment APP2) | yes (APP1) | yes (APP1) | yes (JFIF) | no | yes | `zune-jpeg` / `jpeg-encoder` |
-| TIFF | yes | yes | U8, U16, F32 | all six (CMYK, CMYK+A included) | yes | yes (tag 34675) | no | yes (tag 700) | yes | yes (Description, Make, Model, Software, DateTime, Artist, Copyright) | no | `tiff` |
-| WebP | yes | yes | U8 | RGB, RGBA | yes | yes | yes | yes | no | no | yes (VP8, when `webp_lossless` is off) | `image-webp` / built-in VP8 |
+| TIFF | yes | yes | U8, U16, F32 | all eight (CMYK, CMYK+A, Lab, LabA included) | yes | yes (tag 34675) | yes (Exif 34665 / GPS 34853 sub-IFDs) | yes (tag 700) | yes | yes (Description, Make, Model, Software, DateTime, Artist, Copyright) | no | `tiff` |
+| WebP | yes | yes | U8 | RGB, RGBA | yes | yes | yes | yes | yes (EXIF) | no | yes (VP8, when `webp_lossless` is off) | `image-webp` / built-in VP8 |
 | GIF | yes | yes | U8 | RGBA | 1-bit | no | no | no | no | no | yes (256-colour palette) | `image` |
 | BMP | yes | yes | U8 | RGB, RGBA | yes | no | no | no | no | no | no | `image` |
 | TGA | yes | yes | U8 | Gray, GrayA, RGB, RGBA | yes | no | no | no | no | no | no | `image` (read) / built in (RLE write, one scanline per packet) |
 | ICO | yes | yes | U8 | RGBA (at most 256×256) | yes | no | no | no | no | no | no | `image` |
 | DDS | yes | yes | U8 | Gray, GrayA, RGB, RGBA | yes | no | no | no | no | no | yes (BC1–BC3, when `EncodeOptions::dds` asks for one) | built in |
 | Netpbm (PBM/PGM/PPM/PAM/PFM) | yes | yes | U8, U16, F32 (float: PFM gray/RGB only) | all six (PAM `CMYK`/`CMYK_ALPHA`) | yes (PAM) | no | no | no | no | no | no | built in |
+| PCX | yes | **no** | U8 | RGB | no | no | no | no | no | no | n/a | built in |
+| XPM | yes | **no** | U8 | RGBA | yes | no | no | no | no | no | n/a | built in |
 | QOI | yes | yes | U8 | RGB, RGBA | yes | no | no | no | no | no | no | `image` |
 | OpenEXR | yes | yes | F16, F32 | Y, YA, RGB, RGBA | yes | no | no | no | no | no | no | `exr` |
 | Radiance HDR | yes | yes | F32 | RGB | no | no | no | no | no | no | yes (RGBE) | `image` |
@@ -195,8 +197,14 @@ embedded table (and a PNG's transparent entry) so `photocraft-io` can open them 
   way, composited onto its canvas, with its duration in milliseconds and the file's ICC profile.
   The video-layer commands use both (`photocraft_io::import_gif_frames`,
   `photocraft_io::import_webp_frames`).
-* **EXIF in TIFF** is stored as a sub-IFD rather than a blob, so it is not preserved yet.
-  `caps.exif = false` for TIFF, and a warning is raised.
+* **EXIF in TIFF** is stored as sub-IFDs rather than a blob: reading rebuilds an EXIF block
+  from the file's Exif (34665) and GPS (34853) directories plus IFD0's descriptive tags, and
+  writing copies those directories back, so tags PhotoCraft doesn't know survive when they fit
+  the reader's copy limits (at most 1024 entries per directory, and 4 MiB of copied values
+  combined across IFD0, GPS and Exif for one TIFF stream; oversized or excess values are
+  dropped). Values are
+  copied as bytes (re-ordered when the byte orders differ). An EXIF block is read as classic
+  TIFF only (its offsets are 4 bytes).
 * **Orientation** (EXIF tag 274 in JPEG, PNG `eXIf` and WebP; the decoded page's tag in TIFF and
   BigTIFF) is applied on
   decode, like Photoshop: the pixels come back upright and the EXIF/XMP orientation is rewritten
