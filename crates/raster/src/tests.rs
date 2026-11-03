@@ -834,3 +834,43 @@ fn content_bounds_with_tile_skipping() {
     s.fill_rect(Rect::new(-700, 4000, -699, 4001), &[0.5]);
     assert_eq!(s.content_bounds(), Rect::new(-700, 0, 2000, 4001));
 }
+
+#[test]
+fn covered_bounds_ignores_the_colour_of_clear_pixels() {
+    for fmt in [PixelFormat::RGBA8, PixelFormat::RGBA16, PixelFormat::RGBA32F] {
+        // Clear white over 3x3 tiles, with an opaque square in the middle tile.
+        let mut s = Surface::new(fmt);
+        let filled = Rect::new(0, 0, 3 * TILE_SIZE, 3 * TILE_SIZE);
+        s.fill_rect(filled, &[1.0, 1.0, 1.0, 0.0]);
+        let square = Rect::new(TILE_SIZE + 10, TILE_SIZE + 20, TILE_SIZE + 14, TILE_SIZE + 24);
+        s.fill_rect(square, &[0.0, 0.0, 0.0, 1.0]);
+        assert_eq!(s.covered_bounds(), square, "{fmt:?}");
+        assert_eq!(s.content_bounds(), filled, "{fmt:?}");
+    }
+}
+
+#[test]
+fn covered_bounds_equals_content_bounds_without_a_clear_default() {
+    let mut rgb = Surface::new(PixelFormat::new(photocraft_color::ColorMode::Rgb, SampleType::U8, false));
+    rgb.fill_rect(Rect::new(5, 6, 300, 400), &[1.0, 0.5, 0.0]);
+    assert_eq!(rgb.covered_bounds(), rgb.content_bounds());
+    assert_eq!(rgb.covered_bounds(), Rect::new(5, 6, 300, 400));
+    let mut opaque = Surface::with_default(PixelFormat::RGBA8, &[0.0, 0.0, 0.0, 1.0]);
+    opaque.fill_rect(Rect::new(-40, 3, 70, 90), &[1.0, 1.0, 1.0, 0.0]);
+    assert_eq!(opaque.covered_bounds(), opaque.content_bounds());
+    assert_eq!(opaque.covered_bounds(), Rect::new(-40, 3, 70, 90));
+}
+
+#[test]
+fn covered_bounds_skips_interior_tiles() {
+    // Interior content only; ring tiles present but all-default (unpruned).
+    let mut s = Surface::new(PixelFormat::RGBA8);
+    s.fill_rect(Rect::new(0, 0, 1024, 1024), &[0.0, 0.0, 0.0, 0.0]);
+    s.fill_rect(Rect::new(300, 310, 700, 720), &[1.0, 1.0, 1.0, 1.0]);
+    assert_eq!(s.covered_bounds(), Rect::new(300, 310, 700, 720));
+    // Full-canvas content plus a far-away speck.
+    let mut s = Surface::new(PixelFormat::RGBA8);
+    s.fill_rect(Rect::new(0, 0, 2000, 1500), &[1.0, 1.0, 1.0, 1.0]);
+    s.fill_rect(Rect::new(-700, 4000, -699, 4001), &[1.0, 1.0, 1.0, 0.5]);
+    assert_eq!(s.covered_bounds(), Rect::new(-700, 0, 2000, 4001));
+}
