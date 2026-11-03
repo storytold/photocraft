@@ -23,15 +23,13 @@ pub(crate) enum AssetDrag {
         key: String,
         /// Exact hierarchy identity for canonical drag arbitration. Legacy consumers may omit it.
         node_id: Option<NodeId>,
+        /// Selected item identities in visible browser order. Empty means a single-item drag.
+        selection: Vec<NodeId>,
     },
     /// Any group node, including a nested group. `path` is empty for a root group.
-    Group {
-        scope: String,
-        name: String,
-        path: Vec<String>,
-    },
-    /// Canonical group source with an exact path-qualified node identity.
-    CanonicalGroup { scope: String, node_id: NodeId },
+    Group { scope: String, name: String, path: Vec<String> },
+    /// Canonical group source with an exact path-qualified node identity and browser selection.
+    CanonicalGroup { scope: String, node_id: NodeId, selection: Vec<NodeId> },
 }
 
 impl AssetDrag {
@@ -39,8 +37,7 @@ impl AssetDrag {
     /// Legacy name/path payloads intentionally do not produce canonical move requests.
     pub(crate) fn canonical_node_id(&self, expected_scope: &str) -> Option<&NodeId> {
         match self {
-            Self::Preset { scope, node_id: Some(node_id), .. } | Self::CanonicalGroup { scope, node_id }
-                if scope == expected_scope => Some(node_id),
+            Self::Preset { scope, node_id: Some(node_id), .. } | Self::CanonicalGroup { scope, node_id, .. } if scope == expected_scope => Some(node_id),
             _ => None,
         }
     }
@@ -94,18 +91,19 @@ pub(crate) fn card_drop_hit(rect: Rect, pointer: Pos2, grid: bool, target: NodeI
 pub(crate) fn card_drop_hits(rect: Rect, grid: bool, target: NodeId, depth: usize, order: usize) -> [DropHitRegion; 2] {
     let (leading, trailing) = if grid {
         let middle = rect.center().x;
-        (
-            Rect::from_min_max(rect.min, Pos2::new(middle, rect.bottom())),
-            Rect::from_min_max(Pos2::new(middle, rect.top()), rect.max),
-        )
+        (Rect::from_min_max(rect.min, Pos2::new(middle, rect.bottom())), Rect::from_min_max(Pos2::new(middle, rect.top()), rect.max))
     } else {
         let middle = rect.center().y;
-        (
-            Rect::from_min_max(rect.min, Pos2::new(rect.right(), middle)),
-            Rect::from_min_max(Pos2::new(rect.left(), middle), rect.max),
-        )
+        (Rect::from_min_max(rect.min, Pos2::new(rect.right(), middle)), Rect::from_min_max(Pos2::new(rect.left(), middle), rect.max))
     };
-    let leading_hit = card_drop_hit(rect, if grid { Pos2::new(rect.left(), rect.center().y) } else { Pos2::new(rect.center().x, rect.top()) }, grid, target.clone(), depth, order);
+    let leading_hit = card_drop_hit(
+        rect,
+        if grid { Pos2::new(rect.left(), rect.center().y) } else { Pos2::new(rect.center().x, rect.top()) },
+        grid,
+        target.clone(),
+        depth,
+        order,
+    );
     let trailing_hit = card_drop_hit(
         rect,
         if grid { Pos2::new(rect.right(), rect.center().y) } else { Pos2::new(rect.center().x, rect.bottom()) },
@@ -118,13 +116,7 @@ pub(crate) fn card_drop_hits(rect: Rect, grid: bool, target: NodeId, depth: usiz
 }
 
 /// Capture a group header as a drop-onto target. Every point on the header prepends inside it.
-pub(crate) fn group_header_drop_hit(
-    rect: Rect,
-    _pointer: Pos2,
-    target: NodeId,
-    depth: usize,
-    order: usize,
-) -> DropHitRegion {
+pub(crate) fn group_header_drop_hit(rect: Rect, _pointer: Pos2, target: NodeId, depth: usize, order: usize) -> DropHitRegion {
     DropHitRegion {
         target: None,
         container: Some(ContainerId::Group(target)),
@@ -138,15 +130,7 @@ pub(crate) fn group_header_drop_hit(
 
 /// Capture a drop-at-end target spanning a group's visible subtree (e.g. the indent column).
 pub(crate) fn group_append_hit(hit_rect: Rect, indicator_rect: Rect, group: NodeId, depth: usize, order: usize) -> DropHitRegion {
-    DropHitRegion {
-        target: None,
-        container: Some(ContainerId::Group(group)),
-        region: PointerRegion::ContainerEnd,
-        hit_rect,
-        indicator_rect,
-        depth,
-        order,
-    }
+    DropHitRegion { target: None, container: Some(ContainerId::Group(group)), region: PointerRegion::ContainerEnd, hit_rect, indicator_rect, depth, order }
 }
 
 /// Split the six-pixel separation before a group into upper- and lower-level drop targets.
@@ -172,24 +156,24 @@ pub(crate) fn group_gap_drop_hits(
     let upper_line = Rect::from_min_max(Pos2::new(upper_bounds.left(), marker_top), Pos2::new(upper_bounds.right(), marker_bottom));
     let lower_line = Rect::from_min_max(Pos2::new(lower_bounds.left(), marker_top), Pos2::new(lower_bounds.right(), marker_bottom));
     vec![
-            DropHitRegion {
-                target: Some(upper),
-                container: None,
-                region: PointerRegion::TrailingEdge,
-                hit_rect: Rect::from_min_max(rect.min, Pos2::new(rect.right(), middle)),
-                indicator_rect: upper_line,
-                depth: upper_depth,
-                order,
-            },
-            DropHitRegion {
-                target: Some(lower),
-                container: None,
-                region: PointerRegion::LeadingEdge,
-                hit_rect: Rect::from_min_max(Pos2::new(rect.left(), middle), rect.max),
-                indicator_rect: lower_line,
-                depth: lower_depth,
-                order: order.saturating_add(1),
-            },
+        DropHitRegion {
+            target: Some(upper),
+            container: None,
+            region: PointerRegion::TrailingEdge,
+            hit_rect: Rect::from_min_max(rect.min, Pos2::new(rect.right(), middle)),
+            indicator_rect: upper_line,
+            depth: upper_depth,
+            order,
+        },
+        DropHitRegion {
+            target: Some(lower),
+            container: None,
+            region: PointerRegion::LeadingEdge,
+            hit_rect: Rect::from_min_max(Pos2::new(rect.left(), middle), rect.max),
+            indicator_rect: lower_line,
+            depth: lower_depth,
+            order: order.saturating_add(1),
+        },
     ]
 }
 
@@ -297,9 +281,12 @@ fn group_insertion_marker_rect(rect: Rect, before: bool) -> Rect {
 
 #[cfg(test)]
 mod insertion_marker_tests {
-    use super::{card_drop_hit, card_drop_hits, card_trailing_marker_rect, group_append_hit, group_drop_outline_rects, group_gap_drop_hits, group_gap_upper_anchor, group_header_drop_hit, group_insertion_marker_rect, root_append_hit, root_prepend_hit};
-    use crate::pickers::picker_browser_model::{ContainerId, DropPosition, HierarchyNode, NodeId, PickerBrowserHierarchy};
+    use super::{
+        card_drop_hit, card_drop_hits, card_trailing_marker_rect, group_append_hit, group_drop_outline_rects, group_gap_drop_hits, group_gap_upper_anchor,
+        group_header_drop_hit, group_insertion_marker_rect, root_append_hit, root_prepend_hit,
+    };
     use crate::pickers::picker_browser_dragging::{DropIndicator, PointerRegion, resolve_drop_candidate};
+    use crate::pickers::picker_browser_model::{ContainerId, DropPosition, HierarchyNode, NodeId, PickerBrowserHierarchy};
     use egui::{Pos2, Rect};
 
     #[test]
@@ -360,11 +347,8 @@ mod insertion_marker_tests {
     fn card_edge_indicators_cover_both_halves_in_grid_and_list_layouts() {
         let card = Rect::from_min_max(Pos2::new(10.0, 30.0), Pos2::new(110.0, 70.0));
         for grid in [false, true] {
-            let (leading_pointer, trailing_pointer) = if grid {
-                (Pos2::new(11.0, 50.0), Pos2::new(109.0, 50.0))
-            } else {
-                (Pos2::new(50.0, 31.0), Pos2::new(50.0, 69.0))
-            };
+            let (leading_pointer, trailing_pointer) =
+                if grid { (Pos2::new(11.0, 50.0), Pos2::new(109.0, 50.0)) } else { (Pos2::new(50.0, 31.0), Pos2::new(50.0, 69.0)) };
             let leading = card_drop_hit(card, leading_pointer, grid, NodeId::from("card"), 2, 4);
             let trailing = card_drop_hit(card, trailing_pointer, grid, NodeId::from("card"), 2, 4);
             let halves = card_drop_hits(card, grid, NodeId::from("card"), 2, 4);
@@ -390,16 +374,7 @@ mod insertion_marker_tests {
         let gap = Rect::from_min_max(Pos2::new(10.0, 100.0), Pos2::new(210.0, 106.0));
         let upper_bounds = Rect::from_min_max(Pos2::new(31.0, 40.0), Pos2::new(131.0, 80.0));
         let lower_bounds = Rect::from_min_max(Pos2::new(31.0, 106.0), Pos2::new(231.0, 135.0));
-        let split = group_gap_drop_hits(
-            gap,
-            NodeId::from("upper"),
-            NodeId::from("lower"),
-            upper_bounds,
-            lower_bounds,
-            0,
-            1,
-            4,
-        );
+        let split = group_gap_drop_hits(gap, NodeId::from("upper"), NodeId::from("lower"), upper_bounds, lower_bounds, 0, 1, 4);
         assert_eq!(split.len(), 2);
         assert_eq!(split[0].region, PointerRegion::TrailingEdge);
         assert_eq!(split[0].target, Some(NodeId::from("upper")));
@@ -417,16 +392,7 @@ mod insertion_marker_tests {
         assert_eq!(split[1].indicator_rect.height(), 4.0);
 
         for (upper_depth, lower_depth) in [(0, 1), (0, 0), (1, 0)] {
-            let split = group_gap_drop_hits(
-                gap,
-                NodeId::from("upper"),
-                NodeId::from("lower"),
-                upper_bounds,
-                lower_bounds,
-                upper_depth,
-                lower_depth,
-                4,
-            );
+            let split = group_gap_drop_hits(gap, NodeId::from("upper"), NodeId::from("lower"), upper_bounds, lower_bounds, upper_depth, lower_depth, 4);
             assert_eq!(split.len(), 2);
             assert_eq!(split[0].region, PointerRegion::TrailingEdge);
             assert_eq!(split[0].target, Some(NodeId::from("upper")));
@@ -436,16 +402,7 @@ mod insertion_marker_tests {
         }
 
         // Nested groups use the same child-level append anchor.
-        let nested = group_gap_drop_hits(
-            gap,
-            NodeId::from("upper-folder"),
-            NodeId::from("child-folder"),
-            upper_bounds,
-            lower_bounds,
-            1,
-            2,
-            4,
-        );
+        let nested = group_gap_drop_hits(gap, NodeId::from("upper-folder"), NodeId::from("child-folder"), upper_bounds, lower_bounds, 1, 2, 4);
         assert_eq!(nested[0].region, PointerRegion::TrailingEdge);
         assert_eq!(nested[0].target, Some(NodeId::from("upper-folder")));
         assert_eq!(nested[0].container, None);
@@ -495,13 +452,15 @@ mod insertion_marker_tests {
     #[test]
     fn group_gap_anchor_uses_the_actual_previous_mixed_sibling() {
         use crate::pickers::picker_browser_model::{HierarchyNode as Node, PickerBrowserHierarchy};
-        let hierarchy = PickerBrowserHierarchy::new(vec![
-            Node::group("outer", vec![
+        let hierarchy = PickerBrowserHierarchy::new(vec![Node::group(
+            "outer",
+            vec![
                 Node::group("inner", vec![Node::group("child", vec![]), Node::item("first"), Node::item("last")]),
                 Node::item("meeting-card"),
                 Node::group("lower", vec![]),
-            ]),
-        ]).unwrap();
+            ],
+        )])
+        .unwrap();
         assert_eq!(group_gap_upper_anchor(&hierarchy, &NodeId::from("lower")), Some((NodeId::from("meeting-card"), 1)));
         assert_eq!(group_gap_upper_anchor(&hierarchy, &NodeId::from("inner")), Some((NodeId::from("outer"), 0)));
         let empty = PickerBrowserHierarchy::new(vec![Node::group("outer", vec![Node::group("empty", vec![])])]).unwrap();
@@ -512,17 +471,15 @@ mod insertion_marker_tests {
     fn group_gap_upper_anchor_tracks_the_previous_group_or_card_at_each_nesting_level() {
         use crate::pickers::picker_browser_model::HierarchyNode as Node;
 
-        let hierarchy = PickerBrowserHierarchy::new(vec![
-            Node::group(
-                "root",
-                vec![
-                    Node::item("root-first"),
-                    Node::group("nested", vec![Node::item("nested-first"), Node::group("deep", vec![]), Node::item("nested-last")]),
-                    Node::item("root-last"),
-                    Node::group("lower-root", vec![]),
-                ],
-            ),
-        ])
+        let hierarchy = PickerBrowserHierarchy::new(vec![Node::group(
+            "root",
+            vec![
+                Node::item("root-first"),
+                Node::group("nested", vec![Node::item("nested-first"), Node::group("deep", vec![]), Node::item("nested-last")]),
+                Node::item("root-last"),
+                Node::group("lower-root", vec![]),
+            ],
+        )])
         .unwrap();
 
         assert_eq!(group_gap_upper_anchor(&hierarchy, &NodeId::from("lower-root")), Some((NodeId::from("root-last"), 1)));
@@ -563,8 +520,14 @@ mod insertion_marker_tests {
 
         assert_eq!(card_drop_hit(card, grid_midpoint, true, NodeId::from("card"), 0, 0).region, PointerRegion::LeadingEdge);
         assert_eq!(card_drop_hit(card, list_midpoint, false, NodeId::from("card"), 0, 0).region, PointerRegion::LeadingEdge);
-        assert_eq!(card_drop_hit(card, Pos2::new(card.center().x + 0.01, card.center().y), true, NodeId::from("card"), 0, 0).region, PointerRegion::TrailingEdge);
-        assert_eq!(card_drop_hit(card, Pos2::new(card.center().x, card.center().y + 0.01), false, NodeId::from("card"), 0, 0).region, PointerRegion::TrailingEdge);
+        assert_eq!(
+            card_drop_hit(card, Pos2::new(card.center().x + 0.01, card.center().y), true, NodeId::from("card"), 0, 0).region,
+            PointerRegion::TrailingEdge
+        );
+        assert_eq!(
+            card_drop_hit(card, Pos2::new(card.center().x, card.center().y + 0.01), false, NodeId::from("card"), 0, 0).region,
+            PointerRegion::TrailingEdge
+        );
     }
 }
 
@@ -607,13 +570,14 @@ pub(crate) fn asset_browser_header_drag_source(response: &egui::Response, scope:
 }
 
 /// Register a canonical hierarchy node as a draggable header using its exact typed identity.
-pub(crate) fn asset_browser_header_drag_source_with_id(response: &egui::Response, scope: &str, node_id: NodeId) {
-    response.dnd_set_drag_payload(AssetDrag::CanonicalGroup { scope: scope.to_owned(), node_id });
+pub(crate) fn asset_browser_header_drag_source_with_id(response: &egui::Response, scope: &str, node_id: NodeId, selection: &[NodeId]) {
+    response.dnd_set_drag_payload(AssetDrag::CanonicalGroup { scope: scope.to_owned(), node_id, selection: selection.to_vec() });
 }
 
 /// Register a card source with its exact canonical identity (keys may repeat across groups).
-pub(crate) fn asset_browser_item_drag_source_with_id(response: &egui::Response, scope: &str, key: &str, node_id: NodeId) {
-    response.dnd_set_drag_payload(AssetDrag::Preset { scope: scope.to_string(), key: key.to_string(), node_id: Some(node_id) });
+pub(crate) fn asset_browser_item_drag_source_with_id(response: &egui::Response, scope: &str, key: &str, node_id: NodeId, selection: &[NodeId]) {
+    let selection = selection.to_vec();
+    response.dnd_set_drag_payload(AssetDrag::Preset { scope: scope.to_string(), key: key.to_string(), node_id: Some(node_id), selection });
 }
 
 /// Take the browser's one-shot release payload after a canonical hit has won arbitration.
@@ -707,7 +671,7 @@ pub(crate) fn asset_browser_item_target(
     key: &str,
     grid: bool,
 ) -> Option<AssetDrag> {
-    response.dnd_set_drag_payload(AssetDrag::Preset { scope: scope.to_string(), key: key.to_string(), node_id: None });
+    response.dnd_set_drag_payload(AssetDrag::Preset { scope: scope.to_string(), key: key.to_string(), node_id: None, selection: Vec::new() });
     let hovered = response.dnd_hover_payload::<AssetDrag>().map(|payload| payload.as_ref().clone());
     if matches!(&hovered, Some(AssetDrag::Preset { scope: drag_scope, key: dragged, .. }) if drag_scope.as_str() == scope && dragged.as_str() != key) {
         let after = ui.ctx().pointer_interact_pos().is_some_and(|p| item_drop_after(rect, p, grid));
@@ -783,12 +747,23 @@ mod canonical_drag_tests {
 
     #[test]
     fn canonical_source_identity_is_scope_checked_and_path_qualified() {
-        let item = AssetDrag::Preset { scope: "brushes".to_owned(), key: "soft".to_owned(), node_id: Some(NodeId::group_path(["Favorites"], "soft")) };
-        let group = AssetDrag::CanonicalGroup { scope: "brushes".to_owned(), node_id: NodeId::group_path(["Favorites"], "Favorites") };
+        let item = AssetDrag::Preset {
+            scope: "brushes".to_owned(),
+            key: "soft".to_owned(),
+            node_id: Some(NodeId::group_path(["Favorites"], "soft")),
+            selection: Vec::new(),
+        };
+        let group_selection = vec![NodeId::group("Favorites"), NodeId::item("Other", "soft")];
+        let group = AssetDrag::CanonicalGroup {
+            scope: "brushes".to_owned(),
+            node_id: NodeId::group_path(["Favorites"], "Favorites"),
+            selection: group_selection.clone(),
+        };
         let legacy = AssetDrag::Group { scope: "brushes".to_owned(), name: "Favorites".to_owned(), path: Vec::new() };
 
         assert_eq!(item.canonical_node_id("brushes"), Some(&NodeId::group_path(["Favorites"], "soft")));
         assert_eq!(group.canonical_node_id("brushes"), Some(&NodeId::group_path(["Favorites"], "Favorites")));
+        assert!(matches!(&group, AssetDrag::CanonicalGroup { selection, .. } if selection == &group_selection));
         assert_eq!(item.canonical_node_id("patterns"), None);
         assert_eq!(legacy.canonical_node_id("brushes"), None);
     }

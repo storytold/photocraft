@@ -5,6 +5,8 @@
 //! arbitration, hierarchy resolver, and transient persistence are the system under test.
 
 use super::{BrowserAction, BrowserAdapter, BrowserCapabilities, BrowserOptions, GroupView, ItemPaintState, ItemView, browser};
+use crate::pickers::picker_browser_dragging::DropMoveIntent;
+use crate::pickers::picker_browser_model::NodeId;
 use crate::pickers::picker_state::{HierarchyOrderEntry, PresetUi};
 use egui::{Event, Modifiers, PointerButton, Pos2, Rect, Vec2, vec2};
 use egui_kittest::{Harness, kittest::Queryable};
@@ -25,6 +27,11 @@ fn harness(groups: Vec<GroupView>, size: Vec2) -> Harness<'static, UiTestState> 
 }
 
 fn harness_with_state(groups: Vec<GroupView>, size: Vec2, initial_state: PresetUi) -> Harness<'static, UiTestState> {
+    harness_with_state_layout(groups, size, initial_state, false)
+}
+
+fn harness_with_state_layout(groups: Vec<GroupView>, size: Vec2, mut initial_state: PresetUi, list: bool) -> Harness<'static, UiTestState> {
+    initial_state.sizes.insert(PANEL.to_owned(), if list { super::MIN_THUMB } else { 40.0 });
     let mut h = Harness::builder().with_size(size).build_ui_state(
         move |ui, state: &mut UiTestState| {
             if !ui.ctx().fonts(|fonts| fonts.definitions().families.contains_key(&egui::FontFamily::Name("semibold".into()))) {
@@ -77,6 +84,65 @@ fn harness_with_state(groups: Vec<GroupView>, size: Vec2, initial_state: PresetU
     h
 }
 
+fn harness_with_intent_capture(
+    groups: Vec<GroupView>,
+    size: Vec2,
+    mut initial_state: PresetUi,
+    list: bool,
+) -> Harness<'static, (PresetUi, Vec<DropMoveIntent>)> {
+    initial_state.sizes.insert(PANEL.to_owned(), if list { super::MIN_THUMB } else { 40.0 });
+    let mut h = Harness::builder().with_size(size).build_ui_state(
+        move |ui, state: &mut (PresetUi, Vec<DropMoveIntent>)| {
+            if !ui.ctx().fonts(|fonts| fonts.definitions().families.contains_key(&egui::FontFamily::Name("semibold".into()))) {
+                return;
+            }
+            let (preset_ui, intents) = state;
+            let mut capture_intent = |intent: &DropMoveIntent| {
+                intents.push(intent.clone());
+                Ok(())
+            };
+            let mut paint_item = |_: &egui::Ui, _: Rect, _: usize, _: usize, _: ItemPaintState| {};
+            let mut adapter = BrowserAdapter {
+                panel: PANEL,
+                groups: &groups,
+                options: BrowserOptions {
+                    canvas: Rect::NOTHING,
+                    flush: false,
+                    center_grid: false,
+                    grid_indent: 8.0,
+                    all_groups_open: true,
+                    compact_context_menus: false,
+                    item_size: Some(vec2(72.0, 48.0)),
+                    list_item_height: Some(26.0),
+                    domain_hierarchy_actions: false,
+                    root_item_group: None,
+                },
+                capabilities: BrowserCapabilities {
+                    item_drag: true,
+                    item_drop: true,
+                    group_drag: true,
+                    selection: true,
+                    activation: true,
+                    canonical_hierarchy_drag: true,
+                },
+                item_context_menu: None,
+                group_context_menu: None,
+                nested_group_context_menu: None,
+                canonical_hierarchy_move: Some(&mut capture_intent),
+                hierarchy_item_move: None,
+                paint_group: None,
+                paint_item: &mut paint_item,
+                paint_list_item: None,
+            };
+            browser(ui, preset_ui, &mut adapter, 900.0);
+        },
+        (initial_state, Vec::new()),
+    );
+    crate::PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
+    h.run_steps(3);
+    h
+}
+
 fn nested_group_tree() -> Vec<GroupView> {
     vec![
         group("A", vec![item("a1", "A card 1", &[]), item("a2", "A card 2", &[]), item("a3", "A card 3", &[])]),
@@ -115,7 +181,7 @@ fn with_root_item_between_groups(group: &str, key: &str) -> PresetUi {
     state
 }
 
-fn pointer_drag(h: &mut Harness<'static, UiTestState>, source: Pos2, target: Pos2) {
+fn pointer_drag<S>(h: &mut Harness<'static, S>, source: Pos2, target: Pos2) {
     h.event(Event::PointerMoved(source));
     h.run_steps(1);
     h.event(Event::PointerButton { pos: source, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
@@ -169,7 +235,11 @@ fn canonical_group_drop_outline_left_edge_is_visible_in_rendered_pixels() {
     let left_edge = (0..4).any(|dy| pixel_is_accent(target.left(), target.top() + dy as f32));
     let top_edge = (0..4).any(|dx| pixel_is_accent(target.left() + dx as f32, target.top() + 1.0));
 
-    assert!(left_edge, "left edge missing from rendered drop outline: target={target:?}, clip={browser_clip:?}, accent={accent:?}, ppp={ppp}, pixels={:?}", (0..6).map(|x| image.get_pixel(x, (target.top() + 1.0) as u32).0).collect::<Vec<_>>());
+    assert!(
+        left_edge,
+        "left edge missing from rendered drop outline: target={target:?}, clip={browser_clip:?}, accent={accent:?}, ppp={ppp}, pixels={:?}",
+        (0..6).map(|x| image.get_pixel(x, (target.top() + 1.0) as u32).0).collect::<Vec<_>>()
+    );
     assert!(top_edge, "top edge missing from rendered drop outline: target={target:?}, accent={accent:?}, ppp={ppp}");
 }
 
@@ -344,13 +414,21 @@ fn item_drag_preview_follows_cursor_with_original_pickup_offset_after_leaving_as
     h.event(Event::PointerMoved(pointer));
     h.run_steps(2);
     let expected_outside = Rect::from_min_size(pointer - source.size() * 0.5, source.size());
-    assert_eq!(ghost_rect.get(), Some(expected_outside), "outside the asset-browser viewport, the ghost must follow the cursor while preserving the original center grab offset");
+    assert_eq!(
+        ghost_rect.get(),
+        Some(expected_outside),
+        "outside the asset-browser viewport, the ghost must follow the cursor while preserving the original center grab offset"
+    );
 
     // Also cover the native PointerGone event path. Do not first send an artificial out-of-bounds
     // PointerMoved event here; the preceding assertion already covers leaving the browser viewport.
     h.remove_cursor();
     h.run_steps(2);
-    assert_eq!(ghost_rect.get(), Some(source), "without a pointer position, the ghost falls back to its pickup bounds; app={app_clip:?}, picker={picker_clip:?}");
+    assert_eq!(
+        ghost_rect.get(),
+        Some(source),
+        "without a pointer position, the ghost falls back to its pickup bounds; app={app_clip:?}, picker={picker_clip:?}"
+    );
     let image = h.render().expect("render dragged item preview after PointerGone");
     let source_center = source.center();
     let ppp = h.ctx.pixels_per_point();
@@ -495,7 +573,11 @@ fn actual_gap_between_a_group_and_root_card_offers_append_and_root_sibling_desti
         let a = h.state().0.hierarchy_order[PANEL].get("A").cloned().unwrap_or_default();
         let root = h.state().0.hierarchy_order[PANEL].get("").cloned().unwrap_or_default();
         if append_into_group {
-            assert!(a.contains(&HierarchyOrderEntry::Item("b1".into())), "upper half should append the root card to Group A: {a:?}; root={root:?}; all={:?}", h.state().0.hierarchy_order);
+            assert!(
+                a.contains(&HierarchyOrderEntry::Item("b1".into())),
+                "upper half should append the root card to Group A: {a:?}; root={root:?}; all={:?}",
+                h.state().0.hierarchy_order
+            );
             assert!(!root.contains(&HierarchyOrderEntry::RootItem { group: "B".into(), key: "b1".into() }));
         } else {
             assert!(!a.contains(&HierarchyOrderEntry::Item("b1".into())), "lower half should keep the card at the root level: {a:?}");
@@ -509,21 +591,11 @@ fn actual_gap_between_a_group_and_root_card_offers_append_and_root_sibling_desti
 #[test]
 fn actual_gap_between_nested_group_and_its_sibling_card_works_at_nested_depth() {
     for (offset, append_into_group) in [(-1.0, true), (1.0, false)] {
-        let groups = vec![
-            group("A", vec![item("a1", "A card", &[])]),
-            group("B", vec![item("b1", "B card", &[])]),
-            group("C", vec![item("c1", "C card", &[])]),
-        ];
+        let groups =
+            vec![group("A", vec![item("a1", "A card", &[])]), group("B", vec![item("b1", "B card", &[])]), group("C", vec![item("c1", "C card", &[])])];
         let mut initial = PresetUi::default();
         initial.nest_group(PANEL, &["A".into(), "B".into(), "C".into()], "A", Some("B"));
-        initial.set_hierarchy_order(
-            PANEL,
-            "B",
-            vec![
-                HierarchyOrderEntry::Group("A".into()),
-                HierarchyOrderEntry::Item("b1".into()),
-            ],
-        );
+        initial.set_hierarchy_order(PANEL, "B", vec![HierarchyOrderEntry::Group("A".into()), HierarchyOrderEntry::Item("b1".into())]);
         let mut h = harness_with_state(groups, vec2(520.0, 900.0), initial);
         let group_card = h.get_by_label("A card").rect();
         let sibling_card = h.get_by_label("B card").rect();
@@ -586,18 +658,27 @@ fn actual_nested_group_drag_cannot_create_self_or_descendant_cycles() {
 fn actual_group_collapse_hides_descendants_and_reopening_restores_the_same_nodes() {
     let mut h = harness_with_state(nested_group_tree(), vec2(520.0, 900.0), with_b_nested_in_a());
     assert!(h.query_all_by_label("B card 1").next().is_some());
-    let header = h.get_by_label("B").rect().center();
+    let header_rect = h.get_by_label("B").rect();
+    let header = header_rect.center();
     h.event(Event::PointerMoved(header));
     h.event(Event::PointerButton { pos: header, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
     h.run_steps(1);
     h.event(Event::PointerButton { pos: header, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
     h.run_steps(2);
-    assert!(h.query_all_by_label("B card 1").next().is_none());
-    let header = h.get_by_label("B").rect().center();
-    h.event(Event::PointerMoved(header));
-    h.event(Event::PointerButton { pos: header, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    assert!(h.query_all_by_label("B card 1").next().is_some(), "clicking the group body selects it but does not collapse it");
+    assert!(h.state().0.browser_node_selected(PANEL, &NodeId::group("B")));
+
+    let disclosure = pos2(header_rect.left() + 9.0, header_rect.center().y);
+    h.event(Event::PointerMoved(disclosure));
+    h.event(Event::PointerButton { pos: disclosure, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
     h.run_steps(1);
-    h.event(Event::PointerButton { pos: header, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.event(Event::PointerButton { pos: disclosure, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+    assert!(h.query_all_by_label("B card 1").next().is_none());
+    h.event(Event::PointerMoved(disclosure));
+    h.event(Event::PointerButton { pos: disclosure, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    h.event(Event::PointerButton { pos: disclosure, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
     h.run_steps(2);
     assert!(h.query_all_by_label("B card 1").next().is_some());
 }
@@ -612,6 +693,99 @@ fn actual_card_selection_and_double_activation_emit_only_the_enabled_generic_eve
     h.event(Event::PointerButton { pos: card, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
     h.run_steps(2);
     assert!(matches!(h.state().1.as_slice(), [BrowserAction::SelectItem { group, key, .. }] if group == "A" && key == "a1"));
+}
+
+#[test]
+fn browser_selection_clears_only_when_empty_browser_space_is_clicked() {
+    let groups = nested_group_tree();
+    let mut h = Harness::builder().with_size(vec2(520.0, 520.0)).build_ui_state(
+        move |ui, state: &mut UiTestState| {
+            if !ui.ctx().fonts(|fonts| fonts.definitions().families.contains_key(&egui::FontFamily::Name("semibold".into()))) {
+                return;
+            }
+            ui.label("Shell header");
+            let mut paint_item = |_: &egui::Ui, _: Rect, _: usize, _: usize, _: ItemPaintState| {};
+            let (preset_ui, actions, item_moves) = state;
+            let mut commit_item_move = |_: &str, _: &str, _: &str, _: usize| Ok(());
+            let mut adapter = BrowserAdapter {
+                panel: PANEL,
+                groups: &groups,
+                options: BrowserOptions {
+                    canvas: Rect::NOTHING,
+                    flush: false,
+                    center_grid: false,
+                    grid_indent: 8.0,
+                    all_groups_open: true,
+                    compact_context_menus: false,
+                    item_size: Some(vec2(72.0, 48.0)),
+                    list_item_height: Some(26.0),
+                    domain_hierarchy_actions: false,
+                    root_item_group: None,
+                },
+                capabilities: BrowserCapabilities {
+                    item_drag: false,
+                    item_drop: false,
+                    group_drag: false,
+                    selection: true,
+                    activation: true,
+                    canonical_hierarchy_drag: false,
+                },
+                item_context_menu: None,
+                group_context_menu: None,
+                nested_group_context_menu: None,
+                canonical_hierarchy_move: None,
+                hierarchy_item_move: Some(&mut commit_item_move),
+                paint_group: None,
+                paint_item: &mut paint_item,
+                paint_list_item: None,
+            };
+            actions.extend(browser(ui, preset_ui, &mut adapter, 300.0));
+            ui.label("Shell footer");
+            let _ = item_moves;
+        },
+        (PresetUi::default(), Vec::new(), Vec::new()),
+    );
+    crate::PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
+    h.run_steps(3);
+
+    let card = h.get_by_label("A card 1").rect().center();
+    h.event(Event::PointerMoved(card));
+    h.event(Event::PointerButton { pos: card, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    h.event(Event::PointerButton { pos: card, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+    assert!(!h.state().0.browser_selection.get(PANEL).is_none_or(|selection| selection.is_empty()));
+
+    let header = h.get_by_label("Shell header").rect().center();
+    h.event(Event::PointerMoved(header));
+    h.event(Event::PointerButton { pos: header, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    h.event(Event::PointerButton { pos: header, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+    assert!(
+        !h.state().0.browser_selection.get(PANEL).is_none_or(|selection| selection.is_empty()),
+        "shell header is outside the browser selection-clear region"
+    );
+
+    let footer = h.get_by_label("Shell footer").rect().center();
+    h.event(Event::PointerMoved(footer));
+    h.event(Event::PointerButton { pos: footer, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    h.event(Event::PointerButton { pos: footer, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+    assert!(
+        !h.state().0.browser_selection.get(PANEL).is_none_or(|selection| selection.is_empty()),
+        "shell footer is outside the browser selection-clear region"
+    );
+
+    let browser = super::last_browser_rect(&h.ctx, PANEL).expect("browser viewport is recorded");
+    let empty = pos2(browser.right() - 8.0, browser.bottom() - 8.0);
+    h.event(Event::PointerMoved(empty));
+    h.event(Event::PointerButton { pos: empty, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    h.event(Event::PointerButton { pos: empty, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+    assert!(h.state().0.browser_selection.get(PANEL).is_none_or(|selection| selection.is_empty()), "empty space within the browser viewport clears selection");
 }
 
 #[test]
@@ -695,18 +869,22 @@ fn active_root_card_drop_between_cards_paints_a_vertical_insertion_marker() {
     let y = (target_card.center().y * ppp).round() as i32;
     let has_accent = (x - 2..=x + 2).any(|px| {
         (y - 2..=y + 2).any(|py| {
-            px >= 0 && py >= 0 && (px as u32) < image.width() && (py as u32) < image.height()
-                && image.get_pixel(px as u32, py as u32).0[..3] == accent[..3]
+            px >= 0 && py >= 0 && (px as u32) < image.width() && (py as u32) < image.height() && image.get_pixel(px as u32, py as u32).0[..3] == accent[..3]
         })
     });
 
     assert!(has_accent, "the insertion marker between root cards should be vertical at the target card's leading edge");
-    let horizontal_marker_pixels = (x + 3..((target_card.right() * ppp).round() as i32 - 3)).filter(|px| {
-        (y - 1..=y + 1).any(|py| {
-            *px >= 0 && py >= 0 && (*px as u32) < image.width() && (py as u32) < image.height()
-                && image.get_pixel(*px as u32, py as u32).0[..3] == accent[..3]
+    let horizontal_marker_pixels = (x + 3..((target_card.right() * ppp).round() as i32 - 3))
+        .filter(|px| {
+            (y - 1..=y + 1).any(|py| {
+                *px >= 0
+                    && py >= 0
+                    && (*px as u32) < image.width()
+                    && (py as u32) < image.height()
+                    && image.get_pixel(*px as u32, py as u32).0[..3] == accent[..3]
+            })
         })
-    }).count();
+        .count();
     assert_eq!(horizontal_marker_pixels, 0, "an interior card insertion must not paint a horizontal marker across the card");
 }
 
@@ -725,6 +903,468 @@ fn actual_card_drag_commits_before_and_after_positions_for_multiple_source_targe
         pointer_drag(&mut h, source, target);
         assert_eq!(h.state().2, [("A".into(), source_key.into(), "A".into(), expected_index)], "source={source_key}, target={target_key}, after={after}");
     }
+}
+
+#[test]
+fn actual_list_row_drag_commits_before_and_after_positions() {
+    for (after, expected_index) in [(false, 0), (true, 1)] {
+        let mut h = harness_with_state_layout(nested_group_tree(), vec2(520.0, 900.0), PresetUi::default(), true);
+        let source = h.get_by_label("A card 1").rect().center();
+        let target_row = h.get_by_label("A card 2").rect();
+        let target = pos2(target_row.center().x, if after { target_row.bottom() - 2.0 } else { target_row.top() + 2.0 });
+
+        pointer_drag(&mut h, source, target);
+
+        assert_eq!(h.state().2, [("A".into(), "a1".into(), "A".into(), expected_index)], "list after={after}, target={target_row:?}");
+    }
+}
+
+#[test]
+fn actual_list_drag_moves_the_entire_selected_item_set() {
+    for list in [true, false] {
+        let mut initial = PresetUi::default();
+        initial.select_browser_node(PANEL, NodeId::item("A", "a1"), false);
+        initial.select_browser_node(PANEL, NodeId::item("A", "a2"), true);
+        let mut h = harness_with_state_layout(nested_group_tree(), vec2(520.0, 900.0), initial, list);
+        let source = h.get_by_label("A card 1").rect().center();
+        let target_row = h.get_by_label("B card 1").rect();
+        let target = if list { pos2(target_row.center().x, target_row.top() + 2.0) } else { pos2(target_row.left() + 2.0, target_row.center().y) };
+
+        pointer_drag(&mut h, source, target);
+
+        let mut moved: Vec<_> = h.state().2.iter().map(|(_, key, group, _)| (key.as_str(), group.as_str())).collect();
+        moved.sort_unstable();
+        assert_eq!(moved, [("a1", "B"), ("a2", "B")], "list layout={list}");
+        assert_eq!(
+            h.state().2.iter().map(|(_, key, _, _)| key.as_str()).collect::<Vec<_>>(),
+            ["a1", "a2"],
+            "simulated insertion indices must advance with the selected nodes in list={list}"
+        );
+        assert_eq!(
+            h.state().2.iter().map(|(_, _, _, index)| *index).collect::<Vec<_>>(),
+            [0, 1],
+            "domain insertion indices must preserve selection order in list={list}"
+        );
+        let destination = &h.state().0.hierarchy_order[PANEL]["B"];
+        let moved_a1 = destination.iter().position(|entry| *entry == HierarchyOrderEntry::Item("a1".into())).unwrap();
+        let moved_a2 = destination.iter().position(|entry| *entry == HierarchyOrderEntry::Item("a2".into())).unwrap();
+        let target = destination.iter().position(|entry| *entry == HierarchyOrderEntry::Item("b1".into())).unwrap();
+        assert!(moved_a1 < moved_a2 && moved_a2 < target, "selection order must be retained in list={list}: {destination:?}");
+    }
+}
+
+#[test]
+fn actual_multi_card_drag_preserves_selection_order_for_every_drop_region() {
+    for list in [false, true] {
+        for (region, expected_order, expected_callbacks) in [
+            ("before", vec!["a1", "a2", "b1", "b2"], vec![("a1", 0), ("a2", 1)]),
+            ("after", vec!["b1", "a1", "a2", "b2"], vec![("a2", 1), ("a1", 1)]),
+            ("prepend", vec!["a1", "a2", "b1", "b2"], vec![("a2", 0), ("a1", 0)]),
+            ("append", vec!["b1", "b2"], vec![]),
+        ] {
+            let mut initial = PresetUi::default();
+            initial.select_browser_node(PANEL, NodeId::item("A", "a1"), false);
+            initial.select_browser_node(PANEL, NodeId::item("A", "a2"), true);
+            let mut h = harness_with_state_layout(nested_group_tree(), vec2(520.0, 900.0), initial, list);
+            let source = h.get_by_label("A card 1").rect().center();
+            let target = match region {
+                "before" | "after" => {
+                    let rect = h.get_by_label("B card 1").rect();
+                    if list {
+                        pos2(rect.center().x, if region == "before" { rect.top() + 2.0 } else { rect.bottom() - 2.0 })
+                    } else {
+                        pos2(if region == "before" { rect.left() + 2.0 } else { rect.right() - 2.0 }, rect.center().y)
+                    }
+                }
+                "prepend" => h.get_by_label("B").rect().center(),
+                "append" => {
+                    let last = h.get_by_label("C card 1").rect();
+                    pos2(last.center().x, last.bottom() + 10.0)
+                }
+                _ => unreachable!(),
+            };
+
+            pointer_drag(&mut h, source, target);
+
+            let actual_order: Vec<_> = h.state().0.hierarchy_order[PANEL]["B"]
+                .iter()
+                .filter_map(|entry| match entry {
+                    HierarchyOrderEntry::Item(key) => Some(key.as_str()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(actual_order, expected_order, "region={region}, list={list}");
+            assert_eq!(
+                h.state().2.iter().map(|(_, key, _, index)| (key.as_str(), *index)).collect::<Vec<_>>(),
+                expected_callbacks,
+                "domain callback order and indices for region={region}, list={list}"
+            );
+            if region == "append" {
+                assert_eq!(
+                    h.state().0.hierarchy_order[PANEL][""],
+                    [
+                        HierarchyOrderEntry::Group("A".into()),
+                        HierarchyOrderEntry::Group("B".into()),
+                        HierarchyOrderEntry::Group("C".into()),
+                        HierarchyOrderEntry::RootItem { group: "A".into(), key: "a1".into() },
+                        HierarchyOrderEntry::RootItem { group: "A".into(), key: "a2".into() },
+                    ],
+                    "root append must retain the selected card order in list={list}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn actual_multi_card_same_group_reorder_uses_indices_after_prior_selected_moves() {
+    for list in [false, true] {
+        let mut initial = PresetUi::default();
+        initial.select_browser_node(PANEL, NodeId::item("A", "a1"), false);
+        initial.select_browser_node(PANEL, NodeId::item("A", "a2"), true);
+        let mut h = harness_with_state_layout(nested_group_tree(), vec2(520.0, 900.0), initial, list);
+        let source = h.get_by_label("A card 1").rect().center();
+        let target_row = h.get_by_label("A card 3").rect();
+        let target = if list { pos2(target_row.center().x, target_row.bottom() - 2.0) } else { pos2(target_row.right() - 2.0, target_row.center().y) };
+
+        pointer_drag(&mut h, source, target);
+
+        let actual: Vec<_> = h.state().0.hierarchy_order[PANEL]["A"]
+            .iter()
+            .filter_map(|entry| match entry {
+                HierarchyOrderEntry::Item(key) => Some(key.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(actual, ["a3", "a1", "a2"], "same-container reorder in list={list}");
+        assert_eq!(
+            h.state().2.iter().map(|(_, key, _, index)| (key.as_str(), *index)).collect::<Vec<_>>(),
+            [("a2", 2), ("a1", 1)],
+            "same-container domain indices in list={list}"
+        );
+    }
+}
+
+#[test]
+fn actual_group_drag_moves_all_selected_groups_together() {
+    for list in [false, true] {
+        let mut initial = PresetUi::default();
+        initial.select_browser_node(PANEL, NodeId::group("A"), false);
+        initial.select_browser_node(PANEL, NodeId::group("B"), true);
+        let mut h = harness_with_state_layout(nested_group_tree(), vec2(520.0, 900.0), initial, list);
+        let source = h.get_by_label("A").rect().center();
+        let target = h.get_by_label("C").rect().center();
+
+        pointer_drag(&mut h, source, target);
+
+        assert_eq!(
+            h.state().0.hierarchy_order[PANEL]["C"],
+            [HierarchyOrderEntry::Group("A".into()), HierarchyOrderEntry::Group("B".into()), HierarchyOrderEntry::Item("c1".into())],
+            "group selection order must be retained in list={list}"
+        );
+        assert_eq!(h.state().2, Vec::<(String, String, String, usize)>::new());
+    }
+}
+
+#[test]
+fn actual_group_drag_moves_a_mixed_group_and_card_selection() {
+    for list in [false, true] {
+        let mut initial = PresetUi::default();
+        initial.select_browser_node(PANEL, NodeId::group("A"), false);
+        initial.select_browser_node(PANEL, NodeId::item("B", "b1"), true);
+        let mut h = harness_with_state_layout(nested_group_tree(), vec2(520.0, 900.0), initial, list);
+        let source = h.get_by_label("A").rect().center();
+        let target = h.get_by_label("C").rect().center();
+
+        pointer_drag(&mut h, source, target);
+
+        assert_eq!(
+            h.state().0.hierarchy_order[PANEL]["C"],
+            [HierarchyOrderEntry::Group("A".into()), HierarchyOrderEntry::Item("b1".into()), HierarchyOrderEntry::Item("c1".into())],
+            "mixed selection order must be retained in list={list}"
+        );
+        assert_eq!(h.state().2, [("B".into(), "b1".into(), "C".into(), 0)]);
+    }
+}
+
+#[test]
+fn actual_card_drag_moves_a_mixed_card_and_group_selection() {
+    for list in [false, true] {
+        let mut initial = PresetUi::default();
+        initial.select_browser_node(PANEL, NodeId::group("A"), false);
+        initial.select_browser_node(PANEL, NodeId::item("B", "b1"), true);
+        let mut h = harness_with_state_layout(nested_group_tree(), vec2(520.0, 900.0), initial, list);
+        let source = h.get_by_label("B card 1").rect().center();
+        let target = h.get_by_label("C").rect().center();
+
+        pointer_drag(&mut h, source, target);
+
+        assert_eq!(
+            h.state().0.hierarchy_order[PANEL]["C"],
+            [HierarchyOrderEntry::Group("A".into()), HierarchyOrderEntry::Item("b1".into()), HierarchyOrderEntry::Item("c1".into())],
+            "mixed selection order must be independent of the dragged node type in list={list}"
+        );
+        assert_eq!(h.state().2, [("B".into(), "b1".into(), "C".into(), 0)]);
+    }
+}
+
+#[test]
+fn actual_shared_picker_passes_the_complete_mixed_selection_to_its_commit_function() {
+    let mut initial = PresetUi::default();
+    initial.select_browser_node(PANEL, NodeId::group("A"), false);
+    initial.select_browser_node(PANEL, NodeId::item("B", "b1"), true);
+    let mut h = harness_with_intent_capture(nested_group_tree(), vec2(520.0, 900.0), initial, false);
+    assert!(h.state().0.browser_node_selected(PANEL, &NodeId::group("A")));
+    assert!(h.state().0.browser_node_selected(PANEL, &NodeId::item("B", "b1")));
+    let source = h.get_by_label("A").rect().center();
+    let target = h.get_by_label("C").rect().center();
+
+    pointer_drag(&mut h, source, target);
+
+    assert_eq!(h.state().1.len(), 1);
+    assert_eq!(h.state().1[0].source, NodeId::group("A"));
+    assert_eq!(h.state().1[0].selection, [NodeId::group("A"), NodeId::item("B", "b1")]);
+    assert_eq!(h.state().1[0].position, crate::pickers::picker_browser_model::DropPosition::PrependTo { group: NodeId::group("C") });
+}
+
+#[test]
+fn actual_unselected_drag_source_does_not_expand_to_other_selected_nodes() {
+    for list in [false, true] {
+        let mut initial = PresetUi::default();
+        initial.select_browser_node(PANEL, NodeId::group("A"), false);
+        let mut h = harness_with_intent_capture(nested_group_tree(), vec2(520.0, 900.0), initial, list);
+        let source = h.get_by_label("B card 1").rect().center();
+        let target = h.get_by_label("C").rect().center();
+
+        pointer_drag(&mut h, source, target);
+
+        assert_eq!(h.state().1.len(), 1, "list={list}");
+        assert_eq!(h.state().1[0].source, NodeId::item("B", "b1"), "list={list}");
+        assert!(h.state().1[0].selection.is_empty(), "an unselected source must use single-node fallback in list={list}");
+    }
+}
+
+#[test]
+fn actual_selected_ancestor_moves_once_when_a_selected_descendant_is_dragged() {
+    for list in [false, true] {
+        let mut initial = PresetUi::default();
+        initial.select_browser_node(PANEL, NodeId::group("A"), false);
+        initial.select_browser_node(PANEL, NodeId::item("A", "a1"), true);
+        let mut h = harness_with_intent_capture(nested_group_tree(), vec2(520.0, 900.0), initial, list);
+        let source = h.get_by_label("A card 1").rect().center();
+        let target = h.get_by_label("C").rect().center();
+
+        pointer_drag(&mut h, source, target);
+
+        assert_eq!(h.state().1.len(), 1, "list={list}");
+        assert_eq!(h.state().1[0].source, NodeId::item("A", "a1"), "the pointer identity remains the dragged card in list={list}");
+        assert_eq!(h.state().1[0].selection, [NodeId::group("A")], "the selected ancestor subsumes its descendant in list={list}");
+    }
+}
+
+#[test]
+fn actual_invalid_member_rejects_the_entire_multi_node_move_before_commit() {
+    for list in [false, true] {
+        let mut initial = PresetUi::default();
+        initial.select_browser_node(PANEL, NodeId::group("A"), false);
+        initial.select_browser_node(PANEL, NodeId::group("C"), true);
+        let mut h = harness_with_intent_capture(nested_group_tree(), vec2(520.0, 900.0), initial, list);
+        let source = h.get_by_label("A").rect().center();
+        let target = h.get_by_label("C").rect().center();
+
+        pointer_drag(&mut h, source, target);
+
+        assert!(h.state().1.is_empty(), "the selected destination group makes the whole selection invalid in list={list}");
+        assert_eq!(h.state().0.parent_of(PANEL, "A"), None, "no valid subset may be moved in list={list}");
+        assert_eq!(h.state().0.parent_of(PANEL, "C"), None, "the invalid selected node remains at root in list={list}");
+    }
+}
+
+#[test]
+fn actual_multiple_group_drag_uses_before_after_prepend_and_append_targets() {
+    use crate::pickers::picker_browser_model::{ContainerId, DropPosition};
+
+    for list in [false, true] {
+        for (region, expected) in [
+            ("before", DropPosition::Before { target: NodeId::group("D") }),
+            ("after", DropPosition::After { target: NodeId::group("C") }),
+            ("prepend", DropPosition::PrependTo { group: NodeId::group("C") }),
+            ("append", DropPosition::AppendTo { container: ContainerId::Root }),
+        ] {
+            let mut initial = PresetUi::default();
+            initial.select_browser_node(PANEL, NodeId::group("A"), false);
+            initial.select_browser_node(PANEL, NodeId::group("B"), true);
+            let groups = vec![group("A", Vec::new()), group("B", Vec::new()), group("C", Vec::new()), group("D", Vec::new())];
+            let mut h = harness_with_intent_capture(groups, vec2(520.0, 900.0), initial, list);
+            let source = h.get_by_label("A").rect().center();
+            let target = match region {
+                "before" | "after" => {
+                    let upper = h.get_by_label("C").rect();
+                    let lower = h.get_by_label("D").rect();
+                    let gap_middle = (upper.bottom() + lower.top()) * 0.5;
+                    pos2(upper.center().x, gap_middle + if region == "before" { 1.0 } else { -1.0 })
+                }
+                "prepend" => h.get_by_label("C").rect().center(),
+                "append" => {
+                    let last = h.get_by_label("D").rect();
+                    pos2(last.center().x, last.bottom() + 10.0)
+                }
+                _ => unreachable!(),
+            };
+
+            pointer_drag(&mut h, source, target);
+
+            assert_eq!(h.state().1.len(), 1, "region={region}, list={list}");
+            assert_eq!(h.state().1[0].source, NodeId::group("A"), "region={region}, list={list}");
+            assert_eq!(h.state().1[0].selection, [NodeId::group("A"), NodeId::group("B")], "region={region}, list={list}");
+            assert_eq!(h.state().1[0].position, expected, "region={region}, list={list}");
+        }
+    }
+}
+
+#[test]
+fn actual_mixed_group_and_card_selection_uses_every_drop_position_from_either_source_type() {
+    use crate::pickers::picker_browser_model::{ContainerId, DropPosition};
+
+    for list in [false, true] {
+        for source_kind in ["group", "card"] {
+            for (region, expected) in [
+                ("before", DropPosition::Before { target: NodeId::group("D") }),
+                ("after", DropPosition::After { target: NodeId::group("C") }),
+                ("prepend", DropPosition::PrependTo { group: NodeId::group("C") }),
+                ("append", DropPosition::AppendTo { container: ContainerId::Root }),
+            ] {
+                let mut initial = PresetUi::default();
+                initial.select_browser_node(PANEL, NodeId::group("A"), false);
+                initial.select_browser_node(PANEL, NodeId::item("B", "b1"), true);
+                let groups = vec![group("A", Vec::new()), group("B", vec![item("b1", "B card 1", &[])]), group("C", Vec::new()), group("D", Vec::new())];
+                let mut h = harness_with_intent_capture(groups, vec2(520.0, 900.0), initial, list);
+                let source = if source_kind == "group" { h.get_by_label("A").rect().center() } else { h.get_by_label("B card 1").rect().center() };
+                let target = match region {
+                    "before" | "after" => {
+                        let upper = h.get_by_label("C").rect();
+                        let lower = h.get_by_label("D").rect();
+                        let gap_middle = (upper.bottom() + lower.top()) * 0.5;
+                        pos2(upper.center().x, gap_middle + if region == "before" { 1.0 } else { -1.0 })
+                    }
+                    "prepend" => h.get_by_label("C").rect().center(),
+                    "append" => {
+                        let last = h.get_by_label("D").rect();
+                        pos2(last.center().x, last.bottom() + 10.0)
+                    }
+                    _ => unreachable!(),
+                };
+
+                pointer_drag(&mut h, source, target);
+
+                assert_eq!(h.state().1.len(), 1, "source={source_kind}, region={region}, list={list}");
+                let intent = &h.state().1[0];
+                assert_eq!(
+                    intent.source,
+                    if source_kind == "group" { NodeId::group("A") } else { NodeId::item("B", "b1") },
+                    "source identity for source={source_kind}, region={region}, list={list}"
+                );
+                assert_eq!(
+                    intent.selection,
+                    [NodeId::group("A"), NodeId::item("B", "b1")],
+                    "selection order for source={source_kind}, region={region}, list={list}"
+                );
+                assert_eq!(intent.position, expected, "destination for source={source_kind}, region={region}, list={list}");
+            }
+        }
+    }
+}
+
+#[test]
+fn actual_unsupported_path_selection_is_rejected_before_any_item_callback() {
+    for list in [false, true] {
+        let groups = vec![
+            group("A", vec![item("folder-card", "Folder card", &["Folder"])]),
+            group("B", vec![item("b1", "B card 1", &[])]),
+            group("C", vec![item("c1", "C card 1", &[])]),
+        ];
+        let mut initial = PresetUi::default();
+        initial.select_browser_node(PANEL, NodeId::item_in_path(["A", "Folder"], "folder-card"), false);
+        initial.select_browser_node(PANEL, NodeId::item("B", "b1"), true);
+        let mut h = harness_with_state_layout(groups, vec2(520.0, 900.0), initial, list);
+        let source = h.get_by_label("Folder card").rect().center();
+        let target = h.get_by_label("C").rect().center();
+
+        pointer_drag(&mut h, source, target);
+
+        assert!(h.state().2.is_empty(), "unsupported path-aware multi-move must not partially call item callbacks in list={list}");
+    }
+}
+
+#[test]
+fn actual_group_drag_onto_a_list_row_uses_the_rows_vertical_insertion_edge() {
+    for (after, expected_order) in [
+        (
+            false,
+            vec![
+                HierarchyOrderEntry::Group("B".into()),
+                HierarchyOrderEntry::Item("a1".into()),
+                HierarchyOrderEntry::Item("a2".into()),
+                HierarchyOrderEntry::Item("a3".into()),
+            ],
+        ),
+        (
+            true,
+            vec![
+                HierarchyOrderEntry::Item("a1".into()),
+                HierarchyOrderEntry::Group("B".into()),
+                HierarchyOrderEntry::Item("a2".into()),
+                HierarchyOrderEntry::Item("a3".into()),
+            ],
+        ),
+    ] {
+        let mut h = harness_with_state_layout(nested_group_tree(), vec2(520.0, 900.0), PresetUi::default(), true);
+        let source = h.get_by_label("B").rect().center();
+        let target_row = h.get_by_label("A card 1").rect();
+        let target = pos2(target_row.center().x, if after { target_row.bottom() - 2.0 } else { target_row.top() + 2.0 });
+
+        pointer_drag(&mut h, source, target);
+
+        assert_eq!(h.state().0.parent_of(PANEL, "B"), Some("A"));
+        assert_eq!(h.state().0.hierarchy_order[PANEL]["A"], expected_order, "list after={after}");
+    }
+}
+
+#[test]
+fn actual_list_row_accepts_an_item_drop_from_a_different_group() {
+    let mut h = harness_with_state_layout(nested_group_tree(), vec2(520.0, 900.0), PresetUi::default(), true);
+    let source = h.get_by_label("B card 1").rect().center();
+    let target_row = h.get_by_label("A card 2").rect();
+    let target = pos2(target_row.center().x, target_row.bottom() - 2.0);
+
+    pointer_drag(&mut h, source, target);
+
+    assert_eq!(h.state().2, [("B".into(), "b1".into(), "A".into(), 2)]);
+}
+
+#[test]
+fn actual_list_item_drop_on_a_group_header_moves_it_into_that_group() {
+    let mut h = harness_with_state_layout(nested_group_tree(), vec2(520.0, 900.0), PresetUi::default(), true);
+    let source = h.get_by_label("A card 1").rect().center();
+    let target = h.get_by_label("B").rect().center();
+
+    pointer_drag(&mut h, source, target);
+
+    assert_eq!(h.state().2, [("A".into(), "a1".into(), "B".into(), 0)]);
+}
+
+#[test]
+fn actual_nested_list_item_drop_at_root_append_promotes_it_to_a_root_sibling() {
+    let mut h = harness_with_state_layout(nested_group_tree(), vec2(520.0, 900.0), with_b_nested_in_a(), true);
+    let source = h.get_by_label("B card 1").rect().center();
+    let last_row = h.get_by_label("C card 1").rect();
+    let target = pos2(last_row.center().x, last_row.bottom() + 8.0);
+
+    pointer_drag(&mut h, source, target);
+
+    let root_order = &h.state().0.hierarchy_order[PANEL][""];
+    assert!(root_order.contains(&HierarchyOrderEntry::RootItem { group: "B".into(), key: "b1".into() }), "root order: {root_order:?}");
+    assert!(!h.state().0.hierarchy_order[PANEL]["B"].contains(&HierarchyOrderEntry::Item("b1".into())));
 }
 
 #[test]
@@ -801,11 +1441,7 @@ fn root_append_indicator_spans_the_full_browser_width() {
     let image = h.render().expect("render root append preview");
     let ppp = h.ctx.pixels_per_point();
     let y = (last_card.bottom() * ppp).round() as i32;
-    let has_accent_at = |x: u32| {
-        (y - 3..=y + 3).any(|py| {
-            py >= 0 && (py as u32) < image.height() && image.get_pixel(x, py as u32).0[..3] == accent[..3]
-        })
-    };
+    let has_accent_at = |x: u32| (y - 3..=y + 3).any(|py| py >= 0 && (py as u32) < image.height() && image.get_pixel(x, py as u32).0[..3] == accent[..3]);
     assert!(has_accent_at(2), "root append marker should reach the left edge of the browser; image width={}", image.width());
     assert!(has_accent_at(image.width() - 3), "root append marker should reach the right edge of the browser; image width={}", image.width());
 }
@@ -843,12 +1479,17 @@ fn root_end_after_a_card_uses_the_cards_vertical_trailing_marker() {
     let has_accent = |px: i32, py: i32| {
         (px - 2..=px + 2).any(|x| {
             (py - 2..=py + 2).any(|y| {
-                x >= 0 && y >= 0 && (x as u32) < image.width() && (y as u32) < image.height()
-                    && image.get_pixel(x as u32, y as u32).0[..3] == accent[..3]
+                x >= 0 && y >= 0 && (x as u32) < image.width() && (y as u32) < image.height() && image.get_pixel(x as u32, y as u32).0[..3] == accent[..3]
             })
         })
     };
-    assert!(has_accent(x, y), "root append after a card should show its vertical trailing edge; last_card={last_card:?}, ppp={ppp}, image={}x{}, order={:?}", image.width(), image.height(), h.state().0.hierarchy_order[PANEL]);
+    assert!(
+        has_accent(x, y),
+        "root append after a card should show its vertical trailing edge; last_card={last_card:?}, ppp={ppp}, image={}x{}, order={:?}",
+        image.width(),
+        image.height(),
+        h.state().0.hierarchy_order[PANEL]
+    );
     assert!(!has_accent(2, (last_card.bottom() * ppp).round() as i32), "card append should not draw a full-width line");
     assert!(!has_accent(image.width() as i32 - 3, (last_card.bottom() * ppp).round() as i32), "card append should not draw a full-width line");
 }
@@ -874,13 +1515,19 @@ fn root_leading_group_marker_renders_all_four_pixels_inside_the_picker_clip() {
     let left = (first_header.left() * ppp).round() as u32;
     let right = (first_header.right() * ppp).round() as u32;
     let top = (first_header.top() * ppp).round() as i32;
-    let has_accent_at = |x: u32, y: i32| {
-        y >= 0 && (y as u32) < image.height() && image.get_pixel(x, y as u32).0[..3] == accent[..3]
-    };
+    let has_accent_at = |x: u32, y: i32| y >= 0 && (y as u32) < image.height() && image.get_pixel(x, y as u32).0[..3] == accent[..3];
     let rows: Vec<bool> = (top - 8..=top + 12).map(|y| has_accent_at(left + 4, y)).collect();
-    assert!(rows.windows(4).any(|window| window.iter().all(|pixel| *pixel)), "leading group marker should render four consecutive pixels at the left edge; first_header={first_header:?}, top={top}, rows={rows:?}, image={}x{}", image.width(), image.height());
+    assert!(
+        rows.windows(4).any(|window| window.iter().all(|pixel| *pixel)),
+        "leading group marker should render four consecutive pixels at the left edge; first_header={first_header:?}, top={top}, rows={rows:?}, image={}x{}",
+        image.width(),
+        image.height()
+    );
     let right_rows: Vec<bool> = (top - 8..=top + 12).map(|y| has_accent_at(image.width() - 5, y)).collect();
-    assert!(right_rows.windows(4).any(|window| window.iter().all(|pixel| *pixel)), "leading group marker should span the full browser width; rows={right_rows:?}, first_header={first_header:?}, right={right}");
+    assert!(
+        right_rows.windows(4).any(|window| window.iter().all(|pixel| *pixel)),
+        "leading group marker should span the full browser width; rows={right_rows:?}, first_header={first_header:?}, right={right}"
+    );
 }
 
 #[test]
@@ -917,13 +1564,17 @@ fn root_leading_card_uses_its_vertical_leading_marker() {
     let has_accent = |px: i32, py: i32| {
         (px - 2..=px + 2).any(|x| {
             (py - 2..=py + 2).any(|y| {
-                x >= 0 && y >= 0 && (x as u32) < image.width() && (y as u32) < image.height()
-                    && image.get_pixel(x as u32, y as u32).0[..3] == accent[..3]
+                x >= 0 && y >= 0 && (x as u32) < image.width() && (y as u32) < image.height() && image.get_pixel(x as u32, y as u32).0[..3] == accent[..3]
             })
         })
     };
     assert!(has_accent(x, y), "root prepend before a card should show its vertical leading edge");
-    assert!(!has_accent(image.width() as i32 - 3, y), "card prepend should not draw a full-width horizontal line; first_card={first_card:?}, ppp={ppp}, image={}x{}", image.width(), image.height());
+    assert!(
+        !has_accent(image.width() as i32 - 3, y),
+        "card prepend should not draw a full-width horizontal line; first_card={first_card:?}, ppp={ppp}, image={}x{}",
+        image.width(),
+        image.height()
+    );
 }
 
 #[test]

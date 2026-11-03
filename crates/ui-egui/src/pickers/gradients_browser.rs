@@ -65,12 +65,8 @@ pub(crate) fn gradients_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         })
         .collect();
     let mut state = std::mem::take(&mut app.ui.presets_ui);
-    let root_items: std::collections::BTreeSet<String> = library
-        .iter()
-        .find(|group| group.name == ROOT_ITEMS_GROUP)
-        .into_iter()
-        .flat_map(|group| group.items.iter().map(|item| item.name.clone()))
-        .collect();
+    let root_items: std::collections::BTreeSet<String> =
+        library.iter().find(|group| group.name == ROOT_ITEMS_GROUP).into_iter().flat_map(|group| group.items.iter().map(|item| item.name.clone())).collect();
     // Preserve the canonical mixed root sequence written by commit_hierarchy_move. Rebuilding
     // RootItems first on every frame silently discarded the requested insertion point, making a
     // successful drop between groups or at the bottom appear to have failed (the card jumped to
@@ -103,10 +99,8 @@ pub(crate) fn gradients_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // Newly discovered durable root cards (for example after an app restart) have no transient
     // mixed-order token. Seed them before the existing group sequence; subsequent drag commits
     // then preserve their explicitly chosen positions.
-    let mut missing_root_items: Vec<HierarchyOrderEntry> = root_items
-        .difference(&represented_root_items)
-        .map(|key| HierarchyOrderEntry::RootItem { group: ROOT_ITEMS_GROUP.into(), key: key.clone() })
-        .collect();
+    let mut missing_root_items: Vec<HierarchyOrderEntry> =
+        root_items.difference(&represented_root_items).map(|key| HierarchyOrderEntry::RootItem { group: ROOT_ITEMS_GROUP.into(), key: key.clone() }).collect();
     missing_root_items.append(&mut root_order);
     let root_order = missing_root_items;
     state.set_hierarchy_order("gradients", "", root_order);
@@ -303,7 +297,8 @@ mod tests {
         let headers = last_group_headers(&h.ctx, "gradients");
         assert!(headers.len() >= 2);
         let (source_group, _) = headers.first().unwrap();
-        let source_key = h.state().session.presets.gradients.iter().find(|group| &group.name == source_group).and_then(|group| group.items.first()).unwrap().name.clone();
+        let source_key =
+            h.state().session.presets.gradients.iter().find(|group| &group.name == source_group).and_then(|group| group.items.first()).unwrap().name.clone();
         let source = h.get_by_label(&source_key).rect().center();
         let first_header = headers.first().unwrap().1;
         let target = egui::pos2(first_header.center().x, first_header.top() - 5.0);
@@ -319,7 +314,8 @@ mod tests {
         h.event(Event::PointerButton { pos: target, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
         h.run_steps(3);
 
-        let root_owner = h.state().session.presets.gradients.iter().find(|group| group.name == ROOT_ITEMS_GROUP).expect("the domain root owner is created on demand");
+        let root_owner =
+            h.state().session.presets.gradients.iter().find(|group| group.name == ROOT_ITEMS_GROUP).expect("the domain root owner is created on demand");
         assert_eq!(root_owner.items.first().map(|item| item.name.as_str()), Some(source_key.as_str()));
         assert!(last_group_headers(&h.ctx, "gradients").iter().all(|(name, _)| name != ROOT_ITEMS_GROUP));
 
@@ -349,11 +345,27 @@ mod tests {
             let initial_headers = last_group_headers(&h.ctx, "gradients");
             assert!(initial_headers.len() >= 2);
             let (source_group, _) = initial_headers.first().unwrap();
-            let source_key = h.state().session.presets.gradients.iter().find(|group| &group.name == source_group)
-                .and_then(|group| group.items.iter().find(|item| {
-                    !h.state().session.presets.gradients.iter().find(|owner| owner.name == ROOT_ITEMS_GROUP)
-                        .is_some_and(|owner| owner.items.iter().any(|root_item| root_item.name == item.name))
-                })).unwrap().name.clone();
+            let source_key = h
+                .state()
+                .session
+                .presets
+                .gradients
+                .iter()
+                .find(|group| &group.name == source_group)
+                .and_then(|group| {
+                    group.items.iter().find(|item| {
+                        !h.state()
+                            .session
+                            .presets
+                            .gradients
+                            .iter()
+                            .find(|owner| owner.name == ROOT_ITEMS_GROUP)
+                            .is_some_and(|owner| owner.items.iter().any(|root_item| root_item.name == item.name))
+                    })
+                })
+                .unwrap()
+                .name
+                .clone();
             if h.query_all_by_label(&source_key).next().is_none() {
                 let header = initial_headers.first().unwrap().1.center();
                 h.event(Event::PointerMoved(header));
@@ -374,8 +386,17 @@ mod tests {
                 }
                 "root_end" => {
                     let (last_group, last_header) = headers.last().unwrap();
-                    let last_key = h.state().session.presets.gradients.iter().find(|group| &group.name == last_group)
-                        .and_then(|group| group.items.last()).unwrap().name.clone();
+                    let last_key = h
+                        .state()
+                        .session
+                        .presets
+                        .gradients
+                        .iter()
+                        .find(|group| &group.name == last_group)
+                        .and_then(|group| group.items.last())
+                        .unwrap()
+                        .name
+                        .clone();
                     if h.query_all_by_label(&last_key).next().is_none() {
                         let header = last_header.center();
                         h.event(Event::PointerMoved(header));
@@ -401,10 +422,19 @@ mod tests {
             h.event(Event::PointerButton { pos: target, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
             h.run_steps(3);
 
-            let root_owner = h.state().session.presets.gradients.iter().find(|group| group.name == ROOT_ITEMS_GROUP)
+            let root_owner = h
+                .state()
+                .session
+                .presets
+                .gradients
+                .iter()
+                .find(|group| group.name == ROOT_ITEMS_GROUP)
                 .unwrap_or_else(|| panic!("root owner should be created for drop_position={drop_position}"));
-            assert!(root_owner.items.iter().any(|item| item.name == source_key),
-                "drop_position={drop_position}: expected {source_key:?} in root owner, library={:?}", h.state().session.presets.gradients);
+            assert!(
+                root_owner.items.iter().any(|item| item.name == source_key),
+                "drop_position={drop_position}: expected {source_key:?} in root owner, library={:?}",
+                h.state().session.presets.gradients
+            );
             let root_order = &h.state().ui.presets_ui.hierarchy_order["gradients"][""];
             let moved = HierarchyOrderEntry::RootItem { group: ROOT_ITEMS_GROUP.into(), key: source_key.clone() };
             let moved_index = root_order.iter().position(|entry| entry == &moved).expect("the mixed root sequence retains the moved card");
@@ -412,8 +442,10 @@ mod tests {
                 "gap_upper" | "gap_lower" => {
                     let first_group_index = root_order.iter().position(|entry| *entry == HierarchyOrderEntry::Group(headers[0].0.clone())).unwrap();
                     let second_group_index = root_order.iter().position(|entry| *entry == HierarchyOrderEntry::Group(headers[1].0.clone())).unwrap();
-                    assert!(first_group_index < moved_index && moved_index < second_group_index,
-                        "drop_position={drop_position}: card must remain between the first two groups: {root_order:?}");
+                    assert!(
+                        first_group_index < moved_index && moved_index < second_group_index,
+                        "drop_position={drop_position}: card must remain between the first two groups: {root_order:?}"
+                    );
                 }
                 "root_end" => assert_eq!(root_order.last(), Some(&moved), "the card must remain at the root sequence's end: {root_order:?}"),
                 _ => unreachable!(),
@@ -450,10 +482,10 @@ mod tests {
         scroll_to_bottom(&mut h);
 
         let (last_group, last_header) = last_group_headers(&h.ctx, "gradients").last().cloned().unwrap();
-        let last_key = h.state().session.presets.gradients.iter().find(|group| group.name == last_group)
-            .and_then(|group| group.items.last()).unwrap().name.clone();
+        let last_key =
+            h.state().session.presets.gradients.iter().find(|group| group.name == last_group).and_then(|group| group.items.last()).unwrap().name.clone();
         if h.query_all_by_label(&last_key).next().is_none() {
-            let point = last_header.center();
+            let point = egui::pos2(last_header.left() + 9.0, last_header.center().y);
             h.event(Event::PointerMoved(point));
             h.event(Event::PointerButton { pos: point, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
             h.run_steps(1);
@@ -476,7 +508,13 @@ mod tests {
         h.event(Event::PointerButton { pos: target, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
         h.run_steps(3);
 
-        let root_owner = h.state().session.presets.gradients.iter().find(|group| group.name == ROOT_ITEMS_GROUP)
+        let root_owner = h
+            .state()
+            .session
+            .presets
+            .gradients
+            .iter()
+            .find(|group| group.name == ROOT_ITEMS_GROUP)
             .expect("dropping at the root end creates the durable owner group");
         assert!(root_owner.items.iter().any(|item| item.name == last_key));
         let root_order = &h.state().ui.presets_ui.hierarchy_order["gradients"][""];
@@ -502,7 +540,8 @@ mod tests {
         assert!(headers.len() >= 2, "gradient group headers are visible");
         let (target_group, target_header) = &headers[0];
         let (moving_group, moving_header) = headers.last().unwrap();
-        let target_item = h.state().session.presets.gradients.iter().find(|group| &group.name == target_group).and_then(|group| group.items.first()).unwrap().name.clone();
+        let target_item =
+            h.state().session.presets.gradients.iter().find(|group| &group.name == target_group).and_then(|group| group.items.first()).unwrap().name.clone();
         let size = *h.state().ui.presets_ui.sizes.get("gradients").unwrap_or(&40.0);
         let origin = h.ctx.input(|input| input.viewport_rect().min);
         let target = egui::pos2(origin.x + 8.0 + 20.0 + size * 0.5 - 5.0, target_header.bottom() + 2.0 + size * 0.5);

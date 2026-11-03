@@ -783,11 +783,7 @@ mod tests {
         let legacy: PresetUi = serde_json::from_value(json!({"group_parent":{"gradients":{"Child":"Parent"}}})).unwrap();
         assert_eq!(legacy.parent_of("gradients", "Child"), Some("Parent"));
 
-        st.set_hierarchy_order(
-            "gradients",
-            "",
-            ["Parent", "Sibling"].map(|name| HierarchyOrderEntry::Group(name.into())).to_vec(),
-        );
+        st.set_hierarchy_order("gradients", "", ["Parent", "Sibling"].map(|name| HierarchyOrderEntry::Group(name.into())).to_vec());
         st.toggled.insert("gradients/Parent/Inner".into());
         st.rename_group("gradients", "Parent", "Renamed");
         assert_eq!(st.parent_of("gradients", "Child"), Some("Renamed"));
@@ -1017,8 +1013,11 @@ mod tests {
 
         use egui_kittest::{Harness, kittest::Queryable};
 
-        let groups =
-            vec![GroupView { name: "Only group".into(), root_only: false, items: vec![ItemView { key: "only".into(), name: "Only item".into(), group_path: Vec::new() }] }];
+        let groups = vec![GroupView {
+            name: "Only group".into(),
+            root_only: false,
+            items: vec![ItemView { key: "only".into(), name: "Only item".into(), group_path: Vec::new() }],
+        }];
         let mut st = PresetUi::default();
         let menu_calls = Rc::new(Cell::new(0));
         let search_calls = Rc::new(Cell::new(0));
@@ -1055,7 +1054,14 @@ mod tests {
                 domain_hierarchy_actions: false,
                 root_item_group: None,
             },
-            capabilities: BrowserCapabilities { item_drag: false, item_drop: false, group_drag: false, selection: false, activation: false, canonical_hierarchy_drag: false },
+            capabilities: BrowserCapabilities {
+                item_drag: false,
+                item_drop: false,
+                group_drag: false,
+                selection: false,
+                activation: false,
+                canonical_hierarchy_drag: false,
+            },
             item_context_menu: None,
             group_context_menu: None,
             nested_group_context_menu: None,
@@ -1190,8 +1196,11 @@ mod tests {
             "later groups start collapsed"
         );
 
-        let header =
-            last_group_headers(&h.ctx, panel).iter().find(|(name, _)| name == &group).map(|(_, rect)| rect.center()).expect("second group header is visible");
+        let header = last_group_headers(&h.ctx, panel)
+            .iter()
+            .find(|(name, _)| name == &group)
+            .map(|(_, rect)| pos2(rect.left() + 9.0, rect.center().y))
+            .expect("second group header is visible");
         h.event(egui::Event::PointerMoved(header));
         h.run_steps(1);
         h.event(egui::Event::PointerButton { pos: header, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
@@ -1280,6 +1289,7 @@ mod tests {
         item: &ItemView,
         _group: &GroupView,
         _names: &[String],
+        _selected: &[(String, ItemView)],
         ev: &mut Vec<BrowserAction>,
     ) {
         if ui.button("Consumer item operation").clicked() {
@@ -1299,8 +1309,11 @@ mod tests {
     fn browser_keeps_context_hit_targets_but_delegates_menu_actions() {
         use egui_kittest::{Harness, kittest::Queryable};
 
-        let groups =
-            vec![GroupView { name: "Only group".into(), root_only: false, items: vec![ItemView { key: "only".into(), name: "Only item".into(), group_path: Vec::new() }] }];
+        let groups = vec![GroupView {
+            name: "Only group".into(),
+            root_only: false,
+            items: vec![ItemView { key: "only".into(), name: "Only item".into(), group_path: Vec::new() }],
+        }];
         let mut st = PresetUi::default();
         let mut adapter = BrowserAdapter {
             panel: "consumer-actions",
@@ -1362,10 +1375,7 @@ mod tests {
         let old: PresetUi = serde_json::from_value(json!({"sizes": {"swatches": 22.0}})).unwrap();
         assert!(old.hierarchy_order.is_empty(), "an older state without the field still loads");
         let st: PresetUi = serde_json::from_value(json!({"groupOrder": {"swatches": ["Dark", "Grays"]}})).unwrap();
-        assert_eq!(
-            st.hierarchy_order["swatches"][""],
-            ["Dark", "Grays"].map(|name| HierarchyOrderEntry::Group(name.into()))
-        );
+        assert_eq!(st.hierarchy_order["swatches"][""], ["Dark", "Grays"].map(|name| HierarchyOrderEntry::Group(name.into())));
         let saved = serde_json::to_value(&st).unwrap();
         assert!(saved.get("groupOrder").is_none(), "new writes use only the canonical hierarchy sequence");
         let back: PresetUi = serde_json::from_value(saved).unwrap();

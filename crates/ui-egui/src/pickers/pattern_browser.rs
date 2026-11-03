@@ -6,7 +6,10 @@ use egui::{Color32, ColorImage, Pos2, Rect, Sense, Stroke, TextureHandle, pos2, 
 use serde_json::json;
 
 use crate::PhotocraftApp;
-use crate::pickers::asset_browser::{BrowserAction, BrowserAdapter, BrowserCapabilities, BrowserOptions, GroupView, ItemPaintState, ItemView, browser};
+use crate::pickers::asset_browser::{
+    BrowserAction, BrowserAdapter, BrowserCapabilities, BrowserOptions, GroupView, ItemPaintState, ItemView, begin_item_rename, browser, delete_item_actions,
+    item_context_targets, move_item_actions,
+};
 use crate::pickers::asset_browser_interaction::canvas_drop_rect;
 use crate::pickers::picker_footer::FooterOptions;
 use crate::pickers::picker_shell::{MIN_THUMB, ShellOptions, picker_menu_button, picker_shell};
@@ -241,25 +244,29 @@ pub(crate) fn compact_item_context_menu(
     item: &ItemView,
     group: &GroupView,
     group_names: &[String],
+    selected_items: &[(String, ItemView)],
     ev: &mut Vec<BrowserAction>,
 ) {
+    let targets = item_context_targets(item, group, selected_items);
+    let count = targets.len();
     if ui.button(tl!("Rename…")).clicked() {
-        st.item_renaming = Some(crate::pickers::picker_state::ItemRenameState { panel: panel.to_string(), group: group.name.clone(), group_path: item.group_path.clone(), key: item.key.clone(), text: item.name.clone() });
+        begin_item_rename(st, panel, &targets);
         compact_context_menu_close_later(ui, panel);
-    } else if ui.button(tl!("Delete")).clicked() {
-        ev.push(BrowserAction::DeleteItem { group: group.name.clone(), group_path: item.group_path.clone(), key: item.key.clone() });
+    } else if ui.button(if count > 1 { format!("{} ({count})", tl!("Delete")) } else { tl!("Delete").to_string() }).clicked() {
+        ev.extend(delete_item_actions(&targets));
         compact_context_menu_close_later(ui, panel);
     } else {
         let mut move_to = None;
         ui.menu_button(tl!("Move to"), |ui| {
-            for name in group_names.iter().filter(|name| name.as_str() != group.name) {
-                if ui.button(name).clicked() {
+            for name in group_names {
+                let already_in_target = targets.iter().all(|(source_group, _)| source_group == name);
+                if !already_in_target && ui.button(name).clicked() {
                     move_to = Some(name.clone());
                 }
             }
         });
         if let Some(name) = move_to {
-            ev.push(BrowserAction::Move(item.key.clone(), name));
+            ev.extend(move_item_actions(&targets, &name));
             compact_context_menu_close_later(ui, panel);
         }
     }
@@ -375,7 +382,9 @@ pub(crate) fn compact_pattern_browser(
                     }
                     BrowserAction::SelectItem { group, group_path, key } | BrowserAction::ActivateItem { group, group_path, key } => {
                         state.set_selected_item(panel, &group, &group_path, &key);
-                        if key != selected { picked = Some(key); }
+                        if key != selected {
+                            picked = Some(key);
+                        }
                         browser_ui.close();
                     }
                     BrowserAction::RenameNestedGroup { .. } | BrowserAction::DeleteNestedGroup { .. } => {}
@@ -457,11 +466,17 @@ pub(crate) fn apply_compact_pattern_actions(app: &mut PhotocraftApp, ctx: &egui:
         // The shared preset command translator clears the panel selection after every delete.
         // Compact consumers keep their own selection key, so deleting an unrelated pattern must
         // not clear the Brush Texture picker's current pattern.
-        let deleted_key = match &event { BrowserAction::Delete(key) | BrowserAction::DeleteItem { key, .. } => Some(key.as_str()), _ => None };
+        let deleted_key = match &event {
+            BrowserAction::Delete(key) | BrowserAction::DeleteItem { key, .. } => Some(key.as_str()),
+            _ => None,
+        };
         let selected_before = deleted_key.and_then(|_| app.ui.presets_ui.selected.get(panel).cloned());
         if generic(app, panel, "pattern.presets", &event, json!({})) {
             if let (Some(key), Some(selected)) = (deleted_key, selected_before)
-                && selected != key { app.ui.presets_ui.selected.insert(panel.into(), selected); }
+                && selected != key
+            {
+                app.ui.presets_ui.selected.insert(panel.into(), selected);
+            }
             let state_id = egui::Id::new(("compact-pattern-browser", panel));
             ctx.data_mut(|data| {
                 if let Some(mut state) = data.get_temp::<PresetUi>(state_id) {
@@ -471,7 +486,9 @@ pub(crate) fn apply_compact_pattern_actions(app: &mut PhotocraftApp, ctx: &egui:
                         BrowserAction::Delete(key) if state.selected.get(panel) == Some(key) => {
                             state.selected.remove(panel);
                         }
-                        BrowserAction::DeleteItem { key, .. } if state.selected.get(panel) == Some(key) => { state.selected.remove(panel); }
+                        BrowserAction::DeleteItem { key, .. } if state.selected.get(panel) == Some(key) => {
+                            state.selected.remove(panel);
+                        }
                         _ => {}
                     }
                     data.insert_temp(state_id, state);

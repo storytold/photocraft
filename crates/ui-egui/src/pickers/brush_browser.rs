@@ -9,7 +9,10 @@ use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
 use crate::brush_preview;
-use crate::pickers::asset_browser::{self, BrowserAction, BrowserAdapter, BrowserCapabilities, BrowserOptions, GroupView, ItemPaintState, ItemView};
+use crate::pickers::asset_browser::{
+    self, BrowserAction, BrowserAdapter, BrowserCapabilities, BrowserOptions, GroupView, ItemPaintState, ItemView, begin_item_rename, delete_item_actions,
+    item_context_targets,
+};
 use crate::pickers::asset_browser_hierarchy::{HierarchyGroup, HierarchyNode, hierarchy_tree};
 pub(crate) use crate::pickers::asset_browser_interaction::AssetDrag as BrushDrag;
 use crate::pickers::asset_browser_interaction::{ContextMenuAction, HierarchyDrop, draw_group_context_menu, draw_item_context_menu, hierarchy_group_drop};
@@ -716,23 +719,21 @@ fn brush_item_context_menu(
     item: &ItemView,
     group: &GroupView,
     _group_names: &[String],
+    selected_items: &[(String, ItemView)],
     actions: &mut Vec<BrowserAction>,
 ) {
-    match draw_item_context_menu(ui, tl!("Rename Brush…"), tl!("Delete Brush"), None) {
+    let targets = item_context_targets(item, group, selected_items);
+    let count = targets.len();
+    let delete_label = if count > 1 { format!("{} ({count})", tl!("Delete Brushes")) } else { tl!("Delete Brush").to_string() };
+    match draw_item_context_menu(ui, tl!("Rename Brush…"), &delete_label, None) {
         Some(ContextMenuAction::Rename) => {
             if st.group_renaming.as_ref().is_some_and(|rename| rename.panel == panel) {
                 st.group_renaming = None;
             }
-            st.item_renaming = Some(crate::pickers::picker_state::ItemRenameState {
-                panel: panel.to_string(),
-                group: group.name.clone(),
-                group_path: item.group_path.clone(),
-                key: item.key.clone(),
-                text: item.name.clone(),
-            });
+            begin_item_rename(st, panel, &targets);
         }
         Some(ContextMenuAction::Delete) => {
-            actions.push(BrowserAction::DeleteItem { group: group.name.clone(), group_path: item.group_path.clone(), key: item.key.clone() })
+            actions.extend(delete_item_actions(&targets));
         }
         Some(ContextMenuAction::MoveTo(_)) | None => {}
     }
@@ -1474,7 +1475,7 @@ fn paint_brush_hierarchy_drag_label(ui: &egui::Ui, scope: &str, id: egui::Id) {
         BrushDrag::Group { scope, name, path } => {
             (scope.as_str(), path.last().cloned().unwrap_or_else(|| if name.is_empty() { UNGROUPED.to_string() } else { name.clone() }))
         }
-        BrushDrag::CanonicalGroup { scope, node_id } => {
+        BrushDrag::CanonicalGroup { scope, node_id, .. } => {
             let name = match node_id {
                 NodeId::Group(name) => name.clone(),
                 NodeId::GroupPath(path) => path.last().cloned().unwrap_or_default(),
@@ -1629,7 +1630,9 @@ mod hierarchy_anchor_identity_tests {
         .into_iter()
         .collect();
 
-        let action = brush_drop_intent_to_action(&presets, &identities, &DropMoveIntent { source, position: DropPosition::After { target } }).unwrap();
+        let action =
+            brush_drop_intent_to_action(&presets, &identities, &DropMoveIntent { source, selection: Vec::new(), position: DropPosition::After { target } })
+                .unwrap();
         assert!(matches!(action, Action::Move { name, folder: Some(path), index: Some(1), .. } if name == "Moving brush" && path.is_empty()));
     }
 
@@ -1650,7 +1653,9 @@ mod hierarchy_anchor_identity_tests {
         .into_iter()
         .collect();
 
-        let action = brush_drop_intent_to_action(&presets, &identities, &DropMoveIntent { source, position: DropPosition::After { target } }).unwrap();
+        let action =
+            brush_drop_intent_to_action(&presets, &identities, &DropMoveIntent { source, selection: Vec::new(), position: DropPosition::After { target } })
+                .unwrap();
         assert!(matches!(action, Action::MoveInto { group, folder, into: Some((target, path)), before: None, before_item: Some(anchor) }
             if group == "Kit" && folder == vec!["Source".to_string()] && target == "Kit" && path.is_empty() && anchor == "Direct sibling"));
     }
@@ -1666,8 +1671,12 @@ mod hierarchy_anchor_identity_tests {
                 .into_iter()
                 .collect();
 
-        let action =
-            brush_drop_intent_to_action(&presets, &identities, &DropMoveIntent { source, position: DropPosition::PrependTo { group: target } }).unwrap();
+        let action = brush_drop_intent_to_action(
+            &presets,
+            &identities,
+            &DropMoveIntent { source, selection: Vec::new(), position: DropPosition::PrependTo { group: target } },
+        )
+        .unwrap();
         assert!(matches!(action, Action::Move { name, group, folder: Some(path), index: Some(0) }
             if name == "Moving" && group == "Kit" && path.is_empty()));
     }
@@ -1686,8 +1695,12 @@ mod hierarchy_anchor_identity_tests {
         .into_iter()
         .collect();
 
-        let action =
-            brush_drop_intent_to_action(&presets, &identities, &DropMoveIntent { source, position: DropPosition::PrependTo { group: target } }).unwrap();
+        let action = brush_drop_intent_to_action(
+            &presets,
+            &identities,
+            &DropMoveIntent { source, selection: Vec::new(), position: DropPosition::PrependTo { group: target } },
+        )
+        .unwrap();
         assert!(matches!(action, Action::Move { name, group, folder: Some(path), index: Some(0) }
             if name == "Moving" && group == "Kit" && path == vec!["Folder".to_string()]));
     }
@@ -1708,8 +1721,12 @@ mod hierarchy_anchor_identity_tests {
         .into_iter()
         .collect();
 
-        let action =
-            brush_drop_intent_to_action(&presets, &identities, &DropMoveIntent { source, position: DropPosition::PrependTo { group: target } }).unwrap();
+        let action = brush_drop_intent_to_action(
+            &presets,
+            &identities,
+            &DropMoveIntent { source, selection: Vec::new(), position: DropPosition::PrependTo { group: target } },
+        )
+        .unwrap();
         assert!(matches!(action, Action::MoveInto { group, folder, into: Some((target, path)), before: Some(before), before_item: None }
             if group == "Other" && folder == vec!["Source".to_string()] && target == "Kit" && path.is_empty() && before == "First folder"));
     }
@@ -1765,11 +1782,80 @@ mod hierarchy_anchor_identity_tests {
         h.event(Event::PointerButton { pos: target, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
         h.run_steps(3);
 
-        assert!(matches!(
-            h.state().1.as_slice(),
-            [Action::MoveInto { group, folder, into: Some((target, path)), before: None, before_item: Some(anchor) }]
-                if group == "Group B" && folder.is_empty() && target == "Group A" && path == &["Nested".to_string()] && anchor == "Nested brush"
-        ), "unexpected brush browser actions: {:?}", h.state().1);
+        assert!(
+            matches!(
+                h.state().1.as_slice(),
+                [Action::MoveInto { group, folder, into: Some((target, path)), before: None, before_item: Some(anchor) }]
+                    if group == "Group B" && folder.is_empty() && target == "Group A" && path == &["Nested".to_string()] && anchor == "Nested brush"
+            ),
+            "unexpected brush browser actions: {:?}",
+            h.state().1
+        );
         assert_eq!(h.state().1.len(), 1, "the nested header resolves exactly one group move");
+    }
+}
+
+#[cfg(test)]
+mod list_drag_ui_tests {
+    use super::{Action, BrushesPanelState, PANEL_LIST, PresetUi, preset_list};
+    use crate::PhotocraftApp;
+    use egui::{Event, Modifiers, PointerButton, pos2, vec2};
+    use egui_kittest::{Harness, kittest::Queryable};
+    use photocraft_engine::paint::BrushPreset;
+
+    fn drag(h: &mut Harness<'static, (BrushesPanelState, PresetUi, Vec<Action>)>, from: egui::Pos2, to: egui::Pos2) {
+        h.event(Event::PointerMoved(from));
+        h.run_steps(1);
+        h.event(Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        h.run_steps(1);
+        for step in 1..=8 {
+            h.event(Event::PointerMoved(from + (to - from) * (step as f32 / 8.0)));
+            h.run_steps(1);
+        }
+        h.event(Event::PointerButton { pos: to, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        h.run_steps(3);
+    }
+
+    #[test]
+    fn brush_panel_list_rows_reorder_presets_by_vertical_drag() {
+        let presets = vec![
+            BrushPreset {
+                name: "First brush".into(),
+                brush: Default::default(),
+                builtin: false,
+                group: "Kit".into(),
+                folder: Vec::new(),
+                captures: Default::default(),
+            },
+            BrushPreset {
+                name: "Second brush".into(),
+                brush: Default::default(),
+                builtin: false,
+                group: "Kit".into(),
+                folder: Vec::new(),
+                captures: Default::default(),
+            },
+        ];
+        let mut h = Harness::builder().with_size(vec2(420.0, 520.0)).build_ui_state(
+            move |ui, state: &mut (BrushesPanelState, PresetUi, Vec<Action>)| {
+                if ui.ctx().fonts(|fonts| fonts.definitions().families.contains_key(&egui::FontFamily::Name("semibold".into()))) {
+                    state.2.extend(preset_list(ui, &presets, None, &mut state.0, &mut state.1, PANEL_LIST));
+                }
+            },
+            (BrushesPanelState::default(), PresetUi::default(), Vec::new()),
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
+        h.run_steps(3);
+
+        let source = h.get_by_label("First brush").rect().center();
+        let target_row = h.get_by_label("Second brush").rect();
+        drag(&mut h, source, pos2(target_row.center().x, target_row.bottom() - 2.0));
+
+        assert!(
+            matches!(h.state().2.as_slice(), [Action::Move { name, group, folder: Some(path), index: Some(1) }]
+            if name == "First brush" && group == "Kit" && path.is_empty()),
+            "unexpected brush list actions: {:?}",
+            h.state().2
+        );
     }
 }

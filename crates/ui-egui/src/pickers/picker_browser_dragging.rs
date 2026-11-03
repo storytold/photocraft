@@ -94,6 +94,8 @@ pub(crate) struct DropCandidate {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct DropMoveIntent {
     pub(crate) source: NodeId,
+    /// Effective selected move roots in visible browser order. A selected ancestor subsumes its descendants.
+    pub(crate) selection: Vec<NodeId>,
     pub(crate) position: DropPosition,
 }
 
@@ -122,22 +124,32 @@ impl DropCandidate {
 pub(crate) struct DragSession {
     /// Stable identity of the dragged node.
     pub(crate) source: NodeId,
+    /// Effective selected move roots in visible browser order. A selected ancestor subsumes its descendants.
+    pub(crate) selection: Vec<NodeId>,
     /// Last pointer position reported by egui.
     pub(crate) pointer: Option<Pos2>,
     /// Current resolved candidate; preview and release must use this same value.
     pub(crate) candidate: Option<DropCandidate>,
 }
 
+/// Order a multi-node hierarchy commit so repeated insertions at one anchor retain the browser's
+/// visible selection order. Before/append insertions advance naturally; after/prepend insertions
+/// must be applied in reverse because each operation uses the same stable anchor.
+pub(crate) fn hierarchy_move_sources(selection: &[NodeId], position: &DropPosition) -> Vec<NodeId> {
+    let reverse = matches!(position, DropPosition::After { .. } | DropPosition::PrependTo { .. });
+    if reverse { selection.iter().rev().cloned().collect() } else { selection.to_vec() }
+}
+
 impl DragSession {
     /// Start tracking a drag from a hierarchy node.
-    pub(crate) fn new(source: NodeId) -> Self {
-        Self { source, pointer: None, candidate: None }
+    pub(crate) fn new(source: NodeId, selection: Vec<NodeId>) -> Self {
+        Self { source, selection, pointer: None, candidate: None }
     }
 
     /// Update the pointer and resolve a candidate from the hit region under it.
     pub(crate) fn resolve(&mut self, pointer: Pos2, hit: &DropHitRegion, hierarchy: &PickerBrowserHierarchy) -> Option<&DropCandidate> {
         self.pointer = Some(pointer);
-        self.candidate = resolve_drop_candidate(&self.source, hit, hierarchy);
+        self.candidate = resolve_drop_candidate_with_selection(&self.source, &self.selection, hit, hierarchy);
         self.candidate.as_ref()
     }
 
@@ -154,7 +166,7 @@ impl DragSession {
         if let DropValidity::Invalid(reason) = &candidate.validity {
             return Err(reason.clone());
         }
-        Ok(Some(DropMoveIntent { source: self.source.clone(), position: candidate.position.clone() }))
+        Ok(Some(DropMoveIntent { source: self.source.clone(), selection: self.selection.clone(), position: candidate.position.clone() }))
     }
 
     /// Hand one validated intent to the adapter and preserve its failure as an explicit result.
@@ -174,11 +186,7 @@ impl DragSession {
 /// Return the winning hit's index so the browser can take the payload from that exact response.
 /// Deepest targets win; equal-depth targets prefer later (more specific) registrations.
 pub(crate) fn arbitrate_hit_index(pointer: Pos2, hits: &[DropHitRegion]) -> Option<usize> {
-    hits.iter()
-        .enumerate()
-        .filter(|(_, hit)| hit.hit_rect.contains(pointer))
-        .max_by_key(|(_, hit)| (hit.depth, hit.order))
-        .map(|(index, _)| index)
+    hits.iter().enumerate().filter(|(_, hit)| hit.hit_rect.contains(pointer)).max_by_key(|(_, hit)| (hit.depth, hit.order)).map(|(index, _)| index)
 }
 
 /// Paint the indicator carried by a valid resolved candidate. Invalid destinations intentionally
@@ -216,6 +224,18 @@ fn container_outline_rects(rect: Rect) -> [Rect; 4] {
 
 /// Convert a geometric hit region into one semantic operation and its matching indicator.
 pub(crate) fn resolve_drop_candidate(source: &NodeId, hit: &DropHitRegion, hierarchy: &PickerBrowserHierarchy) -> Option<DropCandidate> {
+    resolve_drop_candidate_with_selection(source, &[], hit, hierarchy)
+}
+
+/// Resolve a drop for the effective selection, falling back to the pointer source when there is
+/// no selection payload. The destination is accepted only when every node that will move can be
+/// moved there. `source` remains the pointer identity even when a selected ancestor subsumes it.
+pub(crate) fn resolve_drop_candidate_with_selection(
+    source: &NodeId,
+    selection: &[NodeId],
+    hit: &DropHitRegion,
+    hierarchy: &PickerBrowserHierarchy,
+) -> Option<DropCandidate> {
     let (position, indicator) = match hit.region {
         PointerRegion::LeadingEdge => {
             let target = hit.target.clone()?;
@@ -237,7 +257,8 @@ pub(crate) fn resolve_drop_candidate(source: &NodeId, hit: &DropHitRegion, hiera
             (DropPosition::AppendTo { container }, indicator)
         }
     };
-    let validity = match hierarchy.validate_position(source, &position) {
+    let move_roots: Vec<&NodeId> = if selection.is_empty() { vec![source] } else { selection.iter().collect() };
+    let validity = match move_roots.into_iter().try_for_each(|selected| hierarchy.validate_position(selected, &position)) {
         Ok(()) => DropValidity::Valid,
         Err(HierarchyError::Cycle(id)) if matches!(&position, DropPosition::Before { target } | DropPosition::After { target } if target == &id) => {
             DropValidity::Invalid(DropRejection::SameNode)
@@ -253,7 +274,10 @@ pub(crate) fn resolve_drop_candidate(source: &NodeId, hit: &DropHitRegion, hiera
 
 #[cfg(test)]
 mod tests {
-    use super::{DropCommitResult, DropHitRegion, DropIndicator, DropRejection, DropValidity, DragSession, PointerRegion, arbitrate_hit_index, container_outline_rects, resolve_drop_candidate};
+    use super::{
+        DragSession, DropCommitResult, DropHitRegion, DropIndicator, DropRejection, DropValidity, PointerRegion, arbitrate_hit_index, container_outline_rects,
+        hierarchy_move_sources, resolve_drop_candidate, resolve_drop_candidate_with_selection,
+    };
     use crate::pickers::picker_browser_model::{ContainerId, DropPosition, HierarchyNode, NodeId, PickerBrowserHierarchy};
     use egui::{Pos2, Rect};
 
@@ -285,12 +309,7 @@ mod tests {
 
     #[test]
     fn dragging_a_group_onto_a_card_uses_that_cards_parent_sequence() {
-        let candidate = resolve_drop_candidate(
-            &NodeId::from("other"),
-            &hit(PointerRegion::TrailingEdge, Some("card"), None),
-            &hierarchy(),
-        )
-        .unwrap();
+        let candidate = resolve_drop_candidate(&NodeId::from("other"), &hit(PointerRegion::TrailingEdge, Some("card"), None), &hierarchy()).unwrap();
         assert_eq!(candidate.position, DropPosition::After { target: "card".into() });
         assert_eq!(candidate.validity, DropValidity::Valid);
         assert!(candidate.is_valid());
@@ -303,11 +322,9 @@ mod tests {
         assert_eq!(body.position, DropPosition::PrependTo { group: NodeId::from("other") });
         assert!(matches!(body.indicator, DropIndicator::ContainerHighlight { .. }));
 
-        let group = resolve_drop_candidate(
-            &NodeId::from("other"),
-            &hit(PointerRegion::GroupBody, None, Some(ContainerId::Group("folder".into()))),
-            &hierarchy(),
-        ).unwrap();
+        let group =
+            resolve_drop_candidate(&NodeId::from("other"), &hit(PointerRegion::GroupBody, None, Some(ContainerId::Group("folder".into()))), &hierarchy())
+                .unwrap();
         assert_eq!(group.position, DropPosition::PrependTo { group: NodeId::from("folder") });
         assert!(group.is_valid());
 
@@ -315,11 +332,9 @@ mod tests {
         assert_eq!(root_end.position, DropPosition::AppendTo { container: ContainerId::Root });
         assert!(matches!(root_end.indicator, DropIndicator::RootAppendLine { .. }));
 
-        let group_end = resolve_drop_candidate(
-            &NodeId::from("card"),
-            &hit(PointerRegion::ContainerEnd, None, Some(ContainerId::Group("other".into()))),
-            &hierarchy(),
-        ).unwrap();
+        let group_end =
+            resolve_drop_candidate(&NodeId::from("card"), &hit(PointerRegion::ContainerEnd, None, Some(ContainerId::Group("other".into()))), &hierarchy())
+                .unwrap();
         assert_eq!(group_end.position, DropPosition::AppendTo { container: ContainerId::Group("other".into()) });
         assert!(matches!(group_end.indicator, DropIndicator::InsertionLine { .. }));
     }
@@ -379,12 +394,7 @@ mod tests {
 
     #[test]
     fn root_append_is_an_explicit_container_end_candidate() {
-        let candidate = resolve_drop_candidate(
-            &NodeId::from("card"),
-            &hit(PointerRegion::ContainerEnd, None, Some(ContainerId::Root)),
-            &hierarchy(),
-        )
-        .unwrap();
+        let candidate = resolve_drop_candidate(&NodeId::from("card"), &hit(PointerRegion::ContainerEnd, None, Some(ContainerId::Root)), &hierarchy()).unwrap();
         assert_eq!(candidate.position, DropPosition::AppendTo { container: ContainerId::Root });
         assert_eq!(candidate.validity, DropValidity::Valid);
     }
@@ -408,7 +418,7 @@ mod tests {
     #[test]
     fn commit_hands_the_exact_validated_intent_to_the_adapter() {
         let hierarchy = hierarchy();
-        let mut session = DragSession::new(NodeId::from("card"));
+        let mut session = DragSession::new(NodeId::from("card"), Vec::new());
         session.resolve(Pos2::new(20.0, 25.0), &hit(PointerRegion::LeadingEdge, Some("other"), None), &hierarchy);
 
         let result = session.commit_with(|intent| {
@@ -421,9 +431,143 @@ mod tests {
     }
 
     #[test]
+    fn selected_nodes_are_validated_and_carried_through_the_drag_intent() {
+        let hierarchy = PickerBrowserHierarchy::new(vec![
+            HierarchyNode::group("folder", vec![HierarchyNode::item("card"), HierarchyNode::item("selected-card")]),
+            HierarchyNode::group("other", vec![]),
+        ])
+        .unwrap();
+        let selected = NodeId::from("selected-card");
+        let mut session = DragSession::new(NodeId::from("card"), vec![NodeId::from("card"), selected.clone()]);
+        session.resolve(Pos2::new(20.0, 25.0), &hit(PointerRegion::TrailingEdge, Some("other"), None), &hierarchy);
+
+        let result = session.commit_with(|intent| {
+            assert_eq!(intent.source, NodeId::from("card"));
+            assert_eq!(intent.selection, vec![NodeId::from("card"), selected.clone()]);
+            assert_eq!(intent.position, DropPosition::After { target: "other".into() });
+            Ok::<(), &'static str>(())
+        });
+        assert_eq!(result, DropCommitResult::Committed);
+
+        let invalid = resolve_drop_candidate_with_selection(
+            &NodeId::from("card"),
+            &[NodeId::from("other")],
+            &hit(PointerRegion::LeadingEdge, Some("other"), None),
+            &hierarchy,
+        )
+        .unwrap();
+        assert_eq!(invalid.validity, DropValidity::Invalid(DropRejection::SameNode));
+    }
+
+    #[test]
+    fn selected_group_subsumes_the_pointer_card_when_validating_a_mixed_drag() {
+        let tree = PickerBrowserHierarchy::new(vec![
+            HierarchyNode::group("folder", vec![HierarchyNode::item("card")]),
+            HierarchyNode::group("other", vec![HierarchyNode::item("target")]),
+        ])
+        .unwrap();
+        let selected_group = NodeId::from("folder");
+        let candidate = resolve_drop_candidate_with_selection(
+            &NodeId::from("card"),
+            &[selected_group.clone()],
+            &hit(PointerRegion::GroupBody, None, Some(ContainerId::Group("other".into()))),
+            &tree,
+        )
+        .unwrap();
+
+        assert_eq!(candidate.validity, DropValidity::Valid);
+        let mut session = DragSession::new(NodeId::from("card"), vec![selected_group.clone()]);
+        session.resolve(Pos2::new(20.0, 30.0), &hit(PointerRegion::GroupBody, None, Some(ContainerId::Group("other".into()))), &tree);
+        let intent = session.validated_intent().unwrap().unwrap();
+        assert_eq!(intent.source, NodeId::from("card"));
+        assert_eq!(intent.selection, [selected_group]);
+    }
+
+    #[test]
+    fn every_selected_node_must_accept_the_same_destination() {
+        let tree = PickerBrowserHierarchy::new(vec![
+            HierarchyNode::group("folder", vec![HierarchyNode::item("card")]),
+            HierarchyNode::group("other", vec![HierarchyNode::item("target")]),
+        ])
+        .unwrap();
+        let candidate = resolve_drop_candidate_with_selection(
+            &NodeId::from("card"),
+            &[NodeId::from("folder"), NodeId::from("other")],
+            &hit(PointerRegion::GroupBody, None, Some(ContainerId::Group("other".into()))),
+            &tree,
+        )
+        .unwrap();
+
+        assert_eq!(candidate.validity, DropValidity::Invalid(DropRejection::WouldCreateCycle));
+    }
+
+    #[test]
+    fn multi_node_commit_order_preserves_visible_order_for_every_drop_position() {
+        let selection = [NodeId::from("first"), NodeId::from("second")];
+        let cases = [
+            (DropPosition::Before { target: "target".into() }, vec!["first", "second"]),
+            (DropPosition::After { target: "target".into() }, vec!["second", "first"]),
+            (DropPosition::PrependTo { group: "destination".into() }, vec!["second", "first"]),
+            (DropPosition::AppendTo { container: ContainerId::Root }, vec!["first", "second"]),
+        ];
+
+        for (position, expected) in cases {
+            assert_eq!(hierarchy_move_sources(&selection, &position), expected.into_iter().map(NodeId::from).collect::<Vec<_>>(), "position={position:?}");
+        }
+    }
+
+    #[test]
+    fn applying_ordered_multi_node_moves_preserves_visible_selection_order_for_every_target_family() {
+        let cases = [
+            (
+                DropPosition::Before { target: "target".into() },
+                vec![NodeId::from("source"), NodeId::from("moving-group"), NodeId::from("moving-card"), NodeId::from("target"), NodeId::from("destination")],
+                vec![],
+            ),
+            (
+                DropPosition::After { target: "target".into() },
+                vec![NodeId::from("source"), NodeId::from("target"), NodeId::from("moving-group"), NodeId::from("moving-card"), NodeId::from("destination")],
+                vec![],
+            ),
+            (
+                DropPosition::PrependTo { group: "destination".into() },
+                vec![NodeId::from("source"), NodeId::from("target"), NodeId::from("destination")],
+                vec![NodeId::from("moving-group"), NodeId::from("moving-card")],
+            ),
+            (
+                DropPosition::AppendTo { container: ContainerId::Root },
+                vec![NodeId::from("source"), NodeId::from("target"), NodeId::from("destination"), NodeId::from("moving-group"), NodeId::from("moving-card")],
+                vec![],
+            ),
+        ];
+
+        for (position, expected_roots, expected_destination) in cases {
+            let mut hierarchy = PickerBrowserHierarchy::new(vec![
+                HierarchyNode::group(
+                    "source",
+                    vec![HierarchyNode::group("moving-group", vec![HierarchyNode::item("inside")]), HierarchyNode::item("moving-card")],
+                ),
+                HierarchyNode::item("target"),
+                HierarchyNode::group("destination", vec![]),
+            ])
+            .unwrap();
+            for source in hierarchy_move_sources(&[NodeId::from("moving-group"), NodeId::from("moving-card")], &position) {
+                hierarchy.move_node(&source, &position).unwrap();
+            }
+
+            assert_eq!(hierarchy.roots().iter().map(|node| node.id().clone()).collect::<Vec<_>>(), expected_roots, "position={position:?}");
+            assert_eq!(
+                hierarchy.children_of(&ContainerId::Group("destination".into())).unwrap().iter().map(|node| node.id().clone()).collect::<Vec<_>>(),
+                expected_destination,
+                "position={position:?}"
+            );
+        }
+    }
+
+    #[test]
     fn invalid_or_missing_candidates_never_reach_the_adapter() {
         let hierarchy = hierarchy();
-        let mut invalid = DragSession::new(NodeId::from("card"));
+        let mut invalid = DragSession::new(NodeId::from("card"), Vec::new());
         invalid.resolve(Pos2::new(20.0, 25.0), &hit(PointerRegion::LeadingEdge, Some("card"), None), &hierarchy);
         let mut called = false;
         let rejected = invalid.commit_with(|_| {
@@ -433,17 +577,14 @@ mod tests {
         assert_eq!(rejected, DropCommitResult::Rejected(DropRejection::SameNode));
         assert!(!called);
 
-        let empty = DragSession::new(NodeId::from("card"));
+        let empty = DragSession::new(NodeId::from("card"), Vec::new());
         assert_eq!(empty.commit_with(|_| Ok::<(), ()>(())), DropCommitResult::NoCandidate);
     }
 
     #[test]
     fn every_source_and_drop_region_uses_model_validation_before_adapter_commit() {
         let hierarchy = PickerBrowserHierarchy::new(vec![
-            HierarchyNode::group(
-                "A",
-                vec![HierarchyNode::item("a1"), HierarchyNode::group("B", vec![HierarchyNode::item("b1")]), HierarchyNode::item("a2")],
-            ),
+            HierarchyNode::group("A", vec![HierarchyNode::item("a1"), HierarchyNode::group("B", vec![HierarchyNode::item("b1")]), HierarchyNode::item("a2")]),
             HierarchyNode::item("root-card"),
             HierarchyNode::group("C", vec![]),
         ])
@@ -474,7 +615,7 @@ mod tests {
                 let model_accepts = hierarchy.validate_position(source, &candidate.position).is_ok();
                 assert_eq!(candidate.is_valid(), model_accepts, "source={source:?}, hit={hit:?}");
 
-                let mut session = DragSession::new(source.clone());
+                let mut session = DragSession::new(source.clone(), Vec::new());
                 session.resolve(Pos2::new(20.0, 25.0), hit, &hierarchy);
                 let mut adapter_called = false;
                 let result = session.commit_with(|intent| {
@@ -497,7 +638,7 @@ mod tests {
     #[test]
     fn adapter_failure_is_preserved_as_a_commit_result() {
         let hierarchy = hierarchy();
-        let mut session = DragSession::new(NodeId::from("card"));
+        let mut session = DragSession::new(NodeId::from("card"), Vec::new());
         session.resolve(Pos2::new(20.0, 25.0), &hit(PointerRegion::LeadingEdge, Some("other"), None), &hierarchy);
 
         assert_eq!(session.commit_with(|_| Err("adapter rejected move")), DropCommitResult::Failed("adapter rejected move"));

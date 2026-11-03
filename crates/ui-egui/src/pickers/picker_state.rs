@@ -58,6 +58,12 @@ pub struct PresetUi {
     /// Nested folder path for a browser selection. Missing entries preserve legacy key-only state.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub selected_group_path: BTreeMap<String, Vec<String>>,
+    /// Multi-selection owned by the shared browser. Transient because domain adapters still own
+    /// the active preset used by commands; these identities describe only the visible UI selection.
+    #[serde(skip)]
+    pub(crate) browser_selection: BTreeMap<String, std::collections::BTreeSet<crate::pickers::picker_browser_model::NodeId>>,
+    #[serde(skip)]
+    pub(crate) browser_selection_anchor: BTreeMap<String, crate::pickers::picker_browser_model::NodeId>,
     /// Tool Presets: Current Tool Only.
     pub current_tool_only: bool,
     /// Custom Shape tool: the shape it draws.
@@ -81,6 +87,9 @@ pub struct PresetUi {
     /// Typed item rename target; the legacy tuple above remains for external/legacy callers.
     #[serde(skip)]
     pub(crate) item_renaming: Option<ItemRenameState>,
+    /// Remaining targets for a sequential multi-item rename. The browser edits one target at a time.
+    #[serde(skip)]
+    pub(crate) item_rename_queue: Vec<ItemRenameState>,
 }
 
 /// Brush adapter presentation options stored alongside the shared asset-browser state.
@@ -179,6 +188,44 @@ impl std::ops::DerefMut for PresetUi {
 }
 
 impl PresetUi {
+    pub(crate) fn browser_node_selected(&self, panel: &str, id: &crate::pickers::picker_browser_model::NodeId) -> bool {
+        self.browser_selection.get(panel).is_some_and(|selection| selection.contains(id))
+    }
+
+    pub(crate) fn select_browser_node(&mut self, panel: &str, id: crate::pickers::picker_browser_model::NodeId, additive: bool) {
+        let selection = self.browser_selection.entry(panel.to_owned()).or_default();
+        if !additive {
+            selection.clear();
+        }
+        if additive && !selection.insert(id.clone()) {
+            selection.remove(&id);
+        } else if !additive {
+            selection.insert(id.clone());
+        }
+        if !additive {
+            self.browser_selection_anchor.insert(panel.to_owned(), id);
+        }
+    }
+
+    pub(crate) fn select_browser_range(
+        &mut self,
+        panel: &str,
+        visible: &[crate::pickers::picker_browser_model::NodeId],
+        target: &crate::pickers::picker_browser_model::NodeId,
+    ) {
+        let Some(anchor) = self.browser_selection_anchor.get(panel) else {
+            self.select_browser_node(panel, target.clone(), false);
+            return;
+        };
+        let (Some(start), Some(end)) = (visible.iter().position(|id| id == anchor), visible.iter().position(|id| id == target)) else {
+            self.select_browser_node(panel, target.clone(), false);
+            return;
+        };
+        let selection = self.browser_selection.entry(panel.to_owned()).or_default();
+        selection.clear();
+        selection.extend(visible[start.min(end)..=start.max(end)].iter().cloned());
+    }
+
     pub(crate) fn set_selected(&mut self, panel: &str, key: &str) {
         self.selected.insert(panel.to_string(), key.to_string());
         self.selected_group.remove(panel);
@@ -849,6 +896,32 @@ mod tests {
     }
 
     #[test]
+    fn browser_multi_selection_toggles_nodes_and_shift_selects_the_visible_interval() {
+        use crate::pickers::picker_browser_model::NodeId;
+
+        let first = NodeId::group("First");
+        let card_a = NodeId::item("First", "a");
+        let collapsed = NodeId::group("Collapsed");
+        let hidden_card = NodeId::item("Collapsed", "hidden");
+        let card_b = NodeId::item("Last", "b");
+        let visible = vec![first.clone(), card_a.clone(), collapsed.clone(), card_b.clone()];
+        let mut state = PresetUi::default();
+
+        state.select_browser_node("panel", first.clone(), false);
+        state.select_browser_node("panel", card_a.clone(), true);
+        assert!(state.browser_node_selected("panel", &first));
+        assert!(state.browser_node_selected("panel", &card_a));
+
+        state.select_browser_range("panel", &visible, &card_b);
+        assert!(visible.iter().all(|id| state.browser_node_selected("panel", id)));
+        assert!(!state.browser_node_selected("panel", &hidden_card));
+
+        state.select_browser_node("panel", card_a.clone(), true);
+        assert!(!state.browser_node_selected("panel", &card_a));
+        assert!(state.browser_node_selected("panel", &first));
+    }
+
+    #[test]
     fn exact_path_item_tokens_do_not_mutate_same_key_in_other_groups_or_folders() {
         let mut state = PresetUi::default();
         state.set_hierarchy_order(
@@ -1208,15 +1281,17 @@ mod tests {
         let entries = vec![HierarchyOrderEntry::Group("Before".into()), first.clone(), HierarchyOrderEntry::Group("After".into()), second.clone()];
 
         state.move_hierarchy_entry("panel", "", entries.clone(), second.clone(), Some(&first));
-        assert_eq!(state.hierarchy_order["panel"][""], [
-            HierarchyOrderEntry::Group("Before".into()), second.clone(), first.clone(), HierarchyOrderEntry::Group("After".into()),
-        ]);
+        assert_eq!(
+            state.hierarchy_order["panel"][""],
+            [HierarchyOrderEntry::Group("Before".into()), second.clone(), first.clone(), HierarchyOrderEntry::Group("After".into()),]
+        );
 
         let current = state.hierarchy_order["panel"][""].clone();
         state.move_hierarchy_entry("panel", "", current, first.clone(), None);
-        assert_eq!(state.hierarchy_order["panel"][""], [
-            HierarchyOrderEntry::Group("Before".into()), second, HierarchyOrderEntry::Group("After".into()), first,
-        ]);
+        assert_eq!(
+            state.hierarchy_order["panel"][""],
+            [HierarchyOrderEntry::Group("Before".into()), second, HierarchyOrderEntry::Group("After".into()), first,]
+        );
     }
 
     #[test]
@@ -1247,10 +1322,14 @@ mod tests {
     #[test]
     fn deleting_a_root_card_removes_only_the_matching_owner_and_key() {
         let mut state = PresetUi::default();
-        state.set_hierarchy_order("panel", "", vec![
-            HierarchyOrderEntry::RootItem { group: "First".into(), key: "shared".into() },
-            HierarchyOrderEntry::RootItem { group: "Second".into(), key: "shared".into() },
-        ]);
+        state.set_hierarchy_order(
+            "panel",
+            "",
+            vec![
+                HierarchyOrderEntry::RootItem { group: "First".into(), key: "shared".into() },
+                HierarchyOrderEntry::RootItem { group: "Second".into(), key: "shared".into() },
+            ],
+        );
 
         state.delete_hierarchy_item_in_group("panel", "First", "shared");
 
@@ -1260,12 +1339,16 @@ mod tests {
     #[test]
     fn root_card_identity_and_mixed_order_survive_the_preferences_round_trip() {
         let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-        app.ui.presets_ui.set_hierarchy_order("gradients", "", vec![
-            HierarchyOrderEntry::Group("First group".into()),
-            HierarchyOrderEntry::RootItem { group: "Root owner".into(), key: "same:key".into() },
-            HierarchyOrderEntry::RootItem { group: "Other owner".into(), key: "same:key".into() },
-            HierarchyOrderEntry::Group("Second group".into()),
-        ]);
+        app.ui.presets_ui.set_hierarchy_order(
+            "gradients",
+            "",
+            vec![
+                HierarchyOrderEntry::Group("First group".into()),
+                HierarchyOrderEntry::RootItem { group: "Root owner".into(), key: "same:key".into() },
+                HierarchyOrderEntry::RootItem { group: "Other owner".into(), key: "same:key".into() },
+                HierarchyOrderEntry::Group("Second group".into()),
+            ],
+        );
 
         super::persist(&mut app, &egui::Context::default());
         let saved = app.session.prefs_to_json();
@@ -1282,28 +1365,34 @@ mod tests {
         let ctx = egui::Context::default();
         app.ui.presets_ui.set_hierarchy_order("panel", "", vec![HierarchyOrderEntry::Group("A".into())]);
 
-        let mut output = ctx.run_ui(egui::RawInput {
-            events: vec![egui::Event::PointerButton {
-                pos: egui::Pos2::new(10.0, 10.0),
-                button: egui::PointerButton::Primary,
-                pressed: true,
-                modifiers: egui::Modifiers::NONE,
-            }],
-            ..Default::default()
-        }, |_| {});
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                events: vec![egui::Event::PointerButton {
+                    pos: egui::Pos2::new(10.0, 10.0),
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                ..Default::default()
+            },
+            |_| {},
+        );
         output.textures_delta.clear();
         super::persist(&mut app, &ctx);
         assert!(app.session.prefs().dialogs.get("pickerBrowserUi").is_none(), "an in-progress drag must not persist an intermediate hierarchy");
 
-        let mut output = ctx.run_ui(egui::RawInput {
-            events: vec![egui::Event::PointerButton {
-                pos: egui::Pos2::new(10.0, 10.0),
-                button: egui::PointerButton::Primary,
-                pressed: false,
-                modifiers: egui::Modifiers::NONE,
-            }],
-            ..Default::default()
-        }, |_| {});
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                events: vec![egui::Event::PointerButton {
+                    pos: egui::Pos2::new(10.0, 10.0),
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                ..Default::default()
+            },
+            |_| {},
+        );
         output.textures_delta.clear();
         super::persist(&mut app, &ctx);
         assert!(app.session.prefs().dialogs.get("pickerBrowserUi").is_some(), "the completed hierarchy is persisted after release");
