@@ -101,6 +101,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if fallback {
                 println!("{:.2} ms (FALLBACK TO CPU: {:?})", gpu_cold_dur.as_secs_f64() * 1000.0, warnings);
                 (true, true)
+            } else if gpu_renderer.context().is_none() {
+                // The export never reached the renderer (e.g. a single-layer input takes the
+                // native path), so no GPU work ran: report it as CPU work, not a GPU result.
+                println!("{:.2} ms (renderer not used)", gpu_cold_dur.as_secs_f64() * 1000.0);
+                (false, true)
             } else {
                 println!("{:.2} ms", gpu_cold_dur.as_secs_f64() * 1000.0);
                 let adapter = gpu_renderer.adapter_name().unwrap_or("unknown");
@@ -139,8 +144,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("|---|---|---|---|");
     println!("| CPU Baseline | {:.2} ms | 1.00x | Reference CPU compositor |", cpu_dur.as_secs_f64() * 1000.0);
     if is_fallback {
-        println!("| GPU Cold | {:.2} ms | N/A | Fallback to CPU occurred; no GPU speedup |", gpu_cold_dur.as_secs_f64() * 1000.0);
-        println!("| GPU Warm | N/A | N/A | Not measured (GPU fell back to CPU) |");
+        println!("| GPU Cold | {:.2} ms | N/A | GPU not used (CPU fallback or a CPU-only export path); no GPU speedup |", gpu_cold_dur.as_secs_f64() * 1000.0);
+        println!("| GPU Warm | N/A | N/A | Not measured (GPU not used) |");
     } else {
         let is_software = gpu_renderer.is_software();
         let adapter_note = if is_software { "Software rasterizer (e.g. lavapipe/llvmpipe)" } else { "Hardware GPU" };
@@ -171,8 +176,8 @@ fn sample_doc(w: u32, h: u32, layer_count: usize) -> Document {
 
     for idx in 0..layer_count {
         let mut s = Surface::new(doc.pixel_format());
-        let x0 = (idx as i32 * 20) % (w as i32 / 2);
-        let y0 = (idx as i32 * 20) % (h as i32 / 2);
+        let x0 = (idx as i32 * 20) % (w as i32 / 2).max(1);
+        let y0 = (idx as i32 * 20) % (h as i32 / 2).max(1);
         let rw = (w as i32 - x0).max(1);
         let rh = (h as i32 - y0).max(1);
         s.fill_rect(Rect::new(x0, y0, x0 + rw, y0 + rh), &[0.3, 0.5, 0.7, 0.8]);

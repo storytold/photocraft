@@ -72,9 +72,14 @@ fn gpu_env_var_validation() {
 fn explicit_flags_override_environment() {
     let d = tmp("override");
     let in_png = d.join("in.png");
+    let in_layers = d.join("in.pcraft");
     let out1 = d.join("out1.png");
     let out2 = d.join("out2.png");
     write_png(&in_png, 16, 16);
+    // A single-layer PNG takes the native export path and never calls the renderer; a
+    // multi-layer document composites, so it observes whether `--gpu` reached the backend.
+    let o = bin().args(["run", "--new", r#"{"width":16,"height":16}"#, "--cmd", "layer.new.layer", "--out", in_layers.to_str().unwrap()]).output().unwrap();
+    assert!(o.status.success(), "stderr: {}", String::from_utf8_lossy(&o.stderr));
 
     // --no-gpu overrides PHOTOCRAFT_GPU=1
     let o = bin().env("PHOTOCRAFT_GPU", "1").args(["convert", "--no-gpu", in_png.to_str().unwrap(), out1.to_str().unwrap()]).output().unwrap();
@@ -82,9 +87,13 @@ fn explicit_flags_override_environment() {
     assert!(out1.is_file());
 
     // --gpu overrides PHOTOCRAFT_GPU=0
-    let o = bin().env("PHOTOCRAFT_GPU", "0").args(["convert", "--gpu", in_png.to_str().unwrap(), out2.to_str().unwrap()]).output().unwrap();
+    let o = bin().env("PHOTOCRAFT_GPU", "0").args(["convert", "--gpu", in_layers.to_str().unwrap(), out2.to_str().unwrap()]).output().unwrap();
     assert!(o.status.success(), "stderr: {}", String::from_utf8_lossy(&o.stderr));
     assert!(out2.is_file());
+    let stderr = String::from_utf8_lossy(&o.stderr);
+    // The renderer reports either its adapter, an unavailable adapter, or (in a build without
+    // GPU support) that GPU rendering was requested; the CPU default emits none of these.
+    assert!(stderr.contains("GPU"), "explicit --gpu must reach the renderer when the environment disables it: {stderr}");
 
     // Explicit flag overrides even bad environment value
     let out3 = d.join("out3.png");
@@ -108,6 +117,12 @@ fn mcp_bridge_rejects_explicit_gpu_flags_and_ignores_env() {
     assert_eq!(o.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&o.stderr);
     assert!(stderr.contains("configure rendering on the desktop app"), "{stderr}");
+
+    // An invalid PHOTOCRAFT_GPU value is ignored in bridge mode: the desktop process controls
+    // rendering, so the bridge must not validate the variable or reject the request for it.
+    let o = bin().env("PHOTOCRAFT_GPU", "invalid").args(["mcp", "--bridge", "127.0.0.1:50000"]).stdin(std::process::Stdio::null()).output().unwrap();
+    let stderr = String::from_utf8_lossy(&o.stderr);
+    assert!(!stderr.contains("PHOTOCRAFT_GPU"), "bridge mode must ignore the GPU environment: {stderr}");
 }
 
 #[test]
@@ -203,30 +218,58 @@ fn serve_gpu_preserves_clean_protocol_stdout_and_drains_diagnostics_to_stderr() 
     assert_eq!(v1["id"], 1);
     assert_eq!(v1["ok"], true, "{v1}");
 
-    // 2. Failure recovery: invalid request receives error reply without crashing server
-    writeln!(stdin, "{}", serde_json::json!({"id": 2, "method": "invalid.nonexistent.method", "params": {}})).unwrap();
+    // 2. A second layer so the render below composites instead of taking the native path.
+    writeln!(stdin, "{}", serde_json::json!({"id": 2, "method": "engine.execute", "params": {"command": "layer.new.layer", "params": {"name": "Top"}}}))
+        .unwrap();
     stdin.flush().unwrap();
 
     let mut line2 = String::new();
-    assert!(stdout.read_line(&mut line2).unwrap() > 0, "server must respond to invalid request");
+    assert!(stdout.read_line(&mut line2).unwrap() > 0, "server must respond to the layer command");
     let v2: Value = serde_json::from_str(&line2).expect("line 2 on stdout must be valid JSON");
     assert_eq!(v2["id"], 2);
-    assert_eq!(v2["ok"], false, "{v2}");
+    assert_eq!(v2["ok"], true, "{v2}");
 
-    // 3. Subsequent valid command still succeeds (proves session & renderer recovery)
-    writeln!(stdin, "{}", serde_json::json!({"id": 3, "method": "doc.inspect"})).unwrap();
+    // 3. Failure recovery: invalid request receives error reply without crashing server
+    writeln!(stdin, "{}", serde_json::json!({"id": 3, "method": "invalid.nonexistent.method", "params": {}})).unwrap();
     stdin.flush().unwrap();
 
     let mut line3 = String::new();
-    assert!(stdout.read_line(&mut line3).unwrap() > 0, "server must respond to third request");
+    assert!(stdout.read_line(&mut line3).unwrap() > 0, "server must respond to invalid request");
     let v3: Value = serde_json::from_str(&line3).expect("line 3 on stdout must be valid JSON");
     assert_eq!(v3["id"], 3);
-    assert_eq!(v3["ok"], true, "{v3}");
+    assert_eq!(v3["ok"], false, "{v3}");
+
+    // 4. Subsequent valid command still succeeds (proves session & renderer recovery)
+    writeln!(stdin, "{}", serde_json::json!({"id": 4, "method": "doc.inspect"})).unwrap();
+    stdin.flush().unwrap();
+
+    let mut line4 = String::new();
+    assert!(stdout.read_line(&mut line4).unwrap() > 0, "server must respond to the inspect request");
+    let v4: Value = serde_json::from_str(&line4).expect("line 4 on stdout must be valid JSON");
+    assert_eq!(v4["id"], 4);
+    assert_eq!(v4["ok"], true, "{v4}");
+
+    // 5. Render the composite: one JSON line on stdout, diagnostics only on stderr.
+    writeln!(stdin, "{}", serde_json::json!({"id": 5, "method": "doc.render", "params": {"maxSide": 16}})).unwrap();
+    stdin.flush().unwrap();
+
+    let mut line5 = String::new();
+    assert!(stdout.read_line(&mut line5).unwrap() > 0, "server must answer the render request");
+    let v5: Value = serde_json::from_str(&line5).expect("line 5 on stdout must be valid JSON");
+    assert_eq!(v5["id"], 5);
+    assert_eq!(v5["ok"], true, "{v5}");
+    assert!(v5["result"]["base64"].as_str().is_some_and(|b| !b.is_empty()), "render must return PNG bytes: {v5}");
 
     // Close stdin and verify graceful exit
     drop(stdin);
     let output = child.wait_with_output().unwrap();
     assert!(output.status.success());
+
+    // Every render that reaches the renderer reports its adapter or why it fell back, whichever
+    // build and adapter this test runs on.
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let markers = ["GPU adapter:", "no GPU adapter available", "could not build GPU compositor", "falling back to CPU", "GPU acceleration requested"];
+    assert!(markers.iter().any(|m| stderr.contains(m)), "render must report its GPU backend or fallback on stderr: {stderr}");
 }
 
 #[test]

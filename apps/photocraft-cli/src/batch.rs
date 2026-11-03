@@ -10,7 +10,7 @@ use crate::{
     CliError, Result,
     actions::load_actions_file,
     args::{BatchArgs, DropletArgs},
-    output::warn_dedup,
+    output::{warn_all, warn_dedup},
 };
 
 /// Whether `a` and `b` name the same existing folder, however they are spelt (relative, with a
@@ -111,7 +111,9 @@ pub(crate) fn batch(a: &BatchArgs, out: &mut dyn Write, err: &mut dyn Write) -> 
                 ok += 1;
                 written.record(&target_text, &input.to_string_lossy());
                 let _ = writeln!(out, "ok    {} -> {}", input.display(), target.display());
-                warn_dedup(err, &ws, &mut seen_warnings);
+                // Each file's own export warnings (e.g. transparency composited over white) are
+                // reported for that file, even when an earlier file had the same warning.
+                warn_all(err, &ws);
                 warn_dedup(err, &diags, &mut seen_warnings);
             }
             Err(e) => {
