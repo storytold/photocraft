@@ -638,6 +638,7 @@ fn land(s: &mut Session, id: u64, made: Made) -> Result<Value> {
         })?;
         let matching = note_variations(s, &ids, &placed);
         keep_capture(s, capture, group, &ids);
+        forget_gone(s);
         return Ok(json!({"layer": group.0, "variations": ids, "matching": matching, "fill": id}));
     }
     let (group, ids) = s.edit(LABEL, |doc, active| {
@@ -659,7 +660,28 @@ fn land(s: &mut Session, id: u64, made: Made) -> Result<Value> {
     s.genai_state.sources.insert(group, Arc::new(Source { prompt: input.prompt.clone(), area, prepared }));
     let matching = note_variations(s, &ids, &placed);
     keep_capture(s, capture, group, &ids);
+    forget_gone(s);
     Ok(json!({"layer": group.0, "variations": ids, "bounds": [area.x0, area.y0, area.width(), area.height()], "matching": matching, "fill": id}))
+}
+
+/// Forget what generative layers were made from, and how variations were placed, once no open
+/// document holds their layer: not now, and not in a state undo, redo or a History snapshot can
+/// bring back. Run when a fill lands (what holds the memory) and when a document closes, so a
+/// session's fills don't keep their requests' pixels after their layers are gone for good.
+pub(crate) fn forget_gone(s: &mut Session) {
+    let g = &s.genai_state;
+    if g.sources.is_empty() && g.notes.is_empty() {
+        return;
+    }
+    let docs: Vec<Arc<Document>> = s
+        .documents()
+        .iter()
+        .flat_map(|st| std::iter::once(&st.doc).chain(st.history.held_docs()).chain(st.snapshots.iter().map(|x| &x.doc)))
+        .cloned()
+        .collect();
+    let held = |id: &LayerId| docs.iter().any(|d| d.layer(*id).is_some());
+    s.genai_state.sources.retain(|id, _| held(id));
+    s.genai_state.notes.retain(|id, _| held(id));
 }
 
 /// Keep what fill landed in `group` as variations `ids` sent and got back, each placed picture

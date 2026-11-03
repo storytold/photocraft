@@ -169,6 +169,7 @@ impl Session {
         }
         let d = self.docs.remove(index);
         self.open_document_order.retain(|&id| id != d.doc.id);
+        crate::genai_cmds::forget_gone(self);
         self.active = if self.docs.is_empty() {
             None
         } else {
