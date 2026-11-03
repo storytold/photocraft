@@ -599,3 +599,11 @@ cameraRaw	Yellow	पीला
 	Download	डाउनलोड करें
 	Downloading…	डाउनलोड हो रहा है…
 	Any picture works; it is fitted into a square. Right-click an icon to remove it.	कोई भी चित्र चलेगा; उसे एक वर्ग में फ़िट किया जाता है। हटाने के लिए आइकन पर राइट-क्लिक करें।
+
+# Actions panel: loading several action files at once
+	{message} ({note})	{message} ({note})
+@plural	{n} action|{n} actions	{n} एक्शन|{n} एक्शन
+@plural	{n} step has no PhotoCraft equivalent yet|{n} steps have no PhotoCraft equivalent yet	{n} चरण का अभी PhotoCraft में कोई समकक्ष नहीं है|{n} चरणों का अभी PhotoCraft में कोई समकक्ष नहीं है
+@plural	{n} action file loaded|{n} action files loaded	{n} एक्शन फ़ाइल लोड हुई|{n} एक्शन फ़ाइलें लोड हुईं
+	{set} from {file} replaced the one from {earlier}	{file} के सेट {set} ने {earlier} वाले सेट की जगह ले ली
+@plural	{n} file could not be loaded: {errors}|{n} files could not be loaded: {errors}	{n} फ़ाइल लोड नहीं हो सकी: {errors}|{n} फ़ाइलें लोड नहीं हो सकीं: {errors}

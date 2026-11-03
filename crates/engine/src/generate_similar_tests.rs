@@ -131,7 +131,7 @@ fn generated_images_and_expanded_areas_have_their_own_similar() {
     let st = fake.state();
     let g = &st.runs.last().unwrap().request;
     assert!(g["task"] == "fill" && !g["mask"].is_null(), "a fill request");
-    assert!(g["prompt"].as_str().unwrap().contains("extend the scene"), "{}", g["prompt"]);
+    assert!(g["prompt"].as_str().unwrap().contains("continuing to the right, empty, with no people"), "{}", g["prompt"]);
     drop(st);
     let d = s.active().unwrap();
     let nid = LayerId(r3["layer"].as_u64().unwrap());

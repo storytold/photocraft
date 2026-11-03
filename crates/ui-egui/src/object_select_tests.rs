@@ -39,7 +39,7 @@ fn last_params(app: &PhotocraftApp) -> (String, serde_json::Value) {
 
 #[test]
 fn a_drag_is_a_box_prompt_and_ctrl_clicks_refine_the_last_object() {
-    let fake = FakeNative::start().unwrap();
+    let fake = FakeNative::start_with(Options { missing_files: vec!["model.safetensors".into()], ..Options::default() }).unwrap();
     let mut a = app(&fake.url);
     let none = egui::Modifiers::NONE;
     // A box around the object: the box template, refine on by default.

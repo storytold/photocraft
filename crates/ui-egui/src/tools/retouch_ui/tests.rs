@@ -865,7 +865,11 @@ fn art_history_stroke_runs_the_command() {
 /// rectangle and without a server nothing changes.
 #[test]
 fn object_selection_click_asks_the_detector_and_the_bar_selects_by_text() {
-    let fake = photocraft_genai::fake::FakeNative::start().unwrap();
+    let fake = photocraft_genai::fake::FakeNative::start_with(photocraft_genai::fake::Options {
+        missing_files: vec!["model.safetensors".into()],
+        ..Default::default()
+    })
+    .unwrap();
     let mut app = app();
     app.ui.tool = Tool::ObjectSelection;
     let none = egui::Modifiers::NONE;
@@ -974,15 +978,17 @@ fn quick_selection_strokes_ask_the_detector_when_a_server_answers() {
     assert_eq!((pts.first().cloned(), pts.last().cloned()), (Some(json!([10.0, 30.0])), Some(json!([50.0, 30.0]))), "the stroke's ends are in");
     {
         let st = fake.state();
-        assert_eq!(st.runs.len(), 1);
-        let coords = st.runs[0].request["params"]["points"].as_str().unwrap_or_default();
+        // The detector once (ViTMatte, served by the fake too, then refines the edge).
+        let seg: Vec<_> = st.runs.iter().filter(|r| r.request["task"] == "segment").collect();
+        assert_eq!(seg.len(), 1);
+        let coords = seg[0].request["params"]["points"].as_str().unwrap_or_default();
         assert!(coords.contains("\"x\":10") && coords.contains("\"x\":50"), "{coords}");
     }
     assert!(app.session.active().unwrap().doc.selection.is_some());
     // ⌥: the object under the stroke is subtracted.
     stroke(&mut app, egui::Modifiers::ALT);
     assert_eq!(app.session.journal.last().map(|(_, p)| p["mode"].as_str()), Some(Some("subtract")));
-    assert_eq!(fake.state().runs.len(), 2);
+    assert_eq!(fake.state().runs.iter().filter(|r| r.request["task"] == "segment").count(), 2);
     // A server that is down: the classical path again, quietly.
     app.session.edit_prefs(|p| {
         p.integrations.models_path = "http://127.0.0.1:9".into();

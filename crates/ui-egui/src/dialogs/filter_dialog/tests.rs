@@ -23,6 +23,18 @@ fn a_unit_after_a_range_bound_does_not_reset_the_range_to_its_fallback() {
 }
 
 #[test]
+fn lens_flare_dialog_centre_is_a_slider_from_0_to_1_defaulting_to_the_middle() {
+    // `"centerX":number=0.5` read as an integer field defaulting to 0: the menu's Lens Flare
+    // landed in the top-left corner and an imported 0.4 centre rounded to 0.
+    let spec = photocraft_engine::commands::find("filter.render.lensFlare").expect("filter.render.lensFlare is registered");
+    let params = parse_spec(spec.params);
+    for key in ["centerX", "centerY"] {
+        let kind = params.iter().find(|p| p.key == key).map(|p| p.kind.clone());
+        assert_eq!(kind, Some(Kind::Range { min: 0.0, max: 1.0, default: 0.5 }), "{key}");
+    }
+}
+
+#[test]
 fn color_settings_working_spaces_list_installed_profiles_of_their_space() {
     // #6323: a press condition installed in the system can be the CMYK working space, as in
     // Photoshop's Color Settings; each working-space menu lists only profiles of its space.
@@ -628,7 +640,7 @@ fn smart_displace_preview_uses_the_map_document() {
             applied.add_document((**d).clone(), None);
         }
         applied.execute(SMART_FILTER_SET_PARAMS, p.clone()).unwrap();
-        let want = photocraft_compose::render(&applied.active().unwrap().doc, doc.bounds()).px;
+        let want = photocraft_compose::render(&applied.active().unwrap().doc, doc.bounds()).into_px();
         let preview = preview_document_for_target(
             &doc,
             layer,
@@ -1647,18 +1659,12 @@ fn a_generative_dialog_never_turns_an_optional_range_into_its_minimum() {
             assert!(!segment.trim_end().ends_with('?') || segment.contains('='), "{command}.{}: an optional range with no default ({segment})", p.key);
         }
     }
-    assert!(
-        parse_spec(photocraft_engine::commands::find("generate.splitLayers").map(|c| c.params).unwrap_or_default())
-            .iter()
-            .all(|p| p.key != "maxPixels" || !matches!(p.kind, Kind::Range { .. })),
-        "Split's maxPixels is left to the engine (its 640-px working size), not a slider"
-    );
-    // Split's Tries is a real slider whose default is the engine's (one seed; more keep the best).
-    let tries = parse_spec(photocraft_engine::commands::find("generate.splitLayers").map(|c| c.params).unwrap_or_default())
-        .into_iter()
-        .find(|p| p.key == "tries")
-        .map(|p| p.kind);
-    assert!(matches!(tries, Some(Kind::Range { min, max, default }) if min == 1.0 && max == 4.0 && default == 1.0), "{tries:?}");
+    // Split into Layers (SAM 3.1 + Fill since 2026-11-02): Layers is a slider from the
+    // background and one subject up, and nothing of the layered model is left in the dialog.
+    let split = parse_spec(photocraft_engine::commands::find("generate.splitLayers").map(|c| c.params).unwrap_or_default());
+    let layers = split.iter().find(|p| p.key == "layers").map(|p| p.kind.clone());
+    assert!(matches!(layers, Some(Kind::Range { min, max, default }) if min == 2.0 && max == 8.0 && default == 3.0), "{layers:?}");
+    assert!(split.iter().all(|p| !["tries", "maxPixels", "steps", "guidance", "template", "model"].contains(&p.key.as_str())));
 }
 
 /// Every Edit-menu generative dialog (and the Angles window) as PNGs in the folder that

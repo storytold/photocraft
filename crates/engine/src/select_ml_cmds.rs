@@ -325,6 +325,8 @@ struct Prompting {
     points: Vec<[f64; 2]>,
     negatives: Vec<[f64; 2]>,
     bbox: Option<Rect>,
+    /// How many instances the detector may return (none: its default, one).
+    max_detections: Option<usize>,
 }
 
 /// Ask the detector: the masks it returned, at the request size.
@@ -351,6 +353,9 @@ fn detect(
     };
     let mut params = BTreeMap::new();
     params.insert("threshold".to_string(), json!(pr.threshold));
+    if let Some(n) = pr.max_detections {
+        params.insert("maxDetections".to_string(), json!(n));
+    }
     if pr.declared.contains("points") {
         params.insert("points".to_string(), Value::String(scaled(&pr.points)));
     }
@@ -518,6 +523,7 @@ fn prompting(plan: &Plan) -> Prompting {
         points: plan.points.clone(),
         negatives: plan.negatives.clone(),
         bbox: plan.bbox,
+        max_detections: None,
     }
 }
 
@@ -587,7 +593,7 @@ fn run_select(s: &mut Session, cmd: &str, p: &Value, label_prefix: &str) -> Resu
             let mut mask = pick(&instances, instance, n, &shown)?;
             if refine {
                 ctx.progress(0.97, "Refining edge");
-                mask = refine_coverage(doc, *active, all_layers, mask, area);
+                mask = matte_or_refine(backend.as_ref(), doc, *active, all_layers, mask, area, ctx)?.0;
             }
             let mask = finish_coverage(mask, area, grow, fill_holes, soften);
             doc.selection = sel::combine(doc.selection.as_ref(), &mask, area, mode);
@@ -764,6 +770,7 @@ fn prompting_for(s: &Session, cmd: &str, template: &str, prompt: &str) -> Option
         points: Vec::new(),
         negatives: Vec::new(),
         bbox: None,
+        max_detections: None,
     };
     Some((backend, server, prompting))
 }
@@ -825,6 +832,68 @@ impl ObjectUnderStroke {
         let mut pr = pr.clone();
         pr.prompt = name.to_string();
         find_union(backend.as_ref(), server, &pr, doc, active, ctx)
+    }
+}
+
+/// One detector instance: its canvas coverage, bounds and pixel count.
+pub(crate) type Instance = (Vec<f32>, Rect, u64);
+
+/// Split into Layers' subjects: the detector's instances of what a picture is of (Select
+/// Subject's prompts in turn, or the caller's), each a canvas coverage with its bounds and
+/// pixel count, largest first, specks dropped and enclosed gaps filled. Built on the session,
+/// run inside the split's job.
+pub(crate) struct SubjectFinder {
+    backend: Arc<dyn photocraft_genai::GenerativeBackend>,
+    server: String,
+    prompting: Prompting,
+    prompts: Vec<String>,
+}
+
+/// A [`SubjectFinder`] asking for `prompt` (none: Select Subject's [`SUBJECT_FALLBACKS`]).
+pub(crate) fn subject_finder(s: &Session, prompt: Option<&str>) -> Result<SubjectFinder> {
+    let prompts: Vec<String> = match prompt.map(str::trim).filter(|p| !p.is_empty()) {
+        Some(p) => vec![p.to_string()],
+        None => SUBJECT_FALLBACKS.iter().map(|p| (*p).to_string()).collect(),
+    };
+    let (backend, server, prompting) = prompting_for(s, BY_TEXT, DEFAULT_SEGMENT_TEMPLATE, &prompts[0])
+        .ok_or_else(|| EngineError::Other("no segmentation model (SAM 3.1) is set up; see Preferences > Generative".into()))?;
+    Ok(SubjectFinder { backend, server, prompting, prompts })
+}
+
+impl SubjectFinder {
+    /// The same finder asking only for `prompt` (one detector run: the prompt that found the
+    /// subjects, when checking that a fill removed them).
+    pub(crate) fn only(&self, prompt: &str) -> Self {
+        SubjectFinder { backend: Arc::clone(&self.backend), server: self.server.clone(), prompting: self.prompting.clone(), prompts: vec![prompt.to_string()] }
+    }
+
+    /// Let the detector return up to `n` instances (its default is one).
+    pub(crate) fn at_most(mut self, n: usize) -> Self {
+        self.prompting.max_detections = Some(n.max(1));
+        self
+    }
+
+    /// The instances found in the picture (`all_layers`: the composite, else the active layer)
+    /// and the prompt that found them.
+    pub(crate) fn instances(&self, doc: &Document, active: Option<LayerId>, all_layers: bool, ctx: &JobCtx) -> Result<(Vec<Instance>, String)> {
+        let area = doc.bounds();
+        let (image, _) = detector_image(doc, active, all_layers, MAX_SEGMENT_REQUEST_PIXELS)?;
+        let (masks, _, prompt) = detect_any(self.backend.as_ref(), &self.server, &image, area, &self.prompting, &self.prompts, ctx)?;
+        let (w, h) = (area.width() as usize, area.height() as usize);
+        let mut instances: Vec<Instance> = without_specks(instances_of(&masks, area)?)
+            .into_iter()
+            .map(|(cov, _, _)| {
+                let cov = fill_enclosed(&cov, w, h);
+                let (b, n) = coverage_bounds(&cov, area);
+                (cov, b, n)
+            })
+            .filter(|(_, _, n)| *n > 0)
+            .collect();
+        instances.sort_by_key(|i| std::cmp::Reverse(i.2));
+        if instances.is_empty() {
+            return Err(EngineError::Other(format!("nothing matching \"{prompt}\" was found")));
+        }
+        Ok((instances, prompt))
     }
 }
 
@@ -892,3 +961,171 @@ pub fn specs() -> Vec<CommandSpec> {
 #[cfg(test)]
 #[path = "select_ml_cmds_tests.rs"]
 mod tests;
+
+/// ViTMatte's template (native only).
+pub(crate) const VITMATTE_TEMPLATE: &str = "vitmatte/refine";
+
+/// The subjects' alphas from ViTMatte, or `None` when the server lacks it. Each subject is
+/// cropped with a margin and sent with a trimap made from its detector mask: solid a little
+/// inside the edge, unknown in a band around it reaching out to where stray hair goes (a
+/// fraction of the subject's size), background beyond. Another subject's body stays out of it.
+pub(crate) fn vitmatte_alphas(
+    backend: &dyn photocraft_genai::GenerativeBackend,
+    picture: &[u8],
+    area: Rect,
+    instances: &[Instance],
+    ctx: &JobCtx,
+) -> Result<Option<Vec<Vec<f32>>>> {
+    if instances.is_empty() || generate_cmds::resolve_auto(backend, &[VITMATTE_TEMPLATE], "") != VITMATTE_TEMPLATE {
+        return Ok(None);
+    }
+    let (w, h) = (area.width() as usize, area.height() as usize);
+    let mut alphas = Vec::with_capacity(instances.len());
+    for (i, (cov, bounds, _)) in instances.iter().enumerate() {
+        ctx.check()?;
+        let side = bounds.width().max(bounds.height()) as f32;
+        let (out_band, in_band) = ((side * BAND_OUT).max(MIN_BAND_OUT), (side * BAND_IN).max(MIN_BAND_IN));
+        let crop = bounds.inflate(out_band.ceil() as i32 + 8).intersect(&area);
+        let (cw, ch) = (crop.width() as usize, crop.height() as usize);
+        if cw == 0 || ch == 0 {
+            return Ok(None);
+        }
+        // The crop's pixels and mask.
+        let mut px = Vec::with_capacity(cw * ch * 4);
+        let mut on = Vec::with_capacity(cw * ch);
+        for y in crop.y0 as usize..crop.y1 as usize {
+            px.extend_from_slice(&picture[(y * w + crop.x0 as usize) * 4..(y * w + crop.x1 as usize) * 4]);
+            on.extend(cov[y * w + crop.x0 as usize..y * w + crop.x1 as usize].iter().map(|c| *c >= 0.5));
+        }
+        let off: Vec<bool> = on.iter().map(|b| !*b).collect();
+        let (to_mask, depth) = (photocraft_algo::selection::edt(&on, cw, ch), photocraft_algo::selection::edt(&off, cw, ch));
+        if to_mask.len() != cw * ch || depth.len() != cw * ch {
+            return Ok(None);
+        }
+        let trimap: Vec<u8> = (0..cw * ch)
+            .map(|k| {
+                if on[k] && depth[k] > in_band {
+                    255
+                } else if to_mask[k] <= out_band {
+                    128
+                } else {
+                    0
+                }
+            })
+            .collect();
+        // At most MAX_VITMATTE_PIXELS go to the model (its global attention grows with the
+        // square of the tokens); the alpha comes back up to the crop.
+        let (rw, rh) = fit_pixels(cw as u32, ch as u32, MAX_VITMATTE_PIXELS);
+        let image = Rgba8::new(cw as u32, ch as u32, px).map_err(gen_err)?;
+        let tri = Gray8::new(cw as u32, ch as u32, trimap.clone()).map_err(gen_err)?;
+        let (image, tri) = if (rw, rh) == (cw as u32, ch as u32) {
+            (image, tri)
+        } else {
+            let t = resize_gray8(&tri, rw, rh)?;
+            let t = Gray8::new(
+                rw,
+                rh,
+                t.data
+                    .iter()
+                    .map(|v| {
+                        if *v < 64 {
+                            0
+                        } else if *v > 192 {
+                            255
+                        } else {
+                            128
+                        }
+                    })
+                    .collect(),
+            )
+            .map_err(gen_err)?;
+            (resize_rgba8(&image, rw, rh)?, t)
+        };
+        let req = Request {
+            template: VITMATTE_TEMPLATE.to_string(),
+            prompt: String::new(),
+            negative: String::new(),
+            seed: 0,
+            steps: 1,
+            guidance: 0.0,
+            image: Some(image),
+            mask: Some(tri),
+            models: Vec::new(),
+            size: None,
+            params: BTreeMap::new(),
+            references: Vec::new(),
+        };
+        let n = instances.len() as f32;
+        let resp = match backend.run(&req, &JobProgress::span(ctx, 0.05 + 0.25 * i as f32 / n, 0.05 + 0.25 * (i + 1) as f32 / n)) {
+            Ok(r) => r,
+            Err(_) if !ctx.cancelled() => return Ok(None),
+            Err(e) => return Err(gen_err(e)),
+        };
+        let Some(out) = resp.images.into_iter().next() else { return Ok(None) };
+        let plane = Gray8::new(out.width, out.height, out.data.as_chunks::<4>().0.iter().map(|p| p[3]).collect()).map_err(gen_err)?;
+        let plane = if (plane.width, plane.height) == (cw as u32, ch as u32) { plane } else { resize_gray8(&plane, cw as u32, ch as u32)? };
+        let mut alpha = vec![0.0f32; w * h];
+        for (k, (a, t)) in plane.data.iter().zip(&trimap).enumerate() {
+            let (x, y) = (crop.x0 as usize + k % cw, crop.y0 as usize + k / cw);
+            let other = instances.iter().enumerate().any(|(j, (c, _, _))| j != i && c[y * w + x] >= 0.5) && !on[k];
+            alpha[y * w + x] = match (*t, other) {
+                (_, true) | (0, _) => 0.0,
+                (255, _) => 1.0,
+                _ => f32::from(*a) / 255.0,
+            };
+        }
+        alphas.push(alpha);
+    }
+    Ok(Some(alphas))
+}
+
+/// How far the unknown band reaches out past a subject's mask, as a fraction of its larger
+/// side (stray hair)...
+const BAND_OUT: f32 = 0.05;
+/// ...and at least this many pixels;
+const MIN_BAND_OUT: f32 = 10.0;
+/// how far it reaches in (the mask's own edge is a few pixels off)...
+const BAND_IN: f32 = 0.015;
+/// ...and at least this many pixels.
+const MIN_BAND_IN: f32 = 4.0;
+/// The most pixels one ViTMatte request carries (about 1536 × 1536).
+const MAX_VITMATTE_PIXELS: u64 = 1536 * 1536;
+
+/// The picture a selection reads, canvas-sized RGBA8: the active layer's pixels, or the
+/// composite with `all_layers` (or when the active layer has none).
+pub(crate) fn picture_rgba(doc: &Document, active: Option<LayerId>, all_layers: bool) -> Vec<u8> {
+    let area = doc.bounds();
+    let layer = if all_layers { None } else { active.and_then(|id| doc.layer(id)).and_then(|l| l.surface()) };
+    match layer {
+        Some(surf) => {
+            let mut px = vec![[0u8; 4]; area.width() as usize * area.height() as usize];
+            surf.read_rgba8_into(area, &mut px);
+            px.into_iter().flatten().collect()
+        }
+        None => photocraft_compose::render(doc, area).to_rgba8().pixels,
+    }
+}
+
+/// A detector mask's soft edge: ViTMatte's when the server has it (hair strand by strand),
+/// else the classical edge refinement ([`refine_coverage`]).
+pub(crate) fn matte_or_refine(
+    backend: &dyn photocraft_genai::GenerativeBackend,
+    doc: &Document,
+    active: Option<LayerId>,
+    all_layers: bool,
+    cov: Vec<f32>,
+    area: Rect,
+    ctx: &JobCtx,
+) -> Result<(Vec<f32>, bool)> {
+    let (bounds, n) = coverage_bounds(&cov, area);
+    if n > 0 {
+        let picture = picture_rgba(doc, active, all_layers);
+        let one = [(cov, bounds, n)];
+        if let Some(mut a) = vitmatte_alphas(backend, &picture, area, &one, ctx)? {
+            return Ok((a.swap_remove(0), true));
+        }
+        let [(cov, _, _)] = one;
+        return Ok((refine_coverage(doc, active, all_layers, cov, area), false));
+    }
+    Ok((cov, false))
+}

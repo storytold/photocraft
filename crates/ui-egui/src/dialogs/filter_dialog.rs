@@ -346,7 +346,6 @@ fn model_page(command: &str) -> Option<&'static str> {
         "generate.expand" => "expand",
         "generate.edit" => "edit",
         "generate.removeBackground" => "matte",
-        "generate.splitLayers" => "split",
         "select.byText" => "select",
         _ => return None,
     })
