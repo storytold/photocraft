@@ -946,3 +946,6 @@ fn consent_terms_use_the_shared_layers_ids() {
     assert!(ConsentTerm::ALL.iter().all(|t| ConsentTerm::from_id(t.id()) == Some(*t)));
     assert_eq!(ConsentTerm::from_id("forever"), None);
 }
+
+/// Review follow-ups (#10903): feathered edges, colour matching, framing, diagnostics.
+mod review;

@@ -154,12 +154,16 @@ pub(super) fn request_images(image: &Surface, sel: &Surface, area: Rect, w: u32,
     if original.len() != coverage.len() * 3 {
         return Err(other("Generative Fill could not read the area around the selection"));
     }
-    let fill = surroundings_fill(&original, &coverage, w as usize, h as usize);
+    // Any pixel the selection touches, even faintly along a feathered edge, is replaced whole and
+    // gives the placeholder nothing of its own colour: none of what is being replaced is sent.
+    // The mask keeps the feather, so the model still blends the edge.
+    let selected: Vec<f32> = coverage.iter().map(|&m| if m > 0.0 { 1.0 } else { 0.0 }).collect();
+    let fill = surroundings_fill(&original, &selected, w as usize, h as usize);
     let mut cleared = Vec::with_capacity(rgba.len());
     let mut mask = Vec::with_capacity(rgba.len());
     for (i, &m) in coverage.iter().enumerate() {
         for c in 0..3 {
-            let v = original[i * 3 + c] * (1.0 - m) + fill[i * 3 + c] * PLACEHOLDER * m;
+            let v = if m > 0.0 { fill[i * 3 + c] * PLACEHOLDER } else { original[i * 3 + c] };
             cleared.push((v * 255.0).round().clamp(0.0, 255.0) as u8);
         }
         cleared.push(255);

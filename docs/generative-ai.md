@@ -90,12 +90,14 @@ ordinary group, and Generate More is off for it.
 Only when a fill or Generate More runs, only to the connection of the chosen model, once per
 variation (three requests by default; a metered service bills each one):
 
-- **The picture around the selection**: the selection's bounds plus a margin of context (twice
-  the selection's longer side, 64 to 2048 px), grown toward the nearest common output shape
+- **The picture around the selection**: the selection's bounds plus a margin of context (the
+  selection's longer side on every side, 64 to 2048 px), grown toward the nearest common output shape
   (square, 3:2 or 2:3, so a model that returns one of those isn't stretched) and kept inside the
   canvas, rendered from all visible layers in sRGB and scaled to at most 2048 px on the long side.
   The selected area itself is replaced by a dimmed soft blur of the colours around it: the model
-  never sees what is being replaced, as Photoshop's fill doesn't, so it can't paint it back.
+  never sees the replaced content, as Photoshop's fill doesn't, so it can't paint it back. Every
+  pixel the selection touches, even faintly along a feathered edge, is replaced whole, and only
+  unselected pixels feed the blur; the feather lives in the mask alone.
 - **The selection's shape**: a PNG the size of that picture, transparent (and white) where the
   fill goes, opaque black where the picture is kept, partly transparent along a feathered edge.
   Transparent-means-edit is the convention mask-based image models read (OpenAI's image edits,
