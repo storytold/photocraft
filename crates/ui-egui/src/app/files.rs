@@ -480,7 +480,9 @@ impl PhotocraftApp {
     /// layers. Recheck file identity after writing before invalidating its saved state.
     pub(crate) fn copy_needs_savepoint_check(doc: &photocraft_doc::Document, path: &str, settings: &ExportSettings) -> bool {
         let layered = photocraft_engine::file_cmds::holds_at(doc, path)
-            || (tiff_options_ui::is_tiff_path(path) && settings.tiff_layers && photocraft_io::tiff_layers::supports_layers(doc)
+            || (tiff_options_ui::is_tiff_path(path)
+                && settings.tiff_layers
+                && photocraft_io::tiff_layers::supports_layers(doc)
                 && photocraft_io::tiff_layers::would_write_layers(doc));
         !layered
     }

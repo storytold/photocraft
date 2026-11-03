@@ -282,7 +282,10 @@ fn copy_overwrite_of_a_flat_background_tiff_remains_conservatively_unsaved() {
         app.session.active_mut().unwrap().saved_to("own.tif".into());
         let bytes = Rc::new(RefCell::new(Vec::new()));
         let written = bytes.clone();
-        app.services.write = Some(Box::new(move |_, data| { *written.borrow_mut() = data.to_vec(); Ok(()) }));
+        app.services.write = Some(Box::new(move |_, data| {
+            *written.borrow_mut() = data.to_vec();
+            Ok(())
+        }));
         let command = if copy { "file.saveACopy" } else { "file.saveAs" };
         app.replay_save(command, &json!({"path": "own.tif", "tiffLayers": true})).unwrap();
         assert!(photocraft_codecs::tiff_photoshop_tags(&bytes.borrow()).1.is_none());
