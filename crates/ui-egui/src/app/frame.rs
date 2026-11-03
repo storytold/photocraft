@@ -231,6 +231,9 @@ impl PhotocraftApp {
     /// wait modal took the frame (its input, IME and window check already handled).
     fn ui_body(&mut self, ui: &mut egui::Ui) -> bool {
         let ctx = ui.ctx().clone();
+        // The open dialogs before synthetic input reaches them, so only those it opens or edits
+        // are marked as automation-driven (a user's dialog it leaves alone keeps its preview).
+        let synthetic_before = self.automation_input.then(|| crate::automation_preview::snapshot(self));
         // A text field's right-click menu, before any field is drawn (text_field_menu.rs).
         text_field_menu::show(&ctx);
         // The wheel goes to a focused value field before the canvas or a panel sees it (#5473).
@@ -350,9 +353,12 @@ impl PhotocraftApp {
         // Remember the 0.37 panel sizes so a later 0.36 rollback's newer old-key values win on
         // the next upgrade (see `panels::migrate_panel_state`).
         panels::remember_panel_state(&ctx);
-        // Synthetic input could have edited any dialog open now: preview it under the policy.
-        if self.automation_input {
-            crate::automation_preview::note_open(self);
+        // Synthetic input judges the previews of the dialogs it opened or edited this pass; input
+        // that began mid-pass (no snapshot to compare) could have reached any open dialog.
+        match synthetic_before {
+            Some(before) => crate::automation_preview::note_changes(self, &before),
+            None if self.automation_input => crate::automation_preview::note_open(self),
+            None => {}
         }
         self.automation_input = false;
         shape_stroke_ui::finish_frame(self, &ctx);

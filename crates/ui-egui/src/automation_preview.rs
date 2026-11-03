@@ -6,8 +6,8 @@
 //! Displace map or Color Lookup file the policy refuses would still be read, decoded and shown
 //! on the canvas, where the client can screenshot it.
 //!
-//! The app remembers which dialogs automation opened or changed (a control request that added
-//! or edited one, or a synthetic input pass while it was open). Their previews, and every
+//! The app remembers which dialogs automation opened or changed (a control request or a
+//! synthetic input pass that added or edited one). Their previews, and every
 //! preview computed while automation input is being handled, pass the policy first. Dialogs
 //! only the user touched preview as before.
 
@@ -18,22 +18,26 @@ use serde_json::{Map, Value};
 /// which ones the request opened or edited.
 pub(crate) type Snapshot = Vec<(u64, Map<String, Value>)>;
 
+/// The open dialogs' ids and fields now, taken before a control request or synthetic input pass.
 pub(crate) fn snapshot(app: &PhotocraftApp) -> Snapshot {
     app.ui.dialogs.iter().map(|d| (d.id, d.fields.clone())).collect()
 }
 
-/// After a control request: mark every dialog it opened or changed as automation-driven.
+/// After a control request or synthetic input pass: mark every dialog it opened or changed as
+/// automation-driven. A dialog it left as it was (a user's own) keeps its unjudged preview.
 pub(crate) fn note_changes(app: &mut PhotocraftApp, before: &Snapshot) {
     let changed: Vec<u64> = app.ui.dialogs.iter().filter(|d| !before.iter().any(|(id, fields)| *id == d.id && *fields == d.fields)).map(|d| d.id).collect();
     mark(app, changed);
 }
 
-/// After a synthetic input pass: the input could have reached any open dialog.
+/// After synthetic input that began mid-pass, with no snapshot to compare: it could have reached
+/// any open dialog, so all of them are marked.
 pub(crate) fn note_open(app: &mut PhotocraftApp) {
     let open: Vec<u64> = app.ui.dialogs.iter().map(|d| d.id).collect();
     mark(app, open);
 }
 
+/// Add `ids` to the automation-driven dialogs and forget the ones that have closed.
 fn mark(app: &mut PhotocraftApp, ids: Vec<u64>) {
     for id in ids {
         if !app.automation_dialogs.contains(&id) {
@@ -83,6 +87,7 @@ mod tests {
         }
     }
 
+    /// An app whose automation gate and command callback both apply [`policy`].
     fn confined_app() -> (PhotocraftApp, egui::Context) {
         let services = crate::Services {
             automation_authorize: Some(policy),
@@ -94,6 +99,7 @@ mod tests {
         (app, egui::Context::default())
     }
 
+    /// Send one control request and return its immediate reply.
     fn call(app: &mut PhotocraftApp, ctx: &egui::Context, method: &str, params: Value) -> Value {
         let (req, _rx) = ControlRequest::new(method, params);
         match handle(app, ctx, &req) {
@@ -102,6 +108,7 @@ mod tests {
         }
     }
 
+    /// A fresh scratch directory for this test process, tagged by `tag`.
     fn temp_dir(tag: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("pc-automation-preview-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -129,12 +136,15 @@ mod tests {
         cube
     }
 
+    /// The active document's filter preview flattened to pixels, or None when none was computed.
     fn preview_pixels(app: &mut PhotocraftApp, ctx: &egui::Context) -> Option<Vec<[f32; 4]>> {
         let idx = app.session.active_index().unwrap();
         crate::canvas::ensure_filter_preview(app, idx, ctx)?;
         app.filter_preview.as_ref().and_then(|p| p.result.as_ref()).map(|d| photocraft_compose::flatten(d).px)
     }
 
+    /// A Displace dialog a client filled with a refused map previews nothing and reports it,
+    /// while the user's own dialog with the same map still previews.
     #[test]
     fn displace_preview_of_an_automation_dialog_does_not_read_a_refused_map() {
         let dir = temp_dir("displace");
@@ -175,6 +185,24 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A synthetic input pass that leaves the user's dialog as it was doesn't mark it, so its
+    /// preview stays unjudged; one that edits a field does.
+    #[test]
+    fn synthetic_pass_marks_only_the_dialogs_it_changed() {
+        let (mut app, _ctx) = confined_app();
+        app.session.execute("file.new", json!({"width": 16, "height": 16})).unwrap();
+        let mine = crate::dialogs::open_command_dialog(&mut app, "filter.distort.displace", "Displace");
+        let before = super::snapshot(&app);
+        super::note_changes(&mut app, &before);
+        assert!(!app.automation_dialogs.contains(&mine), "an untouched dialog stays the user's");
+        let before = super::snapshot(&app);
+        app.ui.dialog_mut(mine).unwrap().fields.insert("mapPath".into(), json!("elsewhere.png"));
+        super::note_changes(&mut app, &before);
+        assert!(app.automation_dialogs.contains(&mine), "a dialog the pass edited is automation-driven");
+    }
+
+    /// A Color Lookup dialog a client pointed at a refused LUT previews nothing, while the
+    /// user's own dialog with the same LUT still previews.
     #[test]
     fn color_lookup_preview_of_an_automation_dialog_does_not_read_a_refused_lut() {
         let dir = temp_dir("lut");
