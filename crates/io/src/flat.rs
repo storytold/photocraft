@@ -414,7 +414,7 @@ fn import_tiff_with_extras(
     ctl: &photocraft_raster::Interrupt,
 ) -> Result<ImportResult, IoError> {
     ctl.check().map_err(|_| IoError::Cancelled)?;
-    let keep = codecs::DecodeOptions { keep_orientation: true, limits: decode_limits(opts), ..Default::default() };
+    let keep = codecs::DecodeOptions { keep_orientation: true, limits: decode_limits(opts) };
     let (img, orientation) = match page {
         None => (codecs::decode_with(bytes, &keep)?, codecs::tiff_orientation(bytes)),
         Some(p) => (codecs::decode_tiff_page(bytes, p, &keep)?, codecs::tiff_page_orientation(bytes, p)),
