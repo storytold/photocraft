@@ -217,6 +217,25 @@ fn save_a_copy_keeps_path_and_dirty_state() {
     assert!(s.execute("file.saveACopy", json!({})).is_err());
 }
 
+#[test]
+fn copy_overwrite_marks_a_flattened_own_file_unsaved_but_keeps_an_intact_copy_clean() {
+    let dir = tempfile::tempdir().unwrap();
+    for (ext, layers) in [("psd", false), ("psd", true), ("tif", false), ("tif", true)] {
+        let path = dir.path().join(format!("own.{ext}")).to_string_lossy().into_owned();
+        let mut s = session(4, 4, 8);
+        s.execute("layer.new.layer", json!({})).unwrap();
+        s.active_mut().unwrap().saved_to(path.clone());
+        let p = if ext == "tif" {
+            json!({"path": path, "overwrite": true, "tiffLayers": layers})
+        } else {
+            json!({"path": path, "overwrite": true, "layers": layers})
+        };
+        s.execute("file.saveACopy", p).unwrap();
+        assert_eq!(s.active().unwrap().is_dirty(), !layers, "{ext}, layers={layers}");
+        assert_eq!(s.active().unwrap().path.as_deref(), Some(path.as_str()));
+    }
+}
+
 /// A copy over the document's own file, however the path is spelt, would replace it (a lossy
 /// re-encode can't be undone), so it is refused unless `overwrite` is passed (#7437).
 #[test]

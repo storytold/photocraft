@@ -440,6 +440,7 @@ impl PhotocraftApp {
     /// (`None`: 32 with an alpha channel or transparency, else 24), the DDS options and the JPEG
     /// Options.
     fn write_save(&mut self, path: String, tiff_layers: Option<bool>, choices: FormatChoices) -> Result<Value, String> {
+        let tiff_layers = tiff_layers.or(choices.tiff.and_then(|t| t.layers));
         let copy = self.saves_copy(&path, tiff_layers)?;
         let settings = choices.apply(ExportSettings { tiff_layers: tiff_layers.unwrap_or(ExportSettings::default().tiff_layers), ..self.save_settings() });
         match self.write_document(path.clone(), &settings, copy)? {
@@ -449,8 +450,8 @@ impl PhotocraftApp {
     }
 
     /// Encodes the active document with `settings` and writes it to `path`, which becomes the
-    /// document's path unless saving a copy. A copy leaves the original's path and unsaved
-    /// changes intact. Returns the path and the export warnings (also shown to the user), or
+    /// document's path unless saving a copy. An incomplete copy over the own file invalidates
+    /// its savepoint; other copies keep its saved state. Returns the path and export warnings, or
     /// `None` when the save went to a background job (#2017), which finishes it in
     /// [`jobs_ui::tick`].
     pub(crate) fn write_document(&mut self, path: String, settings: &ExportSettings, copy: bool) -> Result<Option<(String, Vec<String>)>, String> {
@@ -461,13 +462,50 @@ impl PhotocraftApp {
         }
         let st = self.session.active().ok_or("no document")?;
         let (doc, written, previous) = (st.doc.id, st.revision, st.saved_revision);
+        let invalidate = copy && self.copy_overwrites_savepoint(&st.doc, &path, settings);
         let export = self.services.export.as_ref().ok_or("no exporter configured")?;
         let (bytes, warnings) = export(&st.doc, &path, settings)?;
         let write = self.services.write.as_mut().ok_or("no writer configured")?;
         write(&path, &bytes)?;
+        if invalidate {
+            self.invalidate_savepoint(doc);
+        }
         let revision = saved_revision_after_write(!self.services.write_unconfirmed, written, previous);
         self.saved(doc, revision, &path, &warnings, copy);
         Ok(Some((path, warnings)))
+    }
+
+    /// Decide before writing: atomic replacement can break a hard-link alias. A layered copy
+    /// keeps the editable document; flat copies can change pixels, alpha or layers, so their
+    /// successful replacement invalidates the source's saved state.
+    pub(crate) fn copy_overwrites_savepoint(&self, doc: &photocraft_doc::Document, path: &str, settings: &ExportSettings) -> bool {
+        let Some(st) = self.session.documents().iter().find(|st| st.doc.id == doc.id) else { return false };
+        let layered = photocraft_engine::file_cmds::holds_at(doc, path) || (tiff_options_ui::is_tiff_path(path) && settings.tiff_layers);
+        st.path.as_deref().is_some_and(|own| photocraft_engine::file_cmds::same_file(own, path)) && !layered
+    }
+
+    /// A successful write replaced the file behind this savepoint; undo cannot restore it.
+    pub(crate) fn invalidate_savepoint(&mut self, doc: DocId) {
+        self.session.invalidate_savepoints(&[doc]);
+    }
+
+    /// Export As and layer exports may resize or replace the composite. Capture all open
+    /// documents bound to the destination before the write, then invalidate them only on success.
+    pub(crate) fn export_overwrites_savepoints(&self, path: &str) -> Vec<DocId> {
+        self.session.savepoints_at(path)
+    }
+
+    pub(crate) fn exported_over_savepoints(&mut self, docs: &[DocId]) {
+        if docs.is_empty() {
+            return;
+        }
+        self.session.invalidate_savepoints(docs);
+        for &doc in docs {
+            if let Some(own) = self.session.documents().iter().find(|st| st.doc.id == doc).and_then(|st| st.path.clone()) {
+                self.remember_stamp(doc, &own);
+            }
+        }
+        self.sync_views();
     }
 
     /// After `saver` was written to `path`, any other open document bound to that file no longer
@@ -665,10 +703,14 @@ impl PhotocraftApp {
         }
         let state = self.session.active().ok_or("no document")?;
         let (doc, revision) = (state.doc.id, state.revision);
+        let invalidate = !photocraft_engine::file_cmds::holds_at(&state.doc, &target) && self.copy_overwrites_savepoint(&state.doc, &target, &settings);
         let export = self.services.export.as_ref().ok_or("no exporter configured")?;
         let (bytes, warnings) = export(&state.doc, &target, &settings)?;
         let write = self.services.automation_write.as_mut().ok_or("automation write authority is not configured")?;
         write(&target, &bytes)?;
+        if invalidate {
+            self.invalidate_savepoint(doc);
+        }
         self.saved_automation(doc, revision, &target, &warnings, false);
         Ok(reply(&target, &warnings))
     }

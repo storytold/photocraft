@@ -20,7 +20,9 @@ fn app_harness() -> Harness<'static, PhotocraftApp> {
 
 /// [`app_harness`] over the given services (the beep test records the hook's calls).
 fn app_harness_with(services: crate::Services) -> Harness<'static, PhotocraftApp> {
-    let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).with_max_steps(8).build_eframe(|cc| {
+    let builder = Harness::builder().with_size(vec2(1280.0, 800.0)).with_max_steps(8);
+    let builder = if std::env::var_os("PHOTOCRAFT_COPY_SNAPSHOTS").is_some() { builder.wgpu() } else { builder };
+    let mut h = builder.build_eframe(|cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
         let mut s = photocraft_engine::Session::new();
         s.execute("file.new", json!({"width": 320, "height": 240})).unwrap();
@@ -671,6 +673,75 @@ fn quitting_waits_for_a_background_save_to_finish() {
     step_until(&mut h, |a| !a.saving());
     assert_eq!(gates.written(), ["/tmp/photocraft-test/copy.psd"]);
     assert!(!h.state().jobs.close_after_saves, "the close is repeated once the save ends");
+}
+
+#[test]
+fn a_background_copy_overwrite_invalidates_only_after_a_successful_write() {
+    for outcome in ["success", "failure", "cancel"] {
+        let mut h = app_harness();
+        let path = "/tmp/photocraft-test/own.tif";
+        h.state_mut().session.active_mut().unwrap().saved_to(path.into());
+        let revision = h.state().session.active().unwrap().revision;
+        let gates = Gates { write: Arc::new(AtomicBool::new(true)), ..Gates::default() };
+        h.state_mut().services.save_file = Some(gates.save((outcome == "failure").then_some("disk full")));
+        let settings = crate::ExportSettings { tiff_layers: false, ..Default::default() };
+        assert_eq!(h.state_mut().write_document(path.into(), &settings, true), Ok(None));
+        assert!(!h.state().has_unsaved_work(), "{outcome}: a pending write has changed nothing");
+        if outcome == "cancel" {
+            let job = h.state().jobs.saves[0].job;
+            crate::jobs_ui::cancel(h.state_mut(), job);
+        }
+        gates.encode.store(true, Ordering::Relaxed);
+        step_until(&mut h, |app| !app.saving());
+        let st = h.state().session.active().unwrap();
+        assert_eq!(st.revision, revision, "{outcome}: the document was not edited");
+        assert_eq!(st.path.as_deref(), Some(path));
+        assert_eq!(st.is_dirty(), outcome == "success", "{outcome}: only a completed replacement invalidates the savepoint");
+        assert_eq!(gates.written().len(), usize::from(outcome == "success"));
+    }
+}
+
+#[test]
+fn quitting_during_a_destructive_copy_asks_before_discarding_the_layers() {
+    let mut h = app_harness();
+    let path = "/tmp/photocraft-test/own.tif";
+    h.state_mut().session.active_mut().unwrap().saved_to(path.into());
+    let gates = Gates { write: Arc::new(AtomicBool::new(true)), ..Gates::default() };
+    h.state_mut().services.save_file = Some(gates.save(None));
+    let settings = crate::ExportSettings { tiff_layers: false, ..Default::default() };
+    h.state_mut().write_document(path.into(), &settings, true).unwrap();
+    assert!(press_window_close(h.state_mut()));
+    assert!(h.state().jobs.close_after_saves);
+    gates.encode.store(true, Ordering::Relaxed);
+    step_until(&mut h, |app| !app.saving());
+    h.run_steps(3);
+    assert!(h.state().has_unsaved_work());
+    assert!(h.state().discard.is_some(), "the deferred quit asks about the layers now missing from disk");
+    assert!(!h.state().allow_close);
+    if let Some(dir) = std::env::var_os("PHOTOCRAFT_COPY_SNAPSHOTS") {
+        let dir = std::path::PathBuf::from(dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        h.render().unwrap().save(dir.join("discard-layers-close-warning.png")).unwrap();
+    }
+}
+
+#[test]
+fn a_background_copy_invalidates_its_source_even_after_switching_tabs() {
+    let mut h = app_harness();
+    let path = "/tmp/photocraft-test/own.tif";
+    h.state_mut().session.active_mut().unwrap().saved_to(path.into());
+    let doc = h.state().active_doc_id().unwrap();
+    let gates = Gates { write: Arc::new(AtomicBool::new(true)), ..Gates::default() };
+    h.state_mut().services.save_file = Some(gates.save(None));
+    h.state_mut().write_document(path.into(), &crate::ExportSettings { tiff_layers: false, ..Default::default() }, true).unwrap();
+    h.state_mut().run("file.new", json!({"width": 4, "height": 4})).unwrap();
+    let other = h.state().active_doc_id().unwrap();
+    h.state_mut().session.active_mut().unwrap().saved_to("other.psd".into());
+    gates.encode.store(true, Ordering::Relaxed);
+    step_until(&mut h, |app| !app.saving());
+    assert_eq!(h.state().active_doc_id().unwrap(), other);
+    assert!(!h.state().session.active().unwrap().is_dirty(), "the other tab was not invalidated");
+    assert!(h.state().session.documents().iter().find(|st| st.doc.id == doc).unwrap().is_dirty());
 }
 
 #[test]

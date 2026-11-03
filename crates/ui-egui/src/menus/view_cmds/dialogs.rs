@@ -578,8 +578,8 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
 }
 
 /// File › Save a Copy: pick a name, encode with the export service, write; the document's path
-/// and saved state are untouched. An action being recorded keeps it as a `file.saveACopy` step
-/// with its path (#4373).
+/// is kept; an incomplete overwrite of its own file invalidates the saved state. An action
+/// being recorded keeps it as a `file.saveACopy` step with its path (#4373).
 fn save_a_copy(app: &mut PhotocraftApp) -> Result<Value, String> {
     let doc = app.session.active().ok_or("no document")?.doc.clone();
     let stem = doc.name.rsplit_once('.').map_or(doc.name.as_str(), |(a, _)| a);
@@ -621,15 +621,20 @@ fn save_a_copy(app: &mut PhotocraftApp) -> Result<Value, String> {
 }
 
 /// Writes `doc` to `path` as a copy (Save a Copy, and its replayed action step): the document's
-/// path and saved state are untouched. `choices` are the Targa, DDS and JPEG answers, when there
-/// are any.
+/// path is kept; an incomplete overwrite of its own file invalidates the saved state.
+/// `choices` hold any format answers.
 pub(crate) fn write_copy(app: &mut PhotocraftApp, doc: &photocraft_doc::Document, path: &str, choices: crate::FormatChoices) -> Result<Value, String> {
     let settings = choices.apply(app.save_settings());
+    let invalidate = app.copy_overwrites_savepoint(doc, path, &settings);
     let export = app.services.export.as_ref().ok_or("no exporter configured")?;
     let (bytes, warnings) = export(doc, path, &settings)?;
     let write = app.services.write.as_mut().ok_or("no writer configured")?;
     write(path, &bytes)?;
+    if invalidate {
+        app.invalidate_savepoint(doc.id);
+    }
     app.detach_others_from_file(path, doc.id);
+    app.sync_views();
     let template = "Saved a copy as {path}";
     app.ui.status = crate::i18n::fmt(tl!(template), &[("path", path)]);
     app.ui.status_error = false;

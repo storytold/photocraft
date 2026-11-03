@@ -120,6 +120,24 @@ impl crate::DocState {
     }
 }
 
+impl Session {
+    /// Open documents whose saved file a write would replace. Capture before writing: atomic
+    /// replacement can break a hard-link alias that identified the original file.
+    pub fn savepoints_at(&self, path: &str) -> Vec<photocraft_doc::DocId> {
+        self.docs.iter().filter(|st| st.path.as_deref().is_some_and(|own| same_file(own, path))).map(|st| st.doc.id).collect()
+    }
+
+    /// After a successful incomplete copy or export, its source file no longer represents these
+    /// documents. Keep their paths and history, but make closing ask before discarding them.
+    pub fn invalidate_savepoints(&mut self, docs: &[photocraft_doc::DocId]) {
+        for st in &mut self.docs {
+            if docs.contains(&st.doc.id) {
+                st.saved_revision = u64::MAX;
+            }
+        }
+    }
+}
+
 pub(crate) fn str_param<'a>(p: &'a Value, key: &str, cmd: &str) -> Result<&'a str> {
     p.get(key).and_then(Value::as_str).filter(|v| !v.is_empty()).ok_or_else(|| EngineError::BadParams { cmd: cmd.into(), msg: format!("missing \"{key}\"") })
 }

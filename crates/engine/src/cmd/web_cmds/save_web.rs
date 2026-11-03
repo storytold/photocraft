@@ -1,7 +1,9 @@
 use super::assets::{asset_output_path, asset_path_components};
 use super::optimizer::{optimize, web_document, web_exif, web_warnings, web_xmp};
 use super::settings::{WebSettings, rgb_hex};
-use super::{EngineError, Rect, ResolvedSlice, Result, Session, SliceKind, Value, bad, join, json, other, portable_device_name, slices, stem, write_file};
+use super::{
+    EngineError, Rect, ResolvedSlice, Result, Session, SliceKind, Value, bad, join, json, other, portable_device_name, slices, stem, write_export, write_file,
+};
 
 /// A file-name-safe slice name.
 fn slice_file(name: &str) -> String {
@@ -218,7 +220,7 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
     }
     if let Some(path) = single.filter(|_| dir.is_none() && (all.len() == 1 || p.get("slices").is_none())) {
         let o = optimize(&buf.px, bw, wdoc.bounds(), &st, icc, exif, xmp.as_deref(), dpi, false)?;
-        write(path, &o.bytes)?;
+        write_export(s, path, &o.bytes, write)?;
         remember_web_settings(s, cmd, &last_web);
         s.file_menu.last_web = Some(last_web);
         crate::automate_cmds::fire_event(s, "export");
@@ -272,7 +274,7 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
         let name = unique(&slice_file(&r.name), o.ext);
         let rel = if images.is_empty() { name.clone() } else { format!("{images}/{name}") };
         let out = join(&dir, &rel);
-        write(&web_derived_path(&dir, &rel, native_paths)?, &o.bytes)?;
+        write_export(s, &web_derived_path(&dir, &rel, native_paths)?, &o.bytes, write)?;
         total += o.bytes.len();
         files.push(out);
         let alt = stored.map_or(String::new(), |s| html_escape(&s.alt));
@@ -292,11 +294,11 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
         let spacer = grid.then(|| if images.is_empty() { "spacer.gif".to_string() } else { format!("{images}/spacer.gif") });
         if let Some(sp) = &spacer {
             let gif = photocraft_codecs::web::encode_gif_indexed(1, 1, &[0], &[[0, 0, 0]], Some(0), false).map_err(other)?;
-            write(&web_derived_path(&dir, sp, native_paths)?, &gif)?;
+            write_export(s, &web_derived_path(&dir, sp, native_paths)?, &gif, write)?;
         }
         let page = html_table(&base, wdoc.size.width, wdoc.size.height, &cells, spacer.as_deref());
         let hp = join(&dir, &format!("{base}.html"));
-        write(&web_derived_path(&dir, &format!("{base}.html"), native_paths)?, page.as_bytes())?;
+        write_export(s, &web_derived_path(&dir, &format!("{base}.html"), native_paths)?, page.as_bytes(), write)?;
         html_path = Some(hp);
     }
     remember_web_settings(s, cmd, &last_web);

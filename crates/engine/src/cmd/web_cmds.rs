@@ -44,6 +44,15 @@ fn other(e: impl std::fmt::Display) -> EngineError {
     EngineError::Other(e.to_string())
 }
 
+/// All export writers invalidate the file's savepoints only once that file was written. A later
+/// slice failure must not leave an earlier replacement looking saved.
+fn write_export(s: &mut Session, path: &str, bytes: &[u8], write: &mut dyn FnMut(&str, &[u8]) -> Result<()>) -> Result<()> {
+    let overwritten = s.savepoints_at(path);
+    write(path, bytes)?;
+    s.invalidate_savepoints(&overwritten);
+    Ok(())
+}
+
 /// After a save: regenerate the document's image assets when Generate › Image Assets is on.
 pub fn on_saved(s: &Session, index: usize) -> Option<Value> {
     let d = s.documents().get(index)?;
