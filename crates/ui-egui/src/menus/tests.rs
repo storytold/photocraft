@@ -115,6 +115,35 @@ fn provider_resource_named_dashes_remains_a_command_in_window_native_and_search_
 }
 
 #[test]
+fn provider_resource_names_remain_literal_in_localized_menus_and_search() {
+    let french = crate::i18n::Lang::from_code("fr").unwrap();
+    assert_eq!(crate::i18n::tr(french, "File"), "Fichier");
+    let provider = crate::file_providers::Host::default();
+    provider.set_session("localized-menu-fixture-0001".into()).unwrap();
+    provider.connect("menu-fixture".into(), "Provider resources".into(), "account".into()).unwrap();
+    let connection = provider.snapshot()["connectionId"].as_str().unwrap().to_string();
+    let names = [("catalog", "File"), ("ellipsis", "File…")];
+    let resources =
+        names.into_iter().map(|(id, name)| crate::file_providers::Resource { id: id.into(), name: name.into(), updated_at: String::new() }).collect();
+    provider.set_resources(&connection, resources).unwrap();
+    let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services { file_provider: Some(provider), ..Default::default() });
+    let mut items = menu_items(&app);
+    let mut ordinary = items.iter().find(|item| item.id == "file.openProviderRecent.catalog").unwrap().clone();
+    ordinary.id = "fixture.catalog-control".into();
+    items.push(ordinary.clone());
+    let layout = native_menu::photocraft_layout(&items, french, "fr");
+    for (id, name) in names {
+        let command = format!("file.openProviderRecent.{id}");
+        let item = items.iter().find(|item| item.id == command).unwrap();
+        assert_eq!(translated_menu_label(french, item), name);
+        assert!(search_items(&items, name, french).iter().any(|hit| hit.id == command));
+        assert_eq!(layout.bar.find(&command).map(|item| item.label.as_str()), Some(name));
+    }
+    assert_eq!(translated_menu_label(french, &ordinary), "Fichier");
+    assert_eq!(layout.bar.find("fixture.catalog-control").map(|item| item.label.as_str()), Some("Fichier"));
+}
+
+#[test]
 fn live_lookup_finds_engine_and_shell_commands() {
     for command in photocraft_engine::commands::command_specs() {
         assert!(is_live(command.id), "{}", command.id);

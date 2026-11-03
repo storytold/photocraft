@@ -85,6 +85,14 @@ chooser and calls `resolveSaveDialog`. Cancelling must not export or mark a docu
 The chosen name determines the codec before encoding. Existing format-option prompts still
 apply. Save a Copy and Export retain their existing local writer.
 
+A Save of a clean document to its existing provider resource and filename may instead finish
+with `saveUnchanged` after the host resolves `saveDialog`. Its `requestId` is the resolved chooser
+request, so the host can close that operation. The event also carries `documentId`, the already
+acknowledged `revision` (both strings), `resourceId` and `filename`, plus the usual `connectionId`,
+`providerId` and `namespace` identity fields. It contains no `detail.bytes`, emits no `save` for
+that operation and requires **no `saveResult` call**: that revision is already stored by the
+provider. Treat it as a completed chooser operation rather than waiting for another upload.
+
 After choosing provider storage and encoding, the `save` event contains the captured bytes:
 
 ```json

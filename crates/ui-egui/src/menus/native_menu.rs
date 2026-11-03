@@ -577,8 +577,10 @@ fn translate(bar: &mut MenuBar, lang: Lang) {
     fn walk(nodes: &mut [Node], lang: Lang) {
         for n in nodes {
             match n {
-                // A document's name is shown as it is.
-                Node::Item(it) if it.role.is_none() && !it.id.starts_with(crate::menus::DOCUMENT_ITEM) => it.label = tr_id(lang, &it.id, &it.label).to_string(),
+                // Document and provider resource names are data, not UI catalog keys.
+                Node::Item(it) if it.role.is_none() && !it.id.starts_with(crate::menus::DOCUMENT_ITEM) && !it.id.starts_with("file.openProviderRecent.") => {
+                    it.label = tr_id(lang, &it.id, &it.label).to_string();
+                }
                 Node::Submenu { label, children, role } => {
                     if role.is_none() {
                         *label = tr(lang, label).to_string();
