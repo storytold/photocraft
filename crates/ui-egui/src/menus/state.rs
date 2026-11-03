@@ -63,6 +63,7 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
         | "window.panel.iconic" => !app.session.prefs().workspace_locked,
         "file.open" | "file.exit" | "file.clearRecent" | "file.removeRecent" | "help.about" | "help.systemInfo" | "edit.search" => true,
         i if i.starts_with("file.openRecent.") => true,
+        i if i.starts_with("file.openProviderRecent.") => app.services.file_provider.as_ref().is_some_and(|provider| provider.enabled()),
         i if i.starts_with(DOCUMENT_ITEM) => true,
         i if crate::links::url_for(i).is_some() => true,
         i if i.starts_with("window.theme.") => true,
@@ -219,9 +220,9 @@ pub(crate) fn reveal_label() -> &'static str {
 
 /// Translate the fixed command label and substitute the currently configured export format.
 /// Reuse the existing translated PNG sentence, so dynamic formats work in every UI language.
-pub(super) fn translated_menu_label(lang: crate::i18n::Lang, item: &MenuItem) -> String {
-    // A document's name is shown as it is.
-    if item.id.starts_with(DOCUMENT_ITEM) {
+pub(crate) fn translated_menu_label(lang: crate::i18n::Lang, item: &MenuItem) -> String {
+    // Document and provider resource names are data, not UI catalog keys.
+    if item.id.starts_with(DOCUMENT_ITEM) || item.id.starts_with("file.openProviderRecent.") {
         return item.label.clone();
     }
     if item.id == "file.export.quickExportAsPng"

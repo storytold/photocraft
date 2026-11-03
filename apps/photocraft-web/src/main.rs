@@ -26,8 +26,17 @@ mod indexed_presets;
 mod web;
 
 #[cfg(target_arch = "wasm32")]
+mod file_providers;
+
+#[cfg(all(target_arch = "wasm32", test))]
+pub mod file_provider_browser_tests;
+
+#[cfg(target_arch = "wasm32")]
 fn main() {
-    web::start();
+    // The browser test harness installs only the boundary under test, never the GPU/editor.
+    if !cfg!(test) {
+        web::start();
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]

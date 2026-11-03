@@ -73,6 +73,10 @@ fn push_recent(list: &mut Vec<String>, id: &str, cap: usize) {
     list.truncate(cap);
 }
 
+fn menu_command_label(item: &crate::menus::MenuItem, label: String) -> String {
+    if item.id.starts_with("file.openProviderRecent.") { label } else { label.trim_end_matches('…').to_string() }
+}
+
 /// The empty-query hits: the recent commands as rows, newest first (UI-217-7). Ids that are
 /// no longer menu commands are skipped.
 fn recent_hits(recents: &[String], menus: &[crate::menus::MenuItem], lang: crate::i18n::Lang) -> Vec<(i32, String, String, Option<String>, bool)> {
@@ -82,11 +86,11 @@ fn recent_hits(recents: &[String], menus: &[crate::menus::MenuItem], lang: crate
         .filter_map(|(i, id)| {
             let m = menus.iter().find(|m| &m.id == id)?;
             let path = m.path.iter().map(|p| crate::i18n::tr(lang, p)).collect::<Vec<_>>().join(" › ");
-            let label = crate::i18n::tr_id(lang, &m.id, &m.label);
+            let label = menu_command_label(m, crate::menus::translated_menu_label(lang, m));
             Some((
                 1000 - i as i32,
                 m.id.clone(),
-                label.trim_end_matches('…').to_string(),
+                label,
                 Some(path + &m.shortcut.as_ref().map(|s| format!("   {}", crate::shortcuts::pretty(s))).unwrap_or_default()),
                 m.enabled,
             ))
@@ -99,20 +103,15 @@ fn recent_hits(recents: &[String], menus: &[crate::menus::MenuItem], lang: crate
 fn menu_hits(menus: Vec<crate::menus::MenuItem>, q: &str, lang: crate::i18n::Lang) -> Vec<(i32, String, String, Option<String>, bool)> {
     menus
         .into_iter()
-        .filter(|m| m.label != "---")
+        .filter(|m| !m.is_separator())
         .filter_map(|m| {
             let path_en = m.path.join(" › ");
             let path = m.path.iter().map(|p| crate::i18n::tr(lang, p)).collect::<Vec<_>>().join(" › ");
-            let label = crate::i18n::tr_id(lang, &m.id, &m.label);
+            let label = crate::menus::translated_menu_label(lang, &m);
             // Match what is shown and the English name (commands are documented in English).
-            let s = fuzzy_score(q, &format!("{label} {path} {} {path_en}", m.label))? + exact_bonus(q, &[label, &m.label]);
-            Some((
-                s,
-                m.id,
-                label.trim_end_matches('…').to_string(),
-                Some(path + &m.shortcut.map(|s| format!("   {}", crate::shortcuts::pretty(&s))).unwrap_or_default()),
-                m.enabled,
-            ))
+            let s = fuzzy_score(q, &format!("{label} {path} {} {path_en}", m.label))? + exact_bonus(q, &[label.as_str(), &m.label]);
+            let label = menu_command_label(&m, label);
+            Some((s, m.id, label, Some(path + &m.shortcut.map(|s| format!("   {}", crate::shortcuts::pretty(&s))).unwrap_or_default()), m.enabled))
         })
         .collect()
 }
@@ -337,6 +336,30 @@ mod tests {
             "the empty-query palette runs the recent command"
         );
         assert_eq!(super::recent_ids(&ctx).len(), 1, "re-running it moves it to the front, no duplicate");
+    }
+
+    #[test]
+    fn provider_resource_names_stay_literal_in_search_and_recent_palette_rows() {
+        let french = crate::i18n::Lang::from_code("fr").unwrap();
+        let item = |id: &str, label: &str| crate::menus::MenuItem {
+            id: id.into(),
+            label: label.into(),
+            path: vec!["File".into()],
+            shortcut: None,
+            enabled: true,
+            checked: None,
+            color: None,
+        };
+        let menus =
+            vec![item("file.openProviderRecent.catalog", "File"), item("file.openProviderRecent.ellipsis", "File…"), item("fixture.catalog-control", "File")];
+        let recents = menus.iter().map(|item| item.id.clone()).collect::<Vec<_>>();
+        for rows in [menu_hits(menus.clone(), "file", french), recent_hits(&recents, &menus, french)] {
+            for (id, name) in
+                [("file.openProviderRecent.catalog", "File"), ("file.openProviderRecent.ellipsis", "File…"), ("fixture.catalog-control", "Fichier")]
+            {
+                assert_eq!(rows.iter().find(|row| row.1 == id).map(|row| row.2.as_str()), Some(name));
+            }
+        }
     }
 
     /// #2479: menu separators matched on their menu path ("f" → File, Filter) and filled the

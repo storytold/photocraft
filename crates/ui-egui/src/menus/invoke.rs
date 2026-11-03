@@ -236,6 +236,11 @@ fn invoke_file_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, 
             // Writes back only to a layered file that holds the whole document; anything else
             // goes through Save As, so the original is never overwritten with less (#3806).
             let choices = crate::FormatChoices::from_params(params, id)?;
+            if app.services.file_provider.as_ref().is_some_and(|provider| provider.enabled()) {
+                // Provider saves choose a destination before any local disk-change checks.
+                // A binding's resource ID never reaches the filesystem writer or stamp API.
+                return app.save_dialog_flow(params.get("path").and_then(Value::as_str).map(str::to_owned), choices, true).map(Some);
+            }
             match params.get("path").and_then(Value::as_str) {
                 Some(path) => app.save_as_with(Some(path.to_string()), choices),
                 None => {
@@ -277,6 +282,11 @@ fn invoke_file_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, 
             app.remove_recent(path);
             Ok(Value::Null)
         }
+        id if id.starts_with("file.openProviderRecent.") => {
+            let provider = app.services.file_provider.as_ref().ok_or("no file provider is connected")?;
+            provider.request_recent(id.trim_start_matches("file.openProviderRecent."))?;
+            Ok(Value::Null)
+        }
         id if id.starts_with("file.openRecent.") => {
             #[cfg(not(target_arch = "wasm32"))]
             {
@@ -304,6 +314,20 @@ fn invoke_file_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, 
 pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: Value) -> Result<Value, String> {
     if let Some(result) = crate::smart_svg_ui::intercept(app, id, &params) {
         return result;
+    }
+    // The discard prompt re-enters here directly. Keep the save intent attached to the
+    // document until its filename and format options have both been answered.
+    if let (Some(provider), Some(doc)) = (app.services.file_provider.as_ref(), app.session.active())
+        && !app.file_dialog_open()
+        && !app.save_options_open()
+        && !provider.pending_for(doc.doc.id)
+    {
+        match id {
+            "file.save" => provider.intent(doc.doc.id, "save"),
+            "file.saveAs" => provider.intent(doc.doc.id, "saveAs"),
+            _ if id.starts_with("file.") => provider.clear_intent(doc.doc.id),
+            _ => {}
+        }
     }
     if id == "layer.selectUnderCursor" {
         return select_layer_under_cursor(app, ctx);

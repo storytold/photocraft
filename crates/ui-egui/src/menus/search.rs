@@ -38,7 +38,7 @@ pub fn search_items<'a>(items: &'a [MenuItem], query: &str, lang: crate::i18n::L
         english.into_iter().chain(local).min()
     };
     let mut hits: Vec<(u8, usize, &MenuItem)> =
-        items.iter().enumerate().filter(|(_, it)| it.label != "---").filter_map(|(i, it)| rank(it).map(|r| (r, i, it))).collect();
+        items.iter().enumerate().filter(|(_, it)| !it.is_separator()).filter_map(|(i, it)| rank(it).map(|r| (r, i, it))).collect();
     hits.sort_by_key(|(r, i, _)| (*r, *i));
     let mut seen = std::collections::HashSet::new();
     hits.into_iter().filter(|(_, _, it)| seen.insert(it.id.as_str())).take(HELP_SEARCH_MAX).map(|(_, _, it)| it).collect()

@@ -23,6 +23,7 @@ impl PhotocraftApp {
 impl PhotocraftApp {
     /// Shared logic body. A wrapping host owns the final reset tail after its own work.
     pub fn logic_frame(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        crate::file_providers::tick(self, ctx);
         self.cap_frame_rate();
         i18n::set_current(i18n::Lang::from_pref(&self.session.prefs().interface.language));
         // Caps Lock state read from the OS once per frame (see `Services::caps_lock`): the canvas
@@ -132,6 +133,7 @@ impl PhotocraftApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaintWhileHidden);
         }
         self.poll_file_dialog(ctx, Some(frame));
+        crate::file_providers::capture(self);
     }
 
     /// Shared UI body. A wrapping host must call `finish_type_reset_pass` after return,
@@ -172,6 +174,7 @@ impl PhotocraftApp {
             type_tool::sync_ime(self, &ctx);
             // The frame's stage record was started with its input: close it here too.
             self.finish_frame(0.0);
+            crate::file_providers::capture(self);
             return;
         }
         let t0 = gpu_canvas::now_ms();
@@ -196,6 +199,7 @@ impl PhotocraftApp {
         self.perf.frame(ui_ms);
         self.finish_frame(ui_ms);
         if !drawn {
+            crate::file_providers::capture(self);
             return;
         }
         // This pass handled its input: the in-flight synthetic batch is delivered once and the
@@ -225,6 +229,10 @@ impl PhotocraftApp {
         self.issue_captures(&ctx);
         // Last, after everything drawn this frame: a lost window device can't draw it (#3438).
         gpu_status::check_window(self, &ctx);
+        // Provider completions arrive in logic before widgets see this pass's raw input.
+        // Only now may an unchanged capture release its parked close/quit continuation.
+        discard_ui::finish_provider_save(self, &ctx);
+        crate::file_providers::capture(self);
     }
 
     /// The frame's UI, between `ui_start` and `finish_frame`. False when the screen picker's

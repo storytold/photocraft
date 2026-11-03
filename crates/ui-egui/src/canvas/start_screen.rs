@@ -19,7 +19,8 @@ pub(super) fn start_screen(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let show_recent = app.session.prefs().interface.show_home_recent_files;
     let recent: Vec<String> =
         if cfg!(target_arch = "wasm32") || !show_recent { Vec::new() } else { app.ui.recent_files.iter().take(HOME_RECENT).cloned().collect() };
-    let recent_h = if recent.is_empty() { 0.0 } else { 34.0 + recent.len() as f32 * HOME_RECENT_ROW };
+    let hosted = app.services.file_provider.as_ref().is_some_and(|provider| provider.connected());
+    let recent_h = if recent.is_empty() { if hosted && show_recent { 82.0 } else { 0.0 } } else { 34.0 + recent.len() as f32 * HOME_RECENT_ROW };
     // A tiling window manager can give the canvas less room than the card wants: shrink the card
     // to fit, and stack the buttons when they don't fit side by side.
     let new_label = crate::shortcuts::command_label(app, "New document…", "file.new");
@@ -29,9 +30,11 @@ pub(super) fn start_screen(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let side_by_side = 2.0 * button_width + HOME_BUTTON_GAP <= card_width;
     // Stacked buttons take one more row.
     let stacked_h = if side_by_side { 0.0 } else { 44.0 };
-    let card = Rect::from_center_size(area.center(), egui::vec2(card_width, 330.0 + recent_h + stacked_h));
+    let provider_h = if show_recent { crate::file_providers::home_height(app) } else { 0.0 };
+    let height = 330.0 + recent_h + provider_h + stacked_h;
+    let card = Rect::from_center_size(area.center(), egui::vec2(card_width, if hosted { height.min(area.height()) } else { height }));
     ui.scope_builder(egui::UiBuilder::new().max_rect(card), |ui| {
-        ui.vertical_centered(|ui| {
+        home_card(ui, hosted, |ui| {
             ui.horizontal(|ui| {
                 let title = ui.painter().layout_no_wrap(tl!("PhotoCraft").into(), crate::theme::semibold(38.0), t.text);
                 let by = ui.painter().layout_no_wrap(tl!("open source").into(), egui::FontId::proportional(13.0), t.text_faint);
@@ -74,9 +77,23 @@ pub(super) fn start_screen(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 crate::icons::paint(ui, r, "image", 15.0, t.text_faint);
                 ui.label(egui::RichText::new(msg).color(t.text_faint));
             });
+            if show_recent {
+                crate::file_providers::home_recent(app, ui);
+            }
             if !recent.is_empty() {
                 ui.add_space(22.0);
                 home_recent(app, ui, &recent);
+            } else if hosted && show_recent {
+                ui.add_space(16.0);
+                ui.label(egui::RichText::new(tl!("Local Recent Files")).strong());
+                ui.label(if cfg!(target_arch = "wasm32") {
+                    tl!("Use the browser file picker to reopen a file from this device.")
+                } else {
+                    tl!("There are no recent local files.")
+                });
+                if ui.button(tl!("Open Local File…")).clicked() {
+                    let _ = app.open_dialog_file();
+                }
             }
             ui.add_space(26.0);
             crate::links::discord_button(app, ui, 190.0);
@@ -84,6 +101,18 @@ pub(super) fn start_screen(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             crate::links::link_row(app, ui);
         });
     });
+}
+
+/// Provider and local sections share the available canvas without pushing the final rows
+/// outside a short viewport. With no provider the existing Home layout is unchanged.
+fn home_card(ui: &mut egui::Ui, hosted: bool, body: impl FnOnce(&mut egui::Ui)) {
+    if hosted {
+        egui::ScrollArea::vertical().id_salt("home_file_provider_sections").show(ui, |ui| {
+            ui.vertical_centered(body);
+        });
+    } else {
+        ui.vertical_centered(body);
+    }
 }
 
 /// Wayland has no native file drops (winit 0.30, #386), so the hint offers File › Open and paste.
@@ -110,7 +139,8 @@ fn home_recent(app: &mut PhotocraftApp, ui: &mut egui::Ui, recent: &[String]) {
     ui.horizontal(|ui| {
         // Line the heading up with the file icons.
         ui.add_space(((ui.available_width() - width) / 2.0).max(0.0) + 8.0);
-        ui.label(egui::RichText::new(tl!("Recent")).font(crate::theme::semibold(12.5)).color(t.text_dim));
+        let heading = if app.services.file_provider.as_ref().is_some_and(|provider| provider.connected()) { tl!("Local Recent Files") } else { tl!("Recent") };
+        ui.label(egui::RichText::new(heading).font(crate::theme::semibold(12.5)).color(t.text_dim));
     });
     ui.add_space(4.0);
     let mut open = None;
