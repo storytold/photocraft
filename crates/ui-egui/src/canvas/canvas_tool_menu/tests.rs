@@ -546,6 +546,44 @@ fn zoom_and_hand_right_click_opens_the_view_menu() {
     }
 }
 
+/// Space's Hand has the view menu too, as in Photoshop (#11271): with the Move tool selected and
+/// Space held, a right-click inside the image opens it, about the clicked point; outside the image
+/// the pasteboard menu still wins; Space let go, the Move tool's right-click is its own again.
+#[test]
+fn space_hand_right_click_opens_the_view_menu() {
+    let mut app = zoom_app(400, 300);
+    app.ui.tool = Tool::Move;
+    let mut h = harness(app);
+    let inside = screen_of(h.state(), [300.0, 100.0]);
+    let space = |pressed| egui::Event::Key { key: egui::Key::Space, physical_key: None, pressed, repeat: false, modifiers: Modifiers::NONE };
+    h.event(space(true));
+    h.run_steps(2);
+    assert_eq!(crate::hold_keys::held_tool(h.state(), &h.ctx), Some(crate::hold_keys::Temporary::Hand), "Space holds the Hand");
+    right_click(&mut h, inside, Modifiers::NONE);
+    let menu = h.state().ui.canvas_tool_menu.clone().expect("Space's Hand opens the view menu");
+    assert!(rows(&menu) == VIEW_MENU && menu.tool == Tool::Hand && menu.anchor.is_some(), "the view menu, about the point");
+    assert_eq!((h.state().ui.tool, menu.over), (Tool::Move, Some(Tool::Move)), "the Move tool stays selected, the menu over it");
+    // The menu stays when Space is let go, as a popup does; a tool change closes it.
+    h.event(space(false));
+    h.run_steps(3);
+    assert!(h.state().ui.canvas_tool_menu.is_some(), "the menu outlives the held Space");
+    h.state_mut().ui.tool = Tool::Brush;
+    h.run_steps(2);
+    assert!(h.state().ui.canvas_tool_menu.is_none(), "another tool selected closes it");
+    h.state_mut().ui.tool = Tool::Move;
+    h.event(space(true));
+    h.run_steps(2);
+    h.state_mut().ui.canvas_tool_menu = None;
+    let outside = h.state().last_canvas_rect.min + vec2(5.0, 5.0);
+    right_click(&mut h, outside, Modifiers::NONE);
+    assert!(h.state().ui.canvas_tool_menu.as_ref().is_some_and(|m| m.pasteboard), "pasteboard menu outside");
+    h.state_mut().ui.canvas_tool_menu = None;
+    h.event(space(false));
+    h.run_steps(2);
+    right_click(&mut h, inside, Modifiers::NONE);
+    assert!(h.state().ui.canvas_tool_menu.is_none(), "Space let go, the Move tool's right-click is the layer pick, not the view menu");
+}
+
 #[test]
 fn view_menu_zoom_in_keeps_the_clicked_point_under_the_pointer() {
     let mut app = zoom_app(400, 300);
