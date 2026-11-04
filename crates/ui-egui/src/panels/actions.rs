@@ -540,11 +540,24 @@ fn run_frame(app: &mut PhotocraftApp, frame: Frame, used: Option<u64>, preserve_
             }
         }
     }
-    if failed.is_none()
-        && (paused.is_some() || yielded)
+    if failed.is_none() {
+        suspend_frame_history(app, paused.as_ref(), yielded);
+    }
+    actions_cmds::finish_playback(&mut app.session, None, &action, frame.from);
+    Ok(match (failed, paused) {
+        (Some(f), _) => json!({"action": action.name, "ran": ran, "failed": f}),
+        (None, Some(p)) => json!({"action": action.name, "ran": ran, "paused": p}),
+        (None, None) if yielded => json!({"action": action.name, "ran": ran, "yielded":true}),
+        (None, None) => json!({"action": action.name, "ran": ran}),
+    })
+}
+
+/// Transfer the current history to the paused dialog or yielded playback before unwinding.
+fn suspend_frame_history(app: &mut PhotocraftApp, paused: Option<&Value>, yielded: bool) {
+    if (paused.is_some() || yielded)
         && let Some(history) = actions_cmds::suspend_history(&mut app.session)
     {
-        if let Some(dialog) = paused.as_ref().and_then(waiting_dialog) {
+        if let Some(dialog) = paused.and_then(waiting_dialog) {
             if let Some(token) = paused_token(app, dialog)
                 && let Some(entry) = app.paused_playbacks.paused.get_mut(&token)
             {
@@ -554,13 +567,6 @@ fn run_frame(app: &mut PhotocraftApp, frame: Frame, used: Option<u64>, preserve_
             app.actions_runtime.history = Some(history);
         }
     }
-    actions_cmds::finish_playback(&mut app.session, None, &action, frame.from);
-    Ok(match (failed, paused) {
-        (Some(f), _) => json!({"action": action.name, "ran": ran, "failed": f}),
-        (None, Some(p)) => json!({"action": action.name, "ran": ran, "paused": p}),
-        (None, None) if yielded => json!({"action": action.name, "ran": ran, "yielded":true}),
-        (None, None) => json!({"action": action.name, "ran": ran}),
-    })
 }
 
 /// Execute the actual menu command, not a synthetic keystroke. Fit is deferred
@@ -1263,11 +1269,11 @@ fn resume_scope(app: &mut PhotocraftApp, paused: &mut PausedPlayback) -> Result<
     if let Some(record) = &paused.record {
         record.validate(&app.session).map_err(|error| error.to_string())?;
     }
-    if let Some(history) = paused.history.take() {
-        if let Err(error) = history.resume(&mut app.session) {
-            paused.history = Some(history);
-            return Err(error.to_string());
-        }
+    if let Some(history) = paused.history.take()
+        && let Err(error) = history.resume(&mut app.session)
+    {
+        paused.history = Some(history);
+        return Err(error.to_string());
     }
     if let Some(job) = app.session.active().and_then(|doc| app.session.job_on(doc.doc.id)) {
         app.session.wait_job(job.id).map_err(|error| error.to_string())?;
