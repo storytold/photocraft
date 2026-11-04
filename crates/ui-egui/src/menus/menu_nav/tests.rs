@@ -1921,3 +1921,40 @@ fn more_time_to_reach_submenus_has_no_limit_on_a_row() {
     glide(&mut h, frames, None, |t| to + egui::vec2(14.0 * t, 0.0));
     assert_eq!(image_submenu(&h), "Mode", "still moving after longer than AIM_DWELL");
 }
+
+/// The few pixels egui adds beside a submenu row are still the row's: resting there, beside
+/// Window › Workspace after Arrange's submenu was open, opens Workspace's submenu. The test against
+/// a row's shared bottom edge counted the side strips out too, so no submenu opened.
+#[test]
+fn the_strip_beside_a_submenu_row_opens_its_submenu() {
+    let mut h = harness_dt(1.0 / 120.0);
+    open(&mut h, "Window");
+    let all = rows(&h, 0);
+    let (arrange, workspace) = (all[0].rect, all[1].rect);
+    let rest = egui::pos2(arrange.right() - 40.0, arrange.center().y);
+    glide(&mut h, 12, None, |t| rest - egui::vec2(30.0 * (1.0 - t), 0.0));
+    h.run_steps(60);
+    assert!(h.query_by_label_contains("Cascade").is_some(), "Arrange's submenu is open");
+    move_pointer(&mut h, egui::pos2(workspace.right() + 2.0, workspace.center().y));
+    h.run_steps(90);
+    assert!(h.query_by_label_contains("Essentials").is_some(), "Workspace's submenu opened");
+    assert!(h.query_by_label_contains("Cascade").is_none(), "Arrange's submenu closed");
+}
+
+/// A key that moves the highlight takes it for good: a submenu let go earlier (with no row under
+/// the pointer to take the highlight then) no longer hands it back to the row under the pointer.
+#[test]
+fn a_key_press_isnt_undone_by_an_earlier_let_go() {
+    let mut h = harness((1280.0, 720.0, 1.0));
+    open(&mut h, "Window");
+    let all = rows(&h, 0);
+    let i = (0..all.len() - 1).find(|&i| all[i].command.is_some() && all[i + 1].command.is_some() && visible(&h, 0, i + 1)).expect("two command rows");
+    move_pointer(&mut h, all[i].rect.center());
+    assert_eq!(Nav::current(&h.ctx).highlighted(0), Some(i));
+    let mut nav = Nav::current(&h.ctx);
+    nav.follow = Some(0);
+    nav.store(&h.ctx);
+    key(&mut h, egui::Key::ArrowDown);
+    h.run_steps(2);
+    assert_eq!(Nav::current(&h.ctx).highlighted(0), Some(i + 1), "Down moved the highlight, and it stays");
+}

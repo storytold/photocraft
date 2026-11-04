@@ -652,3 +652,55 @@ fn a_text_field_outside_the_menu_keeps_its_arrows() {
         assert_eq!(Nav::current(&h.ctx).top, top, "{k:?} stays with the field");
     }
 }
+
+/// A menu opened with Alt+letter has the keys, as after an arrow key: the pointer resting where
+/// the menu drops, over Image › Adjustments, neither lights that row nor opens its submenu. The
+/// menu stayed the pointer's, so egui opened the submenu under it.
+#[test]
+fn a_menu_opened_from_the_keyboard_ignores_a_resting_pointer() {
+    let mut h = bar();
+    h.get_by_label("Image").click();
+    h.run_steps(3);
+    let adjustments =
+        rows(&h, 0).iter().position(|r| r.command.is_none() && r.enabled && r.rect.top() > rows(&h, 0)[0].rect.bottom()).expect("a second submenu row");
+    let rect = rows(&h, 0)[adjustments].rect;
+    key(&mut h, egui::Key::Escape);
+    assert!(!is_open(&h.ctx));
+    h.event(egui::Event::PointerMoved(rect.center()));
+    h.run_steps(30);
+    alt_key(&mut h, egui::Key::I);
+    h.run_steps(30);
+    let nav = Nav::current(&h.ctx);
+    assert!(nav.highlighted(0).is_some_and(|i| i != adjustments), "the first row is lit, not the one under the pointer: {:?}", nav.highlighted(0));
+    let popups = h.ctx.memory(|m| m.areas().visible_layer_ids()).into_iter().filter(|l| l.order == egui::Order::Foreground).count();
+    assert_eq!(popups, 1, "only the Image menu is open");
+}
+
+/// A button outside the menus keeps the focus across a menu opened and closed from the keyboard:
+/// the menu takes the focus while it has the keys (egui would walk it along the menus) and gives
+/// it back when it closes. It was dropped for good.
+#[test]
+fn a_menu_from_the_keyboard_gives_the_focus_back() {
+    let probe = std::rc::Rc::new(std::cell::Cell::new(None));
+    let seen = probe.clone();
+    let mut h = Harness::builder().with_size(egui::vec2(1280.0, 720.0)).build_ui_state(
+        move |ui, app| {
+            crate::menus::menu_bar(app, ui);
+            seen.set(Some(ui.add(egui::Button::new("Probe")).id));
+        },
+        app(),
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.run_steps(3);
+    let id = probe.get().expect("the button was drawn");
+    h.ctx.memory_mut(|m| m.request_focus(id));
+    h.run_steps(3);
+    assert_eq!(h.ctx.memory(|m| m.focused()), Some(id));
+    alt_key(&mut h, egui::Key::I);
+    key(&mut h, egui::Key::ArrowDown);
+    assert!(is_open(&h.ctx));
+    key(&mut h, egui::Key::Escape);
+    h.run_steps(3);
+    assert!(!is_open(&h.ctx));
+    assert_eq!(h.ctx.memory(|m| m.focused()), Some(id), "the button has the focus again");
+}
