@@ -165,6 +165,22 @@ fn control_clicks_open_the_right_click_menus() {
     }
 }
 
+/// A pen contact's touch event at `at`, with pressure while it is down.
+fn pen_touch(at: Pos2, phase: egui::TouchPhase) -> Event {
+    let force = (phase == egui::TouchPhase::Start).then_some(0.5);
+    Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(1), phase, pos: at, force }
+}
+
+/// One frame with `events` through the app's own `raw_input_hook`, which kittest doesn't run.
+fn hook_frame(h: &mut Harness<'static, PhotocraftApp>, events: Vec<Event>) {
+    let ctx = h.ctx.clone();
+    let mut raw = h.input_mut().clone();
+    raw.events.extend(events);
+    eframe::App::raw_input_hook(h.state_mut(), &ctx, &mut raw);
+    *h.input_mut() = raw;
+    h.step();
+}
+
 /// A pen press with the barrel button held (Windows, #5364) that drifts `drift` before it lifts,
 /// as a hovering hand does; `pen` false is the same right-drag from a mouse.
 fn barrel_drift(h: &mut Harness<'_, PhotocraftApp>, at: Pos2, drift: egui::Vec2, modifiers: Modifiers, pen: bool) {
@@ -172,9 +188,11 @@ fn barrel_drift(h: &mut Harness<'_, PhotocraftApp>, at: Pos2, drift: egui::Vec2,
     h.event(Event::PointerMoved(at));
     h.run_steps(2);
     let button = if pen { PointerButton::Primary } else { PointerButton::Secondary };
-    let mut down = vec![Event::PointerButton { pos: at, button, pressed: true, modifiers }];
+    // The pen's touch start only tells the normalizer the press is the pen's; the canvas gets
+    // the press alone (`pen_barrel_through_the_raw_input_hook` sends the whole contact).
+    let mut down = vec![pen_touch(at, egui::TouchPhase::Start), Event::PointerButton { pos: at, button, pressed: true, modifiers }];
     h.state_mut().control_click.normalize_with_pen(&mut down, false, pen);
-    h.input_mut().events.extend(down);
+    h.input_mut().events.extend(down.into_iter().filter(|e| !matches!(e, Event::Touch { .. })));
     h.run_steps(1);
     for step in 1..=4 {
         h.event(Event::PointerMoved(at + drift * (step as f32 / 4.0)));
@@ -217,6 +235,33 @@ fn a_pen_barrel_alt_drag_resizes_and_opens_no_brush_picker() {
     barrel_drift(&mut h, at, vec2(40.0, 0.0), Modifiers::ALT, true);
     assert!(!is_open(&h, Popup::Brush));
     assert!(h.state().session.tools.brush.size > size, "Alt with the barrel button resizes the brush");
+}
+
+/// The whole path: the pen's raw touch and primary press, unnormalized, through `raw_input_hook`
+/// with the platform's barrel service. Barrel held opens the picker and paints nothing; without
+/// the barrel the same tap stays a left click.
+#[test]
+fn pen_barrel_through_the_raw_input_hook() {
+    for barrel in [true, false] {
+        let mut h = harness(Tool::Brush, false, 1.0);
+        h.state_mut().services.pen_barrel_press = Some(Box::new(move || barrel));
+        let at = fractional_point(&h, 1.0);
+        hook_frame(&mut h, vec![Event::PointerMoved(at)]);
+        hook_frame(&mut h, vec![]);
+        let before = document_state(&h);
+        let press = Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE };
+        hook_frame(&mut h, vec![pen_touch(at, egui::TouchPhase::Start), press]);
+        hook_frame(&mut h, vec![]);
+        let release = Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE };
+        hook_frame(&mut h, vec![pen_touch(at, egui::TouchPhase::End), release]);
+        for _ in 0..3 {
+            hook_frame(&mut h, vec![]);
+        }
+        assert_eq!(is_open(&h, Popup::Brush), barrel, "barrel={barrel}");
+        if barrel {
+            assert!(document_state(&h) == before, "a barrel tap paints nothing");
+        }
+    }
 }
 
 #[test]

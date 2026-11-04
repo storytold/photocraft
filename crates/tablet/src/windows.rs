@@ -118,7 +118,9 @@ unsafe extern "system" fn get_msg_proc(code: i32, w_param: usize, l_param: isize
                 };
                 let is_barrel = is_barrel_pressed(pen_flags, pointer_message_flags);
                 BARREL_DOWN.store(is_barrel, Ordering::Relaxed);
-                if msg.message == WM_POINTERDOWN {
+                // Pens only: GetPointerPenInfo fails for a finger, whose touch-down must not
+                // clear a barrel press egui hasn't read yet.
+                if msg.message == WM_POINTERDOWN && pen_flags.is_some() {
                     BARREL_AT_PRESS.store(is_barrel, Ordering::Relaxed);
                 }
             }

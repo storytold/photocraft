@@ -19,15 +19,20 @@ impl ControlClick {
     }
 
     /// [`Self::normalize`], where `pen_barrel` says this frame's pen press had the barrel button
-    /// held. A barrel press's release still maps after the barrel lets go.
+    /// held. Only the press egui-winit emulates for that contact is remapped: the one following a
+    /// touch start, so a mouse press in the same frame stays primary. A barrel press's release
+    /// still maps after the barrel lets go.
     pub fn normalize_with_pen(&mut self, events: &mut [egui::Event], macos: bool, pen_barrel: bool) {
+        let mut touch_started = false;
         for event in events {
             match event {
+                egui::Event::Touch { phase: egui::TouchPhase::Start, .. } => touch_started = true,
                 egui::Event::PointerButton { button, pressed, modifiers, .. } if *button == egui::PointerButton::Primary => {
                     if *pressed {
+                        let pen_press = pen_barrel && std::mem::take(&mut touch_started);
                         // Control-Option is the existing brush resize gesture.
-                        self.secondary_down = pen_barrel || (macos && modifiers.ctrl && !modifiers.alt && !modifiers.command);
-                        self.pen_secondary = pen_barrel;
+                        self.secondary_down = pen_press || (macos && modifiers.ctrl && !modifiers.alt && !modifiers.command);
+                        self.pen_secondary = pen_press;
                     }
                     if self.secondary_down {
                         *button = egui::PointerButton::Secondary;
@@ -54,6 +59,11 @@ mod tests {
 
     fn button(pressed: bool, modifiers: Modifiers) -> Event {
         Event::PointerButton { pos: egui::pos2(50.0, 50.0), button: PointerButton::Primary, pressed, modifiers }
+    }
+
+    /// The touch start egui-winit sends ahead of a pen contact's emulated press.
+    fn touch_start() -> Event {
+        Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(1), phase: egui::TouchPhase::Start, pos: egui::pos2(50.0, 50.0), force: None }
     }
 
     #[test]
@@ -122,9 +132,10 @@ mod tests {
         let mut secondary = false;
         let mut primary = false;
         // A quick tap: press and release in one frame, the barrel known only at the press.
-        for (mut events, barrel) in
-            [(vec![Event::PointerMoved(egui::pos2(50.0, 50.0))], false), (vec![button(true, Modifiers::NONE), button(false, Modifiers::NONE)], true)]
-        {
+        for (mut events, barrel) in [
+            (vec![Event::PointerMoved(egui::pos2(50.0, 50.0))], false),
+            (vec![touch_start(), button(true, Modifiers::NONE), button(false, Modifiers::NONE)], true),
+        ] {
             state.normalize_with_pen(&mut events, false, barrel);
             ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
                 let r = ui.allocate_rect(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(200.0, 200.0)), egui::Sense::click());
@@ -144,12 +155,30 @@ mod tests {
     #[test]
     fn a_barrel_press_released_after_the_barrel_lets_go_still_releases_secondary() {
         let mut state = ControlClick::default();
-        let mut press = [button(true, Modifiers::NONE)];
+        let mut press = [touch_start(), button(true, Modifiers::NONE)];
         state.normalize_with_pen(&mut press, false, true);
         let mut release = [button(false, Modifiers::NONE)];
         state.normalize_with_pen(&mut release, false, false);
-        assert!(matches!(press[0], Event::PointerButton { button: PointerButton::Secondary, .. }));
+        assert!(matches!(press[1], Event::PointerButton { button: PointerButton::Secondary, .. }));
         assert!(matches!(release[0], Event::PointerButton { button: PointerButton::Secondary, .. }));
+    }
+
+    #[test]
+    fn a_mouse_press_in_the_pen_barrel_frame_stays_primary() {
+        // The mouse press comes before the pen's touch start, or after the pen's own press.
+        for mouse_first in [true, false] {
+            let mut state = ControlClick::default();
+            let mut events = if mouse_first {
+                vec![button(true, Modifiers::NONE), button(false, Modifiers::NONE), touch_start(), button(true, Modifiers::NONE)]
+            } else {
+                vec![touch_start(), button(true, Modifiers::NONE), button(false, Modifiers::NONE), button(true, Modifiers::NONE)]
+            };
+            state.normalize_with_pen(&mut events, false, true);
+            let pen = if mouse_first { 3 } else { 1 };
+            let mouse = if mouse_first { 0 } else { 3 };
+            assert!(matches!(events[pen], Event::PointerButton { button: PointerButton::Secondary, .. }), "mouse_first={mouse_first}");
+            assert!(matches!(events[mouse], Event::PointerButton { button: PointerButton::Primary, .. }), "mouse_first={mouse_first}");
+        }
     }
 
     #[test]
