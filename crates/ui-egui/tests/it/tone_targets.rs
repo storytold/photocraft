@@ -547,6 +547,11 @@ fn invalid_scalar_action_gray_alias_cannot_commit() {
 
 /// Play an actual recorded modal step while a different scalar channel is selected.
 fn colour_set_action(mode: ColorMode, depth: SampleType, kind: &str, recorded: Value) -> Harness<'static, PhotocraftApp> {
+    colour_set_action_with_selection(mode, depth, kind, recorded, false)
+}
+
+/// Set up selection before playback: a paused Action owns its captured document/history.
+fn colour_set_action_with_selection(mode: ColorMode, depth: SampleType, kind: &str, recorded: Value, feathered: bool) -> Harness<'static, PhotocraftApp> {
     let mut app = fixture(mode, depth, ChannelTarget::Alpha(0));
     app.session
         .edit("Colour pattern", |doc, _| {
@@ -562,6 +567,11 @@ fn colour_set_action(mode: ColorMode, depth: SampleType, kind: &str, recorded: V
                 }
             }
             doc.layers[0].surface_mut().unwrap().write_region(bounds, &samples);
+            if feathered {
+                let mut selection = Surface::new(PixelFormat::GRAY8);
+                selection.fill_rect(photocraft_geom::Rect::new(4, 4, 24, 24), &[0.5]);
+                doc.selection = Some(selection);
+            }
             Ok(())
         })
         .unwrap();
@@ -606,18 +616,7 @@ fn colour_set_action_gray_alias_matches_direct_command_preview_commit_and_undo()
                 for (kind, pencil) in [("levels", false), ("curves", false), ("curves", true)] {
                     for native in [false, true] {
                         let raw = colour_set_alias_params(mode, indices, kind, pencil, native);
-                        let mut h = colour_set_action(mode, depth, kind, raw.clone());
-                        if native {
-                            h.state_mut()
-                                .session
-                                .edit("Feathered selection", |doc, _| {
-                                    let mut selection = Surface::new(PixelFormat::GRAY8);
-                                    selection.fill_rect(photocraft_geom::Rect::new(4, 4, 24, 24), &[0.5]);
-                                    doc.selection = Some(selection);
-                                    Ok(())
-                                })
-                                .unwrap();
-                        }
+                        let mut h = colour_set_action_with_selection(mode, depth, kind, raw.clone(), native);
                         let context = format!("{mode:?} {depth:?} {label} {kind} pencil={pencil} native={native}");
                         assert_eq!(names(&h), [label], "{context}");
                         let fields = params(&h);

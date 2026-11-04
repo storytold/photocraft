@@ -205,6 +205,21 @@ Validation on Linux using the full-sweep serial configuration and CI's pinned fo
 
 Current evidence is retained in `plan/coderabbit-round2-20261104/` (gitignored).
 
+## Main integration and review (2026-11-04)
+
+Current upstream main integrated: `8e82c0e728ee03eb0ce7e5d12289f98bae1595c9` (249 incoming commits since `81bd97376`). The one conflict in modal Action playback now preserves both target-aware tone initialization and main's grouped Action history, authorization and receiver checks. Recorded adjustment values are normalized once; generic filters retain their existing initialization. The unchanged recorded-parameter filtering was extracted into a private helper to keep the combined playback function within the strict Clippy complexity limit, without suppressions.
+
+The colour-set regression used to add its feathered selection after pausing the Action. Main's new document/history guard correctly rejects that external edit. Its fixture now creates the same selection before playback, retaining all 108 native-depth preview/commit/undo cases and every assertion. No production guard was weakened.
+
+Validation on Linux, full sweep, serial tests and CI's pinned fonts:
+
+- Full engine/UI `cargo test`: **8,534 passed, 0 failed, 43 normally ignored**, including doctest builds. All 98 focused Action unit tests and the targeted tone integrations passed separately.
+- Strict engine/UI all-target Clippy, formatting, layering and wasm passed. The ignored full-registry adversarial command test passed separately. Changed-corpus checking correctly skipped: no corpus-critical paths differ from integrated main.
+- Four fresh full-app offscreen Action captures were inspected for addressed masks and unavailable targets in Levels/Curves. The scoped integration review found no further actionable issues.
+- No workflow or contributor files differ from main. Historical benchmarks and broader-workspace results remain dated; no new timing comparison or Windows/macOS result is claimed for this integration.
+
+Evidence is retained in `plan/merge-main-20261104/` (gitignored).
+
 ## 24 MP release comparison
 
 Dense synthetic 6000 × 4000 RGB8 raster layer, raster mask, saved alpha channel and Quick Mask, each filled with 25% gray. The central selection is a 3000 × 2000 rectangle at 0.5 coverage. Proxy factor 4 (1500 × 1000). AMD Ryzen 7 9700X, 16 logical CPUs, Ubuntu 26.04.1, Rust 1.99.0, default optimized release profile (thin LTO).
