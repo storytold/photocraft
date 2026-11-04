@@ -228,3 +228,56 @@ fn failed_workspace_write_keeps_export_warnings_with_a_drain_only_renderer() {
     assert!(again.is_empty(), "the export warnings must drain exactly once: {again:?}");
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn failed_local_write_keeps_export_warnings_with_a_drain_only_renderer() {
+    let dir = std::env::temp_dir().join(format!("photocraft-local-warnings-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    // A directory at the destination makes the final atomic rename fail after encoding.
+    let target = dir.join("target.png");
+    fs::create_dir(&target).unwrap();
+
+    let mut h = Headless::trusted_local();
+    let mut doc = Document::with_background("test", Size::new(32, 24), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+    let mut top = doc.layers[0].clone();
+    top.name = "top".into();
+    doc.layers.push(top);
+    h.session.open_document(doc, None);
+    h.set_renderer(Some(Box::new(DrainOnlyRenderer)));
+
+    let res = h.save(None, Some(&target), Some("png"), &Default::default());
+    assert!(res.is_err(), "a write over a directory must fail: {res:?}");
+    let diagnostics = h.drain_diagnostics();
+    assert!(
+        diagnostics.iter().any(|d| d.contains("flattened")),
+        "the export warnings must survive a failed local write when the renderer ignores pushed diagnostics: {diagnostics:?}"
+    );
+    assert!(h.drain_diagnostics().is_empty(), "the export warnings must drain exactly once");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn scaled_preview_fallback_warning_is_drained_and_the_rpc_reply_carries_it() {
+    let mut h = Headless::trusted_local();
+    h.session.open_document(Document::with_background("preview", Size::new(64, 48), ColorMode::Rgb, SampleType::U8, Color::WHITE), None);
+    h.set_renderer(Some(Box::new(DrainOnlyRenderer)));
+
+    // A scaled preview composes on the CPU; the warning must not depend on `push_diagnostic`.
+    let png = h.render_png(None, 16).expect("scaled preview");
+    assert!(png.starts_with(b"\x89PNG"));
+    let diagnostics = h.drain_diagnostics();
+    assert!(diagnostics.iter().any(|d| d.contains("scaled previews")), "preview fallback warning must be drained: {diagnostics:?}");
+
+    let reply = h.handle("doc.render", serde_json::json!({"maxSide": 16})).expect("doc.render");
+    assert!(reply.get("base64").is_some(), "existing reply fields stay: {reply}");
+    let warnings = reply.get("warnings").and_then(|w| w.as_array()).expect("warnings array");
+    assert!(warnings.iter().any(|w| w.as_str().is_some_and(|w| w.contains("scaled previews"))), "{reply}");
+    assert!(h.drain_diagnostics().is_empty(), "the reply consumed the warnings");
+
+    // No renderer, no fallback, no `warnings` key.
+    let mut plain = Headless::trusted_local();
+    plain.session.open_document(Document::with_background("plain", Size::new(64, 48), ColorMode::Rgb, SampleType::U8, Color::WHITE), None);
+    let reply = plain.handle("doc.render", serde_json::json!({"maxSide": 16})).expect("doc.render");
+    assert!(reply.get("warnings").is_none(), "{reply}");
+}

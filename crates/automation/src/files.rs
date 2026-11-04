@@ -114,7 +114,32 @@ pub fn save_with_renderer(
     format_override: Option<&str>,
     opts: &ExportOptions,
     writer: Option<&mut PcraftWriter>,
+    mut renderer: Option<&mut dyn BandRenderer>,
+) -> Result<Vec<String>, AutomationError> {
+    let mut kept = Vec::new();
+    let res = save_with_renderer_keeping(doc, path, format_override, opts, writer, renderer.as_mut().map(|r| &mut **r as &mut dyn BandRenderer), &mut kept);
+    if res.is_err()
+        && let Some(r) = renderer
+    {
+        // Callers without their own store still see the reason through the renderer.
+        for warning in kept {
+            r.push_diagnostic(warning);
+        }
+    }
+    res
+}
+
+/// [`save_with_renderer`] that hands the export warnings of an encode whose write then failed
+/// to the caller in `kept`, independent of what the renderer does with
+/// [`BandRenderer::push_diagnostic`] (the default is a no-op).
+pub fn save_with_renderer_keeping(
+    doc: &Document,
+    path: &Path,
+    format_override: Option<&str>,
+    opts: &ExportOptions,
+    writer: Option<&mut PcraftWriter>,
     renderer: Option<&mut dyn BandRenderer>,
+    kept: &mut Vec<String>,
 ) -> Result<Vec<String>, AutomationError> {
     let ext = format_override
         .map(|f| f.trim_start_matches('.').to_ascii_lowercase())
@@ -140,11 +165,9 @@ pub fn save_with_renderer(
     };
     let r = photocraft_io::export_with_renderer(doc, &ext, opts, &photocraft_raster::Interrupt::NONE, Some(&mut *renderer))?;
     if let Err(e) = photocraft_format::atomic_write(path, &r.bytes) {
-        // Encoding drained the renderer's diagnostics into `r.warnings`; put them back so the
-        // caller can still report the adapter or fallback reason alongside the write error.
-        for warning in &r.warnings {
-            renderer.push_diagnostic(warning.clone());
-        }
+        // Encoding drained the renderer's diagnostics into `r.warnings`; hand them to the
+        // caller so it can still report the adapter or fallback reason alongside the write error.
+        kept.extend(r.warnings);
         return Err(AutomationError::Io(e.to_string()));
     }
     Ok(r.warnings)
@@ -189,10 +212,23 @@ pub fn render_png(doc: &Document, max_side: u32) -> Result<Vec<u8>, AutomationEr
     render_png_with_renderer(doc, max_side, None)
 }
 
-/// [`render_png`] with an optional custom [`BandRenderer`].
+/// [`render_png`] with an optional custom [`BandRenderer`]. Preview fallback warnings are
+/// queued on the renderer; use [`render_png_with_warnings`] to receive them directly.
 pub fn render_png_with_renderer(doc: &Document, max_side: u32, mut renderer: Option<&mut dyn BandRenderer>) -> Result<Vec<u8>, AutomationError> {
+    let (png, warnings) = render_png_with_warnings(doc, max_side, renderer.as_mut().map(|r| &mut **r as &mut dyn BandRenderer))?;
+    if let Some(r) = renderer {
+        for w in warnings {
+            r.push_diagnostic(w);
+        }
+    }
+    Ok(png)
+}
+
+/// [`render_png_with_renderer`] that returns the preview fallback warnings with the bytes.
+pub fn render_png_with_warnings(doc: &Document, max_side: u32, mut renderer: Option<&mut dyn BandRenderer>) -> Result<(Vec<u8>, Vec<String>), AutomationError> {
     let side = if max_side == 0 { doc.size.width.max(doc.size.height) } else { max_side };
     let (target_w, target_h) = photocraft_compose::thumbnail_size(doc, side.max(1));
+    let mut warnings = Vec::new();
 
     if let Some(r) = renderer.as_mut()
         && (target_w, target_h) == (doc.size.width, doc.size.height)
@@ -201,23 +237,19 @@ pub fn render_png_with_renderer(doc: &Document, max_side: u32, mut renderer: Opt
         // document's preview must not be twice as large as the one it previews.
         let res = photocraft_io::export_preview_png_with_renderer(doc, Some(&mut **r));
         match res {
-            Ok(res) => {
-                for w in res.warnings {
-                    r.push_diagnostic(w);
-                }
-                return Ok(res.bytes);
-            }
+            Ok(res) => return Ok((res.bytes, res.warnings)),
             Err(photocraft_io::IoError::Cancelled) => return Err(AutomationError::Other("rendering was cancelled".into())),
             Err(e) => return Err(e.into()),
         }
     }
 
-    if let Some(r) = renderer {
-        r.push_diagnostic("scaled previews and thumbnails use CPU compositor; GPU rendering applies to full-size previews".into());
+    if renderer.is_some() {
+        warnings.push("scaled previews and thumbnails use CPU compositor; GPU rendering applies to full-size previews".into());
     }
 
     let img = photocraft_compose::thumbnail(doc, side.max(1));
     let image = photocraft_codecs::Image::from_u8(img.width, img.height, photocraft_codecs::ChannelLayout::Rgba, img.pixels)
         .map_err(|e| AutomationError::Other(e.to_string()))?;
-    photocraft_codecs::encode(&image, photocraft_codecs::Format::Png, &Default::default()).map_err(|e| AutomationError::Other(e.to_string()))
+    let png = photocraft_codecs::encode(&image, photocraft_codecs::Format::Png, &Default::default()).map_err(|e| AutomationError::Other(e.to_string()))?;
+    Ok((png, warnings))
 }

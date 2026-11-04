@@ -31,7 +31,7 @@ pub struct Headless {
     writers: HashMap<u64, PcraftWriter>,
     filesystem: Filesystem,
     renderer: Option<Box<dyn photocraft_io::BandRenderer>>,
-    /// Export warnings kept when a capability-scoped write fails: the next
+    /// Export warnings kept when a write fails, and preview fallback warnings: the next
     /// [`Headless::drain_diagnostics`] still reports them, whatever the renderer does with
     /// [`photocraft_io::BandRenderer::push_diagnostic`].
     pending_diagnostics: Vec<String>,
@@ -347,13 +347,16 @@ impl Headless {
             Filesystem::Denied => return Err(AutomationError::BadRequest("automation filesystem access is not granted: write authority is absent".into())),
             Filesystem::TrustedLocal => {
                 let writer = self.writers.entry(doc.id.0).or_default();
-                files::save_with_renderer(
+                // Export warnings of a failed write stay in `pending_diagnostics`, whatever the
+                // renderer does with `push_diagnostic`.
+                files::save_with_renderer_keeping(
                     &doc,
                     &target,
                     format,
                     opts,
                     Some(writer),
                     self.renderer.as_mut().map(|b| &mut **b as &mut dyn photocraft_io::BandRenderer),
+                    &mut self.pending_diagnostics,
                 )?
             }
             Filesystem::Workspace(workspace) => {
@@ -418,7 +421,10 @@ impl Headless {
         if !matches!(&self.filesystem, Filesystem::TrustedLocal) {
             crate::budgets::check_preview(doc.size.width, doc.size.height, max_side)?;
         }
-        let png = files::render_png_with_renderer(doc, max_side, self.renderer.as_mut().map(|b| &mut **b as &mut dyn photocraft_io::BandRenderer))?;
+        let (png, warnings) = files::render_png_with_warnings(doc, max_side, self.renderer.as_mut().map(|b| &mut **b as &mut dyn photocraft_io::BandRenderer))?;
+        // Kept here so `drain_diagnostics` returns them whatever the renderer does with
+        // `push_diagnostic`.
+        self.pending_diagnostics.extend(warnings);
         if !matches!(&self.filesystem, Filesystem::TrustedLocal) {
             crate::budgets::check_png(png.len())?;
         }
