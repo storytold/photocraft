@@ -132,6 +132,7 @@ impl PhotocraftApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaintWhileHidden);
         }
         self.poll_file_dialog(ctx, Some(frame));
+        crate::control::flush_events(self);
     }
 
     /// Shared UI body. A wrapping host must call `finish_type_reset_pass` after return,
@@ -225,6 +226,7 @@ impl PhotocraftApp {
         self.issue_captures(&ctx);
         // Last, after everything drawn this frame: a lost window device can't draw it (#3438).
         gpu_status::check_window(self, &ctx);
+        crate::control::flush_events(self);
     }
 
     /// The frame's UI, between `ui_start` and `finish_frame`. False when the screen picker's

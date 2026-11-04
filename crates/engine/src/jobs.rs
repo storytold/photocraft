@@ -491,6 +491,8 @@ struct Running {
     coalesce: Option<String>,
     color_restrict: Option<crate::color_channels::Restriction>,
     filter_mask_layer: Option<LayerId>,
+    /// Active document before the command, used when a job lands.
+    snapshot_events: crate::events::Snapshot,
     /// The document's layer selection when the job started: applying targets it, not whatever
     /// got selected meanwhile (a Type click does that without editing the document, #7366).
     layers: Option<LayerSelection>,
@@ -732,6 +734,7 @@ pub fn run<T: Send + 'static>(
         coalesce: s.coalesce_request.clone(),
         color_restrict: s.color_restrict,
         filter_mask_layer: s.filter_mask_layer,
+        snapshot_events: Default::default(),
         layers,
         rx,
         apply: Some(erased),
@@ -1078,6 +1081,10 @@ impl Session {
         let label = format!("Opening {name}");
         let name_w = name.to_string();
         let name_a = name.to_string();
+        let source_path = match &source {
+            OpenSource::Path(path) => Some(path.clone()),
+            OpenSource::Bytes(_) => None,
+        };
         let mut opts = import_options(self.prefs());
         opts.psd_high_memory_approved = approve_high_memory;
         opts.psd_approved_estimate = approved_estimate;
@@ -1207,7 +1214,10 @@ impl Session {
                         let held = s.hold_open(r.document, r.source_read_only);
                         return Ok(json!({"held": held, "name": name_a, "warnings": r.warnings, "color": question, "damaged": damaged}));
                     }
-                    let (index, color) = s.open_document(r.document, None);
+                    // Bind the verified source before document.opened is emitted. Read-only
+                    // imports still ask for a fresh Save destination.
+                    let path = source_path.clone().filter(|_| !r.source_read_only);
+                    let (index, color) = s.open_document(r.document, path);
                     let id = s.documents().get(index).ok_or(EngineError::NoDocument)?.doc.id;
                     if let Some(st) = s.active_mut() {
                         st.source_read_only = r.source_read_only;
@@ -1547,6 +1557,7 @@ impl Session {
         // Commands this one runs on its own behalf journal after this mark (#3067).
         let nested_from = self.journal.len();
         let pre_selected = if self.actions.recording.is_some() { self.active().map(|st| st.selected_layers()) } else { None };
+        let mut event_snapshot = crate::events::Snapshot::of(self.active());
         let mut record_before = crate::actions_record::Before::capture(self);
         // A replayable command is recorded as one step, so recording pauses while it runs: an
         // action it plays (a script step) must not flush the steps it ran so far into the action
@@ -1558,8 +1569,10 @@ impl Session {
         // error instead of taking the app down. `edit` only commits a document after its closure
         // returns, so the documents are unchanged.
         self.live_commit = live_commit.filter(|live| live.cmd == id);
+        let was_running = std::mem::replace(&mut self.event_command_running, true);
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (spec.run)(self, &run_params)))
             .unwrap_or_else(|_| Err(EngineError::Other(format!("`{id}` failed with an internal error (logged); the document is unchanged"))));
+        self.event_command_running = was_running;
         self.live_commit = None;
         if self.actions.recording.is_none() {
             self.actions.recording = recording;
@@ -1585,6 +1598,7 @@ impl Session {
                 job.journal = spec.journal;
                 job.recorded_by = self.actions.recording.map(|_| self.actions.take);
                 job.pre_selected = pre_selected.clone();
+                job.snapshot_events = std::mem::take(&mut event_snapshot);
                 job.before = std::mem::take(&mut record_before);
                 let jid = job.id;
                 self.jobs.running.push(job);
@@ -1606,12 +1620,13 @@ impl Session {
                     }
                 }
                 self.after_command(id, params, spec.journal, Some(nested_from), pre_selected.as_deref(), &record_before);
+                self.emit_events(id, &event_snapshot);
                 Ok(Started::Done(v))
             }
         };
-        // A closed document's freed buffers went to the scratch pool (`before` and the action
-        // recording snapshot kept it alive until here). Drop both before handing the pool back
-        // to the OS (#10479). Compare ids since Split/Merge Channels open replacement documents.
+        drop(event_snapshot);
+        // A closed document's snapshots must be dropped before the scratch pool is released;
+        // otherwise their buffers return to the pool only after release (#10479).
         if docs_before.iter().any(|id| !self.docs.iter().any(|st| st.doc.id == *id)) {
             drop(before);
             drop(record_before);
@@ -1737,6 +1752,7 @@ impl Session {
             journal,
             recorded_by,
             pre_selected,
+            snapshot_events,
             before,
             ..
         } = job;
@@ -1785,11 +1801,13 @@ impl Session {
         // contract as synchronous dispatch without truncating work done while the worker ran.
         let nested_from = self.journal.len();
         let recording = if *journal && crate::actions_cmds::replayable(command) { self.actions.recording.take() } else { None };
+        let was_running = std::mem::replace(&mut self.event_command_running, true);
         let r = match apply {
             Some(f) => std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self, payload)))
                 .unwrap_or_else(|_| Err(EngineError::Other(format!("`{label}` failed with an internal error (logged); the document is unchanged")))),
             None => Err(EngineError::Other("internal error: job applied twice".into())),
         };
+        self.event_command_running = was_running;
         if self.actions.recording.is_none() {
             self.actions.recording = recording;
         }
@@ -1801,6 +1819,7 @@ impl Session {
         // to that document instead, when the user switched tabs mid-job.
         if r.is_ok() {
             self.after_command(command, params.clone(), *journal, Some(nested_from), pre_selected.as_deref(), before);
+            self.emit_events(command, snapshot_events);
             if foreign && let Some((start, _)) = self.actions.recording.as_mut() {
                 *start = self.journal.len();
             }
@@ -1821,6 +1840,21 @@ impl Session {
             self.note_active_change();
         }
         r
+    }
+
+    /// Run a capability-scoped edit whose bytes were already read by the caller, and emit the
+    /// same document events as command dispatch. Failed edits leave the event cursor unchanged.
+    pub fn run_edit_with_events<T>(&mut self, command: &str, edit: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
+        let before = crate::events::Snapshot::of(self.active());
+        let value = edit(self)?;
+        self.emit_events(command, &before);
+        Ok(value)
+    }
+
+    /// Log only the changes produced by a successful command.
+    fn emit_events(&mut self, id: &str, before: &crate::events::Snapshot) {
+        let st = before.document.and_then(|doc| self.docs.iter().find(|st| st.doc.id.0 == doc));
+        crate::events::after_command(&mut self.events, id, before, st);
     }
 
     fn end_job(&mut self, job: &Running, outcome: JobOutcome) {

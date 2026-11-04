@@ -43,6 +43,7 @@ pub const METHODS: &[&str] = &[
     "engine.execute",
     "jobs.list",
     "jobs.cancel",
+    "events.poll",
     "engine.commands",
     "session.list",
     "doc.open",
@@ -125,6 +126,10 @@ impl Headless {
             // Background jobs (#210): list (applying any that finished) and cancel.
             "jobs.list" => self.command_start("jobs.list", json!({}), true),
             "jobs.cancel" => self.command_start("jobs.cancel", p, true),
+            // Headless clients poll the same bounded event log as the desktop transport.
+            "events.poll" => {
+                photocraft_engine::events::poll(&self.session.events, &p).map(|batch| serde_json::to_value(batch).unwrap_or(Value::Null)).map_err(bad)
+            }
             "engine.commands" => {
                 let all = self.command_list();
                 Ok(match str_of(&p, "filter").map(str::to_lowercase) {

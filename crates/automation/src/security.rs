@@ -292,6 +292,15 @@ impl AuthDeadlineStream {
         self.deadline = None;
         self.stream.set_read_timeout(Some(IO_TIMEOUT))
     }
+
+    /// A subscriber can be silent while events are pushed from another thread. Restore the
+    /// ordinary idle timeout when it unsubscribes so unused control sockets remain bounded.
+    pub fn subscription_idle(&mut self, subscribed: bool) -> std::io::Result<()> {
+        if self.deadline.is_some() {
+            return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "subscription requires authentication"));
+        }
+        self.stream.set_read_timeout(if subscribed { None } else { Some(IO_TIMEOUT) })
+    }
 }
 
 impl Read for AuthDeadlineStream {
@@ -311,6 +320,19 @@ impl Read for AuthDeadlineStream {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_authenticated_subscription_has_no_reader_idle_deadline() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let stream = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let mut read = AuthDeadlineStream::new(stream, AUTH_DEADLINE);
+        read.authenticated().unwrap();
+        assert_eq!(read.stream.read_timeout().unwrap(), Some(IO_TIMEOUT));
+        read.subscription_idle(true).unwrap();
+        assert_eq!(read.stream.read_timeout().unwrap(), None);
+        read.subscription_idle(false).unwrap();
+        assert_eq!(read.stream.read_timeout().unwrap(), Some(IO_TIMEOUT));
+    }
 
     #[test]
     fn generated_tokens_are_valid_and_distinct() {

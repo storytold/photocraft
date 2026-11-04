@@ -1,4 +1,5 @@
 use super::METHODS;
+use super::events::{events_poll, events_subscribe};
 use super::inspect::inspect;
 use super::params::{
     BUTTONS, KEY_MODIFIERS, MAX_CLICKS, POINTER_MODIFIERS, UI_SET_FIELDS, bool_field, err, f32_field, f32_range, input_choice, input_modifiers, input_number,
@@ -34,6 +35,9 @@ fn engine_methods(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlReq
         "ui.context.choose" => context_choose(app, ctx, &req.params),
         "engine.execute" | "ui.menu.invoke" => execute_command(app, ctx, req),
         "engine.commands" => wrap(app.run("command.list", json!({}))),
+        "events.poll" => events_poll(app, &req.params),
+        "events.subscribe" => events_subscribe(app, req),
+        "events.unsubscribe" => ok(json!({"subscribed": false})),
         // Background jobs (#210): running ones with progress, then the last few that ended.
         "jobs.list" => wrap(app.session.execute("jobs.list", json!({})).map_err(|e| e.to_string())),
         "jobs.cancel" => jobs_cancel(app, &req.params),
@@ -1424,7 +1428,7 @@ fn app_open(app: &mut PhotocraftApp, path: &str, approved: bool) -> Outcome {
     };
     wrap(opened.and_then(|(name, bytes)| {
         let name = app.open_name(&name);
-        let warnings = app.open_automation_bytes_with_approval(&name, &bytes, approved)?;
+        let warnings = app.open_automation_bytes_from_with_approval(&name, &bytes, Some(path), approved)?;
         // Brushes/gradients go to the preset libraries: no document, no Open Recent entry.
         if !crate::preset_files_ui::is_preset_file(&name) {
             app.opened_from(path);

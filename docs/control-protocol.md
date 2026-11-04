@@ -113,6 +113,47 @@ The transport is `apps/photocraft/src/control_server.rs`, and the handlers are i
 - `app.open {path}` / `app.save {path?, tgaBits?, ddsCompression?, ddsMipmaps?, quality?, jpegFormat?, tiffCompression?, tiffTransparency?, tiffPyramid?, tiffLayers?}` (JPEG: `quality` on the 0–12 scale, `jpegFormat` `baseline`, `optimized` or `progressive`; TIFF: `tiffCompression` `none`, `lzw` or `zip`, `tiffTransparency` and `tiffPyramid` bools; automation never shows JPEG or TIFF Options): relative file I/O through the configured automation roots (`app.open` reads under the read root, `app.save` writes under the write root; absolute paths beneath the canonical or configured root are accepted, while `..` and paths escaping the root are refused, and both fail closed when no root was granted). Both reply with `warnings` (import/export notes such as "adjustment layer flattened"; `[]` when none), also shown to the user in the status bar and as a notice (`notices` in `ui.inspect`); `app.open` also returns the `path` and document `name` (directory `.pcraft` — the native on-disk form — loads through the read root's capability; the single-file (zip) form takes the bytes path), `app.save` the `path` written. `app.save` without `path` writes back only to the document's own PSD, PSB or `.pcraft` file, like File › Save. `tgaBits` (24 or 32) sets a TGA's bits per pixel: 32 writes the alpha channel (or else the transparency) as its alpha, 24 none; without it, 32 with an alpha channel or transparency, else 24. `ddsCompression` (`none`, `bc1`, `bc2` or `bc3`) and `ddsMipmaps` (bool) set a DDS texture's compression and mip chain; without them, uncompressed without mipmaps. Automation saves never show TGA, DDS, JPEG or TIFF options. Automation opens and saves never fire script events. Use these two rather than `file.open`, `file.save`, `file.saveAs` or `file.saveACopy`, which the control channel refuses (see [Engine commands](#engine-commands))
 - `app.quit`
 
+## Events
+
+What changed, for tools that must react without polling the whole state (#4939). The engine keeps
+the last 4096 committed changes in a log; every event is `{seq, event, document?, source?, time, data}`:
+`seq` its position (from 1), `event` its kind, `document` the document's id where there is one,
+`source` the command id for events emitted by command dispatch. Events emitted directly by the
+session's open, save and close helpers use `ui`, including automation callers; shell events also
+use `ui`. `time` is milliseconds since the
+epoch, `data` the kind's fields. Only committed changes are logged, never previews (a brush stroke
+appears when it lands, a dragged slider when the dialog commits).
+
+| Event | `data` |
+|---|---|
+| `document.opened` | `{index, name, path}` |
+| `document.closed` | `{name, path, unsaved}` |
+| `document.activated` | `{index, name}` (another document came to the front) |
+| `document.saved` | `{path, revision}` (saves, not copies or exports) |
+| `document.changed` | `{command, revision, damage?: [x0, y0, x1, y1], layersAdded?: [ids], layersRemoved?: [ids]}` (one per command or job that edited the document, including undo and redo) |
+| `selection.changed` | `{bounds: [x0, y0, x1, y1] or null}` (the pixel selection) |
+| `layers.selected` | `{active: id or null, selected: [ids]}` (the Layers panel's selection) |
+| `history.changed` | `{action: step\|undo\|redo\|clear\|trim, states, canUndo, canRedo}` |
+| `tool.changed` | `{tool}` (the desktop app's tool, as `ui.inspect` names it) |
+
+- `events.poll {since?, limit?, events?, documents?, waitMs?}` → `{events, next, gap}`: the events after
+  the sequence number `since` (at most `limit`, default 256, at most 1024), filtered to the kinds in
+  `events` and the documents in `documents` when given. Poll again with `since: next`. Without
+  `since` it returns no events and the current cursor immediately. `gap: true` means the caller
+  fell more than 4096 events behind or supplied a cursor from an earlier app run, so it should
+  resynchronize. With both `since` and `waitMs` (desktop control server, at most 25 000), the
+  reply waits that long for an event before returning empty: a long poll.
+- `events.subscribe {events?, documents?, since?}` → `{subscribed, next, events}` (TCP control server
+  only): from then on, matching events are pushed on the same connection as JSON lines without an
+  `id`, between replies, as they happen (once a frame). A connection that stops reading loses
+  events rather than frames: its queue holds 1024, and once there is room again a
+  `{"event": "gap", "dropped": n}` line counts matching events lost from its full queue plus
+  log entries evicted before the subscriber could read them. Retained events excluded by the
+  subscriber's filter are not counted. A subscribed connection is not
+  closed for being idle. `events.unsubscribe` ends it; so does closing the connection.
+- The MCP tool `events_poll` and the headless server's `events.poll` are the same poll (no
+  subscriptions there; the bridge forwards `wait_ms` to the desktop app).
+
 ## Engine commands
 
 Change the UI language without restarting with `prefs.set`:
@@ -374,6 +415,7 @@ How each MCP tool maps onto control methods in bridge mode:
 |---|---|
 | `command_run {id, params, wait?}` | `engine.execute {command: id, params, wait}` |
 | `jobs_list` / `jobs_cancel {job?}` | `jobs.list` / `jobs.cancel {job?}` |
+| `events_poll {since?, wait_ms?, events?, documents?, limit?}` | `events.poll` (see [Events](#events)) |
 | `command_list {filter?, enabled_only?}` | `engine.commands` (filtered by the MCP server; replies with the same bare array, rows keep `disabledReason` and `needsDocument`, see [Command list replies](#command-list-replies)) |
 | `doc_new {…}` | `engine.execute {command: "file.new", params}` |
 | `doc_inspect` | `engine.execute {command: "document.inspect"}` |

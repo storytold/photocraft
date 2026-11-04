@@ -318,6 +318,17 @@ impl PartialEq for Surface {
     }
 }
 
+impl Surface {
+    /// Whether both surfaces still share their copy-on-write tiles. A captured clone can use
+    /// this to detect an edit without comparing pixel bytes or scanning content bounds.
+    pub fn shares_storage_with(&self, other: &Self) -> bool {
+        self.format == other.format
+            && self.default_pixel == other.default_pixel
+            && self.tiles.len() == other.tiles.len()
+            && self.tiles.iter().zip(other.tiles.iter()).all(|((a_coord, a), (b_coord, b))| a_coord == b_coord && Arc::ptr_eq(a, b))
+    }
+}
+
 /// Converts the `data` span covering one tile into that tile's bytes.
 fn write_tile(t: &mut Tile, tc: TileCoord, r: Rect, data: &[f32], w: usize, n: usize, sample: SampleType) {
     let tr = tc.rect().intersect(&r);
@@ -650,7 +661,11 @@ impl Surface {
             (gx0, gy0, gx1, gy1) = (gx0.min(c.tx), gy0.min(c.ty), gx1.max(c.tx), gy1.max(c.ty));
         }
         let mut order: Vec<(&TileCoord, &Arc<Tile>)> = self.tiles.iter().collect();
-        order.sort_by_key(|(c, _)| (c.tx - gx0).min(gx1 - c.tx).min(c.ty - gy0).min(gy1 - c.ty));
+        // Tile coordinates can come from damaged files. Use a wider type for their distance
+        // from the outer edge: i32 subtraction overflows for opposite extreme coordinates.
+        order.sort_by_key(|(c, _)| {
+            (i64::from(c.tx) - i64::from(gx0)).min(i64::from(gx1) - i64::from(c.tx)).min(i64::from(c.ty) - i64::from(gy0)).min(i64::from(gy1) - i64::from(c.ty))
+        });
         let mut out = Rect::EMPTY;
         for (c, t) in order {
             let origin = c.rect();

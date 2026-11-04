@@ -139,18 +139,29 @@ impl PhotocraftApp {
     /// Returns the import warnings (also shown to the user). Brush and gradient
     /// files go to the preset libraries, as for interactive opens.
     pub fn open_automation_bytes(&mut self, name: &str, bytes: &[u8]) -> Result<Vec<String>, String> {
-        self.open_automation_bytes_with_approval(name, bytes, false)
+        self.open_automation_bytes_from_with_approval(name, bytes, None, false)
     }
 
     /// [`Self::open_automation_bytes`] with the caller's high-memory approval for the imported bytes.
     pub fn open_automation_bytes_with_approval(&mut self, name: &str, bytes: &[u8], approved: bool) -> Result<Vec<String>, String> {
+        self.open_automation_bytes_from_with_approval(name, bytes, None, approved)
+    }
+
+    /// Import authorized automation bytes with their source path and memory approval.
+    pub(crate) fn open_automation_bytes_from_with_approval(
+        &mut self,
+        name: &str,
+        bytes: &[u8],
+        path: Option<&str>,
+        approved: bool,
+    ) -> Result<Vec<String>, String> {
         let events_enabled = self.session.prefs().script_events.enabled;
         if events_enabled {
             self.session.edit_prefs(|prefs| prefs.script_events.enabled = false);
         }
         let result = match preset_files_ui::open(self, name, bytes) {
             Some(r) => r.map(|()| Vec::new()),
-            None => self.import_automation_document(name, bytes, approved),
+            None => self.import_automation_document(name, bytes, path, approved),
         };
         if events_enabled {
             self.session.edit_prefs(|prefs| prefs.script_events.enabled = true);
@@ -160,16 +171,17 @@ impl PhotocraftApp {
 
     /// The document half of [`open_automation_bytes`](Self::open_automation_bytes): no script
     /// events and no Color Settings policy (which may read user-configured profile paths).
-    fn import_automation_document(&mut self, name: &str, bytes: &[u8], approved: bool) -> Result<Vec<String>, String> {
+    fn import_automation_document(&mut self, name: &str, bytes: &[u8], path: Option<&str>, approved: bool) -> Result<Vec<String>, String> {
         let import = self.services.import.as_ref().ok_or("no importer configured")?;
         let mut opts = photocraft_engine::jobs::import_options(self.session.prefs());
         opts.psd_high_memory_approved = approved;
         let (mut doc, warnings) = import(name, bytes, &opts)?;
         photocraft_engine::file_cmds::raw_defaults(&self.session, &warnings, &mut doc);
-        // The caller records the path it read from.
-        self.session.add_document(doc, None);
+        let read_only = photocraft_io::affinity::is_affinity(bytes);
+        let bound_path = path.filter(|path| !photocraft_engine::file_cmds::is_template(path) && !read_only).map(str::to_string);
+        self.session.add_document(doc, bound_path);
         if let Some(st) = self.session.active_mut() {
-            st.source_read_only = photocraft_io::affinity::is_affinity(bytes);
+            st.source_read_only = read_only;
         }
         self.sync_views();
         self.ui.status = crate::i18n::fmt(tl!("Opened {name}"), &[("name", name)]);
@@ -620,12 +632,8 @@ impl PhotocraftApp {
             // A background save may finish while another document is active (or after its
             // document was closed, when there is nothing left to record).
             let _ = self.with_document(doc, |app| {
-                if let Some(st) = app.session.active_mut()
-                    && arm
-                {
-                    st.saved_to(path.to_string());
-                    // The job locked the document, but record the revision that was written.
-                    st.saved_revision = revision;
+                if arm && let Some(i) = app.session.active_index() {
+                    app.session.document_saved(i, path.to_string(), Some(revision));
                     app.remember_stamp(doc, path);
                 }
                 // "Save Document" script events and File › Generate › Image Assets.

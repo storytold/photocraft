@@ -44,10 +44,12 @@ use crate::canvas::{ToolEvent, tool_event};
 use crate::state::{DialogKind, Tool};
 
 mod dispatch;
+mod events;
 mod inspect;
 mod params;
 
 use dispatch::dispatch;
+pub use events::{PUSH_QUEUE, Subscriber, flush_events};
 pub use inspect::{inspect, save_screenshot, save_screenshot_rgba};
 #[cfg(test)]
 use params::screen_point;
@@ -87,12 +89,14 @@ pub struct ControlRequest {
     pub deadline: Option<std::time::Instant>,
     /// Shared with the transport, so that when it stops waiting it knows whether the command ran.
     pub dispatch: Dispatch,
+    /// Bounded queue supplied by a transport for `events.subscribe`.
+    pub push: Option<std::sync::mpsc::SyncSender<String>>,
 }
 
 impl ControlRequest {
     pub fn new(method: impl Into<String>, params: Value) -> (Self, std::sync::mpsc::Receiver<ControlResponse>) {
         let (tx, rx) = std::sync::mpsc::channel();
-        (Self { method: method.into(), params, reply: tx, deadline: None, dispatch: Dispatch::default() }, rx)
+        (Self { method: method.into(), params, reply: tx, deadline: None, dispatch: Dispatch::default(), push: None }, rx)
     }
 }
 
@@ -188,6 +192,9 @@ pub(super) const METHODS: &[&str] = &[
     "app.save",
     "engine.commands",
     "engine.execute",
+    "events.poll",
+    "events.subscribe",
+    "events.unsubscribe",
     "jobs.cancel",
     "jobs.list",
     "ui.click",

@@ -18,6 +18,7 @@ pub mod color_channels;
 mod crop_fill;
 pub mod display_color;
 pub mod doc_path;
+pub mod events;
 pub mod filters;
 pub mod filters_ext;
 mod group_options;
@@ -201,6 +202,11 @@ pub struct Session {
     pub tools: ToolState,
     /// Log of executed commands (for action recording and debugging).
     pub journal: Vec<(String, Value)>,
+    /// Bounded committed-change log for control clients (#4939).
+    pub events: events::EventLog,
+    /// Direct layer-selection helpers publish their own events only outside command dispatch;
+    /// a command's before/after snapshot publishes its selection change once.
+    event_command_running: bool,
     /// Text layer changed by the last journal entry, for folding Type tool keystrokes.
     typed_layer: Option<(photocraft_doc::DocId, LayerId)>,
     /// Coalescing key of the command being executed.

@@ -54,10 +54,27 @@ impl Session {
     }
 
     pub fn set_active(&mut self, index: usize) -> bool {
+        self.set_active_with_events(index, true)
+    }
+
+    /// Temporarily target a document for an indexed automation call. It updates the active
+    /// generation and tool target, while leaving the user-visible event log unchanged.
+    pub fn set_active_silent(&mut self, index: usize) -> bool {
+        self.set_active_with_events(index, false)
+    }
+
+    fn set_active_with_events(&mut self, index: usize, publish_event: bool) -> bool {
         if index < self.docs.len() {
+            let previous = self.active;
             self.active = Some(index);
             self.note_active_change();
             self.sync_tools_mask_target();
+            if publish_event
+                && previous != Some(index)
+                && let Some(st) = self.docs.get(index)
+            {
+                self.events.push("document.activated", Some(st.doc.id.0), Some("ui"), serde_json::json!({"index": index, "name": st.doc.name}));
+            }
             true
         } else {
             false
@@ -146,7 +163,21 @@ impl Session {
         let i = self.docs.len() - 1;
         self.active = Some(i);
         self.note_active_change();
+        if let Some(st) = self.docs.get(i) {
+            self.events.push("document.opened", Some(st.doc.id.0), Some("ui"), serde_json::json!({"index": i, "name": st.doc.name, "path": st.path}));
+        }
         i
+    }
+
+    /// Record a completed save, including the revision actually written by a background save.
+    pub fn document_saved(&mut self, index: usize, path: String, revision: Option<u64>) -> bool {
+        let Some(st) = self.docs.get_mut(index) else { return false };
+        st.saved_to(path.clone());
+        if let Some(revision) = revision {
+            st.saved_revision = revision;
+        }
+        self.events.push("document.saved", Some(st.doc.id.0), Some("ui"), serde_json::json!({"path": path, "revision": st.saved_revision}));
+        true
     }
 
     /// Holds a decoded document back from opening (see `held_opens`); returns its id.
@@ -168,6 +199,7 @@ impl Session {
         if index >= self.docs.len() {
             return None;
         }
+        let previous = self.active().map(|st| st.doc.id);
         smart_cmds::on_close(self, index);
         if let Some(id) = self.docs.get(index).map(|d| d.doc.id) {
             self.cancel_jobs_on(id);
@@ -177,6 +209,12 @@ impl Session {
             self.link_scan = None;
         }
         let d = self.docs.remove(index);
+        self.events.push(
+            "document.closed",
+            Some(d.doc.id.0),
+            Some("ui"),
+            serde_json::json!({"name": d.doc.name, "path": d.path, "unsaved": d.revision != d.saved_revision}),
+        );
         self.open_document_order.retain(|&id| id != d.doc.id);
         self.active = if self.docs.is_empty() {
             None
@@ -188,6 +226,10 @@ impl Session {
             })
         };
         self.note_active_change();
+        let activated = self.active().filter(|st| Some(st.doc.id) != previous).map(|st| (st.doc.id.0, st.doc.name.clone()));
+        if let Some((id, name)) = activated {
+            self.events.push("document.activated", Some(id), Some("ui"), serde_json::json!({"index": self.active, "name": name}));
+        }
         Some(d)
     }
 }

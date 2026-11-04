@@ -272,6 +272,27 @@ pub struct RunParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct EventsPollParams {
+    /// The `next` of the previous poll (omit to get only the current cursor).
+    #[serde(default)]
+    pub since: Option<u64>,
+    /// Hold the reply up to this long for an event to arrive (desktop bridge only; at most 25 s).
+    #[serde(default)]
+    pub wait_ms: Option<u64>,
+    /// Only these event kinds (document.opened, document.closed, document.activated, document.saved,
+    /// document.changed, selection.changed, layers.selected, history.changed, tool.changed).
+    #[serde(default)]
+    pub events: Option<Vec<String>>,
+    /// Only these documents (ids).
+    #[serde(default)]
+    pub documents: Option<Vec<u64>>,
+    /// At most this many events (default 256, at most 1024).
+    #[serde(default)]
+    pub limit: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct JobCancelParams {
     /// The job id from `command_run` / `jobs_list` (omit to cancel every running job).
     #[serde(default)]
@@ -978,6 +999,41 @@ impl PhotocraftMcp {
         that ended (state done|failed|cancelled with their result or error). Finished jobs are applied first.")]
     async fn jobs_list(&self) -> Result<CallToolResult, McpError> {
         self.jobs_call("jobs.list", json!({}), true).await
+    }
+
+    #[tool(description = "What changed since a cursor (#4939): committed edits (document.changed with the command, revision, \
+        damage and layers added or removed), selection.changed, layers.selected, history.changed (step, undo, redo), \
+        document.opened / activated / saved / closed and tool.changed, each with its document id and source. Returns \
+        {events, next, gap}; poll again with `since: next`. Without `since` it returns only the cursor. `gap` means \
+        the caller fell more than 4096 events behind. With the desktop bridge, `wait_ms` holds the reply until an \
+        event arrives (long poll, at most 25 s).")]
+    async fn events_poll(&self, Parameters(p): Parameters<EventsPollParams>) -> Result<CallToolResult, McpError> {
+        let mut params = json!({});
+        if let Some(o) = params.as_object_mut() {
+            if let Some(s) = p.since {
+                o.insert("since".into(), json!(s));
+            }
+            if let Some(w) = p.wait_ms {
+                o.insert("waitMs".into(), json!(w));
+            }
+            if let Some(e) = p.events {
+                o.insert("events".into(), json!(e));
+            }
+            if let Some(d) = p.documents {
+                o.insert("documents".into(), json!(d));
+            }
+            if let Some(l) = p.limit {
+                o.insert("limit".into(), json!(l));
+            }
+        }
+        let p2 = params.clone();
+        if let Some(r) = self.headless_op(move |h| h.handle("events.poll", p2)).await {
+            return to_result(r);
+        }
+        let Some(b) = self.bridge_client() else {
+            return Ok(no_backend());
+        };
+        to_result(b.call_read("events.poll", params).await)
     }
 
     #[tool(description = "Cancel a background job by id (or every running job when `job` is omitted). The document is left \

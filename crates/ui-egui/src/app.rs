@@ -82,6 +82,8 @@ impl PhotocraftApp {
             caps_lock: false,
             opacity_keys: None,
             control_rx: None,
+            event_subscribers: Vec::new(),
+            last_tool_event: None,
             captures: crate::screenshot::Captures::default(),
             type_ime: type_tool::ImeState::default(),
             input_waiters: Vec::new(),

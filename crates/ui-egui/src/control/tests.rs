@@ -1540,6 +1540,9 @@ fn automation_open_and_save_use_the_roots_and_reply_with_warnings() {
     assert_eq!(r["result"]["warnings"], json!(["Adjustment layer flattened"]), "{r}");
     assert_eq!(r["result"]["name"], "warn.psd");
     assert_eq!(app.session.active().unwrap().path.as_deref(), Some("in/warn.psd"));
+    let opened = call(&mut app, &ctx, "events.poll", json!({"since": 0, "events": ["document.opened"]}));
+    assert_eq!(opened["result"]["events"][0]["data"]["path"], "in/warn.psd", "{opened}");
+    assert_eq!(opened["result"]["events"][0]["source"], "ui");
     assert_eq!(app.ui.recent_files, vec!["in/warn.psd".to_string()]);
     let r = call(&mut app, &ctx, "app.save", json!({"path": "out.png"}));
     assert_eq!(r["result"], json!({"path": "out.png", "warnings": ["Layers were flattened"]}), "{r}");
@@ -1560,6 +1563,8 @@ fn automation_open_and_save_use_the_roots_and_reply_with_warnings() {
     let r = call(&mut app, &ctx, "app.open", json!({"path": "in/card.psdt"}));
     assert_eq!(r["result"]["name"], "Untitled-1", "{r}");
     assert_eq!(app.session.active().unwrap().path, None);
+    let opened = call(&mut app, &ctx, "events.poll", json!({"since": 0, "events": ["document.opened"]}));
+    assert_eq!(opened["result"]["events"].as_array().and_then(|events| events.last()).map(|event| &event["data"]["path"]), Some(&Value::Null));
     let r = call(&mut app, &ctx, "app.save", json!({}));
     assert!(r["error"].as_str().unwrap().contains("pass `path`"), "{r}");
 }
@@ -2347,4 +2352,89 @@ fn shift_right_menu_choose_rejects_bad_choices_and_sets_the_tool() {
     // Magic Eraser has no menu.
     shift_right(&mut app, &ctx, "magicEraser");
     assert!(inspect(&app, &ctx)["brushModeMenu"].is_null());
+}
+/// `events.poll` reads the session's log; `events.subscribe` pushes lines into the transport's
+/// queue every frame, with a gap notice once the queue overflowed (#4939).
+#[test]
+fn events_poll_and_subscribe() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let ctx = egui::Context::default();
+    let r = call(&mut app, &ctx, "events.poll", json!({}));
+    assert_eq!(r["ok"], true, "{r}");
+    let cursor = r["result"]["next"].as_u64().unwrap();
+    app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    let r = call(&mut app, &ctx, "events.poll", json!({"since": cursor, "events": ["document.opened", "document.changed"]}));
+    let events = r["result"]["events"].as_array().unwrap();
+    assert_eq!(events.len(), 2, "{r}");
+    assert_eq!(events[0]["event"], "document.opened");
+    assert_eq!(events[1]["data"]["command"], "layer.new.layer");
+    assert!(call(&mut app, &ctx, "events.poll", json!({"since": 0, "events": ["nope"]}))["error"].as_str().unwrap().contains("unknown event"));
+    // Subscribe: the transport gives a queue; frames push into it.
+    let (tx, rx) = std::sync::mpsc::sync_channel::<String>(4);
+    let (mut req, _rrx) = ControlRequest::new("events.subscribe", json!({"events": ["document.changed", "tool.changed", "history.changed"]}));
+    req.push = Some(tx);
+    let Outcome::Done(r) = handle(&mut app, &ctx, &req) else { panic!("subscribe replies at once") };
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(app.event_subscribers.len(), 1);
+    let (req, _rrx) = ControlRequest::new("events.subscribe", json!({}));
+    let Outcome::Done(r) = handle(&mut app, &ctx, &req) else { panic!() };
+    assert_eq!(r["ok"], false, "a transport without a queue can't subscribe: {r}");
+    flush_events(&mut app);
+    let first: Value = serde_json::from_str(&rx.try_recv().unwrap()).unwrap();
+    assert_eq!(first["event"], "tool.changed", "the shell's tool is announced on the first frame: {first}");
+    assert!(rx.try_recv().is_err(), "nothing else yet");
+    app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    flush_events(&mut app);
+    let lines: Vec<Value> = std::iter::from_fn(|| rx.try_recv().ok()).map(|l| serde_json::from_str(&l).unwrap()).collect();
+    let kinds: Vec<&str> = lines.iter().map(|l| l["event"].as_str().unwrap()).collect();
+    assert_eq!(kinds, ["document.changed", "history.changed"], "{lines:?}");
+    assert!(lines[0].get("id").is_none(), "pushed lines carry no id");
+    // Overflow: more events than the queue holds, read later, come with a gap notice.
+    for _ in 0..6 {
+        app.run("edit.fill", json!({"color": "#00ff00"})).unwrap();
+    }
+    flush_events(&mut app);
+    let lines: Vec<Value> = std::iter::from_fn(|| rx.try_recv().ok()).map(|l| serde_json::from_str(&l).unwrap()).collect();
+    assert_eq!(lines.len(), 4, "the queue's size: {lines:?}");
+    flush_events(&mut app);
+    let notice: Value = serde_json::from_str(&rx.try_recv().unwrap()).unwrap();
+    assert_eq!(notice["event"], "gap");
+    assert_eq!(notice["dropped"], 8, "{notice}");
+    assert_ne!(app.ui.tool, crate::state::Tool::Eraser);
+    app.ui.tool = crate::state::Tool::Eraser;
+    flush_events(&mut app);
+    let t: Value = serde_json::from_str(&rx.try_recv().unwrap()).unwrap();
+    assert_eq!((t["event"].as_str(), t["data"]["tool"].clone()), (Some("tool.changed"), serde_json::to_value(crate::state::Tool::Eraser).unwrap()), "{t}");
+    flush_events(&mut app);
+    assert!(rx.try_recv().is_err(), "the same tool again is not a change");
+    // The transport dropping its queue ends the subscription.
+    drop(rx);
+    app.run("edit.fill", json!({"color": "#0000ff"})).unwrap();
+    flush_events(&mut app);
+    assert!(app.event_subscribers.is_empty());
+}
+
+#[test]
+fn a_filtered_subscriber_counts_an_evicted_gap_once_while_its_queue_is_full() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let ctx = egui::Context::default();
+    app.last_tool_event = Some(app.ui.tool);
+    app.session.events.push("history.changed", None, Some("test"), json!({}));
+    let (tx, rx) = std::sync::mpsc::sync_channel::<String>(1);
+    let (mut req, _rrx) = ControlRequest::new("events.subscribe", json!({"since": 0, "events": ["history.changed"]}));
+    req.push = Some(tx.clone());
+    let Outcome::Done(reply) = handle(&mut app, &ctx, &req) else { panic!("subscribe replies at once") };
+    assert_eq!(reply["ok"], true, "{reply}");
+    tx.send("occupied".into()).unwrap();
+    for _ in 0..(photocraft_engine::events::CAPACITY + 2) {
+        app.session.events.push("tool.changed", None, Some("test"), json!({}));
+    }
+    flush_events(&mut app);
+    flush_events(&mut app);
+    assert_eq!(rx.try_recv().unwrap(), "occupied");
+    flush_events(&mut app);
+    let notice: Value = serde_json::from_str(&rx.try_recv().unwrap()).unwrap();
+    assert_eq!(notice["event"], "gap");
+    assert_eq!(notice["dropped"], 3, "only the three evicted log entries are counted once: {notice}");
 }

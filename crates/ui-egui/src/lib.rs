@@ -437,6 +437,10 @@ pub struct PhotocraftApp {
     /// The first digit of a two-digit opacity typed on the number keys (`opacity_keys`, #352).
     pub(crate) opacity_keys: opacity_keys::Pending,
     control_rx: Option<Receiver<ControlRequest>>,
+    /// Active control transports subscribed to committed changes (#4939).
+    pub(crate) event_subscribers: Vec<control::Subscriber>,
+    /// Last tool announced to subscribers.
+    pub(crate) last_tool_event: Option<crate::state::Tool>,
     /// `ui.screenshot` requests: bounded admission, a weak-slot callback per issuance, monotonic
     /// deadlines and a capture-time geometry epoch (see `screenshot.rs`).
     captures: screenshot::Captures,
