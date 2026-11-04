@@ -715,7 +715,7 @@ pub(crate) fn triangle_sv([hue, white, black]: [Pos2; 3], p: Pos2) -> Option<(f3
 }
 
 /// The triangle shaded through saturation and brightness at hue `h`.
-fn triangle_mesh(tri: [Pos2; 3], h: f32) -> Mesh {
+pub(crate) fn triangle_mesh(tri: [Pos2; 3], h: f32) -> Mesh {
     let n = 16usize;
     let mut m = Mesh::default();
     for j in 0..=n {

@@ -444,6 +444,23 @@ fn color_wheel_corner_knobs_just_outside_the_triangle_keep_the_hue() {
     assert!(got[1] < 0.05 && got[2] > 0.95, "white knob picked {got:?}");
 }
 
+/// The painted triangle is the one clicks are read from, whatever the hue (#10122): vertex
+/// `j * 17 + i` of the fill sits at saturation `i / 16` and brightness `j / 16` of the fixed
+/// triangle.
+#[test]
+fn color_wheel_paints_the_fixed_triangle_at_every_hue() {
+    let tri = crate::color_panel_ui::triangle(pos2(150.0, 120.0), 90.0);
+    for hue in [20.0f32, 200.0] {
+        let mesh = crate::color_panel_ui::triangle_mesh(tri, hue / 360.0);
+        assert_eq!(mesh.vertices.len(), 17 * 17);
+        for (k, v) in mesh.vertices.iter().enumerate() {
+            let (i, j) = (k % 17, k / 17);
+            let want = crate::color_panel_ui::triangle_point(tri, i as f32 / 16.0, j as f32 / 16.0);
+            assert!(v.pos.distance(want) < 1e-3, "hue {hue}, vertex {k}: {:?} vs {want:?}", v.pos);
+        }
+    }
+}
+
 /// Picking a mode from the panel menu changes the panel; the theme never does.
 #[test]
 fn panel_menu_picks_the_mode_and_ramp() {
