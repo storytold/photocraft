@@ -351,8 +351,9 @@ fn txt2_style_agrees(s: &CharStyle, style: &E, fonts: &[E], k: f32) -> bool {
         return false;
     }
     // A mask beyond the 20 sets is ignored on import (`add_txt2_features`), so here too.
+    // Missing or invalid key 85 counts as 0 (the reader's default), not "any mask agrees".
     let sets = (0..20).filter(|n| feature(&format!("ss{:02}", n + 1)) == Some(true)).fold(0i64, |m, n| m | 1 << n);
-    style.get(TXT2_STYLISTIC_SETS).and_then(E::as_i64).filter(|m| (0..1 << 20).contains(m)).is_none_or(|m| m == sets)
+    style.get(TXT2_STYLISTIC_SETS).and_then(E::as_i64).filter(|m| (0..1 << 20).contains(m)).unwrap_or(0) == sets
 }
 
 /// EngineData's `FontCaps` code of a style: 0 normal, 1 small caps, 2 all caps.
