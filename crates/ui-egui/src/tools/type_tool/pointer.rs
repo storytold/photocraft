@@ -131,7 +131,10 @@ pub fn pointer_down(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifie
         if hit_layer(app, x, y) == Some(id) || inside_box(app, id, x, y) {
             let off = hit_offset(app, id, x, y);
             // A double-click's second press held to drag selects by whole words (#11280).
-            if word_press && !mods.shift && let Some(text) = current_text(app, id) {
+            if word_press
+                && !mods.shift
+                && let Some(text) = current_text(app, id)
+            {
                 let (a, b) = click_selection(None, &text, off, None, 2);
                 app.type_word_drag = Some((a, b));
                 if let Some(e) = app.ui.text_edit.as_mut() {
