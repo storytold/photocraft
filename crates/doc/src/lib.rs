@@ -1603,9 +1603,18 @@ mod tests {
         // X passes the board rather than entering it, then enters the group below.
         assert!(d.step(x, -1));
         assert_eq!(rows(&d), ["Board", "  B1", "X", "G", "  C", "Background"]);
+        // And back up past it the same way.
+        assert!(d.step(x, 1));
+        assert_eq!(rows(&d), ["X", "Board", "  B1", "G", "  C", "Background"]);
+        assert!(d.step(x, -1));
         assert!(d.step(x, -1));
         assert_eq!(rows(&d), ["Board", "  B1", "G", "  X", "  C", "Background"]);
-        // The board passes the open group rather than entering it, and stays a listed artboard.
+        // The board passes the open group rather than entering it, either way, and stays a listed
+        // artboard.
+        assert!(d.step(board, -1));
+        assert_eq!(rows(&d), ["G", "  X", "  C", "Board", "  B1", "Background"]);
+        assert!(d.step(board, 1));
+        assert_eq!(rows(&d), ["Board", "  B1", "G", "  X", "  C", "Background"]);
         assert!(d.step(board, -1));
         assert_eq!(rows(&d), ["G", "  X", "  C", "Board", "  B1", "Background"]);
         assert_eq!(d.artboards().len(), 1);
