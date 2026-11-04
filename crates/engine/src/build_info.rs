@@ -11,7 +11,10 @@
 //! shells out to git, so builds work from a source tarball and for wasm.
 
 /// The workspace version, such as `0.1.0` or `0.2.0-rc.1`.
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const VERSION: &str = match option_env!("PHOTOCRAFT_OVERRIDE_VERSION") {
+    Some(v) => v,
+    None => env!("CARGO_PKG_VERSION"),
+};
 
 /// The full git commit this build was made from, when the build environment recorded it.
 pub fn git_sha() -> Option<&'static str> {
