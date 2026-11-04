@@ -3032,41 +3032,6 @@ fn torn_off_document_is_not_drawn_again_in_the_main_window() {
     }
 }
 
-/// #11276: a document floating in its own window zooms from the Navigator and the status bar's
-/// zoom field (both edit the document's view), as a tabbed one does; the window doesn't keep or
-/// write back an older copy.
-#[test]
-fn a_floating_document_follows_navigator_and_status_bar_zoom() {
-    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-    app.run("file.new", json!({"width": 400, "height": 300, "name": "floating"})).unwrap();
-    app.run("file.new", json!({"width": 400, "height": 300, "name": "docked"})).unwrap();
-    app.sync_views();
-    let ctx = egui::Context::default();
-    crate::menus::invoke(&mut app, &ctx, "window.arrange.floatInWindow", json!({"document": 0})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(900.0, 700.0)).build_ui_state(
-        |ui, (app, ready): &mut (PhotocraftApp, bool)| {
-            if *ready {
-                egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| document_area(app, ui));
-                extra_windows(app, ui.ctx());
-            }
-        },
-        (app, false),
-    );
-    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
-    h.state_mut().1 = true;
-    h.run_steps(4);
-    let window_zoom = |h: &egui_kittest::Harness<'_, (PhotocraftApp, bool)>| h.state().0.ui.windows[0].view.zoom;
-    // The Navigator's zoom field and slider, and the status bar's, set the view's zoom this way.
-    for pct in [200.0, 50.0] {
-        let app = &mut h.state_mut().0;
-        crate::zoom_levels::set_from_field(&mut app.ui.views[0], false, pct, false);
-        h.run_steps(3);
-        let want = pct / 100.0;
-        assert!((window_zoom(&h) - want).abs() < 1e-3, "{pct}%: the window shows {}", window_zoom(&h));
-        assert!((h.state().0.ui.views[0].zoom - want).abs() < 1e-3, "{pct}%: not written back over by the window");
-    }
-}
-
 /// #11276: in a tiled arrangement the active document's cell zooms from the Navigator and the
 /// status bar too.
 #[test]
@@ -3096,5 +3061,49 @@ fn a_tiled_document_follows_navigator_and_status_bar_zoom() {
             let zoom = h.state().0.ui.views[active].zoom;
             assert!((zoom - pct / 100.0).abs() < 1e-3, "{layout} {pct}%: {zoom}");
         }
+    }
+}
+
+
+/// #11276: a document floating in its own window zooms from the zoom typed into the status bar
+/// and into the Navigator, as a tabbed one does; the window doesn't keep or write back an older
+/// copy of the view.
+#[test]
+fn a_floating_document_follows_navigator_and_status_bar_zoom() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_max_steps(64).build_eframe(|cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 400, "height": 300, "name": "floating"})).unwrap();
+        app.run("file.new", json!({"width": 400, "height": 300, "name": "docked"})).unwrap();
+        crate::menus::invoke(&mut app, &egui::Context::default(), "window.arrange.floatInWindow", json!({"document": 0})).unwrap();
+        app
+    });
+    h.run_steps(6);
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "window.panel.navigator", json!({})).unwrap();
+    h.run_steps(6);
+    assert_eq!(h.state().session.active_index(), Some(0), "the floating document is active");
+    // The status bar's zoom field (bottom left) and the Navigator's.
+    let fields = |h: &egui_kittest::Harness<'_, PhotocraftApp>| {
+        let mut f: Vec<egui::Rect> =
+            h.query_all_by_role(egui::accesskit::Role::SpinButton).filter(|n| n.accesskit_node().label().as_deref() == Some("Zoom")).map(|n| n.rect()).collect();
+        f.sort_by(|a, b| a.left().total_cmp(&b.left()));
+        f
+    };
+    assert_eq!(fields(&h).len(), 2, "the status bar's and the Navigator's zoom fields");
+    for (field, typed, want) in [(0, "200", 2.0), (1, "50", 0.5), (0, "300", 3.0), (1, "100", 1.0)] {
+        let at = fields(&h)[field].center();
+        h.event(egui::Event::PointerMoved(at));
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+        h.run_steps(2);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.event(egui::Event::Text(typed.into()));
+        h.key_press(egui::Key::Enter);
+        h.run_steps(60);
+        let window = h.state().ui.windows[0].view.zoom;
+        assert!((window - want).abs() < 1e-3, "field {field}, typed {typed}: the window shows {window}");
+        assert!((h.state().ui.views[0].zoom - want).abs() < 1e-3, "field {field}, typed {typed}: not written back over by the window");
     }
 }
