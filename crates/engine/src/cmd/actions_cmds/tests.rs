@@ -1255,7 +1255,8 @@ fn arrange_that_cannot_move_is_a_noop_in_playback() {
     assert_eq!(s.active().unwrap().history.past_len(), before + 2, "the no-op adds no history step");
 
     // The predicate identifies no movement for every layer: top level, above the Background,
-    // and inside a group.
+    // and inside a group (Bring Forward and Send Backward step out of a group, so inside one only
+    // Bring to Front and Send to Back can be at their end).
     let a = s.execute("layer.new.layer", json!({"name": "A"})).unwrap()["layer"].clone();
     s.execute("layer.select", json!({"layer": a})).unwrap();
     s.execute("layer.groupLayers", json!({})).unwrap();
@@ -1265,7 +1266,9 @@ fn arrange_that_cannot_move_is_a_noop_in_playback() {
     let bg = crate::background_cmds::background_id(&s.active().unwrap().doc);
     for id in ids.into_iter().filter(|id| Some(*id) != bg) {
         for (cmd, dir) in cmds {
-            let at_end = super::super::ops::arrange_at_end(&s.active().unwrap().doc, id, dir);
+            let single = matches!(cmd, "layer.arrange.bringForward" | "layer.arrange.sendBackward");
+            let at_end = if single { super::super::ops::step_at_end } else { super::super::ops::arrange_at_end };
+            let at_end = at_end(&s.active().unwrap().doc, id, dir);
             let history = s.active().unwrap().history.past_len();
             let ran = s.execute(cmd, json!({"layer": id.0}));
             if at_end {

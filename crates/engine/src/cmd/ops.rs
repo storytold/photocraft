@@ -28,6 +28,13 @@ pub(crate) fn arrange_at_end(doc: &Document, id: LayerId, dir: i32) -> bool {
     if dir > 0 { idx.saturating_add(1) >= len } else { idx <= floor }
 }
 
+/// Is layer `id` already as far as Bring Forward / Send Backward can take it in direction `dir`?
+/// They step a row of the Layers panel at a time ([`Document::step`]), out of a group from its end,
+/// so only the ends of the top-level stack stop them.
+pub(crate) fn step_at_end(doc: &Document, id: LayerId, dir: i32) -> bool {
+    doc.path_of(id).is_some_and(|p| p.len() == 1) && arrange_at_end(doc, id, dir)
+}
+
 pub(super) fn arrange(s: &mut Session, p: &Value, delta: i32) -> Result<Value> {
     let id = layer_param(s, p)?;
     let edited = s.edit("Arrange", |doc, _| {
@@ -42,14 +49,18 @@ pub(super) fn arrange(s: &mut Session, p: &Value, delta: i32) -> Result<Value> {
             d => d,
         };
         let dir = steps.signum();
+        // Bring Forward and Send Backward move a row of the Layers panel at a time, into and out of
+        // expanded groups (#11263); Bring to Front and Send to Back keep to the layer's own stack.
+        let single = steps.abs() == 1;
+        let move_by = |doc: &mut Document, d: i32| if single { doc.step(id, d) } else { doc.shift(id, d) };
         let before = crate::clip_group::Before::read(doc, &[id]);
         let mut moved = false;
         for _ in 0..steps.abs() {
-            if !doc.shift(id, dir) {
+            if !move_by(doc, dir) {
                 break;
             }
             if crate::background_cmds::keep_background_at_bottom(bg, doc).is_err() {
-                doc.shift(id, -dir);
+                move_by(doc, -dir);
                 break;
             }
             moved = true;

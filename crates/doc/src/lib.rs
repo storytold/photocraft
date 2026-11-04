@@ -737,6 +737,19 @@ impl Layer {
             _ => None,
         }
     }
+    /// How many groups deep the layer's own contents reach: 0 for a layer or an empty group, 1 for
+    /// a group with layers in it, one more for each group with layers nested in it.
+    pub fn subtree_depth(&self) -> usize {
+        let mut max = 0;
+        let mut stack: Vec<(&Layer, usize)> = vec![(self, 0)];
+        while let Some((l, depth)) = stack.pop() {
+            if let Some(ch) = l.children().filter(|ch| !ch.is_empty()) {
+                max = max.max(depth + 1);
+                stack.extend(ch.iter().map(|c| (c, depth + 1)));
+            }
+        }
+        max
+    }
     pub fn surface(&self) -> Option<&Surface> {
         match &self.content {
             LayerContent::Raster(s) => Some(s),
@@ -1288,6 +1301,47 @@ impl Document {
         true
     }
 
+    /// Move a layer one row up (+1) or down (-1) as the Layers panel lists it: past a sibling, into
+    /// the expanded group beside it (down enters at the group's top, up at its bottom), or out of
+    /// its own group when it is the child at that end, to the row beside the group. A collapsed
+    /// group is passed as one row, as is a group the layer's own groups would nest past
+    /// [`MAX_GROUP_DEPTH`] in. Returns false at the ends of the top-level stack.
+    pub fn step(&mut self, id: LayerId, dir: i32) -> bool {
+        let Some(path) = self.path_of(id) else { return false };
+        let Some((&idx, parent)) = path.split_last() else { return false };
+        let up = dir > 0;
+        let siblings = if parent.is_empty() { self.layers.len() } else { self.layer_at(parent).and_then(Layer::children).map_or(0, <[Layer]>::len) };
+        let next = if up { idx.checked_add(1).filter(|n| *n < siblings) } else { idx.checked_sub(1) };
+        let Some(next) = next else {
+            // The end of its group's children: out of the group, to the row beside it.
+            let Some(group) = self.layer_at(parent).map(|g| g.id) else { return false };
+            let Some(l) = self.remove(id) else { return false };
+            let _ = if up { self.insert_above(Some(group), l) } else { self.insert_below(Some(group), l) };
+            return true;
+        };
+        let mut beside = parent.to_vec();
+        beside.push(next);
+        let fits = self.layer_at(&path).is_some_and(|l| beside.len().saturating_add(l.subtree_depth()) <= MAX_GROUP_DEPTH);
+        let group = self.layer_at(&beside).filter(|g| fits && matches!(&g.content, LayerContent::Group(gr) if gr.expanded)).map(|g| g.id);
+        let Some(group) = group else { return self.shift(id, dir) };
+        let Some(l) = self.remove(id) else { return false };
+        match self.layer_mut(group).and_then(Layer::children_mut) {
+            Some(children) => {
+                if up {
+                    children.insert(0, l)
+                } else {
+                    children.push(l)
+                }
+                true
+            }
+            None => {
+                // Not reached (the group was just found); the layer stays in the document regardless.
+                self.layers.push(l);
+                false
+            }
+        }
+    }
+
     /// Next unused "Layer N" name.
     pub fn next_layer_name(&self, base: &str) -> String {
         let names: std::collections::HashSet<&str> = self.walk().into_iter().map(|(_, _, l)| l.name.as_str()).collect();
@@ -1464,6 +1518,68 @@ mod tests {
         assert!(!d.shift(b, 1));
         assert_eq!(d.remove(a).unwrap().name, "A");
         assert!(d.layer(a).is_none());
+    }
+
+    /// The Layers panel's rows, top first, children indented.
+    fn rows(d: &Document) -> Vec<String> {
+        fn rec(layers: &[Layer], depth: usize, out: &mut Vec<String>) {
+            for l in layers.iter().rev() {
+                out.push(format!("{}{}", "  ".repeat(depth), l.name));
+                rec(l.children().unwrap_or(&[]), depth + 1, out);
+            }
+        }
+        let mut out = Vec::new();
+        rec(&d.layers, 0, &mut out);
+        out
+    }
+
+    #[test]
+    fn step_walks_the_rows_of_the_panel() {
+        let mut d = doc();
+        let bg = d.layers[0].id;
+        let g = d.insert_above(Some(bg), Layer::group("G", vec![Layer::raster("C1", d.pixel_format()), Layer::raster("C2", d.pixel_format())]));
+        let x = d.insert_above(Some(g), Layer::raster("X", d.pixel_format()));
+        let start = ["X", "G", "  C2", "  C1", "Background"];
+        assert_eq!(rows(&d), start);
+        // Down: into the group at its top, through it, out below it.
+        let down = [
+            ["G", "  X", "  C2", "  C1", "Background"],
+            ["G", "  C2", "  X", "  C1", "Background"],
+            ["G", "  C2", "  C1", "  X", "Background"],
+            ["G", "  C2", "  C1", "X", "Background"],
+        ];
+        for want in down {
+            assert!(d.step(x, -1));
+            assert_eq!(rows(&d), want);
+        }
+        // Up: the same rows back, then nothing above the top.
+        for want in [down[2], down[1], down[0], start] {
+            assert!(d.step(x, 1));
+            assert_eq!(rows(&d), want);
+        }
+        assert!(!d.step(x, 1));
+        assert_eq!(rows(&d), start);
+        // A collapsed group is one row.
+        if let LayerContent::Group(gr) = &mut d.layer_mut(g).unwrap().content {
+            gr.expanded = false;
+        }
+        assert!(d.step(x, -1));
+        assert_eq!(rows(&d), down[3]);
+        assert!(d.step(x, 1));
+        assert_eq!(rows(&d), start);
+        // So is a group the layer's own groups would nest too deep in: X wrapped in MAX groups.
+        if let LayerContent::Group(gr) = &mut d.layer_mut(g).unwrap().content {
+            gr.expanded = true;
+        }
+        let mut top = x;
+        for n in 0..MAX_GROUP_DEPTH {
+            let inner = d.remove(top).unwrap();
+            top = d.insert_above(Some(g), Layer::group(format!("W{n}"), vec![inner]));
+        }
+        assert_eq!(d.max_group_depth(), MAX_GROUP_DEPTH);
+        assert!(d.step(top, -1));
+        assert_eq!(d.layers.iter().map(|l| l.id).collect::<Vec<_>>(), [bg, top, g]);
+        assert_eq!(d.max_group_depth(), MAX_GROUP_DEPTH);
     }
 
     #[test]
