@@ -32,10 +32,17 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, params: Value) -> Re
     Ok(reply)
 }
 
-/// The Name filter's text field, taking the focus with its text selected after [`invoke`].
+/// The Name filter's text field, taking the focus with its text selected after [`invoke`]. The
+/// focus waits for a frame without a pointer press or release: egui drops the focus at the end of
+/// a frame in which the pointer was clicked elsewhere, as it is when the menu item is clicked.
 pub fn name_field(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let id = ui.scope_id().with("layer-filter-name");
-    if ui.ctx().data_mut(|d| d.remove_temp::<bool>(focus_flag())).unwrap_or(false) {
+    let pending = ui.ctx().data(|d| d.get_temp::<bool>(focus_flag())).unwrap_or(false);
+    let clicking = ui.input(|i| i.pointer.any_pressed() || i.pointer.any_released() || i.pointer.any_down());
+    if pending && clicking {
+        ui.ctx().request_repaint();
+    } else if pending {
+        ui.ctx().data_mut(|d| d.remove_temp::<bool>(focus_flag()));
         ui.memory_mut(|m| m.request_focus(id));
         widgets::field_tab::select_all(ui.ctx(), id, &app.ui.layer_filter_name);
     }

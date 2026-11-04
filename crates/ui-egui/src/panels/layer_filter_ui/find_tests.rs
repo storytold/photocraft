@@ -97,3 +97,35 @@ fn the_shortcut_runs_find_layers() {
     assert_eq!(h.state().ui.layer_filter_by, FilterBy::Name);
     assert!(h.ctx.memory(|m| m.focused()).is_some(), "the caret is in the Name field");
 }
+
+#[test]
+fn clicking_the_menu_item_leaves_the_caret_in_the_name_field() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = harness();
+    h.get_by_label("Select").click();
+    h.run_steps(4);
+    h.get_by_label("Find Layers Ctrl+Alt+Shift+F").click();
+    h.run_steps(6);
+    assert_eq!(h.state().ui.layer_filter_by, FilterBy::Name);
+    h.event(egui::Event::Text("lin".into()));
+    h.run_steps(4);
+    assert_eq!(h.state().ui.layer_filter_name, "lin", "typing goes to the Name field");
+}
+
+#[test]
+fn the_shortcut_shows_a_layers_tab_closed_from_the_window_menu() {
+    let mut h = harness();
+    use egui_kittest::kittest::Queryable;
+    h.get_by_label("Window").click();
+    h.run_steps(4);
+    h.get_by_label("✔ Layers F7").click();
+    h.run_steps(4);
+    assert!(!h.state().ui.panels.layers, "Window › Layers closed the panel");
+    h.state_mut().ui.layer_filter_name = "lin".into();
+    h.key_press_modifiers(egui::Modifiers::COMMAND | egui::Modifiers::ALT | egui::Modifiers::SHIFT, egui::Key::F);
+    h.run_steps(6);
+    assert_eq!(h.state().ui.layer_filter_by, FilterBy::Name);
+    h.event(egui::Event::Text("other".into()));
+    h.run_steps(4);
+    assert_eq!(h.state().ui.layer_filter_name, "other", "the panel is back, focused, with its text selected");
+}
