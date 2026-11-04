@@ -291,9 +291,12 @@ fn serve_gpu_preserves_clean_protocol_stdout_and_drains_diagnostics_to_stderr() 
 
     // Every render that reaches the renderer reports its adapter or why it fell back, whichever
     // build and adapter this test runs on.
+    // `doc.render` returns the diagnostics of its own render in the reply's `warnings`; any left
+    // in the queue go to stderr. Either way they stay off the protocol lines' framing.
     let stderr = String::from_utf8_lossy(&output.stderr);
+    let reported = format!("{stderr}\n{}", v5["result"]["warnings"]);
     let markers = ["GPU adapter:", "no GPU adapter available", "could not build GPU compositor", "falling back to CPU", "GPU acceleration requested"];
-    assert!(markers.iter().any(|m| stderr.contains(m)), "render must report its GPU backend or fallback on stderr: {stderr}");
+    assert!(markers.iter().any(|m| reported.contains(m)), "render must report its GPU backend or fallback in its reply or on stderr: {reported}");
 }
 
 #[test]
