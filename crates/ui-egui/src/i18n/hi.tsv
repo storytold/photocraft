@@ -2467,15 +2467,70 @@ cameraRaw	Yellow	पीला
 @plural	Saved {n} color to {file}|Saved {n} colors to {file}	{file} में {n} रंग सहेजा गया|{file} में {n} रंग सहेजे गए
 @plural	Updated {n} linked smart object changed on disk|Updated {n} linked smart objects changed on disk	डिस्क पर बदला {n} लिंक्ड स्मार्ट ऑब्जेक्ट अपडेट किया गया|डिस्क पर बदले {n} लिंक्ड स्मार्ट ऑब्जेक्ट्स अपडेट किए गए
 @plural	{n} Layer|{n} Layers	{n} लेयर|{n} लेयर्स
-@plural	{n} action|{n} actions	{n} एक्शन|{n} एक्शन्स
 @plural	{n} layer recorded by this comp was deleted. Update the comp, or clear the warning.|{n} layers recorded by this comp were deleted. Update the comp, or clear the warning.	इस कॉम्प द्वारा रिकॉर्ड की गई {n} लेयर हटा दी गई। कॉम्प अपडेट करें, या चेतावनी साफ़ करें।|इस कॉम्प द्वारा रिकॉर्ड की गई {n} लेयर्स हटा दी गईं। कॉम्प अपडेट करें, या चेतावनी साफ़ करें।
 @plural	{n} plane|{n} planes	{n} प्लेन|{n} प्लेन
 @plural	{n} preset|{n} presets	{n} प्रीसेट|{n} प्रीसेट्स
 @plural	{n} sample point removed|{n} sample points removed	{n} सैंपल पॉइंट हटाया गया|{n} सैंपल पॉइंट हटाए गए
 @plural	{n} sample|{n} samples	{n} नमूना|{n} नमूने
 @plural	{n} slice|{n} slices	{n} स्लाइस|{n} स्लाइस
-@plural	{n} step has no PhotoCraft equivalent yet|{n} steps have no PhotoCraft equivalent yet	{n} चरण का अभी कोई PhotoCraft समकक्ष नहीं है|{n} चरणों का अभी कोई PhotoCraft समकक्ष नहीं है
 @plural	{n} step with no Photoshop equivalent left out|{n} steps with no Photoshop equivalent left out	Photoshop समकक्ष न होने वाला {n} चरण छोड़ा गया|Photoshop समकक्ष न होने वाले {n} चरण छोड़े गए
 @plural	{n} step|{n} steps	{n} चरण|{n} चरण
 @plural	{warning} (+{n} more brush preset warning)|{warning} (+{n} more brush preset warnings)	{warning} (+{n} और ब्रश प्रीसेट चेतावनी)|{warning} (+{n} और ब्रश प्रीसेट चेतावनियाँ)
 @plural	{what} with {n} warning|{what} with {n} warnings	{what}, {n} चेतावनी के साथ|{what}, {n} चेतावनियों के साथ
+# Actions panel: loading several action files at once
+	{message} ({note})	{message} ({note})
+@plural	{n} action|{n} actions	{n} एक्शन|{n} एक्शन
+@plural	{n} step has no PhotoCraft equivalent yet|{n} steps have no PhotoCraft equivalent yet	{n} चरण का अभी PhotoCraft में कोई समकक्ष नहीं है|{n} चरणों का अभी PhotoCraft में कोई समकक्ष नहीं है
+@plural	{n} action file loaded|{n} action files loaded	{n} एक्शन फ़ाइल लोड हुई|{n} एक्शन फ़ाइलें लोड हुईं
+	{set} from {file} replaced the one from {earlier}	{file} के सेट {set} ने {earlier} वाले सेट की जगह ले ली
+@plural	{n} file could not be loaded: {errors}|{n} files could not be loaded: {errors}	{n} फ़ाइल लोड नहीं हो सकी: {errors}|{n} फ़ाइलें लोड नहीं हो सकीं: {errors}
+
+# Strings added on main after the catalog was completed (2026-11-04)
+	A command was cancelled or stopped during batch processing. Continue with the next file or stop?	बैच प्रोसेसिंग के दौरान एक कमांड रद्द या रोकी गई। अगली फ़ाइल के साथ जारी रखें या रोकें?
+	Answer the open import question first, then import this file again.	पहले खुले आयात प्रश्न का उत्तर दें, फिर इस फ़ाइल को दोबारा आयात करें।
+	Arrowhead options	तीर-शीर्ष विकल्प
+	Arrowheads	तीर-शीर्ष
+	Batch	बैच
+	Batch preview	बैच पूर्वावलोकन
+	Bevel & Emboss	बेवल और एम्बॉस
+	Concavity	अवतलता
+	Create new set	नया सेट बनाएँ
+	Drop Shadow	ड्रॉप शैडो
+	Effect	प्रभाव
+	End	अंत
+	Filter for embedded smart objects	एम्बेडेड स्मार्ट ऑब्जेक्ट्स के लिए फ़िल्टर
+	Filter for linked smart objects that are missing	गायब लिंक्ड स्मार्ट ऑब्जेक्ट्स के लिए फ़िल्टर
+	Filter for smart objects linked locally	स्थानीय रूप से लिंक किए गए स्मार्ट ऑब्जेक्ट्स के लिए फ़िल्टर
+	High Memory Photoshop Document	अधिक मेमोरी वाला Photoshop दस्तावेज़
+	Image Compression	छवि संपीड़न
+	Import as New Group	नए समूह के रूप में आयात करें
+	Import as New Group keeps “{group}” and adds the file as a new group beside it.	नए समूह के रूप में आयात करें “{group}” को बनाए रखता है और फ़ाइल को उसके बगल में एक नए समूह के रूप में जोड़ता है।
+	Inner Glow	इनर ग्लो
+	Inner Shadow	इनर शैडो
+	LZW	LZW
+	Length	लंबाई
+	Lining	लाइनिंग
+	No import is waiting. Import the file again.	कोई आयात प्रतीक्षा में नहीं है। फ़ाइल को दोबारा आयात करें।
+	Numerals	अंक
+	Open anyway	फिर भी खोलें
+	Opening this document uses more memory and may slow down your computer or other running applications.	इस दस्तावेज़ को खोलने में अधिक मेमोरी लगती है और इससे आपका कंप्यूटर या चल रहे अन्य एप्लिकेशन धीमे हो सकते हैं।
+	Opening “{name}” requires an estimated {est} GiB of memory ({avail} GiB available).	“{name}” को खोलने के लिए अनुमानित {est} GiB मेमोरी चाहिए ({avail} GiB उपलब्ध)।
+	Opening “{name}” requires an estimated {est} GiB of memory. The available memory could not be measured.	“{name}” को खोलने के लिए अनुमानित {est} GiB मेमोरी चाहिए। उपलब्ध मेमोरी मापी नहीं जा सकी।
+	Outer Glow	आउटर ग्लो
+	Proportional	आनुपातिक
+	Proportional Lining	आनुपातिक लाइनिंग
+	Proportional Oldstyle	आनुपातिक ओल्डस्टाइल
+	Replace deletes everything in “{group}” first, including presets you edited or moved there. This can't be undone.	बदलें पहले “{group}” में सब कुछ हटा देता है, जिसमें आपके द्वारा संपादित या वहाँ ले जाए गए प्रीसेट भी शामिल हैं। इसे पूर्ववत नहीं किया जा सकता।
+	Satin	साटन
+	Save Image Pyramid	इमेज पिरामिड सहेजें
+	Save Transparency	पारदर्शिता सहेजें
+	Set as default	डिफ़ॉल्ट के रूप में सेट करें
+	Start	आरंभ
+	Tabular	टेबुलर
+	Tabular Lining	टेबुलर लाइनिंग
+	Tabular Oldstyle	टेबुलर ओल्डस्टाइल
+	Use these settings for new arrows	नए तीरों के लिए ये सेटिंग्स उपयोग करें
+	ZIP	ZIP
+	{message} into “{group}”	“{group}” में {message}
+@plural	The brush group “{group}” already has {n} brush of yours.|The brush group “{group}” already has {n} brushes of yours.	ब्रश समूह “{group}” में पहले से आपका {n} ब्रश है।|ब्रश समूह “{group}” में पहले से आपके {n} ब्रश हैं।
+@plural	The gradient group “{group}” already exists ({n} gradient).|The gradient group “{group}” already exists ({n} gradients).	ग्रेडिएंट समूह “{group}” पहले से मौजूद है ({n} ग्रेडिएंट)।|ग्रेडिएंट समूह “{group}” पहले से मौजूद है ({n} ग्रेडिएंट)।
