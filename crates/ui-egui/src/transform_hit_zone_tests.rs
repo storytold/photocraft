@@ -43,6 +43,7 @@ fn near(actual: Option<[f64; 2]>, expected: [f64; 2]) {
     assert!((actual[0] - expected[0]).hypot(actual[1] - expected[1]) < 1e-6, "{actual:?} != {expected:?}");
 }
 
+/// Screen-sized zones must survive zoom changes; the interior control rejects an all-sided edge grab area.
 #[test]
 fn whole_edge_and_corner_priority_table_at_100_and_200_percent() {
     for zoom in [1.0, 2.0] {
@@ -73,6 +74,7 @@ fn whole_edge_and_corner_priority_table_at_100_and_200_percent() {
     }
 }
 
+/// An overlapping corner zone must not steal a closer painted midpoint on a small box.
 #[test]
 fn small_boxes_keep_their_painted_mid_edge_handles() {
     for side in [8.0, 16.0, 32.0] {
@@ -89,6 +91,7 @@ fn small_boxes_keep_their_painted_mid_edge_handles() {
     }
 }
 
+/// Reproduce inward rounding through the view transform, with a one-pixel interior control.
 #[test]
 fn an_edge_survives_the_actual_f32_view_round_trip() {
     for zoom in [1.0_f32, 2.0] {
@@ -103,6 +106,7 @@ fn an_edge_survives_the_actual_f32_view_round_trip() {
     }
 }
 
+/// The same small-edge press must be ignored by Distort and stretch one axis in legacy unlinked scaling.
 #[test]
 fn a_small_edge_keeps_distort_and_legacy_aspect_behavior() {
     for mode in [TransformMode::Distort, TransformMode::Free] {
@@ -131,6 +135,7 @@ fn a_small_edge_keeps_distort_and_legacy_aspect_behavior() {
     }
 }
 
+/// At 45 degrees, corners and edges exchange cursor axis orientation at both tested zooms.
 #[test]
 fn turned_box_zones_and_resize_cursors_follow_the_quad() {
     let turn = |p: [f64; 2]| {
@@ -158,6 +163,7 @@ fn turned_box_zones_and_resize_cursors_follow_the_quad() {
     }
 }
 
+/// Skewed edges and reversed winding must use actual segment geometry for hits and turn direction.
 #[test]
 fn distorted_and_flipped_quads_use_their_edges_not_an_axis_aligned_box() {
     let q = [[100.0, 100.0], [500.0, 140.0], [460.0, 300.0], [80.0, 260.0]];
@@ -171,6 +177,7 @@ fn distorted_and_flipped_quads_use_their_edges_not_an_axis_aligned_box() {
     }
 }
 
+/// A concave quad whose corner mean is beyond an edge rejects center-based normal orientation.
 #[test]
 fn concave_quad_edge_direction_uses_winding_in_both_orientations() {
     let q = [[0.0, 0.0], [100.0, 0.0], [10.0, 10.0], [0.0, 100.0]];
@@ -179,6 +186,7 @@ fn concave_quad_edge_direction_uses_winding_in_both_orientations() {
     }
 }
 
+/// Each outside position selects its inward turn orientation and hides the system cursor.
 #[test]
 fn outside_rotation_has_eight_edge_and_corner_orientations() {
     let app = app(QUAD, 1.0);
@@ -199,6 +207,7 @@ fn outside_rotation_has_eight_edge_and_corner_orientations() {
     }
 }
 
+/// Compare unopened controls with an active session at identical points, including a free interior.
 #[test]
 fn unopened_move_controls_share_the_open_sessions_zones_and_cursors() {
     let app = app(QUAD, 1.0);
@@ -217,6 +226,7 @@ fn unopened_move_controls_share_the_open_sessions_zones_and_cursors() {
     assert!(!transform_controls_hit(r, r.center()), "inside remains an ordinary Move drag");
 }
 
+/// A press away from midpoint handles must scale an anchored preview without creating a history edit.
 #[test]
 fn move_whole_edge_press_enters_scaling_at_both_zooms() {
     for zoom in [1.0, 2.0] {
@@ -250,6 +260,7 @@ fn move_whole_edge_press_enters_scaling_at_both_zooms() {
     }
 }
 
+/// Excluded modes retain cursor ownership, and non-finite coordinates cannot activate controls.
 #[test]
 fn modes_that_do_not_rotate_and_invalid_points_do_not_hide_the_pointer() {
     let mut app = app(QUAD, 1.0);
@@ -278,6 +289,7 @@ fn modes_that_do_not_rotate_and_invalid_points_do_not_hide_the_pointer() {
     }
 }
 
+/// Captured rotation must retain feedback after crossing into the box, independent of hover zones.
 #[test]
 fn rotate_drag_keeps_the_arrow_when_the_pointer_enters_the_box() {
     let mut app = app(QUAD, 1.0);

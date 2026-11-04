@@ -19,6 +19,9 @@ pub(crate) enum Hit {
 
 /// Screen-sized corner and outward edge bands, shared with Move's unopened controls.
 impl TransformSession {
+    /// Classify a document point with screen-sized corner and outward edge zones.
+    /// Corners outrank free edge bands; overlapping painted handles keep nearest-handle priority.
+    /// Only projection-scale rounding is treated as an edge on the interior side.
     pub(crate) fn box_hit(quad: &[[f64; 2]; 4], p: [f64; 2], tol: f64) -> Hit {
         // `tol` is the existing 12 pt handle tolerance, divided by the view zoom.
         let corner_radius = tol * (8.0 / HANDLE_PX);
@@ -119,6 +122,8 @@ pub(crate) fn hit(t: &TransformSession, p: [f64; 2], tol: f64) -> Hit {
     if d(t.pivot) < tol && d(t.pivot) < handle_distance { Hit::Pivot } else { h }
 }
 
+/// Even-odd quad membership, independent of winding and valid for concave boxes.
+/// Handles and edge-rounding tolerance are classified separately by the caller.
 fn inside(q: &[[f64; 2]; 4], p: [f64; 2]) -> bool {
     let mut c = false;
     for i in 0..4 {
@@ -314,6 +319,8 @@ pub(crate) fn rotate_cursor_dir(app: &PhotocraftApp, p: [f64; 2]) -> Option<[f64
     rotate_dir(app.ui.transform.as_ref()?, app.transform_preview.as_ref(), p, handle_tolerance(app))
 }
 
+/// Choose hover or captured rotation feedback without overriding scaling gestures.
+/// Warp, Distort, Skew and Content-Aware Scale keep their own cursor behavior.
 pub(super) fn rotate_dir(t: &TransformSession, pv: Option<&TransformPreview>, p: [f64; 2], tol: f64) -> Option<[f64; 2]> {
     // Content-Aware Scale's box only scales, and Skew doesn't rotate: no rotate arrow.
     if !(p[0].is_finite() && p[1].is_finite())

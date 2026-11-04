@@ -58,10 +58,12 @@ pub(super) fn transform_controls_rect(app: &PhotocraftApp, xf: &ViewXform) -> Op
     Some(Rect::from_two_pos(xf.to_screen(b.x0 as f32, b.y0 as f32), xf.to_screen(b.x1 as f32, b.y1 as f32)))
 }
 
+/// Express the unopened screen rectangle in the same corner order as a transform quad.
 fn controls_quad(r: Rect) -> [[f64; 2]; 4] {
     [r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom()].map(|p| [f64::from(p.x), f64::from(p.y)])
 }
 
+/// Classify screen coordinates with the fixed screen-space tolerance, without a pivot.
 fn controls_zone(r: Rect, p: Pos2) -> crate::transform_tool::Hit {
     crate::state::TransformSession::box_hit(&controls_quad(r), [f64::from(p.x), f64::from(p.y)], crate::transform_tool::HANDLE_PX)
 }
