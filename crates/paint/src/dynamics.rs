@@ -213,30 +213,42 @@ pub fn smooth_points(cfg: &Smoothing, zoom: f32, pts: &[StrokePoint]) -> Vec<Str
 const CURVE_STEP_PX: f64 = 2.0;
 /// Most pieces one [`CornerCurve`] arc is split into.
 const MAX_CURVE_STEPS: usize = 64;
-/// How far past its chord a [`CornerCurve`] arc ends heading, as a fraction of the turn it just
-/// made. 1 would draw steady curves as circle arcs, but after a sharp corner the overshoot would
-/// swing from side to side forever; at ½ it halves with every segment.
-const CURVE_LEAD: f64 = 0.5;
+/// Longest arc handle, as a multiple of its chord. Centripetal Catmull-Rom handles can outgrow a
+/// short chord between two long ones; capped, the short arc can't swing out into a loop.
+const MAX_HANDLE_PER_CHORD: f64 = 1.5;
 
-/// Rounds the corners of the smoothed path (#2138). Pointer samples arrive far apart on a fast
-/// stroke, and joining them with straight lines turns a quick curve into a polygon. This joins
-/// them with cubic arcs instead: each leaves its start point in the direction the path arrived
-/// there, so the direction of travel never jumps, and reaches the new point already turning on a
-/// little past the chord ([`CURVE_LEAD`]), so a steady curve bends evenly along each arc rather
-/// than all at its start. Straight input stays straight.
+/// Rounds the corners of the pointer's path (#2138). Pointer samples arrive far apart on a fast
+/// stroke (a touchpad or a 60 Hz pointer reports a fast circle a dozen times), and joining them
+/// with straight lines turns a quick curve into a polygon. This joins them with a centripetal
+/// Catmull-Rom spline instead: the path passes through every point, heading at each one along the
+/// line from the point before it to the point after it, so the direction of travel never jumps
+/// and each bend goes the way the samples around it go. Straight input stays straight.
 ///
-/// Nothing waits for a later point: every arc ends at the newest point, so the live stroke, which
-/// tools that run each dab themselves can't redraw, shows the same path as the committed one.
-/// The less the path turns, the more the arc keeps its start direction; a full reversal stays a
-/// corner rather than overshooting into a loop.
+/// The arc into a point waits for the point after it, since that decides the heading there. The
+/// live stroke's tail preview (`DabGenerator::finish` on a copy) draws that last arc, ending
+/// along its chord, every frame, so the brush does not visibly trail the pointer by a sample. A
+/// point that doesn't move (a held pointer repeating itself) and the end of the stroke draw the
+/// waiting arc that same way at once. Guessing the heading at the newest point instead, without
+/// waiting, put an S-bend into every arc whose guess the next sample proved wrong.
 #[derive(Clone, Debug, Default)]
 struct CornerCurve {
+    /// Start of the arc that waits for the next point (with `pending`).
+    prev: Option<StrokePoint>,
+    /// The newest point.
     last: Option<StrokePoint>,
-    /// Unit direction the path arrived at `last` heading in.
-    dir: Option<(f64, f64)>,
+    /// The path's velocity (per unit of centripetal knot) at the start of the next arc, when it
+    /// is already fixed: by the arc drawn into that point. `None` starts along the chord.
+    start_vel: Option<(f64, f64)>,
+    /// The arc `prev` → `last` is not drawn yet.
+    pending: bool,
     /// Longest leg time, in ms, that is still split into an arc. A longer leg stays one straight
     /// chord, so the walker's stalled-backlog guard sees the whole gap rather than one piece of it.
     max_gap_ms: Option<f64>,
+}
+
+/// Centripetal knot interval between two points: the square root of their distance.
+fn knot(a: &StrokePoint, b: &StrokePoint) -> f64 {
+    (b.x - a.x).hypot(b.y - a.y).sqrt()
 }
 
 impl CornerCurve {
@@ -244,51 +256,99 @@ impl CornerCurve {
         Self { max_gap_ms, ..Self::default() }
     }
 
-    /// Feed one point; appends the path points up to and including it.
+    /// Feed one point; appends the path points up to the newest one whose heading is known.
     fn push(&mut self, p: StrokePoint, out: &mut Vec<StrokePoint>) {
-        let Some(a) = self.last.replace(p) else {
+        let Some(b) = self.last else {
+            self.last = Some(p);
             out.push(p);
             return;
         };
-        let (dx, dy) = (p.x - a.x, p.y - a.y);
-        let len = (dx * dx + dy * dy).sqrt();
+        let len = (p.x - b.x).hypot(p.y - b.y);
         if !(len > 1e-9 && len.is_finite()) {
+            // Held still (or a point with no usable position): the waiting arc ends here.
+            self.finish(out);
+            if !len.is_finite() {
+                self.start_vel = None;
+            }
+            self.last = Some(p);
             out.push(p);
             return;
         }
-        let u = (dx / len, dy / len);
-        let Some(t) = self.dir else {
-            self.dir = Some(u);
+        if self.max_gap_ms.is_some_and(|g| p.time - b.time > g) {
+            // A long gap is one straight chord; the next arc starts along it.
+            self.finish(out);
+            let h = knot(&b, &p);
+            self.start_vel = Some(((p.x - b.x) / h, (p.y - b.y) / h));
+            self.last = Some(p);
             out.push(p);
             return;
+        }
+        if let (true, Some(a)) = (self.pending, self.prev) {
+            // Now the heading at `b` is known: along `a` → `p`, with centripetal weights.
+            let (h0, h1) = (knot(&a, &b), knot(&b, &p));
+            let v = |k: fn(&StrokePoint) -> f64| (k(&b) - k(&a)) / h0 - (k(&p) - k(&a)) / (h0 + h1) + (k(&p) - k(&b)) / h1;
+            self.start_vel = Some(self.arc(a, b, Some((v(|q| q.x), v(|q| q.y))), out));
+        }
+        self.prev = Some(b);
+        self.last = Some(p);
+        self.pending = true;
+    }
+
+    /// Draws the waiting arc, with a natural end (see [`Self::arc`]).
+    fn finish(&mut self, out: &mut Vec<StrokePoint>) {
+        if let (true, Some(a), Some(b)) = (self.pending, self.prev, self.last) {
+            self.start_vel = Some(self.arc(a, b, None, out));
+        }
+        self.pending = false;
+    }
+
+    /// The arc `a` → `b` leaving `a` at `start_vel` and arriving at velocity `end_vel`, as path
+    /// points after `a` up to and including `b`; returns the velocity it arrives with. An end
+    /// without a velocity (the stroke's first point, the newest one) is natural: it bends as the
+    /// other end does, not straight along the chord, which put a slight S into the first arc.
+    fn arc(&self, a: StrokePoint, b: StrokePoint, end_vel: Option<(f64, f64)>, out: &mut Vec<StrokePoint>) -> (f64, f64) {
+        let (dx, dy) = (b.x - a.x, b.y - a.y);
+        let len = dx.hypot(dy);
+        let h = len.sqrt();
+        // Bézier handles: a third of each end's derivative over this knot interval, capped.
+        let handle = |v: (f64, f64)| {
+            let (x, y) = (v.0 * h / 3.0, v.1 * h / 3.0);
+            let m = x.hypot(y);
+            let cap = len * MAX_HANDLE_PER_CHORD / 3.0;
+            if m > cap && m.is_finite() { (x * cap / m, y * cap / m) } else { (x, y) }
         };
-        // The end direction: the chord's, turned on by CURVE_LEAD of the turn from `t` (its
-        // length is at least 1 - CURVE_LEAD, so the division is safe).
-        let (ex, ey) = (u.0 + CURVE_LEAD * (u.0 - t.0), u.1 + CURVE_LEAD * (u.1 - t.1));
-        let e_len = (ex * ex + ey * ey).sqrt();
-        let e = (ex / e_len, ey / e_len);
-        // Bézier handles a third of the chord long; the start handle shrinks as the turn grows.
-        let reach = len / 3.0 * (1.0 + t.0 * u.0 + t.1 * u.1) / 2.0;
-        let bend = ((t.0 * u.1 - t.1 * u.0).abs() * reach).max((e.0 * u.1 - e.1 * u.0).abs() * len / 3.0);
-        let n = (((len + bend) / CURVE_STEP_PX).ceil() as usize).clamp(1, MAX_CURVE_STEPS);
-        let long_gap = self.max_gap_ms.is_some_and(|g| p.time - a.time > g);
-        if bend <= 0.05 || n == 1 || long_gap {
-            // Drawn as the straight chord, so the next arc starts from the chord's direction.
-            self.dir = Some(u);
-            out.push(p);
-            return;
+        // A natural end's derivative is (3·chord − m)/2, m the other end's, so the curve's second
+        // derivative is zero there: as handles (a third of each), (chord − other handle)/2.
+        let natural = |other: (f64, f64)| ((dx - other.0) / 2.0, (dy - other.1) / 2.0);
+        let (s, e) = match (self.start_vel.map(handle), end_vel.map(handle)) {
+            (Some(s), Some(e)) => (s, e),
+            (Some(s), None) => (s, natural(s)),
+            (None, Some(e)) => (natural(e), e),
+            (None, None) => ((dx / 3.0, dy / 3.0), (dx / 3.0, dy / 3.0)),
+        };
+        let c1 = (a.x + s.0, a.y + s.1);
+        let c2 = (b.x - e.0, b.y - e.1);
+        // How far the handles sit off the chord: straight input stays a single straight piece.
+        let off = |c: (f64, f64)| ((c.0 - a.x) * dy - (c.1 - a.y) * dx).abs() / len;
+        let bend = off(c1).max(off(c2));
+        let reach = s.0.hypot(s.1) + (c2.0 - c1.0).hypot(c2.1 - c1.1) + e.0.hypot(e.1);
+        let n = ((reach / CURVE_STEP_PX).ceil() as usize).clamp(1, MAX_CURVE_STEPS);
+        let arrive = (e.0 * 3.0 / h, e.1 * 3.0 / h);
+        if bend.is_nan() || bend <= 0.05 || n == 1 {
+            out.push(b);
+            return arrive;
         }
-        self.dir = Some(e);
-        let c1 = StrokePoint { x: a.x + t.0 * reach, y: a.y + t.1 * reach, ..a };
-        let c2 = StrokePoint { x: p.x - e.0 * len / 3.0, y: p.y - e.1 * len / 3.0, ..p };
         for i in 1..n {
             let f = i as f64 / n as f64;
-            let (ab, bc, cd) = (lerp_pt(&a, &c1, f), lerp_pt(&c1, &c2, f), lerp_pt(&c2, &p, f));
-            let q = lerp_pt(&lerp_pt(&ab, &bc, f), &lerp_pt(&bc, &cd, f), f);
-            // Only the position follows the arc; pose and time run evenly from `a` to `p`.
-            out.push(StrokePoint { x: q.x, y: q.y, ..lerp_pt(&a, &p, f) });
+            let g = 1.0 - f;
+            let (w0, w1, w2, w3) = (g * g * g, 3.0 * g * g * f, 3.0 * g * f * f, f * f * f);
+            // Only the position follows the arc; pose and time run evenly from `a` to `b`.
+            let x = w0 * a.x + w1 * c1.0 + w2 * c2.0 + w3 * b.x;
+            let y = w0 * a.y + w1 * c1.1 + w2 * c2.1 + w3 * b.y;
+            out.push(StrokePoint { x, y, ..lerp_pt(&a, &b, f) });
         }
-        out.push(p);
+        out.push(b);
+        arrive
     }
 }
 
@@ -846,25 +906,30 @@ pub fn apply_pose(b: &BrushSettings, mut p: StrokePoint) -> StrokePoint {
 #[derive(Clone, Debug)]
 pub struct DabGenerator {
     smoother: Smoother,
-    /// Rounds the smoothed path's corners while Smoothing is on (see [`CornerCurve`]).
+    /// Rounds the corners of the pointer's path, before the smoother, while Smoothing is on (see
+    /// [`CornerCurve`]).
     curve: Option<CornerCurve>,
     walker: PathWalker,
     dual_walker: Option<PathWalker>,
     builder: DabBuilder,
     dual: Option<DualBuilder>,
     scratch: Vec<StrokePoint>,
+    curve_buf: Vec<StrokePoint>,
 }
 
 impl DabGenerator {
     /// Does the stroke change with time while the pointer is held still (airbrush Build-up, or
     /// smoothing still catching up)? The canvas then keeps feeding it the held point.
+    /// A held pointer also finishes the arc the [`CornerCurve`] keeps waiting for the next point.
     pub fn wants_time(&self) -> bool {
-        self.walker.interval.is_some() || self.smoother.lagging()
+        self.walker.interval.is_some() || self.smoother.lagging() || self.curve.as_ref().is_some_and(|c| c.pending)
     }
 
-    /// See [`Smoother::string`].
+    /// See [`Smoother::string`]; it ends at the pointer itself, not at the newest point the
+    /// [`CornerCurve`] has passed on.
     pub fn smoothing_string(&self) -> Option<([f64; 2], [f64; 2])> {
-        self.smoother.string()
+        let pointer = self.curve.as_ref().and_then(|c| c.last);
+        self.smoother.string().map(|(brush, p)| (brush, pointer.map_or(p, |q| [q.x, q.y])))
     }
 
     pub fn new(brush: &BrushSettings, zoom: f32) -> Self {
@@ -885,6 +950,7 @@ impl DabGenerator {
             builder: DabBuilder::new(&brush),
             dual: dual_on.then(|| DualBuilder::new(&brush)),
             scratch: Vec::new(),
+            curve_buf: Vec::new(),
         }
     }
 
@@ -909,14 +975,22 @@ impl DabGenerator {
         }
     }
 
-    /// The smoothed points `sm` with their corners rounded (unchanged without a curve).
-    fn curved(&mut self, sm: Vec<StrokePoint>) -> Vec<StrokePoint> {
-        let Some(curve) = self.curve.as_mut() else { return sm };
-        let mut out = Vec::with_capacity(sm.len() * 2);
-        for p in &sm {
-            curve.push(*p, &mut out);
+    /// Feed one input point through the [`CornerCurve`] and the smoother.
+    ///
+    /// The curve goes first, through the pointer's own samples: run after the smoother, it had
+    /// to bend around the straight runs the smoother's catch-up steps lay towards each sample.
+    fn smooth(&mut self, p: StrokePoint, sm: &mut Vec<StrokePoint>) {
+        let Some(curve) = self.curve.as_mut() else {
+            self.smoother.push(p, sm);
+            return;
+        };
+        let mut cv = std::mem::take(&mut self.curve_buf);
+        cv.clear();
+        curve.push(p, &mut cv);
+        for q in &cv {
+            self.smoother.push(*q, sm);
         }
-        out
+        self.curve_buf = cv;
     }
 
     /// Feed input points; appends the new primary and dual dabs.
@@ -924,9 +998,8 @@ impl DabGenerator {
         let mut sm = std::mem::take(&mut self.scratch);
         sm.clear();
         for p in pts {
-            self.smoother.push(*p, &mut sm);
+            self.smooth(*p, &mut sm);
         }
-        let sm = self.curved(sm);
         self.walk(&sm, dabs, dual);
         self.scratch = sm;
     }
@@ -934,8 +1007,14 @@ impl DabGenerator {
     /// End of stroke.
     pub fn finish(&mut self, dabs: &mut Vec<Dab>, dual: &mut Vec<Dab>) {
         let mut sm = Vec::new();
+        let mut cv = Vec::new();
+        if let Some(curve) = self.curve.as_mut() {
+            curve.finish(&mut cv);
+        }
+        for q in &cv {
+            self.smoother.push(*q, &mut sm);
+        }
         self.smoother.finish(&mut sm);
-        let sm = self.curved(sm);
         self.walk(&sm, dabs, dual);
         let mut steps = Vec::new();
         self.walker.finish(&mut |s| steps.push(s));

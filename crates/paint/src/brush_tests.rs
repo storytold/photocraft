@@ -2115,3 +2115,39 @@ fn rounded_corners_settle_back_onto_a_straight_line() {
     let off = |from: f64| d.iter().filter(|d| d.center.y >= from).map(|d| (d.center.x - 60.0).abs()).fold(0.0, f64::max);
     assert!(off(120.0) < 0.5, "the line is straight again after a few samples ({:.2} px off)", off(120.0));
 }
+
+#[test]
+fn rounded_corners_bend_only_one_way_round_a_touchpad_circle() {
+    // A fast circle drawn on a laptop touchpad, as the canvas recorded it: samples 6 to 16 ms and
+    // 45 to 230 px apart, every one turning the same way. The stroke must too. Guessing the
+    // heading at the newest sample put S-bends into the arcs, and the circle came out lumpy.
+    let recorded = [
+        (0.0, 459.0, 919.7),
+        (6.2, 502.4, 792.2),
+        (12.5, 620.5, 634.8),
+        (28.9, 813.4, 467.6),
+        (45.6, 1026.7, 361.0),
+        (62.4, 1214.6, 319.6),
+        (79.1, 1345.2, 345.1),
+        (95.7, 1421.3, 418.5),
+        (112.4, 1464.9, 549.3),
+        (129.0, 1451.3, 722.8),
+        (145.8, 1360.8, 911.2),
+        (154.1, 1193.8, 1095.0),
+        (162.3, 972.4, 1253.1),
+        (178.9, 756.0, 1325.2),
+        (195.6, 612.1, 1331.9),
+        (212.3, 536.6, 1301.7),
+    ];
+    let pts: Vec<StrokePoint> = recorded.iter().map(|&(time, x, y)| StrokePoint { time, ..StrokePoint::new(x, y, 1.0) }).collect();
+    for amount in [0.05, 0.1, 0.5] {
+        let b = BrushSettings { size: 10.0, spacing: 0.1, smoothing: Smoothing { amount, catch_up_on_end: false, ..Default::default() }, ..brush() };
+        let d = dabs_of(&b, &pts);
+        let steps: Vec<(f64, f64)> =
+            d.windows(2).map(|w| (w[1].center.x - w[0].center.x, w[1].center.y - w[0].center.y)).filter(|(x, y)| x.hypot(*y) > 1e-6).collect();
+        // The samples turn clockwise on screen (y down): a positive cross product.
+        let against =
+            steps.windows(2).map(|w| (w[0].0 * w[1].1 - w[0].1 * w[1].0).atan2(w[0].0 * w[1].0 + w[0].1 * w[1].1).to_degrees()).fold(0.0, |m: f64, t| m.min(t));
+        assert!(against > -0.05, "Smoothing {amount}: a step turns {against:.2}° against the circle");
+    }
+}
