@@ -526,7 +526,11 @@ fn exif_without_thumbnail(exif: &[u8]) -> Option<Vec<u8>> {
     }
     // Classic TIFF: also blank the thumbnail JPEG itself (IFD1's JPEGInterchangeFormat/Length),
     // which stays recoverable in the block once nothing points at it.
-    let thumb = (!big_tiff).then(|| thumbnail_range(order, body, next - prefix)).flatten();
+    // Only a range clear of IFD0's table and values: one that covers them is not a thumbnail.
+    let thumb = (!big_tiff)
+        .then(|| thumbnail_range(order, body, next - prefix))
+        .flatten()
+        .filter(|&(off, len)| !overlaps_ifd0(order, body, first - 2, count, off, len));
     let mut out = exif.to_vec();
     out.get_mut(next..next + width)?.fill(0);
     if let Some((off, len)) = thumb
@@ -537,17 +541,48 @@ fn exif_without_thumbnail(exif: &[u8]) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// Whether `off..off + len` of `body` covers part of classic IFD0 (`ifd0` is its entry count's
+/// offset): its table with the next-IFD pointer, or an out-of-line value of one of its entries.
+fn overlaps_ifd0(order: Order, body: &[u8], ifd0: usize, count: usize, off: usize, len: usize) -> bool {
+    let end = off.saturating_add(len);
+    let hits = |a: usize, size: usize| a < end && off < a.saturating_add(size);
+    if hits(ifd0, 2 + count * 12 + 4) {
+        return true;
+    }
+    (0..count).any(|i| {
+        let e = ifd0 + 2 + i * 12;
+        let unit = match order.u16(body, e + 2) {
+            Some(1 | 2 | 6 | 7) => 1,
+            Some(3 | 8) => 2,
+            Some(4 | 9 | 11) => 4,
+            Some(5 | 10 | 12) => 8,
+            _ => return false,
+        };
+        let size = usize::try_from(order.u32(body, e + 4).unwrap_or(0)).unwrap_or(usize::MAX).saturating_mul(unit);
+        size > 4 && order.u32(body, e + 8).and_then(|v| usize::try_from(v).ok()).is_some_and(|v| hits(v, size))
+    })
+}
+
 /// IFD1's thumbnail JPEG as (offset, length) in `body`, from the next-IFD pointer at `ptr`.
 fn thumbnail_range(order: Order, body: &[u8], ptr: usize) -> Option<(usize, usize)> {
     let ifd1 = usize::try_from(order.u32(body, ptr)?).ok()?;
     let (mut off, mut len) = (None, None);
     for i in 0..usize::from(order.u16(body, ifd1)?) {
         let e = ifd1.checked_add(2)?.checked_add(i.checked_mul(12)?)?;
-        let value = if order.u16(body, e + 2)? == 3 { usize::from(order.u16(body, e + 8)?) } else { usize::try_from(order.u32(body, e + 8)?).ok()? };
-        match order.u16(body, e)? {
-            0x0201 => off = Some(value),
-            0x0202 => len = Some(value),
-            _ => {}
+        let tag = order.u16(body, e)?;
+        if !matches!(tag, 0x0201 | 0x0202) {
+            continue;
+        }
+        // One SHORT or LONG value; anything else holds an unrelated number.
+        let ty = order.u16(body, e + 2)?;
+        if order.u32(body, e + 4)? != 1 || !matches!(ty, 3 | 4) {
+            return None;
+        }
+        let value = if ty == 3 { usize::from(order.u16(body, e + 8)?) } else { usize::try_from(order.u32(body, e + 8)?).ok()? };
+        if tag == 0x0201 {
+            off = Some(value);
+        } else {
+            len = Some(value);
         }
     }
     Some((off?, len?))

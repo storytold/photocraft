@@ -536,6 +536,27 @@ fn exports_drop_the_source_exif_thumbnail() {
     }
 }
 
+/// A thumbnail range that covers IFD0, or tags that are not one SHORT/LONG value, are not blanked.
+#[test]
+fn thumbnail_blanking_keeps_ifd0_and_ignores_malformed_tags() {
+    for e in [&LE, &BE] {
+        let exif = exif_with_thumbnail(e);
+        let ifd1 = camera_exif(e).len();
+        let table = 8..8 + 2 + 4 * 12;
+        // Offset 8, length 60: the range covers IFD0's table.
+        let mut over = exif.clone();
+        over[ifd1 + 2 + 8..ifd1 + 2 + 12].copy_from_slice(&e.u32(8));
+        over[ifd1 + 2 + 12 + 8..ifd1 + 2 + 12 + 12].copy_from_slice(&e.u32(60));
+        let out = export_exif(&over, None);
+        assert_eq!(next_ifd(e, &out), 0, "IFD1 is still unlinked");
+        assert_eq!(out[table.start..table.end], over[table.start..table.end], "IFD0's table is untouched");
+        // A count of 2 on the offset tag: the thumbnail bytes are not blanked.
+        let mut counted = exif.clone();
+        counted[ifd1 + 2 + 4..ifd1 + 2 + 8].copy_from_slice(&e.u32(2));
+        assert!(export_exif(&counted, None).windows(5).any(|w| w == b"stale"));
+    }
+}
+
 #[test]
 fn thumbnail_removal_never_panics_on_truncated_exif() {
     for e in [&LE, &BE] {
