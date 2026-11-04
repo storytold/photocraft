@@ -899,6 +899,11 @@ fn select_tool_by_key(app: &mut PhotocraftApp, ctx: &egui::Context, pressed: &im
         if cycle_shift || pressed(k) {
             let before = app.ui.tool;
             let group: Vec<Tool> = Tool::ALL.iter().copied().filter(|x| x.key() == t.key() && crate::tool_shortcuts::uses_default(app, *x)).collect();
+            // Edit › Toolbar hides tools from the key too, or it picks one the toolbar no longer shows.
+            // A group hidden whole keeps answering: that is the only way left to reach its tools.
+            let hidden: Vec<Tool> = app.session.prefs().toolbar.hidden.iter().map(String::as_str).filter_map(Tool::from_name).collect();
+            let shown: Vec<Tool> = group.iter().copied().filter(|x| !hidden.contains(x)).collect();
+            let group = if shown.is_empty() { group } else { shown };
             app.ui.tool = match group.iter().position(|x| *x == app.ui.tool) {
                 Some(i) if shift_switch && !cycle_shift => group[i],
                 Some(i) => group[(i + 1) % group.len()],
