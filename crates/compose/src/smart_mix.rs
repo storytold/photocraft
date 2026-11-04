@@ -46,7 +46,7 @@ fn check(ctl: &Interrupt<'_>) -> Result<(), Error> {
 /// Mix an ordinary filter result with its input over `area`, preserving base data outside it.
 ///
 /// `area` is the caller's native mixing extent, normally the union of input/result content
-/// bounds. Non-Normal coverage changes classify the entire extent before mixing any pixel.
+/// bounds. Non-Normal coverage changes select source-over only at the affected pixel.
 /// Alpha-preserving filters instead edit existing coverage, including at fractional opacity.
 /// The caller must admit the retained output tiles; scratch is bounded to three tile buffers.
 pub fn mix(base: &Surface, filtered: &Surface, area: Rect, mode: BlendMode, opacity: f32, ctl: &Interrupt<'_>) -> Result<Surface, Error> {
@@ -62,21 +62,6 @@ pub fn mix(base: &Surface, filtered: &Surface, area: Rect, mode: BlendMode, opac
     }
     let fmt = base.format();
     let n = fmt.channels();
-    // An unchanged-alpha pixel must use the same rule as a changed-alpha blur edge.
-    // This classification is global, as in the original native Smart-filter mixer.
-    let mut composite_coverage = false;
-    if mode != BlendMode::Normal && fmt.alpha {
-        for tile in area.tiles() {
-            check(ctl)?;
-            let rect = tile.rect().intersect(&area);
-            let b = base.try_read_region(rect)?;
-            let t = filtered.try_read_region(rect)?;
-            if b.chunks_exact(n).zip(t.chunks_exact(n)).any(|(bp, tp)| bp.last() != tp.last()) {
-                composite_coverage = true;
-                break;
-            }
-        }
-    }
     let mut out = base.clone();
     for tile in area.tiles() {
         check(ctl)?;
@@ -90,8 +75,9 @@ pub fn mix(base: &Surface, filtered: &Surface, area: Rect, mode: BlendMode, opac
         for ((bp, tp), op) in b.chunks_exact(n).zip(t.chunks_exact(n)).zip(values.chunks_exact_mut(n)) {
             let b = photocraft_raster::to_rgba(&fmt, bp);
             let t = photocraft_raster::to_rgba(&fmt, tp);
-            if composite_coverage {
-                let rgba = photocraft_color::blend::composite(mode, b, t, opacity);
+            if mode != BlendMode::Normal && fmt.alpha && bp.last() != tp.last() {
+                let rgba =
+                    if fmt.sample == SampleType::F32 { composite_hdr(mode, b, t, opacity) } else { photocraft_color::blend::composite(mode, b, t, opacity) };
                 photocraft_raster::from_rgba_into(&fmt, rgba, op);
                 continue;
             }
@@ -118,6 +104,27 @@ pub fn mix(base: &Surface, filtered: &Surface, area: Rect, mode: BlendMode, opac
     out.prune();
     check(ctl)?;
     Ok(out)
+}
+
+/// Source-over in the float document domain; wide accumulators keep finite weighted HDR blends finite.
+fn composite_hdr(mode: BlendMode, backdrop: [f32; 4], source: [f32; 4], opacity: f32) -> [f32; 4] {
+    let ab = f64::from(backdrop[3]);
+    let alpha = f64::from(source[3]) * f64::from(opacity);
+    if alpha <= 0. {
+        return backdrop;
+    }
+    let output_alpha = alpha + ab * (1. - alpha);
+    if output_alpha <= 0. {
+        return [0.; 4];
+    }
+    let blend = photocraft_color::blend::blend_rgb_hdr(mode, [backdrop[0], backdrop[1], backdrop[2]], [source[0], source[1], source[2]]);
+    let mut output = [0.; 4];
+    for c in 0..3 {
+        let color = ((1. - alpha) * ab * f64::from(backdrop[c]) + (1. - ab) * alpha * f64::from(source[c]) + alpha * ab * f64::from(blend[c])) / output_alpha;
+        output[c] = color.clamp(-f64::from(f32::MAX), f64::from(f32::MAX)) as f32;
+    }
+    output[3] = output_alpha as f32;
+    output
 }
 
 #[cfg(test)]
@@ -174,9 +181,8 @@ mod tests {
     }
 
     #[test]
-    /// Ensure one changed-alpha region selects the same whole-extent policy across tile boundaries as native
-    /// composition.
-    fn non_normal_coverage_classification_is_global_across_tiles_and_matches_native_composite() {
+    /// A changed-alpha edge in another tile must not increase untouched interior coverage.
+    fn non_normal_coverage_is_classified_per_pixel_across_tiles() {
         let area = Rect::new(0, 0, 257, 1);
         for mode in [ColorMode::Rgb, ColorMode::Grayscale] {
             for sample in SampleType::ALL {
@@ -190,12 +196,30 @@ mod tests {
                     for x in [0, 256] {
                         let b = photocraft_raster::to_rgba(&format, &base.pixel(x, 0));
                         let t = photocraft_raster::to_rgba(&format, &filtered.pixel(x, 0));
-                        let expected = photocraft_color::blend::composite(blend, b, t, 0.5);
+                        let expected = if x == 0 {
+                            let color = photocraft_color::blend::blend_rgb(blend, [b[0], b[1], b[2]], [t[0], t[1], t[2]]);
+                            [0.5 * (b[0] + color[0]), 0.5 * (b[1] + color[1]), 0.5 * (b[2] + color[2]), b[3]]
+                        } else {
+                            photocraft_color::blend::composite(blend, b, t, 0.5)
+                        };
                         let expected = surface(format, expected, Rect::new(x, 0, x + 1, 1));
-                        assert_eq!(mixed.pixel(x, 0), expected.pixel(x, 0), "{mode:?}/{sample:?}/{blend:?}/x{x}");
+                        for (got, want) in mixed.pixel(x, 0).into_iter().zip(expected.pixel(x, 0)) {
+                            assert!((got - want).abs() <= tolerance(sample), "{mode:?}/{sample:?}/{blend:?}/x{x}: {got}/{want}");
+                        }
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn changed_coverage_uses_hdr_nonseparable_blending() {
+        let area = Rect::new(0, 0, 1, 1);
+        let base = surface(PixelFormat::RGBA32F, [4., 4., 4., 0.5], area);
+        let filtered = surface(PixelFormat::RGBA32F, [8., 8., 8., 0.25], area);
+        let out = mix(&base, &filtered, area, BlendMode::Luminosity, 1., &Interrupt::NONE).unwrap();
+        for (got, expected) in out.pixel(0, 0).into_iter().zip([5.6, 5.6, 5.6, 0.625]) {
+            assert!((got - expected).abs() < 1e-5);
         }
     }
 

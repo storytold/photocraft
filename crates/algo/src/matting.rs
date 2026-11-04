@@ -651,6 +651,7 @@ pub enum Error {
     Allocation,
     InvalidGeometry,
     ChannelMismatch,
+    NonFiniteSample,
     WorkspaceLimit,
 }
 impl std::fmt::Display for Error {
@@ -661,25 +662,28 @@ impl std::fmt::Display for Error {
             Self::Allocation => "native matting allocation unavailable",
             Self::InvalidGeometry => "native matting geometry is invalid",
             Self::ChannelMismatch => "native matting color channels do not match",
+            Self::NonFiniteSample => "native matting requires finite samples",
             Self::WorkspaceLimit => "native matting exceeds its working-byte allowance",
         })
     }
 }
 impl std::error::Error for Error {}
 
-/// Existing ordinary Remove Black/White Matte equation. Zero/opaque alpha is unchanged.
+/// Remove Black/White Matte in floating RGB coordinates without clipping finite HDR values.
+/// Results outside the representable float range saturate; zero/opaque alpha is unchanged.
 /// Conversion to/from document channels belongs to the caller's native pixel format.
 pub fn remove_matte_pixel(q: &mut [f32; 4], white: bool) {
     if q[3] > 0.0 && q[3] < 1.0 {
         let a = q[3];
         for v in &mut q[..3] {
-            *v = if white { (*v - (1.0 - a)) / a } else { *v / a }.clamp(0.0, 1.0);
+            let value = if white { (f64::from(*v) - (1.0 - f64::from(a))) / f64::from(a) } else { f64::from(*v) / f64::from(a) };
+            *v = value.clamp(-f64::from(f32::MAX), f64::from(f32::MAX)) as f32;
         }
     }
 }
 
 /// Existing native Remove Black Matte with fallible COW tiles/rows and cancellation.
-/// It changes only content inside `bounds`, preserves native color/depth conversion,
+/// It unassociates native color samples without a lossy RGB round trip, changes only `bounds`,
 /// and is identity on a surface without alpha. No partial result is published on error.
 pub fn remove_black_matte_with(src: &Surface, bounds: Rect, ctl: &photocraft_raster::Interrupt) -> Result<Surface, Error> {
     ctl.check().map_err(|_| Error::Cancelled)?;
@@ -719,12 +723,20 @@ pub fn remove_black_matte_with(src: &Surface, bounds: Rect, ctl: &photocraft_ras
             if index.is_multiple_of(1024) {
                 ctl.check().map_err(|_| Error::Cancelled)?;
             }
-            let mut rgba = photocraft_raster::to_rgba(&format, samples);
-            remove_matte_pixel(&mut rgba, false);
-            let mut encoded = [0.; 8];
-            let count = photocraft_raster::from_rgba_into(&format, rgba, &mut encoded);
-            let converted = encoded.get(..count).filter(|v| v.len() == samples.len()).ok_or(Error::ChannelMismatch)?;
-            samples.copy_from_slice(converted);
+            if samples.iter().any(|value| !value.is_finite()) {
+                return Err(Error::NonFiniteSample);
+            }
+            let alpha = *samples.last().ok_or(Error::ChannelMismatch)?;
+            if alpha > 0. && alpha < 1. {
+                for value in samples.iter_mut().take(channels - 1) {
+                    let unassociated = f64::from(*value) / f64::from(alpha);
+                    *value = if format.sample == photocraft_color::SampleType::F32 {
+                        unassociated.clamp(-f64::from(f32::MAX), f64::from(f32::MAX)) as f32
+                    } else {
+                        unassociated.clamp(0., 1.) as f32
+                    };
+                }
+            }
         }
         out.try_write_region(row_bounds, &row).map_err(|_| Error::Allocation)?;
     }
@@ -949,7 +961,10 @@ mod native_matte_tests {
                     if expected[3] > 0. && expected[3] < 1. {
                         let alpha = expected[3];
                         for color in &mut expected[..3] {
-                            *color = (*color / alpha).clamp(0., 1.);
+                            *color /= alpha;
+                            if depth != SampleType::F32 {
+                                *color = color.clamp(0., 1.);
+                            }
                         }
                     }
                     let mut values = [0.; 8];

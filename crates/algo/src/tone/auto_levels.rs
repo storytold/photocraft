@@ -75,7 +75,7 @@ fn histograms(surface: &Surface, area: Rect, ctl: &Interrupt<'_>) -> Result<[[u6
     Ok(histograms)
 }
 
-/// Find the native 0.1-percent histogram endpoints, falling back to identity when no samples exist.
+/// Find the native 0.1-percent histogram endpoints; empty or flat ranges use identity.
 fn clip_points(histogram: &[u64; 256]) -> (f32, f32) {
     let total: u64 = histogram.iter().sum();
     if total == 0 {
@@ -83,16 +83,16 @@ fn clip_points(histogram: &[u64; 256]) -> (f32, f32) {
     }
     let limit = (total as f64 * 0.001) as u64;
     let (mut accumulated, mut low) = (0u64, 0usize);
-    while low < 254 && accumulated + histogram.get(low).copied().unwrap_or(0) <= limit {
+    while low < 255 && accumulated + histogram.get(low).copied().unwrap_or(0) <= limit {
         accumulated += histogram.get(low).copied().unwrap_or(0);
         low += 1;
     }
     let (mut accumulated, mut high) = (0u64, 255usize);
-    while high > low + 1 && accumulated + histogram.get(high).copied().unwrap_or(0) <= limit {
+    while high > 0 && accumulated + histogram.get(high).copied().unwrap_or(0) <= limit {
         accumulated += histogram.get(high).copied().unwrap_or(0);
         high -= 1;
     }
-    (low as f32 / 255., high as f32 / 255.)
+    if low >= high { (0., 1.) } else { (low as f32 / 255., high as f32 / 255.) }
 }
 /// Select the central occupied display bin for ordinary native Auto Color neutralization.
 fn median(histogram: &[u64; 256]) -> f32 {

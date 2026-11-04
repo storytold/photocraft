@@ -416,6 +416,31 @@ fn accepted_deep_svg_and_embedded_children_do_not_exhaust_a_small_caller_stack()
         .unwrap();
 }
 
+/// Multiple children and opacity retain the groups: parsing alone on a worker is insufficient.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn retained_deep_svg_groups_lower_render_and_drop_on_a_bounded_worker() {
+    std::thread::Builder::new()
+        .stack_size(512 << 10)
+        .spawn(|| {
+            let source = format!(
+                "<svg {NS} width=\"8\" height=\"8\">{}<rect width=\"8\" height=\"8\"/>{}</svg>",
+                "<g opacity=\"0.99\"><rect width=\"1\" height=\"1\"/>".repeat(500),
+                "</g>".repeat(500)
+            );
+            let imported = svg::import_svg("retained.svg", source.as_bytes()).unwrap();
+            assert!(px(&imported.document, 0, 0)[3] > 0.5);
+            let (preview, _) = svg::import_svg_preview_with_work("retained.svg", source.as_bytes(), u64::MAX).unwrap();
+            assert!(px(&preview.document, 0, 0)[3] > 0.5);
+            let (w, h, pixels) = svg::rasterize_rgba8(source.as_bytes()).unwrap();
+            assert_eq!((w, h), (8, 8));
+            assert!(pixels[3] > 127);
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
 /// 8 000 nested groups (70 KB) overflowed the XML parser's recursion on a 2 MB thread stack, an
 /// abort nothing can catch. It is an error now, found before the parser runs; the thread here
 /// has a small stack so a regression aborts the test instead of passing by luck.

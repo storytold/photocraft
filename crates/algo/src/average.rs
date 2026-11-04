@@ -100,6 +100,20 @@ pub fn apply_with(surface: &Surface, area: Rect, bounds: Rect, selection: Option
             }
             let p = to_rgba(&surface.format(), dst);
             let mut mixed = p;
+            if surface.format().alpha && p[3] != avg[3] {
+                let before = f64::from(p[3]) * (1. - f64::from(k));
+                let after = f64::from(avg[3]) * f64::from(k);
+                let alpha = before + after;
+                for c in 0..3 {
+                    mixed[c] = if alpha > 0. { ((f64::from(p[c]) * before + f64::from(avg[c]) * after) / alpha) as f32 } else { 0. };
+                }
+                mixed[3] = alpha as f32;
+                if mixed.iter().any(|value| !value.is_finite()) {
+                    return Err(Error::NonFiniteSample);
+                }
+                from_rgba_into(&surface.format(), mixed, dst);
+                continue;
+            }
             for (v, (a, b)) in mixed.iter_mut().zip(p.into_iter().zip(avg)) {
                 *v = a + (b - a) * k;
                 if !v.is_finite() {
@@ -198,9 +212,8 @@ mod tests {
         assert!((p[0] - 1. / 3.).abs() < 1e-6 && (p[2] - 2. / 3.).abs() < 1e-6 && p[3] == 0.75);
     }
     #[test]
-    /// Pin the ordinary Raster Average weighting and quantization policy across native depths and selection
-    /// coverage.
-    fn original_rgba_weighted_mean_selection_and_depth_policy() {
+    /// Pin native mean weighting, premultiplied feathering and quantization across color models and depths.
+    fn rgba_weighted_mean_and_premultiplied_selection_at_every_depth() {
         for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab] {
             for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
                 let format = PixelFormat { mode, sample: depth, alpha: true };
@@ -224,7 +237,14 @@ mod tests {
                 from_rgba_into(&format, expected, &mut p);
                 encoded.write_pixel(0, 0, &p);
                 assert_eq!(out.pixel(0, 0), encoded.pixel(0, 0));
-                let mixed = std::array::from_fn(|c| b[c] + (expected[c] - b[c]) * 0.25);
+                let alpha = f64::from(b[3]) * 0.75 + f64::from(expected[3]) * 0.25;
+                let mixed = std::array::from_fn(|c| {
+                    if c == 3 {
+                        alpha as f32
+                    } else {
+                        ((f64::from(b[c]) * f64::from(b[3]) * 0.75 + f64::from(expected[c]) * f64::from(expected[3]) * 0.25) / alpha) as f32
+                    }
+                });
                 from_rgba_into(&format, mixed, &mut p);
                 encoded.write_pixel(1, 0, &p);
                 assert_eq!(out.pixel(1, 0), encoded.pixel(1, 0));

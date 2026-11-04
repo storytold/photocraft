@@ -234,8 +234,10 @@ pub(crate) fn has_filterable_layer(s: &Session) -> std::result::Result<(), Strin
 /// Channel-selective controls describe native samples; their last entry is alpha only on alpha-capable surfaces.
 fn edits_transparency(filter: &FilterParams, layer: &Layer) -> bool {
     filter.makes_transparency()
-        && (!matches!(filter, FilterParams::ChannelNoise(_) | FilterParams::Convolution(_) | FilterParams::Percentile(_))
-            || layer.surface().is_none_or(|surface| surface.format().alpha))
+        && (!matches!(
+            filter,
+            FilterParams::ChannelNoise(_) | FilterParams::Convolution(_) | FilterParams::Percentile(_) | FilterParams::FillHoles { alpha_only: false, .. }
+        ) || layer.surface().is_none_or(|surface| surface.format().alpha))
 }
 
 pub(crate) fn run_filter(s: &mut Session, id: &str, p: &Value) -> Result<Value> {

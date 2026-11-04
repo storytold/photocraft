@@ -241,6 +241,13 @@ pub fn apply_with(s: &Surface, p: &Params, area: Rect, domain: Rect, selection: 
                 }
                 let original = Image { rect: tile, ch, data: s.try_read_region(tile).map_err(|_| Error::Allocation)? };
                 crate::mix_selection(&mut filtered, tile, selection, &original, s.format().alpha);
+                for (pixel, before) in filtered.chunks_exact_mut(ch).zip(original.data.chunks_exact(ch)) {
+                    for ((value, original), selected) in pixel.iter_mut().zip(before).zip(&p.channels) {
+                        if !selected {
+                            *value = *original;
+                        }
+                    }
+                }
             }
             if filtered.iter().any(|v| !v.is_finite()) {
                 return Err(Error::NonFiniteSample);

@@ -45,6 +45,7 @@ fn channel_filter_transparency_follows_native_alpha_format() {
                     }
                 }
                 assert!(edits_transparency(&FilterParams::ColorToAlpha { color: [1.; 4], transparency_threshold: 0., opacity_threshold: 1. }, &layer));
+                assert_eq!(edits_transparency(&FilterParams::FillHoles { connectivity: 4, alpha_only: false }, &layer), alpha);
             }
         }
     }

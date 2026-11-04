@@ -486,7 +486,12 @@ fn pattern_sizes_from_the_file_are_checked() {
     assert!(matches!(huge, Err(FormatError::LimitExceeded(_))), "{huge:?}");
     let empty = load_from_bytes(&with_pattern_size(0, 24));
     assert!(matches!(empty, Err(FormatError::Corrupt(_))), "{empty:?}");
-    assert!(load_from_bytes(&with_pattern_size(32, 24)).is_ok());
+    let ordinary = load_from_bytes(&with_pattern_size(32, 24)).unwrap();
+    // Storage preserves imported pattern declarations; dense painting has a separate budget.
+    let retained = load_from_bytes(&with_pattern_size(30_000, 30_000)).unwrap();
+    let pattern = &retained.patterns[0];
+    assert!(!pattern.is_paintable());
+    assert_eq!(pattern.surface.tile_count(), ordinary.patterns[0].surface.tile_count());
 }
 
 /// A canvas is a few bytes of manifest JSON; one past the budget is refused before any work (#2935).

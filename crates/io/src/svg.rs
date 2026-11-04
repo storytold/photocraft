@@ -288,9 +288,41 @@ fn font_resolver() -> usvg::FontResolver<'static> {
     usvg::FontResolver::default()
 }
 
-/// Runs accepted deep parsing on one bounded native worker, including its embedded-image callbacks.
-/// Spawn/join failures are errors; wasm rejects deep parsing because it cannot isolate the recursive parser.
+#[cfg(not(target_arch = "wasm32"))]
+std::thread_local! {
+    static SVG_WORKER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Keep parsing, recursive lowering/rendering and usvg tree destruction on the same bounded stack.
+/// Embedded SVG callbacks reuse this worker; only native document/pixel data crosses back to the caller.
+fn on_svg_stack<T: Send>(operation: impl FnOnce() -> Result<T, IoError> + Send) -> Result<T, IoError> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        if SVG_WORKER.with(std::cell::Cell::get) {
+            return operation();
+        }
+        std::thread::scope(|scope| {
+            let worker = std::thread::Builder::new()
+                .name("photocraft-svg".into())
+                .stack_size(PARSER_STACK_BYTES)
+                .spawn_scoped(scope, move || {
+                    SVG_WORKER.with(|active| active.set(true));
+                    operation()
+                })
+                .map_err(|error| IoError::Svg(format!("could not start the bounded SVG worker: {error}")))?;
+            worker.join().map_err(|_| IoError::Svg("the bounded SVG worker failed; the drawing was not opened".into()))?
+        })
+    }
+    #[cfg(target_arch = "wasm32")]
+    operation()
+}
+
+/// Private parsing probes keep the same depth guard; public operations already own an isolated stack.
 fn parse_at_depth<T: Send>(depth: usize, isolated: bool, parse: impl FnOnce(bool) -> Result<T, IoError> + Send) -> Result<T, IoError> {
+    #[cfg(not(target_arch = "wasm32"))]
+    if SVG_WORKER.with(std::cell::Cell::get) {
+        return parse(true);
+    }
     if isolated || depth <= INLINE_XML_DEPTH {
         return parse(isolated);
     }
@@ -300,7 +332,10 @@ fn parse_at_depth<T: Send>(depth: usize, isolated: bool, parse: impl FnOnce(bool
             let worker = std::thread::Builder::new()
                 .name("photocraft-svg-parse".into())
                 .stack_size(PARSER_STACK_BYTES)
-                .spawn_scoped(scope, move || parse(true))
+                .spawn_scoped(scope, move || {
+                    SVG_WORKER.with(|active| active.set(true));
+                    parse(true)
+                })
                 .map_err(|error| IoError::Svg(format!("could not start the bounded SVG parser worker: {error}")))?;
             worker.join().map_err(|_| IoError::Svg("the bounded SVG parser worker failed; the drawing was not opened".into()))?
         })
@@ -930,7 +965,7 @@ pub fn import_svg(name: &str, bytes: &[u8]) -> Result<ImportResult, IoError> {
 /// Opens an SVG while rasterising any subtrees deeper than `max_group_depth` into single pixel
 /// layers. The document's hard nesting limit remains [`MAX_GROUP_DEPTH`].
 pub fn import_svg_with_group_depth(name: &str, bytes: &[u8], max_group_depth: usize) -> Result<ImportResult, IoError> {
-    import_svg_inner(name, bytes, max_group_depth, None, false)
+    on_svg_stack(|| import_svg_inner(name, bytes, max_group_depth, None, false))
 }
 
 /// Opens an SVG with a conservative budget for eagerly rendered layer caches. A canvas above
@@ -938,7 +973,7 @@ pub fn import_svg_with_group_depth(name: &str, bytes: &[u8], max_group_depth: us
 /// When the canvas fits but its elements' combined caches would exceed the budget, the whole
 /// drawing becomes one pixel layer, with an explicit editability warning.
 pub fn import_svg_bounded(name: &str, bytes: &[u8], max_cached_pixels: u64) -> Result<ImportResult, IoError> {
-    import_svg_inner(name, bytes, MAX_GROUP_DEPTH, Some(max_cached_pixels), false)
+    on_svg_stack(|| import_svg_inner(name, bytes, MAX_GROUP_DEPTH, Some(max_cached_pixels), false))
 }
 
 /// Import a drawing with one aggregate pixel-work allowance and return its conservative charge.
@@ -960,46 +995,48 @@ pub fn import_svg_preview_with_work(name: &str, bytes: &[u8], max_work: u64) -> 
 }
 
 fn import_svg_bounded_with_work_mode(name: &str, bytes: &[u8], max_work: u64, strict: bool) -> Result<(ImportResult, u64), IoError> {
-    if max_work == 0 {
-        return Err(IoError::Svg("SVG preview validation work budget is exhausted".into()));
-    }
-    let ParsedWork { parsed, svg_images, decoded, draw_nodes, repeatable_raster, repeatable_svg, .. } =
-        parse_bounded_work_with(bytes, max_work.min(MAX_RASTER_PIXELS), strict, fonts)?;
-    let area = canvas(&parsed.tree, &mut Vec::new()).size.area();
-    // This preview check charges every embedded SVG image a canvas-sized surface of work.
-    if svg_images != 0 && area.checked_mul(svg_images.saturating_add(1)).is_none_or(|pixels| pixels > max_work.min(MAX_RASTER_PIXELS)) {
-        return Err(IoError::Svg("embedded SVG intermediate images exceed the SVG cache budget".into()));
-    }
-    let uses = draw_nodes.max(1);
-    let intermediate_surfaces = svg_images.saturating_mul(if repeatable_svg { uses } else { 1 }).saturating_add(1);
-    // Only raster-bearing repeatable resources can repaint an already-parsed image. Plain
-    // vector paths alongside a photo do not decode that photo again for each path.
-    let decoded_work = decoded
-        .checked_mul(if repeatable_raster { uses } else { 1 })
-        .filter(|pixels| *pixels <= max_work)
-        .ok_or_else(|| IoError::Svg("SVG image decoding exceeds the validation work budget".into()))?;
-    let cache_limit = (max_work.saturating_sub(decoded_work) / intermediate_surfaces).min(MAX_RASTER_PIXELS);
-    if area > cache_limit {
-        return Err(IoError::Svg("SVG preview decoding and rendering exceed the validation work budget".into()));
-    }
-    let nodes = count_nodes(parsed.tree.root(), true);
-    let layers = area.checked_mul(u64::try_from(nodes.max(1)).unwrap_or(u64::MAX));
-    // import_parsed uses this same bound to select one whole-drawing fallback before it
-    // renders any layer caches. A tiny canvas cannot hide a huge decoded source image.
-    let rendered = if nodes > MAX_NODES || layers.is_none_or(|pixels| pixels > cache_limit) { area } else { layers.unwrap_or(area) };
-    let work = rendered
-        .checked_mul(intermediate_surfaces)
-        .and_then(|pixels| decoded_work.checked_add(pixels))
-        .filter(|pixels| *pixels <= max_work)
-        .ok_or_else(|| IoError::Svg("SVG preview validation work budget exceeded".into()))?;
-    import_parsed(name, parsed, MAX_GROUP_DEPTH, Some(cache_limit), false).map(|imported| (imported, work))
+    on_svg_stack(|| {
+        if max_work == 0 {
+            return Err(IoError::Svg("SVG preview validation work budget is exhausted".into()));
+        }
+        let ParsedWork { parsed, svg_images, decoded, draw_nodes, repeatable_raster, repeatable_svg, .. } =
+            parse_bounded_work_with(bytes, max_work.min(MAX_RASTER_PIXELS), strict, fonts)?;
+        let area = canvas(&parsed.tree, &mut Vec::new()).size.area();
+        // This preview check charges every embedded SVG image a canvas-sized surface of work.
+        if svg_images != 0 && area.checked_mul(svg_images.saturating_add(1)).is_none_or(|pixels| pixels > max_work.min(MAX_RASTER_PIXELS)) {
+            return Err(IoError::Svg("embedded SVG intermediate images exceed the SVG cache budget".into()));
+        }
+        let uses = draw_nodes.max(1);
+        let intermediate_surfaces = svg_images.saturating_mul(if repeatable_svg { uses } else { 1 }).saturating_add(1);
+        // Only raster-bearing repeatable resources can repaint an already-parsed image. Plain
+        // vector paths alongside a photo do not decode that photo again for each path.
+        let decoded_work = decoded
+            .checked_mul(if repeatable_raster { uses } else { 1 })
+            .filter(|pixels| *pixels <= max_work)
+            .ok_or_else(|| IoError::Svg("SVG image decoding exceeds the validation work budget".into()))?;
+        let cache_limit = (max_work.saturating_sub(decoded_work) / intermediate_surfaces).min(MAX_RASTER_PIXELS);
+        if area > cache_limit {
+            return Err(IoError::Svg("SVG preview decoding and rendering exceed the validation work budget".into()));
+        }
+        let nodes = count_nodes(parsed.tree.root(), true);
+        let layers = area.checked_mul(u64::try_from(nodes.max(1)).unwrap_or(u64::MAX));
+        // import_parsed uses this same bound to select one whole-drawing fallback before it
+        // renders any layer caches. A tiny canvas cannot hide a huge decoded source image.
+        let rendered = if nodes > MAX_NODES || layers.is_none_or(|pixels| pixels > cache_limit) { area } else { layers.unwrap_or(area) };
+        let work = rendered
+            .checked_mul(intermediate_surfaces)
+            .and_then(|pixels| decoded_work.checked_add(pixels))
+            .filter(|pixels| *pixels <= max_work)
+            .ok_or_else(|| IoError::Svg("SVG preview validation work budget exceeded".into()))?;
+        import_parsed(name, parsed, MAX_GROUP_DEPTH, Some(cache_limit), false).map(|imported| (imported, work))
+    })
 }
 
 /// The same cache bound without a lossy aggregate-budget fallback. Smart-object operations
 /// use this variant so editing contents or changing Stack Mode fails before excessive caches
 /// are rendered, rather than silently changing the source's layer structure.
 pub fn import_svg_bounded_layers(name: &str, bytes: &[u8], max_cached_pixels: u64) -> Result<ImportResult, IoError> {
-    import_svg_inner(name, bytes, MAX_GROUP_DEPTH, Some(max_cached_pixels), true)
+    on_svg_stack(|| import_svg_inner(name, bytes, MAX_GROUP_DEPTH, Some(max_cached_pixels), true))
 }
 
 /// Opens untrusted SVG (smart-object contents) as [`import_svg`] does, as editable layers under
@@ -1007,7 +1044,7 @@ pub fn import_svg_bounded_layers(name: &str, bytes: &[u8], max_cached_pixels: u6
 /// `max_decoded_pixels` (capped at 24 MP) in all, nested SVG images get the same budget, and
 /// compressed data inflates to at most 16 MiB.
 pub fn import_svg_bounded_images(name: &str, bytes: &[u8], max_decoded_pixels: u64) -> Result<ImportResult, IoError> {
-    import_parsed(name, parse_bounded(bytes, max_decoded_pixels)?, MAX_GROUP_DEPTH, None, false)
+    on_svg_stack(|| import_parsed(name, parse_bounded(bytes, max_decoded_pixels)?, MAX_GROUP_DEPTH, None, false))
 }
 
 /// The pixel bounds [`import_svg_bounded`] gives the drawing, found without rendering any layer
@@ -1016,13 +1053,15 @@ pub fn import_svg_bounded_images(name: &str, bytes: &[u8], max_decoded_pixels: u
 /// pixel does not. A smart object's warp frame needs only these bounds, so an SVG whose editable
 /// layer caches exceed the budget (rejected by [`import_svg_bounded_layers`]) still has one.
 pub fn bounded_canvas_bounds(bytes: &[u8], max_cached_pixels: u64) -> Result<Rect, IoError> {
-    let parsed = parse_bounded(bytes, max_cached_pixels)?;
-    let cv = canvas(&parsed.tree, &mut Vec::new());
-    let limit = max_cached_pixels.min(MAX_RASTER_PIXELS);
-    if cv.size.area() > limit {
-        return Err(IoError::Svg(format!("{} × {} px exceeds the SVG layer cache budget of {limit} pixels", cv.size.width, cv.size.height)));
-    }
-    Ok(Rect::from_size(cv.size))
+    on_svg_stack(|| {
+        let parsed = parse_bounded(bytes, max_cached_pixels)?;
+        let cv = canvas(&parsed.tree, &mut Vec::new());
+        let limit = max_cached_pixels.min(MAX_RASTER_PIXELS);
+        if cv.size.area() > limit {
+            return Err(IoError::Svg(format!("{} × {} px exceeds the SVG layer cache budget of {limit} pixels", cv.size.width, cv.size.height)));
+        }
+        Ok(Rect::from_size(cv.size))
+    })
 }
 
 /// Parse (bounded when `max_cached_pixels` is set) and convert to layers; see [`import_parsed_with_limits`].
@@ -1122,23 +1161,27 @@ fn import_parsed_with_limits(
 /// The whole drawing rendered at `scale` (1 = its own size), as a straight-alpha RGBA buffer at
 /// the origin. Smart objects use it to stay sharp at any placement.
 pub fn rasterize(bytes: &[u8], scale: f32) -> Result<photocraft_compose::Buffer, IoError> {
-    let tree = parse(bytes)?.tree;
-    rasterize_tree(&tree, scale)
+    on_svg_stack(|| {
+        let tree = parse(bytes)?.tree;
+        rasterize_tree(&tree, scale)
+    })
 }
 
 /// Render untrusted embedded SVG with intrinsic raster-image and aggregate decode budgets.
 pub fn rasterize_bounded(bytes: &[u8], scale: f32, max_decoded_pixels: u64) -> Result<photocraft_compose::Buffer, IoError> {
-    let (parsed, chain) = parse_bounded_inner(bytes, max_decoded_pixels)?;
-    let tree = parsed.tree;
-    if chain != 0 {
-        let cv = canvas(&tree, &mut Vec::new());
-        let k = cv.scale * scale.clamp(1.0 / 64.0, 64.0);
-        let width = ((tree.size().width() * k).ceil() as u32).max(1);
-        let height = ((tree.size().height() * k).ceil() as u32).max(1);
-        check_scratch_surfaces(u64::from(width) * u64::from(height), chain, max_decoded_pixels)
-            .map_err(|_| IoError::Svg("embedded SVG intermediate images exceed the rendered pixel budget".into()))?;
-    }
-    rasterize_tree(&tree, scale)
+    on_svg_stack(|| {
+        let (parsed, chain) = parse_bounded_inner(bytes, max_decoded_pixels)?;
+        let tree = parsed.tree;
+        if chain != 0 {
+            let cv = canvas(&tree, &mut Vec::new());
+            let k = cv.scale * scale.clamp(1.0 / 64.0, 64.0);
+            let width = ((tree.size().width() * k).ceil() as u32).max(1);
+            let height = ((tree.size().height() * k).ceil() as u32).max(1);
+            check_scratch_surfaces(u64::from(width) * u64::from(height), chain, max_decoded_pixels)
+                .map_err(|_| IoError::Svg("embedded SVG intermediate images exceed the rendered pixel budget".into()))?;
+        }
+        rasterize_tree(&tree, scale)
+    })
 }
 
 /// Render the whole tree at `scale` (clamped to 1/64–64) times its canvas size into a straight-alpha
@@ -1155,28 +1198,30 @@ fn rasterize_tree(tree: &usvg::Tree, scale: f32) -> Result<photocraft_compose::B
 /// [`MAX_RASTER_PIXELS`] in all: its width, height and straight-alpha RGBA8 pixels. Paste uses it
 /// for a drawing copied as SVG markup.
 pub fn rasterize_rgba8(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), IoError> {
-    let tree = parse(bytes)?.tree;
-    let cv = canvas(&tree, &mut Vec::new());
-    let (w, h) = (f64::from(tree.size().width() * cv.scale), f64::from(tree.size().height() * cv.scale));
-    // The largest k ≤ 1 with (w·k + 2)(h·k + 2) ≤ the limit: `render` rounds each side up, and
-    // f32 rounding can add one more pixel.
-    let max = MAX_RASTER_PIXELS as f64;
-    let fit = if (w + 2.0) * (h + 2.0) <= max {
-        1.0
-    } else {
-        let (a, b) = (w * h, 2.0 * (w + h));
-        (-b + (b * b - 4.0 * a * (4.0 - max)).sqrt()) / (2.0 * a)
-    };
-    let pixmap = render(&tree, cv.scale * fit as f32)?;
-    let px = pixmap
-        .pixels()
-        .iter()
-        .flat_map(|p| {
-            let c = p.demultiply();
-            [c.red(), c.green(), c.blue(), c.alpha()]
-        })
-        .collect();
-    Ok((pixmap.width(), pixmap.height(), px))
+    on_svg_stack(|| {
+        let tree = parse(bytes)?.tree;
+        let cv = canvas(&tree, &mut Vec::new());
+        let (w, h) = (f64::from(tree.size().width() * cv.scale), f64::from(tree.size().height() * cv.scale));
+        // The largest k ≤ 1 with (w·k + 2)(h·k + 2) ≤ the limit: `render` rounds each side up, and
+        // f32 rounding can add one more pixel.
+        let max = MAX_RASTER_PIXELS as f64;
+        let fit = if (w + 2.0) * (h + 2.0) <= max {
+            1.0
+        } else {
+            let (a, b) = (w * h, 2.0 * (w + h));
+            (-b + (b * b - 4.0 * a * (4.0 - max)).sqrt()) / (2.0 * a)
+        };
+        let pixmap = render(&tree, cv.scale * fit as f32)?;
+        let px = pixmap
+            .pixels()
+            .iter()
+            .flat_map(|p| {
+                let c = p.demultiply();
+                [c.red(), c.green(), c.blue(), c.alpha()]
+            })
+            .collect();
+        Ok((pixmap.width(), pixmap.height(), px))
+    })
 }
 
 /// `tree` drawn at `k` pixels per SVG unit on a transparent pixmap whose sides round up.
