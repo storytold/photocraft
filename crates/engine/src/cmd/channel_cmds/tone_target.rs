@@ -136,7 +136,13 @@ mod rabbit_tests {
             let mut explicit = params;
             explicit["target"] = json!("pixels");
             s.execute(&command, explicit).unwrap();
-            assert_ne!(before.layers, s.active().unwrap().doc.layers, "an explicit pixel target still works");
+            let after = &s.active().unwrap().doc;
+            assert_eq!(before.layers.len(), after.layers.len());
+            assert!(
+                before.layers.iter().zip(&after.layers).all(|(a, b)| a.mask == b.mask && a.vector_mask == b.vector_mask),
+                "an explicit pixel target must preserve both masks"
+            );
+            assert!(before.layers.iter().zip(&after.layers).any(|(a, b)| a.content != b.content), "an explicit pixel target must change raster content");
         }
     }
 }

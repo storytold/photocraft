@@ -199,7 +199,7 @@ Seven new regression functions cover vector-mask refusal and explicit-pixels pre
 Validation on Linux using the full-sweep serial configuration and CI's pinned fonts:
 
 - Full engine/UI `cargo test`: **8,306 passed, 0 failed, 43 normally ignored**, including doctest builds. The ignored full-registry adversarial command test passed separately.
-- Strict engine/UI all-target Clippy (`-D warnings`), formatting, layering and wasm passed. Changed-corpus checking correctly skipped. The only post-suite edit was formatting in a test assertion; its targeted regression was rerun successfully.
+- Strict engine/UI all-target Clippy (`-D warnings`), formatting, layering and wasm passed. Changed-corpus checking correctly skipped. Post-suite changes were test-only: assertion formatting and stronger explicit-pixels checks requiring changed raster content with unchanged raster/vector masks. The affected regressions, strict Clippy and formatting passed again.
 - Five fresh offscreen main-view Smart Filter captures were inspected: point and pencil Curves retain the recorded inverted curve; Levels shows Gamma 2; a document switch hides stale controls; returning restores the original RGB editor. The first four functional regressions failed before the fixes.
 - Repeated local review/fix passes addressed the alias/merge boundary, target repair, parameter validation and exact preview/commit agreement. The latest scoped review found no further actionable issues. Historical benchmarks remain dated; no new performance, broad-workspace or Windows/macOS result is claimed.
 
