@@ -278,16 +278,19 @@ pub const WARP_ONE_LAYER: &str = "Warp works on one layer at a time: select a si
 /// Free Transform on a copy (⌥⌘T, no menu item): duplicates the active layer (with a selection,
 /// its selected pixels, as Layer via Copy) and transforms the copy (#352).
 pub fn begin_copy(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> {
-    if crate::canvas::multiple_color_target(app) && crate::vector_ui::free_transform_path(app).is_none() {
+    let path_target = crate::vector_ui::free_transform_path(app).is_some();
+    if crate::canvas::multiple_color_target(app) && !path_target {
         return Err("Free Transform a Copy requires the composite or one colour channel".into());
     }
     let params = resolved_params(app, &json!({}))?;
+    if !path_target && !photocraft_engine::channel_transform::visible(&app.session, &params).map_err(|e| e.to_string())? {
+        return Err(photocraft_engine::channel_transform::HIDDEN.into());
+    }
     let viewed = app.session.active().and_then(photocraft_engine::mask_view_cmds::current);
     let selected = app.session.active().is_some_and(|d| d.doc.selection.is_some());
     // Composite pixels without a selection frame their link group without making a copy
     // (#11217). A captured colour, channel or mask remains an isolated target and still copies.
     let linked = !selected
-        && viewed.is_none()
         && params["target"] == "pixels"
         && app.session.active().is_some_and(|st| {
             let targets = photocraft_engine::transform_cmds::selection_targets(st);

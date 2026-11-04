@@ -418,6 +418,34 @@ fn interactive_guard_preserves_document_and_history_for_every_undo_entry_point()
 }
 
 #[test]
+fn refused_guarded_edits_do_not_open_an_action_history_boundary() {
+    let mut s = session(ColorMode::Rgb, SampleType::U8);
+    s.active_mut().unwrap().coalesce = Some("existing gesture".into());
+    crate::actions_cmds::begin_document_history(&mut s, "guarded action");
+    let st = s.active_mut().unwrap();
+    st.channel_transform = Some(Guard { layer: st.active_layer, target: json!({"color": 1}) });
+    let before = st.doc.clone();
+    let history = st.history.entries();
+    let visibility = st.history.captured_visibility().map(<[_]>::to_vec);
+    let called = std::cell::Cell::new(false);
+    let error = s
+        .edit("refused", |_, _| {
+            called.set(true);
+            Ok(())
+        })
+        .unwrap_err();
+    assert!(error.to_string().contains(LOCKED));
+    assert!(!called.get());
+    let st = s.active().unwrap();
+    assert!(Arc::ptr_eq(&before, &st.doc));
+    assert_eq!(st.coalesce.as_deref(), Some("existing gesture"));
+    assert_eq!(st.history.captured_visibility().map(<[_]>::to_vec), visibility);
+    crate::actions_cmds::finish_document_history(&mut s);
+    assert_eq!(s.active().unwrap().history.entries(), history);
+    assert!(Arc::ptr_eq(&before, &s.active().unwrap().doc));
+}
+
+#[test]
 fn interactive_guard_allows_inline_mesh_edits_but_refuses_stored_warp_edits() {
     let mut s = session(ColorMode::Rgb, SampleType::U8);
     s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();

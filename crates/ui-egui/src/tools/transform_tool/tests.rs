@@ -2277,6 +2277,83 @@ fn free_transform_a_copy_of_a_linked_layer_boxes_the_link_group_without_a_copy()
     cancel(&mut app);
 }
 
+#[test]
+fn free_transform_a_copy_of_a_colour_on_a_linked_layer_stays_isolated() {
+    for selected in [false, true] {
+        for landed in [false, true] {
+            let (mut app, source, linked, _) = linked_layers_app();
+            app.session.tools.background = [0.0, 0.0, 0.0, 1.0];
+            app.run("channel.target", json!({"channel": "red"})).unwrap();
+            if selected {
+                app.run("select.rect", json!({"x": 8, "y": 8, "width": 8, "height": 16})).unwrap();
+            }
+            let before = app.session.active().unwrap().doc.clone();
+            begin_copy(&mut app, &egui::Context::default()).unwrap();
+            let copy = app.session.active().unwrap().active_layer.unwrap();
+            assert_ne!(copy, source, "a colour target makes a copy even on a linked host");
+            assert_eq!(app.session.active().unwrap().doc.layers.len(), before.layers.len() + 1);
+            let t = app.ui.transform.as_ref().unwrap();
+            assert_eq!(t.target, Some(json!({"color": 0})));
+            assert!(t.layers.is_empty(), "the linked group must not become the edit target");
+            let copied = app.session.active().unwrap().doc.layer(copy).unwrap().surface().unwrap().clone();
+            super::nudge(&mut app, 4.0, 0.0);
+            if landed {
+                commit(&mut app);
+                assert!(!app.ui.status_error, "{}", app.ui.status);
+                let doc = &app.session.active().unwrap().doc;
+                assert_eq!(doc.layer(source), before.layer(source));
+                assert_eq!(doc.layer(linked), before.layer(linked));
+                let result = doc.layer(copy).unwrap().surface().unwrap();
+                for y in 0..64 {
+                    for x in 0..64 {
+                        for component in [1, 2, 3] {
+                            assert_eq!(result.sample_channel(x, y, component), copied.sample_channel(x, y, component));
+                        }
+                    }
+                }
+                assert_ne!(result, &copied);
+                app.session.undo();
+            } else {
+                cancel(&mut app);
+            }
+            assert_eq!(app.session.active().unwrap().doc.layers, before.layers);
+        }
+    }
+}
+
+#[test]
+fn free_transform_a_copy_from_a_linked_filter_mask_view_boxes_the_link_group() {
+    for mode in ["gray", "overlay"] {
+        for colors in [vec![0], vec![0, 2]] {
+            let (mut app, _, linked, _) = linked_layers_app();
+            app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+            let smart = app.session.active().unwrap().active_layer.unwrap();
+            app.session
+                .edit("filter mask", |doc, _| {
+                    let LayerContent::Smart(content) = &mut doc.layer_mut(smart).unwrap().content else { panic!("not a smart object") };
+                    content.filter_mask = Some(photocraft_doc::LayerMask::reveal_all());
+                    Ok(())
+                })
+                .unwrap();
+            app.run("layer.select", json!({"layer": linked.0, "mode": "add"})).unwrap();
+            app.run("layer.linkLayers", json!({"linked": true})).unwrap();
+            app.run("layer.select", json!({"layer": smart.0})).unwrap();
+            app.run("channel.target", json!({"colors": colors})).unwrap();
+            app.run("view.layerMask", json!({"mask": "filter", "mode": mode})).unwrap();
+            let before = app.session.active().unwrap().doc.clone();
+            begin_copy(&mut app, &egui::Context::default()).unwrap();
+            assert_eq!(app.session.active().unwrap().doc.layers.len(), before.layers.len(), "a filter-mask view still transforms the whole object");
+            let t = app.ui.transform.as_ref().unwrap();
+            assert_eq!(t.made, None);
+            assert_eq!(t.layers.len(), 2);
+            assert!(t.layers.contains(&smart.0) && t.layers.contains(&linked.0));
+            assert!(app.transform_preview.as_ref().unwrap().channel.is_none());
+            cancel(&mut app);
+            assert_eq!(app.session.active().unwrap().doc.layers, before.layers);
+        }
+    }
+}
+
 /// #11217: the box over one selected linked layer frames, previews and commits its whole link
 /// group, as in Photoshop. It used to frame A alone; B only moved at the commit.
 #[test]
@@ -3452,20 +3529,48 @@ fn mask_view_keeps_move_and_transform_available_behind_a_colour_set() {
 /// layer's own pixels take the link group's box without a copy.
 #[test]
 fn free_transform_a_copy_of_a_targeted_mask_on_a_linked_layer_still_copies() {
-    let mut app = masked_app(false);
-    let a = app.session.active().unwrap().active_layer.unwrap();
-    app.session.execute("layer.new.layer", json!({})).unwrap();
-    let b = app.session.active().unwrap().active_layer.unwrap();
-    app.session.execute("layer.select", json!({"layer": a.0})).unwrap();
-    app.session.execute("layer.select", json!({"layer": b.0, "mode": "add"})).unwrap();
-    assert_eq!(app.session.execute("layer.linkLayers", json!({})).unwrap()["linked"], true);
-    app.session.execute("layer.select", json!({"layer": a.0})).unwrap();
-    app.ui.mask_target = true;
-    let layers = app.session.active().unwrap().doc.layers.len();
-    crate::menus::invoke(&mut app, &egui::Context::default(), "edit.freeTransformCopy", json!({})).unwrap();
-    assert_eq!(app.session.active().unwrap().doc.layers.len(), layers + 1, "the layer is copied");
-    assert_eq!(app.ui.transform.as_ref().unwrap().made, Some(MadeLayer::Copy));
-    cancel(&mut app);
+    for shown in [false, true] {
+        let mut app = masked_app(false);
+        let a = app.session.active().unwrap().active_layer.unwrap();
+        app.session.execute("layer.new.layer", json!({})).unwrap();
+        let b = app.session.active().unwrap().active_layer.unwrap();
+        app.session.execute("layer.select", json!({"layer": a.0})).unwrap();
+        app.session.execute("layer.select", json!({"layer": b.0, "mode": "add"})).unwrap();
+        assert_eq!(app.session.execute("layer.linkLayers", json!({})).unwrap()["linked"], true);
+        app.session.execute("layer.select", json!({"layer": a.0})).unwrap();
+        // A refused hidden target must not create a duplicate or discard an existing redo branch.
+        app.session
+            .edit("redo marker", |doc, _| {
+                doc.layer_mut(a).unwrap().surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(40, 40, 44, 44), &[0.0, 1.0, 0.0, 1.0]);
+                Ok(())
+            })
+            .unwrap();
+        assert!(app.session.undo());
+        app.ui.mask_target = true;
+        if shown {
+            app.run("view.layerMask", json!({"mode": "overlay"})).unwrap();
+        }
+        let before = app.session.active().unwrap().doc.clone();
+        let history = app.session.active().unwrap().history.entries();
+        let future: Vec<_> = app.session.active().unwrap().history.redo_labels().map(str::to_owned).collect();
+        let eyes = app.session.active().unwrap().channel_view.clone();
+        let layers = app.session.active().unwrap().doc.layers.len();
+        let result = crate::menus::invoke(&mut app, &egui::Context::default(), "edit.freeTransformCopy", json!({}));
+        if !shown {
+            assert!(result.unwrap_err().contains(photocraft_engine::channel_transform::HIDDEN));
+            let st = app.session.active().unwrap();
+            assert!(Arc::ptr_eq(&before, &st.doc));
+            assert_eq!(st.history.entries(), history);
+            assert_eq!(st.history.redo_labels().collect::<Vec<_>>(), future);
+            assert_eq!(st.channel_view, eyes);
+            assert!(app.ui.transform.is_none());
+            continue;
+        }
+        result.unwrap();
+        assert_eq!(app.session.active().unwrap().doc.layers.len(), layers + 1, "the layer is copied");
+        assert_eq!(app.ui.transform.as_ref().unwrap().made, Some(MadeLayer::Copy));
+        cancel(&mut app);
+    }
 }
 
 #[test]
@@ -3477,6 +3582,24 @@ fn linked_mask_target_transforms_alone() {
     begin(&mut app, &ctx).unwrap();
     assert_eq!(app.ui.transform.as_ref().unwrap().target, Some(json!("mask")));
     assert_eq!(app.ui.transform.as_ref().unwrap().rect, [0.0, 0.0, 16.0, 64.0]);
+}
+
+#[test]
+fn free_transform_a_copy_of_a_path_keeps_priority_over_a_hidden_colour() {
+    let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+    app.run("path.set", json!({"name": "work", "path": {"subpaths": [{"closed": true, "knots": [[10, 10], [30, 10], [30, 20], [10, 20]]}]}})).unwrap();
+    app.ui.tool = Tool::PathSelection;
+    app.run("channel.target", json!({"channel": "red"})).unwrap();
+    app.run("channel.setVisible", json!({"channel": "red", "visible": false})).unwrap();
+    let before = app.session.active().unwrap().doc.clone();
+    let eyes = app.session.active().unwrap().channel_view.clone();
+    begin_copy(&mut app, &egui::Context::default()).unwrap();
+    assert_eq!(app.ui.transform.as_ref().unwrap().path, Some(json!({"name": "work"})));
+    assert_eq!(app.session.active().unwrap().channel_view, eyes);
+    cancel(&mut app);
+    assert_eq!(app.session.active().unwrap().doc.layers, before.layers);
+    assert_eq!(app.session.active().unwrap().doc.work_path, before.work_path);
+    assert_eq!(app.session.active().unwrap().channel_view, eyes);
 }
 
 /// ⌘T with Path Selection and a path transforms the path, not the layer's pixels, as one

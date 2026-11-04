@@ -145,6 +145,13 @@ impl Preview {
             let mut warp = warp.clone();
             warp.bounds = warp.bounds.map(|v| v / k);
             warp.mesh = warp.mesh.map(|m| m.map_points(|p| [p[0] / k, p[1] / k]));
+            if warp.style == photocraft_geom::warp::WarpStyle::Cylinder {
+                // The engine rebuilds this mesh from its silhouettes. Only those four
+                // document-space coordinates scale; the depth and wrap values are ratios.
+                for value in warp.values.iter_mut().take(4) {
+                    *value /= k;
+                }
+            }
             params["warp"] = json!(warp);
             "edit.transform.warp"
         } else {
@@ -1963,6 +1970,9 @@ mod tests {
 
 #[cfg(test)]
 mod set_tests;
+
+#[cfg(test)]
+mod cylinder_tests;
 
 #[cfg(test)]
 mod limits_tests;
