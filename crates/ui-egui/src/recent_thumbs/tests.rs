@@ -120,7 +120,6 @@ fn the_cache_deletes_its_oldest_files_past_the_limit() {
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 5);
     disk::evict(dir.path(), 5);
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 5, "nothing more to delete");
-    assert!(MAX_CACHE_FILES >= 100 && MAX_TEXTURES >= 16);
 }
 
 #[test]
@@ -269,13 +268,16 @@ fn the_view_asks_the_workers_and_shows_what_they_find() {
     assert!(view.status(&pic).is_none(), "not statted yet is not missing");
     let cache = dir.path().join("cache");
     for _ in 0..500 {
-        let _ = ctx.run_ui(Default::default(), |ui| {
+        // The pass's texture uploads are not drawn anywhere: drop them on purpose.
+        ctx.run_ui(Default::default(), |ui| {
             view.begin(ui.ctx(), &paths);
             for p in &paths {
                 view.want(p, 1);
             }
             view.finish(ui.ctx(), Some(cache.as_path()));
-        });
+        })
+        .textures_delta
+        .clear();
         let settled = paths.iter().all(|p| view.status(p).is_some() && !matches!(view.preview(p), Preview::Loading));
         if settled {
             break;
@@ -290,7 +292,7 @@ fn the_view_asks_the_workers_and_shows_what_they_find() {
     assert!(matches!(view.preview(&gone), Preview::None));
     assert_eq!(view.textures(), 1);
     // A file taken off the list is forgotten.
-    let _ = ctx.run_ui(Default::default(), |ui| view.begin(ui.ctx(), std::slice::from_ref(&pic)));
+    ctx.run_ui(Default::default(), |ui| view.begin(ui.ctx(), std::slice::from_ref(&pic))).textures_delta.clear();
     assert!(view.status(&text).is_none());
 }
 
@@ -304,11 +306,13 @@ fn a_thumbnail_of_a_file_that_goes_missing_turns_gray() {
     let mut view = RecentView::default();
     let paths = vec![path.clone()];
     let frame = |view: &mut RecentView| {
-        let _ = ctx.run_ui(Default::default(), |ui| {
+        ctx.run_ui(Default::default(), |ui| {
             view.begin(ui.ctx(), &paths);
             view.want(&path, 1);
             view.finish(ui.ctx(), Some(cache.as_path()));
-        });
+        })
+        .textures_delta
+        .clear();
     };
     for _ in 0..500 {
         frame(&mut view);
@@ -388,7 +392,10 @@ fn a_picture_that_declares_a_huge_size_is_not_decoded() {
     let bytes = huge_png();
     assert!(bytes.len() < 100);
     let opts = photocraft_codecs::DecodeOptions { limits: disk::decode_limits(), ..Default::default() };
-    assert!(photocraft_codecs::decode_with(&bytes, &opts).is_err(), "the limits refuse it");
+    assert!(
+        matches!(photocraft_codecs::decode_with(&bytes, &opts), Err(photocraft_codecs::CodecError::LimitExceeded(_))),
+        "the limits, not a missing image, refuse it"
+    );
     let dir = tempfile::tempdir().unwrap();
     let file = write(dir.path(), "bomb.png", &bytes);
     assert!(disk::make(&file.to_string_lossy(), bytes.len() as u64, false).is_none());

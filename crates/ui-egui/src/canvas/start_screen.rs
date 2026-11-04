@@ -174,21 +174,27 @@ fn notice(ui: &mut egui::Ui, icon: Option<&str>, title: &str, body: &str, button
     let t = Tokens::get(ui.ctx());
     let mut clicked = false;
     ui.add_space(48.0);
-    ui.vertical_centered(|ui| {
-        ui.set_max_width(420.0);
-        if let Some(icon) = icon {
-            let (r, _) = ui.allocate_exact_size(vec2(40.0, 40.0), Sense::hover());
-            crate::icons::paint(ui, r, icon, 40.0, t.text_dim);
-            ui.add_space(8.0);
-        }
-        ui.label(egui::RichText::new(title).font(medium(16.0)).color(t.text));
-        ui.add_space(6.0);
-        ui.add(egui::Label::new(egui::RichText::new(body).color(t.text_dim)).wrap());
-        if let Some(button) = button {
-            ui.add_space(14.0);
-            clicked = crate::widgets::secondary_button(ui, button, 0.0).clicked();
-        }
-    });
+    // A centred column of its own, placed by hand: narrowing the parent's centred layout moved
+    // everything below it.
+    let available = ui.available_width();
+    let column = available.min(420.0);
+    let top_left = ui.cursor().min;
+    let rect = Rect::from_min_size(pos2(top_left.x + (available - column) / 2.0, top_left.y), vec2(column, 10_000.0));
+    let mut inner = ui.new_child(UiBuilder::new().max_rect(rect).layout(Layout::top_down(Align::Center)));
+    if let Some(icon) = icon {
+        let (r, _) = inner.allocate_exact_size(vec2(40.0, 40.0), Sense::hover());
+        crate::icons::paint(&inner, r, icon, 40.0, t.text_dim);
+        inner.add_space(8.0);
+    }
+    inner.label(egui::RichText::new(title).font(medium(16.0)).color(t.text));
+    inner.add_space(6.0);
+    inner.add(egui::Label::new(egui::RichText::new(body).color(t.text_dim)).wrap());
+    if let Some(button) = button {
+        inner.add_space(14.0);
+        clicked = crate::widgets::secondary_button(&mut inner, button, 0.0).clicked();
+    }
+    let used = inner.min_rect().height();
+    ui.allocate_space(vec2(available, used));
     clicked
 }
 
@@ -268,7 +274,7 @@ fn recent_section(app: &mut PhotocraftApp, ui: &mut egui::Ui, width: f32) {
     };
     let filter_field = |ui: &mut egui::Ui, filter: &mut String, width: f32| {
         ui.label(egui::RichText::new(tl!("Filter")).color(t.text_dim));
-        let field = crate::widgets::text_field(ui, egui::Id::new("home-recent-filter"), filter, tl!("Filter Recent Files"), width, false);
+        let field = crate::widgets::text_field(ui, egui::Id::unique("home-recent-filter"), filter, tl!("Filter Recent Files"), width, false);
         let _ = field.accessible_name(tl!("Filter Recent Files"));
     };
     if single_row {

@@ -336,7 +336,7 @@ fn recent_times_follow_the_list() {
     app.push_recent("/a/w.psd");
     assert!(opened(&app).is_empty());
     // A time that was never recorded is no time: the list falls back to the file's modified time.
-    assert!(app.session.prefs().file_handling.recent_opened.get("/a/never.psd").is_none());
+    assert!(!app.session.prefs().file_handling.recent_opened.contains_key("/a/never.psd"));
 }
 
 #[test]

@@ -152,6 +152,9 @@ fn the_document_profile_is_honoured() {
     assert!(near(mid, [0.735; 3], 0.03), "{mid:?}");
 }
 
+/// A named way to damage a thumbnail resource.
+type Damage<'a> = (&'a str, &'a dyn Fn(&mut Vec<u8>));
+
 /// The thumbnail a saved PSD holds reads back from its header and resources alone.
 #[test]
 fn the_embedded_thumbnail_reads_back_without_decoding_the_document() {
@@ -197,7 +200,7 @@ fn malformed_and_truncated_thumbnails_are_errors() {
         edit(&mut r.data);
         file.to_bytes().unwrap()
     };
-    let cases: [(&str, &dyn Fn(&mut Vec<u8>)); 7] = [
+    let cases: [Damage; 7] = [
         ("header cut short", &|d| d.truncate(10)),
         ("no picture", &|d| d.truncate(28)),
         ("zero width", &|d| d[4..8].copy_from_slice(&0u32.to_be_bytes())),

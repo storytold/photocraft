@@ -407,12 +407,11 @@ impl RecentView {
 
 /// `rgba` (straight alpha) as gray, keeping each pixel's alpha.
 fn gray_out(rgba: &mut [u8]) {
-    for px in rgba.chunks_exact_mut(4) {
-        if let [r, g, b, _] = px {
-            let y = (u32::from(*r) * 299 + u32::from(*g) * 587 + u32::from(*b) * 114) / 1000;
-            let y = y.min(255) as u8;
-            (*r, *g, *b) = (y, y, y);
-        }
+    for px in rgba.as_chunks_mut::<4>().0 {
+        let [r, g, b, _] = px;
+        let y = (u32::from(*r) * 299 + u32::from(*g) * 587 + u32::from(*b) * 114) / 1000;
+        let y = y.min(255) as u8;
+        (*r, *g, *b) = (y, y, y);
     }
 }
 

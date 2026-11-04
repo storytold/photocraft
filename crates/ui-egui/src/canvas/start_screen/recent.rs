@@ -179,7 +179,7 @@ pub(super) fn grid(app: &mut PhotocraftApp, ui: &mut egui::Ui, width: f32, rows:
 
 fn card(app: &mut PhotocraftApp, ui: &mut egui::Ui, rect: Rect, row: &Row, now: u64, actions: &mut Actions) {
     let t = Tokens::get(ui.ctx());
-    let id = ui.id().with(("recent-card", row.path.as_str()));
+    let id = ui.scope_id().with(("recent-card", row.path.as_str()));
     let resp = ui.interact(rect, id, Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &row.name));
     // The × sits over the card, so the card counts as hovered while the pointer is on it.
@@ -287,7 +287,7 @@ pub(super) fn list(
             continue;
         }
         let cell = Rect::from_min_size(pos2(head.left() + x, head.top()), vec2(w, head.height()));
-        let resp = ui.interact(cell, ui.id().with(("recent-header", label)), if kind.is_some() { Sense::click() } else { Sense::hover() });
+        let resp = ui.interact(cell, ui.scope_id().with(("recent-header", label)), if kind.is_some() { Sense::click() } else { Sense::hover() });
         let shown = tl!(label);
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, kind.is_some(), shown));
         let active = kind == Some(sort);
@@ -312,7 +312,7 @@ pub(super) fn list(
 
 fn list_row(app: &mut PhotocraftApp, ui: &mut egui::Ui, rect: Rect, row: &Row, cols: &Columns, now: u64, actions: &mut Actions) {
     let t = Tokens::get(ui.ctx());
-    let id = ui.id().with(("recent-row", row.path.as_str()));
+    let id = ui.scope_id().with(("recent-row", row.path.as_str()));
     let resp = ui.interact(rect, id, Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &row.name));
     let hovered = ui.rect_contains_pointer(rect);
