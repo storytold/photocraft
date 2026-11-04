@@ -160,6 +160,39 @@ fn unopened_move_controls_share_the_open_sessions_zones_and_cursors() {
 }
 
 #[test]
+fn move_whole_edge_press_enters_scaling_at_both_zooms() {
+    for zoom in [1.0, 2.0] {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.session.execute("file.new", serde_json::json!({"width": 640, "height": 480})).unwrap();
+        app.session.execute("shape.create", serde_json::json!({"kind": "rect", "rect": [100, 100, 400, 200], "fill": "#ff0000"})).unwrap();
+        app.sync_views();
+        app.ui.views[0].zoom = zoom;
+        app.ui.tool = Tool::Move;
+        app.ui.tool_options.move_show_transform = true;
+        app.ui.extras.snap = false;
+        let xf = view(zoom);
+        let ctx = egui::Context::default();
+        let before = app.session.active().unwrap().doc.clone();
+        let steps = app.session.active().unwrap().history.past_len();
+        // Away from the top edge's midpoint and corners: the native canvas first opens the
+        // controls here, then forwards the same document-space press to the transform tool.
+        assert!(begin_transform_controls_at(&mut app, &ctx, &xf, xf.to_screen(180.0, 100.0)));
+        for event in [
+            crate::canvas::ToolEvent::Down { x: 180.0, y: 100.0, pressure: 1.0 },
+            crate::canvas::ToolEvent::Move { x: 180.0, y: 90.0, pressure: 1.0 },
+            crate::canvas::ToolEvent::Up { x: 180.0, y: 90.0 },
+        ] {
+            crate::canvas::tool_event(&mut app, event, Modifiers::SHIFT);
+        }
+        let t = app.ui.transform.as_ref().expect("a handle release retains the transform session");
+        assert!(t.quad[0][1] < 100.0, "the pressed edge scales");
+        assert!((t.quad[2][1] - 300.0).abs() < 1e-6, "the opposite edge anchors scaling instead of moving the whole box");
+        assert_eq!(app.session.active().unwrap().doc, before, "a preview does not commit pixels");
+        assert_eq!(app.session.active().unwrap().history.past_len(), steps);
+    }
+}
+
+#[test]
 fn modes_that_do_not_rotate_and_invalid_points_do_not_hide_the_pointer() {
     let mut app = app(QUAD, 1.0);
     for mode in [TransformMode::Distort, TransformMode::Skew] {
