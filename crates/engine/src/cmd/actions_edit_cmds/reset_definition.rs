@@ -126,7 +126,7 @@ mod tests {
         s.actions.playback_steps = 23;
         let (_, first) = apply(&mut s, false).unwrap();
         let (_, latest) = apply(&mut s, false).unwrap();
-        let rows = set_occurrences(&s);
+        let rows = set_occurrences(&s).unwrap();
         assert_eq!(rows.len(), 2);
         assert_eq!(rows.iter().map(|row| row.name.as_str()).collect::<Vec<_>>(), [defaults::NAME, defaults::NAME]);
         assert!(rows.iter().all(|row| row.actions.len() == 2 && row.origin.is_some()));

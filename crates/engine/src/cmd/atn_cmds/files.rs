@@ -206,7 +206,7 @@ pub(super) fn save(s: &mut Session, p: &Value) -> Result<Value> {
     } else if p.get("action").is_some() {
         let idx = crate::actions_cmds::resolve(&s.actions.list, p, cmd)?;
         let a = &s.actions.list[idx];
-        vec![(set_param.clone().unwrap_or_else(|| super::logical_set_name(a.set.as_deref()).to_string()), sidecar::selection(&s.actions, a))]
+        vec![(set_param.clone().unwrap_or_else(|| super::logical_set_name(a.set.as_deref()).to_string()), sidecar::selection(&s.actions, a).map_err(|error| bad(cmd, error))?)]
     } else if let Some(set) = &set_param {
         let groups = sidecar::groups(&s.actions, Some(set)).map_err(|error| bad(cmd, error))?;
         if groups.is_empty() {

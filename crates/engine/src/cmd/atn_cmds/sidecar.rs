@@ -240,7 +240,7 @@ pub(crate) fn explicit_icon(action: &mut Action) {
 }
 
 /// Use an empty-row carrier only when both its current slot and displayed row still match.
-pub(super) fn empty_source(state: &ActionState, slot: usize) -> Option<Arc<SetMetadata>> {
+pub(crate) fn empty_source(state: &ActionState, slot: usize) -> Option<Arc<SetMetadata>> {
     state.atn_set_rows.iter().find(|entry| entry.slot == slot && state.sets.get(slot) == Some(&entry.row)).map(|entry| entry.source.clone())
 }
 
@@ -338,11 +338,19 @@ pub(crate) fn assign_set_metadata(state: &mut ActionState, action: usize, target
     }
 }
 
+/// Change only the destination SET carrier; action-level opaque bytes and origins stay intact.
+pub(crate) fn place_metadata(action: &mut Action, source: Option<Arc<SetMetadata>>) {
+    if let Some(metadata) = action.atn_metadata.as_mut() { metadata.set = source; }
+}
+
 /// Select one action with its set metadata and exact raw-row provenance when still available.
-pub(crate) fn selection<'a>(state: &ActionState, action: &'a Action) -> Selection<'a> {
-    let source =
-        action.atn_metadata.as_ref().and_then(|metadata| metadata.set.clone()).or_else(|| group_source(state, super::logical_set_name(action.set.as_deref())));
-    Selection { actions: vec![action], source, raw: state.library.row_source(&state.sets, action) }
+pub(crate) fn selection<'a>(state: &ActionState, action: &'a Action) -> Result<Selection<'a>> {
+    crate::actions_cmds::library::placement::validate(state)?;
+    if let Some(binding) = &action.library_row { binding.slot(state)?; }
+    let source = action.library_row.as_ref().map(|binding| binding.carrier.clone()).unwrap_or_else(|| {
+        action.atn_metadata.as_ref().and_then(|metadata| metadata.set.clone()).or_else(|| group_source(state, super::logical_set_name(action.set.as_deref())))
+    });
+    Ok(Selection { actions: vec![action], source, raw: state.library.row_source(&state.sets, action)? })
 }
 
 /// Build the portable logical-set selection, preserving its opaque metadata and enforcing archive limits.
@@ -361,6 +369,7 @@ fn groups_ordered<'a>(state: &'a ActionState, only: Option<&str>, durable: bool)
     if state.list.len() > atn::MAX_TOTAL_ACTIONS || state.sets.len() > atn::MAX_SETS {
         return Err("action library exceeds archive limits".into());
     }
+    crate::actions_cmds::library::placement::validate(state)?;
     let raw_rows = state.library.row_index(&state.sets);
     let mut seen = std::collections::HashSet::new();
     let names: Vec<_> = state
@@ -379,8 +388,10 @@ fn groups_ordered<'a>(state: &'a ActionState, only: Option<&str>, durable: bool)
     };
     for action in ordered {
         let name = super::logical_set_name(action.set.as_deref());
-        let source = action.atn_metadata.as_ref().and_then(|metadata| metadata.set.clone()).or_else(|| sources.get(name).cloned().flatten());
-        let raw = raw_rows.source(action);
+        let source = action.library_row.as_ref().map(|binding| binding.carrier.clone()).unwrap_or_else(|| {
+            action.atn_metadata.as_ref().and_then(|metadata| metadata.set.clone()).or_else(|| sources.get(name).cloned().flatten())
+        });
+        let raw = raw_rows.source(action)?;
         let existing = out.last_mut().filter(|(previous, selection)| {
             *previous == name
                 && selection.raw == raw
@@ -863,4 +874,4 @@ fn append_inner(
 
 #[cfg(test)]
 #[path = "sidecar_tests.rs"]
-mod tests;
+pub(crate) mod tests;

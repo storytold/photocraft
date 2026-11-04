@@ -105,7 +105,7 @@ pub(crate) fn confirm(app: &mut PhotocraftApp, dialog: u64, fields: &Map<String,
     app.ui.actions.selected = None;
     app.ui.actions.selected_step = None;
     app.ui.actions.selected_set = result.get("set").and_then(Value::as_str).map(str::to_string);
-    let folders = photocraft_engine::actions_edit_cmds::set_occurrences(&app.session);
+    let folders = photocraft_engine::actions_edit_cmds::set_occurrences(&app.session)?;
     app.ui.actions.selected_folder = result.get("slot").and_then(Value::as_u64).and_then(|slot| usize::try_from(slot).ok())
         .and_then(|slot| folders.iter().find(|row| row.slot == Some(slot))).map(super::FolderSelection::from_row);
     app.ui.actions.collapsed_folders.retain(|key| folders.iter().any(|row| key.matches(row)));

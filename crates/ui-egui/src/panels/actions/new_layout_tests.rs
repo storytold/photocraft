@@ -141,7 +141,7 @@ fn repeated_factory_folders_keep_modern_selection_collapse_and_empty_row_order()
     assert_eq!(h.query_all_by_label("Invert Colors").count(), 1);
     assert_eq!(h.query_all_by_label("Desaturate").count(), 1);
     assert_eq!(super::super::selected_set_actions(h.state()), vec![2, 3]);
-    let rows = photocraft_engine::actions_edit_cmds::set_occurrences(&h.state().session);
+    let rows = photocraft_engine::actions_edit_cmds::set_occurrences(&h.state().session).unwrap();
     assert!(h.state().ui.actions.folder_collapsed(&super::super::FolderSelection::from_row(&rows[1])));
     assert!(!h.state().ui.actions.folder_collapsed(&super::super::FolderSelection::from_row(&rows[2])));
     h.state_mut().ui.actions.search = "Invert".into();

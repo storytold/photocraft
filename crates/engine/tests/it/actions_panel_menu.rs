@@ -206,7 +206,7 @@ fn reset_has_one_panel_undo_and_saves_the_selected_physical_occurrence() {
     let revision = s.active().unwrap().revision;
     s.execute("actions.reset", json!({"mode":"append","confirm":true})).unwrap();
     let result = s.execute("actions.reset", json!({"mode":"append","confirm":true})).unwrap();
-    let folders = actions_edit_cmds::set_occurrences(&s);
+    let folders = actions_edit_cmds::set_occurrences(&s).unwrap();
     let defaults: Vec<_> = folders.iter().filter(|row| row.name == actions_edit_cmds::DEFAULT_SET_NAME).collect();
     assert_eq!(defaults.len(), 2);
     assert_ne!(defaults[0].origin, defaults[1].origin);
@@ -219,7 +219,7 @@ fn reset_has_one_panel_undo_and_saves_the_selected_physical_occurrence() {
     assert!(s.execute("actions.save", json!({"setSlot":result["slot"],"set":"Wrong"})).is_err());
     assert_eq!(s.execute("edit.undo", json!({})).unwrap(), json!(true));
     assert_eq!(s.actions.list.len(), original.len() + 2);
-    assert_eq!(actions_edit_cmds::set_occurrences(&s).iter().filter(|row| row.name == actions_edit_cmds::DEFAULT_SET_NAME).count(), 1);
+    assert_eq!(actions_edit_cmds::set_occurrences(&s).unwrap().iter().filter(|row| row.name == actions_edit_cmds::DEFAULT_SET_NAME).count(), 1);
     assert!(!actions_edit_cmds::reset_undo_available(&s));
     assert!(s.execute("actions.undoReset", json!({})).is_err());
     assert!(std::sync::Arc::ptr_eq(&s.active().unwrap().doc, &document));

@@ -151,22 +151,18 @@ fn insert_step(s: &mut Session, idx: usize, at: usize, step: (String, Value)) ->
     result
 }
 
-/// Keep session-list Play Action targets stable when a copied action inserts a row.
-/// Other commands' nested JSON may own a separate action library and is not traversed.
-fn shift_action_calls(actions: &mut [Action], at: usize, count: usize) {
+/// Keep Play and Conditional numeric targets stable when an action inserts a row.
+/// Other commands' nested JSON may own a separate library and is not traversed.
+pub(crate) fn shift_action_calls(actions: &mut [Action], at: usize, count: usize) {
     for (id, params) in actions.iter_mut().flat_map(|a| &mut a.steps) {
-        if id != "actions.play" {
-            continue;
-        }
-        let Some(Value::Number(n)) = params.get("action") else { continue };
-        let shifted = if let Some(n) = n.as_u64() {
-            if n >= at as u64 { n.checked_add(count as u64).map(Value::from) } else { None }
-        } else {
-            // `actions.play` also accepts floating indices, rounding them before lookup.
-            n.as_f64().filter(|n| n.round() >= at as f64).map(|n| Value::from(n + count as f64))
-        };
-        if let Some(value) = shifted {
-            params["action"] = value;
+        for &key in crate::actions_cmds::call_keys(id) {
+            let Some(Value::Number(n)) = params.get(key) else { continue };
+            let shifted = if let Some(n) = n.as_u64() {
+                if n >= at as u64 { n.checked_add(count as u64).map(Value::from) } else { None }
+            } else {
+                n.as_f64().filter(|n| n.round() >= at as f64).map(|n| Value::from(n + count as f64))
+            };
+            if let Some(value) = shifted { params[key] = value; }
         }
     }
 }

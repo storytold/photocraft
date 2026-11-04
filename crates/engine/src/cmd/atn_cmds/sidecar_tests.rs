@@ -611,3 +611,14 @@ fn actual_editor_icon_update_preserves_unknown_type_until_an_explicit_default_ch
     assert_eq!(integer(entry, "actionThumbnailTypeKey"), 0);
     assert!(entry.parsed().unwrap().get("actionIconKey").is_none());
 }
+
+// Reuse this independently spelled wire oracle for the isolated placement prototype.
+pub(crate) fn physical_placement_fixture() -> Vec<u8> {
+    fixture_rows(&[("Same", 1), ("Same", 1), ("Same", 0)], None, "placement").bytes
+}
+pub(crate) fn physical_action_payload(action: &Action) -> Vec<u8> {
+    action.atn_metadata.as_ref().unwrap().raw.bytes().to_vec()
+}
+pub(crate) fn physical_set_payload(state: &ActionState, slot: usize) -> Vec<u8> {
+    empty_source(state, slot).unwrap().raw.bytes().to_vec()
+}

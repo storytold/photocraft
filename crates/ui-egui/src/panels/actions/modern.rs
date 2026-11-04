@@ -448,7 +448,10 @@ pub(super) fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let list = app.session.actions.list.clone();
     let query = app.ui.actions.search.to_lowercase();
     let matches = |action: &Action| action.name.to_lowercase().contains(&query);
-    let mut folders = photocraft_engine::actions_edit_cmds::set_occurrences(&app.session);
+    let mut folders = match photocraft_engine::actions_edit_cmds::set_occurrences(&app.session) {
+        Ok(folders) => folders,
+        Err(error) => { app.ui.status = error; app.ui.status_error = true; return; }
+    };
     // Preserve the original logical order until physical rows exist; then use their slots,
     // including empty occurrences and repeated captions.
     if !folders.iter().any(|folder| folder.origin.is_some()) {

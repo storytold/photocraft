@@ -2,6 +2,20 @@ use super::*;
 // These unchanged assertions exercise the Classic presentation explicitly.
 use super::{classic_panel as panel, classic_panel_menu as panel_menu};
 
+/// A delayed callback must not act on a same-caption replacement or a changed revision.
+#[test]
+fn delayed_physical_folder_checks_revision_and_origin_before_slot_dispatch() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.session.execute("actions.reset", json!({"mode":"append","confirm":true})).unwrap();
+    let rows = photocraft_engine::actions_edit_cmds::set_occurrences(&app.session).unwrap();
+    let held = FolderSelection::from_row(&rows[0]);
+    let revision = app.session.actions.rev;
+    assert_eq!(held.checked_slot(&app, revision).unwrap(), 0);
+    app.session.execute("actions.reset", json!({"mode":"replace","confirm":true})).unwrap();
+    assert!(held.checked_slot(&app, revision).is_err());
+    assert!(held.checked_slot(&app, app.session.actions.rev).is_err(), "equal captions are not equal row origins");
+}
+
 /// Equal folder captions keep separate selection and disclosure controls after repeated Append.
 #[test]
 fn repeated_factory_folders_select_and_collapse_independently() {
@@ -36,7 +50,7 @@ fn repeated_factory_folders_select_and_collapse_independently() {
     assert_eq!(h.query_all_by_label("Desaturate").count(), 1);
     assert_eq!(h.state().ui.actions.selected_folder.as_ref(), Some(&selected));
     assert_eq!(selected_set_actions(h.state()), vec![2, 3]);
-    let rows = photocraft_engine::actions_edit_cmds::set_occurrences(&h.state().session);
+    let rows = photocraft_engine::actions_edit_cmds::set_occurrences(&h.state().session).unwrap();
     assert!(h.state().ui.actions.folder_collapsed(&FolderSelection::from_row(&rows[1])));
     assert!(!h.state().ui.actions.folder_collapsed(&FolderSelection::from_row(&rows[2])));
 }

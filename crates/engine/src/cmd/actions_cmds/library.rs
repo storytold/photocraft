@@ -9,6 +9,9 @@ use photocraft_psd::{
 use super::{Action, ActionState, color_to_atn};
 use crate::atn_cmds::{self, sidecar};
 
+pub(crate) mod placement;
+pub use placement::RowBinding;
+
 type Result<T> = std::result::Result<T, String>;
 const MAX_BYTES: usize = crate::preset_store::MAX_ACTIONS_BYTES as usize;
 
@@ -162,29 +165,53 @@ pub struct Library {
 
 pub(crate) struct RowIndex<'a> {
     first: std::collections::HashMap<&'a str, RowOrigin>,
-    exact: std::collections::HashMap<(&'a str, (usize, usize)), RowOrigin>,
+    exact: std::collections::HashMap<(&'a str, (usize, usize)), (RowOrigin, usize, usize)>,
+    slots: std::collections::HashMap<&'a str, (usize, usize, bool)>,
 }
 impl RowIndex<'_> {
-    /// Prefer the action's exact surviving physical row; otherwise use the first logical namesake.
-    pub(crate) fn source(&self, action: &Action) -> Option<RowOrigin> {
+    /// Explicit placement never falls back to another namesake, even after a row disappears.
+    pub(crate) fn destination(&self, binding: &RowBinding) -> Result<usize> {
+        if let Some(row) = &binding.row {
+            let (_, slot, count) = self.exact.get(&(binding.name.as_str(), row.key())).ok_or("the bound Actions folder no longer exists")?;
+            if *count != 1 { return Err("the bound Actions folder is ambiguous".into()); }
+            Ok(*slot)
+        } else {
+            let (slot, count, raw) = self.slots.get(binding.name.as_str()).ok_or("the bound Actions folder no longer exists")?;
+            if *count != 1 || *raw { return Err("the rawless Actions folder is ambiguous or replaced".into()); }
+            Ok(*slot)
+        }
+    }
+    /// Retain legacy logical fallback only for actions with no explicit destination.
+    pub(crate) fn source(&self, action: &Action) -> Result<Option<RowOrigin>> {
         let name = atn_cmds::logical_set_name(action.set.as_deref());
-        action.library_origin.as_ref().and_then(|origin| self.exact.get(&(name, origin.row.key()))).or_else(|| self.first.get(name)).cloned()
+        if let Some(binding) = &action.library_row {
+            if name != binding.name { return Err("the bound Actions folder caption changed".into()); }
+            self.destination(binding)?;
+            return Ok(binding.row.clone());
+        }
+        if let Some((row, _, count)) = action.library_origin.as_ref().and_then(|origin| self.exact.get(&(name, origin.row.key()))) {
+            if *count != 1 { return Err("the original Actions folder is ambiguous".into()); }
+            return Ok(Some(row.clone()));
+        }
+        Ok(self.first.get(name).cloned())
     }
 }
 
 impl Library {
-    /// Index surviving rows once, retaining both first-name resolution and exact provenance matches.
+    /// Index current captions, unique exact provenance and rawless ambiguity once.
     pub(crate) fn row_index<'a>(&self, names: &'a [String]) -> RowIndex<'a> {
-        let mut index = RowIndex { first: Default::default(), exact: Default::default() };
-        for (name, row) in names.iter().zip(&self.rows) {
+        let mut index = RowIndex { first: Default::default(), exact: Default::default(), slots: Default::default() };
+        for (slot, name) in names.iter().enumerate() {
+            let row = self.rows.get(slot).and_then(Option::as_ref);
+            index.slots.entry(name.as_str()).and_modify(|entry| { entry.1 += 1; entry.2 |= row.is_some(); }).or_insert((slot, 1, row.is_some()));
             if let Some(row) = row {
                 index.first.entry(name.as_str()).or_insert_with(|| row.clone());
-                index.exact.entry((name.as_str(), row.key())).or_insert_with(|| row.clone());
+                index.exact.entry((name.as_str(), row.key())).and_modify(|entry| entry.2 += 1).or_insert_with(|| (row.clone(), slot, 1));
             }
         }
         index
     }
-    pub(crate) fn row_source(&self, names: &[String], action: &Action) -> Option<RowOrigin> {
+    pub(crate) fn row_source(&self, names: &[String], action: &Action) -> Result<Option<RowOrigin>> {
         self.row_index(names).source(action)
     }
 }

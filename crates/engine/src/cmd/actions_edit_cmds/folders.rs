@@ -16,8 +16,9 @@ pub struct SetOccurrence {
 
 /// Resolve actions with the library's existing exact-origin/first-logical-name rule.
 /// Empty and repeated same-caption rows remain separate and keep their physical slot order.
-pub fn set_occurrences(s: &Session) -> Vec<SetOccurrence> {
+pub fn set_occurrences(s: &Session) -> Result<Vec<SetOccurrence>, String> {
     let state = &s.actions;
+    crate::actions_cmds::library::placement::validate(state)?;
     let mut rows: Vec<_> = state.sets.iter().enumerate().map(|(slot, name)| SetOccurrence {
         name: name.clone(),
         slot: Some(slot),
@@ -36,7 +37,7 @@ pub fn set_occurrences(s: &Session) -> Vec<SetOccurrence> {
     let index = state.library.row_index(&state.sets);
     for (action_index, action) in state.list.iter().enumerate() {
         let name = atn_cmds::logical_set_name(action.set.as_deref());
-        let source = index.source(action).map(|row| row.key());
+        let source = index.source(action)?.map(|row| row.key());
         let row = source.and_then(|source| physical.get(&(name, source)).copied()).or_else(|| first.get(name).copied());
         if let Some(row) = row.and_then(|row| rows.get_mut(row)) {
             row.actions.push(action_index);
@@ -45,5 +46,5 @@ pub fn set_occurrences(s: &Session) -> Vec<SetOccurrence> {
             rows.push(SetOccurrence { name: name.into(), slot: None, origin: None, actions: vec![action_index], _source: None });
         }
     }
-    rows
+    Ok(rows)
 }

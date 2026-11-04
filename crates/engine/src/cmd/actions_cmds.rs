@@ -58,6 +58,9 @@ pub struct Action {
     /// Original physical record; runtime only, persisted by the single ATN library codec.
     #[serde(skip)]
     pub library_origin: Option<library::ActionOrigin>,
+    /// Checked destination placement, independent of immutable raw action/event provenance.
+    #[serde(skip)]
+    pub library_row: Option<library::RowBinding>,
     /// Native parts of an original one-to-many ATN event, moved with their step indices.
     #[serde(skip)]
     pub library_steps: Vec<Option<library::StepOrigin>>,
@@ -128,6 +131,7 @@ impl Action {
             atn_metadata: None,
             library_origin: None,
             library_steps: Vec::new(),
+            library_row: None,
             steps,
             disabled: BTreeSet::new(),
             dialogs: BTreeSet::new(),
@@ -988,16 +992,16 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
 /// Delete validated, sorted library indices as one edit. References follow surviving
 /// identities; calls to deleted targets become invalid rather than playing a replacement.
 /// Embedded libraries in other commands' JSON own their own references and stay untouched.
-fn remove_actions(s: &mut Session, removed: &[usize]) -> Vec<String> {
-    let old_len = s.actions.list.len();
-    let names: Vec<_> = removed.iter().filter_map(|&index| s.actions.list.get(index).map(|action| action.name.clone())).collect();
+pub(crate) fn remove_definitions(list: &mut Vec<Action>, removed: &[usize]) -> (Vec<String>, Vec<String>) {
+    let old_len = list.len();
+    let names: Vec<_> = removed.iter().filter_map(|&index| list.get(index).map(|action| action.name.clone())).collect();
     let mut vanished: BTreeSet<&str> = names.iter().map(String::as_str).collect();
-    for (index, action) in s.actions.list.iter().enumerate() {
+    for (index, action) in list.iter().enumerate() {
         if removed.binary_search(&index).is_err() {
             vanished.remove(action.name.as_str());
         }
     }
-    for (id, params) in s.actions.list.iter_mut().flat_map(|action| &mut action.steps) {
+    for (id, params) in list.iter_mut().flat_map(|action| &mut action.steps) {
         for &key in call_keys(id) {
             let Some(value) = params.get(key) else { continue };
             if value.as_str().is_some_and(|name| vanished.contains(name)) {
@@ -1012,12 +1016,17 @@ fn remove_actions(s: &mut Session, removed: &[usize]) -> Vec<String> {
         }
     }
     let mut index = 0;
-    s.actions.list.retain(|_| {
+    list.retain(|_| {
         let keep = removed.binary_search(&index).is_err();
         index += 1;
         keep
     });
     let keys: Vec<_> = vanished.iter().map(|name| format!("{PLAY_SHORTCUT_PREFIX}{name}")).collect();
+    (names, keys)
+}
+
+fn remove_actions(s: &mut Session, removed: &[usize]) -> Vec<String> {
+    let (names, keys) = remove_definitions(&mut s.actions.list, removed);
     if keys.iter().any(|key| s.prefs().shortcuts.contains_key(key) || s.prefs().alternate_shortcuts.contains_key(key)) {
         s.edit_prefs(|prefs| {
             for key in &keys {
@@ -1072,7 +1081,7 @@ fn toggle(s: &mut Session, p: &Value) -> Result<Value> {
 pub const PLAY_SHORTCUT_PREFIX: &str = "actions.play:";
 
 /// Named action references shared by Rename and an editor's prepared Save.
-fn call_keys(id: &str) -> &'static [&'static str] {
+pub(crate) fn call_keys(id: &str) -> &'static [&'static str] {
     match id {
         "actions.play" => &["action"],
         "actions.conditional" => &["then", "else"],

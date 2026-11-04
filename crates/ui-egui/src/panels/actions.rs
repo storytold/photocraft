@@ -139,12 +139,22 @@ impl FolderSelection {
     fn matches(&self, row: &photocraft_engine::actions_edit_cmds::SetOccurrence) -> bool {
         self.name == row.name && match self.origin { Some(origin) => row.origin == Some(origin), None => row.origin.is_none() && row.slot == self.slot }
     }
+
+    /// Delayed callbacks bind both the captured revision and the actual retained row origin.
+    fn checked_slot(&self, app: &PhotocraftApp, revision: u64) -> Result<usize, String> {
+        if app.session.actions.rev != revision { return Err("the selected Actions folder changed".into()); }
+        let rows = photocraft_engine::actions_edit_cmds::set_occurrences(&app.session)?;
+        let mut matches = rows.iter().filter(|row| self.matches(row));
+        let row = matches.next().ok_or("the selected Actions folder no longer exists")?;
+        if matches.next().is_some() { return Err("the selected Actions folder is ambiguous".into()); }
+        row.slot.ok_or_else(|| "the selected Actions folder has no physical slot".into())
+    }
 }
 
 fn selected_occurrence(app: &PhotocraftApp) -> Option<photocraft_engine::actions_edit_cmds::SetOccurrence> {
     if app.ui.actions.selected.is_some() { return None; }
     let selected = app.ui.actions.selected_folder.as_ref()?;
-    photocraft_engine::actions_edit_cmds::set_occurrences(&app.session).into_iter().find(|row| selected.matches(row))
+    photocraft_engine::actions_edit_cmds::set_occurrences(&app.session).ok()?.into_iter().find(|row| selected.matches(row))
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -993,7 +1003,8 @@ fn load_dialog_with_limit(app: &mut PhotocraftApp, max_contents_bytes: u64) -> R
 /// or every action when none came from a set, as a `.atn` file Photoshop loads.
 fn save_dialog(app: &mut PhotocraftApp, set: Option<String>) -> Result<Value, String> {
     let physical = if set.is_none() && app.ui.actions.selected.is_none() && app.ui.actions.selected_folder.is_some() {
-        Some(selected_occurrence(app).ok_or("the selected action folder changed before Save Actions")?)
+        let key = app.ui.actions.selected_folder.as_ref().ok_or("the selected action folder changed before Save Actions")?;
+        Some(key.checked_slot(app, app.session.actions.rev)?)
     } else { None };
     let selected_set = app.ui.actions.selected.is_none().then(|| app.ui.actions.selected_set.clone()).flatten();
     let selected_set = selected_set.filter(|set| photocraft_engine::actions_edit_cmds::set_names(&app.session).contains(set));
@@ -1003,7 +1014,7 @@ fn save_dialog(app: &mut PhotocraftApp, set: Option<String>) -> Result<Value, St
         Some(set) => json!({"set": set, "skipUnsupported": true}),
         None => json!({"skipUnsupported": true}),
     };
-    if let Some(slot) = physical.and_then(|row| row.slot) {
+    if let Some(slot) = physical {
         params["setSlot"] = json!(slot);
     }
     let r = app.run("actions.save", params)?;
@@ -2066,7 +2077,10 @@ fn classic_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let mut dialog_toggled = None;
     let mut set_toggled: Option<(FolderSelection, bool, bool)> = None;
     let mut save_set: Option<FolderSelection> = None;
-    let folders = photocraft_engine::actions_edit_cmds::set_occurrences(&app.session);
+    let folders = match photocraft_engine::actions_edit_cmds::set_occurrences(&app.session) {
+        Ok(folders) => folders,
+        Err(error) => { app.ui.status = error; app.ui.status_error = true; return; }
+    };
     app.ui.actions.collapsed_folders.retain(|key| folders.iter().any(|row| key.matches(row)));
     if app.ui.actions.selected_folder.as_ref().is_some_and(|key| !folders.iter().any(|row| key.matches(row))) {
         app.ui.actions.selected_folder = None;
