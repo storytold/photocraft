@@ -1100,7 +1100,8 @@ pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
             let solid = egui::style::ScrollStyle::solid();
             scroll.bar_width = solid.bar_width;
             scroll.floating_width = solid.bar_width;
-            scroll.floating_allocated_width = solid.bar_width;
+            // The room a solid bar takes beside the content, margins included.
+            scroll.floating_allocated_width = solid.allocated_width();
             scroll.dormant_handle_opacity = 0.45;
             scroll.active_handle_opacity = 0.6;
         }

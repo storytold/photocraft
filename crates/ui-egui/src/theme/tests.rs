@@ -96,6 +96,16 @@ fn resting_scrollbar_thumb_stands_out_from_its_track_in_every_theme() {
             if scroll.floating {
                 let hover = over(thumb_in(&v.widgets.hovered).gamma_multiply(scroll.interact_handle_opacity), track);
                 assert!((luma(hover) - luma(track)).abs() > gap, "{kind:?}/{theme:?}: hovering makes the thumb stronger");
+                let list_hover = over(thumb_in(&v.widgets.inactive).gamma_multiply(scroll.active_handle_opacity), track);
+                assert!((luma(list_hover) - luma(track)).abs() > gap, "{kind:?}/{theme:?}: the pointer over the list makes the thumb stronger");
+            }
+            // Classic keeps the room and width a solid bar has beside the content; its bar floats
+            // only so the thumb can fade (a solid style always paints it opaque).
+            if kind == ThemeKind::Classic {
+                let solid = egui::style::ScrollStyle::solid();
+                assert!(scroll.floating, "{theme:?}: Classic's thumb fades");
+                assert_eq!(scroll.allocated_width(), solid.allocated_width(), "{theme:?}: Classic reserves a solid bar's room");
+                assert_eq!((scroll.bar_width, scroll.floating_width), (solid.bar_width, solid.bar_width), "{theme:?}: at a solid bar's width");
             }
         }
     }
