@@ -44,10 +44,11 @@ fn slot_tool(ui: &egui::Ui, current: Tool, slot: &[Tool], key: egui::Id) -> Tool
     ui.data(|d| d.get_temp::<Tool>(key)).filter(|t| slot.contains(t)).unwrap_or(slot[0])
 }
 
-/// Next tool in a toolbar flyout slot after `from`, wrapping (Photoshop Alt/Option-click).
+/// Next tool in a toolbar flyout slot after `from`, wrapping (Photoshop Alt/Option-click). An
+/// empty slot returns `from` unchanged rather than dividing by zero.
 pub(super) fn next_slot_tool(slot: &[Tool], from: Tool) -> Tool {
     let i = slot.iter().position(|&t| t == from).unwrap_or(0);
-    slot[(i + 1) % slot.len()]
+    i.checked_add(1).and_then(|n| n.checked_rem(slot.len())).and_then(|n| slot.get(n)).copied().unwrap_or(from)
 }
 
 /// [`TOOL_SECTIONS`] without the tools hidden in Edit › Toolbar (`hidden` holds tool names: the

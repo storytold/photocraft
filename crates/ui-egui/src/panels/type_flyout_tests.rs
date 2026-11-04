@@ -446,6 +446,8 @@ fn next_slot_tool_wraps_around_the_flyout() {
     assert_eq!(next_slot_tool(&slot, Tool::EllipseMarquee), Tool::SingleRowMarquee);
     assert_eq!(next_slot_tool(&slot, Tool::SingleColumnMarquee), Tool::RectMarquee);
     assert_eq!(next_slot_tool(&slot, Tool::Brush), Tool::EllipseMarquee, "unknown from → after the first");
+    // Empty slot: no panic, the current tool stays.
+    assert_eq!(next_slot_tool(&[], Tool::Brush), Tool::Brush);
 }
 
 /// Edit › Toolbar hidden tools shrink the Alt-click cycle to the remaining flyout members.
