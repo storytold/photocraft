@@ -78,6 +78,7 @@ fn a_layer_id_reference_imports_as_the_layer_id() {
         expanded: true,
         actions: vec![AtnAction { name: UnicodeString::new_nul("A"), items: vec![item("setd", "Set", Some(descriptor))], ..Default::default() }],
         warnings: Vec::new(),
+        encoding: None,
     })
     .unwrap();
     let imported = import(&bytes).unwrap();
