@@ -26,7 +26,7 @@
 	Target:	இலக்கு:
 	Selected Artboards	தேர்ந்தெடுக்கப்பட்ட ஆர்ட்போர்டுகள்
 	Center Columns	நெடுவரிசைகளை மையப்படுத்து
-	Clear Existing Guides	இருக்கும் வழிகாட்டிகளை அழி
+	Clear Existing Guides	இருக்கும் அளவுகோட்டு வரிகளை அழி
 	Invalid guide layout	தவறான வழிகாட்டி அமைப்பு
 	Leave empty for automatic size	தானியங்கி அளவுக்கு காலியாக விடவும்
 	5 Columns, 3 Rows	5 நெடுவரிசைகள், 3 வரிசைகள்
@@ -117,7 +117,7 @@
 	Add Open Files	திறந்த கோப்புகளைச் சேர்
 	Sort By Name	பெயரால் வரிசைப்படுத்து
 	Attempt to Automatically Align Source Images	மூலப் படங்களைத் தானாக சீரமைக்க முயற்சி
-	Create Smart Object after Loading Layers	அடுக்குகளை ஏற்றிய பின் நுண்ணறிவு பொருளை உருவாக்கு
+	Create Smart Object after Loading Layers	அடுக்குகளை ஏற்றிய பின் திறன்மிகு பொருளை உருவாக்கு
 	Reveal in Finder	Finder-இல் காட்டு
 	Show in Explorer	Explorer-இல் காட்டு
 	Show in Folder	கோப்புறையில் காட்டு
@@ -206,7 +206,7 @@
 	Cursors…	சுட்டிகள்…
 	Transparency & Gamut…	ஒளிஊடுருவல் & நிற வரம்பு…
 	Units & Rulers…	அலகுகள் & அளவுகோல்கள்…
-	Guides, Grid & Slices…	வழிகாட்டிகள், கட்டம் & துண்டுகள்…
+	Guides, Grid & Slices…	அளவுகோட்டு வரிகள், கட்டம் & துண்டுகள்…
 	Plug-ins…	செருகுநிரல்கள்…
 	Type…	உரை…
 	Enhanced Controls…	மேம்படுத்தப்பட்ட கட்டுப்பாடுகள்…
@@ -265,10 +265,10 @@
 	Auto Contrast	தானியங்கி மாறுபாடு
 	Auto Color	தானியங்கி நிறம்
 	Image Size…	பட அளவு…
-	Canvas Size…	கேன்வாஸ் அளவு…
+	Canvas Size…	படச்சட்ட அளவு…
 	Image Rotation	பட சுழற்சி
-	Flip Canvas Horizontal	கேன்வாஸை கிடைமட்டமாகப் புரட்டு
-	Flip Canvas Vertical	கேன்வாஸை செங்குத்தாகப் புரட்டு
+	Flip Canvas Horizontal	படச்சட்டத்தை கிடைமட்டமாகப் புரட்டு
+	Flip Canvas Vertical	படச்சட்டத்தை செங்குத்தாகப் புரட்டு
 	Crop	வெட்டு
 	Trim…	ஒதுக்கு…
 	Reveal All	அனைத்தையும் வெளிப்படுத்து
@@ -307,7 +307,7 @@
 	New Fill Layer	புதிய நிரப்பு அடுக்கு
 	New Adjustment Layer	புதிய சரிசெய்தல் அடுக்கு
 	New Layer Based Slice	புதிய அடுக்கு அடிப்படையிலான துண்டு
-	New Smart Object via Copy	நகல் வழியாகப் புதிய நுண்ணறிவு பொருள்
+	New Smart Object via Copy	நகல் வழியாகப் புதிய திறன்மிகு பொருள்
 	New Blank Video Layer	புதிய வெற்று வீடியோ அடுக்கு
 	New Video Layer from File…	கோப்பிலிருந்து புதிய வீடியோ அடுக்கு…
 	Duplicate Layer…	அடுக்கை நகலெடு…
@@ -334,10 +334,10 @@
 	Global Light…	பொது ஒளி…
 	Hide All Effects	அனைத்து விளைவுகளையும் மறை
 	Scale Effects…	விளைவுகளை அளவு மாற்று…
-	Smart Filter	நுண்ணறிவு வடிகட்டி
-	Convert for Smart Filters	நுண்ணறிவு வடிகட்டிகளுக்கு மாற்று
-	Clear Smart Filters	நுண்ணறிவு வடிகட்டிகளை அழி
-	Disable Smart Filters	நுண்ணறிவு வடிகட்டிகளை முடக்கு
+	Smart Filter	திறன்மிகு வடிகட்டி
+	Convert for Smart Filters	திறன்மிகு வடிகட்டிகளுக்கு மாற்று
+	Clear Smart Filters	திறன்மிகு வடிகட்டிகளை அழி
+	Disable Smart Filters	திறன்மிகு வடிகட்டிகளை முடக்கு
 	Delete Filter Mask	வடிகட்டி மாஸ்க்கை நீக்கு
 	Disable Filter Mask	வடிகட்டி மாஸ்க்கை முடக்கு
 	Solid Color…	திட நிறம்…
@@ -360,9 +360,9 @@
 	Vector Mask from Current Path	தற்போதைய பாதையிலிருந்து வெக்டர் மாஸ்க்
 	Create Clipping Mask	கிளிப்பிங் மாஸ்க் உருவாக்கு
 	Release Clipping Mask	கிளிப்பிங் மாஸ்க்கை விடுவி
-	Smart Objects	நுண்ணறிவு பொருட்கள்
-	Smart Object	நுண்ணறிவு பொருள்
-	Convert to Smart Object	நுண்ணறிவு பொருளாக மாற்று
+	Smart Objects	திறன்மிகு பொருட்கள்
+	Smart Object	திறன்மிகு பொருள்
+	Convert to Smart Object	திறன்மிகு பொருளாக மாற்று
 	Convert to Embedded	உட்பொதிந்ததாக மாற்று
 	Convert to Layers	அடுக்குகளாக மாற்று
 	Convert to Linked…	இணைக்கப்பட்டதாக மாற்று…
@@ -402,7 +402,7 @@
 	Rasterize Type Layer	உரை அடுக்கை ராஸ்டராக்கு
 	Rasterize Shape	வடிவத்தை ராஸ்டராக்கு
 	New Guide Layout…	புதிய வழிகாட்டி அமைப்பு…
-	New Guides From Shape	வடிவத்திலிருந்து புதிய வழிகாட்டிகள்
+	New Guides From Shape	வடிவத்திலிருந்து புதிய அளவுகோட்டு வரிகள்
 	Lock Layers…	அடுக்குகளைப் பூட்டு…
 	Link Layers	அடுக்குகளை இணை
 	Select Linked Layers	இணைக்கப்பட்ட அடுக்குகளைத் தேர்ந்தெடு
@@ -473,12 +473,12 @@
 	Crisp	துல்லியம்
 	Strong	வலிமை
 	Smooth	மென்மை
-	Windows LCD	Windows LCD
+	Windows LCD	விண்டோஸ் எல்.சி.டி
 	Windows	Windows
 	Orientation	திசையமைவு
 	Horizontal	கிடைமட்டம்
 	Vertical	செங்குத்து
-	OpenType	OpenType
+	OpenType	ஓபன் டைப்
 	Standard Ligatures	நிலையான இணைப்பெழுத்துகள்
 	Contextual Alternates	சூழல் மாற்றுகள்
 	Discretionary Ligatures	விருப்ப இணைப்பெழுத்துகள்
@@ -518,7 +518,7 @@
 	Color Range…	நிற வரம்பு…
 	Focus Area…	கவனப் பகுதி…
 	Select and Mask…	தேர்ந்தெடுத்து மாஸ்க் செய்…
-	Smart Radius	நுண்ணறிவு ஆரம்
+	Smart Radius	திறன்மிகு ஆரம்
 	Shift Edge	விளிம்பை நகர்த்து
 	Decontaminate	தூய்மையாக்கு
 	Output	வெளியீடு
@@ -537,7 +537,7 @@
 	Match All	அனைத்தையும் பொருத்து
 	Last Filter	கடைசி வடிகட்டி
 	Filter Gallery…	வடிகட்டி காட்சியகம்…
-	Adaptive Wide Angle…	Adaptive Wide Angle…
+	Adaptive Wide Angle…	தகவமைக்கும் அகலக் கோணம்…
 	Camera Raw Filter…	கேமரா Raw வடிகட்டி…
 	Liquify…	திரவமாக்கு…
 	Vanishing Point…	மறையும் புள்ளி…
@@ -561,7 +561,7 @@
 	Motion Blur…	இயக்க மங்கல்…
 	Radial Blur…	ஆரை மங்கல்…
 	Shape Blur…	வடிவ மங்கல்…
-	Smart Blur…	நுண்ணறிவு மங்கல்…
+	Smart Blur…	திறன்மிகு மங்கல்…
 	Surface Blur…	மேற்பரப்பு மங்கல்…
 	Average	சராசரி
 	Displace…	இடம்பெயர்…
@@ -600,7 +600,7 @@
 	Sharpen	கூர்மையாக்கு
 	Sharpen Edges	விளிம்புகளைக் கூர்மையாக்கு
 	Sharpen More	மேலும் கூர்மையாக்கு
-	Smart Sharpen…	நுண்ணறிவு கூர்மையாக்கல்…
+	Smart Sharpen…	திறன்மிகு கூர்மையாக்கல்…
 	Unsharp Mask…	அன்ஷார்ப் மாஸ்க்…
 	High Pass…	உயர் அனுமதி…
 	Stylize	பாணியாக்கு
@@ -630,11 +630,11 @@
 	Working Yellow Plate	பணி மஞ்சள் தட்டு
 	Working Black Plate	பணி கருப்பு தட்டு
 	Working CMY Plate	பணி CMY தட்டு
-	Legacy Macintosh RGB	பழைய Macintosh RGB
+	Legacy Macintosh RGB	பழைய மேகிண்டோஷ் RGB
 	Internet Standard RGB	இணைய நிலையான RGB
-	Monitor RGB	மானிட்டர் RGB
-	Color Blindness — Protanopia-type	நிறக்குருடு — புரோட்டனோபியா வகை
-	Color Blindness — Deuteranopia-type	நிறக்குருடு — டியூட்டரனோபியா வகை
+	Monitor RGB	திரை RGB
+	Color Blindness — Protanopia-type	சிவப்பு நிறக்குருடு
+	Color Blindness — Deuteranopia-type	பச்சை நிறக்குருடு
 	Zoom In	பெரிதாக்கு
 	Zoom Out	சிறிதாக்கு
 	Fit on Screen	திரைக்குப் பொருத்து
@@ -676,11 +676,11 @@
 	Target Path	இலக்குப் பாதை
 	Current Path	தற்போதைய பாதை
 	Grid	கட்டம்
-	Guides	வழிகாட்டிகள்
-	Canvas Guides	கேன்வாஸ் வழிகாட்டிகள்
-	Artboard Guides	ஆர்ட்போர்டு வழிகாட்டிகள்
+	Guides	அளவுகோட்டு வரிகள்
+	Canvas Guides	படச்சட்ட அளவுகோட்டு வரிகள்
+	Artboard Guides	ஆர்ட்போர்டு அளவுகோட்டு வரிகள்
 	Count	எண்ணிக்கை
-	Smart Guides	நுண்ணறிவு வழிகாட்டிகள்
+	Smart Guides	திறன்மிகு அளவுகோட்டு வரிகள்
 	Slices	துண்டுகள்
 	Notes	குறிப்புகள்
 	Pixel Grid	பிக்சல் கட்டம்
@@ -695,10 +695,10 @@
 	Rulers	அளவுகோல்கள்
 	Snap	ஒட்டு
 	Snap To	இதனுடன் ஒட்டு
-	Lock Guides	வழிகாட்டிகளைப் பூட்டு
-	Clear Guides	வழிகாட்டிகளை அழி
-	Clear Selected Artboard Guides	தேர்ந்தெடுத்த ஆர்ட்போர்டு வழிகாட்டிகளை அழி
-	Clear Canvas Guides	கேன்வாஸ் வழிகாட்டிகளை அழி
+	Lock Guides	அளவுகோட்டு வரிகளை நிலைநிறுத்து
+	Clear Guides	அளவுகோட்டு வரிகளை அழி
+	Clear Selected Artboard Guides	தேர்ந்தெடுத்த ஆர்ட்போர்டு அளவுகோட்டு வரிகளை அழி
+	Clear Canvas Guides	படச்சட்ட அளவுகோட்டு வரிகளை அழி
 	New Guide…	புதிய வழிகாட்டி…
 	Lock Slices	துண்டுகளைப் பூட்டு
 	Clear Slices	துண்டுகளை அழி
@@ -732,27 +732,27 @@
 	Reset All Tools	அனைத்து கருவிகளையும் மீட்டமை
 	Reset all tools to their default settings?	அனைத்து கருவிகளையும் இயல்புநிலை அமைப்புகளுக்கு மீட்டமைக்கவா?
 	Lock Workspace	பணியிடத்தைப் பூட்டு
-	Theme	தீம்
-	Pro Theme	Pro தீம்
-	Pro Medium Gray Theme	Pro நடுத்தர சாம்பல் தீம்
-	Pro Light Gray Theme	Pro வெளிர் சாம்பல் தீம்
-	Pro Light Theme	Pro வெளிர் தீம்
-	Studio Theme	Studio தீம்
-	Studio Light Theme	Studio வெளிர் தீம்
-	Adwaita Light Theme	Adwaita வெளிர் தீம்
-	Adwaita Dark Theme	Adwaita கருமை தீம்
-	Classic Theme	கிளாசிக் தீம்
-	Solarized dark	Solarized கருமை
-	Solarized Dark Theme	Solarized கருமை தீம்
-	Breeze dark	Breeze கருமை
-	Breeze Dark Theme	Breeze கருமை தீம்
-	Breeze light	Breeze வெளிர்
-	Breeze Light Theme	Breeze வெளிர் தீம்
+	Theme	தோற்றம்
+	Pro Theme	புரோ தோற்றம்
+	Pro Medium Gray Theme	புரோ நடுத்தர சாம்பல் தோற்றம்
+	Pro Light Gray Theme	புரோ வெளிர் சாம்பல் தோற்றம்
+	Pro Light Theme	புரோ வெளிர் தோற்றம்
+	Studio Theme	ஸ்டுடியோ தோற்றம்
+	Studio Light Theme	ஸ்டுடியோ வெளிர் தோற்றம்
+	Adwaita Light Theme	அத்வைதா வெளிர் தோற்றம்
+	Adwaita Dark Theme	அத்வைதா கருமை தோற்றம்
+	Classic Theme	கிளாசிக் தோற்றம்
+	Solarized dark	சோலரைஸ்டு கருமை
+	Solarized Dark Theme	சோலரைஸ்டு கருமை தோற்றம்
+	Breeze dark	பிரீஸ் கருமை
+	Breeze Dark Theme	பிரீஸ் கருமை தோற்றம்
+	Breeze light	பிரீஸ் வெளிர்
+	Breeze Light Theme	பிரீஸ் வெளிர் தோற்றம்
 	Soft dark	மென் கருமை
 	Soft light	மென் வெளிர்
-	Soft Dark Theme	மென் கருமை தீம்
-	Soft Light Theme	மென் வெளிர் தீம்
-	Next Theme	அடுத்த தீம்
+	Soft Dark Theme	மென் கருமை தோற்றம்
+	Soft Light Theme	மென் வெளிர் தோற்றம்
+	Next Theme	அடுத்த தோற்றம்
 	Actions	செயல்கள்
 	Brush Settings	தூரிகை அமைப்புகள்
 	Brushes	தூரிகைகள்
@@ -813,7 +813,7 @@
 	Absolute Colorimetric	முழுமையான நிற அளவியல்
 	Action	செயல்
 	Adaptive	தகவமைவு
-	Adaptive Wide Angle isn't open	Adaptive Wide Angle திறக்கப்படவில்லை
+	Adaptive Wide Angle isn't open	தகவமைக்கும் அகலக் கோணம் திறக்கப்படவில்லை
 	Add	சேர்
 	Add Layer Mask	அடுக்கு மாஸ்க்கைச் சேர்
 	Add Stop	நிறுத்தத்தைச் சேர்
@@ -916,8 +916,8 @@
 	Cancel current crop operation  (Esc)	தற்போதைய வெட்டுச் செயலை ரத்துசெய் (Esc)
 	Cancel transform (Esc)	உருமாற்றத்தை ரத்துசெய் (Esc)
 	Cancel warp (Esc)	வார்ப்பை ரத்துசெய் (Esc)
-	Canvas	கேன்வாஸ்
-	Canvas extension color:	கேன்வாஸ் நீட்டிப்பு நிறம்:
+	Canvas	படச்சட்டம்
+	Canvas extension color:	படச்சட்ட நீட்டிப்பு நிறம்:
 	Capture	பதிவுசெய்
 	Capture the visibility, position and style of every layer with + below, then switch between versions.	கீழே உள்ள + மூலம் ஒவ்வொரு அடுக்கின் தெரிவுநிலை, நிலை, பாணியைப் பதிவுசெய்து, பின்னர் பதிப்புகளுக்கு இடையே மாறவும்.
 	Catch-up on Stroke End	கோடு முடிவில் ஈடுசெய்
@@ -1119,7 +1119,7 @@
 	Filter for adjustment layers	சரிசெய்தல் அடுக்குகளுக்கான வடிகட்டி
 	Filter for pixel layers	பிக்சல் அடுக்குகளுக்கான வடிகட்டி
 	Filter for shape layers	வடிவ அடுக்குகளுக்கான வடிகட்டி
-	Filter for smart objects	நுண்ணறிவு பொருட்களுக்கான வடிகட்டி
+	Filter for smart objects	திறன்மிகு பொருட்களுக்கான வடிகட்டி
 	Filter for type layers	உரை அடுக்குகளுக்கான வடிகட்டி
 	Filter:	வடிகட்டி:
 	Finger Painting	விரல் ஓவியம்
@@ -1209,8 +1209,8 @@
 	Keyboard Shortcuts	விசைப்பலகை குறுக்குவழிகள்
 	Keyboard Shortcuts and Menus	விசைப்பலகை குறுக்குவழிகள் & பட்டிகள்
 	Kind	வகை
-	Label Size	லேபிள் அளவு
-	Labels	லேபிள்கள்
+	Label Size	குறியீட்டு அளவு
+	Labels	குறியீடுகள்
 	Lanczos (sharp)	Lanczos (கூர்மை)
 	Landscape	நிலத்தோற்றம்
 	Last Document State	கடைசி ஆவண நிலை
@@ -1482,7 +1482,7 @@
 	Shortcut removed.	குறுக்குவழி நீக்கப்பட்டது.
 	Show All Menu Items	அனைத்து பட்டி உருப்படிகளையும் காட்டு
 	Show Backdrop	பின்புலத்தைக் காட்டு
-	Show Guides	வழிகாட்டிகளைக் காட்டு
+	Show Guides	அளவுகோட்டு வரிகளை காட்டு
 	Show Mask	மாஸ்க்கைக் காட்டு
 	Show Mesh	வலையைக் காட்டு
 	Show Overlay	மேலடுக்கைக் காட்டு
@@ -1495,7 +1495,7 @@
 	Size Jitter	அளவு அதிர்வு
 	Size:	அளவு:
 	Slice Options…	துண்டு விருப்பங்கள்…
-	Slices From Guides	வழிகாட்டிகளிலிருந்து துண்டுகள்
+	Slices From Guides	அளவுகோட்டு வரிகளிலிருந்து துண்டுகள்
 	Slices are locked (View › Lock Slices)	துண்டுகள் பூட்டப்பட்டுள்ளன (காட்சி › துண்டுகளைப் பூட்டு)
 	Small Caps	சிறிய பெரிய எழுத்துகள்
 	Smoothing	மென்மையாக்கல்
@@ -1525,7 +1525,7 @@
 	Swap colours (X)	நிறங்களை மாற்றிக்கொள் (X)
 	Swaps height and width	உயரத்தையும் அகலத்தையும் மாற்றிக்கொள்கிறது
 	Switch between free transform and warp modes	தன்னிச்சை உருமாற்றம் மற்றும் வார்ப் முறைகளுக்கு இடையே மாறு
-	Switch theme	தீமை மாற்று
+	Switch theme	தோற்றத்தை மாற்று
 	Temperature	வெப்பநிலை
 	Tetrahedral	நான்முகம்
 	Text Position:	உரை நிலை:
@@ -1714,8 +1714,8 @@
 	Linear Burn	நேர்கோட்டு எரிப்பு
 	Linear Height	நேர்கோட்டு உயரம்
 	Link with Layer	அடுக்குடன் இணை
-	Lorem Ipsum	Lorem Ipsum
-	Magentas	மெஜந்தாக்கள்
+	Lorem Ipsum	தமிழ் வாழ்க
+	Magentas	கருஞ்சிவப்புகள்
 	Magic Eraser Tool	மாய அழிப்பான் கருவி
 	Magic Wand Tool	மாயக்கோல் கருவி
 	Marquee	தேர்வுச்சட்டம்
@@ -1747,8 +1747,8 @@
 	Direct Selection Tool	நேரடித் தேர்வுக் கருவி
 	Add Anchor Point Tool	நங்கூரப் புள்ளி சேர்க்கும் கருவி
 	Delete Anchor Point Tool	நங்கூரப் புள்ளி நீக்கும் கருவி
-	Click a segment to add an anchor point · {alt}-click an anchor to delete it	நங்கூரப் புள்ளியைச் சேர்க்க ஒரு பகுதியைக் கிளிக் செய்யவும் · நீக்க நங்கூரத்தை {alt}-கிளிக் செய்யவும்
-	Click an anchor point to delete it · {alt}-click a segment to add one	நங்கூரப் புள்ளியை நீக்க அதைக் கிளிக் செய்யவும் · சேர்க்க ஒரு பகுதியை {alt}-கிளிக் செய்யவும்
+	Click a segment to add an anchor point · {alt}-click an anchor to delete it	தொகுதியைச் சொடுக்கி ஒரு நங்கூரப் புள்ளியைச் சேர்க்கவும் · நங்கூரப் புள்ளியை நீக்க {alt}-சொடுக்கவும்
+	Click an anchor point to delete it · {alt}-click a segment to add one	நங்கூரப் புள்ளியை நீக்க அதைச் சொடுக்கவும் · புதிய புள்ளியைச் சேர்க்க தொகுதியை {alt}-சொடுக்கவும்
 	Pattern Overlay	வடிவ மேலடுக்கு
 	Pen Pressure	பேனா அழுத்தம்
 	Pen Tilt	பேனா சாய்வு
@@ -1768,10 +1768,10 @@
 	PostScript (72 points/inch)	PostScript (72 புள்ளிகள்/அங்குலம்)
 	Postcard	அஞ்சல் அட்டை
 	Poster	சுவரொட்டி
-	Pro (Dark)	Pro (கருமை)
-	Pro (Light)	Pro (வெளிர்)
-	Pro (Light Gray)	Pro (வெளிர் சாம்பல்)
-	Pro (Medium Gray)	Pro (நடுத்தர சாம்பல்)
+	Pro (Dark)	புரோ (கருமை)
+	Pro (Light)	புரோ (வெளிர்)
+	Pro (Light Gray)	புரோ (வெளிர் சாம்பல்)
+	Pro (Medium Gray)	புரோ (நடுத்தர சாம்பல்)
 	Protect Texture	பரப்பமைப்பைப் பாதுகாக்கவும்
 	Purple	ஊதா
 	Quick Mask	விரைவு மாஸ்க்
@@ -1800,13 +1800,13 @@
 	Show Extras Options	கூடுதல் விருப்பங்களைக் காட்டு
 	Slice Select Tool	துண்டுத் தேர்வுக் கருவி
 	Slice Tool	துண்டுக் கருவி
-	Smart Filters	நுண்ணறிவு வடிகட்டிகள்
+	Smart Filters	திறன்மிகு வடிகட்டிகள்
 	Smudge Tool	தேய்க்கும் கருவி
 	Soft	மென்மை
 	Soften	மென்மையாக்கு
 	Source	மூலம்
-	Source: set	மூலம்: அமைக்கப்பட்டது
-	Sponge Tool	கடற்பாசிக் கருவி
+	Source: set	மூலம்: அமை
+	Sponge Tool	உறிஞ்சிக் கருவி
 	Spot Healing Brush Tool	புள்ளி குணப்படுத்தும் தூரிகைக் கருவி
 	Spread	பரவல்
 	Square, 12 x 12	சதுரம், 12 x 12
@@ -1814,9 +1814,9 @@
 	Std Dev:	திட்ட விலகல்:
 	Studio (Dark)	Studio (கருமை)
 	Studio (Light)	Studio (வெளிர்)
-	Stylus Wheel	ஸ்டைலஸ் சக்கரம்
+	Stylus Wheel	தொடுபேனா சக்கரம்
 	Subtract	கழி
-	Tabloid	Tabloid
+	Tabloid	டேப்ளாய்ட்
 	Text Replacement	உரை மாற்றீடு
 	Thin	மெல்லிய
 	Traditional (72.27 points/inch)	பாரம்பரிய (72.27 புள்ளிகள்/அங்குலம்)
@@ -1859,7 +1859,7 @@
 	Allow agent control	முகவர் கட்டுப்பாட்டை அனுமதி
 	Allow scripts to connect	ஸ்கிரிப்டுகள் இணைய அனுமதி
 	Always	எப்போதும்
-	Always create smart objects when placing	வைக்கும்போது எப்போதும் நுண்ணறிவு பொருட்களை உருவாக்கு
+	Always create smart objects when placing	வைக்கும்போது எப்போதும் திறன்மிகு பொருட்களை உருவாக்கு
 	Animated zoom	அனிமேஷன் பெரிதாக்கல்
 	Apply auto tone	தானியங்கி தொனியைப் பயன்படுத்து
 	Ask	கேள்
@@ -1882,7 +1882,7 @@
 	Show canvas dots	படச்சட்ட புள்ளிகளைக் காட்டு
 	Clip thumbnails to layer bounds	சிறுபடங்களை அடுக்கு எல்லைக்கு வெட்டு
 	Clip Thumbnails to Layer Bounds	சிறுபடங்களை அடுக்கு எல்லைக்கு வெட்டு
-	Canvas color	கேன்வாஸ் நிறம்
+	Canvas color	படச்சட்ட நிறம்
 	Canvas custom color	விருப்பமான படச்சட்ட நிறம்
 	Color picker	நிறத் தேர்வி
 	Color space	நிற வெளி
@@ -1919,7 +1919,7 @@
 	Full size tip	முழு அளவு முனை
 	Gamut warning color	நிற வரம்பு எச்சரிக்கை நிறம்
 	Gamut warning opacity	நிற வரம்பு எச்சரிக்கை ஒளிபுகாமை
-	Generator enabled	ஜெனரேட்டர் இயக்கப்பட்டது
+	Generator enabled	உருவாக்கி இயக்கப்பட்டது
 	Gif	GIF
 	Glossy	பளபளப்பான
 	Grid color	கட்ட நிறம்
@@ -1928,9 +1928,9 @@
 	Grid style	கட்ட பாணி
 	Grid unit	கட்ட அலகு
 	Gridline every	கட்டக்கோடு ஒவ்வொரு
-	Guide color	வழிகாட்டி நிறம்
-	Guide style	வழிகாட்டி பாணி
-	Guides, Grid & Slices	வழிகாட்டிகள், கட்டம் & துண்டுகள்
+	Guide color	அளவுகோட்டு வரிகள் நிறம்
+	Guide style	அளவுகோட்டு வரிகள் பாணி
+	Guides, Grid & Slices	அளவுகோட்டு வரிகள், கட்டம் & துண்டுகள்
 	Gutter	இடைவெளிப்பட்டை
 	History Log	வரலாற்றுப் பதிவு
 	History states	வரலாற்று நிலைகள்
@@ -1958,7 +1958,7 @@
 	Nearest neighbor	அருகிலுள்ள அண்டை
 	Never	ஒருபோதும் இல்லை
 	Normal tip	இயல்பான முனை
-	Open as smart object	நுண்ணறிவு பொருளாகத் திற
+	Open as smart object	திறன்மிகு பொருளாகத் திற
 	Open in camera raw	கேமரா Raw இல் திற
 	Open documents as tabs	ஆவணங்களைத் தாவல்களாகத் திற
 	Overscroll	மிகைஉருட்டல்
@@ -1969,10 +1969,10 @@
 	Preserve details	விவரங்களைப் பேணு
 	Print resolution	அச்சுத் தெளிவுத்திறன்
 	Pro	Pro
-	Pro light	Pro வெளிர்
-	Pro light gray	Pro வெளிர் சாம்பல்
-	Pro medium	Pro நடுத்தரம்
-	Pro photo	Pro Photo
+	Pro light	புரோ வெளிர்
+	Pro light gray	புரோ வெளிர் சாம்பல்
+	Pro medium	புரோ நடுத்தரம்
+	Pro photo	புரோ போட்டோ
 	Quick export format	விரைவு ஏற்றுமதி வடிவம்
 	Quick export location	விரைவு ஏற்றுமதி இடம்
 	Recent file count	சமீபத்திய கோப்பு எண்ணிக்கை
@@ -2005,8 +2005,8 @@
 	System title bar	கணினி தலைப்புப் பட்டை
 	Show transformation values	உருமாற்ற மதிப்புகளைக் காட்டு
 	Slice color	துண்டு நிறம்
-	Smart guide color	நுண்ணறிவு வழிகாட்டி நிறம்
-	Smart quotes	நுண்ணறிவு மேற்கோள்கள்
+	Smart guide color	திறன்மிகு வழிகாட்டி நிறம்
+	Smart quotes	திறன்மிகு மேற்கோள்கள்
 	Snap vector tools and transforms to pixel grid	வெக்டர் கருவிகளையும் உருமாற்றங்களையும் பிக்சல் கட்டத்துடன் ஒட்டு
 	Srgb	sRGB
 	Standard	நிலையான
@@ -2101,9 +2101,9 @@
 	Shape Layer	வடிவ அடுக்கு
 	Group Layer	குழு அடுக்கு
 	Fill Layer	நிரப்பு அடுக்கு
-	Smart Object Layer	நுண்ணறிவு பொருள் அடுக்கு
+	Smart Object Layer	திறன்மிகு பொருள் அடுக்கு
 	Create Warped Text	வார்ப் செய்த உரையை உருவாக்கு
-	Rasterize Smart Object	நுண்ணறிவு பொருளை ராஸ்டராக்கு
+	Rasterize Smart Object	திறன்மிகு பொருளை ராஸ்டராக்கு
 	Rasterize Fill Content	நிரப்பு உள்ளடக்கத்தை ராஸ்டராக்கு
 	Rasterize Layer Style	அடுக்கு பாணியை ராஸ்டராக்கு
 	Unlock: picking a preset replaces these settings	பூட்டைத் திற: முன்னமைவைத் தேர்ந்தெடுத்தால் இந்த அமைப்புகள் மாற்றப்படும்
@@ -2208,7 +2208,7 @@
 	5 x 5	5 x 5
 	Grid:	கட்டம்:
 	Color Range	நிற வரம்பு
-	Adaptive Wide Angle	Adaptive Wide Angle
+	Adaptive Wide Angle	தகவமைக்கும் அகலக் கோணம்
 	Chalk & Charcoal	சுண்ணாம்பு & கரி
 	Charcoal	கரி
 	Chrome	குரோம்
@@ -2392,12 +2392,12 @@ cameraRaw	Amount	அளவு
 	First	முதல்
 	Last commit	கடைசி கமிட்
 	Last	கடைசி
-	Contributors: {contributors} · Commits: {commits}	பங்களிப்பாளர்கள்: {contributors} · கமிட்கள்: {commits}
+	Contributors: {contributors} · Commits: {commits}	பங்களிப்பாளர்கள்: {contributors} · சமர்ப்பிப்புகள்: {commits}
 	No contributor data was built into this copy.	இந்த நகலில் பங்களிப்பாளர் தரவு சேர்க்கப்படவில்லை.
 	No model credits were built into this copy.	இந்த நகலில் மாதிரி நன்றிகள் சேர்க்கப்படவில்லை.
 	Company	நிறுவனம்
 	Version	பதிப்பு
-	% of all commits	அனைத்து கமிட்களில் %
+	% of all commits	அனைத்து சமர்ப்பிப்புகளில் %
 	Lines +/−	வரிகள் +/−
 	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{binAdded} / −{binDeleted} binary assets, {first} – {last}	@{login}: {prs} PRகள், {commits} கமிட்கள், +{added} / −{deleted} வரிகள் (Δ {delta}), +{binAdded} / −{binDeleted} பைனரி சொத்துகள், {first} – {last}
 	Create new swatch	புதிய நிற மாதிரியை உருவாக்கு
@@ -2412,7 +2412,7 @@ cameraRaw	Amount	அளவு
 	Blend If:	கலப்பு நிபந்தனை:
 	Channels:	சேனல்கள்:
 	Knockout	நாக்அவுட்
-	Apply At Canvas Bounds	கேன்வாஸ் எல்லைகளில் பயன்படுத்து
+	Apply At Canvas Bounds	படச்சட்ட எல்லைகளில் பயன்படுத்து
 	Color Picker (Text Color)	நிறத் தேர்வி (உரை நிறம்)
 	Color Picker ({name})	நிறத் தேர்வி ({name})
 	Color Picker (Fill Color)	நிறத் தேர்வி (நிரப்பு நிறம்)
@@ -2428,7 +2428,7 @@ cameraRaw	Amount	அளவு
 	Show/Hide All Panels	அனைத்துப் பலகங்களையும் காட்டு/மறை
 	Show/Hide Panels	பலகங்களைக் காட்டு/மறை
 	Could not open	திறக்க முடியவில்லை
-	{path}: the path is not valid Unicode; rename the file and open it again.	{path}: பாதை சரியான Unicode அல்ல; கோப்பின் பெயரை மாற்றி மீண்டும் திறக்கவும்.
+	{path}: the path is not valid Unicode; rename the file and open it again.	{path}: பாதை சரியான யூனிகோட் அல்ல; கோப்பின் பெயரை மாற்றி மீண்டும் திறக்கவும்.
 	Contents:	உள்ளடக்கம்:
 	Custom Pattern:	தனிப்பயன் வடிவமைப்பு:
 	Foreground Color	முன்புற நிறம்
@@ -2535,9 +2535,9 @@ fontWeight	Italic	சாய்வு
 	Bundle Arrow-Key Nudges	அம்புக்குறி விசை நகர்வுகளைத் தொகுத்திடு
 	Nudge Bundle Pause (ms)	நகர்வுத் தொகுப்பு இடைநிறுத்தம் (ms)
 	Appearance Mode	தோற்ற முறை
-	Dark Theme	கருமை தீம்
-	Light Theme	வெளிர் தீம்
-	Pro Medium	Pro நடுத்தரம்
+	Dark Theme	கருமை தோற்றம்
+	Light Theme	வெளிர் தோற்றம்
+	Pro Medium	புரோ நடுத்தரம்
 	Studio Light	Studio வெளிர்
 	Next Appearance Mode	அடுத்த தோற்ற முறை
 	Sync with system	கணினியுடன் ஒத்திசை
@@ -2547,7 +2547,7 @@ fontWeight	Italic	சாய்வு
 	Set additional Crop options	கூடுதல் வெட்டு விருப்பங்களை அமை
 	Show Cropped Area	வெட்டப்பட்ட பகுதியைக் காட்டு
 	Enable Crop Shield	வெட்டுக் கவசத்தை இயக்கு
-	Match Canvas	கேன்வாஸுடன் பொருத்து
+	Match Canvas	படச்சட்டத்துடன் பொருத்து
 	Auto Adjust Opacity	ஒளிபுகாமையைத் தானாகச் சரிசெய்
 	Crop Shield color	வெட்டுக் கவச நிறம்
 	Color Picker (Crop Shield Color)	நிறத் தேர்வி (வெட்டுக் கவச நிறம்)
@@ -2700,13 +2700,13 @@ cameraData	Lens	லென்ஸ்
 	Use Default Masks on Fill Layers	நிரப்பு அடுக்குகளில் இயல்புநிலை மாஸ்க்குகளைப் பயன்படுத்து
 	Expand New Effects	புதிய விளைவுகளை விரிவாக்கு
 	Add “copy” to Copied Layers and Groups	நகலெடுத்த அடுக்குகள் மற்றும் குழுக்களில் “நகல்” ஐச் சேர்
-	Preview on canvas when reordering layers	அடுக்குகளை மறுவரிசைப்படுத்தும்போது கேன்வாஸில் முன்னோட்டம் காட்டு
+	Preview on canvas when reordering layers	அடுக்குகளை மறுவரிசைப்படுத்தும்போது படச்சட்டத்தில் முன்னோட்டம் காட்டு
 	Show layer mask badges	அடுக்கு மாஸ்க் அடையாளங்களைக் காட்டு
 	Blending Options ({filter})	கலப்பு விருப்பங்கள் ({filter})
-	Hide the layer's effects and Smart Filters  ({key}-click: all layers)	அடுக்கின் விளைவுகளையும் நுண்ணறிவு வடிகட்டிகளையும் மறை ({key}-கிளிக்: அனைத்து அடுக்குகள்)
-	Show the layer's effects and Smart Filters  ({key}-click: all layers)	அடுக்கின் விளைவுகளையும் நுண்ணறிவு வடிகட்டிகளையும் காட்டு ({key}-கிளிக்: அனைத்து அடுக்குகள்)
+	Hide the layer's effects and Smart Filters  ({key}-click: all layers)	அடுக்கின் விளைவுகளையும் திறன்மிகு வடிகட்டிகளையும் மறை ({key}-கிளிக்: அனைத்து அடுக்குகள்)
+	Show the layer's effects and Smart Filters  ({key}-click: all layers)	அடுக்கின் விளைவுகளையும் திறன்மிகு வடிகட்டிகளையும் காட்டு ({key}-கிளிக்: அனைத்து அடுக்குகள்)
 	Wait for the current job to finish.	தற்போதைய வேலை முடியும் வரை காத்திருக்கவும்.
-	The document or Smart Filter changed. Reopen its dialog.	ஆவணம் அல்லது நுண்ணறிவு வடிகட்டி மாறிவிட்டது. அதன் உரையாடலை மீண்டும் திறக்கவும்.
+	The document or Smart Filter changed. Reopen its dialog.	ஆவணம் அல்லது திறன்மிகு வடிகட்டி மாறிவிட்டது. அதன் உரையாடலை மீண்டும் திறக்கவும்.
 	Opacity must be between 0% and 100%.	ஒளிபுகாமை 0% முதல் 100% வரை இருக்க வேண்டும்.
 	Dissolve is approximated: it blends without Photoshop's dither.	கரைவு தோராயமாக்கப்பட்டுள்ளது: இது Photoshop இன் டித்தர் இல்லாமல் கலக்கிறது.
 	Loading fonts…	எழுத்துருக்களை ஏற்றுகிறது…
@@ -2749,7 +2749,7 @@ curves	Smooth	மென்மையாக்கு
 	Clear Brush Strokes	தூரிகைக் கோடுகளை அழி
 	Show rulers	அளவுகோல்களைக் காட்டு
 	Presentation	விளக்கக்காட்சி
-	Click to place · Alt-click or drag off-canvas to remove	வைக்க கிளிக் · நீக்க Alt-கிளிக் அல்லது கேன்வாஸுக்கு வெளியே இழுக்கவும்
+	Click to place · Alt-click or drag off-canvas to remove	வைக்க கிளிக் · நீக்க Alt-கிளிக் அல்லது படச்சட்டத்துக்கு வெளியே இழுக்கவும்
 	No document open	திறந்த ஆவணம் இல்லை
 	{n} of {max} sample points	{max} மாதிரிப் புள்ளிகளில் {n}
 	New Snapshot…	புதிய ஸ்னாப்ஷாட்…
@@ -2769,7 +2769,7 @@ curves	Smooth	மென்மையாக்கு
 @plural	Imported {n} brush from {group}|Imported {n} brushes from {group}	{group} இலிருந்து {n} தூரிகை இறக்குமதி செய்யப்பட்டது|{group} இலிருந்து {n} தூரிகைகள் இறக்குமதி செய்யப்பட்டன
 @plural	Imported {n} swatch from {file}|Imported {n} swatches from {file}	{file} இலிருந்து {n} நிற மாதிரி இறக்குமதி செய்யப்பட்டது|{file} இலிருந்து {n} நிற மாதிரிகள் இறக்குமதி செய்யப்பட்டன
 @plural	Played {n} step|Played {n} steps	{n} படி இயக்கப்பட்டது|{n} படிகள் இயக்கப்பட்டன
-@plural	Updated {n} linked smart object changed on disk|Updated {n} linked smart objects changed on disk	வட்டில் மாறிய {n} இணைக்கப்பட்ட நுண்ணறிவு பொருள் புதுப்பிக்கப்பட்டது|வட்டில் மாறிய {n} இணைக்கப்பட்ட நுண்ணறிவு பொருட்கள் புதுப்பிக்கப்பட்டன
+@plural	Updated {n} linked smart object changed on disk|Updated {n} linked smart objects changed on disk	வட்டில் மாறிய {n} இணைக்கப்பட்ட திறன்மிகு பொருள் புதுப்பிக்கப்பட்டது|வட்டில் மாறிய {n} இணைக்கப்பட்ட திறன்மிகு பொருட்கள் புதுப்பிக்கப்பட்டன
 @plural	Saved for Web: {n} file|Saved for Web: {n} files	வலைக்காகச் சேமித்தது: {n} கோப்பு|வலைக்காகச் சேமித்தது: {n} கோப்புகள்
 @plural	{n} layer recorded by this comp was deleted. Update the comp, or clear the warning.|{n} layers recorded by this comp were deleted. Update the comp, or clear the warning.	இந்த அமைப்பில் பதிவான {n} அடுக்கு நீக்கப்பட்டது. அமைப்பைப் புதுப்பிக்கவும், அல்லது எச்சரிக்கையை அழிக்கவும்.|இந்த அமைப்பில் பதிவான {n} அடுக்குகள் நீக்கப்பட்டன. அமைப்பைப் புதுப்பிக்கவும், அல்லது எச்சரிக்கையை அழிக்கவும்.
 @plural	{n} plane|{n} planes	{n} தளம்|{n} தளங்கள்
@@ -2796,11 +2796,11 @@ curves	Smooth	மென்மையாக்கு
 	Loaded contours from {file}	{file} இலிருந்து வெளிக்கோடுகள் ஏற்றப்பட்டன
 	Saved contours to {file}	{file} க்கு வெளிக்கோடுகள் சேமிக்கப்பட்டன
 @id	select.all	அனைத்தையும் தேர்ந்தெடு
-	Delete Smart Filters	நுண்ணறிவு வடிகட்டிகளை நீக்கு
-	Enable Smart Filters	நுண்ணறிவு வடிகட்டிகளை இயக்கு
+	Delete Smart Filters	திறன்மிகு வடிகட்டிகளை நீக்கு
+	Enable Smart Filters	திறன்மிகு வடிகட்டிகளை இயக்கு
 	Delete Layer…	அடுக்கை நீக்கு…
 	Select Similar Colors	ஒத்த நிறங்களைத் தேர்ந்தெடு
-	Canvas rotation	கேன்வாஸ் சுழற்சி
+	Canvas rotation	படச்சட்ட சுழற்சி
 	Extensions	நீட்டிப்புகள்
 	Libraries	நூலகங்கள்
 	3D	3D
@@ -3046,7 +3046,7 @@ curves	Smooth	மென்மையாக்கு
 	Gray:	சாம்பல்:
 	Spot:	புள்ளி:
 	Advanced Controls	மேம்பட்ட கட்டுப்பாடுகள்
-	Desaturate Monitor Colors By	மானிட்டர் நிறங்களின் செறிவைக் குறை
+	Desaturate Monitor Colors By	திரை நிறங்களின் செறிவைக் குறை
 	Blend RGB Colors Using Gamma 1.0	காமா 1.0 மூலம் RGB நிறங்களைக் கலக்கு
 	Profile Mismatches: Ask When Opening	சுயவிவரப் பொருத்தமின்மை: திறக்கும்போது கேள்
 	Ask When Pasting	ஒட்டும்போது கேள்
@@ -3132,7 +3132,7 @@ curves	Smooth	மென்மையாக்கு
 	Open…     ⌘O	திற…     ⌘O
 	Rulers  (⌘R)	அளவுகோல்கள் (⌘R)
 	Search commands (⌘K)	கட்டளைகளைத் தேடு (⌘K)
-	Show Guides  (⌘;)	வழிகாட்டிகளைக் காட்டு (⌘;)
+	Show Guides  (⌘;)	அளவுகோட்டு வரிகளைக் காட்டு (⌘;)
 	Subtract from selection  (⌥)	தேர்விலிருந்து கழி (⌥)
 	Uses the foreground and background colors.	முன்புற மற்றும் பின்னணி நிறங்களைப் பயன்படுத்துகிறது.
 	↑↓ navigate   ↵ run   esc close	↑↓ வழிசெல்   ↵ இயக்கு   esc மூடு
@@ -3252,7 +3252,7 @@ layerLabel	No Color	நிறம் இல்லை
 	Change…	மாற்று…
 	Transformation	உருமாற்றம்
 	Scaling	அளவு மாற்றம்
-	Canvas Size	கேன்வாஸ் அளவு
+	Canvas Size	படச்சட்ட அளவு
 	Percentage	சதவீதம்
 	Degrees	பாகைகள்
 	Middle	நடு
@@ -3723,8 +3723,8 @@ layerLabel	No Color	நிறம் இல்லை
 	Border	எல்லை
 	Box Blur	பெட்டி மங்கல்
 	Calculations	கணக்கீடுகள்
-	Camera Raw	Camera Raw
-	Camera Raw Filter	Camera Raw வடிகட்டி
+	Camera Raw	கேமரா ரா
+	Camera Raw Filter	கேமரா ரா வடிகட்டி
 	Channel1	சேனல்1
 	Channel2	சேனல்2
 	Channel3	சேனல்3
@@ -3775,7 +3775,7 @@ layerLabel	No Color	நிறம் இல்லை
 	Interpret Footage	காட்சிப்பதிவை விளக்கு
 	Iris Blur	கருவிழி மங்கல்
 	Jag	ஜாக்
-	Label	லேபிள்
+	Label	குறியீடு
 	Layer Comps to Files	அடுக்கு அமைப்புகளைக் கோப்புகளாக
 	Layer Content Options	அடுக்கு உள்ளடக்க விருப்பங்கள்
 	Layer From Background	பின்னணியிலிருந்து அடுக்கு
@@ -3839,8 +3839,8 @@ layerLabel	No Color	நிறம் இல்லை
 	Shadows/Highlights	நிழல்கள்/ஒளிர்வுகள்
 	Shape Blur	வடிவ மங்கல்
 	Shear	ஷியர்
-	Smart Blur	நுண்ணறிவு மங்கல்
-	Smart Sharpen	நுண்ணறிவு கூர்மையாக்கல்
+	Smart Blur	திறன்மிகு மங்கல்
+	Smart Sharpen	திறன்மிகு கூர்மையாக்கல்
 	Smudge Stick	தேய்ப்புக் குச்சி
 	Solid Color	திட நிறம்
 	Spherize	கோளமாக்கு
@@ -3912,7 +3912,7 @@ layerLabel	No Color	நிறம் இல்லை
 	Make Symmetry Path	சமச்சீர்ப் பாதையை உருவாக்கு
 	Disable Symmetry Path	சமச்சீர்ப் பாதையை முடக்கு
 	Select Custom Color…	தனிப்பயன் நிறத்தைத் தேர்ந்தெடு…
-	Color Picker (Custom Canvas Color)	நிறத் தேர்வி (தனிப்பயன் கேன்வாஸ் நிறம்)
+	Color Picker (Custom Canvas Color)	நிறத் தேர்வி (தனிப்பயன் படச்சட்ட நிறம்)
 	Duplicate Channel	சேனலை நகலெடு
 	Delete Channel	சேனலை நீக்கு
 	Rename Channel…	சேனலின் பெயரை மாற்று…
@@ -3985,7 +3985,7 @@ layerLabel	No Color	நிறம் இல்லை
 	Scroll menu down	பட்டியைக் கீழே உருட்டு
 	This type layer must be rasterized before proceeding. Its text will no longer be editable. Rasterize the type?	தொடர்வதற்கு முன் இந்த உரை அடுக்கு ராஸ்டராக்கப்பட வேண்டும். அதன் உரையை இனி திருத்த முடியாது. உரையை ராஸ்டராக்கவா?
 	This shape layer must be rasterized before proceeding. It will no longer be editable as a shape. Rasterize the shape?	தொடர்வதற்கு முன் இந்த வடிவ அடுக்கு ராஸ்டராக்கப்பட வேண்டும். இதை இனி வடிவமாகத் திருத்த முடியாது. வடிவத்தை ராஸ்டராக்கவா?
-	This Smart Object must be rasterized before proceeding. Its contents will no longer be editable. Rasterize the Smart Object?	தொடர்வதற்கு முன் இந்த நுண்ணறிவு பொருள் ராஸ்டராக்கப்பட வேண்டும். அதன் உள்ளடக்கத்தை இனி திருத்த முடியாது. நுண்ணறிவு பொருளை ராஸ்டராக்கவா?
+	This Smart Object must be rasterized before proceeding. Its contents will no longer be editable. Rasterize the Smart Object?	தொடர்வதற்கு முன் இந்த திறன்மிகு பொருள் ராஸ்டராக்கப்பட வேண்டும். அதன் உள்ளடக்கத்தை இனி திருத்த முடியாது. திறன்மிகு பொருளை ராஸ்டராக்கவா?
 	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	தொடர்வதற்கு முன் இந்த நிரப்பு அடுக்கு ராஸ்டராக்கப்பட வேண்டும். அதன் நிரப்பு உள்ளடக்கத்தை இனி திருத்த முடியாது. அடுக்கை ராஸ்டராக்கவா?
 	This layer must be rasterized before proceeding.	தொடர்வதற்கு முன் இந்த அடுக்கு ராஸ்டராக்கப்பட வேண்டும்.
 	Color Picker (Background Color)	நிறத் தேர்வி (பின்னணி நிறம்)
@@ -4007,15 +4007,15 @@ layerLabel	No Color	நிறம் இல்லை
 	unknown type	தெரியாத வகை
 	Platform: {os} {arch}	தளம்: {os} {arch}
 	previous reading kept; the last re-read failed: {reason}	முந்தைய அளவீடு தக்கவைக்கப்பட்டது; கடைசி மறுவாசிப்பு தோல்வியடைந்தது: {reason}
-	Monitor profile: {profile}	மானிட்டர் சுயவிவரம்: {profile}
+	Monitor profile: {profile}	திரை சுயவிவரம்: {profile}
 	Display profiles: {reason}	காட்சிச் சுயவிவரங்கள்: {reason}
-	Monitor profile in use on {display}: {profile}	{display} இல் பயன்பாட்டில் உள்ள மானிட்டர் சுயவிவரம்: {profile}
-	Monitor profile in use: {profile}	பயன்பாட்டில் உள்ள மானிட்டர் சுயவிவரம்: {profile}
-	The canvas is shown as sRGB. Choose a monitor profile in Edit › Color Settings.	கேன்வாஸ் sRGB ஆகக் காட்டப்படுகிறது. திருத்து › நிற அமைப்புகளில் மானிட்டர் சுயவிவரத்தைத் தேர்ந்தெடுக்கவும்.
-	The canvas on {display} is shown as sRGB. Choose a monitor profile in Edit › Color Settings.	{display} இல் உள்ள கேன்வாஸ் sRGB ஆகக் காட்டப்படுகிறது. திருத்து › நிற அமைப்புகளில் மானிட்டர் சுயவிவரத்தைத் தேர்ந்தெடுக்கவும்.
+	Monitor profile in use on {display}: {profile}	{display} இல் பயன்பாட்டில் உள்ள திரை சுயவிவரம்: {profile}
+	Monitor profile in use: {profile}	பயன்பாட்டில் உள்ள திரை சுயவிவரம்: {profile}
+	The canvas is shown as sRGB. Choose a monitor profile in Edit › Color Settings.	படச்சட்டம் sRGB ஆகக் காட்டப்படுகிறது. திருத்து › நிற அமைப்புகளில் திரை சுயவிவரத்தைத் தேர்ந்தெடுக்கவும்.
+	The canvas on {display} is shown as sRGB. Choose a monitor profile in Edit › Color Settings.	{display} இல் உள்ள படச்சட்டம் sRGB ஆகக் காட்டப்படுகிறது. திருத்து › நிற அமைப்புகளில் திரை சுயவிவரத்தைத் தேர்ந்தெடுக்கவும்.
 	Display profile not used	காட்சிச் சுயவிவரம் பயன்படுத்தப்படவில்லை
-	Monitor profile on {display} (main window): {profile}	{display} இல் மானிட்டர் சுயவிவரம் (முதன்மைச் சாளரம்): {profile}
-	Monitor profile on {display}: {profile}	{display} இல் மானிட்டர் சுயவிவரம்: {profile}
+	Monitor profile on {display} (main window): {profile}	{display} இல் திரை சுயவிவரம் (main window): {profile}
+	Monitor profile on {display}: {profile}	{display} இல் திரை சுயவிவரம்: {profile}
 	fallback	மாற்று
 	The document does not have an embedded colour profile. Working space: {working}.	ஆவணத்தில் உட்பொதிந்த நிறச் சுயவிவரம் இல்லை. பணி வெளி: {working}.
 	The document has an embedded colour profile that does not match the working space.\nEmbedded: {embedded}\nWorking: {working}	ஆவணத்தில் உள்ள உட்பொதிந்த நிறச் சுயவிவரம் பணி வெளியுடன் பொருந்தவில்லை.\nஉட்பொதிந்தது: {embedded}\nபணி: {working}
@@ -4035,8 +4035,8 @@ navigator	Zoom	பெரிதாக்கல்
 	The current gradient (pick one in Window › Gradients)	தற்போதைய சாய்வு (சாளரம் › சாய்வுகளில் ஒன்றைத் தேர்ந்தெடுக்கவும்)
 	auto	தானியங்கி
 	Baseline Shift	அடிப்படைக் கோடு மாற்றம்
-	Breeze Dark	Breeze கருமை
-	Breeze Light	Breeze வெளிர்
+	Breeze Dark	பிரீஸ் கருமை
+	Breeze Light	பிரீஸ் வெளிர்
 	brushes	தூரிகைகள்
 	Color Picker	நிறத் தேர்வி
 	Current	தற்போதையது
@@ -4123,8 +4123,8 @@ navigator	Zoom	பெரிதாக்கல்
 	Chisel Soft	உளி மென்மை
 	Open color-less EXR as ACEScg	நிறமற்ற EXR ஐ ACEScg ஆகத் திற
 	Do not append "copy" to filename when saving a copy	நகலைச் சேமிக்கும்போது கோப்புப் பெயருடன் "copy" ஐச் சேர்க்க வேண்டாம்
-	Edit Selected Guides	தேர்ந்தெடுத்த வழிகாட்டிகளைத் திருத்து
-	Clear Selected Guides	தேர்ந்தெடுத்த வழிகாட்டிகளை அழி
+	Edit Selected Guides	தேர்ந்தெடுத்த அளவுகோட்டு வரிகளைத் திருத்து
+	Clear Selected Guides	தேர்ந்தெடுத்த அளவுகோட்டு வரிகளை அழி
 	Bicubic Automatic	பைகியூபிக் தானியங்கி
 	Bicubic Smoother	பைகியூபிக் மென்மை
 	Bicubic Sharper	பைகியூபிக் கூர்மை
@@ -4167,15 +4167,15 @@ navigator	Zoom	பெரிதாக்கல்
 	Free Transform is still being applied; try again when it has finished.	தன்னிச்சை உருமாற்றம் இன்னும் பயன்படுத்தப்படுகிறது; முடிந்ததும் மீண்டும் முயலவும்.
 	The transform couldn't be applied.	உருமாற்றத்தைப் பயன்படுத்த முடியவில்லை.
 	Its layers need {needed} of GPU memory; the budget leaves them {budget}.	அதன் அடுக்குகளுக்கு {needed} GPU நினைவகம் தேவை; ஒதுக்கீடு அவற்றுக்கு {budget} மட்டுமே விடுகிறது.
-	Set GPU Memory in Preferences › Performance to what your graphics card can hold, at most 3/8 of its memory. Automatic follows Memory Usage, within a quarter of this computer's memory and 3/8 of the card's, and doesn't count the document against a card whose memory is known. The status bar shows GPU Memory Full while they don't fit.	விருப்பத்தேர்வுகள் › செயல்திறனில் GPU நினைவகத்தை உங்கள் வரைகலை அட்டை தாங்கக்கூடிய அளவுக்கு, அதிகபட்சம் அதன் நினைவகத்தின் 3/8, என அமைக்கவும். தானியங்கி முறை நினைவகப் பயன்பாட்டைப் பின்பற்றும்; இந்தக் கணினியின் நினைவகத்தின் கால் பங்கு மற்றும் அட்டையின் 3/8 க்குள், நினைவகம் அறியப்பட்ட அட்டைக்கு எதிராக ஆவணத்தைக் கணக்கிடாது. அவை பொருந்தாதபோது நிலைப் பட்டை "GPU நினைவகம் நிரம்பியது" எனக் காட்டும்.
+	Set GPU Memory in Preferences › Performance to what your graphics card can hold, at most 3/8 of its memory. Automatic follows Memory Usage, within a quarter of this computer's memory and 3/8 of the card's, and doesn't count the document against a card whose memory is known. The status bar shows GPU Memory Full while they don't fit.	விருப்பத்தேர்வுகள் › செயல்திறனில் வரைகலை செயலி நினைவகத்தை உங்கள் வரைகலை அட்டை தாங்கக்கூடிய அளவுக்கு, அதிகபட்சம் அதன் நினைவகத்தின் 3/8, என அமைக்கவும். தானியங்கி முறை நினைவகப் பயன்பாட்டைப் பின்பற்றும்; இந்தக் கணினியின் நினைவகத்தின் கால் பங்கு மற்றும் அட்டையின் 3/8 க்குள், நினைவகம் அறியப்பட்ட அட்டைக்கு எதிராக ஆவணத்தைக் கணக்கிடாது. அவை பொருந்தாதபோது நிலைப் பட்டை "வரைகலை செயலி நினைவகம் நிரம்பியது" எனக் காட்டும்.
 	GPU Memory Full	GPU நினைவகம் நிரம்பியது
-	The layers need {needed} of GPU memory and may hold {budget}, so edits that redraw the whole document do it on the CPU. Click to set GPU Memory.	அடுக்குகளுக்கு {needed} GPU நினைவகம் தேவை, {budget} மட்டுமே வைத்திருக்க முடியும்; எனவே முழு ஆவணத்தையும் மறுவரையும் திருத்தங்கள் அதை CPU இல் செய்கின்றன. GPU நினைவகத்தை அமைக்க கிளிக் செய்யவும்.
-	GPU memory budget: {budget}	GPU நினைவக ஒதுக்கீடு: {budget}
+	The layers need {needed} of GPU memory and may hold {budget}, so edits that redraw the whole document do it on the CPU. Click to set GPU Memory.	அடுக்குகளுக்கு {needed} வரைகலை செயலி நினைவகம் தேவை, ஆனால் {budget} மட்டுமே உள்ளது; எனவே முழு ஆவணத்தையும் மறுவரையும் திருத்தங்கள் கணினிச் செயலியில் மூலம் செய்யப்படும். வரைகலை செயலி நினைவகத்தை அமைக்கக் கிளிக் செய்யவும்.
+	GPU memory budget: {budget}	வரைகலை செயலி நினைவக ஒதுக்கீடு: {budget}
 	Graphics memory: {size}	வரைகலை நினைவகம்: {size}
 	This document's layers: {needed} of {budget} for layers	இந்த ஆவணத்தின் அடுக்குகள்: அடுக்குகளுக்கான {budget} இல் {needed}
-	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	இந்த ஆவணத்தின் அடுக்குகளுக்கு {needed} தேவை, ஆனால் {budget} மட்டுமே வைத்திருக்க முடியும்: முழு ஆவண மறுவரைவுகள் CPU ஐப் பயன்படுத்துகின்றன
-	GPU Memory (MB, 0 = Automatic)	GPU நினைவகம் (MB, 0 = தானியங்கி)
-	{path}: the path is not valid Unicode; save under another name.	{path}: பாதை சரியான Unicode அல்ல; வேறு பெயரில் சேமிக்கவும்.
+	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	இந்த ஆவணத்தின் அடுக்குகளுக்கு {needed} தேவை, ஆனால் {budget} மட்டுமே வைத்திருக்க முடியும்: முழு ஆவண மறுவரைவுகள் கணினிச் செயலியைப் பயன்படுத்துகின்றன
+	GPU Memory (MB, 0 = Automatic)	வரைகலை செயலி நினைவகம் (எம்பி, 0 = தானியங்கி)
+	{path}: the path is not valid Unicode; save under another name.	{path}: பாதை சரியான யூனிகோட் அல்ல; வேறு பெயரில் சேமிக்கவும்.
 	{name} was changed by another app after it was opened or saved here.	இங்கு திறந்த அல்லது சேமித்த பிறகு {name} மற்றொரு பயன்பாட்டால் மாற்றப்பட்டுள்ளது.
 	Replace it with this document, or cancel and use File › Save As to keep both.	இந்த ஆவணத்தால் அதை மாற்றவும், அல்லது ரத்துசெய்து இரண்டையும் வைத்திருக்க கோப்பு › இவ்வாறு சேமி என்பதைப் பயன்படுத்தவும்.
 	Decrease Brush Size	தூரிகை அளவைக் குறை
@@ -4185,8 +4185,8 @@ navigator	Zoom	பெரிதாக்கல்
 	Demosaic	டிமொசைக்
 	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	கேமராவின் நிற வடிகட்டி மொசைக் எவ்வாறு நிரப்பப்படுகிறது. கோப்பு திறக்கும்போது இது பயன்படுத்தப்படும்; முன்னோட்டம் அது திறக்கப்பட்ட முறையைக் காட்டும்.
 	AHD (adaptive homogeneity)	AHD (தகவமைவு ஒருபடித்தன்மை)
-	Malvar–He–Cutler	Malvar–He–Cutler
-	Hirakawa–Parks: the cleanest edges and the least colour fringing, the slowest.	Hirakawa–Parks: மிகத் தூய்மையான விளிம்புகள், மிகக் குறைந்த நிற ஓரங்கள், மிக மெதுவானது.
+	Malvar–He–Cutler	மல்வார்–ஹே–கட்லர்
+	Hirakawa–Parks: the cleanest edges and the least colour fringing, the slowest.	ஹிரகாவா-பார்க்ஸ்: மிகத் தூய்மையான விளிம்புகள், மிகக் குறைந்த நிற ஓரங்கள், மிக மெதுவானது.
 	Gradient-corrected interpolation: sharp and fast, with some colour fringing on fine detail.	சாய்வு-திருத்திய இடைக்கணிப்பு: கூர்மையும் வேகமும், நுண் விவரங்களில் சிறிது நிற ஓரங்களுடன்.
 	The fastest and the softest, with colour fringing on fine detail.	மிக வேகமானது, மிக மென்மையானது, நுண் விவரங்களில் நிற ஓரங்களுடன்.
 	“{name}” already exists. Replace it?	“{name}” ஏற்கனவே உள்ளது. அதை மாற்றவா?
@@ -4199,8 +4199,8 @@ navigator	Zoom	பெரிதாக்கல்
 	Last Brush	கடைசி தூரிகை
 	Preview size	முன்னோட்ட அளவு
 	Memory Usage	நினைவகப் பயன்பாடு
-	Per-document RAM limit (MB)	ஆவணத்துக்கான RAM வரம்பு (MB)
-	Installed RAM: {ram} MB; this limit: {percent}%	நிறுவிய RAM: {ram} MB; இந்த வரம்பு: {percent}%
+	Per-document RAM limit (MB)	ஆவணத்துக்கான நினைவக வரம்பு (எம்பி)
+	Installed RAM: {ram} MB; this limit: {percent}%	பொருத்தப்பட்டுள்ள நினைவகம்: {ram} எம்பி; இந்த வரம்பு: {percent}%
 	Limits each open document's pixels plus History. Oldest undo states are discarded when the limit is exceeded.	ஒவ்வொரு திறந்த ஆவணத்தின் பிக்சல்களையும் வரலாற்றையும் வரம்பிடுகிறது. வரம்பு மீறும்போது பழைய செயல்தவிர் நிலைகள் நிராகரிக்கப்படும்.
 	Applies immediately when saved. Memory is not reserved in advance.	சேமித்ததும் உடனே பொருந்தும். நினைவகம் முன்கூட்டியே ஒதுக்கப்படுவதில்லை.
 	With GPU Memory set to Automatic, this also limits the GPU layer budget. That budget is capped at one quarter of installed RAM and, when known, three eighths of the graphics card's memory, with a 512 MB minimum. Raising this limit beyond those caps does not increase the GPU budget.	GPU நினைவகம் தானியங்கி என அமைக்கப்பட்டிருந்தால், இது GPU அடுக்கு ஒதுக்கீட்டையும் வரம்பிடுகிறது. அந்த ஒதுக்கீடு நிறுவிய RAM இன் கால் பங்கு, மற்றும் அறியப்பட்டால் வரைகலை அட்டை நினைவகத்தின் மூன்றில் எட்டு பங்கு, குறைந்தபட்சம் 512 MB என வரம்பிடப்படுகிறது. இந்த வரம்பை அவற்றைத் தாண்டி உயர்த்தினாலும் GPU ஒதுக்கீடு அதிகரிக்காது.
@@ -4211,13 +4211,13 @@ navigator	Zoom	பெரிதாக்கல்
 	Generate Mipmaps	Mipmap-களை உருவாக்கு
 	There is no color table to save.	சேமிக்க நிற அட்டவணை இல்லை.
 @plural	Saved {n} color to {file}|Saved {n} colors to {file}	{file} க்கு {n} நிறம் சேமிக்கப்பட்டது|{file} க்கு {n} நிறங்கள் சேமிக்கப்பட்டன
-	GPU adapter	GPU அடாப்டர்
+	GPU adapter	வரைகலைச் செயலி பொருத்தி
 	Confirm or cancel the open action step dialog first	முதலில் திறந்துள்ள செயல் படி உரையாடலை உறுதிசெய்யவும் அல்லது ரத்துசெய்யவும்
-	Pro Medium Gray	Pro நடுத்தர சாம்பல்
-	Solarized	Solarized
-	Breeze	Breeze
-	Pro Light Gray	Pro வெளிர் சாம்பல்
-	Pro Light	Pro வெளிர்
+	Pro Medium Gray	புரோ நடுத்தர சாம்பல்
+	Solarized	கதிர்மாற்றம்
+	Breeze	பிரீஸ்
+	Pro Light Gray	புரோ வெளிர் சாம்பல்
+	Pro Light	புரோ வெளிர்
 	Resize Windows to Fit	சாளரங்களைப் பொருத்த அளவு மாற்று
 	EXR	EXR
 	Automatic paragraph direction	தானியங்கிப் பத்தித் திசை
