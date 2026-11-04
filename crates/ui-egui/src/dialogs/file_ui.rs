@@ -98,8 +98,8 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &V
             app,
             id,
             tl!("Contact Sheet II"),
-            json!({"input": dir, "units": "inches", "width": 8.0, "height": 10.0, "resolution": 300.0, "mode": "rgb", "depth": 8, "columns": 5, "rows": 6, "placeAcrossFirst": true, "autoSpacing": true, "rotateForBestFit": false, "caption": true, "font": photocraft_text::fonts::DEFAULT_FAMILY, "fontSize": 12.0, "flatten": false}),
-            json!({"units": ["inches", "cm", "pixels"], "mode": ["rgb", "gray", "cmyk", "lab"]}),
+            json!({"input": dir, "selectedFiles": [], "sheetPreset": "a3", "units": "mm", "width": 297.0, "height": 420.0, "resolution": 300.0, "margin": 0.0, "gap": 2.0, "centerLayers": true, "layout": "native", "mode": "rgb", "depth": 8, "columns": 5, "rows": 6, "placeAcrossFirst": true, "autoSpacing": false, "rotateForBestFit": false, "caption": false, "font": photocraft_text::fonts::DEFAULT_FAMILY, "fontSize": 12.0, "flatten": false}),
+            json!({"sheetPreset": ["a3", "a4", "custom"], "units": ["inches", "cm", "mm", "pixels"], "layout": ["native", "fit"], "mode": ["rgb", "gray", "cmyk", "lab"]}),
         ),
         "file.automate.createDroplet" => {
             let dir = droplet_default_dir(app);

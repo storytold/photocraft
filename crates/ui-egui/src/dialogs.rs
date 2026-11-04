@@ -24,6 +24,17 @@ fn browse_field(app: &mut PhotocraftApp, id: u64, fields: &serde_json::Map<Strin
     let key = key.to_string();
     let r = if is_folder_field(&key) {
         app.ask_folder(move |app, path| fill_field(app, id, &key, path))
+    } else if key == "selectedFiles" && fields.get("__command").and_then(Value::as_str) == Some("file.automate.contactSheetII") {
+        let initial_dir = crate::file_dialog::last_used_dir(&app.ui.recent_files);
+        let request = crate::file_dialog::FileDialogRequest::Open { multiple: true, initial_dir, extensions: None };
+        app.ask_file(request, move |app, answer| match answer {
+            crate::file_dialog::FileDialogAnswer::Paths(paths) => {
+                let d = app.ui.dialog_mut(id).ok_or("the dialog was closed")?;
+                d.fields.insert(key, json!(paths));
+                Ok(Value::Null)
+            }
+            _ => Err("Contact Sheet reads image files from disk".into()),
+        })
     } else if fields.get("__command").and_then(Value::as_str) == Some("plugin.install") {
         let initial_dir = crate::file_dialog::last_used_dir(&app.ui.recent_files);
         let request = crate::file_dialog::FileDialogRequest::Open { multiple: false, initial_dir, extensions: Some(vec!["wasm".into()]) };

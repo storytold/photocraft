@@ -473,8 +473,15 @@ fn units_px(v: f64, unit: &str, res: f64) -> f64 {
 
 fn contact_sheet(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.automate.contactSheetII";
-    let files: Vec<String> = match p.get("input").or_else(|| p.get("files")) {
-        Some(Value::Array(a)) => a.iter().filter_map(Value::as_str).map(str::to_string).collect(),
+    let files: Vec<String> = match p
+        .get("selectedFiles")
+        .filter(|v| v.as_array().is_some_and(|a| !a.is_empty()))
+        .or_else(|| p.get("input").or_else(|| p.get("files")))
+    {
+        Some(Value::Array(a)) => a
+            .iter()
+            .map(|v| v.as_str().filter(|path| !path.is_empty()).map(str::to_string).ok_or_else(|| bad(cmd, "file lists must contain non-empty paths")))
+            .collect::<Result<_>>()?,
         Some(Value::String(dir)) => list_images(dir)?,
         _ => return Err(bad(cmd, "missing \"input\" (a folder or an array of files)")),
     };
@@ -482,16 +489,95 @@ fn contact_sheet(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(cmd, "no images to place"));
     }
     let f = |k: &str, d: f64| p.get(k).and_then(Value::as_f64).filter(|v| v.is_finite() && *v > 0.0).unwrap_or(d);
-    let unit = p.get("units").and_then(Value::as_str).unwrap_or("inches");
+    let preset = p.get("sheetPreset").and_then(Value::as_str);
+    let (unit, default_width, default_height) = match preset {
+        Some("a3") => ("mm", 297.0, 420.0),
+        Some("a4") => ("mm", 210.0, 297.0),
+        Some("custom") | None => (
+            p.get("units").and_then(Value::as_str).unwrap_or("inches"),
+            8.0,
+            10.0,
+        ),
+        Some(other) => return Err(bad(cmd, format!("unknown sheet preset `{other}` (a3|a4|custom)"))),
+    };
+    if !matches!(unit, "inches" | "in" | "cm" | "mm" | "px" | "pixels") {
+        return Err(bad(cmd, format!("unknown units `{unit}` (inches|cm|mm|pixels)")));
+    }
     let res = f("resolution", 300.0).clamp(1.0, 10_000.0);
-    let pw = units_px(f("width", 8.0), unit, res).round().clamp(16.0, 30_000.0) as u32;
-    let ph = units_px(f("height", 10.0), unit, res).round().clamp(16.0, 30_000.0) as u32;
-    let cols = f("columns", 5.0).round().clamp(1.0, 100.0) as u32;
-    let rows = f("rows", 6.0).round().clamp(1.0, 100.0) as u32;
+    let pw = units_px(f("width", default_width), unit, res).round().clamp(16.0, 30_000.0) as u32;
+    let ph = units_px(f("height", default_height), unit, res).round().clamp(16.0, 30_000.0) as u32;
     let auto = p.get("autoSpacing").and_then(Value::as_bool).unwrap_or(true);
     let gap = (f64::from(pw.min(ph)) * 0.014).max(2.0);
-    let hs = if auto { gap } else { p.get("horizontal").and_then(Value::as_f64).map_or(gap, |v| units_px(v, unit, res)) };
-    let vs = if auto { gap } else { p.get("vertical").and_then(Value::as_f64).map_or(gap, |v| units_px(v, unit, res)) };
+    let margin = match p.get("margin") {
+        None => 0.0,
+        Some(v) => v
+            .as_f64()
+            .filter(|n| n.is_finite() && *n >= 0.0)
+            .ok_or_else(|| bad(cmd, "\"margin\" must be a non-negative number"))?,
+    };
+    let margin = units_px(margin, unit, res);
+    if !margin.is_finite() || margin * 2.0 >= f64::from(pw.min(ph)) {
+        return Err(bad(cmd, "\"margin\" leaves no usable sheet area"));
+    }
+    let uniform_gap = match p.get("gap") {
+        None => None,
+        Some(v) => Some(
+            v.as_f64()
+                .filter(|n| n.is_finite() && *n >= 0.0)
+                .ok_or_else(|| bad(cmd, "\"gap\" must be a non-negative number"))?,
+        ),
+    };
+    let (hs, vs) = if let Some(gap) = uniform_gap {
+        let gap = units_px(gap, unit, res);
+        (gap, gap)
+    } else {
+        (
+            if auto {
+                gap
+            } else {
+                p.get("horizontal").and_then(Value::as_f64).map_or(gap, |v| units_px(v, unit, res))
+            },
+            if auto {
+                gap
+            } else {
+                p.get("vertical").and_then(Value::as_f64).map_or(gap, |v| units_px(v, unit, res))
+            },
+        )
+    };
+    let usable_w = f64::from(pw) - 2.0 * margin;
+    let usable_h = f64::from(ph) - 2.0 * margin;
+    if !hs.is_finite() || !vs.is_finite() || hs < 0.0 || vs < 0.0 {
+        return Err(bad(cmd, "spacing must be finite and non-negative"));
+    }
+    let layout = p.get("layout").and_then(Value::as_str).unwrap_or("fit");
+    if !matches!(layout, "fit" | "native") {
+        return Err(bad(cmd, format!("unknown layout `{layout}` (fit|native)")));
+    }
+    let natural = layout == "native";
+    let mut sources = Vec::new();
+    let mut errors = Vec::new();
+    if natural {
+        for path in files {
+            let dimensions = (|| -> Result<(u32, u32)> {
+                let bytes = read_file(&path)?;
+                let doc = import(&file_name(&path), &bytes)?;
+                if doc.size.width == 0 || doc.size.height == 0 {
+                    return Err(bad(cmd, "an input image has zero dimensions"));
+                }
+                Ok((doc.size.width, doc.size.height))
+            })();
+            match dimensions {
+                Ok(size) => sources.push((path, Some(size))),
+                Err(e) => errors.push(json!({"file": path, "error": e.to_string()})),
+            }
+        }
+    } else {
+        sources.extend(files.into_iter().map(|path| (path, None)));
+    }
+    if sources.is_empty() {
+        let details = errors.iter().filter_map(|e| e.get("error").and_then(Value::as_str)).take(3).collect::<Vec<_>>().join("; ");
+        return Err(bad(cmd, format!("no valid images to place: {details}")));
+    }
     let across = p.get("placeAcrossFirst").and_then(Value::as_bool).unwrap_or(true);
     let rotate = p.get("rotateForBestFit").and_then(Value::as_bool).unwrap_or(false);
     let caption = p.get("caption").and_then(Value::as_bool).unwrap_or(true);
@@ -501,44 +587,97 @@ fn contact_sheet(s: &mut Session, p: &Value) -> Result<Value> {
     let mode = p.get("mode").and_then(Value::as_str).unwrap_or("rgb").to_string();
     let depth = crate::commands::int(p, "depth").unwrap_or(8);
     let caption_px = if caption { font_pt * res / 72.0 * 1.5 } else { 0.0 };
-    let cell_w = ((f64::from(pw) - f64::from(cols + 1) * hs) / f64::from(cols)).max(1.0);
-    let cell_h = ((f64::from(ph) - f64::from(rows + 1) * vs) / f64::from(rows)).max(1.0);
+    let (cols, rows, native_cell_w, native_cell_h) = if natural {
+        let max_width = sources.iter().filter_map(|(_, size)| size.as_ref().map(|(w, _)| *w)).max().unwrap_or(1);
+        let max_height = sources.iter().filter_map(|(_, size)| size.as_ref().map(|(_, h)| *h)).max().unwrap_or(1);
+        if f64::from(max_width) > usable_w || f64::from(max_height) + caption_px > usable_h {
+            return Err(bad(cmd, "an image is too large to fit within the sheet's usable area"));
+        }
+        let cols = ((usable_w + hs) / (f64::from(max_width) + hs)).floor() as u32;
+        let rows = ((usable_h + vs) / (f64::from(max_height) + caption_px + vs)).floor() as u32;
+        if cols == 0 || rows == 0 {
+            return Err(bad(cmd, "grid calculation failed; images may be too large for the sheet and margins"));
+        }
+        (cols, rows, f64::from(max_width), f64::from(max_height) + caption_px)
+    } else {
+        (f("columns", 5.0).round().clamp(1.0, 100.0) as u32, f("rows", 6.0).round().clamp(1.0, 100.0) as u32, 0.0, 0.0)
+    };
+    let cell_w = if natural { native_cell_w } else { (usable_w - f64::from(cols + 1) * hs) / f64::from(cols) };
+    let cell_h = if natural { native_cell_h } else { (usable_h - f64::from(rows + 1) * vs) / f64::from(rows) };
+    if !natural && (cell_w < 1.0 || cell_h < 1.0) {
+        return Err(bad(cmd, "the sheet margins and spacing leave no room for the selected grid"));
+    }
     let box_h = (cell_h - caption_px).max(1.0);
+    let center = p.get("centerLayers").and_then(Value::as_bool).unwrap_or(false);
     let per_page = (cols * rows) as usize;
     let mut docs = Vec::new();
     let mut placed = 0usize;
-    let mut errors = Vec::new();
-    for (page, chunk) in files.chunks(per_page).enumerate() {
-        let name = if files.len() > per_page { format!("ContactSheet-{:03}", page + 1) } else { "ContactSheet-001".into() };
+    for (page, chunk) in sources.chunks(per_page).enumerate() {
+        let name = if sources.len() > per_page { format!("ContactSheet-{:03}", page + 1) } else { "ContactSheet-001".into() };
         s.execute("file.new", json!({"width": pw, "height": ph, "mode": mode, "depth": depth, "background": "white", "name": name}))?;
         let idx = s.active_index().ok_or(EngineError::NoDocument)?;
         if let Some(st) = s.active_mut() {
             std::sync::Arc::make_mut(&mut st.doc).resolution_dpi = res as f32;
         }
         let fmt = s.active().ok_or(EngineError::NoDocument)?.doc.pixel_format();
-        for (k, path) in chunk.iter().enumerate() {
+        let grid_cell_w = if natural { native_cell_w } else { cell_w };
+        let grid_cell_h = if natural { native_cell_h } else { cell_h };
+        let start_gap_x = if natural { 0.0 } else { hs };
+        let start_gap_y = if natural { 0.0 } else { vs };
+        let used_cols = if across {
+            (chunk.len() as u32).min(cols)
+        } else {
+            (chunk.len() as u32).div_ceil(rows).min(cols)
+        };
+        let used_rows = if across {
+            (chunk.len() as u32).div_ceil(cols).min(rows)
+        } else {
+            (chunk.len() as u32).min(rows)
+        };
+        let x_offset = if center {
+            ((usable_w - (f64::from(used_cols) * grid_cell_w + f64::from(used_cols.saturating_sub(1)) * hs + 2.0 * start_gap_x)) / 2.0)
+                .max(0.0)
+        } else {
+            0.0
+        };
+        let y_offset = if center {
+            ((usable_h - (f64::from(used_rows) * grid_cell_h + f64::from(used_rows.saturating_sub(1)) * vs + 2.0 * start_gap_y)) / 2.0)
+                .max(0.0)
+        } else {
+            0.0
+        };
+        for (k, (path, source_size)) in chunk.iter().enumerate() {
             let k = k as u32;
             let (c, r) = if across { (k % cols, k / cols) } else { (k / rows, k % rows) };
-            let x0 = hs + f64::from(c) * (cell_w + hs);
-            let y0 = vs + f64::from(r) * (cell_h + vs);
+            let x0 = margin + start_gap_x + x_offset + f64::from(c) * (grid_cell_w + hs);
+            let y0 = margin + start_gap_y + y_offset + f64::from(r) * (grid_cell_h + vs);
             let thumb = (|| -> Result<photocraft_doc::Surface> {
                 let bytes = read_file(path)?;
                 let src = import(&file_name(path), &bytes)?;
                 let mut t = Session::new();
                 t.add_document(src, None);
-                let (w, h) = t.active().map(|d| (f64::from(d.doc.size.width), f64::from(d.doc.size.height))).unwrap_or((1.0, 1.0));
+                let (w, h) = source_size
+                    .as_ref()
+                    .map(|(w, h)| (f64::from(*w), f64::from(*h)))
+                    .or_else(|| t.active().map(|d| (f64::from(d.doc.size.width), f64::from(d.doc.size.height))))
+                    .ok_or(EngineError::NoDocument)?;
+                if w <= 0.0 || h <= 0.0 {
+                    return Err(bad(cmd, format!("{} has zero dimensions", file_name(path))));
+                }
                 let fit = |w: f64, h: f64| (cell_w / w).min(box_h / h);
-                if rotate && fit(h, w) > fit(w, h) * 1.001 {
+                if !natural && rotate && fit(h, w) > fit(w, h) * 1.001 {
                     t.execute("image.imageRotation.90cw", json!({}))?;
                 }
-                let (w, h) = t.active().map(|d| (f64::from(d.doc.size.width), f64::from(d.doc.size.height))).unwrap_or((1.0, 1.0));
-                let k = fit(w, h);
+                let (w, h) = t.active().map(|d| (f64::from(d.doc.size.width), f64::from(d.doc.size.height))).ok_or(EngineError::NoDocument)?;
+                let k = if natural { 1.0 } else { fit(w, h) };
                 let (tw, th) = ((w * k).round().max(1.0), (h * k).round().max(1.0));
-                t.execute("image.imageSize", json!({"width": tw, "height": th, "resample": "bicubic"}))?;
+                if !natural {
+                    t.execute("image.imageSize", json!({"width": tw, "height": th, "resample": "bicubic"}))?;
+                }
                 let d = &t.active().ok_or(EngineError::NoDocument)?.doc;
                 let buf = photocraft_compose::flatten(d);
-                let ox = (x0 + (cell_w - tw) / 2.0).round() as i32;
-                let oy = (y0 + (box_h - th) / 2.0).round() as i32;
+                let ox = (x0 + if natural { 0.0 } else { (cell_w - tw) / 2.0 }).round() as i32;
+                let oy = (y0 + if natural { 0.0 } else { (box_h - th) / 2.0 }).round() as i32;
                 let n = fmt.channels();
                 let mut data = vec![0.0f32; buf.px.len() * n];
                 for (px, out) in buf.px.iter().zip(data.chunks_exact_mut(n)) {
@@ -565,7 +704,8 @@ fn contact_sheet(s: &mut Session, p: &Value) -> Result<Value> {
             placed += 1;
             if caption {
                 let size_pt = font_pt;
-                let baseline = y0 + box_h + caption_px * 0.72;
+                let caption_offset = if natural { source_size.as_ref().map_or(box_h, |(_, h)| f64::from(*h)) } else { box_h };
+                let baseline = y0 + caption_offset + caption_px * 0.72;
                 s.execute("type.create", json!({"x": x0 + cell_w / 2.0, "y": baseline, "text": label, "font": font, "size": size_pt, "align": "center", "color": [0.0, 0.0, 0.0], "name": label}))?;
             }
         }
@@ -589,7 +729,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.automate.contactSheetII",
             "Contact Sheet II…",
             &["File", "Automate"],
-            r##"{"input":folder|[paths],"units":"inches|cm|mm|pixels"="inches","width":8,"height":10,"resolution":ppi=300,"mode":"rgb|gray|cmyk|lab"="rgb","depth":8|16=8,"columns":5,"rows":6,"placeAcrossFirst":bool=true,"autoSpacing":bool=true,"horizontal":units?,"vertical":units?,"rotateForBestFit":bool=false,"caption":bool=true (file name as caption),"font":family?,"fontSize":pt=12,"flatten":bool=false} → {documents, pages, images}"##,
+            r##"{"input":folder|[paths],"selectedFiles":[paths]? (chosen image files; takes precedence over input),"sheetPreset":"a3|a4|custom"?,"units":"inches|cm|mm|pixels"="inches","width":8,"height":10,"resolution":ppi=300,"margin":units=0,"gap":units?,"centerLayers":bool=false,"layout":"native|fit"="fit" (native keeps source size and derives the grid from the largest image),"mode":"rgb|gray|cmyk|lab"="rgb","depth":8|16=8,"columns":5,"rows":6,"placeAcrossFirst":bool=true,"autoSpacing":bool=true,"horizontal":units?,"vertical":units?,"rotateForBestFit":bool=false,"caption":bool=true (file name as caption),"font":family?,"fontSize":pt=12,"flatten":bool=false} → {documents, pages, images}"##,
             native,
             contact_sheet
         ),
