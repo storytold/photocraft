@@ -114,8 +114,8 @@ fn masked_hdr_smart_filter_cache_survives_psd_and_psb_export() {
         let base_samples = pixels.read_region(bounds);
         let filtered_samples = filtered.read_region(bounds);
         assert!(base_samples.iter().zip(&filtered_samples).any(|(base, filtered)| (base - filtered).abs() > 0.1), "the actual blur must change the fixture");
-        assert!(filtered_samples.chunks_exact(4).any(|p| p[..3].iter().any(|&v| v < 0.)), "retain signed filtered colors");
-        assert!(filtered_samples.chunks_exact(4).any(|p| p[..3].iter().any(|&v| v > 1.)), "retain HDR filtered colors");
+        assert!(filtered_samples.as_chunks::<4>().0.iter().any(|p| p[..3].iter().any(|&v| v < 0.)), "retain signed filtered colors");
+        assert!(filtered_samples.as_chunks::<4>().0.iter().any(|p| p[..3].iter().any(|&v| v > 1.)), "retain HDR filtered colors");
 
         // Author the mixed cache independently of mix/unmix. This is a premultiplied
         // weighted sum, so the import and export inverses cannot mask each other's bugs.
