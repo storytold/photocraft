@@ -5,9 +5,11 @@ use std::path::Path;
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
+use photocraft_cms::{Builtin, Intent, Profile, Transform};
 use photocraft_codecs::{ChannelLayout, DecodeOptions, EncodeOptions, Format, Image, Limits, SampleType};
 use photocraft_doc::Document;
 use photocraft_raster::Rgba8Image;
+use photocraft_raw::PreviewColorSpace;
 
 use super::{Done, FileStat, Job, MAX_CACHE_FILES, MAX_DECODE_BYTES, MISSING_KEY, Outcome, Probe, THUMB_SIDE, lock};
 
@@ -202,7 +204,38 @@ fn raw_preview(bytes: &[u8]) -> Option<Rgba8Image> {
     let opts = DecodeOptions { limits: decode_limits(), ..Default::default() };
     let img = photocraft_codecs::decode_with(preview.jpeg, &opts).ok()?;
     let (width, height) = img.dimensions();
-    valid(Rgba8Image { width, height, pixels: img.to_rgba8() }).map(|img| fit(img, THUMB_SIDE))
+    let source = preview_profile(bytes, img.icc.as_deref());
+    let mut thumb = valid(Rgba8Image { width, height, pixels: img.to_rgba8() }).map(|img| fit(img, THUMB_SIDE))?;
+    if let Some(source) = source {
+        to_srgb(&mut thumb, &source);
+    }
+    Some(thumb)
+}
+
+/// The colour space of a raw's preview when it is not sRGB: its own ICC profile, else the one the
+/// raw's EXIF states (as the import reads it). An unknown space is taken as sRGB.
+fn preview_profile(raw: &[u8], icc: Option<&[u8]>) -> Option<Profile> {
+    let source = match icc.map(Profile::parse) {
+        Some(Ok(own)) => own,
+        Some(Err(_)) => return None,
+        None => match photocraft_raw::embedded_preview_color_space(raw)? {
+            PreviewColorSpace::AdobeRgb => Builtin::AdobeRgbCompat.profile().clone(),
+            PreviewColorSpace::ProPhoto => Builtin::ProPhotoCompat.profile().clone(),
+            PreviewColorSpace::Srgb => return None,
+        },
+    };
+    (!source.same_colors(Builtin::Srgb.profile())).then_some(source)
+}
+
+/// Convert the thumbnail's colours from `source` to sRGB, leaving its alpha alone. A conversion
+/// that cannot be made leaves the pixels as they are.
+fn to_srgb(img: &mut Rgba8Image, source: &Profile) {
+    let Ok(transform) = Transform::new(source, Builtin::Srgb.profile(), Intent::RelativeColorimetric, true) else { return };
+    let mut buf: Vec<f32> = img.pixels.iter().map(|&v| f32::from(v) / 255.0).collect();
+    transform.apply(&mut buf, 4);
+    for (out, v) in img.pixels.iter_mut().zip(&buf) {
+        *out = (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    }
 }
 
 /// `img` if its pixels are as many as its size says.
@@ -339,6 +372,33 @@ pub(super) fn store(dir: &Path, path: &str, size: u64, modified: Option<u64>, im
         let _ = std::fs::remove_file(&temp);
     }
     evict(dir, MAX_CACHE_FILES);
+}
+
+/// Is `name` one of the cache's own file names (`<16 hex>_<modified>_<size>.png`, or its `.tmp`)?
+fn is_cache_name(name: &str) -> bool {
+    let b = name.as_bytes();
+    b.len() > 17
+        && b.get(..16).is_some_and(|h| h.iter().all(u8::is_ascii_hexdigit))
+        && b.get(16) == Some(&b'_')
+        && (name.ends_with(".png") || name.ends_with(".png.tmp"))
+}
+
+/// Delete the cached thumbnails of `path`, or all of them for `None`. Only regular files directly
+/// in `dir` with the cache's own names go: the folder itself, subfolders, links and any other file
+/// stay.
+pub(super) fn forget(dir: &Path, path: Option<&str>) {
+    let wanted = path.map(prefix);
+    let Ok(read) = std::fs::read_dir(dir) else { return };
+    for entry in read.flatten().take(MAX_SCAN) {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !is_cache_name(&name) || wanted.as_ref().is_some_and(|p| !name.starts_with(p.as_str())) {
+            continue;
+        }
+        // `file_type` does not follow a link.
+        if entry.file_type().is_ok_and(|t| t.is_file()) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
 }
 
 /// Delete the oldest files in `dir` so that at most `max` remain (with a tenth of room to spare, so

@@ -45,6 +45,7 @@ impl PhotocraftApp {
     /// File › Open Recent › Clear Recent File List.
     pub fn clear_recent(&mut self) {
         self.ui.recent_files.clear();
+        self.recent_view.forget(self.services.thumbnail_cache_dir.as_deref(), None);
         self.session.prefs.edit(|p| {
             p.file_handling.recent_files.clear();
             p.file_handling.recent_opened.clear();
@@ -55,6 +56,7 @@ impl PhotocraftApp {
     /// file stays on disk, and opening it again lists it again.
     pub fn remove_recent(&mut self, path: &str) {
         self.ui.recent_files.retain(|p| p != path);
+        self.recent_view.forget(self.services.thumbnail_cache_dir.as_deref(), Some(path));
         self.session.prefs.edit(|p| {
             p.file_handling.recent_files.retain(|r| r != path);
             p.file_handling.recent_opened.remove(path);

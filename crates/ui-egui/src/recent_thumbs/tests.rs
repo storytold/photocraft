@@ -416,3 +416,38 @@ fn unknown_bytes_named_like_pictures_have_no_preview() {
         assert!(is(&probe(&file, true, None, None), |o| matches!(o, Outcome::NoPreview)), "{name}");
     }
 }
+
+/// Forgetting deletes cache-named thumbnails (one path's, or all) and nothing else.
+#[test]
+fn forgetting_deletes_only_the_caches_own_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let img = rgba(2, 2, [5, 6, 7, 255]);
+    disk::store(dir.path(), "/a/one.png", 1, Some(1), &img);
+    disk::store(dir.path(), "/a/two.png", 1, Some(1), &img);
+    let unrelated = [write(dir.path(), "notes.txt", b"keep"), write(dir.path(), "photo.png", b"keep"), write(dir.path(), "0123456789abcdef.png", b"keep")];
+    std::fs::create_dir(dir.path().join("0123456789abcdef_1_1.png.d")).unwrap();
+    disk::forget(dir.path(), Some("/a/one.png"));
+    assert!(disk::load_any(dir.path(), "/a/one.png").is_none());
+    assert!(disk::load_any(dir.path(), "/a/two.png").is_some(), "another path's thumbnail stays");
+    disk::forget(dir.path(), None);
+    assert!(disk::load_any(dir.path(), "/a/two.png").is_none());
+    assert!(unrelated.iter().all(|f| f.is_file()), "files with other names stay");
+    assert!(dir.path().join("0123456789abcdef_1_1.png.d").is_dir());
+    assert!(dir.path().is_dir(), "the folder stays");
+    disk::forget(&dir.path().join("missing"), None); // no folder: nothing to do
+}
+
+/// A file taken off the list is no longer held, and a worker still on it is remembered.
+#[test]
+fn a_forgotten_file_is_dropped_from_the_view() {
+    let mut view = RecentView::default();
+    for p in ["/a/one.png", "/a/two.png"] {
+        view.entries.insert(p.into(), Entry::new());
+    }
+    view.entries.get_mut("/a/two.png").unwrap().in_flight = true;
+    view.forget(None, Some("/a/one.png"));
+    assert!(!view.entries.contains_key("/a/one.png") && view.forgotten.is_empty());
+    view.forget(None, None);
+    assert!(view.entries.is_empty());
+    assert!(view.forgotten.contains("/a/two.png"), "its answer will be followed by another deletion");
+}

@@ -184,6 +184,11 @@ pub struct RecentView {
     /// Files whose status is wanted for sorting though their cards are off screen.
     stats_wanted: Vec<String>,
     worker: Option<Worker>,
+    /// Where the workers cache thumbnails (set when they start).
+    cache_dir: Option<PathBuf>,
+    /// Files taken off the list while a worker was still looking at them: their answer, whenever
+    /// it comes, is followed by another deletion of their cached thumbnails.
+    forgotten: HashSet<String>,
     /// The worker could not be started: every thumbnail is "No preview".
     worker_failed: bool,
     /// Frame counter, for [`Entry::used`].
@@ -244,6 +249,23 @@ impl RecentView {
     pub fn want_status(&mut self, path: &str) {
         self.entries.entry(path.to_string()).or_insert_with(Entry::new);
         self.stats_wanted.push(path.to_string());
+    }
+
+    /// `path` (or, for `None`, every file) is off the Recent list: drop what is held for it and
+    /// delete its cached thumbnails (all of them for `None`) on a short-lived thread, so the frame
+    /// never touches the disk and the deletion does not depend on the job queue. A worker still
+    /// looking at the file is answered by another deletion when it finishes.
+    pub fn forget(&mut self, cache: Option<&Path>, path: Option<&str>) {
+        let flying: Vec<String> = match path {
+            Some(p) => self.entries.remove(p).filter(|e| e.in_flight).map(|_| p.to_string()).into_iter().collect(),
+            None => {
+                let flying = self.entries.iter().filter(|(_, e)| e.in_flight).map(|(p, _)| p.clone()).collect();
+                self.entries.clear();
+                flying
+            }
+        };
+        self.forgotten.extend(flying);
+        wipe(cache, path);
     }
 
     /// Cache the thumbnail of `doc`, just opened or saved at `path`, without opening the file
@@ -310,7 +332,8 @@ impl RecentView {
 
     fn ensure_worker(&mut self, cache: Option<&Path>) -> Option<&Worker> {
         if self.worker.is_none() && !self.worker_failed {
-            self.worker = Worker::start(cache.map(Path::to_path_buf));
+            self.cache_dir = cache.map(Path::to_path_buf);
+            self.worker = Worker::start(self.cache_dir.clone());
             self.worker_failed = self.worker.is_none();
         }
         self.worker.as_ref()
@@ -341,7 +364,13 @@ impl RecentView {
     fn apply(&mut self, ctx: &egui::Context, done: Done) {
         let generation = self.generation;
         let tick = self.tick;
-        let Some(e) = self.entries.get_mut(&done.path) else { return };
+        let Some(e) = self.entries.get_mut(&done.path) else {
+            // Taken off the list while it was being looked at: the worker may have cached it since.
+            if self.forgotten.remove(&done.path) {
+                wipe(self.cache_dir.as_deref(), Some(&done.path));
+            }
+            return;
+        };
         e.in_flight = false;
         if done.stat.is_some() {
             e.stat = done.stat;
@@ -403,6 +432,18 @@ impl RecentView {
     pub(crate) fn textures(&self) -> usize {
         self.entries.values().filter(|e| matches!(e.thumb, Thumb::Ready { .. })).count()
     }
+}
+
+/// Delete cached thumbnails (see [`disk::forget`]) on a detached thread. Failing to start one is
+/// ignored: the cache is only a cache.
+fn wipe(cache: Option<&Path>, path: Option<&str>) {
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(dir) = cache {
+        let (dir, path) = (dir.to_path_buf(), path.map(str::to_string));
+        let _ = std::thread::Builder::new().name("recent-thumbs-forget".into()).spawn(move || disk::forget(&dir, path.as_deref()));
+    }
+    #[cfg(target_arch = "wasm32")]
+    let _ = (cache, path);
 }
 
 /// `rgba` (straight alpha) as gray, keeping each pixel's alpha.
