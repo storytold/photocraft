@@ -859,7 +859,7 @@ pub fn moved_index(index: usize, from: usize, to: usize) -> usize {
     }
 }
 
-/// Remove the resolved action while retaining the identities of unaffected definitions and calls.
+/// Delete the selected set, action or step with the appropriate playback and recording guards.
 fn delete(s: &mut Session, p: &Value) -> Result<Value> {
     not_playing(s, "actions.delete")?;
     if p.get("set").is_some() {

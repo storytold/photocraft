@@ -113,9 +113,20 @@ pub(super) fn conditional_from(d: &Descriptor) -> Mapped {
         _ => None,
     };
     let mut params = json!({"if": condition, "then": branch("then"), "else": branch("else")});
-    for key in ["then", "else"] {
-        if let Some(set) = get_ref(d, key).and_then(|reference| super::steps_layer::action_set(reference)) {
-            params[format!("{key}Set")] = json!(set);
+    let scopes = ["then", "else"].map(|key| (key, get_ref(d, key).and_then(|reference| super::steps_layer::action_set(reference))));
+    let shared = scopes
+        .iter()
+        .filter(|(key, _)| params[*key].is_string())
+        .find_map(|(_, set)| set.as_deref())
+        .filter(|set| scopes.iter().all(|(key, scope)| !params[*key].is_string() || scope.as_deref() == Some(*set)));
+    if let Some(set) = shared {
+        // Preserve the existing command shape when every active branch has the same scope.
+        params["set"] = json!(set);
+    } else {
+        for (key, set) in scopes {
+            if let Some(set) = set {
+                params[format!("{key}Set")] = json!(set);
+            }
         }
     }
     step("actions.conditional", params)

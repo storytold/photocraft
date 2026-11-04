@@ -122,3 +122,16 @@ fn portable_conditional_branches_retain_independent_set_scopes() {
         assert_eq!(session.active().unwrap().doc.layers.last().unwrap().name, expected);
     }
 }
+
+/// Retaining set references must not invent per-branch fields for the existing shared-set API.
+#[test]
+fn portable_conditional_shared_scope_keeps_the_existing_command_shape() {
+    use photocraft_engine::atn_cmds;
+    for other in [serde_json::Value::Null, json!("Else")] {
+        let params = json!({"if":"always","then":"Then","else":other,"set":"S"});
+        let action = Action::new("Caller", vec![("actions.conditional".into(), params.clone())]);
+        let bytes = atn_cmds::export("S", &[&action], &[], false).unwrap().0;
+        let imported = atn_cmds::import(&bytes).unwrap();
+        assert_eq!(imported.actions[0].steps[0].1, params);
+    }
+}
