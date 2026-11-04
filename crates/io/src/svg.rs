@@ -1509,8 +1509,10 @@ impl Conv {
         let canvas = tiny_skia::Transform::from_row(k, 0.0, 0.0, k, -(x0 as f32), -(y0 as f32));
         let ts = canvas.pre_concat(parent).pre_translate(shift.x(), shift.y());
         resvg::render_node(node, ts, &mut pixmap.as_mut())?;
-        let layer = Layer::new(name, LayerContent::Raster(surface(&pixmap, Rect::new(x0, y0, x1, y1), self.fmt)));
-        let bytes = pixels * self.fmt.bytes_per_pixel() as u64;
+        let surf = surface(&pixmap, Rect::new(x0, y0, x1, y1), self.fmt);
+        // Charge what the layer keeps: surface() prunes transparent tiles.
+        let bytes = photocraft_raster::stored_tiles_bytes(surf.tile_count() as u64, &self.fmt);
+        let layer = Layer::new(name, LayerContent::Raster(surf));
         self.pixel_budget -= bytes;
         self.retained_pixel_bytes += bytes;
         Some(layer)
