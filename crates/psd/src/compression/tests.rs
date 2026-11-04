@@ -27,9 +27,65 @@ fn layout(planes: usize, width: usize, height: usize, depth: u16, version: Versi
 
 fn pb_roundtrip(src: &[u8]) -> Vec<u8> {
     let enc = packbits::encode_vec(src);
+    assert_eq!(packbits::encoded_len(src), enc.len());
     let dec = packbits::decode(&enc, src.len()).unwrap();
     assert_eq!(dec, src, "encoded: {enc:?}");
     enc
+}
+
+#[test]
+fn packbits_block_scan_preserves_scalar_packets() {
+    fn scalar(src: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < src.len() {
+            let mut run = 1;
+            while i + run < src.len() && run < 128 && src[i + run] == src[i] {
+                run += 1;
+            }
+            if run >= 2 {
+                out.extend_from_slice(&[(1i16 - run as i16) as u8, src[i]]);
+                i += run;
+            } else {
+                let start = i;
+                while i < src.len() && i - start < 128 {
+                    if i + 2 < src.len() && src[i] == src[i + 1] && src[i] == src[i + 2] {
+                        break;
+                    }
+                    i += 1;
+                }
+                out.push((i - start - 1) as u8);
+                out.extend_from_slice(&src[start..i]);
+            }
+        }
+        out
+    }
+    let check = |src: &[u8]| {
+        let expected = scalar(src);
+        let mut actual = vec![42];
+        packbits::encode(src, &mut actual);
+        assert_eq!(&actual[1..], expected, "source {src:?}");
+        assert_eq!(packbits::encoded_len(src), expected.len());
+    };
+    for n in 0..=10 {
+        for mut bits in 0..3usize.pow(n) {
+            let src: Vec<_> = (0..n)
+                .map(|_| {
+                    let b = [0, 1, 255][bits % 3];
+                    bits /= 3;
+                    b
+                })
+                .collect();
+            check(&src);
+        }
+    }
+    for start in 0..260 {
+        for run in [2, 3, 7, 8, 9, 127, 128, 129, 256] {
+            let mut src: Vec<_> = (0..520).map(|i| (i % 251) as u8).collect();
+            src[start..start + run].fill(255);
+            check(&src);
+        }
+    }
 }
 
 #[test]
@@ -350,4 +406,31 @@ fn zip_bomb_is_bounded() {
 #[test]
 fn zip_garbage_errors() {
     assert!(zip_decompress(&[1, 2, 3, 4], 4).is_err());
+}
+
+#[test]
+fn reserved_zip_output_matches_the_growing_writer() {
+    for bytes in [Vec::new(), vec![0; 131072], (0..131072).map(|i| (i * 31 + i / 173) as u8).collect()] {
+        let mut old = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        old.write_all(&bytes).unwrap();
+        assert_eq!(zip_compress(&bytes), old.finish().unwrap());
+    }
+}
+
+#[test]
+fn counted_packbits_matches_mixed_runs_and_literals() {
+    for n in 0..520 {
+        let bytes: Vec<_> = (0..n).map(|i| if i % 23 < 9 { (i / 23) as u8 } else { (i * 31) as u8 }).collect();
+        assert_eq!(packbits::encoded_len(&bytes), packbits::encode_vec(&bytes).len());
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn rle_chunks_use_the_callers_pool_and_report_panics() {
+    let pool = rayon::ThreadPoolBuilder::new().num_threads(2).build().unwrap();
+    pool.install(|| {
+        map_chunks(8, (0..64).collect(), |_| assert!(matches!(rayon::current_thread_index(), Some(0 | 1)))).unwrap();
+        assert!(map_chunks(2, vec![0, 1], |_| panic!("worker")).is_err());
+    });
 }

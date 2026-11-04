@@ -5490,6 +5490,7 @@ dependencies = [
  "flate2",
  "photocraft-psd",
  "proptest",
+ "rayon",
  "serde",
  "thiserror 2.0.21",
 ]
