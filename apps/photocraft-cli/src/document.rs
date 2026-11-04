@@ -85,6 +85,9 @@ fn command_list(a: &RunArgs) -> Result<Vec<(String, Value)>> {
     Ok(cmds)
 }
 
+/// Reported once by `run --gpu` when a step is `file.export.quickExport`.
+const QUICK_EXPORT_CPU_NOTE: &str = "file.export.quickExport runs on the CPU compositor; --gpu applies to --out and the export commands that take a renderer";
+
 pub(crate) fn run_cmds(a: &RunArgs, out: &mut dyn Write, err: &mut dyn Write) -> Result {
     let opts = ExportOptions::from(&a.export);
     let mut h = Headless::trusted_local();
@@ -120,6 +123,11 @@ pub(crate) fn run_cmds(a: &RunArgs, out: &mut dyn Write, err: &mut dyn Write) ->
         let new_warnings: Vec<String> =
             h.session.active().map(|st| missing_font_warnings(&st.doc)).unwrap_or_default().into_iter().filter(|w| reported_fonts.insert(w.clone())).collect();
         warn_all(err, &new_warnings);
+        // Quick Export composites and encodes inside the engine, which has no renderer: say so
+        // once, so `--gpu` never looks as if it applied to it (docs/development.md, GPU).
+        if policy.enabled && id == "file.export.quickExport" {
+            warn_dedup(err, &[QUICK_EXPORT_CPU_NOTE.to_string()], &mut reported_fonts);
+        }
         let mut result = json!({"command": id, "result": r});
         if !new_warnings.is_empty() {
             result["warnings"] = json!(new_warnings);

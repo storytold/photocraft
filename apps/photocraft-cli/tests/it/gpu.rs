@@ -312,3 +312,21 @@ fn cpu_default_does_not_emit_gpu_warnings() {
 
     let _ = std::fs::remove_dir_all(&d);
 }
+
+#[test]
+fn run_gpu_quick_export_reports_that_it_runs_on_the_cpu() {
+    let d = tmp("quick_export");
+    let out_png = d.join("quick.png");
+    let params = format!(r#"{{"path":{}}}"#, serde_json::to_string(&out_png.to_string_lossy()).unwrap());
+    let args = ["run", "--new", r#"{"width":16,"height":16,"background":"white"}"#, "--cmd", "file.export.quickExport", "--params", params.as_str()];
+    let o = bin().args(args).arg("--gpu").output().unwrap();
+    assert!(o.status.success(), "stderr: {}", String::from_utf8_lossy(&o.stderr));
+    assert!(out_png.is_file());
+    let stderr = String::from_utf8_lossy(&o.stderr);
+    assert_eq!(stderr.matches("quickExport runs on the CPU compositor").count(), 1, "one CPU note expected: {stderr}");
+
+    let o = bin().args(args).output().unwrap();
+    assert!(o.status.success());
+    assert!(!String::from_utf8_lossy(&o.stderr).contains("runs on the CPU compositor"), "no note without --gpu");
+    let _ = std::fs::remove_dir_all(&d);
+}
