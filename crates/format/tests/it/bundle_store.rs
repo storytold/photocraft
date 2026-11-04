@@ -122,11 +122,15 @@ struct MemoryStore {
     log: Vec<String>,
     planned: Vec<String>,
     fail: Option<&'static str>,
+    panic: Option<&'static str>,
 }
 
 impl MemoryStore {
     fn step(&mut self, step: &str) -> Result<()> {
         self.log.push(step.to_owned());
+        if self.panic.is_some_and(|name| step.starts_with(name)) {
+            panic!("{step} panicked");
+        }
         match self.fail {
             Some(name) if step.starts_with(name) => Err(FormatError::Io(std::io::Error::other(format!("{name} failed")))),
             _ => Ok(()),
@@ -220,6 +224,41 @@ fn a_failed_save_never_commits_and_always_ends() {
         assert_eq!(store.log.last().map(String::as_str), Some("end"));
         assert!(!store.files.contains_key("manifest.json"), "{fail}");
     }
+}
+
+#[test]
+fn a_failed_save_leaves_the_committed_bundle_as_it_was() {
+    let doc = rich_doc(ColorMode::Rgb, SampleType::U8);
+    let mut edited = doc.clone();
+    edited.layers[1].opacity = 0.25;
+    for fail in ["object", "preview", "commit"] {
+        let mut store = MemoryStore::default();
+        PcraftWriter::new().save_to(&doc, &mut store, &with_previews()).unwrap();
+        let manifest = store.files["manifest.json"].clone();
+        store.fail = Some(fail);
+        assert!(PcraftWriter::new().save_to(&edited, &mut store, &with_previews()).is_err(), "{fail}");
+        assert_eq!(store.files["manifest.json"], manifest, "{fail}");
+        assert_eq!(load(&store).unwrap(), doc, "{fail}");
+    }
+}
+
+#[test]
+fn a_panicking_store_step_still_ends_the_save() {
+    let doc = rich_doc(ColorMode::Rgb, SampleType::U8);
+    for step in ["plan", "object", "preview", "commit"] {
+        let mut store = MemoryStore { panic: Some(step), ..Default::default() };
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| PcraftWriter::new().save_to(&doc, &mut store, &with_previews())));
+        assert!(panicked.is_err(), "{step}");
+        assert_eq!(store.log.last().map(String::as_str), Some("end"), "{step}: {:?}", store.log);
+        assert!(!store.files.contains_key("manifest.json"), "{step}");
+    }
+}
+
+#[test]
+fn a_directory_store_without_a_path_is_refused_before_touching_disk() {
+    let mut store = DirStore::default();
+    let e = PcraftWriter::new().save_to(&rich_doc(ColorMode::Rgb, SampleType::U8), &mut store, &SaveOptions::default()).unwrap_err();
+    assert!(e.to_string().contains("no bundle path"), "{e}");
 }
 
 #[test]
