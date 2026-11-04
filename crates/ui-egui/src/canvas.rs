@@ -1287,7 +1287,9 @@ fn handle_canvas_tool_clicks(
             };
             let d = xf.to_doc(p);
             crate::type_tool::multi_click(app, n, d[0], d[1]);
-            app.type_last_click = Some((ctx.input(|i| i.time), p));
+            // Only a single click arms the word drag: the press after a double-click is a third
+            // click, not a double-click's second press.
+            app.type_last_click = (n == 1).then(|| (ctx.input(|i| i.time), p));
         }
     }
 }

@@ -3738,6 +3738,20 @@ fn double_click_held_and_dragged_selects_whole_words() {
     // Left into "alpha" (glyph 2): from the end of beta back to the start of alpha.
     let alpha = glyph(&mut h, id, 2, 0.5);
     assert_eq!(drag_words(&mut h, alpha), ((10, 0), (10, 0)), "leftward: whole words");
+    // A triple-click's third press held and dragged isn't a word drag.
+    h.hover_at(in_beta);
+    h.run_steps(1);
+    for down in [true, false, true, false, true] {
+        press(&mut h, in_beta, down);
+    }
+    for t in 1..=6 {
+        h.hover_at(in_beta + (gamma - in_beta) * (t as f32 / 6.0));
+        h.run_steps(1);
+    }
+    let third = selection(&h);
+    press(&mut h, gamma, false);
+    h.run_steps(40);
+    assert_ne!(third, (6, 16), "a third press dragged doesn't select by words");
     // A single press dragged still selects character by character.
     h.hover_at(in_beta);
     h.run_steps(1);
