@@ -106,6 +106,9 @@ pub struct Nav {
     follow: Option<usize>,
     /// The keys moved the highlight, and the pointer hasn't moved since.
     keyboard: bool,
+    /// The widget that had the focus when the keys took the menu (it is surrendered meanwhile):
+    /// it gets the focus back when the menus close, unless something else took it.
+    refocus: Option<Id>,
     /// Help's search field has text this frame.
     pub(crate) search_text: bool,
     /// The text field with the keyboard, as of the last frame.
@@ -133,11 +136,24 @@ impl Nav {
         let mut nav: Nav = ctx.data(|d| d.get_temp(nav_id())).unwrap_or_default();
         let top = nav.tops.iter().position(|id| egui::Popup::is_id_open(ctx, *id));
         if top != nav.top {
-            nav = Nav { top, tops: std::mem::take(&mut nav.tops), keyboard: nav.keyboard && top.is_some(), field: nav.field, ..Default::default() };
+            let refocus = nav.refocus.take();
+            nav = Nav {
+                top,
+                tops: std::mem::take(&mut nav.tops),
+                keyboard: nav.keyboard && top.is_some(),
+                refocus: refocus.filter(|_| top.is_some()),
+                field: nav.field,
+                ..Default::default()
+            };
+            if let Some(id) = refocus.filter(|_| top.is_none() && ctx.memory(|m| m.focused()).is_none()) {
+                ctx.memory_mut(|m| m.request_focus(id));
+            }
         }
         // egui moves the focus with the arrow keys too, along the menu titles and into a submenu
-        // beside the menu: gray rows, and a gray title one step behind the open menu.
+        // beside the menu: gray rows, and a gray title one step behind the open menu. The first
+        // focus taken (from outside the menus) is given back when they close.
         if let Some(focus) = ctx.memory(|m| m.focused()).filter(|_| nav.keyboard && !ctx.text_edit_focused()) {
+            nav.refocus.get_or_insert(focus);
             ctx.memory_mut(|m| m.surrender_focus(focus));
         }
         nav
@@ -447,7 +463,6 @@ impl Nav {
         }
     }
 
-    /// Open the highlighted submenu of `level` and move the keyboard into it.
     /// No row is highlighted any more: the rows have changed, and a highlight is a position among
     /// them.
     pub(crate) fn clear_highlight(&mut self) {
@@ -455,9 +470,11 @@ impl Nav {
     }
 
     /// Light the first enabled row of `level` once it has been drawn (a menu opened from the
-    /// keyboard, as on Windows).
+    /// keyboard, as on Windows). The keys have the menu: a pointer resting over it lights and
+    /// opens nothing until it moves, as after an arrow key.
     pub(crate) fn highlight_first(&mut self, level: usize) {
         self.first_at = Some(level);
+        self.keyboard = true;
     }
 
     /// The enabled row of the level the arrows are in whose mnemonic is `c`.
@@ -472,6 +489,8 @@ impl Nav {
         self.open_sub(ctx, level, widget);
     }
 
+    /// Open the submenu of `level`'s row `widget` and move the keyboard into it (an arrow key, ↩
+    /// or a mnemonic).
     fn open_sub(&mut self, ctx: &egui::Context, level: usize, widget: Id) {
         let Some(&root) = self.roots.get(level) else { return };
         let sub = SubMenu::id_from_widget_id(widget);
@@ -481,6 +500,7 @@ impl Nav {
         self.level = level + 1;
         self.hi.truncate(level + 1);
         self.first_at = Some(level + 1);
+        self.keyboard = true;
     }
 
     /// Remember the row the submenu of `level` (1 = a top-level menu's submenu) hangs from.
@@ -563,6 +583,9 @@ impl Nav {
             return;
         }
         self.keyboard = true;
+        // The keys have the highlight now: a submenu let go earlier no longer hands it to the row
+        // under the pointer (scrolling one under it, say).
+        self.follow = None;
         ctx.request_repaint();
     }
 
