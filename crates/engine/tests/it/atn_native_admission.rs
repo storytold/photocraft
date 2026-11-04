@@ -34,7 +34,7 @@ fn portable_native_admission_preserves_library_bytes_but_refuses_nonrecordable_e
         assert!(error.contains(id) && error.contains("not permitted"), "{error}");
         let mut session = Session::new();
         let before = session.actions.clone();
-        assert!(session.execute("actions.load", json!({"data":crate::paint::tile::b64_encode(&bytes)})).is_err());
+        assert!(session.execute("actions.load", json!({"data":photocraft_engine::paint::tile::b64_encode(&bytes)})).is_err());
         assert_eq!(session.actions, before, "refusal occurs before installing any action");
     }
     for (id, params) in [("filter.distort.ripple", json!({"amount":1.5,"size":"medium"})), ("file.save", json!({"path":"recorded.png","nativeOption":true}))] {
