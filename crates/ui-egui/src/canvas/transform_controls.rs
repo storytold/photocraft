@@ -58,50 +58,40 @@ pub(super) fn transform_controls_rect(app: &PhotocraftApp, xf: &ViewXform) -> Op
     Some(Rect::from_two_pos(xf.to_screen(b.x0 as f32, b.y0 as f32), xf.to_screen(b.x1 as f32, b.y1 as f32)))
 }
 
-/// The Move tool shows transform handles even before a Free Transform session exists.
-/// Use the same hit areas for pointer-down and hover, so a control never behaves like
-/// resize/rotate while showing the ordinary four-arrow Move cursor (#2871).
+fn controls_quad(r: Rect) -> [[f64; 2]; 4] {
+    [r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom()].map(|p| [f64::from(p.x), f64::from(p.y)])
+}
+
+fn controls_zone(r: Rect, p: Pos2) -> crate::transform_tool::Hit {
+    crate::state::TransformSession::box_hit(&controls_quad(r), [f64::from(p.x), f64::from(p.y)], crate::transform_tool::HANDLE_PX)
+}
+
+/// Share the open session's screen-sized zones before the first interaction (#11097).
 pub(super) fn transform_controls_cursor(r: Rect, p: Pos2) -> Option<egui::CursorIcon> {
-    let handles = [r.left_top(), r.center_top(), r.right_top(), r.right_center(), r.right_bottom(), r.center_bottom(), r.left_bottom(), r.left_center()];
-    let grab = crate::transform_tool::HANDLE_PX as f32;
-    for (i, handle) in handles.into_iter().enumerate() {
-        if handle.distance(p) <= grab {
-            return Some(match i {
-                0 | 4 => egui::CursorIcon::ResizeNwSe,
-                2 | 6 => egui::CursorIcon::ResizeNeSw,
-                1 | 5 => egui::CursorIcon::ResizeVertical,
-                _ => egui::CursorIcon::ResizeHorizontal,
-            });
-        }
-    }
-    // The rotation band: the pointer gives way to the curved rotate arrow (`transform_controls_turn`).
-    in_rotation_band(r, p).then_some(egui::CursorIcon::None)
+    use crate::transform_tool::Hit;
+    Some(match controls_zone(r, p) {
+        Hit::Corner(0 | 2) => egui::CursorIcon::ResizeNwSe,
+        Hit::Corner(_) => egui::CursorIcon::ResizeNeSw,
+        Hit::Edge(0 | 2) => egui::CursorIcon::ResizeVertical,
+        Hit::Edge(_) => egui::CursorIcon::ResizeHorizontal,
+        Hit::Outside => egui::CursorIcon::None,
+        Hit::Inside | Hit::Pivot => egui::CursorIcon::Default,
+    })
 }
 
-fn in_rotation_band(r: Rect, p: Pos2) -> bool {
-    r.expand(18.0).contains(p) && !r.expand(5.0).contains(p)
-}
-
-/// In the rotation band just outside the Move tool's transform controls, the screen direction the
-/// curved rotate arrow bends round: into the box along the nearest corner's bisector, as Free
-/// Transform draws it (#4658). Before, the band showed a plain alias pointer, so nothing said a
-/// drag there rotates.
+/// At any distance outside the controls, the same edge/corner direction as Free Transform.
 pub(super) fn transform_controls_turn(r: Rect, p: Pos2) -> Option<Vec2> {
-    if !in_rotation_band(r, p)
-        || [r.left_top(), r.center_top(), r.right_top(), r.right_center(), r.right_bottom(), r.center_bottom(), r.left_bottom(), r.left_center()]
-            .into_iter()
-            .any(|h| h.distance(p) <= crate::transform_tool::HANDLE_PX as f32)
-    {
+    if controls_zone(r, p) != crate::transform_tool::Hit::Outside {
         return None;
     }
-    let corner = pos2(if p.x < r.center().x { r.left() } else { r.right() }, if p.y < r.center().y { r.top() } else { r.bottom() });
-    Some(vec2((r.center().x - corner.x).signum(), (r.center().y - corner.y).signum()).normalized() * 16.0)
+    let k = crate::state::TransformSession::box_turn_direction(&controls_quad(r), [f64::from(p.x), f64::from(p.y)])?;
+    Some(vec2(k[0] as f32, k[1] as f32) * 16.0)
 }
 
-/// A visible handle starts scaling; the narrow band just outside the box starts rotation.
+/// A visible handle starts scaling; any point outside the box starts rotation.
 /// The interior stays the normal Move-tool drag target.
 pub(super) fn transform_controls_hit(r: Rect, p: Pos2) -> bool {
-    transform_controls_cursor(r, p).is_some()
+    !matches!(controls_zone(r, p), crate::transform_tool::Hit::Inside | crate::transform_tool::Hit::Pivot)
 }
 
 /// Enter the existing Free Transform session when a Move-tool transform control is pressed: on
@@ -138,3 +128,7 @@ pub(super) fn draw_transform_controls(app: &mut PhotocraftApp, painter: &egui::P
         painter.rect_stroke(h, 0.0, Stroke::new(1.0, accent), egui::StrokeKind::Inside);
     }
 }
+
+#[cfg(test)]
+#[path = "../transform_hit_zone_tests.rs"]
+mod hit_zone_tests;
