@@ -1,6 +1,8 @@
 //! Running a filter plug-in over a surface, band by band.
 
 use std::sync::Arc;
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::OnceLock;
 
 use photocraft_color::{ColorMode, PixelFormat, SampleType};
 use photocraft_geom::{Rect, TILE_SIZE, TileCoord};
@@ -75,6 +77,21 @@ fn read_clamped(s: &Surface, rect: Rect, extent: Rect) -> Vec<f32> {
 /// Most bands one run is split into.
 const MAX_BANDS: u64 = 1 << 16;
 
+/// Interpreter-heavy plug-ins can keep more cores busy than Rayon’s usual one worker per
+/// available CPU. Share the extra workers across runs, and honour explicit Rayon pool settings.
+#[cfg(not(target_arch = "wasm32"))]
+fn plugin_pool() -> Option<&'static rayon::ThreadPool> {
+    if rayon::current_thread_index().is_some() || std::env::var_os("RAYON_NUM_THREADS").is_some() {
+        return None;
+    }
+    static POOL: OnceLock<Option<rayon::ThreadPool>> = OnceLock::new();
+    POOL.get_or_init(|| {
+        let cores = std::thread::available_parallelism().map(std::num::NonZeroUsize::get).unwrap_or(1);
+        let workers = cores.saturating_mul(5).div_ceil(2).clamp(1, 64);
+        rayon::ThreadPoolBuilder::new().num_threads(workers).build().ok()
+    }).as_ref()
+}
+
 impl Plugin {
     /// The rectangle a run writes: the layer's content (grown by the plug-in's overlap) or the
     /// canvas, limited to the selection's bounds.
@@ -136,10 +153,14 @@ impl Plugin {
         let deadline = Deadline::new(self.limits());
         let ctx = BandCtx { surface, extent, canvas, selection, fmt, ov, params: Value::Object(resolved) };
         let budget = RunBudget::new(self.limits());
+        #[cfg(not(target_arch = "wasm32"))]
+        let pool = (bands.len() >= 16).then(plugin_pool).flatten();
+        #[cfg(not(target_arch = "wasm32"))]
+        let workers = pool.map_or_else(rayon::current_num_threads, rayon::ThreadPool::current_num_threads);
         // Start with the conservative bound. Its first group supplies a real memory footprint
         // for later groups while preserving the existing parallel error cancellation.
         #[cfg(not(target_arch = "wasm32"))]
-        let mut group = self.limits().parallel_bands(rayon::current_num_threads());
+        let mut group = self.limits().parallel_bands(workers);
         #[cfg(target_arch = "wasm32")]
         let mut group = 1;
         let mut remaining = bands.as_slice();
@@ -165,7 +186,11 @@ impl Plugin {
                 #[cfg(not(target_arch = "wasm32"))]
                 let results: Vec<Result<Surface>> = {
                     use rayon::prelude::*;
-                    slice.par_iter().map(run).collect()
+                    if let Some(pool) = pool {
+                        pool.install(|| slice.par_iter().map(run).collect())
+                    } else {
+                        slice.par_iter().map(run).collect()
+                    }
                 };
                 #[cfg(target_arch = "wasm32")]
                 let results: Vec<Result<Surface>> = slice.iter().map(run).collect();
@@ -189,7 +214,7 @@ impl Plugin {
             if !measured {
                 #[cfg(not(target_arch = "wasm32"))]
                 {
-                    group = self.limits().parallel_bands_for(rayon::current_num_threads(), budget.snapshot().0);
+                    group = self.limits().parallel_bands_for(workers, budget.snapshot().0);
                 }
                 measured = true;
             } else {
@@ -263,10 +288,11 @@ impl Plugin {
 fn encode_band(surface: &Surface, band: Rect, data: &[f32]) -> Surface {
     let mut s = Surface::with_default(surface.format(), &surface.default_pixel());
     for c in band.tiles() {
-        if let Some(t) = surface.tile(c) {
+        if c.rect().intersect(&band) != c.rect()
+            && let Some(t) = surface.tile(c)
+        {
+            // Only a partial tile needs its pixels outside the band preserved.
             s.tile_mut(c).bytes_mut().copy_from_slice(&t.bytes());
-        } else {
-            s.tile_mut(c);
         }
     }
     s.write_region(band, data);
@@ -281,4 +307,23 @@ struct BandCtx<'a> {
     fmt: PixelFormat,
     ov: i32,
     params: Value,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn encoding_preserves_original_pixels_outside_partial_tiles() {
+        let mut source = Surface::new(PixelFormat::RGBA8);
+        source.fill_rect(Rect::new(0, 0, 512, 256), &[0.0, 1.0, 0.0, 1.0]);
+        let band = Rect::new(10, 0, 512, 256);
+        let data = [1.0, 0.0, 0.0, 1.0].repeat(band.width() as usize * band.height() as usize);
+
+        let encoded = encode_band(&source, band, &data);
+        assert_eq!(encoded.pixel(0, 0), source.pixel(0, 0));
+        assert_eq!(encoded.pixel(9, 255), source.pixel(9, 255));
+        assert_eq!(encoded.pixel(10, 0), vec![1.0, 0.0, 0.0, 1.0]);
+        assert_eq!(encoded.pixel(400, 255), vec![1.0, 0.0, 0.0, 1.0]);
+    }
 }
