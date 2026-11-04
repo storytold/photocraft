@@ -40,12 +40,22 @@ pub fn gpu_lock() -> MutexGuard<'static, ()> {
     guard
 }
 
-/// Creates the Vulkan instance that stays for the rest of the process.
+/// Creates the Vulkan instance that stays for the rest of the process, unless `WGPU_BACKEND`
+/// leaves Vulkan out (to keep a broken Vulkan driver out of the tests).
 #[cfg(target_os = "linux")]
 fn keep_vulkan() {
     use wgpu::{Backends, Instance, InstanceDescriptor};
-    static KEPT: std::sync::OnceLock<Instance> = std::sync::OnceLock::new();
-    KEPT.get_or_init(|| Instance::new(InstanceDescriptor { backends: Backends::VULKAN, ..InstanceDescriptor::new_without_display_handle() }));
+    static KEPT: std::sync::OnceLock<Option<Instance>> = std::sync::OnceLock::new();
+    KEPT.get_or_init(|| {
+        kept_backends(Backends::from_env()).map(|backends| Instance::new(InstanceDescriptor { backends, ..InstanceDescriptor::new_without_display_handle() }))
+    });
+}
+
+/// The backends of the kept instance for a `WGPU_BACKEND` of `env`: Vulkan, if it allows it.
+#[cfg(target_os = "linux")]
+fn kept_backends(env: Option<wgpu::Backends>) -> Option<wgpu::Backends> {
+    let vulkan = env.unwrap_or(wgpu::Backends::VULKAN) & wgpu::Backends::VULKAN;
+    (!vulkan.is_empty()).then_some(vulkan)
 }
 
 #[cfg(test)]
@@ -71,6 +81,16 @@ mod tests {
         for t in threads {
             assert!(t.join().is_ok());
         }
+    }
+
+    /// `WGPU_BACKEND=gl` keeps Vulkan out of the tests: no Vulkan instance is kept then.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_kept_instance_follows_wgpu_backend() {
+        use wgpu::Backends;
+        assert_eq!(kept_backends(None), Some(Backends::VULKAN));
+        assert_eq!(kept_backends(Some(Backends::GL)), None);
+        assert_eq!(kept_backends(Some(Backends::GL | Backends::VULKAN)), Some(Backends::VULKAN));
     }
 
     #[test]

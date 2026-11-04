@@ -12,7 +12,7 @@ use photocraft_gpu::{Compositor, render_to_vec};
 use crate::GPU_LOCK;
 
 fn device() -> Option<(wgpu::Adapter, wgpu::Device, wgpu::Queue)> {
-    let instance = wgpu::Instance::default();
+    let instance = crate::instance();
     let Ok(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) else {
         eprintln!("skipping: no adapter");
         return None;
