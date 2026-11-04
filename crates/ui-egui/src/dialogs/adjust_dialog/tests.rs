@@ -1345,3 +1345,25 @@ fn command_digits_pick_the_levels_and_curves_channel() {
         }
     }
 }
+
+/// With only Green and Blue targeted, Curves lists the combined entry, Green and Blue: the keys
+/// still follow the document's channels, not the list's positions (#11283).
+#[test]
+fn command_digits_follow_native_channels_on_a_partial_curves_target() {
+    let mut app = app_in_mode("rgb");
+    app.run("channel.target", json!({"colors": [1, 2]})).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    open(h.state_mut(), "image.adjustments.curves").unwrap();
+    h.run_steps(2);
+    let combined = popup_channels(&mut h);
+    let mut press = |key| {
+        h.key_press_modifiers(egui::Modifiers::COMMAND, key);
+        h.run_steps(2);
+        popup_channels(&mut h)
+    };
+    assert_eq!(press(egui::Key::Num3), combined, "⌘3 (Red) isn't listed: nothing changes");
+    assert!(press(egui::Key::Num4).iter().any(|c| c == "Green"), "⌘4 is Green, the first listed channel");
+    assert!(press(egui::Key::Num5).iter().any(|c| c == "Blue"));
+    assert_eq!(press(egui::Key::Num2), combined, "⌘2 is the combined entry");
+}
