@@ -823,3 +823,15 @@ fn a_narrow_drawable_is_charged_the_tiles_it_stores() {
     img.layers.truncate(3);
     assert!(open(&img.write()).is_ok(), "three fit");
 }
+
+/// Blank content keeps no tiles after `prune()`, so it is not charged against the pixel budget.
+#[test]
+fn blank_layers_are_not_charged_for_pruned_tiles() {
+    let mut budget = MAX_PIXEL_BYTES;
+    for _ in 0..4 {
+        let mut surface = Surface::new(photocraft_color::PixelFormat::RGBA8);
+        let px = Pixels { width: 1, height: 300_000, channels: 4, data: vec![0.0; 1_200_000] };
+        write_pixels(&mut surface, &px, 0, 0, &mut budget).unwrap();
+    }
+    assert_eq!(budget, MAX_PIXEL_BYTES);
+}

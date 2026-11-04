@@ -390,10 +390,16 @@ fn build(nodes: Vec<Node>, images: &[Image], fmt: PixelFormat, budget: &mut usiz
                     }
                     // Admitted by decoded size; the surface stores whole tiles, many more for a
                     // narrow image or one offset across tile edges.
+                    // The check stays before the write (it allocates the whole rect's tiles); only the
+                    // tiles kept after `prune()` are charged.
                     let tiles = usize::try_from(photocraft_raster::tile_storage_bytes(rect, &fmt)).unwrap_or(usize::MAX);
-                    *budget = budget.checked_sub(tiles).ok_or_else(|| invalid("decoded layers exceed the 1 GiB limit"))?;
+                    if tiles > *budget {
+                        return Err(invalid("decoded layers exceed the 1 GiB limit"));
+                    }
                     surface.write_interleaved(rect, px.data());
                     surface.prune();
+                    let kept = usize::try_from(photocraft_raster::stored_tiles_bytes(surface.tile_count() as u64, &fmt)).unwrap_or(usize::MAX);
+                    *budget = budget.saturating_sub(kept);
                 }
                 layer.content = LayerContent::Raster(surface);
                 out.push(layer);

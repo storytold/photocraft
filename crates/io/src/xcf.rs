@@ -590,10 +590,17 @@ fn write_pixels(surface: &mut Surface, px: &Pixels, x: i32, y: i32, budget: &mut
     if surface.channels() != px.channels || px.data.len() != (px.width as usize) * (px.height as usize) * px.channels {
         return Err(invalid("pixel data does not match the drawable"));
     }
+    // Checked before the write (it allocates the whole rect's tiles); only the tiles kept after
+    // `prune()` are charged.
     let tiles = usize::try_from(photocraft_raster::tile_storage_bytes(rect, &surface.format())).unwrap_or(usize::MAX);
-    *budget = budget.checked_sub(tiles).ok_or_else(|| invalid("the layers exceed the 1 GiB pixel limit"))?;
+    if tiles > *budget {
+        return Err(invalid("the layers exceed the 1 GiB pixel limit"));
+    }
+    let before = surface.tile_count();
     surface.write_region(rect, &px.data);
     surface.prune();
+    let added = surface.tile_count().saturating_sub(before) as u64;
+    *budget = budget.saturating_sub(usize::try_from(photocraft_raster::stored_tiles_bytes(added, &surface.format())).unwrap_or(usize::MAX));
     Ok(())
 }
 

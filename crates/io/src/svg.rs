@@ -1203,7 +1203,9 @@ impl Conv {
     }
 
     /// Check both retained and transient memory before rendering; charge only retained output.
-    fn can_retain_pixels(&mut self, pixels: u64) -> bool {
+    /// `pixels` are the output's whole-tile pixels; `scratch_pixels` are those of the temporary
+    /// pixmap and f32 buffers, which cover only the logical box.
+    fn can_retain_pixels(&mut self, pixels: u64, scratch_pixels: u64) -> bool {
         let bytes = pixels.saturating_mul(self.fmt.bytes_per_pixel() as u64);
         if bytes > self.pixel_budget {
             self.note("pixel-budget", "SVG: some rasterised elements were omitted because they exceeded the remaining pixel memory budget".into());
@@ -1211,7 +1213,7 @@ impl Conv {
         }
         // surface() converts the RGBA8 pixmap into f32 scratch space before writing
         // sample-format tiles. All three buffers briefly coexist with retained layers.
-        let temporary = pixels.saturating_mul(4 + self.fmt.channels() as u64 * 4 + self.fmt.bytes_per_pixel() as u64);
+        let temporary = scratch_pixels.saturating_mul(4 + self.fmt.channels() as u64 * 4) + pixels.saturating_mul(self.fmt.bytes_per_pixel() as u64);
         if self.retained_pixel_bytes.saturating_add(temporary) > MAX_PEAK_PIXEL_BYTES {
             self.note("pixel-peak", "SVG: some rasterised elements were omitted to bound temporary conversion memory".into());
             return false;
@@ -1417,7 +1419,7 @@ impl Conv {
         .intersect(&self.canvas);
         // Whole tiles, as the cache stores them: a narrow shape keeps far more than its area.
         let pixels = area.tile_count() * (photocraft_geom::TILE_SIZE as u64).pow(2);
-        if self.can_retain_pixels(pixels) {
+        if self.can_retain_pixels(pixels, pixels) {
             sh.cache = Some(photocraft_vector::render_shape(&sh, self.fmt, self.canvas));
             let bytes = pixels * self.fmt.bytes_per_pixel() as u64;
             self.pixel_budget -= bytes;
@@ -1492,8 +1494,9 @@ impl Conv {
             return None;
         }
         // The layer keeps whole tiles over its box, however narrow the box.
+        let logical = pixels;
         let pixels = Rect::new(x0, y0, x1, y1).tile_count() * (photocraft_geom::TILE_SIZE as u64).pow(2);
-        if !self.can_retain_pixels(pixels) {
+        if !self.can_retain_pixels(pixels, logical) {
             return None;
         }
         let Some(mut pixmap) = pixmap(w, h) else {
