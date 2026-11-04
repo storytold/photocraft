@@ -159,40 +159,57 @@ fn fill_layer(doc: &mut Document, id: Result<LayerId>, cov: &Coverage, own_pixel
         (y as usize).checked_mul(w).and_then(|i| i.checked_add(x as usize)).and_then(|i| labels.get(i)).copied().unwrap_or(0)
     };
     let n = surf.format().channels().max(1);
-    let filled: Vec<(Rect, Vec<f32>)> = pieces
-        .par_iter()
-        .enumerate()
-        .map(|(k, bounds)| -> Result<(Rect, Vec<f32>)> {
-            let k = k as u32 + 1;
-            let (window, px) = crate::fill_cmds::content_aware_native(
-                surf,
-                *bounds,
-                canvas,
-                true,
-                SEED,
-                |x, y| label(x, y) == k,
-                // A partial active layer (EdgeHalf in #10868) must extend its own image, not
-                // sample its empty canvas rows into the new strip. Keep legacy sampling intact.
-                |x, y| label(x, y) == 0 && (!own_pixels || !surf.format().alpha || surf.sample_channel(x, y, n.saturating_sub(1)) > 0.0),
-            )?;
-            // The piece's bounds, its pixels from the fill and the rest as they were.
-            let mut out = surf.read_region(*bounds);
-            let ww = window.width() as usize;
-            for y in bounds.y0..bounds.y1 {
-                for x in bounds.x0..bounds.x1 {
-                    if label(x, y) != k || !window.contains(x, y) {
-                        continue;
-                    }
-                    let src = ((y - window.y0) as usize * ww + (x - window.x0) as usize) * n;
-                    let dst = ((y - bounds.y0) as usize * bounds.width() as usize + (x - bounds.x0) as usize) * n;
-                    if let (Some(s), Some(d)) = (px.get(src..src + n), out.get_mut(dst..dst + n)) {
-                        d.copy_from_slice(s);
-                    }
+    let donor_bounds = own_pixels.then(|| if surf.format().alpha { surf.content_bounds().intersect(&canvas) } else { canvas });
+    let fill_piece = |(k, bounds): (usize, &Rect)| -> Result<(Rect, Vec<f32>)> {
+        let k = k as u32 + 1;
+        // A partial active layer can have no donor near a distant turned corner. Only that
+        // added target may widen its sampling envelope; its hole and output stay unchanged.
+        let usable = |x, y| label(x, y) == 0 && (!own_pixels || !surf.format().alpha || surf.sample_channel(x, y, n.saturating_sub(1)) > 0.0);
+        let sampling_bounds = if let Some(donor_bounds) = donor_bounds {
+            let window = crate::fill_cmds::sampling_window(*bounds, canvas).intersect(&donor_bounds);
+            if (window.y0..window.y1).any(|y| (window.x0..window.x1).any(|x| usable(x, y))) {
+                *bounds
+            } else {
+                // Empty donors still reach the existing native sampling error and roll back.
+                bounds.union(&donor_bounds)
+            }
+        } else {
+            *bounds
+        };
+        let (window, px) = crate::fill_cmds::content_aware_native(
+            surf,
+            sampling_bounds,
+            canvas,
+            true,
+            SEED,
+            |x, y| label(x, y) == k,
+            // A partial active layer (EdgeHalf in #10868) must extend its own image, not
+            // sample its empty canvas rows into the new strip. Keep legacy sampling intact.
+            usable,
+        )?;
+        // The piece's bounds, its pixels from the fill and the rest as they were.
+        let mut out = surf.read_region(*bounds);
+        let ww = window.width() as usize;
+        for y in bounds.y0..bounds.y1 {
+            for x in bounds.x0..bounds.x1 {
+                if label(x, y) != k || !window.contains(x, y) {
+                    continue;
+                }
+                let src = ((y - window.y0) as usize * ww + (x - window.x0) as usize) * n;
+                let dst = ((y - bounds.y0) as usize * bounds.width() as usize + (x - bounds.x0) as usize) * n;
+                if let (Some(s), Some(d)) = (px.get(src..src + n), out.get_mut(dst..dst + n)) {
+                    d.copy_from_slice(s);
                 }
             }
-            Ok((*bounds, out))
-        })
-        .collect::<Result<_>>()?;
+        }
+        Ok((*bounds, out))
+    };
+    let filled: Vec<(Rect, Vec<f32>)> = if own_pixels {
+        // A fallback window can span the canvas: keep only one added-target window live.
+        pieces.iter().enumerate().map(fill_piece).collect::<Result<_>>()?
+    } else {
+        pieces.par_iter().enumerate().map(fill_piece).collect::<Result<_>>()?
+    };
     let surf = doc.layer_mut(id).and_then(|l| l.surface_mut()).ok_or_else(|| EngineError::Other("Content-Aware fill needs a pixel layer".into()))?;
     for (r, px) in filled {
         surf.write_region(r, &px);

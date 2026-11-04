@@ -165,7 +165,9 @@ fn turned_rows_sample_each_target_and_leave_other_layers_at_plain_crop() {
         let p = frame(true);
         let plain = plain_control(&mut s, &p);
         let past = s.active().unwrap().history.past_len();
-        crop(&mut s, p, true);
+        let mut p = p;
+        p["contentAware"] = json!(true);
+        s.execute("image.crop", p).unwrap_or_else(|error| panic!("turned row {row}, active {active:?}: {error}"));
         let d = doc(&s);
         pixel(d, active, 850, 400, if row == 1 { BLUE } else { GREEN });
         assert!(d.layer(active).unwrap().surface().unwrap().content_bounds().contains(850, 400));
