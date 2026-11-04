@@ -15,6 +15,7 @@ pub enum Error {
     Allocation(AllocationError),
     FormatMismatch,
     InvalidOpacity,
+    NonFiniteSample,
 }
 
 impl fmt::Display for Error {
@@ -25,6 +26,7 @@ impl fmt::Display for Error {
             Self::Allocation(error) => error.fmt(f),
             Self::FormatMismatch => f.write_str("Smart filter input and result formats differ"),
             Self::InvalidOpacity => f.write_str("Smart filter opacity must be finite and between zero and one"),
+            Self::NonFiniteSample => f.write_str("Smart filter samples must be finite"),
         }
     }
 }
@@ -48,6 +50,7 @@ fn check(ctl: &Interrupt<'_>) -> Result<(), Error> {
 /// `area` is the caller's native mixing extent, normally the union of input/result content
 /// bounds. Non-Normal coverage changes select source-over only at the affected pixel.
 /// Alpha-preserving filters instead edit existing coverage, including at fractional opacity.
+/// Processed F32 samples are validated before blending and after native color conversion.
 /// The caller must admit the retained output tiles; scratch is bounded to three tile buffers.
 pub fn mix(base: &Surface, filtered: &Surface, area: Rect, mode: BlendMode, opacity: f32, ctl: &Interrupt<'_>) -> Result<Surface, Error> {
     check(ctl)?;
@@ -73,12 +76,18 @@ pub fn mix(base: &Surface, filtered: &Surface, area: Rect, mode: BlendMode, opac
         values.try_reserve_exact(b.len()).map_err(|_| AllocationError::NotEnoughMemory { bytes })?;
         values.resize(b.len(), 0.);
         for ((bp, tp), op) in b.chunks_exact(n).zip(t.chunks_exact(n)).zip(values.chunks_exact_mut(n)) {
+            if fmt.sample == SampleType::F32 && bp.iter().chain(tp).any(|value| !value.is_finite()) {
+                return Err(Error::NonFiniteSample);
+            }
             let b = photocraft_raster::to_rgba(&fmt, bp);
             let t = photocraft_raster::to_rgba(&fmt, tp);
             if mode != BlendMode::Normal && fmt.alpha && bp.last() != tp.last() {
                 let rgba =
                     if fmt.sample == SampleType::F32 { composite_hdr(mode, b, t, opacity) } else { photocraft_color::blend::composite(mode, b, t, opacity) };
                 photocraft_raster::from_rgba_into(&fmt, rgba, op);
+                if fmt.sample == SampleType::F32 && op.iter().any(|value| !value.is_finite()) {
+                    return Err(Error::NonFiniteSample);
+                }
                 continue;
             }
             let cb = [b[0], b[1], b[2]];
@@ -105,6 +114,9 @@ pub fn mix(base: &Surface, filtered: &Surface, area: Rect, mode: BlendMode, opac
                 }
             }
             photocraft_raster::from_rgba_into(&fmt, rgba, op);
+            if fmt.sample == SampleType::F32 && op.iter().any(|value| !value.is_finite()) {
+                return Err(Error::NonFiniteSample);
+            }
         }
         check(ctl)?;
         out.try_write_region(rect, &values)?;
@@ -277,6 +289,45 @@ mod tests {
             let pixel = result.pixel(0, 0);
             assert!(pixel.iter().all(|value| value.is_finite()));
             assert_eq!(pixel, base.pixel(0, 0));
+        }
+    }
+
+    #[test]
+    fn nonfinite_native_samples_fail_atomically_even_in_later_tiles() {
+        let area = Rect::new(0, 0, 257, 1);
+        for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab, ColorMode::Multichannel] {
+            for alpha in [false, true] {
+                let format = PixelFormat::new(mode, SampleType::F32, alpha);
+                let mut bp = vec![0.25; format.channels()];
+                let mut tp = vec![0.75; format.channels()];
+                if alpha {
+                    *bp.last_mut().unwrap() = 0.5;
+                    *tp.last_mut().unwrap() = 0.25;
+                }
+                let mut base = Surface::new(format);
+                let mut filtered = Surface::new(format);
+                base.fill_rect(area, &bp);
+                filtered.fill_rect(area, &tp);
+                for channel in 0..format.channels() {
+                    for value in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+                        for bad_base in [false, true] {
+                            let (mut b, mut t) = (base.clone(), filtered.clone());
+                            let mut bad = if bad_base { bp.clone() } else { tp.clone() };
+                            bad[channel] = value;
+                            if bad_base { &mut b } else { &mut t }.write_pixel(256, 0, &bad);
+                            let before = (b.clone(), t.clone());
+                            for blend in [BlendMode::Normal, BlendMode::Multiply] {
+                                assert_eq!(
+                                    mix(&b, &t, area, blend, 0.5, &Interrupt::NONE),
+                                    Err(Error::NonFiniteSample),
+                                    "{format:?} channel={channel} base={bad_base} {blend:?}"
+                                );
+                            }
+                            assert_eq!((b, t), before);
+                        }
+                    }
+                }
+            }
         }
     }
 

@@ -87,6 +87,54 @@ fn export_psd(doc: &Document) -> Vec<u8> {
 }
 
 #[test]
+fn masked_hdr_smart_filter_cache_survives_psd_and_psb_export() {
+    use photocraft_color::{BlendMode, PixelFormat};
+    use photocraft_doc::{Layer, LayerContent, LayerMask, SmartFilter, SmartObject, SmartSource};
+    use photocraft_geom::Affine;
+    use photocraft_raster::Surface;
+    use std::sync::Arc;
+
+    let mut source = Document::new("uniform HDR source", Size::new(3, 1), ColorMode::Rgb, SampleType::F32);
+    let mut pixels = Surface::new(source.pixel_format());
+    let expected = [4., 2., 0.5, 0.75];
+    pixels.fill_rect(source.bounds(), &expected);
+    source.layers.push(Layer::new("HDR pixels", LayerContent::Raster(pixels.clone())));
+    let bytes = export(&source, "psd", &ExportOptions::default()).unwrap().bytes;
+    let mut smart = SmartObject::new(SmartSource::Embedded { file_name: "source.psd".into(), bytes: Arc::new(bytes) }, Affine::IDENTITY, Some(pixels));
+    // Gaussian blur leaves this uniform source unchanged. Its enabled filter mask
+    // still requires the exporter to recover and store the unmasked filter cache.
+    smart.smart_filters.push(SmartFilter {
+        command: "filter.blur.gaussianBlur".into(),
+        params: serde_json::json!({"radius": 1.}),
+        blend: BlendMode::Normal,
+        opacity: 1.,
+        visible: true,
+    });
+    let mut mask = LayerMask::reveal_all();
+    mask.surface = Surface::with_default(PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false), &[0.5]);
+    smart.filter_mask = Some(mask);
+    let mut doc = Document::new("masked HDR Smart object", source.size, source.mode, source.depth);
+    doc.layers.push(Layer::new("HDR Smart", LayerContent::Smart(smart)));
+    for extension in ["psd", "psb"] {
+        let out = export(&doc, extension, &ExportOptions::default()).unwrap();
+        assert!(!out.warnings.iter().any(|w| w.contains("smart object written as pixels")), "{:?}", out.warnings);
+        assert!(common::strict_block_errors(&out.bytes).is_empty());
+        let file = PsdFile::from_bytes(&out.bytes).unwrap();
+        assert_eq!(file.header.depth, 32);
+        let back = import(&format!("masked.{extension}"), &out.bytes).unwrap().document;
+        let LayerContent::Smart(smart) = &back.layers[0].content else { panic!("Smart object was rasterized") };
+        assert_eq!(smart.smart_filters.len(), 1);
+        assert!(smart.filter_mask.is_some());
+        let cache = smart.cache.as_ref().unwrap();
+        for x in 0..3 {
+            let actual = cache.pixel(x, 0);
+            assert_eq!(actual.len(), expected.len());
+            assert!(actual.iter().zip(expected).all(|(a, b)| a.is_finite() && (a - b).abs() < 1e-5), "{extension} ({x},0): {actual:?}");
+        }
+    }
+}
+
+#[test]
 fn flat_32bit_export_layout() {
     for mode in [ColorMode::Rgb, ColorMode::Grayscale] {
         let doc = Document::new("flat", Size::new(9, 7), mode, SampleType::F32);

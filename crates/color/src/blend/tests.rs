@@ -3,6 +3,46 @@ use super::*;
 const E: f32 = 1e-5;
 
 #[test]
+fn overflowing_hdr_hue_keeps_even_subnormal_source_channel_ordering() {
+    let max = f32::MAX;
+    let cb = [max, -max / 2., 0.];
+    // Backdrop luminosity is .005 * MAX. Pure green at that luminosity is
+    // .005/.59 * MAX, irrespective of the positive source's magnitude.
+    for tiny in [1e-20, f32::from_bits(1)] {
+        let out = blend_rgb_hdr(BlendMode::Hue, cb, [0., tiny, 0.]);
+        assert!(out.iter().all(|v| v.is_finite()), "{tiny}: {out:?}");
+        assert!(out[1] > out[0] && out[1] > out[2], "tiny green hue became gray: {out:?}");
+        assert!((out[1] / max - 0.005 / 0.59).abs() < 1e-6, "{out:?}");
+        assert!((out[0] / max).abs() < 1e-6 && (out[2] / max).abs() < 1e-6, "{out:?}");
+    }
+}
+
+#[test]
+fn hdr_screen_replays_only_nonfinite_results_in_wide_arithmetic() {
+    let max = f32::MAX;
+    assert_eq!(blend_channel_hdr(BlendMode::Screen, 2e19, 2e19), -max);
+    assert_eq!(blend_channel_hdr(BlendMode::Screen, max, max), -max);
+    let values = [-max, -2e19, -1., -0., 0., f32::from_bits(1), 0.25, 1., 2e19, max];
+    for cb in values {
+        for cs in values {
+            let ordinary = cb + cs - cb * cs;
+            let actual = blend_channel_hdr(BlendMode::Screen, cb, cs);
+            assert!(actual.is_finite(), "{cb}, {cs}: {actual}");
+            if ordinary.is_finite() {
+                assert_eq!(actual.to_bits(), ordinary.to_bits(), "ordinary F32 rounding changed for {cb}, {cs}");
+            } else {
+                let (b, s) = (f64::from(cb), f64::from(cs));
+                let expected = (b + s - b * s).clamp(-f64::from(max), f64::from(max)) as f32;
+                assert_eq!(actual.to_bits(), expected.to_bits(), "{cb}, {cs}");
+            }
+            // The integer-depth entry point retains its established arithmetic.
+            assert_eq!(blend_channel(BlendMode::Screen, cb, cs).to_bits(), ordinary.to_bits());
+        }
+    }
+    assert_eq!(blend_rgb_hdr(BlendMode::Screen, [max, -max, 2e19], [max, max, 2e19]), [-max, max, -max]);
+}
+
+#[test]
 fn finite_signed_extreme_nonseparable_hdr_does_not_publish_infinity_or_nan() {
     let max = f32::MAX;
     let gray = [max; 3];

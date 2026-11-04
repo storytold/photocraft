@@ -183,11 +183,22 @@ pub fn blend_channel(mode: BlendMode, cb: f32, cs: f32) -> f32 {
 
 /// [`blend_channel`] for 32-bit float documents, whose values may exceed 1: Linear Dodge (Add)
 /// and Divide don't clip at 1 there (Photoshop's 32-bit Add is how light is added in HDR), only
-/// at `f32::MAX`, so they stay finite. Other modes use [`blend_channel`], including
-/// Multiply's signed finite saturation for both HDR and coverage-compositing callers.
+/// at `f32::MAX`, so they stay finite. Screen retries overflowing finite inputs in F64;
+/// other modes use [`blend_channel`], including Multiply's signed finite saturation for
+/// both HDR and coverage-compositing callers.
 #[inline]
 pub fn blend_channel_hdr(mode: BlendMode, cb: f32, cs: f32) -> f32 {
-    channel(mode, cb, cs, f32::MAX)
+    let out = channel(mode, cb, cs, f32::MAX);
+    if mode == BlendMode::Screen && !out.is_finite() && cb.is_finite() && cs.is_finite() {
+        return screen_hdr_wide(cb, cs);
+    }
+    out
+}
+
+#[cold]
+fn screen_hdr_wide(cb: f32, cs: f32) -> f32 {
+    let (cb, cs) = (f64::from(cb), f64::from(cs));
+    (cb + cs - cb * cs).clamp(-f64::from(f32::MAX), f64::from(f32::MAX)) as f32
 }
 
 /// `B(cb, cs)` with Linear Dodge and Divide clipped at `hi` (1 at integer depths).
@@ -446,13 +457,61 @@ pub fn blend_rgb_hdr(mode: BlendMode, cb: [f32; 3], cs: [f32; 3]) -> [f32; 3] {
     if out.iter().all(|v| v.is_finite()) || cb.iter().chain(&cs).any(|v| !v.is_finite()) {
         return out;
     }
-    // SetLum, SetSat and ClipColor are homogeneous when their gamut bound scales too.
-    // Replay only overflowing finite inputs in a shared normalized domain, then restore
-    // magnitude in f64. Ordinary native arithmetic and its rounding remain unchanged.
-    let scale = cb.iter().chain(&cs).map(|v| f64::from(*v).abs()).fold(1f64, f64::max);
-    let normalized = |c: [f32; 3]| c.map(|v| (f64::from(v) / scale) as f32);
-    let top = (f64::from(f32::MAX) / scale) as f32;
-    blend_rgb_within(mode, normalized(cb), normalized(cs), top).map(|v| (f64::from(v) * scale).clamp(-f64::from(f32::MAX), f64::from(f32::MAX)) as f32)
+    nonseparable_hdr_wide(mode, cb, cs)
+}
+
+/// Only replay overflowing finite inputs. A shared F32 normalization can erase a tiny
+/// source's hue; raw F32 inputs and these helpers' products fit safely in F64.
+#[cold]
+fn nonseparable_hdr_wide(mode: BlendMode, cb: [f32; 3], cs: [f32; 3]) -> [f32; 3] {
+    fn lum(c: [f64; 3]) -> f64 {
+        0.3 * c[0] + 0.59 * c[1] + 0.11 * c[2]
+    }
+    fn sat(c: [f64; 3]) -> f64 {
+        c[0].max(c[1]).max(c[2]) - c[0].min(c[1]).min(c[2])
+    }
+    fn set_sat(c: [f64; 3], s: f64) -> [f64; 3] {
+        let mut idx = [0usize, 1, 2];
+        idx.sort_by(|&a, &b| c[a].total_cmp(&c[b]));
+        let (imin, imid, imax) = (idx[0], idx[1], idx[2]);
+        let mut out = [0.; 3];
+        if c[imax] > c[imin] {
+            out[imid] = (c[imid] - c[imin]) * s / (c[imax] - c[imin]);
+            out[imax] = s;
+        }
+        out
+    }
+    fn set_lum(c: [f64; 3], target: f64) -> [f64; 3] {
+        let d = target - lum(c);
+        let c = c.map(|v| v + d);
+        let l = lum(c);
+        let n = c[0].min(c[1]).min(c[2]);
+        let x = c[0].max(c[1]).max(c[2]);
+        let top = f64::from(f32::MAX);
+        let mut out = c;
+        if n < 0. {
+            let d = l - n;
+            for v in &mut out {
+                *v = if l > 0. && d > 0. { l + (*v - l) * l / d } else { l };
+            }
+        }
+        if x > top {
+            let d = x - l;
+            for v in &mut out {
+                *v = if l < top && d > 0. { l + (*v - l) * (top - l) / d } else { l };
+            }
+        }
+        out
+    }
+    let (cb, cs) = (cb.map(f64::from), cs.map(f64::from));
+    let out = match mode {
+        BlendMode::Hue => set_lum(set_sat(cs, sat(cb)), lum(cb)),
+        BlendMode::Saturation => set_lum(set_sat(cb, sat(cs)), lum(cb)),
+        BlendMode::Color => set_lum(cs, lum(cb)),
+        BlendMode::Luminosity => set_lum(cb, lum(cs)),
+        _ => cs,
+    };
+    out.map(|v| v.clamp(-f64::from(f32::MAX), f64::from(f32::MAX)) as f32)
 }
 
 /// Composite a straight-alpha source over a straight-alpha backdrop with blend mode and opacity.

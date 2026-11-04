@@ -112,6 +112,9 @@ pub fn apply_with(surface: &Surface, area: Rect, bounds: Rect, selection: Option
                     return Err(Error::NonFiniteSample);
                 }
                 from_rgba_into(&surface.format(), mixed, dst);
+                if dst.iter().any(|v| !v.is_finite()) {
+                    return Err(Error::NonFiniteSample);
+                }
                 continue;
             }
             for (v, (a, b)) in mixed.iter_mut().zip(p.into_iter().zip(avg)) {
@@ -308,6 +311,38 @@ mod tests {
         source.write_pixel(1, 0, &[-f32::MAX, 0., 0., -0.5]);
         let before = source.clone();
         assert_eq!(apply_with(&source, b, b, None, &Interrupt::NONE).unwrap_err(), Error::NonFiniteSample);
+        assert_eq!(source, before);
+    }
+
+    #[test]
+    fn alpha_changing_lab_selection_rejects_nonfinite_native_conversion_atomically() {
+        let format = PixelFormat::new(ColorMode::Lab, SampleType::F32, true);
+        let bounds = Rect::new(0, 0, 3, 1);
+        let neutral = 128. / 255.;
+        // Finite signed alpha is hostile but accepted input. Its weights nearly cancel while the
+        // white pixel's color contribution remains, creating finite HDR RGB that overflows Lab.
+        let pixels: [[f32; 4]; 3] = [[1., neutral, neutral, 1.], [0., neutral, neutral, -1.], [0., neutral, neutral, 1e-20]];
+        let mut source = Surface::new(format);
+        let mut selection = Surface::new(PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false));
+        let mut mean = Mean::default();
+        for (x, (pixel, coverage)) in pixels.into_iter().zip([1., 1., 0.5]).enumerate() {
+            assert!(pixel.iter().all(|v| v.is_finite()));
+            source.write_pixel(x as i32, 0, &pixel);
+            selection.write_pixel(x as i32, 0, &[coverage]);
+            let rgba = to_rgba(&format, &pixel);
+            assert!(rgba.iter().all(|v| v.is_finite()));
+            mean.push(rgba, coverage);
+        }
+        let avg = mean.rgba().unwrap();
+        assert!(avg.iter().all(|v| v.is_finite()));
+        assert!(avg[0] > 1e19);
+        assert_ne!(avg[3], pixels[0][3]);
+        // Full selection coverage at the first pixel makes its premultiplied mix exactly avg.
+        let mut native = [0.; 4];
+        from_rgba_into(&format, avg, &mut native);
+        assert!(native.iter().any(|v| !v.is_finite()));
+        let before = source.clone();
+        assert_eq!(apply_with(&source, bounds, bounds, Some(&selection), &Interrupt::NONE).unwrap_err(), Error::NonFiniteSample);
         assert_eq!(source, before);
     }
 }
