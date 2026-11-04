@@ -401,6 +401,16 @@ pub(crate) fn encode(state: &ActionState, keys: &[(String, String)]) -> Result<V
             .ok_or("Actions text exceeds library byte limit")?;
     }
     let groups = sidecar::library_groups(state)?;
+    let wire_names: Vec<String> = groups
+        .iter()
+        .map(|(name, selection)| match selection.raw.as_ref() {
+            Some(row) if row.logical_name == *name => Ok(row.file()?.name.to_string_lossy()),
+            _ => Ok(atn_cmds::wire_set_name(name).to_string()),
+        })
+        .collect::<Result<_>>()?;
+    let mut available =
+        atn_cmds::UniqueNames::new(std::iter::once(atn_cmds::UNGROUPED_SET.to_string()).chain(wire_names.into_iter().filter(|name| !name.is_empty())));
+    let literal_alias = available.claim(atn_cmds::UNGROUPED_SET);
     let mut names = std::collections::HashMap::new();
     for action in &state.list {
         *names.entry(action.name.as_str()).or_insert(0usize) += 1;
@@ -411,7 +421,9 @@ pub(crate) fn encode(state: &ActionState, keys: &[(String, String)]) -> Result<V
         let original = selection.raw.as_ref().map(RowOrigin::file).transpose()?;
         let mut file = original.cloned().unwrap_or_default();
         let wire = atn_cmds::wire_set_name(name);
-        if selection.raw.as_ref().is_none_or(|row| row.logical_name != *name) {
+        if selection.raw.as_ref().is_none_or(|row| row.logical_name != *name)
+            || original.is_some_and(|file| file.name.to_string_lossy() == atn_cmds::UNGROUPED_SET && literal_alias != *name)
+        {
             file.name = UnicodeString::new_nul(wire);
         }
         file.actions.clear();

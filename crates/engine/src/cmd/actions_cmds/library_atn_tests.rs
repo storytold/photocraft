@@ -242,6 +242,9 @@ fn literal_ungrouped_rows_remain_distinct_from_the_unnamed_category() {
     assert_eq!(session.actions.list.iter().map(|action| action.name.as_str()).collect::<Vec<_>>(), ["Named", "Collision"]);
     let loaded = library::decode(&encode(&session.actions)).unwrap();
     assert_eq!(loaded.list.iter().map(|action| action.name.as_str()).collect::<Vec<_>>(), ["Named", "Collision"]);
+    session.execute("actions.delete", json!({"set":"Ungrouped Actions 2"})).unwrap();
+    let loaded = library::decode(&encode(&session.actions)).unwrap();
+    assert_eq!(loaded.list[0].set.as_deref(), Some("Ungrouped Actions 3"), "removing the collision cannot change the surviving logical folder on reload");
 }
 
 fn legacy() -> Vec<u8> {
