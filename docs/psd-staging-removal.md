@@ -83,16 +83,17 @@ and smart export; counts are not gains.
 Independent scalar oracles cover 90,913 packet cases, stored depths, transforms, HDR, signed
 zeros, infinities and distinct quiet/signalling NaNs. Nested one-, two- and four-worker oracles
 preserve bytes, ordering and profile scopes. Workers own disjoint output and private scratch;
-no new threads, locks or mutable shared caches were added. No unresolved correctness/race
+no new production threads, locks or mutable shared caches were added. No unresolved correctness/race
 issue was found; review used ownership and deterministic checks, not a race detector.
 
 Fresh rebased-source gates passed: compositor 422 unit + five integration; PSD 329 unit + 212
 integration/corpus + doctest; I/O 563 unit + 574 integration/corpus; raster 57 unit + 22
 integration. Strict all-target Clippy, formatting, 31-crate layering, wasm and affected
 performance smoke passed, with unchanged smoke reports explicitly reused. Two known main
-release SVG stack-overflow tests remain excluded. Raster units ran serially after an unchanged
-global-reservation test collided in the parallel suite;
-its isolated rerun also passed. The SVG exclusions are:
+release SVG stack-overflow tests remain excluded. The two raster reservation tests now share a
+test-only mutex around their process-wide counter checks. The full raster release suite passes
+with normal parallel execution; all five memory tests also pass 20 runs with 16 test workers.
+The SVG exclusions are:
 
 - `svg::tests::bounded_embedded_svg_gets_only_the_nesting_depth_the_drawing_left`
 - `svg::an_embedded_svg_gets_only_the_nesting_depth_the_drawing_left`
