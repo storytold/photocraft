@@ -452,8 +452,7 @@ pub fn blend_rgb_hdr(mode: BlendMode, cb: [f32; 3], cs: [f32; 3]) -> [f32; 3] {
     let scale = cb.iter().chain(&cs).map(|v| f64::from(*v).abs()).fold(1f64, f64::max);
     let normalized = |c: [f32; 3]| c.map(|v| (f64::from(v) / scale) as f32);
     let top = (f64::from(f32::MAX) / scale) as f32;
-    blend_rgb_within(mode, normalized(cb), normalized(cs), top)
-        .map(|v| (f64::from(v) * scale).clamp(-f64::from(f32::MAX), f64::from(f32::MAX)) as f32)
+    blend_rgb_within(mode, normalized(cb), normalized(cs), top).map(|v| (f64::from(v) * scale).clamp(-f64::from(f32::MAX), f64::from(f32::MAX)) as f32)
 }
 
 /// Composite a straight-alpha source over a straight-alpha backdrop with blend mode and opacity.
