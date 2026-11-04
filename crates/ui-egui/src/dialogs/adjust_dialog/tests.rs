@@ -204,6 +204,38 @@ fn levels_alt_reset_restores_defaults() {
     assert_eq!(field(&h, id, "gamma"), defaults["gamma"]);
 }
 
+/// Photoshop's channel keys in the Levels and Curves dialogs (#11283): ⌘2 shows the composite and
+/// ⌘3, ⌘4, ⌘5 the Red, Green and Blue channels, as do ⌥2 to ⌥5 (Adobe's keys for choosing an
+/// adjustment's channel); a digit with no channel behind it (⌘6 in RGB) changes nothing.
+#[test]
+fn command_and_option_digits_pick_the_dialog_channel() {
+    use egui::{Key, Modifiers};
+    for kind in ["levels", "curves"] {
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app_with_image());
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        open(h.state_mut(), &format!("image.adjustments.{kind}")).unwrap();
+        h.run_steps(2);
+        let mem = dialog_mem(kind).with(if kind == "levels" { "levels-ch" } else { "curves-ch" });
+        let picked = |h: &Harness<'static, PhotocraftApp>| h.ctx.data(|d| d.get_temp::<usize>(mem)).unwrap_or(0);
+        assert_eq!(picked(&h), 0, "{kind}");
+        for (mods, key, want) in [
+            (Modifiers::COMMAND, Key::Num3, 1),
+            (Modifiers::COMMAND, Key::Num5, 3),
+            (Modifiers::COMMAND, Key::Num6, 3),
+            (Modifiers::COMMAND, Key::Num2, 0),
+            (Modifiers::ALT, Key::Num4, 2),
+            (Modifiers::ALT, Key::Num6, 2),
+            (Modifiers::ALT, Key::Num2, 0),
+            (Modifiers::ALT, Key::Num3, 1),
+        ] {
+            h.key_press_modifiers(mods, key);
+            h.run_steps(2);
+            assert_eq!(picked(&h), want, "{kind}: {mods:?} {key:?}");
+        }
+        assert!(popup_channels(&mut h).iter().any(|v| v == "Red"), "{kind}: the popup shows the channel picked");
+    }
+}
+
 fn sample_params(kind: &str) -> Value {
     match kind {
         "brightnessContrast" => json!({"brightness": 40}),

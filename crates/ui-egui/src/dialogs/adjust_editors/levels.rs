@@ -62,11 +62,12 @@ pub(super) fn nearest(xs: &[f32], x: f32) -> Option<u8> {
 
 pub(super) fn levels(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     let t = Tokens::get(ui.ctx());
-    let channels = editor_channels(cx, space_of(v));
+    let space = space_of(v);
+    let channels = editor_channels(cx, space);
     let mut ch = 0;
     let mut auto = false;
     ui.horizontal(|ui| {
-        ch = editor_channel_picker(ui, cx.mem.with("levels-ch"), &channels);
+        ch = editor_channel_picker(ui, cx, space, cx.mem.with("levels-ch"), &channels);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             auto = widgets::secondary_button(ui, tl!("Auto"), 0.0).clicked();
         });
