@@ -476,7 +476,10 @@ fn run_frame(app: &mut PhotocraftApp, frame: Frame, used: Option<u64>, preserve_
         match result {
             Ok(value) => {
                 if let Some(error) = actions_cmds::nested_failure(id, &value).or_else(|| actions_cmds::save_target_closed(&app.session, id, target)) {
-                    failed = Some(json!({"step": i, "id": id, "error": error}));
+                    // Keep the same child-result detail as headless Actions and Scripts.
+                    let mut failure = json!({"step": i, "id": id, "error": error});
+                    failure["result"] = value;
+                    failed = Some(failure);
                     break;
                 }
                 if let Some(inner) = value.get("paused").filter(|p| p.is_object()) {

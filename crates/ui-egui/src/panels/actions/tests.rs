@@ -456,6 +456,10 @@ fn nested_shell_actions_include_view_steps_and_propagate_failures() {
         Some(|id, _| if id == "view.fitOnScreen" { Err(photocraft_engine::EngineError::Other("denied nested view".into())) } else { Ok(()) });
     let r = app.run("actions.play", json!({"action":"Parent"})).unwrap();
     assert!(r["failed"]["error"].as_str().unwrap().contains("denied nested view"));
+    let child = &r["failed"]["result"];
+    assert_eq!(child["action"], "Child");
+    assert_eq!(child["failed"]["id"], "view.fitOnScreen");
+    assert!(child["failed"]["error"].as_str().unwrap().contains("denied nested view"));
     assert!(app.session.actions.playback_stack.is_empty());
     assert_eq!(app.session.actions.playing, 0);
 }
