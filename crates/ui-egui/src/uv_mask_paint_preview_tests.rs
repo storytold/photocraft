@@ -479,7 +479,7 @@ fn gray_fill_preview_skips_full_cpu_worker_for_both_mask_target_forms() {
 }
 
 #[test]
-fn fill_sampler_throttles_samples_but_commit_keeps_latest_raw_transform() {
+fn fill_sampler_coalesces_returned_transform_and_opacity_before_commit() {
     let mut session = photocraft_engine::Session::new();
     session.execute("file.new", json!({"width":512,"height":129})).unwrap();
     session.uv.scene = Some(std::sync::Arc::new(photocraft_uv::Scene::default()));
@@ -507,61 +507,100 @@ fn fill_sampler_throttles_samples_but_commit_keeps_latest_raw_transform() {
     std::sync::Arc::make_mut(&mut state.doc).layer_mut(layer).unwrap().mask = Some(mask);
     let mut app = PhotocraftApp::new(session, Services::default());
     let t0 = std::time::Instant::now();
-    set_fill(&mut app, layer, 0, [8, 0, 40, 32], 0.0);
+    let first_bounds = [8, 0, 40, 32];
+    let moved_bounds = [24, 0, 56, 32];
+    set_fill(&mut app, layer, 0, first_bounds, 0.0);
     let _ = super::fill_mask_proxy_at(&mut app, 0, t0);
     let first_key = super::current_fill_key(&app, 0).unwrap();
-    let (generation, doc, revision, worker_epoch) = {
-        let preview = app.uv_mask_paint_preview.as_ref().unwrap();
-        (preview.generation, preview.doc, preview.revision, std::sync::Arc::clone(&preview.mask_sampler.worker.as_ref().unwrap().cancel_epoch))
-    };
-    app.uv_mask_paint_preview.as_mut().unwrap().mask_sampler.ready =
-        Some(super::FillMaskProxy { generation, doc, revision, layer, index: 0, key: first_key, size: [1, 1], values: std::sync::Arc::new(vec![1.0]) });
+    let worker_epoch = std::sync::Arc::clone(&app.uv_mask_paint_preview.as_ref().unwrap().mask_sampler.worker.as_ref().unwrap().cancel_epoch);
+    let first_deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    let (mut first_proxy, _) = super::fill_mask_proxy_at(&mut app, 0, std::time::Instant::now());
+    while first_proxy.as_ref().is_none_or(|proxy| proxy.key != first_key) {
+        std::thread::sleep(std::time::Duration::from_millis(1));
+        (first_proxy, _) = super::fill_mask_proxy_at(&mut app, 0, std::time::Instant::now());
+        assert!(std::time::Instant::now() < first_deadline, "the first Fill proxy completes before testing its invalidation");
+    }
+    assert_eq!(first_proxy.unwrap().key, first_key);
 
-    set_fill(&mut app, layer, 0, [24, 0, 56, 32], 17.0);
+    set_fill(&mut app, layer, 0, moved_bounds, 17.0);
     assert!(app.uv_mask_paint_preview.as_ref().unwrap().mask_sampler.ready.is_none(), "the proxy for the previous transform no longer matches the current key");
     assert!(std::sync::Arc::ptr_eq(&worker_epoch, &app.uv_mask_paint_preview.as_ref().unwrap().mask_sampler.worker.as_ref().unwrap().cancel_epoch));
     assert_eq!(worker_epoch.load(std::sync::atomic::Ordering::Relaxed), 0, "transform changes keep the existing worker alive");
     let (still_unready, next) = super::fill_mask_proxy_at(&mut app, 0, t0 + std::time::Duration::from_millis(20));
-    let latest_key = super::current_fill_key(&app, 0).unwrap();
-    assert!(still_unready.is_none_or(|proxy| proxy.key != latest_key), "no result can claim parameters that have not been sampled yet");
+    let moved_key = super::current_fill_key(&app, 0).unwrap();
+    assert!(still_unready.is_none_or(|proxy| proxy.key != moved_key), "no result can claim parameters that have not been sampled yet");
     assert!(next.is_some(), "a repaint is scheduled while the worker or cadence is pending");
-    assert_ne!(super::current_fill_key(&app, 0).unwrap(), first_key);
+    assert_ne!(moved_key, first_key);
     {
         let schedule = &app.uv_mask_paint_preview.as_ref().unwrap().mask_sampler.schedule;
         assert_eq!(schedule.last_sampled_at, Some(t0), "the first sample's cadence is preserved");
-        assert_eq!(schedule.latest_key, Some(first_key), "the moved bounds have not launched an early second sample");
+        assert_eq!(schedule.latest_key, None, "the invalidated result is no longer marked ready, but the cadence remains intact");
     }
 
-    set(&mut app, layer, 0, 0.75);
-    let (_, opacity_repaint) = super::fill_mask_proxy_at(&mut app, 0, t0 + std::time::Duration::from_millis(30));
-    assert!(opacity_repaint.is_some(), "opacity changes share the same Fill sample cadence");
+    set_fill(&mut app, layer, 0, first_bounds, 0.0);
+    assert!(app.uv_mask_paint_preview.as_ref().unwrap().mask_sampler.ready.is_none(), "returning to k1 does not resurrect the invalidated proxy");
+    let (returned_proxy, return_repaint) = super::fill_mask_proxy_at(&mut app, 0, t0 + std::time::Duration::from_millis(30));
+    assert!(returned_proxy.is_none(), "k1 is not ready until it is sampled again");
+    assert!(return_repaint.is_some());
     {
-        let preview = app.uv_mask_paint_preview.as_ref().unwrap();
-        assert!(std::sync::Arc::ptr_eq(&worker_epoch, &preview.mask_sampler.worker.as_ref().unwrap().cancel_epoch));
-        assert_eq!(preview.mask_sampler.schedule.last_sampled_at, Some(t0));
-        assert_eq!(preview.mask_sampler.schedule.latest_key, Some(first_key), "opacity does not reset or bypass coalescing");
+        let schedule = &app.uv_mask_paint_preview.as_ref().unwrap().mask_sampler.schedule;
+        assert_eq!(schedule.last_sampled_at, Some(t0));
+        assert_eq!(schedule.latest_key, None, "the schedule does not mistake the invalidated k1 result for a ready one");
     }
-    let latest_key = super::current_fill_key(&app, 0).unwrap();
-    let latest = super::pending(&app).unwrap();
-    assert_eq!(latest.bounds, Some([24, 0, 56, 32]));
-    assert_eq!(latest.opacity, 0.75);
-    assert_eq!(latest.rotation, Some(17.0), "release keeps the raw latest manipulator parameters");
 
     let t50 = t0 + std::time::Duration::from_millis(50);
     let (mut proxy, _) = super::fill_mask_proxy_at(&mut app, 0, t50);
+    assert_eq!(super::current_fill_key(&app, 0), Some(first_key), "the returned transform is k1 again");
+    {
+        let schedule = &app.uv_mask_paint_preview.as_ref().unwrap().mask_sampler.schedule;
+        assert_eq!(schedule.last_sampled_at, Some(t50), "k1 is sampled again at the next 20 Hz interval");
+        assert_eq!(schedule.latest_key, Some(first_key));
+    }
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-    while proxy.as_ref().is_none_or(|proxy| proxy.key != latest_key) {
+    while proxy.as_ref().is_none_or(|proxy| proxy.key != first_key) {
         std::thread::sleep(std::time::Duration::from_millis(1));
         (proxy, _) = super::fill_mask_proxy_at(&mut app, 0, std::time::Instant::now());
-        assert!(std::time::Instant::now() < deadline, "worker publishes the latest coalesced transform");
+        assert!(std::time::Instant::now() < deadline, "worker republishes k1 after it becomes current again");
     }
-    assert_eq!(proxy.unwrap().key, latest_key);
+    assert_eq!(proxy.unwrap().key, first_key);
+    assert!(std::sync::Arc::ptr_eq(&worker_epoch, &app.uv_mask_paint_preview.as_ref().unwrap().mask_sampler.worker.as_ref().unwrap().cancel_epoch));
+
+    set(&mut app, layer, 0, 0.75);
+    let t60 = t0 + std::time::Duration::from_millis(60);
+    let (opacity_proxy, opacity_repaint) = super::fill_mask_proxy_at(&mut app, 0, t60);
+    assert!(opacity_proxy.is_none(), "the old k1 proxy does not represent the updated opacity");
+    assert!(opacity_repaint.is_some(), "opacity changes share the same Fill sample cadence");
+    let latest_key = super::current_fill_key(&app, 0).unwrap();
+    assert_ne!(latest_key, first_key);
+    {
+        let preview = app.uv_mask_paint_preview.as_ref().unwrap();
+        assert!(std::sync::Arc::ptr_eq(&worker_epoch, &preview.mask_sampler.worker.as_ref().unwrap().cancel_epoch));
+        assert_eq!(preview.mask_sampler.schedule.last_sampled_at, Some(t50));
+        assert_eq!(preview.mask_sampler.schedule.latest_key, None, "the opacity change invalidates the k1 proxy without resetting cadence");
+    }
+    let t100 = t0 + std::time::Duration::from_millis(100);
+    let (mut final_proxy, _) = super::fill_mask_proxy_at(&mut app, 0, t100);
+    {
+        let schedule = &app.uv_mask_paint_preview.as_ref().unwrap().mask_sampler.schedule;
+        assert_eq!(schedule.last_sampled_at, Some(t100));
+        assert_eq!(schedule.latest_key, Some(latest_key));
+    }
+    let final_deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while final_proxy.as_ref().is_none_or(|proxy| proxy.key != latest_key) {
+        std::thread::sleep(std::time::Duration::from_millis(1));
+        (final_proxy, _) = super::fill_mask_proxy_at(&mut app, 0, std::time::Instant::now());
+        assert!(std::time::Instant::now() < final_deadline, "worker publishes the latest opacity key");
+    }
     assert!(!super::fill_preview_pending(&app, layer, 0));
+    let latest = super::pending(&app).unwrap();
+    assert_eq!(latest.bounds, Some(first_bounds));
+    assert_eq!(latest.opacity, 0.75);
+    assert_eq!(latest.rotation, Some(0.0));
     app.run("uv.maskPaint.modify", latest.params()).unwrap();
     let committed = app.session.active().unwrap().doc.layer(layer).unwrap().mask.as_ref().unwrap().paint.as_ref().unwrap().layers[0].clone();
-    assert_eq!(committed.fill_bounds, Some([24, 0, 56, 32]));
+    assert_eq!(committed.fill_bounds, Some(first_bounds));
     assert_eq!(committed.opacity, 0.75);
-    assert!(matches!(committed.kind, EffectKind::Fill { rotation, .. } if rotation == 17.0));
+    assert!(matches!(committed.kind, EffectKind::Fill { rotation, .. } if rotation == 0.0));
 }
 
 #[test]

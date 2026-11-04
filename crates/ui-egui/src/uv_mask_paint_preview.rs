@@ -327,8 +327,11 @@ fn invalidate_preview_cache(preview: &mut Preview) {
     preview.materialized = None;
     let current_key = (preview.bounds.is_some() && preview.rotation.is_some())
         .then(|| preview_key(preview.revision, preview.layer, preview.index, preview.opacity, preview.bounds, preview.rotation));
-    if preview.mask_sampler.ready.as_ref().is_some_and(|proxy| Some(proxy.key) != current_key) {
+    if let Some(stale_key) = preview.mask_sampler.ready.as_ref().map(|proxy| proxy.key).filter(|key| Some(*key) != current_key) {
         preview.mask_sampler.ready = None;
+        if preview.mask_sampler.schedule.latest_key == Some(stale_key) {
+            preview.mask_sampler.schedule.latest_key = None;
+        }
     }
 }
 
@@ -447,9 +450,12 @@ pub(crate) fn fill_mask_proxy_at(app: &mut PhotocraftApp, idx: usize, now: Insta
         && result.revision == preview.revision
         && result.layer == preview.layer
         && result.index == preview.index
-        && result.key == key
     {
-        preview.mask_sampler.ready = Some(result);
+        if result.key == key {
+            preview.mask_sampler.ready = Some(result);
+        } else if preview.mask_sampler.schedule.latest_key == Some(result.key) {
+            preview.mask_sampler.schedule.latest_key = None;
+        }
     }
 
     let due = preview.mask_sampler.schedule.accept(now, key);
