@@ -427,14 +427,18 @@ fn recognizes_document_portal_paths() {
 fn document_portal_target_is_refused_before_anything_is_created() {
     let root = Path::new("/run/user/424242");
     let p = root.join("doc/deadbeef/file.psd");
-    let folder = p.parent().unwrap();
-    let folder_existed = folder.exists();
+    // Every level of the portal path the refusal is responsible for: the
+    // per-user root, the `doc` mount under it, and the target folder.
+    let levels = [root.to_path_buf(), root.join("doc"), p.parent().unwrap().to_path_buf()];
+    let existed: Vec<bool> = levels.iter().map(|d| d.exists()).collect();
     let e = atomic_write(&p, b"new").unwrap_err();
     assert_eq!(e.kind(), io::ErrorKind::PermissionDenied);
     assert!(e.to_string().contains("file.psd") && e.to_string().contains("document portal") && e.to_string().contains("not changed"), "{e}");
     let e = atomic_write_stream(&p, &mut |w| w.write_all(b"new")).unwrap_err();
     assert!(e.to_string().contains("document portal"), "{e}");
-    assert_eq!(folder.exists(), folder_existed, "no folder is created on the portal's mount");
+    for (dir, was) in levels.iter().zip(&existed) {
+        assert_eq!(dir.exists(), *was, "no folder is created on the portal's mount: {}", dir.display());
+    }
 }
 
 #[cfg(unix)]
