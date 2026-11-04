@@ -716,7 +716,7 @@ fn agent_space_right_click_with_a_text_field_focused_keeps_the_tool() {
     app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
     app.sync_views();
     app.ui.tool = crate::state::Tool::Move;
-    let field = egui::Id::new("a focused text field");
+    let field = egui::Id::unique("a focused text field");
     egui::text_edit::TextEditState::default().store(&ctx, field);
     ctx.memory_mut(|m| m.request_focus(field));
     assert!(ctx.text_edit_focused(), "the field has focus");
