@@ -468,7 +468,12 @@ fn paste_layers(s: &mut Session, layers: &Document, dx: i32, dy: i32) -> Result<
     let mut present: std::collections::HashMap<[u8; 4], std::collections::HashSet<&[u8]>> = std::collections::HashMap::new();
     // Only when the clipboard carries linked blocks: an ordinary paste would hash every destination file for nothing.
     let is_lnk = |k: &[u8; 4]| matches!(k, b"lnk2" | b"lnk3" | b"lnkD" | b"lnkE");
-    let clipboard_links = copies.metadata.psd_global_blocks.iter().any(|(_, k, _)| is_lnk(k));
+    // and not every such block is already shared with the destination (those are skipped below).
+    let clipboard_links = copies
+        .metadata
+        .psd_global_blocks
+        .iter()
+        .any(|(_, k, data)| is_lnk(k) && !d.doc.metadata.psd_global_blocks.iter().any(|(_, dk, dd)| dk == k && std::sync::Arc::ptr_eq(dd, data)));
     for (_, dk, dd) in d.doc.metadata.psd_global_blocks.iter().filter(|(_, k, _)| clipboard_links && is_lnk(k)) {
         present.entry(*dk).or_default().extend(photocraft_io::linked::records(dd));
     }
