@@ -3123,6 +3123,7 @@ fn file_info_write_removes_newline_separated_single_quoted_attribute() {
     assert_eq!(read_file_info(Some(xmp))["authorTitle"], "Painter");
     let out = write_file_info(Some(xmp), &json!({ "authorTitle": "" }));
     assert!(!out.contains("Painter"), "cleared attribute must be removed: {out}");
+    assert!(out.contains("rdf:about=\"\""), "the rest of the Description stays: {out}");
     assert_eq!(read_file_info(Some(&out))["authorTitle"], "");
 }
 

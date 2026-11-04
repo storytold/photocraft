@@ -289,13 +289,16 @@ fn find_attr<'a>(xmp: &'a str, prop: &str) -> Option<(usize, usize, &'a str)> {
         }
         let end = tag_end(xmp, lt);
         let tag = &xmp[lt..end];
-        let quoted = quoted_spans(tag);
+        let mut in_quote = vec![false; tag.len()];
+        for (a, b) in quoted_spans(tag) {
+            in_quote[a..b].fill(true);
+        }
         let bytes = tag.as_bytes();
         let mut at = 0;
         while at < tag.len() {
             // Anchor on whitespace outside quoted values; the attribute name
             // starts after the whitespace run.
-            let Some(ws) = (at..tag.len()).find(|&i| bytes[i].is_ascii_whitespace() && !quoted.iter().any(|&(a, b)| (a..b).contains(&i))) else {
+            let Some(ws) = (at..tag.len()).find(|&i| bytes[i].is_ascii_whitespace() && !in_quote[i]) else {
                 break;
             };
             let name = ws + tag[ws..].bytes().take_while(|b| b.is_ascii_whitespace()).count();
