@@ -185,6 +185,8 @@ enum NativeTextFixture {
     GroupedCachedType,
 }
 
+/// Writes a real native PSD containing flat or nested raster content, or nested
+/// editable type whose cache is rendered before the observed import takes place.
 fn native_text_fixture(dir: &TempDir, kind: NativeTextFixture) -> std::path::PathBuf {
     use photocraft_color::{ColorMode, PixelFormat, SampleType};
     use photocraft_doc::{
@@ -226,6 +228,8 @@ fn native_text_fixture(dir: &TempDir, kind: NativeTextFixture) -> std::path::Pat
     dir.write("native.psd", &bytes)
 }
 
+/// Checks imported nesting and editable text/font metadata or exact raster pixels,
+/// so an early-return dependency check cannot pass by dropping the fixture's data.
 fn check_native_text_fixture(doc: &photocraft_doc::Document, kind: NativeTextFixture) {
     use photocraft_doc::LayerContent;
     assert_eq!((doc.size.width, doc.size.height), (96, 40));
@@ -267,6 +271,11 @@ fn check_native_text_fixture(doc: &photocraft_doc::Document, kind: NativeTextFix
     }
 }
 
+/// Holds the shared text-engine mutex while importing the same PSD on a worker.
+/// Raster-only input must finish; cached editable type must still wait. The
+/// ten-second receive bound observes that dependency, not font-loading latency.
+/// Release the mutex before joining or asserting, then compare model and pixels
+/// with the unlocked import so the expected timeout cannot strand the worker.
 fn native_text_dependency_case(tag: &str, kind: NativeTextFixture) {
     use std::sync::mpsc;
     use std::time::Duration;
