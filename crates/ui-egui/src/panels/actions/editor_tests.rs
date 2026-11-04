@@ -29,6 +29,51 @@ fn store(mem: &MemBackend) -> std::collections::BTreeMap<String, Vec<u8>> {
 }
 
 #[test]
+fn picker_choices_reach_the_owned_draft_and_only_save_publishes_them() {
+    use egui::accesskit::Role;
+    use egui_kittest::{Harness, kittest::Queryable};
+    struct State {
+        app: PhotocraftApp,
+        page: Page,
+    }
+    let (mut app, mem) = app(Default::default());
+    let page = existing(&mut app);
+    let before = app.session.actions.list.clone();
+    let persisted = store(&mem);
+    let mut harness = Harness::builder().with_size(egui::vec2(650.0, 750.0)).build_ui_state(
+        |ui, state: &mut State| {
+            if !ui.ctx().fonts(|fonts| fonts.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                return;
+            }
+            let view = state.page.get(&mut state.app).unwrap();
+            let swatches = crate::theme::Tokens::get(ui.ctx()).action_swatches();
+            let _ = state.page.metadata(&mut state.app, ui, &view, &swatches);
+        },
+        State { app, page },
+    );
+    PhotocraftApp::setup_context(&harness.ctx, crate::theme::ThemeKind::Studio);
+    harness.run_steps(3);
+    for label in ["Text colour", "Yellow"] {
+        harness.get_by_role_and_label(Role::Button, "Choose icon and color").click();
+        harness.run_steps(3);
+        harness.get_by_role_and_label(Role::Button, label).click();
+        harness.run_steps(3);
+    }
+    let state = harness.state_mut();
+    let view = state.page.get(&mut state.app).unwrap();
+    assert_eq!(action_text(&view, "icon"), "TextColor");
+    assert_eq!(action_text(&view, "color"), "yellow");
+    assert_eq!(state.app.session.actions.list, before);
+    assert_eq!(store(&mem), persisted);
+    state.page.ask_save(&mut state.app, Activity::default()).unwrap();
+    assert_eq!(state.page.answer(&mut state.app, Answer::Save, Activity::default()).unwrap(), Some(Event::Saved { source: Some(0) }));
+    let mut reopened = Session::new();
+    assert!(reopened.attach_preset_store(preset_store::open(Box::new(mem))).is_empty());
+    assert_eq!(reopened.actions.list[0].icon, "TextColor");
+    assert_eq!(reopened.actions.list[0].color, "yellow");
+}
+
+#[test]
 fn untouched_new_page_keeps_one_default_and_leaves_without_publishing() {
     let (mut app, mem) = app(Default::default());
     let before = app.session.actions.list.clone();
