@@ -248,6 +248,45 @@ fn from_rgba_into_matches_from_rgba() {
     }
 }
 
+#[test]
+fn reused_conversion_matches_allocating_pixels() {
+    let modes = [
+        ColorMode::Bitmap,
+        ColorMode::Grayscale,
+        ColorMode::Indexed,
+        ColorMode::Rgb,
+        ColorMode::Cmyk,
+        ColorMode::Lab,
+        ColorMode::Multichannel,
+        ColorMode::Duotone,
+    ];
+    for from in modes.into_iter().flat_map(|m| [false, true].map(move |a| PixelFormat::new(m, SampleType::F32, a))) {
+        for to in modes.into_iter().flat_map(|m| [false, true].map(move |a| PixelFormat::new(m, SampleType::F32, a))) {
+            for value in [-0.0, 0.3, 1.5, f32::NAN, f32::INFINITY] {
+                let px = vec![value; from.channels()];
+                let mut out = vec![42.0; to.channels()];
+                convert_pixel_into(&from, &to, &px, &mut out);
+                assert_eq!(out.iter().map(|v| v.to_bits()).collect::<Vec<_>>(), convert_pixel(&from, &to, &px).iter().map(|v| v.to_bits()).collect::<Vec<_>>());
+            }
+        }
+    }
+    let r = Rect::new(-1, -2, 3, 4);
+    let mut src = Surface::with_default(PixelFormat::RGBA32F, &[0.2, 0.4, 0.6, 0.7]);
+    src.fill_rect(r, &[0.8, 0.6, 0.4, 0.3]);
+    for sample in SampleType::ALL {
+        let to = PixelFormat::new(ColorMode::Lab, sample, true);
+        let converted = src.convert(to);
+        assert_eq!(converted, src.try_convert(to).unwrap());
+        let mut expected = Vec::new();
+        for p in src.read_region(r).as_chunks::<4>().0 {
+            let mut bytes = vec![0; to.bytes_per_pixel()];
+            encode_pixel(&to, &convert_pixel(&src.format(), &to, p), &mut bytes);
+            expected.extend(bytes);
+        }
+        assert_eq!(converted.to_interleaved(r), expected);
+    }
+}
+
 /// Sample counts above the stack capacity use writable storage without truncating channels.
 #[test]
 fn sample_buffer_keeps_stack_fast_path_and_supports_dynamic_channels() {

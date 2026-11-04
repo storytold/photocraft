@@ -1456,6 +1456,7 @@ impl Surface {
         let mut out = Surface::with_default(to, &convert_pixel(&self.format, &to, &self.default_pixel()));
         let from_n = self.channels();
         let mut src = vec![0.0f32; from_n];
+        let mut converted = vec![0.0f32; to.channels()];
         // Each distinct tile converts once; coordinates sharing it share the result (#4531).
         let mut done: std::collections::HashMap<*const Tile, Arc<Tile>> = std::collections::HashMap::new();
         for (c, t) in &self.tiles {
@@ -1470,8 +1471,8 @@ impl Surface {
                 for (k, v) in src.iter_mut().enumerate() {
                     *v = read_sample(&source, self.format.sample, i * from_n + k);
                 }
-                let px = convert_pixel(&self.format, &to, &src);
-                for (k, v) in px.iter().enumerate() {
+                convert_pixel_into(&self.format, &to, &src, &mut converted);
+                for (k, v) in converted.iter().enumerate() {
                     write_sample(&mut dst, to.sample, i * to.channels() + k, *v);
                 }
             }
@@ -1490,6 +1491,7 @@ impl Surface {
         let mut src = Vec::new();
         src.try_reserve_exact(from_n).map_err(|_| AllocationError::NotEnoughMemory { bytes: from_n * std::mem::size_of::<f32>() })?;
         src.resize(from_n, 0.0f32);
+        let mut converted = vec![0.0f32; to.channels()];
         let mut done: std::collections::HashMap<*const Tile, Arc<Tile>> = std::collections::HashMap::new();
         for (c, t) in &self.tiles {
             if let Some(converted) = done.get(&Arc::as_ptr(t)) {
@@ -1504,8 +1506,8 @@ impl Surface {
                 for (k, v) in src.iter_mut().enumerate() {
                     *v = read_sample(&source_bytes, self.format.sample, i * from_n + k);
                 }
-                let px = convert_pixel(&self.format, &to, &src);
-                for (k, v) in px.iter().enumerate() {
+                convert_pixel_into(&self.format, &to, &src, &mut converted);
+                for (k, v) in converted.iter().enumerate() {
                     write_sample(&mut dest_bytes, to.sample, i * to.channels() + k, *v);
                 }
             }
@@ -1549,6 +1551,19 @@ pub fn convert_pixel(from: &PixelFormat, to: &PixelFormat, px: &[f32]) -> Vec<f3
     }
     let rgba = to_rgba(from, px);
     from_rgba(to, rgba)
+}
+
+/// Internal conversion into buffers sized from the two formats.
+fn convert_pixel_into(from: &PixelFormat, to: &PixelFormat, px: &[f32], out: &mut [f32]) {
+    if from.mode == to.mode {
+        let n = from.mode.color_channels();
+        out[..n].copy_from_slice(&px[..n]);
+        if to.alpha {
+            out[n] = if from.alpha { px[n] } else { 1.0 };
+        }
+    } else {
+        from_rgba_into(to, to_rgba(from, px), out);
+    }
 }
 
 pub fn to_rgba(format: &PixelFormat, px: &[f32]) -> [f32; 4] {
