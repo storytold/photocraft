@@ -235,7 +235,7 @@ pub(super) fn empty_source(state: &ActionState, slot: usize) -> Option<Arc<SetMe
     state.atn_set_rows.iter().find(|entry| entry.slot == slot && state.sets.get(slot) == Some(&entry.row)).map(|entry| entry.source.clone())
 }
 
-pub(super) fn install_row(state: &mut ActionState, name: &str, source: Option<Arc<SetMetadata>>) {
+pub(crate) fn install_row(state: &mut ActionState, name: &str, source: Option<Arc<SetMetadata>>) {
     let slot = state.sets.len();
     state.library.rows.resize(slot, None);
     state.library.rows.push(None);

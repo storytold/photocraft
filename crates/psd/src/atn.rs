@@ -58,39 +58,58 @@ pub const MAX_ITEMS: usize = 100_000;
 /// No source bytes are copied or rewritten by this parser.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SpannedAtnArchive {
+    /// Parsed sets in physical file order.
     pub sets: Vec<AtnFile>,
+    /// Byte spans for the sets, in the same order.
     pub spans: Vec<AtnSetSpan>,
 }
 
 /// One physical set, including its original header fields and action occurrences.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AtnSetSpan {
+    /// Half-open input range of the complete set, including its actions.
     pub range: std::ops::Range<usize>,
+    /// Set header through the action count, before the first action.
     pub header: std::ops::Range<usize>,
+    /// Length-prefixed Unicode set name bytes.
     pub name: std::ops::Range<usize>,
+    /// Original expanded-flag byte.
     pub expanded: std::ops::Range<usize>,
+    /// Original four-byte action count.
     pub count: std::ops::Range<usize>,
+    /// Action spans in physical file order.
     pub actions: Vec<AtnActionSpan>,
 }
 
 /// One physical action. Header ranges let a library edit one field without normalizing others.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AtnActionSpan {
+    /// Half-open input range of the complete action, including its steps.
     pub range: std::ops::Range<usize>,
+    /// Action header through the step count, before the first step.
     pub header: std::ops::Range<usize>,
+    /// Original function-key code bytes.
     pub function_key: std::ops::Range<usize>,
+    /// Original Shift-modifier flag byte.
     pub shift: std::ops::Range<usize>,
+    /// Original command-modifier flag byte.
     pub command: std::ops::Range<usize>,
+    /// Original color-label code bytes.
     pub color: std::ops::Range<usize>,
+    /// Length-prefixed Unicode action name bytes.
     pub name: std::ops::Range<usize>,
+    /// Original expanded-flag byte.
     pub expanded: std::ops::Range<usize>,
+    /// Original four-byte step count.
     pub count: std::ops::Range<usize>,
+    /// Step spans in physical file order.
     pub items: Vec<AtnItemSpan>,
 }
 
 /// One original event, even when it maps to several native command steps.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AtnItemSpan {
+    /// Half-open input range of the complete original step.
     pub range: std::ops::Range<usize>,
     /// Expanded, enabled, dialog, dialog-options bytes, in that order.
     pub flags: std::ops::Range<usize>,
