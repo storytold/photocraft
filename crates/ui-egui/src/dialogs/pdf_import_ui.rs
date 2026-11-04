@@ -47,6 +47,29 @@ struct Thumb {
     size: (u32, u32),
 }
 
+/// A page's or image's thumbnail: not tried yet, rendered, or refused. A refused one is not
+/// tried again until the Thumbnail Size changes, so a page that fails (a damaged stream, an
+/// image over the decode budget) neither re-parses the file every frame nor holds back the
+/// thumbnails after it.
+enum Slot {
+    Pending,
+    Ready(Thumb),
+    Failed,
+}
+
+impl Slot {
+    fn ready(&self) -> Option<&Thumb> {
+        match self {
+            Slot::Ready(t) => Some(t),
+            Slot::Pending | Slot::Failed => None,
+        }
+    }
+
+    fn is_pending(&self) -> bool {
+        matches!(self, Slot::Pending)
+    }
+}
+
 /// The file behind the dialog: what the fields can't hold.
 pub struct PdfImport {
     /// The dialog's id.
@@ -62,8 +85,8 @@ pub struct PdfImport {
     images: Option<Vec<PdfImage>>,
     /// The accepted user password of an encrypted file.
     pub password: Option<String>,
-    thumbs: Vec<Option<Thumb>>,
-    image_thumbs: Vec<Option<Thumb>>,
+    thumbs: Vec<Slot>,
+    image_thumbs: Vec<Slot>,
     /// The Thumbnail Size the textures were rendered for.
     thumb_key: String,
     /// Bounding boxes per page, computed when a page's size is first needed.
@@ -140,7 +163,7 @@ pub fn open(app: &mut PhotocraftApp, name: &str, path: Option<&str>, bytes: &[u8
         info,
         images: None,
         password: None,
-        thumbs: (0..pages).map(|_| None).collect(),
+        thumbs: (0..pages).map(|_| Slot::Pending).collect(),
         image_thumbs: Vec::new(),
         thumb_key: String::new(),
         bounds: (0..pages).map(|_| None).collect(),
@@ -286,8 +309,8 @@ fn thumb_side(size: &str) -> u32 {
 /// Renders the missing thumbnails of the list on show, a few per frame.
 fn render_thumbs(st: &mut PdfImport, ctx: &egui::Context, images: bool, size: &str) {
     if st.thumb_key != size {
-        st.thumbs.iter_mut().for_each(|t| *t = None);
-        st.image_thumbs.iter_mut().for_each(|t| *t = None);
+        st.thumbs.iter_mut().for_each(|t| *t = Slot::Pending);
+        st.image_thumbs.iter_mut().for_each(|t| *t = Slot::Pending);
         st.thumb_key = size.to_string();
     }
     let side = thumb_side(size);
@@ -295,34 +318,40 @@ fn render_thumbs(st: &mut PdfImport, ctx: &egui::Context, images: bool, size: &s
     if images {
         if st.images.is_none() {
             st.images = Some(pdf_import::images(&st.bytes, st.password.as_deref()).unwrap_or_default());
-            st.image_thumbs = st.images.as_ref().map_or(Vec::new(), |v| v.iter().map(|_| None).collect());
+            st.image_thumbs = st.images.as_ref().map_or(Vec::new(), |v| v.iter().map(|_| Slot::Pending).collect());
         }
         for (i, slot) in st.image_thumbs.iter_mut().enumerate() {
-            if slot.is_some() || budget == 0 {
+            if !slot.is_pending() || budget == 0 {
                 continue;
             }
             budget -= 1;
-            if let Ok(t) = pdf_import::image_thumbnail(&st.bytes, i + 1, side, st.password.as_deref()) {
-                let img = egui::ColorImage::from_rgba_unmultiplied([t.width as usize, t.height as usize], &t.rgba);
-                *slot = Some(Thumb { tex: ctx.load_texture(format!("pdf-image-thumb-{i}"), img, egui::TextureOptions::LINEAR), size: (t.width, t.height) });
-            }
+            *slot = match pdf_import::image_thumbnail(&st.bytes, i + 1, side, st.password.as_deref()) {
+                Ok(t) => {
+                    let img = egui::ColorImage::from_rgba_unmultiplied([t.width as usize, t.height as usize], &t.rgba);
+                    Slot::Ready(Thumb { tex: ctx.load_texture(format!("pdf-image-thumb-{i}"), img, egui::TextureOptions::LINEAR), size: (t.width, t.height) })
+                }
+                Err(_) => Slot::Failed,
+            };
         }
-        if st.image_thumbs.iter().any(Option::is_none) {
+        if st.image_thumbs.iter().any(Slot::is_pending) {
             ctx.request_repaint();
         }
         return;
     }
     for (i, slot) in st.thumbs.iter_mut().enumerate() {
-        if slot.is_some() || budget == 0 {
+        if !slot.is_pending() || budget == 0 {
             continue;
         }
         budget -= 1;
-        if let Ok(t) = pdf_import::thumbnail(&st.bytes, i + 1, side, st.password.as_deref()) {
-            let img = egui::ColorImage::from_rgba_unmultiplied([t.width as usize, t.height as usize], &t.rgba);
-            *slot = Some(Thumb { tex: ctx.load_texture(format!("pdf-page-thumb-{i}"), img, egui::TextureOptions::LINEAR), size: (t.width, t.height) });
-        }
+        *slot = match pdf_import::thumbnail(&st.bytes, i + 1, side, st.password.as_deref()) {
+            Ok(t) => {
+                let img = egui::ColorImage::from_rgba_unmultiplied([t.width as usize, t.height as usize], &t.rgba);
+                Slot::Ready(Thumb { tex: ctx.load_texture(format!("pdf-page-thumb-{i}"), img, egui::TextureOptions::LINEAR), size: (t.width, t.height) })
+            }
+            Err(_) => Slot::Failed,
+        };
     }
-    if st.thumbs.iter().any(Option::is_none) {
+    if st.thumbs.iter().any(Slot::is_pending) {
         ctx.request_repaint();
     }
 }
@@ -410,7 +439,7 @@ fn left_column(ui: &mut egui::Ui, f: &mut Map<String, Value>, st: &mut PdfImport
             if !ui.is_rect_visible(r) {
                 continue;
             }
-            let thumb = if images { st.image_thumbs.get(i) } else { st.thumbs.get(i) }.and_then(Option::as_ref);
+            let thumb = if images { st.image_thumbs.get(i) } else { st.thumbs.get(i) }.and_then(Slot::ready);
             let on = selected.contains(&(i + 1));
             let paper = Rect::from_center_size(pos2(r.center().x, r.top() + 8.0 + side / 2.0), vec2(side, side));
             let (pw, ph) = thumb.map_or((side, side), |th| {
@@ -654,7 +683,7 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
                 let n = info.pages.len();
                 st.info = Some(info);
                 st.password = Some(pw);
-                st.thumbs = (0..n).map(|_| None).collect();
+                st.thumbs = (0..n).map(|_| Slot::Pending).collect();
                 st.bounds = (0..n).map(|_| None).collect();
                 fields.remove("__needsPassword");
                 fields.remove("password");

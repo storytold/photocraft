@@ -21,7 +21,7 @@ fn doc(s: &Session) -> &Document {
 fn png(dir: &str, name: &str, w: u32, h: u32, color: &str) -> String {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": w, "height": h, "background": color})).unwrap();
-    let path = std::path::Path::new(dir).join(name).to_string_lossy().into_owned();
+    let path = join(dir, name);
     save_doc(doc(&s), &path, None).unwrap();
     path
 }
@@ -3043,7 +3043,7 @@ fn pdf_file(dir: &str, name: &str) -> String {
         out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
     }
     out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
-    let path = std::path::Path::new(dir).join(name).to_string_lossy().into_owned();
+    let path = join(dir, name);
     std::fs::write(&path, out).unwrap();
     path
 }

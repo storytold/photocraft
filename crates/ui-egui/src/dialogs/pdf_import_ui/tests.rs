@@ -362,5 +362,28 @@ fn the_dialog_draws_its_controls() {
     }
     // The thumbnails were rendered.
     let st = h.state().pdf_import.first().expect("held");
-    assert!(st.thumbs.iter().all(Option::is_some), "every page has its thumbnail");
+    assert!(st.thumbs.iter().all(|s| s.ready().is_some()), "every page has its thumbnail");
+}
+
+#[test]
+fn a_failed_thumbnail_is_not_retried_and_does_not_hold_back_the_rest() {
+    // Pages 1–3 each carry an inline image past the decode budget, so their thumbnails are
+    // refused; page 4 is plain. Three tries a frame used to go to the same three failures every
+    // frame (re-parsing the file each time), and page 4 never got its thumbnail.
+    let huge = "q 200 0 0 200 0 0 cm BI /W 40000 /H 40000 /CS /RGB /BPC 8 /F /Fl ID x EI Q";
+    let bytes = pdf(&[(300.0, 300.0, huge), (300.0, 300.0, huge), (300.0, 300.0, huge), (300.0, 300.0, "0 0 1 rg 20 20 260 260 re f")]);
+    let mut app = app();
+    app.open_file("/tmp/pc-test/bad-thumbs.pdf", &bytes).expect("open");
+    let mut st = app.pdf_import.pop().expect("held");
+    let ctx = egui::Context::default();
+    render_thumbs(&mut st, &ctx, false, "small");
+    assert!(st.thumbs[..3].iter().all(|s| matches!(s, Slot::Failed)), "the refused pages are recorded");
+    assert!(st.thumbs[3].is_pending(), "one frame tries three pages");
+    render_thumbs(&mut st, &ctx, false, "small");
+    assert!(st.thumbs[3].ready().is_some(), "the next frame reaches page 4");
+    assert!(!st.thumbs.iter().any(Slot::is_pending), "nothing is left to retry");
+    // A new Thumbnail Size tries every page again.
+    render_thumbs(&mut st, &ctx, false, "large");
+    assert!(st.thumbs[..3].iter().all(|s| matches!(s, Slot::Failed)));
+    assert!(st.thumbs[3].is_pending());
 }

@@ -876,6 +876,15 @@ impl PhotocraftApp {
     }
 }
 
+/// Whether a document opened from `name`'s `bytes` with `opts` must stay untitled rather than
+/// take the PDF as its file, as Photoshop leaves it: a rasterised page, or anything Import PDF
+/// opened (a page or an embedded image). Only a one-image PDF opened directly, like a picture,
+/// keeps the PDF. (The importer says the same through `source_read_only`, which the import hook
+/// doesn't pass on.)
+fn pdf_untitled(name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions) -> bool {
+    photocraft_io::is_pdf_input(name, bytes) && (opts.pdf.is_some() || !photocraft_io::pdf_import::opens_as_image(bytes, None))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -941,13 +950,4 @@ mod tests {
         assert!(app.ui.status.contains("image assets: 2 in"), "{}", app.ui.status);
         let _ = std::fs::remove_dir_all(&root);
     }
-}
-
-/// Whether a document opened from `name`'s `bytes` with `opts` must stay untitled rather than
-/// take the PDF as its file, as Photoshop leaves it: a rasterised page, or anything Import PDF
-/// opened (a page or an embedded image). Only a one-image PDF opened directly, like a picture,
-/// keeps the PDF. (The importer says the same through `source_read_only`, which the import hook
-/// doesn't pass on.)
-fn pdf_untitled(name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions) -> bool {
-    photocraft_io::is_pdf_input(name, bytes) && (opts.pdf.is_some() || !photocraft_io::pdf_import::opens_as_image(bytes, None))
 }
