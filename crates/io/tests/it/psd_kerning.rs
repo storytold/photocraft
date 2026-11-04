@@ -143,6 +143,7 @@ fn optical_kerning_saves_as_metrics_without_txt2() {
 /// #10308: stylistic sets (and other Txt2-only OpenType flags) on a PhotoCraft-native document
 /// write a `Txt2` block and round-trip through save and reopen.
 #[test]
+#[ignore = "a Txt2 written by PhotoCraft makes Photoshop 27 refuse the file, so Txt2-only settings are not saved; see optical_kerning_saves_as_metrics_without_txt2"]
 fn fresh_stylistic_sets_round_trip_through_psd() {
     use photocraft_doc::text::FontFeature;
     let base = CharStyle { font_family: "Inter".into(), size_pt: 24.0, ..Default::default() };
