@@ -944,11 +944,33 @@ fn failed_row_preparation_preserves_existing_tiles() {
     surface.try_write_rows_with(Rect::new(0, 0, 1, 1), |_, _, dst| dst.fill(42)).unwrap();
     let before = surface.clone();
     let result = surface.try_prepare_rows(r, |tiles, _, _| {
-        fill_tile(&mut tiles[0], r, &PixelFormat::GRAY8, &[0], &|_, _, dst: &mut [u8]| dst.fill(7))?;
+        fill_tile(&mut tiles[0], r, &PixelFormat::GRAY8, &[0], &|_, _, dst: &mut [u8]| dst.fill(7), &|| Ok::<(), AllocationError>(()))?;
         Err(AllocationError::NotEnoughMemory { bytes: 1 })
     });
     assert!(matches!(result, Err(AllocationError::NotEnoughMemory { .. })));
     assert_eq!(surface.tile_count(), 1);
     assert_eq!(surface.to_interleaved(Rect::new(0, 0, 1, 1)), vec![42]);
+    assert!(std::sync::Arc::ptr_eq(surface.tiles.values().next().unwrap(), before.tiles.values().next().unwrap()));
+}
+
+#[test]
+fn cancelled_row_write_stops_during_tile_and_preserves_surface() {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    let mut surface = Surface::new(PixelFormat::GRAY8);
+    let r = Rect::new(0, 0, 1, 100);
+    surface.try_write_rows_with(r, |_, _, dst| dst.fill(42)).unwrap();
+    let before = surface.clone();
+    let cancelled = AtomicBool::new(false);
+    let rows = AtomicUsize::new(0);
+    let check = || cancelled.load(Ordering::SeqCst);
+    let result = surface.try_write_rows_with_interrupt(r, &Interrupt::cancel_only(&check), |_, _, dst| {
+        dst.fill(7);
+        rows.fetch_add(1, Ordering::SeqCst);
+        cancelled.store(true, Ordering::SeqCst);
+    });
+    assert_eq!(result, Err(RowWriteError::Cancelled(Cancelled)));
+    assert_eq!(rows.load(Ordering::SeqCst), 1);
+    assert_eq!(surface.to_interleaved(r), before.to_interleaved(r));
     assert!(std::sync::Arc::ptr_eq(surface.tiles.values().next().unwrap(), before.tiles.values().next().unwrap()));
 }

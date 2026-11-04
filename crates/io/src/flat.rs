@@ -6,7 +6,7 @@ use photocraft_codecs::{self as codecs, ChannelLayout, Format, Image, SampleType
 use photocraft_color::{BlendMode, ColorMode, PixelFormat, SampleType};
 use photocraft_doc::{AlphaChannel, Document, Layer, LayerContent};
 use photocraft_geom::{Rect, Size, TILE_SIZE};
-use photocraft_raster::{AllocationError, Interrupt, Surface};
+use photocraft_raster::{AllocationError, Interrupt, RowWriteError, Surface};
 
 use crate::{ExportOptions, ExportResult, ImportResult, IoError, TgaBits, XmpEmbed};
 
@@ -566,7 +566,7 @@ fn image_to_document_with(name: &str, img: &Image, ctl: &Interrupt) -> Result<Im
     let f = document_format(img.layout(), img.sample_type());
     warnings.extend(f.warning.clone());
     ctl.check().map_err(|_| IoError::Cancelled)?;
-    let mut s = image_surface(img, f.layout, f.sample)?;
+    let mut s = image_surface_with(img, f.layout, f.sample, ctl)?;
     ctl.check().map_err(|_| IoError::Cancelled)?;
     ctl.progress(0.95);
     if img.layout().has_alpha() {
@@ -621,6 +621,10 @@ fn single_layer_document(
 /// The pixels of a decoded image as a surface of `fmt`, converting layout and sample type a
 /// band of rows at a time so no second full-size copy of the image is made.
 pub(crate) fn image_surface(img: &Image, target_layout: ChannelLayout, csample: CSample) -> Result<Surface, IoError> {
+    image_surface_with(img, target_layout, csample, &Interrupt::NONE)
+}
+
+fn image_surface_with(img: &Image, target_layout: ChannelLayout, csample: CSample, ctl: &Interrupt) -> Result<Surface, IoError> {
     let mode = match target_layout {
         ChannelLayout::Gray | ChannelLayout::GrayA => ColorMode::Grayscale,
         ChannelLayout::Cmyk | ChannelLayout::CmykA => ColorMode::Cmyk,
@@ -654,7 +658,7 @@ pub(crate) fn image_surface(img: &Image, target_layout: ChannelLayout, csample: 
     });
     let failed = std::sync::atomic::AtomicBool::new(false);
     let (Ok(cw), Ok(ch)) = (i32::try_from(w), i32::try_from(h)) else { return Err(IoError::Unsupported("image too large".into())) };
-    let written = s.try_write_rows_with(Rect::new(0, 0, cw, ch), |y, x0, dst| {
+    let written = s.try_write_rows_with_interrupt(Rect::new(0, 0, cw, ch), ctl, |y, x0, dst| {
         let n = dst.len() / dst_px.max(1);
         let span = usize::try_from(y)
             .ok()
@@ -686,7 +690,10 @@ pub(crate) fn image_surface(img: &Image, target_layout: ChannelLayout, csample: 
             }
         }
     });
-    written.map_err(alloc_error)?;
+    written.map_err(|error| match error {
+        RowWriteError::Allocation(error) => alloc_error(error),
+        RowWriteError::Cancelled(_) => IoError::Cancelled,
+    })?;
     if failed.load(std::sync::atomic::Ordering::Relaxed) {
         return Err(IoError::Unsupported("the decoded image does not match its size".into()));
     }
@@ -2172,11 +2179,22 @@ mod fused_tile_tests {
         let yes = || true;
         let r = import_flat_with_options("t", &bytes, &crate::ImportOptions::default(), &Interrupt::cancel_only(&yes));
         assert!(matches!(r, Err(IoError::Cancelled)), "{:?}", r.map(|_| ()));
-        // Cancelled only once the decode is over: the tiles are not built.
+        // Cancelled on a later poll, after the decode has run.
         let calls = AtomicU32::new(0);
         let after_decode = || calls.fetch_add(1, Ordering::Relaxed) >= 1;
         let r = import_flat_with_options("t", &bytes, &crate::ImportOptions::default(), &Interrupt::cancel_only(&after_decode));
         assert!(matches!(r, Err(IoError::Cancelled)), "{:?}", r.map(|_| ()));
+    }
+
+    #[test]
+    fn document_import_cancels_during_surface_construction() {
+        let img = pixels(64, 64, false);
+        let calls = AtomicU32::new(0);
+        // One document check, one tile check, then row checks. Cancel after two rows.
+        let cancel = || calls.fetch_add(1, Ordering::SeqCst) >= 4;
+        let result = image_to_document_with("t", &img, &Interrupt::cancel_only(&cancel));
+        assert!(matches!(result, Err(IoError::Cancelled)));
+        assert_eq!(calls.load(Ordering::SeqCst), 5);
     }
 
     #[test]

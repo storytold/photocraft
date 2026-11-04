@@ -46,6 +46,30 @@ impl fmt::Display for AllocationError {
 }
 
 impl std::error::Error for AllocationError {}
+
+/// Failure to prepare an interruptible row write.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RowWriteError {
+    Allocation(AllocationError),
+    Cancelled(Cancelled),
+}
+
+impl From<AllocationError> for RowWriteError {
+    fn from(error: AllocationError) -> Self {
+        Self::Allocation(error)
+    }
+}
+
+impl fmt::Display for RowWriteError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Allocation(error) => write!(f, "{error}"),
+            Self::Cancelled(error) => write!(f, "{error}"),
+        }
+    }
+}
+
+impl std::error::Error for RowWriteError {}
 pub mod memory;
 mod scratch_file;
 pub mod spill;
@@ -402,10 +426,13 @@ fn copy_tiles(tiles: &mut [(TileCoord, Arc<Tile>)], r: Rect, bytes: &[u8], w: us
 
 /// Fills one tile of [`Surface::try_write_rows_with`]: makes it writable, then calls `fill` for
 /// each row of `r` inside it.
-fn fill_tile<F>(slot: &mut (TileCoord, Option<Arc<Tile>>), r: Rect, format: &PixelFormat, default_pixel: &[u8], fill: &F) -> Result<(), AllocationError>
+fn fill_tile<F, C, E>(slot: &mut (TileCoord, Option<Arc<Tile>>), r: Rect, format: &PixelFormat, default_pixel: &[u8], fill: &F, check: &C) -> Result<(), E>
 where
     F: Fn(i32, i32, &mut [u8]) + Sync,
+    C: Fn() -> Result<(), E> + Sync,
+    E: From<AllocationError> + Send,
 {
+    check()?;
     let (tc, tile) = slot;
     match tile {
         None => *tile = Some(Arc::new(Tile::try_filled(format, default_pixel)?)),
@@ -421,6 +448,7 @@ where
     let tr = tc.rect().intersect(&r);
     let span = tr.width() as usize * bpp;
     for y in tr.y0..tr.y1 {
+        check()?;
         let row = (y - tc.ty * TILE_SIZE) as usize * TILE_SIZE as usize + (tr.x0 - tc.tx * TILE_SIZE) as usize;
         if let Some(dst) = row.checked_mul(bpp).and_then(|o| data.get_mut(o..o.checked_add(span)?)) {
             fill(y, tr.x0, dst);
@@ -430,21 +458,25 @@ where
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn fill_tiles<F>(tiles: &mut [(TileCoord, Option<Arc<Tile>>)], r: Rect, format: &PixelFormat, default_pixel: &[u8], fill: &F) -> Result<(), AllocationError>
+fn fill_tiles<F, C, E>(tiles: &mut [(TileCoord, Option<Arc<Tile>>)], r: Rect, format: &PixelFormat, default_pixel: &[u8], fill: &F, check: &C) -> Result<(), E>
 where
     F: Fn(i32, i32, &mut [u8]) + Sync,
+    C: Fn() -> Result<(), E> + Sync,
+    E: From<AllocationError> + Send,
 {
     use rayon::prelude::*;
-    tiles.par_iter_mut().try_for_each(|slot| fill_tile(slot, r, format, default_pixel, fill))
+    tiles.par_iter_mut().try_for_each(|slot| fill_tile(slot, r, format, default_pixel, fill, check))
 }
 
 /// Serial counterpart, for the web build.
 #[cfg(target_arch = "wasm32")]
-fn fill_tiles<F>(tiles: &mut [(TileCoord, Option<Arc<Tile>>)], r: Rect, format: &PixelFormat, default_pixel: &[u8], fill: &F) -> Result<(), AllocationError>
+fn fill_tiles<F, C, E>(tiles: &mut [(TileCoord, Option<Arc<Tile>>)], r: Rect, format: &PixelFormat, default_pixel: &[u8], fill: &F, check: &C) -> Result<(), E>
 where
     F: Fn(i32, i32, &mut [u8]) + Sync,
+    C: Fn() -> Result<(), E> + Sync,
+    E: From<AllocationError> + Send,
 {
-    tiles.iter_mut().try_for_each(|slot| fill_tile(slot, r, format, default_pixel, fill))
+    tiles.iter_mut().try_for_each(|slot| fill_tile(slot, r, format, default_pixel, fill, check))
 }
 
 fn decode_tile_row_rgba(fmt: &PixelFormat, t: &[u8], base: usize, dst: &mut [[f32; 4]], row: &mut Vec<f32>) {
@@ -1148,12 +1180,24 @@ impl Surface {
     where
         F: Fn(i32, i32, &mut [u8]) + Sync,
     {
-        self.try_prepare_rows(r, |tiles, format, default_pixel| fill_tiles(tiles, r, format, default_pixel, &fill))
+        self.try_prepare_rows(r, |tiles, format, default_pixel| fill_tiles(tiles, r, format, default_pixel, &fill, &|| Ok(())))
     }
 
-    fn try_prepare_rows<F>(&mut self, r: Rect, prepare: F) -> Result<(), AllocationError>
+    /// Interruptible row write. Cancellation or allocation failure leaves the surface unchanged.
+    /// Checks run before each tile and row; already running callbacks may finish after cancellation.
+    pub fn try_write_rows_with_interrupt<F>(&mut self, r: Rect, ctl: &Interrupt, fill: F) -> Result<(), RowWriteError>
     where
-        F: FnOnce(&mut [(TileCoord, Option<Arc<Tile>>)], &PixelFormat, &[u8]) -> Result<(), AllocationError>,
+        F: Fn(i32, i32, &mut [u8]) + Sync,
+    {
+        self.try_prepare_rows(r, |tiles, format, default_pixel| {
+            fill_tiles(tiles, r, format, default_pixel, &fill, &|| ctl.check().map_err(RowWriteError::Cancelled))
+        })
+    }
+
+    fn try_prepare_rows<F, E>(&mut self, r: Rect, prepare: F) -> Result<(), E>
+    where
+        F: FnOnce(&mut [(TileCoord, Option<Arc<Tile>>)], &PixelFormat, &[u8]) -> Result<(), E>,
+        E: From<AllocationError>,
     {
         if r.is_empty() {
             return Ok(());
