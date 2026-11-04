@@ -1558,13 +1558,19 @@ fn new_text_layer_gets_a_txt2_object_and_frame() {
     assert_eq!(out.path(&["1", "1"]).and_then(E::as_array).unwrap().len(), 2);
     assert_eq!(out.path(&["0", "8", "0"]).and_then(E::as_array).unwrap().len(), 2);
 
-    // An oversized object is never the template (it would be copied once per new layer).
+    // An oversized object is never the template (it would be copied once per new layer); a fresh
+    // point-text object with its own frame is written instead (#10308).
     let filler = "0 ".repeat(5000);
     let big = prev.iter().map(|&b| b as char).collect::<String>().replace("/2 [ << /99 /PC", &format!("/9 [ {filler}] /2 [ << /99 /PC"));
     let big: Vec<u8> = big.chars().map(|c| c as u32 as u8).collect();
     let out = crate::psd::parse_txt2(&crate::psd::build_txt2(&[(0, &old), (1, &new)], Some(&big))).unwrap();
     let object = &out.path(&["1", "1"]).and_then(E::as_array).unwrap()[1];
-    assert!(object.get("1").is_none(), "no copy of an oversized template");
+    assert!(object.get("9").is_none(), "no copy of an oversized template's extras");
+    assert_eq!(
+        object.path(&["1", "0"]),
+        Some(&E::Array(vec![E::Dict(vec![("0".into(), E::Int(1))])])),
+        "a fresh object still names its own frame"
+    );
     assert_eq!(out.path(&["0", "8", "0"]).and_then(E::as_array).unwrap().len(), 2);
 }
 

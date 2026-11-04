@@ -206,7 +206,7 @@ fn char_spans(layer: &TextLayer) -> Vec<(usize, i64)> {
 /// (`/11`). Photoshop reads the character style from here rather than from EngineData, and quit
 /// on a run holding only the auto-kern mode. `None` when `base` has no style dictionary or is
 /// larger than a template may be (it is copied once per run).
-fn txt2_style_runs(layer: &TextLayer, base: &E, fonts: &mut Vec<E>, dpi: f32) -> Option<Vec<E>> {
+fn txt2_style_runs(layer: &TextLayer, base: &E, fonts: &mut Vec<E>, dpi: f32, seed_empty: bool) -> Option<Vec<E>> {
     if !matches!(base.path(&["0", "0", "6"]), Some(E::Dict(_))) || !fits(base, &mut { TEMPLATE_NODES }) {
         return None;
     }
@@ -218,7 +218,7 @@ fn txt2_style_runs(layer: &TextLayer, base: &E, fonts: &mut Vec<E>, dpi: f32) ->
     let mut looked_up = std::collections::HashMap::new();
     for (ri, n) in spans {
         let s = runs.get(ri).map_or(&default, |r| &r.style);
-        let font = *looked_up.entry(postscript_for(s)).or_insert_with_key(|name| txt2_font(fonts, name));
+        let font = *looked_up.entry(postscript_for(s)).or_insert_with_key(|name| txt2_font(fonts, name, seed_empty));
         let mut run = base.clone();
         let style = run.get_mut("0")?.get_mut("0")?.get_mut("6")?;
         if let Some(font) = font {
@@ -540,14 +540,18 @@ fn txt2_font_entry(name: &str, kind: i64) -> E {
 
 /// The index of the PostScript font `name` in a `Txt2` font list (`<< /0 << /99 /CoolTypeFont
 /// /0 << /0 name /2 type >> >> >>` entries), appending it (shaped like the list's first entry)
-/// when missing. An empty list gets a seeded CoolTypeFont entry so PhotoCraft-native blocks still
-/// name a font (#10308).
-fn txt2_font(fonts: &mut Vec<E>, name: &str) -> Option<i64> {
+/// when missing. An empty list gets a seeded CoolTypeFont entry only when `seed_empty` is set —
+/// PhotoCraft-native blocks and files that already have `/0/1` (#10308). Photoshop blocks without
+/// a font list must keep `/0` unchanged (#2374), so seeding is skipped for those.
+fn txt2_font(fonts: &mut Vec<E>, name: &str, seed_empty: bool) -> Option<i64> {
     let named = |f: &E| f.path(&["0", "0", "0"]).and_then(E::as_str) == Some(name);
     if let Some(i) = fonts.iter().position(named) {
         return i64::try_from(i).ok();
     }
     if fonts.is_empty() {
+        if !seed_empty {
+            return None;
+        }
         fonts.push(txt2_font_entry(name, 0));
         return Some(0);
     }
@@ -672,6 +676,9 @@ pub fn build_txt2_at(objects: &[(i32, &TextLayer)], previous: Option<&[u8]>, dpi
     let td_fonts_before = td_fonts.len();
     let mut fonts: Vec<E> = prev.as_ref().and_then(|p| p.path(&["0", "1", "0"]).and_then(E::as_array)).map(<[E]>::to_vec).unwrap_or_default();
     let fonts_before = fonts.len();
+    // Seed an empty CoolTypeFont list only for PhotoCraft-native blocks, or when the file already
+    // has `/0/1`. Photoshop blocks without a font list must keep `/0` byte-stable (#2374).
+    let seed_empty = previous.is_none() || prev.as_ref().and_then(|p| p.path(&["0", "1"])).is_some();
     // Looked up once per save, not per layer: a crafted block with many objects must not cost
     // a pass over all of them for every type layer.
     let all_stubs = prev_objects.iter().all(is_stub);
@@ -781,7 +788,7 @@ pub fn build_txt2_at(objects: &[(i32, &TextLayer)], previous: Option<&[u8]>, dpi
                     .then(|| model.path(&["6", "0"]).and_then(E::as_array).and_then(<[E]>::first).cloned())
                     .flatten()
                     .unwrap_or_else(minimal_txt2_style_run);
-                txt2_style_runs(layer, &base, &mut fonts, dpi)
+                txt2_style_runs(layer, &base, &mut fonts, dpi, seed_empty)
             })
             .flatten();
         let file_runs = reuse.then(|| model.path(&["6", "0"]).and_then(E::as_array)).flatten().and_then(|runs| with_modes(runs, &modes));
@@ -816,7 +823,8 @@ pub fn build_txt2_at(objects: &[(i32, &TextLayer)], previous: Option<&[u8]>, dpi
     // `/1` whatever it holds beside the text objects. A PhotoCraft-native block still gets a
     // frame list (`/0 /8 /0`) so each object's view can name a frame (#10308, #7698). A legacy
     // block with only named resources may lack the numbered `/0` dictionary: create it so
-    // `pad_frames` and the font-list write can run.
+    // `pad_frames` and the font-list write can run. Do not inject `/0/8` into a Photoshop `/0`
+    // that never had frames — that breaks byte-identical unedited saves (#2374).
     let mut outer = prev.clone().unwrap_or_else(|| {
         E::Dict(vec![
             ("98".into(), E::Dict(vec![("0".into(), E::Int(14))])),
@@ -825,7 +833,8 @@ pub fn build_txt2_at(objects: &[(i32, &TextLayer)], previous: Option<&[u8]>, dpi
     });
     if !matches!(outer.get("0"), Some(E::Dict(_))) {
         outer.set("0", E::Dict(vec![("8".into(), E::Dict(vec![("0".into(), E::Array(vec![]))]))]));
-    } else if outer.path(&["0", "8", "0"]).and_then(E::as_array).is_none()
+    } else if frames_needed > 0
+        && outer.path(&["0", "8", "0"]).and_then(E::as_array).is_none()
         && let Some(doc @ E::Dict(_)) = outer.get_mut("0")
     {
         doc.set("8", E::Dict(vec![("0".into(), E::Array(vec![]))]));
@@ -848,15 +857,17 @@ pub fn build_txt2_at(objects: &[(i32, &TextLayer)], previous: Option<&[u8]>, dpi
             }
         }
     }
-    // Write the font list whenever it grew (including the first seed on a PhotoCraft-native block).
+    // Write the font list whenever it grew. Create `/0/1` only when seeding is allowed (native or
+    // the file already had that key); otherwise leave Photoshop's `/0` alone (#2374).
     if fonts.len() != fonts_before
         && let Some(doc @ E::Dict(_)) = outer.get_mut("0")
     {
         match doc.get_mut("1") {
             Some(list @ E::Dict(_)) => list.set("0", E::Array(fonts)),
-            _ => {
+            _ if seed_empty => {
                 doc.set("1", E::Dict(vec![("0".into(), E::Array(fonts))]));
             }
+            _ => {}
         }
     }
     match outer.get_mut("1") {
