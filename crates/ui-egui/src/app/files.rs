@@ -522,8 +522,9 @@ impl PhotocraftApp {
     fn write_save(&mut self, path: String, tiff_layers: Option<bool>, choices: &FormatChoices) -> Result<Value, String> {
         let copy = self.saves_copy(&path, tiff_layers)?;
         let mut settings = choices.apply(ExportSettings { tiff_layers: tiff_layers.unwrap_or(ExportSettings::default().tiff_layers), ..self.save_settings() });
-        if let Some(pdf) = &choices.pdf {
-            let request = photocraft_engine::file_cmds::PdfRequest::resolve(&self.session.color, pdf).map_err(|e| e.to_string())?;
+        if let Some(pdf) = &choices.pdf
+            && let Some(request) = photocraft_engine::file_cmds::PdfRequest::resolve(&self.session.color, pdf).map_err(|e| e.to_string())?
+        {
             settings.pdf = request.options_for(&self.session.active().ok_or("no document")?.doc);
         }
         match self.write_document(path.clone(), &settings, copy)? {

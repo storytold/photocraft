@@ -3,11 +3,13 @@
 use super::*;
 use crate::{FileDialogAnswer, pdf_options_ui};
 use egui_kittest::kittest::Queryable;
+use photocraft_io::PdfXStandard;
 use std::{cell::RefCell, rc::Rc};
 
-/// What one export was asked for: `None` for a plain PDF, else the PDF/X-1a bleed (pt) and
-/// whether the colour is converted.
-type Asked = Option<(f64, bool)>;
+/// What one export was asked for: `None` for a plain PDF, else the PDF/X standard id, the bleed
+/// (pt), whether the document's colour is read through its own profile (converted or embedded)
+/// and whether it is converted.
+type Asked = Option<(String, f64, bool, bool)>;
 /// Each write: the path and what its export was asked for.
 type Writes = Rc<RefCell<Vec<(String, Asked)>>>;
 
@@ -19,7 +21,7 @@ fn pdf_app(to: &str) -> (Prompted, Writes) {
     let written = writes.clone();
     app.services.file_dialog = Some(crate::file_dialog::fake(vec![Some(FileDialogAnswer::SaveTo(to.into()))]).0);
     app.services.export = Some(Box::new(|_, _, settings| {
-        let asked: Asked = settings.pdf.x1a.as_ref().map(|x| (x.bleed_pt, x.source.is_some()));
+        let asked: Asked = settings.pdf.x.as_ref().map(|x| (x.standard.id().to_string(), x.bleed_pt, x.source.is_some(), x.convert));
         Ok((serde_json::to_vec(&asked).unwrap(), Vec::new()))
     }));
     app.services.write = Some(Box::new(move |path, bytes| {
@@ -56,7 +58,11 @@ fn v2_profile_file() -> String {
     let mut b = photocraft_cms::Builtin::CoatedCmyk.profile().to_bytes().to_vec();
     b[8] = 2;
     b[9] = 0x10;
-    let path = std::env::temp_dir().join(format!("photocraft-pdf-tests-v2-{}.icc", std::process::id()));
+    // One file per call: tests run in parallel, and one rewriting a shared file while another
+    // reads it hands the reader a truncated profile.
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!("photocraft-pdf-tests-v2-{}-{n}.icc", std::process::id()));
     std::fs::write(&path, b).unwrap();
     path.to_string_lossy().into_owned()
 }
@@ -75,7 +81,7 @@ fn save_as_to_a_pdf_asks_and_writes_plain_by_default() {
     let (mut h, writes) = pdf_app("t.pdf");
     h.state_mut().save_as(None).unwrap();
     h.run_steps(3);
-    assert!(h.state().pdf_options.as_ref().is_some_and(|p| !p.x1a && !p.copy));
+    assert!(h.state().pdf_options.as_ref().is_some_and(|p| p.standard.is_none() && !p.copy));
     capture(&mut h, "01-pdf-options");
     assert!(writes.borrow().is_empty(), "nothing is written before the answer");
     h.key_press(Key::Enter);
@@ -94,7 +100,7 @@ fn pdf_x1a_writes_the_chosen_condition_and_bleed() {
         let p = h.state_mut().pdf_options.as_mut().unwrap();
         p.candidates.push(v2_condition());
         p.profile = p.candidates.len() - 1;
-        p.x1a = true;
+        p.standard = Some(PdfXStandard::X1a2001);
         p.bleed_mm = 3.0;
     }
     h.run_steps(2);
@@ -103,7 +109,8 @@ fn pdf_x1a_writes_the_chosen_condition_and_bleed() {
     h.run_steps(3);
     let w = writes.borrow();
     assert_eq!(w.len(), 1);
-    let (bleed, converted) = w[0].1.expect("PDF/X-1a");
+    let (standard, bleed, converted, _) = w[0].1.clone().expect("PDF/X-1a");
+    assert_eq!(standard, "x1a2001");
     assert_eq!(w[0].0, "x.pdf");
     assert!((bleed - 3.0 * 72.0 / 25.4).abs() < 1e-9, "3 mm in points: {bleed}");
     assert!(converted, "an RGB document is converted to the output condition");
@@ -118,8 +125,8 @@ fn a_version_4_condition_cant_be_saved_as_x1a() {
     h.run_steps(3);
     {
         let p = h.state_mut().pdf_options.as_mut().unwrap();
-        p.profile = p.candidates.iter().position(|c| !c.fits_x1a()).expect("the built-in working CMYK is v4");
-        p.x1a = true;
+        p.profile = p.candidates.iter().position(|c| !c.fits(PdfXStandard::X1a2001)).expect("the built-in working CMYK is v4");
+        p.standard = Some(PdfXStandard::X1a2001);
     }
     h.run_steps(2);
     capture(&mut h, "03-pdf-x1a-v4-refused");
@@ -170,7 +177,7 @@ fn pdf_x1a_is_recorded_and_scripted_with_the_same_params() {
         let p = h.state_mut().pdf_options.as_mut().unwrap();
         p.candidates.push(v2_condition());
         p.profile = p.candidates.len() - 1;
-        p.x1a = true;
+        p.standard = Some(PdfXStandard::X1a2001);
         p.bleed_mm = 5.0;
         p.candidates[p.profile].spec.clone()
     };
@@ -189,13 +196,72 @@ fn pdf_x1a_is_recorded_and_scripted_with_the_same_params() {
     let w = writes.borrow();
     assert_eq!(w.len(), 2);
     assert_eq!(w[1].0, "s.pdf");
-    assert!(w[1].1.is_some_and(|(bleed, converted)| (bleed - 5.0 * 72.0 / 25.4).abs() < 1e-9 && converted), "{:?}", w[1]);
+    assert!(w[1].1.as_ref().is_some_and(|(_, bleed, converted, _)| (bleed - 5.0 * 72.0 / 25.4).abs() < 1e-9 && *converted), "{:?}", w[1]);
     for bad in [
-        json!({"path": "b.pdf", "pdfStandard": "x4"}),
+        json!({"path": "b.pdf", "pdfStandard": "x5"}),
         json!({"path": "b.pdf", "pdfBleedMm": 3}),
         json!({"path": "b.pdf", "pdfStandard": "x1a2001", "pdfBleedMm": -1}),
     ] {
         assert!(crate::menus::invoke(h.state_mut(), &ctx, "file.saveAs", bad.clone()).is_err(), "{bad}");
     }
     assert_eq!(w.len(), 2, "bad params write nothing");
+}
+
+/// PDF/X-4 takes the built-in ICC v4 CMYK that PDF/X-1a and PDF/X-3 refuse, and with No
+/// Conversion keeps the document's colour; the answer is recorded with `pdfConvert: false`.
+#[test]
+fn pdf_x4_takes_a_version_4_condition_and_can_keep_the_colour() {
+    let (mut h, writes) = pdf_app("x4.pdf");
+    h.state_mut().save_as(None).unwrap();
+    h.run_steps(3);
+    {
+        let p = h.state_mut().pdf_options.as_mut().unwrap();
+        p.profile = p.candidates.iter().position(|c| !c.fits(PdfXStandard::X3_2002)).expect("the built-in working CMYK is v4");
+        assert!(p.candidates[p.profile].fits(PdfXStandard::X4));
+        p.standard = Some(PdfXStandard::X3_2002);
+    }
+    h.run_steps(2);
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert!(writes.borrow().is_empty(), "PDF/X-3 can't take a v4 condition");
+    {
+        let p = h.state_mut().pdf_options.as_mut().unwrap();
+        p.standard = Some(PdfXStandard::X4);
+        p.convert = false;
+    }
+    h.run_steps(2);
+    capture(&mut h, "04-pdf-x4-no-conversion");
+    h.get_by_label("Save PDF").click();
+    h.run_steps(3);
+    let w = writes.borrow();
+    assert_eq!(w.len(), 1);
+    assert_eq!(w[0].1, Some(("x4-2008".to_string(), 0.0, true, false)), "tagged with the document's profile, not converted");
+    let (_, step) = h.state().session.journal.last().cloned().expect("a recorded step");
+    assert_eq!(step["pdfStandard"], "x4-2008");
+    assert_eq!(step["pdfConvert"], false);
+}
+
+/// PDF/X-3 with No Conversion can't embed the document's ICC v4 profile (the built-in sRGB): the
+/// prompt says so and stays until the colour is converted.
+#[test]
+fn pdf_x3_keeping_a_version_4_document_profile_is_refused() {
+    let (mut h, writes) = pdf_app("x3.pdf");
+    h.state_mut().save_as(None).unwrap();
+    h.run_steps(3);
+    {
+        let p = h.state_mut().pdf_options.as_mut().unwrap();
+        p.candidates.push(v2_condition());
+        p.profile = p.candidates.len() - 1;
+        p.standard = Some(PdfXStandard::X3_2002);
+        p.convert = false;
+    }
+    h.run_steps(2);
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert!(writes.borrow().is_empty(), "nothing written");
+    h.state_mut().pdf_options.as_mut().unwrap().convert = true;
+    h.run_steps(2);
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert_eq!(writes.borrow()[0].1, Some(("x3-2002".to_string(), 0.0, true, true)));
 }

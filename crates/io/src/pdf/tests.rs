@@ -139,8 +139,12 @@ fn v2_cmyk() -> std::sync::Arc<Vec<u8>> {
     std::sync::Arc::new(b)
 }
 
+fn pdfx(standard: PdfXStandard, source: Option<std::sync::Arc<Vec<u8>>>, convert: bool, bleed_pt: f64) -> PdfOptions {
+    PdfOptions { x: Some(PdfX { standard, profile: v2_cmyk(), source, convert, intent: photocraft_cms::Intent::RelativeColorimetric, bpc: true, bleed_pt }) }
+}
+
 fn x1a(source: Option<std::sync::Arc<Vec<u8>>>, bleed_pt: f64) -> PdfOptions {
-    PdfOptions { x1a: Some(PdfX1a { profile: v2_cmyk(), source, intent: photocraft_cms::Intent::RelativeColorimetric, bpc: true, bleed_pt }) }
+    pdfx(PdfXStandard::X1a2001, source, true, bleed_pt)
 }
 
 #[test]
@@ -198,10 +202,10 @@ fn x1a_keeps_gray_as_device_gray() {
 #[test]
 fn x1a_refuses_what_it_cant_write() {
     let d = doc(ColorMode::Rgb);
-    let v4 = PdfOptions { x1a: Some(PdfX1a { profile: photocraft_cms::Builtin::CoatedCmyk.profile().to_bytes(), ..x1a(None, 0.0).x1a.unwrap() }) };
+    let v4 = PdfOptions { x: Some(PdfX { profile: photocraft_cms::Builtin::CoatedCmyk.profile().to_bytes(), ..x1a(None, 0.0).x.unwrap() }) };
     let e = export_with_options(&d, &v4).unwrap_err().to_string();
     assert!(e.contains("version 2"), "{e}");
-    let rgb = PdfOptions { x1a: Some(PdfX1a { profile: photocraft_cms::Builtin::Srgb.profile().to_bytes(), ..x1a(None, 0.0).x1a.unwrap() }) };
+    let rgb = PdfOptions { x: Some(PdfX { profile: photocraft_cms::Builtin::Srgb.profile().to_bytes(), ..x1a(None, 0.0).x.unwrap() }) };
     assert!(export_with_options(&d, &rgb).unwrap_err().to_string().contains("CMYK"));
     // The 4 × 2 px page at 72 dpi is 4 × 2 pt: a 1 pt bleed leaves nothing to trim.
     assert!(export_with_options(&d, &x1a(None, 1.0)).unwrap_err().to_string().contains("bleed"));
@@ -215,7 +219,137 @@ fn output_conditions_and_dates() {
     assert_eq!(output_condition_id("PSO Coated v3"), "FOGRA51");
     assert_eq!(output_condition_id("U.S. Web Coated (SWOP) v2"), "CGATS TR 001");
     assert_eq!(output_condition_id("PhotoCraft Coated CMYK"), "Custom");
-    assert_eq!(pdf_date(0), "D:19700101000000+00'00'");
-    assert_eq!(pdf_date(1_760_000_000), "D:20251009085320+00'00'");
     assert_eq!(file_id(b"abc", 1).len(), 32);
+}
+
+/// `bytes` relabelled ICC v2.1 (the repository ships no v2 profile); only the version is read.
+fn as_v2(p: &photocraft_cms::Profile) -> std::sync::Arc<Vec<u8>> {
+    let mut b = p.to_bytes().to_vec();
+    b[8] = 2;
+    b[9] = 0x10;
+    std::sync::Arc::new(b)
+}
+
+/// The text between `open` and the next `close` in `pdf`.
+fn between(pdf: &[u8], open: &str, close: &str) -> String {
+    let s = String::from_utf8_lossy(pdf);
+    let at = s.find(open).expect(open) + open.len();
+    s[at..].split(close).next().unwrap().to_string()
+}
+
+#[test]
+fn x3_keeps_icc_tagged_rgb_for_the_printer_to_convert() {
+    let mut d = doc(ColorMode::Rgb);
+    let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::F32, true);
+    d.layers = vec![Layer::new("Red", LayerContent::Raster(solid(fmt, 0, 0, 4, 2, &[1.0, 0.0, 0.0, 1.0])))];
+    let srgb = as_v2(photocraft_cms::Builtin::Srgb.profile());
+    let out = export_with_options(&d, &pdfx(PdfXStandard::X3_2002, Some(srgb.clone()), false, 0.0)).unwrap();
+    let pdf = &out.bytes;
+    check_structure(pdf);
+    assert!(
+        pdf.starts_with(
+            b"%PDF-1.3
+"
+        ),
+        "PDF/X-3:2002 is PDF 1.3"
+    );
+    assert!(has(pdf, "/GTS_PDFXVersion (PDF/X-3:2002) >>"), "no conformance key: that is PDF/X-1a's");
+    assert!(has(pdf, "/S /GTS_PDFX") && has(pdf, "/DestOutputProfile 6 0 R"));
+    assert!(has(pdf, "/ColorSpace [/ICCBased 8 0 R]"), "the image keeps its RGB, tagged");
+    assert!(has(pdf, "/N 3 /Alternate /DeviceRGB"));
+    assert!(!has(pdf, "/ColorSpace /DeviceRGB"), "never untagged RGB");
+    assert_eq!(stream_after(pdf, "/N 3 /Alternate"), *srgb, "the document's profile embedded whole");
+    assert_eq!(&stream_after(pdf, "/Subtype /Image")[..3], &[255, 0, 0], "the numbers are the document's");
+    assert!(!has(pdf, "/Metadata"), "XMP is PDF/X-4's");
+    assert!(!out.warnings.iter().any(|w| w.contains("converted")));
+}
+
+#[test]
+fn x3_converts_to_the_output_condition_when_asked() {
+    let srgb = as_v2(photocraft_cms::Builtin::Srgb.profile());
+    let out = export_with_options(&doc(ColorMode::Rgb), &pdfx(PdfXStandard::X3_2002, Some(srgb), true, 0.0)).unwrap();
+    check_structure(&out.bytes);
+    assert!(has(&out.bytes, "/ColorSpace /DeviceCMYK") && !has(&out.bytes, "/ICCBased"));
+    assert!(out.warnings.iter().any(|w| w.contains("PDF/X-3:2002: colour converted")), "{:?}", out.warnings);
+}
+
+#[test]
+fn x3_refuses_version_4_profiles_pdf_1_3_cant_hold() {
+    let d = doc(ColorMode::Rgb);
+    // The built-in sRGB is ICC v4: it can't be embedded, only converted from.
+    let v4 = photocraft_cms::Builtin::Srgb.profile().to_bytes();
+    let e = export_with_options(&d, &pdfx(PdfXStandard::X3_2002, Some(v4.clone()), false, 0.0)).unwrap_err().to_string();
+    assert!(e.starts_with("unsupported") || e.contains("PDF/X-3:2002"), "{e}");
+    assert!(e.contains("version 2 only") && e.contains("PDF/X-4"), "{e}");
+    assert!(export_with_options(&d, &pdfx(PdfXStandard::X3_2002, Some(v4), true, 0.0)).is_ok(), "converting from it is fine");
+    let mut opts = pdfx(PdfXStandard::X3_2002, None, true, 0.0);
+    if let Some(x) = &mut opts.x {
+        x.profile = photocraft_cms::Builtin::CoatedCmyk.profile().to_bytes();
+    }
+    let e = export_with_options(&d, &opts).unwrap_err().to_string();
+    assert!(e.contains("ICC version 2 and") && e.contains("save PDF/X-4"), "{e}");
+}
+
+#[test]
+fn x4_writes_pdf_1_6_with_matching_xmp_and_takes_version_4_profiles() {
+    let mut d = doc(ColorMode::Rgb);
+    d.name = "Plakat Köln & Co.psd".into();
+    let mut opts = pdfx(PdfXStandard::X4, Some(photocraft_cms::Builtin::Srgb.profile().to_bytes()), false, 0.0);
+    if let Some(x) = &mut opts.x {
+        x.profile = photocraft_cms::Builtin::CoatedCmyk.profile().to_bytes();
+    }
+    let x = opts.x.as_ref().unwrap();
+    let out = export_x(&d, x, 1_760_000_000).unwrap();
+    let pdf = &out.bytes;
+    check_structure(pdf);
+    assert!(
+        pdf.starts_with(
+            b"%PDF-1.6
+"
+        ),
+        "PDF/X-4 is PDF 1.6"
+    );
+    assert!(has(pdf, "/GTS_PDFXVersion (PDF/X-4) >>"));
+    assert!(has(pdf, "/ColorSpace [/ICCBased 8 0 R]"), "v4 RGB stays tagged");
+    assert!(has(pdf, "/Metadata 9 0 R"));
+    assert_eq!(stream_after(pdf, "/N 4 /Filter"), *photocraft_cms::Builtin::CoatedCmyk.profile().to_bytes(), "a v4 output profile");
+    // Info and XMP agree, as PDF/X-4 preflight checks.
+    assert!(has(pdf, "/CreationDate (D:20251009085320+00'00') /ModDate (D:20251009085320+00'00')"));
+    let xmp = between(pdf, "/Subtype /XML", "endstream");
+    assert!(xmp.contains("<xmp:CreateDate>2025-10-09T08:53:20+00:00</xmp:CreateDate>"), "{xmp}");
+    assert!(xmp.contains("<pdfxid:GTS_PDFXVersion>PDF/X-4</pdfxid:GTS_PDFXVersion>"));
+    assert!(xmp.contains("<pdf:Trapped>False</pdf:Trapped>") && has(pdf, "/Trapped /False"));
+    assert!(xmp.contains("<xmpMM:VersionID>1</xmpMM:VersionID>") && xmp.contains("<xmpMM:RenditionClass>default</xmpMM:RenditionClass>"));
+    assert!(xmp.contains("<xmpMM:DocumentID>uuid:"));
+    assert!(xmp.contains(">Plakat Köln &amp; Co</rdf:li>"), "{xmp}");
+    let title: String = "Plakat Köln & Co".encode_utf16().map(|u| format!("{u:04X}")).collect();
+    assert!(has(pdf, &format!("/Title <FEFF{title}>")), "a non-ASCII title as UTF-16, not question marks");
+    assert!(has(pdf, "/Type /Metadata /Subtype /XML /Length"), "the packet is not compressed");
+}
+
+#[test]
+fn every_standard_keeps_a_cmyk_documents_numbers_in_its_condition() {
+    let mut d = doc(ColorMode::Cmyk);
+    let fmt = PixelFormat::new(ColorMode::Cmyk, SampleType::F32, true);
+    d.layers = vec![Layer::new("Ink", LayerContent::Raster(solid(fmt, 0, 0, 4, 2, &[0.2, 0.4, 0.6, 0.8, 1.0])))];
+    for standard in PdfXStandard::ALL {
+        for convert in [true, false] {
+            let out = export_with_options(&d, &pdfx(standard, None, convert, 0.0)).unwrap();
+            check_structure(&out.bytes);
+            assert!(has(&out.bytes, "/ColorSpace /DeviceCMYK"), "{standard:?}");
+            assert_eq!(&stream_after(&out.bytes, "/Subtype /Image")[..4], &[51, 102, 153, 204], "{standard:?}");
+        }
+    }
+}
+
+#[test]
+fn standards_round_trip_their_ids() {
+    for s in PdfXStandard::ALL {
+        assert_eq!(PdfXStandard::from_id(s.id()), Some(s));
+    }
+    assert_eq!(PdfXStandard::from_id("X4"), Some(PdfXStandard::X4));
+    assert_eq!(PdfXStandard::from_id("x3"), Some(PdfXStandard::X3_2002));
+    assert_eq!(PdfXStandard::from_id("x5"), None);
+    assert_eq!(pdf_text("abc"), "(abc)");
+    assert_eq!(pdf_text("é"), "<FEFF00E9>");
 }

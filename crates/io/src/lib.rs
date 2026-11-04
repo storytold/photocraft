@@ -63,7 +63,7 @@ pub use ora::losses as ora_losses;
 pub mod pattern_map;
 mod pcraft_cache;
 pub mod pdf;
-pub use pdf::{PdfOptions, PdfX1a};
+pub use pdf::{PdfOptions, PdfX, PdfXStandard};
 mod pdn;
 pub use pcraft_cache::PcraftExportCache;
 pub mod pixels;

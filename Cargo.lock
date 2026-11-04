@@ -5285,6 +5285,7 @@ name = "photocraft-io"
 version = "0.20.1"
 dependencies = [
  "blake3",
+ "chrono",
  "craft-docpath",
  "crc32fast",
  "flate2",
@@ -5312,6 +5313,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "tiff",
+ "web-time",
  "zune-core 0.5.3",
  "zune-jpegxl",
 ]

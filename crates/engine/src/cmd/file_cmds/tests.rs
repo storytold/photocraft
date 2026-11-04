@@ -3046,7 +3046,10 @@ fn save_a_copy_writes_pdf_x1a_from_its_params() {
     let refused = join(&dir, "refused.pdf");
     for p in [
         json!({"path": refused, "pdfStandard": "x1a2001", "pdfOutputProfile": "coated-cmyk"}),
-        json!({"path": refused, "pdfStandard": "x4"}),
+        json!({"path": refused, "pdfStandard": "x5"}),
+        json!({"path": refused, "pdfStandard": "x1a2001", "pdfConvert": false}),
+        json!({"path": refused, "pdfConvert": true}),
+        json!({"path": refused, "pdfStandard": "x3-2002", "pdfConvert": "no"}),
         json!({"path": refused, "pdfBleedMm": 3}),
         json!({"path": refused, "pdfStandard": "x1a2001", "pdfBleedMm": 99}),
         json!({"path": refused, "pdfStandard": "x1a2001", "pdfOutputProfile": 7}),
@@ -3054,4 +3057,30 @@ fn save_a_copy_writes_pdf_x1a_from_its_params() {
         assert!(s.execute("file.saveACopy", p.clone()).is_err(), "{p}");
     }
     assert!(std::fs::metadata(&refused).is_err(), "nothing written");
+}
+
+/// `file.saveACopy` writes PDF/X-3:2002 and PDF/X-4 from its params: X-4 takes the built-in ICC v4
+/// CMYK and carries XMP; both keep RGB tagged with the document's profile when `pdfConvert` is
+/// false, and X-3 refuses a v4 profile it would have to embed.
+#[test]
+fn save_a_copy_writes_pdf_x3_and_x4_from_its_params() {
+    let dir = tmp("pdfx34");
+    let mut s = session(72, 36, 8);
+    let x4 = join(&dir, "x4.pdf");
+    s.execute("file.saveACopy", json!({"path": x4, "pdfStandard": "x4-2008", "pdfOutputProfile": "coated-cmyk", "pdfConvert": false})).unwrap();
+    let pdf = std::fs::read(&x4).unwrap();
+    let has = |pdf: &[u8], n: &str| pdf.windows(n.len()).any(|w| w == n.as_bytes());
+    assert!(pdf.starts_with(b"%PDF-1.6"));
+    assert!(has(&pdf, "/GTS_PDFXVersion (PDF/X-4)") && has(&pdf, "<pdfxid:GTS_PDFXVersion>PDF/X-4</pdfxid:GTS_PDFXVersion>"));
+    assert!(has(&pdf, "/ColorSpace [/ICCBased 8 0 R]"), "RGB stays tagged");
+
+    let converted = join(&dir, "x4c.pdf");
+    s.execute("file.saveACopy", json!({"path": converted, "pdfStandard": "x4", "pdfOutputProfile": "coated-cmyk"})).unwrap();
+    let pdf = std::fs::read(&converted).unwrap();
+    assert!(has(&pdf, "/ColorSpace /DeviceCMYK") && !has(&pdf, "/ICCBased"), "converted by default");
+
+    let x3 = join(&dir, "x3.pdf");
+    let e = s.execute("file.saveACopy", json!({"path": x3, "pdfStandard": "x3-2002", "pdfOutputProfile": "coated-cmyk"})).unwrap_err().to_string();
+    assert!(e.contains("PDF/X-3:2002") && e.contains("version 2"), "{e}");
+    assert!(std::fs::metadata(&x3).is_err(), "nothing written");
 }

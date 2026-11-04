@@ -1,8 +1,11 @@
 //! PDF Options: the prompt File › Save As and Save a Copy show before writing a PDF, as
-//! Photoshop's Save Adobe PDF dialog does with its Standard menu: a plain PDF, or PDF/X-1a:2001
-//! for a printer, with the output condition (an ICC v2 CMYK profile) and the bleed already inside
-//! the document. An RGB document, or a CMYK one in another condition, is converted to the output
-//! profile on the way out (Photoshop's Convert to Destination); the document itself is untouched.
+//! Photoshop's Save Adobe PDF dialog does with its Standard menu: a plain PDF, or PDF/X-1a:2001,
+//! PDF/X-3:2002 or PDF/X-4:2008 for a printer, with the output condition (a CMYK profile: ICC v2
+//! for X-1a and X-3, v2 or v4 for X-4), the colour conversion and the bleed already inside the
+//! document. PDF/X-1a converts RGB, or CMYK in another condition, to the output profile on the way
+//! out (Photoshop's Convert to Destination); PDF/X-3 and PDF/X-4 can instead keep the colour in
+//! the document's profile (No Conversion) for the printer to convert. The document itself is
+//! untouched.
 //!
 //! The save is parked in [`Prompt`] while the modal is up (egui is immediate-mode) and written
 //! once answered. Cancel drops the save. The last answer is remembered between sessions.
@@ -11,6 +14,7 @@ use std::sync::Arc;
 
 use photocraft_cms::{ColorSpace, Profile, ProfileClass};
 use photocraft_color::ColorMode;
+use photocraft_io::PdfXStandard;
 
 use crate::PhotocraftApp;
 
@@ -24,9 +28,10 @@ pub struct Candidate {
 }
 
 impl Candidate {
-    /// PDF/X-1a:2001 is PDF 1.3, which knows ICC version 2 only.
-    pub fn fits_x1a(&self) -> bool {
-        self.profile.version.0 == 2
+    /// Whether `standard` can embed this profile: PDF/X-1a and PDF/X-3 are PDF 1.3, which knows
+    /// ICC version 2 only; PDF/X-4 takes version 4 too.
+    pub fn fits(&self, standard: PdfXStandard) -> bool {
+        (2..=standard.max_icc_version()).contains(&self.profile.version.0)
     }
 }
 
@@ -40,8 +45,11 @@ pub struct Prompt {
     pub copy: bool,
     /// The step the answered save is recorded as (see `targa_options_ui::Prompt::record`).
     pub record: &'static str,
-    /// Standard: PDF/X-1a:2001 rather than none.
-    pub x1a: bool,
+    /// Standard: a PDF/X standard, or `None` for a plain PDF.
+    pub standard: Option<PdfXStandard>,
+    /// PDF/X-3 and PDF/X-4: convert the colour to the output profile rather than keep it in the
+    /// document's profile.
+    pub convert: bool,
     /// The chosen output condition, an index into `candidates`.
     pub profile: usize,
     /// The bleed inside the document, in millimetres.
@@ -54,7 +62,48 @@ pub struct Prompt {
     restored: bool,
 }
 
-/// The PDF/X answer in command `cmd`'s params (`None`: none given, a plain PDF).
+impl Prompt {
+    /// The document's colour already is the chosen output condition's (gray, or CMYK in it), so
+    /// its numbers go into the file unchanged.
+    fn keeps_numbers(&self) -> bool {
+        self.mode == ColorMode::Grayscale
+            || (self.mode == ColorMode::Cmyk && self.candidates.get(self.profile).is_some_and(|c| c.profile.description == self.source.description))
+    }
+
+    /// What stops the save as chosen, if anything.
+    fn problem(&self) -> Option<String> {
+        let standard = self.standard?;
+        let Some(c) = self.candidates.get(self.profile) else {
+            return Some(
+                tl!("No CMYK profile is installed. Install the printer's profile (for example ISO Coated v2 or Coated FOGRA39) in Windows and save again.")
+                    .into(),
+            );
+        };
+        if !c.fits(standard) {
+            return Some(if standard == PdfXStandard::X4 {
+                tl!("PDF/X-4 needs an ICC version 2 or 4 profile. Choose the printer's profile (for example PSO Coated v3 or Coated FOGRA39).").into()
+            } else {
+                crate::i18n::fmt(
+                    tl!(
+                        "{standard} needs an ICC version 2 profile. Choose the printer's profile (for example ISO Coated v2 or Coated FOGRA39), or save PDF/X-4."
+                    ),
+                    &[("standard", standard.name())],
+                )
+            });
+        }
+        if standard.keeps_icc_colour() && !self.convert && !self.keeps_numbers() && self.source.version.0 > standard.max_icc_version() {
+            return Some(crate::i18n::fmt(
+                tl!(
+                    "The document's profile ({profile}) is ICC version {version}, which {standard} can't embed. Convert to the output profile, or save PDF/X-4."
+                ),
+                &[("profile", &self.source.description), ("version", &self.source.version.0.to_string()), ("standard", standard.name())],
+            ));
+        }
+        None
+    }
+}
+
+/// The PDF answer in command `cmd`'s params (`None`: none given, so Save As asks).
 pub fn params_param(params: &serde_json::Value, cmd: &str) -> Result<Option<photocraft_engine::file_cmds::PdfParams>, String> {
     photocraft_engine::file_cmds::pdf_params(params, cmd).map_err(|e| e.to_string())
 }
@@ -93,91 +142,102 @@ fn candidates(app: &PhotocraftApp, doc: &photocraft_doc::Document) -> Vec<Candid
 /// Parks the save behind the prompt. A prompt already waiting is never replaced.
 pub fn park(app: &mut PhotocraftApp, path: String, copy: bool, record: &'static str) -> Result<(), String> {
     if app.save_options_open() {
-        return Err("Answer the TIFF, Targa, DDS or PDF Options before starting another save".into());
+        return Err("Answer the TIFF, Targa, DDS, JPEG or PDF Options before starting another save".into());
     }
     let doc = app.active_doc_id()?;
     let st = app.session.active().ok_or("no document")?;
     let (source, mode) = (photocraft_engine::color_cmds::document_profile(&st.doc), st.doc.mode);
     let candidates = candidates(app, &st.doc);
     // Start on the document's own condition when it can be one, else the first that fits.
-    let profile = candidates.iter().position(Candidate::fits_x1a).unwrap_or(0);
-    app.pdf_options = Some(Prompt { doc, path, copy, record, x1a: false, profile, bleed_mm: 0.0, candidates, source, mode, restored: false });
+    let profile = candidates.iter().position(|c| c.fits(PdfXStandard::X1a2001)).unwrap_or(0);
+    app.pdf_options =
+        Some(Prompt { doc, path, copy, record, standard: None, convert: true, profile, bleed_mm: 0.0, candidates, source, mode, restored: false });
     Ok(())
 }
 
-/// The remembered answer: (PDF/X-1a, output profile description, bleed in mm).
-type Remembered = (bool, String, f32);
+/// The remembered answer: (standard id or "none", output profile description, bleed in mm,
+/// convert).
+type Remembered = (String, String, f32, bool);
 
 fn remembered_id() -> egui::Id {
     egui::Id::unique("pdf-options-last")
 }
 
-/// The save choices for `p`'s answer (`None`: a plain PDF), as a script or a recorded action
-/// would pass them.
-pub fn params(p: &Prompt) -> Result<Option<photocraft_engine::file_cmds::PdfParams>, String> {
-    if !p.x1a {
-        return Ok(None);
+/// The save choices for `p`'s answer, as a script or a recorded action would pass them.
+pub fn params(p: &Prompt) -> Result<photocraft_engine::file_cmds::PdfParams, String> {
+    let Some(standard) = p.standard else { return Ok(photocraft_engine::file_cmds::PdfParams::PLAIN) };
+    if let Some(problem) = p.problem() {
+        return Err(problem);
     }
-    let c = p.candidates.get(p.profile).ok_or("PDF/X-1a needs a CMYK output profile; none is installed")?;
-    if !c.fits_x1a() {
-        return Err(format!("PDF/X-1a:2001 needs an ICC version 2 output profile and \"{}\" is version {}", c.profile.description, c.profile.version.0));
-    }
-    Ok(Some(photocraft_engine::file_cmds::PdfParams { profile: Some(c.spec.clone()), bleed_mm: f64::from(p.bleed_mm.clamp(0.0, 50.0)) }))
+    let c = p.candidates.get(p.profile).ok_or("PDF/X needs a CMYK output profile; none is installed")?;
+    Ok(photocraft_engine::file_cmds::PdfParams {
+        standard: Some(standard),
+        profile: Some(c.spec.clone()),
+        bleed_mm: f64::from(p.bleed_mm.clamp(0.0, 50.0)),
+        convert: p.convert || !standard.keeps_icc_colour(),
+    })
 }
 
 pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let Some(p) = &mut app.pdf_options else { return };
     if !p.restored {
         p.restored = true;
-        if let Some((x1a, desc, bleed)) = ctx.data_mut(|d| d.get_persisted::<Remembered>(remembered_id())) {
-            p.x1a = x1a;
+        if let Some((standard, desc, bleed, convert)) = ctx.data_mut(|d| d.get_persisted::<Remembered>(remembered_id())) {
+            p.standard = PdfXStandard::from_id(&standard);
             p.bleed_mm = bleed.clamp(0.0, 50.0);
+            p.convert = convert;
             if let Some(i) = p.candidates.iter().position(|c| c.profile.description == desc) {
                 p.profile = i;
             }
         }
     }
     let (mut ok, mut cancel) = (false, false);
-    let (mut x1a, mut profile, mut bleed) = (p.x1a, p.profile, p.bleed_mm);
-    let fits = p.candidates.get(profile).is_some_and(Candidate::fits_x1a);
-    let can_save = !x1a || fits;
+    let (mut standard, mut profile, mut bleed, mut convert) = (p.standard, p.profile, p.bleed_mm, p.convert);
+    let problem = p.problem();
+    let can_save = problem.is_none();
     let modal = egui::Modal::new(egui::Id::unique("pdf-options")).show(ctx, |ui| {
-        ui.set_max_width(440.0);
+        ui.set_max_width(460.0);
         ui.label(egui::RichText::new(tl!("PDF Options")).font(crate::theme::semibold(15.0)));
         ui.add_space(4.0);
         crate::widgets::hairline(ui);
         ui.add_space(8.0);
         crate::widgets::section_label(ui, tl!("Standard"));
-        ui.radio_value(&mut x1a, false, tl!("None"));
-        ui.radio_value(&mut x1a, true, "PDF/X-1a:2001");
-        if x1a {
+        ui.radio_value(&mut standard, None, tl!("None"));
+        for s in PdfXStandard::ALL {
+            ui.radio_value(&mut standard, Some(s), s.name());
+        }
+        if let Some(s) = standard {
             ui.add_space(8.0);
             crate::widgets::section_label(ui, tl!("Output Condition"));
-            if p.candidates.is_empty() {
-                ui.label(tl!(
-                    "No CMYK profile is installed. Install the printer's profile (for example ISO Coated v2 or Coated FOGRA39) in Windows and save again."
-                ));
-            } else {
+            if !p.candidates.is_empty() {
                 let labels: Vec<(usize, String)> = p
                     .candidates
                     .iter()
                     .enumerate()
-                    .map(|(i, c)| (i, if c.fits_x1a() { c.label.clone() } else { format!("{} (ICC v{})", c.label, c.profile.version.0) }))
+                    .map(|(i, c)| (i, if c.fits(s) { c.label.clone() } else { format!("{} (ICC v{})", c.label, c.profile.version.0) }))
                     .collect();
                 let options: Vec<(usize, &str)> = labels.iter().map(|(i, l)| (*i, l.as_str())).collect();
-                crate::widgets::dropdown_literal(ui, "pdf-output-profile", tl!("Output Condition"), &mut profile, &options, 420.0);
-                if !fits {
-                    ui.add_space(4.0);
-                    ui.label(tl!("PDF/X-1a:2001 needs an ICC version 2 profile. Choose the printer's profile (for example ISO Coated v2 or Coated FOGRA39)."));
-                } else {
-                    ui.add_space(4.0);
-                    let same = p.mode == ColorMode::Grayscale
-                        || (p.mode == ColorMode::Cmyk && p.candidates.get(profile).is_some_and(|c| c.profile.description == p.source.description));
-                    ui.weak(if same {
-                        tl!("The CMYK numbers are kept.")
-                    } else {
-                        tl!("The colours are converted to this profile in the PDF; the document is not changed.")
-                    });
+                crate::widgets::dropdown_literal(ui, "pdf-output-profile", tl!("Output Condition"), &mut profile, &options, 440.0);
+            }
+            if s.keeps_icc_colour() {
+                ui.add_space(8.0);
+                crate::widgets::section_label(ui, tl!("Color Conversion"));
+                ui.radio_value(&mut convert, true, tl!("Convert to Output Profile"));
+                ui.radio_value(&mut convert, false, tl!("No Conversion (keep the document's profile)"));
+            }
+            ui.add_space(4.0);
+            match &problem {
+                Some(problem) => {
+                    ui.label(problem.as_str());
+                }
+                None if p.keeps_numbers() => {
+                    ui.weak(tl!("The CMYK numbers are kept."));
+                }
+                None if s.keeps_icc_colour() && !convert => {
+                    ui.weak(tl!("The colours keep the document's profile, embedded in the PDF; the printer converts them."));
+                }
+                None => {
+                    ui.weak(tl!("The colours are converted to this profile in the PDF; the document is not changed."));
                 }
             }
             ui.add_space(8.0);
@@ -195,9 +255,10 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         });
     });
     cancel |= modal.should_close();
-    p.x1a = x1a;
+    p.standard = standard;
     p.profile = profile;
     p.bleed_mm = bleed;
+    p.convert = convert;
     // A focused button takes Enter as its click without consuming the key: Enter on Cancel cancels.
     let enter = can_save && !cancel && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
     if ok || enter {
@@ -211,22 +272,19 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             Err(e) => return fail(app, e),
         };
         let mut settings = app.save_settings();
-        if let Some(pdf) = &chosen {
-            let request = photocraft_engine::file_cmds::PdfRequest::resolve(&app.session.color, pdf).map_err(|e| e.to_string());
-            let doc = app.session.documents().iter().find(|d| d.doc.id == p.doc).map(|d| d.doc.clone());
-            match (request, doc) {
-                (Ok(request), Some(doc)) => settings.pdf = request.options_for(&doc),
-                (Err(e), _) => return fail(app, e),
-                (_, None) => return fail(app, tl!("The document is closed").into()),
-            }
+        let doc = app.session.documents().iter().find(|d| d.doc.id == p.doc).map(|d| d.doc.clone());
+        match (photocraft_engine::file_cmds::PdfRequest::resolve(&app.session.color, &chosen), doc) {
+            (Ok(Some(request)), Some(doc)) => settings.pdf = request.options_for(&doc),
+            (Ok(_), Some(_)) => {}
+            (Err(e), _) => return fail(app, e.to_string()),
+            (_, None) => return fail(app, tl!("The document is closed").into()),
         }
         let desc = p.candidates.get(p.profile).map(|c| c.profile.description.clone()).unwrap_or_default();
-        ctx.data_mut(|d| d.insert_persisted::<Remembered>(remembered_id(), (p.x1a, desc, p.bleed_mm)));
+        let id = p.standard.map_or("none", PdfXStandard::id).to_string();
+        ctx.data_mut(|d| d.insert_persisted::<Remembered>(remembered_id(), (id, desc, p.bleed_mm, p.convert)));
         let mut step = if p.record == "file.save" { serde_json::json!({}) } else { serde_json::json!({"path": p.path}) };
-        if let Some(pdf) = &chosen {
-            // An action being recorded plays the save back as PDF/X-1a with the same condition.
-            pdf.record(&mut step);
-        }
+        // An action being recorded plays the save back with the same standard and condition.
+        chosen.record(&mut step);
         let written = app.with_document(p.doc, |app| app.write_document(p.path, &settings, p.copy));
         if written.is_ok() {
             // An action being recorded keeps the Save As or Save a Copy.

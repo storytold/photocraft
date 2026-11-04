@@ -3551,3 +3551,22 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Solid Color	Volltonfarbe
 	Tint Color	Tönungsfarbe
 	Edit Brush…	Pinsel bearbeiten…
+
+# PDF Options (PDF/X-1a, PDF/X-3, PDF/X-4)
+	PDF Options	PDF-Optionen
+	Output Condition	Ausgabebedingung
+	Document: {profile}	Dokument: {profile}
+	Working CMYK: {profile}	CMYK-Arbeitsfarbraum: {profile}
+	No CMYK profile is installed. Install the printer's profile (for example ISO Coated v2 or Coated FOGRA39) in Windows and save again.	Es ist kein CMYK-Profil installiert. Installieren Sie das Profil der Druckerei (zum Beispiel ISO Coated v2 oder Coated FOGRA39) in Windows und speichern Sie erneut.
+	PDF/X-4 needs an ICC version 2 or 4 profile. Choose the printer's profile (for example PSO Coated v3 or Coated FOGRA39).	PDF/X-4 braucht ein ICC-Profil der Version 2 oder 4. Wählen Sie das Profil der Druckerei (zum Beispiel PSO Coated v3 oder Coated FOGRA39).
+	{standard} needs an ICC version 2 profile. Choose the printer's profile (for example ISO Coated v2 or Coated FOGRA39), or save PDF/X-4.	{standard} braucht ein ICC-Profil der Version 2. Wählen Sie das Profil der Druckerei (zum Beispiel ISO Coated v2 oder Coated FOGRA39) oder speichern Sie als PDF/X-4.
+	The document's profile ({profile}) is ICC version {version}, which {standard} can't embed. Convert to the output profile, or save PDF/X-4.	Das Profil des Dokuments ({profile}) ist ICC-Version {version}, die {standard} nicht einbetten kann. Konvertieren Sie in das Ausgabeprofil oder speichern Sie als PDF/X-4.
+	Color Conversion	Farbkonvertierung
+	Convert to Output Profile	In Ausgabeprofil konvertieren
+	No Conversion (keep the document's profile)	Keine Konvertierung (Profil des Dokuments behalten)
+	The CMYK numbers are kept.	Die CMYK-Werte bleiben erhalten.
+	The colours keep the document's profile, embedded in the PDF; the printer converts them.	Die Farben behalten das Profil des Dokuments, eingebettet im PDF; die Druckerei konvertiert sie.
+	The colours are converted to this profile in the PDF; the document is not changed.	Die Farben werden im PDF in dieses Profil konvertiert; das Dokument selbst bleibt unverändert.
+	Bleed:	Anschnitt:
+	The bleed already in the document: the trim box sits this far inside the page.	Der Anschnitt, der schon im Dokument ist: Das Endformat (TrimBox) liegt so weit innerhalb der Seite.
+	Save PDF	PDF speichern
