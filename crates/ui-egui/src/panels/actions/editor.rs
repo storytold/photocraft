@@ -176,6 +176,7 @@ impl Page {
         self.prompt.is_some() || self.editing.is_some()
     }
 
+    /// Validate the response's draft identity and shape before refreshing buffers or step selection.
     fn accept(&mut self, view: &Value) -> Result<(), String> {
         if view.get("draft").and_then(Value::as_u64) != Some(self.draft)
             || view.get("action").and_then(|action| action.get("name")).and_then(Value::as_str).is_none()
@@ -195,6 +196,7 @@ impl Page {
         Ok(())
     }
 
+    /// Bind every backend edit to this draft and retain its error without replacing the page.
     fn call(&mut self, app: &mut PhotocraftApp, verb: &str, params: Value) -> Result<Value, String> {
         if self.closed {
             return Err(tl!("This editor page is closed").into());
@@ -222,6 +224,7 @@ impl Page {
         }
     }
 
+    /// Refresh this draft from backend inspection without executing a new editor command.
     fn get(&mut self, app: &mut PhotocraftApp) -> Result<Value, String> {
         match photocraft_engine::actions_cmds::editor::inspect(&app.session, self.draft).map_err(|error| error.to_string()) {
             Ok(view) => {
@@ -235,10 +238,12 @@ impl Page {
         }
     }
 
+    /// Include unsubmitted text buffers as well as backend edits when deciding whether leaving needs confirmation.
     fn dirty(&self, view: &Value) -> bool {
         view.get("dirty").and_then(Value::as_bool) == Some(true) || self.name.dirty() || self.description.dirty() || self.shortcut.dirty()
     }
 
+    /// Submit only changed metadata fields, leaving unknown and untouched Action values with the backend.
     fn stage(&mut self, app: &mut PhotocraftApp) -> Result<Value, String> {
         let mut params = Map::new();
         for (key, buffer) in [("name", &self.name), ("description", &self.description), ("shortcut", &self.shortcut)] {
@@ -253,6 +258,7 @@ impl Page {
         app.session.prefs().dialogs.get(CONFIRM_PREF).and_then(|value| value.get("skip")).and_then(Value::as_bool) == Some(true)
     }
 
+    /// Offer Save only for a dirty draft and apply the stored skip preference through the same answer path.
     fn ask_save(&mut self, app: &mut PhotocraftApp, activity: Activity) -> Result<Option<Event>, String> {
         let view = self.get(app)?;
         if self.dirty(&view) {
@@ -287,6 +293,7 @@ impl Page {
         }
     }
 
+    /// Resolve Save/Discard/Cancel without closing the page on backend refusal or an unfinished recorded step.
     fn answer(&mut self, app: &mut PhotocraftApp, answer: Answer, activity: Activity) -> Result<Option<Event>, String> {
         let intent = self.prompt.ok_or("There is no Save Action prompt")?;
         if matches!(answer, Answer::Cancel) {
@@ -330,6 +337,7 @@ impl Page {
         Ok(Some(Event::Closed { saved: matches!(answer, Answer::Save), source: self.source }))
     }
 
+    /// Stage local metadata before requesting preview of this draft from the selected original step index.
     fn preview(&mut self, app: &mut PhotocraftApp, from: usize) -> Result<Event, String> {
         let view = self.stage(app)?;
         if from >= steps(&view).len() {

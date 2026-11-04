@@ -40,6 +40,7 @@ enum Delete {
     Group(String, Vec<Action>, u64),
 }
 
+/// Include backend drafts and suspended playback so layout/navigation guards cannot bypass hidden owners.
 pub(crate) fn editor_busy(app: &PhotocraftApp) -> bool {
     app.actions_runtime.page.is_some() || app.session.actions.editor.is_some() || app.actions_runtime.task.is_some() || suspended(app)
 }
@@ -52,6 +53,7 @@ pub(crate) fn layout_checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
     }
 }
 
+/// Route layout changes through the current editor's leave flow before replacing its presentation.
 pub(crate) fn layout_command(app: &mut PhotocraftApp, id: &str) -> Option<Result<Value, String>> {
     let layout = match id {
         "actions.layout.modern" => ActionsLayout::Modern,
@@ -65,6 +67,7 @@ pub(crate) fn layout_command(app: &mut PhotocraftApp, id: &str) -> Option<Result
     Some(Ok(json!({"layout":layout})))
 }
 
+/// Persist layout and row size after pointer interaction ends, and only when the saved value differs.
 pub(crate) fn persist(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if ctx.input(|input| input.pointer.any_down()) {
         return;
@@ -75,6 +78,7 @@ pub(crate) fn persist(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
 }
 
+/// Restore known presentation settings, using Modern and large rows for absent or unknown values.
 pub(crate) fn restore(app: &mut PhotocraftApp) {
     let saved = &app.session.prefs().actions_panel;
     app.ui.actions_layout = match saved.get("layout").and_then(Value::as_str) {
@@ -87,6 +91,7 @@ pub(crate) fn restore(app: &mut PhotocraftApp) {
     };
 }
 
+/// Expose the live page and playback frontier without creating a new draft or serializing runtime owners.
 pub(crate) fn inspect(app: &PhotocraftApp) -> Value {
     let page = app.actions_runtime.page.as_ref();
     json!({
@@ -113,10 +118,12 @@ fn activity(app: &PhotocraftApp) -> editor::Activity {
     editor::Activity { playback_busy: app.actions_runtime.task.is_some() || suspended(app), finishing_step: app.session.has_recording_job() }
 }
 
+/// Prefer the current command gate, inheriting the automation gate only for automation input.
 fn effective_gate(app: &PhotocraftApp) -> Option<Gate> {
     app.session.authorize.or(if app.automation_input { app.services.automation_authorize } else { None })
 }
 
+/// Attach a visible page to an existing backend draft without allocating or replacing that draft.
 fn attach(app: &mut PhotocraftApp) -> Result<(), String> {
     if app.actions_runtime.page.is_none()
         && let Some(draft) = app.session.actions.editor.as_ref()
@@ -136,6 +143,7 @@ pub(crate) fn discarded(app: &mut PhotocraftApp, draft: u64) {
     }
 }
 
+/// Open one owned editor page only when no draft or playback already occupies the Actions flow.
 fn open(app: &mut PhotocraftApp, params: Value) -> Result<Value, String> {
     if editor_busy(app) {
         return Err(tl!("Close the open Actions editor first").into());
@@ -146,6 +154,7 @@ fn open(app: &mut PhotocraftApp, params: Value) -> Result<Value, String> {
     Ok(json!({"draft":id}))
 }
 
+/// Apply page outcomes to selection, pending navigation or preview without publishing definitions directly.
 fn event(app: &mut PhotocraftApp, event: editor::Event) -> Result<(), String> {
     match event {
         editor::Event::Saved { source } | editor::Event::Closed { saved: true, source } => {
@@ -198,6 +207,7 @@ pub(super) fn leave_for(app: &mut PhotocraftApp, id: &str, params: Value) -> Res
     Ok(json!({"pending":app.actions_runtime.pending.is_some()}))
 }
 
+/// Resume the parked destination with its original authorization gate; defer actual Exit to the close flow.
 fn finish_navigation(app: &mut PhotocraftApp) -> Result<(), String> {
     let Some((id, params, gate)) = app.actions_runtime.pending.take() else { return Ok(()) };
     let saved = app.session.authorize;
@@ -267,6 +277,7 @@ pub(super) fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
 }
 
+/// Export the selected action through the Photoshop-only projection and sanitize its suggested filename.
 fn export(app: &mut PhotocraftApp) -> Result<Value, String> {
     let index = app.ui.actions.selected.ok_or("Select an action to export")?;
     let action = app.session.actions.list.get(index).ok_or("The selected action no longer exists")?;
@@ -543,12 +554,14 @@ fn new_group(app: &mut PhotocraftApp) -> Result<Value, String> {
     Ok(json!({"dialog":id}))
 }
 
+/// Queue an immutable draft snapshot with the backend owner that suspends capture for its entire preview.
 fn start_preview(app: &mut PhotocraftApp, draft: u64, from: usize) -> Result<Value, String> {
     let (action, owner) = actions_cmds::playback::preview(&mut app.session, draft, from).map_err(|error| error.to_string())?;
     let frame = Frame { action, from, source: Source::Draft(draft), take: app.session.actions.take };
     queue(app, frame, owner, Vec::new())
 }
 
+/// Snapshot remaining group actions and acquire a frame-spanning owner for the first resolved definition.
 fn start_library(app: &mut PhotocraftApp, indices: &[usize]) -> Result<Value, String> {
     let Some((&index, rest)) = indices.split_first() else { return Ok(json!({"ran":0})) };
     let then = rest
@@ -560,6 +573,7 @@ fn start_library(app: &mut PhotocraftApp, indices: &[usize]) -> Result<Value, St
     queue(app, frame, owner, then)
 }
 
+/// Install one incremental task and its authorization gate, releasing the supplied owner on admission failure.
 fn queue(app: &mut PhotocraftApp, frame: Frame, owner: actions_cmds::playback::Owner, then: Vec<Action>) -> Result<Value, String> {
     if app.actions_runtime.task.is_some() {
         owner.finish(&mut app.session);
@@ -574,6 +588,7 @@ fn queue(app: &mut PhotocraftApp, frame: Frame, owner: actions_cmds::playback::O
     Ok(json!({"playing":true}))
 }
 
+/// Transfer a confirmed dialog continuation back into the tick task without replacing its owner or budgets.
 pub(super) fn resume_tick(app: &mut PhotocraftApp, paused: PausedPlayback) -> Result<(), String> {
     if let Some(owner) = &paused.record
         && let Err(error) = owner.yielding(&mut app.session, true)
@@ -600,6 +615,8 @@ pub(crate) fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
     tick_with_quantum(app, ctx, 8);
 }
 
+/// Advance bounded work under the captured gate, transferring ownership across nested frames and dialogs.
+/// Completion, cancellation and failure must release the same capture owner.
 fn tick_with_quantum(app: &mut PhotocraftApp, ctx: &egui::Context, quantum: usize) {
     if app.actions_runtime.page.is_none() && app.actions_runtime.pending.as_ref().is_some_and(|(id, _, _)| id == "__actionsExit") {
         app.actions_runtime.pending = None;
@@ -718,6 +735,7 @@ fn tick_with_quantum(app: &mut PhotocraftApp, ctx: &egui::Context, quantum: usiz
     }
 }
 
+/// Release incremental task and dialog owners, closing only their own Spelling panel or step dialogs.
 pub(super) fn cancel(app: &mut PhotocraftApp) {
     if let Some(mut task) = app.actions_runtime.task.take()
         && let Some(owner) = task.owner.take()
@@ -745,6 +763,7 @@ pub(super) fn cancel(app: &mut PhotocraftApp) {
     app.actions_runtime.parents.clear();
 }
 
+/// Release all remaining playback captures during application exit, including non-incremental continuations.
 pub(crate) fn shutdown(app: &mut PhotocraftApp) {
     cancel(app);
     for (_, paused) in std::mem::take(&mut app.paused_playbacks.paused) {
@@ -758,6 +777,7 @@ pub(crate) fn guard_navigation(app: &mut PhotocraftApp, id: &str, params: Value)
     editor_busy(app).then(|| leave_for(app, id, params))
 }
 
+/// Hold normal window Close behind the current editor leave question, preserving any pending destination.
 pub(crate) fn guard_exit(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     if !editor_busy(app) {
         return false;
@@ -771,6 +791,7 @@ pub(crate) fn guard_exit(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     true
 }
 
+/// Keep owned questions visible off-tab and resume parked navigation only after a successful page close.
 pub(crate) fn modals(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if app.actions_runtime.page_drawn == Some(app.frame) {
         return;
@@ -794,6 +815,7 @@ pub(crate) fn owns_delete(fields: &serde_json::Map<String, Value>) -> bool {
     fields.contains_key(DELETE)
 }
 
+/// Capture the selected definition or group revision and authorization gate before opening its delete question.
 fn ask_delete(app: &mut PhotocraftApp, index: Option<usize>, group: Option<String>) -> Result<Value, String> {
     if app.actions_runtime.delete.is_some() {
         return Err("Answer the open delete question first".into());
@@ -836,12 +858,14 @@ pub(crate) fn delete_body(ui: &mut egui::Ui, fields: &mut serde_json::Map<String
     ui.label(fields.get("message").and_then(Value::as_str).unwrap_or_default());
 }
 
+/// Clear only the delete owner named by this dialog, leaving a later question intact.
 pub(crate) fn delete_cancel(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Value>) {
     if app.actions_runtime.delete.as_ref().is_some_and(|(id, _, _)| fields.get(DELETE).and_then(Value::as_u64) == Some(*id)) {
         app.actions_runtime.delete = None;
     }
 }
 
+/// Reject a stale or ambiguous captured target before deleting it under the question's original gate.
 pub(crate) fn delete_confirm(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Value>) -> Result<Value, String> {
     let (id, target, gate) = app.actions_runtime.delete.take().ok_or("The delete question is no longer current")?;
     if fields.get(DELETE).and_then(Value::as_u64) != Some(id) {

@@ -63,6 +63,7 @@ struct State {
 #[derive(Clone, Default)]
 pub struct Bridge(Arc<Mutex<State>>);
 
+/// Attach the memory-backed library while protecting shared tips if startup found unreadable records.
 pub fn session(backend: Bridge) -> (Session, Vec<String>) {
     let mut session = Session::new();
     let opened = preset_store::open(Box::new(backend.clone()));
@@ -94,6 +95,7 @@ impl Bridge {
         self.0.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    /// Validate per-record, total-byte and record-count bounds before changing the memory inventory.
     fn insert(s: &mut State, name: &str, bytes: &[u8]) -> Result<(), String> {
         if bytes.len() as u64 > record_limit(name)? {
             return Err(format!("{name}: preset record too large"));
@@ -108,6 +110,7 @@ impl Bridge {
         Ok(())
     }
 
+    /// Hydrate a validated startup record without scheduling it as an edit for the browser writer.
     pub fn load(&self, name: &str, bytes: Vec<u8>) -> Result<(), String> {
         Self::insert(&mut self.state(), name, &bytes)
     }
@@ -164,11 +167,13 @@ impl Bridge {
         self.state().error = None;
     }
 
+    /// Show a rejected current edit before a transaction error; an older successful batch cannot erase it.
     pub fn error(&self) -> Option<String> {
         let s = self.state();
         s.rejected.values().next().cloned().or_else(|| s.error.clone())
     }
 
+    /// Include in-flight writes, queued edits and rejected replacements in the unsaved indicator.
     pub fn unsaved(&self) -> bool {
         let s = self.state();
         s.writing || !s.dirty.is_empty() || !s.rejected.is_empty()
@@ -180,6 +185,7 @@ impl PresetBackend for Bridge {
         Ok(self.state().files.iter().map(|(k, b)| (k.clone(), b.len() as u64)).collect())
     }
 
+    /// Read the live memory value under the caller's byte ceiling, without waiting for browser storage.
     fn read(&self, name: &str, max: u64) -> Result<Vec<u8>, String> {
         let s = self.state();
         let bytes = s.files.get(name).ok_or_else(|| format!("{name}: not found"))?;
@@ -189,6 +195,7 @@ impl PresetBackend for Bridge {
         Ok(bytes.to_vec())
     }
 
+    /// Validate the exact legacy/ATN/backup tuple and capacity before staging one fixed migration batch.
     fn migrate_actions(&self, legacy: &[u8], atn: &[u8], published: bool) -> Result<ActionsMigration, String> {
         let mut s = self.state();
         let result = (|| -> Result<ActionsMigration, String> {
@@ -234,6 +241,7 @@ impl PresetBackend for Bridge {
         result
     }
 
+    /// Stage a bounded live replacement; only acceptance of that record clears its prior rejection.
     fn write(&self, name: &str, bytes: &[u8]) -> Result<(), String> {
         if matches!(name, LEGACY_ACTIONS_FILE | MIGRATED_ACTIONS_FILE) {
             return Err("legacy Actions records are migration-only".into());
@@ -259,6 +267,7 @@ impl PresetBackend for Bridge {
         Ok(())
     }
 
+    /// Stage ordinary deletions while retaining migration-only records and tips needed by damaged groups.
     fn remove(&self, name: &str) -> Result<(), String> {
         if matches!(name, LEGACY_ACTIONS_FILE | MIGRATED_ACTIONS_FILE) {
             return Err("legacy Actions records are migration-only".into());

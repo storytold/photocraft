@@ -26,6 +26,7 @@ impl Scope {
 }
 
 impl Drop for Scope {
+    /// Stop the migration decision and detach its live request callback so late Blob reads cannot write.
     fn drop(&mut self) {
         self.decision.borrow_mut().stopped = true;
         if let Some(request) = self.current.borrow_mut().take() {

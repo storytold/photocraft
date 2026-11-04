@@ -14,6 +14,7 @@ const EMPTY_LIBRARY: &str = "photocraftEmptyLibraryV1";
 const MAX_BYTES: usize = crate::preset_import_cmds::MAX_FILE_BYTES as usize;
 type Result<T> = std::result::Result<T, String>;
 
+/// Enforce the external action-file byte ceiling before extending an encoded sidecar.
 fn extend(out: &mut Vec<u8>, bytes: &[u8]) -> Result<()> {
     if out.len().checked_add(bytes.len()).is_none_or(|length| length > MAX_BYTES) {
         return Err("sidecar exceeds the action-file byte limit".into());
@@ -42,6 +43,7 @@ fn key_len(key: &Id) -> usize {
     }
 }
 
+/// Serialize only a descriptor value so field patches retain their original key bytes.
 fn value_bytes(value: D) -> Result<Vec<u8>> {
     let header = Descriptor::new("null").to_bytes().len();
     let bytes = Descriptor::new("null").with("value", value).to_bytes();
@@ -49,6 +51,7 @@ fn value_bytes(value: D) -> Result<Vec<u8>> {
 }
 
 impl RawDescriptor {
+    /// Validate and retain the bounded original descriptor bytes before accepting span-based edits.
     fn new(bytes: &[u8]) -> Result<Self> {
         if bytes.len() > MAX_BYTES {
             return Err("sidecar exceeds the action-file byte limit".into());
@@ -65,6 +68,7 @@ impl RawDescriptor {
         Descriptor::from_bytes(self.bytes()).map_err(|error| error.to_string())
     }
 
+    /// Locate original field spans and reject inconsistent lengths instead of reconstructing opaque bytes.
     fn fields(&self) -> Result<(usize, Vec<Field>)> {
         let descriptor = self.parsed()?;
         let header = Descriptor { name: descriptor.name.clone(), class_id: descriptor.class_id.clone(), items: Vec::new() }.to_bytes().len();
@@ -84,6 +88,7 @@ impl RawDescriptor {
         Ok((header, fields))
     }
 
+    /// Resolve a unique object list into shared source spans, rejecting oversized or malformed entries.
     fn list(&self, name: &str) -> Result<Vec<Self>> {
         let (_, fields) = self.fields()?;
         let mut matching = fields.into_iter().filter(|field| field.key.is(name));
@@ -171,6 +176,7 @@ impl RawDescriptor {
     }
 }
 
+/// Encode bounded object-list entries without reserializing their retained descriptors.
 fn objects(entries: &[Vec<u8>]) -> Result<Vec<u8>> {
     if entries.len() > atn::MAX_TOTAL_ACTIONS {
         return Err("too many sidecar objects".into());
@@ -233,10 +239,12 @@ pub(crate) fn explicit_icon(action: &mut Action) {
     }
 }
 
+/// Use an empty-row carrier only when both its current slot and displayed row still match.
 pub(super) fn empty_source(state: &ActionState, slot: usize) -> Option<Arc<SetMetadata>> {
     state.atn_set_rows.iter().find(|entry| entry.slot == slot && state.sets.get(slot) == Some(&entry.row)).map(|entry| entry.source.clone())
 }
 
+/// Append one physical row and its optional carrier; provenance starts unset until explicitly bound.
 pub(crate) fn install_row(state: &mut ActionState, name: &str, source: Option<Arc<SetMetadata>>) {
     let slot = state.sets.len();
     state.library.rows.resize(slot, None);
@@ -292,6 +300,7 @@ pub(crate) fn retire_sets(state: &mut ActionState, names: &std::collections::Has
     }
 }
 
+/// Inherit group metadata only when all action and empty-row carriers identify one source set.
 fn group_source(state: &ActionState, name: &str) -> Option<Arc<SetMetadata>> {
     let actions: Vec<&Action> = state.list.iter().filter(|action| super::logical_set_name(action.set.as_deref()) == name).collect();
     let mut source = match source_for(&actions) {
@@ -312,6 +321,7 @@ fn group_source(state: &ActionState, name: &str) -> Option<Arc<SetMetadata>> {
     source
 }
 
+/// Compare the source allocation and physical set ordinal, rather than metadata or display-name equality.
 fn same_set(left: &Arc<SetMetadata>, right: &Arc<SetMetadata>) -> bool {
     Arc::ptr_eq(&left.source, &right.source) && left.ordinal == right.ordinal
 }
@@ -328,12 +338,14 @@ pub(crate) fn assign_set_metadata(state: &mut ActionState, action: usize, target
     }
 }
 
+/// Select one action with its set metadata and exact raw-row provenance when still available.
 pub(crate) fn selection<'a>(state: &ActionState, action: &'a Action) -> Selection<'a> {
     let source =
         action.atn_metadata.as_ref().and_then(|metadata| metadata.set.clone()).or_else(|| group_source(state, super::logical_set_name(action.set.as_deref())));
     Selection { actions: vec![action], source, raw: state.library.row_source(&state.sets, action) }
 }
 
+/// Build the portable logical-set selection, preserving its opaque metadata and enforcing archive limits.
 pub(crate) fn groups<'a>(state: &'a ActionState, only: Option<&str>) -> Result<Vec<(&'a str, Selection<'a>)>> {
     groups_ordered(state, only, false)
 }
@@ -481,6 +493,7 @@ pub(crate) struct Decoded {
     pub(crate) source: Option<Arc<Source>>,
 }
 
+/// Reject missing or repeated schema fields instead of choosing an arbitrary occurrence.
 fn unique<'a>(descriptor: &'a Descriptor, key: &str) -> Result<&'a D> {
     let mut fields = descriptor.items.iter().filter(|(id, _)| id.is(key));
     let value = fields.next().map(|(_, value)| value).ok_or_else(|| format!("missing sidecar {key}"))?;
@@ -494,6 +507,7 @@ pub(super) fn has_payload(item: &AtnItem) -> bool {
     (item.event.is("stop") || item.event.is("Stop")) && item.descriptor.as_ref().is_some_and(|descriptor| descriptor.get(MODERN).is_some())
 }
 
+/// Recognize the complete measured wrapper shape before treating its versioned bytes as a sidecar.
 fn payload(file: &AtnFile) -> Option<&[u8]> {
     if file.name.to_string_lossy() != "Action sidecar" || file.expanded {
         return None;
@@ -525,6 +539,7 @@ pub(crate) fn is_wrapper(file: &AtnFile) -> bool {
     payload(file).is_some()
 }
 
+/// Read at most one typed migration receipt from the retained outer descriptor.
 pub(crate) fn legacy_origin(source: Option<&Source>) -> Result<Option<crate::actions_cmds::library::LegacyOrigin>> {
     let Some(source) = source else { return Ok(None) };
     let root = source.root.parsed()?;
@@ -650,12 +665,14 @@ fn decode_inner(files: &[AtnFile], library: bool, raw_outer: Option<&[u8]>) -> R
     Ok(result)
 }
 
+/// Install the decoded visible metadata while retaining its opaque source carrier for later edits.
 pub(crate) fn apply(action: &mut Action, metadata: ActionMetadata) {
     action.description = metadata.description.clone();
     action.icon = metadata.icon.clone();
     action.atn_metadata = Some(metadata);
 }
 
+/// Patch only changed description/icon fields; unchanged and unknown metadata retains its original bytes.
 fn entry(action: &Action) -> Result<Vec<u8>> {
     // Bound strings before UnicodeString allocates their UTF16 representation.
     let units = action.description.encode_utf16().count().checked_add(action.icon.encode_utf16().count()).ok_or("metadata string length overflow")?;
@@ -692,6 +709,7 @@ pub(crate) struct Selection<'a> {
     pub(crate) raw: Option<crate::actions_cmds::library::RowOrigin>,
 }
 
+/// Reject selections with conflicting physical source sets, even when their display names match.
 pub(super) fn source_for(actions: &[&Action]) -> Result<Option<Arc<SetMetadata>>> {
     let mut source: Option<Arc<SetMetadata>> = None;
     for candidate in actions.iter().filter_map(|action| action.atn_metadata.as_ref()).filter_map(|metadata| metadata.set.as_ref()) {

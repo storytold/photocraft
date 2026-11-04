@@ -43,6 +43,7 @@ pub struct ImportedSet {
     pub(crate) metadata: Option<std::sync::Arc<super::sidecar::SetMetadata>>,
 }
 
+/// Retain an unsupported event's ID kind and descriptor for later export without executing it.
 fn photoshop_step(item: &AtnItem, label: String) -> (String, Value) {
     let descriptor = item.descriptor.as_ref().map(|d| photocraft_paint::tile::b64_encode(&d.to_bytes()));
     let event_kind = match &item.event {
@@ -79,6 +80,7 @@ pub(super) fn clip_name(s: &str) -> String {
     s.chars().take(MAX_NAME_CHARS).collect()
 }
 
+/// Project events under archive-wide step limits, retaining flags and optional original-event cohorts.
 fn convert_action(
     file: &AtnFile,
     a: &AtnAction,
@@ -166,6 +168,7 @@ pub(crate) fn library_action(file: &AtnFile, action: &AtnAction, set: &str) -> s
 
 const NATIVE_EVENT: &str = "photocraftCommand";
 
+/// Read one bounded, uniquely named UTF16 TEXT field from a native event descriptor.
 fn native_text(descriptor: &Descriptor, key: &str) -> std::result::Result<String, String> {
     let mut values = descriptor.items.iter().filter(|(id, _)| id.is(key));
     let Some((_, D::Text(text))) = values.next() else { return Err(format!("native action step needs TEXT {key}")) };
@@ -176,6 +179,7 @@ fn native_text(descriptor: &Descriptor, key: &str) -> std::result::Result<String
     String::from_utf16(units).map_err(|_| format!("invalid UTF16 native action {key}"))
 }
 
+/// Decode only the reserved native event with its exact two-field schema; never dispatch its command.
 fn read_native(item: &AtnItem) -> std::result::Result<Option<(String, Value)>, String> {
     if item.event != AtnEvent::name(NATIVE_EVENT) {
         return Ok(None);
@@ -194,6 +198,7 @@ fn read_native(item: &AtnItem) -> std::result::Result<Option<(String, Value)>, S
     Ok(Some((id, params)))
 }
 
+/// Encode an unmapped native command and its complete JSON without losing unsupported options.
 pub(crate) fn native_item(id: &str, params: &Value) -> std::result::Result<AtnItem, String> {
     let params = serde_json::to_string(params).map_err(|error| error.to_string())?;
     if id.is_empty() || id.len() > crate::preset_store::MAX_ACTIONS_BYTES as usize || params.len() > crate::preset_store::MAX_ACTIONS_BYTES as usize {
@@ -296,6 +301,7 @@ pub struct Skipped {
     pub id: String,
 }
 
+/// Project one kept or mapped Photoshop event, supplying the caller set for unscoped action references.
 pub(super) fn export_item(id: &str, params: &Value, set: &str) -> Option<AtnItem> {
     if id == PHOTOSHOP_STEP {
         let event = jstr(params, "event")?;
@@ -393,6 +399,7 @@ pub fn export(
     export_groups(&[(set, selection)], function_keys, skip_unsupported)
 }
 
+/// Validate selected archive counts, export each group and append its positional metadata carrier.
 pub(super) fn export_groups(
     groups: &[(&str, super::sidecar::Selection<'_>)],
     function_keys: &[(String, String)],
@@ -430,6 +437,7 @@ pub(super) fn export_groups(
     Ok((bytes, skipped))
 }
 
+/// Preserve step order and flags; report explicit omissions or retain unmapped commands as native events.
 fn export_set(
     set: &str,
     actions: &[&Action],

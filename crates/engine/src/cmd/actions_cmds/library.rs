@@ -55,6 +55,7 @@ struct Archive {
 }
 
 impl PartialEq for Archive {
+    /// Archive equality denotes the same parsed input, not equal bytes from a separate load.
     fn eq(&self, other: &Self) -> bool {
         std::ptr::eq(self, other)
     }
@@ -84,9 +85,11 @@ pub(crate) struct RowOrigin {
 }
 
 impl RowOrigin {
+    /// Transient physical row identity; repeated display names remain distinct.
     pub(crate) fn key(&self) -> (usize, usize) {
         (Arc::as_ptr(&self.archive) as usize, self.set)
     }
+    /// Resolve this physical row in its retained archive, rejecting an invalid ordinal.
     fn file(&self) -> Result<&AtnFile> {
         self.archive.parsed.sets.get(self.set).ok_or_else(|| "missing original set".into())
     }
@@ -100,21 +103,25 @@ pub(crate) struct LegacyOrigin {
 }
 
 impl LegacyOrigin {
+    /// Bind a bounded legacy input by byte count and digest before recording a migration receipt.
     pub(crate) fn new(bytes: &[u8]) -> Result<Self> {
         if bytes.len() > MAX_BYTES {
             return Err("legacy Actions library exceeds byte limit".into());
         }
         Ok(Self { bytes: bytes.len(), digest: blake3::hash(bytes).to_hex().to_string() })
     }
+    /// Require the exact original legacy bytes, including for same-size replacement inputs.
     pub(crate) fn matches(&self, bytes: &[u8]) -> bool {
         bytes.len() == self.bytes && blake3::hash(bytes).to_hex().as_str() == self.digest
     }
+    /// Encode the receipt version, bounded byte count and digest into the library sidecar.
     pub(crate) fn descriptor(&self) -> Result<Descriptor> {
         Ok(Descriptor::new("null")
             .with("version", D::Integer(1))
             .with("bytes", D::Integer(i32::try_from(self.bytes).map_err(|_| "legacy length overflow")?))
             .with("digest", D::Text(UnicodeString::new(&self.digest))))
     }
+    /// Validate the receipt schema, unique fields, byte ceiling and lowercase digest before use.
     pub(crate) fn from_descriptor(value: &Descriptor) -> Result<Self> {
         if !value.class_id.is("null") || !value.name.0.is_empty() || value.items.len() != 3 {
             return Err("invalid legacy Actions origin".into());
@@ -158,6 +165,7 @@ pub(crate) struct RowIndex<'a> {
     exact: std::collections::HashMap<(&'a str, (usize, usize)), RowOrigin>,
 }
 impl RowIndex<'_> {
+    /// Prefer the action's exact surviving physical row; otherwise use the first logical namesake.
     pub(crate) fn source(&self, action: &Action) -> Option<RowOrigin> {
         let name = atn_cmds::logical_set_name(action.set.as_deref());
         action.library_origin.as_ref().and_then(|origin| self.exact.get(&(name, origin.row.key()))).or_else(|| self.first.get(name)).cloned()
@@ -165,6 +173,7 @@ impl RowIndex<'_> {
 }
 
 impl Library {
+    /// Index surviving rows once, retaining both first-name resolution and exact provenance matches.
     pub(crate) fn row_index<'a>(&self, names: &'a [String]) -> RowIndex<'a> {
         let mut index = RowIndex { first: Default::default(), exact: Default::default() };
         for (name, row) in names.iter().zip(&self.rows) {
@@ -258,6 +267,7 @@ pub(crate) fn bind_import(action: &mut Action, original: &Action) {
     action.atn_metadata = original.atn_metadata.clone();
 }
 
+/// Attach one imported physical row to its destination slot without replacing an existing sidecar source.
 pub(crate) fn import_row(state: &mut ActionState, imported: &ActionState, index: usize, slot: usize) {
     state.library.rows.resize(state.sets.len(), None);
     if let Some(row) = state.library.rows.get_mut(slot) {
@@ -400,6 +410,7 @@ fn action_record(action: &Action, set: &str, keys: &[(String, String)], unique_n
     Ok((output, OutputAction { origin: origin.cloned(), items: origins }))
 }
 
+/// Copy a validated source span while enforcing the complete durable-library byte ceiling.
 fn append(out: &mut Vec<u8>, bytes: &[u8], range: Range<usize>) -> Result<()> {
     let value = bytes.get(range).ok_or("invalid Actions library byte span")?;
     if out.len().checked_add(value.len()).is_none_or(|length| length > MAX_BYTES) {
@@ -409,6 +420,7 @@ fn append(out: &mut Vec<u8>, bytes: &[u8], range: Range<usize>) -> Result<()> {
     Ok(())
 }
 
+/// Reuse an original field only when unchanged; otherwise copy the canonical replacement span.
 fn field(out: &mut Vec<u8>, canonical: &[u8], new: Range<usize>, source: Option<(&Archive, Range<usize>)>, unchanged: bool) -> Result<()> {
     if let Some((source, old)) = source.filter(|_| unchanged) { append(out, &source.bytes, old) } else { append(out, canonical, new) }
 }

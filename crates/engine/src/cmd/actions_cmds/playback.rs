@@ -20,6 +20,7 @@ pub struct Owner {
     call: Option<(String, usize)>,
 }
 
+/// Restore a Classic recorder only to one unchanged definition, allowing reorder but rejecting ambiguity.
 fn classic_index(s: &Session, action: &Action) -> Option<usize> {
     let mut matches = s.actions.list.iter().enumerate().filter(|(_, candidate)| *candidate == action).map(|(index, _)| index);
     let index = matches.next()?;
@@ -41,6 +42,7 @@ pub fn admit(s: &Session, id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Acquire one playback identity after jobs and capture flush complete, retaining the exact recording destination.
 fn suspend(s: &mut Session, preview: Option<(u64, Arc<Action>)>, call: Option<(String, usize)>, required: bool) -> Result<Option<Owner>> {
     if s.actions.held_playback.is_some() {
         return Err(bad("actions.play", "another action owns a suspended playback"));

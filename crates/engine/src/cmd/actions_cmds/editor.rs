@@ -86,6 +86,7 @@ pub(super) fn preview_value(s: &Session, id: u64) -> Result<Action> {
     visible(s, draft)
 }
 
+/// Require both this draft identity and its unchanged staged value before an owned preview resumes.
 pub(super) fn preview_matches(s: &Session, id: u64, snapshot: &Action) -> bool {
     s.actions.editor.as_ref().is_some_and(|draft| draft.id == id && &draft.value == snapshot)
 }

@@ -14,6 +14,7 @@ const TIMEOUT_MS: f64 = 10_000.0;
 
 mod migration;
 
+/// Retain a DOM exception's name and message so storage failures remain actionable to the caller.
 fn js(e: JsValue) -> String {
     if let Some(exception) = e.dyn_ref::<web_sys::DomException>() {
         format!("{}: {}", exception.name(), exception.message())
@@ -29,6 +30,7 @@ impl Listeners {
     fn new() -> Self {
         Self(Vec::new())
     }
+    /// Own each installed callback until its scoped listener collection detaches it.
     fn add(&mut self, target: &EventTarget, name: &'static str, f: impl FnMut(Event) + 'static) -> Result<(), JsValue> {
         let cb = Closure::<dyn FnMut(Event)>::new(f);
         target.add_event_listener_with_callback(name, cb.as_ref().unchecked_ref())?;
@@ -37,6 +39,7 @@ impl Listeners {
     }
 }
 impl Drop for Listeners {
+    /// Detach every owned event listener before releasing its Rust callback, including on timeout.
     fn drop(&mut self) {
         for (target, name, cb) in &self.0 {
             let _ = target.remove_event_listener_with_callback(name, cb.as_ref().unchecked_ref());
@@ -49,6 +52,7 @@ struct Pending {
     _listeners: Listeners,
 }
 
+/// Pair an IDB request promise with owned success/error listeners for the whole pending operation.
 fn request(request: &IdbRequest) -> Pending {
     let mut listeners = Listeners::new();
     let promise = Promise::new(&mut |resolve, reject| {
@@ -98,6 +102,7 @@ async fn before(promise: &Promise, deadline: f64) -> Result<JsValue, String> {
     result
 }
 
+/// Open the versioned store within the shared deadline; close late or superseded connections.
 async fn open(deadline: f64) -> Result<IdbDatabase, String> {
     let factory = web_sys::window().ok_or("no window")?.indexed_db().map_err(js)?.ok_or("IndexedDB unavailable")?;
     let req = factory.open_with_u32(DATABASE, 2).map_err(js)?;
@@ -155,6 +160,7 @@ async fn open(deadline: f64) -> Result<IdbDatabase, String> {
     }
 }
 
+/// Open and hydrate one startup bridge under a single deadline, closing the connection on read failure.
 pub async fn load() -> Result<(IdbDatabase, Bridge, Vec<String>), String> {
     let deadline = js_sys::Date::now() + TIMEOUT_MS;
     let db = open(deadline).await?;
@@ -168,6 +174,7 @@ pub async fn load() -> Result<(IdbDatabase, Bridge, Vec<String>), String> {
     }
 }
 
+/// Bound the record inventory before copying Blob bytes, preserving unreadable entries for recovery.
 async fn read(db: &IdbDatabase, deadline: f64) -> Result<(Bridge, Vec<String>), String> {
     let tx = db.transaction_with_str_and_mode(FILES, IdbTransactionMode::Readonly).map_err(js)?;
     let req = tx.object_store(FILES).map_err(js)?.open_cursor().map_err(js)?;
@@ -261,6 +268,8 @@ fn queue_batch(store: &web_sys::IdbObjectStore, batch: &Batch, committed: bool) 
     Ok(())
 }
 
+/// Acknowledge only transaction completion; migration comparisons and writes share one bounded transaction.
+/// A closed connection is replaced without rehydrating over newer unsaved bridge edits.
 pub async fn write(db: &std::rc::Rc<std::cell::RefCell<IdbDatabase>>, batch: &Batch) -> Result<(), String> {
     if let Some(migration) = &batch.migration {
         if !matches!(batch.get(LEGACY_ACTIONS_FILE), Some(None))
