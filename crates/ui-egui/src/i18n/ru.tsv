@@ -3283,6 +3283,7 @@ curves	Smooth	Сгладить
 	Gray Value (Median)	Уровень серого (медиана)
 	Integrated Density	Интегральная плотность
 	Length	Длина
+	Memory usage percent	Использование памяти (%)
 	Show Favorite Fonts	Показать избранные шрифты
 	No favorite fonts yet: click the star beside a font to add it.	Избранных шрифтов пока нет: нажмите на звёздочку рядом со шрифтом, чтобы добавить его.
 	Favorite fonts	Избранные шрифты
@@ -3332,6 +3333,7 @@ curves	Smooth	Сгладить
 	Chisel Soft	Мягкая огранка
 	Open color-less EXR as ACEScg	Открывать EXR без цветового профиля как ACEScg
 	Do not append "copy" to filename when saving a copy	Не добавлять «copy» к имени файла при сохранении копии
+	Save Full-Size Composite in .pcraft Files	Сохранять сведённое изображение в полном размере в файлах .pcraft
 	Edit Selected Guides	Изменить выбранные направляющие
 	Clear Selected Guides	Удалить выбранные направляющие
 	Bicubic Automatic	Бикубическая, автоматически
@@ -3387,6 +3389,7 @@ curves	Smooth	Сгладить
 	This document's layers: {needed} of {budget} for layers	Слои этого документа: {needed} из {budget} для слоёв
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Слоям этого документа нужно {needed}, но занимать они могут {budget}: весь документ перерисовывается на CPU
 	GPU Memory (MB, 0 = Automatic)	Память GPU (МБ, 0 = автоматически)
+	Scratch Size Limit (MB, 0 = No Limit)	Предел размера рабочего диска (МБ, 0 = без ограничения)
 	{path}: the path is not valid Unicode; save under another name.	{path}: путь не является допустимым Unicode; сохраните под другим именем.
 	Replace	Заменить
 	{name} was changed by another app after it was opened or saved here.	Файл {name} был изменён другим приложением после того, как его открыли или сохранили здесь.
@@ -4714,3 +4717,108 @@ shape	Appearance	Оформление
 	Stop Color	Цвет контрольной точки
 	Shapes can't use patterns yet	Фигуры пока не могут использовать узоры
 	Edit Brush…	Изменить кисть…
+
+# Actions list and editor (10945/10946)
+	Action saved, but confirmation preference could not be saved: {error}	Операция сохранена, но настройку подтверждения сохранить не удалось: {error}
+	Add a brief description for this action…	Добавьте краткое описание этой операции…
+	Allow Tool Recording	Разрешить запись инструментов
+	Answer the open Actions editor question first	Сначала ответьте на открытый вопрос в редакторе операций
+	Apply to background	Применить к фону
+	Apply to subject	Применить к объекту
+	Black and white	Чёрно-белое
+	Cancel and continue editing	Отменить и продолжить редактирование
+	Choose color	Выбрать цвет
+	Choose icon	Выбрать значок
+	Choose icon and color	Выбрать значок и цвет
+	Classic Actions	Классические операции
+	Clear All Actions	Очистить все операции
+	Clear search	Очистить поиск
+	Click action	Щелчок
+	Close the open Actions editor first	Сначала закройте открытый редактор операций
+	Collapse all	Свернуть всё
+	Colour lookup tables	Таблицы преобразования цветов
+	Confirm or cancel the open action dialog first	Сначала подтвердите или отмените открытый диалог операции
+	Control	Ctrl
+	Default icon	Значок по умолчанию
+	Delete Action	Удалить операцию
+	Delete action	Удалить операцию
+	Delete group	Удалить группу
+	Delete step	Удалить шаг
+	Delete the action "{name}"?	Удалить операцию «{name}»?
+	Delete the group "{name}"?	Удалить группу «{name}»?
+	Discard	Отбросить
+	Download	Скачать
+	Duplicate Action	Дублировать операцию
+	Duplicate action	Дублировать операцию
+	Duplicate group	Дублировать группу
+	Duplicate step	Дублировать шаг
+	Edit Action	Изменить операцию
+	Edit action	Изменить операцию
+	Edit step settings	Изменить настройки шага
+	Enable step	Включить шаг
+	Expand all	Развернуть всё
+	Export Action…	Экспортировать операцию…
+	Finish or cancel action playback and the pending step first	Сначала завершите или отмените воспроизведение операции и ожидающий шаг
+	Finishing step…	Завершение шага…
+	Generated layer effects	Сгенерированные эффекты слоя
+	Generated styles	Сгенерированные стили
+	Grey	Серый
+	Harmonize layers	Согласовать слои
+	Hue and saturation	Цветовой тон и насыщенность
+	Import Actions…	Импортировать операции…
+	Import actions or create a new action to get started.	Импортируйте операции или создайте новую, чтобы начать.
+	Insert Action	Вставить операцию
+	Insert Conditional	Вставить условие
+	Insert Menu Item	Вставить пункт меню
+	Insert Path	Вставить контур
+	Insert Stop	Вставить остановку
+	Insert…	Вставить…
+	Keyboard shortcut	Сочетание клавиш
+	Lavender	Лавандовый
+	Layer effects	Эффекты слоя
+	Light blue	Светло-синий
+	List size	Размер списка
+	Magic wand	Волшебная палочка
+	Merge layers	Объединить слои
+	Move step down	Переместить шаг вниз
+	Move step up	Переместить шаг вверх
+	New group	Новая группа
+	No steps yet	Шагов пока нет
+	Object selection	Выделение объекта
+	Play Action	Воспроизвести операцию
+	Play Actions	Воспроизвести операции
+	Play action	Воспроизвести операцию
+	Play from selected step	Воспроизвести с выбранного шага
+	Playback Options…	Параметры воспроизведения…
+	Play…	Воспроизвести…
+	Preview on hover	Предпросмотр при наведении
+	Record	Записать
+	Recording	Запись
+	Remove background	Удалить фон
+	Save Action	Сохранить операцию
+	Search actions	Поиск операций
+	Select an existing action step to play	Выберите существующий шаг операции для воспроизведения
+	Select subject	Выбрать объект
+	Show grid	Показать сетку
+	Show step settings	Показать настройки шага
+	Smart removal	Умное удаление
+	Sort & View options	Параметры сортировки и вида
+	Start recording to build your action	Начните запись, чтобы создать операцию
+	Steps	Шаги
+	Stored action step	Сохранённый шаг операции
+	Stored settings	Сохранённые настройки
+	Teal	Сине-зелёный
+	Text	Текст
+	Text colour	Цвет текста
+	The draft steps changed. Cancel this dialog and reopen the step.	Шаги черновика изменились. Отмените этот диалог и снова откройте шаг.
+	The dragged action changed; drag it again	Перетаскиваемая операция изменилась; перетащите её снова
+	The editor response does not belong to this draft	Ответ редактора не относится к этому черновику
+	There are unsaved changes. Do you want to save or discard them?	Есть несохранённые изменения. Сохранить их или отбросить?
+	This editor page is closed	Эта страница редактора закрыта
+	This step dialog belongs to another editor	Этот диалог шага относится к другому редактору
+	Wait for the current action step to finish	Дождитесь завершения текущего шага операции
+	You haven't created any actions	Вы ещё не создали ни одной операции
+	Yours	Ваши
+
+# Actions reserved category caption (10945/10946)
+	Ungrouped Actions	Несгруппированные операции

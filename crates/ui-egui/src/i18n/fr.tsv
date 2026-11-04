@@ -3297,6 +3297,7 @@ curves	Smooth	Lisser
 	Sent to {printer}	Envoyé à {printer}
 	set in Print Settings…	défini dans les paramètres d’impression…
 	ICO is limited to 256 × 256 pixels	Le format ICO est limité à 256 × 256 pixels
+	Memory usage percent	Utilisation de la mémoire (%)
 	Show Favorite Fonts	Afficher les polices favorites
 	No favorite fonts yet: click the star beside a font to add it.	Aucune police favorite pour l’instant : cliquez sur l’étoile à côté d’une police pour l’ajouter.
 	Favorite fonts	Polices favorites
@@ -3359,6 +3360,7 @@ curves	Smooth	Lisser
 	Chisel Soft	Ciselage doux
 	Open color-less EXR as ACEScg	Ouvrir les EXR sans espace colorimétrique en ACEScg
 	Do not append "copy" to filename when saving a copy	Ne pas ajouter « copy » au nom de fichier lors de l’enregistrement d’une copie
+	Save Full-Size Composite in .pcraft Files	Enregistrer l’image composite en taille réelle dans les fichiers .pcraft
 	Edit Selected Guides	Modifier les repères sélectionnés
 	Clear Selected Guides	Effacer les repères sélectionnés
 	Bicubic Automatic	Bicubique automatique
@@ -3413,6 +3415,7 @@ curves	Smooth	Lisser
 	This document's layers: {needed} of {budget} for layers	Calques de ce document : {needed} sur {budget} pour les calques
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Les calques de ce document ont besoin de {needed} mais peuvent occuper {budget} : le document entier se redessine sur le CPU
 	GPU Memory (MB, 0 = Automatic)	Mémoire GPU (Mo, 0 = Automatique)
+	Scratch Size Limit (MB, 0 = No Limit)	Limite de taille du disque de travail (Mo, 0 = aucune limite)
 	{path}: the path is not valid Unicode; save under another name.	{path} : le chemin n’est pas un Unicode valide ; enregistrez sous un autre nom.
 	Replace	Remplacer
 	{name} was changed by another app after it was opened or saved here.	{name} a été modifié par une autre application après avoir été ouvert ou enregistré ici.
@@ -4553,3 +4556,108 @@ shape	Appearance	Apparence
 	Stop Color	Couleur du point
 	Shapes can't use patterns yet	Les formes ne peuvent pas encore utiliser de motifs
 	Edit Brush…	Modifier le pinceau…
+
+# Actions list and editor (10945/10946)
+	Action saved, but confirmation preference could not be saved: {error}	L’action a été enregistrée, mais la préférence de confirmation n’a pas pu être enregistrée : {error}
+	Add a brief description for this action…	Ajoutez une brève description de cette action…
+	Allow Tool Recording	Autoriser l’enregistrement des outils
+	Answer the open Actions editor question first	Répondez d’abord à la question ouverte dans l’éditeur d’actions
+	Apply to background	Appliquer à l’arrière-plan
+	Apply to subject	Appliquer au sujet
+	Black and white	Noir et blanc
+	Cancel and continue editing	Annuler et continuer la modification
+	Choose color	Choisir une couleur
+	Choose icon	Choisir une icône
+	Choose icon and color	Choisir une icône et une couleur
+	Classic Actions	Actions classiques
+	Clear All Actions	Effacer toutes les actions
+	Clear search	Effacer la recherche
+	Click action	Action de clic
+	Close the open Actions editor first	Fermez d’abord l’éditeur d’actions ouvert
+	Collapse all	Tout réduire
+	Colour lookup tables	Tables de correspondance des couleurs
+	Confirm or cancel the open action dialog first	Confirmez ou annulez d’abord la boîte de dialogue d’action ouverte
+	Control	Ctrl
+	Default icon	Icône par défaut
+	Delete Action	Supprimer l’action
+	Delete action	Supprimer l’action
+	Delete group	Supprimer le groupe
+	Delete step	Supprimer l’étape
+	Delete the action "{name}"?	Supprimer l’action « {name} » ?
+	Delete the group "{name}"?	Supprimer le groupe « {name} » ?
+	Discard	Abandonner
+	Download	Télécharger
+	Duplicate Action	Dupliquer l’action
+	Duplicate action	Dupliquer l’action
+	Duplicate group	Dupliquer le groupe
+	Duplicate step	Dupliquer l’étape
+	Edit Action	Modifier l’action
+	Edit action	Modifier l’action
+	Edit step settings	Modifier les paramètres de l’étape
+	Enable step	Activer l’étape
+	Expand all	Tout développer
+	Export Action…	Exporter l’action…
+	Finish or cancel action playback and the pending step first	Terminez ou annulez d’abord la lecture de l’action et l’étape en attente
+	Finishing step…	Fin de l’étape…
+	Generated layer effects	Effets de calque générés
+	Generated styles	Styles générés
+	Grey	Gris
+	Harmonize layers	Harmoniser les calques
+	Hue and saturation	Teinte et saturation
+	Import Actions…	Importer des actions…
+	Import actions or create a new action to get started.	Importez des actions ou créez-en une pour commencer.
+	Insert Action	Insérer une action
+	Insert Conditional	Insérer une condition
+	Insert Menu Item	Insérer un élément de menu
+	Insert Path	Insérer un tracé
+	Insert Stop	Insérer un arrêt
+	Insert…	Insérer…
+	Keyboard shortcut	Raccourci clavier
+	Lavender	Lavande
+	Layer effects	Effets de calque
+	Light blue	Bleu clair
+	List size	Taille de la liste
+	Magic wand	Baguette magique
+	Merge layers	Fusionner les calques
+	Move step down	Descendre l’étape
+	Move step up	Monter l’étape
+	New group	Nouveau groupe
+	No steps yet	Aucune étape pour le moment
+	Object selection	Sélection d’objet
+	Play Action	Lire l’action
+	Play Actions	Lire les actions
+	Play action	Lire l’action
+	Play from selected step	Lire à partir de l’étape sélectionnée
+	Playback Options…	Options de lecture…
+	Play…	Lecture…
+	Preview on hover	Aperçu au survol
+	Record	Enregistrer
+	Recording	Enregistrement
+	Remove background	Supprimer l'arrière-plan
+	Save Action	Enregistrer l’action
+	Search actions	Rechercher des actions
+	Select an existing action step to play	Sélectionnez une étape d’action existante à lire
+	Select subject	Sélectionner le sujet
+	Show grid	Afficher la grille
+	Show step settings	Afficher les paramètres de l’étape
+	Smart removal	Suppression intelligente
+	Sort & View options	Options de tri et d’affichage
+	Start recording to build your action	Lancez l’enregistrement pour créer votre action
+	Steps	Étapes
+	Stored action step	Étape d’action enregistrée
+	Stored settings	Paramètres enregistrés
+	Teal	Bleu sarcelle
+	Text	Texte
+	Text colour	Couleur du texte
+	The draft steps changed. Cancel this dialog and reopen the step.	Les étapes du brouillon ont changé. Annulez cette boîte de dialogue et rouvrez l’étape.
+	The dragged action changed; drag it again	L’action déplacée a changé ; faites-la glisser à nouveau
+	The editor response does not belong to this draft	La réponse de l’éditeur n’appartient pas à ce brouillon
+	There are unsaved changes. Do you want to save or discard them?	Des modifications ne sont pas enregistrées. Voulez-vous les enregistrer ou les abandonner ?
+	This editor page is closed	Cette page de l’éditeur est fermée
+	This step dialog belongs to another editor	Cette boîte de dialogue d’étape appartient à un autre éditeur
+	Wait for the current action step to finish	Attendez la fin de l’étape d’action en cours
+	You haven't created any actions	Vous n’avez créé aucune action
+	Yours	Vos actions
+
+# Actions reserved category caption (10945/10946)
+	Ungrouped Actions	Actions non groupées

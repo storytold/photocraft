@@ -158,12 +158,17 @@ fn insert_path_captures_cubic_geometry_without_editing_the_document() {
     let played = s.execute("actions.play", json!({"action":"A"})).unwrap();
     assert!(played.get("failed").is_none(), "{played}");
     assert_eq!(s.execute("path.info", json!({"name":"work"})).unwrap()["path"], expected);
-    assert!(atn_cmds::export("S", &[&s.actions.list[0]], &[], false).is_err(), "native capture must not pretend an unverified ATN descriptor is supported");
+    let (bytes, skipped) = atn_cmds::export("S", &[&s.actions.list[0]], &[], false).unwrap();
+    assert!(skipped.is_empty());
+    let wire = photocraft_psd::atn::parse(&bytes).unwrap();
+    assert_eq!(wire.actions[0].items[0].event, photocraft_psd::atn::AtnEvent::name("photocraftCommand"), "unmeasured inverted geometry uses the canonical native carrier, not a guessed Photoshop descriptor");
+    let back = atn_cmds::import(&bytes).unwrap();
+    assert_eq!(back.actions[0].steps, s.actions.list[0].steps, "the full native path value must survive");
 }
 
-/// Reject a nested creation before reset can clear the existing library.
-fn deny_new_set(id: &str, _: &Value) -> photocraft_engine::Result<()> {
-    if id == "actions.newSet" { Err(EngineError::Other("new set denied".into())) } else { Ok(()) }
+/// Reject the actual Reset operation before it can replace a canonical definition.
+fn deny_reset(id: &str, _: &Value) -> photocraft_engine::Result<()> {
+    if id == "actions.reset" { Err(EngineError::Other("reset denied".into())) } else { Ok(()) }
 }
 
 /// Real starter definitions are installed only after consent and all destructive admission checks.
@@ -175,7 +180,7 @@ fn reset_defaults_append_or_replace_only_after_valid_consent() {
         assert!(s.execute("actions.reset", p).is_err());
         assert_eq!(s.actions, original);
     }
-    s.authorize = Some(deny_new_set);
+    s.authorize = Some(deny_reset);
     assert!(s.execute("actions.reset", json!({"mode":"replace","confirm":true})).is_err());
     assert_eq!(s.actions, original);
     s.authorize = None;
@@ -189,5 +194,71 @@ fn reset_defaults_append_or_replace_only_after_valid_consent() {
     for (action, command) in s.actions.list.iter().zip(["image.adjustments.invert", "image.adjustments.desaturate"]) {
         assert_eq!(action.set.as_deref(), Some(actions_edit_cmds::DEFAULT_SET_NAME));
         assert_eq!(action.steps, [(command.into(), json!({}))]);
+    }
+}
+
+/// Edit Undo consumes only the latest panel Reset; physical-folder Save does not merge captions.
+#[test]
+fn reset_has_one_panel_undo_and_saves_the_selected_physical_occurrence() {
+    let mut s = session();
+    let original = s.actions.list.clone();
+    let document = s.active().unwrap().doc.clone();
+    let revision = s.active().unwrap().revision;
+    s.execute("actions.reset", json!({"mode":"append","confirm":true})).unwrap();
+    let result = s.execute("actions.reset", json!({"mode":"append","confirm":true})).unwrap();
+    let folders = actions_edit_cmds::set_occurrences(&s);
+    let defaults: Vec<_> = folders.iter().filter(|row| row.name == actions_edit_cmds::DEFAULT_SET_NAME).collect();
+    assert_eq!(defaults.len(), 2);
+    assert_ne!(defaults[0].origin, defaults[1].origin);
+    assert!(defaults.iter().all(|row| row.actions.len() == 2));
+    let saved = s.execute("actions.save", json!({"set":actions_edit_cmds::DEFAULT_SET_NAME,"setSlot":result["slot"]})).unwrap();
+    assert_eq!(saved["actions"].as_array().unwrap().len(), 2);
+    let bytes = photocraft_engine::paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap();
+    assert_eq!(atn_cmds::import(&bytes).unwrap().actions.len(), 2);
+    assert!(s.execute("actions.save", json!({"setSlot":999999})).is_err());
+    assert!(s.execute("actions.save", json!({"setSlot":result["slot"],"set":"Wrong"})).is_err());
+    assert_eq!(s.execute("edit.undo", json!({})).unwrap(), json!(true));
+    assert_eq!(s.actions.list.len(), original.len() + 2);
+    assert_eq!(actions_edit_cmds::set_occurrences(&s).iter().filter(|row| row.name == actions_edit_cmds::DEFAULT_SET_NAME).count(), 1);
+    assert!(!actions_edit_cmds::reset_undo_available(&s));
+    assert!(s.execute("actions.undoReset", json!({})).is_err());
+    assert!(std::sync::Arc::ptr_eq(&s.active().unwrap().doc, &document));
+    assert_eq!(s.active().unwrap().revision, revision);
+}
+
+/// Classic and Draft use one tool opt-in while retaining the canonical spelling projection.
+#[test]
+fn tool_recording_opt_in_has_the_same_journal_policy_in_both_recorders() {
+    for draft in [false, true] {
+        let mut s = session();
+        s.execute("type.create", json!({"x":1,"y":8,"text":"Teh end","size":8})).unwrap();
+        s.execute("layer.new.layer", json!({"name":"Paint"})).unwrap();
+        let id = if draft {
+            let id = s.execute("actions.editor.open", json!({"name":"Draft"})).unwrap()["draft"].as_u64().unwrap();
+            s.execute("actions.editor.record", json!({"draft":id})).unwrap();
+            Some(id)
+        } else {
+            s.execute("actions.record", json!({"action":"A"})).unwrap();
+            None
+        };
+        s.execute("select.all", json!({})).unwrap();
+        stroke(&mut s, "#ff0000");
+        s.execute("actions.allowToolRecording", json!({"enabled":true})).unwrap();
+        stroke(&mut s, "#00ff00");
+        s.execute("actions.allowToolRecording", json!({"enabled":false})).unwrap();
+        stroke(&mut s, "#0000ff");
+        s.execute("edit.checkSpelling", json!({"action":"suggest","word":"recieve"})).unwrap();
+        s.execute("edit.checkSpelling", json!({"allLayers":true})).unwrap();
+        s.execute("select.deselect", json!({})).unwrap();
+        let steps = if let Some(id) = id {
+            s.execute("actions.editor.stop", json!({"draft":id})).unwrap();
+            s.execute("actions.editor.get", json!({"draft":id})).unwrap()["action"]["steps"].clone()
+        } else {
+            s.execute("actions.stop", json!({})).unwrap();
+            serde_json::to_value(&s.actions.list[0].steps).unwrap()
+        };
+        let ids: Vec<_> = steps.as_array().unwrap().iter().map(|step| step[0].as_str().unwrap()).collect();
+        assert_eq!(ids, ["select.all", "paint.stroke", "edit.checkSpelling", "select.deselect"], "Draft={draft}");
+        assert_eq!(s.journal.iter().filter(|(id, _)| id == "paint.stroke").count(), 3);
     }
 }

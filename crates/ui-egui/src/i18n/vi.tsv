@@ -3758,6 +3758,7 @@ curves	Smooth	Làm mượt
 	Sent to {printer}	Đã gửi tới {printer}
 	set in Print Settings…	đặt trong thiết lập in…
 	ICO is limited to 256 × 256 pixels	ICO giới hạn ở 256 × 256 pixel
+	Memory usage percent	Tỷ lệ sử dụng bộ nhớ
 	Show Favorite Fonts	Hiển thị phông chữ yêu thích
 	No favorite fonts yet: click the star beside a font to add it.	Chưa có phông chữ yêu thích: nhấp vào ngôi sao bên cạnh phông chữ để thêm.
 	Favorite fonts	Phông chữ yêu thích
@@ -3820,6 +3821,7 @@ curves	Smooth	Làm mượt
 	Chisel Soft	Đục mềm
 	Open color-less EXR as ACEScg	Mở EXR không khai báo màu sắc dưới dạng ACEScg
 	Do not append "copy" to filename when saving a copy	Không thêm "copy" vào tên tệp khi lưu bản sao
+	Save Full-Size Composite in .pcraft Files	Lưu ảnh tổng hợp kích thước đầy đủ trong tệp .pcraft
 	Edit Selected Guides	Sửa đường căn đã chọn
 	Clear Selected Guides	Xóa đường căn đã chọn
 	Bicubic Automatic	Bicubic tự động
@@ -3897,6 +3899,7 @@ curves	Smooth	Làm mượt
 	This document's layers: {needed} of {budget} for layers	Các lớp của tài liệu này: {needed} trên {budget} dành cho lớp
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Các lớp của tài liệu này cần {needed} nhưng chỉ được dùng {budget}: vẽ lại toàn bộ tài liệu dùng CPU
 	GPU Memory (MB, 0 = Automatic)	Bộ nhớ GPU (MB, 0 = Tự động)
+	Scratch Size Limit (MB, 0 = No Limit)	Giới hạn dung lượng đĩa tạm (MB, 0 = Không giới hạn)
 	{path}: the path is not valid Unicode; save under another name.	{path}: đường dẫn không phải Unicode hợp lệ; hãy lưu với tên khác.
 	Replace	Thay thế
 	{name} was changed by another app after it was opened or saved here.	{name} đã bị một ứng dụng khác thay đổi sau khi được mở hoặc lưu ở đây.
@@ -4024,3 +4027,110 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Màu điểm dừng
 	Shapes can't use patterns yet	Hình chưa thể dùng mẫu tô
 	Edit Brush…	Chỉnh sửa cọ…
+
+# Actions list and editor (10945/10946)
+	Action saved, but confirmation preference could not be saved: {error}	Đã lưu thao tác nhưng không thể lưu tùy chọn xác nhận: {error}
+	Add a brief description for this action…	Thêm mô tả ngắn cho thao tác này…
+	Allow Tool Recording	Cho phép ghi công cụ
+	Answer the open Actions editor question first	Trước tiên hãy trả lời câu hỏi đang mở trong trình chỉnh sửa thao tác
+	Apply to background	Áp dụng cho nền
+	Apply to subject	Áp dụng cho chủ thể
+	Back	Quay lại
+	Black and white	Đen trắng
+	Cancel and continue editing	Hủy và tiếp tục chỉnh sửa
+	Choose color	Chọn màu
+	Choose icon	Chọn biểu tượng
+	Choose icon and color	Chọn biểu tượng và màu
+	Classic Actions	Thao tác cổ điển
+	Clear All Actions	Xóa tất cả thao tác
+	Clear search	Xóa tìm kiếm
+	Click action	Thao tác nhấp
+	Close the open Actions editor first	Trước tiên hãy đóng trình chỉnh sửa thao tác đang mở
+	Collapse all	Thu gọn tất cả
+	Colour lookup tables	Bảng tra màu
+	Confirm or cancel the open action dialog first	Trước tiên hãy xác nhận hoặc hủy hộp thoại thao tác đang mở
+	Control	Ctrl
+	Default icon	Biểu tượng mặc định
+	Delete Action	Xóa thao tác
+	Delete action	Xóa thao tác
+	Delete group	Xóa nhóm
+	Delete step	Xóa bước
+	Delete the action "{name}"?	Xóa thao tác “{name}”?
+	Delete the group "{name}"?	Xóa nhóm “{name}”?
+	Discard	Bỏ
+	Download	Tải xuống
+	Duplicate Action	Nhân bản thao tác
+	Duplicate action	Nhân bản thao tác
+	Duplicate group	Nhân bản nhóm
+	Duplicate step	Nhân bản bước
+	Edit Action	Chỉnh sửa thao tác
+	Edit action	Chỉnh sửa thao tác
+	Edit step settings	Chỉnh sửa cài đặt bước
+	Enable step	Bật bước
+	Expand all	Mở rộng tất cả
+	Export Action…	Xuất thao tác…
+	Finish or cancel action playback and the pending step first	Trước tiên hãy hoàn tất hoặc hủy việc phát thao tác và bước đang chờ
+	Finishing step…	Đang hoàn tất bước…
+	Generated layer effects	Hiệu ứng lớp được tạo
+	Generated styles	Kiểu được tạo
+	Grey	Xám
+	Harmonize layers	Hài hòa các lớp
+	Hue and saturation	Sắc độ và độ bão hòa
+	Import Actions…	Nhập thao tác…
+	Import actions or create a new action to get started.	Nhập thao tác hoặc tạo thao tác mới để bắt đầu.
+	Insert Action	Chèn thao tác
+	Insert Conditional	Chèn điều kiện
+	Insert Menu Item	Chèn mục menu
+	Insert Path	Chèn đường dẫn
+	Insert Stop	Chèn điểm dừng
+	Insert…	Chèn…
+	Keyboard shortcut	Phím tắt
+	Lavender	Màu oải hương
+	Layer effects	Hiệu ứng lớp
+	Light blue	Xanh lam nhạt
+	List size	Kích thước danh sách
+	Magic wand	Đũa thần
+	Merge layers	Gộp lớp
+	Move step down	Di chuyển bước xuống
+	Move step up	Di chuyển bước lên
+	New group	Nhóm mới
+	No steps yet	Chưa có bước nào
+	Object selection	Chọn đối tượng
+	On	Bật
+	Play Action	Phát thao tác
+	Play Actions	Phát các thao tác
+	Play action	Phát thao tác
+	Play from selected step	Phát từ bước đã chọn
+	Playback Options…	Tùy chọn phát…
+	Play…	Phát…
+	Preview on hover	Xem trước khi di chuột qua
+	Record	Ghi
+	Recording	Đang ghi
+	Remove background	Gỡ bỏ nền
+	Save Action	Lưu thao tác
+	Search actions	Tìm thao tác
+	Select an existing action step to play	Chọn một bước thao tác hiện có để phát
+	Select subject	Chọn chủ thể
+	Show grid	Hiện lưới
+	Show step settings	Hiển thị cài đặt bước
+	Smart removal	Xóa thông minh
+	Sort & View options	Tùy chọn sắp xếp và hiển thị
+	Start recording to build your action	Bắt đầu ghi để tạo thao tác của bạn
+	Steps	Các bước
+	Stored action step	Bước thao tác đã lưu
+	Stored settings	Cài đặt đã lưu
+	Teal	Xanh mòng két
+	Text	Văn bản
+	Text colour	Màu văn bản
+	The draft steps changed. Cancel this dialog and reopen the step.	Các bước trong bản nháp đã thay đổi. Hãy hủy hộp thoại này rồi mở lại bước.
+	The dragged action changed; drag it again	Thao tác được kéo đã thay đổi; hãy kéo lại
+	The editor response does not belong to this draft	Phản hồi của trình chỉnh sửa không thuộc bản nháp này
+	There are unsaved changes. Do you want to save or discard them?	Có thay đổi chưa được lưu. Bạn muốn lưu hay bỏ chúng?
+	This editor page is closed	Trang chỉnh sửa này đã đóng
+	This step dialog belongs to another editor	Hộp thoại bước này thuộc trình chỉnh sửa khác
+	Wait for the current action step to finish	Đợi bước thao tác hiện tại hoàn tất
+	You haven't created any actions	Bạn chưa tạo thao tác nào
+	Yours	Của bạn
+
+# Actions reserved category caption (10945/10946)
+	Ungrouped Actions	Thao tác chưa được nhóm

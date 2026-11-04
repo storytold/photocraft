@@ -28,19 +28,28 @@ use crate::{EngineError, Result, Session};
 
 mod adjustments;
 mod convert;
+pub(crate) use convert::{UniqueNames, library_action, library_items};
 mod descriptors;
 mod events;
 mod fields;
 mod files;
 mod menu_item;
+pub(crate) mod sidecar;
+pub use sidecar::ActionMetadata;
 
+mod steps_artboard;
 mod steps_channels;
+mod steps_content_aware;
+mod steps_direct_adjustments;
 mod steps_distort;
 mod steps_doc;
 mod steps_gallery;
+mod steps_gradient;
 mod steps_image;
 mod steps_layer;
+mod steps_layer_style;
 mod steps_make;
+mod steps_type_path;
 
 mod steps_stylize;
 
@@ -52,8 +61,7 @@ mod tables;
 
 #[cfg(test)]
 use adjustments::{levels_from, selective_from};
-pub(crate) use convert::UniqueNames;
-pub use convert::{Imported, Skipped, Unsupported, export, function_key_name, import, import_with_encoding, parse_function_key};
+pub use convert::{Imported, ImportedSet, Skipped, Unsupported, export, function_key_name, import, import_with_encoding, normalize_import, parse_function_key};
 #[cfg(test)]
 use convert::{MAX_NAME_CHARS, export_item, normalise};
 #[cfg(test)]
@@ -86,6 +94,18 @@ pub const PHOTOSHOP_STEP: &str = "actions.photoshopStep";
 pub const STOP_MESSAGE: &str = "actions.stopMessage";
 /// The set name Save Actions uses for actions that came from no set.
 pub const DEFAULT_SET: &str = "PhotoCraft Actions";
+/// One logical outside-group category shared by the classic and modern Actions views.
+pub const UNGROUPED_SET: &str = "Ungrouped Actions";
+
+/// The single visible category for legacy ungrouped actions and empty-wire imports.
+pub fn logical_set_name(set: Option<&str>) -> &str {
+    set.filter(|name| *name != UNGROUPED_SET).unwrap_or(UNGROUPED_SET)
+}
+
+/// The ungrouped category exports with an empty ATN set name; explicit names stay intact.
+pub fn wire_set_name(set: &str) -> &str {
+    if set == UNGROUPED_SET { "" } else { set }
+}
 
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: cmd.into(), msg: msg.into() }
@@ -117,7 +137,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Load Actions…",
             menu: &[],
             shortcut: None,
-            params: r##"{"path":".atn file"?,"data":base64 bytes?,"set":name? (override the file's set name),"replace":bool=true (replace the actions of a set of the same name),"encoding":"auto"|label="auto" (the encoding of 8-bit step names: shift_jis, gbk, big5, euc-kr, windows-1252, macintosh…; auto works it out)} → {set, actions:[names], steps, unsupported:[{action, step, event, name}], functionKeys:[{action, key}], warnings, encoding}. Photoshop steps PhotoCraft cannot play become actions.photoshopStep steps (kept for Save Actions; they fail at playback with the step's name); tool selections and other steps with no document effect are imported switched off. Layer references by name replay in any document."##,
+            params: r##"{"path":".atn file"?,"data":base64 bytes?,"set":name? (override only a file with one real set),"replace":bool=true (replace each imported set),"encoding":"auto"|label="auto" (one encoding for all 8-bit step names: shift_jis, gbk, big5, euc-kr, windows-1252, macintosh…)} → {set, sets:[names], actions:[names], steps, unsupported:[{action, step, event, name}], functionKeys:[{action, key}], warnings, encoding}. All real sets import together. Recognized sidecar metadata follows set/action position; empty wire set names become Ungrouped Actions. Photoshop steps PhotoCraft cannot play become actions.photoshopStep steps, retained for Save Actions and reported at playback."##,
             enabled: always,
             run: load,
             journal: false,
@@ -137,7 +157,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Save Actions…",
             menu: &[],
             shortcut: None,
-            params: r##"{"path":".atn file"? (else the bytes come back as base64 `data`),"set":name? (that set's actions, none for an empty New Set set; default: every action, as the set "PhotoCraft Actions"),"action":name|index? (one action),"skipUnsupported":bool=false (leave out steps with no Photoshop equivalent instead of failing)} → {set, actions:[names], steps, bytes, skipped:[{action, step, id}], path|data}"##,
+            params: r##"{"path":".atn file"? (else base64 `data`),"set":name? (one logical set, including empty sets),"setSlot":index? (one current physical folder, mutually exclusive with action),"action":name|index? (one action),"skipUnsupported":bool=false (omit steps with no Photoshop equivalent)} → {set, sets:[names], actions:[names], steps, bytes, skipped:[{action, step, id}], path|data}. Default saves every real group; a single named group keeps the legacy PhotoCraft Actions output name. Ungrouped Actions writes an empty wire name. Sidecar metadata is rebuilt for the selected sets/actions; conflicting archive notes or global metadata fail explicitly."##,
             enabled: always,
             run: save,
             journal: false,

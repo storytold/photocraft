@@ -1,4 +1,4 @@
-//! #7669: strict ATN export must not replace a native fractional Crystallize cell size.
+//! #7669: native fallback preserves fractional cell sizes; Photoshop-only export omits them.
 use photocraft_engine::actions_cmds::Action;
 use photocraft_engine::{Session, atn_cmds};
 use photocraft_psd::{atn, descriptor::Value as D};
@@ -27,10 +27,9 @@ fn pixels(s: &Session) -> Vec<[f32; 4]> {
     photocraft_compose::flatten(&s.active().unwrap().doc).into_px()
 }
 
-/// Fractions remain valid native edits; strict integer ATN conversion must refuse them.
+/// Fractions retain their exact native settings and pixels; explicit Photoshop omission reports them.
 #[test]
-fn fractional_cell_sizes_remain_native_and_are_refused_by_strict_export() {
-    let mut silently_exported = Vec::new();
+fn fractional_cell_sizes_use_native_events_without_pixel_loss() {
     for depth in [8, 16, 32] {
         for cell_size in [3.1, 5.4, 5.5, 5.6, 10.25, 299.9] {
             let params = json!({"cellSize": cell_size});
@@ -48,22 +47,20 @@ fn fractional_cell_sizes_remain_native_and_are_refused_by_strict_export() {
                 rounded.execute(CRYSTALLIZE, json!({"cellSize": 5})).unwrap();
                 assert_ne!(pixels(&rounded), expected, "fixture must expose 5.4 vs 5: {depth}");
             }
-            if let Ok((bytes, skipped)) = atn_cmds::export("Crystallize", &[&action], &[], false) {
-                let imported = atn_cmds::import(&bytes).unwrap();
-                assert!(skipped.is_empty() && imported.unsupported.is_empty() && imported.warnings.is_empty());
-                let exported = imported.actions[0].steps[0].1["cellSize"].clone();
-                let mut replay = fixture(depth);
-                replay.actions.list = imported.actions;
-                replay.execute("actions.play", json!({"action": "Fractional Crystallize"})).unwrap();
-                let changed = pixels(&replay) != expected;
-                if cell_size == 5.4 {
-                    assert!(changed, "baseline must expose the reported pixel loss: {depth}");
-                }
-                silently_exported.push(format!("depth {depth}: {cell_size} -> {exported}, pixels changed: {changed}"));
-            }
+            let (bytes, skipped) = atn_cmds::export("Crystallize", &[&action], &[], false).unwrap();
+            assert!(skipped.is_empty());
+            let item = &atn::parse(&bytes).unwrap().actions[0].items[0];
+            assert_eq!(item.event, atn::AtnEvent::name("photocraftCommand"));
+            let imported = atn_cmds::import(&bytes).unwrap();
+            assert!(imported.unsupported.is_empty() && imported.warnings.is_empty());
+            assert_eq!(imported.actions[0].steps, action.steps, "native fallback retains exact fractions");
+            let mut replay = fixture(depth);
+            replay.actions.list = imported.actions;
+            replay.execute("actions.play", json!({"action":action.name})).unwrap();
+            assert_eq!(pixels(&replay), pixels(&direct), "native fallback must not round pixels");
+            crate::atn_export::fallback("Crystallize", &action);
         }
     }
-    assert!(silently_exported.is_empty(), "strict export silently accepted fractional cell sizes:\n{}", silently_exported.join("\n"));
 }
 
 /// Integer sizes, bounds and omitted defaults retain their binary descriptor and playback.
@@ -104,11 +101,15 @@ fn integer_cell_sizes_and_defaults_preserve_playback() {
 /// Skipping is explicit and reports exactly which edits were lost, preserving supported order.
 #[test]
 fn skipping_fractional_cell_sizes_reports_action_and_step() {
-    let action =
-        Action::new("Mixed Crystallize", [5.0, 5.4, 10.0, 10.25].into_iter().map(|cell_size| (CRYSTALLIZE.into(), json!({"cellSize": cell_size}))).collect());
-    let error = atn_cmds::export("Crystallize", &[&action], &[], false).unwrap_err();
-    assert!(error.contains("step 2 of `Mixed Crystallize`"), "{error}");
-    assert!(error.contains(CRYSTALLIZE) && error.contains("skipUnsupported"), "{error}");
+    let action = Action::new(
+        "Mixed Crystallize",
+        [json!(5), json!(5.4), json!(10), json!(10.25)].into_iter().map(|cell_size| (CRYSTALLIZE.into(), json!({"cellSize": cell_size}))).collect(),
+    );
+    let items = crate::atn_export::preserved("Crystallize", &action);
+    assert_eq!(items.len(), 4);
+    for index in [1, 3] {
+        assert_eq!(items[index].event, atn::AtnEvent::name("photocraftCommand"));
+    }
     let (bytes, skipped) = atn_cmds::export("Crystallize", &[&action], &[], true).unwrap();
     assert_eq!(
         skipped,
@@ -130,7 +131,7 @@ fn skipping_fractional_cell_sizes_reports_action_and_step() {
 
 /// The plain event still cannot carry mask/channel targets or nonnumeric cell sizes.
 #[test]
-fn non_pixel_targets_and_malformed_fields_are_still_refused() {
+fn non_pixel_targets_and_malformed_fields_use_native_events_or_are_skipped() {
     for params in [
         json!({"cellSize": 5, "target": "mask"}),
         json!({"cellSize": 5, "target": "quickMask"}),
@@ -143,7 +144,7 @@ fn non_pixel_targets_and_malformed_fields_are_still_refused() {
         json!({"cellSize": 1e100}),
     ] {
         let action = Action::new("Unsupported Crystallize", vec![(CRYSTALLIZE.into(), params.clone())]);
-        assert!(atn_cmds::export("Crystallize", &[&action], &[], false).is_err(), "{params}");
+        crate::atn_export::fallback("Crystallize", &action);
         let (bytes, skipped) = atn_cmds::export("Crystallize", &[&action], &[], true).unwrap();
         assert_eq!(skipped, vec![atn_cmds::Skipped { action: "Unsupported Crystallize".into(), step: 0, id: CRYSTALLIZE.into() }]);
         assert!(atn_cmds::import(&bytes).unwrap().actions[0].steps.is_empty());

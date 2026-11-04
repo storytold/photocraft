@@ -2908,6 +2908,7 @@ curves	Smooth	平滑
 	Sent to {printer}	已傳送至 {printer}
 	set in Print Settings…	在列印設定中設定…
 	ICO is limited to 256 × 256 pixels	ICO 最大為 256 × 256 像素
+	Memory usage percent	記憶體使用比例 (%)
 	Show Favorite Fonts	顯示我的最愛字體
 	No favorite fonts yet: click the star beside a font to add it.	尚無我的最愛字體：按一下字體旁的星號即可加入。
 	Favorite fonts	我的最愛字體
@@ -2970,6 +2971,7 @@ curves	Smooth	平滑
 	Chisel Soft	雕刻柔和
 	Open color-less EXR as ACEScg	將無色彩空間資訊的 EXR 以 ACEScg 開啟
 	Do not append "copy" to filename when saving a copy	儲存副本時不在檔名後加上「copy」
+	Save Full-Size Composite in .pcraft Files	在 .pcraft 檔案中儲存全尺寸合成影像
 	Color Profile	色彩描述檔
 	EXIF	EXIF
 	Edit Selected Guides	編輯所選參考線
@@ -3029,6 +3031,7 @@ curves	Smooth	平滑
 	This document's layers: {needed} of {budget} for layers	此文件的圖層：圖層可用 {budget} 中的 {needed}
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	此文件的圖層需要 {needed}，但只能佔用 {budget}：整份文件的重繪使用 CPU
 	GPU Memory (MB, 0 = Automatic)	GPU 記憶體（MB，0 = 自動）
+	Scratch Size Limit (MB, 0 = No Limit)	暫存磁碟大小上限（MB，0 = 無限制）
 	{path}: the path is not valid Unicode; save under another name.	{path}：路徑不是有效的 Unicode；請以其他名稱儲存。
 	Replace	取代
 	{name} was changed by another app after it was opened or saved here.	{name} 在此處開啟或儲存後已被其他 App 更改。
@@ -3158,3 +3161,110 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Solid Color	純色
 	Tint Color	色調顏色
 	Edit Brush…	編輯筆刷…
+
+# Actions list and editor (10945/10946)
+	Action saved, but confirmation preference could not be saved: {error}	動作已儲存，但無法儲存確認偏好設定：{error}
+	Add a brief description for this action…	為此動作新增簡短說明…
+	Allow Tool Recording	允許錄製工具操作
+	Answer the open Actions editor question first	請先回答動作編輯器中開啟的問題
+	Apply to background	套用至背景
+	Apply to subject	套用至主體
+	Back	返回
+	Black and white	黑白
+	Cancel and continue editing	取消並繼續編輯
+	Choose color	選擇顏色
+	Choose icon	選擇圖示
+	Choose icon and color	選擇圖示與色彩
+	Classic Actions	傳統動作
+	Clear All Actions	清除所有動作
+	Clear search	清除搜尋
+	Click action	點擊操作
+	Close the open Actions editor first	請先關閉已開啟的動作編輯器
+	Collapse all	全部摺疊
+	Colour lookup tables	色彩查詢表
+	Confirm or cancel the open action dialog first	請先確認或取消已開啟的動作對話框
+	Control	Ctrl
+	Default icon	預設圖示
+	Delete Action	刪除動作
+	Delete action	刪除動作
+	Delete group	刪除群組
+	Delete step	刪除步驟
+	Delete the action "{name}"?	刪除動作「{name}」？
+	Delete the group "{name}"?	刪除群組「{name}」？
+	Discard	捨棄
+	Download	下載
+	Duplicate Action	複製動作
+	Duplicate action	複製動作
+	Duplicate group	複製群組
+	Duplicate step	複製步驟
+	Edit Action	編輯動作
+	Edit action	編輯動作
+	Edit step settings	編輯步驟設定
+	Enable step	啟用步驟
+	Expand all	全部展開
+	Export Action…	匯出動作…
+	Finish or cancel action playback and the pending step first	請先完成或取消動作播放及待處理步驟
+	Finishing step…	正在完成步驟…
+	Generated layer effects	產生的圖層效果
+	Generated styles	產生的樣式
+	Grey	灰色
+	Harmonize layers	協調圖層
+	Hue and saturation	色相與飽和度
+	Import Actions…	匯入動作…
+	Import actions or create a new action to get started.	匯入動作或建立新動作，即可開始使用。
+	Insert Action	插入動作
+	Insert Conditional	插入條件
+	Insert Menu Item	插入選單項目
+	Insert Path	插入路徑
+	Insert Stop	插入停止
+	Insert…	插入…
+	Keyboard shortcut	鍵盤快速鍵
+	Lavender	薰衣草色
+	Layer effects	圖層效果
+	Light blue	淺藍色
+	List size	清單大小
+	Magic wand	魔術棒
+	Merge layers	合併圖層
+	Move step down	下移步驟
+	Move step up	上移步驟
+	New group	新增群組
+	No steps yet	尚無步驟
+	Object selection	物件選取
+	On	開
+	Play Action	播放動作
+	Play Actions	播放動作
+	Play action	播放動作
+	Play from selected step	從所選步驟播放
+	Playback Options…	播放選項…
+	Play…	播放…
+	Preview on hover	暫留時預覽
+	Record	錄製
+	Recording	正在錄製
+	Remove background	移除背景
+	Save Action	儲存動作
+	Search actions	搜尋動作
+	Select an existing action step to play	選取要播放的現有動作步驟
+	Select subject	選取主體
+	Show grid	顯示格點
+	Show step settings	顯示步驟設定
+	Smart removal	智慧移除
+	Sort & View options	排序與檢視選項
+	Start recording to build your action	開始錄製以建立動作
+	Steps	步驟
+	Stored action step	已儲存的動作步驟
+	Stored settings	已儲存的設定
+	Teal	藍綠色
+	Text	文字
+	Text colour	文字顏色
+	The draft steps changed. Cancel this dialog and reopen the step.	草稿步驟已變更。請取消此對話框並重新開啟該步驟。
+	The dragged action changed; drag it again	拖曳的動作已變更；請重新拖曳
+	The editor response does not belong to this draft	編輯器回應不屬於此草稿
+	There are unsaved changes. Do you want to save or discard them?	有未儲存的變更。要儲存還是捨棄？
+	This editor page is closed	此編輯器頁面已關閉
+	This step dialog belongs to another editor	此步驟對話框屬於另一個編輯器
+	Wait for the current action step to finish	請等候目前的動作步驟完成
+	You haven't created any actions	您尚未建立任何動作
+	Yours	我的動作
+
+# Actions reserved category caption (10945/10946)
+	Ungrouped Actions	未分組動作

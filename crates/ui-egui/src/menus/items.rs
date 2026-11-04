@@ -241,6 +241,12 @@ pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
         item.label = "Release Clipping Mask".into();
         item.enabled = is_enabled(app, &item.id);
     }
+    if photocraft_engine::actions_edit_cmds::reset_undo_available(&app.session)
+        && app.ui.pen.as_ref().is_none_or(|pen| pen.knots.is_empty())
+        && let Some(undo) = items.iter_mut().find(|item| item.id == "edit.undo")
+    {
+        undo.label = "Undo Reset Actions".into();
+    }
     items
 }
 

@@ -22,13 +22,13 @@ pub(crate) fn owns(fields: &Map<String, Value>) -> bool {
 /// Reset must not discard a live or suspended recording.
 fn idle(app: &PhotocraftApp) -> Result<(), String> {
     super::suspended_guard(app, COMMAND)?;
-    if app.session.actions.recording.is_some() || app.session.actions.playing > 0 {
+    if app.session.actions.recording_active() || app.session.actions.playing > 0 || app.session.actions.held_playback.is_some() {
         return Err(tl!("Stop recording or playback before resetting actions.").into());
     }
     Ok(())
 }
 
-/// Capture this library and caller, keeping append as the initial choice.
+/// Capture this library and caller; OK replaces, matching the measured warning's default.
 pub(super) fn open(app: &mut PhotocraftApp) -> Result<Value, String> {
     idle(app)?;
     if app.held_actions_reset.is_some() {
@@ -42,24 +42,38 @@ pub(super) fn open(app: &mut PhotocraftApp) -> Result<Value, String> {
     if !append {
         replace?;
     }
-    let mode = if append { "append" } else { "replace" };
-    let fields = json!({MARK:true,"__command":COMMAND,"__label":"Reset Actions","mode":mode});
+    let fields = json!({MARK:true,"__command":COMMAND,"__label":"Reset Actions","mode":"replace"});
     let dialog = app.ui.open_dialog(DialogKind::Command, fields.as_object().cloned().unwrap_or_default());
     app.held_actions_reset = Some(Held { dialog, revision: app.session.actions.rev, gate, automated, append, replace: allowed_replace });
     Ok(json!({"dialog":dialog}))
 }
 
-/// Identify the starter actions and offer append, replace or the standard Cancel.
-pub(crate) fn body(app: &PhotocraftApp, ui: &mut egui::Ui, dialog: u64, fields: &mut Map<String, Value>) {
-    let held = app.held_actions_reset.as_ref().filter(|held| held.dialog == dialog);
+/// The measured warning has three explicit buttons rather than editable radio choices.
+pub(crate) fn body(_app: &PhotocraftApp, ui: &mut egui::Ui, _dialog: u64, _fields: &mut Map<String, Value>) {
+    ui.label(tl!("Replace the current actions?"));
     ui.label(tl!("Restore PhotoCraft Basics: Invert Colors and Desaturate."));
-    let mut mode = fields.get("mode").and_then(Value::as_str).unwrap_or("append").to_string();
-    ui.add_enabled_ui(held.is_some_and(|held| held.append), |ui| ui.radio_value(&mut mode, "append".into(), tl!("Append")));
-    ui.add_enabled_ui(held.is_some_and(|held| held.replace), |ui| ui.radio_value(&mut mode, "replace".into(), tl!("Replace")));
-    if mode == "replace" {
-        ui.label(tl!("This removes the current action library and cannot be undone."));
+}
+
+/// Keyboard confirmation means OK, so it must retain Replace's captured permission.
+pub(crate) fn can_default_confirm(app: &PhotocraftApp, dialog: u64) -> bool {
+    app.held_actions_reset.as_ref().is_some_and(|held| held.dialog == dialog && held.replace)
+}
+
+/// OK / Cancel / Append preserve separate permissions and publish only the clicked choice.
+pub(crate) fn buttons(app: &PhotocraftApp, ui: &mut egui::Ui, dialog: u64, fields: &mut Map<String, Value>) -> Option<crate::widgets::ButtonRole> {
+    use crate::widgets::{ButtonRole, DialogButton, dialog_buttons};
+    let held = app.held_actions_reset.as_ref().filter(|held| held.dialog == dialog);
+    let hit = dialog_buttons(ui, &[
+        DialogButton::new(ButtonRole::Default, tl!("OK"), 84.0).enabled(held.is_some_and(|held| held.replace)),
+        DialogButton::new(ButtonRole::Cancel, tl!("Cancel"), 84.0),
+        DialogButton::new(ButtonRole::Alternate, tl!("Append"), 84.0).enabled(held.is_some_and(|held| held.append)),
+    ]);
+    if hit == Some(ButtonRole::Default) {
+        fields.insert("mode".into(), json!("replace"));
+    } else if hit == Some(ButtonRole::Alternate) {
+        fields.insert("mode".into(), json!("append"));
     }
-    fields.insert("mode".into(), json!(mode));
+    hit
 }
 
 /// Check actual consent and retained permissions before the registered command commits.
@@ -91,6 +105,13 @@ pub(crate) fn confirm(app: &mut PhotocraftApp, dialog: u64, fields: &Map<String,
     app.ui.actions.selected = None;
     app.ui.actions.selected_step = None;
     app.ui.actions.selected_set = result.get("set").and_then(Value::as_str).map(str::to_string);
+    let folders = photocraft_engine::actions_edit_cmds::set_occurrences(&app.session);
+    app.ui.actions.selected_folder = result.get("slot").and_then(Value::as_u64).and_then(|slot| usize::try_from(slot).ok())
+        .and_then(|slot| folders.iter().find(|row| row.slot == Some(slot))).map(super::FolderSelection::from_row);
+    app.ui.actions.collapsed_folders.retain(|key| folders.iter().any(|row| key.matches(row)));
+    if let Some(selected) = &app.ui.actions.selected_folder {
+        app.ui.actions.collapsed_folders.retain(|key| key != selected);
+    }
     app.ui.actions.expanded.resize(app.session.actions.list.len(), false);
     app.ui.actions.renaming = None;
     app.ui.actions.reveal_recording = None;

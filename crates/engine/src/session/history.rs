@@ -2,10 +2,20 @@ use super::documents::fix_active;
 use super::{Arc, DocState, Document, LayerId, LayerTarget, Session, channel_cmds, layer_multi_cmds};
 
 impl Session {
+    /// Undo a document step or restore Clear History's rows and source without editing pixels.
     pub fn undo(&mut self) -> bool {
         // A background job is computing from the current state: it must not move under it.
         if self.active_job().is_some() {
             return false;
+        }
+        // The latest Reset is panel definition state, never a document History entry.
+        if crate::actions_edit_cmds::reset_undo_available(self) {
+            return self.execute("actions.undoReset", serde_json::json!({})).is_ok();
+        }
+        // Undo Clear History only restores metadata. It must not establish the new document
+        // baseline that an actual edit after Clear History would create.
+        if !self.active().is_some_and(|st| st.history.is_cleared()) {
+            crate::actions_cmds::before_action_edit(self);
         }
         let keep_visibility = !self.visibility_undoable();
         let Some(st) = self.active_mut() else { return false };
@@ -47,10 +57,12 @@ impl Session {
         }
     }
 
+    /// Restore the next document state and its selection/visibility bookkeeping through the ordinary history path.
     pub fn redo(&mut self) -> bool {
         if self.active_job().is_some() {
             return false;
         }
+        crate::actions_cmds::before_action_edit(self);
         let keep_visibility = !self.visibility_undoable();
         let Some(st) = self.active_mut() else { return false };
         st.coalesce = None;

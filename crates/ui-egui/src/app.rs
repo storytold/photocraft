@@ -20,6 +20,12 @@ mod input;
 mod prefs;
 mod screenshot;
 mod targets;
+
+impl Drop for PhotocraftApp {
+    fn drop(&mut self) {
+        actions::shutdown(self);
+    }
+}
 mod thumbs;
 mod view;
 mod window;
@@ -43,6 +49,7 @@ impl PhotocraftApp {
             display_memo: HashMap::new(),
             navigator_gpu: HashMap::new(),
             navigator_plain: std::collections::HashSet::new(),
+            streams: HashMap::new(),
             info_samplers: None,
             monitors: Default::default(),
             checker: None,
@@ -126,6 +133,7 @@ impl PhotocraftApp {
             automation_input: false,
             run_depth: 0,
             paused_playbacks: Default::default(),
+            actions_runtime: Default::default(),
             channel_thumbs: None,
             channel_views: HashMap::new(),
             type_layout: None,
@@ -164,6 +172,7 @@ impl PhotocraftApp {
             raw_redevelop: Vec::new(),
             wide_angle: None,
             dialog_edits: Default::default(),
+            color_picker_live: Vec::new(),
             pending_after_prompt: None,
             tone_hist: None,
             doc_hist: None,
@@ -187,12 +196,15 @@ impl PhotocraftApp {
             discard: None,
             file_dialog: None,
             tiff_options: None,
+            tiff_remembered: Default::default(),
             save_dirs: HashMap::new(),
             disk_stamps: HashMap::new(),
             targa_options: None,
             jpeg_options: None,
             dds_options: None,
             held_opens: Default::default(),
+            held_memory_prompts: Default::default(),
+            prompt_order: Default::default(),
             held_preset_import: None,
             held_actions_replace: None,
             held_record_again: None,
@@ -276,6 +288,14 @@ impl eframe::App for PhotocraftApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        photocraft_compose::discard_unreadable_pixel_caches();
+        if let Err(error) = photocraft_raster::spill::check_integrity() {
+            self.ui.status = error;
+            self.ui.status_error = true;
+        } else if let Some(error) = photocraft_raster::spill::last_error() {
+            self.ui.status = error;
+            self.ui.status_error = true;
+        }
         self.ui_frame(ui, frame);
         self.finish_type_reset_pass(ui.ctx());
     }

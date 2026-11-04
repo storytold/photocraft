@@ -3362,6 +3362,7 @@ curves	Smooth	Tasoita
 	This document's layers: {needed} of {budget} for layers	Tämän asiakirjan tasot: {needed} / {budget} tasoille
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Tämän asiakirjan tasot tarvitsevat {needed}, mutta saavat käyttää {budget}: koko asiakirjan uudelleenpiirrot käyttävät suoritinta
 	GPU Memory (MB, 0 = Automatic)	GPU-muisti (Mt, 0 = automaattinen)
+	Scratch Size Limit (MB, 0 = No Limit)	Työlevyn kokoraja (Mt, 0 = ei rajaa)
 	{path}: the path is not valid Unicode; save under another name.	{path}: polku ei ole kelvollista Unicodea; tallenna toisella nimellä.
 	Replace	Korvaa
 	{name} was changed by another app after it was opened or saved here.	Toinen ohjelma on muuttanut tiedostoa {name} sen jälkeen, kun se avattiin tai tallennettiin täällä.
@@ -4773,3 +4774,108 @@ cameraRaw	White Balance: As Shot	Valkotasapaino: kuvauksen mukainen
 	The path was discarded	Polku hylättiin
 	The path was kept as the Work Path	Polku säilytettiin työpolkuna
 	Edit Brush…	Muokkaa sivellintä…
+
+# Actions list and editor (10945/10946)
+	Action saved, but confirmation preference could not be saved: {error}	Toiminto tallennettiin, mutta vahvistusasetusta ei voitu tallentaa: {error}
+	Add a brief description for this action…	Lisää lyhyt kuvaus tästä toiminnosta…
+	Allow Tool Recording	Salli työkalujen tallennus
+	Answer the open Actions editor question first	Vastaa ensin toimintomuokkaimen avoimeen kysymykseen
+	Apply to background	Käytä taustaan
+	Apply to subject	Käytä kohteeseen
+	Black and white	Mustavalkoinen
+	Cancel and continue editing	Peruuta ja jatka muokkaamista
+	Choose color	Valitse väri
+	Choose icon	Valitse kuvake
+	Choose icon and color	Valitse kuvake ja väri
+	Classic Actions	Perinteiset toiminnot
+	Clear All Actions	Tyhjennä kaikki toiminnot
+	Clear search	Tyhjennä haku
+	Click action	Napsautustoiminto
+	Close the open Actions editor first	Sulje ensin avoin toimintomuokkain
+	Collapse all	Supista kaikki
+	Colour lookup tables	Värien hakutaulukot
+	Confirm or cancel the open action dialog first	Vahvista tai peruuta ensin avoin toiminnon valintaikkuna
+	Control	Ctrl
+	Default icon	Oletuskuvake
+	Delete Action	Poista toiminto
+	Delete action	Poista toiminto
+	Delete group	Poista ryhmä
+	Delete step	Poista vaihe
+	Delete the action "{name}"?	Poistetaanko toiminto ”{name}”?
+	Delete the group "{name}"?	Poistetaanko ryhmä ”{name}”?
+	Discard	Hylkää
+	Download	Lataa
+	Duplicate Action	Monista toiminto
+	Duplicate action	Monista toiminto
+	Duplicate group	Monista ryhmä
+	Duplicate step	Monista vaihe
+	Edit Action	Muokkaa toimintoa
+	Edit action	Muokkaa toimintoa
+	Edit step settings	Muokkaa vaiheen asetuksia
+	Enable step	Ota vaihe käyttöön
+	Expand all	Laajenna kaikki
+	Export Action…	Vie toiminto…
+	Finish or cancel action playback and the pending step first	Viimeistele tai peruuta ensin toiminnon toisto ja odottava vaihe
+	Finishing step…	Viimeistellään vaihetta…
+	Generated layer effects	Luodut tasotehosteet
+	Generated styles	Luodut tyylit
+	Grey	Harmaa
+	Harmonize layers	Yhtenäistä tasot
+	Hue and saturation	Sävy ja kylläisyys
+	Import Actions…	Tuo toimintoja…
+	Import actions or create a new action to get started.	Aloita tuomalla toimintoja tai luomalla uusi toiminto.
+	Insert Action	Lisää toiminto
+	Insert Conditional	Lisää ehto
+	Insert Menu Item	Lisää valikkokohta
+	Insert Path	Lisää polku
+	Insert Stop	Lisää pysäytys
+	Insert…	Lisää…
+	Keyboard shortcut	Pikanäppäin
+	Lavender	Laventeli
+	Layer effects	Tasotehosteet
+	Light blue	Vaaleansininen
+	List size	Luettelon koko
+	Magic wand	Taikasauva
+	Merge layers	Yhdistä tasot
+	Move step down	Siirrä vaihe alas
+	Move step up	Siirrä vaihe ylös
+	New group	Uusi ryhmä
+	No steps yet	Ei vielä vaiheita
+	Object selection	Objektin valinta
+	Play Action	Toista toiminto
+	Play Actions	Toista toiminnot
+	Play action	Toista toiminto
+	Play from selected step	Toista valitusta vaiheesta
+	Playback Options…	Toistoasetukset…
+	Play…	Toista…
+	Preview on hover	Esikatsele osoitettaessa
+	Record	Tallenna suoritus
+	Recording	Suorituksen tallennus
+	Remove background	Poista tausta
+	Save Action	Tallenna toiminto
+	Search actions	Hae toimintoja
+	Select an existing action step to play	Valitse olemassa oleva toimintovaihe toistettavaksi
+	Select subject	Valitse kohde
+	Show grid	Näytä ruudukko
+	Show step settings	Näytä vaiheen asetukset
+	Smart removal	Älykäs poisto
+	Sort & View options	Lajittelu- ja näkymäasetukset
+	Start recording to build your action	Aloita suorituksen tallennus luodaksesi toiminnon
+	Steps	Vaiheet
+	Stored action step	Tallennettu toimintovaihe
+	Stored settings	Tallennetut asetukset
+	Teal	Sinivihreä
+	Text	Teksti
+	Text colour	Tekstin väri
+	The draft steps changed. Cancel this dialog and reopen the step.	Luonnoksen vaiheet ovat muuttuneet. Peruuta tämä valintaikkuna ja avaa vaihe uudelleen.
+	The dragged action changed; drag it again	Vedetty toiminto on muuttunut; vedä se uudelleen
+	The editor response does not belong to this draft	Muokkaimen vastaus ei kuulu tähän luonnokseen
+	There are unsaved changes. Do you want to save or discard them?	Muutoksia on tallentamatta. Haluatko tallentaa vai hylätä ne?
+	This editor page is closed	Tämä muokkaimen sivu on suljettu
+	This step dialog belongs to another editor	Tämä vaiheen valintaikkuna kuuluu toiseen muokkaimeen
+	Wait for the current action step to finish	Odota nykyisen toimintovaiheen valmistumista
+	You haven't created any actions	Et ole vielä luonut toimintoja
+	Yours	Omat
+
+# Actions reserved category caption (10945/10946)
+	Ungrouped Actions	Ryhmittelemättömät toiminnot

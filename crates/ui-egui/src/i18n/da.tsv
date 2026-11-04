@@ -3361,6 +3361,7 @@ curves	Smooth	Udjævn
 	This document's layers: {needed} of {budget} for layers	Dette dokuments lag: {needed} af {budget} til lag
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Dette dokuments lag kræver {needed}, men kan rumme {budget}: gentegninger af hele dokumentet bruger CPU'en
 	GPU Memory (MB, 0 = Automatic)	GPU-hukommelse (MB, 0 = automatisk)
+	Scratch Size Limit (MB, 0 = No Limit)	Størrelsesgrænse for arbejdsdisk (MB, 0 = ingen grænse)
 	{path}: the path is not valid Unicode; save under another name.	{path}: stien er ikke gyldig Unicode; gem under et andet navn.
 	Replace	Erstat
 	{name} was changed by another app after it was opened or saved here.	{name} blev ændret af et andet program, efter at den blev åbnet eller gemt her.
@@ -4772,3 +4773,108 @@ cameraRaw	White Balance: As Shot	Hvidbalance: Som fotograferet
 	The path was discarded	Stien blev kasseret
 	The path was kept as the Work Path	Stien blev bevaret som arbejdssti
 	Edit Brush…	Rediger pensel…
+
+# Actions list and editor (10945/10946)
+	Action saved, but confirmation preference could not be saved: {error}	Handlingen blev gemt, men bekræftelsesindstillingen kunne ikke gemmes: {error}
+	Add a brief description for this action…	Tilføj en kort beskrivelse af denne handling…
+	Allow Tool Recording	Tillad optagelse af værktøjer
+	Answer the open Actions editor question first	Besvar først det åbne spørgsmål i handlingseditoren
+	Apply to background	Anvend på baggrunden
+	Apply to subject	Anvend på motivet
+	Black and white	Sort-hvid
+	Cancel and continue editing	Annuller og fortsæt redigeringen
+	Choose color	Vælg farve
+	Choose icon	Vælg ikon
+	Choose icon and color	Vælg ikon og farve
+	Classic Actions	Klassiske handlinger
+	Clear All Actions	Ryd alle handlinger
+	Clear search	Ryd søgningen
+	Click action	Klikhandling
+	Close the open Actions editor first	Luk først den åbne handlingseditor
+	Collapse all	Fold alle sammen
+	Colour lookup tables	Farveopslagstabeller
+	Confirm or cancel the open action dialog first	Bekræft eller annuller først den åbne handlingsdialog
+	Control	Ctrl
+	Default icon	Standardikon
+	Delete Action	Slet handling
+	Delete action	Slet handling
+	Delete group	Slet gruppe
+	Delete step	Slet trin
+	Delete the action "{name}"?	Slet handlingen »{name}«?
+	Delete the group "{name}"?	Slet gruppen »{name}«?
+	Discard	Kassér
+	Download	Hent
+	Duplicate Action	Dupliker handling
+	Duplicate action	Dupliker handling
+	Duplicate group	Dupliker gruppe
+	Duplicate step	Dupliker trin
+	Edit Action	Rediger handling
+	Edit action	Rediger handling
+	Edit step settings	Rediger trinindstillinger
+	Enable step	Aktivér trin
+	Expand all	Udvid alle
+	Export Action…	Eksportér handling…
+	Finish or cancel action playback and the pending step first	Afslut eller annuller først afspilningen af handlingen og det afventende trin
+	Finishing step…	Afslutter trin…
+	Generated layer effects	Genererede lageffekter
+	Generated styles	Genererede stilarter
+	Grey	Grå
+	Harmonize layers	Harmoniser lag
+	Hue and saturation	Farvetone og mætning
+	Import Actions…	Importér handlinger…
+	Import actions or create a new action to get started.	Importér handlinger, eller opret en ny handling for at komme i gang.
+	Insert Action	Indsæt handling
+	Insert Conditional	Indsæt betingelse
+	Insert Menu Item	Indsæt menupunkt
+	Insert Path	Indsæt kurve
+	Insert Stop	Indsæt stop
+	Insert…	Indsæt…
+	Keyboard shortcut	Tastaturgenvej
+	Lavender	Lavendel
+	Layer effects	Lageffekter
+	Light blue	Lyseblå
+	List size	Listestørrelse
+	Magic wand	Tryllestav
+	Merge layers	Flet lag
+	Move step down	Flyt trin ned
+	Move step up	Flyt trin op
+	New group	Ny gruppe
+	No steps yet	Ingen trin endnu
+	Object selection	Objektmarkering
+	Play Action	Afspil handling
+	Play Actions	Afspil handlinger
+	Play action	Afspil handling
+	Play from selected step	Afspil fra det valgte trin
+	Playback Options…	Afspilningsindstillinger…
+	Play…	Afspil…
+	Preview on hover	Forhåndsvis ved at holde markøren over
+	Record	Optag
+	Recording	Optager
+	Remove background	Fjern baggrund
+	Save Action	Gem handling
+	Search actions	Søg efter handlinger
+	Select an existing action step to play	Vælg et eksisterende handlingstrin, der skal afspilles
+	Select subject	Markér motiv
+	Show grid	Vis gitter
+	Show step settings	Vis trinindstillinger
+	Smart removal	Intelligent fjernelse
+	Sort & View options	Sorterings- og visningsindstillinger
+	Start recording to build your action	Start optagelsen for at oprette din handling
+	Steps	Trin
+	Stored action step	Gemt handlingstrin
+	Stored settings	Gemte indstillinger
+	Teal	Blågrøn
+	Text	Tekst
+	Text colour	Tekstfarve
+	The draft steps changed. Cancel this dialog and reopen the step.	Kladdens trin er ændret. Annuller denne dialog, og åbn trinnet igen.
+	The dragged action changed; drag it again	Den trukne handling er ændret; træk den igen
+	The editor response does not belong to this draft	Editorens svar hører ikke til denne kladde
+	There are unsaved changes. Do you want to save or discard them?	Der er ændringer, som ikke er gemt. Vil du gemme eller kassere dem?
+	This editor page is closed	Denne editorside er lukket
+	This step dialog belongs to another editor	Denne trindialog hører til en anden editor
+	Wait for the current action step to finish	Vent, til det aktuelle handlingstrin er færdigt
+	You haven't created any actions	Du har ikke oprettet nogen handlinger
+	Yours	Dine
+
+# Actions reserved category caption (10945/10946)
+	Ungrouped Actions	Ikke-grupperede handlinger

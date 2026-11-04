@@ -3992,6 +3992,7 @@ curves	Smooth	Згладити
 	Sent to {printer}	Надіслано на {printer}
 	set in Print Settings…	задається в параметрах друку…
 	ICO is limited to 256 × 256 pixels	ICO обмежено розміром 256 × 256 пікселів
+	Memory usage percent	Використання пам’яті (%)
 	Show Favorite Fonts	Показати вибрані шрифти
 	No favorite fonts yet: click the star beside a font to add it.	Вибраних шрифтів ще немає: натисніть зірочку біля шрифту, щоб додати його.
 	Favorite fonts	Вибрані шрифти
@@ -4054,6 +4055,7 @@ curves	Smooth	Згладити
 	Chisel Soft	М'яке різьблення
 	Open color-less EXR as ACEScg	Відкривати EXR без колірного профілю як ACEScg
 	Do not append "copy" to filename when saving a copy	Не додавати «copy» до імені файлу під час збереження копії
+	Save Full-Size Composite in .pcraft Files	Зберігати зведене зображення в повному розмірі у файлах .pcraft
 	Edit Selected Guides	Редагувати вибрані напрямні
 	Clear Selected Guides	Очистити вибрані напрямні
 	Bicubic Automatic	Бікубічна, автоматично
@@ -4106,6 +4108,7 @@ curves	Smooth	Згладити
 	This document's layers: {needed} of {budget} for layers	Шари цього документа: {needed} з {budget} для шарів
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Шарам цього документа потрібно {needed}, але займати вони можуть {budget}: увесь документ перемальовується на CPU
 	GPU Memory (MB, 0 = Automatic)	Пам'ять GPU (МБ, 0 = автоматично)
+	Scratch Size Limit (MB, 0 = No Limit)	Обмеження розміру робочого диска (МБ, 0 = без обмеження)
 	{path}: the path is not valid Unicode; save under another name.	{path}: шлях не є коректним Unicode; збережіть під іншою назвою.
 	Replace	Замінити
 	{name} was changed by another app after it was opened or saved here.	Файл {name} змінила інша програма після того, як його тут відкрили або зберегли.
@@ -4228,3 +4231,110 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Колір контрольної точки
 	Shapes can't use patterns yet	Фігури поки не можуть використовувати візерунки
 	Edit Brush…	Редагувати пензель…
+
+# Actions list and editor (10945/10946)
+	Action saved, but confirmation preference could not be saved: {error}	Дію збережено, але не вдалося зберегти налаштування підтвердження: {error}
+	Add a brief description for this action…	Додайте короткий опис цієї дії…
+	Allow Tool Recording	Дозволити запис інструментів
+	Answer the open Actions editor question first	Спочатку дайте відповідь на відкрите запитання в редакторі дій
+	Apply to background	Застосувати до тла
+	Apply to subject	Застосувати до об’єкта
+	Back	Назад
+	Black and white	Чорно-біле
+	Cancel and continue editing	Скасувати й продовжити редагування
+	Choose color	Вибрати колір
+	Choose icon	Вибрати піктограму
+	Choose icon and color	Вибрати піктограму й колір
+	Classic Actions	Класичні дії
+	Clear All Actions	Очистити всі дії
+	Clear search	Очистити пошук
+	Click action	Клацання
+	Close the open Actions editor first	Спочатку закрийте відкритий редактор дій
+	Collapse all	Згорнути все
+	Colour lookup tables	Таблиці перетворення кольорів
+	Confirm or cancel the open action dialog first	Спочатку підтвердьте або скасуйте відкритий діалог дії
+	Control	Ctrl
+	Default icon	Типова піктограма
+	Delete Action	Видалити дію
+	Delete action	Видалити дію
+	Delete group	Видалити групу
+	Delete step	Видалити крок
+	Delete the action "{name}"?	Видалити дію «{name}»?
+	Delete the group "{name}"?	Видалити групу «{name}»?
+	Discard	Відкинути
+	Download	Завантажити
+	Duplicate Action	Дублювати дію
+	Duplicate action	Дублювати дію
+	Duplicate group	Дублювати групу
+	Duplicate step	Дублювати крок
+	Edit Action	Редагувати дію
+	Edit action	Редагувати дію
+	Edit step settings	Редагувати налаштування кроку
+	Enable step	Увімкнути крок
+	Expand all	Розгорнути все
+	Export Action…	Експортувати дію…
+	Finish or cancel action playback and the pending step first	Спочатку завершіть або скасуйте відтворення дії та крок, що очікує
+	Finishing step…	Завершення кроку…
+	Generated layer effects	Згенеровані ефекти шару
+	Generated styles	Згенеровані стилі
+	Grey	Сірий
+	Harmonize layers	Узгодити шари
+	Hue and saturation	Відтінок і насиченість
+	Import Actions…	Імпортувати дії…
+	Import actions or create a new action to get started.	Імпортуйте дії або створіть нову дію, щоб розпочати.
+	Insert Action	Вставити дію
+	Insert Conditional	Вставити умову
+	Insert Menu Item	Вставити пункт меню
+	Insert Path	Вставити контур
+	Insert Stop	Вставити зупинку
+	Insert…	Вставити…
+	Keyboard shortcut	Сполучення клавіш
+	Lavender	Лавандовий
+	Layer effects	Ефекти шару
+	Light blue	Світло-синій
+	List size	Розмір списку
+	Magic wand	Чарівна паличка
+	Merge layers	Об'єднати шари
+	Move step down	Перемістити крок униз
+	Move step up	Перемістити крок угору
+	New group	Нова група
+	No steps yet	Кроків ще немає
+	Object selection	Вибір об’єкта
+	On	Увімк.
+	Play Action	Відтворити дію
+	Play Actions	Відтворити дії
+	Play action	Відтворити дію
+	Play from selected step	Відтворити з вибраного кроку
+	Playback Options…	Параметри відтворення…
+	Play…	Відтворити…
+	Preview on hover	Попередній перегляд при наведенні
+	Record	Записати
+	Recording	Запис
+	Remove background	Видалити фон
+	Save Action	Зберегти дію
+	Search actions	Пошук дій
+	Select an existing action step to play	Виберіть наявний крок дії для відтворення
+	Select subject	Виділити об'єкт
+	Show grid	Показати сітку
+	Show step settings	Показати налаштування кроку
+	Smart removal	Розумне видалення
+	Sort & View options	Параметри сортування та вигляду
+	Start recording to build your action	Почніть запис, щоб створити дію
+	Steps	Кроки
+	Stored action step	Збережений крок дії
+	Stored settings	Збережені налаштування
+	Teal	Синьо-зелений
+	Text	Текст
+	Text colour	Колір тексту
+	The draft steps changed. Cancel this dialog and reopen the step.	Кроки чернетки змінилися. Скасуйте цей діалог і знову відкрийте крок.
+	The dragged action changed; drag it again	Перетягувана дія змінилася; перетягніть її знову
+	The editor response does not belong to this draft	Відповідь редактора не належить цій чернетці
+	There are unsaved changes. Do you want to save or discard them?	Є незбережені зміни. Зберегти їх чи відкинути?
+	This editor page is closed	Цю сторінку редактора закрито
+	This step dialog belongs to another editor	Цей діалог кроку належить іншому редактору
+	Wait for the current action step to finish	Дочекайтеся завершення поточного кроку дії
+	You haven't created any actions	Ви ще не створили жодної дії
+	Yours	Ваші
+
+# Actions reserved category caption (10945/10946)
+	Ungrouped Actions	Незгруповані дії

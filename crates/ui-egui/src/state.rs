@@ -16,7 +16,24 @@ pub use panel_state::{
 };
 pub use tool::Tool;
 pub use tool_options::{SampleAllLayers, ToolOptions};
-use tool_options::{default_brush_tool, default_layer_filter_mode, yes};
+use tool_options::{default_brush_tool, default_layer_filter_mode, layer_filter_mode_or_normal, yes};
+
+/// The Actions panel's remembered presentation. Runtime owners live on the app.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ActionsLayout {
+    #[default]
+    Modern,
+    Classic,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ActionsListSize {
+    #[default]
+    Large,
+    Small,
+}
 pub use transform::{
     BoxResize, CamTransform, ContentAwareOptions, Extras, MadeLayer, TextEdit, TransformMode, TransformSession, TypeInsertionStyle, TypeTransform,
 };
@@ -349,6 +366,9 @@ pub struct UiState {
     /// Layers panel kind filter ("pixel", "adjustment", "type", "shape", "smart"); empty = all.
     #[serde(default)]
     pub layer_filter: Vec<String>,
+    /// Layers panel Smart Object filter ("linked", "missing", "embedded"); empty = all.
+    #[serde(default)]
+    pub layer_filter_smart: Vec<String>,
     /// Thumbnail dimensions, content cropping and filter-strip visibility.
     #[serde(default)]
     pub layers_panel_options: LayersPanelOptions,
@@ -362,11 +382,24 @@ pub struct UiState {
     #[serde(default)]
     pub layer_filter_name: String,
     /// Layers panel blend-mode filter.
-    #[serde(default = "default_layer_filter_mode")]
+    #[serde(default = "default_layer_filter_mode", deserialize_with = "layer_filter_mode_or_normal")]
     pub layer_filter_mode: photocraft_color::BlendMode,
+    /// Layers panel effect filter (#10880).
+    #[serde(default)]
+    pub layer_filter_effect: crate::layer_filter_ui::effect::EffectKind,
+    /// Layers panel attribute filter (#10881).
+    #[serde(default)]
+    pub layer_filter_attribute: crate::layer_filter_ui::attribute::Attribute,
+    /// Layers panel colour filter (#5898): the label colour listed (None: layers without one).
+    #[serde(default)]
+    pub layer_filter_color: photocraft_doc::LabelColor,
     /// Actions panel: which row is selected and which are expanded. The list lives on the session.
     #[serde(default)]
     pub actions: crate::actions::ActionsUi,
+    #[serde(default)]
+    pub actions_layout: ActionsLayout,
+    #[serde(default)]
+    pub actions_list_size: ActionsListSize,
     /// Layer Comps panel: the selected comp (by comp id).
     #[serde(default)]
     pub layer_comp_selected: Option<u32>,
@@ -557,6 +590,8 @@ impl Default for UiState {
             extras: Extras::default(),
             view: Default::default(),
             actions: Default::default(),
+            actions_layout: Default::default(),
+            actions_list_size: Default::default(),
             layer_comp_selected: None,
             presets_ui: Default::default(),
             web_view: None,
@@ -568,6 +603,7 @@ impl Default for UiState {
             artboard_tool: Default::default(),
             shell: Default::default(),
             layer_filter: Vec::new(),
+            layer_filter_smart: Vec::new(),
             layers_panel_options: LayersPanelOptions::default(),
             histogram_panel: Default::default(),
             histogram_range: None,
@@ -575,6 +611,9 @@ impl Default for UiState {
             layer_filter_by: Default::default(),
             layer_filter_name: String::new(),
             layer_filter_mode: default_layer_filter_mode(),
+            layer_filter_effect: Default::default(),
+            layer_filter_attribute: Default::default(),
+            layer_filter_color: Default::default(),
             pen: None,
             pen_doc: None,
             stroke_editor: None,

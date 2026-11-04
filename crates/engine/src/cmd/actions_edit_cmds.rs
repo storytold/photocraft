@@ -19,6 +19,9 @@ pub use record_again::{RecordAgainTarget, target as record_again_target};
 mod insert_path;
 pub use insert_path::selected_path as selected_recording_path;
 mod defaults;
+mod folders;
+pub use folders::{SetOccurrence, set_occurrences};
+pub(crate) mod reset_definition;
 
 /// PhotoCraft's original starter set, using existing document-local adjustments.
 pub const DEFAULT_SET_NAME: &str = defaults::NAME;
@@ -26,43 +29,33 @@ pub const DEFAULT_SET_NAME: &str = defaults::NAME;
 /// Prepare real starter definitions and all admission checks before replacement.
 fn reset(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "actions.reset";
-    not_playing(s, cmd)?;
-    if s.actions.recording.is_some() {
-        return Err(bad(cmd, "stop recording before resetting actions"));
-    }
-    if p.get("confirm").and_then(Value::as_bool) != Some(true) {
-        return Err(bad(cmd, "resetting actions requires `confirm`: true"));
-    }
+    if p.get("confirm").and_then(Value::as_bool) != Some(true) { return Err(bad(cmd, "resetting actions requires `confirm`: true")); }
     let replace = match p.get("mode").and_then(Value::as_str) {
         Some("append") => false,
         Some("replace") => true,
         _ => return Err(bad(cmd, "`mode` must be append or replace")),
     };
-    let names = if replace { Vec::new() } else { set_names(s) };
-    let name = crate::atn_cmds::UniqueNames::new(names).claim(DEFAULT_SET_NAME);
-    let mut actions = defaults::actions();
-    let existing = if replace { Vec::new() } else { s.actions.list.iter().map(|a| a.name.clone()).collect() };
-    let mut action_names = crate::atn_cmds::UniqueNames::new(existing);
-    for action in &mut actions {
-        action.name = action_names.claim(&action.name);
-        action.set = Some(name.clone());
-        if action.steps.iter().any(|(id, params)| !is_step_command(id) || !params.is_object()) {
-            return Err(bad(cmd, "invalid starter action definition"));
-        }
-    }
-    let count = actions.len();
-    let create = json!({"name":name});
-    if let Some(gate) = s.authorize {
-        gate("actions.newSet", &create)?;
-        if replace {
-            gate("actions.clearAll", &json!({"confirm":true}))?;
-        }
-    }
-    let cleared = if replace { clear_all(s, &json!({"confirm":true}))?["cleared"].clone() } else { json!(0) };
-    new_set(s, &create)?;
-    s.actions.list.extend(actions);
-    s.actions.touch();
-    Ok(json!({"set":name,"actions":count,"cleared":cleared}))
+    let (value, undo) = reset_definition::apply(s, replace)?;
+    s.actions.reset_undo = Some(Box::new(undo));
+    Ok(value)
+}
+
+/// The one latest panel undo uses canonical definition fields, independent of document History.
+fn undo_reset(s: &mut Session, p: &Value) -> Result<Value> {
+    if p.as_object().is_none_or(|params| !params.is_empty()) { return Err(bad("actions.undoReset", "Undo Reset Actions takes no parameters")); }
+    let undo = s.actions.reset_undo.as_deref().ok_or_else(|| bad("actions.undoReset", "no Reset Actions is available to undo"))?;
+    reset_definition::can_restore(s, undo)?;
+    let undo = s.actions.reset_undo.take().ok_or_else(|| bad("actions.undoReset", "no Reset Actions is available to undo"))?;
+    reset_definition::restore(s, *undo)
+}
+
+/// A stale or busy Reset never replaces the document's ordinary undo operation.
+pub fn reset_undo_available(s: &Session) -> bool {
+    s.actions.reset_undo.as_deref().is_some_and(|undo| reset_definition::can_restore(s, undo).is_ok())
+}
+
+fn reset_undo_enabled(s: &Session) -> std::result::Result<(), String> {
+    if reset_undo_available(s) { Ok(()) } else { Err("no unchanged Reset Actions is available to undo".into()) }
 }
 
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
@@ -108,7 +101,7 @@ fn index(p: &Value, key: &str, cmd: &str) -> Result<Option<usize>> {
 
 /// Whether `id` can be a step: a registered command, a Play Action call, or one of the desktop
 /// shell's recorded save/view commands.
-fn is_step_command(id: &str) -> bool {
+pub(crate) fn is_step_command(id: &str) -> bool {
     crate::commands::find(id).is_some() || id == "actions.play" || crate::actions_cmds::shell_save_command(id) || crate::actions_cmds::shell_view_command(id)
 }
 
@@ -209,16 +202,20 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
         result["index"] = json!(idx);
         return Ok(result);
     }
-    if s.actions.recording.is_some() {
+    if s.actions.recording_active() {
         return Err(bad(cmd, "stop recording before duplicating an action"));
     }
     let mut copied = s.actions.list[idx].clone();
     let mut names = crate::atn_cmds::UniqueNames::new(s.actions.list.iter().map(|a| a.name.clone()));
     copied.name = names.claim(&format!("{} copy", copied.name));
+    crate::actions_cmds::library::check_action_count(&s.actions, s.actions.list.iter().chain(std::iter::once(&copied))).map_err(|error| bad(cmd, error))?;
     let at = idx + 1;
     let result = json!({"action": copied.name, "index": at, "steps": copied.steps.len()});
-    s.actions.list.insert(at, copied);
-    shift_action_calls(&mut s.actions.list, at, 1);
+    let mut proposed = crate::actions_cmds::library::definition_copy(&s.actions);
+    proposed.list.insert(at, copied);
+    shift_action_calls(&mut proposed.list, at, 1);
+    crate::actions_cmds::library::check_definition(&proposed, &s.prefs().shortcuts).map_err(|error| bad(cmd, error))?;
+    s.actions.list = proposed.list;
     s.actions.touch();
     Ok(result)
 }
@@ -229,7 +226,7 @@ fn duplicate_set(s: &mut Session, p: &Value) -> Result<Value> {
     if p.get("action").is_some() || p.get("step").is_some() {
         return Err(bad(cmd, "select either a set or an action/step"));
     }
-    if s.actions.recording.is_some() {
+    if s.actions.recording_active() {
         return Err(bad(cmd, "stop recording before duplicating a set"));
     }
     let source = p.get("set").and_then(Value::as_str).ok_or_else(|| bad(cmd, "`set` must be a set name"))?;
@@ -240,12 +237,12 @@ fn duplicate_set(s: &mut Session, p: &Value) -> Result<Value> {
     let mut set_names = crate::atn_cmds::UniqueNames::new(sets);
     let name = set_names.claim(&format!("{source} copy"));
     let mut names = crate::atn_cmds::UniqueNames::new(s.actions.list.iter().map(|a| a.name.clone()));
-    let at = s.actions.list.iter().position(|a| a.set.as_deref() == Some(source)).map_or(s.actions.list.len(), |i| i + 1);
+    let at = s.actions.list.iter().rposition(|a| crate::atn_cmds::logical_set_name(a.set.as_deref()) == source).map_or(s.actions.list.len(), |i| i + 1);
     let added: Vec<_> = s
         .actions
         .list
         .iter()
-        .filter(|a| a.set.as_deref() == Some(source))
+        .filter(|a| crate::atn_cmds::logical_set_name(a.set.as_deref()) == source)
         .cloned()
         .map(|mut a| {
             a.name = names.claim(&format!("{} copy", a.name));
@@ -255,12 +252,18 @@ fn duplicate_set(s: &mut Session, p: &Value) -> Result<Value> {
         .collect();
     let copied: Vec<_> = added.iter().map(|a| a.name.clone()).collect();
     let count = added.len();
-    s.actions.list.splice(at..at, added);
+    crate::actions_cmds::library::check_action_count(&s.actions, s.actions.list.iter().chain(added.iter())).map_err(|error| bad(cmd, error))?;
+    let mut proposed = crate::actions_cmds::library::definition_copy(&s.actions);
+    proposed.list.splice(at..at, added);
     if count != 0 {
-        shift_action_calls(&mut s.actions.list, at, count);
+        shift_action_calls(&mut proposed.list, at, count);
     }
-    let folder = s.actions.sets.iter().position(|set| set == source).map_or(s.actions.sets.len(), |i| i + 1);
-    s.actions.sets.insert(folder, name.clone());
+    crate::atn_cmds::sidecar::duplicate_set_rows(&mut proposed, source, &name);
+    crate::actions_cmds::library::check_definition(&proposed, &s.prefs().shortcuts).map_err(|error| bad(cmd, error))?;
+    s.actions.list = proposed.list;
+    s.actions.sets = proposed.sets;
+    s.actions.library = proposed.library;
+    s.actions.atn_set_rows = proposed.atn_set_rows;
     s.actions.touch();
     Ok(json!({"set":name,"actions":copied,"index":at}))
 }
@@ -269,23 +272,25 @@ fn duplicate_set(s: &mut Session, p: &Value) -> Result<Value> {
 fn clear_all(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "actions.clearAll";
     not_playing(s, cmd)?;
-    if s.actions.recording.is_some() {
-        return Err(bad(cmd, "stop recording before clearing actions"));
-    }
-    if p.get("confirm").and_then(Value::as_bool) != Some(true) {
-        return Err(bad(cmd, "clearing all actions requires `confirm`: true"));
-    }
+    if s.actions.recording_active() { return Err(bad(cmd, "stop recording before clearing actions")); }
+    if p.get("confirm").and_then(Value::as_bool) != Some(true) { return Err(bad(cmd, "clearing all actions requires `confirm`: true")); }
     let count = s.actions.list.len();
-    if count != 0 {
-        let keys: std::collections::HashSet<_> = s.actions.list.iter().map(|a| format!("{}{}", crate::actions_cmds::PLAY_SHORTCUT_PREFIX, a.name)).collect();
-        s.edit_prefs(|prefs| prefs.shortcuts.retain(|key, _| !keys.contains(key)));
-    }
-    if count != 0 || !s.actions.sets.is_empty() {
-        s.actions.list.clear();
-        s.actions.sets.clear();
-        s.actions.touch();
-    }
-    Ok(json!({"cleared": count}))
+    let mut proposed = crate::actions_cmds::library::definition_copy(&s.actions);
+    proposed.list.clear();
+    let names = proposed.sets.iter().cloned().collect();
+    crate::atn_cmds::sidecar::retire_sets(&mut proposed, &names);
+    let mut shortcuts = s.prefs().shortcuts.clone();
+    let mut alternate = s.prefs().alternate_shortcuts.clone();
+    shortcuts.retain(|key, _| !key.starts_with(crate::actions_cmds::PLAY_SHORTCUT_PREFIX));
+    alternate.retain(|key, _| !key.starts_with(crate::actions_cmds::PLAY_SHORTCUT_PREFIX));
+    crate::actions_cmds::library::check_definition(&proposed, &shortcuts).map_err(|error| bad(cmd, error))?;
+    s.actions.list = proposed.list;
+    s.actions.sets = proposed.sets;
+    s.actions.library = proposed.library;
+    s.actions.atn_set_rows = proposed.atn_set_rows;
+    s.edit_prefs(|prefs| { prefs.shortcuts = shortcuts; prefs.alternate_shortcuts = alternate; });
+    s.actions.touch();
+    Ok(json!({"cleared":count}))
 }
 
 /// The panel's dialog toggle column. With `step`, switch one step's dialog on or off; without
@@ -334,6 +339,7 @@ fn assign_set(s: &mut Session, p: &Value) -> Result<Value> {
         Some(Value::String(_)) => return Err(bad(cmd, "`set` is empty; pass null to take the action out of its set")),
         Some(_) => return Err(bad(cmd, "`set` must be a name or null")),
     };
+    crate::atn_cmds::sidecar::assign_set_metadata(&mut s.actions, idx, set.as_deref());
     let action = &mut s.actions.list[idx];
     action.set = set;
     let result = json!({"action": action.name, "set": action.set});
@@ -345,7 +351,14 @@ fn assign_set(s: &mut Session, p: &Value) -> Result<Value> {
 /// then the empty ones New Set made.
 pub fn set_names(s: &Session) -> Vec<String> {
     let mut seen = std::collections::HashSet::new();
-    s.actions.list.iter().filter_map(|a| a.set.as_ref()).chain(&s.actions.sets).filter(|set| seen.insert(set.as_str())).cloned().collect()
+    s.actions
+        .list
+        .iter()
+        .map(|action| crate::atn_cmds::logical_set_name(action.set.as_deref()))
+        .chain(s.actions.sets.iter().map(String::as_str))
+        .filter(|set| seen.insert(*set))
+        .map(str::to_string)
+        .collect()
 }
 
 /// New Set…: an empty set folder, named `name` or "Set N" (the first number no set has), that New
@@ -363,7 +376,7 @@ fn new_set(s: &mut Session, p: &Value) -> Result<Value> {
     if names.contains(&name) {
         return Err(bad(cmd, format!("a set named `{name}` already exists")));
     }
-    s.actions.sets.push(name.clone());
+    crate::atn_cmds::sidecar::install_row(&mut s.actions, &name, None);
     s.actions.touch();
     Ok(json!({"set": name}))
 }
@@ -475,7 +488,12 @@ fn conditional(s: &mut Session, p: &Value) -> Result<Value> {
     let played = if holds { then } else { otherwise };
     let mut out = json!({"if": condition, "holds": holds, "played": played});
     if let Some(name) = played {
-        let r = s.execute("actions.play", json!({"action": name}))?;
+        let mut call = json!({"action": name});
+        let key = if holds { "thenSet" } else { "elseSet" };
+        if let Some(scope) = p.get(key).filter(|scope| !scope.is_null()).or_else(|| p.get("set").filter(|scope| !scope.is_null())) {
+            call["set"] = scope.clone();
+        }
+        let r = s.execute("actions.play", call)?;
         if let Some(f) = r.get("failed") {
             out["failed"] = f.clone();
         }
@@ -487,6 +505,16 @@ fn conditional(s: &mut Session, p: &Value) -> Result<Value> {
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
+        CommandSpec {
+            id: "actions.undoReset",
+            label: "Undo Reset Actions",
+            menu: &[],
+            shortcut: None,
+            params: "{} → {undone:true}. Restore only the latest unchanged Reset's definitions and both shortcut maps, without changing document History or runtime ownership.",
+            enabled: reset_undo_enabled,
+            run: undo_reset,
+            journal: false,
+        },
         CommandSpec {
             id: "actions.insertMenuItem",
             label: "Insert Menu Item…",
@@ -502,7 +530,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Reset Actions…",
             menu: &[],
             shortcut: None,
-            params: r##"{"mode":"append"|"replace","confirm":true} → {set,placeholder:true,actions:0,cleared}. Restores a clearly labeled empty default-set placeholder, pending clarification of Photoshop's default contents. Append keeps the current library; replace clears it after consent. This is not complete default-set parity."##,
+            params: r##"{"mode":"append"|"replace","confirm":true} → {set,slot,appended,actions:2}. Restore PhotoCraft Basics (Invert Colors and Desaturate). Append retains separate same-caption physical folders; replace removes the current definitions. Only the latest Reset has definition-only Undo, independent of document History."##,
             enabled: always,
             run: reset,
             journal: false,
@@ -512,7 +540,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Insert Path",
             menu: &[],
             shortcut: None,
-            params: r##"{"action":name|index,"name":"work"|"layer"|saved path name,"at":index?} → {action,step,id,steps}. Snapshot exactly the selected path as a path.set work-path step, preserving cubic handles and path options. No fallback from a missing Work Path to a layer path. Native replay is supported; Photoshop ATN path-descriptor export remains unsupported."##,
+            params: r##"{"action":name|index,"name":"work"|"layer"|saved path name,"at":index?} → {action,step,id,steps}. Snapshot exactly the selected path as a path.set work-path step, preserving cubic handles and path options. No fallback from a missing Work Path to a layer path. The measured Work Path ATN descriptor supports absolute coordinates, cubic handles, even-odd subpaths and Add/Subtract/XOR. Other native path semantics retain the canonical native fallback."##,
             enabled: always,
             run: insert_path::run,
             journal: false,
@@ -549,10 +577,10 @@ pub fn specs() -> Vec<CommandSpec> {
         },
         CommandSpec {
             id: "actions.duplicate",
-            label: "Duplicate",
+            label: "Duplicate Action",
             menu: &[],
             shortcut: None,
-            params: r##"{"action":name|index,"step":index?} or {"set":name} → {action?,index,step?,steps?,set?,actions?}. Duplicate the action, set or step directly below its source. Copies receive a unique " copy" name; settings, flags and colors are retained. Function-key bindings stay with their original actions. Stop recording before duplicating an action or set."##,
+            params: r##"{"action":name|index, "step":index?} or {"set":name} → {action,index,steps} or {set,actions,index}. Copies a step, action or entire folder below its source, retaining settings and flags. Whole-action/folder copies require recording to be stopped; original function keys stay with their original actions."##,
             enabled: always,
             run: duplicate,
             journal: false,
@@ -582,7 +610,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Conditional",
             menu: &[],
             shortcut: None,
-            params: r##"{"if":condition, "then":action name|null, "else":action name|null} → {if, holds, played, ran?, failed?}. Photoshop's Insert Conditional: conditions always|never|isOpen|landscape|square|portrait|modeIsRGB|modeIsCMYK|modeIsGrayscale|modeIsLab|modeIsBitmap|modeIsIndexed|modeIsDuotone|modeIsMultichannel|depth8|depth16|depth32|unsaved|hasSelection|hasLayers|hasAlphaChannels|isBackground|isPixelLayer|isAdjustmentLayer|isShapeLayer|isTypeLayer|isSmartObject|isLayerGroup|isLocked|isVisible|hasPixelMask|hasVectorMask|hasEffects (layer conditions test the active layer). The branch plays as actions.play does; its failure stops the calling action."##,
+            params: r##"{"if":condition, "then":action name|null, "else":action name|null, "set":name?, "thenSet":name?, "elseSet":name?} → {if, holds, played, ran?, failed?}. Photoshop's Insert Conditional: conditions always|never|isOpen|landscape|square|portrait|modeIsRGB|modeIsCMYK|modeIsGrayscale|modeIsLab|modeIsBitmap|modeIsIndexed|modeIsDuotone|modeIsMultichannel|depth8|depth16|depth32|unsaved|hasSelection|hasLayers|hasAlphaChannels|isBackground|isPixelLayer|isAdjustmentLayer|isShapeLayer|isTypeLayer|isSmartObject|isLayerGroup|isLocked|isVisible|hasPixelMask|hasVectorMask|hasEffects (layer conditions test the active layer). Each branch uses its explicit set or the common set, and plays as actions.play does; its failure stops the calling action."##,
             enabled: always,
             run: conditional,
             journal: true,
@@ -670,6 +698,30 @@ mod tests {
         // Deleting a step keeps the flags of the others in place.
         s.execute("actions.delete", json!({"action": "A", "step": 0})).unwrap();
         assert_eq!(s.actions.list[0].dialogs.iter().copied().collect::<Vec<_>>(), [0]);
+    }
+
+    /// A malformed selected scope must not become an unscoped call or inherit a valid shared scope.
+    #[test]
+    fn conditional_rejects_malformed_selected_scopes_before_playback() {
+        for (condition, branch) in [("always", "then"), ("hasSelection", "else")] {
+            for field in ["set".to_string(), format!("{branch}Set")] {
+                let mut s = session_with(&[]);
+                s.actions.list[0].set = Some("Intended".into());
+                s.actions.list[0].steps = vec![("layer.new.layer".into(), json!({"name":"Wrong fallback"}))];
+                let before = s.active().unwrap().doc.clone();
+                let mut params = json!({"if":condition,"then":"A","else":"A","set":"Intended"});
+                params[&field] = json!(5);
+                let error = s.execute("actions.conditional", params).unwrap_err().to_string();
+                assert!(error.contains("set"), "{field}: {error}");
+                assert_eq!(s.active().unwrap().doc.as_ref(), before.as_ref(), "{field} never plays the unscoped A");
+            }
+        }
+        let mut s = session_with(&[]);
+        s.actions.list[0].set = Some("Intended".into());
+        s.actions.list[0].steps = vec![("layer.new.layer".into(), json!({"name":"Intended"}))];
+        let played = s.execute("actions.conditional", json!({"if":"always","then":"A","thenSet":null,"set":"Intended"})).unwrap();
+        assert!(played.get("failed").is_none(), "{played}");
+        assert_eq!(s.active().unwrap().doc.layers.last().unwrap().name, "Intended");
     }
 
     #[test]

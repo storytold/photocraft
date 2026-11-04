@@ -382,6 +382,78 @@ fn record_explicit_transform_keeps_one_replayable_step() {
 }
 
 #[test]
+fn recording_folds_one_run_of_move_tool_nudges() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 24, "height": 24, "background": "transparent"})).unwrap();
+    s.execute("layer.new.layer", json!({"name": "Target"})).unwrap();
+    s.execute("actions.record", json!({"name": "Nudge"})).unwrap();
+    for (dx, dy, run) in [(1, 0, "nudge:1"), (1, 0, "nudge:1"), (1, 10, "nudge:1"), (0, 1, "nudge:2")] {
+        s.execute("layer.translate", json!({"dx": dx, "dy": dy, "coalesce": run})).unwrap();
+    }
+    s.execute("actions.stop", json!({})).unwrap();
+    let steps = &s.actions.list[0].steps;
+    assert_eq!(steps, &[("layer.translate".into(), json!({"dx": 3.0, "dy": 10.0})), ("layer.translate".into(), json!({"dx": 0.0, "dy": 1.0}))]);
+}
+
+/// Each nudge moves by whole pixels, so two 0.6 px steps fold into the 2 px they moved, not 1.2.
+#[test]
+fn folded_nudges_add_whole_pixel_steps() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 24, "height": 24, "background": "transparent"})).unwrap();
+    s.execute("layer.new.layer", json!({"name": "Target"})).unwrap();
+    s.execute("actions.record", json!({"name": "Nudge"})).unwrap();
+    for _ in 0..2 {
+        s.execute("layer.translate", json!({"dx": 0.6, "dy": 0.0, "coalesce": "nudge:1"})).unwrap();
+    }
+    s.execute("actions.stop", json!({})).unwrap();
+    assert_eq!(s.actions.list[0].steps, [("layer.translate".into(), json!({"dx": 2.0, "dy": 0.0}))]);
+}
+
+#[test]
+fn recording_document_activation_uses_opening_order_offset() {
+    let mut s = Session::new();
+    for name in ["First", "Second"] {
+        s.execute("file.new", json!({"width": 8, "height": 8, "name": name})).unwrap();
+    }
+    s.execute("actions.record", json!({"name": "Switch"})).unwrap();
+    s.execute("document.activate", json!({"document": 0})).unwrap();
+    s.execute("actions.stop", json!({})).unwrap();
+    assert_eq!(s.actions.list[0].steps, [("document.activate".into(), json!({"offset": -1}))]);
+}
+
+#[test]
+fn recorded_point_text_position_scales_with_the_playback_canvas() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 100, "height": 100, "background": "transparent"})).unwrap();
+    s.execute("actions.record", json!({"name": "Caption"})).unwrap();
+    s.execute("type.create", json!({"x": 20, "y": 30, "text": "Hi", "size": 12})).unwrap();
+    s.execute("actions.stop", json!({})).unwrap();
+    assert_eq!(s.actions.list[0].steps[0].1["xPercent"], json!(20.0));
+    assert_eq!(s.actions.list[0].steps[0].1["yPercent"], json!(30.0));
+    s.execute("file.new", json!({"width": 200, "height": 300, "background": "transparent"})).unwrap();
+    let played = s.execute("actions.play", json!({"action": "Caption"})).unwrap();
+    assert!(played.get("failed").is_none(), "{played}");
+    let info = s.execute("type.info", json!({})).unwrap();
+    assert_eq!(info["transform"][4], json!(40.0));
+    assert_eq!(info["transform"][5], json!(90.0));
+}
+
+#[test]
+fn recorded_point_text_rejects_invalid_relative_positions() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 100, "height": 100})).unwrap();
+    for params in [
+        json!({"xPercent": 20}),
+        json!({"xPercent": "20", "yPercent": 30}),
+        json!({"xPercent": 20, "yPercent": 30, "x": 20}),
+        json!({"xPercent": 20, "yPercent": 30, "box": [0, 0, 10, 10]}),
+        json!({"xPercent": 1e100, "yPercent": 30}),
+    ] {
+        assert!(playback_params(&s, "type.create", &params).is_err(), "{params}");
+    }
+}
+
+#[test]
 fn recorded_single_layer_transform_replays_after_layer_ids_shift() {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 20, "height": 8, "background": "transparent"})).unwrap();
@@ -472,9 +544,12 @@ fn record_keeps_only_replayable_steps() {
 }
 
 #[test]
+/// Playback on a different document must match native edits at every depth, independent of history grouping.
 fn play_on_another_document_matches_pixels_at_each_depth() {
     for depth in [8, 16, 32] {
         let mut s = Session::new();
+        // This control checks the optional, per-step history behavior.
+        s.execute("actions.setHistory", json!({"singleState": false})).unwrap();
         record_red(&mut s, depth);
         s.execute("file.new", json!({"width": 40, "height": 40, "depth": depth})).unwrap();
         let before = s.active().unwrap().history.past_len();
@@ -690,8 +765,8 @@ fn recorded_layer_drag_replays_on_another_document() {
 }
 
 /// An Alt-drag copy records `inPlace` (#7200), which only matters for an artboard: a plain
-/// layer's recorded copy must still export to .atn, while an artboard's must be refused rather
-/// than exported as a copy beside the original.
+/// layer's recorded copy has a Photoshop event, while an artboard's uses the native
+/// carrier rather than exporting as a copy beside the original.
 #[test]
 fn recorded_in_place_duplicate_keeps_in_place_only_for_artboards() {
     let mut s = Session::new();
@@ -706,7 +781,13 @@ fn recorded_in_place_duplicate_keeps_in_place_only_for_artboards() {
     assert_eq!(s.actions.list[0].steps, vec![("layer.duplicate".to_string(), json!({}))]);
     assert_eq!(s.actions.list[1].steps, vec![("layer.duplicate".to_string(), json!({"inPlace": true}))]);
     assert!(crate::atn_cmds::export("Audit", &[&s.actions.list[0]], &[], false).is_ok());
-    assert!(crate::atn_cmds::export("Audit", &[&s.actions.list[1]], &[], false).is_err());
+    let (bytes, skipped) = crate::atn_cmds::export("Audit", &[&s.actions.list[1]], &[], false).unwrap();
+    assert!(skipped.is_empty());
+    let file = photocraft_psd::atn::parse(&bytes).unwrap();
+    assert_eq!(file.actions[0].items[0].event, photocraft_psd::atn::AtnEvent::name("photocraftCommand"));
+    assert_eq!(crate::atn_cmds::import(&bytes).unwrap().actions[0].steps, s.actions.list[1].steps);
+    let (_, skipped) = crate::atn_cmds::export("Audit", &[&s.actions.list[1]], &[], true).unwrap();
+    assert_eq!(skipped.len(), 1);
     // Several selected layers are copied together: one artboard among them keeps `inPlace`.
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
@@ -1097,7 +1178,7 @@ fn actions_persist_with_the_preset_store() {
     let names: Vec<String> = early.actions.list.iter().map(|a| a.name.clone()).collect();
     assert!(names.contains(&"Early".into()) && names.contains(&"Kept".into()), "{names:?}");
 
-    std::fs::write(dir.join("actions.json"), b"{").unwrap();
+    std::fs::write(dir.join(crate::preset_store::ACTIONS_FILE), b"broken ATN").unwrap();
     let mut bad = Session::new();
     let warnings = bad.attach_preset_store(crate::preset_store::open_dir(&dir));
     assert!(warnings.iter().any(|w| w.contains("actions")), "{warnings:?}");
@@ -1166,9 +1247,12 @@ fn button_color_is_one_of_the_photoshop_swatches() {
 }
 
 #[test]
+/// An arrangement that cannot move the layer must not create a grouped history entry.
 fn arrange_that_cannot_move_is_a_noop_in_playback() {
     // #8453: imported actions make an adjustment layer, then Bring it to Front, where it already is.
     let mut s = Session::new();
+    // Keep individual rows visible so grouping cannot hide an extra no-op record.
+    s.execute("actions.setHistory", json!({"singleState": false})).unwrap();
     s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
     let steps = vec![
         ("layer.newAdjustmentLayer.curves".to_string(), json!({})),
@@ -1220,7 +1304,7 @@ fn arrange_that_cannot_move_is_a_noop_in_playback() {
 }
 
 /// #10459 review: recording into an existing set keeps that set's exact name, even one with
-/// surrounding spaces (from an older actions.json); a new set name is trimmed.
+/// surrounding spaces (from a legacy library); a new set name is trimmed.
 #[test]
 fn record_keeps_an_existing_sets_exact_name() {
     let mut s = Session::new();
@@ -1249,4 +1333,122 @@ fn record_keeps_an_empty_loaded_sets_exact_name() {
     assert_eq!(set.as_deref(), Some(" Web "));
     assert_eq!(crate::actions_edit_cmds::set_names(&s), [" Web "], "one folder, not a trimmed second one");
     assert_eq!(s.execute("actions.save", json!({"set": " Web "})).unwrap()["actions"], json!(["First"]));
+}
+
+#[test]
+fn draft_capture_spelling_uses_classic_filter_and_dialog_offsets() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width":300,"height":100,"background":"white"})).unwrap();
+    let layer = s.execute("type.create", json!({"x":10,"y":50,"text":"Teh brwon end","size":12})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("actions.record", json!({"name":"Spell draft"})).unwrap();
+    s.execute("layer.renameLayer", json!({"name":"Text"})).unwrap();
+    s.execute("actions.stop", json!({})).unwrap();
+    s.execute("actions.toggle", json!({"action":0,"step":0,"enabled":false})).unwrap();
+    s.execute("actions.dialog", json!({"action":0,"step":0,"enabled":true})).unwrap();
+    let original = s.actions.list[0].clone();
+    let draft = s.execute("actions.editor.open", json!({"action":0})).unwrap()["draft"].as_u64().unwrap();
+    s.execute("actions.editor.record", json!({"draft":draft})).unwrap();
+    for params in [
+        json!({"action":"list","allLayers":true}),
+        json!({"action":"suggest","word":"recieve"}),
+        json!({"action":"change","layer":layer,"start":0,"end":3,"word":"Teh","replace":"The"}),
+        json!({"action":"changeAll","word":"brwon","replace":"brown"}),
+        json!({"action":"addToDictionary","word":"Photocraft"}),
+        json!({"action":"removeFromDictionary","word":"Photocraft"}),
+        json!({"allLayers":true}),
+        json!({"action":null,"allLayers":false}),
+    ] {
+        s.execute("edit.checkSpelling", params).unwrap();
+    }
+    assert!(matches!(
+        &s.active().unwrap().doc.layer(photocraft_doc::LayerId(layer)).unwrap().content,
+        photocraft_doc::LayerContent::Text(text) if text.text == "The brown end"
+    ));
+    let journal = s.journal.clone();
+    let (take, rev) = (s.actions.take, s.actions.rev);
+    let shown = s.execute("actions.editor.get", json!({"draft":draft})).unwrap();
+    assert_eq!(s.execute("actions.editor.get", json!({"draft":draft})).unwrap(), shown);
+    let mut expected = original.clone();
+    expected.steps.extend([("edit.checkSpelling".into(), json!({"allLayers":true})), ("edit.checkSpelling".into(), json!({"allLayers":false}))]);
+    expected.dialogs.extend([1, 2]);
+    assert_eq!(shown["action"], serde_json::to_value(&expected).unwrap());
+    assert_eq!(s.actions.list[0], original, "inspection must not publish");
+    assert_eq!(s.journal, journal);
+    assert_eq!((s.actions.take, s.actions.rev), (take, rev));
+    s.execute("actions.editor.stop", json!({"draft":draft})).unwrap();
+    assert_eq!(s.execute("actions.editor.get", json!({"draft":draft})).unwrap()["action"], shown["action"]);
+    s.execute("actions.editor.save", json!({"draft":draft})).unwrap();
+    assert_eq!(s.actions.list[0], expected, "Save must retain the projected steps and existing flags");
+}
+
+#[test]
+fn draft_capture_nudges_match_classic_rounding_runs_and_separators() {
+    let capture = |draft_capture: bool| {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width":24,"height":24,"background":"transparent"})).unwrap();
+        s.execute("layer.new.layer", json!({"name":"Target"})).unwrap();
+        let draft = if draft_capture {
+            let id = s.execute("actions.editor.open", json!({"name":"Nudges"})).unwrap()["draft"].as_u64().unwrap();
+            s.execute("actions.editor.record", json!({"draft":id})).unwrap();
+            Some(id)
+        } else {
+            s.execute("actions.record", json!({"name":"Nudges"})).unwrap();
+            None
+        };
+        for params in
+            [json!({"dx":0.6,"dy":0,"coalesce":"nudge:1"}), json!({"dx":0.6,"dy":0,"coalesce":"nudge:1"}), json!({"dx":0,"dy":-0.6,"coalesce":"nudge:2"})]
+        {
+            s.execute("layer.translate", params).unwrap();
+        }
+        s.execute("layer.renameLayer", json!({"name":"Renamed"})).unwrap();
+        s.execute("layer.translate", json!({"dx":0,"dy":-0.6,"coalesce":"nudge:2"})).unwrap();
+        match draft {
+            Some(id) => {
+                // Save directly from capture uses the same projection as Get and Stop.
+                let shown = s.execute("actions.editor.get", json!({"draft":id})).unwrap();
+                s.execute("actions.editor.save", json!({"draft":id})).unwrap();
+                assert_eq!(serde_json::to_value(&s.actions.list[0]).unwrap(), shown["action"]);
+            }
+            None => {
+                s.execute("actions.stop", json!({})).unwrap();
+            }
+        }
+        s.actions.list[0].clone()
+    };
+    let expected: Vec<(String, Value)> = vec![
+        ("layer.translate".into(), json!({"dx":2.0,"dy":0.0})),
+        ("layer.translate".into(), json!({"dx":0.0,"dy":-1.0})),
+        ("layer.renameLayer".into(), json!({"name":"Renamed"})),
+        ("layer.translate".into(), json!({"dx":0.0,"dy":-1.0})),
+    ];
+    let (classic, draft) = (capture(false), capture(true));
+    assert_eq!(classic.steps, expected);
+    assert_eq!(draft.steps, expected, "fold within a run, never across a new run or another command");
+    assert_eq!(draft.dialogs, classic.dialogs);
+    assert!(draft.steps.iter().all(|(_, params)| params.get("coalesce").is_none()));
+}
+
+#[test]
+fn draft_capture_preview_flush_keeps_projection_and_recording_owner() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width":300,"height":100,"background":"white"})).unwrap();
+    s.execute("type.create", json!({"x":10,"y":50,"text":"Teh end","size":12})).unwrap();
+    let draft = s.execute("actions.editor.open", json!({"name":"Preview"})).unwrap()["draft"].as_u64().unwrap();
+    s.execute("actions.editor.record", json!({"draft":draft})).unwrap();
+    s.execute("edit.checkSpelling", json!({"action":"suggest","word":"recieve"})).unwrap();
+    s.execute("edit.checkSpelling", json!({"allLayers":true})).unwrap();
+    let shown = s.execute("actions.editor.get", json!({"draft":draft})).unwrap();
+    let take = s.actions.take;
+    // Acquire the existing engine snapshot API without executing its document steps.
+    let (snapshot, owner) = playback::preview(&mut s, draft, 0).unwrap();
+    assert_eq!(serde_json::to_value(snapshot.as_ref()).unwrap(), shown["action"]);
+    owner.validate(&s).unwrap();
+    owner.finish(&mut s);
+    assert_eq!(s.actions.take, take);
+    assert!(s.actions.recording_active());
+    assert!(s.actions.list.is_empty());
+    let after = s.execute("actions.editor.get", json!({"draft":draft})).unwrap();
+    assert_eq!(after["action"], shown["action"], "suspend flush must not lose flags or duplicate capture");
+    assert_eq!(after["action"]["steps"], json!([["edit.checkSpelling",{"allLayers":true}]]));
+    assert_eq!(after["action"]["dialogs"], json!([0]));
 }

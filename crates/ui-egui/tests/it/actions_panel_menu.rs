@@ -9,6 +9,7 @@ use std::{cell::RefCell, rc::Rc, sync::atomic::AtomicUsize};
 /// A real panel and its dialogs with one selected action in a set.
 fn harness() -> Harness<'static, PhotocraftApp> {
     let mut app = PhotocraftApp::new(Session::new(), Default::default());
+    app.ui.actions_layout = photocraft_ui_egui::state::ActionsLayout::Classic;
     app.background_jobs = false;
     app.run("file.new", json!({"width":16,"height":12})).unwrap();
     let mut a = Action::new("A", vec![]);
@@ -142,14 +143,12 @@ fn reset_defaults_and_clear_all_keep_actual_consent_and_caller() {
     h.run_steps(3);
     assert_eq!(h.state().session.actions.list, original);
     open(&mut h, "Reset Actions…");
-    h.get_by_label("OK").click();
+    h.get_by_label("Append").click();
     h.run_steps(3);
     assert_eq!(&h.state().session.actions.list[..original.len()], original.as_slice());
     assert_eq!(h.state().session.actions.list.len(), original.len() + 2);
     assert!(h.state().session.actions.sets.iter().any(|s| s == actions_edit_cmds::DEFAULT_SET_NAME));
     open(&mut h, "Reset Actions…");
-    h.get_by_label("Replace").click();
-    h.run_steps(3);
     h.get_by_label("OK").click();
     h.run_steps(3);
     assert_eq!(h.state().session.actions.list.len(), 2);
@@ -170,6 +169,27 @@ fn reset_defaults_and_clear_all_keep_actual_consent_and_caller() {
         assert!(dialogs::confirm(h.state_mut(), dialog).is_err());
         assert_eq!(h.state().session.actions.list[0].name, "Changed");
     }
+}
+
+/// The measured warning's three buttons compose with the real Edit Undo command.
+#[test]
+fn reset_warning_has_three_buttons_and_undo_is_outside_document_history() {
+    let mut h = harness();
+    let original = h.state().session.actions.list.clone();
+    let document = h.state().session.active().unwrap().doc.clone();
+    let revision = h.state().session.active().unwrap().revision;
+    open(&mut h, "Reset Actions…");
+    assert!(h.query_by_label("Replace the current actions?").is_some());
+    for label in ["OK", "Cancel", "Append"] { assert!(h.query_by_label(label).is_some()); }
+    h.get_by_label("Append").click();
+    h.run_steps(3);
+    assert_eq!(h.state().session.actions.list.len(), original.len() + 2);
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    h.run_steps(3);
+    assert_eq!(h.state().session.actions.list, original);
+    assert!(std::sync::Arc::ptr_eq(&h.state().session.active().unwrap().doc, &document));
+    assert_eq!(h.state().session.active().unwrap().revision, revision);
+    assert!(!actions_edit_cmds::reset_undo_available(&h.state().session));
 }
 
 static PATH_CHECKS: AtomicUsize = AtomicUsize::new(0);
@@ -282,7 +302,7 @@ fn reset_modes(id: &str, params: &Value) -> photocraft_engine::Result<()> {
     Ok(())
 }
 
-/// Denied radios stay disabled; replace forgets old collapsed sets, append keeps them, and gates recheck.
+/// Denied buttons stay disabled; replace forgets old collapsed sets, append keeps them, and gates recheck.
 #[test]
 fn reset_modes_and_replaced_set_disclosures_follow_retained_and_current_policy() {
     use egui_kittest::kittest::NodeT;
@@ -301,19 +321,22 @@ fn reset_modes_and_replaced_set_disclosures_follow_retained_and_current_policy()
         }
         let dialog = open(&mut h, "Reset Actions…");
         assert_eq!(h.get_by_label("Append").accesskit_node().is_disabled(), allowed & 1 == 0);
-        assert_eq!(h.get_by_label("Replace").accesskit_node().is_disabled(), allowed & 2 == 0);
+        assert_eq!(h.get_by_label("OK").accesskit_node().is_disabled(), allowed & 2 == 0);
         if allowed == 3 {
             RESET_MODES.store(0, Ordering::SeqCst);
             assert!(dialogs::confirm(h.state_mut(), dialog).is_err());
             assert_eq!(h.state().session.actions.list, before);
             assert_eq!(h.state().ui.actions.collapsed_sets, ["S", "Remember"]);
         } else {
-            dialogs::confirm(h.state_mut(), dialog).unwrap();
+            h.get_by_label(if allowed == 1 { "Append" } else { "OK" }).click();
+            h.run_steps(3);
             if allowed == 1 {
-                assert_eq!(h.state().session.actions.list, before);
+                assert_eq!(&h.state().session.actions.list[..before.len()], before.as_slice());
+                assert_eq!(h.state().session.actions.list.len(), before.len() + 2);
                 assert_eq!(h.state().ui.actions.collapsed_sets, ["S", "Remember"]);
             } else {
-                assert!(h.state().session.actions.list.is_empty());
+                assert_eq!(h.state().session.actions.list.len(), 2);
+                assert_eq!(h.state().session.actions.sets, [actions_edit_cmds::DEFAULT_SET_NAME]);
                 assert_eq!(h.state().ui.actions.collapsed_sets, ["Remember"]);
             }
         }

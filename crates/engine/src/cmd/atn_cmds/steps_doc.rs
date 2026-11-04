@@ -17,6 +17,7 @@ pub(super) fn place_from(d: &Descriptor) -> Mapped {
     step(if get_bool(d, "Lnkd") == Some(true) { "file.placeLinked" } else { "file.placeEmbedded" }, p)
 }
 
+/// Encode supported Place options and its source reference as a Photoshop descriptor.
 pub(super) fn place_to(id: &str, p: &Value) -> Option<Descriptor> {
     let mut d = desc("null").with("null", path_value(jstr(p, "path")?)).with("FTcs", enm("QCSt", "Qcsa"));
     if let Some(s) = jnum(p, "scale") {
@@ -44,9 +45,12 @@ fn path_extension(path: &str) -> Option<String> {
 }
 
 /// `save`: a plain Save, or a Save As (`As` format, `In` destination, `Cpy` As a Copy).
-/// Only a destination that is a file of the recorded format imports: a folder (#5430), a missing
-/// or unknown format or a mismatched extension stays a kept Photoshop step, so playback stops
-/// before writing rather than saving over the played file (#7102).
+/// A destination that is a file of the recorded format imports with its path. "Save in
+/// directory" (`DIDr`, recorded when the suggested name was kept) imports as a folder step, so
+/// playback saves each document under its own name in that folder (#5305). Anything else (a
+/// missing or unknown format, a mismatched extension, a copy into a folder) stays a kept
+/// Photoshop step, so playback stops before writing rather than saving over the played file
+/// (#7102).
 pub(super) fn save_from(d: &Descriptor) -> Mapped {
     let unsupported = Mapped::Unsupported { harmless: false };
     if d.get("As  ").is_none() && d.get("In  ").is_none() {
@@ -56,11 +60,16 @@ pub(super) fn save_from(d: &Descriptor) -> Mapped {
     // with a format that isn't a descriptor) the step is kept.
     let Some(format) = get_obj(d, "As  ") else { return unsupported };
     let Some(path) = d.get("In  ").and_then(path_text) else { return unsupported };
+    let class = trimmed(&format.class_id);
     if get_bool(d, "DIDr") == Some(true) {
-        return unsupported;
+        // `In` is the folder alone. Save a Copy has no folder step: it stays kept.
+        let Some(ext) = SAVE_FORMATS.iter().find(|(c, _)| *c == class).and_then(|(_, exts)| exts.first()) else { return unsupported };
+        if get_bool(d, "Cpy ") == Some(true) {
+            return unsupported;
+        }
+        return step("file.saveAs", json!({"folder": path, "extension": ext}));
     }
     let Some(ext) = path_extension(&path) else { return unsupported };
-    let class = trimmed(&format.class_id);
     let Some((_, exts)) = SAVE_FORMATS.iter().find(|(c, _)| *c == class) else { return unsupported };
     if !exts.contains(&ext.as_str()) {
         return unsupported;
@@ -68,11 +77,20 @@ pub(super) fn save_from(d: &Descriptor) -> Mapped {
     step(if get_bool(d, "Cpy ") == Some(true) { "file.saveACopy" } else { "file.saveAs" }, json!({"path": path}))
 }
 
+/// Translate supported Save choices into a descriptor without inventing absent file options.
 pub(super) fn save_to(id: &str, p: &Value) -> Option<Descriptor> {
     if id == "file.save" {
         return Some(desc("null"));
     }
-    let path = jstr(p, "path")?;
+    let Some(path) = jstr(p, "path").filter(|v| !v.is_empty()) else {
+        // A Save As recorded with the document's own name: "save in directory" (#5305).
+        let (folder, ext) = (jstr(p, "folder")?, jstr(p, "extension")?.to_ascii_lowercase());
+        if id != "file.saveAs" {
+            return None;
+        }
+        let (class, _) = SAVE_FORMATS.iter().find(|(_, exts)| exts.contains(&ext.as_str()))?;
+        return Some(desc("null").with("As  ", D::Descriptor(desc(class))).with("In  ", path_value(folder)).with("DIDr", D::Boolean(true)));
+    };
     let ext = path_extension(path)?;
     let (class, _) = SAVE_FORMATS.iter().find(|(_, exts)| exts.contains(&ext.as_str()))?;
     let d = desc("null").with("As  ", D::Descriptor(desc(class))).with("In  ", path_value(path));
@@ -94,9 +112,27 @@ pub(super) fn conditional_from(d: &Descriptor) -> Mapped {
         Some(Target::Name(n)) => Some(clip_name(&n)),
         _ => None,
     };
-    step("actions.conditional", json!({"if": condition, "then": branch("then"), "else": branch("else")}))
+    let mut params = json!({"if": condition, "then": branch("then"), "else": branch("else")});
+    let scopes = ["then", "else"].map(|key| (key, get_ref(d, key).and_then(super::steps_layer::action_set)));
+    let shared = scopes
+        .iter()
+        .filter(|(key, _)| params[*key].is_string())
+        .find_map(|(_, set)| set.as_deref())
+        .filter(|set| scopes.iter().all(|(key, scope)| !params[*key].is_string() || scope.as_deref() == Some(*set)));
+    if let Some(set) = shared {
+        // Preserve the existing command shape when every active branch has the same scope.
+        params["set"] = json!(set);
+    } else {
+        for (key, set) in scopes {
+            if let Some(set) = set {
+                params[format!("{key}Set")] = json!(set);
+            }
+        }
+    }
+    step("actions.conditional", params)
 }
 
+/// Write independent branch references, retaining each explicit set before the shared fallback set.
 pub(super) fn conditional_to(_: &str, p: &Value) -> Option<Descriptor> {
     let condition = jstr(p, "if")?;
     let code = lookup_back(CONDITION_CODES, condition).unwrap_or(condition);
@@ -104,7 +140,7 @@ pub(super) fn conditional_to(_: &str, p: &Value) -> Option<Descriptor> {
     for key in ["then", "else"] {
         if let Some(name) = jstr(p, key) {
             let mut items = vec![ReferenceItem::Name { class: class("Actn"), name: UnicodeString::new_nul(name) }];
-            if let Some(set) = jstr(p, "set") {
+            if let Some(set) = p.get(format!("{key}Set")).and_then(Value::as_str).or_else(|| jstr(p, "set")) {
                 items.push(ReferenceItem::Name { class: class("ASet"), name: UnicodeString::new_nul(set) });
             }
             d = d.with(key, D::Reference(items));
@@ -144,7 +180,8 @@ pub(super) fn export_from(d: &Descriptor) -> Mapped {
     let unsupported = Mapped::Unsupported { harmless: false };
     let Some(u) = get_obj(d, "Usng") else { return unsupported };
     let Some(path) = d.get("In  ").and_then(path_text) else { return unsupported };
-    let mut p = json!({"path": path});
+    // "Save in directory": `In` is only the folder, and each document saves under its own name.
+    let mut p = if get_bool(u, "DIDr") == Some(true) { json!({"folder": path}) } else { json!({"path": path}) };
     if let Some(f) = get_enum(u, "Fmt ") {
         match lookup(WEB_FORMATS, &f) {
             Some(f) => p["format"] = json!(f),
@@ -170,9 +207,18 @@ pub(super) fn export_from(d: &Descriptor) -> Mapped {
     step("file.export.saveForWebLegacy", p)
 }
 
+/// Encode the export format and supported options, refusing values the event cannot represent.
 pub(super) fn export_to(_: &str, p: &Value) -> Option<Descriptor> {
-    let path = jstr(p, "path")?;
+    // A step recorded with the document's own name keeps only its folder (#5305).
+    let (path, in_folder) = match (jstr(p, "path").filter(|v| !v.is_empty()), jstr(p, "folder")) {
+        (Some(path), _) => (path, false),
+        (None, Some(folder)) => (folder, true),
+        (None, None) => return None,
+    };
     let mut u = desc("SaveForWeb").with("Op  ", enm("SWOp", "OpSa")).with("Fmt ", enm("IRFm", lookup_back(WEB_FORMATS, jstr(p, "format").unwrap_or("png24"))?));
+    if in_folder {
+        u = u.with("DIDr", D::Boolean(true));
+    }
     for (key, param, default) in [
         ("Intr", "interlaced", false),
         ("Trns", "transparency", true),
@@ -557,6 +603,7 @@ pub(super) fn image_size_to(_: &str, p: &Value) -> Option<Descriptor> {
     Some(d)
 }
 
+/// Project a Photoshop crop rectangle and supported options into command parameters.
 pub(super) fn crop_from(d: &Descriptor) -> Mapped {
     let mut p = Map::new();
     if let Some(t) = get_obj(d, "To  ") {
@@ -583,6 +630,7 @@ pub(super) fn crop_from(d: &Descriptor) -> Mapped {
     step("image.crop", Value::Object(p))
 }
 
+/// Encode a supported crop while refusing output-size options this event cannot preserve.
 pub(super) fn crop_to(_: &str, p: &Value) -> Option<Descriptor> {
     // The W x H x Resolution output options have no field here: refuse rather than export a plain
     // rectangle crop that keeps the old size and resolution on replay.

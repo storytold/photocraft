@@ -578,6 +578,9 @@ fn saving_from_the_prompt_closes_after_an_unconfirmed_write() {
 #[path = "tests/tiff_tests.rs"]
 mod tiff_tests;
 
+#[path = "tests/tiff_options_tests.rs"]
+mod tiff_options_tests;
+
 #[path = "tests/targa_tests.rs"]
 mod targa_tests;
 
@@ -624,6 +627,38 @@ fn window_close_goes_through_once_the_window_device_is_lost() {
     app.window_lost = true;
     assert!(!press_window_close(&mut app), "the close isn't cancelled");
     assert!(app.discard.is_none(), "no prompt opened");
+}
+
+/// Device loss cannot leave an owned step dialog trapping a blank window on Close.
+#[test]
+fn lost_window_close_releases_actions_ownership_without_a_prompt() {
+    use photocraft_engine::actions_cmds::Action;
+    for lost in [false, true] {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width":8,"height":8})).unwrap();
+        let mut action = Action::new("Owned", vec![("filter.blur.gaussianBlur".into(), json!({"radius":1}))]);
+        action.dialogs.insert(0);
+        app.session.actions.list.push(action);
+        app.run("actions.record", json!({"name":"Recorder"})).unwrap();
+        let take = app.session.actions.take;
+        let value = crate::actions::play(&mut app, &json!({"action":"Owned"})).unwrap();
+        assert!(value.get("paused").is_some(), "{value}");
+        let fields = app.ui.dialogs.iter().find(|dialog| Some(dialog.id) == value["paused"]["dialog"].as_u64()).unwrap().fields.clone();
+        let held = app.session.actions.held_playback;
+        assert!(held.is_some() && app.session.actions.recording.is_none());
+        app.window_lost = lost;
+        let commands = window_close_commands(&mut app);
+        assert_eq!(commands.iter().any(|command| matches!(command, egui::ViewportCommand::CancelClose)), !lost);
+        assert_eq!(app.session.actions.take, take);
+        if lost {
+            assert!(app.session.actions.held_playback.is_none());
+            assert!(crate::actions::resume(&mut app, &fields).is_err(), "the released token cannot resume");
+            assert!(app.session.actions.recording.is_some(), "the suspended recorder was released");
+            assert!(app.discard.is_none(), "no invisible document prompt");
+        } else {
+            assert_eq!(app.session.actions.held_playback, held, "normal Close still waits for its owner");
+        }
+    }
 }
 
 /// The title bar's close button and File › Exit run `file.exit` through `menus::invoke`, which

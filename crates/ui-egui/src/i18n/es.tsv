@@ -4203,6 +4203,7 @@ navigator	Zoom	Zoom
 	Sent to {printer}	Enviado a {printer}
 	set in Print Settings…	se establece en Ajustes de impresión…
 	ICO is limited to 256 × 256 pixels	ICO está limitado a 256 × 256 píxeles
+	Memory usage percent	Uso de memoria (%)
 	Show Favorite Fonts	Mostrar fuentes favoritas
 	No favorite fonts yet: click the star beside a font to add it.	Aún no hay fuentes favoritas: haz clic en la estrella junto a una fuente para añadirla.
 	Favorite fonts	Fuentes favoritas
@@ -4265,6 +4266,7 @@ navigator	Zoom	Zoom
 	Chisel Soft	Cincelar suave
 	Open color-less EXR as ACEScg	Abrir EXR sin espacio de color como ACEScg
 	Do not append "copy" to filename when saving a copy	No añadir «copy» al nombre de archivo al guardar una copia
+	Save Full-Size Composite in .pcraft Files	Guardar la imagen compuesta a tamaño completo en los archivos .pcraft
 	Edit Selected Guides	Editar guías seleccionadas
 	Clear Selected Guides	Borrar guías seleccionadas
 	Bicubic Automatic	Bicúbica automática
@@ -4317,6 +4319,7 @@ navigator	Zoom	Zoom
 	This document's layers: {needed} of {budget} for layers	Capas de este documento: {needed} de {budget} para capas
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Las capas de este documento necesitan {needed} pero pueden ocupar {budget}: los redibujados de todo el documento usan la CPU
 	GPU Memory (MB, 0 = Automatic)	Memoria de GPU (MB, 0 = Automático)
+	Scratch Size Limit (MB, 0 = No Limit)	Límite de tamaño del disco de memoria virtual (MB, 0 = sin límite)
 	{path}: the path is not valid Unicode; save under another name.	{path}: la ruta no es Unicode válido; guarde con otro nombre.
 	{name} was changed by another app after it was opened or saved here.	Otra aplicación cambió {name} después de abrirlo o guardarlo aquí.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Reemplázalo con este documento, o cancela y usa Archivo › Guardar como para conservar ambos.
@@ -4429,3 +4432,108 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Color de la parada
 	Shapes can't use patterns yet	Las formas aún no pueden usar motivos
 	Edit Brush…	Editar pincel…
+
+# Actions list and editor (10945/10946)
+	Action saved, but confirmation preference could not be saved: {error}	La acción se guardó, pero no se pudo guardar la preferencia de confirmación: {error}
+	Add a brief description for this action…	Añade una breve descripción de esta acción…
+	Allow Tool Recording	Permitir la grabación de herramientas
+	Answer the open Actions editor question first	Responde primero a la pregunta abierta en el editor de acciones
+	Apply to background	Aplicar al fondo
+	Apply to subject	Aplicar al sujeto
+	Black and white	Blanco y negro
+	Cancel and continue editing	Cancelar y seguir editando
+	Choose color	Elegir color
+	Choose icon	Elegir icono
+	Choose icon and color	Elegir icono y color
+	Classic Actions	Acciones clásicas
+	Clear All Actions	Borrar todas las acciones
+	Clear search	Borrar búsqueda
+	Click action	Acción de clic
+	Close the open Actions editor first	Cierra primero el editor de acciones abierto
+	Collapse all	Contraer todo
+	Colour lookup tables	Tablas de consulta de color
+	Confirm or cancel the open action dialog first	Confirma o cancela primero el cuadro de diálogo de acción abierto
+	Control	Ctrl
+	Default icon	Icono predeterminado
+	Delete Action	Eliminar acción
+	Delete action	Eliminar acción
+	Delete group	Eliminar grupo
+	Delete step	Eliminar paso
+	Delete the action "{name}"?	¿Eliminar la acción «{name}»?
+	Delete the group "{name}"?	¿Eliminar el grupo «{name}»?
+	Discard	Descartar
+	Download	Descargar
+	Duplicate Action	Duplicar acción
+	Duplicate action	Duplicar acción
+	Duplicate group	Duplicar grupo
+	Duplicate step	Duplicar paso
+	Edit Action	Editar acción
+	Edit action	Editar acción
+	Edit step settings	Editar ajustes del paso
+	Enable step	Activar paso
+	Expand all	Expandir todo
+	Export Action…	Exportar acción…
+	Finish or cancel action playback and the pending step first	Finaliza o cancela primero la reproducción de la acción y el paso pendiente
+	Finishing step…	Finalizando paso…
+	Generated layer effects	Efectos de capa generados
+	Generated styles	Estilos generados
+	Grey	Gris
+	Harmonize layers	Armonizar capas
+	Hue and saturation	Tono y saturación
+	Import Actions…	Importar acciones…
+	Import actions or create a new action to get started.	Importa acciones o crea una nueva para empezar.
+	Insert Action	Insertar acción
+	Insert Conditional	Insertar condición
+	Insert Menu Item	Insertar elemento de menú
+	Insert Path	Insertar trazado
+	Insert Stop	Insertar detención
+	Insert…	Insertar…
+	Keyboard shortcut	Atajo de teclado
+	Lavender	Lavanda
+	Layer effects	Efectos de capa
+	Light blue	Azul claro
+	List size	Tamaño de lista
+	Magic wand	Varita mágica
+	Merge layers	Combinar capas
+	Move step down	Mover paso abajo
+	Move step up	Mover paso arriba
+	New group	Nuevo grupo
+	No steps yet	Aún no hay pasos
+	Object selection	Selección de objetos
+	Play Action	Reproducir acción
+	Play Actions	Reproducir acciones
+	Play action	Reproducir acción
+	Play from selected step	Reproducir desde el paso seleccionado
+	Playback Options…	Opciones de reproducción…
+	Play…	Reproducir…
+	Preview on hover	Vista previa al pasar el cursor
+	Record	Grabar
+	Recording	Grabando
+	Remove background	Quitar el fondo
+	Save Action	Guardar acción
+	Search actions	Buscar acciones
+	Select an existing action step to play	Selecciona un paso de acción existente para reproducirlo
+	Select subject	Seleccionar sujeto
+	Show grid	Mostrar cuadrícula
+	Show step settings	Mostrar ajustes del paso
+	Smart removal	Eliminación inteligente
+	Sort & View options	Opciones de orden y vista
+	Start recording to build your action	Inicia la grabación para crear tu acción
+	Steps	Pasos
+	Stored action step	Paso de acción guardado
+	Stored settings	Ajustes guardados
+	Teal	Verde azulado
+	Text	Texto
+	Text colour	Color del texto
+	The draft steps changed. Cancel this dialog and reopen the step.	Los pasos del borrador han cambiado. Cancela este cuadro de diálogo y vuelve a abrir el paso.
+	The dragged action changed; drag it again	La acción arrastrada ha cambiado; vuelve a arrastrarla
+	The editor response does not belong to this draft	La respuesta del editor no pertenece a este borrador
+	There are unsaved changes. Do you want to save or discard them?	Hay cambios sin guardar. ¿Quieres guardarlos o descartarlos?
+	This editor page is closed	Esta página del editor está cerrada
+	This step dialog belongs to another editor	Este cuadro de diálogo de paso pertenece a otro editor
+	Wait for the current action step to finish	Espera a que termine el paso de acción actual
+	You haven't created any actions	No has creado ninguna acción
+	Yours	Tus acciones
+
+# Actions reserved category caption (10945/10946)
+	Ungrouped Actions	Acciones sin agrupar

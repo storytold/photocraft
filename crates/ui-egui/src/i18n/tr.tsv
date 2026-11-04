@@ -4002,6 +4002,7 @@ cameraData	Lens	Lens
 	Kept {name}: written by another application	{name} korundu: başka bir uygulama tarafından yazılmış
 	Shadow Tint	Gölge tonu
 	Redrawing	Yeniden çiziliyor
+	Memory usage percent	Bellek kullanım yüzdesi
 	Show Favorite Fonts	Favori yazı tiplerini göster
 	No favorite fonts yet: click the star beside a font to add it.	Henüz favori yazı tipi yok: eklemek için bir yazı tipinin yanındaki yıldıza tıklayın.
 	Favorite fonts	Favori yazı tipleri
@@ -4051,6 +4052,7 @@ cameraData	Lens	Lens
 	Chisel Soft	Yumuşak Keski
 	Open color-less EXR as ACEScg	Renk bilgisi olmayan EXR'yi ACEScg olarak aç
 	Do not append "copy" to filename when saving a copy	Kopya kaydederken dosya adına "copy" ekleme
+	Save Full-Size Composite in .pcraft Files	.pcraft dosyalarına tam boyutlu bileşik görüntüyü kaydet
 	Edit Selected Guides	Seçili Kılavuzları Düzenle
 	Clear Selected Guides	Seçili Kılavuzları Temizle
 	Bicubic Automatic	Bikübik Otomatik
@@ -4126,6 +4128,7 @@ cameraData	Lens	Lens
 	This document's layers: {needed} of {budget} for layers	Bu belgenin katmanları: katmanlar için {budget} içinden {needed}
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Bu belgenin katmanlarının {needed} belleğe ihtiyacı var ama en fazla {budget} kullanabilirler: tüm belgenin yeniden çizimi CPU'yu kullanır
 	GPU Memory (MB, 0 = Automatic)	GPU Belleği (MB, 0 = Otomatik)
+	Scratch Size Limit (MB, 0 = No Limit)	Geçici disk boyut sınırı (MB, 0 = Sınırsız)
 	{path}: the path is not valid Unicode; save under another name.	{path}: yol geçerli bir Unicode değil; başka bir adla kaydedin.
 	{name} was changed by another app after it was opened or saved here.	{name}, burada açıldıktan veya kaydedildikten sonra başka bir uygulama tarafından değiştirildi.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Bu belgeyle değiştirin ya da iptal edip ikisini de korumak için Dosya › Farklı Kaydet'i kullanın.
@@ -4251,3 +4254,108 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Durak Rengi
 	Shapes can't use patterns yet	Şekiller henüz desen kullanamaz
 	Edit Brush…	Fırçayı Düzenle…
+
+# Actions list and editor (10945/10946)
+	Action saved, but confirmation preference could not be saved: {error}	Eylem kaydedildi, ancak onay tercihi kaydedilemedi: {error}
+	Add a brief description for this action…	Bu eylem için kısa bir açıklama ekleyin…
+	Allow Tool Recording	Araç kaydına izin ver
+	Answer the open Actions editor question first	Önce Eylem düzenleyicisindeki açık soruyu yanıtlayın
+	Apply to background	Arka plana uygula
+	Apply to subject	Konuya uygula
+	Black and white	Siyah beyaz
+	Cancel and continue editing	İptal et ve düzenlemeye devam et
+	Choose color	Renk seç
+	Choose icon	Simge seç
+	Choose icon and color	Simge ve renk seç
+	Classic Actions	Klasik Eylemler
+	Clear All Actions	Tüm Eylemleri temizle
+	Clear search	Aramayı temizle
+	Click action	Tıklama eylemi
+	Close the open Actions editor first	Önce açık Eylem düzenleyicisini kapatın
+	Collapse all	Tümünü daralt
+	Colour lookup tables	Renk eşleme tabloları
+	Confirm or cancel the open action dialog first	Önce açık eylem iletişim kutusunu onaylayın veya iptal edin
+	Control	Ctrl
+	Default icon	Varsayılan simge
+	Delete Action	Eylemi sil
+	Delete action	Eylemi sil
+	Delete group	Grubu Sil
+	Delete step	Adımı sil
+	Delete the action "{name}"?	“{name}” eylemi silinsin mi?
+	Delete the group "{name}"?	“{name}” grubu silinsin mi?
+	Discard	Vazgeç
+	Download	İndir
+	Duplicate Action	Eylemi çoğalt
+	Duplicate action	Eylemi çoğalt
+	Duplicate group	Grubu çoğalt
+	Duplicate step	Adımı çoğalt
+	Edit Action	Eylemi düzenle
+	Edit action	Eylemi düzenle
+	Edit step settings	Adım ayarlarını düzenle
+	Enable step	Adımı etkinleştir
+	Expand all	Tümünü genişlet
+	Export Action…	Eylemi dışa aktar…
+	Finish or cancel action playback and the pending step first	Önce eylem oynatımını ve bekleyen adımı tamamlayın veya iptal edin
+	Finishing step…	Adım tamamlanıyor…
+	Generated layer effects	Oluşturulan katman efektleri
+	Generated styles	Oluşturulan stiller
+	Grey	Gri
+	Harmonize layers	Katmanları uyumlaştır
+	Hue and saturation	Ton ve doygunluk
+	Import Actions…	Eylemleri içe aktar…
+	Import actions or create a new action to get started.	Başlamak için eylemleri içe aktarın veya yeni bir eylem oluşturun.
+	Insert Action	Eylem ekle
+	Insert Conditional	Koşul ekle
+	Insert Menu Item	Menü öğesi ekle
+	Insert Path	Yol ekle
+	Insert Stop	Durdurma Ekle
+	Insert…	Ekle…
+	Keyboard shortcut	Klavye kısayolu
+	Lavender	Lavanta
+	Layer effects	Katman efektleri
+	Light blue	Açık Mavi
+	List size	Liste boyutu
+	Magic wand	Sihirli değnek
+	Merge layers	Katmanları Birleştir
+	Move step down	Adımı aşağı taşı
+	Move step up	Adımı yukarı taşı
+	New group	Yeni Grup
+	No steps yet	Henüz adım yok
+	Object selection	Nesne seçimi
+	Play Action	Eylemi oynat
+	Play Actions	Eylemleri oynat
+	Play action	Eylemi oynat
+	Play from selected step	Seçili adımdan oynat
+	Playback Options…	Oynatım Seçenekleri…
+	Play…	Oynat…
+	Preview on hover	Üzerine gelindiğinde önizle
+	Record	Kaydı başlat
+	Recording	Kaydediliyor
+	Remove background	Arka Planı Kaldır
+	Save Action	Eylemi kaydet
+	Search actions	Eylemlerde ara
+	Select an existing action step to play	Oynatmak için mevcut bir eylem adımı seçin
+	Select subject	Konuyu Seç
+	Show grid	Izgarayı Göster
+	Show step settings	Adım ayarlarını göster
+	Smart removal	Akıllı kaldırma
+	Sort & View options	Sıralama ve Görünüm seçenekleri
+	Start recording to build your action	Eyleminizi oluşturmak için kaydı başlatın
+	Steps	Adımlar
+	Stored action step	Saklanan eylem adımı
+	Stored settings	Saklanan ayarlar
+	Teal	Mavimsi yeşil
+	Text	Metin
+	Text colour	Metin rengi
+	The draft steps changed. Cancel this dialog and reopen the step.	Taslak adımları değişti. Bu iletişim kutusunu iptal edip adımı yeniden açın.
+	The dragged action changed; drag it again	Sürüklenen eylem değişti; yeniden sürükleyin
+	The editor response does not belong to this draft	Düzenleyici yanıtı bu taslağa ait değil
+	There are unsaved changes. Do you want to save or discard them?	Kaydedilmemiş değişiklikler var. Kaydetmek mi, vazgeçmek mi istiyorsunuz?
+	This editor page is closed	Bu düzenleyici sayfası kapalı
+	This step dialog belongs to another editor	Bu adım iletişim kutusu başka bir düzenleyiciye ait
+	Wait for the current action step to finish	Geçerli eylem adımının bitmesini bekleyin
+	You haven't created any actions	Henüz hiçbir eylem oluşturmadınız
+	Yours	Size ait
+
+# Actions reserved category caption (10945/10946)
+	Ungrouped Actions	Gruplanmamış eylemler

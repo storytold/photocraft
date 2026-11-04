@@ -3496,6 +3496,7 @@ curves	Smooth	매끄럽게
 	Sent to {printer}	{printer}(으)로 전송됨
 	set in Print Settings…	인쇄 설정에서 지정…
 	ICO is limited to 256 × 256 pixels	ICO는 256 × 256픽셀로 제한됩니다
+	Memory usage percent	메모리 사용 비율(%)
 	Show Favorite Fonts	즐겨찾는 글꼴 표시
 	No favorite fonts yet: click the star beside a font to add it.	아직 즐겨찾는 글꼴이 없습니다. 글꼴 옆의 별을 클릭하여 추가하세요.
 	Favorite fonts	즐겨찾는 글꼴
@@ -3558,6 +3559,7 @@ curves	Smooth	매끄럽게
 	Chisel Soft	부드럽게 조각
 	Open color-less EXR as ACEScg	색 공간 정보 없는 EXR을 ACEScg로 열기
 	Do not append "copy" to filename when saving a copy	사본 저장 시 파일 이름에 "copy"를 붙이지 않음
+	Save Full-Size Composite in .pcraft Files	.pcraft 파일에 전체 크기 합성 이미지 저장
 	Color Profile	색상 프로필
 	EXIF	EXIF
 	Edit Selected Guides	선택한 안내선 편집
@@ -3614,6 +3616,7 @@ curves	Smooth	매끄럽게
 	This document's layers: {needed} of {budget} for layers	이 문서의 레이어: 레이어용 {budget} 중 {needed}
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	이 문서의 레이어에 {needed}가 필요하지만 {budget}만 사용할 수 있습니다: 문서 전체 다시 그리기는 CPU를 사용합니다
 	GPU Memory (MB, 0 = Automatic)	GPU 메모리(MB, 0 = 자동)
+	Scratch Size Limit (MB, 0 = No Limit)	임시 디스크 크기 제한(MB, 0 = 제한 없음)
 	{path}: the path is not valid Unicode; save under another name.	{path}: 경로가 올바른 유니코드가 아닙니다. 다른 이름으로 저장하세요.
 	Replace	대치
 	{name} was changed by another app after it was opened or saved here.	{name}이(가) 여기서 열거나 저장한 뒤 다른 앱에서 변경되었습니다.
@@ -3737,3 +3740,110 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	정지점 색상
 	Shapes can't use patterns yet	모양에는 아직 패턴을 사용할 수 없습니다
 	Edit Brush…	브러시 편집…
+
+# Actions list and editor (10945/10946)
+	Action saved, but confirmation preference could not be saved: {error}	액션을 저장했지만 확인 설정을 저장하지 못했습니다: {error}
+	Add a brief description for this action…	이 액션에 대한 간단한 설명 추가…
+	Allow Tool Recording	도구 기록 허용
+	Answer the open Actions editor question first	먼저 액션 편집기에 열린 질문에 답하세요
+	Apply to background	배경에 적용
+	Apply to subject	피사체에 적용
+	Back	뒤로
+	Black and white	흑백
+	Cancel and continue editing	취소하고 계속 편집
+	Choose color	색상 선택
+	Choose icon	아이콘 선택
+	Choose icon and color	아이콘 및 색상 선택
+	Classic Actions	클래식 액션
+	Clear All Actions	모든 액션 지우기
+	Clear search	검색 지우기
+	Click action	클릭 동작
+	Close the open Actions editor first	먼저 열려 있는 액션 편집기를 닫으세요
+	Collapse all	모두 접기
+	Colour lookup tables	색상 조회 테이블
+	Confirm or cancel the open action dialog first	먼저 열려 있는 액션 대화 상자를 확인하거나 취소하세요
+	Control	Ctrl
+	Default icon	기본 아이콘
+	Delete Action	액션 삭제
+	Delete action	액션 삭제
+	Delete group	그룹 삭제
+	Delete step	단계 삭제
+	Delete the action "{name}"?	액션 “{name}”을(를) 삭제할까요?
+	Delete the group "{name}"?	그룹 “{name}”을(를) 삭제할까요?
+	Discard	버리기
+	Download	다운로드
+	Duplicate Action	액션 복제
+	Duplicate action	액션 복제
+	Duplicate group	그룹 복제
+	Duplicate step	단계 복제
+	Edit Action	액션 편집
+	Edit action	액션 편집
+	Edit step settings	단계 설정 편집
+	Enable step	단계 활성화
+	Expand all	모두 펼치기
+	Export Action…	액션 내보내기…
+	Finish or cancel action playback and the pending step first	먼저 액션 재생과 대기 중인 단계를 완료하거나 취소하세요
+	Finishing step…	단계 마무리 중…
+	Generated layer effects	생성된 레이어 효과
+	Generated styles	생성된 스타일
+	Grey	회색
+	Harmonize layers	레이어 조화
+	Hue and saturation	색조 및 채도
+	Import Actions…	액션 가져오기…
+	Import actions or create a new action to get started.	액션을 가져오거나 새 액션을 만들어 시작하세요.
+	Insert Action	액션 삽입
+	Insert Conditional	조건 삽입
+	Insert Menu Item	메뉴 항목 삽입
+	Insert Path	패스 삽입
+	Insert Stop	정지 삽입
+	Insert…	삽입…
+	Keyboard shortcut	키보드 단축키
+	Lavender	라벤더
+	Layer effects	레이어 효과
+	Light blue	연한 파랑
+	List size	목록 크기
+	Magic wand	자동 선택
+	Merge layers	레이어 병합
+	Move step down	단계 아래로 이동
+	Move step up	단계 위로 이동
+	New group	새 그룹
+	No steps yet	아직 단계가 없습니다
+	Object selection	개체 선택
+	On	켜짐
+	Play Action	액션 재생
+	Play Actions	액션 재생
+	Play action	액션 재생
+	Play from selected step	선택한 단계부터 재생
+	Playback Options…	재생 옵션…
+	Play…	재생…
+	Preview on hover	마우스를 올리면 미리 보기
+	Record	기록
+	Recording	기록 중
+	Remove background	배경 제거
+	Save Action	액션 저장
+	Search actions	액션 검색
+	Select an existing action step to play	재생할 기존 액션 단계를 선택하세요
+	Select subject	피사체 선택
+	Show grid	격자 표시
+	Show step settings	단계 설정 표시
+	Smart removal	스마트 제거
+	Sort & View options	정렬 및 보기 옵션
+	Start recording to build your action	기록을 시작하여 액션을 만드세요
+	Steps	단계
+	Stored action step	저장된 액션 단계
+	Stored settings	저장된 설정
+	Teal	청록색
+	Text	텍스트
+	Text colour	텍스트 색상
+	The draft steps changed. Cancel this dialog and reopen the step.	초안 단계가 변경되었습니다. 이 대화 상자를 취소하고 단계를 다시 여세요.
+	The dragged action changed; drag it again	드래그한 액션이 변경되었습니다. 다시 드래그하세요
+	The editor response does not belong to this draft	편집기 응답이 이 초안에 속하지 않습니다
+	There are unsaved changes. Do you want to save or discard them?	저장하지 않은 변경 사항이 있습니다. 저장할까요, 버릴까요?
+	This editor page is closed	이 편집기 페이지는 닫혀 있습니다
+	This step dialog belongs to another editor	이 단계 대화 상자는 다른 편집기에 속합니다
+	Wait for the current action step to finish	현재 액션 단계가 끝날 때까지 기다리세요
+	You haven't created any actions	아직 만든 액션이 없습니다
+	Yours	내 액션
+
+# Actions reserved category caption (10945/10946)
+	Ungrouped Actions	그룹화되지 않은 액션
