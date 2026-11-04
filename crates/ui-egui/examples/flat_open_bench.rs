@@ -26,8 +26,11 @@
 //! - `editable`: import + admission + first composite of one open, the "decode + first composite" rows
 //!
 //! Peak memory: without `--case` the bench starts itself once per case (`current_exe`), so each
-//! case's `VmHWM` is its own; the rows carry `peak_rss_bytes` (the import passes, before the GPU
-//! exists) and the report's context lists `peak_total_bytes` too. Off Linux the peak is `n/a`.
+//! case's `VmHWM` is its own process-lifetime high-water mark. `peak_process_after_import_bytes`
+//! is read after real import and admission; `peak_process_after_all_passes_bytes` is read after
+//! standalone decode/orient/tiles, GPU setup and warm-up, and editable-open passes. The latter
+//! is not an isolated composite or editable-open peak. Row `peak_rss_provenance` identifies
+//! which reading its `peak_rss_bytes` carries. Off Linux the peak is `n/a`.
 //! A case run directly with `--case` generates a missing fixture in its own process, which
 //! raises its peak: run the bench once without `--case` first.
 
@@ -252,7 +255,7 @@ fn run_case(case: &Case, dir: &Path, quick: bool, reps: usize, cpu: bool) -> Res
         s.open_document(doc, Some(name.clone()));
         put(1, ms(t));
     }
-    let peak_import = photocraft_testkit::perf::process_peak_rss_bytes();
+    let peak_process_after_import = photocraft_testkit::perf::process_peak_rss_bytes();
 
     // Pass 2: the phases of the import on their own.
     let format = photocraft_codecs::detect(&bytes).ok_or("unknown format")?;
@@ -290,11 +293,11 @@ fn run_case(case: &Case, dir: &Path, quick: bool, reps: usize, cpu: bool) -> Res
         put(5, c);
         put(6, open + c);
     }
-    let peak_total = photocraft_testkit::perf::process_peak_rss_bytes();
+    let peak_process_after_all_passes = photocraft_testkit::perf::process_peak_rss_bytes();
     let phases: serde_json::Map<String, Value> = PHASES.iter().zip(ph).map(|(n, v)| ((*n).to_string(), json!(v))).collect();
     Ok(json!({
         "key": case.key, "label": case.label, "width": w, "height": h, "file_bytes": bytes.len(),
-        "peak_import_bytes": peak_import, "peak_total_bytes": peak_total, "adapter": adapter, "phases": phases,
+        "peak_process_after_import_bytes": peak_process_after_import, "peak_process_after_all_passes_bytes": peak_process_after_all_passes, "adapter": adapter, "phases": phases,
     }))
 }
 
@@ -306,8 +309,10 @@ fn rows_of(res: &Value) -> Vec<Value> {
         .map(|p| {
             let samples: Vec<f64> = res["phases"][*p].as_array().map(|a| a.iter().filter_map(Value::as_f64).collect()).unwrap_or_default();
             let composite = matches!(*p, "first composite" | "editable");
-            let peak = res[if composite { "peak_total_bytes" } else { "peak_import_bytes" }].as_u64();
-            photocraft_testkit::perf::row(&format!("{label}: {p}"), &samples, peak, None)
+            let peak = res[if composite { "peak_process_after_all_passes_bytes" } else { "peak_process_after_import_bytes" }].as_u64();
+            let mut row = photocraft_testkit::perf::row(&format!("{label}: {p}"), &samples, peak, None);
+            row["peak_rss_provenance"] = json!(if composite { "whole_case_process_after_all_passes" } else { "case_process_after_import_and_admission" });
+            row
         })
         .collect()
 }
@@ -323,7 +328,31 @@ fn print_case(res: &Value) {
         let phase = name.rsplit(": ").next().unwrap_or(name);
         println!("  {phase:<16} p50 {:>8.1} ms   p95 {:>8.1} ms", p50.unwrap_or(f64::NAN), p95.unwrap_or(f64::NAN));
     }
-    println!("  peak RSS: {} MB through import, {} MB with the first composite", mb(&res["peak_import_bytes"]), mb(&res["peak_total_bytes"]));
+    println!(
+        "  process RSS high-water: {} MiB after import/admission, {} MiB after all passes (including standalone phases and warm-up)",
+        mb(&res["peak_process_after_import_bytes"]),
+        mb(&res["peak_process_after_all_passes_bytes"])
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rows_identify_the_process_peak_reading() {
+        let res = json!({
+            "label": "fixture", "phases": {},
+            "peak_process_after_import_bytes": 100,
+            "peak_process_after_all_passes_bytes": 200,
+        });
+        let rows = rows_of(&res);
+        for (row, phase) in rows.iter().zip(PHASES) {
+            let all_passes = matches!(phase, "first composite" | "editable");
+            assert_eq!(row["peak_rss_bytes"], if all_passes { 200 } else { 100 });
+            assert_eq!(row["peak_rss_provenance"], if all_passes { "whole_case_process_after_all_passes" } else { "case_process_after_import_and_admission" });
+        }
+    }
 }
 
 /// Starts this binary for one case so its peak memory is its own; returns the parsed result.
@@ -395,7 +424,7 @@ fn main() {
     if let Some(out) = arg(&args, "--json") {
         let cases: Vec<Value> = results
             .iter()
-            .map(|r| json!({"key": r["key"], "width": r["width"], "height": r["height"], "file_bytes": r["file_bytes"], "peak_import_bytes": r["peak_import_bytes"], "peak_total_bytes": r["peak_total_bytes"]}))
+            .map(|r| json!({"key": r["key"], "width": r["width"], "height": r["height"], "file_bytes": r["file_bytes"], "peak_process_after_import_bytes": r["peak_process_after_import_bytes"], "peak_process_after_all_passes_bytes": r["peak_process_after_all_passes_bytes"]}))
             .collect();
         let adapter = results.iter().find_map(|r| r["adapter"].as_str().map(str::to_string));
         let context = json!({
@@ -404,7 +433,7 @@ fn main() {
         });
         let mut report = photocraft_testkit::perf::report("flat_open_bench", context, rows, None);
         // Each case ran in its own process: this one's peak says nothing about them.
-        report["process_peak_rss_bytes"] = json!(results.iter().filter_map(|r| r["peak_total_bytes"].as_u64()).max());
+        report["process_peak_rss_bytes"] = json!(results.iter().filter_map(|r| r["peak_process_after_all_passes_bytes"].as_u64()).max());
         if let Err(e) = photocraft_testkit::perf::write_report(&out, &report) {
             eprintln!("{e}");
             errors.push(json!({"name": "report", "error": e}));
