@@ -37,7 +37,7 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
         "toolOptions": app.ui.tool_options,
         "layerFilter": ({
             let f = crate::layer_filter_ui::Filter::of(app);
-            json!({"on": f.on, "by": f.by, "kinds": f.kinds, "name": f.name, "effect": f.effect.id(), "mode": f.mode.label(), "color": f.color.id(), "smart": f.smart})
+            json!({"on": f.on, "by": f.by, "kinds": f.kinds, "name": f.name, "effect": f.effect.id(), "attribute": f.attribute.id(), "mode": f.mode.label(), "color": f.color.id(), "smart": f.smart})
         }),
         "perspectiveCrop": app.ui.perspective_crop,
         "strokeEditor": app.ui.stroke_editor,

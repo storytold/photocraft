@@ -12,6 +12,8 @@ use crate::PhotocraftApp;
 #[derive(Clone, Debug)]
 pub struct DocumentFilter {
     pub filter: Filter,
+    /// Last criteria applied to selection in this open document, not the last active tab.
+    applied: Option<Filter>,
     revision: u64,
     source: Weak<Document>,
 }
@@ -50,8 +52,23 @@ pub(super) fn retain_open(app: &mut PhotocraftApp) {
 pub(super) fn apply(app: &mut PhotocraftApp, filter: Filter) {
     retain_open(app);
     if let Some(state) = app.session.active() {
-        app.ui.layer_filters.insert(state.doc.id, DocumentFilter { filter, revision: state.revision, source: Arc::downgrade(&state.doc) });
+        app.ui.layer_filters.entry(state.doc.id).and_modify(|saved| saved.filter = filter.clone()).or_insert_with(|| DocumentFilter {
+            filter,
+            applied: None,
+            revision: state.revision,
+            source: Arc::downgrade(&state.doc),
+        });
     }
+}
+
+/// Remember selection application in the same lifecycle-owned record as the criteria.
+pub(super) fn changed_since_draw(app: &mut PhotocraftApp, filter: &Filter) -> bool {
+    apply(app, filter.clone());
+    let Some(id) = app.session.active().map(|state| state.doc.id) else { return false };
+    let Some(saved) = app.ui.layer_filters.get_mut(&id) else { return false };
+    let changed = saved.applied.as_ref() != Some(filter);
+    saved.applied = Some(filter.clone());
+    changed
 }
 
 fn toggle(ui: &mut egui::Ui, on: &mut bool) {

@@ -1,4 +1,4 @@
-//! #10877 foundation only. No selection pruning or additional filter kind is implemented here.
+//! #10877: per-open-document filter ownership, switch and current-main reader integration.
 use egui::vec2;
 use egui_kittest::{
     Harness,
@@ -376,4 +376,51 @@ fn layer_filter_switch_visual_fixture() {
         eprintln!("capture {name}: filter={} rows={:?}", inspected["result"]["layerFilter"], drawn(&h));
         h.render().expect("render layer filter state").save(output.join(name)).expect("save layer filter capture");
     }
+}
+
+/// Returning to a tab must not reapply its unchanged predicate to a later selection.
+#[test]
+fn selection_application_belongs_to_the_open_document() {
+    let mut app = app();
+    let blue = app.session.active().unwrap().doc.walk().into_iter().find(|(_, _, layer)| layer.name == "Blue").unwrap().2.id;
+    set(&mut app, json!({"by": "name", "name": "Red"}));
+    super::selection::follow(&mut app);
+    assert!(app.session.active().unwrap().selected_layers().is_empty());
+    app.run("layer.select", json!({"layer": blue.0})).unwrap();
+    super::selection::follow(&mut app);
+    assert_eq!(app.session.active().unwrap().selected_layers(), [blue], "later selection is allowed while hidden");
+    app.run("file.new", json!({"width":8,"height":8})).unwrap();
+    set(&mut app, json!({"by": "name", "name": "other"}));
+    super::selection::follow(&mut app);
+    app.run("document.activate", json!({"document":0})).unwrap();
+    super::selection::follow(&mut app);
+    assert_eq!(app.session.active().unwrap().selected_layers(), [blue], "tab activation is not a criterion edit");
+    set(&mut app, json!({"by": "name", "name": "Red"}));
+    super::selection::follow(&mut app);
+    assert_eq!(app.session.active().unwrap().selected_layers(), [blue], "an identical patch is not a new application");
+    set(&mut app, json!({"name": "Blue"}));
+    super::selection::follow(&mut app);
+    set(&mut app, json!({"name": "Red"}));
+    super::selection::follow(&mut app);
+    assert!(app.session.active().unwrap().selected_layers().is_empty(), "a real criterion edit still prunes");
+}
+
+/// Attribute is owned with the rest of each document's filter, while its pixel cache stays derived.
+#[test]
+fn attribute_criteria_are_per_document_and_read_back_atomically() {
+    let mut app = app();
+    set(&mut app, json!({"by":"attribute", "attribute":"notVisible"}));
+    let before = Filter::of(&app);
+    assert!(before.on);
+    let inspected = call(&mut app, "ui.inspect", json!({}));
+    assert_eq!(inspected["result"]["layerFilter"]["attribute"], "notVisible");
+    assert_eq!(call(&mut app, "ui.set", json!({"layerFilter":{"on":false,"attribute":"bad"}}))["ok"], false);
+    assert_eq!(Filter::of(&app), before);
+    app.run("file.new", json!({"width":8,"height":8})).unwrap();
+    assert_eq!(Filter::of(&app), Filter::default());
+    app.run("document.activate", json!({"document":0})).unwrap();
+    assert_eq!(Filter::of(&app), before);
+    set(&mut app, json!({"on":false}));
+    assert_eq!(Filter::of(&app).attribute, before.attribute);
+    assert_eq!(listed(&app).len(), 3, "Off keeps the Attribute criterion and lists the full tree");
 }
