@@ -71,7 +71,7 @@ fn header_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, header: Rect) {
     bar.label(egui::RichText::new(tl!("PhotoCraft")).font(semibold(18.0)).color(t.text));
     // The options bar is hidden on Home, so this is the way back to the open documents.
     let documents = app.session.documents().len();
-    if (documents > 0 || !app.session.prefs().general.auto_show_home_screen) {
+    if documents > 0 || !app.session.prefs().general.auto_show_home_screen {
         crate::chrome_ui::home_button(app, &mut bar);
     }
     bar.with_layout(Layout::right_to_left(Align::Center), |ui| {

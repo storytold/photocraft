@@ -26,10 +26,11 @@ fn app(theme: ThemeKind, document: bool, auto_show: bool) -> Harness<'static, Ph
     h
 }
 
-fn chrome_shown(h: &Harness<'static, PhotocraftApp>) -> bool {
-    let toolbar = h.query_by_label("Brush Tool (B)").is_some();
-    let dock = h.query_by_label("Create a new layer").is_some();
-    assert_eq!(toolbar, dock, "the tool strip and the dock come and go together");
+fn chrome_shown(h: &Harness<'static, PhotocraftApp>, when: &str) -> bool {
+    // Tool buttons are named "Move Tool  (V)" (the shortcut follows), the dock's footer button "Create a new layer".
+    let toolbar = h.query_all_by_label_contains("Move Tool").next().is_some();
+    let dock = h.query_all_by_label_contains("Create a new layer").next().is_some();
+    assert_eq!(toolbar, dock, "{when}: the tool strip and the dock come and go together (toolbar {toolbar}, dock {dock})");
     toolbar
 }
 
@@ -44,7 +45,7 @@ fn click_home(h: &mut Harness<'static, PhotocraftApp>) {
 fn no_documents_with_auto_show_draws_only_the_home_content() {
     let h = app(ThemeKind::Pro, false, true);
     assert!(h.query_by_label("New file").is_some(), "Home content");
-    assert!(!chrome_shown(&h), "no tool strip or dock under Home");
+    assert!(!chrome_shown(&h, "no documents, auto-show"), "no tool strip or dock under Home");
     assert!(h.query_by_label("No document").is_none(), "no status bar");
     assert_eq!(h.query_all_by_label("Home").count(), 1, "only the rail's entry: nothing to go back to");
 }
@@ -54,15 +55,15 @@ fn toggling_home_swaps_the_chrome_and_keeps_the_panel_prefs() {
     for theme in ThemeKind::ALL {
         let mut h = app(theme, true, true);
         let panels = h.state().ui.panels.clone();
-        assert!(chrome_shown(&h), "{theme:?}: chrome with a document");
+        assert!(chrome_shown(&h, &format!("{theme:?}, document open, before Home")), "{theme:?}: chrome with a document");
         click_home(&mut h);
         assert!(h.query_by_label("New file").is_some(), "{theme:?}: Home content");
-        assert!(!chrome_shown(&h), "{theme:?}: no chrome on Home");
+        assert!(!chrome_shown(&h, &format!("{theme:?}, on Home")), "{theme:?}: no chrome on Home");
         assert!(h.query_all_by_label("Home").count() >= 2, "{theme:?}: the header's Home toggle and the rail's entry");
         assert_eq!(h.state().ui.panels, panels, "{theme:?}: showing Home leaves the saved panels alone");
         click_home(&mut h);
         assert!(h.query_by_label("New file").is_none(), "{theme:?}: Home dismissed");
-        assert!(chrome_shown(&h), "{theme:?}: chrome back");
+        assert!(chrome_shown(&h, &format!("{theme:?}, after Home")), "{theme:?}: chrome back");
         assert_eq!(h.state().ui.panels, panels);
     }
 }
