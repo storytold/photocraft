@@ -28,7 +28,7 @@ pub(crate) fn has_pending(layer: &Layer) -> bool {
     matches!(&layer.content,LayerContent::Smart(sm) if sm.smart_filters.iter().any(|f|matches!(f.command.as_str(),"image.autoTone"|"image.autoContrast")))
 }
 
-/// Uniform display bins may yield a one-bin Levels interval, narrower than the
+/// A nonflat display range may span just one Levels bin, narrower than the
 /// normal command's sliders. Author the same native Levels response into fixed
 /// ordinary pencil Curves instead of publishing invalid Levels parameters.
 fn fixed_parameters(
@@ -315,22 +315,17 @@ mod tests {
         assert_eq!(pending, before);
     }
 
-    /// Reject the fixed Curves fallback to test authority on uniform automatic-tone results.
-    fn deny_curves(id: &str, _: &Value) -> Result<()> {
-        if id == "image.adjustments.curves" { Err(EngineError::Other("fixed curves denied".into())) } else { Ok(()) }
-    }
-
     #[test]
-    /// Verify uniform endpoint images use representable native Curves and remain stable after native save/reopen.
-    fn opaque_uniform_auto_uses_valid_native_curves_and_reopens_at_every_depth() {
+    /// Flat images retain their pixels through valid identity Levels, strict commands and native save/reopen.
+    fn opaque_uniform_auto_uses_identity_native_levels_and_reopens_at_every_depth() {
         for depth in SampleType::ALL {
-            for value in [0., 1.] {
+            for value in [0., 0.5, 1.] {
                 for command in ["image.autoTone", "image.autoContrast"] {
                     let (mut document, mut layer, _) = fixture(depth, command);
                     let mut source = document.clone();
                     let mut pixels = Surface::new(source.pixel_format());
                     pixels.fill_rect(source.bounds(), &[value, value, value, 1.]);
-                    source.layers.push(Layer::new("Uniform native pixels", LayerContent::Raster(pixels)));
+                    source.layers.push(Layer::new("Uniform native pixels", LayerContent::Raster(pixels.clone())));
                     let LayerContent::Smart(smart) = &mut layer.content else {
                         panic!("native smart fixture");
                     };
@@ -342,25 +337,38 @@ mod tests {
                     ordinary.add_document(source.clone(), None);
                     ordinary.execute(command, json!({})).unwrap();
                     let expected = ordinary.active().unwrap().doc.layers[0].surface().unwrap().clone();
+                    assert_eq!(expected.read_region(document.bounds()), pixels.read_region(document.bounds()), "flat {depth:?} {value} {command}");
                     let mut rejected = layer.clone();
                     {
-                        let _scope = crate::jobs::render_authorization_scope(Some(deny_curves));
+                        let _scope = crate::jobs::render_authorization_scope(Some(deny_levels));
                         assert!(materialize(&document, &mut rejected, &JobCtx::new(), &mut |_| Ok(())).is_err());
                     }
                     assert_eq!(rejected, layer);
                     assert!(
                         materialize(&document, &mut rejected, &JobCtx::new(), &mut |bytes| if bytes == 64 * 1024 {
-                            Err(EngineError::Other("curve allocation budget".into()))
+                            Err(EngineError::Other("retained Levels parameter budget".into()))
                         } else {
                             Ok(())
                         })
                         .is_err()
                     );
                     assert_eq!(rejected, layer);
-                    materialize(&document, &mut layer, &JobCtx::new(), &mut |_| Ok(())).unwrap();
+                    let mut charged = 0;
+                    materialize(&document, &mut layer, &JobCtx::new(), &mut |bytes| {
+                        charged += bytes;
+                        Ok(())
+                    })
+                    .unwrap();
+                    assert_eq!(charged, 64 * 1024, "identity Levels still retain native parameters");
                     let filter = &object(&layer).smart_filters[0];
-                    assert_eq!(filter.command, "image.adjustments.curves");
-                    assert_eq!(filter.params["pencil"], true);
+                    assert_eq!(filter.command, "image.adjustments.levels");
+                    let identity = Adjustment::Levels {
+                        master: LevelsChannel::default(),
+                        per_channel: std::array::from_fn(|_| LevelsChannel::default()),
+                        space: Default::default(),
+                        black: LevelsChannel::default(),
+                    };
+                    assert_eq!(filter.params, crate::adjust_params::to_params(&identity));
                     // Exercise the current public command's strict schema, not only the
                     // tolerant stored Smart-filter replay decoder.
                     let mut strict = crate::Session::new();
@@ -377,6 +385,46 @@ mod tests {
                     let restored = crate::smart_cmds::render(&reopened, object(&reopened.layers[0])).unwrap().unwrap();
                     assert_eq!(restored.read_region(document.bounds()), rendered.read_region(document.bounds()));
                 }
+            }
+        }
+    }
+
+    #[test]
+    /// Genuine one-bin ranges still need valid pencil Curves and their retained-parameter reservation.
+    fn narrow_native_levels_keep_curves_fallback_and_charge_its_parameters() {
+        for depth in SampleType::ALL {
+            let (_, _, pixels) = fixture(depth, "image.autoTone");
+            let narrow = LevelsChannel { in_black: 127. / 255., in_white: 128. / 255., ..Default::default() };
+            let levels = Adjustment::Levels {
+                master: LevelsChannel::default(),
+                per_channel: std::array::from_fn(|_| narrow.clone()),
+                space: Default::default(),
+                black: LevelsChannel::default(),
+            };
+            let mut requested = Vec::new();
+            assert!(
+                fixed_parameters(&levels, &pixels, &JobCtx::new(), &mut |bytes| {
+                    requested.push(bytes);
+                    Err(EngineError::Other("retained Curves parameter budget".into()))
+                })
+                .is_err()
+            );
+            assert_eq!(requested, [64 * 1024]);
+            let mut charged = 0;
+            let (command, params) = fixed_parameters(&levels, &pixels, &JobCtx::new(), &mut |bytes| {
+                charged += bytes;
+                Ok(())
+            })
+            .unwrap();
+            assert_eq!(charged, 64 * 1024);
+            assert_eq!(command, "image.adjustments.curves");
+            let parsed = crate::adjust_params::from_params("curves", &params, None, ColorMode::Rgb).unwrap();
+            let Adjustment::Curves { per_channel, pencil, .. } = parsed else { panic!("expected native Curves") };
+            assert!(pencil);
+            for curve in per_channel {
+                assert_eq!(curve.len(), 256);
+                assert_eq!(curve.first().unwrap().output, 0.);
+                assert_eq!(curve.last().unwrap().output, 1.);
             }
         }
     }

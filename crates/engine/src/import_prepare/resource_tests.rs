@@ -609,9 +609,9 @@ fn automatic_document(layers: usize, filters: usize, uniform: bool) -> (Document
     (document, decoded_bytes)
 }
 
-/// Permit one-time native analysis but deny publication of its generated fixed curve command.
-fn deny_generated_automatic_curve(command: &str, _: &serde_json::Value) -> Result<()> {
-    if command == "image.adjustments.curves" { Err(limit("denied fixed automatic curve")) } else { Ok(()) }
+/// Permit one-time native analysis but deny publication of its generated fixed Levels command.
+fn deny_generated_automatic_levels(command: &str, _: &serde_json::Value) -> Result<()> {
+    if command == "image.adjustments.levels" { Err(limit("denied fixed automatic levels")) } else { Ok(()) }
 }
 
 #[test]
@@ -627,7 +627,17 @@ fn sequential_automatic_analysis_reuses_prepaid_frames_and_retains_fixed_paramet
         for layer in &ready.layers {
             caches.cache(layer.surface().unwrap()).unwrap();
             let LayerContent::Smart(object) = &layer.content else { panic!("prepared Smart") };
-            assert!(object.smart_filters.iter().all(|filter| filter.command == if uniform { "image.adjustments.curves" } else { "image.adjustments.levels" }));
+            for filter in &object.smart_filters {
+                assert_eq!(filter.command, "image.adjustments.levels");
+                let fixed = crate::adjust_params::from_params("levels", &filter.params, None, ready.mode).unwrap();
+                if uniform {
+                    assert_eq!(
+                        fixed,
+                        crate::adjust_params::default_for("levels", ready.mode).unwrap(),
+                        "flat analysis retains ordinary identity Levels parameters"
+                    );
+                }
+            }
         }
         let retained = decoded_bytes * layers as u64 + (MAX_PREPARATION_BYTES - caches.remaining_bytes) + 64 * 1024 * (layers * filters) as u64;
         assert_eq!(
@@ -682,7 +692,7 @@ fn automatic_analysis_credit_and_retained_parameter_failure_lifetimes_are_distin
         let mut layer = original_layer.clone();
         let mut budget = allowance();
         budget.remaining_bytes = frame + 64 * 1024;
-        let authority: Option<fn(&str, &serde_json::Value) -> Result<()>> = if outcome == 2 { Some(deny_generated_automatic_curve) } else { None };
+        let authority: Option<fn(&str, &serde_json::Value) -> Result<()>> = if outcome == 2 { Some(deny_generated_automatic_levels) } else { None };
         let _scope = crate::jobs::render_authorization_scope(authority);
         let result = budget.with_render(&original, |budget, credit, _| {
             crate::import_native_actions::materialize_with_source(
