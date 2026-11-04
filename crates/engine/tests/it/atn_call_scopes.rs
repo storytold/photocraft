@@ -114,6 +114,13 @@ fn portable_conditional_branches_retain_independent_set_scopes() {
         let projected = atn_cmds::import(&bytes).unwrap();
         assert_eq!(projected.actions[2].steps[0].1["thenSet"], "A");
         assert_eq!(projected.actions[2].steps[0].1["elseSet"], "B");
+        if condition == "hasLayers" {
+            let mut inherited = projected.clone();
+            inherited.actions[2].steps[0].1["thenSet"] = serde_json::Value::Null;
+            inherited.actions[2].steps[0].1["set"] = json!("A");
+            atn_cmds::normalize_import(&mut inherited, std::iter::empty()).unwrap();
+            assert_eq!(inherited.actions[2].steps[0].1["then"], "Finish", "null branch scope inherits the shared set, like the writer");
+        }
         let mut session = Session::new();
         session.execute("file.new", json!({"width":4,"height":4})).unwrap();
         session.execute("layer.new.layer", json!({"name":"Existing working layer"})).unwrap();
