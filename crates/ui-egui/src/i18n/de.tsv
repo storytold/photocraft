@@ -3570,4 +3570,38 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Bleed:	Anschnitt:
 	The bleed already in the document: the trim box sits this far inside the page.	Der Anschnitt, der schon im Dokument ist: Das Endformat (TrimBox) liegt so weit innerhalb der Seite.
 	Save PDF	PDF speichern
+	PDF Preset:	PDF-Vorgabe:
+	[High Quality Print]	[Qualitativ hochwertiger Druck]
+	Standard:	Standard:
+	Compatibility:	Kompatibilität:
+	Summary	Übersicht
+	The image is saved flattened: layers, type and transparency are not kept as such. Keep the document as .psd or .pcraft to edit it later.	Das Bild wird auf eine Ebene reduziert gespeichert: Ebenen, Text und Transparenz bleiben nicht als solche erhalten. Speichern Sie das Dokument als .psd oder .pcraft, um es später zu bearbeiten.
+	Images	Bilder
+	Downsampling:	Neuberechnung:
+	Do Not Downsample	Keine Neuberechnung
+	Compression:	Komprimierung:
+	ZIP (lossless)	ZIP (verlustfrei)
+	Image Quality:	Bildqualität:
+	8 bits per channel	8 Bit pro Kanal
+	Print PDFs are written at full resolution with lossless compression, so nothing is lost on the way to the press.	Druck-PDFs werden in voller Auflösung und verlustfrei komprimiert geschrieben, auf dem Weg zur Druckmaschine geht also nichts verloren.
+	Color Conversion:	Farbkonvertierung:
+	Convert to Destination	In Zielprofil konvertieren
+	No Conversion	Keine Konvertierung
+	Destination:	Ziel:
+	N/A	k. A.
+	Profile Inclusion Policy:	Profil-Einschlussrichtlinie:
+	Include Tagged Source Profiles	Quellprofile mit Tags einschließen
+	Don't Include Profiles	Profile nicht einschließen
+	Include Destination Profile	Zielprofil einschließen
+	Output Intent Profile Name:	Name des Ausgabe-Intent-Profils:
+	Output Condition Identifier:	Kennung der Ausgabebedingung:
+	already in the document	bereits im Dokument
+	Page:	Seite:
+	Trim:	Endformat:
+	Settings	Einstellungen
+	Warnings	Warnungen
+	A plain PDF for viewing and for printers that don't ask for PDF/X. The image keeps its colour and its embedded profile.	Ein normales PDF zum Ansehen und für Druckereien, die kein PDF/X verlangen. Das Bild behält seine Farben und sein eingebettetes Profil.
+	PDF/X-1a:2001 (ISO 15930-1) for print: all colour is CMYK or gray, converted to the printer's output condition. Most print shops accept it. PDF 1.3, an ICC version 2 output profile.	PDF/X-1a:2001 (ISO 15930-1) für den Druck: alle Farben sind CMYK oder Grau, konvertiert in die Ausgabebedingung der Druckerei. Die meisten Druckereien nehmen es an. PDF 1.3, ein Ausgabeprofil in ICC-Version 2.
+	PDF/X-3:2002 (ISO 15930-3) for print: like PDF/X-1a, but colour may also keep its own ICC profile for the printer to convert. PDF 1.3, ICC version 2 profiles.	PDF/X-3:2002 (ISO 15930-3) für den Druck: wie PDF/X-1a, Farben dürfen aber auch ihr eigenes ICC-Profil behalten, und die Druckerei konvertiert sie. PDF 1.3, Profile in ICC-Version 2.
+	PDF/X-4:2008 (ISO 15930-7), the current print standard: colour converted to the output condition or kept in its own profile, ICC version 2 or 4 profiles, XMP metadata. PDF 1.6.	PDF/X-4:2008 (ISO 15930-7), der aktuelle Druckstandard: Farben in die Ausgabebedingung konvertiert oder im eigenen Profil belassen, Profile in ICC-Version 2 oder 4, XMP-Metadaten. PDF 1.6.
 	A {bleed} mm bleed leaves no trim on this {width} × {height} mm page.	Ein Anschnitt von {bleed} mm lässt auf dieser Seite von {width} × {height} mm kein Endformat übrig.

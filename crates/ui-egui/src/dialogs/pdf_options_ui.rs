@@ -1,5 +1,6 @@
-//! PDF Options: the prompt File › Save As and Save a Copy show before writing a PDF, as
-//! Photoshop's Save Adobe PDF dialog does with its Standard menu: a plain PDF, or PDF/X-1a:2001,
+//! Save PDF: the prompt File › Save As and Save a Copy show before writing a PDF, laid out as
+//! Photoshop's Save Adobe PDF dialog (preset, standard and compatibility above; General,
+//! Compression, Output and Summary sections beside): a plain PDF, or PDF/X-1a:2001,
 //! PDF/X-3:2002 or PDF/X-4:2008 for a printer, with the output condition (a CMYK profile: ICC v2
 //! for X-1a and X-3, v2 or v4 for X-4), the colour conversion and the bleed already inside the
 //! document. PDF/X-1a converts RGB, or CMYK in another condition, to the output profile on the way
@@ -62,6 +63,8 @@ pub struct Prompt {
     embedded: bool,
     /// The page in points (pixels ÷ resolution × 72), which the bleed has to leave a trim in.
     page_pt: (f64, f64),
+    /// The section showing.
+    pub section: Section,
     /// The remembered answer has been applied (it needs the egui context, so on the first frame).
     restored: bool,
 }
@@ -191,9 +194,282 @@ pub fn park(app: &mut PhotocraftApp, path: String, copy: bool, record: &'static 
         mode,
         embedded,
         page_pt,
+        section: Section::default(),
         restored: false,
     });
     Ok(())
+}
+
+/// The dialog's width, its section list's and the height every section's pane keeps, so the
+/// window doesn't jump between sections.
+const DIALOG_W: f32 = 700.0;
+const SECTION_W: f32 = 130.0;
+const PANE_H: f32 = 330.0;
+/// The label column inside a pane's groups.
+const LABEL_W: f32 = 190.0;
+
+/// The sections of the dialog, in Photoshop's order (it also has Security, which PDF/X forbids).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Section {
+    #[default]
+    General,
+    Compression,
+    Output,
+    Summary,
+}
+
+impl Section {
+    pub const ALL: [Section; 4] = [Section::General, Section::Compression, Section::Output, Section::Summary];
+
+    fn title(self) -> &'static str {
+        match self {
+            Section::General => "General",
+            Section::Compression => "Compression",
+            Section::Output => "Output",
+            Section::Summary => "Summary",
+        }
+    }
+}
+
+/// The preset that sets `standard`, as Photoshop names its PDF presets.
+fn preset_name(standard: PdfXStandard) -> &'static str {
+    match standard {
+        PdfXStandard::X1a2001 => "[PDF/X-1a:2001]",
+        PdfXStandard::X3_2002 => "[PDF/X-3:2002]",
+        PdfXStandard::X4 => "[PDF/X-4:2008]",
+    }
+}
+
+/// The PDF version a file of `standard` is.
+fn compatibility(standard: Option<PdfXStandard>) -> &'static str {
+    match standard {
+        None => "PDF 1.4",
+        Some(PdfXStandard::X1a2001 | PdfXStandard::X3_2002) => "PDF 1.3",
+        Some(PdfXStandard::X4) => "PDF 1.6",
+    }
+}
+
+fn description(standard: Option<PdfXStandard>) -> &'static str {
+    match standard {
+        None => tl!("A plain PDF for viewing and for printers that don't ask for PDF/X. The image keeps its colour and its embedded profile."),
+        Some(PdfXStandard::X1a2001) => tl!(
+            "PDF/X-1a:2001 (ISO 15930-1) for print: all colour is CMYK or gray, converted to the printer's output condition. Most print shops accept it. PDF 1.3, an ICC version 2 output profile."
+        ),
+        Some(PdfXStandard::X3_2002) => tl!(
+            "PDF/X-3:2002 (ISO 15930-3) for print: like PDF/X-1a, but colour may also keep its own ICC profile for the printer to convert. PDF 1.3, ICC version 2 profiles."
+        ),
+        Some(PdfXStandard::X4) => tl!(
+            "PDF/X-4:2008 (ISO 15930-7), the current print standard: colour converted to the output condition or kept in its own profile, ICC version 2 or 4 profiles, XMP metadata. PDF 1.6."
+        ),
+    }
+}
+
+/// A right-aligned field label in a column `w` wide, as Photoshop lines up its dialog labels; a
+/// longer translation is elided, with the full label as its tooltip.
+fn label_cell(ui: &mut egui::Ui, text: &str, w: f32) {
+    let t = crate::theme::Tokens::get(ui.ctx());
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, 22.0), egui::Sense::hover());
+    let color = if ui.is_enabled() { t.text } else { t.text_faint };
+    let mut job = egui::text::LayoutJob::simple_singleline(text.to_string(), egui::TextStyle::Body.resolve(ui.style()), color);
+    job.wrap = egui::text::TextWrapping::truncate_at_width(w);
+    let galley = ui.painter().layout_job(job);
+    let elided = galley.elided;
+    let pos = rect.right_center() - egui::vec2(galley.size().x, galley.size().y / 2.0);
+    ui.painter().galley(pos, galley, color);
+    if elided {
+        resp.on_hover_text(text);
+    }
+}
+
+/// A value shown in a field's frame that can't be edited here (it follows from other choices).
+fn readonly_field(ui: &mut egui::Ui, t: &crate::theme::Tokens, text: &str, w: f32) {
+    egui::Frame::new().stroke(egui::Stroke::new(1.0, t.field_border)).corner_radius(t.radius_sm).inner_margin(egui::Margin::symmetric(6, 3)).show(ui, |ui| {
+        ui.set_width(w - 12.0);
+        ui.add(egui::Label::new(egui::RichText::new(text).color(t.text_dim)).truncate());
+    });
+}
+
+/// A titled group of settings, as Photoshop frames them.
+fn group(ui: &mut egui::Ui, t: &crate::theme::Tokens, title: &str, enabled: bool, add: impl FnOnce(&mut egui::Ui)) {
+    crate::widgets::section_label(ui, title);
+    ui.add_enabled_ui(enabled, |ui| {
+        egui::Frame::new().stroke(egui::Stroke::new(1.0, t.separator)).corner_radius(t.radius_sm).inner_margin(egui::Margin::same(8)).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            add(ui);
+        });
+    });
+    ui.add_space(8.0);
+}
+
+fn general_pane(ui: &mut egui::Ui, t: &crate::theme::Tokens, standard: Option<PdfXStandard>) {
+    group(ui, t, tl!("Description"), true, |ui| {
+        ui.set_min_height(84.0);
+        ui.add(egui::Label::new(egui::RichText::new(description(standard)).color(t.text_dim)).wrap());
+    });
+    group(ui, t, tl!("Options"), true, |ui| {
+        ui.add(
+            egui::Label::new(
+                egui::RichText::new(tl!(
+                    "The image is saved flattened: layers, type and transparency are not kept as such. Keep the document as .psd or .pcraft to edit it later."
+                ))
+                .color(t.text_dim),
+            )
+            .wrap(),
+        );
+    });
+}
+
+fn compression_pane(ui: &mut egui::Ui, t: &crate::theme::Tokens) {
+    group(ui, t, tl!("Images"), true, |ui| {
+        egui::Grid::new("pdf-compression").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
+            for (label, value) in [
+                (tl!("Downsampling:"), tl!("Do Not Downsample")),
+                (tl!("Compression:"), tl!("ZIP (lossless)")),
+                (tl!("Image Quality:"), tl!("8 bits per channel")),
+            ] {
+                label_cell(ui, label, LABEL_W);
+                readonly_field(ui, t, value, 240.0);
+                ui.end_row();
+            }
+        });
+    });
+    ui.add(
+        egui::Label::new(
+            egui::RichText::new(tl!("Print PDFs are written at full resolution with lossless compression, so nothing is lost on the way to the press."))
+                .color(t.text_faint),
+        )
+        .wrap(),
+    );
+}
+
+/// The colour conversion, destination and PDF/X fields, and the bleed.
+#[allow(clippy::too_many_arguments)]
+fn output_pane(
+    ui: &mut egui::Ui,
+    t: &crate::theme::Tokens,
+    p: &Prompt,
+    standard: Option<PdfXStandard>,
+    profile: &mut usize,
+    convert: &mut bool,
+    bleed: &mut f32,
+    problem: Option<&str>,
+) {
+    let destination = standard.and(p.candidates.get(*profile)).map(|c| c.profile.description.clone());
+    group(ui, t, tl!("Color"), true, |ui| {
+        egui::Grid::new("pdf-color").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
+            label_cell(ui, tl!("Color Conversion:"), LABEL_W);
+            match standard {
+                Some(s) if s.keeps_icc_colour() => {
+                    let options = [(true, tl!("Convert to Destination")), (false, tl!("No Conversion"))];
+                    crate::widgets::dropdown_literal(ui, "pdf-convert", tl!("Color Conversion:"), convert, &options, 260.0);
+                }
+                Some(_) => readonly_field(ui, t, tl!("Convert to Destination"), 260.0),
+                None => readonly_field(ui, t, tl!("No Conversion"), 260.0),
+            }
+            ui.end_row();
+            label_cell(ui, tl!("Destination:"), LABEL_W);
+            match standard {
+                Some(s) if !p.candidates.is_empty() => {
+                    let labels: Vec<(usize, String)> = p
+                        .candidates
+                        .iter()
+                        .enumerate()
+                        .map(|(i, c)| (i, if c.fits(s) { c.label.clone() } else { format!("{} (ICC v{})", c.label, c.profile.version.0) }))
+                        .collect();
+                    let options: Vec<(usize, &str)> = labels.iter().map(|(i, l)| (*i, l.as_str())).collect();
+                    crate::widgets::dropdown_literal(ui, "pdf-output-profile", tl!("Destination:"), profile, &options, 260.0);
+                }
+                _ => readonly_field(ui, t, tl!("N/A"), 260.0),
+            }
+            ui.end_row();
+            label_cell(ui, tl!("Profile Inclusion Policy:"), LABEL_W);
+            let policy = match standard {
+                None if p.embedded => tl!("Include Tagged Source Profiles"),
+                None => tl!("Don't Include Profiles"),
+                Some(s) if s.keeps_icc_colour() && !*convert && !p.keeps_numbers() => tl!("Include Tagged Source Profiles"),
+                Some(_) => tl!("Include Destination Profile"),
+            };
+            readonly_field(ui, t, policy, 260.0);
+            ui.end_row();
+        });
+        if standard.is_some() && problem.is_none() {
+            ui.add_space(4.0);
+            let hint = if p.keeps_numbers() {
+                tl!("The CMYK numbers are kept.")
+            } else if standard.is_some_and(PdfXStandard::keeps_icc_colour) && !*convert {
+                tl!("The colours keep the document's profile, embedded in the PDF; the printer converts them.")
+            } else {
+                tl!("The colours are converted to this profile in the PDF; the document is not changed.")
+            };
+            ui.add(egui::Label::new(egui::RichText::new(hint).color(t.text_faint)).wrap());
+        }
+    });
+    group(ui, t, "PDF/X", standard.is_some(), |ui| {
+        egui::Grid::new("pdf-x").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
+            let na = tl!("N/A");
+            label_cell(ui, tl!("Output Intent Profile Name:"), LABEL_W);
+            readonly_field(ui, t, destination.as_deref().unwrap_or(na), 260.0);
+            ui.end_row();
+            label_cell(ui, tl!("Output Condition Identifier:"), LABEL_W);
+            readonly_field(ui, t, if standard.is_some() { "Custom" } else { na }, 260.0);
+            ui.end_row();
+            label_cell(ui, tl!("Bleed:"), LABEL_W);
+            ui.horizontal(|ui| {
+                crate::widgets::value_field(ui, bleed, 0.0..=50.0, "mm", 70.0);
+                ui.add(egui::Label::new(egui::RichText::new(tl!("already in the document")).color(t.text_faint)).truncate());
+            });
+            ui.end_row();
+        });
+    });
+}
+
+#[allow(clippy::too_many_arguments)]
+fn summary_pane(
+    ui: &mut egui::Ui,
+    t: &crate::theme::Tokens,
+    p: &Prompt,
+    standard: Option<PdfXStandard>,
+    profile: usize,
+    convert: bool,
+    bleed: f32,
+    problem: Option<&str>,
+) {
+    let mm = |pt: f64| pt * 25.4 / 72.0;
+    let (w, h) = (mm(p.page_pt.0), mm(p.page_pt.1));
+    let b = f64::from(bleed);
+    let na = tl!("N/A").to_string();
+    let rows: Vec<(&str, String)> = vec![
+        (tl!("Standard:"), standard.map_or_else(|| tl!("None").to_string(), |s| s.name().to_string())),
+        (tl!("Compatibility:"), compatibility(standard).to_string()),
+        (tl!("Destination:"), standard.and(p.candidates.get(profile)).map_or(na.clone(), |c| c.profile.description.clone())),
+        (
+            tl!("Color Conversion:"),
+            match standard {
+                Some(s) if s.keeps_icc_colour() && !convert => tl!("No Conversion").to_string(),
+                Some(_) => tl!("Convert to Destination").to_string(),
+                None => tl!("No Conversion").to_string(),
+            },
+        ),
+        (tl!("Page:"), format!("{w:.1} × {h:.1} mm")),
+        (tl!("Trim:"), if standard.is_some() { format!("{:.1} × {:.1} mm", w - 2.0 * b, h - 2.0 * b) } else { na }),
+    ];
+    group(ui, t, tl!("Settings"), true, |ui| {
+        egui::Grid::new("pdf-summary").num_columns(2).spacing([8.0, 4.0]).show(ui, |ui| {
+            for (label, value) in &rows {
+                label_cell(ui, label, 140.0);
+                ui.add(egui::Label::new(egui::RichText::new(value).color(t.text)).truncate());
+                ui.end_row();
+            }
+        });
+    });
+    group(ui, t, tl!("Warnings"), true, |ui| match problem {
+        Some(problem) => {
+            ui.add(egui::Label::new(egui::RichText::new(problem).color(t.warning)).wrap());
+        }
+        None => {
+            ui.label(egui::RichText::new(tl!("None")).color(t.text_dim));
+        }
+    });
 }
 
 /// The remembered answer: (standard id or "none", output profile as a save names it, bleed in
@@ -233,62 +509,79 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         }
     }
     let (mut ok, mut cancel) = (false, false);
-    let (mut standard, mut profile, mut bleed, mut convert) = (p.standard, p.profile, p.bleed_mm, p.convert);
+    let (mut standard, mut profile, mut bleed, mut convert, mut section) = (p.standard, p.profile, p.bleed_mm, p.convert, p.section);
     let problem = p.problem();
     let can_save = problem.is_none();
     let modal = egui::Modal::new(egui::Id::unique("pdf-options")).show(ctx, |ui| {
-        ui.set_max_width(460.0);
-        ui.label(egui::RichText::new(tl!("PDF Options")).font(crate::theme::semibold(15.0)));
+        let t = crate::theme::Tokens::get(ui.ctx());
+        ui.set_width(DIALOG_W);
+        ui.label(egui::RichText::new(tl!("Save as PDF")).font(crate::theme::semibold(15.0)));
         ui.add_space(4.0);
         crate::widgets::hairline(ui);
         ui.add_space(8.0);
-        crate::widgets::section_label(ui, tl!("Standard"));
-        ui.radio_value(&mut standard, None, tl!("None"));
-        for s in PdfXStandard::ALL {
-            ui.radio_value(&mut standard, Some(s), s.name());
-        }
-        if let Some(s) = standard {
-            ui.add_space(8.0);
-            crate::widgets::section_label(ui, tl!("Output Condition"));
-            if !p.candidates.is_empty() {
-                let labels: Vec<(usize, String)> = p
-                    .candidates
-                    .iter()
-                    .enumerate()
-                    .map(|(i, c)| (i, if c.fits(s) { c.label.clone() } else { format!("{} (ICC v{})", c.label, c.profile.version.0) }))
-                    .collect();
-                let options: Vec<(usize, &str)> = labels.iter().map(|(i, l)| (*i, l.as_str())).collect();
-                crate::widgets::dropdown_literal(ui, "pdf-output-profile", tl!("Output Condition"), &mut profile, &options, 440.0);
-            }
-            if s.keeps_icc_colour() {
-                ui.add_space(8.0);
-                crate::widgets::section_label(ui, tl!("Color Conversion"));
-                ui.radio_value(&mut convert, true, tl!("Convert to Output Profile"));
-                ui.radio_value(&mut convert, false, tl!("No Conversion (keep the document's profile)"));
-            }
-            ui.add_space(4.0);
-            match &problem {
-                Some(problem) => {
-                    ui.label(problem.as_str());
+        // The preset, the standard it sets and the PDF version that follows, as Photoshop heads its
+        // Save Adobe PDF dialog.
+        egui::Grid::new("pdf-head").num_columns(4).spacing([8.0, 6.0]).show(ui, |ui| {
+            label_cell(ui, tl!("PDF Preset:"), 96.0);
+            let presets: Vec<(Option<PdfXStandard>, &str)> =
+                std::iter::once((None, tl!("[High Quality Print]"))).chain(PdfXStandard::ALL.iter().map(|s| (Some(*s), preset_name(*s)))).collect();
+            crate::widgets::dropdown_literal(ui, "pdf-preset", tl!("PDF Preset:"), &mut standard, &presets, 300.0);
+            ui.label("");
+            ui.label("");
+            ui.end_row();
+            label_cell(ui, tl!("Standard:"), 96.0);
+            let standards: Vec<(Option<PdfXStandard>, &str)> =
+                std::iter::once((None, tl!("None"))).chain(PdfXStandard::ALL.iter().map(|s| (Some(*s), s.name()))).collect();
+            crate::widgets::dropdown_literal(ui, "pdf-standard", tl!("Standard:"), &mut standard, &standards, 300.0);
+            label_cell(ui, tl!("Compatibility:"), 92.0);
+            readonly_field(ui, &t, compatibility(standard), 110.0);
+            ui.end_row();
+        });
+        ui.add_space(10.0);
+        ui.horizontal_top(|ui| {
+            // The section list, as Preferences draws it.
+            ui.vertical(|ui| {
+                ui.set_width(SECTION_W);
+                for s in Section::ALL {
+                    let (rect, resp) = ui.allocate_exact_size(egui::vec2(SECTION_W, 24.0), egui::Sense::click());
+                    let sel = section == s;
+                    if sel {
+                        ui.painter().rect_filled(rect, t.radius_sm, t.row_selected);
+                    } else if resp.hovered() {
+                        ui.painter().rect_filled(rect, t.radius_sm, t.hover);
+                    }
+                    let color = if sel { t.text } else { t.text_dim };
+                    let mut job = egui::text::LayoutJob::simple_singleline(tl!(s.title()).to_string(), crate::theme::medium(12.5), color);
+                    job.wrap = egui::text::TextWrapping::truncate_at_width(rect.width() - 12.0);
+                    let galley = ui.painter().layout_job(job);
+                    ui.painter().galley(rect.left_center() + egui::vec2(8.0, -galley.size().y / 2.0), galley, color);
+                    if resp.clicked() {
+                        section = s;
+                    }
                 }
-                None if p.keeps_numbers() => {
-                    ui.weak(tl!("The CMYK numbers are kept."));
-                }
-                None if s.keeps_icc_colour() && !convert => {
-                    ui.weak(tl!("The colours keep the document's profile, embedded in the PDF; the printer converts them."));
-                }
-                None => {
-                    ui.weak(tl!("The colours are converted to this profile in the PDF; the document is not changed."));
-                }
-            }
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                ui.label(tl!("Bleed:"));
-                crate::widgets::value_field(ui, &mut bleed, 0.0..=50.0, "mm", 70.0);
             });
-            ui.weak(tl!("The bleed already in the document: the trim box sits this far inside the page."));
+            crate::widgets::vline(ui, PANE_H);
+            ui.vertical(|ui| {
+                ui.set_width(DIALOG_W - SECTION_W - 24.0);
+                ui.set_min_height(PANE_H);
+                ui.label(egui::RichText::new(tl!(section.title())).font(crate::theme::semibold(14.0)).color(t.text));
+                ui.add_space(6.0);
+                match section {
+                    Section::General => general_pane(ui, &t, standard),
+                    Section::Compression => compression_pane(ui, &t),
+                    Section::Output => output_pane(ui, &t, p, standard, &mut profile, &mut convert, &mut bleed, problem.as_deref()),
+                    Section::Summary => summary_pane(ui, &t, p, standard, profile, convert, bleed, problem.as_deref()),
+                }
+            });
+        });
+        ui.add_space(6.0);
+        crate::widgets::hairline(ui);
+        ui.add_space(8.0);
+        // What stops the save, on its own line where it can't be missed whatever section shows.
+        if let Some(problem) = &problem {
+            ui.add(egui::Label::new(egui::RichText::new(problem.as_str()).color(t.warning)).wrap());
+            ui.add_space(6.0);
         }
-        ui.add_space(12.0);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 10.0;
             ok = ui.add_enabled_ui(can_save, |ui| crate::widgets::primary_button(ui, tl!("Save PDF"), 84.0)).inner.clicked();
@@ -300,6 +593,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     p.profile = profile;
     p.bleed_mm = bleed;
     p.convert = convert;
+    p.section = section;
     // Checked again with this frame's edits: a standard picked in the same frame as Save PDF may
     // not fit the chosen profile.
     let can_save = p.problem().is_none();

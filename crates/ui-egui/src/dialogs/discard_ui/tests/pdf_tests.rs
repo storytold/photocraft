@@ -388,3 +388,36 @@ fn automation_saves_take_no_profile_files_and_other_formats_ignore_pdf_answers()
     h.state_mut().save_automation_with(Some("b.png".into()), choices).unwrap();
     assert_eq!(writes.borrow().len(), 2, "a profile file only matters to a PDF");
 }
+
+/// Every section of Save PDF draws, for each standard, without changing the answer.
+#[test]
+fn every_section_draws_for_every_standard() {
+    let (mut h, writes) = pdf_app("s.pdf");
+    h.state_mut().save_as(None).unwrap();
+    h.run_steps(3);
+    h.state_mut().pdf_options.as_mut().unwrap().candidates.push(v2_condition());
+    for standard in [None, Some(PdfXStandard::X1a2001), Some(PdfXStandard::X3_2002), Some(PdfXStandard::X4)] {
+        for section in pdf_options_ui::Section::ALL {
+            {
+                let p = h.state_mut().pdf_options.as_mut().unwrap();
+                p.standard = standard;
+                p.section = section;
+                p.profile = p.candidates.len() - 1;
+                p.bleed_mm = 3.0;
+            }
+            h.run_steps(2);
+            let p = h.state().pdf_options.as_ref().expect("still asking");
+            assert_eq!((p.standard, p.section), (standard, section));
+            if standard == Some(PdfXStandard::X4) {
+                capture(&mut h, &format!("05-x4-{section:?}"));
+            }
+        }
+    }
+    // The light theme draws the same dialog from its own tokens.
+    let ctx = h.ctx.clone();
+    h.state_mut().set_theme(&ctx, crate::theme::ThemeKind::ProLight);
+    h.state_mut().pdf_options.as_mut().unwrap().section = pdf_options_ui::Section::Output;
+    h.run_steps(3);
+    capture(&mut h, "06-x4-output-light");
+    assert!(writes.borrow().is_empty(), "drawing writes nothing");
+}
