@@ -212,6 +212,12 @@ fn modes_that_do_not_rotate_and_invalid_points_do_not_hide_the_pointer() {
     app.ui.transform.as_mut().unwrap().warp = None;
     assert_eq!(rotate_cursor_dir(&app, [f64::NAN, 200.0]), None);
     assert_eq!(TransformSession::box_turn_direction(&[[0.0, 0.0]; 4], [20.0, 20.0]), None);
+    let r = Rect::from_min_max(pos2(100.0, 100.0), pos2(500.0, 300.0));
+    for p in [pos2(f32::NAN, 200.0), pos2(f32::INFINITY, 200.0)] {
+        assert_eq!(transform_controls_cursor(r, p), None, "invalid points cannot hide the pointer");
+        assert_eq!(transform_controls_turn(r, p), None);
+        assert!(!transform_controls_hit(r, p), "invalid points cannot activate the overlay");
+    }
 }
 
 #[test]

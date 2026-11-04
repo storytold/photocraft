@@ -68,6 +68,9 @@ fn controls_zone(r: Rect, p: Pos2) -> crate::transform_tool::Hit {
 
 /// Share the open session's screen-sized zones before the first interaction (#11097).
 pub(super) fn transform_controls_cursor(r: Rect, p: Pos2) -> Option<egui::CursorIcon> {
+    if !p.is_finite() {
+        return None;
+    }
     use crate::transform_tool::Hit;
     Some(match controls_zone(r, p) {
         Hit::Corner(0 | 2) => egui::CursorIcon::ResizeNwSe,
@@ -91,7 +94,7 @@ pub(super) fn transform_controls_turn(r: Rect, p: Pos2) -> Option<Vec2> {
 /// A visible handle starts scaling; any point outside the box starts rotation.
 /// The interior stays the normal Move-tool drag target.
 pub(super) fn transform_controls_hit(r: Rect, p: Pos2) -> bool {
-    !matches!(controls_zone(r, p), crate::transform_tool::Hit::Inside | crate::transform_tool::Hit::Pivot)
+    p.is_finite() && !matches!(controls_zone(r, p), crate::transform_tool::Hit::Inside | crate::transform_tool::Hit::Pivot)
 }
 
 /// Enter the existing Free Transform session when a Move-tool transform control is pressed: on
