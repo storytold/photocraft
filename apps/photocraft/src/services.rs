@@ -198,6 +198,16 @@ fn dialog_file_name(suggested: &str, adds_extension: bool) -> Option<String> {
     Some(if bare { stem.to_string_lossy().into_owned() } else { name })
 }
 
+/// The folder rfd's save dialog starts in (`dir`), or none where rfd can't be given one with a name
+/// (#11040). On macOS (`appends_name`) rfd 0.17.2 passes `dir/name` to NSSavePanel as the starting
+/// folder: when a file of that name exists (an image dragged in from Downloads, saved under its own
+/// name) the save fails with "Not a directory", and a new name is a folder that doesn't exist, which
+/// the panel ignores. Until an rfd release has the fix (PolyMeilex/rfd@2b202ba, PolyMeilex/rfd#114),
+/// macOS gets only the name and the panel opens in the folder it last used.
+fn rfd_save_directory<'a>(dir: Option<&'a Path>, name: Option<&str>, appends_name: bool) -> Option<&'a Path> {
+    dir.filter(|_| !(appends_name && name.is_some()))
+}
+
 /// Shows an Open or Save dialog without blocking the event loop (#673, #574): rfd's async dialog
 /// is created here, on the main thread, with the window as its parent (a sheet on macOS, an owned
 /// modal window elsewhere), and a helper thread waits for it and hands the answer to the app.
@@ -243,7 +253,7 @@ fn show_file_dialog(request: FileDialogRequest, parent: Option<&eframe::Frame>, 
             if let Some(name) = &name {
                 dialog = dialog.set_file_name(name);
             }
-            if let Some(dir) = &dir {
+            if let Some(dir) = rfd_save_directory(dir.as_deref(), name.as_deref(), cfg!(target_os = "macos")) {
                 dialog = dialog.set_directory(dir);
             }
             // On Linux the portal's own dialog, which reports the file type picked (#6121); rfd if
