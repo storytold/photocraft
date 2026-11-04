@@ -158,7 +158,8 @@ pub fn legacy_pinch_to_zoom(events: &mut [Event], now: f64, last: Option<f64>, n
         _ => None,
     };
     let plain_two_axis = |e: &Event| {
-        two_axis_pinch && matches!(e, Event::MouseWheel { unit: MouseWheelUnit::Point, delta, modifiers, .. } if !modifiers.ctrl && !modifiers.alt && two_axis_point_pinch(*delta))
+        two_axis_pinch
+            && matches!(e, Event::MouseWheel { unit: MouseWheelUnit::Point, delta, modifiers, .. } if !modifiers.ctrl && !modifiers.alt && two_axis_point_pinch(*delta))
     };
     let fraction = |d: Vec2| d.x.fract() != 0.0 || d.y.fract() != 0.0;
     let pinching = last.is_some_and(|t| (0.0..PINCH_GAP).contains(&(now - t)))
