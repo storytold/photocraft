@@ -786,19 +786,21 @@ fn auto_sets_the_light_sliders_from_the_image() {
     let raw = app.pending_raw_open.take().unwrap();
     open_raw(&mut app, &ctx, raw).unwrap();
     assert!(app.camera_raw.as_ref().unwrap().params.is_identity());
-    let mut expected = app.camera_raw.as_ref().unwrap().params.clone();
-    photocraft_algo::camera_raw::auto_tone(&app.camera_raw.as_ref().unwrap().proxy, &mut expected);
     menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"auto": true}})).unwrap().unwrap();
     let p = app.camera_raw.as_ref().unwrap().params.clone();
     assert!(!p.is_identity(), "Auto chose something: {p:?}");
     assert!(app.camera_raw.as_ref().unwrap().auto_on());
     assert_eq!(p.hsl_hue, [0.0; 8], "Auto leaves the color mixer alone");
-    // The raw-default preference retains main's Light-only Auto.
+    // Camera Raw Defaults › Apply auto tone opens with the same Auto, shown on so it can be turned off.
     app.run("prefs.set", json!({"path": "rawDefaults.applyAutoTone", "value": true})).unwrap();
     app.open_bytes("IMG_0007.dng", &dng).unwrap();
     let raw = app.pending_raw_open.take().unwrap();
     open_raw(&mut app, &ctx, raw).unwrap();
-    assert_eq!(app.camera_raw.as_ref().unwrap().params, expected, "Apply auto tone retains the Light-only raw default");
+    let d = app.camera_raw.as_mut().unwrap();
+    assert!(d.auto_on(), "Apply auto tone turns Edit › Auto on");
+    assert_eq!(d.params, p, "Apply auto tone matches the Auto button");
+    d.toggle_auto();
+    assert!(d.params.is_identity(), "turning Auto off restores the defaults: {:?}", d.params);
 }
 
 #[test]

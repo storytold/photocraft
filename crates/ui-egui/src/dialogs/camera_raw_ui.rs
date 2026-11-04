@@ -216,7 +216,7 @@ impl CameraRawDialog {
             }
         } else {
             let before = AutoTone::of(&self.params);
-            let set = photocraft_algo::camera_raw::auto_edit(&self.proxy, self.pw, self.ph, &self.params);
+            let set = photocraft_algo::camera_raw::auto_tone(&self.proxy, self.pw, self.ph, &self.params);
             set.apply(&mut self.params);
             self.auto = Some((before, set));
         }

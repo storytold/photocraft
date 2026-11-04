@@ -60,7 +60,7 @@ mod local_tone;
 mod per_pixel;
 mod whites_blacks;
 
-pub use auto::{AutoTone, auto_tone as auto_edit, auto_white_balance};
+pub use auto::{AutoTone, auto_tone, auto_white_balance};
 pub use per_pixel::{CURVE_LUT, Grade, Grain, PerPixel, Vignette, VignetteStyle, WB_STEPS, WhitesBlacks, per_pixel, white_black_points};
 
 /// How the pixels encode light: the sRGB curve (gamma 0) or a pure power law (ProPhoto's 1.8,
@@ -292,40 +292,6 @@ fn shadow_tint(c: [f32; 3], tint: f32) -> [f32; 3] {
     let o = [c[0] + k, c[1] - k, c[2] + k].map(|v| v.max(0.0));
     let l2 = luma(o);
     if l2 > 1e-6 { o.map(|v| v * l / l2) } else { o }
-}
-
-/// Camera Raw's Auto for the Light panel: Exposure, Contrast, Highlights, Shadows, Whites and
-/// Blacks from the image's luminance histogram (`px` in the document's encoding). A well
-/// exposed image gets near-zero settings; a dark one more exposure and lifted shadows; one
-/// with a crushed or blown end gets Blacks or Whites back from the edge. The other panels are
-/// left alone, as Camera Raw's Auto leaves them.
-pub fn auto_tone(px: &[[f32; 4]], p: &mut CameraRaw) {
-    if px.is_empty() {
-        return;
-    }
-    let mut lum: Vec<f32> = px.iter().map(|q| luma([q[0], q[1], q[2]]).clamp(0.0, 1.0)).collect();
-    lum.sort_by(|a, b| a.total_cmp(b));
-    let at = |f: f32| lum[((lum.len() - 1) as f32 * f).round() as usize];
-    let (black, shadow, median, light, white) = (at(0.001), at(0.1), at(0.5), at(0.9), at(0.999));
-    // Exposure: the median towards middle grey (sRGB 0.46), damped so flat scenes aren't
-    // forced to it.
-    let median_lin = srgb_to_linear(median).max(1e-4);
-    p.exposure = (0.6 * (0.18f32 / median_lin).log2()).clamp(-2.0, 2.0);
-    // Blacks and Whites bring the ends to the edges without clipping more than Camera Raw does.
-    p.blacks = ((0.04 - black) * 400.0).clamp(-40.0, 40.0);
-    p.whites = ((0.96 - white) * 300.0).clamp(-40.0, 40.0);
-    // Shadows up when the darker tenth is crushed, highlights down when the brighter tenth is
-    // near white.
-    p.shadows = ((0.25 - shadow) * 200.0).clamp(0.0, 50.0);
-    p.highlights = ((light - 0.85) * -300.0).clamp(-50.0, 0.0);
-    // A little contrast for a flat histogram.
-    let spread = (light - shadow).max(0.0);
-    p.contrast = ((0.6 - spread) * 60.0).clamp(0.0, 25.0);
-    // Shown as Camera Raw shows them: Exposure to a hundredth of a stop, the others whole.
-    p.exposure = (p.exposure * 100.0).round() / 100.0;
-    for v in [&mut p.blacks, &mut p.whites, &mut p.shadows, &mut p.highlights, &mut p.contrast] {
-        *v = v.round();
-    }
 }
 
 fn luma(c: [f32; 3]) -> f32 {
@@ -1365,38 +1331,36 @@ mod tests {
 
     #[test]
     fn auto_tone_brightens_dark_and_darkens_bright_images() {
-        let mut p = CameraRaw::default();
-        auto_tone(&[], &mut p);
-        assert_eq!(p, CameraRaw::default(), "no pixels: nothing changes");
-        let dark: Vec<[f32; 4]> = (0..4096)
-            .map(|i| {
-                let v = 0.05 + (i % 64) as f32 / 64.0 * 0.15;
-                [v, v, v, 1.0]
-            })
-            .collect();
-        auto_tone(&dark, &mut p);
+        // #5128's expectations, on the one Auto (Edit › Auto and Camera Raw Defaults › Apply auto tone).
+        let auto = |px: &[[f32; 4]]| {
+            let mut p = CameraRaw::default();
+            auto_tone(px, 64, px.len() / 64, &p).apply(&mut p);
+            p
+        };
+        assert_eq!(auto(&[]), CameraRaw::default(), "no pixels: nothing changes");
+        let ramp = |lo: f32, span: f32, steps: f32| -> Vec<[f32; 4]> {
+            (0..4096)
+                .map(|i| {
+                    let v = lo + (i % 64) as f32 / steps * span;
+                    [v, v, v, 1.0]
+                })
+                .collect()
+        };
+        let untouched = |p: &CameraRaw| p.hsl_neutral() && (p.temperature, p.tint, p.clarity) == (0.0, 0.0, 0.0);
+        let p = auto(&ramp(0.05, 0.15, 64.0));
         assert!(p.exposure > 0.5, "a dark image gets exposure: {}", p.exposure);
-        assert!(p.shadows > 0.0, "and lifted shadows: {}", p.shadows);
-        let mut p = CameraRaw::default();
-        let bright: Vec<[f32; 4]> = (0..4096)
-            .map(|i| {
-                let v = 0.8 + (i % 64) as f32 / 64.0 * 0.19;
-                [v, v, v, 1.0]
-            })
-            .collect();
-        auto_tone(&bright, &mut p);
+        // Shadows / Highlights are judged after Exposure has moved the image, so these ramps need
+        // little of either; they never go the wrong way.
+        assert!(p.shadows >= 0.0, "and its shadows are not pushed down: {}", p.shadows);
+        assert!(untouched(&p), "other panels untouched: {p:?}");
+        let p = auto(&ramp(0.8, 0.19, 64.0));
         assert!(p.exposure < -0.5, "a bright image loses exposure: {}", p.exposure);
-        assert!(p.highlights < 0.0, "and its highlights come down: {}", p.highlights);
-        let mut p = CameraRaw::default();
-        let good: Vec<[f32; 4]> = (0..4096)
-            .map(|i| {
-                let v = 0.04 + (i % 64) as f32 / 63.0 * 0.92;
-                [v, v, v, 1.0]
-            })
-            .collect();
-        auto_tone(&good, &mut p);
-        assert!(p.exposure.abs() < 0.3 && p.blacks.abs() < 10.0 && p.whites.abs() < 10.0, "a full-range image is left nearly alone: {p:?}");
-        assert!(p.saturation == 0.0 && p.hsl_neutral(), "other panels untouched");
+        assert!(p.highlights <= 0.0, "and its highlights are not pushed up: {}", p.highlights);
+        assert!(untouched(&p), "other panels untouched: {p:?}");
+        // A full-range image keeps its key; Whites / Blacks still set its clipping points.
+        let p = auto(&ramp(0.04, 0.92, 63.0));
+        assert!(p.exposure.abs() < 0.3, "a full-range image keeps its exposure: {p:?}");
+        assert!(untouched(&p), "other panels untouched: {p:?}");
     }
 
     #[test]

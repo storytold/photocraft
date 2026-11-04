@@ -542,11 +542,14 @@ viewports, so the dialog is drawn over the main window and appears in the image.
 RGB/Grayscale layer. `params: {"smartFilter": {"layer": id, "index": i}}` opens it on an existing
 Camera Raw smart filter instead (as double-clicking the filter in the Layers panel does): the
 stored settings over the pixels below that filter, previewed through the filter mask; commit
-then runs `layer.smartFilter.setParams` with every setting. `params.ui` accepts `set` (filter settings), `before`, `scope`, `view`, `auto` (true: the Light
-sliders from the image's histogram, the panel's Auto button), `commit` and
+then runs `layer.smartFilter.setParams` with every setting. `params.ui` accepts `set` (filter settings), `before`, `scope`, `view`, `auto` (the Edit row's Auto:
+true turns it on, fitting the Light sliders plus Vibrance and Saturation to the image; false turns
+it off and restores what it changed; Camera Raw Defaults › Apply auto tone opens raw files with it
+on), `blackAndWhite` (the Edit row's B&W, on or off), `whiteBalance` (`"asShot"` or `"auto"`),
+`commit` and
 `cancel`, and while a raw file opens also `demosaic` (below). All parts of one request are validated before any is applied; a rejected request
 leaves the settings, view state, preferences and document unchanged (and closes a dialog it
-opened). Unknown `ui` or settings properties, non-boolean `before` / `auto` / `commit` / `cancel`, and
+opened). Unknown `ui` or settings properties, non-boolean `before` / `auto` / `blackAndWhite` / `commit` / `cancel`, other `whiteBalance` values, and
 `commit` together with `cancel` are errors. Point curves (`pointCurve`, `pointCurveRed`,
 `pointCurveGreen`, `pointCurveBlue`) are empty or 2–16 finite points in 0–255 with inputs at
 least one level apart. Commit dispatches one `filter.cameraRaw` engine command; a failed commit

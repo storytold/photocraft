@@ -95,13 +95,14 @@ pub(super) fn open_raw(app: &mut PhotocraftApp, ctx: &egui::Context, raw: RawOpe
         app.ui.status_error = false;
     }
     open_pixels(app, ctx, layer, surf, params, Coverage::None, Target::OpenRaw)?;
-    // Camera Raw Defaults › Apply auto tone: a file without its own settings opens with Auto.
+    // Camera Raw Defaults › Apply auto tone: a file without its own settings opens with Edit › Auto
+    // on, so its button shows it and turns it off again.
     if !from_sidecar
         && app.session.prefs().raw_defaults.apply_auto_tone
         && let Some(d) = app.camera_raw.as_mut()
+        && !d.auto_on()
     {
-        photocraft_algo::camera_raw::auto_tone(&d.proxy, &mut d.params);
-        d.dirty = true;
+        d.toggle_auto();
     }
     let curve = match (&raw.bytes, &raw.path) {
         (Some(b), _) => Some(photocraft_io::raw::tone_curve(b)),
@@ -355,9 +356,9 @@ pub fn opened_without_dialog(app: &mut PhotocraftApp, index: usize, name: &str, 
     if let Some(loaded) = &sidecar {
         params = loaded.clone();
     } else if app.session.prefs().raw_defaults.apply_auto_tone
-        && let Some(px) = app.session.active().and_then(|st| st.doc.layer(st.active_layer?)).and_then(|l| l.surface()).map(|s| sample_pixels(s, 512))
+        && let Some((px, w, h)) = app.session.active().and_then(|st| st.doc.layer(st.active_layer?)).and_then(|l| l.surface()).map(|s| sample_pixels(s, 512))
     {
-        photocraft_algo::camera_raw::auto_tone(&px, &mut params);
+        photocraft_algo::camera_raw::auto_tone(&px, w, h, &params).apply(&mut params);
     }
     let r = if params.is_identity() {
         let defaults = app.session.prefs().raw_defaults.clone();
@@ -372,22 +373,23 @@ pub fn opened_without_dialog(app: &mut PhotocraftApp, index: usize, name: &str, 
 }
 
 /// Every k-th pixel of a surface's content, k chosen so the longer side has about `max_side`
-/// samples: enough for a histogram (Auto tone) without reading a whole raw.
-fn sample_pixels(surf: &photocraft_raster::Surface, max_side: usize) -> Vec<[f32; 4]> {
+/// samples, and the sampled width and height: enough for Auto tone without reading a whole raw.
+fn sample_pixels(surf: &photocraft_raster::Surface, max_side: usize) -> (Vec<[f32; 4]>, usize, usize) {
     let area = surf.content_bounds();
     let (w, h) = (area.x1.saturating_sub(area.x0).max(0) as usize, area.y1.saturating_sub(area.y0).max(0) as usize);
     if w == 0 || h == 0 {
-        return Vec::new();
+        return (Vec::new(), 0, 0);
     }
     let k = w.max(h).div_ceil(max_side.max(1)).max(1);
-    let mut out = Vec::with_capacity(w.div_ceil(k) * h.div_ceil(k));
+    let (sw, sh) = (w.div_ceil(k), h.div_ceil(k));
+    let mut out = Vec::with_capacity(sw * sh);
     let mut row = vec![[0.0f32; 4]; w];
     for y in (0..h).step_by(k) {
         let yy = area.y0.saturating_add(y as i32);
         surf.read_rgba_into(Rect::new(area.x0, yy, area.x1, yy.saturating_add(1)), &mut row);
         out.extend(row.iter().step_by(k).copied());
     }
-    out
+    (out, sw, sh)
 }
 
 fn mark_unmodified(app: &mut PhotocraftApp, index: usize) {
