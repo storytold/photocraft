@@ -42,7 +42,7 @@ fn harness(icon: &str, color: &str) -> Harness<'static, State> {
 
 fn open(h: &mut Harness<'_, State>) {
     assert!(!egui::Popup::is_any_open(&h.ctx));
-    h.get_by_role_and_label(Role::Button, "Choose icon").click();
+    h.get_by_role_and_label(Role::Button, "Choose icon and color").click();
     h.run_steps(3);
 }
 
