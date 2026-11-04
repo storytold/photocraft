@@ -79,11 +79,21 @@ pub(super) fn editor_channel_picker(ui: &mut egui::Ui, cx: &EditorCx, space: Ton
 
 /// The option of `channels` named by a ⌥ digit (or, in the dialog, a ⌘ digit) pressed this frame:
 /// 2 the composite, 3 onwards the components in the space's order, as the Channels panel numbers
-/// them. A digit with no channel behind it (⌘6 in RGB) is consumed and picks nothing.
+/// them. A digit with no channel behind it (⌘6 in RGB) is consumed and picks nothing. Nothing
+/// while a mouse button is held, and nothing for ⌥ while a text field has focus.
 fn channel_digit(ui: &egui::Ui, dialog: bool, space: ToneSpace, channels: &[(ToneChannel, String, usize)]) -> Option<usize> {
     use egui::{Key, Modifiers};
     const DIGITS: [Key; 8] = [Key::Num2, Key::Num3, Key::Num4, Key::Num5, Key::Num6, Key::Num7, Key::Num8, Key::Num9];
-    let pressed = ui.input_mut(|i| DIGITS.iter().position(|&k| i.consume_key(Modifiers::ALT, k) || (dialog && i.consume_key(Modifiers::COMMAND, k))));
+    // A held mouse button keeps its channel: a Levels handle being dragged or a Curves pencil
+    // stroke under way would otherwise go on in the channel the digit picked. A focused text
+    // field keeps its ⌥ keys, as every field does (`shortcut_dispatch::Focus::Text`); ⌘ still
+    // switches, as the ⌘ shortcuts do over a field.
+    if ui.input(|i| i.pointer.any_down()) {
+        return None;
+    }
+    let typing = ui.ctx().text_edit_focused();
+    let pressed =
+        ui.input_mut(|i| DIGITS.iter().position(|&k| (!typing && i.consume_key(Modifiers::ALT, k)) || (dialog && i.consume_key(Modifiers::COMMAND, k))));
     let slot = pressed? + 2;
     let slot_of =
         |ch: &ToneChannel| if ch.key.is_empty() { Some(2) } else { adjust_params::channel_keys(space).iter().position(|k| *k == ch.key).map(|p| p + 3) };

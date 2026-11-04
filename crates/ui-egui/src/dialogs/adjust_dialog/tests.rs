@@ -236,6 +236,60 @@ fn command_and_option_digits_pick_the_dialog_channel() {
     }
 }
 
+/// The digits wait while a mouse button is held (a Levels handle or a Curves pencil stroke keeps
+/// its channel to the end), and the ⌥ ones while a text field has focus, which keeps its keys as
+/// every field does; ⌘ still switches there. In CMYK ⌘6 picks Black, the fifth option.
+#[test]
+fn channel_digits_wait_for_a_held_button_and_a_focused_field() {
+    use egui::{Key, Modifiers};
+    let levels = |app: PhotocraftApp| {
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        open(h.state_mut(), "image.adjustments.levels").unwrap();
+        h.run_steps(2);
+        h
+    };
+    let mem = dialog_mem("levels").with("levels-ch");
+    let picked = |h: &Harness<'static, PhotocraftApp>| h.ctx.data(|d| d.get_temp::<usize>(mem)).unwrap_or(0);
+    let mut h = levels(app_with_image());
+    // A press on Auto, held: the digits wait. Let go away from it (no click), and they work again.
+    let auto = h.get_by_label("Auto").rect().center();
+    let away = auto + egui::vec2(0.0, 40.0);
+    let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    h.event(egui::Event::PointerMoved(auto));
+    h.event(button(auto, true));
+    h.run_steps(2);
+    h.key_press_modifiers(Modifiers::ALT, Key::Num3);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Num4);
+    h.run_steps(2);
+    assert_eq!(picked(&h), 0, "the digits wait while the button is held");
+    h.event(egui::Event::PointerMoved(away));
+    h.event(button(away, false));
+    h.run_steps(2);
+    h.key_press_modifiers(Modifiers::ALT, Key::Num3);
+    h.run_steps(2);
+    assert_eq!(picked(&h), 1, "let go, ⌥3 picks Red");
+    // A numeric field with focus keeps ⌥2; ⌘2 still picks the composite.
+    h.query_all_by_role(egui::accesskit::Role::SpinButton).next().expect("a numeric field").click();
+    h.run_steps(2);
+    assert!(h.ctx.text_edit_focused(), "the field has focus");
+    h.key_press_modifiers(Modifiers::ALT, Key::Num2);
+    h.run_steps(2);
+    assert_eq!(picked(&h), 1, "⌥2 is the field's while it has focus");
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Num2);
+    h.run_steps(2);
+    assert_eq!(picked(&h), 0, "⌘2 still picks the composite");
+    // CMYK's fifth option, Black, is ⌘6 / ⌥6.
+    let mut h = levels(app_in_mode("cmyk"));
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Num6);
+    h.run_steps(2);
+    assert_eq!(picked(&h), 4, "⌘6 picks Black in CMYK");
+    assert!(popup_channels(&mut h).iter().any(|v| v == "Black"));
+    h.key_press_modifiers(Modifiers::ALT, Key::Num2);
+    h.run_steps(2);
+    assert_eq!(picked(&h), 0, "⌥2 picks CMYK");
+}
+
 fn sample_params(kind: &str) -> Value {
     match kind {
         "brightnessContrast" => json!({"brightness": 40}),
