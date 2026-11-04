@@ -43,6 +43,78 @@ pub struct ImportedSet {
     pub(crate) metadata: Option<std::sync::Arc<super::sidecar::SetMetadata>>,
 }
 
+/// Give imported actions globally unique playback names while keeping calls bound to their physical set.
+/// Explicit set references win over caller-local names; ambiguous cross-set calls are refused.
+/// The caller owns the uncommitted import, so a refusal never changes a live library.
+pub fn normalize_import(imp: &mut Imported, reserved: impl IntoIterator<Item = String>) -> std::result::Result<Vec<String>, String> {
+    let mut set_for = vec![0usize; imp.actions.len()];
+    for (index, set) in imp.sets.iter().enumerate() {
+        set_for.get_mut(set.actions.clone()).ok_or_else(|| "invalid imported set range".to_string())?.fill(index);
+    }
+    if imp.action_keys.len() != imp.actions.len() {
+        return Err("invalid imported shortcut positions".to_string());
+    }
+    let mut taken = UniqueNames::new(reserved);
+    let mut names = Vec::with_capacity(imp.actions.len());
+    let mut renamed: Vec<std::collections::HashMap<String, String>> = vec![Default::default(); imp.sets.len()];
+    let mut global: std::collections::HashMap<String, Option<String>> = std::collections::HashMap::new();
+    let mut added = Vec::with_capacity(imp.actions.len());
+    for (index, mut a) in std::mem::take(&mut imp.actions).into_iter().enumerate() {
+        let name = taken.claim(&a.name);
+        let group = set_for.get(index).and_then(|set| renamed.get_mut(*set)).ok_or_else(|| "invalid imported action position".to_string())?;
+        group.entry(a.name.clone()).or_insert_with(|| name.clone());
+        global
+            .entry(a.name.clone())
+            .and_modify(|entry| {
+                if entry.as_ref() != Some(&name) {
+                    *entry = None;
+                }
+            })
+            .or_insert(Some(name.clone()));
+        a.name = name.clone();
+        names.push(name);
+        added.push(a);
+    }
+    // Resolve imported calls within their physical set first; never use another set's first
+    // duplicate display name for metadata or shortcuts. Ambiguous cross-set calls fail before commit.
+    for (index, a) in added.iter_mut().enumerate() {
+        let local = set_for.get(index).and_then(|set| renamed.get(*set)).ok_or_else(|| "invalid imported action position".to_string())?;
+        for (id, params) in &mut a.steps {
+            let keys: &[&str] = match id.as_str() {
+                "actions.play" => &["action"],
+                "actions.conditional" => &["then", "else"],
+                _ => &[],
+            };
+            for key in keys {
+                if let Some(target) = params.get(*key).and_then(Value::as_str) {
+                    let scope = params
+                        .get(format!("{key}Set"))
+                        .or_else(|| params.get("set"))
+                        .and_then(Value::as_str)
+                        .and_then(|name| imp.sets.iter().position(|set| set.name == name))
+                        .and_then(|index| renamed.get(index))
+                        .unwrap_or(local);
+                    let to = if let Some(to) = scope.get(target) {
+                        Some(to)
+                    } else {
+                        match global.get(target) {
+                            Some(Some(to)) => Some(to),
+                            Some(None) => return Err("ambiguous cross-set action call; source set is required".to_string()),
+                            None => None,
+                        }
+                    };
+                    if let Some(to) = to {
+                        params[*key] = json!(to);
+                    }
+                }
+            }
+        }
+    }
+    imp.actions = added;
+    imp.function_keys = names.iter().zip(&imp.action_keys).filter_map(|(name, key)| key.as_ref().map(|key| (name.clone(), key.clone()))).collect();
+    Ok(names)
+}
+
 /// Retain an unsupported event's ID kind and descriptor for later export without executing it.
 fn photoshop_step(item: &AtnItem, label: String) -> (String, Value) {
     let descriptor = item.descriptor.as_ref().map(|d| photocraft_paint::tile::b64_encode(&d.to_bytes()));
@@ -80,6 +152,13 @@ pub(super) fn clip_name(s: &str) -> String {
     s.chars().take(MAX_NAME_CHARS).collect()
 }
 
+/// The durable library retains all native bytes; external files accept the recorder's command surface.
+#[derive(Clone, Copy)]
+enum NativeInput {
+    Library,
+    Portable,
+}
+
 /// Project events under archive-wide step limits, retaining flags and optional original-event cohorts.
 fn convert_action(
     file: &AtnFile,
@@ -88,13 +167,14 @@ fn convert_action(
     unsupported: &mut Vec<Unsupported>,
     total: &mut usize,
     mut cohorts: Option<&mut Vec<std::ops::Range<usize>>>,
+    native_input: NativeInput,
 ) -> std::result::Result<Action, String> {
     let name = clip_name(&a.name.to_string_lossy());
     let mut action = Action::new(name.clone(), Vec::new());
     action.set = Some(clip_name(set));
     action.color = color_from_atn(a.color);
     for (i, item) in a.items.iter().enumerate() {
-        let native = read_native(item)?;
+        let native = read_native(item, native_input)?;
         let is_native = native.is_some();
         let mapped = if let Some(step) = native {
             Mapped::Steps(vec![step])
@@ -149,7 +229,7 @@ pub(crate) fn library_action(file: &AtnFile, action: &AtnAction, set: &str) -> s
     let mut cohorts = Vec::new();
     let mut unsupported = Vec::new();
     let mut total = 0;
-    let mut value = convert_action(file, action, set, &mut unsupported, &mut total, Some(&mut cohorts))?;
+    let mut value = convert_action(file, action, set, &mut unsupported, &mut total, Some(&mut cohorts), NativeInput::Library)?;
     value.name = action.name.to_string_lossy();
     value.set = (!set.is_empty()).then(|| set.to_string());
     // The durable library reflects its wire flags. The external importer may deliberately
@@ -180,7 +260,7 @@ fn native_text(descriptor: &Descriptor, key: &str) -> std::result::Result<String
 }
 
 /// Decode only the reserved native event with its exact two-field schema; never dispatch its command.
-fn read_native(item: &AtnItem) -> std::result::Result<Option<(String, Value)>, String> {
+fn read_native(item: &AtnItem, input: NativeInput) -> std::result::Result<Option<(String, Value)>, String> {
     if item.event != AtnEvent::name(NATIVE_EVENT) {
         return Ok(None);
     }
@@ -191,6 +271,18 @@ fn read_native(item: &AtnItem) -> std::result::Result<Option<(String, Value)>, S
     let id = native_text(descriptor, "command")?;
     if id.is_empty() {
         return Err("empty native action command".into());
+    }
+    // Use the same command eligibility as recording, plus the explicit playback controls.
+    // Configuration/install commands cannot be smuggled through a portable Actions file.
+    // Unknown/future IDs remain preservable and fail normal dispatch without a side effect.
+    // Re-importing after an upgrade checks any newly registered command against this policy.
+    // Local persistence retains every native step without executing it.
+    if matches!(input, NativeInput::Portable)
+        && crate::commands::find(&id).is_some()
+        && !crate::actions_cmds::replayable(&id)
+        && !matches!(id.as_str(), super::STOP_MESSAGE | super::PHOTOSHOP_STEP | "actions.conditional")
+    {
+        return Err(format!("native action command `{id}` is not permitted in a portable Actions file"));
     }
     let params = native_text(descriptor, "params")?;
     // serde's bounded recursion remains enabled; load never dispatches or resolves the command.
@@ -274,7 +366,7 @@ pub fn import_with_encoding(bytes: &[u8], encoding: Option<&str>) -> std::result
         }
         let start = out.actions.len();
         for (at, action) in file.actions.iter().enumerate() {
-            let mut converted = convert_action(file, action, &set, &mut out.unsupported, &mut total, None)?;
+            let mut converted = convert_action(file, action, &set, &mut out.unsupported, &mut total, None, NativeInput::Portable)?;
             if let Some(value) = metadata.actions.get_mut(index).and_then(|actions| actions.get_mut(at)).and_then(Option::take) {
                 super::sidecar::apply(&mut converted, value);
             }

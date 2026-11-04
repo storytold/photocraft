@@ -11,7 +11,7 @@ use photocraft_psd::{
 use serde_json::json;
 
 /// The durable writer preserves explicit set scopes through its exact native fallback.
-/// Portable Photoshop projection may omit those scopes; it is not this loader fixture's input.
+/// Portable Play/Conditional reference scopes have separate CLI and import controls.
 fn row(name: &str, mut actions: Vec<Action>) -> AtnFile {
     if actions.is_empty() {
         return AtnFile { name: UnicodeString::new_nul(name), ..Default::default() };
@@ -59,7 +59,6 @@ fn imported_named_set_calls_keep_their_target_through_duplicate_action_renaming(
                 ];
                 if let Some(scope) = scope {
                     let caller = files[3].actions.iter().find(|action| action.name.to_string_lossy() == "Caller").unwrap();
-                    assert_eq!(caller.items[0].event, atn::AtnEvent::name("photocraftCommand"), "fixture must retain the recorded set");
                     let bytes = atn::write(&files[3]).unwrap();
                     let imported = photocraft_engine::atn_cmds::import(&bytes).unwrap();
                     assert_eq!(imported.actions[0].steps[0].1["set"], scope);
@@ -94,5 +93,32 @@ fn imported_named_set_calls_keep_their_target_through_duplicate_action_renaming(
                 }
             }
         }
+    }
+}
+
+/// Portable Conditional references may name a different physical set for each branch.
+#[test]
+fn portable_conditional_branches_retain_independent_set_scopes() {
+    use photocraft_engine::atn_cmds;
+    for (condition, expected) in [("hasLayers", "From A"), ("hasSelection", "From B")] {
+        let caller =
+            Action::new("Caller", vec![("actions.conditional".into(), json!({"if":condition,"then":"Finish","thenSet":"A","else":"Finish","elseSet":"B"}))]);
+        let mut rows = Vec::new();
+        let first = finish("From A");
+        let second = finish("From B");
+        for (name, action) in [("A", &first), ("B", &second), ("C", &caller)] {
+            let bytes = atn_cmds::export(name, &[action], &[], false).unwrap().0;
+            rows.push(atn::parse(&bytes).unwrap());
+        }
+        let bytes = atn::write_sets(&rows).unwrap();
+        let projected = atn_cmds::import(&bytes).unwrap();
+        assert_eq!(projected.actions[2].steps[0].1["thenSet"], "A");
+        assert_eq!(projected.actions[2].steps[0].1["elseSet"], "B");
+        let mut session = Session::new();
+        session.execute("file.new", json!({"width":4,"height":4})).unwrap();
+        session.execute("actions.load", json!({"data":photocraft_engine::paint::tile::b64_encode(&bytes)})).unwrap();
+        let result = session.execute("actions.play", json!({"action":"Caller"})).unwrap();
+        assert!(result.get("failed").is_none(), "{result}");
+        assert_eq!(session.active().unwrap().doc.layers.last().unwrap().name, expected);
     }
 }

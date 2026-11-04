@@ -2169,3 +2169,12 @@ Copy and Paste Layer Style (`copyEffects`, `pasteEffects`), Align (`align`), Ren
 layer's name), Deselect (Set of the selection to None). Steps recorded with Backlight, Fill Flash, Color
 Cast, Variations, Texture Fill and the old Snapshot events come only from very old versions and stay kept
 steps.
+
+
+Native commands in imported files follow the action recorder's command eligibility.
+Registered configuration commands, including plug-in installation and script wrappers,
+are refused before the imported library is installed. Replayable edits, recorded file
+operations, and playback controls remain available. Unknown command IDs can be retained
+for future versions but fail normal playback dispatch while unsupported. The local ATN
+preset library preserves all native command IDs and JSON parameters without executing
+steps during load.

@@ -1,6 +1,6 @@
 //! Display names for the measured Actions editor glyph identifiers (#10946).
 //!
-//! Source preparation: include this module in the real editor when its consumer is added.
+//! The editor picker and modern Actions rows use the assets registered in `icon_data.rs`.
 //! Lookup is exact and display-only. Keep the original metadata identifier when saving.
 
 /// The picker uses six columns, with entries ordered row by row.

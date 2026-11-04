@@ -56,7 +56,7 @@ mod tables;
 
 #[cfg(test)]
 use adjustments::{levels_from, selective_from};
-pub use convert::{Imported, ImportedSet, Skipped, Unsupported, export, function_key_name, import, import_with_encoding, parse_function_key};
+pub use convert::{Imported, ImportedSet, Skipped, Unsupported, export, function_key_name, import, import_with_encoding, normalize_import, parse_function_key};
 #[cfg(test)]
 use convert::{MAX_NAME_CHARS, export_item, normalise};
 #[cfg(test)]

@@ -6,7 +6,7 @@ use craft_ui::icons::{SvgIconSet, SvgStyle};
 
 use glyphs::{GLYPH_COLUMNS, GLYPHS, display_glyph};
 
-// Test-only embed table. Production registration belongs with the real editor consumer.
+// Test-only embed table; production assets are registered in icon_data.rs.
 static ASSETS: &[(&str, &[u8])] = &[
     ("action-editor-click", include_bytes!("../../../../../assets/icons/action-editor/click.svg")),
     ("action-editor-crop", include_bytes!("../../../../../assets/icons/action-editor/crop.svg")),

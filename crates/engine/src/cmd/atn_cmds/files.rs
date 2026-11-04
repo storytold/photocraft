@@ -1,7 +1,8 @@
 use super::convert::{export_groups, import_with_encoding};
 use super::sidecar;
-use super::{Action, DEFAULT_SET, EngineError, Result, Session, UniqueNames, Value, bad, json};
+use super::{Action, DEFAULT_SET, EngineError, Result, Session, Value, bad, json};
 
+/// Validate and normalize an external archive before committing actions, physical rows and shortcuts.
 pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "actions.load";
     if s.actions.recording_active() || s.actions.playing > 0 {
@@ -93,74 +94,10 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
     if old_rows.checked_add(new_rows).is_none_or(|count| count > super::atn::MAX_SETS) {
         return Err(bad(cmd, "too many action set rows"));
     }
-    let mut set_for = vec![0usize; imp.actions.len()];
-    for (index, set) in imp.sets.iter().enumerate() {
-        set_for.get_mut(set.actions.clone()).ok_or_else(|| bad(cmd, "invalid imported set range"))?.fill(index);
-    }
-    if imp.action_keys.len() != imp.actions.len() {
-        return Err(bad(cmd, "invalid imported shortcut positions"));
-    }
-    let mut taken = UniqueNames::new(s.actions.list.iter().filter(keep).map(|action| action.name.clone()));
-    let mut names = Vec::with_capacity(imp.actions.len());
-    let mut renamed: Vec<std::collections::HashMap<String, String>> = vec![Default::default(); imp.sets.len()];
-    let mut global: std::collections::HashMap<String, Option<String>> = std::collections::HashMap::new();
-    let mut steps = 0usize;
-    let mut added = Vec::with_capacity(imp.actions.len());
-    let mut keys = Vec::new();
-    for (index, mut a) in imp.actions.into_iter().enumerate() {
-        let name = taken.claim(&a.name);
-        let group = set_for.get(index).and_then(|set| renamed.get_mut(*set)).ok_or_else(|| bad(cmd, "invalid imported action position"))?;
-        group.entry(a.name.clone()).or_insert_with(|| name.clone());
-        global
-            .entry(a.name.clone())
-            .and_modify(|entry| {
-                if entry.as_ref() != Some(&name) {
-                    *entry = None;
-                }
-            })
-            .or_insert(Some(name.clone()));
-        if let Some(key) = imp.action_keys.get(index).and_then(Option::as_ref) {
-            keys.push((name.clone(), key.clone()));
-        }
-        a.name = name.clone();
-        steps = steps.saturating_add(a.steps.len());
-        names.push(name);
-        added.push(a);
-    }
-    // Resolve imported calls within their physical set first; never use another set's first
-    // duplicate display name for metadata or shortcuts. Ambiguous cross-set calls fail before commit.
-    for (index, a) in added.iter_mut().enumerate() {
-        let local = set_for.get(index).and_then(|set| renamed.get(*set)).ok_or_else(|| bad(cmd, "invalid imported action position"))?;
-        for (id, params) in &mut a.steps {
-            let keys: &[&str] = match id.as_str() {
-                "actions.play" => &["action"],
-                "actions.conditional" => &["then", "else"],
-                _ => &[],
-            };
-            for key in keys {
-                if let Some(target) = params.get(*key).and_then(Value::as_str) {
-                    let scope = params
-                        .get("set")
-                        .and_then(Value::as_str)
-                        .and_then(|name| imp.sets.iter().position(|set| set.name == name))
-                        .and_then(|index| renamed.get(index))
-                        .unwrap_or(local);
-                    let to = if let Some(to) = scope.get(target) {
-                        Some(to)
-                    } else {
-                        match global.get(target) {
-                            Some(Some(to)) => Some(to),
-                            Some(None) => return Err(bad(cmd, "ambiguous cross-set action call; source set is required")),
-                            None => None,
-                        }
-                    };
-                    if let Some(to) = to {
-                        params[*key] = json!(to);
-                    }
-                }
-            }
-        }
-    }
+    let names = super::normalize_import(&mut imp, s.actions.list.iter().filter(keep).map(|action| action.name.clone())).map_err(|error| bad(cmd, error))?;
+    let keys = imp.function_keys.clone();
+    let steps: usize = imp.actions.iter().map(|action| action.steps.len()).sum();
+    let added = imp.actions;
     let set_names: Vec<String> = imp.sets.iter().map(|set| set.name.clone()).collect();
     if replace {
         s.actions.list.retain(|action| !targets.contains(super::logical_set_name(action.set.as_deref())));
@@ -200,6 +137,7 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
     }))
 }
 
+/// Encode the selected action or library while retaining its physical source and metadata.
 pub(super) fn save(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "actions.save";
     crate::actions_cmds::flush_recording(s)?;

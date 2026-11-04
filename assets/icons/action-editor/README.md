@@ -9,9 +9,9 @@ Each source uses a 24 px viewBox, currentColor and the existing 2 px round strok
 convention. The existing SvgIconSet pipeline recolours and overrides stroke width
 at display time. No new renderer or dependencies are needed.
 
-The mapping is in `crates/ui-egui/src/panels/actions/editor_glyphs.rs`. It is not
-registered in production yet. Add its consumer and the thirty names to the existing
-embedded icon table together. Preserve each raw metadata identifier on save;
+The mapping in `crates/ui-egui/src/panels/actions/editor_glyphs.rs` is registered
+through `icon_data.rs` and used by the editor picker and modern Actions rows.
+Preserve each raw metadata identifier on save;
 unknown identifiers display the existing neutral `square` icon, whose Lucide and
 Feather attribution remains in the parent attribution table.
 

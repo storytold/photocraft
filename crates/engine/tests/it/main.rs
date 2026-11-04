@@ -15,6 +15,7 @@ mod atn_call_scopes;
 mod atn_crystallize_cell_size;
 mod atn_direct_adjustments;
 mod atn_layer_style;
+mod atn_native_admission;
 mod atn_newer_events;
 mod atn_reference_forms;
 mod atn_ripple_amount;

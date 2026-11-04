@@ -142,8 +142,8 @@ fn contents(ui: &mut egui::Ui, icon: &str, color: &str, swatches: &[Color32; 12]
 /// `id` scopes popup/widget state for this editor. `icon`/`color` are authoritative raw values;
 /// unknowns display neutrally and are never returned as replacements without a click. `swatches`
 /// are caller-selected PhotoCraft colours in ATN index order, not measured reference RGB samples.
-/// Slot zero is ignored in favour of the neutral theme surface. Register the thirty glyph assets
-/// through the existing icon table when connecting this leaf to the actual editor consumer.
+/// Slot zero uses the neutral theme surface. The editor and modern rows share the thirty
+/// glyph assets registered in the existing icon table.
 pub fn show(ui: &mut egui::Ui, id: Id, icon: &str, color: &str, swatches: &[Color32; 12]) -> Option<Choice> {
     let tokens = Tokens::get(ui.ctx());
     ui.push_id(id, |ui| {

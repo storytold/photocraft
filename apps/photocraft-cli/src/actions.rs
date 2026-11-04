@@ -109,25 +109,26 @@ pub fn load_actions_file(path: &Path, name: Option<&str>) -> Result<(Steps, Vec<
         let (steps, set) = load_actions(&text, name)?;
         return Ok((steps, set, Vec::new()));
     }
-    let imp = photocraft_engine::atn_cmds::import(&bytes).map_err(|message| ActionsError::Atn { path: path.to_path_buf(), message })?;
-    let action = match (name, imp.actions.as_slice()) {
+    let mut imp = photocraft_engine::atn_cmds::import(&bytes).map_err(|message| ActionsError::Atn { path: path.to_path_buf(), message })?;
+    let selected = match (name, imp.actions.as_slice()) {
         (Some(n), _) => {
-            let matched: Vec<_> = imp.actions.iter().filter(|action| action.name == n).collect();
+            let matched: Vec<_> = imp.actions.iter().enumerate().filter(|(_, action)| action.name == n).collect();
             match matched.as_slice() {
-                [only] => *only,
+                [(index, _)] => *index,
                 [] => return Err(ActionsError::NoSuchAtnAction { name: n.to_owned(), set: imp.set.clone(), names: names(&imp.actions) }),
                 _ => {
                     return Err(ActionsError::AmbiguousAtnAction {
                         name: n.to_owned(),
-                        sets: matched.iter().map(|action| action.set.clone().unwrap_or_else(|| imp.set.clone())).collect(),
+                        sets: matched.iter().map(|(_, action)| action.set.clone().unwrap_or_else(|| imp.set.clone())).collect(),
                     });
                 }
             }
         }
-        (None, [only]) => only,
+        (None, [_]) => 0,
         (None, []) => return Err(ActionsError::EmptyAtn { path: path.to_path_buf() }),
         (None, _) => return Err(ActionsError::PickOneAtn { set: imp.set.clone(), names: names(&imp.actions) }),
     };
+    let action = &imp.actions[selected];
     let warnings = imp
         .unsupported
         .iter()
@@ -135,6 +136,7 @@ pub fn load_actions_file(path: &Path, name: Option<&str>) -> Result<(Steps, Vec<
         .map(|u| format!("`{}` step {}: Photoshop's \"{}\" ({}) has no PhotoCraft equivalent yet", u.action, u.step + 1, u.name, u.event))
         .chain(imp.warnings.iter().cloned())
         .collect();
-    let play = vec![("actions.play".to_string(), json!({"action": action.name}))];
+    photocraft_engine::atn_cmds::normalize_import(&mut imp, std::iter::empty()).map_err(|message| ActionsError::Atn { path: path.to_path_buf(), message })?;
+    let play = vec![("actions.play".to_string(), json!({"action": imp.actions[selected].name}))];
     Ok((play, imp.actions, warnings))
 }

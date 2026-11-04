@@ -1871,3 +1871,70 @@ fn batch_external_atn_input_is_not_limited_by_the_preset_store_size() {
     assert_eq!(actions[0].steps[0].0, photocraft_engine::atn_cmds::PHOTOSHOP_STEP);
     assert_eq!(warnings.len(), 1);
 }
+
+/// CLI import must bind a nested call to its own physical set before Batch playback.
+#[test]
+fn batch_nested_atn_calls_keep_physical_set_targets() {
+    use photocraft_engine::{Session, actions_cmds::Action, atn_cmds};
+    use photocraft_psd::{atn, descriptor::UnicodeString};
+    for explicit in [false, true] {
+        let directory = tmp(if explicit { "nested-atn-explicit-set" } else { "nested-atn-local-set" });
+        let file = directory.join("sets.atn");
+        let marker = |name: &str| Action::new("Finish", vec![("layer.new.layer".into(), json!({"name":name}))]);
+        let caller =
+            Action::new("Caller", vec![("actions.play".into(), if explicit { json!({"action":"Finish","set":"A"}) } else { json!({"action":"Finish"}) })]);
+        let group = |name: &str, actions: &[&Action]| {
+            let bytes = atn_cmds::export(name, actions, &[], false).unwrap().0;
+            atn::parse(&bytes).unwrap()
+        };
+        let first = marker("From A");
+        let second = marker("From B");
+        let files = vec![group("A", &[&first]), group("B", &[&second, &caller])];
+        assert_eq!(files[1].name, UnicodeString::new_nul("B"));
+        std::fs::write(&file, atn::write_sets(&files).unwrap()).unwrap();
+        let (steps, actions, _) = photocraft_cli::load_actions_file(&file, Some("Caller")).unwrap();
+        let mut session = Session::new();
+        session.execute("file.new", json!({"width":4,"height":4})).unwrap();
+        session.actions.list = actions;
+        for (id, params) in steps {
+            let result = session.execute(&id, params).unwrap();
+            assert!(result.get("failed").is_none(), "{result}");
+        }
+        let expected = if explicit { "From A" } else { "From B" };
+        assert!(session.active().unwrap().doc.layers.iter().any(|layer| layer.name == expected));
+        assert!(!session.active().unwrap().doc.layers.iter().any(|layer| layer.name == if explicit { "From B" } else { "From A" }));
+    }
+}
+
+/// An unscoped cross-set call with no local candidate must fail before output creation.
+#[test]
+fn batch_refuses_ambiguous_nested_atn_calls_before_output() {
+    use photocraft_engine::{actions_cmds::Action, atn_cmds};
+    use photocraft_psd::atn;
+    let directory = tmp("nested-atn-ambiguous");
+    let file = directory.join("sets.atn");
+    let finish = Action::new("Finish", vec![("layer.new.layer".into(), json!({}))]);
+    let caller = Action::new("Caller", vec![("actions.play".into(), json!({"action":"Finish"}))]);
+    let mut groups = Vec::new();
+    for (name, action) in [("A", &finish), ("B", &finish), ("C", &caller)] {
+        let bytes = atn_cmds::export(name, &[action], &[], false).unwrap().0;
+        groups.push(atn::parse(&bytes).unwrap());
+    }
+    std::fs::write(&file, atn::write_sets(&groups).unwrap()).unwrap();
+    let output = directory.join("out");
+    let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+    let args = [
+        "batch".as_ref(),
+        "--in".as_ref(),
+        directory.as_os_str(),
+        "--out".as_ref(),
+        output.as_os_str(),
+        "--actions".as_ref(),
+        file.as_os_str(),
+        "--action".as_ref(),
+        "Caller".as_ref(),
+    ];
+    assert_eq!(photocraft_cli::run(args, &mut stdout, &mut stderr), 1);
+    assert!(String::from_utf8_lossy(&stderr).contains("ambiguous cross-set"));
+    assert!(!output.exists());
+}

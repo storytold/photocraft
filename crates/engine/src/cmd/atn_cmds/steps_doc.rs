@@ -110,9 +110,16 @@ pub(super) fn conditional_from(d: &Descriptor) -> Mapped {
         Some(Target::Name(n)) => Some(clip_name(&n)),
         _ => None,
     };
-    step("actions.conditional", json!({"if": condition, "then": branch("then"), "else": branch("else")}))
+    let mut params = json!({"if": condition, "then": branch("then"), "else": branch("else")});
+    for key in ["then", "else"] {
+        if let Some(set) = get_ref(d, key).and_then(|reference| super::steps_layer::action_set(reference)) {
+            params[format!("{key}Set")] = json!(set);
+        }
+    }
+    step("actions.conditional", params)
 }
 
+/// Write independent branch references, retaining each explicit set before the shared fallback set.
 pub(super) fn conditional_to(_: &str, p: &Value) -> Option<Descriptor> {
     let condition = jstr(p, "if")?;
     let code = lookup_back(CONDITION_CODES, condition).unwrap_or(condition);
@@ -120,7 +127,7 @@ pub(super) fn conditional_to(_: &str, p: &Value) -> Option<Descriptor> {
     for key in ["then", "else"] {
         if let Some(name) = jstr(p, key) {
             let mut items = vec![ReferenceItem::Name { class: class("Actn"), name: UnicodeString::new_nul(name) }];
-            if let Some(set) = jstr(p, "set") {
+            if let Some(set) = p.get(format!("{key}Set")).and_then(Value::as_str).or_else(|| jstr(p, "set")) {
                 items.push(ReferenceItem::Name { class: class("ASet"), name: UnicodeString::new_nul(set) });
             }
             d = d.with(key, D::Reference(items));
