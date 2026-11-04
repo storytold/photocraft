@@ -185,6 +185,13 @@ fn type_checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
         return Some(t.is_some_and(|t| (t.orientation == photocraft_doc::text::Orientation::Vertical) == (k == "vertical")));
     }
     let t = t?;
+    // The style where the menu reads: the selection start while editing a range (as the Character
+    // panel shows it), else the layer's first run.
+    let start = crate::type_tool::target(app).and_then(|(_, range)| range).map_or(0, |r| r[0]);
+    if let Some(key) = id.strip_prefix("type.openType.numerals.") {
+        let want = photocraft_engine::type_extra_cmds::NumeralsStyle::from_id(key)?;
+        return Some(photocraft_engine::type_extra_cmds::numerals_style_at(t, start) == Some(want));
+    }
     let tag = match id.strip_prefix("type.openType.")? {
         "standardLigatures" => "liga",
         "contextualAlternates" => "calt",
@@ -198,9 +205,6 @@ fn type_checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
         "fractions" => "frac",
         set => stylistic_set_tag(set.strip_prefix("stylisticSets.set")?)?,
     };
-    // The style where the toggle starts: the selection start while editing a range (as the
-    // Character panel shows it), else the layer's first run, which is what the command reads.
-    let start = crate::type_tool::target(app).and_then(|(_, range)| range).map_or(0, |r| r[0]);
     Some(photocraft_engine::type_extra_cmds::feature_on_at(t, start, tag))
 }
 

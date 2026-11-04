@@ -1,7 +1,7 @@
 //! The Type menu: anti-aliasing, orientation, point ⇄ paragraph conversion, Create Work Path,
-//! Convert to Shape, Rasterize, Warp Text, the OpenType toggles (with the 20 Stylistic Sets),
-//! Paste Lorem Ipsum, Update All Text Layers, missing-font replacement and the default type
-//! styles.
+//! Convert to Shape, Rasterize, Warp Text, the OpenType toggles (with the Numerals submenu and the 20
+//! Stylistic Sets), Paste Lorem Ipsum, Update All Text Layers, missing-font replacement and the
+//! default type styles.
 //!
 //! Everything edits the typed [`TextLayer`] model and re-renders through `type_cmds::refresh`,
 //! so the PSD `TySh` data (and with it warp, anti-aliasing and the OpenType flags) is regenerated
@@ -509,6 +509,88 @@ pub const STYLISTIC_SET_TAGS: [&str; 20] = [
     "ss20",
 ];
 
+/// OpenType figure tags Type › OpenType › Numerals clears or sets (`lnum`/`onum`/`pnum`/`tnum`).
+pub const NUMERAL_FEATURE_TAGS: [&str; 4] = ["lnum", "onum", "pnum", "tnum"];
+
+/// One item of Type › OpenType › Numerals (Adobe figure-style radio set).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NumeralsStyle {
+    Default,
+    Lining,
+    Oldstyle,
+    Proportional,
+    Tabular,
+    ProportionalLining,
+    TabularLining,
+    ProportionalOldstyle,
+    TabularOldstyle,
+}
+
+impl NumeralsStyle {
+    /// Command-id suffix after `type.openType.numerals.`.
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::Lining => "lining",
+            Self::Oldstyle => "oldstyle",
+            Self::Proportional => "proportional",
+            Self::Tabular => "tabular",
+            Self::ProportionalLining => "proportionalLining",
+            Self::TabularLining => "tabularLining",
+            Self::ProportionalOldstyle => "proportionalOldstyle",
+            Self::TabularOldstyle => "tabularOldstyle",
+        }
+    }
+
+    /// Menu label for this numerals style.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Default => "Default",
+            Self::Lining => "Lining",
+            Self::Oldstyle => "Oldstyle",
+            Self::Proportional => "Proportional",
+            Self::Tabular => "Tabular",
+            Self::ProportionalLining => "Proportional Lining",
+            Self::TabularLining => "Tabular Lining",
+            Self::ProportionalOldstyle => "Proportional Oldstyle",
+            Self::TabularOldstyle => "Tabular Oldstyle",
+        }
+    }
+
+    /// Parse a `type.openType.numerals.*` suffix.
+    pub fn from_id(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|style| style.id() == id)
+    }
+
+    /// Every Numerals menu item, in menu order.
+    pub const ALL: [Self; 9] = [
+        Self::Default,
+        Self::Lining,
+        Self::Oldstyle,
+        Self::Proportional,
+        Self::Tabular,
+        Self::ProportionalLining,
+        Self::TabularLining,
+        Self::ProportionalOldstyle,
+        Self::TabularOldstyle,
+    ];
+
+    /// OpenType tags this style turns on (the other [`NUMERAL_FEATURE_TAGS`] are cleared).
+    pub const fn tags(self) -> &'static [&'static str] {
+        match self {
+            Self::Default => &[],
+            Self::Lining => &["lnum"],
+            Self::Oldstyle => &["onum"],
+            Self::Proportional => &["pnum"],
+            Self::Tabular => &["tnum"],
+            Self::ProportionalLining => &["pnum", "lnum"],
+            Self::TabularLining => &["tnum", "lnum"],
+            Self::ProportionalOldstyle => &["pnum", "onum"],
+            Self::TabularOldstyle => &["tnum", "onum"],
+        }
+    }
+}
+
 /// Is the OpenType toggle `tag` on for a character style? (`liga`/`dlig` have dedicated fields.)
 pub fn feature_on(st: &photocraft_doc::text::CharStyle, tag: &str) -> bool {
     match tag {
@@ -518,16 +600,34 @@ pub fn feature_on(st: &photocraft_doc::text::CharStyle, tag: &str) -> bool {
     }
 }
 
+/// The character style at character `ci` of `t`: its run's, or past the end the last run's.
+fn style_at(t: &TextLayer, ci: usize) -> Option<photocraft_doc::text::CharStyle> {
+    let at = byte_index(&t.text, ci);
+    let mut end = 0usize;
+    let mut last = None;
+    for run in t.char_runs() {
+        end = end.saturating_add(run.len);
+        if at < end {
+            return Some(run.style);
+        }
+        last = Some(run.style);
+    }
+    last
+}
+
 /// Is the OpenType toggle `tag` on at character `ci` of `t`? Past the end it reads the last run.
 pub fn feature_on_at(t: &TextLayer, ci: usize, tag: &str) -> bool {
-    let at = byte_index(&t.text, ci);
-    let runs = t.char_runs();
-    let mut end = 0usize;
-    let run = runs.iter().find(|r| {
-        end = end.saturating_add(r.len);
-        at < end
-    });
-    run.or(runs.last()).is_some_and(|r| feature_on(&r.style, tag))
+    style_at(t, ci).is_some_and(|st| feature_on(&st, tag))
+}
+
+/// Which Numerals menu item matches `st`'s figure tags? `None` when the mix is not a menu item.
+pub fn numerals_style_of(st: &photocraft_doc::text::CharStyle) -> Option<NumeralsStyle> {
+    NumeralsStyle::ALL.into_iter().find(|style| NUMERAL_FEATURE_TAGS.iter().all(|tag| feature_on(st, tag) == style.tags().contains(tag)))
+}
+
+/// Numerals style at character `ci` of `t` (same run pick as [`feature_on_at`]).
+pub fn numerals_style_at(t: &TextLayer, ci: usize) -> Option<NumeralsStyle> {
+    style_at(t, ci).and_then(|st| numerals_style_of(&st))
 }
 
 fn set_feature(st: &mut photocraft_doc::text::CharStyle, tag: &str, on: bool) {
@@ -541,6 +641,21 @@ fn set_feature(st: &mut photocraft_doc::text::CharStyle, tag: &str, on: bool) {
             }
         }
     }
+}
+
+fn apply_numerals(st: &mut photocraft_doc::text::CharStyle, style: NumeralsStyle) {
+    let on = style.tags();
+    for tag in NUMERAL_FEATURE_TAGS {
+        set_feature(st, tag, on.contains(&tag));
+    }
+}
+
+fn set_numerals(s: &mut Session, p: &Value, style: NumeralsStyle) -> Result<Value> {
+    with_text_targets(s, p, "Change OpenType Numerals", |t, (a, b)| {
+        style_range(t, a.min(b), a.max(b), &|st| apply_numerals(st, style));
+        Ok(())
+    })?;
+    Ok(json!({"numerals": style.id()}))
 }
 
 fn toggle_opentype(s: &mut Session, p: &Value, tag: &'static str) -> Result<Value> {
@@ -805,6 +920,41 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("type.openType.ornaments", "Ornaments", &["Type", "OpenType"], OT, has_format_target, |s, p| toggle_opentype(s, p, "ornm")),
         spec!("type.openType.ordinals", "Ordinals", &["Type", "OpenType"], OT, has_format_target, |s, p| toggle_opentype(s, p, "ordn")),
         spec!("type.openType.fractions", "Fractions", &["Type", "OpenType"], OT, has_format_target, |s, p| toggle_opentype(s, p, "frac")),
+        spec!("type.openType.numerals.default", "Default", &["Type", "OpenType", "Numerals"], FP, has_format_target, |s, p| set_numerals(
+            s,
+            p,
+            NumeralsStyle::Default
+        )),
+        spec!("type.openType.numerals.lining", "Lining", &["Type", "OpenType", "Numerals"], FP, has_format_target, |s, p| {
+            set_numerals(s, p, NumeralsStyle::Lining)
+        }),
+        spec!("type.openType.numerals.oldstyle", "Oldstyle", &["Type", "OpenType", "Numerals"], FP, has_format_target, |s, p| {
+            set_numerals(s, p, NumeralsStyle::Oldstyle)
+        }),
+        spec!("type.openType.numerals.proportional", "Proportional", &["Type", "OpenType", "Numerals"], FP, has_format_target, |s, p| set_numerals(
+            s,
+            p,
+            NumeralsStyle::Proportional
+        )),
+        spec!("type.openType.numerals.tabular", "Tabular", &["Type", "OpenType", "Numerals"], FP, has_format_target, |s, p| {
+            set_numerals(s, p, NumeralsStyle::Tabular)
+        }),
+        spec!("type.openType.numerals.proportionalLining", "Proportional Lining", &["Type", "OpenType", "Numerals"], FP, has_format_target, |s, p| {
+            set_numerals(s, p, NumeralsStyle::ProportionalLining)
+        }),
+        spec!("type.openType.numerals.tabularLining", "Tabular Lining", &["Type", "OpenType", "Numerals"], FP, has_format_target, |s, p| set_numerals(
+            s,
+            p,
+            NumeralsStyle::TabularLining
+        )),
+        spec!("type.openType.numerals.proportionalOldstyle", "Proportional Oldstyle", &["Type", "OpenType", "Numerals"], FP, has_format_target, |s, p| {
+            set_numerals(s, p, NumeralsStyle::ProportionalOldstyle)
+        }),
+        spec!("type.openType.numerals.tabularOldstyle", "Tabular Oldstyle", &["Type", "OpenType", "Numerals"], FP, has_format_target, |s, p| set_numerals(
+            s,
+            p,
+            NumeralsStyle::TabularOldstyle
+        )),
         spec!("type.createWorkPath", "Create Work Path", &["Type"], LP, has_text, create_work_path),
         spec!("type.convertToShape", "Convert to Shape", &["Type"], LP, has_text, convert_to_shape),
         spec!("type.rasterizeTypeLayer", "Rasterize Type Layer", &["Type"], LP, has_text, |s, p| s.execute("type.rasterize", p.clone())),
