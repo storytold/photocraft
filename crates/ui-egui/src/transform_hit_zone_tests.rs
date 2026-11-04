@@ -87,6 +87,7 @@ fn turned_box_zones_and_resize_cursors_follow_the_quad() {
         let xf = view(zoom);
         let t = app.ui.transform.as_ref().unwrap();
         for (p, expected, icon) in [
+            ([500.0, 100.0], Hit::Corner(1), CursorIcon::ResizeHorizontal),
             ([180.0, 95.0], Hit::Edge(0), CursorIcon::ResizeNeSw),
             ([505.0, 150.0], Hit::Edge(1), CursorIcon::ResizeNwSe),
             ([180.0, 101.0], Hit::Inside, CursorIcon::Default),
@@ -109,6 +110,14 @@ fn distorted_and_flipped_quads_use_their_edges_not_an_axis_aligned_box() {
         assert_eq!(hit(&t, [220.0, 113.0], 12.0), Hit::Inside);
         assert_eq!(hit(&t, [220.0, 90.0], 12.0), Hit::Outside);
         near(TransformSession::box_turn_direction(&q, [220.0, 90.0]), [-0.1 / 1.01_f64.sqrt(), 1.0 / 1.01_f64.sqrt()]);
+    }
+}
+
+#[test]
+fn concave_quad_edge_direction_uses_winding_in_both_orientations() {
+    let q = [[0.0, 0.0], [100.0, 0.0], [10.0, 10.0], [0.0, 100.0]];
+    for q in [q, [q[1], q[0], q[3], q[2]]] {
+        near(TransformSession::box_turn_direction(&q, [56.0, 14.0]), [-1.0 / 82.0_f64.sqrt(), -9.0 / 82.0_f64.sqrt()]);
     }
 }
 

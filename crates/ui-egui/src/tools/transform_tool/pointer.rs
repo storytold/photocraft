@@ -67,8 +67,10 @@ impl TransformSession {
         } else {
             let (a, b) = (quad[i], quad[(i + 1) % 4]);
             let normal = [a[1] - b[1], b[0] - a[0]];
-            let center = quad.iter().fold([0.0; 2], |c, q| [c[0] + q[0] / 4.0, c[1] + q[1] / 4.0]);
-            let sign = (normal[0] * (center[0] - a[0]) + normal[1] * (center[1] - a[1])).signum();
+            // Winding orients every edge, even when a concave quad's mean corner position
+            // lies on the wrong side of this edge. Translate before taking the area.
+            let cross = |i: usize, j: usize| (quad[i][0] - quad[0][0]) * (quad[j][1] - quad[0][1]) - (quad[i][1] - quad[0][1]) * (quad[j][0] - quad[0][0]);
+            let sign = (cross(1, 2) + cross(2, 3)).signum();
             normal.map(|v| v * sign)
         };
         unit(toward)
