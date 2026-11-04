@@ -75,6 +75,15 @@ fn psb_rle_workspace_uses_four_byte_row_counts() {
 }
 
 #[test]
+fn large_psb_rle_layer_fits_through_estimate() {
+    let file = large_rle_layer(18_246, 12_179, Version::Psb);
+    let estimate = super::estimate(&file).unwrap();
+
+    assert!(estimate.total_bytes <= DEFAULT_PSD_IMPORT_PIXEL_BYTES, "{}", estimate.total_bytes);
+    assert!(check(&file, DEFAULT_PSD_IMPORT_PIXEL_BYTES).is_ok());
+}
+
+#[test]
 fn zip_layer_keeps_the_existing_whole_plane_workspace_guard() {
     for compression in [Compression::Zip, Compression::ZipPrediction] {
         let mut file = large_rle_layer(18_246, 12_179, Version::Psd);
@@ -149,6 +158,14 @@ fn large_rle_layer_fits_without_decoding_or_changing_retained_tiles() {
     surface.surface(rec.rect, 4, 1).unwrap();
     assert_eq!(surface.retained, 937_689_088);
     assert!(estimate.tile_bytes >= surface.retained, "estimate must charge the large layer tiles: {}", estimate.tile_bytes);
+    // The other layer and mask surfaces in this fixture are tiny compared with this large layer.
+    // A second charge for the large layer would therefore push the total above this bound.
+    let duplicate_charge_bound = surface.retained * 2;
+    assert!(
+        estimate.tile_bytes < duplicate_charge_bound,
+        "estimate must not charge the large layer twice: {} >= {duplicate_charge_bound}",
+        estimate.tile_bytes
+    );
 }
 
 #[test]
