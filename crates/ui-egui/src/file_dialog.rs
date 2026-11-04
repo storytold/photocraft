@@ -270,22 +270,12 @@ impl PhotocraftApp {
         files.sort_by(|a, b| crate::file_open::natural_cmp(&a.0, &b.0));
         let batch = crate::jobs_ui::begin_batch(self);
         for (seq, (name, bytes)) in files.iter().enumerate() {
+            // The order travels with the open: a background tab, an inline document, a parked DDS
+            // Import prompt, or a memory prompt that is answered later all place the file at its
+            // place in the set.
             let order = crate::jobs_ui::OpenOrder { batch, seq };
-            let pending = self.jobs.opens.len();
-            let parked = self.dds_imports.len();
-            match self.open_bytes_opts(name, bytes, None, dds) {
-                Ok(_) => {
-                    if self.dds_imports.len() > parked {
-                        if let Some(prompt) = self.dds_imports.back_mut() {
-                            prompt.order = Some(order);
-                        }
-                    } else {
-                        match self.jobs.opens.get_mut(pending) {
-                            Some(tab) => tab.order = Some(order),
-                            None => crate::jobs_ui::opened_in_order(&mut self.jobs, order),
-                        }
-                    }
-                }
+            match self.open_bytes_placed(name, bytes, None, None, Some(order), dds) {
+                Ok(_) => {}
                 Err(e) => self.open_failed(name, &e),
             }
         }

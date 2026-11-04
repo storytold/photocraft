@@ -18,12 +18,11 @@ pub struct Opened {
 
 /// Decode a document that was read through a filesystem capability.
 pub fn open_bytes(name: &str, bytes: &[u8]) -> Result<Opened, AutomationError> {
-    open_bytes_opts(name, bytes, &photocraft_io::ImportOptions::default())
+    open_bytes_with_options(name, bytes, &photocraft_io::ImportOptions::default())
 }
 
-/// [`open_bytes`] with the caller's import options (a DDS texture's alpha, mip chain and flip
-/// choices).
-pub fn open_bytes_opts(name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions) -> Result<Opened, AutomationError> {
+/// Decode a document that was read through a filesystem capability with custom import options.
+pub fn open_bytes_with_options(name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions) -> Result<Opened, AutomationError> {
     if Path::new(name).extension().is_some_and(|extension| extension.eq_ignore_ascii_case(photocraft_format::EXTENSION)) {
         let document = photocraft_format::load_from_bytes(bytes)?;
         return Ok(Opened { warnings: photocraft_io::open_warnings(&document), document, source_read_only: false });
@@ -35,11 +34,11 @@ pub fn open_bytes_opts(name: &str, bytes: &[u8], opts: &photocraft_io::ImportOpt
 /// Open a document from disk. Directory bundles and `.pcraft` ZIPs load
 /// natively; everything else goes through `photocraft-io` (PSD, PNG, …).
 pub fn open(path: &Path) -> Result<Opened, AutomationError> {
-    open_opts(path, &photocraft_io::ImportOptions::default())
+    open_with_options(path, &photocraft_io::ImportOptions::default())
 }
 
-/// [`open`] with the caller's import options.
-pub fn open_opts(path: &Path, opts: &photocraft_io::ImportOptions) -> Result<Opened, AutomationError> {
+/// Open a document from disk with custom import options.
+pub fn open_with_options(path: &Path, opts: &photocraft_io::ImportOptions) -> Result<Opened, AutomationError> {
     if path.is_dir() {
         let document = photocraft_format::load_path(path)?;
         return Ok(Opened { warnings: photocraft_io::open_warnings(&document), document, source_read_only: false });
@@ -58,13 +57,30 @@ pub fn open_opts(path: &Path, opts: &photocraft_io::ImportOptions) -> Result<Ope
     #[cfg(not(any(unix, windows)))]
     {
         let bytes = photocraft_format::read_file(path).map_err(|e| AutomationError::Io(format!("{}: {e}", path.display())))?;
-        open_bytes_opts(&name, &bytes, opts)
+        open_bytes_with_options(&name, &bytes, opts)
     }
 }
 
 /// Previews for a `.pcraft` bundle.
 pub fn previews(doc: &Document) -> SaveOptions {
-    SaveOptions { thumbnail: Some(photocraft_compose::thumbnail(doc, 256)), composite: Some(photocraft_compose::thumbnail(doc, 1024)) }
+    SaveOptions { thumbnail: Some(photocraft_compose::thumbnail(doc, 256)), composite: Some(photocraft_compose::thumbnail(doc, 1024)), ..Default::default() }
+}
+
+/// [`previews`], plus the full-size composite when `opts` asks for it and it can be rendered
+/// ([`ExportOptions::pcraft_full_composite`]). Fails when a scratch tile of `doc` could not be
+/// read while they were rendered: the previews may then hold placeholder pixels, and the
+/// bundle's own scratch checks only cover reads made after it starts.
+fn native_options(doc: &Document, opts: &ExportOptions) -> Result<SaveOptions, AutomationError> {
+    doc.scratch_health().map_err(AutomationError::Io)?;
+    let generation = photocraft_raster::spill::read_error_generation();
+    let mut out = previews(doc);
+    if opts.pcraft_full_composite {
+        out.full_composite = photocraft_io::pcraft_full_composite(doc);
+        out.full_composite_icc = out.full_composite.as_ref().map(|_| photocraft_io::pcraft_full_composite_icc(doc));
+    }
+    photocraft_raster::spill::check_since(generation).map_err(AutomationError::Io)?;
+    doc.scratch_health().map_err(AutomationError::Io)?;
+    Ok(out)
 }
 
 /// Encode the name the saved native bundle will report on reopening. Save As updates
@@ -96,7 +112,7 @@ pub fn save(
         let named = named_for_output(doc, &path.to_string_lossy());
         let mut local = PcraftWriter::new();
         let w = writer.unwrap_or(&mut local);
-        w.save_path(&named, path, &previews(&named))?;
+        w.save_path(&named, path, &native_options(&named, opts)?)?;
         return Ok(Vec::new());
     }
     let r = photocraft_io::export(doc, &ext, opts)?;
@@ -114,7 +130,7 @@ pub fn save_bytes(doc: &Document, name: &str, format_override: Option<&str>, opt
         .ok_or_else(|| AutomationError::BadRequest(format!("cannot tell the format of `{name}`; pass a format")))?;
     if ext == photocraft_format::EXTENSION {
         let named = named_for_output(doc, name);
-        return Ok((photocraft_format::save_to_bytes(&named, &previews(&named))?, Vec::new()));
+        return Ok((photocraft_format::save_to_bytes(&named, &native_options(&named, opts)?)?, Vec::new()));
     }
     let result = photocraft_io::export(doc, &ext, opts)?;
     Ok((result.bytes, result.warnings))

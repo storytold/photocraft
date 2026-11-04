@@ -170,7 +170,9 @@ fn a_parked_dds_keeps_its_place_in_an_open_together_set() {
 #[test]
 fn scripted_dds_import_answers_and_plain_textures_skip_the_prompt() {
     let (mut h, chosen) = app_importing();
-    h.state_mut().open_file_opts("t.dds", &dds_bytes(), Some(DdsImport { alpha_as_channel: true, mips_as_layers: true, ..Default::default() })).unwrap();
+    h.state_mut()
+        .open_file_placed("t.dds", &dds_bytes(), None, None, Some(DdsImport { alpha_as_channel: true, mips_as_layers: true, ..Default::default() }))
+        .unwrap();
     assert!(h.state().dds_imports.is_empty(), "answered opens don't ask");
     assert_eq!(*chosen.borrow(), Some(DdsImport { alpha_as_channel: true, mips_as_layers: true, ..Default::default() }));
 

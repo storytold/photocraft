@@ -314,8 +314,7 @@ fn a_dds_open_held_for_its_profile_prompt_keeps_the_drop_slot() {
     assert_eq!(docs(&h), ["a.png", "b.png"]);
     h.state_mut().run("edit.colorSettings", serde_json::json!({"askOnMissing": true})).unwrap();
     // A drop on tab slot 1 parks behind the DDS Import prompt with the slot on it.
-    assert!(crate::dds_import_ui::park_bytes(h.state_mut(), "c.dds".into(), None, &rgba_dds()));
-    h.state_mut().dds_imports.back_mut().unwrap().slot = Some(1);
+    assert!(crate::dds_import_ui::park_bytes(h.state_mut(), "c.dds".into(), None, &rgba_dds(), Some(1), None));
     h.run_steps(3);
     click(&mut h, "OK");
     assert_eq!(h.state().held_opens.len(), 1, "the untagged DDS waits on its profile prompt");

@@ -55,17 +55,33 @@ pub fn wants_path(path: &str) -> Option<DdsInfo> {
     wants(&head[..n])
 }
 
-/// Park `name`'s open behind the prompt. The queue keeps later opens' prompts in order.
-pub fn park(app: &mut PhotocraftApp, name: String, path: Option<String>, source: OpenSource, info: DdsInfo) {
-    app.dds_imports.push_back(Prompt { name, path, source, options: DdsImport::default(), info, slot: None, order: None });
+/// Park `name`'s open behind the prompt. The queue keeps later opens' prompts in order; the
+/// drop's tab slot or place in a set travels to the open once the prompt is answered.
+pub fn park(
+    app: &mut PhotocraftApp,
+    name: String,
+    path: Option<String>,
+    source: OpenSource,
+    info: DdsInfo,
+    slot: Option<usize>,
+    order: Option<crate::jobs_ui::OpenOrder>,
+) {
+    app.dds_imports.push_back(Prompt { name, path, source, options: DdsImport::default(), info, slot, order });
 }
 
 /// Park an open whose bytes are in hand (`bytes` is the whole file), when it has choices to
 /// make. Returns whether the open parked.
-pub fn park_bytes(app: &mut PhotocraftApp, name: String, path: Option<String>, bytes: &[u8]) -> bool {
+pub fn park_bytes(
+    app: &mut PhotocraftApp,
+    name: String,
+    path: Option<String>,
+    bytes: &[u8],
+    slot: Option<usize>,
+    order: Option<crate::jobs_ui::OpenOrder>,
+) -> bool {
     match wants(bytes) {
         Some(info) => {
-            park(app, name, path, OpenSource::Bytes(std::sync::Arc::new(bytes.to_vec())), info);
+            park(app, name, path, OpenSource::Bytes(std::sync::Arc::new(bytes.to_vec())), info, slot, order);
             true
         }
         None => false,
@@ -74,9 +90,8 @@ pub fn park_bytes(app: &mut PhotocraftApp, name: String, path: Option<String>, b
 
 /// Answers the front prompt and runs its open.
 fn confirm(app: &mut PhotocraftApp, p: Prompt) {
-    let (docs, opens, held) = (app.session.documents().len(), app.jobs.opens.len(), app.held_opens.len());
     let r = if app.background_jobs {
-        crate::jobs_ui::start_open_opts(app, &p.name, p.path.clone(), p.source, Some(p.options))
+        crate::jobs_ui::start_open_opts(app, &p.name, p.path.clone(), p.source, p.slot, p.order, Some(p.options))
     } else {
         let bytes: std::borrow::Cow<'_, [u8]> = match &p.source {
             OpenSource::Bytes(b) => std::borrow::Cow::Borrowed(&b[..]),
@@ -92,38 +107,10 @@ fn confirm(app: &mut PhotocraftApp, p: Prompt) {
             #[cfg(target_arch = "wasm32")]
             OpenSource::Path(_) => return,
         };
-        app.open_bytes_opts(&p.name, &bytes, p.path.as_deref(), Some(p.options)).map(|_| ())
+        app.open_bytes_placed(&p.name, &bytes, p.path.as_deref(), p.slot, p.order, Some(p.options)).map(|_| ())
     };
     if let Err(e) = r {
         app.open_failed(&p.name, &e);
-        crate::jobs_ui::end_batch(app);
-        return;
-    }
-    // Where the open lands: a background open's tab, or the document an inline open already
-    // appended — a drop's tab slot or the place it held in a set opened together.
-    if let Some(tab) = app.jobs.opens.get_mut(opens) {
-        if p.slot.is_some() {
-            tab.slot = p.slot;
-        }
-        if p.order.is_some() {
-            tab.order = p.order;
-        }
-        return;
-    }
-    // A Color Settings or damage prompt can hold the open back: no document was appended to
-    // move, so the slot rides the Held and applies when the prompt resolves.
-    if app.held_opens.len() > held {
-        if let Some(h) = app.held_opens.back_mut() {
-            h.slot = p.slot.or_else(|| p.order.and_then(|o| crate::jobs_ui::batch_slot(&mut app.jobs, o)));
-        }
-        crate::jobs_ui::end_batch(app);
-        return;
-    }
-    let slot = p.slot.or_else(|| p.order.and_then(|o| crate::jobs_ui::batch_slot(&mut app.jobs, o)));
-    if let Some(slot) = slot
-        && app.session.documents().len() > docs
-    {
-        let _ = app.run("document.move", serde_json::json!({"document": docs, "to": slot}));
     }
     crate::jobs_ui::end_batch(app);
 }

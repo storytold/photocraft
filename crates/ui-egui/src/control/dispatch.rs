@@ -5,6 +5,7 @@ use super::params::{
     input_object, merged_object, modifiers_from, num_field, ok, screen_point, uint_field, whole_object,
 };
 use super::{ControlRequest, DialogKind, Outcome, PhotocraftApp, SHELL_DIALOG, Tool, ToolEvent, Value, json, run_waiting, tool_event, wrap};
+use photocraft_engine::jobs::{CancelReport, JobId};
 
 /// A domain handler: `Some` when it owns the request's method, `None` to let the next one try.
 type Handler = fn(&mut PhotocraftApp, &egui::Context, &ControlRequest) -> Option<Outcome>;
@@ -123,18 +124,27 @@ fn execute_command(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRe
 fn jobs_cancel(app: &mut PhotocraftApp, p: &Value) -> Outcome {
     let all = p.get("job").is_none_or(Value::is_null);
     match p.get("job").and_then(Value::as_u64) {
-        Some(j) if app.session.job(photocraft_engine::jobs::JobId(j)).is_some() => {
-            let cancelled = crate::jobs_ui::cancel(app, photocraft_engine::jobs::JobId(j));
-            ok(json!({"cancelled": usize::from(cancelled)}))
-        }
+        // Same reply as the engine's `jobs.cancel`: `{cancelled: n}`, plus `notCancelled:
+        // [{job, reason}]` for the jobs left running (a save already writing its file, a print).
+        Some(j) if app.session.job(JobId(j)).is_some() => ok(cancel_each(app, vec![JobId(j)]).to_json()),
         Some(j) => err(format!("no running job {j}")),
         None if all => {
             let ids: Vec<_> = app.session.jobs().into_iter().map(|j| j.id).collect();
-            let cancelled = ids.into_iter().filter(|j| crate::jobs_ui::cancel(app, *j)).count();
-            ok(json!({"cancelled": cancelled}))
+            ok(cancel_each(app, ids).to_json())
         }
         None => err("`job` must be a job id"),
     }
+}
+
+fn cancel_each(app: &mut PhotocraftApp, ids: Vec<JobId>) -> CancelReport {
+    let mut report = CancelReport::default();
+    for id in ids {
+        match crate::jobs_ui::try_cancel(app, id) {
+            Ok(()) => report.cancelled.push(id),
+            Err(why) => report.refused.push((id, why)),
+        }
+    }
+    report
 }
 
 // ---- the shell: view state, windows, GPU, focus, screenshots ----
@@ -1370,7 +1380,11 @@ fn app_methods(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlReques
     Some(match req.method.as_str() {
         "app.open" => match str_param(p, "path") {
             Some(path) => match crate::dds_import_ui::params(p) {
-                Ok(dds) => app_open(app, path, dds),
+                Ok(dds) => match p.get("approveHighMemory") {
+                    None | Some(Value::Null) => app_open(app, path, dds, false),
+                    Some(Value::Bool(approved)) => app_open(app, path, dds, *approved),
+                    Some(_) => err("expected boolean for `approveHighMemory`"),
+                },
                 Err(e) => err(e),
             },
             None => err("missing `path`"),
@@ -1391,7 +1405,9 @@ fn app_methods(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlReques
     })
 }
 
-fn app_open(app: &mut PhotocraftApp, path: &str, dds: Option<photocraft_io::DdsImport>) -> Outcome {
+/// The `app.open` control method: opens a path through the configured automation read
+/// capability, with optional high-memory approval and DDS import answers.
+fn app_open(app: &mut PhotocraftApp, path: &str, dds: Option<photocraft_io::DdsImport>, approved: bool) -> Outcome {
     if let Some(outcome) = open_pcraft_directory(app, path) {
         return outcome;
     }
@@ -1401,7 +1417,7 @@ fn app_open(app: &mut PhotocraftApp, path: &str, dds: Option<photocraft_io::DdsI
     };
     wrap(opened.and_then(|(name, bytes)| {
         let name = app.open_name(&name);
-        let warnings = app.open_automation_bytes_opts(&name, &bytes, dds)?;
+        let warnings = app.open_automation_bytes_opts(&name, &bytes, approved, dds)?;
         // Brushes/gradients go to the preset libraries: no document, no Open Recent entry.
         if !crate::preset_files_ui::is_preset_file(&name) {
             app.opened_from(path);

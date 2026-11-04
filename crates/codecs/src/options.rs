@@ -316,6 +316,10 @@ pub struct DdsInfo {
     pub compression: Option<DdsCompression>,
 }
 
+/// The longer side, in pixels, at which a TIFF image pyramid stops: the last level written is
+/// the first one no longer than this ([`EncodeOptions::tiff_pyramid`]).
+pub const TIFF_PYRAMID_MIN: u32 = 64;
+
 /// Options for [`crate::encode`].
 #[derive(Debug, Clone)]
 pub struct EncodeOptions {
@@ -340,6 +344,11 @@ pub struct EncodeOptions {
     /// Always write TIFF as BigTIFF (8-byte offsets). Without it a TIFF is written as BigTIFF
     /// only when it could pass the 4 GiB a classic TIFF can address.
     pub tiff_bigtiff: bool,
+    /// TIFF: after the full image, write Photoshop's "Save Image Pyramid" levels: copies at half,
+    /// a quarter, … of the size, each marked reduced-resolution (`NewSubfileType` 1), down to
+    /// [`crate::TIFF_PYRAMID_MIN`] px on the longer side. Readers that don't know pyramids open
+    /// the full image, which comes first.
+    pub tiff_pyramid: bool,
     pub exr_compression: ExrCompression,
     /// DPX bits per sample. `None` follows the image: 8 for 8-bit, 16 otherwise.
     pub dpx_bits: Option<DpxBits>,
@@ -364,6 +373,7 @@ impl Default for EncodeOptions {
             webp_quality: 80,
             tiff_compression: TiffCompression::None,
             tiff_bigtiff: false,
+            tiff_pyramid: false,
             exr_compression: ExrCompression::Zip16,
             dpx_bits: None,
             dds: DdsOptions::default(),
