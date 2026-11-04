@@ -1137,7 +1137,7 @@ pub fn export_flat_with_renderer(
                     img = dds_image(doc, img, &mut warnings)?;
                 }
                 if format == Format::Tiff {
-                    warnings.extend(crate::tiff_layers::stamp_flat_channels(doc, &mut img));
+                    warnings.extend(crate::tiff_layers::flat_transparency_and_channels(doc, &mut img, opts.tiff_transparency));
                 }
                 // Drain only once encoding succeeded: if it fails, the queued diagnostics stay
                 // with the renderer for the caller to report alongside the error.
