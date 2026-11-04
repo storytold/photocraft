@@ -713,6 +713,24 @@ fn write_webp(path: &str, w: u32, h: u32, frames: &[([u8; 3], u32)]) {
 }
 
 #[test]
+fn a_damaged_webp_import_reports_salvaged_frames() {
+    let dir = tmpdir("webpcut");
+    let path = format!("{dir}/anim.webp");
+    write_webp(&path, 8, 8, &[([255, 0, 0], 50), ([0, 255, 0], 50), ([0, 0, 255], 50)]);
+    let mut bytes = std::fs::read(&path).unwrap();
+    // Keep the container intact but damage the final frame, as in the codec regression.
+    let last = bytes.windows(4).rposition(|w| w == b"VP8L").unwrap();
+    bytes[last + 8] = 0;
+    std::fs::write(&path, bytes).unwrap();
+    let mut s = session();
+    let r = s.execute("layer.videoLayers.newVideoLayerFromFile", json!({"path": path})).unwrap();
+    assert_eq!(r["frames"], 2);
+    let warnings = r["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0].as_str().unwrap().contains("ends early"));
+}
+
+#[test]
 fn an_animated_webp_becomes_a_video_layer_with_every_frame() {
     let dir = tmpdir("webpin");
     let path = format!("{dir}/anim.webp");
