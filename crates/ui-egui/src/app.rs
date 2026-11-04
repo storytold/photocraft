@@ -195,6 +195,7 @@ impl PhotocraftApp {
             targa_options: None,
             jpeg_options: None,
             dds_options: None,
+            pdf_options: None,
             held_opens: Default::default(),
             held_memory_prompts: Default::default(),
             prompt_order: Default::default(),

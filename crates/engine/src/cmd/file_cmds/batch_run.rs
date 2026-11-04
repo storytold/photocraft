@@ -197,7 +197,7 @@ fn process_outputs<'a>(
         f(scratch, out)
     };
     for (path, out) in outputs {
-        let r = process_one(raw_ppi, path, &out, save, ProcessOptions { format: None, written: Some(&written), ctx: None }, &run);
+        let r = process_one(raw_ppi, path, &out, &save, ProcessOptions { format: None, written: Some(&written), ctx: None }, &run);
         match r {
             Ok(()) => {
                 written.record(&out, path);
@@ -215,7 +215,14 @@ struct ProcessOptions<'a> {
     ctx: Option<&'a crate::jobs::JobCtx>,
 }
 
-fn process_one(raw_ppi: f64, path: &str, out: &str, save: SaveOpts, options: ProcessOptions<'_>, f: &dyn Fn(&mut Session, &str) -> Result<bool>) -> Result<()> {
+fn process_one(
+    raw_ppi: f64,
+    path: &str,
+    out: &str,
+    save: &SaveOpts,
+    options: ProcessOptions<'_>,
+    f: &dyn Fn(&mut Session, &str) -> Result<bool>,
+) -> Result<()> {
     if let Some(written) = options.written {
         written.check(out).map_err(EngineError::Other)?;
     }
@@ -244,18 +251,18 @@ fn process_one(raw_ppi: f64, path: &str, out: &str, save: SaveOpts, options: Pro
         if let Some(ctx) = options.ctx {
             save_batch_doc(&d.doc, out, &ext, save, ctx)?;
         } else {
-            save_doc_as(&d.doc, out, &ext, save)?;
+            save_doc_as(&d.doc, out, &ext, save.clone())?;
         }
     } else {
-        save_doc(&d.doc, out, save)?;
+        save_doc(&d.doc, out, save.clone())?;
     }
     Ok(())
 }
 
 /// Encode before the Batch write checkpoint. Esc accepted during an action or encode therefore
 /// leaves the current destination untouched; the worker owns the write once the checkpoint passes.
-fn save_batch_doc(doc: &Document, out: &str, format: &str, save: SaveOpts, ctx: &crate::jobs::JobCtx) -> Result<()> {
-    let (bytes, _) = encode(doc, format, save)?;
+fn save_batch_doc(doc: &Document, out: &str, format: &str, save: &SaveOpts, ctx: &crate::jobs::JobCtx) -> Result<()> {
+    let (bytes, _) = encode(doc, format, save.clone())?;
     ctx.batch_before_write()?;
     write_file(out, &bytes)?;
     Ok(())
@@ -374,7 +381,7 @@ pub(super) fn process_batch_outputs(
             break;
         }
         ctx.progress(index as f32 / total.max(1) as f32, &format!("{} of {total}: {}", index + 1, file_name(path)));
-        let result = process_one(raw_ppi, path, out, save, ProcessOptions { format: Some(format), written: None, ctx: Some(ctx) }, f);
+        let result = process_one(raw_ppi, path, out, &save, ProcessOptions { format: Some(format), written: None, ctx: Some(ctx) }, f);
         // An input that failed on its own (not because it was stopped) stays a failure with its
         // reason, even when a cancel or Esc lands while it runs.
         let failure =
@@ -641,7 +648,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
                     match saved {
                         Some(doc) if scratch.active().is_none_or(|active| active.doc.id != doc.id) => {
                             ctx.check()?;
-                            save_batch_doc(&doc, out, &encode_format, save, ctx)?;
+                            save_batch_doc(&doc, out, &encode_format, &save, ctx)?;
                             Ok(true)
                         }
                         _ => Ok(false),
@@ -657,7 +664,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
                 carried.set(scratch.actions.playback_steps);
                 result
             };
-            let result = process_batch_outputs(raw_ppi, outputs, &format, save, &policy, ctx, &run);
+            let result = process_batch_outputs(raw_ppi, outputs, &format, save.clone(), &policy, ctx, &run);
             Ok((result, carried.get()))
         },
         move |s, (result, carried)| {
@@ -754,7 +761,7 @@ fn batch_open_documents(
                 None => s.documents().iter().find(|state| state.doc.id.0 == *id).ok_or(EngineError::NoDocument)?.doc.clone(),
             };
             let ext = if format == "same" { same_format(path) } else { format.trim_start_matches('.').to_ascii_lowercase() };
-            save_doc_as(&doc, out, &ext, save)?;
+            save_doc_as(&doc, out, &ext, save.clone())?;
             files.push(out.clone());
             Ok(())
         })();
