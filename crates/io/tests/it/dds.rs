@@ -137,6 +137,15 @@ fn mip_layers_hide_below_the_top_level() {
 }
 
 #[test]
+fn a_cancelled_open_stops_between_mip_levels() {
+    let opts = ImportOptions { dds: DdsImport { mips_as_layers: true, ..Default::default() }, ..Default::default() };
+    let interrupted = || true;
+    let ctl = photocraft_raster::Interrupt::cancel_only(&interrupted);
+    let r = import_with_options_and_interrupt("t.dds", &dds_with_mips(), &opts, &ctl);
+    assert!(matches!(r, Err(IoError::Cancelled)), "cancel wins over the decode error: {r:?}");
+}
+
+#[test]
 fn mips_as_layers_on_a_single_level_texture_is_one_layer() {
     let img = photocraft_codecs::Image::from_u8(4, 4, photocraft_codecs::ChannelLayout::Rgba, [10, 20, 30, 200].repeat(16)).unwrap();
     let b = photocraft_codecs::encode(&img, photocraft_codecs::Format::Dds, &photocraft_codecs::EncodeOptions::default()).unwrap();

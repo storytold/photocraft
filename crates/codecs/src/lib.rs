@@ -180,7 +180,12 @@ pub fn decode_gif_frames(bytes: &[u8], opts: &DecodeOptions) -> Result<Vec<Anima
 /// level only. Level pixels are read as the file stores them (the top level's pitch applies to
 /// level 0); a level that ends before its size fails the whole decode.
 pub fn decode_dds_levels(bytes: &[u8], opts: &DecodeOptions) -> Result<Vec<Image>, CodecError> {
-    dds::decode_levels(bytes, &opts.limits)
+    dds::decode_levels(bytes, &opts.limits, &|| false)
+}
+
+/// [`decode_dds_levels`] that stops between levels once `cancel` is set.
+pub fn decode_dds_levels_with_cancel(bytes: &[u8], opts: &DecodeOptions, cancel: &dyn Fn() -> bool) -> Result<Vec<Image>, CodecError> {
+    dds::decode_levels(bytes, &opts.limits, cancel)
 }
 
 /// A DDS texture's dimensions, mip count and whether it carries alpha, read from the header

@@ -71,7 +71,7 @@ pub(crate) fn import_flat_with_options(
         return import_tiff_page_with_options(name, bytes, None, opts, ctl);
     }
     if format == Some(Format::Dds) {
-        return import_dds(name, bytes, opts);
+        return import_dds(name, bytes, opts, ctl);
     }
     let img = codecs::decode_as(format.ok_or(codecs::CodecError::UnknownFormat)?, bytes)?;
     // A palette BMP, PNG or GIF opens in Indexed Color mode with its colour table, as in
@@ -321,20 +321,34 @@ fn flip_dds_image(img: &mut Image) {
 /// as a Targa opens — nothing is discarded — but an alpha that is the same value everywhere
 /// holds no data and opens neither channel nor transparency. With a mip chain, only the top
 /// level's alpha becomes the channel.
-fn import_dds(name: &str, bytes: &[u8], opts: &ImportOptions) -> Result<ImportResult, IoError> {
+fn import_dds(name: &str, bytes: &[u8], opts: &ImportOptions, ctl: &photocraft_raster::Interrupt) -> Result<ImportResult, IoError> {
     let levels = if opts.dds.mips_as_layers {
-        codecs::decode_dds_levels(bytes, &codecs::DecodeOptions::default())?
+        // A cancelled job stops between mip levels instead of decoding the whole chain.
+        match codecs::decode_dds_levels_with_cancel(bytes, &codecs::DecodeOptions::default(), &|| ctl.cancelled()) {
+            Ok(levels) => levels,
+            Err(e) => {
+                ctl.check().map_err(|_| IoError::Cancelled)?;
+                return Err(e.into());
+            }
+        }
     } else {
         vec![codecs::decode_as(Format::Dds, bytes)?]
     };
-    import_dds_levels(name, levels, bytes, opts)
+    import_dds_levels(name, levels, bytes, opts, ctl)
 }
 
 /// The level images of a DDS texture as a document: the alpha, mip and flip import answers as
 /// in [`import_dds`], `bytes` for the saved [`file_encoding`].
-fn import_dds_levels(name: &str, mut levels: Vec<Image>, bytes: &[u8], opts: &ImportOptions) -> Result<ImportResult, IoError> {
+fn import_dds_levels(
+    name: &str,
+    mut levels: Vec<Image>,
+    bytes: &[u8],
+    opts: &ImportOptions,
+    ctl: &photocraft_raster::Interrupt,
+) -> Result<ImportResult, IoError> {
     if opts.dds.flip {
         for img in levels.iter_mut() {
+            ctl.check().map_err(|_| IoError::Cancelled)?;
             flip_dds_image(img);
         }
     }
@@ -359,6 +373,7 @@ fn import_dds_levels(name: &str, mut levels: Vec<Image>, bytes: &[u8], opts: &Im
         l.locks.position = false;
     }
     for (i, img) in levels.iter().enumerate().skip(1) {
+        ctl.check().map_err(|_| IoError::Cancelled)?;
         let mut s = image_surface(img, f.layout, f.sample)?;
         s.prune();
         let mut l = Layer::new(format!("Mip {i}"), LayerContent::Raster(s));

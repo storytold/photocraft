@@ -260,9 +260,16 @@ pub(crate) fn decode(b: &[u8], limits: &Limits) -> Result<Image, CodecError> {
 /// Every declared mip level as an image, largest first; [`decode`] reads the top one. The
 /// chain ends at 1×1, so a header claiming more levels than reduce to it reads that many —
 /// the field is hostile input, and each level re-walks the ones before it.
-pub(crate) fn decode_levels(b: &[u8], limits: &Limits) -> Result<Vec<Image>, CodecError> {
+pub(crate) fn decode_levels(b: &[u8], limits: &Limits, cancel: &dyn Fn() -> bool) -> Result<Vec<Image>, CodecError> {
     let p = parse(b)?;
-    (0..p.mip_count()).map(|i| level_image(&p, i, limits)).collect()
+    let mut levels = Vec::with_capacity(p.mip_count() as usize);
+    for i in 0..p.mip_count() {
+        if cancel() {
+            return Err(bad("DDS import cancelled"));
+        }
+        levels.push(level_image(&p, i, limits)?);
+    }
+    Ok(levels)
 }
 
 /// The image of mip `index` (`0` is the top level). Levels are stored largest first and,
