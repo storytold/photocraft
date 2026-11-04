@@ -115,7 +115,8 @@ pub(crate) fn field(ui: &mut egui::Ui, obj: &mut Map<String, Value>, value: &str
 
 pub(crate) fn preferences(app: &mut PhotocraftApp, ui: &egui::Ui, fields: &Map<String, Value>) {
     let Some(browse) = ui.ctx().data_mut(|d| d.remove_temp::<bool>(egui::Id::unique(REQUEST))) else { return };
-    let folder = fields.get("values").and_then(|v| v.get("fileHandling")).and_then(|v| v.get("actionsFolder")).and_then(Value::as_str).unwrap_or("").to_string();
+    let folder =
+        fields.get("values").and_then(|v| v.get("fileHandling")).and_then(|v| v.get("actionsFolder")).and_then(Value::as_str).unwrap_or("").to_string();
     let result = if browse {
         let Some(id) = fields.get("__prefsDialogId").and_then(Value::as_u64) else { return };
         app.ask_file(crate::file_dialog::FileDialogRequest::Folder { initial_dir: (!folder.is_empty()).then_some(folder) }, move |app, answer| {
