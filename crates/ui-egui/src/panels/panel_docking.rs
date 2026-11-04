@@ -553,11 +553,7 @@ pub(crate) fn dock_label(id: &String) -> String {
 }
 
 /// A panel's size policy, shared by the main layout and the peek overlay.
-pub(crate) fn dock_limits(
-    id: &String,
-    collapsed: &std::collections::HashSet<String>,
-    strip: f32,
-) -> craft_ui::docking::PanelLimits {
+pub(crate) fn dock_limits(id: &String, collapsed: &std::collections::HashSet<String>, strip: f32) -> craft_ui::docking::PanelLimits {
     if id == CANVAS {
         craft_ui::docking::PanelLimits { min: egui::vec2(200.0, 120.0), ..Default::default() }
     } else if collapsed.contains(id) {

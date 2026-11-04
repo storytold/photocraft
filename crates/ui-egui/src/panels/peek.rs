@@ -79,22 +79,13 @@ fn strip(ctx: &egui::Context, id: Id) -> Option<Rect> {
     ctx.data(|d| d.get_temp::<Option<Rect>>(id)).flatten()
 }
 
-fn note_focus(
-    ctx: &egui::Context,
-    strip_id: Id,
-    focus_id: Id,
-    p: Pos2,
-    button_down: bool,
-    press_origin: Option<Pos2>,
-    focused: Option<Id>,
-) {
+fn note_focus(ctx: &egui::Context, strip_id: Id, focus_id: Id, p: Pos2, button_down: bool, press_origin: Option<Pos2>, focused: Option<Id>) {
     // Only focus gained through the peek itself joins the hold set: the pointer over its
     // strip, or a press that started in it. Focus gained elsewhere (a click on the canvas)
     // must never hold the peek open after the pointer leaves.
     let interacting =
         over_strip(ctx, strip_id, p) || (button_down && press_origin.is_some_and(|o| strip(ctx, strip_id).is_some_and(|r| r.expand(2.0).contains(o))));
-    if interacting
-        && let Some(f) = focused {
+    if interacting && let Some(f) = focused {
         ctx.data_mut(|d| {
             d.get_temp_mut_or_default::<HashSet<Id>>(focus_id).insert(f);
         });
@@ -214,8 +205,7 @@ pub(crate) fn compute_peek(app: &PhotocraftApp, ctx: &egui::Context, chrome: boo
         let trigger = !button_down && dist <= ZONE && (dist <= EDGE_ALWAYS || !blocked);
         // A dock column must exist to draw: without one the peek is not active, so its
         // strip clears below instead of lingering.
-        peek.dock = (trigger || hold(ctx, dock_strip_id(), dock_focus_id()))
-            && peek_layout(app).is_some_and(|(_, width)| width > 0.0);
+        peek.dock = (trigger || hold(ctx, dock_strip_id(), dock_focus_id())) && peek_layout(app).is_some_and(|(_, width)| width > 0.0);
     }
     if peek.toolbar {
         note_focus(ctx, toolbar_strip_id(), toolbar_focus_id(), p, button_down, press_origin, focused);
@@ -244,18 +234,11 @@ pub(crate) fn draw_peek(app: &mut PhotocraftApp, ctx: &egui::Context, peek: &Pee
     }
     let rtl = crate::direction::is_rtl();
     if peek.toolbar {
-        let (pos, pivot) = if rtl {
-            (Pos2::new(canvas.right(), canvas.top()), Align2::RIGHT_TOP)
-        } else {
-            (Pos2::new(canvas.left(), canvas.top()), Align2::LEFT_TOP)
-        };
-        let resp = egui::Area::new(Id::unique("toolbar-peek"))
-            .order(egui::Order::Foreground)
-            .fixed_pos(pos)
-            .pivot(pivot)
-            .show(ctx, |ui| {
-                super::toolbar(app, ui);
-            });
+        let (pos, pivot) =
+            if rtl { (Pos2::new(canvas.right(), canvas.top()), Align2::RIGHT_TOP) } else { (Pos2::new(canvas.left(), canvas.top()), Align2::LEFT_TOP) };
+        let resp = egui::Area::new(Id::unique("toolbar-peek")).order(egui::Order::Foreground).fixed_pos(pos).pivot(pivot).show(ctx, |ui| {
+            super::toolbar(app, ui);
+        });
         record_panel_strip(ctx, toolbar_strip_id(), resp.response.rect);
     }
     if peek.dock {
@@ -269,20 +252,13 @@ pub(crate) fn draw_peek(app: &mut PhotocraftApp, ctx: &egui::Context, peek: &Pee
             clear_panel_strip(ctx, dock_strip_id());
             return;
         }
-        let (pos, pivot) = if rtl {
-            (Pos2::new(canvas.left(), canvas.top()), Align2::LEFT_TOP)
-        } else {
-            (Pos2::new(canvas.right(), canvas.top()), Align2::RIGHT_TOP)
-        };
-        let resp = egui::Area::new(peek_area_id())
-            .order(egui::Order::Foreground)
-            .fixed_pos(pos)
-            .pivot(pivot)
-            .show(ctx, |ui| {
-                ui.allocate_ui(Vec2::new(width, canvas.height()), |ui| {
-                    show_column(app, ui, &layout);
-                });
+        let (pos, pivot) =
+            if rtl { (Pos2::new(canvas.left(), canvas.top()), Align2::LEFT_TOP) } else { (Pos2::new(canvas.right(), canvas.top()), Align2::RIGHT_TOP) };
+        let resp = egui::Area::new(peek_area_id()).order(egui::Order::Foreground).fixed_pos(pos).pivot(pivot).show(ctx, |ui| {
+            ui.allocate_ui(Vec2::new(width, canvas.height()), |ui| {
+                show_column(app, ui, &layout);
             });
+        });
         record_panel_strip(ctx, dock_strip_id(), resp.response.rect);
     }
 }
