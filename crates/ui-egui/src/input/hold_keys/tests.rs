@@ -1073,3 +1073,34 @@ fn a_one_frame_cmd_click_with_the_hand_tool_zooms() {
     h.run_steps(2);
     assert!(h.state().ui.views[0].zoom > z0);
 }
+
+/// Right-click while Space holds the Hand over another tool: the Hand tool's view menu, as in
+/// Photoshop, not the held-over tool's menu; the tool comes back on release (#11271).
+#[test]
+fn space_right_click_opens_the_hand_view_menu() {
+    for tool in [Tool::Move, Tool::Brush, Tool::RectMarquee] {
+        let mut h = harness(tool);
+        let p = screen(&h, 200.0, 150.0);
+        h.event(Event::PointerMoved(p));
+        h.run_steps(1);
+        key(&mut h, Key::Space, true, Modifiers::NONE);
+        h.event(Event::PointerButton { pos: p, button: PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE });
+        h.run_steps(1);
+        h.event(Event::PointerButton { pos: p, button: PointerButton::Secondary, pressed: false, modifiers: Modifiers::NONE });
+        h.run_steps(1);
+        key(&mut h, Key::Space, false, Modifiers::NONE);
+        h.run_steps(2);
+        let menu = h.state().ui.canvas_tool_menu.clone().unwrap_or_else(|| panic!("{tool:?}: Space right-click opens no menu"));
+        assert!(crate::canvas_tool_menu::rows(&menu) == crate::canvas_tool_menu::VIEW_MENU, "{tool:?}: the view menu");
+        assert!(h.state().ui.layer_menu.is_none(), "{tool:?}: not the Move tool's layer menu");
+        assert!(h.state().ui.brush_picker.is_none(), "{tool:?}: not the brush picker");
+        assert_eq!(h.state().ui.tool, tool, "{tool:?}: the tool is kept");
+        // Its rows work as the selected Hand's do.
+        let zoom = h.state().ui.views[0].zoom;
+        let ctx = h.ctx.clone();
+        crate::canvas_tool_menu::choose(h.state_mut(), &ctx, "view.twoHundredPercent");
+        h.run_steps(2);
+        assert!((h.state().ui.views[0].zoom - 2.0).abs() < 1e-3, "{tool:?}: 200% from {zoom}");
+        assert!(h.state().ui.canvas_tool_menu.is_none(), "{tool:?}: choosing closes the menu");
+    }
+}

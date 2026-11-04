@@ -655,6 +655,31 @@ fn agent_right_click_with_the_zoom_tool_opens_and_runs_the_view_menu() {
     assert!(app.ui.canvas_tool_menu.is_none());
 }
 
+/// #11271: an agent's right-click with Space held is the held Hand's: the view menu, whatever the
+/// tool; with ⌘ as well (the held Zoom) it is not.
+#[test]
+fn agent_space_right_click_opens_the_hand_view_menu() {
+    for tool in [crate::state::Tool::Move, crate::state::Tool::Brush, crate::state::Tool::RectMarquee] {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
+        app.sync_views();
+        app.ui.tool = tool;
+        let click = |space, command| json!({"space": space, "command": command, "button": "secondary", "events": [{"kind":"down","x":8,"y":8},{"kind":"up","x":8,"y":8}]});
+        assert_eq!(call(&mut app, &ctx, "ui.pointer", click(true, false))["ok"], true);
+        let menu = app.ui.canvas_tool_menu.clone().unwrap_or_else(|| panic!("{tool:?}: no menu"));
+        assert!(crate::canvas_tool_menu::rows(&menu) == crate::canvas_tool_menu::VIEW_MENU, "{tool:?}");
+        assert_eq!(call(&mut app, &ctx, "ui.context.choose", json!({"id":"view.twoHundredPercent"}))["ok"], true, "{tool:?}");
+        assert_eq!(app.ui.views[0].zoom, 2.0, "{tool:?}");
+        assert_eq!(app.ui.tool, tool);
+        app.ui.canvas_tool_menu = None;
+        app.ui.layer_menu = None;
+        app.ui.brush_picker = None;
+        call(&mut app, &ctx, "ui.pointer", click(true, true));
+        assert!(app.ui.canvas_tool_menu.as_ref().is_none_or(|m| m.anchor.is_none()), "{tool:?}: ⌘Space holds the Zoom, which has no menu");
+    }
+}
+
 /// #6561: an agent's right-click on a pending crop opens the crop menu, as on the canvas.
 #[test]
 fn agent_right_click_on_a_pending_crop_opens_and_runs_the_crop_menu() {
