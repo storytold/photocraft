@@ -142,7 +142,7 @@ impl SmartOut {
     /// The document's global blocks with the linked-layer files and filter caches brought up to
     /// date: unreferenced files dropped (when every reference is known), new files appended,
     /// filter caches kept or regenerated per smart object. Unchanged blocks stay byte-identical.
-    pub(super) fn finish(&self, blocks: Vec<photocraft_doc::PsdGlobalBlock>) -> Vec<photocraft_doc::PsdGlobalBlock> {
+    pub(super) fn finish(mut self, blocks: Vec<photocraft_doc::PsdGlobalBlock>) -> Vec<photocraft_doc::PsdGlobalBlock> {
         use std::sync::Arc;
         let keep = |u: &str| !self.prune_ok || self.used.contains(u);
         let mut out = Vec::with_capacity(blocks.len() + 2);
@@ -166,7 +166,7 @@ impl SmartOut {
                 fx.items.retain(|i| self.keep_fx.contains(&i.id));
                 let fresh = !fx_placed && !self.new_fx.is_empty();
                 if fresh {
-                    fx.items.extend(self.new_fx.iter().cloned());
+                    fx.items.append(&mut self.new_fx);
                     fx_placed = true;
                 }
                 if fx.items.len() == before && !fresh {
@@ -179,18 +179,21 @@ impl SmartOut {
             }
         }
         if !added && !self.add.is_empty() {
-            let data: Vec<u8> = self.add.iter().flat_map(crate::linked::encode_linked_file).collect();
+            let mut data = Vec::new();
+            for file in &self.add {
+                crate::linked::append_linked_file(file, &mut data);
+            }
             out.push((*b"8BIM", *b"lnk2", Arc::new(data)));
         }
-        for (sig, key, data) in self.linked_copies.values() {
-            if let Some((_, _, block)) = out.iter_mut().find(|(s, k, _)| s == sig && k == key) {
-                Arc::make_mut(block).extend_from_slice(data);
+        for (sig, key, data) in self.linked_copies.into_values() {
+            if let Some((_, _, block)) = out.iter_mut().find(|(s, k, _)| *s == sig && *k == key) {
+                Arc::make_mut(block).extend_from_slice(&data);
             } else {
-                out.push((*sig, *key, data.clone()));
+                out.push((sig, key, data));
             }
         }
         if !fx_placed && !self.new_fx.is_empty() {
-            let fx = photocraft_psd::filter_effects::FilterEffects { version: 3, items: self.new_fx.clone() };
+            let fx = photocraft_psd::filter_effects::FilterEffects { version: 3, items: self.new_fx };
             out.push((*b"8BIM", *b"FEid", Arc::new(padded_fx(&fx))));
             if !out.iter().any(|(_, k, _)| k == b"FMsk") {
                 // Filter mask overlay: RGB red at 50 %, Photoshop's default.

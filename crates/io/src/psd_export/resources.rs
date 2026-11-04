@@ -108,9 +108,32 @@ pub(crate) fn keep_imported_resource(doc: &Document, id: u16, data: &[u8]) -> bo
 /// A document-level (global) tagged block. Photoshop pads these to a multiple of 4, and readers
 /// such as psd-tools step to the next block that way: an even pad after `CAI ` (77 bytes)
 /// misaligned every block after it (#200).
-pub(crate) fn global_block(signature: [u8; 4], key: [u8; 4], data: &[u8]) -> TaggedBlock {
-    let mut tb = TaggedBlock::new(key, data.to_vec());
+pub(crate) fn global_block(signature: [u8; 4], key: [u8; 4], data: std::sync::Arc<Vec<u8>>) -> TaggedBlock {
+    let padding = (4 - data.len() % 4) % 4;
+    let mut tb = TaggedBlock::new(key, std::sync::Arc::unwrap_or_clone(data));
     tb.signature = signature;
-    tb.padding = Some(vec![0; (4 - data.len() % 4) % 4]);
+    tb.padding = Some(vec![0; padding]);
     tb
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    #[test]
+    fn global_blocks_move_unique_bytes_and_detach_shared_bytes() {
+        for len in 1..=4 {
+            let bytes = Arc::new(vec![37; len]);
+            let ptr = bytes.as_ptr();
+            let moved = global_block(*b"8B64", *b"TEST", bytes);
+            assert_eq!(moved.data.as_ptr(), ptr);
+            assert_eq!(moved.signature, *b"8B64");
+            assert_eq!(moved.padding, Some(vec![0; (4 - len % 4) % 4]));
+            let shared = Arc::new(moved.data);
+            let mut detached = global_block(*b"8BIM", *b"TEST", shared.clone());
+            detached.data[0] = 99;
+            assert_eq!(shared.as_slice(), vec![37; len]);
+        }
+    }
 }
