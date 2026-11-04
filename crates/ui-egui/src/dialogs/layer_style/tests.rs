@@ -78,17 +78,54 @@ fn a_drag_starts_from_the_offset_the_gradient_shows() {
 /// tool pans as usual: `gradient_layer_bounds` finds the dialog's layer, or nothing.
 #[test]
 fn the_gradient_drag_needs_its_layer() {
-    let s = session();
+    let mut s = session();
+    let empty = s.active().unwrap().active_layer.unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
     let id = s.active().unwrap().active_layer.unwrap();
+    s.execute("edit.fill", json!({"contents": "color", "color": "#ff0000"})).unwrap();
     let mut f = Map::new();
     f.insert("layer".into(), json!(id.0));
-    // An empty new layer has no size yet; the lookup is what matters here (`drag_gradient` keeps
-    // the bounds at 1 px or more).
-    assert_ne!(gradient_layer_bounds(&s, &f), None, "the dialog's layer");
+    assert_eq!(gradient_layer_bounds(&s, &f), Some([64.0, 64.0]), "the dialog's layer");
+    // An empty layer paints no gradient (review): nothing to move, the Hand tool pans.
+    f.insert("layer".into(), json!(empty.0));
+    assert_eq!(gradient_layer_bounds(&s, &f), None, "an empty layer");
     f.insert("layer".into(), json!(id.0 + 1000));
     assert_eq!(gradient_layer_bounds(&s, &f), None, "a layer that is gone");
     f.remove("layer");
     assert_eq!(gradient_layer_bounds(&s, &f), None, "a dialog without a layer");
+}
+
+/// Review: the selected instance changing under a held press, or a Gradient Overlay page chosen
+/// during a press that began on another page, moves that instance from its own offset by the
+/// pointer's travel from that moment, not from the press.
+#[test]
+fn the_drag_rebases_when_the_selected_effect_changes() {
+    let mut f = Map::new();
+    f.insert("selected".into(), json!("fx3"));
+    f.insert(
+        "effects".into(),
+        json!([
+            {"id": "fx1", "kind": "gradientOverlay", "on": true, "params": {}},
+            {"id": "fx2", "kind": "gradientOverlay", "on": true, "params": {"offset": [0.1, 0.1]}},
+            {"id": "fx3", "kind": "dropShadow", "on": true, "params": {}},
+        ]),
+    );
+    let offset = |f: &Map<String, Value>, id: &str| entry(f, id).unwrap()["params"].get("offset").cloned();
+    // The press began on the shadow page: nothing for the gradient, until its page is chosen.
+    drag_gradient(&mut f, true, [0.0, 0.0], [200.0, 100.0]);
+    drag_gradient(&mut f, false, [40.0, 0.0], [200.0, 100.0]);
+    f.insert("selected".into(), json!("fx1"));
+    drag_gradient(&mut f, false, [40.0, 0.0], [200.0, 100.0]);
+    assert_eq!(offset(&f, "fx1"), None, "nothing moved since the page was chosen");
+    drag_gradient(&mut f, false, [60.0, 0.0], [200.0, 100.0]);
+    assert_eq!(offset(&f, "fx1"), Some(json!([0.1, 0.0])), "20 px on from the switch");
+    // Another instance selected mid-press: it moves by the travel from here, from its own offset.
+    f.insert("selected".into(), json!("fx2"));
+    drag_gradient(&mut f, false, [60.0, 0.0], [200.0, 100.0]);
+    assert_eq!(offset(&f, "fx2"), Some(json!([0.1, 0.1])), "nothing moved yet");
+    drag_gradient(&mut f, false, [80.0, 20.0], [200.0, 100.0]);
+    assert_eq!(offset(&f, "fx2"), Some(json!([0.2, 0.3])));
+    assert_eq!(offset(&f, "fx1"), Some(json!([0.1, 0.0])), "the first one stays");
 }
 
 /// #10763: with a Gradient Overlay page selected, a drag on the image moves the gradient: its
