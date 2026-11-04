@@ -3064,7 +3064,6 @@ fn a_tiled_document_follows_navigator_and_status_bar_zoom() {
     }
 }
 
-
 /// #11276: a document floating in its own window zooms from the zoom typed into the status bar
 /// and into the Navigator, as a tabbed one does; the window doesn't keep or write back an older
 /// copy of the view.
@@ -3086,8 +3085,11 @@ fn a_floating_document_follows_navigator_and_status_bar_zoom() {
     assert_eq!(h.state().session.active_index(), Some(0), "the floating document is active");
     // The status bar's zoom field (bottom left) and the Navigator's.
     let fields = |h: &egui_kittest::Harness<'_, PhotocraftApp>| {
-        let mut f: Vec<egui::Rect> =
-            h.query_all_by_role(egui::accesskit::Role::SpinButton).filter(|n| n.accesskit_node().label().as_deref() == Some("Zoom")).map(|n| n.rect()).collect();
+        let mut f: Vec<egui::Rect> = h
+            .query_all_by_role(egui::accesskit::Role::SpinButton)
+            .filter(|n| n.accesskit_node().label().as_deref() == Some("Zoom"))
+            .map(|n| n.rect())
+            .collect();
         f.sort_by(|a, b| a.left().total_cmp(&b.left()));
         f
     };
