@@ -258,11 +258,11 @@ mod panel_defaults {
     }
 
     #[test]
-    fn selected_text_edits_leave_panel_defaults_and_other_characters_untouched() {
+    fn selected_text_edits_set_the_defaults_and_leave_other_characters_untouched() {
         let mut app = new_app();
         let ctx = egui::Context::default();
         super::super::apply(&mut app, &ctx, json!({"tracking": 80, "fauxBold": true}));
-        let defaults = app.ui.tool_options.type_style_defaults.clone();
+        let mut defaults = app.ui.tool_options.type_style_defaults.clone();
         let id = LayerId(app.run("type.create", json!({"text": "AéBC", "size": 24})).unwrap()["layer"].as_u64().unwrap());
         app.ui.text_edit = Some(crate::state::TextEdit {
             layer: id.0,
@@ -282,6 +282,9 @@ mod panel_defaults {
         assert_eq!(runs.iter().map(|r| (r.len, r.style.tracking)).collect::<Vec<_>>(), [(1, 0.0), (2, 15.0), (2, 0.0)]);
         assert!(photocraft_engine::type_extra_cmds::feature_on(&runs[1].style, "frac"));
         assert!(!photocraft_engine::type_extra_cmds::feature_on(&runs[0].style, "frac"));
+        // #9938: the selection's new settings are the next layer's too; the others are kept.
+        defaults.insert("tracking".into(), json!(15));
+        defaults.insert("features".into(), json!({"frac": true}));
         assert_eq!(app.ui.tool_options.type_style_defaults, defaults);
         app.run("edit.undo", json!({})).unwrap();
         assert_eq!(text(&app, id).char_runs().len(), 1, "selection edits keep their typing-session coalescing");

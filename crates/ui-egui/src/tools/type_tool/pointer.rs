@@ -339,7 +339,8 @@ pub fn pointer_up(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
             app.ui.status = e;
             app.ui.status_error = true;
         }
-        if o.type_aa != "sharp" {
+        // The engine creates Smooth type; the tool's method (Sharp unless changed) is the layer's (#9938).
+        if o.type_aa != photocraft_engine::type_extra_cmds::aa_name(photocraft_doc::text::AntiAlias::default()) {
             let _ = app.run("type.edit", json!({"layer": id, "antialias": o.type_aa, "coalesce": key}));
         }
         // A Type Mask's text is a hidden working layer: the canvas shows the mask overlay
