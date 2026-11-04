@@ -810,7 +810,8 @@ pub fn entry_enabled(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) 
     if menu.type_layer {
         return TYPE_LAYER_MENU.iter().flatten().any(|(_, id)| *id == command) && crate::menus::is_enabled(app, command);
     }
-    if menu.transform || !path_menu(menu.tool) {
+    // The view menu (Space's Hand over a path tool, #11271) keeps the View commands' own rules.
+    if menu.transform || menu.anchor.is_some() || !path_menu(menu.tool) {
         return crate::menus::is_enabled(app, command);
     }
     let Some(st) = app.session.active() else { return false };

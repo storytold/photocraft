@@ -659,7 +659,7 @@ fn agent_right_click_with_the_zoom_tool_opens_and_runs_the_view_menu() {
 /// tool; with ⌘ as well (the held Zoom) it is not.
 #[test]
 fn agent_space_right_click_opens_the_hand_view_menu() {
-    for tool in [crate::state::Tool::Move, crate::state::Tool::Brush, crate::state::Tool::RectMarquee] {
+    for tool in [crate::state::Tool::Move, crate::state::Tool::Brush, crate::state::Tool::RectMarquee, crate::state::Tool::Pen] {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         let ctx = egui::Context::default();
         app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
@@ -677,7 +677,33 @@ fn agent_space_right_click_opens_the_hand_view_menu() {
         app.ui.brush_picker = None;
         call(&mut app, &ctx, "ui.pointer", click(true, true));
         assert!(app.ui.canvas_tool_menu.as_ref().is_none_or(|m| m.anchor.is_none()), "{tool:?}: ⌘Space holds the Zoom, which has no menu");
+        app.ui.canvas_tool_menu = None;
+        app.ui.layer_menu = None;
+        app.ui.brush_picker = None;
+        // ⌥Space holds the Zoom too: no view menu, and not the Move tool's layer list.
+        let alt = json!({"space": true, "alt": true, "button": "secondary", "events": [{"kind":"down","x":8,"y":8},{"kind":"up","x":8,"y":8}]});
+        call(&mut app, &ctx, "ui.pointer", alt);
+        assert!(app.ui.canvas_tool_menu.as_ref().is_none_or(|m| m.anchor.is_none()), "{tool:?}: ⌥Space opens no view menu");
+        assert!(app.ui.layer_menu.is_none(), "{tool:?}: ⌥Space doesn't open the layer list");
     }
+}
+
+/// #11271: while type is edited Space types, so an agent's Space right-click stays the type
+/// edit menu, not the Hand's view menu.
+#[test]
+fn agent_space_right_click_while_typing_keeps_the_type_menu() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let ctx = egui::Context::default();
+    app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
+    app.sync_views();
+    app.ui.tool = crate::state::Tool::Type;
+    app.run("type.create", json!({"text": "Hello", "size": 12, "x": 4, "y": 20})).unwrap();
+    crate::menus::invoke(&mut app, &ctx, "type.editText", json!({})).unwrap();
+    assert!(app.ui.text_edit.is_some());
+    let click = json!({"space": true, "button": "secondary", "events": [{"kind":"down","x":8,"y":16},{"kind":"up","x":8,"y":16}]});
+    assert_eq!(call(&mut app, &ctx, "ui.pointer", click)["ok"], true);
+    let menu = app.ui.canvas_tool_menu.clone().expect("the type edit menu");
+    assert!(menu.anchor.is_none() && menu.text, "the type edit menu, not the view menu");
 }
 
 /// #6561: an agent's right-click on a pending crop opens the crop menu, as on the canvas.

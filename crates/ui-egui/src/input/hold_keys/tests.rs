@@ -1078,7 +1078,7 @@ fn a_one_frame_cmd_click_with_the_hand_tool_zooms() {
 /// Photoshop, not the held-over tool's menu; the tool comes back on release (#11271).
 #[test]
 fn space_right_click_opens_the_hand_view_menu() {
-    for tool in [Tool::Move, Tool::Brush, Tool::RectMarquee] {
+    for tool in [Tool::Move, Tool::Brush, Tool::RectMarquee, Tool::Pen] {
         let mut h = harness(tool);
         let p = screen(&h, 200.0, 150.0);
         h.event(Event::PointerMoved(p));

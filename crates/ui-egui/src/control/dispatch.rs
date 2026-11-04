@@ -1414,10 +1414,22 @@ fn secondary_menu_took(app: &mut PhotocraftApp, ctx: &egui::Context, g: &Pointer
     secondary_transform_or_crop_took(app, ctx, g, s) || secondary_canvas_menu_took(app, ctx, g, s)
 }
 
-/// The tool a gesture's right button belongs to: Space alone holds the Hand over the selected tool,
-/// as in the app (#11271); with ⌘ or ⌥ it is the Zoom, whose right button opens no menu.
+/// The tool a gesture's right button belongs to, as `hold_keys` decides it in the app (#11271):
+/// Space holds the Hand over the selected tool, ⌘Space or ⌥Space the Zoom (whose right button
+/// opens no view menu). Space types while text is edited, and repositions a crop frame, a pen
+/// drag or a shape, marquee or lasso being drawn: the selected tool keeps the button then.
 fn held_tool(app: &PhotocraftApp, g: &PointerGesture) -> Tool {
-    if g.space && !g.mods.command && !g.mods.alt { Tool::Hand } else { app.ui.tool }
+    let drawing = crate::crop_ui::active(app)
+        || app.ui.pen.as_ref().is_some_and(|pen| pen.dragging && !pen.curvature)
+        || app.drag.as_ref().is_some_and(|d| crate::hold_keys::repositions(d.tool))
+        || crate::type_transform::active(app);
+    if !g.space || app.ui.text_edit.is_some() || drawing {
+        app.ui.tool
+    } else if g.mods.command || g.mods.alt {
+        Tool::Zoom
+    } else {
+        Tool::Hand
+    }
 }
 
 fn secondary_transform_or_crop_took(app: &mut PhotocraftApp, ctx: &egui::Context, g: &PointerGesture, s: &PointerSample) -> bool {
@@ -1471,7 +1483,8 @@ fn secondary_canvas_menu_took(app: &mut PhotocraftApp, ctx: &egui::Context, g: &
         return true;
     }
     if crate::canvas_tool_menu::is_view_tool(held) {
-        if down {
+        // The selected Zoom or Hand, or the Hand Space holds: the held Zoom has no menu.
+        if down && (held == app.ui.tool || held == Tool::Hand) {
             crate::canvas_tool_menu::open_view(app, ctx, held, screen_point(app, x, y), [x, y]);
         }
         return true;
