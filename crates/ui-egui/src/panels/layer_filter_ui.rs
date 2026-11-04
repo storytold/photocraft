@@ -276,10 +276,7 @@ pub fn bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     }
                 }
             }
-            FilterBy::Name => {
-                let width = ui.available_width().max(48.0);
-                widgets::text_field(ui, ui.scope_id().with("layer-filter-name"), &mut app.ui.layer_filter_name, tl!("Search"), width, false);
-            }
+            FilterBy::Name => find::name_field(app, ui),
             FilterBy::Effect => effect::controls(app, ui),
             FilterBy::Mode => {
                 let modes: Vec<(BlendMode, &str)> = std::iter::once(BlendMode::PassThrough).chain(BlendMode::LAYER_MODES).map(|m| (m, m.label())).collect();
@@ -316,8 +313,11 @@ pub fn bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 }
 
 pub mod effect;
+pub mod find;
 
 #[cfg(test)]
 mod effect_tests;
+#[cfg(test)]
+mod find_tests;
 #[cfg(test)]
 mod tests;
