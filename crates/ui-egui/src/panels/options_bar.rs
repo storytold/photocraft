@@ -72,15 +72,11 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(10, 0)))
         .show(ui, |ui| {
             ui.style_mut().spacing.scroll = egui::style::ScrollStyle { bar_width: 4.0, ..egui::style::ScrollStyle::floating() };
-            let flip_size = 24.0;
             ui.with_layout(crate::direction::row(), |ui| {
                 let gap = ui.spacing().item_spacing.x;
-                let transforming = app.ui.transform.is_some();
-                // The tool icon stays fixed. Outside Free Transform, keep flips beside it;
-                // during Free Transform the flips live with the reference-point controls.
+                // The tool icon stays fixed. Tool actions belong in the scrollable options row.
                 let base_width = if t.pro { 26.0 + 9.0 + 26.0 + 10.0 + 9.0 + gap * 4.0 } else { 28.0 + 9.0 + gap };
-                let fixed_width = base_width + if transforming { 0.0 } else { flip_size * 2.0 + 9.0 + gap * 3.0 };
-                ui.allocate_ui_with_layout(vec2(fixed_width, ui.available_height()), crate::direction::row(), |ui| {
+                ui.allocate_ui_with_layout(vec2(base_width, ui.available_height()), crate::direction::row(), |ui| {
                     if t.pro {
                         crate::chrome_ui::home_button(app, ui);
                         widgets::vline(ui, 22.0);
@@ -108,10 +104,6 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         icons::paint(ui, r, "chevron-down", 10.0, t.text_faint);
                     }
                     widgets::vline(ui, 22.0);
-                    if !transforming {
-                        flip_buttons(app, ui, flip_size);
-                        widgets::vline(ui, 22.0);
-                    }
                 });
                 let options_width = (ui.available_width() - gap).max(0.0);
                 ui.allocate_ui_with_layout(vec2(options_width, ui.available_height()), egui::Layout::top_down(egui::Align::Min), |ui| {
@@ -167,12 +159,18 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                     || crate::frame_tool::options_bar(app, ui, tool)
                                     || crate::artboard_tool::options_bar(app, ui, tool)
                                 {
+                                    if supports_flip_in_options_bar(tool) {
+                                        flip_group(app, ui, gap);
+                                    }
                                     return;
                                 }
                                 let brush_before = app.session.tools.brush.clone();
                                 let mut brush = brush_before.clone();
                                 let b = &mut brush;
                                 tool_specific_options(app, ui, t, tool, b);
+                                if supports_flip_in_options_bar(tool) {
+                                    flip_group(app, ui, gap);
+                                }
                                 // Painting symmetry is independent of visual theme. Keep the options-bar
                                 // action available for Brush, Pencil and Eraser in every palette (#2659).
                                 if matches!(tool, Tool::Brush | Tool::Pencil | Tool::Eraser) {
@@ -188,7 +186,32 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         });
 }
 
-/// Keep selection and layer flips available for every tool, including an open Free Transform box.
+/// Flip actions belong in Move and pixel-selection tool options. Free Transform supplies its
+/// own action group regardless of the underlying tool.
+fn supports_flip_in_options_bar(tool: Tool) -> bool {
+    matches!(
+        tool,
+        Tool::Move
+            | Tool::RectMarquee
+            | Tool::EllipseMarquee
+            | Tool::SingleRowMarquee
+            | Tool::SingleColumnMarquee
+            | Tool::Lasso
+            | Tool::PolygonLasso
+            | Tool::MagneticLasso
+            | Tool::MagicWand
+            | Tool::QuickSelection
+            | Tool::ObjectSelection
+    )
+}
+
+fn flip_group(app: &mut PhotocraftApp, ui: &mut egui::Ui, gap: f32) {
+    // Align sets zero spacing for its icon strip. Restore the row spacing before this group.
+    ui.spacing_mut().item_spacing.x = gap;
+    widgets::vline(ui, 22.0);
+    flip_buttons(app, ui, 24.0);
+}
+
 /// Both buttons use the same commands as Edit › Transform and agent control.
 pub(crate) fn flip_buttons(app: &mut PhotocraftApp, ui: &mut egui::Ui, size: f32) {
     for (id, icon, label) in

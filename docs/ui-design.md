@@ -110,7 +110,8 @@ The app's top bar (`panels::title_bar`) starts with the brand mark (the app icon
 The toolbar scrolls its tool rows when two columns still exceed the available height. Foreground
 and background colours stay visible below those rows, together with the Quick Mask and Screen
 Mode controls in every theme. The options bar keeps Flip Horizontal and Flip Vertical buttons
-beside the tool icon for ordinary tools and near Cancel and Commit when Free Transform is open.
+after the Move tool's alignment controls and at the end of pixel-selection tool options; unrelated
+tools do not show them. During Free Transform they sit near Cancel and Commit.
 They use the Edit › Transform commands on the selected pixels or active
 layer, and turn an open Free Transform box in place. Long options rows scroll horizontally. Both scrollers bring newly focused
 controls into view and retain the existing tool actions and popups. At compact widths, Free

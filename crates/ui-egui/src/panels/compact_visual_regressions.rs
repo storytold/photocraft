@@ -33,11 +33,11 @@ fn toolbar_harness_sized(kind: theme::ThemeKind, scale: f32, height: f32) -> egu
 }
 
 #[test]
-fn flip_controls_remain_visible_in_a_narrow_options_bar() {
+fn move_flip_controls_follow_alignment_in_every_theme() {
     for kind in theme::ThemeKind::ALL {
         for direction in [crate::direction::Dir::Ltr, crate::direction::Dir::Rtl] {
             let _direction = crate::direction::direction_scope(direction);
-            let mut harness = egui_kittest::Harness::builder().with_size(vec2(320.0, 360.0)).build_ui_state(
+            let mut harness = egui_kittest::Harness::builder().with_size(vec2(1280.0, 360.0)).build_ui_state(
                 |ui, app: &mut PhotocraftApp| {
                     if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                         options_bar(app, ui);
@@ -47,15 +47,44 @@ fn flip_controls_remain_visible_in_a_narrow_options_bar() {
             );
             PhotocraftApp::setup_context(&harness.ctx, kind);
             harness.run_steps(2);
-            let tool = harness.get_by_label("Move Tool").rect();
+            let align = harness.get_by_label("Align and distribute").rect();
             for label in ["Flip Horizontal", "Flip Vertical"] {
                 let rect = harness.get_by_label(label).rect();
-                assert!(rect.left() >= 10.0 && rect.right() <= 310.0, "{kind:?} {direction:?}: {label} is outside the options bar's inner margin: {rect:?}");
-                let trailing = if direction == crate::direction::Dir::Rtl { rect.center().x < tool.center().x } else { rect.center().x > tool.center().x };
-                assert!(trailing, "{kind:?} {direction:?}: {label} should follow the tool options");
-                assert!((rect.center().x - tool.center().x).abs() < 130.0, "{kind:?} {direction:?}: {label} should stay beside the tool icon");
+                assert!(rect.left() >= 10.0 && rect.right() <= 1270.0, "{kind:?} {direction:?}: {label} is outside the options bar's inner margin: {rect:?}");
+                let trailing = if direction == crate::direction::Dir::Rtl { rect.center().x < align.center().x } else { rect.center().x > align.center().x };
+                assert!(trailing, "{kind:?} {direction:?}: {label} should follow Move alignment");
+                assert!((rect.center().x - align.center().x).abs() < 110.0, "{kind:?} {direction:?}: {label} should stay beside Move alignment");
             }
         }
+    }
+}
+
+#[test]
+fn narrow_move_options_scroll_to_flip_controls() {
+    for kind in theme::ThemeKind::ALL {
+        let mut harness = egui_kittest::Harness::builder().with_size(vec2(320.0, 360.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    options_bar(app, ui);
+                }
+            },
+            PhotocraftApp::new(photocraft_engine::Session::new(), Default::default()),
+        );
+        PhotocraftApp::setup_context(&harness.ctx, kind);
+        harness.run_steps(2);
+        for _ in 0..6 {
+            harness.event(egui::Event::PointerMoved(pos2(200.0, 20.0)));
+            harness.event(egui::Event::MouseWheel {
+                source: egui::MouseWheelSource::Unknown,
+                unit: egui::MouseWheelUnit::Point,
+                delta: vec2(-1500.0, 0.0),
+                modifiers: egui::Modifiers::NONE,
+                phase: egui::TouchPhase::Move,
+            });
+            harness.run_steps(1);
+        }
+        let rect = harness.get_by_label("Flip Vertical").rect();
+        assert!(rect.left() >= 10.0 && rect.right() <= 310.0, "{kind:?}: Move's last flip should scroll into view: {rect:?}");
     }
 }
 

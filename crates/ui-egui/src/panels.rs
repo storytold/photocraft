@@ -1367,6 +1367,36 @@ mod toolbar_tests {
         }
     }
 
+    #[test]
+    fn flip_controls_only_appear_for_move_and_pixel_selection_tools() {
+        for tool in [
+            Tool::Move,
+            Tool::RectMarquee,
+            Tool::EllipseMarquee,
+            Tool::SingleRowMarquee,
+            Tool::SingleColumnMarquee,
+            Tool::Lasso,
+            Tool::PolygonLasso,
+            Tool::MagneticLasso,
+            Tool::MagicWand,
+            Tool::QuickSelection,
+            Tool::ObjectSelection,
+        ] {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            app.ui.tool = tool;
+            let h = flip_harness_sized(app, crate::theme::ThemeKind::Studio, 1600.0);
+            assert!(h.query_by_label("Flip Horizontal").is_some(), "{tool:?} should offer a pixel or layer flip");
+            assert!(h.query_by_label("Flip Vertical").is_some(), "{tool:?} should offer a pixel or layer flip");
+        }
+        for tool in [Tool::Brush, Tool::Crop, Tool::Type, Tool::Zoom, Tool::Eyedropper, Tool::PathSelection, Tool::Artboard] {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            app.ui.tool = tool;
+            let h = flip_harness_sized(app, crate::theme::ThemeKind::Studio, 1600.0);
+            assert!(h.query_by_label("Flip Horizontal").is_none(), "{tool:?} should not offer a flip");
+            assert!(h.query_by_label("Flip Vertical").is_none(), "{tool:?} should not offer a flip");
+        }
+    }
+
     fn flip_harness(app: PhotocraftApp, kind: crate::theme::ThemeKind) -> egui_kittest::Harness<'static, PhotocraftApp> {
         flip_harness_sized(app, kind, 800.0)
     }
