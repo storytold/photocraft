@@ -31,6 +31,21 @@ fn same(shown: &Buffer, cold: &Buffer) {
     assert!(worst < 2e-5, "live partial redraw must match the full current render; largest channel error {worst}");
 }
 
+fn reference_colours(case: Case, shown: &Buffer, cold: &Buffer) {
+    if matches!(case, Case::Horizontal) {
+        // Literal independent oracle: endpoint widths704 ->842. The gradient corner -0.5
+        // cancels the pixel-centre +0.5, so RGB=(x-64)/width. No product gradient helper.
+        opaque_grey(shown, 256, 3.0 / 11.0);
+        opaque_grey(cold, 256, 96.0 / 421.0);
+        opaque_grey(shown, 600, 67.0 / 88.0);
+        opaque_grey(cold, 600, 268.0 / 421.0);
+    } else {
+        let expected = if matches!(case, Case::UnchangedFrame) { 3.0 / 11.0 } else { 0.5 };
+        opaque_grey(shown, 256, expected);
+        opaque_grey(cold, 256, expected);
+    }
+}
+
 fn run(case: Case) {
     let mut s = Session::new();
     s.execute("file.new", json!({"width":1024,"height":64,"mode":"rgb","depth":32,"background":"white"})).unwrap();
@@ -80,18 +95,7 @@ fn run(case: Case) {
     assert_eq!(reach, if matches!(case, Case::NoOverlay) { 0 } else { 2 });
     let damage = raw.inflate(reach);
     let cold = render(&live.doc, live.doc.bounds());
-    if matches!(case, Case::Horizontal) {
-        // Literal independent oracle: endpoint widths704 ->842. The gradient corner -0.5
-        // cancels the pixel-centre +0.5, so RGB=(x-64)/width. No product gradient helper.
-        opaque_grey(&shown, 256, 3.0 / 11.0);
-        opaque_grey(&cold, 256, 96.0 / 421.0);
-        opaque_grey(&shown, 600, 67.0 / 88.0);
-        opaque_grey(&cold, 600, 268.0 / 421.0);
-    } else {
-        let expected = if matches!(case, Case::UnchangedFrame) { 3.0 / 11.0 } else { 0.5 };
-        opaque_grey(&shown, 256, expected);
-        opaque_grey(&cold, 256, expected);
-    }
+    reference_colours(case, &shown, &cold);
     // Existing same-size CPU texture update: render only the reported live damage plus
     // effect reach, then retain every other pixel from the previous displayed frame.
     let patch = render_reduced_damage(&live.doc, 1024, 64, damage);
