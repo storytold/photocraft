@@ -534,6 +534,39 @@ fn a_value_dialog_opens_on_its_first_number_selected_and_remembers_it() {
     assert_eq!(radius(&h), Some(5.0), "a cancelled 9 is not remembered");
 }
 
+#[test]
+fn plugin_enter_commits_the_number_and_focus_switch_keeps_dialog_open() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = dialog_harness(egui::vec2(1280.0, 800.0), "filter.blur.gaussianBlur");
+    let d = h.state_mut().ui.dialogs.last_mut().unwrap();
+    d.fields.insert("__command".into(), json!("plugin.run"));
+    d.fields.insert("__spec".into(), json!(r#"{"fine":0..100=45}"#));
+    d.fields.insert("fine".into(), json!(45));
+    d.fields.insert("__preview".into(), json!(false));
+    // Reopen so first-field focus targets the plugin number.
+    let fields = d.fields.clone();
+    h.state_mut().ui.dialogs.clear();
+    h.state_mut().ui.open_dialog(DialogKind::Command, fields);
+    h.run_steps(4);
+    assert!(h.get_by_role(egui::accesskit::Role::SpinButton).is_focused());
+    let revision = h.state().session.active().unwrap().revision;
+    h.event(egui::Event::Text("72".into()));
+    h.run_steps(1);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert_eq!(h.state().ui.dialogs.len(), 1, "Enter must not submit plugin.run");
+    assert_eq!(h.state().ui.dialogs[0].fields.get("fine"), Some(&json!(72.0)));
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+    assert_eq!(h.state().ui.dialogs.len(), 1, "another Enter must not implicitly apply the filter");
+    h.event(egui::Event::WindowFocused(false));
+    h.run_steps(2);
+    h.event(egui::Event::WindowFocused(true));
+    h.run_steps(2);
+    assert_eq!(h.state().ui.dialogs.len(), 1);
+    assert_eq!(h.state().session.active().unwrap().revision, revision);
+}
+
 /// #4673: File › Automate › Fit Image holds two numbers and a check box, so its window is as
 /// wide as that content and its buttons, not the 380-point floor of the larger dialogs.
 #[test]

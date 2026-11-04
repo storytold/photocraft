@@ -286,21 +286,7 @@ impl GpuTimer {
     fn value(&self, count: u32, px: u64) -> Option<GpuTiming> {
         let bytes = u64::from(count) * 8;
         let view = self.read.slice(0..bytes).get_mapped_range().ok()?;
-        let mut ticks = 0u64;
-        for pair in view.as_chunks::<16>().0 {
-            let (a, b) = pair.split_at(8);
-            let start = u64::from_le_bytes(a.try_into().ok()?);
-            let end = u64::from_le_bytes(b.try_into().ok()?);
-            // A driver that reset or wrapped its timer gives an end before its start: the whole
-            // measurement is then unusable, and no number is better than a wrong one.
-            if end < start {
-                return None;
-            }
-            ticks += end - start;
-        }
-        drop(view);
-        let ms = ticks as f64 * f64::from(self.period_ns) / 1.0e6;
-        (ms.is_finite() && ms < SANE_MS).then_some(GpuTiming { ms, px, spans: count / 2 })
+        span_value(&view, self.period_ns, px)
     }
 
     /// Write one timestamp, noting an overflow instead of wrapping round the query set.
@@ -311,5 +297,47 @@ impl GpuTimer {
         }
         encoder.write_timestamp(&self.set, self.written);
         self.written += 1;
+    }
+}
+
+/// Sum actual timestamp pairs; driver/queue waits are not execution-time oracles.
+fn span_value(bytes: &[u8], period_ns: f32, px: u64) -> Option<GpuTiming> {
+    let (pairs, remainder) = bytes.as_chunks::<16>();
+    if pairs.is_empty() || pairs.len() > SPANS as usize || !remainder.is_empty() || !period_ns.is_finite() || period_ns <= 0.0 {
+        return None;
+    }
+    let mut ticks = 0u64;
+    for pair in pairs {
+        let (a, b) = pair.split_at(8);
+        let start = u64::from_le_bytes(a.try_into().ok()?);
+        let end = u64::from_le_bytes(b.try_into().ok()?);
+        ticks = ticks.checked_add(end.checked_sub(start)?)?;
+    }
+    let ms = ticks as f64 * f64::from(period_ns) / 1.0e6;
+    (ms.is_finite() && ms < SANE_MS).then_some(GpuTiming { ms, px, spans: pairs.len() as u32 })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sums_every_span_without_counting_the_gap_between_submissions() {
+        // 1 ms + 3 ms, separated by a 99 ms driver/encoding gap. Returning only the
+        // last pair (3 ms) or the first-to-last interval (103 ms) must both fail.
+        let bytes: Vec<u8> = [0u64, 1_000_000, 100_000_000, 103_000_000].into_iter().flat_map(u64::to_le_bytes).collect();
+        assert_eq!(span_value(&bytes, 1.0, 6000000), Some(GpuTiming { ms: 4.0, px: 6000000, spans: 2 }));
+        assert_eq!(span_value(&bytes, 2.0, 9), Some(GpuTiming { ms: 8.0, px: 9, spans: 2 }));
+    }
+
+    #[test]
+    fn invalid_or_overflowed_timestamps_are_not_reported() {
+        let bytes: Vec<u8> = [2u64, 1].into_iter().flat_map(u64::to_le_bytes).collect();
+        assert_eq!(span_value(&bytes, 1.0, 1), None);
+        assert_eq!(span_value(&bytes[..15], 1.0, 1), None);
+        assert_eq!(span_value(&[], 1.0, 1), None);
+        let bytes: Vec<u8> = [0u64, u64::MAX, 0, u64::MAX].into_iter().flat_map(u64::to_le_bytes).collect();
+        assert_eq!(span_value(&bytes, 1.0, 1), None);
+        assert_eq!(span_value(&[0; 16], f32::NAN, 1), None);
     }
 }
