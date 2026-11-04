@@ -1,5 +1,5 @@
-//! A bounding box with eight handles over several selected shape layers, as in Photoshop: with
-//! Path Selection or a shape tool (Rectangle, Ellipse, Triangle, Polygon, Line) active and two or
+//! A bounding box with eight handles over the selected shape layers, as in Photoshop: with
+//! Path Selection or a shape tool (Rectangle, Ellipse, Triangle, Polygon, Line) active and one or
 //! more shape layers selected, the union of their path bounds shows as a box. Dragging a handle
 //! previews the scaled outlines and, on release, scales every selected shape about the opposite
 //! handle with one `edit.transform` (which keeps live shapes live), as one History step named
@@ -44,12 +44,12 @@ fn shows(app: &PhotocraftApp) -> bool {
         && matches!(app.ui.tool, Tool::PathSelection | Tool::Rectangle | Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::Line)
 }
 
-/// The selected shape layers and the box round their paths. `None` unless two or more layers are
-/// selected and all are shape layers (one shape keeps its own widgets).
+/// The selected shape layers and the box round their paths. `None` unless at least one layer is
+/// selected and all are shape layers.
 fn selection(app: &PhotocraftApp) -> Option<(Vec<u64>, [f64; 4])> {
     let st = app.session.active()?;
     let ids = st.selected_layers();
-    if ids.len() < 2 {
+    if ids.is_empty() {
         return None;
     }
     let mut layers = Vec::with_capacity(ids.len());

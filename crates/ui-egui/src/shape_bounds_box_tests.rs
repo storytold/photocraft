@@ -89,17 +89,19 @@ fn a_click_without_movement_changes_nothing() {
 }
 
 #[test]
-fn the_box_needs_two_shapes_and_a_path_or_shape_tool() {
-    // One selected shape keeps its own widgets: no box, no drag.
-    let (mut app, a, _) = app_with_two_shapes(Tool::PathSelection);
+fn one_selected_shape_gets_the_box_and_other_tools_none() {
+    // Photoshop shows the box for a single shape too: its corner handle scales that shape.
+    let (mut app, a, b) = app_with_two_shapes(Tool::PathSelection);
     app.run("layer.select", json!({"layer": a})).unwrap();
-    assert!(crate::shape_bounds_box::cursor(&app, [403.0, 301.0]).is_none());
-    tool_event(&mut app, ToolEvent::Down { x: 403.0, y: 301.0, pressure: 1.0 }, NONE);
-    assert!(app.ui.shape_box.is_none());
-    tool_event(&mut app, ToolEvent::Up { x: 403.0, y: 301.0 }, NONE);
-    near(bounds(&app, a), [100.0, 98.0, 403.0, 301.0]);
+    assert_eq!(crate::shape_bounds_box::cursor(&app, [403.0, 301.0]), Some(egui::CursorIcon::ResizeNwSe));
+    assert!(crate::shape_bounds_box::cursor(&app, [723.0, 451.0]).is_none(), "the other shape's corner is not a handle");
+    drag(&mut app, [403.0, 301.0], [303.0, 241.0]);
+    let s = 1.0 + (-100.0 * 303.0 + -60.0 * 203.0) / (303.0f64 * 303.0 + 203.0 * 203.0);
+    near(bounds(&app, a), [100.0, 98.0, 100.0 + 303.0 * s, 98.0 + 203.0 * s]);
+    near(bounds(&app, b), [420.0, 318.0, 723.0, 451.0]);
+    assert_eq!(app.session.active().unwrap().history.entries().last().map(String::as_str), Some("Transform Path"));
 
-    // Another tool has none either.
+    // Another tool has none.
     let (mut app, ..) = app_with_two_shapes(Tool::Move);
     assert!(crate::shape_bounds_box::cursor(&app, [723.0, 451.0]).is_none());
     app.ui.tool = Tool::Brush;
