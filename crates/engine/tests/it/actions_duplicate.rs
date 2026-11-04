@@ -76,7 +76,7 @@ fn action_count_admission_reserves_the_metadata_carrier_before_publication() {
         for operation in ["action", "set", "editor"] {
             let mut s = Session::new();
             let capacity = photocraft_psd::atn::MAX_TOTAL_ACTIONS - usize::from(metadata);
-            s.actions.list = (0..capacity - 1).map(|index| Action::new(&format!("Action {index}"), vec![])).collect();
+            s.actions.list = (0..capacity - 1).map(|index| Action::new(format!("Action {index}"), vec![])).collect();
             s.actions.list[0].set = Some("Source".into());
             if metadata {
                 s.actions.list[0].description = "Requires the hidden metadata action".into();

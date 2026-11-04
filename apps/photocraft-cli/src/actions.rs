@@ -33,6 +33,8 @@ pub enum ActionsError {
     Atn { path: PathBuf, message: String },
     #[error("no action named `{name}` in the set `{set}` (it holds {})", quoted(names))]
     NoSuchAtnAction { name: String, set: String, names: Vec<String> },
+    #[error("action name `{name}` is ambiguous across sets ({}); choose a unique action name", quoted(sets))]
+    AmbiguousAtnAction { name: String, sets: Vec<String> },
     #[error("{}: the set holds no actions", path.display())]
     EmptyAtn { path: PathBuf },
     #[error("the set `{set}` holds {} actions: pick one with --action <name> ({})", names.len(), quoted(names))]
@@ -73,7 +75,11 @@ pub fn load_actions(text: &str, name: Option<&str>) -> Result<(Steps, Vec<Action
     if name.is_some() {
         return Err(ActionsError::NotASet);
     }
-    Ok((steps_of(&v)?, Vec::new()))
+    let called = match v.get("calledActions") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(called) => serde_json::from_value(called.clone()).map_err(ActionsError::Set)?,
+    };
+    Ok((steps_of(&v)?, called))
 }
 
 /// [`load_actions`] for a file on disk: a Photoshop Actions file (`.atn`, by extension or by
@@ -105,11 +111,19 @@ pub fn load_actions_file(path: &Path, name: Option<&str>) -> Result<(Steps, Vec<
     }
     let imp = photocraft_engine::atn_cmds::import(&bytes).map_err(|message| ActionsError::Atn { path: path.to_path_buf(), message })?;
     let action = match (name, imp.actions.as_slice()) {
-        (Some(n), _) => imp.actions.iter().find(|a| a.name == n).ok_or_else(|| ActionsError::NoSuchAtnAction {
-            name: n.to_owned(),
-            set: imp.set.clone(),
-            names: names(&imp.actions),
-        })?,
+        (Some(n), _) => {
+            let matched: Vec<_> = imp.actions.iter().filter(|action| action.name == n).collect();
+            match matched.as_slice() {
+                [only] => *only,
+                [] => return Err(ActionsError::NoSuchAtnAction { name: n.to_owned(), set: imp.set.clone(), names: names(&imp.actions) }),
+                _ => {
+                    return Err(ActionsError::AmbiguousAtnAction {
+                        name: n.to_owned(),
+                        sets: matched.iter().map(|action| action.set.clone().unwrap_or_else(|| imp.set.clone())).collect(),
+                    });
+                }
+            }
+        }
         (None, [only]) => only,
         (None, []) => return Err(ActionsError::EmptyAtn { path: path.to_path_buf() }),
         (None, _) => return Err(ActionsError::PickOneAtn { set: imp.set.clone(), names: names(&imp.actions) }),

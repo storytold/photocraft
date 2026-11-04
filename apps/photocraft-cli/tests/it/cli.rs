@@ -1737,6 +1737,87 @@ fn tiff_options_choose_compression_transparency_and_pyramid() {
     }
 }
 
+/// A generated droplet remains standalone when its top-level step calls a saved action.
+#[test]
+fn batch_loads_generated_droplet_called_actions_and_rejects_malformed_dependencies() {
+    use photocraft_engine::{Session, actions_cmds::Action};
+    let d = tmp("droplet-called-actions");
+    let input_dir = d.join("in");
+    std::fs::create_dir(&input_dir).unwrap();
+    let input = input_dir.join("input.png");
+    write_png(&input, 4, 3, 17);
+    let droplet = d.join("nested.pcdroplet");
+    let output = d.join("out");
+    let mut session = Session::new();
+    session.actions.list.push(Action::new("Invert", vec![("image.adjustments.invert".into(), json!({}))]));
+    session.execute("file.automate.createDroplet", json!({"path":droplet,"steps":[["actions.play",{"action":"Invert"}]],"shim":false})).unwrap();
+    let (steps, called, warnings) = photocraft_cli::load_actions_file(&droplet, None).unwrap();
+    assert_eq!(steps[0].0, "actions.play");
+    assert_eq!(called.len(), 1);
+    assert_eq!(called[0].name, "Invert");
+    assert!(warnings.is_empty());
+    let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+    let args = ["batch".as_ref(), "--in".as_ref(), input_dir.as_os_str(), "--out".as_ref(), output.as_os_str(), "--actions".as_ref(), droplet.as_os_str()];
+    assert_eq!(photocraft_cli::run(args, &mut stdout, &mut stderr), 0, "{}", String::from_utf8_lossy(&stderr));
+    assert!(output.join("input.png").exists());
+    let mut value: serde_json::Value = serde_json::from_slice(&std::fs::read(&droplet).unwrap()).unwrap();
+    value["calledActions"] = json!({"not":"an action list"});
+    std::fs::write(&droplet, serde_json::to_vec(&value).unwrap()).unwrap();
+    assert!(photocraft_cli::load_actions_file(&droplet, None).is_err());
+    value.as_object_mut().unwrap().remove("calledActions");
+    value["action"]["steps"] = json!([["image.adjustments.invert", {}]]);
+    let (_, called) = photocraft_cli::load_actions(&value.to_string(), None).unwrap();
+    assert!(called.is_empty(), "legacy droplets with no dependency table still load");
+}
+
+/// Explicit names must select exactly one action before Batch creates any output.
+#[test]
+fn batch_rejects_ambiguous_atn_action_names_and_keeps_unique_selection() {
+    use photocraft_psd::{
+        atn::{self, AtnAction, AtnFile},
+        descriptor::UnicodeString,
+    };
+    let d = tmp("ambiguous-atn-action");
+    let file = d.join("sets.atn");
+    let files = [
+        AtnFile {
+            name: UnicodeString::new_nul("Group A"),
+            actions: vec![
+                AtnAction { name: UnicodeString::new_nul("Resize"), ..Default::default() },
+                AtnAction { name: UnicodeString::new_nul("Only"), ..Default::default() },
+            ],
+            ..Default::default()
+        },
+        AtnFile {
+            name: UnicodeString::new_nul("Group B"),
+            actions: vec![AtnAction { name: UnicodeString::new_nul("Resize"), ..Default::default() }],
+            ..Default::default()
+        },
+    ];
+    std::fs::write(&file, atn::write_sets(&files).unwrap()).unwrap();
+    let error = photocraft_cli::load_actions_file(&file, Some("Resize")).unwrap_err().to_string();
+    assert!(error.contains("ambiguous") && error.contains("Group A") && error.contains("Group B"), "{error}");
+    let (steps, actions, _) = photocraft_cli::load_actions_file(&file, Some("Only")).unwrap();
+    assert_eq!(steps, [("actions.play".into(), json!({"action":"Only"}))]);
+    assert_eq!(actions.len(), 3);
+    let output = d.join("out");
+    let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+    let args = [
+        "batch".as_ref(),
+        "--in".as_ref(),
+        d.as_os_str(),
+        "--out".as_ref(),
+        output.as_os_str(),
+        "--actions".as_ref(),
+        file.as_os_str(),
+        "--action".as_ref(),
+        "Resize".as_ref(),
+    ];
+    assert_eq!(photocraft_cli::run(args, &mut stdout, &mut stderr), 1);
+    assert!(String::from_utf8_lossy(&stderr).contains("ambiguous"));
+    assert!(!output.exists());
+}
+
 #[test]
 fn batch_rejects_a_legacy_json_library_before_creating_output() {
     let d = tmp("legacy-action-library-rejected");

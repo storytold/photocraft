@@ -39,6 +39,44 @@ fn open(s: &mut Session, params: Value) -> u64 {
     s.execute("actions.editor.open", params).unwrap()["draft"].as_u64().unwrap()
 }
 
+/// All library-play entry points reject the edited row before suspending its draft capture.
+#[test]
+fn recorded_self_calls_use_definition_identity_before_any_playback_effect() {
+    for route in ["engine", "shell", "incremental"] {
+        for target in [json!("Original"), json!(0)] {
+            let (mut s, store) = session();
+            s.actions.list[0].steps.push(("layer.new.layer".into(), json!({"name":"Must not execute"})));
+            let draft = open(&mut s, json!({"action":0}));
+            editor(&mut s, "update", draft, json!({"name":"Renamed"})).unwrap();
+            editor(&mut s, "record", draft, json!({})).unwrap();
+            let actions = s.actions.clone();
+            let layers = s.active().unwrap().doc.layers.len();
+            let journal = s.journal.len();
+            let bytes = store.read(ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap();
+            let params = json!({"action":target});
+            let result = match route {
+                "engine" => s.execute("actions.play", params).map(|_| ()),
+                "shell" => photocraft_engine::actions_cmds::playback::library(&mut s, &params).map(|_| ()),
+                _ => photocraft_engine::actions_cmds::playback::Owner::library(&mut s, &params).map(|_| ()),
+            };
+            assert!(result.unwrap_err().to_string().contains("recursive action call"), "{route}");
+            assert_eq!(s.actions, actions);
+            assert_eq!(s.active().unwrap().doc.layers.len(), layers);
+            assert_eq!(s.journal.len(), journal);
+            assert_eq!(store.read(ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap(), bytes);
+        }
+    }
+    // The first namesake is a distinct definition when this draft edits the second row.
+    let (mut s, _) = session();
+    s.actions.list.insert(1, s.actions.list[0].clone());
+    let draft = open(&mut s, json!({"action":1}));
+    editor(&mut s, "record", draft, json!({})).unwrap();
+    s.execute("actions.play", json!({"action":0})).unwrap();
+    editor(&mut s, "stop", draft, json!({})).unwrap();
+    editor(&mut s, "save", draft, json!({})).unwrap();
+    assert_eq!(s.actions.list[1].steps.last().unwrap(), &("actions.play".into(), json!({"action":"Original"})));
+}
+
 /// An encoder refusal retains the dirty capture and both in-memory and stored definitions.
 #[test]
 fn save_rejects_unencodable_metadata_before_ending_capture_or_publishing() {

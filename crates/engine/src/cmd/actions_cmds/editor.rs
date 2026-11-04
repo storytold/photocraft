@@ -36,6 +36,12 @@ impl Draft {
     }
 }
 
+/// A recorded library call may not target the definition being edited.
+/// Compare the resolved row, so a different same-name occurrence remains callable.
+pub(super) fn recording_into(s: &Session, index: usize) -> bool {
+    s.actions.editor.as_ref().is_some_and(|draft| draft.recording.is_some() && draft.source == Some(index))
+}
+
 /// Only action bindings participate in the editor's shortcut stale guard.
 fn action_keys<T: Clone>(keys: &BTreeMap<String, T>) -> BTreeMap<String, T> {
     keys.iter().filter(|(key, _)| key.starts_with(super::PLAY_SHORTCUT_PREFIX)).map(|(key, value)| (key.clone(), value.clone())).collect()

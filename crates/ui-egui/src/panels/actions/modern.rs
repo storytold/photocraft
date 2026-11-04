@@ -1,5 +1,8 @@
 //! Modern Actions list and runtime editor integration. Definitions remain engine commands.
-use super::*;
+use super::{
+    Action, Frame, Gate, NEW_SET, PausedPlayback, PhotocraftApp, RESUME, Rect, Sense, Source, Tokens, Value, abandoned, actions_cmds, editor, editor_glyphs,
+    icons, json, load_dialog, paused_token, run_with_parents, set_label, suspended, vec2, waiting_dialog,
+};
 use crate::state::{ActionsLayout, ActionsListSize};
 use std::sync::Arc;
 
@@ -33,7 +36,7 @@ struct Progress {
 }
 
 enum Delete {
-    Action(Action),
+    Action(Box<Action>),
     Group(String, Vec<Action>, u64),
 }
 
@@ -293,7 +296,7 @@ enum Operation {
     Duplicate(Value),
     DeleteAction(usize),
     DeleteGroup(String),
-    Assign(DragAction, String),
+    Assign(Box<DragAction>, String),
     NewGroup,
 }
 
@@ -365,10 +368,8 @@ fn action_row(app: &mut PhotocraftApp, ui: &mut egui::Ui, index: usize, action: 
         if name.drag_started() {
             name.dnd_set_drag_payload(DragAction { index, source: action.clone() });
         }
-        if hovered || app.ui.actions.selected == Some(index) {
-            if icons::button(ui, "settings", 24.0, false, tl!("Edit action")).clicked() {
-                operation = Some(Operation::Edit(index));
-            }
+        if (hovered || app.ui.actions.selected == Some(index)) && icons::button(ui, "settings", 24.0, false, tl!("Edit action")).clicked() {
+            operation = Some(Operation::Edit(index));
         }
         let menu = icons::button(ui, "ellipsis", 24.0, false, tl!("Actions"));
         egui::Popup::menu(&menu).show(|ui| {
@@ -462,7 +463,7 @@ pub(super) fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 });
             });
             if let Some(drag) = header.response.dnd_release_payload::<DragAction>() {
-                operation = Some(Operation::Assign((*drag).clone(), group.clone()));
+                operation = Some(Operation::Assign(Box::new((*drag).clone()), group.clone()));
             }
             header.response.context_menu(|ui| {
                 operation = context(ui, None, Some(group), members.clone()).or(operation.take());
@@ -499,7 +500,7 @@ pub(super) fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 });
             });
             if let Some(drag) = header.response.dnd_release_payload::<DragAction>() {
-                operation = Some(Operation::Assign((*drag).clone(), photocraft_engine::atn_cmds::UNGROUPED_SET.to_string()));
+                operation = Some(Operation::Assign(Box::new((*drag).clone()), photocraft_engine::atn_cmds::UNGROUPED_SET.to_string()));
             }
         }
         if list.is_empty() {
@@ -819,7 +820,7 @@ fn ask_delete(app: &mut PhotocraftApp, index: Option<usize>, group: Option<Strin
         None => {
             let action = index.and_then(|index| app.session.actions.list.get(index)).cloned().ok_or("The selected action no longer exists")?;
             let message = crate::i18n::fmt(tl!("Delete the action \"{name}\"?"), &[("name", &action.name)]);
-            (Delete::Action(action), message)
+            (Delete::Action(Box::new(action)), message)
         }
     };
     let fields = json!({"__label":"Delete action","message":message});
@@ -848,7 +849,7 @@ pub(crate) fn delete_confirm(app: &mut PhotocraftApp, fields: &serde_json::Map<S
     }
     let params = match target {
         Delete::Action(action) => {
-            let mut matches = app.session.actions.list.iter().enumerate().filter(|(_, current)| *current == &action).map(|(index, _)| index);
+            let mut matches = app.session.actions.list.iter().enumerate().filter(|(_, current)| *current == action.as_ref()).map(|(index, _)| index);
             let index = matches.next().ok_or("The selected action changed; select it again")?;
             if matches.next().is_some() {
                 return Err("The selected action is ambiguous".into());

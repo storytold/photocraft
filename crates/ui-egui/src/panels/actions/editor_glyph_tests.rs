@@ -1,7 +1,6 @@
 //! Source contract tests; no rasterization or app launch.
 
-#[path = "editor_glyphs.rs"]
-mod glyphs;
+use crate::actions::editor_glyphs as glyphs;
 
 use craft_ui::icons::{SvgIconSet, SvgStyle};
 

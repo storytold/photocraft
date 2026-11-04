@@ -204,11 +204,11 @@ impl Page {
         let result = app.run(&format!("actions.editor.{verb}"), Value::Object(params));
         match result {
             Ok(view) => {
-                if verb != "discard" {
-                    if let Err(error) = self.accept(&view) {
-                        self.error = Some(error.clone());
-                        return Err(error);
-                    }
+                if verb != "discard"
+                    && let Err(error) = self.accept(&view)
+                {
+                    self.error = Some(error.clone());
+                    return Err(error);
                 }
                 if verb != "get" {
                     self.error = None;
@@ -467,7 +467,7 @@ impl Page {
         };
         let mut shortcut_changed = false;
         ui.horizontal(|ui| {
-            egui::ComboBox::from_id_salt("action-editor-fn").selected_text(label).show_ui(ui, |ui| {
+            craft_ui::ComboBox::from_id_salt("action-editor-fn").selected_text(label).show_ui(ui, |ui| {
                 for number in 0..=15 {
                     let label = if number == 0 { tl!("None").to_string() } else { format!("F{number}") };
                     shortcut_changed |= ui.selectable_value(&mut chosen, number, label).changed();
@@ -483,10 +483,9 @@ impl Page {
         }
         if (name_edit.lost_focus() || description_edit.lost_focus() || shortcut_changed)
             && (self.name.dirty() || self.description.dirty() || self.shortcut.dirty())
+            && let Ok(view) = self.stage(app)
         {
-            if let Ok(view) = self.stage(app) {
-                latest = Some(view);
-            }
+            latest = Some(view);
         }
         latest
     }
@@ -809,7 +808,7 @@ fn field(ui: &mut egui::Ui, param: &filter_dialog::Param, values: &mut Map<Strin
                     .or_else(|| default.clone())
                     .or_else(|| options.first().cloned())
                     .unwrap_or_default();
-                egui::ComboBox::from_id_salt(&param.key).selected_text(&value).show_ui(ui, |ui| {
+                craft_ui::ComboBox::from_id_salt(&param.key).selected_text(&value).show_ui(ui, |ui| {
                     for option in options {
                         if ui.selectable_value(&mut value, option.clone(), tl!(option)).changed() {
                             update = Some(json!(value));

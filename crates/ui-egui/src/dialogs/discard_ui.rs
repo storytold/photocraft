@@ -125,7 +125,10 @@ pub fn guard_window_close(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if !ctx.input(|i| i.viewport().close_requested()) {
         return;
     }
-    if crate::actions::guard_exit(app, ctx) {
+    if app.window_lost {
+        // The lost device cannot draw an Actions leave prompt. Release its capture before exit.
+        crate::actions::shutdown(app);
+    } else if crate::actions::guard_exit(app, ctx) {
         return;
     }
     if !app.allow_close && intercept(app, EXIT, &Value::Null) {

@@ -107,7 +107,7 @@ fn six_by_five_icon_grid_returns_the_measured_identifier_for_each_button() {
         ("AdjustmentGeneral", "Adjustments"),
         ("HueAndSat", "Hue and saturation"),
         ("ActionsExposure", "Exposure"),
-        ("ColorLookUpTables", "Colour lookup tables"),
+        ("ColorLookUpTables", "Color lookup tables"),
         ("BlackAndWhite", "Black and white"),
         ("SmartRemove", "Smart removal"),
         ("ActionsDodge", "Dodge"),
@@ -119,7 +119,7 @@ fn six_by_five_icon_grid_returns_the_measured_identifier_for_each_button() {
         ("ObjectSelectionLasso", "Object selection"),
         ("MagicWand", "Magic wand"),
         ("AIGenerate", "Generate"),
-        ("TextColor", "Text colour"),
+        ("TextColor", "Text color"),
         ("ActionsText", "Text"),
         ("ActionsDownload", "Download"),
         ("ActionsLayers", "Layers"),
@@ -159,7 +159,7 @@ fn two_by_six_colour_grid_keeps_classic_blue_and_new_blue_distinct() {
         ("magenta", "Magenta"),
         ("purple", "Purple"),
         ("violet", "Lavender"),
-        ("gray", "Grey"),
+        ("gray", "Gray"),
     ];
     let mut h = harness(UNKNOWN_ICON, UNKNOWN_COLOR);
     open(&mut h);

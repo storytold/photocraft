@@ -23,7 +23,7 @@ const GLYPH_LABELS: [&str; 30] = [
     "Adjustments",
     "Hue and saturation",
     "Exposure",
-    "Colour lookup tables",
+    "Color lookup tables",
     "Black and white",
     "Smart removal",
     "Dodge",
@@ -35,7 +35,7 @@ const GLYPH_LABELS: [&str; 30] = [
     "Object selection",
     "Magic wand",
     "Generate",
-    "Text colour",
+    "Text color",
     "Text",
     "Download",
     "Layers",
@@ -62,7 +62,7 @@ const COLOR_GRID: [(&str, &str); 12] = [
     ("magenta", "Magenta"),
     ("purple", "Purple"),
     ("violet", "Lavender"),
-    ("gray", "Grey"),
+    ("gray", "Gray"),
 ];
 
 fn thumbnail_style(color: &str, swatches: &[Color32; 12], tokens: &Tokens) -> (Color32, Color32) {

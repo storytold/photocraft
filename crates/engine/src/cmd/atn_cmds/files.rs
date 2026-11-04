@@ -139,7 +139,13 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
             };
             for key in keys {
                 if let Some(target) = params.get(*key).and_then(Value::as_str) {
-                    let to = if let Some(to) = local.get(target) {
+                    let scope = params
+                        .get("set")
+                        .and_then(Value::as_str)
+                        .and_then(|name| imp.sets.iter().position(|set| set.name == name))
+                        .and_then(|index| renamed.get(index))
+                        .unwrap_or(local);
+                    let to = if let Some(to) = scope.get(target) {
                         Some(to)
                     } else {
                         match global.get(target) {

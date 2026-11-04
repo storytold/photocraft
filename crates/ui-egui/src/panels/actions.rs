@@ -16,7 +16,7 @@ use crate::icons;
 use crate::theme::Tokens;
 
 mod editor;
-mod editor_glyphs;
+pub(crate) mod editor_glyphs;
 mod editor_picker;
 mod modern;
 
@@ -359,6 +359,27 @@ fn pause_frame(app: &mut PhotocraftApp, frame: &Frame, from: usize, dialog: u64)
     app.paused_playbacks.pause(frame.after(from), dialog, app.session.authorize, app.session.actions.playback_steps, doc)
 }
 
+/// Open Spelling with the frame's document, gate and one-use continuation token.
+fn pause_spelling_step(app: &mut PhotocraftApp, frame: &Frame, from: usize, params: &Value) -> Result<(), String> {
+    if let Some(open) = app.ui.type_panels.spell.as_ref() {
+        return Err(if open.resume.is_some() { "Check Spelling is already open for another action" } else { "Check Spelling is already open" }.into());
+    }
+    crate::type_panels_ui::open_spelling(app, params.get("allLayers").and_then(Value::as_bool).unwrap_or(true))?;
+    // Spelling owns its existing non-modal panel token, not a generic dialog id.
+    let doc = app.session.active().map(|d| d.doc.id);
+    let token = match app.paused_playbacks.pause(frame.after(from), 0, app.session.authorize, app.session.actions.playback_steps, doc) {
+        Ok(token) => token,
+        Err(error) => {
+            app.ui.type_panels.spell = None;
+            return Err(error);
+        }
+    };
+    if let Some(dialog) = app.ui.type_panels.spell.as_mut() {
+        dialog.resume = Some(token);
+    }
+    Ok(())
+}
+
 /// Execute one immutable frame with normal shell view/save, authorization and job ordering.
 fn run_frame(app: &mut PhotocraftApp, frame: Frame, used: Option<u64>, preserve_tail: bool) -> Result<Value, String> {
     frame.validate(&app.session)?;
@@ -427,27 +448,9 @@ fn run_frame(app: &mut PhotocraftApp, frame: Frame, used: Option<u64>, preserve_
         // one keeps its place and ignored words.
         // A correction (`action` set) opens no dialog and runs below.
         if action.dialogs.contains(&i) && !app.automation_input && id == "edit.checkSpelling" && p.get("action").is_none() {
-            if let Some(open) = app.ui.type_panels.spell.as_ref() {
-                let error = if open.resume.is_some() { "Check Spelling is already open for another action" } else { "Check Spelling is already open" };
+            if let Err(error) = pause_spelling_step(app, &frame, i + 1, p) {
                 failed = Some(json!({"step": i, "id": id, "error": error}));
                 break;
-            }
-            if let Err(error) = crate::type_panels_ui::open_spelling(app, p.get("allLayers").and_then(Value::as_bool).unwrap_or(true)) {
-                failed = Some(json!({"step": i, "id": id, "error": error}));
-                break;
-            }
-            // Spelling owns its existing non-modal panel token, not a generic dialog id.
-            let doc = app.session.active().map(|d| d.doc.id);
-            let token = match app.paused_playbacks.pause(frame.after(i + 1), 0, app.session.authorize, app.session.actions.playback_steps, doc) {
-                Ok(token) => token,
-                Err(error) => {
-                    app.ui.type_panels.spell = None;
-                    failed = Some(json!({"step": i, "id": id, "error": error}));
-                    break;
-                }
-            };
-            if let Some(d) = app.ui.type_panels.spell.as_mut() {
-                d.resume = Some(token);
             }
             paused = Some(json!({"step": i, "id": id, "dialog": crate::type_panels_ui::SPELLING}));
             break;
