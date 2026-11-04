@@ -610,9 +610,12 @@ impl BundleObject<'_> {
         matches!(self.object, Object::Tile(..))
     }
 
-    /// The bytes the object stands for, uncompressed (tile samples little-endian).
-    pub fn content(&self) -> impl std::ops::Deref<Target = [u8]> + '_ {
-        self.object.content()
+    /// The bytes the object stands for, uncompressed (tile samples little-endian). Fails, like
+    /// [`Self::compressed`], when a tile's scratch storage could not be read.
+    pub fn content(&self) -> Result<impl std::ops::Deref<Target = [u8]> + '_> {
+        let content = self.object.content();
+        self.scratch.check()?;
+        Ok(content)
     }
 
     /// What a store keeps: [`Self::content`] as one zstd frame. Fails when a tile's scratch
@@ -647,7 +650,8 @@ pub enum Stored {
 /// 3. [`object`](Self::object), for each of those objects, in path order;
 /// 4. [`preview`](Self::preview), for each preview the save includes;
 /// 5. [`commit`](Self::commit), with the manifest: the save has happened once it returns `Ok`;
-/// 6. [`end`](Self::end), always, whether the save got that far or not.
+/// 6. [`end`](Self::end), always, whether the save got that far or not (also when a step
+///    panics).
 ///
 /// Objects never change once stored (their path is their hash), so a store may keep any copy it
 /// trusts. Nothing the previous manifest references may be removed before `commit`.
@@ -732,7 +736,8 @@ impl ZipStore {
         Ok(Self { archive, index: index.into(), ..Self::default() })
     }
 
-    /// The archive of the last save (empty before one).
+    /// The archive of the last save, or the one given to [`Self::from_bytes`] (empty for a new
+    /// store).
     pub fn bytes(&self) -> &[u8] {
         &self.archive
     }
@@ -1046,6 +1051,9 @@ impl ByteSource for DirStore {
 
 impl BundleStore for DirStore {
     fn begin(&mut self) -> Result<()> {
+        if self.path.as_os_str().is_empty() {
+            return Err(FormatError::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, "directory store has no bundle path (DirStore::new)")));
+        }
         let root = bundle_root(&self.path)?;
         let lock = lock_bundle(&root, self.lock_wait)?;
         let existing = list_objects(&root)?;
@@ -1684,9 +1692,15 @@ impl Hashes {
         store: &mut S,
         commit: impl FnOnce(&mut S, &mut Prepared) -> Result<usize>,
     ) -> Result<SaveStats> {
-        let result = store.begin().and_then(|()| self.save_begun(doc, opts, store, commit));
-        store.end();
-        result
+        // `end` also runs when a step panics, so a caught panic leaves no lock held.
+        struct EndOnDrop<'s, S: BundleStore + ?Sized>(&'s mut S);
+        impl<S: BundleStore + ?Sized> Drop for EndOnDrop<'_, S> {
+            fn drop(&mut self) {
+                self.0.end();
+            }
+        }
+        let store = EndOnDrop(store);
+        store.0.begin().and_then(|()| self.save_begun(doc, opts, &mut *store.0, commit))
     }
 
     fn save_begun<S: BundleStore + ?Sized>(
@@ -1757,6 +1771,9 @@ impl PcraftWriter {
 
     /// Save into `store`. Tile and blob hashes are remembered across stores; what is already
     /// stored is the store's own business.
+    ///
+    /// Into a [`ZipStore`], a save that the full-size composite would take past the ZIP limit
+    /// fails here; [`Self::save_zip`] leaves the composite out instead.
     pub fn save_to(&mut self, doc: &Document, store: &mut dyn BundleStore, opts: &SaveOptions) -> Result<SaveStats> {
         self.hashes.save(doc, opts, store)
     }
@@ -1854,20 +1871,26 @@ fn compressed_cache_budget_limits_retained_capacity_without_changing_bytes() {
     surface.write_pixel(0, 0, &[0.2, 0.4, 0.6, 1.0]);
     surface.write_pixel(256, 0, &[0.6, 0.4, 0.2, 1.0]);
     doc.layers.push(Layer::new("pixels", LayerContent::Raster(surface)));
+    // A blob's payload is cached and budgeted like a tile's.
+    doc.icc_profile = Some(Arc::new((0..=255).collect()));
     let mut writer = PcraftWriter::new();
     let (expected, _) = writer.save_zip(&doc, &SaveOptions::default()).unwrap();
+    assert!(writer.zip.compressed.keys().any(|k| k.starts_with("blobs/")));
     let key = writer.zip.compressed.keys().next().unwrap().clone();
     let key_allocation = writer.zip.compressed.get_key_value(&key).unwrap().0.as_ptr();
     assert_eq!(writer.save_zip(&doc, &SaveOptions::default()).unwrap().0, expected);
     assert_eq!(writer.zip.compressed.get_key_value(&key).unwrap().0.as_ptr(), key_allocation);
-    let budget = writer.zip.compressed.values().map(|v| v.capacity()).min().unwrap();
+    // Room for the blob (first in archive order) and the smallest tile, not every tile.
+    let capacity = |tiles: bool| writer.zip.compressed.iter().filter(move |(k, _)| k.starts_with("tiles/") == tiles).map(|(_, v)| v.capacity());
+    let budget = capacity(false).sum::<usize>() + capacity(true).min().unwrap();
     writer.set_compressed_cache_budget(budget);
     assert!(writer.zip.compressed.is_empty());
     let (bytes, _) = writer.save_zip(&doc, &SaveOptions::default()).unwrap();
     assert_eq!(bytes, expected);
     assert!(writer.zip.compressed.values().map(|v| v.capacity()).sum::<usize>() <= budget);
-    assert!(!writer.zip.compressed.is_empty());
-    let retained = writer.zip.compressed.len();
+    assert!(writer.zip.compressed.keys().any(|k| k.starts_with("blobs/")));
+    assert!(writer.zip.compressed.keys().any(|k| k.starts_with("tiles/")));
+    let retained = writer.zip.compressed.keys().filter(|k| k.starts_with("tiles/")).count();
     let (bytes, stats) = writer.save_zip(&doc, &SaveOptions::default()).unwrap();
     assert_eq!(bytes, expected);
     assert_eq!(stats.tiles_reused, retained);
