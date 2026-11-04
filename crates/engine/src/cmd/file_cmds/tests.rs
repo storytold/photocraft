@@ -3108,6 +3108,25 @@ fn file_info_write_removes_foreign_spelling_attributes() {
 }
 
 #[test]
+fn file_info_reads_attributes_after_newlines_and_single_quotes() {
+    // Valid XML the exact-byte matcher skipped: attributes on their own lines
+    // (newline/tab before the name), whitespace around `=`, single-quoted values.
+    let xmp = "<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"><rdf:Description rdf:about=\"\"\n\txmlns:photoshop=\"http://ns.adobe.com/photoshop/1.0/\"\n\tphotoshop:AuthorsPosition = 'Painter'\n\txmlns:xmpRights=\"http://ns.adobe.com/xap/1.0/rights/\" xmpRights:Marked = \"True\"/></rdf:RDF>";
+    let info = read_file_info(Some(xmp));
+    assert_eq!(info["authorTitle"], "Painter");
+    assert_eq!(info["copyrightStatus"], "copyrighted");
+}
+
+#[test]
+fn file_info_write_removes_newline_separated_single_quoted_attribute() {
+    let xmp = "<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\" xmlns:photoshop=\"http://ns.adobe.com/photoshop/1.0/\"><rdf:Description rdf:about=\"\"\n        photoshop:AuthorsPosition = 'Painter'/></rdf:RDF>";
+    assert_eq!(read_file_info(Some(xmp))["authorTitle"], "Painter");
+    let out = write_file_info(Some(xmp), &json!({ "authorTitle": "" }));
+    assert!(!out.contains("Painter"), "cleared attribute must be removed: {out}");
+    assert_eq!(read_file_info(Some(&out))["authorTitle"], "");
+}
+
+#[test]
 fn file_info_ignores_xmlns_lookalikes_in_attribute_values() {
     // #11200: a quoted attribute value that mentions a binding registers nothing (the same
     // rule as element text), so the q:li planted in the keywords container is not an item.

@@ -272,9 +272,10 @@ fn quoted_spans(s: &str) -> Vec<(usize, usize)> {
 /// Attribute form `prop="value"` on an `rdf:Description`. The name must sit at an attribute
 /// position — inside a start tag, outside any quoted value: `prop="…"` inside another
 /// attribute's value (or in element text) is text, and matching it would read, or on removal
-/// cut, the wrong thing (#11200).
+/// cut, the wrong thing (#11200). The name may follow any XML whitespace (space, tab, or
+/// newline), whitespace may surround the `=`, and the value may be single- or double-quoted;
+/// the returned span runs from the whitespace before the name through the closing quote.
 fn find_attr<'a>(xmp: &'a str, prop: &str) -> Option<(usize, usize, &'a str)> {
-    let key = format!(" {prop}=\"");
     let mut from = 0;
     while let Some(lt) = xmp.get(from..).and_then(|r| r.find('<')).map(|i| i + from) {
         let rest = &xmp[lt..];
@@ -289,15 +290,37 @@ fn find_attr<'a>(xmp: &'a str, prop: &str) -> Option<(usize, usize, &'a str)> {
         let end = tag_end(xmp, lt);
         let tag = &xmp[lt..end];
         let quoted = quoted_spans(tag);
+        let bytes = tag.as_bytes();
         let mut at = 0;
-        while let Some(i) = tag.get(at..).and_then(|r| r.find(&key)).map(|i| i + at) {
-            at = i + 1;
-            if quoted.iter().any(|&(a, b)| (a..b).contains(&i)) {
-                continue;
+        while at < tag.len() {
+            // Anchor on whitespace outside quoted values; the attribute name
+            // starts after the whitespace run.
+            let Some(ws) = (at..tag.len()).find(|&i| bytes[i].is_ascii_whitespace() && !quoted.iter().any(|&(a, b)| (a..b).contains(&i))) else {
+                break;
+            };
+            let name = ws + tag[ws..].bytes().take_while(|b| b.is_ascii_whitespace()).count();
+            let after = name + prop.len();
+            // `name..after` must be exactly `prop`, then optional whitespace,
+            // `=`, optional whitespace, and a quote.
+            let mut i = after;
+            while bytes.get(i).is_some_and(|b| b.is_ascii_whitespace()) {
+                i += 1;
             }
-            let v0 = i + key.len();
-            let Some(v1) = tag[v0..].find('"').map(|j| j + v0) else { break };
-            return Some((lt + i, lt + v1 + 1, &tag[v0..v1]));
+            if tag.get(name..after) == Some(prop) && bytes.get(i) == Some(&b'=') {
+                i += 1;
+                while bytes.get(i).is_some_and(|b| b.is_ascii_whitespace()) {
+                    i += 1;
+                }
+                if let Some(&q) = bytes.get(i) {
+                    if q == b'"' || q == b'\'' {
+                        let v0 = i + 1;
+                        if let Some(v1) = tag[v0..].find(q as char).map(|j| j + v0) {
+                            return Some((lt + ws, lt + v1 + 1, &tag[v0..v1]));
+                        }
+                    }
+                }
+            }
+            at = name.max(at + 1);
         }
         from = end;
     }
