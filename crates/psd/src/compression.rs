@@ -527,6 +527,19 @@ pub fn predict(buf: &mut [u8], layout: &PlaneLayout) -> Result<()> {
     if rb == 0 {
         return Ok(());
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    if buf.len() >= 1 << 20 && matches!(layout.depth, 1 | 8 | 16 | 32) {
+        use rayon::prelude::*;
+        let threads = rayon::current_num_threads().min(32);
+        let rows = buf.len() / rb;
+        let step = rows.div_ceil(threads).max(1) * rb;
+        return buf[..rows * rb].par_chunks_mut(step).try_for_each(|part| predict_rows(part, layout));
+    }
+    predict_rows(buf, layout)
+}
+
+fn predict_rows(buf: &mut [u8], layout: &PlaneLayout) -> Result<()> {
+    let rb = layout.row_bytes();
     let w = layout.width;
     let mut scratch = Vec::new();
     for row in buf.chunks_exact_mut(rb) {
@@ -547,7 +560,6 @@ pub fn predict(buf: &mut [u8], layout: &PlaneLayout) -> Result<()> {
                 }
             }
             32 => {
-                scratch.clear();
                 scratch.resize(rb, 0);
                 // Split into four byte planes (MSB first) and delta the whole
                 // plane-major row. Plane k's first delta uses the last byte of
