@@ -823,8 +823,13 @@ impl Ex<'_> {
         use photocraft_doc::SmartSource;
         let preview = self.smart.vector_preview(sm).and_then(|preview| Some((preview.document.clone(), preview.frame?)));
         let mut source = match &sm.source {
-            // A file of the imported document, or one its placed-layer data names (a missing
-            // link stays a smart object, as in Photoshop).
+            // Placed-layer data naming a file the document has no record of (not even an external
+            // link): Photoshop opens such a file but fails to save it ("disk error", -32005), so
+            // the layer is written as the pixels it shows.
+            SmartSource::Linked { path } if !path.is_empty() && !self.smart.known.contains(path) && template.is_some_and(|t| t.idnt == *path) => {
+                Err(format!("its source file {path} is missing from the document, and Photoshop can't save such a smart object"))
+            }
+            // A file of the imported document, or one its placed-layer data names.
             SmartSource::Linked { path } if self.smart.known.contains(path) || template.is_some_and(|t| t.idnt == *path) => {
                 let stored = template.filter(|t| t.idnt == *path).and_then(|t| crate::smart_map::stored_size(&t.descriptor));
                 let geometry = stored.map(|size| (size, f64::from(self.dpi))).or_else(|| {

@@ -64,6 +64,9 @@ fn placed_layer_blocks_keep_their_keys() {
         blocks: vec![TaggedBlock::unicode_name("smart"), TaggedBlock::new(*b"PlLd", plld(uuid)), TaggedBlock::new(*b"SoLd", sold(uuid))],
         ..Default::default()
     });
+    // The file the placed layer names, as Photoshop stores it.
+    let linked = linked::LinkedFile { uuid: uuid.into(), file_name: "in.png".into(), bytes: vec![1, 2, 3, 4] };
+    f.global_blocks.push(TaggedBlock::new(*b"lnk2", linked::encode_linked_file(&linked)));
     for b in f.layers().last().unwrap().blocks.iter() {
         b.check_structure().unwrap();
     }
@@ -74,6 +77,27 @@ fn placed_layer_blocks_keep_their_keys() {
     // Before the fix the SoLd data overwrote the PlLd block.
     assert_eq!(rec.block(b"PlLd").unwrap().data, plld(uuid));
     assert_eq!(rec.block(b"SoLd").unwrap().data, sold(uuid));
+}
+
+/// A placed layer naming a file the document has no record of (not even an external link) is
+/// written as the pixels it shows: Photoshop opens such a smart object but can't save the file
+/// ("disk error", -32005).
+#[test]
+fn a_smart_object_without_its_file_is_written_as_pixels() {
+    let uuid = "5b0c0b42-1b9c-11e0-a5b7-d0b1b2c3d4e5";
+    let mut f = testgen::small(Version::Psd, Compression::Raw);
+    f.layers_mut().push(LayerRecord {
+        name: b"smart".to_vec(),
+        blocks: vec![TaggedBlock::unicode_name("smart"), TaggedBlock::new(*b"PlLd", plld(uuid)), TaggedBlock::new(*b"SoLd", sold(uuid))],
+        ..Default::default()
+    });
+    let bytes = f.to_bytes().unwrap();
+    let imp = import("in.psd", &bytes).unwrap();
+    let saved = export(&imp.document, "out.psd", &ExportOptions::default()).unwrap();
+    assert!(saved.warnings.iter().any(|w| w.contains("smart object written as pixels") && w.contains("missing")), "{:?}", saved.warnings);
+    let back = PsdFile::from_bytes(&saved.bytes).unwrap();
+    let rec = back.layers().iter().find(|l| l.name == b"smart").unwrap();
+    assert!(rec.block(b"SoLd").is_none() && rec.block(b"PlLd").is_none());
 }
 
 #[test]

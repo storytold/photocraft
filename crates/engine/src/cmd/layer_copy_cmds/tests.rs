@@ -500,3 +500,50 @@ fn retargeting_type_survives_bad_resolutions() {
     crate::canvas_geom::retarget_type_resolution(&mut d, f32::MAX);
     assert!(size(&d).is_finite() && size(&d) > 0.0, "{}", size(&d));
 }
+
+/// Turns layer `paint` of document 0 into a smart object whose file sits in the document's
+/// `lnk2` block, as PSD import keeps a Photoshop smart object (its source a uuid).
+fn psd_embedded_smart_object(s: &mut Session, paint: LayerId) {
+    s.execute("layer.select", json!({"layer": paint.0})).unwrap();
+    s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    let outer = s.active().unwrap().active_layer.unwrap();
+    s.edit("embedded linked source", |doc, _| {
+        let LayerContent::Smart(sm) = &mut doc.layer_mut(outer).ok_or(crate::EngineError::NoDocument)?.content else {
+            return Err(crate::EngineError::Other("not a smart object".into()));
+        };
+        sm.source = photocraft_doc::SmartSource::Linked { path: "uuid-1".into() };
+        let linked = photocraft_io::linked::LinkedFile { uuid: "uuid-1".into(), file_name: "in.png".into(), bytes: vec![1, 2, 3, 4] };
+        doc.metadata.psd_global_blocks.push((*b"8BIM", *b"lnk2", std::sync::Arc::new(photocraft_io::linked::encode_linked_file(&linked))));
+        Ok(())
+    })
+    .unwrap();
+}
+
+/// The smart object `layer` of document `i` still finds its file there.
+fn source_resolves(s: &Session, i: usize, layer: LayerId) -> bool {
+    let LayerContent::Smart(sm) = &doc(s, i).layer(layer).unwrap().content else { panic!("not a smart object") };
+    crate::smart_cmds::source_bytes(&doc(s, i).metadata, &sm.source).is_some()
+}
+
+/// A Photoshop smart object copied to another document, or duplicated into a new one, takes its
+/// embedded file along (as Paste does, #3584). Without it the destination named a file it didn't
+/// have: its saved PSD opened in Photoshop but couldn't be saved again ("disk error", -32005).
+#[test]
+fn copies_keep_psd_embedded_smart_object_files() {
+    let (mut s, paint) = two_docs(40, 30, 8);
+    psd_embedded_smart_object(&mut s, paint);
+    let smart = s.active().unwrap().active_layer.unwrap();
+    let r = s.execute("layer.copyToDocument", json!({"document": 1, "layers": [smart.0]})).unwrap();
+    assert!(source_resolves(&s, 1, copied(&r)), "copy to another document");
+    // Copying again lands no second record of the same file.
+    s.set_active(0);
+    s.execute("layer.copyToDocument", json!({"document": 1, "layers": [smart.0]})).unwrap();
+    let records =
+        doc(&s, 1).metadata.psd_global_blocks.iter().filter(|(_, k, _)| k == b"lnk2").flat_map(|(_, _, d)| photocraft_io::linked::block_uuids(d)).count();
+    assert_eq!(records, 1);
+
+    s.set_active(0);
+    let r = s.execute("layer.duplicate", json!({"layer": smart.0, "document": "new"})).unwrap();
+    let i = r["document"].as_u64().unwrap() as usize;
+    assert!(source_resolves(&s, i, LayerId(r["layer"].as_u64().unwrap())), "duplicate into a new document");
+}

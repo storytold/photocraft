@@ -70,7 +70,7 @@ fn scratch_doc(doc: &Document) -> Document {
 
 /// Scope linked records to the copied layer tree: a PSD block can also hold files belonging
 /// to unselected or hidden layers, which must not follow this copy into a native save.
-fn copy_linked_sources(source: &Document, copies: &mut Document) -> Result<()> {
+pub(crate) fn copy_linked_sources(source: &Document, copies: &mut Document) -> Result<()> {
     fn collect<'a>(layers: &'a [Layer], depth: usize, paths: &mut std::collections::HashSet<&'a str>) -> Result<()> {
         if depth > photocraft_doc::MAX_GROUP_DEPTH {
             return Err(EngineError::Other("can't copy linked smart objects from layers nested too deeply".into()));
@@ -106,6 +106,30 @@ fn copy_linked_sources(source: &Document, copies: &mut Document) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// The linked-file records `copies` carries (see [`copy_linked_sources`]) that `dest` doesn't
+/// hold yet, to land with the copied smart objects: without them a copy names a file its new
+/// document doesn't have, and the saved PSD can't be saved again by Photoshop.
+pub(crate) fn missing_linked_records(copies: &Document, dest: &Document, what: &str) -> Result<Vec<photocraft_doc::PsdGlobalBlock>> {
+    let mut linked = Vec::new();
+    for (signature, key, data) in copies.metadata.psd_global_blocks.iter().filter(|(_, k, _)| matches!(k, b"lnk2" | b"lnk3" | b"lnkD" | b"lnkE")) {
+        if dest.metadata.psd_global_blocks.iter().any(|(_, dk, dd)| dk == key && std::sync::Arc::ptr_eq(dd, data)) {
+            continue;
+        }
+        // The copies may hold a subset of a destination block. Compare complete records,
+        // so copying one layer in the same document does not duplicate large embedded files.
+        let missing = photocraft_io::linked::select_items(data, &|_, raw| {
+            !dest.metadata.psd_global_blocks.iter().any(|(_, dk, dd)| dk == key && photocraft_io::linked::contains_item(dd, raw))
+        })
+        .map_err(|e| EngineError::Other(format!("Could not {what} smart-object contents: {e}; the document was not changed")))?;
+        let missing = missing.map(std::sync::Arc::new).unwrap_or_else(|| data.clone());
+        if !missing.is_empty() {
+            linked.try_reserve(1).map_err(|_| EngineError::Other(format!("not enough memory to {what} smart-object source records")))?;
+            linked.push((*signature, *key, missing));
+        }
+    }
+    Ok(linked)
 }
 
 /// The layer Copy takes whole ([`takes_whole`]): a scratch document in the source's colour
@@ -462,23 +486,7 @@ fn paste_layers(s: &mut Session, layers: &Document, dx: i32, dy: i32) -> Result<
     crate::layer_copy_cmds::translate_copies(&mut copies, &d.doc, dx, dy);
     let patterns: Vec<_> = copies.patterns.iter().filter(|pat| !d.doc.patterns.iter().any(|q| q.id == pat.id)).cloned().collect();
     // A copied smart object may name a PSD-embedded linked file; land its `lnk` block too (#3584).
-    let mut linked = Vec::new();
-    for (signature, key, data) in copies.metadata.psd_global_blocks.iter().filter(|(_, k, _)| matches!(k, b"lnk2" | b"lnk3" | b"lnkD" | b"lnkE")) {
-        if d.doc.metadata.psd_global_blocks.iter().any(|(_, dk, dd)| dk == key && std::sync::Arc::ptr_eq(dd, data)) {
-            continue;
-        }
-        // The clipboard may contain a subset of a destination block. Compare complete records,
-        // so copying one layer in the same document does not duplicate large embedded files.
-        let missing = photocraft_io::linked::select_items(data, &|_, raw| {
-            !d.doc.metadata.psd_global_blocks.iter().any(|(_, dk, dd)| dk == key && photocraft_io::linked::contains_item(dd, raw))
-        })
-        .map_err(|e| EngineError::Other(format!("Could not paste smart-object contents: {e}; the document was not changed")))?;
-        let missing = missing.map(std::sync::Arc::new).unwrap_or_else(|| data.clone());
-        if !missing.is_empty() {
-            linked.try_reserve(1).map_err(|_| EngineError::Other("not enough memory to paste smart-object source records".into()))?;
-            linked.push((*signature, *key, missing));
-        }
-    }
+    let linked = missing_linked_records(&copies, &d.doc, "paste")?;
     let id = s.edit("Paste", |doc, active| {
         doc.patterns.extend(patterns);
         doc.metadata.psd_global_blocks.extend(linked);
