@@ -19,6 +19,8 @@ pub(crate) enum Target {
     QuickMask,
 }
 
+/// An alpha index that cannot fit this platform stays an unaddressable alpha target. Using
+/// usize::MAX makes the later checked lookup fail instead of wrapping or falling back to pixels.
 pub(crate) fn target_of(p: &Value) -> Target {
     match p.get("target") {
         Some(Value::String(s)) => match s.as_str() {
@@ -27,7 +29,7 @@ pub(crate) fn target_of(p: &Value) -> Target {
             "quickMask" => Target::QuickMask,
             _ => Target::Pixels,
         },
-        Some(Value::Object(o)) => o.get("channel").and_then(Value::as_u64).map_or(Target::Pixels, |i| Target::Alpha(i as usize)),
+        Some(Value::Object(o)) => o.get("channel").and_then(Value::as_u64).map_or(Target::Pixels, |i| Target::Alpha(usize::try_from(i).unwrap_or(usize::MAX))),
         _ => Target::Pixels,
     }
 }
@@ -137,13 +139,19 @@ pub(crate) fn mask_target_enabled(s: &Session, id: &str, p: &Value) -> Option<st
         // The commands that paint, fill, filter or adjust the filter mask need a smart object with
         // smart filters, not a pixel layer. Paste keeps its own check (something to paste).
         Target::FilterMask if follows_filter_mask(id) && !PASTE_IDS.contains(&id) => {
-            Some(crate::active_layer_of(s).and_then(crate::smart_cmds::filter_mask_paintable))
+            Some(addressed_layer(s, p).and_then(crate::smart_cmds::filter_mask_paintable))
         }
         Target::Mask if edits_mask(id) => {
-            Some(crate::active_layer_of(s).and_then(|l| if l.mask.is_some() { Ok(()) } else { Err("the active layer has no layer mask".into()) }))
+            Some(addressed_layer(s, p).and_then(|l| if l.mask.is_some() { Ok(()) } else { Err("the target layer has no layer mask".into()) }))
         }
         _ => None,
     }
+}
+
+/// The mask receiver resolved by the same layer selector as the eventual edit.
+fn addressed_layer<'a>(s: &'a Session, p: &Value) -> std::result::Result<&'a Layer, String> {
+    let id = crate::commands::layer_param(s, p).map_err(|e| e.to_string())?;
+    s.active().and_then(|st| st.doc.layer(id)).ok_or_else(|| format!("no layer {}", id.0))
 }
 
 /// Whether command `id` edits the targeted channel or mask when its params name no `"target"`

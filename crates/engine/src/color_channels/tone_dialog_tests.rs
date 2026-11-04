@@ -24,13 +24,13 @@ fn tone_dialog_normalization_matches_native_execution() {
             ] {
                 let kind = if raw.get("gamma").is_some() { "levels" } else { "curves" };
                 let mut raw = raw;
-                for key in keys {
+                for (index, key) in keys.iter().enumerate() {
                     raw[*key] = if kind == "levels" {
-                        json!({"gamma":1.5})
+                        json!({"gamma":1.1+index as f64*0.2})
                     } else if raw["pencil"] == true {
-                        json!((0..256).map(|i| (i * 17 % 256) as f32).collect::<Vec<_>>())
+                        json!((0..256).map(|i| ((i * (17 + index) + index * 23) % 256) as f32).collect::<Vec<_>>())
                     } else {
-                        json!([[0, 0], [100, 180], [255, 255]])
+                        json!([[0, 0], [80 + index * 10, 120 + index * 20], [255, 255]])
                     };
                 }
                 let canonical = tone_dialog_params(kind, &raw, mode, colors).unwrap();
@@ -63,6 +63,27 @@ fn tone_dialog_normalization_rejects_invalid_requests() {
     for mode in [ColorMode::Rgb, ColorMode::Cmyk, ColorMode::Lab] {
         for (kind, p) in [("levels", json!({"gray":{"gamma":"bad"}})), ("curves", json!({"gray":[[0,0]]})), ("curves", json!({"gray":[0,1,2],"pencil":true}))] {
             assert!(tone_dialog_params(kind, &p, mode, rgb).is_err(), "{mode:?} {kind}");
+        }
+    }
+}
+
+/// JSON null has the same meaning as omission for both combined and single Lab records.
+#[test]
+fn review_null_lab_native_records_match_omission() {
+    for indices in [&[0][..], &[1][..], &[2][..], &[0, 2][..], &[1, 2][..], &[0, 1, 2][..]] {
+        let colors = ColorChannels::from_indices(indices.iter().copied(), 3).unwrap();
+        for (kind, p) in [
+            ("levels", json!({"gamma":1.4})),
+            ("curves", json!({"points":[[0,20],[128,180],[255,240]]})),
+            ("curves", json!({"points":[[0,20],[128,180],[255,240]],"pencil":true,"smooth":2})),
+        ] {
+            let mut null = p.clone();
+            for key in ["lightness", "a", "b"] {
+                null[key] = Value::Null;
+            }
+            let parse =
+                |p| tone_adjustment(kind, p, crate::adjust_params::from_params(kind, p, None, ColorMode::Lab).unwrap(), ColorMode::Lab, colors).unwrap();
+            assert_eq!(parse(&null), parse(&p), "{kind} {indices:?}");
         }
     }
 }

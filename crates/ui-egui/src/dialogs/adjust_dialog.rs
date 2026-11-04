@@ -44,6 +44,9 @@ pub fn picker_armed(app: &PhotocraftApp) -> bool {
     let Some(dialog) = app.ui.dialogs.last().filter(|d| picker_kind(&d.fields).is_some()) else { return false };
     let Some(eyedropper) = picker(dialog.fields.get(CURVE_PICKER)) else { return false };
     let kind = picker_kind(&dialog.fields).unwrap_or_default();
+    if target_context(app, &dialog.fields).is_err() {
+        return false;
+    }
     app.session.active().is_some() && picker_supported(curve_mode(app, kind, &dialog.fields), eyedropper)
 }
 
@@ -60,6 +63,10 @@ pub fn sample_at(app: &mut PhotocraftApp, x: f64, y: f64) -> bool {
         return false;
     };
     let Some(dialog) = app.ui.dialogs.last() else { return true };
+    if let Err(error) = target_context(app, &dialog.fields) {
+        app.ui.status = error.to_string();
+        return true;
+    }
     let mode = curve_mode(app, &kind, &dialog.fields);
     let gray = isolated(app, &dialog.fields).is_some_and(|c| c.gray.is_some());
     if !picker_supported(mode, eyedropper) {
@@ -84,7 +91,15 @@ pub fn sample_at(app: &mut PhotocraftApp, x: f64, y: f64) -> bool {
         photocraft_engine::adjust_params::adjustment_eyedropper(&kind, &base, eyedropper, sample, mode)
     };
     let params = match adjustment {
-        Ok(adjustment) => photocraft_engine::adjust_params::to_params(&adjustment),
+        // Scalar samples retain their native precision. The colour picker keeps its existing
+        // hundredth-level curve-point convention, independently of source sample depth.
+        Ok(adjustment) => {
+            if gray {
+                photocraft_engine::adjust_params::to_dialog_params(&adjustment)
+            } else {
+                photocraft_engine::adjust_params::to_params(&adjustment)
+            }
+        }
         Err(error) => {
             app.ui.status = error.to_string();
             return true;
@@ -270,6 +285,9 @@ pub fn reset(app: &PhotocraftApp, ctx: &egui::Context, fields: &mut Map<String, 
         return;
     }
     let kind = fields.get("__adjust").and_then(Value::as_str).unwrap_or_default().to_string();
+    if matches!(kind.as_str(), "levels" | "curves") && target_context(app, fields).is_err() {
+        return;
+    }
     let mode = curve_mode(app, &kind, fields);
     // Color Balance: Photoshop keeps the user's Preserve Luminosity across Reset.
     let preserve = if kind == "colorBalance" { fields.get("preserveLuminosity").cloned() } else { None };
@@ -299,14 +317,15 @@ pub fn open(app: &mut PhotocraftApp, command: &str) -> Option<u64> {
 /// Seed an Action's dialog only after resolving its recorded target, so document-space
 /// defaults cannot overwrite the target's neutral grayscale values.
 pub(crate) fn open_with_params(app: &mut PhotocraftApp, command: &str, params: &Value) -> Option<u64> {
-    let mut params = app.with_mask_target(command, params.clone());
+    let params = if params.is_null() { json!({}) } else { Value::Object(params.as_object()?.clone()) };
+    let mut params = app.with_mask_target(command, params);
     if params.get("target").is_none()
         && let Some(colors) = photocraft_engine::color_channels::selected(&app.session)
         && let Some(object) = params.as_object_mut()
     {
         object.insert("target".into(), colors.params());
     }
-    open_fields(app, command, params.as_object().cloned().unwrap_or_default())
+    open_fields(app, command, params.as_object()?.clone())
 }
 
 /// Reopen a captured Smart Filter with document-colour defaults, independent of channel targeting.
@@ -319,11 +338,18 @@ pub(crate) fn open_smart_filter(app: &mut PhotocraftApp, command: &str, params: 
 }
 
 /// Merge target-aware defaults with supplied parameters while preserving trusted modal metadata.
-fn open_fields(app: &mut PhotocraftApp, command: &str, mut fields: Map<String, Value>) -> Option<u64> {
+fn open_fields(app: &mut PhotocraftApp, command: &str, fields: Map<String, Value>) -> Option<u64> {
+    let fields = seeded_fields(app, command, fields)?;
+    Some(app.ui.open_dialog(crate::state::DialogKind::Command, fields))
+}
+
+/// Normalize recorded settings once their target resolves, retaining modal addressing/chrome.
+fn seeded_fields(app: &PhotocraftApp, command: &str, mut fields: Map<String, Value>) -> Option<Map<String, Value>> {
     let kind = command.strip_prefix(PREFIX).filter(|k| adjust_editors::has_editor(k))?;
     let spec = photocraft_engine::commands::find(command)?;
     let mode = curve_mode(app, kind, &fields);
-    let defaults = photocraft_engine::adjust_params::default_for(kind, mode).ok()?;
+    let valid_target = !matches!(kind, "levels" | "curves") || target_context(app, &fields).is_ok();
+    let defaults = if valid_target { Some(photocraft_engine::adjust_params::default_for(kind, mode).ok()?) } else { None };
     let isolated = matches!(kind, "levels" | "curves").then(|| isolated(app, &fields)).flatten();
     let gray_target = isolated.as_ref().is_some_and(|c| c.gray.is_some());
     let color_set = isolated.and_then(|c| c.components);
@@ -352,8 +378,10 @@ fn open_fields(app: &mut PhotocraftApp, command: &str, mut fields: Map<String, V
     fields.insert("__label".into(), json!(spec.label));
     fields.insert("__adjust".into(), json!(kind));
     fields.insert("__filter".into(), json!(true));
-    fields.insert("__preview".into(), json!(true));
-    if let Value::Object(mut p) = photocraft_engine::adjust_params::to_params(&defaults) {
+    fields.entry("__preview").or_insert(json!(true));
+    if let Some(defaults) = defaults
+        && let Value::Object(mut p) = photocraft_engine::adjust_params::to_params(&defaults)
+    {
         // An invalid gray alias must reach engine validation: seeded identity points would
         // otherwise override it. Valid aliases were already canonicalized above.
         if (gray_target || color_set.is_some())
@@ -366,7 +394,8 @@ fn open_fields(app: &mut PhotocraftApp, command: &str, mut fields: Map<String, V
         fields.extend(p);
     }
     fields.extend(supplied);
-    Some(app.ui.open_dialog(crate::state::DialogKind::Command, fields))
+    fields.insert("__unresolvedTarget".into(), json!(!valid_target));
+    Some(fields)
 }
 
 /// Whether the dialog's captured target is a set of several Lab components, whose Levels and
@@ -382,6 +411,9 @@ pub fn open_last(app: &mut PhotocraftApp, command: &str) -> Option<u64> {
     let id = open(app, command)?;
     let kind = command.strip_prefix(PREFIX).unwrap_or_default();
     let fields = app.ui.dialog_mut(id)?.fields.clone();
+    if matches!(kind, "levels" | "curves") && target_context(app, &fields).is_err() {
+        return Some(id);
+    }
     let mode = curve_mode(app, kind, &fields);
     let Some(mut last) = app.session.prefs().dialogs.get(command).cloned() else { return Some(id) };
     // Recall settings in the current plane's space, independently of the target they came from.
@@ -396,7 +428,7 @@ pub fn open_last(app: &mut PhotocraftApp, command: &str) -> Option<u64> {
     ) {
         return Some(id);
     }
-    let mut restored = photocraft_engine::adjust_params::to_params(&adjustment);
+    let mut restored = photocraft_engine::adjust_params::to_dialog_params(&adjustment);
     // The target `open` captured, as `remember` reads it: a viewed layer mask wins over the
     // Channels panel's colour set, so its settings are restored as saved.
     let captured_set = app.ui.dialog_mut(id).is_some_and(|d| combined_lab_target(&d.fields));
@@ -446,15 +478,24 @@ pub(crate) fn remember(app: &mut PhotocraftApp, fields: &Map<String, Value>) {
 /// The Levels/Curves dialog's target from panel state or explicit parameters, including filter masks.
 /// Re-editing a captured Smart Filter always exposes its document-colour controls.
 fn isolated(app: &PhotocraftApp, fields: &Map<String, Value>) -> Option<photocraft_engine::channel_cmds::IsolatedCurveChannel> {
-    if fields.contains_key("__smartFilter") {
-        return None;
+    target_context(app, fields).ok()?.channel
+}
+
+/// Resolve layer selectors and target validity in the engine without mutating panel selection.
+/// A captured Smart Filter supplies its own layer and keeps document-colour controls.
+fn target_context(app: &PhotocraftApp, fields: &Map<String, Value>) -> photocraft_engine::Result<photocraft_engine::channel_cmds::ToneTarget> {
+    if let Some(filter) = fields.get("__smartFilter") {
+        let layer = filter.get("layer").and_then(Value::as_u64).map(photocraft_doc::LayerId);
+        return Ok(photocraft_engine::channel_cmds::ToneTarget { layer, channel: None });
     }
-    let st = app.session.active()?;
-    if !fields.contains_key("target") && app.filter_mask_targeted() {
-        return photocraft_engine::channel_cmds::filter_mask_curve_channel(st);
+    let mut params = crate::filter_dialog::params_of(fields);
+    if params.get("target").is_none()
+        && app.filter_mask_targeted()
+        && let Some(object) = params.as_object_mut()
+    {
+        object.insert("target".into(), json!("filterMask"));
     }
-    let params = fields.get("target").map_or(Value::Null, |target| json!({"target": target}));
-    photocraft_engine::channel_cmds::isolated_curve_channel_with_params(st, app.layer_mask_targeted(), &params)
+    photocraft_engine::channel_cmds::resolve_tone_target(&app.session, app.layer_mask_targeted(), &params)
 }
 
 /// Retain modal metadata and explicit command addressing when replacing adjustment parameters.
@@ -473,19 +514,33 @@ fn curve_mode(app: &PhotocraftApp, kind: &str, fields: &Map<String, Value>) -> p
 /// Dialog body: the kind's editor over the fields, then the Preview checkbox.
 pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String, Value>) {
     let kind = fields.get("__adjust").and_then(Value::as_str).unwrap_or_default().to_string();
+    let context = if matches!(kind.as_str(), "levels" | "curves") {
+        match target_context(app, fields) {
+            Ok(context) => context,
+            Err(error) => {
+                ui.label(tl!("The adjustment target is missing or unavailable."));
+                ui.label(error.to_string());
+                return;
+            }
+        }
+    } else {
+        target_context(app, fields)
+            .unwrap_or_else(|_| photocraft_engine::channel_cmds::ToneTarget { layer: app.session.active().and_then(|s| s.active_layer), channel: None })
+    };
+    if fields.get("__unresolvedTarget").and_then(Value::as_bool) == Some(true)
+        && let Some(command) = fields.get("__command").and_then(Value::as_str)
+        && let Some(resolved) = seeded_fields(app, command, fields.clone())
+    {
+        *fields = resolved;
+    }
     let mode = curve_mode(app, &kind, fields);
     if matches!(kind.as_str(), "levels" | "curves") {
         picker_controls(ui, fields, mode);
         ui.add_space(4.0);
     }
     let mut values = crate::filter_dialog::params_of(fields);
-    let active = fields
-        .get("__smartFilter")
-        .and_then(|f| f.get("layer"))
-        .and_then(Value::as_u64)
-        .map(photocraft_doc::LayerId)
-        .or_else(|| app.session.active().and_then(|s| s.active_layer));
-    let isolated_curve = isolated(app, fields);
+    let active = context.layer;
+    let isolated_curve = context.channel;
     let gray_plane = matches!(kind.as_str(), "levels" | "curves").then(|| isolated_curve.as_ref().and_then(|c| c.gray)).flatten();
     let gray = gray_plane.is_some() || app.session.active().is_some_and(|s| adjust_editors::is_gray(s.doc.mode));
     let hist = match active {

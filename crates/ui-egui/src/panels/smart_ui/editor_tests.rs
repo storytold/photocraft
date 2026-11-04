@@ -186,6 +186,26 @@ fn filter_editor_starts_missing_parameters_from_defaults_not_remembered_values()
     assert_eq!(app.ui.dialog_mut(id).unwrap().fields["reduceNoise"].as_f64(), Some(60.0));
 }
 
+/// A captured tone filter must visibly affect its CPU preview, not merely retain parameters.
+fn assert_tone_preview_is_non_neutral(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    let idx = app.session.active_index().unwrap();
+    let id = app.ui.dialogs.last().unwrap().id;
+    let saved = app.ui.dialogs.last().unwrap().fields.clone();
+    let kind = saved["__adjust"].as_str().unwrap();
+    let mode = app.session.active().unwrap().doc.mode;
+    crate::canvas::ensure_filter_preview(app, idx, ctx).unwrap();
+    let rendered = photocraft_compose::flatten(app.filter_preview.as_ref().unwrap().result.as_ref().unwrap()).px.clone();
+    let neutral = photocraft_engine::adjust_params::to_params(&photocraft_engine::adjust_params::default_for(kind, mode).unwrap());
+    let fields = &mut app.ui.dialog_mut(id).unwrap().fields;
+    fields.retain(|key, _| key.starts_with("__"));
+    fields.extend(neutral.as_object().unwrap().clone());
+    crate::canvas::ensure_filter_preview(app, idx, ctx).unwrap();
+    let identity = photocraft_compose::flatten(app.filter_preview.as_ref().unwrap().result.as_ref().unwrap()).px.clone();
+    assert_ne!(rendered, identity, "{mode:?} {kind}: the recorded filter must affect the preview");
+    app.ui.dialog_mut(id).unwrap().fields = saved;
+    crate::canvas::ensure_filter_preview(app, idx, ctx).unwrap();
+}
+
 /// Re-editing a whole-image tone Smart Filter keeps its colour controls and stored records,
 /// even when a colour component, alpha, Quick Mask or either layer-mask UI target is selected.
 #[test]
@@ -253,6 +273,7 @@ fn tone_filter_editor_ignores_current_channel_target() {
                 let ctx = h.ctx.clone();
                 let idx = h.state().session.active_index().unwrap();
                 assert!(crate::canvas::ensure_filter_preview(h.state_mut(), idx, &ctx).is_some());
+                assert_tone_preview_is_non_neutral(h.state_mut(), &ctx);
                 assert!(std::sync::Arc::ptr_eq(&h.state().session.active().unwrap().doc, &before), "preview never writes to the selected plane");
                 crate::dialogs::confirm(h.state_mut(), id).unwrap();
                 assert_eq!(smart(h.state(), layer).smart_filters.len(), 3);

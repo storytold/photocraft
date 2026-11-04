@@ -929,6 +929,7 @@ pub fn destructive_eyedropper(s: &crate::Session, kind: &str, p: &Value) -> Resu
         return Ok(None);
     }
     let p = crate::channel_cmds::inject_target(s, &format!("image.adjustments.{kind}"), p.clone());
+    let target = crate::channel_cmds::resolve_tone_target(s, false, &p)?;
     if crate::channel_cmds::gray_target(&p).is_none() {
         return eyedropper_from_params(s, kind, &p);
     }
@@ -936,12 +937,12 @@ pub fn destructive_eyedropper(s: &crate::Session, kind: &str, p: &Value) -> Resu
     // A Smart Filter mask starts as implicit Reveal All. Sampling it must not materialize it.
     let reveal_all;
     let surface = if crate::channel_cmds::target_of(&p) == crate::channel_cmds::Target::FilterMask {
-        let layer = d.active_layer.and_then(|id| d.doc.layer(id)).ok_or_else(|| bad(EYEDROPPER, "no active layer"))?;
+        let layer = target.layer.and_then(|id| d.doc.layer(id)).ok_or_else(|| bad(EYEDROPPER, "no target layer"))?;
         crate::smart_cmds::filter_mask_paintable(layer).map_err(EngineError::Other)?;
         reveal_all = photocraft_doc::LayerMask::reveal_all();
         crate::mask_view_cmds::viewed_mask(layer, true).map_or(&reveal_all.surface, |m| &m.surface)
     } else {
-        crate::channel_cmds::read_target_surface(&d.doc, d.active_layer, &p)?
+        crate::channel_cmds::read_target_surface(&d.doc, target.layer, &p)?
     };
     let e = p.get("eyedropper").ok_or_else(|| bad(EYEDROPPER, "missing eyedropper"))?;
     let (picker, sample) = eyedropper_sample(&d.doc, None, e, Some(surface))?;

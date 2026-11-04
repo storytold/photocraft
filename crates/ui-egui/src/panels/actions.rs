@@ -240,6 +240,10 @@ fn play_owned(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>)
         // The dialog toggle: show the step's dialog with its recorded values and continue
         // from the next step when it is confirmed (`resume`). Agents play headlessly.
         if action.dialogs.contains(&i) && !app.automation_input && (crate::filter_dialog::has_dialog(id) || crate::adjust_dialog::has_dialog(id)) {
+            if crate::adjust_dialog::has_dialog(id) && !p.is_object() && !p.is_null() {
+                failed = Some(json!({"step": i, "id": id, "error": "adjustment parameters must be an object or null"}));
+                break;
+            }
             let label = label_of(id);
             let mut values = p.clone();
             if let Some(o) = values.as_object_mut() {

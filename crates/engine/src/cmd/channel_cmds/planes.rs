@@ -51,16 +51,22 @@ pub fn isolated_curve_channel_for(st: &DocState, layers_panel_mask: bool) -> Opt
 }
 
 /// The channel a tone dialog edits, with an explicit command target taking precedence over
-/// panel state (notably when an Action opens a recorded step's dialog).
+/// panel state. For commands that also address a layer, use [`super::resolve_tone_target`]
+/// to resolve its selectors and report missing/invalid targets without a composite fallback.
 pub fn isolated_curve_channel_with_params(st: &DocState, layers_panel_mask: bool, params: &Value) -> Option<IsolatedCurveChannel> {
+    isolated_curve_channel_at(st, layers_panel_mask, params, st.active_layer)
+}
+
+/// Build metadata for the already-resolved layer, retaining the original panel state.
+pub(super) fn isolated_curve_channel_at(st: &DocState, layers_panel_mask: bool, params: &Value, layer: Option<super::LayerId>) -> Option<IsolatedCurveChannel> {
     let doc = &st.doc;
     if params.get("target").is_some() {
-        if let Some(colors) = crate::color_channels::explicit(params, color_count(doc)).ok().flatten() {
+        if let Some(colors) = crate::color_channels::explicit(params, color_count(doc)).ok()? {
             return curve_channel_for_colors(doc, colors);
         }
         return match target_of(params) {
-            Target::Mask => layer_mask_curve_channel(st),
-            Target::FilterMask => filter_mask_curve_channel(st),
+            Target::Mask => layer_mask_curve_channel_at(st, layer),
+            Target::FilterMask => filter_mask_curve_channel_at(st, layer),
             Target::Alpha(i) => doc.channels.get(i).map(|c| IsolatedCurveChannel {
                 name: c.name.clone(),
                 components: None,
@@ -86,10 +92,10 @@ pub fn isolated_curve_channel_with_params(st: &DocState, layers_panel_mask: bool
     if (matches!(st.channel_view.target, ChannelTarget::Color(_)) || (st.channel_view.target == ChannelTarget::Composite && doc.quick_mask.is_none()))
         && crate::mask_view_cmds::current(st).is_some_and(|v| v.filter)
     {
-        return filter_mask_curve_channel(st);
+        return filter_mask_curve_channel_at(st, layer);
     }
     if matches!(st.channel_view.target, ChannelTarget::Color(_)) && (crate::mask_view_cmds::current(st).is_some() || layers_panel_mask) {
-        return layer_mask_curve_channel(st);
+        return layer_mask_curve_channel_at(st, layer);
     }
     if let Some(colors) = st.channel_view.color_selection(color_count(doc)) {
         return curve_channel_for_colors(doc, colors);
@@ -113,9 +119,9 @@ pub fn isolated_curve_channel_with_params(st: &DocState, layers_panel_mask: bool
             translate: true,
             gray: Some(GraySurface::QuickMask),
         }),
-        ChannelTarget::LayerMask => layer_mask_curve_channel(st),
-        ChannelTarget::Composite if crate::mask_view_cmds::current(st).is_some_and(|v| v.filter) => filter_mask_curve_channel(st),
-        ChannelTarget::Composite if crate::mask_view_cmds::current(st).is_some() || layers_panel_mask => layer_mask_curve_channel(st),
+        ChannelTarget::LayerMask => layer_mask_curve_channel_at(st, layer),
+        ChannelTarget::Composite if crate::mask_view_cmds::current(st).is_some_and(|v| v.filter) => filter_mask_curve_channel_at(st, layer),
+        ChannelTarget::Composite if crate::mask_view_cmds::current(st).is_some() || layers_panel_mask => layer_mask_curve_channel_at(st, layer),
         _ => None,
     }
 }
@@ -143,7 +149,11 @@ pub fn curve_channel_for_colors(doc: &Document, colors: crate::color_channels::C
 
 /// The active layer mask's tone descriptor, independent of the selected colour rows.
 pub fn layer_mask_curve_channel(st: &DocState) -> Option<IsolatedCurveChannel> {
-    let layer = st.active_layer.and_then(|id| st.doc.layer(id))?;
+    layer_mask_curve_channel_at(st, st.active_layer)
+}
+
+fn layer_mask_curve_channel_at(st: &DocState, id: Option<super::LayerId>) -> Option<IsolatedCurveChannel> {
+    let layer = id.and_then(|id| st.doc.layer(id))?;
     layer.mask.as_ref()?;
     let name = format!("{} Mask", layer.name);
     Some(IsolatedCurveChannel { name, components: None, key: "", hist: 0, tint: false, translate: false, gray: Some(GraySurface::LayerMask) })
@@ -152,7 +162,11 @@ pub fn layer_mask_curve_channel(st: &DocState) -> Option<IsolatedCurveChannel> {
 /// The Curves target when the active smart object's filter mask is targeted (its thumbnail on the
 /// Smart Filters row, FILE-215-3): a gray plane, though the mask may not exist until the first edit.
 pub fn filter_mask_curve_channel(st: &DocState) -> Option<IsolatedCurveChannel> {
-    let layer = st.active_layer.and_then(|id| st.doc.layer(id))?;
+    filter_mask_curve_channel_at(st, st.active_layer)
+}
+
+fn filter_mask_curve_channel_at(st: &DocState, id: Option<super::LayerId>) -> Option<IsolatedCurveChannel> {
+    let layer = id.and_then(|id| st.doc.layer(id))?;
     crate::smart_cmds::filter_mask_paintable(layer).ok()?;
     let name = format!("{} Filter Mask", layer.name);
     Some(IsolatedCurveChannel { name, components: None, key: "", hist: 0, tint: false, translate: false, gray: Some(GraySurface::FilterMask) })

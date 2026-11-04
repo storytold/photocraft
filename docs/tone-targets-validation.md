@@ -166,6 +166,26 @@ Validation on Linux with `PHOTOCRAFT_FULL_SWEEP=1` and CI's pinned font input:
 
 Current evidence is retained in `plan/colour-set-action-fix-20261103/` (gitignored).
 
+## CodeRabbit review follow-up (2026-11-04)
+
+A recorded `layer: "Receiver"` mask edit could show and sample the active layer's mask while committing to Receiver. A shared checked engine resolver now supplies the addressed layer, target name and histogram for the dialog and picker; mask preconditions check the same receiver. Selection stays on the original layer. Both raster masks and Smart Filter masks use this context, including implicit Reveal All filter masks.
+
+Invalid or missing tone targets retain their recorded address and show an unavailable message without colour controls/defaults or a colour histogram. Repairing an initially unresolved address re-seeds its recorded values while retaining the Action continuation. Malformed modal Action parameter shapes fail the step; object/null inputs remain supported. Native alpha indices are checked before platform-sized conversion, and an unaddressable index cannot wrap to a real channel. A whole-pixel/native-colour target needs a layer, while saved channels remain layer-independent.
+
+Null native Lab records now match omission for combined and single-channel edits. Last-used Levels/Curves settings retain accepted precision. Scalar-plane picker settings also retain native precision; the colour picker's existing hundredth-level curve-point convention and pencil-map canonical precision are retained.
+
+Ten new regression functions cover 72 addressed-mask sampling comparisons and 24 commit/undo cases across RGB/Gray/CMYK/Lab and U8/U16/F32; 108 real raster/filter-mask Action cases with id/name/name-object selectors; unresolved/malformed targets, large indices, layer-independent alpha, repaired targets/continuation tokens, null Lab records and precise recall. Existing tests now compare gamma preview/commit output, assert a known explicit-pixels Action result, use distinct per-component normalization records, and compare all 36 reopened tone Smart Filter previews with identity output. This PR introduces 49 regression functions in total.
+
+Validation on Linux with `PHOTOCRAFT_FULL_SWEEP=1`, CI's pinned font input and `--test-threads=1`:
+
+- Full engine/UI `cargo test`: **8,299 passed, 0 failed, 43 normally ignored**, including doctest builds. The ignored full-registry adversarial command test passed separately.
+- Strict engine/UI all-target Clippy (`-D warnings`), formatting, layering and wasm passed. Changed-corpus checking correctly skipped because no corpus-critical paths differ from integrated main.
+- Four fresh offscreen Levels/Curves captures were inspected. Addressed-mask dialogs show `Receiver Mask` and recorded Gamma 2/inverted points while `Current` stays selected; missing-channel dialogs show the unavailable state without colour controls or a histogram.
+- The initial regressions reproduced the reported failures. Successive review/fix rounds also corrected native scalar picker precision, repaired-target initialization and an RGB picker rounding compatibility regression. The original RGB picker test remains unchanged. The final scoped review found no further actionable issues, and source hashes match the successful final run.
+- Only target metadata, dialog initialization, parameter handling and sampling routing changed; pixel-processing, proxy and resampling algorithms are unchanged. Historical benchmarks remain dated. No new timing comparison, broad-workspace or Windows/macOS result is claimed.
+
+Current evidence is retained in `plan/coderabbit-followup-20261104/` (gitignored).
+
 ## 24 MP release comparison
 
 Dense synthetic 6000 × 4000 RGB8 raster layer, raster mask, saved alpha channel and Quick Mask, each filled with 25% gray. The central selection is a 3000 × 2000 rectangle at 0.5 coverage. Proxy factor 4 (1500 × 1000). AMD Ryzen 7 9700X, 16 logical CPUs, Ubuntu 26.04.1, Rust 1.99.0, default optimized release profile (thin LTO).

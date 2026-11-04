@@ -116,9 +116,24 @@ fn levels_gray_target_controls_change_the_target_in_every_mode_and_depth() {
                 let pixels = st.doc.layers[0].content.clone();
                 let history = st.history.past_len();
                 let before = value(h.state(), target);
+                // The standalone preview helper starts from a composite session. Supply the
+                // plane that the live preview request captures from Channels/Quick Mask.
+                let mut preview_params = params(&h);
+                preview_params["target"] = match target {
+                    ChannelTarget::Alpha(i) => json!({"channel":i}),
+                    ChannelTarget::LayerMask => json!("mask"),
+                    _ => json!("quickMask"),
+                };
+                let preview = filter_dialog::preview_document(&st.doc, st.active_layer, "image.adjustments.levels", &preview_params, 1).unwrap();
+                let preview_value = match target {
+                    ChannelTarget::Alpha(i) => preview.channels[i].surface.sample_channel(8, 8, 0),
+                    ChannelTarget::LayerMask => preview.layers[0].mask.as_ref().unwrap().surface.sample_channel(8, 8, 0),
+                    _ => preview.quick_mask.as_ref().unwrap().surface.sample_channel(8, 8, 0),
+                };
                 let id = h.state().ui.dialogs.last().unwrap().id;
                 dialogs::confirm(h.state_mut(), id).unwrap();
                 let after = value(h.state(), target);
+                assert_eq!(preview_value, after, "the gamma preview matches committed native samples");
                 assert!(after > before + 0.1, "{mode:?} {depth:?} {target:?}: {before} -> {after}");
                 assert_eq!(h.state().session.active().unwrap().doc.layers[0].content, pixels);
                 assert_eq!(h.state().session.active().unwrap().history.past_len(), history + 1);
@@ -376,7 +391,17 @@ fn explicit_channel_action_uses_channel_preview_even_with_composite_selected() {
 /// An explicit pixels Action keeps colour controls and edits pixels while an alpha is selected.
 #[test]
 fn explicit_pixels_action_bypasses_current_alpha_target() {
-    let mut h = action_dialog(ColorMode::Rgb, json!("pixels"), ChannelTarget::Alpha(0), "curves");
+    let mut app = fixture(ColorMode::Rgb, SampleType::U8, ChannelTarget::Alpha(0));
+    let mut raw = json!({"target":"pixels","points":[[0,0],[255,255]]});
+    for key in ["red", "green", "blue"] {
+        raw[key] = json!([[0, 255], [255, 255]]);
+    }
+    let mut action = photocraft_engine::actions_cmds::Action::new("Pixel edit", vec![("image.adjustments.curves".into(), raw)]);
+    action.dialogs.insert(0);
+    app.session.actions.list.push(action);
+    let mut h = harness(app);
+    h.state_mut().run("actions.play", json!({"action":"Pixel edit"})).unwrap();
+    h.run_steps(4);
     assert_eq!(names(&h), ["RGB"]);
     for key in ["red", "green", "blue"] {
         assert_eq!(params(&h)[key], json!([[0, 255], [255, 255]]), "pixel targets retain their recorded {key} curve");
@@ -385,10 +410,22 @@ fn explicit_pixels_action_bypasses_current_alpha_target() {
     h.run_steps(2);
     assert!(adjust_dialog::sample_at(h.state_mut(), 8.0, 8.0));
     assert_eq!(params(&h)["target"], "pixels");
-    let before = h.state().session.active().unwrap().doc.channels.clone();
+    let before = h.state().session.active().unwrap().doc.clone();
     let id = h.state().ui.dialogs.last().unwrap().id;
+    // A known non-neutral replay result must actually reach the pixels, while the selected
+    // alpha remains untouched. A silently dropped adjustment must fail this assertion.
+    h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("points".into(), json!([[0, 64], [255, 255]]));
+    for key in ["red", "green", "blue"] {
+        h.state_mut().ui.dialog_mut(id).unwrap().fields.insert(key.into(), json!([[0, 0], [255, 255]]));
+    }
     dialogs::confirm(h.state_mut(), id).unwrap();
-    assert_eq!(h.state().session.active().unwrap().doc.channels, before);
+    let after = &h.state().session.active().unwrap().doc;
+    assert_eq!(after.channels, before.channels);
+    let old = before.layers[0].surface().unwrap().pixel(8, 8);
+    let new = after.layers[0].surface().unwrap().pixel(8, 8);
+    assert!(old[..3].iter().all(|v| *v == 0.0));
+    assert!(new[..3].iter().all(|v| (*v - 64.0 / 255.0).abs() < 0.005));
+    assert_eq!(new[3], old[3]);
 }
 
 /// Rejected samples and Cancel leave all committed document data and history unchanged.
@@ -877,9 +914,9 @@ fn colour_set_action_gray_alias_precedence_and_cancel() {
 fn colour_set_action_gray_alias_lab_recall_keeps_both_records() {
     for kind in ["levels", "curves"] {
         let raw = if kind == "levels" {
-            json!({"target":{"colors":[0,2]},"gray":{"gamma":2},"lightness":{"gamma":1.5}})
+            json!({"target":{"colors":[0,2]},"gray":{"gamma":2},"lightness":{"gamma":1.543217}})
         } else {
-            json!({"target":{"colors":[0,2]},"gray":[[0,255],[255,0]],"lightness":[[0,30],[255,200]]})
+            json!({"target":{"colors":[0,2]},"gray":[[0,255],[255,0]],"lightness":[[0,30.123456],[255,200.654321]]})
         };
         let mut h = colour_set_action(ColorMode::Lab, SampleType::U8, kind, raw);
         let expected = params(&h);
@@ -915,4 +952,200 @@ fn scalar_action_gray_alias_does_not_repeat_pencil_smoothing() {
     let id = h.state().ui.dialogs.last().unwrap().id;
     dialogs::confirm(h.state_mut(), id).unwrap();
     assert_eq!(h.state().session.active().unwrap().doc.channels, oracle.active().unwrap().doc.channels);
+}
+
+/// Missing and malformed recorded targets must not display document-colour controls or
+/// histograms. The original address remains available for errors and Cancel leaves pixels intact.
+#[test]
+fn review_unresolved_action_targets_do_not_fall_back_to_colour_controls() {
+    for target in [json!({"channel":999}), json!({"color":0,"channel":0}), json!({"colors":[999]}), json!("quickMask")] {
+        for kind in ["levels", "curves"] {
+            let mut app = fixture(ColorMode::Lab, SampleType::U16, ChannelTarget::Color(0));
+            let command = format!("image.adjustments.{kind}");
+            let mut action = photocraft_engine::actions_cmds::Action::new("Missing target", vec![(command, json!({"target":target}))]);
+            action.dialogs.insert(0);
+            app.session.actions.list.push(action);
+            let mut h = harness(app);
+            h.state_mut().run("actions.play", json!({"action":"Missing target"})).unwrap();
+            h.run_steps(4);
+            assert!(names(&h).is_empty(), "invalid target must not show a colour dropdown: {target}");
+            assert_eq!(params(&h)["target"], target);
+            assert!(h.query_by_label("The adjustment target is missing or unavailable.").is_some());
+            assert!(params(&h).get("red").is_none() && params(&h).get("lightness").is_none());
+            let original = h.state().session.active().unwrap().doc.clone();
+            let id = h.state().ui.dialogs.last().unwrap().id;
+            assert!(dialogs::confirm(h.state_mut(), id).is_err());
+            assert!(std::sync::Arc::ptr_eq(&original, &h.state().session.active().unwrap().doc));
+        }
+    }
+}
+
+/// Malformed Action step parameter shapes fail before opening an editable neutral dialog.
+#[test]
+fn review_malformed_action_params_cannot_open_a_neutral_adjustment() {
+    for value in [json!([]), json!([1]), json!(42), json!("bad"), json!(true)] {
+        let mut app = fixture(ColorMode::Rgb, SampleType::U8, ChannelTarget::Alpha(0));
+        let before = app.session.active().unwrap().doc.clone();
+        let mut action = photocraft_engine::actions_cmds::Action::new("Bad params", vec![("image.adjustments.levels".into(), value)]);
+        action.dialogs.insert(0);
+        app.session.actions.list.push(action);
+        let result = app.run("actions.play", json!({"action":"Bad params"})).unwrap();
+        assert!(app.ui.dialogs.is_empty(), "bad params must fail the step instead of becoming defaults");
+        assert!(result.get("failed").is_some() || result.get("error").is_some(), "{result}");
+        assert!(std::sync::Arc::ptr_eq(&before, &app.session.active().unwrap().doc));
+    }
+    for value in [Value::Null, json!({})] {
+        let mut app = fixture(ColorMode::Rgb, SampleType::U8, ChannelTarget::Alpha(0));
+        let mut action = photocraft_engine::actions_cmds::Action::new("Default params", vec![("image.adjustments.levels".into(), value)]);
+        action.dialogs.insert(0);
+        app.session.actions.list.push(action);
+        let result = app.run("actions.play", json!({"action":"Default params"})).unwrap();
+        assert!(result.get("failed").is_none(), "{result}");
+        assert_eq!(app.ui.dialogs.len(), 1);
+    }
+}
+
+/// Recalling a precise Action's accepted settings must retain their parsed tone values and
+/// produce the same native plane as directly applying those settings a second time.
+#[test]
+fn review_precise_action_settings_survive_last_used_recall() {
+    for mode in MODES {
+        for kind in ["levels", "curves"] {
+            let mut raw = if kind == "levels" {
+                json!({"gray":{"gamma":1.234567,"inBlack":8.123456}})
+            } else {
+                json!({"gray":[[0,0],[100.123456,200.654321],[255,255]]})
+            };
+            raw["target"] = json!({"channel":0});
+            let mut h = colour_set_action(mode, SampleType::F32, kind, raw);
+            let expected = params(&h);
+            let id = h.state().ui.dialogs.last().unwrap().id;
+            dialogs::confirm(h.state_mut(), id).unwrap();
+            let st = h.state().session.active().unwrap();
+            let mut oracle = Session::new();
+            oracle.add_document((*st.doc).clone(), None);
+            oracle.select_layer(st.active_layer.unwrap()).unwrap();
+            oracle.execute(&format!("image.adjustments.{kind}"), expected.clone()).unwrap();
+            let id = adjust_dialog::open_last(h.state_mut(), &format!("image.adjustments.{kind}")).unwrap();
+            h.run_steps(4);
+            let parse = |p: &Value| photocraft_engine::adjust_params::from_params(kind, p, None, ColorMode::Grayscale).unwrap();
+            assert_eq!(parse(&params(&h)), parse(&expected), "{mode:?} {kind}");
+            dialogs::confirm(h.state_mut(), id).unwrap();
+            assert_eq!(h.state().session.active().unwrap().doc.channels, oracle.active().unwrap().doc.channels);
+        }
+    }
+}
+
+/// Build distinct active and addressed masks, retaining the active layer and panel target.
+fn addressed_mask_app(mode: ColorMode, depth: SampleType, filter: bool) -> (PhotocraftApp, photocraft_doc::LayerId) {
+    let mut app = if filter { filter_mask_fixture(mode, depth, true) } else { fixture(mode, depth, ChannelTarget::Alpha(0)) };
+    let mut other = app.session.active().unwrap().doc.layers[0].clone();
+    other.id = Layer::new("id", other.content.clone()).id;
+    other.name = "Receiver".into();
+    let mut mask = LayerMask::reveal_all();
+    mask.surface = Surface::new(PixelFormat::new(ColorMode::Grayscale, depth, false));
+    mask.surface.fill_rect(app.session.active().unwrap().doc.bounds(), &[0.75]);
+    if filter {
+        let LayerContent::Smart(sm) = &mut other.content else { panic!("smart") };
+        sm.filter_mask = Some(mask);
+    } else {
+        other.mask = Some(mask);
+    }
+    let id = other.id;
+    app.session
+        .edit("Other mask", |doc, _| {
+            doc.layers.push(other);
+            Ok(())
+        })
+        .unwrap();
+    (app, id)
+}
+
+/// Named/id mask Actions show, sample, preview and edit the addressed layer's own mask without
+/// switching the selected layer. The matrix includes native raster and Smart Filter masks.
+#[test]
+fn review_mask_action_context_matches_the_addressed_layer() {
+    for mode in MODES {
+        for depth in DEPTHS {
+            for kind in ["levels", "curves"] {
+                for filter in [false, true] {
+                    let (app, layer) = addressed_mask_app(mode, depth, filter);
+                    for selector in [json!(layer.0), json!("Receiver"), json!({"name":"Receiver"})] {
+                        let mut app = fixture_for_addressed_replay(&app);
+                        let command = format!("image.adjustments.{kind}");
+                        let target = if filter { "filterMask" } else { "mask" };
+                        let raw = json!({"layer":selector,"target":target});
+                        let mut action = photocraft_engine::actions_cmds::Action::new("Other mask", vec![(command.clone(), raw)]);
+                        action.dialogs.insert(0);
+                        app.session.actions.list.push(action);
+                        let original = app.session.active().unwrap().doc.clone();
+                        let active = app.session.active().unwrap().active_layer;
+                        let expected =
+                            photocraft_engine::mask_view_cmds::viewed_mask(original.layer(layer).unwrap(), filter).unwrap().surface.sample_channel(8, 8, 0);
+                        let mut h = harness(app);
+                        h.state_mut().run("actions.play", json!({"action":"Other mask"})).unwrap();
+                        h.run_steps(4);
+                        assert_eq!(names(&h), [if filter { "Receiver Filter Mask" } else { "Receiver Mask" }]);
+                        let id = h.state().ui.dialogs.last().unwrap().id;
+                        h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("__curvePicker".into(), json!("white"));
+                        assert!(adjust_dialog::sample_at(h.state_mut(), 8.0, 8.0));
+                        let p = params(&h);
+                        let want = photocraft_engine::adjust_params::adjustment_eyedropper(
+                            kind,
+                            &json!({}),
+                            photocraft_engine::adjust_params::CurvesEyedropper::White,
+                            [expected; 3],
+                            ColorMode::Grayscale,
+                        )
+                        .unwrap();
+                        let got = photocraft_engine::adjust_params::from_params(kind, &p, None, ColorMode::Grayscale).unwrap();
+                        assert_eq!(got, want, "{mode:?} {depth:?} {kind} {target}");
+                        let preview = filter_dialog::preview_document(&original, active, &command, &p, 1).unwrap();
+                        dialogs::confirm(h.state_mut(), id).unwrap();
+                        let doc = &h.state().session.active().unwrap().doc;
+                        assert_eq!(doc.layers, preview.layers);
+                        assert_eq!(doc.layers[0], original.layers[0]);
+                        assert_eq!(doc.channels, original.channels);
+                        assert!(
+                            photocraft_engine::mask_view_cmds::viewed_mask(doc.layer(layer).unwrap(), filter).unwrap().surface.sample_channel(8, 8, 0) > 0.99
+                        );
+                        assert_eq!(h.state().session.active().unwrap().active_layer, active);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Copy the source document for independent Action cases without carrying modal/UI history.
+fn fixture_for_addressed_replay(app: &PhotocraftApp) -> PhotocraftApp {
+    let st = app.session.active().unwrap();
+    let mut s = Session::new();
+    s.add_document((*st.doc).clone(), None);
+    s.select_layer(st.active_layer.unwrap()).unwrap();
+    s.active_mut().unwrap().channel_view = st.channel_view.clone();
+    let mut result = PhotocraftApp::new(s, Default::default());
+    result.background_jobs = false;
+    result
+}
+
+/// Repairing a missing Action address re-seeds its recorded alias without losing modal context.
+#[test]
+fn review_repaired_action_target_seeds_recorded_controls() {
+    let mut h = colour_set_action(ColorMode::Lab, SampleType::U16, "levels", json!({"target":{"channel":999},"gray":{"gamma":2}}));
+    assert!(names(&h).is_empty());
+    let id = h.state().ui.dialogs.last().unwrap().id;
+    let before = h.state().session.active().unwrap().doc.clone();
+    let fields = &mut h.state_mut().ui.dialog_mut(id).unwrap().fields;
+    let resume = fields.get("__resumeAction").cloned();
+    assert!(resume.is_some());
+    fields.insert("target".into(), json!({"channel":0}));
+    h.run_steps(4);
+    assert_eq!(names(&h), ["Saved sky"]);
+    assert_eq!(params(&h)["gamma"], 2.0);
+    assert!(params(&h).get("gray").is_none());
+    assert_eq!(h.state().ui.dialogs.last().unwrap().fields.get("__resumeAction").cloned(), resume);
+    edit_gamma(&mut h, "1.0");
+    dialogs::confirm(h.state_mut(), id).unwrap();
+    assert_eq!(h.state().session.active().unwrap().doc.channels, before.channels);
 }

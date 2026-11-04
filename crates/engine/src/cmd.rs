@@ -1246,6 +1246,9 @@ fn build() -> Vec<CommandSpec> {
             enabled: crate::adjust_cmds::has_adjustable,
             run: |s, p| {
                 let kind = p.get("__kind").and_then(Value::as_str).unwrap_or("invert").to_string();
+                if matches!(kind.as_str(), "levels" | "curves") {
+                    crate::channel_cmds::resolve_tone_target(s, false, p)?;
+                }
                 let eyedropped = if matches!(kind.as_str(), "levels" | "curves") { crate::adjust_params::destructive_eyedropper(s, &kind, p)? } else { None };
                 // A smart filter re-runs its params, so it records what an eyedropper resolved
                 // to, not the sample (#3127).

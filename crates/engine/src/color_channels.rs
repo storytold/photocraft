@@ -557,14 +557,15 @@ pub(crate) fn tone_adjustment(
             if colors.len() == 1 {
                 *master = neutral;
                 if let Some(k) = colors.indices().next()
-                    && p.get(crate::adjust_params::channel_keys(photocraft_doc::adjust::ToneSpace::Lab).get(k).copied().unwrap_or("")).is_none()
+                    && p.get(crate::adjust_params::channel_keys(photocraft_doc::adjust::ToneSpace::Lab).get(k).copied().unwrap_or(""))
+                        .is_none_or(Value::is_null)
                     && let Some(out) = per_channel.get_mut(k)
                 {
                     *out = group;
                 }
             } else {
                 *master = group;
-                if p.get("lightness").is_none()
+                if p.get("lightness").is_none_or(Value::is_null)
                     && let (Some(out), Some(original)) = (per_channel.first_mut(), base.first())
                 {
                     *out = original.clone();
@@ -579,14 +580,15 @@ pub(crate) fn tone_adjustment(
             if colors.len() == 1 {
                 *master = neutral;
                 if let Some(k) = colors.indices().next()
-                    && p.get(crate::adjust_params::channel_keys(photocraft_doc::adjust::ToneSpace::Lab).get(k).copied().unwrap_or("")).is_none()
+                    && p.get(crate::adjust_params::channel_keys(photocraft_doc::adjust::ToneSpace::Lab).get(k).copied().unwrap_or(""))
+                        .is_none_or(Value::is_null)
                     && let Some(out) = per_channel.get_mut(k)
                 {
                     *out = group;
                 }
             } else {
                 *master = group;
-                if p.get("lightness").is_none()
+                if p.get("lightness").is_none_or(Value::is_null)
                     && let (Some(out), Some(original)) = (per_channel.first_mut(), base.first())
                 {
                     *out = original.clone();

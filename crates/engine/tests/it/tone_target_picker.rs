@@ -335,3 +335,49 @@ fn explicit_tone_descriptors_resolve_colour_sets_before_panel_state() {
         }
     }
 }
+
+/// An explicitly addressed mask supplies the picker sample and receives the edit, even if
+/// the active layer has a different mask or no mask. Native metadata and other planes survive.
+#[test]
+fn review_picker_reads_the_addressed_mask_layer() {
+    for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab] {
+        for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+            for kind in ["levels", "curves"] {
+                let mut s = session(mode, depth);
+                let mut other = s.active().unwrap().doc.layers[0].clone();
+                other.id = Layer::new("id", other.content.clone()).id;
+                other.name = "Addressed".into();
+                let bounds = s.active().unwrap().doc.bounds();
+                other.mask.as_mut().unwrap().surface.fill_rect(bounds, &[0.75]);
+                let id = other.id;
+                s.edit("Second mask", |doc, _| {
+                    doc.layers.push(other);
+                    Ok(())
+                })
+                .unwrap();
+                for selector in [json!(id.0), json!("Addressed"), json!({"name":"Addressed"})] {
+                    let p = json!({"target":"mask","layer":selector,"eyedropper":{"point":"white","at":[8,8]}});
+                    let sample = s.active().unwrap().doc.layer(id).unwrap().mask.as_ref().unwrap().surface.sample_channel(8, 8, 0);
+                    let expected =
+                        adjust_params::adjustment_eyedropper(kind, &json!({}), adjust_params::CurvesEyedropper::White, [sample; 3], ColorMode::Grayscale)
+                            .unwrap();
+                    assert_eq!(adjust_params::destructive_eyedropper(&s, kind, &p).unwrap(), Some(expected), "{mode:?} {depth:?} {kind}");
+                }
+                s.edit("Active has no mask", |doc, _| {
+                    doc.layers[0].mask = None;
+                    Ok(())
+                })
+                .unwrap();
+                let before = s.active().unwrap().doc.clone();
+                s.execute(&format!("image.adjustments.{kind}"), json!({"target":"mask","layer":id.0,"eyedropper":{"point":"white","at":[8,8]}})).unwrap();
+                let doc = &s.active().unwrap().doc;
+                assert!(doc.layer(id).unwrap().mask.as_ref().unwrap().surface.sample_channel(8, 8, 0) > 0.99);
+                assert_eq!(doc.layers[0], before.layers[0]);
+                assert_eq!(doc.channels, before.channels);
+                assert_eq!(doc.quick_mask, before.quick_mask);
+                s.undo();
+                assert_eq!(s.active().unwrap().doc.layers, before.layers);
+            }
+        }
+    }
+}
