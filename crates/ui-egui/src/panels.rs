@@ -33,7 +33,7 @@ mod dock;
 pub mod histogram_panel;
 mod history;
 pub mod history_menu_ui;
-mod info;
+pub(crate) mod info;
 pub mod info_panel_options;
 mod layer_drag;
 pub mod layer_filter_ui;
