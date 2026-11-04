@@ -177,6 +177,35 @@ fn transform_controls_stay_reachable_across_the_more_transition() {
 }
 
 #[test]
+fn capture_transform_bar_review_fixture() {
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    let Some(path) = std::env::var_os("PHOTOCRAFT_TRANSFORM_BAR_CAPTURE") else { return };
+    let _gpu = photocraft_testkit::gpu_lock();
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.ui.transform = Some(session());
+    set_size_unit(&mut app, "inches");
+    let mut h = Harness::builder().with_size(vec2(1000.0, 160.0)).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                ui.painter().rect_filled(ui.max_rect(), 0.0, ui.visuals().panel_fill);
+                ui.horizontal_centered(|ui| options_bar(app, ui));
+            }
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
+    h.run_steps(6);
+    let path = std::path::PathBuf::from(path);
+    h.render().unwrap().save(&path).unwrap();
+    if let Some(more) = h.query_by_label("More transform controls") {
+        more.click();
+        h.run_steps(2);
+        h.render().unwrap().save(path.with_file_name("transform-advanced-after-more.png")).unwrap();
+    }
+}
+
+#[test]
 fn interpolation_selection_is_reused_for_the_next_transform() {
     use egui::accesskit::Role;
     use egui_kittest::{Harness, kittest::Queryable};
