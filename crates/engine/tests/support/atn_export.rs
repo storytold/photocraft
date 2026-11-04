@@ -39,13 +39,7 @@ pub fn preserved(set: &str, action: &Action) -> Vec<AtnItem> {
             bytes
         }
     };
-    atn::parse_sets(&bytes)
-        .unwrap()
-        .into_iter()
-        .flat_map(|file| file.actions)
-        .find(|record| record.name.to_string_lossy() == action.name)
-        .unwrap()
-        .items
+    atn::parse_sets(&bytes).unwrap().into_iter().flat_map(|file| file.actions).find(|record| record.name.to_string_lossy() == action.name).unwrap().items
 }
 
 /// A one-step command cannot be emitted as a lossy Photoshop approximation.
