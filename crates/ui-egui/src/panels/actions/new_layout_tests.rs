@@ -53,7 +53,7 @@ fn streamed_history_keeps_the_root_boundary_across_quanta_and_nested_dialogs() {
                 assert!(!app.ui.status_error, "{}", app.ui.status);
                 let state = app.session.active().unwrap();
                 assert!(state.doc.layers.iter().any(|layer| layer.name == "Tail"));
-                assert_eq!(state.history.past_len(), past + if single { 1 } else { 2 }, "nested={nested}, dialog={dialog}");
+                assert_eq!(state.history.past_len(), past + if single { 1 } else { 2 + usize::from(dialog) }, "nested={nested}, dialog={dialog}");
                 if single {
                     assert_eq!(state.history.entries().last().map(String::as_str), Some("Action: Root"));
                     app.run("edit.undo", json!({})).unwrap();

@@ -104,6 +104,15 @@ fn single_history_dialog_refuses_intervening_edit_or_document_switch() {
 
 /// Prepare a real paused spelling step with a known document and history boundary, under either grouping policy.
 fn paused_history_spelling(single: bool, gate: Option<Gate>) -> (PhotocraftApp, std::sync::Arc<photocraft_doc::Document>, usize) {
+    paused_history_spelling_with(single, gate, |_| {})
+}
+
+/// Configure the complete definition before its immutable playback snapshot is paused.
+fn paused_history_spelling_with(
+    single: bool,
+    gate: Option<Gate>,
+    configure: impl FnOnce(&mut Vec<Action>),
+) -> (PhotocraftApp, std::sync::Arc<photocraft_doc::Document>, usize) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width":300,"height":100})).unwrap();
     app.run("type.create", json!({"x":10,"y":50,"text":"Teh brwon"})).unwrap();
@@ -120,6 +129,7 @@ fn paused_history_spelling(single: bool, gate: Option<Gate>) -> (PhotocraftApp, 
     );
     action.dialogs.insert(1);
     app.session.actions.list.push(action);
+    configure(&mut app.session.actions.list);
     app.session.authorize = gate;
     let paused = play(&mut app, &json!({"action":"Spell"})).unwrap();
     assert_eq!(paused["paused"]["dialog"], crate::type_panels_ui::SPELLING, "{paused}");
@@ -2400,11 +2410,12 @@ fn a_changed_live_gate_cannot_be_replaced_for_the_remaining_action() {
     }
     for service in [false, true] {
         for nested in [false, true] {
-            let (mut app, before, past) = paused_history_spelling(true, Some(deny_wide_blur));
-            if nested {
-                app.session.actions.list.push(Action::new("Nested tail", vec![("layer.renameLayer".into(), json!({"name":"Forbidden tail"}))]));
-                app.session.actions.list[0].steps[2] = ("actions.play".into(), json!({"action":"Nested tail"}));
-            }
+            let (mut app, before, past) = paused_history_spelling_with(true, Some(deny_wide_blur), |list| {
+                if nested {
+                    list.push(Action::new("Nested tail", vec![("layer.renameLayer".into(), json!({"name":"Forbidden tail"}))]));
+                    list[0].steps[2] = ("actions.play".into(), json!({"action":"Nested tail"}));
+                }
+            });
             spelling_change(&mut app, json!({"action":"change","start":0,"end":3,"word":"Teh","replace":"The"})).unwrap();
             let corrected = app.session.active().unwrap().doc.clone();
             if service {
@@ -2509,8 +2520,7 @@ fn configured_gates_require_one_composed_policy_for_automated_resume() {
 #[test]
 /// A policy change after the final spelling step must not discard completed edits when no tail remains to dispatch.
 fn a_changed_gate_after_the_last_spelling_step_keeps_completed_edits() {
-    let (mut app, before, past) = paused_history_spelling(true, Some(deny_wide_blur));
-    app.session.actions.list[0].steps.truncate(2);
+    let (mut app, before, past) = paused_history_spelling_with(true, Some(deny_wide_blur), |list| list[0].steps.truncate(2));
     spelling_change(&mut app, json!({"action":"change","start":0,"end":3,"word":"Teh","replace":"The"})).unwrap();
     let corrected = app.session.active().unwrap().doc.clone();
     app.session.authorize = Some(|_, _| Ok(()));
