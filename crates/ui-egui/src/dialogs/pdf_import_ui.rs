@@ -392,7 +392,7 @@ fn password_body(ui: &mut egui::Ui, f: &mut Map<String, Value>, t: &Tokens) {
         ui.label(egui::RichText::new(tl!("Password:")).color(t.text_dim));
         let mut pw = s(f, "password", "").to_string();
         let id = ui.scope_id().with("pdf-password");
-        let r = widgets::text_field(ui, id, &mut pw, "", 220.0, false);
+        let r = widgets::text_field(ui, id, &mut pw, "", 220.0, false).accessible_name(tl!("Password:"));
         if r.changed() {
             f.insert("password".into(), json!(pw));
         }
@@ -528,7 +528,7 @@ fn right_column(ui: &mut egui::Ui, f: &mut Map<String, Value>, st: &mut PdfImpor
         group(ui, t, tl!("Page Options"), |ui| {
             field(ui, "Name:", &mut |ui| {
                 let mut name = s(f, "name", "").to_string();
-                let r = widgets::text_field(ui, ui.scope_id().with("pdf-name"), &mut name, "", 190.0, false);
+                let r = widgets::text_field(ui, ui.scope_id().with("pdf-name"), &mut name, "", 190.0, false).accessible_name(tl!("Name:"));
                 if r.changed() {
                     f.insert("name".into(), json!(name));
                 }
@@ -561,7 +561,7 @@ fn right_column(ui: &mut egui::Ui, f: &mut Map<String, Value>, st: &mut PdfImpor
             for (key, label, cur, other) in [("width", "Width:", w, h), ("height", "Height:", h, w)] {
                 field(ui, label, &mut |ui| {
                     let mut v = crate::new_doc_ui::to_unit(cur as f32, &unit, ppi);
-                    let r = widgets::value_field_prec(ui, &mut v, 0.0..=300_000.0, "", 70.0, decimals);
+                    let r = widgets::value_field_prec(ui, &mut v, 0.0..=300_000.0, "", 70.0, decimals).accessible_name(tl!(label));
                     if r.changed() && !r.dragged() {
                         let px = crate::new_doc_ui::from_unit(v, &unit, ppi).round().clamp(1.0, 300_000.0) as u32;
                         let (nw, nh) = if constrain && cur > 0 {
@@ -588,7 +588,8 @@ fn right_column(ui: &mut egui::Ui, f: &mut Map<String, Value>, st: &mut PdfImpor
             field(ui, "Resolution:", &mut |ui| {
                 let res_unit = s(f, "resolutionUnit", "in").to_string();
                 let mut v = if res_unit == "cm" { ppi / 2.54 } else { ppi };
-                let r = widgets::value_field_prec(ui, &mut v, 0.1..=pdf_import::MAX_RESOLUTION, "", 70.0, if res_unit == "cm" { 2 } else { 0 });
+                let r = widgets::value_field_prec(ui, &mut v, 0.1..=pdf_import::MAX_RESOLUTION, "", 70.0, if res_unit == "cm" { 2 } else { 0 })
+                    .accessible_name(tl!("Resolution:"));
                 if r.changed() && !r.dragged() {
                     let new = (if res_unit == "cm" { v * 2.54 } else { v }).clamp(pdf_import::MIN_RESOLUTION, pdf_import::MAX_RESOLUTION);
                     // A typed size is a physical size: it keeps its inches, so its pixels follow.

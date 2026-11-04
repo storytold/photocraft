@@ -344,6 +344,10 @@ fn the_dialog_draws_its_controls() {
     );
     PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
     h.run_steps(6);
+    // The captions are painted manually, so fields need explicit accessible names.
+    for label in ["Name:", "Width:", "Height:", "Resolution:"] {
+        assert!(h.query_all_by_label(label).next().is_some(), "missing accessible field: {label}");
+    }
     for label in [
         "Import PDF",
         "Select:",
