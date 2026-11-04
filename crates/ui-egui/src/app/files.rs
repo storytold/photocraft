@@ -23,15 +23,19 @@ impl PhotocraftApp {
         }
         self.ui.recent_files = r.clone();
         let now = crate::recent_thumbs::unix_now();
+        let listed = r.iter().any(|p| p == path);
         self.session.prefs.edit(|p| {
             let fh = &mut p.file_handling;
             fh.recent_opened.retain(|k, _| r.contains(k));
-            if r.iter().any(|listed| listed == path) {
+            if listed {
                 fh.recent_opened.insert(path.to_string(), now);
             }
             fh.recent_files = r;
         });
-        self.seed_recent_thumbnail(path);
+        // A zero cap leaves the path unlisted: nothing to seed for it.
+        if listed {
+            self.seed_recent_thumbnail(path);
+        }
     }
 
     /// Hand the thumbnail of the open document `path` was just opened from or saved to to the
