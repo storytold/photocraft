@@ -764,6 +764,8 @@ fn every_mapped_command_exports_and_imports_back() {
         "filter.sharpen.sharpen",
         "filter.sharpen.sharpenEdges",
         "filter.sharpen.sharpenMore",
+        "gradient.fill.set",
+        "layer.newFillLayer.gradient",
     ];
     let unexpected: Vec<&str> = missing.iter().copied().filter(|id| !allowed.contains(id)).collect();
     assert!(unexpected.is_empty(), "add round-trip cases for {unexpected:?}");

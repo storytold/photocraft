@@ -1159,49 +1159,60 @@ fn pattern_desc(p: &Value) -> Option<Descriptor> {
     Some(t)
 }
 
-const GRADIENT_STYLES: &[(&str, &str)] = &[
-    ("Rdl", "radial"), ("Lnr", "linear"), ("Angl", "angle"),
-    ("Rflt", "reflected"), ("Dmnd", "diamond"),
-];
+const GRADIENT_STYLES: &[(&str, &str)] = &[("Rdl", "radial"), ("Lnr", "linear"), ("Angl", "angle"), ("Rflt", "reflected"), ("Dmnd", "diamond")];
 
 /// Color stops from a `gradientLayer` Grad descriptor: `[[location_0_to_1, "#rrggbb"], …]`.
 /// Returns `None` if the descriptor is malformed or has fewer than 2 stops.
 fn gradient_color_stops(grad: &Descriptor) -> Option<Vec<Value>> {
     let clrs = get_list(grad, "Clrs")?;
-    let stops: Option<Vec<Value>> = clrs.iter().map(|item| {
-        let D::Descriptor(stop) = item else { return None };
-        let hex = color_hex(get_obj(stop, "Clr ")?)?;
-        let loc = get_num(stop, "Lctn")? / 4096.0;
-        Some(json!([loc, hex]))
-    }).collect();
+    let stops: Option<Vec<Value>> = clrs
+        .iter()
+        .map(|item| {
+            let D::Descriptor(stop) = item else { return None };
+            let hex = color_hex(get_obj(stop, "Clr ")?)?;
+            let loc = get_num(stop, "Lctn")? / 4096.0;
+            Some(json!([loc, hex]))
+        })
+        .collect();
     let stops = stops?;
-    if stops.len() < 2 { return None; }
+    if stops.len() < 2 {
+        return None;
+    }
     Some(stops)
 }
 
 /// Per-segment midpoints from a `gradientLayer` Grad descriptor, in 0..1 range (Photoshop
 /// stores 0–100 in `Mdpn`; 50 is the default). Returns `None` when all segments use the
 /// default so the caller can omit the `"midpoints"` key. One value per segment (one fewer
-/// than stops); `Mdpn` on the last stop describes no segment and is ignored.
+/// than stops); `Mdpn` on the first stop describes no segment and is ignored.
 fn gradient_midpoints(grad: &Descriptor) -> Option<Vec<f64>> {
     let clrs = get_list(grad, "Clrs")?;
-    let n = clrs.len().saturating_sub(1);
-    let mids: Vec<f64> = clrs.iter().take(n).map(|item| {
-        let D::Descriptor(stop) = item else { return 0.5 };
-        get_num(stop, "Mdpn").map(|m| m / 100.0).unwrap_or(0.5)
-    }).collect();
-    if mids.iter().all(|&m| (m - 0.5).abs() < 0.001) { return None; }
+    let mids: Vec<f64> = clrs
+        .iter()
+        .skip(1)
+        .map(|item| {
+            let D::Descriptor(stop) = item else { return 0.5 };
+            get_num(stop, "Mdpn").map(|m| m / 100.0).unwrap_or(0.5)
+        })
+        .collect();
+    if mids.iter().all(|&m| (m - 0.5).abs() < 0.001) {
+        return None;
+    }
     Some(mids)
 }
 
 /// Transparency stops from a `gradientLayer` Grad descriptor: `[[location_0_to_1, opacity_0_to_100], …]`.
 fn gradient_transparency_stops(grad: &Descriptor) -> Vec<Value> {
-    get_list(grad, "Trns").unwrap_or(&[]).iter().filter_map(|item| {
-        let D::Descriptor(stop) = item else { return None };
-        let opct = get_num(stop, "Opct")?;
-        let loc = get_num(stop, "Lctn")? / 4096.0;
-        Some(json!([loc, opct]))
-    }).collect()
+    get_list(grad, "Trns")
+        .unwrap_or(&[])
+        .iter()
+        .filter_map(|item| {
+            let D::Descriptor(stop) = item else { return None };
+            let opct = get_num(stop, "Opct")?;
+            let loc = get_num(stop, "Lctn")? / 4096.0;
+            Some(json!([loc, opct]))
+        })
+        .collect()
 }
 
 /// Set params for a `gradientLayer` descriptor → `gradient.fill.set`.
@@ -1218,13 +1229,19 @@ fn gradient_layer_set_params(t: &Descriptor) -> Option<Value> {
     if let Some(mids) = gradient_midpoints(grad) {
         p.insert("midpoints".into(), Value::Array(mids.into_iter().map(Value::from).collect()));
     }
-    p.insert("reverse".into(), get_bool(t, "Rvrs").unwrap_or(false).into());
-    p.insert("dither".into(), get_bool(t, "Dthr").unwrap_or(false).into());
-    p.insert("scale".into(), get_num(t, "Scl ").unwrap_or(100.0).into());
-    let (h, v) = get_obj(t, "Ofst")
-        .map(|ofst| (get_num(ofst, "Hrzn").unwrap_or(0.0), get_num(ofst, "Vrtc").unwrap_or(0.0)))
-        .unwrap_or((0.0, 0.0));
-    p.insert("offset".into(), json!([h, v]));
+    if let Some(v) = get_bool(t, "Rvrs") {
+        p.insert("reverse".into(), v.into());
+    }
+    if let Some(v) = get_bool(t, "Dthr") {
+        p.insert("dither".into(), v.into());
+    }
+    if let Some(v) = get_num(t, "Scl ") {
+        p.insert("scale".into(), v.into());
+    }
+    if let Some(ofst) = get_obj(t, "Ofst") {
+        let (h, v) = (get_num(ofst, "Hrzn")?, get_num(ofst, "Vrtc")?);
+        p.insert("offset".into(), json!([h, v]));
+    }
     Some(Value::Object(p))
 }
 
@@ -1242,8 +1259,105 @@ fn gradient_layer_params(t: &Descriptor) -> Option<(Value, Value)> {
     create_p.insert("to".into(), to.into());
     create_p.insert("style".into(), style.into());
     create_p.insert("angle".into(), angle.into());
-    if get_bool(t, "Rvrs") == Some(true) { create_p.insert("reverse".into(), true.into()); }
+    if get_bool(t, "Rvrs") == Some(true) {
+        create_p.insert("reverse".into(), true.into());
+    }
     Some((Value::Object(create_p), set_p))
+}
+
+/// The `Grad` member shared by `gradientLayer` Make and Set descriptors.
+fn gradient_layer_grad_desc(p: &Value) -> Option<Descriptor> {
+    let stops = p.get("stops")?.as_array()?;
+    if stops.len() < 2 {
+        return None;
+    }
+    let empty: Vec<Value> = vec![];
+    let midpoints: &[Value] = p.get("midpoints").map_or(Some(empty.as_slice()), |v| v.as_array().map(|a| a.as_slice()))?;
+    if !midpoints.is_empty() && midpoints.len() != stops.len().checked_sub(1)? {
+        return None;
+    }
+    let colors: Option<Vec<D>> = stops
+        .iter()
+        .enumerate()
+        .map(|(i, stop)| {
+            let stop = stop.as_array().filter(|stop| stop.len() == 2)?;
+            let location = stop.first()?.as_f64()?;
+            let midpoint = if i == 0 { 0.5 } else { midpoints.get(i - 1).and_then(Value::as_f64).unwrap_or(0.5) };
+            if !location.is_finite() || !(0.0..=1.0).contains(&location) || !midpoint.is_finite() {
+                return None;
+            }
+            Some(D::Descriptor(
+                desc("Clrt")
+                    .with("Clr ", D::Descriptor(color_desc(stop.get(1)?.as_str()?)?))
+                    .with("Type", enm("Clry", "UsrS"))
+                    .with("Lctn", long((location * 4096.0).round()))
+                    .with("Mdpn", long((midpoint.clamp(0.05, 0.95) * 100.0).round())),
+            ))
+        })
+        .collect();
+    let transparency = match p.get("transparency") {
+        Some(Value::Array(stops)) => {
+            let stops: Option<Vec<D>> = stops
+                .iter()
+                .map(|stop| {
+                    let stop = stop.as_array().filter(|stop| stop.len() == 2)?;
+                    let (location, opacity) = (stop.first()?.as_f64()?, stop.get(1)?.as_f64()?);
+                    if !(0.0..=1.0).contains(&location) || !opacity.is_finite() {
+                        return None;
+                    }
+                    Some(D::Descriptor(desc("TrnS").with("Opct", pct(opacity)).with("Lctn", long((location * 4096.0).round())).with("Mdpn", long(50.0))))
+                })
+                .collect();
+            D::List(stops?)
+        }
+        None => D::List(vec![
+            D::Descriptor(desc("TrnS").with("Opct", pct(100.0)).with("Lctn", long(0.0)).with("Mdpn", long(50.0))),
+            D::Descriptor(desc("TrnS").with("Opct", pct(100.0)).with("Lctn", long(4096.0)).with("Mdpn", long(50.0))),
+        ]),
+        _ => return None,
+    };
+    Some(
+        desc("Grdn")
+            .with("Nm  ", text("Custom"))
+            .with("GrdF", enm("GrdF", "CstS"))
+            .with("Intr", D::Double(4096.0))
+            .with("Clrs", D::List(colors?))
+            .with("Trns", transparency),
+    )
+}
+
+/// A `gradientLayer` descriptor for a Make event. The following Set event owns all settings.
+fn gradient_layer_desc_create(p: &Value) -> Option<Descriptor> {
+    let style = lookup_back(GRADIENT_STYLES, jstr(p, "style")?)?;
+    let stops = json!([[0.0, jstr(p, "from")?], [1.0, jstr(p, "to")?]]);
+    let grad = gradient_layer_grad_desc(&json!({"stops": stops}))?;
+    Some(desc("gradientLayer").with("Grad", D::Descriptor(grad)).with("Type", enm("GrdT", style)))
+}
+
+/// A `gradientLayer` descriptor for a Set event, inverse to `gradient_layer_set_params`.
+fn gradient_layer_set_desc(p: &Value) -> Option<Descriptor> {
+    let style = lookup_back(GRADIENT_STYLES, jstr(p, "style")?)?;
+    let mut t = desc("gradientLayer").with("Grad", D::Descriptor(gradient_layer_grad_desc(p)?)).with("Type", enm("GrdT", style));
+    if let Some(v) = jnum(p, "angle") {
+        t = t.with("Angl", long(v));
+    }
+    if let Some(v) = jbool(p, "reverse") {
+        t = t.with("Rvrs", D::Boolean(v));
+    }
+    if let Some(v) = jbool(p, "dither") {
+        t = t.with("Dthr", D::Boolean(v));
+    }
+    if let Some(v) = jnum(p, "scale") {
+        t = t.with("Scl ", pct(v));
+    }
+    if let Some(offset) = p.get("offset").and_then(Value::as_array) {
+        let (h, v) = (offset.first()?.as_f64()?, offset.get(1)?.as_f64()?);
+        if offset.len() != 2 || !h.is_finite() || !v.is_finite() {
+            return None;
+        }
+        t = t.with("Ofst", D::Descriptor(desc("Pnt ").with("Hrzn", pct(h)).with("Vrtc", pct(v))));
+    }
+    Some(t)
 }
 
 /// Layer › Layer Mask: the `UsrM` value of an Add Layer Mask `Mk` ↔ its command.
@@ -1364,10 +1478,7 @@ fn make_from(d: &Descriptor) -> Mapped {
                 None => Mapped::Unsupported { harmless: false },
             },
             Some(t) if t.class_id.is("gradientLayer") => match gradient_layer_params(t) {
-                Some((create_p, set_p)) => steps(vec![
-                    ("layer.newFillLayer.gradient", create_p),
-                    ("gradient.fill.set", set_p),
-                ]),
+                Some((create_p, set_p)) => steps(vec![("layer.newFillLayer.gradient", create_p), ("gradient.fill.set", set_p)]),
                 None => Mapped::Unsupported { harmless: false },
             },
             _ => Mapped::Unsupported { harmless: false },
@@ -1452,6 +1563,10 @@ fn make_to(id: &str, p: &Value) -> Option<Descriptor> {
                 return None;
             }
             let t = pattern_desc(p)?;
+            desc("null").with("null", class_ref("contentLayer")).with("Usng", D::Descriptor(desc("contentLayer").with("Type", D::Descriptor(t))))
+        }
+        "layer.newFillLayer.gradient" => {
+            let t = gradient_layer_desc_create(p)?;
             desc("null").with("null", class_ref("contentLayer")).with("Usng", D::Descriptor(desc("contentLayer").with("Type", D::Descriptor(t))))
         }
         "layer.duplicate" => {
@@ -1630,48 +1745,52 @@ fn set_from(d: &Descriptor) -> Mapped {
                 v.push(("layer.setProps", Value::Object(p)));
             }
             if let Some(blnd_list) = get_list(t, "Blnd") {
-                let entries: Option<Vec<Value>> = blnd_list.iter().map(|item| {
-                    let D::Descriptor(blnd) = item else { return None };
-                    let chnl_ref = get_ref(blnd, "Chnl")?;
-                    let ch_name = match target(chnl_ref) {
-                        Target::Ordinal(o) if o == "Trgt" || o == "Cmps" => "gray",
-                        Target::Ordinal(o) => lookup(CHANNELS, &o)?,
-                        _ => return None,
-                    };
-                    let src_b = get_num(blnd, "SrcB")? as i64;
-                    let src_l = get_num(blnd, "Srcl")? as i64;
-                    let src_w = get_num(blnd, "SrcW")? as i64;
-                    let src_m = get_num(blnd, "Srcm")? as i64;
-                    let mut entry = json!({"channel": ch_name, "thisLayer": [src_b, src_l, src_w, src_m]});
-                    if let (Some(db), Some(dl), Some(dw), Some(dt)) = (
-                        get_num(blnd, "DstB"), get_num(blnd, "Dstl"),
-                        get_num(blnd, "DstW"), get_num(blnd, "Dstt"),
-                    ) {
-                        entry["underlying"] = json!([db as i64, dl as i64, dw as i64, dt as i64]);
-                    }
-                    Some(entry)
-                }).collect();
+                let entries: Option<Vec<Value>> = blnd_list
+                    .iter()
+                    .map(|item| {
+                        let D::Descriptor(blnd) = item else { return None };
+                        let chnl_ref = get_ref(blnd, "Chnl")?;
+                        let ch_name = match target(chnl_ref) {
+                            Target::Ordinal(o) if o == "Trgt" || o == "Cmps" => "gray",
+                            Target::Ordinal(o) => lookup(CHANNELS, &o)?,
+                            _ => return None,
+                        };
+                        let src_b = get_num(blnd, "SrcB")? as i64;
+                        let src_l = get_num(blnd, "Srcl")? as i64;
+                        let src_w = get_num(blnd, "SrcW")? as i64;
+                        let src_m = get_num(blnd, "Srcm")? as i64;
+                        let mut entry = json!({"channel": ch_name, "thisLayer": [src_b, src_l, src_w, src_m]});
+                        if let (Some(db), Some(dl), Some(dw), Some(dt)) =
+                            (get_num(blnd, "DstB"), get_num(blnd, "Dstl"), get_num(blnd, "DstW"), get_num(blnd, "Dstt"))
+                        {
+                            entry["underlying"] = json!([db as i64, dl as i64, dw as i64, dt as i64]);
+                        }
+                        Some(entry)
+                    })
+                    .collect();
                 if let Some(entries) = entries {
                     if let Some(mut bp) = layer_target(r) {
                         bp.insert("blendIf".into(), Value::Array(entries));
-                        v.push(("layer.setProps", Value::Object(bp)));
+                        v.push(("layer.layerStyle.blendingOptions", Value::Object(bp)));
                     }
                 }
             }
             if v.is_empty() { unsupported } else { steps(v) }
         }
         // A Pattern Fill layer's pattern (double-click its thumbnail).
-        (Some("contentLayer"), Target::Ordinal(o)) if o == "Trgt" => match get_obj(d, "T   ") {
-            Some(t) if t.class_id.is("patternLayer") => match pattern_params(t) {
-                Some(p) if !p.is_empty() => step("layer.fill.pattern.set", Value::Object(p)),
+        (Some("contentLayer"), Target::Ordinal(o)) if o == "Trgt" => {
+            match get_obj(d, "T   ").and_then(|t| if t.class_id.is("contentLayer") { get_obj(t, "Type") } else { Some(t) }) {
+                Some(t) if t.class_id.is("patternLayer") => match pattern_params(t) {
+                    Some(p) if !p.is_empty() => step("layer.fill.pattern.set", Value::Object(p)),
+                    _ => unsupported,
+                },
+                Some(t) if t.class_id.is("gradientLayer") => match gradient_layer_set_params(t) {
+                    Some(p) => step("gradient.fill.set", p),
+                    None => unsupported,
+                },
                 _ => unsupported,
-            },
-            Some(t) if t.class_id.is("gradientLayer") => match gradient_layer_set_params(t) {
-                Some(p) => step("gradient.fill.set", p),
-                None => unsupported,
-            },
-            _ => unsupported,
-        },
+            }
+        }
         (Some("AdjL"), Target::Ordinal(o)) if o == "Trgt" => {
             match get_obj(d, "T   ").and_then(|t| adjustment_by_class(&trimmed(&t.class_id)).map(|a| (a, t))) {
                 Some((a, t)) => match (a.from)(t) {
@@ -1795,6 +1914,10 @@ fn set_to(id: &str, p: &Value) -> Option<Descriptor> {
                 return None;
             }
             desc("null").with("null", target_ref("contentLayer")).with("T   ", D::Descriptor(pattern_desc(p)?))
+        }
+        "gradient.fill.set" => {
+            let t = gradient_layer_set_desc(p)?;
+            desc("null").with("null", target_ref("contentLayer")).with("T   ", D::Descriptor(desc("contentLayer").with("Type", D::Descriptor(t))))
         }
         "layer.setAdjustment" => {
             // The adjustment kind isn't in the params: Photoshop needs it, so only steps that
@@ -3711,6 +3834,7 @@ const EVENTS: &[Event] = &[
             "layer.new.layerViaCut",
             "layer.newFillLayer.solidColor",
             "layer.newFillLayer.pattern",
+            "layer.newFillLayer.gradient",
             "layer.newAdjustmentLayer.levels",
             "layer.newAdjustmentLayer.curves",
             "layer.newAdjustmentLayer.hueSaturation",
@@ -3754,6 +3878,7 @@ const EVENTS: &[Event] = &[
             "layer.setLabelColor",
             "layer.setAdjustment",
             "layer.fill.pattern.set",
+            "gradient.fill.set",
             "layer.new.layerFromBackground",
         ],
         from: set_from,
@@ -4420,6 +4545,84 @@ pub fn specs() -> Vec<CommandSpec> {
             journal: true,
         },
     ]
+}
+
+#[cfg(test)]
+mod gradient_and_blend_if_tests {
+    use super::*;
+
+    fn gradient_descriptor(midpoint: f64) -> Descriptor {
+        desc("gradientLayer")
+            .with(
+                "Grad",
+                D::Descriptor(
+                    desc("Grdn").with(
+                        "Clrs",
+                        D::List(vec![
+                            D::Descriptor(
+                                desc("Clrt").with("Clr ", D::Descriptor(color_desc("#000000").unwrap())).with("Lctn", long(0.0)).with("Mdpn", long(50.0)),
+                            ),
+                            D::Descriptor(
+                                desc("Clrt")
+                                    .with("Clr ", D::Descriptor(color_desc("#ffffff").unwrap()))
+                                    .with("Lctn", long(4096.0))
+                                    .with("Mdpn", long(midpoint * 100.0)),
+                            ),
+                        ]),
+                    ),
+                ),
+            )
+            .with("Type", enm("GrdT", "Lnr"))
+    }
+
+    #[test]
+    fn gradient_midpoint_is_read_from_the_stop_ending_its_segment() {
+        let params = gradient_layer_set_params(&gradient_descriptor(0.3)).unwrap();
+        assert_eq!(params["midpoints"], json!([0.3]));
+    }
+
+    #[test]
+    fn gradient_set_keeps_explicit_false_and_zero_values() {
+        let descriptor = gradient_descriptor(0.5)
+            .with("Rvrs", D::Boolean(false))
+            .with("Dthr", D::Boolean(false))
+            .with("Scl ", pct(100.0))
+            .with("Ofst", D::Descriptor(desc("Pnt ").with("Hrzn", pct(0.0)).with("Vrtc", pct(0.0))));
+        let params = gradient_layer_set_params(&descriptor).unwrap();
+        assert_eq!(params["reverse"], false);
+        assert_eq!(params["dither"], false);
+        assert_eq!(params["scale"], 100.0);
+        assert_eq!(params["offset"], json!([0.0, 0.0]));
+    }
+
+    #[test]
+    fn gradient_make_and_set_descriptors_round_trip() {
+        let create = json!({"from": "#000000", "to": "#ffffff", "style": "linear", "angle": 90.0});
+        let set = json!({
+            "style": "linear", "angle": 90.0,
+            "stops": [[0.0, "#000000"], [1.0, "#ffffff"]],
+            "transparency": [[0.0, 100.0], [1.0, 100.0]],
+            "midpoints": [0.3], "reverse": false, "dither": false,
+            "scale": 100.0, "offset": [0.0, 0.0]
+        });
+        let make = make_to("layer.newFillLayer.gradient", &create).unwrap();
+        let Mapped::Steps(make_steps) = make_from(&make) else { panic!("gradient Make did not import") };
+        assert_eq!(make_steps[0], ("layer.newFillLayer.gradient".into(), create));
+
+        let descriptor = set_to("gradient.fill.set", &set).unwrap();
+        let Mapped::Steps(set_steps) = set_from(&descriptor) else { panic!("gradient Set did not import") };
+        assert_eq!(set_steps, vec![("gradient.fill.set".into(), set)]);
+    }
+
+    #[test]
+    fn blend_if_imports_as_blending_options() {
+        let blend =
+            desc("Blnd").with("Chnl", target_ref("Chnl")).with("SrcB", long(0.0)).with("Srcl", long(10.0)).with("SrcW", long(245.0)).with("Srcm", long(255.0));
+        let descriptor =
+            desc("null").with("null", target_ref("Lyr ")).with("T   ", D::Descriptor(desc("Lyr ").with("Blnd", D::List(vec![D::Descriptor(blend)]))));
+        let Mapped::Steps(steps) = set_from(&descriptor) else { panic!("blend-if Set did not import") };
+        assert_eq!(steps, vec![("layer.layerStyle.blendingOptions".into(), json!({"blendIf": [{"channel": "gray", "thisLayer": [0, 10, 245, 255]}]}))]);
+    }
 }
 
 #[cfg(test)]
