@@ -1,4 +1,6 @@
-use super::edit::{TEMPLATE_NODES, compact, copies_fit, edited_object, fits, is_stub, names_one_frame, new_object, pad_frames, td_edited_object, with_modes};
+use super::edit::{
+    TEMPLATE_NODES, compact, copies_fit, copies_fit_plus, edited_object, fits, is_stub, names_one_frame, new_object, pad_frames, td_edited_object, with_modes,
+};
 use super::import::{OPENTYPE_KEYS, TXT2_FEATURES, TXT2_STYLISTIC_SETS, kern_units, manual, object_frame, pair_runs, parse_txt2, postscript_for, real};
 use super::{
     AntiAlias, Caps, CharStyle, Color, ColorMode, D, Descriptor, E, FontBaseline, Id, Kerning, Orientation, ParagraphStyle, TextAlign, TextLayer, TextShape,
@@ -216,10 +218,12 @@ fn txt2_style_runs(layer: &TextLayer, base: &E, fonts: &mut Vec<E>, dpi: f32) ->
     // A template too large to copy once per run is compacted rather than given up on: falling
     // back would keep the file's old style runs, so the edit would not reach the saved file.
     let compacted;
-    let base = if copies_fit(base, spans.len()) {
+    // Each run can gain up to TXT2_ADDED_KEYS keys the template may lack (size, leading, features...).
+    const TXT2_ADDED_KEYS: usize = 18;
+    let base = if copies_fit_plus(base, spans.len(), TXT2_ADDED_KEYS) {
         base
     } else {
-        compacted = compact(base, &["0", "0", "6"]).filter(|c| copies_fit(c, spans.len()))?;
+        compacted = compact(base, &["0", "0", "6"]).filter(|c| copies_fit_plus(c, spans.len(), TXT2_ADDED_KEYS))?;
         &compacted
     };
     let default = CharStyle::default();

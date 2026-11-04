@@ -21,12 +21,17 @@ const MAX_COPIED_BYTES: usize = 64 << 20;
 
 /// Whether `copies` copies of `v` fit [`MAX_COPIED_NODES`] and [`MAX_COPIED_BYTES`].
 pub(super) fn copies_fit(v: &E, copies: usize) -> bool {
+    copies_fit_plus(v, copies, 0)
+}
+
+/// [`copies_fit`] where each copy also gains up to `extra_nodes` nodes (keys the caller adds after copying).
+pub(super) fn copies_fit_plus(v: &E, copies: usize, extra_nodes: usize) -> bool {
     let (mut nodes, mut bytes) = (MAX_COPIED_NODES, MAX_COPIED_BYTES);
     if !fits_budget(v, &mut nodes, &mut bytes) {
         return false;
     }
     let (n, b) = (MAX_COPIED_NODES - nodes, MAX_COPIED_BYTES - bytes);
-    n.checked_mul(copies).is_some_and(|t| t <= MAX_COPIED_NODES) && b.checked_mul(copies).is_some_and(|t| t <= MAX_COPIED_BYTES)
+    n.saturating_add(extra_nodes).checked_mul(copies).is_some_and(|t| t <= MAX_COPIED_NODES) && b.checked_mul(copies).is_some_and(|t| t <= MAX_COPIED_BYTES)
 }
 
 /// Values at most this large survive [`compact`]: far above any style value Photoshop writes.
@@ -368,7 +373,7 @@ pub fn set_text_index(tysh: &[u8], index: i32) -> Option<Vec<u8>> {
 
 #[cfg(test)]
 mod copy_budget_tests {
-    use super::{E, MAX_COPIED_BYTES, compact, copies_fit, with_modes};
+    use super::{E, MAX_COPIED_BYTES, MAX_COPIED_NODES, compact, copies_fit, copies_fit_plus, with_modes};
 
     /// `<< /0 << /0 << /6 << /11 1 /99 (filler) >> >> >> /1 len >>`, a Txt2 style run.
     fn run(len: i64, filler: usize) -> E {
@@ -384,6 +389,14 @@ mod copy_budget_tests {
         assert!(copies_fit(&big, 63));
         assert!(!copies_fit(&big, MAX_COPIED_BYTES >> 20), "64 copies of 1 MiB pass the byte budget");
         assert!(!copies_fit(&big, usize::MAX));
+    }
+
+    #[test]
+    fn keys_added_per_copy_count_against_the_node_budget() {
+        let small = run(1, 16);
+        let copies = MAX_COPIED_NODES / 8;
+        assert!(copies_fit(&small, copies), "the template alone passes");
+        assert!(!copies_fit_plus(&small, copies, 18), "the keys each copy gains do not");
     }
 
     #[test]
