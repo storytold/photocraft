@@ -99,7 +99,7 @@ the reference application.
 | `CtTL` | cutToLayer | Layer Via Cut | `layer.new.layerViaCut` |
 | `LnsF` | lensFlare | Lens Flare | `filter.render.lensFlare` |
 | `Lvls` | levels | Levels | `image.adjustments.levels`, `image.autoTone`, `image.autoContrast` |
-| `Mk  ` | make | Make | `layer.layerStyle.createLayer`, `layer.new.layer`, `layer.new.group`, `layer.groupLayers`, `layer.duplicate`, `layer.new.layerViaCopy`, `layer.new.layerViaCut`, `layer.newFillLayer.solidColor`, `layer.newFillLayer.pattern`, `layer.newAdjustmentLayer.levels`, `layer.newAdjustmentLayer.curves`, `layer.newAdjustmentLayer.hueSaturation`, `layer.newAdjustmentLayer.brightnessContrast`, `layer.newAdjustmentLayer.threshold`, `layer.newAdjustmentLayer.posterize`, `layer.newAdjustmentLayer.invert`, `layer.newAdjustmentLayer.colorBalance`, `layer.newAdjustmentLayer.vibrance`, `layer.newAdjustmentLayer.exposure`, `layer.newAdjustmentLayer.photoFilter`, `layer.newAdjustmentLayer.blackWhite`, `layer.newAdjustmentLayer.channelMixer`, `layer.newAdjustmentLayer.selectiveColor`, `layer.newAdjustmentLayer.gradientMap`, `layer.layerMask.revealAll`, `layer.layerMask.hideAll`, `layer.layerMask.revealSelection`, `layer.layerMask.hideSelection`, `file.new`, `file.newFromClipboard`, `history.newSnapshot`, `type.convertToShape` |
+| `Mk  ` | make | Make | `layer.layerStyle.createLayer`, `layer.new.layer`, `layer.new.group`, `layer.groupLayers`, `layer.duplicate`, `layer.new.layerViaCopy`, `layer.new.layerViaCut`, `layer.newFillLayer.solidColor`, `layer.newFillLayer.pattern`, `layer.newFillLayer.gradient`, `layer.newAdjustmentLayer.levels`, `layer.newAdjustmentLayer.curves`, `layer.newAdjustmentLayer.hueSaturation`, `layer.newAdjustmentLayer.brightnessContrast`, `layer.newAdjustmentLayer.threshold`, `layer.newAdjustmentLayer.posterize`, `layer.newAdjustmentLayer.invert`, `layer.newAdjustmentLayer.colorBalance`, `layer.newAdjustmentLayer.vibrance`, `layer.newAdjustmentLayer.exposure`, `layer.newAdjustmentLayer.photoFilter`, `layer.newAdjustmentLayer.blackWhite`, `layer.newAdjustmentLayer.channelMixer`, `layer.newAdjustmentLayer.selectiveColor`, `layer.newAdjustmentLayer.gradientMap`, `layer.layerMask.revealAll`, `layer.layerMask.hideAll`, `layer.layerMask.revealSelection`, `layer.layerMask.hideSelection`, `file.new`, `file.newFromClipboard`, `history.newSnapshot`, `type.convertToShape` |
 | (string ID only) | animationFramesFromLayers | Make Frames from Layers |  |
 | (string ID only) | matchColor | Match Color | `image.adjustments.matchColor` |
 | `Mxm ` | maximum | Maximum | `filter.other.maximum` |
@@ -142,7 +142,7 @@ the reference application.
 | (string ID only) | smartBrushWorkspace | Select and Mask | `select.refineEdge` |
 | (string ID only) | autoCutout | Select Subject | `select.subject` |
 | `SlcC` | selectiveColor | Selective Color | `image.adjustments.selectiveColor` |
-| `setd` | set | Set | `select.all`, `select.deselect`, `select.reselect`, `select.loadSelection`, `select.rect`, `select.lasso`, `select.editInQuickMaskMode`, `tools.setColors`, `layer.setProps`, `layer.renameLayer`, `layer.setLabelColor`, `layer.setAdjustment`, `layer.fill.pattern.set`, `layer.new.layerFromBackground`, `layer.layerStyle.blendingOptions`, `layer.smartFilter.blendingOptions` |
+| `setd` | set | Set | `select.all`, `select.deselect`, `select.reselect`, `select.loadSelection`, `select.rect`, `select.lasso`, `select.editInQuickMaskMode`, `tools.setColors`, `layer.setProps`, `layer.renameLayer`, `layer.setLabelColor`, `layer.setAdjustment`, `layer.fill.pattern.set`, `gradient.fill.set`, `layer.new.layerFromBackground`, `layer.layerStyle.blendingOptions`, `layer.smartFilter.blendingOptions` |
 | (string ID only) | adaptCorrect | Shadows/Highlights | `image.adjustments.shadowsHighlights` |
 | `Shrp` | sharpen | Sharpen | `filter.sharpen.sharpen` |
 | `ShrE` | sharpenEdges | Sharpen Edges | `filter.sharpen.sharpenEdges` |
@@ -438,6 +438,16 @@ differences that do not change what a step does.
   `forceNotify`) and default flags (`MkVs` false, `Adjs` false) are not written back.
 - An adjustment layer's values equal to the defaults are not written back (other values are).
 - Colours are kept as 8-bit values (51.0031 becomes 51); gradient names become "Custom".
+- A loaded Gradient Fill Make or Set (`gradientLayer`) saves back as the recorded descriptor until
+  it is edited. Otherwise it is written from the params: `#rrggbb` stops on 1/4096 locations and
+  whole-percent midpoints; a Set also needs its transparency stops, as the event replaces the whole
+  gradient. Midpoint k is the `Mdpn` of stop k + 1 (the first stop's is 50). A Noise gradient,
+  smoothness below 100 %, a non-classic interpolation or a transparency midpoint stay Photoshop steps.
+- Blend If (`Blnd` in a layer Set) loads as `layer.layerStyle.blendingOptions`. With only the
+  Blending Options dialog's keys (`Opct`, `fillOpacity`, `Md  `, `Blnd`, the Advanced checkboxes) the
+  Set is one step and saves back as one Set; with any other key, those go through `layer.setProps`.
+  Slider values are whole levels 0..255, `SrcB`/`Srcl`/`SrcW`/`Srcm` for This Layer and
+  `DstB`/`Dstl`/`DstW`/`Dstt` for Underlying Layer (black low, black high, white low, white high).
 - Levels and Curves write the composite as `Chnl.Cmps` (the application skips `Ordn.Trgt`, #8543).
 
 ## Reference forms
