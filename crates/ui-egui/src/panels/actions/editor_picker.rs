@@ -68,7 +68,7 @@ const COLOR_GRID: [(&str, &str); 12] = [
 fn thumbnail_style(color: &str, swatches: &[Color32; 12], tokens: &Tokens) -> (Color32, Color32) {
     let index = BUTTON_COLORS.iter().position(|name| *name == color).filter(|index| *index > 0);
     match index.and_then(|index| swatches.get(index)).copied() {
-        Some(fill) => (fill, Color32::WHITE),
+        Some(fill) => (fill, Tokens::action_thumbnail_ink(fill)),
         None => (tokens.card, tokens.text),
     }
 }

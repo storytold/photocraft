@@ -214,6 +214,17 @@ pub struct Tokens {
 }
 
 impl Tokens {
+    /// Actions use both light and dark swatches, including the theme's dim text colour.
+    /// Choose the ink with the greater WCAG contrast against the actual supplied fill.
+    pub fn action_thumbnail_ink(fill: Color32) -> Color32 {
+        let linear = |channel: u8| {
+            let value = f32::from(channel) / 255.0;
+            if value <= 0.04045 { value / 12.92 } else { ((value + 0.055) / 1.055).powf(2.4) }
+        };
+        let luminance = 0.2126 * linear(fill.r()) + 0.7152 * linear(fill.g()) + 0.0722 * linear(fill.b());
+        if (luminance + 0.05) / 0.05 >= 1.05 / (luminance + 0.05) { Color32::BLACK } else { Color32::WHITE }
+    }
+
     /// Semantic Actions thumbnail palette in ATN colour-index order. These are application
     /// colours, independent of stored metadata; uncoloured/unknown values use the card tokens.
     pub fn action_swatches(&self) -> [Color32; 12] {

@@ -334,7 +334,7 @@ fn thumbnail(ui: &mut egui::Ui, action: &Action, size: f32, tokens: &Tokens) -> 
     let fill = color.and_then(|index| tokens.action_swatches().get(index).copied()).unwrap_or(tokens.card);
     ui.painter().rect_filled(rect, tokens.radius_sm, fill);
     let glyph = if action.icon.is_empty() { "action-editor-click" } else { editor_glyphs::display_glyph(&action.icon) };
-    icons::paint(ui, rect, glyph, size * 0.6, if color.is_some() { Color32::WHITE } else { tokens.text });
+    icons::paint(ui, rect, glyph, size * 0.6, if color.is_some() { Tokens::action_thumbnail_ink(fill) } else { tokens.text });
     response
 }
 
@@ -609,7 +609,7 @@ fn tick_with_quantum(app: &mut PhotocraftApp, ctx: &egui::Context, quantum: usiz
         .paused
         .iter()
         .filter_map(|(token, paused)| {
-            let open = if paused.doc.is_some() {
+            let open = if paused.dialog == 0 {
                 app.ui.type_panels.spell.as_ref().is_some_and(|dialog| dialog.resume == Some(*token))
             } else {
                 app.ui.dialogs.iter().any(|dialog| dialog.id == paused.dialog)
@@ -726,7 +726,7 @@ pub(super) fn cancel(app: &mut PhotocraftApp) {
     let tokens: Vec<_> = app.paused_playbacks.paused.iter().filter_map(|(token, paused)| paused.incremental.then_some(*token)).collect();
     for token in tokens {
         if let Some(paused) = app.paused_playbacks.paused.remove(&token) {
-            if paused.doc.is_some() {
+            if paused.dialog == 0 {
                 // Only this continuation owns the Spelling panel; a manual/unrelated one stays.
                 if app.ui.type_panels.spell.as_ref().is_some_and(|dialog| dialog.resume == Some(token)) {
                     app.ui.type_panels.spell = None;

@@ -1,5 +1,17 @@
 use super::*;
 
+#[test]
+fn action_thumbnail_glyphs_remain_readable_on_every_theme_swatch() {
+    for kind in ThemeKind::ALL {
+        for fill in Tokens::for_kind(kind).action_swatches().into_iter().skip(1) {
+            let ink = Tokens::action_thumbnail_ink(fill);
+            assert!(contrast(ink, fill) >= 4.5, "{kind:?}: {ink:?} on {fill:?}");
+        }
+    }
+    assert_eq!(Tokens::action_thumbnail_ink(Color32::from_rgb(255, 240, 90)), Color32::BLACK);
+    assert_eq!(Tokens::action_thumbnail_ink(Color32::from_rgb(20, 25, 35)), Color32::WHITE);
+}
+
 fn text_sizes(ctx: &egui::Context) -> Vec<egui::Vec2> {
     let mut sizes = Vec::new();
     // The plugin queues changed fonts at the end of a pass; egui applies them next pass.

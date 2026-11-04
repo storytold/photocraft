@@ -36,6 +36,58 @@ fn blur_draft(app: &mut PhotocraftApp) -> u64 {
 }
 
 #[test]
+fn generic_dialog_checks_the_document_after_the_real_window_control_route() {
+    for document in [0, 1] {
+        let mut app = app();
+        app.session.execute("file.new", json!({"width":8,"height":6})).unwrap();
+        assert!(app.session.set_active(0));
+        let id = blur_draft(&mut app);
+        preview_draft(&mut app, id, 0).unwrap();
+        let dialog = dialog(&app);
+        let (request, _reply) = crate::control::ControlRequest::new("ui.window.open", json!({"document":document}));
+        let crate::control::Outcome::Done(reply) = crate::control::handle(&mut app, &egui::Context::default(), &request) else {
+            panic!("the window control must return immediately without a rendering frame");
+        };
+        assert_eq!(reply["ok"], true, "{reply}");
+        let other = app.session.documents()[1].doc.clone();
+        let result = crate::dialogs::confirm(&mut app, dialog);
+        if document == 1 {
+            assert!(result.is_err());
+            assert!(!has_layer(&app, "Suffix"));
+        } else {
+            result.unwrap();
+            assert!(has_layer(&app, "Suffix"));
+        }
+        assert!(std::sync::Arc::ptr_eq(&other, &app.session.documents()[1].doc));
+        assert!(app.session.actions.held_playback.is_none());
+        assert!(app.paused_playbacks.paused.is_empty());
+    }
+}
+
+#[test]
+fn preview_from_a_selected_step_skips_the_prefix_and_retains_dialog_indices() {
+    let mut app = app();
+    let id = draft(
+        &mut app,
+        &[
+            ("layer.new.layer", json!({"name":"Skipped prefix"})),
+            ("filter.blur.gaussianBlur", json!({"radius":1})),
+            ("layer.new.layer", json!({"name":"Suffix"})),
+        ],
+    );
+    app.run("actions.editor.step", json!({"draft":id,"op":"dialog","step":1,"enabled":true})).unwrap();
+    let before = get(&mut app, id);
+    let played = preview_draft(&mut app, id, 1).unwrap();
+    assert_eq!(played["paused"]["step"], 1);
+    assert!(!has_layer(&app, "Skipped prefix"));
+    let dialog = dialog(&app);
+    crate::dialogs::confirm(&mut app, dialog).unwrap();
+    assert!(has_layer(&app, "Suffix"));
+    assert!(!has_layer(&app, "Skipped prefix"));
+    assert_eq!(get(&mut app, id), before);
+}
+
+#[test]
 fn unpublished_preview_preserves_snapshot_indices_flags_and_metadata() {
     let mut app = app();
     let id = draft(&mut app, &[("layer.new.layer", json!({"name":"Disabled"})), ("layer.new.layer", json!({"name":"Visible"}))]);
@@ -260,6 +312,34 @@ fn deferred_displace_checks_the_owner_and_gate_before_refocus_or_command() {
         assert!(app.session.actions.held_playback.is_none());
         assert!(app.paused_playbacks.paused.is_empty());
     }
+}
+
+#[test]
+fn a_valid_deferred_map_refocuses_its_original_document_and_resumes_the_suffix() {
+    let directory = tempfile::tempdir().unwrap();
+    let map = directory.path().join("map.png");
+    let mut source = photocraft_engine::Session::new();
+    source.execute("file.new", json!({"width":8,"height":6,"background":"white"})).unwrap();
+    std::fs::write(&map, photocraft_io::export(&source.active().unwrap().doc, "map.png", &Default::default()).unwrap().bytes).unwrap();
+    let mut app = app();
+    let id = draft(&mut app, &[("filter.distort.displace", json!({"horizontal":1,"vertical":1})), ("layer.new.layer", json!({"name":"Suffix"}))]);
+    app.run("actions.editor.step", json!({"draft":id,"op":"dialog","step":0,"enabled":true})).unwrap();
+    let (show, asked) = crate::file_dialog::fake(vec![Some(crate::file_dialog::FileDialogAnswer::Paths(vec![map.to_string_lossy().into_owned()]))]);
+    app.services.file_dialog = Some(show);
+    preview_draft(&mut app, id, 0).unwrap();
+    let dialog = dialog(&app);
+    crate::dialogs::confirm(&mut app, dialog).unwrap();
+    assert!(app.file_dialog_open());
+    app.session.execute("file.new", json!({"width":4,"height":4})).unwrap();
+    let other = app.session.documents()[1].doc.clone();
+    app.poll_file_dialog(&egui::Context::default(), None);
+    assert_eq!(asked.borrow().len(), 1);
+    assert_eq!(app.session.active_index(), Some(0));
+    assert!(has_layer(&app, "Suffix"));
+    assert!(std::sync::Arc::ptr_eq(&other, &app.session.documents()[1].doc));
+    assert!(!app.ui.status_error, "{}", app.ui.status);
+    assert!(app.session.actions.held_playback.is_none());
+    assert!(app.paused_playbacks.paused.is_empty());
 }
 
 #[test]

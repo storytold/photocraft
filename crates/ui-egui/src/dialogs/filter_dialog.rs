@@ -1127,7 +1127,7 @@ pub(crate) fn ask_displace_map(app: &mut PhotocraftApp, command: String, fields:
         };
         let mut fields = fields;
         fields.insert("mapPath".into(), json!(path));
-        crate::actions::with_step_gate(app, &fields, None, |app| {
+        crate::actions::with_step_gate_at(app, &fields, None, Some(doc), |app| {
             app.refocus(doc)?;
             let (cmd, params) = crate::smart_ui::confirm_command(app, &fields, command, params_of(&fields))?;
             let result = app.run(&cmd, params);

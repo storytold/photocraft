@@ -182,8 +182,8 @@ fn thumbnail_uses_the_callers_indexed_palette_and_theme_neutral_fallback() {
         for unknown_or_none in ["", UNKNOWN_COLOR, "future-color", "Blue", "blue2 "] {
             assert_eq!(thumbnail_style(unknown_or_none, &palette, &tokens), (tokens.card, tokens.text));
         }
-        assert_eq!(thumbnail_style("blue", &palette, &tokens), (palette[5], Color32::WHITE));
-        assert_eq!(thumbnail_style("blue2", &palette, &tokens), (palette[9], Color32::WHITE));
+        assert_eq!(thumbnail_style("blue", &palette, &tokens).0, palette[5]);
+        assert_eq!(thumbnail_style("blue2", &palette, &tokens).0, palette[9]);
         assert_ne!(palette[5], palette[9]);
     }
     assert_eq!(super::display_glyph(UNKNOWN_ICON), "square");

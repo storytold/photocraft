@@ -353,7 +353,8 @@ fn pause_frame(app: &mut PhotocraftApp, frame: &Frame, from: usize, dialog: u64)
     if app.ui.dialogs.iter().all(|d| d.id != dialog) {
         return Err("the action step dialog could not be opened".into());
     }
-    app.paused_playbacks.pause(frame.after(from), dialog, app.session.authorize, app.session.actions.playback_steps)
+    let doc = app.session.active().map(|d| d.doc.id);
+    app.paused_playbacks.pause(frame.after(from), dialog, app.session.authorize, app.session.actions.playback_steps, doc)
 }
 
 /// Execute one immutable frame with normal shell view/save, authorization and job ordering.
@@ -434,7 +435,8 @@ fn run_frame(app: &mut PhotocraftApp, frame: Frame, used: Option<u64>, preserve_
                 break;
             }
             // Spelling owns its existing non-modal panel token, not a generic dialog id.
-            let token = match app.paused_playbacks.pause(frame.after(i + 1), 0, app.session.authorize, app.session.actions.playback_steps) {
+            let doc = app.session.active().map(|d| d.doc.id);
+            let token = match app.paused_playbacks.pause(frame.after(i + 1), 0, app.session.authorize, app.session.actions.playback_steps, doc) {
                 Ok(token) => token,
                 Err(error) => {
                     app.ui.type_panels.spell = None;
@@ -442,9 +444,6 @@ fn run_frame(app: &mut PhotocraftApp, frame: Frame, used: Option<u64>, preserve_
                     break;
                 }
             };
-            if let Some(entry) = app.paused_playbacks.paused.get_mut(&token) {
-                entry.doc = app.session.active().map(|d| d.doc.id);
-            }
             if let Some(d) = app.ui.type_panels.spell.as_mut() {
                 d.resume = Some(token);
             }
@@ -975,8 +974,8 @@ pub(crate) struct PausedPlayback {
     ran: u64,
     used: u64,
     incremental: bool,
-    /// The document a pause at Check Spelling was playing on. That dialog doesn't block the
-    /// document tabs, so Done ([`resume_spelling`]) continues only on this document.
+    /// The document bound before opening the step dialog or non-modal Spelling panel.
+    /// Confirmation must validate it before executing a command or refocusing a deferred reply.
     doc: Option<photocraft_doc::DocId>,
 }
 
@@ -987,12 +986,12 @@ pub(crate) struct PausedPlaybacks {
 }
 
 impl PausedPlaybacks {
-    fn pause(&mut self, frame: Frame, dialog: u64, gate: Option<Gate>, used: u64) -> Result<u64, String> {
+    fn pause(&mut self, frame: Frame, dialog: u64, gate: Option<Gate>, used: u64, doc: Option<photocraft_doc::DocId>) -> Result<u64, String> {
         let token = self.last.checked_add(1).ok_or("action step dialog identities exhausted")?;
         self.last = token;
         self.paused.insert(
             token,
-            PausedPlayback { frame, dialog, gate, record: None, parents: Vec::new(), then: Vec::new(), ran: 0, used, incremental: false, doc: None },
+            PausedPlayback { frame, dialog, gate, record: None, parents: Vec::new(), then: Vec::new(), ran: 0, used, incremental: false, doc },
         );
         Ok(token)
     }
@@ -1010,6 +1009,19 @@ pub(crate) fn with_step_gate(
     dialog: Option<u64>,
     run: impl FnOnce(&mut PhotocraftApp) -> Result<Value, String>,
 ) -> Result<Value, String> {
+    let doc = app.session.active().map(|doc| doc.doc.id);
+    with_step_gate_at(app, fields, dialog, doc, run)
+}
+
+/// A deferred picker retains its original document even when another tab is active.
+/// Validate that captured identity before the callback is allowed to refocus it.
+pub(crate) fn with_step_gate_at(
+    app: &mut PhotocraftApp,
+    fields: &serde_json::Map<String, Value>,
+    dialog: Option<u64>,
+    doc: Option<photocraft_doc::DocId>,
+    run: impl FnOnce(&mut PhotocraftApp) -> Result<Value, String>,
+) -> Result<Value, String> {
     let Some(token) = fields.get(RESUME) else {
         if let Some(original) = dialog.and_then(|dialog| app.paused_playbacks.paused.iter().find_map(|(token, p)| (p.dialog == dialog).then_some(*token))) {
             abandoned(app, &serde_json::Map::from_iter([(RESUME.to_string(), json!(original))]));
@@ -1021,6 +1033,9 @@ pub(crate) fn with_step_gate(
         let paused = token.as_u64().and_then(|token| app.paused_playbacks.paused.get(&token)).ok_or("this dialog doesn't belong to a paused action")?;
         if dialog.is_some_and(|dialog| dialog != paused.dialog) {
             return Err("this dialog doesn't belong to that paused action".to_string());
+        }
+        if paused.doc != doc {
+            return Err("the active document changed while the action step dialog was open".to_string());
         }
         paused.frame.validate(&app.session)?;
         if let Some(owner) = &paused.record {
