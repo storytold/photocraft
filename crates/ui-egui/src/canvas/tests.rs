@@ -1421,7 +1421,7 @@ fn start_screen_buttons_stay_inside_a_narrow_canvas() {
         h.state_mut().1 = true;
         h.run_steps(3);
         for label in ["New file", "Open", "Join us on Discord"] {
-            let nodes = h.query_all_by_label_contains(label);
+            let nodes: Vec<_> = h.query_all_by_label_contains(label).collect();
             assert!(!nodes.is_empty(), "`{label}` is on the Home screen at {width} points");
             for node in nodes {
                 let r = node.rect();

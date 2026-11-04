@@ -106,7 +106,7 @@ fn decode_resource(data: &[u8]) -> Result<Rgba8Image, IoError> {
             let mut pixels = Vec::with_capacity(wide * high * 4);
             for y in 0..high {
                 let line = body.get(y * row..y * row + wide * 3).ok_or_else(|| bad("truncated pixels"))?;
-                for px in line.chunks_exact(3) {
+                for px in line.as_chunks::<3>().0 {
                     pixels.extend_from_slice(px);
                     pixels.push(255);
                 }

@@ -361,3 +361,51 @@ fn only_so_many_textures_are_kept() {
     view.apply(&ctx, Done { path: "/bad.png".into(), stat: None, key: None, outcome: Outcome::Image(Rgba8Image { width: 4, height: 4, pixels: vec![0; 5] }) });
     assert!(matches!(view.preview("/bad.png"), Preview::None));
 }
+
+/// A PNG that is a few dozen bytes but declares 60 000 × 60 000 pixels (3.6 gigapixels).
+fn huge_png() -> Vec<u8> {
+    let mut ihdr = Vec::new();
+    ihdr.extend_from_slice(&60_000u32.to_be_bytes());
+    ihdr.extend_from_slice(&60_000u32.to_be_bytes());
+    ihdr.extend_from_slice(&[8, 2, 0, 0, 0]);
+    let mut out = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+    for (kind, data) in [(b"IHDR", ihdr.as_slice()), (b"IEND", &[][..])] {
+        out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        out.extend_from_slice(kind);
+        out.extend_from_slice(data);
+        let mut crc = flate2::Crc::new();
+        crc.update(kind);
+        crc.update(data);
+        out.extend_from_slice(&crc.sum().to_be_bytes());
+    }
+    out
+}
+
+/// A small file that declares an enormous picture is refused by the codec's limits, before any
+/// of it is allocated, instead of being imported.
+#[test]
+fn a_picture_that_declares_a_huge_size_is_not_decoded() {
+    let bytes = huge_png();
+    assert!(bytes.len() < 100);
+    let opts = photocraft_codecs::DecodeOptions { limits: disk::decode_limits(), ..Default::default() };
+    assert!(photocraft_codecs::decode_with(&bytes, &opts).is_err(), "the limits refuse it");
+    let dir = tempfile::tempdir().unwrap();
+    let file = write(dir.path(), "bomb.png", &bytes);
+    assert!(disk::make(&file.to_string_lossy(), bytes.len() as u64, false).is_none());
+    let done = probe(&file, true, None, None);
+    assert!(matches!(done.stat, Some(FileStat::Present { .. })));
+    assert!(is(&done, |o| matches!(o, Outcome::NoPreview)));
+    // The limits are about 100 megapixels and 512 MiB.
+    let l = disk::decode_limits();
+    assert!(l.max_pixels <= 100_000_000 && l.max_alloc <= 512 << 20);
+}
+
+/// Bytes that merely look like nothing known, and a text file named like a picture, have no preview.
+#[test]
+fn unknown_bytes_named_like_pictures_have_no_preview() {
+    let dir = tempfile::tempdir().unwrap();
+    for name in ["a.png", "b.dng", "c.cr2", "d.svg", "e.tif"] {
+        let file = write(dir.path(), name, b"definitely not a picture");
+        assert!(is(&probe(&file, true, None, None), |o| matches!(o, Outcome::NoPreview)), "{name}");
+    }
+}

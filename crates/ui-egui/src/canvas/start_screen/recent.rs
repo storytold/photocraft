@@ -104,13 +104,13 @@ fn fit(size: [f32; 2], max: Vec2) -> Vec2 {
 fn picture(app: &mut PhotocraftApp, ui: &egui::Ui, area: Rect, max: Vec2, row: &Row, missing: bool, compact: bool) {
     let t = Tokens::get(ui.ctx());
     match app.recent_view.preview(&row.path) {
-        Preview::Image { id, size, .. } => {
+        Preview::Image { id, size, gray } => {
             let r = Rect::from_center_size(area.center(), fit(size, max));
             if !missing && !compact {
                 ui.painter().rect_filled(r.translate(vec2(0.0, 2.0)).expand(1.0), 0.0, t.shadow);
             }
             // A missing file's thumbnail is gray and about a third as strong.
-            let tint = if missing { Color32::from_white_alpha(89) } else { Color32::WHITE };
+            let tint = if missing || gray { Color32::from_white_alpha(89) } else { Color32::WHITE };
             ui.painter().image(id, r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), tint);
         }
         Preview::Loading => {}

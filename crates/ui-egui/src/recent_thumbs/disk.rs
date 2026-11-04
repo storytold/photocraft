@@ -14,6 +14,13 @@ use super::{Done, FileStat, Job, MAX_CACHE_FILES, MAX_DECODE_BYTES, MISSING_KEY,
 /// Pixel memory a PSD may take when it is decoded for its thumbnail.
 const PSD_PIXEL_BUDGET: u64 = 512 << 20;
 
+/// A decode for a thumbnail takes at most this many pixels, ...
+const DECODE_MAX_PIXELS: u64 = 100_000_000;
+/// ... this many bytes for them, ...
+const DECODE_MAX_ALLOC: u64 = 512 << 20;
+/// ... and is at most this wide or tall.
+const DECODE_MAX_SIDE: u32 = 1 << 16;
+
 /// Largest cached thumbnail file read.
 const MAX_CACHED_BYTES: u64 = 4 << 20;
 
@@ -109,20 +116,42 @@ pub(super) fn seed(path: &str, doc: &Document, cache: Option<&Path>) {
 
 // ------------------------------------------------------------------ making a thumbnail
 
-/// A thumbnail for the file at `path`: the preview a `.pcraft` or PSD/PSB file embeds, else (under
-/// [`MAX_DECODE_BYTES`]) a full decode through the normal import. `None` shows "No preview".
-fn make(path: &str, size: u64, is_dir: bool) -> Option<Rgba8Image> {
+/// A thumbnail for the file at `path`: the preview a `.pcraft`, PSD/PSB or camera raw file embeds,
+/// else (under [`MAX_DECODE_BYTES`]) a decode. Flat pictures are checked against [`decode_limits`]
+/// first, so a small file that expands to a huge image is refused before it is allocated; only
+/// PSD/PSB (with its pixel budget) are imported without that check. Camera raws are never
+/// demosaiced. `None` shows "No preview".
+pub(super) fn make(path: &str, size: u64, is_dir: bool) -> Option<Rgba8Image> {
     if is_dir {
         return None;
     }
     let ext = Path::new(path).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
-    let embedded = match ext.as_str() {
+    match ext.as_str() {
         "pcraft" => pcraft_preview(path, size),
-        "psd" | "psb" | "psdt" => psd_preview(path),
-        _ => None,
-    };
-    embedded.or_else(|| decode(path, size))
+        "psd" | "psb" | "psdt" => psd_preview(path).or_else(|| decode(path, size, Kind::Layered)),
+        "svg" => decode(path, size, Kind::Svg),
+        _ => decode(path, size, Kind::Flat),
+    }
 }
+
+/// How [`decode`] may open a file.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    /// A picture a codec reads: its size is checked before the import.
+    Flat,
+    /// PSD/PSB: the import honours its pixel budget.
+    Layered,
+    /// SVG, which the import bounds itself.
+    Svg,
+}
+
+/// What a decode for a thumbnail may take: about 100 megapixels, and 512 MiB for the pixels.
+pub(super) fn decode_limits() -> Limits {
+    Limits { max_width: DECODE_MAX_SIDE, max_height: DECODE_MAX_SIDE, max_pixels: DECODE_MAX_PIXELS, max_alloc: DECODE_MAX_ALLOC }
+}
+
+/// Only one full decode runs at a time, whatever the number of workers.
+static FULL_DECODE: Mutex<()> = Mutex::new(());
 
 /// The PSD/PSB's thumbnail resource, read without reading the document.
 fn psd_preview(path: &str) -> Option<Rgba8Image> {
@@ -141,17 +170,39 @@ fn pcraft_preview(path: &str, size: u64) -> Option<Rgba8Image> {
     decode_small(&png)
 }
 
-/// Open the file as a document and render its thumbnail.
-fn decode(path: &str, size: u64) -> Option<Rgba8Image> {
+/// Open the file as a document and render its thumbnail, one file at a time across the workers.
+fn decode(path: &str, size: u64, kind: Kind) -> Option<Rgba8Image> {
     if size > MAX_DECODE_BYTES {
         return None;
     }
     let bytes = photocraft_format::read_file(Path::new(path)).ok()?;
+    let _one = lock(&FULL_DECODE);
+    if kind == Kind::Flat {
+        // A camera raw shows the preview inside it; developing it is far too much for a thumbnail.
+        if photocraft_io::raw::is_raw(&bytes) {
+            return raw_preview(&bytes);
+        }
+        photocraft_codecs::detect(&bytes)?;
+        // The codec checks the declared size against the limits before it allocates anything.
+        let opts = DecodeOptions { limits: decode_limits(), ..Default::default() };
+        if photocraft_codecs::decode_with(&bytes, &opts).is_err() {
+            return None;
+        }
+    }
     let name = Path::new(path).file_name()?.to_string_lossy().into_owned();
     let opts = photocraft_io::ImportOptions { psd_max_pixel_bytes: PSD_PIXEL_BUDGET, ..Default::default() };
     let imported = photocraft_io::import_with_options(&name, &bytes, &opts).ok()?;
     drop(bytes);
     valid(photocraft_compose::thumbnail(&imported.document, THUMB_SIDE))
+}
+
+/// The largest JPEG preview embedded in a camera raw file, if it has one.
+fn raw_preview(bytes: &[u8]) -> Option<Rgba8Image> {
+    let preview = photocraft_raw::embedded_preview(bytes)?;
+    let opts = DecodeOptions { limits: decode_limits(), ..Default::default() };
+    let img = photocraft_codecs::decode_with(preview.jpeg, &opts).ok()?;
+    let (width, height) = img.dimensions();
+    valid(Rgba8Image { width, height, pixels: img.to_rgba8() }).map(|img| fit(img, THUMB_SIDE))
 }
 
 /// `img` if its pixels are as many as its size says.
