@@ -365,7 +365,7 @@ fn remove_matte(s: &mut Session, white: bool) -> Result<Value> {
                     let mut after = out.try_read_region(row).map_err(|error| other(error.to_string()))?;
                     for (index, (old, new)) in before.chunks_exact(channels).zip(after.chunks_exact_mut(channels)).enumerate() {
                         let x = area.x0.saturating_add(i32::try_from(index).map_err(|_| other("matte row is too wide"))?);
-                        let coverage = mask.value(x, y);
+                        let coverage = mask.sample_channel(x, y, 0);
                         if !coverage.is_finite() {
                             return Err(other("matte selection contains a non-finite sample"));
                         }
