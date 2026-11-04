@@ -167,9 +167,11 @@ fn fresh_stylistic_sets_round_trip_through_psd() {
     let back = photocraft_io::import("k.psd", &bytes).unwrap().document;
     let LayerContent::Text(b) = &back.layers[0].content else { panic!("not text") };
     let runs = b.char_runs();
-    let tags: Vec<_> = runs.iter().flat_map(|r| r.style.features.iter().map(|f| (f.tag.as_str(), f.value))).collect();
-    assert!(tags.contains(&("ss01", 1)), "{tags:?}");
-    assert!(tags.contains(&("ss05", 1)), "{tags:?}");
+    assert_eq!(runs.iter().map(|r| r.len).sum::<usize>(), b.text.len(), "the runs cover the text");
+    for r in &runs {
+        let on = |tag: &str| r.style.features.iter().any(|f| f.tag == tag && f.value == 1);
+        assert!(on("ss01") && on("ss05"), "both sets on every character: {:?}", r.style.features);
+    }
 }
 
 /// Two imported layers can name the same Txt2 object; export must update the second

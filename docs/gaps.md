@@ -102,7 +102,7 @@ what an agent can't finish alone.
   (TYPE-218-5; Character panel buttons 2026-10-11, #3752; Numerals submenu 2026-11-03 —
   `.pcraft` keeps all figure tags; PSD EngineData only `OldStyle`/`onum` until a Photoshop-authored
   oracle lands; PhotoCraft-native PSDs keep stylistic sets and other Txt2-only flags through
-  save/reopen since 2026-10-30, #10308; the Type › OpenType › Stylistic Sets menu is #10285 / PR #10304), text free transform
+  save/reopen since 2026-11-04, #10308; the Type › OpenType › Stylistic Sets menu is #10285 / PR #10304), text free transform
   (#2630), area type in PSD (TYPE-218-10). Done since the re-measure: manual and optical kerning with PSD round trip
   (TYPE-218-6, #206), variable-font axes (TYPE-218-4, #2985), Warp on live type without a
   rasterize prompt, as in Photoshop (TYPE-218-9, #3004), and the live Warp Text preview that opens

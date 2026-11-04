@@ -232,10 +232,6 @@ fn txt2_style_runs(layer: &TextLayer, base: &E, fonts: &mut Vec<E>, dpi: f32, se
         style.set("6", real(s.horizontal_scale));
         style.set("7", real(s.vertical_scale));
         style.set("8", E::Int(s.tracking.round() as i64));
-        // A fresh minimal run has no `/53`; create the SimplePaint dict so the fill is written (#10308).
-        if !matches!(style.get("53").and_then(|p| p.get("0")), Some(E::Dict(_))) {
-            style.set("53", simple_paint_dict());
-        }
         if let Some(paint @ E::Dict(_)) = style.get_mut("53").and_then(|p| p.get_mut("0")) {
             let (kind, values) = fill_color(&s.color);
             paint.set("0", E::Int(kind));
@@ -541,8 +537,8 @@ fn txt2_font_entry(name: &str, kind: i64) -> E {
 /// The index of the PostScript font `name` in a `Txt2` font list (`<< /0 << /99 /CoolTypeFont
 /// /0 << /0 name /2 type >> >> >>` entries), appending it (shaped like the list's first entry)
 /// when missing. An empty list gets a seeded CoolTypeFont entry only when `seed_empty` is set —
-/// PhotoCraft-native blocks and files that already have `/0/1` (#10308). Photoshop blocks without
-/// a font list must keep `/0` unchanged (#2374), so seeding is skipped for those.
+/// a PhotoCraft-native block (#10308); a file's own block keeps its `/0` as it was (#2374), so
+/// `None` there, as before.
 fn txt2_font(fonts: &mut Vec<E>, name: &str, seed_empty: bool) -> Option<i64> {
     let named = |f: &E| f.path(&["0", "0", "0"]).and_then(E::as_str) == Some(name);
     if let Some(i) = fonts.iter().position(named) {
@@ -622,12 +618,15 @@ fn minimal_txt2_style_run() -> E {
 fn fresh_point_text_object(frame: usize, text: &str) -> E {
     let frame = i64::try_from(frame).unwrap_or(0);
     let view = E::Dict(vec![("0".into(), E::Array(vec![E::Dict(vec![("0".into(), E::Int(frame))])]))]);
-    // One paragraph run covering the whole engine text (length in UTF-16 code units).
-    let len = text.encode_utf16().count() as i64;
-    let para = E::Dict(vec![("0".into(), E::dict()), ("1".into(), E::Int(len))]);
+    // One paragraph run per `\r`-terminated paragraph (lengths in UTF-16 code units), as
+    // `edited_object` refits them.
+    let paragraphs = text
+        .split_inclusive('\r')
+        .map(|p| E::Dict(vec![("0".into(), E::dict()), ("1".into(), E::Int(i64::try_from(p.encode_utf16().count()).unwrap_or(i64::MAX)))]))
+        .collect();
     let model = E::Dict(vec![
         ("0".into(), E::String(text.to_string())),
-        ("5".into(), E::Dict(vec![("0".into(), E::Array(vec![para]))])),
+        ("5".into(), E::Dict(vec![("0".into(), E::Array(paragraphs))])),
         ("6".into(), E::Dict(vec![("0".into(), E::Array(vec![]))])),
     ]);
     E::Dict(vec![("0".into(), model), ("1".into(), view)])
@@ -676,9 +675,11 @@ pub fn build_txt2_at(objects: &[(i32, &TextLayer)], previous: Option<&[u8]>, dpi
     let td_fonts_before = td_fonts.len();
     let mut fonts: Vec<E> = prev.as_ref().and_then(|p| p.path(&["0", "1", "0"]).and_then(E::as_array)).map(<[E]>::to_vec).unwrap_or_default();
     let fonts_before = fonts.len();
-    // Seed an empty CoolTypeFont list only for PhotoCraft-native blocks, or when the file already
-    // has `/0/1`. Photoshop blocks without a font list must keep `/0` byte-stable (#2374).
-    let seed_empty = previous.is_none() || prev.as_ref().and_then(|p| p.path(&["0", "1"])).is_some();
+    // A PhotoCraft-native block: the document had no `Txt2` of its own (#10308). Only such a
+    // block gets the fresh point-text objects, minimal style runs, seeded font list and frame
+    // list below; a file's own block (Photoshop's, any era) is written as before (#2374, #7698).
+    let native = prev.is_none();
+    let seed_empty = native;
     // Looked up once per save, not per layer: a crafted block with many objects must not cost
     // a pass over all of them for every type layer.
     let all_stubs = prev_objects.iter().all(is_stub);
@@ -752,6 +753,11 @@ pub fn build_txt2_at(objects: &[(i32, &TextLayer)], previous: Option<&[u8]>, dpi
         // can't be refitted keeps the frame that object was drawn in.
         let fresh = (kept.is_none() && edited.is_none())
             .then(|| {
+                // Without a template, only a PhotoCraft-native block gets a fresh object; a file's
+                // block keeps the stub it always got.
+                if template.is_none() && !native {
+                    return None;
+                }
                 let own = slot.and_then(|o| object_frame(o, true)).filter(|f| frame_count.is_some_and(|n| *f < n));
                 let frame = match own {
                     Some(f) => f,
@@ -784,10 +790,8 @@ pub fn build_txt2_at(objects: &[(i32, &TextLayer)], previous: Option<&[u8]>, dpi
         // without a template run, a minimal base is filled the same way (#10308).
         let styled = (!unchanged)
             .then(|| {
-                let base = (!is_stub(&object))
-                    .then(|| model.path(&["6", "0"]).and_then(E::as_array).and_then(<[E]>::first).cloned())
-                    .flatten()
-                    .unwrap_or_else(minimal_txt2_style_run);
+                let file_base = (!is_stub(&object)).then(|| model.path(&["6", "0"]).and_then(E::as_array).and_then(<[E]>::first).cloned()).flatten();
+                let base = file_base.or_else(|| native.then(minimal_txt2_style_run))?;
                 txt2_style_runs(layer, &base, &mut fonts, dpi, seed_empty)
             })
             .flatten();
@@ -820,25 +824,15 @@ pub fn build_txt2_at(objects: &[(i32, &TextLayer)], previous: Option<&[u8]>, dpi
         }
     }
     // The outer dictionary keeps whatever the block held (`/98` version, block extras, …), and
-    // `/1` whatever it holds beside the text objects. A PhotoCraft-native block still gets a
-    // frame list (`/0 /8 /0`) so each object's view can name a frame (#10308, #7698). A legacy
-    // block with only named resources may lack the numbered `/0` dictionary: create it so
-    // `pad_frames` and the font-list write can run. Do not inject `/0/8` into a Photoshop `/0`
-    // that never had frames — that breaks byte-identical unedited saves (#2374).
+    // `/1` whatever it holds beside the text objects. A PhotoCraft-native block gets a frame list
+    // (`/0 /8 /0`) so each object's view can name a frame (#10308, #7698); a file's block is never
+    // given a `/0` or a frame list it didn't have (#2374).
     let mut outer = prev.clone().unwrap_or_else(|| {
         E::Dict(vec![
             ("98".into(), E::Dict(vec![("0".into(), E::Int(14))])),
             ("0".into(), E::Dict(vec![("8".into(), E::Dict(vec![("0".into(), E::Array(vec![]))]))])),
         ])
     });
-    if !matches!(outer.get("0"), Some(E::Dict(_))) {
-        outer.set("0", E::Dict(vec![("8".into(), E::Dict(vec![("0".into(), E::Array(vec![]))]))]));
-    } else if frames_needed > 0
-        && outer.path(&["0", "8", "0"]).and_then(E::as_array).is_none()
-        && let Some(doc @ E::Dict(_)) = outer.get_mut("0")
-    {
-        doc.set("8", E::Dict(vec![("0".into(), E::Array(vec![]))]));
-    }
     pad_frames(&mut outer, slots.len().max(frames_needed));
     // A path layer's frame holds its path; a layer taken off its path loses its path frame. An
     // unchanged path leaves the file's frame as it was, and so does a frame the file already had
@@ -857,8 +851,8 @@ pub fn build_txt2_at(objects: &[(i32, &TextLayer)], previous: Option<&[u8]>, dpi
             }
         }
     }
-    // Write the font list whenever it grew. Create `/0/1` only when seeding is allowed (native or
-    // the file already had that key); otherwise leave Photoshop's `/0` alone (#2374).
+    // Write the font list whenever it grew. Create `/0/1` only in a PhotoCraft-native block;
+    // otherwise leave the file's `/0` alone (#2374).
     if fonts.len() != fonts_before
         && let Some(doc @ E::Dict(_)) = outer.get_mut("0")
     {
