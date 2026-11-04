@@ -96,11 +96,7 @@ fn run(case: Case) {
     // effect reach, then retain every other pixel from the previous displayed frame.
     let patch = render_reduced_damage(&live.doc, 1024, 64, damage);
     println!("live raw damage {raw:?}, effect reach {reach}, brush support {:?}, current frame {frame:?}, CPU patch {:?}", live.bounds(), patch.rect);
-    for y in patch.rect.y0..patch.rect.y1 {
-        for x in patch.rect.x0..patch.rect.x1 {
-            shown.px[(y * 1024 + x) as usize] = patch.get(x, y);
-        }
-    }
+    copy_patch(&mut shown, &patch, 1024);
     if matches!(case, Case::Horizontal) {
         // Release already repairs this known preview residual; do not imply export corruption.
         let old_roi = Rect::new(256, 24, 272, 40);
@@ -164,9 +160,13 @@ fn live_params(x: f64, y: f64) -> serde_json::Value {
 
 fn apply_damage(shown: &mut Buffer, doc: &photocraft_doc::Document, damage: Rect) {
     let patch = render_reduced_damage(doc, doc.size.width, doc.size.height, damage);
+    copy_patch(shown, &patch, doc.size.width as i32);
+}
+
+fn copy_patch(shown: &mut Buffer, patch: &Buffer, width: i32) {
     for y in patch.rect.y0..patch.rect.y1 {
         for x in patch.rect.x0..patch.rect.x1 {
-            shown.px[(y * doc.size.width as i32 + x) as usize] = patch.get(x, y);
+            shown.px[(y * width + x) as usize] = patch.get(x, y);
         }
     }
 }
