@@ -219,6 +219,7 @@ impl Tokens {
         [Color32::from_black_alpha(160), Color32::from_white_alpha(235)]
     }
 
+    /// Return the built-in palette and layout tokens for a theme, before user overrides.
     pub fn for_kind(kind: ThemeKind) -> Self {
         match kind {
             // Sampled from Photoshop 2026's default brightness (raw display values).

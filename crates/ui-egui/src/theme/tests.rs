@@ -109,6 +109,7 @@ fn saved_ui_font_size_survives_first_frame_install() {
     }
 }
 
+/// Keep normal-sized warning text readable on light Pro status bars and notification cards.
 #[test]
 fn pro_light_warning_text_meets_wcag_aa() {
     // Status messages use chrome; popup titles use card. Both are normal-size text.
