@@ -112,6 +112,13 @@ pub fn with_hdr<R>(hdr: bool, f: impl FnOnce() -> R) -> R {
 /// `B(Cb, Cs)` with Photoshop's variants.
 pub fn blend_rgb(mode: BlendMode, cb: [f32; 3], cs: [f32; 3]) -> [f32; 3] {
     match mode {
+        // Constant modes remove HDR lookup and per-channel dispatch. Non-finite inputs keep
+        // the generic calls' NaN propagation.
+        BlendMode::Normal => cs,
+        BlendMode::Multiply if cb.iter().chain(&cs).all(|v| v.is_finite()) => {
+            std::array::from_fn(|i| generic::blend_channel(BlendMode::Multiply, cb[i], cs[i]))
+        }
+        BlendMode::Screen if cb.iter().chain(&cs).all(|v| v.is_finite()) => std::array::from_fn(|i| generic::blend_channel(BlendMode::Screen, cb[i], cs[i])),
         BlendMode::VividLight => std::array::from_fn(|i| vivid_light_ps(cb[i], cs[i])),
         BlendMode::HardMix => std::array::from_fn(|i| hard_mix_ps(cb[i], cs[i])),
         BlendMode::ColorBurn => std::array::from_fn(|i| color_burn(cb[i], cs[i])),
@@ -382,6 +389,43 @@ pub fn composite_gamma(mode: BlendMode, backdrop: [f32; 4], source: [f32; 4], op
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn common_blends_preserve_generic_bits_in_both_scopes() {
+        let values = [
+            0.0,
+            -0.0,
+            0.5,
+            1.0,
+            -2.0,
+            5.0,
+            f32::from_bits(1),
+            f32::MAX,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::from_bits(0x7fc12345),
+            f32::from_bits(0xffc34567),
+            f32::from_bits(0x7fa32100),
+        ];
+        for hdr in [false, true] {
+            for lab in [false, true] {
+                with_hdr(hdr, || {
+                    with_lab_mix(lab, || {
+                        for mode in [BlendMode::Normal, BlendMode::Multiply, BlendMode::Screen] {
+                            for b in values {
+                                for s in values {
+                                    let cb = [b, s, b];
+                                    let cs = [s, b, s];
+                                    let expected = if hdr { generic::blend_rgb_hdr(mode, cb, cs) } else { generic::blend_rgb(mode, cb, cs) };
+                                    assert_eq!(blend_rgb(mode, cb, cs).map(f32::to_bits), expected.map(f32::to_bits), "{mode:?} {b} {s}");
+                                }
+                            }
+                        }
+                    })
+                });
+            }
+        }
+    }
     #[test]
     fn text_gamma_lightens_dark_edges() {
         // 69 % blue (0, 51, 153) over grey 129: Photoshop shows (57, 80, 146).
