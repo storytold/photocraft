@@ -35,6 +35,41 @@ fn session() -> Session {
     s
 }
 
+/// Whole-action and folder copies use the same encoder budget as durable storage.
+#[test]
+fn duplicate_rejects_combined_metadata_size_without_changing_rows_or_store() {
+    use photocraft_engine::preset_store::{self, ACTIONS_FILE, MAX_ACTIONS_BYTES, MemBackend, PresetBackend};
+    for set in [false, true] {
+        for admitted in [true, false] {
+            let store = MemBackend::default();
+            let mut s = Session::new();
+            assert!(s.attach_preset_store(preset_store::open(Box::new(store.clone()))).is_empty());
+            let mut source = Action::new("Source", vec![("select.all".into(), json!({}))]);
+            source.set = Some("Group".into());
+            source.description = "x".repeat(if admitted { 3 << 20 } else { 5 << 20 });
+            s.actions.list.push(source);
+            s.execute("actions.dialog", json!({"action":0,"enabled":false})).unwrap();
+            let bytes = store.read(ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap();
+            let before = s.actions.clone();
+            let prefs = s.prefs().clone();
+            let result = s.execute("actions.duplicate", if set { json!({"set":"Group"}) } else { json!({"action":0}) });
+            if admitted {
+                result.unwrap();
+                let mut restored = Session::new();
+                assert!(restored.attach_preset_store(preset_store::open(Box::new(store))).is_empty());
+                assert_eq!(restored.actions.list.len(), 2);
+                assert!(restored.actions.list.iter().all(|action| action.description.len() == 3 << 20));
+            } else {
+                let error = result.unwrap_err();
+                assert!(error.to_string().contains("byte limit"), "{error}");
+                assert_eq!(s.actions, before);
+                assert_eq!(s.prefs(), &prefs);
+                assert_eq!(store.read(ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap(), bytes);
+            }
+        }
+    }
+}
+
 #[test]
 fn action_count_admission_reserves_the_metadata_carrier_before_publication() {
     for metadata in [false, true] {

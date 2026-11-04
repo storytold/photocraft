@@ -420,7 +420,7 @@ fn rename_calls(params: &mut Value, id: &str, old: &str, new: &str) {
     }
 }
 
-/// Only changed references need prepared copies; no library or Session snapshot is taken.
+/// Prepare only changed named-call parameters; the caller validates the proposed definitions.
 fn references(s: &Session, draft: &Draft, value: &mut Action) -> Vec<(usize, usize, Value)> {
     let mut changes = Vec::new();
     if !draft.source.is_some_and(|index| super::owns_name(&s.actions.list, index)) || draft.opening.name == value.name {
@@ -520,20 +520,24 @@ fn save(s: &mut Session, p: &Value) -> Result<Value> {
     next.alternates = action_keys(&alternates);
     next.recording = None;
     let response = view(&next, &value);
-    if target == s.actions.list.len() {
-        s.actions.list.try_reserve(1).map_err(|_| bad(SAVE, "not enough memory for the action"))?;
+    let mut proposed = super::library::definition_copy(&s.actions);
+    if target == proposed.list.len() {
+        proposed.list.try_reserve(1).map_err(|_| bad(SAVE, "not enough memory for the action"))?;
     }
-    // All validation and copies are complete. No command execution or fallible work follows.
+    // Include renamed callers in the same encoded candidate as the edited action.
     for (action, step, params) in changes {
-        if let Some((_, old)) = s.actions.list.get_mut(action).and_then(|action| action.steps.get_mut(step)) {
+        if let Some((_, old)) = proposed.list.get_mut(action).and_then(|action| action.steps.get_mut(step)) {
             *old = params;
         }
     }
-    if target == s.actions.list.len() {
-        s.actions.list.push(value);
-    } else if let Some(old) = s.actions.list.get_mut(target) {
+    if target == proposed.list.len() {
+        proposed.list.push(value);
+    } else if let Some(old) = proposed.list.get_mut(target) {
         *old = value;
     }
+    super::library::check_definition(&proposed, &keys).map_err(|error| bad(SAVE, error))?;
+    // Encoding succeeded. Publish definitions without replacing the live capture/owner state.
+    s.actions.list = proposed.list;
     if changed {
         s.actions.touch();
     }

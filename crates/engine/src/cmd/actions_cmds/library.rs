@@ -27,6 +27,26 @@ pub(crate) fn check_action_count<'a>(state: &ActionState, actions: impl IntoIter
     Ok(())
 }
 
+/// Copy only persisted definitions and row provenance for pre-publication encoding.
+/// Recording, editor ownership and playback counters remain in the live state.
+pub(crate) fn definition_copy(state: &ActionState) -> ActionState {
+    ActionState {
+        list: state.list.clone(),
+        library: state.library.clone(),
+        sets: state.sets.clone(),
+        atn_set_rows: state.atn_set_rows.clone(),
+        ..Default::default()
+    }
+}
+
+/// Use the durable encoder's complete limits before publishing a proposed definition.
+/// This checks eligibility, while backend I/O retains its ordinary warning/retry semantics.
+pub(crate) fn check_definition(state: &ActionState, shortcuts: &std::collections::BTreeMap<String, String>) -> Result<()> {
+    let keys: Vec<_> =
+        shortcuts.iter().filter_map(|(key, value)| key.strip_prefix(super::PLAY_SHORTCUT_PREFIX).map(|name| (name.to_string(), value.clone()))).collect();
+    encode(state, &keys).map(|_| ())
+}
+
 #[derive(Debug)]
 struct Archive {
     bytes: Arc<[u8]>,
@@ -301,10 +321,13 @@ struct OutputAction {
     items: Vec<Option<ItemOrigin>>,
 }
 
+/// Resolve a physical source record, rejecting stale row/action indices.
 fn original_action(origin: &ActionOrigin) -> Result<&AtnAction> {
     origin.row.file()?.actions.get(origin.action).ok_or_else(|| "missing original action".into())
 }
 
+/// Rebuild edited headers and steps while retaining provenance for unchanged event spans.
+/// Function keys bind only unique action names; opaque source headers remain available.
 fn action_record(action: &Action, set: &str, keys: &[(String, String)], unique_name: bool) -> Result<(AtnAction, OutputAction)> {
     let origin = action.library_origin.as_ref();
     let original = origin.map(original_action).transpose()?;

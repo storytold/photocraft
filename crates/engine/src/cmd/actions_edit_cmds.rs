@@ -140,8 +140,11 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
     crate::actions_cmds::library::check_action_count(&s.actions, s.actions.list.iter().chain(std::iter::once(&copied))).map_err(|error| bad(cmd, error))?;
     let at = idx + 1;
     let result = json!({"action": copied.name, "index": at, "steps": copied.steps.len()});
-    s.actions.list.insert(at, copied);
-    shift_action_calls(&mut s.actions.list, at, 1);
+    let mut proposed = crate::actions_cmds::library::definition_copy(&s.actions);
+    proposed.list.insert(at, copied);
+    shift_action_calls(&mut proposed.list, at, 1);
+    crate::actions_cmds::library::check_definition(&proposed, &s.prefs().shortcuts).map_err(|error| bad(cmd, error))?;
+    s.actions.list = proposed.list;
     s.actions.touch();
     Ok(result)
 }
@@ -179,11 +182,17 @@ fn duplicate_set(s: &mut Session, p: &Value) -> Result<Value> {
     let copied: Vec<_> = added.iter().map(|a| a.name.clone()).collect();
     let count = added.len();
     crate::actions_cmds::library::check_action_count(&s.actions, s.actions.list.iter().chain(added.iter())).map_err(|error| bad(cmd, error))?;
-    s.actions.list.splice(at..at, added);
+    let mut proposed = crate::actions_cmds::library::definition_copy(&s.actions);
+    proposed.list.splice(at..at, added);
     if count != 0 {
-        shift_action_calls(&mut s.actions.list, at, count);
+        shift_action_calls(&mut proposed.list, at, count);
     }
-    crate::atn_cmds::sidecar::duplicate_set_rows(&mut s.actions, source, &name);
+    crate::atn_cmds::sidecar::duplicate_set_rows(&mut proposed, source, &name);
+    crate::actions_cmds::library::check_definition(&proposed, &s.prefs().shortcuts).map_err(|error| bad(cmd, error))?;
+    s.actions.list = proposed.list;
+    s.actions.sets = proposed.sets;
+    s.actions.library = proposed.library;
+    s.actions.atn_set_rows = proposed.atn_set_rows;
     s.actions.touch();
     Ok(json!({"set":name,"actions":copied,"index":at}))
 }

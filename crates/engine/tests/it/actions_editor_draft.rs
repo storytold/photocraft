@@ -39,6 +39,34 @@ fn open(s: &mut Session, params: Value) -> u64 {
     s.execute("actions.editor.open", params).unwrap()["draft"].as_u64().unwrap()
 }
 
+/// An encoder refusal retains the dirty capture and both in-memory and stored definitions.
+#[test]
+fn save_rejects_unencodable_metadata_before_ending_capture_or_publishing() {
+    let (mut s, store) = session();
+    let draft = open(&mut s, json!({"action":"Original"}));
+    editor(&mut s, "update", draft, json!({"name":"Renamed","description":"x".repeat(9 << 20),"shortcut":"F8"})).unwrap();
+    editor(&mut s, "record", draft, json!({})).unwrap();
+    let before = s.actions.clone();
+    let prefs = s.prefs().clone();
+    let bytes = store.read(ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap();
+    let error = editor(&mut s, "save", draft, json!({})).unwrap_err();
+    assert!(error.to_string().contains("byte limit"), "{error}");
+    assert_eq!(s.actions, before);
+    assert_eq!(s.prefs(), &prefs);
+    assert_eq!(store.read(ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap(), bytes);
+    assert!(editor(&mut s, "get", draft, json!({})).unwrap()["dirty"].as_bool().unwrap());
+
+    // A large eligible replacement can still close the same capture and persist the rename.
+    editor(&mut s, "update", draft, json!({"description":"x".repeat(3 << 20)})).unwrap();
+    editor(&mut s, "save", draft, json!({})).unwrap();
+    assert!(!editor(&mut s, "get", draft, json!({})).unwrap()["dirty"].as_bool().unwrap());
+    let mut restored = Session::new();
+    assert!(restored.attach_preset_store(preset_store::open(Box::new(store))).is_empty());
+    assert_eq!(restored.actions.list[0].name, "Renamed");
+    assert_eq!(restored.actions.list[0].description.len(), 3 << 20);
+    assert_eq!(restored.actions.list[1].steps[0].1["action"], "Renamed");
+}
+
 #[test]
 fn namesake_rename_follows_only_the_first_resolved_occurrence_in_both_editors() {
     for modern in [false, true] {
