@@ -343,6 +343,8 @@ pub(crate) fn library_groups(state: &ActionState) -> Result<Vec<(&str, Selection
     groups_ordered(state, None, true)
 }
 
+/// Select rows with their opaque metadata and reject archive-count overflow.
+/// Durable output preserves flat call resolution; portable output groups the chosen logical set.
 fn groups_ordered<'a>(state: &'a ActionState, only: Option<&str>, durable: bool) -> Result<Vec<(&'a str, Selection<'a>)>> {
     if state.list.len() > atn::MAX_TOTAL_ACTIONS || state.sets.len() > atn::MAX_SETS {
         return Err("action library exceeds archive limits".into());
@@ -535,14 +537,18 @@ pub(crate) fn legacy_origin(source: Option<&Source>) -> Result<Option<crate::act
     crate::actions_cmds::library::LegacyOrigin::from_descriptor(value).map(Some)
 }
 
+/// Read portable metadata without accepting a library-only empty marker as an action set.
 pub(super) fn decode(files: &[AtnFile]) -> Result<Decoded> {
     decode_inner(files, false, None)
 }
 
+/// Read the complete persisted sidecar, retaining raw outer fields for later edits.
 pub(crate) fn decode_library(files: &[AtnFile], raw_outer: Option<&[u8]>) -> Result<Decoded> {
     decode_inner(files, true, raw_outer)
 }
 
+/// Bind one final sidecar to exact physical set/action positions.
+/// Ambiguous wrappers or malformed bindings fail instead of applying metadata by name.
 fn decode_inner(files: &[AtnFile], library: bool, raw_outer: Option<&[u8]>) -> Result<Decoded> {
     let mut result =
         Decoded { hidden: None, sets: vec![None; files.len()], actions: files.iter().map(|file| vec![None; file.actions.len()]).collect(), source: None };
@@ -704,6 +710,8 @@ pub(super) fn append(files: &mut Vec<AtnFile>, selected: &[Selection<'_>]) -> Re
     append_inner(files, selected, false, None, None).map(|_| ())
 }
 
+/// Encode the complete library carrier, including an explicit empty marker when needed.
+/// Only full-library writes receive a legacy migration receipt.
 pub(crate) fn append_library(
     files: &mut Vec<AtnFile>,
     selected: &[Selection<'_>],
@@ -718,6 +726,8 @@ pub(crate) fn action_needs_metadata(action: &Action) -> bool {
     action.atn_metadata.is_some() || !action.description.is_empty() || !action.icon.is_empty()
 }
 
+/// Patch selected positional metadata while preserving unknown source fields.
+/// Reserve the carrier's real action/item budget before appending the final wrapper.
 fn append_inner(
     files: &mut Vec<AtnFile>,
     selected: &[Selection<'_>],

@@ -35,6 +35,7 @@ impl Drop for Scope {
     }
 }
 
+/// Replace the single liveness request and detach its predecessor's success handler.
 fn next(store: &web_sys::IdbObjectStore, current: &Rc<RefCell<Option<IdbRequest>>>, callback: &Callback) -> Result<(), String> {
     let request = store.count().map_err(js)?;
     let borrowed = callback.borrow();
@@ -46,6 +47,7 @@ fn next(store: &web_sys::IdbObjectStore, current: &Rc<RefCell<Option<IdbRequest>
     Ok(())
 }
 
+/// Compare bounded Blob bytes before the shared deadline; only undefined means absent.
 async fn bytes(value: JsValue, deadline: f64) -> Result<Option<Vec<u8>>, String> {
     if value.is_undefined() {
         return Ok(None);
@@ -58,6 +60,9 @@ async fn bytes(value: JsValue, deadline: f64) -> Result<Option<Vec<u8>>, String>
     Ok(Some(Uint8Array::new(&buffer).to_vec()))
 }
 
+/// Compare the exact migration tuple inside one live read/write transaction.
+/// Blob futures publish decisions; active request callbacks alone queue mutations.
+/// Dropping the scope detaches the callback so late Blob results cannot write.
 pub(super) fn start(tx: &web_sys::IdbTransaction, store: &web_sys::IdbObjectStore, batch: &Batch, deadline: f64) -> Result<Scope, String> {
     let migration = batch.migration.clone().ok_or("missing migration identity")?;
     let mut reads = Vec::new();

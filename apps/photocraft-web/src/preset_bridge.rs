@@ -112,6 +112,8 @@ impl Bridge {
         Self::insert(&mut self.state(), name, &bytes)
     }
 
+    /// Take one pending batch, keeping the original migration bytes fixed across retries.
+    /// Newer live ATN edits stay dirty until that migration is acknowledged.
     pub fn begin(&self) -> Option<Batch> {
         let mut s = self.state();
         if s.writing || s.error.is_some() || s.dirty.is_empty() {
@@ -138,6 +140,8 @@ impl Bridge {
         Some(Batch { files, migration: s.migration.clone() })
     }
 
+    /// Apply a transaction completion result without clearing edits staged while it ran.
+    /// Failure requeues the batch; only success retires the migration identity.
     pub fn finish(&self, batch: Batch, result: Result<(), String>) {
         let mut s = self.state();
         s.writing = false;
