@@ -201,7 +201,7 @@ pub(super) fn commit_open_raw(app: &mut PhotocraftApp, params: &CameraRaw, raw: 
             photocraft_engine::jobs::OpenSource::Bytes(b) => b,
             #[cfg(not(target_arch = "wasm32"))]
             photocraft_engine::jobs::OpenSource::Path(p) => {
-                std::sync::Arc::new(std::fs::read(&p).map_err(|e| photocraft_engine::EngineError::Other(format!("{p}: {e}")))?)
+                std::sync::Arc::new(read_raw_file(&p).map_err(|e| photocraft_engine::EngineError::Other(format!("{p}: {e}")))?)
             }
             #[cfg(target_arch = "wasm32")]
             photocraft_engine::jobs::OpenSource::Path(p) => return Err(photocraft_engine::EngineError::Other(format!("{p}: cannot read files here"))),
@@ -496,4 +496,26 @@ pub fn open_smart_filter(app: &mut PhotocraftApp, ctx: &egui::Context, layer: La
         .ok_or("the smart object's contents are unavailable (missing linked file?)")?;
     let coverage = sm.filter_mask.clone().filter(|m| m.enabled).map_or(Coverage::None, Coverage::Mask);
     open_pixels(app, ctx, layer, surf, params, coverage, Target::SmartFilter(index))
+}
+
+/// Largest RAW file re-read for a tuned develop (the importer's own file ceiling is far lower).
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_RAW_REREAD_BYTES: u64 = 4 << 30;
+
+/// The bytes of the regular file at `path`, at most [`MAX_RAW_REREAD_BYTES`]: the opened handle
+/// must be a regular file, so a pathname swapped for a never-ending device is refused, and reading
+/// stops one byte past the cap.
+#[cfg(not(target_arch = "wasm32"))]
+fn read_raw_file(path: &str) -> std::io::Result<Vec<u8>> {
+    use std::io::{Error, ErrorKind, Read};
+    let file = std::fs::File::open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(Error::new(ErrorKind::InvalidInput, "not a regular file"));
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_RAW_REREAD_BYTES + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_RAW_REREAD_BYTES {
+        return Err(Error::new(ErrorKind::InvalidData, "file is too large"));
+    }
+    Ok(bytes)
 }
