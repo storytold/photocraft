@@ -766,6 +766,10 @@ fn agent_right_click_during_its_crop_drag_opens_no_menu() {
     let right_click = json!([{"kind":"down","x":16,"y":12},{"kind":"up","x":16,"y":12}]);
     pointer(&mut app, "secondary", right_click.clone());
     assert!(app.ui.canvas_tool_menu.is_none(), "no menu over the drag");
+    // Space repositions the frame being dragged rather than holding the Hand: no view menu (#11271).
+    let spaced = json!({"tool": "Crop", "space": true, "button": "secondary", "events": right_click.clone()});
+    assert_eq!(call(&mut app, &ctx, "ui.pointer", spaced)["ok"], true);
+    assert!(app.ui.canvas_tool_menu.is_none(), "no view menu with Space over the drag");
     pointer(&mut app, "left", json!([{"kind":"up","x":18,"y":14}]));
     pointer(&mut app, "secondary", right_click.clone());
     assert!(app.ui.canvas_tool_menu.as_ref().is_some_and(|m| m.crop.is_some()), "after the release it opens");
