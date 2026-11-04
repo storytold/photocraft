@@ -91,8 +91,9 @@ pub fn selection_mode(tool: Tool, bar: u8, m: egui::Modifiers) -> &'static str {
 /// only draws a marquee from its centre). An options-bar Subtract or Intersect is kept (#1106).
 pub fn document_selection_mode(app: &PhotocraftApp, tool: Tool, m: egui::Modifiers) -> &'static str {
     let mode = selection_mode(tool, app.ui.selection_mode, m);
-    // Scanned last: the canvas asks every frame while a Patch lasso is drawn or hovered.
-    let selected = || app.session.active().and_then(|st| st.doc.selection.as_ref()).is_some_and(|s| !s.content_bounds().is_empty());
+    // Asked last, and from the bounds the selection outline caches (same key): the canvas asks
+    // every frame while a Patch lasso is drawn or hovered with ⌥.
+    let selected = || app.session.active().is_some_and(|st| st.doc.selection.as_ref().is_some_and(|s| !app.known_bounds(u64::MAX - st.doc.id.0, s).is_empty()));
     if m.alt && matches!(mode, "subtract" | "intersect") && selection_mode(tool, app.ui.selection_mode, egui::Modifiers::NONE) == "replace" && !selected() {
         "replace"
     } else {
@@ -233,6 +234,24 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    /// ⌥'s "is anything selected" reads the bounds the selection outline caches, as the canvas
+    /// asks every frame, and scans only a selection that changed since.
+    #[test]
+    fn alt_reads_the_cached_selection_bounds() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        let alt = egui::Modifiers::ALT;
+        app.run("file.new", serde_json::json!({"width": 40, "height": 30})).unwrap();
+        app.run("select.rect", serde_json::json!({"x": 5, "y": 5, "width": 10, "height": 10})).unwrap();
+        assert_eq!(document_selection_mode(&app, Tool::Lasso, alt), "subtract", "nothing cached: scanned");
+        let st = app.session.active().unwrap();
+        let (key, fingerprint) = (u64::MAX - st.doc.id.0, crate::surface_fingerprint(st.doc.selection.as_ref().unwrap()));
+        // An empty box cached for this very selection is believed, so nothing is scanned.
+        app.bounds_cache.insert(key, (fingerprint, photocraft_geom::Rect::EMPTY));
+        assert_eq!(document_selection_mode(&app, Tool::Lasso, alt), "replace", "the cached bounds are used");
+        app.run("select.rect", serde_json::json!({"x": 20, "y": 5, "width": 10, "height": 10})).unwrap();
+        assert_eq!(document_selection_mode(&app, Tool::Lasso, alt), "subtract", "a new selection is scanned again");
     }
 
     #[test]

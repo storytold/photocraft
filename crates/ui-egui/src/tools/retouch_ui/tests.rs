@@ -411,6 +411,50 @@ fn a_new_patch_lasso_hides_and_replaces_the_old_selection() {
     }
 }
 
+/// The screen boxes of the marching ants painted in one canvas frame (meshes of black and white).
+fn painted_ants(app: &mut PhotocraftApp) -> Vec<egui::Rect> {
+    let ctx = egui::Context::default();
+    PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::ALL[0]);
+    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(300.0, 200.0));
+    let view = crate::state::View { zoom: 2.0, center: [50.0, 30.0], doc_size: [100, 60], fit_pending: false, ..Default::default() };
+    let mut output = ctx.run_ui(egui::RawInput { screen_rect: Some(rect), ..Default::default() }, |ui| {
+        crate::canvas::canvas_view(app, ui, 0, rect, view.clone(), true);
+    });
+    output.textures_delta.clear();
+    let black_and_white =
+        |m: &egui::Mesh| m.vertices.iter().any(|v| v.color == egui::Color32::BLACK) && m.vertices.iter().any(|v| v.color == egui::Color32::WHITE);
+    output
+        .shapes
+        .iter()
+        .filter_map(|s| match &s.shape {
+            egui::Shape::Mesh(m) if black_and_white(m) => Some(egui::Rect::from_points(&m.vertices.iter().map(|v| v.pos).collect::<Vec<_>>())),
+            _ => None,
+        })
+        .collect()
+}
+
+/// #11024 on the canvas: while a new Patch lasso is drawn, no ants are painted where the selection
+/// it replaces is, only along the lasso; a ⇧ lasso, which adds, keeps them.
+#[test]
+fn a_new_patch_lasso_paints_no_ants_on_the_old_selection() {
+    for tool in [Tool::Patch, Tool::ContentAwareMove] {
+        for (m, kept) in [(egui::Modifiers::NONE, false), (egui::Modifiers::SHIFT, true)] {
+            let mut app = app();
+            app.run("select.rect", json!({"x": 10, "y": 20, "width": 16, "height": 20})).unwrap();
+            app.sync_views();
+            app.ui.tool = tool;
+            let old = painted_ants(&mut app).into_iter().reduce(|a, b| a.union(b)).expect("the selection has its ants");
+            tool_event(&mut app, ToolEvent::Down { x: 60.0, y: 20.0, pressure: 1.0 }, m);
+            for [x, y] in [[76.0, 20.0], [76.0, 40.0], [60.0, 40.0]] {
+                tool_event(&mut app, ToolEvent::Move { x, y, pressure: 1.0 }, m);
+            }
+            let ants = painted_ants(&mut app);
+            assert!(ants.iter().any(|a| !a.intersects(old)), "{tool:?} {m:?}: the lasso being drawn has its ants: {ants:?}");
+            assert_eq!(ants.iter().any(|a| a.intersects(old)), kept, "{tool:?} {m:?}: ants on the old selection at {old:?}: {ants:?}");
+        }
+    }
+}
+
 /// #11024: the Patch and Content-Aware Move cursors show + with ⇧ and − with ⌥, like the Lasso's,
 /// but nothing over the selection without them, where a press drags the patch.
 #[test]
