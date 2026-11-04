@@ -1305,7 +1305,8 @@ impl Document {
     /// the expanded group beside it (down enters at the group's top, up at its bottom), or out of
     /// its own group when it is the child at that end, to the row beside the group. A collapsed
     /// group is passed as one row, as is a group the layer's own groups would nest past
-    /// [`MAX_GROUP_DEPTH`] in. Returns false at the ends of the top-level stack.
+    /// [`MAX_GROUP_DEPTH`] in, and so is an artboard, which also stays at the top level itself.
+    /// Returns false at the ends of the top-level stack.
     pub fn step(&mut self, id: LayerId, dir: i32) -> bool {
         let Some(path) = self.path_of(id) else { return false };
         let Some((&idx, parent)) = path.split_last() else { return false };
@@ -1321,8 +1322,11 @@ impl Document {
         };
         let mut beside = parent.to_vec();
         beside.push(next);
-        let fits = self.layer_at(&path).is_some_and(|l| beside.len().saturating_add(l.subtree_depth()) <= MAX_GROUP_DEPTH);
-        let group = self.layer_at(&beside).filter(|g| fits && matches!(&g.content, LayerContent::Group(gr) if gr.expanded)).map(|g| g.id);
+        // An artboard stays at the top level, where the document lists its boards, and Arrange
+        // doesn't step into a board either: both pass as one row.
+        let fits = self.layer_at(&path).is_some_and(|l| l.artboard().is_none() && beside.len().saturating_add(l.subtree_depth()) <= MAX_GROUP_DEPTH);
+        let group =
+            self.layer_at(&beside).filter(|g| fits && matches!(&g.content, LayerContent::Group(gr) if gr.expanded && gr.artboard.is_none())).map(|g| g.id);
         let Some(group) = group else { return self.shift(id, dir) };
         let Some(l) = self.remove(id) else { return false };
         match self.layer_mut(group).and_then(Layer::children_mut) {
@@ -1580,6 +1584,35 @@ mod tests {
         assert!(d.step(top, -1));
         assert_eq!(d.layers.iter().map(|l| l.id).collect::<Vec<_>>(), [bg, top, g]);
         assert_eq!(d.max_group_depth(), MAX_GROUP_DEPTH);
+    }
+
+    #[test]
+    fn step_passes_artboards_as_one_row() {
+        // An artboard stays at the top level (the document lists its boards there), and Arrange
+        // doesn't step into one; a layer inside a board leaves it like any group.
+        let mut d = doc();
+        let bg = d.layers[0].id;
+        let g = d.insert_above(Some(bg), Layer::group("G", vec![Layer::raster("C", d.pixel_format())]));
+        let mut board = Layer::group("Board", vec![Layer::raster("B1", d.pixel_format())]);
+        if let LayerContent::Group(gr) = &mut board.content {
+            gr.artboard = Some(Artboard::new(Rect::new(0, 0, 32, 32)));
+        }
+        let board = d.insert_above(Some(g), board);
+        let x = d.insert_above(Some(board), Layer::raster("X", d.pixel_format()));
+        assert_eq!(rows(&d), ["X", "Board", "  B1", "G", "  C", "Background"]);
+        // X passes the board rather than entering it, then enters the group below.
+        assert!(d.step(x, -1));
+        assert_eq!(rows(&d), ["Board", "  B1", "X", "G", "  C", "Background"]);
+        assert!(d.step(x, -1));
+        assert_eq!(rows(&d), ["Board", "  B1", "G", "  X", "  C", "Background"]);
+        // The board passes the open group rather than entering it, and stays a listed artboard.
+        assert!(d.step(board, -1));
+        assert_eq!(rows(&d), ["G", "  X", "  C", "Board", "  B1", "Background"]);
+        assert_eq!(d.artboards().len(), 1);
+        // A layer leaves its board from its end, as from any group.
+        let b1 = d.layer_at(&[1, 0]).unwrap().id;
+        assert!(d.step(b1, 1));
+        assert_eq!(rows(&d), ["G", "  X", "  C", "B1", "Board", "Background"]);
     }
 
     #[test]
