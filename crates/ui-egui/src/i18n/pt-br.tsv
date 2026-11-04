@@ -4447,3 +4447,16 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Cor da parada
 	Shapes can't use patterns yet	Formas ainda não podem usar padrões
 	Edit Brush…	Editar pincel…
+
+# PDF Options (PDF/X-1a)
+	PDF Options	Opções de PDF
+	Output Condition	Condição de saída
+	Document: {profile}	Documento: {profile}
+	Working CMYK: {profile}	CMYK de trabalho: {profile}
+	No CMYK profile is installed. Install the printer's profile (for example ISO Coated v2 or Coated FOGRA39) in Windows and save again.	Nenhum perfil CMYK instalado. Instale no Windows o perfil da gráfica (por exemplo ISO Coated v2 ou Coated FOGRA39) e salve de novo.
+	PDF/X-1a:2001 needs an ICC version 2 profile. Choose the printer's profile (for example ISO Coated v2 or Coated FOGRA39).	O PDF/X-1a:2001 precisa de um perfil ICC versão 2. Escolha o perfil da gráfica (por exemplo ISO Coated v2 ou Coated FOGRA39).
+	The CMYK numbers are kept.	Os valores CMYK são mantidos.
+	The colours are converted to this profile in the PDF; the document is not changed.	As cores são convertidas para este perfil no PDF; o documento não é alterado.
+	Bleed:	Sangria:
+	The bleed already in the document: the trim box sits this far inside the page.	A sangria que já está no documento: a linha de corte fica essa distância para dentro da página.
+	Save PDF	Salvar PDF

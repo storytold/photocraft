@@ -3012,3 +3012,46 @@ fn open_as_and_place_keep_the_typed_hard_budget_fields() {
         });
     });
 }
+
+/// `file.saveACopy` writes PDF/X-1a:2001 when its params ask: the output profile by path, the
+/// bleed as the trim box, RGB converted to device CMYK; a v4 profile and bad params are refused
+/// and write nothing.
+#[test]
+fn save_a_copy_writes_pdf_x1a_from_its_params() {
+    let dir = tmp("pdfx");
+    let mut v2 = photocraft_cms::Builtin::CoatedCmyk.profile().to_bytes().to_vec();
+    v2[8] = 2;
+    v2[9] = 0x10;
+    let icc = join(&dir, "v2.icc");
+    std::fs::write(&icc, v2).unwrap();
+    let mut s = session(300, 150, 8);
+    s.edit("resolution", |doc, _| {
+        doc.resolution_dpi = 300.0;
+        Ok(())
+    })
+    .unwrap();
+    let out = join(&dir, "print.pdf");
+    s.execute("file.saveACopy", json!({"path": out, "pdfStandard": "x1a2001", "pdfOutputProfile": icc, "pdfBleedMm": 3})).unwrap();
+    let pdf = std::fs::read(&out).unwrap();
+    let has = |n: &str| pdf.windows(n.len()).any(|w| w == n.as_bytes());
+    assert!(pdf.starts_with(b"%PDF-1.3"));
+    assert!(has("/GTS_PDFXConformance (PDF/X-1a:2001)") && has("/S /GTS_PDFX"));
+    assert!(has("/TrimBox [8.50 8.50 63.50 27.50]"), "3 mm in from a 1 × 0.5 in page");
+    assert!(has("/ColorSpace /DeviceCMYK") && !has("/DeviceRGB"));
+
+    let plain = join(&dir, "plain.pdf");
+    s.execute("file.saveACopy", json!({"path": plain, "pdfStandard": "none"})).unwrap();
+    assert!(std::fs::read(&plain).unwrap().starts_with(b"%PDF-1.4"), "a plain PDF as before");
+
+    let refused = join(&dir, "refused.pdf");
+    for p in [
+        json!({"path": refused, "pdfStandard": "x1a2001", "pdfOutputProfile": "coated-cmyk"}),
+        json!({"path": refused, "pdfStandard": "x4"}),
+        json!({"path": refused, "pdfBleedMm": 3}),
+        json!({"path": refused, "pdfStandard": "x1a2001", "pdfBleedMm": 99}),
+        json!({"path": refused, "pdfStandard": "x1a2001", "pdfOutputProfile": 7}),
+    ] {
+        assert!(s.execute("file.saveACopy", p.clone()).is_err(), "{p}");
+    }
+    assert!(std::fs::metadata(&refused).is_err(), "nothing written");
+}

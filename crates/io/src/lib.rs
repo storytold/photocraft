@@ -63,6 +63,7 @@ pub use ora::losses as ora_losses;
 pub mod pattern_map;
 mod pcraft_cache;
 pub mod pdf;
+pub use pdf::{PdfOptions, PdfX1a};
 mod pdn;
 pub use pcraft_cache::PcraftExportCache;
 pub mod pixels;
@@ -404,6 +405,8 @@ pub struct ExportOptions {
     /// omit it; check the manifest's `full_composite` member ([`photocraft_format::read_full_composite`]
     /// reads it). Off by default.
     pub pcraft_full_composite: bool,
+    /// PDF: plain, or PDF/X-1a:2001 for print (Save As asks in PDF Options).
+    pub pdf: pdf::PdfOptions,
 }
 
 impl Default for ExportOptions {
@@ -421,6 +424,7 @@ impl Default for ExportOptions {
             pcraft_cache: None,
             read_linked_files: true,
             pcraft_full_composite: false,
+            pdf: pdf::PdfOptions::default(),
         }
     }
 }
@@ -980,7 +984,7 @@ fn export_stages(doc: &Document, name_or_ext: &str, opts: &ExportOptions, ctl: &
         return ora::export(doc).map(EncodedExport::from);
     }
     if ext == "pdf" {
-        return pdf::export(doc).map(EncodedExport::from);
+        return pdf::export_with_options(doc, &opts.pdf).map(EncodedExport::from);
     }
     if ext == photocraft_format::EXTENSION {
         let doc = named_for_file(doc, name_or_ext);

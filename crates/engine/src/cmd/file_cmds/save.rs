@@ -1,3 +1,7 @@
+use std::sync::Arc;
+
+use photocraft_color::ColorMode;
+
 use super::paths::{same_file, write_file};
 use super::{Document, EngineError, Layer, LayerContent, Result, Session, Value, f64_param, flattened_checked, json, str_param};
 
@@ -9,9 +13,9 @@ pub fn tiff_would_write_layers(doc: &Document) -> bool {
 }
 
 /// What a headless save writes beyond the format: JPEG quality and format, TIFF layers, Targa
-/// bits, DPX bits, DDS compression and mipmaps, PSD previews, the PSD merged image and the
-/// `.pcraft` full-size composite.
-#[derive(Debug, Clone, Copy)]
+/// bits, DPX bits, DDS compression and mipmaps, PSD previews, the PSD merged image, the
+/// `.pcraft` full-size composite and PDF/X.
+#[derive(Debug, Clone)]
 pub(crate) struct SaveOpts {
     /// Photoshop's 0–12 JPEG scale.
     pub quality: Option<f64>,
@@ -43,6 +47,8 @@ pub(crate) struct SaveOpts {
     /// File Handling › Save Full-Size Composite in .pcraft Files, off by default). The save may
     /// omit it; check the manifest's `full_composite` member.
     pub pcraft_full_composite: bool,
+    /// PDF: PDF/X-1a:2001 (`"pdfStandard": "x1a2001"`), its profiles resolved in the session.
+    pub pdf: Option<PdfRequest>,
 }
 
 impl Default for SaveOpts {
@@ -60,6 +66,7 @@ impl Default for SaveOpts {
             image_previews: true,
             psd_maximize_compatibility: true,
             pcraft_full_composite: false,
+            pdf: None,
         }
     }
 }
@@ -86,6 +93,7 @@ impl SaveOpts {
             image_previews: file_handling.image_previews != crate::prefs::Ask::Never,
             psd_maximize_compatibility: file_handling.maximize_psd_compatibility != crate::prefs::Ask::Never,
             pcraft_full_composite: pcraft_full_composite_param(p, cmd)?.unwrap_or(file_handling.pcraft_full_composite),
+            pdf: pdf_params(p, cmd)?.map(|pdf| PdfRequest::resolve(&s.color, &pdf)).transpose()?,
         })
     }
 
@@ -209,6 +217,108 @@ pub fn dds_param(p: &Value, cmd: &str) -> Result<Option<photocraft_io::DdsOption
     Ok(Some(photocraft_io::DdsOptions { compression: compression.unwrap_or_default(), mipmaps: mipmaps.unwrap_or(false) }))
 }
 
+/// The PDF/X-1a a save's params ask for, before its profile is resolved: `"pdfStandard":
+/// "none" | "x1a2001"`, `"pdfOutputProfile"` (a built-in id, `working-cmyk`, `document` or an
+/// `.icc`/`.icm` path; unset, the document's own CMYK profile, else the working CMYK) and
+/// `"pdfBleedMm"` (0–50, the bleed already inside the document). `None` for a plain PDF. Shared by
+/// every save that takes it (the engine's commands, the app's Save As and recorded actions).
+#[derive(Clone, Debug, PartialEq)]
+pub struct PdfParams {
+    pub profile: Option<String>,
+    pub bleed_mm: f64,
+}
+
+impl PdfParams {
+    /// Adds these choices to a recorded save step.
+    pub fn record(&self, step: &mut Value) {
+        step["pdfStandard"] = "x1a2001".into();
+        if let Some(profile) = &self.profile {
+            step["pdfOutputProfile"] = profile.as_str().into();
+        }
+        if self.bleed_mm > 0.0 {
+            step["pdfBleedMm"] = self.bleed_mm.into();
+        }
+    }
+}
+
+/// The [`PdfParams`] in `p`; anything malformed is a bad parameter of command `cmd`.
+pub fn pdf_params(p: &Value, cmd: &str) -> Result<Option<PdfParams>> {
+    let bad = |msg: String| EngineError::BadParams { cmd: cmd.into(), msg };
+    let x1a = match p.get("pdfStandard") {
+        None | Some(Value::Null) => false,
+        Some(v) => match v.as_str() {
+            Some("none") => false,
+            Some("x1a2001") => true,
+            _ => return Err(bad(format!("`pdfStandard` must be \"none\" or \"x1a2001\", got {v}"))),
+        },
+    };
+    let profile = match p.get("pdfOutputProfile") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(spec)) if !spec.is_empty() => Some(spec.clone()),
+        Some(v) => return Err(bad(format!("`pdfOutputProfile` must be a profile id or path, got {v}"))),
+    };
+    let bleed_mm = match p.get("pdfBleedMm") {
+        None | Some(Value::Null) => 0.0,
+        Some(v) => v.as_f64().filter(|b| (0.0..=50.0).contains(b)).ok_or_else(|| bad(format!("`pdfBleedMm` must be 0 to 50, got {v}")))?,
+    };
+    if !x1a {
+        if profile.is_some() || bleed_mm > 0.0 {
+            return Err(bad("`pdfOutputProfile` and `pdfBleedMm` need `\"pdfStandard\": \"x1a2001\"`".into()));
+        }
+        return Ok(None);
+    }
+    Ok(Some(PdfParams { profile, bleed_mm }))
+}
+
+/// [`PdfParams`] with the output profile and the colour settings taken from a session, ready for
+/// any document saved with them.
+#[derive(Clone, Debug)]
+pub struct PdfRequest {
+    /// `None`: the document's own CMYK profile, else `working`.
+    output: Option<Arc<photocraft_cms::Profile>>,
+    working: Arc<photocraft_cms::Profile>,
+    intent: photocraft_cms::Intent,
+    bpc: bool,
+    bleed_mm: f64,
+}
+
+impl PdfRequest {
+    pub fn resolve(color: &crate::color_cmds::ColorState, params: &PdfParams) -> Result<Self> {
+        let output = match params.profile.as_deref() {
+            None | Some("document") => None,
+            Some(spec) => Some(color.resolve(spec, None, Some(ColorMode::Cmyk))?),
+        };
+        Ok(PdfRequest { output, working: color.working(ColorMode::Cmyk), intent: color.settings.intent(), bpc: color.settings.bpc, bleed_mm: params.bleed_mm })
+    }
+
+    /// The PDF/X-1a options for saving `doc`.
+    pub fn options_for(&self, doc: &Document) -> photocraft_io::PdfOptions {
+        let dest = match &self.output {
+            Some(p) => p.clone(),
+            None if doc.mode == ColorMode::Cmyk => crate::color_cmds::document_profile(doc),
+            None => self.working.clone(),
+        };
+        pdf_x1a_options(doc, &dest, self.intent, self.bpc, self.bleed_mm)
+    }
+}
+
+/// PDF/X-1a:2001 to the output condition `dest` for `doc`: a gray document, or a CMYK one already
+/// in that condition, keeps its numbers; anything else is converted from the document's profile
+/// (the PDF writer refuses a `dest` that isn't an ICC v2 CMYK profile).
+pub fn pdf_x1a_options(doc: &Document, dest: &photocraft_cms::Profile, intent: photocraft_cms::Intent, bpc: bool, bleed_mm: f64) -> photocraft_io::PdfOptions {
+    let src = crate::color_cmds::document_profile(doc);
+    let same = doc.mode == ColorMode::Grayscale || (doc.mode == ColorMode::Cmyk && src.description == dest.description);
+    photocraft_io::PdfOptions {
+        x1a: Some(photocraft_io::PdfX1a {
+            profile: dest.to_bytes(),
+            source: (!same).then(|| src.to_bytes()),
+            intent,
+            bpc,
+            bleed_pt: bleed_mm.max(0.0) * 72.0 / 25.4,
+        }),
+    }
+}
+
 /// Encodes `doc` for `path`'s extension.
 pub(crate) fn encode(doc: &Document, path: &str, save: impl Into<SaveOpts>) -> Result<(Vec<u8>, Vec<String>)> {
     crate::allocation::checkpoint("saving document")?;
@@ -235,6 +345,9 @@ pub(crate) fn encode(doc: &Document, path: &str, save: impl Into<SaveOpts>) -> R
     }
     opts.encode.tiff_pyramid = save.tiff_pyramid;
     opts.encode.dds = save.dds;
+    if let Some(pdf) = &save.pdf {
+        opts.pdf = pdf.options_for(doc);
+    }
     if let Some(q) = save.quality {
         let q = jpeg_quality(q);
         opts.encode.jpeg_quality = q;

@@ -165,6 +165,7 @@ pub use dialogs::new_layer_ui;
 pub use dialogs::open_prompt;
 pub use dialogs::palette;
 pub(crate) use dialogs::pattern_fill_ui;
+pub use dialogs::pdf_options_ui;
 pub use dialogs::preset_group_prompt;
 pub use dialogs::rasterize_prompt;
 pub use dialogs::replace_prompt;
@@ -690,6 +691,8 @@ pub struct PhotocraftApp {
     pub(crate) jpeg_options: Option<jpeg_options_ui::Prompt>,
     /// A save to a DDS texture parked behind the DDS Options prompt (see `dds_options_ui`).
     pub(crate) dds_options: Option<dds_options_ui::Prompt>,
+    /// A Save As or Save a Copy to PDF parked behind the PDF Options prompt (see `pdf_options_ui`).
+    pub(crate) pdf_options: Option<pdf_options_ui::Prompt>,
     /// Files read but not opened yet: the first waits on its profile prompt, the rest behind it
     /// (see `open_prompt`).
     pub(crate) held_opens: std::collections::VecDeque<open_prompt::Held>,

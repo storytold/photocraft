@@ -244,9 +244,16 @@ impl PhotocraftApp {
                 // Confirming the document's own file: ask first if another app changed it (#6596).
                 if plain_save
                     && own.as_deref() == Some(path.as_str())
-                    && let Some(r) = crate::disk_change_prompt::intercept(app, doc, &path, true, choices)
+                    && let Some(r) = crate::disk_change_prompt::intercept(app, doc, &path, true, choices.clone())
                 {
                     return r;
+                }
+                // A PDF picked in the dialog asks for PDF Options (plain, or PDF/X for print); a
+                // script naming a path writes a plain PDF without asking.
+                if choices.pdf.is_none() && crate::pdf_options_ui::is_pdf_path(&path) {
+                    let copy = app.saves_copy(&path, None)?;
+                    crate::pdf_options_ui::park(app, path.clone(), copy, "file.saveAs")?;
+                    return Ok(serde_json::json!({"path": path, "warnings": []}));
                 }
                 let from = app.session.journal.len();
                 let r = app.save_to(path.clone(), choices)?;
@@ -299,7 +306,7 @@ impl PhotocraftApp {
         if self.save_options_open() {
             return Err(SAVE_OPTIONS_OPEN.into());
         }
-        let r = self.write_save(path, None, choices)?;
+        let r = self.write_save(path, None, &choices)?;
         // JPEG Options are recorded only where they change something
         // ([`jpeg_options_ui::plain_save_step`]); the Targa and DDS answers as given.
         let mut step = jpeg_options_ui::plain_save_step(choices.jpeg);
@@ -312,7 +319,7 @@ impl PhotocraftApp {
     /// Targa, DDS or JPEG answer), so an action being recorded keeps it (#2032).
     fn save_as_step(&mut self, path: String, tiff_layers: Option<bool>, choices: FormatChoices) -> Result<Value, String> {
         let mut step = self.save_as_record(&path);
-        let r = self.write_save(path, tiff_layers, choices)?;
+        let r = self.write_save(path, tiff_layers, &choices)?;
         if let Some(layers) = tiff_layers {
             step["tiffLayers"] = layers.into();
         }
@@ -512,9 +519,13 @@ impl PhotocraftApp {
     /// `Some(false)` discards the layers and saves a copy. `choices` are the Targa bits per pixel
     /// (`None`: 32 with an alpha channel or transparency, else 24), the DDS options and the JPEG
     /// Options.
-    fn write_save(&mut self, path: String, tiff_layers: Option<bool>, choices: FormatChoices) -> Result<Value, String> {
+    fn write_save(&mut self, path: String, tiff_layers: Option<bool>, choices: &FormatChoices) -> Result<Value, String> {
         let copy = self.saves_copy(&path, tiff_layers)?;
-        let settings = choices.apply(ExportSettings { tiff_layers: tiff_layers.unwrap_or(ExportSettings::default().tiff_layers), ..self.save_settings() });
+        let mut settings = choices.apply(ExportSettings { tiff_layers: tiff_layers.unwrap_or(ExportSettings::default().tiff_layers), ..self.save_settings() });
+        if let Some(pdf) = &choices.pdf {
+            let request = photocraft_engine::file_cmds::PdfRequest::resolve(&self.session.color, pdf).map_err(|e| e.to_string())?;
+            settings.pdf = request.options_for(&self.session.active().ok_or("no document")?.doc);
+        }
         match self.write_document(path.clone(), &settings, copy)? {
             Some((path, warnings)) => Ok(serde_json::json!({"path": path, "warnings": warnings})),
             None => Ok(serde_json::json!({"path": path, "warnings": [], "pending": true, "job": self.jobs.last_started.map(|j| j.0)})),
@@ -664,9 +675,9 @@ impl PhotocraftApp {
         own == path && self.services.file_stamp.as_ref().and_then(|stamp| stamp(path)).is_some_and(|now| now != *then)
     }
 
-    /// TIFF, Targa, DDS or JPEG Options is waiting on an answer before a save is written.
+    /// TIFF, Targa, DDS, JPEG or PDF Options is waiting on an answer before a save is written.
     pub(crate) fn save_options_open(&self) -> bool {
-        self.tiff_options.is_some() || self.targa_options.is_some() || self.dds_options.is_some() || self.jpeg_options.is_some()
+        self.tiff_options.is_some() || self.targa_options.is_some() || self.dds_options.is_some() || self.jpeg_options.is_some() || self.pdf_options.is_some()
     }
 
     /// Writes a save that waited on a format prompt (Targa, DDS, JPEG or TIFF Options) once answered:

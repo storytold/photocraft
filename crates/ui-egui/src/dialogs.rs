@@ -1170,6 +1170,7 @@ pub mod new_layer_ui;
 pub mod open_prompt;
 pub mod palette;
 pub(crate) mod pattern_fill_ui;
+pub mod pdf_options_ui;
 pub mod preset_group_prompt;
 pub mod rasterize_prompt;
 pub mod replace_prompt;

@@ -1,22 +1,23 @@
 use super::{
-    CaptionStyle, Document, FileDialogFn, OsEvent, Value, dds_options_ui, jobs_ui, jpeg_options_ui, monitor_status, native_menu, screen_picker,
+    CaptionStyle, Document, FileDialogFn, OsEvent, Value, dds_options_ui, jobs_ui, jpeg_options_ui, monitor_status, native_menu, pdf_options_ui, screen_picker,
     targa_options_ui, tiff_options_ui,
 };
 
 /// The error a save gets while another save waits on its format prompt.
-pub(crate) const SAVE_OPTIONS_OPEN: &str = "Answer the TIFF, Targa, DDS or JPEG Options before starting another save";
+pub(crate) const SAVE_OPTIONS_OPEN: &str = "Answer the TIFF, Targa, DDS, JPEG or PDF Options before starting another save";
 
 /// The format answers a save takes instead of asking: the Targa bits per pixel (`"tgaBits"`),
 /// the DDS options (`"ddsCompression"`, `"ddsMipmaps"`), JPEG Options (`"quality"` 0–12,
 /// `"jpegFormat"`) and TIFF Options (`"tiffCompression"`, `"tiffTransparency"`, `"tiffPyramid"`,
-/// `"tiffLayers"`). `None` asks in Save As and takes the default in automation saves, which never
-/// prompt.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+/// `"tiffLayers"`) and PDF/X (`"pdfStandard"`, `"pdfOutputProfile"`, `"pdfBleedMm"`). `None` asks in
+/// Save As and takes the default in automation saves, which never prompt.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct FormatChoices {
     pub tga_bits: Option<photocraft_io::TgaBits>,
     pub dds: Option<photocraft_io::DdsOptions>,
     pub jpeg: Option<jpeg_options_ui::JpegChoice>,
     pub tiff: Option<tiff_options_ui::TiffChoice>,
+    pub pdf: Option<photocraft_engine::file_cmds::PdfParams>,
 }
 
 impl FormatChoices {
@@ -27,6 +28,7 @@ impl FormatChoices {
             dds: dds_options_ui::options_param(params, cmd)?,
             jpeg: jpeg_options_ui::choice_param(params, cmd)?,
             tiff: tiff_options_ui::choice_param(params, cmd)?,
+            pdf: pdf_options_ui::params_param(params, cmd)?,
         })
     }
 
@@ -38,11 +40,12 @@ impl FormatChoices {
             dds: dds_options_ui::options_param(params, cmd)?,
             jpeg: jpeg_options_ui::recorded_choice(params, cmd)?,
             tiff: tiff_options_ui::choice_param(params, cmd)?,
+            pdf: pdf_options_ui::params_param(params, cmd)?,
         })
     }
 
     /// The export settings with these answers applied.
-    pub fn apply(self, settings: ExportSettings) -> ExportSettings {
+    pub fn apply(&self, settings: ExportSettings) -> ExportSettings {
         let settings = ExportSettings { tga_bits: self.tga_bits.or(settings.tga_bits), dds: self.dds.unwrap_or(settings.dds), ..settings };
         let settings = match self.tiff {
             Some(t) => t.apply(settings),
@@ -55,7 +58,7 @@ impl FormatChoices {
     }
 
     /// Adds the answers to a recorded save step.
-    pub(crate) fn record(self, step: &mut Value) {
+    pub(crate) fn record(&self, step: &mut Value) {
         if let Some(bits) = self.tga_bits {
             step["tgaBits"] = bits.bits().into();
         }
@@ -67,6 +70,9 @@ impl FormatChoices {
         }
         if let Some(t) = self.tiff {
             t.record(step);
+        }
+        if let Some(pdf) = &self.pdf {
+            pdf.record(step);
         }
     }
 }
@@ -127,6 +133,8 @@ pub struct ExportSettings {
     /// Read and embed the files linked smart objects name ([`photocraft_io::ExportOptions::read_linked_files`]).
     /// Off for automation saves, which are granted only their target.
     pub read_linked_files: bool,
+    /// PDF: plain, or PDF/X from PDF Options.
+    pub pdf: photocraft_io::PdfOptions,
 }
 
 impl Default for ExportSettings {
@@ -151,6 +159,7 @@ impl Default for ExportSettings {
             document_path: None,
             pcraft_cache: None,
             read_linked_files: true,
+            pdf: photocraft_io::PdfOptions::default(),
         }
     }
 }
@@ -183,6 +192,7 @@ impl ExportSettings {
         opts.document_path = self.document_path.clone();
         opts.pcraft_cache = self.pcraft_cache.clone();
         opts.read_linked_files = self.read_linked_files;
+        opts.pdf = self.pdf.clone();
         opts
     }
 }

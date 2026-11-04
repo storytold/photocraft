@@ -129,3 +129,93 @@ fn other_modes_are_refused_with_an_actionable_error() {
     assert!(e.contains("RGB") && e.contains("Mode"), "{e}");
     assert!(crate::export(&d, "x.pdf", &crate::ExportOptions::default()).is_err());
 }
+
+/// The built-in CMYK profile relabelled ICC v2.1, so PDF/X-1a takes it: the structure tests need
+/// a v2 output profile and the repository ships none.
+fn v2_cmyk() -> std::sync::Arc<Vec<u8>> {
+    let mut b = photocraft_cms::Builtin::CoatedCmyk.profile().to_bytes().to_vec();
+    b[8] = 2;
+    b[9] = 0x10;
+    std::sync::Arc::new(b)
+}
+
+fn x1a(source: Option<std::sync::Arc<Vec<u8>>>, bleed_pt: f64) -> PdfOptions {
+    PdfOptions { x1a: Some(PdfX1a { profile: v2_cmyk(), source, intent: photocraft_cms::Intent::RelativeColorimetric, bpc: true, bleed_pt }) }
+}
+
+#[test]
+fn x1a_writes_pdf_1_3_with_the_output_intent_boxes_and_identification() {
+    let mut d = doc(ColorMode::Rgb);
+    d.size = Size { width: 300, height: 150 };
+    let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::F32, true);
+    d.layers = vec![Layer::new("Paper", LayerContent::Raster(solid(fmt, 0, 0, 300, 150, &[1.0, 1.0, 1.0, 1.0])))];
+    d.resolution_dpi = 300.0;
+    let out = crate::export(&d, "out.pdf", &crate::ExportOptions { pdf: x1a(None, 9.0), ..Default::default() }).unwrap();
+    let pdf = &out.bytes;
+    check_structure(pdf);
+    assert!(pdf.starts_with(b"%PDF-1.3\n"), "PDF/X-1a:2001 is PDF 1.3");
+    assert!(has(pdf, "/GTS_PDFXVersion (PDF/X-1:2001) /GTS_PDFXConformance (PDF/X-1a:2001)"));
+    assert!(has(pdf, "/Trapped /False"));
+    assert!(has(pdf, "/OutputIntents [<< /Type /OutputIntent /S /GTS_PDFX /OutputConditionIdentifier (Custom)"));
+    assert!(has(pdf, "/DestOutputProfile 6 0 R"));
+    assert!(has(pdf, "/MediaBox [0 0 72.00 36.00] /BleedBox [0 0 72.00 36.00] /TrimBox [9.00 9.00 63.00 27.00]"), "the bleed sits inside the page");
+    assert!(has(pdf, "/ColorSpace /DeviceCMYK"), "RGB is converted to the output condition");
+    assert!(!has(pdf, "/ICCBased") && !has(pdf, "/DeviceRGB"), "only device CMYK colour");
+    assert!(!has(pdf, "/Font"), "no font, so none left unembedded");
+    assert!(has(pdf, "/Info 7 0 R /ID [<"), "the trailer names the info dictionary and the file");
+    assert_eq!(stream_after(pdf, "/N 4 /Filter"), *v2_cmyk(), "the output profile is embedded whole");
+    let img = stream_after(pdf, "/Subtype /Image");
+    assert!(img.iter().all(|&v| v == 0), "white paper is no ink");
+    assert!(out.warnings.iter().any(|w| w.contains("converted")), "{:?}", out.warnings);
+}
+
+#[test]
+fn x1a_keeps_a_cmyk_documents_numbers() {
+    let mut d = doc(ColorMode::Cmyk);
+    let fmt = PixelFormat::new(ColorMode::Cmyk, SampleType::F32, true);
+    d.layers = vec![Layer::new("Ink", LayerContent::Raster(solid(fmt, 0, 0, 4, 2, &[1.0, 0.5, 0.0, 0.2, 1.0])))];
+    let out = export_with_options(&d, &x1a(None, 0.0)).unwrap();
+    let img = stream_after(&out.bytes, "/Subtype /Image");
+    assert_eq!(&img[..4], &[255, 128, 0, 51], "no conversion");
+    assert!(!out.warnings.iter().any(|w| w.contains("converted")));
+}
+
+#[test]
+fn x1a_converts_a_cmyk_document_from_another_condition() {
+    let d = doc(ColorMode::Cmyk);
+    let other = photocraft_cms::Builtin::CoatedCmyk.profile().to_bytes();
+    let out = export_with_options(&d, &x1a(Some(other), 0.0)).unwrap();
+    assert!(out.warnings.iter().any(|w| w.contains("converted")), "{:?}", out.warnings);
+}
+
+#[test]
+fn x1a_keeps_gray_as_device_gray() {
+    let out = export_with_options(&doc(ColorMode::Grayscale), &x1a(None, 0.0)).unwrap();
+    assert!(has(&out.bytes, "/ColorSpace /DeviceGray"));
+    assert!(has(&out.bytes, "/GTS_PDFXConformance (PDF/X-1a:2001)"));
+}
+
+#[test]
+fn x1a_refuses_what_it_cant_write() {
+    let d = doc(ColorMode::Rgb);
+    let v4 = PdfOptions { x1a: Some(PdfX1a { profile: photocraft_cms::Builtin::CoatedCmyk.profile().to_bytes(), ..x1a(None, 0.0).x1a.unwrap() }) };
+    let e = export_with_options(&d, &v4).unwrap_err().to_string();
+    assert!(e.contains("version 2"), "{e}");
+    let rgb = PdfOptions { x1a: Some(PdfX1a { profile: photocraft_cms::Builtin::Srgb.profile().to_bytes(), ..x1a(None, 0.0).x1a.unwrap() }) };
+    assert!(export_with_options(&d, &rgb).unwrap_err().to_string().contains("CMYK"));
+    // The 4 × 2 px page at 72 dpi is 4 × 2 pt: a 1 pt bleed leaves nothing to trim.
+    assert!(export_with_options(&d, &x1a(None, 1.0)).unwrap_err().to_string().contains("bleed"));
+    assert!(export_with_options(&doc(ColorMode::Lab), &x1a(None, 0.0)).is_err());
+}
+
+#[test]
+fn output_conditions_and_dates() {
+    assert_eq!(output_condition_id("Coated FOGRA39 (ISO 12647-2:2004)"), "FOGRA39");
+    assert_eq!(output_condition_id("ISO Coated v2 (ECI)"), "FOGRA39");
+    assert_eq!(output_condition_id("PSO Coated v3"), "FOGRA51");
+    assert_eq!(output_condition_id("U.S. Web Coated (SWOP) v2"), "CGATS TR 001");
+    assert_eq!(output_condition_id("PhotoCraft Coated CMYK"), "Custom");
+    assert_eq!(pdf_date(0), "D:19700101000000+00'00'");
+    assert_eq!(pdf_date(1_760_000_000), "D:20251009085320+00'00'");
+    assert_eq!(file_id(b"abc", 1).len(), 32);
+}

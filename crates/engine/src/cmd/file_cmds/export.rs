@@ -92,7 +92,7 @@ pub fn export_layers_report_with(s: &Session, p: &Value, mut write: impl FnMut(&
         }
 
         let name = format!("{}_{:04}_{}.{format}", sanitize(&prefix), index, sanitize(&l.name));
-        let (bytes, _warnings) = encode(&one, &name, save)?;
+        let (bytes, _warnings) = encode(&one, &name, save.clone())?;
         write(&name, &bytes)?;
         report.files.push(name);
     }
