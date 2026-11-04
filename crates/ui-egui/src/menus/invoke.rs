@@ -424,7 +424,10 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
         }
         // Edit › Fill… from the menu or its shortcuts: the Fill dialog (with params: the engine).
         crate::fill_ui::COMMAND if params.as_object().is_none_or(|o| o.is_empty()) => {
-            if let Some(Err(why)) = photocraft_engine::commands::find(id).map(|c| (c.enabled)(&app.session)) {
+            // The row enables Fill on a targeted layer mask, where the raw precondition alone
+            // refuses an adjustment layer (#10851): check the call the OK will make.
+            let run = app.with_mask_target(id, params.clone());
+            if let Some(why) = app.session.disabled_reason_with(id, &run) {
                 return Err(why);
             }
             Ok(json!({"dialog": crate::fill_ui::open(app)}))
