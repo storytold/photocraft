@@ -63,7 +63,11 @@ fn load(s: &mut Session, p: &Value) -> Result<Value> {
     let values = s.prefs().dialogs.get(&key).and_then(|v| v.get(name)).ok_or_else(|| bad(CMD, "preset not found"))?;
     let plugin = photocraft_plugins::registry::get(req_str(p, "id", CMD)?).ok_or_else(|| bad(CMD, "plug-in is not installed"))?;
     // Revalidate against the currently installed version; schema changes cannot inject bad values.
-    let resolved = plugin.manifest().resolve_params(values).map_err(|e| bad(CMD, e.to_string()))?;
+    let mut resolved = plugin.manifest().resolve_params(values).map_err(|e| bad(CMD, e.to_string()))?;
+    if plugin.id() == "local.skinsmooth.skin-smooth" {
+        resolved.remove("positiveColors");
+        resolved.remove("negativeColors");
+    }
     Ok(Value::Object(resolved))
 }
 

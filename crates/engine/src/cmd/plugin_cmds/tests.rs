@@ -401,6 +401,27 @@ fn presets_survive_restart_and_are_isolated_and_validated() {
     assert_eq!(restart.execute("plugin.preset.list", json!({"id":id})).unwrap(), json!({}));
 }
 
+#[test]
+fn skin_smooth_preset_load_preserves_session_samples() {
+    registry::install_bytes(include_bytes!("../../../../plugins/tests/fixtures/skin-smooth.wasm")).unwrap();
+    let id = "local.skinsmooth.skin-smooth";
+    let mut session = Session::new();
+    let samples = json!({"positiveColors":[[0.7, 0.5, 0.4]], "negativeColors":[[0.2, 0.3, 0.8]]});
+    let mut params = samples.as_object().unwrap().clone();
+    params.insert("fine".into(), json!(72));
+    session.execute("plugin.preset.save", json!({"id":id,"name":"Portrait","params":params})).unwrap();
+    let mut loaded = Session::new();
+    loaded.load_prefs_json(&session.prefs_to_json()).unwrap();
+    let preset = loaded.execute("plugin.preset.load", json!({"id":id,"name":"Portrait"})).unwrap();
+    assert!(preset.get("positiveColors").is_none());
+    assert!(preset.get("negativeColors").is_none());
+    let mut current = samples.as_object().unwrap().clone();
+    current.extend(preset.as_object().unwrap().clone());
+    assert_eq!(current["positiveColors"], samples["positiveColors"]);
+    assert_eq!(current["negativeColors"], samples["negativeColors"]);
+    assert_eq!(current["fine"], json!(72.0));
+}
+
 /// Checks that rejected profiles leave no edit, while sRGB filtering preserves alpha, selection bounds and undo/redo.
 #[test]
 fn skin_smooth_checks_icc_before_editing_at_every_depth() {
