@@ -420,18 +420,34 @@ fn accepted_deep_svg_and_embedded_children_do_not_exhaust_a_small_caller_stack()
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn retained_deep_svg_groups_lower_render_and_drop_on_a_bounded_worker() {
+    // Native document compositing has its own recursive stack requirements. Keep only this
+    // independent pixel oracle off the small caller; SVG APIs and native document destruction
+    // below must still complete there, with all retained groups intact.
+    let pixel = |doc: &photocraft_doc::Document| {
+        std::thread::scope(|scope| {
+            std::thread::Builder::new()
+                .name("svg-native-pixel-oracle".into())
+                .stack_size(8 << 20)
+                .spawn_scoped(scope, || px(doc, 0, 0))
+                .unwrap()
+                .join()
+                .unwrap()
+        })
+    };
     std::thread::Builder::new()
         .stack_size(512 << 10)
-        .spawn(|| {
+        .spawn(move || {
             let source = format!(
                 "<svg {NS} width=\"8\" height=\"8\">{}<rect width=\"8\" height=\"8\"/>{}</svg>",
                 "<g opacity=\"0.99\"><rect width=\"1\" height=\"1\"/>".repeat(500),
                 "</g>".repeat(500)
             );
             let imported = svg::import_svg("retained.svg", source.as_bytes()).unwrap();
-            assert!(px(&imported.document, 0, 0)[3] > 0.5);
+            assert_eq!(imported.document.max_group_depth(), 100);
+            assert!(pixel(&imported.document)[3] > 0.5);
             let (preview, _) = svg::import_svg_preview_with_work("retained.svg", source.as_bytes(), u64::MAX).unwrap();
-            assert!(px(&preview.document, 0, 0)[3] > 0.5);
+            assert_eq!(preview.document.max_group_depth(), 100);
+            assert!(pixel(&preview.document)[3] > 0.5);
             let (w, h, pixels) = svg::rasterize_rgba8(source.as_bytes()).unwrap();
             assert_eq!((w, h), (8, 8));
             assert!(pixels[3] > 127);
