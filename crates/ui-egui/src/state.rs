@@ -16,7 +16,7 @@ pub use panel_state::{
 };
 pub use tool::Tool;
 pub use tool_options::{SampleAllLayers, ToolOptions};
-use tool_options::{default_brush_tool, default_layer_filter_mode, yes};
+use tool_options::{default_brush_tool, yes};
 pub use transform::{
     BoxResize, CamTransform, ContentAwareOptions, Extras, MadeLayer, TextEdit, TransformMode, TransformSession, TypeInsertionStyle, TypeTransform,
 };
@@ -346,33 +346,15 @@ pub struct UiState {
     /// Work Path changes.
     #[serde(default)]
     pub hidden_work_path: Option<(u64, photocraft_doc::Path)>,
-    /// Layers panel kind filter ("pixel", "adjustment", "type", "shape", "smart"); empty = all.
-    #[serde(default)]
-    pub layer_filter: Vec<String>,
-    /// Layers panel Smart Object filter ("linked", "missing", "embedded"); empty = all.
-    #[serde(default)]
-    pub layer_filter_smart: Vec<String>,
+    /// Session-only filters keyed by stable document identity; never restored from preferences.
+    #[serde(skip)]
+    pub layer_filters: std::collections::HashMap<photocraft_doc::DocId, crate::layer_filter_ui::switch::DocumentFilter>,
     /// Thumbnail dimensions, content cropping and filter-strip visibility.
     #[serde(default)]
     pub layers_panel_options: LayersPanelOptions,
     /// Transient dialog; never restored with a workspace.
     #[serde(skip)]
     pub layers_panel_dialog: Option<LayersPanelDialog>,
-    /// Layers panel filter type (#5048): kind (above), name or blend mode.
-    #[serde(default)]
-    pub layer_filter_by: crate::layer_filter_ui::FilterBy,
-    /// Layers panel name filter: part of a layer name, ignoring case; empty = all.
-    #[serde(default)]
-    pub layer_filter_name: String,
-    /// Layers panel blend-mode filter.
-    #[serde(default = "default_layer_filter_mode")]
-    pub layer_filter_mode: photocraft_color::BlendMode,
-    /// Layers panel effect filter (#10880).
-    #[serde(default)]
-    pub layer_filter_effect: crate::layer_filter_ui::effect::EffectKind,
-    /// Layers panel colour filter (#5898): the label colour listed (None: layers without one).
-    #[serde(default)]
-    pub layer_filter_color: photocraft_doc::LabelColor,
     /// Actions panel: which row is selected and which are expanded. The list lives on the session.
     #[serde(default)]
     pub actions: crate::actions::ActionsUi,
@@ -576,17 +558,11 @@ impl Default for UiState {
             frame_tool: Default::default(),
             artboard_tool: Default::default(),
             shell: Default::default(),
-            layer_filter: Vec::new(),
-            layer_filter_smart: Vec::new(),
+            layer_filters: Default::default(),
             layers_panel_options: LayersPanelOptions::default(),
             histogram_panel: Default::default(),
             histogram_range: None,
             layers_panel_dialog: None,
-            layer_filter_by: Default::default(),
-            layer_filter_name: String::new(),
-            layer_filter_mode: default_layer_filter_mode(),
-            layer_filter_effect: Default::default(),
-            layer_filter_color: Default::default(),
             pen: None,
             pen_doc: None,
             stroke_editor: None,

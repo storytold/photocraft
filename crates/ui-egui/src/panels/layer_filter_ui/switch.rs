@@ -1,0 +1,94 @@
+//! Session-only ownership and the Layers filter's switch. Criteria stay in `Filter`.
+use std::sync::{Arc, Weak};
+
+use egui::{Color32, Sense, Stroke, pos2, vec2};
+use photocraft_doc::Document;
+
+use super::Filter;
+use crate::PhotocraftApp;
+
+/// A saved document can reopen with the same DocId. Match the existing view-state policy:
+/// a new snapshot without a newer revision belongs to a newly opened instance.
+#[derive(Clone, Debug)]
+pub struct DocumentFilter {
+    pub filter: Filter,
+    revision: u64,
+    source: Weak<Document>,
+}
+
+impl PartialEq for DocumentFilter {
+    fn eq(&self, other: &Self) -> bool {
+        // Snapshot provenance is bookkeeping, not a change to the UI's filter value.
+        self.filter == other.filter
+    }
+}
+
+impl DocumentFilter {
+    fn belongs_to(&self, state: &photocraft_engine::DocState) -> bool {
+        state.revision > self.revision || self.source.as_ptr() == Arc::as_ptr(&state.doc)
+    }
+}
+
+pub(super) fn current(app: &PhotocraftApp) -> Filter {
+    let Some(state) = app.session.active() else { return Filter::default() };
+    app.ui.layer_filters.get(&state.doc.id).filter(|saved| saved.belongs_to(state)).map(|saved| saved.filter.clone()).unwrap_or_default()
+}
+
+pub(super) fn retain_open(app: &mut PhotocraftApp) {
+    let documents = app.session.documents();
+    app.ui.layer_filters.retain(|id, saved| {
+        let Some(state) = documents.iter().find(|state| state.doc.id == *id) else { return false };
+        if !saved.belongs_to(state) {
+            return false;
+        }
+        saved.revision = state.revision;
+        saved.source = Arc::downgrade(&state.doc);
+        true
+    });
+}
+
+pub(super) fn apply(app: &mut PhotocraftApp, filter: Filter) {
+    retain_open(app);
+    if let Some(state) = app.session.active() {
+        app.ui.layer_filters.insert(state.doc.id, DocumentFilter { filter, revision: state.revision, source: Arc::downgrade(&state.doc) });
+    }
+}
+
+fn toggle(ui: &mut egui::Ui, on: &mut bool) {
+    let label = tl!("Turn layer filtering on or off");
+    let (rect, mut response) = ui.allocate_exact_size(vec2(16.0, 22.0), Sense::click());
+    let keyboard = response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Space) || i.key_pressed(egui::Key::Enter));
+    if response.clicked() || keyboard {
+        *on = !*on;
+        response.request_focus();
+        response.mark_changed();
+    }
+    ui.painter().rect_filled(rect.shrink(1.0), 7.0, ui.visuals().extreme_bg_color);
+    ui.painter().rect_stroke(rect.shrink(1.0), 7.0, Stroke::new(1.0, ui.visuals().widgets.inactive.bg_stroke.color), egui::StrokeKind::Inside);
+    let centre = pos2(rect.center().x, if *on { rect.top() + 7.0 } else { rect.bottom() - 7.0 });
+    ui.painter().circle_filled(centre, 4.5, if *on { Color32::from_rgb(220, 50, 50) } else { Color32::WHITE });
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, ui.is_enabled(), *on, label));
+    response.on_hover_text(label);
+}
+
+pub(super) fn bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    retain_open(app);
+    let Some(document) = app.session.active().map(|state| state.doc.id) else { return };
+    let mut filter = Filter::of(app);
+    let before = filter.clone();
+    ui.push_id(("layer-filter", document.0), |ui| {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            let width = (ui.available_width() - 26.0).max(0.0);
+            ui.allocate_ui_with_layout(vec2(width, 22.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.add_enabled_ui(filter.on, |ui| super::controls(&mut filter, ui));
+            });
+            filter.activate_changed(&before);
+            ui.add_space(4.0);
+            toggle(ui, &mut filter.on);
+        });
+    });
+    if filter != before {
+        apply(app, filter);
+    }
+}

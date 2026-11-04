@@ -309,10 +309,6 @@ pub(super) fn default_brush_tool() -> Tool {
     Tool::Brush
 }
 
-pub(super) fn default_layer_filter_mode() -> photocraft_color::BlendMode {
-    photocraft_color::BlendMode::Normal
-}
-
 fn one_u32() -> u32 {
     1
 }

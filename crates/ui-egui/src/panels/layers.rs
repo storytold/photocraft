@@ -271,7 +271,8 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 ui.scroll_with_delta(vec2(0.0, delta));
                 ctx.request_repaint();
             }
-            let filter = crate::layer_filter_ui::Filter::of_app(app);
+            let filter = crate::layer_filter_ui::Filter::of(app);
+            let filter_context = crate::layer_filter_ui::FilterContext::of_app(app, &filter);
             let fx_collapsed = app.session.active().map(|d| d.fx_collapsed.clone()).unwrap_or_default();
             crate::layer_row_ui::begin(ui.ctx());
             // The drawn rows, top to bottom (#1721): the space between them and below the last
@@ -282,7 +283,7 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 if !photocraft_engine::select_extra_cmds::isolation_shows(&doc, &isolated, l.id) {
                     continue;
                 }
-                if !filter.shows(l) {
+                if !filter.shows_with(l, &filter_context) {
                     continue;
                 }
                 let row = RowSel { selected: selection.contains(&l.id), primary: active == Some(l.id), multi: selection.len() > 1 };
@@ -297,6 +298,12 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 if !fx_collapsed.contains(&l.id) {
                     crate::smart_ui::filter_rows(app, ui, &doc, l, depth, &mut actions);
                 }
+            }
+            if filter.active_with(&filter_context) && drawn.is_empty() {
+                let height = if rows_h.is_finite() { rows_h } else { ui.clip_rect().height().max(24.0) };
+                ui.allocate_ui_with_layout(vec2(ui.available_width(), height), egui::Layout::centered_and_justified(egui::Direction::TopDown), |ui| {
+                    ui.label(tl!("No layers match the filter."));
+                });
             }
             // The bottom of everything drawn: the last layer's effect and Smart Filter rows sit
             // under its own row (#8764).

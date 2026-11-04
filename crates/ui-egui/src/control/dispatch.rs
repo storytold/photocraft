@@ -325,7 +325,15 @@ impl ToolSet {
             cam_transform_on_drop: bool_field(p, "camTransformOnDrop")?,
             // Developer overlay of the active layer's storage tiles (tile_overlay.rs).
             tile_grid: bool_field(p, "tileGrid")?,
-            layer_filter: p.get("layerFilter").map(|v| crate::layer_filter_ui::patched(&app.ui, v)).transpose()?,
+            layer_filter: p
+                .get("layerFilter")
+                .map(|v| {
+                    if app.session.active().is_none() {
+                        return Err("layerFilter requires an open document".to_string());
+                    }
+                    crate::layer_filter_ui::patched(&crate::layer_filter_ui::Filter::of(app), v)
+                })
+                .transpose()?,
             pen_mode: pen_mode_param(p)?,
             pen_path_op: pen_path_op_param(p)?,
         })
@@ -363,7 +371,7 @@ impl ToolSet {
             app.ui.view.tile_grid = on;
         }
         if let Some(f) = self.layer_filter {
-            crate::layer_filter_ui::apply(&mut app.ui, f);
+            crate::layer_filter_ui::apply(app, f);
         }
         if let Some(m) = self.pen_mode {
             app.ui.tool_options.vector_mode = m;

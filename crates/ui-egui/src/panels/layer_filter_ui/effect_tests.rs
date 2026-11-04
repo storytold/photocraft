@@ -44,7 +44,7 @@ fn listed(doc: &Document, filter: &Filter) -> Vec<String> {
 }
 
 fn by_effect(effect: EffectKind) -> Filter {
-    Filter::of(&UiState { layer_filter_by: FilterBy::Effect, layer_filter_effect: effect, ..UiState::default() })
+    Filter { on: true, by: FilterBy::Effect, effect, ..Filter::default() }
 }
 
 #[test]
@@ -69,32 +69,36 @@ fn each_effect_lists_the_layers_with_it_enabled() {
 
 #[test]
 fn effect_filters_at_once_with_bevel_and_emboss() {
-    let f = Filter::of(&UiState { layer_filter_by: FilterBy::Effect, ..UiState::default() });
+    let f = Filter { on: true, by: FilterBy::Effect, ..Filter::default() };
     assert_eq!(f.effect, EffectKind::BevelEmboss);
     assert!(f.active(), "Effect filters as soon as it's picked");
 }
 
 #[test]
 fn ui_set_picks_the_effect_by_id() {
-    let mut ui = UiState::default();
+    let mut current = Filter::default();
     for effect in EffectKind::ALL {
-        let f = super::patched(&ui, &json!({"by": "effect", "effect": effect.id()})).unwrap();
-        super::apply(&mut ui, f);
-        assert_eq!((ui.layer_filter_by, ui.layer_filter_effect), (FilterBy::Effect, effect));
+        let f = super::patched(&current, &json!({"by": "effect", "effect": effect.id()})).unwrap();
+        assert_eq!((f.by, f.effect), (FilterBy::Effect, effect));
+        current = f;
     }
-    let err = super::patched(&ui, &json!({"effect": "colorOverlay"})).unwrap_err();
+    let err = super::patched(&current, &json!({"effect": "colorOverlay"})).unwrap_err();
     assert!(err.contains("colorOverlay") && err.contains("bevelEmboss") && err.contains("dropShadow"), "{err}");
-    assert!(super::patched(&ui, &json!({"effect": 3})).is_err());
-    assert!(super::patched(&ui, &json!({"effect": null})).is_err());
+    assert!(super::patched(&current, &json!({"effect": 3})).is_err());
+    assert!(super::patched(&current, &json!({"effect": null})).is_err());
 }
 
 #[test]
 fn saved_settings_without_the_effect_still_load() {
-    let mut saved = serde_json::to_value(UiState { layer_filter_effect: EffectKind::Satin, ..UiState::default() }).unwrap();
-    assert_eq!(saved["layer_filter_effect"], "satin");
-    saved.as_object_mut().unwrap().remove("layer_filter_effect");
-    let ui: UiState = serde_json::from_value(saved).unwrap();
-    assert_eq!(ui.layer_filter_effect, EffectKind::BevelEmboss);
+    for legacy in [json!({}), json!({"layer_filter_by": "effect", "layer_filter_effect": "satin"})] {
+        let ui: UiState = serde_json::from_value(legacy).unwrap();
+        assert!(ui.layer_filters.is_empty(), "legacy global criteria are not document state");
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.ui = ui;
+        app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+        assert_eq!(Filter::of(&app), Filter::default());
+        assert_eq!(Filter::of(&app).effect, EffectKind::BevelEmboss);
+    }
 }
 
 /// The names of the rows the Layers panel drew, top to bottom.
@@ -110,19 +114,21 @@ fn the_panel_filters_by_the_effect_picked_in_the_dropdown() {
     let session = session();
     let mut h = Harness::builder().with_size(vec2(1440.0, 1200.0)).with_max_steps(64).build_eframe(move |cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-        PhotocraftApp::new(session, crate::Services::default())
+        let mut app = PhotocraftApp::new(session, crate::Services::default());
+        super::apply(&mut app, Filter { on: true, ..Filter::default() });
+        app
     });
     h.run_steps(8);
     h.get_by_value("Kind").click();
     h.run_steps(4);
     h.query_all_by_label("Effect").last().expect("Effect in the open list").click();
     h.run_steps(4);
-    assert_eq!(h.state().ui.layer_filter_by, FilterBy::Effect);
+    assert_eq!(Filter::of(h.state()).by, FilterBy::Effect);
     assert_eq!(drawn(&h), ["bevel"], "Bevel & Emboss at first");
     h.get_by_value("Bevel & Emboss").click();
     h.run_steps(4);
     h.query_all_by_label("Drop Shadow").last().expect("Drop Shadow in the open list").click();
     h.run_steps(4);
-    assert_eq!(h.state().ui.layer_filter_effect, EffectKind::DropShadow);
+    assert_eq!(Filter::of(h.state()).effect, EffectKind::DropShadow);
     assert_eq!(drawn(&h), ["shadow"]);
 }

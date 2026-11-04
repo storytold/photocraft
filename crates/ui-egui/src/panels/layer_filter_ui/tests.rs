@@ -37,24 +37,28 @@ fn layer(doc: &Document, name: &str) -> u64 {
 
 /// The names `filter` lists, top to bottom.
 fn listed(doc: &Document, filter: &Filter) -> Vec<String> {
-    crate::layer_tree_ui::display_rows(doc, filter.active()).into_iter().filter(|(_, l)| filter.shows(l)).map(|(_, l)| l.name.clone()).collect()
+    listed_with(doc, filter, &super::FilterContext::default())
+}
+
+fn listed_with(doc: &Document, filter: &Filter, context: &super::FilterContext) -> Vec<String> {
+    crate::layer_tree_ui::display_rows(doc, filter.by != FilterBy::Artboard && filter.active_with(context))
+        .into_iter()
+        .filter(|(_, l)| filter.shows_with(l, context))
+        .map(|(_, l)| l.name.clone())
+        .collect()
 }
 
 fn filter(by: FilterBy, kinds: &[&str], name: &str, mode: BlendMode) -> Filter {
-    Filter::of(&UiState {
-        layer_filter_by: by,
-        layer_filter: kinds.iter().map(|k| k.to_string()).collect(),
-        layer_filter_name: name.into(),
-        layer_filter_mode: mode,
-        ..UiState::default()
-    })
+    let mut f = Filter { by, kinds: kinds.iter().map(|k| k.to_string()).collect(), name: name.into(), mode, ..Filter::default() };
+    f.activate_changed(&Filter::default());
+    f
 }
 
 #[test]
 fn each_filter_type_lists_its_matches() {
     let s = session();
     let doc = &s.active().unwrap().doc;
-    let all = listed(doc, &Filter::of(&UiState::default()));
+    let all = listed(doc, &Filter::default());
     assert_eq!(all, ["ink notes", "Sheets", "Ink", "Paper", "Background"]);
     // Kind: groups match no kind, as before.
     assert_eq!(listed(doc, &filter(FilterBy::Kind, &["pixel"], "", BlendMode::Normal)), ["Ink", "Paper", "Background"]);
@@ -81,14 +85,13 @@ fn only_a_criterion_turns_kind_and_name_on_while_mode_always_filters() {
 #[test]
 fn saved_settings_without_the_new_fields_still_load() {
     let mut saved = serde_json::to_value(UiState::default()).unwrap();
-    let fields = saved.as_object_mut().unwrap();
-    for key in ["layer_filter_by", "layer_filter_name", "layer_filter_mode"] {
-        assert!(fields.remove(key).is_some(), "{key} is saved");
-    }
+    saved["layer_filter_by"] = json!("mode");
+    saved["layer_filter_name"] = json!("old");
+    saved["layer_filter"] = json!(["pixel"]);
+    saved["layer_filter_mode"] = json!("Multiply");
     let ui: UiState = serde_json::from_value(saved).unwrap();
-    assert_eq!((ui.layer_filter_by, ui.layer_filter_name.as_str(), ui.layer_filter_mode), (FilterBy::Kind, "", BlendMode::Normal));
-    let round = serde_json::to_value(UiState { layer_filter_by: FilterBy::Mode, ..UiState::default() }).unwrap();
-    assert_eq!(round["layer_filter_by"], "mode");
+    assert!(ui.layer_filters.is_empty(), "old global criteria never initialize a document");
+    assert!(serde_json::to_value(ui).unwrap().get("layer_filters").is_none(), "per-document state is session-only");
 }
 
 fn harness() -> Harness<'static, PhotocraftApp> {
@@ -120,39 +123,38 @@ fn drawn(h: &Harness<'_, PhotocraftApp>) -> Vec<String> {
 fn the_dropdown_switches_the_panel_between_filter_types() {
     let mut h = harness();
     assert_eq!(drawn(&h), ["ink notes", "Sheets", "Ink", "Paper", "Background"]);
+    h.get_by_label("Turn layer filtering on or off").click();
+    h.run_steps(4);
     // The type is a real dropdown now: open it and pick Name.
     // A dropdown shows its choice as the combo box's value.
     h.get_by_value("Kind").click();
     h.run_steps(4);
     h.query_all_by_label("Name").last().expect("Name in the open list").click();
     h.run_steps(4);
-    assert_eq!(h.state().ui.layer_filter_by, FilterBy::Name);
+    assert_eq!(Filter::of(h.state()).by, FilterBy::Name);
     assert_eq!(drawn(&h), ["ink notes", "Sheets", "Ink", "Paper", "Background"], "no text yet: every layer");
-    h.state_mut().ui.layer_filter_name = "ink".into();
+    set_filter(&mut h, json!({"name":"ink"}));
     h.run_steps(4);
     assert_eq!(drawn(&h), ["ink notes", "Ink"]);
     // Mode starts at Normal; the kind toggles left on under Kind don't leak into it.
-    h.state_mut().ui.layer_filter = vec!["type".into()];
-    h.state_mut().ui.layer_filter_by = FilterBy::Mode;
+    set_filter(&mut h, json!({"kinds":["type"],"by":"mode"}));
     h.run_steps(4);
     assert_eq!(drawn(&h), ["ink notes", "Paper", "Background"]);
-    h.state_mut().ui.layer_filter_mode = BlendMode::Multiply;
+    set_filter(&mut h, json!({"mode":"Multiply"}));
     h.run_steps(4);
     assert_eq!(drawn(&h), ["Ink"]);
     // Back to Kind: its own criterion applies again.
-    h.state_mut().ui.layer_filter_by = FilterBy::Kind;
+    set_filter(&mut h, json!({"by":"kind"}));
     h.run_steps(4);
     assert_eq!(drawn(&h), ["ink notes"]);
 }
 
-/// The filter row was drawn in the Pro themes only, while Filter Options › Show is in every
-/// theme's panel menu: in Studio and the others it did nothing.
 #[test]
 fn every_theme_shows_the_filter_row() {
     for theme in ThemeKind::ALL {
         let mut h = harness_in(theme);
         assert!(h.query_by_value("Kind").is_some(), "{theme:?} draws the filter row");
-        h.state_mut().ui.layer_filter = vec!["type".into()];
+        set_filter(&mut h, json!({"kinds":["type"]}));
         h.run_steps(4);
         assert_eq!(drawn(&h), ["ink notes"], "{theme:?} filters by kind");
     }
@@ -169,7 +171,7 @@ fn the_color_filter_lists_one_label() {
     s.execute("layer.setLabelColor", json!({"layer": sheets, "color": "seafoam"})).unwrap();
     s.execute("layer.setLabelColor", json!({"layer": ink, "color": "red"})).unwrap();
     let doc = &s.active().unwrap().doc;
-    let by_color = |c: photocraft_doc::LabelColor| Filter::of(&UiState { layer_filter_by: FilterBy::Color, layer_filter_color: c, ..UiState::default() });
+    let by_color = |c: photocraft_doc::LabelColor| Filter { on: true, by: FilterBy::Color, color: c, ..Filter::default() };
     assert!(by_color(photocraft_doc::LabelColor::None).active(), "Color filters at once, as in Photoshop");
     assert_eq!(listed(doc, &by_color(photocraft_doc::LabelColor::Red)), ["Ink"]);
     assert_eq!(listed(doc, &by_color(photocraft_doc::LabelColor::Seafoam)), ["Sheets", "Paper"]);
@@ -214,8 +216,9 @@ fn listed_by_artboard(s: &mut photocraft_engine::Session, names: &[&str]) -> Vec
     }
     let d = s.active().unwrap();
     let mut f = filter(FilterBy::Artboard, &[], "", BlendMode::Normal);
-    f.board_rows = super::board_rows(&d.doc, &d.selected_layers());
-    listed(&d.doc, &f)
+    f.on = true; // Explicit enabled fixture; automatic activation is covered in switch_tests.
+    let context = super::FilterContext { board_rows: super::board_rows(&d.doc, &d.selected_layers()), ..Default::default() };
+    listed_with(&d.doc, &f, &context)
 }
 
 #[test]
@@ -232,8 +235,8 @@ fn the_artboard_filter_lists_the_artboards_that_hold_the_selected_layers() {
     // A selected layer in no artboard: every layer again.
     assert_eq!(listed_by_artboard(&mut s, &["Loose"]), all);
     assert_eq!(listed_by_artboard(&mut s, &["Oak", "Loose"]), all);
-    let round = serde_json::to_value(UiState { layer_filter_by: FilterBy::Artboard, ..UiState::default() }).unwrap();
-    assert_eq!(round["layer_filter_by"], "artboard");
+    let round = serde_json::to_value(FilterBy::Artboard).unwrap();
+    assert_eq!(round, "artboard");
 }
 
 #[test]
@@ -245,11 +248,13 @@ fn the_artboard_filter_follows_the_selection_in_the_panel() {
     });
     h.run_steps(8);
     let all = ["Loose", "Front", "Trees", "Oak", "Back", "Grass", "Background"];
+    h.get_by_label("Turn layer filtering on or off").click();
+    h.run_steps(4);
     h.get_by_value("Kind").click();
     h.run_steps(4);
     h.query_all_by_label("Artboard").last().expect("Artboard in the open list").click();
     h.run_steps(4);
-    assert_eq!(h.state().ui.layer_filter_by, FilterBy::Artboard);
+    assert_eq!(Filter::of(h.state()).by, FilterBy::Artboard);
     assert_eq!(drawn(&h), all, "Loose, in no artboard, is selected: every layer");
     let oak = layer(&h.state().session.active().unwrap().doc, "Oak");
     h.state_mut().session.execute("layer.select", json!({"layer": oak})).unwrap();
@@ -327,8 +332,15 @@ fn smart_session(file: &std::path::Path) -> photocraft_engine::Session {
     s
 }
 
-fn by_smart(smart: &[&str], missing: std::collections::HashSet<String>) -> Filter {
-    Filter { smart: smart.iter().map(|k| k.to_string()).collect(), missing, ..filter(FilterBy::SmartObject, &[], "", BlendMode::Normal) }
+fn by_smart(smart: &[&str], missing: std::collections::HashSet<String>) -> (Filter, super::FilterContext) {
+    let mut f = filter(FilterBy::SmartObject, &[], "", BlendMode::Normal);
+    f.smart = smart.iter().map(|k| k.to_string()).collect();
+    f.on = !f.smart.is_empty();
+    (f, super::FilterContext { missing, ..Default::default() })
+}
+
+fn listed_smart(doc: &Document, f: &(Filter, super::FilterContext)) -> Vec<String> {
+    listed_with(doc, &f.0, &f.1)
 }
 
 #[test]
@@ -337,32 +349,31 @@ fn the_smart_object_filter_lists_linked_missing_and_embedded_smart_objects() {
     let mut s = smart_session(&file);
     let doc = &s.active().unwrap().doc;
     let none = std::collections::HashSet::new;
-    assert!(!by_smart(&[], none()).active(), "no toggle on: every layer");
-    assert_eq!(listed(doc, &by_smart(&[], none())), ["Linked art", "Embedded art", "Plain", "Background"]);
-    assert_eq!(listed(doc, &by_smart(&["linked"], none())), ["Linked art"]);
-    assert_eq!(listed(doc, &by_smart(&["embedded"], none())), ["Embedded art"]);
-    assert_eq!(listed(doc, &by_smart(&["linked", "embedded"], none())), ["Linked art", "Embedded art"]);
-    assert_eq!(listed(doc, &by_smart(&["missing"], s.missing_links())), Vec::<String>::new(), "the file is there");
+    assert!(!by_smart(&[], none()).0.active(), "no toggle on: every layer");
+    assert_eq!(listed_smart(doc, &by_smart(&[], none())), ["Linked art", "Embedded art", "Plain", "Background"]);
+    assert_eq!(listed_smart(doc, &by_smart(&["linked"], none())), ["Linked art"]);
+    assert_eq!(listed_smart(doc, &by_smart(&["embedded"], none())), ["Embedded art"]);
+    assert_eq!(listed_smart(doc, &by_smart(&["linked", "embedded"], none())), ["Linked art", "Embedded art"]);
+    assert_eq!(listed_smart(doc, &by_smart(&["missing"], s.missing_links())), Vec::<String>::new(), "the file is there");
     std::fs::remove_file(&file).unwrap();
     s.execute("layer.smartObjects.updateChanged", json!({})).unwrap();
     let doc = &s.active().unwrap().doc;
-    assert_eq!(listed(doc, &by_smart(&["missing"], s.missing_links())), ["Linked art"]);
-    assert_eq!(listed(doc, &by_smart(&["missing", "embedded"], s.missing_links())), ["Linked art", "Embedded art"]);
+    assert_eq!(listed_smart(doc, &by_smart(&["missing"], s.missing_links())), ["Linked art"]);
+    assert_eq!(listed_smart(doc, &by_smart(&["missing", "embedded"], s.missing_links())), ["Linked art", "Embedded art"]);
 }
 
 #[test]
 fn saved_settings_without_the_smart_object_toggles_still_load() {
     let mut saved = serde_json::to_value(UiState::default()).unwrap();
-    assert!(saved.as_object_mut().unwrap().remove("layer_filter_smart").is_some(), "layer_filter_smart is saved");
+    saved["layer_filter_by"] = json!("smartObject");
+    saved["layer_filter_smart"] = json!(["missing"]);
     let ui: UiState = serde_json::from_value(saved).unwrap();
-    assert!(ui.layer_filter_smart.is_empty());
-    let round =
-        serde_json::to_value(UiState { layer_filter_by: FilterBy::SmartObject, layer_filter_smart: vec!["missing".into()], ..UiState::default() }).unwrap();
-    let back: UiState = serde_json::from_value(round.clone()).unwrap();
-    assert_eq!(
-        (round["layer_filter_by"].as_str(), back.layer_filter_by, back.layer_filter_smart),
-        (Some("smartObject"), FilterBy::SmartObject, vec!["missing".to_string()])
-    );
+    assert!(ui.layer_filters.is_empty(), "legacy global toggles cannot seed any document");
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.ui = ui;
+    app.run("file.new", json!({"width":8,"height":8})).unwrap();
+    assert_eq!(Filter::of(&app), Filter::default(), "a new document starts Kind/off/empty");
+    assert!(serde_json::to_value(&app.ui).unwrap().get("layer_filters").is_none(), "criteria are session-only");
 }
 
 #[test]
@@ -376,15 +387,17 @@ fn the_smart_object_toggles_filter_the_panel() {
     h.run_steps(8);
     let all = ["Linked art", "Embedded art", "Plain", "Background"];
     assert_eq!(drawn(&h), all);
+    h.get_by_label("Turn layer filtering on or off").click();
+    h.run_steps(4);
     h.get_by_value("Kind").click();
     h.run_steps(4);
     h.query_all_by_label("Smart Object").last().expect("Smart Object in the open list").click();
     h.run_steps(4);
-    assert_eq!(h.state().ui.layer_filter_by, FilterBy::SmartObject);
+    assert_eq!(Filter::of(h.state()).by, FilterBy::SmartObject);
     assert_eq!(drawn(&h), all, "no toggle on yet: every layer");
     h.get_by_label("Filter for embedded smart objects").click();
     h.run_steps(4);
-    assert_eq!(h.state().ui.layer_filter_smart, ["embedded"]);
+    assert_eq!(Filter::of(h.state()).smart, ["embedded"]);
     assert_eq!(drawn(&h), ["Embedded art"]);
     h.get_by_label("Filter for embedded smart objects").click();
     h.get_by_label("Filter for smart objects linked locally").click();
@@ -393,7 +406,7 @@ fn the_smart_object_toggles_filter_the_panel() {
     h.get_by_label("Filter for smart objects linked locally").click();
     h.get_by_label("Filter for linked smart objects that are missing").click();
     h.run_steps(4);
-    assert_eq!(h.state().ui.layer_filter_smart, ["missing"]);
+    assert_eq!(Filter::of(h.state()).smart, ["missing"]);
     assert_eq!(drawn(&h), Vec::<String>::new(), "the file is there");
     std::fs::remove_file(&file).unwrap();
     h.state_mut().session.execute("layer.smartObjects.updateChanged", json!({})).unwrap();
@@ -425,4 +438,9 @@ fn the_artboard_filter_lists_the_outer_artboard_for_a_layer_in_a_nested_artboard
     assert_eq!(super::board_rows(&doc, &[inner_id]), outer_rows, "the nested artboard itself: the outer artboard's rows");
     let both: HashSet<_> = outer_rows.iter().copied().chain([other_id]).collect();
     assert_eq!(super::board_rows(&doc, &[leaf_id, other_id]), both);
+}
+
+fn set_filter(h: &mut Harness<'_, PhotocraftApp>, patch: serde_json::Value) {
+    let f = super::patched(&Filter::of(h.state()), &patch).unwrap();
+    super::apply(h.state_mut(), f);
 }

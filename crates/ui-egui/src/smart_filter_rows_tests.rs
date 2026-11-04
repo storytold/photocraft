@@ -290,11 +290,12 @@ fn a_hidden_filter_row_is_deselected() {
     let (mut h, a, _, _) = panel();
     let blur = at(&h, "Gaussian Blur");
     click_at(&mut h, blur);
-    h.state_mut().ui.layer_filter_by = crate::layer_filter_ui::FilterBy::Name;
-    h.state_mut().ui.layer_filter_name = "Pixels".into();
+    let filter = crate::layer_filter_ui::patched(&crate::layer_filter_ui::Filter::of(h.state()), &json!({"by":"name","name":"Pixels","on":true})).unwrap();
+    crate::layer_filter_ui::apply(h.state_mut(), filter);
     h.run_steps(4);
     // Shown again, the row is no longer highlighted: the selection went, it wasn't just hidden.
-    h.state_mut().ui.layer_filter_name.clear();
+    let filter = crate::layer_filter_ui::patched(&crate::layer_filter_ui::Filter::of(h.state()), &json!({"name":""})).unwrap();
+    crate::layer_filter_ui::apply(h.state_mut(), filter);
     h.run_steps(4);
     assert!(!selected(&h, "Gaussian Blur"));
     h.key_press(egui::Key::Delete);
