@@ -400,6 +400,8 @@ fn accepted_deep_svg_and_embedded_children_do_not_exhaust_a_small_caller_stack()
             assert!(close(px(&imported.document, 4, 4), [0., 0., 0., 1.]), "near-limit top-level shape must remain visible");
             let (_, _, pixels) = svg::rasterize_rgba8(top.as_bytes()).unwrap();
             assert_eq!(&pixels[(4 * 8 + 4) * 4..(4 * 8 + 4) * 4 + 4], &[0, 0, 0, 255]);
+            let (preview, _) = svg::import_svg_preview_with_work("drawing.svg", top.as_bytes(), u64::MAX).unwrap();
+            assert!(close(px(&preview.document, 4, 4), [0., 0., 0., 1.]), "near-limit preview shape must remain visible");
             // The outer drawing alone is shallow. Its decoded child must receive the same
             // isolation as a deep top-level drawing, without increasing the shared depth cap.
             for inner in [126, 500] {
