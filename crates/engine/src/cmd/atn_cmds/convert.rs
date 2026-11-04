@@ -215,10 +215,10 @@ pub(crate) fn library_items(id: &str, params: &Value, set: &str) -> std::result:
     if let Some(items) = export_items(id, params, set) {
         let file = AtnFile { name: UnicodeString::new_nul(set), ..Default::default() };
         let action = AtnAction { items: items.clone(), ..Default::default() };
-        if let Ok((roundtrip, _)) = library_action(&file, &action, set) {
-            if roundtrip.steps == [(id.to_string(), params.clone())] {
-                return Ok(items);
-            }
+        if let Ok((roundtrip, _)) = library_action(&file, &action, set)
+            && roundtrip.steps == [(id.to_string(), params.clone())]
+        {
+            return Ok(items);
         }
     }
     Ok(vec![native_item(id, params)?])

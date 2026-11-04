@@ -408,19 +408,19 @@ pub(crate) fn encode(state: &ActionState, keys: &[(String, String)]) -> Result<V
     for (index, file) in files.iter().enumerate() {
         let span = encoded.spans.get(index).ok_or("missing output set span")?;
         if index >= groups.len() {
-            if let (Some(outer), Some(source)) = (&outer, &state.library.source) {
-                if let Some(old) = source.hidden.and_then(|hidden| source.parsed.spans.get(hidden)) {
-                    let descriptor = old
-                        .actions
-                        .first()
-                        .and_then(|action| action.items.first())
-                        .and_then(|item| item.descriptor.clone())
-                        .ok_or("missing original sidecar span")?;
-                    append(&mut out, &source.bytes, old.range.start..descriptor.start)?;
-                    append(&mut out, outer, 0..outer.len())?;
-                    append(&mut out, &source.bytes, descriptor.end..old.range.end)?;
-                    continue;
-                }
+            if let (Some(outer), Some(source)) = (&outer, &state.library.source)
+                && let Some(old) = source.hidden.and_then(|hidden| source.parsed.spans.get(hidden))
+            {
+                let descriptor = old
+                    .actions
+                    .first()
+                    .and_then(|action| action.items.first())
+                    .and_then(|item| item.descriptor.clone())
+                    .ok_or("missing original sidecar span")?;
+                append(&mut out, &source.bytes, old.range.start..descriptor.start)?;
+                append(&mut out, outer, 0..outer.len())?;
+                append(&mut out, &source.bytes, descriptor.end..old.range.end)?;
+                continue;
             }
             // Newly created wrapper uses the canonical header and the exact patched descriptor.
             if let Some(outer) = &outer {

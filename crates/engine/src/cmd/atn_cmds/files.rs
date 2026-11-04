@@ -227,12 +227,13 @@ pub(super) fn save(s: &mut Session, p: &Value) -> Result<Value> {
         sidecar::groups(&s.actions, None).map_err(|error| bad(cmd, error))?.into_iter().map(|(name, selection)| (name.to_string(), selection)).collect()
     };
     // Preserve the old default single-set output name; a multi-set Save keeps each real group.
-    if p.get("action").is_none() && set_param.is_none() && groups.len() == 1 {
-        if let Some((name, _)) = groups.first_mut() {
-            if name != super::UNGROUPED_SET {
-                *name = DEFAULT_SET.to_string();
-            }
-        }
+    if p.get("action").is_none()
+        && set_param.is_none()
+        && groups.len() == 1
+        && let Some((name, _)) = groups.first_mut()
+        && name != super::UNGROUPED_SET
+    {
+        *name = DEFAULT_SET.to_string();
     }
     let names: Vec<String> = groups.iter().flat_map(|(_, selection)| &selection.actions).map(|action| action.name.clone()).collect();
     let set_names: Vec<String> = groups.iter().map(|(name, _)| name.clone()).collect();

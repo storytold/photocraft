@@ -224,10 +224,11 @@ pub(crate) struct SetRowMetadata {
 
 /// Root's editor.update hook calls this after validating an explicitly supplied icon string.
 pub(crate) fn explicit_icon(action: &mut Action) {
-    if let Some(metadata) = action.atn_metadata.as_mut() {
-        if action.icon.is_empty() && !matches!(metadata.thumbnail, 0 | 3) {
-            metadata.reset_icon = true;
-        }
+    if let Some(metadata) = action.atn_metadata.as_mut()
+        && action.icon.is_empty()
+        && !matches!(metadata.thumbnail, 0 | 3)
+    {
+        metadata.reset_icon = true;
     }
 }
 
@@ -368,21 +369,21 @@ pub(crate) fn groups<'a>(state: &'a ActionState, only: Option<&str>) -> Result<V
         }
         for (slot, _) in state.sets.iter().enumerate().filter(|(_, row)| row.as_str() == name) {
             let raw = state.library.rows.get(slot).cloned().flatten();
-            if let Some(raw) = raw.as_ref() {
-                if !out.iter().skip(before).any(|(_, selection)| selection.raw.as_ref() == Some(raw)) {
-                    if out.len() >= atn::MAX_SETS {
-                        return Err("too many sets in actions archive".into());
-                    }
-                    out.push((name, Selection { actions: Vec::new(), source: empty_source(state, slot), raw: Some(raw.clone()) }));
+            if let Some(raw) = raw.as_ref()
+                && !out.iter().skip(before).any(|(_, selection)| selection.raw.as_ref() == Some(raw))
+            {
+                if out.len() >= atn::MAX_SETS {
+                    return Err("too many sets in actions archive".into());
                 }
+                out.push((name, Selection { actions: Vec::new(), source: empty_source(state, slot), raw: Some(raw.clone()) }));
             }
-            if let Some(source) = empty_source(state, slot) {
-                if !out.iter().skip(before).any(|(_, selection)| selection.source.as_ref().is_some_and(|existing| same_set(existing, &source))) {
-                    if out.len() >= atn::MAX_SETS {
-                        return Err("too many sets in actions archive".into());
-                    }
-                    out.push((name, Selection { actions: Vec::new(), source: Some(source), raw: state.library.rows.get(slot).cloned().flatten() }));
+            if let Some(source) = empty_source(state, slot)
+                && !out.iter().skip(before).any(|(_, selection)| selection.source.as_ref().is_some_and(|existing| same_set(existing, &source)))
+            {
+                if out.len() >= atn::MAX_SETS {
+                    return Err("too many sets in actions archive".into());
                 }
+                out.push((name, Selection { actions: Vec::new(), source: Some(source), raw: state.library.rows.get(slot).cloned().flatten() }));
             }
         }
         if out.len() == before {

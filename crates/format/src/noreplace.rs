@@ -96,12 +96,12 @@ mod tests {
 
     struct Dir(PathBuf);
     impl Dir {
-        fn new() -> Self {
+        fn new() -> io::Result<Self> {
             static NEXT: AtomicU64 = AtomicU64::new(0);
             let path = std::env::temp_dir().join(format!("pc-noreplace-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
             // Never clean a preexisting directory to make the fixture pass.
-            std::fs::create_dir(&path).unwrap();
-            Self(path)
+            std::fs::create_dir(&path)?;
+            Ok(Self(path))
         }
     }
     impl Drop for Dir {
@@ -112,7 +112,7 @@ mod tests {
 
     #[test]
     fn retirement_moves_the_original_bytes_without_overwriting_a_backup() {
-        let dir = Dir::new();
+        let dir = Dir::new().unwrap();
         let from = dir.0.join("legacy");
         let to = dir.0.join("retained");
         std::fs::write(&from, b"exact original bytes").unwrap();
@@ -128,7 +128,7 @@ mod tests {
 
     #[test]
     fn retirement_refuses_same_name_and_missing_source_without_changing_existing_data() {
-        let dir = Dir::new();
+        let dir = Dir::new().unwrap();
         let from = dir.0.join("legacy");
         let to = dir.0.join("retained");
         std::fs::write(&to, b"existing backup").unwrap();
@@ -140,7 +140,7 @@ mod tests {
 
     #[test]
     fn publication_keeps_an_existing_destination_and_leaves_no_owned_temp() {
-        let dir = Dir::new();
+        let dir = Dir::new().unwrap();
         let path = dir.0.join("actions.atn");
         std::fs::write(&path, b"existing ATN").unwrap();
         let error = write_noreplace(&path, b"replacement").unwrap_err();
@@ -151,7 +151,7 @@ mod tests {
 
     #[test]
     fn publication_creates_complete_bytes_then_removes_its_temp_name() {
-        let dir = Dir::new();
+        let dir = Dir::new().unwrap();
         let path = dir.0.join("actions.atn");
         write_noreplace(&path, b"complete ATN").unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), b"complete ATN");

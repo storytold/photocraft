@@ -5,7 +5,7 @@ use super::{Action, Recording, Result, Session, Value, bad};
 
 #[derive(Debug)]
 enum Destination {
-    Classic(Action),
+    Classic(Box<Action>),
     Draft(u64),
 }
 
@@ -60,7 +60,7 @@ fn suspend(s: &mut Session, preview: Option<(u64, Arc<Action>)>, call: Option<(S
             // Valid Classic capture always names a current action. A missing destination must
             // fail before acquiring a lease rather than resume into an unrelated row.
             match s.actions.list.get(index).cloned() {
-                Some(action) => Some(Destination::Classic(action)),
+                Some(action) => Some(Destination::Classic(Box::new(action))),
                 None => {
                     s.actions.recording = Some((s.journal.len(), index));
                     return Err(bad("actions.play", "the recording destination no longer exists"));
