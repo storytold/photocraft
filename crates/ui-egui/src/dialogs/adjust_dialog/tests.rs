@@ -1365,5 +1365,6 @@ fn command_digits_follow_native_channels_on_a_partial_curves_target() {
     assert_eq!(press(egui::Key::Num3), combined, "⌘3 (Red) isn't listed: nothing changes");
     assert!(press(egui::Key::Num4).iter().any(|c| c == "Green"), "⌘4 is Green, the first listed channel");
     assert!(press(egui::Key::Num5).iter().any(|c| c == "Blue"));
+    assert!(press(egui::Key::Num3).iter().any(|c| c == "Blue"), "⌘3 (Red) isn't listed: Blue stays selected");
     assert_eq!(press(egui::Key::Num2), combined, "⌘2 is the combined entry");
 }
