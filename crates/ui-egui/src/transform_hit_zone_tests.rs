@@ -1,7 +1,7 @@
 use super::*;
 use crate::state::{ContentAwareOptions, TransformMode, TransformSession};
 use crate::transform_tool::{Hit, cursor, hit, rotate_cursor_dir};
-use egui::{CursorIcon, Modifiers};
+use egui::{CursorIcon, Modifiers, pos2};
 
 const QUAD: [[f64; 2]; 4] = [[100.0, 100.0], [500.0, 100.0], [500.0, 300.0], [100.0, 300.0]];
 
