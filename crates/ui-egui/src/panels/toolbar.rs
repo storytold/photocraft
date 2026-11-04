@@ -178,22 +178,19 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                     // Prefer the primary-release event's modifiers (Alt may already be
                                     // up), and only a release on this slot — the frame's event list is
                                     // shared with every other widget.
-                                    let click_mods = ui.input(|i| {
-                                        i.events
-                                            .iter()
-                                            .rev()
-                                            .find_map(|e| match e {
-                                                egui::Event::PointerButton {
-                                                    pos,
-                                                    button: egui::PointerButton::Primary,
-                                                    pressed: false,
-                                                    modifiers,
-                                                    ..
-                                                } if resp.rect.contains(*pos) => Some(*modifiers),
-                                                _ => None,
-                                            })
-                                            .unwrap_or(i.modifiers)
-                                    });
+                                    let click_mods =
+                                        ui.input(|i| {
+                                            i.events
+                                                .iter()
+                                                .rev()
+                                                .find_map(|e| match e {
+                                                    egui::Event::PointerButton {
+                                                        pos, button: egui::PointerButton::Primary, pressed: false, modifiers, ..
+                                                    } if resp.rect.contains(*pos) => Some(*modifiers),
+                                                    _ => None,
+                                                })
+                                                .unwrap_or(i.modifiers)
+                                        });
                                     let alt = click_mods.alt;
                                     let modified = click_mods.alt || click_mods.shift || click_mods.ctrl || click_mods.command;
                                     // egui's double-click ignores modifiers: a plain click after a

@@ -500,42 +500,17 @@ fn alt_click_cycles_the_tool_flyout_slot() {
     // Alt-click advances through every flyout entry, including ones Shift+M skips.
     // Clear i.modifiers before the release while keeping Alt on the release event, so a
     // regression that only reads i.modifiers (and ignores the pointer-release modifiers) fails.
-    for (t, want) in [
-        (1.5, Tool::EllipseMarquee),
-        (2.0, Tool::SingleRowMarquee),
-        (2.5, Tool::SingleColumnMarquee),
-        (3.0, Tool::RectMarquee),
-    ] {
-        frame(
-            &mut app,
-            &ctx,
-            t,
-            vec![egui::Event::ModifiersChanged(alt), egui::Event::PointerMoved(at), pointer(at, true, alt)],
-        );
-        frame(
-            &mut app,
-            &ctx,
-            t + 0.05,
-            vec![egui::Event::ModifiersChanged(Default::default()), pointer(at, false, alt)],
-        );
+    for (t, want) in [(1.5, Tool::EllipseMarquee), (2.0, Tool::SingleRowMarquee), (2.5, Tool::SingleColumnMarquee), (3.0, Tool::RectMarquee)] {
+        frame(&mut app, &ctx, t, vec![egui::Event::ModifiersChanged(alt), egui::Event::PointerMoved(at), pointer(at, true, alt)]);
+        frame(&mut app, &ctx, t + 0.05, vec![egui::Event::ModifiersChanged(Default::default()), pointer(at, false, alt)]);
         frame(&mut app, &ctx, t + 0.1, vec![]);
         assert_eq!(app.ui.tool, want, "alt-click at {t}");
         assert!(!flyout(&ctx), "alt-click must not open the flyout");
     }
     // From another tool, Alt-click advances from the slot's remembered (shown) tool: Rect after the wrap.
     app.ui.tool = Tool::Brush;
-    frame(
-        &mut app,
-        &ctx,
-        4.0,
-        vec![egui::Event::ModifiersChanged(alt), egui::Event::PointerMoved(at), pointer(at, true, alt)],
-    );
-    frame(
-        &mut app,
-        &ctx,
-        4.05,
-        vec![egui::Event::ModifiersChanged(Default::default()), pointer(at, false, alt)],
-    );
+    frame(&mut app, &ctx, 4.0, vec![egui::Event::ModifiersChanged(alt), egui::Event::PointerMoved(at), pointer(at, true, alt)]);
+    frame(&mut app, &ctx, 4.05, vec![egui::Event::ModifiersChanged(Default::default()), pointer(at, false, alt)]);
     frame(&mut app, &ctx, 4.1, vec![]);
     assert_eq!(app.ui.tool, Tool::EllipseMarquee, "inactive slot cycles from its shown tool");
 }
