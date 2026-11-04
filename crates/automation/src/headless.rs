@@ -90,22 +90,29 @@ impl Headless {
 
     /// Open a file and make it the active document.
     pub fn open(&mut self, path: &Path) -> Result<Value, AutomationError> {
-        let opts = photocraft_engine::jobs::import_options(self.session.prefs());
-        self.open_with(path, &opts)
+        self.open_with_approval(path, false)
     }
 
-    /// [`Headless::open`] with the import settings (a PDF page's Import PDF answers).
-    pub fn open_with(&mut self, path: &Path, opts: &photocraft_io::ImportOptions) -> Result<Value, AutomationError> {
+    /// Open a file with optional high-memory approval and make it the active document.
+    pub fn open_with_approval(&mut self, path: &Path, approve_high_memory: bool) -> Result<Value, AutomationError> {
+        let opts = photocraft_io::ImportOptions { psd_high_memory_approved: approve_high_memory, ..Default::default() };
+        self.open_with_options(path, &opts)
+    }
+
+    /// Open a file with custom import options and make it the active document.
+    pub fn open_with_options(&mut self, path: &Path, opts: &photocraft_io::ImportOptions) -> Result<Value, AutomationError> {
         let requested = path.to_str().ok_or_else(|| AutomationError::BadRequest("automation paths must be valid UTF-8".into()))?;
         let mut o = match &self.filesystem {
             Filesystem::Denied => return Err(AutomationError::BadRequest("automation filesystem access is not granted: read authority is absent".into())),
-            Filesystem::TrustedLocal => files::open_with(path, opts)?,
+            Filesystem::TrustedLocal => files::open_with_options(path, opts)?,
             Filesystem::Workspace(workspace) => {
                 let bytes = workspace.read(requested)?;
                 let name = path.file_name().and_then(|name| name.to_str()).unwrap_or(requested);
-                files::open_bytes_with(name, &bytes, opts)?
+                files::open_bytes_with_options(name, &bytes, opts)?
             }
         };
+        // Preferences › Raw Defaults › Resolution, as the app's File › Open applies it.
+        file_cmds::raw_defaults(&self.session, &o.warnings, &mut o.document);
         let path = match file_cmds::template_name(&self.session, requested) {
             Some(untitled) => {
                 o.document.name = untitled;
@@ -133,7 +140,8 @@ impl Headless {
     /// Place a file into a document as a Smart Object layer: the capability-scoped counterpart
     /// of `file.placeEmbedded`, which reads an ambient path and is therefore refused in
     /// automation (#2810). `path` resolves beneath the read root the way `open` resolves one,
-    /// and `params` carries the command's own options (`scale`, `fit`, `center`).
+    /// and `params` carries the command's own options (`scale`, `fit`, `center`,
+    /// `approveHighMemory`).
     pub fn place(&mut self, index: Option<usize>, path: &str, params: &Value) -> Result<Value, AutomationError> {
         self.on_doc(index, |this| {
             let mut opts = params.as_object().cloned().unwrap_or_default();
@@ -156,6 +164,28 @@ impl Headless {
         })
     }
 
+    /// Replace a smart object's contents with a file from the read root: the capability-scoped
+    /// `layer.smartObjects.replaceContents`, which takes an ambient `path` and is refused in
+    /// automation (#8061). `params` is the command's own (`layer`).
+    pub fn replace_smart_object(&mut self, index: Option<usize>, path: &str, params: &Value) -> Result<Value, AutomationError> {
+        self.on_doc(index, |this| {
+            let mut opts = params.as_object().cloned().unwrap_or_default();
+            opts.insert("path".into(), json!(path));
+            if matches!(&this.filesystem, Filesystem::TrustedLocal) {
+                return this.command_run("layer.smartObjects.replaceContents", Value::Object(opts));
+            }
+            let bytes = match &this.filesystem {
+                Filesystem::Workspace(workspace) => workspace.read(path)?,
+                _ => {
+                    return Err(AutomationError::BadRequest("automation filesystem access is not granted: read authority is absent".into()));
+                }
+            };
+            let name = Path::new(path).file_name().and_then(|name| name.to_str()).unwrap_or(path);
+            this.sync_jobs();
+            Ok(photocraft_engine::smart_cmds::replace_contents_from_bytes(&mut this.session, &Value::Object(opts), name, bytes)?)
+        })
+    }
+
     /// Export each exported layer of a document as its own file beneath the write root: the
     /// capability-scoped `file.export.layersToFiles`, which takes an ambient `dir` and is
     /// therefore refused in automation (#3216). The bytes come from the command's own core, so
@@ -175,10 +205,16 @@ impl Headless {
                 _ => return Err(AutomationError::BadRequest("automation filesystem access is not granted: write authority is absent".into())),
             };
             let mut outputs = workspace.export_sequence(dir)?;
-            let written = file_cmds::export_layers_with(&this.session, params, |name, bytes| {
+            let report = file_cmds::export_layers_report_with(&this.session, params, |name, bytes| {
                 outputs.write(name, bytes).map_err(|e| photocraft_engine::EngineError::Other(e.to_string()))
             });
-            exported(dir, written, &mut outputs)
+            let (written, skipped) = match report {
+                Ok(report) => (Ok(report.files), report.skipped),
+                Err(error) => (Err(error), Vec::new()),
+            };
+            let mut result = exported(dir, written, &mut outputs)?;
+            result["skipped"] = json!(skipped);
+            Ok(result)
         })
     }
 
@@ -265,7 +301,10 @@ impl Headless {
                 files::save(&doc, &target, format, opts, Some(writer))?
             }
             Filesystem::Workspace(workspace) => {
-                let (bytes, warnings) = files::save_bytes(&doc, target_text, format, opts)?;
+                // Only the target is granted: a linked smart object's stored path is document
+                // data, so PSD export writes that layer as pixels instead of embedding the file.
+                let opts = ExportOptions { read_linked_files: false, ..opts.clone() };
+                let (bytes, warnings) = files::save_bytes(&doc, target_text, format, &opts)?;
                 workspace.write(target_text, &bytes)?;
                 warnings
             }
@@ -331,6 +370,8 @@ impl Headless {
         if let Some(d) = self.session.close(i) {
             self.writers.remove(&d.doc.id.0);
         }
+        // The closed document's buffers went to the scratch pool: hand them back to the OS.
+        photocraft_raster::scratch::release();
         Ok(self.session_list())
     }
 
