@@ -113,6 +113,9 @@ pub struct Nav {
     pub(crate) search_text: bool,
     /// The text field with the keyboard, as of the last frame.
     field: Option<Id>,
+    /// [`Self::field`] before this frame's keys replaced it: the field an Esc this frame was taken
+    /// from (egui drops the focus on any Esc first).
+    field_was: Option<Id>,
 }
 
 fn nav_id() -> Id {
@@ -162,6 +165,11 @@ impl Nav {
     /// The state as the last frame left it (tests, inspection).
     pub fn current(ctx: &egui::Context) -> Nav {
         ctx.data(|d| d.get_temp(nav_id())).unwrap_or_default()
+    }
+
+    /// The text field that had the keyboard before this frame's keys (see [`Self::keys`]).
+    pub(crate) fn field_was(&self) -> Option<Id> {
+        self.field_was
     }
 
     /// The highlighted row of `level`, if any.
@@ -518,6 +526,7 @@ impl Nav {
     pub fn keys(&mut self, ctx: &egui::Context, tops: &[Id], clicked: &mut Option<String>) {
         self.tops = tops.to_vec();
         let field = std::mem::replace(&mut self.field, ctx.memory(|m| m.focused()).filter(|_| ctx.text_edit_focused()));
+        self.field_was = field;
         let Some(top) = self.top.filter(|_| !tops.is_empty()) else { return };
         let level = self.level.min(self.rows.len().saturating_sub(1));
         self.level = level;

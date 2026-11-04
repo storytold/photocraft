@@ -420,6 +420,10 @@ impl Keys {
         let press = |k: Key| consume(Modifiers::NONE, k);
         if press(Key::Escape) {
             self.focus = None;
+            // egui dropped a text field's focus on this Esc, which was for the bar.
+            if let Some(field) = nav.field_was() {
+                ctx.memory_mut(|m| m.request_focus(field));
+            }
         } else if press(Key::ArrowRight) {
             self.focus = Some((focus + 1) % n);
         } else if press(Key::ArrowLeft) {

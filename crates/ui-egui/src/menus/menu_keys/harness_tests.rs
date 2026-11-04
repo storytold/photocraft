@@ -688,6 +688,34 @@ fn esc_closing_a_menu_keeps_the_text_field_in_focus() {
     assert_eq!(h.ctx.memory(|m| m.focused()), None, "with no menu open, Esc leaves the field as usual");
 }
 
+/// F10 in a text field puts the keyboard on the bar with no menu open; Esc then takes it off the
+/// bar and leaves the field as it was. egui dropped the field's focus on that Esc.
+#[test]
+fn esc_off_the_bar_keeps_the_text_field_in_focus() {
+    let field = egui::Id::unique("a text field");
+    let mut h = Harness::builder().with_size(egui::vec2(1280.0, 720.0)).build_ui_state(
+        move |ui, (app, text, lost): &mut (PhotocraftApp, String, bool)| {
+            crate::menus::menu_bar(app, ui);
+            let label = ui.label("Name");
+            *lost |= ui.add(egui::TextEdit::singleline(text).id(field)).labelled_by(label.id).lost_focus();
+        },
+        (app(), "some text".to_string(), false),
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.run_steps(3);
+    h.ctx.memory_mut(|m| m.request_focus(field));
+    h.run_steps(3);
+    h.key_press(egui::Key::F10);
+    h.run_steps(3);
+    assert!(Keys::current(&h.ctx).focus.is_some(), "F10 put the keyboard on the bar");
+    assert!(!is_open(&h.ctx));
+    h.key_press(egui::Key::Escape);
+    h.run_steps(5);
+    assert!(Keys::current(&h.ctx).focus.is_none(), "Esc took it off");
+    assert_eq!(h.ctx.memory(|m| m.focused()), Some(field), "the field still has the keyboard");
+    assert!(!h.state().2, "and never lost it");
+}
+
 /// Esc in the very frame after a menu opens gives the field back too: the frame the menu opens in
 /// is the first with a menu to remember the field for.
 #[test]
