@@ -28,6 +28,12 @@ pub fn value_field_prec(ui: &mut Ui, value: &mut f32, range: std::ops::RangeIncl
     value_field_in(ui, value, range, suffix, width, 0.0, FieldOpts { decimals: Some(decimals), ..Default::default() }, None).0
 }
 
+/// A [`value_field_prec`] whose Arrow-key and scrub step follow the shown decimals, so a field in
+/// inches moves 0.001 at a time rather than a whole unit (#8744).
+pub fn value_field_prec_step(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>, suffix: &str, width: f32, decimals: u32) -> Response {
+    value_field_in(ui, value, range, suffix, width, 0.0, FieldOpts { decimals: Some(decimals), step_from_decimals: true, ..Default::default() }, None).0
+}
+
 /// A field's unit and the resolution a typed unit converts at (`1in` in a px field).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FieldUnits {

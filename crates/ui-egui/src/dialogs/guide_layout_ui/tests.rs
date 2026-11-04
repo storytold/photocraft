@@ -324,3 +324,59 @@ fn preview_cache_tracks_document_revision() {
     app.run(COMMAND, json!({"margin":23})).unwrap();
     assert!(preview(&app, &app.session.active().unwrap().doc).unwrap().0.vertical.contains(&23.0));
 }
+
+#[test]
+fn margin_unit_reads_the_transient_pick_and_never_percent() {
+    let mut app = app();
+    app.session.prefs.edit(|p| p.units_and_rulers.rulers = Unit::Percent);
+    let mut f = Map::new();
+    assert_eq!(margin_unit(&app, &f), Unit::Pixels, "a percent ruler still reads a length");
+    f.insert("__marginUnit".into(), json!("cm"));
+    assert_eq!(margin_unit(&app, &f), Unit::Centimeters, "the pick wins over the ruler unit");
+    f.insert("__marginUnit".into(), json!("furlongs"));
+    assert_eq!(margin_unit(&app, &f), Unit::Pixels, "an unknown name falls back to the ruler unit");
+}
+
+#[test]
+fn reset_clears_the_transient_margin_unit() {
+    let mut app = app();
+    let id = open(&mut app);
+    let mut fields = app.ui.dialog_mut(id).unwrap().fields.clone();
+    fields.insert("__marginUnit".into(), json!("cm"));
+    reset(&app, &mut fields);
+    assert!(!fields.contains_key("__marginUnit"), "reset must not keep a unit picked earlier");
+}
+
+#[test]
+fn confirmed_layout_does_not_remember_the_margin_unit() {
+    let mut app = app();
+    let id = open(&mut app);
+    app.ui.dialog_mut(id).unwrap().fields.insert("__marginUnit".into(), json!("cm"));
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    assert!(app.ui.view.guide_layout.get("__marginUnit").is_none(), "the unit is the dialog's view, not a saved parameter");
+}
+
+#[test]
+fn showing_margins_in_centimetres_does_not_edit_them() {
+    let mut app = app();
+    let id = open(&mut app);
+    let dpi = f64::from(app.session.active().unwrap().doc.resolution_dpi.max(1.0));
+    let px = Unit::Centimeters.to_px(0.5, dpi, 1.0, 72.0);
+    {
+        let f = &mut app.ui.dialog_mut(id).unwrap().fields;
+        f.insert("margin".into(), json!([px, px, px, px]));
+        f.insert("__marginUnit".into(), json!("cm"));
+    }
+    draw(&mut app, id);
+    let f = &app.ui.dialog_mut(id).unwrap().fields;
+    for (i, v) in f["margin"].as_array().unwrap().iter().enumerate() {
+        assert_eq!(v.as_f64(), Some(px), "field {i} was rewritten just by being drawn in cm");
+    }
+}
+
+#[test]
+fn a_fractional_pixel_margin_keeps_its_fraction_when_pixels_are_shown() {
+    assert_eq!(margin_decimals(Unit::Pixels, 0.3), 2, "0.001 in at 300 ppi is 0.3 px, not 0 px");
+    assert_eq!(margin_decimals(Unit::Pixels, 59.0), 0, "a whole pixel margin stays an integer");
+    assert_eq!(margin_decimals(Unit::Centimeters, 0.5), Unit::Centimeters.decimals() as u32);
+}
