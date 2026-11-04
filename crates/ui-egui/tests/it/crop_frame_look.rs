@@ -76,7 +76,8 @@ fn committing_or_cancelling_brings_back_the_untouched_look() {
         release(&mut app);
         photocraft_ui_egui::canvas::commit_crop(&mut app);
         photocraft_ui_egui::crop_ui::ensure_frame(&mut app);
-        assert_eq!(drawn(&app), (false, false, FrameLook::Untouched), "{show:?} after commit: a new untouched frame");
+        // A commit hides the frame until the next press, so there is nothing to draw.
+        assert!(app.ui.crop_rect.is_none(), "{show:?}: the commit hides the frame");
 
         press_and_drag(&mut app);
         release(&mut app);
