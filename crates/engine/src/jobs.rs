@@ -681,7 +681,7 @@ pub fn run<T: Send + 'static>(
         return Err(EngineError::Other(format!("`{label}` started a second background job in one command")));
     }
     #[cfg(not(target_arch = "wasm32"))]
-    s.jobs.draining.retain(|handle| !handle.is_finished());
+    s.reap_draining_jobs();
     let admitted = s.jobs.running.len();
     #[cfg(not(target_arch = "wasm32"))]
     let admitted = admitted.saturating_add(s.jobs.draining.len());
@@ -1304,18 +1304,21 @@ impl Session {
             }
         }
         #[cfg(not(target_arch = "wasm32"))]
-        {
-            let mut release = false;
-            self.jobs.draining.retain(|d| {
-                let done = d.handle.is_finished();
-                release |= done && d.release;
-                !done
-            });
-            if release {
-                photocraft_raster::scratch::release();
-            }
-        }
+        self.reap_draining_jobs();
         std::mem::take(&mut self.jobs.events)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn reap_draining_jobs(&mut self) {
+        let mut release = false;
+        self.jobs.draining.retain(|d| {
+            let done = d.handle.is_finished();
+            release |= done && d.release;
+            !done
+        });
+        if release {
+            photocraft_raster::scratch::release();
+        }
     }
 
     /// Block until job `id` ends, apply it, and return its result (the control channel's and

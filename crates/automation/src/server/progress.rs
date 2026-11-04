@@ -116,11 +116,18 @@ impl PhotocraftMcp {
     pub(super) async fn headless_wait(&self, id: String, params: Value, waiter: &mut Waiter, step: (usize, usize)) -> Option<Result<Value, AutomationError>> {
         let Backend::Headless(session) = &*self.backend else { return None };
         let session = session.clone();
+        let cancel = waiter.context.as_ref().map(|context| context.ct.clone());
         // The guard is armed under the lock that starts the job: when the request is dropped while
         // the start still waits for the lock, the closure's output is dropped unread and cancels it.
         let mut guard = match self
             .headless_op(move |h| {
+                if cancel.as_ref().is_some_and(|token| token.is_cancelled()) {
+                    return Err(photocraft_engine::EngineError::Cancelled.into());
+                }
                 Ok(match h.command_begin(&id, params)? {
+                    Started::Job(job) if cancel.as_ref().is_some_and(|token| token.is_cancelled()) => {
+                        return h.job_abandon(job).map(Err);
+                    }
                     Started::Job(job) => Ok(Abandon { session, job: Some(job) }),
                     Started::Done(value) => Err(value),
                 })

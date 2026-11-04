@@ -1196,9 +1196,7 @@ fn background_admission_counts_cancelled_workers_until_they_finish() {
         s.start_job("test.extra", json!({}), "extra", false, |_| -> Result<()> { panic!("draining workers bypassed the cap") }, |_, ()| Ok(Value::Null));
     assert!(rejected.unwrap_err().to_string().contains("too many background jobs"));
     drop(gates);
-    for handle in s.jobs.draining.drain(..) {
-        handle.join().unwrap();
-    }
+    s.join_cancelled_jobs();
     let id = job(s.start_job("test.resumed", json!({}), "resumed", false, |_| Ok(()), |_, ()| Ok(json!("resumed"))).unwrap());
     assert_eq!(s.wait_job(id).unwrap(), json!("resumed"));
 }
