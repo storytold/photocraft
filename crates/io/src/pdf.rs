@@ -560,6 +560,15 @@ fn export_x(doc: &Document, x: &PdfX, secs: u64) -> std::result::Result<ExportRe
                 (p, bytes)
             }
         };
+        // ICCBased takes input, display, output and colour space profiles; a device link or an
+        // abstract profile describes no colour space of its own.
+        use photocraft_cms::ProfileClass as C;
+        if !matches!(src.class, C::Input | C::Display | C::Output | C::ColorSpace) {
+            return Err(bad(format!(
+                "the document's profile \"{}\" is a {:?} profile, which can't describe its colour; assign an RGB, gray or CMYK profile",
+                src.description, src.class
+            )));
+        }
         if src.color_space != space(doc.mode) {
             return Err(bad(format!("\"{}\" is a {:?} profile, not the document's {:?}", src.description, src.color_space, doc.mode)));
         }

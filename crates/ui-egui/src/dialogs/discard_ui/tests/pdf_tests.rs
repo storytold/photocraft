@@ -347,3 +347,19 @@ fn replayed_copies_and_automation_saves_write_pdf_x() {
         assert_eq!(asked.as_ref().map(|a| (a.0.as_str(), a.3)), Some(("x4-2008", false)), "{path}");
     }
 }
+
+/// While PDF Options waits, menu and control commands that would change the document are held
+/// back, as in any modal dialog; navigation still works.
+#[test]
+fn commands_wait_while_pdf_options_is_open() {
+    let (mut h, _writes) = pdf_app("m.pdf");
+    assert!(crate::menus::modal_allows(h.state(), "image.mode.cmyk"));
+    h.state_mut().save_as(None).unwrap();
+    h.run_steps(3);
+    assert!(h.state().pdf_options.is_some());
+    assert!(!crate::menus::modal_allows(h.state(), "image.mode.cmyk"), "no mode change under the prompt");
+    assert!(crate::menus::modal_allows(h.state(), "view.zoomIn"), "navigation still works");
+    h.key_press(Key::Escape);
+    h.run_steps(3);
+    assert!(crate::menus::modal_allows(h.state(), "image.mode.cmyk"), "free again after Cancel");
+}
