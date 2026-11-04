@@ -1752,6 +1752,10 @@ fn live_dodge_matches_the_commit_across_cells() {
     let mut live = LiveDab::begin(&s, "paint.dodge", &opts(&all[..1])).unwrap();
     live.push(&pts(&all[1..3])).unwrap();
     live.push(&pts(&all[3..])).unwrap();
+    // Smoothing's rounded corners wait for the next point before drawing the arc into the newest
+    // one (#2138), so these tools, which can't preview a tail, run one sample behind while the
+    // pointer moves. The canvas feeds a held pointer its point again, which draws that arc.
+    live.push(&pts(&all[4..])).unwrap();
     let shown = live.doc.clone();
     s.execute("paint.dodge", opts(&all)).unwrap();
     let id = s.active().unwrap().active_layer.unwrap();
