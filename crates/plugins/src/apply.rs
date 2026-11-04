@@ -3,6 +3,7 @@
 use std::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use photocraft_color::{ColorMode, PixelFormat, SampleType};
 use photocraft_geom::{Rect, TILE_SIZE, TileCoord};
@@ -77,6 +78,12 @@ fn read_clamped(s: &Surface, rect: Rect, extent: Rect) -> Vec<f32> {
 /// Most bands one run is split into.
 const MAX_BANDS: u64 = 1 << 16;
 
+/// Errors from a band that hit the shared memory cap may have the same variant as unrelated
+/// plug-in errors, so use the band's denial flag rather than the error's shape.
+fn hard_error_in_discarded_attempt(results: &[(Result<Surface>, bool)]) -> Option<Error> {
+    results.iter().find_map(|(result, denied)| if *denied { None } else { result.as_ref().err().cloned() })
+}
+
 /// Interpreter-heavy plug-ins can keep more cores busy than Rayon’s usual one worker per
 /// available CPU. Share the extra workers across runs, and honour explicit Rayon pool settings.
 #[cfg(not(target_arch = "wasm32"))]
@@ -89,7 +96,8 @@ fn plugin_pool() -> Option<&'static rayon::ThreadPool> {
         let cores = std::thread::available_parallelism().map(std::num::NonZeroUsize::get).unwrap_or(1);
         let workers = cores.saturating_mul(5).div_ceil(2).clamp(1, 64);
         rayon::ThreadPoolBuilder::new().num_threads(workers).build().ok()
-    }).as_ref()
+    })
+    .as_ref()
 }
 
 impl Plugin {
@@ -175,35 +183,36 @@ impl Plugin {
                 let denials = budget.snapshot().1;
                 let attempt = deadline.attempt();
                 let run = |b: &Rect| {
-                    let r = self.run_band(&ctx, *b, &attempt, Arc::clone(&budget)).map(|data| encode_band(surface, *b, &data));
+                    let denied = Arc::new(AtomicBool::new(false));
+                    let r = self.run_band(&ctx, *b, &attempt, Arc::clone(&budget), Arc::clone(&denied)).map(|data| encode_band(surface, *b, &data));
+                    let was_denied = denied.load(Ordering::Relaxed);
                     if let Err(error) = &r
-                        && budget.snapshot().1 == denials
+                        && !was_denied
                     {
                         attempt.abort(error.clone());
                     }
-                    r
+                    (r, was_denied)
                 };
                 #[cfg(not(target_arch = "wasm32"))]
-                let results: Vec<Result<Surface>> = {
+                let results: Vec<(Result<Surface>, bool)> = {
                     use rayon::prelude::*;
-                    if let Some(pool) = pool {
-                        pool.install(|| slice.par_iter().map(run).collect())
-                    } else {
-                        slice.par_iter().map(run).collect()
-                    }
+                    if let Some(pool) = pool { pool.install(|| slice.par_iter().map(run).collect()) } else { slice.par_iter().map(run).collect() }
                 };
                 #[cfg(target_arch = "wasm32")]
-                let results: Vec<Result<Surface>> = slice.iter().map(run).collect();
+                let results: Vec<(Result<Surface>, bool)> = slice.iter().map(run).collect();
                 if budget.snapshot().1 != denials {
                     // A later band used more memory than the probe. Discard the entire attempt
                     // (including successful bands) and retry with fewer concurrent instances.
+                    if let Some(error) = hard_error_in_discarded_attempt(&results) {
+                        return Err(error);
+                    }
                     if size == 1 {
                         return Err(Error::Limit("memory budget".into()));
                     }
                     width = (size / 2).max(1);
                     continue;
                 }
-                for r in results {
+                for (r, _) in results {
                     for (c, t) in r?.tiles() {
                         out.tile_mut(*c).bytes_mut().copy_from_slice(&t.bytes());
                     }
@@ -225,7 +234,7 @@ impl Plugin {
         Ok(out)
     }
 
-    fn run_band(&self, c: &BandCtx, band: Rect, deadline: &Deadline, budget: Arc<RunBudget>) -> Result<Vec<f32>> {
+    fn run_band(&self, c: &BandCtx, band: Rect, deadline: &Deadline, budget: Arc<RunBudget>, denied: Arc<AtomicBool>) -> Result<Vec<f32>> {
         let n = c.fmt.channels();
         let input = band.inflate(c.ov);
         let mut data = read_clamped(c.surface, input, c.extent);
@@ -244,7 +253,7 @@ impl Plugin {
         let pbytes = serde_json::to_vec(&params).map_err(|e| Error::Params(e.to_string()))?;
         let orig_full = data.clone();
         let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.filter_buffer(&mut data, iw, ih, n as u32, format_code(c.fmt), &pbytes, deadline, budget)
+            self.filter_buffer(&mut data, iw, ih, n as u32, format_code(c.fmt), &pbytes, deadline, budget, denied)
         }));
         run.map_err(|_| Error::Trap("the runtime panicked".into()))??;
         // Keep the band (drop the overlap margins), sanitise and blend by the selection.
@@ -312,6 +321,29 @@ struct BandCtx<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn discarded_attempt_keeps_a_hard_error_even_when_variants_match() {
+        let results = [(Err(Error::Failed("allocation failed".into())), true), (Err(Error::Failed("plug-in failed independently".into())), false)];
+        assert_eq!(hard_error_in_discarded_attempt(&results), Some(Error::Failed("plug-in failed independently".into())));
+    }
+
+    #[test]
+    fn run_band_forwards_the_shared_budget() {
+        let limits = crate::Limits { max_memory_bytes: 4 << 20, max_total_memory_bytes: 5 << 20, ..crate::Limits::default() };
+        let plugin = Plugin::load(include_bytes!("../tests/fixtures/invert.wasm"), limits.clone()).unwrap();
+        let mut surface = Surface::new(PixelFormat::RGBA8);
+        let canvas = Rect::new(0, 0, 256, 256);
+        surface.fill_rect(canvas, &[0.25, 0.5, 0.75, 1.0]);
+        let budget = RunBudget::new(&limits);
+        budget.occupy_for_test(limits.max_total_memory_bytes);
+        let denied = Arc::new(AtomicBool::new(false));
+        let ctx = BandCtx { surface: &surface, extent: canvas, canvas, selection: None, fmt: surface.format(), ov: 0, params: json!({}) };
+
+        assert!(plugin.run_band(&ctx, canvas, &Deadline::new(&limits), Arc::clone(&budget), Arc::clone(&denied)).is_err());
+        assert!(denied.load(Ordering::Relaxed));
+        assert!(budget.snapshot().1 > 0, "the band's instance must charge the shared budget");
+    }
 
     #[test]
     fn encoding_preserves_original_pixels_outside_partial_tiles() {

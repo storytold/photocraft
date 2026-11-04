@@ -1,6 +1,9 @@
 //! The wasmi host: loading, instantiating and calling a plug-in under resource limits.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+};
 
 use wasmi::{
     Config, EnforcedLimits, Engine, Instance, Linker, Memory, Module, ResourceLimiter, Store, StoreLimits, StoreLimitsBuilder, TypedFunc, TypedResumableCall,
@@ -25,6 +28,8 @@ pub struct Limits {
     /// Cap on a plug-in's linear memory.
     pub max_memory_bytes: usize,
     /// Cap on the linear memory actually allocated by all of one run's instances together.
+    /// Values below `max_memory_bytes` use that per-instance cap as the effective total, so
+    /// at least one instance can run.
     pub max_total_memory_bytes: usize,
     /// Target size of one band of `f32` pixels handed to the plug-in.
     pub band_bytes: usize,
@@ -94,25 +99,33 @@ impl RunBudget {
         let usage = self.usage.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         (usage.peak_instance, usage.denials)
     }
+
+    #[cfg(test)]
+    pub(crate) fn occupy_for_test(&self, bytes: usize) {
+        self.usage.lock().unwrap_or_else(std::sync::PoisonError::into_inner).used = bytes;
+    }
 }
 
 struct BandLimiter {
     limits: StoreLimits,
     budget: Arc<RunBudget>,
+    denied: Arc<AtomicBool>,
     charged: usize,
     pending_old: Option<usize>,
 }
 
 impl BandLimiter {
-    fn new(limits: &Limits, budget: Arc<RunBudget>) -> Self {
+    fn new(limits: &Limits, budget: Arc<RunBudget>, denied: Arc<AtomicBool>) -> Self {
         let limits = StoreLimitsBuilder::new().memory_size(limits.max_memory_bytes).memories(1).tables(4).table_elements(100_000).instances(1).build();
-        Self { limits, budget, charged: 0, pending_old: None }
+        Self { limits, budget, denied, charged: 0, pending_old: None }
     }
 }
 
 impl Drop for BandLimiter {
     fn drop(&mut self) {
         let mut usage = self.budget.usage.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        // A failed growth is refunded before drop; only completed allocations inform later groups.
+        usage.peak_instance = usage.peak_instance.max(self.charged);
         usage.used = usage.used.saturating_sub(self.charged);
     }
 }
@@ -125,11 +138,11 @@ impl ResourceLimiter for BandLimiter {
         let mut usage = self.budget.usage.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let delta = desired.saturating_sub(self.charged);
         if usage.used.checked_add(delta).is_none_or(|total| total > self.budget.limit) {
+            self.denied.store(true, Ordering::Relaxed);
             usage.denials = usage.denials.saturating_add(1);
             return Ok(false);
         }
         usage.used += delta;
-        usage.peak_instance = usage.peak_instance.max(desired);
         self.charged = desired;
         self.pending_old = Some(current);
         Ok(true)
@@ -319,7 +332,7 @@ impl Plugin {
         }
         let mut p = Plugin { manifest: placeholder_manifest(), engine, module, limits, size: bytes.len(), source: None };
         let deadline = Deadline::new(&p.limits);
-        let mut live = p.instantiate(&deadline, RunBudget::new(&p.limits))?;
+        let mut live = p.instantiate(&deadline, RunBudget::new(&p.limits), Arc::new(AtomicBool::new(false)))?;
         let version: TypedFunc<(), i32> = live.func("pc_abi_version")?;
         let v = p.call(&mut live, &version, (), p.limits.fuel_base, &deadline)?;
         if v != ABI_VERSION {
@@ -361,9 +374,9 @@ impl Plugin {
         self
     }
 
-    pub(crate) fn instantiate(&self, deadline: &Deadline, budget: Arc<RunBudget>) -> Result<Live> {
+    pub(crate) fn instantiate(&self, deadline: &Deadline, budget: Arc<RunBudget>, denied: Arc<AtomicBool>) -> Result<Live> {
         deadline.check()?;
-        let mut store = Store::new(&self.engine, BandLimiter::new(&self.limits, budget));
+        let mut store = Store::new(&self.engine, BandLimiter::new(&self.limits, budget, denied));
         store.limiter(|l| l);
         // The start function (if any) runs on this fuel. It cannot be interrupted to check the
         // deadline the way a call can, so it gets no more than one slice, however much a call may use.
@@ -412,10 +425,11 @@ impl Plugin {
         params: &[u8],
         deadline: &Deadline,
         budget: Arc<RunBudget>,
+        denied: Arc<AtomicBool>,
     ) -> Result<()> {
         let bytes = data.len().checked_mul(4).filter(|b| *b <= i32::MAX as usize && *b + params.len() <= self.limits.max_memory_bytes);
         let bytes = bytes.ok_or_else(|| Error::Limit("memory budget (band too large)".into()))?;
-        let mut live = self.instantiate(deadline, budget)?;
+        let mut live = self.instantiate(deadline, budget, denied)?;
         let alloc: TypedFunc<i32, i32> = live.func("pc_alloc")?;
         let filter: TypedFunc<FilterArgs, i32> = live.func("pc_filter")?;
         let ptr = self.call(&mut live, &alloc, bytes as i32, self.limits.fuel_base, deadline)? as u32 as usize;
@@ -481,15 +495,16 @@ mod tests {
     fn shared_budget_charges_actual_growth_and_releases_on_drop() {
         let limits = Limits { max_memory_bytes: 8 << 20, max_total_memory_bytes: 10 << 20, ..Limits::default() };
         let budget = RunBudget::new(&limits);
-        let mut a = BandLimiter::new(&limits, Arc::clone(&budget));
-        let mut b = BandLimiter::new(&limits, Arc::clone(&budget));
+        let mut a = BandLimiter::new(&limits, Arc::clone(&budget), Arc::new(AtomicBool::new(false)));
+        let mut b = BandLimiter::new(&limits, Arc::clone(&budget), Arc::new(AtomicBool::new(false)));
         assert!(matches!(a.memory_growing(0, 4 << 20, None), Ok(true)));
         assert!(matches!(b.memory_growing(0, 4 << 20, None), Ok(true)));
         assert_eq!(budget.usage.lock().unwrap().used, 8 << 20);
         assert!(matches!(a.memory_growing(4 << 20, 7 << 20, None), Ok(false)));
         assert_eq!(budget.usage.lock().unwrap().used, 8 << 20);
-        assert_eq!(budget.snapshot(), (4 << 20, 1));
+        assert_eq!(budget.snapshot(), (0, 1));
         drop(b);
+        assert_eq!(budget.snapshot(), (4 << 20, 1));
         assert!(matches!(a.memory_growing(4 << 20, 7 << 20, None), Ok(true)));
         assert_eq!(budget.usage.lock().unwrap().used, 7 << 20);
         drop(a);
@@ -500,14 +515,16 @@ mod tests {
     fn failed_growth_refunds_reservation_and_instance_cap_still_applies() {
         let limits = Limits { max_memory_bytes: 8 << 20, max_total_memory_bytes: 10 << 20, ..Limits::default() };
         let budget = RunBudget::new(&limits);
-        let mut a = BandLimiter::new(&limits, Arc::clone(&budget));
+        let mut a = BandLimiter::new(&limits, Arc::clone(&budget), Arc::new(AtomicBool::new(false)));
         assert!(matches!(a.memory_growing(0, 2 << 20, None), Ok(true)));
         assert!(matches!(a.memory_growing(2 << 20, 7 << 20, None), Ok(true)));
         a.memory_grow_failed(&wasmi::errors::MemoryError::OutOfSystemMemory).unwrap();
         assert_eq!(budget.usage.lock().unwrap().used, 2 << 20);
+        assert_eq!(budget.snapshot().0, 0, "in-flight growth is not a measured peak");
         assert!(matches!(a.memory_growing(2 << 20, 9 << 20, None), Ok(false)));
         assert_eq!(budget.snapshot().1, 0, "individual cap is separate from the run budget");
         drop(a);
+        assert_eq!(budget.snapshot().0, 2 << 20, "failed growth does not inflate later group widths");
         assert_eq!(budget.usage.lock().unwrap().used, 0);
     }
 
