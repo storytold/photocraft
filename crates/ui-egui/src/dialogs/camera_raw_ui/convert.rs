@@ -58,21 +58,22 @@ fn box_average(surf: &photocraft_raster::Surface, area: Rect, k: usize) -> Vec<[
     let mut proxy = vec![[0.0f32; 4]; pw * ph];
     let mut row = vec![[0.0f32; 4]; w];
     for py in 0..ph {
-        let mut acc = vec![[0.0f32; 5]; pw];
+        // f64: a weighted f32 sample near f32::MAX would overflow to infinity.
+        let mut acc = vec![[0.0f64; 5]; pw];
         for sy in py * k..((py + 1) * k).min(h) {
-            let weight = if sy == h - 1 { ((py + 1) * k - sy) as f32 } else { 1.0 };
+            let weight = if sy == h - 1 { ((py + 1) * k - sy) as f64 } else { 1.0 };
             let y = area.y0 + sy as i32;
             surf.read_rgba_into(Rect::new(area.x0, y, area.x1, y + 1), &mut row);
             for (x, q) in row.iter().enumerate() {
                 let a = &mut acc[x / k];
                 for c in 0..4 {
-                    a[c] += q[c] * weight;
+                    a[c] += f64::from(q[c]) * weight;
                 }
                 a[4] += weight;
             }
         }
         for (x, a) in acc.iter().enumerate() {
-            proxy[py * pw + x] = [a[0] / a[4], a[1] / a[4], a[2] / a[4], a[3] / a[4]];
+            proxy[py * pw + x] = [0, 1, 2, 3].map(|c| (a[c] / a[4]) as f32);
         }
     }
     proxy
@@ -246,5 +247,15 @@ mod box_average_tests {
                 assert!(g.iter().zip(w).all(|(a, b)| (a - b).abs() < 1e-5), "{area:?} k={k}: {g:?} vs {w:?}");
             }
         }
+    }
+
+    /// Samples near f32::MAX stay finite: the weighted sums are held in f64.
+    #[test]
+    fn huge_samples_do_not_overflow() {
+        let mut surf = Surface::new(PixelFormat::RGBA32F);
+        let big = f32::MAX / 2.0;
+        surf.fill_rect(Rect::new(0, 0, 2, 1), &[big, -big, big, 1.0]);
+        let got = box_average(&surf, Rect::new(0, 0, 2, 1), 4);
+        assert!(got.iter().flatten().all(|v| v.is_finite()), "{got:?}");
     }
 }
