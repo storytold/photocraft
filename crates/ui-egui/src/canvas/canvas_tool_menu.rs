@@ -724,7 +724,9 @@ pub fn open_pasteboard(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: 
         guide: false,
         spelling: None,
         crop: None,
-        over: (tool != app.ui.tool).then_some(app.ui.tool),
+        // Space's Hand keeps the menu over the selected tool (#11271); a held zoom key's goes with
+        // the key, as before.
+        over: (tool == Tool::Hand && tool != app.ui.tool).then_some(app.ui.tool),
     });
     crate::canvas_popup::mark_open(ctx, menu_id());
     true

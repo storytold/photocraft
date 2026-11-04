@@ -582,6 +582,15 @@ fn space_hand_right_click_opens_the_view_menu() {
     h.run_steps(2);
     right_click(&mut h, inside, Modifiers::NONE);
     assert!(h.state().ui.canvas_tool_menu.is_none(), "Space let go, the Move tool's right-click is the layer pick, not the view menu");
+    // A held zoom key (⌥Space, Zoom Out) is as before: no view menu inside, and the pasteboard menu
+    // outside goes with the key.
+    h.event(egui::Event::ModifiersChanged(Modifiers::ALT));
+    h.event(egui::Event::Key { key: egui::Key::Space, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::ALT });
+    h.run_steps(2);
+    right_click(&mut h, inside, Modifiers::ALT);
+    assert!(h.state().ui.canvas_tool_menu.is_none(), "a held zoom key opens no view menu");
+    right_click(&mut h, outside, Modifiers::ALT);
+    assert!(h.state().ui.canvas_tool_menu.is_none(), "nor does its pasteboard menu outlast the frame");
 }
 
 #[test]
