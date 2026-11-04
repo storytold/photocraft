@@ -1,12 +1,14 @@
 //! Running a filter plug-in over a surface, band by band.
 
+use std::sync::Arc;
+
 use photocraft_color::{ColorMode, PixelFormat, SampleType};
 use photocraft_geom::{Rect, TILE_SIZE, TileCoord};
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
 
 use crate::manifest::Area;
-use crate::runtime::{Deadline, Plugin};
+use crate::runtime::{Deadline, Plugin, RunBudget};
 use crate::{Error, Result};
 
 /// The `format` argument of `pc_filter`: bits 0–7 the source bit depth (8, 16 or 32), bit 8 set
@@ -133,38 +135,72 @@ impl Plugin {
         }
         let deadline = Deadline::new(self.limits());
         let ctx = BandCtx { surface, extent, canvas, selection, fmt, ov, params: Value::Object(resolved) };
-        let run = |b: &Rect| {
-            let r = self.run_band(&ctx, *b, &deadline).map(|data| encode_band(surface, *b, &data));
-            if let Err(error) = &r {
-                deadline.abort(error.clone());
-            }
-            r
-        };
-        // A few bands at a time: one per worker, and no more instances than the run's memory
-        // budget holds at their cap, so peak memory stays bounded however many cores run (#8603).
+        let budget = RunBudget::new(self.limits());
+        // Start with the conservative bound. Its first group supplies a real memory footprint
+        // for later groups while preserving the existing parallel error cancellation.
         #[cfg(not(target_arch = "wasm32"))]
-        let group = self.limits().parallel_bands(rayon::current_num_threads());
+        let mut group = self.limits().parallel_bands(rayon::current_num_threads());
         #[cfg(target_arch = "wasm32")]
-        let group = 1;
-        for chunk in bands.chunks(group) {
-            #[cfg(not(target_arch = "wasm32"))]
-            let results: Vec<Result<Surface>> = {
-                use rayon::prelude::*;
-                chunk.par_iter().map(run).collect()
-            };
-            #[cfg(target_arch = "wasm32")]
-            let results: Vec<Result<Surface>> = chunk.iter().map(run).collect();
-            for r in results {
-                for (c, t) in r?.tiles() {
-                    out.tile_mut(*c).bytes_mut().copy_from_slice(&t.bytes());
+        let mut group = 1;
+        let mut remaining = bands.as_slice();
+        let mut measured = false;
+        while !remaining.is_empty() {
+            let chunk_size = group.min(remaining.len());
+            let mut chunk = &remaining[..chunk_size];
+            let mut width = group;
+            while !chunk.is_empty() {
+                let size = width.min(chunk.len());
+                let slice = &chunk[..size];
+                let denials = budget.snapshot().1;
+                let attempt = deadline.attempt();
+                let run = |b: &Rect| {
+                    let r = self.run_band(&ctx, *b, &attempt, Arc::clone(&budget)).map(|data| encode_band(surface, *b, &data));
+                    if let Err(error) = &r
+                        && budget.snapshot().1 == denials
+                    {
+                        attempt.abort(error.clone());
+                    }
+                    r
+                };
+                #[cfg(not(target_arch = "wasm32"))]
+                let results: Vec<Result<Surface>> = {
+                    use rayon::prelude::*;
+                    slice.par_iter().map(run).collect()
+                };
+                #[cfg(target_arch = "wasm32")]
+                let results: Vec<Result<Surface>> = slice.iter().map(run).collect();
+                if budget.snapshot().1 != denials {
+                    // A later band used more memory than the probe. Discard the entire attempt
+                    // (including successful bands) and retry with fewer concurrent instances.
+                    if size == 1 {
+                        return Err(Error::Limit("memory budget".into()));
+                    }
+                    width = (size / 2).max(1);
+                    continue;
                 }
+                for r in results {
+                    for (c, t) in r?.tiles() {
+                        out.tile_mut(*c).bytes_mut().copy_from_slice(&t.bytes());
+                    }
+                }
+                chunk = &chunk[size..];
+            }
+            remaining = &remaining[chunk_size..];
+            if !measured {
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    group = self.limits().parallel_bands_for(rayon::current_num_threads(), budget.snapshot().0);
+                }
+                measured = true;
+            } else {
+                group = group.min(width);
             }
         }
         out.prune();
         Ok(out)
     }
 
-    fn run_band(&self, c: &BandCtx, band: Rect, deadline: &Deadline) -> Result<Vec<f32>> {
+    fn run_band(&self, c: &BandCtx, band: Rect, deadline: &Deadline, budget: Arc<RunBudget>) -> Result<Vec<f32>> {
         let n = c.fmt.channels();
         let input = band.inflate(c.ov);
         let mut data = read_clamped(c.surface, input, c.extent);
@@ -182,8 +218,9 @@ impl Plugin {
         }
         let pbytes = serde_json::to_vec(&params).map_err(|e| Error::Params(e.to_string()))?;
         let orig_full = data.clone();
-        let run =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.filter_buffer(&mut data, iw, ih, n as u32, format_code(c.fmt), &pbytes, deadline)));
+        let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.filter_buffer(&mut data, iw, ih, n as u32, format_code(c.fmt), &pbytes, deadline, budget)
+        }));
         run.map_err(|_| Error::Trap("the runtime panicked".into()))??;
         // Keep the band (drop the overlap margins), sanitise and blend by the selection.
         let (bw, bh) = (band.width() as usize, band.height() as usize);
