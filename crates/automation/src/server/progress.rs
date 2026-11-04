@@ -131,11 +131,18 @@ impl PhotocraftMcp {
             return None;
         }
         let backend = self.backend.clone();
+        let cancel = waiter.context.as_ref().map(|context| context.ct.clone());
         // The guard is armed under the lock that starts the job: when the request is dropped while
         // the start still waits for the lock, the closure's output is dropped unread and cancels it.
         let mut guard = match self
             .headless_op(move |h| {
+                if cancel.as_ref().is_some_and(|token| token.is_cancelled()) {
+                    return Err(photocraft_engine::EngineError::Cancelled.into());
+                }
                 Ok(match h.command_begin(&id, params)? {
+                    Started::Job(job) if cancel.as_ref().is_some_and(|token| token.is_cancelled()) => {
+                        return h.job_abandon(job).map(Err);
+                    }
                     Started::Job(job) => Ok(Abandon { backend, job: Some(job) }),
                     Started::Done(value) => Err(value),
                 })
@@ -257,7 +264,9 @@ async fn bridge_cancel(client: &BridgeClient, guard: &mut Abandon, job: u64, id:
     let cancel = client.call("jobs.cancel", json!({"job": job})).await;
     // A failed or abandoned call keeps the guard armed for one cleanup attempt on drop.
     // Only an acknowledged cancellation proves that cleanup is no longer needed.
-    if cancel.is_ok() {
+    // A definite refusal is not improved by retrying; malformed replies and transport
+    // failures leave the guard armed because the outcome is uncertain.
+    if cancel.as_ref().is_ok_and(|value| cancellation_acknowledged(value) || refusal(value, job).is_some()) {
         guard.job = None;
     }
     cancel_answer(job, id, cancel)
@@ -268,9 +277,22 @@ async fn bridge_cancel(client: &BridgeClient, guard: &mut Abandon, job: u64, id:
 /// than report a cancellation.
 fn cancel_answer(job: u64, id: &str, reply: Result<Value, AutomationError>) -> AutomationError {
     match reply {
-        Ok(_) => photocraft_engine::EngineError::Cancelled.into(),
-        Err(error) => AutomationError::Bridge(format!("job {job} ({id}) was not cancelled: {error}; check jobs_list for its outcome")),
+        Ok(value) if refusal(&value, job).is_some() => {
+            let reason = refusal(&value, job).unwrap_or("unknown reason");
+            AutomationError::Bridge(format!("job {job} ({id}) was not cancelled: {reason}; check jobs_list for its outcome"))
+        }
+        Ok(value) if cancellation_acknowledged(&value) => photocraft_engine::EngineError::Cancelled.into(),
+        Ok(value) => AutomationError::Bridge(format!("cancellation of job {job} ({id}) was not confirmed: {value}; check jobs_list for its outcome")),
+        Err(error) => AutomationError::Bridge(format!("job {job} ({id}) cancellation was not confirmed: {error}; check jobs_list for its outcome")),
     }
+}
+
+fn cancellation_acknowledged(value: &Value) -> bool {
+    value.get("cancelled").and_then(Value::as_u64) == Some(1)
+}
+
+fn refusal(value: &Value, job: u64) -> Option<&str> {
+    value.get("notCancelled")?.as_array()?.iter().find(|entry| entry.get("job").and_then(Value::as_u64) == Some(job))?.get("reason")?.as_str()
 }
 
 #[cfg(test)]
@@ -282,6 +304,8 @@ mod tests {
         let cancelled = cancel_answer(7, "filter.blur.gaussianBlur", Ok(json!({"cancelled": 1})));
         assert!(matches!(cancelled, AutomationError::Engine(photocraft_engine::EngineError::Cancelled)), "{cancelled}");
         let refused = cancel_answer(7, "filter.blur.gaussianBlur", Err(AutomationError::App("job 7 is not running".into())));
-        assert!(matches!(&refused, AutomationError::Bridge(m) if m.contains("was not cancelled") && m.contains("job 7 is not running")), "{refused}");
+        assert!(matches!(&refused, AutomationError::Bridge(m) if m.contains("not confirmed") && m.contains("job 7 is not running")), "{refused}");
+        let refused = cancel_answer(7, "filter.blur.gaussianBlur", Ok(json!({"cancelled": 0, "notCancelled": [{"job": 7, "reason": "committing"}]})));
+        assert!(matches!(&refused, AutomationError::Bridge(m) if m.contains("job 7") && m.contains("committing") && m.contains("jobs_list")), "{refused}");
     }
 }

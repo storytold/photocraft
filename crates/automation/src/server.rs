@@ -1434,6 +1434,65 @@ mod tests {
         assert_eq!(mcp.headless_op(|h| h.inspect(None)).await.unwrap().unwrap(), before);
     }
 
+    /// Cancellation notifications only cancel the token: the handler remains alive while
+    /// its blocking start waits for the session lock.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn cancelled_queued_commands_never_start() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+        let mcp = PhotocraftMcp::headless();
+        mcp.headless_op(|h| h.command_run("file.new", json!({"width": 8, "height": 8}))).await.unwrap().unwrap();
+        let before = mcp.headless_op(|h| h.inspect(None)).await.unwrap().unwrap();
+        let Backend::Headless(session) = &*mcp.backend else { panic!("headless") };
+        let session = session.clone();
+        let (locked, acquired) = std::sync::mpsc::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        let holder = std::thread::spawn(move || {
+            let _held = session.lock().unwrap();
+            locked.send(()).unwrap();
+            released.recv().unwrap();
+        });
+        acquired.recv().unwrap();
+
+        let (mut input, server_in) = tokio::io::duplex(65536);
+        let (server_out, output) = tokio::io::duplex(65536);
+        let server = tokio::spawn(mcp.clone().serve_io(server_in, server_out));
+        let mut lines = BufReader::new(output).lines();
+        async fn send(input: &mut tokio::io::DuplexStream, value: Value) {
+            input.write_all(format!("{value}\n").as_bytes()).await.unwrap();
+        }
+        send(&mut input, json!({"jsonrpc":"2.0", "id":1, "method":"initialize", "params":{"protocolVersion":"2025-06-18", "capabilities":{}, "clientInfo":{"name":"test", "version":"1"}}})).await;
+        lines.next_line().await.unwrap().unwrap();
+        send(&mut input, json!({"jsonrpc":"2.0", "method":"notifications/initialized"})).await;
+        for (id, command, params) in [(2, "layer.new.layer", json!({})), (3, "filter.blur.gaussianBlur", json!({"radius": 10}))] {
+            send(
+                &mut input,
+                json!({"jsonrpc":"2.0", "id":id, "method":"tools/call", "params":{"name":"command_run", "arguments":{"id":command, "params":params}}}),
+            )
+            .await;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        for id in [2, 3] {
+            send(&mut input, json!({"jsonrpc":"2.0", "method":"notifications/cancelled", "params":{"requestId":id}})).await;
+        }
+        send(&mut input, json!({"jsonrpc":"2.0", "id":4, "method":"ping"})).await;
+        loop {
+            let reply: Value = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+            if reply["id"] == 4 {
+                break;
+            }
+        }
+        release.send(()).unwrap();
+        holder.join().unwrap();
+        // Let both blocked starts acquire the mutex before inspecting their effects.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let (after, jobs) = mcp.headless_op(|h| Ok((h.inspect(None)?, h.session.jobs_with_recent()))).await.unwrap().unwrap();
+        assert_eq!(after, before);
+        assert!(jobs.is_empty(), "cancelled queued job started: {jobs:?}");
+        drop(input);
+        server.await.unwrap().unwrap();
+    }
+
     /// The same over the bridge (#8130): a dropped wait sends `jobs.cancel` for the app's job.
     #[tokio::test(flavor = "multi_thread")]
     async fn dropping_a_bridged_wait_cancels_the_apps_job() {
