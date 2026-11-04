@@ -406,6 +406,18 @@ fn the_windows_save_dialog_gets_a_bare_name_so_the_type_picks_the_extension() {
     assert_eq!(dialog_file_name("", true), None);
 }
 
+/// macOS's save panel isn't given the folder along with a name (#11040): rfd 0.17.2 would pass it
+/// `Downloads/photo.jpg` as a folder and an existing photo.jpg fails the save with "Not a
+/// directory". Without a name, and on the other systems, the folder is kept.
+#[test]
+fn the_macos_save_panel_gets_no_folder_with_a_name() {
+    let dir = Path::new("/Users/me/Downloads");
+    assert_eq!(rfd_save_directory(Some(dir), Some("photo.jpg"), true), None);
+    assert_eq!(rfd_save_directory(Some(dir), None, true), Some(dir));
+    assert_eq!(rfd_save_directory(Some(dir), Some("photo.jpg"), false), Some(dir));
+    assert_eq!(rfd_save_directory(None, Some("photo.jpg"), false), None);
+}
+
 /// A name in another letter case reaches the same file where the file system ignores case
 /// (Windows, and macOS by default), and only there. Two files with the same contents are two.
 #[test]
