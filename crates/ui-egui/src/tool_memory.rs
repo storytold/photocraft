@@ -12,9 +12,9 @@
 //! with the tool that owns the session brush (that brush itself is `Preferences::last_brush`).
 //! Reset Tool and Reset All Tools change both, so the next save forgets what they reset.
 //!
-//! The tools used last (`UiState::group_tools`) go to `Preferences::group_tools` with the selected
-//! tool (#3569), so a tool picked from a flyout stays on its toolbar slot and its key after a
-//! restart. A name this version doesn't know is skipped, as with the options.
+//! The tools used last (`UiState::group_tools`) are kept the same way in
+//! `Preferences::group_tools` (#3569), so a tool picked from a flyout stays on its toolbar slot
+//! and its key after a restart. A name this version doesn't know is skipped, as with the options.
 
 use photocraft_engine::BrushSettings;
 use serde_json::{Map, Value, json};
@@ -65,20 +65,15 @@ pub fn persist(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let tool = selected(app);
     if app.prefs_rt.selected_tool != Some(tool) {
         app.prefs_rt.selected_tool = Some(tool);
-        // Noted here as well: no frame follows a tool picked right before quitting.
-        app.ui.remember_group_tool(tool);
-        let prefs = app.session.prefs();
-        if let (Ok(now), Ok(group_tools)) = (serde_json::to_value(tool), serde_json::to_value(&app.ui.group_tools))
-            && (prefs.selected_tool != now || prefs.group_tools != group_tools)
+        if let Ok(now) = serde_json::to_value(tool)
+            && app.session.prefs().selected_tool != now
         {
-            app.session.prefs.edit(|p| {
-                p.selected_tool = now;
-                p.group_tools = group_tools;
-            });
+            app.session.prefs.edit(|p| p.selected_tool = now);
             // prefs_ui::tick ran before the panels; ensure it can flush this new revision.
             ctx.request_repaint();
         }
     }
+    persist_group_tools(app, ctx, tool);
     persist_brushes(app);
     if app.prefs_rt.tool_options.as_ref() == Some(&app.ui.tool_options) {
         return;
@@ -87,6 +82,24 @@ pub fn persist(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let now = changed(&app.ui.tool_options);
     if app.session.prefs().tool_options != now {
         app.session.prefs.edit(|p| p.tool_options = now);
+    }
+}
+
+/// Remember the tools used last when the list changes, whether or not the selected tool did: a
+/// tool picked during a drag that ends on the tool it began with changes only the list.
+fn persist_group_tools(app: &mut PhotocraftApp, ctx: &egui::Context, tool: Tool) {
+    // Noted here as well: no frame follows a tool picked right before quitting.
+    app.ui.remember_group_tool(tool);
+    if app.prefs_rt.group_tools.as_ref() == Some(&app.ui.group_tools) {
+        return;
+    }
+    app.prefs_rt.group_tools = Some(app.ui.group_tools.clone());
+    if let Ok(now) = serde_json::to_value(&app.ui.group_tools)
+        && app.session.prefs().group_tools != now
+    {
+        app.session.prefs.edit(|p| p.group_tools = now);
+        // As for the selected tool: prefs_ui::tick ran before the panels.
+        ctx.request_repaint();
     }
 }
 
@@ -194,14 +207,14 @@ pub fn restore(app: &mut PhotocraftApp) {
     let saved = app.session.prefs().selected_tool.clone();
     if !saved.is_null() {
         match serde_json::from_value::<Tool>(saved) {
-            Ok(tool) => {
-                app.ui.tool = tool;
-                app.ui.remember_group_tool(tool);
-            }
+            Ok(tool) => app.ui.tool = tool,
             Err(err) => log::warn!("Preferences: ignoring the remembered selected tool: {err}"),
         }
     }
+    // Here rather than on the first frame, so a launch alone has nothing to save.
+    app.ui.remember_group_tool(app.ui.tool);
     app.prefs_rt.selected_tool = Some(app.ui.tool);
+    app.prefs_rt.group_tools = Some(app.ui.group_tools.clone());
     let saved = app.session.prefs().tool_options.clone();
     if let Some(saved) = saved.as_object()
         && let Ok(Value::Object(mut cur)) = serde_json::to_value(&app.ui.tool_options)
