@@ -1377,8 +1377,11 @@ fn web_xmp_that_does_not_fit_is_trimmed_or_left_out_and_reported() {
     assert_eq!((img.dimensions(), img.meta.xmp), ((64, 48), None), "written without the XMP");
     assert!(r["warnings"][0].as_str().is_some_and(|w| w.contains(&format!("XMP ({bytes} bytes)"))), "{r}");
     s.execute("file.export.exportPreferences", json!({"quickExportFormat": "jpg", "metadata": "all"})).unwrap();
-    let r = s.execute("file.export.quickExport", json!({"path": format!("{dir}/quick.jpg")})).unwrap();
+    let quick = format!("{dir}/quick.jpg");
+    let r = s.execute("file.export.quickExport", json!({"path": quick})).unwrap();
     assert!(r["warnings"][0].as_str().is_some_and(|w| w.contains("XMP")), "{r}");
+    let img = decode(&quick);
+    assert_eq!((img.dimensions(), img.meta.xmp), ((64, 48), None), "Quick Export writes it without the XMP too");
     s.execute("prefs.reset", json!({"path": "export"})).unwrap();
 }
 
