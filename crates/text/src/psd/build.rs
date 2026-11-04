@@ -1,5 +1,5 @@
 use super::edit::{
-    TEMPLATE_NODES, compact, copies_fit, copies_fit_plus, edited_object, fits, is_stub, names_one_frame, new_object, pad_frames, td_edited_object, with_modes,
+    TEMPLATE_NODES, compact, copies_fit_plus, edited_object, fits, is_stub, names_one_frame, new_object, pad_frames, td_edited_object, with_modes,
 };
 use super::import::{OPENTYPE_KEYS, TXT2_FEATURES, TXT2_STYLISTIC_SETS, kern_units, manual, object_frame, pair_runs, parse_txt2, postscript_for, real};
 use super::{
@@ -220,10 +220,11 @@ fn txt2_style_runs(layer: &TextLayer, base: &E, fonts: &mut Vec<E>, dpi: f32) ->
     let compacted;
     // Each run can gain up to TXT2_ADDED_KEYS keys the template may lack (size, leading, features...).
     const TXT2_ADDED_KEYS: usize = 18;
-    let base = if copies_fit_plus(base, spans.len(), TXT2_ADDED_KEYS) {
+    const TXT2_ADDED_KEY_BYTES: usize = 32;
+    let base = if copies_fit_plus(base, spans.len(), TXT2_ADDED_KEYS, TXT2_ADDED_KEY_BYTES) {
         base
     } else {
-        compacted = compact(base, &["0", "0", "6"]).filter(|c| copies_fit_plus(c, spans.len(), TXT2_ADDED_KEYS))?;
+        compacted = compact(base, &["0", "0", "6"]).filter(|c| copies_fit_plus(c, spans.len(), TXT2_ADDED_KEYS, TXT2_ADDED_KEY_BYTES))?;
         &compacted
     };
     let default = CharStyle::default();
@@ -489,10 +490,14 @@ fn td_restyled(entry: &E, layer: &TextLayer, fonts: &mut Vec<E>, dpi: f32) -> Op
     // As in `txt2_style_runs`: compact a template too large to copy per run, so the edit still
     // reaches this copy instead of the entry keeping its old style.
     let compacted;
-    let base = if copies_fit(base, spans.len()) {
+    // Each run can gain the `Features` keys set below (17 + 7 option flags + the style-set mask), the run
+    // `Length`, and the paint `Type`/`Values`; a bound on their nodes and key bytes (longest key 21 bytes).
+    const TD_ADDED_KEYS: usize = 40;
+    const TD_ADDED_KEY_BYTES: usize = 1024;
+    let base = if copies_fit_plus(base, spans.len(), TD_ADDED_KEYS, TD_ADDED_KEY_BYTES) {
         base
     } else {
-        compacted = compact(base, &["RunData", "StyleSheet", "Features"]).filter(|c| copies_fit(c, spans.len()))?;
+        compacted = compact(base, &["RunData", "StyleSheet", "Features"]).filter(|c| copies_fit_plus(c, spans.len(), TD_ADDED_KEYS, TD_ADDED_KEY_BYTES))?;
         &compacted
     };
     let default = CharStyle::default();

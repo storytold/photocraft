@@ -20,18 +20,21 @@ const MAX_COPIED_NODES: usize = 1 << 22;
 const MAX_COPIED_BYTES: usize = 64 << 20;
 
 /// Whether `copies` copies of `v` fit [`MAX_COPIED_NODES`] and [`MAX_COPIED_BYTES`].
+#[cfg(test)]
 pub(super) fn copies_fit(v: &E, copies: usize) -> bool {
-    copies_fit_plus(v, copies, 0)
+    copies_fit_plus(v, copies, 0, 0)
 }
 
-/// [`copies_fit`] where each copy also gains up to `extra_nodes` nodes (keys the caller adds after copying).
-pub(super) fn copies_fit_plus(v: &E, copies: usize, extra_nodes: usize) -> bool {
+/// [`copies_fit`] where each copy also gains up to `extra_nodes` nodes and `extra_bytes` key bytes
+/// (keys the caller adds after copying).
+pub(super) fn copies_fit_plus(v: &E, copies: usize, extra_nodes: usize, extra_bytes: usize) -> bool {
     let (mut nodes, mut bytes) = (MAX_COPIED_NODES, MAX_COPIED_BYTES);
     if !fits_budget(v, &mut nodes, &mut bytes) {
         return false;
     }
     let (n, b) = (MAX_COPIED_NODES - nodes, MAX_COPIED_BYTES - bytes);
-    n.saturating_add(extra_nodes).checked_mul(copies).is_some_and(|t| t <= MAX_COPIED_NODES) && b.checked_mul(copies).is_some_and(|t| t <= MAX_COPIED_BYTES)
+    n.saturating_add(extra_nodes).checked_mul(copies).is_some_and(|t| t <= MAX_COPIED_NODES)
+        && b.saturating_add(extra_bytes).checked_mul(copies).is_some_and(|t| t <= MAX_COPIED_BYTES)
 }
 
 /// Values at most this large survive [`compact`]: far above any style value Photoshop writes.
@@ -396,7 +399,15 @@ mod copy_budget_tests {
         let small = run(1, 16);
         let copies = MAX_COPIED_NODES / 8;
         assert!(copies_fit(&small, copies), "the template alone passes");
-        assert!(!copies_fit_plus(&small, copies, 18), "the keys each copy gains do not");
+        assert!(!copies_fit_plus(&small, copies, 18, 0), "the keys each copy gains do not");
+    }
+
+    #[test]
+    fn key_bytes_added_per_copy_count_against_the_byte_budget() {
+        let small = run(1, 16);
+        let copies = 100_000;
+        assert!(copies_fit_plus(&small, copies, 0, 0), "the template alone passes");
+        assert!(!copies_fit_plus(&small, copies, 0, 700), "the key bytes each copy gains do not");
     }
 
     #[test]
