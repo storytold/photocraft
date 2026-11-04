@@ -130,10 +130,7 @@ fn fresh_stylistic_sets_round_trip_through_psd() {
         text: "Hi".into(),
         runs: vec![TextRun {
             len: 2,
-            style: CharStyle {
-                features: vec![FontFeature { tag: "ss01".into(), value: 1 }, FontFeature { tag: "ss05".into(), value: 1 }],
-                ..base
-            },
+            style: CharStyle { features: vec![FontFeature { tag: "ss01".into(), value: 1 }, FontFeature { tag: "ss05".into(), value: 1 }], ..base },
         }],
         ..Default::default()
     };
@@ -144,8 +141,17 @@ fn fresh_stylistic_sets_round_trip_through_psd() {
     doc.layers.push(Layer::new("t", LayerContent::Text(r)));
     let bytes = photocraft_io::export(&doc, "k.psd", &Default::default()).unwrap().bytes;
     let file = photocraft_psd::PsdFile::from_bytes(&bytes).unwrap();
-    let txt2 = file.global_blocks.iter().find(|b| &b.key == b"Txt2").and_then(|b| photocraft_text::psd::parse_txt2(&b.data)).expect("Txt2 written for stylistic sets");
-    let style = txt2.path(&["1", "1"]).and_then(E::as_array).and_then(|a| a.first()).and_then(|o| o.path(&["0", "6", "0"])).and_then(E::as_array).and_then(|a| a.first()).and_then(|r| r.path(&["0", "0", "6"])).expect("style run");
+    let txt2 =
+        file.global_blocks.iter().find(|b| &b.key == b"Txt2").and_then(|b| photocraft_text::psd::parse_txt2(&b.data)).expect("Txt2 written for stylistic sets");
+    let style = txt2
+        .path(&["1", "1"])
+        .and_then(E::as_array)
+        .and_then(|a| a.first())
+        .and_then(|o| o.path(&["0", "6", "0"]))
+        .and_then(E::as_array)
+        .and_then(|a| a.first())
+        .and_then(|r| r.path(&["0", "0", "6"]))
+        .expect("style run");
     // Bits 0 and 4 → sets 1 and 5.
     assert_eq!(style.get("85").and_then(E::as_i64), Some((1 << 0) | (1 << 4)));
     assert_eq!(style.path(&["53", "99"]).and_then(E::as_str), Some("SimplePaint"), "paint stream tag");
