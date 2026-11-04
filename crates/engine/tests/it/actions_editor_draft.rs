@@ -47,7 +47,7 @@ fn namesake_rename_follows_only_the_first_resolved_occurrence_in_both_editors() 
             s.actions.list.insert(1, s.actions.list[0].clone());
             s.actions.list[2].steps.push(("actions.conditional".into(), json!({"if":"always","then":"Original","else":"Other"})));
             s.prefs.edit(|prefs| {
-                prefs.alternate_shortcuts.insert("actions.play:Original".into(), "Shift+F8".into());
+                prefs.alternate_shortcuts.insert("actions.play:Original".into(), vec!["Shift+F8".into()]);
             });
             if modern {
                 let draft = open(&mut s, json!({"action":index}));
@@ -67,7 +67,7 @@ fn namesake_rename_follows_only_the_first_resolved_occurrence_in_both_editors() 
             assert_eq!(caller.steps[1].1["else"], "Other");
             let key = format!("actions.play:{owner}");
             assert_eq!(s.prefs().shortcuts.get(&key).map(String::as_str), Some("F6"));
-            assert_eq!(s.prefs().alternate_shortcuts.get(&key).map(String::as_str), Some("Shift+F8"));
+            assert_eq!(s.prefs().alternate_shortcuts[&key], ["Shift+F8"]);
             let other = if index == 0 { "Original" } else { "Renamed" };
             assert!(!s.prefs().shortcuts.contains_key(&format!("actions.play:{other}")));
             assert!(!s.prefs().alternate_shortcuts.contains_key(&format!("actions.play:{other}")));

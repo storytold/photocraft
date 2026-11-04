@@ -989,10 +989,8 @@ impl PausedPlaybacks {
     fn pause(&mut self, frame: Frame, dialog: u64, gate: Option<Gate>, used: u64, doc: Option<photocraft_doc::DocId>) -> Result<u64, String> {
         let token = self.last.checked_add(1).ok_or("action step dialog identities exhausted")?;
         self.last = token;
-        self.paused.insert(
-            token,
-            PausedPlayback { frame, dialog, gate, record: None, parents: Vec::new(), then: Vec::new(), ran: 0, used, incremental: false, doc },
-        );
+        self.paused
+            .insert(token, PausedPlayback { frame, dialog, gate, record: None, parents: Vec::new(), then: Vec::new(), ran: 0, used, incremental: false, doc });
         Ok(token)
     }
 
