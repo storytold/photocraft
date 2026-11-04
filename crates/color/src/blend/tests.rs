@@ -2,6 +2,35 @@ use super::*;
 
 const E: f32 = 1e-5;
 
+#[test]
+fn finite_signed_extreme_nonseparable_hdr_does_not_publish_infinity_or_nan() {
+    let max = f32::MAX;
+    let gray = [max; 3];
+    let signed = [max, -max, 0.];
+    // The original SetLum subtraction overflowed before gamut clipping could produce white.
+    for (mode, cb, cs) in [(BlendMode::Color, gray, signed), (BlendMode::Luminosity, signed, gray)] {
+        let out = blend_rgb_hdr(mode, cb, cs);
+        assert!(out.iter().all(|v| v.is_finite()), "{mode:?}: {out:?}");
+        for value in out {
+            assert!((value / max - 1.).abs() < E, "{mode:?}: {out:?}");
+        }
+    }
+    let values = [-max, 0., max];
+    for mode in [BlendMode::Hue, BlendMode::Saturation, BlendMode::Color, BlendMode::Luminosity] {
+        for b in 0..27 {
+            let cb = [values[b % 3], values[b / 3 % 3], values[b / 9]];
+            for s in 0..27 {
+                let cs = [values[s % 3], values[s / 3 % 3], values[s / 9]];
+                let out = blend_rgb_hdr(mode, cb, cs);
+                assert!(out.iter().all(|v| v.is_finite()), "{mode:?}: {cb:?}, {cs:?} -> {out:?}");
+            }
+        }
+        for (cb, cs) in [([0.2, 0.7, 0.4], [0.8, 0.3, 0.6]), ([-0.5, 2., 4.], [8., 0.25, -1.])] {
+            assert_eq!(blend_rgb_hdr(mode, cb, cs), blend_rgb_within(mode, cb, cs, max));
+        }
+    }
+}
+
 fn close(a: f32, b: f32) -> bool {
     (a - b).abs() < E
 }

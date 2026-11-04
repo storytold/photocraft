@@ -8,6 +8,7 @@
 //! keep the mixed result as their pixels, so PSD import mixes ([`mix`]) and export unmixes
 //! ([`unmix`]).
 
+use photocraft_color::SampleType;
 use photocraft_doc::LayerMask;
 use photocraft_raster::Surface;
 
@@ -37,6 +38,26 @@ pub fn mix(base: &Surface, filtered: &Surface, mask: &LayerMask) -> Surface {
         let mut o = vec![0.0f32; b.len()];
         for (i, ((bp, fp), op)) in b.chunks_exact(n).zip(f.chunks_exact(n)).zip(o.chunks_exact_mut(n)).enumerate() {
             let m = k.get(i).copied().unwrap_or(1.0).clamp(0.0, 1.0);
+            if fmt.sample == SampleType::F32 {
+                // Native float colors can be signed or HDR. Weighted F64 sums also avoid overflowing
+                // the difference between opposite finite F32 extremes before applying coverage.
+                let m = f64::from(m);
+                if fmt.alpha {
+                    let a = n - 1;
+                    let before = f64::from(bp[a]) * (1.0 - m);
+                    let after = f64::from(fp[a]) * m;
+                    let alpha = before + after;
+                    op[a] = alpha as f32;
+                    for c in 0..a {
+                        op[c] = if alpha > 0.0 { ((f64::from(bp[c]) * before + f64::from(fp[c]) * after) / alpha) as f32 } else { 0.0 };
+                    }
+                } else {
+                    for c in 0..n {
+                        op[c] = (f64::from(bp[c]) * (1.0 - m) + f64::from(fp[c]) * m) as f32;
+                    }
+                }
+                continue;
+            }
             if !fmt.alpha {
                 for c in 0..n {
                     op[c] = bp[c] + (fp[c] - bp[c]) * m;
@@ -144,6 +165,85 @@ mod tests {
         let mut m = LayerMask::reveal_all();
         m.surface = surface(PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false), |x, _| vec![x as f32 / 7.0]);
         m
+    }
+
+    #[test]
+    fn selection_mix_preserves_native_float_hdr_and_integer_ranges() {
+        for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab] {
+            for depth in SampleType::ALL {
+                for alpha in [false, true] {
+                    let fmt = PixelFormat::new(mode, depth, alpha);
+                    let n = fmt.channels();
+                    let colors = n - usize::from(alpha);
+                    let mut b: Vec<f32> = (0..n).map(|c| if c % 2 == 0 { -2. } else { 4. }).collect();
+                    let mut f: Vec<f32> = (0..n).map(|c| if c % 2 == 0 { 4. } else { -2. }).collect();
+                    if alpha {
+                        b[colors] = 0.25;
+                        f[colors] = 0.75;
+                    }
+                    let mut base = Surface::new(fmt);
+                    let mut filtered = Surface::new(fmt);
+                    base.write_pixel(0, 0, &b);
+                    filtered.write_pixel(0, 0, &f);
+                    let (b, f) = (base.pixel(0, 0), filtered.pixel(0, 0));
+                    for coverage in [0., 0.5, 1.] {
+                        let mut mask = LayerMask::reveal_all();
+                        mask.surface = Surface::with_default(PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false), &[coverage]);
+                        let out = mix(&base, &filtered, &mask).pixel(0, 0);
+                        let before = if alpha { f64::from(b[colors]) } else { 1. } * (1. - f64::from(coverage));
+                        let after = if alpha { f64::from(f[colors]) } else { 1. } * f64::from(coverage);
+                        let weight = before + after;
+                        let mut expected = vec![0.; n];
+                        for c in 0..colors {
+                            expected[c] = ((f64::from(b[c]) * before + f64::from(f[c]) * after) / weight) as f32;
+                            if depth != SampleType::F32 {
+                                expected[c] = expected[c].clamp(0., 1.);
+                            }
+                        }
+                        if alpha {
+                            expected[colors] = weight as f32;
+                        }
+                        let epsilon = match depth {
+                            SampleType::U8 => 1. / 255. + 1e-6,
+                            SampleType::U16 => 1. / 65535. + 1e-6,
+                            SampleType::F32 => 1e-6,
+                        };
+                        assert!(
+                            out.iter().zip(&expected).all(|(a, b)| a.is_finite() && (a - b).abs() <= epsilon),
+                            "{fmt:?} {coverage}: {out:?} vs {expected:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn float_selection_mix_of_opposite_finite_extremes_stays_finite() {
+        for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab] {
+            for alpha in [false, true] {
+                let fmt = PixelFormat::new(mode, SampleType::F32, alpha);
+                let colors = fmt.channels() - usize::from(alpha);
+                let mut b = vec![f32::MAX; fmt.channels()];
+                let mut f = vec![-f32::MAX; fmt.channels()];
+                if alpha {
+                    b[colors] = 0.25;
+                    f[colors] = 0.75;
+                }
+                let mut base = Surface::new(fmt);
+                let mut filtered = Surface::new(fmt);
+                base.write_pixel(0, 0, &b);
+                filtered.write_pixel(0, 0, &f);
+                let mut mask = LayerMask::reveal_all();
+                mask.surface = Surface::with_default(PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false), &[0.5]);
+                let out = mix(&base, &filtered, &mask).pixel(0, 0);
+                assert!(out.iter().all(|v| v.is_finite()), "{fmt:?}: {out:?}");
+                assert_eq!(&out[..colors], vec![if alpha { -f32::MAX / 2. } else { 0. }; colors]);
+                if alpha {
+                    assert_eq!(out[colors], 0.5);
+                }
+            }
+        }
     }
 
     #[test]

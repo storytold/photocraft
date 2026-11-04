@@ -439,7 +439,21 @@ pub fn blend_rgb_within(mode: BlendMode, cb: [f32; 3], cs: [f32; 3], top: f32) -
 /// [`blend_rgb`] for 32-bit float documents: separable modes use [`blend_channel_hdr`], and the
 /// non-separable ones keep values above 1 ([`blend_rgb_within`] at `f32::MAX`).
 pub fn blend_rgb_hdr(mode: BlendMode, cb: [f32; 3], cs: [f32; 3]) -> [f32; 3] {
-    if mode.is_separable() { std::array::from_fn(|i| blend_channel_hdr(mode, cb[i], cs[i])) } else { blend_rgb_within(mode, cb, cs, f32::MAX) }
+    if mode.is_separable() {
+        return std::array::from_fn(|i| blend_channel_hdr(mode, cb[i], cs[i]));
+    }
+    let out = blend_rgb_within(mode, cb, cs, f32::MAX);
+    if out.iter().all(|v| v.is_finite()) || cb.iter().chain(&cs).any(|v| !v.is_finite()) {
+        return out;
+    }
+    // SetLum, SetSat and ClipColor are homogeneous when their gamut bound scales too.
+    // Replay only overflowing finite inputs in a shared normalized domain, then restore
+    // magnitude in f64. Ordinary native arithmetic and its rounding remain unchanged.
+    let scale = cb.iter().chain(&cs).map(|v| f64::from(*v).abs()).fold(1f64, f64::max);
+    let normalized = |c: [f32; 3]| c.map(|v| (f64::from(v) / scale) as f32);
+    let top = (f64::from(f32::MAX) / scale) as f32;
+    blend_rgb_within(mode, normalized(cb), normalized(cs), top)
+        .map(|v| (f64::from(v) * scale).clamp(-f64::from(f32::MAX), f64::from(f32::MAX)) as f32)
 }
 
 /// Composite a straight-alpha source over a straight-alpha backdrop with blend mode and opacity.
