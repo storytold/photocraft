@@ -1,20 +1,34 @@
 //! Import resolves explicit set names before normalizing duplicate action names.
-use photocraft_engine::{Session, actions_cmds::Action, atn_cmds};
+use photocraft_engine::{
+    Session,
+    actions_cmds::Action,
+    preset_store::{self, ACTIONS_FILE, MAX_ACTIONS_BYTES, MemBackend, PresetBackend},
+};
 use photocraft_psd::{
     atn::{self, AtnFile},
     descriptor::UnicodeString,
 };
 use serde_json::json;
 
-/// Each call to the public exporter supplies one physical row, including repeated names.
-fn row(name: &str, actions: Vec<Action>) -> AtnFile {
+/// The durable writer preserves explicit set scopes through its exact native fallback.
+/// Portable Photoshop projection may omit those scopes; it is not this loader fixture's input.
+fn row(name: &str, mut actions: Vec<Action>) -> AtnFile {
     if actions.is_empty() {
         return AtnFile { name: UnicodeString::new_nul(name), ..Default::default() };
     }
-    let refs: Vec<_> = actions.iter().collect();
-    let (bytes, skipped) = atn_cmds::export(name, &refs, &[], false).unwrap();
-    assert!(skipped.is_empty());
-    atn::parse(&bytes).unwrap()
+    let store = MemBackend::default();
+    let mut session = Session::new();
+    assert!(session.attach_preset_store(preset_store::open(Box::new(store.clone()))).is_empty());
+    for action in &mut actions {
+        action.set = Some(name.to_string());
+    }
+    session.actions.list = actions;
+    session.actions.rev += 1;
+    session.sync_preset_store();
+    let bytes = store.read(ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap();
+    let mut rows = atn::parse_sets(&bytes).unwrap();
+    assert_eq!(rows.len(), 1, "metadata-free fixture has exactly its real set row");
+    rows.remove(0)
 }
 
 fn finish(marker: &str) -> Action {
@@ -43,6 +57,13 @@ fn imported_named_set_calls_keep_their_target_through_duplicate_action_renaming(
                     row("C", caller),
                     row("Empty", Vec::new()),
                 ];
+                if let Some(scope) = scope {
+                    let caller = files[3].actions.iter().find(|action| action.name.to_string_lossy() == "Caller").unwrap();
+                    assert_eq!(caller.items[0].event, atn::AtnEvent::name("photocraftCommand"), "fixture must retain the recorded set");
+                    let bytes = atn::write(&files[3]).unwrap();
+                    let imported = photocraft_engine::atn_cmds::import(&bytes).unwrap();
+                    assert_eq!(imported.actions[0].steps[0].1["set"], scope);
+                }
                 let bytes = atn::write_sets(&files).unwrap();
                 let mut session = Session::new();
                 session.execute("file.new", json!({"width":8,"height":8})).unwrap();
@@ -58,7 +79,7 @@ fn imported_named_set_calls_keep_their_target_through_duplicate_action_renaming(
                     None
                 };
                 if let Some(expected) = expected {
-                    result.unwrap();
+                    result.unwrap_or_else(|error| panic!("conditional={conditional}, local={local}, scope={scope:?}: {error}"));
                     let caller = session.actions.list.iter().find(|action| action.name == "Caller").unwrap();
                     let target = caller.steps[0].1[if conditional { "then" } else { "action" }].as_str().unwrap();
                     let resolved = session.actions.list.iter().find(|action| action.name == target).unwrap();
