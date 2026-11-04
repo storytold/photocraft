@@ -21,6 +21,34 @@ pub use transform::{
     BoxResize, CamTransform, ContentAwareOptions, Extras, MadeLayer, TextEdit, TransformMode, TransformSession, TypeInsertionStyle, TypeTransform,
 };
 
+/// Which side of the canvas holds the tool palette. `Start` follows the UI direction; the
+/// physical sides pin it so the palette can sit beside the right-hand dock.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ToolbarSide {
+    #[default]
+    Start,
+    Left,
+    Right,
+}
+
+impl ToolbarSide {
+    pub fn resolve(self) -> Self {
+        match self {
+            Self::Start if crate::direction::is_rtl() => Self::Right,
+            Self::Start => Self::Left,
+            side => side,
+        }
+    }
+
+    pub fn other(self) -> Self {
+        match self.resolve() {
+            Self::Right => Self::Left,
+            _ => Self::Right,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Panels {
     pub layers: bool,
@@ -43,6 +71,9 @@ pub struct Panels {
     /// The toolbar's header chevron: two columns even when one fits (#1197).
     #[serde(default)]
     pub toolbar_double: bool,
+    /// Physical side of the tool palette. `Start` mirrors with the reading direction.
+    #[serde(default)]
+    pub toolbar_side: ToolbarSide,
     /// The right-hand panel dock. ⇧Tab hides and shows it, as in Photoshop (#1313).
     #[serde(default = "yes")]
     pub dock: bool,
@@ -82,6 +113,7 @@ impl Default for Panels {
             brushes: false,
             character: false,
             toolbar_double: false,
+            toolbar_side: ToolbarSide::Start,
             dock: true,
             hidden_by_tab: None,
             full_screen_chrome: false,
@@ -692,6 +724,28 @@ impl UiState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn toolbar_side_defaults_to_start_and_round_trips() {
+        assert_eq!(ToolbarSide::default(), ToolbarSide::Start);
+        assert_eq!(Panels::default().toolbar_side, ToolbarSide::Start);
+        let value = serde_json::to_value(Panels::default()).unwrap();
+        assert_eq!(value["toolbar_side"], "start");
+        assert_eq!(serde_json::from_value::<Panels>(value).unwrap(), Panels::default());
+
+        let mut right = Panels::default();
+        right.toolbar_side = ToolbarSide::Right;
+        let value = serde_json::to_value(&right).unwrap();
+        assert_eq!(value["toolbar_side"], "right");
+        assert_eq!(serde_json::from_value::<Panels>(value).unwrap(), right);
+
+        let mut old = serde_json::to_value(Panels::default()).unwrap();
+        old.as_object_mut().unwrap().remove("toolbar_side");
+        assert_eq!(serde_json::from_value::<Panels>(old).unwrap().toolbar_side, ToolbarSide::Start);
+
+        assert_eq!(ToolbarSide::Left.other(), ToolbarSide::Right);
+        assert_eq!(ToolbarSide::Right.other(), ToolbarSide::Left);
+    }
 
     #[test]
     fn sample_all_layers_is_per_tool_and_old_prefs_load() {

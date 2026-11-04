@@ -1,5 +1,6 @@
 use super::options_bar::reveal_focused_control;
 use super::{Align2, Color32, PhotocraftApp, Pos2, Rect, Sense, Stroke, StrokeKind, Tokens, Tool, c32, icons, json, pos2, vec2};
+use crate::state::ToolbarSide;
 
 // ----------------------------------------------------------------------------- toolbar
 
@@ -100,20 +101,40 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // Two columns when the header chevron asks for them; a column that doesn't fit scrolls.
     let double = app.ui.panels.toolbar_double;
     let w = if double { w1 + bx + 2.0 } else { w1 };
-    crate::direction::start_panel("toolbar")
+    let side = app.ui.panels.toolbar_side.resolve();
+    let panel = if side == ToolbarSide::Right { egui::Panel::right("toolbar") } else { egui::Panel::left("toolbar") };
+    panel
         .resizable(false)
         .exact_size(w)
         .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(m, 8)))
         .show(ui, |ui| {
             // Toolbar width is a user preference, not a Pro-only feature.
             // Keep the same hit target in every theme (including RTL layouts).
-            let (cr, resp) = ui.allocate_exact_size(vec2(bx, 14.0), Sense::click());
-            let (shrink, grow) = if crate::direction::is_rtl() { ("chevrons-right", "chevrons-left") } else { ("chevrons-left", "chevrons-right") };
-            icons::paint(ui, cr, if double { shrink } else { grow }, 11.0, if resp.hovered() { t.text } else { t.text_faint });
-            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Toolbar")));
-            if resp.clicked() {
-                app.ui.panels.toolbar_double = !double;
-            }
+            ui.allocate_ui_with_layout(vec2(bx, 14.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                let (cr, resp) = ui.allocate_exact_size(vec2(bx.min(14.0), 14.0), Sense::click());
+                let (shrink, grow) = if side == ToolbarSide::Right {
+                    ("chevrons-right", "chevrons-left")
+                } else {
+                    ("chevrons-left", "chevrons-right")
+                };
+                icons::paint(ui, cr, if double { shrink } else { grow }, 11.0, if resp.hovered() { t.text } else { t.text_faint });
+                resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Toolbar")));
+                if resp.clicked() {
+                    app.ui.panels.toolbar_double = !double;
+                }
+                let other = side.other();
+                let (dock_tip, dock_icon) = match other {
+                    ToolbarSide::Right => ("Move Toolbar to the Right", "panel-right"),
+                    _ => ("Move Toolbar to the Left", "panel-left"),
+                };
+                let (dr, dock) = ui.allocate_exact_size(vec2((bx - 16.0).max(14.0), 14.0), Sense::click());
+                icons::paint(ui, dr, dock_icon, 11.0, if dock.hovered() { t.text } else { t.text_faint });
+                dock.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!(dock_tip)));
+                if dock.on_hover_text(tl!(dock_tip)).clicked() {
+                    app.ui.panels.toolbar_side = other;
+                }
+            });
             ui.add_space(4.0);
             // Subtle violet wash at the bottom of the toolbar.
             let full = ui.max_rect();
@@ -268,8 +289,10 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                     if let Some((open_key, anchor)) = ui.data(|d| d.get_temp::<(egui::Id, Rect)>(flyout_id))
                                         && open_key == key
                                     {
-                                        // Beside the tool, towards the canvas.
-                                        let (pivot, pos) = if crate::direction::is_rtl() {
+                                        // Beside the tool, towards the canvas: a toolbar on the
+                                        // physical right opens its flyout to the left.
+                                        let physical_right = side == ToolbarSide::Right;
+                                        let (pivot, pos) = if physical_right {
                                             (egui::Align2::RIGHT_TOP, anchor.left_top() - vec2(6.0, 0.0))
                                         } else {
                                             (egui::Align2::LEFT_TOP, anchor.right_top() + vec2(6.0, 0.0))
