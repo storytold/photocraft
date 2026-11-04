@@ -55,11 +55,21 @@ fn rle_layer_workspace_tracks_band_and_overlapping_channel_buffers() {
 
 #[test]
 fn psb_rle_workspace_uses_four_byte_row_counts() {
-    let file = large_rle_layer(1_024, 2_048, Version::Psb);
+    // A one-pixel-wide row makes the row table dominate the peak workspace. If PSB entries are
+    // accidentally read as two-byte PSD counts, the computed table charge is halved and this
+    // exact accounting assertion fails.
+    let file = large_rle_layer(1, 2_048, Version::Psb);
     let rec = file.layers().first().unwrap();
     let (width, height) = rec.rect.size().unwrap();
     let workspace = rle_layer_workspace(rec, width, height, 3, 1, &file).unwrap();
 
+    let bands = super::super::psd_import::band_rows(rec.rect.top, height, width * 4);
+    let row_tables = height as u64 * 4 * 4; // rows × 4-byte PSB entries × four decoded channels
+    let row_indexes = (height as u64 + 1) * 8 * 4; // one u64 offset table per channel
+    let band_ranges = bands.capacity() as u64 * std::mem::size_of::<(usize, usize)>() as u64;
+    let expected = row_tables + row_indexes + band_ranges;
+
+    assert_eq!(workspace, expected, "PSB RLE preflight must account for every four-byte row count");
     assert!(workspace < 64 << 20, "PSB RLE should use bounded row bands: {workspace}");
     assert!(check(&file, DEFAULT_PSD_IMPORT_PIXEL_BYTES).is_ok());
 }
@@ -103,8 +113,20 @@ fn rle_mask_tracks_tile_rows_and_zip_mask_keeps_full_plane_guard() {
     }
     let mask_channel = rec.channels.iter_mut().find(|channel| channel.id == CHANNEL_USER_MASK).unwrap();
     *mask_channel = rle_channel(CHANNEL_USER_MASK, 4_096, 2_048, Version::Psd);
-    let rle_workspace =
-        rle_mask_workspace(rle_mask.layers()[0].channel(CHANNEL_USER_MASK).unwrap(), Rect::from_xywh(0, 0, 4_096, 2_048), 1, Version::Psd).unwrap();
+    let mask_rect = Rect::from_xywh(0, 0, 4_096, 2_048);
+    let rle_workspace = rle_mask_workspace(rle_mask.layers()[0].channel(CHANNEL_USER_MASK).unwrap(), mask_rect, 1, Version::Psd).unwrap();
+    let layer_workspace = rle_mask
+        .layers()
+        .iter()
+        .filter_map(|layer| {
+            let (width, height) = layer.rect.size().ok()?;
+            rle_layer_workspace(layer, width, height, 3, 1, &rle_mask)
+        })
+        .max()
+        .unwrap_or_default();
+    assert!(rle_workspace > layer_workspace, "fixture makes the user-mask RLE workspace the largest scratch charge");
+    let estimate = super::estimate(&rle_mask).unwrap();
+    assert_eq!(estimate.workspace_bytes, rle_workspace, "the overall estimate must charge the RLE user-mask workspace");
 
     let mut zip_mask = rle_mask.clone();
     zip_mask.layers_mut()[0].channels.iter_mut().find(|channel| channel.id == CHANNEL_USER_MASK).unwrap().compression = Some(Compression::Zip);
@@ -126,6 +148,7 @@ fn large_rle_layer_fits_without_decoding_or_changing_retained_tiles() {
     let mut surface = ImportBudget::default();
     surface.surface(rec.rect, 4, 1).unwrap();
     assert_eq!(surface.retained, 937_689_088);
+    assert!(estimate.tile_bytes >= surface.retained, "estimate must charge the large layer tiles: {}", estimate.tile_bytes);
 }
 
 #[test]
