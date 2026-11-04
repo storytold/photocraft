@@ -93,6 +93,15 @@ pub fn mix(base: &Surface, filtered: &Surface, area: Rect, mode: BlendMode, opac
             if alpha > 0. {
                 for c in 0..3 {
                     rgba[c] = (cb[c] * b[3] * (1. - opacity) + color[c] * t[3] * opacity) / alpha;
+                    if fmt.sample == SampleType::F32 && !rgba[c].is_finite() && [cb[c], color[c], b[3], t[3], alpha].into_iter().all(f32::is_finite) {
+                        // Even an identical MAX-valued pixel can overflow after f32 weighted
+                        // division. Recompute only that exceptional channel with wide weights.
+                        let before = f64::from(b[3]) * (1. - f64::from(opacity));
+                        let after = f64::from(t[3]) * f64::from(opacity);
+                        let coverage = before + after;
+                        let value = if coverage > 0. { (f64::from(cb[c]) * before + f64::from(color[c]) * after) / coverage } else { 0. };
+                        rgba[c] = value.clamp(-f64::from(f32::MAX), f64::from(f32::MAX)) as f32;
+                    }
                 }
             }
             photocraft_raster::from_rgba_into(&fmt, rgba, op);
@@ -256,6 +265,18 @@ mod tests {
                 }
                 assert!(result.pixel(0, 0).iter().all(|value| value.is_finite()));
             }
+        }
+    }
+
+    #[test]
+    fn normal_fractional_strength_preserves_identical_signed_max_pixels() {
+        let area = Rect::new(0, 0, 1, 1);
+        for value in [-f32::MAX, f32::MAX] {
+            let base = surface(PixelFormat::RGBA32F, [value, value, value, 0.01], area);
+            let result = mix(&base, &base, area, BlendMode::Normal, 0.03, &Interrupt::NONE).unwrap();
+            let pixel = result.pixel(0, 0);
+            assert!(pixel.iter().all(|value| value.is_finite()));
+            assert_eq!(pixel, base.pixel(0, 0));
         }
     }
 
