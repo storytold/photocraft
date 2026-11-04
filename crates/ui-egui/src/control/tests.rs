@@ -1004,6 +1004,39 @@ fn ui_set_drives_the_eyedropper_options() {
     assert_eq!(app.ui.tool_options.eyedropper_size, 1);
 }
 
+/// #9713: the Pen and shape tools' Path Options over the control channel, reported by `ui.inspect`.
+#[test]
+fn ui_set_drives_the_path_options() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let ctx = egui::Context::default();
+    let good = call(&mut app, &ctx, "ui.set", json!({"pathColor": "red", "pathThickness": 2.5, "anchorSize": 7, "pathMarkStart": true}));
+    assert_eq!(good["ok"], true, "{good}");
+    let o = &app.ui.tool_options;
+    assert_eq!((o.path_color.as_str(), o.path_thickness, o.anchor_size, o.path_mark_start), ("red", 2.5, 7, true));
+    let shown = &call(&mut app, &ctx, "ui.inspect", json!({}))["result"]["toolOptions"];
+    assert_eq!((shown["path_color"].as_str(), shown["anchor_size"].as_u64()), (Some("red"), Some(7)));
+    assert_eq!((shown["path_thickness"].as_f64(), shown["path_mark_start"].as_bool()), (Some(2.5), Some(true)));
+    for bad in [
+        json!({"pathColor": "plaid"}),
+        json!({"pathColor": 3}),
+        json!({"pathThickness": 0.1}),
+        json!({"pathThickness": 9}),
+        json!({"pathThickness": "thin"}),
+        json!({"anchorSize": 0}),
+        json!({"anchorSize": 8}),
+        json!({"anchorSize": 2.5}),
+        json!({"pathMarkStart": "yes"}),
+    ] {
+        let r = call(&mut app, &ctx, "ui.set", bad.clone());
+        assert_eq!(r["ok"], false, "{bad}: {r}");
+    }
+    // A rejected call applies none of its fields.
+    let r = call(&mut app, &ctx, "ui.set", json!({"pathColor": "black", "pathThickness": 1.0, "pathMarkStart": false, "anchorSize": 99}));
+    assert_eq!(r["ok"], false, "{r}");
+    let o = &app.ui.tool_options;
+    assert_eq!((o.path_color.as_str(), o.path_thickness, o.path_mark_start, o.anchor_size), ("red", 2.5, true, 7));
+}
+
 /// #1046: the Color Sampler tool is selectable over the control channel and reported as active.
 #[test]
 fn ui_set_selects_the_color_sampler_tool() {
