@@ -243,6 +243,7 @@ pub(super) fn web_frame_document(doc: &photocraft_doc::Document, frame: Option<u
     Ok((*preview.active().ok_or(photocraft_engine::EngineError::NoDocument)?.doc).clone())
 }
 
+/// Lay out the preview and settings without letting their content resize the dialog.
 pub(super) fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let t = Tokens::get(ui.ctx());
     let Some(doc) = app.session.active().map(|d| d.doc.clone()) else { return };

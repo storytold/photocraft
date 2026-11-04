@@ -864,6 +864,7 @@ fn web_preview_keeps_its_size_and_zoom_while_the_pointer_moves() {
     assert!(drifted.is_empty(), "the dialog or its zoom changed while the pointer moved: {drifted:#?}");
 }
 
+/// Wide settings text must not widen the dialog during pointer or keyboard repaints.
 #[test]
 fn web_settings_keep_dialog_width_stable_with_large_ui_font() {
     let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(2560.0, 1380.0)).with_pixels_per_point(1.0).with_max_steps(64).build_eframe(|cc| {
