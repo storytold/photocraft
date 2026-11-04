@@ -308,7 +308,10 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     } else {
         vec![(ButtonRole::Default, "Yes", Some(Key::Y), 84.0, Answer::Save), (ButtonRole::Alternate, "No", Some(Key::N), 84.0, Answer::Discard), cancel]
     };
-    let mut answer = ctx.input_mut(|i| buttons.iter().find(|b| b.2.is_some_and(|k| i.consume_key(egui::Modifiers::NONE, k))).map(|b| b.4));
+    // An answer's letter presses it, alone or with ⌘ (Ctrl off the Mac): Photoshop's ⌘D is
+    // Don't Save (#11282).
+    let pressed = |i: &mut egui::InputState, k: Key| i.consume_key(egui::Modifiers::NONE, k) || i.consume_key(egui::Modifiers::COMMAND, k);
+    let mut answer = ctx.input_mut(|i| buttons.iter().find(|b| b.2.is_some_and(|k| pressed(i, k))).map(|b| b.4));
     let labels = button_labels(mac, &buttons.iter().map(|b| (b.1, b.2)).collect::<Vec<_>>());
     let row: Vec<DialogButton> =
         buttons.iter().zip(&labels).map(|(b, label)| DialogButton::new(b.0, label, b.3).focus(focus && b.0 == ButtonRole::Default)).collect();
