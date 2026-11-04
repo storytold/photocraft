@@ -39,7 +39,7 @@ fn blur_draft(app: &mut PhotocraftApp) -> u64 {
 fn generic_dialog_checks_the_document_after_the_real_window_control_route() {
     for document in [0, 1] {
         let mut app = app();
-        app.session.execute("file.new", json!({"width":8,"height":6})).unwrap();
+        app.run("file.new", json!({"width":8,"height":6})).unwrap();
         assert!(app.session.set_active(0));
         let id = blur_draft(&mut app);
         preview_draft(&mut app, id, 0).unwrap();
