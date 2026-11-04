@@ -290,7 +290,8 @@ fn stylistic_set_checkmark_follows_the_toggle() {
     menu(&mut app, &ctx, id, json!({})).unwrap();
     assert_eq!(checked(&app, id), Some(false));
     for bad in ["set0", "set21", "set04", "set", "set-1", "setx", "set100"] {
-        assert_eq!(checked(&app, &format!("type.openType.stylisticSets.{bad}")), None, "{bad}");
+        // Not through `checked`, which only finds catalog items: these ids must reach the resolver.
+        assert_eq!(super::dispatch::checked(&app, &format!("type.openType.stylisticSets.{bad}")), None, "{bad}");
     }
 }
 
