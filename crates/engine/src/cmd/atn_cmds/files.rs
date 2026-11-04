@@ -169,6 +169,8 @@ fn import_actions(s: &mut Session, p: &Value, whole: bool) -> Result<Value> {
 /// Encode the selected action or library while retaining its physical source and metadata.
 pub(super) fn save(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "actions.save";
+    let physical = crate::actions_cmds::library::RowBinding::requested(&s.actions, p,
+        crate::actions_cmds::library::placement::SelectorUse::Folder).map_err(|error| bad(cmd, error))?;
     crate::actions_cmds::flush_recording(s)?;
     let skip = match p.get("skipUnsupported") {
         None | Some(Value::Null) => false,
@@ -183,14 +185,7 @@ pub(super) fn save(s: &mut Session, p: &Value) -> Result<Value> {
         Some(Value::String(n)) if !n.trim().is_empty() => Some(n.trim().to_string()),
         Some(_) => return Err(bad(cmd, "`set` must be a non-empty string")),
     };
-    let physical_slot = match p.get("setSlot") {
-        None | Some(Value::Null) => None,
-        Some(value) => Some(value.as_u64().and_then(|slot| usize::try_from(slot).ok())
-            .filter(|slot| s.actions.sets.get(*slot).is_some()).ok_or_else(|| bad(cmd, "`setSlot` is not a current physical folder slot"))?),
-    };
-    if physical_slot.is_some() && p.get("action").is_some() {
-        return Err(bad(cmd, "select either a physical folder or an action"));
-    }
+    let physical_slot = physical.as_ref().map(|binding| binding.slot(&s.actions)).transpose().map_err(|error| bad(cmd, error))?;
     let mut groups = if let Some(slot) = physical_slot {
         let name = s.actions.sets.get(slot).ok_or_else(|| bad(cmd, "the action folder no longer exists"))?;
         if set_param.as_ref().is_some_and(|selected| selected != name) { return Err(bad(cmd, "the physical folder name changed")); }

@@ -674,6 +674,16 @@ matches an existing folder. The warning's OK replaces the library; Append adds t
 Edit > Undo Reset Actions restores only the latest unchanged Reset's definitions and both
 shortcut maps, independently of document History and active recording/playback state.
 
+The existing record, new-draft Open, Assign Set, Duplicate, Delete and Save commands accept
+`setSlot` to select one current physical folder; an optional `set` must match its exact current
+caption. A bare slot is current-state selection, not a stable identifier. The panel retains
+revision and row origin across delayed operations. Set-only calls keep logical caption-wide
+behavior. Physical creation and assignment use contiguous blocks and preserve numeric Play
+and Conditional targets; unrepresentable order or a changed first-name target is refused
+before publication. Destination placement does not replace raw action/event provenance or
+change logical `Action` equality. New-draft Save retains its opening destination and publishes
+only validated definitions and intended shortcut maps.
+
 `actions.insertPath` snapshots the exact selected work, layer or saved path as a native
 `path.set` work-path step, retaining cubic controls, operations, fill rule and inversion.
 The measured Photoshop `set`/`WrPt` descriptor mapping represents non-inverted, even-odd-fill

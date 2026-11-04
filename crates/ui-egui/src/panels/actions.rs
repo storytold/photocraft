@@ -149,6 +149,14 @@ impl FolderSelection {
         if matches.next().is_some() { return Err("the selected Actions folder is ambiguous".into()); }
         row.slot.ok_or_else(|| "the selected Actions folder has no physical slot".into())
     }
+
+    fn checked_params(&self, app: &PhotocraftApp, revision: u64) -> Result<Value, String> {
+        if self.slot.is_some() { return Ok(json!({"set":self.name,"setSlot":self.checked_slot(app, revision)?})); }
+        if app.session.actions.rev != revision { return Err("the selected Actions folder changed".into()); }
+        let rows = photocraft_engine::actions_edit_cmds::set_occurrences(&app.session)?;
+        if rows.iter().filter(|row| self.matches(row)).count() != 1 { return Err("the selected Actions folder changed or is ambiguous".into()); }
+        Ok(json!({"set":self.name}))
+    }
 }
 
 fn selected_occurrence(app: &PhotocraftApp) -> Option<photocraft_engine::actions_edit_cmds::SetOccurrence> {
@@ -728,6 +736,21 @@ fn new_action_set(app: &PhotocraftApp) -> Option<String> {
     }
 }
 
+/// Resolve the actual selected occurrence before opening a recorder or a delayed new draft.
+fn new_action_params(app: &PhotocraftApp) -> Result<Value, String> {
+    let revision = app.session.actions.rev;
+    if app.ui.actions.selected.is_none() && let Some(key) = &app.ui.actions.selected_folder {
+        return key.checked_params(app, revision);
+    }
+    if let Some(index) = app.ui.actions.selected.filter(|&index| index < app.session.actions.list.len()) {
+        let rows = photocraft_engine::actions_edit_cmds::set_occurrences(&app.session)?;
+        if let Some(row) = rows.iter().find(|row| row.actions.contains(&index)) {
+            if row.slot.is_some() { return FolderSelection::from_row(row).checked_params(app, revision); }
+        }
+    }
+    Ok(new_action_set(app).map_or(json!({}), |set| json!({"set":set})))
+}
+
 fn begin_recording(app: &mut PhotocraftApp, append: bool) {
     if app.session.actions.recording_active() {
         return;
@@ -736,19 +759,29 @@ fn begin_recording(app: &mut PhotocraftApp, append: bool) {
     // new action like New Action does, in the selected set.
     let params = match app.ui.actions.selected {
         Some(i) if append => json!({"action": i}),
-        _ => new_action_set(app).map_or(json!({}), |set| json!({"set": set})),
+        _ => match new_action_params(app) {
+            Ok(params) => params,
+            Err(error) => { app.ui.status = error; app.ui.status_error = true; return; }
+        },
     };
+    let old_count = app.session.actions.list.len();
     let Ok(v) = app.run("actions.record", params) else { return };
     let Some(i) = v.get("index").and_then(Value::as_u64).and_then(|n| usize::try_from(n).ok()) else { return };
     app.ui.actions.select(i, None);
-    if app.ui.actions.expanded.len() <= i {
-        app.ui.actions.expanded.resize(i + 1, false);
+    if app.session.actions.list.len() > old_count {
+        app.ui.actions.expanded.resize(old_count, false);
+        app.ui.actions.expanded.insert(i, true);
+    } else {
+        app.ui.actions.expanded.resize(app.session.actions.list.len(), false);
+        if let Some(expanded) = app.ui.actions.expanded.get_mut(i) { *expanded = true; }
     }
-    app.ui.actions.expanded[i] = true;
-    // Its set too, in case its folder is collapsed.
-    if let Some(action) = app.session.actions.list.get(i) {
-        let set = photocraft_engine::atn_cmds::logical_set_name(action.set.as_deref());
-        app.ui.actions.collapsed_sets.retain(|c| c != set);
+    // Reveal only the actual recording folder, retaining independent namesake disclosure.
+    if let Ok(rows) = photocraft_engine::actions_edit_cmds::set_occurrences(&app.session) {
+        if let Some(row) = rows.iter().find(|row| row.actions.contains(&i)) {
+            let key = FolderSelection::from_row(row);
+            app.ui.actions.collapsed_folders.retain(|old| old != &key);
+            if row.origin.is_none() { app.ui.actions.collapsed_sets.retain(|name| name != &row.name); }
+        }
     }
 }
 
@@ -1649,7 +1682,7 @@ fn classic_panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if ui.add_enabled(can_delete || (!recording && selected_set(app).is_some()), egui::Button::new(tl!("Duplicate"))).clicked() {
         act = Some("duplicate");
     }
-    if ui.add_enabled(can_delete, egui::Button::new(tl!("Delete"))).clicked() {
+    if ui.add_enabled(can_delete || (!recording && selected_set(app).is_some()), egui::Button::new(tl!("Delete"))).clicked() {
         act = Some("delete");
     }
     if ui.add_enabled(any, egui::Button::new(tl!("Play"))).clicked() {
@@ -1720,10 +1753,7 @@ fn classic_panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 v.unwrap_or(Value::Null)
             })
         }
-        "delete" => {
-            delete_selection(app);
-            Ok(Value::Null)
-        }
+        "delete" => request_delete(app),
         "duplicate" => duplicate_selection(app),
         "recordAgain" => record_again::open(app),
         "toolRecording" => app.run("actions.allowToolRecording", json!({"enabled": !app.session.actions.record_tools})),
@@ -1752,6 +1782,8 @@ fn classic_panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 struct DragRow {
     action: usize,
     step: Option<usize>,
+    revision: u64,
+    origin: Option<(usize, usize)>,
 }
 
 /// Drops use an insertion line, converted to the final index expected by actions.move.
@@ -1772,6 +1804,45 @@ fn drag_row(ui: &egui::Ui, response: &egui::Response, row: DragRow, t: &Tokens) 
 }
 
 fn move_row(app: &mut PhotocraftApp, source: DragRow, to: usize) {
+    let checked = (|| -> Result<Option<(Value, usize)>, String> {
+        if source.revision != app.session.actions.rev { return Err("The dragged action changed; drag it again".into()); }
+        let rows = photocraft_engine::actions_edit_cmds::set_occurrences(&app.session)?;
+        let source_row = rows.iter().find(|row| row.actions.contains(&source.action)).ok_or("The dragged action no longer exists")?;
+        if source_row.origin != source.origin { return Err("The dragged action folder changed".into()); }
+        if source.step.is_some() { return Ok(None); }
+        if to >= app.session.actions.list.len() { return Err("The drop position changed".into()); }
+        let mut order: Vec<_> = (0..app.session.actions.list.len()).filter(|&index| index != source.action).collect();
+        order.insert(to, source.action);
+        let neighbour = to.checked_sub(1).and_then(|index| order.get(index)).or_else(|| order.get(to + 1));
+        let Some(target) = neighbour.and_then(|index| rows.iter().find(|row| row.actions.contains(index))) else { return Ok(None) };
+        let key = FolderSelection::from_row(target);
+        if !key.matches(source_row) && (source_row.origin.is_some() || target.origin.is_some()) {
+            let mut params = key.checked_params(app, source.revision)?;
+            if params.get("setSlot").is_none() { return Err("The target folder has no physical slot".into()); }
+            params["action"] = json!(source.action);
+            return Ok(Some((params, source.action)));
+        }
+        Ok(None)
+    })();
+    match checked {
+        Err(error) => { app.ui.status = error; app.ui.status_error = true; return; }
+        Ok(Some((params, from))) => {
+            match app.run("actions.assignSet", params) {
+                Ok(result) => {
+                    if let Some(index) = result.get("index").and_then(Value::as_u64).and_then(|index| usize::try_from(index).ok()) {
+                        app.ui.actions.expanded.resize(app.session.actions.list.len(), false);
+                        if from < app.ui.actions.expanded.len() && index < app.ui.actions.expanded.len() {
+                            let expanded = app.ui.actions.expanded.remove(from); app.ui.actions.expanded.insert(index, expanded);
+                        }
+                        app.ui.actions.select(index, None);
+                    }
+                }
+                Err(error) => { app.ui.status = error; app.ui.status_error = true; }
+            }
+            return;
+        }
+        Ok(None) => {}
+    }
     let mut params = json!({"action": source.action, "to": to});
     if let Some(step) = source.step {
         params["step"] = json!(step);
@@ -1802,11 +1873,20 @@ fn move_row(app: &mut PhotocraftApp, source: DragRow, to: usize) {
 /// Keep the selection and disclosure rows on the new copy after the engine edits the list.
 fn duplicate_selection(app: &mut PhotocraftApp) -> Result<Value, String> {
     if let Some(set) = selected_set(app).map(str::to_string) {
+        let params = match &app.ui.actions.selected_folder {
+            Some(key) => key.checked_params(app, app.session.actions.rev)?,
+            None => json!({"set":set}),
+        };
         let old_len = app.session.actions.list.len();
-        let result = app.run("actions.duplicate", json!({"set":set}))?;
+        let result = app.run("actions.duplicate", params)?;
         app.ui.actions.selected = None;
         app.ui.actions.selected_step = None;
         app.ui.actions.selected_set = result.get("set").and_then(Value::as_str).map(str::to_string);
+        app.ui.actions.selected_folder = None;
+        if let Some(slot) = result.get("slot").and_then(Value::as_u64).and_then(|slot| usize::try_from(slot).ok()) {
+            let rows = photocraft_engine::actions_edit_cmds::set_occurrences(&app.session)?;
+            if let Some(row) = rows.iter().find(|row| row.slot == Some(slot)) { app.ui.actions.select_folder(FolderSelection::from_row(row)); }
+        }
         let index = result.get("index").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok()).unwrap_or(old_len);
         let count = app.session.actions.list.len().saturating_sub(old_len);
         app.ui.actions.expanded.resize(old_len, false);
@@ -1838,6 +1918,20 @@ fn duplicate_selection(app: &mut PhotocraftApp) -> Result<Value, String> {
         }
     }
     Ok(result)
+}
+
+fn request_delete(app: &mut PhotocraftApp) -> Result<Value, String> {
+    if app.ui.actions.selected.is_some() { delete_selection(app); return Ok(Value::Null); }
+    let rows = photocraft_engine::actions_edit_cmds::set_occurrences(&app.session)?;
+    let key = if let Some(key) = &app.ui.actions.selected_folder { key.clone() } else {
+        let name = selected_set(app).ok_or("Select an action folder first")?;
+        let mut matches = rows.iter().filter(|row| row.name == name);
+        let row = matches.next().ok_or("The selected folder no longer exists")?;
+        if matches.next().is_some() { return Err("The selected folder is ambiguous".into()); }
+        FolderSelection::from_row(row)
+    };
+    key.checked_params(app, app.session.actions.rev)?;
+    modern::ask_delete(app, None, Some(key))
 }
 
 fn delete_selection(app: &mut PhotocraftApp) {
@@ -2165,7 +2259,7 @@ fn classic_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             } else if resp.hovered() {
                 ui.painter().rect_filled(rect, 0.0, t.hover.gamma_multiply(0.5));
             }
-            if let Some(change) = drag_row(ui, &resp, DragRow { action: i, step: None }, &t) {
+            if let Some(change) = drag_row(ui, &resp, DragRow { action: i, step: None, revision:app.session.actions.rev, origin:folder.and_then(|folder| folder.origin) }, &t) {
                 moved = Some(change);
             }
             let expanded = app.ui.actions.expanded.get(i).copied().unwrap_or(false) && !button_mode;
@@ -2234,7 +2328,7 @@ fn classic_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 }
             }
             if expanded {
-                let context = StepRowsContext { action: i, x0, steps, disabled, dialogs, reveal, tokens: &t };
+                let context = StepRowsContext { action: i, x0, steps, disabled, dialogs, reveal, tokens: &t, origin:folder.and_then(|folder| folder.origin) };
                 let events = draw_step_rows(app, ui, &context);
                 moved = moved.or(events.moved);
                 toggled = toggled.or(events.toggled);
@@ -2298,13 +2392,11 @@ fn classic_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         if crate::icons::button(ui, "plus", 24.0, false, tl!("Create new action")).clicked() && !recording_now {
             begin_recording(app, false);
         }
-        let can_delete = app.ui.actions.selected.is_some() && (!recording_now || app.ui.actions.selected_step.is_some());
+        let can_delete = (app.ui.actions.selected.is_some() && (!recording_now || app.ui.actions.selected_step.is_some())) || (!recording_now && selected_set(app).is_some());
         ui.add_enabled_ui(can_delete, |ui| {
             let response = crate::icons::button(ui, "trash", 24.0, false, tl!("Delete"));
             response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, can_delete, tl!("Delete")));
-            if response.clicked() {
-                delete_selection(app);
-            }
+            if response.clicked() && let Err(error) = request_delete(app) { app.ui.status = error; app.ui.status_error = true; }
         });
         let mode_label = if app.ui.actions.button_mode { tl!("Button Mode On") } else { tl!("Button Mode") };
         let mode_button = ui.add_enabled(!recording_now, egui::Button::new(mode_label).small()).on_hover_text(tl!("Button Mode"));
@@ -2354,6 +2446,7 @@ struct StepRowsContext<'a> {
     dialogs: &'a std::collections::BTreeSet<usize>,
     reveal: Option<(usize, usize)>,
     tokens: &'a Tokens,
+    origin: Option<(usize, usize)>,
 }
 
 #[derive(Default)]
@@ -2372,7 +2465,7 @@ fn draw_step_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui, context: &StepRows
         }
         let label = step_label(id, params);
         draw_step_label(app, ui, rect, &response, step, &label, context);
-        events.moved = drag_row(ui, &response, DragRow { action: context.action, step: Some(step) }, context.tokens).or(events.moved);
+        events.moved = drag_row(ui, &response, DragRow { action: context.action, step: Some(step), revision:app.session.actions.rev, origin:context.origin }, context.tokens).or(events.moved);
         let (check, dialog) = draw_step_controls(ui, rect, step, &label, context);
         if check.clicked() {
             events.toggled = Some((context.action, step));

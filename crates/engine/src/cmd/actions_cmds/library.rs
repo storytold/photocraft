@@ -10,7 +10,7 @@ use super::{Action, ActionState, color_to_atn};
 use crate::atn_cmds::{self, sidecar};
 
 pub(crate) mod placement;
-pub use placement::RowBinding;
+pub use placement::{RowBinding, same_placement};
 
 type Result<T> = std::result::Result<T, String>;
 const MAX_BYTES: usize = crate::preset_store::MAX_ACTIONS_BYTES as usize;

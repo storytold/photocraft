@@ -1,4 +1,4 @@
-//! Isolated checked physical-placement prototype. No public command adapter is installed here.
+//! Checked physical placement used by existing Actions command adapters.
 //! Prepared candidates own definitions/maps only; callers must retain their normal lifetime gates.
 use std::{collections::{BTreeMap, HashMap, HashSet}, sync::Arc};
 use super::{Action, ActionState, RowOrigin, Result, atn_cmds, sidecar};
@@ -55,11 +55,60 @@ impl RowBinding {
         Ok(slot)
     }
 
-    fn apply(&self, action: &mut Action) {
+    pub(crate) fn apply(&self, action: &mut Action) {
         action.set = Some(self.name.clone());
         action.library_row = Some(self.clone());
         sidecar::place_metadata(action, self.carrier.clone());
     }
+}
+
+impl RowBinding {
+    /// Placement-only no-op detection uses the current checked context, not Action::PartialEq.
+    pub(crate) fn contains(&self, state: &ActionState, action: &Action) -> Result<bool> {
+        self.slot(state)?;
+        let raw = state.library.row_index(&state.sets).source(action)?;
+        Ok(atn_cmds::logical_set_name(action.set.as_deref()) == self.name
+            && raw.as_ref().map(RowOrigin::key) == self.row.as_ref().map(RowOrigin::key))
+    }
+}
+
+/// Runtime snapshot comparison only; ordinary Action equality retains its reload contract.
+pub fn same_placement(left: &Action, right: &Action) -> bool {
+    let row = |action: &Action| action.library_row.as_ref().map(|binding| binding.row.as_ref().map(RowOrigin::key))
+        .unwrap_or_else(|| action.library_origin.as_ref().map(|origin| origin.row.key()));
+    if atn_cmds::logical_set_name(left.set.as_deref()) != atn_cmds::logical_set_name(right.set.as_deref()) || row(left) != row(right) { return false; }
+    match (&left.library_row, &right.library_row) {
+        (Some(left), Some(right)) => left.carrier == right.carrier,
+        _ => true,
+    }
+}
+
+/// Publish a fully validated candidate without replacing capture, editor, Owner or counters.
+pub(crate) fn publish(s: &mut crate::Session, definition: ActionState, shortcuts: Keys, alternates: Alternates, changed: bool) {
+    s.actions.list = definition.list;
+    s.actions.sets = definition.sets;
+    s.actions.library = definition.library;
+    s.actions.atn_set_rows = definition.atn_set_rows;
+    if shortcuts != s.prefs().shortcuts || alternates != s.prefs().alternate_shortcuts {
+        s.edit_prefs(|prefs| { prefs.shortcuts = shortcuts; prefs.alternate_shortcuts = alternates; });
+    }
+    if changed { s.actions.touch(); }
+}
+
+impl Prepared {
+    pub(crate) fn publish(self, s: &mut crate::Session) -> Value {
+        publish(s, self.definition, self.shortcuts, self.alternates, true);
+        self.result
+    }
+}
+
+/// Moving indices while a capture/job owns them must fail before any recording flush.
+pub(crate) fn idle(s: &crate::Session, command: &str) -> crate::Result<()> {
+    super::super::not_playing(s, command)?;
+    if s.actions.recording_active() || s.has_recording_job() {
+        return Err(super::super::bad(command, "finish recording and its pending step before editing a physical folder"));
+    }
+    Ok(())
 }
 
 /// All readers use the same checked destination and current row-local carrier.
@@ -229,9 +278,10 @@ pub(crate) fn prepare(state: &ActionState, shortcuts: &Keys, alternates: &Altern
                 value
             }).collect();
             let count = copied.len();
+            let copied_names: Vec<_> = copied.iter().map(|action| action.name.clone()).collect();
             definition.list.splice(at..at, copied);
             crate::actions_edit_cmds::shift_action_calls(&mut definition.list, at, count);
-            json!({"index":at,"set":name,"slot":destination_slot,"actions":count})
+            json!({"index":at,"set":name,"slot":destination_slot,"actions":copied_names})
         }
         Edit::Delete { source } => {
             let slot = source.slot(state)?;

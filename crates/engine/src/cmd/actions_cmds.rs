@@ -548,6 +548,11 @@ fn get(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// Start capture into the selected or newly created definition while refusing incompatible playback state.
 fn record(s: &mut Session, p: &Value) -> Result<Value> {
+    let destination = library::RowBinding::requested(&s.actions, p, library::placement::SelectorUse::NewAction).map_err(|error| bad("actions.record", error))?;
+    if p.get("action").is_some() && (p.get("set").is_some() || p.get("name").is_some()) {
+        return Err(bad("actions.record", "record an existing action without replacement name/set fields"));
+    }
+    if destination.is_some() { library::placement::idle(s, "actions.record")?; }
     not_playing(s, "actions.record")?;
     if s.actions.recording_active() {
         return Err(bad("actions.record", "already recording; stop first"));
@@ -578,9 +583,18 @@ fn record(s: &mut Session, p: &Value) -> Result<Value> {
             Some(Value::String(n)) if !n.trim().is_empty() => Some(n.trim().to_string()),
             Some(_) => return Err(bad("actions.record", "\"set\" must be a set name or null")),
         };
-        s.actions.list.push(Action { set, ..Action::new(name, Vec::new()) });
-        s.actions.touch();
-        s.actions.list.len() - 1
+        let value = Action { set, ..Action::new(name, Vec::new()) };
+        if let Some(destination) = destination {
+            let prepared = library::placement::prepare(&s.actions, &s.prefs().shortcuts, &s.prefs().alternate_shortcuts,
+                library::placement::Edit::Insert { destination, action:value }).map_err(|error| bad("actions.record", error))?;
+            let index = prepared.result["index"].as_u64().and_then(|value| usize::try_from(value).ok()).ok_or_else(|| bad("actions.record", "missing prepared action index"))?;
+            prepared.publish(s);
+            index
+        } else {
+            s.actions.list.push(value);
+            s.actions.touch();
+            s.actions.list.len() - 1
+        }
     };
     s.actions.recording = Some((s.journal.len(), idx));
     s.actions.take = s.actions.take.wrapping_add(1);
@@ -906,6 +920,15 @@ fn move_item(s: &mut Session, p: &Value) -> Result<Value> {
         let moved = s.actions.list.remove(idx);
         let result = json!({"action": moved.name, "index": to});
         s.actions.list.insert(to, moved);
+        // A direct list reorder follows the same known numeric call surface as physical moves.
+        let count = s.actions.list.len();
+        for (id, params) in s.actions.list.iter_mut().flat_map(|action| &mut action.steps) {
+            for &key in call_keys(id) {
+                let Some(old) = params.get(key).and_then(num).and_then(|value| usize::try_from(value).ok()).filter(|&old| old < count) else { continue };
+                let new = moved_index(old, idx, to);
+                if new != old { params[key] = json!(new); }
+            }
+        }
         if let Some((_, recording)) = s.actions.recording.as_mut() {
             *recording = moved_index(*recording, idx, to);
         }
@@ -929,6 +952,13 @@ pub fn moved_index(index: usize, from: usize, to: usize) -> usize {
 
 /// Delete the selected set, action or step with the appropriate playback and recording guards.
 fn delete(s: &mut Session, p: &Value) -> Result<Value> {
+    let physical = library::RowBinding::requested(&s.actions, p, library::placement::SelectorUse::Folder).map_err(|error| bad("actions.delete", error))?;
+    if let Some(source) = physical {
+        library::placement::idle(s, "actions.delete")?;
+        let prepared = library::placement::prepare(&s.actions, &s.prefs().shortcuts, &s.prefs().alternate_shortcuts,
+            library::placement::Edit::Delete { source }).map_err(|error| bad("actions.delete", error))?;
+        return Ok(prepared.publish(s));
+    }
     not_playing(s, "actions.delete")?;
     if p.get("set").is_some() {
         if p.get("action").is_some() || p.get("step").is_some() {
@@ -1226,7 +1256,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Record Action",
             menu: &[],
             shortcut: None,
-            params: r##"{"name":str? (new action, default "Action N"),"set":name? (the set it goes in, as New Action records into the selected set)} or {"action":name|index} (append) → {action, index}"##,
+            params: r##"{"name":str? (new action, default "Action N"),"set":name?,"setSlot":current physical slot? (new action destination; exact optional caption)} or {"action":name|index} (append) → {action, index}"##,
             enabled: always,
             run: record,
             journal: false,
@@ -1256,7 +1286,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Delete Action",
             menu: &[],
             shortcut: None,
-            params: r##"{"action":name|index, "step":index?} or {"set":name} → {deleted:name} or {action,deletedStep,steps} or {deletedSet,deleted:[name…]}. Step is 0-based, including pending recorded steps. Deleting a folder also deletes its contents, including an empty folder. Whole-action/folder deletion requires recording to be stopped. Calls to survivors keep their target; calls to deleted actions become invalid."##,
+            params: r##"{"action":name|index, "step":index?} or {"set":name?,"setSlot":current physical slot?} → {deleted:name} or {action,deletedStep,steps} or {deletedSet,deleted:[name…]}. Step is 0-based, including pending recorded steps. Deleting a folder also deletes its contents, including an empty folder. Whole-action/folder deletion requires recording to be stopped. Calls to survivors keep their target; calls to deleted actions become invalid."##,
             enabled: always,
             run: delete,
             journal: false,

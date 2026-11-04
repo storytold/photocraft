@@ -39,7 +39,7 @@ struct Progress {
 
 enum Delete {
     Action(Box<Action>),
-    Group(String, Vec<Action>, u64),
+    Group(super::FolderSelection, Vec<Action>, u64),
 }
 
 /// Include backend drafts and suspended playback so layout/navigation guards cannot bypass hidden owners.
@@ -300,6 +300,7 @@ fn export(app: &mut PhotocraftApp) -> Result<Value, String> {
 struct DragAction {
     index: usize,
     source: Action,
+    revision: u64,
 }
 
 enum Operation {
@@ -308,12 +309,13 @@ enum Operation {
     Play(Vec<usize>),
     Duplicate(Value),
     DeleteAction(usize),
-    DeleteGroup(String),
-    Assign(Box<DragAction>, String),
+    DuplicateGroup(super::FolderSelection, u64),
+    DeleteGroup(super::FolderSelection, u64),
+    Assign(Box<DragAction>, super::FolderSelection),
     NewGroup,
 }
 
-fn context(ui: &mut egui::Ui, action: Option<usize>, group: Option<&str>, play: Vec<usize>, group_mutable: bool) -> Option<Operation> {
+fn context(ui: &mut egui::Ui, action: Option<usize>, group: Option<&super::FolderSelection>, play: Vec<usize>, revision: u64) -> Option<Operation> {
     let mut operation = None;
     if ui.add_enabled(action.is_some(), egui::Button::new(tl!("Edit Action"))).clicked() {
         operation = action.map(Operation::Edit);
@@ -325,16 +327,16 @@ fn context(ui: &mut egui::Ui, action: Option<usize>, group: Option<&str>, play: 
         ui.add_enabled(false, egui::Button::new(tl!(label)));
     }
     let duplicate = if group.is_some() { tl!("Duplicate group") } else { tl!("Duplicate action") };
-    if ui.add_enabled(group_mutable, egui::Button::new(duplicate)).clicked() {
-        operation = Some(Operation::Duplicate(match group {
-            Some(group) => json!({"set":group}),
-            None => json!({"action":action}),
-        }));
+    if ui.button(duplicate).clicked() {
+        operation = Some(match group {
+            Some(group) => Operation::DuplicateGroup(group.clone(), revision),
+            None => Operation::Duplicate(json!({"action":action})),
+        });
     }
     let delete = if group.is_some() { tl!("Delete group") } else { tl!("Delete action") };
-    if ui.add_enabled(group_mutable, egui::Button::new(delete)).clicked() {
+    if ui.button(delete).clicked() {
         operation = match group {
-            Some(group) => Some(Operation::DeleteGroup(group.into())),
+            Some(group) => Some(Operation::DeleteGroup(group.clone(), revision)),
             None => action.map(Operation::DeleteAction),
         };
     }
@@ -369,7 +371,7 @@ fn action_row(app: &mut PhotocraftApp, ui: &mut egui::Ui, index: usize, action: 
             operation = Some(Operation::Play(vec![index]));
         }
         if tile.drag_started() {
-            tile.dnd_set_drag_payload(DragAction { index, source: action.clone() });
+            tile.dnd_set_drag_payload(DragAction { index, source: action.clone(), revision:app.session.actions.rev });
         }
         let name = ui
             .add_sized(vec2((ui.available_width() - 60.0).max(20.0), size), egui::Button::new(&action.name).frame(false).sense(Sense::click_and_drag()))
@@ -379,18 +381,18 @@ fn action_row(app: &mut PhotocraftApp, ui: &mut egui::Ui, index: usize, action: 
             operation = Some(Operation::Play(vec![index]));
         }
         if name.drag_started() {
-            name.dnd_set_drag_payload(DragAction { index, source: action.clone() });
+            name.dnd_set_drag_payload(DragAction { index, source: action.clone(), revision:app.session.actions.rev });
         }
         if (hovered || app.ui.actions.selected == Some(index)) && icons::button(ui, "settings", 24.0, false, tl!("Edit action")).clicked() {
             operation = Some(Operation::Edit(index));
         }
         let menu = icons::button(ui, "ellipsis", 24.0, false, tl!("Actions"));
         egui::Popup::menu(&menu).show(|ui| {
-            operation = context(ui, Some(index), None, vec![index], true).or(operation.take());
+            operation = context(ui, Some(index), None, vec![index], app.session.actions.rev).or(operation.take());
         });
     });
     row.response.context_menu(|ui| {
-        operation = context(ui, Some(index), None, vec![index], true).or(operation.take());
+        operation = context(ui, Some(index), None, vec![index], app.session.actions.rev).or(operation.take());
     });
     operation
 }
@@ -462,8 +464,6 @@ pub(super) fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             ranks.get(folder.name.as_str()).copied().unwrap_or(usize::MAX),
         ));
     }
-    let mut occurrences = std::collections::HashMap::new();
-    for folder in &folders { *occurrences.entry(folder.name.as_str()).or_insert(0usize) += 1; }
     app.ui.actions.collapsed_folders.retain(|key| folders.iter().any(|row| key.matches(row)));
     if app.ui.actions.selected_folder.as_ref().is_some_and(|key| !folders.iter().any(|row| key.matches(row))) {
         app.ui.actions.selected_folder = None;
@@ -488,9 +488,6 @@ pub(super) fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             }
             let key = super::FolderSelection::from_row(folder);
             let collapsed = app.ui.actions.folder_collapsed(&key);
-            // The existing group mutation commands accept a logical caption. Until the
-            // serialized slot-selector extension lands, they cannot mutate one namesake.
-            let group_mutable = occurrences.get(group.as_str()) == Some(&1);
             ui.push_id(("modern-physical-folder", key.origin, key.slot, group), |ui| {
                 let header = ui.horizontal(|ui| {
                     if icons::button(ui, if collapsed { "chevron-right" } else { "chevron-down" }, 20.0, false, group).clicked() {
@@ -502,14 +499,14 @@ pub(super) fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     }
                     let menu = icons::button(ui, "ellipsis", 24.0, false, tl!("Actions"));
                     egui::Popup::menu(&menu).show(|ui| {
-                        operation = context(ui, None, Some(group), members.clone(), group_mutable).or(operation.take());
+                        operation = context(ui, None, Some(&key), members.clone(), app.session.actions.rev).or(operation.take());
                     });
                 });
-                if group_mutable && let Some(drag) = header.response.dnd_release_payload::<DragAction>() {
-                    operation = Some(Operation::Assign(Box::new((*drag).clone()), group.clone()));
+                if let Some(drag) = header.response.dnd_release_payload::<DragAction>() {
+                    operation = Some(Operation::Assign(Box::new((*drag).clone()), key.clone()));
                 }
                 header.response.context_menu(|ui| {
-                    operation = context(ui, None, Some(group), members.clone(), group_mutable).or(operation.take());
+                    operation = context(ui, None, Some(&key), members.clone(), app.session.actions.rev).or(operation.take());
                 });
                 if !collapsed || !query.is_empty() {
                     for &index in members {
@@ -530,20 +527,24 @@ pub(super) fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     });
     if let Some(operation) = operation {
         let result = match operation {
-            Operation::New => {
-                let set = app.ui.actions.selected_set.clone();
-                open(app, json!({"set":set}))
-            }
+            Operation::New => super::new_action_params(app).and_then(|params| open(app, params)),
             Operation::Edit(index) => open(app, json!({"action":index})),
             Operation::Play(indices) => start_library(app, &indices),
             Operation::Duplicate(params) => app.run("actions.duplicate", params),
             Operation::DeleteAction(index) => ask_delete(app, Some(index), None),
-            Operation::DeleteGroup(group) => ask_delete(app, None, Some(group)),
+            Operation::DuplicateGroup(group, revision) => group.checked_params(app, revision).and_then(|params| app.run("actions.duplicate", params)),
+            Operation::DeleteGroup(group, revision) => group.checked_params(app, revision).and_then(|_| ask_delete(app, None, Some(group))),
             Operation::Assign(drag, group) => {
-                if app.session.actions.list.get(drag.index) != Some(&drag.source) {
+                if app.session.actions.rev != drag.revision || app.session.actions.list.get(drag.index).is_none_or(|value|
+                    value != &drag.source || !actions_cmds::library::same_placement(value, &drag.source)) {
                     Err(tl!("The dragged action changed; drag it again").into())
                 } else {
-                    app.run("actions.assignSet", json!({"action":drag.index,"set":group}))
+                    group.checked_params(app, drag.revision).and_then(|mut params| {
+                        params["action"] = json!(drag.index);
+                        app.run("actions.assignSet", params).inspect(|result| {
+                            if let Some(index) = result.get("index").and_then(Value::as_u64).and_then(|index| usize::try_from(index).ok()) { app.ui.actions.select(index, None); }
+                        })
+                    })
                 }
             }
             Operation::NewGroup => new_group(app),
@@ -729,7 +730,7 @@ fn tick_with_quantum(app: &mut PhotocraftApp, ctx: &egui::Context, quantum: usiz
                 }
                 ctx.request_repaint();
             } else {
-                let indices: Option<Vec<_>> = task.then.iter().map(|action| app.session.actions.list.iter().position(|current| current == action)).collect();
+                let indices: Option<Vec<_>> = task.then.iter().map(|action| app.session.actions.list.iter().position(|current| current == action && actions_cmds::library::same_placement(current, action))).collect();
                 let result = indices.ok_or("A group action changed during playback".to_string()).and_then(|indices| start_library(app, &indices));
                 if result.is_err() {
                     app.actions_runtime.progress = None;
@@ -832,7 +833,7 @@ pub(crate) fn owns_delete(fields: &serde_json::Map<String, Value>) -> bool {
 }
 
 /// Capture the selected definition or group revision and authorization gate before opening its delete question.
-fn ask_delete(app: &mut PhotocraftApp, index: Option<usize>, group: Option<String>) -> Result<Value, String> {
+pub(super) fn ask_delete(app: &mut PhotocraftApp, index: Option<usize>, group: Option<super::FolderSelection>) -> Result<Value, String> {
     if app.actions_runtime.delete.is_some() {
         return Err("Answer the open delete question first".into());
     }
@@ -841,19 +842,13 @@ fn ask_delete(app: &mut PhotocraftApp, index: Option<usize>, group: Option<Strin
     }
     let (target, message) = match group {
         Some(group) => {
-            if !photocraft_engine::actions_edit_cmds::set_names(&app.session).contains(&group) {
-                return Err("The selected group no longer exists".into());
-            }
-            let members = app
-                .session
-                .actions
-                .list
-                .iter()
-                .filter(|action| photocraft_engine::atn_cmds::logical_set_name(action.set.as_deref()) == group)
-                .cloned()
-                .collect();
-            let message = crate::i18n::fmt(tl!("Delete the group \"{name}\"?"), &[("name", &group)]);
-            (Delete::Group(group, members, app.session.actions.rev), message)
+            let revision = app.session.actions.rev;
+            group.checked_params(app, revision)?;
+            let rows = photocraft_engine::actions_edit_cmds::set_occurrences(&app.session)?;
+            let row = rows.iter().find(|row| group.matches(row)).ok_or("The selected group no longer exists")?;
+            let members = row.actions.iter().filter_map(|&index| app.session.actions.list.get(index).cloned()).collect();
+            let message = crate::i18n::fmt(tl!("Delete the group \"{name}\"?"), &[("name", &group.name)]);
+            (Delete::Group(group, members, revision), message)
         }
         None => {
             let action = index.and_then(|index| app.session.actions.list.get(index)).cloned().ok_or("The selected action no longer exists")?;
@@ -887,28 +882,27 @@ pub(crate) fn delete_confirm(app: &mut PhotocraftApp, fields: &serde_json::Map<S
     if fields.get(DELETE).and_then(Value::as_u64) != Some(id) {
         return Err("The delete question has changed".into());
     }
+    let mut removed = Vec::new();
     let params = match target {
         Delete::Action(action) => {
-            let mut matches = app.session.actions.list.iter().enumerate().filter(|(_, current)| *current == action.as_ref()).map(|(index, _)| index);
+            let mut matches = app.session.actions.list.iter().enumerate().filter(|(_, current)| *current == action.as_ref() && actions_cmds::library::same_placement(current, &action)).map(|(index, _)| index);
             let index = matches.next().ok_or("The selected action changed; select it again")?;
             if matches.next().is_some() {
                 return Err("The selected action is ambiguous".into());
             }
+            removed.push(index);
             json!({"action":index})
         }
         Delete::Group(group, members, revision) => {
-            let current: Vec<_> = app
-                .session
-                .actions
-                .list
-                .iter()
-                .filter(|action| photocraft_engine::atn_cmds::logical_set_name(action.set.as_deref()) == group)
-                .cloned()
-                .collect();
-            if app.session.actions.rev != revision || current != members || !photocraft_engine::actions_edit_cmds::set_names(&app.session).contains(&group) {
+            let params = group.checked_params(app, revision)?;
+            let rows = photocraft_engine::actions_edit_cmds::set_occurrences(&app.session)?;
+            let row = rows.iter().find(|row| group.matches(row)).ok_or("The selected group changed; select it again")?;
+            removed = row.actions.clone();
+            let current: Vec<_> = row.actions.iter().filter_map(|&index| app.session.actions.list.get(index)).collect();
+            if current.len() != members.len() || current.iter().zip(&members).any(|(current, old)| *current != old || !actions_cmds::library::same_placement(current, old)) {
                 return Err("The selected group changed; select it again".into());
             }
-            json!({"set":group})
+            params
         }
     };
     let saved = app.session.authorize;
@@ -916,9 +910,13 @@ pub(crate) fn delete_confirm(app: &mut PhotocraftApp, fields: &serde_json::Map<S
     let result = app.run("actions.delete", params);
     app.session.authorize = saved;
     if result.is_ok() {
+        for &index in removed.iter().rev() {
+            if index < app.ui.actions.expanded.len() { app.ui.actions.expanded.remove(index); }
+        }
         app.ui.actions.selected = None;
         app.ui.actions.selected_step = None;
         app.ui.actions.selected_set = None;
+        app.ui.actions.selected_folder = None;
     }
     result
 }

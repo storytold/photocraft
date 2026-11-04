@@ -171,7 +171,7 @@ pub(crate) fn shift_action_calls(actions: &mut [Action], at: usize, count: usize
 fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "actions.duplicate";
     not_playing(s, cmd)?;
-    if p.get("set").is_some() {
+    if p.get("set").is_some() || p.get("setSlot").is_some() {
         return duplicate_set(s, p);
     }
     let idx = resolve(&s.actions.list, p, cmd)?;
@@ -219,6 +219,16 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
 /// Copy a folder below its source, using the existing first-appearance order and empty-set model.
 fn duplicate_set(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "actions.duplicate";
+    use crate::actions_cmds::library::{RowBinding, placement};
+    let physical = RowBinding::requested(&s.actions, p, placement::SelectorUse::Folder).map_err(|error| bad(cmd, error))?;
+    if let Some(source) = physical {
+        placement::idle(s, cmd)?;
+        let mut names = crate::atn_cmds::UniqueNames::new(set_names(s));
+        let name = names.claim(&format!("{} copy", source.name));
+        let prepared = placement::prepare(&s.actions, &s.prefs().shortcuts, &s.prefs().alternate_shortcuts,
+            placement::Edit::Duplicate { source, name }).map_err(|error| bad(cmd, error))?;
+        return Ok(prepared.publish(s));
+    }
     if p.get("action").is_some() || p.get("step").is_some() {
         return Err(bad(cmd, "select either a set or an action/step"));
     }
@@ -243,6 +253,7 @@ fn duplicate_set(s: &mut Session, p: &Value) -> Result<Value> {
         .map(|mut a| {
             a.name = names.claim(&format!("{} copy", a.name));
             a.set = Some(name.clone());
+            if let Some(binding) = &mut a.library_row { binding.name = name.clone(); }
             a
         })
         .collect();
@@ -327,6 +338,19 @@ fn dialog(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn assign_set(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "actions.assignSet";
+    use crate::actions_cmds::library::{RowBinding, placement};
+    let physical = RowBinding::requested(&s.actions, p, placement::SelectorUse::Assign).map_err(|error| bad(cmd, error))?;
+    if let Some(destination) = physical {
+        placement::idle(s, cmd)?;
+        let index = resolve(&s.actions.list, p, cmd)?;
+        if destination.contains(&s.actions, &s.actions.list[index]).map_err(|error| bad(cmd, error))? {
+            return Ok(json!({"action":s.actions.list[index].name,"set":destination.name,"index":index,"slot":destination.slot(&s.actions).map_err(|error| bad(cmd, error))?}));
+        }
+        let mut prepared = placement::prepare(&s.actions, &s.prefs().shortcuts, &s.prefs().alternate_shortcuts,
+            placement::Edit::Assign { destination, action:index }).map_err(|error| bad(cmd, error))?;
+        prepared.result["action"] = json!(s.actions.list[index].name);
+        return Ok(prepared.publish(s));
+    }
     not_playing(s, cmd)?;
     let idx = resolve(&s.actions.list, p, cmd)?;
     let set = match p.get("set") {
@@ -337,6 +361,7 @@ fn assign_set(s: &mut Session, p: &Value) -> Result<Value> {
     };
     crate::atn_cmds::sidecar::assign_set_metadata(&mut s.actions, idx, set.as_deref());
     let action = &mut s.actions.list[idx];
+    if crate::atn_cmds::logical_set_name(action.set.as_deref()) != crate::atn_cmds::logical_set_name(set.as_deref()) { action.library_row = None; }
     action.set = set;
     let result = json!({"action": action.name, "set": action.set});
     s.actions.touch();
@@ -576,7 +601,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Duplicate Action",
             menu: &[],
             shortcut: None,
-            params: r##"{"action":name|index, "step":index?} or {"set":name} → {action,index,steps} or {set,actions,index}. Copies a step, action or entire folder below its source, retaining settings and flags. Whole-action/folder copies require recording to be stopped; original function keys stay with their original actions."##,
+            params: r##"{"action":name|index, "step":index?} or {"set":name?,"setSlot":current physical slot?} → {action,index,steps} or {set,actions,index}. Copies a step, action or entire folder below its source, retaining settings and flags. Whole-action/folder copies require recording to be stopped; original function keys stay with their original actions."##,
             enabled: always,
             run: duplicate,
             journal: false,
@@ -616,7 +641,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Move to Set",
             menu: &[],
             shortcut: None,
-            params: r##"{"action":name|index, "set":name|null} → {action, set}. The set folder the Actions panel shows the action under (what Load Actions fills and Save Actions writes); null takes it out of any set."##,
+            params: r##"{"action":name|index, "set":name|null?, "setSlot":current physical slot?} → {action, set, index?, slot?}. The set folder the Actions panel shows the action under (what Load Actions fills and Save Actions writes); null takes it out of any set."##,
             enabled: always,
             run: assign_set,
             journal: false,

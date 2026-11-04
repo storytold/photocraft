@@ -88,13 +88,13 @@ pub(super) fn preview_value(s: &Session, id: u64) -> Result<Action> {
 
 /// Require both this draft identity and its unchanged staged value before an owned preview resumes.
 pub(super) fn preview_matches(s: &Session, id: u64, snapshot: &Action) -> bool {
-    s.actions.editor.as_ref().is_some_and(|draft| draft.id == id && &draft.value == snapshot)
+    s.actions.editor.as_ref().is_some_and(|draft| draft.id == id && &draft.value == snapshot && super::library::same_placement(&draft.value, snapshot))
 }
 
 /// Structured inspection serializes the complete Action, not a metadata whitelist.
 fn view(draft: &Draft, value: &Action) -> Value {
     json!({"draft":draft.id, "action":value, "shortcut":draft.shortcut,
-        "dirty": value != &draft.opening || draft.shortcut != draft.opening_shortcut,
+        "dirty": value != &draft.opening || !super::library::same_placement(value, &draft.opening) || draft.shortcut != draft.opening_shortcut,
         "recording":draft.recording.is_some(), "source":draft.source, "libraryRevision":draft.library_revision})
 }
 
@@ -133,7 +133,8 @@ fn new_value(s: &Session, p: &Value) -> Result<Action> {
 
 /// Open one complete action clone, without changing the library, shortcuts or preset store.
 fn open(s: &mut Session, p: &Value) -> Result<Value> {
-    fields(p, &["action", "name", "set"], OPEN)?;
+    fields(p, &["action", "name", "set", "setSlot"], OPEN)?;
+    let destination = super::library::RowBinding::requested(&s.actions, p, super::library::placement::SelectorUse::NewAction).map_err(|error| bad(OPEN, error))?;
     not_playing(s, OPEN)?;
     if s.actions.editor.is_some() || s.actions.recording_active() {
         return Err(bad(OPEN, "close the open editor or stop recording first"));
@@ -142,10 +143,11 @@ fn open(s: &mut Session, p: &Value) -> Result<Value> {
     if source.is_some() && (p.get("name").is_some() || p.get("set").is_some()) {
         return Err(bad(OPEN, "open an existing action without replacement name/set fields"));
     }
-    let value = match source {
+    let mut value = match source {
         Some(index) => s.actions.list.get(index).cloned().ok_or_else(|| bad(OPEN, "no such action"))?,
         None => new_value(s, p)?,
     };
+    if let Some(destination) = destination { destination.apply(&mut value); }
     let id = s.actions.take.checked_add(1).ok_or_else(|| bad(OPEN, "recording identities exhausted"))?;
     let shortcut = s.prefs().shortcuts.get(&format!("{}{}", super::PLAY_SHORTCUT_PREFIX, value.name)).cloned().unwrap_or_default();
     let draft = Draft {
@@ -407,7 +409,8 @@ fn stop(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// Reject external library/shortcut edits before preparing any definition publication.
 fn unchanged(s: &Session, draft: &Draft) -> Result<()> {
-    let source_changed = draft.source.is_some_and(|index| s.actions.list.get(index) != Some(&draft.opening));
+    let source_changed = draft.source.is_some_and(|index| s.actions.list.get(index).is_none_or(|value|
+        value != &draft.opening || !super::library::same_placement(value, &draft.opening)));
     if s.actions.rev != draft.library_revision
         || source_changed
         || action_keys(&s.prefs().shortcuts) != draft.keys
@@ -488,7 +491,8 @@ fn save(s: &mut Session, p: &Value) -> Result<Value> {
     }
     unchanged(s, draft)?;
     let mut value = visible(s, draft)?;
-    if value == draft.opening && draft.shortcut == draft.opening_shortcut {
+    if let Some(destination) = &value.library_row { destination.slot(&s.actions).map_err(|error| bad(SAVE, error))?; }
+    if value == draft.opening && super::library::same_placement(&value, &draft.opening) && draft.shortcut == draft.opening_shortcut {
         // Save closes this capture even when it has no completed steps. The committed
         // library, shortcut maps and their revisions still remain exactly unchanged.
         let mut next = draft.clone();
@@ -513,47 +517,43 @@ fn save(s: &mut Session, p: &Value) -> Result<Value> {
             .chain(draft.source.is_none().then_some(&value)),
     )
     .map_err(|error| bad(SAVE, error))?;
-    let (keys, alternates) = bindings(s, draft, &value);
-    let target = draft.source.unwrap_or(s.actions.list.len());
-    let changed = draft.source.is_none() || value != draft.opening || !changes.is_empty();
-    let prefs_changed = keys != s.prefs().shortcuts || alternates != s.prefs().alternate_shortcuts;
+    let (mut keys, mut alternates) = bindings(s, draft, &value);
+    let changed = draft.source.is_none() || value != draft.opening || !super::library::same_placement(&value, &draft.opening) || !changes.is_empty();
+    let mut proposed = super::library::definition_copy(&s.actions);
+    // Renamed callers and the edited action remain one preflighted transaction.
+    for (action, step, params) in changes {
+        if let Some((_, old)) = proposed.list.get_mut(action).and_then(|action| action.steps.get_mut(step)) { *old = params; }
+    }
+    let target;
+    if draft.source.is_none() && value.library_row.is_some() {
+        let destination = value.library_row.clone().ok_or_else(|| bad(SAVE, "missing draft destination"))?;
+        let prepared = super::library::placement::prepare(&proposed, &keys, &alternates,
+            super::library::placement::Edit::Insert { destination, action:value }).map_err(|error| bad(SAVE, error))?;
+        target = prepared.result["index"].as_u64().and_then(|index| usize::try_from(index).ok()).ok_or_else(|| bad(SAVE, "missing prepared action index"))?;
+        proposed = prepared.definition;
+        keys = prepared.shortcuts;
+        alternates = prepared.alternates;
+    } else {
+        target = draft.source.unwrap_or(proposed.list.len());
+        if target == proposed.list.len() {
+            proposed.list.try_reserve(1).map_err(|_| bad(SAVE, "not enough memory for the action"))?;
+            proposed.list.push(value);
+        } else if let Some(old) = proposed.list.get_mut(target) { *old = value; }
+        super::library::check_definition(&proposed, &keys).map_err(|error| bad(SAVE, error))?;
+    }
+    // The prepared insertion may remap this value's numeric calls; acknowledge that exact value.
+    let published = proposed.list.get(target).cloned().ok_or_else(|| bad(SAVE, "missing prepared definition"))?;
     let mut next = draft.clone();
-    next.value = value.clone();
-    next.opening = value.clone();
+    next.value = published.clone();
+    next.opening = published.clone();
     next.source = Some(target);
     next.library_revision = if changed { s.actions.rev.saturating_add(1) } else { s.actions.rev };
     next.opening_shortcut = next.shortcut.clone();
     next.keys = action_keys(&keys);
     next.alternates = action_keys(&alternates);
     next.recording = None;
-    let response = view(&next, &value);
-    let mut proposed = super::library::definition_copy(&s.actions);
-    if target == proposed.list.len() {
-        proposed.list.try_reserve(1).map_err(|_| bad(SAVE, "not enough memory for the action"))?;
-    }
-    // Include renamed callers in the same encoded candidate as the edited action.
-    for (action, step, params) in changes {
-        if let Some((_, old)) = proposed.list.get_mut(action).and_then(|action| action.steps.get_mut(step)) {
-            *old = params;
-        }
-    }
-    if target == proposed.list.len() {
-        proposed.list.push(value);
-    } else if let Some(old) = proposed.list.get_mut(target) {
-        *old = value;
-    }
-    super::library::check_definition(&proposed, &keys).map_err(|error| bad(SAVE, error))?;
-    // Encoding succeeded. Publish definitions without replacing the live capture/owner state.
-    s.actions.list = proposed.list;
-    if changed {
-        s.actions.touch();
-    }
-    if prefs_changed {
-        s.edit_prefs(|prefs| {
-            prefs.shortcuts = keys;
-            prefs.alternate_shortcuts = alternates;
-        });
-    }
+    let response = view(&next, &published);
+    super::library::placement::publish(s, proposed, keys, alternates, changed);
     s.actions.editor = Some(next);
     Ok(response)
 }
@@ -578,7 +578,7 @@ pub(super) fn specs() -> Vec<CommandSpec> {
         command(
             OPEN,
             "Open Action Draft",
-            r#"{"action":name|index?} or {"name":str?,"set":str?} → draft view. One unpublished complete Action; untouched New Save is a no-op."#,
+            r#"{"action":name|index?} or {"name":str?,"set":str?,"setSlot":current physical slot?} → draft view. One unpublished complete Action; untouched New Save is a no-op."#,
             open,
         ),
         command(
