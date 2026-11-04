@@ -125,7 +125,8 @@ impl ExportPresetSettings {
             "profile": "document",
             "embedProfile": true,
             "tgaBits": "auto",
-            "resample": DEFAULT_RESAMPLE
+            "resample": DEFAULT_RESAMPLE,
+            "pngCompression": "default"
         });
         if let Some(defaults) = defaults.as_object() {
             for (k, v) in defaults {
@@ -242,7 +243,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Save Export Preset",
             menu: &[],
             shortcut: None,
-            params: r#"{"name":str,"settings":{"format":"png|jpg|webp|tif|tga|ico","quality":1..100,"lossless":bool,"transparency":bool,"scale":1..1000,"width":px,"height":px,"lockAspect":bool,"sizing":"scale|pixels","metadata":"none|exif|all","profile":"document|srgb","embedProfile":bool,"tgaBits":"auto|24|32","resample":"bicubicAutomatic|bicubic|bicubicSmoother|bicubicSharper|bilinear|nearest"="bicubicAutomatic"}} (a saved name is replaced)"#,
+            params: r#"{"name":str,"settings":{"format":"png|jpg|webp|tif|tga|ico","quality":1..100,"lossless":bool,"transparency":bool,"scale":1..1000,"width":px,"height":px,"lockAspect":bool,"sizing":"scale|pixels","metadata":"none|exif|all","profile":"document|srgb","embedProfile":bool,"tgaBits":"auto|24|32","resample":"bicubicAutomatic|bicubic|bicubicSmoother|bicubicSharper|bilinear|nearest"="bicubicAutomatic","pngCompression":"none|fast|default|best"="default"}} (a saved name is replaced)"#,
             enabled: always,
             run: save,
             journal: false,
@@ -279,7 +280,8 @@ mod tests {
             "profile": "srgb",
             "embedProfile": false,
             "tgaBits": "24",
-            "resample": "nearest"
+            "resample": "nearest",
+            "pngCompression": "best"
         })
     }
 
@@ -303,6 +305,7 @@ mod tests {
         assert_eq!(presets[0]["settings"]["embedProfile"], false);
         assert_eq!(presets[0]["settings"]["metadata"], "exif");
         assert_eq!(presets[0]["settings"]["resample"], "nearest");
+        assert_eq!(presets[0]["settings"]["pngCompression"], "best", "the Compression effort survives the preferences round trip");
 
         let got = restored.execute("file.export.presets.get", json!({"name": "WEB JPEG"})).unwrap();
         assert_eq!(got["preset"]["settings"]["profile"], "srgb");
@@ -327,6 +330,11 @@ mod tests {
         let err = s.execute("file.export.presets.save", json!({"name": "x", "settings": {"resample": "lanczos"}})).unwrap_err().to_string();
         assert!(err.contains("resample must be one of"), "{err}");
         assert!(s.execute("file.export.presets.save", json!({"name": "x", "settings": {"resample": 3}})).is_err());
+        // Through the save path, so the check is load-bearing. The UI-side assertion this replaces
+        // only proved the struct serialises, which it does whether the engine validates or not.
+        let err = s.execute("file.export.presets.save", json!({"name": "x", "settings": {"pngCompression": "tiny"}})).unwrap_err().to_string();
+        assert!(err.contains("pngCompression must be one of"), "{err}");
+        assert!(s.execute("file.export.presets.save", json!({"name": "x", "settings": {"pngCompression": 3}})).is_err());
         assert!(s.execute("file.export.presets.delete", json!({"name": "missing"})).is_err());
         assert!(s.execute("file.export.presets.get", json!({"name": ""})).is_err());
 
@@ -338,5 +346,6 @@ mod tests {
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].name, "ok");
         assert_eq!(loaded[0].settings.resample, DEFAULT_RESAMPLE, "a preset saved before Resample existed loads with the default");
+        assert_eq!(loaded[0].settings.png_compression, "default", "and one saved before Compression existed loads at the codec default");
     }
 }

@@ -1878,11 +1878,12 @@ mod tests {
         )
         .expect("a preset without the field still loads");
         assert_eq!(old.png_compression, "default", "an older preset loads as the codec default");
-        // And a value the control never offers is refused rather than written through.
-        let bogus = ExportPresetSettings { png_compression: "tiny".into(), ..pixels.clone() };
+        // A value the control never offers is not written through. Refusing it outright is the
+        // engine's job and is tested there, through the save path, so that check is load-bearing;
+        // an assertion here that the struct still serialises would pass either way and prove
+        // nothing (#5409 review).
         f.insert("pngCompression".into(), json!("tiny"));
         assert_eq!(preset_settings(&f)["pngCompression"], "default", "an unknown effort saves as the default");
-        assert!(serde_json::to_value(&bogus).is_ok(), "the struct itself serialises; validation is the engine's");
         assert_eq!(f.get("width"), Some(&json!(64)));
         assert_eq!(f.get("height"), Some(&json!(32)));
         assert_eq!(f.get("sizing"), Some(&json!("pixels")));
