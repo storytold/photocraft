@@ -485,9 +485,9 @@ fn preflight_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     if crate::canvas::cancel_mixer_on_context_change(app, ctx) {
         return false;
     }
-    // However the tool was picked (toolbar, flyout, shortcut, automation), its group's key brings
-    // it back later (#2608).
-    app.ui.remember_group_tool();
+    // However the tool was picked (toolbar, flyout, shortcut, automation), its group's key and its
+    // toolbar slot bring it back later (#2608). A temporary tool is no choice, so it isn't noted.
+    app.ui.remember_group_tool(crate::tool_memory::selected(app));
     crate::canvas::polygon_cancel_stale(app);
     // Camera Raw is modal like Photoshop's filter dialog: no application shortcut (Save, Undo,
     // tools) runs beneath it, and it handles its own keys (Y, U, O, S). Unlike the other dialogs
