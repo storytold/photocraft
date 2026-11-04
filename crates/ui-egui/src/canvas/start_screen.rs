@@ -64,14 +64,14 @@ pub(super) fn start_screen(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     });
 }
 
-/// The wordmark, the Home button where the options bar does not carry one, and the command search.
+/// The wordmark, the Home button, and the command search.
 fn header_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, header: Rect) {
     let t = Tokens::get(ui.ctx());
     let mut bar = ui.new_child(UiBuilder::new().max_rect(header.shrink2(vec2(20.0, 0.0))).layout(Layout::left_to_right(Align::Center)));
     bar.label(egui::RichText::new(tl!("PhotoCraft")).font(semibold(18.0)).color(t.text));
-    // The Pro themes' options bar has the Home button, and a second one would only confuse.
+    // The options bar is hidden on Home, so this is the way back to the open documents.
     let documents = app.session.documents().len();
-    if !t.pro && (documents > 0 || !app.session.prefs().general.auto_show_home_screen) {
+    if (documents > 0 || !app.session.prefs().general.auto_show_home_screen) {
         crate::chrome_ui::home_button(app, &mut bar);
     }
     bar.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -272,20 +272,27 @@ fn recent_section(app: &mut PhotocraftApp, ui: &mut egui::Ui, width: f32) {
             reverse = !reverse;
         }
     };
-    let filter_field = |ui: &mut egui::Ui, filter: &mut String, width: f32| {
-        ui.label(egui::RichText::new(tl!("Filter")).color(t.text_dim));
+    let filter_field = |ui: &mut egui::Ui, filter: &mut String, width: f32, rtl: bool| {
+        // In a right-to-left layout the first widget lands rightmost, so the field goes first.
+        let label = |ui: &mut egui::Ui| ui.label(egui::RichText::new(tl!("Filter")).color(t.text_dim));
+        if !rtl {
+            label(ui);
+        }
         let field = crate::widgets::text_field(ui, egui::Id::unique("home-recent-filter"), filter, tl!("Filter Recent Files"), width, false);
         let _ = field.accessible_name(tl!("Filter Recent Files"));
+        if rtl {
+            label(ui);
+        }
     };
     if single_row {
         ui.horizontal(|ui| {
             toolbar(ui);
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| filter_field(ui, &mut filter, FILTER_WIDTH));
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| filter_field(ui, &mut filter, FILTER_WIDTH, true));
         });
     } else {
         ui.horizontal(&mut toolbar);
         ui.add_space(4.0);
-        ui.horizontal(|ui| filter_field(ui, &mut filter, (width - 60.0).clamp(80.0, FILTER_WIDTH)));
+        ui.horizontal(|ui| filter_field(ui, &mut filter, (width - 60.0).clamp(80.0, FILTER_WIDTH), false));
     }
     if filter != app.ui.home_recent_filter {
         app.ui.home_recent_filter = filter.clone();

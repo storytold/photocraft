@@ -21,6 +21,16 @@ impl PhotocraftApp {
 }
 
 impl PhotocraftApp {
+    /// Whether the Home screen is what the canvas area shows this frame. Files opening in the
+    /// background (#210) have tabs before they have documents, so they win over Home. The frame
+    /// draws no tool strip, options bar, status bar or docks under Home, and the canvas area
+    /// draws Home itself; both ask here so they cannot disagree.
+    pub(crate) fn home_screen_up(&mut self) -> bool {
+        let opening = !self.jobs.opens.is_empty();
+        let n = self.session.documents().len();
+        !opening && self.ui.chrome.shows_home(n, self.session.prefs().general.auto_show_home_screen)
+    }
+
     /// Shared logic body. A wrapping host owns the final reset tail after its own work.
     pub fn logic_frame(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         self.cap_frame_rate();
@@ -279,17 +289,19 @@ impl PhotocraftApp {
         if (chrome || tabbed_in) && self.ui.panels.menu_bar {
             panels::title_bar(self, ui);
         }
-        if (chrome && self.ui.panels.options_bar) || tabbed_in {
+        // Home is only the menu bar and the Home content; the saved panel prefs are untouched.
+        let home = self.home_screen_up();
+        if (chrome && self.ui.panels.options_bar && !home) || tabbed_in {
             panels::options_bar(self, ui);
         }
-        if chrome && self.ui.panels.status_bar {
+        if chrome && self.ui.panels.status_bar && !home {
             panels::status_bar(self, ui);
         }
-        if (chrome && self.ui.panels.toolbar) || tabbed_in {
+        if (chrome && self.ui.panels.toolbar && !home) || tabbed_in {
             panels::toolbar(self, ui);
         }
         // craft-ui's layout holds the canvas as its protected `canvas` panel.
-        let docking = (chrome && self.ui.panels.dock) || tabbed_in;
+        let docking = (chrome && self.ui.panels.dock && !home) || tabbed_in;
         if docking {
             panels::dock_area(self, ui);
         } else {
