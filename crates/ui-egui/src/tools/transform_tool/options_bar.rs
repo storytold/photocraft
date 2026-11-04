@@ -328,13 +328,13 @@ pub(crate) fn position_size_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, t
     // in a length), converted at the document's resolution against the box's original side (#6284).
     let units = crate::widgets::FieldUnits { unit: u.unit, dpi: u.dpi, ppi: u.ppi };
     lbl(ui, "W:");
-    let rw = crate::widgets::value_field_extent(ui, &mut w, -wlim_u..=wlim_u, suffix, size_w, places, units, side_w).accessible_name(tl!("Width"));
+    let rw = crate::widgets::value_field_extent(ui, &mut w, -wlim_u..=wlim_u, suffix, size_w, Some(places), units, side_w).accessible_name(tl!("Width"));
     let link = !app.ui.transform_unlinked;
     if crate::icons::button(ui, if link { "link" } else { "unlink" }, 22.0, link, tl!("Maintain aspect ratio")).clicked() {
         app.ui.transform_unlinked = link;
     }
     lbl(ui, "H:");
-    let rh = crate::widgets::value_field_extent(ui, &mut h, -hlim_u..=hlim_u, suffix, size_w, places, units, side_h).accessible_name(tl!("Height"));
+    let rh = crate::widgets::value_field_extent(ui, &mut h, -hlim_u..=hlim_u, suffix, size_w, Some(places), units, side_h).accessible_name(tl!("Height"));
     for r in [&rw, &rh] {
         r.context_menu(|ui| {
             if let Some(name) = crate::rulers::unit_menu(ui, u.unit) {

@@ -44,10 +44,11 @@ pub fn value_field_units(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInc
     value_field_in(ui, value, range, "", width, 0.0, FieldOpts { decimals: Some(decimals), units: Some(units), ..Default::default() }, None).0
 }
 
-/// A [`value_field_prec`] in `units` whose 100 % is a length of `extent` px (Free Transform's W
-/// and H): a length typed while it shows percent becomes that share of `extent` (`40px`, `2in`),
-/// and a percentage typed while it shows a length becomes that share of `extent` (`50%`), at
-/// `units`' resolution (#6284). The field keeps its own unit.
+/// A value field in `units` whose 100 % is a length of `extent` px (Free Transform's W and H):
+/// a length typed while it shows percent becomes that share of `extent` (`40px`, `2in`), and a
+/// percentage typed while it shows a length becomes that share of `extent` (`50%`), at `units`'
+/// resolution (#6284). The field keeps its own unit. `decimals` overrides the field's own
+/// precision when given.
 #[allow(clippy::too_many_arguments)]
 pub fn value_field_extent(
     ui: &mut Ui,
@@ -55,11 +56,11 @@ pub fn value_field_extent(
     range: std::ops::RangeInclusive<f32>,
     suffix: &str,
     width: f32,
-    decimals: u32,
+    decimals: Option<u32>,
     units: FieldUnits,
     extent: f64,
 ) -> Response {
-    let opts = FieldOpts { decimals: Some(decimals), units: Some(units), extent: Some(extent), ..Default::default() };
+    let opts = FieldOpts { decimals, units: Some(units), extent: Some(extent), ..Default::default() };
     value_field_in(ui, value, range, suffix, width, 0.0, opts, None).0
 }
 

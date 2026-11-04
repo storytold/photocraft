@@ -59,7 +59,8 @@ fn field(ui: &mut egui::Ui, id: &str, label: (&str, &str), name: &str, current: 
     stacked_label(ui, tl!(label.0), &[tl!(label.0), tl!(label.1)], LABEL_W, 2.0);
     let key = ui.make_persistent_id(("layer-props-field", id));
     let mut v = ui.data(|d| d.get_temp::<f32>(key)).unwrap_or_else(|| u.shown(f64::from(current), extent));
-    let resp = widgets::value_field(ui, &mut v, -300_000.0..=300_000.0, u.unit.suffix(), width).accessible_name(tl!(name));
+    let units = widgets::FieldUnits { unit: u.unit, dpi: u.dpi, ppi: u.ppi };
+    let resp = widgets::value_field_extent(ui, &mut v, -300_000.0..=300_000.0, u.unit.suffix(), width, None, units, extent).accessible_name(tl!(name));
     if resp.dragged() || resp.has_focus() {
         ui.data_mut(|d| d.insert_temp(key, v));
         return None;
@@ -360,6 +361,45 @@ mod tests {
         assert_eq!(px.px(170.0, 1.0), 170.0);
         let pc = LenUnit { unit: Unit::Percent, dpi: 72.0, ppi: 72.0 };
         assert_eq!(pc.shown(822.0, 1644.0), 50.0);
+    }
+
+    /// #10784: typing a percentage into Properties' W field sets that share of the document
+    /// width, as it does in Photoshop.
+    #[test]
+    fn transform_width_field_takes_a_typed_percentage() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::Queryable;
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 800, "height": 600})).unwrap();
+        let id = app.run("shape.create", json!({"kind": "rect", "rect": [40, 50, 240, 150], "fill": "#3366cc"})).unwrap()["layer"]
+            .as_u64()
+            .map(photocraft_doc::LayerId)
+            .unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(280.0, 900.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if ui.ctx().cumulative_pass_nr() == 0 {
+                    PhotocraftApp::setup_context(ui.ctx(), crate::theme::ThemeKind::ProMedium);
+                    return;
+                }
+                let state = app.session.active().unwrap();
+                let layer = state.doc.layer(state.active_layer.unwrap()).unwrap().clone();
+                properties(app, ui, &layer);
+            },
+            app,
+        );
+        h.run_steps(3);
+        h.get_all_by_role(Role::SpinButton).next().expect("the W field").click();
+        h.run_steps(1);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.event(egui::Event::Text("50%".into()));
+        h.run_steps(1);
+        h.key_press(egui::Key::Enter);
+        h.run_steps(3);
+        let state = h.state().session.active().unwrap();
+        let layer = state.doc.layer(id).unwrap();
+        let LayerContent::Shape(shape) = &layer.content else { panic!("still a shape") };
+        let c = shape.path.control_bounds().unwrap();
+        assert!((c.2 - c.0 - 400.0).abs() < 0.5, "half of the 800 px document: {c:?}");
     }
 
     #[test]

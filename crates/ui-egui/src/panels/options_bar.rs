@@ -762,7 +762,7 @@ fn fixed_size_field(ui: &mut egui::Ui, px: &mut f32, units: widgets::FieldUnits,
     let before = to_unit(f64::from(*px));
     let mut v = before;
     let places = unit.decimals() as u32;
-    let resp = widgets::value_field_extent(ui, &mut v, to_unit(1.0)..=to_unit(FIXED_SIZE_MAX_PX), unit.suffix(), 62.0, places, units, extent);
+    let resp = widgets::value_field_extent(ui, &mut v, to_unit(1.0)..=to_unit(FIXED_SIZE_MAX_PX), unit.suffix(), 62.0, Some(places), units, extent);
     // Leaving the field re-reads the rounded text it showed (100 px at 72 ppi reads back as
     // 1.389 in); that isn't an edit, so the pixels stay exact.
     let shown = |x: f32| (f64::from(x) * 10f64.powi(places as i32)).round();
