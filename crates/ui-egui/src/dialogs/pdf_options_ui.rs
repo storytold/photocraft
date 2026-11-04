@@ -60,6 +60,8 @@ pub struct Prompt {
     mode: ColorMode,
     /// The document carries a profile of its own (rather than reading as the working space).
     embedded: bool,
+    /// The page in points (pixels ÷ resolution × 72), which the bleed has to leave a trim in.
+    page_pt: (f64, f64),
     /// The remembered answer has been applied (it needs the egui context, so on the first frame).
     restored: bool,
 }
@@ -80,6 +82,14 @@ impl Prompt {
     /// What stops the save as chosen, if anything.
     fn problem(&self) -> Option<String> {
         let standard = self.standard?;
+        let (w, h) = self.page_pt;
+        if 2.0 * f64::from(self.bleed_mm) * 72.0 / 25.4 >= w.min(h) {
+            let mm = |pt: f64| format!("{:.1}", pt * 25.4 / 72.0);
+            return Some(crate::i18n::fmt(
+                tl!("A {bleed} mm bleed leaves no trim on this {width} × {height} mm page."),
+                &[("bleed", &format!("{:.1}", self.bleed_mm)), ("width", &mm(w)), ("height", &mm(h))],
+            ));
+        }
         let Some(c) = self.candidates.get(self.profile) else {
             return Some(
                 tl!("No CMYK profile is installed. Install the printer's profile (for example ISO Coated v2 or Coated FOGRA39) in Windows and save again.")
@@ -162,11 +172,27 @@ pub fn park(app: &mut PhotocraftApp, path: String, copy: bool, record: &'static 
     let doc = app.active_doc_id()?;
     let st = app.session.active().ok_or("no document")?;
     let (source, mode, embedded) = (photocraft_engine::color_cmds::document_profile(&st.doc), st.doc.mode, st.doc.icc_profile.is_some());
+    let dpi = f64::from(st.doc.resolution_dpi.max(1.0));
+    let page_pt = (f64::from(st.doc.size.width) * 72.0 / dpi, f64::from(st.doc.size.height) * 72.0 / dpi);
     let candidates = candidates(app, &st.doc);
     // Start on the document's own condition when it can be one, else the first that fits.
     let profile = candidates.iter().position(|c| c.fits(PdfXStandard::X1a2001)).unwrap_or(0);
-    app.pdf_options =
-        Some(Prompt { doc, path, copy, record, standard: None, convert: true, profile, bleed_mm: 0.0, candidates, source, mode, embedded, restored: false });
+    app.pdf_options = Some(Prompt {
+        doc,
+        path,
+        copy,
+        record,
+        standard: None,
+        convert: true,
+        profile,
+        bleed_mm: 0.0,
+        candidates,
+        source,
+        mode,
+        embedded,
+        page_pt,
+        restored: false,
+    });
     Ok(())
 }
 
@@ -274,25 +300,35 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     p.profile = profile;
     p.bleed_mm = bleed;
     p.convert = convert;
+    // Checked again with this frame's edits: a standard picked in the same frame as Save PDF may
+    // not fit the chosen profile.
+    let can_save = p.problem().is_none();
     // A focused button takes Enter as its click without consuming the key: Enter on Cancel cancels.
     let enter = can_save && !cancel && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
-    if ok || enter {
+    if (ok && can_save) || enter {
         let Some(p) = app.pdf_options.take() else { return };
-        let fail = |app: &mut PhotocraftApp, e: String| {
+        // Nothing written: the prompt stays, with its destination, for another answer.
+        let fail = |app: &mut PhotocraftApp, p: Prompt, e: String| {
             app.ui.status = crate::i18n::fmt(tl!("Save failed: {error}"), &[("error", &e)]);
             app.ui.status_error = true;
+            app.pdf_options = Some(p);
         };
         let chosen = match params(&p) {
             Ok(chosen) => chosen,
-            Err(e) => return fail(app, e),
+            Err(e) => return fail(app, p, e),
         };
         let mut settings = app.save_settings();
         let doc = app.session.documents().iter().find(|d| d.doc.id == p.doc).map(|d| d.doc.clone());
         match (photocraft_engine::file_cmds::PdfRequest::resolve(&app.session.color, &chosen), doc) {
             (Ok(Some(request)), Some(doc)) => settings.pdf = request.options_for(&doc),
             (Ok(_), Some(_)) => {}
-            (Err(e), _) => return fail(app, e.to_string()),
-            (_, None) => return fail(app, tl!("The document is closed").into()),
+            (Err(e), _) => return fail(app, p, e.to_string()),
+            // The document is gone: nothing to ask about any more.
+            (_, None) => {
+                app.ui.status = crate::i18n::fmt(tl!("Save failed: {error}"), &[("error", tl!("The document is closed"))]);
+                app.ui.status_error = true;
+                return;
+            }
         }
         let spec = p.candidates.get(p.profile).map(|c| c.spec.clone()).unwrap_or_default();
         let id = p.standard.map_or("none", PdfXStandard::id).to_string();
@@ -300,7 +336,12 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         let mut step = if p.record == "file.save" { serde_json::json!({}) } else { serde_json::json!({"path": p.path}) };
         // An action being recorded plays the save back with the same standard and condition.
         chosen.record(&mut step);
-        let written = app.with_document(p.doc, |app| app.write_document(p.path, &settings, p.copy));
+        let path = p.path.clone();
+        let written = app.with_document(p.doc, |app| {
+            // A Save As that keeps the document's own name records only its folder (#5305).
+            app.record_answered_save_as(p.record, &mut step);
+            app.write_document(path, &settings, p.copy)
+        });
         if written.is_ok() {
             // An action being recorded keeps the Save As or Save a Copy.
             app.session.journal.push((p.record.into(), step));
@@ -309,6 +350,8 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             Err(e) => {
                 app.ui.status = crate::i18n::fmt(tl!("Save failed: {error}"), &[("error", &e)]);
                 app.ui.status_error = true;
+                // The prompt stays, with its destination, for another standard or condition.
+                app.pdf_options = Some(p);
             }
             Ok(Some(_)) if !p.copy => crate::discard_ui::saved_document(app, ctx, p.doc),
             // A background save releases the close prompt when it finishes (`jobs_ui`).

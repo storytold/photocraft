@@ -13,10 +13,16 @@ type Asked = Option<(String, f64, bool, bool)>;
 /// Each write: the path and what its export was asked for.
 type Writes = Rc<RefCell<Vec<(String, Asked)>>>;
 
-/// One 8×8 RGB document whose exports record their PDF options, in a harness showing PDF Options
-/// and answering a save dialog with `to`.
+/// One 8×8 RGB document at 1 ppi (an 8 × 8 inch page, room for any bleed) whose exports record
+/// their PDF options, in a harness showing PDF Options and answering a save dialog with `to`.
 fn pdf_app(to: &str) -> (Prompted, Writes) {
     let mut app = app_with_docs(1);
+    app.session
+        .edit("resolution", |doc, _| {
+            doc.resolution_dpi = 1.0;
+            Ok(())
+        })
+        .unwrap();
     let writes: Writes = Rc::default();
     let written = writes.clone();
     app.services.file_dialog = Some(crate::file_dialog::fake(vec![Some(FileDialogAnswer::SaveTo(to.into()))]).0);
@@ -264,4 +270,80 @@ fn pdf_x3_keeping_a_version_4_document_profile_is_refused() {
     h.key_press(Key::Enter);
     h.run_steps(3);
     assert_eq!(writes.borrow()[0].1, Some(("x3-2002".to_string(), 0.0, true, true)));
+}
+
+/// #5305: a PDF Save As answered with the document's own name records only the folder and
+/// extension, so playing the action on another document saves that one under its own name.
+#[test]
+fn a_pdf_save_as_with_the_documents_name_records_only_the_folder() {
+    let (mut h, _writes) = pdf_app("unused.pdf");
+    let name = h.state().session.active().unwrap().doc.name.clone();
+    h.state_mut().services.file_dialog = Some(crate::file_dialog::fake(vec![Some(FileDialogAnswer::SaveTo(format!("out/{name}.pdf")))]).0);
+    h.state_mut().save_as(None).unwrap();
+    h.run_steps(3);
+    h.state_mut().pdf_options.as_mut().unwrap().standard = Some(PdfXStandard::X4);
+    h.run_steps(2);
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    let (id, step) = h.state().session.journal.last().cloned().expect("a recorded step");
+    assert_eq!(id, "file.saveAs");
+    assert_eq!(step.get("path"), None, "{step}");
+    assert_eq!((step["folder"].as_str(), step["extension"].as_str(), step["pdfStandard"].as_str()), (Some("out"), Some("pdf"), Some("x4-2008")));
+}
+
+/// A bleed that leaves no trim on the page is refused in the prompt, which stays; a write that
+/// fails leaves the prompt open with its destination too.
+#[test]
+fn the_prompt_stays_on_a_bleed_too_wide_or_a_failed_write() {
+    let (mut h, writes) = pdf_app("b.pdf");
+    h.state_mut()
+        .session
+        .edit("resolution", |doc, _| {
+            doc.resolution_dpi = 72.0;
+            Ok(())
+        })
+        .unwrap();
+    h.state_mut().save_as(None).unwrap();
+    h.run_steps(3);
+    {
+        let p = h.state_mut().pdf_options.as_mut().unwrap();
+        p.standard = Some(PdfXStandard::X4);
+        p.bleed_mm = 3.0; // the 8 px page at 72 ppi is 2.8 mm wide
+    }
+    h.run_steps(2);
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert!(writes.borrow().is_empty() && h.state().pdf_options.is_some(), "refused, still asking");
+
+    h.state_mut().pdf_options.as_mut().unwrap().bleed_mm = 0.0;
+    h.state_mut().services.write = Some(Box::new(|_, _| Err("disk full".into())));
+    h.run_steps(2);
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert_eq!(h.state().pdf_options.as_ref().map(|p| p.path.as_str()), Some("b.pdf"), "the prompt and its destination stay");
+    assert!(h.state().ui.status_error);
+}
+
+/// A replayed PDF/X Save a Copy step and an automation save with PDF/X params write PDF/X, not a
+/// plain PDF.
+#[test]
+fn replayed_copies_and_automation_saves_write_pdf_x() {
+    let (mut h, writes) = pdf_app("unused.pdf");
+    let x4 = json!({"pdfStandard": "x4-2008", "pdfOutputProfile": "working-cmyk", "pdfConvert": false});
+    let mut copy = x4.clone();
+    copy["path"] = "copy.pdf".into();
+    h.state_mut().replay_save("file.saveACopy", &copy).unwrap();
+    // Automation writes through its own granted writer; it lands in the same record.
+    let automated = writes.clone();
+    h.state_mut().services.automation_write = Some(Box::new(move |path: &str, bytes: &[u8]| {
+        automated.borrow_mut().push((path.to_string(), serde_json::from_slice(bytes).unwrap()));
+        Ok(())
+    }));
+    let choices = crate::FormatChoices::from_params(&x4, "app.save").unwrap();
+    h.state_mut().save_automation_with(Some("auto.pdf".into()), choices).unwrap();
+    let w = writes.borrow();
+    assert_eq!(w.len(), 2, "{w:?}");
+    for (path, asked) in w.iter() {
+        assert_eq!(asked.as_ref().map(|a| (a.0.as_str(), a.3)), Some(("x4-2008", false)), "{path}");
+    }
 }

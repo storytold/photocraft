@@ -3570,3 +3570,4 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Bleed:	Anschnitt:
 	The bleed already in the document: the trim box sits this far inside the page.	Der Anschnitt, der schon im Dokument ist: Das Endformat (TrimBox) liegt so weit innerhalb der Seite.
 	Save PDF	PDF speichern
+	A {bleed} mm bleed leaves no trim on this {width} × {height} mm page.	Ein Anschnitt von {bleed} mm lässt auf dieser Seite von {width} × {height} mm kein Endformat übrig.

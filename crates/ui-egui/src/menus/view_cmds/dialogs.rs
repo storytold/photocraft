@@ -647,7 +647,7 @@ fn save_a_copy(app: &mut PhotocraftApp) -> Result<Value, String> {
 /// path and saved state are untouched. `choices` are the Targa, DDS and JPEG answers, when there
 /// are any.
 pub(crate) fn write_copy(app: &mut PhotocraftApp, doc: &photocraft_doc::Document, path: &str, choices: crate::FormatChoices) -> Result<Value, String> {
-    let settings = choices.apply(app.save_settings());
+    let settings = app.with_pdf_choice(&choices, doc, choices.apply(app.save_settings()))?;
     let export = app.services.export.as_ref().ok_or("no exporter configured")?;
     let (bytes, warnings) = export(doc, path, &settings)?;
     let write = app.services.write.as_mut().ok_or("no writer configured")?;

@@ -195,8 +195,6 @@ struct XPage<'a> {
     standard: PdfXStandard,
     /// The output profile (CMYK), embedded as the intent's `DestOutputProfile`.
     profile: &'a [u8],
-    /// The registered characterization the profile describes (`FOGRA39`…), or `Custom`.
-    condition_id: &'a str,
     /// The profile's description.
     condition: &'a str,
     title: &'a str,
@@ -313,8 +311,10 @@ fn write_pdf(page: &PrintPage, x: Option<&XPage>) -> Vec<u8> {
             obj(
                 &mut out,
                 format!(
-                    "<< /Type /Catalog /Pages 2 0 R{metadata} /OutputIntents [<< /Type /OutputIntent /S /GTS_PDFX /OutputConditionIdentifier {} /OutputCondition {} /RegistryName (http://www.color.org) /Info {} /DestOutputProfile 6 0 R >>] >>",
-                    pdf_string(x.condition_id),
+                    // `Custom`: the embedded profile defines the condition. A registered name
+                    // (FOGRA39, …) can't be verified from a profile, and a wrong one would claim
+                    // another press condition.
+                    "<< /Type /Catalog /Pages 2 0 R{metadata} /OutputIntents [<< /Type /OutputIntent /S /GTS_PDFX /OutputConditionIdentifier (Custom) /OutputCondition {} /RegistryName (http://www.color.org) /Info {} /DestOutputProfile 6 0 R >>] >>",
                     pdf_string(x.condition),
                     pdf_string(x.condition)
                 )
@@ -497,31 +497,13 @@ pub struct PdfX {
     pub bleed_pt: f64,
 }
 
-/// The registered characterization a CMYK profile's description names, for the output intent's
-/// `OutputConditionIdentifier` (the ICC registry's names); `Custom` otherwise, which the
-/// embedded profile then defines. Only names that identify one condition are mapped (the most
-/// specific first): a wrong registered name would claim another press condition, while `Custom`
-/// with the embedded profile is always valid.
-pub fn output_condition_id(description: &str) -> &'static str {
-    let d = description.to_ascii_lowercase();
-    let known: [(&[&str], &str); 10] = [
-        (&["fogra51", "pso coated v3"], "FOGRA51"),
-        (&["fogra52", "pso uncoated v3"], "FOGRA52"),
-        (&["fogra39", "iso coated v2"], "FOGRA39"),
-        (&["fogra47", "pso uncoated iso12647"], "FOGRA47"),
-        (&["fogra30", "iso uncoated yellowish"], "FOGRA30"),
-        (&["fogra29", "iso uncoated"], "FOGRA29"),
-        (&["gracol2006", "gracol 2006", "coated gracol"], "CGATS TR 006"),
-        (&["swop2006_coated3", "swop 2006 coated #3", "coated3"], "CGATS TR 003"),
-        (&["swop2006_coated5", "swop 2006 coated #5", "coated5"], "CGATS TR 005"),
-        (&["web coated (swop) v2"], "CGATS TR 001"),
-    ];
-    known.iter().find(|(keys, _)| keys.iter().any(|k| d.contains(k))).map_or("Custom", |(_, id)| id)
-}
-
-/// 32 hex digits from `data` and `salt` (two FNV-1a passes), for the trailer's file `/ID`.
-fn file_id(data: &[u8], salt: u64) -> String {
-    let fnv = |seed: u64| data.iter().fold(seed ^ salt, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3));
+/// 32 hex digits from the page `data`, the Info values in `info` (title, standard, output
+/// condition) and `salt` (the save time), two FNV-1a passes, for the trailer's file `/ID` and the
+/// XMP document id: ISO 32000 asks for the Info values in it, so two saves of the same pixels in
+/// one second under other names get different ids.
+fn file_id(data: &[u8], info: &[&str], salt: u64) -> String {
+    let bytes = info.iter().flat_map(|s| s.as_bytes().iter().chain([&0u8])).chain(data.iter());
+    let fnv = |seed: u64| bytes.clone().fold(seed ^ salt, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3));
     format!("{:016x}{:016x}", fnv(0xcbf2_9ce4_8422_2325), fnv(0x8422_2325_cbf2_9ce4))
 }
 
@@ -618,23 +600,17 @@ fn export_x(doc: &Document, x: &PdfX, secs: u64) -> std::result::Result<ExportRe
         warnings.push("free-form text metadata is not supported by PDF; it will be dropped".into());
     }
     let data: Vec<u8> = samples.into_iter().map(to8).collect();
-    let id = file_id(&data, secs);
-    let image = PrintImage { width: doc.size.width, height: doc.size.height, channels, data, icc };
-    let page = PrintPage { paper: (pw, ph), image, rect: (0.0, 0.0, pw, ph), marks: Marks::default(), description: None, label: None };
     // Control characters become spaces, in the Info title and the XMP alike, so the two agree.
     let title: String = doc.name.rsplit_once('.').map_or(doc.name.as_str(), |(stem, _)| stem).chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
-    let title = title.trim();
-    let created = i64::try_from(secs).ok().and_then(|s| chrono::DateTime::from_timestamp(s, 0)).unwrap_or_default();
-    let xp = XPage {
-        standard: x.standard,
-        profile: &x.profile,
-        condition_id: output_condition_id(&dst.description),
-        condition: &dst.description,
-        title: if title.is_empty() { "Untitled" } else { title },
-        trim: (b, b, pw - b, ph - b),
-        created,
-        id,
+    let title = match title.trim() {
+        "" => "Untitled",
+        t => t,
     };
+    let id = file_id(&data, &[title, x.standard.id(), &dst.description], secs);
+    let image = PrintImage { width: doc.size.width, height: doc.size.height, channels, data, icc };
+    let page = PrintPage { paper: (pw, ph), image, rect: (0.0, 0.0, pw, ph), marks: Marks::default(), description: None, label: None };
+    let created = i64::try_from(secs).ok().and_then(|s| chrono::DateTime::from_timestamp(s, 0)).unwrap_or_default();
+    let xp = XPage { standard: x.standard, profile: &x.profile, condition: &dst.description, title, trim: (b, b, pw - b, ph - b), created, id };
     Ok(ExportResult { bytes: write_pdf(&page, Some(&xp)), warnings })
 }
 

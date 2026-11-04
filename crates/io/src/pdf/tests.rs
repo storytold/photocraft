@@ -213,13 +213,10 @@ fn x1a_refuses_what_it_cant_write() {
 }
 
 #[test]
-fn output_conditions_and_dates() {
-    assert_eq!(output_condition_id("Coated FOGRA39 (ISO 12647-2:2004)"), "FOGRA39");
-    assert_eq!(output_condition_id("ISO Coated v2 (ECI)"), "FOGRA39");
-    assert_eq!(output_condition_id("PSO Coated v3"), "FOGRA51");
-    assert_eq!(output_condition_id("U.S. Web Coated (SWOP) v2"), "CGATS TR 001");
-    assert_eq!(output_condition_id("PhotoCraft Coated CMYK"), "Custom");
-    assert_eq!(file_id(b"abc", 1).len(), 32);
+fn file_ids_take_the_info_values() {
+    assert_eq!(file_id(b"abc", &["t"], 1).len(), 32);
+    assert_ne!(file_id(b"abc", &["a"], 1), file_id(b"abc", &["b"], 1), "the title changes the id");
+    assert_ne!(file_id(b"abc", &["ab", "c"], 1), file_id(b"abc", &["a", "bc"], 1), "values are kept apart");
 }
 
 /// `bytes` relabelled ICC v2.1 (the repository ships no v2 profile); only the version is read.
@@ -403,10 +400,9 @@ fn control_characters_in_the_title_agree_in_info_and_xmp() {
 }
 
 #[test]
-fn only_unambiguous_names_map_to_a_registered_condition() {
-    assert_eq!(output_condition_id("ISO Uncoated Yellowish"), "FOGRA30");
-    assert_eq!(output_condition_id("ISO Uncoated"), "FOGRA29");
-    assert_eq!(output_condition_id("SWOP2006_Coated3v2"), "CGATS TR 003");
-    assert_eq!(output_condition_id("SWOP2006_Coated5v2"), "CGATS TR 005");
-    assert_eq!(output_condition_id("U.S. Web Uncoated (SWOP) v2"), "Custom", "not the coated SWOP condition");
+fn the_output_condition_is_custom_with_its_profile_embedded() {
+    // A profile's name can't prove the press condition it was made for, so none is claimed.
+    let out = export_with_options(&doc(ColorMode::Rgb), &x1a(None, 0.0)).unwrap();
+    assert!(has(&out.bytes, "/OutputConditionIdentifier (Custom) /OutputCondition ("));
+    assert!(has(&out.bytes, "/DestOutputProfile 6 0 R"), "Custom needs the embedded profile");
 }
