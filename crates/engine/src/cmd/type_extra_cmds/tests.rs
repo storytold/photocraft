@@ -243,6 +243,138 @@ fn opentype_toggles_store_features() {
     assert!(feature_on(&back.char_runs()[0].style, "swsh") && !back.char_runs()[0].style.ligatures);
 }
 
+/// Is `tag` on at character `ci` of an ASCII text layer?
+fn on_at(s: &Session, id: LayerId, ci: usize, tag: &str) -> bool {
+    let mut end = 0;
+    text(s, id)
+        .char_runs()
+        .iter()
+        .find(|r| {
+            end += r.len;
+            ci < end
+        })
+        .is_some_and(|r| feature_on(&r.style, tag))
+}
+
+#[test]
+fn numerals_are_registered_with_their_menu_path() {
+    for style in NumeralsStyle::ALL {
+        let spec = crate::commands::find(&format!("type.openType.numerals.{}", style.id())).unwrap();
+        assert_eq!(spec.label, style.label());
+        assert_eq!(spec.menu, ["Type", "OpenType", "Numerals"]);
+    }
+    assert!(crate::commands::find("type.openType.numerals.unknown").is_none());
+}
+
+#[test]
+fn numerals_replace_figure_tags_and_keep_other_features() {
+    let mut s = session(8);
+    let id = text_layer(&mut s, "012345");
+    let before = text(&s, id).char_runs()[0].style.clone();
+    s.execute("type.openType.fractions", json!({"on": true})).unwrap();
+    s.execute("type.openType.numerals.tabularLining", json!({})).unwrap();
+    assert_eq!(numerals_style_of(&text(&s, id).char_runs()[0].style), Some(NumeralsStyle::TabularLining));
+    assert!(on_at(&s, id, 0, "tnum") && on_at(&s, id, 0, "lnum") && !on_at(&s, id, 0, "onum") && !on_at(&s, id, 0, "pnum"));
+    assert!(feature_on(&text(&s, id).char_runs()[0].style, "frac"), "non-figure features stay");
+    s.execute("type.openType.numerals.proportionalOldstyle", json!({})).unwrap();
+    assert_eq!(numerals_style_of(&text(&s, id).char_runs()[0].style), Some(NumeralsStyle::ProportionalOldstyle));
+    assert!(on_at(&s, id, 0, "pnum") && on_at(&s, id, 0, "onum") && !on_at(&s, id, 0, "tnum") && !on_at(&s, id, 0, "lnum"));
+    s.execute("type.openType.numerals.default", json!({})).unwrap();
+    assert_eq!(numerals_style_of(&text(&s, id).char_runs()[0].style), Some(NumeralsStyle::Default));
+    for tag in NUMERAL_FEATURE_TAGS {
+        assert!(!on_at(&s, id, 0, tag), "{tag}");
+    }
+    let st = text(&s, id).char_runs()[0].style.clone();
+    assert!(st.ligatures, "liga untouched");
+    assert_eq!((st.size_pt, st.font_family.clone(), st.color), (before.size_pt, before.font_family, before.color));
+}
+
+#[test]
+fn numerals_range_edits_only_those_characters() {
+    let mut s = session(8);
+    let id = text_layer(&mut s, "abcdef");
+    s.execute("type.openType.numerals.lining", json!({"range": [2, 5]})).unwrap();
+    let on: Vec<bool> = (0..6).map(|i| on_at(&s, id, i, "lnum")).collect();
+    assert_eq!(on, [false, false, true, true, true, false]);
+    assert_eq!(numerals_style_at(text(&s, id), 2), Some(NumeralsStyle::Lining));
+    assert_eq!(numerals_style_at(text(&s, id), 0), Some(NumeralsStyle::Default));
+    s.execute("type.openType.numerals.tabular", json!({"range": [2, 5]})).unwrap();
+    assert!(on_at(&s, id, 3, "tnum") && !on_at(&s, id, 3, "lnum"));
+    assert!(!on_at(&s, id, 0, "tnum"));
+}
+
+#[test]
+fn numerals_apply_to_every_listed_layer() {
+    let mut s = session(8);
+    let a = text_layer(&mut s, "one");
+    let b = text_layer(&mut s, "two");
+    s.execute("type.openType.numerals.oldstyle", json!({"layers": [a.0, b.0]})).unwrap();
+    assert!(on_at(&s, a, 0, "onum") && on_at(&s, b, 2, "onum"));
+    s.execute("type.openType.numerals.default", json!({"layers": [a.0, b.0]})).unwrap();
+    assert!(!on_at(&s, a, 0, "onum") && !on_at(&s, b, 0, "onum"));
+}
+
+#[test]
+fn numerals_are_one_undo_step_each() {
+    let mut s = session(8);
+    let id = text_layer(&mut s, "123");
+    s.execute("type.openType.numerals.lining", json!({})).unwrap();
+    s.execute("type.openType.numerals.tabularOldstyle", json!({})).unwrap();
+    assert!(s.undo());
+    assert_eq!(numerals_style_of(&text(&s, id).char_runs()[0].style), Some(NumeralsStyle::Lining));
+    assert!(s.undo());
+    assert_eq!(numerals_style_of(&text(&s, id).char_runs()[0].style), Some(NumeralsStyle::Default));
+    assert!(s.redo());
+    assert_eq!(numerals_style_of(&text(&s, id).char_runs()[0].style), Some(NumeralsStyle::Lining));
+}
+
+#[test]
+fn numerals_survive_a_pcraft_round_trip() {
+    let mut s = session(8);
+    let id = text_layer(&mut s, "Il36");
+    s.execute("type.openType.numerals.proportionalLining", json!({})).unwrap();
+    let bytes = photocraft_format::save_to_bytes(&s.active().unwrap().doc, &Default::default()).unwrap();
+    let doc = photocraft_format::load_from_bytes(&bytes).unwrap();
+    let Some(LayerContent::Text(t)) = doc.layer(id).map(|l| &l.content) else { panic!("text layer lost") };
+    assert_eq!(numerals_style_of(&t.char_runs()[0].style), Some(NumeralsStyle::ProportionalLining));
+}
+
+#[test]
+fn numerals_fail_gracefully_on_bad_params() {
+    let mut s = session(8);
+    let bg = s.active().unwrap().active_layer.unwrap();
+    let id = text_layer(&mut s, "abc");
+    let cmd = "type.openType.numerals.tabularLining";
+    assert!(s.execute(cmd, json!({"layer": 987_654})).is_err(), "unknown layer");
+    assert!(s.execute(cmd, json!({"layer": bg.0})).is_err(), "not a type layer");
+    assert!(s.execute(cmd, json!({"layers": ["x"]})).is_err());
+    s.execute(cmd, json!({"range": [5, 2]})).unwrap();
+    s.execute(cmd, json!({"range": [50, 90]})).unwrap();
+    s.execute(cmd, json!({"range": [u64::MAX, 0]})).unwrap();
+    s.execute(cmd, json!({"range": "all"})).unwrap();
+    assert!(s.execute(cmd, json!({"layer": id.0, "range": [0, 1]})).is_ok());
+    assert_eq!(numerals_style_of(&text(&s, id).char_runs()[0].style), Some(NumeralsStyle::TabularLining));
+}
+
+#[test]
+fn numerals_tabular_changes_inter_digit_widths() {
+    let mut s = session(8);
+    let r = s.execute("type.create", json!({"x": 20, "y": 70, "text": "1111111111", "font": "Inter", "size": 36, "color": "#000000"})).unwrap();
+    let id = LayerId(r["layer"].as_u64().unwrap());
+    let width = |s: &Session| {
+        let t = text(s, id).clone();
+        let mut e = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner());
+        let layout = e.layout(&t, 72.0);
+        layout.lines.first().map_or(0.0, |line| line.x1 - line.x0)
+    };
+    let plain = width(&s);
+    s.execute("type.openType.numerals.tabular", json!({})).unwrap();
+    let tab = width(&s);
+    assert!((tab - plain).abs() > 0.5, "tnum changes Inter's digit advances: {plain} → {tab}");
+    s.execute("type.openType.numerals.default", json!({})).unwrap();
+    assert!((width(&s) - plain).abs() < 0.5, "default restores the advances");
+}
+
 #[test]
 fn lorem_update_fonts_and_default_styles() {
     let mut s = session(16);
@@ -312,6 +444,80 @@ fn type_attaches_to_a_path_and_releases_it() {
     assert!(ink(&s, id).width() > ink(&s, id).height());
     assert!(s.undo());
     assert!(matches!(text(&s, id).shape, TextShape::Path { .. }));
+}
+
+/// #9114: type on a path follows its own path when the path is edited (Direct Selection's
+/// `path.*` commands with `"name": "layer"`), as Photoshop's Type Path does; the Paths list names
+/// it, an edit is one undo step, and an edit that leaves no path is refused.
+#[test]
+fn type_follows_its_path_when_the_path_is_edited() {
+    let mut s = session(8);
+    let id = text_layer(&mut s, "Hello path");
+    s.edit("path", |doc, _| {
+        doc.work_path = Some(Path::new(vec![Subpath::polyline(&[(150.0, 10.0), (150.0, 110.0)])]));
+        Ok(())
+    })
+    .unwrap();
+    s.execute("type.attachToPath", json!({"start": 4})).unwrap();
+    // In document space, the type path is where the work path was.
+    let path = crate::type_extra_cmds::type_path(text(&s, id)).unwrap();
+    let ends: Vec<(f64, f64)> = path.subpaths[0].knots.iter().map(|k| (k.anchor.x, k.anchor.y)).collect();
+    assert!(ends.iter().zip([(150.0, 10.0), (150.0, 110.0)]).all(|(a, b)| (a.0 - b.0).abs() < 1e-6 && (a.1 - b.1).abs() < 1e-6), "{ends:?}");
+    let listed = s.execute("path.list", json!({})).unwrap();
+    assert_eq!(listed["typePath"]["kind"], "typePath", "{listed}");
+    // Swing the path's end to the right: the type now runs down and to the right.
+    let before = ink(&s, id);
+    let r = s.execute("path.moveAnchors", json!({"name": "layer", "layer": id.0, "anchors": [[0, 1]], "move": [120, 0]})).unwrap();
+    assert_eq!(r["name"], "layer");
+    let after = ink(&s, id);
+    assert!(after.width() > before.width() + 20, "{before:?} → {after:?}");
+    assert!(matches!(text(&s, id).shape, TextShape::Path { start, .. } if start == 4.0), "where the type starts is kept");
+    // The work path it came from is untouched; Undo puts the type path back.
+    assert_eq!(s.active().unwrap().doc.work_path.as_ref().unwrap().subpaths[0].knots[1].anchor.x, 150.0);
+    assert!(s.undo());
+    assert_eq!(ink(&s, id), before);
+    // An edit that would leave fewer than two points is refused and changes nothing.
+    assert!(s.execute("path.deleteAnchor", json!({"name": "layer", "layer": id.0, "subpath": 0, "knot": 0})).is_err());
+    assert_eq!(ink(&s, id), before);
+}
+
+/// #9114: a type-on-a-path layer's vector mask is still what `"name": "layer"` edits, as on main
+/// and as `path.info` reads it; `"typePath": true` edits the Type Path; `path.list` reports both.
+#[test]
+fn a_vector_mask_on_type_on_a_path_is_edited_not_the_type_path() {
+    let mut s = session(8);
+    let id = text_layer(&mut s, "Hello path");
+    s.edit("path", |doc, _| {
+        doc.work_path = Some(Path::new(vec![Subpath::polyline(&[(150.0, 10.0), (150.0, 110.0)])]));
+        Ok(())
+    })
+    .unwrap();
+    s.execute("type.attachToPath", json!({})).unwrap();
+    let rect = json!({"subpaths": [{"closed": true, "knots": [[10, 10], [200, 10], [200, 100], [10, 100]]}]});
+    s.execute("layer.vectorMask.add", json!({"layer": id.0, "path": rect})).unwrap();
+    let listed = s.execute("path.list", json!({})).unwrap();
+    assert_eq!((listed["layerPath"]["kind"].as_str(), listed["typePath"]["kind"].as_str()), (Some("vectorMask"), Some("typePath")), "{listed}");
+    let type_path = |s: &Session| crate::type_extra_cmds::type_path(text(s, id)).unwrap();
+    let before = type_path(&s);
+    let mask = |s: &Session| s.active().unwrap().doc.layer(id).unwrap().vector_mask.as_ref().unwrap().path.subpaths[0].knots[0].anchor;
+    s.execute("path.moveAnchors", json!({"name": "layer", "layer": id.0, "anchors": [[0, 0]], "move": [10, 0]})).unwrap();
+    assert_eq!(mask(&s), photocraft_geom::Point::new(20.0, 10.0), "the mask's corner moved");
+    assert_eq!(type_path(&s), before, "the Type Path stays");
+    s.execute("path.moveAnchors", json!({"name": "layer", "layer": id.0, "typePath": true, "anchors": [[0, 1]], "move": [20, 0]})).unwrap();
+    assert!((type_path(&s).subpaths[0].knots[1].anchor.x - before.subpaths[0].knots[1].anchor.x - 20.0).abs() < 1e-6, "the Type Path moved");
+    assert_eq!(mask(&s), photocraft_geom::Point::new(20.0, 10.0), "the mask stays");
+}
+
+/// An edit can't grow the Type Path past the cap `type.attachToPath` keeps.
+#[test]
+fn an_edited_type_path_keeps_the_knot_cap() {
+    let mut s = session(8);
+    let id = text_layer(&mut s, "Hi");
+    let knots: Vec<(f64, f64)> = (0..=MAX_TYPE_PATH_KNOTS).map(|i| (i as f64 * 0.001, 50.0)).collect();
+    let mut t = text(&s, id).clone();
+    t.shape = TextShape::Path { path: Subpath::polyline(&knots[..2]), start: 0.0, flip: false };
+    assert!(set_type_path(&mut t, &Path::new(vec![Subpath::polyline(&knots[..MAX_TYPE_PATH_KNOTS])])).is_ok());
+    assert!(set_type_path(&mut t, &Path::new(vec![Subpath::polyline(&knots)])).is_err());
 }
 
 /// The Type tool's click on a path: `"at"` starts the type where the path passes nearest the

@@ -1,6 +1,6 @@
 //! The About window's credits: every contributor (GitHub login always; display and real names only
 //! with recorded consent) and the AI models that helped. The tables are baked into the binary by
-//! build.rs from contributors/contributors.json (craftrules standards/contributors.md); nothing is
+//! build.rs from contributors/contributors.json; nothing is
 //! read at run time. UI strings go through `tl!` (column abbreviations like `+LOC` stay as they are).
 
 use std::cmp::Ordering;
@@ -266,7 +266,7 @@ fn contributors_in(app: &mut PhotocraftApp, ui: &mut egui::Ui, contributors: &[C
         ui.separator();
         ui.label(tl!("Sort"));
         let (press, close) = crate::press_menu::PressCombo::before(ui, "credits_sort");
-        let sort = egui::ComboBox::from_id_salt("credits_sort").selected_text(v.key.label().0).close_behavior(close).show_ui(ui, |ui| {
+        let sort = craft_ui::ComboBox::from_id_salt("credits_sort").selected_text(v.key.label().0).close_behavior(close).show_ui(ui, |ui| {
             for k in SortKey::ALL {
                 let item = ui.selectable_label(v.key == k, k.label().0);
                 if press.chosen(ui, &item) {

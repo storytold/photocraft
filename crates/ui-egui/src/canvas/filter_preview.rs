@@ -1,6 +1,6 @@
 use super::display::canvas_display;
 use super::textures::texture_buffer;
-use super::*;
+use super::{Document, LayerContent, PhotocraftApp};
 
 /// The proxy factor of a live preview of filter `cmd` with `params` on `doc`, the active document:
 /// reduced on a large document (Preferences › Performance › Low Resolution Previews), except for
@@ -84,11 +84,14 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
                 Ok(computed) if finished == request => publish_filter_preview(app, idx, finished, computed.result, computed.ms),
                 // Mid-drag, a frame for the value the pointer has just left is what makes the
                 // canvas follow the drag. Three things have to hold for it: it belongs to this
-                // preview, it has a frame to show (an empty one would blank a good preview), and
-                // it must not displace a frame that is already exact for the dialog, which is
-                // what a slider dragged out and back would otherwise make the canvas do.
+                // preview (at any proxy factor: it is drawn at its own, and a radius drag can move
+                // the factor, #10474), it has a frame to show (an empty one would blank a good
+                // preview), and it must not displace a frame that is already exact for the dialog,
+                // which is what a slider dragged out and back would otherwise make the canvas do.
                 Ok(computed)
-                    if finished.same_target(&request) && computed.result.is_some() && !app.filter_preview.as_ref().is_some_and(|p| p.key == request) =>
+                    if finished.same_target_at_any_scale(&request)
+                        && computed.result.is_some()
+                        && !app.filter_preview.as_ref().is_some_and(|p| p.key == request) =>
                 {
                     publish_filter_preview(app, idx, finished, computed.result, computed.ms);
                 }
@@ -125,7 +128,7 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
                     let buffer = photocraft_compose::flatten(&doc);
                     (std::sync::Arc::new(doc), buffer)
                 });
-                crate::filter_preview_worker::Computed { result, ms: crate::gpu_canvas::now_ms() - t0 }
+                crate::dialogs::filter_preview_worker::Computed { result, ms: crate::gpu_canvas::now_ms() - t0 }
             }) {
                 app.filter_preview = Some(crate::filter_dialog::FilterPreview { key: request.clone(), result: None, committing: false });
                 crate::notices::error(app, error);
@@ -135,8 +138,9 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
             ctx.request_repaint_after(std::time::Duration::from_millis(16));
         }
         let preview = app.filter_preview.as_ref()?;
-        // Keep the last preview during a drag, but never one from another source or dialog.
-        if !preview.key.same_target(&request) {
+        // Keep the last preview during a drag, but never one from another source or dialog. It is
+        // drawn at its own factor, so a drag that changes the factor keeps it too (#10474).
+        if !preview.key.same_target_at_any_scale(&request) {
             return None;
         }
         let result = preview.result.as_ref()?;
