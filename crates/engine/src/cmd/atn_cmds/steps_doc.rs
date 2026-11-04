@@ -113,7 +113,7 @@ pub(super) fn conditional_from(d: &Descriptor) -> Mapped {
         _ => None,
     };
     let mut params = json!({"if": condition, "then": branch("then"), "else": branch("else")});
-    let scopes = ["then", "else"].map(|key| (key, get_ref(d, key).and_then(|reference| super::steps_layer::action_set(reference))));
+    let scopes = ["then", "else"].map(|key| (key, get_ref(d, key).and_then(super::steps_layer::action_set)));
     let shared = scopes
         .iter()
         .filter(|(key, _)| params[*key].is_string())
