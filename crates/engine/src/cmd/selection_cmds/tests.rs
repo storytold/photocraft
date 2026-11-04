@@ -223,6 +223,66 @@ fn magic_wand_contiguous_and_modes() {
 }
 
 #[test]
+fn magic_wand_tolerance_refresh_recombines_with_original_selection_and_keeps_undo() {
+    let mut s = session();
+    s.execute("select.rect", json!({"x": 25, "y": 5, "width": 10, "height": 10})).unwrap();
+    let baseline = s.active().unwrap().doc.selection.clone();
+
+    s.execute("select.magicWand", json!({"x": 10, "y": 10, "tolerance": 0, "antiAlias": false, "mode": "add"})).unwrap();
+    assert_eq!(coverage(&s, 10, 10), 1.0);
+    assert_eq!(coverage(&s, 20, 10), 0.0);
+
+    s.execute_magic_wand_with_selection_baseline(json!({"x": 10, "y": 10, "tolerance": 255, "antiAlias": false, "mode": "add"}), baseline.clone()).unwrap();
+    assert_eq!(coverage(&s, 20, 10), 1.0);
+    s.execute_magic_wand_with_selection_baseline(json!({"x": 10, "y": 10, "tolerance": 0, "antiAlias": false, "mode": "add"}), baseline).unwrap();
+    assert_eq!(coverage(&s, 10, 10), 1.0);
+    assert_eq!(coverage(&s, 30, 10), 1.0);
+    assert_eq!(coverage(&s, 20, 10), 0.0);
+
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(coverage(&s, 20, 10), 1.0);
+}
+
+#[test]
+fn magic_wand_tolerance_refresh_records_the_final_click_for_action_replay() {
+    let mut s = session();
+    s.execute("actions.record", json!({"name": "Wand"})).unwrap();
+    s.execute("select.rect", json!({"x": 25, "y": 5, "width": 10, "height": 10})).unwrap();
+    let baseline = s.active().unwrap().doc.selection.clone();
+    let params = |tolerance| json!({"x": 10, "y": 10, "tolerance": tolerance, "antiAlias": false, "mode": "add"});
+
+    s.execute("select.magicWand", params(255)).unwrap();
+    s.execute_magic_wand_with_selection_baseline(params(0), baseline).unwrap();
+    s.execute("actions.stop", json!({})).unwrap();
+
+    let action = s.actions.list[0].clone();
+    assert_eq!(action.steps.len(), 2, "the initial selection plus one final Magic Wand click");
+    assert_eq!(action.steps[1].0, "select.magicWand");
+    assert_eq!(action.steps[1].1["tolerance"], 0);
+
+    let mut replay = session();
+    replay.actions.list.push(action);
+    replay.execute("actions.play", json!({"action": "Wand"})).unwrap();
+    assert_eq!(coverage(&replay, 30, 10), 1.0, "the pre-click Add baseline is retained");
+    assert_eq!(coverage(&replay, 20, 10), 0.0, "the final lower tolerance is replayed");
+}
+
+#[test]
+fn magic_wand_subtract_tolerance_refresh_can_restore_baseline_pixels() {
+    let mut s = session();
+    s.execute("select.rect", json!({"x": 25, "y": 5, "width": 10, "height": 10})).unwrap();
+    let baseline = s.active().unwrap().doc.selection.clone();
+    let params = |tolerance| json!({"x": 10, "y": 10, "tolerance": tolerance, "antiAlias": false, "mode": "subtract"});
+
+    s.execute("select.magicWand", params(0)).unwrap();
+    assert_eq!(coverage(&s, 30, 10), 1.0);
+    s.execute_magic_wand_with_selection_baseline(params(255), baseline.clone()).unwrap();
+    assert_eq!(coverage(&s, 30, 10), 0.0);
+    s.execute_magic_wand_with_selection_baseline(params(0), baseline).unwrap();
+    assert_eq!(coverage(&s, 30, 10), 1.0);
+}
+
+#[test]
 fn color_range_prepared_query_matches_the_command_at_all_depths() {
     use photocraft_doc::{Color, ColorMode, SampleType, Size};
     for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
