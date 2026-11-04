@@ -106,6 +106,11 @@ impl Owner {
         Ok((Arc::new(action), from, owner))
     }
 
+    /// Suspend a recorder started while an unowned library dialog waited, using the same take-bound owner.
+    pub fn continuation(s: &mut Session, action: &Action, from: usize) -> Result<Option<Self>> {
+        suspend(s, None, Some((action.name.clone(), from)), false)
+    }
+
     /// Between UI ticks, reject unowned commands before their pre-command effects or jobs.
     pub fn yielding(&self, s: &mut Session, yielding: bool) -> Result<()> {
         self.validate(s)?;

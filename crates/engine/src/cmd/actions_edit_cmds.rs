@@ -394,8 +394,8 @@ fn conditional(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(name) = played {
         let mut call = json!({"action": name});
         let key = if holds { "thenSet" } else { "elseSet" };
-        if let Some(scope) = p.get(key).and_then(Value::as_str).or_else(|| p.get("set").and_then(Value::as_str)) {
-            call["set"] = json!(scope);
+        if let Some(scope) = p.get(key).filter(|scope| !scope.is_null()).or_else(|| p.get("set").filter(|scope| !scope.is_null())) {
+            call["set"] = scope.clone();
         }
         let r = s.execute("actions.play", call)?;
         if let Some(f) = r.get("failed") {
@@ -532,6 +532,30 @@ mod tests {
         // Deleting a step keeps the flags of the others in place.
         s.execute("actions.delete", json!({"action": "A", "step": 0})).unwrap();
         assert_eq!(s.actions.list[0].dialogs.iter().copied().collect::<Vec<_>>(), [0]);
+    }
+
+    /// A malformed selected scope must not become an unscoped call or inherit a valid shared scope.
+    #[test]
+    fn conditional_rejects_malformed_selected_scopes_before_playback() {
+        for (condition, branch) in [("always", "then"), ("hasSelection", "else")] {
+            for field in ["set".to_string(), format!("{branch}Set")] {
+                let mut s = session_with(&[]);
+                s.actions.list[0].set = Some("Intended".into());
+                s.actions.list[0].steps = vec![("layer.new.layer".into(), json!({"name":"Wrong fallback"}))];
+                let before = s.active().unwrap().doc.clone();
+                let mut params = json!({"if":condition,"then":"A","else":"A","set":"Intended"});
+                params[&field] = json!(5);
+                let error = s.execute("actions.conditional", params).unwrap_err().to_string();
+                assert!(error.contains("set"), "{field}: {error}");
+                assert_eq!(s.active().unwrap().doc.as_ref(), before.as_ref(), "{field} never plays the unscoped A");
+            }
+        }
+        let mut s = session_with(&[]);
+        s.actions.list[0].set = Some("Intended".into());
+        s.actions.list[0].steps = vec![("layer.new.layer".into(), json!({"name":"Intended"}))];
+        let played = s.execute("actions.conditional", json!({"if":"always","then":"A","thenSet":null,"set":"Intended"})).unwrap();
+        assert!(played.get("failed").is_none(), "{played}");
+        assert_eq!(s.active().unwrap().doc.layers.last().unwrap().name, "Intended");
     }
 
     #[test]

@@ -1134,7 +1134,9 @@ pub(crate) fn run_step_dialog(app: &mut PhotocraftApp, fields: &serde_json::Map<
 /// Bind the dialog's own edit to its suspended action before it runs or starts a worker.
 pub(crate) fn prepare_history(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Value>) -> Result<(), String> {
     let Some(token) = fields.get(RESUME).and_then(Value::as_u64) else { return Ok(()) };
-    let history = app.paused_playbacks.paused.get_mut(&token).ok_or("this dialog doesn't belong to a paused action")?.history.take();
+    let paused = app.paused_playbacks.paused.get_mut(&token).ok_or("this dialog doesn't belong to a paused action")?;
+    suspend_later_capture(&mut app.session, paused)?;
+    let history = paused.history.take();
     if let Some(history) = history
         && let Err(e) = history.resume(&mut app.session)
     {
@@ -1263,9 +1265,21 @@ pub(crate) fn resume_spelling(app: &mut PhotocraftApp, token: u64) -> Result<(),
     Err(error.into())
 }
 
+/// A plain library pause may gain a recorder while waiting. Hold it before the confirmed edit
+/// or resumed tail, and let the existing owner restore it on completion, cancellation or failure.
+fn suspend_later_capture(session: &mut photocraft_engine::Session, paused: &mut PausedPlayback) -> Result<(), String> {
+    if paused.record.is_none() && session.actions.recording_active() {
+        paused.frame.validate(session)?;
+        paused.record = actions_cmds::playback::Owner::continuation(session, &paused.frame.action, paused.frame.from.saturating_sub(1))
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
 /// Restore the bound history and completed worker before admitting the remaining immutable tail.
 fn resume_scope(app: &mut PhotocraftApp, paused: &mut PausedPlayback) -> Result<Option<Gate>, String> {
     paused.frame.validate(&app.session)?;
+    suspend_later_capture(&mut app.session, paused)?;
     if let Some(record) = &paused.record {
         record.validate(&app.session).map_err(|error| error.to_string())?;
     }

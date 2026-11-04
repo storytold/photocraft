@@ -358,3 +358,75 @@ fn a_resumed_preview_keeps_its_tree_step_budget() {
     assert_eq!(app.session.actions.playback_steps, actions_cmds::MAX_PLAYBACK_STEPS);
     assert!(app.session.actions.held_playback.is_none());
 }
+
+/// A recorder started during an ordinary library pause survives confirmation, a second pause,
+/// cancellation and command failure, and captures later manual work once rather than playback internals.
+#[test]
+fn a_recorder_started_during_a_library_dialog_survives_its_continuation() {
+    for exit in ["complete", "cancel first", "cancel second", "command error"] {
+        let mut app = app();
+        let mut child = Action::new(
+            "Child",
+            vec![
+                ("filter.blur.gaussianBlur".into(), json!({"radius":1})),
+                ("filter.blur.gaussianBlur".into(), json!({"radius":1})),
+                ("layer.new.layer".into(), json!({"name":"Suffix"})),
+            ],
+        );
+        child.dialogs.extend([0, 1]);
+        app.session.actions.list.push(child);
+        app.run("actions.play", json!({"action":"Child"})).unwrap();
+        let first = dialog(&app);
+        app.run("actions.record", json!({"name":"Later"})).unwrap();
+        let take = app.session.actions.take;
+        assert!(app.session.actions.recording_active());
+        if exit == "cancel first" {
+            crate::dialogs::cancel(&mut app, first).unwrap();
+        } else {
+            crate::dialogs::confirm(&mut app, first).unwrap();
+            assert!(!app.session.actions.recording_active(), "capture remains held across the second pause: {exit}");
+            assert!(app.session.actions.held_playback.is_some());
+            assert_eq!(app.session.actions.take, take, "the second pause retains the same take");
+            let second = dialog(&app);
+            assert_ne!(first, second);
+            match exit {
+                "cancel second" => crate::dialogs::cancel(&mut app, second).unwrap(),
+                "command error" => {
+                    app.ui.dialog_mut(second).unwrap().fields.insert("radius".into(), json!("invalid"));
+                    assert!(crate::dialogs::confirm(&mut app, second).is_err());
+                }
+                _ => {
+                    crate::dialogs::confirm(&mut app, second).unwrap();
+                }
+            }
+        }
+        assert!(app.session.actions.recording_active(), "{exit}");
+        assert_eq!(app.session.actions.take, take, "{exit} restores the original later take");
+        assert!(app.session.actions.held_playback.is_none());
+        assert!(app.paused_playbacks.paused.is_empty());
+        app.run("layer.new.layer", json!({"name":"After"})).unwrap();
+        app.run("actions.stop", json!({})).unwrap();
+        let recorded = &app.session.actions.list.iter().find(|action| action.name == "Later").unwrap().steps;
+        let manual = ("layer.new.layer".into(), json!({"name":"After"}));
+        let expected = if exit == "cancel first" { vec![manual] } else { vec![("actions.play".into(), json!({"action":"Child"})), manual] };
+        assert_eq!(recorded, &expected, "{exit}");
+        assert_eq!(has_layer(&app, "Suffix"), exit == "complete");
+    }
+}
+
+/// Even an empty remaining tail must release the capture acquired for the confirmed command.
+#[test]
+fn a_late_recorder_survives_a_library_dialog_with_no_tail() {
+    let mut app = app();
+    let mut child = Action::new("Only dialog", vec![("filter.blur.gaussianBlur".into(), json!({"radius":1}))]);
+    child.dialogs.insert(0);
+    app.session.actions.list.push(child);
+    app.run("actions.play", json!({"action":"Only dialog"})).unwrap();
+    let id = dialog(&app);
+    app.run("actions.record", json!({"name":"Later"})).unwrap();
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    assert!(app.session.actions.recording_active());
+    assert!(app.session.actions.held_playback.is_none());
+    app.run("actions.stop", json!({})).unwrap();
+    assert_eq!(app.session.actions.list[1].steps, vec![("actions.play".into(), json!({"action":"Only dialog"}))]);
+}
