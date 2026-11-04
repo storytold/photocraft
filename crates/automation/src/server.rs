@@ -656,9 +656,8 @@ impl PhotocraftMcp {
             Ok(bytes) => bytes,
             Err(error) => return Ok(fail(format!("app screenshot data: {error}"))),
         };
-        let bytes = match downscale_png(&bytes, max_side.unwrap_or(0)) {
-            Ok(Some(small)) => small,
-            Ok(None) => bytes,
+        let bytes = match downscale_screenshot(bytes, max_side.unwrap_or(0)).await {
+            Ok(bytes) => bytes,
             Err(error) => return Ok(fail(error)),
         };
         if let Err(error) = check_png(bytes.len()) {
@@ -666,6 +665,12 @@ impl PhotocraftMcp {
         }
         Ok(png_result(&bytes, "screenshot of the live app window".into()))
     }
+}
+
+async fn downscale_screenshot(bytes: Vec<u8>, max_side: u32) -> Result<Vec<u8>, AutomationError> {
+    tokio::task::spawn_blocking(move || Ok(downscale_png(&bytes, max_side)?.unwrap_or(bytes)))
+        .await
+        .map_err(|error| AutomationError::Other(format!("screenshot downscale task failed: {error}")))?
 }
 
 fn downscale_png(png: &[u8], max_side: u32) -> Result<Option<Vec<u8>>, AutomationError> {
@@ -1339,6 +1344,17 @@ mod tests {
         assert!(downscale_png(b"not a png", 32).is_err());
         assert!(downscale_png(&png, 0).is_err());
         assert!(downscale_png(&png, 1024).is_err());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn bridge_screenshot_blocking_downscale_preserves_bytes_and_errors() {
+        let image = photocraft_codecs::Image::from_u8(64, 32, photocraft_codecs::ChannelLayout::Rgba, vec![128; 64 * 32 * 4]).unwrap();
+        let png = photocraft_codecs::encode(&image, photocraft_codecs::Format::Png, &Default::default()).unwrap();
+        assert_eq!(downscale_screenshot(png.clone(), 64).await.unwrap(), png);
+        let small = downscale_screenshot(png, 32).await.unwrap();
+        let decoded = photocraft_codecs::decode_as(photocraft_codecs::Format::Png, &small).unwrap();
+        assert_eq!(decoded.dimensions(), (32, 16));
+        assert!(downscale_screenshot(b"not a png".to_vec(), 32).await.is_err());
     }
 
     #[tokio::test(flavor = "multi_thread")]

@@ -91,12 +91,44 @@ pub(crate) fn mcp(a: &McpArgs, err: &mut dyn Write) -> Result {
             PhotocraftMcp::with_headless(h)
         }
     };
+    let rt = mcp_runtime()?;
+    Ok(rt.block_on(server.serve_stdio())?)
+}
+
+fn mcp_runtime() -> Result<tokio::runtime::Runtime> {
     let mut rt_builder = tokio::runtime::Builder::new_multi_thread();
     // A stdio MCP server is usually idle. Keep one async worker by default; image work runs on
     // the blocking pool, and Tokio still honors an explicitly configured worker count.
     if std::env::var_os("TOKIO_WORKER_THREADS").is_none() {
         rt_builder.worker_threads(1);
     }
-    let rt = rt_builder.enable_all().build()?;
-    Ok(rt.block_on(server.serve_stdio())?)
+    Ok(rt_builder.enable_all().build()?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::mcp_runtime;
+
+    #[test]
+    fn mcp_stdio_defaults_to_one_worker_and_honors_override() {
+        if let Ok(expected) = std::env::var("PHOTOCRAFT_MCP_TEST_EXPECTED_WORKERS") {
+            let expected = expected.parse::<usize>().unwrap();
+            let workers = mcp_runtime().unwrap().metrics().num_workers();
+            assert_eq!(workers, expected, "TOKIO_WORKER_THREADS={:?}", std::env::var_os("TOKIO_WORKER_THREADS"));
+            return;
+        }
+
+        // Spawn the test in a fresh process for each environment: Rust 2024 cannot safely mutate
+        // another test's process environment, and Tokio reads its override at runtime startup.
+        for (worker_override, expected) in [(None, 1), (Some("2"), 2)] {
+            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            command.args(["--exact", "automation::tests::mcp_stdio_defaults_to_one_worker_and_honors_override"]);
+            command.env_remove("TOKIO_WORKER_THREADS").env("PHOTOCRAFT_MCP_TEST_EXPECTED_WORKERS", expected.to_string());
+            if let Some(workers) = worker_override {
+                command.env("TOKIO_WORKER_THREADS", workers);
+            }
+            let output = command.output().unwrap();
+            assert!(output.status.success(), "TOKIO_WORKER_THREADS={worker_override:?}: {}", String::from_utf8_lossy(&output.stdout));
+        }
+    }
 }

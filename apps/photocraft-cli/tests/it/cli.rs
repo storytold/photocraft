@@ -1120,38 +1120,6 @@ fn mcp_stdio_handshake_and_tool_call() {
     let _ = child.wait();
 }
 
-#[cfg(target_os = "linux")]
-#[test]
-fn mcp_stdio_defaults_to_one_worker_and_honors_override() {
-    for (worker_override, expected) in [(None, 1), (Some("2"), 2)] {
-        let mut command = bin();
-        command.arg("mcp").env_remove("TOKIO_WORKER_THREADS");
-        if let Some(workers) = worker_override {
-            command.env("TOKIO_WORKER_THREADS", workers);
-        }
-        let mut child = command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().unwrap();
-        let mut stdin = child.stdin.take().unwrap();
-        let mut stdout = BufReader::new(child.stdout.take().unwrap());
-        mcp_send(
-            &mut stdin,
-            json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
-                "protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}),
-        );
-        mcp_recv(&mut stdout, 1);
-        let tasks = std::fs::read_dir(format!("/proc/{}/task", child.id())).unwrap();
-        let workers = tasks
-            .map(|task| {
-                let task = task.unwrap();
-                std::fs::read_to_string(task.path().join("comm")).unwrap()
-            })
-            .filter(|name| name.starts_with("tokio-rt-worker"))
-            .count();
-        assert_eq!(workers, expected, "TOKIO_WORKER_THREADS={worker_override:?}");
-        let _ = child.kill();
-        let _ = child.wait();
-    }
-}
-
 /// Send one JSON-RPC line to an `mcp` child.
 fn mcp_send(stdin: &mut impl Write, v: Value) {
     writeln!(stdin, "{v}").unwrap();
