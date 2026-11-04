@@ -788,6 +788,17 @@ fn feather(cover: &[f32], w: usize, h: usize, r: usize) -> (Vec<bool>, Vec<f32>)
     (is_grown, alpha)
 }
 
+/// Turn the grown mask and blend weights of `feather` around: the selection is the part to keep, so
+/// the model regenerates only the band around it and the result is blended in outside the
+/// selection, scaled by how little of each pixel the selection covers. Used to blend a pasted
+/// product into its scene (shadow, reflection, light wrap) without redrawing the product.
+fn keep_inside(cover: &[f32], grown: &mut [bool], alpha: &mut [f32]) {
+    for ((g, a), c) in grown.iter_mut().zip(alpha.iter_mut()).zip(cover) {
+        *g = *g && *c <= 0.0;
+        *a *= 1.0 - c.clamp(0.0, 1.0);
+    }
+}
+
 /// Pull the generated pixels' colour toward what is around them. In the grown band outside the
 /// selection the original is still there, so `generated - original` there is the model's colour
 /// drift; spread it inward smoothly (a normalised blur of the band's differences) and subtract
@@ -955,6 +966,16 @@ fn fill_as(s: &mut Session, p: &Value, label: &'static str) -> Result<Value> {
     let resolution = num(p, "resolution", 768.0, 256.0, 2048.0)?;
     let feather_px = num(p, "feather", 6.0, 0.0, 32.0)?.round() as usize;
     let color_match = (num(p, "colorMatch", 60.0, 0.0, 100.0)? / 100.0) as f32;
+    let keep = match p.get("keepSelection") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(b)) => *b,
+        Some(_) => return Err(bad("`keepSelection` must be true or false")),
+    };
+    if keep && feather_px == 0 {
+        return Err(bad("`keepSelection` needs a `feather` above 0: it is the width of the band the model regenerates around the selection"));
+    }
+    // There is nothing generated inside the selection to match to the rim, so no colour match.
+    let color_match = if keep { 0.0 } else { color_match };
     let output = p.get("output").and_then(Value::as_str).unwrap_or("new").to_string();
     if !matches!(output.as_str(), "new" | "current") {
         return Err(bad("`output` must be new|current"));
@@ -1012,8 +1033,11 @@ fn fill_as(s: &mut Session, p: &Value, label: &'static str) -> Result<Value> {
                 let c = to_rgba(&fmt, px);
                 rgb.extend(c.iter().take(3).map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8));
             }
-            let selected = cover.iter().take(count).filter(|c| **c > 0.0).count();
-            let (grown, alpha) = feather(cover.get(..count).unwrap_or_default(), wu, hu, feather_px);
+            let (mut grown, mut alpha) = feather(cover.get(..count).unwrap_or_default(), wu, hu, feather_px);
+            if keep {
+                keep_inside(cover.get(..count).unwrap_or_default(), &mut grown, &mut alpha);
+            }
+            let selected = if keep { grown.iter().filter(|g| **g).count() } else { cover.iter().take(count).filter(|c| **c > 0.0).count() };
             // What the model regenerates is the selection grown by the feather radius.
             let mut mask: Vec<u8> = grown.iter().map(|g| if *g { 255 } else { 0 }).collect();
             let original_rgb = if color_match > 0.0 && feather_px > 0 { rgb.clone() } else { Vec::new() };
@@ -1115,7 +1139,7 @@ fn apply(s: &mut Session, label: &str, id: LayerId, output: &str, fmt: PixelForm
 /// `PHOTOCRAFT_GENFILL_URL`). `host` is `192.168.1.20:8188` or `http://myserver.local:8188`, on
 /// this machine or a private network only. An empty `model` is the server's first checkpoint,
 /// preferring an inpainting one.
-const FILL_PARAMS: &str = r##"{"prompt":text,"negativePrompt":text,"backend":"comfyui|a1111","host":text,"model":text,"steps":1..150=25,"guidance":0..30=0,"strength":0.1..1=1,"resolution":256..2048=768,"seed":-1..4294967295=-1,"feather":0..32=6,"colorMatch":0..100=60,"output":"new|current"}"##;
+const FILL_PARAMS: &str = r##"{"prompt":text,"negativePrompt":text,"backend":"comfyui|a1111","host":text,"model":text,"steps":1..150=25,"guidance":0..30=0,"strength":0.1..1=1,"resolution":256..2048=768,"seed":-1..4294967295=-1,"feather":0..32=6,"colorMatch":0..100=60,"keepSelection":bool=false,"output":"new|current"}"##;
 
 /// The Generative Fill commands: fill, remove and list-models.
 pub fn specs() -> Vec<CommandSpec> {

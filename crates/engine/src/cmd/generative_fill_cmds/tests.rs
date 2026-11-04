@@ -428,6 +428,56 @@ fn the_fill_fades_out_past_the_selection_edge() {
     assert!(*px(&s, 31, 35).last().unwrap() > 0.99);
 }
 
+#[test]
+fn keep_selection_regenerates_only_the_band_around_it() {
+    let cover = square_cover();
+    let (mut grown, mut alpha) = feather(&cover, 96, 80, 6);
+    keep_inside(&cover, &mut grown, &mut alpha);
+    // Nothing inside the selection is regenerated or blended in; the band outside is.
+    let at = |x: usize, y: usize| y * 96 + x;
+    assert!(!grown[at(40, 35)] && alpha[at(40, 35)] == 0.0);
+    assert!(grown[at(27, 35)] && alpha[at(27, 35)] > 0.0);
+    assert_eq!(grown.iter().filter(|g| **g).count(), 32 * 32 - 20 * 20);
+    // A soft-edged selection lets the result in as much as it leaves the pixel uncovered.
+    let soft: Vec<f32> = cover.iter().map(|c| c * 0.25).collect();
+    let (mut g, mut a) = (vec![true; cover.len()], vec![1.0f32; cover.len()]);
+    keep_inside(&soft, &mut g, &mut a);
+    assert!(!g[at(40, 35)] && (a[at(40, 35)] - 0.75).abs() < 1e-6);
+}
+
+#[test]
+fn keep_selection_leaves_the_selected_pixels_alone() {
+    let mut s = session();
+    rect_selection(&mut s);
+    let (host, server) = a1111_server([255, 0, 0]);
+    s.execute("edit.generativeFill", json!({"backend": "a1111", "host": host, "feather": 6, "keepSelection": true, "output": "current"})).unwrap();
+    let seen = server.join().unwrap();
+    let req: Value = serde_json::from_slice(&seen.lock().unwrap()[0].2).unwrap();
+    // The model is asked for the ring only: the 32x32 grown square minus the 20x20 selection.
+    let mask = base64::engine::general_purpose::STANDARD.decode(req["mask"].as_str().unwrap()).unwrap();
+    let mask = photocraft_codecs::decode(&mask).unwrap();
+    assert_eq!(mask.data().iter().filter(|v| **v == 255).count(), 32 * 32 - 20 * 20);
+    // The selected pixels stay white, the band next to them takes the fill, far away is untouched.
+    let inside = px(&s, 40, 35);
+    assert!(inside[0] > 0.99 && inside[1] > 0.99 && inside[2] > 0.99, "{inside:?}");
+    assert!(px(&s, 24, 35)[1] < 0.5, "{:?}", px(&s, 24, 35));
+    assert!(px(&s, 5, 5)[1] > 0.99);
+}
+
+#[test]
+fn keep_selection_needs_a_band_and_a_bool() {
+    let mut s = session();
+    rect_selection(&mut s);
+    let before = state(&s);
+    for p in [json!({"keepSelection": true, "feather": 0}), json!({"keepSelection": "yes"}), json!({"keepSelection": 1})] {
+        let mut p = p;
+        p["backend"] = json!("a1111");
+        p["host"] = json!("127.0.0.1:9");
+        assert!(s.execute("edit.generativeFill", p.clone()).is_err(), "{p}");
+    }
+    assert_eq!(state(&s), before);
+}
+
 /// A fake ComfyUI that has a Flux Fill GGUF, the Flux text encoders and VAE, and also video
 /// models in its unet folder, which must not be offered for filling.
 fn flux_server(colour: [u8; 3]) -> (String, std::thread::JoinHandle<Seen>) {

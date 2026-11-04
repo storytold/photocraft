@@ -53,7 +53,16 @@ the server has, with Refresh). A command parameter overrides the environment
 (`PHOTOCRAFT_GENFILL_BACKEND`, `PHOTOCRAFT_GENFILL_URL`), which overrides the saved preference.
 Parameters of the fill: `prompt`, `negativePrompt` (SD only), `steps`, `guidance` (0 = automatic:
 7 for SD, 30 for Flux), `strength`, `resolution`, `seed`, `feather` (grow and soften the edge) and
-`colorMatch` (pull the colour toward the surroundings), `output` (`new` or `current`).
+`colorMatch` (pull the colour toward the surroundings), `keepSelection` (see below), `output` (`new` or `current`).
+
+**Blending something you added (`keepSelection`).** A fill regenerates everything inside the
+selection, so selecting a pasted product redraws the product. With `keepSelection: true` the
+selection is the part to keep: the model regenerates only the band of `feather` pixels around it
+(set `feather` to 16-32 for a shadow or reflection; it must be above 0), the selected pixels are
+never touched, and the colour match is skipped. Describe the effect in the prompt ("soft contact
+shadow on the table, warm window light"), not the product, and lower `strength` (about 0.4-0.6) to
+keep more of what is already around it. The model cannot relight the product itself; do that with
+an adjustment layer clipped to it.
 
 ## Not done
 
