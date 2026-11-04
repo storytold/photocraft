@@ -669,6 +669,10 @@ fn a_truncated_gif_import_is_reported_as_salvaged() {
     let w = r["warnings"].as_array().unwrap();
     assert_eq!(w.len(), 1, "{w:?}");
     assert!(w[0].as_str().unwrap().contains("ends early"), "{w:?}");
+    let r = s.execute("layer.videoLayers.replaceFootage", json!({"path": &path})).unwrap();
+    assert_eq!(r["warnings"].as_array().unwrap().len(), 1, "{r}");
+    let r = s.execute("layer.videoLayers.reloadFrame", json!({})).unwrap();
+    assert_eq!(r["warnings"].as_array().unwrap().len(), 1, "{r}");
     // The other shared-loader callers disclose it too.
     let mut t = session();
     let r = t.execute("file.import.videoFramesToLayers", json!({"path": &path})).unwrap();
