@@ -18,6 +18,7 @@ struct Mapping {
 }
 
 impl Mapping {
+    /// Capture the effective paint mapping so frame changes with identical mappings stay local.
     fn new(g: &Gradient, frame: Rect) -> Self {
         // Match paint_fx's actual layout, including snapping and offset. Overlay/stroke paint
         // does not use Gradient.align or the effects reference (the latter anchors patterns).
@@ -44,6 +45,7 @@ impl Mapping {
     }
 }
 
+/// Select visible, enabled gradient overlays and gradient strokes with positive opacity.
 fn gradients(layer: &Layer) -> impl Iterator<Item = &Gradient> {
     layer.effects.items.iter().filter(move |_| layer.visible && layer.effects.enabled).filter_map(|effect| match effect {
         Effect::GradientOverlay { common, gradient, .. } if common.enabled && common.opacity > 0.0 => Some(gradient),
@@ -72,6 +74,8 @@ pub(super) struct Tracker {
 }
 
 impl Tracker {
+    /// Watch the target and visible ancestors with active gradients, keeping only layout metadata.
+    /// Return `None` when the target is unavailable or no relevant gradient needs tracking.
     pub(super) fn new(doc: &Document, layer: Option<LayerId>) -> Option<Self> {
         let path = doc.path_of(layer?)?;
         let mut layers = Vec::new();

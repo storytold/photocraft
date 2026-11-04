@@ -17,6 +17,7 @@ fn near(actual: f32, expected: f32) {
     assert!((actual - expected).abs() < 2e-5, "actual {actual}, independently expected {expected}");
 }
 
+/// Check all RGB channels and opacity against an independently derived grey value.
 fn opaque_grey(buffer: &Buffer, x: i32, expected: f32) {
     let pixel = buffer.get(x, 32);
     for actual in &pixel[..3] {
@@ -25,12 +26,14 @@ fn opaque_grey(buffer: &Buffer, x: i32, expected: f32) {
     near(pixel[3], 1.0);
 }
 
+/// Compare every retained and repainted channel with the full current CPU render.
 fn same(shown: &Buffer, cold: &Buffer) {
     assert_eq!(shown.rect, cold.rect);
     let worst = shown.px.iter().zip(&cold.px).flat_map(|(a, b)| (0..4).map(move |c| (a[c] - b[c]).abs())).fold(0.0f32, f32::max);
     assert!(worst < 2e-5, "live partial redraw must match the full current render; largest channel error {worst}");
 }
 
+/// Establish literal old/new gradient values, with unchanged-mapping and no-overlay controls.
 fn reference_colours(case: Case, shown: &Buffer, cold: &Buffer) {
     if matches!(case, Case::Horizontal) {
         // Literal independent oracle: endpoint widths704 ->842. The gradient corner -0.5
@@ -46,6 +49,8 @@ fn reference_colours(case: Case, shown: &Buffer, cold: &Buffer) {
     }
 }
 
+/// Patch the previous display using public live damage and compare with a cold CPU render.
+/// The horizontal case also checks that committing the same live stroke preserves its pixels.
 fn run(case: Case) {
     let mut s = Session::new();
     s.execute("file.new", json!({"width":1024,"height":64,"mode":"rgb","depth":32,"background":"white"})).unwrap();
@@ -167,6 +172,7 @@ fn apply_damage(shown: &mut Buffer, doc: &photocraft_doc::Document, damage: Rect
     copy_patch(shown, &patch, doc.size.width as i32);
 }
 
+/// Replace only the reported patch, preserving stale pixels outside it for the oracle to detect.
 fn copy_patch(shown: &mut Buffer, patch: &Buffer, width: i32) {
     for y in patch.rect.y0..patch.rect.y1 {
         for x in patch.rect.x0..patch.rect.x1 {
@@ -192,6 +198,7 @@ fn initial_dab_relayout_damage_stays_separate_from_commit_pixel_bounds() {
     same(&shown, &cold);
 }
 
+/// Exercise each gradient style and gradient stroke with stored offset/alignment/reference settings.
 #[test]
 fn changed_gradient_mappings_cover_all_styles_offsets_align_and_reference() {
     for (style, angle, scale, stroke) in [
@@ -236,6 +243,7 @@ fn changed_gradient_mappings_cover_all_styles_offsets_align_and_reference() {
     }
 }
 
+/// Require local damage for inactive gradients and frame changes that leave the mapping unchanged.
 #[test]
 fn disabled_and_zero_opacity_gradients_and_unchanged_horizontal_mapping_stay_local() {
     for inactive in 0..3 {
@@ -324,6 +332,7 @@ fn painting_a_child_updates_its_ancestors_gradient_mapping() {
     same(&shown, &render(&live.doc, live.doc.bounds()));
 }
 
+/// Grow the frame symmetrically without changing the angle/radial mapping; damage stays local.
 #[test]
 fn symmetric_frame_growth_with_unchanged_angle_or_radial_mapping_stays_local() {
     for (style, angle) in [("angle", 45.0), ("radial", 90.0)] {

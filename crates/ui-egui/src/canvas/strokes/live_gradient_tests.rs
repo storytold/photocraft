@@ -10,6 +10,7 @@ use crate::{
     state::Tool,
 };
 
+/// Build matching hard-brush fixtures with and without a frame-relative gradient overlay.
 fn app(overlay: bool) -> PhotocraftApp {
     let mut s = photocraft_engine::Session::new();
     s.execute("file.new", json!({"width":1024,"height":64,"mode":"rgb","depth":32,"background":"white"})).unwrap();
@@ -40,12 +41,14 @@ fn app(overlay: bool) -> PhotocraftApp {
     app
 }
 
+/// Compare every channel of the partially updated display with the full current CPU render.
 fn same(a: &Buffer, b: &Buffer) {
     assert_eq!(a.rect, b.rect);
     let worst = a.px.iter().zip(&b.px).flat_map(|(a, b)| (0..4).map(move |c| (a[c] - b[c]).abs())).fold(0.0f32, f32::max);
     assert!(worst < 2e-5, "actual shared-history CPU update differs from full live render: {worst}");
 }
 
+/// Apply only the reported CPU damage, leaving the rest of the displayed frame intact.
 fn patch(shown: &mut Buffer, doc: &photocraft_doc::Document, damage: Rect) {
     let patch = render_reduced_damage(doc, doc.size.width, doc.size.height, damage);
     for y in patch.rect.y0..patch.rect.y1 {
@@ -55,6 +58,8 @@ fn patch(shown: &mut Buffer, doc: &photocraft_doc::Document, damage: Rect) {
     }
 }
 
+/// Drive real Down/Move events through shared damage history, excluding unknown/full fallback.
+/// Cover initial and pushed relayout plus a no-gradient control using CPU rendering.
 #[test]
 fn actual_shared_live_damage_covers_initial_and_pushed_gradient_relayout() {
     for (overlay, initial_only) in [(true, true), (true, false), (false, false)] {

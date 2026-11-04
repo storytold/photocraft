@@ -207,6 +207,7 @@ impl EngineStroke {
             Self::Mixer(s) => s.bounds(),
         }
     }
+    /// Include Brush gradient relayout in the first update; other live tools use their bounds.
     fn initial_damage(&self) -> DRect {
         match self {
             Self::Brush(stroke) => stroke.initial_damage(),
@@ -358,6 +359,8 @@ pub(crate) fn stroke_command(app: &PhotocraftApp, tool: Tool) -> &'static str {
     if tool == Tool::Pencil || crate::eraser_ui::pencil_mode(app, tool) || crate::eraser_ui::block_mode(app, tool) { "paint.pencil" } else { "paint.stroke" }
 }
 
+/// Start the drag's live tool and seed damage history with its first composite update.
+/// Return `None` when the drag, target or tool parameters cannot start a live stroke.
 pub(super) fn begin_live_stroke(app: &PhotocraftApp) -> Option<LiveStroke> {
     static STROKES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let st = app.session.active()?;
