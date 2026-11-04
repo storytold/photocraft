@@ -334,7 +334,7 @@ fn thumbnail(ui: &mut egui::Ui, action: &Action, size: f32, tokens: &Tokens) -> 
     let fill = color.and_then(|index| tokens.action_swatches().get(index).copied()).unwrap_or(tokens.card);
     ui.painter().rect_filled(rect, tokens.radius_sm, fill);
     let glyph = if action.icon.is_empty() { "action-editor-click" } else { editor_glyphs::display_glyph(&action.icon) };
-    icons::paint(ui, rect, glyph, size * 0.6, if color.is_some() { Tokens::action_thumbnail_ink(fill) } else { tokens.text });
+    icons::paint(ui, rect, glyph, size * 0.6, if color.is_some() { Tokens::ACTION_THUMBNAIL_GLYPH } else { tokens.text });
     response
 }
 

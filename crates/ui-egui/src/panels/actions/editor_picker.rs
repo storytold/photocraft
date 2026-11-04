@@ -68,13 +68,20 @@ const COLOR_GRID: [(&str, &str); 12] = [
 fn thumbnail_style(color: &str, swatches: &[Color32; 12], tokens: &Tokens) -> (Color32, Color32) {
     let index = BUTTON_COLORS.iter().position(|name| *name == color).filter(|index| *index > 0);
     match index.and_then(|index| swatches.get(index)).copied() {
-        Some(fill) => (fill, Tokens::action_thumbnail_ink(fill)),
+        Some(fill) => (fill, Tokens::ACTION_THUMBNAIL_GLYPH),
         None => (tokens.card, tokens.text),
     }
 }
 
+/// Selection marks remain legible independently of the fixed action-glyph ink.
+fn swatch_style(color: &str, swatches: &[Color32; 12], tokens: &Tokens) -> (Color32, Color32) {
+    let (fill, glyph) = thumbnail_style(color, swatches, tokens);
+    let coloured = BUTTON_COLORS.iter().skip(1).any(|name| *name == color);
+    (fill, if coloured { Tokens::action_thumbnail_ink(fill) } else { glyph })
+}
+
 fn color_button(ui: &mut egui::Ui, color: &str, label: &str, selected: bool, swatches: &[Color32; 12], tokens: &Tokens) -> egui::Response {
-    let (fill, ink) = thumbnail_style(color, swatches, tokens);
+    let (fill, ink) = swatch_style(color, swatches, tokens);
     let style = IconButtonStyle {
         normal: ButtonVisuals { fill, stroke: Stroke::new(1.0, tokens.field_border), icon: ink },
         hovered: ButtonVisuals { fill, stroke: Stroke::new(1.0, tokens.text), icon: ink },

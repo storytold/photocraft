@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn action_thumbnail_glyphs_remain_readable_on_every_theme_swatch() {
+fn action_swatch_selection_marks_remain_readable_on_every_theme_swatch() {
     for kind in ThemeKind::ALL {
         for fill in Tokens::for_kind(kind).action_swatches().into_iter().skip(1) {
             let ink = Tokens::action_thumbnail_ink(fill);

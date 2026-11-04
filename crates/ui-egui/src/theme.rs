@@ -214,8 +214,11 @@ pub struct Tokens {
 }
 
 impl Tokens {
-    /// Actions use both light and dark swatches, including the theme's dim text colour.
-    /// Choose the ink with the greater WCAG contrast against the actual supplied fill.
+    /// Coloured Actions thumbnails use a white glyph on the chosen colour.
+    pub const ACTION_THUMBNAIL_GLYPH: Color32 = Color32::WHITE;
+
+    /// Swatch selection marks choose the greater WCAG contrast against the supplied fill.
+    /// Action glyphs use ACTION_THUMBNAIL_GLYPH instead.
     pub fn action_thumbnail_ink(fill: Color32) -> Color32 {
         let linear = |channel: u8| {
             let value = f32::from(channel) / 255.0;

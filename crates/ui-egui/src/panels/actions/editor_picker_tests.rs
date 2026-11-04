@@ -177,14 +177,21 @@ fn two_by_six_colour_grid_keeps_classic_blue_and_new_blue_distinct() {
 #[test]
 fn thumbnail_uses_the_callers_indexed_palette_and_theme_neutral_fallback() {
     let palette = swatches();
-    for kind in [ThemeKind::Pro, ThemeKind::ProLight] {
+    for kind in ThemeKind::ALL {
         let tokens = Tokens::for_kind(kind);
         for unknown_or_none in ["", UNKNOWN_COLOR, "future-color", "Blue", "blue2 "] {
             assert_eq!(thumbnail_style(unknown_or_none, &palette, &tokens), (tokens.card, tokens.text));
+            assert_eq!(super::swatch_style(unknown_or_none, &palette, &tokens), (tokens.card, tokens.text));
         }
         assert_eq!(thumbnail_style("blue", &palette, &tokens).0, palette[5]);
         assert_eq!(thumbnail_style("blue2", &palette, &tokens).0, palette[9]);
         assert_ne!(palette[5], palette[9]);
+        let actual = tokens.action_swatches();
+        for (index, name) in photocraft_engine::actions_cmds::BUTTON_COLORS.iter().enumerate().skip(1) {
+            assert_eq!(thumbnail_style(name, &actual, &tokens), (actual[index], Color32::WHITE), "{kind:?}: {name}");
+            assert_eq!(super::swatch_style(name, &actual, &tokens), (actual[index], Tokens::action_thumbnail_ink(actual[index])));
+        }
+        assert_eq!(super::swatch_style("yellow", &actual, &tokens).1, Color32::BLACK);
     }
     assert_eq!(super::display_glyph(UNKNOWN_ICON), "square");
     assert_eq!(super::display_glyph(""), "square");
