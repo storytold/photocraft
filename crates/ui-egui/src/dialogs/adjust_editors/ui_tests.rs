@@ -205,6 +205,82 @@ fn color_lookup_picker_cycles_luts_with_the_mouse_wheel() {
     assert!(h.state().live_adjust.is_none(), "the completed wheel gesture is committed");
 }
 
+/// #11341: the arrow keys and the wheel step from the last built-in (Cross Process) into the LUT
+/// folder's files and back, previewing and then committing them like the built-ins, instead of
+/// stopping at Cross Process.
+#[test]
+fn color_lookup_picker_steps_into_the_lut_folder_and_back() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("film.cube");
+    std::fs::write(&path, "LUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n").unwrap();
+    let mut h = app_harness("colorLookup", "rgb", 8);
+    h.state_mut().run("prefs.set", json!({"path": "fileHandling.lutFolder", "value": tmp.path().to_str().unwrap()})).unwrap();
+    let (id, _) = layer(&h);
+    h.state_mut().run("layer.setAdjustment", json!({"layer": id.0, "lut": "crossProcess"})).unwrap();
+    let steps = h.state().session.active().unwrap().history.past_len();
+    let name_of = |h: &Harness<'_, PhotocraftApp>| match layer(h).1 {
+        Adjustment::ColorLookup { name, .. } => name,
+        other => panic!("{other:?}"),
+    };
+    let previewed = |h: &Harness<'_, PhotocraftApp>, key: &str| {
+        h.state().live_adjust.as_ref().is_some_and(|(_, p)| p.get("file").or(p.get("lut")).and_then(serde_json::Value::as_str) == Some(key))
+    };
+    let label = label_rect(&h, "3D LUT File").expect("Color Lookup file label");
+    let picker = |h: &Harness<'_, PhotocraftApp>| {
+        h.query_all_by_role(egui::accesskit::Role::ComboBox)
+            .min_by(|a, b| a.rect().center().distance(label.center()).total_cmp(&b.rect().center().distance(label.center())))
+            .expect("Color Lookup picker")
+            .rect()
+            .center()
+    };
+    let at = picker(&h);
+    h.hover_at(at);
+    h.run_steps(1);
+    h.query_all_by_role(egui::accesskit::Role::ComboBox)
+        .min_by(|a, b| a.rect().center().distance(label.center()).total_cmp(&b.rect().center().distance(label.center())))
+        .expect("Color Lookup picker")
+        .click();
+    h.run_steps(1);
+    // The folder scan runs on a worker thread: frames until its file is listed in the open popup.
+    for _ in 0..500 {
+        if h.query_by_label("film.cube").is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        h.run_steps(1);
+    }
+    assert!(h.query_by_label("film.cube").is_some(), "the folder's file is listed after the built-ins");
+    let file = path.to_str().unwrap();
+    // Down from the last built-in: the folder's file, previewed, then committed when the keys rest.
+    h.key_press(egui::Key::ArrowDown);
+    h.run_steps(1);
+    assert!(previewed(&h, file), "ArrowDown past Cross Process previews the folder's file: {:?}", h.state().live_adjust);
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), steps, "still a preview");
+    h.run_steps(4);
+    assert_eq!(name_of(&h), "film.cube", "the rest commits the folder's file");
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1);
+    assert!(h.state().live_adjust.is_none());
+    // Up from it: the last built-in again.
+    h.key_press(egui::Key::ArrowUp);
+    h.run_steps(1);
+    assert!(previewed(&h, "crossProcess"), "ArrowUp from the folder's file previews Cross Process: {:?}", h.state().live_adjust);
+    h.run_steps(4);
+    assert_eq!(name_of(&h), "Cross Process");
+    // The wheel steps into the folder too.
+    h.hover_at(picker(&h));
+    h.event(egui::Event::MouseWheel {
+        source: egui::MouseWheelSource::Unknown,
+        unit: egui::MouseWheelUnit::Line,
+        delta: vec2(0.0, -1.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: Default::default(),
+    });
+    h.run_steps(1);
+    assert!(previewed(&h, file), "a wheel notch down from Cross Process previews the folder's file: {:?}", h.state().live_adjust);
+    h.run_steps(4);
+    assert_eq!(name_of(&h), "film.cube");
+}
+
 fn curve_of(a: &Adjustment) -> Vec<[f32; 2]> {
     match a {
         Adjustment::Curves { master, .. } => master.iter().map(|p| [(p.input * 255.0).round(), (p.output * 255.0).round()]).collect(),

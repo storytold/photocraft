@@ -180,12 +180,17 @@ pub fn color_lookup_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: Layer
     let builtins = photocraft_engine::adjust_cmds::LOOKS;
     let folder = folder_luts(app, ui.ctx());
     let current = current_lookup(name, lut.is_some(), &folder);
+    // A preview under way (the wheel, the arrow keys) is the shown choice: a built-in by its id, a
+    // LUT folder file by its path (#11341).
     let current = app
         .live_adjust
         .as_ref()
-        .filter(|(layer, params)| *layer == id && params.get("lut").is_some())
-        .and_then(|(_, params)| params.get("lut").and_then(Value::as_str))
-        .map(str::to_owned)
+        .filter(|(layer, _)| *layer == id)
+        .and_then(|(_, params)| match (params.get("lut").and_then(Value::as_str), params.get("file").and_then(Value::as_str)) {
+            (Some(lut), _) => Some(lut.to_owned()),
+            (None, Some(path)) => Some(format!("{FOLDER_LUT}{path}")),
+            (None, None) => None,
+        })
         .unwrap_or(current);
     let custom_label = format!("{name} ({size}³)");
     let mut opts: Vec<(String, &str)> = vec![("load".into(), tl!("Load 3D LUT…")), ("none".into(), tl!("None"))];
@@ -210,10 +215,12 @@ pub fn color_lookup_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: Layer
         let (chosen, _) = widgets::dropdown_wheel_hovered(ui, &format!("clrl-{}", id.0), tl!("Color"), &mut sel, &opts, 170.0);
         if !chosen.is_empty() {
             if cycle_input {
-                // ponytail: wheel previews cover the built-ins only; a folder LUT would be re-read
-                // from disk on every step. Pick it with a click.
-                if sel != "load" && sel != "custom" && !sel.starts_with(FOLDER_LUT) {
-                    app.live_adjust = Some((id, json!({"lut": sel})));
+                // The wheel and the arrow keys preview the LUT folder's files like the built-ins
+                // (#11341): skipping them left the step at the last built-in, the choice falling
+                // back. A file is read once per step, as the preview is memoised by its params
+                // (`adjust_preview::live_key`); the rest commits it like a built-in.
+                if sel != "load" && sel != "custom" {
+                    app.live_adjust = Some((id, lookup_params(&sel)));
                     cycling_preview = true;
                 }
             } else if sel == "load" {
@@ -231,7 +238,7 @@ pub fn color_lookup_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: Layer
         if ui.input(|input| input.time - since) >= 0.75 {
             if let Some((layer, preview)) = &app.live_adjust
                 && *layer == id
-                && preview.get("lut").is_some()
+                && (preview.get("lut").is_some() || preview.get("file").is_some())
             {
                 params = Some(preview.clone());
             }
@@ -262,12 +269,17 @@ pub fn color_lookup_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: Layer
         params = Some(json!({"dither": d}));
     }
     if let Some(mut p) = params {
+        // Tetrahedral or Dither changed under a preview: the previewed look goes with them.
         if p.get("lut").is_none()
+            && p.get("file").is_none()
             && let Some((layer, preview)) = &app.live_adjust
             && *layer == id
-            && let Some(lut) = preview.get("lut")
         {
-            p["lut"] = lut.clone();
+            for k in ["lut", "file"] {
+                if let Some(v) = preview.get(k) {
+                    p[k] = v.clone();
+                }
+            }
         }
         p["layer"] = json!(id.0);
         // Errors (an unreadable LUT file) land in the status bar.
