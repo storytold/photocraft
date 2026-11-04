@@ -1178,23 +1178,18 @@ fn splash_shortcuts_unblocked_when_job_fails_with_notice_during_tick() {
     splash2.start_time = now;
     h.state_mut().splash = Some(splash2);
 
-    let (done_tx, done_rx) = std::sync::mpsc::channel();
     let r = h.state_mut().session.start_job(
         "test.failing_job",
         json!({}),
         "Failing Filter",
         false,
-        move |_ctx| {
-            let _ = done_tx.send(());
-            Err(photocraft_engine::EngineError::Other("simulated worker failure".into()))
-        },
+        |_ctx| Err(photocraft_engine::EngineError::Other("simulated worker failure".into())),
         |_s, ()| Ok(json!({})),
     ).unwrap();
-    let Started::Job(_id) = r else { panic!("expected background job"); };
+    let Started::Job(id) = r else { panic!("expected background job"); };
 
-    // Wait for the worker thread to finish running and post its result into the channel.
-    let _ = done_rx.recv_timeout(Duration::from_secs(2));
-    std::thread::sleep(Duration::from_millis(50));
+    // Wait for the failed job to finish; wait_job records the failure event for tick to drain.
+    assert!(h.state_mut().session.wait_job(id).is_err());
 
     // Inject 'B' key press (Photoshop shortcut for Brush tool).
     h.key_press(egui::Key::B);
