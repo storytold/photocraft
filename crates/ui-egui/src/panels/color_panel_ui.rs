@@ -585,8 +585,11 @@ fn wheel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             Some(origin) => {
                 let d = origin.distance(center);
                 // The hue knob reaches past the ring's edge on a small wheel. The triangle's
-                // corners reach into the ring's inner band, and a press there is the triangle.
-                let part = (d <= outer + 7.0).then_some(d >= inner - 2.0 && !triangle_contains(tri, origin));
+                // corners reach into the ring's inner band, and a press there is the triangle, as
+                // is one on a corner's knob just outside it (up to half the ring's width, so the
+                // ring's middle stays the ring).
+                let near = (ring_w / 2.0).min(5.0);
+                let part = (d <= outer + 7.0).then_some(d >= inner - 2.0 && !triangle_near(tri, origin, near));
                 ui.data_mut(|data| data.insert_temp(drag_key, part));
                 part
             }
@@ -678,11 +681,19 @@ pub(crate) fn triangle_point([hue, white, black]: [Pos2; 3], s: f32, b: f32) -> 
     black + (white - black) * b + (hue - white) * (b * s)
 }
 
-/// Whether `p` lies inside the triangle or on its edge; `false` for a non-finite `p`.
-fn triangle_contains([a, b, c]: [Pos2; 3], p: Pos2) -> bool {
+/// Whether `p` lies inside the triangle or within `tol` of it; `false` for a non-finite `p`.
+pub(crate) fn triangle_near([a, b, c]: [Pos2; 3], p: Pos2, tol: f32) -> bool {
     let side = |u: Pos2, v: Pos2| (v - u).x * (p - u).y - (v - u).y * (p - u).x;
     let (s1, s2, s3) = (side(a, b), side(b, c), side(c, a));
-    (s1 >= 0.0 && s2 >= 0.0 && s3 >= 0.0) || (s1 <= 0.0 && s2 <= 0.0 && s3 <= 0.0)
+    let inside = (s1 >= 0.0 && s2 >= 0.0 && s3 >= 0.0) || (s1 <= 0.0 && s2 <= 0.0 && s3 <= 0.0);
+    // Distance to the segment u–v; a degenerate one is its end point.
+    let to_edge = |u: Pos2, v: Pos2| {
+        let e = v - u;
+        let len2 = e.length_sq();
+        let t = if len2 > 0.0 { ((p - u).dot(e) / len2).clamp(0.0, 1.0) } else { 0.0 };
+        p.distance(u + e * t)
+    };
+    inside || to_edge(a, b) <= tol || to_edge(b, c) <= tol || to_edge(c, a) <= tol
 }
 
 /// Saturation and brightness at `p`, clamped into the triangle; `None` for a degenerate one or a

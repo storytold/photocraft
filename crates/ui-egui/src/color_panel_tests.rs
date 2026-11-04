@@ -414,6 +414,36 @@ fn color_wheel_pure_hue_corner_keeps_the_hue() {
     assert!((got[0] - 120.0).abs() < 2.0, "ring click beside the corner picked {got:?}");
 }
 
+/// A press on a corner's knob can land just outside the triangle, on the ring's inner band: it
+/// still picks from the triangle and keeps the hue. The ring's middle beside the corner is the
+/// ring.
+#[test]
+fn color_wheel_corner_knobs_just_outside_the_triangle_keep_the_hue() {
+    let hsb_of =
+        |h: &mut Harness<'_, PhotocraftApp>| photocraft_color::convert::rgb_to_hsb(bytes(h.state().session.tools.foreground).map(|v| f32::from(v) / 255.0));
+    let [r, g, b] = photocraft_color::convert::hsb_to_rgb([20.0, 0.5, 0.5]);
+    let mut h = color_tab(ThemeKind::Pro, ColorPanelMode::ColorWheel, [r, g, b, 1.0]);
+    let area = h.get_by_label("Color Wheel").rect();
+    let (center, inner, outer) = crate::color_panel_ui::wheel_geometry(area);
+    let tri @ [hue_c, white, _] = crate::color_panel_ui::triangle(center, inner - 1.0);
+    // 2 pt out from each upper corner: outside the triangle, in the ring's band.
+    let out = |corner: Pos2| corner + (corner - center).normalized() * 2.0;
+    for p in [out(hue_c), out(white)] {
+        assert!(!crate::color_panel_ui::triangle_near(tri, p, 0.0) && p.distance(center) >= inner - 2.0);
+    }
+    press(&mut h, out(hue_c), Modifiers::NONE);
+    let got = hsb_of(&mut h);
+    assert!((got[0] - 20.0).abs() < 2.0 && got[1] > 0.95 && got[2] > 0.95, "hue knob picked {got:?}");
+    // The ring's middle at the corner's angle turns the hue.
+    press(&mut h, center + vec2(0.0, -(inner + outer) / 2.0), Modifiers::NONE);
+    let got = hsb_of(&mut h);
+    assert!((got[0] - 90.0).abs() < 2.0, "ring middle picked {got:?}");
+    // White has no hue to keep: the ring would turn the hue to 210 degrees and keep full saturation.
+    press(&mut h, out(white), Modifiers::NONE);
+    let got = hsb_of(&mut h);
+    assert!(got[1] < 0.05 && got[2] > 0.95, "white knob picked {got:?}");
+}
+
 /// Picking a mode from the panel menu changes the panel; the theme never does.
 #[test]
 fn panel_menu_picks_the_mode_and_ramp() {
