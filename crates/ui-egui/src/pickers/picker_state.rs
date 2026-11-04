@@ -128,6 +128,9 @@ pub struct PresetUi {
     /// Case-insensitive asset-name filter per picker.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub search: BTreeMap<String, String>,
+    /// Recently selected asset identities, newest first, shared by every picker adapter.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) recent_items: BTreeMap<String, Vec<RecentPickerItem>>,
     /// In-place rename: (panel, preset or "group:<name>", text).
     #[serde(skip)]
     pub renaming: Option<(String, String, String)>,
@@ -140,6 +143,34 @@ pub struct PresetUi {
     /// Remaining targets for a sequential multi-item rename. The browser edits one target at a time.
     #[serde(skip)]
     pub(crate) item_rename_queue: Vec<ItemRenameState>,
+}
+
+/// Asset-neutral identity retained by the shared recent-items strip.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct RecentPickerItem {
+    pub(crate) group: String,
+    pub(crate) group_path: Vec<String>,
+    pub(crate) key: String,
+}
+
+pub(crate) const MAX_RECENT_PICKER_ITEMS: usize = 15;
+
+impl PresetUi {
+    pub(crate) fn record_recent_item(&mut self, panel: &str, group: &str, group_path: &[String], key: &str) {
+        let items = self.recent_items.entry(panel.to_owned()).or_default();
+        items.retain(|item| item.group != group || item.group_path != group_path || item.key != key);
+        items.insert(0, RecentPickerItem { group: group.to_owned(), group_path: group_path.to_vec(), key: key.to_owned() });
+        items.truncate(MAX_RECENT_PICKER_ITEMS);
+    }
+
+    pub(crate) fn reorder_recent_items(&mut self, panel: &str, from: usize, to: usize) {
+        let Some(items) = self.recent_items.get_mut(panel) else { return };
+        if from >= items.len() || to >= items.len() || from == to {
+            return;
+        }
+        let item = items.remove(from);
+        items.insert(to, item);
+    }
 }
 
 /// Brush adapter presentation options stored alongside the shared asset-browser state.

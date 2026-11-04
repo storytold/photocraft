@@ -19,4 +19,5 @@ pub(crate) mod picker_state;
 pub(crate) mod preset_commands;
 pub mod preset_panels;
 pub(crate) mod preset_preview;
+pub(crate) mod recent_picker;
 pub mod swatches_ui;

@@ -117,8 +117,6 @@ pub(crate) struct ShellOptions<'a> {
     pub(crate) header: Option<UiCallback<'a>>,
     /// Optional search control; the consumer owns its query state and filtering.
     pub(crate) search: Option<UiCallback<'a>>,
-    /// Optional recent-items strip rendered above the browser.
-    pub(crate) recents: Option<UiCallback<'a>>,
     /// Standard shared footer controls, when the picker needs them.
     pub(crate) footer: Option<FooterOptions<'a>>,
 }
@@ -133,8 +131,6 @@ pub(crate) struct CustomShellOptions<'a> {
     pub(crate) header: Option<UiCallback<'a>>,
     /// Optional search control; the consumer owns its query state and filtering.
     pub(crate) search: Option<UiCallback<'a>>,
-    /// Optional recent-items strip rendered above the browser.
-    pub(crate) recents: Option<UiCallback<'a>>,
     /// Consumer-owned footer renderer plus the height it reserves in the browser viewport.
     pub(crate) footer: Option<CustomFooter<'a>>,
     /// Total height budget for controls, browser and footer. When set, the shell subtracts its
@@ -151,12 +147,20 @@ pub(crate) fn picker_shell(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut B
         ui.add(egui::TextEdit::singleline(query).desired_width(ui.available_width()).hint_text(tl!("Search")));
     }
 
+    let recent_options = crate::pickers::recent_picker::Options::for_panel(&panel);
+    let mut events = crate::pickers::recent_picker::show(ui, st, adapter, recent_options);
+
     let footer_id = egui::Id::new(("preset-footer", panel.as_str()));
     let footer_h = if shell.footer.is_some() { ui.data(|d| d.get_temp::<f32>(footer_id)).unwrap_or(FOOTER_GUESS) } else { 0.0 };
     // Do not let a consumer's legacy thumbnail-grid cap leave unused space below a short control
     // row; the browser itself scrolls within the viewport reserved by the shell.
     let allocated_h = (ui.available_height() - footer_h).max(0.0);
-    let mut events = browser(ui, st, adapter, allocated_h);
+    events.extend(browser(ui, st, adapter, allocated_h));
+    for event in &events {
+        if let BrowserAction::SelectItem { group, group_path, key } = event {
+            st.record_recent_item(&panel, group, group_path, key);
+        }
+    }
 
     if let Some(footer) = shell.footer {
         let footer_top = ui.min_rect().bottom();
@@ -213,9 +217,6 @@ fn shell_controls(ui: &mut egui::Ui, shell: &mut ShellOptions<'_>) {
     if let Some(search) = shell.search.as_deref_mut() {
         search(ui);
     }
-    if let Some(recents) = shell.recents.as_deref_mut() {
-        recents(ui);
-    }
 }
 
 fn shell_controls_custom(ui: &mut egui::Ui, shell: &mut CustomShellOptions<'_>) {
@@ -224,9 +225,6 @@ fn shell_controls_custom(ui: &mut egui::Ui, shell: &mut CustomShellOptions<'_>) 
     }
     if let Some(search) = shell.search.as_deref_mut() {
         search(ui);
-    }
-    if let Some(recents) = shell.recents.as_deref_mut() {
-        recents(ui);
     }
 }
 

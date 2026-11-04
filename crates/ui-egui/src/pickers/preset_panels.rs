@@ -993,16 +993,10 @@ mod tests {
         }];
         let mut st = PresetUi::default();
         let search_calls = Rc::new(Cell::new(0));
-        let recent_calls = Rc::new(Cell::new(0));
         let search_count = Rc::clone(&search_calls);
-        let recent_count = Rc::clone(&recent_calls);
         let mut search = move |ui: &mut egui::Ui| {
             search_count.set(search_count.get() + 1);
             ui.label("Search");
-        };
-        let mut recents = move |ui: &mut egui::Ui| {
-            recent_count.set(recent_count.get() + 1);
-            ui.label("Recent");
         };
         let events = Rc::new(RefCell::new(Vec::<BrowserAction>::new()));
         let captured_events = Rc::clone(&events);
@@ -1041,19 +1035,14 @@ mod tests {
                 if !ui.ctx().fonts(|fonts| fonts.definitions().families.contains_key(&egui::FontFamily::Name("semibold".into()))) {
                     return;
                 }
-                let emitted = picker_shell(
-                    ui,
-                    &mut st,
-                    &mut adapter,
-                    ShellOptions { search: Some(&mut search), recents: Some(&mut recents), footer: None, ..Default::default() },
-                );
+                let emitted = picker_shell(ui, &mut st, &mut adapter, ShellOptions { search: Some(&mut search), footer: None, ..Default::default() });
                 captured_events.borrow_mut().extend(emitted);
             },
             app,
         );
         PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
         h.run_steps(3);
-        assert!(search_calls.get() > 0 && recent_calls.get() > 0, "enabled shell controls are rendered");
+        assert!(search_calls.get() > 0, "enabled shell controls are rendered");
         let rect = last_browser_rect(&h.ctx, "compact-library").expect("browser viewport is recorded without a footer");
         assert!(rect.height() > 200.0, "without a footer, the browser expands into the remaining panel space: {rect:?}");
         h.get_by_label("Only item").click();

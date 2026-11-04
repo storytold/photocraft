@@ -2214,6 +2214,14 @@ pub(crate) fn browser_with_root_sequence(
                                     )
                                 });
                                 let resp = ui.interact(r, ui.id().with((panel, gi, ii)), Sense::click_and_drag());
+                                let cursor = if resp.is_pointer_button_down_on() {
+                                    Some(egui::CursorIcon::Grabbing)
+                                } else if panel == "gradients" {
+                                    Some(egui::CursorIcon::PointingHand)
+                                } else {
+                                    None
+                                };
+                                let resp = if let Some(cursor) = cursor { resp.on_hover_cursor(cursor) } else { resp };
                                 let node_id = item_node_for_identity(&g.name, &it.group_path, &it.key, &hierarchy_identities);
                                 let is_sel = {
                                     let state = st_cell.borrow();
