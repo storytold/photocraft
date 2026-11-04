@@ -364,18 +364,31 @@ pub fn pdf_x_options(
     bleed_mm: f64,
 ) -> photocraft_io::PdfOptions {
     let src = crate::color_cmds::document_profile(doc);
-    let same = doc.mode == ColorMode::Grayscale || (doc.mode == ColorMode::Cmyk && src.description == dest.description);
+    let convert = convert || !standard.keeps_icc_colour();
+    let same = match doc.mode {
+        // The same profile, by its data: two profiles can share a name and differ in colour.
+        ColorMode::Cmyk => same_profile(&src, dest),
+        // Gray goes out as DeviceGray (the black ink) unless No Conversion keeps a gray profile
+        // the document carries.
+        ColorMode::Grayscale => convert || doc.icc_profile.is_none(),
+        _ => false,
+    };
     photocraft_io::PdfOptions {
         x: Some(photocraft_io::PdfX {
             standard,
             profile: dest.to_bytes(),
             source: (!same).then(|| src.to_bytes()),
-            convert: convert || !standard.keeps_icc_colour(),
+            convert,
             intent,
             bpc,
             bleed_pt: bleed_mm.max(0.0) * 72.0 / 25.4,
         }),
     }
+}
+
+/// Whether `a` and `b` are one profile: the same ICC data, not merely the same description.
+pub fn same_profile(a: &photocraft_cms::Profile, b: &photocraft_cms::Profile) -> bool {
+    a.to_bytes() == b.to_bytes()
 }
 
 /// Encodes `doc` for `path`'s extension.

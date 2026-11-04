@@ -152,6 +152,12 @@ impl PdfXStandard {
         }
     }
 
+    /// Whether the file may embed an ICC profile of major version `major`: version 2 always,
+    /// version 4 in PDF/X-4 only (PDF 1.3 predates it). There is no version 3.
+    pub fn takes_icc_version(self, major: u8) -> bool {
+        major == 2 || (major == 4 && self == PdfXStandard::X4)
+    }
+
     /// The newest ICC major version the file may embed: PDF 1.3 knows version 2 only.
     pub fn max_icc_version(self) -> u8 {
         match self {
@@ -493,17 +499,22 @@ pub struct PdfX {
 
 /// The registered characterization a CMYK profile's description names, for the output intent's
 /// `OutputConditionIdentifier` (the ICC registry's names); `Custom` otherwise, which the
-/// embedded profile then defines.
+/// embedded profile then defines. Only names that identify one condition are mapped (the most
+/// specific first): a wrong registered name would claim another press condition, while `Custom`
+/// with the embedded profile is always valid.
 pub fn output_condition_id(description: &str) -> &'static str {
     let d = description.to_ascii_lowercase();
-    let known: [(&[&str], &str); 7] = [
+    let known: [(&[&str], &str); 10] = [
         (&["fogra51", "pso coated v3"], "FOGRA51"),
         (&["fogra52", "pso uncoated v3"], "FOGRA52"),
         (&["fogra39", "iso coated v2"], "FOGRA39"),
         (&["fogra47", "pso uncoated iso12647"], "FOGRA47"),
+        (&["fogra30", "iso uncoated yellowish"], "FOGRA30"),
         (&["fogra29", "iso uncoated"], "FOGRA29"),
         (&["gracol2006", "gracol 2006", "coated gracol"], "CGATS TR 006"),
-        (&["swop"], "CGATS TR 001"),
+        (&["swop2006_coated3", "swop 2006 coated #3", "coated3"], "CGATS TR 003"),
+        (&["swop2006_coated5", "swop 2006 coated #5", "coated5"], "CGATS TR 005"),
+        (&["web coated (swop) v2"], "CGATS TR 001"),
     ];
     known.iter().find(|(keys, _)| keys.iter().any(|k| d.contains(k))).map_or("Custom", |(_, id)| id)
 }
@@ -530,8 +541,14 @@ fn export_x(doc: &Document, x: &PdfX, secs: u64) -> std::result::Result<ExportRe
     if dst.color_space != ColorSpace::Cmyk {
         return Err(bad(format!("the output condition needs a CMYK profile; \"{}\" is {:?}", dst.description, dst.color_space)));
     }
+    if dst.class != photocraft_cms::ProfileClass::Output {
+        return Err(bad(format!(
+            "the output condition needs a printer (output) profile and \"{}\" is a {:?} profile; choose the printer's profile",
+            dst.description, dst.class
+        )));
+    }
     let max = x.standard.max_icc_version();
-    if dst.version.0 > max || dst.version.0 < 2 {
+    if !x.standard.takes_icc_version(dst.version.0) {
         return Err(bad(format!(
             "the output profile must be ICC version {} and \"{}\" is version {}; choose the printer's profile (for example Coated FOGRA39 or ISO Coated v2){}",
             if max == 2 { "2" } else { "2 or 4" },
@@ -587,10 +604,12 @@ fn export_x(doc: &Document, x: &PdfX, secs: u64) -> std::result::Result<ExportRe
         (4, out, None)
     } else {
         let (src, bytes) = source()?;
-        if src.version.0 > max {
+        if !x.standard.takes_icc_version(src.version.0) {
             return Err(bad(format!(
-                "the document's profile \"{}\" is ICC version {} and this standard embeds version 2 only; convert the colour to the output profile, or save PDF/X-4",
-                src.description, src.version.0
+                "the document's profile \"{}\" is ICC version {}, which this standard can't embed (PDF/X-1a and PDF/X-3 take version 2, PDF/X-4 versions 2 and 4); convert the colour to the output profile{}",
+                src.description,
+                src.version.0,
+                if x.standard == PdfXStandard::X4 { "" } else { ", or save PDF/X-4" }
             )));
         }
         (device, samples, Some(bytes.to_vec()))
@@ -602,7 +621,9 @@ fn export_x(doc: &Document, x: &PdfX, secs: u64) -> std::result::Result<ExportRe
     let id = file_id(&data, secs);
     let image = PrintImage { width: doc.size.width, height: doc.size.height, channels, data, icc };
     let page = PrintPage { paper: (pw, ph), image, rect: (0.0, 0.0, pw, ph), marks: Marks::default(), description: None, label: None };
-    let title = doc.name.rsplit_once('.').map_or(doc.name.as_str(), |(stem, _)| stem);
+    // Control characters become spaces, in the Info title and the XMP alike, so the two agree.
+    let title: String = doc.name.rsplit_once('.').map_or(doc.name.as_str(), |(stem, _)| stem).chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+    let title = title.trim();
     let created = i64::try_from(secs).ok().and_then(|s| chrono::DateTime::from_timestamp(s, 0)).unwrap_or_default();
     let xp = XPage {
         standard: x.standard,

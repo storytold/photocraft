@@ -3084,3 +3084,36 @@ fn save_a_copy_writes_pdf_x3_and_x4_from_its_params() {
     assert!(e.contains("PDF/X-3:2002") && e.contains("version 2"), "{e}");
     assert!(std::fs::metadata(&x3).is_err(), "nothing written");
 }
+
+/// A CMYK document keeps its numbers only when its profile is the output profile by data: one
+/// with the same name and other data is converted. A gray document goes out as the black ink,
+/// unless No Conversion keeps a gray profile it carries.
+#[test]
+fn pdf_x_keeps_numbers_only_for_the_same_profile_data() {
+    use photocraft_cms::{Builtin, Intent, Profile};
+    use photocraft_io::PdfXStandard;
+    let coated = Builtin::CoatedCmyk.profile().to_bytes();
+    let mut other = coated.to_vec();
+    other[64] ^= 1; // the header's rendering intent: other data, the same description
+    let other = Profile::parse(&other).unwrap();
+    let dest = Profile::parse(&coated).unwrap();
+    assert_eq!(other.description, dest.description);
+    assert!(!same_profile(&other, &dest) && same_profile(&dest, &Profile::parse(&coated).unwrap()));
+
+    let mut s = session(4, 4, 8);
+    s.execute("image.mode.cmyk", json!({"profile": "coated-cmyk"})).unwrap();
+    let mut d = doc(&s).clone();
+    let x = |d: &Document, dest: &Profile, convert: bool| pdf_x_options(d, PdfXStandard::X4, dest, convert, Intent::RelativeColorimetric, true, 0.0).x.unwrap();
+    d.icc_profile = Some(coated.clone());
+    assert!(x(&d, &dest, true).source.is_none(), "the same profile keeps the numbers");
+    assert!(x(&d, &other, true).source.is_some(), "the same name with other data is converted");
+
+    let mut g = session(4, 4, 8);
+    g.execute("image.mode.grayscale", json!({})).unwrap();
+    let mut gray = doc(&g).clone();
+    gray.icc_profile = None;
+    assert!(x(&gray, &dest, false).source.is_none(), "untagged gray is the black ink");
+    gray.icc_profile = Some(Builtin::SGray.profile().to_bytes());
+    assert!(x(&gray, &dest, true).source.is_none(), "converting keeps gray as the black ink");
+    assert!(x(&gray, &dest, false).source.is_some(), "No Conversion keeps its gray profile");
+}

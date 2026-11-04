@@ -280,7 +280,7 @@ fn x3_refuses_version_4_profiles_pdf_1_3_cant_hold() {
     let v4 = photocraft_cms::Builtin::Srgb.profile().to_bytes();
     let e = export_with_options(&d, &pdfx(PdfXStandard::X3_2002, Some(v4.clone()), false, 0.0)).unwrap_err().to_string();
     assert!(e.starts_with("unsupported") || e.contains("PDF/X-3:2002"), "{e}");
-    assert!(e.contains("version 2 only") && e.contains("PDF/X-4"), "{e}");
+    assert!(e.contains("can't embed") && e.contains("save PDF/X-4"), "{e}");
     assert!(export_with_options(&d, &pdfx(PdfXStandard::X3_2002, Some(v4), true, 0.0)).is_ok(), "converting from it is fine");
     let mut opts = pdfx(PdfXStandard::X3_2002, None, true, 0.0);
     if let Some(x) = &mut opts.x {
@@ -352,4 +352,61 @@ fn standards_round_trip_their_ids() {
     assert_eq!(PdfXStandard::from_id("x5"), None);
     assert_eq!(pdf_text("abc"), "(abc)");
     assert_eq!(pdf_text("é"), "<FEFF00E9>");
+}
+
+/// `bytes` with its header patched at `at`; the data differs, the description doesn't.
+fn patched(bytes: &[u8], at: usize, with: &[u8]) -> std::sync::Arc<Vec<u8>> {
+    let mut b = bytes.to_vec();
+    b[at..at + with.len()].copy_from_slice(with);
+    std::sync::Arc::new(b)
+}
+
+#[test]
+fn the_output_profile_must_be_a_printer_profile_of_version_2_or_4() {
+    let d = doc(ColorMode::Rgb);
+    let with = |profile: std::sync::Arc<Vec<u8>>, standard| {
+        let mut o = pdfx(standard, None, true, 0.0);
+        if let Some(x) = &mut o.x {
+            x.profile = profile;
+        }
+        export_with_options(&d, &o)
+    };
+    // A CMYK colour-space profile, not an output (printer) one.
+    let e = with(patched(&v2_cmyk(), 12, b"spac"), PdfXStandard::X4).unwrap_err().to_string();
+    assert!(e.contains("printer (output) profile"), "{e}");
+    // There is no ICC version 3: PDF/X-4 takes 2 and 4 only.
+    let e = with(patched(&v2_cmyk(), 8, &[3]), PdfXStandard::X4).unwrap_err().to_string();
+    assert!(e.contains("version 3"), "{e}");
+    assert!(with(patched(&v2_cmyk(), 8, &[4]), PdfXStandard::X4).is_ok());
+    assert!(with(patched(&v2_cmyk(), 8, &[4]), PdfXStandard::X3_2002).is_err());
+}
+
+#[test]
+fn no_conversion_keeps_a_gray_documents_own_profile() {
+    let gray = as_v2(photocraft_cms::Builtin::SGray.profile());
+    let out = export_with_options(&doc(ColorMode::Grayscale), &pdfx(PdfXStandard::X3_2002, Some(gray.clone()), false, 0.0)).unwrap();
+    check_structure(&out.bytes);
+    assert!(has(&out.bytes, "/ColorSpace [/ICCBased 8 0 R]") && has(&out.bytes, "/N 1 /Alternate /DeviceGray"));
+    assert_eq!(stream_after(&out.bytes, "/N 1 /Alternate"), *gray);
+}
+
+#[test]
+fn control_characters_in_the_title_agree_in_info_and_xmp() {
+    let mut d = doc(ColorMode::Rgb);
+    d.name = "Plakat	Tour
+.psd"
+        .into();
+    let opts = pdfx(PdfXStandard::X4, None, true, 0.0);
+    let out = export_x(&d, opts.x.as_ref().unwrap(), 0).unwrap();
+    assert!(has(&out.bytes, "/Title (Plakat Tour)"));
+    assert!(between(&out.bytes, "/Subtype /XML", "endstream").contains(">Plakat Tour</rdf:li>"));
+}
+
+#[test]
+fn only_unambiguous_names_map_to_a_registered_condition() {
+    assert_eq!(output_condition_id("ISO Uncoated Yellowish"), "FOGRA30");
+    assert_eq!(output_condition_id("ISO Uncoated"), "FOGRA29");
+    assert_eq!(output_condition_id("SWOP2006_Coated3v2"), "CGATS TR 003");
+    assert_eq!(output_condition_id("SWOP2006_Coated5v2"), "CGATS TR 005");
+    assert_eq!(output_condition_id("U.S. Web Uncoated (SWOP) v2"), "Custom", "not the coated SWOP condition");
 }

@@ -31,7 +31,7 @@ impl Candidate {
     /// Whether `standard` can embed this profile: PDF/X-1a and PDF/X-3 are PDF 1.3, which knows
     /// ICC version 2 only; PDF/X-4 takes version 4 too.
     pub fn fits(&self, standard: PdfXStandard) -> bool {
-        (2..=standard.max_icc_version()).contains(&self.profile.version.0)
+        standard.takes_icc_version(self.profile.version.0)
     }
 }
 
@@ -58,16 +58,23 @@ pub struct Prompt {
     /// The document's own profile, as its colour is read, and its mode.
     source: Arc<Profile>,
     mode: ColorMode,
+    /// The document carries a profile of its own (rather than reading as the working space).
+    embedded: bool,
     /// The remembered answer has been applied (it needs the egui context, so on the first frame).
     restored: bool,
 }
 
 impl Prompt {
-    /// The document's colour already is the chosen output condition's (gray, or CMYK in it), so
-    /// its numbers go into the file unchanged.
+    /// The document's numbers go into the file unchanged: CMYK already in the chosen output
+    /// condition (the same profile data, not just the same name), or gray as the black ink unless
+    /// No Conversion keeps a gray profile the document carries.
     fn keeps_numbers(&self) -> bool {
-        self.mode == ColorMode::Grayscale
-            || (self.mode == ColorMode::Cmyk && self.candidates.get(self.profile).is_some_and(|c| c.profile.description == self.source.description))
+        let convert = self.convert || self.standard.is_none_or(|s| !s.keeps_icc_colour());
+        match self.mode {
+            ColorMode::Grayscale => convert || !self.embedded,
+            ColorMode::Cmyk => self.candidates.get(self.profile).is_some_and(|c| photocraft_engine::file_cmds::same_profile(&c.profile, &self.source)),
+            _ => false,
+        }
     }
 
     /// What stops the save as chosen, if anything.
@@ -91,7 +98,7 @@ impl Prompt {
                 )
             });
         }
-        if standard.keeps_icc_colour() && !self.convert && !self.keeps_numbers() && self.source.version.0 > standard.max_icc_version() {
+        if standard.keeps_icc_colour() && !self.convert && !self.keeps_numbers() && !standard.takes_icc_version(self.source.version.0) {
             return Some(crate::i18n::fmt(
                 tl!(
                     "The document's profile ({profile}) is ICC version {version}, which {standard} can't embed. Convert to the output profile, or save PDF/X-4."
@@ -114,13 +121,21 @@ pub fn is_pdf_path(path: &str) -> bool {
 }
 
 /// The output conditions on offer: the document's own CMYK profile, the working CMYK space, then
-/// every installed CMYK output profile, each once (by description).
+/// every installed CMYK output profile, each once (by its data: two files can share a name and
+/// differ in colour, and then both are listed, told apart by their file names).
 fn candidates(app: &PhotocraftApp, doc: &photocraft_doc::Document) -> Vec<Candidate> {
     let mut list: Vec<Candidate> = Vec::new();
     let mut push = |label: String, spec: String, profile: Arc<Profile>| {
-        if profile.color_space == ColorSpace::Cmyk && !list.iter().any(|c| c.profile.description == profile.description) {
-            list.push(Candidate { label, spec, profile });
+        if profile.color_space != ColorSpace::Cmyk || list.iter().any(|c| photocraft_engine::file_cmds::same_profile(&c.profile, &profile)) {
+            return;
         }
+        let label = if list.iter().any(|c| c.label == label) {
+            let file = std::path::Path::new(&spec).file_name().map_or(spec.clone(), |f| f.to_string_lossy().into_owned());
+            format!("{label} ({file})")
+        } else {
+            label
+        };
+        list.push(Candidate { label, spec, profile });
     };
     if doc.mode == ColorMode::Cmyk {
         let p = photocraft_engine::color_cmds::document_profile(doc);
@@ -146,17 +161,17 @@ pub fn park(app: &mut PhotocraftApp, path: String, copy: bool, record: &'static 
     }
     let doc = app.active_doc_id()?;
     let st = app.session.active().ok_or("no document")?;
-    let (source, mode) = (photocraft_engine::color_cmds::document_profile(&st.doc), st.doc.mode);
+    let (source, mode, embedded) = (photocraft_engine::color_cmds::document_profile(&st.doc), st.doc.mode, st.doc.icc_profile.is_some());
     let candidates = candidates(app, &st.doc);
     // Start on the document's own condition when it can be one, else the first that fits.
     let profile = candidates.iter().position(|c| c.fits(PdfXStandard::X1a2001)).unwrap_or(0);
     app.pdf_options =
-        Some(Prompt { doc, path, copy, record, standard: None, convert: true, profile, bleed_mm: 0.0, candidates, source, mode, restored: false });
+        Some(Prompt { doc, path, copy, record, standard: None, convert: true, profile, bleed_mm: 0.0, candidates, source, mode, embedded, restored: false });
     Ok(())
 }
 
-/// The remembered answer: (standard id or "none", output profile description, bleed in mm,
-/// convert).
+/// The remembered answer: (standard id or "none", output profile as a save names it, bleed in
+/// mm, convert).
 type Remembered = (String, String, f32, bool);
 
 fn remembered_id() -> egui::Id {
@@ -182,11 +197,11 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let Some(p) = &mut app.pdf_options else { return };
     if !p.restored {
         p.restored = true;
-        if let Some((standard, desc, bleed, convert)) = ctx.data_mut(|d| d.get_persisted::<Remembered>(remembered_id())) {
+        if let Some((standard, spec, bleed, convert)) = ctx.data_mut(|d| d.get_persisted::<Remembered>(remembered_id())) {
             p.standard = PdfXStandard::from_id(&standard);
             p.bleed_mm = bleed.clamp(0.0, 50.0);
             p.convert = convert;
-            if let Some(i) = p.candidates.iter().position(|c| c.profile.description == desc) {
+            if let Some(i) = p.candidates.iter().position(|c| c.spec == spec) {
                 p.profile = i;
             }
         }
@@ -279,9 +294,9 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             (Err(e), _) => return fail(app, e.to_string()),
             (_, None) => return fail(app, tl!("The document is closed").into()),
         }
-        let desc = p.candidates.get(p.profile).map(|c| c.profile.description.clone()).unwrap_or_default();
+        let spec = p.candidates.get(p.profile).map(|c| c.spec.clone()).unwrap_or_default();
         let id = p.standard.map_or("none", PdfXStandard::id).to_string();
-        ctx.data_mut(|d| d.insert_persisted::<Remembered>(remembered_id(), (id, desc, p.bleed_mm, p.convert)));
+        ctx.data_mut(|d| d.insert_persisted::<Remembered>(remembered_id(), (id, spec, p.bleed_mm, p.convert)));
         let mut step = if p.record == "file.save" { serde_json::json!({}) } else { serde_json::json!({"path": p.path}) };
         // An action being recorded plays the save back with the same standard and condition.
         chosen.record(&mut step);
