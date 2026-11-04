@@ -5,6 +5,27 @@ use photocraft_color::SampleType;
 use photocraft_geom::{Rect, TILE_SIZE};
 use photocraft_raster::Surface;
 
+/// Compress owned export bytes, retaining the original plane for raw fallback.
+pub(crate) fn compress_plane(
+    mut plane: Vec<u8>,
+    compression: photocraft_psd::Compression,
+    layout: &photocraft_psd::compression::PlaneLayout,
+) -> (photocraft_psd::Compression, Vec<u8>) {
+    use photocraft_psd::{Compression, compression as codec};
+    let encoded = if compression == Compression::ZipPrediction && layout.depth == 32 && layout.decoded_len().ok() == Some(plane.len()) {
+        codec::predict(&mut plane, layout).map(|()| codec::zip_compress(&plane))
+    } else {
+        codec::encode_planes(compression, &plane, layout)
+    };
+    match encoded {
+        Ok(data) => {
+            photocraft_raster::scratch::give(plane);
+            (compression, data)
+        }
+        Err(_) => (Compression::Raw, plane),
+    }
+}
+
 /// PSD depth (bits) for a sample type.
 pub fn psd_depth(s: SampleType) -> u16 {
     match s {
@@ -108,15 +129,23 @@ fn interleave_into(planes: &[Option<&[u8]>], fill: &[Vec<u8>], n: usize, s: Samp
 
 /// Gather big-endian PSD planes directly from tiles into their final allocations.
 pub(crate) fn surface_planes(surface: &Surface, r: Rect, channels: usize, invert: &[bool], lab16: bool) -> Vec<Vec<u8>> {
+    surface_planes_white(surface, r, channels, invert, lab16, None)
+}
+
+pub(crate) fn surface_planes_white(surface: &Surface, r: Rect, channels: usize, invert: &[bool], lab16: bool, white: Option<&[u8]>) -> Vec<Vec<u8>> {
     let fmt = surface.format();
     let len = r.width() as usize * r.height() as usize * fmt.sample.bytes();
     let mut planes: Vec<_> = (0..channels).map(|_| photocraft_raster::scratch::take_exact(len, 0u8)).collect();
-    surface_planes_into(surface, r, invert, lab16, &mut planes.iter_mut().map(Vec::as_mut_slice).collect::<Vec<_>>());
+    surface_planes_into_white(surface, r, invert, lab16, &mut planes.iter_mut().map(Vec::as_mut_slice).collect::<Vec<_>>(), white);
     planes
 }
 
 /// Gather into final plane slices, each covering `r`; also used for appended merged channels.
 pub(crate) fn surface_planes_into(surface: &Surface, r: Rect, invert: &[bool], lab16: bool, planes: &mut [&mut [u8]]) {
+    surface_planes_into_white(surface, r, invert, lab16, planes, None);
+}
+
+fn surface_planes_into_white(surface: &Surface, r: Rect, invert: &[bool], lab16: bool, planes: &mut [&mut [u8]], white: Option<&[u8]>) {
     if r.is_empty() {
         return;
     }
@@ -131,7 +160,8 @@ pub(crate) fn surface_planes_into(surface: &Surface, r: Rect, invert: &[bool], l
         }
     }
     let default_row = surface.default_bytes().repeat(TILE_SIZE as usize);
-    par_map(bs.into_iter().zip(parts).collect(), |(rows, mut parts)| {
+    par_map_cpu(bs.into_iter().zip(parts).collect(), |(rows, mut parts)| {
+        let mut whitened = Vec::new();
         let band = Rect::new(r.x0, r.y0.saturating_add_unsigned(rows.start as u32), r.x1, r.y0.saturating_add_unsigned(rows.end as u32));
         for tc in band.tiles() {
             let tr = tc.rect().intersect(&band);
@@ -145,6 +175,19 @@ pub(crate) fn surface_planes_into(surface: &Surface, r: Rect, invert: &[bool], l
                         &t[at..at + len * ch * bps]
                     }
                     None => &default_row[..len * ch * bps],
+                };
+                let src = if let Some(white) = white {
+                    whitened.clear();
+                    whitened.extend_from_slice(src);
+                    let colors = fmt.mode.color_channels();
+                    for pixel in whitened.chunks_exact_mut(ch * bps) {
+                        if photocraft_color::read_sample(pixel, fmt.sample, colors) <= 0.0 {
+                            pixel[..colors * bps].copy_from_slice(&white[..colors * bps]);
+                        }
+                    }
+                    &whitened
+                } else {
+                    src
                 };
                 for (c, plane) in parts.iter_mut().enumerate() {
                     let out = &mut plane[dst..dst + len * bps];
@@ -344,6 +387,20 @@ pub fn par_map<T: Send, R: Send>(items: Vec<T>, f: impl Fn(T) -> R + Sync) -> Ve
     })
 }
 
+/// Ordered mapping on the shared worker pool; sequential on wasm or for a single item.
+pub fn par_map_cpu<T: Send, R: Send>(items: Vec<T>, f: impl Fn(T) -> R + Sync) -> Vec<R> {
+    if cfg!(target_arch = "wasm32") || items.len() < 2 {
+        return items.into_iter().map(f).collect();
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use rayon::prelude::*;
+        items.into_par_iter().map(&f).collect()
+    }
+    #[cfg(target_arch = "wasm32")]
+    items.into_iter().map(f).collect()
+}
+
 /// `0..n` split into about one band per core.
 pub fn bands(n: usize) -> Vec<std::ops::Range<usize>> {
     let k = if cfg!(target_arch = "wasm32") { 1 } else { std::thread::available_parallelism().map_or(1, |v| v.get()).clamp(1, 32) };
@@ -354,6 +411,16 @@ pub fn bands(n: usize) -> Vec<std::ops::Range<usize>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn nested_mapping_stays_on_the_callers_pool_and_in_order() {
+        let pool = rayon::ThreadPoolBuilder::new().num_threads(2).build().unwrap();
+        let got = pool.install(|| par_map_cpu((0..8).collect(), |i| par_map_cpu((0..4).collect(), |j| (i * 4 + j, rayon::current_thread_index()))));
+        let got: Vec<_> = got.into_iter().flatten().collect();
+        assert_eq!(got.iter().map(|(n, _)| *n).collect::<Vec<_>>(), (0..32).collect::<Vec<_>>());
+        assert!(got.iter().all(|(_, worker)| matches!(worker, Some(0 | 1))));
+    }
 
     #[test]
     fn tiled_export_planes_match_previous_staging_paths() {
@@ -387,6 +454,71 @@ mod tests {
             assert_eq!(merged[0], 42);
             assert_eq!(&merged[1..], surface_planes(&mask, r, 1, &[false], false)[0]);
             assert_eq!(surface_planes(&mask, Rect::EMPTY, 1, &[false], false), vec![Vec::<u8>::new()]);
+        }
+    }
+
+    #[test]
+    fn pattern_and_filter_cache_planes_match_staged_export() {
+        use photocraft_color::{ColorMode, PixelFormat};
+        for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab] {
+            for sample in SampleType::ALL {
+                let fmt = PixelFormat::new(mode, sample, true);
+                let r = Rect::new(0, 0, 7, 260);
+                let mut surface = Surface::new(fmt);
+                let values: Vec<_> = (0..7 * 260 * fmt.channels())
+                    .map(|i| {
+                        if sample == SampleType::F32 {
+                            [0.0, -0.0, -0.2, 0.5, 1.5, f32::INFINITY, f32::from_bits(0x7f80_0001), f32::from_bits(0x7fc0_1234)][i % 8]
+                        } else {
+                            (i % 19) as f32 / 18.0
+                        }
+                    })
+                    .collect();
+                surface.write_region(r, &values);
+                let ch = fmt.channels();
+                let invert: Vec<_> = (0..ch).map(|c| mode == ColorMode::Cmyk && c + 1 < ch).collect();
+                let staged = |s: &Surface, r: Rect| {
+                    let mut bytes = s.to_interleaved(r);
+                    if mode == ColorMode::Lab && sample == SampleType::U16 {
+                        lab16_chroma(&mut bytes, ch, false);
+                    }
+                    deinterleave(&bytes, ch, sample, &invert)
+                };
+                let pattern = photocraft_doc::Pattern { id: "test".into(), name: "test".into(), width: 7, height: 260, surface: surface.clone() };
+                let encoded = crate::pattern_map::to_psd(&pattern);
+                let expected = staged(&surface, r);
+                assert_eq!(encoded.channels, expected[..ch - 1]);
+                assert_eq!(encoded.alpha.as_ref(), expected.last());
+                let bounds = Rect::new(-2, -3, 9, 263);
+                let mut values = surface.read_region(bounds);
+                let white = photocraft_raster::from_rgba(&fmt, [1.0; 4]);
+                for p in values.chunks_exact_mut(ch) {
+                    if p[ch - 1] <= 0.0 {
+                        p[..ch - 1].copy_from_slice(&white[..ch - 1]);
+                    }
+                }
+                let mut filled = Surface::new(fmt);
+                filled.write_region(bounds, &values);
+                let expected = staged(&filled, bounds);
+                let compression = if sample == SampleType::F32 { photocraft_psd::Compression::ZipPrediction } else { photocraft_psd::Compression::Rle };
+                let encode = |p: &[u8]| {
+                    photocraft_psd::filter_effects::EffectsPlane::encode(compression, p, bounds.width() as usize, bounds.height() as usize, psd_depth(sample))
+                        .unwrap()
+                };
+                let mut mask = photocraft_doc::LayerMask::hide_all();
+                mask.surface = Surface::with_default(PixelFormat::new(ColorMode::Grayscale, sample, false), &[1.0]);
+                mask.surface.fill_rect(bounds, &[0.25]);
+                for mask in [None, Some(&mask)] {
+                    let item = crate::smart_map::feid_item("id", &surface, mask, bounds, fmt).unwrap();
+                    for (i, p) in expected.iter().enumerate() {
+                        assert_eq!(item.slots[if i + 1 == ch { 25 } else { i }], Some(encode(p)));
+                    }
+                    let mask_surface =
+                        mask.map(|m| m.surface.clone()).unwrap_or_else(|| Surface::with_default(PixelFormat::new(ColorMode::Grayscale, sample, false), &[1.0]));
+                    let bytes = deinterleave(&mask_surface.to_interleaved(bounds), 1, sample, &[false]).pop().unwrap();
+                    assert_eq!(item.mask.unwrap().1, encode(&bytes));
+                }
+            }
         }
     }
 

@@ -12,7 +12,7 @@ use photocraft_geom::Rect;
 use photocraft_psd::patterns::{PatternBudget, PsdPattern, block_has_user_mask, block_key, mode_channels, parse_pattern_block_with, write_pattern_block};
 use photocraft_raster::Surface;
 
-use crate::pixels::{deinterleave, max_sample, psd_depth, sample_for_depth, try_interleave, zero_sample};
+use crate::pixels::{max_sample, psd_depth, sample_for_depth, surface_planes, try_interleave, zero_sample};
 
 /// Global block keys holding patterns.
 pub const PATTERN_KEYS: [[u8; 4]; 3] = [*b"Patt", *b"Pat2", *b"Pat3"];
@@ -138,16 +138,12 @@ pub fn to_psd(p: &Pattern) -> PsdPattern {
     };
     let fmt = PixelFormat::new(mode, f.sample, f.alpha);
     let surf = if fmt == f { p.surface.clone() } else { p.surface.convert(fmt) };
-    let mut bytes = surf.to_interleaved(p.rect());
     let ch = fmt.channels();
-    if mode == ColorMode::Lab && fmt.sample == SampleType::U16 {
-        crate::pixels::lab16_chroma(&mut bytes, ch, false);
-    }
     let mut invert = vec![mode == ColorMode::Cmyk; ch];
     if fmt.alpha {
         invert[ch - 1] = false;
     }
-    let mut planes = deinterleave(&bytes, ch, fmt.sample, &invert);
+    let mut planes = surface_planes(&surf, p.rect(), ch, &invert, mode == ColorMode::Lab && fmt.sample == SampleType::U16);
     let alpha = fmt.alpha.then(|| planes.pop()).flatten();
     PsdPattern {
         mode: psd_mode(mode),

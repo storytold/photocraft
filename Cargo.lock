@@ -5431,6 +5431,7 @@ dependencies = [
  "photocraft-text",
  "photocraft-vector",
  "proptest",
+ "rayon",
  "resvg",
  "roxmltree 0.21.1",
  "serde_json",

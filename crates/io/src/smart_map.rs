@@ -239,37 +239,24 @@ pub fn feid_item(placed: &str, unfiltered: &Surface, mask: Option<&LayerMask>, b
     let cc = doc_fmt.mode.color_channels();
     let depth = crate::pixels::psd_depth(sample);
     let compression = if sample == SampleType::F32 { Compression::ZipPrediction } else { Compression::Rle };
-    let encode = |plane: &[u8], w: usize, h: usize| {
-        EffectsPlane::encode(compression, plane, w, h, depth)
-            .or_else(|_| EffectsPlane::encode(Compression::Raw, plane, w, h, depth))
-            .unwrap_or(EffectsPlane { compression: Compression::Raw, data: plane.to_vec() })
-    };
     let mut invert = vec![doc_fmt.mode == ColorMode::Cmyk; cc];
     invert.push(false);
     // Fully transparent pixels carry white, as in Photoshop's own cache: filters that look at
     // colour regardless of alpha (Shadows/Highlights) read it.
-    let mut vals = px.read_region(r);
     let white = photocraft_raster::from_rgba(&doc_fmt, [1.0, 1.0, 1.0, 1.0]);
-    for p in vals.chunks_exact_mut(cc + 1) {
-        if p[cc] <= 0.0 {
-            p[..cc].copy_from_slice(&white[..cc]);
-        }
-    }
-    let mut filled = Surface::new(doc_fmt);
-    filled.write_region(r, &vals);
-    drop(vals);
-    let mut bytes = filled.to_interleaved(r);
-    if doc_fmt.mode == ColorMode::Lab && sample == SampleType::U16 {
-        // 16-bit Lab a*/b* in Photoshop's scale, as in layer channels.
-        crate::pixels::lab16_chroma(&mut bytes, cc + 1, false);
-    }
-    let planes = crate::pixels::deinterleave(&bytes, cc + 1, sample, &invert);
+    let mut white_bytes = vec![0; doc_fmt.bytes_per_pixel()];
+    photocraft_raster::encode_pixel(&doc_fmt, &white, &mut white_bytes);
+    let planes = crate::pixels::surface_planes_white(&px, r, cc + 1, &invert, doc_fmt.mode == ColorMode::Lab && sample == SampleType::U16, Some(&white_bytes));
     let (w, h) = (r.width() as usize, r.height() as usize);
     let mut slots = vec![None; 26];
-    for (i, p) in planes.iter().enumerate() {
+    let layout = photocraft_psd::compression::PlaneLayout { planes: 1, width: w, height: h, depth, version: photocraft_psd::Version::Psb };
+    for (i, plane) in crate::pixels::par_map_cpu(planes.into_iter().enumerate().collect(), |(i, p)| {
+        let (compression, data) = crate::pixels::compress_plane(p, compression, &layout);
+        (i, EffectsPlane { compression, data })
+    }) {
         let slot = if i == cc { 25 } else { i };
         if let Some(s) = slots.get_mut(slot) {
-            *s = Some(encode(p, w, h));
+            *s = Some(plane);
         }
     }
     let mut item = filter_mask_item(placed, mask, bounds, sample);
@@ -290,21 +277,19 @@ fn filter_mask_item(placed: &str, mask: Option<&LayerMask>, bounds: GeomRect, sa
     let plane = match mask {
         Some(m) => {
             let s = if m.surface.format() == fmt { m.surface.clone() } else { m.surface.convert(fmt) };
-            crate::pixels::deinterleave(&s.to_interleaved(area), 1, sample, &[false]).into_iter().next().unwrap_or_default()
+            crate::pixels::surface_planes(&s, area, 1, &[false], false).pop().unwrap_or_default()
         }
         None => {
-            let mut white = Vec::with_capacity(w * h * sample.bytes());
-            for _ in 0..w * h {
-                crate::pixels::encode_be(1.0, sample, &mut white);
-            }
-            white
+            let mut white = Vec::with_capacity(sample.bytes());
+            crate::pixels::encode_be(1.0, sample, &mut white);
+            white.repeat(w * h)
         }
     };
     let depth = crate::pixels::psd_depth(sample);
     let compression = if sample == SampleType::F32 { Compression::ZipPrediction } else { Compression::Rle };
-    let plane = EffectsPlane::encode(compression, &plane, w, h, depth)
-        .or_else(|_| EffectsPlane::encode(Compression::Raw, &plane, w, h, depth))
-        .unwrap_or(EffectsPlane { compression: Compression::Raw, data: plane });
+    let layout = photocraft_psd::compression::PlaneLayout { planes: 1, width: w, height: h, depth, version: photocraft_psd::Version::Psb };
+    let (compression, data) = crate::pixels::compress_plane(plane, compression, &layout);
+    let plane = EffectsPlane { compression, data };
     FilterEffectsItem { id: placed.to_string(), version: 1, rect, depth: u32::from(depth), max_channels: 24, slots: vec![None; 26], mask: Some((rect, plane)) }
 }
 
