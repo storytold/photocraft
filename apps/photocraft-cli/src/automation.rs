@@ -91,6 +91,12 @@ pub(crate) fn mcp(a: &McpArgs, err: &mut dyn Write) -> Result {
             PhotocraftMcp::with_headless(h)
         }
     };
-    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+    let mut rt_builder = tokio::runtime::Builder::new_multi_thread();
+    // A stdio MCP server is usually idle. Keep one async worker by default; image work runs on
+    // the blocking pool, and Tokio still honors an explicitly configured worker count.
+    if std::env::var_os("TOKIO_WORKER_THREADS").is_none() {
+        rt_builder.worker_threads(1);
+    }
+    let rt = rt_builder.enable_all().build()?;
     Ok(rt.block_on(server.serve_stdio())?)
 }
