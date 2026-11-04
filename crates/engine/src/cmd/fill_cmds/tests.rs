@@ -419,13 +419,40 @@ fn a_float_fill_blends_as_its_layers_composite() {
         (BlendMode::LinearDodge, "linearDodge"),
         (BlendMode::Color, "color"),
     ] {
-        let (b, c) = ([0.6, 0.3, 1.4, 1.0], [0.5, 0.7, 0.2, 1.0]);
-        let mut s = Session::new();
-        s.execute("file.new", json!({"width": 1, "height": 1, "mode": "rgb", "depth": 32, "background": "transparent"})).unwrap();
-        s.execute("edit.fill", json!({"color": b, "mode": "normal"})).unwrap();
-        s.execute("edit.fill", json!({"color": c, "mode": name})).unwrap();
-        let got = px(&s, 0, 0);
-        let want = photocraft_compose::psblend::with_hdr(true, || photocraft_compose::psblend::composite(mode, b, c, 1.0));
-        assert!(close(got, want), "{mode:?}: fill {got:?}, layer {want:?}");
+        // The second pair tells the compositor's Color Dodge from the generic one: a backdrop of
+        // 1e-6 stays black in the compositor's, and doesn't in the generic one.
+        for (b, c) in [([0.6, 0.3, 1.4, 1.0], [0.5, 0.7, 0.2, 1.0]), ([1e-6, 0.3, 1.4, 1.0], [1.0, 0.7, 0.2, 1.0])] {
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width": 1, "height": 1, "mode": "rgb", "depth": 32, "background": "transparent"})).unwrap();
+            s.execute("edit.fill", json!({"color": b, "mode": "normal"})).unwrap();
+            s.execute("edit.fill", json!({"color": c, "mode": name})).unwrap();
+            let got = px(&s, 0, 0);
+            let want = photocraft_compose::psblend::with_hdr(true, || photocraft_compose::psblend::composite(mode, b, c, 1.0));
+            assert!(close(got, want), "{mode:?} over {b:?}: fill {got:?}, layer {want:?}");
+        }
     }
+}
+
+/// #11126: a 32-bit gradient keeps stop colours above white on a layer's colour, and Stroke Path's
+/// brush keeps a Linear Dodge above white as the Brush does.
+#[test]
+fn float_gradient_stops_and_stroke_path_keep_light_above_white() {
+    let base = || {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 40, "height": 40, "mode": "rgb", "depth": 32, "background": "transparent"})).unwrap();
+        s.execute("edit.fill", json!({"color": [0.5, 0.5, 0.5, 1.0], "mode": "normal"})).unwrap();
+        s
+    };
+    let mut s = base();
+    let bright = [2.0, 2.0, 2.0, 1.0];
+    s.execute("paint.gradient", json!({"from": [0, 20], "to": [40, 20], "colors": [bright, bright], "mode": "linearDodge"})).unwrap();
+    let v = px(&s, 20, 20)[0];
+    assert!((v - 2.5).abs() < 0.01, "a stop of 2 over 0.5 in Linear Dodge: {v}");
+    let mut s = base();
+    s.execute("path.set", json!({"path": {"subpaths": [{"knots": [[10, 10], [30, 10], [30, 30], [10, 30]]}]}})).unwrap();
+    // Stroke Path paints with the Brush tool's settings, its blend mode included.
+    s.tools.brush.mode = BlendMode::LinearDodge;
+    s.execute("path.stroke", json!({"tool": "pencil", "size": 4, "color": [0.75, 0.75, 0.75, 1.0], "opacity": 100})).unwrap();
+    let v = px(&s, 20, 10)[0];
+    assert!((v - 1.25).abs() < 0.01, "Stroke Path in Linear Dodge keeps light above white: {v}");
 }

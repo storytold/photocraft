@@ -163,6 +163,8 @@ pub fn paint_gradient(
     selection: Option<&Surface>,
     lock_transparency: bool,
 ) {
+    // A float document's colour keeps stop colours above white (#11126): the dither doesn't cap them.
+    let top = if matches!(blend_mode, FillMode::BlendColor(_)) && s.format().sample == photocraft_color::SampleType::F32 { f32::MAX } else { 1.0 };
     composite_area(
         s,
         area,
@@ -175,7 +177,7 @@ pub fn paint_gradient(
                 // One quantisation step of monochromatic noise breaks 8-bit banding without speckle.
                 let n = (photocraft_color::dither_noise(x, y) - 0.5) / 255.0;
                 for ch in c.iter_mut().take(3) {
-                    *ch = (*ch + n).clamp(0.0, 1.0);
+                    *ch = (*ch + n).clamp(0.0, top);
                 }
             }
             c
