@@ -1084,7 +1084,13 @@ fn inching_between_touching_submenu_rows_switches_at_once() {
 fn row_fill(h: &Harness<'static, PhotocraftApp>, rect: egui::Rect) -> Option<egui::Color32> {
     fn walk(shape: &egui::Shape, rect: egui::Rect, out: &mut Option<egui::Color32>) {
         match shape {
-            egui::Shape::Rect(r) if r.fill.a() > 0 && rect.x_range().contains(r.rect.center().x) && (r.rect.center().y - rect.center().y).abs() < 3.0 && (r.rect.height() - rect.height()).abs() < 6.0 && r.rect.width() > rect.width() * 0.6 => {
+            egui::Shape::Rect(r)
+                if r.fill.a() > 0
+                    && rect.x_range().contains(r.rect.center().x)
+                    && (r.rect.center().y - rect.center().y).abs() < 3.0
+                    && (r.rect.height() - rect.height()).abs() < 6.0
+                    && r.rect.width() > rect.width() * 0.6 =>
+            {
                 *out = Some(r.fill);
             }
             egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, rect, out)),
@@ -1210,7 +1216,8 @@ fn a_submenu_let_go_while_the_pointer_rests_disappears() {
         open(&mut h, menu);
         let all = rows(&h, 0);
         let src = all.iter().position(|r| r.command.is_none() && r.enabled).expect("a submenu row");
-        let (dest, _) = all.iter().enumerate().skip(src + 1).filter(|(_, r)| r.command.is_some() && r.enabled).nth(nth_command - 1).expect("a command row below it");
+        let (dest, _) =
+            all.iter().enumerate().skip(src + 1).filter(|(_, r)| r.command.is_some() && r.enabled).nth(nth_command - 1).expect("a command row below it");
         let (from, to) = (all[src].rect, all[dest].rect);
         let rest = egui::pos2(from.right() - 60.0, from.center().y);
         glide(&mut h, 12, None, |t| rest - egui::vec2(30.0 * (1.0 - t), 0.0));
@@ -1427,7 +1434,11 @@ fn in_a_submenu_touching_submenu_rows_switch_at_once() {
                 (false, false) => '.',
             });
             if to.contains(egui::pos2(x, y - (to.center().y - from.center().y).signum() * 2.0)) && open_submenu_row_at(&h, 1) != Some(want) {
-                wrong.push(format!("{}: step {s}, the pointer is on row {want} but row {:?}'s submenu is open", if down { "down" } else { "up" }, open_submenu_row_at(&h, 1)));
+                wrong.push(format!(
+                    "{}: step {s}, the pointer is on row {want} but row {:?}'s submenu is open",
+                    if down { "down" } else { "up" },
+                    open_submenu_row_at(&h, 1)
+                ));
             }
         }
         let handovers = seen.as_bytes().windows(2).filter(|w| w[0] != w[1]).count();
@@ -1436,4 +1447,41 @@ fn in_a_submenu_touching_submenu_rows_switch_at_once() {
         }
     }
     assert!(wrong.is_empty(), "{wrong:#?}");
+}
+
+/// The few pixels egui adds beside a submenu row are still the row's: resting there, beside
+/// Window › Workspace after Arrange's submenu was open, opens Workspace's submenu. The test against
+/// a row's shared bottom edge counted the side strips out too, so no submenu opened.
+#[test]
+fn the_strip_beside_a_submenu_row_opens_its_submenu() {
+    let mut h = harness_dt(1.0 / 120.0);
+    open(&mut h, "Window");
+    let all = rows(&h, 0);
+    let (arrange, workspace) = (all[0].rect, all[1].rect);
+    let rest = egui::pos2(arrange.right() - 40.0, arrange.center().y);
+    glide(&mut h, 12, None, |t| rest - egui::vec2(30.0 * (1.0 - t), 0.0));
+    h.run_steps(60);
+    assert!(h.query_by_label_contains("Cascade").is_some(), "Arrange's submenu is open");
+    move_pointer(&mut h, egui::pos2(workspace.right() + 2.0, workspace.center().y));
+    h.run_steps(90);
+    assert!(h.query_by_label_contains("Essentials").is_some(), "Workspace's submenu opened");
+    assert!(h.query_by_label_contains("Cascade").is_none(), "Arrange's submenu closed");
+}
+
+/// A key that moves the highlight takes it for good: a submenu let go earlier (with no row under
+/// the pointer to take the highlight then) no longer hands it back to the row under the pointer.
+#[test]
+fn a_key_press_isnt_undone_by_an_earlier_let_go() {
+    let mut h = harness((1280.0, 720.0, 1.0));
+    open(&mut h, "Window");
+    let all = rows(&h, 0);
+    let i = (0..all.len() - 1).find(|&i| all[i].command.is_some() && all[i + 1].command.is_some() && visible(&h, 0, i + 1)).expect("two command rows");
+    move_pointer(&mut h, all[i].rect.center());
+    assert_eq!(Nav::current(&h.ctx).highlighted(0), Some(i));
+    let mut nav = Nav::current(&h.ctx);
+    nav.follow = Some(0);
+    nav.store(&h.ctx);
+    key(&mut h, egui::Key::ArrowDown);
+    h.run_steps(2);
+    assert_eq!(Nav::current(&h.ctx).highlighted(0), Some(i + 1), "Down moved the highlight, and it stays");
 }

@@ -135,7 +135,10 @@ fn submenu_row<R>(ui: &mut egui::Ui, title: egui::WidgetText, elsewhere: bool, c
     ui.style_mut().visuals.widgets.inactive = inactive;
     // The rect egui tests the pointer against (`SubMenu::show`), against the part that can be seen.
     let reach = response.rect.expand2(ui.spacing().item_spacing / 2.0);
-    let hidden = ui.ctx().pointer_hover_pos().is_some_and(|p| reach.contains(p) && (!ui.clip_rect().contains(p) || !crate::menu_nav::on_row(response.rect, p)));
+    // Only the edges egui adds above and below count against it: the strips beside the row are
+    // still the row's.
+    let rows = response.rect.y_range();
+    let hidden = ui.ctx().pointer_hover_pos().is_some_and(|p| reach.contains(p) && (!ui.clip_rect().contains(p) || p.y < rows.min || p.y >= rows.max));
     if hidden && !open {
         return (response, None);
     }
