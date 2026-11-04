@@ -131,11 +131,11 @@ fn transform_bar_pins_warp_cancel_and_commit() {
 }
 
 #[test]
-fn transform_more_stays_reachable_with_length_units_at_intermediate_widths() {
+fn transform_controls_stay_reachable_across_the_more_transition() {
     use egui_kittest::{Harness, kittest::Queryable};
     use std::{cell::Cell, rc::Rc};
 
-    for width in [655.0, 670.0, 685.0, 700.0] {
+    for width in [655.0, 670.0, 685.0, 700.0, 800.0, 900.0, 1000.0, 1200.0, 1400.0] {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.ui.transform = Some(session());
         set_size_unit(&mut app, "inches");
@@ -154,19 +154,25 @@ fn transform_more_stays_reachable_with_length_units_at_intermediate_widths() {
         );
         PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
         h.run_steps(6);
-        let more = h.get_by_label("More transform controls").rect();
         let flip = h.get_by_label("Flip Horizontal").rect();
-        assert!(more.right() <= fields_right.get() + 1.0, "at {width} pt, More is outside the fields clip: {more:?} {flip:?}");
         for label in ["Width", "Height"] {
             if let Some(field) = h.query_by_label(label) {
                 assert!(field.rect().right() <= fields_right.get() + 1.0, "at {width} pt, {label} is outside the fields clip: {:?}", field.rect());
             }
         }
-        h.get_by_label("More transform controls").click();
-        h.run_steps(2);
-        h.get_by_label("Rotate");
-        h.get_by_label("Width");
-        h.get_by_label("Height");
+        if let Some(more) = h.query_by_label("More transform controls") {
+            assert!(more.rect().right() <= fields_right.get() + 1.0, "at {width} pt, More is outside the fields clip: {:?} {flip:?}", more.rect());
+            more.click();
+            h.run_steps(2);
+            h.get_by_label("Rotate");
+            h.get_by_label("Width");
+            h.get_by_label("Height");
+        } else {
+            for label in ["Rotate", "Set vertical skew", "Interpolation"] {
+                let rect = h.get_by_label(label).rect();
+                assert!(rect.right() <= fields_right.get() + 1.0, "at {width} pt, {label} is outside the fields clip: {rect:?} {flip:?}");
+            }
+        }
     }
 }
 

@@ -196,24 +196,24 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let fields = egui::Rect::from_min_max(bar.min, egui::pos2(split, bar.bottom()));
     let mut row = ui.new_child(egui::UiBuilder::new().id_salt("transform-fields").max_rect(fields).layout(egui::Layout::left_to_right(egui::Align::Center)));
     row.set_clip_rect(fields);
-    if let Some(w) = t.warp.clone() {
+    let uses_more = if let Some(w) = t.warp.clone() {
         warp_fields(app, &mut row, &w);
+        false
     } else if t.content_aware.is_some() {
         crate::cas_transform::fields(app, &mut row, &t);
+        false
     } else {
-        transform_fields(app, &mut row, &t);
-    }
-    let start = if fields.width() < COMPACT_FIELDS_W { split } else { row.min_rect().right().min(split) };
+        transform_fields(app, &mut row, &t)
+    };
+    let start = if uses_more || fields.width() < COMPACT_FIELDS_W { split } else { row.min_rect().right().min(split) };
     let actions = egui::Rect::from_min_max(egui::pos2(start, bar.top()), egui::pos2(start + buttons_w, bar.bottom()));
     let mut btns = ui.new_child(egui::UiBuilder::new().id_salt("transform-actions").max_rect(actions).layout(egui::Layout::right_to_left(egui::Align::Center)));
     transform_actions(app, &mut btns, warping, t.content_aware.is_none());
 }
 
-fn transform_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: &TransformSession) {
-    let available = ui.available_width();
-    let compact = available < COMPACT_FIELDS_W;
-    let narrow = !position_size_fields_with(app, ui, t, compact.then_some(18.0));
-    if compact {
+fn transform_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: &TransformSession) -> bool {
+    let narrow = !position_size_fields_with(app, ui, t, Some(18.0));
+    if narrow || ui.available_width() < advanced_transform_fields_width(ui) {
         let more = crate::icons::button(ui, "ellipsis", 18.0, false, tl!("More transform controls"));
         more.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("More transform controls")));
         egui::Popup::menu(&more).show(|ui| {
@@ -222,12 +222,26 @@ fn transform_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: &TransformSes
             }
             ui.horizontal(|ui| advanced_transform_fields(app, ui, t));
         });
-        return;
+        return true;
     }
     advanced_transform_fields(app, ui, t);
+    false
 }
 
-/// Angle, skew and interpolation stay reachable through the compact bar's More menu.
+/// Measured space needed for the full advanced row, including translated captions and item gaps.
+fn advanced_transform_fields_width(ui: &egui::Ui) -> f32 {
+    let captions = caption_width(ui, &["H:", "V:", tl!("Interpolation:")]);
+    // Two dividers, rotate icon and field, two skew fields, interpolation dropdown, ten items.
+    9.0 + 9.0 + 18.0 + 60.0 + 56.0 + 56.0 + 130.0 + captions + 9.0 * ui.spacing().item_spacing.x + 2.0
+}
+
+fn caption_width(ui: &egui::Ui, captions: &[&str]) -> f32 {
+    let mut font = egui::TextStyle::Body.resolve(ui.style());
+    font.size = 12.0;
+    ui.ctx().fonts_mut(|fonts| captions.iter().map(|text| fonts.layout_no_wrap((*text).into(), font.clone(), egui::Color32::WHITE).size().x).sum())
+}
+
+/// Angle, skew and interpolation stay reachable through More when the inline row does not fit.
 fn advanced_transform_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: &TransformSession) {
     let tk = crate::theme::Tokens::get(ui.ctx());
     let (_, _, angle, skew_h) = readout(t);
@@ -348,11 +362,7 @@ fn position_size_fields_with(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: &Tra
         84.0
     };
     if let Some(more_w) = trailing_more_w {
-        let mut font = egui::TextStyle::Body.resolve(ui.style());
-        font.size = 12.0;
-        let labels_w = ui
-            .ctx()
-            .fonts_mut(|fonts| ["W:", "H:"].iter().map(|text| fonts.layout_no_wrap((*text).into(), font.clone(), egui::Color32::WHITE).size().x).sum::<f32>());
+        let labels_w = caption_width(ui, &["W:", "H:"]);
         // Divider, two labels, two fields, aspect link, More, and their seven item gaps.
         let needed = 9.0 + labels_w + 2.0 * size_w + 22.0 + more_w + 7.0 * ui.spacing().item_spacing.x + 2.0;
         if ui.available_width() < needed {
