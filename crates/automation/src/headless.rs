@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use photocraft_engine::jobs::{JobId, JobOutcome, Started};
+use photocraft_engine::jobs::{JobEvent, JobId, JobOutcome, Started};
 use photocraft_engine::{Session, command_specs, file_cmds};
 use photocraft_format::PcraftWriter;
 use photocraft_io::ExportOptions;
@@ -33,7 +33,7 @@ pub struct Headless {
     filesystem: Filesystem,
     /// Jobs a caller waits on ([`Headless::command_begin`]), with their outcome once they end.
     /// Kept here because `jobs.list` holds only the last few jobs that ended.
-    waited: HashMap<JobId, Option<JobOutcome>>,
+    waited: HashMap<JobId, Option<JobEvent>>,
 }
 
 /// A waited job's state, from [`Headless::job_poll`].
@@ -82,7 +82,7 @@ impl Headless {
     pub fn sync_jobs(&mut self) {
         for event in self.session.poll_jobs() {
             if let Some(slot) = self.waited.get_mut(&event.id) {
-                *slot = Some(event.outcome);
+                *slot = Some(event);
             }
         }
     }
@@ -113,14 +113,25 @@ impl Headless {
 
     /// Open a file and make it the active document.
     pub fn open(&mut self, path: &Path) -> Result<Value, AutomationError> {
+        self.open_with_approval(path, false)
+    }
+
+    /// Open a file with optional high-memory approval and make it the active document.
+    pub fn open_with_approval(&mut self, path: &Path, approve_high_memory: bool) -> Result<Value, AutomationError> {
+        let opts = photocraft_io::ImportOptions { psd_high_memory_approved: approve_high_memory, ..Default::default() };
+        self.open_with_options(path, &opts)
+    }
+
+    /// Open a file with custom import options and make it the active document.
+    pub fn open_with_options(&mut self, path: &Path, opts: &photocraft_io::ImportOptions) -> Result<Value, AutomationError> {
         let requested = path.to_str().ok_or_else(|| AutomationError::BadRequest("automation paths must be valid UTF-8".into()))?;
         let mut o = match &self.filesystem {
             Filesystem::Denied => return Err(AutomationError::BadRequest("automation filesystem access is not granted: read authority is absent".into())),
-            Filesystem::TrustedLocal => files::open(path)?,
+            Filesystem::TrustedLocal => files::open_with_options(path, opts)?,
             Filesystem::Workspace(workspace) => {
                 let bytes = workspace.read(requested)?;
                 let name = path.file_name().and_then(|name| name.to_str()).unwrap_or(requested);
-                files::open_bytes(name, &bytes)?
+                files::open_bytes_with_options(name, &bytes, opts)?
             }
         };
         // Preferences › Raw Defaults › Resolution, as the app's File › Open applies it.
@@ -152,7 +163,8 @@ impl Headless {
     /// Place a file into a document as a Smart Object layer: the capability-scoped counterpart
     /// of `file.placeEmbedded`, which reads an ambient path and is therefore refused in
     /// automation (#2810). `path` resolves beneath the read root the way `open` resolves one,
-    /// and `params` carries the command's own options (`scale`, `fit`, `center`).
+    /// and `params` carries the command's own options (`scale`, `fit`, `center`,
+    /// `approveHighMemory`).
     pub fn place(&mut self, index: Option<usize>, path: &str, params: &Value) -> Result<Value, AutomationError> {
         self.on_doc(index, |this| {
             let mut opts = params.as_object().cloned().unwrap_or_default();
@@ -381,6 +393,8 @@ impl Headless {
         if let Some(d) = self.session.close(i) {
             self.writers.remove(&d.doc.id.0);
         }
+        // The closed document's buffers went to the scratch pool: hand them back to the OS.
+        photocraft_raster::scratch::release();
         Ok(self.session_list())
     }
 
@@ -434,9 +448,11 @@ impl Headless {
         }
         let outcome = self.waited.remove(&job).flatten();
         JobPoll::Ended(match outcome {
-            Some(JobOutcome::Done(value)) => Ok(value),
-            Some(JobOutcome::Failed(error)) => Err(AutomationError::Other(error)),
-            Some(JobOutcome::Cancelled) => Err(photocraft_engine::EngineError::Cancelled.into()),
+            Some(event) => match event.outcome {
+                JobOutcome::Done(value) => Ok(value),
+                JobOutcome::Failed(error) => Err(event.error.map(AutomationError::from).unwrap_or(AutomationError::Other(error))),
+                JobOutcome::Cancelled => Err(photocraft_engine::EngineError::Cancelled.into()),
+            },
             // Ended without this session seeing it end (not expected): `wait_job` reads the
             // recent-jobs list and does not block for a job that is no longer running.
             None => self.session.wait_job(job).map_err(Into::into),
@@ -520,5 +536,32 @@ fn exported(dir: &str, written: photocraft_engine::Result<Vec<String>>, outputs:
             outputs.cleanup()?;
             Err(error.into())
         }
+    }
+}
+
+#[cfg(test)]
+mod waited_error_tests {
+    use super::*;
+
+    #[test]
+    fn waited_job_keeps_typed_failure() {
+        let mut headless = Headless::trusted_local();
+        let id = JobId(123);
+        let error = photocraft_engine::EngineError::PsdHardBudget { name: "large.psd".into(), required: 9000, limit: 4000 };
+        headless.waited.insert(
+            id,
+            Some(JobEvent {
+                id,
+                command: "file.open".into(),
+                label: "Open".into(),
+                document: None,
+                outcome: JobOutcome::Failed(error.to_string()),
+                error: Some(error),
+            }),
+        );
+        assert!(matches!(
+            headless.job_poll(id),
+            JobPoll::Ended(Err(AutomationError::Engine(photocraft_engine::EngineError::PsdHardBudget { required: 9000, limit: 4000, .. })))
+        ));
     }
 }
