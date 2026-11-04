@@ -29,6 +29,15 @@ fn assert_no_temp(dir: &Path) {
     assert!(leftovers.is_empty(), "temporary files left behind: {leftovers:?}");
 }
 
+/// The sorted entry names of `dir`, or `None` when it cannot be read
+/// (missing, or not a directory): callers compare before/after listings and
+/// skip the comparison when either side is unreadable.
+fn entry_names(dir: &Path) -> Option<Vec<std::ffi::OsString>> {
+    let mut names: Vec<_> = std::fs::read_dir(dir).ok()?.filter_map(|e| e.ok().map(|e| e.file_name())).collect();
+    names.sort();
+    Some(names)
+}
+
 const ORIGINAL: &[u8] = b"the user's precious original document";
 
 /// Real file system with failures injected at chosen steps.
@@ -431,6 +440,7 @@ fn document_portal_target_is_refused_before_anything_is_created() {
     // per-user root, the `doc` mount under it, and the target folder.
     let levels = [root.to_path_buf(), root.join("doc"), p.parent().unwrap().to_path_buf()];
     let existed: Vec<bool> = levels.iter().map(|d| d.exists()).collect();
+    let listings: Vec<Option<Vec<std::ffi::OsString>>> = levels.iter().map(|d| entry_names(d)).collect();
     let e = atomic_write(&p, b"new").unwrap_err();
     assert_eq!(e.kind(), io::ErrorKind::PermissionDenied);
     assert!(e.to_string().contains("file.psd") && e.to_string().contains("document portal") && e.to_string().contains("not changed"), "{e}");
@@ -438,6 +448,11 @@ fn document_portal_target_is_refused_before_anything_is_created() {
     assert!(e.to_string().contains("document portal"), "{e}");
     for (dir, was) in levels.iter().zip(&existed) {
         assert_eq!(dir.exists(), *was, "no folder is created on the portal's mount: {}", dir.display());
+    }
+    for (dir, before) in levels.iter().zip(&listings) {
+        if let (Some(before), Some(after)) = (before, entry_names(dir)) {
+            assert_eq!(after, *before, "no entry is written under the portal's mount: {}", dir.display());
+        }
     }
 }
 
