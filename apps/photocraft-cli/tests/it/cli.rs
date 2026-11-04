@@ -1920,7 +1920,16 @@ fn batch_refuses_ambiguous_nested_atn_calls_before_output() {
         let bytes = atn_cmds::export(name, &[action], &[], false).unwrap().0;
         groups.push(atn::parse(&bytes).unwrap());
     }
-    std::fs::write(&file, atn::write_sets(&groups).unwrap()).unwrap();
+    // Portable export supplies the caller's set by default; remove it for this unscoped fixture.
+    let descriptor = groups.last_mut().unwrap().actions[0].items[0].descriptor.as_mut().unwrap();
+    for (_, value) in &mut descriptor.items {
+        if let photocraft_psd::descriptor::Value::Reference(reference) = value {
+            reference.retain(|item| !matches!(item, photocraft_psd::descriptor::ReferenceItem::Name { class, .. } if class.class_id.is("ASet")));
+        }
+    }
+    let bytes = atn::write_sets(&groups).unwrap();
+    assert!(atn_cmds::import(&bytes).unwrap().actions[2].steps[0].1.get("set").is_none());
+    std::fs::write(&file, bytes).unwrap();
     let output = directory.join("out");
     let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
     let args = [

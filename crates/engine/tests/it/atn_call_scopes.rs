@@ -35,12 +35,12 @@ fn finish(marker: &str) -> Action {
     Action::new("Finish", vec![("layer.new.layer".into(), json!({"name":marker}))])
 }
 
-/// Play and Conditional use the first named physical set, retaining legacy fallback rules.
+/// Explicit scopes never fall through; unscoped calls retain caller-local resolution.
 #[test]
 fn imported_named_set_calls_keep_their_target_through_duplicate_action_renaming() {
     for conditional in [false, true] {
         for local in [false, true] {
-            for scope in [Some("B"), None, Some("Missing"), Some("Empty")] {
+            for scope in [Some("A"), Some("B"), None, Some("Missing"), Some("Empty")] {
                 let mut params = if conditional { json!({"if":"always","then":"Finish"}) } else { json!({"action":"Finish"}) };
                 if let Some(scope) = scope {
                     params["set"] = json!(scope);
@@ -68,11 +68,16 @@ fn imported_named_set_calls_keep_their_target_through_duplicate_action_renaming(
                 session.execute("file.new", json!({"width":8,"height":8})).unwrap();
                 let before = session.actions.clone();
                 let result = session.execute("actions.load", json!({"data":photocraft_engine::paint::tile::b64_encode(&bytes),"replace":false}));
-                let expected = if scope == Some("B") {
-                    Some("From B first")
-                } else if scope == Some("Empty") {
-                    None
-                } else if local {
+                if scope == Some("Missing") {
+                    result.unwrap();
+                    let caller = session.actions.list.iter().find(|action| action.name == "Caller").unwrap();
+                    assert_eq!(caller.steps[0].1[if conditional { "then" } else { "action" }], "Finish");
+                    assert_eq!(caller.steps[0].1["set"], "Missing", "deferred external reference stays unrewritten");
+                    continue;
+                }
+                let expected = if scope == Some("A") {
+                    Some("From A")
+                } else if scope.is_none() && local {
                     Some("From C")
                 } else {
                     None
@@ -88,7 +93,12 @@ fn imported_named_set_calls_keep_their_target_through_duplicate_action_renaming(
                     assert_eq!(session.active().unwrap().doc.layers.last().unwrap().name, expected);
                 } else {
                     let error = result.unwrap_err().to_string();
-                    assert!(error.contains("ambiguous cross-set"), "{error}");
+                    let expected = match scope {
+                        Some("B") => "ambiguous action call set",
+                        Some("Empty") => "missing from set",
+                        _ => "ambiguous cross-set",
+                    };
+                    assert!(error.contains(expected), "{error}");
                     assert_eq!(session.actions, before, "refusal retains the original definitions");
                 }
             }
