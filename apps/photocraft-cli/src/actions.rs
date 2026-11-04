@@ -82,10 +82,10 @@ pub fn load_actions(text: &str, name: Option<&str>) -> Result<(Steps, Vec<Action
 pub fn load_actions_file(path: &Path, name: Option<&str>) -> Result<(Steps, Vec<Action>, Vec<String>), ActionsError> {
     let file = std::fs::File::open(path).map_err(|source| ActionsError::Read { path: path.to_path_buf(), source })?;
     let mut bytes = Vec::new();
-    file.take(photocraft_engine::preset_store::MAX_ACTIONS_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|source| ActionsError::Read { path: path.to_path_buf(), source })?;
-    if bytes.len() as u64 > photocraft_engine::preset_store::MAX_ACTIONS_BYTES {
+    // CLI batch input is an external action file, not the smaller persisted preset store.
+    let limit = photocraft_engine::preset_import_cmds::MAX_FILE_BYTES;
+    file.take(limit + 1).read_to_end(&mut bytes).map_err(|source| ActionsError::Read { path: path.to_path_buf(), source })?;
+    if bytes.len() as u64 > limit {
         return Err(ActionsError::Read {
             path: path.to_path_buf(),
             source: std::io::Error::new(std::io::ErrorKind::InvalidData, "Actions input exceeds byte limit"),

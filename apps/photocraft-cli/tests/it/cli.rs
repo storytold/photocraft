@@ -1742,7 +1742,51 @@ fn batch_rejects_a_legacy_json_library_before_creating_output() {
     let d = tmp("legacy-action-library-rejected");
     let file = d.join("legacy-library.json");
     std::fs::write(&file, r#"{"version":1,"actions":[{"name":"Old","steps":[]}]}"#).unwrap();
-    let result = photocraft_cli::load_actions_file(&file, Some("Old"));
-    assert!(result.unwrap_err().to_string().contains("legacy JSON action libraries"));
-    assert!(!d.join("out").exists());
+    let output = d.join("out");
+    let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+    let args = [
+        "batch".as_ref(),
+        "--in".as_ref(),
+        d.as_os_str(),
+        "--out".as_ref(),
+        output.as_os_str(),
+        "--actions".as_ref(),
+        file.as_os_str(),
+        "--action".as_ref(),
+        "Old".as_ref(),
+    ];
+    assert_eq!(photocraft_cli::run(args, &mut stdout, &mut stderr), 1);
+    assert!(String::from_utf8(stderr).unwrap().contains("legacy JSON action libraries"));
+    assert!(!output.exists());
+}
+
+#[test]
+fn batch_external_atn_input_is_not_limited_by_the_preset_store_size() {
+    use photocraft_psd::{
+        atn::{self, AtnAction, AtnEvent, AtnFile, AtnItem},
+        descriptor::{Descriptor, UnicodeString, Value},
+    };
+    let directory = tmp("large-external-action-input");
+    let file = directory.join("external.atn");
+    let bytes = atn::write(&AtnFile {
+        name: UnicodeString::new_nul("External"),
+        actions: vec![AtnAction {
+            name: UnicodeString::new_nul("Opaque"),
+            items: vec![AtnItem {
+                event: AtnEvent::name("futureOpaqueEvent"),
+                descriptor: Some(Descriptor::new("null").with("payload", Value::RawData(vec![37; 17 << 20]))),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        ..Default::default()
+    })
+    .unwrap();
+    assert!(bytes.len() as u64 > photocraft_engine::preset_store::MAX_ACTIONS_BYTES);
+    std::fs::write(&file, bytes).unwrap();
+    let (steps, actions, warnings) = photocraft_cli::load_actions_file(&file, Some("Opaque")).unwrap();
+    assert_eq!(steps[0].0, "actions.play");
+    assert_eq!(actions.len(), 1);
+    assert_eq!(actions[0].steps[0].0, photocraft_engine::atn_cmds::PHOTOSHOP_STEP);
+    assert_eq!(warnings.len(), 1);
 }
