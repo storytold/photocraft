@@ -95,19 +95,16 @@ The backend editor commands keep one complete action draft outside the live libr
   restore an old library snapshot, erase the journal or undo document edits made
   while recording. Old editor identities cannot mutate a reopened editor.
 
-Descriptions and icons temporarily persist through the existing native JSON Actions
-library compatibility path, with defaults for older files. The required #11066 library
-migration makes ATN with the measured sidecar the sole writable persisted library.
-Legacy JSON is then a one-time migration input with a preserved backup, without
-continued dual writing or new JSON-only metadata handling.
+Descriptions and icons use the same ATN library and metadata sidecar as Load/Save
+Actions. The one-time JSON migration and recovery rules above apply to editor
+changes too.
 Actions belong to that library, not to `.pcraft` documents. The integrated ATN
 sidecar reader and writer preserve descriptions, icons and opaque imported metadata.
 Unedited physical set rows, including empty and duplicate-name rows, retain their
 positional carriers; deliberate logical group/action moves retain panel ordering.
 Editing a description preserves unknown thumbnail data; an explicitly supplied icon
 choice replaces it. `skipUnsupported` permits omitting unsupported steps, not silently
-dropping sidecar metadata. This ATN transport support does not implement the separate
-#11066 durable-library migration or authorize normalizing its untouched names/bytes.
+dropping sidecar metadata. Untouched names and record bytes remain preserved.
 
 The Modern editor stages changes in an unpublished draft. Save publishes the
 edited action; Discard leaves the library unchanged, and Cancel keeps editing.
@@ -120,8 +117,7 @@ waits for existing jobs before taking capture; jobs started by its step dialogs 
 the normal completion/failure and foreign-take handling. The raw legacy `begin_playback`
 entry still refuses an active draft recorder; the owned adapter suspends it explicitly.
 Headless `Session::execute(actions.play)` and deliberate shell library calls capture
-one named call in either recorder. No #10766
-or #10965 implementation is implicitly imported by this backend.
+one named call in either recorder.
 
 ## Supported events
 
