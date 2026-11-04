@@ -417,6 +417,9 @@ fn a_device_link_document_profile_is_never_embedded() {
     let link = patched(&as_v2(photocraft_cms::Builtin::Srgb.profile()), 12, b"link");
     let e = export_with_options(&doc(ColorMode::Rgb), &pdfx(PdfXStandard::X3_2002, Some(link), false, 0.0)).unwrap_err().to_string();
     assert!(e.contains("DeviceLink"), "{e}");
+    let abstract_ = patched(&as_v2(photocraft_cms::Builtin::Srgb.profile()), 12, b"abst");
+    let e = export_with_options(&doc(ColorMode::Rgb), &pdfx(PdfXStandard::X3_2002, Some(abstract_), false, 0.0)).unwrap_err().to_string();
+    assert!(e.contains("Abstract"), "{e}");
 }
 
 #[test]
