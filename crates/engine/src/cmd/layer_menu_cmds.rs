@@ -348,6 +348,41 @@ fn remove_matte(s: &mut Session, white: bool) -> Result<Value> {
             Ok(Value::Null)
         });
     }
+    if !white {
+        let id = layer_param(s, &Value::Null)?;
+        return s.edit("Remove Black Matte", |doc, _| {
+            let bounds = doc.bounds();
+            let selection = doc.selection.clone();
+            let surf = crate::commands::paint_surface(doc, id, &Value::Null)?;
+            let area = selection.as_ref().map_or(bounds, |mask| bounds.intersect(&mask.content_bounds()));
+            let mut out = remove_black_matte_surface_in(surf, area, &photocraft_raster::Interrupt::NONE)?;
+            if let Some(mask) = selection {
+                let area = area.intersect(&surf.content_bounds());
+                let channels = surf.format().channels();
+                for y in area.y0..area.y1 {
+                    let row = Rect::new(area.x0, y, area.x1, y + 1);
+                    let before = surf.try_read_region(row).map_err(|error| other(error.to_string()))?;
+                    let mut after = out.try_read_region(row).map_err(|error| other(error.to_string()))?;
+                    for (index, (old, new)) in before.chunks_exact(channels).zip(after.chunks_exact_mut(channels)).enumerate() {
+                        let x = area.x0.saturating_add(i32::try_from(index).map_err(|_| other("matte row is too wide"))?);
+                        let coverage = mask.value(x, y);
+                        if !coverage.is_finite() {
+                            return Err(other("matte selection contains a non-finite sample"));
+                        }
+                        let coverage = f64::from(coverage.clamp(0., 1.));
+                        // Matte removal preserves alpha, so premultiplied selection mixing reduces
+                        // to native channel interpolation. Use f64 to preserve finite HDR extremes.
+                        for (old, new) in old.iter().zip(new) {
+                            *new = (f64::from(*old) * (1. - coverage) + f64::from(*new) * coverage) as f32;
+                        }
+                    }
+                    out.try_write_region(row, &after).map_err(|error| other(error.to_string()))?;
+                }
+            }
+            *surf = out;
+            Ok(Value::Null)
+        });
+    }
     edit_rgba(s, if white { "Remove White Matte" } else { "Remove Black Matte" }, 0, |px, _| {
         for q in px {
             remove_matte_pixel(q, white);
@@ -1151,8 +1186,8 @@ mod native_matte_tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
-    /// Compare checked matte output with the ordinary pixel equation in each native encoding and preserve sources after
-    /// cancellation.
+    /// Evaluate native unmatting independently; an RGB round trip would change CMYK separations
+    /// and Lab chroma. Preserve the source after success and cancellation.
     fn native_matte_checked_rows_keep_all_depths_models_alpha_and_cancel_atomically() {
         for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab] {
             for sample in SampleType::ALL {
@@ -1163,11 +1198,19 @@ mod native_matte_tests {
                 surface.fill_rect(Rect::new(0, 0, 3, 3), &encoded[..count]);
                 let source = surface.clone();
                 let out = remove_black_matte_surface_in(&surface, Rect::new(0, 0, 3, 3), &photocraft_raster::Interrupt::NONE).unwrap();
-                let mut rgba = to_rgba(&fmt, &source.pixel(1, 1));
-                remove_matte_pixel(&mut rgba, false);
-                let count = from_rgba_into(&fmt, rgba, &mut encoded);
+                let mut expected_pixel = source.pixel(1, 1);
+                let alpha = *expected_pixel.last().unwrap();
+                let black = match mode {
+                    ColorMode::Cmyk => photocraft_color::convert::rgb_to_cmyk([0.; 3]).to_vec(),
+                    ColorMode::Lab => vec![0., 128. / 255., 128. / 255.],
+                    _ => vec![0.; fmt.channels() - 1],
+                };
+                for (channel, black) in expected_pixel.iter_mut().zip(black) {
+                    let value = (f64::from(*channel) - f64::from(black) * (1. - f64::from(alpha))) / f64::from(alpha);
+                    *channel = if sample == SampleType::F32 { value as f32 } else { value.clamp(0., 1.) as f32 };
+                }
                 let mut expected = Surface::new(fmt);
-                expected.fill_rect(Rect::new(0, 0, 1, 1), &encoded[..count]);
+                expected.fill_rect(Rect::new(0, 0, 1, 1), &expected_pixel);
                 assert_eq!(out.pixel(1, 1), expected.pixel(0, 0), "{mode:?} {sample:?}");
                 assert_eq!(surface, source);
                 let checks = AtomicUsize::new(0);
@@ -1179,14 +1222,96 @@ mod native_matte_tests {
     }
 
     #[test]
+    fn raster_black_matte_uses_native_channels_at_every_depth_and_model() {
+        for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab] {
+            for sample in SampleType::ALL {
+                let mut session = Session::new();
+                session.execute("file.new", json!({"width":2,"height":2})).unwrap();
+                let format = PixelFormat { mode, sample, alpha: true };
+                let mut source = Surface::new(format);
+                let mut encoded = [0.; 8];
+                let count = from_rgba_into(&format, [0.2, 0.1, 0.05, 0.5], &mut encoded);
+                source.fill_rect(Rect::new(0, 0, 2, 2), &encoded[..count]);
+                session
+                    .edit("native fixture", |doc, active| {
+                        *doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap() = source.clone();
+                        Ok(())
+                    })
+                    .unwrap();
+                let before = session.active().unwrap().doc.clone();
+                let expected = remove_black_matte_surface_in(&source, Rect::new(0, 0, 2, 2), &photocraft_raster::Interrupt::NONE).unwrap();
+                session.execute("layer.matting.removeBlackMatte", json!({})).unwrap();
+                let changed = session.active().unwrap().doc.clone();
+                assert_eq!(changed.layers[0].surface().unwrap().pixel(0, 0), expected.pixel(0, 0), "{mode:?} {sample:?}");
+                session.undo();
+                assert_eq!(*session.active().unwrap().doc, *before);
+                session.redo();
+                assert_eq!(*session.active().unwrap().doc, *changed);
+            }
+        }
+    }
+
+    #[test]
+    fn raster_and_smart_black_matte_preserve_hdr_through_feathered_selection_and_undo() {
+        for smart in [false, true] {
+            let mut session = Session::new();
+            session.execute("file.new", json!({"width":3,"height":1,"depth":32})).unwrap();
+            session
+                .edit("HDR fixture", |doc, active| {
+                    doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().fill_rect(Rect::new(0, 0, 3, 1), &[1.2, -0.3, 0.05, 0.5]);
+                    Ok(())
+                })
+                .unwrap();
+            if smart {
+                session.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+            }
+            session
+                .edit("feathered selection", |doc, _| {
+                    let mut selection = Surface::new(PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false));
+                    selection.write_region(Rect::new(0, 0, 3, 1), &[1., 0.5, 0.]);
+                    doc.selection = Some(selection);
+                    Ok(())
+                })
+                .unwrap();
+            let before = session.active().unwrap().doc.clone();
+            let history = session.active().unwrap().history.past_len();
+            session.execute("layer.matting.removeBlackMatte", json!({})).unwrap();
+            let changed = session.active().unwrap().doc.clone();
+            assert_eq!(session.active().unwrap().history.past_len(), history + 1);
+            assert_eq!(changed.selection, before.selection);
+            let layer = &changed.layers[0];
+            let pixels = match &layer.content {
+                LayerContent::Smart(sm) => {
+                    assert_eq!(sm.smart_filters.len(), 1);
+                    assert!(sm.filter_mask.is_some());
+                    crate::smart_cmds::render(&changed, sm).unwrap().unwrap()
+                }
+                _ => layer.surface().unwrap().clone(),
+            };
+            for (x, expected) in [[2.4, -0.6, 0.1, 0.5], [1.8, -0.45, 0.075, 0.5], [1.2, -0.3, 0.05, 0.5]].into_iter().enumerate() {
+                let actual = pixels.pixel(x as i32, 0);
+                for (actual, expected) in actual.iter().zip(expected) {
+                    assert!((actual - expected).abs() < 0.00001, "smart={smart} x={x}: {actual} != {expected}");
+                }
+            }
+            session.undo();
+            assert_eq!(*session.active().unwrap().doc, *before);
+            session.redo();
+            assert_eq!(*session.active().unwrap().doc, *changed);
+        }
+    }
+
+    #[test]
     /// Refuse direct and group-inherited pixel/all locks while preserving the exact document Arc, active target and
     /// history length.
-    fn smart_remove_black_matte_refuses_direct_and_inherited_pixel_locks_atomically() {
-        for inherited in [false, true] {
+    fn raster_and_smart_remove_black_matte_refuse_direct_and_inherited_pixel_locks_atomically() {
+        for (smart, inherited) in [(false, false), (false, true), (true, false), (true, true)] {
             for all in [false, true] {
                 let mut session = Session::new();
                 session.execute("file.new", json!({"width":2,"height":2,"depth":32})).unwrap();
-                session.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+                if smart {
+                    session.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+                }
                 let id = session.active().unwrap().active_layer.unwrap();
                 session
                     .edit("locked fixture", |doc, _| {
