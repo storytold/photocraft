@@ -51,6 +51,10 @@ fn begin_with_params(app: &mut PhotocraftApp, ctx: &egui::Context, params: serde
     let id = st.active_layer.ok_or("no active layer")?;
     // Several layers selected: one box moves them all, as in Photoshop (#6501).
     let targets = photocraft_engine::transform_cmds::selection_targets(st);
+    // The selection takes its linked layers along, as `edit.transform` does: in Photoshop the box
+    // over one linked layer frames and moves the whole link group (#11217), but not a linked
+    // Background (`box_targets`). Unlinked, unchanged.
+    let targets = photocraft_engine::transform_cmds::box_targets(&doc, &targets);
     if targets != [id] {
         return begin_several(app, ctx, doc, revision, id, targets);
     }
@@ -279,7 +283,20 @@ pub fn begin_copy(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), St
     }
     let params = resolved_params(app, &json!({}))?;
     let viewed = app.session.active().and_then(photocraft_engine::mask_view_cmds::current);
-    let selection = app.session.active().is_some_and(|d| d.doc.selection.is_some()) && params["target"] != "mask" && viewed.is_none();
+    let selected = app.session.active().is_some_and(|d| d.doc.selection.is_some());
+    // Composite pixels without a selection frame their link group without making a copy
+    // (#11217). A captured colour, channel or mask remains an isolated target and still copies.
+    let linked = !selected
+        && viewed.is_none()
+        && params["target"] == "pixels"
+        && app.session.active().is_some_and(|st| {
+            let targets = photocraft_engine::transform_cmds::selection_targets(st);
+            photocraft_engine::transform_cmds::box_targets(&st.doc, &targets) != targets
+        });
+    if linked {
+        return begin_with_params(app, ctx, params);
+    }
+    let selection = selected && params["target"] != "mask" && viewed.is_none();
     if viewed.is_some() || params["target"] == "mask" {
         // A selected mask copies its host unchanged, then transforms only the copied mask.
         // Pixel Layer via Copy would crop/rasterize the host and lose the captured target.

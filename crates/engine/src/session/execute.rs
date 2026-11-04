@@ -270,6 +270,9 @@ impl Session {
         if channel_transform::locked(self) {
             return Err(EngineError::Other(channel_transform::LOCKED.into()));
         }
+        if record {
+            crate::actions_cmds::before_action_edit(self);
+        }
         // Every mutation path (linked-file refresh, transform, place) re-renders smart objects
         // through this entry; the requesting session's authority must reach those renders.
         let _authorization = crate::jobs::render_authorization_scope(self.authorize);
