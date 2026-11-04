@@ -69,7 +69,65 @@ fn whole_edge_and_corner_priority_table_at_100_and_200_percent() {
             assert_eq!(hit(&t, p.map(|v| v / zoom), 12.0 / zoom), expected, "zoom {zoom}, screen {p:?}");
         }
         let tiny = session([[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]]);
-        assert_eq!(TransformSession::box_hit(&tiny.quad, [5.0, -1.0], 12.0), Hit::Corner(0), "corners beat overlapping edge bands");
+        assert_eq!(TransformSession::box_hit(&tiny.quad, [1.0, -1.0], 12.0), Hit::Corner(0), "corners beat overlapping edge bands");
+    }
+}
+
+#[test]
+fn small_boxes_keep_their_painted_mid_edge_handles() {
+    for side in [8.0, 16.0, 32.0] {
+        for zoom in [1.0, 2.0] {
+            let q = [[0.0, 0.0], [side, 0.0], [side, side], [0.0, side]].map(|p| p.map(|v| v / zoom));
+            let t = session(q);
+            for i in 0..4 {
+                let (a, b) = (q[i], q[(i + 1) % 4]);
+                let midpoint = [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0];
+                assert_eq!(hit(&t, midpoint, 12.0 / zoom), Hit::Edge(i), "side {side}, zoom {zoom}, edge {i}");
+                assert_eq!(hit(&t, a, 12.0 / zoom), Hit::Corner(i));
+            }
+        }
+    }
+}
+
+#[test]
+fn an_edge_survives_the_actual_f32_view_round_trip() {
+    for zoom in [1.0_f32, 2.0] {
+        let q = [[100.0, 100.00002], [500.0, 100.00002], [500.0, 300.0], [100.0, 300.0]].map(|p| p.map(|v| v / f64::from(zoom)));
+        let t = session(q);
+        let xf = view(zoom);
+        let p = xf.to_doc(xf.to_screen((180.0 / f64::from(zoom)) as f32, q[0][1] as f32));
+        let inward_rounding = (p[1] - q[0][1]) * f64::from(zoom);
+        assert!(inward_rounding > 0.0 && inward_rounding < 1e-3, "fixture must expose inward f32 rounding: {inward_rounding}");
+        assert_eq!(hit(&t, p, 12.0 / f64::from(zoom)), Hit::Edge(0));
+        assert_eq!(hit(&t, [p[0], q[0][1] + 1.0 / f64::from(zoom)], 12.0 / f64::from(zoom)), Hit::Inside, "a whole pixel inside still moves");
+    }
+}
+
+#[test]
+fn a_small_edge_keeps_distort_and_legacy_aspect_behavior() {
+    for mode in [TransformMode::Distort, TransformMode::Free] {
+        let mut app = app(QUAD, 1.0);
+        app.ui.transform = None;
+        app.ui.extras.snap = false;
+        app.ui.transform_unlinked = true;
+        app.session.edit_prefs(|p| p.general.use_legacy_free_transform = true);
+        app.session.execute("shape.create", serde_json::json!({"kind":"rect","rect":[8,8,16,16],"fill":"#ff0000"})).unwrap();
+        crate::transform_tool::begin(&mut app, &egui::Context::default()).unwrap();
+        app.ui.transform.as_mut().unwrap().mode = mode;
+        let before = app.ui.transform.as_ref().unwrap().quad;
+        for event in [
+            crate::canvas::ToolEvent::Down { x: 24.0, y: 16.0, pressure: 1.0 },
+            crate::canvas::ToolEvent::Move { x: 40.0, y: 16.0, pressure: 1.0 },
+            crate::canvas::ToolEvent::Up { x: 40.0, y: 16.0 },
+        ] {
+            crate::canvas::tool_event(&mut app, event, Modifiers::NONE);
+        }
+        let q = app.ui.transform.as_ref().unwrap().quad;
+        if mode == TransformMode::Distort {
+            assert_eq!(q, before, "Distort still ignores an edge press");
+        } else {
+            assert!((q[2][0] - q[0][0] - 32.0).abs() < 1e-6 && (q[2][1] - q[0][1] - 16.0).abs() < 1e-6, "a legacy edge stretches one axis: {q:?}");
+        }
     }
 }
 

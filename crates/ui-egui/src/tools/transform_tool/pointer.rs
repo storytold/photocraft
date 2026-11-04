@@ -23,19 +23,32 @@ impl TransformSession {
         // `tol` is the existing 12 pt handle tolerance, divided by the view zoom.
         let corner_radius = tol * (8.0 / HANDLE_PX);
         let edge_width = tol * (11.0 / HANDLE_PX);
+        // Canvas coordinates round through f32. Treat only sub-pixel projection noise as
+        // the line itself; a point one screen pixel inside still belongs to the interior.
+        let line_epsilon = tol.abs() * (1e-3 / HANDLE_PX);
         let distance = |q: [f64; 2]| (p[0] - q[0]).hypot(p[1] - q[1]);
-        if let Some((i, _)) = quad.iter().enumerate().map(|(i, &q)| (i, distance(q))).filter(|(_, d)| *d <= corner_radius).min_by(|a, b| a.1.total_cmp(&b.1)) {
-            return Hit::Corner(i);
-        }
         let interior = inside(quad, p);
-        let edge = (0..4)
-            .filter_map(|i| {
-                let (_, q) = edge_projection(quad, i, p)?;
-                let d = distance(q);
-                // One pixel inside is interior, not a scale handle. The line itself is a handle.
-                (d <= edge_width && (!interior || d <= tol.abs() * 1e-9)).then_some((i, d))
-            })
-            .min_by(|a, b| a.1.total_cmp(&b.1));
+        let edge_distance = |i| {
+            let (_, q) = edge_projection(quad, i, p)?;
+            let d = distance(q);
+            (d <= edge_width && (!interior || d <= line_epsilon)).then_some(d)
+        };
+        if let Some((i, corner_distance)) =
+            quad.iter().enumerate().map(|(i, &q)| (i, distance(q))).filter(|(_, d)| *d <= corner_radius).min_by(|a, b| a.1.total_cmp(&b.1))
+        {
+            // Corners beat edge bands, but overlapping painted handles on small boxes keep
+            // their nearest-handle priority. Otherwise a 16pt box's edge center is a corner.
+            let painted_edge = (0..4)
+                .filter_map(|k| {
+                    edge_distance(k)?;
+                    let (a, b) = (quad[k], quad[(k + 1) % 4]);
+                    let d = distance([(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0]);
+                    (d < corner_distance).then_some((k, d))
+                })
+                .min_by(|a, b| a.1.total_cmp(&b.1));
+            return painted_edge.map_or(Hit::Corner(i), |(k, _)| Hit::Edge(k));
+        }
+        let edge = (0..4).filter_map(|i| edge_distance(i).map(|d| (i, d))).min_by(|a, b| a.1.total_cmp(&b.1));
         match edge {
             Some((i, _)) => Hit::Edge(i),
             None if interior => Hit::Inside,
