@@ -5,6 +5,43 @@ use photocraft_engine::{
 };
 use serde_json::{Value, json};
 
+#[test]
+fn deleting_a_namesake_keeps_named_calls_and_keys_until_the_last_target_is_gone() {
+    for group in [false, true] {
+        let mut s = Session::new();
+        s.actions.list = vec![
+            grouped("Duplicate", "First"), grouped("Duplicate", "Second"),
+            Action::new("Caller", vec![
+                ("actions.play".into(), json!({"action":"Duplicate"})),
+                ("actions.play".into(), json!({"action":0})),
+                ("actions.play".into(), json!({"action":1})),
+                ("actions.conditional".into(), json!({"if":"always","then":"Duplicate","else":0})),
+            ]),
+        ];
+        s.prefs.edit(|prefs| {
+            prefs.shortcuts.insert("actions.play:Duplicate".into(), "F5".into());
+            prefs.alternate_shortcuts.insert("actions.play:Duplicate".into(), vec!["F6".into()]);
+        });
+        s.execute("actions.delete", if group {json!({"set":"First"})} else {json!({"action":0})}).unwrap();
+        assert_eq!(s.actions.list[0].name, "Duplicate");
+        let calls = &s.actions.list[1].steps;
+        assert_eq!(calls[0].1["action"], "Duplicate");
+        assert!(calls[1].1["action"].is_null());
+        assert_eq!(calls[2].1["action"], 0);
+        assert_eq!(calls[3].1["then"], "Duplicate");
+        assert!(calls[3].1["else"].is_null());
+        assert_eq!(s.prefs().shortcuts["actions.play:Duplicate"], "F5");
+        assert_eq!(s.prefs().alternate_shortcuts["actions.play:Duplicate"], ["F6"]);
+        s.execute("actions.delete", json!({"action":0})).unwrap();
+        for (id, params) in &s.actions.list[0].steps {
+            if id == "actions.play" { assert!(params["action"].is_null()); }
+            else { assert!(params["then"].is_null()); }
+        }
+        assert!(!s.prefs().shortcuts.contains_key("actions.play:Duplicate"));
+        assert!(!s.prefs().alternate_shortcuts.contains_key("actions.play:Duplicate"));
+    }
+}
+
 fn grouped(name: &str, set: &str) -> Action {
     Action { set: Some(set.into()), ..Action::new(name, Vec::new()) }
 }

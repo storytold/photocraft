@@ -58,6 +58,58 @@ fn untouched_duplicate_physical_records_and_noncanonical_bytes_survive() {
     assert_ne!(atn::write_sets(&atn::parse_sets(&bytes).unwrap()).unwrap(), bytes);
 }
 
+/// Strict loading preserves repeated physical rows; external import intentionally renames them.
+fn ordered_archive(rows: &[(&str, &[Action])]) -> Vec<u8> {
+    let files: Vec<_> = rows
+        .iter()
+        .map(|(name, actions)| {
+            let refs: Vec<_> = actions.iter().collect();
+            let (bytes, skipped) = atn_cmds::export(name, &refs, &[], false).unwrap();
+            assert!(skipped.is_empty());
+            atn::parse_sets(&bytes).unwrap().remove(0)
+        })
+        .collect();
+    atn::write_sets(&files).unwrap()
+}
+
+#[test]
+fn durable_regrouping_keeps_flat_call_targets_and_empty_rows() {
+    let first = Action::new("First", vec![]);
+    let second = Action::new("Second", vec![]);
+    let other = Action::new("Other", vec![]);
+    let caller = Action::new("Caller", vec![("actions.play".into(), json!({"action":1}))]);
+    let bytes = ordered_archive(&[("Before", &[]), ("A", &[first, second]), ("Between", &[]), ("B", &[other]), ("C", &[caller])]);
+    let state = library::decode(&bytes).unwrap();
+    assert_eq!(encode(&state), bytes, "untouched empty rows retain exact physical placement");
+    let mut session = crate::Session::new();
+    session.actions = state;
+    session.execute("actions.assignSet", json!({"action":0,"set":"B"})).unwrap();
+    let restored = library::decode(&encode(&session.actions)).unwrap();
+    assert_eq!(restored.list.iter().map(|action| action.name.as_str()).collect::<Vec<_>>(), ["First", "Second", "Other", "Caller"]);
+    assert_eq!(restored.list[3].steps[0].1["action"], 1);
+    assert_eq!(restored.list[1].name, "Second");
+    for name in ["Before", "Between"] {
+        assert_eq!(restored.sets.iter().filter(|row| row.as_str() == name).count(), 1);
+    }
+}
+
+#[test]
+fn duplicate_physical_rows_stay_after_all_original_targets() {
+    let first = Action::new("First", vec![]);
+    let second = Action::new("Second", vec![]);
+    let caller = Action::new("Caller", vec![("actions.play".into(), json!({"action":1}))]);
+    let bytes = ordered_archive(&[("Group", &[first]), ("Empty", &[]), ("Group", &[second]), ("Other", &[caller])]);
+    let mut session = crate::Session::new();
+    session.actions = library::decode(&bytes).unwrap();
+    session.execute("actions.duplicate", json!({"set":"Group"})).unwrap();
+    let restored = library::decode(&encode(&session.actions)).unwrap();
+    assert_eq!(restored.list.iter().map(|action| action.name.as_str()).collect::<Vec<_>>(), ["First", "Second", "First copy", "Second copy", "Caller"]);
+    assert_eq!(restored.list[4].steps[0].1["action"], 1);
+    assert_eq!(restored.list[1].name, "Second");
+    assert_eq!(restored.sets.iter().filter(|name| name.as_str() == "Group").count(), 2);
+    assert_eq!(restored.sets.iter().filter(|name| name.as_str() == "Empty").count(), 1);
+}
+
 #[test]
 fn changing_one_name_preserves_every_other_original_field_and_occurrence() {
     let bytes = wire();
@@ -151,7 +203,45 @@ fn empty_library_has_a_known_carrier_and_no_invented_user_folder() {
     assert!(loaded.sets.is_empty());
     assert_eq!(atn::parse_sets(&bytes).unwrap().len(), 1);
     assert_eq!(encode(&loaded), bytes);
+    let imported = atn_cmds::import(&bytes).unwrap();
+    assert!(imported.actions.is_empty());
+    assert!(imported.sets.is_empty());
+    // A foreign sidecar with no real set is still rejected; only the explicit native
+    // empty-library marker permits this otherwise ambiguous input through public import.
+    let mut files = atn::parse_sets(&bytes).unwrap();
+    let outer = files[0].actions[0].items[0].descriptor.as_mut().unwrap();
+    let (_, D::RawData(payload)) = outer.items.iter_mut().find(|(id, _)| id.is("modernizedActionData")).unwrap() else { panic!("native payload") };
+    let mut root = Descriptor::from_bytes(&payload[4..]).unwrap();
+    root.items.retain(|(id, _)| !id.is("photocraftEmptyLibraryV1"));
+    payload.truncate(4);
+    payload.extend(root.to_bytes());
+    assert!(atn_cmds::import(&atn::write_sets(&files).unwrap()).is_err());
     assert!(library::decode(&16u32.to_be_bytes()).is_err());
+}
+
+#[test]
+fn literal_ungrouped_rows_remain_distinct_from_the_unnamed_category() {
+    let rows = [("", "Loose"), (atn_cmds::UNGROUPED_SET, "Named"), ("Ungrouped Actions 2", "Collision")];
+    let files: Vec<_> = rows
+        .iter()
+        .map(|(set, action)| AtnFile {
+            name: UnicodeString::new_nul(set),
+            actions: vec![AtnAction { name: UnicodeString::new_nul(action), ..Default::default() }],
+            ..Default::default()
+        })
+        .collect();
+    let bytes = atn::write_sets(&files).unwrap();
+    let state = library::decode(&bytes).unwrap();
+    assert_eq!(state.sets, ["Ungrouped Actions", "Ungrouped Actions 3", "Ungrouped Actions 2"]);
+    assert_eq!(state.list[0].set, None);
+    assert_eq!(state.list[1].set.as_deref(), Some("Ungrouped Actions 3"));
+    assert_eq!(encode(&state), bytes, "logical disambiguation keeps untouched original wire names");
+    let mut session = crate::Session::new();
+    session.actions = state;
+    session.execute("actions.delete", json!({"set":"Ungrouped Actions"})).unwrap();
+    assert_eq!(session.actions.list.iter().map(|action| action.name.as_str()).collect::<Vec<_>>(), ["Named", "Collision"]);
+    let loaded = library::decode(&encode(&session.actions)).unwrap();
+    assert_eq!(loaded.list.iter().map(|action| action.name.as_str()).collect::<Vec<_>>(), ["Named", "Collision"]);
 }
 
 fn legacy() -> Vec<u8> {
@@ -175,6 +265,24 @@ fn migration_publishes_one_atn_and_renames_exact_json_bytes_once() {
         assert!(reopened.warnings.is_empty(), "{:?}", reopened.warnings);
         assert_eq!(mem.read(ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap(), atn);
     }
+}
+
+#[test]
+fn portable_exports_do_not_inherit_full_library_migration_receipts() {
+    let bytes = legacy();
+    let mem = MemBackend::default();
+    mem.files.lock().unwrap().insert(LEGACY_ACTIONS_FILE.into(), bytes.clone());
+    assert!(preset_store::open(Box::new(mem.clone())).warnings.is_empty());
+    let state = library::decode(&mem.read(ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap()).unwrap();
+    assert!(state.library.legacy.as_ref().unwrap().matches(&bytes));
+    let (portable, skipped) = atn_cmds::export("Portable", &[&state.list[0]], &[], false).unwrap();
+    assert!(skipped.is_empty());
+    assert!(library::decode(&portable).unwrap().library.legacy.is_none());
+    let unrelated_store = MemBackend::default();
+    unrelated_store.files.lock().unwrap().extend([(ACTIONS_FILE.into(), portable), (LEGACY_ACTIONS_FILE.into(), bytes.clone())]);
+    let _ = preset_store::open(Box::new(unrelated_store.clone()));
+    assert_eq!(unrelated_store.read(LEGACY_ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap(), bytes);
+    assert!(unrelated_store.read(MIGRATED_ACTIONS_FILE, MAX_ACTIONS_BYTES).is_err());
 }
 
 #[test]

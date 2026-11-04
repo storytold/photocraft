@@ -189,6 +189,15 @@ fn update(s: &mut Session, p: &Value) -> Result<Value> {
     let mut next = draft.clone();
     if let Some(value) = p.get("name") {
         next.value.name = name(value, Some(&next.value.name), UPDATE)?;
+        if next.value.name != draft.value.name
+            && next
+                .value
+                .steps
+                .iter()
+                .any(|(id, params)| super::call_keys(id).iter().any(|key| params.get(key).and_then(Value::as_str) == Some(next.value.name.as_str())))
+        {
+            return Err(bad(UPDATE, "an action cannot play itself"));
+        }
     }
     if let Some(value) = p.get("description") {
         next.value.description = value.as_str().ok_or_else(|| bad(UPDATE, "`description` must be a string"))?.to_string();
@@ -223,7 +232,7 @@ fn index(p: &Value, key: &str, len: usize, insert: bool) -> Result<usize> {
 }
 
 /// Validate newly authored content, without interpreting or normalizing an untouched opaque step.
-fn new_step(p: &Value, old: Option<&(String, Value)>, draft: &Draft) -> Result<(String, Value)> {
+fn new_step(s: &Session, p: &Value, old: Option<&(String, Value)>, draft: &Draft) -> Result<(String, Value)> {
     let id = match p.get("id") {
         Some(Value::String(id)) => id.as_str(),
         Some(_) => return Err(bad(STEP, "`id` must be a command string")),
@@ -236,10 +245,13 @@ fn new_step(p: &Value, old: Option<&(String, Value)>, draft: &Draft) -> Result<(
     if !crate::actions_edit_cmds::is_step_command(id) || !params.is_object() {
         return Err(bad(STEP, "a new step needs a known command and object params"));
     }
-    if id == "actions.play"
-        && (params.get("action").and_then(Value::as_str) == Some(draft.value.name.as_str())
-            || draft.source.is_some_and(|source| params.get("action").and_then(Value::as_u64) == Some(source as u64)))
-    {
+    let owns_current_name = draft.value.name != draft.opening.name || draft.source.is_none_or(|index| super::owns_name(&s.actions.list, index));
+    if super::call_keys(id).iter().any(|key| {
+        owns_current_name && params.get(key).and_then(Value::as_str) == Some(draft.value.name.as_str())
+            || draft.source.is_some_and(|index| super::owns_name(&s.actions.list, index))
+                && params.get(key).and_then(Value::as_str) == Some(draft.opening.name.as_str())
+            || draft.source.is_some_and(|source| params.get(key).and_then(Value::as_u64) == Some(source as u64))
+    }) {
         return Err(bad(STEP, "an action cannot play itself"));
     }
     Ok((id.to_string(), params))
@@ -251,10 +263,10 @@ fn remap(value: &mut Action, old_len: usize, f: impl Fn(usize) -> Option<usize>)
 }
 
 /// Insert or replace after complete validation, retaining all unrelated Action fields.
-fn insert_or_replace(value: &mut Action, draft: &Draft, p: &Value, op: &str) -> Result<()> {
+fn insert_or_replace(s: &Session, value: &mut Action, draft: &Draft, p: &Value, op: &str) -> Result<()> {
     let len = value.steps.len();
     let at = index(p, "step", len, op == "insert")?;
-    let step = new_step(p, if op == "replace" { value.steps.get(at) } else { None }, draft)?;
+    let step = new_step(s, p, if op == "replace" { value.steps.get(at) } else { None }, draft)?;
     if op == "insert" {
         if len >= MAX_STEPS {
             return Err(bad(STEP, "the draft exceeds the 100000-step limit"));
@@ -319,7 +331,7 @@ fn step(s: &mut Session, p: &Value) -> Result<Value> {
         STEP,
     )?;
     match op {
-        "insert" | "replace" => insert_or_replace(&mut value, draft, p, op)?,
+        "insert" | "replace" => insert_or_replace(s, &mut value, draft, p, op)?,
         "delete" | "move" | "duplicate" => rearrange(&mut value, p, op)?,
         "enabled" | "dialog" => {
             let at = index(p, "step", value.steps.len(), false)?;
@@ -411,7 +423,7 @@ fn rename_calls(params: &mut Value, id: &str, old: &str, new: &str) {
 /// Only changed references need prepared copies; no library or Session snapshot is taken.
 fn references(s: &Session, draft: &Draft, value: &mut Action) -> Vec<(usize, usize, Value)> {
     let mut changes = Vec::new();
-    if draft.source.is_none() || draft.opening.name == value.name {
+    if !draft.source.is_some_and(|index| super::owns_name(&s.actions.list, index)) || draft.opening.name == value.name {
         return changes;
     }
     for (id, params) in &mut value.steps {
@@ -435,7 +447,7 @@ fn bindings(s: &Session, draft: &Draft, value: &Action) -> Bindings {
     let mut alternates = s.prefs().alternate_shortcuts.clone();
     let old = format!("{}{}", super::PLAY_SHORTCUT_PREFIX, draft.opening.name);
     let new = format!("{}{}", super::PLAY_SHORTCUT_PREFIX, value.name);
-    if draft.source.is_some() && old != new {
+    if draft.source.is_some_and(|index| super::owns_name(&s.actions.list, index)) && old != new {
         if let Some(key) = keys.remove(&old) {
             keys.insert(new.clone(), key);
         }
@@ -460,6 +472,9 @@ fn bindings(s: &Session, draft: &Draft, value: &Action) -> Bindings {
 fn save(s: &mut Session, p: &Value) -> Result<Value> {
     fields(p, &["draft"], SAVE)?;
     not_playing(s, SAVE)?;
+    if s.has_recording_job() {
+        return Err(bad(SAVE, "finish the recorded step before saving the action"));
+    }
     let draft = owned(s, p, SAVE)?;
     if s.actions.recording.is_some() {
         return Err(bad(SAVE, "stop Classic recording first"));
@@ -481,6 +496,16 @@ fn save(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(SAVE, "an action with this name already exists"));
     }
     let changes = references(s, draft, &mut value);
+    super::library::check_action_count(
+        &s.actions,
+        s.actions
+            .list
+            .iter()
+            .enumerate()
+            .map(|(index, action)| if Some(index) == draft.source { &value } else { action })
+            .chain(draft.source.is_none().then_some(&value)),
+    )
+    .map_err(|error| bad(SAVE, error))?;
     let (keys, alternates) = bindings(s, draft, &value);
     let target = draft.source.unwrap_or(s.actions.list.len());
     let changed = draft.source.is_none() || value != draft.opening || !changes.is_empty();

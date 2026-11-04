@@ -137,6 +137,7 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
     let mut copied = s.actions.list[idx].clone();
     let mut names = crate::atn_cmds::UniqueNames::new(s.actions.list.iter().map(|a| a.name.clone()));
     copied.name = names.claim(&format!("{} copy", copied.name));
+    crate::actions_cmds::library::check_action_count(&s.actions, s.actions.list.iter().chain(std::iter::once(&copied))).map_err(|error| bad(cmd, error))?;
     let at = idx + 1;
     let result = json!({"action": copied.name, "index": at, "steps": copied.steps.len()});
     s.actions.list.insert(at, copied);
@@ -162,7 +163,7 @@ fn duplicate_set(s: &mut Session, p: &Value) -> Result<Value> {
     let mut set_names = crate::atn_cmds::UniqueNames::new(sets);
     let name = set_names.claim(&format!("{source} copy"));
     let mut names = crate::atn_cmds::UniqueNames::new(s.actions.list.iter().map(|a| a.name.clone()));
-    let at = s.actions.list.iter().position(|a| crate::atn_cmds::logical_set_name(a.set.as_deref()) == source).map_or(s.actions.list.len(), |i| i + 1);
+    let at = s.actions.list.iter().rposition(|a| crate::atn_cmds::logical_set_name(a.set.as_deref()) == source).map_or(s.actions.list.len(), |i| i + 1);
     let added: Vec<_> = s
         .actions
         .list
@@ -177,6 +178,7 @@ fn duplicate_set(s: &mut Session, p: &Value) -> Result<Value> {
         .collect();
     let copied: Vec<_> = added.iter().map(|a| a.name.clone()).collect();
     let count = added.len();
+    crate::actions_cmds::library::check_action_count(&s.actions, s.actions.list.iter().chain(added.iter())).map_err(|error| bad(cmd, error))?;
     s.actions.list.splice(at..at, added);
     if count != 0 {
         shift_action_calls(&mut s.actions.list, at, count);

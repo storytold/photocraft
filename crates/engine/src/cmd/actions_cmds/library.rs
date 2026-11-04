@@ -12,6 +12,21 @@ use crate::atn_cmds::{self, sidecar};
 type Result<T> = std::result::Result<T, String>;
 const MAX_BYTES: usize = crate::preset_store::MAX_ACTIONS_BYTES as usize;
 
+/// Check the encoded action-count ceiling before a definition edit is published.
+/// The metadata carrier consumes one real ATN action even though it is hidden in the panel.
+pub(crate) fn check_action_count<'a>(state: &ActionState, actions: impl IntoIterator<Item = &'a Action>) -> Result<()> {
+    let mut count = 0usize;
+    let mut carrier = state.library.sidecar.is_some() || state.library.legacy.is_some() || !state.atn_set_rows.is_empty();
+    for action in actions {
+        count = count.checked_add(1).ok_or("Actions count overflow")?;
+        carrier |= sidecar::action_needs_metadata(action);
+    }
+    if count.checked_add(usize::from(carrier)).is_none_or(|total| total > atn::MAX_TOTAL_ACTIONS) {
+        return Err("actions archive leaves no space for the action and its metadata sidecar".into());
+    }
+    Ok(())
+}
+
 #[derive(Debug)]
 struct Archive {
     bytes: Arc<[u8]>,
@@ -45,6 +60,7 @@ pub struct StepOrigin {
 pub(crate) struct RowOrigin {
     archive: Arc<Archive>,
     set: usize,
+    logical_name: String,
 }
 
 impl RowOrigin {
@@ -164,17 +180,35 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<ActionState> {
     state.library.sidecar = metadata.source;
     state.library.legacy = legacy;
     let mut total = 0usize;
+    let mut set_names = atn_cmds::UniqueNames::new(
+        std::iter::once(atn_cmds::UNGROUPED_SET.to_string()).chain(
+            archive
+                .parsed
+                .sets
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| Some(*index) != archive.hidden)
+                .map(|(_, file)| file.name.to_string_lossy())
+                .filter(|name| !name.is_empty()),
+        ),
+    );
+    let literal_ungrouped = set_names.claim(atn_cmds::UNGROUPED_SET);
     for (set, file) in archive.parsed.sets.iter().enumerate().filter(|(index, _)| Some(*index) != archive.hidden) {
         let wire_name = file.name.to_string_lossy();
-        let row = RowOrigin { archive: archive.clone(), set };
+        let logical_name = if wire_name == atn_cmds::UNGROUPED_SET {
+            literal_ungrouped.as_str()
+        } else {
+            atn_cmds::logical_set_name((!wire_name.is_empty()).then_some(wire_name.as_str()))
+        };
+        let row = RowOrigin { archive: archive.clone(), set, logical_name: logical_name.to_string() };
         let slot = state.sets.len();
-        state.sets.push(atn_cmds::logical_set_name((!wire_name.is_empty()).then_some(wire_name.as_str())).to_string());
+        state.sets.push(logical_name.to_string());
         state.library.rows.push(Some(row.clone()));
         if let Some(source) = metadata.sets.get_mut(set).and_then(Option::take) {
             state.atn_set_rows.push(sidecar::SetRowMetadata { slot, row: state.sets.last().cloned().ok_or("missing loaded row")?, source });
         }
         for (index, original) in file.actions.iter().enumerate() {
-            let (mut action, cohorts) = atn_cmds::library_action(file, original, &wire_name)?;
+            let (mut action, cohorts) = atn_cmds::library_action(file, original, if wire_name.is_empty() { "" } else { logical_name })?;
             total = total.checked_add(action.steps.len()).filter(|count| *count <= atn::MAX_TOTAL_ITEMS).ok_or("too many native steps in Actions library")?;
             if let Some(metadata) = metadata.actions.get_mut(set).and_then(|actions| actions.get_mut(index)).and_then(Option::take) {
                 sidecar::apply(&mut action, metadata);
@@ -366,7 +400,7 @@ pub(crate) fn encode(state: &ActionState, keys: &[(String, String)]) -> Result<V
             .filter(|bytes| *bytes <= MAX_BYTES)
             .ok_or("Actions text exceeds library byte limit")?;
     }
-    let groups = sidecar::groups(state, None)?;
+    let groups = sidecar::library_groups(state)?;
     let mut names = std::collections::HashMap::new();
     for action in &state.list {
         *names.entry(action.name.as_str()).or_insert(0usize) += 1;
@@ -377,10 +411,7 @@ pub(crate) fn encode(state: &ActionState, keys: &[(String, String)]) -> Result<V
         let original = selection.raw.as_ref().map(RowOrigin::file).transpose()?;
         let mut file = original.cloned().unwrap_or_default();
         let wire = atn_cmds::wire_set_name(name);
-        if original.is_none_or(|old| {
-            let source_name = old.name.to_string_lossy();
-            atn_cmds::logical_set_name((!source_name.is_empty()).then_some(source_name.as_str())) != *name
-        }) {
+        if selection.raw.as_ref().is_none_or(|row| row.logical_name != *name) {
             file.name = UnicodeString::new_nul(wire);
         }
         file.actions.clear();

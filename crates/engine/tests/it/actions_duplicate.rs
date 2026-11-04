@@ -2,11 +2,74 @@
 use photocraft_engine::{Session, actions_cmds::Action};
 use serde_json::{Value, json};
 
+#[test]
+fn a_copied_group_keeps_numeric_call_identity_through_native_store_reload() {
+    use photocraft_engine::preset_store::{self, MemBackend};
+    let store = MemBackend::default();
+    let mut s = session();
+    assert!(s.attach_preset_store(preset_store::open(Box::new(store.clone()))).is_empty());
+    let mut first = Action::new("First", vec![("layer.new.layer".into(), json!({"name":"First marker"}))]);
+    first.set = Some("Group".into());
+    let mut second = Action::new("Second", vec![("layer.new.layer".into(), json!({"name":"Second marker"}))]);
+    second.set = Some("Group".into());
+    let mut caller = Action::new("Caller", vec![("actions.play".into(), json!({"action":1}))]);
+    caller.set = Some("Other".into());
+    s.actions.list = vec![first, second, caller];
+    s.execute("actions.duplicate", json!({"set":"Group"})).unwrap();
+    assert_eq!(s.actions.list.iter().map(|a| a.name.as_str()).collect::<Vec<_>>(), ["First", "Second", "First copy", "Second copy", "Caller"]);
+    assert_eq!(s.actions.list[4].steps[0].1["action"], 1);
+    let mut restored = Session::new();
+    assert!(restored.attach_preset_store(preset_store::open(Box::new(store))).is_empty());
+    assert_eq!(restored.actions.list.iter().map(|a| a.name.as_str()).collect::<Vec<_>>(), ["First", "Second", "First copy", "Second copy", "Caller"]);
+    assert_eq!(restored.actions.list[4].steps[0].1["action"], 1);
+    restored.execute("file.new", json!({"width":8,"height":6})).unwrap();
+    let result = restored.execute("actions.play", json!({"action":"Caller"})).unwrap();
+    assert!(result.get("failed").is_none(), "{result}");
+    assert_eq!(restored.active().unwrap().doc.layers.last().unwrap().name, "Second marker");
+}
+
 /// A tiny document to distinguish definition edits from document mutations and playback.
 fn session() -> Session {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 8, "height": 6})).unwrap();
     s
+}
+
+#[test]
+fn action_count_admission_reserves_the_metadata_carrier_before_publication() {
+    for metadata in [false, true] {
+        for operation in ["action", "set", "editor"] {
+            let mut s = Session::new();
+            let capacity = photocraft_psd::atn::MAX_TOTAL_ACTIONS - usize::from(metadata);
+            s.actions.list = (0..capacity - 1).map(|index| Action::new(&format!("Action {index}"), vec![])).collect();
+            s.actions.list[0].set = Some("Source".into());
+            if metadata {
+                s.actions.list[0].description = "Requires the hidden metadata action".into();
+            }
+            for admitted in [true, false] {
+                let (command, params) = match operation {
+                    "action" => ("actions.duplicate", json!({"action":0})),
+                    "set" => ("actions.duplicate", json!({"set":"Source"})),
+                    _ => {
+                        let draft = s.execute("actions.editor.open", json!({"name":format!("New {admitted}")})).unwrap()["draft"].as_u64().unwrap();
+                        s.execute("actions.editor.step", json!({"draft":draft,"op":"insert","step":0,"id":"select.all","params":{}})).unwrap();
+                        ("actions.editor.save", json!({"draft":draft}))
+                    }
+                };
+                let before = s.actions.clone();
+                let result = s.execute(command, params.clone());
+                assert_eq!(result.is_ok(), admitted, "{operation}, metadata={metadata}: {result:?}");
+                if admitted {
+                    assert_eq!(s.actions.list.len(), capacity);
+                    if operation == "editor" {
+                        s.execute("actions.editor.discard", json!({"draft":params["draft"]})).unwrap();
+                    }
+                } else {
+                    assert_eq!(s.actions, before, "a full archive retains its list, rows and unpublished draft");
+                }
+            }
+        }
+    }
 }
 
 /// Copies retain metadata and call targets without taking the original function key.

@@ -39,6 +39,42 @@ fn open(s: &mut Session, params: Value) -> u64 {
     s.execute("actions.editor.open", params).unwrap()["draft"].as_u64().unwrap()
 }
 
+#[test]
+fn namesake_rename_follows_only_the_first_resolved_occurrence_in_both_editors() {
+    for modern in [false, true] {
+        for index in [0, 1] {
+            let (mut s, _) = session();
+            s.actions.list.insert(1, s.actions.list[0].clone());
+            s.actions.list[2].steps.push(("actions.conditional".into(), json!({"if":"always","then":"Original","else":"Other"})));
+            s.prefs.edit(|prefs| {
+                prefs.alternate_shortcuts.insert("actions.play:Original".into(), "Shift+F8".into());
+            });
+            if modern {
+                let draft = open(&mut s, json!({"action":index}));
+                editor(&mut s, "update", draft, json!({"name":"Renamed"})).unwrap();
+                // A later occurrence may legitimately call the first, including after rename.
+                if index == 1 {
+                    editor(&mut s, "step", draft, json!({"op":"insert","step":1,"id":"actions.play","params":{"action":"Original"}})).unwrap();
+                }
+                editor(&mut s, "save", draft, json!({})).unwrap();
+            } else {
+                s.execute("actions.rename", json!({"action":index,"name":"Renamed"})).unwrap();
+            }
+            let owner = if index == 0 { "Renamed" } else { "Original" };
+            let caller = s.actions.list.iter().find(|action| action.name == "Caller").unwrap();
+            assert_eq!(caller.steps[0].1["action"], owner, "modern={modern}, index={index}");
+            assert_eq!(caller.steps[1].1["then"], owner);
+            assert_eq!(caller.steps[1].1["else"], "Other");
+            let key = format!("actions.play:{owner}");
+            assert_eq!(s.prefs().shortcuts.get(&key).map(String::as_str), Some("F6"));
+            assert_eq!(s.prefs().alternate_shortcuts.get(&key).map(String::as_str), Some("Shift+F8"));
+            let other = if index == 0 { "Original" } else { "Renamed" };
+            assert!(!s.prefs().shortcuts.contains_key(&format!("actions.play:{other}")));
+            assert!(!s.prefs().alternate_shortcuts.contains_key(&format!("actions.play:{other}")));
+        }
+    }
+}
+
 /// Metadata, portable recorded targets and named calls stay out of the stored library.
 #[test]
 fn edits_and_recording_stay_draft_until_save_or_discard() {
@@ -223,8 +259,9 @@ fn classic_recording_remains_immediate_without_editor_save() {
     let len = s.actions.list.len();
     s.execute("actions.record", json!({"name":"Classic"})).unwrap();
     assert_eq!(s.actions.list.len(), len + 1);
-    let native: Value = serde_json::from_slice(&store.read(ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap()).unwrap();
-    assert_eq!(native["actions"].as_array().unwrap().len(), len + 1);
+    let mut restored = Session::new();
+    assert!(restored.attach_preset_store(preset_store::open(Box::new(store.clone()))).is_empty());
+    assert_eq!(restored.actions.list.len(), len + 1);
     assert!(s.execute("actions.editor.open", json!({})).is_err());
     s.execute("edit.fill", json!({"color":"#00ff00"})).unwrap();
     assert_eq!(photocraft_engine::actions_cmds::pending_steps(&s, len).count(), 1);
@@ -232,6 +269,36 @@ fn classic_recording_remains_immediate_without_editor_save() {
     assert_eq!(s.actions.list[len].steps.len(), 1);
     assert_eq!(s.actions.list[len].steps[0].0, "edit.fill");
     assert_eq!(s.actions.list[len].steps[0].1["color"], "#00ff00");
+}
+
+#[test]
+fn rename_and_new_steps_cannot_introduce_play_or_conditional_self_calls() {
+    for (command, params) in [
+        ("actions.play", json!({"action":"Future"})),
+        ("actions.conditional", json!({"if":"always","then":"Future"})),
+        ("actions.conditional", json!({"if":"always","then":"Other","else":"Future"})),
+    ] {
+        let (mut s, _) = session();
+        let draft = open(&mut s, json!({"name":"Before"}));
+        editor(&mut s, "step", draft, json!({"op":"insert","step":0,"id":command,"params":params})).unwrap();
+        let before = editor(&mut s, "get", draft, json!({})).unwrap();
+        assert!(editor(&mut s, "update", draft, json!({"name":"Future"})).is_err());
+        assert_eq!(editor(&mut s, "get", draft, json!({})).unwrap(), before);
+        editor(&mut s, "update", draft, json!({"name":"Allowed"})).unwrap();
+        editor(&mut s, "discard", draft, json!({})).unwrap();
+        let draft = open(&mut s, json!({"action":"Original"}));
+        editor(&mut s, "update", draft, json!({"name":"Renamed"})).unwrap();
+        let mut params = params.clone();
+        for key in ["action", "then", "else"] {
+            if params.get(key).is_some_and(|v| v == "Future") {
+                params[key] = json!("Original");
+            }
+        }
+        assert!(
+            editor(&mut s, "step", draft, json!({"op":"insert","step":0,"id":command,"params":params})).is_err(),
+            "the opening source name will become Renamed at Save"
+        );
+    }
 }
 
 /// Failed Save keeps an active take; successful Save consumes its pending steps only once.
@@ -257,6 +324,32 @@ fn save_finishes_its_own_capture_only_after_complete_validation() {
     assert!(std::sync::Arc::ptr_eq(&s.active().unwrap().doc, &doc));
     assert_eq!(s.active().unwrap().history.entries(), history);
     assert_eq!(s.journal, journal);
+}
+
+/// A late job from a discarded take is journaled, but never enters the next draft capture.
+#[test]
+fn save_waits_for_a_real_recorded_job_before_publishing() {
+    let (mut s, store) = session();
+    let draft = open(&mut s, json!({"name":"Worker capture"}));
+    editor(&mut s, "record", draft, json!({})).unwrap();
+    let job = match s.start("filter.blur.gaussianBlur", json!({"radius":1})).unwrap() {
+        Started::Job(id) => id,
+        _ => panic!("blur must use its real job path"),
+    };
+    assert!(s.has_recording_job());
+    let state = s.actions.clone();
+    let bytes = store.read(ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap();
+    assert!(editor(&mut s, "save", draft, json!({})).is_err());
+    assert_eq!(s.actions, state, "refusal retains the capture and unpublished draft");
+    assert_eq!(store.read(ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap(), bytes);
+    s.wait_job(job).unwrap();
+    assert!(!s.has_recording_job());
+    let saved = editor(&mut s, "save", draft, json!({})).unwrap();
+    assert_eq!(saved["recording"], false);
+    assert_eq!(s.actions.list.last().unwrap().steps[0].0, "filter.blur.gaussianBlur");
+    let mut restored = Session::new();
+    assert!(restored.attach_preset_store(preset_store::open(Box::new(store))).is_empty());
+    assert_eq!(restored.actions.list.last().unwrap().steps, s.actions.list.last().unwrap().steps);
 }
 
 /// A late job from a discarded take is journaled, but never enters the next draft capture.

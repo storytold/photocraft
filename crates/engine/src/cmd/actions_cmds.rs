@@ -916,10 +916,16 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
 fn remove_actions(s: &mut Session, removed: &[usize]) -> Vec<String> {
     let old_len = s.actions.list.len();
     let names: Vec<_> = removed.iter().filter_map(|&index| s.actions.list.get(index).map(|action| action.name.clone())).collect();
+    let mut vanished: BTreeSet<&str> = names.iter().map(String::as_str).collect();
+    for (index, action) in s.actions.list.iter().enumerate() {
+        if removed.binary_search(&index).is_err() {
+            vanished.remove(action.name.as_str());
+        }
+    }
     for (id, params) in s.actions.list.iter_mut().flat_map(|action| &mut action.steps) {
         for &key in call_keys(id) {
             let Some(value) = params.get(key) else { continue };
-            if value.as_str().is_some_and(|name| names.iter().any(|deleted| deleted == name)) {
+            if value.as_str().is_some_and(|name| vanished.contains(name)) {
                 params[key] = Value::Null;
             } else if let Some(index) = num(value).and_then(|index| usize::try_from(index).ok()).filter(|&index| index < old_len) {
                 match removed.binary_search(&index) {
@@ -936,7 +942,7 @@ fn remove_actions(s: &mut Session, removed: &[usize]) -> Vec<String> {
         index += 1;
         keep
     });
-    let keys: Vec<_> = names.iter().map(|name| format!("{PLAY_SHORTCUT_PREFIX}{name}")).collect();
+    let keys: Vec<_> = vanished.iter().map(|name| format!("{PLAY_SHORTCUT_PREFIX}{name}")).collect();
     if keys.iter().any(|key| s.prefs().shortcuts.contains_key(key) || s.prefs().alternate_shortcuts.contains_key(key)) {
         s.edit_prefs(|prefs| {
             for key in &keys {
@@ -999,6 +1005,11 @@ fn call_keys(id: &str) -> &'static [&'static str] {
     }
 }
 
+/// Named calls and shortcuts resolve to the first matching occurrence.
+fn owns_name(list: &[Action], index: usize) -> bool {
+    list.get(index).is_some_and(|action| list.iter().position(|candidate| candidate.name == action.name) == Some(index))
+}
+
 /// Rename an action in place. Nested `actions.play` steps and `actions.conditional` branches
 /// that call it by name, and its function-key binding, follow the new name so nothing silently
 /// stops working.
@@ -1018,12 +1029,15 @@ fn rename(s: &mut Session, p: &Value) -> Result<Value> {
     if s.actions.list.iter().any(|a| a.name == name) {
         return Err(bad("actions.rename", "an action with this name already exists"));
     }
-    let pending = s.actions.recording_cursor().unwrap_or(s.journal.len());
-    let calls = s.actions.list.iter_mut().flat_map(|a| a.steps.iter_mut()).chain(s.journal.iter_mut().skip(pending));
-    for (id, params) in calls {
-        for key in call_keys(id) {
-            if params.get(*key).and_then(Value::as_str) == Some(old.as_str()) {
-                params[*key] = json!(name);
+    let follows = owns_name(&s.actions.list, idx);
+    if follows {
+        let pending = s.actions.recording_cursor().unwrap_or(s.journal.len());
+        let calls = s.actions.list.iter_mut().flat_map(|a| a.steps.iter_mut()).chain(s.journal.iter_mut().skip(pending));
+        for (id, params) in calls {
+            for key in call_keys(id) {
+                if params.get(*key).and_then(Value::as_str) == Some(old.as_str()) {
+                    params[*key] = json!(name);
+                }
             }
         }
     }
@@ -1032,10 +1046,13 @@ fn rename(s: &mut Session, p: &Value) -> Result<Value> {
     }
     s.actions.touch();
     let (from, to) = (format!("{PLAY_SHORTCUT_PREFIX}{old}"), format!("{PLAY_SHORTCUT_PREFIX}{name}"));
-    if s.prefs().shortcuts.contains_key(&from) {
+    if follows && (s.prefs().shortcuts.contains_key(&from) || s.prefs().alternate_shortcuts.contains_key(&from)) {
         s.edit_prefs(|prefs| {
             if let Some(key) = prefs.shortcuts.remove(&from) {
-                prefs.shortcuts.insert(to, key);
+                prefs.shortcuts.insert(to.clone(), key);
+            }
+            if let Some(key) = prefs.alternate_shortcuts.remove(&from) {
+                prefs.alternate_shortcuts.insert(to, key);
             }
         });
     }

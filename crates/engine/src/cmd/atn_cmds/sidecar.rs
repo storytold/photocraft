@@ -10,6 +10,7 @@ use super::{Action, AtnAction, AtnEvent, AtnFile, AtnItem};
 use crate::actions_cmds::ActionState;
 
 const MODERN: &str = "modernizedActionData";
+const EMPTY_LIBRARY: &str = "photocraftEmptyLibraryV1";
 const MAX_BYTES: usize = crate::preset_import_cmds::MAX_FILE_BYTES as usize;
 type Result<T> = std::result::Result<T, String>;
 
@@ -250,7 +251,7 @@ pub(crate) fn install_row(state: &mut ActionState, name: &str, source: Option<Ar
 /// surviving row carriers with the insertion. Action clones already retain their raw entries.
 pub(crate) fn duplicate_set_rows(state: &mut ActionState, source: &str, name: &str) {
     let rows: Vec<_> = state.sets.iter().enumerate().filter_map(|(slot, row)| (row == source).then_some(slot)).collect();
-    let at = rows.first().map_or(state.sets.len(), |slot| slot + 1);
+    let at = rows.last().map_or(state.sets.len(), |slot| slot + 1);
     let mut copied: Vec<_> = rows.iter().map(|&slot| empty_source(state, slot)).collect();
     if copied.is_empty() {
         copied.push(group_source(state, source));
@@ -334,43 +335,61 @@ pub(crate) fn selection<'a>(state: &ActionState, action: &'a Action) -> Selectio
 }
 
 pub(crate) fn groups<'a>(state: &'a ActionState, only: Option<&str>) -> Result<Vec<(&'a str, Selection<'a>)>> {
+    groups_ordered(state, only, false)
+}
+
+/// Durable libraries preserve flat resolution order, including interleaved logical sets.
+pub(crate) fn library_groups(state: &ActionState) -> Result<Vec<(&str, Selection<'_>)>> {
+    groups_ordered(state, None, true)
+}
+
+fn groups_ordered<'a>(state: &'a ActionState, only: Option<&str>, durable: bool) -> Result<Vec<(&'a str, Selection<'a>)>> {
     if state.list.len() > atn::MAX_TOTAL_ACTIONS || state.sets.len() > atn::MAX_SETS {
         return Err("action library exceeds archive limits".into());
     }
     let raw_rows = state.library.row_index(&state.sets);
-    let mut names = std::collections::HashSet::new();
+    let mut seen = std::collections::HashSet::new();
+    let names: Vec<_> = state
+        .list
+        .iter()
+        .map(|action| super::logical_set_name(action.set.as_deref()))
+        .chain(state.sets.iter().map(String::as_str))
+        .filter(|name| only.is_none_or(|only| only == *name) && seen.insert(*name))
+        .collect();
+    let sources: std::collections::HashMap<_, _> = names.iter().map(|&name| (name, group_source(state, name))).collect();
     let mut out: Vec<(&str, Selection<'a>)> = Vec::new();
-    for name in state.list.iter().map(|action| super::logical_set_name(action.set.as_deref())).chain(state.sets.iter().map(String::as_str)) {
-        if only.is_some_and(|only| only != name) || !names.insert(name) {
-            continue;
-        }
-        let fallback = group_source(state, name);
-        let before = out.len();
-        for action in state.list.iter().filter(|action| super::logical_set_name(action.set.as_deref()) == name) {
-            let source = action.atn_metadata.as_ref().and_then(|metadata| metadata.set.clone()).or_else(|| fallback.clone());
-            let raw = raw_rows.source(action);
-            let existing = out.last_mut().filter(|(previous, selection)| {
-                *previous == name
-                    && selection.raw == raw
-                    && match (&selection.source, &source) {
-                        (None, None) => true,
-                        (Some(left), Some(right)) => same_set(left, right),
-                        _ => false,
-                    }
-            });
-            if let Some((_, selection)) = existing {
-                selection.actions.push(action);
-            } else {
-                if out.len() >= atn::MAX_SETS {
-                    return Err("too many sets in actions archive".into());
+    let ordered: Vec<_> = if durable {
+        state.list.iter().collect()
+    } else {
+        names.iter().flat_map(|name| state.list.iter().filter(move |action| super::logical_set_name(action.set.as_deref()) == *name)).collect()
+    };
+    for action in ordered {
+        let name = super::logical_set_name(action.set.as_deref());
+        let source = action.atn_metadata.as_ref().and_then(|metadata| metadata.set.clone()).or_else(|| sources.get(name).cloned().flatten());
+        let raw = raw_rows.source(action);
+        let existing = out.last_mut().filter(|(previous, selection)| {
+            *previous == name
+                && selection.raw == raw
+                && match (&selection.source, &source) {
+                    (None, None) => true,
+                    (Some(left), Some(right)) => same_set(left, right),
+                    _ => false,
                 }
-                out.push((name, Selection { actions: vec![action], source, raw }));
+        });
+        if let Some((_, selection)) = existing {
+            selection.actions.push(action);
+        } else {
+            if out.len() >= atn::MAX_SETS {
+                return Err("too many sets in actions archive".into());
             }
+            out.push((name, Selection { actions: vec![action], source, raw }));
         }
+    }
+    for name in names {
         for (slot, _) in state.sets.iter().enumerate().filter(|(_, row)| row.as_str() == name) {
             let raw = state.library.rows.get(slot).cloned().flatten();
             if let Some(raw) = raw.as_ref()
-                && !out.iter().skip(before).any(|(_, selection)| selection.raw.as_ref() == Some(raw))
+                && !out.iter().any(|(current, selection)| *current == name && selection.raw.as_ref() == Some(raw))
             {
                 if out.len() >= atn::MAX_SETS {
                     return Err("too many sets in actions archive".into());
@@ -378,7 +397,7 @@ pub(crate) fn groups<'a>(state: &'a ActionState, only: Option<&str>) -> Result<V
                 out.push((name, Selection { actions: Vec::new(), source: empty_source(state, slot), raw: Some(raw.clone()) }));
             }
             if let Some(source) = empty_source(state, slot)
-                && !out.iter().skip(before).any(|(_, selection)| selection.source.as_ref().is_some_and(|existing| same_set(existing, &source)))
+                && !out.iter().any(|(current, selection)| *current == name && selection.source.as_ref().is_some_and(|existing| same_set(existing, &source)))
             {
                 if out.len() >= atn::MAX_SETS {
                     return Err("too many sets in actions archive".into());
@@ -386,15 +405,15 @@ pub(crate) fn groups<'a>(state: &'a ActionState, only: Option<&str>) -> Result<V
                 out.push((name, Selection { actions: Vec::new(), source: Some(source), raw: state.library.rows.get(slot).cloned().flatten() }));
             }
         }
-        if out.len() == before {
+        if !out.iter().any(|(current, _)| *current == name) {
             if out.len() >= atn::MAX_SETS {
                 return Err("too many sets in actions archive".into());
             }
-            out.push((name, Selection { actions: Vec::new(), source: fallback, raw: None }));
+            out.push((name, Selection { actions: Vec::new(), source: sources.get(name).cloned().flatten(), raw: None }));
         }
     }
-    // Preserve physical rows only when doing so preserves the panel's group/action order.
-    // An explicit move can change that projection, including S1/S2/S1 runs within one group.
+    // Restore physical rows only if the relevant order remains unchanged. Durable storage
+    // must preserve the entire flat list because numeric and first-name calls resolve there.
     let mut slots = std::collections::HashMap::new();
     for row in &state.atn_set_rows {
         if state.sets.get(row.slot) == Some(&row.row) {
@@ -414,7 +433,13 @@ pub(crate) fn groups<'a>(state: &'a ActionState, only: Option<&str>) -> Result<V
             .or_else(|| selection.source.as_ref().and_then(|source| slots.get(&(*name, Arc::as_ptr(&source.source), source.ordinal)).copied()))
             .unwrap_or(usize::MAX)
     });
-    if panel_projection(&out, 0..out.len()) != panel_projection(&out, physical.iter().copied()) {
+    let preserves_order = if durable {
+        let projected: Vec<_> = physical.iter().flat_map(|&index| out[index].1.actions.iter().map(|action| std::ptr::from_ref(*action))).collect();
+        projected == state.list.iter().map(std::ptr::from_ref).collect::<Vec<_>>()
+    } else {
+        panel_projection(&out, 0..out.len()) == panel_projection(&out, physical.iter().copied())
+    };
+    if !preserves_order {
         return Ok(out);
     }
     Ok(physical
@@ -535,7 +560,7 @@ fn decode_inner(files: &[AtnFile], library: bool, raw_outer: Option<&[u8]>) -> R
             return Err("unsupported Actions sidecar root".into());
         }
         let sets = root.list("sets")?;
-        if sets.is_empty() && !library {
+        if sets.is_empty() && !library && unique(&parsed, EMPTY_LIBRARY)? != &D::Boolean(true) {
             return Err("Actions sidecar requires at least one real set".into());
         }
         if sets.len().checked_add(1) != Some(files.len()) {
@@ -689,6 +714,10 @@ pub(crate) fn append_library(
     append_inner(files, selected, force, source, receipt)
 }
 
+pub(crate) fn action_needs_metadata(action: &Action) -> bool {
+    action.atn_metadata.is_some() || !action.description.is_empty() || !action.icon.is_empty()
+}
+
 fn append_inner(
     files: &mut Vec<AtnFile>,
     selected: &[Selection<'_>],
@@ -699,10 +728,7 @@ fn append_inner(
     if files.len() != selected.len() {
         return Err("sidecar export selection mismatch".into());
     }
-    let needed = selected.iter().any(|selection| {
-        selection.source.is_some()
-            || selection.actions.iter().any(|action| action.atn_metadata.is_some() || !action.description.is_empty() || !action.icon.is_empty())
-    });
+    let needed = selected.iter().any(|selection| selection.source.is_some() || selection.actions.iter().any(|action| action_needs_metadata(action)));
     if !needed && !force {
         return Ok(None);
     }
@@ -763,10 +789,12 @@ fn append_inner(
         Some(source) => source.root.patch(&[("sets", Some(objects(&sets)?))])?,
         None => RawDescriptor::new(&Descriptor::new("null").with("sets", D::List(Vec::new())).to_bytes())?.patch(&[("sets", Some(objects(&sets)?))])?,
     };
+    let root = RawDescriptor::new(&root)?.patch(&[(EMPTY_LIBRARY, if files.is_empty() { Some(value_bytes(D::Boolean(true))?) } else { None })])?;
     let root = if let Some(receipt) = receipt {
         RawDescriptor::new(&root)?.patch(&[("photocraftLegacyJsonV1", Some(value_bytes(D::Descriptor(receipt.descriptor()?))?))])?
     } else {
-        root
+        // A portable subset is not proof that the complete legacy library was published.
+        RawDescriptor::new(&root)?.patch(&[("photocraftLegacyJsonV1", None)])?
     };
     let mut payload = 16u32.to_be_bytes().to_vec();
     extend(&mut payload, &root)?;
