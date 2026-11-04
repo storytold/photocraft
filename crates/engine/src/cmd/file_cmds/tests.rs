@@ -1344,6 +1344,15 @@ fn file_info_reads_declarations_the_way_an_xml_reader_does() {
     assert!(edit < out.find("</r:RDF>").unwrap(), "the edit inserts inside the RDF element: {out}");
     assert!(out.find("</r:RDF>").unwrap() < out.find("</z:RDF>").unwrap(), "the text mention stays where it was written: {out}");
     assert_eq!(read_file_info(Some(&out))["authorTitle"], "Artist");
+    // Declarations written inside a processing instruction or a quoted attribute value are text,
+    // and bind nothing: a later `</q:RDF>` must not capture the insertion.
+    let hidden = format!(
+        r#"<?xml-stylesheet xmlns:q="{NS}"?><x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="xmlns:q='{NS}'"><r:RDF xmlns:r="{NS}"><r:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:CreatorTool="Other App"/></r:RDF></x:xmpmeta>trailing words</q:RDF>"#
+    );
+    let out = write_file_info(Some(&hidden), &json!({"authorTitle": "Artist"}));
+    assert!(out.contains("xmp:CreatorTool=\"Other App\""), "the packet is kept: {out}");
+    assert!(out.find("AuthorsPosition").unwrap() < out.find("</r:RDF>").unwrap(), "the edit inserts inside the RDF element: {out}");
+    assert_eq!(read_file_info(Some(&out))["authorTitle"], "Artist");
     // A self-closed `<rdf:RDF>` earlier in the packet does not reach the insertion point in a
     // later RDF-spelled element: the inserted description re-declares its `rdf` prefix.
     let re_opened = format!(

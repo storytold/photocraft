@@ -316,11 +316,15 @@ fn rdf_end_tag(x: &str) -> Option<(usize, usize)> {
 }
 
 /// The `xmlns` token at `at` sits inside an element's start tag — not in character data, where a
-/// File Info text value could mention `xmlns:x="…"` and bind nothing at all. True from the last
-/// `<` while no unquoted `>` has closed the tag and the tag is not an end tag (#11116).
+/// File Info text value could mention `xmlns:x="…"` and bind nothing at all; not in a processing
+/// instruction or doctype, whose pseudo-attributes bind nothing either; and not inside another
+/// attribute's quoted value, where `xmlns:` is plain text (#11116).
 fn in_start_tag(x: &str, at: usize) -> bool {
     let Some(lt) = x[..at].rfind('<') else { return false };
-    if x[lt + 1..at].starts_with('/') {
+    // A start tag's `<` is followed by the element name; `</`, `<?` and `<!` open an end tag, a
+    // processing instruction or a comment/doctype/CDATA, none of which carries a declaration.
+    // (An element name may start with a non-ASCII XML letter, so only these three leads reject.)
+    if matches!(x.as_bytes().get(lt + 1), Some(b'/') | Some(b'?') | Some(b'!')) {
         return false;
     }
     let mut quote: Option<char> = None;
@@ -333,7 +337,8 @@ fn in_start_tag(x: &str, at: usize) -> bool {
             None => {}
         }
     }
-    true
+    // A token still inside quotes is text of an attribute value, not a declaration.
+    quote.is_none()
 }
 
 /// Parse the `xmlns[:prefix] = "uri"` namespace declaration starting at `i` in `x` (`x[i..]` is
