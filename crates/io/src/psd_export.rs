@@ -185,15 +185,15 @@ impl Ex<'_> {
         if self.fmt.sample == SampleType::F32 { Compression::ZipPrediction } else { Compression::Rle }
     }
 
-    fn encode(&self, id: i16, plane: &[u8], w: usize, h: usize) -> ChannelData {
+    fn encode(&self, id: i16, plane: Vec<u8>, w: usize, h: usize) -> ChannelData {
         let depth = psd_depth(self.fmt.sample);
         // Photoshop writes empty layer/mask channels as just the raw compression code.
         // A ZIP stream for a zero-sized channel makes readers try to decompress an
         // invalid image extent (notably psd-tools for 32-bit adjustment layers).
         let compression = if w == 0 || h == 0 { Compression::Raw } else { self.compression() };
-        let c = ChannelData::encode(id, compression, plane, w, h, depth, self.version)
-            .or_else(|_| ChannelData::encode(id, Compression::Raw, plane, w, h, depth, self.version))
-            .unwrap_or(ChannelData::new(id, Some(Compression::Raw), plane.to_vec()));
+        let layout = photocraft_psd::compression::PlaneLayout { planes: 1, width: w, height: h, depth, version: self.version };
+        let (compression, data) = crate::pixels::compress_plane(plane, compression, &layout);
+        let c = ChannelData::new(id, Some(compression), data);
         match &self.stage {
             Some(stage) => stage.channel(c),
             None => c,
@@ -201,7 +201,7 @@ impl Ex<'_> {
     }
 
     fn empty_channels(&self) -> Vec<ChannelData> {
-        (-1..self.cc as i16).map(|id| self.encode(id, &[], 0, 0)).collect()
+        (-1..self.cc as i16).map(|id| self.encode(id, Vec::new(), 0, 0)).collect()
     }
 
     fn pixel_channels(&self, s: &Surface, name: &str, include_alpha: bool) -> (PsdRect, Vec<ChannelData>, Vec<String>) {
@@ -229,9 +229,11 @@ impl Ex<'_> {
             surface_planes(&s, r, self.cc + usize::from(include_alpha), &invert, self.fmt.mode == ColorMode::Lab && self.fmt.sample == SampleType::U16);
         let (w, h) = (r.width() as usize, r.height() as usize);
         // Alpha (-1) first, then the colour channels; each compressed on its own thread.
-        let order: Vec<(i16, &Vec<u8>)> =
-            planes.get(self.cc).map(|p| (-1, p)).into_iter().chain(planes.iter().take(self.cc).enumerate().map(|(c, p)| (c as i16, p))).collect();
-        let ch = crate::pixels::par_map(order, |(id, plane)| self.encode(id, plane, w, h));
+        let mut order: Vec<_> = planes.into_iter().enumerate().map(|(c, p)| (if c == self.cc { -1 } else { c as i16 }, p)).collect();
+        if include_alpha {
+            order.rotate_right(1);
+        }
+        let ch = crate::pixels::par_map_cpu(order, |(id, plane)| self.encode(id, plane, w, h));
         (to_psd_rect(r), ch, warnings)
     }
 
@@ -261,7 +263,7 @@ impl Ex<'_> {
             real: None,
             real_first: true,
         };
-        (MaskData::Mask(pm), Some(self.encode(-2, &plane, w, h)))
+        (MaskData::Mask(pm), Some(self.encode(-2, plane, w, h)))
     }
 
     /// Prefer numbers above imported layer IDs, wrapping safely at u32::MAX.
@@ -990,7 +992,12 @@ impl Ex<'_> {
         // fill must be rendered from the document's patterns, not left transparent (#1907).
         let buf = photocraft_compose::render_fill_content(l, f, self.canvas, &self.patterns);
         let mut s = Surface::new(self.fmt);
-        let vals: Vec<f32> = buf.px.iter().flat_map(|p| photocraft_raster::from_rgba(&self.fmt, *p)).collect();
+        let mut vals = Vec::with_capacity(buf.px.len() * self.fmt.channels());
+        let mut pixel = [0.0f32; 5];
+        for p in &buf.px {
+            let n = photocraft_raster::from_rgba_into(&self.fmt, *p, &mut pixel);
+            vals.extend_from_slice(&pixel[..n]);
+        }
         s.write_region(self.canvas, &vals);
         s.prune();
         s

@@ -12,7 +12,7 @@ use photocraft_geom::Rect;
 use photocraft_psd::patterns::{PatternBudget, PsdPattern, block_has_user_mask, block_key, mode_channels, parse_pattern_block_with, write_pattern_block};
 use photocraft_raster::Surface;
 
-use crate::pixels::{max_sample, psd_depth, sample_for_depth, try_interleave, zero_sample};
+use crate::pixels::{max_sample, psd_depth, sample_for_depth, surface_planes_into, try_interleave, zero_sample};
 
 /// Global block keys holding patterns.
 pub const PATTERN_KEYS: [[u8; 4]; 3] = [*b"Patt", *b"Pat2", *b"Pat3"];
@@ -162,39 +162,27 @@ fn to_psd_in(p: &Pattern, remaining: &mut u64) -> Result<PsdPattern, String> {
         return Err(fail("dense pixels exceed the file's remaining pattern memory budget; keep the native .pcraft file to preserve it"));
     }
     let surf = if fmt == f { p.surface.clone() } else { p.surface.try_convert(fmt).map_err(|error| fail(&error.to_string()))? };
-    let mut bytes = surf.try_to_interleaved(p.rect()).map_err(|error| fail(&error.to_string()))?;
     let ch = fmt.channels();
-    if mode == ColorMode::Lab && fmt.sample == SampleType::U16 {
-        crate::pixels::lab16_chroma(&mut bytes, ch, false);
-    }
     let mut invert = vec![mode == ColorMode::Cmyk; ch];
     if fmt.alpha {
         invert[ch - 1] = false;
     }
-    // Allocate each output plane fallibly; the interleaved input and retained planes
-    // are each bounded by MAX_WORKING_BYTES, irrespective of sparse source storage.
+    // Keep the shared dense budget and fallible plane allocation without interleaved staging.
     let plane_len = usize::try_from(required / ch as u64).map_err(|_| fail("plane byte count overflow"))?;
     let mut planes: Vec<Vec<u8>> = Vec::with_capacity(ch);
     for _ in 0..ch {
         let mut plane = Vec::new();
         plane.try_reserve_exact(plane_len).map_err(|error| fail(&error.to_string()))?;
+        plane.resize(plane_len, 0);
         planes.push(plane);
     }
-    for pixel in bytes.chunks_exact(fmt.bytes_per_pixel()) {
-        for (plane, sample) in planes.iter_mut().zip(pixel.chunks_exact(fmt.sample.bytes())) {
-            plane.extend_from_slice(sample);
-        }
-    }
-    for (plane, invert) in planes.iter_mut().zip(invert) {
-        if invert {
-            crate::pixels::invert_plane(plane, fmt.sample);
-        }
-        if cfg!(target_endian = "little") {
-            for sample in plane.chunks_exact_mut(fmt.sample.bytes()) {
-                sample.reverse();
-            }
-        }
-    }
+    surface_planes_into(
+        &surf,
+        p.rect(),
+        &invert,
+        mode == ColorMode::Lab && fmt.sample == SampleType::U16,
+        &mut planes.iter_mut().map(Vec::as_mut_slice).collect::<Vec<_>>(),
+    );
     let alpha = fmt.alpha.then(|| planes.pop()).flatten();
     *remaining -= required;
     Ok(PsdPattern {

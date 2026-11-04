@@ -4,6 +4,122 @@ fn document(width: u32, height: u32) -> Document {
     Document::new("size estimate", photocraft_geom::Size::new(width, height), ColorMode::Rgb, SampleType::U8)
 }
 
+#[test]
+fn fill_channels_match_allocating_pixel_conversion() {
+    for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Lab] {
+        for sample in SampleType::ALL {
+            let mut doc = Document::new("fill", photocraft_geom::Size::new(13, 7), mode, sample);
+            let fill = photocraft_doc::Fill::Solid(photocraft_color::Color { mode: ColorMode::Rgb, c: [0.2, 0.4, 0.6, 0.0], alpha: 0.4 });
+            let layer = Layer::new("fill", LayerContent::Fill(fill.clone()));
+            let buf = photocraft_compose::render_fill_content(&layer, &fill, doc.bounds(), &[]);
+            let fmt = doc.pixel_format();
+            let values: Vec<_> = buf.px.iter().flat_map(|p| photocraft_raster::from_rgba(&fmt, *p)).collect();
+            let mut surface = Surface::new(fmt);
+            surface.write_region(doc.bounds(), &values);
+            let mut bytes = surface.to_interleaved(doc.bounds());
+            if mode == ColorMode::Lab && sample == SampleType::U16 {
+                crate::pixels::lab16_chroma(&mut bytes, fmt.channels(), false);
+            }
+            let planes = crate::pixels::deinterleave(&bytes, fmt.channels(), sample, &vec![false; fmt.channels()]);
+            doc.layers.push(layer);
+            let file = document_to_psd(&doc);
+            for channel in &file.layers()[0].channels {
+                let c = if channel.id == -1 { mode.color_channels() } else { channel.id as usize };
+                let compression = if sample == SampleType::F32 { Compression::ZipPrediction } else { Compression::Rle };
+                assert_eq!(*channel, ChannelData::encode(channel.id, compression, &planes[c], 13, 7, psd_depth(sample), file.header.version).unwrap());
+            }
+        }
+    }
+}
+
+#[test]
+fn opacity_scan_matches_decoded_alpha() {
+    for sample in SampleType::ALL {
+        let fmt = PixelFormat::new(ColorMode::Rgb, sample, true);
+        let r = photocraft_geom::Rect::new(-2, -3, 260, 259);
+        for a in [0.0, 0.999_99, 1.0, 1.5, f32::NAN, f32::INFINITY] {
+            let mut s = Surface::with_default(fmt, &[0.2, 0.4, 0.6, 1.0]);
+            s.fill_rect(photocraft_geom::Rect::new(-1, -1, 259, 258), &[0.3, 0.5, 0.7, a]);
+            let bytes = s.to_interleaved(r);
+            let expected = bytes.chunks_exact(fmt.bytes_per_pixel()).all(|p| photocraft_color::read_sample(p, sample, 3) >= 1.0);
+            assert_eq!(crate::flat::opaque_surface(&s, r), expected);
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn concurrent_exports_keep_bytes_in_single_and_multi_worker_pools() {
+    use rayon::prelude::*;
+    let docs: Vec<_> = [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab]
+        .into_iter()
+        .flat_map(|mode| SampleType::ALL.map(move |sample| (mode, sample)))
+        .map(|(mode, sample)| {
+            let mut doc = Document::new("concurrent", photocraft_geom::Size::new(67, 259), mode, sample);
+            let mut layer = Layer::raster("pixels", doc.pixel_format());
+            let values: Vec<_> = (0..67 * 259 * doc.pixel_format().channels()).map(|i| (i % 17) as f32 / 16.0).collect();
+            layer.surface_mut().unwrap().write_region(doc.bounds(), &values);
+            let mut mask = LayerMask::hide_all();
+            mask.surface = Surface::with_default(PixelFormat::new(ColorMode::Grayscale, sample, false), &[0.7]);
+            mask.surface.fill_rect(photocraft_geom::Rect::new(-1, -2, 68, 260), &[0.4]);
+            layer.mask = Some(mask.clone());
+            doc.channels.push(photocraft_doc::AlphaChannel::new("saved", mask.surface.clone()));
+            doc.quick_mask = Some(photocraft_doc::AlphaChannel::new("quick", mask.surface));
+            doc.layers.push(layer);
+            if mode == ColorMode::Cmyk && sample != SampleType::U16 {
+                let tvi = if sample == SampleType::U8 { 0.1 } else { 0.3 };
+                let profile =
+                    photocraft_cms::synth::cmyk_profile(&photocraft_cms::synth::CmykParams { tvi: [tvi; 4], grid_a2b: 5, grid_b2a: 5, ..Default::default() });
+                doc.icc_profile = Some(profile.to_bytes());
+                let mut hue = Layer::raster("hue", doc.pixel_format());
+                hue.blend = photocraft_doc::BlendMode::Hue;
+                doc.layers.push(hue);
+            }
+            doc
+        })
+        .collect();
+    let encode = |i: usize| {
+        let opts = PsdExportOptions { force_psb: i.is_multiple_of(2), ..Default::default() };
+        let (file, warnings) = document_to_psd_with(&docs[i], &opts);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        file.to_bytes().unwrap()
+    };
+    let expected: Vec<_> = (0..docs.len()).map(encode).collect();
+    for threads in [1, 2, 4] {
+        let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
+        pool.install(|| (0..docs.len() * 2).into_par_iter().for_each(|i| assert_eq!(encode(i % docs.len()), expected[i % docs.len()])));
+    }
+}
+
+#[test]
+fn owned_layer_planes_keep_the_borrowed_encoders_bytes() {
+    for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab] {
+        for sample in SampleType::ALL {
+            let mut doc = Document::new("owned", photocraft_geom::Size::new(129, 2), mode, sample);
+            let fmt = doc.pixel_format();
+            let mut surface = Surface::new(fmt);
+            let values: Vec<_> = (0..258 * fmt.channels()).map(|i| (i % 17) as f32 / 16.0).collect();
+            surface.write_region(doc.bounds(), &values);
+            let mut bytes = surface.to_interleaved(doc.bounds());
+            if mode == ColorMode::Lab && sample == SampleType::U16 {
+                crate::pixels::lab16_chroma(&mut bytes, fmt.channels(), false);
+            }
+            let mut invert = vec![mode == ColorMode::Cmyk; mode.color_channels()];
+            invert.push(false);
+            let planes = crate::pixels::deinterleave(&bytes, fmt.channels(), sample, &invert);
+            doc.layers.push(Layer::new("pixels", LayerContent::Raster(surface)));
+            let file = document_to_psd(&doc);
+            let channels = &file.layers()[0].channels;
+            assert_eq!(channels.iter().map(|c| c.id).collect::<Vec<_>>(), (-1..mode.color_channels() as i16).collect::<Vec<_>>());
+            for channel in channels {
+                let index = if channel.id == -1 { mode.color_channels() } else { channel.id as usize };
+                let compression = if sample == SampleType::F32 { Compression::ZipPrediction } else { Compression::Rle };
+                assert_eq!(*channel, ChannelData::encode(channel.id, compression, &planes[index], 129, 2, psd_depth(sample), file.header.version).unwrap());
+            }
+        }
+    }
+}
+
 /// Photoshop opens a PSD's bottom layer as its Background only when that layer has no
 /// transparency channel (measured on Photoshop 27.11: with the channel written, re-exported
 /// files reopened with the Background as an ordinary layer).
