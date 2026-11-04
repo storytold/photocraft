@@ -426,7 +426,16 @@ fn save_round_trips_through_photoshop_events() {
     saved_native(&mut s, "Ours");
     let r = s.execute("actions.save", json!({"action": "Ours", "skipUnsupported": true})).unwrap();
     assert_eq!(r["skipped"], json!([{"action": "Ours", "step": 0, "id": "unsupported.forTest"}]));
-    assert_eq!(r["set"], "Ours");
+    assert_eq!(r["set"], UNGROUPED_SET);
+    assert_eq!(r["sets"], json!([UNGROUPED_SET]));
+    assert_eq!(r["actions"], json!(["Ours"]));
+    let bytes = photocraft_paint::tile::b64_decode(r["data"].as_str().unwrap()).unwrap();
+    let files = atn::parse_sets(&bytes).unwrap();
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].name.to_string_lossy(), "");
+    assert_eq!(files[0].actions.len(), 1);
+    assert_eq!(files[0].actions[0].name.to_string_lossy(), "Ours");
+    assert!(files[0].actions[0].items.is_empty(), "only the explicitly skipped step is omitted");
 }
 
 /// `image.adjustments.selectiveColor` takes a range as an array (`"reds": [c, m, y, k]`) or as
@@ -1455,6 +1464,11 @@ fn step_commands_and_bad_params_fail_gracefully() {
 fn save_writes_the_file_and_the_set_of_the_selected_action() {
     let mut s = Session::new();
     s.execute("actions.load", json!({"data": b64(&atn::write(&sample()).unwrap())})).unwrap();
+    // A default save of one named group retains the legacy output name.
+    let r = s.execute("actions.save", json!({})).unwrap();
+    assert_eq!(r["set"], DEFAULT_SET);
+    let bytes = photocraft_paint::tile::b64_decode(r["data"].as_str().unwrap()).unwrap();
+    assert_eq!(atn::parse_sets(&bytes).unwrap()[0].name.to_string_lossy(), DEFAULT_SET);
     s.actions.list.push(Action::new("Loose", vec![("select.all".into(), json!({}))]));
     let dir = std::env::temp_dir().join(format!("pc-atn-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -1464,9 +1478,18 @@ fn save_writes_the_file_and_the_set_of_the_selected_action() {
     let file = atn::parse(&std::fs::read(&path).unwrap()).unwrap();
     assert_eq!(file.actions.len(), 1);
     assert_eq!(file.actions[0].name.to_string_lossy(), "Finish");
-    // Without a set, everything goes out under the default name.
+    // Saving all groups preserves the named set and the ungrouped category separately.
     let r = s.execute("actions.save", json!({})).unwrap();
-    assert_eq!((r["set"].as_str(), r["actions"].as_array().map(Vec::len)), (Some(DEFAULT_SET), Some(3)));
+    assert_eq!((r["set"].as_str(), r["actions"].as_array().map(Vec::len)), (Some("Test Set"), Some(3)));
+    assert_eq!(r["sets"], json!(["Test Set", UNGROUPED_SET]));
+    assert_eq!(r["actions"], json!(["Soften", "Finish", "Loose"]));
+    let bytes = photocraft_paint::tile::b64_decode(r["data"].as_str().unwrap()).unwrap();
+    let files = atn::parse_sets(&bytes).unwrap();
+    assert_eq!(files.len(), 2);
+    assert_eq!(files[0].name.to_string_lossy(), "Test Set");
+    assert_eq!(files[1].name.to_string_lossy(), "");
+    assert_eq!(files[0].actions.iter().map(|a| a.name.to_string_lossy()).collect::<Vec<_>>(), ["Soften", "Finish"]);
+    assert_eq!(files[1].actions.iter().map(|a| a.name.to_string_lossy()).collect::<Vec<_>>(), ["Loose"]);
     std::fs::remove_dir_all(&dir).ok();
 }
 
