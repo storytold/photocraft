@@ -3142,3 +3142,17 @@ fn pdf_answers_matter_only_for_a_pdf_target() {
     assert!(e.contains("pdfOutputProfile"), "{e}");
     assert!(std::fs::metadata(&pdf).is_err(), "nothing written");
 }
+
+/// Recording a PDF choice into a step that already holds one replaces it, so the step stays
+/// valid: no output profile, bleed or conversion is left beside a plain PDF.
+#[test]
+fn recording_a_pdf_choice_replaces_the_old_one() {
+    let mut step = json!({"path": "a.pdf", "pdfStandard": "x4-2008", "pdfOutputProfile": "coated-cmyk", "pdfBleedMm": 3.0, "pdfConvert": false});
+    PdfParams::PLAIN.record(&mut step);
+    assert_eq!(step, json!({"path": "a.pdf", "pdfStandard": "none"}));
+    assert!(pdf_params(&step, "file.saveACopy").is_ok(), "the step replays");
+    let x1a = PdfParams { standard: Some(photocraft_io::PdfXStandard::X1a2001), profile: None, bleed_mm: 0.0, convert: true };
+    let mut step = json!({"pdfStandard": "x4-2008", "pdfBleedMm": 3.0, "pdfConvert": false});
+    x1a.record(&mut step);
+    assert_eq!(step, json!({"pdfStandard": "x1a2001"}));
+}

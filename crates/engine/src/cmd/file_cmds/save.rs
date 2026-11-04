@@ -245,8 +245,14 @@ impl PdfParams {
     /// A plain PDF, chosen rather than left unset.
     pub const PLAIN: PdfParams = PdfParams { standard: None, profile: None, bleed_mm: 0.0, convert: true };
 
-    /// Adds these choices to a recorded save step.
+    /// Adds these choices to a recorded save step, replacing any PDF choices it already holds (a
+    /// stale `pdfOutputProfile` beside `"pdfStandard": "none"` would make the step invalid).
     pub fn record(&self, step: &mut Value) {
+        if let Some(o) = step.as_object_mut() {
+            for k in ["pdfStandard", "pdfOutputProfile", "pdfBleedMm", "pdfConvert"] {
+                o.remove(k);
+            }
+        }
         let Some(standard) = self.standard else {
             step["pdfStandard"] = "none".into();
             return;
