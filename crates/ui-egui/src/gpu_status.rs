@@ -449,7 +449,10 @@ mod tests {
 
         let reason = "Unexpected error variant (driver implementation is at fault)";
         request_restart(&mut app, reason, 1);
-        assert_eq!(*requests.borrow(), vec![crate::WindowRestart { reason: reason.into(), reopen: vec!["C:/work/clean.psd".into(), "C:/work/second.psd".into()], left_out: 0 }]);
+        assert_eq!(
+            *requests.borrow(),
+            vec![crate::WindowRestart { reason: reason.into(), reopen: vec!["C:/work/clean.psd".into(), "C:/work/second.psd".into()], left_out: 0 }]
+        );
 
         // Recovery off with unsaved work: the work wouldn't come back, so no restart is asked for.
         app.session.prefs.edit(|p| p.file_handling.recover_on_launch = false);
