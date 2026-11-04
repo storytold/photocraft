@@ -1251,6 +1251,42 @@ fn file_info_round_trips_through_xmp_and_psd() {
     assert_eq!(read_file_info(Some(&out))["authorTitle"], "Artist");
 }
 
+#[test]
+fn file_info_reads_rdf_bound_to_a_foreign_prefix() {
+    let xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><q:RDF xmlns:q="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><q:Description q:about="" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title><q:Alt><q:li xml:lang="x-default">Pier</q:li></q:Alt></dc:title><dc:creator><q:Seq><q:li>A</q:li><q:li>B</q:li></q:Seq></dc:creator><dc:subject><q:Bag><q:li>sea</q:li><q:li>wood</q:li></q:Bag></dc:subject></q:Description></q:RDF></x:xmpmeta>"#;
+    let info = read_file_info(Some(xmp));
+    assert_eq!(info["title"], "Pier");
+    assert_eq!(info["author"], "A; B");
+    assert_eq!(info["keywords"], json!(["sea", "wood"]));
+}
+
+#[test]
+fn file_info_reads_rdf_as_the_default_namespace() {
+    let xmp = r#"<RDF xmlns="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:dc="http://purl.org/dc/elements/1.1/"><Description about=""><dc:title><Alt><li xml:lang="x-default">Pier</li></Alt></dc:title><dc:creator><Seq><li>A</li><li>B</li></Seq></dc:creator></Description></RDF>"#;
+    let info = read_file_info(Some(xmp));
+    assert_eq!(info["title"], "Pier");
+    assert_eq!(info["author"], "A; B");
+}
+
+#[test]
+fn file_info_reads_dc_and_rights_bound_to_foreign_prefixes() {
+    let xmp = r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:e="http://purl.org/dc/elements/1.1/" xmlns:r="http://ns.adobe.com/xap/1.0/rights/" xmlns:ps="http://ns.adobe.com/photoshop/1.0/" r:Marked="True" ps:AuthorsPosition="Painter"><e:title><rdf:Alt><rdf:li xml:lang="x-default">Pier</rdf:li></rdf:Alt></e:title><r:WebStatement>https://example.org/c</r:WebStatement></rdf:Description></rdf:RDF>"#;
+    let info = read_file_info(Some(xmp));
+    assert_eq!(info["title"], "Pier");
+    assert_eq!(info["authorTitle"], "Painter");
+    assert_eq!(info["copyrightStatus"], "copyrighted");
+    assert_eq!(info["copyrightUrl"], "https://example.org/c");
+}
+
+#[test]
+fn file_info_reads_literal_prefixes_without_declarations() {
+    let xmp = r#"<rdf:Description><dc:title><rdf:Alt><rdf:li xml:lang="x-default">Pier</rdf:li></rdf:Alt></dc:title><dc:creator><rdf:Seq><rdf:li>A</rdf:li></rdf:Seq></dc:creator><xmpRights:Marked>False</xmpRights:Marked></rdf:Description>"#;
+    let info = read_file_info(Some(xmp));
+    assert_eq!(info["title"], "Pier");
+    assert_eq!(info["author"], "A");
+    assert_eq!(info["copyrightStatus"], "publicDomain");
+}
+
 fn camera_exif() -> Vec<u8> {
     photocraft_algo::exif::build(&photocraft_algo::exif::CameraInfo {
         make: Some("SONY".into()),
