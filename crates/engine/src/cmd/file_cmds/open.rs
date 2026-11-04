@@ -279,6 +279,11 @@ pub fn place_bytes(s: &mut Session, name: &str, bytes: Vec<u8>, linked: Option<S
         Some(c) if c.len() == 2 => (c[0].as_f64().unwrap_or(cw / 2.0), c[1].as_f64().unwrap_or(ch / 2.0)),
         _ => (cw / 2.0, ch / 2.0),
     };
+    // `scale` is the caller's: bound the resampled size before allocating it.
+    let scaled = w * scale * h * scale;
+    if scaled.is_nan() || scaled > photocraft_compose::MAX_RENDER_PIXELS as f64 {
+        return Err(EngineError::BadParams { cmd: "file.placeEmbedded".into(), msg: format!("scaling {w}×{h} by {scale} makes an image too large to place") });
+    }
     let (dx, dy) = ((center.0 - w * scale / 2.0).round(), (center.1 - h * scale / 2.0).round());
     let mut px = flattened_checked(&src, fmt, "file.place")?;
     if (scale - 1.0).abs() > 1e-9 {
