@@ -790,7 +790,12 @@ impl PhotocraftApp {
         let settings = ExportSettings { read_linked_files: false, ..choices.apply(self.save_settings()) };
         // Only the target is granted here too: an output profile named by its file would be read
         // without the automation read authority and embedded in the PDF.
-        if let Some(spec) = choices.pdf.as_ref().and_then(|p| p.profile.as_deref()).filter(|s| photocraft_engine::file_cmds::names_a_profile_file(s)) {
+        if let Some(spec) = choices
+            .pdf
+            .as_ref()
+            .and_then(|p| p.profile.as_deref())
+            .filter(|s| photocraft_engine::file_cmds::names_a_profile_file(s) && crate::pdf_options_ui::is_pdf_path(&target))
+        {
             return Err(format!(
                 "`pdfOutputProfile` \"{spec}\": an automation save can't read a profile file; pass a built-in id, \"working-cmyk\" or \"document\" (set the working CMYK first to use another profile)"
             ));

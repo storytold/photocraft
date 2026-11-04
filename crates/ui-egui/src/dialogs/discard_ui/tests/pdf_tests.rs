@@ -384,4 +384,7 @@ fn automation_saves_take_no_profile_files_and_other_formats_ignore_pdf_answers()
     let choices = crate::FormatChoices::from_params(&unresolvable, "app.save").unwrap();
     h.state_mut().save_automation_with(Some("a.png".into()), choices).unwrap();
     assert_eq!(writes.borrow().len(), 1, "the PNG is written; its PDF answers are never resolved");
+    let choices = crate::FormatChoices::from_params(&file, "app.save").unwrap();
+    h.state_mut().save_automation_with(Some("b.png".into()), choices).unwrap();
+    assert_eq!(writes.borrow().len(), 2, "a profile file only matters to a PDF");
 }

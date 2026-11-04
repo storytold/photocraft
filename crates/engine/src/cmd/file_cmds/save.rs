@@ -48,7 +48,9 @@ pub(crate) struct SaveOpts {
     /// omit it; check the manifest's `full_composite` member.
     pub pcraft_full_composite: bool,
     /// PDF: PDF/X-1a, PDF/X-3 or PDF/X-4 (`"pdfStandard"`), its profiles resolved in the session.
-    pub pdf: Option<PdfRequest>,
+    /// A profile that didn't resolve is kept as its error, raised only when the target is a PDF:
+    /// another format never reads these options.
+    pub pdf: Option<std::result::Result<PdfRequest, String>>,
 }
 
 impl Default for SaveOpts {
@@ -94,7 +96,7 @@ impl SaveOpts {
             psd_maximize_compatibility: file_handling.maximize_psd_compatibility != crate::prefs::Ask::Never,
             pcraft_full_composite: pcraft_full_composite_param(p, cmd)?.unwrap_or(file_handling.pcraft_full_composite),
             pdf: match pdf_params(p, cmd)? {
-                Some(pdf) => PdfRequest::resolve(&s.color, &pdf)?,
+                Some(pdf) => PdfRequest::resolve(&s.color, &pdf).map_err(|e| e.to_string()).transpose(),
                 None => None,
             },
         })
@@ -433,8 +435,13 @@ pub(crate) fn encode(doc: &Document, path: &str, save: impl Into<SaveOpts>) -> R
     }
     opts.encode.tiff_pyramid = save.tiff_pyramid;
     opts.encode.dds = save.dds;
-    if let Some(pdf) = &save.pdf {
-        opts.pdf = pdf.options_for(doc);
+    // `path` is a file name or, for batch outputs, the bare format name.
+    let pdf_target = super::extension(path).as_deref().unwrap_or(path).eq_ignore_ascii_case("pdf");
+    if let Some(pdf) = save.pdf.as_ref().filter(|_| pdf_target) {
+        match pdf {
+            Ok(request) => opts.pdf = request.options_for(doc),
+            Err(msg) => return Err(EngineError::BadParams { cmd: "pdfOutputProfile".into(), msg: msg.clone() }),
+        }
     }
     if let Some(q) = save.quality {
         let q = jpeg_quality(q);

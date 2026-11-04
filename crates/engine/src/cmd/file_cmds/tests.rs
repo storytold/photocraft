@@ -3127,3 +3127,18 @@ fn profile_files_are_told_from_profile_ids() {
         assert!(!names_a_profile_file(id), "{id}");
     }
 }
+
+/// PDF answers are resolved for a PDF target only: a PNG save with an unknown output profile
+/// writes its PNG, while the same answers on a PDF save are refused.
+#[test]
+fn pdf_answers_matter_only_for_a_pdf_target() {
+    let dir = tmp("pdfonly");
+    let mut s = session(8, 8, 8);
+    let png = join(&dir, "a.png");
+    s.execute("file.saveACopy", json!({"path": png, "pdfStandard": "x4-2008", "pdfOutputProfile": "no-such-profile"})).unwrap();
+    assert!(std::fs::metadata(&png).is_ok(), "the PNG is written");
+    let pdf = join(&dir, "a.pdf");
+    let e = s.execute("file.saveACopy", json!({"path": pdf, "pdfStandard": "x4-2008", "pdfOutputProfile": "no-such-profile"})).unwrap_err().to_string();
+    assert!(e.contains("pdfOutputProfile"), "{e}");
+    assert!(std::fs::metadata(&pdf).is_err(), "nothing written");
+}
