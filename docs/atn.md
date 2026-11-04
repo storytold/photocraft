@@ -22,7 +22,7 @@ the reference application.
 
 The preset store keeps the complete library in `actions.atn`. Physical set and action
 occurrences, empty folders, function keys, header colours, step flags, descriptions and
-icons survive a restart. Untouched version16 records retain their original bytes,
+icons survive a restart. Untouched version-16 records retain their original bytes,
 including unknown events and descriptor fields. Editing one record does not normalize
 unrelated records. A known metadata sidecar carries descriptions and icons; a sidecar-only
 archive represents an empty PhotoCraft library without inventing a user folder.
@@ -40,9 +40,11 @@ transactions remain marked unsaved.
 PhotoCraft commands that have no lossless Photoshop representation use a string event
 named `photocraftCommand`. Its descriptor has TEXT fields `command` and `params`;
 `params` contains JSON. Loading it validates the payload without running the command
-or requiring its registration. Save Actions retains these events by default;
-`skipUnsupported: true` omits them and reports each skipped step. Photoshop does not
-implement these PhotoCraft events.
+or requiring its registration. Portable import and Save Actions admit registered native
+commands only when recording permits them or they are playback controls; a refused export
+returns an error. The local preset library retains every native command and its complete
+JSON. `skipUnsupported: true` omits native steps and reports each skipped step. Photoshop
+does not implement these PhotoCraft events.
 
 CLI file inputs accept ATN libraries and PhotoCraft droplets. Legacy JSON action-library
 files are rejected. The control protocol and MCP still use command JSON.
