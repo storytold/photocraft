@@ -1,4 +1,4 @@
-//! Reset offers explicit append/replace consent while default contents remain a placeholder.
+//! Reset offers explicit append/replace consent for PhotoCraft's original starter actions.
 use crate::{PhotocraftApp, state::DialogKind};
 use serde_json::{Map, Value, json};
 const COMMAND: &str = "actions.reset";
@@ -49,10 +49,10 @@ pub(super) fn open(app: &mut PhotocraftApp) -> Result<Value, String> {
     Ok(json!({"dialog":dialog}))
 }
 
-/// Clearly label the temporary content and offer append, replace or the standard Cancel.
+/// Identify the starter actions and offer append, replace or the standard Cancel.
 pub(crate) fn body(app: &PhotocraftApp, ui: &mut egui::Ui, dialog: u64, fields: &mut Map<String, Value>) {
     let held = app.held_actions_reset.as_ref().filter(|held| held.dialog == dialog);
-    ui.label(tl!("Default Actions contents are not available yet. This restores an empty placeholder set."));
+    ui.label(tl!("Restore PhotoCraft Basics: Invert Colors and Desaturate."));
     let mut mode = fields.get("mode").and_then(Value::as_str).unwrap_or("append").to_string();
     ui.add_enabled_ui(held.is_some_and(|held| held.append), |ui| ui.radio_value(&mut mode, "append".into(), tl!("Append")));
     ui.add_enabled_ui(held.is_some_and(|held| held.replace), |ui| ui.radio_value(&mut mode, "replace".into(), tl!("Replace")));

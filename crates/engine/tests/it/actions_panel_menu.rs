@@ -166,9 +166,9 @@ fn deny_new_set(id: &str, _: &Value) -> photocraft_engine::Result<()> {
     if id == "actions.newSet" { Err(EngineError::Other("new set denied".into())) } else { Ok(()) }
 }
 
-/// The placeholder is explicit, both modes work, and all refusals precede destructive mutation.
+/// Real starter definitions are installed only after consent and all destructive admission checks.
 #[test]
-fn reset_placeholder_appends_or_replaces_only_after_valid_consent() {
+fn reset_defaults_append_or_replace_only_after_valid_consent() {
     let mut s = session();
     let original = s.actions.clone();
     for p in [json!({}), json!({"mode":"replace"}), json!({"mode":"wrong","confirm":true}), json!({"mode":"append","confirm":false})] {
@@ -180,9 +180,14 @@ fn reset_placeholder_appends_or_replaces_only_after_valid_consent() {
     assert_eq!(s.actions, original);
     s.authorize = None;
     let result = s.execute("actions.reset", json!({"mode":"append","confirm":true})).unwrap();
-    assert_eq!(result["placeholder"], true);
-    assert_eq!(s.actions.list, original.list);
+    assert_eq!(result["actions"], 2);
+    assert_eq!(&s.actions.list[..original.list.len()], original.list.as_slice());
+    assert_eq!(s.actions.list.len(), original.list.len() + 2);
     s.execute("actions.reset", json!({"mode":"replace","confirm":true})).unwrap();
-    assert!(s.actions.list.is_empty());
-    assert_eq!(s.actions.sets, [actions_edit_cmds::DEFAULT_SET_PLACEHOLDER]);
+    assert_eq!(s.actions.list.len(), 2);
+    assert_eq!(s.actions.sets, [actions_edit_cmds::DEFAULT_SET_NAME]);
+    for (action, command) in s.actions.list.iter().zip(["image.adjustments.invert", "image.adjustments.desaturate"]) {
+        assert_eq!(action.set.as_deref(), Some(actions_edit_cmds::DEFAULT_SET_NAME));
+        assert_eq!(action.steps, [(command.into(), json!({}))]);
+    }
 }

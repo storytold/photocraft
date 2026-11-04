@@ -45,6 +45,7 @@ mod steps_make;
 mod steps_stylize;
 
 mod steps_other;
+mod steps_path;
 mod steps_render;
 mod steps_selection;
 mod tables;

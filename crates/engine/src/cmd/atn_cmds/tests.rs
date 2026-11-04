@@ -483,7 +483,15 @@ fn settings_at_the_value_the_event_plays_still_export() {
 /// Every exported command has a canonical import, including recorded full-stack navigation.
 #[test]
 fn every_mapped_command_exports_and_imports_back() {
+    let path = photocraft_doc::Path {
+        subpaths: vec![photocraft_doc::Subpath::polygon(&[(1.0, 2.0), (31.0, 2.0), (31.0, 24.0)])],
+        fill_rule: photocraft_doc::FillRule::EvenOdd,
+        inverted: false,
+    };
+    let mut path = json!({"name":"work","path":crate::vector_cmds::path_json(&path)});
+    normalise(&mut path);
     let cases: Vec<(&str, Value)> = vec![
+        ("path.set", path),
         ("filter.render.clouds", json!({})),
         ("filter.render.differenceClouds", json!({})),
         ("filter.render.fibers", json!({"variance": 20, "strength": 7, "seed": -123})),
@@ -842,6 +850,10 @@ fn every_mapped_command_exports_and_imports_back() {
                 }
                 assert_eq!(steps[0].0, *id, "{id} came back as another command");
                 let mut back = steps[0].1.clone();
+                if *id == "path.set" {
+                    assert_eq!(super::steps_path::to(&back).as_ref(), item.descriptor.as_ref());
+                    back.as_object_mut().unwrap().remove(super::steps_path::SOURCE);
+                }
                 normalise(&mut back);
                 if *id == "actions.play" || *id == "actions.conditional" {
                     back["set"] = json!("S");

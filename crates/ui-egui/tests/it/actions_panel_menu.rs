@@ -134,7 +134,7 @@ fn revocable(id: &str, _: &Value) -> photocraft_engine::Result<()> {
 
 /// Actual append/replace/Cancel work, and retained or stale consent cannot clear the library.
 #[test]
-fn reset_placeholder_and_clear_all_keep_actual_consent_and_caller() {
+fn reset_defaults_and_clear_all_keep_actual_consent_and_caller() {
     let mut h = harness();
     let original = h.state().session.actions.list.clone();
     open(&mut h, "Reset Actions…");
@@ -144,15 +144,16 @@ fn reset_placeholder_and_clear_all_keep_actual_consent_and_caller() {
     open(&mut h, "Reset Actions…");
     h.get_by_label("OK").click();
     h.run_steps(3);
-    assert_eq!(h.state().session.actions.list, original);
-    assert!(h.state().session.actions.sets.iter().any(|s| s.contains("placeholder")));
+    assert_eq!(&h.state().session.actions.list[..original.len()], original.as_slice());
+    assert_eq!(h.state().session.actions.list.len(), original.len() + 2);
+    assert!(h.state().session.actions.sets.iter().any(|s| s == actions_edit_cmds::DEFAULT_SET_NAME));
     open(&mut h, "Reset Actions…");
     h.get_by_label("Replace").click();
     h.run_steps(3);
     h.get_by_label("OK").click();
     h.run_steps(3);
-    assert!(h.state().session.actions.list.is_empty());
-    assert_eq!(h.state().session.actions.sets, [actions_edit_cmds::DEFAULT_SET_PLACEHOLDER]);
+    assert_eq!(h.state().session.actions.list.len(), 2);
+    assert_eq!(h.state().session.actions.sets, [actions_edit_cmds::DEFAULT_SET_NAME]);
     for label in ["Reset Actions…", "Clear All Actions"] {
         REVOKED.store(false, Ordering::SeqCst);
         let mut h = harness();
@@ -264,8 +265,8 @@ fn reset_offers_allowed_replace_when_append_is_denied() {
     let dialog = open(&mut h, "Reset Actions…");
     assert_eq!(h.state_mut().ui.dialog_mut(dialog).unwrap().fields["mode"], "replace");
     dialogs::confirm(h.state_mut(), dialog).unwrap();
-    assert!(h.state().session.actions.list.is_empty());
-    assert_eq!(h.state().session.actions.sets, [actions_edit_cmds::DEFAULT_SET_PLACEHOLDER]);
+    assert_eq!(h.state().session.actions.list.len(), 2);
+    assert_eq!(h.state().session.actions.sets, [actions_edit_cmds::DEFAULT_SET_NAME]);
 }
 
 /// Only this test changes the policy; the same gate identity can revoke consent after opening.

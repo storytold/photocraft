@@ -18,11 +18,12 @@ mod record_again;
 pub use record_again::{RecordAgainTarget, target as record_again_target};
 mod insert_path;
 pub use insert_path::selected_path as selected_recording_path;
+mod defaults;
 
-/// Temporary empty folder until Photoshop's intended default action contents are specified.
-pub const DEFAULT_SET_PLACEHOLDER: &str = "Default Actions (placeholder)";
+/// PhotoCraft's original starter set, using existing document-local adjustments.
+pub const DEFAULT_SET_NAME: &str = defaults::NAME;
 
-/// Restore an explicit placeholder while keeping all admission checks before replacement.
+/// Prepare real starter definitions and all admission checks before replacement.
 fn reset(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "actions.reset";
     not_playing(s, cmd)?;
@@ -38,7 +39,18 @@ fn reset(s: &mut Session, p: &Value) -> Result<Value> {
         _ => return Err(bad(cmd, "`mode` must be append or replace")),
     };
     let names = if replace { Vec::new() } else { set_names(s) };
-    let name = crate::atn_cmds::UniqueNames::new(names).claim(DEFAULT_SET_PLACEHOLDER);
+    let name = crate::atn_cmds::UniqueNames::new(names).claim(DEFAULT_SET_NAME);
+    let mut actions = defaults::actions();
+    let existing = if replace { Vec::new() } else { s.actions.list.iter().map(|a| a.name.clone()).collect() };
+    let mut action_names = crate::atn_cmds::UniqueNames::new(existing);
+    for action in &mut actions {
+        action.name = action_names.claim(&action.name);
+        action.set = Some(name.clone());
+        if action.steps.iter().any(|(id, params)| !is_step_command(id) || !params.is_object()) {
+            return Err(bad(cmd, "invalid starter action definition"));
+        }
+    }
+    let count = actions.len();
     let create = json!({"name":name});
     if let Some(gate) = s.authorize {
         gate("actions.newSet", &create)?;
@@ -48,7 +60,9 @@ fn reset(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let cleared = if replace { clear_all(s, &json!({"confirm":true}))?["cleared"].clone() } else { json!(0) };
     new_set(s, &create)?;
-    Ok(json!({"set":name,"placeholder":true,"actions":0,"cleared":cleared}))
+    s.actions.list.extend(actions);
+    s.actions.touch();
+    Ok(json!({"set":name,"actions":count,"cleared":cleared}))
 }
 
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
