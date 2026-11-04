@@ -64,10 +64,14 @@
 	Remove {name} from Recent	{name} ஐ சமீபத்தியவற்றிலிருந்து நீக்கு
 	Close	மூடு
 	Minimize	சிறிதாக்கு
+	Minimize Panel	பலகத்தை சிறிதாக்கு
 	Maximize	பெரிதாக்கு
 	Restore	மீட்டமை
 	Close All	அனைத்தையும் மூடு
 	Close Others	மற்றவற்றை மூடு
+	Close Other Panels in Group	குழுவில் உள்ள மற்ற பலகங்களை மூடு
+	Open Panel in Own Window	தனிச் சாளரத்தில் பலகத்தைத் திற
+	Arrange Panels	பலகத்தை வரிசைப்படுத்து
 	Save	சேமி
 	Save As…	இவ்வாறு சேமி…
 	Save a Copy…	நகலைச் சேமி…
@@ -101,7 +105,7 @@
 	Fit Image…	படத்தைப் பொருத்து…
 	Lens Correction…	லென்ஸ் திருத்தம்…
 	Merge to HDR Pro…	HDR Pro ஆக இணை…
-	Photomerge…	Photomerge…
+	Photomerge…	புகைப்பட ஒருங்கிணைப்பு…
 	Scripts	ஸ்கிரிப்டுகள்
 	Image Processor…	பட செயலி…
 	Delete All Empty Layers	காலியான அனைத்து அடுக்குகளையும் நீக்கு
@@ -146,6 +150,11 @@
 	No Spelling Suggestions	எழுத்துப்பிழை பரிந்துரைகள் இல்லை
 	Fill…	நிரப்பு…
 	Stroke…	கோடிடு…
+	Fill with Foreground Color	முன்னணி நிறத்தால் நிரப்பு
+	Fill with Background Color	பின்னணி நிறத்தால் நிரப்பு
+	Fill with Foreground Color, Preserve Transparency	முன்னணி நிறத்தால் நிரப்பு, ஒளிஊடுருவும் தன்மையைப் பாதுகாக்கவும்
+	Fill with Background Color, Preserve Transparency	பின்னணி நிறத்தால் நிரப்பு, ஒளிஊடுருவும் தன்மையைப் பாதுகாக்கவும்
+	Fill from History	வரலாற்று நிலையிலிருந்து நிரப்பு
 	Content-Aware Fill…	உள்ளடக்கம் அறிந்த நிரப்பு…
 	Delete and Fill Selection	தேர்வை நீக்கி நிரப்பு
 	Content-Aware Scale	உள்ளடக்கம் அறிந்த அளவீடு
@@ -280,7 +289,7 @@
 	Data Sets…	தரவுத் தொகுப்புகள்…
 	Apply Data Set…	தரவுத் தொகுப்பைப் பயன்படுத்து…
 	Variable Data Sets…	மாறி தரவுத் தொகுப்புகள்…
-	Trap…	ட்ராப்…
+	Trap…	பிடிப்பு…
 	Analysis	பகுப்பாய்வு
 	Set Measurement Scale…	அளவீட்டு அளவுகோலை அமை…
 	Select Data Points…	தரவுப் புள்ளிகளைத் தேர்ந்தெடு…
@@ -355,6 +364,7 @@
 	Enable Vector Mask	திசையன் மறைப்பை இயக்கு
 	Link Layer Mask	அடுக்கு மறைப்பை இணை
 	Unlink Layer Mask	அடுக்கு மறைப்பு இணைப்பை நீக்கு
+	Toggle Layer Mask Overlay	அடுக்கு மறைப்பு மேலடுக்கை மாற்று
 	Link Vector Mask	திசையன் மறைப்பை இணை
 	Add Vector Mask	வெக்டர் மறைப்பைச் சேர்
 	Vector Mask from Current Path	தற்போதைய பாதையிலிருந்து திசையன் மறைப்பு
@@ -636,7 +646,9 @@
 	Color Blindness — Protanopia-type	சிவப்பு நிறக்குருடு
 	Color Blindness — Deuteranopia-type	பச்சை நிறக்குருடு
 	Zoom In	பெரிதாக்கு
+	Zoom In	(hold, drag to scrub) பெரிதாக்கு (அழுத்திப் பிடித்து, நகர்த்தித் தேடவும்)
 	Zoom Out	சிறிதாக்கு
+	Zoom Out (hold)	சிறிதாக்கு (அழுத்திப் பிடிக்கவும்)
 	Fit on Screen	திரைக்குப் பொருத்து
 	Fit Layer(s) on Screen	அடுக்குகளைத் திரைக்குப் பொருத்து
 	Fit Artboard on Screen	ஆர்ட்போர்டைத் திரைக்குப் பொருத்து
@@ -768,7 +780,7 @@
 	Info	தகவல்
 	Measurement Log	அளவீட்டுப் பதிவு
 	Modifier Keys	மாற்றி விசைகள்
-	Navigator	நேவிகேட்டர்
+	Navigator	வழிகாட்டி
 	Options	விருப்பங்கள்
 	Paragraph	பத்தி
 	Paragraph Styles	பத்திப் பாணிகள்
@@ -1186,6 +1198,10 @@
 	Import brushes (.abr)	தூரிகைகளை இறக்குமதி செய் (.abr)
 	Import Presets	முன்னமைவுகளை இறக்குமதி செய்
 	Imported	இறக்குமதி செய்யப்பட்டது
+	Increase Type Size	எழுத்துரு அளவை அதிகரி
+	Decrease Type Size	எழுத்துரு அளவைக் குறை
+	Increase Type Size by 10	எழுத்துரு அளவை 10 புள்ளிகளால் அதிகரி
+	Decrease Type Size by 10	எழுத்துரு அளவை 10 புள்ளிகளால் குறை
 	Indent First	முதல் வரி உள்தள்ளல்
 	Indent Left	இடது உள்தள்ளல்
 	Indent Right	வலது உள்தள்ளல்
@@ -1608,6 +1624,7 @@
 	Aqua	அக்வா
 	Art & Illustration	கலை & விளக்கப்படம்
 	ArtCraft	ஆர்ட்கிராப்ட்
+	Art History Brush Tool	கலை வரலாற்றுத் தூரிகைக் கருவி
 	Background Eraser Tool	பின்னணி அழிப்புக் கருவி
 	Bevel & Emboss	சரிவு & புடைப்பு
 	Blend Mode	கலப்பு முறை
@@ -1631,6 +1648,7 @@
 	Color Dodge	நிற ஒளிர்வு
 	Color Dynamics	நிற இயக்கவியல்
 	Color Overlay	நிற மேலடுக்கு
+	Color Sampler Tool	நிற மாதிரி கருவி	
 	Comic Book	காமிக் புத்தகம்
 	Conform	இணங்கு
 	Content-Aware Fill needs a selection on a pixel layer	உள்ளடக்கம் அறிந்த நிரப்புக்கு பிக்சல் அடுக்கில் தேர்வு தேவை
@@ -1683,6 +1701,7 @@
 	Gradient Tool	நிறப் படித்திறன் கருவி
 	Greens	பச்சைகள்
 	Hand Tool	கை கருவி
+	Hand Tool (hold)	கை கருவி (அழுத்திப் பிடிக்கவும்)
 	Hard	கடினம்
 	Hard Mix	கடின கலவை
 	Healing Brush Tool	குணப்படுத்தும் தூரிகைக் கருவி
@@ -1812,8 +1831,8 @@
 	Square, 12 x 12	சதுரம், 12 x 12
 	Square, 5 x 5	சதுரம், 5 x 5
 	Std Dev:	திட்ட விலகல்:
-	Studio (Dark)	Studio (கருமை)
-	Studio (Light)	Studio (வெளிர்)
+	Studio (Dark)	ஸ்டுடியோ (கருமை)
+	Studio (Light)	ஸ்டுடியோ (வெளிர்)
 	Stylus Wheel	தொடுபேனா சக்கரம்
 	Subtract	கழி
 	Tabloid	டேப்ளாய்ட்
@@ -1968,7 +1987,7 @@
 	Precise	துல்லியமான
 	Preserve details	விவரங்களைப் பேணு
 	Print resolution	அச்சுத் தெளிவுத்திறன்
-	Pro	Pro
+	Pro	புரோ
 	Pro light	புரோ வெளிர்
 	Pro light gray	புரோ வெளிர் சாம்பல்
 	Pro medium	புரோ நடுத்தரம்
@@ -2010,8 +2029,8 @@
 	Snap vector tools and transforms to pixel grid	திசையன் கருவிகளையும் உருமாற்றங்களையும் பிக்சல் கட்டத்துடன் ஒட்டு
 	Srgb	sRGB
 	Standard	நிலையான
-	Studio	Studio
-	Studio light	Studio வெளிர்
+	Studio	ஸ்டுடியோ
+	Studio light	ஸ்டுடியோ வெளிர்
 	Adwaita	அத்வைதா
 	Adwaita dark	அத்வைதா கருமை
 	Subdivisions	உட்பிரிவுகள்
@@ -2082,6 +2101,7 @@
 	Show the layer's effects  ({key}-click: all layers)	அடுக்கின் விளைவுகளைக் காண்பி ({key}-கிளிக்: அனைத்து அடுக்குகள்)
 	Brush picker	தூரிகைத் தேர்வி
 	Erase	அழி
+	Erase with Brush or Pencil (hold)	தூரிகை அல்லது பென்சிலைக் கொண்டு அழி (அழுத்திப் பிடி)	
 	Right click with painting tools	ஓவியக் கருவிகளுடன் வலது கிளிக்
 	System Info…	கணினித் தகவல்…
 	System Info	கணினித் தகவல்
@@ -2538,7 +2558,7 @@ fontWeight	Italic	சாய்வு
 	Dark Theme	கருமை தோற்றம்
 	Light Theme	வெளிர் தோற்றம்
 	Pro Medium	புரோ நடுத்தரம்
-	Studio Light	Studio வெளிர்
+	Studio Light	ஸ்டுடியோ வெளிர்
 	Next Appearance Mode	அடுத்த தோற்ற முறை
 	Sync with system	கணினியுடன் ஒத்திசை
 	Active	செயலில்
@@ -3204,6 +3224,7 @@ layerLabel	No Color	நிறம் இல்லை
 	Reset Preferences	விருப்பத்தேர்வுகளை மீட்டமை
 	Documentation	ஆவணப்படுத்தல்
 	Check for Updates	புதுப்பிப்புகளைச் சரிபார்
+	Check for Updates…	புதுப்பிப்புகளைச் சரிபார்…
 	Loading…	ஏற்றுகிறது…
 	Processing…	செயலாக்குகிறது…
 	Saving…	சேமிக்கிறது…
@@ -3593,6 +3614,14 @@ layerLabel	No Color	நிறம் இல்லை
 	Multiple Flames One Direction	ஒரே திசையில் பல தீச்சுடர்கள்
 	Multiple Flames Path Directions	பாதைத் திசைகளில் பல தீச்சுடர்கள்
 	Multiple Flames Various Length	பல்வேறு நீளங்களில் பல தீச்சுடர்கள்
+	Numerals	எண்கள்
+	Lining	நேர்கோட்டு எண்கள்
+	Proportional	விகிதாசார எண்கள்
+	Proportional Lining விகிதாசார நேர்கோட்டு எண்கள்
+	Proportional Oldstyle	விகிதாசார பழைய பாணி எண்கள்
+	Tabular	அட்டவணை வடிவ எண்கள்
+	Tabular Lining	அட்டவணை நேர்கோட்டு எண்கள்
+	Tabular Oldstyle	அட்டவணைப் பழைய பாணி எண்கள்
 	Octagon	எண்கோணம்
 	Odd Fields	ஒற்றைப் புலங்கள்
 	One Flame Along Path	பாதையில் ஒரு தீச்சுடர்
@@ -3804,7 +3833,7 @@ layerLabel	No Color	நிறம் இல்லை
 	Paint Daubs	வண்ணத் தீற்றல்கள்
 	Path Blur	பாதை மங்கல்
 	Paths to Illustrator	பாதைகளை Illustrator-க்கு
-	Photomerge	Photomerge
+	Photomerge	புகைப்பட ஒருங்கிணைப்பு
 	Picture Frame	படச் சட்டகம்
 	Pinch	கிள்ளு
 	Place Embedded	உட்பொதிந்து வை
@@ -3897,9 +3926,22 @@ layerLabel	No Color	நிறம் இல்லை
 	Set Colors	நிறங்களை அமை
 	Switch Foreground and Background Colors	முன்புற & பின்னணி நிறங்களை மாற்றிக்கொள்
 	Target	இலக்கு
+	Target Composite Channel	கூட்டுக் சேனலை இலக்காக்கு
+	Target Layer Mask	அடுக்கு மறைப்பை இலக்காக்கு
+	Target Channel 3	சேனல் 3 ஐ இலக்காக்கு
+	Target Channel 4	சேனல் 4 ஐ இலக்காக்கு
+	Target Channel 5	சேனல் 5 ஐ இலக்காக்கு
+	Target Channel 6	சேனல் 6 ஐ இலக்காக்கு
+	Target Channel 7	சேனல் 7 ஐ இலக்காக்கு
+	Target Channel 8	சேனல் 8 ஐ இலக்காக்கு
+	Target Channel 9	சேனல் 9 ஐ இலக்காக்கு
+	Load Luminosity	ஒளிர்வுத்திறனை ஏற்று
 	Make Work Path…	பணிப் பாதையை உருவாக்கு…
 	Create Vector Mask	திசையன் மறைப்பை உருவாக்கு
 	Make Selection…	தேர்வை உருவாக்கு…
+	Make Selection from Path	பாதையிலிருந்து தேர்வு செய்
+	Add Path to Selection	தேர்வுடன் பாதையைச் சேர்
+	Subtract Path from Selection	தேர்விலிருந்து பாதையைக் கழி
 	Fill Path…	பாதையை நிரப்பு…
 	Clipping Path…	வெட்டுப் பாதை…
 	Free Transform Path	பாதையைத் தன்னிச்சையாக உருமாற்று
