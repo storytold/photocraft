@@ -58,6 +58,7 @@ pub fn parse_actions(text: &str) -> Result<Vec<(String, Value)>, ActionsError> {
     steps_of(&v)
 }
 
+/// Read the actual step array from a droplet/action value and report malformed input before Batch starts.
 fn steps_of(v: &Value) -> Result<Steps, ActionsError> {
     Ok(photocraft_engine::automate_cmds::parse_action(v.get("actions").unwrap_or(v), "batch --actions")?)
 }

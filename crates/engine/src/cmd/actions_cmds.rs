@@ -452,6 +452,7 @@ fn num(v: &Value) -> Option<i64> {
     v.as_i64().or_else(|| v.as_f64().filter(|f| f.is_finite()).map(|f| f.round() as i64))
 }
 
+/// Resolve numeric identity or the first exact named definition, validating hostile indices and empty names.
 pub(crate) fn resolve(list: &[Action], p: &Value, cmd: &str) -> Result<usize> {
     let Some(v) = p.get("action") else {
         return Err(bad(cmd, "needs \"action\" (a name or an index)"));
@@ -475,6 +476,7 @@ pub(crate) fn resolve(list: &[Action], p: &Value, cmd: &str) -> Result<usize> {
     }
 }
 
+/// Validate an optional playback start step against the selected action before any command runs.
 fn from_step(p: &Value, len: usize) -> Result<usize> {
     let Some(v) = p.get("from") else { return Ok(0) };
     if v.is_null() {
@@ -510,6 +512,7 @@ fn get(s: &mut Session, p: &Value) -> Result<Value> {
     )
 }
 
+/// Start capture into the selected or newly created definition while refusing incompatible playback state.
 fn record(s: &mut Session, p: &Value) -> Result<Value> {
     not_playing(s, "actions.record")?;
     if s.actions.recording_active() {
@@ -566,6 +569,7 @@ pub fn pending_steps(s: &Session, action: usize) -> impl Iterator<Item = &(Strin
     s.journal.iter().skip(from).filter(|(id, p)| recorded(id, p))
 }
 
+/// Commit only replayable journal entries owned by the active recording cursor.
 pub(crate) fn flush_recording(s: &mut Session) -> Result<()> {
     let Some((_, idx)) = s.actions.recording else { return editor::flush(s) };
     if idx >= s.actions.list.len() {
@@ -640,6 +644,7 @@ fn fold_recorded_nudges(steps: impl IntoIterator<Item = (String, Value)>) -> Vec
     out
 }
 
+/// Finish an active capture and expose the resulting action without replaying its recorded commands.
 fn stop(s: &mut Session, _p: &Value) -> Result<Value> {
     not_playing(s, "actions.stop")?;
     let Some((_, idx)) = s.actions.recording else {
@@ -671,6 +676,7 @@ pub fn saves_smart_contents(s: &Session, id: &str) -> bool {
     id == "file.save" && s.is_enabled(SAVE_CONTENTS)
 }
 
+/// Execute enabled steps under the shared budget and authorizer, retaining the first nested failure.
 fn run_recorded(s: &mut Session, action: &Action, from: usize) -> (u64, Option<Value>) {
     let mut ran = 0u64;
     let mut failed = None;
@@ -725,6 +731,7 @@ pub fn begin_playback(s: &mut Session, action: &Action) -> Result<Option<(usize,
     Ok(recording)
 }
 
+/// Restore playback/capture bookkeeping after the selected action has completed or failed.
 pub fn finish_playback(s: &mut Session, recording: Option<(usize, usize)>, action: &Action, from: usize) {
     s.actions.playback_stack.pop();
     s.actions.playing = s.actions.playing.saturating_sub(1);
@@ -760,6 +767,7 @@ pub fn nested_failure(id: &str, value: &Value) -> Option<String> {
     })
 }
 
+/// Validate the selected definition and start position before suspending capture for nested playback.
 fn play(s: &mut Session, p: &Value) -> Result<Value> {
     let (action, from) = playback_plan(s, p)?;
     // actions.play journals its own named call, rather than using dispatch's journaled
@@ -791,6 +799,7 @@ fn play(s: &mut Session, p: &Value) -> Result<Value> {
     })
 }
 
+/// Reject definition edits while an action playback still owns the library.
 pub(crate) fn not_playing(s: &Session, cmd: &str) -> Result<()> {
     if s.actions.playing > 0 || s.actions.held_playback.is_some() { Err(bad(cmd, "cannot edit actions during playback")) } else { Ok(()) }
 }
@@ -850,6 +859,7 @@ pub fn moved_index(index: usize, from: usize, to: usize) -> usize {
     }
 }
 
+/// Remove the resolved action while retaining the identities of unaffected definitions and calls.
 fn delete(s: &mut Session, p: &Value) -> Result<Value> {
     not_playing(s, "actions.delete")?;
     if p.get("set").is_some() {
@@ -1060,6 +1070,7 @@ fn rename(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"action": name, "index": idx}))
 }
 
+/// Validate the requested action colour before changing the stored definition.
 fn set_color(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "actions.setColor";
     not_playing(s, cmd)?;
