@@ -81,10 +81,14 @@ sources and reopened smart objects. Saved pre-rebase stack samples cover composi
 and smart export; counts are not gains.
 
 Independent scalar oracles cover 90,913 packet cases, stored depths, transforms, HDR, signed
-zeros, infinities and distinct quiet/signalling NaNs. Nested one-, two- and four-worker oracles
-preserve bytes, ordering and profile scopes. Workers own disjoint output and private scratch;
-no new production threads, locks or mutable shared caches were added. No unresolved correctness/race
-issue was found; review used ownership and deterministic checks, not a race detector.
+zeros, infinities and distinct quiet/signalling NaNs. Pattern arithmetic compares exact bits
+except for [NaN payloads](https://doc.rust-lang.org/std/primitive.f32.html#nan-bit-patterns),
+which Rust does not guarantee across arithmetic evaluations; NaN
+results must still match. Encoded-file comparisons remain byte-exact. Nested one-, two- and
+four-worker oracles preserve bytes, ordering and profile scopes. Workers own disjoint output
+and private scratch; no new production threads, locks or mutable shared caches were added.
+No unresolved correctness/race issue was found; review used ownership and deterministic
+checks, not a race detector.
 
 Fresh rebased-source gates passed: compositor 422 unit + five integration; PSD 329 unit + 212
 integration/corpus + doctest; I/O 563 unit + 574 integration/corpus; raster 57 unit + 22

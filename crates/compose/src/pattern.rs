@@ -227,7 +227,7 @@ pub struct Tile {
     w: usize,
     h: usize,
     texels: Texels,
-    // Non-finite texels retain scalar NaN propagation, including signalling payloads.
+    // Non-finite texels keep the scalar arithmetic path.
     finite: bool,
 }
 
@@ -511,7 +511,9 @@ mod tests {
     }
 
     #[test]
-    fn sampling_and_rendering_preserve_scalar_bits() {
+    fn sampling_and_rendering_match_scalar() {
+        // Rust arithmetic may select any NaN operand's payload; all other bits stay exact.
+        let bits = |p: [f32; 4]| p.map(|v| if v.is_nan() { f32::NAN.to_bits() } else { v.to_bits() });
         let special = [
             0.0,
             -0.0,
@@ -548,7 +550,7 @@ mod tests {
                 let coords = [-1e30, -5.75, -0.5, 0.0, 0.5, 1.25, 3.5, 9.75, 1e30, f64::INFINITY, f64::NEG_INFINITY, f64::NAN];
                 for u in coords {
                     for v in coords {
-                        assert_eq!(tile.sample_premul(u, v).map(f32::to_bits), original_sample(&tile, u, v).map(f32::to_bits), "{w}x{h} ({u},{v})");
+                        assert_eq!(bits(tile.sample_premul(u, v)), bits(original_sample(&tile, u, v)), "{w}x{h} ({u},{v})");
                     }
                 }
                 for phase in [(0.0, 0.0), (-7.0, 3.0), (0.25, -0.75), (i32::MAX as f32, -3.0), (f32::NAN, 0.0)] {
@@ -582,8 +584,8 @@ mod tests {
                                 }
                             }
                             assert_eq!(
-                                actual.iter().map(|p| p.map(f32::to_bits)).collect::<Vec<_>>(),
-                                expected.iter().map(|p| p.map(f32::to_bits)).collect::<Vec<_>>(),
+                                actual.iter().copied().map(bits).collect::<Vec<_>>(),
+                                expected.iter().copied().map(bits).collect::<Vec<_>>(),
                                 "{phase:?} {scale} {angle} {rect:?}"
                             );
                         }
