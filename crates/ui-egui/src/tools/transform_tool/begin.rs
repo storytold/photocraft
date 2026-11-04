@@ -130,7 +130,8 @@ pub(super) fn interpolation_preference(interpolation: &str) -> Option<photocraft
 /// layer move when there is a selection; type, shapes, smart objects and groups move whole.
 fn begin_several(app: &mut PhotocraftApp, ctx: &egui::Context, doc: Arc<Document>, revision: u64, active: LayerId, ids: Vec<LayerId>) -> Result<(), String> {
     use photocraft_engine::transform_cmds as tc;
-    if ids.iter().any(|id| tc::locked_for_transform(&doc, *id)) {
+    // The Background among them refuses the same way, rather than being left out (#11101).
+    if tc::background_among(&doc, &ids).is_some() || ids.iter().any(|id| tc::locked_for_transform(&doc, *id)) {
         app.ui.open_dialog(crate::state::DialogKind::Error, json!({"message": tl!(LOCKED)}).as_object().cloned().unwrap_or_default());
         return Err(LOCKED.into());
     }

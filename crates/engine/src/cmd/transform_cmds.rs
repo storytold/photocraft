@@ -266,9 +266,9 @@ pub fn locked_for_transform(doc: &Document, id: LayerId) -> bool {
 }
 
 /// The layers Free Transform moves with the Layers panel's selection, bottom-to-top: with several
-/// layers selected, every one that no selected group already carries, as in Photoshop (#6501), but
-/// the Background, which Show Transform Controls doesn't frame either. With one layer selected (or
-/// only the Background besides it), that layer; the active layer when nothing else is.
+/// layers selected, every one that no selected group already carries, as in Photoshop (#6501). The
+/// Background stays among them, so such a box refuses as locked (#11101, [`background_among`]).
+/// With one layer selected, that layer; the active layer when nothing else is.
 pub fn selection_targets(st: &crate::DocState) -> Vec<LayerId> {
     targets_of(&st.doc, &st.selected_layers(), st.active_layer)
 }
@@ -279,8 +279,17 @@ pub(crate) fn targets_of(doc: &Document, selected: &[LayerId], active: Option<La
     if selected.len() < 2 {
         return active.into_iter().collect();
     }
-    let ids: Vec<LayerId> = crate::layer_multi_cmds::top_level(doc, selected).into_iter().filter(|id| !doc.is_background(*id)).collect();
+    let ids = crate::layer_multi_cmds::top_level(doc, selected);
     if ids.is_empty() { active.into_iter().collect() } else { ids }
+}
+
+/// The Background when it is among several layers one box would move: Photoshop refuses that Free
+/// Transform with its locked-layer alert rather than leaving the Background out (#11101).
+pub fn background_among(doc: &Document, ids: &[LayerId]) -> Option<LayerId> {
+    if ids.len() < 2 {
+        return None;
+    }
+    ids.iter().copied().find(|id| doc.is_background(*id))
 }
 
 /// The `layers` param: the layers one box transforms together (at most 10000, each in the
@@ -821,7 +830,14 @@ fn transform(s: &mut Session, p: &Value) -> Result<Value> {
         (Some(ids), _) => ids,
         _ if lone.is_some() => Vec::new(),
         (None, Some(id)) => vec![id],
-        (None, None) => selection_targets(st),
+        (None, None) => {
+            let ids = selection_targets(st);
+            if let Some(bg) = background_among(&st.doc, &ids) {
+                let name = st.doc.layer(bg).map_or("Background", |l| l.name.as_str());
+                return Err(EngineError::Other(format!("layer \"{name}\" is locked")));
+            }
+            ids
+        }
     };
     if let Some(missing) = ids.iter().find(|id| st.doc.layer(**id).is_none()) {
         return Err(EngineError::NoLayer(*missing));

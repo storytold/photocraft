@@ -22,7 +22,8 @@ pub(crate) fn layer_edges_rect(app: &PhotocraftApp, idx: usize) -> Option<photoc
     Some(b.translate(dx, dy))
 }
 
-/// The layers Move › Show Transform Controls frames: every selected layer but the Background.
+/// The layers Move › Show Transform Controls frames: every selected layer, none when the Background
+/// is among several, and none for the Background alone.
 /// A corner radius drag hides the box, as in Photoshop. So does View › Extras (⌘H, #6699): the
 /// controls are an Extra, hidden and inert until Extras comes back, while Show Transform Controls
 /// keeps its setting.
@@ -37,7 +38,13 @@ pub(super) fn transform_controls_layers(app: &PhotocraftApp) -> Vec<&photocraft_
         return Vec::new();
     }
     let Some(st) = app.session.active() else { return Vec::new() };
-    st.selected_layers().into_iter().filter_map(|id| st.doc.layer(id)).filter(|l| !crate::doc_props_ui::is_background(&st.doc, l)).collect()
+    // The Background among several selected layers: Free Transform refuses them as locked, so no
+    // box frames them either, rather than one leaving the Background out (#11101).
+    let selected = st.selected_layers();
+    if photocraft_engine::transform_cmds::background_among(&st.doc, &selected).is_some() {
+        return Vec::new();
+    }
+    selected.into_iter().filter_map(|id| st.doc.layer(id)).filter(|l| !crate::doc_props_ui::is_background(&st.doc, l)).collect()
 }
 
 /// Move tool › Show Transform Controls: the boxes Free Transform would open on the selected

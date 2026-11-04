@@ -146,9 +146,12 @@ fn several_selected_layers_share_one_frame_that_transforms_them_all() {
     assert!(both.contains_rect(one) && both.width() > one.width() && both.height() > one.height(), "{both:?} frames both");
     let (lt, rb) = (xf.to_doc(both.left_top()), xf.to_doc(both.right_bottom()));
     assert!((lt[0] - 20.0).abs() < 1e-3 && (lt[1] - 30.0).abs() < 1e-3 && (rb[0] - 150.0).abs() < 1e-3 && (rb[1] - 150.0).abs() < 1e-3, "{lt:?} {rb:?}");
-    // The Background never joins the frame.
+    // The Background among them: Free Transform refuses them as locked, so no box shows (#11101).
     let bg = app.session.active().unwrap().doc.layers[0].id;
     app.session.execute("layer.select", json!({"layer": bg.0, "mode": "add"})).unwrap();
+    assert!(transform_controls_layers(&app).is_empty());
+    assert_eq!(transform_controls_rect(&app, &xf), None);
+    app.session.execute("layer.select", json!({"layer": bg.0, "mode": "toggle"})).unwrap();
     assert_eq!(transform_controls_layers(&app).len(), 2);
     assert_eq!(transform_controls_rect(&app, &xf), Some(both));
     let ctx = egui::Context::default();
