@@ -266,21 +266,9 @@ fn equalize(s: &mut Session, p: &Value) -> Result<Value> {
 fn has_average_target(s: &Session) -> std::result::Result<(), String> {
     if matches!(&active_layer(s)?.content, LayerContent::Smart(_)) { crate::filters::has_filterable_layer(s) } else { has_pixels(s) }
 }
-/// Route Smart content through native replay and replace raster colors with the selection-weighted mean using the
-/// ordinary pixel-edit path.
+/// Share the checked selection/alpha-weighted implementation between raster edits and native Smart replay.
 fn average(s: &mut Session, p: &Value) -> Result<Value> {
-    if matches!(&active_layer(s).map_err(EngineError::Other)?.content, LayerContent::Smart(_)) {
-        return crate::filters::run_filter(s, "filter.blur.average", p);
-    }
-    map_pixels(s, "Average", p, |_, px, cover| {
-        let mut mean = photocraft_algo::average::Mean::default();
-        for (p, &k) in px.iter().zip(cover) {
-            mean.push(*p, k);
-        }
-        if let Some(avg) = mean.rgba() {
-            px.fill(avg);
-        }
-    })
+    crate::filters::run_filter(s, "filter.blur.average", p)
 }
 
 // ---------- transform presets ----------
