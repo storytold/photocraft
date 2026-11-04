@@ -1019,6 +1019,33 @@ fn spec_dialog(app: &mut PhotocraftApp, command: &str, label: &str, spec: &str, 
 /// current options) and Simulate Pressure (#2978).
 const STROKE_PATH_SPEC: &str = r##"{"tool":"brush|pencil|eraser|backgroundEraser|cloneStamp|patternStamp|healingBrush|spotHealingBrush|historyBrush|blur|sharpen|smudge|dodge|burn|sponge|colorReplacement|mixerBrush"="brush","simulatePressure":bool=false}"##;
 
+/// Where the Stroke Path dialog's Simulate Pressure choice is remembered: the UI-state preferences'
+/// dialogs map, under the command id, as `edit.fill` and `view.newGuide` use their own (#10527).
+const STROKE_PATH_REMEMBERED: &str = "path.stroke";
+
+/// The choice the next Stroke Path dialog opens with: what the last OK applied, else off. Saved data
+/// is never trusted — anything but an object holding a real bool (a hand-edited preferences file,
+/// an agent that wrote something else) falls back to Photoshop's default, off.
+fn remembered_simulate_pressure(app: &PhotocraftApp) -> bool {
+    app.session
+        .prefs()
+        .dialogs
+        .get(STROKE_PATH_REMEMBERED)
+        .and_then(Value::as_object)
+        .and_then(|saved| saved.get("simulatePressure"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// OK ran the stroke: remember the Simulate Pressure it applied so the dialog opens with it again
+/// next time (#10527). Cancel never reaches here, so cancelling changes nothing, and a stroke run
+/// without the dialog (the Paths panel's Stroke button) writes nothing either. A stroke whose params
+/// said nothing about pressure applied the engine's default, off.
+pub(crate) fn remember_simulate_pressure(app: &mut PhotocraftApp, params: &Value) {
+    let on = params.get("simulatePressure").and_then(Value::as_bool).unwrap_or(false);
+    app.session.prefs.edit(|p| p.dialogs.insert(STROKE_PATH_REMEMBERED.into(), json!({ "simulatePressure": on })));
+}
+
 /// The Stroke Path dialog for the path `name` (Paths panel menu, Alt-click on its Stroke button).
 pub(crate) fn stroke_path_dialog(app: &mut PhotocraftApp, name: &str) {
     pen_dialog(app, "path.stroke", "Stroke Path…", name);
@@ -1055,6 +1082,12 @@ fn pen_dialog(app: &mut PhotocraftApp, command: &str, label: &str, name: &str) {
             fields.insert(key.into(), json!(value));
         }
     }
+    if command == "path.stroke" {
+        // The spec-driven dialog reappears with fresh fields, so the checkbox needs its own seed:
+        // a schema dialog carrying a `__spec` is outside `filter_dialog::remember`. Only Simulate
+        // Pressure is remembered; the tool stays on the spec's default (#10527).
+        fields.insert("simulatePressure".into(), json!(remembered_simulate_pressure(app)));
+    }
     spec_dialog(app, command, label, spec, fields);
 }
 
@@ -1066,8 +1099,8 @@ pub(crate) fn make_selection(app: &mut PhotocraftApp) -> Result<(), String> {
     // else the Paths panel path it adds to (a selected saved path, or the Work Path), which it
     // selects so it is the active path.
     let pending_layer = pending && (app.ui.tool_options.vector_mode == "shape" || crate::vector_ui::targeted_vector_mask(app).is_some());
-    if pending {
-        crate::vector_ui::pen_commit(app, false);
+    if pending && !crate::vector_ui::pen_commit(app, false) {
+        return Err(app.ui.status.clone());
     }
     let name = if pending_layer { Some("layer".to_string()) } else { crate::vector_ui::active_path_name(app) }
         .ok_or_else(|| "No path is available for this action".to_string())?;
@@ -1086,8 +1119,8 @@ fn choose_pen(app: &mut PhotocraftApp, ctx: &Context, menu: &CanvasToolMenu, com
     }
     let pending = app.ui.pen.as_ref().is_some_and(|p| p.knots.len() >= 2);
     let pending_layer = pending && (app.ui.tool_options.vector_mode == "shape" || app.ui.vector_mask_target);
-    if pending {
-        crate::vector_ui::pen_commit(app, false);
+    if pending && !crate::vector_ui::pen_commit(app, false) {
+        return Err(app.ui.status.clone());
     }
     let name = if pending { Some(if pending_layer { "layer" } else { "work" }.to_string()) } else { menu.path_name.clone() }
         .ok_or_else(|| "No path is available for this action".to_string())?;
@@ -1155,7 +1188,13 @@ pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
                         continue;
                     };
                     let text = if crop_label_is_ui(&command) { tl!(&label).to_string() } else { label };
-                    let item = egui::Button::selectable(mode_checked(app, &menu, &command), text).min_size(egui::vec2(200.0, 20.0));
+                    // The overlay rows carry their own glyph (#10889); the rest stay text-only.
+                    let mut atoms = egui::Atoms::default();
+                    if let Some(kind) = command.strip_prefix(CROP_OVERLAY).and_then(crate::crop_overlay::CropOverlay::from_id) {
+                        atoms.push_right(crate::icons::image(kind.icon(), 14.0, t.icon));
+                    }
+                    atoms.push_right(text);
+                    let item = egui::Button::selectable(mode_checked(app, &menu, &command), atoms).min_size(egui::vec2(200.0, 20.0));
                     if ui.add_enabled(entry_enabled(app, &menu, &command), item).clicked() {
                         selected = Some(command);
                     }

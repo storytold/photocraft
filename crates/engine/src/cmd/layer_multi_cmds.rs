@@ -20,8 +20,10 @@ mod selection;
 mod structure;
 
 use align::{align, distribute};
-pub use damage::{layer_bounds, layers_damage, same_pixels, selection_only_change, step_damage};
-pub(crate) use damage::{note_damage, note_inert_insert, note_insert};
+#[cfg(any(test, debug_assertions))]
+pub(crate) use damage::hint_misses;
+pub(crate) use damage::note_insert;
+pub use damage::{layer_bounds, same_pixels, selection_only_change, step_damage};
 use moves::link_groups;
 pub(crate) use moves::shift_surface;
 #[cfg(test)]
@@ -132,9 +134,15 @@ pub fn specs() -> Vec<CommandSpec> {
             s,
             "vertically"
         )),
-        spec!("layer.linkLayers", "Link Layers", &["Layer"], None, "{} (toggles: unlinks when the selection is already one link group)", can_link, |s, _| {
-            link_layers(s)
-        }),
+        spec!(
+            "layer.linkLayers",
+            "Link Layers",
+            &["Layer"],
+            None,
+            r#"{"linked":bool?} (omitted: toggle; explicit true links, false unlinks)"#,
+            can_link,
+            link_layers
+        ),
         spec!("layer.mergeLayers", "Merge Layers", &["Layer"], Some("Cmd+E"), "{} (one layer selected: Merge Down)", has_layer, |s, _| merge_layers(s)),
         spec!(
             "layer.new.groupFromLayers",
@@ -164,3 +172,6 @@ mod tests;
 
 #[cfg(test)]
 mod layers_panel_parity_tests;
+
+#[cfg(test)]
+mod tile_damage_tests;
