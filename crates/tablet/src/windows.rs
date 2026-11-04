@@ -75,9 +75,12 @@ unsafe extern "system" {
     fn CallNextHookEx(hhk: *mut std::ffi::c_void, n_code: i32, w_param: usize, l_param: isize) -> isize;
     fn GetCurrentThreadId() -> u32;
     fn GetPointerPenInfo(pointer_id: u32, pen_info: *mut POINTER_PEN_INFO) -> i32;
+    fn GetPointerType(pointer_id: u32, pointer_type: *mut u32) -> i32;
 }
 
 const WH_GETMESSAGE: i32 = 3;
+/// `PT_PEN` (`POINTER_INPUT_TYPE`, winuser.h).
+const PT_PEN: u32 = 3;
 const WM_POINTERUPDATE: u32 = 0x0245;
 const WM_POINTERDOWN: u32 = 0x0246;
 const WM_POINTERUP: u32 = 0x0247;
@@ -118,10 +121,16 @@ unsafe extern "system" fn get_msg_proc(code: i32, w_param: usize, l_param: isize
                 };
                 let is_barrel = is_barrel_pressed(pen_flags, pointer_message_flags);
                 BARREL_DOWN.store(is_barrel, Ordering::Relaxed);
-                // Pens only: GetPointerPenInfo fails for a finger, whose touch-down must not
-                // clear a barrel press egui hasn't read yet.
-                if msg.message == WM_POINTERDOWN && pen_flags.is_some() {
-                    BARREL_AT_PRESS.store(is_barrel, Ordering::Relaxed);
+                // Pens only: a finger's touch-down must not clear a barrel press egui hasn't read
+                // yet. Every pen down records its state, even one whose pen info lookup failed.
+                if msg.message == WM_POINTERDOWN {
+                    let mut pointer_type = 0;
+                    // SAFETY: `pointer_type` is a valid out pointer, and `pointer_id` is the
+                    // pointer identifier from the valid WM_POINTER message.
+                    let pen = unsafe { GetPointerType(pointer_id, &mut pointer_type) != 0 } && pointer_type == PT_PEN;
+                    if pen || pen_flags.is_some() {
+                        BARREL_AT_PRESS.store(is_barrel, Ordering::Relaxed);
+                    }
                 }
             }
             WM_POINTERUP | WM_POINTERLEAVE => {

@@ -260,6 +260,8 @@ fn pen_barrel_through_the_raw_input_hook() {
         assert_eq!(is_open(&h, Popup::Brush), barrel, "barrel={barrel}");
         if barrel {
             assert!(document_state(&h) == before, "a barrel tap paints nothing");
+        } else {
+            assert!(document_state(&h) != before, "a plain pen tap paints");
         }
     }
 }

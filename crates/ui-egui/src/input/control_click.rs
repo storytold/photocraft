@@ -20,16 +20,17 @@ impl ControlClick {
 
     /// [`Self::normalize`], where `pen_barrel` says this frame's pen press had the barrel button
     /// held. Only the press egui-winit emulates for that contact is remapped: the one following a
-    /// touch start, so a mouse press in the same frame stays primary. A barrel press's release
-    /// still maps after the barrel lets go.
+    /// touch start, at the touch's own position, so a mouse press in the same frame stays primary
+    /// (a finger that sends no emulated press can't lend its touch start to it). A barrel press's
+    /// release still maps after the barrel lets go.
     pub fn normalize_with_pen(&mut self, events: &mut [egui::Event], macos: bool, pen_barrel: bool) {
-        let mut touch_started = false;
+        let mut touch_start: Option<egui::Pos2> = None;
         for event in events {
             match event {
-                egui::Event::Touch { phase: egui::TouchPhase::Start, .. } => touch_started = true,
-                egui::Event::PointerButton { button, pressed, modifiers, .. } if *button == egui::PointerButton::Primary => {
+                egui::Event::Touch { phase: egui::TouchPhase::Start, pos, .. } => touch_start = Some(*pos),
+                egui::Event::PointerButton { button, pressed, modifiers, pos } if *button == egui::PointerButton::Primary => {
                     if *pressed {
-                        let pen_press = pen_barrel && std::mem::take(&mut touch_started);
+                        let pen_press = pen_barrel && touch_start.take().is_some_and(|t| t.distance(*pos) < 0.5);
                         // Control-Option is the existing brush resize gesture.
                         self.secondary_down = pen_press || (macos && modifiers.ctrl && !modifiers.alt && !modifiers.command);
                         self.pen_secondary = pen_press;
@@ -161,6 +162,17 @@ mod tests {
         state.normalize_with_pen(&mut release, false, false);
         assert!(matches!(press[1], Event::PointerButton { button: PointerButton::Secondary, .. }));
         assert!(matches!(release[0], Event::PointerButton { button: PointerButton::Secondary, .. }));
+    }
+
+    #[test]
+    fn a_finger_touch_start_does_not_remap_a_mouse_press_elsewhere() {
+        let mut state = ControlClick::default();
+        let finger =
+            Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(2), phase: egui::TouchPhase::Start, pos: egui::pos2(300.0, 20.0), force: None };
+        let mut events = [finger, button(true, Modifiers::NONE), button(false, Modifiers::NONE)];
+        state.normalize_with_pen(&mut events, false, true);
+        assert!(events[1..].iter().all(|e| matches!(e, Event::PointerButton { button: PointerButton::Primary, .. })));
+        assert!(!state.pen_secondary());
     }
 
     #[test]
