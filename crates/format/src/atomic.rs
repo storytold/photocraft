@@ -463,20 +463,18 @@ fn sleep_ms(ms: u64) {
 #[cfg(target_arch = "wasm32")]
 fn sleep_ms(_ms: u64) {}
 
-/// Whether `path` lies under the xdg document portal's mount, `$XDG_RUNTIME_DIR/doc`: its
-/// components contain `run`, `user`, any one name (the uid), `doc` in a row (#11185).
+/// Whether `path` lies under the xdg document portal's mount, `$XDG_RUNTIME_DIR/doc`: the
+/// mount sits at the filesystem root, so the components must be `run`, `user`, any one name
+/// (the uid), `doc` from the root — the same names nested in a local folder are a local
+/// folder (#11185).
 fn is_document_portal_path(path: &Path) -> bool {
     let is = |c: Option<Component<'_>>, name: &str| matches!(c, Some(Component::Normal(s)) if s == name);
-    let mut rest = path.components();
-    loop {
-        let mut w = rest.clone();
-        if is(w.next(), "run") && is(w.next(), "user") && matches!(w.next(), Some(Component::Normal(_))) && is(w.next(), "doc") {
-            return true;
-        }
-        if rest.next().is_none() {
-            return false;
-        }
-    }
+    let mut c = path.components();
+    matches!(c.next(), Some(Component::RootDir))
+        && is(c.next(), "run")
+        && is(c.next(), "user")
+        && matches!(c.next(), Some(Component::Normal(_)))
+        && is(c.next(), "doc")
 }
 
 /// How deep a symlink chain we follow before giving up, like the OS limit.

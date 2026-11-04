@@ -417,6 +417,7 @@ fn recognizes_document_portal_paths() {
     assert!(is_document_portal_path(Path::new("/run/user/1000/doc/9f3abc/file.psd")));
     assert!(!is_document_portal_path(Path::new("/home/user/Documents/file.psd")));
     assert!(!is_document_portal_path(Path::new("/run/user/1000/other/file.psd")));
+    assert!(!is_document_portal_path(Path::new("/home/user/run/user/1000/doc/file.psd")));
     assert!(!is_document_portal_path(Path::new("doc/file.psd")));
 }
 
@@ -426,12 +427,13 @@ fn recognizes_document_portal_paths() {
 fn document_portal_target_is_refused_before_anything_is_created() {
     let root = Path::new("/run/user/424242");
     let p = root.join("doc/deadbeef/file.psd");
+    let root_existed = root.exists();
     let e = atomic_write(&p, b"new").unwrap_err();
     assert_eq!(e.kind(), io::ErrorKind::PermissionDenied);
     assert!(e.to_string().contains("file.psd") && e.to_string().contains("document portal") && e.to_string().contains("not changed"), "{e}");
     let e = atomic_write_stream(&p, &mut |w| w.write_all(b"new")).unwrap_err();
     assert!(e.to_string().contains("document portal"), "{e}");
-    assert!(!root.exists(), "no folder is created on the portal's mount");
+    assert_eq!(root.exists(), root_existed, "no folder is created on the portal's mount");
 }
 
 #[cfg(unix)]
