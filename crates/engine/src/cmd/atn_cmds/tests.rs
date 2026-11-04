@@ -399,7 +399,8 @@ fn save_round_trips_through_photoshop_events() {
     let mut s = Session::new();
     let bytes = atn::write(&sample()).unwrap();
     s.execute("actions.load", json!({"data": b64(&bytes)})).unwrap();
-    let first = s.actions.list.clone();
+    let mut first = s.actions.list.clone();
+    assert_eq!(first[0].steps[7], ("actions.play".into(), json!({"action": "Finish"})));
     let r = s.execute("actions.save", json!({"set": "Test Set"})).unwrap();
     assert_eq!(r["actions"], json!(["Soften", "Finish"]));
     assert_eq!(r["skipped"], json!([]));
@@ -416,7 +417,9 @@ fn save_round_trips_through_photoshop_events() {
     // Play names the set too, as Photoshop does.
     assert_eq!(get_ref(file.actions[0].items[7].descriptor.as_ref().unwrap(), "null").unwrap().len(), 2);
 
-    // Loading what was saved gives the same actions.
+    // Export supplies the containing set for an unscoped Play; reload preserves that
+    // explicit scope and every other logical action field.
+    first[0].steps[7].1["set"] = json!("Test Set");
     let mut t = Session::new();
     t.execute("actions.load", json!({"data": b64(&saved)})).unwrap();
     assert_eq!(t.actions.list, first);
@@ -1805,7 +1808,7 @@ fn remaining_events_import_in_their_photoshop_shapes() {
     assert_eq!(more_steps[2].1, json!({"target": {"index": 0}}));
     assert_eq!(more_steps[4].1, json!({"foreground": "#000000"}));
     assert!(more.unsupported.is_empty());
-    assert_eq!(rest_steps[0].1, json!({"if": "hasLayers", "then": "FS8-Layers", "else": "FS8-No-Layers"}));
+    assert_eq!(rest_steps[0].1, json!({"if": "hasLayers", "then": "FS8-Layers", "thenSet": "FS", "else": "FS8-No-Layers"}));
     assert_eq!(rest_steps[1].1, json!({"percent": 200, "resample": "bicubicAutomatic", "scaleStyles": true}));
     assert_eq!(rest_steps[2].1, json!({"x": 0, "y": 0, "tolerance": 32, "contiguous": false}));
     assert_eq!(rest_steps[4].1, json!({"path": "/Users/me/logo.png", "scale": 50}));
@@ -2867,7 +2870,7 @@ fn partial_play_action_is_not_exported_as_whole_action_call() {
         let (bytes, skipped) = export("Set", &[&whole], &[], false).unwrap();
         assert!(skipped.is_empty());
         let imported = import(&bytes).unwrap();
-        assert_eq!(imported.actions[0].steps, vec![("actions.play".to_string(), json!({"action": "Child"}))]);
+        assert_eq!(imported.actions[0].steps, vec![("actions.play".to_string(), json!({"action": "Child", "set": "Set"}))]);
     }
 }
 
