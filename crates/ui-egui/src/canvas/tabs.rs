@@ -117,7 +117,7 @@ fn documents(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 app.ui.views[d] = v;
                 // Only a press that reaches the tile: a menu, popup or panel drawn over it keeps
                 // the press, so choosing a menu item there doesn't switch documents first (#11010).
-                if main_focused && ui.input(|i| i.pointer.primary_pressed()) && ui.rect_contains_pointer(cell) {
+                if main_focused && super::pressed_on(ui, cell, true) {
                     app.session.set_active(d);
                 }
             }
@@ -126,7 +126,7 @@ fn documents(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         }
         return;
     }
-    if idx != active_doc && main_focused && ui.input(|i| i.pointer.primary_pressed()) && ui.rect_contains_pointer(rect) {
+    if idx != active_doc && main_focused && super::pressed_on(ui, rect, true) {
         app.session.set_active(idx);
     }
     let view = app.ui.views[idx].clone();

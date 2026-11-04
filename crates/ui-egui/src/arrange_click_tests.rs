@@ -139,3 +139,24 @@ fn a_menu_over_the_canvas_does_not_use_a_held_tool() {
     h.run_steps(1);
     assert!(h.state().ui.spring.as_ref().is_some_and(|s| s.used), "a press on the canvas is");
 }
+
+/// A press counts for the rectangle it began on, though the pointer has moved on before the frame
+/// runs: the press and the move arrive in one frame.
+#[test]
+fn a_press_counts_where_it_began() {
+    let ctx = egui::Context::default();
+    let (a, b) = (egui::Rect::from_min_size(egui::pos2(0.0, 0.0), vec2(100.0, 100.0)), egui::Rect::from_min_size(egui::pos2(100.0, 0.0), vec2(100.0, 100.0)));
+    let frame = |events: Vec<egui::Event>| {
+        let input = egui::RawInput { events, screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(200.0, 100.0))), ..Default::default() };
+        let mut seen = (false, false);
+        let mut out = ctx.run_ui(input, |ui| {
+            seen = (crate::canvas::pressed_on(ui, a, true), crate::canvas::pressed_on(ui, b, true));
+        });
+        out.textures_delta.clear();
+        seen
+    };
+    frame(vec![egui::Event::PointerMoved(a.center())]);
+    let press = egui::Event::PointerButton { pos: a.center(), button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE };
+    let seen = frame(vec![press, egui::Event::PointerMoved(b.center())]);
+    assert_eq!(seen, (true, false), "the press began on a");
+}
