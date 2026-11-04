@@ -568,26 +568,28 @@ pub fn open_bytes_as(s: &mut Session, name: &str, bytes: &[u8], as_ext: Option<&
 /// a PDF then opens with Photoshop's defaults (page 1, Bounding Box, 300 ppi, RGB, 8 bits).
 pub fn pdf_options(p: &Value) -> Result<Option<photocraft_io::pdf_import::PdfOpenOptions>> {
     use photocraft_io::pdf_import::{CropTo, PdfOpenOptions};
+    // A key set to `null` counts as absent, as in the other format params (`tgaBits`).
+    let get = |k: &str| p.get(k).filter(|v| !v.is_null());
     let keys = ["page", "resolution", "crop", "mode", "depth", "antiAlias", "name", "password", "image", "suppressWarnings"];
-    if !keys.iter().any(|k| p.get(k).is_some()) {
+    if !keys.iter().any(|k| get(k).is_some()) {
         return Ok(None);
     }
     let mut o = PdfOpenOptions::default();
-    if let Some(v) = p.get("page") {
+    if let Some(v) = get("page") {
         o.page = v.as_u64().filter(|n| *n >= 1).ok_or_else(|| EngineError::Other("page: a page number from 1".into()))? as usize;
     }
-    if let Some(v) = p.get("image") {
+    if let Some(v) = get("image") {
         o.image = Some(v.as_u64().filter(|n| *n >= 1).ok_or_else(|| EngineError::Other("image: an image number from 1".into()))? as usize);
     }
-    if let Some(v) = p.get("resolution") {
+    if let Some(v) = get("resolution") {
         let r = v.as_f64().filter(|r| r.is_finite() && *r > 0.0).ok_or_else(|| EngineError::Other("resolution: pixels per inch".into()))?;
         o.resolution = r as f32;
     }
-    if let Some(v) = p.get("crop") {
+    if let Some(v) = get("crop") {
         let c = v.as_str().and_then(CropTo::from_id).ok_or_else(|| EngineError::Other("crop: boundingBox|mediaBox|cropBox|bleedBox|trimBox|artBox".into()))?;
         o.crop = c;
     }
-    if let Some(v) = p.get("mode") {
+    if let Some(v) = get("mode") {
         o.mode = match v.as_str().map(str::to_ascii_lowercase).as_deref() {
             Some("rgb") => ColorMode::Rgb,
             Some("gray" | "grayscale") => ColorMode::Grayscale,
@@ -596,21 +598,24 @@ pub fn pdf_options(p: &Value) -> Result<Option<photocraft_io::pdf_import::PdfOpe
             _ => return Err(EngineError::Other("mode: rgb|gray|cmyk|lab".into())),
         };
     }
-    if let Some(v) = p.get("depth") {
+    if let Some(v) = get("depth") {
         o.depth = match v.as_u64() {
             Some(8) => photocraft_color::SampleType::U8,
             Some(16) => photocraft_color::SampleType::U16,
             _ => return Err(EngineError::Other("depth: 8|16".into())),
         };
     }
-    if let Some(v) = p.get("antiAlias") {
+    if let Some(v) = get("antiAlias") {
         o.anti_alias = v.as_bool().ok_or_else(|| EngineError::Other("antiAlias: true|false".into()))?;
     }
-    if let Some(v) = p.get("suppressWarnings") {
+    if let Some(v) = get("suppressWarnings") {
         o.suppress_warnings = v.as_bool().ok_or_else(|| EngineError::Other("suppressWarnings: true|false".into()))?;
     }
-    o.name = p.get("name").and_then(Value::as_str).map(str::to_string);
-    o.password = p.get("password").and_then(Value::as_str).map(str::to_string);
+    let text = |k: &str| -> Result<Option<String>> {
+        get(k).map(|v| v.as_str().map(str::to_string).ok_or_else(|| EngineError::Other(format!("{k}: a string")))).transpose()
+    };
+    o.name = text("name")?;
+    o.password = text("password")?;
     Ok(Some(o))
 }
 

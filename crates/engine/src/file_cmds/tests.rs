@@ -1513,6 +1513,8 @@ fn bad_pdf_options_are_refused_before_opening_or_placing() {
         ("depth", json!("8")),
         ("antiAlias", json!("yes")),
         ("suppressWarnings", json!(1)),
+        ("name", json!(7)),
+        ("password", json!(["secret"])),
     ];
     let mut s = session(100, 100, 8);
     let (count, revision, layers) = (s.documents().len(), s.active().unwrap().revision, doc(&s).layers.len());
@@ -1530,6 +1532,23 @@ fn bad_pdf_options_are_refused_before_opening_or_placing() {
     // Good answers open and place.
     s.execute("file.placeEmbedded", json!({"path": pdf, "page": 2, "resolution": 72})).unwrap();
     assert_eq!(doc(&s).layers.len(), layers + 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A PDF option given as `null` counts as absent, as `tgaBits` does: it neither errors nor
+/// replaces the default.
+#[test]
+fn null_pdf_options_count_as_absent() {
+    let keys = ["page", "resolution", "crop", "mode", "depth", "antiAlias", "name", "password", "image", "suppressWarnings"];
+    let all_null: serde_json::Map<String, Value> = keys.iter().map(|k| (k.to_string(), Value::Null)).collect();
+    assert!(pdf_options(&Value::Object(all_null)).unwrap().is_none(), "only nulls: no Import PDF answers");
+    let o = pdf_options(&json!({"page": null, "resolution": 72, "name": null, "image": null})).unwrap().expect("resolution was given");
+    assert_eq!((o.page, o.resolution, o.name, o.image), (1, 72.0, None, None));
+    let dir = tmp("pdf-null-options");
+    let pdf = pdf_file(&dir, "doc.pdf");
+    let mut s = Session::new();
+    s.execute("file.openAs", json!({"path": pdf, "page": null, "crop": null})).expect("null options open with the defaults");
+    assert_eq!(s.documents().len(), 1);
     let _ = std::fs::remove_dir_all(&dir);
 }
 

@@ -22,7 +22,7 @@ mod recovery_tests;
 const OPEN_EXTS: &[&str] = &[
     "pcraft", "pdn", "ora", "kra", "krz", "psd", "psb", "psdt", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "tga", "ico", "qoi", "exr", "hdr",
     "pbm", "pgm", "ppm", "pam", "pfm", "pcx", "dds", "xpm", "fits", "fit", "fts", "dpx", "cin", "heic", "heif", "hif", "dng", "cr2", "cr3", "nef", "nrw",
-    "arw", "pef", "orf", "rw2", "raf", "abr", "grd", "svg", "svgz", "aco", "ase", "kys", "af", "afdesign", "afphoto", "afpub",
+    "arw", "pef", "orf", "rw2", "raf", "abr", "grd", "svg", "svgz", "pdf", "aco", "ase", "kys", "af", "afdesign", "afphoto", "afpub",
 ];
 const SVG_EXTS: &[&str] = &["svg", "svgz"];
 
@@ -48,6 +48,7 @@ const OPEN_FILTERS: &[(&str, &[&str])] = &[
     ("OpenRaster", &["ora"]),
     ("Paint.NET", &["pdn"]),
     ("SVG", SVG_EXTS),
+    ("Photoshop PDF", &["pdf"]),
     ("PNG", &["png"]),
     ("JPEG", &["jpg", "jpeg"]),
     ("HEIF", &["heic", "heif", "hif"]),
@@ -848,7 +849,7 @@ mod tests {
         all.sort_unstable();
         assert_eq!(named, all, "the named filters cover All Formats exactly");
         let names: Vec<&str> = filters.iter().map(|(name, _)| *name).collect();
-        for name in ["Photoshop", "Affinity", "HEIF", "PNG", "JPEG", "TIFF", "Portable Bitmap", "OpenEXR", "Radiance HDR", "Paint.NET"] {
+        for name in ["Photoshop", "Photoshop PDF", "Affinity", "HEIF", "PNG", "JPEG", "TIFF", "Portable Bitmap", "OpenEXR", "Radiance HDR", "Paint.NET"] {
             assert!(names.contains(&name), "{name}");
         }
     }
