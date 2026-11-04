@@ -55,10 +55,13 @@ pub(crate) fn resource(doc: &Document) -> Result<ImageResource, IoError> {
 /// larger one is not a thumbnail and decoding it could cost more than the file is worth.
 pub const MAX_READ_SIDE: u32 = 1024;
 
+/// How many pixels a JPEG thumbnail's width or height may differ from its header's (writers round).
+const SIZE_TOLERANCE: u32 = 2;
+
 /// The embedded thumbnail (resource 1036) of the PSD or PSB in `src`, as RGBA, or `None` when it
 /// has none. Only the file's header and image resource section are read, however large the file
 /// is, and every length in them is checked first. A damaged file, an unsupported thumbnail format
-/// or a JPEG that does not match its header is an error, never a panic.
+/// or a JPEG whose size is not its header's (give or take a rounding of [`SIZE_TOLERANCE`] pixels) is an error, never a panic.
 pub fn read<R: ReadAt + ?Sized>(src: &R) -> Result<Option<Rgba8Image>, IoError> {
     let resources = photocraft_psd::resources::read_resources(src)?;
     resources.iter().find(|r| r.id == ids::THUMBNAIL).map(|r| decode_resource(&r.data)).transpose()
@@ -92,8 +95,12 @@ fn decode_resource(data: &[u8]) -> Result<Rgba8Image, IoError> {
                 max_alloc: 64 << 20,
             };
             let img = photocraft_codecs::decode_with(jfif, &photocraft_codecs::DecodeOptions { limits, ..Default::default() })?;
-            // The picture's own size: some writers round the header's.
+            // The picture's own size: some writers round the header's, but a picture that is not the
+            // one the header describes is a damaged thumbnail.
             let (width, height) = img.dimensions();
+            if width.abs_diff(w) > SIZE_TOLERANCE || height.abs_diff(h) > SIZE_TOLERANCE {
+                return Err(bad("picture does not match its header"));
+            }
             Ok(Rgba8Image { width, height, pixels: img.to_rgba8() })
         }
         0 => {

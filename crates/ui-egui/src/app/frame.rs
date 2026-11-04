@@ -291,17 +291,17 @@ impl PhotocraftApp {
         }
         // Home is only the menu bar and the Home content; the saved panel prefs are untouched.
         let home = self.home_screen_up();
-        if (chrome && self.ui.panels.options_bar && !home) || tabbed_in {
+        if ((chrome && self.ui.panels.options_bar) || tabbed_in) && !home {
             panels::options_bar(self, ui);
         }
         if chrome && self.ui.panels.status_bar && !home {
             panels::status_bar(self, ui);
         }
-        if (chrome && self.ui.panels.toolbar && !home) || tabbed_in {
+        if ((chrome && self.ui.panels.toolbar) || tabbed_in) && !home {
             panels::toolbar(self, ui);
         }
         // craft-ui's layout holds the canvas as its protected `canvas` panel.
-        let docking = (chrome && self.ui.panels.dock && !home) || tabbed_in;
+        let docking = ((chrome && self.ui.panels.dock) || tabbed_in) && !home;
         if docking {
             panels::dock_area(self, ui);
         } else {
@@ -310,15 +310,21 @@ impl PhotocraftApp {
             egui::CentralPanel::default().frame(egui::Frame::NONE.fill(backdrop)).show(ui, |ui| {
                 canvas::document_area(self, ui);
             });
-            panels::properties_window(self, &ctx);
+            if !home {
+                panels::properties_window(self, &ctx);
+            }
         }
-        brush_panel::window(self, &ctx);
-        preset_panels::windows(self, &ctx);
-        gradient_ui::editor_window(self, &ctx);
-        type_panels_ui::windows(self, &ctx);
-        analysis_ui::windows(self, &ctx);
-        timeline_ui::windows(self, &ctx);
-        workspace_ui::windows(self, &ctx);
+        // The floating editor windows belong to the editor: Home covers them (dialogs and notices
+        // below stay).
+        if !home {
+            brush_panel::window(self, &ctx);
+            preset_panels::windows(self, &ctx);
+            gradient_ui::editor_window(self, &ctx);
+            type_panels_ui::windows(self, &ctx);
+            analysis_ui::windows(self, &ctx);
+            timeline_ui::windows(self, &ctx);
+            workspace_ui::windows(self, &ctx);
+        }
         palette::show(self, &ctx);
         dialogs::show(self, &ctx);
         layers_panel_ui::show_dialog(self, &ctx);

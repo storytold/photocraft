@@ -317,7 +317,8 @@ fn recent_section(app: &mut PhotocraftApp, ui: &mut egui::Ui, width: f32) {
         .iter()
         .map(|path| {
             let (size, modified) = match app.recent_view.status(path) {
-                Some(crate::recent_thumbs::FileStat::Present { size, modified }) => (Some(size), modified),
+                // The modified time is in nanoseconds.
+                Some(crate::recent_thumbs::FileStat::Present { size, modified }) => (Some(size), modified.map(|n| n / 1_000_000_000)),
                 _ => (None, None),
             };
             Row {

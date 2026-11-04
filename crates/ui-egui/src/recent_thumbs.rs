@@ -9,8 +9,14 @@
 //! through the normal import followed by the compositor's thumbnail. A file with none of those
 //! shows "No preview". A worker that panics or cannot start degrades to the same.
 //!
-//! A path that fails to stat is [`FileStat::Missing`]; one that has not been statted yet has no
-//! status, and the screen must not treat it as missing.
+//! A path whose `stat` says "not found" is [`FileStat::Missing`]; any other failure is
+//! [`FileStat::Unavailable`] (the file may well be there); one that has not been statted yet has no
+//! status. The screen must not treat either of the last two as missing.
+//!
+//! A file taken off the list is forgotten: [`Shared`] is the one place the workers ask before they
+//! write to the cache, so nothing is cached for it afterwards, and its cached thumbnails are
+//! deleted. Every request carries the identity of the entry that made it, so the answer to a
+//! request of an entry that has since been removed (and perhaps added again) is ignored.
 
 #![cfg_attr(target_arch = "wasm32", allow(dead_code))]
 
@@ -57,10 +63,14 @@ const MISSING_KEY: u64 = u64::MAX;
 /// What a `stat` of a recent file found.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FileStat {
-    /// It is there: its length (0 for a folder) and modified time (seconds since the epoch).
+    /// It is there: its length (0 for a folder) and modified time (nanoseconds since the epoch,
+    /// as precise as the file system keeps it).
     Present { size: u64, modified: Option<u64> },
-    /// The `stat` failed: the file was moved, renamed or deleted, or its drive is gone.
+    /// The file was not found: it was moved, renamed or deleted.
     Missing,
+    /// The `stat` failed for another reason (no permission, a drive that errors): the file may
+    /// exist, so opening it is tried and reports the real error.
+    Unavailable,
 }
 
 /// What the worker found for a thumbnail.
@@ -78,6 +88,8 @@ pub(crate) enum Outcome {
 /// A worker's answer for one file.
 pub(crate) struct Done {
     pub path: String,
+    /// The entry the request was made for (see [`Probe::id`]).
+    pub id: u64,
     /// `None`: not known (the worker failed), which is not the same as missing.
     pub stat: Option<FileStat>,
     pub key: Option<u64>,
@@ -87,11 +99,59 @@ pub(crate) struct Done {
 /// A request to look at one file.
 pub(crate) struct Probe {
     pub path: String,
+    /// Identity of the entry asking: an answer for an entry that is gone, or was replaced by a
+    /// new one for the same path, is ignored.
+    pub id: u64,
     /// Also make a thumbnail (unless the file is the one `known` was made from).
     pub want_thumb: bool,
     /// The cache key of the thumbnail already held, if any.
     pub known: Option<u64>,
     pub ctx: egui::Context,
+}
+
+/// What the frame and the workers agree on about the cache.
+#[derive(Default)]
+pub(crate) struct Shared {
+    /// Paths a worker may cache a thumbnail for: those a request was made for, until forgotten.
+    allowed: Mutex<HashSet<String>>,
+    /// Held while a worker checks `allowed` and writes, and while thumbnails are deleted, so a
+    /// deletion never overtakes a write it should have followed.
+    cache: Mutex<()>,
+}
+
+impl Shared {
+    /// A request for `path` is being made: it may be cached.
+    pub(crate) fn allow(&self, path: &str) {
+        lock(&self.allowed).insert(path.to_string());
+    }
+
+    /// `path` (or, for `None`, every file) may no longer be cached.
+    fn deny(&self, path: Option<&str>) {
+        let mut allowed = lock(&self.allowed);
+        match path {
+            Some(p) => {
+                allowed.remove(p);
+            }
+            None => allowed.clear(),
+        }
+    }
+
+    /// Run `write` (a store into the cache for `path`) unless `path` was forgotten.
+    pub(crate) fn store(&self, path: &str, write: impl FnOnce()) {
+        let _cache = lock(&self.cache);
+        let allowed = lock(&self.allowed).contains(path);
+        if allowed {
+            write();
+        }
+    }
+
+    /// Delete the cached thumbnails of `path`, or all of them for `None`, once any write in
+    /// progress is done.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn wipe(&self, dir: &Path, path: Option<&str>) {
+        let _cache = lock(&self.cache);
+        disk::forget(dir, path);
+    }
 }
 
 pub(crate) enum Job {
@@ -127,6 +187,8 @@ enum Thumb {
 }
 
 struct Entry {
+    /// See [`Probe::id`]; 0 for an entry made outside the view (tests).
+    id: u64,
     stat: Option<FileStat>,
     /// Cache key the thumbnail (or the absence of one) was made for.
     key: Option<u64>,
@@ -140,7 +202,7 @@ struct Entry {
 
 impl Entry {
     fn new() -> Self {
-        Entry { stat: None, key: None, thumb: Thumb::Unrequested, in_flight: false, fresh: 0, used: 0 }
+        Entry { id: 0, stat: None, key: None, thumb: Thumb::Unrequested, in_flight: false, fresh: 0, used: 0 }
     }
 }
 
@@ -153,14 +215,14 @@ struct Worker {
 
 impl Worker {
     #[cfg(not(target_arch = "wasm32"))]
-    fn start(cache: Option<PathBuf>) -> Option<Self> {
+    fn start(cache: Option<PathBuf>, shared: Arc<Shared>) -> Option<Self> {
         let (jobs, rx) = std::sync::mpsc::sync_channel::<Job>(QUEUE);
         let (tx, done) = std::sync::mpsc::channel::<Done>();
         let rx = Arc::new(Mutex::new(rx));
         let mut started = 0;
         for n in 0..WORKERS {
-            let (rx, tx, cache) = (rx.clone(), tx.clone(), cache.clone());
-            let spawned = std::thread::Builder::new().name(format!("recent-thumbs-{n}")).spawn(move || disk::serve(&rx, &tx, cache.as_deref()));
+            let (rx, tx, cache, shared) = (rx.clone(), tx.clone(), cache.clone(), shared.clone());
+            let spawned = std::thread::Builder::new().name(format!("recent-thumbs-{n}")).spawn(move || disk::serve(&rx, &tx, cache.as_deref(), &shared));
             if spawned.is_ok() {
                 started += 1;
             }
@@ -169,7 +231,7 @@ impl Worker {
     }
 
     #[cfg(target_arch = "wasm32")]
-    fn start(_: Option<PathBuf>) -> Option<Self> {
+    fn start(_: Option<PathBuf>, _: Arc<Shared>) -> Option<Self> {
         None
     }
 }
@@ -186,9 +248,10 @@ pub struct RecentView {
     worker: Option<Worker>,
     /// Where the workers cache thumbnails (set when they start).
     cache_dir: Option<PathBuf>,
-    /// Files taken off the list while a worker was still looking at them: their answer, whenever
-    /// it comes, is followed by another deletion of their cached thumbnails.
-    forgotten: HashSet<String>,
+    /// What the workers may cache (see [`Shared`]).
+    shared: Arc<Shared>,
+    /// The identity the next entry gets.
+    next_id: u64,
     /// The worker could not be started: every thumbnail is "No preview".
     worker_failed: bool,
     /// Frame counter, for [`Entry::used`].
@@ -215,7 +278,11 @@ impl RecentView {
         self.wanted.clear();
         self.stats_wanted.clear();
         let keep: HashSet<&str> = listed.iter().map(String::as_str).collect();
-        self.entries.retain(|path, _| keep.contains(path.as_str()));
+        let gone: Vec<String> = self.entries.keys().filter(|path| !keep.contains(path.as_str())).cloned().collect();
+        let cache = self.cache_dir.clone();
+        for path in gone {
+            self.forget(cache.as_deref(), Some(&path));
+        }
         ctx.request_repaint_after(std::time::Duration::from_secs_f64(STALE_SECS));
     }
 
@@ -241,31 +308,39 @@ impl RecentView {
     /// The card for `path` (opened at `opened`, seconds since the epoch, 0 when unknown) is on
     /// screen: its status and thumbnail are wanted, the most recently opened first.
     pub fn want(&mut self, path: &str, opened: u64) {
-        self.entries.entry(path.to_string()).or_insert_with(Entry::new);
+        self.entry(path);
         self.wanted.push((path.to_string(), opened));
     }
 
     /// Only the status of `path` is wanted (a sort by size needs it for files off screen).
     pub fn want_status(&mut self, path: &str) {
-        self.entries.entry(path.to_string()).or_insert_with(Entry::new);
+        self.entry(path);
         self.stats_wanted.push(path.to_string());
     }
 
-    /// `path` (or, for `None`, every file) is off the Recent list: drop what is held for it and
-    /// delete its cached thumbnails (all of them for `None`) on a short-lived thread, so the frame
-    /// never touches the disk and the deletion does not depend on the job queue. A worker still
-    /// looking at the file is answered by another deletion when it finishes.
+    /// The entry for `path`, made (with a new identity) when there is none.
+    fn entry(&mut self, path: &str) -> &mut Entry {
+        let next = &mut self.next_id;
+        self.entries.entry(path.to_string()).or_insert_with(|| {
+            *next += 1;
+            Entry { id: *next, ..Entry::new() }
+        })
+    }
+
+    /// `path` (or, for `None`, every file) is off the Recent list: drop what is held for it, stop
+    /// the workers caching anything more for it (a queued seed or a probe already running
+    /// included) and delete its cached thumbnails (all of them for `None`) on a short-lived
+    /// thread, so the frame never touches the disk and the deletion does not depend on the job
+    /// queue or on the Home screen being shown.
     pub fn forget(&mut self, cache: Option<&Path>, path: Option<&str>) {
-        let flying: Vec<String> = match path {
-            Some(p) => self.entries.remove(p).filter(|e| e.in_flight).map(|_| p.to_string()).into_iter().collect(),
-            None => {
-                let flying = self.entries.iter().filter(|(_, e)| e.in_flight).map(|(p, _)| p.clone()).collect();
-                self.entries.clear();
-                flying
+        match path {
+            Some(p) => {
+                self.entries.remove(p);
             }
-        };
-        self.forgotten.extend(flying);
-        wipe(cache, path);
+            None => self.entries.clear(),
+        }
+        self.shared.deny(path);
+        wipe(&self.shared, cache, path);
     }
 
     /// Cache the thumbnail of `doc`, just opened or saved at `path`, without opening the file
@@ -274,6 +349,7 @@ impl RecentView {
         if cache.is_none() || self.worker_failed {
             return;
         }
+        self.shared.allow(path);
         let Some(worker) = self.ensure_worker(cache.as_deref()) else { return };
         // Dropped when the queue is full: a thumbnail made later from the file does as well.
         let _ = worker.jobs.try_send(Job::Seed { path: path.to_string(), doc });
@@ -301,6 +377,7 @@ impl RecentView {
         wanted.sort_by_key(|(_, opened)| std::cmp::Reverse(*opened));
         let stats = std::mem::take(&mut self.stats_wanted);
         let generation = self.generation;
+        let shared = self.shared.clone();
         let visible = wanted.iter().map(|(p, _)| (p.clone(), true)).chain(stats.into_iter().map(|p| (p, false)));
         for (path, thumb) in visible {
             let Some(worker) = self.worker.as_ref() else { break };
@@ -310,8 +387,10 @@ impl RecentView {
             if e.in_flight || (fresh && !needs_thumb) {
                 continue;
             }
+            shared.allow(&path);
             let probe = Probe {
                 path: path.clone(),
+                id: e.id,
                 want_thumb: thumb,
                 // A dropped or never-made thumbnail is made again whatever the file's key.
                 known: if matches!(e.thumb, Thumb::Unrequested) { None } else { e.key },
@@ -333,7 +412,7 @@ impl RecentView {
     fn ensure_worker(&mut self, cache: Option<&Path>) -> Option<&Worker> {
         if self.worker.is_none() && !self.worker_failed {
             self.cache_dir = cache.map(Path::to_path_buf);
-            self.worker = Worker::start(self.cache_dir.clone());
+            self.worker = Worker::start(self.cache_dir.clone(), self.shared.clone());
             self.worker_failed = self.worker.is_none();
         }
         self.worker.as_ref()
@@ -364,21 +443,25 @@ impl RecentView {
     fn apply(&mut self, ctx: &egui::Context, done: Done) {
         let generation = self.generation;
         let tick = self.tick;
-        let Some(e) = self.entries.get_mut(&done.path) else {
-            // Taken off the list while it was being looked at: the worker may have cached it since.
-            if self.forgotten.remove(&done.path) {
-                wipe(self.cache_dir.as_deref(), Some(&done.path));
-            }
-            return;
-        };
+        // Taken off the list while it was being looked at (and perhaps listed again since, as a
+        // new entry): the answer is not for the entry there now. Nothing was cached for it after
+        // it was forgotten (see `Shared`).
+        let Some(e) = self.entries.get_mut(&done.path).filter(|e| e.id == done.id) else { return };
         e.in_flight = false;
+        let changed = done.stat.is_some() && e.stat.is_some() && e.stat != done.stat;
         if done.stat.is_some() {
             e.stat = done.stat;
             e.fresh = generation;
         }
         let missing = e.stat == Some(FileStat::Missing);
         match done.outcome {
-            Outcome::Skipped => {}
+            Outcome::Skipped => {
+                // The file changed, or went, since its thumbnail was made: make it again the
+                // next time the card is shown (an unchanged file comes back from the cache).
+                if changed {
+                    e.thumb = Thumb::Unrequested;
+                }
+            }
             Outcome::Unchanged => {
                 e.key = done.key;
                 // A thumbnail shown in colour for a file that has just gone is made again, in
@@ -434,16 +517,16 @@ impl RecentView {
     }
 }
 
-/// Delete cached thumbnails (see [`disk::forget`]) on a detached thread. Failing to start one is
+/// Delete cached thumbnails (see [`Shared::wipe`]) on a detached thread. Failing to start one is
 /// ignored: the cache is only a cache.
-fn wipe(cache: Option<&Path>, path: Option<&str>) {
+fn wipe(shared: &Arc<Shared>, cache: Option<&Path>, path: Option<&str>) {
     #[cfg(not(target_arch = "wasm32"))]
     if let Some(dir) = cache {
-        let (dir, path) = (dir.to_path_buf(), path.map(str::to_string));
-        let _ = std::thread::Builder::new().name("recent-thumbs-forget".into()).spawn(move || disk::forget(&dir, path.as_deref()));
+        let (shared, dir, path) = (shared.clone(), dir.to_path_buf(), path.map(str::to_string));
+        let _ = std::thread::Builder::new().name("recent-thumbs-forget".into()).spawn(move || shared.wipe(&dir, path.as_deref()));
     }
     #[cfg(target_arch = "wasm32")]
-    let _ = (cache, path);
+    let _ = (shared, cache, path);
 }
 
 /// `rgba` (straight alpha) as gray, keeping each pixel's alpha.
@@ -491,7 +574,9 @@ pub fn when_label(now: u64, opened: u64) -> String {
 pub fn size_label(bytes: u64) -> String {
     const KB: f64 = 1024.0;
     let b = bytes as f64;
-    if b < KB * KB {
+    if bytes == 0 {
+        "0 KB".into()
+    } else if b < KB * KB {
         format!("{} KB", (b / KB).ceil().max(1.0))
     } else if b < KB * KB * KB {
         format!("{:.1} MB", b / (KB * KB))

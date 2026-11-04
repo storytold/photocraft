@@ -200,9 +200,13 @@ fn malformed_and_truncated_thumbnails_are_errors() {
         edit(&mut r.data);
         file.to_bytes().unwrap()
     };
-    let cases: [Damage; 7] = [
+    let cases: [Damage; 8] = [
         ("header cut short", &|d| d.truncate(10)),
         ("no picture", &|d| d.truncate(28)),
+        ("header size far from the picture's", &|d| {
+            d[4..8].copy_from_slice(&1u32.to_be_bytes());
+            d[8..12].copy_from_slice(&1u32.to_be_bytes());
+        }),
         ("zero width", &|d| d[4..8].copy_from_slice(&0u32.to_be_bytes())),
         ("huge height", &|d| d[8..12].copy_from_slice(&u32::MAX.to_be_bytes())),
         ("unknown format", &|d| d[0..4].copy_from_slice(&9u32.to_be_bytes())),

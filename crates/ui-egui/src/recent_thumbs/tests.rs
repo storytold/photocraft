@@ -18,8 +18,10 @@ fn png(img: &Rgba8Image) -> Vec<u8> {
 }
 
 fn probe(path: &Path, want_thumb: bool, known: Option<u64>, cache: Option<&PathBuf>) -> Done {
-    let p = Probe { path: path.to_string_lossy().into_owned(), want_thumb, known, ctx: egui::Context::default() };
-    disk::probe(&p, cache.map(PathBuf::as_path))
+    let p = Probe { path: path.to_string_lossy().into_owned(), id: 0, want_thumb, known, ctx: egui::Context::default() };
+    let shared = Shared::default();
+    shared.allow(&p.path);
+    disk::probe(&p, cache.map(PathBuf::as_path), &shared)
 }
 
 fn image_of(done: &Done) -> &Rgba8Image {
@@ -232,14 +234,17 @@ fn opening_a_document_seeds_the_cache() {
     let cache = dir.path().join("cache");
     let file = write(dir.path(), "doc.psd", b"not read: the cache is seeded from the open document");
     let path = file.to_string_lossy().into_owned();
-    disk::seed(&path, &document(30, 20), Some(cache.as_path()));
+    let shared = Shared::default();
+    shared.allow(&path);
+    disk::seed(&path, &document(30, 20), Some(cache.as_path()), &shared);
     let (stat, _) = disk::stat(&path);
     let FileStat::Present { size, modified } = stat else { panic!("the file exists") };
     let img = disk::load(&cache, &path, size, modified).expect("cached");
     assert_eq!((img.width, img.height), (30, 20));
     // No cache folder, or a file that is not there: nothing to do.
-    disk::seed(&path, &document(4, 4), None);
-    disk::seed("/no/such/file.psd", &document(4, 4), Some(cache.as_path()));
+    disk::seed(&path, &document(4, 4), None, &shared);
+    shared.allow("/no/such/file.psd");
+    disk::seed("/no/such/file.psd", &document(4, 4), Some(cache.as_path()), &shared);
     assert_eq!(std::fs::read_dir(&cache).unwrap().count(), 1);
 }
 
@@ -346,6 +351,7 @@ fn only_so_many_textures_are_kept() {
         view.entries.insert(path.clone(), Entry::new());
         answers.push(Done {
             path,
+            id: 0,
             stat: Some(FileStat::Present { size: 1, modified: Some(1) }),
             key: Some(i as u64),
             outcome: Outcome::Image(rgba(2, 2, [1, 1, 1, 255])),
@@ -362,7 +368,10 @@ fn only_so_many_textures_are_kept() {
     assert!(matches!(view.preview(&format!("/p/{}.png", MAX_TEXTURES + 4)), Preview::Image { .. }));
     // A thumbnail with the wrong number of pixels is no preview.
     view.entries.insert("/bad.png".into(), Entry::new());
-    view.apply(&ctx, Done { path: "/bad.png".into(), stat: None, key: None, outcome: Outcome::Image(Rgba8Image { width: 4, height: 4, pixels: vec![0; 5] }) });
+    view.apply(
+        &ctx,
+        Done { path: "/bad.png".into(), id: 0, stat: None, key: None, outcome: Outcome::Image(Rgba8Image { width: 4, height: 4, pixels: vec![0; 5] }) },
+    );
     assert!(matches!(view.preview("/bad.png"), Preview::None));
 }
 
@@ -437,17 +446,145 @@ fn forgetting_deletes_only_the_caches_own_files() {
     disk::forget(&dir.path().join("missing"), None); // no folder: nothing to do
 }
 
-/// A file taken off the list is no longer held, and a worker still on it is remembered.
+/// A file taken off the list is no longer held, and nothing more is cached for it.
 #[test]
 fn a_forgotten_file_is_dropped_from_the_view() {
     let mut view = RecentView::default();
     for p in ["/a/one.png", "/a/two.png"] {
         view.entries.insert(p.into(), Entry::new());
+        view.shared.allow(p);
     }
-    view.entries.get_mut("/a/two.png").unwrap().in_flight = true;
     view.forget(None, Some("/a/one.png"));
-    assert!(!view.entries.contains_key("/a/one.png") && view.forgotten.is_empty());
+    assert!(!view.entries.contains_key("/a/one.png"));
+    let dir = tempfile::tempdir().unwrap();
+    let img = rgba(2, 2, [5, 6, 7, 255]);
+    let shared = view.shared.clone();
+    let write_to = |path: &str| shared.store(path, || disk::store(dir.path(), path, 1, Some(1), &img));
+    write_to("/a/one.png");
+    assert!(disk::load_any(dir.path(), "/a/one.png").is_none(), "a late write for a forgotten file is not made");
+    write_to("/a/two.png");
+    assert!(disk::load_any(dir.path(), "/a/two.png").is_some());
     view.forget(None, None);
     assert!(view.entries.is_empty());
-    assert!(view.forgotten.contains("/a/two.png"), "its answer will be followed by another deletion");
+    write_to("/a/two.png");
+    assert!(disk::load_any(dir.path(), "/a/two.png").is_some(), "the earlier file stays; only new writes were stopped");
+}
+
+/// A seed queued before the file left the list is cancelled by `forget`, and listing the file
+/// again allows it once more.
+#[test]
+fn forgetting_cancels_a_queued_seed_and_listing_again_allows_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = dir.path().join("cache");
+    let file = write(dir.path(), "doc.psd", b"x");
+    let path = file.to_string_lossy().into_owned();
+    let mut view = RecentView::default();
+    view.shared.allow(&path);
+    view.forget(None, Some(&path));
+    disk::seed(&path, &document(8, 8), Some(cache.as_path()), &view.shared);
+    assert!(!cache.exists() || std::fs::read_dir(&cache).unwrap().count() == 0, "nothing cached after the removal");
+    view.shared.allow(&path);
+    disk::seed(&path, &document(8, 8), Some(cache.as_path()), &view.shared);
+    assert_eq!(std::fs::read_dir(&cache).unwrap().count(), 1);
+}
+
+/// The answer to a probe of an entry that was removed and listed again is not for the new entry.
+#[test]
+fn a_stale_probe_answer_is_ignored() {
+    let ctx = egui::Context::default();
+    let mut view = RecentView::default();
+    view.want("/a/one.png", 0);
+    let old = view.entries["/a/one.png"].id;
+    view.forget(None, Some("/a/one.png"));
+    view.want("/a/one.png", 0);
+    let new = view.entries["/a/one.png"].id;
+    assert_ne!(old, new);
+    view.entries.get_mut("/a/one.png").unwrap().in_flight = true;
+    view.apply(&ctx, Done { path: "/a/one.png".into(), id: old, stat: Some(FileStat::Missing), key: None, outcome: Outcome::Skipped });
+    assert_eq!(view.status("/a/one.png"), None, "the old answer changes nothing");
+    assert!(view.entries["/a/one.png"].in_flight);
+    view.apply(&ctx, Done { path: "/a/one.png".into(), id: new, stat: Some(FileStat::Missing), key: None, outcome: Outcome::Skipped });
+    assert_eq!(view.status("/a/one.png"), Some(FileStat::Missing));
+}
+
+/// A status-only refresh that finds the file changed drops the thumbnail shown for it.
+#[test]
+fn a_changed_status_drops_the_thumbnail() {
+    let ctx = egui::Context::default();
+    let mut view = RecentView::default();
+    let present = |size| Some(FileStat::Present { size, modified: Some(1) });
+    view.entries.insert("/p.png".into(), Entry::new());
+    view.apply(&ctx, Done { path: "/p.png".into(), id: 0, stat: present(1), key: Some(1), outcome: Outcome::Image(rgba(2, 2, [1, 1, 1, 255])) });
+    assert!(matches!(view.preview("/p.png"), Preview::Image { .. }));
+    view.apply(&ctx, Done { path: "/p.png".into(), id: 0, stat: present(1), key: None, outcome: Outcome::Skipped });
+    assert!(matches!(view.preview("/p.png"), Preview::Image { .. }), "same status: kept");
+    view.apply(&ctx, Done { path: "/p.png".into(), id: 0, stat: present(2), key: None, outcome: Outcome::Skipped });
+    assert!(matches!(view.preview("/p.png"), Preview::Loading), "changed: made again when shown");
+}
+
+/// Zero bytes read as 0 KB, not 1 KB.
+#[test]
+fn an_empty_file_is_zero_kb() {
+    assert_eq!(size_label(0), "0 KB");
+    assert_eq!(size_label(1), "1 KB");
+    assert_eq!(size_label(1024), "1 KB");
+}
+
+/// Eviction deletes only the cache's own files, whatever their age.
+#[test]
+fn eviction_leaves_other_files_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let keep = write(dir.path(), "notes.txt", b"keep");
+    let img = rgba(2, 2, [9, 9, 9, 255]);
+    for i in 0..6 {
+        std::fs::write(dir.path().join(file_name(&format!("/p/{i}.png"), 1, Some(i))), png(&img)).unwrap();
+    }
+    disk::evict(dir.path(), 2);
+    assert!(keep.is_file());
+    assert!(std::fs::read_dir(dir.path()).unwrap().count() <= 3);
+}
+
+/// Only "not found" is missing; a modified time keeps its sub-second part.
+#[test]
+fn stat_tells_not_found_from_other_failures() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = write(dir.path(), "a.png", b"x");
+    let (stat, _) = disk::stat(&file.to_string_lossy());
+    let FileStat::Present { modified: Some(nanos), .. } = stat else { panic!("present with a time") };
+    assert!(nanos > 1_000_000_000_000_000_000 / 1000, "nanoseconds since the epoch, not seconds");
+    assert_eq!(disk::stat(&dir.path().join("none.png").to_string_lossy()).0, FileStat::Missing);
+    assert_eq!(disk::stat(&file.join("below.png").to_string_lossy()).0, FileStat::Missing, "below a file: not there");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let locked = dir.path().join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        let inner = write(&locked, "b.png", b"x");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let denied = matches!(std::fs::metadata(&inner), Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied);
+        let got = disk::stat(&inner.to_string_lossy()).0;
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        if denied {
+            assert_eq!(got, FileStat::Unavailable, "no permission is not missing");
+        }
+    }
+}
+
+/// Two versions of a file a moment apart do not share a cache file.
+#[test]
+fn modified_times_keep_nanoseconds_in_the_cache_name() {
+    assert_ne!(file_name("/a.psd", 10, Some(5_000_000_001)), file_name("/a.psd", 10, Some(5_000_000_002)));
+    assert_ne!(cache_key("/a.psd", 10, Some(5_000_000_001)), cache_key("/a.psd", 10, Some(5_000_000_002)));
+}
+
+/// An older thumbnail goes only after the new one is in place.
+#[test]
+fn a_failed_store_keeps_the_older_thumbnail() {
+    let dir = tempfile::tempdir().unwrap();
+    let red = rgba(4, 2, [255, 0, 0, 255]);
+    disk::store(dir.path(), "/pics/a.png", 100, Some(1), &red);
+    // A folder is where the new file would go: the rename fails.
+    std::fs::create_dir(dir.path().join(file_name("/pics/a.png", 120, Some(2)))).unwrap();
+    disk::store(dir.path(), "/pics/a.png", 120, Some(2), &rgba(4, 2, [0, 0, 255, 255]));
+    assert_eq!(disk::load(dir.path(), "/pics/a.png", 100, Some(1)).as_ref(), Some(&red));
 }

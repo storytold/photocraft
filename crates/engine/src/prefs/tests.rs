@@ -152,6 +152,20 @@ fn recent_opened_defaults_empty_and_a_bad_value_resets_only_it() {
     assert_eq!(invalid.len(), 1);
 }
 
+/// Replacing the list through `Preferences::set` drops the last-opened times of files that left it.
+#[test]
+fn setting_the_recent_files_prunes_their_opened_times() {
+    let mut p = Preferences::default();
+    p.file_handling.recent_files = vec!["/a.psd".into(), "/b.psd".into()];
+    p.file_handling.recent_opened.insert("/a.psd".into(), 10);
+    p.file_handling.recent_opened.insert("/b.psd".into(), 20);
+    p.set("fileHandling.recentFiles", json!(["/b.psd"])).unwrap();
+    assert_eq!(p.file_handling.recent_opened.len(), 1);
+    assert_eq!(p.file_handling.recent_opened.get("/b.psd"), Some(&20));
+    p.set("fileHandling.recentFiles", json!(["/a.psd", "/b.psd"])).unwrap();
+    assert_eq!(p.file_handling.recent_opened.get("/a.psd"), None, "an old time does not come back");
+}
+
 #[test]
 fn appearance_defaults_and_legacy_theme_migrate() {
     let p = Preferences::default();

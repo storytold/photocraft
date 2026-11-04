@@ -1292,7 +1292,13 @@ impl Preferences {
         check_value(path, &value)?;
         let mut root = self.to_json();
         set_path(&mut root, path, value)?;
+        let listed_before = self.file_handling.recent_files.clone();
         *self = serde_json::from_value(root).map_err(|e| format!("invalid value for `{path}`: {e}"))?;
+        // A file the list no longer holds loses its last-opened time, as when the app removes it.
+        if self.file_handling.recent_files != listed_before {
+            let listed = &self.file_handling.recent_files;
+            self.file_handling.recent_opened.retain(|k, _| listed.contains(k));
+        }
         Ok(())
     }
 

@@ -11,7 +11,7 @@ use photocraft_doc::Document;
 use photocraft_raster::Rgba8Image;
 use photocraft_raw::PreviewColorSpace;
 
-use super::{Done, FileStat, Job, MAX_CACHE_FILES, MAX_DECODE_BYTES, MISSING_KEY, Outcome, Probe, THUMB_SIDE, lock};
+use super::{Done, FileStat, Job, MAX_CACHE_FILES, MAX_DECODE_BYTES, MISSING_KEY, Outcome, Probe, Shared, THUMB_SIDE, lock};
 
 /// Pixel memory a PSD may take when it is decoded for its thumbnail.
 const PSD_PIXEL_BUDGET: u64 = 512 << 20;
@@ -34,7 +34,7 @@ const MAX_PREVIEW_SIDE: u32 = 4096;
 
 /// A worker thread: answers jobs until the window is gone. A panic while working on one file
 /// answers "no preview" for it and the thread carries on.
-pub(super) fn serve(jobs: &Arc<Mutex<Receiver<Job>>>, answers: &Sender<Done>, cache: Option<&Path>) {
+pub(super) fn serve(jobs: &Arc<Mutex<Receiver<Job>>>, answers: &Sender<Done>, cache: Option<&Path>, shared: &Shared) {
     loop {
         // The lock is held while waiting, so the other worker waits its turn here.
         let job = lock(jobs).recv();
@@ -42,15 +42,15 @@ pub(super) fn serve(jobs: &Arc<Mutex<Receiver<Job>>>, answers: &Sender<Done>, ca
         match job {
             Job::Probe(p) => {
                 let ctx = p.ctx.clone();
-                let failed = Done { path: p.path.clone(), stat: None, key: None, outcome: Outcome::NoPreview };
-                let done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| probe(&p, cache))).unwrap_or(failed);
+                let failed = Done { path: p.path.clone(), id: p.id, stat: None, key: None, outcome: Outcome::NoPreview };
+                let done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| probe(&p, cache, shared))).unwrap_or(failed);
                 if answers.send(done).is_err() {
                     return;
                 }
                 ctx.request_repaint();
             }
             Job::Seed { path, doc } => {
-                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| seed(&path, &doc, cache)));
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| seed(&path, &doc, cache, shared)));
             }
         }
     }
@@ -60,22 +60,24 @@ pub(super) fn serve(jobs: &Arc<Mutex<Receiver<Job>>>, answers: &Sender<Done>, ca
 pub(super) fn stat(path: &str) -> (FileStat, bool) {
     match std::fs::metadata(path) {
         Ok(m) => {
-            let modified = m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs());
+            let modified = m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).and_then(|d| u64::try_from(d.as_nanos()).ok());
             (FileStat::Present { size: if m.is_file() { m.len() } else { 0 }, modified }, m.is_dir())
         }
-        Err(_) => (FileStat::Missing, false),
+        Err(e) if matches!(e.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory) => (FileStat::Missing, false),
+        // No permission, a drive that errors: the file may be there.
+        Err(_) => (FileStat::Unavailable, false),
     }
 }
 
 /// Look at the file in `p`: its status and, when asked, its thumbnail.
-pub(super) fn probe(p: &Probe, cache: Option<&Path>) -> Done {
+pub(super) fn probe(p: &Probe, cache: Option<&Path>, shared: &Shared) -> Done {
     let (stat, is_dir) = stat(&p.path);
-    let done = |key, outcome| Done { path: p.path.clone(), stat: Some(stat), key, outcome };
+    let done = |key, outcome| Done { path: p.path.clone(), id: p.id, stat: Some(stat), key, outcome };
     if !p.want_thumb {
         return done(None, Outcome::Skipped);
     }
     match stat {
-        FileStat::Missing => {
+        FileStat::Missing | FileStat::Unavailable => {
             if p.known == Some(MISSING_KEY) {
                 return done(Some(MISSING_KEY), Outcome::Unchanged);
             }
@@ -94,7 +96,7 @@ pub(super) fn probe(p: &Probe, cache: Option<&Path>) -> Done {
             match make(&p.path, size, is_dir) {
                 Some(img) => {
                     if let Some(dir) = cache {
-                        store(dir, &p.path, size, modified, &img);
+                        shared.store(&p.path, || store(dir, &p.path, size, modified, &img));
                     }
                     done(Some(key), Outcome::Image(img))
                 }
@@ -105,14 +107,14 @@ pub(super) fn probe(p: &Probe, cache: Option<&Path>) -> Done {
 }
 
 /// Cache the thumbnail of `doc` for the file at `path`, which `doc` was just opened from or saved to.
-pub(super) fn seed(path: &str, doc: &Document, cache: Option<&Path>) {
+pub(super) fn seed(path: &str, doc: &Document, cache: Option<&Path>, shared: &Shared) {
     let Some(dir) = cache else { return };
     let (FileStat::Present { size, modified }, false) = stat(path) else { return };
     if dir.join(file_name(path, size, modified)).exists() {
         return;
     }
     if let Some(img) = valid(photocraft_compose::thumbnail(doc, THUMB_SIDE)) {
-        store(dir, path, size, modified, &img);
+        shared.store(path, || store(dir, path, size, modified, &img));
     }
 }
 
@@ -307,7 +309,8 @@ fn fnv(bytes: &[u8], mut h: u64) -> u64 {
     h
 }
 
-/// Identity of a file's contents as far as a thumbnail goes: its path, size and modified time.
+/// Identity of a file's contents as far as a thumbnail goes: its path, size and modified time
+/// (nanoseconds, where the file system keeps them).
 pub(super) fn cache_key(path: &str, size: u64, modified: Option<u64>) -> u64 {
     let h = fnv(&size.to_le_bytes(), fnv(&modified.unwrap_or(0).to_le_bytes(), fnv(path.as_bytes(), FNV_BASIS)));
     h.min(MISSING_KEY - 1)
@@ -362,13 +365,15 @@ pub(super) fn store(dir: &Path, path: &str, size: u64, modified: Option<u64>, im
         return;
     }
     let name = file_name(path, size, modified);
-    for (_, old) in entries_of(dir, &prefix(path)) {
-        if old.file_name().is_some_and(|n| n.to_string_lossy() != name) {
-            let _ = std::fs::remove_file(old);
-        }
-    }
     let temp = dir.join(format!("{name}.tmp"));
-    if std::fs::write(&temp, &png).is_ok() && std::fs::rename(&temp, dir.join(&name)).is_err() {
+    if std::fs::write(&temp, &png).is_ok() && std::fs::rename(&temp, dir.join(&name)).is_ok() {
+        // Older versions go only once the new one is in place.
+        for (_, old) in entries_of(dir, &prefix(path)) {
+            if old.file_name().is_some_and(|n| n.to_string_lossy() != name) {
+                let _ = std::fs::remove_file(old);
+            }
+        }
+    } else {
         let _ = std::fs::remove_file(&temp);
     }
     evict(dir, MAX_CACHE_FILES);
@@ -404,7 +409,8 @@ pub(super) fn forget(dir: &Path, path: Option<&str>) {
 /// Delete the oldest files in `dir` so that at most `max` remain (with a tenth of room to spare, so
 /// the next store does not have to scan again).
 pub(super) fn evict(dir: &Path, max: usize) {
-    let mut files = entries_of(dir, "");
+    // Only the cache's own files: anything else in the folder is not ours to delete.
+    let mut files: Vec<_> = entries_of(dir, "").into_iter().filter(|(_, p)| p.file_name().is_some_and(|n| is_cache_name(&n.to_string_lossy()))).collect();
     if files.len() <= max {
         return;
     }

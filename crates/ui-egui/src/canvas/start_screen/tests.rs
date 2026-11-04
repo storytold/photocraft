@@ -218,6 +218,23 @@ fn the_x_removes_a_card_in_the_grid_and_a_row_in_the_list() {
 }
 
 #[test]
+fn the_x_is_reachable_from_the_keyboard() {
+    let (app, _dir) = with_files(&FILES);
+    let mut h = harness(app, vec2(1360.0, 800.0));
+    settle(&mut h);
+    assert!(h.query_by_label("Remove a.txt from Recent").is_none());
+    h.get_by_label("a.txt").focus();
+    h.run_steps(3);
+    let x = h.get_by_label("Remove a.txt from Recent");
+    x.focus();
+    h.run_steps(2);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert_eq!(h.state().0.ui.recent_files.len(), 2, "Enter on the focused × removes the file");
+    assert!(h.state().0.session.documents().is_empty(), "and does not open it");
+}
+
+#[test]
 fn the_context_menu_offers_open_show_remove_and_clear() {
     let (app, _dir) = with_files(&FILES);
     let mut h = harness(app, vec2(1360.0, 800.0));

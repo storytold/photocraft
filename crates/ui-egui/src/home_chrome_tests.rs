@@ -34,6 +34,12 @@ fn chrome_shown(h: &Harness<'static, PhotocraftApp>, when: &str) -> bool {
     toolbar
 }
 
+/// The options bar and the status bar: a widget of each ("Auto-Select:" of the Move tool's options,
+/// the status bar's zoom field).
+fn bars_shown(h: &Harness<'static, PhotocraftApp>) -> (bool, bool) {
+    (h.query_all_by_label_contains("Auto-Select").next().is_some(), h.query_all_by_label("Zoom").next().is_some())
+}
+
 /// Click the Home button nearest the top: the header's (or the options bar's), not the rail's row.
 fn click_home(h: &mut Harness<'static, PhotocraftApp>) {
     let top = h.query_all_by_label("Home").min_by(|a, b| a.rect().min.y.total_cmp(&b.rect().min.y)).expect("a Home button");
@@ -56,7 +62,9 @@ fn toggling_home_swaps_the_chrome_and_keeps_the_panel_prefs() {
         let mut h = app(theme, true, true);
         let panels = h.state().ui.panels.clone();
         assert!(chrome_shown(&h, &format!("{theme:?}, document open, before Home")), "{theme:?}: chrome with a document");
+        assert_eq!(bars_shown(&h), (true, true), "{theme:?}: options bar and status bar with a document");
         click_home(&mut h);
+        assert_eq!(bars_shown(&h), (false, false), "{theme:?}: no options bar or status bar on Home");
         assert!(h.query_by_label("New file").is_some(), "{theme:?}: Home content");
         assert!(!chrome_shown(&h, &format!("{theme:?}, on Home")), "{theme:?}: no chrome on Home");
         assert!(h.query_all_by_label("Home").count() >= 2, "{theme:?}: the header's Home toggle and the rail's entry");
@@ -64,6 +72,19 @@ fn toggling_home_swaps_the_chrome_and_keeps_the_panel_prefs() {
         click_home(&mut h);
         assert!(h.query_by_label("New file").is_none(), "{theme:?}: Home dismissed");
         assert!(chrome_shown(&h, &format!("{theme:?}, after Home")), "{theme:?}: chrome back");
+        assert_eq!(bars_shown(&h), (true, true), "{theme:?}: bars back");
         assert_eq!(h.state().ui.panels, panels);
     }
+}
+
+#[test]
+fn tab_in_full_screen_does_not_bring_the_chrome_back_over_home() {
+    let mut h = app(ThemeKind::Pro, true, true);
+    click_home(&mut h);
+    h.state_mut().ui.view.screen_mode = "fullScreen".into();
+    h.state_mut().ui.panels.full_screen_chrome = true;
+    h.run_steps(6);
+    assert!(h.query_by_label("New file").is_some(), "Home content");
+    assert!(!chrome_shown(&h, "Tab-revealed chrome on Home"), "no tool strip or dock");
+    assert_eq!(bars_shown(&h), (false, false), "no options bar or status bar");
 }

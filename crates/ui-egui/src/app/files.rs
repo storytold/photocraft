@@ -12,10 +12,15 @@ impl PhotocraftApp {
     /// `path`, its thumbnail is cached for the Home screen on a worker thread.
     pub fn push_recent(&mut self, path: &str) {
         let cap = self.recent_cap();
-        let mut r = self.session.prefs().file_handling.recent_files.clone();
+        let old = self.session.prefs().file_handling.recent_files.clone();
+        let mut r = old.clone();
         r.retain(|p| p != path);
         r.insert(0, path.to_string());
         r.truncate(cap);
+        // Files the cap pushed off the list lose their cached thumbnails too.
+        for gone in old.iter().filter(|p| !r.contains(p)) {
+            self.recent_view.forget(self.services.thumbnail_cache_dir.as_deref(), Some(gone));
+        }
         self.ui.recent_files = r.clone();
         let now = crate::recent_thumbs::unix_now();
         self.session.prefs.edit(|p| {

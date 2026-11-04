@@ -61,7 +61,7 @@ impl Actions {
         if let Some(path) = &self.reveal
             && let Err(e) = crate::menus::invoke(app, ctx, "file.revealInFinder", serde_json::json!({"path": path}))
         {
-            app.ui.status = e;
+            crate::notices::error(app, e);
         }
         if let Some(kind) = self.header {
             app.session.prefs.edit(|p| {
@@ -80,9 +80,22 @@ impl Actions {
     }
 }
 
-/// Open a recent file; a file known to be gone asks what to do instead (never merely fails).
+/// Is the file at `path` gone? Asked of the file system directly, for a file whose status the
+/// workers have not reported yet: one `stat` on a click, and only a "not found" counts.
+fn not_found(path: &str) -> bool {
+    matches!(std::fs::metadata(path), Err(e) if matches!(e.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory))
+}
+
+/// Open a recent file; a file that is gone asks what to do instead (never merely fails). A file
+/// the workers have not looked at yet (or could not) is looked at here before deciding; a file
+/// whose `stat` failed some other way is tried, and reports its real error.
 fn open(app: &mut PhotocraftApp, path: &str) {
-    if app.recent_view.status(path) == Some(FileStat::Missing) {
+    let gone = match app.recent_view.status(path) {
+        Some(FileStat::Missing) => true,
+        None => not_found(path),
+        Some(FileStat::Present { .. } | FileStat::Unavailable) => false,
+    };
+    if gone {
         crate::recent_missing_prompt::open(app, path);
     } else if let Err(e) = app.open_path(path) {
         app.open_failed(&crate::file_open::display_name(path), &e);
@@ -125,9 +138,17 @@ fn picture(app: &mut PhotocraftApp, ui: &egui::Ui, area: Rect, max: Vec2, row: &
     }
 }
 
-/// The × that takes a file off the list; says whether it was clicked.
-fn remove_button(ui: &mut egui::Ui, id: egui::Id, at: Rect, name: &str) -> bool {
-    let x = ui.interact(at, id.with("remove"), Sense::click());
+/// The × that takes a file off the list; says whether it was clicked (or activated from the
+/// keyboard). It is drawn while the pointer is over its card or row (`over`), while the card or
+/// row has keyboard focus (`parent_focused`) and while it has focus itself. It is always a tab
+/// stop, but only takes clicks while drawn, so an unseen × never swallows a click on the card.
+fn remove_button(ui: &mut egui::Ui, id: egui::Id, at: Rect, name: &str, over: bool, parent_focused: bool) -> bool {
+    let x_id = id.with("remove");
+    let show = over || parent_focused || ui.memory(|m| m.has_focus(x_id));
+    let x = ui.interact(at, x_id, if show { Sense::click() } else { Sense::focusable_noninteractive() });
+    if !show {
+        return false;
+    }
     let label = crate::i18n::fmt(tl!("Remove {name} from Recent"), &[("name", name)]);
     x.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
     let color = crate::icons::button_chrome(ui, at, false, x.hovered());
@@ -205,13 +226,10 @@ fn card(app: &mut PhotocraftApp, ui: &mut egui::Ui, rect: Rect, row: &Row, now: 
         ui.painter().text(meta_at, Align2::LEFT_TOP, when_label(now, opened), egui::FontId::proportional(12.0), t.text_dim);
     }
 
-    let mut removed = false;
-    if hovered {
-        let close = Rect::from_center_size(pos2(surface.right() - 18.0, surface.top() + 18.0), Vec2::splat(REMOVE_BUTTON));
-        removed = remove_button(ui, id, close, &row.name);
-        if removed {
-            actions.remove = Some(row.path.clone());
-        }
+    let close = Rect::from_center_size(pos2(surface.right() - 18.0, surface.top() + 18.0), Vec2::splat(REMOVE_BUTTON));
+    let removed = remove_button(ui, id, close, &row.name, hovered, resp.has_focus());
+    if removed {
+        actions.remove = Some(row.path.clone());
     }
     let resp = resp.on_hover_text(&row.path).on_hover_cursor(egui::CursorIcon::PointingHand);
     if resp.clicked() && !removed {
@@ -350,13 +368,10 @@ fn list_row(app: &mut PhotocraftApp, ui: &mut egui::Ui, rect: Rect, row: &Row, c
     cell(ui, cols.kind, &row.kind, small.clone(), t.text_dim);
     cell(ui, cols.folder, &row.folder, small, t.text_dim);
 
-    let mut removed = false;
-    if hovered {
-        let close = Rect::from_center_size(pos2(rect.right() - 8.0 - REMOVE_BUTTON / 2.0, rect.center().y), Vec2::splat(REMOVE_BUTTON));
-        removed = remove_button(ui, id, close, &row.name);
-        if removed {
-            actions.remove = Some(row.path.clone());
-        }
+    let close = Rect::from_center_size(pos2(rect.right() - 8.0 - REMOVE_BUTTON / 2.0, rect.center().y), Vec2::splat(REMOVE_BUTTON));
+    let removed = remove_button(ui, id, close, &row.name, hovered, resp.has_focus());
+    if removed {
+        actions.remove = Some(row.path.clone());
     }
     let resp = resp.on_hover_text(&row.path).on_hover_cursor(egui::CursorIcon::PointingHand);
     if resp.clicked() && !removed {
