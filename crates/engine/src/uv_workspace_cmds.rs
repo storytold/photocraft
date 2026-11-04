@@ -56,11 +56,14 @@ fn switch(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"active":active,"documents":s.docs.len()}))
 }
 fn close(s: &mut Session, params: &Value) -> Result<Value> {
-    if params.get("discard").and_then(Value::as_bool) != Some(true) && s.uv_documents().iter().any(DocState::is_dirty) {
-        return Err(EngineError::Other("Unsaved 3D texture changes must be saved or explicitly discarded".into()));
-    }
     let restore_ordinary_workspace = !s.uv_workspace.active;
     switch(s, &json!({"active":true}))?;
+    if params.get("discard").and_then(Value::as_bool) != Some(true) && s.uv_documents().iter().any(DocState::is_dirty) {
+        if restore_ordinary_workspace {
+            switch(s, &json!({"active":false}))?;
+        }
+        return Err(EngineError::Other("Unsaved 3D texture changes must be saved or explicitly discarded".into()));
+    }
     while !s.docs.is_empty() {
         s.close(s.docs.len() - 1);
     }
@@ -101,6 +104,24 @@ mod tests {
     use photocraft_color::{ColorMode, SampleType};
     use photocraft_doc::Document;
     use photocraft_geom::Size;
+
+    fn headless_project() -> (Session, photocraft_doc::DocId, photocraft_doc::DocId) {
+        let mut session = Session::new();
+        let ordinary_index = session.add_document(Document::new("ordinary", Size::new(8, 8), ColorMode::Rgb, SampleType::U8), None);
+        let ordinary_id = session.documents()[ordinary_index].doc.id;
+        let texture_index = session.add_document(Document::new("UV texture", Size::new(8, 8), ColorMode::Rgb, SampleType::U8), None);
+        let texture_id = session.documents()[texture_index].doc.id;
+        session.uv.scene = Some(std::sync::Arc::new(photocraft_uv::Scene::default()));
+        session.uv.bindings.push(Some(texture_id));
+        session.set_active(ordinary_index);
+        (session, ordinary_id, texture_id)
+    }
+
+    fn make_dirty(session: &mut Session, id: photocraft_doc::DocId) {
+        let index = session.documents().iter().position(|state| state.doc.id == id).expect("test document is open");
+        session.set_active(index);
+        session.execute("layer.new.layer", json!({})).expect("new layer marks test document dirty");
+    }
 
     #[test]
     fn close_restores_the_ordinary_bank_when_it_was_active() {
@@ -146,5 +167,42 @@ mod tests {
         assert!(session.uv.scene.is_none());
         assert_eq!(session.documents().len(), 1);
         assert_eq!(session.active().map(|state| state.doc.id), Some(ordinary_id));
+    }
+
+    #[test]
+    fn headless_close_checks_uv_bank_and_does_not_block_on_dirty_ordinary_document() {
+        let (mut session, ordinary_id, texture_id) = headless_project();
+        make_dirty(&mut session, ordinary_id);
+        session.set_active(0);
+        assert!(session.documents().iter().find(|state| state.doc.id == ordinary_id).is_some_and(DocState::is_dirty));
+        assert!(!session.documents().iter().find(|state| state.doc.id == texture_id).is_some_and(DocState::is_dirty));
+
+        session.execute("uv.project.close", json!({"discard":false})).expect("dirty ordinary work is outside the UV project");
+
+        assert_eq!(session.documents().len(), 1);
+        assert_eq!(session.active().map(|state| state.doc.id), Some(ordinary_id));
+        assert!(session.active().is_some_and(DocState::is_dirty));
+        assert!(session.uv.scene.is_none());
+    }
+
+    #[test]
+    fn headless_close_restores_ordinary_bank_after_uv_dirty_refusal_and_discard_closes_uv_docs() {
+        let (mut session, ordinary_id, texture_id) = headless_project();
+        make_dirty(&mut session, texture_id);
+        session.set_active(0);
+
+        assert!(session.execute("uv.project.close", json!({"discard":false})).is_err());
+        assert!(!session.uv_workspace.active, "a rejected close returns to the previously active ordinary workspace");
+        assert_eq!(session.documents().len(), 1);
+        assert_eq!(session.active().map(|state| state.doc.id), Some(ordinary_id));
+        assert_eq!(session.uv_documents().len(), 1);
+        assert_eq!(session.uv_documents()[0].doc.id, texture_id);
+        assert!(session.uv_documents()[0].is_dirty());
+
+        session.execute("uv.project.close", json!({"discard":true})).expect("explicit discard closes the dirty UV project");
+        assert!(!session.uv_workspace.active);
+        assert_eq!(session.documents().len(), 1);
+        assert_eq!(session.active().map(|state| state.doc.id), Some(ordinary_id));
+        assert!(session.uv.scene.is_none());
     }
 }

@@ -227,14 +227,15 @@ pub(crate) fn set(app: &mut PhotocraftApp, layer: LayerId, index: usize, opacity
         && (p.doc, p.revision, p.layer, p.index) == (doc, revision, layer, index)
     {
         if opacity.to_bits() == canonical.to_bits() {
-            app.uv_mask_paint_preview = None;
+            if p.bounds.is_some() || p.rotation.is_some() {
+                p.opacity = opacity;
+                invalidate_preview_cache(p);
+            } else {
+                app.uv_mask_paint_preview = None;
+            }
         } else if p.opacity.to_bits() != opacity.to_bits() {
             p.opacity = opacity;
-            p.bounds = None;
-            p.rotation = None;
-            p.shown = None;
-            p.mask_sampler = FillMaskSampler::default();
-            p.materialized = None;
+            invalidate_preview_cache(p);
         }
     } else if app.uv_mask_paint_preview.is_none() && opacity.to_bits() != canonical.to_bits() {
         app.uv_mask_paint_preview = Some(Preview {
@@ -278,23 +279,32 @@ pub(crate) fn set_fill(app: &mut PhotocraftApp, layer: LayerId, index: usize, bo
         photocraft_doc::mask_paint::EffectKind::Fill { rotation, .. } => *rotation,
         _ => return,
     };
-    if bounds == canonical_bounds && rotation.to_bits() == canonical_rotation.to_bits() {
-        app.uv_mask_paint_preview = None;
-    } else if let Some(p) = app.uv_mask_paint_preview.as_mut()
+    let canonical_transform = bounds == canonical_bounds && rotation.to_bits() == canonical_rotation.to_bits();
+    if let Some(p) = app.uv_mask_paint_preview.as_mut()
         && (p.doc, p.revision, p.layer, p.index) == (doc, revision, layer, index)
     {
-        if p.bounds == Some(bounds) && p.rotation.is_some_and(|current| current.to_bits() == rotation.to_bits()) {
+        if canonical_transform {
+            if p.bounds.is_some() || p.rotation.is_some() {
+                p.bounds = None;
+                p.rotation = None;
+                invalidate_preview_cache(p);
+                if p.opacity.to_bits() == canonical_opacity.to_bits() {
+                    app.uv_mask_paint_preview = None;
+                }
+            }
             return;
         }
-        if p.bounds.is_none() || p.rotation.is_none() {
-            p.mask_sampler = FillMaskSampler::default();
+        if p.bounds == Some(bounds) && p.rotation.is_some_and(|current| current.to_bits() == rotation.to_bits()) {
+            return;
         }
         if !p.opacity.is_finite() {
             p.opacity = canonical_opacity;
         }
         p.bounds = Some(bounds);
         p.rotation = Some(rotation);
-        p.materialized = None;
+        invalidate_preview_cache(p);
+    } else if canonical_transform {
+        return;
     } else if app.uv_mask_paint_preview.is_none() {
         app.uv_mask_paint_preview = Some(Preview {
             generation: NEXT_PREVIEW_GENERATION.fetch_add(1, Ordering::Relaxed),
@@ -309,6 +319,16 @@ pub(crate) fn set_fill(app: &mut PhotocraftApp, layer: LayerId, index: usize, bo
             mask_sampler: FillMaskSampler::default(),
             materialized: None,
         });
+    }
+}
+
+fn invalidate_preview_cache(preview: &mut Preview) {
+    preview.shown = None;
+    preview.materialized = None;
+    let current_key = (preview.bounds.is_some() && preview.rotation.is_some())
+        .then(|| preview_key(preview.revision, preview.layer, preview.index, preview.opacity, preview.bounds, preview.rotation));
+    if preview.mask_sampler.ready.as_ref().is_some_and(|proxy| Some(proxy.key) != current_key) {
+        preview.mask_sampler.ready = None;
     }
 }
 
@@ -427,6 +447,7 @@ pub(crate) fn fill_mask_proxy_at(app: &mut PhotocraftApp, idx: usize, now: Insta
         && result.revision == preview.revision
         && result.layer == preview.layer
         && result.index == preview.index
+        && result.key == key
     {
         preview.mask_sampler.ready = Some(result);
     }

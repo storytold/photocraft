@@ -36,6 +36,14 @@ fn app() -> (PhotocraftApp, LayerId) {
     (PhotocraftApp::new(session, Services::default()), id)
 }
 
+fn fill_app() -> (PhotocraftApp, LayerId) {
+    let (mut app, layer) = app();
+    let state = app.session.active_mut().unwrap();
+    let paint = std::sync::Arc::make_mut(&mut state.doc).layer_mut(layer).unwrap().mask.as_mut().unwrap().paint.as_mut().unwrap();
+    paint.layers[0].kind = EffectKind::Fill { value: 1.0, rotation: 0.0, repeat_u: false, repeat_v: false, mirror_u: false, mirror_v: false };
+    (app, layer)
+}
+
 #[test]
 fn opacity_preview_is_gpu_document_transient_then_cpu_materializes_when_needed() {
     let (mut app, layer) = app();
@@ -333,6 +341,71 @@ fn fill_bounds_preview_uses_low_res_proxy_and_commits_once_on_release() {
 }
 
 #[test]
+fn opacity_and_fill_transform_previews_preserve_each_other_and_commit_as_one_undo_step() {
+    let (mut app, layer) = fill_app();
+    let next_bounds = [3, 4, 21, 18];
+    let next_rotation = 27.0;
+    set_fill(&mut app, layer, 0, next_bounds, next_rotation);
+    set(&mut app, layer, 0, 0.35);
+
+    let commit = super::pending(&app).expect("combined Fill and opacity preview remains pending");
+    assert_eq!((commit.opacity, commit.bounds, commit.rotation), (0.35, Some(next_bounds), Some(next_rotation)));
+    let params = commit.params();
+    assert_eq!(params["opacity"].as_f64().map(|value| value as f32), Some(0.35));
+    assert_eq!(params["bounds"], json!(next_bounds));
+    assert_eq!(params["rotation"], json!(next_rotation));
+    let history = app.session.active().unwrap().history.past_len();
+
+    app.session.active_mut().unwrap().revision += 1;
+    assert!(app.run("layer.select", json!({"layer":layer.0})).is_err(), "a stale preview commit is rejected");
+    let retained = super::pending(&app).expect("failed commit must retain the preview");
+    assert_eq!((retained.opacity, retained.bounds, retained.rotation), (0.35, Some(next_bounds), Some(next_rotation)));
+    assert_eq!(retained.params(), params, "retry still carries all three user-selected parameters");
+    app.session.active_mut().unwrap().revision -= 1;
+
+    app.run("uv.maskPaint.modify", retained.params()).unwrap();
+    assert!(app.uv_mask_paint_preview.is_none());
+    assert_eq!(app.session.active().unwrap().history.past_len(), history + 1, "combined preview commits as one history entry");
+    let committed = app.session.active().unwrap().doc.layer(layer).unwrap().mask.as_ref().unwrap().paint.as_ref().unwrap().layers[0].clone();
+    assert_eq!(committed.opacity, 0.35);
+    assert_eq!(committed.fill_bounds, Some(next_bounds));
+    assert!(matches!(committed.kind, EffectKind::Fill { rotation, .. } if rotation == next_rotation));
+
+    app.run("edit.undo", json!({})).unwrap();
+    let undone = app.session.active().unwrap().doc.layer(layer).unwrap().mask.as_ref().unwrap().paint.as_ref().unwrap().layers[0].clone();
+    assert_eq!(undone.opacity, 1.0);
+    assert_eq!(undone.fill_bounds, None);
+    assert!(matches!(undone.kind, EffectKind::Fill { rotation, .. } if rotation == 0.0));
+}
+
+#[test]
+fn canonical_opacity_and_fill_resets_clear_only_their_own_preview_parts() {
+    let (mut app, layer) = fill_app();
+    let canvas = [0, 0, 32, 24];
+    let bounds = [3, 4, 21, 18];
+
+    set_fill(&mut app, layer, 0, bounds, 27.0);
+    set(&mut app, layer, 0, 0.35);
+    set(&mut app, layer, 0, 1.0);
+    let after_opacity_reset = super::pending(&app).expect("spatial edit remains after opacity returns to canonical");
+    assert_eq!(after_opacity_reset.opacity, 1.0);
+    assert_eq!((after_opacity_reset.bounds, after_opacity_reset.rotation), (Some(bounds), Some(27.0)));
+
+    set_fill(&mut app, layer, 0, canvas, 0.0);
+    assert!(app.uv_mask_paint_preview.is_none(), "resetting the only remaining Fill edit clears the preview");
+
+    set(&mut app, layer, 0, 0.4);
+    set_fill(&mut app, layer, 0, bounds, 14.0);
+    set_fill(&mut app, layer, 0, canvas, 0.0);
+    let after_fill_reset = super::pending(&app).expect("opacity edit remains after Fill transform returns to canonical");
+    assert_eq!(after_fill_reset.opacity, 0.4);
+    assert_eq!((after_fill_reset.bounds, after_fill_reset.rotation), (None, None));
+    let params = after_fill_reset.params();
+    assert_eq!(params["opacity"].as_f64().map(|value| value as f32), Some(0.4));
+    assert!(params.get("bounds").is_none() && params.get("rotation").is_none(), "canonical Fill parameters are omitted while pending opacity is retained");
+}
+
+#[test]
 fn gray_fill_preview_skips_full_cpu_worker_for_both_mask_target_forms() {
     let mut session = photocraft_engine::Session::new();
     session.execute("file.new", json!({"width":512,"height":129})).unwrap();
@@ -437,14 +510,41 @@ fn fill_sampler_throttles_samples_but_commit_keeps_latest_raw_transform() {
     set_fill(&mut app, layer, 0, [8, 0, 40, 32], 0.0);
     let _ = super::fill_mask_proxy_at(&mut app, 0, t0);
     let first_key = super::current_fill_key(&app, 0).unwrap();
+    let (generation, doc, revision, worker_epoch) = {
+        let preview = app.uv_mask_paint_preview.as_ref().unwrap();
+        (preview.generation, preview.doc, preview.revision, std::sync::Arc::clone(&preview.mask_sampler.worker.as_ref().unwrap().cancel_epoch))
+    };
+    app.uv_mask_paint_preview.as_mut().unwrap().mask_sampler.ready =
+        Some(super::FillMaskProxy { generation, doc, revision, layer, index: 0, key: first_key, size: [1, 1], values: std::sync::Arc::new(vec![1.0]) });
+
     set_fill(&mut app, layer, 0, [24, 0, 56, 32], 17.0);
+    assert!(app.uv_mask_paint_preview.as_ref().unwrap().mask_sampler.ready.is_none(), "the proxy for the previous transform no longer matches the current key");
+    assert!(std::sync::Arc::ptr_eq(&worker_epoch, &app.uv_mask_paint_preview.as_ref().unwrap().mask_sampler.worker.as_ref().unwrap().cancel_epoch));
+    assert_eq!(worker_epoch.load(std::sync::atomic::Ordering::Relaxed), 0, "transform changes keep the existing worker alive");
     let (still_unready, next) = super::fill_mask_proxy_at(&mut app, 0, t0 + std::time::Duration::from_millis(20));
     let latest_key = super::current_fill_key(&app, 0).unwrap();
     assert!(still_unready.is_none_or(|proxy| proxy.key != latest_key), "no result can claim parameters that have not been sampled yet");
     assert!(next.is_some(), "a repaint is scheduled while the worker or cadence is pending");
     assert_ne!(super::current_fill_key(&app, 0).unwrap(), first_key);
+    {
+        let schedule = &app.uv_mask_paint_preview.as_ref().unwrap().mask_sampler.schedule;
+        assert_eq!(schedule.last_sampled_at, Some(t0), "the first sample's cadence is preserved");
+        assert_eq!(schedule.latest_key, Some(first_key), "the moved bounds have not launched an early second sample");
+    }
+
+    set(&mut app, layer, 0, 0.75);
+    let (_, opacity_repaint) = super::fill_mask_proxy_at(&mut app, 0, t0 + std::time::Duration::from_millis(30));
+    assert!(opacity_repaint.is_some(), "opacity changes share the same Fill sample cadence");
+    {
+        let preview = app.uv_mask_paint_preview.as_ref().unwrap();
+        assert!(std::sync::Arc::ptr_eq(&worker_epoch, &preview.mask_sampler.worker.as_ref().unwrap().cancel_epoch));
+        assert_eq!(preview.mask_sampler.schedule.last_sampled_at, Some(t0));
+        assert_eq!(preview.mask_sampler.schedule.latest_key, Some(first_key), "opacity does not reset or bypass coalescing");
+    }
+    let latest_key = super::current_fill_key(&app, 0).unwrap();
     let latest = super::pending(&app).unwrap();
     assert_eq!(latest.bounds, Some([24, 0, 56, 32]));
+    assert_eq!(latest.opacity, 0.75);
     assert_eq!(latest.rotation, Some(17.0), "release keeps the raw latest manipulator parameters");
 
     let t50 = t0 + std::time::Duration::from_millis(50);
@@ -460,6 +560,7 @@ fn fill_sampler_throttles_samples_but_commit_keeps_latest_raw_transform() {
     app.run("uv.maskPaint.modify", latest.params()).unwrap();
     let committed = app.session.active().unwrap().doc.layer(layer).unwrap().mask.as_ref().unwrap().paint.as_ref().unwrap().layers[0].clone();
     assert_eq!(committed.fill_bounds, Some([24, 0, 56, 32]));
+    assert_eq!(committed.opacity, 0.75);
     assert!(matches!(committed.kind, EffectKind::Fill { rotation, .. } if rotation == 17.0));
 }
 

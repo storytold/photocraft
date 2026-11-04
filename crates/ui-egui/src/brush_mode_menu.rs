@@ -194,6 +194,10 @@ pub(crate) fn menu_id() -> Id {
     Id::unique("canvas-brush-mode-menu")
 }
 
+fn dismissal_key(ctx: &Context, name: &'static str) -> Id {
+    menu_id().with((name, ctx.viewport_id()))
+}
+
 /// Opens the active tool's menu at screen point `pos`.
 pub(crate) fn open(app: &mut PhotocraftApp, ctx: &Context, pos: [f32; 2]) {
     if !pos.iter().all(|v| v.is_finite()) || items(app.ui.tool).is_empty() {
@@ -227,7 +231,7 @@ fn current_tool(app: &PhotocraftApp) -> bool {
 
 /// A press outside dismisses the popup, and consumes that entire canvas gesture through Up.
 pub(crate) fn blocks_canvas(app: &PhotocraftApp, ctx: &Context) -> bool {
-    let key = menu_id().with("dismiss-pointer");
+    let key = dismissal_key(ctx, "dismiss-pointer");
     if ctx.data(|d| d.get_temp::<bool>(key)).unwrap_or(false) {
         if !ctx.input(|i| i.pointer.any_down()) {
             ctx.data_mut(|d| d.remove::<bool>(key));
@@ -249,7 +253,7 @@ pub(crate) fn blocks_canvas(app: &PhotocraftApp, ctx: &Context) -> bool {
 /// or `ui.context.choose`.
 pub(crate) fn blocks_control(app: &mut PhotocraftApp, ctx: &Context, ev: crate::canvas::ToolEvent) -> bool {
     use crate::canvas::ToolEvent;
-    let key = menu_id().with("control-dismiss");
+    let key = dismissal_key(ctx, "control-dismiss");
     let blocked = ctx.data(|d| d.get_temp::<bool>(key)).unwrap_or(false);
     if blocked {
         if matches!(ev, ToolEvent::Up { .. }) {
@@ -350,7 +354,7 @@ pub(crate) fn show(app: &mut PhotocraftApp, ctx: &Context) {
         close(app);
         // Escape also consumes the release of a right-button gesture still in flight.
         if same_tool && ctx.input(|i| i.pointer.secondary_down()) {
-            ctx.data_mut(|d| d.insert_temp(menu_id().with("dismiss-pointer"), true));
+            ctx.data_mut(|d| d.insert_temp(dismissal_key(ctx, "dismiss-pointer"), true));
         }
         return;
     }
@@ -505,5 +509,82 @@ mod tests {
         assert!(app.ui.brush_picker.is_some());
         assert_eq!(app.ui.uv_workbench.picker_viewport, Some(viewport));
         assert!(app.ui.uv_workbench.picker_3d, "the Brush picker opened by detached 3D keeps its viewport owner");
+    }
+
+    #[test]
+    fn dismiss_latches_are_scoped_to_root_and_detached_viewports() {
+        let detached = ViewportId::from_hash_of("uv-model-window");
+        let ctx = Context::default();
+        PhotocraftApp::setup_context(&ctx, Default::default());
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let root_pointer = dismissal_key(&ctx, "dismiss-pointer");
+        let detached_pointer = menu_id().with(("dismiss-pointer", detached));
+
+        ctx.data_mut(|data| data.insert_temp(detached_pointer, true));
+        let _ = ctx
+            .run_ui(viewport_input(ViewportId::ROOT), |ui| {
+                assert!(!blocks_canvas(&app, ui.ctx()), "a detached pointer latch must not block root canvas input");
+            })
+            .textures_delta
+            .clear();
+        assert!(ctx.data(|data| data.get_temp::<bool>(detached_pointer)).unwrap_or(false), "root input must not clear the detached latch");
+        let _ = ctx
+            .run_ui(viewport_input(detached), |ui| {
+                assert!(blocks_canvas(&app, ui.ctx()), "the detached viewport consumes its own latched gesture");
+            })
+            .textures_delta
+            .clear();
+        assert!(!ctx.data(|data| data.get_temp::<bool>(detached_pointer)).unwrap_or(false), "the owner clears its pointer latch after release");
+
+        let detached_control = menu_id().with(("control-dismiss", detached));
+        let root_up = crate::canvas::ToolEvent::Up { x: 0.0, y: 0.0 };
+        ctx.data_mut(|data| data.insert_temp(detached_control, true));
+        let _ = ctx
+            .run_ui(viewport_input(ViewportId::ROOT), |ui| {
+                assert!(!blocks_control(&mut app, ui.ctx(), root_up), "a detached control latch must not consume root automation input");
+            })
+            .textures_delta
+            .clear();
+        assert!(ctx.data(|data| data.get_temp::<bool>(detached_control)).unwrap_or(false), "root input must not clear the detached control latch");
+        let _ = ctx
+            .run_ui(viewport_input(detached), |ui| {
+                assert!(blocks_control(&mut app, ui.ctx(), root_up), "the owner consumes the pending control release");
+            })
+            .textures_delta
+            .clear();
+        assert!(!ctx.data(|data| data.get_temp::<bool>(detached_control)).unwrap_or(false), "the owner clears its control latch on release");
+
+        ctx.data_mut(|data| data.insert_temp(root_pointer, true));
+        let _ = ctx
+            .run_ui(viewport_input(detached), |ui| {
+                assert!(!blocks_canvas(&app, ui.ctx()), "a root pointer latch must not block detached input");
+            })
+            .textures_delta
+            .clear();
+        assert!(ctx.data(|data| data.get_temp::<bool>(root_pointer)).unwrap_or(false), "detached input must not clear the root latch");
+        let _ = ctx
+            .run_ui(viewport_input(ViewportId::ROOT), |ui| {
+                assert!(blocks_canvas(&app, ui.ctx()), "the root viewport consumes its own latched gesture");
+            })
+            .textures_delta
+            .clear();
+        assert!(!ctx.data(|data| data.get_temp::<bool>(root_pointer)).unwrap_or(false), "the root clears its pointer latch after release");
+
+        let root_control = dismissal_key(&ctx, "control-dismiss");
+        ctx.data_mut(|data| data.insert_temp(root_control, true));
+        let _ = ctx
+            .run_ui(viewport_input(detached), |ui| {
+                assert!(!blocks_control(&mut app, ui.ctx(), root_up), "a root control latch must not consume detached automation input");
+            })
+            .textures_delta
+            .clear();
+        assert!(ctx.data(|data| data.get_temp::<bool>(root_control)).unwrap_or(false), "detached input must not clear the root control latch");
+        let _ = ctx
+            .run_ui(viewport_input(ViewportId::ROOT), |ui| {
+                assert!(blocks_control(&mut app, ui.ctx(), root_up), "the root consumes its own pending control release");
+            })
+            .textures_delta
+            .clear();
+        assert!(!ctx.data(|data| data.get_temp::<bool>(root_control)).unwrap_or(false), "the root clears its control latch on release");
     }
 }
