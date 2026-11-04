@@ -513,6 +513,20 @@ fn svg_group_rasterization_threshold_is_bounded_by_document_depth() {
 }
 
 #[test]
+fn tablet_input_pref_defaults_to_windows_ink() {
+    let mut s = session();
+    assert_eq!(s.prefs().tools.tablet_input, TabletInput::WindowsInk);
+    assert_eq!(s.execute("prefs.get", json!({"path": "tools.tabletInput"})).unwrap(), json!("windowsInk"));
+    assert_eq!(choices("tools.tabletInput"), Some(TabletInput::NAMES));
+    s.execute("prefs.set", json!({"path": "tools.tabletInput", "value": "winTab"})).unwrap();
+    assert_eq!(s.prefs().tools.tablet_input, TabletInput::WinTab);
+    for bad in [json!("ink"), json!(1), json!(true), json!(null)] {
+        assert!(s.execute("prefs.set", json!({"path": "tools.tabletInput", "value": bad})).is_err());
+    }
+    assert_eq!(s.prefs().tools.tablet_input, TabletInput::WinTab, "rejected values change nothing");
+}
+
+#[test]
 fn right_click_with_painting_tools_pref() {
     let mut s = session();
     assert_eq!(s.prefs().tools.right_click_with_painting_tools, RightClickPaint::BrushPicker, "Photoshop: the Brush Preset picker");
