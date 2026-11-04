@@ -19,6 +19,17 @@ pub use craft_pcraft_format::{Hash, TileRef};
 /// Current manifest version written by this build: 2 carries the responsive layout.
 pub const FORMAT_VERSION: u32 = 2;
 
+/// The last manifest version without responsive data. A plain document saves at this
+/// version, so a v1-only reader keeps opening it; only a document carrying the responsive
+/// layout writes [`FORMAT_VERSION`]. When another feature bumps [`FORMAT_VERSION`], the
+/// static assert below fails and this boundary moves with that feature instead of the
+/// writer silently emitting a version that means something else.
+pub const FORMAT_VERSION_WITHOUT_RESPONSIVE: u32 = 1;
+const _: () = assert!(
+    FORMAT_VERSION == FORMAT_VERSION_WITHOUT_RESPONSIVE + 1,
+    "FORMAT_VERSION moved past the responsive boundary: update FORMAT_VERSION_WITHOUT_RESPONSIVE and the save gate in store.rs together with the feature that bumped it"
+);
+
 /// The manifest: craft-pcraft-format's envelope (`format_version`, `generator`, the optional
 /// `thumbnail` and `composite` previews) around the document [`DocM`]. A save with the full-size
 /// composite adds a `full_composite` member after the envelope; [`crate::read_full_composite`]

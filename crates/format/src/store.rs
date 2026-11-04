@@ -1114,7 +1114,7 @@ impl PcraftWriter {
         // Compatibility: a document with no responsive data saves as version 1 (a v1-only
         // reader keeps opening it byte-compatibly); version 2 marks files that carry the
         // responsive layout program.
-        model.format_version = if model.document.responsive.is_empty() { FORMAT_VERSION - 1 } else { FORMAT_VERSION };
+        model.format_version = if model.document.responsive.is_empty() { crate::manifest::FORMAT_VERSION_WITHOUT_RESPONSIVE } else { FORMAT_VERSION };
         let manifest = manifest_json(&model, full_composite)?;
         let stats = SaveStats { tiles_total: c.tiles.len(), blobs_total: c.blobs.len(), manifest_bytes: manifest.len(), ..Default::default() };
         let invalid = |h: &str| FormatError::corrupt(format!("invalid object hash `{h}`"));
