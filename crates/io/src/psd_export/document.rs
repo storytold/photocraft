@@ -191,7 +191,7 @@ fn export_supported_document(
         if !ex.records.is_empty() && matches!(&key, b"Lr16" | b"Lr32" | b"Layr") {
             continue;
         }
-        let block = global_block(sig, key, &data);
+        let block = global_block(sig, key, data);
         // A kept merged-transparency marker describes the opened file's composite. Over an opaque
         // one it would make the first alpha channel read back as the transparency, and vanish.
         if !has_alpha && block.is_merged_transparency_marker() {
