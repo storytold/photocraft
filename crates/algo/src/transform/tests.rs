@@ -88,6 +88,56 @@ fn rgba() -> Surface {
     Surface::new(PixelFormat::RGBA8)
 }
 
+#[test]
+fn exact_mirrors_match_the_general_warp_across_tiles() {
+    for fmt in [PixelFormat::RGBA8, PixelFormat::GRAYA8, PixelFormat::CMYKA8] {
+        let rect = Rect::new(-130, 41, 413, 352);
+        let mut src = Surface::new(fmt);
+        let n = fmt.channels();
+        let mut pixels = vec![0u8; rect.width() as usize * rect.height() as usize * n];
+        for (i, p) in pixels.chunks_exact_mut(n).enumerate() {
+            if i % 13 != 0 {
+                for (c, v) in p.iter_mut().enumerate() {
+                    *v = ((i * 29 + c * 61) % 256) as u8;
+                }
+                p[n - 1] = if i % 7 == 0 { 0 } else { ((i * 13) % 255 + 1) as u8 };
+            }
+        }
+        src.try_write_interleaved(rect, &pixels).unwrap();
+        for h in [
+            Homography([-1.0, 0.0, f64::from(rect.x0 + rect.x1), 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]),
+            Homography([1.0, 0.0, 0.0, 0.0, -1.0, f64::from(rect.y0 + rect.y1), 0.0, 0.0, 1.0]),
+            Homography([-1.0, 0.0, f64::from(rect.x0 + rect.x1 + 237), 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]),
+            Homography([1.0, 0.0, 0.0, 0.0, -1.0, f64::from(rect.y0 + rect.y1 - 173), 0.0, 0.0, 1.0]),
+        ] {
+            let fast = warp_surface(&src, rect, &h, Interp::Nearest).unwrap();
+            let dst = if h.0[0] < 0.0 {
+                Rect::new(h.0[2] as i32 - rect.x1, rect.y0, h.0[2] as i32 - rect.x0, rect.y1)
+            } else {
+                Rect::new(rect.x0, h.0[5] as i32 - rect.y1, rect.x1, h.0[5] as i32 - rect.y0)
+            };
+            let reference = warp_surface_clipped(&src, rect, &h, Interp::Nearest, dst).unwrap();
+            assert_eq!(fast.to_interleaved(dst), reference.to_interleaved(dst), "{fmt:?}, {h:?}");
+        }
+    }
+}
+
+#[test]
+#[ignore = "manual flip benchmark"]
+fn benchmark_exact_flip_against_general_warp() {
+    let rect = Rect::new(0, 0, 6000, 4000);
+    let mut src = rgba();
+    src.fill_rect(rect, &[0.2, 0.5, 0.8, 1.0]);
+    let h = Homography([-1.0, 0.0, 6000.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]);
+    let start = std::time::Instant::now();
+    let reference = warp_surface_clipped(&src, rect, &h, Interp::Nearest, rect).unwrap();
+    eprintln!("general: {:?}", start.elapsed());
+    let start = std::time::Instant::now();
+    let fast = warp_surface(&src, rect, &h, Interp::Nearest).unwrap();
+    eprintln!("fast: {:?}", start.elapsed());
+    assert_eq!(fast.to_interleaved(rect), reference.to_interleaved(rect));
+}
+
 /// The "pixel stretch" (#3773): a 1 px column scaled 100x stays solid across the stretch, as in
 /// Photoshop. Samples past the source edge repeat the edge, and only the outline is antialiased.
 #[test]

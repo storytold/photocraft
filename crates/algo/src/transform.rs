@@ -7,9 +7,9 @@
 //! bounded by the tile working set. Large reductions are pre-filtered with a proper resize first,
 //! so shrinking a layer doesn't alias.
 
-use photocraft_color::PixelFormat;
-use photocraft_geom::Rect;
-use photocraft_raster::{Interrupt, Surface};
+use photocraft_color::{PixelFormat, SampleType};
+use photocraft_geom::{Rect, TILE_SIZE, TileCoord};
+use photocraft_raster::{AllocationError, Interrupt, Surface};
 use serde::{Deserialize, Serialize};
 
 use crate::resample::{Resample, resize_surface};
@@ -302,6 +302,11 @@ fn warp(
     clip: Option<Rect>,
     ctl: &Interrupt,
 ) -> Result<Surface, photocraft_raster::AllocationError> {
+    if clip.is_none()
+        && let Some(out) = exact_flip(src, src_rect, h, interp, ctl)?
+    {
+        return Ok(out);
+    }
     let mut fmt = src.format();
     let converted;
     let mut src = if fmt.alpha {
@@ -549,6 +554,107 @@ fn warp(
     let mut out = out.into_inner().unwrap_or_else(std::sync::PoisonError::into_inner);
     out.prune();
     Ok(out)
+}
+
+/// Copy encoded pixels for the two exact, nearest-neighbour mirror presets. General warping
+/// decodes, premultiplies, samples and encodes every pixel; a mirror only changes their addresses.
+/// Keep the general path for other formats, fractional maps, and clipped warps.
+fn exact_flip(src: &Surface, rect: Rect, h: &Homography, interp: Interp, ctl: &Interrupt) -> Result<Option<Surface>, AllocationError> {
+    let fmt = src.format();
+    if rect.is_empty() || interp != Interp::Nearest || !fmt.alpha || fmt.sample != SampleType::U8 || src.default_bytes().iter().any(|&b| b != 0) {
+        return Ok(None);
+    }
+    let m = h.0;
+    let horizontal = if m[0] == -1.0 && m[1] == 0.0 && m[3..] == [0.0, 1.0, 0.0, 0.0, 0.0, 1.0] {
+        true
+    } else if m[..5] == [1.0, 0.0, 0.0, 0.0, -1.0] && m[6..] == [0.0, 0.0, 1.0] {
+        false
+    } else {
+        return Ok(None);
+    };
+    let axis = if horizontal { m[2] } else { m[5] };
+    if !axis.is_finite() || axis.fract() != 0.0 || axis < f64::from(i32::MIN) || axis > f64::from(i32::MAX) {
+        return Ok(None);
+    }
+    let axis = axis as i64;
+    let edge = |v: i32| axis - i64::from(v);
+    let limits = if horizontal { (edge(rect.x1), edge(rect.x0)) } else { (edge(rect.y1), edge(rect.y0)) };
+    if limits.0 < -i64::from(WARP_REACH) || limits.1 > i64::from(WARP_REACH) {
+        return Ok(None);
+    }
+    let dst_rect =
+        if horizontal { Rect::new(limits.0 as i32, rect.y0, limits.1 as i32, rect.y1) } else { Rect::new(rect.x0, limits.0 as i32, rect.x1, limits.1 as i32) };
+    if dst_rect.x0 < -WARP_REACH || dst_rect.y0 < -WARP_REACH || dst_rect.x1 > WARP_REACH || dst_rect.y1 > WARP_REACH {
+        return Ok(None);
+    }
+    let bpp = fmt.bytes_per_pixel();
+    let size = TILE_SIZE as usize;
+    let mut targets = std::collections::BTreeSet::new();
+    for (&tc, _) in src.tiles() {
+        let r = tc.rect().intersect(&rect);
+        if r.is_empty() {
+            continue;
+        }
+        let mirrored =
+            if horizontal { Rect::new(edge(r.x1) as i32, r.y0, edge(r.x0) as i32, r.y1) } else { Rect::new(r.x0, edge(r.y1) as i32, r.x1, edge(r.y0) as i32) };
+        targets.extend(mirrored.tiles());
+    }
+    let total = targets.len().max(1);
+    let finished = std::sync::atomic::AtomicUsize::new(0);
+    let work = |tc: TileCoord| -> Result<Option<(TileCoord, std::sync::Arc<photocraft_raster::Tile>)>, AllocationError> {
+        if ctl.cancelled() {
+            return Ok(None);
+        }
+        let mut tile = src.try_default_tile()?;
+        let r = tc.rect().intersect(&dst_rect);
+        {
+            let mut dst = tile.bytes_mut();
+            for y in r.y0..r.y1 {
+                let sy = if horizontal { y } else { (axis - 1 - i64::from(y)) as i32 };
+                let mut x = r.x0;
+                while x < r.x1 {
+                    let sx = if horizontal { (axis - 1 - i64::from(x)) as i32 } else { x };
+                    let stc = TileCoord::containing(sx, sy);
+                    let sr = stc.rect();
+                    let count = if horizontal { (sx - sr.x0 + 1).min(r.x1 - x) } else { (sr.x1 - sx).min(r.x1 - x) } as usize;
+                    if let Some(source) = src.tile(stc) {
+                        let bytes = source.try_bytes().map_err(AllocationError::ScratchRead)?;
+                        let src_row = (sy - sr.y0) as usize * size;
+                        let dst_row = (y - tc.ty * TILE_SIZE) as usize * size;
+                        let dst_x = (x - tc.tx * TILE_SIZE) as usize;
+                        for i in 0..count {
+                            let source_x = if horizontal { (sx - sr.x0) as usize - i } else { (sx - sr.x0) as usize + i };
+                            let from = (src_row + source_x) * bpp;
+                            // The general nearest warp leaves fully transparent pixels at zero.
+                            if bytes[from + bpp - 1] != 0 {
+                                let to = (dst_row + dst_x + i) * bpp;
+                                dst[to..to + bpp].copy_from_slice(&bytes[from..from + bpp]);
+                            }
+                        }
+                    }
+                    x += count as i32;
+                }
+            }
+        }
+        let done = finished.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        ctl.progress(0.98 * done as f32 / total as f32);
+        Ok(Some((tc, std::sync::Arc::new(tile))))
+    };
+    let targets: Vec<TileCoord> = targets.into_iter().collect();
+    #[cfg(not(target_arch = "wasm32"))]
+    let tiles: Vec<_> = {
+        use rayon::prelude::*;
+        targets.into_par_iter().map(work).collect::<Result<_, _>>()?
+    };
+    #[cfg(target_arch = "wasm32")]
+    let tiles: Vec<_> = targets.into_iter().map(work).collect::<Result<_, _>>()?;
+    if ctl.cancelled() {
+        return Ok(Some(Surface::new(fmt)));
+    }
+    let mut out = Surface::new(fmt);
+    out.put_tiles(tiles.into_iter().flatten());
+    out.prune();
+    Ok(Some(out))
 }
 
 #[cfg(test)]
