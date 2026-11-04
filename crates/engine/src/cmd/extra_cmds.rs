@@ -699,11 +699,20 @@ pub(crate) fn kind_of(s: &Session, id: LayerId) -> Option<&'static str> {
     })
 }
 
+fn has_vector_mask(s: &Session, id: LayerId, only: Option<&str>) -> bool {
+    only.is_none() && s.active().and_then(|d| d.doc.layer(id)).is_some_and(|l| l.vector_mask.is_some())
+}
+
+/// Whether `rasterize_one` has something to do for this layer.
+fn has_rasterize_work(s: &Session, id: LayerId, only: Option<&str>) -> bool {
+    kind_of(s, id).is_some_and(|k| only.is_none_or(|o| o == k)) || has_vector_mask(s, id, only)
+}
+
 /// Rasterize one layer; `only` restricts it to one kind. Without `only` (Rasterize › Layer / All
 /// Layers: "all vector data") a vector mask becomes a pixel mask too; layer effects stay live, as
 /// in Photoshop (Rasterize › Layer Style bakes them). Returns false when there was nothing to do.
 pub(crate) fn rasterize_one(s: &mut Session, id: LayerId, only: Option<&str>, key: &str) -> Result<bool> {
-    let vector_mask = only.is_none() && s.active().and_then(|d| d.doc.layer(id)).is_some_and(|l| l.vector_mask.is_some());
+    let vector_mask = has_vector_mask(s, id, only);
     let content = rasterize_content(s, id, only, key)?;
     if vector_mask {
         s.execute("layer.rasterize.vectorMask", json!({"layer": id.0, "coalesce": key}))?;
@@ -770,36 +779,64 @@ fn rasterize_content(s: &mut Session, id: LayerId, only: Option<&str>, key: &str
 /// rasterize"), every selected layer the command applies to, in one history step.
 pub(crate) fn rasterize(s: &mut Session, p: &Value, only: Option<&'static str>) -> Result<Value> {
     let ids = crate::layer_multi_cmds::targets(s, p)?;
+    rasterize_layers(s, ids, only, rasterize_one)
+}
+
+fn nothing_to_rasterize(only: Option<&str>, many: bool) -> EngineError {
+    EngineError::Other(match (only, many) {
+        (Some(k), false) => format!("the layer is not a {k} layer"),
+        (Some(k), true) => format!("none of the selected layers is a {k} layer"),
+        (None, false) => "the layer has nothing to rasterize".into(),
+        (None, true) => "none of the selected layers has anything to rasterize".into(),
+    })
+}
+
+/// Convert `ids` with `convert` as one history step; a layer that fails takes back the ones
+/// converted before it (#4974).
+fn rasterize_layers(
+    s: &mut Session,
+    ids: Vec<LayerId>,
+    only: Option<&str>,
+    convert: impl Fn(&mut Session, LayerId, Option<&str>, &str) -> Result<bool>,
+) -> Result<Value> {
     let many = ids.len() > 1;
-    let key = step_key(s, "rasterize");
-    let mut done = Vec::new();
-    for id in ids {
-        if rasterize_one(s, id, only, &key)? {
-            done.push(id.0);
-        }
+    // Refused before a step starts: a failed `compound` still moves the revision, and a command
+    // that changes nothing must leave it alone.
+    if !ids.iter().any(|&id| has_rasterize_work(s, id, only)) {
+        return Err(nothing_to_rasterize(only, many));
     }
-    let Some(&first) = done.first() else {
-        return Err(EngineError::Other(match (only, many) {
-            (Some(k), false) => format!("the layer is not a {k} layer"),
-            (Some(k), true) => format!("none of the selected layers is a {k} layer"),
-            (None, false) => "the layer has nothing to rasterize".into(),
-            (None, true) => "none of the selected layers has anything to rasterize".into(),
-        }));
-    };
+    let key = step_key(s, "rasterize");
+    let (first, done) = crate::analysis_cmds::compound(s, "Rasterize", |s| {
+        let mut done = Vec::new();
+        for id in ids {
+            if convert(s, id, only, &key)? {
+                done.push(id.0);
+            }
+        }
+        let Some(&first) = done.first() else { return Err(nothing_to_rasterize(only, many)) };
+        Ok((first, done))
+    })?;
     let active = s.active().and_then(|d| d.active_layer).map(|id| id.0).filter(|id| done.contains(id));
     Ok(json!({"layer": active.unwrap_or(first), "layers": done}))
 }
 
 pub(crate) fn rasterize_all(s: &mut Session) -> Result<Value> {
     let ids: Vec<LayerId> = s.active().map(|d| d.doc.walk().into_iter().map(|(_, _, l)| l.id).collect()).unwrap_or_default();
-    let key = step_key(s, "rasterizeAll");
-    let mut n = 0;
-    for id in ids {
-        // Every sub-step shares one history entry via the coalescing key.
-        if rasterize_one(s, id, None, &key)? {
-            n += 1;
-        }
+    let ids: Vec<LayerId> = ids.into_iter().filter(|&id| has_rasterize_work(s, id, None)).collect();
+    if ids.is_empty() {
+        return Ok(json!({"rasterized": 0}));
     }
+    let key = step_key(s, "rasterizeAll");
+    let n = crate::analysis_cmds::compound(s, "Rasterize All Layers", |s| {
+        let mut n = 0;
+        for id in ids {
+            // Every sub-step shares one history entry via the coalescing key.
+            if rasterize_one(s, id, None, &key)? {
+                n += 1;
+            }
+        }
+        Ok(n)
+    })?;
     Ok(json!({"rasterized": n}))
 }
 
