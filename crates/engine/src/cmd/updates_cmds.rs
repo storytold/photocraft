@@ -9,7 +9,6 @@ use serde_json::{Value, json};
 use crate::commands::{CommandSpec, always};
 use crate::{EngineError, Result, Session};
 
-pub const RELEASES: &str = "https://github.com/storytold/photocraft/releases";
 pub type CheckResult = std::result::Result<Option<Release>, String>;
 /// Starts background work and returns immediately. No document or personal data is sent.
 pub type CheckFn = Box<dyn FnMut() -> std::result::Result<Receiver<CheckResult>, String> + Send>;
@@ -130,7 +129,7 @@ mod tests {
         for _ in 0..3 {
             assert_eq!(s.execute("help.checkForUpdates", json!({})).unwrap()["status"], "checking");
         }
-        tx.send(Ok(Some(Release { version: "1.0.0".into(), url: format!("{RELEASES}/tag/v1.0.0") }))).unwrap();
+        tx.send(Ok(Some(Release { version: "1.0.0".into(), url: "https://github.com/storytold/photocraft/releases/tag/v1.0.0".into() }))).unwrap();
         let status = s.execute("updates.status", json!({})).unwrap();
         assert_eq!(status["result"]["status"], "available");
         assert_eq!(status["result"]["release"]["version"], "1.0.0");
