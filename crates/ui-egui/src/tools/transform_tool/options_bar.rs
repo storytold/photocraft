@@ -127,7 +127,9 @@ fn skew_about_pivot(app: &mut PhotocraftApp, skew_h: f64, skew_v: f64) {
 }
 
 /// Width of flip, mode, cancel and commit actions kept at the end of the options bar.
-const ACTIONS_W: f32 = 221.0;
+pub(super) const ACTIONS_W: f32 = 221.0;
+
+const COMPACT_FIELDS_W: f32 = 510.0;
 
 /// Width of the action buttons when they follow the Warp fields (one more than the box bar: Reset).
 const WARP_ACTIONS_W: f32 = 257.0;
@@ -201,7 +203,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     } else {
         transform_fields(app, &mut row, &t);
     }
-    let start = row.min_rect().right().min(split);
+    let start = if fields.width() < COMPACT_FIELDS_W { split } else { row.min_rect().right().min(split) };
     let actions = egui::Rect::from_min_max(egui::pos2(start, bar.top()), egui::pos2(start + buttons_w, bar.bottom()));
     let mut btns = ui.new_child(egui::UiBuilder::new().id_salt("transform-actions").max_rect(actions).layout(egui::Layout::right_to_left(egui::Align::Center)));
     transform_actions(app, &mut btns, warping, t.content_aware.is_none());
@@ -209,9 +211,8 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
 fn transform_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: &TransformSession) {
     let available = ui.available_width();
-    let compact = available < 510.0;
-    let narrow = available < 435.0;
-    position_size_fields_with(app, ui, t, !narrow);
+    let compact = available < COMPACT_FIELDS_W;
+    let narrow = !position_size_fields_with(app, ui, t, compact.then_some(18.0));
     if compact {
         let more = crate::icons::button(ui, "ellipsis", 18.0, false, tl!("More transform controls"));
         more.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("More transform controls")));
@@ -302,11 +303,13 @@ fn anchor_grid_widget(ui: &mut egui::Ui, current_anchor: Option<usize>) -> Optio
 
 /// The reference point's X/Y and the W/H scale fields (with the aspect link) of the options bar.
 pub(crate) fn position_size_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: &TransformSession) {
-    position_size_fields_with(app, ui, t, true);
+    position_size_fields_with(app, ui, t, None);
 }
 
-fn position_size_fields_with(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: &TransformSession, show_size: bool) {
-    let compact = ui.available_width() < 510.0;
+/// Draw X/Y first, then use the row's remaining width to decide whether W/H and the trailing
+/// More button fit. Length units give W/H wider fields than percentages.
+fn position_size_fields_with(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: &TransformSession, trailing_more_w: Option<f32>) -> bool {
+    let compact = ui.available_width() < COMPACT_FIELDS_W;
     let tk = crate::theme::Tokens::get(ui.ctx());
     let (sx, sy, _, _) = readout(t);
     let lbl = |ui: &mut egui::Ui, s: &str| {
@@ -336,19 +339,7 @@ fn position_size_fields_with(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: &Tra
         s.quad = s.quad.map(|q| [q[0] + dx, q[1] + dy]);
         s.pivot = [px as f64, py as f64];
     }
-    if !show_size {
-        return;
-    }
-    crate::widgets::vline(ui, 22.0);
-    // W and H in the unit picked from their right-click menu: the scale in percent, or the box's
-    // length (Photoshop's units, at the document's resolution).
     let u = size_unit(app);
-    let (side_w, side_h) = (t.rect[2] - t.rect[0], t.rect[3] - t.rect[1]);
-    let (wlim, hlim) = (scale_limit_pct(side_w), scale_limit_pct(side_h));
-    let (wlim_u, hlim_u) = (size_shown(&u, f64::from(wlim), side_w), size_shown(&u, f64::from(hlim), side_h));
-    let (mut w, mut h) = (size_shown(&u, sx, side_w), size_shown(&u, sy, side_h));
-    let (suffix, places) = (u.unit.suffix(), u.unit.decimals() as u32);
-    // Lengths need more room than a percentage ("2116.67 mm").
     let size_w = if u.unit == photocraft_engine::prefs::Unit::Percent {
         if compact { 51.0 } else { 66.0 }
     } else if compact {
@@ -356,6 +347,27 @@ fn position_size_fields_with(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: &Tra
     } else {
         84.0
     };
+    if let Some(more_w) = trailing_more_w {
+        let mut font = egui::TextStyle::Body.resolve(ui.style());
+        font.size = 12.0;
+        let labels_w = ui
+            .ctx()
+            .fonts_mut(|fonts| ["W:", "H:"].iter().map(|text| fonts.layout_no_wrap((*text).into(), font.clone(), egui::Color32::WHITE).size().x).sum::<f32>());
+        // Divider, two labels, two fields, aspect link, More, and their seven item gaps.
+        let needed = 9.0 + labels_w + 2.0 * size_w + 22.0 + more_w + 7.0 * ui.spacing().item_spacing.x + 2.0;
+        if ui.available_width() < needed {
+            return false;
+        }
+    }
+    crate::widgets::vline(ui, 22.0);
+    // W and H in the unit picked from their right-click menu: the scale in percent, or the box's
+    // length (Photoshop's units, at the document's resolution).
+    let (side_w, side_h) = (t.rect[2] - t.rect[0], t.rect[3] - t.rect[1]);
+    let (wlim, hlim) = (scale_limit_pct(side_w), scale_limit_pct(side_h));
+    let (wlim_u, hlim_u) = (size_shown(&u, f64::from(wlim), side_w), size_shown(&u, f64::from(hlim), side_h));
+    let (mut w, mut h) = (size_shown(&u, sx, side_w), size_shown(&u, sy, side_h));
+    let (suffix, places) = (u.unit.suffix(), u.unit.decimals() as u32);
+    // Lengths need more room than a percentage ("2116.67 mm").
     // Whatever their unit, W and H take any other typed in (`500 px` or `2 in` in percent, `50%`
     // in a length), converted at the document's resolution against the box's original side (#6284).
     let units = crate::widgets::FieldUnits { unit: u.unit, dpi: u.dpi, ppi: u.ppi };
@@ -386,6 +398,7 @@ fn position_size_fields_with(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: &Tra
         };
         scale_about_pivot(app, kx, ky);
     }
+    true
 }
 
 /// Options bar fields in Warp mode: style, bend, the split icons and the grid menu.
