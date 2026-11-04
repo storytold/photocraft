@@ -72,9 +72,27 @@ pub fn copy_metadata(from: &Path, to: &Path) -> io::Result<()> {
     let acl = Ok(());
 
     // A save over a 0600 file must not widen it to whatever the process default is.
+    #[cfg(unix)]
+    let permissions = std::fs::metadata(from).and_then(|m| set_permissions_keeping_group(&m, to));
+    #[cfg(not(unix))]
     let permissions = std::fs::metadata(from).and_then(|m| std::fs::set_permissions(to, m.permissions()));
 
     attributes.and(acl).and(created).and(permissions)
+}
+
+/// Give `to` the permission bits of the replaced file (`from`), and its group when it has another:
+/// group bits are access for *that* group, so on a replacement owned by a different one (a
+/// setgid folder, say) they would hand the file to people the original never named. If the
+/// group cannot be restored (the owner is not a member), the group bits are left off.
+#[cfg(unix)]
+fn set_permissions_keeping_group(from: &std::fs::Metadata, to: &Path) -> io::Result<()> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let mut permissions = from.permissions();
+    if std::fs::metadata(to)?.gid() != from.gid() && std::os::unix::fs::chown(to, None, Some(from.gid())).is_err() {
+        permissions.set_mode(permissions.mode() & !0o070);
+    }
+    // After the chown, which clears setuid/setgid.
+    std::fs::set_permissions(to, permissions)
 }
 
 /// The creation time ("Created" in Finder) of the file being replaced, onto the file replacing
