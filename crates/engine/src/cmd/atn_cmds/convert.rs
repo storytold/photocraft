@@ -6,6 +6,13 @@ use crate::actions_cmds::{color_from_atn, color_to_atn};
 
 // ------------------------------------------------------------------ import
 
+/// Portable files admit the recorder's command surface and playback controls; unknown IDs stay opaque.
+fn portable_native(id: &str) -> bool {
+    crate::commands::find(id).is_none()
+        || crate::actions_cmds::replayable(id)
+        || matches!(id, super::STOP_MESSAGE | super::PHOTOSHOP_STEP | "actions.conditional")
+}
+
 /// A step with no PhotoCraft equivalent.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct Unsupported {
@@ -300,11 +307,7 @@ fn read_native(item: &AtnItem, input: NativeInput) -> std::result::Result<Option
     // Unknown/future IDs remain preservable and fail normal dispatch without a side effect.
     // Re-importing after an upgrade checks any newly registered command against this policy.
     // Local persistence retains every native step without executing it.
-    if matches!(input, NativeInput::Portable)
-        && crate::commands::find(&id).is_some()
-        && !crate::actions_cmds::replayable(&id)
-        && !matches!(id.as_str(), super::STOP_MESSAGE | super::PHOTOSHOP_STEP | "actions.conditional")
-    {
+    if matches!(input, NativeInput::Portable) && !portable_native(&id) {
         return Err(format!("native action command `{id}` is not permitted in a portable Actions file"));
     }
     let params = native_text(descriptor, "params")?;
@@ -344,8 +347,8 @@ pub(crate) fn library_items(id: &str, params: &Value, set: &str) -> std::result:
     Ok(vec![native_item(id, params)?])
 }
 
-/// Convert a `.atn` file. Fails only when the file is unreadable: every step imports, as a
-/// command or as a kept Photoshop step.
+/// Convert a portable `.atn` file without dispatching its steps. Reject malformed files and
+/// registered native commands that recording forbids; keep unknown Photoshop events opaque.
 pub fn import(bytes: &[u8]) -> std::result::Result<Imported, String> {
     import_with_encoding(bytes, None)
 }
@@ -503,7 +506,9 @@ pub fn parse_function_key(key: &str) -> Option<(u16, bool, bool)> {
 }
 
 /// The `.atn` bytes of `actions` as the set `set`. `function_keys` gives each action's key
-/// (`F1`…`F15`, with `Shift+` and `Cmd+` as [`function_key_name`] writes them). PhotoCraft-only steps use the reserved native event, or are omitted with `skip_unsupported`.
+/// (`F1`…`F15`, with `Shift+` and `Cmd+` as [`function_key_name`] writes them). PhotoCraft-only steps
+/// use the reserved native event if portable import permits them, otherwise export fails.
+/// With `skip_unsupported`, native steps are omitted and reported.
 pub fn export(
     set: &str,
     actions: &[&Action],
@@ -583,6 +588,13 @@ fn export_set(
                         continue;
                     }
                     return Err("invalid kept Photoshop step".into());
+                }
+                None if !portable_native(id) => {
+                    if skip_unsupported {
+                        skipped.push(Skipped { action: a.name.clone(), step: i, id: id.clone() });
+                        continue;
+                    }
+                    return Err(format!("native action command `{id}` is not permitted in a portable Actions file"));
                 }
                 None => vec![native_item(id, params)?],
             };

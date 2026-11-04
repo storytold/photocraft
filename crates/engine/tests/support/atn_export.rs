@@ -3,25 +3,43 @@ use photocraft_engine::{
     Session,
     actions_cmds::Action,
     atn_cmds,
-    preset_store::{self, ACTIONS_FILE, MemBackend, PresetBackend},
+    preset_store::{self, ACTIONS_FILE, MAX_ACTIONS_BYTES, MemBackend, PresetBackend},
 };
 use photocraft_psd::{
     atn::{self, AtnItem},
     descriptor::Value as D,
 };
 
-/// Load default export through the durable store, retaining every native ID and JSON parameter exactly.
+/// Persist and reopen every native ID and JSON value, then check the portable export/import contract.
 pub fn preserved(set: &str, action: &Action) -> Vec<AtnItem> {
-    let (bytes, skipped) = atn_cmds::export(set, &[action], &[], false).unwrap();
-    assert!(skipped.is_empty());
-    // The durable library preserves every native ID and JSON value. Portable imports
-    // deliberately apply the stricter recorder policy, covered by native-admission tests.
     let store = MemBackend::default();
-    store.write(ACTIONS_FILE, &bytes).unwrap();
+    let mut session = Session::new();
+    assert!(session.attach_preset_store(preset_store::open(Box::new(store.clone()))).is_empty());
+    let mut stored = action.clone();
+    stored.set = Some(set.into());
+    session.actions.list.push(stored);
+    session.actions.rev += 1;
+    session.sync_preset_store();
+    let bytes = store.read(ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap();
     let mut loaded = Session::new();
     assert!(loaded.attach_preset_store(preset_store::open(Box::new(store))).is_empty());
     assert_eq!(loaded.actions.list[0].steps, action.steps);
-    atn::parse(&bytes).unwrap().actions[0].items.clone()
+    // Admission is tested independently with known forbidden IDs. This shared helper also
+    // requires export and import to agree, without treating portable export as local storage.
+    let bytes = match atn_cmds::import(&bytes) {
+        Ok(_) => {
+            let (portable, skipped) = atn_cmds::export(set, &[action], &[], false).unwrap();
+            assert!(skipped.is_empty());
+            assert_eq!(atn_cmds::import(&portable).unwrap().actions[0].steps, action.steps);
+            portable
+        }
+        Err(error) => {
+            assert!(error.contains("not permitted in a portable Actions file"), "{error}");
+            assert_eq!(atn_cmds::export(set, &[action], &[], false).unwrap_err(), error);
+            bytes
+        }
+    };
+    atn::parse_sets(&bytes).unwrap().into_iter().flat_map(|file| file.actions).find(|record| record.name.to_string_lossy() == action.name).unwrap().items
 }
 
 /// A one-step command cannot be emitted as a lossy Photoshop approximation.
