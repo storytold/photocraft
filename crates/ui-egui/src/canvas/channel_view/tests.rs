@@ -83,6 +83,87 @@ fn channel_eyes_reuse_composite_until_pixels_change() {
 }
 
 #[test]
+fn replaced_document_invalidates_channel_composite_when_content_revision_is_unchanged() {
+    let mut app = PhotocraftApp::new(Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 64, "height": 32})).unwrap();
+    app.run("edit.fill", json!({"color": "#4080c0"})).unwrap();
+    app.sync_views();
+    let ctx = egui::Context::default();
+    app.run("channel.setVisible", json!({"channel": "red", "visible": false})).unwrap();
+    assert!(ensure(&mut app, &ctx, 0).is_some());
+    let id = app.session.active().unwrap().doc.id.0;
+    let original_content = app.channel_views.get(&id).unwrap().source.as_ref().unwrap().content;
+    let original_sample = app.channel_views.get(&id).unwrap().source.as_ref().unwrap().pixels[0];
+
+    // Match a UV mask-cache refresh: new document pixels and a new UI revision, while the
+    // content revision stays fixed because this refresh is not a user edit or undo step.
+    app.run("edit.fill", json!({"color": "#e02010"})).unwrap();
+    let state = app.session.active_mut().unwrap();
+    state.view_revision += 1;
+
+    assert_eq!(state.revision.wrapping_sub(state.view_revision), original_content);
+    assert!(ensure(&mut app, &ctx, 0).is_some());
+    let refreshed_sample = app.channel_views.get(&id).unwrap().source.as_ref().map(|source| source.pixels[0]);
+    assert!(refreshed_sample.is_none_or(|sample| sample != original_sample), "a replaced document must invalidate or recompute its stale composite");
+}
+
+#[cfg(all(feature = "uv-workbench", not(target_arch = "wasm32")))]
+#[test]
+fn real_uv_reimport_invalidates_channel_composite_after_bound_mask_cache_refresh() {
+    use photocraft_color::PixelFormat;
+    use photocraft_doc::mask_paint::Stack;
+    use photocraft_raster::Surface;
+
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("mesh.obj");
+    std::fs::write(&source, "mtllib mesh.mtl\nv 0 0 0\nv 1 0 0\nv 0 1 0\nvt 0 0\nvt 1 0\nvt 0 1\nusemtl Mat\nf 1/1 2/2 3/3\n").unwrap();
+    std::fs::write(temp.path().join("mesh.mtl"), "newmtl Mat\nKd 1 1 1\n").unwrap();
+
+    let mut app = PhotocraftApp::new(Session::new(), crate::Services::default());
+    app.run("uv.workspace.activate", json!({"active":true})).unwrap();
+    app.run("uv.model.import", json!({"path":source})).unwrap();
+    app.run("uv.texture.create", json!({"width":32,"height":32})).unwrap();
+    app.run("edit.fill", json!({"color":"#ff0000"})).unwrap();
+    app.run("layer.layerMask.revealAll", json!({})).unwrap();
+    let doc_id = app.session.active().unwrap().doc.id;
+    let layer = app.session.active().unwrap().active_layer.unwrap();
+
+    // Seed a stale flattened mask while keeping its editable base at full visibility. The real
+    // reimport command must refresh this bound document through apply_bound_mask_cache_updates.
+    let state = app.session.active_mut().unwrap();
+    let mask = std::sync::Arc::make_mut(&mut state.doc).layer_mut(layer).unwrap().mask.as_mut().unwrap();
+    mask.surface = Surface::with_default(PixelFormat::GRAY8, &[0.0]);
+    mask.paint = Some(Stack { base: Surface::with_default(PixelFormat::GRAY8, &[1.0]), layers: Vec::new(), active: 0 });
+
+    app.run("channel.setVisible", json!({"channel":"red","visible":false})).unwrap();
+    app.sync_views();
+    let idx = app.session.documents().iter().position(|document| document.doc.id == doc_id).unwrap();
+    let ctx = egui::Context::default();
+    assert!(ensure(&mut app, &ctx, idx).is_some());
+    let id = doc_id.0;
+    let old_sample = app.channel_views.get(&id).unwrap().source.as_ref().unwrap().pixels[0];
+
+    app.run("uv.model.reimport", json!({})).unwrap();
+    assert!(ensure(&mut app, &ctx, idx).is_some());
+    let state = app.session.documents().get(idx).unwrap();
+    let source = app.channel_views.get(&id).unwrap().source.as_ref().unwrap();
+    assert_ne!(source.pixels[0], old_sample, "the reimported mask pixels must replace the cached composite");
+    let expected = render(&state.doc, &state.channel_view, state.doc.bounds(), 1, Look::default(), state.active_layer).unwrap();
+    let mut unused = None;
+    let actual = render_with_source(
+        &state.doc,
+        &state.channel_view,
+        state.doc.bounds(),
+        1,
+        Look::default(),
+        state.active_layer,
+        CompositeSource { cached: Some(&source.pixels), fresh: &mut unused },
+    )
+    .unwrap();
+    assert_eq!(actual, expected, "the partial-channel preview must use the reimported document pixels");
+}
+
+#[test]
 fn plain_composite_draws_nothing() {
     let s = session();
     let st = s.active().unwrap();

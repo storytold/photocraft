@@ -67,7 +67,7 @@ pub(super) fn texels_into(format: wgpu::TextureFormat, px: &[[f32; 4]], out: &mu
 /// IEEE 754 binary32 → binary16, round to nearest even; overflow saturates to the largest
 /// finite half (65504) so HDR values never become infinite, NaN becomes 0. Branch-light: the
 /// rounding is done with integer adds on the f32 bits (and an f32 add for subnormals).
-pub(super) fn f32_to_f16(v: f32) -> u16 {
+pub(crate) fn f32_to_f16(v: f32) -> u16 {
     // 2^-14: the smallest normal half; below it the result is subnormal (or zero).
     const MIN_NORMAL: u32 = 113 << 23;
     // 2^16: halves overflow from here (65520 and up round to infinity; saturate instead).

@@ -7,6 +7,8 @@ pub enum Kernel {
     Clear,
     Content,
     Mask,
+    /// One step of an editable mask Paint stack.
+    MaskStack,
     Blend,
     /// `Content` then `Blend` in one pass: a plain layer's pixels blended straight onto A.
     LayerBlend,
@@ -54,6 +56,7 @@ impl Kernel {
             Kernel::Clear | Kernel::CopyRect | Kernel::CopyFull => return None,
             Kernel::Content => "fs_content",
             Kernel::Mask => "fs_mask",
+            Kernel::MaskStack => "fs_mask_stack",
             Kernel::Blend => "fs_blend",
             Kernel::LayerBlend => "fs_layerblend",
             Kernel::LayerBatch => "fs_layerbatch",
@@ -96,9 +99,10 @@ impl Kernel {
     }
 
     /// Every kernel with a pipeline.
-    pub const DRAWN: [Kernel; 24] = [
+    pub const DRAWN: [Kernel; 25] = [
         Kernel::Content,
         Kernel::Mask,
+        Kernel::MaskStack,
         Kernel::Blend,
         Kernel::LayerBlend,
         Kernel::LayerBatch,
@@ -129,6 +133,8 @@ impl Kernel {
 pub enum Role {
     Content,
     Mask,
+    /// An editable Paint surface belonging to a layer mask. The index distinguishes residents.
+    MaskPaint(u16),
     /// A stroked shape's stroke alone (its fill uses `Content`).
     Stroke,
 }
@@ -165,6 +171,8 @@ pub struct Pass<'a> {
     pub fill: f32,
     /// Layer pixels (raster / text / shape / smart cache / fill cache).
     pub tex: Option<TexUse<'a>>,
+    /// Full source texture for an editable mask Fill with transformed UVs.
+    pub mask_fill: Option<MaskFillUse<'a>>,
     /// Colour outside `tex` (the surface's default pixel), the solid fill colour, or the effect
     /// colour.
     pub color: [f32; 4],
@@ -208,9 +216,23 @@ impl SurfaceRef<'_> {
 #[derive(Clone, Debug)]
 pub struct MaskUse<'a> {
     pub layer: LayerId,
-    pub surface: SurfaceRef<'a>,
+    pub source: MaskSource<'a>,
     pub density: f32,
     pub default: f32,
+}
+
+#[derive(Clone, Debug)]
+pub struct MaskFillUse<'a> {
+    pub layer: LayerId,
+    pub index: u16,
+    pub surface: &'a Surface,
+    pub size: [u32; 2],
+}
+
+#[derive(Clone, Debug)]
+pub enum MaskSource<'a> {
+    Surface(SurfaceRef<'a>),
+    Slot(Slot),
 }
 
 impl<'a> Pass<'a> {
@@ -226,6 +248,7 @@ impl<'a> Pass<'a> {
             opacity: 1.0,
             fill: 1.0,
             tex: None,
+            mask_fill: None,
             color: [0.0; 4],
             mask: None,
             adjust_kind: 0,

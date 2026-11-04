@@ -8,6 +8,22 @@
 /// Shell commands: id, label, menu path, default shortcut.
 pub const SHELL_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("layer.selectUnderCursor", "Select Layer Under Cursor", &[], None),
+    #[cfg(feature = "uv-workbench")]
+    ("window.uvWorkbench", "3D / UV Workbench", &["Window"], None),
+    #[cfg(feature = "uv-workbench")]
+    ("window.workspace.threeD", "3D", &["Window", "Workspace"], None),
+    #[cfg(feature = "uv-workbench")]
+    ("file.uv.import", "Import Model…", &["File", "3D Import"], None),
+    #[cfg(feature = "uv-workbench")]
+    ("file.uv.reimport", "Reimport", &["File", "3D Import"], None),
+    #[cfg(feature = "uv-workbench")]
+    ("file.uv.settings", "Import Settings…", &["File", "3D Import"], None),
+    #[cfg(feature = "uv-workbench")]
+    ("file.uv.openProject", "Open 3D Project…", &["File", "3D Import"], None),
+    #[cfg(feature = "uv-workbench")]
+    ("file.uv.saveProject", "Save 3D Project…", &["File", "3D Import"], None),
+    #[cfg(feature = "uv-workbench")]
+    ("file.uv.closeProject", "Close 3D Project", &["File", "3D Import"], None),
     ("ui.symmetryTransform", "Transform Symmetry", &[], None),
     // Right-click the options bar's tool icon (#2825); `tool.resetAll` asks first.
     ("tool.reset", "Reset Tool", &[], None),

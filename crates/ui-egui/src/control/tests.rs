@@ -1,5 +1,20 @@
 use super::*;
 
+#[cfg(feature = "uv-workbench")]
+#[test]
+fn ui_inspect_reports_uv_renderer_state_without_map_contents() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let ctx = egui::Context::default();
+    let inspected = call(&mut app, &ctx, "ui.inspect", json!({}));
+    assert_eq!(inspected.pointer("/result/uvViewport/rendererActive"), Some(&json!(false)));
+    assert_eq!(inspected.pointer("/result/uvViewport/pbrEnabled"), Some(&json!(app.ui.uv_workbench.lighting.pbr)));
+    assert_eq!(inspected.pointer("/result/uvViewport/pbrActive"), Some(&json!(false)));
+    assert_eq!(inspected.pointer("/result/uvViewport/channel"), Some(&json!(app.ui.uv_workbench.channel.label())));
+    assert!(inspected.pointer("/result/uvViewport/maps").is_some());
+    assert!(inspected.pointer("/result/uvViewport/pixels").is_none());
+    assert!(inspected.pointer("/result/uvViewport/paths").is_none());
+}
+
 fn call(app: &mut PhotocraftApp, ctx: &egui::Context, method: &str, params: Value) -> Value {
     let (req, _rx) = ControlRequest::new(method, params);
     match handle(app, ctx, &req) {

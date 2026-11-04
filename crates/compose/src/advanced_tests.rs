@@ -168,7 +168,7 @@ fn knockout_follows_masks_and_transparency_shapes() {
         // A mask hiding x >= 3: only x < 3 knocks out.
         let mut m = photocraft_raster::Surface::new(PixelFormat::new(ColorMode::Grayscale, depth, false));
         m.fill_rect(Rect::new(0, 0, 3, 8), &photocraft_raster::from_rgba(&m.format(), [1.0; 4]));
-        k.mask = Some(LayerMask { surface: m, enabled: true, linked: true, density: 1.0, feather: 0.0 });
+        k.mask = Some(LayerMask { surface: m, enabled: true, linked: true, density: 1.0, feather: 0.0, paint: None });
         d.layers.push(k);
         check(&d, 1, 2, WHITE, "inside the mask");
         check(&d, 4, 2, GREEN, "masked out");
@@ -444,7 +444,7 @@ fn layer_mask_hides_effects() {
         // The mask shows x < 8.
         let mut m = photocraft_raster::Surface::new(PixelFormat::new(ColorMode::Grayscale, depth, false));
         m.fill_rect(Rect::new(0, 0, 8, 8), &photocraft_raster::from_rgba(&m.format(), [1.0; 4]));
-        l.mask = Some(LayerMask { surface: m, enabled: true, linked: true, density: 1.0, feather: 0.0 });
+        l.mask = Some(LayerMask { surface: m, enabled: true, linked: true, density: 1.0, feather: 0.0, paint: None });
         d.layers.push(l);
         // Default: the stroke follows the masked shape, so it runs along the mask's edge.
         check(&d, 7, 4, RED, "stroke along the mask edge");

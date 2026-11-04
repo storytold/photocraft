@@ -27,6 +27,9 @@ struct SampledComposite {
     content: u64,
     preview_key: u64,
     factor: u32,
+    /// Identifies the immutable document snapshot. A UV mask-cache refresh replaces the document
+    /// without changing its content revision, but does change pixels used by the composite.
+    document: std::sync::Weak<Document>,
     pixels: Vec<[f32; 4]>,
 }
 
@@ -117,6 +120,95 @@ pub fn render(doc: &Document, v: &ChannelView, r: Rect, factor: u32, look: Look,
     render_with_source(doc, v, r, factor, look, active, CompositeSource { cached: None, fresh: &mut unused })
 }
 
+/// Area-average a channel view on the compositor's global reduced-image grid. `r` is in output
+/// pixels, including its origin for damage updates. Native pixels are rendered in bounded bands.
+#[cfg(feature = "uv-workbench")]
+pub(crate) fn render_reduced_grid(
+    doc: &Document,
+    view: &ChannelView,
+    r: Rect,
+    output_size: [u32; 2],
+    look: Look,
+    active: Option<photocraft_doc::LayerId>,
+) -> Option<Vec<Color32>> {
+    let [w, h] = [output_size[0].min(doc.size.width), output_size[1].min(doc.size.height)];
+    if view.is_plain(doc) || r.is_empty() || w == 0 || h == 0 || r.x0 < 0 || r.y0 < 0 || r.x1 as u32 > w || r.y1 as u32 > h {
+        return None;
+    }
+    let span = |t: u32, full: u32, reduced: u32| {
+        let start = u64::from(t) * u64::from(full) / u64::from(reduced);
+        let end = ((u64::from(t) + 1) * u64::from(full) / u64::from(reduced)).max(start + 1).min(u64::from(full));
+        (start as i32, end as i32)
+    };
+    let columns: Vec<_> = (r.x0 as u32..r.x1 as u32).map(|x| span(x, doc.size.width, w)).collect();
+    let sx0 = columns.first()?.0;
+    let sx1 = columns.last()?.1;
+    let feathered = feathered_view_mask(doc, view);
+    let mut result = Vec::with_capacity(r.width() as usize * r.height() as usize);
+    for y in r.y0 as u32..r.y1 as u32 {
+        let (sy0, sy1) = span(y, doc.size.height, h);
+        let mut sums = vec![[0u64; 4]; columns.len()];
+        // Even extreme aspect ratios never allocate a complete native channel image.
+        for by0 in (sy0..sy1).step_by(32) {
+            let band = Rect::new(sx0, by0, sx1, (by0 + 32).min(sy1));
+            let mut unused = None;
+            let pixels = render_prepared(doc, view, band, 1, look, active, CompositeSource { cached: None, fresh: &mut unused }, feathered.as_ref())?;
+            for row in pixels.chunks_exact(band.width() as usize) {
+                for (sum, &(x0, x1)) in sums.iter_mut().zip(&columns) {
+                    for pixel in &row[(x0 - sx0) as usize..(x1 - sx0) as usize] {
+                        for (sum, value) in sum.iter_mut().zip(pixel.to_array()) {
+                            *sum += u64::from(value);
+                        }
+                    }
+                }
+            }
+        }
+        for (sum, &(x0, x1)) in sums.into_iter().zip(&columns) {
+            let count = (x1 - x0) as u64 * (sy1 - sy0) as u64;
+            let [r, g, b, a] = sum.map(|value| ((value + count / 2) / count) as u8);
+            result.push(Color32::from_rgba_premultiplied(r, g, b, a));
+        }
+    }
+    Some(result)
+}
+
+/// Colorize the shared low-resolution Fill proxy for either the 2D channel overlay or the UV
+/// map. `r` is in output-image coordinates; the proxy is stretched over the document extent.
+#[cfg(feature = "uv-workbench")]
+pub(crate) fn render_fill_mask_proxy(
+    doc: &Document,
+    view: &ChannelView,
+    r: Rect,
+    output_size: [u32; 2],
+    look: Look,
+    proxy: &crate::uv_mask_paint_preview::FillMaskProxy,
+) -> Option<Vec<Color32>> {
+    let (_, mode) = view.shown_layer_mask(doc)?;
+    if r.is_empty() || output_size[0] == 0 || output_size[1] == 0 || proxy.size.contains(&0) {
+        return None;
+    }
+    let values = &proxy.values;
+    if values.len() != (proxy.size[0] as usize).saturating_mul(proxy.size[1] as usize) {
+        return None;
+    }
+    let mut pixels = Vec::with_capacity((r.width() as usize).saturating_mul(r.height() as usize));
+    for y in r.y0..r.y1 {
+        let py = (i64::from(y) * i64::from(proxy.size[1]) / i64::from(output_size[1])).clamp(0, i64::from(proxy.size[1] - 1)) as usize;
+        for x in r.x0..r.x1 {
+            let px = (i64::from(x) * i64::from(proxy.size[0]) / i64::from(output_size[0])).clamp(0, i64::from(proxy.size[0] - 1)) as usize;
+            let mask = values[py * proxy.size[0] as usize + px].clamp(0.0, 1.0);
+            pixels.push(match mode {
+                MaskViewMode::Gray => Color32::from_gray(q(mask)),
+                MaskViewMode::Overlay => {
+                    let alpha = look.mask_opacity.clamp(0.0, 1.0) * (1.0 - mask);
+                    Color32::from_rgba_premultiplied(q(look.mask_rgb[0] * alpha), q(look.mask_rgb[1] * alpha), q(look.mask_rgb[2] * alpha), q(alpha))
+                }
+            });
+        }
+    }
+    Some(pixels)
+}
+
 fn render_with_source(
     doc: &Document,
     v: &ChannelView,
@@ -125,6 +217,32 @@ fn render_with_source(
     look: Look,
     active: Option<photocraft_doc::LayerId>,
     source: CompositeSource<'_>,
+) -> Option<Vec<Color32>> {
+    let feathered = feathered_view_mask(doc, v);
+    render_prepared(doc, v, r, factor, look, active, source, feathered.as_ref())
+}
+
+fn feathered_view_mask(doc: &Document, v: &ChannelView) -> Option<Surface> {
+    v.layer_mask
+        .and_then(|view| doc.layer(view.layer))
+        .filter(|layer| layer.mask.as_ref().is_some_and(|mask| mask.enabled && photocraft_compose::masks::feather_sigma(mask.feather) > 0.0))
+        .and_then(|layer| {
+            let mut pixel_mask_layer = layer.clone();
+            pixel_mask_layer.vector_mask = None;
+            photocraft_compose::masks::combined_mask(&pixel_mask_layer, doc.bounds())
+        })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_prepared(
+    doc: &Document,
+    v: &ChannelView,
+    r: Rect,
+    factor: u32,
+    look: Look,
+    active: Option<photocraft_doc::LayerId>,
+    source: CompositeSource<'_>,
+    feathered_mask: Option<&Surface>,
 ) -> Option<Vec<Color32>> {
     if v.is_plain(doc) || r.is_empty() {
         return None;
@@ -135,16 +253,7 @@ fn render_with_source(
     // ⌥-click mask view (#196): the pixel mask alone, in grayscale (white reveals); ⇧⌥ with
     // nothing else shown: just the rubylith. Use the compositor's cached feather for the pixel
     // mask, but leave vector masks out: this view targets the pixel mask channel by itself.
-    let feathered_mask = v
-        .layer_mask
-        .and_then(|view| doc.layer(view.layer))
-        .filter(|layer| layer.mask.as_ref().is_some_and(|mask| mask.enabled && photocraft_compose::masks::feather_sigma(mask.feather) > 0.0))
-        .and_then(|layer| {
-            let mut pixel_mask_layer = layer.clone();
-            pixel_mask_layer.vector_mask = None;
-            photocraft_compose::masks::combined_mask(&pixel_mask_layer, doc.bounds())
-        });
-    let shown_mask = layer_mask.map(|(m, mode)| (feathered_mask.as_ref().unwrap_or(&m.surface), mode));
+    let shown_mask = layer_mask.map(|(m, mode)| (feathered_mask.unwrap_or(&m.surface), mode));
     let only_mask = ChannelView { layer_mask: None, ..v.clone() }.is_plain(doc);
     match shown_mask {
         Some((m, MaskViewMode::Gray)) => return Some(mask_px(m, r, factor, |g| Color32::from_gray(q(g)))),
@@ -287,9 +396,21 @@ fn view_key(v: &ChannelView, look: Look) -> u64 {
 /// Make the channel-view texture of document `idx` current; `None` = nothing to draw.
 pub fn ensure(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize) -> Option<egui::TextureId> {
     let st = app.session.documents().get(idx)?;
-    let view = st.channel_view.clone();
+    let mut view = st.channel_view.clone();
     let active = st.active_layer;
+    #[cfg(feature = "uv-workbench")]
+    let target_fill_mask = crate::uv_mask_paint_preview::current_fill_key(app, idx).is_some();
+    #[cfg(not(feature = "uv-workbench"))]
+    let target_fill_mask = false;
+    if target_fill_mask
+        && view.target == photocraft_engine::channel_cmds::ChannelTarget::LayerMask
+        && view.layer_mask.is_none()
+        && let Some(layer) = active.filter(|id| st.doc.layer(*id).is_some_and(|layer| layer.mask.is_some()))
+    {
+        view.layer_mask = Some(photocraft_engine::mask_view_cmds::LayerMaskView { layer, filter: false, mode: MaskViewMode::Gray });
+    }
     let (revision, last_damage) = (st.revision, st.last_damage);
+    let source_document = std::sync::Arc::downgrade(&st.doc);
     let content = revision.wrapping_sub(st.view_revision);
     let id = st.doc.id.0;
     if view.is_plain(&st.doc) {
@@ -302,6 +423,19 @@ pub fn ensure(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize) -> Optio
     // otherwise an opaque grayscale mask hides the stroke until it is committed (#2078).
     // The plain-composite path above needs no preview work.
     let (doc, preview_key) = crate::canvas::filter_channel_preview(app, idx, ctx).unwrap_or_else(|| crate::canvas::display_doc(app, idx));
+    // Spatial Fill sampling runs off-thread at a capped cadence. The texture and 3D map share
+    // the same accepted proxy/key; until its first result, keep the canonical texture.
+    #[cfg(feature = "uv-workbench")]
+    let raw_fill_active = crate::uv_mask_paint_preview::current_fill_key(app, idx).is_some();
+    #[cfg(feature = "uv-workbench")]
+    let fill_proxy = if raw_fill_active {
+        crate::uv_mask_paint_preview::fill_mask_proxy(app, idx, ctx)
+            .filter(|proxy| view.layer_mask.is_some_and(|shown| shown.layer == proxy.layer) && view.shown_layer_mask(&doc).is_some())
+    } else {
+        None
+    };
+    #[cfg(feature = "uv-workbench")]
+    let preview_key = fill_proxy.as_ref().map_or(preview_key, |proxy| proxy.key);
     // Interface ▸ Show Channels in Color tints single colour channel views on the canvas too,
     // not just the panel thumbnails (#2385). The view key carries the flag and the Layer Mask
     // Display Options, so changing them rebuilds the texture.
@@ -309,11 +443,22 @@ pub fn ensure(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize) -> Optio
     let key = view_key(&view, look);
     // Never exceed what the GPU accepts (egui panics on oversized textures).
     let max_side = (ctx.input(|i| i.max_texture_side) as u32).clamp(256, MAX_SIDE);
+    #[cfg(feature = "uv-workbench")]
+    let factor = fill_proxy.as_ref().map_or_else(
+        || doc.size.width.max(doc.size.height).div_ceil(max_side).max(1),
+        |proxy| doc.size.width.max(doc.size.height).div_ceil(proxy.size[0].max(proxy.size[1]).max(1)).max(1),
+    );
+    #[cfg(not(feature = "uv-workbench"))]
     let factor = doc.size.width.max(doc.size.height).div_ceil(max_side).max(1);
-    // A live preview can mutate the same Arc in place. Content revision and preview_key, not
-    // pointer identity, determine whether these flattened pixels are still current.
+    // A live preview can mutate the same Arc in place, so content revision and preview_key still
+    // guard that path. Document identity also catches cache-only refreshes that replace pixels
+    // while leaving the content revision unchanged.
     if let Some(c) = app.channel_views.get_mut(&id) {
-        if let Some(s) = c.source.as_mut().filter(|s| s.factor == factor && s.content == content && s.preview_key == preview_key) {
+        if let Some(s) = c
+            .source
+            .as_mut()
+            .filter(|s| s.factor == factor && s.content == content && s.preview_key == preview_key && std::sync::Weak::ptr_eq(&s.document, &source_document))
+        {
             s.revision = revision;
         } else {
             c.source = None;
@@ -328,8 +473,21 @@ pub fn ensure(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize) -> Optio
     {
         return Some(c.tex.id());
     }
-    let damage =
-        app.channel_views.get(&id).and_then(|c| crate::canvas::damage_since(app, idx, (c.revision, c.preview_key), (revision, preview_key), 0, last_damage));
+    #[cfg(feature = "uv-workbench")]
+    if raw_fill_active && fill_proxy.is_none() {
+        // Never build a full-size channel composite on the pointer thread. Keep the prior
+        // canonical texture (if one exists) until the sampler publishes its first small result.
+        return app.channel_views.get(&id).filter(|c| c.key == key && c.revision == revision).map(|c| c.tex.id());
+    }
+    #[cfg(feature = "uv-workbench")]
+    let fill_proxy_active = fill_proxy.is_some();
+    #[cfg(not(feature = "uv-workbench"))]
+    let fill_proxy_active = false;
+    let damage = (!fill_proxy_active)
+        .then(|| {
+            app.channel_views.get(&id).and_then(|c| crate::canvas::damage_since(app, idx, (c.revision, c.preview_key), (revision, preview_key), 0, last_damage))
+        })
+        .flatten();
     if let Some(c) = app.channel_views.get_mut(&id)
         && c.key == key
         && c.factor == factor
@@ -354,9 +512,23 @@ pub fn ensure(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize) -> Optio
     let b = doc.bounds();
     let cached = app.channel_views.get(&id).and_then(|c| c.source.as_ref()).map(|s| s.pixels.as_slice());
     let mut fresh = None;
+    #[cfg(feature = "uv-workbench")]
+    let size = if let Some(proxy) = &fill_proxy {
+        [proxy.size[0] as usize, proxy.size[1] as usize]
+    } else {
+        [b.width().div_ceil(factor) as usize, b.height().div_ceil(factor) as usize]
+    };
+    #[cfg(not(feature = "uv-workbench"))]
+    let size = [b.width().div_ceil(factor) as usize, b.height().div_ceil(factor) as usize];
+    #[cfg(feature = "uv-workbench")]
+    let px = if let Some(proxy) = &fill_proxy {
+        render_fill_mask_proxy(&doc, &view, Rect::new(0, 0, size[0] as i32, size[1] as i32), [size[0] as u32, size[1] as u32], look, proxy)?
+    } else {
+        render_with_source(&doc, &view, b, factor, look, active, CompositeSource { cached, fresh: &mut fresh })?
+    };
+    #[cfg(not(feature = "uv-workbench"))]
     let px = render_with_source(&doc, &view, b, factor, look, active, CompositeSource { cached, fresh: &mut fresh })?;
     let new_source = fresh.is_some();
-    let size = [b.width().div_ceil(factor) as usize, b.height().div_ceil(factor) as usize];
     let img = egui::ColorImage::new(size, px);
     match app.channel_views.get_mut(&id) {
         Some(c) if c.tex.size() == size => {
@@ -367,12 +539,12 @@ pub fn ensure(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize) -> Optio
             c.factor = factor;
             c.valid = true;
             if let Some(pixels) = fresh.take() {
-                c.source = Some(SampledComposite { revision, content, preview_key, factor, pixels });
+                c.source = Some(SampledComposite { revision, content, preview_key, factor, document: source_document.clone(), pixels });
             }
         }
         _ => {
             let tex = ctx.load_texture(format!("channel-view-{id}"), img, TextureOptions::LINEAR);
-            let source = fresh.map(|pixels| SampledComposite { revision, content, preview_key, factor, pixels });
+            let source = fresh.map(|pixels| SampledComposite { revision, content, preview_key, factor, document: source_document, pixels });
             app.channel_views.insert(id, Cache { revision, key, preview_key, factor, valid: true, tex, source });
         }
     }

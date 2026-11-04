@@ -40,6 +40,8 @@ pub(crate) const MAX_PATTERN_TEXTURE_BYTES: u64 = 256 << 20;
 /// A pattern texture no frame has painted with for this many frames is dropped.
 pub const PATTERN_IDLE_FRAMES: u64 = 240;
 
+pub(crate) const MASK_FILL_SOURCE_BYTES: u64 = 256 << 20;
+
 /// Uploads (bytes) [`Compositor::render`] stages before submitting the work recorded so far, so
 /// a refresh of a huge document never holds all its uploads in staging memory at once.
 pub(crate) const FLUSH_BYTES: u64 = 512 << 20;

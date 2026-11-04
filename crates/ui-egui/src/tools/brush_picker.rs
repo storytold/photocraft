@@ -82,6 +82,11 @@ pub(crate) fn picker_id() -> egui::Id {
 /// All opening paths protect the same frame, including the control channel and options bar.
 pub(crate) fn open(ui: &mut crate::state::UiState, ctx: &egui::Context, at: [f32; 2]) {
     ui.brush_picker = Some(at);
+    #[cfg(feature = "uv-workbench")]
+    {
+        ui.uv_workbench.picker_3d = false;
+        ui.uv_workbench.picker_viewport = Some(ctx.viewport_id());
+    }
     crate::canvas_popup::mark_open(ctx, picker_id());
 }
 
@@ -217,6 +222,19 @@ pub fn body(
     st: &mut BrushesPanelState,
     size: egui::Vec2,
 ) -> Vec<Pick> {
+    body_with_extra(ui, b, presets, current, st, size, |_| {})
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn body_with_extra(
+    ui: &mut egui::Ui,
+    b: &mut BrushSettings,
+    presets: &[BrushPreset],
+    current: Option<&str>,
+    st: &mut BrushesPanelState,
+    size: egui::Vec2,
+    extra: impl FnOnce(&mut egui::Ui),
+) -> Vec<Pick> {
     let t = Tokens::get(ui.ctx());
     let mut picks = Vec::new();
     // The picker is its dragged (or remembered) size: at least that tall even when every group
@@ -254,6 +272,7 @@ pub fn body(
             dismiss_popup(&hardness);
         }
     });
+    extra(ui);
     ui.add_space(6.0);
     widgets::hairline(ui);
     ui.add_space(6.0);

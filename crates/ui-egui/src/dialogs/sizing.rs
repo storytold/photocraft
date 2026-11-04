@@ -46,6 +46,12 @@ pub fn is_sizing(command: &str) -> bool {
     matches!(command, "image.imageSize" | "image.canvasSize")
 }
 
+/// Shared UI preflight used before geometry dialogs or gestures begin. The engine repeats this
+/// check at command admission so automation and direct command callers are protected too.
+pub(crate) fn geometry_preflight(app: &PhotocraftApp, command: &str) -> Result<(), String> {
+    photocraft_engine::channel_cmds::mask_stack_geometry_refusal(&app.session, command).map_or(Ok(()), Err)
+}
+
 /// Alt+Cancel (Reset): restore the dimensions and options from when the dialog opened.
 pub fn reset(f: &mut Map<String, Value>) {
     if !f.contains_key("__sizing") {

@@ -129,12 +129,14 @@ pub(crate) use refs::source_spec;
 pub use refs::{Blending, ChanRef, parse_ref};
 use selection::{load_selection, quick_mask, save_selection};
 use spot::{is_flat, merge, merge_spot, mergeable, split};
+pub use targeting::mask_stack_geometry_refusal;
 use targeting::{SLOT_KEY, target_cmd, target_slot};
 pub(crate) use targeting::{
     Target, channel_surface_for_filter, clear_channel, clear_color_channel, color_restriction, edits_channel, filter_mask_layer, inject_target, invert_region,
-    is_channel_target, is_spot_target, mask_target_enabled, restrict_to_color, routed, target_of, target_surface, targeted_channel,
+    is_channel_target, is_spot_target, mask_stack_geometry_enabled, mask_target_enabled, restrict_to_color, routed, target_of, target_surface,
+    targeted_channel,
 };
-pub use targeting::{follows_filter_mask, follows_target, read_target_surface};
+pub use targeting::{follows_filter_mask, follows_target, read_history_target_surface, read_target_surface};
 pub(crate) use view::fix_view;
 pub use view::{ChannelTarget, ChannelView, QuickMaskOptions, color_names, composite_name};
 

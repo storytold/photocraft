@@ -143,6 +143,7 @@ fn set_view(s: &mut Session, p: &Value) -> Result<Value> {
         // A view change: redraw without recompositing, and keep a clean document clean.
         let clean = st.saved_revision == st.revision;
         st.revision += 1;
+        st.view_revision = st.view_revision.wrapping_add(1);
         if clean {
             st.saved_revision = st.revision;
         }

@@ -130,9 +130,24 @@ pub const SHADER: &str = include_str!("compose.wgsl");
 /// Pass-level resources resolved for one page cell: resident pages (texture, mask) and effect
 /// maps (view and region) per pass.
 pub(crate) struct Bound {
-    pub(crate) views: Vec<(Option<ResidentRef>, Option<ResidentRef>)>,
+    pub(crate) views: Vec<(Option<ResidentRef>, Option<BoundMask>)>,
     pub(crate) keys: Vec<ResKey>,
     pub(crate) maps: Vec<Option<(wgpu::TextureView, Rect)>>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum BoundMask {
+    Resident(ResidentRef),
+    Slot(plan::Slot),
+}
+
+impl BoundMask {
+    pub(crate) fn rect(self) -> Option<[i32; 4]> {
+        match self {
+            Self::Resident((_, rect)) => Some(rect),
+            Self::Slot(_) => None,
+        }
+    }
 }
 
 /// Pass-level resources shared by every cell of a frame.
@@ -141,4 +156,6 @@ pub(crate) struct FrameRes {
     pub(crate) areas: Vec<(Rect, Rect)>,
     pub(crate) luts: Vec<Option<(wgpu::Texture, wgpu::TextureView)>>,
     pub(crate) patterns: Vec<Option<wgpu::TextureView>>,
+    pub(crate) mask_fills: Vec<Option<wgpu::TextureView>>,
 }
+use super::plan;

@@ -21,7 +21,7 @@ use crate::dynamics::{DabGenerator, grid_cell};
 use crate::retouch::{Footprint, alpha_index, over_native};
 use crate::rng::hash2;
 use crate::tile::{Mips, PatternImage};
-use crate::{Dab, StrokePoint, TipProfile};
+use crate::{Dab, MappedDab, StrokePoint, TipProfile};
 
 /// Salt of the 8-bit dither's per-pixel noise.
 const DITHER_SALT: u64 = 0x0000_6469_7468_6572;
@@ -910,6 +910,55 @@ impl StrokeRenderer {
     }
     pub fn dab_count(&self) -> usize {
         self.dabs_done
+    }
+    /// Accumulate an externally projected native dab. Geometry adapters provide
+    /// coverage in destination pixels; native opacity, masks, colour dynamics,
+    /// blending, bit depth and sparse stroke compositing remain in this renderer.
+    pub fn accumulate_mapped(&mut self, rect: Rect, coverage: &[f32], dual: &[f32], depth: &[f32], dab: &Dab) -> bool {
+        if !Self::mapped_input_valid(rect, coverage, dual, depth, dab) {
+            return false;
+        }
+        self.accumulate_mapped_validated(rect, coverage, dual, depth, dab);
+        true
+    }
+
+    /// Validate a complete projected batch before mutating the accumulated coverage maps.
+    pub fn accumulate_mapped_batch(&mut self, batches: &[MappedDab<'_>]) -> bool {
+        if batches.iter().any(|batch| !Self::mapped_input_valid(batch.rect, batch.coverage, batch.dual_coverage, batch.depth, batch.dab)) {
+            return false;
+        }
+        for batch in batches {
+            self.accumulate_mapped_validated(batch.rect, batch.coverage, batch.dual_coverage, batch.depth, batch.dab);
+        }
+        true
+    }
+
+    fn mapped_input_valid(rect: Rect, coverage: &[f32], dual: &[f32], depth: &[f32], dab: &Dab) -> bool {
+        let n = u64::from(rect.width()) * u64::from(rect.height());
+        !(n == 0
+            || n > 16_777_216
+            || coverage.len() as u64 != n
+            || dual.len() != coverage.len()
+            || depth.len() != coverage.len()
+            || coverage.iter().chain(dual).chain(depth).any(|v| !v.is_finite() || !(0.0..=1.0).contains(v))
+            || dab.color.iter().any(|v| !v.is_finite())
+            || !dab.opacity.is_finite()
+            || !(0.0..=1.0).contains(&dab.opacity))
+    }
+
+    fn accumulate_mapped_validated(&mut self, rect: Rect, coverage: &[f32], dual: &[f32], depth: &[f32], dab: &Dab) {
+        let mut native = [0.0; 8];
+        let color = match (self.per_dab_color, self.fmt) {
+            (true, Some(fmt)) => {
+                from_rgba_into(&fmt, dab.color, &mut native);
+                Some(&native[..fmt.mode.color_channels()])
+            }
+            _ => None,
+        };
+        self.cov.accumulate(rect, coverage, dab.opacity, color, self.ctx.brush.wet_edges.then_some(depth));
+        if let Some(target) = &mut self.dual {
+            target.accumulate(rect, dual, 1.0, None, None);
+        }
     }
     /// Union of the dab rectangles so far.
     pub fn bounds(&self) -> Rect {

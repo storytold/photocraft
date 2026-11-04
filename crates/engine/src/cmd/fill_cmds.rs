@@ -123,7 +123,7 @@ pub fn fill(s: &mut Session, p: &Value) -> Result<Value> {
         "history" => {
             // A History panel row `state` or a `snapshot`, else the History Brush's source.
             let source_doc = crate::history_source_cmds::paint_source(st, p, CMD)?;
-            let src = crate::channel_cmds::read_target_surface(source_doc.as_ref(), id, p)
+            let src = crate::channel_cmds::read_history_target_surface(source_doc.as_ref(), id, p)
                 .map_err(|_| EngineError::Other("the target did not exist (as pixels, a mask or a channel) in that history state".into()))?;
             Source::Pixels(area, read_rgba(src, area, "reading Fill's history source")?)
         }

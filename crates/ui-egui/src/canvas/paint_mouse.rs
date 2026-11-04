@@ -126,7 +126,7 @@ pub fn canvas_buttons(app: &mut PhotocraftApp, response: &Response, tool: Tool) 
     let resizing = app.brush_resize.is_some_and(|r| r.secondary);
     let right_stopped = response.drag_stopped_by(PointerButton::Secondary) || (resizing && response.drag_stopped());
 
-    if physical_right && crate::brush_resize::is_right_gesture(crate::workspace_ui::sticky_mods(app, mods)) {
+    if physical_right && crate::brush_resize::is_right_gesture_in_space(app, crate::workspace_ui::sticky_mods(app, mods)) {
         app.alt_sampling = false;
     }
 
@@ -135,7 +135,7 @@ pub fn canvas_buttons(app: &mut PhotocraftApp, response: &Response, tool: Tool) 
     crate::brush_resize::release_stale(app, right_down || response.drag_stopped_by(PointerButton::Secondary) || response.drag_stopped());
     let resize_start = crate::brush_resize::applies(tool)
         && app.drag.is_none()
-        && crate::brush_resize::is_right_gesture(crate::workspace_ui::sticky_mods(app, mods))
+        && crate::brush_resize::is_right_gesture_in_space(app, crate::workspace_ui::sticky_mods(app, mods))
         && (right_started || (physical_right && response.dragged() && app.brush_resize.is_none()));
     let resizing = app.brush_resize.is_some_and(|r| r.secondary);
     app.brush_resize_armed = resize_start || (physical_right && resizing);
@@ -175,6 +175,7 @@ pub fn canvas_buttons(app: &mut PhotocraftApp, response: &Response, tool: Tool) 
     if right_click
         && !erase
         && !layer_menu
+        && !crate::brush_resize::is_right_gesture_in_space(app, crate::workspace_ui::sticky_mods(app, mods))
         && !crate::color_hud::is_open(&app.ui)
         && right_click_picker(tool)
         && let Some(p) = response.interact_pointer_pos()
@@ -214,7 +215,7 @@ pub fn pointer_secondary(app: &mut PhotocraftApp, ctx: &egui::Context, down: boo
         }
         return false;
     }
-    if crate::brush_resize::applies(tool) && (crate::brush_resize::is_right_gesture(mods) || app.brush_resize.is_some_and(|r| r.secondary)) {
+    if crate::brush_resize::applies(tool) && (crate::brush_resize::is_right_gesture_in_space(app, mods) || app.brush_resize.is_some_and(|r| r.secondary)) {
         app.brush_resize_armed = down && app.drag.is_none();
         return true;
     }
@@ -240,6 +241,10 @@ pub fn pointer_secondary(app: &mut PhotocraftApp, ctx: &egui::Context, down: boo
 /// double-click on a preset closes it.
 pub fn show_picker(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let Some([x, y]) = app.ui.brush_picker else { return };
+    #[cfg(feature = "uv-workbench")]
+    if app.ui.uv_workbench.picker_viewport.is_some_and(|owner| owner != ctx.viewport_id()) {
+        return;
+    }
     if !has_brush_picker(app.ui.tool) {
         app.ui.brush_picker = None;
         return;
@@ -266,8 +271,28 @@ pub fn show_picker(app: &mut PhotocraftApp, ctx: &egui::Context) {
         let before = app.session.tools.brush.clone();
         let mut b = before.clone();
         let list = &mut app.ui.brush_picker_list;
-        let frame = egui::Frame::popup(ui.style())
-            .show(ui, |ui| crate::brush_picker::body(ui, &mut b, &app.session.tools.presets, app.session.tools.current_preset.as_deref(), list, content));
+        #[cfg(feature = "uv-workbench")]
+        let picker_3d = app.ui.uv_workbench.picker_3d;
+        #[cfg(feature = "uv-workbench")]
+        let mut wrap = app.ui.uv_workbench.paint_wrap;
+        let frame = egui::Frame::popup(ui.style()).show(ui, |ui| {
+            crate::brush_picker::body_with_extra(ui, &mut b, &app.session.tools.presets, app.session.tools.current_preset.as_deref(), list, content, |ui| {
+                #[cfg(feature = "uv-workbench")]
+                if picker_3d {
+                    ui.horizontal(|ui| {
+                        ui.selectable_value(&mut wrap, false, tl!("Paint UV")).on_hover_text(tl!("Brush tip in UV space"));
+                        ui.selectable_value(&mut wrap, true, tl!("Paint Wrap"))
+                            .on_hover_text(tl!("Wraps neighboring faces and UV seams. Brush, Pencil and Eraser; retouching uses Paint UV."));
+                    });
+                }
+                #[cfg(not(feature = "uv-workbench"))]
+                let _ = ui;
+            })
+        });
+        #[cfg(feature = "uv-workbench")]
+        {
+            app.ui.uv_workbench.paint_wrap = wrap;
+        }
         let picks = frame.inner;
         // The corner grip resizes the picker, and the size is remembered across opens.
         if let Some(new) = crate::brush_picker::resize_grip(ui, frame.response.rect, content) {

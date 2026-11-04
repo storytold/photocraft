@@ -358,6 +358,7 @@ fn refine_edge_outputs_and_undo() {
             feather: 3.5,
             linked: false,
             enabled: true,
+            paint: None,
         });
         Ok(())
     })

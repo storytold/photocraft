@@ -100,6 +100,23 @@ pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
             items.insert(at, e);
         }
     }
+    #[cfg(feature = "uv-workbench")]
+    {
+        let mut imports = Vec::new();
+        let mut i = 0;
+        while i < items.len() {
+            if items.get(i).is_some_and(|item| item.id.starts_with("file.uv.")) {
+                imports.push(items.remove(i));
+            } else {
+                i += 1;
+            }
+        }
+        let at = items
+            .iter()
+            .position(|item| item.id == "file.fileInfo")
+            .unwrap_or_else(|| items.iter().position(|item| item.id == "file.print").unwrap_or(items.len()));
+        items.splice(at..at, imports);
+    }
     crate::plugin_ui::insert_menu_items(app, &mut items);
     if let Some(mask) = app.session.active().and_then(|s| s.active_layer.and_then(|id| s.doc.layer(id))).and_then(|l| l.mask.as_ref())
         && let Some(item) = items.iter_mut().find(|i| i.id == "layer.layerMask.enabled")

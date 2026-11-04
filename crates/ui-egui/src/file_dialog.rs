@@ -348,6 +348,10 @@ impl PhotocraftApp {
     /// the status bar. Returns the action's result.
     fn finish_file_dialog(&mut self, answer: Option<FileDialogAnswer>) -> Result<Value, String> {
         let Some(Pending { then, .. }) = self.file_dialog.take() else { return Err(CANCELLED.into()) };
+        #[cfg(feature = "uv-workbench")]
+        if answer.is_none() || matches!(answer, Some(FileDialogAnswer::Unavailable(_))) {
+            crate::uv_project::cancel_pending_replace(self);
+        }
         let r = then(self, answer);
         if let Err(e) = &r
             && e != CANCELLED

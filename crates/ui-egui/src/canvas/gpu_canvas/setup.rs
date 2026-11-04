@@ -35,6 +35,12 @@ pub struct Refresh {
     pub upload_ms: f64,
     /// Layer tiles the wgpu compositor uploaded.
     pub uploads: u64,
+    /// Bytes uploaded for changed layer tiles by the wgpu compositor.
+    pub gpu_upload_bytes: u64,
+    /// Planned compositor passes for this refresh.
+    pub gpu_passes: u64,
+    /// Chunk renders for this refresh.
+    pub gpu_chunks: u64,
     /// How long the GPU spent executing a recent wgpu composite, once its timestamps came back
     /// (a frame or two after that refresh, so usually an earlier one than this). It carries its
     /// own pixel count and is never this refresh's unless they match. `None` when the device has

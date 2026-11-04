@@ -101,7 +101,7 @@ pub fn base_document(doc: &Document, target: LayerId) -> Result<Document, String
     l.id = PREVIEW_LAYER;
     l.clipped = true;
     if let Some(sel) = &doc.selection {
-        l.mask = Some(LayerMask { surface: sel.clone(), enabled: true, linked: false, density: 1.0, feather: 0.0 });
+        l.mask = Some(LayerMask { surface: sel.clone(), enabled: true, linked: false, density: 1.0, feather: 0.0, paint: None });
     }
     let mut out = doc.clone();
     out.insert_above(Some(target), l);

@@ -1038,6 +1038,143 @@ fn channel_target_layer_mask_and_vector_mask() {
 }
 
 #[test]
+fn history_mask_sources_read_the_flattened_mask_not_the_active_paint_surface() {
+    let mut s = session();
+    s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+    let layer_id = s.active().unwrap().active_layer.unwrap();
+    let state = s.active_mut().unwrap();
+    let doc = std::sync::Arc::make_mut(&mut state.doc);
+    let mask = doc.layer_mut(layer_id).unwrap().mask.as_mut().unwrap();
+    let flattened = mask.surface.clone();
+    let paint_surface = Surface::with_default(PixelFormat::RGBA8, &[0.0; 4]);
+    mask.paint = Some(photocraft_doc::mask_paint::Stack {
+        base: flattened,
+        layers: vec![photocraft_doc::mask_paint::Paint {
+            name: "Paint".into(),
+            visible: true,
+            opacity: 1.0,
+            blend: BlendMode::Normal,
+            surface: paint_surface,
+            fill_map: None,
+            fill_map_size: [0, 0],
+            fill_bounds: None,
+            kind: photocraft_doc::mask_paint::EffectKind::Paint,
+        }],
+        active: 0,
+    });
+
+    let params = json!({"target": "mask"});
+    let ordinary_source = read_target_surface(doc, Some(layer_id), &params).unwrap();
+    let history_source = read_history_target_surface(doc, Some(layer_id), &params).unwrap();
+    let mask = doc.layer(layer_id).unwrap().mask.as_ref().unwrap();
+    assert!(std::ptr::eq(history_source, &mask.surface));
+    assert!(std::ptr::eq(ordinary_source, &mask.paint.as_ref().unwrap().layers[0].surface));
+}
+
+fn history_mask_command_session() -> (Session, usize) {
+    use photocraft_color::PixelFormat;
+    use photocraft_doc::mask_paint::{EffectKind, Paint, Stack};
+
+    let mut s = session();
+    s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+    let layer_id = s.active().unwrap().active_layer.unwrap();
+    s.edit("seed mask Paint history source", |doc, _| {
+        let mask = doc.layer_mut(layer_id).unwrap().mask.as_mut().unwrap();
+        let flattened = Surface::with_default(PixelFormat::GRAY8, &[0.2]);
+        // A white Paint layer at 62.5% opacity composites over the 0.2 base to 0.7.
+        let paint_surface = Surface::with_default(PixelFormat::RGBA8, &[1.0, 1.0, 1.0, 0.625]);
+        mask.paint = Some(Stack {
+            base: flattened,
+            layers: vec![Paint {
+                name: "Historical Paint".into(),
+                // Keep the active editable source distinct from the flattened mask snapshot.
+                visible: true,
+                opacity: 1.0,
+                blend: photocraft_color::BlendMode::Normal,
+                surface: paint_surface,
+                fill_map: None,
+                fill_map_size: [0, 0],
+                fill_bounds: None,
+                kind: EffectKind::Paint,
+            }],
+            active: 0,
+        });
+        Ok(())
+    })
+    .unwrap();
+    let source_state = s.active().unwrap().history.past_len();
+    s.edit("remove current mask Paint stack", |doc, _| {
+        let mask = doc.layer_mut(layer_id).unwrap().mask.as_mut().unwrap();
+        mask.paint = None;
+        mask.surface = Surface::with_default(PixelFormat::GRAY8, &[0.0]);
+        Ok(())
+    })
+    .unwrap();
+    (s, source_state)
+}
+
+#[test]
+fn history_fill_samples_the_flattened_historical_mask() {
+    let (mut s, state) = history_mask_command_session();
+    s.execute("edit.fill", json!({"contents":"history", "state":state, "target":"mask"})).unwrap();
+    let active = s.active().unwrap();
+    let mask = active.doc.layer(active.active_layer.unwrap()).unwrap().mask.as_ref().unwrap();
+    let sample = mask.surface.sample_channel(20, 15, 0);
+    assert!((sample - 0.7).abs() < 0.02, "History Fill must use the flattened mask, got {sample}");
+}
+
+#[test]
+fn history_brush_samples_the_flattened_historical_mask() {
+    let (mut s, state) = history_mask_command_session();
+    s.execute("paint.historyBrush", json!({"points":[[20,15]], "size":8, "hardness":100, "state":state, "target":"mask"})).unwrap();
+    let active = s.active().unwrap();
+    let mask = active.doc.layer(active.active_layer.unwrap()).unwrap().mask.as_ref().unwrap();
+    let sample = mask.surface.sample_channel(20, 15, 0);
+    assert!((sample - 0.7).abs() < 0.08, "History Brush must use the flattened mask, got {sample}");
+}
+
+#[test]
+fn perspective_crop_rejects_editable_mask_stacks_before_changing_geometry() {
+    use photocraft_color::PixelFormat;
+    use photocraft_doc::mask_paint::{EffectKind, Paint, Stack};
+
+    let mut guarded = session();
+    guarded.execute("layer.layerMask.revealAll", json!({})).unwrap();
+    let layer_id = guarded.active().unwrap().active_layer.unwrap();
+    guarded
+        .edit("add editable mask Paint stack", |doc, _| {
+            let mask = doc.layer_mut(layer_id).unwrap().mask.as_mut().unwrap();
+            mask.paint = Some(Stack {
+                base: mask.surface.clone(),
+                layers: vec![Paint {
+                    name: "Paint".into(),
+                    visible: false,
+                    opacity: 1.0,
+                    blend: photocraft_color::BlendMode::Normal,
+                    surface: Surface::with_default(PixelFormat::RGBA8, &[0.0, 0.0, 0.0, 0.0]),
+                    fill_map: None,
+                    fill_map_size: [0, 0],
+                    fill_bounds: None,
+                    kind: EffectKind::Paint,
+                }],
+                active: 0,
+            });
+            Ok(())
+        })
+        .unwrap();
+    let before = guarded.active().unwrap().doc.bounds();
+    let params = json!({"corners": [[0, 0], [40, 0], [40, 20], [0, 20]], "width": 40, "height": 20});
+    let error = guarded.execute("image.perspectiveCrop", params.clone()).unwrap_err();
+    assert!(error.to_string().contains("editable mask Paint effects"), "{error}");
+    assert_eq!(guarded.active().unwrap().doc.bounds(), before, "refusal must happen before geometry changes");
+    assert!(guarded.active().unwrap().doc.layer(layer_id).unwrap().mask.as_ref().unwrap().paint.is_some());
+
+    let mut unguarded = session();
+    unguarded.execute("image.perspectiveCrop", params).unwrap();
+    assert_eq!(unguarded.active().unwrap().doc.bounds().size(), before.size());
+}
+
+#[test]
 fn clear_with_a_colour_channel_targeted_clears_only_that_channel() {
     let near = |a: &[f32], b: &[f32]| a.len() == b.len() && a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-3);
     // The Background, then a normal layer (Delete there can't make one channel transparent).

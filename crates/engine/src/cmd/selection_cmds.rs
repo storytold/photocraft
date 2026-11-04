@@ -25,6 +25,11 @@ fn has_selection(s: &Session) -> std::result::Result<(), String> {
     s.active().filter(|d| d.doc.selection.is_some()).map(|_| ()).ok_or_else(|| "no selection".into())
 }
 
+#[cfg(feature = "uv-workbench")]
+fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
+    EngineError::BadParams { cmd: cmd.into(), msg: msg.into() }
+}
+
 fn f(p: &Value, k: &str, d: f32) -> f32 {
     p.get(k).and_then(Value::as_f64).map_or(d, |v| v as f32)
 }
@@ -595,6 +600,74 @@ fn lasso(s: &mut Session, p: &Value) -> Result<Value> {
     polygon_selection(s, "select.lasso", "Lasso", &pts, p)
 }
 
+/// Convert UV face triangles into one persistent document selection and one Undo step.
+#[cfg(feature = "uv-workbench")]
+fn uv_polygons(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "select.uvPolygons";
+    let previous = s.active_index();
+    if let Some(document) = p.get("document").and_then(Value::as_u64) {
+        let target = s.documents().iter().position(|st| st.doc.id.0 == document).ok_or_else(|| bad(CMD, "the texture document is unavailable"))?;
+        if previous != Some(target) && !s.set_active(target) {
+            return Err(bad(CMD, "the texture document is unavailable"));
+        }
+    }
+    let result = uv_polygons_active(s, p);
+    if let Some(previous) = previous
+        && s.active_index() != Some(previous)
+    {
+        s.set_active(previous);
+    }
+    result
+}
+
+#[cfg(feature = "uv-workbench")]
+fn uv_polygons_active(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "select.uvPolygons";
+    let polygons = p.get("polygons").and_then(Value::as_array).ok_or_else(|| bad(CMD, "`polygons` must be an array of triangles"))?;
+    if polygons.len() > 100_000 {
+        return Err(bad(CMD, "too many UV polygons"));
+    }
+    let area = s.active().ok_or(EngineError::NoDocument)?.doc.bounds();
+    let mut selection = Surface::new(photocraft_color::PixelFormat::GRAY8);
+    for (index, polygon) in polygons.iter().enumerate() {
+        let points = polygon.as_array().filter(|points| points.len() == 3).ok_or_else(|| bad(CMD, format!("polygon {index} must have 3 points")))?;
+        let points: Vec<(f32, f32)> = points
+            .iter()
+            .map(|point| {
+                point
+                    .as_array()
+                    .filter(|pair| pair.len() == 2)
+                    .and_then(|pair| Some((pair[0].as_f64()? as f32, pair[1].as_f64()? as f32)))
+                    .filter(|(x, y)| x.is_finite() && y.is_finite())
+                    .ok_or_else(|| bad(CMD, format!("polygon {index} has an invalid point")))
+            })
+            .collect::<Result<_>>()?;
+        let min_x = points.iter().map(|point| point.0).fold(f32::INFINITY, f32::min).floor() as i32;
+        let min_y = points.iter().map(|point| point.1).fold(f32::INFINITY, f32::min).floor() as i32;
+        let max_x = points.iter().map(|point| point.0).fold(f32::NEG_INFINITY, f32::max).ceil() as i32;
+        let max_y = points.iter().map(|point| point.1).fold(f32::NEG_INFINITY, f32::max).ceil() as i32;
+        let band = Rect::new(min_x.max(area.x0), min_y.max(area.y0), max_x.saturating_add(1).min(area.x1), max_y.saturating_add(1).min(area.y1));
+        if band.is_empty() {
+            continue;
+        }
+        let mask = sel::polygon(&points, band, true);
+        let mut union = selection.read_region(band);
+        for (dst, src) in union.iter_mut().zip(mask) {
+            // Adjacent UV triangles share their diagonal. Accumulate edge coverage so the seam
+            // is not visible in the combined mask.
+            *dst = (*dst + src).min(1.0);
+        }
+        selection.write_region(band, &union);
+    }
+    selection.prune();
+    // An empty surface means no pixels are selected; None means unrestricted editing.
+    let selected = s.edit("UV Polygon Selection", |doc, _| {
+        doc.selection = Some(selection);
+        Ok(true)
+    })?;
+    Ok(json!({"selected": selected}))
+}
+
 /// Selects the polygon `pts` with the lasso tools' `mode`, `antiAlias` and `feather` params, as
 /// one history step called `label`.
 pub(crate) fn polygon_selection(s: &mut Session, cmd: &str, label: &str, pts: &[(f32, f32)], p: &Value) -> Result<Value> {
@@ -729,6 +802,8 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             lasso
         ),
+        #[cfg(feature = "uv-workbench")]
+        spec!("select.uvPolygons", "UV Polygon Selection", [], r#"{"document":id?,"polygons":[[[x,y],[x,y],[x,y]],…]}"#, has_doc, uv_polygons),
     ]
 }
 

@@ -5,6 +5,8 @@ use super::{
     text_field_menu, theme, tiff_options_ui, timeline_ui, titlebar, tool_cursor, tool_memory, transform_tool, type_panels_ui, type_tool, updates_ui, vector_ui,
     view_cmds, wide_angle_ui, work_area, workspace_ui,
 };
+#[cfg(feature = "uv-workbench")]
+use crate::{uv_library, uv_project, uv_ui};
 
 impl PhotocraftApp {
     /// Wait out the rest of [`Self::min_frame_ms`] since the last frame started.
@@ -24,6 +26,8 @@ impl PhotocraftApp {
     /// Shared logic body. A wrapping host owns the final reset tail after its own work.
     pub fn logic_frame(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         self.cap_frame_rate();
+        #[cfg(feature = "uv-workbench")]
+        crate::uv_mask_paint_preview::cancel_stale_on_escape(self, ctx);
         i18n::set_current(i18n::Lang::from_pref(&self.session.prefs().interface.language));
         // Caps Lock state read from the OS once per frame (see `Services::caps_lock`): the canvas
         // cursor block needs it before the frame renders. `None` (Wayland/web) keeps `false`.
@@ -111,8 +115,15 @@ impl PhotocraftApp {
             ctx.request_repaint();
         }
         let dropped = ctx.input(|i| i.raw.dropped_files.clone());
+        #[cfg(feature = "uv-workbench")]
+        let mut dropped = dropped;
         if !dropped.is_empty() {
             let at = self.services.cursor_pos.as_mut().and_then(|f| f(ctx));
+            #[cfg(feature = "uv-workbench")]
+            {
+                uv_library::file_drop(self, ctx, at, &mut dropped);
+                uv_ui::texture_drop(self, ctx, at, &mut dropped);
+            }
             self.open_dropped(ctx, dropped, at);
             // Files dragged in from another app's window: PhotoCraft comes to the front and takes
             // the keyboard, as Photoshop does, instead of staying behind the source (#5687).
@@ -305,6 +316,7 @@ impl PhotocraftApp {
         gradient_ui::editor_window(self, &ctx);
         type_panels_ui::windows(self, &ctx);
         analysis_ui::windows(self, &ctx);
+
         timeline_ui::windows(self, &ctx);
         workspace_ui::windows(self, &ctx);
         palette::show(self, &ctx);
@@ -313,6 +325,8 @@ impl PhotocraftApp {
         rasterize_prompt::run_pending(self, &ctx);
         jobs_ui::dialog(self, &ctx);
         discard_ui::show(self, &ctx);
+        #[cfg(feature = "uv-workbench")]
+        uv_project::prompt(self, &ctx);
         tiff_options_ui::show(self, &ctx);
         targa_options_ui::show(self, &ctx);
         jpeg_options_ui::show(self, &ctx);

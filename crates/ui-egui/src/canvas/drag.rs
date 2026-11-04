@@ -7,6 +7,8 @@ pub struct Drag {
     pub tool: Tool,
     pub start: [f64; 2],
     pub points: Vec<[f64; 3]>,
+    /// Indices where an opted-in native UV mask stroke starts a disconnected island path.
+    pub breaks: Vec<usize>,
     pub modifiers: egui::Modifiers,
     /// A Brush/Eraser stroke that erases: the Eraser, or a right-button Brush drag with
     /// Preferences › Tools › Right-click with painting tools set to Erase.
@@ -42,6 +44,7 @@ impl Drag {
             tool,
             start,
             points,
+            breaks: Vec::new(),
             modifiers,
             erase,
             clear: false,

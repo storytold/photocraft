@@ -1,0 +1,208 @@
+//! Independent document banks for the 3D project and ordinary PhotoCraft workspaces.
+use crate::{DocState, EngineError, Result, Session, commands::CommandSpec};
+use serde_json::{Value, json};
+#[derive(Default)]
+pub struct Documents {
+    pub active: bool,
+    pub(crate) initialized: bool,
+    pub(crate) parked: Vec<DocState>,
+    active_index: Option<usize>,
+}
+impl Documents {
+    /// Hidden documents still need a save prompt on application exit.
+    pub fn parked(&self) -> &[DocState] {
+        &self.parked
+    }
+}
+impl Session {
+    pub fn uv_documents(&self) -> &[DocState] {
+        if self.uv_workspace.initialized && !self.uv_workspace.active { &self.uv_workspace.parked } else { &self.docs }
+    }
+
+    pub(crate) fn uv_documents_mut(&mut self) -> &mut [DocState] {
+        if self.uv_workspace.initialized && !self.uv_workspace.active { &mut self.uv_workspace.parked } else { &mut self.docs }
+    }
+}
+fn switch(s: &mut Session, p: &Value) -> Result<Value> {
+    let active = p.get("active").and_then(Value::as_bool).ok_or_else(|| EngineError::Other("active must be boolean".into()))?;
+    if s.uv_workspace.active == active {
+        return Ok(json!({"active":active}));
+    }
+    // Also admit sessions populated by headless imports before the UI was attached.
+    if active && !s.uv_workspace.initialized && s.uv.scene.is_some() {
+        let ids: std::collections::HashSet<_> =
+            s.uv.all_bindings().flatten().copied().chain(s.uv.saved_revisions.keys().copied()).chain(s.uv.replaced_document_ids.iter().copied()).collect();
+        let selected = s.active().map(|st| st.doc.id);
+        let mut uv = Vec::new();
+        for st in std::mem::take(&mut s.docs) {
+            if ids.contains(&st.doc.id) {
+                uv.push(st);
+            } else {
+                s.uv_workspace.parked.push(st);
+            }
+        }
+        s.uv_workspace.active_index =
+            selected.and_then(|id| s.uv_workspace.parked.iter().position(|st| st.doc.id == id)).or_else(|| (!s.uv_workspace.parked.is_empty()).then_some(0));
+        s.docs = uv;
+        s.active = selected.and_then(|id| s.docs.iter().position(|st| st.doc.id == id)).or_else(|| (!s.docs.is_empty()).then_some(0));
+    } else {
+        std::mem::swap(&mut s.docs, &mut s.uv_workspace.parked);
+        std::mem::swap(&mut s.active, &mut s.uv_workspace.active_index);
+    }
+    s.uv_workspace.active = active;
+    s.uv_workspace.initialized = true;
+    s.note_active_change();
+    s.sync_tools_mask_target();
+    Ok(json!({"active":active,"documents":s.docs.len()}))
+}
+fn close(s: &mut Session, params: &Value) -> Result<Value> {
+    let restore_ordinary_workspace = !s.uv_workspace.active;
+    switch(s, &json!({"active":true}))?;
+    if params.get("discard").and_then(Value::as_bool) != Some(true) && s.uv_documents().iter().any(DocState::is_dirty) {
+        if restore_ordinary_workspace {
+            switch(s, &json!({"active":false}))?;
+        }
+        return Err(EngineError::Other("Unsaved 3D texture changes must be saved or explicitly discarded".into()));
+    }
+    while !s.docs.is_empty() {
+        s.close(s.docs.len() - 1);
+    }
+    s.uv = Default::default();
+    if restore_ordinary_workspace {
+        switch(s, &json!({"active":false}))?;
+    }
+    Ok(Value::Null)
+}
+pub fn specs() -> Vec<CommandSpec> {
+    vec![
+        CommandSpec {
+            id: "uv.project.close",
+            label: "Close 3D container",
+            menu: &[],
+            shortcut: None,
+            params: "{}",
+            enabled: |_| Ok(()),
+            run: close,
+            journal: false,
+        },
+        CommandSpec {
+            id: "uv.workspace.activate",
+            label: "3D document workspace",
+            menu: &[],
+            shortcut: None,
+            params: r#"{"active":boolean}"#,
+            enabled: |_| Ok(()),
+            run: switch,
+            journal: false,
+        },
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use photocraft_color::{ColorMode, SampleType};
+    use photocraft_doc::Document;
+    use photocraft_geom::Size;
+
+    fn headless_project() -> (Session, photocraft_doc::DocId, photocraft_doc::DocId) {
+        let mut session = Session::new();
+        let ordinary_index = session.add_document(Document::new("ordinary", Size::new(8, 8), ColorMode::Rgb, SampleType::U8), None);
+        let ordinary_id = session.documents()[ordinary_index].doc.id;
+        let texture_index = session.add_document(Document::new("UV texture", Size::new(8, 8), ColorMode::Rgb, SampleType::U8), None);
+        let texture_id = session.documents()[texture_index].doc.id;
+        session.uv.scene = Some(std::sync::Arc::new(photocraft_uv::Scene::default()));
+        session.uv.bindings.push(Some(texture_id));
+        session.set_active(ordinary_index);
+        (session, ordinary_id, texture_id)
+    }
+
+    fn make_dirty(session: &mut Session, id: photocraft_doc::DocId) {
+        let index = session.documents().iter().position(|state| state.doc.id == id).expect("test document is open");
+        session.set_active(index);
+        session.execute("layer.new.layer", json!({})).expect("new layer marks test document dirty");
+    }
+
+    #[test]
+    fn close_restores_the_ordinary_bank_when_it_was_active() {
+        let mut session = Session::new();
+        session.add_document(Document::new("ordinary", Size::new(8, 8), ColorMode::Rgb, SampleType::U8), None);
+        let ordinary_id = session.active().map(|state| state.doc.id).expect("ordinary document was added");
+        session.uv_workspace.parked.push(DocState::new(Document::new("UV texture", Size::new(8, 8), ColorMode::Rgb, SampleType::U8), None));
+        session.uv_workspace.initialized = true;
+        session.uv_workspace.active = false;
+
+        close(&mut session, &json!({"discard":true})).expect("UV project closes");
+
+        assert!(!session.uv_workspace.active);
+        assert_eq!(session.documents().len(), 1);
+        assert_eq!(session.active().map(|state| state.doc.id), Some(ordinary_id));
+    }
+
+    #[test]
+    fn close_allows_unsaved_project_metadata_when_texture_documents_are_clean() {
+        let mut session = Session::new();
+        session.add_document(Document::new("ordinary", Size::new(8, 8), ColorMode::Rgb, SampleType::U8), None);
+        let ordinary_id = session.active().map(|state| state.doc.id).expect("ordinary document was added");
+        let texture = DocState::new(Document::new("UV texture", Size::new(8, 8), ColorMode::Rgb, SampleType::U8), None);
+        let texture_id = texture.doc.id;
+        let saved_content_revision = texture.revision.saturating_sub(texture.view_revision);
+        session.uv_workspace.parked.push(texture);
+        session.uv_workspace.initialized = true;
+        session.uv_workspace.active = false;
+        session.uv.scene = Some(std::sync::Arc::new(photocraft_uv::Scene::default()));
+        session.uv.project_path = "saved-project.pcuv".into();
+        session.uv.saved_revisions.insert(texture_id, saved_content_revision);
+        session.uv.saved_generation = session.uv.generation;
+        assert!(!session.uv.has_unsaved_project(session.uv_documents()), "fixture starts as a saved project");
+
+        // Metadata edits belong to the project save state; texture documents stay clean.
+        session.uv.generation += 1;
+        assert!(session.uv.has_unsaved_project(session.uv_documents()));
+        assert!(!session.uv_documents()[0].is_dirty());
+
+        close(&mut session, &json!({"discard":false})).expect("engine close permits metadata-only unsaved state; UI prompts separately");
+
+        assert!(!session.uv_workspace.active);
+        assert!(session.uv.scene.is_none());
+        assert_eq!(session.documents().len(), 1);
+        assert_eq!(session.active().map(|state| state.doc.id), Some(ordinary_id));
+    }
+
+    #[test]
+    fn headless_close_checks_uv_bank_and_does_not_block_on_dirty_ordinary_document() {
+        let (mut session, ordinary_id, texture_id) = headless_project();
+        make_dirty(&mut session, ordinary_id);
+        session.set_active(0);
+        assert!(session.documents().iter().find(|state| state.doc.id == ordinary_id).is_some_and(DocState::is_dirty));
+        assert!(!session.documents().iter().find(|state| state.doc.id == texture_id).is_some_and(DocState::is_dirty));
+
+        session.execute("uv.project.close", json!({"discard":false})).expect("dirty ordinary work is outside the UV project");
+
+        assert_eq!(session.documents().len(), 1);
+        assert_eq!(session.active().map(|state| state.doc.id), Some(ordinary_id));
+        assert!(session.active().is_some_and(DocState::is_dirty));
+        assert!(session.uv.scene.is_none());
+    }
+
+    #[test]
+    fn headless_close_restores_ordinary_bank_after_uv_dirty_refusal_and_discard_closes_uv_docs() {
+        let (mut session, ordinary_id, texture_id) = headless_project();
+        make_dirty(&mut session, texture_id);
+        session.set_active(0);
+
+        assert!(session.execute("uv.project.close", json!({"discard":false})).is_err());
+        assert!(!session.uv_workspace.active, "a rejected close returns to the previously active ordinary workspace");
+        assert_eq!(session.documents().len(), 1);
+        assert_eq!(session.active().map(|state| state.doc.id), Some(ordinary_id));
+        assert_eq!(session.uv_documents().len(), 1);
+        assert_eq!(session.uv_documents()[0].doc.id, texture_id);
+        assert!(session.uv_documents()[0].is_dirty());
+
+        session.execute("uv.project.close", json!({"discard":true})).expect("explicit discard closes the dirty UV project");
+        assert!(!session.uv_workspace.active);
+        assert_eq!(session.documents().len(), 1);
+        assert_eq!(session.active().map(|state| state.doc.id), Some(ordinary_id));
+        assert!(session.uv.scene.is_none());
+    }
+}

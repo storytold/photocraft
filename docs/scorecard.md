@@ -268,7 +268,7 @@ Menu wiring (`docs/parity-checklist.md`): 640 of 640 menu items live (100.0%). T
 
 ## Reliability
 
-Never-crash attribute on 30 of 30 crate roots.
+Never-crash attribute on 31 of 31 crate roots.
 
 | Id | Target | Status | Issue | Note |
 |---|---|---|---|---|

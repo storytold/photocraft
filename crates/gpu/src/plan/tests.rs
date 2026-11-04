@@ -1,5 +1,5 @@
 use super::*;
-use photocraft_color::{Color, ColorMode, SampleType};
+use photocraft_color::{Color, ColorMode, PixelFormat, SampleType};
 use photocraft_geom::Size;
 
 #[test]
@@ -334,4 +334,45 @@ fn advanced_blending_falls_back_to_the_cpu() {
     inner.advanced.knockout = Knockout::Shallow;
     d.layers.push(Layer::group("g", vec![inner]));
     assert!(plan(&d).is_err(), "knockout inside a group");
+}
+#[test]
+fn editable_paint_mask_fill_uses_transformed_source_pass() {
+    use photocraft_doc::{
+        LayerMask,
+        mask_paint::{EffectKind, Paint, Stack},
+    };
+    use photocraft_raster::Surface;
+
+    let mut doc = Document::new("mask fill", Size::new(8, 8), ColorMode::Rgb, SampleType::U8);
+    let mut layer = Layer::new("masked", LayerContent::Fill(Fill::Solid(Color::WHITE)));
+    let map = Surface::with_default(PixelFormat::GRAY8, &[0.0]);
+    let mut mask = LayerMask::hide_all();
+    mask.paint = Some(Stack {
+        base: mask.surface.clone(),
+        layers: vec![Paint {
+            name: "Fill".into(),
+            visible: true,
+            opacity: 0.75,
+            blend: photocraft_color::BlendMode::Normal,
+            surface: Surface::new(PixelFormat::RGBA8),
+            fill_map: Some(map),
+            fill_map_size: [2, 3],
+            fill_bounds: Some([1, 2, 7, 8]),
+            kind: EffectKind::Fill { value: 0.4, rotation: 37.0, repeat_u: true, repeat_v: false, mirror_u: true, mirror_v: false },
+        }],
+        active: 0,
+    });
+    layer.mask = Some(mask);
+    doc.layers.push(layer);
+
+    let plan = plan(&doc).expect("editable Paint mask should be GPU-supported");
+    let pass = plan.passes.iter().find(|p| p.kernel == Kernel::MaskStack && p.adjust_kind == 5).expect("spatial Fill pass");
+    assert_eq!(pass.flags & F_MASK_FILL, F_MASK_FILL);
+    assert_eq!(pass.flags & F_MASK_FILL_REPEAT_U, F_MASK_FILL_REPEAT_U);
+    assert_eq!(pass.flags & F_MASK_FILL_REPEAT_V, 0);
+    assert_eq!(pass.flags & F_MASK_FILL_MIRROR_U, F_MASK_FILL_MIRROR_U);
+    assert_eq!(pass.flags & F_MASK_FILL_MIRROR_V, 0);
+    assert_eq!(pass.params[0], [1.0, 2.0, 7.0, 8.0]);
+    assert_eq!(pass.params[2], [2.0, 3.0, 0.0, 0.0]);
+    assert!(pass.mask_fill.as_ref().is_some_and(|fill| fill.index == 0 && fill.size == [2, 3]));
 }

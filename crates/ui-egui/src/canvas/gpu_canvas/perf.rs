@@ -36,6 +36,12 @@ pub struct Perf {
     pub gpu: bool,
     /// Layer tiles uploaded by the last GPU composite.
     pub gpu_uploads: u64,
+    /// Bytes uploaded for changed layer tiles by the last GPU composite.
+    pub gpu_upload_bytes: u64,
+    /// Planned compositor passes in the last GPU refresh.
+    pub gpu_passes: u64,
+    /// Chunk renders in the last GPU refresh.
+    pub gpu_chunks: u64,
     /// How long the GPU spent executing a recent composite (ms), from timestamp queries read
     /// back after the fact. `None` on the CPU compositor, on a device without timestamp queries
     /// and on wasm — there is then no honest number to report, and `composite_ms` is not one.
@@ -221,6 +227,9 @@ impl Perf {
         self.upload_ms = upload_ms;
         if !kind.starts_with("gpu") {
             self.gpu_uploads = 0;
+            self.gpu_upload_bytes = 0;
+            self.gpu_passes = 0;
+            self.gpu_chunks = 0;
             // The CPU compositor did this one: there is no GPU time, and the last GPU
             // refresh's would be read as this refresh's.
             self.gpu_ms = None;
@@ -231,6 +240,10 @@ impl Perf {
     /// Record a canvas refresh and any GPU measurement that came back with it.
     pub fn record_refresh(&mut self, r: &Refresh) {
         self.record(r.kind, r.px, r.composite_ms, r.upload_ms);
+        self.gpu_uploads = r.uploads;
+        self.gpu_upload_bytes = r.gpu_upload_bytes;
+        self.gpu_passes = r.gpu_passes;
+        self.gpu_chunks = r.gpu_chunks;
         if let Some(t) = r.gpu {
             self.record_gpu(t);
         }

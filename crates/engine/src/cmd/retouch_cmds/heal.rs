@@ -73,7 +73,7 @@ pub(super) fn healing_brush(s: &mut Session, p: &Value) -> Result<Value> {
 pub(super) fn history_source(s: &Session, id: Option<LayerId>, p: &Value, cmd: &str) -> Result<Surface> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let source_doc = crate::history_source_cmds::paint_source(st, p, cmd)?;
-    crate::channel_cmds::read_target_surface(source_doc.as_ref(), id, p)
+    crate::channel_cmds::read_history_target_surface(source_doc.as_ref(), id, p)
         .cloned()
         .map_err(|_| EngineError::Other("the target did not exist (as pixels, a mask or a channel) in that history state".into()))
 }

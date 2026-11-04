@@ -1079,7 +1079,7 @@ impl<'a> Image<'a> {
             let (_mname, _mprops, px) = self.channel(mptr, ctl)?;
             let mut surface = Surface::new(mask_fmt);
             write_pixels(&mut surface, &px, x, y)?;
-            layer.mask = Some(LayerMask { surface, enabled: apply_mask, linked: true, density: 1.0, feather: 0.0 });
+            layer.mask = Some(LayerMask { surface, enabled: apply_mask, linked: true, density: 1.0, feather: 0.0, paint: None });
         }
         let linear = composite_space.unsigned_abs() == 1 || blend_space.unsigned_abs() == 1;
         Ok(Some((Node { layer, path, group, children: Vec::new() }, linear)))

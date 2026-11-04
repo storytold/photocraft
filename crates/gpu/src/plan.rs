@@ -34,10 +34,11 @@ use planner::Planner;
 #[cfg(test)]
 use planner::blend_if_params;
 pub use planner::{
-    F_ADD_DIFF, F_ATOP, F_BLEND_IF, F_CHANNELS, F_FIRST, F_GATE, F_HDR, F_KNOCKOUT, F_LAB, F_LAYER_SHAPE, F_NO_LAYER, F_OUTLINE, F_QUANT, F_REL, F_STROKE_OUT,
+    F_ADD_DIFF, F_ATOP, F_BLEND_IF, F_CHANNELS, F_FIRST, F_GATE, F_HDR, F_KNOCKOUT, F_LAB, F_LAYER_SHAPE, F_MASK_FILL, F_MASK_FILL_LEGACY,
+    F_MASK_FILL_MIRROR_U, F_MASK_FILL_MIRROR_V, F_MASK_FILL_REPEAT_U, F_MASK_FILL_REPEAT_V, F_MASK_SLOT, F_NO_LAYER, F_OUTLINE, F_QUANT, F_REL, F_STROKE_OUT,
     F_TEXT_GAMMA, F_VECTOR, INIT_ALPHA, INIT_COVER, INIT_INSIDE, INIT_OPAQUE, INIT_OUTLINE, INIT_RELATIVE, INIT_SCALE, INIT_VSTROKE, SHAPE_MAP,
 };
-pub use types::{Checkpoint, DocCtx, FxLayer, Kernel, MapRef, MaskUse, Pass, Role, SurfaceRef, TexUse, Unsupported};
+pub use types::{Checkpoint, DocCtx, FxLayer, Kernel, MapRef, MaskFillUse, MaskSource, MaskUse, Pass, Role, SurfaceRef, TexUse, Unsupported};
 
 /// Index of a chunk-sized accumulator texture.
 pub type Slot = u32;
@@ -51,6 +52,8 @@ pub struct Plan<'a> {
     pub fx: Vec<FxLayer<'a>>,
     /// Complete root stack units, where only the accumulated backdrop remains live.
     pub checkpoints: Vec<Checkpoint>,
+    /// Maximum sum of active Blur radii within one editable mask stack.
+    pub mask_halo: u32,
 }
 
 /// Build the pass list for `doc`.

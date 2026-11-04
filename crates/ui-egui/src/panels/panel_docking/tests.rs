@@ -6,6 +6,162 @@ fn app() -> PhotocraftApp {
     PhotocraftApp::new(photocraft_engine::Session::new(), Default::default())
 }
 
+#[cfg(feature = "uv-workbench")]
+#[test]
+fn uv_panels_are_parked_during_2d_edits_and_restored_for_3d() {
+    let mut app = app();
+    app.ui.workspace = "3D".into();
+    crate::menus::apply_workspace(&mut app);
+    app.run("window.panel.activate", json!({"panel":"uvWorkbench"})).unwrap();
+    let saved = lay(&app).clone();
+    assert!(saved.contains(&"uvWorkbench".to_owned()));
+
+    app.ui.workspace = "Painting".into();
+    crate::uv_workspace::sync_workspace(&mut app).unwrap();
+    let projected = scoped_layout(&app, lay(&app).clone());
+    assert!(!projected.contains(&"uvWorkbench".to_owned()));
+    assert!(lay(&app).contains(&"uvWorkbench".to_owned()), "projection keeps the saved UV panel");
+
+    // A normal panel can still be moved while the UV panel is parked in the saved layout.
+    app.run("window.panel.move", json!({"panel":"history","anchor":"layers","zone":"bottom"})).unwrap();
+    assert!(lay(&app).contains(&"uvWorkbench".to_owned()));
+    assert!(lay(&app).contains(&"history".to_owned()));
+
+    app.ui.workspace = "3D".into();
+    crate::uv_workspace::sync_workspace(&mut app).unwrap();
+    assert!(scoped_layout(&app, lay(&app).clone()).contains(&"uvWorkbench".to_owned()));
+    assert_ne!(lay(&app), &saved, "2D edits to ordinary panels persist across the workspace switch");
+}
+
+#[cfg(feature = "uv-workbench")]
+#[test]
+fn uv_workbench_toggle_closes_only_its_custom_panel() {
+    let mut app = app();
+    app.ui.workspace = "3D".into();
+    crate::menus::apply_workspace(&mut app);
+    app.run("window.panel.activate", json!({"panel":"uvWorkbench"})).unwrap();
+    app.run("window.panel.activate", json!({"panel":"layers"})).unwrap();
+    assert!(lay(&app).contains(&"uvWorkbench".to_owned()));
+
+    crate::menus::invoke(&mut app, &egui::Context::default(), "window.uvWorkbench", Value::Null).unwrap();
+    assert!(!lay(&app).contains(&"uvWorkbench".to_owned()));
+    assert!(lay(&app).contains(&"layers".to_owned()));
+    assert!(!app.ui.uv_workbench.open);
+}
+
+#[cfg(feature = "uv-workbench")]
+#[test]
+fn legacy_set_cannot_select_a_parked_uv_tab_while_showing_properties() {
+    let mut app = app();
+    app.ui.workspace = "Painting".into();
+    app.ui.docking = Some(Workspace::new(legacy(&app)));
+    let before = serde_json::to_value(&app.ui).unwrap();
+    let ctx = egui::Context::default();
+    let result = control_set(&mut app, &ctx, json!({"panels":{"properties":true},"dockTabs":{"properties":2}}));
+    assert_eq!(result["ok"], false);
+    assert_eq!(serde_json::to_value(&app.ui).unwrap(), before, "a parked UV tab cannot leak into a 2D workspace");
+}
+
+#[cfg(feature = "uv-workbench")]
+#[test]
+fn properties_rail_falls_back_when_the_selected_uv_tab_is_parked() {
+    let mut app = app();
+    app.ui.workspace = "3D".into();
+    let layout = Layout {
+        root: Some(Node::Split {
+            axis: craft_ui::layout::SplitAxis::Horizontal,
+            size: craft_ui::layout::SplitSize::FixedSecond(300.0),
+            first: Box::new(Node::Tabs { panels: vec![CANVAS.to_owned()], active: 0 }),
+            second: Box::new(Node::Tabs { panels: vec!["uvWorkbench".to_owned()], active: 0 }),
+        }),
+        floating: Vec::new(),
+    };
+    app.ui.docking = Some(Workspace::new(layout));
+    app.ui.dock_tabs.properties = 2;
+    app.ui.workspace = "Painting".into();
+
+    rail_click(&mut app, Group::Properties);
+
+    assert!(lay(&app).contains(&"properties".to_owned()), "the rail activates an available Properties panel");
+    assert!(!scoped_layout(&app, lay(&app).clone()).contains(&"uvWorkbench".to_owned()));
+}
+
+#[cfg(feature = "uv-workbench")]
+#[test]
+fn legacy_set_can_unhide_and_select_a_properties_tab_in_one_request() {
+    let mut app = app();
+    app.ui.workspace = "3D".into();
+    let pro = app.ui.theme.is_pro();
+    app.ui.dock.hide_tab(Group::Properties, 2, pro);
+    app.ui.docking = Some(Workspace::new(legacy(&app)));
+
+    let mut target_dock = app.ui.dock.clone();
+    target_dock.show_tab(Group::Properties, 2, pro);
+    let result = control_set(&mut app, &egui::Context::default(), json!({"dock":target_dock,"dockTabs":{"properties":2}}));
+
+    assert_eq!(result["ok"], true, "{result}");
+    assert!(lay(&app).contains(&"uvWorkbench".to_owned()));
+    assert!(panel_active(lay(&app), "uvWorkbench"));
+}
+
+#[cfg(feature = "uv-workbench")]
+#[test]
+fn stale_uv_toggle_state_reopens_the_missing_custom_panel() {
+    let mut app = app();
+    app.ui.workspace = "3D".into();
+    crate::menus::apply_workspace(&mut app);
+    app.run("window.panel.activate", json!({"panel":"uvWorkbench"})).unwrap();
+    app.run("window.panel.close", json!({"panel":"uvWorkbench"})).unwrap();
+    assert!(!lay(&app).contains(&"uvWorkbench".to_owned()));
+    assert!(!app.ui.uv_workbench.open);
+
+    // The layout is authoritative if the persisted toggle bit is stale.
+    app.ui.uv_workbench.open = true;
+    crate::menus::invoke(&mut app, &egui::Context::default(), "window.uvWorkbench", Value::Null).unwrap();
+    assert!(lay(&app).contains(&"uvWorkbench".to_owned()));
+    assert!(app.ui.uv_workbench.open);
+}
+
+#[cfg(feature = "uv-workbench")]
+#[test]
+fn close_others_in_2d_preserves_parked_uv_tabs() {
+    let mut app = app();
+    app.ui.workspace = "3D".into();
+    crate::menus::apply_workspace(&mut app);
+    app.run("window.panel.activate", json!({"panel":"uvWorkbench"})).unwrap();
+    app.run("window.panel.move", json!({"panel":"uvWorkbench","anchor":"properties","zone":"center"})).unwrap();
+    app.ui.workspace = "Painting".into();
+    crate::uv_workspace::sync_workspace(&mut app).unwrap();
+
+    app.run("window.panel.closeOthers", json!({"panel":"properties"})).unwrap();
+    assert!(lay(&app).contains(&"properties".to_owned()));
+    assert!(lay(&app).contains(&"uvWorkbench".to_owned()), "Close Others acts on the visible projection only");
+}
+
+#[cfg(feature = "uv-workbench")]
+#[test]
+fn closing_the_ordinary_properties_group_keeps_parked_uv_panel_visibility() {
+    let mut app = app();
+    app.ui.workspace = "3D".into();
+    crate::menus::apply_workspace(&mut app);
+    app.ui.docking = Some(Workspace::new(legacy(&app)));
+    assert!(lay(&app).contains(&"uvWorkbench".to_owned()));
+    assert!(lay(&app).contains(&"uvImages".to_owned()));
+
+    app.ui.workspace = "Painting".into();
+    crate::uv_workspace::sync_workspace(&mut app).unwrap();
+    let mut panels = app.ui.panels.clone();
+    panels.properties = false;
+    let request = json!({"panels":{"properties":false}});
+    let update = prepare_legacy_update(&app, &request, Some(&panels), None, None, app.ui.theme.is_pro()).unwrap().unwrap();
+    commit_legacy_update(&mut app, update, &request);
+
+    assert!(lay(&app).contains(&"uvWorkbench".to_owned()), "ordinary group visibility must not hide the parked UV workbench");
+    assert!(lay(&app).contains(&"uvImages".to_owned()), "ordinary group visibility must not hide the parked UV images tab");
+    assert!(!lay(&app).contains(&"properties".to_owned()));
+    assert!(!lay(&app).contains(&"adjustments".to_owned()));
+}
+
 fn lay(app: &PhotocraftApp) -> &Layout<String> {
     &app.ui.docking.as_ref().expect("a customized workspace").layout
 }
@@ -590,7 +746,8 @@ fn legacy_control_updates_authoritative_custom_visibility_and_selection_atomical
     assert_eq!(control_set(&mut app, &ctx, json!({"panels":{"layers":false}}))["ok"], true);
     assert!(PANELS.iter().filter(|p| p.2 == Group::Layers).all(|p| !lay(&app).contains(&p.0.into())));
     assert!(!app.ui.panels.layers);
-    assert_eq!(control_set(&mut app, &ctx, json!({"panels":{"layers":true},"dockTabs":{"layers":2}}))["ok"], true);
+    let restored = control_set(&mut app, &ctx, json!({"panels":{"layers":true},"dockTabs":{"layers":2}}));
+    assert_eq!(restored["ok"], true, "{restored}");
     assert!(panel_active(lay(&app), "paths"));
     let before = serde_json::to_value(&app.ui).unwrap();
     for request in [
