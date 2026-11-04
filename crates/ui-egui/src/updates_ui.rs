@@ -120,9 +120,11 @@ pub(crate) fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         && app.ui.updates_open
         && let Status::Available { release } = app.session.updates.status.clone()
     {
-        let mut prompt = app.updates_rt.signed_prompt.take().unwrap_or_else(|| {
-            craft_update::StartupPrompt::new(&crate::UPDATE_APP, release_of(&release), photocraft_engine::build_info::VERSION)
-        });
+        let mut prompt = app
+            .updates_rt
+            .signed_prompt
+            .take()
+            .unwrap_or_else(|| craft_update::StartupPrompt::new(&crate::UPDATE_APP, release_of(&release), photocraft_engine::build_info::VERSION));
         match prompt.show(ctx) {
             craft_update::StartupPromptResponse::Pending => app.updates_rt.signed_prompt = Some(prompt),
             craft_update::StartupPromptResponse::UpdateAndRestart => {
