@@ -65,11 +65,22 @@ fn tool_keys_skip_tools_hidden_from_the_toolbar() {
     app.ui.tool = Tool::Move;
     press_key(&mut app, &ctx, Key::L, Modifiers::NONE);
     assert_eq!(app.ui.tool, Tool::MagneticLasso);
-    // A group hidden whole keeps its key.
+    // A group hidden whole keeps its key, and Shift+key still cycles its tools.
     app.session.edit_prefs(|p| p.toolbar.hidden.push("PaintBucket".to_string()));
     app.ui.tool = Tool::Move;
     press_key(&mut app, &ctx, Key::G, Modifiers::NONE);
-    assert!(matches!(app.ui.tool, Tool::Gradient | Tool::PaintBucket));
+    let first = app.ui.tool;
+    assert!(matches!(first, Tool::Gradient | Tool::PaintBucket));
+    press_key(&mut app, &ctx, Key::G, Modifiers::SHIFT);
+    assert_ne!(app.ui.tool, first);
+    // Brush stays on the toolbar under a shortcut of its own, so B has no hidden tool to fall back on.
+    app.session.edit_prefs(|p| {
+        p.toolbar.hidden = ["Pencil", "MixerBrush", "ColorReplacement"].map(String::from).to_vec();
+        p.shortcuts.insert("tools.select.brush".to_string(), "F6".to_string());
+    });
+    app.ui.tool = Tool::Move;
+    press_key(&mut app, &ctx, Key::B, Modifiers::NONE);
+    assert_eq!(app.ui.tool, Tool::Move);
 }
 
 /// #3296: by default T keeps the current type tool and only Shift+T cycles, as in Photoshop.
