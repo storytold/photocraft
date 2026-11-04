@@ -30,7 +30,7 @@ impl ViewXform {
                 center,
                 flip: app.ui.view.flip_horizontal,
                 rotation: v.rotation,
-                aspect: app.ui.view.display_aspect(),
+                aspect: app.display_aspect(),
             }
             .pixel_aligned_for(app, app.canvas_ppp()),
         )

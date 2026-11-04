@@ -19,8 +19,11 @@ use crate::blocks;
 use crate::pixels::{max_sample, sample_for_depth, try_interleave, zero_sample};
 
 /// Resources that are mapped to document fields or regenerated on export.
-pub(crate) const MAPPED_RESOURCES: [u16; 19] = [
+pub(crate) const MAPPED_RESOURCES: [u16; 22] = [
     ids::GLOBAL_ANGLE,
+    ids::PIXEL_ASPECT_RATIO,
+    ids::COLOR_SAMPLERS,
+    ids::COLOR_SAMPLERS_OLD,
     ids::GLOBAL_ALTITUDE,
     ids::RESOLUTION_INFO,
     ids::ICC_PROFILE,
@@ -1122,6 +1125,24 @@ pub(crate) fn can_recover_layers(file: &PsdFile) -> bool {
     import_format(file).1 && !file.layers().is_empty()
 }
 
+/// The Color Sampler points of a resource: each on the pixel it samples (Photoshop stores its
+/// centre), those off the canvas dropped, at most Photoshop's ten. A record that can't be read
+/// leaves them as they are and is kept for the save (`color_sampler_resources`).
+fn color_samplers(resource: &photocraft_psd::ImageResource, doc: &mut Document) {
+    let Ok(s) = photocraft_psd::ColorSamplers::from_bytes(&resource.data) else {
+        doc.metadata.psd_resources.push((resource.id, String::from_utf8_lossy(&resource.name).into_owned(), Arc::new(resource.data.clone())));
+        return;
+    };
+    let (w, h) = (f64::from(doc.size.width), f64::from(doc.size.height));
+    doc.color_samplers = s
+        .points
+        .iter()
+        .map(|p| p.map(f64::floor))
+        .filter(|[x, y]| x.is_finite() && y.is_finite() && *x >= 0.0 && *y >= 0.0 && *x < w && *y < h)
+        .take(photocraft_doc::MAX_COLOR_SAMPLERS)
+        .collect();
+}
+
 /// Reads the document-level metadata; the second value is the allocation failure that stopped a
 /// pattern from being read, which fails the open.
 fn read_initial_metadata(
@@ -1133,6 +1154,7 @@ fn read_initial_metadata(
     warnings: &mut Vec<String>,
 ) -> (bool, Option<String>) {
     let header = &file.header;
+    let current_samplers = file.resources.iter().any(|r| r.id == ids::COLOR_SAMPLERS && photocraft_psd::ColorSamplers::from_bytes(&r.data).is_ok());
     for resource in &file.resources {
         match resource.id {
             ids::RESOLUTION_INFO => {
@@ -1143,6 +1165,16 @@ fn read_initial_metadata(
                 }
             }
             ids::ICC_PROFILE => doc.icc_profile = Some(Arc::new(resource.data.clone())),
+            // A ratio that can't be read or drawn (zero, negative, NaN) leaves the pixels square,
+            // and its record is kept for the save (`pixel_aspect_resource`).
+            ids::PIXEL_ASPECT_RATIO => match crate::psd_export::readable_pixel_aspect(&resource.data) {
+                Some(ratio) => doc.pixel_aspect = ratio,
+                None => doc.metadata.psd_resources.push((resource.id, String::from_utf8_lossy(&resource.name).into_owned(), Arc::new(resource.data.clone()))),
+            },
+            // Color Sampler points: 1073 when it can be read, even with no points, else the legacy
+            // 1038 (Photoshop writes both).
+            ids::COLOR_SAMPLERS_OLD if current_samplers => {}
+            ids::COLOR_SAMPLERS | ids::COLOR_SAMPLERS_OLD => color_samplers(resource, doc),
             ids::XMP => doc.metadata.xmp = Some(String::from_utf8_lossy(&resource.data).into()),
             ids::EXIF => doc.metadata.exif = Some(Arc::new(resource.data.clone())),
             1032 => parse_guides(&resource.data, doc),

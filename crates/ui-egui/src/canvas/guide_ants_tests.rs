@@ -59,11 +59,12 @@ fn the_ants_are_painted_over_the_guides_at_every_zoom() {
     }
 }
 
-/// A secondary view (another tile of the document) draws no guides, but still its ants.
+/// A secondary view (another tile) draws its own guides, with the ants over them here too.
 #[test]
-fn a_secondary_view_still_draws_the_ants() {
+fn a_secondary_view_draws_its_guides_under_its_ants() {
     let mut app = app();
     let (guides, ants) = painted(&mut app, 1.0, 0.5, false);
-    assert!(guides.is_empty());
+    assert_eq!(guides.len(), 4);
     assert!(!ants.is_empty());
+    assert!(ants.iter().min() > guides.iter().max(), "ants at {ants:?} are under the guides at {guides:?}");
 }

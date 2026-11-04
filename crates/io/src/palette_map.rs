@@ -52,6 +52,8 @@ pub(crate) fn document_to_psd(doc: &Document, force_psb: bool, size_limit: Optio
         ImageResource::new(ids::GLOBAL_ALTITUDE, (doc.global_light.altitude.round() as i32).to_be_bytes().to_vec()),
         ImageResource::new(1032, crate::psd_export::guides_resource(doc)),
     ];
+    resources.push(crate::psd_export::pixel_aspect_resource(doc));
+    resources.extend(crate::psd_export::color_sampler_resources(doc));
     if let (PsdMode::Indexed, Some(t)) = (mode, table) {
         resources.push(ImageResource::new(COLOR_TABLE_COUNT, (t.colors.len() as u16).to_be_bytes().to_vec()));
         if let Some(i) = t.transparent {

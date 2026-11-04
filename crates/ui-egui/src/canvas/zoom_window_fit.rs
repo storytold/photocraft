@@ -141,12 +141,14 @@ pub fn follow(
     }
     // Still recorded while maximized, so leaving it doesn't resize for a zoom made meanwhile.
     let pinned = ctx.input(|i| i.viewport().maximized == Some(true) || i.viewport().fullscreen == Some(true));
+    // This window's own document and settings: every open window follows in the same frame.
+    let toggles = app.window_toggles_in(viewport, window.document);
     let layout = Layout {
         ppp: ctx.pixels_per_point(),
-        aspect: app.ui.view.display_aspect(),
-        chrome: rect.size() - crate::rulers::content_rect(app, rect).size(),
+        aspect: app.display_aspect_of(Some(window.document)),
+        chrome: rect.size() - crate::rulers::content_rect_with(toggles.rulers, rect).size(),
         bars: if app.ui.view.shows_scrollbars() { crate::scrollbars::THICKNESS } else { 0.0 },
-        flip: app.ui.view.flip_horizontal,
+        flip: toggles.flip_horizontal,
         monitor: ctx.input(|i| i.viewport().monitor_size),
     };
     let on = app.session.prefs().general.zoom_resizes_windows && !pinned;
@@ -290,6 +292,60 @@ mod tests {
         app.ui.extras.rulers = true;
         let ruled = frame(&app, ViewportClass::Immediate, &at(2.0)).unwrap();
         assert!(ruled.x > 800.0 && ruled.y > 600.0, "{ruled:?}");
+    }
+
+    /// Every open document window follows in the same frame: each is sized for its own document's
+    /// pixel aspect ratio, not the active document's.
+    #[test]
+    fn follow_sizes_a_window_for_its_own_documents_pixel_aspect_ratio() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        for _ in 0..2 {
+            app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
+        }
+        app.sync_views();
+        app.ui.extras.rulers = false;
+        app.ui.view.pixel_aspect_correction = true;
+        app.run("view.setPixelAspectRatio", json!({"ratio": 2.0})).unwrap();
+        app.session.set_active(0);
+        app.sync_views();
+        app.run("prefs.set", json!({"path": "general.zoomResizesWindows", "value": true})).unwrap();
+        let ctx = Context::default();
+        let viewport = ViewportId::from_hash_of(("docwin", 5_u64));
+        let rect = Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0));
+        let window = DocWindow { id: 5, document: 1, view: view([400, 300], 1.0), open: true, position: None, floating: false, focused: false };
+        let bars = Vec2::splat(crate::scrollbars::THICKNESS);
+        // The first frame records the zoom; a zoom after it resizes the window.
+        assert_eq!(follow(&app, &ctx, ViewportClass::Immediate, viewport, &window, &mut view([400, 300], 1.0), rect), None);
+        let size = follow(&app, &ctx, ViewportClass::Immediate, viewport, &window, &mut view([400, 300], 1.5), rect);
+        assert_eq!(size, Some(vec2(1200.0, 450.0) + bars), "the second document's pixels are twice as wide");
+    }
+
+    /// An extra window is sized for its own rulers, whichever window has focus.
+    #[test]
+    fn follow_sizes_a_window_for_its_own_rulers() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
+        app.sync_views();
+        app.ui.extras.rulers = false;
+        app.run("prefs.set", json!({"path": "general.zoomResizesWindows", "value": true})).unwrap();
+        let own = crate::state::WindowToggles { rulers: true, ..app.window_toggles() };
+        let window = DocWindow {
+            id: 6,
+            document: 0,
+            view: View { toggles: Some(own), ..view([400, 300], 1.0) },
+            open: true,
+            position: None,
+            floating: false,
+            focused: false,
+        };
+        app.ui.windows.push(window.clone());
+        let ctx = Context::default();
+        let viewport = crate::canvas::doc_window_viewport(6);
+        let rect = Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0));
+        let bars = Vec2::splat(crate::scrollbars::THICKNESS);
+        assert_eq!(follow(&app, &ctx, ViewportClass::Immediate, viewport, &window, &mut view([400, 300], 1.0), rect), None);
+        let size = follow(&app, &ctx, ViewportClass::Immediate, viewport, &window, &mut view([400, 300], 2.0), rect).unwrap();
+        assert_eq!(size, vec2(800.0, 600.0) + Vec2::splat(crate::rulers::RULER) + bars, "the window makes room for its own rulers");
     }
 
     /// Where the image lands in a window of the wrapped size, and the canvas area the scrollbars
