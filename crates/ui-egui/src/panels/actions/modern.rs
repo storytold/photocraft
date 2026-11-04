@@ -313,7 +313,7 @@ enum Operation {
     NewGroup,
 }
 
-fn context(ui: &mut egui::Ui, action: Option<usize>, group: Option<&str>, play: Vec<usize>) -> Option<Operation> {
+fn context(ui: &mut egui::Ui, action: Option<usize>, group: Option<&str>, play: Vec<usize>, group_mutable: bool) -> Option<Operation> {
     let mut operation = None;
     if ui.add_enabled(action.is_some(), egui::Button::new(tl!("Edit Action"))).clicked() {
         operation = action.map(Operation::Edit);
@@ -325,14 +325,14 @@ fn context(ui: &mut egui::Ui, action: Option<usize>, group: Option<&str>, play: 
         ui.add_enabled(false, egui::Button::new(tl!(label)));
     }
     let duplicate = if group.is_some() { tl!("Duplicate group") } else { tl!("Duplicate action") };
-    if ui.button(duplicate).clicked() {
+    if ui.add_enabled(group_mutable, egui::Button::new(duplicate)).clicked() {
         operation = Some(Operation::Duplicate(match group {
             Some(group) => json!({"set":group}),
             None => json!({"action":action}),
         }));
     }
     let delete = if group.is_some() { tl!("Delete group") } else { tl!("Delete action") };
-    if ui.button(delete).clicked() {
+    if ui.add_enabled(group_mutable, egui::Button::new(delete)).clicked() {
         operation = match group {
             Some(group) => Some(Operation::DeleteGroup(group.into())),
             None => action.map(Operation::DeleteAction),
@@ -386,11 +386,11 @@ fn action_row(app: &mut PhotocraftApp, ui: &mut egui::Ui, index: usize, action: 
         }
         let menu = icons::button(ui, "ellipsis", 24.0, false, tl!("Actions"));
         egui::Popup::menu(&menu).show(|ui| {
-            operation = context(ui, Some(index), None, vec![index]).or(operation.take());
+            operation = context(ui, Some(index), None, vec![index], true).or(operation.take());
         });
     });
     row.response.context_menu(|ui| {
-        operation = context(ui, Some(index), None, vec![index]).or(operation.take());
+        operation = context(ui, Some(index), None, vec![index], true).or(operation.take());
     });
     operation
 }
@@ -448,73 +448,74 @@ pub(super) fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let list = app.session.actions.list.clone();
     let query = app.ui.actions.search.to_lowercase();
     let matches = |action: &Action| action.name.to_lowercase().contains(&query);
-    let groups = photocraft_engine::actions_edit_cmds::set_names(&app.session);
+    let mut folders = photocraft_engine::actions_edit_cmds::set_occurrences(&app.session);
+    // Preserve the original logical order until physical rows exist; then use their slots,
+    // including empty occurrences and repeated captions.
+    if !folders.iter().any(|folder| folder.origin.is_some()) {
+        let names = photocraft_engine::actions_edit_cmds::set_names(&app.session);
+        let ranks: std::collections::HashMap<_, _> = names.iter().enumerate().map(|(rank, name)| (name.as_str(), rank)).collect();
+        folders.sort_by_key(|folder| (
+            folder.name == photocraft_engine::atn_cmds::UNGROUPED_SET,
+            ranks.get(folder.name.as_str()).copied().unwrap_or(usize::MAX),
+        ));
+    }
+    let mut occurrences = std::collections::HashMap::new();
+    for folder in &folders { *occurrences.entry(folder.name.as_str()).or_insert(0usize) += 1; }
+    app.ui.actions.collapsed_folders.retain(|key| folders.iter().any(|row| key.matches(row)));
+    if app.ui.actions.selected_folder.as_ref().is_some_and(|key| !folders.iter().any(|row| key.matches(row))) {
+        app.ui.actions.selected_folder = None;
+        app.ui.actions.selected_set = None;
+    }
     egui::ScrollArea::vertical().id_salt("modern-actions-list").show(ui, |ui| {
-        for group in groups.iter().filter(|group| group.as_str() != photocraft_engine::atn_cmds::UNGROUPED_SET) {
-            let members: Vec<_> = list
-                .iter()
-                .enumerate()
-                .filter(|(_, action)| photocraft_engine::atn_cmds::logical_set_name(action.set.as_deref()) == group)
-                .map(|(index, _)| index)
-                .collect();
+        for folder in &folders {
+            let group = &folder.name;
+            let members = &folder.actions;
             if !query.is_empty() && !members.iter().any(|&index| matches(&list[index])) {
                 continue;
             }
-            let collapsed = app.ui.actions.collapsed_sets.contains(group);
-            let header = ui.horizontal(|ui| {
-                if icons::button(ui, if collapsed { "chevron-right" } else { "chevron-down" }, 20.0, false, group).clicked() {
-                    if collapsed {
-                        app.ui.actions.collapsed_sets.retain(|name| name != group);
-                    } else {
-                        app.ui.actions.collapsed_sets.push(group.clone());
-                    }
-                }
-                ui.strong(group);
-                let menu = icons::button(ui, "ellipsis", 24.0, false, tl!("Actions"));
-                egui::Popup::menu(&menu).show(|ui| {
-                    operation = context(ui, None, Some(group), members.clone()).or(operation.take());
-                });
-            });
-            if let Some(drag) = header.response.dnd_release_payload::<DragAction>() {
-                operation = Some(Operation::Assign(Box::new((*drag).clone()), group.clone()));
-            }
-            header.response.context_menu(|ui| {
-                operation = context(ui, None, Some(group), members.clone()).or(operation.take());
-            });
-            if !collapsed || !query.is_empty() {
-                for &index in &members {
+            let ungrouped = group == photocraft_engine::atn_cmds::UNGROUPED_SET && folder.origin.is_none() && !members.is_empty();
+            if ungrouped {
+                ui.separator();
+                for &index in members {
                     if matches(&list[index]) {
-                        operation = action_row(app, ui, index, &list[index], true).or(operation.take());
+                        operation = action_row(app, ui, index, &list[index], false).or(operation.take());
                     }
                 }
+                continue;
             }
-        }
-        let ungrouped: Vec<_> = list
-            .iter()
-            .enumerate()
-            .filter(|(_, action)| photocraft_engine::atn_cmds::logical_set_name(action.set.as_deref()) == photocraft_engine::atn_cmds::UNGROUPED_SET)
-            .collect();
-        let empty_ungrouped = ungrouped.is_empty() && groups.iter().any(|group| group == photocraft_engine::atn_cmds::UNGROUPED_SET);
-        if !ungrouped.is_empty() || empty_ungrouped {
-            ui.separator();
-        }
-        for (index, action) in ungrouped {
-            if matches(action) {
-                operation = action_row(app, ui, index, action, false).or(operation.take());
-            }
-        }
-        if empty_ungrouped {
-            // No ordinary Ungrouped header: this row represents a real retained empty set.
-            let header = ui.horizontal(|ui| {
-                ui.strong(set_label(photocraft_engine::atn_cmds::UNGROUPED_SET));
-                let menu = icons::button(ui, "ellipsis", 24.0, false, tl!("Actions"));
-                egui::Popup::menu(&menu).show(|ui| {
-                    operation = context(ui, None, Some(photocraft_engine::atn_cmds::UNGROUPED_SET), Vec::new()).or(operation.take());
+            let key = super::FolderSelection::from_row(folder);
+            let collapsed = app.ui.actions.folder_collapsed(&key);
+            // The existing group mutation commands accept a logical caption. Until the
+            // serialized slot-selector extension lands, they cannot mutate one namesake.
+            let group_mutable = occurrences.get(group.as_str()) == Some(&1);
+            ui.push_id(("modern-physical-folder", key.origin, key.slot, group), |ui| {
+                let header = ui.horizontal(|ui| {
+                    if icons::button(ui, if collapsed { "chevron-right" } else { "chevron-down" }, 20.0, false, group).clicked() {
+                        app.ui.actions.toggle_folder(key.clone());
+                    }
+                    let selected = app.ui.actions.selected.is_none() && app.ui.actions.selected_folder.as_ref().is_some_and(|selected| selected.matches(folder));
+                    if ui.selectable_label(selected, set_label(group)).clicked() {
+                        app.ui.actions.select_folder(key.clone());
+                    }
+                    let menu = icons::button(ui, "ellipsis", 24.0, false, tl!("Actions"));
+                    egui::Popup::menu(&menu).show(|ui| {
+                        operation = context(ui, None, Some(group), members.clone(), group_mutable).or(operation.take());
+                    });
                 });
+                if group_mutable && let Some(drag) = header.response.dnd_release_payload::<DragAction>() {
+                    operation = Some(Operation::Assign(Box::new((*drag).clone()), group.clone()));
+                }
+                header.response.context_menu(|ui| {
+                    operation = context(ui, None, Some(group), members.clone(), group_mutable).or(operation.take());
+                });
+                if !collapsed || !query.is_empty() {
+                    for &index in members {
+                        if matches(&list[index]) {
+                            operation = action_row(app, ui, index, &list[index], true).or(operation.take());
+                        }
+                    }
+                }
             });
-            if let Some(drag) = header.response.dnd_release_payload::<DragAction>() {
-                operation = Some(Operation::Assign(Box::new((*drag).clone()), photocraft_engine::atn_cmds::UNGROUPED_SET.to_string()));
-            }
         }
         if list.is_empty() {
             let tokens = Tokens::get(ui.ctx());

@@ -8,6 +8,7 @@ fn repeated_factory_folders_select_and_collapse_independently() {
     use egui_kittest::{Harness, kittest::Queryable};
     let mut session = photocraft_engine::Session::new();
     session.execute("file.new", json!({"width":4,"height":4})).unwrap();
+    session.execute("actions.newSet", json!({"name":"Empty before defaults"})).unwrap();
     for _ in 0..2 {
         session.execute("actions.reset", json!({"mode":"append","confirm":true})).unwrap();
     }
@@ -16,6 +17,7 @@ fn repeated_factory_folders_select_and_collapse_independently() {
     h.run_steps(3);
     let caption = photocraft_engine::actions_edit_cmds::DEFAULT_SET_NAME;
     assert_eq!(h.query_all_by_label(caption).count(), 2);
+    assert!(h.get_by_label("Empty before defaults").rect().top() < h.query_all_by_label(caption).next().unwrap().rect().top());
     assert_eq!(h.query_all_by_label("Invert Colors").count(), 2);
     h.query_all_by_label(caption).nth(1).unwrap().click();
     h.run_steps(2);
@@ -35,8 +37,8 @@ fn repeated_factory_folders_select_and_collapse_independently() {
     assert_eq!(h.state().ui.actions.selected_folder.as_ref(), Some(&selected));
     assert_eq!(selected_set_actions(h.state()), vec![2, 3]);
     let rows = photocraft_engine::actions_edit_cmds::set_occurrences(&h.state().session);
-    assert!(h.state().ui.actions.folder_collapsed(&FolderSelection::from_row(&rows[0])));
-    assert!(!h.state().ui.actions.folder_collapsed(&FolderSelection::from_row(&rows[1])));
+    assert!(h.state().ui.actions.folder_collapsed(&FolderSelection::from_row(&rows[1])));
+    assert!(!h.state().ui.actions.folder_collapsed(&FolderSelection::from_row(&rows[2])));
 }
 
 /// A small valid Photoshop set, generated without external action files.

@@ -111,6 +111,44 @@ fn harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
     h
 }
 
+/// Physical namesakes have separate Modern headers, exact selection and disclosure state.
+#[test]
+fn repeated_factory_folders_keep_modern_selection_collapse_and_empty_row_order() {
+    let mut app = app();
+    app.session.execute("actions.newSet", json!({"name":"Empty before defaults"})).unwrap();
+    for _ in 0..2 {
+        app.session.execute("actions.reset", json!({"mode":"append","confirm":true})).unwrap();
+    }
+    let mut h = harness(app);
+    let caption = photocraft_engine::actions_edit_cmds::DEFAULT_SET_NAME;
+    let names: Vec<_> = h.query_all_by_label(caption).map(|node| node.rect()).filter(|rect| rect.width() > 24.0).collect();
+    assert_eq!(names.len(), 2);
+    assert_eq!(h.query_all_by_label("Invert Colors").count(), 2);
+    let empty = h.query_all_by_label("Empty before defaults").map(|node| node.rect()).find(|rect| rect.width() > 24.0).unwrap();
+    assert!(empty.top() < names[0].top());
+    let click = |h: &mut Harness<'_, PhotocraftApp>, pos| {
+        h.event(egui::Event::PointerMoved(pos));
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+            h.step();
+        }
+        h.run_steps(2);
+    };
+    click(&mut h, names[1].center());
+    assert_eq!(super::super::selected_set_actions(h.state()), vec![2, 3]);
+    let toggle = h.query_all_by_label(caption).map(|node| node.rect()).find(|rect| rect.width() <= 24.0).unwrap();
+    click(&mut h, toggle.center());
+    assert_eq!(h.query_all_by_label("Invert Colors").count(), 1);
+    assert_eq!(h.query_all_by_label("Desaturate").count(), 1);
+    assert_eq!(super::super::selected_set_actions(h.state()), vec![2, 3]);
+    let rows = photocraft_engine::actions_edit_cmds::set_occurrences(&h.state().session);
+    assert!(h.state().ui.actions.folder_collapsed(&super::super::FolderSelection::from_row(&rows[1])));
+    assert!(!h.state().ui.actions.folder_collapsed(&super::super::FolderSelection::from_row(&rows[2])));
+    h.state_mut().ui.actions.search = "Invert".into();
+    h.run_steps(2);
+    assert_eq!(h.query_all_by_label("Invert Colors").count(), 2, "search reveals matching members of each occurrence");
+}
+
 #[test]
 fn defaults_layout_commands_and_validated_preferences_are_shell_only() {
     let mut app = app();
@@ -466,5 +504,5 @@ fn canonical_ungrouped_category_keeps_classic_loose_rows_flat_and_order_stable()
     h.get_by_label(photocraft_engine::atn_cmds::UNGROUPED_SET);
     h.state_mut().run("actions.layout.modern", json!({})).unwrap();
     h.run_steps(3);
-    h.get_by_label(photocraft_engine::atn_cmds::UNGROUPED_SET);
+    assert!(h.query_all_by_label(photocraft_engine::atn_cmds::UNGROUPED_SET).any(|node| node.rect().width() > 24.0));
 }

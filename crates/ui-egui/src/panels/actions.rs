@@ -2078,9 +2078,15 @@ fn classic_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             if let Some(value) = action_folder.get_mut(index) { *value = Some(folder_index); }
         }
     }
-    let order = if folders.iter().any(|folder| folder.origin.is_some()) {
-        folders.iter().flat_map(|folder| folder.actions.iter().copied()).collect()
-    } else { display_order(&rows) };
+    let physical_order = folders.iter().any(|folder| folder.origin.is_some());
+    // A physical folder contributes a header even when it is empty, at its actual slot.
+    let order: Vec<_> = if physical_order {
+        folders.iter().enumerate().flat_map(|(folder, row)| {
+            std::iter::once((Some(folder), None)).chain(row.actions.iter().map(move |&action| (Some(folder), Some(action))))
+        }).collect()
+    } else {
+        display_order(&rows).into_iter().map(|action| (action_folder.get(action).copied().flatten(), Some(action))).collect()
+    };
     let max_h = (ui.available_height() - 38.0).max(0.0);
     let mut play_idx: Option<Vec<usize>> = None;
     let mut moved = None;
@@ -2099,12 +2105,24 @@ fn classic_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         }
         scroll_actions_during_drag(ui);
         let mut shown_folder = None;
-        for i in order.iter().copied() {
+        for (folder_index, action_index) in order.iter().copied() {
+            if action_index.is_none() {
+                if let Some(folder) = folder_index.and_then(|index| folders.get(index)) {
+                    let key = FolderSelection::from_row(folder);
+                    let selected = app.ui.actions.selected.is_none() && app.ui.actions.selected_folder.as_ref().is_some_and(|value| value.matches(folder));
+                    let result = ui.push_id(("physical-action-folder", key.origin, key.slot, &key.name), |ui| {
+                        draw_set_header(ui, &folder.name, folder.actions.len() as u64, app.ui.actions.folder_collapsed(&key), selected, &t)
+                    }).inner;
+                    if result.toggled || result.picked { set_toggled = Some((key.clone(), result.toggled, result.picked)); }
+                    if result.save { save_set = Some(key); }
+                }
+                continue;
+            }
+            let Some(i) = action_index else { continue };
             let Row { name, steps, disabled, dialogs, set, color: swatch } = &rows[i];
-            let folder_index = action_folder.get(i).copied().flatten();
             let folder = folder_index.and_then(|index| folders.get(index));
             let has_header = set.is_some() || folder.is_some_and(|folder| folder.origin.is_some());
-            if has_header && shown_folder != folder_index {
+            if !physical_order && has_header && shown_folder != folder_index {
                 shown_folder = folder_index;
                 if let Some(folder) = folder {
                     let key = FolderSelection::from_row(folder);
@@ -2209,9 +2227,11 @@ fn classic_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 dialog_toggled = dialog_toggled.or(events.dialog_toggled);
             }
         }
-        let (empty_toggled, empty_save) = draw_empty_sets(app, ui, &folders, &t);
-        set_toggled = set_toggled.take().or(empty_toggled);
-        save_set = save_set.take().or(empty_save);
+        if !physical_order {
+            let (empty_toggled, empty_save) = draw_empty_sets(app, ui, &folders, &t);
+            set_toggled = set_toggled.take().or(empty_toggled);
+            save_set = save_set.take().or(empty_save);
+        }
     });
     if let Some((action, step)) = toggled {
         let _ = app.run("actions.toggle", json!({"action": action, "step": step}));
