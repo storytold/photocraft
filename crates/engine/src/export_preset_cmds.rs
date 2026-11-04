@@ -39,6 +39,13 @@ fn default_resample() -> String {
     DEFAULT_RESAMPLE.into()
 }
 
+/// The PNG zlib efforts a preset may name, matching Export As's own control (#5409).
+pub const PNG_COMPRESSION: [&str; 4] = ["none", "fast", "default", "best"];
+
+fn default_png_compression() -> String {
+    "default".into()
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExportPresetSettings {
@@ -63,6 +70,10 @@ pub struct ExportPresetSettings {
     /// One of [`RESAMPLE`]; presets saved before the choice existed load as the default.
     #[serde(default = "default_resample")]
     pub resample: String,
+    /// One of [`PNG_COMPRESSION`]; presets saved before the choice existed load as `"default"`,
+    /// which is the codec's own effort, so an old preset exports exactly as it did.
+    #[serde(default = "default_png_compression")]
+    pub png_compression: String,
 }
 
 impl ExportPresetSettings {
@@ -92,6 +103,9 @@ impl ExportPresetSettings {
             return Err("tgaBits must be auto, 24 or 32".into());
         }
         export_resample(&self.resample)?;
+        if !PNG_COMPRESSION.contains(&self.png_compression.as_str()) {
+            return Err(format!("pngCompression must be one of {}", PNG_COMPRESSION.join(", ")));
+        }
         Ok(())
     }
 

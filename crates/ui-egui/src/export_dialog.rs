@@ -16,8 +16,9 @@ use crate::theme::Tokens;
 use crate::{ExportSettings, PhotocraftApp};
 
 const FORMATS: [(&str, &str); 6] = [("png", "PNG"), ("jpg", "JPG"), ("webp", "WebP"), ("tif", "TIFF"), ("tga", "TGA"), ("ico", "ICO")];
-/// The PNG zlib efforts Export As offers (the `pngCompression` field).
-const PNG_COMPRESSIONS: [&str; 4] = ["none", "fast", "default", "best"];
+/// The PNG zlib efforts Export As offers (the `pngCompression` field). The engine owns the list,
+/// since it is what validates a saved preset; a second copy here would drift from it.
+use photocraft_engine::export_preset_cmds::PNG_COMPRESSION as PNG_COMPRESSIONS;
 
 /// Preferences ▸ remembered dialog settings: Export As writes the settings it was used with
 /// last under its command id and seeds the next dialog from them, as Fill, Liquify and the
@@ -758,6 +759,7 @@ fn apply_preset(f: &mut Map<String, Value>, settings: &photocraft_engine::export
     f.insert("embedProfile".into(), json!(settings.embed_profile));
     f.insert("tgaBits".into(), json!(settings.tga_bits));
     f.insert("resample".into(), json!(settings.resample));
+    f.insert("pngCompression".into(), json!(settings.png_compression));
     if settings.sizing == "pixels" {
         f.insert("width".into(), json!(settings.width));
         f.insert("height".into(), json!(settings.height));
@@ -775,6 +777,10 @@ fn preset_settings(f: &Map<String, Value>) -> Value {
     let bits = if ["auto", "24", "32"].contains(&bits.as_str()) { bits } else { "auto".into() };
     let scale = n(f, "scale", 100.0);
     let scale = if scale.is_finite() { scale.clamp(1.0, 1000.0) } else { 100.0 };
+    // Saved with the rest, or a preset would apply whatever Compression the dialog happened to be
+    // showing instead of the one it was saved with (#5409 review).
+    let png = s(f, "pngCompression");
+    let png = if PNG_COMPRESSIONS.contains(&png.as_str()) { png } else { "default".into() };
     json!({
         "format": s_fmt(f),
         "quality": n(f, "quality", 85.0).clamp(1.0, 100.0).round(),
@@ -790,6 +796,7 @@ fn preset_settings(f: &Map<String, Value>) -> Value {
         "embedProfile": f.get("embedProfile").and_then(Value::as_bool).unwrap_or(true),
         "tgaBits": bits,
         "resample": resample_method(f, None).unwrap_or(DEFAULT_RESAMPLE),
+        "pngCompression": png,
     })
 }
 
@@ -1849,11 +1856,33 @@ mod tests {
             embed_profile: false,
             tga_bits: "auto".into(),
             resample: "nearest".into(),
+            png_compression: "best".into(),
         };
         let mut f = Map::new();
         apply_preset(&mut f, &pixels, 400.0, 200.0);
         assert_eq!(f.get("resample"), Some(&json!("nearest")), "a preset restores its Resample method");
         assert_eq!(preset_settings(&f)["resample"], "nearest", "and saves it");
+        // #5409 review: the Compression choice went the same way as Resample, and did not.
+        // Saving a preset dropped it, so applying one left whatever the dialog was showing.
+        assert_eq!(f.get("pngCompression"), Some(&json!("best")), "a preset restores its Compression effort");
+        assert_eq!(preset_settings(&f)["pngCompression"], "best", "and saves it");
+        // A preset written before the choice existed loads as the codec default, so an old preset
+        // exports exactly as it used to rather than silently gaining Best.
+        let old: ExportPresetSettings = serde_json::from_value(
+            serde_json::to_value(&pixels)
+                .map(|mut v| {
+                    v.as_object_mut().map(|o| o.remove("pngCompression"));
+                    v
+                })
+                .expect("the preset serialises"),
+        )
+        .expect("a preset without the field still loads");
+        assert_eq!(old.png_compression, "default", "an older preset loads as the codec default");
+        // And a value the control never offers is refused rather than written through.
+        let bogus = ExportPresetSettings { png_compression: "tiny".into(), ..pixels.clone() };
+        f.insert("pngCompression".into(), json!("tiny"));
+        assert_eq!(preset_settings(&f)["pngCompression"], "default", "an unknown effort saves as the default");
+        assert!(serde_json::to_value(&bogus).is_ok(), "the struct itself serialises; validation is the engine's");
         assert_eq!(f.get("width"), Some(&json!(64)));
         assert_eq!(f.get("height"), Some(&json!(32)));
         assert_eq!(f.get("sizing"), Some(&json!("pixels")));
