@@ -56,7 +56,7 @@ fn alpha_type_channels_import_as_alpha_and_round_trip() {
         as_ink.channels[1].surface = s;
         as_ink.channels[1].spot = Some((photocraft_color::Color::BLACK, 0.0));
         // Within f32 rounding: the inverted copy is re-quantised to the channel depth.
-        let (shown, inked) = (photocraft_compose::flatten(&d).px, photocraft_compose::flatten(&as_ink).px);
+        let (shown, inked) = (photocraft_compose::flatten(&d).into_px(), photocraft_compose::flatten(&as_ink).into_px());
         assert_eq!(shown.len(), inked.len());
         for (a, b) in shown.iter().zip(&inked) {
             assert!(a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-5), "{a:?} vs {b:?} ({depth}-bit)");
@@ -115,7 +115,7 @@ fn alpha_type_channels_are_stored_as_is_not_as_ink() {
         assert_eq!(values(&d.channels[0]), [1.0, 0.0, 1.0, 0.0], "spot channel ({depth}-bit)");
 
         // The composite is what Photoshop shows: the alpha prints as black ink where unselected.
-        let px = photocraft_compose::flatten(&d).px;
+        let px = photocraft_compose::flatten(&d).into_px();
         assert_eq!(px.iter().map(|p| [p[0], p[1], p[2]]).collect::<Vec<_>>(), [[0.0, 1.0, 1.0], [1.0, 1.0, 1.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]);
 
         // Saved back byte for byte.
@@ -241,4 +241,54 @@ fn unknown_display_space_takes_the_alternate_spot_colour() {
     assert!(rgb[0] <= 3.0 && (rgb[1] - 157.0).abs() <= 3.0 && (rgb[2] - 165.0).abs() <= 3.0, "{rgb:?}");
     assert_ne!(without.channels[0].spot.unwrap().0, ink);
     assert!(doc.channels[1].spot.is_none(), "the alpha channel stays an alpha channel");
+}
+
+#[test]
+fn tile_row_conversion_preserves_spot_and_alpha_planes() {
+    for depth in [8, 16, 32] {
+        let mut f = testgen::merged_only(Version::Psb, ColorMode::Multichannel, depth, Compression::Rle, 5, 600);
+        let mut info = 1u32.to_be_bytes().to_vec();
+        display_record(&mut info, [0, 0, 0], 0, 2);
+        display_record(&mut info, [65535, 0, 0], 50, 1);
+        f.resources.push(ImageResource::new(1077, info));
+        let raw = f.decode_merged().unwrap();
+        let (doc, _) = psd_to_document(&f);
+        let sample = usize::from(depth / 8);
+        let plane = 5 * 600 * sample;
+        for (k, channel) in doc.channels.iter().enumerate() {
+            let values = channel.surface.read_region(doc.bounds());
+            for (i, value) in values.iter().enumerate() {
+                let bytes = &raw[k * plane + i * sample..k * plane + (i + 1) * sample];
+                let original = match depth {
+                    8 => f32::from(bytes[0]) / 255.0,
+                    16 => f32::from(u16::from_be_bytes(bytes.try_into().unwrap())) / 65535.0,
+                    _ => f32::from_be_bytes(bytes.try_into().unwrap()),
+                };
+                let expected = if channel.spot.is_some() { 1.0 - original } else { original };
+                assert!((value - expected).abs() < 0.00001, "depth {depth}, channel {k}, pixel {i}");
+            }
+        }
+    }
+}
+
+#[test]
+fn legacy_unknown_display_space_uses_matching_alternate_id() {
+    let mut f = file(8);
+    f.resources.retain(|r| r.id != 1077);
+    let mut info = Vec::new();
+    display_record(&mut info, [0, 0, 0], 0, 2);
+    info[0..2].copy_from_slice(&0x2331u16.to_be_bytes());
+    info.push(0);
+    display_record(&mut info, [0, 0, 0], 50, 1);
+    info.push(0);
+    f.resources.push(ImageResource::new(1007, info));
+    f.resources.push(ImageResource::new(1053, [3u32, 4].iter().flat_map(|id| id.to_be_bytes()).collect()));
+    let without = psd_to_document(&f).0;
+    f.resources.push(ImageResource::new(1067, vec![0, 1, 0, 1, 0, 0, 0, 3, 0, 7, 0x16, 0xd7, 0xf3, 1, 0xfa, 0x4d, 0, 0]));
+    let doc = psd_to_document(&f).0;
+    let ink = doc.channels[0].spot.unwrap().0;
+    assert_ne!(without.channels[0].spot.unwrap().0, ink);
+    let rgb = ink.to_rgb().map(|v| (v * 255.0).round());
+    assert!(rgb[0] <= 3.0 && (rgb[1] - 157.0).abs() <= 3.0 && (rgb[2] - 165.0).abs() <= 3.0, "{rgb:?}");
+    assert!(doc.channels[1].spot.is_none());
 }

@@ -229,6 +229,7 @@ fn show_modal<T>(
     ctx: &egui::Context,
     id: egui::Id,
     resizable: Option<(egui::Vec2, egui::Vec2, egui::Vec2)>,
+    fixed: Option<egui::Vec2>,
     interactive: bool,
     contents: impl FnOnce(&mut egui::Ui) -> T,
 ) -> egui::ModalResponse<T> {
@@ -237,7 +238,12 @@ fn show_modal<T>(
         if !interactive {
             ui.disable();
         }
-        if let Some((size, min, max)) = resizable {
+        if let Some(size) = fixed {
+            egui::Resize::default().id(id.with("resize")).with_stroke(false).fixed_size(size).show(ui, |ui| {
+                ui.set_clip_rect(ui.clip_rect().expand(8.0));
+                contents(ui)
+            })
+        } else if let Some((size, min, max)) = resizable {
             // No stroke: Resize outlines its contents 2 points out, an inner box inside the
             // dialog's frame that left the title and buttons flush against it (#8199).
             egui::Resize::default().id(id.with("resize")).with_stroke(false).default_size(size.min(max)).min_size(min).max_size(max).show(ui, contents)
@@ -274,6 +280,7 @@ pub(crate) fn close_box(ui: &mut egui::Ui, rect: egui::Rect) -> bool {
 fn command_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: &mut Fields, id: egui::Id, interactive: bool) -> Option<bool> {
     let mut outcome: Option<bool> = None;
     match d.kind {
+        _ if crate::open_prompt::owns_memory(fields) => crate::open_prompt::memory_body(ui, fields),
         _ if crate::open_prompt::owns_damage(fields) => crate::open_prompt::damage_body(ui, fields),
         _ if crate::guide_layout_ui::owns(fields) => outcome = crate::guide_layout_ui::body(app, ui, fields, interactive),
         _ if crate::brush_preset_dialog::owns(fields) => outcome = crate::brush_preset_dialog::body(app, ui, fields, interactive),
@@ -288,7 +295,9 @@ fn command_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: 
         _ if crate::delete_layer_prompt::owns(fields) => crate::delete_layer_prompt::body(ui, fields),
         _ if crate::disk_change_prompt::owns(fields) => crate::disk_change_prompt::body(ui, fields),
         _ if crate::replace_prompt::owns(fields) => crate::replace_prompt::body(ui, fields),
+        _ if crate::preset_group_prompt::owns(fields) => crate::preset_group_prompt::body(ui, fields),
         _ if crate::actions::owns_insert_stop(fields) => crate::actions::insert_stop_body(ui, fields),
+        _ if crate::actions::owns_new_set(fields) => crate::actions::new_set_body(ui, fields),
         _ if crate::new_layer_ui::owns(fields) => crate::new_layer_ui::body(ui, fields),
         _ if crate::mask_trash_prompt::owns(fields) => crate::mask_trash_prompt::body(ui, fields),
         _ if crate::rasterize_prompt::owns(fields) => crate::rasterize_prompt::body(ui, fields),
@@ -324,7 +333,14 @@ fn command_body_more(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fie
         _ if crate::blur_pins::owns(fields) => crate::blur_pins::body(ui, fields),
         _ if fields.contains_key("__filter") => filter_body(app, ui, d, fields, id),
         _ if crate::new_guide_ui::owns(fields) => crate::new_guide_ui::body(ui, fields),
-        _ if fields.contains_key("__form") => crate::view_cmds::form_body(ui, fields),
+        _ if fields.contains_key("__form") => {
+            if fields.get("__command").and_then(Value::as_str) == Some("file.fileInfo") {
+                let room = (ui.ctx().content_rect().height() - DIALOG_CHROME).max(120.0);
+                egui::ScrollArea::vertical().id_salt(("file-info-body", d.id)).max_height(room).show(ui, |ui| crate::view_cmds::form_body(ui, fields));
+            } else {
+                crate::view_cmds::form_body(ui, fields);
+            }
+        }
         _ => {}
     }
     outcome
@@ -349,7 +365,7 @@ fn dialog_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: &
             }
         }
         DialogKind::About => {
-            // Tabs About · Contributors · Models (craftrules standards/contributors.md). The
+            // Tabs About · Contributors · Models. The
             // tab is a dialog field, so automation can switch it with `ui.dialog.set`.
             let tab = about_tab(fields);
             let mut chosen = tab;
@@ -367,7 +383,7 @@ fn dialog_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: &
             about_tab_body(app, ui, chosen);
         }
         DialogKind::Command => outcome = command_body(app, ui, d, fields, id, interactive),
-        DialogKind::LayerStyle => crate::layer_style::body(app, ui, fields),
+        DialogKind::LayerStyle => outcome = crate::layer_style::body_with_response(app, ui, fields, interactive),
         DialogKind::Error => {
             ui.label(fields.get("message").and_then(Value::as_str).unwrap_or("Error"));
         }
@@ -475,6 +491,17 @@ fn button_row(
                 fields.insert("choice".into(), json!("rasterize"));
             }
             hit
+        } else if crate::preset_group_prompt::owns(fields) {
+            // Import as New Group / Cancel / Replace (#10640): Enter keeps the group.
+            let new = DialogButton::new(ButtonRole::Default, tl!("Import as New Group"), 150.0);
+            let replace = DialogButton::new(ButtonRole::Alternate, tl!("Replace"), 84.0);
+            let hit = dialog_buttons(ui, &[new, cancel, replace]);
+            if hit == Some(ButtonRole::Alternate) {
+                fields.insert("choice".into(), json!("replace"));
+            } else if hit == Some(ButtonRole::Default) {
+                fields.insert("choice".into(), json!("new"));
+            }
+            hit
         } else {
             dialog_buttons(ui, &[ok, cancel])
         };
@@ -494,6 +521,8 @@ fn button_row(
 fn ok_label(d: &Dialog) -> &'static str {
     if d.kind == DialogKind::NewDocument {
         tl!("Create")
+    } else if crate::open_prompt::owns_memory(&d.fields) {
+        tl!("Open anyway")
     } else if crate::open_prompt::owns_damage(&d.fields) {
         tl!("Continue")
     } else if crate::delete_layer_prompt::owns(&d.fields) {
@@ -584,7 +613,9 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             (remembered.unwrap_or(size), min, resizable_max(ctx, &fields, min))
         });
         let mut given = None;
-        let modal = show_modal(modal, ctx, id, resize, interactive, |ui| {
+        let fixed = (d.kind == DialogKind::LayerStyle)
+            .then(|| egui::vec2(800.0, 550.0).min((ctx.content_rect().size() - egui::vec2(40.0, 40.0)).max(egui::vec2(640.0, 360.0))));
+        let modal = show_modal(modal, ctx, id, resize, fixed, interactive, |ui| {
             sizing = ui.is_sizing_pass();
             let available = ui.available_size();
             given = Some(available);
@@ -611,7 +642,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 ui.set_min_width(700.0);
             }
             ui.set_max_width(wide.unwrap_or_else(|| default_max_width(&d, compact, curves, about_tabs, available.x)));
-            if web {
+            if web || fixed.is_some() {
                 ui.set_max_width(available.x);
                 ui.set_min_size(available);
             } else if let Some(w) = crate::file_ui::dialog_width(&d.fields) {
@@ -625,7 +656,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 ui.set_max_width(360.0);
             }
             if color_picker {
-                ui.set_width(crate::color_picker_ui::CONTENT_WIDTH);
+                ui.set_width(crate::color_picker_ui::content_width(ui));
             }
             let label = egui::Label::new(egui::RichText::new(&title).font(crate::theme::semibold(15.0))).selectable(false);
             let t = if crate::color_picker_ui::owns(&fields) { ui.add_sized(egui::vec2(ui.available_width(), 22.0), label).rect } else { ui.add(label).rect };
@@ -651,7 +682,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             if let Some(Value::String(key)) = fields.remove(BROWSE_FIELD) {
                 browse_field(app, d.id, &fields, &key);
             }
-            if crate::guide_layout_ui::owns(&fields) || crate::brush_preset_dialog::owns(&fields) {
+            if d.kind == DialogKind::LayerStyle || crate::guide_layout_ui::owns(&fields) || crate::brush_preset_dialog::owns(&fields) {
                 // These dialogs own their right-side actions and validate Enter themselves.
             } else if crate::color_picker_ui::owns(&fields) {
                 if interactive && outcome.is_none() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
@@ -689,7 +720,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             ctx.data_mut(|m| m.insert_persisted(size_id(place), size));
         }
         // Pin once laid out at its real size (the first frame is an invisible sizing pass).
-        if !sizing && (web || pinned.is_none() || drag != egui::Vec2::ZERO) {
+        if !sizing && (web || fixed.is_some() || pinned.is_none() || drag != egui::Vec2::ZERO) {
             let screen = ctx.content_rect();
             // Keep the whole dialog (and so its title bar) on screen.
             let room = (screen.size() - modal.response.rect.size()).max(egui::Vec2::ZERO);
@@ -738,6 +769,10 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         }
     }
     ctx.data_mut(|m| m.insert_temp(egui::Id::unique(RECTS), shown));
+    // A colour picked this frame shows in its target dialog on the next one.
+    if crate::color_picker_ui::live_preview::sync(app) {
+        ctx.request_repaint();
+    }
 }
 
 /// The About window's tabs, as stored in its `tab` field.
@@ -771,6 +806,11 @@ fn about_tab_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, tab: &str) {
 
 /// The dialog title as shown: [`title`] in the UI language.
 fn display_title(d: &Dialog) -> String {
+    match d.fields.get("__colorPicker").and_then(Value::as_str) {
+        Some("foreground") => return crate::color_picker_ui::fixed_title("Color Picker (Foreground Color)", "Foreground Color"),
+        Some("background") => return crate::color_picker_ui::fixed_title("Color Picker (Background Color)", "Background Color"),
+        _ => {}
+    }
     if crate::smart_filter_dialog::owns(&d.fields) {
         return crate::smart_filter_dialog::title(&d.fields);
     }
@@ -813,6 +853,7 @@ const ROUTES: &[fn(&Fields) -> bool] = &[
     crate::delete_layer_prompt::owns,
     crate::disk_change_prompt::owns,
     crate::actions::owns_insert_stop,
+    crate::actions::owns_new_set,
     crate::new_layer_ui::owns,
     crate::new_group_ui::owns,
     crate::mask_trash_prompt::owns,
@@ -829,6 +870,7 @@ const ROUTES: &[fn(&Fields) -> bool] = &[
     crate::prefs_ui::owns,
     crate::open_prompt::owns,
     crate::replace_prompt::owns,
+    crate::preset_group_prompt::owns,
     crate::layer_style::color_picker::owns,
     |f| f.contains_key("__export"),
     |f| f.contains_key("__smartFilter"),
@@ -889,10 +931,11 @@ fn confirm_generic_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, 
         Ok(edit) => edit,
         Err(e) => {
             app.filter_preview = None;
+            crate::actions::abandoned(app, &d.fields);
             return Err(e);
         }
     };
-    let result = app.run(&cmd, params.clone());
+    let result = crate::actions::run_step_dialog(app, &d.fields, &cmd, params.clone());
     // A filter that runs as a background job keeps its preview on screen until the job
     // lands (`canvas::committed_filter_preview`) instead of flashing the unfiltered image.
     let running =
@@ -907,6 +950,10 @@ fn confirm_generic_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, 
         && let Some(name) = params.get("name").and_then(Value::as_str)
     {
         crate::vector_ui::deselect_loaded_path(app, name);
+    }
+    if result.is_ok() && cmd == "path.stroke" {
+        // The Stroke Path dialog reopens with the Simulate Pressure that was just applied (#10527).
+        crate::canvas_tool_menu::remember_simulate_pressure(app, &params);
     }
     if result.is_ok() && cmd == "view.newGuideLayout" {
         app.ui.view.guide_layout = params;
@@ -927,7 +974,7 @@ fn confirm_generic_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, 
 
 /// The checks before a dialog is confirmed: no open child picker, the automation gate for a handler
 /// that touches files itself, and a valid guide layout.
-fn confirm_preflight(app: &mut PhotocraftApp, id: u64) -> Result<(), String> {
+pub(crate) fn confirm_preflight(app: &mut PhotocraftApp, id: u64) -> Result<(), String> {
     if crate::layer_style::color_picker::has_child(app, id) {
         return Err("confirm or cancel the Layer Style color picker first".into());
     }
@@ -940,10 +987,15 @@ fn confirm_preflight(app: &mut PhotocraftApp, id: u64) -> Result<(), String> {
     {
         authorize(command, &Value::Object(d.fields.clone()))?;
     }
+    // A colour field shows the open picker's colour before its OK (`live_preview`): the dialog
+    // would otherwise commit a colour the picker may still cancel.
+    // The live preview's own record of the parent counts too: automation may rewrite `__dialog`.
+    if app.ui.dialogs.iter().any(|child| crate::color_picker_ui::owns(&child.fields) && child.fields.get("__dialog").and_then(Value::as_u64) == Some(id))
+        || crate::color_picker_ui::live_preview::previewed_dialogs(app).contains(&id)
+    {
+        return Err("confirm or cancel the color picker first".into());
+    }
     if let Some(d) = app.ui.dialogs.iter().find(|d| d.id == id).filter(|d| crate::guide_layout_ui::owns(&d.fields)) {
-        if app.ui.dialogs.iter().any(|child| crate::color_picker_ui::owns(&child.fields) && child.fields.get("__dialog").and_then(Value::as_u64) == Some(id)) {
-            return Err("confirm or cancel the guide color picker first".into());
-        }
         crate::guide_layout_ui::validate(app, &d.fields)?;
     }
     Ok(())
@@ -954,6 +1006,7 @@ fn confirm_preflight(app: &mut PhotocraftApp, id: u64) -> Result<(), String> {
 /// and small editors are here, the rest in `confirm_command_more`.
 fn confirm_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, String> {
     match d.kind {
+        _ if crate::open_prompt::owns_memory(&d.fields) => crate::open_prompt::answer_memory(app, true),
         _ if crate::open_prompt::owns_damage(&d.fields) => crate::open_prompt::answer_damage(app, true),
         _ if crate::guide_layout_ui::owns(&d.fields) => crate::guide_layout_ui::confirm(app, &d.fields),
         _ if crate::brush_preset_dialog::owns(&d.fields) => crate::brush_preset_dialog::confirm(app, &d.fields),
@@ -968,7 +1021,9 @@ fn confirm_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, String> 
         _ if crate::delete_layer_prompt::owns(&d.fields) => crate::delete_layer_prompt::confirm(app, &d.fields),
         _ if crate::disk_change_prompt::owns(&d.fields) => crate::disk_change_prompt::confirm(app, &d.fields),
         _ if crate::replace_prompt::owns(&d.fields) => crate::replace_prompt::confirm(app),
+        _ if crate::preset_group_prompt::owns(&d.fields) => crate::preset_group_prompt::confirm(app, &d.fields),
         _ if crate::actions::owns_insert_stop(&d.fields) => crate::actions::insert_stop_confirm(app, &d.fields),
+        _ if crate::actions::owns_new_set(&d.fields) => crate::actions::new_set_confirm(app, &d.fields),
         _ if crate::new_layer_ui::owns(&d.fields) => crate::new_layer_ui::confirm(app, &d.fields),
         _ if crate::mask_trash_prompt::owns(&d.fields) => crate::mask_trash_prompt::confirm(app, &d.fields),
         _ if crate::rasterize_prompt::owns(&d.fields) => crate::rasterize_prompt::confirm(app, &d.fields),
@@ -986,7 +1041,11 @@ fn confirm_command_more(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, Str
     match d.kind {
         _ if crate::file_ui::owns(&d.fields) => crate::file_ui::confirm(app, &d.fields),
         _ if crate::new_guide_ui::owns(&d.fields) => crate::new_guide_ui::confirm(app, &d.fields),
-        _ if crate::color_picker_ui::owns(&d.fields) => crate::color_picker_ui::confirm(app, &d.fields),
+        _ if crate::color_picker_ui::owns(&d.fields) => {
+            // OK sets the target as it was before the live preview showed the colour in it.
+            crate::color_picker_ui::live_preview::end(app, d.id);
+            crate::color_picker_ui::confirm(app, &d.fields)
+        }
         _ if crate::color_range_ui::owns(&d.fields) => crate::color_range_ui::confirm(app, &d.fields),
         _ if crate::prefs_ui::owns(&d.fields) => crate::prefs_ui::confirm(app, &d.fields),
         _ if d.fields.contains_key("__export") => crate::export_dialog::confirm(app, &d.fields),
@@ -1019,12 +1078,32 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
 /// Cancel a dialog and its dependent Layer Style picker, without applying edits.
 pub fn cancel(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
     let closed = app.ui.close_dialog(id).ok_or_else(|| format!("no dialog {id}"))?;
+    // A Color Picker puts back what its live preview showed in its target.
+    crate::color_picker_ui::live_preview::end(app, id);
+    // A field Color Picker of this dialog has no target left: it closes with the dialog.
+    // A picker with a live target goes by the parent recorded when it opened; `__dialog` only
+    // names the parent of one without (e.g. its parent was closed before it could preview).
+    let mut pickers = crate::color_picker_ui::live_preview::pickers_of(app, id);
+    pickers.extend(
+        app.ui
+            .dialogs
+            .iter()
+            .filter(|d| crate::color_picker_ui::owns(&d.fields) && d.fields.get("__dialog").and_then(Value::as_u64) == Some(id))
+            .filter(|d| !crate::color_picker_ui::live_preview::previews(app, d.id))
+            .map(|d| d.id),
+    );
+    for picker in &pickers {
+        crate::color_picker_ui::live_preview::end(app, *picker);
+    }
+    app.ui.dialogs.retain(|d| !pickers.contains(&d.id));
     crate::actions::stopped(app, &closed.fields);
     if crate::guide_layout_ui::owns(&closed.fields) {
         app.ui.dialogs.retain(|child| child.fields.get("__dialog").and_then(Value::as_u64) != Some(id));
     }
     // Cancel on a profile prompt opens neither its file nor the ones still to come.
-    if crate::open_prompt::owns_damage(&closed.fields) {
+    if crate::open_prompt::owns_memory(&closed.fields) {
+        crate::open_prompt::answer_memory(app, false)?;
+    } else if crate::open_prompt::owns_damage(&closed.fields) {
         crate::open_prompt::answer_damage(app, false)?;
     } else if crate::open_prompt::owns(&closed.fields) {
         crate::open_prompt::answer(app, None)?;
@@ -1032,6 +1111,10 @@ pub fn cancel(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
     // Cancel on the question whether to replace a file writes nothing.
     if crate::replace_prompt::owns(&closed.fields) {
         crate::replace_prompt::cancel(app)?;
+    }
+    // Cancel on the group-name question imports nothing.
+    if crate::preset_group_prompt::owns(&closed.fields) {
+        crate::preset_group_prompt::cancel(app);
     }
     app.ui.dialogs.retain(|d| !crate::layer_style::color_picker::child_of(&d.fields, id));
     app.filter_preview = None;
@@ -1083,6 +1166,7 @@ pub(super) mod camera_raw_preview_ui;
 pub(super) mod camera_raw_scope_ui;
 pub mod camera_raw_ui;
 pub mod channel_options_ui;
+pub(crate) mod color_picker_preview;
 pub mod color_picker_ui;
 pub mod color_range_ui;
 pub mod color_table_ui;
@@ -1118,6 +1202,7 @@ pub mod new_layer_ui;
 pub mod open_prompt;
 pub mod palette;
 pub(crate) mod pattern_fill_ui;
+pub mod preset_group_prompt;
 pub mod rasterize_prompt;
 pub mod replace_prompt;
 pub(super) mod rgb_histogram;

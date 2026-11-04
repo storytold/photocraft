@@ -373,6 +373,31 @@ fn drive_until(app: &mut PhotocraftApp, ctx: &egui::Context, what: &str, done: i
 
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
+fn a_held_preview_frame_stays_on_the_canvas_when_the_proxy_factor_changes() {
+    // #10474: Minimum and Maximum take their proxy factor from the radius, so a radius drag across
+    // a whole pixel changes `FilterPreviewKey::k`. The frame for the old factor stays on the
+    // canvas, drawn at its own factor, until the one for the new factor lands.
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.run("file.new", json!({"width": 2400, "height": 2200})).unwrap();
+    app.background_jobs = true;
+    app.ui.views.get_mut(0).expect("the new document's view").zoom = 0.25;
+    crate::filter_dialog::open(&mut app, "filter.other.maximum").unwrap();
+    app.ui.dialogs[0].fields.insert("radius".into(), json!(6.0));
+    let ctx = egui::Context::default();
+    drive_until(&mut app, &ctx, "the first frame", |a| a.filter_preview.as_ref().is_some_and(|p| p.result.is_some()));
+    assert_eq!(app.filter_preview.as_ref().map(|p| p.key.k), Some(2), "6 px on a reduced document previews on the proxy");
+
+    // 1.5 px previews at full resolution: a new request at a new factor, computed on the worker.
+    app.ui.dialogs[0].fields.insert("radius".into(), json!(1.5));
+    let (k, _, size) = ensure_filter_preview(&mut app, 0, &ctx).expect("the held frame stays on the canvas");
+    assert_eq!((k, size), (2, [1200, 1100]), "drawn at its own factor");
+    drive_until(&mut app, &ctx, "the full-resolution frame", |a| a.filter_preview.as_ref().is_some_and(|p| p.key.k == 1 && p.result.is_some()));
+    let (k, _, size) = ensure_filter_preview(&mut app, 0, &ctx).expect("the new frame");
+    assert_eq!((k, size), (1, [2400, 2200]));
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
 fn a_preview_computed_mid_drag_reaches_the_canvas_and_then_converges() {
     // A drag used to paint nothing at all: every completion was dropped for carrying stale
     // parameters, so the canvas only ever showed an effect once the pointer had come to rest.
@@ -2953,4 +2978,56 @@ fn damage_grows_by_nested_effect_reach() {
     assert_eq!(effect_reach(&[group.clone()]), 2 * m);
     group.visible = false;
     assert_eq!(effect_reach(&[group]), 0);
+}
+
+#[test]
+fn tab_reorder_keeps_floating_documents_in_place() {
+    let visible = [0, 2];
+    assert_eq!(move_target_after_filter(&visible, 0, 1, 3), 2);
+    assert_eq!(move_target_after_filter(&visible, 2, 0, 3), 0);
+}
+
+#[test]
+fn arrange_layout_only_includes_docked_documents() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    for name in ["first", "floating", "last"] {
+        app.run("file.new", json!({"width": 80, "height": 60, "name": name})).unwrap();
+    }
+    app.ui.view.arrange = "threeUpStacked".into();
+    crate::menus::invoke(&mut app, &egui::Context::default(), "window.arrange.floatInWindow", json!({"document": 1})).unwrap();
+    let rect = Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+    let shown: Vec<_> = arranged_cells(&app, rect).unwrap().into_iter().map(|(doc, _)| doc).collect();
+    assert_eq!(shown, vec![0, 2]);
+
+    crate::menus::invoke(&mut app, &egui::Context::default(), "window.arrange.floatInWindow", json!({"document": 0})).unwrap();
+    crate::menus::invoke(&mut app, &egui::Context::default(), "window.arrange.floatInWindow", json!({"document": 2})).unwrap();
+    assert!(arranged_cells(&app, rect).is_none(), "the main canvas should be blank when every document is floating");
+}
+
+#[test]
+fn torn_off_document_is_not_drawn_again_in_the_main_window() {
+    for kind in [crate::theme::ThemeKind::Pro, crate::theme::ThemeKind::Studio] {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 80, "height": 60, "name": "floating"})).unwrap();
+        app.run("file.new", json!({"width": 80, "height": 60, "name": "docked"})).unwrap();
+        app.sync_views();
+        let ctx = egui::Context::default();
+        crate::menus::invoke(&mut app, &ctx, "window.arrange.floatInWindow", json!({"document": 0})).unwrap();
+        assert!(app.ui.windows[0].floating);
+        assert_eq!(app.session.active_index(), Some(0), "{kind:?}: the floated page remains active");
+        assert_eq!(main_canvas_document(&app), Some(1), "{kind:?}: the main canvas picks a docked page instead");
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(680.0, 480.0)).build_ui_state(
+            |ui, (app, ready): &mut (PhotocraftApp, bool)| {
+                if *ready {
+                    egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| document_area(app, ui));
+                }
+            },
+            (app, false),
+        );
+        PhotocraftApp::setup_context(&h.ctx, kind);
+        h.state_mut().1 = true;
+        h.run_steps(3);
+        let tabs = h.state().0.tab_strip.as_ref().map(|s| s.tabs.iter().map(|(doc, _)| *doc).collect::<Vec<_>>());
+        assert_eq!(tabs, Some(vec![1]), "{kind:?}: only the docked document stays on the main tab strip");
+    }
 }
