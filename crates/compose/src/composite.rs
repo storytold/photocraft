@@ -342,6 +342,9 @@ pub(crate) fn composite_pixel_layer(layer: &Layer, surf: &Surface, backdrop: &mu
     recycle_mask(mv);
 }
 
+/// Composite ordinary content, including pass-through groups whose children affect the backdrop.
+/// Clipping reconstructs the group's premultiplied contribution; F32 keeps signed and above-white
+/// RGB while integer depths remain bounded. Alpha and transparent-black normalization stay bounded.
 pub(crate) fn composite_layer_plain(layer: &Layer, clipped: &[Layer], backdrop: &mut Buffer, cx: &Ctx, scope: advanced::Scope) {
     let rect = backdrop.rect;
     // A TSL-off stroke base that is transparent here can still have visible clipped siblings;

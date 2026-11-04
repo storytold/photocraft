@@ -236,6 +236,7 @@ fn diff_rect(g: &mut Gpu, doc: &Document, rect: Rect, what: &str) -> Result<phot
     first.ok_or_else(|| format!("{what}: no render"))
 }
 
+/// Require CPU/GPU agreement for the whole canvas and the paged rendering paths in `diff_rect`.
 fn check(g: &mut Gpu, doc: &Document, what: &str) {
     diff_rect(g, doc, doc.bounds(), what).unwrap_or_else(|e| panic!("{e}"));
 }
@@ -3187,6 +3188,24 @@ fn layer_pages_that_just_miss_borrow_the_effect_map_share() {
     assert_eq!(comp.fit_layers(need, true), own, "an exact budget stays exact");
     comp.set_memory_budget(budget);
     assert_eq!(comp.resident_budget(), need, "the next memory budget lends again");
+}
+
+/// Signed and above-white F32 pixels survive a populated zero-opacity clip on the GPU.
+/// The CPU reference exercises the same scene without relying on a bounded U8 clipping case.
+#[test]
+fn hdr_pass_through_zero_opacity_clip_preserves_rgb() {
+    let Some(mut g) = gpu() else { return };
+    let mut d = Document::new("HDR pass-through clip", Size::new(2, 2), ColorMode::Rgb, SampleType::F32);
+    let mut child = Layer::raster("HDR", PixelFormat::RGBA32F);
+    child.surface_mut().unwrap().fill_rect(d.bounds(), &[2.0, -0.25, 0.5, 1.0]);
+    let mut group = Layer::group("group", vec![child]);
+    group.blend = BlendMode::PassThrough;
+    let mut clip = Layer::raster("zero-opacity clip", PixelFormat::RGBA32F);
+    clip.clipped = true;
+    clip.opacity = 0.0;
+    clip.surface_mut().unwrap().fill_rect(d.bounds(), &[0.0, 1.0, 0.0, 1.0]);
+    d.layers = vec![group, clip];
+    check(&mut g, &d, "F32 pass-through with zero-opacity clip");
 }
 
 // A pass-through group holding an adjustment renders isolated when layers clip to it, on the GPU
