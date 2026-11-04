@@ -18,7 +18,7 @@ use photocraft_psd::descriptor::{Descriptor, Id, Value};
 
 use crate::blocks::{enum_of, get_desc, num};
 use crate::effects_map::{blend_from_id, blend_value, effects_descriptor, effects_from_descriptor, is_known_effects_key};
-use crate::pattern_map::{from_psd, to_psd};
+use crate::pattern_map::{from_psd, to_psd_patterns};
 
 /// One style as PhotoCraft keeps it.
 #[derive(Clone, Debug, PartialEq)]
@@ -176,7 +176,7 @@ fn style_id(index: usize, name: &str) -> String {
 pub fn write_asl(styles: &[AslStyle], patterns: &[Pattern]) -> Result<Vec<u8>, String> {
     let pct = |v: f32| Value::UnitFloat { unit: *b"#Prc", value: f64::from(v.clamp(0.0, 1.0)) * 100.0 };
     let file = AslFile {
-        patterns: patterns.iter().map(to_psd).collect(),
+        patterns: to_psd_patterns(patterns)?,
         pattern_error: None,
         styles: styles
             .iter()

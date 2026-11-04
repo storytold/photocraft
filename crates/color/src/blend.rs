@@ -183,22 +183,80 @@ pub fn blend_channel(mode: BlendMode, cb: f32, cs: f32) -> f32 {
 
 /// [`blend_channel`] for 32-bit float documents, whose values may exceed 1: Linear Dodge (Add)
 /// and Divide don't clip at 1 there (Photoshop's 32-bit Add is how light is added in HDR), only
-/// at `f32::MAX`, so they stay finite. Screen retries overflowing finite inputs in F64;
-/// other modes use [`blend_channel`], including Multiply's signed finite saturation for
-/// both HDR and coverage-compositing callers.
+/// at `f32::MAX`, so they stay finite. Nonfinite results from finite inputs are retried in F64
+/// and saturated to the signed F32 range. Ordinary finite F32 results keep their rounding;
+/// Multiply also uses signed finite saturation for coverage-compositing callers.
 #[inline]
 pub fn blend_channel_hdr(mode: BlendMode, cb: f32, cs: f32) -> f32 {
     let out = channel(mode, cb, cs, f32::MAX);
-    if mode == BlendMode::Screen && !out.is_finite() && cb.is_finite() && cs.is_finite() {
-        return screen_hdr_wide(cb, cs);
+    if !out.is_finite() && cb.is_finite() && cs.is_finite() {
+        return channel_hdr_wide(mode, cb, cs);
     }
     out
 }
 
 #[cold]
-fn screen_hdr_wide(cb: f32, cs: f32) -> f32 {
-    let (cb, cs) = (f64::from(cb), f64::from(cs));
-    (cb + cs - cb * cs).clamp(-f64::from(f32::MAX), f64::from(f32::MAX)) as f32
+fn channel_hdr_wide(mode: BlendMode, cb: f32, cs: f32) -> f32 {
+    let (b, s) = (f64::from(cb), f64::from(cs));
+    let hard_light = |b: f64, s: f64| {
+        if s <= 0.5 {
+            b * 2.0 * s
+        } else {
+            let s = 2.0 * s - 1.0;
+            b + (1.0 - b) * s
+        }
+    };
+    let out = match mode {
+        BlendMode::Screen => b + s - b * s,
+        BlendMode::LinearBurn => (b + s - 1.0).max(0.0),
+        BlendMode::LinearDodge => b + s,
+        BlendMode::Overlay => hard_light(s, b),
+        BlendMode::HardLight => hard_light(b, s),
+        BlendMode::SoftLight => {
+            if s <= 0.5 {
+                b + (1.0 - 2.0 * s) * (b * b - b)
+            } else {
+                let backdrop = b.max(0.0);
+                let d = if backdrop <= 0.25 { ((16.0 * backdrop - 12.0) * backdrop + 4.0) * backdrop } else { backdrop.sqrt() };
+                if d == b { b } else { 2.0 * b * (1.0 - s) + d * (2.0 * s - 1.0) }
+            }
+        }
+        BlendMode::PinLight => {
+            if s <= 0.5 {
+                b.min(2.0 * s)
+            } else {
+                b.max(2.0 * s - 1.0)
+            }
+        }
+        BlendMode::Difference => (b - s).abs(),
+        BlendMode::Exclusion => b * (1.0 - 2.0 * s) + s,
+        BlendMode::Subtract => (b - s).max(0.0),
+        BlendMode::Divide => {
+            if s <= 0.0 {
+                if b <= 0.0 { 0.0 } else { 1.0 }
+            } else {
+                b / s
+            }
+        }
+        BlendMode::Negation => 1.0 - (1.0 - b - s).abs(),
+        BlendMode::PaintNetColorBurn => {
+            if s <= 0.0 {
+                0.0
+            } else {
+                (1.0 - (1.0 - b) / s).max(0.0)
+            }
+        }
+        BlendMode::PaintNetColorDodge => {
+            if s >= 1.0 {
+                1.0
+            } else {
+                (b / (1.0 - s)).min(1.0)
+            }
+        }
+        // The remaining scalar formulas already produce finite output for finite inputs.
+        _ => f64::from(channel(mode, cb, cs, f32::MAX)),
+    };
+    out.clamp(-f64::from(f32::MAX), f64::from(f32::MAX)) as f32
 }
 
 /// `B(cb, cs)` with Linear Dodge and Divide clipped at `hi` (1 at integer depths).

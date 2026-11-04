@@ -3,6 +3,71 @@ use super::*;
 const E: f32 = 1e-5;
 
 #[test]
+fn separable_hdr_extremes_stay_finite_and_keep_ordinary_f32_bits() {
+    let max = f32::MAX;
+    let values = [-max, -max / 2., -2e19, -4., -1., -0., 0., f32::from_bits(1), 1e-20, 0.25, 0.5, 0.75, 1., 4., 2e19, max / 2., max];
+    for mode in std::iter::once(BlendMode::PassThrough).chain(BlendMode::layer_modes()).filter(|m| m.is_separable()) {
+        for cb in values {
+            for cs in values {
+                let ordinary = channel(mode, cb, cs, max);
+                let actual = blend_channel_hdr(mode, cb, cs);
+                assert!(actual.is_finite(), "{mode:?}: {cb}, {cs} -> {actual}");
+                if ordinary.is_finite() {
+                    assert_eq!(actual.to_bits(), ordinary.to_bits(), "{mode:?}: ordinary rounding changed for {cb}, {cs}");
+                }
+            }
+        }
+        let rgb = blend_rgb_hdr(mode, [max, -max, 0.5], [-max, max, max]);
+        assert!(rgb.iter().all(|v| v.is_finite()), "{mode:?}: {rgb:?}");
+        // Standard-range calls keep the integer API's results except its intentional Add/Divide cap.
+        for cb in [0., 0.25, 0.5, 0.75, 1.] {
+            for cs in [0., 0.25, 0.5, 0.75, 1.] {
+                if !matches!(mode, BlendMode::LinearDodge | BlendMode::Divide) {
+                    assert_eq!(blend_channel_hdr(mode, cb, cs).to_bits(), blend_channel(mode, cb, cs).to_bits(), "{mode:?}: {cb}, {cs}");
+                }
+            }
+        }
+    }
+    assert_eq!(blend_channel(BlendMode::LinearDodge, 0.75, 0.75), 1.);
+    assert_eq!(blend_channel_hdr(BlendMode::LinearDodge, 0.75, 0.75), 1.5);
+    assert_eq!(blend_channel(BlendMode::Divide, 0.75, 0.25), 1.);
+    assert_eq!(blend_channel_hdr(BlendMode::Divide, 0.75, 0.25), 3.);
+}
+
+#[test]
+fn overflowing_hdr_retries_keep_signed_results_and_blend_identities() {
+    use BlendMode::*;
+    let max = f32::MAX;
+    for (mode, b, s, expected) in [
+        (Exclusion, max, max, -max),
+        (Exclusion, max, 0.5, 0.5),
+        (Exclusion, -max, 0.5, 0.5),
+        (HardLight, max, 0., 0.),
+        (HardLight, max, 0.5, max),
+        (HardLight, 1., max, 1.),
+        (Overlay, 0., max, 0.),
+        (Overlay, 0.5, max, max),
+        (Overlay, max, 1., 1.),
+        (SoftLight, max, 0.5, max),
+        (SoftLight, max, 1., max.sqrt()),
+        (SoftLight, 1., max, 1.),
+        (Difference, max, -max, max),
+        (Subtract, max, -max, max),
+        (LinearBurn, max, max, max),
+        (LinearBurn, max, -max, 0.),
+        (LinearDodge, -max, -max, -max),
+        (Divide, -max, f32::from_bits(1), -max),
+        (PinLight, 0., -max, -max),
+        (PinLight, 0., max, max),
+        (Negation, max, max, -max),
+        (PaintNetColorBurn, max, f32::from_bits(1), max),
+        (PaintNetColorDodge, -max, 0.5, -max),
+    ] {
+        assert_eq!(blend_channel_hdr(mode, b, s), expected, "{mode:?}: {b}, {s}");
+    }
+}
+
+#[test]
 fn overflowing_hdr_hue_keeps_even_subnormal_source_channel_ordering() {
     let max = f32::MAX;
     let cb = [max, -max / 2., 0.];

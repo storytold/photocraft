@@ -199,7 +199,8 @@ pub(crate) fn layerless_file(
     // Document-level tagged blocks (patterns, notes, ...) are valid without a layer section; a
     // kept layer block would describe layers the document doesn't have. Their signatures follow
     // the version the file is written as, known once its size is.
-    let global_blocks: Vec<TaggedBlock> = crate::annotations_map::export_blocks(doc, crate::pattern_map::export_global_blocks(doc))
+    let patterns = crate::pattern_map::export_global_blocks_with_warnings(doc, warnings);
+    let global_blocks: Vec<TaggedBlock> = crate::annotations_map::export_blocks(doc, patterns)
         .into_iter()
         .filter(|(_, key, _)| !matches!(key, b"Layr" | b"Lr16" | b"Lr32"))
         .map(|(sig, key, data)| crate::psd_export::global_block(sig, key, &data))

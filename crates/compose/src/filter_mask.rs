@@ -86,7 +86,7 @@ pub fn mix(base: &Surface, filtered: &Surface, mask: &LayerMask) -> Surface {
 const HIDDEN: f32 = 1.0 / 1024.0;
 
 /// The inverse of [`mix`]: the filtered pixels that mix with `base` through `mask` to `mixed`
-/// (clamped to 0..1 except alpha-bearing F32 colors, which retain their signed/HDR range).
+/// (clamped to 0..1 except F32 colors, which retain their signed/HDR range).
 /// Where the mask hides the filter entirely they are `base`'s, which Photoshop doesn't show there.
 pub fn unmix(base: &Surface, mixed: &Surface, mask: &LayerMask) -> Surface {
     let fmt = base.format();
@@ -123,6 +123,20 @@ pub fn unmix(base: &Surface, mixed: &Surface, mask: &LayerMask) -> Surface {
                 continue;
             }
             if !fmt.alpha {
+                if fmt.sample == SampleType::F32 {
+                    if m == 1.0 {
+                        op.copy_from_slice(xp);
+                    } else {
+                        let m = f64::from(m);
+                        for c in 0..n {
+                            // Invert the weighted sum directly. Native differences can overflow;
+                            // adding the base back also loses small results at full coverage.
+                            let color = (f64::from(xp[c]) - f64::from(bp[c]) * (1.0 - m)) / m;
+                            op[c] = color.clamp(-f64::from(f32::MAX), f64::from(f32::MAX)) as f32;
+                        }
+                    }
+                    continue;
+                }
                 for c in 0..n {
                     op[c] = (bp[c] + (xp[c] - bp[c]) / m).clamp(0.0, 1.0);
                 }
@@ -393,6 +407,72 @@ mod tests {
                     assert!(again.pixel(x, y).iter().zip(mixed.pixel(x, y)).all(|(a, b)| (a - b).abs() < 1e-4));
                 }
             }
+        }
+    }
+
+    #[test]
+    fn opaque_float_unmix_recovers_native_signed_hdr_colors_and_hidden_endpoints() {
+        for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab, ColorMode::Multichannel] {
+            let fmt = PixelFormat::new(mode, SampleType::F32, false);
+            let b: Vec<f32> = (0..fmt.channels()).map(|c| if c % 2 == 0 { -2. } else { 4. }).collect();
+            let f: Vec<f32> = (0..fmt.channels()).map(|c| if c % 2 == 0 { 6. } else { -3. }).collect();
+            let (mut base, mut filtered) = (Surface::new(fmt), Surface::new(fmt));
+            base.write_pixel(0, 0, &b);
+            filtered.write_pixel(0, 0, &f);
+            let before = (base.clone(), filtered.clone());
+            for coverage in [0., HIDDEN / 2., HIDDEN, 0.25, 0.5, 1.] {
+                let mut mask = LayerMask::reveal_all();
+                mask.surface = Surface::with_default(PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false), &[coverage]);
+                let mixed = mix(&base, &filtered, &mask);
+                let back = unmix(&base, &mixed, &mask);
+                assert_eq!(back.format(), fmt);
+                assert_eq!(back.pixel(0, 0), if coverage < HIDDEN { b.clone() } else { f.clone() }, "{mode:?} {coverage}");
+                if coverage >= HIDDEN {
+                    assert_eq!(mix(&base, &back, &mask).pixel(0, 0), mixed.pixel(0, 0), "{mode:?} {coverage}");
+                } else {
+                    // Hidden inverse values are unknown even when a stored mixed pixel is unrelated.
+                    assert_eq!(unmix(&base, &filtered, &mask).pixel(0, 0), b);
+                }
+            }
+            assert_eq!((base, filtered), before);
+        }
+    }
+
+    #[test]
+    fn opaque_float_unmix_handles_extremes_full_coverage_and_unrepresentable_inverse() {
+        for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab, ColorMode::Multichannel] {
+            let fmt = PixelFormat::new(mode, SampleType::F32, false);
+            for (b, f, coverage) in [
+                (f32::MAX, -f32::MAX, 0.5),
+                (-f32::MAX, f32::MAX, 0.5),
+                (f32::MAX, 2., 1.),
+                (-f32::MAX, -3., 1.),
+                (f32::MAX, f32::from_bits(1), 1.),
+                (-f32::MAX, -f32::from_bits(1), 1.),
+            ] {
+                let (mut base, mut filtered) = (Surface::new(fmt), Surface::new(fmt));
+                base.write_pixel(0, 0, &vec![b; fmt.channels()]);
+                filtered.write_pixel(0, 0, &vec![f; fmt.channels()]);
+                let mut mask = LayerMask::reveal_all();
+                mask.surface = Surface::with_default(PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false), &[coverage]);
+                let mixed = mix(&base, &filtered, &mask);
+                let recovered = unmix(&base, &mixed, &mask).pixel(0, 0);
+                // The forward mix defines the observed data; the inverse must recover the
+                // original filter, even when the base is far larger or has the opposite sign.
+                for value in recovered {
+                    assert!(value.is_finite(), "{mode:?} {b} {f} {coverage}");
+                    assert_eq!(value.to_bits(), filtered.pixel(0, 0)[0].to_bits(), "{mode:?} {b} {f} {coverage}");
+                }
+            }
+            let (mut base, mut mixed) = (Surface::new(fmt), Surface::new(fmt));
+            base.write_pixel(0, 0, &vec![-f32::MAX; fmt.channels()]);
+            mixed.write_pixel(0, 0, &vec![f32::MAX; fmt.channels()]);
+            let mut mask = LayerMask::reveal_all();
+            mask.surface = Surface::with_default(PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false), &[0.5]);
+            assert_eq!(unmix(&base, &mixed, &mask).pixel(0, 0), vec![f32::MAX; fmt.channels()]);
+            base.write_pixel(0, 0, &vec![f32::MAX; fmt.channels()]);
+            mixed.write_pixel(0, 0, &vec![-f32::MAX; fmt.channels()]);
+            assert_eq!(unmix(&base, &mixed, &mask).pixel(0, 0), vec![-f32::MAX; fmt.channels()]);
         }
     }
 

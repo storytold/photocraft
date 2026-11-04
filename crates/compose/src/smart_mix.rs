@@ -79,6 +79,12 @@ pub fn mix(base: &Surface, filtered: &Surface, area: Rect, mode: BlendMode, opac
             if fmt.sample == SampleType::F32 && bp.iter().chain(tp).any(|value| !value.is_finite()) {
                 return Err(Error::NonFiniteSample);
             }
+            if mode == BlendMode::Normal && bp == tp {
+                // An unchanged native pixel must retain its separations (and hidden
+                // transparent colors), rather than regenerating them through RGB.
+                op.copy_from_slice(bp);
+                continue;
+            }
             let b = photocraft_raster::to_rgba(&fmt, bp);
             let t = photocraft_raster::to_rgba(&fmt, tp);
             if mode != BlendMode::Normal && fmt.alpha && bp.last() != tp.last() {
@@ -97,7 +103,12 @@ pub fn mix(base: &Surface, filtered: &Surface, area: Rect, mode: BlendMode, opac
             } else {
                 photocraft_color::blend::blend_rgb(mode, cb, ct)
             };
-            let alpha = b[3] + (t[3] - b[3]) * opacity;
+            let mut alpha = b[3] + (t[3] - b[3]) * opacity;
+            if fmt.sample == SampleType::F32 && !alpha.is_finite() {
+                // A convex mix of finite alphas is representable even when their F32
+                // difference overflows. Keep ordinary finite interpolation unchanged.
+                alpha = (f64::from(b[3]) * (1. - f64::from(opacity)) + f64::from(t[3]) * f64::from(opacity)) as f32;
+            }
             let mut rgba = [0., 0., 0., alpha];
             if alpha > 0. {
                 for c in 0..3 {
@@ -289,6 +300,70 @@ mod tests {
             let pixel = result.pixel(0, 0);
             assert!(pixel.iter().all(|value| value.is_finite()));
             assert_eq!(pixel, base.pixel(0, 0));
+        }
+    }
+
+    #[test]
+    fn normal_identity_preserves_native_separations_at_every_depth() {
+        let area = Rect::new(-1, 0, 257, 1);
+        for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab, ColorMode::Multichannel] {
+            for sample in SampleType::ALL {
+                for alpha in [false, true] {
+                    let format = PixelFormat::new(mode, sample, alpha);
+                    let mut pixel = vec![0.75; format.channels()];
+                    for coverage in [0., 0.5, 1.] {
+                        if alpha {
+                            *pixel.last_mut().unwrap() = coverage;
+                        }
+                        let mut base = Surface::new(format);
+                        base.fill_rect(area, &pixel);
+                        for opacity in [0.01, 0.5, 1.] {
+                            let output = mix(&base, &base, area, BlendMode::Normal, opacity, &Interrupt::NONE).unwrap();
+                            assert_eq!(output, base, "{format:?} {coverage} {opacity}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn separable_hdr_extremes_reach_the_checked_mixer_as_finite_pixels() {
+        let area = Rect::new(0, 0, 1, 1);
+        for (backdrop, top) in [(2e19, 2e19), (2e38, -2e38), (-f32::MAX, f32::MAX)] {
+            let base = surface(PixelFormat::RGBA32F, [backdrop, backdrop, backdrop, 1.], area);
+            let filtered = surface(PixelFormat::RGBA32F, [top, top, top, 1.], area);
+            for mode in [BlendMode::Exclusion, BlendMode::HardLight, BlendMode::Overlay, BlendMode::Difference, BlendMode::Subtract, BlendMode::LinearBurn] {
+                let result = mix(&base, &filtered, area, mode, 1., &Interrupt::NONE).unwrap();
+                assert!(result.pixel(0, 0).iter().all(|value| value.is_finite()), "{mode:?} {backdrop} {top}");
+            }
+        }
+    }
+
+    #[test]
+    fn opposite_finite_alpha_extremes_keep_representable_coverage() {
+        let area = Rect::new(0, 0, 1, 1);
+        for mode in [ColorMode::Rgb, ColorMode::Grayscale] {
+            let format = PixelFormat::new(mode, SampleType::F32, true);
+            for (base_alpha, filtered_alpha, opacity, alpha, color) in [
+                (-f32::MAX, f32::MAX, 0.5, 0., 0.),
+                (f32::MAX, -f32::MAX, 0.5, 0., 0.),
+                (-f32::MAX, f32::MAX, 0.75, f32::MAX * 0.5, 5.5),
+                (f32::MAX, -f32::MAX, 0.25, f32::MAX * 0.5, -0.5),
+                (-f32::MAX, f32::MAX, 1., f32::MAX, 4.),
+            ] {
+                let base = surface(format, [1., 1., 1., base_alpha], area);
+                let filtered = surface(format, [4., 4., 4., filtered_alpha], area);
+                let before = (base.clone(), filtered.clone());
+                let output = mix(&base, &filtered, area, BlendMode::Normal, opacity, &Interrupt::NONE).unwrap();
+                let actual = photocraft_raster::to_rgba(&format, &output.pixel(0, 0));
+                assert!(actual.iter().all(|value| value.is_finite()), "{mode:?} {opacity}");
+                assert_eq!(actual[3], alpha);
+                for channel in actual.iter().take(3) {
+                    assert!((*channel - color).abs() < 0.00001, "{mode:?} {opacity}: {actual:?}");
+                }
+                assert_eq!((base, filtered), before);
+            }
         }
     }
 
