@@ -1034,6 +1034,26 @@ fn select_subject_leaves_a_table_along_the_bottom_edge_out() {
 }
 
 #[test]
+fn select_subject_leaves_a_nearby_single_edge_object_out() {
+    // A horizontal door-frame piece enters only from the left and stops just short of the
+    // shoulder. It is large enough to be considered by the edge release heuristic.
+    let (mut img, truth, _) = low_contrast_figure(7);
+    let (w, h) = (240, 200);
+    let mut frame = vec![false; w * h];
+    for y in 48..56 {
+        for x in 0..77 {
+            frame[y * w + x] = true;
+            img.px[y * w + x] = [0.32, 0.24, 0.16];
+        }
+    }
+    let reg = subject::select_subject(&ImageSampler { img: &img, origin: (0, 0) }, Rect::new(0, 0, w as i32, h as i32)).unwrap();
+    let subject_coverage = coverage(&reg, &truth, w, h);
+    let frame_coverage = coverage(&reg, &frame, w, h);
+    assert!(subject_coverage > 0.85, "subject coverage {subject_coverage}");
+    assert!(frame_coverage < 0.1, "door-frame coverage {frame_coverage}");
+}
+
+#[test]
 fn select_subject_ignores_a_stray_pixel_at_the_edge() {
     // One white pixel in the corner (a dead pixel, a speck of dust) is not the subject running
     // out of the picture: it stays unselected and the subject is found as without it.

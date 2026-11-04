@@ -20,8 +20,8 @@
 //!    (the blob, plus whatever the backdrop cannot account for) starts as probable foreground.
 //!    Parts of the subject whose colour is close to the backdrop (a cream shirt on a near-white
 //!    wall) have low saliency and in step 4 land in the background model, which then explains
-//!    them away; here they start as foreground and the cut keeps them (#2788). Only what
-//!    touches the first pass's result survives, so the pass cannot pull in unrelated things.
+//!    them away; here they start as foreground and the cut keeps them (#2788). Only components
+//!    touching the first pass's result survive, but attached clutter can survive with them.
 //!    Where the subject runs out of the picture (a torso cut off by the bottom edge), the frame
 //!    pixels the rest of the frame cannot explain are left out of the backdrop model and left to
 //!    the cut; otherwise they would teach it the shirt's colour and be fixed as background.
@@ -30,7 +30,8 @@
 //!    torso) stays open; specks still fill. Then the mask is re-cut at full resolution.
 //!
 //! Works well for a distinct object on a comparatively plain background; it is not a semantic
-//! segmenter.
+//! segmenter. Nearby clutter and detached subject parts with the same geometry cannot be
+//! distinguished by the component filter.
 
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
@@ -170,6 +171,34 @@ fn keep_main_and_nearby(mask: &[bool], w: usize, h: usize) -> Vec<bool> {
         .map(|(l, (n, b))| l != 0 && (*n >= big || (*n >= speck && b.0 <= nx1 && b.2 >= nx0 && b.1 <= ny1 && b.3 >= ny0)))
         .collect();
     lab.iter().map(|l| keep.get(*l as usize).copied().unwrap_or(false)).collect()
+}
+
+#[cfg(test)]
+mod component_tests {
+    use super::keep_main_and_nearby;
+
+    #[test]
+    fn nearby_component_margin_and_size_boundaries() {
+        // The main 20x20 component has margin ceil(20 * .15) = 3 and a four-pixel floor.
+        // A 30x30 component raises the floor to ceil(900 * .005) = 5.
+        for (side, x, count, retained) in [(20, 42, 3, false), (20, 42, 4, true), (20, 43, 4, false), (30, 54, 4, false), (30, 54, 5, true), (30, 55, 5, false)]
+        {
+            let (w, h) = (80, 80);
+            let mut mask = vec![false; w * h];
+            for y in 20..20 + side {
+                for x in 20..20 + side {
+                    mask[y * w + x] = true;
+                }
+            }
+            for y in 25..25 + count {
+                mask[y * w + x] = true;
+            }
+            let result = keep_main_and_nearby(&mask, w, h);
+            assert!(result[20 * w + 20]);
+            assert_eq!(result[25 * w + x], retained, "side {side}, x {x}, size {count}");
+        }
+        // A qualifying nearby island is kept whether it is a head or unrelated clutter.
+    }
 }
 
 /// A colour model of `samples` and the cost above which a pixel is not explained by it: what
