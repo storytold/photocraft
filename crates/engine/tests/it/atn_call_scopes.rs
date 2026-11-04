@@ -118,7 +118,7 @@ fn portable_conditional_branches_retain_independent_set_scopes() {
             let mut inherited = projected.clone();
             inherited.actions[2].steps[0].1["thenSet"] = serde_json::Value::Null;
             inherited.actions[2].steps[0].1["set"] = json!("A");
-            atn_cmds::normalize_import(&mut inherited, std::iter::empty()).unwrap();
+            atn_cmds::normalize_import(&mut inherited, std::iter::empty(), false).unwrap();
             assert_eq!(inherited.actions[2].steps[0].1["then"], "Finish", "null branch scope inherits the shared set, like the writer");
         }
         let mut session = Session::new();
@@ -142,4 +142,27 @@ fn portable_conditional_shared_scope_keeps_the_existing_command_shape() {
         let imported = atn_cmds::import(&bytes).unwrap();
         assert_eq!(imported.actions[0].steps[0].1, params);
     }
+}
+
+/// An out-of-archive scope still targets an existing library action after local names collide.
+#[test]
+fn imported_external_set_call_is_not_rewritten_to_an_archive_local_namesake() {
+    use photocraft_engine::atn_cmds;
+    let caller = Action::new("Caller", vec![("actions.play".into(), json!({"action":"Finish","set":"External"}))]);
+    let local = finish("From B");
+    let bytes = atn_cmds::export("B", &[&local, &caller], &[], false).unwrap().0;
+    let mut deferred = atn_cmds::import(&bytes).unwrap();
+    atn_cmds::normalize_import(&mut deferred, ["Finish".to_string()], true).unwrap();
+    assert_ne!(deferred.actions[0].name, "Finish");
+    assert_eq!(deferred.actions[1].steps[0].1, json!({"action":"Finish","set":"External"}), "deferred reference remains intact");
+    let mut session = Session::new();
+    session.execute("file.new", json!({"width":4,"height":4})).unwrap();
+    let mut external = finish("From External");
+    external.set = Some("External".into());
+    session.actions.list.push(external);
+    session.execute("actions.load", json!({"data":photocraft_engine::paint::tile::b64_encode(&bytes)})).unwrap();
+    let result = session.execute("actions.play", json!({"action":"Caller"})).unwrap();
+    assert!(result.get("failed").is_none(), "{result}");
+    assert!(session.active().unwrap().doc.layers.iter().any(|layer| layer.name == "From External"));
+    assert!(!session.active().unwrap().doc.layers.iter().any(|layer| layer.name == "From B"));
 }

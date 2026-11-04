@@ -1938,3 +1938,57 @@ fn batch_refuses_ambiguous_nested_atn_calls_before_output() {
     assert!(String::from_utf8_lossy(&stderr).contains("ambiguous cross-set"));
     assert!(!output.exists());
 }
+
+/// An explicit archive scope cannot fall back to a namesake in another physical set.
+#[test]
+fn batch_refuses_missing_or_ambiguous_explicit_atn_scopes_before_output() {
+    use photocraft_engine::{actions_cmds::Action, atn_cmds};
+    use photocraft_psd::atn;
+    for failure in ["missing-target", "missing-set", "ambiguous-set"] {
+        for call in ["play", "shared", "then", "else"] {
+            let directory = tmp(&format!("nested-atn-scope-{failure}-{call}"));
+            let scope = if failure == "missing-set" { "Absent" } else { "A" };
+            let file = directory.join("sets.atn");
+            let finish = Action::new("Finish", vec![("layer.new.layer".into(), json!({}))]);
+            let other = Action::new("Other", Vec::new());
+            let (id, params) = match call {
+                "play" => ("actions.play", json!({"action":"Finish","set":scope})),
+                "shared" => ("actions.conditional", json!({"if":"always","then":"Finish","else":null,"set":scope})),
+                "then" => ("actions.conditional", json!({"if":"always","then":"Finish","thenSet":scope,"else":"Finish","elseSet":"B"})),
+                _ => ("actions.conditional", json!({"if":"always","then":"Finish","thenSet":"B","else":"Finish","elseSet":scope})),
+            };
+            let caller = Action::new("Caller", vec![(id.into(), params)]);
+            let group = |name: &str, actions: &[&Action]| {
+                let bytes = atn_cmds::export(name, actions, &[], false).unwrap().0;
+                atn::parse(&bytes).unwrap()
+            };
+            let mut groups = vec![group("A", &[if failure == "ambiguous-set" { &finish } else { &other }])];
+            if failure == "ambiguous-set" {
+                groups.push(group("A", &[&finish]));
+            }
+            groups.push(group("B", &[&finish, &caller]));
+            std::fs::write(&file, atn::write_sets(&groups).unwrap()).unwrap();
+            let output = directory.join("out");
+            let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+            let args = [
+                "batch".as_ref(),
+                "--in".as_ref(),
+                directory.as_os_str(),
+                "--out".as_ref(),
+                output.as_os_str(),
+                "--actions".as_ref(),
+                file.as_os_str(),
+                "--action".as_ref(),
+                "Caller".as_ref(),
+            ];
+            assert_eq!(photocraft_cli::run(args, &mut stdout, &mut stderr), 1);
+            let error = match failure {
+                "missing-set" => "missing set",
+                "ambiguous-set" => "ambiguous action call set",
+                _ => "missing from set",
+            };
+            assert!(String::from_utf8_lossy(&stderr).contains(error), "{call}: {}", String::from_utf8_lossy(&stderr));
+            assert!(!output.exists());
+        }
+    }
+}

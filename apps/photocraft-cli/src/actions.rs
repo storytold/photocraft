@@ -137,7 +137,8 @@ pub fn load_actions_file(path: &Path, name: Option<&str>) -> Result<(Steps, Vec<
         .map(|u| format!("`{}` step {}: Photoshop's \"{}\" ({}) has no PhotoCraft equivalent yet", u.action, u.step + 1, u.name, u.event))
         .chain(imp.warnings.iter().cloned())
         .collect();
-    photocraft_engine::atn_cmds::normalize_import(&mut imp, std::iter::empty()).map_err(|message| ActionsError::Atn { path: path.to_path_buf(), message })?;
+    photocraft_engine::atn_cmds::normalize_import(&mut imp, std::iter::empty(), false)
+        .map_err(|message| ActionsError::Atn { path: path.to_path_buf(), message })?;
     let play = vec![("actions.play".to_string(), json!({"action": imp.actions[selected].name}))];
     Ok((play, imp.actions, warnings))
 }

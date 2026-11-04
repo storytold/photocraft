@@ -44,9 +44,14 @@ pub struct ImportedSet {
 }
 
 /// Give imported actions globally unique playback names while keeping calls bound to their physical set.
-/// Explicit set references win over caller-local names; ambiguous cross-set calls are refused.
+/// Explicit archive scopes never fall back to another set; external scopes stay unrewritten.
 /// The caller owns the uncommitted import, so a refusal never changes a live library.
-pub fn normalize_import(imp: &mut Imported, reserved: impl IntoIterator<Item = String>) -> std::result::Result<Vec<String>, String> {
+/// `allow_external_calls` is false for a standalone CLI archive and true when importing into a session namespace.
+pub fn normalize_import(
+    imp: &mut Imported,
+    reserved: impl IntoIterator<Item = String>,
+    allow_external_calls: bool,
+) -> std::result::Result<Vec<String>, String> {
     let mut set_for = vec![0usize; imp.actions.len()];
     for (index, set) in imp.sets.iter().enumerate() {
         set_for.get_mut(set.actions.clone()).ok_or_else(|| "invalid imported set range".to_string())?.fill(index);
@@ -87,14 +92,10 @@ pub fn normalize_import(imp: &mut Imported, reserved: impl IntoIterator<Item = S
             };
             for key in keys {
                 if let Some(target) = params.get(*key).and_then(Value::as_str) {
-                    let scope = params
-                        .get(format!("{key}Set"))
-                        .and_then(Value::as_str)
-                        .or_else(|| params.get("set").and_then(Value::as_str))
-                        .and_then(|name| imp.sets.iter().position(|set| set.name == name))
-                        .and_then(|index| renamed.get(index))
-                        .unwrap_or(local);
-                    let to = if let Some(to) = scope.get(target) {
+                    let scope = params.get(format!("{key}Set")).and_then(Value::as_str).or_else(|| params.get("set").and_then(Value::as_str));
+                    let to = if let Some(scope) = scope {
+                        scoped_call_target(&imp.sets, &renamed, scope, target, allow_external_calls)?
+                    } else if let Some(to) = local.get(target) {
                         Some(to)
                     } else {
                         match global.get(target) {
@@ -113,6 +114,26 @@ pub fn normalize_import(imp: &mut Imported, reserved: impl IntoIterator<Item = S
     imp.actions = added;
     imp.function_keys = names.iter().zip(&imp.action_keys).filter_map(|(name, key)| key.as_ref().map(|key| (name.clone(), key.clone()))).collect();
     Ok(names)
+}
+
+/// Resolve only an identified physical archive scope, preserving external/deferred references.
+fn scoped_call_target<'a>(
+    sets: &[ImportedSet],
+    renamed: &'a [std::collections::HashMap<String, String>],
+    scope: &str,
+    target: &str,
+    allow_external_calls: bool,
+) -> std::result::Result<Option<&'a String>, String> {
+    let mut matching = sets.iter().enumerate().filter(|(_, set)| set.name == scope);
+    let index = match matching.next() {
+        Some((index, _)) => index,
+        None if allow_external_calls => return Ok(None),
+        None => return Err(format!("action call references missing set `{scope}`")),
+    };
+    if matching.next().is_some() {
+        return Err(format!("ambiguous action call set `{scope}`"));
+    }
+    renamed.get(index).and_then(|names| names.get(target)).map(Some).ok_or_else(|| format!("action call target `{target}` is missing from set `{scope}`"))
 }
 
 /// Retain an unsupported event's ID kind and descriptor for later export without executing it.

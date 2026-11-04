@@ -94,7 +94,8 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
     if old_rows.checked_add(new_rows).is_none_or(|count| count > super::atn::MAX_SETS) {
         return Err(bad(cmd, "too many action set rows"));
     }
-    let names = super::normalize_import(&mut imp, s.actions.list.iter().filter(keep).map(|action| action.name.clone())).map_err(|error| bad(cmd, error))?;
+    let names =
+        super::normalize_import(&mut imp, s.actions.list.iter().filter(keep).map(|action| action.name.clone()), true).map_err(|error| bad(cmd, error))?;
     let keys = imp.function_keys.clone();
     let steps: usize = imp.actions.iter().map(|action| action.steps.len()).sum();
     let added = imp.actions;
