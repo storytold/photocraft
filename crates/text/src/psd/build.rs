@@ -1063,9 +1063,20 @@ pub fn build_engine_data(layer: &TextLayer, template: Option<E>, dpi: f32) -> E 
                 rd.set(k2, E::Int(v));
             }
         }
+        // Photoshop hangs laying out a superscript or subscript run when these document
+        // settings are missing; it writes them in every type layer (its defaults).
+        for (k2, v) in DOCUMENT_SIZES {
+            if rd.get(k2).is_none() {
+                rd.set(k2, E::Real(v));
+            }
+        }
     }
     e
 }
+
+/// Superscript, subscript and small-caps size and position, as fractions of the font size.
+pub(super) const DOCUMENT_SIZES: [(&str, f64); 5] =
+    [("SuperscriptSize", 0.583), ("SuperscriptPosition", 0.333), ("SubscriptSize", 0.583), ("SubscriptPosition", 0.333), ("SmallCapSize", 0.7)];
 
 /// The anti-aliasing mode for EngineData's `AntiAlias` number, as Photoshop writes it: 0 None,
 /// 1 Crisp, 2 Strong, 3 Smooth, 4 Sharp. Other numbers (platform modes) are left to `AntA`.

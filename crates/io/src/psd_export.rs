@@ -120,6 +120,10 @@ struct Ex<'c> {
     /// `TextIndex`, others get the next free number; see `photocraft_text::psd::build_txt2`),
     /// written into the `TySh` data this export re-serializes.
     text_index: std::collections::HashMap<photocraft_doc::LayerId, i32>,
+    /// The file's `Txt2` no longer matches its type layers (one was edited or added): every type
+    /// layer gets a generated `TySh` and the old `Txt2` is dropped. Photoshop refuses a file that
+    /// mixes its own `Txt2` with `TySh` data written here.
+    regen_text: bool,
     canvas: photocraft_geom::Rect,
     records: Vec<LayerRecord>,
     warnings: Vec<String>,
@@ -520,8 +524,8 @@ impl Ex<'_> {
                         .push(format!("layer \"{}\": area type is saved as paragraph text over its path's bounds (PSD area type is not written yet)", l.name));
                 }
                 // Text layers without PSD data (created here) get a generated TySh.
-                let generated = t.psd_raw.is_none().then(|| std::sync::Arc::new(photocraft_text::psd::build_tysh(t, self.dpi, None)));
-                let src = t.psd_raw.as_ref().or(generated.as_ref());
+                let generated = (t.psd_raw.is_none() || self.regen_text).then(|| std::sync::Arc::new(photocraft_text::psd::build_tysh(t, self.dpi, None)));
+                let src = if self.regen_text { generated.as_ref() } else { t.psd_raw.as_ref().or(generated.as_ref()) };
                 // Character/paragraph style sheets from the document's styles.
                 let styled = src.and_then(|d| crate::text_styles_map::export_tysh(d, t, &self.text_styles, self.dpi)).map(std::sync::Arc::new);
                 // `TextIndex` names the layer's object in the document's `Txt2` (where the
