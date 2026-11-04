@@ -129,3 +129,19 @@ fn the_shortcut_shows_a_layers_tab_closed_from_the_window_menu() {
     h.run_steps(4);
     assert_eq!(h.state().ui.layer_filter_name, "other", "the panel is back, focused, with its text selected");
 }
+
+#[test]
+fn the_menu_item_shows_a_layers_panel_closed_in_the_docking_layout() {
+    let mut h = harness();
+    h.state_mut().run("window.panel.move", json!({"panel": "swatches", "anchor": "layers", "zone": "top"})).unwrap();
+    h.state_mut().run("window.panel.close", json!({"panel": "layers"})).unwrap();
+    h.run_steps(4);
+    let shown = |h: &Harness<'_, PhotocraftApp>| h.state().ui.docking.as_ref().is_some_and(|w| w.layout.contains(&"layers".to_string()));
+    assert!(!shown(&h), "the Layers panel is closed");
+    h.state_mut().ui.layer_filter_name = "lin".into();
+    find(&mut h, json!({}));
+    assert!(shown(&h), "Find Layers shows the Layers panel again");
+    h.event(egui::Event::Text("other".into()));
+    h.run_steps(4);
+    assert_eq!(h.state().ui.layer_filter_name, "other", "the Name field has the focus with its text selected");
+}

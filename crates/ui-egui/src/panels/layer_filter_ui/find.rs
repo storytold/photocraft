@@ -25,8 +25,15 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, params: Value) -> Re
         app.ui.layer_filter_name = name.to_string();
     }
     if !given {
-        *crate::dock::Group::Layers.tab_mut(&mut app.ui.dock_tabs) = 0;
-        crate::dock::reveal(app, crate::dock::Group::Layers);
+        // The panel docking layout (when on) shows the Layers panel itself, else the dock group.
+        if app.ui.docking.is_some() {
+            if let Some(shown) = crate::panel_docking::command(app, "window.panel.activate", &json!({"panel": "layers"})) {
+                shown?;
+            }
+        } else {
+            *crate::dock::Group::Layers.tab_mut(&mut app.ui.dock_tabs) = 0;
+            crate::dock::reveal(app, crate::dock::Group::Layers);
+        }
         ctx.data_mut(|d| d.insert_temp(focus_flag(), true));
     }
     Ok(reply)
