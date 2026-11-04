@@ -338,6 +338,9 @@ fn zero_alloc_accessors_match_read_region() {
         let mut into = vec![9.0; 3];
         s.read_region_into(r, &mut into);
         assert_eq!(region, into);
+        into.fill(9.0);
+        s.read_region_into_slice(r, &mut into);
+        assert!(region.iter().map(|v| v.to_bits()).eq(into.iter().map(|v| v.to_bits())));
         let mut rgba = vec![[0.0; 4]; (r.width() * r.height()) as usize];
         s.read_rgba_into(r, &mut rgba);
         let mut rgba8 = vec![[0; 4]; rgba.len()];

@@ -875,6 +875,13 @@ impl Surface {
         self.read_samples_into(r, out);
     }
 
+    /// Reads interleaved samples into caller-owned storage sized for `r` and this format's
+    /// channels. Clears the destination first, including missing zero-default tiles.
+    pub fn read_region_into_slice(&self, r: Rect, out: &mut [f32]) {
+        out.fill(0.0);
+        self.read_samples_into(r, out);
+    }
+
     /// Copy samples into a zero-initialized buffer sized for `r`.
     fn read_samples_into(&self, r: Rect, out: &mut [f32]) {
         let n = self.channels();
