@@ -28,7 +28,8 @@ commands:
   test            workspace tests (cargo nextest when installed, else cargo test), then doctests
   ci              the CI gate: fmt --check, clippy -D warnings, layers, scorecard --check, tests
                   (nextest --profile ci), panic_hunt, doctests and wasm, with --locked --features heif
-                  (stops at first failure), then the i18n-coverage report
+                  and the docs/localization.md language table (stops at first failure), then the
+                  i18n-coverage report
   corpus [--all | --pngsuite | --psd | --psd-tools | --pixls | --atn | --photoshop | --gimp] [--local] [--update-manifest]
                   show where test corpora live and their pins (xtask/src/corpus_pins.rs), or fetch
                   them into corpus/ (pinned commits, sha256-verified; --all = every corpus but pixls,
@@ -287,6 +288,7 @@ fn cmd_ci() -> Result<(), String> {
             }),
         ),
         ("wasm", Box::new(cmd_wasm)),
+        ("i18n-docs", Box::new(|| i18n_coverage::check_language_table(&root()))),
         (
             "i18n",
             Box::new(|| {

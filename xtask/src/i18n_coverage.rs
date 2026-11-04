@@ -43,11 +43,19 @@ pub fn run(root: &Path) -> Result<(), String> {
     if english_keys.is_empty() {
         return Err("no source-derived English UI translation keys were found".into());
     }
-    let doc_path = root.join("docs/localization.md");
-    let doc = fs::read_to_string(&doc_path).map_err(|e| format!("{}: {e}", doc_path.display()))?;
-    check_documented_languages(&languages, &doc)?;
+    check_language_table(root)?;
     print!("{}", format_report(&languages, &english_keys, &translations));
     Ok(())
+}
+
+/// Checks the language table on its own, so `cargo xtask ci` can fail on it while a coverage report
+/// failure stays a warning.
+pub fn check_language_table(root: &Path) -> Result<(), String> {
+    let registry_path = root.join("crates/ui-egui/src/i18n.rs");
+    let registry = fs::read_to_string(&registry_path).map_err(|e| format!("{}: {e}", registry_path.display()))?;
+    let doc_path = root.join("docs/localization.md");
+    let doc = fs::read_to_string(&doc_path).map_err(|e| format!("{}: {e}", doc_path.display()))?;
+    check_documented_languages(&registered_languages(&registry)?, &doc)
 }
 
 /// The "Supported languages" table in `docs/localization.md` lists every registered language and
@@ -62,9 +70,13 @@ fn check_documented_languages(languages: &[Language], doc: &str) -> Result<(), S
         .unwrap_or_default();
     let mut documented = BTreeSet::new();
     for line in table.lines().filter(|line| line.starts_with('|')) {
-        if let Some(code) = line.split('|').nth(2).and_then(|cell| cell.trim().strip_prefix('`')).and_then(|cell| cell.strip_suffix('`')) {
-            documented.insert(code.to_string());
+        let Some(cell) = line.split('|').nth(2).map(str::trim) else {
+            continue;
+        };
+        if cell == "Preference code" || cell.chars().all(|c| matches!(c, '-' | ':')) {
+            continue;
         }
+        documented.insert(cell.trim_matches('`').to_string());
     }
     let registered: BTreeSet<String> = languages.iter().map(|language| language.code.clone()).collect();
     let missing: Vec<&str> = registered.difference(&documented).map(String::as_str).collect();
@@ -596,6 +608,17 @@ mod tests {
             check_documented_languages(&documentation_languages(), &doc),
             Err("docs/localization.md's Supported languages table is out of date:\n  listed but not registered: tlh".into())
         );
+    }
+
+    #[test]
+    fn documented_languages_read_codes_without_backticks() {
+        let doc = LANGUAGE_DOC.replace("## Catalogs", "| Klingon | tlh | one / other |\n\n## Catalogs");
+        assert_eq!(
+            check_documented_languages(&documentation_languages(), &doc),
+            Err("docs/localization.md's Supported languages table is out of date:\n  listed but not registered: tlh".into())
+        );
+        let doc = LANGUAGE_DOC.replace("`tr`", "tr");
+        assert_eq!(check_documented_languages(&documentation_languages(), &doc), Ok(()));
     }
 
     #[test]
