@@ -548,7 +548,9 @@ fn check_jpeg_chunks(
     if expected.saturating_mul(16) > cap as u64 {
         return Err(CodecError::LimitExceeded(format!("{expected} JPEG strips or tiles")));
     }
-    let mut chunks: Vec<(u64, u64)> = (0..expected).filter_map(|i| Some((f.uint(offsets, i)?, f.uint(sizes, i)?))).collect();
+    // Reserve exactly the budgeted length: collecting from filter_map could over-allocate past `cap`.
+    let mut chunks: Vec<(u64, u64)> = Vec::with_capacity(expected as usize);
+    chunks.extend((0..expected).filter_map(|i| Some((f.uint(offsets, i)?, f.uint(sizes, i)?))));
     chunks.sort_unstable();
     // Entries sharing an offset but not a byte count are different chunks: check each one.
     chunks.dedup();
