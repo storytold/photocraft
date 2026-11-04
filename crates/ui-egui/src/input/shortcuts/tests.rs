@@ -72,7 +72,8 @@ fn tool_keys_skip_tools_hidden_from_the_toolbar() {
     let first = app.ui.tool;
     assert!(matches!(first, Tool::Gradient | Tool::PaintBucket));
     press_key(&mut app, &ctx, Key::G, Modifiers::SHIFT);
-    assert_ne!(app.ui.tool, first);
+    let other = if first == Tool::Gradient { Tool::PaintBucket } else { Tool::Gradient };
+    assert_eq!(app.ui.tool, other);
     // Brush stays on the toolbar under a shortcut of its own, so B has no hidden tool to fall back on.
     app.session.edit_prefs(|p| {
         p.toolbar.hidden = ["Pencil", "MixerBrush", "ColorReplacement"].map(String::from).to_vec();
