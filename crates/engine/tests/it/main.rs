@@ -1,5 +1,8 @@
 //! The crate's integration tests, linked into one test binary.
 
+#[path = "../support/atn_export.rs"]
+mod atn_export;
+
 mod action_metadata;
 mod actions_duplicate;
 mod actions_editor_draft;

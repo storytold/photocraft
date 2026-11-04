@@ -106,9 +106,11 @@ fn integer_cell_sizes_and_defaults_preserve_playback() {
 fn skipping_fractional_cell_sizes_reports_action_and_step() {
     let action =
         Action::new("Mixed Crystallize", [5.0, 5.4, 10.0, 10.25].into_iter().map(|cell_size| (CRYSTALLIZE.into(), json!({"cellSize": cell_size}))).collect());
-    let error = atn_cmds::export("Crystallize", &[&action], &[], false).unwrap_err();
-    assert!(error.contains("step 2 of `Mixed Crystallize`"), "{error}");
-    assert!(error.contains(CRYSTALLIZE) && error.contains("skipUnsupported"), "{error}");
+    let items = crate::atn_export::preserved("Crystallize", &action);
+    assert_eq!(items.len(), 4);
+    for index in [1, 3] {
+        assert_eq!(items[index].event, atn::AtnEvent::name("photocraftCommand"));
+    }
     let (bytes, skipped) = atn_cmds::export("Crystallize", &[&action], &[], true).unwrap();
     assert_eq!(
         skipped,
@@ -130,7 +132,7 @@ fn skipping_fractional_cell_sizes_reports_action_and_step() {
 
 /// The plain event still cannot carry mask/channel targets or nonnumeric cell sizes.
 #[test]
-fn non_pixel_targets_and_malformed_fields_are_still_refused() {
+fn non_pixel_targets_and_malformed_fields_use_native_events_or_are_skipped() {
     for params in [
         json!({"cellSize": 5, "target": "mask"}),
         json!({"cellSize": 5, "target": "quickMask"}),
@@ -143,7 +145,7 @@ fn non_pixel_targets_and_malformed_fields_are_still_refused() {
         json!({"cellSize": 1e100}),
     ] {
         let action = Action::new("Unsupported Crystallize", vec![(CRYSTALLIZE.into(), params.clone())]);
-        assert!(atn_cmds::export("Crystallize", &[&action], &[], false).is_err(), "{params}");
+        crate::atn_export::fallback("Crystallize", &action);
         let (bytes, skipped) = atn_cmds::export("Crystallize", &[&action], &[], true).unwrap();
         assert_eq!(skipped, vec![atn_cmds::Skipped { action: "Unsupported Crystallize".into(), step: 0, id: CRYSTALLIZE.into() }]);
         assert!(atn_cmds::import(&bytes).unwrap().actions[0].steps.is_empty());

@@ -111,9 +111,11 @@ fn integer_amounts_sizes_and_defaults_preserve_playback() {
 fn skipping_fractional_amounts_reports_action_and_step() {
     let action =
         Action::new("Mixed Ripple", [10.0, 81.4, -20.0, -0.5].into_iter().map(|amount| (RIPPLE.into(), json!({"amount": amount, "size": "small"}))).collect());
-    let error = atn_cmds::export("Ripple", &[&action], &[], false).unwrap_err();
-    assert!(error.contains("step 2 of `Mixed Ripple`"), "{error}");
-    assert!(error.contains(RIPPLE) && error.contains("skipUnsupported"), "{error}");
+    let items = crate::atn_export::preserved("Ripple", &action);
+    assert_eq!(items.len(), 4);
+    for index in [1, 3] {
+        assert_eq!(items[index].event, atn::AtnEvent::name("photocraftCommand"));
+    }
     let (bytes, skipped) = atn_cmds::export("Ripple", &[&action], &[], true).unwrap();
     assert_eq!(
         skipped,
@@ -136,7 +138,7 @@ fn skipping_fractional_amounts_reports_action_and_step() {
 
 /// A dedicated Ripple mapping must retain the plain-event target restriction.
 #[test]
-fn non_pixel_targets_and_malformed_fields_are_still_refused() {
+fn non_pixel_targets_and_malformed_fields_use_native_events_or_are_skipped() {
     for params in [
         json!({"amount": 81, "target": "mask"}),
         json!({"amount": 81, "target": "quickMask"}),
@@ -150,7 +152,7 @@ fn non_pixel_targets_and_malformed_fields_are_still_refused() {
         json!({"amount": 81, "size": "unknown"}),
     ] {
         let action = Action::new("Unsupported Ripple", vec![(RIPPLE.into(), params.clone())]);
-        assert!(atn_cmds::export("Ripple", &[&action], &[], false).is_err(), "{params}");
+        crate::atn_export::fallback("Ripple", &action);
         let (bytes, skipped) = atn_cmds::export("Ripple", &[&action], &[], true).unwrap();
         assert_eq!(skipped, vec![atn_cmds::Skipped { action: "Unsupported Ripple".into(), step: 0, id: RIPPLE.into() }]);
         assert!(atn_cmds::import(&bytes).unwrap().actions[0].steps.is_empty());

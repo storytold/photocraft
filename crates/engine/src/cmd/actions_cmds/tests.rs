@@ -762,8 +762,8 @@ fn recorded_layer_drag_replays_on_another_document() {
 }
 
 /// An Alt-drag copy records `inPlace` (#7200), which only matters for an artboard: a plain
-/// layer's recorded copy must still export to .atn, while an artboard's must be refused rather
-/// than exported as a copy beside the original.
+/// layer's recorded copy has a Photoshop event, while an artboard's uses the native
+/// carrier rather than exporting as a copy beside the original.
 #[test]
 fn recorded_in_place_duplicate_keeps_in_place_only_for_artboards() {
     let mut s = Session::new();
@@ -778,7 +778,13 @@ fn recorded_in_place_duplicate_keeps_in_place_only_for_artboards() {
     assert_eq!(s.actions.list[0].steps, vec![("layer.duplicate".to_string(), json!({}))]);
     assert_eq!(s.actions.list[1].steps, vec![("layer.duplicate".to_string(), json!({"inPlace": true}))]);
     assert!(crate::atn_cmds::export("Audit", &[&s.actions.list[0]], &[], false).is_ok());
-    assert!(crate::atn_cmds::export("Audit", &[&s.actions.list[1]], &[], false).is_err());
+    let (bytes, skipped) = crate::atn_cmds::export("Audit", &[&s.actions.list[1]], &[], false).unwrap();
+    assert!(skipped.is_empty());
+    let file = photocraft_psd::atn::parse(&bytes).unwrap();
+    assert_eq!(file.actions[0].items[0].event, photocraft_psd::atn::AtnEvent::name("photocraftCommand"));
+    assert_eq!(crate::atn_cmds::import(&bytes).unwrap().actions[0].steps, s.actions.list[1].steps);
+    let (_, skipped) = crate::atn_cmds::export("Audit", &[&s.actions.list[1]], &[], true).unwrap();
+    assert_eq!(skipped.len(), 1);
     // Several selected layers are copied together: one artboard among them keeps `inPlace`.
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
