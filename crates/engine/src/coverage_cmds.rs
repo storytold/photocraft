@@ -787,7 +787,7 @@ mod tests {
     }
     #[test]
     /// All-channel rank edits preserve opaque Backgrounds and remain available under a transparency lock.
-    fn percentile_preserves_opaque_backgrounds_and_locked_native_layers() {
+    fn native_channel_filters_preserve_opaque_backgrounds_and_locked_native_layers() {
         use photocraft_color::{ColorMode, PixelFormat, SampleType};
         use photocraft_doc::{Document, Layer, LayerContent};
         use photocraft_geom::Size;
@@ -796,38 +796,44 @@ mod tests {
         for mode in [ColorMode::Grayscale, ColorMode::Rgb, ColorMode::Cmyk] {
             for depth in SampleType::ALL {
                 for background in [true, false] {
-                    let format = PixelFormat::new(mode, depth, false);
-                    let mut source = Surface::new(format);
-                    source.write_pixel(1, 1, &vec![1.; format.channels()]);
-                    let mut layer = Layer::new(if background { "Background" } else { "Locked raster" }, LayerContent::Raster(source));
-                    layer.locks.transparency = true;
-                    layer.locks.position = background;
-                    let id = layer.id;
-                    let locks = layer.locks;
-                    let name = layer.name.clone();
-                    let mut doc = Document::new("Opaque percentile", Size::new(3, 3), mode, depth);
-                    doc.layers.push(layer);
-                    let mut session = Session::new();
-                    session.add_document(doc, None);
-                    let original = session.active().unwrap().doc.clone();
-                    let history = session.active().unwrap().history.past_len();
-                    assert_eq!(original.is_background(id), background);
+                    for (command, params, exterior, center) in [
+                        (PERCENTILE, json!({"radius":2,"colorPercentile":50,"alphaPercentile":50,"shape":"disc"}), 0., 1.),
+                        (FILL_HOLES, json!({"connectivity":4,"channel":"each"}), 1., 0.),
+                    ] {
+                        let format = PixelFormat::new(mode, depth, false);
+                        let mut source = Surface::new(format);
+                        source.fill_rect(photocraft_geom::Rect::new(0, 0, 3, 3), &vec![exterior; format.channels()]);
+                        source.write_pixel(1, 1, &vec![center; format.channels()]);
+                        let mut layer = Layer::new(if background { "Background" } else { "Locked raster" }, LayerContent::Raster(source));
+                        layer.locks.transparency = true;
+                        layer.locks.position = background;
+                        let id = layer.id;
+                        let locks = layer.locks;
+                        let name = layer.name.clone();
+                        let mut doc = Document::new("Opaque percentile", Size::new(3, 3), mode, depth);
+                        doc.layers.push(layer);
+                        let mut session = Session::new();
+                        session.add_document(doc, None);
+                        let original = session.active().unwrap().doc.clone();
+                        let history = session.active().unwrap().history.past_len();
+                        assert_eq!(original.is_background(id), background);
 
-                    session.execute(PERCENTILE, json!({"radius":2,"colorPercentile":50,"alphaPercentile":50,"shape":"disc"})).unwrap();
-                    let state = session.active().unwrap();
-                    let doc = &state.doc;
-                    let layer = doc.layer(id).unwrap();
-                    assert_eq!(doc.is_background(id), background, "{mode:?}/{depth:?}/{background}");
-                    assert_eq!(layer.name, name);
-                    assert_eq!(layer.locks, locks);
-                    assert_eq!(layer.surface().unwrap().format(), format);
-                    assert_eq!(layer.surface().unwrap().pixel(1, 1), vec![0.; format.channels()]);
-                    assert_eq!(state.history.past_len(), history + 1);
-                    let filtered = doc.clone();
-                    session.execute("edit.undo", json!({})).unwrap();
-                    assert_eq!(session.active().unwrap().doc, original);
-                    session.execute("edit.redo", json!({})).unwrap();
-                    assert_eq!(session.active().unwrap().doc, filtered);
+                        session.execute(command, params).unwrap();
+                        let state = session.active().unwrap();
+                        let doc = &state.doc;
+                        let layer = doc.layer(id).unwrap();
+                        assert_eq!(doc.is_background(id), background, "{mode:?}/{depth:?}/{background}");
+                        assert_eq!(layer.name, name);
+                        assert_eq!(layer.locks, locks);
+                        assert_eq!(layer.surface().unwrap().format(), format);
+                        assert_eq!(layer.surface().unwrap().pixel(1, 1), vec![exterior; format.channels()]);
+                        assert_eq!(state.history.past_len(), history + 1);
+                        let filtered = doc.clone();
+                        session.execute("edit.undo", json!({})).unwrap();
+                        assert_eq!(session.active().unwrap().doc, original);
+                        session.execute("edit.redo", json!({})).unwrap();
+                        assert_eq!(session.active().unwrap().doc, filtered);
+                    }
                 }
             }
         }
