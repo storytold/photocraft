@@ -186,7 +186,7 @@ fn fade_ignores_a_target_the_command_doesnt_take() {
 
 #[test]
 fn purge_commands() {
-    let _purge_test_guard = PURGE_TEST_LOCK.lock().unwrap();
+    let _purge_test_guard = PURGE_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut s = session(8);
     assert!(!s.is_enabled("edit.purge.undo"));
     assert!(s.is_enabled("edit.purge.videoCache"));
@@ -215,7 +215,7 @@ fn purge_commands() {
 
 #[test]
 fn purge_all_releases_prepared_brush_tips_even_without_a_document() {
-    let _purge_test_guard = PURGE_TEST_LOCK.lock().unwrap();
+    let _purge_test_guard = PURGE_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     use photocraft_paint::{BrushContext, BrushSettings, Dab, GrayTile, TipShape};
     let mut s = Session::new();
     let brush = BrushSettings { tip: TipShape::Sampled(GrayTile::from_fn(31, 17, |x, y| ((x + y) % 5) as f32 / 4.0)), ..Default::default() };
