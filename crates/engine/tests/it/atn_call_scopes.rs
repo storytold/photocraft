@@ -116,6 +116,7 @@ fn portable_conditional_branches_retain_independent_set_scopes() {
         assert_eq!(projected.actions[2].steps[0].1["elseSet"], "B");
         let mut session = Session::new();
         session.execute("file.new", json!({"width":4,"height":4})).unwrap();
+        session.execute("layer.new.layer", json!({"name":"Existing working layer"})).unwrap();
         session.execute("actions.load", json!({"data":photocraft_engine::paint::tile::b64_encode(&bytes)})).unwrap();
         let result = session.execute("actions.play", json!({"action":"Caller"})).unwrap();
         assert!(result.get("failed").is_none(), "{result}");
