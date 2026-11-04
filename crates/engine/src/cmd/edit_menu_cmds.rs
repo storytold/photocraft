@@ -263,7 +263,11 @@ fn export_import(s: &mut Session, p: &Value) -> Result<Value> {
             // Merge by name through an index built once: a file of many distinct names must not
             // rescan the growing library for each (quadratic, on the command thread).
             if want("brushes") {
-                let mut by_name: std::collections::HashMap<String, usize> = s.tools.presets.iter().enumerate().map(|(i, x)| (x.name.clone(), i)).collect();
+                // The first entry of a name wins, as the scan this replaced found it.
+                let mut by_name: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+                for (i, x) in s.tools.presets.iter().enumerate() {
+                    by_name.entry(x.name.clone()).or_insert(i);
+                }
                 for mut b in file.brushes {
                     // Nested folders as the commands bound them (a hand-edited file can't build an
                     // absurd tree).
@@ -281,8 +285,10 @@ fn export_import(s: &mut Session, p: &Value) -> Result<Value> {
                 s.brush_presets_changed();
             }
             if want("customShapes") {
-                let mut by_name: std::collections::HashMap<String, usize> =
-                    s.edit_state.custom_shapes.iter().enumerate().map(|(i, x)| (x.name.clone(), i)).collect();
+                let mut by_name: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+                for (i, x) in s.edit_state.custom_shapes.iter().enumerate() {
+                    by_name.entry(x.name.clone()).or_insert(i);
+                }
                 for c in file.custom_shapes {
                     match by_name.get(&c.name) {
                         Some(&i) => s.edit_state.custom_shapes[i] = c,

@@ -466,7 +466,10 @@ fn paste_layers(s: &mut Session, layers: &Document, dx: i32, dy: i32) -> Result<
     // The destination's records by block key, collected once: a copy keeps duplicate records,
     // and checking each against every destination record was quadratic in their number.
     let mut present: std::collections::HashMap<[u8; 4], std::collections::HashSet<&[u8]>> = std::collections::HashMap::new();
-    for (_, dk, dd) in d.doc.metadata.psd_global_blocks.iter().filter(|(_, k, _)| matches!(k, b"lnk2" | b"lnk3" | b"lnkD" | b"lnkE")) {
+    // Only when the clipboard carries linked blocks: an ordinary paste would hash every destination file for nothing.
+    let is_lnk = |k: &[u8; 4]| matches!(k, b"lnk2" | b"lnk3" | b"lnkD" | b"lnkE");
+    let clipboard_links = copies.metadata.psd_global_blocks.iter().any(|(_, k, _)| is_lnk(k));
+    for (_, dk, dd) in d.doc.metadata.psd_global_blocks.iter().filter(|(_, k, _)| clipboard_links && is_lnk(k)) {
         present.entry(*dk).or_default().extend(photocraft_io::linked::records(dd));
     }
     for (signature, key, data) in copies.metadata.psd_global_blocks.iter().filter(|(_, k, _)| matches!(k, b"lnk2" | b"lnk3" | b"lnkD" | b"lnkE")) {
