@@ -168,6 +168,12 @@ impl ImportBudget {
 /// deliberately counts full decoded planes for every compression method, plus their row
 /// buffers, interleave output and float conversion workspace.
 pub fn estimate(file: &PsdFile) -> Result<PsdMemoryEstimate, IoError> {
+    estimate_with_merged(file, Some(file.image_data.compression), file.image_data.encoded_len())
+}
+
+/// Preflight sees an empty `image_data`; use the merged section's actual metadata without
+/// reading or decoding its pixel payload.
+pub(crate) fn estimate_with_merged(file: &PsdFile, compression: Option<photocraft_psd::Compression>, encoded_len: u64) -> Result<PsdMemoryEstimate, IoError> {
     let mut budget = ImportBudget::default();
     let h = &file.header;
     h.validate()?;
@@ -216,7 +222,25 @@ pub fn estimate(file: &PsdFile) -> Result<PsdMemoryEstimate, IoError> {
         let merged = mul(mul(h.row_bytes() as u64, u64::from(h.height))?, channels)?;
         budget.retain(merged)?;
         // Include float expansion/readback and RGBA fallback, even for packed bitmap input.
-        let converted = mul(pixels, mul(channels.max(cc + 1), sample * 3 + 12)?)?;
+        let converted = if h.color_mode == photocraft_psd::ColorMode::Rgb
+            && h.depth == 8
+            && h.channels == 3
+            && file.layers().is_empty()
+            && matches!(compression, Some(photocraft_psd::Compression::Raw | photocraft_psd::Compression::Rle))
+        {
+            // Opaque RGB8 uses import_layered's byte interleave and direct tile copy:
+            // no full-image float conversion or alpha unmatting. The merged planes
+            // are already retained above. The parsed file keeps the encoded bytes
+            // through conversion. Source imports also read a second encoded copy
+            // (including the two-byte compression field) while decoding. Its row
+            // index and the RGBA interleave belong to separate phases.
+            budget.retain(encoded_len)?;
+            let row_index = mul(mul(u64::from(h.height), channels)?, std::mem::size_of::<usize>() as u64)?;
+            let decoding = encoded_len.checked_add(2).and_then(|n| n.checked_add(row_index)).ok_or_else(overflow)?;
+            mul(pixels, 4)?.max(decoding)
+        } else {
+            mul(pixels, mul(channels.max(cc + 1), sample * 3 + 12)?)?
+        };
         budget.scratch(converted.checked_add(inflate_scratch(merged, 1)?).ok_or_else(overflow)?);
     }
     let mut patterns = photocraft_psd::patterns::PatternBudget::default();

@@ -143,6 +143,18 @@ impl PsdFile {
         want: impl FnOnce(&PsdFile) -> Result<bool>,
         recover: impl FnOnce(&PsdFile) -> bool,
     ) -> Result<(Self, Option<Result<Vec<u8>>>)> {
+        Self::from_source_and_merged_preflight_info(source, |file, _, _| want(file), recover)
+    }
+
+    /// [`Self::from_bytes_and_merged_preflight_info`] for a [`Source`]. Only the two-byte
+    /// compression field is inspected before preflight, never the encoded pixels. A missing
+    /// field or failed read is reported as `None`; a read error is returned after preflight
+    /// unless the callback refuses the import first.
+    pub fn from_source_and_merged_preflight_info(
+        source: Source,
+        want: impl FnOnce(&PsdFile, Option<Compression>, u64) -> Result<bool>,
+        recover: impl FnOnce(&PsdFile) -> bool,
+    ) -> Result<(Self, Option<Result<Vec<u8>>>)> {
         let mut c = Cursor::new(&source);
         let header = Header::read(&mut Reader::new(&c.bytes(26)?))?;
         let version = header.version;
@@ -228,7 +240,10 @@ impl PsdFile {
             image_data: ImageData::new(Compression::Raw, Vec::new()),
             write_as_psb: false,
         };
-        if !want(&file)? {
+        let compression = c.peek(2).map(|bytes| Reader::new(&bytes).u16().ok().map(Compression::from_u16));
+        let want = want(&file, compression.as_ref().ok().copied().flatten(), c.remaining().saturating_sub(2))?;
+        compression?;
+        if !want {
             let compression = Compression::from_u16(c.u16()?);
             file.image_data = ImageData { compression, data: Vec::new(), stored: Some(c.stored_rest()) };
             return Ok((file, None));
