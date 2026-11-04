@@ -175,7 +175,11 @@ pub(crate) fn layers(bytes: &[u8], limits: &Limits) -> Result<Vec<CryptomatteLay
                 .filter(|m| m.len() <= MANIFEST_CAP)
                 .map(|m| parse_manifest(m.as_str()))
                 .unwrap_or_default();
-            let index = channels.iter().filter_map(|n| header.channels.list.iter().position(|c| c.name.to_string() == *n)).min().unwrap_or(usize::MAX);
+            // The position of the layer's first channel in the header's channel list. The
+            // streams carry their indices ("asset00"), the list its suffixes ("asset00.red"),
+            // so a channel belongs to a stream when `split_stream` resolves it to that name.
+            let index =
+                header.channels.list.iter().position(|c| split_stream(&c.name.to_string()).is_some_and(|s| channels.contains(&s.stream))).unwrap_or(usize::MAX);
             part_layers.push((
                 index,
                 CryptomatteLayer {

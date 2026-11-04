@@ -569,12 +569,9 @@ mod tests {
         // A click first, so the source is pinned; then the same path holds new pixels.
         let r = s.execute("select.cryptomatte", json!({"x": 0, "y": 0})).unwrap();
         assert_eq!(r["name"], "cube");
-        let mut mirrored = std::fs::read(&path).unwrap();
-        // Same length, different content: the beauty mirrored by rewriting the R/G/B f32
-        // samples of each scanline in place is invasive; instead write the varied fixture
-        // again with the border flag flipped (different alpha column), which is a rewrite
-        // of the very same length.
-        drop(&mut mirrored);
+        // The same path rewritten with different pixels (the border flag flips the alpha
+        // column): a rewrite of the very same length, so only the identity's mtime and the
+        // signature can catch it.
         varied_crypto_file(&path, true);
         let e = s.execute("select.cryptomatte", json!({"x": 0, "y": 0})).unwrap_err().to_string();
         assert!(e.contains("changed since it was opened") || e.contains("no longer matches"), "{e}");
