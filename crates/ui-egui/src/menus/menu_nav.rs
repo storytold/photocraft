@@ -555,6 +555,9 @@ impl Nav {
             return;
         }
         self.keyboard = true;
+        // The keys have the highlight now: a submenu let go earlier no longer hands it to the row
+        // under the pointer (scrolling one under it, say).
+        self.follow = None;
         ctx.request_repaint();
     }
 
