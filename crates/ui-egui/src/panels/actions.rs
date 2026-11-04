@@ -252,7 +252,9 @@ impl Frame {
     }
 
     fn validate(&self, session: &photocraft_engine::Session) -> Result<(), String> {
-        if self.take != session.actions.take {
+        // A plain library pause does not own a recorder started while its dialog waits.
+        // Suspended captures also validate their exact take through playback::Owner.
+        if matches!(self.source, Source::Draft(_)) && self.take != session.actions.take {
             return Err("this playback belongs to an earlier recording take".into());
         }
         if matches!(self.source, Source::Library) && !session.actions.list.iter().any(|a| a == self.action.as_ref()) {
