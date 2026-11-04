@@ -211,6 +211,7 @@ fn caf_unrepresented_descriptors_are_kept_and_never_partially_play() {
 }
 
 /// Known native defaults become explicit values; unsupported defaults/options cannot disappear.
+/// Representable defaults use CAF events; every unrepresented option stays exact in native fallback and is omitted only on request.
 #[test]
 fn caf_native_exports_preserve_effective_defaults_and_refuse_unrepresented_options() {
     for p in [json!({"sampling":"rectangular","output":"new"}), json!({"sampling":"rectangular","output":"new","seed":1,"target":"pixels"}), params()] {

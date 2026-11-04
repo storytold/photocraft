@@ -10,6 +10,7 @@ use photocraft_psd::{
     descriptor::Value as D,
 };
 
+/// Load default export through the durable store, retaining every native ID and JSON parameter exactly.
 pub fn preserved(set: &str, action: &Action) -> Vec<AtnItem> {
     let (bytes, skipped) = atn_cmds::export(set, &[action], &[], false).unwrap();
     assert!(skipped.is_empty());

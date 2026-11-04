@@ -390,7 +390,9 @@ fn a_recorder_started_during_a_library_dialog_survives_its_continuation() {
             let second = dialog(&app);
             assert_ne!(first, second);
             match exit {
-                "cancel second" => crate::dialogs::cancel(&mut app, second).unwrap(),
+                "cancel second" => {
+                    crate::dialogs::cancel(&mut app, second).unwrap();
+                }
                 "command error" => {
                     app.ui.dialog_mut(second).unwrap().fields.insert("radius".into(), json!("invalid"));
                     assert!(crate::dialogs::confirm(&mut app, second).is_err());

@@ -194,6 +194,7 @@ fn malformed_unknown_and_unrepresentable_descriptors_stay_whole() {
     }
 }
 
+/// Unsupported options cannot become an approximate Photoshop event: keep native JSON or explicitly omit the step.
 #[test]
 fn unsupported_native_targets_and_damaged_origins_use_exact_native_fallback() {
     let loaded = imported(fixture("Lnr ", "Gcls", false));
