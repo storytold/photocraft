@@ -44,6 +44,10 @@ pub(crate) fn float_window(app: &mut PhotocraftApp, doc: usize, offset: usize, f
     view.zoom_transition = None;
     view.display_camera = None;
     view.fit_pending = offset > 0 || view.fit_pending;
+    // A floating window draws the document's own view from now on (`tabs::extra_windows`).
+    if floating && let Some(v) = app.ui.views.get_mut(doc) {
+        *v = view.clone();
+    }
     app.ui.windows.push(crate::state::DocWindow { id: wid, document: doc, view, open: true, floating, focused: false, position: None });
     wid
 }
