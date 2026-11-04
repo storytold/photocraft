@@ -45,7 +45,6 @@ pub const HIDDEN_UNTIL_IMPLEMENTED: &[&str] = &[
     "plugIns.showExtensionPanels",
     "plugIns.allowScriptsToConnect",
     "type.textEngine",
-    "enhancedControls.scrubbySliderAcceleration",
 ];
 
 /// Is the preference at `path` (`"section.key"`) hidden from the Preferences dialog?
