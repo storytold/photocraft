@@ -41,7 +41,7 @@ fn previous_read_region(surface: &Surface, r: Rect) -> Vec<f32> {
                     Some(t) => {
                         let base = (((y - tc.ty * TILE_SIZE) as usize) * TILE_SIZE as usize + (x - tc.tx * TILE_SIZE) as usize) * n;
                         for i in 0..n {
-                            out[o + i] = read_sample(&t.data, surface.format.sample, base + i);
+                            out[o + i] = read_sample(&t.bytes(), surface.format.sample, base + i);
                         }
                     }
                     None => out[o..o + n].copy_from_slice(&dp),
@@ -137,7 +137,7 @@ fn write_region_reference(surface: &mut Surface, r: Rect, data: &[f32]) {
                 let o = (((y - r.y0) as usize) * w + (x - r.x0) as usize) * n;
                 let base = (((y - tc.ty * TILE_SIZE) as usize) * TILE_SIZE as usize + (x - tc.tx * TILE_SIZE) as usize) * n;
                 for i in 0..n {
-                    write_sample(&mut t.data, sample, base + i, data[o + i]);
+                    write_sample(&mut t.bytes_mut(), sample, base + i, data[o + i]);
                 }
             }
         }
@@ -571,13 +571,13 @@ fn tile_content_bounds_match_a_per_pixel_scan() {
                 for &s in &spots {
                     data[s - s % bpp + byte] ^= 0x5a;
                 }
-                let t = Tile { data: data.into_boxed_slice() };
+                let t = Tile::from_vec(data);
                 assert_eq!(t.content_bounds(&dp), per_pixel(&t, &dp), "bpp {bpp}, spots {spots:?}, byte {byte}");
             }
         }
         let mut data = dp.repeat(TILE_SIZE as usize * TILE_SIZE as usize);
         data[row * 3 + 9 * bpp..row * 3 + 10 * bpp].iter_mut().for_each(|b| *b = !*b);
-        let t = Tile { data: data.into_boxed_slice() };
+        let t = Tile::from_vec(data);
         assert_eq!(t.content_bounds(&dp), Some((9, 3, 10, 4)), "bpp {bpp}");
     }
 }
@@ -879,9 +879,14 @@ fn write_rows_empty_rect_writes_nothing() {
 #[test]
 fn write_rows_overflowing_rect_is_an_error_not_a_panic() {
     let mut s = Surface::new(PixelFormat::GRAY8);
+    let r = Rect::new(0, 0, 1, 1);
+    s.try_write_rows_with(r, |_, _, dst| dst.fill(42)).unwrap();
+    let before = s.clone();
     let huge = Rect::new(i32::MIN, i32::MIN, i32::MAX, i32::MAX);
     assert!(s.try_write_rows_with(huge, |_, _, _| {}).is_err());
-    assert_eq!(s.tile_count(), 0);
+    assert_eq!(s.tile_count(), 1);
+    assert_eq!(s.to_interleaved(r), vec![42]);
+    assert!(std::sync::Arc::ptr_eq(s.tiles.values().next().unwrap(), before.tiles.values().next().unwrap()));
 }
 
 #[test]
@@ -930,4 +935,20 @@ fn write_rows_copies_tiles_a_clone_still_shares() {
     assert_eq!(before.to_interleaved(Rect::new(0, 0, 300, 300)), snapshot, "the clone is unchanged");
     assert_eq!(s.to_interleaved(Rect::new(150, 150, 151, 151)), vec![row_byte(150, 150)]);
     assert_eq!(s.to_interleaved(Rect::new(10, 10, 11, 11)), vec![9], "pixels outside the rect keep their value");
+}
+
+#[test]
+fn failed_row_preparation_preserves_existing_tiles() {
+    let mut surface = Surface::new(PixelFormat::GRAY8);
+    let r = Rect::new(0, 0, 300, 1);
+    surface.try_write_rows_with(Rect::new(0, 0, 1, 1), |_, _, dst| dst.fill(42)).unwrap();
+    let before = surface.clone();
+    let result = surface.try_prepare_rows(r, |tiles, _, _| {
+        fill_tile(&mut tiles[0], r, &PixelFormat::GRAY8, &[0], &|_, _, dst: &mut [u8]| dst.fill(7))?;
+        Err(AllocationError::NotEnoughMemory { bytes: 1 })
+    });
+    assert!(matches!(result, Err(AllocationError::NotEnoughMemory { .. })));
+    assert_eq!(surface.tile_count(), 1);
+    assert_eq!(surface.to_interleaved(Rect::new(0, 0, 1, 1)), vec![42]);
+    assert!(std::sync::Arc::ptr_eq(surface.tiles.values().next().unwrap(), before.tiles.values().next().unwrap()));
 }
