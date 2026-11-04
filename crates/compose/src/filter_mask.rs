@@ -26,16 +26,19 @@ pub fn mix(base: &Surface, filtered: &Surface, mask: &LayerMask) -> Surface {
     // and transparent pixels in tiles neither surface has stay as they are.
     let whole = area;
     let same_default = base.default_pixel() == filtered.default_pixel();
+    // Keep tile scratch for the operation. Reallocating these float buffers per tile
+    // dominates large masks; every output sample is overwritten before publication.
+    let (mut b, mut f, mut k, mut o) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     for t in whole.tiles() {
         let area = t.rect().intersect(&whole);
         let bare = !base.has_tiles_in(area) && !filtered.has_tiles_in(area);
         if area.is_empty() || (bare && (fmt.alpha || same_default)) {
             continue;
         }
-        let (b, f) = (base.read_region(area), filtered.read_region(area));
-        let mut k = Vec::new();
+        base.read_region_into(area, &mut b);
+        filtered.read_region_into(area, &mut f);
         mask.values_into(area, &mut k);
-        let mut o = vec![0.0f32; b.len()];
+        o.resize(b.len(), 0.0f32);
         for (i, ((bp, fp), op)) in b.chunks_exact(n).zip(f.chunks_exact(n)).zip(o.chunks_exact_mut(n)).enumerate() {
             let m = k.get(i).copied().unwrap_or(1.0).clamp(0.0, 1.0);
             if fmt.sample == SampleType::F32 {
@@ -165,6 +168,82 @@ mod tests {
         let mut m = LayerMask::reveal_all();
         m.surface = surface(PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false), |x, _| vec![x as f32 / 7.0]);
         m
+    }
+
+    #[test]
+    fn reused_scratch_matches_isolated_pixels_across_partial_and_missing_tiles() {
+        for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab, ColorMode::Multichannel] {
+            for sample in SampleType::ALL {
+                for alpha in [false, true] {
+                    let fmt = PixelFormat::new(mode, sample, alpha);
+                    let n = fmt.channels();
+                    let colors = n - usize::from(alpha);
+                    let base_default = vec![if alpha { 0. } else { 0.125 }; n];
+                    let filtered_default = vec![if alpha { 0. } else { 0.75 }; n];
+                    let mut base = Surface::with_default(fmt, &base_default);
+                    let mut filtered = Surface::with_default(fmt, &filtered_default);
+                    let mut bp = vec![0.25; n];
+                    let mut fp = vec![0.625; n];
+                    if sample == SampleType::F32 {
+                        for c in 0..colors {
+                            bp[c] = if c % 2 == 0 { -2. } else { 3. };
+                            fp[c] = if c % 2 == 0 { 4. } else { -1. };
+                        }
+                    }
+                    if alpha {
+                        bp[colors] = 0.25;
+                        fp[colors] = 0.75;
+                    }
+                    base.fill_rect(photocraft_geom::Rect::new(0, 0, 256, 256), &bp);
+                    base.write_pixel(-2, -1, &bp);
+                    filtered.fill_rect(photocraft_geom::Rect::new(256, 0, 261, 1), &fp);
+                    filtered.write_pixel(260, 257, &fp);
+                    let mut mask = LayerMask::reveal_all();
+                    mask.surface = Surface::with_default(PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false), &[0.5]);
+                    mask.surface.fill_rect(photocraft_geom::Rect::new(0, 256, 256, 258), &[0.]);
+                    mask.surface.write_pixel(256, 0, &[1.]);
+                    if sample == SampleType::F32 {
+                        let tiny = f32::from_bits(1);
+                        for (x, y, b, f, ba, fa, coverage) in [
+                            (-2, -1, f32::MAX, -f32::MAX, tiny, 2. * tiny, 0.5),
+                            (1, 1, -0., 0., 0., 1., 0.),
+                            (255, 255, f32::MAX, f32::MAX, 0.01, 0.01, 0.03),
+                            (256, 257, 1., -f32::MAX, 1., f32::MIN_POSITIVE, 1.),
+                            (260, 257, tiny, 2. * tiny, tiny, 2. * tiny, 0.5),
+                        ] {
+                            let (mut bp, mut fp) = (vec![b; n], vec![f; n]);
+                            if alpha {
+                                bp[colors] = ba;
+                                fp[colors] = fa;
+                            }
+                            base.write_pixel(x, y, &bp);
+                            filtered.write_pixel(x, y, &fp);
+                            mask.surface.write_pixel(x, y, &[coverage]);
+                        }
+                    }
+                    let before = (base.clone(), filtered.clone(), mask.clone());
+                    let result = mix(&base, &filtered, &mask);
+                    for y in [-1, 0, 1, 255, 256, 257] {
+                        for x in [-2, -1, 0, 1, 254, 255, 256, 260] {
+                            // An isolated one-pixel operation cannot retain another tile's scratch.
+                            let mut isolated_base = Surface::new(fmt);
+                            let mut isolated_filtered = Surface::new(fmt);
+                            isolated_base.write_pixel(0, 0, &base.pixel(x, y));
+                            isolated_filtered.write_pixel(0, 0, &filtered.pixel(x, y));
+                            let mut isolated_mask = LayerMask::reveal_all();
+                            isolated_mask.surface = Surface::with_default(PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false), &[mask.value(x, y)]);
+                            let expected = mix(&isolated_base, &isolated_filtered, &isolated_mask).pixel(0, 0);
+                            assert_eq!(
+                                result.pixel(x, y).iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                                expected.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                                "{fmt:?} ({x}, {y})"
+                            );
+                        }
+                    }
+                    assert_eq!((base, filtered, mask), before);
+                }
+            }
+        }
     }
 
     #[test]
