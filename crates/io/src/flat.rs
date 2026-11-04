@@ -52,11 +52,6 @@ pub fn import_flat(name: &str, bytes: &[u8]) -> Result<ImportResult, IoError> {
     import_flat_with_options(name, bytes, &crate::ImportOptions::default(), &photocraft_raster::Interrupt::NONE)
 }
 
-/// [`import_flat`] with the job's cancellation and progress controls.
-pub fn import_flat_with(name: &str, bytes: &[u8], ctl: &Interrupt) -> Result<ImportResult, IoError> {
-    import_flat_with_options(name, bytes, &crate::ImportOptions::default(), ctl)
-}
-
 /// [`import_flat`] with the user's import settings and the job's cancellation.
 ///
 /// A layered TIFF's composite, layer and retained-image estimate is admitted through
