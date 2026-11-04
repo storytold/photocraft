@@ -30,6 +30,7 @@ mod hue_saturation;
 mod levels;
 mod session;
 
+pub(crate) use basic::PHOTO_FILTER_MODE;
 #[cfg(test)]
 pub(crate) use basic::row_value;
 #[cfg(test)]
@@ -69,6 +70,12 @@ pub const KINDS: [&str; 13] = [
 
 pub fn has_editor(kind: &str) -> bool {
     KINDS.contains(&kind)
+}
+
+/// Forget Photo Filter's Filter / Color choice in the editor memory `mem`, so the editor derives it
+/// from the colour again: a choice changed and then cancelled must not outlive the dialog (#9879).
+pub(crate) fn forget_photo_filter_mode(ctx: &egui::Context, mem: egui::Id) {
+    ctx.data_mut(|d| d.remove::<bool>(mem.with(PHOTO_FILTER_MODE)));
 }
 
 /// Kinds that draw a histogram behind their controls.
