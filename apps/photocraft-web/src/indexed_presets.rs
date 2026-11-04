@@ -12,6 +12,8 @@ const DATABASE: &str = "photocraft.presets";
 const FILES: &str = "files";
 const TIMEOUT_MS: f64 = 10_000.0;
 
+mod migration;
+
 fn js(e: JsValue) -> String {
     if let Some(exception) = e.dyn_ref::<web_sys::DomException>() {
         format!("{}: {}", exception.name(), exception.message())
@@ -231,47 +233,57 @@ async fn read(db: &IdbDatabase, deadline: f64) -> Result<(Bridge, Vec<String>), 
     Ok((bridge, warnings))
 }
 
-pub async fn write(db: &IdbDatabase, batch: &Batch) -> Result<(), String> {
+/// Queue only while the transaction is active (creation or an IDB request callback).
+fn queue_batch(store: &web_sys::IdbObjectStore, batch: &Batch, committed: bool) -> Result<(), String> {
+    for (name, bytes) in batch {
+        if committed && matches!(name.as_str(), ACTIONS_FILE | LEGACY_ACTIONS_FILE | MIGRATED_ACTIONS_FILE) {
+            continue;
+        }
+        let key = JsValue::from_str(name);
+        if let Some(bytes) = bytes {
+            if let Some(migration) = &batch.migration
+                && name == ACTIONS_FILE
+                && migration.published
+            {
+                continue;
+            }
+            let blob = Blob::new_with_u8_array_sequence(&Array::of1(&Uint8Array::from(bytes.as_ref()))).map_err(js)?;
+            let exclusive = batch.migration.as_ref().is_some_and(|migration| name == MIGRATED_ACTIONS_FILE || (name == ACTIONS_FILE && !migration.published));
+            if exclusive {
+                store.add_with_key(&blob, &key).map_err(js)?;
+            } else {
+                store.put_with_key(&blob, &key).map_err(js)?;
+            }
+        } else {
+            store.delete(&key).map_err(js)?;
+        }
+    }
+    Ok(())
+}
+
+pub async fn write(db: &std::rc::Rc<std::cell::RefCell<IdbDatabase>>, batch: &Batch) -> Result<(), String> {
     if let Some(migration) = &batch.migration {
         if !matches!(batch.get(LEGACY_ACTIONS_FILE), Some(None))
             || batch.get(MIGRATED_ACTIONS_FILE).and_then(Option::as_ref).is_none_or(|bytes| bytes.as_ref() != migration.legacy.as_ref())
-            || batch.get(ACTIONS_FILE).and_then(Option::as_ref).is_none()
+            || batch.get(ACTIONS_FILE).and_then(Option::as_ref).is_none_or(|bytes| bytes.as_ref() != migration.atn.as_ref())
         {
             return Err("incomplete Actions migration transaction".into());
         }
     }
-    let tx = db.transaction_with_str_and_mode(FILES, IdbTransactionMode::Readwrite).map_err(js)?;
-    let store = tx.object_store(FILES).map_err(js)?;
-    let queued = (|| -> Result<(), String> {
-        for (name, bytes) in batch {
-            let key = JsValue::from_str(name);
-            if let Some(bytes) = bytes {
-                if let Some(migration) = &batch.migration {
-                    if name == ACTIONS_FILE && migration.published && bytes.as_ref() == migration.atn.as_ref() {
-                        continue;
-                    }
-                    if name == MIGRATED_ACTIONS_FILE && bytes.as_ref() != migration.legacy.as_ref() {
-                        return Err("migration backup changed while staged".into());
-                    }
-                }
-                let blob = Blob::new_with_u8_array_sequence(&Array::of1(&Uint8Array::from(bytes.as_ref()))).map_err(js)?;
-                let exclusive =
-                    batch.migration.as_ref().is_some_and(|migration| name == MIGRATED_ACTIONS_FILE || (name == ACTIONS_FILE && !migration.published));
-                if exclusive {
-                    store.add_with_key(&blob, &key).map_err(js)?;
-                } else {
-                    store.put_with_key(&blob, &key).map_err(js)?;
-                }
-            } else {
-                store.delete(&key).map_err(js)?;
-            }
+    let deadline = js_sys::Date::now() + TIMEOUT_MS;
+    // A versionchange handler closes the old connection. Retry replaces only that
+    // connection; it must not rehydrate over the live Bridge's newer unsaved bytes.
+    let connection = db.borrow().clone();
+    let tx = match connection.transaction_with_str_and_mode(FILES, IdbTransactionMode::Readwrite) {
+        Ok(tx) => tx,
+        Err(error) if error.dyn_ref::<web_sys::DomException>().is_some_and(|error| error.name() == "InvalidStateError") => {
+            let connection = open(deadline).await?;
+            *db.borrow_mut() = connection.clone();
+            connection.transaction_with_str_and_mode(FILES, IdbTransactionMode::Readwrite).map_err(js)?
         }
-        Ok(())
-    })();
-    if let Err(e) = queued {
-        let _ = tx.abort();
-        return Err(e);
-    }
+        Err(error) => return Err(js(error)),
+    };
+    let store = tx.object_store(FILES).map_err(js)?;
     let mut listeners = Listeners::new();
     let promise = Promise::new(&mut |resolve, reject| {
         if let Err(e) = listeners.add(&tx, "complete", move |_| {
@@ -291,9 +303,18 @@ pub async fn write(db: &IdbDatabase, batch: &Batch) -> Result<(), String> {
             }
         }
     });
-    let result = before(&promise, js_sys::Date::now() + TIMEOUT_MS).await.map(|_| ());
+    let queued =
+        if batch.migration.is_some() { migration::start(&tx, &store, batch, deadline).map(Some) } else { queue_batch(&store, batch, false).map(|_| None) };
+    let scope = match queued {
+        Ok(scope) => scope,
+        Err(error) => {
+            let _ = tx.abort();
+            return Err(error);
+        }
+    };
+    let result = before(&promise, deadline).await.map(|_| ());
     if result.is_err() {
         let _ = tx.abort();
     }
-    result
+    scope.as_ref().and_then(migration::Scope::error).map_or(result, Err)
 }

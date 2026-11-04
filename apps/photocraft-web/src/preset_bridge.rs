@@ -15,6 +15,19 @@ pub struct Migration {
     pub atn: Arc<[u8]>,
     pub published: bool,
 }
+impl Migration {
+    /// Called only with bytes read under the writer's single readwrite transaction.
+    pub fn already_committed(&self, atn: Option<&[u8]>, legacy: Option<&[u8]>, backup: Option<&[u8]>) -> Result<bool, String> {
+        if atn == Some(self.atn.as_ref()) && legacy.is_none() && backup == Some(self.legacy.as_ref()) {
+            return Ok(true);
+        }
+        if legacy == Some(self.legacy.as_ref()) && backup.is_none() && atn == self.published.then_some(self.atn.as_ref()) {
+            return Ok(false);
+        }
+        Err("Actions migration records changed; original, ATN and backup retained unchanged".into())
+    }
+}
+#[derive(Clone)]
 pub struct Batch {
     pub files: Files,
     pub migration: Option<Migration>,
@@ -105,13 +118,23 @@ impl Bridge {
             return None;
         }
         s.writing = true;
-        let files = std::mem::take(&mut s.dirty)
+        let mut files: Files = std::mem::take(&mut s.dirty)
             .into_iter()
             .map(|name| {
                 let bytes = s.files.get(&name).cloned();
                 (name, bytes)
             })
             .collect();
+        if let Some(migration) = s.migration.clone() {
+            // Every ambiguous retry has the same exact identity. Newer live edits wait
+            // for this migration's acknowledgement, then get their own ordinary batch.
+            if s.files.get(ACTIONS_FILE).map(AsRef::as_ref) != Some(migration.atn.as_ref()) {
+                s.dirty.insert(ACTIONS_FILE.into());
+            }
+            files.insert(ACTIONS_FILE.into(), Some(migration.atn));
+            files.insert(MIGRATED_ACTIONS_FILE.into(), Some(migration.legacy));
+            files.insert(LEGACY_ACTIONS_FILE.into(), None);
+        }
         Some(Batch { files, migration: s.migration.clone() })
     }
 
@@ -279,11 +302,13 @@ mod tests {
     }
 
     #[test]
-    fn actions_migration_abort_requeues_whole_group_with_latest_atn() {
+    fn actions_migration_abort_retries_fixed_bytes_before_the_latest_atn() {
         let bridge = Bridge::default();
         bridge.load(LEGACY_ACTIONS_FILE, b"legacy".to_vec()).unwrap();
         bridge.migrate_actions(b"legacy", b"first ATN", false).unwrap();
+        bridge.write(ACTIONS_FILE, b"edited before begin").unwrap();
         let batch = bridge.begin().unwrap();
+        assert_eq!(batch.get(ACTIONS_FILE).unwrap().as_deref(), Some(&b"first ATN"[..]));
         bridge.write(ACTIONS_FILE, b"edited ATN").unwrap();
         bridge.finish(batch, Err("transaction aborted".into()));
         assert!(bridge.unsaved());
@@ -292,10 +317,35 @@ mod tests {
         let batch = bridge.begin().unwrap();
         assert!(batch.migration.is_some());
         assert_eq!(batch.len(), 3);
-        assert_eq!(batch.get(ACTIONS_FILE).unwrap().as_deref(), Some(&b"edited ATN"[..]));
+        assert_eq!(batch.get(ACTIONS_FILE).unwrap().as_deref(), Some(&b"first ATN"[..]));
         assert_eq!(batch.get(MIGRATED_ACTIONS_FILE).unwrap().as_deref(), Some(&b"legacy"[..]));
         bridge.finish(batch, Ok(()));
+        assert!(bridge.unsaved());
+        let next = bridge.begin().unwrap();
+        assert!(next.migration.is_none());
+        assert_eq!(next.len(), 1);
+        assert_eq!(next.get(ACTIONS_FILE).unwrap().as_deref(), Some(&b"edited ATN"[..]));
+        bridge.finish(next, Ok(()));
         assert!(!bridge.unsaved());
+    }
+
+    #[test]
+    fn migration_recognizes_only_the_exact_fresh_or_committed_tuple() {
+        for published in [false, true] {
+            let migration = Migration { legacy: Arc::from(&b"legacy"[..]), atn: Arc::from(&b"ATN0"[..]), published };
+            assert!(!migration.already_committed(published.then_some(&b"ATN0"[..]), Some(b"legacy"), None).unwrap());
+            assert!(migration.already_committed(Some(b"ATN0"), None, Some(b"legacy")).unwrap());
+            for (atn, legacy, backup) in [
+                (Some(&b"ATN1"[..]), None, Some(&b"legacy"[..])),
+                (Some(&b"ATN0"[..]), Some(&b"change"[..]), None),
+                (Some(&b"ATN0"[..]), None, Some(&b"change"[..])),
+                (Some(&b"ATN0"[..]), Some(&b"legacy"[..]), Some(&b"legacy"[..])),
+                (None, None, Some(&b"legacy"[..])),
+                (Some(&b""[..]), None, Some(&b"legacy"[..])),
+            ] {
+                assert!(migration.already_committed(atn, legacy, backup).is_err());
+            }
+        }
     }
 
     #[test]
