@@ -285,9 +285,10 @@ fn crop_frame_outline(painter: &egui::Painter, q: [Pos2; 4], look: crate::crop_o
             let view = painter.clip_rect().expand(4.0);
             for i in 0..4 {
                 let (a, b) = (q[i], q[(i + 1) % 4]);
-                if let Some([a, b]) = clip_segment(a, b, view) {
-                    painter.line_segment([a, b], Stroke::new(1.0, Color32::from_gray(210)));
-                    painter.extend(egui::Shape::dashed_line(&[a, b], Stroke::new(1.0, Color32::BLACK), 4.0, 4.0));
+                if let Some([from, to]) = clip_segment(a, b, view) {
+                    painter.line_segment([from, to], Stroke::new(1.0, Color32::from_gray(210)));
+                    let offset = dash_offset(a, from, DASH);
+                    painter.extend(egui::Shape::dashed_line_with_offset(&[from, to], Stroke::new(1.0, Color32::BLACK), &[DASH], &[DASH], offset));
                 }
             }
             grey
@@ -297,6 +298,19 @@ fn crop_frame_outline(painter: &egui::Painter, q: [Pos2; 4], look: crate::crop_o
             grey
         }
     }
+}
+
+/// Length of the untouched frame's dashes and of the gaps between them.
+const DASH: f32 = 4.0;
+
+/// Where the dashes of an edge cut to the view begin, so they keep the places they have counted
+/// from the edge's `corner`: started afresh at the cut, the pattern slid along the edge as the view
+/// panned (noted in review). The dashes start every `2 * dash` from the corner; `dashes_from_line`
+/// can only begin on a dash, so a dash the cut divides starts a period later -- that piece is in
+/// the margin the view is grown by, out of sight.
+fn dash_offset(corner: Pos2, start: Pos2, dash: f32) -> f32 {
+    let period = 2.0 * dash;
+    (period - (start - corner).length() % period) % period
 }
 
 /// The part of the segment `a`–`b` inside `r` (Liang–Barsky), or None when none of it is.
@@ -695,7 +709,37 @@ pub(super) fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter
 
 #[cfg(test)]
 mod clip_segment_tests {
-    use super::{Pos2, Rect, clip_segment, pos2};
+    use super::{DASH, Pos2, Rect, clip_segment, dash_offset, pos2};
+
+    /// Where each dash of the edge from `corner`, cut to `view`, begins, as distances from the corner.
+    fn dash_starts(corner: Pos2, end: Pos2, view: Rect) -> Vec<f32> {
+        let Some([from, to]) = clip_segment(corner, end, view) else { return Vec::new() };
+        let shapes =
+            egui::Shape::dashed_line_with_offset(&[from, to], egui::Stroke::new(1.0, egui::Color32::BLACK), &[DASH], &[DASH], dash_offset(corner, from, DASH));
+        shapes
+            .iter()
+            .filter_map(|s| match s {
+                egui::Shape::LineSegment { points, .. } => Some((points[0] - corner).length()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The dashes of an edge cut to the view stay where they are counted from the frame's corner,
+    /// however the view sits on the edge, so panning does not slide them along it (noted in review).
+    #[test]
+    fn the_dashes_keep_their_places_as_the_view_pans() {
+        let (corner, end) = (pos2(0.0, 50.0), pos2(10_000.0, 50.0));
+        for left in [0.0f32, 1.0, 3.3, 4.0, 5.9, 123.45, 4_001.7] {
+            let view = Rect::from_min_max(pos2(left, 0.0), pos2(left + 300.0, 100.0));
+            let starts = dash_starts(corner, end, view);
+            assert!(!starts.is_empty(), "the view at {left} shows dashes");
+            for d in starts {
+                let off = d % (2.0 * DASH);
+                assert!(off < 0.01 || off > 2.0 * DASH - 0.01, "view at {left}: a dash starts {d} from the corner, off the pattern by {off}");
+            }
+        }
+    }
 
     fn view() -> Rect {
         Rect::from_min_max(pos2(0.0, 0.0), pos2(100.0, 50.0))

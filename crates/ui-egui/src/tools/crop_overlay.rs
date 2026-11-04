@@ -250,14 +250,18 @@ pub fn current_guides(app: &PhotocraftApp, w: f32, h: f32) -> Vec<Polyline> {
 /// only the frame, with no shield and no overlay in any show mode; both start with the first change
 /// and stay until the crop is committed or cancelled (#10930). Classic Mode wasn't measured and
 /// keeps the behaviour it had.
+///
+/// Within a drag, the first change is what counts: a drag that changes the frame and brings it back
+/// to where it started keeps the started look until it ends, rather than flickering back to the
+/// untouched one (noted in review). Once it ends, `crop_ui::release` decides, as before.
 pub fn crop_started(app: &PhotocraftApp) -> bool {
-    app.ui.tool_options.crop_shield.classic_mode || !app.crop.default_frame || drag_changed(app)
+    app.ui.tool_options.crop_shield.classic_mode || !app.crop.default_frame || (app.crop.drag.is_some() && app.crop.drag_moved) || drag_changed(app)
 }
 
 /// Whether the drag in progress has changed the frame since its press. A press that hasn't moved
 /// anything yet is not the first change, so it leaves the untouched look (#10930). The tests mirror
 /// the ones `crop_ui` uses when a drag ends.
-fn drag_changed(app: &PhotocraftApp) -> bool {
+pub(crate) fn drag_changed(app: &PhotocraftApp) -> bool {
     use crate::crop_ui::CropDrag;
     match &app.crop.drag {
         None => false,

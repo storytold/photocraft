@@ -117,3 +117,20 @@ fn show_cropped_area_off_still_hides_what_is_outside_an_untouched_frame() {
     assert!(photocraft_ui_egui::crop_shield::current(&app, &ctx).is_some(), "the opaque outside fill stays");
     assert!(current_guides(&app, 300.0, 200.0).is_empty(), "but no overlay before the first change");
 }
+
+/// Within a drag the first change counts: a drag that changes the frame and comes back to where it
+/// started keeps the started look, rather than flickering back to the untouched one mid-drag
+/// (noted in review). Released, the crop is pending as after any drawn frame.
+#[test]
+fn a_drag_brought_back_to_its_start_keeps_the_started_look_until_it_ends() {
+    for show in MODES {
+        let mut app = crop_app(show);
+        control(&mut app, "ui.pointer", json!({"tool": "Crop", "events": [{"kind": "down", "x": 50, "y": 40}, {"kind": "move", "x": 150, "y": 90}]}));
+        assert_eq!(drawn(&app).2, FrameLook::Started, "{show:?}: the first change");
+        control(&mut app, "ui.pointer", json!({"tool": "Crop", "events": [{"kind": "move", "x": 50, "y": 40}]}));
+        assert_eq!(drawn(&app).2, FrameLook::Started, "{show:?}: back where it started, still the started look");
+        assert!(drawn(&app).1, "{show:?}: and the shield");
+        control(&mut app, "ui.pointer", json!({"tool": "Crop", "events": [{"kind": "up", "x": 50, "y": 40}]}));
+        assert_eq!(drawn(&app).2, FrameLook::Started, "{show:?}: released, the crop is pending");
+    }
+}

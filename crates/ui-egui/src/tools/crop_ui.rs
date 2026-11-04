@@ -53,6 +53,10 @@ pub struct CropState {
     frame_for: Option<(usize, u32, u32)>,
     /// The frame is being edited (pressed since it was made): the canvas shows what lies past it.
     pub editing: bool,
+    /// The drag in progress has changed the frame at some point, even if it has since come back to
+    /// where it started: the crop has started, and its look stays for the rest of the drag
+    /// (`crop_overlay::crop_started`, #10930).
+    pub drag_moved: bool,
     /// The document the pending frame (or gesture) belongs to ([`cancel_stale`], #1918).
     doc: Option<photocraft_doc::DocId>,
     /// The options-bar Straighten button and ⌘-drag (`crop_straighten`).
@@ -779,8 +783,14 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool 
 /// Press, drag and release of the frame. Returns true when the frame needs syncing to the view.
 fn track(app: &mut PhotocraftApp, ev: ToolEvent, p: [f64; 2], mods: Modifiers) -> bool {
     match ev {
-        ToolEvent::Down { .. } => begin_drag(app, p),
-        ToolEvent::Move { .. } => update(app, p, mods),
+        ToolEvent::Down { .. } => {
+            app.crop.drag_moved = false;
+            begin_drag(app, p);
+        }
+        ToolEvent::Move { .. } => {
+            update(app, p, mods);
+            app.crop.drag_moved |= crate::crop_overlay::drag_changed(app);
+        }
         ToolEvent::Up { .. } => {
             update(app, p, mods);
             let Some(drag) = app.crop.drag.take() else { return false };
