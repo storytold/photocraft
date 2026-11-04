@@ -129,9 +129,14 @@ impl NsBindings {
 
     /// The `xmlns` declarations inside one start tag (`<` through its `>`).
     fn collect_tag(&mut self, tag: &str) {
+        // Quoted attribute values are text: a declaration shape inside one registers nothing.
+        let quoted = quoted_spans(tag);
         let mut from = 0;
         while let Some(i) = tag.get(from..).and_then(|r| r.find("xmlns")).map(|i| i + from) {
             from = i + "xmlns".len();
+            if quoted.iter().any(|&(a, b)| (a..b).contains(&i)) {
+                continue;
+            }
             // An attribute name: preceded by whitespace.
             if !tag.get(..i).and_then(|s| s.chars().next_back()).is_some_and(char::is_whitespace) {
                 continue;
@@ -245,13 +250,58 @@ fn li_values(inner: &str, li_tags: &[String]) -> Vec<String> {
     out
 }
 
-/// Attribute form `prop="value"` on an `rdf:Description`.
+/// The `(start, end)` spans of `s` that sit inside quotes, quotes included: attribute values,
+/// where declaration- or attribute-shaped text is just text (#11200).
+fn quoted_spans(s: &str) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    let mut quote = None;
+    for (i, c) in s.char_indices() {
+        match quote {
+            Some((q, start)) if c == q => {
+                out.push((start, i + c.len_utf8()));
+                quote = None;
+            }
+            Some(_) => {}
+            None if matches!(c, '"' | '\'') => quote = Some((c, i)),
+            None => {}
+        }
+    }
+    out
+}
+
+/// Attribute form `prop="value"` on an `rdf:Description`. The name must sit at an attribute
+/// position — inside a start tag, outside any quoted value: `prop="…"` inside another
+/// attribute's value (or in element text) is text, and matching it would read, or on removal
+/// cut, the wrong thing (#11200).
 fn find_attr<'a>(xmp: &'a str, prop: &str) -> Option<(usize, usize, &'a str)> {
     let key = format!(" {prop}=\"");
-    let i = xmp.find(&key)?;
-    let v0 = i + key.len();
-    let v1 = xmp[v0..].find('"')? + v0;
-    Some((i, v1 + 1, &xmp[v0..v1]))
+    let mut from = 0;
+    while let Some(lt) = xmp.get(from..).and_then(|r| r.find('<')).map(|i| i + from) {
+        let rest = &xmp[lt..];
+        if let Some(skip) = span_len(rest, "<!--", "-->").or_else(|| span_len(rest, "<![CDATA[", "]]>")).or_else(|| span_len(rest, "<?", "?>")) {
+            from = lt + skip;
+            continue;
+        }
+        if rest.starts_with("</") || rest.starts_with("<!") {
+            from = lt + 2;
+            continue;
+        }
+        let end = tag_end(xmp, lt);
+        let tag = &xmp[lt..end];
+        let quoted = quoted_spans(tag);
+        let mut at = 0;
+        while let Some(i) = tag.get(at..).and_then(|r| r.find(&key)).map(|i| i + at) {
+            at = i + 1;
+            if quoted.iter().any(|&(a, b)| (a..b).contains(&i)) {
+                continue;
+            }
+            let v0 = i + key.len();
+            let Some(v1) = tag[v0..].find('"').map(|j| j + v0) else { break };
+            return Some((lt + i, lt + v1 + 1, &tag[v0..v1]));
+        }
+        from = end;
+    }
+    None
 }
 
 /// File Info fields read from an XMP packet.

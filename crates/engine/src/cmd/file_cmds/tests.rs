@@ -3091,3 +3091,30 @@ fn file_info_write_removes_foreign_spelling_elements() {
     assert_eq!(info["title"], "");
     assert_eq!(info["author"], "Jane");
 }
+
+#[test]
+fn file_info_write_removes_foreign_spelling_attributes() {
+    // #11200: the attribute form removes under every spelling too. The note attribute's
+    // quoted value carries an e:title shape: that is text, so the read must take the real
+    // attribute, and clearing the title must leave the note untouched.
+    let xmp = "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\" xmlns:e=\"http://purl.org/dc/elements/1.1/\">\
+      <rdf:Description rdf:about=\"\" data-note='see e:title=\"Trap\" here' e:title=\"Old Title\"/>\
+      </rdf:RDF></x:xmpmeta>";
+    assert_eq!(read_file_info(Some(xmp))["title"], "Old Title");
+    let out = write_file_info(Some(xmp), &json!({ "title": "" }));
+    assert!(!out.contains("Old Title"), "cleared attribute must be removed: {out}");
+    assert!(out.contains("Trap"), "the quoted lookalike is text and stays: {out}");
+    assert_eq!(read_file_info(Some(&out))["title"], "");
+}
+
+#[test]
+fn file_info_ignores_xmlns_lookalikes_in_attribute_values() {
+    // #11200: a quoted attribute value that mentions a binding registers nothing (the same
+    // rule as element text), so the q:li planted in the keywords container is not an item.
+    let xmp = "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\">\
+      <rdf:Description data-note=\"binds xmlns:q='http://www.w3.org/1999/02/22-rdf-syntax-ns#' inline\">\
+      <dc:subject><rdf:Bag><rdf:li>Real</rdf:li><q:li>Fake</q:li></rdf:Bag></dc:subject>\
+      </rdf:Description></rdf:RDF></x:xmpmeta>";
+    let info = read_file_info(Some(xmp));
+    assert_eq!(info["keywords"], json!(["Real"]));
+}
