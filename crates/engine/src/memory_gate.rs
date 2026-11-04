@@ -7,9 +7,8 @@
 //! selection stay as they were) and says what the user can do. Off the web every check passes.
 //!
 //! The estimates are deliberately rough and err high: they count the big buffers an operation
-//! holds at once, not every temporary. Each function says what it counts. In particular, PSD/PSB
-//! source estimates use canvas dimensions and do not bound the retained surfaces of many layers;
-//! passing the gate does not prevent an allocation trap while decoding such a file.
+//! holds at once, not every temporary. PSD/PSB files whose retained memory cannot be bounded
+//! by the flat-image estimate are refused by the web gate before decoding.
 
 use photocraft_doc::{Document, LayerContent, SmartSource};
 use photocraft_geom::TILE_SIZE;
@@ -42,7 +41,13 @@ pub fn ensure_for_save(what: &str, need: u64) -> Result<()> {
 }
 
 fn check(what: &str, need: u64, advice: &str) -> Result<()> {
-    photocraft_raster::headroom::ensure(need).map_err(|_| EngineError::Other(format!("Not enough memory to {what} (it needs about {} MB). {advice}", mb(need))))
+    photocraft_raster::headroom::ensure(need).map_err(|_| {
+        if need == u64::MAX {
+            EngineError::Other(format!("Not enough memory to safely {what}: the required memory cannot be bounded. {advice}"))
+        } else {
+            EngineError::Other(format!("Not enough memory to {what} (it needs about {} MB). {advice}", mb(need)))
+        }
+    })
 }
 
 /// `bytes` in whole megabytes, rounded up, with thousands separators.
@@ -99,9 +104,45 @@ fn header_pixels(bytes: &[u8]) -> Option<u64> {
     None
 }
 
+/// Only admit PSD/PSB sources whose header and sections prove that the flat-image estimate
+/// applies. Layer records, masks, unusual sample formats, and malformed sections have no safe
+/// canvas-only bound. The sentinel makes the web gate refuse them; native behavior is unchanged.
+fn psd_flat_estimate_is_safe(bytes: &[u8]) -> bool {
+    let Some(header) = bytes.get(..26) else { return false };
+    let version = u16::from_be_bytes([header[4], header[5]]);
+    let channels = u16::from_be_bytes([header[12], header[13]]);
+    let depth = u16::from_be_bytes([header[22], header[23]]);
+    let mode = u16::from_be_bytes([header[24], header[25]]);
+    if !matches!(version, 1 | 2) || !(1..=4).contains(&channels) || depth != 8 || !matches!(mode, 1 | 3) {
+        return false;
+    }
+    let mut at = 26usize;
+    for _ in 0..2 {
+        let Some(length) = bytes.get(at..at.saturating_add(4)).and_then(|b| <[u8; 4]>::try_from(b).ok()) else { return false };
+        if u32::from_be_bytes(length) != 0 {
+            return false;
+        }
+        let Some(end) = at.checked_add(4) else { return false };
+        if end > bytes.len() {
+            return false;
+        }
+        at = end;
+    }
+    let len_bytes = if version == 1 { 4 } else { 8 };
+    let Some(length) = bytes.get(at..at.saturating_add(len_bytes)) else { return false };
+    length.iter().all(|&b| b == 0) && bytes.len().saturating_sub(at + len_bytes) >= 2
+}
+
+fn source_need_is_unbounded(bytes: &[u8]) -> bool {
+    bytes.starts_with(b"8BPS") && !psd_flat_estimate_is_safe(bytes)
+}
+
 /// Place: the file's bytes, plus the decoded file, its composite and the placed pixels, which
 /// are alive together (`bytes_per_px` is the document's pixel size, at least 4).
 pub(crate) fn place_need(bytes: &[u8], bytes_per_px: usize) -> u64 {
+    if source_need_is_unbounded(bytes) {
+        return u64::MAX;
+    }
     let px = source_pixels(bytes);
     let per_px = (bytes_per_px.max(4) as u64).saturating_mul(3).saturating_add(COMPOSITE_BYTES_PER_PX);
     (bytes.len() as u64).saturating_add(px.saturating_mul(per_px))
@@ -109,6 +150,9 @@ pub(crate) fn place_need(bytes: &[u8], bytes_per_px: usize) -> u64 {
 
 /// A smart object's re-render from `bytes`: its source pixels at the measured peak.
 pub(crate) fn smart_render_need(bytes: &[u8]) -> u64 {
+    if source_need_is_unbounded(bytes) {
+        return u64::MAX;
+    }
     source_pixels(bytes).saturating_mul(SMART_RENDER_BYTES_PER_PX)
 }
 
@@ -176,6 +220,18 @@ mod tests {
         // SOI, an APP0 segment of length 4, then SOF0: precision, height 20, width 30.
         let jpeg = [0xff, 0xd8, 0xff, 0xe0, 0, 4, 0, 0, 0xff, 0xc0, 0, 11, 8, 0, 20, 0, 30, 1];
         assert_eq!(source_pixels(&jpeg), 600);
+    }
+
+    #[test]
+    fn malformed_psd_sections_are_refused_without_panicking() {
+        let mut flat = b"8BPS\0\x01\0\0\0\0\0\0\0\x03\0\0\0\x02\0\0\0\x02\0\x08\0\x03".to_vec();
+        flat.extend_from_slice(&[0; 14]);
+        assert!(psd_flat_estimate_is_safe(&flat));
+        for end in 4..flat.len() {
+            assert!(source_need_is_unbounded(&flat[..end]));
+        }
+        flat[26..30].copy_from_slice(&u32::MAX.to_be_bytes());
+        assert!(source_need_is_unbounded(&flat));
     }
 
     #[test]

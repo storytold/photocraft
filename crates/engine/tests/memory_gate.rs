@@ -115,7 +115,7 @@ fn smart_object_render_that_does_not_fit_is_refused_by_name() {
 }
 
 #[test]
-fn layered_psd_can_exceed_the_canvas_based_preflight() {
+fn layered_psd_is_refused_before_decode_without_changing_the_document() {
     use photocraft_psd::{Compression, LayerSpec, PixelData, PsdBuilder};
 
     let room = Room::new(None);
@@ -129,11 +129,7 @@ fn layered_psd_can_exceed_the_canvas_based_preflight() {
         builder.push_layer(LayerSpec::new(format!("layer {layer}"), 0, 0, SIDE, SIDE, PixelData::Rgba8(rgba)));
     }
     let bytes = builder.to_bytes().unwrap();
-    let imported = photocraft_io::import("layers.psd", &bytes).unwrap();
-    let retained: u64 =
-        imported.document.walk().into_iter().filter_map(|(_, _, layer)| layer.surface()).map(|surface| surface.tile_count() as u64 * pixels * 4).sum();
     let budget = pixels * photocraft_engine::memory_gate::SMART_RENDER_BYTES_PER_PX + bytes.len() as u64;
-    assert!(retained > budget, "retained {retained}, budget {budget}");
 
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("layers.psd");
@@ -148,12 +144,33 @@ fn layered_psd_can_exceed_the_canvas_based_preflight() {
     let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::U8, true);
     assert!(photocraft_engine::smart_cmds::source_image("layers.psd", &bytes, fmt).is_err());
 
-    // Simulation affects only the gate, not the allocator: this is evidence of the estimate's
-    // blind spot, not a reproduction of an actual browser OOM or proof that a trap occurs.
+    // This budget passed the old canvas-only estimate even though the layers retain more.
     room.set(Some(headroom::RESERVE + budget));
+    for cmd in ["file.placeEmbedded", "file.placeLinked"] {
+        assert!(s.execute(cmd, json!({"path": path})).unwrap_err().to_string().contains("Not enough memory"));
+        assert_eq!(state(&s), before);
+    }
+    assert!(photocraft_engine::smart_cmds::source_image("layers.psd", &bytes, fmt).is_err());
+}
+
+#[test]
+fn small_flat_psd_still_places_and_renders() {
+    let room = Room::new(Some(SMALL));
+    // Two-by-two RGB PSD: empty color, resource and layer sections, raw planar pixels.
+    let mut bytes = b"8BPS\0\x01\0\0\0\0\0\0\0\x03\0\0\0\x02\0\0\0\x02\0\x08\0\x03".to_vec();
+    bytes.extend_from_slice(&[0; 12]);
+    bytes.extend_from_slice(&[0, 0]);
+    bytes.extend_from_slice(&[128; 12]);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("flat.psd");
+    std::fs::write(&path, &bytes).unwrap();
+    let mut s = new_doc();
+    let before = state(&s);
     s.execute("file.placeEmbedded", json!({"path": path})).unwrap();
     assert_eq!(state(&s).2, before.2 + 1);
-    assert!(photocraft_engine::smart_cmds::source_image("layers.psd", &bytes, fmt).is_ok());
+    let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::U8, true);
+    assert!(photocraft_engine::smart_cmds::source_image("flat.psd", &bytes, fmt).is_ok());
+    drop(room);
 }
 
 #[test]

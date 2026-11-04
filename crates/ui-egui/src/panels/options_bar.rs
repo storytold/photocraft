@@ -40,6 +40,7 @@ pub(super) fn options_bar_height(pro: bool, narrow: bool) -> f32 {
 }
 
 pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    crate::vector_ui::track_arrow_default_selection(app, ui.ctx());
     let t = Tokens::get(ui.ctx());
     let narrow = app.session.prefs().workspace.narrow_options_bar();
     egui::Panel::top("options_bar")
@@ -539,7 +540,7 @@ fn selection_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: 
                     crate::canvas::commit_crop(app);
                 }
                 if icons::button(ui, "ban", 26.0, false, tl!("Cancel current crop operation  (Esc)")).clicked() {
-                    crate::crop_ui::cancel(app);
+                    crate::crop_ui::dismiss(app);
                 }
             });
         }
