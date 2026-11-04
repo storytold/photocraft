@@ -204,7 +204,8 @@ fn sample_stops(stops: &[(f32, [f32; 3])], t: f32) -> [f32; 3] {
             }
             // Sorted in `new`: bisect rather than scan the stops for every covered pixel.
             let j = stops.partition_point(|s| s.0 < t);
-            if j >= stops.len() {
+            // j == 0 for a NaN position: the last stop, as a scan gave.
+            if j >= stops.len() || j == 0 {
                 return stops[stops.len() - 1].1;
             }
             let (a, b) = (&stops[j - 1], &stops[j]);

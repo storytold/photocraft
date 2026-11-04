@@ -75,7 +75,8 @@ fn sample_color<const N: usize>(stops: &[(f32, [f32; N])], mids: &[f32], t: f32)
     // The stops are sorted: the segment is found by bisection, not a scan per pixel (a
     // document can carry thousands of stops).
     let j = stops.partition_point(|s| s.0 < t);
-    if j >= stops.len() {
+    // A NaN position leaves `j` at 0 (no stop compares below it): the last stop, as a scan gave.
+    if j >= stops.len() || j == 0 {
         return last.1;
     }
     let (a, b) = (&stops[j - 1], &stops[j]);
@@ -90,7 +91,7 @@ fn sample_opacity(stops: &[(f32, f32)], t: f32) -> f32 {
         return first.1;
     }
     let j = stops.partition_point(|s| s.0 < t);
-    if j >= stops.len() {
+    if j >= stops.len() || j == 0 {
         return last.1;
     }
     let (a, b) = (&stops[j - 1], &stops[j]);
@@ -249,6 +250,14 @@ pub fn from_handles(style: GradientStyle, from: [f32; 2], to: [f32; 2], frame: R
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A NaN position (from a non-finite angle in a file) returns the last stop and does not panic.
+    #[test]
+    fn nan_position_gives_the_last_stop() {
+        let stops = [(0.0f32, [1.0f32]), (1.0, [2.0])];
+        assert_eq!(sample_color(&stops, &[], f32::NAN), [2.0]);
+        assert_eq!(sample_opacity(&[(0.0, 0.25), (1.0, 0.75)], f32::NAN), 0.75);
+    }
 
     /// Bisection over many stops picks the same segment as a scan, including repeated positions.
     #[test]
