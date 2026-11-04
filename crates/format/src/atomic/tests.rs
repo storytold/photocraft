@@ -411,6 +411,29 @@ fn read_only_file_on_disk_is_never_replaced() {
     atomic_write(&d.0.join("fresh.psd"), b"x").unwrap();
 }
 
+/// #11185: the document portal's mount is `/run/user/<uid>/doc/…`, nowhere else.
+#[test]
+fn recognizes_document_portal_paths() {
+    assert!(is_document_portal_path(Path::new("/run/user/1000/doc/9f3abc/file.psd")));
+    assert!(!is_document_portal_path(Path::new("/home/user/Documents/file.psd")));
+    assert!(!is_document_portal_path(Path::new("/run/user/1000/other/file.psd")));
+    assert!(!is_document_portal_path(Path::new("doc/file.psd")));
+}
+
+/// #11185: a save under the document portal is refused before anything is written or created,
+/// with an error that names the portal, instead of failing silently and leaving temporary files.
+#[test]
+fn document_portal_target_is_refused_before_anything_is_created() {
+    let root = Path::new("/run/user/424242");
+    let p = root.join("doc/deadbeef/file.psd");
+    let e = atomic_write(&p, b"new").unwrap_err();
+    assert_eq!(e.kind(), io::ErrorKind::PermissionDenied);
+    assert!(e.to_string().contains("file.psd") && e.to_string().contains("document portal") && e.to_string().contains("not changed"), "{e}");
+    let e = atomic_write_stream(&p, &mut |w| w.write_all(b"new")).unwrap_err();
+    assert!(e.to_string().contains("document portal"), "{e}");
+    assert!(!root.exists(), "no folder is created on the portal's mount");
+}
+
 #[cfg(unix)]
 #[test]
 fn read_only_folder_errors_clearly_and_never_writes_in_place() {

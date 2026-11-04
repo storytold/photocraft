@@ -18,6 +18,11 @@
 //!   needs the folder to be writable, so without this check Linux and macOS would silently replace
 //!   a `chmod 444` file while Windows refuses; now every platform refuses, as Photoshop does, and
 //!   the user saves a copy with Save As.
+//! - **Desktop portal (Flatpak):** a sandboxed app is handed save targets under the document
+//!   portal's mount (`/run/user/<uid>/doc/…`), which serves the file but not a temporary file
+//!   beside it renamed over it. The save is refused before anything is written, saying to grant
+//!   PhotoCraft access to the folder or save to a local one, instead of failing silently and
+//!   leaving temporary files behind (#11185).
 //! - **Network shares (macOS):** `sync_all` asks for a full flush to the disk's platters
 //!   (`F_FULLFSYNC`), which SMB shares and some virtual file systems refuse while a plain `fsync`
 //!   works. [`sync_file`] falls back to the plain one there (#1336).
@@ -36,7 +41,7 @@
 pub mod meta;
 
 use std::io::{self, Seek, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// The file-system steps [`atomic_write_with`] performs. [`RealFs`] is the real thing; tests
@@ -308,6 +313,18 @@ fn replace_with(fs: &dyn AtomicFs, retry: RenameRetry, path: &Path, write_tmp: &
         Some(d) if !d.as_os_str().is_empty() => d.to_path_buf(),
         _ => PathBuf::from("."),
     };
+    // Before `create_dir_all`: nothing is created on the portal's mount (#11185).
+    if is_document_portal_path(&target) {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "cannot save {}: the folder is served by the desktop document portal (Flatpak sandbox), where an atomic save cannot complete \
+                 (the temporary file beside the document cannot be created and renamed over it); grant PhotoCraft direct access to the folder \
+                 (for example in Flatseal) or save to a local folder instead; {UNCHANGED}",
+                path.display()
+            ),
+        ));
+    }
     std::fs::create_dir_all(&dir).map_err(|e| context(e, format!("cannot create the folder {}", dir.display())))?;
     if fs.is_readonly(&target) {
         return Err(io::Error::new(io::ErrorKind::PermissionDenied, format!("cannot save {}: the file is read-only; {UNCHANGED}", path.display())));
@@ -445,6 +462,22 @@ fn sleep_ms(ms: u64) {
 }
 #[cfg(target_arch = "wasm32")]
 fn sleep_ms(_ms: u64) {}
+
+/// Whether `path` lies under the xdg document portal's mount, `$XDG_RUNTIME_DIR/doc`: its
+/// components contain `run`, `user`, any one name (the uid), `doc` in a row (#11185).
+fn is_document_portal_path(path: &Path) -> bool {
+    let is = |c: Option<Component<'_>>, name: &str| matches!(c, Some(Component::Normal(s)) if s == name);
+    let mut rest = path.components();
+    loop {
+        let mut w = rest.clone();
+        if is(w.next(), "run") && is(w.next(), "user") && matches!(w.next(), Some(Component::Normal(_))) && is(w.next(), "doc") {
+            return true;
+        }
+        if rest.next().is_none() {
+            return false;
+        }
+    }
+}
 
 /// How deep a symlink chain we follow before giving up, like the OS limit.
 const MAX_LINK_DEPTH: u32 = 40;
