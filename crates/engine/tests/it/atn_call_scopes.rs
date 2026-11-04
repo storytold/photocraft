@@ -58,7 +58,7 @@ fn imported_named_set_calls_keep_their_target_through_duplicate_action_renaming(
                     row("Empty", Vec::new()),
                 ];
                 if let Some(scope) = scope {
-                    let caller = files[3].actions.iter().find(|action| action.name.to_string_lossy() == "Caller").unwrap();
+                    assert!(files[3].actions.iter().any(|action| action.name.to_string_lossy() == "Caller"));
                     let bytes = atn::write(&files[3]).unwrap();
                     let imported = photocraft_engine::atn_cmds::import(&bytes).unwrap();
                     assert_eq!(imported.actions[0].steps[0].1["set"], scope);
