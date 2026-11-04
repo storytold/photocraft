@@ -1289,4 +1289,5 @@ fn several_files_dropped_on_the_canvas_are_queued_in_order() {
         })
         .collect();
     assert_eq!(queued, ["one.png", "two.jpg"]);
+    assert!(error_titles(&app).iter().any(|t| t.starts_with("Couldn't open set.abr: ")), "{:?}", app.ui.notices);
 }
