@@ -195,12 +195,12 @@ pub(crate) fn layers(bytes: &[u8], limits: &Limits) -> Result<Vec<CryptomatteLay
     Ok(out)
 }
 
-/// Every `cryptomatte/<key>/` key of a header, in file order, without duplicates.
+/// Every `cryptomatte/<key>/` key of a header, sorted, without duplicates.
 fn cryptomatte_keys(other: &std::collections::HashMap<exr::meta::attribute::Text, exr::meta::attribute::AttributeValue>) -> Vec<String> {
     let mut keys = Vec::new();
     // Track seen keys in a set: the attribute names are file-controlled, so membership with
     // keys.iter().any() is O(n^2) in the number of distinct `cryptomatte/<key>/<field>`
-    // groups. The Vec still records file order; the set only answers "seen before".
+    // groups. The set only answers "seen before"; the result is sorted below.
     let mut seen = std::collections::HashSet::new();
     for name in other.keys() {
         let full = name.to_string();
@@ -210,6 +210,7 @@ fn cryptomatte_keys(other: &std::collections::HashMap<exr::meta::attribute::Text
             keys.push(key.to_string());
         }
     }
+    keys.sort(); // HashMap order varies per call; layer names must stay stable
     keys
 }
 
