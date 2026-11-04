@@ -386,7 +386,20 @@ fn fetch_pngsuite() -> Result<(), String> {
         PNGSUITE_MANIFEST,
         |archive| {
             let mut curl = Command::new("curl");
-            curl.args(["-fsSL", "--retry", "3", "--max-filesize", &PNGSUITE_MAX_ARCHIVE_BYTES.to_string(), "-A", USER_AGENT, "-o", "-", PNGSUITE_URL]);
+            curl.args([
+                "-fsSL",
+                "--proto-redir",
+                "=https",
+                "--retry",
+                "3",
+                "--max-filesize",
+                &PNGSUITE_MAX_ARCHIVE_BYTES.to_string(),
+                "-A",
+                USER_AGENT,
+                "-o",
+                "-",
+                PNGSUITE_URL,
+            ]);
             download_pngsuite(curl, archive)
         },
         |archive, files| {
