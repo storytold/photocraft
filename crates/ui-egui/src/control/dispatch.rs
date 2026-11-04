@@ -1419,6 +1419,12 @@ fn secondary_menu_took(app: &mut PhotocraftApp, ctx: &egui::Context, g: &Pointer
     secondary_transform_or_crop_took(app, ctx, g, s) || secondary_canvas_menu_took(app, ctx, g, s)
 }
 
+/// The tool a gesture's right button belongs to: Space alone holds the Hand over the selected tool,
+/// as in the app (#11271); with ⌘ or ⌥ it is the Zoom, whose right button opens no menu.
+fn held_tool(app: &PhotocraftApp, g: &PointerGesture) -> Tool {
+    if g.space && !g.mods.command && !g.mods.alt { Tool::Hand } else { app.ui.tool }
+}
+
 fn secondary_transform_or_crop_took(app: &mut PhotocraftApp, ctx: &egui::Context, g: &PointerGesture, s: &PointerSample) -> bool {
     let (x, y) = (s.x, s.y);
     let down = matches!(s.ev, ToolEvent::Down { .. });
@@ -1430,14 +1436,15 @@ fn secondary_transform_or_crop_took(app: &mut PhotocraftApp, ctx: &egui::Context
         return true;
     }
     // Right-click with the Move tool, or ⌘/Ctrl+right-click: list the layers there.
-    if crate::layer_pick_ui::is_gesture(app.ui.tool, g.mods) {
+    let held = held_tool(app, g);
+    if crate::layer_pick_ui::is_gesture(held, g.mods) {
         if down {
             app.ui.canvas_tool_menu = None;
             crate::layer_pick_ui::open(app, ctx, screen_point(app, x, y), x, y);
         }
         return true;
     }
-    if app.ui.tool != crate::state::Tool::Crop {
+    if held != Tool::Crop {
         return false;
     }
     // No menu over the agent's own crop frame or Straighten line still being
@@ -1461,15 +1468,16 @@ fn secondary_canvas_menu_took(app: &mut PhotocraftApp, ctx: &egui::Context, g: &
     if crate::canvas_tool_menu::magnetic_drawing(app) {
         return true;
     }
-    if crate::canvas_tool_menu::pasteboard_at(app, app.ui.tool, [x, y]) {
+    let held = held_tool(app, g);
+    if crate::canvas_tool_menu::pasteboard_at(app, held, [x, y]) {
         if down {
-            crate::canvas_tool_menu::open_pasteboard(app, ctx, app.ui.tool, screen_point(app, x, y));
+            crate::canvas_tool_menu::open_pasteboard(app, ctx, held, screen_point(app, x, y));
         }
         return true;
     }
-    if crate::canvas_tool_menu::is_view_tool(app.ui.tool) {
+    if crate::canvas_tool_menu::is_view_tool(held) {
         if down {
-            crate::canvas_tool_menu::open_view(app, ctx, app.ui.tool, screen_point(app, x, y), [x, y]);
+            crate::canvas_tool_menu::open_view(app, ctx, held, screen_point(app, x, y), [x, y]);
         }
         return true;
     }
