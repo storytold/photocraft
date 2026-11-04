@@ -1319,3 +1319,29 @@ fn selective_color_editor_survives_malformed_params() {
     assert!(row.as_array().is_some_and(|a| a.len() == 4 && a.iter().all(Value::is_number)), "rebuilt as four numbers: {row}");
     assert!(row[1].as_f64().unwrap() > 0.0);
 }
+
+/// ⌘2 picks the composite and ⌘3 onward the document's channels in the Levels and Curves
+/// dialogs, as in Photoshop (#11283).
+#[test]
+fn command_digits_pick_the_levels_and_curves_channel() {
+    let cases: [(&str, &[(egui::Key, &str)]); 3] = [
+        ("rgb", &[(egui::Key::Num3, "Red"), (egui::Key::Num4, "Green"), (egui::Key::Num5, "Blue"), (egui::Key::Num2, "RGB")]),
+        ("cmyk", &[(egui::Key::Num6, "Black"), (egui::Key::Num3, "Cyan"), (egui::Key::Num2, "CMYK")]),
+        // Lab lists no composite: ⌘2 leaves the channel as it is.
+        ("lab", &[(egui::Key::Num5, "b"), (egui::Key::Num2, "b"), (egui::Key::Num3, "Lightness")]),
+    ];
+    for kind in ["levels", "curves"] {
+        for (mode, presses) in cases {
+            let mut h =
+                Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app_in_mode(mode));
+            PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+            open(h.state_mut(), &format!("image.adjustments.{kind}")).unwrap();
+            h.run_steps(2);
+            for &(key, channel) in presses {
+                h.key_press_modifiers(egui::Modifiers::COMMAND, key);
+                h.run_steps(2);
+                assert!(popup_channels(&mut h).iter().any(|c| c == channel), "{kind} {mode} {key:?}: {:?}", popup_channels(&mut h));
+            }
+        }
+    }
+}

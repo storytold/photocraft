@@ -63,9 +63,38 @@ pub(super) fn editor_channels(cx: &EditorCx, space: ToneSpace) -> Vec<(ToneChann
     channels.iter().enumerate().map(|(i, c)| (*c, tl!(c.label).to_owned(), i)).collect()
 }
 
-pub(super) fn editor_channel_picker(ui: &mut egui::Ui, id: egui::Id, channels: &[(ToneChannel, String, usize)]) -> usize {
+pub(super) fn editor_channel_picker(ui: &mut egui::Ui, id: egui::Id, channels: &[(ToneChannel, String, usize)], shortcuts: Option<ToneSpace>) -> usize {
+    if let Some(space) = shortcuts {
+        const DIGITS: [(egui::Key, usize); 8] = [
+            (egui::Key::Num2, 2),
+            (egui::Key::Num3, 3),
+            (egui::Key::Num4, 4),
+            (egui::Key::Num5, 5),
+            (egui::Key::Num6, 6),
+            (egui::Key::Num7, 7),
+            (egui::Key::Num8, 8),
+            (egui::Key::Num9, 9),
+        ];
+        let picked = ui.input_mut(|i| {
+            DIGITS.iter().find_map(|&(key, n)| channel_for_shortcut(channels, space, n).filter(|_| i.consume_key(egui::Modifiers::COMMAND, key)))
+        });
+        if let Some(ch) = picked {
+            ui.data_mut(|d| d.insert_temp(id, ch));
+        }
+    }
     let options: Vec<_> = channels.iter().enumerate().map(|(i, (_, name, _))| (i, name.as_str())).collect();
     channel_picker_opts(ui, id, &options, tl!("Channel:"), false)
+}
+
+/// The entry of `channels` that ⌘`n` picks in the Levels and Curves dialogs, as in Photoshop
+/// (#11283): ⌘2 the composite, ⌘3 onward the document's channels in order (Red, Green, Blue;
+/// Cyan … Black; Lightness, a, b). None when the editor doesn't list that channel.
+pub(super) fn channel_for_shortcut(channels: &[(ToneChannel, String, usize)], space: ToneSpace, n: usize) -> Option<usize> {
+    let key = match n {
+        2 => "",
+        n => *adjust_params::channel_keys(space).get(n.checked_sub(3)?)?,
+    };
+    channels.iter().position(|(c, _, _)| c.key == key)
 }
 
 /// The popup, with `translate` for whether the built-in labels follow the interface language;
@@ -354,7 +383,7 @@ pub(super) fn curves(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     if cx.dialog {
         select_channel_by_key(ui, cx.mem.with("curves-ch"), channels.len());
     }
-    let ch = editor_channel_picker(ui, cx.mem.with("curves-ch"), &channels);
+    let ch = editor_channel_picker(ui, cx.mem.with("curves-ch"), &channels, cx.dialog.then_some(space));
     if ch != st.channel {
         st = CurveUi { channel: ch, ..Default::default() };
     }
