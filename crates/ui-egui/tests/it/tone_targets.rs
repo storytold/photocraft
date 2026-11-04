@@ -408,7 +408,19 @@ fn explicit_pixels_action_bypasses_current_alpha_target() {
     }
     h.get_by_label("Set White Point").click();
     h.run_steps(2);
+    let base = params(&h);
+    let expected = photocraft_engine::adjust_params::adjustment_eyedropper(
+        "curves",
+        &base,
+        photocraft_engine::adjust_params::CurvesEyedropper::White,
+        [0.0; 3],
+        ColorMode::Rgb,
+    )
+    .unwrap();
     assert!(adjust_dialog::sample_at(h.state_mut(), 8.0, 8.0));
+    let sampled = photocraft_engine::adjust_params::from_params("curves", &params(&h), None, ColorMode::Rgb).unwrap();
+    assert_eq!(sampled, expected, "the picker writes the curve for the committed black pixel");
+    assert_ne!(params(&h)["points"], base["points"], "the sample cannot silently do nothing");
     assert_eq!(params(&h)["target"], "pixels");
     let before = h.state().session.active().unwrap().doc.clone();
     let id = h.state().ui.dialogs.last().unwrap().id;
@@ -1132,20 +1144,37 @@ fn fixture_for_addressed_replay(app: &PhotocraftApp) -> PhotocraftApp {
 /// Repairing a missing Action address re-seeds its recorded alias without losing modal context.
 #[test]
 fn review_repaired_action_target_seeds_recorded_controls() {
-    let mut h = colour_set_action(ColorMode::Lab, SampleType::U16, "levels", json!({"target":{"channel":999},"gray":{"gamma":2}}));
-    assert!(names(&h).is_empty());
-    let id = h.state().ui.dialogs.last().unwrap().id;
-    let before = h.state().session.active().unwrap().doc.clone();
-    let fields = &mut h.state_mut().ui.dialog_mut(id).unwrap().fields;
-    let resume = fields.get("__resumeAction").cloned();
-    assert!(resume.is_some());
-    fields.insert("target".into(), json!({"channel":0}));
-    h.run_steps(4);
-    assert_eq!(names(&h), ["Saved sky"]);
-    assert_eq!(params(&h)["gamma"], 2.0);
-    assert!(params(&h).get("gray").is_none());
-    assert_eq!(h.state().ui.dialogs.last().unwrap().fields.get("__resumeAction").cloned(), resume);
-    edit_gamma(&mut h, "1.0");
-    dialogs::confirm(h.state_mut(), id).unwrap();
-    assert_eq!(h.state().session.active().unwrap().doc.channels, before.channels);
+    for (kind, raw) in [
+        ("levels", json!({"target":{"channel":999},"gray":{"gamma":2}})),
+        ("curves", json!({"target":{"channel":999},"gray":[[0,255],[255,0]],"lightness":[[0,0],[255,255]]})),
+    ] {
+        let mut h = colour_set_action(ColorMode::Lab, SampleType::U16, kind, raw.clone());
+        assert!(names(&h).is_empty());
+        assert_eq!(params(&h)["gray"], raw["gray"], "unresolved aliases retain their original meaning");
+        let id = h.state().ui.dialogs.last().unwrap().id;
+        let before = h.state().session.active().unwrap().doc.clone();
+        let fields = &mut h.state_mut().ui.dialog_mut(id).unwrap().fields;
+        let resume = fields.get("__resumeAction").cloned();
+        assert!(resume.is_some());
+        fields.insert("target".into(), json!({"channel":0}));
+        h.run_steps(4);
+        assert_eq!(names(&h), ["Saved sky"]);
+        assert!(params(&h).get("gray").is_none());
+        assert_eq!(h.state().ui.dialogs.last().unwrap().fields.get("__resumeAction").cloned(), resume);
+        if kind == "levels" {
+            assert_eq!(params(&h)["gamma"], 2.0);
+            edit_gamma(&mut h, "1.0");
+            dialogs::confirm(h.state_mut(), id).unwrap();
+            assert_eq!(h.state().session.active().unwrap().doc.channels, before.channels);
+        } else {
+            assert_eq!(params(&h)["points"], json!([[0.0, 255.0], [255.0, 0.0]]));
+            let mut oracle = Session::new();
+            oracle.add_document((*before).clone(), None);
+            let mut repaired = raw;
+            repaired["target"] = json!({"channel":0});
+            oracle.execute("image.adjustments.curves", repaired).unwrap();
+            dialogs::confirm(h.state_mut(), id).unwrap();
+            assert_eq!(h.state().session.active().unwrap().doc.channels, oracle.active().unwrap().doc.channels);
+        }
+    }
 }

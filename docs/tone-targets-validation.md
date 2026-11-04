@@ -186,6 +186,25 @@ Validation on Linux with `PHOTOCRAFT_FULL_SWEEP=1`, CI's pinned font input and `
 
 Current evidence is retained in `plan/coderabbit-followup-20261104/` (gitignored).
 
+## Second CodeRabbit follow-up (2026-11-04)
+
+Implicit vector-mask Levels/Curves edits now return an error instead of falling back to layer pixels. Explicit pixel targets still work. An armed picker keeps its cached adjustment baseline while refreshing `target`, `layer` and `document` from the current dialog, including removed keys.
+
+Accepted whole-image tone aliases now normalize before defaults, after the target is known. A missing target retains its original alias until repair, so competing Lab records cannot change a later scalar edit. The shared Smart Filter opener no longer reinserts raw parameters over normalized controls. Preview and confirmation share a validated parameter patch that clears consumed alias/smoothing inputs from the existing filter's merge; canonical pencil maps are not smoothed again. Whole-image RGB/CMYK Levels aliases also populate the visible Gamma control and cannot override a later edit.
+
+Captured filter targets are validated before the tone editor draws controls, reads a histogram or samples. Switching documents shows an unavailable state; returning to the unchanged original document restores the editor. Stale confirmation remains rejected without document writes.
+
+Seven new regression functions cover vector-mask refusal and explicit-pixels precedence; eight picker retarget/removal cases; 48 live Levels mask/Quick Mask preview comparisons across RGB/Gray/CMYK/Lab and U8/U16/F32; 27 whole-image Curves reopening comparisons; six whole-image Levels edits; nine malformed-alias cases; and stale-document/recovery checks for both dialogs. Existing tests now verify unselected native records, the sampled RGB curve before a manual overwrite, all 36 Smart Filter preview/commit pairs, and target repair with competing Lab aliases. This PR introduces 56 regression functions in total.
+
+Validation on Linux using the full-sweep serial configuration and CI's pinned fonts:
+
+- Full engine/UI `cargo test`: **8,306 passed, 0 failed, 43 normally ignored**, including doctest builds. The ignored full-registry adversarial command test passed separately.
+- Strict engine/UI all-target Clippy (`-D warnings`), formatting, layering and wasm passed. Changed-corpus checking correctly skipped. The only post-suite edit was formatting in a test assertion; its targeted regression was rerun successfully.
+- Five fresh offscreen main-view Smart Filter captures were inspected: point and pencil Curves retain the recorded inverted curve; Levels shows Gamma 2; a document switch hides stale controls; returning restores the original RGB editor. The first four functional regressions failed before the fixes.
+- Repeated local review/fix passes addressed the alias/merge boundary, target repair, parameter validation and exact preview/commit agreement. The latest scoped review found no further actionable issues. Historical benchmarks remain dated; no new performance, broad-workspace or Windows/macOS result is claimed.
+
+Current evidence is retained in `plan/coderabbit-round2-20261104/` (gitignored).
+
 ## 24 MP release comparison
 
 Dense synthetic 6000 × 4000 RGB8 raster layer, raster mask, saved alpha channel and Quick Mask, each filled with 25% gray. The central selection is a 3000 × 2000 rectangle at 0.5 coverage. Proxy factor 4 (1500 × 1000). AMD Ryzen 7 9700X, 16 logical CPUs, Ubuntu 26.04.1, Rust 1.99.0, default optimized release profile (thin LTO).

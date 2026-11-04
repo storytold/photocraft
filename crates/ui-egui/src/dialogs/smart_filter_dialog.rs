@@ -134,7 +134,8 @@ pub(crate) fn edit_command(app: &PhotocraftApp, fields: &Map<String, Value>) -> 
         }
         Ok((COMMAND.into(), params))
     } else {
-        Ok(("layer.smartFilter.setParams".into(), json!({"layer": layer.0, "index": index, "params": crate::filter_dialog::params_of(fields)})))
+        let params = crate::adjust_dialog::smart_filter_params(app, fields)?;
+        Ok(("layer.smartFilter.setParams".into(), json!({"layer": layer.0, "index": index, "params": params})))
     }
 }
 

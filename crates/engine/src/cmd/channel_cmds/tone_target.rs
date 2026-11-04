@@ -25,7 +25,10 @@ pub fn resolve_tone_target(s: &Session, layers_panel_mask: bool, params: &Value)
         Some(_) => true,
         None => {
             layers_panel_mask
-                || matches!(st.channel_view.target, super::ChannelTarget::Alpha(_) | super::ChannelTarget::Color(_) | super::ChannelTarget::LayerMask)
+                || matches!(
+                    st.channel_view.target,
+                    super::ChannelTarget::Alpha(_) | super::ChannelTarget::Color(_) | super::ChannelTarget::LayerMask | super::ChannelTarget::VectorMask
+                )
         }
     };
     if needs_channel && channel.is_none() {
@@ -106,5 +109,34 @@ mod tests {
         let gray = resolve_tone_target(&s, false, &json!({"target":{"channel":0}})).unwrap();
         assert!(gray.layer.is_none());
         assert_eq!(gray.channel.unwrap().name, "Saved");
+    }
+}
+
+#[cfg(test)]
+mod rabbit_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// Unsupported vector-mask tone edits refuse the command without touching layer pixels.
+    #[test]
+    fn rabbit_vector_mask_tone_commands_refuse_pixel_fallback() {
+        for (kind, params) in [("levels", json!({"gamma":2})), ("curves", json!({"points":[[0,255],[255,0]]}))] {
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width":8,"height":8})).unwrap();
+            s.execute("edit.fill", json!({"contents":"color","color":"#404040"})).unwrap();
+            s.execute("layer.vectorMask.revealAll", json!({})).unwrap();
+            s.execute("channel.target", json!({"channel":"vectorMask"})).unwrap();
+            let before = s.active().unwrap().doc.clone();
+            let history = s.active().unwrap().history.past_len();
+            assert!(resolve_tone_target(&s, false, &params).is_err());
+            let command = format!("image.adjustments.{kind}");
+            assert!(s.execute(&command, params.clone()).is_err());
+            assert!(std::sync::Arc::ptr_eq(&before, &s.active().unwrap().doc));
+            assert_eq!(s.active().unwrap().history.past_len(), history);
+            let mut explicit = params;
+            explicit["target"] = json!("pixels");
+            s.execute(&command, explicit).unwrap();
+            assert_ne!(before.layers, s.active().unwrap().doc.layers, "an explicit pixel target still works");
+        }
     }
 }

@@ -54,7 +54,7 @@ pub fn picker_armed(app: &PhotocraftApp) -> bool {
 /// open Levels or Curves dialog. Returns true when an armed picker consumed the pointer event,
 /// even if the point was outside the image or transparent.
 pub fn sample_at(app: &mut PhotocraftApp, x: f64, y: f64) -> bool {
-    let Some((id, kind, eyedropper, base)) = app.ui.dialogs.last().and_then(|dialog| {
+    let Some((id, kind, eyedropper, mut base)) = app.ui.dialogs.last().and_then(|dialog| {
         let kind = picker_kind(&dialog.fields)?.to_string();
         let eyedropper = picker(dialog.fields.get(CURVE_PICKER))?;
         let base = dialog.fields.get(CURVE_PICKER_BASE).cloned().unwrap_or_else(|| crate::filter_dialog::params_of(&dialog.fields));
@@ -66,6 +66,17 @@ pub fn sample_at(app: &mut PhotocraftApp, x: f64, y: f64) -> bool {
     if let Err(error) = target_context(app, &dialog.fields) {
         app.ui.status = error.to_string();
         return true;
+    }
+    // Automation can repair or retarget a dialog after arming the picker. Keep the cached
+    // adjustment baseline, but sample the address that the current controls and OK use.
+    if let Some(object) = base.as_object_mut() {
+        for key in ["target", "layer", "document"] {
+            if let Some(value) = dialog.fields.get(key) {
+                object.insert(key.into(), value.clone());
+            } else {
+                object.remove(key);
+            }
+        }
     }
     let mode = curve_mode(app, &kind, &dialog.fields);
     let gray = isolated(app, &dialog.fields).is_some_and(|c| c.gray.is_some());
@@ -360,7 +371,7 @@ fn seeded_fields(app: &PhotocraftApp, command: &str, mut fields: Map<String, Val
     };
     // Resolve a recorded gray alias before adding defaults: Levels' alias would otherwise
     // override visible control edits, while Curves' default points would hide the alias entirely.
-    if (gray_target || color_set.is_some()) && supplied.contains_key("gray") {
+    if valid_target && matches!(kind, "levels" | "curves") && supplied.contains_key("gray") {
         let params = Value::Object(supplied.clone());
         let canonical = if let Some(colors) = color_set {
             photocraft_engine::color_channels::tone_dialog_params(kind, &params, mode, colors)
@@ -384,11 +395,7 @@ fn seeded_fields(app: &PhotocraftApp, command: &str, mut fields: Map<String, Val
     {
         // An invalid gray alias must reach engine validation: seeded identity points would
         // otherwise override it. Valid aliases were already canonicalized above.
-        if (gray_target || color_set.is_some())
-            && kind == "curves"
-            && supplied.get("gray").is_some_and(|v| !v.is_null())
-            && supplied.get("points").is_none_or(Value::is_null)
-        {
+        if kind == "curves" && supplied.get("gray").is_some_and(|v| !v.is_null()) && supplied.get("points").is_none_or(Value::is_null) {
             p.remove("points");
         }
         fields.extend(p);
@@ -396,6 +403,24 @@ fn seeded_fields(app: &PhotocraftApp, command: &str, mut fields: Map<String, Val
     fields.extend(supplied);
     fields.insert("__unresolvedTarget".into(), json!(!valid_target));
     Some(fields)
+}
+
+/// Validate tone edits before the Smart Filter's merge and clear consumed legacy inputs. Null
+/// means omitted to the tone parser, but overwrites an old alias/smoothing record in setParams.
+/// Preview and confirmation use the same patch, so a canonical pencil map is not smoothed twice.
+pub(crate) fn smart_filter_params(app: &PhotocraftApp, fields: &Map<String, Value>) -> Result<Value, String> {
+    let mut params = crate::filter_dialog::params_of(fields);
+    let kind = fields.get("__adjust").and_then(Value::as_str).unwrap_or_default();
+    if matches!(kind, "levels" | "curves") {
+        photocraft_engine::adjust_params::from_params(kind, &params, None, curve_mode(app, kind, fields)).map_err(|error| error.to_string())?;
+        let recorded = fields.get("__smartFilter").and_then(|target| target.get("filter")).and_then(|filter| filter.get("params"));
+        for key in ["gray", "smooth"] {
+            if params.get(key).is_none() && recorded.and_then(|p| p.get(key)).is_some() {
+                params[key] = Value::Null;
+            }
+        }
+    }
+    Ok(params)
 }
 
 /// Whether the dialog's captured target is a set of several Lab components, whose Levels and
@@ -485,8 +510,8 @@ fn isolated(app: &PhotocraftApp, fields: &Map<String, Value>) -> Option<photocra
 /// A captured Smart Filter supplies its own layer and keeps document-colour controls.
 fn target_context(app: &PhotocraftApp, fields: &Map<String, Value>) -> photocraft_engine::Result<photocraft_engine::channel_cmds::ToneTarget> {
     if let Some(filter) = fields.get("__smartFilter") {
-        let layer = filter.get("layer").and_then(Value::as_u64).map(photocraft_doc::LayerId);
-        return Ok(photocraft_engine::channel_cmds::ToneTarget { layer, channel: None });
+        let (layer, _) = crate::smart_filter_dialog::validate_target(app, filter).map_err(photocraft_engine::EngineError::Other)?;
+        return Ok(photocraft_engine::channel_cmds::ToneTarget { layer: Some(layer), channel: None });
     }
     let mut params = crate::filter_dialog::params_of(fields);
     if params.get("target").is_none()

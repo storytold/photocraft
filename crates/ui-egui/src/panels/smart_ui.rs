@@ -502,6 +502,9 @@ pub fn open_editor(app: &mut PhotocraftApp, ctx: &egui::Context, layer: u64, sm:
         // key must show (and save) the schema default instead.
         let mut fields = app.ui.dialog_mut(id)?.fields.clone();
         crate::filter_dialog::reset_fields(app, &mut fields);
+        if let Value::Object(p) = &f.params {
+            fields.extend(p.iter().filter(|(key, _)| !key.starts_with("__")).map(|(key, value)| (key.clone(), value.clone())));
+        }
         app.ui.dialog_mut(id)?.fields = fields;
         Some(id)
     }) else {
@@ -509,13 +512,6 @@ pub fn open_editor(app: &mut PhotocraftApp, ctx: &egui::Context, layer: u64, sm:
     };
     if let Some(d) = app.ui.dialog_mut(id) {
         d.fields.insert("__smartFilter".into(), target);
-        if let Value::Object(p) = &f.params {
-            for (k, v) in p {
-                if !k.starts_with("__") {
-                    d.fields.insert(k.clone(), v.clone());
-                }
-            }
-        }
     }
 }
 

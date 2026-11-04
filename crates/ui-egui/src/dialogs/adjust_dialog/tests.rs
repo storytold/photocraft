@@ -1061,3 +1061,118 @@ fn tone_dialog_explicit_colour_sets_and_pixels_override_gray_panel_state() {
         }
     }
 }
+
+/// Retargeting an armed picker uses the current address without losing its adjustment baseline.
+#[test]
+fn rabbit_picker_uses_current_address_after_retargeting() {
+    use photocraft_engine::channel_cmds::ChannelTarget;
+    for kind in ["levels", "curves"] {
+        for case in 0..4 {
+            let mut app = app_with_image();
+            app.run("layer.layerMask.revealAll", json!({})).unwrap();
+            app.run("edit.fill", json!({"target":"mask","contents":"color","color":"#404040"})).unwrap();
+            let current = app.session.active().unwrap().active_layer.unwrap();
+            app.run("layer.new.layer", json!({"name":"Receiver"})).unwrap();
+            app.run("layer.layerMask.revealAll", json!({})).unwrap();
+            app.run("edit.fill", json!({"target":"mask","contents":"color","color":"#bfbfbf"})).unwrap();
+            let receiver = app.session.active().unwrap().active_layer.unwrap();
+            app.run("channel.new", json!({"name":"Old sample","fill":"black"})).unwrap();
+            app.session.select_layer(current).unwrap();
+            app.session.active_mut().unwrap().channel_view.target = ChannelTarget::LayerMask;
+            let id = open(&mut app, &format!("image.adjustments.{kind}")).unwrap();
+            let old = match case {
+                0 => json!({"target":"mask","layer":current.0,"document":0}),
+                1 => json!({"target":{"channel":0},"layer":receiver.0,"document":0}),
+                _ => json!({"target":"mask","layer":receiver.0,"document":0}),
+            };
+            let address = match case {
+                0 | 1 => json!({"target":"mask","layer":receiver.0}),
+                2 => json!({"target":"mask"}),
+                _ => json!({}),
+            };
+            let fields = &mut app.ui.dialog_mut(id).unwrap().fields;
+            for key in ["target", "layer", "document"] {
+                fields.remove(key);
+            }
+            fields.extend(old.as_object().unwrap().clone());
+            if kind == "levels" {
+                fields.insert("gamma".into(), json!(1.4));
+            } else {
+                fields.insert("points".into(), json!([[0, 10], [128, 180], [255, 240]]));
+            }
+            arm(&mut app, id, "white");
+            let cached = app.ui.dialog_mut(id).unwrap().fields[CURVE_PICKER_BASE].clone();
+            let fields = &mut app.ui.dialog_mut(id).unwrap().fields;
+            for key in ["target", "layer", "document"] {
+                fields.remove(key);
+            }
+            fields.extend(address.as_object().unwrap().clone());
+            let before = app.session.active().unwrap().doc.clone();
+            let layer = if case < 2 { receiver } else { current };
+            let sample = before.layer(layer).unwrap().mask.as_ref().unwrap().surface.sample_channel(8, 8, 0);
+            let expected = photocraft_engine::adjust_params::adjustment_eyedropper(
+                kind,
+                &cached,
+                photocraft_engine::adjust_params::CurvesEyedropper::White,
+                [sample; 3],
+                photocraft_doc::ColorMode::Grayscale,
+            )
+            .unwrap();
+            assert!(sample_at(&mut app, 8.0, 8.0));
+            let fields = &app.ui.dialog_mut(id).unwrap().fields;
+            let actual =
+                photocraft_engine::adjust_params::from_params(kind, &crate::filter_dialog::params_of(fields), None, photocraft_doc::ColorMode::Grayscale)
+                    .unwrap();
+            assert_eq!(actual, expected, "{kind} address case {case}");
+            let mut expected_base = cached;
+            for key in ["target", "layer", "document"] {
+                expected_base.as_object_mut().unwrap().remove(key);
+                if let Some(value) = address.get(key) {
+                    expected_base[key] = value.clone();
+                }
+            }
+            assert_eq!(fields[CURVE_PICKER_BASE], expected_base, "only the cached address changes");
+            assert!(std::sync::Arc::ptr_eq(&before, &app.session.active().unwrap().doc));
+        }
+    }
+}
+
+/// Levels' own implicit mask and Quick Mask targets reach the live canvas preview and commit.
+#[test]
+fn rabbit_levels_live_mask_preview_matches_commit() {
+    use photocraft_engine::channel_cmds::ChannelTarget;
+    for mode in ["rgb", "gray", "lab", "cmyk"] {
+        for depth in [8, 16, 32] {
+            for quick in [false, true] {
+                let mut session = photocraft_engine::Session::new();
+                session.execute("file.new", json!({"width":32,"height":24,"mode":mode,"depth":depth})).unwrap();
+                if quick {
+                    session.execute("select.editInQuickMaskMode", json!({})).unwrap();
+                } else {
+                    session.execute("layer.layerMask.revealAll", json!({})).unwrap();
+                    session.active_mut().unwrap().channel_view.target = ChannelTarget::LayerMask;
+                }
+                let target = if quick { "quickMask" } else { "mask" };
+                session.execute("edit.fill", json!({"target":target,"contents":"color","color":"#404040"})).unwrap();
+                let mut app = PhotocraftApp::new(session, Default::default());
+                app.background_jobs = false;
+                let id = open(&mut app, "image.adjustments.levels").unwrap();
+                app.ui.dialog_mut(id).unwrap().fields.insert("gamma".into(), json!(2));
+                let before = app.session.active().unwrap().doc.clone();
+                let idx = app.session.active_index().unwrap();
+                crate::canvas::ensure_filter_preview(&mut app, idx, &egui::Context::default()).unwrap();
+                let preview = app.filter_preview.as_ref().unwrap().result.as_ref().unwrap().clone();
+                assert!(std::sync::Arc::ptr_eq(&before, &app.session.active().unwrap().doc));
+                crate::dialogs::confirm(&mut app, id).unwrap();
+                let after = &app.session.active().unwrap().doc;
+                let plane = |doc: &photocraft_doc::Document| {
+                    if quick { doc.quick_mask.as_ref().unwrap().surface.clone() } else { doc.layers[0].mask.as_ref().unwrap().surface.clone() }
+                };
+                assert_eq!(plane(&preview), plane(after), "{mode} {depth} {target}: live preview matches commit");
+                assert!(plane(after).sample_channel(8, 8, 0) > plane(&before).sample_channel(8, 8, 0) + 0.1);
+                assert_eq!(after.layers[0].content, before.layers[0].content);
+                assert_eq!(after.channels, before.channels);
+            }
+        }
+    }
+}

@@ -35,6 +35,14 @@ fn tone_dialog_normalization_matches_native_execution() {
                 }
                 let canonical = tone_dialog_params(kind, &raw, mode, colors).unwrap();
                 assert!(canonical.get("gray").is_none() && canonical.get("smooth").is_none());
+                // Hidden component overlays retain their own parsed records, independently of
+                // which components the command writes and of the serialized curve representation.
+                let normalized_records = |p| crate::adjust_params::to_dialog_params(&crate::adjust_params::from_params(kind, p, None, mode).unwrap());
+                let original_records = normalized_records(&raw);
+                let canonical_records = normalized_records(&canonical);
+                for (index, key) in keys.iter().enumerate().filter(|(index, _)| bits & (1 << index) == 0) {
+                    assert_eq!(canonical_records[*key], original_records[*key], "{mode:?} {bits} {kind}: unselected component {index}");
+                }
                 let parsed = |p| tone_adjustment(kind, p, crate::adjust_params::from_params(kind, p, None, mode).unwrap(), mode, colors).unwrap();
                 for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
                     let bounds = Rect::new(0, 0, 8, 8);
