@@ -49,9 +49,10 @@ fn load(d: Descriptor) -> Action {
     loaded.actions.into_iter().next().unwrap()
 }
 
+/// Inspect only the explicit Photoshop projection; unsupported native options are omitted here.
 fn exported(p: Value) -> Option<AtnItem> {
     let a = Action::new("A", vec![(CMD.into(), p)]);
-    let bytes = export("S", &[&a], &[], false).ok()?.0;
+    let bytes = export("S", &[&a], &[], true).ok()?.0;
     atn::parse(&bytes).ok()?.actions.into_iter().next()?.items.into_iter().next()
 }
 
@@ -84,7 +85,7 @@ fn caf_settings_roundtrip_seven_fields_and_boolean_choices() {
     }
 }
 
-/// Unedited source identity, order and flags survive; damaged preservation metadata is refused.
+/// Unedited wire bytes survive; damaged preservation metadata uses exact native fallback.
 #[test]
 fn caf_source_order_and_flags_survive_without_reviving_stale_settings() {
     let mut d = descriptor();
@@ -103,11 +104,13 @@ fn caf_source_order_and_flags_survive_without_reviving_stale_settings() {
     assert_eq!(atn::parse(&bytes).unwrap().actions[0].items[0], source);
     let mut damaged = a.steps[0].1.clone();
     damaged["_atnCafDescriptor"] = json!("not base64");
+    crate::atn_export::fallback("S", &Action::new("A", vec![(CMD.into(), damaged.clone())]));
     assert!(exported(damaged).is_none());
     let invalid = descriptor().with("extra", D::Boolean(true));
     let mut damaged = a.steps[0].1.clone();
     damaged["_atnCafDescriptor"] = json!(photocraft_paint::tile::b64_encode(&invalid.to_bytes()));
-    assert!(exported(damaged).is_none(), "valid base64 cannot hide an unrepresented source field");
+    crate::atn_export::fallback("S", &Action::new("A", vec![(CMD.into(), damaged.clone())]));
+    assert!(exported(damaged).is_none(), "valid base64 cannot hide an unrepresented source field in Photoshop output");
 }
 
 /// Representable edits export their new values canonically, retaining step flags without skips.
@@ -247,9 +250,11 @@ fn caf_native_exports_preserve_effective_defaults_and_refuse_unrepresented_optio
     ] {
         let mut p = params();
         p[key] = value;
+        crate::atn_export::fallback("S", &Action::new("A", vec![(CMD.into(), p.clone())]));
         assert!(exported(p.clone()).is_none(), "{p}");
     }
     for p in [json!({}), json!({"output":"new"}), json!([])] {
+        crate::atn_export::fallback("S", &Action::new("A", vec![(CMD.into(), p.clone())]));
         assert!(exported(p.clone()).is_none(), "unrepresented native default: {p}");
     }
 }

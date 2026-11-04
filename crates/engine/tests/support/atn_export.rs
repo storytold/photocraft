@@ -1,5 +1,10 @@
 //! Assertions for the shared ATN library's native fallback and opt-in Photoshop omission.
-use photocraft_engine::{actions_cmds::Action, atn_cmds};
+use photocraft_engine::{
+    Session,
+    actions_cmds::Action,
+    atn_cmds,
+    preset_store::{self, ACTIONS_FILE, MemBackend, PresetBackend},
+};
 use photocraft_psd::{
     atn::{self, AtnItem},
     descriptor::Value as D,
@@ -8,9 +13,13 @@ use photocraft_psd::{
 pub fn preserved(set: &str, action: &Action) -> Vec<AtnItem> {
     let (bytes, skipped) = atn_cmds::export(set, &[action], &[], false).unwrap();
     assert!(skipped.is_empty());
-    let loaded = atn_cmds::import(&bytes).unwrap();
-    assert!(loaded.unsupported.is_empty());
-    assert_eq!(loaded.actions[0].steps, action.steps);
+    // The durable library preserves every native ID and JSON value. Portable imports
+    // deliberately apply the stricter recorder policy, covered by native-admission tests.
+    let store = MemBackend::default();
+    store.write(ACTIONS_FILE, &bytes).unwrap();
+    let mut loaded = Session::new();
+    assert!(loaded.attach_preset_store(preset_store::open(Box::new(store))).is_empty());
+    assert_eq!(loaded.actions.list[0].steps, action.steps);
     atn::parse(&bytes).unwrap().actions[0].items.clone()
 }
 
