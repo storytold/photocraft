@@ -57,6 +57,14 @@ choice!(PointSize { PostScript = "postScript", Traditional = "traditional" } def
 choice!(Interpolation { BicubicAutomatic = "bicubicAutomatic", Nearest = "nearestNeighbor", Bilinear = "bilinear", Bicubic = "bicubic", BicubicSmoother = "bicubicSmoother", BicubicSharper = "bicubicSharper", PreserveDetails = "preserveDetails" } default BicubicAutomatic);
 choice!(ColorPicker { Adobe = "adobe", System = "system" } default Adobe);
 choice!(Theme { Pro = "pro", ProMedium = "proMedium", ProLightGray = "proLightGray", ProLight = "proLight", Studio = "studio", StudioLight = "studioLight", Classic = "classic", SolarizedDark = "solarizedDark", Adwaita = "adwaita", AdwaitaDark = "adwaitaDark", BreezeLight = "breezeLight", BreezeDark = "breezeDark", SoftDark = "softDark", SoftLight = "softLight" } default ProMedium);
+choice!(
+    /// How the Home screen lists recent files.
+    HomeRecentView { Grid = "grid", List = "list" } default Grid
+);
+choice!(
+    /// What the Home screen's recent files are ordered by.
+    HomeRecentSort { Recent = "recent", Name = "name", Size = "size", Kind = "kind" } default Recent
+);
 choice!(AppearanceMode { Auto = "auto", Dark = "dark", Light = "light" } default Dark);
 choice!(DarkTheme { Pro = "pro", ProMedium = "proMedium", Studio = "studio", SolarizedDark = "solarizedDark", AdwaitaDark = "adwaitaDark", BreezeDark = "breezeDark", SoftDark = "softDark" } default ProMedium);
 choice!(LightTheme { ProLight = "proLight", ProLightGray = "proLightGray", StudioLight = "studioLight", Classic = "classic", Adwaita = "adwaita", BreezeLight = "breezeLight", SoftLight = "softLight" } default ProLight);
@@ -271,6 +279,13 @@ pub struct Interface {
     /// List recent files on the Home screen (the empty workspace). Off hides the list; the
     /// recent files themselves are kept and File > Open Recent still shows them.
     pub show_home_recent_files: bool,
+    /// The Home screen's recent files as a grid of cards or as a list. Set from the Home screen
+    /// itself, so Preferences doesn't show it.
+    pub home_recent_view: HomeRecentView,
+    /// What the Home screen's recent files are ordered by (also set from the Home screen).
+    pub home_recent_sort: HomeRecentSort,
+    /// The Home screen's recent files in the opposite order.
+    pub home_recent_reverse: bool,
     /// Document border in standard screen mode.
     pub canvas_border: CanvasBorder,
     pub ui_scale: UiScale,
@@ -321,6 +336,9 @@ impl Default for Interface {
             canvas_custom_color: "#282828".into(),
             show_canvas_dots: true,
             show_home_recent_files: true,
+            home_recent_view: HomeRecentView::Grid,
+            home_recent_sort: HomeRecentSort::Recent,
+            home_recent_reverse: false,
             canvas_border: CanvasBorder::DropShadow,
             ui_scale: UiScale::Auto,
             language: "auto".into(),
@@ -451,7 +469,7 @@ pub use shortcuts::{
 };
 use store::read_lenient;
 pub use store::{InvalidPref, PREFS_VERSION, PrefsStore, read_section};
-pub use validate::{HIDDEN_UNTIL_IMPLEMENTED, LINUX_ONLY, SECTIONS, choices, gpu_adapter_matches, is_color, is_hidden, parse_hex, range};
+pub use validate::{HIDDEN_UNTIL_IMPLEMENTED, LINUX_ONLY, SECTIONS, SET_ON_HOME_SCREEN, choices, gpu_adapter_matches, is_color, is_hidden, parse_hex, range};
 use validate::{check_value, get_path, keyed, set_path};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -501,6 +519,10 @@ pub struct FileHandling {
     pub recent_file_count: u32,
     /// Most recently opened files, newest first (File › Open Recent).
     pub recent_files: Vec<String>,
+    /// When each of [`FileHandling::recent_files`] was last opened or saved, in seconds since the
+    /// Unix epoch (UTC), by path. The Home screen's "Last Opened"; a file without an entry falls
+    /// back to the file's modified time. Pruned with the list.
+    pub recent_opened: BTreeMap<String, u64>,
     /// A folder whose `.cube`, `.3dl` and `.look` files Color Lookup lists under its built-in
     /// looks (native only, #6558). Empty lists none.
     pub lut_folder: String,
@@ -532,6 +554,7 @@ impl Default for FileHandling {
             rasterize_svg_groups_deeper_than: photocraft_doc::MAX_GROUP_DEPTH as u32,
             recent_file_count: 20,
             recent_files: Vec::new(),
+            recent_opened: BTreeMap::new(),
             lut_folder: String::new(),
         }
     }

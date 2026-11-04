@@ -63,26 +63,27 @@ fn opens(requests: &Requests) -> usize {
 #[test]
 fn double_clicking_the_empty_workspace_shows_file_open() {
     for home in [false, true] {
-        let (mut h, requests) = harness(home);
-        assert!(h.state().session.documents().is_empty());
-        // Well away from the Home screen's centred card.
-        let blank = pos2(40.0, 760.0);
-        clicks(&mut h, blank, 1);
-        assert_eq!(opens(&requests), 0, "home {home}: a single click opens nothing");
-        clicks(&mut h, blank, 2);
-        assert_eq!(opens(&requests), 1, "home {home}: a double-click shows File › Open");
+        // Blank space on the Home screen's rail, and on its page beside the welcome.
+        for blank in [pos2(40.0, 400.0), pos2(1100.0, 700.0)] {
+            let (mut h, requests) = harness(home);
+            assert!(h.state().session.documents().is_empty());
+            clicks(&mut h, blank, 1);
+            assert_eq!(opens(&requests), 0, "home {home}, {blank:?}: a single click opens nothing");
+            clicks(&mut h, blank, 2);
+            assert_eq!(opens(&requests), 1, "home {home}, {blank:?}: a double-click shows File › Open");
+        }
     }
 }
 
 #[test]
 fn the_home_screens_own_widgets_keep_their_double_clicks() {
     let (mut h, requests) = harness(true);
-    // The subtitle is selectable text: a double-click there selects a word, not File › Open.
-    let at = h.get_by_label_contains("Create a new document or open an existing file").rect().center();
+    // The welcome is selectable text: a double-click there selects a word, not File › Open.
+    let at = h.get_by_label_contains("Welcome to PhotoCraft").rect().center();
     clicks(&mut h, at, 2);
     assert_eq!(opens(&requests), 0, "the label took the double-click");
-    // The New document button opens the New Document dialog, not File › Open.
-    let at = h.get_by_label_contains("New document").rect().center();
+    // The New file button opens the New Document dialog, not File › Open.
+    let at = h.get_by_label("New file").rect().center();
     clicks(&mut h, at, 1);
     assert_eq!(opens(&requests), 0);
     assert_eq!(h.state().ui.dialogs.len(), 1, "the New Document dialog");

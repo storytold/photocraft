@@ -7,7 +7,9 @@ impl PhotocraftApp {
     /// Record `path` as the most-recently-opened file (File › Open Recent): de-duplicated, newest
     /// first, capped at Preferences › File Handling › Recent File List Contains. The list lives in
     /// the preferences (`fileHandling.recentFiles`), so it survives a restart; `ui.recent_files`
-    /// mirrors it for the menus and the Home screen.
+    /// mirrors it for the menus and the Home screen. The time goes to `fileHandling.recentOpened`
+    /// (UTC seconds), which keeps entries only for the files listed. If a document is open from
+    /// `path`, its thumbnail is cached for the Home screen on a worker thread.
     pub fn push_recent(&mut self, path: &str) {
         let cap = self.recent_cap();
         let mut r = self.session.prefs().file_handling.recent_files.clone();
@@ -15,20 +17,48 @@ impl PhotocraftApp {
         r.insert(0, path.to_string());
         r.truncate(cap);
         self.ui.recent_files = r.clone();
-        self.session.prefs.edit(|p| p.file_handling.recent_files = r);
+        let now = crate::recent_thumbs::unix_now();
+        self.session.prefs.edit(|p| {
+            let fh = &mut p.file_handling;
+            fh.recent_opened.retain(|k, _| r.contains(k));
+            if r.iter().any(|listed| listed == path) {
+                fh.recent_opened.insert(path.to_string(), now);
+            }
+            fh.recent_files = r;
+        });
+        self.seed_recent_thumbnail(path);
     }
+
+    /// Hand the thumbnail of the open document `path` was just opened from or saved to to the
+    /// Home screen's cache. The document is shared, not copied, and the work is done by the
+    /// worker threads. Nothing without a cache folder (the web, tests).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn seed_recent_thumbnail(&mut self, path: &str) {
+        let Some(cache) = self.services.thumbnail_cache_dir.clone() else { return };
+        let Some(doc) = self.session.documents().iter().find(|d| d.path.as_deref() == Some(path)).map(|d| d.doc.clone()) else { return };
+        self.recent_view.seed(path, doc, Some(cache));
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn seed_recent_thumbnail(&mut self, _: &str) {}
 
     /// File › Open Recent › Clear Recent File List.
     pub fn clear_recent(&mut self) {
         self.ui.recent_files.clear();
-        self.session.prefs.edit(|p| p.file_handling.recent_files.clear());
+        self.session.prefs.edit(|p| {
+            p.file_handling.recent_files.clear();
+            p.file_handling.recent_opened.clear();
+        });
     }
 
     /// Take one file off the recent list (the Home screen's × or Remove from Recent, #2691). The
     /// file stays on disk, and opening it again lists it again.
     pub fn remove_recent(&mut self, path: &str) {
         self.ui.recent_files.retain(|p| p != path);
-        self.session.prefs.edit(|p| p.file_handling.recent_files.retain(|r| r != path));
+        self.session.prefs.edit(|p| {
+            p.file_handling.recent_files.retain(|r| r != path);
+            p.file_handling.recent_opened.remove(path);
+        });
     }
 
     /// How many recent files to remember ("Recent File List Contains", 0–100).

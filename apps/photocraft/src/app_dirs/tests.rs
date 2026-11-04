@@ -163,6 +163,38 @@ fn autosaves_go_to_the_xdg_state_folder() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// The Home screen's thumbnail cache lives in the platform's cache folder, and inside the
+/// override or portable folder when one is used.
+#[test]
+fn thumbnails_are_cached_in_the_platform_cache_folder() {
+    let root = temp("thumbnail-cache");
+    let settings = root.join("home").join(".config").join("photocraft");
+    let home = root.join("home");
+    let cache = root.join("cache");
+    let platform = DataDir { dir: Some(settings.clone()), mode: Mode::Platform, warning: None };
+    let beside = settings.join("Cache").join("Thumbnails");
+    let generic = !cfg!(windows) && !cfg!(target_os = "macos");
+    if generic {
+        assert_eq!(
+            resolve_thumbnail_cache(&platform, env_of(&[("XDG_CACHE_HOME", &cache), ("HOME", &home)])),
+            Some(cache.join("photocraft").join("Thumbnails"))
+        );
+        let default = home.join(".cache").join("photocraft").join("Thumbnails");
+        assert_eq!(resolve_thumbnail_cache(&platform, env_of(&[("HOME", &home)])), Some(default.clone()));
+        let relative = PathBuf::from("relative/cache");
+        assert_eq!(resolve_thumbnail_cache(&platform, env_of(&[("XDG_CACHE_HOME", &relative), ("HOME", &home)])), Some(default));
+    }
+    // No home at all: beside the settings.
+    assert_eq!(resolve_thumbnail_cache(&platform, |_| None), Some(beside.clone()));
+    for mode in [Mode::Override, Mode::Portable] {
+        let d = DataDir { dir: Some(settings.clone()), mode, warning: None };
+        assert_eq!(resolve_thumbnail_cache(&d, env_of(&[("XDG_CACHE_HOME", &cache), ("HOME", &home)])), Some(beside.clone()), "{mode:?}");
+    }
+    let nowhere = DataDir { dir: None, mode: Mode::Platform, warning: None };
+    assert_eq!(resolve_thumbnail_cache(&nowhere, |_| None), None);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// An autosave bundle and its sidecar, as `format::Autosaver` writes them.
 fn autosave(dir: &Path, key: &str) {
     std::fs::create_dir_all(dir.join(format!("{key}.pcraft"))).unwrap();

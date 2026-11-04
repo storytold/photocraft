@@ -98,6 +98,60 @@ fn home_recent_files_preference_defaults_on_persists_and_resets() {
     assert!(s.prefs().interface.show_home_recent_files);
 }
 
+/// The Home screen's view, sort and order: defaults, `prefs.set`, persistence, and a file written
+/// before they existed or holding a bad value loads with the defaults.
+#[test]
+fn home_recent_view_sort_and_order_default_persist_and_load_safely() {
+    let mut s = Session::new();
+    let i = &s.prefs().interface;
+    assert_eq!((i.home_recent_view, i.home_recent_sort, i.home_recent_reverse), (HomeRecentView::Grid, HomeRecentSort::Recent, false));
+    s.execute("prefs.set", json!({"values": {"interface.homeRecentView": "list", "interface.homeRecentSort": "size", "interface.homeRecentReverse": true}}))
+        .unwrap();
+    let i = &s.prefs().interface;
+    assert_eq!((i.home_recent_view, i.home_recent_sort, i.home_recent_reverse), (HomeRecentView::List, HomeRecentSort::Size, true));
+    let mut restored = Session::new();
+    restored.load_prefs_json(&s.prefs_to_json()).unwrap();
+    assert_eq!(restored.prefs().interface.home_recent_view, HomeRecentView::List);
+    assert_eq!(restored.prefs().interface.home_recent_sort, HomeRecentSort::Size);
+    assert!(restored.prefs().interface.home_recent_reverse);
+    // Rejected by prefs.set.
+    assert!(s.execute("prefs.set", json!({"path": "interface.homeRecentView", "value": "carousel"})).is_err());
+    assert!(s.execute("prefs.set", json!({"path": "interface.homeRecentSort", "value": 3})).is_err());
+    assert!(s.execute("prefs.set", json!({"path": "interface.homeRecentReverse", "value": "yes"})).is_err());
+    // A file without them, or with bad values, keeps the defaults and loads the rest.
+    let mut legacy = Session::new();
+    legacy.load_prefs_json(r#"{"interface": {"theme": "studio"}}"#).unwrap();
+    assert_eq!(legacy.prefs().interface.home_recent_view, HomeRecentView::Grid);
+    let mut bad = Session::new();
+    let invalid = bad
+        .load_prefs_json(r#"{"interface": {"homeRecentView": "carousel", "homeRecentSort": 7, "homeRecentReverse": "yes", "showCanvasDots": false}}"#)
+        .unwrap();
+    assert_eq!(bad.prefs().interface.home_recent_view, HomeRecentView::Grid);
+    assert_eq!(bad.prefs().interface.home_recent_sort, HomeRecentSort::Recent);
+    assert!(!bad.prefs().interface.home_recent_reverse);
+    assert!(!bad.prefs().interface.show_canvas_dots, "the valid sibling loads");
+    assert_eq!(invalid.len(), 3);
+    // Set by the Home screen, so the dialog doesn't list them.
+    for path in SET_ON_HOME_SCREEN {
+        assert!(is_hidden(path), "{path}");
+    }
+}
+
+/// `fileHandling.recentOpened` (when each recent file was last opened) is optional in old files and
+/// bad entries don't take the list down with them.
+#[test]
+fn recent_opened_defaults_empty_and_a_bad_value_resets_only_it() {
+    let mut s = Session::new();
+    assert!(s.prefs().file_handling.recent_opened.is_empty());
+    s.load_prefs_json(r#"{"fileHandling": {"recentFiles": ["/a.psd"], "recentOpened": {"/a.psd": 1700000000}}}"#).unwrap();
+    assert_eq!(s.prefs().file_handling.recent_opened.get("/a.psd"), Some(&1_700_000_000));
+    assert_eq!(s.prefs().file_handling.recent_files, ["/a.psd"]);
+    let invalid = s.load_prefs_json(r#"{"fileHandling": {"recentFiles": ["/b.psd"], "recentOpened": {"/b.psd": "yesterday"}}}"#).unwrap();
+    assert!(s.prefs().file_handling.recent_opened.is_empty());
+    assert_eq!(s.prefs().file_handling.recent_files, ["/b.psd"], "the list itself loads");
+    assert_eq!(invalid.len(), 1);
+}
+
 #[test]
 fn appearance_defaults_and_legacy_theme_migrate() {
     let p = Preferences::default();

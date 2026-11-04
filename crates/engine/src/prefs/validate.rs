@@ -1,9 +1,9 @@
 use super::shortcuts::normalize_shortcut;
 use super::{
     AppearanceMode, Ask, CanvasBorder, CanvasColor, CheckerColors, CheckerSize, ColorPicker, DarkTheme, ExportLocation, ExportMetadata, FontPreview,
-    GpuBackend, Interpolation, LightTheme, LineStyle, LinuxDisplayServer, LogDestination, LogDetail, OtherCursor, PaintingCursor, PointSize, PressureCurve,
-    QuickExportFormat, RawColorSpace, RawDemosaic, RawDepth, RawSharpen, RenderingMode, RightClickPaint, TextEngine, Theme, TypeUnit, UiFontSize, UiScale,
-    Unit, Value,
+    GpuBackend, HomeRecentSort, HomeRecentView, Interpolation, LightTheme, LineStyle, LinuxDisplayServer, LogDestination, LogDetail, OtherCursor,
+    PaintingCursor, PointSize, PressureCurve, QuickExportFormat, RawColorSpace, RawDemosaic, RawDepth, RawSharpen, RenderingMode, RightClickPaint, TextEngine,
+    Theme, TypeUnit, UiFontSize, UiScale, Unit, Value,
 };
 
 /// Preferences dialog sections in Photoshop's order: (id, title).
@@ -48,9 +48,14 @@ pub const HIDDEN_UNTIL_IMPLEMENTED: &[&str] = &[
     "enhancedControls.scrubbySliderAcceleration",
 ];
 
+/// Preferences set by the Home screen's own controls (the recent files' view, sort and order),
+/// so Edit › Preferences doesn't show them. They are used, and `prefs.get` / `prefs.set` and the
+/// preferences file carry them like any other.
+pub const SET_ON_HOME_SCREEN: &[&str] = &["interface.homeRecentView", "interface.homeRecentSort", "interface.homeRecentReverse"];
+
 /// Is the preference at `path` (`"section.key"`) hidden from the Preferences dialog?
 pub fn is_hidden(path: &str) -> bool {
-    HIDDEN_UNTIL_IMPLEMENTED.contains(&path) || (!cfg!(target_os = "linux") && LINUX_ONLY.contains(&path))
+    HIDDEN_UNTIL_IMPLEMENTED.contains(&path) || SET_ON_HOME_SCREEN.contains(&path) || (!cfg!(target_os = "linux") && LINUX_ONLY.contains(&path))
 }
 
 /// Preferences that only do something on Linux; the dialog doesn't show them elsewhere. They
@@ -77,6 +82,8 @@ pub fn choices(path: &str) -> Option<&'static [&'static str]> {
         "interface.lightTheme" => LightTheme::NAMES,
         "interface.canvasColor" => CanvasColor::NAMES,
         "interface.canvasBorder" => CanvasBorder::NAMES,
+        "interface.homeRecentView" => HomeRecentView::NAMES,
+        "interface.homeRecentSort" => HomeRecentSort::NAMES,
         "interface.uiScale" => UiScale::NAMES,
         "interface.uiFontSize" => UiFontSize::NAMES,
         "historyLog.destination" => LogDestination::NAMES,

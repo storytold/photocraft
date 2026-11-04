@@ -216,6 +216,10 @@ pub struct UiState {
     /// Recently opened file paths, most-recent first (File › Open Recent). Capped; de-duplicated.
     #[serde(default)]
     pub recent_files: Vec<String>,
+    /// What the Home screen's "Filter Recent Files" field holds. Not saved with the preferences:
+    /// the filter starts empty each launch.
+    #[serde(default)]
+    pub home_recent_filter: String,
     /// Recently picked type families, most-recent first (the font menu's Recent group). Capped by
     /// Preferences ▸ Type ▸ Recent Fonts; de-duplicated.
     #[serde(default)]
@@ -529,6 +533,7 @@ impl Default for UiState {
             group_tools: Vec::new(),
             spring: None,
             recent_files: Vec::new(),
+            home_recent_filter: String::new(),
             recent_fonts: Vec::new(),
             text_edit: None,
             type_box_overflow: false,

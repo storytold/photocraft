@@ -1401,8 +1401,9 @@ fn wayland_start_screen_hint_does_not_claim_file_drop_works() {
     assert!(hint.ends_with(&format!("paste a copied image with {}.", crate::notices::paste_hint(&wayland))), "{hint}");
 }
 
-/// A tiling window manager can hand PhotoCraft a canvas narrower than the Home card (460
-/// points): the two buttons must stay inside the window instead of being clipped at its edges.
+/// A tiling window manager can hand PhotoCraft a canvas narrower than the Home rail and page side
+/// by side: the rail stacks on top, and its buttons and links must stay inside the window instead
+/// of being clipped at its edges.
 #[test]
 fn start_screen_buttons_stay_inside_a_narrow_canvas() {
     use egui_kittest::kittest::Queryable;
@@ -1419,8 +1420,10 @@ fn start_screen_buttons_stay_inside_a_narrow_canvas() {
         PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::default());
         h.state_mut().1 = true;
         h.run_steps(3);
-        for label in ["New document", "Join us on Discord"] {
-            for node in h.query_all_by_label_contains(label) {
+        for label in ["New file", "Open", "Join us on Discord"] {
+            let nodes = h.query_all_by_label_contains(label);
+            assert!(!nodes.is_empty(), "`{label}` is on the Home screen at {width} points");
+            for node in nodes {
                 let r = node.rect();
                 assert!(r.left() >= 0.0 && r.right() <= width, "`{label}` is clipped in a {width}-point-wide canvas: {r:?}");
             }

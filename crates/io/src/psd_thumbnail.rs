@@ -10,7 +10,9 @@ use photocraft_cms::{Builtin, ColorSpace, Intent, Profile, Transform};
 use photocraft_codecs::{ChannelLayout, EncodeOptions, Format, Image, SampleType as CSample};
 use photocraft_color::ColorMode;
 use photocraft_doc::Document;
+use photocraft_psd::ReadAt;
 use photocraft_psd::resources::{ImageResource, ids};
+use photocraft_raster::Rgba8Image;
 
 use crate::IoError;
 
@@ -47,6 +49,72 @@ pub(crate) fn resource(doc: &Document) -> Result<ImageResource, IoError> {
     let opts = EncodeOptions { jpeg_quality: 80, embed_icc: false, embed_metadata: false, ..EncodeOptions::default() };
     let jfif = photocraft_codecs::encode(&img, Format::Jpeg, &opts)?;
     Ok(ImageResource::new(ids::THUMBNAIL, thumbnail_bytes(w, h, &jfif)?))
+}
+
+/// Longest side [`read`] accepts: the format keeps the long side at 160 and some writers go a little over, so a
+/// larger one is not a thumbnail and decoding it could cost more than the file is worth.
+pub const MAX_READ_SIDE: u32 = 1024;
+
+/// The embedded thumbnail (resource 1036) of the PSD or PSB in `src`, as RGBA, or `None` when it
+/// has none. Only the file's header and image resource section are read, however large the file
+/// is, and every length in them is checked first. A damaged file, an unsupported thumbnail format
+/// or a JPEG that does not match its header is an error, never a panic.
+pub fn read<R: ReadAt + ?Sized>(src: &R) -> Result<Option<Rgba8Image>, IoError> {
+    let resources = photocraft_psd::resources::read_resources(src)?;
+    resources.iter().find(|r| r.id == ids::THUMBNAIL).map(|r| decode_resource(&r.data)).transpose()
+}
+
+/// [`read`] for the file at `path`, without reading it whole.
+#[cfg(any(unix, windows))]
+pub fn read_path(path: &std::path::Path) -> Result<Option<Rgba8Image>, IoError> {
+    let src = photocraft_psd::FileSource::open(path).map_err(|e| IoError::Read(format!("{}: {e}", path.display())))?;
+    read(&src)
+}
+
+/// The picture in the data of a 1036 resource: the 28-byte header of [`thumbnail_bytes`], then a
+/// JFIF stream (format 1) or raw RGB rows padded to `widthbytes` (format 0).
+fn decode_resource(data: &[u8]) -> Result<Rgba8Image, IoError> {
+    let bad = |why: &str| IoError::Unsupported(format!("image preview: {why}"));
+    let u32_at = |at: usize| data.get(at..at + 4).and_then(|b| b.try_into().ok()).map(u32::from_be_bytes).ok_or_else(|| bad("truncated header"));
+    let (format, w, h, width_bytes, compressed) = (u32_at(0)?, u32_at(4)?, u32_at(8)?, u32_at(12)?, u32_at(20)?);
+    if w == 0 || h == 0 || w > MAX_READ_SIDE || h > MAX_READ_SIDE {
+        return Err(bad("unsupported size"));
+    }
+    let body = data.get(HEADER_LEN..).ok_or_else(|| bad("truncated header"))?;
+    match format {
+        1 => {
+            // The stream's own length when the header's is missing or wrong.
+            let jfif = usize::try_from(compressed).ok().filter(|&n| n > 0).and_then(|n| body.get(..n)).unwrap_or(body);
+            let limits = photocraft_codecs::Limits {
+                max_width: MAX_READ_SIDE,
+                max_height: MAX_READ_SIDE,
+                max_pixels: u64::from(MAX_READ_SIDE) * u64::from(MAX_READ_SIDE),
+                max_alloc: 64 << 20,
+            };
+            let img = photocraft_codecs::decode_with(jfif, &photocraft_codecs::DecodeOptions { limits, ..Default::default() })?;
+            // The picture's own size: some writers round the header's.
+            let (width, height) = img.dimensions();
+            Ok(Rgba8Image { width, height, pixels: img.to_rgba8() })
+        }
+        0 => {
+            let row = usize::try_from(width_bytes).map_err(|_| bad("unsupported size"))?;
+            let (wide, high) = (w as usize, h as usize);
+            let needed = row.checked_mul(high).ok_or_else(|| bad("unsupported size"))?;
+            if row < wide * 3 || body.len() < needed {
+                return Err(bad("truncated pixels"));
+            }
+            let mut pixels = Vec::with_capacity(wide * high * 4);
+            for y in 0..high {
+                let line = body.get(y * row..y * row + wide * 3).ok_or_else(|| bad("truncated pixels"))?;
+                for px in line.chunks_exact(3) {
+                    pixels.extend_from_slice(px);
+                    pixels.push(255);
+                }
+            }
+            Ok(Rgba8Image { width: w, height: h, pixels })
+        }
+        _ => Err(bad("unsupported format")),
+    }
 }
 
 /// A sample clamped to 0–1 (NaN as 0): 32-bit composites can hold values past white.

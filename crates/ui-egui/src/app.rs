@@ -107,6 +107,7 @@ impl PhotocraftApp {
             thumb_frames: HashMap::new(),
             snapshot_thumbs: HashMap::new(),
             thumb_documents: Vec::new(),
+            recent_view: Default::default(),
             bounds_cache: HashMap::new(),
             proxy: None,
             proxy_uploaded: None,

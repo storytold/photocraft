@@ -802,6 +802,7 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
         // Set by main, which starts loading the store before the window opens.
         preset_store: None,
         is_wayland: false,
+        thumbnail_cache_dir: crate::app_dirs::thumbnail_cache_dir(),
         ..recovery_services(recovery_dir())
     }
 }

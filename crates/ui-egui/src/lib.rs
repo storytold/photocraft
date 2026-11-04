@@ -47,6 +47,7 @@ pub mod os_window;
 pub mod panels;
 pub mod preset_files_ui;
 pub mod proxy;
+mod recent_thumbs;
 pub mod render_path;
 pub mod screenshot;
 pub mod state;
@@ -167,6 +168,7 @@ pub use dialogs::palette;
 pub(crate) use dialogs::pattern_fill_ui;
 pub use dialogs::preset_group_prompt;
 pub use dialogs::rasterize_prompt;
+pub use dialogs::recent_missing_prompt;
 pub use dialogs::replace_prompt;
 use dialogs::rgb_histogram;
 pub use dialogs::screen_picker;
@@ -496,6 +498,8 @@ pub struct PhotocraftApp {
     snapshot_thumbs: HashMap<(DocId, u64), egui::TextureHandle>,
     /// Snapshots whose live layer/mask keys were last used to prune thumbnail handles.
     thumb_documents: Vec<(DocId, std::sync::Weak<Document>)>,
+    /// The Home screen's Recent files: their statuses and thumbnails, and the workers finding them.
+    recent_view: recent_thumbs::RecentView,
     /// Content bounds cached per (key, revision): scanning a 36 MP layer every frame cost ~77 ms.
     bounds_cache: HashMap<u64, (u64, photocraft_geom::Rect)>,
     /// Downsampled proxy of the active document for live previews: (doc, revision, k, proxy).

@@ -110,6 +110,41 @@ pub fn resolve_recovery(data: &DataDir, env: impl Fn(&str) -> Option<OsString>) 
     data.dir.as_ref().map(|d| d.join(RECOVERY))
 }
 
+/// The thumbnail cache's folder name.
+const THUMBNAILS: &str = "Thumbnails";
+
+/// Where the Home screen keeps thumbnails of recent files ([`resolve_thumbnail_cache`] for `current`).
+/// They can all be made again, so losing the folder costs only a moment on the next launch.
+pub fn thumbnail_cache_dir() -> Option<PathBuf> {
+    resolve_thumbnail_cache(current(), |k| std::env::var_os(k))
+}
+
+/// The thumbnail cache's folder for `data`. With the platform convention it is the platform's
+/// cache folder, which backups and settings sync skip: Windows `%LOCALAPPDATA%\Photocraft\Cache`,
+/// macOS `~/Library/Caches/Photocraft`, elsewhere `$XDG_CACHE_HOME/photocraft` (an absolute path
+/// only) or `~/.cache/photocraft`. The override and portable folders keep it inside themselves,
+/// under `Cache`. Without any of those, beside the settings, or none.
+pub fn resolve_thumbnail_cache(data: &DataDir, env: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+    if data.mode == Mode::Platform {
+        let home = || env("HOME").filter(|h| !h.is_empty()).map(PathBuf::from);
+        if cfg!(windows) {
+            if let Some(local) = env("LOCALAPPDATA").filter(|l| !l.is_empty()) {
+                return Some(PathBuf::from(local).join("Photocraft").join("Cache").join(THUMBNAILS));
+            }
+        } else if cfg!(target_os = "macos") {
+            if let Some(home) = home() {
+                return Some(home.join("Library").join("Caches").join("Photocraft").join(THUMBNAILS));
+            }
+        } else {
+            let cache = env("XDG_CACHE_HOME").map(PathBuf::from).filter(|c| c.is_absolute()).or_else(|| home().map(|h| h.join(".cache")));
+            if let Some(cache) = cache {
+                return Some(cache.join("photocraft").join(THUMBNAILS));
+            }
+        }
+    }
+    data.dir.as_ref().map(|d| d.join("Cache").join(THUMBNAILS))
+}
+
 /// The lock file, beside the recovery folder, that keeps two PhotoCraft processes starting at
 /// once (`--new-instance`, control launches) from moving the same autosaves.
 const MIGRATION_LOCK: &str = "recovery-migration.lock";
