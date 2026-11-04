@@ -543,6 +543,14 @@ pub fn drags_gradient(f: &Map<String, Value>) -> bool {
     entry(f, selected).and_then(|e| e.get("kind")).and_then(Value::as_str) == Some("gradientOverlay")
 }
 
+/// Ends a gradient drag's stored origin ([`drag_gradient`]): the canvas calls this whenever its
+/// gradient branch is inactive on a Layer Style dialog (another page chosen under a held press,
+/// say), so a Gradient Overlay page chosen again starts from the offset shown, not from an origin
+/// and a baseline taken before the pointer travelled on another page.
+pub fn end_gradient_drag(f: &mut Map<String, Value>) {
+    f.remove("__gradientDrag");
+}
+
 /// The width and height of the layer the dialog `f` is open on, what a Gradient Overlay's offset
 /// is a fraction of (`photocraft_compose::layer_bounds`, what the renderer paints against): `None`
 /// once that layer is gone or while it is empty (a gradient paints nothing there), when a drag on

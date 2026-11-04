@@ -126,6 +126,16 @@ fn the_drag_rebases_when_the_selected_effect_changes() {
     drag_gradient(&mut f, false, [80.0, 20.0], [200.0, 100.0]);
     assert_eq!(offset(&f, "fx2"), Some(json!([0.2, 0.3])));
     assert_eq!(offset(&f, "fx1"), Some(json!([0.1, 0.0])), "the first one stays");
+    // The page left and the same instance chosen again under the held press (the canvas ends the
+    // stored drag while off the page): it starts over from the offset shown, not from the old
+    // origin and baseline, so the travel made meanwhile doesn't land on it.
+    f.insert("selected".into(), json!("fx3"));
+    end_gradient_drag(&mut f);
+    f.insert("selected".into(), json!("fx2"));
+    drag_gradient(&mut f, false, [120.0, 20.0], [200.0, 100.0]);
+    assert_eq!(offset(&f, "fx2"), Some(json!([0.2, 0.3])), "nothing moved since the page came back");
+    drag_gradient(&mut f, false, [140.0, 20.0], [200.0, 100.0]);
+    assert_eq!(offset(&f, "fx2"), Some(json!([0.3, 0.3])));
 }
 
 /// #10763: with a Gradient Overlay page selected, a drag on the image moves the gradient: its
