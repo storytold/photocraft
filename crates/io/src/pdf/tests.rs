@@ -443,3 +443,44 @@ fn the_file_id_changes_with_the_bleed_and_the_profile() {
     assert_ne!(id(&x1a(None, 0.0)), id(&other), "profile bytes");
     assert_eq!(id(&x1a(None, 0.0)), id(&x1a(None, 0.0)), "the same save, the same id");
 }
+
+/// Absolute colorimetric keeps the source's paper white as the CMS converts it (that is the
+/// intent's point); the other intents still map paper white to no ink.
+#[test]
+fn absolute_colorimetric_keeps_the_simulated_paper_white() {
+    use photocraft_cms::{Builtin, Intent, Transform};
+    let mut src = Builtin::Srgb.profile().clone();
+    src.white_point = [0.6, 0.65, 0.5];
+    let src = src.with_encoded_bytes();
+    let dst = Builtin::CoatedCmyk.profile().clone();
+    let mut expected = [0.0f32; 4];
+    Transform::new(&src, &dst, Intent::AbsoluteColorimetric, true).unwrap().convert_f32(&[1.0, 1.0, 1.0], 3, &mut expected, 4, false);
+    let expected: Vec<u8> = expected.iter().map(|v| to8(*v)).collect();
+    assert!(expected.iter().any(|&v| v > 0), "the probe has a tinted paper white: {expected:?}");
+    let export = |intent| {
+        let mut o = pdfx(PdfXStandard::X4, Some(src.to_bytes()), true, 0.0);
+        if let Some(x) = &mut o.x {
+            x.profile = dst.to_bytes();
+            x.intent = intent;
+        }
+        let out = export_with_options(&doc(ColorMode::Rgb), &o).unwrap();
+        stream_after(&out.bytes, "/Subtype /Image")[..4].to_vec()
+    };
+    assert_eq!(export(Intent::AbsoluteColorimetric), expected, "the simulated paper white");
+    assert_eq!(export(Intent::RelativeColorimetric), [0, 0, 0, 0], "paper white is no ink");
+}
+
+/// A bleed that leaves a trim only before rounding to the written 0.01 pt is refused, on either
+/// axis; an ordinary bleed writes a positive trim box.
+#[test]
+fn the_trim_box_stays_positive_as_written() {
+    // The 4 × 2 px page at 72 dpi is 4 × 2 pt: 0.999 pt leaves 0.002 pt of height, 0.00 written.
+    let e = export_with_options(&doc(ColorMode::Rgb), &x1a(None, 0.999)).unwrap_err().to_string();
+    assert!(e.contains("leaves no trim"), "{e}");
+    let mut tall = doc(ColorMode::Rgb);
+    tall.size = Size { width: 2, height: 4 };
+    let e = export_with_options(&tall, &x1a(None, 0.999)).unwrap_err().to_string();
+    assert!(e.contains("leaves no trim"), "width: {e}");
+    let out = export_with_options(&doc(ColorMode::Rgb), &x1a(None, 0.5)).unwrap();
+    assert!(has(&out.bytes, "/TrimBox [0.50 0.50 3.50 1.50]"));
+}

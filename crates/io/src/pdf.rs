@@ -542,7 +542,10 @@ fn export_x(doc: &Document, x: &PdfX, secs: u64) -> std::result::Result<ExportRe
     }
     let (pw, ph) = page_size(doc);
     let b = x.bleed_pt.max(0.0);
-    if !b.is_finite() || 2.0 * b >= pw.min(ph) {
+    // The boxes are written to 0.01 pt: the trim box has to stay positive as written, not only
+    // before rounding.
+    let q = |v: f64| (v * 100.0).round() / 100.0;
+    if !b.is_finite() || q(pw - b) - q(b) < 0.005 || q(ph - b) - q(b) < 0.005 {
         return Err(bad(format!("a {b:.2} pt bleed leaves no trim on a {pw:.2} × {ph:.2} pt page")));
     }
     let (device, samples) = page_samples(doc)?;
@@ -584,8 +587,9 @@ fn export_x(doc: &Document, x: &PdfX, secs: u64) -> std::result::Result<ExportRe
         let mut out = vec![0.0f32; samples.len() / device * 4];
         t.convert_f32(&samples, device, &mut out, 4, false);
         // Paper stays paper: the transform lands white a fraction of a percent off zero ink,
-        // which would print a tint over every blank area.
-        if doc.mode != ColorMode::Cmyk {
+        // which would print a tint over every blank area. Not for absolute colorimetric, whose
+        // point is to simulate the source's paper white (the CMS leaves its white alone too).
+        if doc.mode != ColorMode::Cmyk && x.intent != photocraft_cms::Intent::AbsoluteColorimetric {
             for (src, ink) in samples.chunks_exact(device).zip(out.as_chunks_mut::<4>().0) {
                 if src.iter().all(|&v| v >= 1.0) {
                     ink.fill(0.0);
