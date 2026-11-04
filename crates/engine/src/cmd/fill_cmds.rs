@@ -460,6 +460,10 @@ fn blend_tile(bytes: &mut [u8], fmt: &photocraft_color::PixelFormat, origin: Rec
     let n = fmt.channels();
     let bpp = fmt.bytes_per_pixel();
     let blend = if mode == BlendMode::Dissolve { BlendMode::Normal } else { mode };
+    // 32-bit float keeps values above 1: Linear Dodge and Divide don't clip there, as in the
+    // layer compositor (#11126).
+    let hdr = fmt.sample == photocraft_color::SampleType::F32;
+    use photocraft_color::blend::{composite, composite_atop, composite_atop_hdr, composite_hdr};
     let mut px = [0.0f32; 8];
     let mut enc = [0.0f32; 8];
     // An opaque colour at full coverage in Normal mode just replaces the colour (and the alpha
@@ -510,9 +514,11 @@ fn blend_tile(bytes: &mut [u8], fmt: &photocraft_color::PixelFormat, origin: Rec
             } else if keep {
                 // Alpha kept: source atop, so a half-transparent pixel takes the new colour by the
                 // source alpha alone (#5783).
-                photocraft_color::blend::composite_atop(blend, d, c, k)
+                if hdr { composite_atop_hdr(blend, d, c, k) } else { composite_atop(blend, d, c, k) }
+            } else if hdr {
+                composite_hdr(blend, d, c, k)
             } else {
-                photocraft_color::blend::composite(blend, d, c, k)
+                composite(blend, d, c, k)
             };
             if keep {
                 o[3] = d[3];

@@ -197,6 +197,13 @@ fn add_and_divide_clip_at_integer_depths_but_not_in_float() {
     let (cb, cs) = ([0.2, 0.3, 0.1], [0.3, 0.4, 0.4]);
     assert_eq!(blend_rgb_hdr(BlendMode::LinearDodge, cb, cs), blend_rgb(BlendMode::LinearDodge, cb, cs));
     assert_eq!(blend_rgb_hdr(BlendMode::Divide, cb, cs), blend_rgb(BlendMode::Divide, cb, cs));
+    // The composites follow: the float ones keep the sum, the integer ones clip it (#11126).
+    let (d, src) = ([0.75, 0.75, 0.75, 1.0], [0.5, 0.5, 0.5, 1.0]);
+    assert_eq!(composite(BlendMode::LinearDodge, d, src, 1.0), [1.0; 4]);
+    assert_eq!(composite_atop(BlendMode::LinearDodge, d, src, 1.0), [1.0; 4]);
+    assert!(composite_hdr(BlendMode::LinearDodge, d, src, 1.0).iter().zip([1.25, 1.25, 1.25, 1.0]).all(|(a, b)| close(*a, b)));
+    assert!(composite_atop_hdr(BlendMode::LinearDodge, d, src, 0.5).iter().zip([1.0, 1.0, 1.0, 1.0]).all(|(a, b)| close(*a, b)));
+    assert_eq!(composite_hdr(BlendMode::Multiply, d, src, 0.5), composite(BlendMode::Multiply, d, src, 0.5));
 }
 
 #[test]
