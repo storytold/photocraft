@@ -48,8 +48,14 @@ fn native_matte_unassociation_keeps_separations_and_hdr() {
                 let mut expected = before.clone();
                 let a = *before.last().unwrap();
                 if a > 0. && a < 1. {
-                    for v in expected.iter_mut().take(format.channels() - 1) {
-                        *v /= a;
+                    let cmyk_black = photocraft_color::convert::rgb_to_cmyk([0.; 3]);
+                    for (channel, v) in expected.iter_mut().take(format.channels() - 1).enumerate() {
+                        let black: f32 = match (mode, channel) {
+                            (ColorMode::Cmyk, c) => cmyk_black[c],
+                            (ColorMode::Lab, 1 | 2) => 128. / 255.,
+                            _ => 0.,
+                        };
+                        *v = ((f64::from(*v) - f64::from(black) * (1. - f64::from(a))) / f64::from(a)) as f32;
                     }
                 }
                 let mut oracle = Surface::new(format);
@@ -63,6 +69,25 @@ fn native_matte_unassociation_keeps_separations_and_hdr() {
             }
         }
     }
+}
+
+#[test]
+fn black_matte_keeps_lab_neutral_and_cmyk_native_separations() {
+    let rect = Rect::new(0, 0, 1, 1);
+    let mut cmyk = Surface::new(PixelFormat::new(ColorMode::Cmyk, SampleType::F32, true));
+    let foreground = [0., 0.1, 0.2, 0.3];
+    let matte = photocraft_color::convert::rgb_to_cmyk([0.; 3]);
+    let mut observed: Vec<_> = foreground.into_iter().zip(matte).map(|(f, b)| 0.5 * f + 0.5 * b).collect();
+    observed.push(0.5);
+    cmyk.write_pixel(0, 0, &observed);
+    let unmatte = matting::remove_black_matte_with(&cmyk, rect, &Interrupt::NONE).unwrap();
+    for (got, expected) in unmatte.pixel(0, 0).into_iter().zip(foreground) {
+        assert!((got - expected).abs() < 1e-6);
+    }
+    let mut lab = Surface::new(PixelFormat::new(ColorMode::Lab, SampleType::F32, true));
+    lab.write_pixel(0, 0, &[0.2, 128. / 255., 128. / 255., 0.5]);
+    let unmatte = matting::remove_black_matte_with(&lab, rect, &Interrupt::NONE).unwrap();
+    assert_eq!(unmatte.pixel(0, 0), vec![0.4, 128. / 255., 128. / 255., 0.5]);
 }
 
 #[test]
@@ -111,9 +136,14 @@ fn average_selection_does_not_mix_hidden_colors_into_new_coverage() {
 #[test]
 fn checked_hdr_extreme_finite_inputs_and_controls_stay_finite() {
     for (shadow, highlight) in [(0., 0.), (50., 50.), (50., -50.), (-50., 50.)] {
-        let mut pixels = [[0.001, 0.001, 0.001, 1.], [1e30, 1e30, 1e30, 1.]];
-        let params = tone::HdrToning { radius: 2., detail: 300., exposure: 5., gamma: 0.1, shadow, highlight, ..Default::default() };
-        tone::checked_hdr::process_with(&mut pixels, 2, 1, &params, &Interrupt::NONE).unwrap();
-        assert!(pixels.iter().flatten().all(|v| v.is_finite() && (0. ..=1.).contains(v)));
+        for mut pixels in [
+            [[0.001, 0.001, 0.001, 1.], [1e30, 1e30, 1e30, 1.]],
+            [[1e30, 1e30, 1e30, 1.], [f32::MAX, -f32::MAX, 0., 1.]],
+            [[f32::MAX, f32::MAX, f32::MAX, 1.], [0.001, 0.001, 0.001, 1.]],
+        ] {
+            let params = tone::HdrToning { radius: 2., detail: 300., exposure: 5., gamma: 0.1, shadow, highlight, ..Default::default() };
+            tone::checked_hdr::process_with(&mut pixels, 2, 1, &params, &Interrupt::NONE).unwrap();
+            assert!(pixels.iter().flatten().all(|v| v.is_finite() && (0. ..=1.).contains(v)));
+        }
     }
 }

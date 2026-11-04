@@ -124,6 +124,11 @@ fn blur(base: &mut [f32], w: usize, h: usize, scratch: &mut [f32], sigma: f32, c
     }
     Ok(())
 }
+/// The same native luminance coefficients in a domain that cannot overflow on finite f32 channels.
+fn wide_luma(c: [f64; 3]) -> f64 {
+    0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2]
+}
+
 /// The caller owns an unpublished work buffer; cancellation may leave that buffer partly processed.
 pub fn process_with(px: &mut [[f32; 4]], w: usize, h: usize, p: &HdrToning, ctl: &Interrupt<'_>) -> Result<(), Error> {
     check(ctl)?;
@@ -143,7 +148,12 @@ pub fn process_with(px: &mut [[f32; 4]], w: usize, h: usize, p: &HdrToning, ctl:
             if q.iter().any(|v| !v.is_finite()) {
                 return Err(Error::NonFiniteSample);
             }
-            *v = (luma([q[0], q[1], q[2]]).max(0.) + 1e-4).ln();
+            let luminance = luma([q[0], q[1], q[2]]);
+            *v = if luminance.is_finite() {
+                (luminance.max(0.) + 1e-4).ln()
+            } else {
+                (wide_luma([f64::from(q[0]), f64::from(q[1]), f64::from(q[2])]).max(0.) + 1e-4).ln() as f32
+            };
         }
         Ok(())
     })?;
@@ -217,7 +227,19 @@ pub fn process_with(px: &mut [[f32; 4]], w: usize, h: usize, p: &HdrToning, ctl:
             let s = 1. + p.saturation / 100. + p.vibrance / 100. * (1. - sat);
             out = out.map(|v| (ll + (v - ll) * s.max(0.)).clamp(0., 1.));
             if out.iter().any(|v| !v.is_finite()) {
-                return Err(Error::NonFiniteSample);
+                // Signed wide-gamut values can cancel to black luminance while individual
+                // channels overflow the f32 rescale. Clamp only after the wide color correction.
+                let source = c.map(f64::from);
+                let scale = f64::from(l1) / (wide_luma(source).max(0.) + 1e-4);
+                let wide = source.map(|value| value * scale);
+                let luminance = wide_luma(wide);
+                let (max, min) = (wide[0].max(wide[1]).max(wide[2]), wide[0].min(wide[1]).min(wide[2]));
+                let saturation = if max > 0. { (max - min) / max } else { 0. };
+                let strength = (1. + f64::from(p.saturation) / 100. + f64::from(p.vibrance) / 100. * (1. - saturation)).max(0.);
+                out = wide.map(|value| (luminance + (value - luminance) * strength).clamp(0., 1.) as f32);
+                if out.iter().any(|value| !value.is_finite()) {
+                    return Err(Error::NonFiniteSample);
+                }
             }
             q[..3].copy_from_slice(&out);
         }

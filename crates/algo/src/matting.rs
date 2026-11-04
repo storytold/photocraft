@@ -683,7 +683,7 @@ pub fn remove_matte_pixel(q: &mut [f32; 4], white: bool) {
 }
 
 /// Existing native Remove Black Matte with fallible COW tiles/rows and cancellation.
-/// It unassociates native color samples without a lossy RGB round trip, changes only `bounds`,
+/// It removes the native black point without a lossy RGB pixel round trip, changes only `bounds`,
 /// and is identity on a surface without alpha. No partial result is published on error.
 pub fn remove_black_matte_with(src: &Surface, bounds: Rect, ctl: &photocraft_raster::Interrupt) -> Result<Surface, Error> {
     ctl.check().map_err(|_| Error::Cancelled)?;
@@ -714,6 +714,20 @@ pub fn remove_black_matte_with(src: &Surface, bounds: Rect, ctl: &photocraft_ras
     if bytes > crate::coverage::MAX_WORKSPACE_BYTES {
         return Err(Error::WorkspaceLimit);
     }
+    // Black is not zero in every native encoding. Resolve the working CMYK profile's
+    // black once; Lab stores its neutral chroma at 128/255. Pixel separations stay native.
+    let mut black = [0.; 8];
+    match format.mode {
+        photocraft_color::ColorMode::Cmyk => black[..4].copy_from_slice(&photocraft_color::convert::rgb_to_cmyk([0.; 3])),
+        photocraft_color::ColorMode::Lab => {
+            black[1] = 128. / 255.;
+            black[2] = 128. / 255.;
+        }
+        _ => {}
+    }
+    if black.iter().any(|value| !value.is_finite()) {
+        return Err(Error::NonFiniteSample);
+    }
     let mut out = src.clone();
     for y in area.y0..area.y1 {
         ctl.check().map_err(|_| Error::Cancelled)?;
@@ -728,8 +742,8 @@ pub fn remove_black_matte_with(src: &Surface, bounds: Rect, ctl: &photocraft_ras
             }
             let alpha = *samples.last().ok_or(Error::ChannelMismatch)?;
             if alpha > 0. && alpha < 1. {
-                for value in samples.iter_mut().take(channels - 1) {
-                    let unassociated = f64::from(*value) / f64::from(alpha);
+                for (value, matte) in samples.iter_mut().take(channels - 1).zip(black) {
+                    let unassociated = (f64::from(*value) - f64::from(matte) * (1. - f64::from(alpha))) / f64::from(alpha);
                     *value = if format.sample == photocraft_color::SampleType::F32 {
                         unassociated.clamp(-f64::from(f32::MAX), f64::from(f32::MAX)) as f32
                     } else {
