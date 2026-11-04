@@ -36,6 +36,8 @@ pub(crate) enum CliError {
     Naming(String),
     #[error("{0}")]
     BatchOption(String),
+    #[error("{0}")]
+    OutputClaimed(String),
     #[error("{0} file(s) failed")]
     FilesFailed(usize),
     #[error("{0}")]
