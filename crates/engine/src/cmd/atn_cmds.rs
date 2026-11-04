@@ -28,7 +28,7 @@ use crate::{EngineError, Result, Session};
 
 mod adjustments;
 mod convert;
-pub(crate) use convert::UniqueNames;
+pub(crate) use convert::{UniqueNames, library_action, library_items};
 mod descriptors;
 mod events;
 mod fields;

@@ -500,7 +500,8 @@ fn sidecar_overhead_is_reserved_before_appending_a_physical_set() {
     let mut action = Action::new("Described", vec![]);
     action.description = "Details".into();
     let mut files = vec![AtnFile::default(); atn::MAX_SETS];
-    let selections: Vec<_> = (0..atn::MAX_SETS).map(|index| Selection { actions: if index == 0 { vec![&action] } else { vec![] }, source: None }).collect();
+    let selections: Vec<_> =
+        (0..atn::MAX_SETS).map(|index| Selection { actions: if index == 0 { vec![&action] } else { vec![] }, source: None, raw: None }).collect();
     assert!(append(&mut files, &selections).is_err());
     assert_eq!(files.len(), atn::MAX_SETS);
 

@@ -18,6 +18,35 @@ layers and documents, newer and older events and files, and a measured reference
 map yet, with everything needed to implement them without
 the reference application.
 
+## Durable Actions library
+
+The preset store keeps the complete library in `actions.atn`. Physical set and action
+occurrences, empty folders, function keys, header colours, step flags, descriptions and
+icons survive a restart. Untouched version16 records retain their original bytes,
+including unknown events and descriptor fields. Editing one record does not normalize
+unrelated records. A known metadata sidecar carries descriptions and icons; a sidecar-only
+archive represents an empty PhotoCraft library without inventing a user folder.
+
+When ATN is absent, PhotoCraft reads the old `actions.json` once, validates and encodes
+the complete library, then publishes ATN before renaming the exact JSON input to
+`actions.json.migrated`. It never overwrites a backup. Invalid input stays unchanged
+with a warning. Existing ATN always takes precedence, including an unreadable ATN;
+there is no fallback that overwrites it. A receipt inside migrated ATN identifies the
+exact legacy bytes for recovery after interrupted retirement. Native publication and
+retirement are separate steps; a retirement failure retains ATN and the legacy input.
+Browser migration uses one acknowledged IndexedDB transaction. Pending or failed
+transactions remain marked unsaved.
+
+PhotoCraft commands that have no lossless Photoshop representation use a string event
+named `photocraftCommand`. Its descriptor has TEXT fields `command` and `params`;
+`params` contains JSON. Loading it validates the payload without running the command
+or requiring its registration. Save Actions retains these events by default;
+`skipUnsupported: true` omits them and reports each skipped step. Photoshop does not
+implement these PhotoCraft events.
+
+CLI file inputs accept ATN libraries and PhotoCraft droplets. Legacy JSON action-library
+files are rejected. The control protocol and MCP still use command JSON.
+
 ## Action header colours
 
 Load and Save Actions preserve each action's colour index. Indices 0–11 map to
@@ -26,7 +55,7 @@ Load and Save Actions preserve each action's colour index. Indices 0–11 map to
 (light blue); `blue2` is the newer blue at index 9. `actions.setColor` accepts
 these measured names. The classic colour menu keeps its eight choices.
 
-An unknown u16 colour index is retained in native action JSON as the reserved
+An unknown u16 colour index is retained in the runtime action model as the reserved
 String `@atn-color:N`, where `N` is its canonical decimal index from 12 to 65535.
 It survives library reloads and ATN export, but cannot be selected with
 `actions.setColor`. Invalid colour strings fail export, including exports with

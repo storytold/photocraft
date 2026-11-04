@@ -44,7 +44,7 @@ use crate::io::{Reader, WriteExt, decode_legacy_name};
 mod legacy;
 mod sets;
 
-pub use sets::{MAX_SETS, MAX_TOTAL_ACTIONS, MAX_TOTAL_ITEMS, parse_sets, parse_sets_with_encoding, write_sets};
+pub use sets::{MAX_SETS, MAX_TOTAL_ACTIONS, MAX_TOTAL_ITEMS, parse_sets, parse_sets_with_encoding, parse_sets_with_spans, write_sets};
 
 /// The version written by this module (Photoshop 6 and every later release).
 pub const VERSION: u32 = 16;
@@ -52,6 +52,51 @@ pub const VERSION: u32 = 16;
 pub const MAX_ACTIONS: usize = 10_000;
 /// Most steps read from one action.
 pub const MAX_ITEMS: usize = 100_000;
+
+/// A complete version16 archive and byte provenance into its original input.
+/// Ranges address the caller's input, including original names/flags/descriptor encodings.
+/// No source bytes are copied or rewritten by this parser.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SpannedAtnArchive {
+    pub sets: Vec<AtnFile>,
+    pub spans: Vec<AtnSetSpan>,
+}
+
+/// One physical set, including its original header fields and action occurrences.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AtnSetSpan {
+    pub range: std::ops::Range<usize>,
+    pub header: std::ops::Range<usize>,
+    pub name: std::ops::Range<usize>,
+    pub expanded: std::ops::Range<usize>,
+    pub count: std::ops::Range<usize>,
+    pub actions: Vec<AtnActionSpan>,
+}
+
+/// One physical action. Header ranges let a library edit one field without normalizing others.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AtnActionSpan {
+    pub range: std::ops::Range<usize>,
+    pub header: std::ops::Range<usize>,
+    pub function_key: std::ops::Range<usize>,
+    pub shift: std::ops::Range<usize>,
+    pub command: std::ops::Range<usize>,
+    pub color: std::ops::Range<usize>,
+    pub name: std::ops::Range<usize>,
+    pub expanded: std::ops::Range<usize>,
+    pub count: std::ops::Range<usize>,
+    pub items: Vec<AtnItemSpan>,
+}
+
+/// One original event, even when it maps to several native command steps.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AtnItemSpan {
+    pub range: std::ops::Range<usize>,
+    /// Expanded, enabled, dialog, dialog-options bytes, in that order.
+    pub flags: std::ops::Range<usize>,
+    /// Descriptor body after its -1 flag; absent for a descriptor-free event.
+    pub descriptor: Option<std::ops::Range<usize>>,
+}
 
 /// A parsed action set.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -222,7 +267,8 @@ fn write_ascii(out: &mut Vec<u8>, s: &[u8]) -> Result<()> {
 }
 
 /// Read one step with the descriptor dialect selected by the file version.
-fn read_item(r: &mut Reader<'_>, legacy: bool) -> Result<AtnItem> {
+fn read_item(r: &mut Reader<'_>, legacy: bool, mut span: Option<&mut AtnItemSpan>) -> Result<AtnItem> {
+    let start = r.pos();
     let expanded = r.u8()? != 0;
     let enabled = r.u8()? != 0;
     let with_dialog = r.u8()? != 0;
@@ -235,21 +281,49 @@ fn read_item(r: &mut Reader<'_>, legacy: bool) -> Result<AtnItem> {
     let dictionary = read_ascii(r)?;
     let descriptor = match r.i32()? {
         0 => None,
-        -1 => Some(if legacy { legacy::read(r)? } else { Descriptor::read(r)? }),
+        -1 => {
+            let start = r.pos();
+            let descriptor = if legacy { legacy::read(r)? } else { Descriptor::read(r)? };
+            if let Some(span) = span.as_deref_mut() {
+                span.descriptor = Some(start..r.pos());
+            }
+            Some(descriptor)
+        }
         n => return Err(PsdError::invalid(format!("bad descriptor flag {n}"))),
     };
+    if let Some(span) = span {
+        span.range = start..r.pos();
+        span.flags = start..start.saturating_add(4);
+    }
     Ok(AtnItem { expanded, enabled, with_dialog, dialog_options, event, dictionary, descriptor })
 }
 
 /// Read an action and its steps using the file's descriptor dialect.
-fn read_action(r: &mut Reader<'_>, legacy: bool, budget: Option<&mut sets::Budget>) -> Result<AtnAction> {
+fn read_action(r: &mut Reader<'_>, legacy: bool, budget: Option<&mut sets::Budget>, mut span: Option<&mut AtnActionSpan>) -> Result<AtnAction> {
+    let start = r.pos();
     let function_key = r.u16()?;
+    let shift_start = r.pos();
     let shift = r.u8()? != 0;
+    let command_start = r.pos();
     let command = r.u8()? != 0;
+    let color_start = r.pos();
     let color = r.u16()?;
+    let name_start = r.pos();
     let name = UnicodeString::read(r)?;
+    let expanded_start = r.pos();
     let expanded = r.u8()? != 0;
+    let count_start = r.pos();
     let n = r.u32()?;
+    if let Some(span) = span.as_deref_mut() {
+        span.header = start..r.pos();
+        span.function_key = start..shift_start;
+        span.shift = shift_start..command_start;
+        span.command = command_start..color_start;
+        span.color = color_start..name_start;
+        span.name = name_start..expanded_start;
+        span.expanded = expanded_start..count_start;
+        span.count = count_start..r.pos();
+    }
     // Each item needs at least its 4 flags, the event kind, two empty names and the descriptor flag.
     r.check_count(u64::from(n), 20)?;
     if n as usize > MAX_ITEMS {
@@ -260,7 +334,14 @@ fn read_action(r: &mut Reader<'_>, legacy: bool, budget: Option<&mut sets::Budge
     }
     let mut items = Vec::with_capacity((n as usize).min(1024));
     for _ in 0..n {
-        items.push(read_item(r, legacy)?);
+        let mut item_span = span.as_ref().map(|_| AtnItemSpan::default());
+        items.push(read_item(r, legacy, item_span.as_mut())?);
+        if let (Some(span), Some(item)) = (span.as_deref_mut(), item_span) {
+            span.items.push(item);
+        }
+    }
+    if let Some(span) = span {
+        span.range = start..r.pos();
     }
     Ok(AtnAction { function_key, shift, command, color, name, expanded, items })
 }
@@ -302,10 +383,23 @@ fn read_version(r: &mut Reader<'_>) -> Result<u32> {
     Ok(version)
 }
 
-fn read_set(r: &mut Reader<'_>, legacy: bool, mut budget: Option<&mut sets::Budget>) -> Result<AtnFile> {
+fn read_set(r: &mut Reader<'_>, legacy: bool, budget: Option<&mut sets::Budget>) -> Result<AtnFile> {
+    read_set_with_spans(r, legacy, budget, None)
+}
+
+fn read_set_with_spans(r: &mut Reader<'_>, legacy: bool, mut budget: Option<&mut sets::Budget>, mut span: Option<&mut AtnSetSpan>) -> Result<AtnFile> {
+    let start = r.pos();
     let name = UnicodeString::read(r)?;
+    let expanded_start = r.pos();
     let expanded = r.u8()? != 0;
+    let count_start = r.pos();
     let n = r.u32()?;
+    if let Some(span) = span.as_deref_mut() {
+        span.header = start..r.pos();
+        span.name = start..expanded_start;
+        span.expanded = expanded_start..count_start;
+        span.count = count_start..r.pos();
+    }
     // Each action needs at least its key, modifiers, colour, an empty name, the flag and a count.
     r.check_count(u64::from(n), 15)?;
     if n as usize > MAX_ACTIONS {
@@ -316,7 +410,14 @@ fn read_set(r: &mut Reader<'_>, legacy: bool, mut budget: Option<&mut sets::Budg
     }
     let mut actions = Vec::with_capacity((n as usize).min(256));
     for _ in 0..n {
-        actions.push(read_action(r, legacy, budget.as_deref_mut())?);
+        let mut action_span = span.as_ref().map(|_| AtnActionSpan::default());
+        actions.push(read_action(r, legacy, budget.as_deref_mut(), action_span.as_mut())?);
+        if let (Some(span), Some(action)) = (span.as_deref_mut(), action_span) {
+            span.actions.push(action);
+        }
+    }
+    if let Some(span) = span {
+        span.range = start..r.pos();
     }
     Ok(AtnFile { name, expanded, actions, warnings: Vec::new(), encoding: None })
 }
@@ -895,5 +996,87 @@ mod tests {
             }
             let _ = parse(&bytes);
         }
+    }
+
+    /// Independent wire input: duplicate raw UTF16 names, noncanonical true bytes, and a
+    /// descriptor boolean whose semantic value cannot preserve its original byte by itself.
+    fn spanned_wire_archive() -> Vec<u8> {
+        fn ascii(out: &mut Vec<u8>, bytes: &[u8]) {
+            out.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
+            out.extend_from_slice(bytes);
+        }
+        let mut out = 16u32.to_be_bytes().to_vec();
+        let raw_name = [0, 0, 0, 2, 0xd8, 0, 0, 0]; // unpaired high surrogate, then NUL
+        for _ in 0..2 {
+            out.extend_from_slice(&raw_name);
+            out.push(2); // expanded=true, retaining its original byte matters
+            out.extend_from_slice(&1u32.to_be_bytes());
+            out.extend_from_slice(&[0, 3, 2, 0, 0, 12]); // F3, Shift byte2, no Command, colour12
+            out.extend_from_slice(&raw_name);
+            out.push(2);
+            out.extend_from_slice(&2u32.to_be_bytes());
+            out.extend_from_slice(&[2, 2, 0, 3]);
+            out.extend_from_slice(b"longFltn");
+            ascii(&mut out, b"Flatten");
+            out.extend_from_slice(&0i32.to_be_bytes());
+            out.extend_from_slice(&[0, 1, 2, 2]);
+            out.extend_from_slice(b"TEXT");
+            ascii(&mut out, b"futureAction");
+            ascii(&mut out, b"Future");
+            out.extend_from_slice(&(-1i32).to_be_bytes());
+            out.extend_from_slice(&0u32.to_be_bytes()); // empty descriptor Unicode name
+            out.extend_from_slice(&0u32.to_be_bytes());
+            out.extend_from_slice(b"null");
+            out.extend_from_slice(&1u32.to_be_bytes());
+            out.extend_from_slice(&0u32.to_be_bytes());
+            out.extend_from_slice(b"flagbool");
+            out.push(2);
+        }
+        out
+    }
+
+    #[test]
+    fn archive_spans_retain_physical_occurrences_and_original_wire_fields() {
+        let bytes = spanned_wire_archive();
+        let archive = parse_sets_with_spans(&bytes).unwrap();
+        assert_eq!(archive.sets.len(), 2);
+        assert_eq!(archive.spans.len(), 2);
+        assert_eq!(archive.spans[0].range.start, 4);
+        assert_eq!(archive.spans[0].range.end, archive.spans[1].range.start);
+        assert_eq!(archive.spans[1].range.end, bytes.len());
+        let mut untouched = bytes[..4].to_vec();
+        for (file, set) in archive.sets.iter().zip(&archive.spans) {
+            assert_eq!(file.name.0, [0xd800, 0]);
+            assert_eq!(bytes[set.expanded.clone()], [2]);
+            assert_eq!(bytes[set.count.clone()], 1u32.to_be_bytes());
+            assert_eq!(set.header.end, set.actions[0].range.start);
+            let action = &set.actions[0];
+            assert_eq!(bytes[action.function_key.clone()], [0, 3]);
+            assert_eq!(bytes[action.shift.clone()], [2]);
+            assert_eq!(bytes[action.command.clone()], [0]);
+            assert_eq!(bytes[action.color.clone()], [0, 12]);
+            assert_eq!(bytes[action.expanded.clone()], [2]);
+            assert_eq!(bytes[action.count.clone()], 2u32.to_be_bytes());
+            assert_eq!(action.header.end, action.items[0].range.start);
+            assert_eq!(bytes[action.items[0].flags.clone()], [2, 2, 0, 3]);
+            assert_eq!(bytes[action.items[1].flags.clone()], [0, 1, 2, 2]);
+            assert_eq!(action.items[0].range.end, action.items[1].range.start);
+            assert_eq!(action.items[1].range.end, action.range.end);
+            assert_eq!(action.range.end, set.range.end);
+            assert_eq!(bytes[action.items[1].range.clone()].last(), Some(&2));
+            untouched.extend_from_slice(&bytes[set.range.clone()]);
+        }
+        assert_eq!(untouched, bytes, "no semantic writer generates the expected raw bytes");
+        assert_eq!(parse_sets(&bytes).unwrap(), archive.sets, "ordinary parsing keeps its semantic API");
+        assert_ne!(write_sets(&archive.sets).unwrap(), bytes, "typed boolean rewriting is not a raw library round trip");
+    }
+
+    #[test]
+    fn archive_spans_reject_partial_later_records_and_legacy_layout() {
+        let mut bytes = spanned_wire_archive();
+        bytes.pop(); // the second set's descriptor value is incomplete
+        assert!(parse_sets_with_spans(&bytes).is_err(), "no partial archive is admitted");
+        assert!(parse_sets_with_spans(&16u32.to_be_bytes()).is_err(), "a version prefix is not an invented empty ATN");
+        assert!(matches!(parse_sets_with_spans(&12u32.to_be_bytes()), Err(PsdError::Unsupported(_))));
     }
 }

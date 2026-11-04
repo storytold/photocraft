@@ -97,8 +97,8 @@ fn unknown_flags_are_usage_errors() {
     let input = d.join("in");
     std::fs::create_dir_all(&input).unwrap();
     write_png(&input.join("a.png"), 8, 4, 3);
-    let actions = d.join("actions.json");
-    std::fs::write(&actions, r#"[{"command":"image.adjustments.invert"}]"#).unwrap();
+    let actions = d.join("fixture.pcdroplet");
+    write_droplet(&actions, r#"[{"command":"image.adjustments.invert"}]"#).unwrap();
     let out_dir = d.join("out");
     let fails = |cmd: &mut Command, flag: &str| {
         let o = cmd.output().unwrap();
@@ -433,9 +433,9 @@ fn batch_applies_actions_to_directory() {
     write_png(&inp.join("one.png"), 12, 8, 1);
     write_png(&inp.join("two.png"), 9, 9, 2);
     std::fs::write(inp.join("notes.txt"), "ignored").unwrap();
-    let actions = d.join("actions.json");
+    let actions = d.join("fixture.pcdroplet");
     let log = d.join("errors.txt");
-    std::fs::write(&actions, json!([{"command": "layer.new.layer", "params": {"name": "Batch"}}]).to_string()).unwrap();
+    write_droplet(&actions, json!([{"command": "layer.new.layer", "params": {"name": "Batch"}}]).to_string()).unwrap();
     let out = ok(bin()
         .args(["batch", "--actions"])
         .arg(&actions)
@@ -459,7 +459,7 @@ fn batch_applies_actions_to_directory() {
         assert_eq!(v["layers"][0]["name"], "Batch");
     }
     // A failing action reports and exits 1.
-    std::fs::write(&actions, r#"{"actions":[{"id":"no.such.command"}]}"#).unwrap();
+    write_droplet(&actions, r#"{"actions":[{"id":"no.such.command"}]}"#).unwrap();
     let o = bin().args(["batch", "--actions"]).arg(&actions).arg("--in").arg(&inp).arg("--out").arg(&outp).output().unwrap();
     assert_eq!(o.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&o.stderr).contains("FAIL"));
@@ -475,8 +475,8 @@ fn batch_recursive_naming_stop_and_error_log() {
         write_png(&input.join(file), 8, 6, 3);
     }
     std::fs::write(input.join("sub/b.png"), b"not a png").unwrap();
-    let actions = root.join("actions.json");
-    std::fs::write(&actions, r#"[["image.imageRotation.90cw", {}]]"#).unwrap();
+    let actions = root.join("fixture.pcdroplet");
+    write_droplet(&actions, r#"[["image.imageRotation.90cw", {}]]"#).unwrap();
     let output = root.join("out");
     let log = root.join("errors.txt");
     let run = |out: &Path, extra: &[&str]| {
@@ -523,8 +523,8 @@ fn batch_naming_keeps_the_tree_order_and_the_selected_encoder() {
     std::fs::create_dir_all(input.join("sub")).unwrap();
     write_png(&input.join("z.png"), 8, 6, 3);
     write_png(&input.join("sub/a.png"), 5, 4, 3);
-    let actions = root.join("actions.json");
-    std::fs::write(&actions, "[]").unwrap();
+    let actions = root.join("fixture.pcdroplet");
+    write_droplet(&actions, "[]").unwrap();
     let run = |out: &Path, extra: &[&str]| {
         bin().args(["batch", "--actions"]).arg(&actions).arg("--in").arg(&input).arg("--out").arg(out).args(extra).output().unwrap()
     };
@@ -575,8 +575,8 @@ static char *logo[] = {
 ",
     )
     .unwrap();
-    let actions = root.join("actions.json");
-    std::fs::write(&actions, "[]").unwrap();
+    let actions = root.join("fixture.pcdroplet");
+    write_droplet(&actions, "[]").unwrap();
     for (name, extra) in [("plain", &[][..]), ("named", &["--naming", "{name}.{ext}"][..])] {
         let out = root.join(name);
         let result = bin().args(["batch", "--actions"]).arg(&actions).arg("--in").arg(&input).arg("--out").arg(&out).args(extra).output().unwrap();
@@ -641,10 +641,25 @@ fn parse_actions_formats() {
     }
 }
 
-/// Runs `batch` on `input` with `actions` (saved as `<name>.json`), writing to the folder `<d>/<name>`.
+/// Keep file-input tests on the supported droplet route; the JSON step parser is tested separately.
+fn write_droplet(path: &Path, text: impl AsRef<[u8]>) -> std::io::Result<()> {
+    let value: Value = serde_json::from_slice(text.as_ref()).map_err(std::io::Error::other)?;
+    let droplet = if value.get("photocraftDroplet").is_some() {
+        value
+    } else {
+        json!({"photocraftDroplet":1,"action":{"steps":value.get("steps").or_else(|| value.get("actions")).unwrap_or(&value)}})
+    };
+    std::fs::write(path, droplet.to_string())
+}
+
+/// Runs `batch` on `input` with `actions` (saved as a droplet), writing to the folder `<d>/<name>`.
 fn batch_with(d: &Path, input: &Path, name: &str, actions: &str, extra: &[&str]) -> std::process::Output {
-    let file = d.join(format!("{name}.json"));
-    std::fs::write(&file, actions).unwrap();
+    let file = d.join(format!("{name}.pcdroplet"));
+    if serde_json::from_str::<Value>(actions).is_ok() {
+        write_droplet(&file, actions).unwrap();
+    } else {
+        std::fs::write(&file, actions).unwrap();
+    }
     bin().args(["batch", "--actions"]).arg(&file).arg("--in").arg(input).arg("--out").arg(d.join(name)).args(extra).output().unwrap()
 }
 
@@ -905,8 +920,8 @@ fn batch_refuses_to_write_over_its_inputs() {
     write_png(&input.join("a.png"), 8, 4, 3);
     let img = photocraft_codecs::Image::from_u8(8, 4, photocraft_codecs::ChannelLayout::Rgb, vec![90; 96]).unwrap();
     std::fs::write(input.join("a.tif"), photocraft_codecs::encode(&img, photocraft_codecs::Format::Tiff, &Default::default()).unwrap()).unwrap();
-    let actions = d.join("actions.json");
-    std::fs::write(&actions, r#"[{"command":"image.adjustments.invert"}]"#).unwrap();
+    let actions = d.join("fixture.pcdroplet");
+    write_droplet(&actions, r#"[{"command":"image.adjustments.invert"}]"#).unwrap();
     let snapshot = || {
         let mut files: Vec<(PathBuf, Vec<u8>)> =
             std::fs::read_dir(&input).unwrap().map(|e| e.unwrap().path()).map(|p| (p.clone(), std::fs::read(p).unwrap())).collect();
@@ -949,8 +964,8 @@ fn batch_naming_rejects_unread_input_alias_through_a_missing_directory() {
     write_png(&input.join("a.png"), 8, 4, 3);
     write_png(&input.join("b.png"), 8, 4, 7);
     let original = std::fs::read(input.join("b.png")).unwrap();
-    let actions = d.join("actions.json");
-    std::fs::write(&actions, r#"[{"command":"image.adjustments.invert"}]"#).unwrap();
+    let actions = d.join("fixture.pcdroplet");
+    write_droplet(&actions, r#"[{"command":"image.adjustments.invert"}]"#).unwrap();
     let output = bin()
         .arg("batch")
         .arg("--actions")
@@ -1120,8 +1135,8 @@ fn batch_later_input_replaces_a_same_named_output() {
     for (name, format) in [("a.bmp", photocraft_codecs::Format::Bmp), ("A.tif", photocraft_codecs::Format::Tiff)] {
         std::fs::write(input.join(name), photocraft_codecs::encode(&img, format, &Default::default()).unwrap()).unwrap();
     }
-    let actions = d.join("actions.json");
-    std::fs::write(&actions, r#"[{"command":"image.adjustments.invert"}]"#).unwrap();
+    let actions = d.join("fixture.pcdroplet");
+    write_droplet(&actions, r#"[{"command":"image.adjustments.invert"}]"#).unwrap();
     let out_dir = d.join("out");
     let o = bin().args(["batch", "--actions"]).arg(&actions).arg("--in").arg(&input).arg("--out").arg(&out_dir).args(["--format", "png"]).output().unwrap();
     let (out, err) = (String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
@@ -1679,8 +1694,8 @@ fn batch_skips_deselect_with_nothing_selected() {
     std::fs::create_dir_all(dir.join("in")).unwrap();
     let Invoke { code, stderr, .. } = invoke(&["run", "--new", r#"{"width":8,"height":6}"#, "--out", &path("in/a.png")]);
     assert_eq!(code, 0, "{stderr}");
-    std::fs::write(dir.join("steps.json"), json!([["select.deselect", {}], ["image.imageRotation.90cw", {}]]).to_string()).unwrap();
-    let Invoke { code, stdout, stderr } = invoke(&["batch", "--actions", &path("steps.json"), "--in", &path("in"), "--out", &path("out")]);
+    write_droplet(&dir.join("steps.pcdroplet"), json!([["select.deselect", {}], ["image.imageRotation.90cw", {}]]).to_string()).unwrap();
+    let Invoke { code, stdout, stderr } = invoke(&["batch", "--actions", &path("steps.pcdroplet"), "--in", &path("in"), "--out", &path("out")]);
     assert_eq!(code, 0, "{stdout}{stderr}");
     assert!(stdout.contains("1 succeeded, 0 failed"), "{stdout}");
     let Invoke { code, stdout, stderr } = invoke(&["info", &path("out/a.png"), "--compact"]);
@@ -1720,4 +1735,14 @@ fn tiff_options_choose_compression_transparency_and_pyramid() {
         assert!(err.contains(flag) && err.contains(expected), "{flag} {bad}: {err}");
         assert!(!out.exists(), "{flag} {bad} wrote a file");
     }
+}
+
+#[test]
+fn batch_rejects_a_legacy_json_library_before_creating_output() {
+    let d = tmp("legacy-action-library-rejected");
+    let file = d.join("legacy-library.json");
+    std::fs::write(&file, r#"{"version":1,"actions":[{"name":"Old","steps":[]}]}"#).unwrap();
+    let result = photocraft_cli::load_actions_file(&file, Some("Old"));
+    assert!(result.unwrap_err().to_string().contains("legacy JSON action libraries"));
+    assert!(!d.join("out").exists());
 }

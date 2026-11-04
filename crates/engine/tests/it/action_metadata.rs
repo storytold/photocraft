@@ -1,10 +1,26 @@
 //! Action metadata compatibility, editor staging and independent ATN sidecar output checks.
 use photocraft_engine::{
     Session,
-    actions_cmds::{Action, ActionsFile},
-    preset_store::{self, ACTIONS_FILE, MAX_ACTIONS_BYTES, MemBackend, PresetBackend},
+    actions_cmds::Action,
+    preset_store::{self, ACTIONS_FILE, LEGACY_ACTIONS_FILE, MAX_ACTIONS_BYTES, MIGRATED_ACTIONS_FILE, MemBackend, PresetBackend},
 };
 use serde_json::json;
+
+fn stored(actions: &[Action]) -> MemBackend {
+    let mem = MemBackend::default();
+    let mut session = Session::new();
+    assert!(session.attach_preset_store(preset_store::open(Box::new(mem.clone()))).is_empty());
+    session.actions.list = actions.to_vec();
+    session.actions.rev += 1;
+    session.sync_preset_store();
+    assert!(mem.read(ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap().starts_with(&16u32.to_be_bytes()));
+    mem
+}
+
+fn assert_definitions(actual: &[Action], expected: &[Action]) {
+    // The public command shape covers every editable definition field, omitting runtime origins.
+    assert_eq!(serde_json::to_value(actual).unwrap(), serde_json::to_value(expected).unwrap());
+}
 
 const DESCRIPTION: &str = "  First line\nCafé 🌿\0  ";
 const UNKNOWN_ICON: &str = " future/editor-icon-图标 ";
@@ -48,50 +64,49 @@ fn described(name: &str, icon: &str) -> Action {
 }
 
 #[test]
-fn old_native_library_defaults_metadata_without_rewriting_on_attach() {
+fn legacy_library_migrates_defaults_and_retains_exact_recovery_input() {
     let legacy = br#"{"version":1,"actions":[{"name":"Legacy","steps":[["future.step",{"raw":[0,255]}]]}]}"#;
     let mem = MemBackend::default();
-    mem.write(ACTIONS_FILE, legacy).unwrap();
+    mem.write(LEGACY_ACTIONS_FILE, legacy).unwrap();
     let mut session = Session::new();
     assert!(session.attach_preset_store(preset_store::open(Box::new(mem.clone()))).is_empty());
     let action = &session.actions.list[0];
     assert!(action.description.is_empty());
     assert!(action.icon.is_empty());
-    assert_eq!(*action, Action::new("Legacy", vec![("future.step".into(), json!({"raw": [0, 255]}))]));
+    assert_definitions(std::slice::from_ref(action), &[Action::new("Legacy", vec![("future.step".into(), json!({"raw": [0, 255]}))])]);
     assert_eq!(serde_json::to_value(action).unwrap(), json!({"name": "Legacy", "steps": [["future.step", {"raw": [0, 255]}]]}));
     assert!(Action::default().description.is_empty());
     assert!(Action::default().icon.is_empty());
     session.sync_preset_store();
-    assert_eq!(mem.read(ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap().as_slice(), legacy);
+    assert_eq!(mem.read(MIGRATED_ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap().as_slice(), legacy);
+    assert!(mem.read(LEGACY_ACTIONS_FILE, MAX_ACTIONS_BYTES).is_err());
+    let bytes = mem.read(ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap();
+    assert!(bytes.starts_with(&16u32.to_be_bytes()));
+    let reopened = preset_store::open(Box::new(mem));
+    assert_definitions(&reopened.actions, &session.actions.list);
 }
 
 #[test]
-fn native_json_preserves_descriptions_and_known_or_unknown_icon_identifiers() {
+fn native_atn_preserves_descriptions_and_known_or_unknown_icon_identifiers() {
     for icon in ["ClickAction", UNKNOWN_ICON] {
-        let original = described("Described", icon);
-        let file = ActionsFile { version: 1, actions: vec![original.clone()] };
-        let bytes = serde_json::to_vec_pretty(&file).unwrap();
-        let stored: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(stored["version"], 1);
-        assert_eq!(stored["actions"][0]["description"], DESCRIPTION);
-        assert_eq!(stored["actions"][0]["icon"], icon);
-        let reopened: ActionsFile = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(reopened, file);
+        let original = described("Editable", icon);
+        let mem = stored(std::slice::from_ref(&original));
+        let bytes = mem.read(ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap();
+        assert_exported_metadata(&bytes, icon);
+        let reopened = preset_store::open(Box::new(mem));
+        assert_definitions(&reopened.actions, std::slice::from_ref(&original));
         assert_eq!(reopened.actions[0].description, DESCRIPTION);
         assert_eq!(reopened.actions[0].icon, icon);
-        assert_eq!(original.description, DESCRIPTION);
-        assert_eq!(original.icon, icon);
     }
 }
 
 #[test]
 fn cloned_actions_keep_metadata_through_rename_and_real_preset_reload() {
-    let initial = ActionsFile { version: 1, actions: vec![described("Known", "ClickAction"), described("Unknown", UNKNOWN_ICON)] };
-    let mem = MemBackend::default();
-    mem.write(ACTIONS_FILE, &serde_json::to_vec_pretty(&initial).unwrap()).unwrap();
+    let initial = vec![described("Known", "ClickAction"), described("Unknown", UNKNOWN_ICON)];
+    let mem = stored(&initial);
     let mut session = Session::new();
     assert!(session.attach_preset_store(preset_store::open(Box::new(mem.clone()))).is_empty());
-    assert_eq!(session.actions.list, initial.actions);
+    assert_definitions(&session.actions.list, &initial);
     // Exercise the model clone here; native duplication has its own regression tests.
     let mut copy = session.actions.list[1].clone();
     copy.name = "Copy".into();
@@ -104,21 +119,20 @@ fn cloned_actions_keep_metadata_through_rename_and_real_preset_reload() {
     for (action, icon) in session.actions.list.iter().zip(["ClickAction", UNKNOWN_ICON, UNKNOWN_ICON]) {
         assert_eq!(action.description, DESCRIPTION);
         assert_eq!(action.icon, icon);
-        assert_eq!(action.steps, initial.actions[0].steps);
-        assert_eq!(action.disabled, initial.actions[0].disabled);
-        assert_eq!(action.dialogs, initial.actions[0].dialogs);
-        assert_eq!(action.set, initial.actions[0].set);
-        assert_eq!(action.color, initial.actions[0].color);
+        assert_eq!(action.steps, initial[0].steps);
+        assert_eq!(action.disabled, initial[0].disabled);
+        assert_eq!(action.dialogs, initial[0].dialogs);
+        assert_eq!(action.set, initial[0].set);
+        assert_eq!(action.color, initial[0].color);
     }
     session.sync_preset_store();
     let bytes = mem.read(ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap();
-    let saved: ActionsFile = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(saved.version, 1);
-    assert_eq!(saved.actions, session.actions.list);
+    let saved = preset_store::open(Box::new(mem.clone()));
+    assert_definitions(&saved.actions, &session.actions.list);
     assert_eq!(saved.actions.iter().map(|action| action.name.as_str()).collect::<Vec<_>>(), ["Renamed known", "Renamed unknown", "Renamed copy"]);
     let mut reopened = Session::new();
     assert!(reopened.attach_preset_store(preset_store::open(Box::new(mem.clone()))).is_empty());
-    assert_eq!(reopened.actions.list, saved.actions);
+    assert_definitions(&reopened.actions.list, &saved.actions);
     assert_eq!(mem.read(ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap(), bytes);
 }
 
@@ -127,9 +141,7 @@ fn cloned_actions_keep_metadata_through_rename_and_real_preset_reload() {
 fn editor_metadata_stays_draft_until_save_and_discard_keeps_saved_values() {
     for icon in ["ClickAction", UNKNOWN_ICON] {
         let mut original = Action::new("Editable", Vec::new());
-        let initial = ActionsFile { version: 1, actions: vec![original.clone()] };
-        let mem = MemBackend::default();
-        mem.write(ACTIONS_FILE, &serde_json::to_vec_pretty(&initial).unwrap()).unwrap();
+        let mem = stored(std::slice::from_ref(&original));
         let mut session = Session::new();
         assert!(session.attach_preset_store(preset_store::open(Box::new(mem.clone()))).is_empty());
         let committed = session.actions.list.clone();
@@ -156,17 +168,17 @@ fn editor_metadata_stays_draft_until_save_and_discard_keeps_saved_values() {
         assert_eq!(saved["dirty"], false);
         original.description = DESCRIPTION.into();
         original.icon = icon.into();
-        assert_eq!(session.actions.list, vec![original.clone()]);
+        assert_definitions(&session.actions.list, std::slice::from_ref(&original));
         let classic = session.execute("actions.get", json!({"action": "Editable"})).unwrap();
         assert_eq!(classic["description"], DESCRIPTION);
         assert_eq!(classic["icon"], icon);
         session.sync_preset_store();
         let saved_bytes = mem.read(ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap();
-        let native: ActionsFile = serde_json::from_slice(&saved_bytes).unwrap();
-        assert_eq!(native.actions, vec![original.clone()]);
+        let native = preset_store::open(Box::new(mem.clone()));
+        assert_definitions(&native.actions, std::slice::from_ref(&original));
         let mut reopened = Session::new();
         assert!(reopened.attach_preset_store(preset_store::open(Box::new(mem.clone()))).is_empty());
-        assert_eq!(reopened.actions.list, native.actions);
+        assert_definitions(&reopened.actions.list, &native.actions);
         // Metadata now exports through the real sidecar, including an unknown glyph identifier.
         let committed = session.actions.list.clone();
         let mut plain = original.clone();
@@ -185,13 +197,16 @@ fn editor_metadata_stays_draft_until_save_and_discard_keeps_saved_values() {
         }
         let mut unsupported = original.clone();
         unsupported.steps.push(("future.step".into(), json!({"raw": [0,255]})));
-        assert!(photocraft_engine::atn_cmds::export("Metadata set", &[&unsupported], &[], false).is_err());
+        let (kept, skipped) = photocraft_engine::atn_cmds::export("Metadata set", &[&unsupported], &[], false).unwrap();
+        assert!(skipped.is_empty());
+        assert_eq!(photocraft_engine::atn_cmds::import(&kept).unwrap().actions[0].steps, unsupported.steps);
+        assert_eq!(photocraft_psd::atn::parse_sets(&kept).unwrap()[0].actions[0].items[0].event.id(), "photocraftCommand");
         let (bytes, skipped) = photocraft_engine::atn_cmds::export("Metadata set", &[&unsupported], &[], true).unwrap();
         assert_eq!(skipped.len(), 1, "skipUnsupported affects steps, never metadata");
         assert_exported_metadata(&bytes, icon);
         session.execute("actions.editor.update", json!({"draft": draft, "description": "Discard me", "icon": "UncommittedIcon"})).unwrap();
         session.execute("actions.editor.discard", json!({"draft": draft})).unwrap();
-        assert_eq!(session.actions.list, vec![original]);
+        assert_definitions(&session.actions.list, std::slice::from_ref(&original));
         assert_eq!(mem.read(ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap(), saved_bytes);
     }
 }

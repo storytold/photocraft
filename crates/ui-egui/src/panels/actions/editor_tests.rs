@@ -90,9 +90,12 @@ fn explicit_save_stays_open_and_dirty_navigation_saves_then_closes_owned_handle(
     page.request_leave(&mut app, Activity::default()).unwrap();
     assert_eq!(page.answer(&mut app, Answer::Save, Activity::default()).unwrap(), Some(Event::Closed { saved: true, source: Some(0) }));
     assert!(app.run("actions.editor.get", json!({"draft": page.draft()})).is_err());
+    let persisted = store(&mem);
     let mut reopened = Session::new();
-    assert!(reopened.attach_preset_store(preset_store::open(Box::new(mem))).is_empty());
-    assert_eq!(reopened.actions.list, app.session.actions.list);
+    assert!(reopened.attach_preset_store(preset_store::open(Box::new(mem.clone()))).is_empty());
+    // Reload attaches ATN wire provenance; every public definition field remains identical.
+    assert_eq!(serde_json::to_value(&reopened.actions.list).unwrap(), serde_json::to_value(&app.session.actions.list).unwrap());
+    assert_eq!(store(&mem), persisted, "reopening must not rewrite the stored library");
 }
 
 #[test]

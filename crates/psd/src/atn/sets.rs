@@ -1,5 +1,7 @@
 //! Whole-file version-16 set streams. The original single-set/legacy API remains compatible.
-use super::{AtnFile, MAX_ACTIONS, MAX_ITEMS, VERSION, codepage, name_encoding_sets, read_set, read_version, write_set};
+use super::{
+    AtnFile, AtnSetSpan, MAX_ACTIONS, MAX_ITEMS, SpannedAtnArchive, VERSION, codepage, name_encoding_sets, read_set_with_spans, read_version, write_set,
+};
 use crate::{
     error::{PsdError, Result},
     io::{Reader, WriteExt},
@@ -46,18 +48,38 @@ pub fn parse_sets(data: &[u8]) -> Result<Vec<AtnFile>> {
 /// [`parse_sets`] with one legacy name encoding for the complete file. Automatic detection also
 /// uses the complete stream; its diagnostic is attached once to the first set.
 pub fn parse_sets_with_encoding(data: &[u8], encoding: Option<&str>) -> Result<Vec<AtnFile>> {
+    parse_archive(data, encoding, false).map(|archive| archive.sets)
+}
+
+/// Read a strict complete version16 archive, retaining physical record/field ranges.
+/// Legacy version12 conversion is deliberately excluded: its descriptor dialect cannot be
+/// spliced unchanged into a version16 library. Existing import APIs still accept it.
+/// A header without any real set remains invalid; an empty logical library needs a valid carrier.
+pub fn parse_sets_with_spans(data: &[u8]) -> Result<SpannedAtnArchive> {
+    parse_archive(data, None, true)
+}
+
+fn parse_archive(data: &[u8], encoding: Option<&str>, capture: bool) -> Result<SpannedAtnArchive> {
     let forced = encoding.map(codepage::resolve_label).transpose()?;
     let mut reader = Reader::new(data);
     let version = read_version(&mut reader)?;
     let legacy = version == 12;
+    if capture && legacy {
+        return Err(PsdError::Unsupported("raw Actions library provenance requires version16".into()));
+    }
     let mut files = Vec::new();
+    let mut spans = Vec::new();
     let mut budget = Budget::default();
     loop {
         if files.len() >= MAX_SETS {
             return Err(PsdError::LimitExceeded("too many sets in actions archive"));
         }
         let before = reader.remaining();
-        let mut file = read_set(&mut reader, legacy, Some(&mut budget))?;
+        let mut span = capture.then(AtnSetSpan::default);
+        let mut file = read_set_with_spans(&mut reader, legacy, Some(&mut budget), span.as_mut())?;
+        if let Some(span) = span {
+            spans.push(span);
+        }
         if legacy && !reader.is_empty() {
             file.warnings.push(format!("{} trailing bytes ignored", reader.remaining()));
         }
@@ -77,7 +99,7 @@ pub fn parse_sets_with_encoding(data: &[u8], encoding: Option<&str>) -> Result<V
     if let Some(first) = files.first_mut() {
         first.warnings.extend(warnings);
     }
-    Ok(files)
+    Ok(SpannedAtnArchive { sets: files, spans })
 }
 
 /// Write all sets under one version16 prefix. Validate aggregate counts before allocating output.

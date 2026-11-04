@@ -8,9 +8,32 @@ use photocraft_engine::{
     preset_store::{self, PresetBackend, *},
 };
 
-pub type Batch = BTreeMap<String, Option<Arc<[u8]>>>;
+pub type Files = BTreeMap<String, Option<Arc<[u8]>>>;
+#[derive(Clone)]
+pub struct Migration {
+    pub legacy: Arc<[u8]>,
+    pub atn: Arc<[u8]>,
+    pub published: bool,
+}
+pub struct Batch {
+    pub files: Files,
+    pub migration: Option<Migration>,
+}
+impl std::ops::Deref for Batch {
+    type Target = Files;
+    fn deref(&self) -> &Files {
+        &self.files
+    }
+}
+impl<'a> IntoIterator for &'a Batch {
+    type Item = (&'a String, &'a Option<Arc<[u8]>>);
+    type IntoIter = std::collections::btree_map::Iter<'a, String, Option<Arc<[u8]>>>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.files.iter()
+    }
+}
 /// Three sampled images per preset (tip, dual tip, texture), plus group/index/action/pattern records.
-pub const MAX_RECORDS: usize = MAX_GROUPS + MAX_PRESETS_PER_GROUP * 3 + 3;
+pub const MAX_RECORDS: usize = MAX_GROUPS + MAX_PRESETS_PER_GROUP * 3 + 5;
 
 #[derive(Default)]
 struct State {
@@ -18,6 +41,7 @@ struct State {
     bytes: u64,
     dirty: BTreeSet<String>,
     writing: bool,
+    migration: Option<Migration>,
     error: Option<String>,
     rejected: BTreeMap<String, String>,
     preserve_tips: bool,
@@ -44,7 +68,7 @@ pub fn record_limit(name: &str) -> Result<u64, String> {
     }
     match name {
         INDEX_FILE => Ok(MAX_INDEX_BYTES),
-        ACTIONS_FILE => Ok(MAX_ACTIONS_BYTES),
+        ACTIONS_FILE | LEGACY_ACTIONS_FILE | MIGRATED_ACTIONS_FILE => Ok(MAX_ACTIONS_BYTES),
         PATTERNS_FILE => Ok(MAX_PATTERNS_BYTES),
         _ if name.starts_with("tips/") && leaf.ends_with(".pctip") => Ok(MAX_TIP_BYTES),
         _ if !name.contains('/') && name.ends_with(".pcbrushes") => Ok(MAX_GROUP_BYTES),
@@ -81,24 +105,27 @@ impl Bridge {
             return None;
         }
         s.writing = true;
-        Some(
-            std::mem::take(&mut s.dirty)
-                .into_iter()
-                .map(|name| {
-                    let bytes = s.files.get(&name).cloned();
-                    (name, bytes)
-                })
-                .collect(),
-        )
+        let files = std::mem::take(&mut s.dirty)
+            .into_iter()
+            .map(|name| {
+                let bytes = s.files.get(&name).cloned();
+                (name, bytes)
+            })
+            .collect();
+        Some(Batch { files, migration: s.migration.clone() })
     }
 
     pub fn finish(&self, batch: Batch, result: Result<(), String>) {
         let mut s = self.state();
         s.writing = false;
-        if let Err(e) = result {
-            // Requeue names, never old bytes: edits/deletes made during the failed write win.
-            s.dirty.extend(batch.into_keys());
-            s.error = Some(e);
+        if let Err(error) = result {
+            // Requeue the whole migration and current bytes, including edits made in flight.
+            s.dirty.extend(batch.files.into_keys());
+            s.error = Some(error);
+        } else if batch.migration.is_some() {
+            // Only transaction completion retires the pending migration. Any newer ATN edit
+            // remains in dirty and gets its own acknowledged transaction.
+            s.migration = None;
         }
     }
 
@@ -135,7 +162,55 @@ impl PresetBackend for Bridge {
         Ok(bytes.to_vec())
     }
 
+    fn migrate_actions(&self, legacy: &[u8], atn: &[u8], published: bool) -> Result<ActionsMigration, String> {
+        let mut s = self.state();
+        let result = (|| -> Result<ActionsMigration, String> {
+            if legacy.len() as u64 > MAX_ACTIONS_BYTES || atn.len() as u64 > MAX_ACTIONS_BYTES {
+                return Err("Actions migration exceeds file limit".into());
+            }
+            if s.migration.is_some() {
+                return Err("an Actions migration is already pending".into());
+            }
+            if s.files.get(LEGACY_ACTIONS_FILE).map(AsRef::as_ref) != Some(legacy) {
+                return Err("legacy Actions input changed before migration".into());
+            }
+            match s.files.get(ACTIONS_FILE) {
+                Some(bytes) if published && bytes.as_ref() == atn => {}
+                None if !published => {}
+                _ => return Err("Actions ATN changed before migration".into()),
+            }
+            if s.files.contains_key(MIGRATED_ACTIONS_FILE) {
+                return Err("legacy backup already exists; original and backup retained unchanged".into());
+            }
+            let size = s.bytes.checked_add(if published { 0 } else { atn.len() as u64 }).ok_or("store size overflow")?;
+            let records = s.files.len() + usize::from(!published);
+            let pending = [ACTIONS_FILE, LEGACY_ACTIONS_FILE, MIGRATED_ACTIONS_FILE].iter().filter(|name| !s.dirty.contains(**name)).count();
+            if size > MAX_STORE_BYTES || records > MAX_RECORDS || s.dirty.len() + pending > MAX_RECORDS {
+                return Err("browser preset store is full".into());
+            }
+            let migration = Migration { legacy: Arc::from(legacy), atn: Arc::from(atn), published };
+            // One lock, with all validation above mutation. add(), not put(), protects the backup
+            // and a first ATN publication in the actual IndexedDB transaction as well.
+            s.files.insert(ACTIONS_FILE.into(), migration.atn.clone());
+            s.files.insert(MIGRATED_ACTIONS_FILE.into(), migration.legacy.clone());
+            s.files.remove(LEGACY_ACTIONS_FILE);
+            s.bytes = size;
+            s.dirty.extend([ACTIONS_FILE.into(), LEGACY_ACTIONS_FILE.into(), MIGRATED_ACTIONS_FILE.into()]);
+            s.migration = Some(migration);
+            Ok(ActionsMigration::Staged)
+        })();
+        if let Err(error) = &result {
+            s.rejected.insert(ACTIONS_FILE.into(), error.clone());
+        } else {
+            s.rejected.remove(ACTIONS_FILE);
+        }
+        result
+    }
+
     fn write(&self, name: &str, bytes: &[u8]) -> Result<(), String> {
+        if matches!(name, LEGACY_ACTIONS_FILE | MIGRATED_ACTIONS_FILE) {
+            return Err("legacy Actions records are migration-only".into());
+        }
         let mut s = self.state();
         if s.files.get(name).is_some_and(|old| old.as_ref() == bytes) {
             s.rejected.remove(name);
@@ -158,6 +233,9 @@ impl PresetBackend for Bridge {
     }
 
     fn remove(&self, name: &str) -> Result<(), String> {
+        if matches!(name, LEGACY_ACTIONS_FILE | MIGRATED_ACTIONS_FILE) {
+            return Err("legacy Actions records are migration-only".into());
+        }
         record_limit(name)?;
         let mut s = self.state();
         if s.preserve_tips && name.starts_with("tips/") {
@@ -183,6 +261,77 @@ mod tests {
     use super::*;
     use photocraft_psd::abr::{AbrSample, LegacyBrush, LegacyTip, write_v12};
     use serde_json::json;
+
+    #[test]
+    fn actions_migration_is_one_staged_batch_and_waits_for_completion() {
+        let bridge = Bridge::default();
+        bridge.load(LEGACY_ACTIONS_FILE, b"exact legacy".to_vec()).unwrap();
+        assert_eq!(bridge.migrate_actions(b"exact legacy", b"complete ATN", false).unwrap(), ActionsMigration::Staged);
+        assert!(bridge.unsaved());
+        let batch = bridge.begin().unwrap();
+        assert!(batch.migration.is_some());
+        assert_eq!(batch.len(), 3);
+        assert!(matches!(batch.get(LEGACY_ACTIONS_FILE), Some(None)));
+        assert_eq!(batch.get(MIGRATED_ACTIONS_FILE).unwrap().as_deref(), Some(&b"exact legacy"[..]));
+        assert!(bridge.begin().is_none());
+        bridge.finish(batch, Ok(()));
+        assert!(!bridge.unsaved());
+    }
+
+    #[test]
+    fn actions_migration_abort_requeues_whole_group_with_latest_atn() {
+        let bridge = Bridge::default();
+        bridge.load(LEGACY_ACTIONS_FILE, b"legacy".to_vec()).unwrap();
+        bridge.migrate_actions(b"legacy", b"first ATN", false).unwrap();
+        let batch = bridge.begin().unwrap();
+        bridge.write(ACTIONS_FILE, b"edited ATN").unwrap();
+        bridge.finish(batch, Err("transaction aborted".into()));
+        assert!(bridge.unsaved());
+        assert!(bridge.begin().is_none());
+        bridge.retry();
+        let batch = bridge.begin().unwrap();
+        assert!(batch.migration.is_some());
+        assert_eq!(batch.len(), 3);
+        assert_eq!(batch.get(ACTIONS_FILE).unwrap().as_deref(), Some(&b"edited ATN"[..]));
+        assert_eq!(batch.get(MIGRATED_ACTIONS_FILE).unwrap().as_deref(), Some(&b"legacy"[..]));
+        bridge.finish(batch, Ok(()));
+        assert!(!bridge.unsaved());
+    }
+
+    #[test]
+    fn actions_migration_validates_all_bindings_and_limits_before_mutation() {
+        let bridge = Bridge::default();
+        bridge.load(LEGACY_ACTIONS_FILE, b"legacy".to_vec()).unwrap();
+        let before = bridge.list().unwrap();
+        assert!(bridge.migrate_actions(b"changed", b"ATN", false).is_err());
+        assert_eq!(bridge.list().unwrap(), before);
+        bridge.state().bytes = MAX_STORE_BYTES;
+        assert!(bridge.migrate_actions(b"legacy", b"ATN", false).is_err());
+        assert_eq!(bridge.list().unwrap(), before);
+        bridge.state().bytes = 6;
+        bridge.load(MIGRATED_ACTIONS_FILE, b"other backup".to_vec()).unwrap();
+        assert!(bridge.migrate_actions(b"legacy", b"ATN", false).is_err());
+        assert_eq!(bridge.read(MIGRATED_ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap(), b"other backup");
+        assert_eq!(bridge.read(LEGACY_ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap(), b"legacy");
+        assert!(bridge.unsaved(), "a rejected migration remains visible until repaired or reloaded");
+    }
+
+    #[test]
+    fn acknowledged_migration_keeps_an_inflight_newer_edit_pending() {
+        let bridge = Bridge::default();
+        bridge.load(LEGACY_ACTIONS_FILE, b"legacy".to_vec()).unwrap();
+        bridge.migrate_actions(b"legacy", b"first ATN", false).unwrap();
+        let batch = bridge.begin().unwrap();
+        bridge.write(ACTIONS_FILE, b"newer ATN").unwrap();
+        bridge.finish(batch, Ok(()));
+        assert!(bridge.unsaved());
+        let next = bridge.begin().unwrap();
+        assert!(next.migration.is_none());
+        assert_eq!(next.len(), 1);
+        assert_eq!(next.get(ACTIONS_FILE).unwrap().as_deref(), Some(&b"newer ATN"[..]));
+        bridge.finish(next, Ok(()));
+        assert!(!bridge.unsaved());
+    }
 
     fn import(s: &mut Session) {
         let abr = write_v12(

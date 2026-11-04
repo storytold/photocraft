@@ -1,7 +1,7 @@
 //! Action-header colours survive the public ATN and native action-library paths.
 use photocraft_engine::{
     Session,
-    actions_cmds::{Action, ActionsFile},
+    actions_cmds::Action,
     atn_cmds,
     preset_store::{self, ACTIONS_FILE, MAX_ACTIONS_BYTES, MemBackend, PresetBackend},
 };
@@ -131,17 +131,19 @@ fn unknown_header_colours_survive_native_persistence_and_unrelated_edits() {
         assert_eq!(s.actions.list[0].color, opaque);
         s.sync_preset_store();
         let bytes = mem.read(ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap();
-        let native: ActionsFile = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(native.actions, s.actions.list);
+        let native = atn::parse_sets(&bytes).unwrap();
+        assert_eq!(native[0].actions[0].color, index);
+        assert_eq!(native[0].actions[0].function_key, 6);
+        same_step_wire(&native[0].actions[0].items[0], &recorded(index).actions[0].items[0]);
         let mut reopened = Session::new();
         assert!(reopened.attach_preset_store(preset_store::open(Box::new(mem.clone()))).is_empty());
-        assert_eq!(reopened.actions.list, native.actions);
+        assert_eq!(serde_json::to_value(&reopened.actions.list).unwrap(), serde_json::to_value(&s.actions.list).unwrap());
         reopened.execute("actions.rename", json!({"action": NAME, "name": "Renamed"})).unwrap();
         assert_eq!(reopened.actions.list[0].color, opaque);
         reopened.sync_preset_store();
         let mut again = Session::new();
         assert!(again.attach_preset_store(preset_store::open(Box::new(mem))).is_empty());
-        assert_eq!(again.actions.list, reopened.actions.list);
+        assert_eq!(serde_json::to_value(&again.actions.list).unwrap(), serde_json::to_value(&reopened.actions.list).unwrap());
         let output = saved(&mut again);
         assert_eq!(output.actions[0].color, index);
         assert_eq!(output.actions[0].name.to_string_lossy(), "Renamed");

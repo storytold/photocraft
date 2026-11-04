@@ -1136,3 +1136,43 @@ fn migration_preserves_duplicate_names_but_refuses_duplicate_ids() {
     assert!(mem.read(PATTERNS_FILE, 1 << 20).is_err());
     assert_eq!(mem.read(LEGACY_PATTERNS_FILE, MAX_PATTERNS_BYTES).unwrap(), old);
 }
+
+#[test]
+fn directory_actions_migration_retains_exact_bytes_and_is_idempotent_on_restart() {
+    let dir = TempDir::new("actions-atn-migration");
+    let backend = DirBackend::new(&dir.0);
+    let legacy = br#" {"version":1,"actions":[{"name":"Native","steps":[["future.command",{"x":1}]]}]} "#;
+    backend.write(LEGACY_ACTIONS_FILE, legacy).unwrap();
+    let opened = open_dir(&dir.0);
+    assert!(opened.warnings.is_empty(), "{:?}", opened.warnings);
+    assert_eq!(opened.actions[0].steps, [("future.command".into(), json!({"x": 1}))]);
+    assert_eq!(backend.read(MIGRATED_ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap(), legacy);
+    assert!(backend.read(LEGACY_ACTIONS_FILE, MAX_ACTIONS_BYTES).is_err());
+    let atn = backend.read(ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap();
+    assert!(atn.starts_with(&16u32.to_be_bytes()));
+    let again = open_dir(&dir.0);
+    assert!(again.warnings.is_empty(), "{:?}", again.warnings);
+    assert_eq!(backend.read(ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap(), atn);
+    assert_eq!(backend.read(MIGRATED_ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap(), legacy);
+}
+
+#[test]
+fn directory_actions_migration_does_not_replace_either_preexisting_destination() {
+    let dir = TempDir::new("actions-atn-no-clobber");
+    let backend = DirBackend::new(&dir.0);
+    let legacy = br#"{"version":1,"actions":[]}"#;
+    backend.write(LEGACY_ACTIONS_FILE, legacy).unwrap();
+    backend.write(ACTIONS_FILE, b"preexisting damaged ATN").unwrap();
+    let failed = open_dir(&dir.0);
+    assert!(matches!(failed.actions, LoadedActions::Failed));
+    assert_eq!(backend.read(ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap(), b"preexisting damaged ATN");
+    assert_eq!(backend.read(LEGACY_ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap(), legacy);
+    backend.remove(ACTIONS_FILE).unwrap();
+    backend.write(MIGRATED_ACTIONS_FILE, b"preexisting recovery input").unwrap();
+    let pending = open_dir(&dir.0);
+    assert!(matches!(pending.actions, LoadedActions::Migrated(_)));
+    assert!(pending.warnings.iter().any(|warning| warning.contains("pending")));
+    assert_eq!(backend.read(LEGACY_ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap(), legacy);
+    assert_eq!(backend.read(MIGRATED_ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap(), b"preexisting recovery input");
+    assert!(backend.read(ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap().starts_with(&16u32.to_be_bytes()));
+}

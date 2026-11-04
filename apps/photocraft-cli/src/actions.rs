@@ -1,4 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::{
+    io::Read,
+    path::{Path, PathBuf},
+};
 
 use photocraft_engine::actions_cmds::Action;
 use serde_json::{Value, json};
@@ -11,8 +14,10 @@ pub enum ActionsError {
     /// The steps don't parse ([`photocraft_engine::automate_cmds::parse_action`]).
     #[error(transparent)]
     Steps(#[from] photocraft_engine::EngineError),
-    #[error("--action picks an action from an Actions set ({{\"actions\": [{{\"name\", \"steps\"}}…]}}), but this file holds one action's steps")]
+    #[error("--action selects an action from an ATN library; a droplet already holds one action")]
     NotASet,
+    #[error("legacy JSON action libraries are no longer supported; use an ATN library or a droplet")]
+    LegacyLibrary,
     #[error("Actions set: {0}")]
     Set(#[source] serde_json::Error),
     #[error("no action named `{name}` in the set (it holds {})", quoted(names))]
@@ -58,38 +63,43 @@ fn steps_of(v: &Value) -> Result<Steps, ActionsError> {
 /// Engine commands to run in order: `(id, params)`.
 pub type Steps = Vec<(String, Value)>;
 
-/// The steps `batch` plays on each file, and the actions they can call. An Actions set (the
-/// Actions panel's `actions.json`: `{"actions": [{"name", "steps"}…]}`, or the bare list) plays
-/// the action `name` picks (optional when the set holds one) with the whole set loaded, as
-/// Photoshop's Batch does; anything else is one action's steps ([`parse_actions`]) (#2786).
+/// Parse one droplet/step value. A legacy JSON action library is never imported here.
 pub fn load_actions(text: &str, name: Option<&str>) -> Result<(Steps, Vec<Action>), ActionsError> {
     let v: Value = serde_json::from_str(text).map_err(ActionsError::Json)?;
     let list = v.get("actions").unwrap_or(&v);
-    let is_set = list.as_array().is_some_and(|a| !a.is_empty() && a.iter().all(|x| x.get("name").is_some_and(Value::is_string)));
-    if !is_set {
-        if name.is_some() {
-            return Err(ActionsError::NotASet);
-        }
-        return Ok((steps_of(&v)?, Vec::new()));
+    if list.as_array().is_some_and(|list| list.iter().any(|action| action.get("name").is_some())) {
+        return Err(ActionsError::LegacyLibrary);
     }
-    let set: Vec<Action> = serde_json::from_value(list.clone()).map_err(ActionsError::Set)?;
-    let action = match (name, set.as_slice()) {
-        (Some(n), _) => set.iter().find(|a| a.name == n).ok_or_else(|| ActionsError::NoSuchAction { name: n.to_owned(), names: names(&set) })?,
-        (None, [only]) => only,
-        (None, _) => return Err(ActionsError::PickOne { names: names(&set) }),
-    };
-    let play = vec![("actions.play".to_string(), json!({"action": action.name}))];
-    Ok((play, set))
+    if name.is_some() {
+        return Err(ActionsError::NotASet);
+    }
+    Ok((steps_of(&v)?, Vec::new()))
 }
 
 /// [`load_actions`] for a file on disk: a Photoshop Actions file (`.atn`, by extension or by
 /// its version word, 12 or 16) is converted first; the played action's steps with no PhotoCraft
 /// equivalent come back as warnings (they fail at playback, as in Photoshop when a step can't run).
 pub fn load_actions_file(path: &Path, name: Option<&str>) -> Result<(Steps, Vec<Action>, Vec<String>), ActionsError> {
-    let bytes = std::fs::read(path).map_err(|source| ActionsError::Read { path: path.to_path_buf(), source })?;
+    let file = std::fs::File::open(path).map_err(|source| ActionsError::Read { path: path.to_path_buf(), source })?;
+    let mut bytes = Vec::new();
+    file.take(photocraft_engine::preset_store::MAX_ACTIONS_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|source| ActionsError::Read { path: path.to_path_buf(), source })?;
+    if bytes.len() as u64 > photocraft_engine::preset_store::MAX_ACTIONS_BYTES {
+        return Err(ActionsError::Read {
+            path: path.to_path_buf(),
+            source: std::io::Error::new(std::io::ErrorKind::InvalidData, "Actions input exceeds byte limit"),
+        });
+    }
     let is_atn = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("atn")) || matches!(bytes.get(..4), Some([0, 0, 0, 12 | 16]));
     if !is_atn {
         let text = String::from_utf8(bytes).map_err(|source| ActionsError::Utf8 { path: path.to_path_buf(), source })?;
+        let value: Value = serde_json::from_str(&text).map_err(ActionsError::Json)?;
+        if value.get("photocraftDroplet").and_then(Value::as_u64) != Some(1)
+            || !value.get("action").and_then(|action| action.get("steps")).is_some_and(Value::is_array)
+        {
+            return Err(ActionsError::LegacyLibrary);
+        }
         let (steps, set) = load_actions(&text, name)?;
         return Ok((steps, set, Vec::new()));
     }

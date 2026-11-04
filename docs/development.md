@@ -252,7 +252,7 @@ cargo run -p photocraft-cli -- info out.pcraft                          # JSON: 
 cargo run -p photocraft-cli -- run in.png --cmd layer.new.layer --params '{"name":"Ink"}' \
                                           --cmd filter.blur.gaussianBlur --params '{"radius":3}' --out out.psd
 cargo run -p photocraft-cli -- run --new '{"width":800,"height":600}' --cmd document.inspect
-cargo run -p photocraft-cli -- batch --actions actions.json --in photos/ --out done/ --format jpg
+cargo run -p photocraft-cli -- batch --actions actions.atn --in photos/ --out done/ --format jpg
 cargo run -p photocraft-cli -- commands --filter blur                    # the command registry
 cargo run -p photocraft-cli --example man-and-completions -- out/       # man pages + bash/zsh/fish/elvish/PowerShell completions
 ```
@@ -268,7 +268,12 @@ ln -s photocraft-<version>-linux-x86_64.AppImage photocraft-cli
 
 The `--cli` selector is removed; all remaining arguments, stdin, stdout, stderr and the exit status are passed through. CLI launches skip desktop integration. The symlink form uses the AppImage runtime's `ARGV0`; the normal AppImage name launches the GUI.
 
-`actions.json` holds the steps of a recorded action: `[["<id>", {…}], …]`, `[{"command": "<id>", "params": {…}}, …]` or bare ids, as a list or wrapped in `{"actions": …}` or `{"steps": …}`; a droplet file works too. It can also be an Actions set (the Actions panel's `actions.json`, `{"actions": [{"name": …, "steps": […]}, …]}`): `--action <name>` picks the action to play (optional when the set holds one), and the whole set is loaded for each file, so a step that plays another action of the set works. `batch` refuses an `--out` folder that is the `--in` folder, since the results would replace the originals, unless `--in-place` is given. `run` prints one JSON line per command result.
+`actions.atn` holds the Actions library. `--action <name>` selects an action
+(optional for a one-action library), with the complete library available for nested
+calls. A PhotoCraft droplet is also accepted. Legacy JSON action-library files are
+rejected; command JSON for `run`, the control protocol and MCP is unchanged.
+`batch` refuses an `--out` folder that is the `--in` folder unless `--in-place` is
+given. `run` prints one JSON line per command result.
 
 ## Native format (.pcraft)
 

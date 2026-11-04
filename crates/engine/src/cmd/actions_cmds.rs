@@ -23,6 +23,7 @@ use crate::commands::CommandSpec;
 use crate::{EngineError, Result, Session};
 
 pub mod editor;
+pub mod library;
 pub mod playback;
 
 /// A command temporarily owns the recorder while its nested commands run.
@@ -37,7 +38,7 @@ fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
 
 /// One recorded action. `steps` is the `[[id, params], …]` shape `file.automate.batch` and
 /// droplets already accept.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Action {
     pub name: String,
     /// Free-form editor description. Older native action libraries have no description.
@@ -49,6 +50,12 @@ pub struct Action {
     /// Opaque imported sidecar data, moved with this action. The ATN library codec owns durability.
     #[serde(skip)]
     pub atn_metadata: Option<crate::atn_cmds::ActionMetadata>,
+    /// Original physical record; runtime only, persisted by the single ATN library codec.
+    #[serde(skip)]
+    pub library_origin: Option<library::ActionOrigin>,
+    /// Native parts of an original one-to-many ATN event, moved with their step indices.
+    #[serde(skip)]
+    pub library_steps: Vec<Option<library::StepOrigin>>,
     #[serde(default)]
     pub steps: Vec<(String, Value)>,
     /// Indices of steps excluded from playback (unchecked in the Actions panel).
@@ -66,6 +73,22 @@ pub struct Action {
     /// Action colour: one of [`BUTTON_COLORS`], or an opaque `@atn-color:N` imported header index.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub color: String,
+}
+
+// Origins are codec bookkeeping, not a logical definition edit. Keep the existing comparison
+// contract used by drafts and consumers; archive reloads do not change logical action equality.
+impl PartialEq for Action {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.description == other.description
+            && self.icon == other.icon
+            && self.atn_metadata == other.atn_metadata
+            && self.steps == other.steps
+            && self.disabled == other.disabled
+            && self.dialogs == other.dialogs
+            && self.set == other.set
+            && self.color == other.color
+    }
 }
 
 /// Measured action colours in ATN index order. The classic picker offers the first eight.
@@ -98,6 +121,8 @@ impl Action {
             description: String::new(),
             icon: String::new(),
             atn_metadata: None,
+            library_origin: None,
+            library_steps: Vec::new(),
             steps,
             disabled: BTreeSet::new(),
             dialogs: BTreeSet::new(),
@@ -108,6 +133,13 @@ impl Action {
 
     /// Apply `f` to every per-step index set (`disabled`, `dialogs`) after steps moved.
     pub(crate) fn remap_steps(&mut self, f: impl Fn(usize) -> Option<usize>) {
+        let mut origins = vec![None; self.steps.len()];
+        for (index, origin) in self.library_steps.iter().enumerate() {
+            if let Some(to) = f(index).and_then(|to| origins.get_mut(to)) {
+                *to = origin.clone();
+            }
+        }
+        self.library_steps = origins;
         self.disabled = self.disabled.iter().filter_map(|&i| f(i)).collect();
         self.dialogs = self.dialogs.iter().filter_map(|&i| f(i)).collect();
     }
@@ -122,21 +154,17 @@ impl Action {
     }
 }
 
-/// On-disk form of [`ActionState::list`] (`actions.json` in the preset store).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct ActionsFile {
-    pub version: u32,
-    pub actions: Vec<Action>,
-}
-
 pub const MAX_PLAYBACK_STEPS: u64 = 100_000;
 
-/// Actions list and the recording / playback flags. Only `list` is persisted.
+/// Actions library and recording / playback flags. The ATN codec persists definitions and rows.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ActionState {
     pub list: Vec<Action>,
-    /// An unpublished editor value. Neither it nor its capture is part of actions.json.
+    /// Raw archive and physical rows, not a second name-keyed persisted library.
+    #[serde(skip)]
+    pub library: library::Library,
+    /// An unpublished editor value. Neither it nor its capture is part of the ATN library.
     #[serde(skip)]
     pub editor: Option<editor::Draft>,
     /// The shell owns a capture/preview across a step dialog. The opaque lease releases it.
@@ -506,7 +534,7 @@ fn record(s: &mut Session, p: &Value) -> Result<Value> {
         }
         let set = match p.get("set") {
             None | Some(Value::Null) => None,
-            // An existing set, empty ones included, keeps its exact name (an older actions.json or
+            // An existing set, empty ones included, keeps its exact name (a legacy library or
             // a `.atn` may pad it); a new one is trimmed.
             Some(Value::String(n)) if crate::actions_edit_cmds::set_names(s).contains(n) => Some(n.clone()),
             Some(Value::String(n)) if !n.trim().is_empty() => Some(n.trim().to_string()),
@@ -1133,6 +1161,9 @@ pub fn specs() -> Vec<CommandSpec> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod library_atn_tests;
 
 #[cfg(test)]
 mod security_tests {

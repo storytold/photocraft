@@ -188,7 +188,7 @@ fn objects(entries: &[Vec<u8>]) -> Result<Vec<u8>> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct Source {
+pub(crate) struct Source {
     wrapper: Vec<u8>,
     outer: RawDescriptor,
     root: RawDescriptor,
@@ -237,6 +237,8 @@ pub(super) fn empty_source(state: &ActionState, slot: usize) -> Option<Arc<SetMe
 
 pub(super) fn install_row(state: &mut ActionState, name: &str, source: Option<Arc<SetMetadata>>) {
     let slot = state.sets.len();
+    state.library.rows.resize(slot, None);
+    state.library.rows.push(None);
     state.sets.push(name.to_string());
     if let Some(source) = source {
         state.atn_set_rows.push(SetRowMetadata { slot, row: name.to_string(), source });
@@ -253,6 +255,9 @@ pub(crate) fn duplicate_set_rows(state: &mut ActionState, source: &str, name: &s
         copied.push(group_source(state, source));
     }
     let count = copied.len();
+    state.library.rows.resize(state.sets.len(), None);
+    let raw: Vec<_> = if rows.is_empty() { vec![None] } else { rows.iter().map(|&slot| state.library.rows.get(slot).cloned().flatten()).collect() };
+    state.library.rows.splice(at..at, raw);
     for entry in &mut state.atn_set_rows {
         if entry.slot >= at {
             entry.slot = entry.slot.saturating_add(count);
@@ -271,6 +276,7 @@ pub(crate) fn retire_sets(state: &mut ActionState, names: &std::collections::Has
     let metadata: std::collections::BTreeMap<usize, SetRowMetadata> =
         std::mem::take(&mut state.atn_set_rows).into_iter().map(|entry| (entry.slot, entry)).collect();
     let rows = std::mem::take(&mut state.sets);
+    let origins = std::mem::take(&mut state.library.rows);
     for (old, row) in rows.into_iter().enumerate() {
         if names.contains(&row) {
             continue;
@@ -279,6 +285,7 @@ pub(crate) fn retire_sets(state: &mut ActionState, names: &std::collections::Has
         if let Some(entry) = metadata.get(&old).filter(|entry| entry.row == row) {
             state.atn_set_rows.push(SetRowMetadata { slot, row: row.clone(), source: entry.source.clone() });
         }
+        state.library.rows.push(origins.get(old).cloned().flatten());
         state.sets.push(row);
     }
 }
@@ -319,16 +326,17 @@ pub(crate) fn assign_set_metadata(state: &mut ActionState, action: usize, target
     }
 }
 
-pub(super) fn selection<'a>(state: &ActionState, action: &'a Action) -> Selection<'a> {
+pub(crate) fn selection<'a>(state: &ActionState, action: &'a Action) -> Selection<'a> {
     let source =
         action.atn_metadata.as_ref().and_then(|metadata| metadata.set.clone()).or_else(|| group_source(state, super::logical_set_name(action.set.as_deref())));
-    Selection { actions: vec![action], source }
+    Selection { actions: vec![action], source, raw: state.library.row_source(&state.sets, action) }
 }
 
-pub(super) fn groups<'a>(state: &'a ActionState, only: Option<&str>) -> Result<Vec<(&'a str, Selection<'a>)>> {
+pub(crate) fn groups<'a>(state: &'a ActionState, only: Option<&str>) -> Result<Vec<(&'a str, Selection<'a>)>> {
     if state.list.len() > atn::MAX_TOTAL_ACTIONS || state.sets.len() > atn::MAX_SETS {
         return Err("action library exceeds archive limits".into());
     }
+    let raw_rows = state.library.row_index(&state.sets);
     let mut names = std::collections::HashSet::new();
     let mut out: Vec<(&str, Selection<'a>)> = Vec::new();
     for name in state.list.iter().map(|action| super::logical_set_name(action.set.as_deref())).chain(state.sets.iter().map(String::as_str)) {
@@ -339,8 +347,10 @@ pub(super) fn groups<'a>(state: &'a ActionState, only: Option<&str>) -> Result<V
         let before = out.len();
         for action in state.list.iter().filter(|action| super::logical_set_name(action.set.as_deref()) == name) {
             let source = action.atn_metadata.as_ref().and_then(|metadata| metadata.set.clone()).or_else(|| fallback.clone());
+            let raw = raw_rows.source(action);
             let existing = out.last_mut().filter(|(previous, selection)| {
                 *previous == name
+                    && selection.raw == raw
                     && match (&selection.source, &source) {
                         (None, None) => true,
                         (Some(left), Some(right)) => same_set(left, right),
@@ -353,16 +363,25 @@ pub(super) fn groups<'a>(state: &'a ActionState, only: Option<&str>) -> Result<V
                 if out.len() >= atn::MAX_SETS {
                     return Err("too many sets in actions archive".into());
                 }
-                out.push((name, Selection { actions: vec![action], source }));
+                out.push((name, Selection { actions: vec![action], source, raw }));
             }
         }
         for (slot, _) in state.sets.iter().enumerate().filter(|(_, row)| row.as_str() == name) {
+            let raw = state.library.rows.get(slot).cloned().flatten();
+            if let Some(raw) = raw.as_ref() {
+                if !out.iter().skip(before).any(|(_, selection)| selection.raw.as_ref() == Some(raw)) {
+                    if out.len() >= atn::MAX_SETS {
+                        return Err("too many sets in actions archive".into());
+                    }
+                    out.push((name, Selection { actions: Vec::new(), source: empty_source(state, slot), raw: Some(raw.clone()) }));
+                }
+            }
             if let Some(source) = empty_source(state, slot) {
                 if !out.iter().skip(before).any(|(_, selection)| selection.source.as_ref().is_some_and(|existing| same_set(existing, &source))) {
                     if out.len() >= atn::MAX_SETS {
                         return Err("too many sets in actions archive".into());
                     }
-                    out.push((name, Selection { actions: Vec::new(), source: Some(source) }));
+                    out.push((name, Selection { actions: Vec::new(), source: Some(source), raw: state.library.rows.get(slot).cloned().flatten() }));
                 }
             }
         }
@@ -370,7 +389,7 @@ pub(super) fn groups<'a>(state: &'a ActionState, only: Option<&str>) -> Result<V
             if out.len() >= atn::MAX_SETS {
                 return Err("too many sets in actions archive".into());
             }
-            out.push((name, Selection { actions: Vec::new(), source: fallback }));
+            out.push((name, Selection { actions: Vec::new(), source: fallback, raw: None }));
         }
     }
     // Preserve physical rows only when doing so preserves the panel's group/action order.
@@ -382,10 +401,17 @@ pub(super) fn groups<'a>(state: &'a ActionState, only: Option<&str>) -> Result<V
             slots.entry(key).and_modify(|slot: &mut usize| *slot = (*slot).min(row.slot)).or_insert(row.slot);
         }
     }
+    let raw_slots: std::collections::HashMap<_, _> =
+        state.library.rows.iter().enumerate().filter_map(|(slot, source)| Some(((state.sets.get(slot)?.as_str(), source.as_ref()?.key()), slot))).collect();
     let mut physical: Vec<_> = (0..out.len()).collect();
     physical.sort_by_cached_key(|&index| {
         let (name, selection) = &out[index];
-        selection.source.as_ref().and_then(|source| slots.get(&(*name, Arc::as_ptr(&source.source), source.ordinal)).copied()).unwrap_or(usize::MAX)
+        selection
+            .raw
+            .as_ref()
+            .and_then(|raw| raw_slots.get(&(*name, raw.key())).copied())
+            .or_else(|| selection.source.as_ref().and_then(|source| slots.get(&(*name, Arc::as_ptr(&source.source), source.ordinal)).copied()))
+            .unwrap_or(usize::MAX)
     });
     if panel_projection(&out, 0..out.len()) != panel_projection(&out, physical.iter().copied()) {
         return Ok(out);
@@ -394,7 +420,7 @@ pub(super) fn groups<'a>(state: &'a ActionState, only: Option<&str>) -> Result<V
         .into_iter()
         .map(|index| {
             let (name, selection) = &out[index];
-            (*name, Selection { actions: selection.actions.clone(), source: selection.source.clone() })
+            (*name, Selection { actions: selection.actions.clone(), source: selection.source.clone(), raw: selection.raw.clone() })
         })
         .collect())
 }
@@ -420,10 +446,11 @@ fn panel_projection<'a>(groups: &[(&'a str, Selection<'a>)], order: impl IntoIte
     nonempty.into_iter().map(|name| (name, actions.remove(name).unwrap_or_default())).collect()
 }
 
-pub(super) struct Decoded {
-    pub(super) hidden: Option<usize>,
-    pub(super) sets: Vec<Option<Arc<SetMetadata>>>,
-    pub(super) actions: Vec<Vec<Option<ActionMetadata>>>,
+pub(crate) struct Decoded {
+    pub(crate) hidden: Option<usize>,
+    pub(crate) sets: Vec<Option<Arc<SetMetadata>>>,
+    pub(crate) actions: Vec<Vec<Option<ActionMetadata>>>,
+    pub(crate) source: Option<Arc<Source>>,
 }
 
 fn unique<'a>(descriptor: &'a Descriptor, key: &str) -> Result<&'a D> {
@@ -466,8 +493,33 @@ fn payload(file: &AtnFile) -> Option<&[u8]> {
     bytes.get(4..)
 }
 
+pub(crate) fn is_wrapper(file: &AtnFile) -> bool {
+    payload(file).is_some()
+}
+
+pub(crate) fn legacy_origin(source: Option<&Source>) -> Result<Option<crate::actions_cmds::library::LegacyOrigin>> {
+    let Some(source) = source else { return Ok(None) };
+    let root = source.root.parsed()?;
+    let mut fields = root.items.iter().filter(|(id, _)| id.is("photocraftLegacyJsonV1"));
+    let Some((_, value)) = fields.next() else { return Ok(None) };
+    if fields.next().is_some() {
+        return Err("duplicate legacy Actions origin".into());
+    }
+    let D::Descriptor(value) = value else { return Err("invalid legacy Actions origin".into()) };
+    crate::actions_cmds::library::LegacyOrigin::from_descriptor(value).map(Some)
+}
+
 pub(super) fn decode(files: &[AtnFile]) -> Result<Decoded> {
-    let mut result = Decoded { hidden: None, sets: vec![None; files.len()], actions: files.iter().map(|file| vec![None; file.actions.len()]).collect() };
+    decode_inner(files, false, None)
+}
+
+pub(crate) fn decode_library(files: &[AtnFile], raw_outer: Option<&[u8]>) -> Result<Decoded> {
+    decode_inner(files, true, raw_outer)
+}
+
+fn decode_inner(files: &[AtnFile], library: bool, raw_outer: Option<&[u8]>) -> Result<Decoded> {
+    let mut result =
+        Decoded { hidden: None, sets: vec![None; files.len()], actions: files.iter().map(|file| vec![None; file.actions.len()]).collect(), source: None };
     for (hidden, file) in files.iter().enumerate() {
         let Some(bytes) = payload(file) else { continue };
         if hidden.checked_add(1) != Some(files.len()) {
@@ -482,7 +534,7 @@ pub(super) fn decode(files: &[AtnFile]) -> Result<Decoded> {
             return Err("unsupported Actions sidecar root".into());
         }
         let sets = root.list("sets")?;
-        if sets.is_empty() {
+        if sets.is_empty() && !library {
             return Err("Actions sidecar requires at least one real set".into());
         }
         if sets.len().checked_add(1) != Some(files.len()) {
@@ -493,14 +545,18 @@ pub(super) fn decode(files: &[AtnFile]) -> Result<Decoded> {
         unique(descriptor, MODERN)?;
         unique(descriptor, "Msge")?;
         unique(descriptor, "Cntn")?;
-        let outer = RawDescriptor::new(&descriptor.to_bytes())?;
+        let outer = match raw_outer {
+            Some(bytes) => RawDescriptor::new(bytes)?,
+            None => RawDescriptor::new(&descriptor.to_bytes())?,
+        };
         let outer_signature = outer.patch(&[(MODERN, Some(value_bytes(D::RawData(Vec::new()))?))])?;
         let mut signature_file = file.clone();
         let signature_item = signature_file.actions.first_mut().and_then(|action| action.items.first_mut()).ok_or("missing sidecar signature item")?;
         signature_item.descriptor = Some(Descriptor::from_bytes(&outer_signature).map_err(|error| error.to_string())?);
         let mut signature = atn::write(&signature_file).map_err(|error| error.to_string())?;
-        signature.extend(root.patch(&[("sets", Some(objects(&[])?))])?);
+        signature.extend(root.patch(&[("sets", Some(objects(&[])?)), ("photocraftLegacyJsonV1", None)])?);
         let source = Arc::new(Source { wrapper: atn::write(file).map_err(|error| error.to_string())?, outer, root, signature });
+        result.source = Some(source.clone());
         let mut ordinal = 0usize;
         for (index, real) in files.iter().enumerate().filter(|(index, _)| *index != hidden) {
             let raw = sets.get(ordinal).ok_or("missing positional sidecar set")?.clone();
@@ -562,7 +618,7 @@ pub(super) fn decode(files: &[AtnFile]) -> Result<Decoded> {
     Ok(result)
 }
 
-pub(super) fn apply(action: &mut Action, metadata: ActionMetadata) {
+pub(crate) fn apply(action: &mut Action, metadata: ActionMetadata) {
     action.description = metadata.description.clone();
     action.icon = metadata.icon.clone();
     action.atn_metadata = Some(metadata);
@@ -598,9 +654,10 @@ fn entry(action: &Action) -> Result<Vec<u8>> {
         .to_bytes())
 }
 
-pub(super) struct Selection<'a> {
-    pub(super) actions: Vec<&'a Action>,
-    pub(super) source: Option<Arc<SetMetadata>>,
+pub(crate) struct Selection<'a> {
+    pub(crate) actions: Vec<&'a Action>,
+    pub(crate) source: Option<Arc<SetMetadata>>,
+    pub(crate) raw: Option<crate::actions_cmds::library::RowOrigin>,
 }
 
 pub(super) fn source_for(actions: &[&Action]) -> Result<Option<Arc<SetMetadata>>> {
@@ -618,6 +675,26 @@ pub(super) fn source_for(actions: &[&Action]) -> Result<Option<Arc<SetMetadata>>
 }
 
 pub(super) fn append(files: &mut Vec<AtnFile>, selected: &[Selection<'_>]) -> Result<()> {
+    append_inner(files, selected, false, None, None).map(|_| ())
+}
+
+pub(crate) fn append_library(
+    files: &mut Vec<AtnFile>,
+    selected: &[Selection<'_>],
+    source: Option<Arc<Source>>,
+    receipt: Option<&crate::actions_cmds::library::LegacyOrigin>,
+) -> Result<Option<Vec<u8>>> {
+    let force = files.is_empty() || receipt.is_some() || source.is_some();
+    append_inner(files, selected, force, source, receipt)
+}
+
+fn append_inner(
+    files: &mut Vec<AtnFile>,
+    selected: &[Selection<'_>],
+    force: bool,
+    source: Option<Arc<Source>>,
+    receipt: Option<&crate::actions_cmds::library::LegacyOrigin>,
+) -> Result<Option<Vec<u8>>> {
     if files.len() != selected.len() {
         return Err("sidecar export selection mismatch".into());
     }
@@ -625,8 +702,8 @@ pub(super) fn append(files: &mut Vec<AtnFile>, selected: &[Selection<'_>]) -> Re
         selection.source.is_some()
             || selection.actions.iter().any(|action| action.atn_metadata.is_some() || !action.description.is_empty() || !action.icon.is_empty())
     });
-    if !needed {
-        return Ok(());
+    if !needed && !force {
+        return Ok(None);
     }
     let actions = files.iter().try_fold(1usize, |count, file| count.checked_add(file.actions.len())).ok_or("sidecar action count overflow")?;
     let steps = files
@@ -637,7 +714,7 @@ pub(super) fn append(files: &mut Vec<AtnFile>, selected: &[Selection<'_>]) -> Re
     if files.len() >= atn::MAX_SETS || actions > atn::MAX_TOTAL_ACTIONS || steps > atn::MAX_TOTAL_ITEMS {
         return Err("actions archive leaves no space for its metadata sidecar".into());
     }
-    let mut source: Option<Arc<Source>> = None;
+    let mut source: Option<Arc<Source>> = source;
     let mut sets = Vec::with_capacity(selected.len());
     let mut set_bytes = 8usize;
     for selection in selected {
@@ -685,6 +762,11 @@ pub(super) fn append(files: &mut Vec<AtnFile>, selected: &[Selection<'_>]) -> Re
         Some(source) => source.root.patch(&[("sets", Some(objects(&sets)?))])?,
         None => RawDescriptor::new(&Descriptor::new("null").with("sets", D::List(Vec::new())).to_bytes())?.patch(&[("sets", Some(objects(&sets)?))])?,
     };
+    let root = if let Some(receipt) = receipt {
+        RawDescriptor::new(&root)?.patch(&[("photocraftLegacyJsonV1", Some(value_bytes(D::Descriptor(receipt.descriptor()?))?))])?
+    } else {
+        root
+    };
     let mut payload = 16u32.to_be_bytes().to_vec();
     extend(&mut payload, &root)?;
     let outer = match &source {
@@ -719,7 +801,7 @@ pub(super) fn append(files: &mut Vec<AtnFile>, selected: &[Selection<'_>]) -> Re
     let item = wrapper.actions.first_mut().and_then(|action| action.items.first_mut()).ok_or("missing output sidecar wrapper")?;
     item.descriptor = Some(descriptor);
     files.push(wrapper);
-    Ok(())
+    Ok(Some(outer))
 }
 
 #[cfg(test)]

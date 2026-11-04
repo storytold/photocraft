@@ -214,8 +214,12 @@ mod batch_action_set_tests {
             {"name": "Bad", "steps": [["layer.delete", {"layer": 999_999}]]},
             {"name": "Loop", "steps": [["actions.play", {"action": "Loop"}]]},
         ]});
-        std::fs::write(dir.join("actions.json"), set.to_string()).unwrap();
-        let batch = |action: &str| invoke(&["batch", "--actions", &path("actions.json"), "--action", action, "--in", &path("in"), "--out", &path(action)]);
+        let actions: Vec<photocraft_engine::actions_cmds::Action> = serde_json::from_value(set["actions"].clone()).unwrap();
+        let refs: Vec<_> = actions.iter().collect();
+        let (atn, skipped) = photocraft_engine::atn_cmds::export("CLI tests", &refs, &[], false).unwrap();
+        assert!(skipped.is_empty());
+        std::fs::write(dir.join("actions.atn"), atn).unwrap();
+        let batch = |action: &str| invoke(&["batch", "--actions", &path("actions.atn"), "--action", action, "--in", &path("in"), "--out", &path(action)]);
 
         let Invoke { code, stdout, stderr } = batch("Outer");
         assert_eq!(code, 0, "{stdout}{stderr}");
@@ -254,10 +258,14 @@ mod batch_action_set_tests {
                 ["file.saveAs", {}],
             ], "disabled": [3], "dialogs": [1]},
         ]});
-        std::fs::write(dir.join("actions.json"), set.to_string()).unwrap();
+        let actions: Vec<photocraft_engine::actions_cmds::Action> = serde_json::from_value(set["actions"].clone()).unwrap();
+        let refs: Vec<_> = actions.iter().collect();
+        let (atn, skipped) = photocraft_engine::atn_cmds::export("CLI tests", &refs, &[], false).unwrap();
+        assert!(skipped.is_empty());
+        std::fs::write(dir.join("actions.atn"), atn).unwrap();
         for action in ["Outer", "Rotate"] {
             let Invoke { code, stdout, stderr } =
-                invoke(&["batch", "--actions", &path("actions.json"), "--action", action, "--in", &path("in"), "--out", &path(action)]);
+                invoke(&["batch", "--actions", &path("actions.atn"), "--action", action, "--in", &path("in"), "--out", &path(action)]);
             assert_eq!(code, 0, "{stdout}{stderr}");
             let Invoke { code, stdout: info, stderr } = invoke(&["info", &path(&format!("{action}/a.png")), "--compact"]);
             assert_eq!(code, 0, "{stderr}");

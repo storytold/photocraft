@@ -15,6 +15,17 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let (bytes, _) = crate::preset_import_cmds::file_bytes(p, cmd, ".atn file")?;
     let mut imp = import_with_encoding(&bytes, encoding).map_err(|e| bad(cmd, e))?;
+    // Legacy imports still use the existing conversion route. Version16 additionally keeps
+    // raw occurrences; normalization of the external import remains a deliberate edit.
+    let provenance = crate::actions_cmds::library::decode(&bytes).ok();
+    if let Some(raw) = &provenance {
+        for (action, original) in imp.actions.iter_mut().zip(&raw.list) {
+            crate::actions_cmds::library::bind_import(action, original);
+        }
+        for (index, set) in imp.sets.iter_mut().enumerate() {
+            set.metadata = sidecar::empty_source(raw, index);
+        }
+    }
     match p.get("set") {
         None | Some(Value::Null) => {}
         Some(Value::String(n)) if !n.trim().is_empty() => {
@@ -69,7 +80,7 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
     drop(old_groups);
     let previous_rows: std::collections::HashSet<String> = s.actions.sets.iter().filter(|name| targets.contains(*name)).cloned().collect();
     let old_rows = s.actions.sets.iter().filter(|name| !replace || !targets.contains(*name)).count();
-    let new_rows = if imp.sets.iter().any(|set| set.metadata.is_some()) {
+    let new_rows = if provenance.is_some() || imp.sets.iter().any(|set| set.metadata.is_some()) {
         imp.sets.len()
     } else {
         imp.sets
@@ -150,9 +161,13 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
         sidecar::retire_sets(&mut s.actions, &targets);
     }
     s.actions.list.extend(added);
-    for set in imp.sets {
-        if set.metadata.is_some() {
+    for (index, set) in imp.sets.into_iter().enumerate() {
+        if provenance.is_some() || set.metadata.is_some() {
+            let slot = s.actions.sets.len();
             sidecar::install_row(&mut s.actions, &set.name, set.metadata);
+            if let Some(raw) = &provenance {
+                crate::actions_cmds::library::import_row(&mut s.actions, raw, index, slot);
+            }
         } else if (set.actions.is_empty() || previous_rows.contains(&set.name)) && !s.actions.sets.contains(&set.name) {
             sidecar::install_row(&mut s.actions, &set.name, None);
         }
@@ -190,7 +205,7 @@ pub(super) fn save(s: &mut Session, p: &Value) -> Result<Value> {
     let set_param = match p.get("set") {
         None | Some(Value::Null) => None,
         // A set is found by its exact name, as `actions.record` finds it: one loaded from a
-        // Photoshop file or an older actions.json may have surrounding spaces. Others are trimmed.
+        // Photoshop file or a legacy library may have surrounding spaces. Others are trimmed.
         Some(Value::String(n)) if crate::actions_edit_cmds::set_names(s).contains(n) => Some(n.clone()),
         Some(Value::String(n)) if !n.trim().is_empty() => Some(n.trim().to_string()),
         Some(_) => return Err(bad(cmd, "`set` must be a non-empty string")),
@@ -227,7 +242,9 @@ pub(super) fn save(s: &mut Session, p: &Value) -> Result<Value> {
     let steps: usize = groups.iter().flat_map(|(_, selection)| &selection.actions).map(|action| action.steps.len()).sum();
     let borrowed: Vec<_> = groups
         .iter()
-        .map(|(name, selection)| (name.as_str(), sidecar::Selection { actions: selection.actions.clone(), source: selection.source.clone() }))
+        .map(|(name, selection)| {
+            (name.as_str(), sidecar::Selection { actions: selection.actions.clone(), source: selection.source.clone(), raw: selection.raw.clone() })
+        })
         .collect();
     let (bytes, skipped) = export_groups(&borrowed, &keys, skip).map_err(|error| bad(cmd, error))?;
     let steps = steps.saturating_sub(skipped.len());

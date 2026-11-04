@@ -1169,7 +1169,7 @@ fn actions_persist_with_the_preset_store() {
     let names: Vec<String> = early.actions.list.iter().map(|a| a.name.clone()).collect();
     assert!(names.contains(&"Early".into()) && names.contains(&"Kept".into()), "{names:?}");
 
-    std::fs::write(dir.join("actions.json"), b"{").unwrap();
+    std::fs::write(dir.join(crate::preset_store::ACTIONS_FILE), b"broken ATN").unwrap();
     let mut bad = Session::new();
     let warnings = bad.attach_preset_store(crate::preset_store::open_dir(&dir));
     assert!(warnings.iter().any(|w| w.contains("actions")), "{warnings:?}");
@@ -1292,7 +1292,7 @@ fn arrange_that_cannot_move_is_a_noop_in_playback() {
 }
 
 /// #10459 review: recording into an existing set keeps that set's exact name, even one with
-/// surrounding spaces (from an older actions.json); a new set name is trimmed.
+/// surrounding spaces (from a legacy library); a new set name is trimmed.
 #[test]
 fn record_keeps_an_existing_sets_exact_name() {
     let mut s = Session::new();

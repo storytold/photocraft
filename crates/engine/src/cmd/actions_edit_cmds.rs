@@ -269,7 +269,7 @@ fn new_set(s: &mut Session, p: &Value) -> Result<Value> {
     if names.contains(&name) {
         return Err(bad(cmd, format!("a set named `{name}` already exists")));
     }
-    s.actions.sets.push(name.clone());
+    crate::atn_cmds::sidecar::install_row(&mut s.actions, &name, None);
     s.actions.touch();
     Ok(json!({"set": name}))
 }

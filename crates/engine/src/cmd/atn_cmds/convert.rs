@@ -79,13 +79,24 @@ pub(super) fn clip_name(s: &str) -> String {
     s.chars().take(MAX_NAME_CHARS).collect()
 }
 
-fn convert_action(file: &AtnFile, a: &AtnAction, set: &str, unsupported: &mut Vec<Unsupported>, total: &mut usize) -> std::result::Result<Action, String> {
+fn convert_action(
+    file: &AtnFile,
+    a: &AtnAction,
+    set: &str,
+    unsupported: &mut Vec<Unsupported>,
+    total: &mut usize,
+    mut cohorts: Option<&mut Vec<std::ops::Range<usize>>>,
+) -> std::result::Result<Action, String> {
     let name = clip_name(&a.name.to_string_lossy());
     let mut action = Action::new(name.clone(), Vec::new());
     action.set = Some(clip_name(set));
     action.color = color_from_atn(a.color);
     for (i, item) in a.items.iter().enumerate() {
-        let mapped = if super::sidecar::has_payload(item) {
+        let native = read_native(item)?;
+        let is_native = native.is_some();
+        let mapped = if let Some(step) = native {
+            Mapped::Steps(vec![step])
+        } else if super::sidecar::has_payload(item) {
             // An unrecognized metadata-bearing Stop stays visible/opaque, never silently loses its payload.
             Mapped::Unsupported { harmless: false }
         } else {
@@ -106,12 +117,15 @@ fn convert_action(file: &AtnFile, a: &AtnAction, set: &str, unsupported: &mut Ve
                 (vec![photoshop_step(item, label)], item.enabled && !harmless)
             }
         };
+        let start = action.steps.len();
         for mut s in new_steps {
             *total = total.checked_add(1).filter(|total| *total <= atn::MAX_TOTAL_ITEMS).ok_or("too many converted steps in actions archive")?;
             if action.steps.len() >= atn::MAX_ITEMS {
                 return Err("too many converted steps in one action".into());
             }
-            normalise(&mut s.1);
+            if !is_native {
+                normalise(&mut s.1);
+            }
             let idx = action.steps.len();
             action.steps.push(s);
             if !enabled {
@@ -121,8 +135,93 @@ fn convert_action(file: &AtnFile, a: &AtnAction, set: &str, unsupported: &mut Ve
                 action.dialogs.insert(idx);
             }
         }
+        if let Some(cohorts) = cohorts.as_deref_mut() {
+            cohorts.push(start..action.steps.len());
+        }
     }
     Ok(action)
+}
+
+/// Strict library projection retains full display strings; raw origins retain exact UTF16 bytes.
+pub(crate) fn library_action(file: &AtnFile, action: &AtnAction, set: &str) -> std::result::Result<(Action, Vec<std::ops::Range<usize>>), String> {
+    let mut cohorts = Vec::new();
+    let mut unsupported = Vec::new();
+    let mut total = 0;
+    let mut value = convert_action(file, action, set, &mut unsupported, &mut total, Some(&mut cohorts))?;
+    value.name = action.name.to_string_lossy();
+    value.set = (!set.is_empty()).then(|| set.to_string());
+    // The durable library reflects its wire flags. The external importer may deliberately
+    // switch harmless unsupported steps off; bind_import treats that as an actual flag edit.
+    for (item, cohort) in action.items.iter().zip(&cohorts) {
+        for index in cohort.clone() {
+            if item.enabled {
+                value.disabled.remove(&index);
+            } else {
+                value.disabled.insert(index);
+            }
+        }
+    }
+    Ok((value, cohorts))
+}
+
+const NATIVE_EVENT: &str = "photocraftCommand";
+
+fn native_text(descriptor: &Descriptor, key: &str) -> std::result::Result<String, String> {
+    let mut values = descriptor.items.iter().filter(|(id, _)| id.is(key));
+    let Some((_, D::Text(text))) = values.next() else { return Err(format!("native action step needs TEXT {key}")) };
+    if values.next().is_some() || text.0.len() > crate::preset_store::MAX_ACTIONS_BYTES as usize {
+        return Err(format!("duplicate or oversized native action {key}"));
+    }
+    let units = text.0.strip_suffix(&[0]).unwrap_or(&text.0);
+    String::from_utf16(units).map_err(|_| format!("invalid UTF16 native action {key}"))
+}
+
+fn read_native(item: &AtnItem) -> std::result::Result<Option<(String, Value)>, String> {
+    if item.event != AtnEvent::name(NATIVE_EVENT) {
+        return Ok(None);
+    }
+    let descriptor = item.descriptor.as_ref().ok_or("missing native action descriptor")?;
+    if !descriptor.class_id.is("null") || descriptor.items.len() != 2 {
+        return Err("unsupported native action descriptor".into());
+    }
+    let id = native_text(descriptor, "command")?;
+    if id.is_empty() {
+        return Err("empty native action command".into());
+    }
+    let params = native_text(descriptor, "params")?;
+    // serde's bounded recursion remains enabled; load never dispatches or resolves the command.
+    let params = serde_json::from_str(&params).map_err(|error| format!("invalid native action JSON: {error}"))?;
+    Ok(Some((id, params)))
+}
+
+pub(crate) fn native_item(id: &str, params: &Value) -> std::result::Result<AtnItem, String> {
+    let params = serde_json::to_string(params).map_err(|error| error.to_string())?;
+    if id.is_empty() || id.len() > crate::preset_store::MAX_ACTIONS_BYTES as usize || params.len() > crate::preset_store::MAX_ACTIONS_BYTES as usize {
+        return Err("empty or oversized native action step".into());
+    }
+    Ok(AtnItem {
+        event: AtnEvent::name(NATIVE_EVENT),
+        dictionary: id.as_bytes().to_vec(),
+        descriptor: Some(desc("null").with("command", D::Text(UnicodeString::new(id))).with("params", D::Text(UnicodeString::new(&params)))),
+        ..Default::default()
+    })
+}
+
+/// Use a Photoshop event only when it preserves this exact native step shape/options.
+pub(crate) fn library_items(id: &str, params: &Value, set: &str) -> std::result::Result<Vec<AtnItem>, String> {
+    if id == PHOTOSHOP_STEP {
+        return export_items(id, params, set).ok_or_else(|| "invalid kept Photoshop step".to_string());
+    }
+    if let Some(items) = export_items(id, params, set) {
+        let file = AtnFile { name: UnicodeString::new_nul(set), ..Default::default() };
+        let action = AtnAction { items: items.clone(), ..Default::default() };
+        if let Ok((roundtrip, _)) = library_action(&file, &action, set) {
+            if roundtrip.steps == [(id.to_string(), params.clone())] {
+                return Ok(items);
+            }
+        }
+    }
+    Ok(vec![native_item(id, params)?])
 }
 
 /// Convert a `.atn` file. Fails only when the file is unreadable: every step imports, as a
@@ -170,7 +269,7 @@ pub fn import_with_encoding(bytes: &[u8], encoding: Option<&str>) -> std::result
         }
         let start = out.actions.len();
         for (at, action) in file.actions.iter().enumerate() {
-            let mut converted = convert_action(file, action, &set, &mut out.unsupported, &mut total)?;
+            let mut converted = convert_action(file, action, &set, &mut out.unsupported, &mut total, None)?;
             if let Some(value) = metadata.actions.get_mut(index).and_then(|actions| actions.get_mut(at)).and_then(Option::take) {
                 super::sidecar::apply(&mut converted, value);
             }
@@ -234,7 +333,7 @@ pub(super) fn export_item(id: &str, params: &Value, set: &str) -> Option<AtnItem
 
 /// Photoshop applies only the rename when a Set mixes it with opacity or blend mode (#8304).
 /// Write each layer property separately, renaming last so named references still resolve.
-fn export_items(id: &str, params: &Value, set: &str) -> Option<Vec<AtnItem>> {
+pub(super) fn export_items(id: &str, params: &Value, set: &str) -> Option<Vec<AtnItem>> {
     let item = export_item(id, params, set)?;
     if id != "layer.setProps" {
         return Some(vec![item]);
@@ -280,7 +379,7 @@ pub fn parse_function_key(key: &str) -> Option<(u16, bool, bool)> {
 }
 
 /// The `.atn` bytes of `actions` as the set `set`. `function_keys` gives each action's key
-/// (`F1`…`F15`, with `Shift+` and `Cmd+` as [`function_key_name`] writes them). Steps with no Photoshop equivalent are an error unless `skip_unsupported`.
+/// (`F1`…`F15`, with `Shift+` and `Cmd+` as [`function_key_name`] writes them). PhotoCraft-only steps use the reserved native event, or are omitted with `skip_unsupported`.
 pub fn export(
     set: &str,
     actions: &[&Action],
@@ -290,7 +389,7 @@ pub fn export(
     if actions.len() > atn::MAX_TOTAL_ACTIONS {
         return Err("too many actions in actions archive".into());
     }
-    let selection = super::sidecar::Selection { actions: actions.to_vec(), source: super::sidecar::source_for(actions)? };
+    let selection = super::sidecar::Selection { actions: actions.to_vec(), source: super::sidecar::source_for(actions)?, raw: None };
     export_groups(&[(set, selection)], function_keys, skip_unsupported)
 }
 
@@ -322,8 +421,10 @@ pub(super) fn export_groups(
     for (set, selection) in groups {
         files.push(export_set(set, &selection.actions, function_keys, skip_unsupported, &mut skipped, &mut written)?);
     }
-    let selected: Vec<_> =
-        groups.iter().map(|(_, selection)| super::sidecar::Selection { actions: selection.actions.clone(), source: selection.source.clone() }).collect();
+    let selected: Vec<_> = groups
+        .iter()
+        .map(|(_, selection)| super::sidecar::Selection { actions: selection.actions.clone(), source: selection.source.clone(), raw: selection.raw.clone() })
+        .collect();
     super::sidecar::append(&mut files, &selected)?;
     let bytes = atn::write_sets(&files).map_err(|error| error.to_string())?;
     Ok((bytes, skipped))
@@ -346,21 +447,23 @@ fn export_set(
             (out.function_key, out.shift, out.command) = (n, shift, command);
         }
         for (i, (id, params)) in a.steps.iter().enumerate() {
-            let Some(items) = export_items(id, params, set) else {
-                if skip_unsupported {
-                    skipped.push(Skipped { action: a.name.clone(), step: i, id: id.clone() });
-                    continue;
+            // Portable export keeps the existing Photoshop mapping contract (including its
+            // explicit defaults). The durable library uses the stricter library_items path.
+            let items = match export_items(id, params, set) {
+                Some(items) => items,
+                None if id == PHOTOSHOP_STEP => {
+                    if skip_unsupported {
+                        skipped.push(Skipped { action: a.name.clone(), step: i, id: id.clone() });
+                        continue;
+                    }
+                    return Err("invalid kept Photoshop step".into());
                 }
-                let step_name = match params.get("layer") {
-                    Some(Value::Number(n)) => format!("`{id}` with numeric layer {n}"),
-                    _ => format!("`{id}`"),
-                };
-                return Err(format!(
-                    "step {} of `{}` ({step_name}) has no Photoshop equivalent; pass \"skipUnsupported\": true to leave it out",
-                    i + 1,
-                    a.name
-                ));
+                None => vec![native_item(id, params)?],
             };
+            if skip_unsupported && items.iter().any(|item| item.event == AtnEvent::name(NATIVE_EVENT)) {
+                skipped.push(Skipped { action: a.name.clone(), step: i, id: id.clone() });
+                continue;
+            }
             for mut item in items {
                 *written = written.checked_add(1).filter(|count| *count <= atn::MAX_TOTAL_ITEMS).ok_or("too many output steps in actions archive")?;
                 item.enabled = a.step_enabled(i);
