@@ -1081,3 +1081,16 @@ fn the_web_build_caps_memory_usage() {
         assert_eq!(honoured_memory_usage_mb(stored, false), stored, "desktop, {stored} MB");
     }
 }
+
+#[test]
+fn paths_with_empty_segments_cannot_skip_the_alternate_shortcut_limit() {
+    let mut prefs = Preferences::default();
+    let many: Vec<String> = (1..=100).map(|n| format!("F{n}")).collect();
+    for path in [".alternateShortcuts", "alternateShortcuts..", ".alternateShortcuts.file.save", "interface..systemTitleBar"] {
+        assert!(prefs.set(path, json!({"file.save": many})).is_err(), "{path}");
+    }
+    assert!(prefs.set("alternateShortcuts.file.save", json!(many)).is_err());
+    assert!(prefs.alternate_shortcuts.is_empty());
+    prefs.alternate_shortcuts.insert("file.save".into(), (1..=100).map(|n| format!("F{n}")).collect());
+    assert!(prefs.alternates("file.save", None).len() <= MAX_ALTERNATES);
+}
