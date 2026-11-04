@@ -452,3 +452,93 @@ fn make_shape_keeps_a_saved_path() {
     assert_eq!(st.doc.paths.first().map(|p| p.name.as_str()), Some("Box"));
     assert_eq!(shape_path(&app).1, st.doc.paths[0].path);
 }
+
+/// Clicks an open path with the Pen through `points`, without finishing it.
+fn draw(app: &mut PhotocraftApp, points: &[(f64, f64)]) {
+    for &(x, y) in points {
+        pen_down(app, x, y, false);
+        pen_up(app);
+    }
+}
+
+/// Make Shape while drawing into a saved path uses the path drawing began with, as the commit
+/// does, not one selected in the Paths panel since.
+#[test]
+fn make_shape_while_drawing_uses_the_path_drawing_began_with() {
+    let mut app = app();
+    square(&mut app, 20.0, 20.0, 50.0);
+    app.run("path.rename", json!({"name": "work", "to": "Box"})).unwrap();
+    app.run("path.set", json!({"name": "Other", "path": {"subpaths": [{"closed": true, "knots": [[100, 100], [150, 100], [150, 150]]}]}})).unwrap();
+    app.ui.selected_path = Some("Box".into());
+    let doc_paths = app.session.active().unwrap().doc.paths.clone();
+    draw(&mut app, &[(10.0, 150.0), (60.0, 150.0), (60.0, 190.0)]);
+    app.ui.selected_path = Some("Other".into());
+    super::make_shape(&mut app).unwrap();
+    let box_path = &doc_paths.iter().find(|p| p.name == "Box").unwrap().path;
+    let shape = shape_path(&app).1;
+    assert_eq!(shape.subpaths.len(), box_path.subpaths.len() + 1, "Box and the drawing");
+    assert_eq!(shape.subpaths[0], box_path.subpaths[0]);
+    assert_eq!(app.session.active().unwrap().doc.paths, doc_paths, "the saved paths stay as they were");
+    assert_eq!(app.ui.selected_path.as_deref(), Some("Other"), "the Paths panel selection stays");
+}
+
+/// With no Work Path and no saved path selected, Make Shape has nothing to make a shape from: the
+/// selected shape layer's own path isn't copied into a second shape layer.
+#[test]
+fn make_shape_doesnt_copy_a_shape_layers_own_path() {
+    let mut app = app();
+    app.ui.tool_options.vector_mode = "shape".into();
+    square(&mut app, 20.0, 20.0, 50.0);
+    app.ui.tool_options.vector_mode = "path".into();
+    assert_eq!(super::active_path_name(&app).as_deref(), Some("layer"));
+    let count = layers(&app);
+    let steps = app.session.active().unwrap().history.past_len();
+    assert!(super::make_shape(&mut app).is_err());
+    assert_eq!(layers(&app), count);
+    assert_eq!(app.session.active().unwrap().history.past_len(), steps);
+}
+
+/// Make Shape while drawing a new path with an unselected Work Path: the commit would have
+/// replaced the Work Path with the drawing, so the shape takes the drawing and no Work Path is
+/// left behind.
+#[test]
+fn make_shape_while_drawing_a_new_work_path_replaces_the_old_one() {
+    let mut app = app();
+    square(&mut app, 20.0, 20.0, 50.0);
+    app.ui.selected_path = None;
+    draw(&mut app, &[(10.0, 150.0), (60.0, 150.0), (60.0, 190.0)]);
+    super::make_shape(&mut app).unwrap();
+    let st = app.session.active().unwrap();
+    assert!(st.doc.work_path.is_none(), "the old Work Path is gone, as after a commit and Make Shape");
+    let shape = shape_path(&app).1;
+    assert_eq!(shape.subpaths.len(), 1);
+    assert_eq!(shape.subpaths[0].knots[0].anchor, photocraft_geom::Point::new(10.0, 150.0));
+}
+
+/// A draft begun in Shape mode that carries on an open subpath of a shape layer, with the mode
+/// switched to Path before Make Shape: the layer keeps its other subpaths, extended in one step,
+/// as the commit does, and no second layer copies part of it.
+#[test]
+fn make_shape_on_a_resumed_shape_layer_draft_keeps_its_other_subpaths() {
+    let mut app = app();
+    app.ui.tool_options.vector_mode = "shape".into();
+    draw(&mut app, &[(20.0, 20.0), (80.0, 20.0)]);
+    assert!(super::pen_commit(&mut app, false));
+    app.ui.tool_options.pen_path_op = "combine".into();
+    square(&mut app, 100.0, 100.0, 40.0);
+    let (id, before) = shape_path(&app);
+    assert_eq!(before.subpaths.len(), 2);
+    let count = layers(&app);
+    let steps = app.session.active().unwrap().history.past_len();
+    draw(&mut app, &[(80.0, 20.0), (80.0, 80.0)]);
+    assert!(app.ui.pen.as_ref().is_some_and(|p| p.resumes.is_some()), "drawing carries on the open subpath");
+    app.ui.tool_options.vector_mode = "path".into();
+    super::make_shape(&mut app).unwrap();
+    assert_eq!(layers(&app), count, "no second layer");
+    let (now, after) = shape_path(&app);
+    assert_eq!(now, id);
+    assert_eq!(after.subpaths.len(), 2, "the square stays");
+    assert_eq!(after.subpaths[0].knots.len(), 3, "the open subpath, extended");
+    assert_eq!(after.subpaths[1], before.subpaths[1]);
+    assert_eq!(app.session.active().unwrap().history.past_len(), steps + 1);
+}

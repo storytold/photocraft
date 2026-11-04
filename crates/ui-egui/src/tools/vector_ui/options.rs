@@ -109,7 +109,8 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                 app.ui.status_error = true;
             }
             // Make: Shape turns the path into a shape layer with the shape fill and stroke (#10934).
-            if ui.add_enabled(has_path, egui::Button::new(tl!("Make Shape"))).clicked()
+            let has_shape_path = super::path_ops::shape_source_path(app).is_some() || app.ui.pen.as_ref().is_some_and(|p| p.knots.len() >= 2);
+            if ui.add_enabled(has_shape_path, egui::Button::new(tl!("Make Shape"))).clicked()
                 && let Err(e) = super::make_shape(app)
             {
                 app.ui.status = e;
