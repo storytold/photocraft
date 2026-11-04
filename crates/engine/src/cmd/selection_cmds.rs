@@ -656,6 +656,11 @@ fn polygon_rows(pts: &[(f32, f32)], area: Rect) -> Rect {
 /// [`polygon_rows`] cut to the columns the polygon spans (a pixel either side for coverage).
 fn polygon_window_rect(pts: &[(f32, f32)], area: Rect) -> Rect {
     let rows = polygon_rows(pts, area);
+    // A non-finite x (JSON `1e40` is `inf` as f32) makes spans whose columns a narrow band would cut,
+    // so such a polygon takes the full-width rows, as it did before bands.
+    if pts.iter().any(|p| !p.0.is_finite()) {
+        return rows;
+    }
     let xs = pts.iter().map(|p| p.0).filter(|x| x.is_finite());
     let (lo, hi) = xs.fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), x| (lo.min(x), hi.max(x)));
     if lo > hi {
