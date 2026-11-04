@@ -3012,3 +3012,19 @@ fn open_as_and_place_keep_the_typed_hard_budget_fields() {
         });
     });
 }
+
+/// #10898: an OpenRaster file holds no saved paths or layer comps, so it isn't the document's
+/// own file when the document has them: the save is a copy, headless saves included.
+#[test]
+fn an_ora_file_holds_no_saved_paths_or_layer_comps() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    assert!(holds_at(&s.active().unwrap().doc, "a.ora"), "plain layers fit");
+    s.execute("layerComp.new", json!({"name": "Comp"})).unwrap();
+    assert!(!holds_at(&s.active().unwrap().doc, "a.ora"), "a layer comp doesn't");
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    s.execute("path.set", json!({"name": "Path 1", "path": {"subpaths": [{"knots": [[1, 1], [6, 1], [6, 6]]}]}})).unwrap();
+    assert!(!holds_at(&s.active().unwrap().doc, "a.ora"), "a saved path doesn't");
+}

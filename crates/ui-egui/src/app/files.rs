@@ -6,8 +6,10 @@ use super::{
 /// Whether the file at `path` keeps all of `doc`: a layered format that holds it, or a TIFF, which
 /// keeps layers and alpha channels.
 fn file_holds(doc: &photocraft_doc::Document, path: &str) -> bool {
-    let tiff = matches!(photocraft_engine::file_cmds::extension(path).as_deref(), Some("tif" | "tiff"));
-    photocraft_engine::file_cmds::holds_at(doc, path) || (tiff && flat_file_keeps_extras(doc, path))
+    // A layered TIFF keeps the PSD image resources too: saved paths, layer comps, the Quick Mask.
+    let tiff = crate::tiff_options_ui::is_tiff_path(path);
+    photocraft_engine::file_cmds::holds_at(doc, path)
+        || (tiff && (photocraft_engine::file_cmds::tiff_would_write_layers(doc) || flat_file_keeps_extras(doc, path)))
 }
 
 impl PhotocraftApp {
@@ -228,9 +230,10 @@ impl PhotocraftApp {
         // An OpenRaster file only when it holds the whole document (#3806): else PSD is offered.
         let holds_ora = st.path.as_deref().is_some_and(|p| photocraft_engine::file_cmds::holds_at(&st.doc, p));
         let keeps_extras = st.path.as_deref().is_some_and(|p| flat_file_keeps_extras(&st.doc, p));
+        let tiff_holds = st.path.as_deref().is_some_and(|p| file_holds(&st.doc, p));
         let writable = ext.is_some_and(|e| {
             matches!(e.as_str(), photocraft_format::EXTENSION | "psd" | "psb")
-                || (matches!(e.as_str(), "tif" | "tiff") && keeps_extras)
+                || (matches!(e.as_str(), "tif" | "tiff") && tiff_holds)
                 || (e == "ora" && holds_ora)
                 || (flat && keeps_extras && photocraft_codecs::from_extension(&e).is_some_and(|f| f.caps().write))
         });
@@ -299,7 +302,8 @@ impl PhotocraftApp {
         // A TIFF asks for TIFF Options (compression, pyramid, transparency, layers); the save
         // continues from the prompt, which records the step once answered.
         if choices.tiff.is_none() && tiff_options_ui::wants_prompt(self, &path) {
-            tiff_options_ui::park(self, path.clone(), false, "file.saveAs")?;
+            let copy = self.saves_copy(&path, None)?;
+            tiff_options_ui::park(self, path.clone(), copy, "file.saveAs")?;
             return Ok(serde_json::json!({"path": path, "warnings": []}));
         }
         let tiff_layers = choices.tiff.and_then(|t| t.layers);
@@ -517,7 +521,7 @@ impl PhotocraftApp {
         // An OpenRaster file that can't hold everything (adjustment layers, styles…) is a copy too,
         // so the editable document isn't marked saved after losing them (#3806).
         let st = self.session.active().ok_or("no document")?;
-        let tiff = |p: &str| matches!(photocraft_engine::file_cmds::extension(p).as_deref(), Some("tif" | "tiff"));
+        let tiff = crate::tiff_options_ui::is_tiff_path;
         // Nor is a document with more than a flat file keeps marked saved after losing it.
         let extras = flat_file_keeps_extras(&st.doc, path);
         let holds = file_holds(&st.doc, path);
@@ -527,9 +531,11 @@ impl PhotocraftApp {
 
     /// Whether saving the active document to `path` leaves content behind: a copy, not because it
     /// lives in a layered file but because the file can't hold what it has.
-    pub(crate) fn save_loses_content(&self, path: &str) -> bool {
+    /// `tiff_layers` is the TIFF Options answer, as for [`Self::saves_copy`]: discarding the layers
+    /// leaves them behind.
+    pub(crate) fn save_loses_content(&self, path: &str, tiff_layers: Option<bool>) -> bool {
         let Some(st) = self.session.active() else { return false };
-        self.saves_copy(path, None).unwrap_or(false) && (plain_raster(&st.doc).is_none() || !flat_file_keeps_extras(&st.doc, path))
+        self.saves_copy(path, tiff_layers).unwrap_or(false) && (plain_raster(&st.doc).is_none() || !flat_file_keeps_extras(&st.doc, path))
     }
 
     /// Whether the close prompt should say the document's content is in no file: its last save was
@@ -566,7 +572,8 @@ impl PhotocraftApp {
             );
             notices::post(self, tl!("Saving a copy"), vec![line.to_string()], false, None);
         }
-        let flat = self.active_doc_id().ok().filter(|_| self.save_loses_content(&path)).map(|doc| (doc, path.clone()));
+        let tiff_layers = crate::tiff_options_ui::is_tiff_path(&path).then_some(settings.tiff_layers);
+        let flat = self.active_doc_id().ok().filter(|_| self.save_loses_content(&path, tiff_layers)).map(|doc| (doc, path.clone()));
         if let Some(save) = flat.clone() {
             self.flat_copy_saves.insert(save);
         }
@@ -664,11 +671,14 @@ impl PhotocraftApp {
                 (false, holds)
             }
         };
-        if !copy && arm {
+        // The document is in a file that holds it again: its own file, or a copy that holds
+        // everything (Save a Copy as PSD after a flat save).
+        let copy_holds = copy && self.session.documents().iter().find(|st| st.doc.id == doc).is_some_and(|st| file_holds(&st.doc, path));
+        if (!copy && arm) || copy_holds {
             self.flat_copy_docs.remove(&doc);
         }
         // An automation save the file can't hold stays unsaved, like a copy.
-        let automation_copy = !copy && !arm && self.with_document(doc, |app| Ok(app.save_loses_content(path))).unwrap_or(false);
+        let automation_copy = !copy && !arm && self.with_document(doc, |app| Ok(app.save_loses_content(path, None))).unwrap_or(false);
         if (self.flat_copy_saves.remove(&(doc, path.to_string())) && copy) || automation_copy {
             self.flat_copy_docs.insert(doc);
         }

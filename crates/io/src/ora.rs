@@ -741,6 +741,16 @@ fn document_warnings(doc: &Document, warnings: &mut Warnings) {
     if !doc.channels.is_empty() {
         warnings.note("alpha channels are not saved to OpenRaster");
     }
+    // OpenRaster has no place for these either, so a document with them isn't held by the file.
+    if !doc.paths.is_empty() {
+        warnings.note("saved paths are not saved to OpenRaster");
+    }
+    if !doc.layer_comps.is_empty() {
+        warnings.note("layer comps are not saved to OpenRaster");
+    }
+    if doc.quick_mask.is_some() {
+        warnings.note("the Quick Mask is not saved to OpenRaster");
+    }
     if !doc.metadata.text.is_empty() || doc.metadata.xmp.is_some() || doc.metadata.exif.is_some() {
         warnings.note("metadata (XMP, EXIF, text) is not saved to OpenRaster");
     }

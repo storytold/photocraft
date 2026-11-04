@@ -22,7 +22,7 @@ pub struct Prompt {
 
 /// Whether saving the active document to `path` should go through the prompt.
 pub fn wants_prompt(app: &PhotocraftApp, path: &str) -> bool {
-    app.session.prefs().file_handling.ask_before_saving_flat_copy && app.save_loses_content(path)
+    app.session.prefs().file_handling.ask_before_saving_flat_copy && app.save_loses_content(path, None)
 }
 
 /// Parks the save behind the prompt.
@@ -279,6 +279,20 @@ mod tests {
         assert!(!h.state().flat_copy_docs.contains(&doc));
     }
 
+    /// A later copy that holds everything (Save a Copy as PSD after a flat save) clears the note:
+    /// the document's content is in a file again (#10898).
+    #[test]
+    fn a_copy_that_holds_the_document_clears_the_flat_copy_note() {
+        let (mut h, _) = harness("unused.png");
+        let doc = h.state().active_doc_id().unwrap();
+        let revision = h.state().session.active().unwrap().revision;
+        h.state_mut().saved_automation(doc, revision, "flat.png", &[], false);
+        assert!(h.state().flat_copy_docs.contains(&doc), "a flat save");
+        h.state_mut().saved_automation(doc, revision, "backup.psd", &[], true);
+        assert!(!h.state().flat_copy_docs.contains(&doc), "the PSD copy holds it");
+        assert!(!h.state().only_saved_flat(doc));
+    }
+
     /// Closing a document drops its flat-copy note.
     #[test]
     fn closing_a_document_forgets_its_flat_copy() {
@@ -312,7 +326,8 @@ mod tests {
         assert!(h.state().only_saved_flat(doc));
     }
 
-    /// A TIFF keeps layers and alpha channels, so a flat copy beside one loses nothing.
+    /// A layered TIFF keeps layers, alpha channels and saved paths, so a flat copy beside one loses
+    /// nothing. (A flat TIFF drops a saved path: `a_flat_tiff_through_tiff_options_is_a_copy`.)
     #[test]
     fn a_flat_copy_of_a_document_in_a_tiff_is_not_the_only_copy() {
         let (mut h, _) = harness("unused.png");
@@ -323,7 +338,7 @@ mod tests {
         h.state_mut().session.active_mut().unwrap().path = Some("art.tif".into());
         assert!(!h.state().only_saved_flat(doc));
         h.state_mut().run("path.set", json!({"name": "Path 1", "path": {"subpaths": []}})).unwrap();
-        assert!(h.state().only_saved_flat(doc), "a saved path isn't in the TIFF");
+        assert!(!h.state().only_saved_flat(doc), "a layered TIFF keeps the saved path too");
     }
 
     /// A confirmation doesn't outlive a save that never ran.
