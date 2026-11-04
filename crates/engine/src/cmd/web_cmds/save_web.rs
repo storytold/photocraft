@@ -189,7 +189,7 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
     let xmp = web_xmp(&doc, st.metadata);
     let exif = web_exif(&doc, st.metadata);
     let dpi = wdoc.resolution_dpi;
-    let warnings = web_warnings(&st, exif, dpi);
+    let warnings = web_warnings(&st, exif, xmp.as_deref(), dpi);
     let all = slices::resolve(&doc);
     let pick = p.get("slices").and_then(Value::as_str).unwrap_or("all");
     let numbers: Option<Vec<u64>> = p.get("numbers").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_u64).collect());

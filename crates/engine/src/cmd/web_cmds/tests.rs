@@ -1343,6 +1343,45 @@ fn web_exif_that_does_not_fit_is_reported_and_bad_exif_is_harmless() {
     }
 }
 
+/// #11330: Save for Web's JPEG is written when the document's XMP is over one segment: the
+/// layered-document properties go (as Save As's do, #645); a packet still too large is left out
+/// and the response says so, as it does for EXIF.
+#[test]
+fn web_xmp_that_does_not_fit_is_trimmed_or_left_out_and_reported() {
+    let dir = tmp("xmp_big");
+    let with_xmp = |xmp: String| {
+        let mut s = session(8);
+        s.edit("xmp", |doc, _| {
+            doc.metadata.xmp = Some(std::sync::Arc::from(xmp.as_str()));
+            Ok(())
+        })
+        .unwrap();
+        s
+    };
+    let ancestors = format!(
+        "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:Description dc:title=\"kept\"><photoshop:DocumentAncestors>{}</photoshop:DocumentAncestors></rdf:Description></x:xmpmeta>",
+        "<rdf:li>id</rdf:li>".repeat(5_000)
+    );
+    let mut s = with_xmp(ancestors);
+    let path = format!("{dir}/trimmed.jpg");
+    let r = s.execute("file.export.saveForWebLegacy", json!({"format": "jpeg", "metadata": "all", "path": path})).unwrap();
+    let xmp = decode(&path).meta.xmp.unwrap_or_default();
+    assert!(xmp.contains("dc:title=\"kept\"") && !xmp.contains("DocumentAncestors"), "{xmp}");
+    assert_eq!(r["warnings"].as_array().map(Vec::len), Some(0), "nothing to warn about once trimmed: {r}");
+    let big = format!("<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><!-- {} --></x:xmpmeta>", "x".repeat(70_000));
+    let bytes = big.len();
+    let mut s = with_xmp(big);
+    let path = format!("{dir}/dropped.jpg");
+    let r = s.execute("file.export.saveForWebLegacy", json!({"format": "jpeg", "metadata": "all", "path": path})).unwrap();
+    let img = decode(&path);
+    assert_eq!((img.dimensions(), img.meta.xmp), ((64, 48), None), "written without the XMP");
+    assert!(r["warnings"][0].as_str().is_some_and(|w| w.contains(&format!("XMP ({bytes} bytes)"))), "{r}");
+    s.execute("file.export.exportPreferences", json!({"quickExportFormat": "jpg", "metadata": "all"})).unwrap();
+    let r = s.execute("file.export.quickExport", json!({"path": format!("{dir}/quick.jpg")})).unwrap();
+    assert!(r["warnings"][0].as_str().is_some_and(|w| w.contains("XMP")), "{r}");
+    s.execute("prefs.reset", json!({"path": "export"})).unwrap();
+}
+
 #[test]
 fn quick_export_exr_preserves_linear_hdr_and_alpha() {
     use photocraft_codecs::{ChannelLayout, Format, Image, SampleType};
