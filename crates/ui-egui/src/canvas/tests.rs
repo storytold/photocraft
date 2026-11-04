@@ -3119,3 +3119,70 @@ fn fade_dialog_previews_the_faded_layer_and_cancel_keeps_the_document() {
         assert_eq!(st.history.past_len(), steps + 1);
     }
 }
+
+/// #11276: a document floating in its own window zooms from the Navigator and the status bar's
+/// zoom field (both edit the document's view), as a tabbed one does; the window doesn't keep or
+/// write back an older copy.
+#[test]
+fn a_floating_document_follows_navigator_and_status_bar_zoom() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 400, "height": 300, "name": "floating"})).unwrap();
+    app.run("file.new", json!({"width": 400, "height": 300, "name": "docked"})).unwrap();
+    app.sync_views();
+    let ctx = egui::Context::default();
+    crate::menus::invoke(&mut app, &ctx, "window.arrange.floatInWindow", json!({"document": 0})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(900.0, 700.0)).build_ui_state(
+        |ui, (app, ready): &mut (PhotocraftApp, bool)| {
+            if *ready {
+                egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| document_area(app, ui));
+                extra_windows(app, ui.ctx());
+            }
+        },
+        (app, false),
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.state_mut().1 = true;
+    h.run_steps(4);
+    let window_zoom = |h: &egui_kittest::Harness<'_, (PhotocraftApp, bool)>| h.state().0.ui.windows[0].view.zoom;
+    // The Navigator's zoom field and slider, and the status bar's, set the view's zoom this way.
+    for pct in [200.0, 50.0] {
+        let app = &mut h.state_mut().0;
+        crate::zoom_levels::set_from_field(&mut app.ui.views[0], false, pct, false);
+        h.run_steps(3);
+        let want = pct / 100.0;
+        assert!((window_zoom(&h) - want).abs() < 1e-3, "{pct}%: the window shows {}", window_zoom(&h));
+        assert!((h.state().0.ui.views[0].zoom - want).abs() < 1e-3, "{pct}%: not written back over by the window");
+    }
+}
+
+/// #11276: in a tiled arrangement the active document's cell zooms from the Navigator and the
+/// status bar too.
+#[test]
+fn a_tiled_document_follows_navigator_and_status_bar_zoom() {
+    for layout in ["twoUpVertical", "tileAllVertically", "fourUp"] {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        for name in ["one", "two", "three"] {
+            app.run("file.new", json!({"width": 400, "height": 300, "name": name})).unwrap();
+        }
+        app.sync_views();
+        crate::menus::invoke(&mut app, &egui::Context::default(), &format!("window.arrange.{layout}"), json!({})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(900.0, 700.0)).build_ui_state(
+            |ui, (app, ready): &mut (PhotocraftApp, bool)| {
+                if *ready {
+                    egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| document_area(app, ui));
+                }
+            },
+            (app, false),
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        h.state_mut().1 = true;
+        h.run_steps(4);
+        let active = h.state().0.session.active_index().unwrap();
+        for pct in [200.0, 50.0] {
+            crate::zoom_levels::set_from_field(&mut h.state_mut().0.ui.views[active], false, pct, false);
+            h.run_steps(3);
+            let zoom = h.state().0.ui.views[active].zoom;
+            assert!((zoom - pct / 100.0).abs() < 1e-3, "{layout} {pct}%: {zoom}");
+        }
+    }
+}
