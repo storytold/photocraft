@@ -132,7 +132,9 @@ pub fn save_bytes(doc: &Document, name: &str, format_override: Option<&str>, opt
         let named = named_for_output(doc, name);
         return Ok((photocraft_format::save_to_bytes(&named, &native_options(&named, opts)?)?, Vec::new()));
     }
-    let result = photocraft_io::export(doc, &ext, opts)?;
+    // No ambient authority: a linked path inside the document must not be read and embedded.
+    let opts = ExportOptions { read_linked_files: false, ..opts.clone() };
+    let result = photocraft_io::export(doc, &ext, &opts)?;
     Ok((result.bytes, result.warnings))
 }
 
