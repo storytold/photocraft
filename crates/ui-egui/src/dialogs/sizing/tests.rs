@@ -401,6 +401,18 @@ fn dimension_edit_between_resolution_edits_sets_a_new_print_size() {
 }
 
 #[test]
+fn resolution_edits_respect_the_engine_resolution_limit() {
+    for (resample, expected) in [("bicubic", (1667, 833)), ("none", (12, 6))] {
+        let (mut h, id) = resolution_dialog((12, 6), 72.0, "px", resample);
+        type_into(&mut h, 2, "14400");
+        assert_eq!(num(&fields(&h), "resolution"), 10_000.0, "{resample}");
+        crate::dialogs::confirm(h.state_mut(), id).unwrap();
+        let doc = &h.state().session.active().unwrap().doc;
+        assert_eq!((doc.size, doc.resolution_dpi), (photocraft_doc::Size::new(expected.0, expected.1), 10_000.0), "{resample}");
+    }
+}
+
+#[test]
 fn resolution_edits_respect_the_maximum_pixel_dimension() {
     use egui_kittest::kittest::Queryable;
     for (original, expected, label) in [((200_000, 1), (300_000, 2), "300000 px × 2 px"), ((1, 200_000), (2, 300_000), "2 px × 300000 px")] {

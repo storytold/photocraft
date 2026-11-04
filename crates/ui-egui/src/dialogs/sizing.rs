@@ -11,6 +11,8 @@ use crate::state::DialogKind;
 use crate::theme::Tokens;
 
 const MAX_PIXEL_DIMENSION: f64 = 300_000.0;
+/// `image.imageSize` stores at most this, so a higher value here would scale pixels for a resolution it never saves.
+const MAX_RESOLUTION: f64 = 10_000.0;
 
 const UNITS: [(&str, &str); 7] =
     [("px", "Pixels"), ("percent", "Percent"), ("in", "Inches"), ("cm", "Centimeters"), ("mm", "Millimeters"), ("pt", "Points"), ("pica", "Picas")];
@@ -256,7 +258,7 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         let res = f.get("resolution").and_then(Value::as_f64).unwrap_or(num(f, "__origRes"));
         let px = num(f, key);
         if px > 0.0 && px.is_finite() {
-            f.insert("resolution".into(), json!((res * orig / px).clamp(1.0, 30000.0)));
+            f.insert("resolution".into(), json!((res * orig / px).clamp(1.0, MAX_RESOLUTION)));
         }
         f.insert("width".into(), json!(ow));
         f.insert("height".into(), json!(oh));
@@ -307,7 +309,7 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     ui.horizontal(|ui| {
         label(ui, tl!("Resolution:"), 90.0);
         let mut r = f.get("resolution").and_then(Value::as_f64).unwrap_or(72.0) as f32;
-        if crate::widgets::value_field(ui, &mut r, 1.0..=30000.0, "", 90.0).accessible_name(tl!("Resolution")).changed() {
+        if crate::widgets::value_field(ui, &mut r, 1.0..=MAX_RESOLUTION as f32, "", 90.0).accessible_name(tl!("Resolution")).changed() {
             let mut r = r.max(1.0) as f64;
             if !resampling {
                 // Without resampling the pixel count is fixed: physical size follows resolution.
