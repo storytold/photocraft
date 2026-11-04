@@ -392,6 +392,17 @@ fn command_plus_the_answer_key_presses_it() {
     assert_eq!(docs_left(&h), Some(1), "⌘D answered Don't Save for the first document");
     assert_eq!(h.state().session.documents().len(), 1, "Don't Save closed it");
 
+    // Save and Yes take the save path: with ⌘ / Ctrl too they open the save dialog.
+    for (os, key) in [(egui::os::OperatingSystem::Mac, Key::S), (egui::os::OperatingSystem::Windows, Key::Y)] {
+        let mut h = prompt_on(os);
+        let (show, asked) = crate::file_dialog::fake(vec![None]);
+        h.state_mut().services.file_dialog = Some(show);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, key);
+        h.run_steps(2);
+        assert_eq!(asked.borrow().len(), 1, "{os:?} ⌘/Ctrl+{key:?} opens the save dialog");
+        assert_eq!(docs_left(&h), Some(2), "cancelling the save dialog keeps the prompt");
+    }
+
     let mut h = prompt_on(egui::os::OperatingSystem::Windows);
     h.key_press_modifiers(egui::Modifiers::COMMAND, Key::N);
     h.run_steps(2);
