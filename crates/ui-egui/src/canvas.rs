@@ -1520,6 +1520,7 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
                         let size = if block { crate::eraser_ui::block_size(app) } else { brush.size };
                         let ppp = painter.ctx().pixels_per_point();
                         let sq = pencil_cursor_rect(xf, xf.to_doc(p), size, ppp);
+                        let sq = sq.translate(p - sq.center());
                         let px = 1.0 / ppp;
                         let (dark, light) = (Stroke::new(px, Color32::from_black_alpha(160)), Stroke::new(px, Color32::from_white_alpha(230)));
                         if !block && pencil_tip_is_round(size) {
