@@ -32,6 +32,25 @@ pub(crate) fn read(r: &mut Reader, id: ObjId, world: Affine) -> Option<Text> {
             r.warn("text beyond the document text budget (truncated)");
             break;
         }
+        // The paragraph alignment is read before the runs, so a budget cut inside this block keeps it.
+        // Scanning the paragraph runs (null slots included) is charged before it is done.
+        if align.is_none()
+            && let Some(p) = s.obj(block, b"PAtt")
+        {
+            if r.charge_text(s.array_len(p, b"Runs").unwrap_or(0)) {
+                align = s.objs(p, b"Runs").first().copied().and_then(|run| s.obj(run, b"Item")).map(|p| paragraph_align(r, p));
+            } else {
+                r.warn("text beyond the document text budget (paragraph alignment left out)");
+            }
+        }
+        // `block_chars` walks each segment's `Glys` slots, nulls included: charge them first.
+        if s.str(glyphs, b"Utf8").is_none() {
+            let slots = s.objs(glyphs, b"Mixd").iter().fold(0usize, |n, seg| n.saturating_add(s.array_len(*seg, b"Glys").unwrap_or(0)));
+            if !r.charge_text(slots) {
+                r.warn("text beyond the document text budget (truncated)");
+                break;
+            }
+        }
         let chars = block_chars(s, glyphs, total, &mut placeholders);
         total = total.checked_add(chars.len())?;
         if total > MAX_CHARS {
@@ -54,9 +73,6 @@ pub(crate) fn read(r: &mut Reader, id: ObjId, world: Affine) -> Option<Text> {
                 }
                 runs.push(run_attrs(r, attrs, text, world));
             }
-        }
-        if align.is_none() {
-            align = s.obj(block, b"PAtt").and_then(|p| s.objs(p, b"Runs").first().copied()).and_then(|run| s.obj(run, b"Item")).map(|p| paragraph_align(r, p));
         }
     }
     if placeholders {
