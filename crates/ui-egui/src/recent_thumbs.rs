@@ -343,6 +343,12 @@ impl RecentView {
         wipe(&self.shared, cache, path);
     }
 
+    /// Whether a worker may still cache a thumbnail for `path`.
+    #[cfg(test)]
+    pub(crate) fn is_allowed(&self, path: &str) -> bool {
+        lock(&self.shared.allowed).contains(path)
+    }
+
     /// Cache the thumbnail of `doc`, just opened or saved at `path`, without opening the file
     /// again later. Skipped without a cache folder; dropped when the workers are busy.
     pub fn seed(&mut self, path: &str, doc: Arc<Document>, cache: Option<PathBuf>) {

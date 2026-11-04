@@ -85,7 +85,14 @@ impl PhotocraftApp {
         let stored = &self.session.prefs().file_handling.recent_files;
         let want = stored.get(..cap.min(stored.len())).unwrap_or_default();
         if self.ui.recent_files.as_slice() != want {
-            self.ui.recent_files = want.to_vec();
+            // A path that left the list (a preference change, not the × or Clear) may still have
+            // a thumbnail seed allowed or queued: revoke it, as `remove_recent` does.
+            let dropped: Vec<String> = self.ui.recent_files.iter().filter(|p| !want.contains(p)).cloned().collect();
+            let want = want.to_vec();
+            self.ui.recent_files = want;
+            for path in &dropped {
+                self.recent_view.forget(self.services.thumbnail_cache_dir.as_deref(), Some(path));
+            }
         }
     }
 

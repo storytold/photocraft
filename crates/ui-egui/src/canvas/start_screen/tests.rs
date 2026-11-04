@@ -398,3 +398,30 @@ fn cards_fill_the_row_with_as_many_columns_as_fit() {
     let tops: Vec<i32> = names.iter().filter_map(|n| narrow_page.query_by_label(n)).map(|n| n.rect().top().round() as i32).collect();
     assert!(tops.iter().filter(|&&y| y == tops[0]).count() <= 2, "{tops:?}");
 }
+
+/// A path a preference change takes off the list loses its allowed thumbnail seed; one that stays
+/// keeps it.
+#[test]
+fn a_path_dropped_by_a_preference_change_loses_its_thumbnail_seed() {
+    let (mut app, dir) = with_files(&[("a.txt", 1, 1), ("b.txt", 1, 2)]);
+    app.services.thumbnail_cache_dir = Some(dir.path().join("cache"));
+    app.sync_recent();
+    let listed = app.ui.recent_files.clone();
+    assert_eq!(listed.len(), 2);
+    let doc = std::sync::Arc::new(Document::new("d", Size::new(4, 4), ColorMode::Rgb, SampleType::U8));
+    for p in &listed {
+        app.recent_view.seed(p, doc.clone(), app.services.thumbnail_cache_dir.clone());
+        assert!(app.recent_view.is_allowed(p));
+    }
+    let kept = listed[0].clone();
+    let dropped = listed[1].clone();
+    app.session.prefs.edit(|p| p.file_handling.recent_files.retain(|r| *r != dropped));
+    app.sync_recent();
+    assert_eq!(app.ui.recent_files, vec![kept.clone()]);
+    assert!(!app.recent_view.is_allowed(&dropped), "the dropped path's seed is revoked");
+    assert!(app.recent_view.is_allowed(&kept));
+    app.run("prefs.set", json!({"values": {"fileHandling.recentFileCount": 0}})).unwrap();
+    app.sync_recent();
+    assert!(app.ui.recent_files.is_empty());
+    assert!(!app.recent_view.is_allowed(&kept));
+}
