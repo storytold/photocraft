@@ -27,6 +27,10 @@ pub struct State {
     next_etag: u64,
     /// PUTs to keys starting with this answer 500.
     pub fail_puts_under: Option<String>,
+    /// PUTs to keys starting with this are stored, then answer 500 (a reply lost on the way).
+    pub lose_replies_under: Option<String>,
+    /// The next this many `If-None-Match: *` PUTs answer 409, as when another upload is in flight.
+    pub conflicts: u32,
 }
 
 pub struct FakeS3 {
@@ -131,6 +135,10 @@ fn handle(state: &Mutex<State>, method: &str, key: &str, headers: &HashMap<Strin
             if s.fail_puts_under.as_deref().is_some_and(|prefix| key.starts_with(prefix)) {
                 return (500, None, error("InternalError"));
             }
+            if s.conflicts > 0 && condition.as_ref().is_some_and(|(h, v)| h == "if-none-match" && v == "*") {
+                s.conflicts -= 1;
+                return (409, None, error("ConditionalRequestConflict"));
+            }
             let current = s.objects.get(key).map(|(_, etag)| etag.clone());
             let holds = match &condition {
                 Some((h, v)) if h == "if-none-match" && v == "*" => current.is_none(),
@@ -143,6 +151,9 @@ fn handle(state: &Mutex<State>, method: &str, key: &str, headers: &HashMap<Strin
             s.next_etag += 1;
             let etag = format!("\"{}\"", s.next_etag);
             s.objects.insert(key.to_string(), (body, etag.clone()));
+            if s.lose_replies_under.as_deref().is_some_and(|prefix| key.starts_with(prefix)) {
+                return (500, None, error("InternalError"));
+            }
             (200, Some(etag), Vec::new())
         }
         _ => (405, None, error("MethodNotAllowed")),

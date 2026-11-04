@@ -21,6 +21,8 @@ fn a_save_uploads_new_objects_once_then_moves_the_head_conditionally() {
     let mut writer = PcraftWriter::new();
     writer.save_to(&doc(1), &mut store, &SaveOptions::default()).unwrap();
     let log = s3.take_log();
+    let manifest_at = log.iter().position(|r| r.key == "docs/a/manifest.json").unwrap();
+    assert!(log.iter().rposition(|r| r.key.starts_with("pool/")).unwrap() < manifest_at, "{log:?}");
     let (objects, rest): (Vec<_>, Vec<_>) = log.iter().partition(|r| r.key.starts_with("pool/"));
     assert!(!objects.is_empty());
     let absent = Some(("if-none-match".to_string(), "*".to_string()));
@@ -55,6 +57,65 @@ fn previews_follow_the_head() {
 
     PcraftWriter::new().save_to(&doc(1), &mut store, &SaveOptions::default()).unwrap();
     assert!(s3.keys().iter().all(|k| !k.ends_with(".png")), "{:?}", s3.keys());
+}
+
+#[test]
+fn a_preview_that_fails_to_upload_leaves_the_save_standing() {
+    let s3 = FakeS3::start();
+    let mut store = S3Store::new(s3.config(), "pool/", "docs/t/").unwrap();
+    s3.state.lock().unwrap().fail_puts_under = Some("docs/t/composite/full.png".into());
+    let opts = SaveOptions { full_composite: Some(Rgba8Image::new(6, 4)), ..with_previews() };
+    let saved = doc(1);
+    PcraftWriter::new().save_to(&saved, &mut store, &opts).unwrap();
+    // The manifest names the full-size composite; storage lacks it (best effort, documented).
+    let manifest = String::from_utf8(s3.object("docs/t/manifest.json").unwrap()).unwrap();
+    assert!(manifest.contains("\"full_composite\""), "{manifest}");
+    assert!(s3.object("docs/t/composite/full.png").is_none());
+    assert!(s3.object("docs/t/thumb.png").is_some());
+    assert_eq!(load(&S3Store::new(s3.config(), "pool/", "docs/t/").unwrap()).unwrap(), saved);
+}
+
+#[test]
+fn an_upload_racing_another_is_retried_then_given_up() {
+    let s3 = FakeS3::start();
+    let mut store = S3Store::new(s3.config(), "pool/", "docs/c/").unwrap();
+    s3.state.lock().unwrap().conflicts = 2;
+    let saved = doc(1);
+    PcraftWriter::new().save_to(&saved, &mut store, &SaveOptions::default()).unwrap();
+    assert_eq!(s3.state.lock().unwrap().conflicts, 0);
+    assert_eq!(load(&S3Store::new(s3.config(), "pool/", "docs/c/").unwrap()).unwrap(), saved);
+
+    // A conflict that never clears fails the save, before the manifest.
+    let mut store = S3Store::new(s3.config(), "other-pool/", "docs/c2/").unwrap();
+    s3.state.lock().unwrap().conflicts = u32::MAX;
+    let err = PcraftWriter::new().save_to(&doc(1), &mut store, &SaveOptions::default()).unwrap_err();
+    assert!(err.to_string().contains("another upload"), "{err}");
+    assert!(!is_conflict(&err));
+    assert!(s3.object("docs/c2/manifest.json").is_none());
+}
+
+#[test]
+fn a_manifest_stored_before_its_reply_was_lost_moves_the_head() {
+    let s3 = FakeS3::start();
+    let mut store = S3Store::new(s3.config(), "pool/", "docs/l/").unwrap();
+    let mut writer = PcraftWriter::new();
+    writer.save_to(&doc(1), &mut store, &SaveOptions::default()).unwrap();
+
+    // Storage keeps the manifest but the reply fails: the save happened, and so does the next.
+    s3.state.lock().unwrap().lose_replies_under = Some("docs/l/manifest.json".into());
+    writer.save_to(&doc(2), &mut store, &SaveOptions::default()).unwrap();
+    s3.state.lock().unwrap().lose_replies_under = None;
+    let third = doc(3);
+    writer.save_to(&third, &mut store, &SaveOptions::default()).unwrap();
+    assert_eq!(load(&S3Store::new(s3.config(), "pool/", "docs/l/").unwrap()).unwrap(), third);
+
+    // A manifest PUT that really failed fails the save and keeps the head it had.
+    let head = store.head();
+    s3.state.lock().unwrap().fail_puts_under = Some("docs/l/manifest.json".into());
+    assert!(writer.save_to(&doc(4), &mut store, &SaveOptions::default()).is_err());
+    assert_eq!(store.head(), head);
+    s3.state.lock().unwrap().fail_puts_under = None;
+    writer.save_to(&doc(4), &mut store, &SaveOptions::default()).unwrap();
 }
 
 #[test]

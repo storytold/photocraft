@@ -50,13 +50,16 @@ fn not_saving() -> FormatError {
 /// <document>manifest.json          this document's head: the version you open
 /// <document>thumb.png              previews of that version
 /// <document>composite/preview.png
+/// <document>composite/full.png
 /// ```
 ///
 /// A save uploads the objects the pool lacks (in parallel, `If-None-Match: *`, so an object
 /// another save already stored is left alone), then replaces the manifest only if it is still the
 /// version this store last read or wrote (`If-Match`; `If-None-Match: *` for a new document).
 /// When someone else saved in between, the save fails with [`HeadChanged`] and overwrites nothing.
-/// Previews follow the new manifest, best effort.
+/// Previews follow the new manifest, best effort: one can be missing or older than the manifest
+/// (also `composite/full.png`, which the manifest names either way). Pool objects are trusted as
+/// stored; this store never downloads one to reuse it.
 ///
 /// Nothing is ever deleted from the pool: objects an old version references stay readable, and
 /// removing unreferenced ones (with version history) is left to a later collector that knows
@@ -118,13 +121,22 @@ fn key(pool: &str, document: &str, path: &str) -> String {
     if pooled(path) { format!("{pool}{path}") } else { format!("{document}{path}") }
 }
 
-/// Stores one object unless the pool already has it.
+/// How often an upload that met another upload of the same object (409) is tried again.
+const CONFLICT_RETRIES: u32 = 3;
+
+/// Stores one object unless the pool already has it. Another save uploading the same object at
+/// the same moment (409) is waited out a few times: once it lands, the object is reused.
 fn upload(client: &Client, pool: &str, object: &BundleObject<'_>) -> Result<Stored> {
-    match client.put(&format!("{pool}{}", object.path()), &object.compressed()?, Condition::IfAbsent)? {
-        Put::Done { .. } => Ok(Stored::Written),
-        Put::PreconditionFailed => Ok(Stored::Reused),
-        Put::Conflicting => Err(io_error(format!("S3 PUT `{}`: another upload of it was in progress; save again", object.path()))),
+    let (key, body) = (format!("{pool}{}", object.path()), object.compressed()?);
+    for retry in 0..=CONFLICT_RETRIES {
+        match client.put(&key, &body, Condition::IfAbsent)? {
+            Put::Done { .. } => return Ok(Stored::Written),
+            Put::PreconditionFailed => return Ok(Stored::Reused),
+            Put::Conflicting if retry < CONFLICT_RETRIES => std::thread::sleep(std::time::Duration::from_millis(50 << retry)),
+            Put::Conflicting => {}
+        }
     }
+    Err(io_error(format!("S3 PUT `{}`: another upload of it was in progress; save again", object.path())))
 }
 
 impl ByteSource for S3Store {
@@ -215,9 +227,17 @@ impl BundleStore for S3Store {
         let save = self.save.as_mut().ok_or_else(not_saving)?;
         let head = lock(&self.head).clone();
         let condition = head.as_deref().map_or(Condition::IfAbsent, Condition::IfMatch);
-        match self.client.put(&key(&self.pool, &self.document, MANIFEST), manifest, condition)? {
-            Put::Done { etag } => *lock(&self.head) = etag,
-            Put::PreconditionFailed | Put::Conflicting => return Err(FormatError::Io(std::io::Error::other(HeadChanged))),
+        let manifest_key = key(&self.pool, &self.document, MANIFEST);
+        match self.client.put(&manifest_key, manifest, condition) {
+            Ok(Put::Done { etag }) => *lock(&self.head) = etag,
+            Ok(Put::PreconditionFailed | Put::Conflicting) => return Err(FormatError::Io(std::io::Error::other(HeadChanged))),
+            // The PUT may have landed before the connection or the reply failed. Storage holding
+            // exactly this manifest means the save happened: keep its ETag, or the next save
+            // would be refused as a conflict with itself.
+            Err(e) => match self.client.get(&manifest_key, manifest.len()) {
+                Ok(Some((stored, etag))) if stored == manifest => *lock(&self.head) = etag,
+                _ => return Err(e),
+            },
         }
         // The save has happened. Previews follow the new head, and ones it doesn't have go.
         let previews = std::mem::take(&mut save.previews);
