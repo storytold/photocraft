@@ -395,6 +395,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_arch = "wasm32"))]
     fn wait_slices_cancel_timeout_and_completion() {
         let never = || false;
         assert_eq!(wait_slices(Duration::ZERO, &never, |_| SlicePoll::Done), WaitOutcome::TimedOut);
@@ -422,6 +423,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_arch = "wasm32"))]
     fn wait_slices_observes_cancel_while_pending() {
         let flag = AtomicBool::new(false);
         let cancelled = || flag.load(Ordering::SeqCst);

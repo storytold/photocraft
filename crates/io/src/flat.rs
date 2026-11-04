@@ -763,7 +763,7 @@ pub fn export_preview_png_with_renderer(doc: &Document, renderer: Option<&mut dy
                 return Ok(res);
             }
             Err(IoError::Render(render_err)) if render_err.is_retryable() => {
-                let fallback_warning = format!("GPU rendering unavailable ({render_err}); falling back to CPU");
+                let fallback_warning = format!("custom renderer unavailable ({render_err}); falling back to CPU");
                 // Keep the fallback reason in this export's warnings only. Move this attempt's
                 // queued diagnostics into its retry result too: leaving either on the renderer
                 // would leak them into a later successful GPU export. If the retry fails, `?`
@@ -906,7 +906,7 @@ impl<'a> FlatSource<'a> {
             // native-endian samples, copied a band of rows at a time (alpha dropped when opaque).
             if let Some(r) = renderer.as_mut() {
                 r.push_diagnostic(
-                    "GPU rendering unsupported: a single-layer export copies the document's own pixels with the CPU path; falling back to CPU".into(),
+                    "custom renderer unsupported: a single-layer export copies the document's own pixels with the CPU path; falling back to CPU".into(),
                 );
             }
             let ch = fmt.channels();
@@ -915,6 +915,7 @@ impl<'a> FlatSource<'a> {
             let rows = if self.rows > 0 { self.rows } else { (BAND_BYTES / (w as usize * ch * bps).max(1)).max(1) as i32 };
             let mut y = 0;
             while y < h as i32 {
+                ctl.check().map_err(|_| IoError::Cancelled)?;
                 let y1 = y.saturating_add(rows).min(h as i32);
                 let mut band = s.to_interleaved(Rect::new(0, y, w as i32, y1));
                 if !alpha {
@@ -951,7 +952,7 @@ impl<'a> FlatSource<'a> {
         };
         if self.inks {
             if let Some(r) = renderer.as_mut() {
-                r.push_diagnostic("GPU rendering unsupported: CMYK ink mixing uses the CPU compositor; falling back to CPU".into());
+                r.push_diagnostic("custom renderer unsupported: CMYK ink mixing uses the CPU compositor; falling back to CPU".into());
             }
             // Mixed on ink values, rendered and quantised in bands.
             let rendered = photocraft_compose::cmyk::render_cmyk_bands(doc, doc.bounds(), self.rows, |band| -> Result<(), IoError> {
@@ -1111,7 +1112,7 @@ pub fn export_flat_with_renderer(
                 ColorMode::Duotone => "Duotone export uses the CPU compositor",
                 _ => "this export uses the CPU compositor",
             };
-            renderer.push_diagnostic(format!("GPU rendering unsupported: {why}; falling back to CPU"));
+            renderer.push_diagnostic(format!("custom renderer unsupported: {why}; falling back to CPU"));
             r.warnings.extend(renderer.drain_diagnostics());
         }
         return Ok(r);
@@ -1146,7 +1147,7 @@ pub fn export_flat_with_renderer(
                 return Ok(res);
             }
             Err(IoError::Render(render_err)) if render_err.is_retryable() => {
-                let fallback_warning = format!("GPU rendering unavailable ({render_err}); falling back to CPU");
+                let fallback_warning = format!("custom renderer unavailable ({render_err}); falling back to CPU");
                 // Keep the fallback reason in this export's warnings only. Move this attempt's
                 // queued diagnostics into its retry result too: leaving either on the renderer
                 // would leak them into a later successful GPU export. If the retry fails, `?`
@@ -1293,7 +1294,7 @@ pub fn export_png_streamed_with_renderer(
             }
             Ok(None) => return Err(IoError::Unsupported("PNG export lost its alpha channel".into())),
             Err(IoError::Render(render_err)) if render_err.is_retryable() => {
-                let fallback_warning = format!("GPU rendering unavailable ({render_err}); falling back to CPU");
+                let fallback_warning = format!("custom renderer unavailable ({render_err}); falling back to CPU");
                 // Keep the fallback reason in this export's warnings only. Move this attempt's
                 // queued diagnostics into its retry result too: leaving either on the renderer
                 // would leak them into a later successful GPU export. If the retry fails, `?`
@@ -2055,6 +2056,37 @@ mod streamed_png_tests {
         assert!(r.warnings.iter().any(|w| w.contains("without interlacing")), "{:?}", r.warnings);
         let whole = decoded(&export_flat(&doc, Format::Png, &opts).unwrap().bytes);
         assert!(decoded(&r.bytes).data() == whole.data());
+    }
+
+    /// The native single-layer copy checks for cancellation before every band, so a cancel
+    /// raised mid-copy stops it instead of copying the rest of the document.
+    #[test]
+    fn a_cancelled_native_single_layer_copy_stops_with_cancelled() {
+        let mut doc = Document::new("native", Size::new(40, 30), ColorMode::Rgb, SampleType::U8);
+        doc.layers = vec![layer(&doc, &[(doc.bounds(), &[0.5, 0.5, 0.5, 1.0])])];
+        let mut ignored = Vec::new();
+        let mut src = FlatSource::new(&doc, &mut ignored, false, false).unwrap();
+        assert!(src.native.is_some(), "a single plain layer takes the native copy");
+        src.rows = 4;
+        let checks = std::sync::atomic::AtomicUsize::new(0);
+        // Pre-cancelled: no band is copied at all.
+        let yes = || true;
+        let mut copied = 0;
+        let r = src.bands(true, &Interrupt::cancel_only(&yes), None, |_, _, _| {
+            copied += 1;
+            Ok(())
+        });
+        assert!(matches!(r, Err(IoError::Cancelled)), "{:?}", r.map(|_| ()));
+        assert_eq!(copied, 0);
+        // Cancelled after the second check: the copy stops after one band, not eight.
+        let after_one = || checks.fetch_add(1, std::sync::atomic::Ordering::SeqCst) >= 1;
+        let mut copied = 0;
+        let r = src.bands(true, &Interrupt::cancel_only(&after_one), None, |_, _, _| {
+            copied += 1;
+            Ok(())
+        });
+        assert!(matches!(r, Err(IoError::Cancelled)), "{:?}", r.map(|_| ()));
+        assert_eq!(copied, 1);
     }
 
     #[test]

@@ -342,7 +342,7 @@ fn forced_unsupported_renderer_restarts_complete_export_on_cpu() {
 
     assert_eq!(expected.bytes, res.bytes, "output after retry must match clean CPU output");
     assert!(
-        res.warnings.iter().any(|w| w.contains("GPU rendering unavailable") && w.contains("falling back to CPU")),
+        res.warnings.iter().any(|w| w.contains("custom renderer unavailable") && w.contains("falling back to CPU")),
         "fallback warning must be reported: {:?}",
         res.warnings
     );

@@ -48,7 +48,7 @@ mod tests {
             return;
         }
         assert!(diagnostics.iter().any(|d| d.contains("GPU adapter:")), "GPU was not initialized: {diagnostics:?}");
-        assert!(!diagnostics.iter().any(|d| d.contains("GPU rendering unavailable")), "full-size render fell back to CPU: {diagnostics:?}");
+        assert!(!diagnostics.iter().any(|d| d.contains("custom renderer unavailable")), "full-size render fell back to CPU: {diagnostics:?}");
     }
 
     #[test]
@@ -87,7 +87,7 @@ mod tests {
             return;
         }
         assert!(diagnostics.iter().any(|d| d.contains("GPU adapter:")), "GPU was not initialized: {diagnostics:?}");
-        assert!(!diagnostics.iter().any(|d| d.contains("GPU rendering unavailable")), "initial render fell back to CPU: {diagnostics:?}");
+        assert!(!diagnostics.iter().any(|d| d.contains("custom renderer unavailable")), "initial render fell back to CPU: {diagnostics:?}");
         let img1_initial = decode(&png1_initial).expect("decode initial");
 
         // 2. Mutate Doc 1 in place (change top layer opacity to 0.1)
@@ -99,7 +99,7 @@ mod tests {
             .expect("edit opacity");
         let png1_mutated = h.render_png(Some(0), 0).expect("mutated render");
         let mutated_diagnostics = h.drain_diagnostics();
-        assert!(!mutated_diagnostics.iter().any(|d| d.contains("GPU rendering unavailable")), "mutated render fell back to CPU: {mutated_diagnostics:?}");
+        assert!(!mutated_diagnostics.iter().any(|d| d.contains("custom renderer unavailable")), "mutated render fell back to CPU: {mutated_diagnostics:?}");
         let img1_mutated = decode(&png1_mutated).expect("decode mutated");
 
         assert_ne!(img1_initial.data(), img1_mutated.data(), "mutating document must invalidate cache and produce fresh pixels");
@@ -113,7 +113,7 @@ mod tests {
 
         let png2 = h.render_png(Some(1), 0).expect("doc2 render");
         let doc2_diagnostics = h.drain_diagnostics();
-        assert!(!doc2_diagnostics.iter().any(|d| d.contains("GPU rendering unavailable")), "second-document render fell back to CPU: {doc2_diagnostics:?}");
+        assert!(!doc2_diagnostics.iter().any(|d| d.contains("custom renderer unavailable")), "second-document render fell back to CPU: {doc2_diagnostics:?}");
         let img2 = decode(&png2).expect("decode doc2");
 
         assert_ne!(img2.data(), img1_mutated.data(), "distinct document must not return stale pixels from previous doc");
