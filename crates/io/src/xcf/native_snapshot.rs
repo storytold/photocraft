@@ -564,10 +564,14 @@ mod tests {
             let mut budget = super::super::MAX_PIXEL_BYTES;
             let got = filter_mask(&base, &filtered, &mask, &mut budget, &Interrupt::NONE).unwrap();
             assert_pixels(&got, &expected, bounds);
-            if alpha {
-                assert!((0.0..=1.0).contains(&got.sample_channel(255, 0, 0)));
-            } else {
-                assert!(got.sample_channel(255, 0, 0) > 1., "ordinary alpha-absent native mask policy retains HDR color");
+            // The uniform mask's density gives 0.72 effective coverage. HDR colors
+            // stay signed and above one with or without alpha; alpha-bearing colors
+            // use the independently weighted premultiplied numerator and coverage.
+            let expected_native: &[f32] = if alpha { &[1.092 / 0.616, 0.784 / 0.616, -0.392 / 0.616, 0.616] } else { &[1.92, 0.88, -0.44] };
+            for x in 255..258 {
+                for (channel, expected) in expected_native.iter().enumerate() {
+                    assert!((got.sample_channel(x, 0, channel) - expected).abs() < 1e-5, "alpha={alpha} x={x} channel={channel}");
+                }
             }
             let mut tiny = 0;
             assert!(filter_mask(&base, &filtered, &mask, &mut tiny, &Interrupt::NONE).is_err());
