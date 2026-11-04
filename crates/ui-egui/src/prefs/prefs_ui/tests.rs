@@ -2053,3 +2053,17 @@ fn more_time_to_reach_submenus_is_an_interface_option_that_starts_off() {
     let values = serde_json::to_value(photocraft_engine::prefs::Interface::default()).unwrap();
     assert_eq!(values["moreTimeToReachSubmenus"], false);
 }
+
+/// Every catalog that translates Enable animations, the option beside it, translates More time to
+/// reach submenus too.
+#[test]
+fn more_time_to_reach_submenus_is_translated() {
+    let mut missing = Vec::new();
+    for lang in crate::i18n::Lang::all() {
+        let _lang = crate::i18n::language_scope(lang);
+        if tl!("Enable animations") != "Enable animations" && tl!("More time to reach submenus") == "More time to reach submenus" {
+            missing.push(format!("{lang:?}"));
+        }
+    }
+    assert!(missing.is_empty(), "untranslated in {missing:?}");
+}
