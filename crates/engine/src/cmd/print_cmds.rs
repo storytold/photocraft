@@ -418,9 +418,10 @@ fn cups_spool(job: &PrintJob) -> std::result::Result<String, SpoolError> {
     let printer = resolve_printer(job.printer.as_deref(), default.as_deref(), &printers)?;
     let is_class = printers.iter().any(|p| p.name == printer && p.is_class);
     let user = std::env::var("USER").or_else(|_| std::env::var("USERNAME")).unwrap_or_else(|_| "photocraft".into());
-    let id = photocraft_ipp::print_job(
+    let id = photocraft_ipp::print_job_oriented(
         &ep,
         &photocraft_ipp::Job { printer: &printer, is_class, title: &job.title, user: &user, copies: job.copies, document: &job.pdf, format: "application/pdf" },
+        job.landscape,
     )
     .map_err(failed)?;
     Ok(format!("job {id} on {printer}"))
@@ -1042,6 +1043,12 @@ fn render_and_spool(doc: &Document, p: &Value, cmd: &str, spooler: Option<&Spool
         // PhotoCraft already placed and scaled the image on its physical sheet. Scaling again
         // in the driver would change the preview, print resolution and crop-mark positions.
         scaling: craft_print::Scaling::Exact,
+        // Tell CUPS the requested orientation as well as encoding it in the PDF page dimensions;
+        // some macOS printer queues otherwise apply their portrait default to landscape pages.
+        options: vec![(
+            "orientation-requested".into(),
+            if p.get("orientation").and_then(Value::as_str) == Some("landscape") { "4" } else { "3" }.into(),
+        )],
         ..Default::default()
     };
     let command = if send { json!(craft_print::command_preview(&job).map_err(other)?) } else { Value::Null };

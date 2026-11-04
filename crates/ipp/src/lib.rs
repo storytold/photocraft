@@ -668,14 +668,31 @@ pub struct Job<'a> {
 
 /// Submits `job` (Print-Job) and returns the job id.
 pub fn print_job(endpoint: &Endpoint, job: &Job<'_>) -> Result<u32> {
+    print_job_inner(endpoint, job, None)
+}
+
+/// Submits a job with an explicit page orientation (`orientation-requested`, RFC 8011),
+/// returning its job id. This is needed when the PDF page is landscape but the printer queue's
+/// default is portrait.
+pub fn print_job_oriented(endpoint: &Endpoint, job: &Job<'_>, landscape: bool) -> Result<u32> {
+    print_job_inner(endpoint, job, Some(landscape))
+}
+
+fn print_job_inner(endpoint: &Endpoint, job: &Job<'_>, landscape: Option<bool>) -> Result<u32> {
     let mut r = Request::new(OP_PRINT_JOB, 3);
     let path = queue_path(job.printer, job.is_class)?;
     r.attr(TAG_URI, "printer-uri", format!("ipp://{}{path}", endpoint.host()).as_bytes());
     r.attr(TAG_NAME, "requesting-user-name", job.user.as_bytes());
     r.attr(TAG_NAME, "job-name", job.title.as_bytes());
     r.attr(TAG_MIME, "document-format", job.format.as_bytes());
+    if let Some(landscape) = landscape {
+        r.group(TAG_JOB_GROUP);
+        r.attr(TAG_ENUM, "orientation-requested", &(if landscape { 4i32 } else { 3i32 }).to_be_bytes());
+    }
     if job.copies > 1 {
-        r.buf.push(TAG_JOB_GROUP);
+        if landscape.is_none() {
+            r.group(TAG_JOB_GROUP);
+        }
         r.integer("copies", job.copies.clamp(1, 999) as i32);
     }
     let mut body = r.end();

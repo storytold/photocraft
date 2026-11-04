@@ -329,6 +329,20 @@ fn a_print_job_carries_the_document_and_returns_its_id() {
 }
 
 #[test]
+fn a_print_job_can_request_landscape_orientation() {
+    let (ep, rx) = fake(ipp(0, &[ok_header(), (TAG_JOB_GROUP, &[(TAG_INTEGER, "job-id", &[&42u32.to_be_bytes()])])]), true, 200);
+    print_job_oriented(
+        &ep,
+        &Job { printer: "Office", is_class: false, title: "photo.psd", user: "diego", copies: 1, document: b"%PDF", format: "application/pdf" },
+        true,
+    )
+    .unwrap();
+    let (_, attrs, _) = rx.recv().unwrap();
+    let orientation = attrs.iter().find(|a| a.name == "orientation-requested").unwrap();
+    assert_eq!((orientation.group, orientation.tag, orientation.int()), (TAG_JOB_GROUP, TAG_ENUM, Some(4)));
+}
+
+#[test]
 fn error_statuses_and_broken_replies_are_errors() {
     let (ep, _rx) = fake(ipp(0x0506, &[ok_header(), (TAG_OPERATION_GROUP, &[(TAG_TEXT, "status-message", &[b"Printer is not accepting jobs"])])]), false, 200);
     let e = print_job(&ep, &Job { printer: "P", is_class: false, title: "t", user: "u", copies: 1, document: b"x", format: "application/pdf" }).unwrap_err();

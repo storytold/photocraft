@@ -113,7 +113,11 @@ fn print_dry_run_renders_a_pdf_and_reports_the_platform_backend() {
         {
             assert_eq!(&cmd[..5], &["lp", "-d", "Office", "-n", "2"]);
             assert!(cmd.contains(&"fit-to-page=false".into()));
+            assert!(cmd.contains(&"orientation-requested=3".into()));
             assert!(!cmd.contains(&out), "PDF bytes are streamed instead of passing a path");
+            let landscape = s.execute("file.print", json!({"send": true, "dryRun": true, "printer": "Office", "orientation": "landscape"})).unwrap();
+            let landscape_cmd: Vec<String> = serde_json::from_value(landscape["command"].clone()).unwrap();
+            assert!(landscape_cmd.contains(&"orientation-requested=4".into()));
         }
         #[cfg(windows)]
         assert_eq!(cmd.first().map(String::as_str), Some("xps-print"));

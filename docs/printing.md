@@ -36,8 +36,11 @@ named and no default, the only printer takes the job on the `lp` and IPP routes;
 a named or default printer.
 
 The IPP client is in-process, pure Rust (RFC 8010/8011: `CUPS-Get-Printers`, `CUPS-Get-Classes`,
-`CUPS-Get-Default`, `Print-Job` with the PDF as the document), so no `lp` binary is needed. It
-only sees queues the server has, not driverless network printers, which is why the Flatpak
+`CUPS-Get-Default`, `Print-Job` with the PDF as the document and an explicit
+`orientation-requested` job attribute), so no `lp` binary is needed. The `lp` route also sends
+`orientation-requested`, since some macOS queues otherwise apply their portrait default to
+landscape PDF pages. The client only sees queues the server has, not driverless network printers,
+which is why the Flatpak
 bundles `lp`/`lpstat` (the manifest's `cups-client` module) and grants `--socket=cups` (the
 host's CUPS socket) and `org.freedesktop.Avahi` (`lpstat -e` finds driverless printers). On a
 system without CUPS, or in a sandbox without the socket, the app falls back to the print portal,
