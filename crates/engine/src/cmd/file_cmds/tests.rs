@@ -3117,3 +3117,13 @@ fn pdf_x_keeps_numbers_only_for_the_same_profile_data() {
     assert!(x(&gray, &dest, true).source.is_none(), "converting keeps gray as the black ink");
     assert!(x(&gray, &dest, false).source.is_some(), "No Conversion keeps its gray profile");
 }
+
+#[test]
+fn profile_files_are_told_from_profile_ids() {
+    for file in ["C:/x/ISOcoated.icc", "/usr/share/color/icc/a.icm", r"C:\Windows\a.ICC", "printer.icc", "D:x"] {
+        assert!(names_a_profile_file(file), "{file}");
+    }
+    for id in ["coated-cmyk", "working-cmyk", "document", "srgb"] {
+        assert!(!names_a_profile_file(id), "{id}");
+    }
+}

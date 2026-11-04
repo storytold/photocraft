@@ -363,3 +363,25 @@ fn commands_wait_while_pdf_options_is_open() {
     h.run_steps(3);
     assert!(crate::menus::modal_allows(h.state(), "image.mode.cmyk"), "free again after Cancel");
 }
+
+/// An automation save can't name its output profile by file (that would read outside the granted
+/// paths); PDF/X answers on a save to another format are ignored rather than resolved.
+#[test]
+fn automation_saves_take_no_profile_files_and_other_formats_ignore_pdf_answers() {
+    let (mut h, writes) = pdf_app("unused.pdf");
+    let sink = writes.clone();
+    h.state_mut().services.automation_write = Some(Box::new(move |path: &str, _: &[u8]| {
+        sink.borrow_mut().push((path.to_string(), None));
+        Ok(())
+    }));
+    let file = json!({"pdfStandard": "x4-2008", "pdfOutputProfile": "C:/secret/printer.icc"});
+    let choices = crate::FormatChoices::from_params(&file, "app.save").unwrap();
+    let e = h.state_mut().save_automation_with(Some("a.pdf".into()), choices).unwrap_err();
+    assert!(e.contains("can't read a profile file"), "{e}");
+    assert!(writes.borrow().is_empty(), "nothing written");
+
+    let unresolvable = json!({"pdfStandard": "x4-2008", "pdfOutputProfile": "no-such-profile"});
+    let choices = crate::FormatChoices::from_params(&unresolvable, "app.save").unwrap();
+    h.state_mut().save_automation_with(Some("a.png".into()), choices).unwrap();
+    assert_eq!(writes.borrow().len(), 1, "the PNG is written; its PDF answers are never resolved");
+}

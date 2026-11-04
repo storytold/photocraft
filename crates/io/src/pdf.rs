@@ -313,10 +313,11 @@ fn write_pdf(page: &PrintPage, x: Option<&XPage>) -> Vec<u8> {
                 format!(
                     // `Custom`: the embedded profile defines the condition. A registered name
                     // (FOGRA39, …) can't be verified from a profile, and a wrong one would claim
-                    // another press condition.
-                    "<< /Type /Catalog /Pages 2 0 R{metadata} /OutputIntents [<< /Type /OutputIntent /S /GTS_PDFX /OutputConditionIdentifier (Custom) /OutputCondition {} /RegistryName (http://www.color.org) /Info {} /DestOutputProfile 6 0 R >>] >>",
-                    pdf_string(x.condition),
-                    pdf_string(x.condition)
+                    // another press condition. No `RegistryName`: it would say the identifier is
+                    // an entry of that registry, which `Custom` isn't.
+                    "<< /Type /Catalog /Pages 2 0 R{metadata} /OutputIntents [<< /Type /OutputIntent /S /GTS_PDFX /OutputConditionIdentifier (Custom) /OutputCondition {} /Info {} /DestOutputProfile 6 0 R >>] >>",
+                    pdf_text(x.condition),
+                    pdf_text(x.condition)
                 )
                 .as_bytes(),
             );
@@ -615,7 +616,9 @@ fn export_x(doc: &Document, x: &PdfX, secs: u64) -> std::result::Result<ExportRe
         "" => "Untitled",
         t => t,
     };
-    let id = file_id(&data, &[title, x.standard.id(), &dst.description], secs);
+    let bleed = format!("{b:.4}");
+    let profile_hash = file_id(&x.profile, &[], 0);
+    let id = file_id(&data, &[title, x.standard.id(), &dst.description, &bleed, &profile_hash], secs);
     let image = PrintImage { width: doc.size.width, height: doc.size.height, channels, data, icc };
     let page = PrintPage { paper: (pw, ph), image, rect: (0.0, 0.0, pw, ph), marks: Marks::default(), description: None, label: None };
     let created = i64::try_from(secs).ok().and_then(|s| chrono::DateTime::from_timestamp(s, 0)).unwrap_or_default();

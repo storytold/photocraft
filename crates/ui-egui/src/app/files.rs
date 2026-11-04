@@ -345,17 +345,19 @@ impl PhotocraftApp {
         }
     }
 
-    /// `settings` with the PDF/X answer in `choices` resolved against the session's colour
-    /// settings for `doc` (unchanged for a plain PDF or no answer). Every save path that takes
-    /// format choices goes through this, so a scripted or replayed PDF/X save is never written
-    /// as a plain PDF.
+    /// `settings` for writing `doc` to `path` with the PDF/X answer in `choices` resolved against
+    /// the session's colour settings (unchanged for a plain PDF, no answer, or a destination that
+    /// isn't a PDF, whose exporter never reads it). Every save path that takes format choices goes
+    /// through this, so a scripted or replayed PDF/X save is never written as a plain PDF.
     pub(crate) fn with_pdf_choice(
         &self,
         choices: &FormatChoices,
         doc: &photocraft_doc::Document,
+        path: &str,
         mut settings: ExportSettings,
     ) -> Result<ExportSettings, String> {
         if let Some(pdf) = &choices.pdf
+            && crate::pdf_options_ui::is_pdf_path(path)
             && let Some(request) = photocraft_engine::file_cmds::PdfRequest::resolve(&self.session.color, pdf).map_err(|e| e.to_string())?
         {
             settings.pdf = request.options_for(doc);
@@ -540,7 +542,7 @@ impl PhotocraftApp {
     fn write_save(&mut self, path: String, tiff_layers: Option<bool>, choices: &FormatChoices) -> Result<Value, String> {
         let copy = self.saves_copy(&path, tiff_layers)?;
         let settings = choices.apply(ExportSettings { tiff_layers: tiff_layers.unwrap_or(ExportSettings::default().tiff_layers), ..self.save_settings() });
-        let settings = self.with_pdf_choice(choices, &self.session.active().ok_or("no document")?.doc, settings)?;
+        let settings = self.with_pdf_choice(choices, &self.session.active().ok_or("no document")?.doc, &path, settings)?;
         match self.write_document(path.clone(), &settings, copy)? {
             Some((path, warnings)) => Ok(serde_json::json!({"path": path, "warnings": warnings})),
             None => Ok(serde_json::json!({"path": path, "warnings": [], "pending": true, "job": self.jobs.last_started.map(|j| j.0)})),
@@ -786,7 +788,14 @@ impl PhotocraftApp {
         // Only the target is granted: a linked smart object's stored path is document data, so
         // PSD export writes that layer as pixels instead of embedding the file.
         let settings = ExportSettings { read_linked_files: false, ..choices.apply(self.save_settings()) };
-        let settings = self.with_pdf_choice(&choices, &self.session.active().ok_or("no document")?.doc, settings)?;
+        // Only the target is granted here too: an output profile named by its file would be read
+        // without the automation read authority and embedded in the PDF.
+        if let Some(spec) = choices.pdf.as_ref().and_then(|p| p.profile.as_deref()).filter(|s| photocraft_engine::file_cmds::names_a_profile_file(s)) {
+            return Err(format!(
+                "`pdfOutputProfile` \"{spec}\": an automation save can't read a profile file; pass a built-in id, \"working-cmyk\" or \"document\" (set the working CMYK first to use another profile)"
+            ));
+        }
+        let settings = self.with_pdf_choice(&choices, &self.session.active().ok_or("no document")?.doc, &target, settings)?;
         // #2017: the File › Save worker path, so the encode doesn't block the frame loop.
         if self.background_jobs
             && let Some(save) = self.services.automation_save.clone()

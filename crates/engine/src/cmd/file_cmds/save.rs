@@ -321,9 +321,18 @@ pub struct PdfRequest {
 }
 
 impl PdfRequest {
-    /// `None` for a plain PDF.
+    /// `None` for a plain PDF. Under an automation authorization a profile named by its file is
+    /// refused: reading it would bypass the granted paths, and its bytes go into the PDF.
     pub fn resolve(color: &crate::color_cmds::ColorState, params: &PdfParams) -> Result<Option<Self>> {
         let Some(standard) = params.standard else { return Ok(None) };
+        if let Some(spec) = params.profile.as_deref().filter(|s| names_a_profile_file(s))
+            && crate::jobs::authorization_installed()
+        {
+            return Err(EngineError::BadParams {
+                cmd: "pdfOutputProfile".into(),
+                msg: format!("\"{spec}\": an automated save can't read a profile file; pass a built-in id, \"working-cmyk\" or \"document\""),
+            });
+        }
         let output = match params.profile.as_deref() {
             None | Some("document") => None,
             Some(spec) => Some(color.resolve(spec, None, Some(ColorMode::Cmyk))?),
@@ -384,6 +393,13 @@ pub fn pdf_x_options(
             bleed_pt: bleed_mm.max(0.0) * 72.0 / 25.4,
         }),
     }
+}
+
+/// Whether a `"pdfOutputProfile"` names a profile file (a path, or an `.icc`/`.icm` name) rather
+/// than a built-in id, `working-cmyk` or `document`.
+pub fn names_a_profile_file(spec: &str) -> bool {
+    let lower = spec.to_ascii_lowercase();
+    spec.contains(['/', '\\', ':']) || lower.ends_with(".icc") || lower.ends_with(".icm")
 }
 
 /// Whether `a` and `b` are one profile: the same ICC data, not merely the same description.

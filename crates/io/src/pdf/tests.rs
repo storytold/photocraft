@@ -403,7 +403,12 @@ fn control_characters_in_the_title_agree_in_info_and_xmp() {
 fn the_output_condition_is_custom_with_its_profile_embedded() {
     // A profile's name can't prove the press condition it was made for, so none is claimed.
     let out = export_with_options(&doc(ColorMode::Rgb), &x1a(None, 0.0)).unwrap();
-    assert!(has(&out.bytes, "/OutputConditionIdentifier (Custom) /OutputCondition ("));
+    let condition = photocraft_cms::Profile::parse(&v2_cmyk()).unwrap().description;
+    assert!(has(
+        &out.bytes,
+        &format!("/OutputConditionIdentifier (Custom) /OutputCondition {} /Info {} /DestOutputProfile", pdf_text(&condition), pdf_text(&condition))
+    ));
+    assert!(!has(&out.bytes, "/RegistryName"), "Custom is no registry entry");
     assert!(has(&out.bytes, "/DestOutputProfile 6 0 R"), "Custom needs the embedded profile");
 }
 
@@ -412,4 +417,26 @@ fn a_device_link_document_profile_is_never_embedded() {
     let link = patched(&as_v2(photocraft_cms::Builtin::Srgb.profile()), 12, b"link");
     let e = export_with_options(&doc(ColorMode::Rgb), &pdfx(PdfXStandard::X3_2002, Some(link), false, 0.0)).unwrap_err().to_string();
     assert!(e.contains("DeviceLink"), "{e}");
+}
+
+#[test]
+fn a_non_ascii_output_condition_survives_as_text() {
+    assert_eq!(pdf_text("Druckerei Köln"), format!("<FEFF{}>", "Druckerei Köln".encode_utf16().map(|u| format!("{u:04X}")).collect::<String>()));
+    assert_eq!(pdf_text("ISO Coated v2 (ECI)"), r"(ISO Coated v2 \(ECI\))", "ASCII keeps its literal form");
+}
+
+#[test]
+fn the_file_id_changes_with_the_bleed_and_the_profile() {
+    let d = doc(ColorMode::Rgb);
+    let id = |o: &PdfOptions| {
+        let out = export_x(&d, o.x.as_ref().unwrap(), 7).unwrap();
+        between(&out.bytes, "/ID [<", ">")
+    };
+    let mut other = x1a(None, 0.0);
+    if let Some(x) = &mut other.x {
+        x.profile = patched(&x.profile, 64, &[1]);
+    }
+    assert_ne!(id(&x1a(None, 0.0)), id(&x1a(None, 0.5)), "bleed");
+    assert_ne!(id(&x1a(None, 0.0)), id(&other), "profile bytes");
+    assert_eq!(id(&x1a(None, 0.0)), id(&x1a(None, 0.0)), "the same save, the same id");
 }
