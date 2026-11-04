@@ -435,12 +435,20 @@ mod tests {
         }
         app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
         app.run("layer.new.layer", json!({})).unwrap();
+        // A second saved document: a restart that kept only the first clean path would still pass
+        // with one clean file.
+        app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
+        {
+            let st = app.session.active_mut().unwrap();
+            st.path = Some("C:/work/second.psd".into());
+            st.saved_revision = st.revision;
+        }
         let dirty: Vec<bool> = app.session.documents().iter().map(|d| d.is_dirty()).collect();
-        assert_eq!(dirty, vec![false, true]);
+        assert_eq!(dirty, vec![false, true, false]);
 
         let reason = "Unexpected error variant (driver implementation is at fault)";
         request_restart(&mut app, reason, 1);
-        assert_eq!(*requests.borrow(), vec![crate::WindowRestart { reason: reason.into(), reopen: vec!["C:/work/clean.psd".into()], left_out: 0 }]);
+        assert_eq!(*requests.borrow(), vec![crate::WindowRestart { reason: reason.into(), reopen: vec!["C:/work/clean.psd".into(), "C:/work/second.psd".into()], left_out: 0 }]);
 
         // Recovery off with unsaved work: the work wouldn't come back, so no restart is asked for.
         app.session.prefs.edit(|p| p.file_handling.recover_on_launch = false);
@@ -492,7 +500,7 @@ mod tests {
         let long = "x".repeat(1_000);
         let (reopen, left_out) = reopen_list(vec![long.clone(); 20]);
         assert_eq!(reopen.len() + left_out, 20);
-        assert!(left_out > 0 && reopen.len() * 1_000 < MAX_REOPEN_CHARS, "{} named, {left_out} left out", reopen.len());
+        assert!(!reopen.is_empty() && left_out > 0 && reopen.len() * 1_000 < MAX_REOPEN_CHARS, "{} named, {left_out} left out", reopen.len());
         assert_eq!(reopen_list(Vec::new()), (Vec::new(), 0));
         // A single name longer than the whole budget is left out, not a panic.
         assert_eq!(reopen_list(vec!["y".repeat(MAX_REOPEN_CHARS + 1)]), (Vec::new(), 1));
