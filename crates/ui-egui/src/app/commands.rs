@@ -291,9 +291,9 @@ impl PhotocraftApp {
     }
 
     pub fn sync_views(&mut self) {
-        // The Paths panel selection belongs to the active document. Ordinary edits replace the
-        // snapshot and advance its revision; a replaced snapshot without a newer revision is a
-        // reopened document, even with the same ID.
+        // The Paths panel selection and canvas context menu belong to the active document.
+        // Ordinary edits replace the snapshot and advance its revision; a replaced snapshot
+        // without a newer revision is a reopened document, even with the same ID.
         let document = self.session.active().map(|st| (st.doc.id, st.revision, std::sync::Arc::downgrade(&st.doc)));
         let same_document = match (&self.path_document, &document) {
             (Some((old_id, old_revision, old_source)), Some((id, revision, source))) => old_id == id && (revision > old_revision || old_source.ptr_eq(source)),
@@ -302,6 +302,7 @@ impl PhotocraftApp {
         };
         if !same_document {
             self.ui.selected_path = None;
+            self.ui.canvas_tool_menu = None;
         }
         self.path_document = document;
         vector_ui::cancel_stale_pen(self);
