@@ -475,6 +475,20 @@ fn the_title_bar_hides_its_menus_with_the_mac_menu_bar() {
     }
 }
 
+/// A plug-in installed over the control channel, with no click or key press, shows in the menus:
+/// `plugin.install` isn't journaled, so the registry's revision is what changes.
+#[test]
+fn installing_a_plugin_without_input_rebuilds_the_menus() {
+    let mut app = app(true);
+    let before = state_hash(&app, None);
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../plugins/tests/fixtures/invert.wasm");
+    {
+        let _installing = crate::plugin_ui::REGISTRY_TESTS.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+        app.run("plugin.install", json!({"path": path})).unwrap();
+    }
+    assert_ne!(state_hash(&app, None), before, "the native menu lists the new plug-in");
+}
+
 #[test]
 fn opening_or_closing_a_workspace_without_input_rebuilds_the_menus() {
     let mut app = app(true);

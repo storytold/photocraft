@@ -741,7 +741,8 @@ pub(crate) fn had_input(ctx: &egui::Context) -> bool {
 
 /// What the menus' rows depend on, cheaply: commands run, the documents (their names, in tab
 /// order, for the Window menu) and the active one's revision,
-/// selection, recent files, panels and view state, the language. `input` forces a change on
+/// selection, recent files, panels and view state, the language, the installed plug-ins (an agent
+/// can install one without a click or key press). `input` forces a change on
 /// frames with a click or key press, which covers state the hash doesn't list.
 pub(crate) fn state_hash(app: &PhotocraftApp, input: Option<u64>) -> u64 {
     let mut h = DefaultHasher::new();
@@ -763,6 +764,7 @@ pub(crate) fn state_hash(app: &PhotocraftApp, input: Option<u64>) -> u64 {
     (app.discard.is_some(), app.camera_raw.is_some(), crate::distort_ui::modal_workspace(app)).hash(&mut h);
     serde_json::to_string(&(&ui.panels, &ui.extras, &ui.view, ui.theme, ui.tool)).unwrap_or_default().hash(&mut h);
     s.prefs().interface.language.hash(&mut h);
+    photocraft_plugins::registry::revision().hash(&mut h);
     h.finish()
 }
 
