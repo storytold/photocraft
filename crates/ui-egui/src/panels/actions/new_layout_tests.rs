@@ -1,5 +1,6 @@
 //! Modern presentation and its actual runtime ownership/navigation seams.
 use super::*;
+use crate::{FileDialogRequest, actions::new_set_dialog};
 use egui_kittest::{Harness, kittest::Queryable};
 
 fn app() -> PhotocraftApp {
