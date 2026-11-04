@@ -435,6 +435,7 @@ mod tests {
         }
         app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
         app.run("layer.new.layer", json!({})).unwrap();
+        app.session.active_mut().unwrap().path = Some("C:/work/dirty.psd".into());
         // A second saved document: a restart that kept only the first clean path would still pass
         // with one clean file.
         app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
@@ -500,7 +501,7 @@ mod tests {
         let long = "x".repeat(1_000);
         let (reopen, left_out) = reopen_list(vec![long.clone(); 20]);
         assert_eq!(reopen.len() + left_out, 20);
-        assert!(!reopen.is_empty() && left_out > 0 && reopen.len() * 1_000 < MAX_REOPEN_CHARS, "{} named, {left_out} left out", reopen.len());
+        assert_eq!((reopen.len(), left_out), (7, 13));
         assert_eq!(reopen_list(Vec::new()), (Vec::new(), 0));
         // A single name longer than the whole budget is left out, not a panic.
         assert_eq!(reopen_list(vec!["y".repeat(MAX_REOPEN_CHARS + 1)]), (Vec::new(), 1));
