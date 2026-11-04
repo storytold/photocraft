@@ -397,6 +397,23 @@ fn prediction_32bit_floats_roundtrip() {
 }
 
 #[test]
+fn fused_prediction_matches_shuffled_byte_deltas() {
+    for w in [1, 2, 3, 31, 256, 257] {
+        let l = layout(2, w, 3, 32, Version::Psb);
+        let mut actual: Vec<_> = (0..l.decoded_len().unwrap()).map(|i| (i * 31 + i / 7) as u8).collect();
+        let expected: Vec<_> = actual
+            .chunks_exact(w * 4)
+            .flat_map(|row| {
+                let shuffled: Vec<_> = (0..4).flat_map(|k| row.iter().skip(k).step_by(4).copied()).collect();
+                (0..shuffled.len()).map(move |i| shuffled[i].wrapping_sub(if i == 0 { 0 } else { shuffled[i - 1] }))
+            })
+            .collect();
+        predict(&mut actual, &l).unwrap();
+        assert_eq!(actual, expected, "width {w}");
+    }
+}
+
+#[test]
 fn zip_bomb_is_bounded() {
     let big = zip_compress(&vec![0u8; 1 << 20]);
     let out = zip_decompress(&big, 10).unwrap();
@@ -422,6 +439,46 @@ fn counted_packbits_matches_mixed_runs_and_literals() {
     for n in 0..520 {
         let bytes: Vec<_> = (0..n).map(|i| if i % 23 < 9 { (i / 23) as u8 } else { (i * 31) as u8 }).collect();
         assert_eq!(packbits::encoded_len(&bytes), packbits::encode_vec(&bytes).len());
+    }
+}
+
+#[test]
+fn prediction_matches_independent_serial_rows() {
+    for depth in [1, 8, 16, 32] {
+        let layout = layout(4, if depth == 1 { 8193 } else { 257 }, 1031, depth, Version::Psb);
+        let rb = layout.row_bytes();
+        let bytes: Vec<_> = (0..layout.decoded_len().unwrap() + 3).map(|i| (i * 13 + i / 17) as u8).collect();
+        let mut expected = bytes.clone();
+        for row in expected.chunks_exact_mut(rb) {
+            let src = row.to_vec();
+            if depth == 16 {
+                for (i, p) in row.as_chunks_mut::<2>().0.iter_mut().enumerate().skip(1) {
+                    let a = u16::from_be_bytes([src[i * 2], src[i * 2 + 1]]);
+                    let b = u16::from_be_bytes([src[i * 2 - 2], src[i * 2 - 1]]);
+                    *p = a.wrapping_sub(b).to_be_bytes();
+                }
+            } else {
+                let shuffled = if depth == 32 { (0..4).flat_map(|c| src.iter().skip(c).step_by(4).copied()).collect::<Vec<_>>() } else { src };
+                for (i, p) in row.iter_mut().enumerate() {
+                    *p = shuffled[i].wrapping_sub(if i == 0 { 0 } else { shuffled[i - 1] });
+                }
+            }
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        for threads in [1, 2, 4] {
+            use rayon::prelude::*;
+            let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
+            pool.install(|| {
+                (0..3).into_par_iter().for_each(|_| {
+                    let mut got = bytes.clone();
+                    predict(&mut got, &layout).unwrap();
+                    assert_eq!(got, expected, "depth {depth}, pool {threads}");
+                })
+            });
+        }
+        let mut got = bytes;
+        predict(&mut got, &layout).unwrap();
+        assert_eq!(got, expected);
     }
 }
 

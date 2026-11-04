@@ -527,6 +527,19 @@ pub fn predict(buf: &mut [u8], layout: &PlaneLayout) -> Result<()> {
     if rb == 0 {
         return Ok(());
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    if buf.len() >= 1 << 20 && matches!(layout.depth, 1 | 8 | 16 | 32) {
+        use rayon::prelude::*;
+        let threads = rayon::current_num_threads().min(32);
+        let rows = buf.len() / rb;
+        let step = rows.div_ceil(threads).max(1) * rb;
+        return buf[..rows * rb].par_chunks_mut(step).try_for_each(|part| predict_rows(part, layout));
+    }
+    predict_rows(buf, layout)
+}
+
+fn predict_rows(buf: &mut [u8], layout: &PlaneLayout) -> Result<()> {
+    let rb = layout.row_bytes();
     let w = layout.width;
     let mut scratch = Vec::new();
     for row in buf.chunks_exact_mut(rb) {
@@ -544,15 +557,15 @@ pub fn predict(buf: &mut [u8], layout: &PlaneLayout) -> Result<()> {
                 }
             }
             32 => {
-                scratch.clear();
                 scratch.resize(rb, 0);
-                for i in 0..w {
-                    for k in 0..4 {
-                        scratch[k * w + i] = row[4 * i + k];
+                for (k, plane) in (0..4).zip(scratch.chunks_exact_mut(w)) {
+                    // Delta continues across byte-plane boundaries, but resets at each row.
+                    let mut previous = if k == 0 { 0 } else { row[4 * (w - 1) + k - 1] };
+                    for (dst, sample) in plane.iter_mut().zip(row.as_chunks::<4>().0) {
+                        let byte = sample[k];
+                        *dst = byte.wrapping_sub(previous);
+                        previous = byte;
                     }
-                }
-                for i in (1..rb).rev() {
-                    scratch[i] = scratch[i].wrapping_sub(scratch[i - 1]);
                 }
                 row.copy_from_slice(&scratch);
             }
