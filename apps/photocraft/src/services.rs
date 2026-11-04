@@ -86,9 +86,11 @@ fn open_filters() -> Vec<(&'static str, Vec<String>)> {
 /// File › Save As formats: (filter name, extensions). PSD, PSB and PhotoCraft's own format, which
 /// keep the most of a document, then the rest by name, so a long list stays easy to search. The
 /// filter matching the suggested name's extension comes first, so a .pcraft document saves as
-/// .pcraft by default and everything else keeps defaulting to PSD.
+/// .pcraft by default and everything else keeps defaulting to PSD. The PSD type takes `.psb` too:
+/// Windows adds the selected type's extension to a name whose extension isn't one of the type's,
+/// so `art.psb` typed under the PSD type would come back as `art.psb.psd`.
 const SAVE_FILTERS: &[(&str, &[&str])] = &[
-    ("PSD Document", &["psd"]),
+    ("PSD Document", &["psd", "psb"]),
     ("PSB Large Document", &["psb"]),
     ("PhotoCraft", &["pcraft"]),
     ("Amiga IFF", &["iff"]),
@@ -140,10 +142,14 @@ fn save_filters(suggested: &str) -> Vec<(String, Vec<String>)> {
         return vec![(name.to_string(), exts.iter().map(|e| e.to_string()).collect())];
     }
     let mut v: Vec<(String, Vec<String>)> = SAVE_FILTERS.iter().map(|(name, exts)| (name.to_string(), exts.iter().map(|e| e.to_string()).collect())).collect();
-    match v.iter().position(|(_, exts)| exts.contains(&ext)) {
+    // The type the extension is first for (`.psb` starts on PSB, not on PSD's second extension),
+    // else any type that lists it.
+    let own = v.iter().position(|(_, exts)| exts.first() == Some(&ext));
+    match own.or_else(|| v.iter().position(|(_, exts)| exts.contains(&ext))) {
         Some(i) => {
             let (name, mut exts) = v.remove(i);
-            // Windows adds the first type's first extension to a bare name: `.psb`, not `.psd`.
+            // Windows adds the first type's first extension to a bare name: `cat.jpeg` stays
+            // `.jpeg`, and `sky.fit` stays `.fit`.
             exts.retain(|e| *e != ext);
             exts.insert(0, ext);
             v.insert(0, (name, exts));
@@ -167,6 +173,16 @@ pub(crate) fn with_chosen_type(path: &Path, opened_with: Option<&str>, chosen: &
     let Some(first) = chosen.first() else { return path.to_path_buf() };
     let ext = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
     let opened_ext = opened_with.and_then(|n| Path::new(n).extension()).and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
+    // A name that already had one of the type's extensions, with the type's first one added after
+    // it (KDE's dialog does that: `art.psb` typed under the PSD type came back as `art.psb.psd`).
+    let inner = path.file_stem().map(Path::new).and_then(|s| s.extension()).and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
+    if let (Some(ext), Some(inner)) = (&ext, &inner)
+        && ext != inner
+        && chosen.contains(ext)
+        && chosen.contains(inner)
+    {
+        return path.with_extension("");
+    }
     match ext {
         Some(ext) if chosen.contains(&ext) => path.to_path_buf(),
         Some(ext) if opened_ext.as_ref() == Some(&ext) => path.with_extension(first),

@@ -975,14 +975,20 @@ fn tiff_options_reach_the_written_file() {
 fn psb_is_its_own_save_type() {
     let filters = save_filters("Untitled-1.psd");
     let (psd, psb) = (&filters[0], &filters[1]);
-    assert_eq!(psd.1, vec!["psd".to_string()], "{psd:?}");
+    // The PSD type takes a typed .psb too, so Windows doesn't add .psd after it.
+    assert_eq!(psd.1, vec!["psd".to_string(), "psb".to_string()], "{psd:?}");
     assert_eq!(psb.1, vec!["psb".to_string()], "{psb:?}");
-    assert_eq!(save_filters("big.psb")[0].1, vec!["psb".to_string()], "a .psb starts on its own type");
+    let big = save_filters("big.psb");
+    assert_eq!((big[0].0.as_str(), big[0].1.clone()), ("PSB Large Document", vec!["psb".to_string()]), "a .psb starts on its own type");
     let chosen = |f: &(String, Vec<String>)| with_chosen_type(Path::new("/pics/art"), Some("art.psd"), &f.1);
     assert_eq!(chosen(psd), PathBuf::from("/pics/art.psd"));
     assert_eq!(chosen(psb), PathBuf::from("/pics/art.psb"));
     let opened = Some("Untitled-1");
     assert_eq!(with_chosen_type(Path::new("/pics/art.psb"), opened, &psd.1), PathBuf::from("/pics/art.psb"), "a typed .psb stays");
+    // KDE adds the type's first extension after a typed one of its own: that one is taken back.
+    assert_eq!(with_chosen_type(Path::new("/pics/art.psb.psd"), opened, &psd.1), PathBuf::from("/pics/art.psb"), "KDE's art.psb.psd");
+    // A dot that's part of the name stays (.jpg isn't one of the PSD type's).
+    assert_eq!(with_chosen_type(Path::new("/pics/scan.jpg.psd"), opened, &psd.1), PathBuf::from("/pics/scan.jpg.psd"));
 }
 
 /// The document formats, then the rest by name, so a long list stays easy to search.
