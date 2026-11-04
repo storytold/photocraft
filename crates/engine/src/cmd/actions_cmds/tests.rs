@@ -1322,3 +1322,121 @@ fn record_keeps_an_empty_loaded_sets_exact_name() {
     assert_eq!(crate::actions_edit_cmds::set_names(&s), [" Web "], "one folder, not a trimmed second one");
     assert_eq!(s.execute("actions.save", json!({"set": " Web "})).unwrap()["actions"], json!(["First"]));
 }
+
+#[test]
+fn draft_capture_spelling_uses_classic_filter_and_dialog_offsets() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width":300,"height":100,"background":"white"})).unwrap();
+    let layer = s.execute("type.create", json!({"x":10,"y":50,"text":"Teh brwon end","size":12})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("actions.record", json!({"name":"Spell draft"})).unwrap();
+    s.execute("layer.renameLayer", json!({"name":"Text"})).unwrap();
+    s.execute("actions.stop", json!({})).unwrap();
+    s.execute("actions.toggle", json!({"action":0,"step":0,"enabled":false})).unwrap();
+    s.execute("actions.dialog", json!({"action":0,"step":0,"enabled":true})).unwrap();
+    let original = s.actions.list[0].clone();
+    let draft = s.execute("actions.editor.open", json!({"action":0})).unwrap()["draft"].as_u64().unwrap();
+    s.execute("actions.editor.record", json!({"draft":draft})).unwrap();
+    for params in [
+        json!({"action":"list","allLayers":true}),
+        json!({"action":"suggest","word":"recieve"}),
+        json!({"action":"change","layer":layer,"start":0,"end":3,"word":"Teh","replace":"The"}),
+        json!({"action":"changeAll","word":"brwon","replace":"brown"}),
+        json!({"action":"addToDictionary","word":"Photocraft"}),
+        json!({"action":"removeFromDictionary","word":"Photocraft"}),
+        json!({"allLayers":true}),
+        json!({"action":null,"allLayers":false}),
+    ] {
+        s.execute("edit.checkSpelling", params).unwrap();
+    }
+    assert!(matches!(
+        &s.active().unwrap().doc.layer(photocraft_doc::LayerId(layer)).unwrap().content,
+        photocraft_doc::LayerContent::Text(text) if text.text == "The brown end"
+    ));
+    let journal = s.journal.clone();
+    let (take, rev) = (s.actions.take, s.actions.rev);
+    let shown = s.execute("actions.editor.get", json!({"draft":draft})).unwrap();
+    assert_eq!(s.execute("actions.editor.get", json!({"draft":draft})).unwrap(), shown);
+    let mut expected = original.clone();
+    expected.steps.extend([("edit.checkSpelling".into(), json!({"allLayers":true})), ("edit.checkSpelling".into(), json!({"allLayers":false}))]);
+    expected.dialogs.extend([1, 2]);
+    assert_eq!(shown["action"], serde_json::to_value(&expected).unwrap());
+    assert_eq!(s.actions.list[0], original, "inspection must not publish");
+    assert_eq!(s.journal, journal);
+    assert_eq!((s.actions.take, s.actions.rev), (take, rev));
+    s.execute("actions.editor.stop", json!({"draft":draft})).unwrap();
+    assert_eq!(s.execute("actions.editor.get", json!({"draft":draft})).unwrap()["action"], shown["action"]);
+    s.execute("actions.editor.save", json!({"draft":draft})).unwrap();
+    assert_eq!(s.actions.list[0], expected, "Save must retain the projected steps and existing flags");
+}
+
+#[test]
+fn draft_capture_nudges_match_classic_rounding_runs_and_separators() {
+    let capture = |draft_capture: bool| {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width":24,"height":24,"background":"transparent"})).unwrap();
+        s.execute("layer.new.layer", json!({"name":"Target"})).unwrap();
+        let draft = if draft_capture {
+            let id = s.execute("actions.editor.open", json!({"name":"Nudges"})).unwrap()["draft"].as_u64().unwrap();
+            s.execute("actions.editor.record", json!({"draft":id})).unwrap();
+            Some(id)
+        } else {
+            s.execute("actions.record", json!({"name":"Nudges"})).unwrap();
+            None
+        };
+        for params in
+            [json!({"dx":0.6,"dy":0,"coalesce":"nudge:1"}), json!({"dx":0.6,"dy":0,"coalesce":"nudge:1"}), json!({"dx":0,"dy":-0.6,"coalesce":"nudge:2"})]
+        {
+            s.execute("layer.translate", params).unwrap();
+        }
+        s.execute("layer.renameLayer", json!({"name":"Renamed"})).unwrap();
+        s.execute("layer.translate", json!({"dx":0,"dy":-0.6,"coalesce":"nudge:2"})).unwrap();
+        match draft {
+            Some(id) => {
+                // Save directly from capture uses the same projection as Get and Stop.
+                let shown = s.execute("actions.editor.get", json!({"draft":id})).unwrap();
+                s.execute("actions.editor.save", json!({"draft":id})).unwrap();
+                assert_eq!(serde_json::to_value(&s.actions.list[0]).unwrap(), shown["action"]);
+            }
+            None => {
+                s.execute("actions.stop", json!({})).unwrap();
+            }
+        }
+        s.actions.list[0].clone()
+    };
+    let expected: Vec<(String, Value)> = vec![
+        ("layer.translate".into(), json!({"dx":2.0,"dy":0.0})),
+        ("layer.translate".into(), json!({"dx":0.0,"dy":-1.0})),
+        ("layer.renameLayer".into(), json!({"name":"Renamed"})),
+        ("layer.translate".into(), json!({"dx":0.0,"dy":-1.0})),
+    ];
+    let (classic, draft) = (capture(false), capture(true));
+    assert_eq!(classic.steps, expected);
+    assert_eq!(draft.steps, expected, "fold within a run, never across a new run or another command");
+    assert_eq!(draft.dialogs, classic.dialogs);
+    assert!(draft.steps.iter().all(|(_, params)| params.get("coalesce").is_none()));
+}
+
+#[test]
+fn draft_capture_preview_flush_keeps_projection_and_recording_owner() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width":300,"height":100,"background":"white"})).unwrap();
+    s.execute("type.create", json!({"x":10,"y":50,"text":"Teh end","size":12})).unwrap();
+    let draft = s.execute("actions.editor.open", json!({"name":"Preview"})).unwrap()["draft"].as_u64().unwrap();
+    s.execute("actions.editor.record", json!({"draft":draft})).unwrap();
+    s.execute("edit.checkSpelling", json!({"action":"suggest","word":"recieve"})).unwrap();
+    s.execute("edit.checkSpelling", json!({"allLayers":true})).unwrap();
+    let shown = s.execute("actions.editor.get", json!({"draft":draft})).unwrap();
+    let take = s.actions.take;
+    // Acquire the existing engine snapshot API without executing its document steps.
+    let (snapshot, owner) = playback::preview(&mut s, draft, 0).unwrap();
+    assert_eq!(serde_json::to_value(snapshot.as_ref()).unwrap(), shown["action"]);
+    owner.validate(&s).unwrap();
+    owner.finish(&mut s);
+    assert_eq!(s.actions.take, take);
+    assert!(s.actions.recording_active());
+    assert!(s.actions.list.is_empty());
+    let after = s.execute("actions.editor.get", json!({"draft":draft})).unwrap();
+    assert_eq!(after["action"], shown["action"], "suspend flush must not lose flags or duplicate capture");
+    assert_eq!(after["action"]["steps"], json!([["edit.checkSpelling",{"allLayers":true}]]));
+    assert_eq!(after["action"]["dialogs"], json!([0]));
+}

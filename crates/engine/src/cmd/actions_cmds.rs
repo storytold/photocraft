@@ -570,16 +570,25 @@ pub(crate) fn flush_recording(s: &mut Session) -> Result<()> {
     if idx >= s.actions.list.len() {
         return Err(bad("actions.stop", "the action being recorded no longer exists"));
     }
-    let steps = fold_recorded_nudges(pending_steps(s, idx).cloned());
+    let steps = project_recorded_steps(pending_steps(s, idx).cloned());
     s.actions.recording = Some((s.journal.len(), idx));
     if !steps.is_empty() {
-        let action = &mut s.actions.list[idx];
-        let first = action.steps.len();
-        action.dialogs.extend(steps.iter().enumerate().filter(|(_, (id, _))| RECORDED_WITH_DIALOG.contains(&id.as_str())).map(|(i, _)| first + i));
-        action.steps.extend(steps);
+        append_recorded_steps(&mut s.actions.list[idx], steps);
         s.actions.touch();
     }
     Ok(())
+}
+
+/// The logical capture projection shared by Classic and the unpublished editor.
+fn project_recorded_steps(steps: impl IntoIterator<Item = (String, Value)>) -> Vec<(String, Value)> {
+    fold_recorded_nudges(steps.into_iter().filter(|(id, params)| recorded(id, params)))
+}
+
+/// Append projected steps without changing existing flags or their indices.
+fn append_recorded_steps(action: &mut Action, steps: Vec<(String, Value)>) {
+    let first = action.steps.len();
+    action.dialogs.extend(steps.iter().enumerate().filter(|(_, (id, _))| RECORDED_WITH_DIALOG.contains(&id.as_str())).map(|(i, _)| first + i));
+    action.steps.extend(steps);
 }
 
 /// Consecutive Move-tool keystrokes in one UI nudge run are one relative action step.

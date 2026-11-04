@@ -58,7 +58,7 @@ fn owned<'a>(s: &'a Session, p: &Value, cmd: &str) -> Result<&'a Draft> {
     s.actions.editor.as_ref().filter(|draft| draft.id == id).ok_or_else(|| bad(cmd, "this editor is no longer open"))
 }
 
-/// Pending capture uses the same logical-command filter as Classic recording.
+/// Raw replayable capture is counted before projection to retain the editor's allocation bound.
 fn pending<'a>(s: &'a Session, draft: &Draft) -> impl Iterator<Item = &'a (String, Value)> {
     s.journal.iter().skip(draft.recording.unwrap_or(s.journal.len())).filter(|(id, _)| replayable(id))
 }
@@ -70,7 +70,7 @@ fn visible(s: &Session, draft: &Draft) -> Result<Action> {
         return Err(bad(RECORD, "the draft exceeds the 100000-step limit"));
     }
     let mut value = draft.value.clone();
-    value.steps.extend(pending(s, draft).cloned());
+    super::append_recorded_steps(&mut value, super::project_recorded_steps(pending(s, draft).cloned()));
     Ok(value)
 }
 
