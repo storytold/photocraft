@@ -97,7 +97,7 @@ fn gradient_map_strip(ui: &mut egui::Ui, stops: &mut Vec<Stop>, cx: &EditorCx, s
         {
             let location = round(loc_of(pos.x - drag.offset), 0.001);
             // As far off the strip as the Gradient tool's; two stops always stay.
-            let off = pos.y > bar.bottom() + 28.0 || pos.y < bar.top() - 26.0;
+            let off = crate::gradient_ui::off_strip(pos, bar);
             if off && drag.removed.is_none() && stops.len() > 2 && drag.index < stops.len() {
                 drag.removed = Some(stops.remove(drag.index));
                 *selected = drag.index.min(stops.len() - 1);
@@ -120,13 +120,14 @@ fn gradient_map_strip(ui: &mut egui::Ui, stops: &mut Vec<Stop>, cx: &EditorCx, s
                 }
             }
         }
-        if resp.drag_stopped() {
+        // A drag can also end without `drag_stopped` (released outside the window, focus lost):
+        // either way what the preview shows is committed, so a stop taken off the strip isn't left
+        // removed with no History step.
+        if resp.drag_stopped() || !ui.input(|i| i.pointer.primary_down()) {
             edit.commit = drag.changed;
             ui.data_mut(|d| d.remove::<MapStopDrag>(key));
-        } else if ui.input(|i| i.pointer.primary_down()) {
-            ui.data_mut(|d| d.insert_temp(key, drag));
         } else {
-            ui.data_mut(|d| d.remove::<MapStopDrag>(key));
+            ui.data_mut(|d| d.insert_temp(key, drag));
         }
     }
     if resp.clicked()

@@ -576,7 +576,36 @@ fn gradient_map_stop_dragged_off_the_strip_is_removed_in_one_step() {
         h.drop_at(back);
         h.run_steps(3);
         assert_eq!(map_stops(&layer(&h).1), vec![(0.0, [0, 0, 0]), (0.4, [255, 0, 0]), (0.5, [0, 255, 0]), (1.0, [255, 255, 255])], "{depth}: kept");
+        assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1, "{depth}: the move is one step");
     }
+}
+
+/// A drag that ends without its release reaching the strip (the drag taken away: focus lost, the
+/// pointer let go elsewhere) still commits what the preview shows: a stop taken off the strip isn't
+/// left removed with no History step.
+#[test]
+fn gradient_map_stop_drag_that_ends_elsewhere_still_commits() {
+    let mut h = app_harness("gradientMap", "rgb", 8);
+    let (id, _) = layer(&h);
+    let four = json!({"layer": id.0, "stops": [[0, "#000000"], [0.25, "#ff0000"], [0.5, "#00ff00"], [1, "#ffffff"]]});
+    h.state_mut().run("layer.setAdjustment", four).unwrap();
+    h.run_steps(3);
+    let steps = h.state().session.active().unwrap().history.past_len();
+    let start = map_handle(&h, 0.25);
+    let away = start + vec2(0.0, 90.0);
+    h.hover_at(start);
+    h.run_steps(1);
+    h.drag_at(start);
+    h.run_steps(1);
+    h.hover_at(away);
+    h.run_steps(1);
+    // The drag ends without reaching the strip's response, then the button comes up.
+    h.ctx.stop_dragging();
+    h.run_steps(1);
+    h.drop_at(away);
+    h.run_steps(3);
+    assert_eq!(map_stops(&layer(&h).1).len(), 3, "the stop the preview dropped is gone from the layer");
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1, "in one History step");
 }
 
 #[test]
@@ -585,6 +614,7 @@ fn gradient_map_last_two_stops_cant_be_dragged_off_the_strip() {
     let (id, _) = layer(&h);
     h.state_mut().run("layer.setAdjustment", json!({"layer": id.0, "stops": [[0, "#000000"], [1, "#ffffff"]]})).unwrap();
     h.run_steps(3);
+    let steps = h.state().session.active().unwrap().history.past_len();
     let start = map_handle(&h, 0.0);
     let away = start + vec2(0.0, 90.0);
     h.hover_at(start);
@@ -593,9 +623,12 @@ fn gradient_map_last_two_stops_cant_be_dragged_off_the_strip() {
     h.run_steps(1);
     h.hover_at(away);
     h.run_steps(1);
+    let preview = h.state().live_adjust.as_ref().map(|(_, v)| v["stops"].as_array().map(Vec::len));
+    assert!(preview.is_none_or(|n| n == Some(2)), "the preview keeps both: {preview:?}");
     h.drop_at(away);
     h.run_steps(3);
-    assert_eq!(map_stops(&layer(&h).1).len(), 2);
+    assert_eq!(map_stops(&layer(&h).1), vec![(0.0, [0, 0, 0]), (1.0, [255, 255, 255])], "both stay where they were");
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), steps, "nothing to record");
 }
 
 #[test]
