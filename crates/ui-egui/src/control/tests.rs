@@ -706,6 +706,26 @@ fn agent_space_right_click_while_typing_keeps_the_type_menu() {
     assert!(menu.anchor.is_none() && menu.text, "the type edit menu, not the view menu");
 }
 
+/// #11271: with a text field focused Space types, so an agent's Space right-click with the Move
+/// tool is the Move tool's (its layer list), not the Hand's view menu, as `hold_keys` decides in
+/// the app.
+#[test]
+fn agent_space_right_click_with_a_text_field_focused_keeps_the_tool() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let ctx = egui::Context::default();
+    app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
+    app.sync_views();
+    app.ui.tool = crate::state::Tool::Move;
+    let field = egui::Id::new("a focused text field");
+    egui::text_edit::TextEditState::default().store(&ctx, field);
+    ctx.memory_mut(|m| m.request_focus(field));
+    assert!(ctx.text_edit_focused(), "the field has focus");
+    let click = json!({"space": true, "button": "secondary", "events": [{"kind":"down","x":8,"y":8},{"kind":"up","x":8,"y":8}]});
+    assert_eq!(call(&mut app, &ctx, "ui.pointer", click)["ok"], true);
+    assert!(app.ui.canvas_tool_menu.as_ref().is_none_or(|m| m.anchor.is_none()), "no view menu while a field has focus");
+    assert!(app.ui.layer_menu.is_some(), "the Move tool's layer list");
+}
+
 /// #6561: an agent's right-click on a pending crop opens the crop menu, as on the canvas.
 #[test]
 fn agent_right_click_on_a_pending_crop_opens_and_runs_the_crop_menu() {

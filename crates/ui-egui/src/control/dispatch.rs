@@ -1421,14 +1421,15 @@ fn secondary_menu_took(app: &mut PhotocraftApp, ctx: &egui::Context, g: &Pointer
 
 /// The tool a gesture's right button belongs to, as `hold_keys` decides it in the app (#11271):
 /// Space holds the Hand over the selected tool, ⌘Space or ⌥Space the Zoom (whose right button
-/// opens no view menu). Space types while text is edited, and repositions a crop frame, a pen
-/// drag or a shape, marquee or lasso being drawn: the selected tool keeps the button then.
-fn held_tool(app: &PhotocraftApp, g: &PointerGesture) -> Tool {
+/// opens no view menu). Space types while text is edited or a text field has focus, and
+/// repositions a crop frame, a pen drag or a shape, marquee or lasso being drawn: the selected
+/// tool keeps the button then.
+fn held_tool(app: &PhotocraftApp, ctx: &egui::Context, g: &PointerGesture) -> Tool {
     let drawing = crate::crop_ui::active(app)
         || app.ui.pen.as_ref().is_some_and(|pen| pen.dragging && !pen.curvature)
         || app.drag.as_ref().is_some_and(|d| crate::hold_keys::repositions(d.tool))
         || crate::type_transform::active(app);
-    if !g.space || app.ui.text_edit.is_some() || drawing {
+    if !g.space || app.ui.text_edit.is_some() || ctx.text_edit_focused() || drawing {
         app.ui.tool
     } else if g.mods.command || g.mods.alt {
         Tool::Zoom
@@ -1448,7 +1449,7 @@ fn secondary_transform_or_crop_took(app: &mut PhotocraftApp, ctx: &egui::Context
         return true;
     }
     // Right-click with the Move tool, or ⌘/Ctrl+right-click: list the layers there.
-    let held = held_tool(app, g);
+    let held = held_tool(app, ctx, g);
     if crate::layer_pick_ui::is_gesture(held, g.mods) {
         if down {
             app.ui.canvas_tool_menu = None;
@@ -1480,7 +1481,7 @@ fn secondary_canvas_menu_took(app: &mut PhotocraftApp, ctx: &egui::Context, g: &
     if crate::canvas_tool_menu::magnetic_drawing(app) {
         return true;
     }
-    let held = held_tool(app, g);
+    let held = held_tool(app, ctx, g);
     if crate::canvas_tool_menu::pasteboard_at(app, held, [x, y]) {
         if down {
             crate::canvas_tool_menu::open_pasteboard(app, ctx, held, screen_point(app, x, y));
