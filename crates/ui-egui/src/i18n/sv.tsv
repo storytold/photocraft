@@ -4801,3 +4801,24 @@ smartSvg	Save to the opened SVG file. Each saved change becomes one undo step in
 smartSvg	Stop syncing this Smart Object	Sluta synkronisera det här smarta objektet
 smartSvg	SVG editor opened. Save the SVG to update this Smart Object.	SVG-redigeraren har öppnats. Spara SVG-filen för att uppdatera det här smarta objektet.
 smartSvg	Updates wait while another document or an editing dialog is active.	Uppdateringar väntar medan ett annat dokument eller en redigeringsdialogruta är aktiv.
+	A command was cancelled or stopped during batch processing. Continue with the next file or stop?	Ett kommando avbröts eller stoppades under batchbearbetningen. Vill du fortsätta med nästa fil eller stoppa?
+	Batch preview	Förhandsgranskning av batch
+	Data Sets as Files is unavailable on the web	Datauppsättningar som filer är inte tillgängligt på webben
+	Effect	Effekt
+	Filter for embedded smart objects	Filtrera efter inbäddade smarta objekt
+	Filter for linked smart objects that are missing	Filtrera efter länkade smarta objekt som saknas
+	Filter for smart objects linked locally	Filtrera efter lokalt länkade smarta objekt
+	High Memory Photoshop Document	Photoshop-dokument med hög minnesanvändning
+	Image Compression	Bildkomprimering
+	LZW	LZW
+	Memory usage percent	Minnesanvändning i procent
+	Open anyway	Öppna ändå
+	Opening this document uses more memory and may slow down your computer or other running applications.	Det här dokumentet använder mer minne när det öppnas och kan göra datorn eller andra program som körs långsammare.
+	Opening “{name}” requires an estimated {est} GiB of memory ({avail} GiB available).	Att öppna ”{name}” kräver uppskattningsvis {est} GiB minne ({avail} GiB tillgängligt).
+	Opening “{name}” requires an estimated {est} GiB of memory. The available memory could not be measured.	Att öppna ”{name}” kräver uppskattningsvis {est} GiB minne. Det tillgängliga minnet kunde inte mätas.
+	Save Full-Size Composite in .pcraft Files	Spara komposit i full storlek i .pcraft-filer
+	Save Image Pyramid	Spara bildpyramid
+	Save Transparency	Spara genomskinlighet
+	The estimate is above 8 GiB and the available memory is unknown, so this process or browser tab may run out of memory. You can still try to open it.	Uppskattningen överstiger 8 GiB och det tillgängliga minnet är okänt, så den här processen eller webbläsarfliken kan få slut på minne. Du kan ändå försöka öppna det.
+	ZIP	ZIP
+	{ok} written to {dir}	{ok} har skrivits till {dir}
