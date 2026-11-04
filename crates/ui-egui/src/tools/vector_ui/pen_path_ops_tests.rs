@@ -381,11 +381,12 @@ fn make_shape_turns_the_work_path_into_a_shape_layer() {
     let LayerContent::Shape(sh) = &st.doc.layer(id).unwrap().content else { panic!("not a shape layer") };
     let fg = app.session.tools.foreground;
     assert_eq!(sh.fill, Some(photocraft_doc::Fill::Solid(photocraft_color::Color::rgba(fg[0], fg[1], fg[2], fg[3]))));
-    // An open path still being drawn is finished into the Work Path, then made a shape.
+    // An open path still being drawn becomes the shape too, still in one History step.
     for (x, y) in [(10.0, 150.0), (60.0, 150.0), (60.0, 190.0)] {
         pen_down(h.state_mut(), x, y, false);
         pen_up(h.state_mut());
     }
+    let steps = h.state().session.active().unwrap().history.past_len();
     h.run_steps(2);
     h.get_by_label("Make Shape").click();
     h.run_steps(3);
@@ -393,6 +394,50 @@ fn make_shape_turns_the_work_path_into_a_shape_layer() {
     assert!(app.ui.pen.is_none());
     assert_eq!(layers(app), count + 2);
     assert_eq!(shape_path(app).1.subpaths[0].knots.len(), 3);
+    assert_eq!(app.session.active().unwrap().history.past_len(), steps + 1, "one History step while drawing");
+    assert!(app.session.active().unwrap().doc.work_path.is_none());
+}
+
+/// Make Shape while drawing with a vector mask targeted makes a shape of the drawn path alone and
+/// leaves the mask as it was: the draft isn't committed into the mask first.
+#[test]
+fn make_shape_while_drawing_leaves_a_targeted_vector_mask_alone() {
+    let mut app = app();
+    let id = app.session.active().unwrap().active_layer.unwrap().0;
+    app.run("layer.vectorMask.add", json!({"layer": id, "path": {"subpaths": [{"closed": true, "knots": [[0, 0], [100, 0], [100, 100], [0, 100]]}]}})).unwrap();
+    app.ui.vector_mask_target = true;
+    let mask = app.session.active().unwrap().doc.layer(LayerId(id)).unwrap().vector_mask.clone();
+    for (x, y) in [(10.0, 150.0), (60.0, 150.0), (60.0, 190.0)] {
+        pen_down(&mut app, x, y, false);
+        pen_up(&mut app);
+    }
+    let steps = app.session.active().unwrap().history.past_len();
+    super::make_shape(&mut app).unwrap();
+    let st = app.session.active().unwrap();
+    assert_eq!(st.doc.layer(LayerId(id)).unwrap().vector_mask, mask, "the mask changed");
+    assert_eq!(st.history.past_len(), steps + 1);
+    let (_, path) = shape_path(&app);
+    assert_eq!(path.subpaths.len(), 1);
+    assert_eq!(path.subpaths[0].knots[0].anchor, photocraft_geom::Point::new(10.0, 150.0));
+}
+
+/// Make Shape while drawing into a selected saved path: the shape is the saved path plus the
+/// drawing, as the commit would have made it, and the saved path stays as it was.
+#[test]
+fn make_shape_while_drawing_into_a_saved_path_keeps_it() {
+    let mut app = app();
+    square(&mut app, 20.0, 20.0, 50.0);
+    app.run("path.rename", json!({"name": "work", "to": "Box"})).unwrap();
+    app.ui.selected_path = Some("Box".into());
+    let saved = app.session.active().unwrap().doc.paths[0].path.clone();
+    for (x, y) in [(10.0, 150.0), (60.0, 150.0), (60.0, 190.0)] {
+        pen_down(&mut app, x, y, false);
+        pen_up(&mut app);
+    }
+    super::make_shape(&mut app).unwrap();
+    let st = app.session.active().unwrap();
+    assert_eq!(st.doc.paths[0].path, saved);
+    assert_eq!(shape_path(&app).1.subpaths.len(), saved.subpaths.len() + 1);
 }
 
 /// Make Shape on a saved path selected in the Paths panel keeps that path.

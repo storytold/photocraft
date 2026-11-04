@@ -445,10 +445,7 @@ fn commit_path_current(app: &mut PhotocraftApp, pen: &PenPath, closed: bool) -> 
         // path selected, a new Work Path replaces the old one. The drawn path ends up selected.
         // A resumed draft whose subpath changed meanwhile joins the path it came from, as a new
         // subpath, even with nothing selected in the Paths panel.
-        let exists = |n: &String| app.session.active().is_some_and(|st| path_exists(&st.doc, n));
-        let resumed_from =
-            pen.resumes.as_ref().filter(|r| r.layer.is_none() && app.session.active().is_some_and(|st| st.doc.id.0 == r.doc)).map(|r| r.path.clone());
-        let target = resumed_from.filter(exists).or_else(|| app.ui.selected_path.clone().filter(exists));
+        let target = draft_target(app, pen);
         let name = target.clone().unwrap_or_else(|| "work".into());
         let mut params = json!({"name": name, "path": path});
         if target.is_some() {
@@ -462,6 +459,43 @@ fn commit_path_current(app: &mut PhotocraftApp, pen: &PenPath, closed: bool) -> 
         return false;
     }
     true
+}
+
+/// The document path a Path-mode draft joins when committed (not into a vector mask): the path it
+/// resumed, else the path selected in the Paths panel. `None`: it becomes a new Work Path.
+fn draft_target(app: &PhotocraftApp, pen: &PenPath) -> Option<String> {
+    let exists = |n: &String| app.session.active().is_some_and(|st| path_exists(&st.doc, n));
+    let resumed_from =
+        pen.resumes.as_ref().filter(|r| r.layer.is_none() && app.session.active().is_some_and(|st| st.doc.id.0 == r.doc)).map(|r| r.path.clone());
+    resumed_from.filter(exists).or_else(|| app.ui.selected_path.clone().filter(exists))
+}
+
+/// What Make Shape turns a Path-mode draft into, without committing it: the path the commit would
+/// leave (the draft joined to the path it goes into, with the Path Operation), and whether that is
+/// the Work Path, which the shape then takes. With a vector mask targeted, the draft alone: the
+/// mask stays as it was. `None` with no document.
+pub(super) fn draft_shape_path(app: &PhotocraftApp, pen: &PenPath) -> Option<(Value, bool)> {
+    let drawn = pen_to_json(pen, false);
+    let doc = &app.session.active()?.doc;
+    if pen.resumes.as_ref().is_some_and(|r| r.layer.is_some()) || targeted_vector_mask(app).is_some() {
+        return Some((drawn, false));
+    }
+    if let Some(r) = pen.resumes.as_ref().filter(|r| r.doc == doc.id.0)
+        && let Some(p) = with_resumed_subpath(doc, r, &drawn)
+    {
+        return Some((p, r.path == "work"));
+    }
+    let Some(name) = draft_target(app, pen) else { return Some((drawn, false)) };
+    let existing = doc_path(doc, &name)?;
+    let mut p = photocraft_engine::vector_cmds::path_json(existing);
+    let op = pen_path_op(&app.ui.tool_options).unwrap_or("combine");
+    if let (Some(subs), Some(new)) = (p.get_mut("subpaths").and_then(Value::as_array_mut), drawn.get("subpaths").and_then(Value::as_array)) {
+        subs.extend(new.iter().cloned().map(|mut sp| {
+            sp["op"] = json!(op);
+            sp
+        }));
+    }
+    Some((p, name == "work"))
 }
 
 /// Does `doc` have the path the Paths panel calls `name`: "work", or a saved path's name?

@@ -74,17 +74,35 @@ pub fn path_to_selection(app: &mut PhotocraftApp, params: Value) -> Result<Value
 }
 
 /// The Pen options bar's Make Shape (Path mode, #10934): a new shape layer from the path being
-/// drawn (committed first) or the active path, with the shape tools' fill and stroke. The Work Path
-/// becomes the shape's path, so it is no longer selected in the Paths panel.
+/// drawn or the active path, with the shape tools' fill and stroke, as one History step. A path
+/// being drawn is not committed: the shape takes what the commit would have made (with a vector
+/// mask targeted, only the drawn path, and the mask stays). The Work Path becomes the shape's
+/// path, so it is no longer selected in the Paths panel.
 pub fn make_shape(app: &mut PhotocraftApp) -> Result<Value, String> {
-    let pending = app.ui.pen.as_ref().is_some_and(|p| p.knots.len() >= 2);
-    // A path being drawn into a targeted vector mask is that layer's path afterwards.
-    let pending_layer = pending && super::targeted_vector_mask(app).is_some();
-    if pending && !pen_commit(app, false) {
-        return Err(app.ui.status.clone());
+    super::cancel_stale_pen(app);
+    if let Some(mut pen) = app.ui.pen.clone().filter(|p| p.knots.len() >= 2) {
+        // A path still being drawn becomes the shape in one step, without being committed first:
+        // into a targeted vector mask that would change the mask.
+        if pen.curvature {
+            super::curvature::curvature_refresh(&mut pen, false);
+        }
+        let (path, consume) = super::pen::draft_shape_path(app, &pen).ok_or_else(|| tl!("No document").to_string())?;
+        let r = app.run(
+            "path.toShape",
+            json!({"path": path, "consumeWorkPath": consume, "fill": super::shapes::fill_param(app), "stroke": super::shapes::stroke_param(app)}),
+        )?;
+        app.ui.pen = None;
+        app.ui.pen_doc = None;
+        if app.ui.direct_selection.target == Some(crate::direct_select::PathRef::Pen) {
+            app.ui.direct_selection = Default::default();
+        }
+        if consume && app.ui.selected_path.as_deref() == Some("work") {
+            app.ui.selected_path = None;
+        }
+        return Ok(r);
     }
-    let name = if pending_layer { Some("layer".to_string()) } else { active_path_name(app) }
-        .ok_or_else(|| tl!("No path to make a shape from: draw one with the Pen tool or select one in the Paths panel.").to_string())?;
+    let name =
+        active_path_name(app).ok_or_else(|| tl!("No path to make a shape from: draw one with the Pen tool or select one in the Paths panel.").to_string())?;
     let r = app.run("path.toShape", json!({"name": name, "fill": super::shapes::fill_param(app), "stroke": super::shapes::stroke_param(app)}))?;
     if name == "work" && app.ui.selected_path.as_deref() == Some("work") {
         app.ui.selected_path = None;

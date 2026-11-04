@@ -457,6 +457,60 @@ fn path_to_shape_rejects_bad_input_without_changing_history() {
     }
 }
 
+/// With no Work Path, `path.toShape` doesn't take the active shape layer's path: that would only
+/// duplicate the shape.
+#[test]
+fn path_to_shape_without_a_work_path_does_not_copy_the_active_shape() {
+    let mut s = session(80, 80, 8);
+    s.execute("shape.create", json!({"rect": [10, 10, 30, 30]})).unwrap();
+    let layers = doc(&s).layers.len();
+    for p in [json!({}), json!({"name": "work"})] {
+        assert!(s.execute("path.toShape", p.clone()).is_err(), "{p} made a shape");
+    }
+    assert_eq!(doc(&s).layers.len(), layers);
+}
+
+/// An inline `path` (a Pen path still being drawn) makes the shape and leaves the Work Path alone,
+/// unless it was drawn into the Work Path (`consumeWorkPath`).
+#[test]
+fn path_to_shape_takes_an_inline_path() {
+    let mut s = session(80, 80, 8);
+    s.execute("path.set", json!({"path": {"subpaths": [{"knots": [[12, 12], [60, 12], [60, 60]]}]}})).unwrap();
+    let drawn = json!({"subpaths": [{"knots": [[5, 5], [30, 5], [30, 30]]}]});
+    let history = s.active().unwrap().history.past_len();
+    let info = s.execute("path.toShape", json!({"path": drawn})).unwrap();
+    let id = LayerId(info["layer"].as_u64().unwrap());
+    let LayerContent::Shape(sh) = &doc(&s).layer(id).unwrap().content else { panic!("not a shape layer") };
+    assert_eq!(sh.path.subpaths[0].knots[0].anchor, Point::new(5.0, 5.0));
+    assert!(doc(&s).work_path.is_some(), "the Work Path stays");
+    assert_eq!(s.active().unwrap().history.past_len(), history + 1);
+    s.execute("path.toShape", json!({"path": drawn, "consumeWorkPath": true})).unwrap();
+    assert!(doc(&s).work_path.is_none());
+}
+
+#[test]
+fn path_to_shape_rejects_paths_and_names_it_cannot_use() {
+    let mut s = session(80, 80, 8);
+    s.execute("path.set", json!({"path": {"subpaths": [{"knots": [[12, 12], [60, 12], [60, 60]]}]}})).unwrap();
+    let before = doc(&s).clone();
+    let drawn = json!({"subpaths": [{"knots": [[5, 5], [30, 5], [30, 30]]}]});
+    for p in [
+        json!({"path": {"subpaths": [{"knots": [[5, 5]]}]}}),
+        json!({"path": {"subpaths": []}}),
+        json!({"path": 42}),
+        json!({"path": drawn, "name": "work"}),
+        json!({"path": drawn, "consumeWorkPath": "yes"}),
+        json!({"layerName": 5}),
+        json!({"layerName": ""}),
+        json!({"layerName": "   "}),
+    ] {
+        assert!(s.execute("path.toShape", p.clone()).is_err(), "accepted {p}");
+        assert_eq!(*doc(&s), before, "{p} modified the document");
+    }
+    s.execute("path.set", json!({"path": {"subpaths": [{"knots": [[12, 12]]}]}})).unwrap();
+    assert!(s.execute("path.toShape", json!({})).is_err(), "a one-anchor Work Path");
+}
+
 #[test]
 fn path_make_selection_rejects_invalid_options_without_changing_history() {
     let mut s = session(80, 80, 8);

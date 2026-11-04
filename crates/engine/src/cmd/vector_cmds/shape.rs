@@ -469,9 +469,12 @@ fn new_fill_stroke(s: &Session, cmd: &str, p: &Value) -> Result<(Option<Fill>, O
     Ok((fill, stroke))
 }
 
-/// The Pen options bar's Make: Shape: a new shape layer from the work path or a saved path, as one
-/// History step. The Work Path becomes the shape's path, so it is gone afterwards; a saved path
-/// stays. With no work path, `"work"` takes the active layer's path, as the other path commands do.
+/// The Pen options bar's Make: Shape: a new shape layer, as one History step, from the work path
+/// or a saved path (`name`), or from an inline `path` (a Pen path still being drawn). The Work
+/// Path becomes the shape's path, so it is gone afterwards; a saved path stays. An inline `path`
+/// leaves the document's paths alone unless `consumeWorkPath` says it was drawn into the Work
+/// Path. Unlike the other path commands, `"work"` never falls back to the active layer's path:
+/// that would duplicate the selected shape or vector mask.
 pub(super) fn path_to_shape(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "path.toShape";
     let name = match p.get("name") {
@@ -479,14 +482,30 @@ pub(super) fn path_to_shape(s: &mut Session, p: &Value) -> Result<Value> {
         Some(Value::String(n)) => Some(n.as_str()),
         Some(_) => return Err(bad(CMD, "`name` must be a path name: \"work\", \"layer\" or a saved path's name")),
     };
-    let path = super::resolve_path(s, name)?;
-    if path.subpaths.iter().all(|sp| sp.knots.is_empty()) {
-        return Err(bad(CMD, "the path is empty"));
+    let consume_flag = match p.get("consumeWorkPath") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(b)) => *b,
+        Some(_) => return Err(bad(CMD, "`consumeWorkPath` must be true or false")),
+    };
+    let (path, consume_work) = match p.get("path").filter(|v| !v.is_null()) {
+        Some(_) if name.is_some() => return Err(bad(CMD, "give `name` or `path`, not both")),
+        Some(v) => (parse_path(v).map_err(|e| bad(CMD, e))?, consume_flag),
+        None if super::is_work(name) => {
+            let d = s.active().ok_or(EngineError::NoDocument)?;
+            (d.doc.work_path.clone().ok_or_else(|| bad(CMD, "there is no Work Path"))?, true)
+        }
+        None => (super::resolve_path(s, name)?, false),
+    };
+    if !path.subpaths.iter().any(|sp| sp.knots.len() >= 2) {
+        return Err(bad(CMD, "the path has no segment to make a shape from"));
     }
     let (fill, stroke) = new_fill_stroke(s, CMD, p)?;
     vector::flatten::validate_shape(&path, stroke.as_ref()).map_err(|e| bad(CMD, e))?;
-    let layer_name = p.get("layerName").and_then(Value::as_str).map(str::to_string);
-    let consume_work = super::is_work(name);
+    let layer_name = match p.get("layerName") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(n)) if !n.trim().is_empty() => Some(n.clone()),
+        Some(_) => return Err(bad(CMD, "`layerName` must be a name that isn't empty")),
+    };
     let mut sh = ShapeLayer { path, fill, stroke, ..Default::default() };
     let id = s.edit("New Shape Layer", |doc, active| {
         refresh_shape(doc, &mut sh);
