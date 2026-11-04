@@ -261,8 +261,12 @@ fn malformed_files_fail_cleanly() {
     for (what, bytes) in cases {
         assert!(crate::import("x.kra", &bytes).is_err(), "{what}");
     }
-    let deep = maindoc("RGBA", &format!("{}{}", r#"<layer nodetype="grouplayer"><layers>"#.repeat(110), "</layers></layer>".repeat(110)));
-    assert!(matches!(crate::import("x.kra", &archive(&deep, &[])), Err(IoError::Unsupported(_))));
+    let groups = |n: usize| maindoc("RGBA", &format!("{}{}", r#"<layer nodetype="grouplayer"><layers>"#.repeat(n), "</layers></layer>".repeat(n)));
+    // Past the group limit (100), within the XML nesting limit: the group limit refuses it.
+    assert!(matches!(crate::import("x.kra", &archive(&groups(110), &[])), Err(IoError::Unsupported(_))));
+    // Two XML levels a group, so 150 groups pass the XML nesting limit: refused before parsing.
+    let e = crate::import("x.kra", &archive(&groups(150), &[])).err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(e.contains("nested"), "{e}");
 }
 
 #[test]
