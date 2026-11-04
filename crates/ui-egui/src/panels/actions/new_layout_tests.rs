@@ -13,6 +13,82 @@ fn app() -> PhotocraftApp {
     app
 }
 
+/// Streaming and nested dialog pauses keep upstream's one-action Undo boundary in both history modes.
+#[test]
+fn streamed_history_keeps_the_root_boundary_across_quanta_and_nested_dialogs() {
+    for single in [false, true] {
+        for nested in [false, true] {
+            for dialog in [false, true] {
+                let mut app = app();
+                app.run("actions.setHistory", json!({"singleState":single})).unwrap();
+                let before = app.session.active().unwrap().doc.clone();
+                let past = app.session.active().unwrap().history.past_len();
+                let mut first = Action::new("Child", vec![("layer.new.layer".into(), json!({"name":"First"}))]);
+                if dialog {
+                    first.steps.push(("filter.blur.gaussianBlur".into(), json!({"radius":1})));
+                    first.dialogs.insert(1);
+                }
+                let root = if nested {
+                    app.session.actions.list.push(first);
+                    Action::new("Root", vec![("actions.play".into(), json!({"action":"Child"})), ("layer.new.layer".into(), json!({"name":"Tail"}))])
+                } else {
+                    first.name = "Root".into();
+                    first.steps.push(("layer.new.layer".into(), json!({"name":"Tail"})));
+                    first
+                };
+                let index = app.session.actions.list.len();
+                app.session.actions.list.push(root);
+                start_library(&mut app, &[index]).unwrap();
+                let ctx = egui::Context::default();
+                for _ in 0..12 {
+                    if let Some(dialog) = app.ui.dialogs.last().map(|dialog| dialog.id) {
+                        crate::dialogs::confirm(&mut app, dialog).unwrap();
+                    } else if app.actions_runtime.task.is_some() {
+                        tick_with_quantum(&mut app, &ctx, 1);
+                    } else {
+                        break;
+                    }
+                }
+                assert!(app.actions_runtime.task.is_none() && app.paused_playbacks.paused.is_empty(), "nested={nested}, dialog={dialog}");
+                assert!(!app.ui.status_error, "{}", app.ui.status);
+                let state = app.session.active().unwrap();
+                assert!(state.doc.layers.iter().any(|layer| layer.name == "Tail"));
+                assert_eq!(state.history.past_len(), past + if single { 1 } else { 2 }, "nested={nested}, dialog={dialog}");
+                if single {
+                    assert_eq!(state.history.entries().last().map(String::as_str), Some("Action: Root"));
+                    app.run("edit.undo", json!({})).unwrap();
+                    assert_eq!(app.session.active().unwrap().doc.as_ref(), before.as_ref());
+                }
+                app.run("actions.setHistory", json!({"singleState":!single})).unwrap();
+            }
+        }
+    }
+}
+
+/// Yielded ownership refuses outside commands; cancelling keeps its prefix and releases history for later edits.
+#[test]
+fn cancelling_streamed_playback_keeps_its_prefix_and_releases_history_for_manual_edits() {
+    let mut app = app();
+    let past = app.session.active().unwrap().history.past_len();
+    app.session
+        .actions
+        .list
+        .push(Action::new("Stream", vec![("layer.new.layer".into(), json!({"name":"Prefix"})), ("layer.new.layer".into(), json!({"name":"Forbidden tail"}))]));
+    start_library(&mut app, &[0]).unwrap();
+    let ctx = egui::Context::default();
+    tick_with_quantum(&mut app, &ctx, 1);
+    assert!(app.actions_runtime.task.is_some());
+    assert!(app.run("layer.renameLayer", json!({"name":"Blocked edit"})).is_err());
+    cancel(&mut app);
+    app.run("layer.renameLayer", json!({"name":"Manual edit"})).unwrap();
+    let manual = app.session.active().unwrap().doc.clone();
+    assert!(app.actions_runtime.task.is_none() && app.session.actions.held_playback.is_none());
+    assert!(!manual.layers.iter().any(|layer| layer.name == "Forbidden tail"));
+    assert_eq!(app.session.active().unwrap().doc.as_ref(), manual.as_ref());
+    assert_eq!(app.session.active().unwrap().history.past_len(), past + 2);
+    app.run("actions.setHistory", json!({"singleState":false})).unwrap();
+}
+
 fn draft(app: &mut PhotocraftApp, steps: &[(&str, Value)]) -> u64 {
     let id = open(app, json!({"name":"Draft"})).unwrap()["draft"].as_u64().unwrap();
     for (index, (command, params)) in steps.iter().enumerate() {

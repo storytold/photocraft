@@ -73,6 +73,16 @@ fn imported_named_set_calls_keep_their_target_through_duplicate_action_renaming(
                     let caller = session.actions.list.iter().find(|action| action.name == "Caller").unwrap();
                     assert_eq!(caller.steps[0].1[if conditional { "then" } else { "action" }], "Finish");
                     assert_eq!(caller.steps[0].1["set"], "Missing", "deferred external reference stays unrewritten");
+                    let played = session.execute("actions.play", json!({"action":"Caller"})).unwrap();
+                    assert!(played["failed"]["error"].as_str().unwrap().contains("set `Missing`"), "{played}");
+                    assert!(!session.active().unwrap().doc.layers.iter().any(|layer| layer.name.starts_with("From ")));
+                    let later = atn::write(&row("Missing", vec![finish("From later-loaded set")])).unwrap();
+                    let store = MemBackend::default();
+                    store.write(ACTIONS_FILE, &later).unwrap();
+                    assert!(session.attach_preset_store(preset_store::open(Box::new(store))).is_empty());
+                    let played = session.execute("actions.play", json!({"action":"Caller"})).unwrap();
+                    assert!(played.get("failed").is_none(), "{played}");
+                    assert_eq!(session.active().unwrap().doc.layers.last().unwrap().name, "From later-loaded set");
                     continue;
                 }
                 let expected = if scope == Some("A") {

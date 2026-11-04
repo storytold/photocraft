@@ -392,7 +392,12 @@ fn conditional(s: &mut Session, p: &Value) -> Result<Value> {
     let played = if holds { then } else { otherwise };
     let mut out = json!({"if": condition, "holds": holds, "played": played});
     if let Some(name) = played {
-        let r = s.execute("actions.play", json!({"action": name}))?;
+        let mut call = json!({"action": name});
+        let key = if holds { "thenSet" } else { "elseSet" };
+        if let Some(scope) = p.get(key).and_then(Value::as_str).or_else(|| p.get("set").and_then(Value::as_str)) {
+            call["set"] = json!(scope);
+        }
+        let r = s.execute("actions.play", call)?;
         if let Some(f) = r.get("failed") {
             out["failed"] = f.clone();
         }
@@ -439,7 +444,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Conditional",
             menu: &[],
             shortcut: None,
-            params: r##"{"if":condition, "then":action name|null, "else":action name|null} → {if, holds, played, ran?, failed?}. Photoshop's Insert Conditional: conditions always|never|isOpen|landscape|square|portrait|modeIsRGB|modeIsCMYK|modeIsGrayscale|modeIsLab|modeIsBitmap|modeIsIndexed|modeIsDuotone|modeIsMultichannel|depth8|depth16|depth32|unsaved|hasSelection|hasLayers|hasAlphaChannels|isBackground|isPixelLayer|isAdjustmentLayer|isShapeLayer|isTypeLayer|isSmartObject|isLayerGroup|isLocked|isVisible|hasPixelMask|hasVectorMask|hasEffects (layer conditions test the active layer). The branch plays as actions.play does; its failure stops the calling action."##,
+            params: r##"{"if":condition, "then":action name|null, "else":action name|null, "set":name?, "thenSet":name?, "elseSet":name?} → {if, holds, played, ran?, failed?}. Photoshop's Insert Conditional: conditions always|never|isOpen|landscape|square|portrait|modeIsRGB|modeIsCMYK|modeIsGrayscale|modeIsLab|modeIsBitmap|modeIsIndexed|modeIsDuotone|modeIsMultichannel|depth8|depth16|depth32|unsaved|hasSelection|hasLayers|hasAlphaChannels|isBackground|isPixelLayer|isAdjustmentLayer|isShapeLayer|isTypeLayer|isSmartObject|isLayerGroup|isLocked|isVisible|hasPixelMask|hasVectorMask|hasEffects (layer conditions test the active layer). Each branch uses its explicit set or the common set, and plays as actions.play does; its failure stops the calling action."##,
             enabled: always,
             run: conditional,
             journal: true,

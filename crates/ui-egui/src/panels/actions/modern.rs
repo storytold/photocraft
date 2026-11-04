@@ -16,6 +16,7 @@ pub(crate) struct Runtime {
     pub(super) quantum: Option<usize>,
     pub(super) yielded: Option<Frame>,
     pub(super) parents: Vec<Frame>,
+    pub(super) history: Option<actions_cmds::ActionHistoryContinuation>,
     delete: Option<(u64, Delete, Option<Gate>)>,
 }
 
@@ -27,6 +28,7 @@ struct Task {
     used: u64,
     ran: u64,
     then: Vec<Action>,
+    history: Option<actions_cmds::ActionHistoryContinuation>,
 }
 
 struct Progress {
@@ -584,7 +586,7 @@ fn queue(app: &mut PhotocraftApp, frame: Frame, owner: actions_cmds::playback::O
         return Err(error.to_string());
     }
     app.actions_runtime.progress = Some(Progress { root: frame.action.clone(), completed: 0, done: false });
-    app.actions_runtime.task = Some(Task { frame, parents: Vec::new(), owner: Some(owner), gate: effective_gate(app), used: 0, ran: 0, then });
+    app.actions_runtime.task = Some(Task { frame, parents: Vec::new(), owner: Some(owner), gate: effective_gate(app), used: 0, ran: 0, then, history: None });
     Ok(json!({"playing":true}))
 }
 
@@ -607,6 +609,7 @@ pub(super) fn resume_tick(app: &mut PhotocraftApp, paused: PausedPlayback) -> Re
         used: paused.used,
         ran: paused.ran.saturating_add(1),
         then: paused.then,
+        history: paused.history,
     });
     Ok(())
 }
@@ -645,11 +648,13 @@ fn tick_with_quantum(app: &mut PhotocraftApp, ctx: &egui::Context, quantum: usiz
         return;
     };
     let saved = app.session.authorize;
-    app.session.authorize = task.gate.or(saved);
     app.actions_runtime.quantum = Some(quantum.max(1));
     app.actions_runtime.yielded = None;
     app.actions_runtime.parents.clear();
+    app.actions_runtime.history = None;
     let result = (|| {
+        let service = if app.automation_input { app.services.automation_authorize } else { None };
+        let gate = super::continuation_gate(task.gate, super::continuation_gate(saved, service)?)?;
         let owner = task.owner.as_ref().ok_or("The playback lost its owner")?;
         owner.yielding(&mut app.session, false).map_err(|error| error.to_string())?;
         if let Source::Draft(id) = task.frame.source
@@ -658,10 +663,15 @@ fn tick_with_quantum(app: &mut PhotocraftApp, ctx: &egui::Context, quantum: usiz
             return Err("The draft preview lost its owner".into());
         }
         task.frame.validate(&app.session)?;
+        if let Some(history) = task.history.take() {
+            history.resume(&mut app.session).map_err(|error| error.to_string())?;
+        }
+        app.session.authorize = gate;
         run_with_parents(app, task.frame.clone(), &task.parents, task.used, true)
     })();
     app.actions_runtime.quantum = None;
     app.session.authorize = saved;
+    task.history = app.actions_runtime.history.take();
     task.used = app.session.actions.playback_steps;
     let result = result.and_then(|value| {
         task.ran = task.ran.saturating_add(value.get("ran").and_then(Value::as_u64).unwrap_or(0));
@@ -725,6 +735,7 @@ fn tick_with_quantum(app: &mut PhotocraftApp, ctx: &egui::Context, quantum: usiz
             }
         }
         Err(error) => {
+            actions_cmds::finish_pending_history(&mut app.session);
             if let Some(owner) = task.owner.take() {
                 owner.finish(&mut app.session);
             }
@@ -742,6 +753,7 @@ pub(super) fn cancel(app: &mut PhotocraftApp) {
     {
         owner.finish(&mut app.session);
     }
+    actions_cmds::finish_pending_history(&mut app.session);
     let tokens: Vec<_> = app.paused_playbacks.paused.iter().filter_map(|(token, paused)| paused.incremental.then_some(*token)).collect();
     for token in tokens {
         if let Some(paused) = app.paused_playbacks.paused.remove(&token) {
