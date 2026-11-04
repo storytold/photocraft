@@ -97,7 +97,8 @@ fn ns_uri(prefix: &str) -> Option<&'static str> {
 /// reader resolves names through these bindings instead of matching literal prefixes. Bindings
 /// are collected document-wide rather than per element scope: a packet rebinding a prefix to
 /// another namespace mid-document is not a case real producers emit, and a string scan stays
-/// in this file's style without an XML parser.
+/// in this file's style without an XML parser. Declarations count only inside a start tag, so
+/// `xmlns`-looking text in element content, comments or CDATA never registers a binding.
 #[derive(Default)]
 struct NsBindings {
     prefixed: Vec<(String, String)>,
@@ -108,13 +109,34 @@ impl NsBindings {
     fn collect(xmp: &str) -> Self {
         let mut b = NsBindings::default();
         let mut from = 0;
-        while let Some(i) = xmp.get(from..).and_then(|r| r.find("xmlns")).map(|i| i + from) {
-            from = i + "xmlns".len();
-            // An attribute name: preceded by whitespace.
-            if !xmp.get(..i).and_then(|s| s.chars().next_back()).is_some_and(char::is_whitespace) {
+        while let Some(lt) = xmp.get(from..).and_then(|r| r.find('<')).map(|i| i + from) {
+            let rest = &xmp[lt..];
+            // Comment and CDATA content is text, however declaration-like it looks.
+            if let Some(skip) = span_len(rest, "<!--", "-->").or_else(|| span_len(rest, "<![CDATA[", "]]>")) {
+                from = lt + skip;
                 continue;
             }
-            let Some(rest) = xmp.get(from..) else { break };
+            if rest.starts_with("</") || rest.starts_with("<?") || rest.starts_with("<!") {
+                from = lt + 2;
+                continue;
+            }
+            let end = tag_end(xmp, lt);
+            b.collect_tag(&xmp[lt..end]);
+            from = end;
+        }
+        b
+    }
+
+    /// The `xmlns` declarations inside one start tag (`<` through its `>`).
+    fn collect_tag(&mut self, tag: &str) {
+        let mut from = 0;
+        while let Some(i) = tag.get(from..).and_then(|r| r.find("xmlns")).map(|i| i + from) {
+            from = i + "xmlns".len();
+            // An attribute name: preceded by whitespace.
+            if !tag.get(..i).and_then(|s| s.chars().next_back()).is_some_and(char::is_whitespace) {
+                continue;
+            }
+            let Some(rest) = tag.get(from..) else { break };
             let (prefix, rest) = match rest.strip_prefix(':') {
                 Some(r) => {
                     let end = r.find(|c: char| c == '=' || c.is_whitespace() || c == '>' || c == '<').unwrap_or(r.len());
@@ -133,11 +155,10 @@ impl NsBindings {
             let Some(uri) = rest.get(1..1 + end) else { continue };
             let uri = xml_unescape(uri);
             match prefix {
-                Some(p) => b.prefixed.push((p.to_string(), uri)),
-                None => b.default.push(uri),
+                Some(p) => self.prefixed.push((p.to_string(), uri)),
+                None => self.default.push(uri),
             }
         }
-        b
     }
 
     /// Whether the packet declares any binding (prefixed or default) for `uri`.
@@ -173,15 +194,39 @@ impl NsBindings {
         self.spellings("rdf:li", true)
     }
 
-    /// The first element `prop` under any of its spellings.
+    /// The first element `prop` under any of its spellings: the earliest match in the packet,
+    /// as with list items, not the first spelling that matches anywhere.
     fn find_element<'a>(&self, xmp: &'a str, prop: &str) -> Option<(usize, usize, &'a str)> {
-        self.spellings(prop, true).iter().find_map(|t| find_element(xmp, t))
+        self.spellings(prop, true).iter().filter_map(|t| find_element(xmp, t)).min_by_key(|(a, _, _)| *a)
     }
 
-    /// The attribute `prop` under any of its spellings.
+    /// The attribute `prop` under any of its spellings, earliest match first as above.
     fn find_attr<'a>(&self, xmp: &'a str, prop: &str) -> Option<(usize, usize, &'a str)> {
-        self.spellings(prop, false).iter().find_map(|t| find_attr(xmp, t))
+        self.spellings(prop, false).iter().filter_map(|t| find_attr(xmp, t)).min_by_key(|(a, _, _)| *a)
     }
+}
+
+/// The length of the `open`…`close` span at the start of `s`, if it starts with `open`
+/// (to the end of `s` when the close never comes).
+fn span_len(s: &str, open: &str, close: &str) -> Option<usize> {
+    let rest = s.strip_prefix(open)?;
+    Some(open.len() + rest.find(close).map_or(rest.len(), |i| i + close.len()))
+}
+
+/// The index just past the `>` that closes the tag opening at `from` (a `<`), honouring
+/// quoted attribute values, which may themselves contain `>`.
+fn tag_end(xmp: &str, from: usize) -> usize {
+    let mut quote = None;
+    for (i, c) in xmp[from..].char_indices() {
+        match quote {
+            Some(q) if c == q => quote = None,
+            Some(_) => {}
+            None if matches!(c, '"' | '\'') => quote = Some(c),
+            None if c == '>' => return from + i + 1,
+            None => {}
+        }
+    }
+    xmp.len()
 }
 
 /// List item values of a container (or the element text for simple properties); `li_tags` are
@@ -379,15 +424,23 @@ pub fn write_file_info(xmp: Option<&str>, info: &Value) -> String {
     let mut x = xmp.filter(|s| s.contains("</rdf:RDF>")).map(str::to_string).unwrap_or_else(|| {
         "<?xpacket begin=\"\u{feff}\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n </rdf:RDF>\n</x:xmpmeta>\n<?xpacket end=\"w\"?>".to_string()
     });
+    // Removal must see every spelling the reader does, or a foreign-prefix element survives a
+    // clear and the old value reads straight back (#11200). Bindings are collected once, up
+    // front: removing an element must not unbind a prefix a later removal still needs.
+    let ns = NsBindings::collect(&x);
     for (key, prop, _) in INFO_FIELDS.into_iter().chain([("copyrightStatus", "xmpRights:Marked", ""), ("copyrightUrl", "xmpRights:WebStatement", "")]) {
         if !changed(key) {
             continue;
         }
-        while let Some((a, b, _)) = find_element(&x, prop) {
-            x.replace_range(a..b, "");
+        for tag in ns.spellings(prop, true) {
+            while let Some((a, b, _)) = find_element(&x, &tag) {
+                x.replace_range(a..b, "");
+            }
         }
-        while let Some((a, b, _)) = find_attr(&x, prop) {
-            x.replace_range(a..b, "");
+        for attr in ns.spellings(prop, false) {
+            while let Some((a, b, _)) = find_attr(&x, &attr) {
+                x.replace_range(a..b, "");
+            }
         }
     }
     let get = |k: &str| info.get(k).filter(|_| changed(k)).cloned().unwrap_or(Value::Null);

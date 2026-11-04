@@ -3048,3 +3048,46 @@ fn open_as_and_place_keep_the_typed_hard_budget_fields() {
         });
     });
 }
+
+#[test]
+fn file_info_picks_the_earliest_spelling_in_the_packet() {
+    // #11200: the Dublin Core namespace is bound to dc and e, with dc declared first, so a
+    // spelling-order lookup finds dc:title — but e:title comes first in the packet and the
+    // earliest match must win, as it does for list items.
+    let xmp = "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:e=\"http://purl.org/dc/elements/1.1/\">\
+      <rdf:Description><e:title><rdf:Alt><rdf:li xml:lang=\"x-default\">First</rdf:li></rdf:Alt></e:title></rdf:Description>\
+      <rdf:Description><dc:title><rdf:Alt><rdf:li xml:lang=\"x-default\">Second</rdf:li></rdf:Alt></dc:title></rdf:Description>\
+      </rdf:RDF></x:xmpmeta>";
+    let info = read_file_info(Some(xmp));
+    assert_eq!(info["title"], "First");
+}
+
+#[test]
+fn file_info_ignores_xmlns_lookalikes_in_element_text() {
+    // #11200: the description's text mentions a binding for q. Only declarations inside a
+    // start tag count, so the q:li planted in the keywords container is not an RDF item.
+    let xmp = "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\">\
+      <rdf:Description>\
+      <dc:description><rdf:Alt><rdf:li xml:lang=\"x-default\">prose with xmlns:q=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\" inside</rdf:li></rdf:Alt></dc:description>\
+      <dc:subject><rdf:Bag><rdf:li>Real</rdf:li><q:li>Fake</q:li></rdf:Bag></dc:subject>\
+      </rdf:Description></rdf:RDF></x:xmpmeta>";
+    let info = read_file_info(Some(xmp));
+    assert_eq!(info["keywords"], json!(["Real"]));
+}
+
+#[test]
+fn file_info_write_removes_foreign_spelling_elements() {
+    // #11200: clearing a field removes its element under every spelling, not just the
+    // literal one — a foreign-prefix title otherwise survives the clear and reads straight
+    // back. Fields the dialog did not change keep their elements.
+    let xmp = "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\" xmlns:q=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\" xmlns:e=\"http://purl.org/dc/elements/1.1/\">\
+      <rdf:Description>\
+      <e:title><q:Alt><q:li xml:lang=\"x-default\">Old Title</q:li></q:Alt></e:title>\
+      <e:creator><q:Seq><q:li>Jane</q:li></q:Seq></e:creator>\
+      </rdf:Description></rdf:RDF></x:xmpmeta>";
+    let out = write_file_info(Some(xmp), &json!({ "title": "" }));
+    assert!(!out.contains("Old Title"), "cleared title must be removed: {out}");
+    let info = read_file_info(Some(&out));
+    assert_eq!(info["title"], "");
+    assert_eq!(info["author"], "Jane");
+}
