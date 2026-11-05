@@ -3223,3 +3223,5 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Specify Channels:	指定色版:
 	Not enough grayscale documents for this mode.	灰階文件不足，無法使用此模式。
 	Pick a different document for each channel.	請為每個色版選擇不同的文件。
+	A picked document is no longer open.	所選的一個文件已不再開啟。
+	A picked document is no longer a grayscale document of the same size.	所選的一個文件已不再是相同大小的灰階文件。

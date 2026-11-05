@@ -1013,10 +1013,8 @@ pub(crate) fn confirm_preflight(app: &mut PhotocraftApp, id: u64) -> Result<(), 
     if let Some(d) = app.ui.dialogs.iter().find(|d| d.id == id).filter(|d| crate::guide_layout_ui::owns(&d.fields)) {
         crate::guide_layout_ui::validate(app, &d.fields)?;
     }
-    // Merge Channels with too few or repeated documents stays open (#11451).
-    if let Some(d) = app.ui.dialogs.iter().find(|d| d.id == id).filter(|d| merge_channels_ui::owns(&d.fields)) {
-        merge_channels_ui::validate(app, &d.fields)?;
-    }
+    // Merge Channels with too few, repeated, closed or changed documents stays open (#11451).
+    merge_channels_ui::preflight(app, id)?;
     Ok(())
 }
 

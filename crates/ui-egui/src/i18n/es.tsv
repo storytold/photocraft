@@ -4481,3 +4481,5 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Specify Channels:	Especificar canales:
 	Not enough grayscale documents for this mode.	No hay suficientes documentos en escala de grises para este modo.
 	Pick a different document for each channel.	Elija un documento distinto para cada canal.
+	A picked document is no longer open.	Uno de los documentos elegidos ya no está abierto.
+	A picked document is no longer a grayscale document of the same size.	Uno de los documentos elegidos ya no es un documento en escala de grises del mismo tamaño.

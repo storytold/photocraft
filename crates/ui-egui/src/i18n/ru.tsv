@@ -4766,3 +4766,5 @@ shape	Appearance	Оформление
 	Specify Channels:	Указать каналы:
 	Not enough grayscale documents for this mode.	Недостаточно документов в градациях серого для этого режима.
 	Pick a different document for each channel.	Выберите отдельный документ для каждого канала.
+	A picked document is no longer open.	Один из выбранных документов больше не открыт.
+	A picked document is no longer a grayscale document of the same size.	Один из выбранных документов больше не является документом в градациях серого того же размера.
