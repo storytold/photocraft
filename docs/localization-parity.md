@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-29 · **Change:** minor (Swedish, Finnish, Danish and Norwegian Bokmål UI catalogs; previously minor: Arabic UI catalog) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-31 · **Change:** minor (Brazilian Portuguese: 245 rows for the strings the sibling catalogs translate — Camera Raw panels, smart-SVG editor, layer-colour labels, themes and colour spaces, canvas messages and plurals; previously minor: Swedish, Finnish, Danish and Norwegian Bokmål UI catalogs; previously minor: Arabic UI catalog) · **Target:** Adobe Photoshop 2026
 
 Per-language status of PhotoCraft's UI. How catalogs work and how to add one:
 [`localization.md`](localization.md). Language notes: [Korean](localization-ko.md), [Spanish](localization-es.md),
@@ -101,3 +101,4 @@ engine localization or native review is complete.
 | 2026-10-28 | minor | Arabic (`ar`) UI catalog: every measured key, six plural forms; layer names and the title bar no longer reversed on egui 0.37 |
 | 2026-10-29 | minor | Swedish (`sv`) UI catalog: every measured key plus the dynamic labels, combined from #5985 and #9536 |
 | 2026-10-29 | minor | Finnish (`fi`), Danish (`da`) and Norwegian Bokmål (`nb`) UI catalogs: every measured key plus the dynamic labels, combined from #5666, #6961, #7267, #8072 and #9025 |
+| 2026-10-31 | minor | Brazilian Portuguese: 245 rows for the dynamic labels the German, French, Spanish and Italian catalogs already translate (Camera Raw panel and messages, smart-SVG editor, layer-colour labels, theme and colour-space names, canvas and status messages, brush/gradient/pattern plurals) |
