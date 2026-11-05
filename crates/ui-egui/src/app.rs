@@ -114,6 +114,7 @@ impl PhotocraftApp {
             proxy: None,
             proxy_uploaded: None,
             outline_cache: None,
+            guide_edit: None,
             filter_preview: None,
             smart_filter_targets: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -170,6 +171,7 @@ impl PhotocraftApp {
             dialog_edits: Default::default(),
             color_picker_live: Vec::new(),
             pending_after_prompt: None,
+            after_transform_commit: None,
             tone_hist: None,
             doc_hist: None,
             doc_hist_preview: None,

@@ -98,6 +98,9 @@ pub use flat::{
     export_flat_with_renderer, export_png_streamed_with_renderer, export_preview_png_with_renderer, file_encoding, import_animation_frames, import_gif_frames,
     import_tiff_page, import_tiff_page_with_options, import_webp_frames, tga_alpha_channel_to_transparency, tga_default_bits,
 };
+// Re-exported for the `flat_open_bench` example, which times the tile-building phase of a flat open.
+#[doc(hidden)]
+pub use flat::image_to_document;
 pub use psd_export::{PsdExportOptions, document_to_psd, document_to_psd_with};
 pub use psd_import::{psd_to_document, psd_to_document_with};
 
@@ -394,6 +397,9 @@ pub struct ExportOptions {
     /// transparency. `None`, the default, keeps it unless the document has alpha or spot
     /// channels, which are then written as with it off.
     pub tiff_transparency: Option<bool>,
+    /// Protect RGB 24-bit Targa alpha and flat TIFF composite transparency during in-place
+    /// Batch saves. Other encoder losses retain their existing policies and warnings.
+    pub preserve_alpha: bool,
     /// Which part of the document's XMP packet and free-form text a flat export embeds.
     /// PSD/PSB always keep XMP; `.pcraft` keeps both. Everything by default, as Save As does;
     /// Export As offers None.
@@ -430,6 +436,7 @@ impl Default for ExportOptions {
             force_psb: false,
             tiff_layers: false,
             tiff_transparency: None,
+            preserve_alpha: false,
             xmp: XmpEmbed::All,
             tga_bits: None,
             image_previews: true,
