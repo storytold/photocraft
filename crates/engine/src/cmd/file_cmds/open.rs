@@ -1,7 +1,7 @@
 use super::paths::{file_name, read_file, stem, template_name};
 use super::{
     Affine, Arc, Document, EngineError, Layer, LayerContent, LayerId, PixelFormat, Resample, Result, Session, SmartObject, SmartSource, Value, f64_param, json,
-    resize_surface_in_canvas_with_interrupt, str_param, translate_surface,
+    str_param, translate_surface,
 };
 use crate::jobs::JobCtx;
 
