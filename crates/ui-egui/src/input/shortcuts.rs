@@ -906,11 +906,13 @@ fn select_tool_by_key(app: &mut PhotocraftApp, ctx: &egui::Context, pressed: &im
             let shown: Vec<Tool> = group.iter().copied().filter(|x| !hidden.contains(x)).collect();
             let group = if letter_hidden { group } else { shown };
             // The letter's visible tools all have shortcuts of their own: nothing here to pick.
-            let Some(&first) = group.first() else { return true };
+            if group.is_empty() {
+                return true;
+            }
             app.ui.tool = match group.iter().position(|x| *x == app.ui.tool) {
                 Some(i) if shift_switch && !cycle_shift => group[i],
                 Some(i) => group[(i + 1) % group.len()],
-                None => app.ui.group_tool(t.key()).filter(|last| group.contains(last)).unwrap_or(first),
+                None => app.ui.group_tools.iter().copied().find(|last| group.contains(last)).unwrap_or(group[0]),
             };
             // `consume_key` ignores extra ⇧ and ⌥: a ⇧/⌥ switch is never spring-loaded.
             let (plain, now) = ctx.input(|i| (!cycle_shift && !i.modifiers.shift && !i.modifiers.alt, i.time));
