@@ -223,6 +223,12 @@ fn stack_mode_edits_and_unrepresented_native_parameters_are_safe() {
     assert_eq!(applied.event, AtnEvent::name(APPLY));
     assert_eq!(applied.descriptor, Some(descriptor("avrg", "Mean")));
 
+    let unknown_empty = Descriptor::new("nope");
+    let mut action = load(item(CLEAR, Some(unknown_empty.clone()))).actions.remove(0);
+    assert_eq!(saved(&action).descriptor, Some(unknown_empty));
+    action.steps[0].0 = "layer.smartObjects.stackMode.mean".into();
+    assert!(atn_cmds::export("Stacks", &[&action], &[], false).is_err());
+
     let unknown_class = photocraft_engine::paint::tile::b64_encode(&descriptor("nope", "Mean").to_bytes());
     for command in ["layer.smartObjects.stackMode.mean", "layer.smartObjects.stackMode.none"] {
         for params in [json!(null), json!([]), json!({"layer":12}), json!({"layer":"Named"}), json!({"target":"mask"}), json!({"unknown":true})] {

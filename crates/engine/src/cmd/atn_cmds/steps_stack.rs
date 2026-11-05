@@ -82,7 +82,7 @@ pub(super) fn mode_to(id: &str, p: &Value) -> Option<Descriptor> {
         return Some(canonical);
     }
     let source = original(p)?;
-    if source.items.is_empty() {
+    if source.items.is_empty() && source.class_id.is("null") {
         return Some(canonical);
     }
     let (_, recorded) = recorded_mode(&source)?;
