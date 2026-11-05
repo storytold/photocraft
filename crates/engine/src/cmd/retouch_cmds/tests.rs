@@ -1770,9 +1770,10 @@ fn live_dodge_matches_the_commit_across_cells() {
         }
     }
     assert!(changed);
-    // A soft tip's footprint spans more live cells, so sums land in a different order: within
-    // 2e-4 (a twentieth of an 8-bit level).
-    assert!(worst <= 2e-4, "live and commit differ by {worst}");
+    // A soft tip's footprint spans more live cells, so sums land in a different order. The gap is
+    // a fraction of each pixel's tone change, so it grows with the tone curve: within 3e-4 (under
+    // a tenth of an 8-bit level).
+    assert!(worst <= 3e-4, "live and commit differ by {worst}");
 }
 
 /// The sequential-dab tools' options for the live hand-off tests.

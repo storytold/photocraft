@@ -48,14 +48,15 @@ fn color_dab(fmt: &PixelFormat, work: &mut Region, fp: &Footprint, strength: f32
 /// stroke: overlapping dabs and passes within one stroke don't compound the tone curve, and a
 /// new stroke builds on the last.
 fn tone_stroke(fmt: PixelFormat, toned: impl Fn([f32; 3]) -> [f32; 3] + 'static) -> DabEffect {
-    /// Side of the cells that remember, per touched pixel, the coverage applied so far and the
-    /// original pixel (copied from the working pixels the first time a dab reaches it). Dense
-    /// cells rather than a map per pixel: a map lookup per covered pixel made long strokes with
-    /// large brushes over ten times slower.
+    /// Side of the cells that remember, per touched pixel, the coverage applied so far, the
+    /// original colour and its full-exposure tone (both worked out the first time a dab reaches
+    /// the pixel, so later dabs only mix). Dense cells rather than a map per pixel: a map lookup
+    /// per covered pixel made long strokes with large brushes over ten times slower.
     const CELL: i32 = 64;
     struct Cell {
         cov: Vec<f32>,
-        orig: Vec<f32>,
+        orig: Vec<[f32; 4]>,
+        tone: Vec<[f32; 3]>,
     }
     let mut cells: std::collections::HashMap<(i32, i32), Cell> = std::collections::HashMap::new();
     let a = alpha_index(&fmt);
@@ -74,8 +75,8 @@ fn tone_stroke(fmt: PixelFormat, toned: impl Fn([f32; 3]) -> [f32; 3] + 'static)
                     continue;
                 }
                 let len = (CELL * CELL) as usize;
-                // Coverage -1: not touched yet, so `orig` isn't filled in for that pixel.
-                let cell = cells.entry((cx, cy)).or_insert_with(|| Cell { cov: vec![-1.0; len], orig: vec![0.0; len * n] });
+                // Coverage -1: not touched yet, so `orig` and `tone` aren't filled in for that pixel.
+                let cell = cells.entry((cx, cy)).or_insert_with(|| Cell { cov: vec![-1.0; len], orig: vec![[0.0; 4]; len], tone: vec![[0.0; 3]; len] });
                 for y in part.y0..part.y1 {
                     for x in part.x0..part.x1 {
                         let k = fp.at(x, y).clamp(0.0, 1.0);
@@ -83,12 +84,14 @@ fn tone_stroke(fmt: PixelFormat, toned: impl Fn([f32; 3]) -> [f32; 3] + 'static)
                             continue;
                         }
                         let i = ((y - cr.y0) * CELL + (x - cr.x0)) as usize;
-                        let (Some(prev), Some(src)) = (cell.cov.get_mut(i), cell.orig.get_mut(i * n..i * n + n)) else { continue };
+                        let (Some(prev), Some(o), Some(t)) = (cell.cov.get_mut(i), cell.orig.get_mut(i), cell.tone.get_mut(i)) else { continue };
                         if *prev < 0.0 {
                             // First touch: the working pixel is still the original.
-                            src.copy_from_slice(work.px(x, y));
+                            *o = to_rgba(&fmt, work.px(x, y));
+                            *t = toned([o[0], o[1], o[2]]);
                             *prev = 0.0;
                         }
+                        let (o, t) = (*o, *t);
                         // Dabs build up the stroke's coverage as a brush stroke's do (flow), up
                         // to full coverage; the tone is applied once, from the original.
                         let k = *prev + k * (1.0 - *prev);
@@ -96,8 +99,6 @@ fn tone_stroke(fmt: PixelFormat, toned: impl Fn([f32; 3]) -> [f32; 3] + 'static)
                             continue;
                         }
                         *prev = k;
-                        let o = to_rgba(&fmt, src);
-                        let t = toned([o[0], o[1], o[2]]);
                         let m = [o[0] + (t[0] - o[0]) * k, o[1] + (t[1] - o[1]) * k, o[2] + (t[2] - o[2]) * k];
                         from_rgba_into(&fmt, [m[0], m[1], m[2], o[3]], &mut enc);
                         let px = work.px_mut(x, y);

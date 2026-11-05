@@ -3,9 +3,11 @@
 //! applies; these functions decide *what* happens to the pixels.
 //!
 //! Tone curves are our own design, chosen to match the observed behaviour of Photoshop's tools:
-//! the selected range is affected most, pure black and white stay put for Midtones, and
-//! "Protect Tones" works on luminance (scaling RGB so hue and saturation are kept, with gamut
-//! compression instead of per-channel clipping).
+//! the selected range is affected most, pure black and white stay put for Midtones, every curve
+//! keeps tones in order at every strength, and "Protect Tones" works on luminance (moving luma
+//! along the curve and scaling the colour around it as much as the curve stretches the colour's
+//! own channel range, so hue is kept and a faint cast in the shadows can't grow into a saturated
+//! colour; gamut compression replaces per-channel clipping).
 
 use serde::{Deserialize, Serialize};
 
@@ -25,28 +27,38 @@ pub fn luma(c: [f32; 3]) -> f32 {
     0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2]
 }
 
-/// The dodge/burn transfer for one value `v` (0..1) with strength `e` (0..1).
+/// Strength of the Shadows Dodge and Highlights Burn curves for exposure `e`. Their slope is
+/// `1 − 3s·(…)²`, so `s` must stay at or below 1/3 for the curve to keep tones in order (#11526);
+/// `e / (1 + 2e)` reaches 1/3 at full exposure and stays close to `e` at low exposure.
+#[inline]
+fn end_strength(e: f32) -> f32 {
+    e / (1.0 + 2.0 * e)
+}
+
+/// The dodge/burn transfer for one value `v` (0..1) with strength `e` (0..1). Monotone in `v`.
 #[inline]
 pub fn tone_curve(v: f32, e: f32, range: ToneRange, burn: bool) -> f32 {
     let v = v.max(0.0);
     let e = e.clamp(0.0, 1.0);
+    let u = v.min(1.0);
     match (range, burn) {
         // Gamma bend, weighted to peak at mid-grey: 0 and 1 are fixed points.
-        (ToneRange::Midtones, false) => {
+        (ToneRange::Midtones, _) => {
             let w = (4.0 * v * (1.0 - v)).clamp(0.0, 1.0);
-            v + w * (v.min(1.0).powf(1.0 / (1.0 + e)) - v)
+            v + w * (u.powf(midtone_gamma(e, burn)) - v)
         }
-        (ToneRange::Midtones, true) => {
-            let w = (4.0 * v * (1.0 - v)).clamp(0.0, 1.0);
-            v + w * (v.min(1.0).powf(1.0 + e) - v)
-        }
-        // Shadows / highlights: `v + e·w·(target − v)` with weight (1−v)² or v², so the chosen end
-        // moves most (black lifts when dodging shadows, white drops when burning highlights).
-        (ToneRange::Shadows, false) => v + e * (1.0 - v.min(1.0)).powi(2) * (1.0 - v.min(1.0)),
-        (ToneRange::Shadows, true) => v - e * (1.0 - v.min(1.0)).powi(2) * v,
-        (ToneRange::Highlights, false) => v + e * v.min(1.0).powi(2) * (1.0 - v.min(1.0)),
-        (ToneRange::Highlights, true) => v - e * v.min(1.0).powi(2) * v,
+        // Shadows / highlights: weight (1−v)² or v² times the distance to the target, so the chosen
+        // end moves most (black lifts when dodging shadows, white drops when burning highlights).
+        (ToneRange::Shadows, false) => v + end_strength(e) * (1.0 - u).powi(3),
+        (ToneRange::Shadows, true) => v - e * (1.0 - u).powi(2) * v,
+        (ToneRange::Highlights, false) => v + e * u.powi(2) * (1.0 - u),
+        (ToneRange::Highlights, true) => v - end_strength(e) * u.powi(2) * v,
     }
+}
+
+#[inline]
+fn midtone_gamma(e: f32, burn: bool) -> f32 {
+    if burn { 1.0 + e } else { 1.0 / (1.0 + e) }
 }
 
 /// Bring an RGB triple back into 0..1 while keeping its luma (mix toward grey), instead of clipping
@@ -67,8 +79,11 @@ fn compress_gamut(c: [f32; 3], l: f32) -> [f32; 3] {
 
 /// Dodge (`burn = false`) or Burn one straight-RGB colour with strength `e` (0..1).
 ///
-/// With `protect_tones`, the curve is applied to luma and the colour scaled to the new luma
-/// (hue and saturation preserved, gamut-compressed); otherwise each channel goes through the curve.
+/// With `protect_tones`, luma goes through the curve and the colour's offset from grey is scaled
+/// by the curve's average slope across the colour's channel range (hue kept, gamut-compressed), so
+/// the channels spread apart as far as the per-channel curve would spread them; otherwise each
+/// channel goes through the curve. Scaling the colour by new ÷ old luma instead multiplied shadow
+/// casts by up to 40× (#11522).
 pub fn dodge_burn(c: [f32; 3], e: f32, range: ToneRange, burn: bool, protect_tones: bool) -> [f32; 3] {
     if e <= 0.0 {
         return c;
@@ -76,8 +91,11 @@ pub fn dodge_burn(c: [f32; 3], e: f32, range: ToneRange, burn: bool, protect_ton
     if protect_tones {
         let l = luma(c);
         let nl = tone_curve(l, e, range, burn);
-        let out = if l > 1e-6 { [c[0] * nl / l, c[1] * nl / l, c[2] * nl / l] } else { [nl; 3] };
-        compress_gamut(out, nl)
+        // Widened around luma so a grey pixel still gets the local slope instead of 0 ÷ 0.
+        let lo = c[0].min(c[1]).min(c[2]).min(l - 1e-3);
+        let hi = c[0].max(c[1]).max(c[2]).max(l + 1e-3);
+        let k = ((tone_curve(hi, e, range, burn) - tone_curve(lo, e, range, burn)) / (hi - lo)).max(0.0);
+        compress_gamut([nl + (c[0] - l) * k, nl + (c[1] - l) * k, nl + (c[2] - l) * k], nl)
     } else {
         [tone_curve(c[0], e, range, burn), tone_curve(c[1], e, range, burn), tone_curve(c[2], e, range, burn)]
     }
@@ -312,13 +330,59 @@ mod tests {
         assert!(b(0.3, ToneRange::Shadows) / 0.3 > b(0.9, ToneRange::Shadows) / 0.9);
     }
 
+    const CURVES: [(ToneRange, bool); 6] = [
+        (ToneRange::Shadows, false),
+        (ToneRange::Shadows, true),
+        (ToneRange::Midtones, false),
+        (ToneRange::Midtones, true),
+        (ToneRange::Highlights, false),
+        (ToneRange::Highlights, true),
+    ];
+
     #[test]
     fn protect_tones_keeps_hue() {
         let c = [0.6, 0.3, 0.2];
         let p = dodge_burn(c, 0.8, ToneRange::Midtones, false, true);
         assert!(p.iter().all(|v| (0.0..=1.0).contains(v)));
-        // Ratios (hue) preserved when nothing clips.
-        assert!((p[0] / p[1] - c[0] / c[1]).abs() < 0.05, "{p:?}");
+        let (l, nl) = (luma(c), luma(p));
+        let ratio = (p[0] - nl) / (p[1] - nl);
+        assert!((ratio - (c[0] - l) / (c[1] - l)).abs() < 1e-3, "{p:?}");
+    }
+
+    #[test]
+    fn protect_tones_keeps_a_shadow_cast_faint() {
+        for c in [[8.0f32, 8.0, 13.0], [10.0, 8.0, 8.0], [26.0, 20.0, 20.0]] {
+            let c = c.map(|v| v / 255.0);
+            for (range, burn) in CURVES {
+                let p = dodge_burn(c, 1.0, range, burn, true);
+                let per_channel = dodge_burn(c, 1.0, range, burn, false);
+                let spread = |v: [f32; 3]| v[0].max(v[1]).max(v[2]) - v[0].min(v[1]).min(v[2]);
+                assert!(spread(p) <= spread(per_channel) * 1.1 + 1e-4, "{range:?} burn={burn}: {c:?} -> {p:?}, per channel {per_channel:?}");
+                assert!(spread(p) <= spread(c) * 2.0, "{range:?} burn={burn}: {c:?} -> {p:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn every_curve_keeps_tones_in_order_at_every_exposure() {
+        for (range, burn) in CURVES {
+            for e in 1..=100 {
+                let e = e as f32 / 100.0;
+                let mut prev = tone_curve(0.0, e, range, burn);
+                for i in 1..=1000 {
+                    let v = tone_curve(i as f32 / 1000.0, e, range, burn);
+                    assert!(v >= prev - 1e-6, "{range:?} burn={burn} e={e} at {i}: {v} < {prev}");
+                    prev = v;
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn full_exposure_keeps_the_far_end_in_place() {
+        assert!(tone_curve(1.0, 1.0, ToneRange::Highlights, true) > 0.5);
+        assert!(tone_curve(0.0, 1.0, ToneRange::Shadows, false) < 0.5);
+        assert!(tone_curve(0.2, 0.5, ToneRange::Shadows, false) > tone_curve(0.0, 0.5, ToneRange::Shadows, false));
     }
 
     #[test]
