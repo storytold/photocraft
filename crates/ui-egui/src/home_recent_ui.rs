@@ -47,6 +47,12 @@ pub(crate) struct ThumbnailCache {
 #[cfg(not(target_arch = "wasm32"))]
 const MAX_CONCURRENT_THUMBNAIL_LOADS: usize = 1;
 
+/// Minimum time between two live-document thumbnail compositions for the same path.
+#[cfg(all(not(target_arch = "wasm32"), not(test)))]
+const OPEN_DOC_REGEN_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
+#[cfg(all(not(target_arch = "wasm32"), test))]
+const OPEN_DOC_REGEN_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
+
 #[cfg(not(target_arch = "wasm32"))]
 fn load_thumbnail_catching_panic(load: impl FnOnce() -> Option<ColorImage>) -> Option<ColorImage> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(load)).ok().flatten()
@@ -364,6 +370,21 @@ pub(crate) fn get_or_load_thumbnail(app: &PhotocraftApp, ctx: &egui::Context, pa
             && entry.key == current_key
         {
             return entry.texture.clone();
+        }
+
+        // Composing the live document runs on the UI thread, so while the document is
+        // being edited regenerate at most once per interval and show the previous preview
+        // in between. A repaint is scheduled so the final revision is still picked up.
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(entry) = cache.entries.get(path)
+            && matches!(entry.key, CacheKey::OpenDoc { .. })
+            && entry.texture.is_some()
+        {
+            let since = entry.last_checked.elapsed();
+            if since < OPEN_DOC_REGEN_INTERVAL {
+                ctx.request_repaint_after(OPEN_DOC_REGEN_INTERVAL.saturating_sub(since));
+                return entry.texture.clone();
+            }
         }
 
         let rgba = photocraft_compose::thumbnail(&st.doc, 256);
@@ -1059,6 +1080,8 @@ mod tests {
             st.revision = 1;
         }
 
+        #[cfg(not(target_arch = "wasm32"))]
+        std::thread::sleep(OPEN_DOC_REGEN_INTERVAL + std::time::Duration::from_millis(20));
         let tex2 = get_or_load_thumbnail(&app, &ctx, path);
         assert!(tex2.is_some());
 
@@ -1068,6 +1091,40 @@ mod tests {
             let entry = cache.entries.get(path).unwrap();
             assert_eq!(entry.key, CacheKey::OpenDoc { revision: 1 });
         }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn open_document_thumbnail_regeneration_is_rate_limited() {
+        use photocraft_doc::{ColorMode, Document, SampleType, Size};
+
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let path = "/tmp/photocraft-test/open_doc_throttle.psd";
+        app.push_recent(path);
+        let doc = Document::new("open_doc_throttle.psd", Size::new(64, 64), ColorMode::Rgb, SampleType::U8);
+        app.session.open_document(doc, Some(path.to_string()));
+        if let Some(st) = app.session.active_mut() {
+            st.path = Some(path.to_string());
+            st.revision = 0;
+        }
+        let ctx = egui::Context::default();
+        assert!(get_or_load_thumbnail(&app, &ctx, path).is_some());
+
+        // Rapid edits: the previous preview is served instead of recomposing every frame.
+        for rev in 1..=5 {
+            if let Some(st) = app.session.active_mut() {
+                st.revision = rev;
+            }
+            assert!(get_or_load_thumbnail(&app, &ctx, path).is_some());
+            let cache = app.thumbnail_cache.lock().unwrap();
+            assert_eq!(cache.entries.get(path).unwrap().key, CacheKey::OpenDoc { revision: 0 });
+        }
+
+        // Once the interval has passed the latest revision is composed.
+        std::thread::sleep(OPEN_DOC_REGEN_INTERVAL + std::time::Duration::from_millis(20));
+        assert!(get_or_load_thumbnail(&app, &ctx, path).is_some());
+        let cache = app.thumbnail_cache.lock().unwrap();
+        assert_eq!(cache.entries.get(path).unwrap().key, CacheKey::OpenDoc { revision: 5 });
     }
 
     #[cfg(not(target_arch = "wasm32"))]
