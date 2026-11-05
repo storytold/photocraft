@@ -36,6 +36,7 @@ impl Buffer {
         self.text != self.acknowledged
     }
 
+    /// Keep unsent text while updating the last acknowledged backend value.
     fn refresh(&mut self, authoritative: &str) {
         if !self.dirty() {
             self.text = authoritative.to_string();
@@ -119,6 +120,7 @@ fn simple(kind: &filter_dialog::Kind) -> bool {
     )
 }
 
+/// Offer editing for Stop and known simple parameters while preserving opaque Photoshop steps.
 fn editable(command: &str) -> bool {
     if command == photocraft_engine::atn_cmds::STOP_MESSAGE {
         return true;
@@ -128,6 +130,7 @@ fn editable(command: &str) -> bool {
             .is_some_and(|spec| filter_dialog::parse_spec(spec.params).iter().any(|param| !param.key.starts_with("__") && simple(&param.kind)))
 }
 
+/// Show scalar values directly and summarize structured settings with one label.
 fn summary(value: &Value) -> String {
     match value {
         Value::String(text) => text.clone(),
@@ -346,6 +349,7 @@ impl Page {
         Ok(Event::Preview { draft: self.draft, from })
     }
 
+    /// Remap the selection and disclosure state after the backend accepts the step edit.
     fn step(&mut self, app: &mut PhotocraftApp, params: Value) -> Result<(), String> {
         let op = params.get("op").and_then(Value::as_str).unwrap_or("");
         let at = params.get("step").and_then(Value::as_u64).and_then(|index| usize::try_from(index).ok());
@@ -402,6 +406,7 @@ impl Page {
         });
     }
 
+    /// Capture the original step and its parameters so confirmation can reject a changed target.
     fn edit_settings(&mut self, view: &Value, at: usize) {
         let Some(original) = steps(view).get(at) else { return };
         let Some((command, params)) = step_parts(original) else { return };
@@ -417,6 +422,7 @@ impl Page {
         }
     }
 
+    /// Recheck the owning draft and the insertion or replacement target before staging the edit.
     fn accept_step(&mut self, app: &mut PhotocraftApp) -> Result<(), String> {
         let edit = self.editing.as_ref().ok_or("There is no step being edited")?.clone();
         if edit.draft != self.draft {
@@ -441,6 +447,7 @@ impl Page {
         Ok(())
     }
 
+    /// Stage explicit picker choices immediately and stage buffered fields on focus loss or shortcut changes.
     fn metadata(&mut self, app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &Value) -> Option<Value> {
         let mut latest = None;
         let picker_id = ui.scope_id().with(("thumbnail", self.draft));
@@ -511,6 +518,7 @@ impl Page {
         }
     }
 
+    /// Use the backend recording state for controls and return preview requests to the parent.
     fn toolbar(&mut self, app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &Value) -> Option<Event> {
         let recording = view.get("recording").and_then(Value::as_bool) == Some(true);
         let mut event = None;
@@ -546,6 +554,7 @@ impl Page {
         event
     }
 
+    /// Keep controls bound to original step indices, even when a stored step cannot be decoded.
     fn rows(&mut self, app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &Value) {
         if steps(view).is_empty() {
             ui.label(tl!("No steps yet"));
@@ -637,6 +646,7 @@ impl Page {
         }
     }
 
+    /// Keep Save disabled during playback or while a recorded step is finishing, and route dismissal through Cancel.
     fn confirmation(&mut self, app: &mut PhotocraftApp, ctx: &egui::Context, activity: Activity) -> Option<Event> {
         self.prompt?;
         let mut answer = None;
@@ -671,6 +681,7 @@ impl Page {
         answer.and_then(|answer| self.answer(app, answer, activity).ok()).flatten()
     }
 
+    /// Edit local parameters and submit them through the owning draft and target checks.
     fn step_dialog(&mut self, app: &mut PhotocraftApp, ctx: &egui::Context) {
         let Some(edit) = self.editing.as_mut() else { return };
         let mut accept = false;

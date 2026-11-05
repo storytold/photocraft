@@ -47,6 +47,7 @@ pub(crate) fn editor_busy(app: &PhotocraftApp) -> bool {
     app.actions_runtime.page.is_some() || app.session.actions.editor.is_some() || app.actions_runtime.task.is_some() || suspended(app)
 }
 
+/// Leave unrelated commands to their own checked-state handlers.
 pub(crate) fn layout_checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
     match id {
         "actions.layout.modern" => Some(app.ui.actions_layout == ActionsLayout::Modern),
@@ -108,6 +109,7 @@ pub(crate) fn inspect(app: &PhotocraftApp) -> Value {
     })
 }
 
+/// Reserve 100% for completed playback, even when a child action outlasts the root's steps.
 fn fraction(progress: &Progress) -> f32 {
     if progress.done {
         return 1.0;
@@ -224,6 +226,7 @@ fn finish_navigation(app: &mut PhotocraftApp) -> Result<(), String> {
     result.map(|_| ())
 }
 
+/// Disable the visible layout switch while an editor or playback owner is active.
 pub(super) fn layout_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     for (id, label) in [("actions.layout.modern", "Actions"), ("actions.layout.classic", "Classic Actions")] {
         if ui.add_enabled(!editor_busy(app), egui::RadioButton::new(layout_checked(app, id) == Some(true), tl!(label))).clicked() {
@@ -237,6 +240,8 @@ pub(super) fn layout_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 fn app_run_layout(app: &mut PhotocraftApp, id: &str) -> Result<Value, String> {
     app.run(id, json!({}))
 }
+
+/// Suppress normal file chooser cancellation and surface other Actions errors.
 fn report(app: &mut PhotocraftApp, result: Result<Value, String>) {
     if let Err(error) = result
         && error != crate::file_dialog::CANCELLED
@@ -246,6 +251,7 @@ fn report(app: &mut PhotocraftApp, result: Result<Value, String>) {
     }
 }
 
+/// Dispatch commands after closing the menu and enable export only for a current selection.
 pub(super) fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     ui.add_enabled(false, egui::Button::new(tl!("Preview on hover")));
     let mut command = None;
@@ -313,6 +319,7 @@ enum Operation {
     NewGroup,
 }
 
+/// Resolve a row or group menu choice to an operation the panel can dispatch.
 fn context(ui: &mut egui::Ui, action: Option<usize>, group: Option<&str>, play: Vec<usize>) -> Option<Operation> {
     let mut operation = None;
     if ui.add_enabled(action.is_some(), egui::Button::new(tl!("Edit Action"))).clicked() {
@@ -352,6 +359,7 @@ fn thumbnail(ui: &mut egui::Ui, action: &Action, size: f32, tokens: &Tokens) -> 
     response
 }
 
+/// Capture the dragged action's definition so a later drop can reject a changed source.
 fn action_row(app: &mut PhotocraftApp, ui: &mut egui::Ui, index: usize, action: &Action, indented: bool) -> Option<Operation> {
     let tokens = Tokens::get(ui.ctx());
     let size = if app.ui.actions_list_size == ActionsListSize::Large { 40.0 } else { 28.0 };
@@ -393,6 +401,7 @@ fn action_row(app: &mut PhotocraftApp, ui: &mut egui::Ui, index: usize, action: 
     operation
 }
 
+/// Give playback and the owned editor precedence, then dispatch list operations after drawing.
 pub(super) fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if let Err(error) = attach(app) {
         report(app, Err(error));
@@ -832,7 +841,7 @@ fn ask_delete(app: &mut PhotocraftApp, index: Option<usize>, group: Option<Strin
     if editor_busy(app) || app.session.actions.recording_active() {
         return Err("Stop recording and close the Actions editor first".into());
     }
-    let (target, message) = match group {
+    let (target, message, label) = match group {
         Some(group) => {
             if !photocraft_engine::actions_edit_cmds::set_names(&app.session).contains(&group) {
                 return Err("The selected group no longer exists".into());
@@ -846,15 +855,15 @@ fn ask_delete(app: &mut PhotocraftApp, index: Option<usize>, group: Option<Strin
                 .cloned()
                 .collect();
             let message = crate::i18n::fmt(tl!("Delete the group \"{name}\"?"), &[("name", &group)]);
-            (Delete::Group(group, members, app.session.actions.rev), message)
+            (Delete::Group(group, members, app.session.actions.rev), message, "Delete group")
         }
         None => {
             let action = index.and_then(|index| app.session.actions.list.get(index)).cloned().ok_or("The selected action no longer exists")?;
             let message = crate::i18n::fmt(tl!("Delete the action \"{name}\"?"), &[("name", &action.name)]);
-            (Delete::Action(Box::new(action)), message)
+            (Delete::Action(Box::new(action)), message, "Delete action")
         }
     };
-    let fields = json!({"__label":"Delete action","message":message});
+    let fields = json!({"__label":label,"message":message});
     let id = app.ui.open_dialog(crate::state::DialogKind::Command, fields.as_object().cloned().unwrap_or_default());
     if let Some(dialog) = app.ui.dialog_mut(id) {
         dialog.fields.insert(DELETE.into(), json!(id));

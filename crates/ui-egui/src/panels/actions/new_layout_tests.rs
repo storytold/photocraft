@@ -181,6 +181,8 @@ fn delete_confirmation_is_one_use_and_rejects_a_changed_target() {
     let mut app = app();
     app.session.actions.list.push(Action::new("Delete me", Vec::new()));
     let id = ask_delete(&mut app, Some(0), None).unwrap()["dialog"].as_u64().unwrap();
+    let dialog = app.ui.dialogs.iter().find(|dialog| dialog.id == id).unwrap();
+    assert_eq!(crate::dialogs::title(dialog), "Delete action");
     app.session.actions.list[0].description = "Changed after the question".into();
     assert!(crate::dialogs::confirm(&mut app, id).is_err());
     assert_eq!(app.session.actions.list.len(), 1);
@@ -199,6 +201,8 @@ fn empty_group_delete_question_rejects_a_changed_library_revision() {
     let mut app = app();
     app.run("actions.newSet", json!({"name":"Empty"})).unwrap();
     let id = ask_delete(&mut app, None, Some("Empty".into())).unwrap()["dialog"].as_u64().unwrap();
+    let dialog = app.ui.dialogs.iter().find(|dialog| dialog.id == id).unwrap();
+    assert_eq!(crate::dialogs::title(dialog), "Delete group");
     app.run("actions.newSet", json!({"name":"Later"})).unwrap();
     assert!(crate::dialogs::confirm(&mut app, id).is_err());
     assert!(photocraft_engine::actions_edit_cmds::set_names(&app.session).contains(&"Empty".to_string()));
