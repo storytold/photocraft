@@ -291,7 +291,8 @@ pub fn locked_for_float(doc: &Document, l: &photocraft_doc::Layer) -> bool {
 fn float(s: &mut Session, p: &Value) -> Result<Value> {
     let (dx, dy) = (int_param(p, "dx"), int_param(p, "dy"));
     let copy = p.get("copy").and_then(Value::as_bool).unwrap_or(false);
-    let step_name = p.get("stepName").and_then(Value::as_str).map(str::to_string);
+    // A name for the History step that drops the piece: short and not blank, else the default.
+    let step_name = p.get("stepName").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty() && s.chars().count() <= 64).map(str::to_string);
     let background = s.tools.background;
     let st = s.active_mut().ok_or(EngineError::NoDocument)?;
     if floating(st).is_none() {
@@ -378,7 +379,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Float Selection",
             menu: &[],
             shortcut: None,
-            params: r##"{"dx":px=0,"dy":px=0,"copy":bool=false,"stepName":string="Move" (History name of the step that drops the piece),"target":"pixels"|"mask"="pixels" (mask: float the selected part of the layer's mask, the hole takes the background colour)} → {layer, offset} (cuts the selected pixels of the active layer into a floating piece the first time, or with copy leaves them and floats a duplicate; on the Background the hole takes the background colour; then moves it by whole pixels; dropped by select.drop or any other command, put back by edit.undo)"##,
+            params: r##"{"dx":px=0,"dy":px=0,"copy":bool=false,"stepName":string="Move" (History name of the step that drops the piece; blank or over 64 characters falls back to Move),"target":"pixels"|"mask"="pixels" (mask: float the selected part of the layer's mask, the hole takes the background colour)} → {layer, offset} (cuts the selected pixels of the active layer into a floating piece the first time, or with copy leaves them and floats a duplicate; on the Background the hole takes the background colour; then moves it by whole pixels; dropped by select.drop or any other command, put back by edit.undo)"##,
             enabled: can_float,
             journal: true,
             run: float,

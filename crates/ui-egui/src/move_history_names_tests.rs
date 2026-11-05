@@ -136,6 +136,20 @@ fn an_alt_drag_of_selected_pixels_is_one_duplicate_step() {
 }
 
 #[test]
+fn a_blank_or_overlong_step_name_drops_as_move() {
+    let mut app = app();
+    app.session.execute("select.rect", json!({"x": 8, "y": 8, "width": 16, "height": 16})).unwrap();
+    for name in ["  ", &"x".repeat(65)] {
+        app.session.execute("select.float", json!({"dx": 2, "dy": 0, "copy": true, "stepName": name})).unwrap();
+        app.session.execute("select.drop", json!({})).unwrap();
+        assert_eq!(newest(&app).as_deref(), Some("Move"), "{name:?}");
+    }
+    app.session.execute("select.float", json!({"dx": 2, "dy": 0, "copy": true, "stepName": "Duplicate"})).unwrap();
+    app.session.execute("select.drop", json!({})).unwrap();
+    assert_eq!(newest(&app).as_deref(), Some("Duplicate"));
+}
+
+#[test]
 fn an_alt_arrow_nudge_keeps_duplicate_plus_move() {
     let mut app = app();
     let h0 = history(&app);
