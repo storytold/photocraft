@@ -47,6 +47,7 @@ impl PhotocraftApp {
             info_samplers: None,
             info_channels: None,
             monitors: Default::default(),
+            thumbnail_cache: std::sync::Arc::new(std::sync::Mutex::new(crate::home_recent_ui::ThumbnailCache::default())),
             checker: None,
             drag: None,
             cancelled_vector_drag: false,
