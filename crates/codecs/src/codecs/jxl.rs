@@ -27,8 +27,10 @@ fn srgb_xmp_metadata(xmp: &str) -> std::borrow::Cow<'_, str> {
     // Exact attribute/element values only; do not replace free-form user text.
     for (old, new) in [
         ("exif:ColorSpace=\"65535\"", "exif:ColorSpace=\"1\""),
+        ("exif:ColorSpace=\"2\"", "exif:ColorSpace=\"1\""),
         ("exif:ColorSpace='65535'", "exif:ColorSpace='1'"),
         ("<exif:ColorSpace>65535</exif:ColorSpace>", "<exif:ColorSpace>1</exif:ColorSpace>"),
+        ("<exif:ColorSpace>2</exif:ColorSpace>", "<exif:ColorSpace>1</exif:ColorSpace>"),
         ("exif:InteroperabilityIndex=\"R03\"", "exif:InteroperabilityIndex=\"R98\""),
         ("exif:InteroperabilityIndex='R03'", "exif:InteroperabilityIndex='R98'"),
         ("<exif:InteroperabilityIndex>R03</exif:InteroperabilityIndex>",
