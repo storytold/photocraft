@@ -284,7 +284,7 @@ pub fn caps(format: Format) -> FormatCaps {
         // `text`: the DPX header fields only (see `fidelity_warnings_with`).
         Format::Dpx => FormatCaps { depths: &[S::U8, S::U16], layouts: &[L::Gray, L::Rgb, L::Rgba], text: true, ..base },
         // GrayA is widened to RGBA at the same depth; the 16-bit alpha header is corrected.
-        Format::Jxl => FormatCaps { read: false, depths: &[S::U8, S::U16], layouts: &[L::Gray, L::Rgb, L::Rgba], ..base },
+        Format::Jxl => FormatCaps { read: false, depths: &[S::U8, S::U16], layouts: &[L::Gray, L::Rgb, L::Rgba], exif: true, xmp: true, ..base },
         Format::Cineon => FormatCaps { depths: &[S::U16], layouts: &[L::Gray, L::Rgb], alpha: false, ..base },
         Format::Dicom => FormatCaps { read: true, write: false, depths: &[S::U8, S::U16], layouts: &[L::Gray, L::Rgb], alpha: false, ..base },
         Format::Iff => FormatCaps { depths: &[S::U8], layouts: &[L::Rgb, L::Rgba], alpha: true, ..base },
