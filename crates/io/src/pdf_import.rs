@@ -78,6 +78,10 @@ const MAX_FORM_DEPTH: usize = 32;
 /// how deep forms nest (50) but not how often one is drawn, so a form drawing its child twice,
 /// 40 levels down, is 2^40 draws: the page would never finish interpreting or rendering.
 const MAX_FORM_DRAWS: u64 = 100_000;
+/// Most Form XObject draws one tiling pattern's cell may make. The renderer interprets the cell
+/// again for every fill painted with the pattern, so this keeps a pattern used many times from
+/// multiplying a large form tree by the number of fills.
+const MAX_PATTERN_FORM_DRAWS: u64 = 1_000;
 /// Most bytes one content stream (the page's contents, a form, a tiling pattern, a Type 3 glyph,
 /// a soft-mask group, an appearance) may inflate to. Deflate reaches about 1000:1, so a few MB in
 /// the file could otherwise ask for gigabytes when the stream is decoded.
@@ -840,6 +844,10 @@ fn filter_chain<'a>(dict: &Dict<'a>) -> Vec<(Filter, Dict<'a>)> {
 fn content_bounded(stream: &Stream<'_>, what: &str) -> Result<(), IoError> {
     let chain: Vec<Filter> = filter_chain(stream.dict()).into_iter().map(|(f, _)| f).collect();
     let Some(flate) = chain.iter().position(|f| *f == Filter::FlateDecode) else { return Ok(()) };
+    // A second decompressing stage after the measured one would expand its output unmeasured.
+    if chain.iter().skip(flate + 1).any(|f| matches!(f, Filter::FlateDecode | Filter::LzwDecode | Filter::RunLengthDecode)) {
+        return Err(IoError::Pdf(format!("PDF: {what} is decompressed twice in a row, so its size can't be checked; the page can't be opened")));
+    }
     let raw = stream.raw_data();
     let mut data = std::borrow::Cow::Borrowed(raw.as_ref());
     // The ASCII filters only shrink their input, so they're undone here to reach the Deflate data.
@@ -1298,6 +1306,11 @@ fn form_draws(page: &Page) -> Result<(), IoError> {
     }
     // The other content the renderer interprets on its own, on the same count: annotation
     // appearances, and the page's tiling patterns, Type 3 glyphs and soft-mask groups.
+    for name in page.resources().patterns.keys() {
+        if let Some(p) = page.resources().patterns.get::<Stream<'_>>(&name) {
+            forms.pattern(&p, page_x, 1, &mut drawn)?;
+        }
+    }
     for (stream, inherited) in other_contents(page) {
         let x = stream.dict().get::<Dict<'_>>(b"Resources").map_or(inherited, |r| Resources::new(r).x_objects);
         let Ok(data) = stream.decoded() else { continue };
@@ -1317,11 +1330,6 @@ fn other_contents<'a>(page: &Page<'a>) -> Vec<(Stream<'a>, Dict<'a>)> {
     let res = page.resources();
     let page_x = res.x_objects.clone();
     let mut out: Vec<(Stream<'a>, Dict<'a>)> = appearance_streams(page).into_iter().map(|s| (s, Dict::default())).collect();
-    for name in res.patterns.keys() {
-        if let Some(s) = res.patterns.get::<Stream<'a>>(&name) {
-            out.push((s, page_x.clone()));
-        }
-    }
     for name in res.fonts.keys() {
         let Some(font) = res.fonts.get::<Dict<'a>>(&name) else { continue };
         let Some(procs) = font.get::<Dict<'a>>(b"CharProcs") else { continue };
@@ -1401,20 +1409,53 @@ impl<'a> Forms<'a> {
         if !self.open.insert(id) {
             return Err(IoError::Pdf("PDF: a Form XObject draws itself, so the page can't be opened".into()));
         }
-        let xobjects = form.dict().get::<Dict<'a>>(b"Resources").map_or_else(|| inherited.clone(), |r| Resources::new(r).x_objects);
-        let kids = match self.children.get(&id) {
-            Some(k) => k.clone(),
-            None => {
-                // An undecodable form draws nothing (the interpreter skips it too).
-                let k = form.decoded().map(|data| self.children(TypedIter::new(&data), &xobjects)).unwrap_or_default();
-                self.children.insert(id, k.clone());
-                k
-            }
-        };
+        let own = form.dict().get::<Dict<'a>>(b"Resources").map(Resources::new);
+        let xobjects = own.as_ref().map_or_else(|| inherited.clone(), |r| r.x_objects.clone());
+        let kids = self.kids(form, &xobjects);
         for kid in &kids {
             self.draw(kid, &xobjects, depth + 1, drawn)?;
         }
+        // The tiling patterns in the form's own resources, counted on every draw of the form (a
+        // form without resources uses its parent's, whose patterns are counted there).
+        if let Some(r) = own {
+            for name in r.patterns.keys() {
+                if let Some(p) = r.patterns.get::<Stream<'a>>(&name) {
+                    self.pattern(&p, &xobjects, depth + 1, drawn)?;
+                }
+            }
+        }
         self.open.remove(&id);
+        Ok(())
+    }
+
+    /// The Form XObjects `stream`'s content draws, read once per stream.
+    fn kids(&mut self, stream: &Stream<'a>, xobjects: &Dict<'a>) -> Vec<Stream<'a>> {
+        let id = stream.obj_id();
+        if let Some(k) = self.children.get(&id) {
+            return k.clone();
+        }
+        // An undecodable stream draws nothing (the interpreter skips it too).
+        let k = stream.decoded().map(|data| self.children(TypedIter::new(&data), xobjects)).unwrap_or_default();
+        self.children.insert(id, k.clone());
+        k
+    }
+
+    /// One interpretation of a tiling pattern's cell (its `/Resources`, or `inherited`), counted
+    /// into `drawn`; a cell drawing more than [`MAX_PATTERN_FORM_DRAWS`] forms is refused.
+    fn pattern(&mut self, pattern: &Stream<'a>, inherited: &Dict<'a>, depth: usize, drawn: &mut u64) -> Result<(), IoError> {
+        if depth > MAX_FORM_DEPTH {
+            return Err(IoError::Pdf(format!("PDF: Form XObjects nest deeper than {MAX_FORM_DEPTH}, so the page can't be opened")));
+        }
+        let xobjects = pattern.dict().get::<Dict<'a>>(b"Resources").map_or_else(|| inherited.clone(), |r| Resources::new(r).x_objects);
+        let before = *drawn;
+        for kid in self.kids(pattern, &xobjects) {
+            self.draw(&kid, &xobjects, depth + 1, drawn)?;
+            if drawn.saturating_sub(before) > MAX_PATTERN_FORM_DRAWS {
+                return Err(IoError::Pdf(format!(
+                    "PDF: a tiling pattern draws Form XObjects more than {MAX_PATTERN_FORM_DRAWS} times per fill, so the page can't be opened"
+                )));
+            }
+        }
         Ok(())
     }
 }

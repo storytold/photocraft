@@ -800,6 +800,41 @@ fn form_xobject_fan_out_is_bounded_before_the_page_is_interpreted() {
     let annotated = objects_pdf("", "/Annots [36 0 R]", "", b"", forms);
     let e = refused(&annotated, "fan-out in an appearance");
     assert!(e.contains("Form XObjects more than"), "{e}");
+    // A tiling pattern in a form's resources, its cell drawing a 2^11 chain: the renderer would
+    // interpret it once per fill. Refused per cell, and through the form that holds it.
+    let chain = |first: usize, levels: usize| -> Vec<Vec<u8>> {
+        (0..levels)
+            .map(|i| {
+                let (res, content) = if i + 1 < levels {
+                    (format!("/Resources << /XObject << /C {} 0 R >> >>", first + 1 + i), "/C Do\n/C Do\n".to_string())
+                } else {
+                    (String::new(), String::new())
+                };
+                stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 10 10] {res}"), content.as_bytes())
+            })
+            .collect()
+    };
+    // 5: the form the page draws, holding pattern 6; 6: the pattern, drawing chain 7..17.
+    let mut objs = vec![
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 10 10] /Resources << /Pattern << /P 6 0 R >> >>", b"/Pattern cs /P scn 0 0 10 10 re f"),
+        stream(
+            "/Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 10 10] /XStep 10 /YStep 10 /Resources << /XObject << /C 7 0 R >> >>",
+            b"/C Do",
+        ),
+    ];
+    objs.extend(chain(7, 11));
+    let e = refused(&objects_pdf("/XObject << /F 5 0 R >>", "", "", b"/F Do", objs), "pattern in a form");
+    assert!(e.contains("tiling pattern"), "{e}");
+    // A pattern cell drawing a few forms opens.
+    let mut objs = vec![
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 10 10] /Resources << /Pattern << /P 6 0 R >> >>", b"/Pattern cs /P scn 0 0 10 10 re f"),
+        stream(
+            "/Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 10 10] /XStep 10 /YStep 10 /Resources << /XObject << /C 7 0 R >> >>",
+            b"/C Do",
+        ),
+    ];
+    objs.extend(chain(7, 4));
+    assert!(import_pdf("pattern.pdf", &objects_pdf("/XObject << /F 5 0 R >>", "", "", b"/F Do", objs), &PdfOpenOptions::default(), &Interrupt::NONE).is_ok());
 }
 
 /// `data` in ASCII85 (no `z` shorthand), ended by `~>`.
@@ -863,6 +898,9 @@ fn a_content_stream_that_inflates_too_far_is_refused_before_decoding() {
     let e = refused(&objects_pdf("", "", "/Filter [/ASCIIHexDecode /FlateDecode]", hexed.as_bytes(), Vec::new()), "ASCIIHex bomb");
     assert!(e.contains("inflates past"), "{e}");
     let e = refused(&objects_pdf("", "", "/Filter [/LZWDecode /FlateDecode]", b"x", Vec::new()), "LZW then Flate");
+    assert!(e.contains("decompressed twice"), "{e}");
+    // Deflate twice: the first stage stays under the limit, the second would expand it unmeasured.
+    let e = refused(&objects_pdf("", "", "/Filter [/FlateDecode /FlateDecode]", &deflated_spaces(1 << 20), Vec::new()), "Flate then Flate");
     assert!(e.contains("decompressed twice"), "{e}");
     let fine = {
         use std::io::Write;
