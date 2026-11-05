@@ -320,6 +320,64 @@ fn box_text_wraps_inside_width() {
     assert_eq!(l2.lines.len(), 2);
 }
 
+fn soft_wrap_leading_ascii_space_advance(mut t: TextLayer, expected_start: usize, spaces: usize, carried: usize) {
+    use crate::layout::line_index;
+
+    let mut e = TextEngine::new();
+    let before = e.layout(&t, 72.0);
+    assert!(before.lines.len() > 1, "{:?}", before.lines);
+    let at = before.lines[1].range.start;
+    assert_eq!(at, expected_start, "{:?}", before.lines);
+    let before_x = before.caret(at).0;
+    let before_line = line_index(&before, at);
+
+    t.text.insert_str(at, &" ".repeat(spaces));
+    let after = e.layout(&t, 72.0);
+    let after_x = after.caret(at + spaces).0;
+    let inserted_advance: f32 = after.clusters.iter().filter(|c| (at..at + spaces).contains(&c.range.start)).map(|c| c.advance).sum();
+    assert!(inserted_advance > 0.0, "{:?}", after.clusters);
+    let space_advance: f32 = after.clusters.iter().filter(|c| (at + spaces - carried..at + spaces).contains(&c.range.start)).map(|c| c.advance).sum();
+    assert_eq!(line_index(&after, at + spaces), before_line, "{:?}", after.lines);
+    assert!(
+        (after_x - before_x - space_advance).abs() < 1e-3,
+        "before {before_x}, after {after_x}, carried spaces {space_advance}, lines {:?}, clusters {:?}",
+        after.lines,
+        after.clusters
+    );
+}
+
+#[test]
+fn horizontal_soft_wrap_preserves_leading_ascii_spaces() {
+    let mut t = point("one two three four", 20.0);
+    t.shape = TextShape::Box { x: 0.0, y: 0.0, width: 80.0, height: 200.0 };
+    soft_wrap_leading_ascii_space_advance(t, "one two ".len(), 3, 3);
+}
+
+fn vertical_soft_wrap_text(first: &str) -> TextLayer {
+    let mut t = point(&format!("{first}鈴木一郎 田中花子"), 36.0);
+    t.font_family = "Shippori Mincho".into();
+    t.orientation = Orientation::Vertical;
+    t.shape = TextShape::Box { x: 0.0, y: 0.0, width: 280.0, height: 480.0 };
+    t
+}
+
+#[test]
+fn vertical_soft_wrap_preserves_leading_ascii_spaces() {
+    let first = "担当：山田 太郎 佐藤 次郎君";
+    soft_wrap_leading_ascii_space_advance(vertical_soft_wrap_text(first), first.len(), 3, 3);
+}
+
+#[test]
+fn vertical_soft_wrap_ascii_space_carry_policy() {
+    for (last, spaces, carried) in [("君", 1, 1), ("君", 2, 2), ("君", 3, 3), ("A", 1, 0), ("A", 2, 1), ("A", 3, 2)] {
+        let first = format!("担当：山田 太郎 佐藤 次郎{last}");
+        soft_wrap_leading_ascii_space_advance(vertical_soft_wrap_text(&first), first.len(), spaces, carried);
+    }
+
+    let first = "担当：山田 太郎 佐藤 次郎A ";
+    soft_wrap_leading_ascii_space_advance(vertical_soft_wrap_text(first), first.len(), 3, 3);
+}
+
 /// #5565: paragraph text breaks at its horizontally scaled width. At 60% it breaks like 100%
 /// text in a box 1/0.6 as wide, and the lines fill the box instead of wrapping early.
 #[test]
