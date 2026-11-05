@@ -6370,7 +6370,20 @@ fn adjustment_layer_name_must_round_trip() {
 #[test]
 fn paste_with_center_refuses_strict_export() {
     let one = |id: &str, p: Value| Action { name: "Probe".into(), steps: vec![(id.into(), p)], ..Default::default() };
-    for p in [json!({"center": [3, 2]}), json!({"center": [3.5, 2.5], "clampToCanvas": false}), json!({"clampToCanvas": false}), json!({"layer": 1})] {
+    for p in [
+        json!({"center": [3, 2]}),
+        json!({"center": [3.5, 2.5], "clampToCanvas": false}),
+        json!({"clampToCanvas": false}),
+        json!({"layer": 1}),
+        json!({"layers": [1]}),
+        json!({"document": "Doc"}),
+        json!({"path": "Path"}),
+        json!({"target": "mask"}),
+        // A present null counts too, as the native `as` paste rejects it.
+        json!({"center": null}),
+        json!({"layer": null}),
+        json!({"target": null}),
+    ] {
         let err = export("Audit", &[&one("edit.paste", p.clone())], &[], false).unwrap_err();
         assert!(err.contains("`edit.paste`"), "{p}: {err}");
         let (_, skipped) = export("Audit", &[&one("edit.paste", p.clone())], &[], true).unwrap();
