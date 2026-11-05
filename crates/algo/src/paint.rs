@@ -126,11 +126,14 @@ fn composite_area(
                     FillMode::Clear => [d[0], d[1], d[2], d[3] * (1.0 - k.min(1.0))],
                 };
                 from_rgba_into(&fmt, o, &mut enc);
-                // A colour picked as CMYK inks replaces fully covered pixels of a CMYK target as it is.
+                // A colour picked as CMYK inks replaces fully covered pixels of a CMYK target as it
+                // is — and pixels the fill made fully opaque out of transparency, whose colour is the
+                // fill alone even though their coverage is partial (the edge of a bucket fill on
+                // transparency, #11354 review). A pixel that held colour keeps its blended encoding.
                 if let Some(i) = inks
                     && fmt.mode == photocraft_color::ColorMode::Cmyk
                     && mode == FillMode::Blend(BlendMode::Normal)
-                    && k >= 1.0
+                    && (k >= 1.0 || (d[3] <= 0.0 && o[3] >= 1.0))
                 {
                     enc[..4].copy_from_slice(&i);
                 }
@@ -424,6 +427,37 @@ mod tests {
                 assert!(s.rgba(4, 0)[3] > 0.999);
             }
         }
+    }
+
+    /// #11354 review: on a CMYK target, the edge pixels a transparent-seed bucket makes
+    /// opaque take the picked inks like the fully covered interior — their colour is the
+    /// fill alone. A partially transparent destination the fill touches keeps the blended
+    /// colour it already had, so its inks stay the conversion of that blend.
+    #[test]
+    fn bucket_on_transparency_writes_the_picked_cmyk_inks_at_the_edge() {
+        let a = Rect::new(0, 0, 8, 1);
+        let inks = [1.0f32, 0.0, 0.0, 0.0];
+        let rgb = photocraft_color::convert::cmyk_to_rgb(inks).map(|c| c.clamp(0.0, 1.0));
+        let src = |_, _| [rgb[0], rgb[1], rgb[2], 1.0];
+        let raw = |s: &Surface, x: i32| -> Vec<f32> { s.read_region(Rect::new(x, 0, x + 1, 1)).into_iter().take(4).collect() };
+        let is_inks = |got: &[f32]| got.iter().zip(inks).all(|(a, b)| (a - b).abs() < 0.02);
+
+        // Transparent run against opaque white: x=3 is the anti-aliased edge (coverage < 1).
+        let mut s = Surface::new(PixelFormat::CMYKA8);
+        s.fill_rect(Rect::new(4, 0, 8, 1), &[0.0, 0.0, 0.0, 0.0, 1.0]);
+        assert!(bucket_fill_inks(&mut s, a, (1, 0), 0.0, true, true, 1.0, None, false, src, Some(inks), FillMode::Blend(BlendMode::Normal)));
+        assert!(is_inks(&raw(&s, 1)), "fully covered: {:?}", raw(&s, 1));
+        assert!(is_inks(&raw(&s, 3)), "the made-opaque edge takes the picked inks: {:?}", raw(&s, 3));
+
+        // The edge pixel holds white at half alpha instead: the fill raises its alpha,
+        // but the colour is a blend, so the picked inks do not replace it.
+        let mut s = Surface::new(PixelFormat::CMYKA8);
+        s.fill_rect(Rect::new(3, 0, 4, 1), &[0.0, 0.0, 0.0, 0.0, 0.5]);
+        s.fill_rect(Rect::new(4, 0, 8, 1), &[0.0, 0.0, 0.0, 0.0, 1.0]);
+        assert!(bucket_fill_inks(&mut s, a, (1, 0), 0.0, true, true, 1.0, None, false, src, Some(inks), FillMode::Blend(BlendMode::Normal)));
+        let edge = s.rgba(3, 0);
+        assert!(edge[3] > 0.5, "the fill raised the partial pixel's alpha: {edge:?}");
+        assert!(!is_inks(&raw(&s, 3)), "a blended destination keeps its own encoding: {:?}", raw(&s, 3));
     }
 
     /// The rule is for a click on transparency only: from an opaque seed, a semi-transparent
