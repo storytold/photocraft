@@ -112,8 +112,9 @@ pub fn right_erases(app: &PhotocraftApp, tool: Tool) -> bool {
 
 /// Route the canvas response's buttons: the left one drives the tool; the right one resizes the
 /// brush with Alt held (#297), erases (Erase preference) or opens the Brush Preset picker. Arms
-/// `secondary_erase` or `brush_resize_armed` for this frame's `Down`.
-pub fn canvas_buttons(app: &mut PhotocraftApp, response: &Response, tool: Tool) -> Buttons {
+/// `secondary_erase` or `brush_resize_armed` for this frame's `Down`. `popups` is false on a canvas
+/// whose window can't show the pickers (an extra document window, #6022): a right-click opens nothing.
+pub fn canvas_buttons(app: &mut PhotocraftApp, response: &Response, tool: Tool, popups: bool) -> Buttons {
     if crate::brush_mode_menu::blocks_canvas(app, &response.ctx) {
         app.secondary_erase = false;
         return Buttons::default();
@@ -145,7 +146,8 @@ pub fn canvas_buttons(app: &mut PhotocraftApp, response: &Response, tool: Tool) 
     let mode_menu = crate::brush_mode_menu::is_gesture(tool, crate::workspace_ui::sticky_mods(app, crate::brush_mode_menu::gesture_mods(&response.ctx, mods)));
     if mode_menu && !resizing && app.drag.is_none() {
         app.secondary_erase = false;
-        if response.secondary_clicked()
+        if popups
+            && response.secondary_clicked()
             && let Some(p) = response.interact_pointer_pos()
         {
             crate::brush_mode_menu::open(app, &response.ctx, [p.x, p.y]);
@@ -163,7 +165,8 @@ pub fn canvas_buttons(app: &mut PhotocraftApp, response: &Response, tool: Tool) 
     let sticky = crate::workspace_ui::sticky_mods(app, mods);
     let hud_gesture = right_click_picker(tool) && !layer_menu && !erase && sticky.shift && sticky.alt;
     let right_press = response.ctx.input(|i| i.pointer.button_pressed(PointerButton::Secondary)) && response.contains_pointer();
-    if hud_gesture
+    if popups
+        && hud_gesture
         && right_press
         && let Some(p) = response.ctx.input(|i| i.pointer.hover_pos())
     {
@@ -173,6 +176,7 @@ pub fn canvas_buttons(app: &mut PhotocraftApp, response: &Response, tool: Tool) 
     let right_start = erase && right_started;
     let right_click = response.secondary_clicked();
     if right_click
+        && popups
         && !erase
         && !layer_menu
         && !crate::color_hud::is_open(&app.ui)
