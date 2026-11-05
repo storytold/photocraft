@@ -440,6 +440,18 @@ fn cmd_h_hides_app_is_opt_in_and_moves_only_the_extras_default() {
     assert_eq!(p.shortcut("view.extras", Some("Cmd+H")), Some("Cmd+H"), "pref off: Photoshop's ⌘H");
 }
 
+/// A preferences file copied from a Mac doesn't turn ⌘H Hides PhotoCraft on anywhere else, where
+/// the moved Extras default would read Ctrl+Ctrl+H. Each host checks its own side.
+#[test]
+fn cmd_h_hides_app_from_a_file_applies_only_on_macos() {
+    let mut s = session();
+    s.load_prefs_json(r#"{"interface": {"cmdHHidesApp": true}}"#).unwrap();
+    let mac = cfg!(target_os = "macos");
+    assert_eq!(s.prefs().interface.cmd_h_hides_app, mac);
+    let expected = if mac { "Ctrl+Cmd+H" } else { "Cmd+H" };
+    assert_eq!(s.prefs().shortcut("view.extras", Some("Cmd+H")), Some(expected));
+}
+
 /// #249: temporary tools (held keys) and the fill / colour keys are bindable like commands.
 #[test]
 fn temporary_tools_and_fill_keys_are_rebindable() {

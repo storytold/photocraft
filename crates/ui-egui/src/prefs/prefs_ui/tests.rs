@@ -1660,6 +1660,31 @@ fn cmd_h_hides_photocraft_is_an_opt_in_mac_checkbox() {
     assert!(h.state().session.prefs().interface.cmd_h_hides_app);
 }
 
+/// The note names ⌃⌘H only while Extras would really get it: a key the user gave Extras stays.
+#[test]
+fn cmd_h_note_says_nothing_of_extras_when_it_has_the_users_own_key() {
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    if !cfg!(target_os = "macos") {
+        return;
+    }
+    let (mut app, _store) = app_with_store();
+    app.run("prefs.set", json!({"values": {"interface.language": "en"}})).unwrap();
+    app.run("edit.keyboardShortcuts", json!({"set": {"view.extras": "Cmd+Alt+E"}, "allowUnknown": true})).unwrap();
+    open_preferences(&mut app, "interface");
+    let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).build_eframe(move |cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        app
+    });
+    h.run_steps(4);
+    h.get_by_label("⌘H Hides PhotoCraft").scroll_to_me();
+    h.run_steps(4);
+    h.get_by_label("⌘H Hides PhotoCraft").click();
+    h.run_steps(4);
+    assert!(h.query_by_label("View › Extras uses ⌃⌘H.").is_none());
+    assert!(h.query_by_label("Hide PhotoCraft uses ⌃⌘H.").is_none());
+}
+
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "macos")))]
 #[test]
 fn system_title_bar_explains_next_launch_and_preserves_apply_and_cancel() {
