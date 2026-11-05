@@ -1,20 +1,22 @@
 use super::{
     CaptionStyle, Document, FileDialogFn, OsEvent, Value, dds_options_ui, jobs_ui, jpeg_options_ui, monitor_status, native_menu, screen_picker,
-    targa_options_ui,
+    targa_options_ui, tiff_options_ui,
 };
 
 /// The error a save gets while another save waits on its format prompt.
 pub(crate) const SAVE_OPTIONS_OPEN: &str = "Answer the TIFF, Targa, DDS or JPEG Options before starting another save";
 
 /// The format answers a save takes instead of asking: the Targa bits per pixel (`"tgaBits"`),
-/// the DDS options (`"ddsCompression"`, `"ddsMipmaps"`) and JPEG Options (`"quality"` 0–12,
-/// `"jpegFormat"`). `None` asks in Save As and takes the default in automation saves, which never
+/// the DDS options (`"ddsCompression"`, `"ddsMipmaps"`), JPEG Options (`"quality"` 0–12,
+/// `"jpegFormat"`) and TIFF Options (`"tiffCompression"`, `"tiffTransparency"`, `"tiffPyramid"`,
+/// `"tiffLayers"`). `None` asks in Save As and takes the default in automation saves, which never
 /// prompt.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct FormatChoices {
     pub tga_bits: Option<photocraft_io::TgaBits>,
     pub dds: Option<photocraft_io::DdsOptions>,
     pub jpeg: Option<jpeg_options_ui::JpegChoice>,
+    pub tiff: Option<tiff_options_ui::TiffChoice>,
 }
 
 impl FormatChoices {
@@ -24,6 +26,7 @@ impl FormatChoices {
             tga_bits: targa_options_ui::bits_param(params, cmd)?,
             dds: dds_options_ui::options_param(params, cmd)?,
             jpeg: jpeg_options_ui::choice_param(params, cmd)?,
+            tiff: tiff_options_ui::choice_param(params, cmd)?,
         })
     }
 
@@ -34,12 +37,17 @@ impl FormatChoices {
             tga_bits: targa_options_ui::bits_param(params, cmd)?,
             dds: dds_options_ui::options_param(params, cmd)?,
             jpeg: jpeg_options_ui::recorded_choice(params, cmd)?,
+            tiff: tiff_options_ui::choice_param(params, cmd)?,
         })
     }
 
     /// The export settings with these answers applied.
     pub fn apply(self, settings: ExportSettings) -> ExportSettings {
         let settings = ExportSettings { tga_bits: self.tga_bits.or(settings.tga_bits), dds: self.dds.unwrap_or(settings.dds), ..settings };
+        let settings = match self.tiff {
+            Some(t) => t.apply(settings),
+            None => settings,
+        };
         match self.jpeg {
             Some(j) => j.apply(settings),
             None => settings,
@@ -56,6 +64,9 @@ impl FormatChoices {
         }
         if let Some(j) = self.jpeg {
             j.record(step);
+        }
+        if let Some(t) = self.tiff {
+            t.record(step);
         }
     }
 }
@@ -79,6 +90,13 @@ pub struct ExportSettings {
     pub webp_quality: Option<u8>,
     /// TIFF: keep the layers (Photoshop layer data); `false` is "Discard Layers and Save a Copy".
     pub tiff_layers: bool,
+    /// TIFF Options › Image Compression.
+    pub tiff_compression: photocraft_codecs::TiffCompression,
+    /// TIFF Options › Save Transparency (`None`: kept unless the document has alpha or spot
+    /// channels; see [`photocraft_io::ExportOptions::tiff_transparency`]).
+    pub tiff_transparency: Option<bool>,
+    /// TIFF Options › Save Image Pyramid.
+    pub tiff_pyramid: bool,
     /// Embed the document's whole XMP packet. `true` by default (Save As keeps the metadata);
     /// Export As starts at Metadata: None, since the packet can carry the text of every type
     /// layer and one id per placed document (#647).
@@ -95,6 +113,9 @@ pub struct ExportSettings {
     /// PSD/PSB: write the real merged image (Preferences › File Handling › Maximize PSD and PSB
     /// File Compatibility; see [`PhotocraftApp::save_settings`]).
     pub psd_maximize_compatibility: bool,
+    /// `.pcraft`: also write the full-size composite (Preferences › File Handling › Save Full-Size
+    /// Composite in .pcraft Files; see [`PhotocraftApp::save_settings`]). Off by default.
+    pub pcraft_full_composite: bool,
     /// Embed the document's ICC profile when the format supports it. On for Save As and, unless
     /// Export As turns it off, for export.
     pub embed_icc: bool,
@@ -120,11 +141,15 @@ impl Default for ExportSettings {
             webp_lossless: true,
             webp_quality: None,
             tiff_layers: true,
+            tiff_compression: photocraft_codecs::TiffCompression::None,
+            tiff_transparency: None,
+            tiff_pyramid: false,
             xmp_all: true,
             tga_bits: None,
             dds: photocraft_io::DdsOptions::default(),
             image_previews: true,
             psd_maximize_compatibility: true,
+            pcraft_full_composite: false,
             embed_icc: true,
             embed_metadata: true,
             document_path: None,
@@ -151,11 +176,15 @@ impl ExportSettings {
         opts.encode.embed_icc = self.embed_icc;
         opts.encode.embed_metadata = self.embed_metadata;
         opts.tiff_layers = self.tiff_layers;
+        opts.tiff_transparency = self.tiff_transparency;
+        opts.encode.tiff_compression = self.tiff_compression;
+        opts.encode.tiff_pyramid = self.tiff_pyramid;
         opts.xmp = if self.xmp_all { photocraft_io::XmpEmbed::All } else { photocraft_io::XmpEmbed::None };
         opts.tga_bits = self.tga_bits;
         opts.encode.dds = self.dds;
         opts.image_previews = self.image_previews;
         opts.psd_maximize_compatibility = self.psd_maximize_compatibility;
+        opts.pcraft_full_composite = self.pcraft_full_composite;
         opts.document_path = self.document_path.clone();
         opts.pcraft_cache = self.pcraft_cache.clone();
         opts.read_linked_files = self.read_linked_files;
@@ -252,6 +281,9 @@ pub type ClipboardSetFn = Box<dyn FnMut(u32, u32, &[u8]) -> Result<(), String>>;
 /// `Err` means the contents could not be read and must not invalidate the internal copy.
 pub type ClipboardGetFn = Box<dyn FnMut() -> Result<Option<(u32, u32, Vec<u8>)>, String>>;
 
+/// Read original SVG markup for an explicit Paste As. A read error preserves the internal copy.
+pub type ClipboardGetSvgFn = Box<dyn FnMut() -> Result<Option<Vec<u8>>, String>>;
+
 /// Whether the last clipboard read found no way to reach the OS clipboard at all.
 pub type ClipboardUnreadableFn = Box<dyn Fn() -> bool>;
 
@@ -304,6 +336,8 @@ pub struct ExternalVectorSource {
 pub type OpenExternalSvgFn = Box<dyn FnMut(ExternalSvgEditor, ExternalVectorSource) -> Result<Box<dyn ExternalSvgSession>, String>>;
 /// Shared queue of (file name, bytes) delivered asynchronously.
 pub type Inbox = std::sync::Arc<std::sync::Mutex<Vec<(String, Vec<u8>)>>>;
+/// Shared queue of browser canvas drops with the document captured at the drop event.
+pub type PlaceInbox = std::sync::Arc<std::sync::Mutex<Vec<(photocraft_doc::DocId, String, Vec<u8>)>>>;
 
 /// Read the saved preferences text (`None` when there is none yet).
 pub type LoadTextFn = Box<dyn FnMut() -> Option<String>>;
@@ -434,10 +468,13 @@ pub struct Services {
     /// Files delivered asynchronously for a drop onto the active document's canvas (web
     /// drag-and-drop, routed by [`PhotocraftApp::dropped_on_canvas`]): placed as layers like a
     /// desktop canvas drop (Place Embedded, each in Free Transform).
-    pub place_inbox: Option<Inbox>,
+    pub place_inbox: Option<PlaceInbox>,
     /// OS clipboard images: copies go out, screenshots and images from other apps come in.
     pub clipboard_set_image: Option<ClipboardSetFn>,
     pub clipboard_get_image: Option<ClipboardGetFn>,
+    /// SVG text copied by another app: imported only by an explicit pixels/path/shape paste,
+    /// and read after an ordinary paste too, only to remember which SVG came with that image.
+    pub clipboard_get_svg: Option<ClipboardGetSvgFn>,
     /// True when the last `clipboard_get_image` read had no clipboard to read, as in a Flatpak on
     /// Wayland (#5031), rather than a clipboard that holds no image. `None` where that can't happen.
     pub clipboard_unreadable: Option<ClipboardUnreadableFn>,
@@ -445,6 +482,11 @@ pub struct Services {
     /// the web (see `prefs_ui`).
     pub load_prefs: Option<LoadTextFn>,
     pub save_prefs: Option<SaveTextFn>,
+    /// Load/save the bounded deterministic GPU compositor failure memo (native only).
+    pub load_gpu_memo: Option<LoadTextFn>,
+    pub save_gpu_memo: Option<SaveTextFn>,
+    /// Compiler identity included in GPU memo keys (for example `fxc` or `dxc:<path>`).
+    pub shader_compiler: Option<String>,
     /// Photoshop's live keyboard shortcut set, imported once at first launch (`kys_import`).
     pub photoshop_shortcuts: Option<PhotoshopShortcutsFn>,
     pub system_theme: Option<SystemThemeFn>,
