@@ -53,9 +53,10 @@ pub fn mask_from_surface(s: Option<&Surface>, area: Rect) -> Vec<f32> {
                     let tc = TileCoord::containing(x, y);
                     let x1 = (tc.rect().x1).min(area.x1);
                     let dst = row.get_mut((x - area.x0) as usize..(x1 - area.x0) as usize).unwrap_or_default();
-                    let src = s.tile(tc).and_then(|t| {
+                    let guard = s.tile(tc).map(|t| t.bytes());
+                    let src = guard.as_deref().and_then(|bytes| {
                         let base = (y - tc.ty * TILE_SIZE) as usize * TILE_SIZE as usize + (x - tc.tx * TILE_SIZE) as usize;
-                        t.bytes().get(base..base + dst.len())
+                        bytes.get(base..base + dst.len())
                     });
                     match src {
                         Some(src) => dst.iter_mut().zip(src).for_each(|(d, b)| *d = lut[*b as usize]),
@@ -115,7 +116,7 @@ fn surface_from_masks(area: Rect, new: &[f32], prev: Option<&[f32]>, f: impl Fn(
         let tr = tc.rect().intersect(&area);
         let (lx, span) = ((tr.x0 - area.x0) as usize, tr.width() as usize);
         let mut tile = Arc::clone(blank);
-        let data = Arc::make_mut(&mut tile).bytes_mut();
+        let mut data = Arc::make_mut(&mut tile).bytes_mut();
         let (mut lo, mut hi) = (if tr == tc.rect() { u8::MAX } else { 0 }, 0u8);
         for y in tr.y0..tr.y1 {
             let o = (y - tc.ty * TILE_SIZE) as usize * ts + (tr.x0 - tc.tx * TILE_SIZE) as usize;
@@ -123,6 +124,7 @@ fn surface_from_masks(area: Rect, new: &[f32], prev: Option<&[f32]>, f: impl Fn(
             row((y - area.y0) as usize * w + lx, dst);
             (lo, hi) = dst.iter().fold((lo, hi), |(lo, hi), b| (lo.min(*b), hi.max(*b)));
         }
+        drop(data);
         (hi > 0).then(|| (*tc, if lo == u8::MAX { Arc::clone(&full) } else { tile }))
     });
     s.put_tiles(built.into_iter().flatten());
@@ -134,10 +136,22 @@ pub fn mask_to_surface(m: &[f32], area: Rect) -> Surface {
     surface_from_masks(area, m, None, |_, v| v)
 }
 
+mod combine_mask;
+pub use combine_mask::combine_band;
+
 /// Combines `new` with `old` by `mode`. Returns `None` when nothing is selected.
 pub fn combine(old: Option<&Surface>, new: &[f32], area: Rect, mode: SelectionMode) -> Option<Surface> {
     if area.is_empty() {
         return None;
+    }
+    // Replace already writes straight from the input mask to tiles; it needs no old mask.
+    if mode == SelectionMode::Replace || (old.is_none() && mode == SelectionMode::Add) {
+        let s = mask_to_surface(new, area);
+        return (s.tile_count() > 0).then_some(s);
+    }
+    let old = old?;
+    if old.format() == PixelFormat::GRAY8 {
+        return combine_mask::gray8(Some(old), new, area, mode, false);
     }
     // Quantize to the 8-bit grid selections are stored on, so combining a mask with itself is
     // exact. Below half an 8-bit step is nothing.
@@ -145,7 +159,7 @@ pub fn combine(old: Option<&Surface>, new: &[f32], area: Rect, mode: SelectionMo
     let s = match mode {
         SelectionMode::Replace => surface_from_masks(area, new, None, |_, v| v),
         _ => {
-            let prev = mask_from_surface(old, area);
+            let prev = mask_from_surface(Some(old), area);
             match mode {
                 SelectionMode::Add => surface_from_masks(area, new, Some(&prev), |p, v| p.max(q(v))),
                 SelectionMode::Subtract => surface_from_masks(area, new, Some(&prev), |p, v| (p - q(v)).max(0.0)),
@@ -381,6 +395,9 @@ pub fn combine_region(old: Option<&Surface>, new: Option<&Region>, mode: Selecti
     let empty = Region { bbox: Rect::EMPTY, mask: Vec::new() };
     let new = new.unwrap_or(&empty);
     let b = new.bbox;
+    if old.is_none_or(|s| s.format() == PixelFormat::GRAY8) {
+        return combine_mask::gray8_bytes(old, &new.mask, b, mode);
+    }
     let prev_u8 = |s: &Surface| -> Vec<u8> {
         let mut v = Vec::new();
         s.read_region_into(b, &mut v);
@@ -761,11 +778,13 @@ pub fn tone_range(px: &[[f32; 4]], lo: f32, hi: f32, falloff: f32) -> Vec<f32> {
 }
 
 mod distance;
+mod inverse;
 mod lasso;
 mod marquee;
 mod morphology;
 
 pub use distance::edt;
+pub use inverse::inverse_surface;
 pub(crate) use lasso::clip_segment;
 pub use lasso::{MAX_PAINTED_TILES, polygon_edge_tiles, polygon_surface};
 pub use marquee::{combine_sparse, combine_surfaces, ellipse_surface};
@@ -904,6 +923,123 @@ pub fn polygon_window(points: &[(f32, f32)], canvas: Rect, window: Rect, anti_al
         }
     });
     m
+}
+
+/// Matches candidate colors against a set of selected colors within an $L_\\infty$
+/// tolerance per channel.
+///
+/// Rather than checking against a single 4D axis-aligned bounding box (which would
+/// falsely include intermediate colors when disparate hues like red and blue are selected),
+/// this indexes selected colors in a bounding-volume hierarchy (BVH). Candidate colors
+/// outside the expanded bounds of subtrees are pruned in $O(1)$ time. Fully transparent
+/// pixels (`a == 0`) match each other whatever their hidden RGB, as in [`magic_wand`].
+#[derive(Clone, Debug)]
+pub struct ColorMatcher {
+    has_transparent: bool,
+    tree: ColorBvh,
+    tol: f32,
+}
+
+#[derive(Clone, Debug)]
+enum ColorBvh {
+    Empty,
+    Leaf(Vec<[f32; 4]>),
+    Node { min: [f32; 4], max: [f32; 4], left: Box<ColorBvh>, right: Box<ColorBvh> },
+}
+
+impl ColorBvh {
+    fn build(mut points: Vec<[f32; 4]>) -> Self {
+        if points.is_empty() {
+            return ColorBvh::Empty;
+        }
+        if points.len() <= 16 {
+            return ColorBvh::Leaf(points);
+        }
+        let (mut min, mut max) = ([f32::MAX; 4], [f32::MIN; 4]);
+        for p in &points {
+            for c in 0..4 {
+                min[c] = min[c].min(p[c]);
+                max[c] = max[c].max(p[c]);
+            }
+        }
+        let mut best_axis = 0;
+        let mut max_spread = -1.0;
+        for c in 0..4 {
+            let spread = max[c] - min[c];
+            if spread > max_spread {
+                max_spread = spread;
+                best_axis = c;
+            }
+        }
+        let mid = points.len() / 2;
+        points.select_nth_unstable_by(mid, |a, b| a[best_axis].total_cmp(&b[best_axis]));
+        let right_pts = points.split_off(mid);
+        let left = ColorBvh::build(points);
+        let right = ColorBvh::build(right_pts);
+        ColorBvh::Node { min, max, left: Box::new(left), right: Box::new(right) }
+    }
+
+    fn matches(&self, q: &[f32; 4], tol: f32) -> bool {
+        match self {
+            ColorBvh::Empty => false,
+            ColorBvh::Leaf(pts) => pts.iter().any(|p| (0..4).all(|c| (q[c] - p[c]).abs() <= tol + 1e-6)),
+            ColorBvh::Node { min, max, left, right } => {
+                for c in 0..4 {
+                    let d = if q[c] < min[c] {
+                        min[c] - q[c]
+                    } else if q[c] > max[c] {
+                        q[c] - max[c]
+                    } else {
+                        0.0
+                    };
+                    if d > tol + 1e-6 {
+                        return false;
+                    }
+                }
+                left.matches(q, tol) || right.matches(q, tol)
+            }
+        }
+    }
+}
+
+impl ColorMatcher {
+    /// Creates a color matcher from selected RGBA colors and an $L_\\infty$ tolerance in $[0, 1]$.
+    pub fn new(selected_colors: impl IntoIterator<Item = [f32; 4]>, tol: f32) -> Self {
+        let mut has_transparent = false;
+        let mut seen = std::collections::HashSet::new();
+        let mut opaque_or_semi = Vec::new();
+        for c in selected_colors {
+            // A transparent color also stays in the tree: a nearly transparent query is compared
+            // by its RGB and alpha like any other.
+            has_transparent |= c[3] == 0.0;
+            let norm = |x: f32| if x == 0.0 { 0.0f32.to_bits() } else { x.to_bits() };
+            let key = [norm(c[0]), norm(c[1]), norm(c[2]), norm(c[3])];
+            if seen.insert(key) {
+                opaque_or_semi.push(c);
+            }
+        }
+        opaque_or_semi.sort_unstable_by(|a, b| {
+            a[0].total_cmp(&b[0]).then_with(|| a[1].total_cmp(&b[1])).then_with(|| a[2].total_cmp(&b[2])).then_with(|| a[3].total_cmp(&b[3]))
+        });
+        opaque_or_semi.dedup_by(|a, b| a == b);
+
+        Self { has_transparent, tree: ColorBvh::build(opaque_or_semi), tol: tol.max(0.0) }
+    }
+
+    /// Returns `true` if no colors (including transparent pixels) were provided.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        !self.has_transparent && matches!(self.tree, ColorBvh::Empty)
+    }
+
+    /// Returns `true` if `q` falls within `tol` of any selected color.
+    #[inline]
+    pub fn matches(&self, q: [f32; 4]) -> bool {
+        if q[3] == 0.0 && self.has_transparent {
+            return true;
+        }
+        self.tree.matches(&q, self.tol)
+    }
 }
 
 #[cfg(test)]

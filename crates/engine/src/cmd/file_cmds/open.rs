@@ -1,11 +1,53 @@
 use super::paths::{file_name, read_file, stem, template_name};
 use super::{
-    Affine, Arc, Document, EngineError, Layer, LayerContent, Resample, Result, Session, SmartObject, SmartSource, Value, f64_param, flattened_checked, json,
-    resize_surface, str_param, translate_surface,
+    Affine, Arc, Document, EngineError, Layer, LayerContent, LayerId, Resample, Result, Session, SmartObject, SmartSource, Value, f64_param, flattened_checked,
+    json, resize_surface, str_param, translate_surface,
 };
 
+/// Input and successfully opened document identities of one Override Open scratch session.
+pub(crate) struct BatchOpen {
+    pub path: String,
+    pub sources: Vec<photocraft_doc::DocId>,
+    pub raw_ppi: f64,
+    /// A recorded Open read a source that must not be replaced (Affinity, Krita, XCF, PDN).
+    pub read_only: bool,
+}
+
+/// Replace only the file choice before either authorization gate; malformed params stay invalid.
+pub(crate) fn batch_open_params(s: &Session, id: &str, params: &Value) -> Option<Value> {
+    let binding = s.batch_open.as_ref()?;
+    if !matches!(id, "file.openAs" | "file.openExrParts") || !(params.is_object() || params.is_null()) {
+        return None;
+    }
+    let mut effective = if params.is_null() { super::json!({}) } else { params.clone() };
+    effective.as_object_mut()?.insert("path".into(), Value::String(binding.path.clone()));
+    Some(effective)
+}
+
+/// Keep import warnings and the applied color policy when only profile questions are suppressed.
+pub(crate) fn batch_open_notice(s: &mut Session, name: &str, warnings: &[String], color: &Value) {
+    if let Some(notices) = &mut s.batch_open_notices {
+        notices.push(json!({"file":name,"warnings":warnings,"color":color}));
+    }
+}
+
+/// Record provenance after a redirected native Open succeeds, including repeated Opens.
+pub(crate) fn remember_batch_open(s: &mut Session) {
+    let opened = s.active().map(|st| (st.doc.id, st.source_read_only));
+    if let (Some(binding), Some((id, read_only))) = (&mut s.batch_open, opened) {
+        binding.sources.push(id);
+        binding.read_only |= read_only;
+    }
+}
+
 pub(crate) fn import(name: &str, bytes: &[u8]) -> Result<Document> {
-    import_result(name, bytes).map(|r| r.document)
+    import_with_options(name, bytes, &photocraft_io::ImportOptions::default())
+}
+
+/// [`import`] with the caller's import settings. Footage passes its PSD/layered-TIFF memory limit,
+/// so a frame import cannot bypass the admission the rest of the open path applies.
+pub(crate) fn import_with_options(name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions) -> Result<Document> {
+    import_result_with(name, bytes, opts).map(|r| r.document)
 }
 
 /// [`import`] for a file that becomes a document of its own (Revert, Load Files into Stack;
@@ -16,15 +58,28 @@ pub(crate) fn import_opened(s: &Session, name: &str, bytes: &[u8]) -> Result<Doc
 }
 
 pub(super) fn import_at_raw_ppi(raw_ppi: f64, name: &str, bytes: &[u8]) -> Result<Document> {
+    import_source_at_raw_ppi(raw_ppi, name, bytes).map(|(doc, _)| doc)
+}
+
+/// [`import_at_raw_ppi`], also telling whether the source must not be replaced by a save
+/// (`ImportResult::source_read_only`: Affinity, Krita, XCF, PDN, whatever its extension says).
+pub(super) fn import_source_at_raw_ppi(raw_ppi: f64, name: &str, bytes: &[u8]) -> Result<(Document, bool)> {
     let r = import_result(name, bytes)?;
     let mut doc = r.document;
     raw_resolution(raw_ppi, &r.warnings, &mut doc);
-    Ok(doc)
+    Ok((doc, r.source_read_only))
 }
 
 fn import_result(name: &str, bytes: &[u8]) -> Result<photocraft_io::ImportResult> {
+    import_result_with(name, bytes, &photocraft_io::ImportOptions::default())
+}
+
+/// The one import path every caller shares: allocation checkpoint, native `.pcraft` and format
+/// dispatch through `photocraft_io::import_with_options`, typed memory refusals, and the
+/// preview-only refusal wherever the import came from.
+fn import_result_with(name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions) -> Result<photocraft_io::ImportResult> {
     crate::allocation::checkpoint("importing document")?;
-    let r = photocraft_io::import(name, bytes).map_err(|e| EngineError::Other(format!("{name}: {e}")))?;
+    let r = photocraft_io::import_with_options(name, bytes, opts).map_err(|e| crate::error::io_open_error(name, e))?;
     // Auxiliary imports return only a document and cannot surface the preview's fidelity warning.
     // Open has its own warning-preserving path; never silently place or process a thumbnail.
     if r.preview_only {
@@ -99,7 +154,12 @@ pub(crate) fn tag_exr_colorspace(s: &Session, name: &str, doc: &mut Document) {
 /// Camera Raw's workflow options set it (the raw itself states none). `warnings` are the
 /// import's notes, which say whether the raw was developed or only its preview opened.
 pub fn raw_defaults(s: &Session, warnings: &[String], doc: &mut Document) {
-    raw_resolution(s.prefs().raw_defaults.resolution, warnings, doc);
+    raw_resolution(raw_open_resolution(s), warnings, doc);
+}
+
+/// RAW resolution inherited by nested Batch inputs, or the session preference outside a binding.
+pub(crate) fn raw_open_resolution(s: &Session) -> f64 {
+    s.batch_open.as_ref().map_or_else(|| s.prefs().raw_defaults.resolution, |binding| binding.raw_ppi)
 }
 
 fn raw_resolution(ppi: f64, warnings: &[String], doc: &mut Document) {
@@ -108,13 +168,41 @@ fn raw_resolution(ppi: f64, warnings: &[String], doc: &mut Document) {
     }
 }
 
+/// Import bytes with an optional format override, retaining source identity and opening diagnostics.
 pub fn open_bytes_as(s: &mut Session, name: &str, bytes: &[u8], as_ext: Option<&str>, path: Option<String>) -> Result<Value> {
+    open_bytes_as_with_options(s, name, bytes, as_ext, path, false)
+}
+
+/// [`open_bytes_as`] with the caller's high-memory approval for these bytes.
+///
+/// A one-shot approved estimate is deliberately not forwarded: these bytes may be a fresh copy
+/// whose estimate was never approved, so approval applies only through the boolean flag.
+pub fn open_bytes_as_with_options(
+    s: &mut Session,
+    name: &str,
+    bytes: &[u8],
+    as_ext: Option<&str>,
+    path: Option<String>,
+    approve_high_memory: bool,
+) -> Result<Value> {
     crate::allocation::checkpoint("importing document")?;
     let decode_name = match as_ext {
         Some(ext) => format!("{}.{}", stem(name), ext.trim_start_matches('.')),
         None => name.to_string(),
     };
-    let r = photocraft_io::import(&decode_name, bytes).map_err(|e| EngineError::Other(format!("{decode_name}: {e}")))?;
+    let mut opts = crate::jobs::import_options(s.prefs());
+    opts.psd_high_memory_approved = approve_high_memory;
+    opts.psd_approved_estimate = None;
+    let raw = super::raw_open::prepare(s, &decode_name, path.as_deref(), bytes)?;
+    let (r, raw_settings) = if let Some((imported, settings)) = raw {
+        (imported, Some(settings))
+    } else {
+        let r = photocraft_io::import_with_options(&decode_name, bytes, &opts).map_err(|e| crate::error::io_open_error(&decode_name, e))?;
+        (r, None)
+    };
+    if (s.batch_open.is_some() || s.batch_open_notices.is_some()) && r.preview_only {
+        return Err(EngineError::Other(format!("{name}: only an embedded preview could be read; Batch cannot process it as the source")));
+    }
     let mut doc = r.document;
     tag_exr_colorspace(s, &decode_name, &mut doc);
     raw_defaults(s, &r.warnings, &mut doc);
@@ -128,20 +216,90 @@ pub fn open_bytes_as(s: &mut Session, name: &str, bytes: &[u8], as_ext: Option<&
             path
         }
     };
+    if raw_settings.is_some() && s.color.open_question(&doc).is_some() {
+        return Err(EngineError::Other(format!("{name}: a color profile question requires interactive opening or suppressWarnings")));
+    }
     // Color Settings policies (preserve / convert / discard the embedded profile).
     let (i, color) = s.open_document(doc, path.filter(|_| !r.source_read_only));
     if let Some(st) = s.active_mut() {
         st.source_read_only = r.source_read_only;
     }
+    if let Some(settings) = raw_settings {
+        super::raw_open::finish(s, settings)?;
+    }
+    batch_open_notice(s, name, &r.warnings, &color);
     // Import notes (e.g. how a camera raw was developed, or that only its preview opened).
     Ok(json!({"document": i, "color": color, "warnings": r.warnings}))
 }
 
+/// Open the selected file with its decoder options and record its Batch source identity.
 pub(super) fn open_as(s: &mut Session, p: &Value) -> Result<Value> {
     let path = str_param(p, "path", "file.openAs")?.to_string();
-    let bytes = read_file(&path)?;
     let as_ext = p.get("as").or_else(|| p.get("format")).and_then(Value::as_str);
-    open_bytes_as(s, &path, &bytes, as_ext, Some(path.clone()))
+    let approve_high_memory = match p.get("approveHighMemory") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(b)) => *b,
+        Some(_) => {
+            return Err(EngineError::BadParams { cmd: "file.openAs".into(), msg: "expected boolean for \"approveHighMemory\"".into() });
+        }
+    };
+    let bytes = read_file(&path)?;
+    let result = open_bytes_as_with_options(s, &path, &bytes, as_ext, Some(path.clone()), approve_high_memory)?;
+    remember_batch_open(s);
+    Ok(result)
+}
+
+/// Answers a pending high-memory preflight: `approve` false cancels it; true rechecks the hard
+/// limit and starts the approved open. The preflight is removed either way, so a refusal or a
+/// later failure releases the source it held.
+pub(super) fn approve_memory(s: &mut Session, p: &Value) -> Result<Value> {
+    let id = crate::file_cmds::u64_param(p, "id", "file.approveMemory")?;
+    let approve = match p.get("approve") {
+        None | Some(Value::Null) => true,
+        Some(Value::Bool(b)) => *b,
+        Some(_) => {
+            return Err(EngineError::BadParams { cmd: "file.approveMemory".into(), msg: "expected boolean for \"approve\"".into() });
+        }
+    };
+    let _background = match p.get("background") {
+        None | Some(Value::Null) => true,
+        Some(Value::Bool(b)) => *b,
+        Some(_) => {
+            return Err(EngineError::BadParams { cmd: "file.approveMemory".into(), msg: "expected boolean for \"background\"".into() });
+        }
+    };
+    if !approve {
+        s.cancel_pending_preflight(id)
+            .ok_or_else(|| EngineError::BadParams { cmd: "file.approveMemory".into(), msg: format!("no pending high-memory preflight for id {id}") })?;
+        return Ok(json!({"id": id, "approved": false, "cancelled": true}));
+    }
+    // Taking the preflight releases the source bytes it held: approval, refusal and a later
+    // failure all end the wait. The one-shot authorization is bound to this source and estimate;
+    // the import re-checks both against the handle it actually decodes.
+    let preflight = s
+        .take_pending_preflight(id)
+        .ok_or_else(|| EngineError::BadParams { cmd: "file.approveMemory".into(), msg: format!("no pending high-memory preflight for id {id}") })?;
+    // The resolved policy is the platform's: desktop uses its measured adaptive budget, the web
+    // its 1 GiB automatic / 2 GiB hard product cap. Explicit consent is available on both; the
+    // hard ceiling is never raised by an approval. While the scratch disk is spilling, tile
+    // pixels may use its room too; this fast refusal grants the whole room (the pending prompt
+    // does not keep the tile share), and the import re-checks the exact split before decoding.
+    let budget = photocraft_io::memory::resolve_budget_with_scratch(photocraft_io::memory::MemorySnapshot::current(), None, u64::MAX);
+    if preflight.required > budget.hard_limit {
+        return Err(EngineError::PsdHardBudget { name: preflight.name, required: preflight.required, limit: budget.hard_limit });
+    }
+    let started = s.start_open_approved_with_background(
+        &preflight.name,
+        preflight.source,
+        preflight.confirm_damage,
+        Some(preflight.required),
+        Some(preflight.fingerprint),
+        _background,
+    )?;
+    match started {
+        crate::jobs::Started::Done(v) => Ok(json!({"id": id, "approved": true, "result": v})),
+        crate::jobs::Started::Job(job_id) => Ok(json!({"id": id, "approved": true, "job": job_id.0})),
+    }
 }
 
 // ---------- place ----------
@@ -156,11 +314,33 @@ pub const PLACE_EMBEDDED: &str = "Place Embedded";
 /// lands as a plain pixel layer instead (an explicit `"smartObject": false` asks for one).
 pub fn place_bytes(s: &mut Session, name: &str, bytes: Vec<u8>, linked: Option<String>, p: &Value) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
-    let (cw, ch) = (d.doc.size.width as f64, d.doc.size.height as f64);
+    let frame_id = match p.get("frame") {
+        Some(Value::Bool(false)) => None,
+        Some(v) if !v.is_null() => Some(LayerId(v.as_u64().ok_or_else(|| EngineError::Other("frame must be a frame id or false".into()))?)),
+        _ => d.active_layer.and_then(|id| crate::frame_cmds::frame_of(&d.doc, id)),
+    };
+    let frame = frame_id
+        .map(|id| {
+            d.doc.layer(id).and_then(|l| l.frame.clone()).map(|f| (id, f)).ok_or_else(|| EngineError::Other("the destination frame is unavailable".into()))
+        })
+        .transpose()?;
+    let (cw, ch) = frame.as_ref().map_or((d.doc.size.width as f64, d.doc.size.height as f64), |(_, f)| {
+        let [a, b, c, d, _, _] = f.transform.m;
+        (a.hypot(b), c.hypot(d))
+    });
     let fmt = d.doc.pixel_format();
     let vector = photocraft_io::svg::is_svg(&bytes);
-    let opts = crate::jobs::import_options(s.prefs());
-    let imported = photocraft_io::import_with_options(name, &bytes, &opts).map_err(|e| EngineError::Other(format!("{name}: {e}")))?;
+    let approve = match p.get("approveHighMemory") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(b)) => *b,
+        Some(_) => {
+            return Err(EngineError::BadParams { cmd: "file.placeEmbedded".into(), msg: "expected boolean for \"approveHighMemory\"".into() });
+        }
+    };
+    let mut opts = crate::jobs::import_options(s.prefs());
+    opts.psd_high_memory_approved = approve;
+    opts.psd_approved_estimate = None;
+    let imported = photocraft_io::import_with_options(name, &bytes, &opts).map_err(|e| crate::error::io_open_error(name, e))?;
     if imported.preview_only {
         return Err(EngineError::Other(format!(
             "{name}: only this Affinity file's embedded preview could be read; open it with File › Open to see the warning, or export PSD or PNG from Affinity before using it here"
@@ -172,6 +352,7 @@ pub fn place_bytes(s: &mut Session, name: &str, bytes: Vec<u8>, linked: Option<S
     let fit = p.get("fit").and_then(Value::as_bool).unwrap_or(s.prefs().general.resize_image_during_place);
     let scale = match f64_param(p, "scale") {
         Some(k) => (k / 100.0).max(1e-4),
+        None if frame.is_some() && fit => (cw / w).max(ch / h),
         None if fit && (w > cw || h > ch) => (cw / w).min(ch / h),
         None => 1.0,
     };
@@ -180,14 +361,32 @@ pub fn place_bytes(s: &mut Session, name: &str, bytes: Vec<u8>, linked: Option<S
         _ => (cw / 2.0, ch / 2.0),
     };
     let (dx, dy) = ((center.0 - w * scale / 2.0).round(), (center.1 - h * scale / 2.0).round());
-    let mut px = flattened_checked(&src, fmt, "file.place")?;
-    if (scale - 1.0).abs() > 1e-9 {
-        px = resize_surface(&px, scale, scale, Resample::Bicubic);
-    }
-    let px = translate_surface(&px, dx as i32, dy as i32);
+    // A frame's image renders through its smart object below, which refuses a placement past the
+    // memory budget; resampling it to the frame's size first would allocate that surface twice.
+    let px = if frame.is_none() {
+        let mut px = flattened_checked(&src, fmt, "file.place")?;
+        if (scale - 1.0).abs() > 1e-9 {
+            px = resize_surface(&px, scale, scale, Resample::Bicubic);
+        }
+        Some(translate_surface(&px, dx as i32, dy as i32))
+    } else {
+        None
+    };
+    let placement = frame
+        .as_ref()
+        .map_or(Affine { m: [scale, 0.0, 0.0, scale, dx, dy] }, |(_, f)| f.transform.mul(&Affine { m: [scale / cw, 0.0, 0.0, scale / ch, dx / cw, dy / ch] }));
+    let corners = [(0.0, 0.0), (w, 0.0), (0.0, h), (w, h)].map(|(x, y)| placement.apply(photocraft_geom::Point::new(x, y)));
+    let bounds = [
+        corners.iter().map(|q| q.x).fold(f64::INFINITY, f64::min),
+        corners.iter().map(|q| q.y).fold(f64::INFINITY, f64::min),
+        corners.iter().map(|q| q.x).fold(f64::NEG_INFINITY, f64::max),
+        corners.iter().map(|q| q.y).fold(f64::NEG_INFINITY, f64::max),
+    ];
     // Preferences ▸ General ▸ Always Create Smart Objects When Placing (on by default): off, an
     // embedded place lands as a plain pixel layer. A linked place is always a smart object.
-    let smart = linked.is_some() || p.get("smartObject").and_then(Value::as_bool).unwrap_or(s.prefs().general.always_create_smart_objects_when_placing);
+    let smart = frame.is_some()
+        || linked.is_some()
+        || p.get("smartObject").and_then(Value::as_bool).unwrap_or(s.prefs().general.always_create_smart_objects_when_placing);
     let source = match linked {
         Some(path) => SmartSource::Linked { path },
         None => SmartSource::Embedded { file_name: file_name(name), bytes: Arc::new(bytes) },
@@ -196,24 +395,39 @@ pub fn place_bytes(s: &mut Session, name: &str, bytes: Vec<u8>, linked: Option<S
     let label = if matches!(&source, SmartSource::Linked { .. }) { "Place Linked" } else { PLACE_EMBEDDED };
     let id = s.edit(label, |doc, active| {
         let layer = if smart {
-            let mut so = SmartObject::new(source, Affine { m: [scale, 0.0, 0.0, scale, dx, dy] }, Some(px));
+            let mut so = SmartObject::new(source, placement, px);
             // A vector source (SVG) renders at its placement scale instead of as a resampled raster.
-            if vector && let Some(sharp) = crate::smart_cmds::render(doc, &so)? {
+            if (vector || frame.is_some())
+                && let Some(sharp) = crate::smart_cmds::render(doc, &so)?
+            {
                 so.cache = Some(sharp);
+            }
+            if so.cache.is_none() {
+                return Err(EngineError::Other(format!("{name}: the placed image could not be rendered")));
             }
             Layer::new(layer_name, LayerContent::Smart(so))
         } else {
+            let px = px.ok_or_else(|| EngineError::Other(format!("{name}: a frame's image must be a smart object")))?;
             Layer::new(layer_name, LayerContent::Raster(px))
         };
-        let id = crate::layer_place::insert_new(doc, *active, layer, crate::layer_place::Place::AutoEditable);
-        *active = Some(id);
+        let id = layer.id;
+        if let Some((frame_id, _)) = &frame {
+            crate::frame_cmds::put_content(doc, *frame_id, layer)?;
+            *active = Some(*frame_id);
+        } else {
+            crate::layer_place::insert_new(doc, *active, layer, crate::layer_place::Place::AutoEditable);
+            *active = Some(id);
+        }
         Ok(id)
     })?;
-    Ok(json!({"layer": id.0, "scale": scale * 100.0, "bounds": [dx, dy, dx + w * scale, dy + h * scale], "smartObject": smart}))
+    Ok(json!({"layer": id.0, "frame": frame.as_ref().map(|(id,_)|id.0), "scale": scale * 100.0, "bounds": bounds, "smartObject": smart}))
 }
 
 pub(super) fn place(s: &mut Session, p: &Value, linked: bool) -> Result<Value> {
     let cmd = if linked { "file.placeLinked" } else { "file.placeEmbedded" };
+    if p.get("approveHighMemory").is_some_and(|v| !v.is_null() && !v.is_boolean()) {
+        return Err(EngineError::BadParams { cmd: cmd.into(), msg: "expected boolean for approveHighMemory".into() });
+    }
     let path = str_param(p, "path", cmd)?.to_string();
     let bytes = read_file(&path)?;
     // The link is stored absolute: a relative one would later be taken from the document's
