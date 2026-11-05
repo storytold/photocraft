@@ -1443,12 +1443,18 @@ fn the_wheel_leaves_a_plain_dropdown_alone() {
     assert_eq!(*h.state(), 0);
 }
 
+/// The middle of an overflowing menu's lower scroll arrow, from the menu's laid-out rect.
+fn lower_menu_arrow(menu: egui::Rect) -> egui::Pos2 {
+    let half = super::dropdown::MENU_ARROW_HEIGHT / 2.0;
+    egui::pos2(menu.left() + half, menu.bottom() - half)
+}
+
 /// #2091: a menu taller than the window shows scroll arrows; hovering the lower one scrolls
 /// it, and a short menu gets none.
 #[test]
 fn overflowing_menus_get_scroll_arrows_that_scroll_on_hover() {
-    // (rows, overflowing, scroll offset, bottom of the menu)
-    type S = (usize, bool, f32, f32);
+    // (rows, overflowing, scroll offset, the menu's rect)
+    type S = (usize, bool, f32, egui::Rect);
     let run = |rows: usize| {
         let mut h = Harness::builder().with_size(egui::vec2(220.0, 300.0)).build_ui_state(
             |ui, s: &mut S| {
@@ -1460,9 +1466,9 @@ fn overflowing_menus_get_scroll_arrows_that_scroll_on_hover() {
                 });
                 s.1 = ui.data(|d| d.get_temp::<bool>(id)).unwrap_or(false);
                 s.2 = ui.data(|d| d.get_temp::<f32>(id.with("offset"))).unwrap_or(0.0);
-                s.3 = ui.min_rect().bottom();
+                s.3 = ui.min_rect();
             },
-            (rows, false, 0.0, 0.0),
+            (rows, false, 0.0, egui::Rect::NOTHING),
         );
         h.run_steps(3);
         h
@@ -1472,7 +1478,7 @@ fn overflowing_menus_get_scroll_arrows_that_scroll_on_hover() {
     let mut long = run(80);
     assert!(long.state().1, "a long menu overflows");
     assert_eq!(long.state().2, 0.0);
-    let below = egui::pos2(100.0, long.state().3 - super::dropdown::MENU_ARROW_HEIGHT / 2.0);
+    let below = lower_menu_arrow(long.state().3);
     long.event(egui::Event::PointerMoved(below));
     long.run_steps(10);
     assert!(long.state().2 > 0.0, "hovering the lower arrow scrolls down");
@@ -1482,8 +1488,8 @@ fn overflowing_menus_get_scroll_arrows_that_scroll_on_hover() {
 /// while hovering it opens again.
 #[test]
 fn a_reopened_menu_takes_no_stale_scroll_step() {
-    // (shown, scroll offset, bottom of the menu)
-    type S = (bool, f32, f32);
+    // (shown, scroll offset, the menu's rect)
+    type S = (bool, f32, egui::Rect);
     let mut h = Harness::builder().with_size(egui::vec2(220.0, 300.0)).build_ui_state(
         |ui, s: &mut S| {
             let id = ui.scope_id().with("menu_scroll");
@@ -1493,14 +1499,14 @@ fn a_reopened_menu_takes_no_stale_scroll_step() {
                         ui.label(format!("Item {i}"));
                     }
                 });
-                s.2 = ui.min_rect().bottom();
+                s.2 = ui.min_rect();
             }
             s.1 = ui.data(|d| d.get_temp::<f32>(id.with("offset"))).unwrap_or(0.0);
         },
-        (true, 0.0, 0.0),
+        (true, 0.0, egui::Rect::NOTHING),
     );
     h.run_steps(3);
-    h.event(egui::Event::PointerMoved(egui::pos2(100.0, h.state().2 - super::dropdown::MENU_ARROW_HEIGHT / 2.0)));
+    h.event(egui::Event::PointerMoved(lower_menu_arrow(h.state().2)));
     h.run_steps(3);
     let offset = h.state().1;
     assert!(offset > 0.0, "hovering the lower arrow scrolls down");
@@ -1510,4 +1516,28 @@ fn a_reopened_menu_takes_no_stale_scroll_step() {
     h.event(egui::Event::PointerGone);
     h.run();
     assert_eq!(h.state().1, offset, "the reopened menu stays where it was left");
+}
+
+/// #2091: an overflowing menu's scroll arrows are as wide as its rows, so they don't widen the
+/// menu to the whole width it is offered.
+#[test]
+fn menu_scroll_arrows_do_not_widen_the_menu() {
+    // (overflowing, width of the menu)
+    type S = (bool, f32);
+    let mut h = Harness::builder().with_size(egui::vec2(600.0, 300.0)).build_ui_state(
+        |ui, s: &mut S| {
+            let id = ui.scope_id().with("menu_scroll");
+            super::menu_scroll(ui, |ui| {
+                for i in 0..80 {
+                    ui.label(format!("Item {i}"));
+                }
+            });
+            s.0 = ui.data(|d| d.get_temp::<bool>(id)).unwrap_or(false);
+            s.1 = ui.min_rect().width();
+        },
+        (false, 0.0),
+    );
+    h.run_steps(4);
+    assert!(h.state().0, "the menu overflows");
+    assert!(h.state().1 < 200.0, "the arrows follow the rows' width, not the 600 pt window: {}", h.state().1);
 }

@@ -1,7 +1,7 @@
 use super::panel::chevron_icon;
 use super::scrub::take_label_scrub_name;
 use super::slider::wheel_notches_of;
-use super::{Pos2, Rect, Response, Ui, Vec2, type_ahead};
+use super::{Pos2, Rect, Response, Sense, Stroke, Tokens, Ui, Vec2, pos2, type_ahead, vec2};
 
 /// A compact labelled dropdown in the studio style.
 pub fn dropdown<T: PartialEq + Clone>(ui: &mut Ui, id: &str, name: &str, current: &mut T, options: &[(T, &str)], width: f32) -> bool {
@@ -228,6 +228,10 @@ pub fn menu_scroll<R>(ui: &mut Ui, add_contents: impl FnOnce(&mut Ui) -> R) -> R
     let id = ui.scope_id().with("menu_scroll");
     let overflow = ui.data(|d| d.get_temp::<bool>(id)).unwrap_or(false);
     let offset = ui.data(|d| d.get_temp::<f32>(id.with("offset"))).unwrap_or(0.0);
+    // The arrows are as wide as the rows were last frame, not the popup's whole available width:
+    // that widened an overflowing menu on every later open (a layer menu went from ~230 to ~600
+    // pt). The output's `inner_rect` is the width asked for, before auto-shrink fits the rows.
+    let width = ui.data(|d| d.get_temp::<f32>(id.with("width"))).unwrap_or(0.0);
     let arrows = if overflow { 2.0 * MENU_ARROW_HEIGHT } else { 0.0 };
     let room = (room - arrows).max(MENU_MIN_HEIGHT);
     // The arrows sit flush against the rows, so no item spacing is added around them that `room`
@@ -236,7 +240,7 @@ pub fn menu_scroll<R>(ui: &mut Ui, add_contents: impl FnOnce(&mut Ui) -> R) -> R
     ui.spacing_mut().item_spacing.y = 0.0;
     let mut step = 0.0;
     if overflow {
-        step += menu_scroll_arrow(ui, true, offset > 0.5);
+        step += menu_scroll_arrow(ui, true, offset > 0.5, width);
     }
     // A popup's Ui is only as tall as the popup was last frame (400 pt on the first), so ask for
     // the whole room: the area still shrinks to its rows when they need less.
@@ -255,12 +259,13 @@ pub fn menu_scroll<R>(ui: &mut Ui, add_contents: impl FnOnce(&mut Ui) -> R) -> R
     let max = (out.content_size.y - out.inner_rect.height()).max(0.0);
     let offset = out.state.clamped_offset().y.clamp(0.0, max);
     if overflow {
-        step += menu_scroll_arrow(ui, false, offset < max - 0.5);
+        step += menu_scroll_arrow(ui, false, offset < max - 0.5, width);
     }
     ui.spacing_mut().item_spacing.y = spacing;
     ui.data_mut(|d| {
         d.insert_temp(id, max > 0.5);
         d.insert_temp(id.with("offset"), offset);
+        d.insert_temp(id.with("width"), out.content_size.x);
         d.insert_temp(id.with("step"), (step, now));
     });
     out.inner
@@ -268,9 +273,11 @@ pub fn menu_scroll<R>(ui: &mut Ui, add_contents: impl FnOnce(&mut Ui) -> R) -> R
 
 /// One scroll arrow of an overflowing menu: hovering scrolls that way, as in Photoshop's and the
 /// system menus. It doesn't page on a click: egui closes a context menu on any click inside it,
-/// so the page would never be seen. Returns the scroll step for the next frame.
-fn menu_scroll_arrow(ui: &mut Ui, up: bool, enabled: bool) -> f32 {
-    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width().max(MENU_ARROW_HEIGHT), MENU_ARROW_HEIGHT), Sense::hover());
+/// so the page would never be seen. `width` is the rows' width. Returns the scroll step for the
+/// next frame.
+fn menu_scroll_arrow(ui: &mut Ui, up: bool, enabled: bool, width: f32) -> f32 {
+    let width = if width.is_finite() { width.max(MENU_ARROW_HEIGHT) } else { MENU_ARROW_HEIGHT };
+    let (rect, resp) = ui.allocate_exact_size(vec2(width, MENU_ARROW_HEIGHT), Sense::hover());
     let t = Tokens::get(ui.ctx());
     let color = if enabled { t.text } else { t.text_dim.gamma_multiply(0.5) };
     let (c, h) = (rect.center(), 3.5);
