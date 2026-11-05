@@ -752,12 +752,8 @@ fn actual_six_pixel_group_gap_selects_upper_append_and_lower_sibling_levels() {
 }
 
 #[test]
-fn actual_card_above_group_shows_the_upper_horizontal_sibling_marker() {
-    let mut h = harness_with_state(
-        nested_group_tree(),
-        vec2(520.0, 900.0),
-        with_root_item_before_group("A", "a1", "B"),
-    );
+fn actual_card_above_group_upper_half_shows_only_its_right_vertical_marker() {
+    let mut h = harness_with_state(nested_group_tree(), vec2(520.0, 900.0), with_root_item_before_group("A", "a1", "B"));
     let source = h.get_by_label("C").rect().center();
     let card = h.get_by_label("A card 1").rect();
     let lower_group = h.get_by_label("B").rect();
@@ -776,20 +772,28 @@ fn actual_card_above_group_shows_the_upper_horizontal_sibling_marker() {
     let accent = crate::theme::Tokens::get(&h.ctx).accent.to_array();
     let image = h.render().expect("render card-to-group sibling marker");
     let ppp = h.ctx.pixels_per_point();
-    let y = (lower_group.top() * ppp).round() as i32;
-    let x0 = (card.left() * ppp).round() as i32;
-    let x1 = (card.right() * ppp).round() as i32;
-    let has_accent = |x: i32| {
-        (y - 3..=y + 3).any(|py| {
-            x >= 0 && py >= 0 && (x as u32) < image.width() && (py as u32) < image.height() && image.get_pixel(x as u32, py as u32).0[..3] == accent[..3]
+    let x = (card.right() * ppp).round() as i32;
+    let y0 = (card.top() * ppp).round() as i32;
+    let y1 = (card.bottom() * ppp).round() as i32;
+    let has_accent = |y: i32| {
+        (x - 3..=x + 3).any(|px| {
+            px >= 0 && y >= 0 && (px as u32) < image.width() && (y as u32) < image.height() && image.get_pixel(px as u32, y as u32).0[..3] == accent[..3]
         })
     };
     assert!(
-        (x0..=x1).filter(|x| has_accent(*x)).count() > (x1 - x0) as usize * 3 / 4,
-        "dragging over the upper half of a card→group boundary must paint a horizontal marker across the preceding card; card={card:?}, group={lower_group:?}, y={y}, accent_pixels={}, width={}, order={:?}",
-        (x0..=x1).filter(|x| has_accent(*x)).count(),
-        x1 - x0,
+        (y0..=y1).filter(|y| has_accent(*y)).count() > (y1 - y0) as usize * 3 / 4,
+        "upper half of a card→group boundary must paint only the card's right vertical edge; card={card:?}, group={lower_group:?}, x={x}, accent_pixels={}, height={}, order={:?}",
+        (y0..=y1).filter(|y| has_accent(*y)).count(),
+        y1 - y0,
         h.state().0.hierarchy_order[PANEL]
+    );
+    let group_line_y = (lower_group.top() * ppp).round() as i32;
+    let group_x0 = (lower_group.left() * ppp).round() as i32;
+    let group_x1 = (lower_group.right() * ppp).round() as i32;
+    let has_group_line = |x: i32| (group_line_y - 3..=group_line_y + 3).any(|y| x >= 0 && y >= 0 && (x as u32) < image.width() && (y as u32) < image.height() && image.get_pixel(x as u32, y as u32).0[..3] == accent[..3]);
+    assert!(
+        (group_x0..=group_x1).filter(|x| has_group_line(*x)).count() < (group_x1 - group_x0) as usize / 4,
+        "upper half must not also paint the lower group's horizontal boundary; group={lower_group:?}, y={group_line_y}"
     );
     h.event(Event::PointerButton { pos: target, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
     h.run_steps(2);
@@ -800,6 +804,43 @@ fn actual_card_above_group_shows_the_upper_horizontal_sibling_marker() {
     assert!(
         card_index < dragged_index && dragged_index < lower_index,
         "the upper half of the card→group boundary should insert the dragged group after the card and before the lower group: {root_order:?}"
+    );
+}
+
+#[test]
+fn actual_card_above_group_lower_half_shows_only_the_groups_upper_horizontal_marker() {
+    let mut h = harness_with_state(nested_group_tree(), vec2(520.0, 900.0), with_root_item_before_group("A", "a1", "B"));
+    let source = h.get_by_label("C").rect().center();
+    let card = h.get_by_label("A card 1").rect();
+    let lower_group = h.get_by_label("B").rect();
+    let target = pos2(card.center().x, lower_group.top() - 2.0);
+    h.event(Event::PointerMoved(source));
+    h.run_steps(1);
+    h.event(Event::PointerButton { pos: source, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    for step in 1..=8 {
+        h.event(Event::PointerMoved(source + (target - source) * (step as f32 / 8.0)));
+        h.run_steps(1);
+    }
+
+    let accent = crate::theme::Tokens::get(&h.ctx).accent.to_array();
+    let image = h.render().expect("render lower card-to-group sibling marker");
+    let ppp = h.ctx.pixels_per_point();
+    let group_line_y = (lower_group.top() * ppp).round() as i32;
+    let group_x0 = (lower_group.left() * ppp).round() as i32;
+    let group_x1 = (lower_group.right() * ppp).round() as i32;
+    let has_group_line = |x: i32| (group_line_y - 3..=group_line_y + 3).any(|y| x >= 0 && y >= 0 && (x as u32) < image.width() && (y as u32) < image.height() && image.get_pixel(x as u32, y as u32).0[..3] == accent[..3]);
+    assert!(
+        (group_x0..=group_x1).filter(|x| has_group_line(*x)).count() > (group_x1 - group_x0) as usize * 3 / 4,
+        "lower half of a card→group boundary must paint the group's upper horizontal edge; group={lower_group:?}, y={group_line_y}"
+    );
+    let card_x = (card.right() * ppp).round() as i32;
+    let card_y0 = (card.top() * ppp).round() as i32;
+    let card_y1 = (card.bottom() * ppp).round() as i32;
+    let has_card_edge = |y: i32| (card_x - 3..=card_x + 3).any(|x| x >= 0 && y >= 0 && (x as u32) < image.width() && (y as u32) < image.height() && image.get_pixel(x as u32, y as u32).0[..3] == accent[..3]);
+    assert!(
+        (card_y0..=card_y1).filter(|y| has_card_edge(*y)).count() < (card_y1 - card_y0) as usize / 4,
+        "lower half must not also paint the preceding card's right edge; card={card:?}, x={card_x}"
     );
 }
 

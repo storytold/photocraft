@@ -2934,7 +2934,7 @@ pub(crate) fn browser_with_root_sequence(
                     let order = canonical_drop_hits.borrow().len();
                     let mut hits = group_gap_drop_hits(GroupGapDropSpec {
                         rect: gap,
-                        upper: item_id,
+                        upper: item_id.clone(),
                         lower: group_id,
                         upper_bounds: item_bounds,
                         lower_bounds: group_bounds,
@@ -2942,6 +2942,9 @@ pub(crate) fn browser_with_root_sequence(
                         lower_depth: 0,
                         order,
                     });
+                    // Keep the two halves mutually exclusive: upper appends after the card
+                    // (its right edge); lower inserts before the group (its upper boundary).
+                    hits[0].indicator_rect = card_trailing_marker_rect(item_bounds, true);
                     // This structural boundary is more specific than the overlapping card
                     // trailing edge and group leading edge targets.
                     hits[0].depth = usize::MAX;
