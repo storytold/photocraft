@@ -123,7 +123,7 @@ fn differently_sparse_colour_sets_use_scalar_outlines_or_the_cpu_oracle() {
     assert!(crate::channel_transform_gpu::test_wait(&rs, || fast.texture(&t, &view, false, false, 1)).is_some(), "a full-frame Warp has common coverage");
     let mut cpu = Preview::new(&doc, layer, [1.0; 4], false).unwrap();
     cpu.update(&t).unwrap();
-    let expected = cpu.image(&view, crate::channel_view::Look::default(), None);
+    let expected = cpu.image(&view, crate::channel_view::Look::default(), None, &crate::channel_view::Screen::default());
     let actual = fast.readback();
     assert!(actual.iter().zip(&expected.pixels).all(|(a, b)| a.to_array().into_iter().zip(b.to_array()).all(|(a, b)| a.abs_diff(b) <= 2)));
     assert!(gpu.health().is_ok());

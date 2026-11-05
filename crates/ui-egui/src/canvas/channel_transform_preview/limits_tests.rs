@@ -200,7 +200,12 @@ fn sparse_selected_scalar_channel_transform_uses_a_bounded_native_display() {
             let eyes = app.session.active().unwrap().channel_view.clone();
             let p = app.transform_preview.as_ref().unwrap().channel.as_ref().unwrap();
             assert_eq!((p.factor, p.display_factor), (1, 2));
-            let image = p.image(&app.session.active().unwrap().channel_view, crate::channel_view::Look::of(&app.session), None);
+            let image = p.image(
+                &app.session.active().unwrap().channel_view,
+                crate::channel_view::Look::of(&app.session),
+                None,
+                &crate::channel_view::Screen::default(),
+            );
             assert_eq!(image.size, [1500, 1000]);
             let scalar = if target == "mask" {
                 &p.shown.layers[0].mask.as_ref().unwrap().surface

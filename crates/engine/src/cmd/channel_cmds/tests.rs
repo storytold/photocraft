@@ -1451,6 +1451,25 @@ fn move_channel_crosses_tiles_and_handles_extreme_offsets() {
     assert!(std::sync::Arc::ptr_eq(&before, &s.active().unwrap().doc), "unrepresentable moves are refused rather than silently dropping samples");
 }
 
+/// An opened RGB or CMYK document shows its spot channels (they print over the composite) and
+/// hides its alpha channels; a Multichannel document's inks are its composite, so their eyes stay off.
+#[test]
+fn opened_documents_show_their_spot_channels() {
+    use photocraft_color::{Color, ColorMode, PixelFormat};
+    for mode in [ColorMode::Rgb, ColorMode::Cmyk, ColorMode::Multichannel] {
+        let mut d = Document::new("spots", photocraft_doc::Size::new(4, 4), mode, SampleType::U8);
+        let fmt = PixelFormat::new(ColorMode::Grayscale, SampleType::U8, false);
+        d.channels.push(AlphaChannel::new("Alpha 1", photocraft_raster::Surface::new(fmt)));
+        d.channels.push(AlphaChannel { spot: Some((Color::rgb(0.0, 0.6, 0.65), 0.0)), ..AlphaChannel::new("teal", photocraft_raster::Surface::new(fmt)) });
+        let mut s = Session::new();
+        s.open_document(d, None);
+        let v = &s.active().unwrap().channel_view;
+        let spot_on = mode != ColorMode::Multichannel;
+        assert_eq!((v.alpha_shown(0), v.alpha_shown(1)), (false, spot_on), "{mode:?}");
+        assert_eq!(v.visible_colors(color_count(&s.active().unwrap().doc)), color_count(&s.active().unwrap().doc), "{mode:?}: the composite stays on");
+    }
+}
+
 /// Split Channels closes the original, so as in the reference application it splits only an
 /// image with a single layer: two layers (even with one hidden) or a lone group are refused and
 /// the document stays open with its layers; a flattened image or a lone normal layer still

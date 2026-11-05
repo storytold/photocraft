@@ -189,27 +189,26 @@ impl Preview {
     }
 
     /// Composite the captured pixels through the current eyes without changing the source.
-    fn image(&self, view: &ChannelView, look: crate::channel_view::Look, display: Option<&photocraft_engine::display_color::CanvasDisplay>) -> ColorImage {
+    fn image(
+        &self,
+        view: &ChannelView,
+        look: crate::channel_view::Look,
+        display: Option<&photocraft_engine::display_color::CanvasDisplay>,
+        screen: &crate::channel_view::Screen,
+    ) -> ColorImage {
         let size = [self.shown.size.width.div_ceil(self.display_factor) as usize, self.shown.size.height.div_ceil(self.display_factor) as usize];
-        let overlay =
-            match crate::channel_view::render_for_display_bounded(&self.shown, view, self.shown.bounds(), self.display_factor, look, self.layer, display) {
-                // Solo/partial colour views already contain the opaque composite. Do not render it twice.
-                Some(pixels) if pixels.iter().all(|p| p.a() == 255) => {
-                    return ColorImage::new(size, pixels);
-                }
-                overlay => overlay,
-            };
+        let overlay = match crate::channel_view::render_for_display_bounded(&self.shown, view, self.shown.bounds(), self.display_factor, look, display, screen)
+        {
+            // Solo/partial colour views already contain the opaque composite. Do not render it twice.
+            Some(pixels) if pixels.iter().all(|p| p.a() == 255) => {
+                return ColorImage::new(size, pixels);
+            }
+            overlay => overlay,
+        };
         let buffer = if self.display_factor == 1 { photocraft_compose::flatten(&self.shown) } else { sampled_composite(&self.shown, self.display_factor) };
         let mut image = crate::canvas::display_image(display, &buffer);
-        let pixels = &mut image.pixels;
         if let Some(overlay) = overlay {
-            for (base, over) in pixels.iter_mut().zip(overlay) {
-                let weight = u32::from(255 - over.a());
-                let b = base.to_array();
-                let o = over.to_array();
-                let result = std::array::from_fn::<_, 4, _>(|i| (u32::from(o[i]) + (u32::from(b[i]) * weight + 127) / 255).min(255) as u8);
-                *base = Color32::from_rgba_premultiplied(result[0], result[1], result[2], result[3]);
-            }
+            crate::channel_view::blend_overlay(&mut image.pixels, overlay);
         }
         image
     }
@@ -360,10 +359,13 @@ pub(crate) fn texture(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, 
     } else {
         preview.recovered(&mut app.ui.status, &mut app.ui.status_error);
     }
-    let key = (view.clone(), look, display_key);
+    let inks = crate::channel_view::prints_inks(&preview.shown, &view);
+    let screen_key = if inks { crate::channel_view::Screen::key(&app.session.color, &preview.shown, output) } else { 0 };
+    let key = (view.clone(), look, display_key ^ screen_key.rotate_left(17));
     if preview.shown.scratch_health().is_ok() && preview.textures.get(&output).is_none_or(|entry| entry.view.as_ref() != Some(&key)) {
         let generation = photocraft_raster::spill::read_error_generation();
-        let image = limit_image(preview.image(&view, look, display.as_deref()), ctx.input(|i| i.max_texture_side));
+        let screen = if inks { crate::channel_view::Screen::of(&app.session.color, &preview.shown, output) } else { crate::channel_view::Screen::default() };
+        let image = limit_image(preview.image(&view, look, display.as_deref(), &screen), ctx.input(|i| i.max_texture_side));
         let view = photocraft_engine::channel_transform::check_capture(&preview.shown, generation).is_ok().then_some(key);
         match preview.textures.get_mut(&output) {
             Some(entry) => {
@@ -452,7 +454,7 @@ mod tests {
                         let actual = fast.readback();
                         let mut oracle = Preview::new(doc, st.active_layer, [1.0; 4], false).unwrap();
                         oracle.update(&t).unwrap();
-                        let expected = oracle.image(&st.channel_view, crate::channel_view::Look::default(), None);
+                        let expected = oracle.image(&st.channel_view, crate::channel_view::Look::default(), None, &crate::channel_view::Screen::default());
                         let max = actual
                             .iter()
                             .zip(&expected.pixels)
@@ -576,7 +578,7 @@ mod tests {
                             let mut oracle = Preview::new(doc, st.active_layer, fill, false).unwrap();
                             oracle.factor = factor;
                             oracle.update(&t).unwrap();
-                            let expected = oracle.image(&st.channel_view, crate::channel_view::Look::default(), None);
+                            let expected = oracle.image(&st.channel_view, crate::channel_view::Look::default(), None, &crate::channel_view::Screen::default());
                             let max = actual
                                 .iter()
                                 .zip(&expected.pixels)
@@ -647,7 +649,7 @@ mod tests {
                             let mut oracle = Preview::new(doc, st.active_layer, fill, false).unwrap();
                             oracle.factor = factor;
                             oracle.update(&t).unwrap();
-                            let expected = oracle.image(&st.channel_view, crate::channel_view::Look::default(), None);
+                            let expected = oracle.image(&st.channel_view, crate::channel_view::Look::default(), None, &crate::channel_view::Screen::default());
                             if selected && offset != 0.0 {
                                 texture.expect("unfolded selected thin Warp keeps the GPU path");
                                 let actual = fast.readback();
@@ -798,8 +800,12 @@ mod tests {
                                 }
                                 texture.unwrap();
                                 let actual = fast.readback();
-                                let expected =
-                                    oracle.image(&view, crate::channel_view::Look { in_color, ..crate::channel_view::Look::default() }, display.as_deref());
+                                let expected = oracle.image(
+                                    &view,
+                                    crate::channel_view::Look { in_color, ..crate::channel_view::Look::default() },
+                                    display.as_deref(),
+                                    &crate::channel_view::Screen::default(),
+                                );
                                 let max = actual
                                     .iter()
                                     .zip(&expected.pixels)
@@ -960,8 +966,8 @@ mod tests {
         delta.clear();
         let preview = a.transform_preview.as_ref().unwrap().channel.as_ref().unwrap();
         let view = &a.session.active().unwrap().channel_view;
-        assert_eq!(pixels_a, preview.image(view, crate::channel_view::Look::default(), display_a.as_deref()).pixels);
-        assert_eq!(pixels_b, preview.image(view, crate::channel_view::Look::default(), display_b.as_deref()).pixels);
+        assert_eq!(pixels_a, preview.image(view, crate::channel_view::Look::default(), display_a.as_deref(), &crate::channel_view::Screen::default()).pixels);
+        assert_eq!(pixels_b, preview.image(view, crate::channel_view::Look::default(), display_b.as_deref(), &crate::channel_view::Screen::default()).pixels);
         assert_ne!(pixels_a, pixels_b, "the two monitor profiles produce different preview colours");
 
         assert_eq!(texture(&mut a, &ctx, 0, Some(1)), Some(tex_a));
@@ -1100,7 +1106,12 @@ mod tests {
                     view.color_hidden = (0..3).map(|c| !eyes.contains(&c)).collect();
                     for in_color in [false, true] {
                         assert!(crate::channel_transform_gpu::test_wait(&rs, || gpu_preview.texture(&t, &view, in_color, true, 1)).is_some());
-                        let expected = cpu.image(&view, crate::channel_view::Look { in_color, ..Default::default() }, display.as_deref());
+                        let expected = cpu.image(
+                            &view,
+                            crate::channel_view::Look { in_color, ..Default::default() },
+                            display.as_deref(),
+                            &crate::channel_view::Screen::default(),
+                        );
                         let actual = gpu_preview.readback();
                         let max = actual
                             .iter()
@@ -1588,7 +1599,7 @@ mod tests {
         let pv = a.transform_preview.as_mut().unwrap().channel.as_mut().unwrap();
         pv.update(&t).unwrap();
         let shown = pv.shown.clone();
-        let expected_image = pv.image(&view, crate::channel_view::Look::default(), None);
+        let expected_image = pv.image(&view, crate::channel_view::Look::default(), None, &crate::channel_view::Screen::default());
         for (cmd, p) in [
             ("channel.target", json!({"channel":"green"})),
             ("layer.select", json!({"layer":t.layer})),
@@ -1610,11 +1621,18 @@ mod tests {
         let pv = a.transform_preview.as_mut().unwrap().channel.as_mut().unwrap();
         pv.update(&t).unwrap();
         assert!(Arc::ptr_eq(&shown, &pv.shown), "eyes do not resample or change captured geometry");
-        assert_ne!(pv.image(&hidden, crate::channel_view::Look::default(), None).pixels, expected_image.pixels);
+        assert_ne!(pv.image(&hidden, crate::channel_view::Look::default(), None, &crate::channel_view::Screen::default()).pixels, expected_image.pixels);
         a.run("channel.setVisible", json!({"channel":"red","visible":true})).unwrap();
         let restored = a.session.active().unwrap().channel_view.clone();
         assert_eq!(
-            a.transform_preview.as_ref().unwrap().channel.as_ref().unwrap().image(&restored, crate::channel_view::Look::default(), None).pixels,
+            a.transform_preview
+                .as_ref()
+                .unwrap()
+                .channel
+                .as_ref()
+                .unwrap()
+                .image(&restored, crate::channel_view::Look::default(), None, &crate::channel_view::Screen::default())
+                .pixels,
             expected_image.pixels
         );
         a.run("channel.setVisible", json!({"channel":"composite","visible":false})).unwrap();
@@ -1730,7 +1748,10 @@ mod tests {
         let preview = a.transform_preview.as_ref().unwrap().channel.as_ref().unwrap();
         assert!(preview.gpu.is_none());
         assert!(crate::channel_transform_gpu::Preview::new_move(a.gpu.as_ref().unwrap(), &st.doc, st.active_layer, a.session.tools.background, 2).is_none());
-        assert_eq!(actual, preview.image(&st.channel_view, crate::channel_view::Look::of(&a.session), display.as_deref()).pixels);
+        assert_eq!(
+            actual,
+            preview.image(&st.channel_view, crate::channel_view::Look::of(&a.session), display.as_deref(), &crate::channel_view::Screen::default()).pixels
+        );
         assert!(a.gpu.as_ref().unwrap().health().is_ok());
     }
 
@@ -1786,7 +1807,12 @@ mod tests {
                                 view.color_hidden = (0..3).map(|i| visible & (1 << i) == 0).collect();
                                 crate::channel_transform_gpu::test_wait(&rs, || fast.texture_move(&t, &view, in_color, false, k, doc.bounds())).unwrap();
                                 let actual = fast.readback();
-                                let expected = oracle.image(&view, crate::channel_view::Look { in_color, ..Default::default() }, None);
+                                let expected = oracle.image(
+                                    &view,
+                                    crate::channel_view::Look { in_color, ..Default::default() },
+                                    None,
+                                    &crate::channel_view::Screen::default(),
+                                );
                                 let max = actual
                                     .iter()
                                     .zip(&expected.pixels)
@@ -1842,7 +1868,8 @@ mod tests {
             let st = a.session.active().unwrap();
             let (display, _) = crate::canvas::canvas_display(&a, &st.doc, None);
             let preview = a.transform_preview.as_ref().unwrap().channel.as_ref().unwrap();
-            let expected = preview.image(&st.channel_view, crate::channel_view::Look::of(&a.session), display.as_deref());
+            let expected =
+                preview.image(&st.channel_view, crate::channel_view::Look::of(&a.session), display.as_deref(), &crate::channel_view::Screen::default());
             assert_eq!(actual, expected.pixels, "{target}/horizon={horizon}/{channel}={visible}");
             assert!(Arc::ptr_eq(&shown, &preview.shown), "eye changes cannot replace the last valid transformed pixels");
             assert!(preview.failed.is_some() || preview.checked.as_ref().is_some_and(|(_, _, result)| result.is_err()));
@@ -1865,7 +1892,10 @@ mod tests {
         let st = a.session.active().unwrap();
         let (display, _) = crate::canvas::canvas_display(&a, &st.doc, None);
         let preview = a.transform_preview.as_ref().unwrap().channel.as_ref().unwrap();
-        assert_eq!(actual, preview.image(&st.channel_view, crate::channel_view::Look::of(&a.session), display.as_deref()).pixels);
+        assert_eq!(
+            actual,
+            preview.image(&st.channel_view, crate::channel_view::Look::of(&a.session), display.as_deref(), &crate::channel_view::Screen::default()).pixels
+        );
         crate::transform_tool::cancel(&mut a);
         assert!(!photocraft_engine::channel_transform::locked(&a.session));
         assert!(Arc::ptr_eq(&before, &a.session.active().unwrap().doc));

@@ -43,6 +43,21 @@ pub(super) fn transform_controls_layers(app: &PhotocraftApp) -> Vec<&photocraft_
     ids.into_iter().filter_map(|id| st.doc.layer(id)).filter(|l| native || !crate::doc_props_ui::is_background(&st.doc, l)).collect()
 }
 
+impl PhotocraftApp {
+    /// Control-channel presses use document coordinates, but the canvas owns the screen-sized
+    /// handle and rotation hit areas. Start the same session before forwarding the press.
+    pub(crate) fn begin_move_transform_controls(&mut self, ctx: &egui::Context, x: f64, y: f64) {
+        if !crate::menus::modal_allows(self, "edit.freeTransform") {
+            return;
+        }
+        let Some(xf) = ViewXform::active(self) else { return };
+        let p = xf.to_screen(x as f32, y as f32);
+        if p.is_finite() && xf.rect.contains(p) {
+            begin_transform_controls_at(self, ctx, &xf, p);
+        }
+    }
+}
+
 /// Move tool › Show Transform Controls: the native colour frame, or the boxes Free Transform
 /// would open on the selected layers joined into one.
 pub(super) fn transform_controls_rect(app: &PhotocraftApp, xf: &ViewXform) -> Option<Rect> {

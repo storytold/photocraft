@@ -99,10 +99,17 @@ fn gpu_channel_move_matches_native_commit_and_tracks_visibility() {
                 )
                 .unwrap();
                 let view = &app.session.active().unwrap().channel_view;
-                let expected =
-                    crate::channel_view::render_for_display(&moved, view, moved.bounds(), 1, crate::channel_view::Look::default(), Some(layer), None)
-                        .filter(|pixels| pixels.iter().all(|p| p.a() == 255))
-                        .unwrap_or_else(|| crate::canvas::display_image(None, &photocraft_compose::flatten(&moved)).pixels);
+                let expected = crate::channel_view::render_for_display(
+                    &moved,
+                    view,
+                    moved.bounds(),
+                    1,
+                    crate::channel_view::Look::default(),
+                    None,
+                    &crate::channel_view::Screen::default(),
+                )
+                .filter(|pixels| pixels.iter().all(|p| p.a() == 255))
+                .unwrap_or_else(|| crate::canvas::display_image(None, &photocraft_compose::flatten(&moved)).pixels);
                 let max =
                     actual.iter().zip(&expected).flat_map(|(a, b)| a.to_array().into_iter().zip(b.to_array()).map(|(x, y)| x.abs_diff(y))).max().unwrap_or(0);
                 assert!(max <= 1, "{depth:?}, offset {dx}, visible {visible}: max display difference {max}");
