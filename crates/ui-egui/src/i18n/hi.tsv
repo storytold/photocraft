@@ -789,7 +789,6 @@ cameraRaw	Yellow	पीला
 	Blur Angle	ब्लर एंगल
 	Blur Gallery	ब्लर गैलरी
 	Blur More	और ब्लर
-	Both	दोनों
 	Both Axes	दोनों अक्ष
 	Bottom	नीचे
 	Bottom Edges	निचले किनारे
@@ -840,7 +839,6 @@ cameraRaw	Yellow	पीला
 	Capture the visibility, position and style of every layer with + below, then switch between versions.	नीचे + से हर लेयर की दृश्यता, स्थिति और स्टाइल सहेजें, फिर संस्करणों के बीच बदलें।
 	Cascade	कैस्केड
 	Catch-up on Stroke End	स्ट्रोक के अंत में पकड़ें
-	Center	केंद्र
 	Center Columns	कॉलम केंद्रित करें
 	Center Crop Marks	केंद्र क्रॉप चिह्न
 	Center text	टेक्स्ट केंद्रित करें
@@ -1014,10 +1012,8 @@ cameraRaw	Yellow	पीला
 	Create Work Path	कार्य पथ बनाएँ
 	Create a new count group	नया गिनती समूह बनाएँ
 	Create a new document or open an existing file.	नया दस्तावेज़ बनाएँ या कोई मौजूदा फ़ाइल खोलें।
-	Create a new elliptical frame	नया अंडाकार फ़्रेम बनाएँ
 	Create a new group	नया समूह बनाएँ
 	Create a new layer	नई लेयर बनाएँ
-	Create a new rectangular frame	नया आयताकार फ़्रेम बनाएँ
 	Create new action	नया एक्शन बनाएँ
 	Create new brush from these settings	इन सेटिंग्स से नया ब्रश बनाएँ
 	Create new channel	नया चैनल बनाएँ
@@ -1374,7 +1370,6 @@ cameraRaw	Yellow	पीला
 	Group name	समूह का नाम
 	Guide color	गाइड का रंग
 	Guides, Grid & Slices…	गाइड्स, ग्रिड और स्लाइस…
-	H	H
 	HDR Toning…	HDR टोनिंग…
 	HDV 1080/DVCPRO HD 720 (1.33)	HDV 1080/DVCPRO HD 720 (1.33)
 	HSB/HSL	HSB/HSL
@@ -2166,7 +2161,6 @@ cameraRaw	Yellow	पीला
 	Show the layer's effects and Smart Filters  ({key}-click: all layers)	लेयर के इफ़ेक्ट्स और स्मार्ट फ़िल्टर दिखाएँ  ({key}-क्लिक: सभी लेयर्स)
 	Show:	दिखाएँ:
 	Sides	भुजाएँ
-	Sides:	भुजाएँ:
 	Size Jitter	साइज़ जिटर
 	Skewness	विषमता
 	Sky	आकाश
@@ -2228,7 +2222,6 @@ cameraRaw	Yellow	पीला
 	Straighten the image by drawing a line on it	इमेज पर रेखा खींचकर उसे सीधा करें
 	Strength:	शक्ति:
 	Strikethrough	स्ट्राइकथ्रू
-	Stroke	स्ट्रोक
 	Stroke Catch-up	स्ट्रोक कैच-अप
 	Stroke Options	स्ट्रोक विकल्प
 	Stroke color	स्ट्रोक रंग
@@ -2392,7 +2385,6 @@ cameraRaw	Yellow	पीला
 	View Options	व्यू विकल्प
 	Visibility	दृश्यता
 	Visible	दृश्यमान
-	W	W
 	W x H x Resolution	W x H x रिज़ॉल्यूशन
 	WIA Support…	WIA समर्थन…
 	Wait for the current job to finish.	वर्तमान कार्य पूरा होने की प्रतीक्षा करें।
@@ -2418,8 +2410,6 @@ cameraRaw	Yellow	पीला
 	Working Yellow Plate	कार्यशील पीली प्लेट
 	Working: {working}	कार्यशील: {working}
 	Working…	काम जारी है…
-	X	X
-	Y	Y
 	Yellow  ·  Blue	पीला  ·  नीला
 	ZigZag…	ज़िगज़ैग…
 	Zoom	ज़ूम
@@ -2477,6 +2467,37 @@ cameraRaw	Yellow	पीला
 @plural	{n} step|{n} steps	{n} चरण|{n} चरण
 @plural	{warning} (+{n} more brush preset warning)|{warning} (+{n} more brush preset warnings)	{warning} (+{n} और ब्रश प्रीसेट चेतावनी)|{warning} (+{n} और ब्रश प्रीसेट चेतावनियाँ)
 @plural	{what} with {n} warning|{what} with {n} warnings	{what}, {n} चेतावनी के साथ|{what}, {n} चेतावनियों के साथ
+# Frame Tool and other branch translations.
+	A frame supports affine transforms; select its image for perspective transforms	फ़्रेम एफ़ाइन रूपांतरणों का समर्थन करता है; परिप्रेक्ष्य रूपांतरणों के लिए उसकी छवि चुनें
+	A frame supports affine transforms; select its image to warp it	फ़्रेम एफ़ाइन रूपांतरणों का समर्थन करता है; वार्प करने के लिए उसकी छवि चुनें
+	Convert to Frame…	फ़्रेम में बदलें…
+	Create a new custom frame	नया कस्टम फ़्रेम बनाएँ
+	Create a new polygonal frame	नया बहुभुजीय फ़्रेम बनाएँ
+	Create a new triangular frame	नया त्रिकोणीय फ़्रेम बनाएँ
+	Fit Content to Frame	सामग्री को फ़्रेम में फ़िट करें
+	Fit Frame to Content	फ़्रेम को सामग्री के अनुसार फ़िट करें
+	Frame coordinates must be finite and within 600000 pixels	फ़्रेम के निर्देशांक परिमित और 600000 पिक्सेल की सीमा में होने चाहिए
+	Import Image…	छवि आयात करें…
+	Invalid frame transform	अमान्य फ़्रेम रूपांतरण
+	Invalid nested file drop	अमान्य नेस्टेड फ़ाइल ड्रॉप
+	New Frame	नया फ़्रेम
+	Replace Image…	छवि बदलें…
+	The frame is locked	फ़्रेम लॉक है
+	The frame is unavailable	फ़्रेम उपलब्ध नहीं है
+	Both	दोनों
+	Center	केंद्र
+	Create a new elliptical frame	नया अंडाकार फ़्रेम बनाएँ
+	Create a new rectangular frame	नया आयताकार फ़्रेम बनाएँ
+	Frame	फ़्रेम
+	H	H
+	Inside	अंदर
+	Outside	बाहर
+	Sides:	भुजाएँ:
+	Stroke	स्ट्रोक
+	W	W
+	X	X
+	Y	Y
+
 # Actions panel: loading several action files at once
 	{message} ({note})	{message} ({note})
 @plural	{n} action|{n} actions	{n} एक्शन|{n} एक्शन
@@ -2534,3 +2555,55 @@ cameraRaw	Yellow	पीला
 	{message} into “{group}”	“{group}” में {message}
 @plural	The brush group “{group}” already has {n} brush of yours.|The brush group “{group}” already has {n} brushes of yours.	ब्रश समूह “{group}” में पहले से आपका {n} ब्रश है।|ब्रश समूह “{group}” में पहले से आपके {n} ब्रश हैं।
 @plural	The gradient group “{group}” already exists ({n} gradient).|The gradient group “{group}” already exists ({n} gradients).	ग्रेडिएंट समूह “{group}” पहले से मौजूद है ({n} ग्रेडिएंट)।|ग्रेडिएंट समूह “{group}” पहले से मौजूद है ({n} ग्रेडिएंट)।
+
+# Strings added on main after 2026-11-04: Layers panel filters, Start screen, OpenType stylistic sets
+	Advanced Blending	एडवांस्ड ब्लेंडिंग
+	Attribute	एट्रिब्यूट
+	Data Sets as Files is unavailable on the web	वेब पर फ़ाइलों के रूप में डेटा सेट उपलब्ध नहीं है
+	Discord	Discord
+	Empty	खाली
+	Grid view	ग्रिड दृश्य
+	Layer Effects	लेयर इफ़ेक्ट्स
+	Learn	सीखें
+	Linked	लिंक किया गया
+	List view	सूची दृश्य
+	New file	नई फ़ाइल
+	No Adv. Blending	एडवांस्ड ब्लेंडिंग नहीं
+	No Layer Effects	लेयर इफ़ेक्ट्स नहीं
+	No Layer Mask	लेयर मास्क नहीं
+	No Vector Mask	वेक्टर मास्क नहीं
+	No recent files	कोई हाल की फ़ाइल नहीं
+	Not Clipped	क्लिप नहीं किया गया
+	Not Empty	खाली नहीं
+	Not Linked	लिंक नहीं किया गया
+	Not Locked	लॉक नहीं है
+	Not Visible	दृश्यमान नहीं
+	On your computer	आपके कंप्यूटर पर
+	Paints from the document's opening state	दस्तावेज़ की खुलने वाली स्थिति से पेंट करता है
+	Set 	सेट 
+	Set 1	सेट 1
+	Set 2	सेट 2
+	Set 3	सेट 3
+	Set 4	सेट 4
+	Set 5	सेट 5
+	Set 6	सेट 6
+	Set 7	सेट 7
+	Set 8	सेट 8
+	Set 9	सेट 9
+	Set 10	सेट 10
+	Set 11	सेट 11
+	Set 12	सेट 12
+	Set 13	सेट 13
+	Set 14	सेट 14
+	Set 15	सेट 15
+	Set 16	सेट 16
+	Set 17	सेट 17
+	Set 18	सेट 18
+	Set 19	सेट 19
+	Set 20	सेट 20
+	Source: {name}	स्रोत: {name}
+	Stylistic Sets	स्टाइलिस्टिक सेट
+	The History Brush source was deleted: set a new source in the History panel	हिस्ट्री ब्रश का स्रोत हटा दिया गया: हिस्ट्री पैनल में नया स्रोत सेट करें
+	Website	वेबसाइट
+	{ok} written to {dir}	{ok} को {dir} में लिखा गया
+@plural	{what}: {n} Image Assets output failed|{what}: {n} Image Assets outputs failed	{what}: {n} इमेज एसेट्स आउटपुट विफल रहा|{what}: {n} इमेज एसेट्स आउटपुट विफल रहे
