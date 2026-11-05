@@ -4791,3 +4791,5 @@ cameraRaw	White Balance: As Shot	Hvidbalance: Som fotograferet
 # Channels panel menu (#11451)
 	Channel Options…	Kanalindstillinger…
 	Specify Channels:	Angiv kanaler:
+	Not enough grayscale documents for this mode.	Der er ikke nok dokumenter i gråtoner til denne tilstand.
+	Pick a different document for each channel.	Vælg et andet dokument til hver kanal.

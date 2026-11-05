@@ -654,3 +654,5 @@ cameraRaw	Yellow	पीला
 	Split Channels	चैनल्स विभाजित करें
 	Merge Channels…	चैनल्स मर्ज करें…
 	Specify Channels:	चैनल्स निर्दिष्ट करें:
+	Not enough grayscale documents for this mode.	इस मोड के लिए पर्याप्त ग्रेस्केल डॉक्यूमेंट नहीं हैं।
+	Pick a different document for each channel.	हर चैनल के लिए अलग डॉक्यूमेंट चुनें।

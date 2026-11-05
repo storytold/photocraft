@@ -3599,3 +3599,5 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Split Channels	Pisahkan Channel
 	Merge Channels…	Gabungkan Channel…
 	Specify Channels:	Tentukan Channel:
+	Not enough grayscale documents for this mode.	Dokumen grayscale tidak cukup untuk mode ini.
+	Pick a different document for each channel.	Pilih dokumen yang berbeda untuk setiap channel.

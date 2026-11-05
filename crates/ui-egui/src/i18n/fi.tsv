@@ -4792,3 +4792,5 @@ cameraRaw	White Balance: As Shot	Valkotasapaino: kuvauksen mukainen
 # Channels panel menu (#11451)
 	Channel Options…	Kanavan asetukset…
 	Specify Channels:	Määritä kanavat:
+	Not enough grayscale documents for this mode.	Harmaasävyasiakirjoja ei ole tarpeeksi tähän tilaan.
+	Pick a different document for each channel.	Valitse jokaiselle kanavalle eri asiakirja.

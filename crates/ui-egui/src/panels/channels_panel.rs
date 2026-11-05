@@ -90,13 +90,15 @@ struct RowInteractions<'a> {
     masked: Option<&'a photocraft_doc::Layer>,
     actions: &'a mut Vec<(String, Value)>,
     mask_click: &'a mut Option<bool>,
+    /// Whether Merge Channels… can run (enough grayscale documents of one size).
+    merge_enabled: bool,
 }
 
 fn handle_row_interactions(ui: &mut egui::Ui, mut row: RowInteractions<'_>) {
     let rename_id = egui::Id::unique(("chan-rename", row.doc.id.0, format!("{:?}", row.row.reference())));
     handle_channel_row_click(ui, &mut row);
     handle_channel_row_double_click(ui, &mut row, rename_id);
-    row.response.context_menu(|ui| draw_row_menu(ui, row.row, row.doc, row.masked, row.actions));
+    row.response.context_menu(|ui| draw_row_menu(ui, row.row, row.doc, row.masked, row.merge_enabled, row.actions));
 }
 
 fn handle_channel_row_click(ui: &egui::Ui, row: &mut RowInteractions<'_>) {
@@ -167,7 +169,14 @@ fn handle_alpha_double_click(ui: &mut egui::Ui, row: &mut RowInteractions<'_>, i
     }
 }
 
-fn draw_row_menu(ui: &mut egui::Ui, row: Row, doc: &photocraft_doc::Document, masked: Option<&photocraft_doc::Layer>, actions: &mut Vec<(String, Value)>) {
+fn draw_row_menu(
+    ui: &mut egui::Ui,
+    row: Row,
+    doc: &photocraft_doc::Document,
+    masked: Option<&photocraft_doc::Layer>,
+    merge_enabled: bool,
+    actions: &mut Vec<(String, Value)>,
+) {
     crate::widgets::menu_scroll(ui, |ui| {
         ui.set_min_width(210.0);
         match row {
@@ -181,7 +190,7 @@ fn draw_row_menu(ui: &mut egui::Ui, row: Row, doc: &photocraft_doc::Document, ma
         item(ui, actions, "New Spot Channel…", "ui.newSpotChannel", json!({}));
         ui.separator();
         item(ui, actions, "Split Channels", "channel.split", json!({}));
-        item(ui, actions, "Merge Channels…", "ui.mergeChannels", json!({}));
+        item_enabled(ui, actions, "Merge Channels…", "ui.mergeChannels", json!({}), merge_enabled);
     });
 }
 
@@ -294,6 +303,8 @@ fn row_presentation(row: Row, context: &RowPresentationContext<'_>, mask_visible
 }
 
 pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    // Greyed in the rows' menu as in the panel menu and the command palette.
+    let merge_enabled = crate::menus::is_enabled(app, "channel.merge");
     let t = Tokens::get(ui.ctx());
     let Some(st) = app.session.active() else {
         ui.add_space(6.0);
@@ -431,6 +442,7 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     masked,
                     actions: &mut actions,
                     mask_click: &mut mask_click,
+                    merge_enabled,
                 },
             );
         }
@@ -663,7 +675,12 @@ pub fn fit_thumb(cell: Rect, w: u32, h: u32) -> (Rect, Rect) {
 }
 
 fn item(ui: &mut egui::Ui, actions: &mut Vec<(String, Value)>, label: &str, cmd: &str, p: Value) {
-    if ui.button(tl!(&label)).clicked() {
+    item_enabled(ui, actions, label, cmd, p, true);
+}
+
+/// [`item`], greyed unless `enabled`.
+fn item_enabled(ui: &mut egui::Ui, actions: &mut Vec<(String, Value)>, label: &str, cmd: &str, p: Value, enabled: bool) {
+    if ui.add_enabled(enabled, egui::Button::new(tl!(&label))).clicked() {
         actions.push((cmd.into(), p));
         ui.close();
     }

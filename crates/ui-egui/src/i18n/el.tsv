@@ -4277,3 +4277,5 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Split Channels	Διαχωρισμός καναλιών
 	Merge Channels…	Συγχώνευση καναλιών…
 	Specify Channels:	Καθορισμός καναλιών:
+	Not enough grayscale documents for this mode.	Δεν υπάρχουν αρκετά έγγραφα σε κλίμακα του γκρι για αυτή τη λειτουργία.
+	Pick a different document for each channel.	Επιλέξτε διαφορετικό έγγραφο για κάθε κανάλι.

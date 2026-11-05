@@ -4308,3 +4308,5 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Split Channels	Kanalları Ayır
 	Merge Channels…	Kanalları Birleştir…
 	Specify Channels:	Kanalları Belirt:
+	Not enough grayscale documents for this mode.	Bu mod için yeterli gri tonlamalı belge yok.
+	Pick a different document for each channel.	Her kanal için farklı bir belge seçin.

@@ -3799,3 +3799,5 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Split Channels	채널 분할
 	Merge Channels…	채널 병합…
 	Specify Channels:	채널 지정:
+	Not enough grayscale documents for this mode.	이 모드에 필요한 회색 음영 문서가 부족합니다.
+	Pick a different document for each channel.	채널마다 다른 문서를 선택하십시오.

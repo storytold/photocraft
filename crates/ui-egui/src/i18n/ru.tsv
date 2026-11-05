@@ -4764,3 +4764,5 @@ shape	Appearance	Оформление
 # Channels panel menu (#11451)
 	Channel Options…	Параметры канала…
 	Specify Channels:	Указать каналы:
+	Not enough grayscale documents for this mode.	Недостаточно документов в градациях серого для этого режима.
+	Pick a different document for each channel.	Выберите отдельный документ для каждого канала.

@@ -4479,3 +4479,5 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 # Channels panel menu (#11451)
 	Channel Options…	Opciones de canal…
 	Specify Channels:	Especificar canales:
+	Not enough grayscale documents for this mode.	No hay suficientes documentos en escala de grises para este modo.
+	Pick a different document for each channel.	Elija un documento distinto para cada canal.

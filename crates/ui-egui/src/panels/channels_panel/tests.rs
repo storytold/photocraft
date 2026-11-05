@@ -633,3 +633,19 @@ fn panel_menu_merge_channels_opens_its_dialog() {
     crate::menus::invoke(&mut app, &ctx, "channel.merge", json!({"mode": "rgb"})).unwrap();
     assert!(app.ui.dialogs.is_empty() && app.session.documents().len() == 1, "explicit params merge directly");
 }
+
+/// Two grayscale documents fill no mode: Merge Channels… is greyed in the panel menu, and the
+/// dispatcher says why instead of opening the dialog; a third one enables it.
+#[test]
+fn merge_channels_waits_for_three_grayscale_documents() {
+    let mut app = menu_app("grayscale");
+    app.run("file.new", json!({"width": 32, "height": 24, "mode": "grayscale"})).unwrap();
+    let ctx = egui::Context::default();
+    let why = crate::menus::invoke(&mut app, &ctx, "channel.merge", json!({})).unwrap_err();
+    assert!(why.contains("three") && app.ui.dialogs.is_empty(), "{why}");
+    let mut h = menu_harness(app);
+    assert!(menu_disabled(&h, "Merge Channels…"), "two documents are not enough");
+    h.state_mut().run("file.new", json!({"width": 32, "height": 24, "mode": "grayscale"})).unwrap();
+    h.run_steps(2);
+    assert!(!menu_disabled(&h, "Merge Channels…"), "three are");
+}

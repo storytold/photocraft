@@ -3608,3 +3608,5 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Split Channels	Kanäle teilen
 	Merge Channels…	Kanäle zusammenfügen…
 	Specify Channels:	Kanäle angeben:
+	Not enough grayscale documents for this mode.	Nicht genug Graustufen-Dokumente für diesen Modus.
+	Pick a different document for each channel.	Wählen Sie für jeden Kanal ein anderes Dokument.

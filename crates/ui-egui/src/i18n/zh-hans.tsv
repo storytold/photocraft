@@ -3265,3 +3265,5 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Split Channels	分离通道
 	Merge Channels…	合并通道…
 	Specify Channels:	指定通道:
+	Not enough grayscale documents for this mode.	灰度文档不足，无法使用此模式。
+	Pick a different document for each channel.	请为每个通道选择不同的文档。
