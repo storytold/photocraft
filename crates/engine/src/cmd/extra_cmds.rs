@@ -241,7 +241,7 @@ fn stroke(s: &mut Session, p: &Value) -> Result<Value> {
 /// Image Based On Selected Area).
 fn equalize(s: &mut Session, p: &Value) -> Result<Value> {
     let whole = match p.get("selectedAreaOnly") {
-        None | Some(Value::Null) => false,
+        None => false,
         Some(Value::Bool(only)) => !only,
         Some(_) => return Err(EngineError::BadParams { cmd: "image.adjustments.equalize".into(), msg: "selectedAreaOnly must be true or false".into() }),
     };

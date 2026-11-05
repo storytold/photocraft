@@ -488,7 +488,7 @@ fn equalize_entire_image_based_on_the_selected_area() {
         s
     };
     for depth in [8, 16, 32] {
-        for params in [json!({}), json!({"selectedAreaOnly": true}), json!({"selectedAreaOnly": null})] {
+        for params in [json!({}), json!({"selectedAreaOnly": true})] {
             let mut s = setup(depth);
             s.execute("image.adjustments.equalize", params.clone()).unwrap();
             let inside = (pixel(&s, 1, 1)[0], pixel(&s, 1, 20)[0]);
@@ -524,7 +524,7 @@ fn equalize_entire_image_without_a_selection_is_plain_equalize() {
 
 #[test]
 fn equalize_refuses_a_selected_area_only_that_is_not_a_boolean() {
-    for bad in [json!("false"), json!(0), json!([true]), json!({})] {
+    for bad in [json!(null), json!("false"), json!(0), json!([true]), json!({})] {
         let mut s = session(8);
         let e = s.execute("image.adjustments.equalize", json!({"selectedAreaOnly": bad})).unwrap_err().to_string();
         assert!(e.contains("selectedAreaOnly"), "{bad}: {e}");

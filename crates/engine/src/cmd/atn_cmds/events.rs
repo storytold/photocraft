@@ -126,13 +126,15 @@ const UNHOLDABLE: &[(&str, &[(&str, Lost)])] = &[
 fn holds_its_settings(id: &str, p: &Value) -> bool {
     let Some((_, settings)) = UNHOLDABLE.iter().find(|(cmd, _)| *cmd == id) else { return true };
     settings.iter().all(|(param, lost)| match (p.get(param), lost) {
-        (None | Some(Value::Null), _) => true,
+        (None, _) => true,
+        // The command refuses null here too, so a null step is refused like any other non-boolean.
+        (Some(v), Lost::ReplaysAsBool(played)) => v.as_bool() == Some(*played),
+        (Some(Value::Null), _) => true,
         (Some(v), Lost::ReplaysAs(played)) => {
             v.as_str() == Some(played)
                 || v.as_f64().is_some_and(|n| played.parse::<f64>().is_ok_and(|d| n == d))
                 || v.as_bool().is_some_and(|b| played.parse::<bool>() == Ok(b))
         }
-        (Some(v), Lost::ReplaysAsBool(played)) => v.as_bool() == Some(*played),
         (Some(v), Lost::DiffersAt(spelling)) => v.as_str() != Some(spelling),
     })
 }

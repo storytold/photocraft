@@ -440,8 +440,9 @@ fn a_setting_the_event_cannot_hold_is_refused() {
         ("filter.other.minimum", json!({"radius": 4, "preserve": "roundness"})),
         ("filter.other.maximum", json!({"radius": 4, "preserve": "roundness"})),
         ("image.adjustments.equalize", json!({"selectedAreaOnly": false})),
-        // Equalize reads `selectedAreaOnly` as a boolean only and refuses the string.
+        // Equalize reads `selectedAreaOnly` as a boolean only and refuses the string and null.
         ("image.adjustments.equalize", json!({"selectedAreaOnly": "true"})),
+        ("image.adjustments.equalize", json!({"selectedAreaOnly": null})),
         ("layer.setAdjustment", json!({"kind": "exposure", "layer": "Target_existing", "exposure": -0.75, "offset": 0.035, "gamma": 1.37})),
         ("layer.setAdjustment", json!({"kind": "exposure", "document": 2, "exposure": -0.75})),
     ] {
