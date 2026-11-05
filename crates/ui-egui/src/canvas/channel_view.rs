@@ -6,7 +6,10 @@
 //! the composite stays visible, an opaque picture with hidden colour channels. Visible spot
 //! channels of an RGB or CMYK document print over the sampled composite where they have ink
 //! (opaque, through the canvas display transform); elsewhere the texture stays transparent, so the
-//! normal canvas shows. The texture is keyed by document revision, view state and display, and
+//! normal canvas shows. This is a screen approximation, not a press proof: each ink is its stored
+//! display colour blended by the Multichannel overprint formula (multiply at solidity 0, cover at
+//! solidity 1) over the sampled composite. A solo spot (all colour channels hidden) shows as its
+//! grayscale values instead. The texture is keyed by document revision, view state and display, and
 //! updated per damage rectangle while painting, so nothing is recomposited per frame.
 
 use egui::{Color32, TextureOptions};
