@@ -43,6 +43,13 @@ pub(super) fn transform_controls_layers(app: &PhotocraftApp) -> Vec<&photocraft_
 /// Move tool › Show Transform Controls: the boxes Free Transform would open on the selected
 /// layers, joined into one.
 pub(super) fn transform_controls_rect(app: &PhotocraftApp, xf: &ViewXform) -> Option<Rect> {
+    if app.ui.tool == Tool::PathSelection {
+        if !app.ui.tool_options.path_show_bounding_box || !app.ui.view.extras || app.ui.transform.is_some() || app.drag.is_some() {
+            return None;
+        }
+        let (x0, y0, x1, y1) = crate::vector_ui::free_transform_path(app)?.1.control_bounds()?;
+        return Some(Rect::from_two_pos(xf.to_screen(x0 as f32, y0 as f32), xf.to_screen(x1 as f32, y1 as f32)));
+    }
     let st = app.session.active()?;
     let layers = transform_controls_layers(app);
     let b = layers.iter().map(|l| photocraft_engine::transform_cmds::transform_frame(&st.doc, l)).filter(|b| !b.is_empty()).reduce(|a, b| a.union(&b))?;

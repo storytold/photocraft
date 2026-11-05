@@ -4,6 +4,10 @@
 //! (`pick_cmds::auto_select_target`), so a type layer is outlined anywhere inside its text, as it
 //! is picked there (#2591). The answer is cached per document revision and pointer pixel: a
 //! pointer resting on the canvas costs nothing per frame.
+//!
+//! The same rollover serves the Artboard tool (the board, or the layer with Auto-Select's Layer
+//! target), the Type tools (the type layer a click edits rather than starting new text) and Path
+//! Selection with Select: All Layers (the shape layer a click picks), #3631.
 
 use egui::{Pos2, Stroke};
 use photocraft_doc::{DocId, Document, Layer, LayerContent, LayerId};
@@ -18,51 +22,82 @@ pub(crate) struct Hover {
     doc: DocId,
     revision: u64,
     at: [i32; 2],
-    group: bool,
+    pick: Pick,
     target_layer: Option<LayerId>,
     bounds: Option<Rect>,
 }
 
+/// What a click would pick under the pointer, per tool (the cache key).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Pick {
+    /// Move tool Auto-Select; true: its Group target.
+    Move(bool),
+    /// Artboard tool Auto-Select (#3631); true: its Layer target, false: the board.
+    Artboard(bool),
+    /// Type tool (#3631): the type layer a click edits.
+    Type,
+    /// Path Selection › Select: All Layers (#3631): the shape layer a click picks.
+    Path,
+}
+
 /// The document-space bounds to outline with the pointer at `at` (document px), or `None` when
-/// nothing is highlighted: the preference is off, another tool is current, a click wouldn't
-/// Auto-Select (it's off without ⌘, or the selected pixels move instead), a button is down, or a
-/// drag or transform is under way.
+/// nothing is highlighted: the preference is off, a tool without a rollover is current, a click
+/// wouldn't Auto-Select (it's off without ⌘, or the selected pixels move instead), a button is
+/// down, or a drag, transform or text edit is under way.
+///
+/// Move tool: the layer (or group) Auto-Select would pick. Artboard tool (Auto-Select on, ⌘
+/// inverts it as for Move): the board under the pointer, or with the Layer target the layer.
+/// Type and Vertical Type tools: the type layer a click would edit rather than start new text
+/// (not the Type Mask tools, for which existing type is only pixels).
 pub(crate) fn target(app: &mut PhotocraftApp, at: Option<[f64; 2]>, command: bool, pressed: bool) -> Option<Rect> {
-    if !app.session.prefs().tools.show_highlight_on_rollover
-        || app.ui.tool != Tool::Move
-        || pressed
-        || app.drag.is_some()
-        || app.guide_drag.is_some()
-        || app.ui.transform.is_some()
-        || app.ui.tool_options.move_auto_select == command
-        || crate::move_ui::moves_selected_pixels_with(app, Tool::Move)
-    {
-        app.canvas_hover_layer = None;
+    app.canvas_hover_layer = None;
+    if !app.session.prefs().tools.show_highlight_on_rollover || pressed || app.drag.is_some() || app.guide_drag.is_some() || app.ui.transform.is_some() {
         return None;
     }
-    let Some(at) = at.filter(|p| p[0].is_finite() && p[1].is_finite()) else {
-        app.canvas_hover_layer = None;
-        return None;
+    let o = &app.ui.tool_options;
+    let pick = match app.ui.tool {
+        Tool::Move if o.move_auto_select != command && !crate::move_ui::moves_selected_pixels_with(app, Tool::Move) => Pick::Move(o.move_target == "group"),
+        Tool::Artboard if o.artboard_auto_select != command && app.ui.artboard_tool.drag.is_none() => Pick::Artboard(o.artboard_target == "layer"),
+        Tool::Type | Tool::VerticalType if app.ui.text_edit.is_none() => Pick::Type,
+        Tool::PathSelection if crate::vector_ui::path_picks(app) => Pick::Path,
+        _ => return None,
     };
+    let at = at.filter(|p| p[0].is_finite() && p[1].is_finite())?;
+    let p = at;
     let at = [at[0].floor() as i32, at[1].floor() as i32];
-    let group = app.ui.tool_options.move_target == "group";
     let st = app.session.active()?;
     let (doc, revision) = (st.doc.id, st.revision);
-    if let Some(h) = app.move_hover.as_ref().filter(|h| h.doc == doc && h.revision == revision && h.at == at && h.group == group) {
+    if let Some(h) = app.move_hover.as_ref().filter(|h| h.doc == doc && h.revision == revision && h.at == at && h.pick == pick) {
         app.canvas_hover_layer = h.target_layer;
         return h.bounds;
     }
-    let target_layer = photocraft_engine::pick_cmds::auto_select_target(&st.doc, at[0], at[1], group);
-    let bounds = target_layer.and_then(|id| outline(&st.doc, id));
-    let target_layer = if bounds.is_some() { target_layer } else { None };
-    app.move_hover = Some(Hover { doc, revision, at, group, target_layer, bounds });
+    let mut target_layer = None;
+    let bounds = match pick {
+        Pick::Move(group) => {
+            let id = photocraft_engine::pick_cmds::auto_select_target(&st.doc, at[0], at[1], group);
+            let bounds = id.and_then(|id| outline(&st.doc, id));
+            target_layer = id.filter(|_| bounds.is_some());
+            bounds
+        }
+        Pick::Artboard(false) => crate::artboard_tool::board_at(&st.doc, p).map(|(_, r)| crate::artboard_tool::board_rect(r)),
+        Pick::Artboard(true) => crate::artboard_tool::layer_at(&st.doc, p).and_then(|id| outline(&st.doc, id)),
+        Pick::Path => {
+            let tol = f64::from(crate::vector_ui::PICK_PX) / f64::from(app.point_zoom().max(1e-3));
+            crate::vector_ui::shape_at(&st.doc, p, tol).and_then(|id| outline(&st.doc, id))
+        }
+        Pick::Type => {
+            let doc = st.doc.clone();
+            crate::type_tool::hit_layer(app, p[0], p[1]).and_then(|id| outline(&doc, id))
+        }
+    };
+    app.move_hover = Some(Hover { doc, revision, at, pick, target_layer, bounds });
     app.canvas_hover_layer = target_layer;
     bounds
 }
 
 /// The outline of a picked layer: its visible content (a group's, its visible layers' together).
 /// Not the Background: it fills the canvas, and the Move tool doesn't move it.
-fn outline(doc: &Document, id: LayerId) -> Option<Rect> {
+pub(crate) fn outline(doc: &Document, id: LayerId) -> Option<Rect> {
     let rows = doc.walk();
     let (prefix, _, top) = rows.iter().find(|(_, _, l)| l.id == id)?;
     if crate::doc_props_ui::is_background(doc, top) {
@@ -217,3 +252,7 @@ mod tests {
         assert_eq!(app.canvas_hover_layer, None);
     }
 }
+
+#[cfg(test)]
+#[path = "move_hover_tools_tests.rs"]
+mod tools_tests;

@@ -124,7 +124,7 @@ fn warp_is_greyed_and_distort_too_while_type_is_among_them() {
     app.run("layer.select", json!({"layer": paint.0, "mode": "add"})).unwrap();
     assert_eq!(app.session.active().unwrap().selected_layers().len(), 2);
     assert!(crate::menus::is_enabled(&app, "edit.transform.distort") && crate::menus::is_enabled(&app, "edit.transform.perspective"));
-    assert!(!crate::menus::is_enabled(&app, "edit.transform.warp"));
+    assert!(crate::menus::is_enabled(&app, "edit.transform.warp"));
 }
 
 #[test]

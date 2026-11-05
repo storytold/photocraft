@@ -141,6 +141,9 @@ pub(super) fn layer_row(
     let compact = l.artboard().is_some() && l.mask.is_none() && l.vector_mask.is_none();
     let (base, row_h) = if compact { (0.0, row_h.min(ARTBOARD_ROW_H)) } else { (base, row_h) };
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), row_h), Sense::click_and_drag());
+    if resp.hovered() {
+        crate::layer_hover::row_hovered(app, ctx, l.id);
+    }
     // With thumbnails off no mask thumbnail is drawn, so none may keep catching drags from older frames.
     if base == 0.0 {
         crate::mask_thumbs_ui::forget(ctx, l.id.0);
