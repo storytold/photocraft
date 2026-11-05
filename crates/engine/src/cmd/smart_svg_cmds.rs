@@ -137,17 +137,18 @@ fn enabled(s: &Session) -> std::result::Result<(), String> {
 fn check_instances(s: &Session, id: LayerId) -> Result<Vec<LayerId>> {
     let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
     let contents = smart(doc, id)?.contents_id;
-    if s.smart_links.iter().any(|link| link.parent == doc.id && link.contents_id == contents) {
-        return Err(EngineError::Other("these smart-object contents are already open in PhotoCraft".into()));
-    }
     let ids: Vec<_> =
         doc.walk().into_iter().filter_map(|(_, _, l)| matches!(&l.content, LayerContent::Smart(sm) if sm.contents_id == contents).then_some(l.id)).collect();
     for id in &ids {
+        let sm = smart(doc, *id)?;
+        if s.smart_links.iter().any(|link| link.matches(doc.id, sm)) {
+            return Err(EngineError::Other("these smart-object contents are already open in PhotoCraft".into()));
+        }
         let locks = doc.effective_locks(*id);
         if locks.all || locks.pixels {
             return Err(EngineError::Other("a shared smart-object instance is locked".into()));
         }
-        embedded(doc, smart(doc, *id)?)?;
+        embedded(doc, sm)?;
     }
     Ok(ids)
 }

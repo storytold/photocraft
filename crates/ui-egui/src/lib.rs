@@ -749,7 +749,6 @@ impl SyntheticTarget {
                 (None, None) => true,
                 _ => false,
             }
-
     }
 }
 

@@ -153,6 +153,11 @@ The same Hayro parser serves both preservation and rendering; bounded raw/Flate 
 private streams. A typed channel-decoding failure rejects the editable import instead of
 silently publishing incomplete layers. Auto falls back only when editing data is absent.
 
+Recovered layers use the PSD memory-admission policy, including decoded pattern charges,
+caller limits, high-memory approval and a capacity recheck after acquiring the decoder gate.
+Approving a queued import retains its selected PDF page and layer options. These checks do
+not remove the ordinary PDF raster import limitations tracked by #11466 and #11467.
+
 Smart objects retain their page/image, layer choice, crop, resolution, colour mode, depth,
 anti-aliasing and explicit pixel size across native saves, cache regeneration, source updates
 and PSD export. Different projections of shared PDF bytes use separate Edit Contents documents.

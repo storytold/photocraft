@@ -1274,6 +1274,89 @@ fn approved_open_forwards_the_flag_and_the_bound_estimate() {
     });
 }
 
+/// The first page is ordinary; only page two contains Photoshop's editable layer stream.
+#[cfg(target_pointer_width = "64")]
+fn tiny_layered_pdf() -> Vec<u8> {
+    use photocraft_psd::tiff::{ByteOrder, ImageSourceData, SIGNATURE};
+
+    let mut document =
+        photocraft_doc::Document::new("source", photocraft_geom::Size::new(3, 2), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
+    let mut layer = photocraft_doc::Layer::raster("Selected authored layer", document.pixel_format());
+    layer.surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(0, 0, 3, 2), &[0.125, 0.5, 0.875, 0.5]);
+    document.layers.push(layer);
+    let psd = photocraft_io::document_to_psd(&document);
+    let (source, _) = ImageSourceData::from_psd(&psd).to_bytes(ByteOrder::Big).unwrap();
+    let stream = |data: &[u8], attributes: &str| {
+        let mut bytes = format!("<< /Length {} {attributes} >>\nstream\n", data.len()).into_bytes();
+        bytes.extend_from_slice(data);
+        bytes.extend_from_slice(b"\nendstream");
+        bytes
+    };
+    let objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 3 2] /Resources << >> /Contents 7 0 R >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 3 2] /Resources << >> /PieceInfo << /AdobePhotoshop << /Private 5 0 R >> >> >>".to_vec(),
+        b"<< /StandardImageFileData 6 0 R /CompositeImage 8 0 R >>".to_vec(),
+        stream(&source[SIGNATURE.len()..], ""),
+        stream(b"0 1 0 rg 0 0 3 2 re f", ""),
+        stream(&[], "/Type /XObject /Subtype /Image /Width 3 /Height 2 /BitsPerComponent 8 /ColorSpace /DeviceRGB"),
+    ];
+    let mut bytes = b"%PDF-1.4\n".to_vec();
+    let mut offsets = Vec::new();
+    for (index, object) in objects.iter().enumerate() {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n", index + 1).as_bytes());
+        bytes.extend_from_slice(object);
+        bytes.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = bytes.len();
+    bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", offsets.len() + 1).as_bytes());
+    for offset in offsets {
+        bytes.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes());
+    bytes
+}
+
+#[cfg(target_pointer_width = "64")]
+#[test]
+fn approved_layered_pdf_retains_its_selected_projection() {
+    use photocraft_doc::PdfImportMode;
+    use photocraft_io::pdf_import::{CropTo, PdfOpenOptions};
+
+    let gb = 1u64 << 30;
+    let bytes = Arc::new(tiny_layered_pdf());
+    let pdf = PdfOpenOptions { layer_mode: PdfImportMode::Layers, page: 2, resolution: 144.0, crop: CropTo::MediaBox, ..Default::default() };
+    let snapshot = photocraft_io::memory::MemorySnapshot { available_ram: Some(8 * gb), swap_free: None, commit_headroom: None };
+    photocraft_io::memory::with_mock_memory(snapshot, || {
+        // Charge the admission estimate, not the fixture's real pixels.
+        photocraft_io::psd_budget::with_test_estimate_charge(4 * gb + 1, || {
+            for background in [false, true] {
+                let mut s = Session::new();
+                let started = s.start_open_pdf("pages.pdf", OpenSource::Bytes(Arc::clone(&bytes)), pdf.clone(), background).unwrap();
+                let result = match started {
+                    Started::Done(value) => value,
+                    Started::Job(id) => s.wait_job(id).unwrap(),
+                };
+                let id = result["pendingPreflight"].as_u64().unwrap_or_else(|| panic!("expected a PDF layer preflight: {result}"));
+                let pending = s.pending_preflights.iter().find(|pending| pending.id == id).unwrap();
+                assert_eq!(pending.pdf.as_ref().unwrap().projection(), pdf.projection());
+                assert!(s.documents().is_empty());
+                let approved = s.execute("file.approveMemory", json!({"id": id, "approve": true, "background": background})).unwrap();
+                if let Some(job) = approved["job"].as_u64() {
+                    s.wait_job(JobId(job)).unwrap();
+                }
+                assert_eq!(s.documents().len(), 1);
+                let state = &s.documents()[0];
+                assert_eq!(state.doc.layers[0].name, "Selected authored layer", "approval must reopen page two's authored layers");
+                assert!(state.source_read_only && state.path.is_none());
+                assert_eq!(s.pending_preflight_bytes().unwrap(), 0);
+            }
+        });
+    });
+}
+
 #[cfg(target_pointer_width = "64")]
 #[test]
 fn approval_is_bound_to_the_approved_estimate() {
@@ -1287,7 +1370,7 @@ fn approval_is_bound_to_the_approved_estimate() {
             let fingerprint = SourceFingerprint::of(&source).unwrap();
             // Consent given for a much smaller estimate does not cover this file.
             let err = s
-                .start_open_approved_with_background("tiny.psd", source, false, Some(1 << 20), Some(fingerprint), false)
+                .start_open_approved_with_background("tiny.psd", source, false, Some(1 << 20), Some(fingerprint), false, None)
                 .expect_err("a larger estimate needs fresh consent");
             assert!(matches!(&err, EngineError::PsdApprovalRequired { .. }), "got {err:?}");
             assert!(s.documents().is_empty());
@@ -1382,12 +1465,12 @@ fn a_replaced_path_is_refused_with_the_source_identity_reason() {
     std::fs::rename(&replacement, &path).unwrap();
     let mut s = Session::new();
     let err = s
-        .start_open_approved_with_background("source.psd", source.clone(), false, Some(1024), Some(fingerprint.clone()), false)
+        .start_open_approved_with_background("source.psd", source.clone(), false, Some(1024), Some(fingerprint.clone()), false, None)
         .expect_err("the handle is not the approved file");
     assert!(matches!(&err, EngineError::SourceChanged { .. }), "the inline refusal must name the identity, not a parser failure: {err:?}");
     assert!(s.documents().is_empty());
     // The same check on the worker path: the job fails with the identity reason, not a decode error.
-    let started = s.start_open_approved_with_background("source.psd", source, false, Some(1024), Some(fingerprint), true).unwrap();
+    let started = s.start_open_approved_with_background("source.psd", source, false, Some(1024), Some(fingerprint), true, None).unwrap();
     let Started::Job(id) = started else { panic!("expected a background job") };
     let err = s.wait_job(id).expect_err("the worker's handle is not the approved file");
     assert!(matches!(&err, EngineError::SourceChanged { .. }), "the background refusal must name the identity: {err:?}");
@@ -1411,7 +1494,7 @@ fn a_same_size_rewrite_with_a_restored_mtime_is_refused_with_the_identity_reason
     std::fs::OpenOptions::new().write(true).open(&path).unwrap().set_times(std::fs::FileTimes::new().set_modified(modified)).unwrap();
     let mut s = Session::new();
     let err = s
-        .start_open_approved_with_background("source.psd", source, false, Some(1024), Some(fingerprint), false)
+        .start_open_approved_with_background("source.psd", source, false, Some(1024), Some(fingerprint), false, None)
         .expect_err("the rewrite is not the file whose estimate was approved");
     assert!(matches!(&err, EngineError::SourceChanged { .. }), "a restored mtime must not hide the rewrite: {err:?}");
     assert!(s.documents().is_empty());

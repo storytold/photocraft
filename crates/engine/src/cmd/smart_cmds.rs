@@ -28,7 +28,9 @@ use std::sync::{Arc, Mutex};
 use photocraft_algo::resample::translate_surface;
 use photocraft_algo::transform::Homography;
 use photocraft_color::{BlendMode, ColorMode, PixelFormat, SampleType};
-use photocraft_doc::{DocId, Document, Layer, LayerContent, LayerId, LayerMask, Metadata, PdfImportOptions, SmartContentsId, SmartFilter, SmartObject, SmartSource};
+use photocraft_doc::{
+    DocId, Document, Layer, LayerContent, LayerId, LayerMask, Metadata, PdfImportOptions, SmartContentsId, SmartFilter, SmartObject, SmartSource,
+};
 use photocraft_geom::{Affine, Rect, Size};
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
@@ -49,6 +51,15 @@ pub struct SmartLink {
     pub original_contents_id: SmartContentsId,
     /// The projection currently edited by this child.
     pub pdf_import: PdfImportOptions,
+}
+
+impl SmartLink {
+    /// Whether this editor owns the instance's current family or its restored PDF projection.
+    pub fn matches(&self, parent: DocId, smart: &SmartObject) -> bool {
+        self.parent == parent
+            && ((self.contents_id == smart.contents_id && smart.pdf_import.is_none_or(|projection| projection == self.pdf_import))
+                || (self.original_contents_id == smart.contents_id && smart.pdf_import.is_some_and(|projection| projection == self.pdf_import)))
+    }
 }
 
 /// PSD placed-layer keys that describe the smart object's source; stale once we change it.
@@ -218,7 +229,7 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         spec!("layer.smartObjects.relinkToFile", "Relink to File…", SO, r##"{"layer":id?,"path":str}"##, has_smart, |s, p| {
             let path = path_param("layer.smartObjects.relinkToFile", p)?.to_string();
-            set_source(s, p, "Relink to File", false, |_, _| Ok(SmartSource::Linked { path }))
+            set_source(s, p, "Relink to File", false, true, |_, _| Ok(SmartSource::Linked { path }))
         }),
         spec!("layer.smartObjects.updateModifiedContent", "Update Modified Content", SO, r##"{"layer":id?}"##, has_linked, |s, p| {
             let id = layer_param(s, p)?;
@@ -250,7 +261,7 @@ pub fn specs() -> Vec<CommandSpec> {
             unpack::convert_to_layers
         ),
         spec!("layer.smartObjects.convertToEmbedded", "Convert to Embedded", SO, r##"{"layer":id?}"##, has_linked, |s, p| {
-            set_source(s, p, "Convert to Embedded", true, |meta, src| {
+            set_source(s, p, "Convert to Embedded", true, false, |meta, src| {
                 let (file_name, bytes) = source_bytes(meta, src).ok_or_else(|| other("the linked file can't be read"))?;
                 Ok(SmartSource::Embedded { file_name, bytes })
             })
@@ -263,7 +274,7 @@ pub fn specs() -> Vec<CommandSpec> {
             has_smart,
             |s, p| {
                 let path = path_param("layer.smartObjects.convertToLinked", p)?.to_string();
-                set_source(s, p, "Convert to Linked", false, |meta, src| {
+                set_source(s, p, "Convert to Linked", false, false, |meta, src| {
                     let (_, bytes) = source_bytes(meta, src).ok_or_else(|| other("the smart object's contents are unavailable"))?;
                     crate::file_cmds::write_file(&path, &bytes)?;
                     Ok(SmartSource::Linked { path })

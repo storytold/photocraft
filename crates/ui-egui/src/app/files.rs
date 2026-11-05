@@ -126,12 +126,10 @@ impl PhotocraftApp {
         let import = self.services.import.as_ref().ok_or("no importer configured")?;
         let mut opts = photocraft_engine::jobs::import_options(self.session.prefs());
         opts.pdf = pdf;
-        let pdf_page = pdf_untitled(name, bytes, &opts);
-        // A PSD and a magic-detected TIFF both go through the typed IO path: only it carries
-        // `PsdApprovalRequired` (and, for a PSD, the structured damaged flag), so a layered
-        // TIFF's high-memory decision can raise its prompt instead of becoming a terminal
-        // string. Every other format keeps the shell's import service.
-        let typed_open = photocraft_io::is_psd(bytes) || photocraft_codecs::detect(bytes) == Some(photocraft_codecs::Format::Tiff);
+        let pdf_page = pdf_untitled(name, bytes);
+        // Typed imports retain memory-approval errors; PDFs with editable Photoshop data
+        // use the same admission route as PSD and layered TIFF.
+        let typed_open = photocraft_io::is_psd(bytes) || pdf_page || photocraft_codecs::detect(bytes) == Some(photocraft_codecs::Format::Tiff);
         let (mut doc, warnings, damaged) = if typed_open {
             // Read PSD damage as structured information in the same decode, not by
             // retrying an error or matching the text of a compatibility warning. A TIFF never
@@ -139,7 +137,10 @@ impl PhotocraftApp {
             let (r, damaged) = match photocraft_io::import_for_open(name, bytes, &opts) {
                 Ok(result) => result,
                 Err(photocraft_io::IoError::PsdApprovalRequired { .. }) => {
-                    jobs_ui::start_open(self, name, path.map(str::to_string), jobs_ui::bytes(bytes), slot, order)?;
+                    match opts.pdf.clone() {
+                        Some(pdf) => jobs_ui::start_open_pdf(self, name, path.map(str::to_string), jobs_ui::bytes(bytes), pdf, order)?,
+                        None => jobs_ui::start_open(self, name, path.map(str::to_string), jobs_ui::bytes(bytes), slot, order)?,
+                    }
                     return Ok(Vec::new());
                 }
                 Err(error) => return Err(error.to_string()),
@@ -218,7 +219,7 @@ impl PhotocraftApp {
         // The caller records the path it read from.
         self.session.add_document(doc, None);
         if let Some(st) = self.session.active_mut() {
-            st.source_read_only = photocraft_io::affinity::is_affinity(bytes) || pdf_untitled(name, bytes, &opts);
+            st.source_read_only = photocraft_io::affinity::is_affinity(bytes) || pdf_untitled(name, bytes);
         }
         self.sync_views();
         self.ui.status = crate::i18n::fmt(tl!("Opened {name}"), &[("name", name)]);
@@ -892,7 +893,7 @@ impl PhotocraftApp {
 }
 
 /// PDF sources stay untitled, including the single-image shortcut, so Save cannot overwrite them.
-fn pdf_untitled(name: &str, bytes: &[u8], _opts: &photocraft_io::ImportOptions) -> bool {
+fn pdf_untitled(name: &str, bytes: &[u8]) -> bool {
     photocraft_io::is_pdf_input(name, bytes)
 }
 

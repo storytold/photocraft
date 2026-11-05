@@ -1825,3 +1825,21 @@ fn convert_and_run_never_overwrite_pdf_sources_even_in_place() {
         }
     }
 }
+
+#[test]
+fn recursive_batch_includes_pdf_inputs() {
+    let d = tmp("recursive-pdf");
+    let input = d.join("input");
+    let nested = input.join("nested");
+    std::fs::create_dir_all(&nested).unwrap();
+    let source = nested.join("page.pdf");
+    ok(bin().args(["run", "--new", r#"{"width":4,"height":2,"background":"white"}"#, "--out"]).arg(&source));
+    let original = std::fs::read(&source).unwrap();
+    let actions = d.join("actions.json");
+    std::fs::write(&actions, "[]").unwrap();
+    let output = d.join("output");
+    let stdout = ok(bin().args(["batch", "--recursive", "--actions"]).arg(&actions).arg("--in").arg(&input).arg("--out").arg(&output)).stdout;
+    assert!(stdout.contains("1 succeeded, 0 failed"), "{stdout}");
+    assert!(std::fs::read(output.join("page.pdf")).unwrap().starts_with(b"%PDF-"));
+    assert_eq!(std::fs::read(&source).unwrap(), original);
+}

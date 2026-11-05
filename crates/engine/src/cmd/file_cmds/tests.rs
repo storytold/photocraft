@@ -2749,6 +2749,7 @@ fn approve_memory_cancels_and_removes_pending_preflight() {
             hard_limit: 2000,
             available_ram: Some(4000),
             confirm_damage: true,
+            pdf: None,
         })
         .unwrap();
     let res = s.execute("file.approveMemory", json!({"id": id, "approve": false})).unwrap();
@@ -2777,6 +2778,7 @@ fn approve_memory_refuses_when_source_changes_before_confirmation() {
             hard_limit: 2000,
             available_ram: Some(4000),
             confirm_damage: true,
+            pdf: None,
         })
         .unwrap();
 
@@ -2804,6 +2806,7 @@ fn approve_memory_refuses_when_available_ram_decreases() {
             hard_limit: 9 * gb,
             available_ram: Some(12 * gb),
             confirm_damage: true,
+            pdf: None,
         })
         .unwrap();
 
@@ -2832,6 +2835,7 @@ fn pending_preflights_cap_fails_closed() {
                 hard_limit: 2000,
                 available_ram: Some(4000),
                 confirm_damage: true,
+                pdf: None,
             })
             .is_ok()
         );
@@ -2847,6 +2851,7 @@ fn pending_preflights_cap_fails_closed() {
             hard_limit: 2000,
             available_ram: Some(4000),
             confirm_damage: true,
+            pdf: None,
         })
         .is_err()
     );
@@ -2865,6 +2870,7 @@ fn memory_preflight(name: &str, source: crate::jobs::OpenSource) -> crate::jobs:
         hard_limit: 2000,
         available_ram: Some(4000),
         confirm_damage: true,
+        pdf: None,
     }
 }
 
@@ -3333,4 +3339,42 @@ fn pdf_password_is_not_journaled() {
     assert!(params.get("password").is_none(), "{params}");
     assert_eq!(params["path"], json!(path));
     let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn saved_pdf_projection_editors_stay_distinct_and_undo_blocks_external_edits() {
+    use photocraft_doc::PdfImportOptions;
+
+    let mut s = session(40, 24, 8);
+    let second_page = place_smart_pdf(&mut s);
+    let first_page = LayerId(s.execute("layer.duplicate", json!({"layer": second_page.0})).unwrap()["layer"].as_u64().unwrap());
+    s.edit("select first-page projection", |document, _| {
+        let LayerContent::Smart(smart) = &mut document.layer_mut(first_page).unwrap().content else { return Err(EngineError::NoLayer(first_page)) };
+        smart.pdf_import = Some(PdfImportOptions { page: 1, ..smart.pdf_import.unwrap() });
+        Ok(())
+    })
+    .unwrap();
+    let second_editor = s.execute("layer.smartObjects.editContents", json!({"layer": second_page.0})).unwrap()["document"].as_u64().unwrap() as usize;
+    s.set_active(0);
+    let first_editor = s.execute("layer.smartObjects.editContents", json!({"layer": first_page.0})).unwrap()["document"].as_u64().unwrap() as usize;
+    assert_ne!(first_editor, second_editor);
+    s.execute("image.imageRotation.90cw", json!({})).unwrap();
+    crate::smart_cmds::commit_child(&mut s, second_editor).unwrap();
+    crate::smart_cmds::commit_child(&mut s, first_editor).unwrap();
+    for (layer, expected_editor) in [(first_page, first_editor), (second_page, second_editor)] {
+        s.set_active(0);
+        assert!(pdf_smart(&s, layer).pdf_import.is_none());
+        let reopened = s.execute("layer.smartObjects.editContents", json!({"layer": layer.0})).unwrap()["document"].as_u64().unwrap() as usize;
+        assert_eq!(reopened, expected_editor, "each committed projection must return to its own editor");
+    }
+    // Undo both commits: the first editor now owns a detached family, but the parent restores
+    // the original PDF family. External edits must still see the open editor through its origin.
+    s.set_active(0);
+    assert!(s.undo());
+    assert!(s.undo());
+    assert_eq!(pdf_smart(&s, second_page).pdf_import.unwrap().page, 2);
+    let error = s.execute("layer.smartObjects.exportSvg", json!({"layer": second_page.0})).unwrap_err();
+    assert!(error.to_string().contains("already open in PhotoCraft"), "{error}");
+    let reopened = s.execute("layer.smartObjects.editContents", json!({"layer": second_page.0})).unwrap()["document"].as_u64().unwrap() as usize;
+    assert_eq!(reopened, second_editor);
 }

@@ -181,7 +181,12 @@ fn linked_sources_and_internal_editor_conflicts_reject_without_reads() {
     let parent = s.active().unwrap().doc.id;
     let contents_id = smart(&s.active().unwrap().doc, id).unwrap().contents_id;
     s.smart_links.push(crate::smart_cmds::SmartLink {
-        child: DocId::fresh(), parent, layer: id, contents_id, original_contents_id: contents_id, pdf_import: Default::default(),
+        child: DocId::fresh(),
+        parent,
+        layer: id,
+        contents_id,
+        original_contents_id: contents_id,
+        pdf_import: Default::default(),
     });
     fails_without_edit(&mut s, params.clone());
     assert!(s.execute(EXPORT, json!({"layer":id.0})).is_err());
@@ -700,4 +705,29 @@ fn native_update_authorizes_filters_on_every_shared_instance_before_editing() {
     let before = s.active().unwrap().doc.clone();
     assert!(s.execute(UPDATE_VECTOR, params).unwrap_err().to_string().contains("denied stored native filter"));
     assert_eq!(s.active().unwrap().doc, before);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn eps_source_conversions_preserve_native_bytes_and_vector_preview() {
+    let (mut s, id, original) = native_session("eps", 8);
+    let changed = [original.as_slice(), b" edited"].concat();
+    let params = native_request(&mut s, id, "eps", &changed);
+    s.execute(UPDATE_VECTOR, params).unwrap();
+    let before = smart(&s.active().unwrap().doc, id).unwrap().clone();
+    let dir = std::env::temp_dir().join(format!("photocraft-eps-conversion-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("linked.eps");
+    s.execute("layer.smartObjects.convertToLinked", json!({"layer": id.0, "path": path})).unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), changed);
+    let linked = smart(&s.active().unwrap().doc, id).unwrap();
+    assert!(matches!(linked.source, SmartSource::Linked { .. }));
+    assert_eq!(linked.vector_preview, before.vector_preview);
+    assert_eq!(linked.cache, before.cache);
+    s.execute("layer.smartObjects.convertToEmbedded", json!({"layer": id.0})).unwrap();
+    let embedded = smart(&s.active().unwrap().doc, id).unwrap();
+    assert!(matches!(&embedded.source, SmartSource::Embedded { bytes, .. } if bytes.as_slice() == changed));
+    assert_eq!(embedded.vector_preview, before.vector_preview);
+    assert_eq!(embedded.cache, before.cache);
+    std::fs::remove_dir_all(dir).unwrap();
 }

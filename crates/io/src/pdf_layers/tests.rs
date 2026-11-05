@@ -140,9 +140,9 @@ fn damaged_channels_are_terminal_but_explicit_render_still_opens_the_page() {
 
 #[test]
 fn smart_pdf_export_materializes_each_projection_without_reading_links() {
-    use std::sync::Arc;
     use photocraft_doc::{LayerContent, SmartContentsId, SmartObject, SmartSource};
     use photocraft_geom::Affine;
+    use std::sync::Arc;
 
     let original = source(SampleType::U8);
     let bytes = Arc::new(preserved(&blocks(&original), 8, None, "", ""));
@@ -203,4 +203,70 @@ fn preserved_layers_are_named_like_a_rendered_page() {
     let bytes = preserved(&blocks(&source(SampleType::U8)), 8, None, "", "");
     let imported = crate::import_with_options("/home/me/scans/layers.pdf", &bytes, &options(PdfImportMode::Layers)).unwrap();
     assert_eq!(imported.document.name, "layers", "the file stem, as page_name gives an ordinary page");
+}
+
+#[test]
+fn preserved_layers_honor_the_callers_pixel_allowance() {
+    let bytes = preserved(&blocks(&source(SampleType::U8)), 8, None, "", "");
+    let snapshot = crate::memory::MemorySnapshot { available_ram: Some(12 << 30), swap_free: None, commit_headroom: None };
+    crate::memory::with_mock_memory(snapshot, || {
+        let mut opts = options(PdfImportMode::Layers);
+        opts.psd_max_pixel_bytes = 1;
+        assert!(matches!(crate::import_with_options("limited.pdf", &bytes, &opts), Err(IoError::PsdImportBudget { limit: 1, .. })));
+        assert!(!crate::psd_gate::is_holding_admission());
+    });
+}
+
+#[test]
+#[cfg(all(not(target_arch = "wasm32"), target_pointer_width = "64"))]
+fn preserved_layers_keep_typed_approval_and_apply_approved_bounds() {
+    let mut psd = crate::document_to_psd(&source(SampleType::U8));
+    // Only the declaration is large: the original channel bytes remain tiny and invalid for it.
+    // Approval must be requested before those channels are decoded.
+    psd.layers_mut()[0].rect = photocraft_psd::Rect::from_xywh(0, 0, 30_000, 30_000);
+    let (tagged, _) = ImageSourceData::from_psd(&psd).to_bytes(ByteOrder::Big).unwrap();
+    let bytes = preserved(&tagged[SIGNATURE.len()..], 8, None, "", "");
+    let (layers, _) = ImageSourceData::from_bytes(&tagged).unwrap();
+    let file = layers.into_psd(Header::new(photocraft_psd::Version::Psd, 3, 2, 3, 8, ColorMode::Rgb), Vec::new(), ImageData::new(Compression::Raw, Vec::new()));
+    let required = crate::psd_budget::estimate(&file).unwrap().total_bytes;
+    assert!(required > 1 << 30);
+    let snapshot = crate::memory::MemorySnapshot { available_ram: Some(required * 2 - 1), swap_free: None, commit_headroom: None };
+    crate::memory::with_mock_memory(snapshot, || {
+        let mut opts = options(PdfImportMode::Layers);
+        assert!(
+            matches!(crate::import_with_options("approval.pdf", &bytes, &opts), Err(IoError::PsdApprovalRequired { required: actual, .. }) if actual == required)
+        );
+        assert!(!crate::psd_gate::is_holding_admission());
+        opts.psd_high_memory_approved = true;
+        opts.psd_approved_estimate = Some(required - 1);
+        assert!(matches!(crate::import_with_options("approval.pdf", &bytes, &opts), Err(IoError::PsdApprovalRequired { .. })));
+        opts.psd_approved_estimate = Some(required);
+        opts.psd_max_pixel_bytes = required - 1;
+        assert!(matches!(crate::import_with_options("approval.pdf", &bytes, &opts), Err(IoError::PsdImportBudget { .. })));
+        opts.psd_max_pixel_bytes = 0;
+        // Authorization reaches channel decoding, which rejects the deliberately truncated data.
+        assert!(matches!(crate::import_with_options("approval.pdf", &bytes, &opts), Err(IoError::Pdf(_))));
+        assert!(!crate::psd_gate::is_holding_admission());
+    });
+}
+
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn preserved_layers_recheck_memory_after_acquiring_admission() {
+    use std::{cell::Cell, rc::Rc};
+    let bytes = preserved(&blocks(&source(SampleType::U8)), 8, None, "", "");
+    let queries = Rc::new(Cell::new(0));
+    let provider = {
+        let queries = queries.clone();
+        Rc::new(move || {
+            let count = queries.get();
+            queries.set(count + 1);
+            crate::memory::MemorySnapshot { available_ram: Some(if count == 0 { 12 << 30 } else { 0 }), swap_free: None, commit_headroom: None }
+        })
+    };
+    crate::memory::with_mock_memory_provider(provider, || {
+        assert!(matches!(crate::import_with_options("drop.pdf", &bytes, &options(PdfImportMode::Layers)), Err(IoError::PsdImportBudget { .. })));
+        assert!(!crate::psd_gate::is_holding_admission());
+    });
+    assert!(queries.get() >= 2, "capacity must be checked before and after acquiring the gate");
 }

@@ -658,6 +658,37 @@ pub fn import_for_open_with(name: &str, bytes: &[u8], opts: &ImportOptions, ctl:
     Ok((result, damaged))
 }
 
+/// Admits a PSD-shaped layer source before any pixel or pattern decoding.
+pub(crate) fn admit_psd(
+    est: &psd_budget::PsdMemoryEstimate,
+    ctl: &photocraft_raster::Interrupt,
+    opts: &ImportOptions,
+) -> Result<psd_gate::AdmissionGuard, IoError> {
+    ctl.check().map_err(|_| IoError::Cancelled)?;
+    if psd_gate::is_holding_admission() {
+        memory::nested_import_local_bound(est.total_bytes, opts.psd_max_pixel_bytes, opts.psd_approved_estimate)?;
+        let guard = psd_gate::acquire_decode_admission(ctl)?;
+        psd_gate::consume_attempt_allowance(est.total_bytes)?;
+        return Ok(guard);
+    }
+    // Refuse before waiting, then recheck fresh capacity after acquiring the decode gate.
+    let evaluate = || {
+        memory::evaluate_psd_admission(
+            est.total_bytes,
+            est.tile_bytes,
+            opts.psd_max_pixel_bytes,
+            opts.psd_high_memory_approved,
+            opts.psd_approved_estimate,
+            memory::MemorySnapshot::current(),
+        )
+    };
+    evaluate()?;
+    let guard = psd_gate::acquire_decode_admission(ctl)?;
+    let outcome = evaluate()?;
+    psd_gate::set_active_attempt_budget(outcome.authorized_total.saturating_sub(est.total_bytes));
+    Ok(guard)
+}
+
 /// The PSD/PSB part of an import, from a parse that takes [`PsdFile::from_bytes_and_merged_recovering`]'s
 /// `want` and `recover`: of the file's bytes, or of the file itself ([`import_file_for_open_with`]).
 fn import_psd(
@@ -681,52 +712,8 @@ fn import_psd(
                 depth?;
                 let est = psd_budget::estimate(file)?;
 
-                if psd_gate::is_holding_admission() {
-                    // Nested import: it spends the enclosing attempt's remaining allowance and
-                    // never resets or re-charges the parent. Cancellation is checked before the
-                    // charge, and admission is reentrant here, so a cancelled or refused nested
-                    // import leaves the parent's allowance untouched. The caller's explicit
-                    // bounds (a lower allowance and a one-shot estimate) still apply before the
-                    // parent is charged.
-                    ctl.check().map_err(|_| IoError::Cancelled)?;
-                    memory::nested_import_local_bound(est.total_bytes, opts.psd_max_pixel_bytes, opts.psd_approved_estimate)?;
-                    let guard = psd_gate::acquire_decode_admission(ctl)?;
-                    psd_gate::consume_attempt_allowance(est.total_bytes)?;
-                    *admission_guard.borrow_mut() = Some(guard);
-                    return Ok(psd_import::merged_needed(file));
-                }
-
-                // 1. Initial admission check BEFORE waiting on or acquiring the gate.
-                // Invalid or unapproved files fail fast without blocking other decodes or acquiring gate.
-                memory::evaluate_psd_admission(
-                    est.total_bytes,
-                    est.tile_bytes,
-                    opts.psd_max_pixel_bytes,
-                    opts.psd_high_memory_approved,
-                    opts.psd_approved_estimate,
-                    memory::MemorySnapshot::current(),
-                )?;
-
-                // 2. Cancellation-aware gate acquisition BEFORE any merged or layer pixel decoding/inflation.
-                let guard = psd_gate::acquire_decode_admission(ctl)?;
-
-                // 3. Re-evaluate adaptive budget immediately after gate acquisition.
-                // If available memory dropped while waiting for gate, this returns Err,
-                // guard is dropped (releasing gate immediately), and error is returned before prompting.
-                let outcome = memory::evaluate_psd_admission(
-                    est.total_bytes,
-                    est.tile_bytes,
-                    opts.psd_max_pixel_bytes,
-                    opts.psd_high_memory_approved,
-                    opts.psd_approved_estimate,
-                    memory::MemorySnapshot::current(),
-                )?;
-
-                // Initialize enclosing attempt allowance for any nested decodes.
-                psd_gate::set_active_attempt_budget(outcome.authorized_total.saturating_sub(est.total_bytes));
-
-                // Retain guard across parse and conversion
-                *admission_guard.borrow_mut() = Some(guard);
+                // Retain admission across merged decoding, parsing and conversion.
+                *admission_guard.borrow_mut() = Some(admit_psd(&est, ctl, opts)?);
                 Ok(psd_import::merged_needed(file))
             })();
 
@@ -947,7 +934,7 @@ fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, o
     // A PDF opens through the Import PDF options (a plain `import` takes Photoshop's defaults).
     if is_pdf_input(name, bytes) {
         let defaults = pdf_import::PdfOpenOptions::default();
-        return pdf_import::import_pdf(name, bytes, opts.pdf.as_ref().unwrap_or(&defaults), ctl);
+        return pdf_import::import_pdf_with_options(name, bytes, opts.pdf.as_ref().unwrap_or(&defaults), opts, ctl);
     }
     if is_svg_input(name, bytes) {
         return svg::import_svg_with_group_depth(name, bytes, opts.max_group_depth);

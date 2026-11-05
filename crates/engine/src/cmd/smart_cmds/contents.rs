@@ -22,13 +22,14 @@ pub(super) fn set_source(
     p: &Value,
     label: &str,
     keep_psd: bool,
+    validate_contents: bool,
     make: impl FnOnce(&Metadata, &SmartSource) -> Result<SmartSource>,
 ) -> Result<Value> {
     let id = layer_param(s, p)?;
     let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
     let pdf_import = smart(doc, id)?.pdf_import;
     let new = make(&doc.metadata, &smart(doc, id)?.source)?;
-    set_shared_source(s, id, label, keep_psd, new, pdf_import)
+    set_shared_source(s, id, label, keep_psd, new, pdf_import, validate_contents)
 }
 
 fn validate_replacement(meta: &Metadata, source: &SmartSource, pdf_import: Option<super::PdfImportOptions>) -> Result<bool> {
@@ -47,8 +48,11 @@ fn set_shared_source(
     keep_psd: bool,
     new: SmartSource,
     target_pdf_import: Option<super::PdfImportOptions>,
+    validate_contents: bool,
 ) -> Result<Value> {
-    let is_pdf = validate_replacement(&s.active().ok_or(EngineError::NoDocument)?.doc.metadata, &new, target_pdf_import)?;
+    // Embedding/linking the same source preserves its projection and preview without decoding
+    // an otherwise unsupported native vector format (EPS/AI).
+    let clear_pdf_import = validate_contents && !validate_replacement(&s.active().ok_or(EngineError::NoDocument)?.doc.metadata, &new, target_pdf_import)?;
     let (parent, contents_id, changed, warnings) = s.edit(label, |doc, _| {
         let contents_id = smart(doc, id)?.contents_id;
         let changed = instances(doc, contents_id);
@@ -56,7 +60,7 @@ fn set_shared_source(
         for &instance in &changed {
             let sm = smart_mut(doc, instance)?;
             sm.source = new.clone();
-            if !is_pdf {
+            if clear_pdf_import {
                 sm.pdf_import = None;
             }
             if !keep_psd {
@@ -93,7 +97,7 @@ pub fn replace_contents_from_bytes(s: &mut Session, p: &Value, file_name: &str, 
 /// Replace Contents from a file's name and bytes: what the desktop and web file pickers hand over.
 pub fn replace_contents_bytes(s: &mut Session, id: LayerId, file_name: &str, bytes: Vec<u8>) -> Result<Value> {
     let pdf_import = smart(&s.active().ok_or(EngineError::NoDocument)?.doc, id)?.pdf_import;
-    set_shared_source(s, id, "Replace Contents", false, SmartSource::Embedded { file_name: file_name.to_string(), bytes: Arc::new(bytes) }, pdf_import)
+    set_shared_source(s, id, "Replace Contents", false, SmartSource::Embedded { file_name: file_name.to_string(), bytes: Arc::new(bytes) }, pdf_import, true)
 }
 
 /// The file name and bytes of smart object `id`'s contents.
@@ -134,16 +138,7 @@ pub(super) fn edit_contents(s: &mut Session, p: &Value) -> Result<Value> {
     let contents_id = sm.contents_id;
     let pdf_import = sm.pdf_import.unwrap_or_default();
     // A document edits one source projection. Different selected PDF pages stay independent.
-    if let Some(index) = s
-        .smart_links
-        .iter()
-        .find(|link| {
-            link.parent == parent
-                && (link.contents_id == contents_id || link.original_contents_id == contents_id)
-                && (link.pdf_import == pdf_import || sm.pdf_import.is_none())
-        })
-        .and_then(|link| s.documents().iter().position(|d| d.doc.id == link.child))
-    {
+    if let Some(index) = s.smart_links.iter().find(|link| link.matches(parent, sm)).and_then(|link| s.documents().iter().position(|d| d.doc.id == link.child)) {
         s.set_active(index);
         return Ok(json!({"document": index, "parentLayer": id.0}));
     }

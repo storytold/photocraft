@@ -215,6 +215,7 @@ fn memory_confirmation_dialog_and_cancel_lifecycle() {
             hard_limit: 8 * gb,
             available_ram: Some(10 * gb),
             confirm_damage: true,
+            pdf: None,
         })
         .unwrap();
 
@@ -355,6 +356,7 @@ fn memory_confirmation_refuses_when_source_changed_inline() {
             hard_limit: 50_000,
             available_ram: Some(100_000),
             confirm_damage: true,
+            pdf: None,
         })
         .unwrap();
 
@@ -407,6 +409,7 @@ fn memory_confirmation_refuses_when_source_changed_async() {
             hard_limit: 50_000,
             available_ram: Some(100_000),
             confirm_damage: true,
+            pdf: None,
         })
         .unwrap();
 
@@ -463,6 +466,7 @@ fn memory_decline_advances_queue_and_cleans_batch() {
             hard_limit: 2000,
             available_ram: Some(4000),
             confirm_damage: true,
+            pdf: None,
         })
         .unwrap();
 
@@ -497,6 +501,7 @@ fn batch_single_file_cancel_preserves_other_held_memory_orders() {
             hard_limit: 2000,
             available_ram: Some(4000),
             confirm_damage: true,
+            pdf: None,
         })
         .unwrap();
 
@@ -512,6 +517,7 @@ fn batch_single_file_cancel_preserves_other_held_memory_orders() {
             hard_limit: 2000,
             available_ram: Some(4000),
             confirm_damage: true,
+            pdf: None,
         })
         .unwrap();
 
@@ -550,6 +556,7 @@ fn profile_cancel_cancels_whole_queue_including_memory_prompts() {
             hard_limit: 8 * gb,
             available_ram: Some(10 * gb),
             confirm_damage: true,
+            pdf: None,
         })
         .unwrap();
 
@@ -616,6 +623,7 @@ fn mixed_prompts_follow_arrival_order_fifo() {
             hard_limit: 8 * gb,
             available_ram: Some(10 * gb),
             confirm_damage: true,
+            pdf: None,
         })
         .unwrap();
     crate::open_prompt::arrive_memory(&mut app, preflight_id, "second_mem.psd".into(), None, None, None, 7 * gb, Some(10 * gb), false, false);
@@ -653,6 +661,7 @@ fn store_preflight(app: &mut PhotocraftApp, name: &str, required: u64, available
             hard_limit: required.saturating_mul(2),
             available_ram: available,
             confirm_damage: true,
+            pdf: None,
         })
         .unwrap()
 }

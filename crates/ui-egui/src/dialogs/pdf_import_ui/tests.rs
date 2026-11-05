@@ -150,15 +150,24 @@ fn the_name_field_and_the_page_options_reach_the_documents() {
 }
 
 #[test]
-fn layer_choice_reaches_pdf_open_options() {
-    let mut f = Map::new();
-    defaults(&mut f, &app());
-    for (value, expected) in
-        [("auto", photocraft_doc::PdfImportMode::Auto), ("layers", photocraft_doc::PdfImportMode::Layers), ("render", photocraft_doc::PdfImportMode::Render)]
-    {
-        f.insert("layers".into(), json!(value));
-        assert_eq!(options(&f, 1, false, None).layer_mode, expected);
-    }
+fn control_open_keeps_pdf_layer_selection_and_source_protection() {
+    use crate::control::{ControlRequest, Outcome, handle};
+
+    let mut app = app();
+    app.services.automation_read = Some(Box::new(|_| Ok(("multi.pdf".into(), three_pages()))));
+    let ctx = egui::Context::default();
+    let (request, _) = ControlRequest::new("app.open", json!({"path": "multi.pdf", "layers": "layers", "approveHighMemory": true}));
+    let Outcome::Done(reply) = handle(&mut app, &ctx, &request) else { panic!("expected immediate open") };
+    assert_eq!(reply["ok"], false, "{reply}");
+    assert!(app.session.documents().is_empty(), "Layers must not silently render a PDF without editing data");
+
+    let (request, _) = ControlRequest::new("app.open", json!({"path": "multi.pdf", "layers": "render", "page": 2, "crop": "mediaBox", "resolution": 72}));
+    let Outcome::Done(reply) = handle(&mut app, &ctx, &request) else { panic!("expected immediate open") };
+    assert_eq!(reply["ok"], true, "{reply}");
+    let opened = app.session.active().expect("selected page");
+    assert_eq!((opened.doc.size.width, opened.doc.size.height), (595, 420));
+    assert_eq!(opened.doc.layers[0].surface().unwrap().pixel(100, 100), [0.0, 1.0, 0.0, 1.0]);
+    assert!(opened.source_read_only && opened.path.is_none(), "a scoped PDF open must never make its source writable");
 }
 
 /// The fields a closed dialog had, rebuilt from defaults plus the test's edits (the dialog is

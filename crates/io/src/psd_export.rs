@@ -825,11 +825,8 @@ impl Ex<'_> {
     /// they are; a linked file is read and embedded).
     fn smart_source(&mut self, sm: &photocraft_doc::SmartObject, template: Option<&crate::smart_map::Placed>) -> Result<Source, String> {
         use photocraft_doc::SmartSource;
-        let preview = if sm.pdf_import.is_none() {
-            self.smart.vector_preview(sm).and_then(|preview| Some((preview.document.clone(), preview.frame?)))
-        } else {
-            None
-        };
+        let preview =
+            if sm.pdf_import.is_none() { self.smart.vector_preview(sm).and_then(|preview| Some((preview.document.clone(), preview.frame?))) } else { None };
         let mut source = match &sm.source {
             // A PDF projection is materialized as a PSB, including an imported PDF held in lnk2.
             SmartSource::Linked { path } if sm.pdf_import.is_some() && self.smart.known.contains(path) => {

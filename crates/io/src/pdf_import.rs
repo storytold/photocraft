@@ -393,14 +393,24 @@ pub fn thumbnail(bytes: &[u8], page: usize, max_side: u32, password: Option<&str
 
 /// Opens one page of a PDF as a document (see the module docs). `name` is the file name.
 pub fn import_pdf(name: &str, bytes: &[u8], opts: &PdfOpenOptions, ctl: &Interrupt) -> Result<ImportResult, IoError> {
-    let mut r = import_pdf_inner(name, bytes, opts, ctl)?;
+    import_pdf_with_options(name, bytes, opts, &crate::ImportOptions::default(), ctl)
+}
+
+pub(crate) fn import_pdf_with_options(
+    name: &str,
+    bytes: &[u8],
+    opts: &PdfOpenOptions,
+    import_options: &crate::ImportOptions,
+    ctl: &Interrupt,
+) -> Result<ImportResult, IoError> {
+    let mut r = import_pdf_inner(name, bytes, opts, import_options, ctl)?;
     if opts.suppress_warnings {
         r.warnings.clear();
     }
     Ok(r)
 }
 
-fn import_pdf_inner(name: &str, bytes: &[u8], opts: &PdfOpenOptions, ctl: &Interrupt) -> Result<ImportResult, IoError> {
+fn import_pdf_inner(name: &str, bytes: &[u8], opts: &PdfOpenOptions, import_options: &crate::ImportOptions, ctl: &Interrupt) -> Result<ImportResult, IoError> {
     if let Some(index) = opts.image {
         return import_image(name, bytes, index, opts.name.as_deref(), opts.password.as_deref(), ctl);
     }
@@ -411,7 +421,7 @@ fn import_pdf_inner(name: &str, bytes: &[u8], opts: &PdfOpenOptions, ctl: &Inter
     let page = page_of(&pdf, opts.page)?;
     if opts.layer_mode != photocraft_doc::PdfImportMode::Render {
         // Named like a rendered page: the chosen name or the file's stem, `-N.pdf` on a multi-page file.
-        match crate::pdf_layers::import_page(&page_name(name, opts.name.as_deref(), opts.page, count), page, ctl) {
+        match crate::pdf_layers::import_page(&page_name(name, opts.name.as_deref(), opts.page, count), page, import_options, ctl) {
             Ok(result) => return Ok(result),
             Err(crate::pdf_layers::LayeredPdfError::Absent) if opts.layer_mode == photocraft_doc::PdfImportMode::Auto => {}
             Err(error) => return Err(error.into_io()),

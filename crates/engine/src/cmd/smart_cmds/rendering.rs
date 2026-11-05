@@ -10,7 +10,13 @@ use std::sync::Mutex;
 
 /// Layer › Smart Objects › Stack Mode: the source's layers (or, when it holds a single group, the
 /// group's layers) combined per pixel with `mode`. Cached like [`source_image`], keyed by mode.
-pub fn stack_image(file_name: &str, bytes: &[u8], fmt: PixelFormat, mode: photocraft_doc::StackMode, pdf_import: Option<super::PdfImportOptions>) -> Result<SourceImage> {
+pub fn stack_image(
+    file_name: &str,
+    bytes: &[u8],
+    fmt: PixelFormat,
+    mode: photocraft_doc::StackMode,
+    pdf_import: Option<super::PdfImportOptions>,
+) -> Result<SourceImage> {
     use photocraft_algo::stack::Stat;
     let mut key = cache_key(bytes, fmt, pdf_import);
     key.0 = *blake3::hash(&[&key.0[..], b"stack:", mode.id().as_bytes()].concat()).as_bytes();

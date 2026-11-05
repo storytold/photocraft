@@ -38,6 +38,8 @@ pub(crate) enum LayeredPdfError {
     /// a PDF or Photoshop-private stream exceeds an import limit.
     Pdf(String),
     Cancelled,
+    /// A typed admission, source-read or allocation failure from the PSD conversion.
+    Import(IoError),
     /// Photoshop preservation metadata was present but is invalid or
     /// unsupported.
     Corrupt(String),
@@ -57,6 +59,7 @@ impl LayeredPdfError {
             Self::Absent => IoError::Pdf("this PDF has no Photoshop editable layer data; choose PDF render mode".into()),
             Self::Pdf(message) => IoError::Pdf(message),
             Self::Cancelled => IoError::Cancelled,
+            Self::Import(error) => error,
             Self::Corrupt(message) => IoError::Pdf(format!(
                 "the Photoshop editable layer data in this PDF is corrupt or unsupported ({message}); choose PDF render mode to open its page appearance"
             )),
@@ -66,9 +69,9 @@ impl LayeredPdfError {
 
 /// Probes the selected page for Photoshop-preserved layers. Callers may fall
 /// back only when this reports [`LayeredPdfError::Absent`].
-pub(crate) fn import_page(name: &str, page: &Page<'_>, ctl: &Interrupt) -> Result<ImportResult, LayeredPdfError> {
+pub(crate) fn import_page(name: &str, page: &Page<'_>, options: &crate::ImportOptions, ctl: &Interrupt) -> Result<ImportResult, LayeredPdfError> {
     ctl.check().map_err(|_| LayeredPdfError::Cancelled)?;
-    layered_page(page, ctl).map(|(mut document, warnings)| {
+    layered_page(page, options, ctl).map(|(mut document, warnings)| {
         document.name = name.to_owned();
         ImportResult { document, warnings, source_read_only: true, preview_only: false }
     })
@@ -83,10 +86,10 @@ fn layered_result(name: &str, bytes: &[u8], page: usize, password: Option<&str>,
         .pages()
         .get(page.checked_sub(1).ok_or_else(|| LayeredPdfError::pdf("PDF page numbers start at 1"))?)
         .ok_or_else(|| LayeredPdfError::pdf(format!("PDF has {} page(s); page {page} was requested", pdf.pages().len())))?;
-    import_page(name, page, ctl)
+    import_page(name, page, &crate::ImportOptions::default(), ctl)
 }
 
-fn layered_page(page: &Page<'_>, ctl: &Interrupt) -> Result<(photocraft_doc::Document, Vec<String>), LayeredPdfError> {
+fn layered_page(page: &Page<'_>, options: &crate::ImportOptions, ctl: &Interrupt) -> Result<(photocraft_doc::Document, Vec<String>), LayeredPdfError> {
     let private = photoshop_private_hayro(page)?;
     ctl.check().map_err(|_| LayeredPdfError::Cancelled)?;
     let mut image_source = decode_hayro_stream(private_stream_hayro(&private, b"StandardImageFileData")?, "StandardImageFileData")?;
@@ -112,13 +115,15 @@ fn layered_page(page: &Page<'_>, ctl: &Interrupt) -> Result<(photocraft_doc::Doc
     {
         resources.push(photocraft_psd::ImageResource::new(photocraft_psd::resources::ids::ICC_PROFILE, profile));
     }
-    let file = layers.into_psd(header, resources, ImageData { compression: Compression::Raw, data: Vec::new() });
+    let file = layers.into_psd(header, resources, ImageData::new(Compression::Raw, Vec::new()));
     check_group_depth(&file).map_err(|error| LayeredPdfError::corrupt(error.to_string()))?;
     ctl.check().map_err(|_| LayeredPdfError::Cancelled)?;
+    let estimate = crate::psd_budget::estimate(&file).map_err(LayeredPdfError::Import)?;
+    let _admission = crate::admit_psd(&estimate, ctl, options).map_err(LayeredPdfError::Import)?;
     let txt2 = file.global_blocks.iter().find(|block| &block.key == b"Txt2").and_then(|block| photocraft_text::psd::parse_txt2(&block.data));
-    let (mut document, psd_warnings, damaged, fatal_error) = psd_to_document_owned(file, ctl, None, false).ok_or(LayeredPdfError::Cancelled)?;
+    let (mut document, psd_warnings, damaged, fatal_error) = psd_to_document_owned(file, ctl, None, true).ok_or(LayeredPdfError::Cancelled)?;
     if let Some(error) = fatal_error {
-        return Err(LayeredPdfError::pdf(error.to_string()));
+        return Err(LayeredPdfError::Import(error));
     }
     if damaged {
         return Err(LayeredPdfError::corrupt("one or more editable layer channels could not be decoded"));

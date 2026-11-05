@@ -1068,6 +1068,15 @@ pub(crate) fn psd_to_document_owned(
     decoded: Option<photocraft_psd::Result<Vec<u8>>>,
     preflighted: bool,
 ) -> Option<(Document, Vec<String>, bool, Option<crate::IoError>)> {
+    // Pattern blocks must still be in the file when the admission estimate inspects them.
+    let _guard = match conversion_admission(&file, ctl, preflighted) {
+        Ok(guard) => guard,
+        Err(error) => {
+            let message = error.to_string();
+            let doc = Document::new("Untitled", Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
+            return Some((doc, vec![message], true, Some(error)));
+        }
+    };
     let global = file
         .global_blocks
         .iter_mut()
@@ -1077,7 +1086,7 @@ pub(crate) fn psd_to_document_owned(
             (b.signature, b.key, Arc::new(data))
         })
         .collect();
-    psd_to_document_global(&file, ctl, decoded, global, preflighted)
+    psd_to_document_global(&file, ctl, decoded, global, true)
 }
 
 /// Whether `file` stores spot planes the way earlier PhotoCraft versions (releases 0.1.0 to
@@ -1267,28 +1276,17 @@ pub(crate) fn psd_to_document_decoded_integrity(
     psd_to_document_global(file, ctl, decoded, global, false).map(|(doc, warnings, damaged, _)| (doc, warnings, damaged))
 }
 
-/// Admission for a legacy conversion.
-///
-/// A nested conversion spends the enclosing attempt's remaining allowance and never resets it.
-/// A standalone conversion refuses an ineligible file before waiting for the decode gate and
-/// rechecks the fresh measurement once admitted, so a refused file never waits behind an active
-/// decode and a memory drop during the wait is seen before any pixel is decoded.
-fn legacy_admission(est: &crate::psd_budget::PsdMemoryEstimate, ctl: &photocraft_raster::Interrupt) -> Result<crate::psd_gate::AdmissionGuard, crate::IoError> {
-    if crate::psd_gate::is_holding_admission() {
-        // Cancellation is checked before the charge and admission is reentrant here, so a
-        // cancelled or refused nested conversion never spends its parent's allowance.
-        ctl.check().map_err(|_| crate::IoError::Cancelled)?;
-        let guard = crate::psd_gate::acquire_decode_admission(ctl)?;
-        crate::psd_gate::consume_attempt_allowance(est.total_bytes)?;
-        return Ok(guard);
+/// Legacy entrypoints use the ordinary admission policy with default caller options.
+fn conversion_admission(
+    file: &PsdFile,
+    ctl: &photocraft_raster::Interrupt,
+    preflighted: bool,
+) -> Result<Option<crate::psd_gate::AdmissionGuard>, crate::IoError> {
+    if preflighted && crate::psd_gate::is_holding_admission() {
+        return Ok(None);
     }
-    let snapshot = || crate::memory::MemorySnapshot::current();
-    // Legacy standalone is unconfirmed: it cannot silently auto allow an estimate above S.
-    crate::memory::evaluate_psd_admission(est.total_bytes, est.tile_bytes, 0, false, None, snapshot())?;
-    let guard = crate::psd_gate::acquire_decode_admission(ctl)?;
-    let outcome = crate::memory::evaluate_psd_admission(est.total_bytes, est.tile_bytes, 0, false, None, snapshot())?;
-    crate::psd_gate::set_active_attempt_budget(outcome.authorized_total.saturating_sub(est.total_bytes));
-    Ok(guard)
+    let estimate = crate::psd_budget::estimate(file)?;
+    crate::admit_psd(&estimate, ctl, &crate::ImportOptions::default()).map(Some)
 }
 
 fn psd_to_document_global(
@@ -1301,25 +1299,13 @@ fn psd_to_document_global(
     // Legacy conversion APIs return warnings rather than Result. Reject before metadata or
     // pixels are decoded, and retain the fatal error for the ordinary import path. An import
     // that checked the file against its own limit first (`preflighted`) does not estimate twice.
-    let _guard = if !preflighted || !crate::psd_gate::is_holding_admission() {
-        let est = match crate::psd_budget::estimate(file) {
-            Ok(e) => e,
-            Err(error) => {
-                let message = error.to_string();
-                let doc = Document::new("Untitled", Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
-                return Some((doc, vec![message], true, Some(error)));
-            }
-        };
-        match legacy_admission(&est, ctl) {
-            Ok(guard) => Some(guard),
-            Err(error) => {
-                let message = error.to_string();
-                let doc = Document::new("Untitled", Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
-                return Some((doc, vec![message], true, Some(error)));
-            }
+    let _guard = match conversion_admission(file, ctl, preflighted) {
+        Ok(guard) => guard,
+        Err(error) => {
+            let message = error.to_string();
+            let doc = Document::new("Untitled", Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
+            return Some((doc, vec![message], true, Some(error)));
         }
-    } else {
-        None
     };
     let (mode, layered, multichannel, depth) = import_format(file);
     let h = &file.header;

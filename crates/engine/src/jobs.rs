@@ -910,6 +910,8 @@ pub struct PendingPsdPreflight {
     pub hard_limit: u64,
     pub available_ram: Option<u64>,
     pub confirm_damage: bool,
+    /// Import PDF answers retained only until this approval is answered or cancelled.
+    pub pdf: Option<photocraft_io::pdf_import::PdfOpenOptions>,
 }
 
 impl Session {
@@ -1040,12 +1042,14 @@ impl Session {
         confirm_damage: bool,
         approved_estimate: Option<u64>,
         expected_fingerprint: Option<SourceFingerprint>,
+        pdf: Option<photocraft_io::pdf_import::PdfOpenOptions>,
     ) -> Result<Started> {
-        self.start_open_approved_with_background(name, source, confirm_damage, approved_estimate, expected_fingerprint, true)
+        self.start_open_approved_with_background(name, source, confirm_damage, approved_estimate, expected_fingerprint, true, pdf)
     }
 
     /// [`Self::start_open_approved`] with an explicit choice between a background worker and
     /// inline work.
+    #[allow(clippy::too_many_arguments)]
     pub fn start_open_approved_with_background(
         &mut self,
         name: &str,
@@ -1054,8 +1058,9 @@ impl Session {
         approved_estimate: Option<u64>,
         expected_fingerprint: Option<SourceFingerprint>,
         background: bool,
+        pdf: Option<photocraft_io::pdf_import::PdfOpenOptions>,
     ) -> Result<Started> {
-        self.start_open_inner(name, source, confirm_damage, true, approved_estimate, expected_fingerprint, background, None)
+        self.start_open_inner(name, source, confirm_damage, true, approved_estimate, expected_fingerprint, background, pdf)
     }
 
     /// Open a file in the background: read (for a path) and decode on a worker, with progress
@@ -1112,7 +1117,7 @@ impl Session {
         let mut opts = import_options(self.prefs());
         opts.psd_high_memory_approved = approve_high_memory;
         opts.psd_approved_estimate = approved_estimate;
-        opts.pdf = pdf;
+        opts.pdf = pdf.clone();
         let test_memory_scope = photocraft_io::memory::TestMemoryScope::capture();
         enum WorkResult {
             Decoded(Box<(photocraft_io::ImportResult, bool)>),
@@ -1216,6 +1221,7 @@ impl Session {
                         hard_limit,
                         available_ram,
                         confirm_damage,
+                        pdf,
                     })?;
                     Ok(json!({
                         "pendingPreflight": id,

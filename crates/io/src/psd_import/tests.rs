@@ -627,3 +627,36 @@ fn legacy_conversion_refuses_before_waiting_for_the_decode_gate() {
     drop(_guard);
     handle.join().expect("worker thread");
 }
+
+#[test]
+fn owned_conversion_counts_patterns_before_moving_global_blocks() {
+    use photocraft_psd::patterns::{PsdPattern, write_pattern_block};
+    let pattern = PsdPattern {
+        mode: 3,
+        depth: 8,
+        width: 9,
+        height: 3,
+        name: "Budget pattern".into(),
+        id: "budget".into(),
+        palette: None,
+        channels: vec![vec![0; 27]; 3],
+        alpha: None,
+    };
+    let pattern_bytes = write_pattern_block(&[pattern]).unwrap();
+    let snapshot = crate::memory::MemorySnapshot { available_ram: Some(12 << 30), swap_free: None, commit_headroom: None };
+    crate::memory::with_mock_memory(snapshot, || {
+        for key in [*b"Patt", *b"Pat2", *b"Pat3"] {
+            let mut file = testgen::small(Version::Psd, Compression::Raw);
+            let baseline = crate::psd_budget::estimate(&file).unwrap().total_bytes;
+            file.global_blocks.push(photocraft_psd::TaggedBlock::new(key, pattern_bytes.clone()));
+            let required = crate::psd_budget::estimate(&file).unwrap().total_bytes;
+            assert!(required > baseline);
+            let ctl = photocraft_raster::Interrupt::NONE;
+            let _guard = crate::psd_gate::acquire_decode_admission(&ctl).unwrap();
+            crate::psd_gate::set_active_attempt_budget(required - 1);
+            let (document, _, _, error) = psd_to_document_owned(file, &ctl, None, false).unwrap();
+            assert!(document.layers.is_empty(), "the pattern-bearing file must be refused before decoding");
+            assert!(matches!(error, Some(crate::IoError::PsdImportBudget { required: actual, .. }) if actual == required), "{error:?}");
+        }
+    });
+}

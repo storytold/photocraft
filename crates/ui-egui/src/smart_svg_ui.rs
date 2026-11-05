@@ -94,7 +94,7 @@ pub(crate) fn intercept(app: &mut PhotocraftApp, id: &str, params: &Value) -> Op
     }
     let doc = st.doc.id;
     // Contents already open in PhotoCraft's own editor: the engine switches to that document.
-    if app.session.smart_links.iter().any(|link| link.parent == doc && link.contents_id == smart.contents_id) {
+    if app.session.smart_links.iter().any(|link| link.matches(doc, smart)) {
         return None;
     }
     let result: Result<Value, String> = (|| {
@@ -413,13 +413,20 @@ pub(crate) fn poll(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let safe = safe_to_apply(app) && ctx.memory(|memory| memory.top_modal_layer().is_none()) && !ctx.input(|input| input.pointer.any_down());
     let mut editing = std::mem::take(&mut app.smart_svg.editing);
     for mut edit in editing.drain(..) {
-        let exists = app
+        let (exists, internal_edit) = app
             .session
             .documents()
             .iter()
             .find(|st| st.doc.id == edit.target.doc)
             .and_then(|st| st.doc.layer(edit.target.layer))
-            .is_some_and(|layer| matches!(&layer.content, LayerContent::Smart(smart) if json!(smart.contents_id.0) == edit.target.contents_id));
+            .and_then(|layer| match &layer.content {
+                LayerContent::Smart(smart) => Some((
+                    json!(smart.contents_id.0) == edit.target.contents_id,
+                    app.session.smart_links.iter().any(|link| link.matches(edit.target.doc, smart)),
+                )),
+                _ => None,
+            })
+            .unwrap_or((false, false));
         if !exists {
             continue;
         }
@@ -437,7 +444,6 @@ pub(crate) fn poll(app: &mut PhotocraftApp, ctx: &egui::Context) {
         if edit.saved.is_none() && edit.session.finished() {
             continue;
         }
-        let internal_edit = app.session.smart_links.iter().any(|link| link.parent == edit.target.doc && json!(link.contents_id.0) == edit.target.contents_id);
         if safe
             && !internal_edit
             && same_target(app, &edit.target)
