@@ -3419,6 +3419,66 @@ fn image_size_resolution_only_does_not_gain_keep_print_size() {
     assert_eq!(image_size_round_trip(&params), None);
 }
 
+/// Explicit sides override percent in native commands; strict ATN export must keep that edit.
+#[test]
+fn image_size_explicit_sides_keep_precedence_over_percent() {
+    for depth in [8, 16, 32] {
+        for (params, expected) in [
+            (json!({"width": 20, "percent": 50, "resample": "nearest"}), (20, 12)),
+            (json!({"height": 18, "percent": 50, "resample": "nearest"}), (16, 18)),
+            (json!({"width": 20, "height": 18, "percent": 50, "resample": "nearest"}), (20, 18)),
+            (json!({"percent": 50, "resample": "nearest"}), (16, 12)),
+            (json!({"width": 20, "resample": "nearest"}), (20, 15)),
+            (json!({"height": 18, "resample": "nearest"}), (24, 18)),
+            (json!({"width": 20, "percent": 50, "resample": "none", "resolution": 144}), (32, 24)),
+        ] {
+            let mut native = Session::new();
+            native.execute("file.new", json!({"width": 32, "height": 24, "depth": depth})).unwrap();
+            native.execute("image.imageSize", params.clone()).unwrap();
+            let size = native.active().unwrap().doc.size;
+            assert_eq!((size.width, size.height), expected, "native {params} at {depth} bits");
+
+            let mut recorded = Session::new();
+            recorded.actions.list.push(Action::new("Resize", vec![("image.imageSize".into(), params.clone())]));
+            let before = recorded.actions.list.clone();
+            let saved = recorded.execute("actions.save", json!({"action": "Resize"})).unwrap();
+            assert_eq!(saved["skipped"], json!([]));
+            assert_eq!(saved["steps"], 1);
+            assert_eq!(recorded.actions.list, before);
+
+            let mut replay = Session::new();
+            let loaded = replay.execute("actions.load", json!({"data": saved["data"]})).unwrap();
+            assert_eq!(loaded["unsupported"], json!([]));
+            replay.execute("file.new", json!({"width": 32, "height": 24, "depth": depth})).unwrap();
+            let played = replay.execute("actions.play", json!({"action": "Resize"})).unwrap();
+            assert_eq!(played["ran"], 1, "{played}");
+            assert!(played.get("failed").is_none(), "{played}");
+            assert_eq!(replay.active().unwrap().doc.size, size, "ATN {params} at {depth} bits");
+        }
+    }
+}
+
+#[test]
+fn image_size_dimensions_have_unique_atn_keys() {
+    for (params, width, height, constrained) in [
+        (json!({"width": 20, "percent": 50}), D::UnitFloat { unit: PX, value: 20.0 }, pct(50.0), Some(false)),
+        (json!({"height": 18, "percent": 50}), pct(50.0), D::UnitFloat { unit: PX, value: 18.0 }, Some(false)),
+        (json!({"width": 20, "height": 18, "percent": 50}), D::UnitFloat { unit: PX, value: 20.0 }, D::UnitFloat { unit: PX, value: 18.0 }, None),
+        (json!({"percent": 50}), pct(50.0), pct(50.0), Some(true)),
+    ] {
+        let action = Action::new("Resize", vec![("image.imageSize".into(), params.clone())]);
+        let (bytes, skipped) = export("Size", &[&action], &[], false).unwrap();
+        assert!(skipped.is_empty());
+        let file = atn::parse(&bytes).unwrap();
+        let d = file.actions[0].items[0].descriptor.as_ref().unwrap();
+        for (key, value) in [("Wdth", width), ("Hght", height)] {
+            assert_eq!(d.items.iter().filter(|(id, _)| id.is(key)).count(), 1, "{key}: {params}");
+            assert_eq!(d.get(key), Some(&value), "{key}: {params}");
+        }
+        assert_eq!(get_bool(d, "CnsP"), constrained, "{params}");
+    }
+}
+
 #[test]
 fn image_size_intentional_controls_still_round_trip() {
     for params in [
