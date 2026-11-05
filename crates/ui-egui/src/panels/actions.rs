@@ -519,11 +519,7 @@ fn pause_step_dialog(app: &mut PhotocraftApp, frame: &Frame, next: usize, id: &s
         // Use the same populated Image Size dialog as the native menu, after the
         // concrete command's gate and enablement check, rather than a bare confirm.
         app.session.precheck(id, p).map_err(|e| e.to_string())?;
-        if crate::sizing::is_sizing(id) {
-            crate::sizing::open(app, id).ok_or("no document")?
-        } else {
-            crate::dialogs::open_command_dialog(app, id, &label)
-        }
+        if crate::sizing::is_sizing(id) { crate::sizing::open(app, id).ok_or("no document")? } else { crate::dialogs::open_command_dialog(app, id, &label) }
     } else {
         crate::dialogs::open_command_dialog(app, id, &label)
     };
