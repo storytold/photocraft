@@ -670,24 +670,19 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             crate::widgets::checkbox(ui, &mut o.cr_anti_alias, tl!("Anti-alias"));
         }
         Tool::HistoryBrush => {
-            let label = app.session.active().and_then(|st| {
-                match photocraft_engine::history_source_cmds::source(st)? {
-                    photocraft_engine::history_source_cmds::HistorySource::Snapshot(id) => {
-                        let s = st.snapshots.iter().find(|s| s.id == id)?;
-                        Some(crate::i18n::fmt(tl!("Source: {name}"), &[("name", &s.name)]))
-                    }
-                    photocraft_engine::history_source_cmds::HistorySource::State(idx) => {
-                        let entries = st.history.entries();
-                        let name = if idx < entries.len() {
-                            entries.get(idx).cloned()
-                        } else {
-                            st.history.redo_labels().nth(idx - entries.len()).map(str::to_string)
-                        }?;
-                        if idx == 0 && name == "Open" {
-                            Some(tl!("Paints from the document's opening state").to_string())
-                        } else {
-                            Some(crate::i18n::fmt(tl!("Source: {name}"), &[("name", &name)]))
-                        }
+            let label = app.session.active().and_then(|st| match photocraft_engine::history_source_cmds::source(st)? {
+                photocraft_engine::history_source_cmds::HistorySource::Snapshot(id) => {
+                    let s = st.snapshots.iter().find(|s| s.id == id)?;
+                    Some(crate::i18n::fmt(tl!("Source: {name}"), &[("name", &s.name)]))
+                }
+                photocraft_engine::history_source_cmds::HistorySource::State(idx) => {
+                    let entries = st.history.entries();
+                    let name =
+                        if idx < entries.len() { entries.get(idx).cloned() } else { st.history.redo_labels().nth(idx - entries.len()).map(str::to_string) }?;
+                    if idx == 0 && name == "Open" {
+                        Some(tl!("Paints from the document's opening state").to_string())
+                    } else {
+                        Some(crate::i18n::fmt(tl!("Source: {name}"), &[("name", &name)]))
                     }
                 }
             });
