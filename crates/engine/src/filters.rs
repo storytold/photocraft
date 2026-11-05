@@ -397,6 +397,8 @@ pub(crate) fn run_filter(s: &mut Session, id: &str, p: &Value) -> Result<Value> 
             let content = surf.content_bounds();
             let area = algo::output_area(&fp, content, bounds, sel_bounds);
             let frame = distort_frame(&id, bounds, content, sel_bounds.is_some_and(|b| !b.is_empty()));
+            // `filter` admits `working_bytes` for this same frame, so a Displace frame past the
+            // canvas is priced before it is read.
             *surf = filter(surf, &fp, area, frame, selection.as_ref(), algo::separable::edge_extent(doc_bounds, content))?;
             if let Some(before) = &before {
                 keep_alpha(before, surf, &|| ctx.cancelled())?;

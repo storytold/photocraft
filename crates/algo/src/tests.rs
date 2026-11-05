@@ -713,3 +713,16 @@ fn blur_halos_follow_the_clamped_radius_and_never_overflow() {
     let gaussian = FilterParams::GaussianBlur { radius: f32::INFINITY };
     assert_eq!(gaussian.halo(), Halo::Radius(i32::MAX));
 }
+
+/// Displace reads its whole frame (#10444): without a selection the engine frames the canvas
+/// and the layer's pixels past it, and filter admission prices that frame, not only the canvas
+/// (tanish2k09 review on #10462).
+#[test]
+fn displace_admission_counts_a_frame_past_the_canvas() {
+    let params = FilterParams::Displace { horizontal: 10.0, vertical: 10.0, stretch: true, undefined: UndefinedAreas::Repeat, map: None, map_8bit: true };
+    let canvas = Rect::new(0, 0, 128, 128);
+    let frame = Rect::new(0, 0, 256, 256);
+    let floats = 4 * 4u64;
+    let (on_canvas, past) = (working_bytes(&params, canvas, canvas, 4), working_bytes(&params, canvas, frame, 4));
+    assert_eq!(past - on_canvas, (frame.size().area() - canvas.size().area()) * floats, "the frame's pixels past the canvas, as floats");
+}
