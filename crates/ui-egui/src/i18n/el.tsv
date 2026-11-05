@@ -144,6 +144,7 @@
 	Right	Δεξιά
 	Open Recent	Πρόσφατα αρχεία
 	Clear Recent Files	Εκκαθάριση πρόσφατων αρχείων
+	Clear Recent File List	Εκκαθάριση πρόσφατων αρχείων
 	Remove from Recent	Αφαίρεση από τα πρόσφατα
 	Remove {name} from Recent	Αφαίρεση του {name} από τα πρόσφατα
 	Close	Κλείσιμο
@@ -2009,7 +2010,9 @@
 	Unite Shapes	Ένωση σχημάτων
 	Subtract Front Shape	Αφαίρεση μπροστινού σχήματος
 	Intersect Shape Areas	Τομή περιοχών σχημάτων
+	Unite Shapes at Overlap	Τομή περιοχών σχημάτων
 	Exclude Overlapping Shapes	Εξαίρεση επικαλυπτόμενων σχημάτων
+	Subtract Shapes at Overlap	Εξαίρεση επικαλυπτόμενων σχημάτων
 	Merge Shape Components	Συγχώνευση συστατικών σχήματος
 	Path operations	Λειτουργίες διαδρομών
 	Top Edges	Επάνω ακμές
@@ -2665,7 +2668,7 @@
 	Install Plug-in	Εγκατάσταση προσθέτου
 	Integrations	Ενσωματώσεις
 	Interlaced	Πεπλεγμένο
-	Internet Standard RGB	Τυπικό RGB διαδικτύου
+	Internet Standard RGB (sRGB)	Τυπικό RGB διαδικτύου (sRGB)
 	Interpolation:	Παρεμβολή:
 	Interpret Footage	Ερμηνεία πλάνων
 	Intersect with selection  ({key})	Τομή με την επιλογή  ({key})
@@ -2718,7 +2721,7 @@
 	Leave as is (don't color manage)	Διατήρηση ως έχει (χωρίς διαχείριση χρώματος)
 	Left align text	Αριστερή στοίχιση κειμένου
 	Legacy	Παλαιού τύπου
-	Legacy Macintosh RGB	Παλαιό Macintosh RGB
+	Legacy Macintosh RGB (Gamma 1.8)	Παλαιό Macintosh RGB (Gamma 1.8)
 	Legacy compositing	Παλαιός τρόπος σύνθεσης
 	Legal	Μέγεθος Legal
 	Length:	Μήκος:
@@ -2855,7 +2858,6 @@
 	New Video Group	Νέα ομάδα βίντεο
 	New Video Layer	Νέο επίπεδο βίντεο
 	New Video Layer from File	Νέο επίπεδο βίντεο από αρχείο
-	New Window for Document	Νέο παράθυρο για το έγγραφο
 	New Workspace	Νέος χώρος εργασίας
 	New Workspace…	Νέος χώρος εργασίας…
 	New document…	Νέο έγγραφο…
@@ -3371,7 +3373,7 @@
 	Word Spacing	Διάστημα λέξεων
 	Work Path	Διαδρομή εργασίας
 	Working Black Plate	Κανάλι μαύρου εργασίας
-	Working CMY Plate	Κανάλια CMY εργασίας
+	Working CMY Plates	Κανάλια CMY εργασίας
 	Working CMYK	Χώρος εργασίας CMYK
 	Working Cyan Plate	Κανάλι κυανού εργασίας
 	Working Gray Plate	Κανάλι γκρι εργασίας

@@ -195,6 +195,7 @@
 	Right	右
 	Open Recent	最近使ったファイルを開く
 	Clear Recent Files	最近使ったファイルを消去
+	Clear Recent File List	最近使ったファイルを消去
 	Remove from Recent	最近使ったファイルから削除
 	Remove {name} from Recent	{name} を最近使ったファイルから削除
 	Close	閉じる
@@ -572,7 +573,9 @@
 	Unite Shapes	シェイプを結合
 	Subtract Front Shape	前面シェイプで型抜き
 	Intersect Shape Areas	シェイプの重なりを抽出
+	Unite Shapes at Overlap	シェイプの重なりを抽出
 	Exclude Overlapping Shapes	シェイプの重なりを除外
+	Subtract Shapes at Overlap	シェイプの重なりを除外
 	Merge Shape Components	シェイプの構成要素を結合
 	Path operations	パスの操作
 	Align	整列
@@ -764,9 +767,9 @@
 	Working Magenta Plate	作業用マゼンタ版
 	Working Yellow Plate	作業用イエロー版
 	Working Black Plate	作業用ブラック版
-	Working CMY Plate	作業用 CMY 版
-	Legacy Macintosh RGB	旧 Macintosh RGB
-	Internet Standard RGB	インターネット標準 RGB
+	Working CMY Plates	作業用 CMY 版
+	Legacy Macintosh RGB (Gamma 1.8)	旧 Macintosh RGB (Gamma 1.8)
+	Internet Standard RGB (sRGB)	インターネット標準 RGB (sRGB)
 	Monitor RGB	モニター RGB
 	Color Blindness — Protanopia-type	色覚特性 — 1 型(P 型)
 	Color Blindness — Deuteranopia-type	色覚特性 — 2 型(D 型)
@@ -858,7 +861,7 @@
 	Consolidate All to Tabs	すべてをタブに統合
 	Float in Window	ウィンドウ内に浮動
 	Float All in Windows	すべてをウィンドウ内に浮動
-	New Window for Document	ドキュメントの新規ウィンドウ
+	New Window	ドキュメントの新規ウィンドウ
 	Workspace	ワークスペース
 	Essentials	基本
 	Graphic and Web	グラフィックと Web

@@ -174,6 +174,7 @@
 	Right	右
 	Open Recent	打开最近文件
 	Clear Recent Files	清除最近文件
+	Clear Recent File List	清除最近文件
 	Remove from Recent	从最近文件中移除
 	Remove {name} from Recent	从最近文件中移除 {name}
 	Close	关闭
@@ -555,7 +556,9 @@
 	Unite Shapes	合并形状
 	Subtract Front Shape	减去前面形状
 	Intersect Shape Areas	形状区域相交
+	Unite Shapes at Overlap	形状区域相交
 	Exclude Overlapping Shapes	排除重叠形状
+	Subtract Shapes at Overlap	排除重叠形状
 	Merge Shape Components	合并形状组件
 	Path operations	路径操作
 	Align	对齐
@@ -748,9 +751,9 @@
 	Working Magenta Plate	工作洋红版
 	Working Yellow Plate	工作黄色版
 	Working Black Plate	工作黑色版
-	Working CMY Plate	工作 CMY 版
-	Legacy Macintosh RGB	旧版 Macintosh RGB
-	Internet Standard RGB	互联网标准 RGB
+	Working CMY Plates	工作 CMY 版
+	Legacy Macintosh RGB (Gamma 1.8)	旧版 Macintosh RGB (Gamma 1.8)
+	Internet Standard RGB (sRGB)	互联网标准 RGB (sRGB)
 	Monitor RGB	显示器 RGB
 	Color Blindness — Protanopia-type	色盲 — 红色盲型
 	Color Blindness — Deuteranopia-type	色盲 — 绿色盲型
@@ -842,7 +845,7 @@
 	Consolidate All to Tabs	将所有窗口合并为选项卡
 	Float in Window	在窗口中浮动
 	Float All in Windows	使所有文档在窗口中浮动
-	New Window for Document	为文档新建窗口
+	New Window	为文档新建窗口
 	Workspace	工作区
 	Essentials	基本功能
 	Graphic and Web	图形与 Web

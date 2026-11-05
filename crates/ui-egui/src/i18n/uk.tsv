@@ -255,6 +255,7 @@
 	Right	Правий
 	Open Recent	Нещодавні файли
 	Clear Recent Files	Очистити список нещодавніх файлів
+	Clear Recent File List	Очистити список нещодавніх файлів
 	Remove from Recent	Вилучити з нещодавніх
 	Remove {name} from Recent	Вилучити {name} з нещодавніх
 	Close	Закрити
@@ -646,7 +647,7 @@
 	Match Location	Узгодити розташування
 	Match Rotation	Узгодити поворот
 	Match All	Узгодити все
-	New Window for Document	Нове вікно для документа
+	New Window	Нове вікно для документа
 	Workspace	Робочий простір
 	Extensions	Розширення
 	Panels	Панелі
@@ -1038,8 +1039,8 @@
 	ACES	ACES
 	Industry Standard	Галузевий стандарт
 	Web	Веб
-	Internet Standard RGB	Стандартний RGB для інтернету
-	Legacy Macintosh RGB	Застарілий Macintosh RGB
+	Internet Standard RGB (sRGB)	Стандартний RGB для інтернету (sRGB)
+	Legacy Macintosh RGB (Gamma 1.8)	Застарілий Macintosh RGB (Gamma 1.8)
 	Monitor RGB	RGB монітора
 	Windows LCD	Windows LCD
 	Coated CMYK	CMYK для крейдованого паперу
@@ -2007,6 +2008,7 @@
 	Enhanced Controls…	Розширені елементи керування…
 	Entropy	Ентропія
 	Exclude Overlapping Shapes	Виключити перекриття фігур
+	Subtract Shapes at Overlap	Виключити перекриття фігур
 	Exit	Вийти
 	Expand…	Розширити…
 	Extra Large	Дуже великий
@@ -2032,6 +2034,7 @@
 	Indexed Color…	Індексований колір…
 	Integrations…	Інтеграції…
 	Intersect Shape Areas	Перетин областей фігур
+	Unite Shapes at Overlap	Перетин областей фігур
 	Kurtosis	Ексцес
 	Large	Великий
 	Layer Edges	Краї шару
@@ -2117,7 +2120,7 @@
 	Vertical Centers	Вертикальні центри
 	Video Frames to Layers…	Відеокадри в шари…
 	WIA Support…	Підтримка WIA…
-	Working CMY Plate	Робоча форма CMY
+	Working CMY Plates	Робоча форма CMY
 	Absolute	Абсолютний
 	Action	Дія
 	Adaptive	Адаптивний

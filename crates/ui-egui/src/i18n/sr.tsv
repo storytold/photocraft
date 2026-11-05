@@ -196,6 +196,7 @@
 	Right	Desno
 	Open Recent	Otvori nedavno
 	Clear Recent Files	Obriši spisak nedavnih datoteka
+	Clear Recent File List	Obriši spisak nedavnih datoteka
 	Remove from Recent	Ukloni iz nedavnih
 	Remove {name} from Recent	Ukloni {name} iz nedavnih
 	Close	Zatvori
@@ -746,9 +747,9 @@
 	Working Magenta Plate	Radna magenta ploča
 	Working Yellow Plate	Radna žuta ploča
 	Working Black Plate	Radna crna ploča
-	Working CMY Plate	Radna CMY ploča
-	Legacy Macintosh RGB	Stari Macintosh RGB
-	Internet Standard RGB	Internet standard RGB
+	Working CMY Plates	Radna CMY ploča
+	Legacy Macintosh RGB (Gamma 1.8)	Stari Macintosh RGB (Gamma 1.8)
+	Internet Standard RGB (sRGB)	Internet standard RGB (sRGB)
 	Monitor RGB	RGB monitora
 	Color Blindness — Protanopia-type	Daltonizam — tip protanopije
 	Color Blindness — Deuteranopia-type	Daltonizam — tip deuteranopije
@@ -840,7 +841,6 @@
 	Consolidate All to Tabs	Objedini sve u kartice
 	Float in Window	Odvoji u prozor
 	Float All in Windows	Odvoji sve u prozore
-	New Window for Document	Novi prozor za dokument
 	Workspace	Radni prostor
 	Essentials	Osnovno
 	Graphic and Web	Grafika i veb

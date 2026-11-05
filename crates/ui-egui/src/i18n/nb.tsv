@@ -86,6 +86,7 @@
 	Right	Høyre
 	Open Recent	Åpne nylig brukte
 	Clear Recent Files	Tøm nylig brukte filer
+	Clear Recent File List	Tøm nylig brukte filer
 	Remove from Recent	Fjern fra nylig brukte
 	Remove {name} from Recent	Fjern {name} fra nylig brukte
 	Close	Lukk
@@ -508,7 +509,6 @@
 	Match Location	Samkjør plassering
 	Match Rotation	Samkjør rotasjon
 	Match All	Samkjør alle
-	New Window for Document	Nytt vindu for dokument
 	Workspace	Arbeidsområde
 	Extensions	Utvidelser
 	Panels	Paneler
@@ -920,8 +920,8 @@
 	ACES	ACES
 	Industry Standard	Bransjestandard
 	Web	Web
-	Internet Standard RGB	Internettstandard RGB
-	Legacy Macintosh RGB	Eldre Macintosh RGB
+	Internet Standard RGB (sRGB)	Internettstandard RGB (sRGB)
+	Legacy Macintosh RGB (Gamma 1.8)	Eldre Macintosh RGB (Gamma 1.8)
 	Monitor RGB	Skjerm-RGB
 	Windows LCD	Windows LCD
 	Coated CMYK	Bestrøket CMYK
@@ -2052,7 +2052,7 @@
 	Vertical Centers	Loddrette sentre
 	Video Frames to Layers…	Videorammer til lag…
 	WIA Support…	WIA-støtte…
-	Working CMY Plate	Arbeidsplate for CMY
+	Working CMY Plates	Arbeidsplate for CMY
 
 # tl! literals (third pass)
 	Absolute	Absolutt

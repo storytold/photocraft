@@ -128,6 +128,7 @@
 	Right	Rechts
 	Open Recent	Recent geopend
 	Clear Recent Files	Recente bestanden wissen
+	Clear Recent File List	Recente bestanden wissen
 	Remove from Recent	Verwijderen uit recente bestanden
 	Remove {name} from Recent	{name} verwijderen uit recente bestanden
 	Close	Sluiten
@@ -504,7 +505,9 @@
 	Unite Shapes	Vormen verenigen
 	Subtract Front Shape	Voorste vorm aftrekken
 	Intersect Shape Areas	Overlappende vormgebieden
+	Unite Shapes at Overlap	Overlappende vormgebieden
 	Exclude Overlapping Shapes	Overlappende vormen uitsluiten
+	Subtract Shapes at Overlap	Overlappende vormen uitsluiten
 	Merge Shape Components	Vormcomponenten samenvoegen
 	Path operations	Padbewerkingen
 	Align	Uitlijnen
@@ -695,9 +698,9 @@
 	Working Magenta Plate	Werkplaat magenta
 	Working Yellow Plate	Werkplaat geel
 	Working Black Plate	Werkplaat zwart
-	Working CMY Plate	Werkplaat CMY
-	Legacy Macintosh RGB	Verouderde Macintosh RGB
-	Internet Standard RGB	Internetstandaard RGB
+	Working CMY Plates	Werkplaat CMY
+	Legacy Macintosh RGB (Gamma 1.8)	Verouderde Macintosh RGB (Gamma 1.8)
+	Internet Standard RGB (sRGB)	Internetstandaard RGB (sRGB)
 	Monitor RGB	Monitor-RGB
 	Color Blindness — Protanopia-type	Kleurenblindheid — type protanopie
 	Color Blindness — Deuteranopia-type	Kleurenblindheid — type deuteranopie
@@ -779,7 +782,6 @@
 	Consolidate All to Tabs	Alles samenvoegen in tabbladen
 	Float in Window	Zwevend in venster
 	Float All in Windows	Alles zwevend in vensters
-	New Window for Document	Nieuw venster voor document
 	Workspace	Werkruimte
 	Essentials	Basis
 	Graphic and Web	Grafisch en web

@@ -550,6 +550,7 @@
 	Clear Canvas Guides	Vászon-segédvonalak törlése
 	Clear Guides	Segédvonalak törlése
 	Clear Recent Files	Legutóbbi fájlok listájának törlése
+	Clear Recent File List	Legutóbbi fájlok listájának törlése
 	Clear Selected Artboard Guides	Kijelölt rajztábla segédvonalainak törlése
 	Clear Slices	Szeletek törlése
 	Clipping Mask	Vágómaszk
@@ -681,7 +682,7 @@
 	Info	Információ
 	Install Plug-in	Bővítmény telepítése
 	Install Plug-in…	Bővítmény telepítése…
-	Internet Standard RGB	Internetes szabványos RGB
+	Internet Standard RGB (sRGB)	Internetes szabványos RGB (sRGB)
 	Inverse	Megfordítás
 	Iris Blur…	Íriszelmosás…
 	Join the ArtCraft Discord	Csatlakozás az ArtCraft Discordhoz
@@ -698,7 +699,7 @@
 	Layer From Background…	Réteg a háttérből…
 	Layers	Rétegek
 	Layers to Files	Rétegek fájlokba
-	Legacy Macintosh RGB	Régi Macintosh RGB
+	Legacy Macintosh RGB (Gamma 1.8)	Régi Macintosh RGB (Gamma 1.8)
 	Lens Blur…	Objektívelmosás…
 	Lens Flare…	Lencsecsillanás…
 	Light gray	Világosszürke
@@ -746,7 +747,6 @@
 	New Type Layer	Új szövegréteg
 	New Video Layer	Új videoréteg
 	New Window	Új ablak
-	New Window for Document	Új ablak a dokumentumhoz
 	New Workspace…	Új munkaterület…
 	Next Appearance Mode	Következő megjelenési mód
 	Next Document	Következő dokumentum
@@ -919,7 +919,7 @@
 	Windows LCD	Windows LCD
 	Wind…	Szél…
 	Working Black Plate	Fekete munkalemez
-	Working CMY Plate	CMY munkalemezek
+	Working CMY Plates	CMY munkalemezek
 	Working CMYK	Munka-CMYK
 	Working Cyan Plate	Cián munkalemez
 	Working Magenta Plate	Magenta munkalemez
