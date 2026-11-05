@@ -9,6 +9,7 @@ const MARGIN: i8 = 16;
 const HEIGHT: f32 = 32.0;
 const CLOSE_SIZE: f32 = 24.0;
 
+/// Build modal chrome with shared insets and shadow, leaving its rim to `paint_border`.
 pub(super) fn frame(ctx: &egui::Context) -> egui::Frame {
     let mut frame = egui::Frame::popup(&ctx.global_style()).corner_radius(ctx.global_style().visuals.window_corner_radius).inner_margin(egui::Margin {
         left: MARGIN,
@@ -22,6 +23,7 @@ pub(super) fn frame(ctx: &egui::Context) -> egui::Frame {
     frame
 }
 
+/// Paint the rounded modal rim with a highlight that fades near the top corners.
 pub(super) fn paint_border(ctx: &egui::Context, response: &egui::Response) {
     let rect = response.rect;
     if !rect.is_finite() || rect.width() <= 1.0 || rect.height() <= 1.0 {
@@ -68,6 +70,7 @@ fn icon(d: &Dialog) -> &'static str {
     }
 }
 
+/// Center a content icon, using the Layers panel's italic mark for layer effects.
 fn paint_icon(ui: &Ui, rect: Rect, name: &str, tint: egui::Color32) {
     if name == "fx" {
         // Match the existing italic effects mark in the Layers footer.
@@ -80,6 +83,8 @@ fn paint_icon(ui: &Ui, rect: Rect, name: &str, tint: egui::Color32) {
     }
 }
 
+/// Draw an elided title with its full text on hover and a separate close target.
+/// Return the header's drag delta and whether the close button was clicked.
 pub(super) fn show(ui: &mut Ui, id: egui::Id, dialog: &Dialog, title: &str) -> (Vec2, bool) {
     let t = Tokens::get(ui.ctx());
     let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), HEIGHT), Sense::hover());
@@ -104,15 +109,17 @@ pub(super) fn show(ui: &mut Ui, id: egui::Id, dialog: &Dialog, title: &str) -> (
     let elided = galley.elided;
     let title_rect = Rect::from_min_size(pos2(title_left, row.center().y - galley.size().y / 2.0), galley.size());
     ui.painter().galley(title_rect.min, galley, t.text);
+
+    // Register the drag target first so the label above it can receive tooltip hover.
+    // Leave the close target out, including when a press becomes a drag.
+    let drag_rect = Rect::from_min_max(band.min, pos2(close.map_or(band.right(), |r| r.left()), band.bottom()));
+    let drag = ui.interact(drag_rect, id.with("title"), Sense::drag()).drag_delta();
     let label = ui.interact(title_rect, id.with("title-label"), Sense::hover());
     label.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, ui.is_enabled(), title));
     if elided {
         label.on_hover_text(title);
     }
 
-    // Leave the close target out of the drag band, including when a press becomes a drag.
-    let drag_rect = Rect::from_min_max(band.min, pos2(close.map_or(band.right(), |r| r.left()), band.bottom()));
-    let drag = ui.interact(drag_rect, id.with("title"), Sense::drag()).drag_delta();
     let clicked = close.is_some_and(|rect| {
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(Layout::left_to_right(Align::Center)));
         crate::icons::button_with_icon_size(&mut child, "x", CLOSE_SIZE, 12.0, false, tl!("Close")).clicked()
@@ -128,6 +135,45 @@ mod tests {
     use super::*;
     use egui_kittest::{Harness, kittest::Queryable};
 
+    /// An elided title reveals its full text on hover and remains a working drag target.
+    #[test]
+    fn elided_title_shows_its_tooltip_and_still_drags() {
+        let title = "Sélecteur de couleurs (Couleur de premier plan) — a deliberately long translated title";
+        let dialog = Dialog { id: 1, kind: DialogKind::LayerStyle, fields: Default::default() };
+        let mut h = Harness::builder().with_size(vec2(800.0, 300.0)).with_step_dt(0.1).build_ui_state(
+            move |ui, state: &mut (bool, Vec2, bool)| {
+                if state.0 {
+                    frame(ui.ctx()).show(ui, |ui| {
+                        ui.set_width(260.0);
+                        let (drag, close) = show(ui, egui::Id::unique("tooltip-header-test"), &dialog, title);
+                        state.1 += drag;
+                        state.2 |= close;
+                    });
+                }
+            },
+            (false, Vec2::ZERO, false),
+        );
+        crate::PhotocraftApp::setup_context(&h.ctx, theme::ThemeKind::Pro);
+        h.state_mut().0 = true;
+        h.run_steps(4);
+        let at = h.get_by_label(title).rect().center();
+        assert_eq!(h.query_all_by_label(title).count(), 1, "only the header label before hover");
+        h.hover_at(at);
+        h.run_steps(12);
+        assert_eq!(h.query_all_by_label(title).count(), 2, "the full title also appears in a tooltip");
+
+        h.drag_at(at);
+        h.run_steps(2);
+        let delta = vec2(36.0, 18.0);
+        h.hover_at(at + delta);
+        h.run_steps(1);
+        h.drop_at(at + delta);
+        h.run_steps(3);
+        assert!((h.state().1 - delta).length() < 1.0, "the label passes dragging to the header: {:?}", h.state().1);
+        assert!(!h.state().2, "dragging the title never closes the dialog");
+    }
+
+    /// Long translated titles stay inside the header without crowding its close target.
     #[test]
     fn long_titles_leave_an_even_inset_and_a_separate_close_target_in_every_theme() {
         let title = "Sélecteur de couleurs (Couleur de premier plan) — a deliberately long translated title";
