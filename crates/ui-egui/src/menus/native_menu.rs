@@ -653,31 +653,50 @@ pub struct NativeMenu {
     /// AppKit toggled a check item itself: re-sync.
     dirty: bool,
     logged: bool,
+    /// Keys whose key equivalent came with a made-up release, while their real key-up may still
+    /// arrive (see [`NativeMenu::raw_input`]).
+    released: Vec<Key>,
 }
 
 impl NativeMenu {
     pub fn new(backend: Box<dyn Backend>) -> NativeMenu {
-        NativeMenu { backend, state: None, clicks: Vec::new(), dirty: true, logged: false }
+        NativeMenu { backend, state: None, clicks: Vec::new(), dirty: true, logged: false, released: Vec::new() }
     }
 
     /// Before egui sees this frame's input: key equivalents become the key presses they were,
     /// and clicks wait for [`NativeMenu::run`].
     ///
-    /// AppKit takes only the key-down: winit still delivers the key-up (it forwards key-ups while
-    /// ⌘ is held). So a key equivalent adds just its press, ahead of its key-up when that is
-    /// already queued. A second, made-up release made ⌘V paste three times (#1638): a ⌘V release
-    /// without a press is how an image paste reaches us (see [`crate::shortcuts::clipboard_keys`]).
+    /// AppKit takes only the key-down. winit still forwards the key-up, but egui-winit passes on
+    /// only the key-ups of key-downs it delivered itself, so egui never sees this one. A key
+    /// equivalent is therefore a whole tap: its press and a release. With the press alone egui
+    /// went on counting the key as held: after ⌘Z the next Z was taken for a key repeat, and a
+    /// spring-loaded Zoom tool on Z never gave the previous tool back (#11555). A real key-up
+    /// still counts once: one already queued takes the made-up release's place, and one arriving
+    /// in a later frame is dropped. A second release made ⌘V paste three times (#1638): a ⌘V
+    /// release without a press is how an image paste reaches us (see
+    /// [`crate::shortcuts::clipboard_keys`]).
     pub fn raw_input(&mut self, raw: &mut egui::RawInput) {
+        // A press of the key starts a new press, whose key-up is its own.
+        raw.events.retain(|e| match e {
+            egui::Event::Key { key, pressed, .. } if self.released.contains(key) => {
+                self.released.retain(|k| k != key);
+                *pressed
+            }
+            _ => true,
+        });
         for e in self.backend.drain() {
             match e {
                 Event::Key(chord) => {
-                    if let Some(press @ egui::Event::Key { key: pressed_key, .. }) = chord.key_event(true) {
-                        let at = raw
-                            .events
-                            .iter()
-                            .position(|e| matches!(e, egui::Event::Key { key, pressed: false, .. } if *key == pressed_key))
-                            .unwrap_or(raw.events.len());
-                        raw.events.insert(at, press);
+                    if let (Some(press @ egui::Event::Key { key: pressed_key, .. }), Some(release)) = (chord.key_event(true), chord.key_event(false)) {
+                        match raw.events.iter().position(|e| matches!(e, egui::Event::Key { key, pressed: false, .. } if *key == pressed_key)) {
+                            Some(at) => raw.events.insert(at, press),
+                            None => {
+                                raw.events.extend([press, release]);
+                                if !self.released.contains(&pressed_key) {
+                                    self.released.push(pressed_key);
+                                }
+                            }
+                        }
                     }
                 }
                 Event::Click(id) => self.clicks.push(id),

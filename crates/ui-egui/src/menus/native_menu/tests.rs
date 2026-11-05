@@ -236,7 +236,7 @@ fn key_equivalents_run_through_the_normal_shortcut_path() {
     if let Some(m) = app.services.native_menu.as_mut() {
         m.raw_input(&mut raw);
     }
-    assert_eq!(raw.events.len(), 1, "the press: winit delivers the release");
+    assert_eq!(raw.events.len(), 2, "the press and its release: the key-up never reaches egui");
     frame(&ctx, raw, |ui| {
         run(&mut app, ui.ctx());
         crate::shortcuts::handle(&mut app, ui.ctx());
@@ -283,6 +283,42 @@ fn a_paste_key_equivalent_pastes_once() {
         step(&mut app, vec![egui::Event::ModifiersChanged(Modifiers::NONE)]);
         assert_eq!(layers(&app), before + 1, "one ⌘V pastes one layer (key-up in the same frame: {same_frame})");
     }
+}
+
+/// #11555: egui-winit pairs each key-up with a key-down it delivered, so the key-up of a key
+/// equivalent, whose key-down AppKit took, no longer reaches egui. The menu's press alone left Z
+/// held in egui after ⌘Z: the next Z counted as a key repeat and picked no tool, and a Z that
+/// started the spring-loaded Zoom tool never gave the brush back. After ⌘Z through the menu no key
+/// is held, and a tap of Z picks the Zoom tool.
+#[test]
+fn an_undo_key_equivalent_leaves_no_key_held() {
+    let mut app = app(true);
+    app.run("edit.fill", json!({"color": "#808080"})).unwrap();
+    app.ui.tool = crate::state::Tool::MixerBrush;
+    let ctx = egui::Context::default();
+    let undo = Chord::parse("Cmd+Z").unwrap();
+    app.services.native_menu = Some(NativeMenu::new(Box::new(Fake { synced: Default::default(), events: vec![Event::Key(undo)] })));
+    let key = |pressed| egui::Event::Key { key: Key::Z, physical_key: Some(Key::Z), pressed, repeat: false, modifiers: Modifiers::NONE };
+    let mut time = 0.0;
+    let mut step = |app: &mut PhotocraftApp, events: Vec<egui::Event>| {
+        time += 0.1;
+        let mut raw = egui::RawInput { events, time: Some(time), ..Default::default() };
+        eframe::App::raw_input_hook(app, &ctx, &mut raw);
+        frame(&ctx, raw, |ui| {
+            run(app, ui.ctx());
+            crate::shortcuts::handle(app, ui.ctx());
+        });
+    };
+    // ⌘ down, Z taken by the menu, ⌘ up: the Z key-up never arrives.
+    step(&mut app, vec![egui::Event::ModifiersChanged(Modifiers::COMMAND)]);
+    step(&mut app, vec![egui::Event::ModifiersChanged(Modifiers::NONE)]);
+    assert!(!app.session.active().unwrap().history.can_undo(), "⌘Z undid the fill");
+    assert!(!ctx.input(|i| i.key_down(Key::Z)), "Z is not held once ⌘Z is done");
+    assert_eq!((app.ui.tool, &app.ui.spring), (crate::state::Tool::MixerBrush, &None), "⌘Z picks no tool");
+    step(&mut app, vec![key(true)]);
+    step(&mut app, vec![key(false)]);
+    step(&mut app, vec![]);
+    assert_eq!((app.ui.tool, &app.ui.spring), (crate::state::Tool::Zoom, &None), "the next tap of Z picks the Zoom tool");
 }
 
 #[test]
