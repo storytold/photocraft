@@ -889,7 +889,9 @@ fn every_mapped_command_exports_and_imports_back() {
             continue;
         }
         let e = event_for(&item.event).unwrap_or_else(|| panic!("{id} exported as an unknown event {}", item.event.id()));
-        match (e.from)(item.descriptor.as_ref().unwrap()) {
+        assert_eq!(item.descriptor.is_none(), *id == super::steps_stack::NONE, "{id}: unexpected descriptor presence");
+        let descriptor = item.descriptor.unwrap_or_default();
+        match (e.from)(&descriptor) {
             Mapped::Steps(steps) => {
                 assert_eq!(steps.len(), 1, "{id}: {steps:?}");
                 let navigation = match *id {
