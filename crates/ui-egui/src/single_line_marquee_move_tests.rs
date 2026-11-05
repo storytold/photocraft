@@ -326,3 +326,42 @@ fn click_on_a_floating_piece_drops_it_and_selects_the_line() {
     assert_eq!(bounds(&app), Rect::new(250, 0, 251, 600));
     assert_eq!(step(&app).as_deref(), Some("Single Column Marquee"));
 }
+
+/// With snapping on, a drag pressed just outside a selected row is a drag from outside: a new row
+/// at the release. The snapped press landed on the row's edge, which counted as inside, so the drag
+/// moved the selection instead.
+#[test]
+fn a_press_that_snaps_onto_the_selection_is_still_outside_it() {
+    let mut app = app();
+    two_rows(&mut app);
+    app.ui.extras.snap = true;
+    drag(&mut app, Tool::SingleRowMarquee, [300.0, 148.5], [300.0, 100.5], Modifiers::NONE);
+    assert_eq!(bounds(&app), Rect::new(0, 100, 800, 101), "a new row at the release, not both rows moved up");
+    assert_eq!(step(&app).as_deref(), Some("Single Row Marquee"));
+
+    two_columns(&mut app);
+    drag(&mut app, Tool::SingleColumnMarquee, [198.5, 300.0], [100.5, 300.0], Modifiers::NONE);
+    assert_eq!(bounds(&app), Rect::new(100, 0, 101, 600));
+    assert_eq!(step(&app).as_deref(), Some("Single Column Marquee"));
+}
+
+/// A Move-tool drag of a floating piece that snapping pulls back to its start, released exactly at
+/// the press, is not a click: the piece keeps floating. The Move tool's click shortcut dropped it.
+#[test]
+fn a_snapped_back_move_tool_drag_keeps_the_piece_floating() {
+    let floats = |app: &PhotocraftApp| app.session.active().is_some_and(|st| photocraft_engine::float_cmds::floating(st).is_some());
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 800, "height": 600, "background": "transparent"})).unwrap();
+    app.run("view.newGuide", json!({"orientation": "horizontal", "position": 150})).unwrap();
+    app.run("select.rect", json!({"x": 100, "y": 150, "width": 200, "height": 100})).unwrap();
+    app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    app.run("select.float", json!({"dx": 0, "dy": 0})).unwrap();
+    app.ui.extras.snap = true;
+    app.ui.tool = Tool::Move;
+    let p = [200.0, 200.5];
+    tool_event(&mut app, ToolEvent::Down { x: p[0], y: p[1], pressure: 1.0 }, Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Move { x: p[0], y: p[1] + 2.0, pressure: 1.0 }, Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Up { x: p[0], y: p[1] }, Modifiers::NONE);
+    assert!(floats(&app), "the piece still floats");
+    assert!(app.move_preview.is_none(), "no preview left from the drag");
+}

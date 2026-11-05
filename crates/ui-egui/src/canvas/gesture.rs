@@ -177,7 +177,10 @@ fn finish_selection_release(app: &mut PhotocraftApp, d: &mut Drag, end: [f64; 3]
     let unmoved = (end[0] - d.start[0]).round() == 0.0 && (end[1] - d.start[1]).round() == 0.0;
     let click = click.unwrap_or(unmoved);
     if unmoved && !click {
-        // A drag that snapping pulled back where it started leaves the selection as it was.
+        // A drag that snapping pulled back where it started leaves the selection as it was. Its
+        // preview of a floating piece goes too: nothing changed for it to go stale with, and a
+        // Move-tool drag's release (`move_ui::finish`) is not reached. It is rebuilt as needed.
+        app.move_preview = None;
         return None;
     }
     if !click || !matches!(d.tool, Tool::SingleRowMarquee | Tool::SingleColumnMarquee) {

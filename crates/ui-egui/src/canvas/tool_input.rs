@@ -392,8 +392,10 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
                 return;
             }
             // Marquee / lasso inside the selection: drag the outline, or ⌘-drag to cut the selected
-            // pixels into a floating piece (`select.float`) and drag that.
-            if let Some(cut) = selection_drag_kind(app, tool, [x, y], mods) {
+            // pixels into a floating piece (`select.float`) and drag that. Inside is judged where the
+            // press was before snapping, as `snap_ui::begin` judges it: snapped, a press just outside
+            // can land on the selection's edge (#11392).
+            if let Some(cut) = selection_drag_kind(app, tool, unsnapped(raw), mods) {
                 // ⌘⌥ on a floating piece leaves it where it is and drags a copy of it.
                 if cut
                     && mods.alt
@@ -575,8 +577,10 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
             let [x, y] = crate::move_mods::selection_drag_to(&mut d, [x, y], mods.shift && app.active_tool() != Tool::Move);
             let (click, [x, y]) = selection_release(&d, raw, [x, y]);
             // A Move-tool click (released where it was pressed) selects, it never moves: snapping
-            // the release point would otherwise nudge the layer onto a nearby edge.
-            if d.tool == Tool::Move && d.points.len() < 2 && matches!(raw, ToolEvent::Up { x, y } if [x, y] == d.start) {
+            // the release point would otherwise nudge the layer onto a nearby edge. A drag that
+            // snapping held at the press point (no points recorded) and that came back there is
+            // not a click: it keeps a floating piece floating (#11392).
+            if d.tool == Tool::Move && !d.left_press && d.points.len() < 2 && matches!(raw, ToolEvent::Up { x, y } if [x, y] == d.start) {
                 app.move_preview = None;
                 crate::move_mods::finish(app);
                 if d.sel_move.is_some() {
@@ -591,6 +595,13 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
             finish_release(app, d, click);
             crate::move_mods::finish(app);
         }
+    }
+}
+
+/// Where pointer event `raw` (before snapping) was.
+fn unsnapped(raw: ToolEvent) -> [f64; 2] {
+    match raw {
+        ToolEvent::Down { x, y, .. } | ToolEvent::Move { x, y, .. } | ToolEvent::Up { x, y } => [x, y],
     }
 }
 
