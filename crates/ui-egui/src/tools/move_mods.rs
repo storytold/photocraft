@@ -1,9 +1,10 @@
 //! Move-tool modifier keys, as in Photoshop (#90):
 //!
-//! - ⇧ while dragging locks the move to the dominant axis (horizontal or vertical). The axis is
-//!   re-evaluated as the drag goes on, so moving far enough the other way switches it; a small
-//!   hysteresis keeps it from flickering near the diagonal. Free Transform uses the same rule with
-//!   eight directions ([`constrain`]).
+//! - ⇧ while dragging locks the move to the nearest of the eight directions (the axes and the 45°
+//!   diagonals), as the reference application does when a layer is dragged (#11382): +100,+30
+//!   moves +100,0 and +80,+80 moves +80,+80. The direction is re-evaluated as the drag goes on,
+//!   so moving far enough another way switches it; a small hysteresis keeps it from flickering
+//!   near the switch-over angle. Free Transform uses the same rule ([`constrain`]).
 //! - ⌥ held when the drag starts duplicates the selected layer(s) (groups included) once the
 //!   pointer actually moves, and the drag then moves the copies. Duplicate and move land as one
 //!   history step ("Duplicate + Move"). ⇧⌥ combines both.
@@ -23,8 +24,10 @@ use crate::PhotocraftApp;
 use crate::canvas::ToolEvent;
 use crate::state::Tool;
 
-/// Directions ⇧ locks a Move-tool drag to: horizontal and vertical (Photoshop's Move tool).
-pub const MOVE_DIRECTIONS: u32 = 4;
+/// Directions ⇧ locks a Move-tool drag of a layer to: the axes and the 45° diagonals. The
+/// reference application moves +80,+80 for a ⇧-drag of +80,+80, so an axis-only lock (four
+/// directions) does not match it (#11382).
+pub const MOVE_DIRECTIONS: u32 = 8;
 /// Directions ⇧ locks a Free Transform body drag, or a Move-tool drag of selected pixels, to: the
 /// axes and the 45° diagonals.
 pub const TRANSFORM_DIRECTIONS: u32 = 8;
