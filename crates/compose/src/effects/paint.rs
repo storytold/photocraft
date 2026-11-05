@@ -37,6 +37,76 @@ pub fn glow_lut(g: &Glow) -> Option<Vec<f32>> {
     ranged_lut(&g.contour, g.range)
 }
 
+/// The coverage transfer a glow paints through (CPU `glow_map` and the GPU's `MFinish` stage
+/// alike): [`glow_lut`], and for an outer glow with a custom contour, capped by the glow's
+/// anti-aliased reach (#11361).
+///
+/// The contour remaps the falloff only within the glow's reach. Run through `glow_lut` alone,
+/// a contour that starts above 0 (Photoshop's flat "always 100 %" one, `(0,1)–(1,1)`) also
+/// lights every pixel the glow never reaches (coverage 0), out to the edge of the effect's
+/// rectangle. Here coverage `v` is also turned back into the pixel's distance inside the reach
+/// (`glow_reach_px`, 0 at and beyond it), and the transfer is
+/// `min(contour(u), max(clamp(reach_px, 0, 1), u))`, with `u = min(v / range, 1)` what a Linear
+/// contour paints. So:
+///
+/// - coverage 0 always paints 0, for any contour (nothing beyond the reach);
+/// - a high contour is solid up to the last pixel of the reach, which steps down by how far
+///   inside the reach its centre is (one soft pixel, as Photoshop's flat-contour band);
+/// - it never paints less than the Linear contour would, so a contour that already follows or
+///   stays under the falloff (Linear, or a custom curve with `contour(0) = 0` rising no faster
+///   than the reach edge) is unchanged. The reach does not depend on Range: Range stretches the
+///   contour over the falloff, the falloff still ends where it ends.
+///
+/// Inner glows keep `glow_lut` (`inner`): their unreached pixels are the shape's interior, where
+/// Photoshop's behaviour with a high contour is unmeasured. `None` = identity.
+pub fn glow_paint_lut(g: &Glow, inner: bool) -> Option<Vec<f32>> {
+    let lut = glow_lut(g);
+    if inner || matches!(g.contour, Contour::Linear) {
+        return lut;
+    }
+    let lut = lut?;
+    let range = if g.range.is_finite() { g.range.clamp(0.01, 1.0) } else { 1.0 };
+    // The GPU samples a 4096-entry table (`compose.wgsl` `lut`), as `ranged_lut` builds.
+    let n = 4096;
+    Some(
+        (0..n)
+            .map(|k| {
+                let v = k as f32 / (n - 1) as f32;
+                let c = lut_at(&lut, v);
+                let linear = (v / range).min(1.0);
+                let edge = glow_reach_px(g, v);
+                let edge = if edge.is_finite() { edge.clamp(0.0, 1.0) } else { 1.0 };
+                c.min(edge.max(linear))
+            })
+            .collect(),
+    )
+}
+
+/// How far (in pixels, centre to the reach's end) a pixel of glow coverage `v` lies inside the
+/// glow's reach, from the falloff `glow_map` builds. Only its value up to 1 matters.
+///
+/// - Precise: `v = ½·(1 − (d − solid) / soft)`, which reaches 0 at `d = size + 1` (centre to
+///   centre), so the distance left is `size + 1 − d = 2·soft·v`.
+/// - Softer: a two-box tent of width `w` (support ±`w`) falls off at a straight edge as
+///   `v = e² / (2w²)` within `e` px of its end, so `e = w·√(2v)`. Curved edges and the discrete
+///   taps make this approximate; it only shapes the last pixel.
+fn glow_reach_px(g: &Glow, v: f32) -> f32 {
+    let v = v.max(0.0);
+    match g.technique {
+        GlowTechnique::Precise => {
+            let solid = g.size * g.spread;
+            let soft = (g.size + 1.0 - solid).max(1e-3);
+            2.0 * soft * v
+        }
+        GlowTechnique::Softer => {
+            let (_, bw) = spread_split(g.size, g.spread);
+            // As `blur::box_width`: the blur never runs narrower than 1 px or past MAX_REACH.
+            let w = if bw.is_nan() { 1.0 } else { bw.clamp(1.0, super::MAX_REACH) };
+            w * (2.0 * v).sqrt()
+        }
+    }
+}
+
 /// A contour applied over a Range (`contour(min(v / range, 1))`); `None` = identity.
 pub fn ranged_lut(contour: &Contour, range: f32) -> Option<Vec<f32>> {
     let base = contour_lut(contour);
@@ -306,7 +376,7 @@ pub(super) fn glow_map(shape: &Map, g: &Glow, inner: bool, origin: (i32, i32)) -
             m
         }
     };
-    m = apply_lut(m, glow_lut(g));
+    m = apply_lut(m, glow_paint_lut(g, inner));
     if inner && g.source == GlowSource::Center {
         m = m.map(|v| 1.0 - v);
     }

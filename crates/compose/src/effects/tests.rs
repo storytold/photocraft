@@ -858,6 +858,143 @@ fn glows_match_photoshop() {
     }
 }
 
+/// An outer glow with a custom contour (#11361), Range 50 %, on the 60 px map with the
+/// 20..40 square of `glows_match_photoshop`.
+fn contour_glow(technique: GlowTechnique, size: f32, points: &[(f32, f32)]) -> Glow {
+    Glow {
+        common: photocraft_doc::FxCommon::new(BlendMode::Normal, 1.0),
+        paint: FxPaint::Color(photocraft_color::Color::BLACK),
+        technique,
+        spread: 0.0,
+        size,
+        contour: Contour::Custom {
+            name: "custom".into(),
+            points: points.iter().map(|&(input, output)| photocraft_doc::adjust::CurvePoint { input, output }).collect(),
+            corners: vec![],
+        },
+        anti_alias: false,
+        range: 0.5,
+        jitter: 0.0,
+        noise: 0.0,
+        source: GlowSource::Edge,
+    }
+}
+
+const FLAT: [(f32, f32); 2] = [(0.0, 1.0), (1.0, 1.0)];
+
+fn square_20_40() -> Map {
+    let n = 60;
+    let mut shape = Map::new(n, n, 0.0);
+    for y in 20..40 {
+        for x in 20..40 {
+            shape.v[y * n + x] = 1.0;
+        }
+    }
+    shape
+}
+
+/// Centre-to-centre (dx, dy) from pixel `(x, y)` to the nearest pixel of the 20..40 square.
+fn off_square(x: usize, y: usize) -> (f32, f32) {
+    let d = |v: usize| if v < 20 { 20 - v } else { v.saturating_sub(39) };
+    (d(x) as f32, d(y) as f32)
+}
+
+/// #11361: a contour above 0 at its start (the flat "always 100 %" one, and one starting at
+/// 50 %) used to light every pixel the glow never reaches, out to the effect's rectangle. Nothing
+/// beyond the reach may paint, for either technique: Precise reaches `size + 1` px (centre to
+/// centre, Euclidean), Softer's two-box tent reaches `size` px along each axis.
+#[test]
+fn high_contour_outer_glow_stays_within_its_reach() {
+    let shape = square_20_40();
+    for points in [&FLAT[..], &[(0.0, 0.5), (1.0, 1.0)][..]] {
+        for (t, size) in [(GlowTechnique::Precise, 4.0f32), (GlowTechnique::Precise, 10.0), (GlowTechnique::Softer, 4.0), (GlowTechnique::Softer, 10.0)] {
+            let m = glow_map(&shape, &contour_glow(t, size, points), false, (0, 0));
+            let mut lit = 0;
+            for y in 0..60 {
+                for x in 0..60 {
+                    let (dx, dy) = off_square(x, y);
+                    let beyond = match t {
+                        // Strictly past it: at exactly `size + 1` rounding can leave a 1e-7 residue.
+                        GlowTechnique::Precise => dx.hypot(dy) > size + 1.0 + 1e-3,
+                        GlowTechnique::Softer => dx.max(dy) > size,
+                    };
+                    let v = m.v[y * 60 + x];
+                    if beyond {
+                        assert_eq!(v, 0.0, "{t:?} size {size} {points:?}: ({x}, {y}) is beyond the reach but paints {v}");
+                    }
+                    lit += usize::from(v > 0.0 && (dx, dy) != (0.0, 0.0));
+                }
+            }
+            // The band, not the rectangle: 3200 pixels lay outside the square before the fix.
+            let band = ((20.0 + 2.0 * (size + 1.0)).powi(2) - 400.0) as usize;
+            assert!(lit > 0 && lit <= band, "{t:?} size {size} {points:?}: {lit} glow pixels, the band holds at most {band}");
+        }
+    }
+}
+
+/// #11361: a flat contour paints a solid band up to the shape, ending in one soft pixel set by how
+/// far its centre lies inside the reach (Photoshop's 4 px flat Precise ellipse reads background,
+/// one soft step, then solid glow up to the shape).
+#[test]
+fn flat_contour_outer_glow_is_a_solid_band_with_one_soft_pixel() {
+    let n = 60;
+    let at = |m: &Map, x: usize| m.v[30 * n + x];
+    // Precise, with the square's left column half covered: its edge sits mid-pixel, so the
+    // pixels out from it are 1.5, 2.5, 3.5, 4.5, 5.5 px (centre to centre) from the shape, and
+    // the reach (size + 1 = 5) ends half-way across the 4.5 px one.
+    let mut shape = square_20_40();
+    for y in 20..40 {
+        shape.v[y * n + 19] = 0.5;
+    }
+    let m = glow_map(&shape, &contour_glow(GlowTechnique::Precise, 4.0, &FLAT), false, (0, 0));
+    for x in 16..=19 {
+        assert!(at(&m, x) > 0.999, "precise, solid band at x {x}: {}", at(&m, x));
+    }
+    assert!((at(&m, 15) - 0.5).abs() < 0.05, "precise, the soft outer pixel: {}", at(&m, 15));
+    assert!(at(&m, 14) == 0.0 && at(&m, 0) == 0.0, "precise, beyond the reach: {} {}", at(&m, 14), at(&m, 0));
+    // Softer, size 4: the tent reaches the 3.5 px pixel (x 16) with coverage 1/64, which a Linear
+    // contour paints at 1/32 and the flat one at the reach's √(2v)·4 ≈ 0.71.
+    let shape = square_20_40();
+    let m = glow_map(&shape, &contour_glow(GlowTechnique::Softer, 4.0, &FLAT), false, (0, 0));
+    for x in 17..20 {
+        assert!(at(&m, x) > 0.999, "softer, solid band at x {x}: {}", at(&m, x));
+    }
+    assert!(at(&m, 16) > 0.5 && at(&m, 16) < 0.95, "softer, the soft outer pixel: {}", at(&m, 16));
+    assert!(at(&m, 15) == 0.0 && at(&m, 0) == 0.0, "softer, beyond the reach: {} {}", at(&m, 15), at(&m, 0));
+}
+
+/// #11361's regression guard: the reach cap never paints below what the Linear contour does, so
+/// Linear glows (None, or a custom straight line as PSDs store it) and inner glows keep their
+/// transfer.
+#[test]
+fn glow_paint_lut_leaves_linear_and_inner_glows_alone() {
+    for t in [GlowTechnique::Precise, GlowTechnique::Softer] {
+        for size in [1.0f32, 4.0, 10.0, 60.0] {
+            for range in [0.5f32, 1.0] {
+                let linear = Glow { contour: Contour::Linear, range, ..contour_glow(t, size, &FLAT) };
+                assert_eq!(glow_paint_lut(&linear, false), glow_lut(&linear), "{t:?} {size} {range}");
+                let straight = Glow { range, ..contour_glow(t, size, &[(0.0, 0.0), (1.0, 1.0)]) };
+                let (Some(a), Some(b)) = (glow_paint_lut(&straight, false), glow_lut(&straight)) else { panic!("custom contours have a table") };
+                assert_eq!(a.len(), 4096);
+                let worst = a.iter().zip(&b).map(|(x, y)| (x - y).abs()).fold(0.0f32, f32::max);
+                assert!(worst < 1e-5, "{t:?} size {size} range {range}: a straight contour moved by {worst}");
+                let flat = Glow { range, ..contour_glow(t, size, &FLAT) };
+                assert_eq!(glow_paint_lut(&flat, true), glow_lut(&flat), "inner glows keep their transfer");
+                let Some(f) = glow_paint_lut(&flat, false) else { panic!("a flat contour has a table") };
+                assert_eq!(f[0], 0.0, "coverage 0 paints nothing");
+                assert!((f[4095] - 1.0).abs() < 1e-6);
+            }
+        }
+    }
+    // Hostile sizes still give a finite table.
+    for size in [f32::NAN, f32::INFINITY, -5.0, 0.0, 1e9] {
+        for t in [GlowTechnique::Precise, GlowTechnique::Softer] {
+            let Some(f) = glow_paint_lut(&contour_glow(t, size, &FLAT), false) else { panic!("table") };
+            assert!(f.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)), "{t:?} size {size}");
+        }
+    }
+}
+
 #[test]
 fn offsets_follow_light() {
     let (dx, dy) = offset(120.0, 10.0);
