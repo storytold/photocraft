@@ -1239,8 +1239,8 @@ fn splash_dismisses_on_synthetic_batch_or_pending_captures() {
     splash2.start_time = 1.0;
     h.state_mut().splash = Some(splash2);
     let (tx, _rx) = std::sync::mpsc::channel();
-    let doc_id = crate::screenshot::DocumentId { document: 1, revision: 1, generation: 1 };
-    let _ = h.state_mut().captures.admit(1, None, tx, Some(doc_id), 0.0, crate::screenshot::now());
+    let doc_id = h.state().document_identity();
+    let _ = h.state_mut().captures.admit(1, None, tx, doc_id, 1.0, crate::screenshot::now());
     assert!(h.state().captures.any_pending());
     h.step();
     assert!(h.state().splash.is_none(), "splash must dismiss when capture is pending");
