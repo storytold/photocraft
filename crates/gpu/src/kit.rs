@@ -1,4 +1,4 @@
-use super::consts::{CHUNK_UNIFORM, OP_UNIFORM, STRIDE};
+use super::consts::{CHUNK_UNIFORM, MAP16, MAP32, OP_UNIFORM, STRIDE};
 use super::convert::{lut_texture, words};
 use super::textures::{ResKey, ResidentRef};
 use super::{Arc, HashMap, I, Kernel, NonZeroU64, Rect};
@@ -126,6 +126,51 @@ pub(crate) fn uniform_entry(binding: u32, size: u64) -> wgpu::BindGroupLayoutEnt
 
 /// The compositor's WGSL source (exposed for validation in tests).
 pub const SHADER: &str = include_str!("compose.wgsl");
+
+/// One thread's share of the compositor's pipelines: the vertex entry point (in
+/// [`vertex_shader`]) and the (kernel, target format) pairs it builds.
+pub(crate) struct BuildJob {
+    pub(crate) vertex: String,
+    pub(crate) keys: Vec<(Kernel, wgpu::TextureFormat)>,
+}
+
+/// The compositor's pipelines, grouped by the thread that builds them: one job per kernel, and
+/// an effect-map kernel's R32F and R16F pipelines in the same job. Each job has its own vertex
+/// entry point, so no two jobs share a shader (see `Compositor::build`).
+pub(crate) fn build_jobs(acc_format: wgpu::TextureFormat) -> Vec<BuildJob> {
+    let one = |k: Kernel| if k.is_map() { vec![(k, MAP32), (k, MAP16)] } else { vec![(k, acc_format)] };
+    let (plain, maps): (Vec<Kernel>, Vec<Kernel>) = Kernel::DRAWN.iter().partition(|k| !k.is_map());
+    plain.into_iter().chain(maps).enumerate().map(|(job, k)| BuildJob { vertex: format!("vs_{job}"), keys: one(k) }).collect()
+}
+
+/// The full-chunk triangle's vertex stage, once per build job under that job's name (`vs_0`,
+/// `vs_1`, ...): the same code under distinct names, so each job compiles its own vertex shader.
+///
+/// A workaround, not a design: wgpu-hal's D3D12 shader cache shares a compiled FXC blob between
+/// threads, and FXC's blobs don't count references atomically, so a shared one can be freed
+/// while still cached (gfx-rs/wgpu#10547, #9173). Each copy costs one compile of a three-line
+/// shader. Once a wgpu release fixes the cache, go back to one `vs` in `compose.wgsl` and let
+/// `build_jobs` split map kernels by format again.
+///
+/// It returns the position directly rather than a struct that holds only `@builtin(position)`:
+/// naga turns that into `VOut _tmp = VOut(...); gl_Position = _tmp.pos;`, which Intel's Windows
+/// OpenGL driver rejects (`GLSL compile failed`, empty log), so every compositor pipeline failed
+/// to build and the canvas fell back to the CPU (#7331). The fragment entry points in
+/// `compose.wgsl` take `@builtin(position) pos: vec4<f32>` for the same reason.
+pub(crate) fn vertex_shader(jobs: &[BuildJob]) -> String {
+    let mut s = String::new();
+    for job in jobs {
+        s.push_str(&format!(
+            "@vertex fn {}(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {{
+    let uv = vec2(f32((vi << 1u) & 2u), f32(vi & 2u));
+    return vec4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.0, 1.0);
+}}
+",
+            job.vertex
+        ));
+    }
+    s
+}
 
 /// Pass-level resources resolved for one page cell: resident pages (texture, mask) and effect
 /// maps (view and region) per pass.

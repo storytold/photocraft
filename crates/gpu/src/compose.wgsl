@@ -73,15 +73,11 @@ const F_LAYER_SHAPE: u32 = 1048576u; // fx merge: B is the shape; layer = its co
 @group(1) @binding(6) var map_tex: texture_2d<f32>;
 @group(1) @binding(7) var pat_tex: texture_2d<f32>;
 
-// A vertex shader whose output struct holds only `@builtin(position)` makes naga emit
-// `VOut _tmp = VOut(...); gl_Position = _tmp.pos;`, which Intel's Windows OpenGL driver rejects
-// outright (`GLSL compile failed`, empty log) — every compositor pipeline then fails to build and
-// the canvas falls back to the CPU (#7331). A plain position return avoids that code path.
-@vertex
-fn vs(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
-    let uv = vec2(f32((vi << 1u) & 2u), f32(vi & 2u));
-    return vec4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.0, 1.0);
-}
+// The full-chunk triangle's vertex stage lives in `vertex_shader` (kit.rs): one entry point
+// per pipeline build job, so no two threads share a compiled vertex shader. It returns the
+// position directly: a struct that holds only `@builtin(position)` makes naga emit
+// `VOut _tmp = VOut(...); gl_Position = _tmp.pos;`, which Intel's Windows OpenGL driver
+// rejects, failing every compositor pipeline and dropping the canvas to the CPU (#7331).
 
 fn local(pos: vec4<f32>) -> vec2<i32> { return vec2<i32>(floor(pos.xy)); }
 fn doc_px(p: vec2<i32>) -> vec2<i32> { return chunk.origin + p; }

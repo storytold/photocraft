@@ -308,6 +308,19 @@ fn kind(name: &str) -> Kind {
     }
 }
 
+/// What adapter selection knows about `info`: the values [`Candidate`] ranks on, with `surface_ok`
+/// and whether its name matches `wanted` passed in, and what the name says it is ([`kind`]).
+fn candidate(info: &wgpu::AdapterInfo, surface_ok: bool, wanted: Option<&str>) -> Candidate {
+    Candidate {
+        vendor: info.vendor,
+        device_type: info.device_type,
+        backend: info.backend,
+        surface_ok,
+        wanted: wanted.is_some_and(|w| adapter_matches(&info.name, w)),
+        kind: kind(&info.name),
+    }
+}
+
 /// Whether `a` is a real GPU, not a VM's adapter or a software renderer. The device type alone is
 /// not enough: wgpu's GL backend calls a real NVIDIA or AMD card `Other`, and calls a VM's emulated
 /// Intel GPU `IntegratedGpu` because the renderer name contains "intel" (virgl).
@@ -453,14 +466,7 @@ pub fn configure(setup: &mut egui_wgpu::WgpuSetup, plan: &Plan, os: Os, wanted: 
                     .iter()
                     .map(|a| {
                         let i = a.get_info();
-                        Candidate {
-                            vendor: i.vendor,
-                            device_type: i.device_type,
-                            backend: i.backend,
-                            surface_ok: surface.is_none_or(|s| a.is_surface_supported(s)),
-                            wanted: wanted.as_deref().is_some_and(|w| adapter_matches(&i.name, w)),
-                            kind: kind(&i.name),
-                        }
+                        candidate(&i, surface.is_none_or(|s| a.is_surface_supported(s)), wanted.as_deref())
                     })
                     .collect();
                 let i = pick(&cands, backend, os).ok_or_else(|| "no graphics adapter found".to_string())?;
@@ -591,18 +597,20 @@ impl Sentinel {
 /// file, read before the window opens; `Auto` when the file or value is missing or unknown.
 #[cfg(any(target_os = "linux", test))]
 pub fn read_display_server(path: Option<&Path>) -> photocraft_engine::prefs::LinuxDisplayServer {
+    read_performance(path).map(|performance| performance.linux_display_server).unwrap_or_default()
+}
+
+/// The preferences file's Performance section, read as the app reads it: a value of the wrong
+/// type keeps its default without resetting the others. `None` without a file or section.
+fn read_performance(path: Option<&Path>) -> Option<photocraft_engine::prefs::Performance> {
     let v: Value = path.and_then(|p| std::fs::read_to_string(p).ok()).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(Value::Null);
-    v.get("performance")
-        .and_then(|p| serde_json::from_value::<photocraft_engine::prefs::Performance>(p.clone()).ok())
-        .map(|performance| performance.linux_display_server)
-        .unwrap_or_default()
+    v.get("performance").cloned().map(photocraft_engine::prefs::read_section)
 }
 
 /// Preferences › Performance › Graphics Adapter (`performance.gpuAdapter`), read before the window
-/// opens; empty (automatic) when the file or value is missing.
+/// opens; empty (automatic) when the file or value is missing or not text.
 pub fn read_gpu_adapter(path: Option<&Path>) -> String {
-    let v: Value = path.and_then(|p| std::fs::read_to_string(p).ok()).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(Value::Null);
-    v.get("performance").and_then(|p| p.get("gpuAdapter")).and_then(Value::as_str).unwrap_or("").chars().take(256).collect()
+    read_performance(path).map(|performance| performance.gpu_adapter.chars().take(256).collect()).unwrap_or_default()
 }
 
 /// Preferences › Performance › Low-Latency Drawing (`performance.lowLatencyDrawing`, off unless

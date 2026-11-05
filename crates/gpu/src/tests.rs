@@ -132,6 +132,44 @@ fn half_roundtrip() {
     }
 }
 
+/// #9173: no two pipeline build jobs share a shader, so no FXC blob is shared across threads.
+#[test]
+fn build_jobs_share_no_shader() {
+    use super::consts::{MAP16, MAP32};
+    use super::kit::{build_jobs, vertex_shader};
+    let jobs = build_jobs(wgpu::TextureFormat::Rgba32Float);
+    let mut seen = std::collections::HashSet::new();
+    for job in &jobs {
+        let fragments: std::collections::HashSet<_> = job.keys.iter().filter_map(|k| k.0.entry()).collect();
+        for f in fragments {
+            assert!(seen.insert(f.to_string()), "fragment shader {f} is built by two jobs");
+        }
+        assert!(seen.insert(job.vertex.clone()), "vertex entry {} is shared", job.vertex);
+    }
+    // Every drawn pipeline is still built, in the same formats.
+    let keys: Vec<_> = jobs.iter().flat_map(|job| job.keys.iter().copied()).collect();
+    let plain = Kernel::DRAWN.iter().filter(|k| !k.is_map()).count();
+    assert_eq!(keys.len(), plain + 2 * (Kernel::DRAWN.len() - plain));
+    for k in Kernel::DRAWN {
+        let formats: Vec<_> = keys.iter().filter(|key| key.0 == k).map(|key| key.1).collect();
+        let want = if k.is_map() { vec![MAP32, MAP16] } else { vec![wgpu::TextureFormat::Rgba32Float] };
+        assert_eq!(formats, want, "{k:?}");
+    }
+    // The vertex module validates and has every job's entry point.
+    let src = vertex_shader(&jobs);
+    let module = wgpu::naga::front::wgsl::parse_str(&src).unwrap_or_else(|e| panic!("{}", e.emit_to_string(&src)));
+    wgpu::naga::valid::Validator::new(wgpu::naga::valid::ValidationFlags::all(), wgpu::naga::valid::Capabilities::empty())
+        .validate(&module)
+        .unwrap_or_else(|e| panic!("{e:?}"));
+    for job in &jobs {
+        assert!(module.entry_points.iter().any(|ep| ep.name == job.vertex && ep.stage == wgpu::naga::ShaderStage::Vertex), "missing {}", job.vertex);
+    }
+    // The fragment module has no vertex stage, so the build can't fall back to one shared `vs`.
+    let compose = wgpu::naga::front::wgsl::parse_str(SHADER).unwrap_or_else(|e| panic!("{}", e.emit_to_string(SHADER)));
+    let shared: Vec<_> = compose.entry_points.iter().filter(|ep| ep.stage == wgpu::naga::ShaderStage::Vertex).map(|ep| ep.name.as_str()).collect();
+    assert!(shared.is_empty(), "compose.wgsl has a vertex entry point every job would share: {shared:?}");
+}
+
 #[test]
 fn shader_validates() {
     let module = wgpu::naga::front::wgsl::parse_str(SHADER).unwrap_or_else(|e| panic!("{}", e.emit_to_string(SHADER)));
@@ -303,7 +341,7 @@ fn sixteen_and_thirty_two_bit_fast_paths_match_the_general_one() {
         let data: Vec<f32> = (0..n).map(|i| (i as u32).wrapping_mul(2_654_435_761) as f32 / u32::MAX as f32 * hdr - (hdr - 1.0) / 4.0).collect();
         s.write_region(r, &data);
         let t = s.tile(TileCoord::new(0, 0)).expect("written").clone();
-        let fast = rgb_gray16_to_f16(&fmt, t.bytes()).or_else(|| rgb_gray32_to_f16(&fmt, t.bytes())).expect("fast path");
+        let fast = rgb_gray16_to_f16(&fmt, &t.bytes()).or_else(|| rgb_gray32_to_f16(&fmt, &t.bytes())).expect("fast path");
         let raw = s.read_region(r);
         let general: Vec<u8> =
             raw.chunks_exact(fmt.channels()).flat_map(|px| photocraft_raster::to_rgba(&fmt, px).map(|x| f32_to_f16(x).to_le_bytes())).flatten().collect();
@@ -402,11 +440,32 @@ fn gl_builds_its_pipelines_on_one_thread() {
 
 /// Guards the shader pattern behind #10636: naga turns a vertex output struct that holds only
 /// `@builtin(position)` into GLSL Intel's Windows OpenGL driver rejects, which fails every pipeline
-/// and silently costs the whole GPU canvas, so both entry points return the position itself.
+/// and silently costs the whole GPU canvas, so every vertex entry point returns the position itself.
+///
+/// Checked on naga's parse of each module, not on its text: a comment or another function repeating
+/// the signature would satisfy a `contains` check while the entry point returned a struct.
 #[test]
 fn the_vertex_shaders_return_the_position_directly() {
-    for (name, src) in [("compose", super::kit::SHADER), ("camera raw", super::camera_raw::CAMERA_RAW_SHADER)] {
-        assert!(src.contains("-> @builtin(position) vec4<f32>"), "{name}: the vertex shader must return the position");
-        assert!(!src.contains("struct VOut"), "{name}: a position-only output struct breaks Intel's GL driver");
+    let generated = super::kit::vertex_shader(&super::kit::build_jobs(super::consts::ACC_FORMAT));
+    for (name, src) in [("compose (generated)", generated.as_str()), ("camera raw", super::camera_raw::CAMERA_RAW_SHADER)] {
+        let module = wgpu::naga::front::wgsl::parse_str(src).unwrap_or_else(|e| panic!("{name}: {}", e.emit_to_string(src)));
+        let vs: Vec<_> = module.entry_points.iter().filter(|ep| ep.stage == wgpu::naga::ShaderStage::Vertex).collect();
+        assert!(!vs.is_empty(), "{name}: no vertex entry point");
+        for ep in vs {
+            let result = ep.function.result.as_ref().unwrap_or_else(|| panic!("{name}: {} returns nothing", ep.name));
+            assert!(
+                matches!(result.binding, Some(wgpu::naga::Binding::BuiltIn(wgpu::naga::BuiltIn::Position { .. }))),
+                "{name}: {} must return `@builtin(position)`",
+                ep.name
+            );
+            let position = matches!(
+                module.types[result.ty].inner,
+                wgpu::naga::TypeInner::Vector {
+                    size: wgpu::naga::VectorSize::Quad,
+                    scalar: wgpu::naga::Scalar { kind: wgpu::naga::ScalarKind::Float, width: 4 },
+                }
+            );
+            assert!(position, "{name}: {} must return `vec4<f32>` itself, not a struct", ep.name);
+        }
     }
 }

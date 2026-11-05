@@ -37,6 +37,8 @@ fn display_server_preference_is_read_before_the_window_opens() {
     // Unknown values, other types, broken JSON and a missing file all start as Auto.
     assert_eq!(read(r#"{"performance":{"linuxDisplayServer":"wayland"}}"#), LinuxDisplayServer::Auto);
     assert_eq!(read(r#"{"performance":{"linuxDisplayServer":11}}"#), LinuxDisplayServer::Auto);
+    // A bad value beside it resets only itself, as when the app loads the file (#6611).
+    assert_eq!(read(r#"{"performance":{"linuxDisplayServer":"x11","cacheLevels":"four"}}"#), LinuxDisplayServer::X11);
     assert_eq!(read("{not json"), LinuxDisplayServer::Auto);
     assert_eq!(read_display_server(Some(&dir.join("missing.json"))), LinuxDisplayServer::Auto);
     assert_eq!(read_display_server(None), LinuxDisplayServer::Auto);
@@ -223,6 +225,8 @@ fn gpu_adapter_is_read_before_the_window_opens() {
     };
     assert_eq!(read(r#"{"performance":{"gpuAdapter":"nvidia"}}"#), "nvidia");
     assert_eq!(read(r#"{"performance":{"gpuAdapter":7}}"#), "");
+    // A bad value beside it resets only itself, as when the app loads the file (#6611).
+    assert_eq!(read(r#"{"performance":{"gpuAdapter":"nvidia","cacheLevels":"four"}}"#), "nvidia");
     assert_eq!(read(r#"{"performance":{}}"#), "");
     assert_eq!(read("not json"), "");
     assert_eq!(read_gpu_adapter(None), "");
@@ -401,6 +405,41 @@ fn an_adapters_name_says_what_it_is() {
     for name in ["NVIDIA GeForce GTX 970/PCIe/SSE2", "AMD Radeon RX 580 Series", "ATI Radeon HD 5700 Series", "Intel(R) HD Graphics 4600", ""] {
         assert_eq!(kind(name), Kind::Gpu, "{name}");
     }
+}
+
+/// #7331, #5191: the selector builds each [`Candidate`] through [`candidate`], which takes its
+/// `kind` from the adapter's name, so a VM's GL adapter (`DeviceType::Other`, vendor 0, exactly
+/// like an AMD card) is `Virtual` and never outranks WARP, while a real GPU's GL adapter stays
+/// `Gpu`.
+#[test]
+fn a_candidate_takes_its_kind_from_the_adapter_name() {
+    let info = |name: &str| wgpu::AdapterInfo {
+        name: name.into(),
+        vendor: 0,
+        device: 0,
+        device_type: wgpu::DeviceType::Other,
+        device_pci_bus_id: String::new(),
+        driver: String::new(),
+        driver_info: String::new(),
+        backend: wgpu::Backend::Gl,
+        subgroup_min_size: 0,
+        subgroup_max_size: 0,
+        transient_saves_memory: None,
+        limit_bucket: None,
+    };
+    let svga = candidate(&info("VMware SVGA 3D"), true, None);
+    assert_eq!(svga.kind, Kind::Virtual);
+    assert!(!hardware(&svga), "a VM's GL must not count as hardware");
+    let amd = candidate(&info("AMD Radeon RX 580 Series"), true, None);
+    assert_eq!(amd.kind, Kind::Gpu);
+    assert!(hardware(&amd), "a real GPU's GL counts as hardware");
+    // The surface and the wanted name are the caller's, not the adapter's.
+    let wanted = candidate(&info("Intel(R) HD Graphics 4600"), false, Some("HD Graphics 4600"));
+    assert!(wanted.wanted, "the name matches the one asked for");
+    assert!(!wanted.surface_ok);
+    // `auto` keeps WARP: the VM's GL is not a hardware adapter.
+    let warp = cand(0x1414, wgpu::DeviceType::Cpu, wgpu::Backend::Dx12);
+    assert_eq!(pick(&[svga, warp], Auto, Os::Windows), Some(1));
 }
 
 #[test]
