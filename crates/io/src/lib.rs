@@ -45,6 +45,7 @@ mod channel_map;
 pub mod comps_map;
 pub mod doc_path;
 pub mod effects_map;
+pub mod export_estimate;
 #[cfg(any(unix, windows))]
 mod exr_native;
 pub mod exr_parts;
@@ -86,6 +87,7 @@ pub mod vector_preview;
 mod xcf;
 pub mod xml;
 
+pub use export_estimate::estimate_export_bytes;
 use photocraft_codecs::{CodecError, EncodeOptions};
 pub use photocraft_codecs::{DdsCompression, DdsOptions, DpxBits};
 use photocraft_doc::{Adjustment, Document, Layer, LayerContent};
@@ -396,6 +398,9 @@ pub struct ExportOptions {
     /// transparency. `None`, the default, keeps it unless the document has alpha or spot
     /// channels, which are then written as with it off.
     pub tiff_transparency: Option<bool>,
+    /// Protect RGB 24-bit Targa alpha and flat TIFF composite transparency during in-place
+    /// Batch saves. Other encoder losses retain their existing policies and warnings.
+    pub preserve_alpha: bool,
     /// Which part of the document's XMP packet and free-form text a flat export embeds.
     /// PSD/PSB always keep XMP; `.pcraft` keeps both. Everything by default, as Save As does;
     /// Export As offers None.
@@ -432,6 +437,7 @@ impl Default for ExportOptions {
             force_psb: false,
             tiff_layers: false,
             tiff_transparency: None,
+            preserve_alpha: false,
             xmp: XmpEmbed::All,
             tga_bits: None,
             image_previews: true,
