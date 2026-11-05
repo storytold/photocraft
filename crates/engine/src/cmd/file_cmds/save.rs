@@ -280,6 +280,15 @@ pub(super) fn save_a_copy(s: &mut Session, p: &Value) -> Result<Value> {
         let px = flattened_checked(&doc, fmt, "file.saveACopy")?;
         doc.layers = vec![Layer::new("Background", LayerContent::Raster(px))];
     }
-    let warnings = save_doc(&doc, &path, SaveOpts::from_params(s, p, "file.saveACopy")?)?;
+    let save = SaveOpts::from_params(s, p, "file.saveACopy")?;
+    let keeps_document = p.get("layers").and_then(Value::as_bool) != Some(false)
+        && (super::holds_at(&doc, &path)
+            || (matches!(super::extension(&path).as_deref(), Some("tif" | "tiff"))
+                && save.tiff_layers
+                && photocraft_io::tiff_layers::supports_layers(&doc)
+                && photocraft_io::tiff_layers::would_write_layers(&doc)));
+    let warnings = save_doc(&doc, &path, save)?;
+    let overwritten: Vec<_> = s.savepoints_at(&path).into_iter().filter(|id| !keeps_document || *id != doc.id).collect();
+    s.invalidate_savepoints(&overwritten);
     Ok(json!({"path": path, "warnings": warnings}))
 }

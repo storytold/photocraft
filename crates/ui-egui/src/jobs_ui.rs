@@ -133,8 +133,10 @@ pub struct SaveJob {
     /// The document's revision when the save started (the job locks it against edits).
     pub revision: u64,
     pub path: String,
-    /// A copy leaves the document's path and unsaved state alone.
+    /// A copy keeps the document's identity; an incomplete overwrite invalidates its savepoint.
     pub copy: bool,
+    /// The copy replaces the document's file with an incomplete snapshot.
+    pub invalidate_savepoint: bool,
     /// An automation save records without firing user-configured hooks.
     pub automation: bool,
     pub state: Arc<SaveState>,
@@ -292,6 +294,8 @@ pub fn start_save(
         return Err(crate::i18n::fmt(tl!("A save to {name} is still running; try again when it finishes"), &[("name", &name)]));
     }
     let (snapshot, doc, revision) = (Arc::clone(&st.doc), st.doc.id, st.revision);
+    let copy_like = copy || (automation && !photocraft_engine::file_cmds::holds_at(&st.doc, &path));
+    let invalidate_savepoint = copy_like && PhotocraftApp::copy_needs_savepoint_check(&snapshot, &path, &settings);
     let label = crate::i18n::fmt(tl!("Saving {name}"), &[("name", &name)]);
     let target = path.clone();
     let result_path = path.clone();
@@ -313,6 +317,9 @@ pub fn start_save(
     match started.map_err(|e| e.to_string())? {
         Started::Done(v) => {
             let warnings = warnings_of(&v);
+            if invalidate_savepoint {
+                app.invalidate_savepoint(doc, &path);
+            }
             if automation {
                 app.saved_automation(doc, revision, &path, &warnings, copy);
             } else {
@@ -323,7 +330,7 @@ pub fn start_save(
         Started::Job(job) => {
             // Preferences › File Handling › Save in Background, read when the save starts.
             let foreground = !app.session.prefs().file_handling.save_in_background;
-            app.jobs.saves.push(SaveJob { job, doc, revision, path, copy, automation, state, ended: false, foreground });
+            app.jobs.saves.push(SaveJob { job, doc, revision, path, copy, invalidate_savepoint, automation, state, ended: false, foreground });
             // Control and MCP requests wait on it, as for other jobs.
             app.jobs.last_started = Some(job);
             // The status bar's progress readout names the save; clear any old message.
@@ -343,6 +350,9 @@ fn warnings_of(v: &Value) -> Vec<String> {
 fn finish_save(app: &mut PhotocraftApp, ctx: &egui::Context, save: SaveJob, label: &str, outcome: JobOutcome) {
     match outcome {
         JobOutcome::Done(v) => {
+            if save.invalidate_savepoint {
+                app.invalidate_savepoint(save.doc, &save.path);
+            }
             if save.automation {
                 app.saved_automation(save.doc, save.revision, &save.path, &warnings_of(&v), save.copy);
             } else {
@@ -371,7 +381,11 @@ fn finish_save(app: &mut PhotocraftApp, ctx: &egui::Context, save: SaveJob, labe
 fn close_after_saves(app: &mut PhotocraftApp, ctx: &egui::Context) {
     app.jobs.saves.retain(|s| !(s.ended && s.state.finished()));
     if !app.saving() && !app.printing() && std::mem::take(&mut app.jobs.close_after_saves) {
-        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        // A copy may just have replaced the only saved layers. Recheck the close guard after
+        // completion rather than closing over work that became unsaved while the writer ran.
+        if app.allow_close || !crate::discard_ui::intercept(app, "file.exit", &Value::Null) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
     }
 }
 

@@ -83,7 +83,7 @@ pub(super) fn quick_export(s: &mut Session, p: &Value) -> Result<Value> {
         // light; the web/sRGB pipeline would instead clamp HDR and negative values.
         let opts = photocraft_io::ExportOptions { xmp: photocraft_io::XmpEmbed::None, ..Default::default() };
         let out = photocraft_io::export(&doc, "exr", &opts).map_err(other)?;
-        write_file(&path, &out.bytes)?;
+        write_export(s, &path, &out.bytes, &mut write_file)?;
         crate::automate_cmds::fire_event(s, "export");
         return Ok(json!({"path": path, "format": fmt, "bytes": out.bytes.len(), "warnings": out.warnings}));
     }
@@ -116,7 +116,8 @@ pub(super) fn quick_export(s: &mut Session, p: &Value) -> Result<Value> {
             // Keeping quality absent preserves the historical lossless Quick Export behavior.
             let (wdoc, _, _) = web_document(&doc, &json!({}), &WebSettings { convert_to_srgb: prefs.convert_to_srgb, ..Default::default() })?;
             let quality = if prefs.webp_lossless { None } else { Some((f64::from(prefs.webp_quality.clamp(1, 100)) - 1.0) * 12.0 / 99.0) };
-            let warnings = crate::file_cmds::save_doc(&wdoc, &path, quality)?;
+            let (bytes, warnings) = crate::file_cmds::encode(&wdoc, &path, quality)?;
+            write_export(s, &path, &bytes, &mut write_file)?;
             crate::automate_cmds::fire_event(s, "export");
             return Ok(json!({"path": path, "format": fmt, "warnings": warnings}));
         }
@@ -141,7 +142,8 @@ pub(super) fn quick_export(s: &mut Session, p: &Value) -> Result<Value> {
         wdoc.resolution_dpi,
         false,
     )?;
-    write_file(&path, &opt.bytes)?;
+    write_export(s, &path, &opt.bytes, &mut write_file)?;
     crate::automate_cmds::fire_event(s, "export");
     Ok(json!({"path": path, "format": fmt, "bytes": opt.bytes.len(), "warnings": web_warnings(&st, exif, wdoc.resolution_dpi)}))
 }
+use super::write_export;

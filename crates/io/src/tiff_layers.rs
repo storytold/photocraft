@@ -32,11 +32,9 @@ pub fn would_write_layers(doc: &Document) -> bool {
     !(single_layer(doc).is_some() && doc.layers.first().is_some_and(|l| l.locks.transparency))
 }
 
-/// Documents a layered TIFF can hold: the TIFF composite must be in the document's model so
-/// that the layer channels inside the tag match it (Lab TIFFs are not decoded or encoded by
-/// `photocraft-codecs`), and there must be layers to keep (a Multichannel document has none:
-/// its channels are the image).
-fn layered_mode(doc: &Document) -> bool {
+/// Whether the layered TIFF encoder can preserve this document's layers. Unsupported color
+/// modes fall back to a flat TIFF even when the caller requests layer data.
+pub fn supports_layers(doc: &Document) -> bool {
     matches!(doc.pixel_format().mode, ColorMode::Grayscale | ColorMode::Rgb | ColorMode::Cmyk) && doc.mode != ColorMode::Multichannel && !doc.layers.is_empty()
 }
 
@@ -334,7 +332,7 @@ const TIFF_COMPOSITE_DONE: f32 = 0.72;
 /// codec (Lab) are saved flat, with a warning. Reports progress through `ctl` (see
 /// [`crate::export_with`]).
 pub(crate) fn export_layered(doc: &Document, opts: &ExportOptions, ctl: &photocraft_raster::Interrupt) -> Result<ExportResult, IoError> {
-    if !layered_mode(doc) {
+    if !supports_layers(doc) {
         let mut r = crate::flat::export_flat_with(doc, Format::Tiff, opts, ctl)?;
         if !doc.layers.is_empty() {
             r.warnings.push(format!("{:?} documents are saved as a flat TIFF: their layers are not kept", doc.pixel_format().mode));
