@@ -320,6 +320,8 @@ mod fill_layer_mode_tests;
 #[cfg(test)]
 mod pattern_mode_tests;
 #[cfg(test)]
+mod second_keys_zoom_actions_tests;
+#[cfg(test)]
 mod tests;
 
 #[cfg(test)]
