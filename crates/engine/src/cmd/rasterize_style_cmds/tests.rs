@@ -201,3 +201,19 @@ fn a_layer_without_effects_changes_nothing() {
     assert_eq!(s.active().unwrap().history.past_len(), steps);
     assert!(!s.active().unwrap().is_dirty());
 }
+
+/// Through the command itself: a layer without effects is refused and nothing moves.
+#[test]
+fn rasterize_layer_style_on_a_layer_without_effects_changes_nothing() {
+    let (mut s, _) = scene(8);
+    s.execute("layer.new.layer", json!({"name": "plain"})).unwrap();
+    let st = s.active_mut().unwrap();
+    st.saved_revision = st.revision;
+    let (revision, steps, journal) = (s.active().unwrap().revision, s.active().unwrap().history.past_len(), s.journal.len());
+    let err = s.execute(ID, json!({})).unwrap_err().to_string();
+    assert!(err.contains("no selected layer has layer effects"), "{err}");
+    assert_eq!(s.active().unwrap().revision, revision);
+    assert_eq!(s.active().unwrap().history.past_len(), steps);
+    assert_eq!(s.journal.len(), journal);
+    assert!(!s.active().unwrap().is_dirty());
+}

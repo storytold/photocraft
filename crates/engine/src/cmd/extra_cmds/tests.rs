@@ -811,6 +811,7 @@ fn rasterize_with_nothing_to_convert_changes_nothing() {
     let (revision, steps) = (s.active().unwrap().revision, s.active().unwrap().history.past_len());
     assert!(s.execute("layer.rasterize.layer", json!({})).is_err());
     assert!(s.execute("layer.rasterize.type", json!({})).is_err());
+    assert_eq!(s.execute("layer.rasterize.allLayers", json!({})).unwrap()["rasterized"], 0);
     assert_eq!(s.active().unwrap().revision, revision);
     assert_eq!(s.active().unwrap().history.past_len(), steps);
     assert!(!s.active().unwrap().is_dirty());
