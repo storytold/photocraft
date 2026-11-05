@@ -60,14 +60,15 @@ fn command_slash_does_nothing_when_the_menu_item_is_greyed() {
     assert!(app.ui.layers_panel_dialog.is_none());
 }
 
-#[test]
-fn panel_menu_row_shows_the_current_key_and_follows_a_change() {
-    let mut app = app();
-    let expected = crate::shortcuts::pretty("Cmd+/");
-    assert_eq!(crate::shortcuts::shortcut_label(&app, "layer.lockLayers"), Some(expected));
-    set_shortcut(&mut app, "Cmd+Shift+L");
-    assert_eq!(crate::shortcuts::shortcut_label(&app, "layer.lockLayers"), Some(crate::shortcuts::pretty("Cmd+Shift+L")));
-    // The panel menu draws with that key without trouble.
+/// Every text the Layers panel menu paints in one frame (the row labels and their shortcut texts).
+fn painted_text(app: &mut PhotocraftApp) -> Vec<String> {
+    fn collect(shape: &egui::Shape, out: &mut Vec<String>) {
+        match shape {
+            egui::Shape::Text(text) => out.push(text.galley.job.text.clone()),
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| collect(s, out)),
+            _ => {}
+        }
+    }
     let ctx = egui::Context::default();
     ctx.begin_pass(egui::RawInput::default());
     let mut ui = egui::Ui::new(
@@ -75,8 +76,38 @@ fn panel_menu_row_shows_the_current_key_and_follows_a_change() {
         egui::Id::unique("lock-layers-panel-menu"),
         egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(300.0, 900.0))),
     );
-    crate::panels::layer_row_ui::panel_menu(&mut app, &mut ui);
-    ctx.end_pass().textures_delta.clear();
+    crate::panels::layer_row_ui::panel_menu(app, &mut ui);
+    // The texture deltas go nowhere in a test: clear them, or epaint's drop check complains.
+    let mut pass = ctx.end_pass();
+    pass.textures_delta.clear();
+    let mut out = Vec::new();
+    for clipped in pass.shapes {
+        collect(&clipped.shape, &mut out);
+    }
+    out
+}
+
+#[test]
+fn panel_menu_row_shows_the_current_key_and_follows_a_change() {
+    let mut app = app();
+    let default_key = crate::shortcuts::pretty("Cmd+/");
+    assert_eq!(crate::shortcuts::shortcut_label(&app, "layer.lockLayers"), Some(default_key.clone()));
+    // The panel menu paints the key beside Lock Layers…
+    let texts = painted_text(&mut app);
+    assert!(texts.iter().any(|t| t == "Lock Layers…"), "{texts:?}");
+    assert!(texts.contains(&default_key), "the default key is painted: {texts:?}");
+    // A changed key is painted instead of the default.
+    set_shortcut(&mut app, "Cmd+Shift+L");
+    let changed = crate::shortcuts::pretty("Cmd+Shift+L");
+    assert_eq!(crate::shortcuts::shortcut_label(&app, "layer.lockLayers"), Some(changed.clone()));
+    let texts = painted_text(&mut app);
+    assert!(texts.contains(&changed), "{texts:?}");
+    assert!(!texts.contains(&default_key), "the old key is gone: {texts:?}");
+    // A removed key paints no key at all.
+    let mut app = app_with_removed_key();
+    let texts = painted_text(&mut app);
+    assert!(texts.iter().any(|t| t == "Lock Layers…"), "{texts:?}");
+    assert!(!texts.contains(&default_key) && !texts.contains(&changed), "{texts:?}");
 }
 
 #[test]
