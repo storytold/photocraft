@@ -157,7 +157,7 @@ impl DocTextures {
 
     /// Rebuild the mip chain inside document rect `r` (x0, y0, x1, y1) with 2×2 box filtering.
     pub(super) fn regenerate_mips(&self, device: &wgpu::Device, queue: &wgpu::Queue, res: &Resources, r: [u32; 4]) {
-        let Some(mip_pipeline) = res.mip_pipeline(self.format) else { return };
+        let (Some(mip_pipeline), Some(copy_pipeline)) = (res.mip_pipeline(self.format), res.mip_copy_pipeline(self.format)) else { return };
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("pc_mips") });
         for t in &self.tiles {
             let [tx, ty, tw, th] = t.rect;
@@ -180,8 +180,11 @@ impl DocTextures {
                 // Keep the sampled source and render attachment in separate resources on Intel
                 // DX12 adapters ([`separate_mip_targets`]): some of their drivers corrupt reduced
                 // previews when both are mip levels of the same texture, even though the
-                // subresources do not overlap. Elsewhere render straight into the level, which
-                // spares a scratch texture and a copy per level on every edit.
+                // subresources do not overlap. The scratch level is then drawn into the canvas
+                // texture, not copied: on an Intel Arc 140V (DX12, driver 32.0.101.9150) a texture
+                // copy into a level that follows an odd-width level lands 16 texels to the left
+                // (#9561). Elsewhere render straight into the level, which spares a scratch
+                // texture and a second pass per level on every edit.
                 let scratch = res.separate_mip_targets.then(|| {
                     let scratch = device.create_texture(&wgpu::TextureDescriptor {
                         label: Some("pc_mip_scratch"),
@@ -190,7 +193,7 @@ impl DocTextures {
                         sample_count: 1,
                         dimension: wgpu::TextureDimension::D2,
                         format: self.format,
-                        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
                         view_formats: &[],
                     });
                     let view = scratch.create_view(&Default::default());
@@ -218,13 +221,32 @@ impl DocTextures {
                 pass.set_scissor_rect(x0, y0, x1 - x0, y1 - y0);
                 pass.draw(0..3, 0..1);
                 drop(pass);
-                if let Some((scratch, _)) = &scratch {
-                    let origin = wgpu::Origin3d { x: x0, y: y0, z: 0 };
-                    encoder.copy_texture_to_texture(
-                        wgpu::TexelCopyTextureInfo { texture: scratch, mip_level: 0, origin, aspect: wgpu::TextureAspect::All },
-                        wgpu::TexelCopyTextureInfo { texture: &t.texture, mip_level: level as u32, origin, aspect: wgpu::TextureAspect::All },
-                        wgpu::Extent3d { width: x1 - x0, height: y1 - y0, depth_or_array_layers: 1 },
-                    );
+                if let Some((_, view)) = &scratch {
+                    let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("pc_mip_copy"),
+                        layout: &res.mip_bgl,
+                        entries: &[
+                            wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(view) },
+                            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&res.mip_sampler) },
+                        ],
+                    });
+                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("pc_mip_copy"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &t.levels[level],
+                            resolve_target: None,
+                            depth_slice: None,
+                            ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    });
+                    pass.set_pipeline(copy_pipeline);
+                    pass.set_bind_group(0, &bg, &[]);
+                    pass.set_scissor_rect(x0, y0, x1 - x0, y1 - y0);
+                    pass.draw(0..3, 0..1);
                 }
             }
         }

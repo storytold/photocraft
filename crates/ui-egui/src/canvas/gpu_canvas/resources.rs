@@ -12,14 +12,18 @@ pub(super) struct Resources {
     pub(super) sampler: wgpu::Sampler,
     pub(super) mip_bgl: wgpu::BindGroupLayout,
     mip_pipeline: wgpu::RenderPipeline,
-    /// `mip_pipeline` and `encode_pipeline` for `Rgba16Float` tiles (when the adapter supports them).
+    /// Draws a scratch level into the canvas texture ([`separate_mip_targets`]).
+    mip_copy_pipeline: wgpu::RenderPipeline,
+    /// `mip_pipeline`, `mip_copy_pipeline` and `encode_pipeline` for `Rgba16Float` tiles (when the
+    /// adapter supports them).
     mip_pipeline_high: Option<wgpu::RenderPipeline>,
+    mip_copy_pipeline_high: Option<wgpu::RenderPipeline>,
     encode_pipeline_high: Option<wgpu::RenderPipeline>,
     pub(super) mip_sampler: wgpu::Sampler,
     pub(super) docs: HashMap<u64, DocTextures>,
     pub(super) views: HashMap<u64, ViewGpu>,
     pub(super) out_linear: bool,
-    /// Build each mip level in a scratch texture and copy it back instead of rendering into
+    /// Build each mip level in a scratch texture and draw it back instead of rendering into
     /// the level directly (see [`separate_mip_targets`]).
     pub(super) separate_mip_targets: bool,
     /// The wgpu layer compositor (created on first use).
@@ -236,6 +240,8 @@ fn pipeline(
 }
 
 impl Resources {
+    /// The canvas shaders, pipelines and samplers for a `target` surface, with the `Rgba16Float`
+    /// tile pipelines when `high`.
     pub(super) fn new(device: &wgpu::Device, queue: &wgpu::Queue, target: wgpu::TextureFormat, high: bool) -> Self {
         let module =
             device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("pc_canvas"), source: wgpu::ShaderSource::Wgsl(CANVAS_WGSL.into()) });
@@ -312,6 +318,8 @@ impl Resources {
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("pc_mip"), bind_group_layouts: &[Some(&mip_bgl)], immediate_size: 0 });
         let mip_pipeline = pipeline(device, "pc_mip", &mip_layout, &mip_module, ("vs", "fs"), FORMAT, None);
         let mip_pipeline_high = high.then(|| pipeline(device, "pc_mip_16f", &mip_layout, &mip_module, ("vs", "fs"), FORMAT_HIGH, None));
+        let mip_copy_pipeline = pipeline(device, "pc_mip_copy", &mip_layout, &mip_module, ("vs", "fs_copy"), FORMAT, None);
+        let mip_copy_pipeline_high = high.then(|| pipeline(device, "pc_mip_copy_16f", &mip_layout, &mip_module, ("vs", "fs_copy"), FORMAT_HIGH, None));
         let mip_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("pc_mip"),
             mag_filter: wgpu::FilterMode::Linear,
@@ -356,7 +364,9 @@ impl Resources {
             sampler,
             mip_bgl,
             mip_pipeline,
+            mip_copy_pipeline,
             mip_pipeline_high,
+            mip_copy_pipeline_high,
             encode_pipeline_high,
             mip_sampler,
             docs: HashMap::new(),
@@ -385,5 +395,10 @@ impl Resources {
     /// The mip-chain pipeline for `format` tiles.
     pub(super) fn mip_pipeline(&self, format: wgpu::TextureFormat) -> Option<&wgpu::RenderPipeline> {
         if format == FORMAT_HIGH { self.mip_pipeline_high.as_ref() } else { Some(&self.mip_pipeline) }
+    }
+
+    /// The pipeline drawing a scratch level into a `format` tile.
+    pub(super) fn mip_copy_pipeline(&self, format: wgpu::TextureFormat) -> Option<&wgpu::RenderPipeline> {
+        if format == FORMAT_HIGH { self.mip_copy_pipeline_high.as_ref() } else { Some(&self.mip_copy_pipeline) }
     }
 }

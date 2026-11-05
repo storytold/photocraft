@@ -267,9 +267,16 @@ fn vs(@builtin(vertex_index) vi: u32) -> V {
     return V(vec4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.0, 1.0), uv);
 }
 
+// One texel of the next mip level: a bilinear tap at the destination texel centre averages
+// the 2×2 source block.
 @fragment
 fn fs(in: V) -> @location(0) vec4<f32> {
-    // A bilinear tap at the destination texel centre averages the 2×2 source block.
     return textureSampleLevel(src, samp, in.uv, 0.0);
+}
+
+// Writes a scratch level into the canvas texture texel for texel (`separate_mip_targets`).
+@fragment
+fn fs_copy(in: V) -> @location(0) vec4<f32> {
+    return textureLoad(src, vec2<i32>(in.pos.xy), 0);
 }
 "#;
