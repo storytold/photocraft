@@ -666,3 +666,22 @@ fn solo_spot_is_grayscale_and_edits_without_layer_mask() {
         assert_eq!(px2[7], Color32::WHITE, "{mode:?}: newly filled area is now white");
     }
 }
+
+#[test]
+fn solo_spot_wins_over_an_unrelated_layer_mask() {
+    for mode in ["rgb", "cmyk"] {
+        let mut app = PhotocraftApp::new(Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 8, "height": 4, "mode": mode})).unwrap();
+        app.run("layer.layerMask.revealAll", json!({})).unwrap();
+        app.run("select.rect", json!({"x": 0, "y": 0, "width": 4, "height": 4})).unwrap();
+        let spot = app.run("channel.newSpot", json!({"color": "#ff0000", "solidity": 0})).unwrap()["channel"].as_u64().unwrap();
+        app.sync_views();
+        app.run("channel.target", json!({"channel": spot})).unwrap();
+        let st = app.session.active().unwrap();
+        assert_eq!(st.channel_view.visible_colors(color_count(&st.doc)), 0);
+        let px = render(&st.doc, &st.channel_view, st.doc.bounds(), 1, Look::default(), st.active_layer).expect("solo spot renders");
+        // A revealed layer mask is all white; the spot has ink on the left half only.
+        assert_eq!(px[0], Color32::WHITE, "{mode}: inked half");
+        assert_eq!(px[7], Color32::BLACK, "{mode}: uninked half shows the spot, not the mask");
+    }
+}
