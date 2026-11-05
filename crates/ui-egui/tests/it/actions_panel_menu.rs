@@ -6,6 +6,9 @@ use serde_json::{Value, json};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{cell::RefCell, rc::Rc, sync::atomic::AtomicUsize};
 
+#[path = "../support/actions_snapshots.rs"]
+mod snapshots;
+
 /// A real panel and its dialogs with one selected action in a set.
 fn harness() -> Harness<'static, PhotocraftApp> {
     let mut app = PhotocraftApp::new(Session::new(), Default::default());
@@ -17,7 +20,7 @@ fn harness() -> Harness<'static, PhotocraftApp> {
     app.session.actions.list.push(a);
     app.ui.actions.selected = Some(0);
     app.ui.actions.expanded = vec![true];
-    let mut h = Harness::builder().with_size(egui::vec2(1100.0, 900.0)).build_ui_state(
+    let mut h = snapshots::builder(egui::vec2(1100.0, 900.0)).build_ui_state(
         |ui, app| {
             actions::panel_menu(app, ui);
             dialogs::show(app, ui.ctx());
@@ -174,6 +177,7 @@ fn reset_defaults_and_clear_all_keep_actual_consent_and_caller() {
 /// The measured warning's three buttons compose with the real Edit Undo command.
 #[test]
 fn reset_warning_has_three_buttons_and_undo_is_outside_document_history() {
+    let _gpu = snapshots::enabled().then(photocraft_testkit::gpu_lock);
     let mut h = harness();
     let original = h.state().session.actions.list.clone();
     let document = h.state().session.active().unwrap().doc.clone();
@@ -181,6 +185,7 @@ fn reset_warning_has_three_buttons_and_undo_is_outside_document_history() {
     open(&mut h, "Reset Actions…");
     assert!(h.query_by_label("Replace the current actions?").is_some());
     for label in ["OK", "Cancel", "Append"] { assert!(h.query_by_label(label).is_some()); }
+    snapshots::capture(&mut h, "reset-warning");
     h.get_by_label("Append").click();
     h.run_steps(3);
     assert_eq!(h.state().session.actions.list.len(), original.len() + 2);

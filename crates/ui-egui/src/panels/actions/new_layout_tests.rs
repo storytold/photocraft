@@ -98,7 +98,7 @@ fn draft(app: &mut PhotocraftApp, steps: &[(&str, Value)]) -> u64 {
 }
 
 fn harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
-    let mut h = Harness::builder().with_size(vec2(480.0, 740.0)).build_ui_state(
+    let mut h = super::super::snapshots::builder(vec2(480.0, 740.0)).build_ui_state(
         |ui, app| {
             if ui.ctx().fonts(|fonts| fonts.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 panel(app, ui);
@@ -114,6 +114,7 @@ fn harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
 /// Physical namesakes have separate Modern headers, exact selection and disclosure state.
 #[test]
 fn repeated_factory_folders_keep_modern_selection_collapse_and_empty_row_order() {
+    let _gpu = super::super::snapshots::enabled().then(photocraft_testkit::gpu_lock);
     let mut app = app();
     app.session.execute("actions.newSet", json!({"name":"Empty before defaults"})).unwrap();
     for _ in 0..2 {
@@ -144,6 +145,7 @@ fn repeated_factory_folders_keep_modern_selection_collapse_and_empty_row_order()
     let rows = photocraft_engine::actions_edit_cmds::set_occurrences(&h.state().session).unwrap();
     assert!(h.state().ui.actions.folder_collapsed(&super::super::FolderSelection::from_row(&rows[1])));
     assert!(!h.state().ui.actions.folder_collapsed(&super::super::FolderSelection::from_row(&rows[2])));
+    super::super::snapshots::capture(&mut h, "modern-repeated-folders");
     h.state_mut().ui.actions.search = "Invert".into();
     h.run_steps(2);
     assert_eq!(h.query_all_by_label("Invert Colors").count(), 2, "search reveals matching members of each occurrence");

@@ -2521,4 +2521,7 @@ mod metadata_color_tests;
 #[cfg(test)]
 mod owned_preview_tests;
 #[cfg(test)]
+#[path = "../../tests/support/actions_snapshots.rs"]
+mod snapshots;
+#[cfg(test)]
 mod tests;

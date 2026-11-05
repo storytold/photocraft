@@ -19,7 +19,8 @@ fn delayed_physical_folder_checks_revision_and_origin_before_slot_dispatch() {
 /// Equal folder captions keep separate selection and disclosure controls after repeated Append.
 #[test]
 fn repeated_factory_folders_select_and_collapse_independently() {
-    use egui_kittest::{Harness, kittest::Queryable};
+    use egui_kittest::kittest::Queryable;
+    let _gpu = snapshots::enabled().then(photocraft_testkit::gpu_lock);
     let mut session = photocraft_engine::Session::new();
     session.execute("file.new", json!({"width":4,"height":4})).unwrap();
     session.execute("actions.newSet", json!({"name":"Empty before defaults"})).unwrap();
@@ -27,7 +28,10 @@ fn repeated_factory_folders_select_and_collapse_independently() {
         session.execute("actions.reset", json!({"mode":"append","confirm":true})).unwrap();
     }
     let app = PhotocraftApp::new(session, crate::Services::default());
-    let mut h = Harness::builder().with_size(vec2(360.0, 420.0)).build_ui_state(|ui, app| panel(app, ui), app);
+    let mut h = snapshots::builder(vec2(360.0, 420.0)).build_ui_state(|ui, app| panel(app, ui), app);
+    if snapshots::enabled() {
+        PhotocraftApp::setup_context(&h.ctx, Default::default());
+    }
     h.run_steps(3);
     let caption = photocraft_engine::actions_edit_cmds::DEFAULT_SET_NAME;
     assert_eq!(h.query_all_by_label(caption).count(), 2);
@@ -53,6 +57,7 @@ fn repeated_factory_folders_select_and_collapse_independently() {
     let rows = photocraft_engine::actions_edit_cmds::set_occurrences(&h.state().session).unwrap();
     assert!(h.state().ui.actions.folder_collapsed(&FolderSelection::from_row(&rows[1])));
     assert!(!h.state().ui.actions.folder_collapsed(&FolderSelection::from_row(&rows[2])));
+    snapshots::capture(&mut h, "classic-repeated-folders");
 }
 
 /// A small valid Photoshop set, generated without external action files.
