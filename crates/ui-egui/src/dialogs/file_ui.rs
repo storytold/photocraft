@@ -24,7 +24,7 @@ use print::{drag_print_position, driver_paper_is_wide, print_params, print_previ
 use print::{print_body, print_confirm};
 pub use web::open_web;
 #[cfg(test)]
-use web::{ANIMATION_PROXY, WEB_COMMAND, WebCache, WebProxy, advance_frames, advance_preview, download_for_web, web_frame_document, web_proxy};
+use web::{ANIMATION_PROXY, WEB_COMMAND, WebCache, WebProxy, advance_frames, advance_preview, download_for_web, variants, web_frame_document, web_proxy};
 use web::{web_body, web_confirm};
 
 fn no_params(p: &Value) -> bool {
@@ -421,6 +421,28 @@ mod web_playback_tests {
         let (frame, began) = advance_frames(0, &delays, 0.0, 0.13);
         assert_eq!(frame, 1);
         assert!((began - 0.1).abs() < 1e-9);
+    }
+
+    /// WebP (#6391): Quality until Lossless is ticked; 4-Up halves a lossy quality like JPEG's.
+    #[test]
+    fn webp_settings_show_quality_until_lossless() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 32, "height": 24})).unwrap();
+        let id = open_web(&mut app);
+        let mut fields = app.ui.dialog_mut(id).unwrap().fields.clone();
+        fields.insert("format".into(), json!("webp"));
+        assert_eq!(fields["lossless"], false);
+        let mut h = harness(app, fields);
+        assert!(h.query_all_by_label("Quality").next().is_some());
+        h.get_by_label("Lossless").click();
+        h.run_steps(2);
+        assert_eq!(h.state().1["lossless"], true);
+        assert!(h.query_all_by_label("Quality").next().is_none(), "lossless has no quality");
+
+        let v = variants(&json!({"format": "webp", "quality": 80}));
+        assert_eq!((v[1]["format"].as_str(), v[1]["quality"].as_f64(), v[2]["quality"].as_f64()), (Some("webp"), Some(40.0), Some(20.0)));
+        let v = variants(&json!({"format": "webp", "lossless": true}));
+        assert_eq!((v[1]["format"].as_str(), v[2]["format"].as_str()), (Some("png8"), Some("gif")));
     }
 
     /// #9174: Save for Web reopens on the preview tab chosen last, as Photoshop's does; 2-Up at

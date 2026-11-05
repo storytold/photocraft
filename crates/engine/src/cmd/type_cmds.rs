@@ -24,10 +24,7 @@ fn has_doc(s: &Session) -> std::result::Result<(), String> {
 }
 
 fn layer_id(s: &Session, p: &Value) -> Result<LayerId> {
-    match p.get("layer").and_then(Value::as_u64) {
-        Some(id) => Ok(LayerId(id)),
-        None => s.active().and_then(|d| d.active_layer).ok_or(EngineError::Other("no active layer".into())),
-    }
+    crate::commands::layer_param(s, p)
 }
 
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
@@ -694,8 +691,8 @@ fn with_text_layer<R>(s: &mut Session, p: &Value, label: &str, f: impl FnOnce(&m
         }
         Ok((r, damage))
     })?;
-    if let Some(st) = s.active_mut() {
-        st.last_damage = damage;
+    if let Some(d) = damage {
+        s.hint_damage(d);
     }
     Ok(r)
 }
@@ -764,8 +761,8 @@ pub(crate) fn with_text_targets(
         }
         Ok(damage)
     })?;
-    if let Some(st) = s.active_mut() {
-        st.last_damage = damage;
+    if let Some(d) = damage {
+        s.hint_damage(d);
     }
     Ok(ids)
 }

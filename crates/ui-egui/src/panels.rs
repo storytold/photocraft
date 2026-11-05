@@ -25,6 +25,7 @@ pub mod channels_panel;
 pub mod chrome_ui;
 pub mod clip_line_ui;
 mod color;
+pub mod color_hud;
 pub mod color_panel_ui;
 pub mod comps_ui;
 pub mod doc_props_ui;
@@ -33,7 +34,7 @@ pub(super) mod frame_strip_ui;
 pub mod histogram_panel;
 mod history;
 pub mod history_menu_ui;
-mod info;
+pub(crate) mod info;
 mod layer_drag;
 pub mod layer_filter_ui;
 pub mod layer_menu_ui;
@@ -58,7 +59,7 @@ pub mod smart_ui;
 mod status_bar;
 pub mod swatches_ui;
 pub(super) mod timeline_ui;
-mod title_bar;
+pub(crate) mod title_bar;
 pub(super) mod titlebar;
 mod toolbar;
 pub mod type_panels_ui;
@@ -88,7 +89,7 @@ pub(crate) use layer_drag::{dropped_on, layer_drag_edge_scroll};
 pub(crate) use layer_row::thumb_load_badge;
 #[cfg(test)]
 use layer_row::{layer_thumb_fit, paint_clipping_indicator};
-pub(crate) use layers::blend_options;
+pub(crate) use layers::{blend_options, fx_button};
 #[cfg(test)]
 use layers::{layers, opacity_row_layout, simple_lock_toggle};
 #[cfg(test)]
@@ -110,7 +111,9 @@ pub use status_bar::{status_bar, status_bar_heights};
 use title_bar::title_x;
 pub use title_bar::{sync_window_title, system_title_bar, title_bar, window_title};
 #[cfg(test)]
-use toolbar::{STUDIO_CHIP, TOOL_SECTIONS, chips_height, color_chips, tool_flyout_drag_open, tool_flyout_release, toolbar_icon_size, visible_sections};
+use toolbar::{
+    STUDIO_CHIP, TOOL_SECTIONS, chips_height, color_chips, next_slot_tool, tool_flyout_drag_open, tool_flyout_release, toolbar_icon_size, visible_sections,
+};
 pub use toolbar::{paint_toolbar_flyout_indicator, toolbar};
 
 fn c32(c: [f32; 4]) -> Color32 {
@@ -145,7 +148,7 @@ mod title_tests {
 
     #[test]
     fn without_the_preference_the_mark_stays() {
-        // The default (e.g. the web build or the snapshot example): no custom bar, no preference.
+        // The default (e.g. the web build or snapshot example): the integrated title bar.
         let app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         assert!(!system_title_bar(&app));
     }
@@ -1950,6 +1953,45 @@ mod sampler_readout_tests {
         assert_eq!(b[0]["rgb"], json!([255, 0, 0]), "an edit shows");
         app.run("view.colorSamplers.add", json!({"x": 8, "y": 8})).unwrap();
         assert_eq!(sampler_readouts(&mut app).len(), 2, "so does a new sampler");
+    }
+}
+
+#[cfg(test)]
+mod brush_chip_tests {
+    use super::brush_controls::brush_preset_chip;
+
+    /// The options-bar chip's tip texture for `brush`, row-major alpha (32 × 32).
+    fn chip_tip(brush: &photocraft_engine::BrushSettings) -> Vec<u8> {
+        let ctx = egui::Context::default();
+        let mut state = crate::state::UiState::default();
+        let mut out = ctx.run_ui(Default::default(), |ui| brush_preset_chip(ui, brush, &mut state));
+        // `Painter::image` is a textured mesh.
+        let id = out.shapes.iter().find_map(|c| match &c.shape {
+            egui::Shape::Mesh(m) if (m.calc_bounds().width() - 14.0).abs() < 0.01 => Some(m.texture_id),
+            _ => None,
+        });
+        let image = id.and_then(|id| out.textures_delta.set.get(&id)).and_then(|d| d.last()).map(|d| match &d.image {
+            egui::ImageData::Color(c) => c.clone(),
+        });
+        out.textures_delta.clear();
+        let image = image.expect("the chip draws its tip as an uploaded texture");
+        assert_eq!(image.size, [32, 32]);
+        image.pixels.iter().map(|p| p.a()).collect()
+    }
+
+    /// The chip shows the brush's own tip: a soft brush fades from its centre as its dabs do, a
+    /// hard one is solid to its rim, and a flattened tip is flat, not a round blob.
+    #[test]
+    fn the_brush_chip_draws_the_brushs_own_tip() {
+        let at = |a: &[u8], x: usize, y: usize| a[y * 32 + x];
+        let hard = chip_tip(&photocraft_engine::BrushSettings { hardness: 1.0, ..Default::default() });
+        let soft = chip_tip(&photocraft_engine::BrushSettings { hardness: 0.0, ..Default::default() });
+        assert!(at(&hard, 16, 16) == 255 && at(&hard, 16 + 11, 16) == 255, "hard: solid to near the rim");
+        assert!(at(&soft, 16, 16) > 230, "soft: full at the centre");
+        assert!(at(&soft, 16 + 11, 16) < 80, "soft: faint near the rim: {}", at(&soft, 16 + 11, 16));
+        assert!(at(&soft, 16 + 6, 16) > at(&soft, 16 + 11, 16), "and fading outwards");
+        let flat = chip_tip(&photocraft_engine::BrushSettings { hardness: 1.0, roundness: 0.3, ..Default::default() });
+        assert!(at(&flat, 16 + 11, 16) > 200 && at(&flat, 16, 16 + 11) == 0, "a flattened tip is flat");
     }
 }
 
