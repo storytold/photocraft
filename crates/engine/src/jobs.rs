@@ -1501,7 +1501,7 @@ impl Session {
     /// Cancel the jobs editing document `doc` (it is closing). A job past its commit keeps
     /// running and its result is still applied (see [`JobCtx::commit`]).
     pub(crate) fn cancel_jobs_on(&mut self, doc: DocId) -> CancelReport {
-        let ids: Vec<JobId> = self.jobs.running.iter().filter(|r| r.doc == Some(doc)).map(|r| r.id).collect();
+        let ids: Vec<JobId> = self.jobs.running.iter().filter(|r| r.doc == Some(doc) || r.locks == Some(doc)).map(|r| r.id).collect();
         let report = self.cancel_each(ids);
         // Workers cancelled now, or earlier and still unwinding, hold the closing document.
         #[cfg(not(target_arch = "wasm32"))]
