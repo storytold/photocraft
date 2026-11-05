@@ -4641,3 +4641,11 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Replace Image…	Замени слику…
 	The frame is locked	Оквир је закључан
 	The frame is unavailable	Оквир није доступан
+
+# Artboard tool options bar (#11385)
+	Distribute Widths	Raspodeli širine
+	Distribute Heights	Raspodeli visine
+	Auto-nest Layers	Automatski ugnezdi slojeve
+	Auto-size Canvas	Automatski promeni veličinu platna
+	Keep Relative Position During Layer Reordering	Zadrži relativni položaj pri promeni redosleda slojeva
+	Shrinkwrap Canvas on Save	Smanji platno na sadržaj pri čuvanju

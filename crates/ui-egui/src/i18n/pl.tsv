@@ -4183,3 +4183,11 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Replace Image…	Zastąp obraz…
 	The frame is locked	Ramka jest zablokowana
 	The frame is unavailable	Ramka jest niedostępna
+
+# Artboard tool options bar (#11385)
+	Distribute Widths	Rozmieść szerokości równomiernie
+	Distribute Heights	Rozmieść wysokości równomiernie
+	Auto-nest Layers	Automatycznie zagnieżdżaj warstwy
+	Auto-size Canvas	Automatycznie zmieniaj rozmiar płótna
+	Keep Relative Position During Layer Reordering	Zachowaj położenie względne przy zmianie kolejności warstw
+	Shrinkwrap Canvas on Save	Przytnij płótno do zawartości przy zapisie

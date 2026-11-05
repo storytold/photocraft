@@ -3254,3 +3254,11 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Frame	框架
 	X	X
 	Y	Y
+
+# Artboard tool options bar (#11385)
+	Distribute Widths	分布宽度
+	Distribute Heights	分布高度
+	Auto-nest Layers	自动嵌套图层
+	Auto-size Canvas	自动调整画布大小
+	Keep Relative Position During Layer Reordering	重新排列图层时保持相对位置
+	Shrinkwrap Canvas on Save	保存时将画布缩至内容大小

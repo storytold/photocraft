@@ -4243,3 +4243,11 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Replace Image…	画像を置き換え…
 	The frame is locked	フレームはロックされています
 	The frame is unavailable	フレームを利用できません
+
+# Artboard tool options bar (#11385)
+	Distribute Widths	幅を分布
+	Distribute Heights	高さを分布
+	Auto-nest Layers	レイヤーを自動でネスト
+	Auto-size Canvas	カンバスサイズを自動調整
+	Keep Relative Position During Layer Reordering	レイヤーの並べ替え中も相対位置を保持
+	Shrinkwrap Canvas on Save	保存時にカンバスを内容に合わせて縮小

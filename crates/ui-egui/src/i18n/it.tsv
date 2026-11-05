@@ -4674,3 +4674,11 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Replace Image…	Sostituisci immagine…
 	The frame is locked	La cornice è bloccata
 	The frame is unavailable	La cornice non è disponibile
+
+# Artboard tool options bar (#11385)
+	Distribute Widths	Distribuisci larghezze
+	Distribute Heights	Distribuisci altezze
+	Auto-nest Layers	Annida livelli automaticamente
+	Auto-size Canvas	Ridimensiona quadro automaticamente
+	Keep Relative Position During Layer Reordering	Mantieni la posizione relativa durante il riordino dei livelli
+	Shrinkwrap Canvas on Save	Riduci il quadro al contenuto al salvataggio

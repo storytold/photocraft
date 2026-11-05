@@ -4320,3 +4320,11 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Replace Image…	Afbeelding vervangen…
 	The frame is locked	Het kader is vergrendeld
 	The frame is unavailable	Het kader is niet beschikbaar
+
+# Artboard tool options bar (#11385)
+	Distribute Widths	Breedtes verdelen
+	Distribute Heights	Hoogtes verdelen
+	Auto-nest Layers	Lagen automatisch nesten
+	Auto-size Canvas	Canvasgrootte automatisch aanpassen
+	Keep Relative Position During Layer Reordering	Relatieve positie behouden bij het wijzigen van de laagvolgorde
+	Shrinkwrap Canvas on Save	Canvas bij opslaan verkleinen tot de inhoud

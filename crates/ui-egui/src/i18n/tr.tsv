@@ -4297,3 +4297,11 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Replace Image…	Görüntüyü Değiştir…
 	The frame is locked	Çerçeve kilitli
 	The frame is unavailable	Çerçeve kullanılamıyor
+
+# Artboard tool options bar (#11385)
+	Distribute Widths	Genişlikleri Dağıt
+	Distribute Heights	Yükseklikleri Dağıt
+	Auto-nest Layers	Katmanları Otomatik İç İçe Yerleştir
+	Auto-size Canvas	Tuvali Otomatik Boyutlandır
+	Keep Relative Position During Layer Reordering	Katmanları Yeniden Sıralarken Göreli Konumu Koru
+	Shrinkwrap Canvas on Save	Kaydederken Tuvali İçeriğe Göre Küçült

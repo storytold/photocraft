@@ -3788,3 +3788,11 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	The frame is unavailable	프레임을 사용할 수 없습니다
 	X	X
 	Y	Y
+
+# Artboard tool options bar (#11385)
+	Distribute Widths	너비 분포
+	Distribute Heights	높이 분포
+	Auto-nest Layers	레이어 자동 중첩
+	Auto-size Canvas	캔버스 크기 자동 조정
+	Keep Relative Position During Layer Reordering	레이어 순서 변경 시 상대 위치 유지
+	Shrinkwrap Canvas on Save	저장 시 캔버스를 내용에 맞게 축소

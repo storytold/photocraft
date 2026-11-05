@@ -3564,3 +3564,11 @@ curves	Smooth	تنعيم
 	Pause For	إيقاف مؤقت لمدة
 	seconds	ثانية
 	Create a single history state	إنشاء حالة سجل واحدة
+
+# Artboard tool options bar (#11385)
+	Distribute Widths	توزيع العروض
+	Distribute Heights	توزيع الارتفاعات
+	Auto-nest Layers	تداخل الطبقات تلقائيًا
+	Auto-size Canvas	تحديد حجم مساحة الرسم تلقائيًا
+	Keep Relative Position During Layer Reordering	الإبقاء على الموضع النسبي عند إعادة ترتيب الطبقات
+	Shrinkwrap Canvas on Save	تقليص مساحة الرسم إلى المحتوى عند الحفظ

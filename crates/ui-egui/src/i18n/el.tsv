@@ -4266,3 +4266,11 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	The frame is unavailable	Το πλαίσιο δεν είναι διαθέσιμο
 	X	X
 	Y	Y
+
+# Artboard tool options bar (#11385)
+	Distribute Widths	Κατανομή πλατών
+	Distribute Heights	Κατανομή υψών
+	Auto-nest Layers	Αυτόματη ένθεση επιπέδων
+	Auto-size Canvas	Αυτόματη αλλαγή μεγέθους καμβά
+	Keep Relative Position During Layer Reordering	Διατήρηση σχετικής θέσης κατά την αναδιάταξη επιπέδων
+	Shrinkwrap Canvas on Save	Σμίκρυνση καμβά στο περιεχόμενο κατά την αποθήκευση

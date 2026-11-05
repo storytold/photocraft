@@ -3588,3 +3588,11 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	The frame is locked	Bingkai terkunci
 	The frame is unavailable	Bingkai tidak tersedia
 	Frame	Bingkai
+
+# Artboard tool options bar (#11385)
+	Distribute Widths	Distribusi lebar
+	Distribute Heights	Distribusi tinggi
+	Auto-nest Layers	Sarangkan layer secara otomatis
+	Auto-size Canvas	Ubah ukuran kanvas otomatis
+	Keep Relative Position During Layer Reordering	Pertahankan posisi relatif saat mengurutkan ulang layer
+	Shrinkwrap Canvas on Save	Kecilkan kanvas sesuai konten saat menyimpan

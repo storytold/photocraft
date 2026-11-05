@@ -4605,3 +4605,11 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Boja tačke
 	Shapes can't use patterns yet	Oblici još ne mogu koristiti uzorke
 	Edit Brush…	Uredi četkicu…
+
+# Artboard tool options bar (#11385)
+	Distribute Widths	Rasporedi širine
+	Distribute Heights	Rasporedi visine
+	Auto-nest Layers	Automatski ugnijezdi slojeve
+	Auto-size Canvas	Automatski promijeni veličinu platna
+	Keep Relative Position During Layer Reordering	Zadrži relativni položaj pri promjeni redoslijeda slojeva
+	Shrinkwrap Canvas on Save	Smanji platno na sadržaj pri sačuvanju

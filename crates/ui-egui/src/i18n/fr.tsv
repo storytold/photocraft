@@ -4598,3 +4598,11 @@ shape	Appearance	Apparence
 	Replace Image…	Remplacer l’image…
 	The frame is locked	Le cadre est verrouillé
 	The frame is unavailable	Le cadre n’est pas disponible
+
+# Artboard tool options bar (#11385)
+	Distribute Widths	Répartir les largeurs
+	Distribute Heights	Répartir les hauteurs
+	Auto-nest Layers	Imbriquer les calques automatiquement
+	Auto-size Canvas	Redimensionner le canevas automatiquement
+	Keep Relative Position During Layer Reordering	Conserver la position relative lors de la réorganisation des calques
+	Shrinkwrap Canvas on Save	Réduire le canevas au contenu à l'enregistrement

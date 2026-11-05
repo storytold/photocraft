@@ -993,6 +993,10 @@ fn confirm_target(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Val
         crate::crop_shield::set_custom_color(app, color)?;
         return Ok(json!({ "color": color }));
     }
+    // The Artboard tool's custom background for the boards it draws (#11385).
+    if target == "artboardBackground" {
+        return crate::artboard_tool::bar::set_custom_background(app, color);
+    }
     // The Note tool's colour for new notes (#2144).
     if target == "noteColor" {
         app.ui.analysis.note_color = parse_hex(color).ok_or("not a colour")?;

@@ -4311,3 +4311,11 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Replace Image…	Nahradit obrázek…
 	The frame is locked	Rámeček je zamčený
 	The frame is unavailable	Rámeček není dostupný
+
+# Artboard tool options bar (#11385)
+	Distribute Widths	Rozmístit šířky
+	Distribute Heights	Rozmístit výšky
+	Auto-nest Layers	Automaticky vnořovat vrstvy
+	Auto-size Canvas	Automaticky měnit velikost plátna
+	Keep Relative Position During Layer Reordering	Zachovat relativní polohu při změně pořadí vrstev
+	Shrinkwrap Canvas on Save	Při uložení zmenšit plátno na obsah

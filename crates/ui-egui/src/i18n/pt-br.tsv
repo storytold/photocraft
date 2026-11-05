@@ -4489,3 +4489,11 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Replace Image…	Substituir imagem…
 	The frame is locked	A moldura está bloqueada
 	The frame is unavailable	A moldura não está disponível
+
+# Artboard tool options bar (#11385)
+	Distribute Widths	Distribuir larguras
+	Distribute Heights	Distribuir alturas
+	Auto-nest Layers	Aninhar camadas automaticamente
+	Auto-size Canvas	Ajustar tamanho da tela automaticamente
+	Keep Relative Position During Layer Reordering	Manter a posição relativa ao reordenar camadas
+	Shrinkwrap Canvas on Save	Reduzir a tela ao conteúdo ao salvar

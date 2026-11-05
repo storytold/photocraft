@@ -4482,3 +4482,11 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Replace Image…	Kép cseréje…
 	The frame is locked	A keret zárolva van
 	The frame is unavailable	A keret nem érhető el
+
+# Artboard tool options bar (#11385)
+	Distribute Widths	Szélességek elosztása
+	Distribute Heights	Magasságok elosztása
+	Auto-nest Layers	Rétegek automatikus beágyazása
+	Auto-size Canvas	Vászonméret automatikus módosítása
+	Keep Relative Position During Layer Reordering	Relatív pozíció megtartása a rétegek átrendezésekor
+	Shrinkwrap Canvas on Save	Vászon összehúzása a tartalomra mentéskor

@@ -4072,3 +4072,11 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Replace Image…	Thay ảnh…
 	The frame is locked	Khung đã bị khóa
 	The frame is unavailable	Khung không khả dụng
+
+# Artboard tool options bar (#11385)
+	Distribute Widths	Phân bố chiều rộng
+	Distribute Heights	Phân bố chiều cao
+	Auto-nest Layers	Tự động lồng các lớp
+	Auto-size Canvas	Tự động đổi kích thước vùng vẽ
+	Keep Relative Position During Layer Reordering	Giữ vị trí tương đối khi sắp xếp lại lớp
+	Shrinkwrap Canvas on Save	Thu nhỏ vùng vẽ theo nội dung khi lưu

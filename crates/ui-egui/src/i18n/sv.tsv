@@ -4785,3 +4785,11 @@ cameraRaw	White Balance: As Shot	Vitbalans: som tagen
 	Pause For	Paus i
 	seconds	sekunder
 	Create a single history state	Skapa ett enda historikläge
+
+# Artboard tool options bar (#11385)
+	Distribute Widths	Fördela bredder
+	Distribute Heights	Fördela höjder
+	Auto-nest Layers	Kapsla in lager automatiskt
+	Auto-size Canvas	Ändra storlek på arbetsytan automatiskt
+	Keep Relative Position During Layer Reordering	Behåll relativ position vid ändring av lagerordning
+	Shrinkwrap Canvas on Save	Krymp arbetsytan till innehållet vid sparning

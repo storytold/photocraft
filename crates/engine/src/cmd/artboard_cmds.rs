@@ -19,6 +19,7 @@ use crate::{EngineError, Result, Session};
 
 /// Artboard size presets (name, width, height) in pixels, Photoshop's common devices and pages.
 pub const PRESETS: &[(&str, u32, u32)] = &[
+    ("iPhone 8/7/6", 750, 1334),
     ("iPhone 14", 390, 844),
     ("iPhone 14 Pro Max", 430, 932),
     ("Android 1080p", 360, 640),

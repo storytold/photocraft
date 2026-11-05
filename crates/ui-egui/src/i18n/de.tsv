@@ -3597,3 +3597,11 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	The frame is unavailable	Der Rahmen ist nicht verfügbar
 	X	X
 	Y	Y
+
+# Artboard tool options bar (#11385)
+	Distribute Widths	Breiten verteilen
+	Distribute Heights	Höhen verteilen
+	Auto-nest Layers	Ebenen automatisch verschachteln
+	Auto-size Canvas	Zeichenflächengröße automatisch anpassen
+	Keep Relative Position During Layer Reordering	Relative Position beim Neuanordnen von Ebenen beibehalten
+	Shrinkwrap Canvas on Save	Zeichenfläche beim Speichern auf den Inhalt verkleinern

@@ -4787,3 +4787,11 @@ cameraRaw	White Balance: As Shot	Hvitbalanse: som fotografert
 	Pause For	Pause i
 	seconds	sekunder
 	Create a single history state	Opprett én historikktilstand
+
+# Artboard tool options bar (#11385)
+	Distribute Widths	Fordel bredder
+	Distribute Heights	Fordel høyder
+	Auto-nest Layers	Neste lag automatisk
+	Auto-size Canvas	Endre lerretstørrelse automatisk
+	Keep Relative Position During Layer Reordering	Behold relativ posisjon ved omordning av lag
+	Shrinkwrap Canvas on Save	Krymp lerretet til innholdet ved lagring
