@@ -345,6 +345,134 @@ fn text_in_missing_fonts_falls_back_to_an_installed_one() {
     }
 }
 
+/// Three visibly distinct generic choices, independent of installed fonts. The medium Inter
+/// face stands in for serif so even hosts with no serif font can detect a wrong fallback.
+fn distinct_generic_fonts() -> Arc<usvg::fontdb::Database> {
+    let mut db = usvg::fontdb::Database::new();
+    db.load_font_data(photocraft_text::fonts::INTER_MEDIUM.to_vec());
+    let mut serif = db.faces().next().unwrap().clone();
+    db.remove_face(serif.id);
+    for (name, _) in &mut serif.families {
+        *name = "SVG Test Serif".into();
+    }
+    db.push_face_info(serif);
+    db.load_font_data(photocraft_text::fonts::INTER_REGULAR.to_vec());
+    db.load_font_data(photocraft_text::fonts::INTER_SEMIBOLD.to_vec());
+    db.load_font_data(photocraft_text::fonts::JETBRAINS_MONO_REGULAR.to_vec());
+    db.set_sans_serif_family("Inter");
+    db.set_serif_family("SVG Test Serif");
+    db.set_monospace_family("JetBrains Mono");
+    Arc::new(db)
+}
+
+fn imported_font_sample(family: &str, attributes: &str) -> Vec<u8> {
+    let svg = format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="240" height="64"><text x="4" y="48" font-size="36" font-family="{family}" {attributes}>ill WWW 017</text></svg>"#
+    );
+    let parsed = parse_with(svg.as_bytes(), distinct_generic_fonts).unwrap();
+    assert!(!parsed.fontless_text);
+    let imported = import_parsed("font fallback", parsed, MAX_GROUP_DEPTH, None, false).unwrap();
+    let pixels = photocraft_compose::flatten(&imported.document).to_rgba8().pixels;
+    assert!(pixels.as_chunks::<4>().0.iter().any(|p| p[3] != 0), "text must be visible");
+    pixels
+}
+
+/// #10852: SVGs often name only sans-serif faces, without an explicit generic at the end.
+#[test]
+fn missing_named_svg_fonts_keep_their_generic_class() {
+    let sans = imported_font_sample("sans-serif", "");
+    let serif = imported_font_sample("serif", "");
+    let mono = imported_font_sample("monospace", "");
+    assert!(sans != serif && sans != mono && serif != mono, "the font oracle must distinguish all three classes");
+    for family in ["DejaVu Sans, Arial, Helvetica", "Arial", "Helvetica", "Verdana", "Liberation Sans", "aRiAl"] {
+        assert!(imported_font_sample(family, "") == sans, "{family}: missing sans-serif faces must not become serif");
+    }
+    for family in ["Courier New", "Courier", "DejaVu Sans Mono", "Liberation Mono"] {
+        assert!(imported_font_sample(family, "") == mono, "{family}: missing monospace faces must stay monospace");
+    }
+    for family in ["Times New Roman", "Times", "Georgia", "Liberation Serif", "Unavailable Authored Font"] {
+        assert!(imported_font_sample(family, "") == serif, "{family}: serif and unknown fonts retain the default fallback");
+    }
+}
+
+#[test]
+fn missing_named_svg_font_fallback_respects_the_authored_stack() {
+    for (family, expected) in [
+        ("Arial, JetBrains Mono", "monospace"),
+        ("Courier New, Inter", "sans-serif"),
+        ("Inter, JetBrains Mono", "sans-serif"),
+        ("JetBrains Mono, Arial", "monospace"),
+        ("sans-serif, Arial", "sans-serif"),
+        ("Arial, serif", "serif"),
+        ("Courier New, sans-serif", "sans-serif"),
+        ("Arial, Courier New", "sans-serif"),
+        ("Courier New, Arial", "monospace"),
+        ("Georgia, Arial", "serif"),
+        ("Unknown, Arial", "sans-serif"),
+        ("&apos;Arial&apos;, &apos;Helvetica&apos;", "sans-serif"),
+        ("Arialish", "serif"),
+    ] {
+        assert!(imported_font_sample(family, "") == imported_font_sample(expected, ""), "{family}: expected {expected}");
+    }
+    let bold = r#"font-weight="600""#;
+    assert!(imported_font_sample("sans-serif", bold) != imported_font_sample("sans-serif", ""), "the oracle must distinguish weights");
+    assert!(imported_font_sample("Arial", bold) == imported_font_sample("sans-serif", bold), "fallback preserves font weight");
+}
+
+#[test]
+fn named_svg_font_fallback_preserves_style_weight_and_stretch() {
+    use usvg::fontdb::{Stretch, Style, Weight};
+    for (attributes, weight, style, stretch) in [
+        (r#"font-weight="700""#, 700, Style::Normal, Stretch::Normal),
+        (r#"font-style="italic""#, 400, Style::Italic, Stretch::Normal),
+        (r#"font-style="oblique""#, 400, Style::Oblique, Stretch::Normal),
+        (r#"font-stretch="condensed""#, 400, Style::Normal, Stretch::Condensed),
+        (r#"font-stretch="expanded""#, 400, Style::Normal, Stretch::Expanded),
+        (r#"font-weight="300" font-style="italic" font-stretch="extra-expanded""#, 300, Style::Italic, Stretch::ExtraExpanded),
+    ] {
+        let mut db = (*distinct_generic_fonts()).clone();
+        // Query matching uses metadata: a separate ID makes each requested property observable
+        // without adding font assets, even though the glyphs share the bundled regular face.
+        let mut face = db.faces().find(|f| f.families.iter().any(|(name, _)| name == "Inter") && f.weight == Weight(400)).unwrap().clone();
+        face.weight = Weight(weight);
+        face.style = style;
+        face.stretch = stretch;
+        let expected = db.push_face_info(face);
+        let mut opt = options(Arc::new(db), MAX_XML_DEPTH);
+        let select = opt.font_resolver.select_font;
+        let chosen = Arc::new(Mutex::new(Vec::new()));
+        let recorded = chosen.clone();
+        opt.font_resolver.select_font = Box::new(move |font, db| {
+            let id = select(font, db);
+            if let Some(id) = id {
+                recorded.lock().unwrap().push(id);
+            }
+            id
+        });
+        let svg = format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="120" height="60"><text y="40" font-family="Arial" {attributes}>Test</text></svg>"#);
+        let tree = usvg::Tree::from_data(svg.as_bytes(), &opt).unwrap();
+        assert!(!tree.root().children().is_empty());
+        assert!(chosen.lock().unwrap().contains(&expected), "{attributes}: the requested face must be selected");
+    }
+}
+
+#[test]
+fn named_svg_font_fallback_keeps_the_default_when_its_generic_is_unavailable() {
+    fn serif_only() -> Arc<usvg::fontdb::Database> {
+        let mut db = usvg::fontdb::Database::new();
+        db.load_font_data(photocraft_text::fonts::INTER_REGULAR.to_vec());
+        db.set_serif_family("Inter");
+        Arc::new(db)
+    }
+    // Missing generic sans/mono assignments must still reach usvg's existing serif fallback.
+    for family in ["Arial", "Courier New", "serif", "Unknown"] {
+        let svg = format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="120" height="60"><text y="40" font-family="{family}">Test</text></svg>"#);
+        let parsed = parse_with(svg.as_bytes(), serif_only).unwrap();
+        assert!(!parsed.fontless_text);
+        assert!(!parsed.tree.root().children().is_empty(), "{family}: text must survive");
+    }
+}
+
 /// #9406: a font installed on disk (how the system fonts load) is read once, not once per
 /// glyph: fontdb re-reads a file source's whole font on every glyph it outlines, about a
 /// millisecond a character. The face text is set in comes from memory, and the outlines

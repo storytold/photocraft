@@ -268,19 +268,65 @@ fn in_memory(id: usvg::fontdb::ID, db: &mut Arc<usvg::fontdb::Database>) -> usvg
     loaded.into_iter().find(|&n| db.face_source(n).is_some_and(|(_, i)| i == index)).unwrap_or(id)
 }
 
-/// usvg's font choice, with the chosen faces read from memory ([`in_memory`]).
-fn font_resolver() -> usvg::FontResolver<'static> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let select = usvg::FontResolver::default_font_selector();
-        let fallback = usvg::FontResolver::default_fallback_selector();
-        usvg::FontResolver {
-            select_font: Box::new(move |font, db| select(font, db).map(|id| in_memory(id, db))),
-            select_fallback: Box::new(move |c, used, db| fallback(c, used, db).map(|id| in_memory(id, db))),
+/// A portable last-resort class for common authored font names, not arbitrary substrings.
+fn named_generic(name: &str) -> Option<usvg::fontdb::Family<'static>> {
+    use usvg::fontdb::Family;
+    for (generic, names) in [
+        (Family::SansSerif, &["Arial", "Helvetica", "DejaVu Sans", "Verdana", "Liberation Sans"][..]),
+        (Family::Serif, &["Times New Roman", "Times", "Georgia", "Liberation Serif", "DejaVu Serif"][..]),
+        (Family::Monospace, &["Courier New", "Courier", "DejaVu Sans Mono", "Liberation Mono"][..]),
+    ] {
+        if names.iter().any(|n| n.eq_ignore_ascii_case(name)) {
+            return Some(generic);
         }
     }
+    None
+}
+
+/// #10852: usvg otherwise appends serif even for a wholly missing sans-serif stack. Try the
+/// first known name's generic class only AFTER every authored family, so a later installed
+/// face or explicit generic still wins. Unknown names keep usvg's existing default.
+fn select_named_font(font: &usvg::Font, db: &usvg::fontdb::Database) -> Option<usvg::fontdb::ID> {
+    use usvg::{FontFamily, fontdb::Family};
+    let generic = font.families().iter().find_map(|f| if let FontFamily::Named(name) = f { named_generic(name) } else { None })?;
+    let mut families: Vec<_> = font
+        .families()
+        .iter()
+        .map(|f| match f {
+            FontFamily::Named(name) => Family::Name(name),
+            FontFamily::SansSerif => Family::SansSerif,
+            FontFamily::Serif => Family::Serif,
+            FontFamily::Monospace => Family::Monospace,
+            FontFamily::Cursive => Family::Cursive,
+            FontFamily::Fantasy => Family::Fantasy,
+        })
+        .collect();
+    families.push(generic);
+    db.query(&usvg::fontdb::Query {
+        families: &families,
+        weight: usvg::fontdb::Weight(font.weight()),
+        stretch: font.stretch().into(),
+        style: font.style().into(),
+    })
+}
+
+/// Preserve named fonts' generic class when missing, with chosen native faces read from
+/// memory ([`in_memory`]); missing-glyph fallback stays usvg's on both native and web.
+fn font_resolver() -> usvg::FontResolver<'static> {
+    let default = usvg::FontResolver::default_font_selector();
+    let select: usvg::FontSelectionFn<'static> = Box::new(move |font, db| {
+        let id = select_named_font(font, db).or_else(|| default(font, db));
+        #[cfg(not(target_arch = "wasm32"))]
+        let id = id.map(|id| in_memory(id, db));
+        id
+    });
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let fallback = usvg::FontResolver::default_fallback_selector();
+        usvg::FontResolver { select_font: select, select_fallback: Box::new(move |c, used, db| fallback(c, used, db).map(|id| in_memory(id, db))) }
+    }
     #[cfg(target_arch = "wasm32")]
-    usvg::FontResolver::default()
+    usvg::FontResolver { select_font: select, ..usvg::FontResolver::default() }
 }
 
 /// Parse options for an untrusted drawing. `<image href>` resolves only `data:` URLs: a file path
