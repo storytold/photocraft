@@ -72,10 +72,12 @@ pub fn insert_new(doc: &mut Document, anchor: Option<LayerId>, mut layer: Layer,
                 index += 1;
             }
             layer.clipped = false;
-        } else if index > 0 && sib.get(index - 1).is_some_and(|below| below.artboard().is_some()) {
-            // Directly above an artboard (content pasted off its board goes there): never clipped
-            // to it, where the board would clip it away, and past the clipped layers above the
-            // slot so their clipping mask stays whole, as a new artboard goes.
+        } else if place == Place::AutoEditable && index > 0 && sib.get(index - 1).is_some_and(|below| below.artboard().is_some()) {
+            // New content placed directly above an artboard (pasted off its board, or beside a
+            // board that doesn't take it): never clipped to it, where the board would clip it
+            // away, and past the clipped layers above the slot so their clipping mask stays
+            // whole, as a new artboard goes. A layer put [`Place::Above`] a board keeps its flag:
+            // the layers after a pasted board, a duplicate.
             while sib.get(index).is_some_and(|above| above.clipped) {
                 index += 1;
             }

@@ -642,7 +642,7 @@ pub(crate) fn shifted(surface: &Surface, dx: i32, dy: i32) -> Surface {
 
 /// Paste into the targeted layer mask, alpha channel or Quick Mask (`"target"`) instead of as a
 /// new layer (Photoshop, #1035): the pasted pixels' luminosity, placed as a paste places them
-/// (on another artboard too), over what was there. Their transparency, and `limit` (Paste Into / Outside), let it show
+/// (into a mask on another artboard too), over what was there. Their transparency, and `limit` (Paste Into / Outside), let it show
 /// through. One history step.
 pub(crate) fn paste_to_target(s: &mut Session, p: &Value, in_place: bool, limit: Option<&Surface>, label: &str) -> Result<Value> {
     crate::allocation::checkpoint("pasting pixels")?;
@@ -650,9 +650,12 @@ pub(crate) fn paste_to_target(s: &mut Session, p: &Value, in_place: bool, limit:
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let canvas = d.doc.bounds();
     let layer = d.active_layer;
-    // Into a mask or channel on another board of this document, the pixels keep their place on
-    // the board, as a layer paste beside the same layer does ([`board_shift`]).
-    let shift = board_shift(&clip, &d.doc, layer, p, false).map(|(dx, dy, _)| (dx, dy));
+    // Into a layer's mask on another board of this document, the pixels keep their place on the
+    // board, as a layer paste beside the same layer does ([`board_shift`]). An alpha channel or
+    // the Quick Mask covers the whole document, on no board, so the active layer's board doesn't
+    // move what goes into it.
+    let shift = if crate::channel_cmds::is_channel_target(p) { None } else { board_shift(&clip, &d.doc, layer, p, false) };
+    let shift = shift.map(|(dx, dy, _)| (dx, dy));
     let (dx, dy) = shift.unwrap_or_else(|| paste_offset(&clip, d.doc.id, canvas, p, in_place));
     let src = shifted(&clip.surface, dx, dy);
     let area = src.content_bounds().intersect(&canvas);

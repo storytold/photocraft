@@ -1871,6 +1871,25 @@ fn paste_into_a_mask_on_another_artboard_keeps_the_place_on_the_board() {
     }
 }
 
+/// Paste in Place into an alpha channel with a layer on another artboard selected keeps the
+/// document position (#11441 review): the channel covers the whole document and belongs to no
+/// board, so the selected layer's board doesn't shift it.
+#[test]
+fn paste_in_place_into_an_alpha_channel_ignores_the_selected_layers_board() {
+    let (mut s, red, _a, b) = two_boards();
+    s.execute("layer.select", json!({"layer": red.0})).unwrap();
+    s.execute("edit.copy", json!({})).unwrap();
+    let lum = luminosity(&s, red, 15, 15);
+    let m = s.execute("layer.new.layer", json!({"name": "m"})).unwrap()["layer"].as_u64().map(LayerId).unwrap();
+    s.execute("layer.moveTo", json!({"layer": m.0, "target": b.0, "position": "into"})).unwrap();
+    s.execute("layer.select", json!({"layer": m.0})).unwrap();
+    s.execute("channel.new", json!({})).unwrap();
+    let r = s.execute("edit.pasteSpecial.pasteInPlace", json!({"target": {"channel": 0}})).unwrap();
+    assert_eq!(r["offset"], json!([0, 0]), "not moved to B");
+    let c = &s.active().unwrap().doc.channels[0].surface;
+    assert!((c.sample_channel(15, 15, 0) - lum).abs() < 2.0 / 255.0, "at the copied spot");
+}
+
 /// Paste into the mask of a position-locked artboard itself takes the board's shift too
 /// (#11441 review): the lock keeps a new layer off the board, but a mask paste adds no layer and
 /// mask edits don't check position locks, so it lands at the same spot on the board, not at the

@@ -375,3 +375,18 @@ fn a_clipped_paste_off_the_board_lands_above_it_unclipped() {
     assert_eq!(root.iter().position(|x| *x == off), root.iter().position(|x| *x == board).map(|i| i + 1));
     assert!(!d.layer(off).unwrap().clipped, "not clipped to the board");
 }
+
+/// A clipped layer put directly above an artboard with [`Place::Above`] keeps its flag
+/// (#11441 review): it is the layer after a pasted board, stacked as it was copied.
+#[test]
+fn a_clipped_layer_placed_above_an_artboard_stays_clipped() {
+    let (mut s, _, _) = session();
+    let board = id(s.execute("layer.new.artboard", json!({"rect": [0, 0, 8, 8]})).unwrap());
+    let mut d = doc(&s).clone();
+    let mut l = Layer::raster("clipped", d.pixel_format());
+    l.clipped = true;
+    let l = insert_new(&mut d, Some(board), l, Place::Above);
+    let root: Vec<LayerId> = d.layers.iter().map(|x| x.id).collect();
+    assert_eq!(root.iter().position(|x| *x == l), root.iter().position(|x| *x == board).map(|i| i + 1));
+    assert!(d.layer(l).unwrap().clipped);
+}
