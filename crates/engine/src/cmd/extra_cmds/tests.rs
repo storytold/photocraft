@@ -311,6 +311,99 @@ fn a_hard_circle_strokes_like_photoshop() {
     }
 }
 
+/// #10775: a thick Outside or Center stroke of a rectangle has bevelled outer corners in
+/// Photoshop, not round ones: the outer edges run straight to the corner's diagonal and are
+/// joined by a 45° cut from one to the other. A pixel `dx` and `dy` px out past both edges
+/// (both ≥ 1) is stroked when `dx + dy ≤ r + 1` (its centre is on or inside the cut), where
+/// `r` is the band outside the selection; along the edges the band is `r` px as before. Inside
+/// the selection the corners stay square.
+#[test]
+fn a_thick_stroke_bevels_a_rectangles_outer_corners() {
+    // Selection x, y 110..270 (edge pixels 110 and 269) on a 380 px canvas.
+    let (n, lo, hi) = (380usize, 110i32, 269i32);
+    let mask: Vec<f32> = (0..n * n)
+        .map(|i| {
+            let (x, y) = ((i % n) as i32, (i / n) as i32);
+            if (lo..=hi).contains(&x) && (lo..=hi).contains(&y) { 1.0 } else { 0.0 }
+        })
+        .collect();
+    // Pixels out past the selection's edge on each axis (0 inside it on that axis), and
+    // pixels in from the nearest edge (0 on the edge row, for pixels inside).
+    let out = |v: i32| (lo - v).max(v - hi).max(0);
+    let depth_in = |x: i32, y: i32| (x - lo).min(hi - x).min(y - lo).min(hi - y);
+    for depth in [8, 16, 32] {
+        for (loc, r, inside) in [("outside", 100, 0), ("center", 50, 50), ("inside", 0, 100)] {
+            let got = stroke_alpha(&mask, n, n, depth, json!({"width": 100, "color": "#000000", "location": loc}));
+            let mut wrong = Vec::new();
+            for (i, a) in got.iter().enumerate() {
+                let (x, y) = ((i % n) as i32, (i / n) as i32);
+                let (dx, dy) = (out(x), out(y));
+                let want = match (dx, dy) {
+                    (0, 0) => depth_in(x, y) < inside,
+                    (0, d) | (d, 0) => d <= r,
+                    _ => dx + dy <= r + 1,
+                };
+                if (a - if want { 1.0 } else { 0.0 }).abs() > 0.004 {
+                    wrong.push(format!("({x}, {y}): {a}, want {want}"));
+                }
+            }
+            assert!(wrong.is_empty(), "{depth}-bit {loc}: {} pixels differ: {:?}", wrong.len(), &wrong[..wrong.len().min(20)]);
+            let at = |x: i32, y: i32| got[y as usize * n + x as usize];
+            if r > 0 {
+                // Filled along the corner's diagonal to the cut and not beyond (a round corner
+                // reached about r / √2 px further out), and the cut meets the outer edges.
+                let k = (r + 1) / 2;
+                assert_eq!((at(hi + k, hi + k), at(hi + k + 1, hi + k + 1)), (1.0, 0.0), "{depth}-bit {loc} diagonal");
+                assert_eq!((at(hi + r, hi + 1), at(hi + r, hi + 2)), (1.0, 0.0), "{depth}-bit {loc} cut meets the side");
+                assert_eq!((at(lo - r, lo - 1), at(lo - r, lo - 2)), (1.0, 0.0), "{depth}-bit {loc} top-left corner");
+            }
+        }
+    }
+}
+
+/// Only the corners of a hard selection are cut: a soft (feathered) rectangle keeps the soft,
+/// round stroke it had, so a pixel past the 45° cut but within the round corner is stroked.
+#[test]
+fn a_feathered_rectangle_keeps_its_round_stroke_corner() {
+    let n = 200usize;
+    let mask: Vec<f32> = (0..n * n)
+        .map(|i| {
+            let (x, y) = (i % n, i / n);
+            if (60..140).contains(&x) && (60..140).contains(&y) { 1.0 } else { 0.0 }
+        })
+        .collect();
+    let soft = sel::feather(&mask, n, n, 2.0);
+    for depth in [8, 16] {
+        let got = stroke_alpha(&soft, n, n, depth, json!({"width": 40, "color": "#000000", "location": "outside"}));
+        // 24 px out past both edges: 48 > 41 is past the cut, but 34 px from the corner is
+        // within the 40 px round corner.
+        let a = got[(139 + 24) * n + 139 + 24];
+        assert!(a > 0.5, "{depth}-bit: {a}");
+    }
+}
+
+/// Before/after timings for the Stroke command on a 24 MP layer (#10775):
+/// `cargo test -p photocraft-engine --release --lib extra_cmds::tests::stroke_timing_24mp -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn stroke_timing_24mp() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 6000, "height": 4000})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("select.rect", json!({"x": 500, "y": 500, "width": 5000, "height": 3000})).unwrap();
+    for loc in ["center", "outside", "inside"] {
+        let mut v = Vec::new();
+        for _ in 0..5 {
+            let t = std::time::Instant::now();
+            s.execute("edit.stroke", json!({"width": 100, "color": "#000000", "location": loc})).unwrap();
+            v.push(t.elapsed().as_secs_f64() * 1000.0);
+            s.undo();
+        }
+        v.sort_by(f64::total_cmp);
+        println!("100 px {loc:<8} stroke, 5000 x 3000 rectangle, 24 MP   median {:>8.1} ms  min {:>8.1} ms", v[2], v[0]);
+    }
+}
+
 /// Select All, then Stroke › Inside draws a border around the canvas (a common Photoshop
 /// technique): the canvas edge is a selection edge like any other, on all four sides.
 #[test]
