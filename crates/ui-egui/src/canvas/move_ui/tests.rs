@@ -1354,3 +1354,67 @@ fn switching_colour_sets_during_a_move_recaptures_the_gpu_source() {
     assert_eq!(app.move_gpu_preview.as_ref().unwrap().colors.indices().collect::<Vec<_>>(), vec![0, 2]);
     assert!(std::sync::Arc::ptr_eq(&before, &app.session.active().unwrap().doc));
 }
+
+/// Board "A" at (10, 10, 50, 50) holding a red square at (10..30)², and an empty board "B" at
+/// (200, 20, 240, 60); the red layer selected, no selection, the Move tool without Auto-Select.
+fn two_boards() -> (PhotocraftApp, photocraft_doc::LayerId, photocraft_doc::LayerId, photocraft_doc::LayerId) {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.session.execute("file.new", json!({"width": 300, "height": 100, "background": "transparent"})).unwrap();
+    app.sync_views();
+    app.session.execute("layer.new.layer", json!({})).unwrap();
+    app.session.execute("select.rect", json!({"x": 10, "y": 10, "width": 20, "height": 20})).unwrap();
+    app.session.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    app.session.execute("select.deselect", json!({})).unwrap();
+    let red = app.session.active().unwrap().active_layer.unwrap();
+    let id = |v: serde_json::Value| photocraft_doc::LayerId(v["layer"].as_u64().unwrap());
+    let a = id(app.session.execute("layer.new.artboardFromLayers", json!({"name": "A"})).unwrap());
+    app.session.execute("layer.artboard.set", json!({"width": 40, "height": 40})).unwrap();
+    let b = id(app.session.execute("layer.new.artboard", json!({"rect": [200, 20, 40, 40], "name": "B"})).unwrap());
+    app.session.execute("layer.select", json!({"layer": red.0})).unwrap();
+    app.ui.tool = Tool::Move;
+    app.ui.tool_options.move_auto_select = false;
+    app.ui.extras.snap = false;
+    app.ui.view.show.smart_guides = false;
+    (app, red, a, b)
+}
+
+/// #10218: a layer dragged with the Move tool from one artboard onto another joins that board
+/// (Photoshop's auto-nesting), so it shows there instead of staying in its old board, clipped away.
+/// ⌥-dragging does the same for the copy and leaves the original where it was.
+#[test]
+fn move_tool_drag_onto_another_artboard_nests_the_layer_there() {
+    let (mut app, red, a, b) = two_boards();
+    let board = |app: &PhotocraftApp, id| app.session.active().unwrap().doc.artboard_of(id);
+    drag(&mut app, [20.0, 20.0], [210.0, 30.0], egui::Modifiers::NONE);
+    assert_eq!(board(&app, red), Some(b), "the layer joined board B");
+    // ⌥-drag it back onto A: the copy joins A, the original stays on B.
+    drag(&mut app, [210.0, 30.0], [20.0, 20.0], egui::Modifiers::ALT);
+    let st = app.session.active().unwrap();
+    let copy = st.active_layer.unwrap();
+    assert_ne!(copy, red, "the copy is active");
+    assert_eq!(board(&app, copy), Some(a), "the copy joined board A");
+    assert_eq!(board(&app, red), Some(b), "the original stayed on board B");
+}
+
+#[test]
+fn channel_drag_across_artboards_keeps_the_layer_on_its_board() {
+    for colors in [vec![0], vec![0, 2]] {
+        let (mut app, red, a, _) = two_boards();
+        app.run("channel.target", json!({"colors":colors})).unwrap();
+        let st = app.session.active().unwrap();
+        let before = st.doc.clone();
+        let steps = st.history.past_len();
+        let mut oracle = photocraft_engine::Session::new();
+        oracle.tools.background = app.session.tools.background;
+        oracle.add_document((*before).clone(), None);
+        oracle.execute("layer.translate", json!({"layer":red.0,"target":{"colors":colors},"dx":190,"dy":10})).unwrap();
+
+        drag(&mut app, [20.0, 20.0], [210.0, 30.0], egui::Modifiers::NONE);
+        let st = app.session.active().unwrap();
+        assert_eq!(st.doc.artboard_of(red), Some(a));
+        assert_eq!(st.doc.layer(red), oracle.active().unwrap().doc.layer(red));
+        assert_eq!(st.history.past_len(), steps + 1);
+        assert!(app.session.undo());
+        assert_eq!(app.session.active().unwrap().doc.layers, before.layers);
+    }
+}

@@ -83,7 +83,7 @@ pub mod fill_cmds;
 pub mod fill_key_cmds;
 pub mod float_cmds;
 pub mod font_library_cmds;
-pub(super) mod frame_cmds;
+pub mod frame_cmds;
 pub mod fx_view_cmds;
 pub mod fx_visibility_cmds;
 pub mod gallery_cmds;
@@ -944,7 +944,7 @@ fn build() -> Vec<CommandSpec> {
             "Move Layer",
             [],
             None,
-            r##"{"layer":id?,"dx":i32,"dy":i32,"units":"px"|"pt"="px" (pt: points, whole pixels at the document's resolution),"target":"pixels"|"mask"|{"color":index}|{"colors":[index,…]}?,"selection":bool=false} (no layer/target: follow the Channels panel; colour targets move only their native samples, with several-component pixel selections constraining the edit and moving the outline once; explicit layer without target moves the whole layer; no layer: every selected layer; linked layers follow whole-layer moves; an unlinked target mask moves alone; selection: carry the selection outline for whole-layer and single-component moves; several-component selected-pixel edits always carry their outline once)"##,
+            r##"{"layer":id?,"dx":i32,"dy":i32,"units":"px"|"pt"="px" (pt: points, whole pixels at the document's resolution),"target":"pixels"|"mask"|{"color":index}|{"colors":[index,…]}?,"selection":bool=false,"nest":bool=false} → null | {nested:[id]} (no layer/target: follow the Channels panel; colour targets move only their native samples, with several-component pixel selections constraining the edit and moving the outline once; explicit layer without target moves the whole layer; no layer: every selected layer; linked layers follow whole-layer moves; an unlinked target mask moves alone; selection: carry the selection outline for whole-layer and single-component moves; several-component selected-pixel edits always carry their outline once; nest: auto-nest whole-layer moves as the Move tool does; a layer whose bounds centre lands on another artboard joins it and one whose centre is off every artboard leaves for the top level; a clipping base takes the layers clipped to it along and a clipped layer goes only where its base goes; artboards, the Background, empty layers, layers whose board doesn't change, groups that would nest too deep and layers locked with Prevent Auto-Nesting (on the layer, a group around it or the destination board) stay put, with their whole clipping group; nested lists the layers that changed board)"##,
             has_layer,
             crate::layer_multi_cmds::translate
         ),

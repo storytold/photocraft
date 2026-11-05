@@ -35,8 +35,8 @@ pub enum DropTarget {
 
 /// A file dropped on the canvas, waiting its turn to be placed.
 pub(crate) enum DropPlace {
-    /// Dropped onto the window (desktop): read from its path, or through egui.
-    File(photocraft_doc::DocId, egui::DroppedFileHandle),
+    /// Desktop drop with the document and optional frame captured at the pointer.
+    File(photocraft_doc::DocId, egui::DroppedFileHandle, Option<photocraft_doc::LayerId>),
     /// Read by the shell itself (the browser reads dropped files asynchronously): its name and
     /// contents, delivered through [`Services::place_inbox`](crate::Services::place_inbox).
     Bytes(photocraft_doc::DocId, String, Vec<u8>),
@@ -256,6 +256,10 @@ impl PhotocraftApp {
     /// absolute path, read in bounded reads (#375) rather than egui's whole-file read.
     pub fn open_dropped(&mut self, ctx: &egui::Context, files: Vec<egui::DroppedFileHandle>, at: Option<egui::Pos2>) {
         let target = self.drop_target(ctx, at);
+        let destination = self.session.active().filter(|_| target == DropTarget::Canvas).map(|st| {
+            let frame = at.and_then(|at| crate::canvas::ViewXform::active(self).map(|xf| xf.to_doc(at))).and_then(|p| crate::frame_tool::frame_at(self, p));
+            (st.doc.id, frame)
+        });
         let mut slot = match target {
             DropTarget::Tabs(slot) => Some(slot),
             DropTarget::Canvas | DropTarget::Elsewhere => None,
@@ -275,8 +279,8 @@ impl PhotocraftApp {
         for f in files {
             let name = dropped_name(&f);
             if target == DropTarget::Canvas && !crate::preset_files_ui::is_preset_file(&name) {
-                if let Some(st) = self.session.active() {
-                    self.drop_places.push_back(DropPlace::File(st.doc.id, f));
+                if let Some((document, frame)) = destination {
+                    self.drop_places.push_back(DropPlace::File(document, f, frame));
                 }
                 continue;
             }
@@ -346,7 +350,7 @@ impl PhotocraftApp {
     pub(crate) fn place_next_dropped(&mut self, ctx: &egui::Context) {
         while self.ui.transform.is_none() && !photocraft_engine::channel_transform::locked(&self.session) {
             let document = |next: &DropPlace| match next {
-                DropPlace::File(document, _) | DropPlace::Bytes(document, _, _) => *document,
+                DropPlace::File(document, _, _) | DropPlace::Bytes(document, _, _) => *document,
             };
             let docs = self.session.documents();
             self.drop_places.retain(|next| docs.iter().any(|st| st.doc.id == document(next)));
@@ -355,12 +359,18 @@ impl PhotocraftApp {
             let Some(index) = self.drop_places.iter().position(|next| document(next) == active) else { return };
             let Some(next) = self.drop_places.remove(index) else { return };
             let (name, placed) = match next {
-                DropPlace::File(_, f) if f.path().is_absolute() => {
-                    (dropped_name(&f), path_text(f.path(), false).and_then(|path| self.run("file.placeEmbedded", serde_json::json!({"path": path}))))
-                }
-                DropPlace::File(_, f) => {
+                DropPlace::File(_, f, frame) => {
                     let name = dropped_name(&f);
-                    let placed = crate::read_dropped(&*f).and_then(|bytes| self.place_bytes(&name, bytes, None));
+                    // A drop outside a frame must not fill whichever frame is selected later.
+                    let mut params = serde_json::json!({"frame": frame.map_or(serde_json::Value::Bool(false), |id| serde_json::json!(id.0))});
+                    let placed = if f.path().is_absolute() {
+                        path_text(f.path(), false).and_then(|path| {
+                            params["path"] = serde_json::json!(path);
+                            self.run("file.placeEmbedded", params)
+                        })
+                    } else {
+                        crate::read_dropped(&*f).and_then(|bytes| self.place_bytes_with(&name, bytes, None, &params))
+                    };
                     (name, placed)
                 }
                 DropPlace::Bytes(_, name, bytes) => {
@@ -369,7 +379,10 @@ impl PhotocraftApp {
                 }
             };
             match placed {
-                Ok(_) => {
+                Ok(result) => {
+                    if result.get("frame").and_then(serde_json::Value::as_u64).is_some() {
+                        continue;
+                    }
                     if let Err(e) = crate::transform_tool::begin_placed(self, ctx) {
                         self.ui.status = e;
                     }
@@ -382,7 +395,10 @@ impl PhotocraftApp {
     /// Place a file's bytes as a smart object layer (File › Place; `linked`: Place Linked, to that
     /// path), for files that weren't read from a path the command can read.
     pub(crate) fn place_bytes(&mut self, name: &str, bytes: Vec<u8>, linked: Option<String>) -> Result<serde_json::Value, String> {
-        let r = photocraft_engine::file_cmds::place_bytes(&mut self.session, name, bytes, linked, &serde_json::json!({})).map_err(|e| e.to_string());
+        self.place_bytes_with(name, bytes, linked, &serde_json::json!({}))
+    }
+    fn place_bytes_with(&mut self, name: &str, bytes: Vec<u8>, linked: Option<String>, params: &serde_json::Value) -> Result<serde_json::Value, String> {
+        let r = photocraft_engine::file_cmds::place_bytes(&mut self.session, name, bytes, linked, params).map_err(|e| e.to_string());
         self.sync_views();
         r
     }

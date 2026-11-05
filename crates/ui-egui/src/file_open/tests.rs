@@ -1244,6 +1244,43 @@ fn native_canvas_drop_queued_during_a_channel_transform_does_not_follow_a_tab_sw
 }
 
 #[test]
+fn queued_native_drop_keeps_its_frame_and_document() {
+    let ctx = egui::Context::default();
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
+    app.run("file.new", json!({"width":128,"height":128})).unwrap();
+    let frame = photocraft_doc::LayerId(app.run("layer.new.frame", json!({"x":20,"y":20,"width":40,"height":40})).unwrap()["layer"].as_u64().unwrap());
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("edit.fill", json!({"color":"#123456"})).unwrap();
+    app.run("channel.target", json!({"channel":"green"})).unwrap();
+    app.last_canvas_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(128.0, 128.0));
+    app.drop_canvas_rect = Some(app.last_canvas_rect);
+    app.ui.views[0].center = [64.0, 64.0];
+    app.ui.views[0].zoom = 1.0;
+    let at = crate::canvas::ViewXform::active(&app).unwrap().to_screen(40.0, 40.0);
+    crate::transform_tool::begin(&mut app, &ctx).unwrap();
+    app.open_dropped(&ctx, vec![dropped("in-frame.png", Ok(png_bytes(4, 3)))], Some(at));
+    app.place_next_dropped(&ctx);
+    assert_eq!(app.drop_places.len(), 1, "the channel transform keeps the drop queued");
+
+    app.session.add_document(Document::new("other", Size::new(8, 8), ColorMode::Rgb, SampleType::U8), None);
+    let other = app.session.active().unwrap().doc.clone();
+    crate::transform_tool::end_if_left(&mut app);
+    app.place_next_dropped(&ctx);
+    assert_eq!(app.drop_places.len(), 1);
+    assert!(std::sync::Arc::ptr_eq(&other, &app.session.active().unwrap().doc));
+
+    assert!(app.session.set_active(0));
+    app.place_next_dropped(&ctx);
+    assert!(app.drop_places.is_empty());
+    let st = app.session.active().unwrap();
+    let frame = st.doc.layer(frame).unwrap();
+    let children = frame.children().unwrap();
+    assert_eq!(children.len(), 1, "the drop fills the original frame");
+    assert!(matches!(children[0].content, photocraft_doc::LayerContent::Smart(_)));
+    assert!(app.ui.transform.is_none(), "filling the frame needs no placement transform");
+}
+
+#[test]
 fn inactive_drop_queues_preserve_order_and_do_not_block_active_documents() {
     let mut app = app_with_canvas();
     let ctx = egui::Context::default();

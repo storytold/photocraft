@@ -59,6 +59,8 @@ fn begin_with_params(app: &mut PhotocraftApp, ctx: &egui::Context, params: serde
         return begin_several(app, ctx, doc, revision, id, targets);
     }
     let layer = doc.layer(id).ok_or("no layer")?;
+    let frame_only =
+        app.ui.tool == crate::state::Tool::Frame && layer.frame.is_some() && crate::frame_tool::target(app, layer) == crate::frame_tool::Target::Frame;
     if photocraft_engine::transform_cmds::locked_for_transform(&doc, id) {
         // Photoshop refuses before the box opens rather than when it is committed (#2585).
         app.ui.open_dialog(crate::state::DialogKind::Error, json!({"message": tl!(LOCKED)}).as_object().cloned().unwrap_or_default());
@@ -101,12 +103,12 @@ fn begin_with_params(app: &mut PhotocraftApp, ctx: &egui::Context, params: serde
     app.transform_preview = Some(TransformPreview {
         session,
         channel: None,
-        doc: Arc::new(pd),
+        doc: if frame_only { doc.clone() } else { Arc::new(pd) },
         texture,
         opacity: layer.opacity * layer.fill_opacity,
-        above: Some(above),
-        styled: styled.then(|| crate::transform_fx::StyledPreview::new(format!("transform-{session}-styled"))),
-        follow: Some(Follow { revision, hidden: if lifted.is_none() { vec![id] } else { Vec::new() } }),
+        above: (!frame_only).then_some(above),
+        styled: (styled && !frame_only).then(|| crate::transform_fx::StyledPreview::new(format!("transform-{session}-styled"))),
+        follow: Some(Follow { revision, hidden: if lifted.is_none() && !frame_only { vec![id] } else { Vec::new() } }),
         committing: None,
         gesture: None,
         warp_drag: None,
@@ -129,7 +131,7 @@ fn begin_with_params(app: &mut PhotocraftApp, ctx: &egui::Context, params: serde
         interpolation: default_interpolation(app).into(),
         warp: None,
         selection: false,
-        target: None,
+        target: frame_only.then(|| json!({"frame": id.0})),
         path: None,
         made: None,
         mode: Default::default(),

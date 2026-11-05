@@ -611,15 +611,16 @@ pub(crate) fn finish(app: &mut PhotocraftApp, dx: f64, dy: f64) {
     if dx == 0.0 && dy == 0.0 {
         return;
     }
-    if app.run("layer.translate", json!({"dx": dx, "dy": dy, "selection": carries_selection(app)})).is_err() {
+    // `nest`: a layer dropped on another artboard joins it (Photoshop's auto-nesting).
+    let Ok(result) = app.run("layer.translate", json!({"dx": dx, "dy": dy, "selection": carries_selection(app), "nest": true})) else {
+        return;
+    };
+    // The preview uses the old board's clip. A secondary CPU view can also be ahead of
+    // the main canvas's fallback under the GPU overlay. Recompose in either case.
+    if had_gpu_preview || result.get("nested").is_some() {
         return;
     }
     let Some(p) = shown else { return };
-    // A secondary CPU view can be current while the main compositor still holds an older
-    // fallback frame under the GPU overlay. Refresh it on commit rather than relabelling it.
-    if had_gpu_preview {
-        return;
-    }
     crate::canvas::shown_as_document(app, p.doc, is_preview_key);
 }
 
