@@ -705,3 +705,53 @@ fn the_mask_overlay_draws_the_line_and_its_handles() {
     assert_eq!(handles, [xf.to_screen(20.0, 60.0), xf.to_screen(120.0, 60.0)]);
     assert!(out.shapes.len() > 2, "and the line between them");
 }
+
+/// CodeRabbit on #10722: a menu over the canvas owns Esc while it is open. The pending gradient
+/// stands, the menu closes, and Esc pressed again then drops the gradient.
+#[test]
+fn a_canvas_menu_takes_escape_before_the_pending_mask_gradient() {
+    let (mut app, _) = app_on_mask();
+    drag(&mut app, [20.0, 60.0], [120.0, 60.0]);
+    let pending = mask::pending(&app);
+    assert!(pending.is_some(), "a gradient is pending");
+    app.ui.canvas_tool_menu = Some(crate::canvas::canvas_tool_menu::CanvasToolMenu {
+        pos: [40.0, 40.0],
+        tool: Tool::Gradient,
+        has_selection: false,
+        has_path: false,
+        path_name: None,
+        transform: false,
+        pasteboard: false,
+        anchor: None,
+        text: false,
+        type_layer: false,
+        guide: false,
+        spelling: None,
+        crop: None,
+    });
+    let escape = |app: &mut PhotocraftApp| {
+        let ctx = egui::Context::default();
+        let key = |pressed| egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed, repeat: false, modifiers: egui::Modifiers::NONE };
+        let input = egui::RawInput { events: vec![key(true), key(false)], ..Default::default() };
+        ctx.run_ui(input, |ui| crate::shortcuts::handle(app, ui.ctx())).textures_delta.clear();
+    };
+    escape(&mut app);
+    assert_eq!(mask::pending(&app), pending, "the menu's Esc leaves the gradient pending");
+    app.ui.canvas_tool_menu = None;
+    escape(&mut app);
+    assert_eq!(mask::pending(&app), None, "with the menu closed, Esc drops it");
+}
+
+/// CodeRabbit on #10722: a command the engine won't run leaves the gradient pending. Paste with
+/// nothing on the clipboard is refused by its own precondition (`has_clip_only`) in the precheck
+/// `before_command` runs, so no history step is written for a paste that does nothing.
+#[test]
+fn a_paste_with_an_empty_clipboard_leaves_the_pending_mask_gradient_alone() {
+    let (mut app, _) = app_on_mask();
+    drag(&mut app, [20.0, 60.0], [120.0, 60.0]);
+    let pending = mask::pending(&app);
+    let revision = app.session.active().unwrap().revision;
+    assert!(app.session.clipboard.is_none(), "nothing copied yet");
+    assert!(app.run("edit.paste", json!({})).is_err(), "paste is refused");
+    assert_eq!((mask::pending(&app), app.session.active().unwrap().revision), (pending, revision), "nothing was painted");
+}

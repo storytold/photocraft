@@ -265,6 +265,12 @@ pub(crate) fn keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     if pending_here(app).is_none() {
         return false;
     }
+    // A menu over the canvas owns Esc and ↩ while it is open: Esc closes the menu and the pending
+    // gradient stands, as the crop menu leaves its crop alone (#6561, CodeRabbit on #10722). These
+    // run before `esc_taken` is read further down `shortcuts`, so they are checked here.
+    if app.ui.canvas_tool_menu.is_some() || app.ui.layer_menu.is_some() || ctx.any_popup_open() {
+        return false;
+    }
     if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
         // The status bar says why, if it can't be painted.
         let _ = commit(app);
