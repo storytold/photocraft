@@ -125,7 +125,7 @@ fn backdrop_pass(img: &super::RgbImage, blob: &[bool], ctl: &Interrupt) -> Resul
     let near_blob = |x: usize, y: usize| (bx0..=bx1).contains(&x) && (by0..=by1).contains(&y);
     let edge = |i: usize| in_frame(i % w, i / w) && !near_blob(i % w, i / w);
     // The subject running out of the picture is neither backdrop to learn nor fixed background.
-    let released = subject_at_edge(img, frame, &edge);
+    let released = subject_at_edge(img, blob, frame, &edge);
     let samples: Vec<[f32; 3]> = (0..w * h).filter(|i| edge(*i) && !released[*i]).map(|i| img.px[i]).collect();
     let Some((backdrop, limit)) = fit_backdrop(&samples) else { return Ok(None) };
     let mut trimap: Vec<u8> = (0..w * h)
@@ -164,16 +164,25 @@ fn keep_main_and_nearby(mask: &[bool], w: usize, h: usize) -> Vec<bool> {
     let margin = ((mx1 - mx0 + 1).max(my1 - my0 + 1) as f32 * 0.15).ceil() as usize;
     let (nx0, ny0, nx1, ny1) = (mx0.saturating_sub(margin), my0.saturating_sub(margin), mx1 + margin, my1 + margin);
     let (big, speck) = ((largest as f32 * 0.2).ceil() as usize, ((largest as f32 * 0.005).ceil() as usize).max(4));
-    // A thin disconnected strip entering from the frame is likely edge clutter.
+    // Only small, nearby components can be vetoed as edge clutter. A strip must be
+    // narrow relative to the canvas and at least twice as long as it is wide.
     let keep: Vec<bool> = sizes
         .iter()
         .zip(&bbox)
         .enumerate()
-        .map(|(l, (n, b))| {
-            l != 0
-                && (l == main
-                    || (!(((b.0 == 0 || b.2 + 1 == w) && b.3 - b.1 + 1 < h * 12 / 100) || ((b.1 == 0 || b.3 + 1 == h) && b.2 - b.0 + 1 < w * 12 / 100))
-                        && (*n >= big || (*n >= speck && b.0 <= nx1 && b.2 >= nx0 && b.1 <= ny1 && b.3 >= ny0))))
+        .map(|(label, (&size, &(x0, y0, x1, y1)))| {
+            if label == 0 {
+                return false;
+            }
+            if label == main || size >= big {
+                return true;
+            }
+            let (width, height) = (x1 - x0 + 1, y1 - y0 + 1);
+            let nearby = x0 <= nx1 && x1 >= nx0 && y0 <= ny1 && y1 >= ny0;
+            let horizontal_strip = (x0 == 0 || x1 + 1 == w) && height < h * 12 / 100 && width >= height * 2;
+            let vertical_strip = (y0 == 0 || y1 + 1 == h) && width < w * 12 / 100 && height >= width * 2;
+            let thin_edge = horizontal_strip || vertical_strip;
+            size >= speck && nearby && !thin_edge
         })
         .collect();
     lab.iter().map(|l| keep.get(*l as usize).copied().unwrap_or(false)).collect()
@@ -181,7 +190,8 @@ fn keep_main_and_nearby(mask: &[bool], w: usize, h: usize) -> Vec<bool> {
 
 #[cfg(test)]
 mod component_tests {
-    use super::keep_main_and_nearby;
+    use super::{keep_main_and_nearby, subject_at_edge};
+    use crate::segment::RgbImage;
 
     #[test]
     fn nearby_component_margin_and_size_boundaries() {
@@ -205,6 +215,87 @@ mod component_tests {
         }
         // A qualifying nearby island is kept whether it is a head or unrelated clutter.
     }
+
+    fn rotate(x: usize, y: usize, side: usize, turns: usize) -> (usize, usize) {
+        let (mut x, mut y) = (x, y);
+        for _ in 0..turns {
+            (x, y) = (side - 1 - y, x);
+        }
+        (x, y)
+    }
+
+    #[test]
+    fn cropped_heads_and_large_limbs_survive_on_every_edge() {
+        let side = 240;
+        for turns in 0..4 {
+            for (main, part) in [((100, 20, 140, 70), (111, 0, 129, 18)), ((80, 70, 120, 120), (122, 90, 240, 100))] {
+                let mut mask = vec![false; side * side];
+                for (x0, y0, x1, y1) in [main, part] {
+                    for y in y0..y1 {
+                        for x in x0..x1 {
+                            let (x, y) = rotate(x, y, side, turns);
+                            mask[y * side + x] = true;
+                        }
+                    }
+                }
+                let result = keep_main_and_nearby(&mask, side, side);
+                let (x, y) = rotate(part.0, part.1, side, turns);
+                assert!(result[y * side + x], "edge {turns}, part {part:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn small_nearby_elongated_edge_strips_are_excluded() {
+        let side = 240;
+        for turns in 0..4 {
+            let mut mask = vec![false; side * side];
+            for (x0, y0, x1, y1) in [(70, 80, 170, 180), (112, 0, 120, 70)] {
+                for y in y0..y1 {
+                    for x in x0..x1 {
+                        let (x, y) = rotate(x, y, side, turns);
+                        mask[y * side + x] = true;
+                    }
+                }
+            }
+            let result = keep_main_and_nearby(&mask, side, side);
+            let (x, y) = rotate(112, 0, side, turns);
+            assert!(!result[y * side + x], "edge {turns}");
+        }
+    }
+
+    #[test]
+    fn narrow_edge_parts_matching_subject_are_released_on_every_edge() {
+        let side = 240;
+        let frame = 12;
+        for turns in 0..4 {
+            for (colour, expected) in [([0.8, 0.2, 0.1], true), ([0.1, 0.2, 0.8], false)] {
+                let mut img = RgbImage::new(side, side);
+                img.px.fill([0.5, 0.5, 0.5]);
+                let mut blob = vec![false; side * side];
+                for y in 60..100 {
+                    for x in 100..140 {
+                        let (x, y) = rotate(x, y, side, turns);
+                        blob[y * side + x] = true;
+                        img.px[y * side + x] = [0.8, 0.2, 0.1];
+                    }
+                }
+                for y in 0..frame {
+                    for x in 110..120 {
+                        let (x, y) = rotate(x, y, side, turns);
+                        img.px[y * side + x] = colour;
+                    }
+                }
+                let edge = |i: usize| {
+                    let (x, y) = (i % side, i / side);
+                    x < frame || y < frame || x + frame >= side || y + frame >= side
+                };
+                let released = subject_at_edge(&img, &blob, frame, &edge);
+                let (x, y) = rotate(110, 0, side, turns);
+                assert_eq!(released[y * side + x], expected, "edge {turns}, colour {colour:?}");
+            }
+        }
+    }
 }
 
 /// A colour model of `samples` and the cost above which a pixel is not explained by it: what
@@ -223,14 +314,17 @@ fn fit_backdrop(samples: &[[f32; 3]]) -> Option<(Gmm, f32)> {
 /// this, such a part trains the backdrop model and is fixed as background, so a cream shirt on a
 /// near-white wall is lost. A floor or a table runs up the sides too, so the frame off the
 /// bottom knows its colour and it stays backdrop; only a band confined to one side's strip is
-/// released (and is then left to the cut). Small or narrow edge patches stay backdrop.
-fn subject_at_edge(img: &super::RgbImage, frame: usize, edge: &dyn Fn(usize) -> bool) -> Vec<bool> {
+/// released (and is then left to the cut). Small patches stay backdrop. Narrow patches are
+/// released only if their colour is also explained by the retained subject.
+fn subject_at_edge(img: &super::RgbImage, blob: &[bool], frame: usize, edge: &dyn Fn(usize) -> bool) -> Vec<bool> {
     let (w, h) = (img.w, img.h);
     // Top, bottom, left, right.
     let on = |i: usize, s: usize| {
         let (x, y) = (i % w, i / w);
         [y < frame, y + frame >= h, x < frame, x + frame >= w].get(s).copied().unwrap_or(false)
     };
+    let subject_samples: Vec<[f32; 3]> = img.px.iter().zip(blob).filter_map(|(pixel, on)| on.then_some(*pixel)).collect();
+    let subject_model = fit_backdrop(&subject_samples);
     let mut odd = vec![false; w * h];
     for s in 0..4 {
         let others: Vec<[f32; 3]> = (0..w * h).filter(|i| edge(*i) && !on(*i, s)).map(|i| img.px[i]).collect();
@@ -246,21 +340,36 @@ fn subject_at_edge(img: &super::RgbImage, frame: usize, edge: &dyn Fn(usize) -> 
     let min = (frame * frame / 2).max(4);
     let mut bounds = vec![(w, h, 0usize, 0usize); sizes.len()];
     for (i, &label) in lab.iter().enumerate() {
-        if label != 0 {
-            if let Some(b) = bounds.get_mut(label as usize) {
-                let (x, y) = (i % w, i / w);
-                *b = (b.0.min(x), b.1.min(y), b.2.max(x), b.3.max(y));
+        if label != 0
+            && let Some(b) = bounds.get_mut(label as usize)
+        {
+            let (x, y) = (i % w, i / w);
+            *b = (b.0.min(x), b.1.min(y), b.2.max(x), b.3.max(y));
+        }
+    }
+    // Count matching pixels per component so a single coincidental pixel cannot release it.
+    let mut matching = vec![0usize; sizes.len()];
+    if let Some((model, limit)) = subject_model {
+        for (i, &label) in lab.iter().enumerate() {
+            if label != 0
+                && model.neg_log(img.px[i]) <= limit
+                && let Some(count) = matching.get_mut(label as usize)
+            {
+                *count += 1;
             }
         }
     }
     lab.iter()
         .map(|l| {
             let i = *l as usize;
-            *l != 0
-                && sizes.get(i).is_some_and(|n| *n >= min)
-                && bounds
-                    .get(i)
-                    .is_some_and(|b| ((b.1 == 0 || b.3 + 1 == h) && b.2 - b.0 + 1 >= 2 * frame) || ((b.0 == 0 || b.2 + 1 == w) && b.3 - b.1 + 1 >= 2 * frame))
+            let Some((&size, &(x0, y0, x1, y1))) = sizes.get(i).zip(bounds.get(i)) else { return false };
+            if *l == 0 || size < min {
+                return false;
+            }
+            let wide_on_horizontal_edge = (y0 == 0 || y1 + 1 == h) && x1 - x0 + 1 >= 2 * frame;
+            let wide_on_vertical_edge = (x0 == 0 || x1 + 1 == w) && y1 - y0 + 1 >= 2 * frame;
+            let matches_subject = matching.get(i).is_some_and(|count| *count >= size.div_ceil(2));
+            wide_on_horizontal_edge || wide_on_vertical_edge || matches_subject
         })
         .collect()
 }
