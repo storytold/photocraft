@@ -305,6 +305,25 @@ fn help_search_keeps_the_arrows_and_space_that_edit_it() {
     assert_eq!(text(&h), "levels ");
 }
 
+/// #10758: the text typed into Help › Search sits on the middle of the field, not against its top.
+#[test]
+fn help_search_text_is_vertically_centred_in_its_field() {
+    for display in [(1280.0, 720.0, 1.0), (1280.0, 720.0, 1.5)] {
+        let mut h = harness(display);
+        open(&mut h, "Help");
+        h.event(egui::Event::Text("levels".into()));
+        h.run_steps(3);
+        let field = h.query_all_by_role(egui::accesskit::Role::TextInput).find(|n| n.is_focused()).expect("the focused search field").rect();
+        let line = h
+            .query_all_by_role(egui::accesskit::Role::TextRun)
+            .map(|n| n.rect())
+            .find(|r| field.contains(r.center()))
+            .expect("the typed text inside the field");
+        let off = (line.center().y - field.center().y).abs();
+        assert!(off <= 1.0, "{display:?}: text {line:?} is {off} pt off the middle of field {field:?}");
+    }
+}
+
 /// A level's visible height (its view) and the full height of its rows: equal means no scrolling.
 fn fits(h: &Harness<'static, PhotocraftApp>, level: usize) -> (f32, f32) {
     let nav = Nav::current(&h.ctx);

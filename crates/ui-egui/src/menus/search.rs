@@ -63,7 +63,9 @@ pub(super) fn help_search(ui: &mut egui::Ui, items: &[MenuItem], opening: bool, 
     let reopened = ctx.data(|d| d.get_temp::<u64>(pass_id)).is_none_or(|p| p + 1 < pass);
     ctx.data_mut(|d| d.insert_temp(pass_id, pass));
     let mut query: String = if reopened { String::new() } else { ctx.data(|d| d.get_temp(text_id)).unwrap_or_default() };
-    let field = ui.add(egui::TextEdit::singleline(&mut query).id(text_id.with("field")).hint_text(crate::i18n::tr(lang, "Search menus")).desired_width(220.0));
+    // The shared field style centres the line in the box, like every other search field (#10758);
+    // a bare `TextEdit` drew its text against the top edge.
+    let field = crate::widgets::text_field(ui, text_id.with("field"), &mut query, crate::i18n::tr(lang, "Search menus"), 220.0, false);
     // The menu opens on the press; the release a frame later completes a click on the title,
     // outside the field, and egui takes the focus away from it again (#1447, #1438).
     if (reopened || opening) && !crate::zoom_field::editing(&ctx) {
