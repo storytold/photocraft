@@ -211,16 +211,28 @@ fn stack_mode_edits_and_unrepresented_native_parameters_are_safe() {
     let mut action = imported.actions[0].clone();
     action.steps[0].0 = "layer.smartObjects.stackMode.maximum".into();
     assert_eq!(saved(&action).descriptor, Some(descriptor("maxx", "Maximum")));
+
+    action.steps[0].0 = "layer.smartObjects.stackMode.none".into();
+    let cleared = saved(&action);
+    assert_eq!(cleared.event, AtnEvent::name(CLEAR));
+    assert_eq!(cleared.descriptor, Some(Descriptor::new("null")));
+
+    let mut action = load(item(CLEAR, Some(Descriptor::new("null")))).actions.remove(0);
+    action.steps[0].0 = "layer.smartObjects.stackMode.mean".into();
+    let applied = saved(&action);
+    assert_eq!(applied.event, AtnEvent::name(APPLY));
+    assert_eq!(applied.descriptor, Some(descriptor("avrg", "Mean")));
+
+    let unknown_class = photocraft_engine::paint::tile::b64_encode(&descriptor("nope", "Mean").to_bytes());
     for command in ["layer.smartObjects.stackMode.mean", "layer.smartObjects.stackMode.none"] {
         for params in [json!(null), json!([]), json!({"layer":12}), json!({"layer":"Named"}), json!({"target":"mask"}), json!({"unknown":true})] {
             let action = Action::new("Mode", vec![(command.into(), params)]);
             assert!(atn_cmds::export("Stacks", &[&action], &[], false).is_err());
         }
-    }
-    let unknown_class = photocraft_engine::paint::tile::b64_encode(&descriptor("nope", "Mean").to_bytes());
-    for origin in [json!(false), json!("!invalid-base64"), json!(""), json!(unknown_class)] {
-        let mut action = Action::new("Mode", vec![("layer.smartObjects.stackMode.mean".into(), json!({}))]);
-        action.steps[0].1[ORIGIN] = origin;
-        assert!(atn_cmds::export("Stacks", &[&action], &[], false).is_err());
+        for origin in [json!(false), json!("!invalid-base64"), json!(""), json!(unknown_class)] {
+            let mut action = Action::new("Mode", vec![(command.into(), json!({}))]);
+            action.steps[0].1[ORIGIN] = origin;
+            assert!(atn_cmds::export("Stacks", &[&action], &[], false).is_err());
+        }
     }
 }

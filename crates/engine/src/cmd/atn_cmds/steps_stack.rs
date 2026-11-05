@@ -82,6 +82,9 @@ pub(super) fn mode_to(id: &str, p: &Value) -> Option<Descriptor> {
         return Some(canonical);
     }
     let source = original(p)?;
+    if source.items.is_empty() {
+        return Some(canonical);
+    }
     let (_, recorded) = recorded_mode(&source)?;
     Some(if recorded == mode { source } else { canonical })
 }
@@ -99,7 +102,10 @@ pub(super) fn none_to(_: &str, p: &Value) -> Option<Descriptor> {
         return Some(desc("null"));
     }
     let source = original(p)?;
-    source.items.is_empty().then_some(source)
+    if source.items.is_empty() {
+        return Some(source);
+    }
+    recorded_mode(&source).map(|_| desc("null"))
 }
 
 /// Import otherwise presents an absent descriptor as an empty one. Retain the distinction for None.

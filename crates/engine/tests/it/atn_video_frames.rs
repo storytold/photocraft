@@ -36,8 +36,8 @@ fn saved(action: &Action) -> AtnItem {
 }
 
 /// Playback tests require a native mapping, rather than a successfully loaded kept step.
-fn load(s: &mut Session, event: &str) {
-    let bytes = file(item(event, Some(Descriptor::default())));
+fn load(s: &mut Session, source: AtnItem) {
+    let bytes = file(source);
     let report = s.execute("actions.load", json!({"data":photocraft_engine::paint::tile::b64_encode(&bytes)})).unwrap();
     assert_eq!(report["unsupported"], json!([]));
 }
@@ -115,7 +115,7 @@ fn descriptors_and_step_flags_round_trip_including_an_absent_descriptor() {
 #[test]
 /// One recorded command must change the correct stack position and remain one undoable edit.
 fn playback_edits_the_current_frame_and_original_stack_with_undo_redo_at_each_depth() {
-    for depth in [8, 16, 32] {
+    for (depth, has_descriptor) in [(8, true), (16, true), (32, true), (8, false)] {
         for (event, _) in EVENTS {
             let (mut s, id) = fixture(depth);
             let before = pixels(&s, id, false);
@@ -127,7 +127,7 @@ fn playback_edits_the_current_frame_and_original_stack_with_undo_redo_at_each_de
                 "deleteFrame" => vec![frames[0].clone(), frames[2].clone()],
                 _ => panic!("fixture event"),
             };
-            load(&mut s, event);
+            load(&mut s, item(event, has_descriptor.then(Descriptor::default)));
             let report = s.execute("actions.play", json!({"action":0})).unwrap();
             assert!(report.get("failed").is_none(), "{depth}/{event}: {report}");
             assert_eq!(report["ran"], 1);
@@ -164,7 +164,7 @@ fn deleting_the_last_frame_keeps_its_pixels() {
     *t = photocraft_doc::video::Timeline::new(1, 24.0);
     let before = pixels(&s, id, false);
     let original = pixels(&s, id, true);
-    load(&mut s, "deleteFrame");
+    load(&mut s, item("deleteFrame", Some(Descriptor::default())));
     let report = s.execute("actions.play", json!({"action":0})).unwrap();
     assert!(report.get("failed").is_none(), "{report}");
     assert_eq!(pixels(&s, id, false), before);
@@ -212,7 +212,7 @@ fn playback_without_a_video_target_fails_without_editing_a_document() {
                 s.execute("file.new", json!({"width":2,"height":2})).unwrap();
             }
             let before = s.active().map(|state| state.doc.clone());
-            load(&mut s, event);
+            load(&mut s, item(event, Some(Descriptor::default())));
             let report = s.execute("actions.play", json!({"action":0})).unwrap();
             assert!(report.get("failed").is_some(), "{event}: {report}");
             match before {
