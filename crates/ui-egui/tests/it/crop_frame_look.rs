@@ -123,6 +123,39 @@ fn a_click_inside_the_untouched_frame_is_not_a_change() {
     }
 }
 
+/// A click on a handle of the untouched frame that doesn't move resizes nothing, so the frame
+/// keeps its untouched look after the release, as a click inside it does (noted in review).
+#[test]
+fn a_click_on_a_handle_of_the_untouched_frame_is_not_a_change() {
+    for show in MODES {
+        let mut app = crop_app(show);
+        let before = app.ui.crop_rect.unwrap();
+        let (x, y) = (before[2], before[3]);
+        control(&mut app, "ui.pointer", json!({"tool": "Crop", "events": [{"kind": "down", "x": x, "y": y}, {"kind": "up", "x": x, "y": y}]}));
+        assert_eq!(app.ui.crop_rect, Some(before), "{show:?}: the frame is where it was");
+        assert_eq!(drawn(&app), (false, false, FrameLook::Untouched), "{show:?}: a handle clicked, not dragged");
+    }
+}
+
+/// An Alt-drag from the centre can draw the very frame the drag started from. The drag changed
+/// the frame on its way there, so after the release the crop is started, not untouched again
+/// (noted in review): what counts is that the gesture changed the frame, not how it ended.
+#[test]
+fn a_drag_that_draws_the_same_frame_again_has_started_the_crop() {
+    for show in MODES {
+        let mut app = crop_app(show);
+        let before = app.ui.crop_rect.unwrap();
+        let c = [(before[0] + before[2]) / 2.0, (before[1] + before[3]) / 2.0];
+        control(
+            &mut app,
+            "ui.pointer",
+            json!({"tool": "Crop", "alt": true, "events": [{"kind": "down", "x": c[0], "y": c[1]}, {"kind": "move", "x": c[0] + 20.0, "y": c[1] + 10.0}, {"kind": "move", "x": before[2], "y": before[3]}, {"kind": "up", "x": before[2], "y": before[3]}]}),
+        );
+        assert_eq!(app.ui.crop_rect, Some(before), "{show:?}: drawn from the centre back to the same frame");
+        assert_eq!(drawn(&app).2, FrameLook::Started, "{show:?}: the drag changed it, so the crop has started");
+    }
+}
+
 #[test]
 fn show_cropped_area_off_still_hides_what_is_outside_an_untouched_frame() {
     let mut app = crop_app(OverlayShow::Always);

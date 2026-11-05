@@ -872,6 +872,8 @@ fn track(app: &mut PhotocraftApp, ev: ToolEvent, p: [f64; 2], mods: Modifiers) -
         }
         ToolEvent::Up { .. } => {
             update(app, p, mods);
+            // The release's own position counts toward whether the gesture changed the frame.
+            app.crop.drag_moved |= crate::crop_overlay::drag_changed(app);
             let Some(drag) = app.crop.drag.take() else { return false };
             release(app, drag);
         }
@@ -956,11 +958,16 @@ fn outside_drag(app: &PhotocraftApp, p: [f64; 2], rect: [f64; 4], deg: f64) -> C
 /// Ends `drag`: keeps a valid frame or restores the previous one, and records an undo step when it changed.
 fn release(app: &mut PhotocraftApp, drag: CropDrag) {
     let ok = app.ui.crop_rect.is_some_and(size_ok);
-    // A click outside the untouched default frame (no turn) leaves it the default, and so does a
-    // click inside it that drew nothing: the frame is the one it was pressed on (noted in review).
-    let changed = !matches!(drag, CropDrag::Rotate { from, .. } | CropDrag::TurnImage { from, .. } if from == angle(app))
-        && !matches!(drag, CropDrag::MoveImage { rect, .. } if app.ui.crop_rect == Some(rect))
-        && !matches!(drag, CropDrag::Draw { prev, .. } if app.ui.crop_rect == prev);
+    // A click outside the untouched default frame (no turn) leaves it the default. A drawn, moved
+    // or resized frame has changed when the gesture changed it at some point (`drag_moved`), not
+    // when it ends unlike its start: a click inside the frame or on a handle draws or resizes
+    // nothing, and an Alt-drag from the centre can draw the very frame it started from (noted in
+    // review).
+    let changed = match drag {
+        CropDrag::Rotate { from, .. } | CropDrag::TurnImage { from, .. } => from != angle(app),
+        CropDrag::MoveImage { rect, .. } => app.ui.crop_rect != Some(rect),
+        CropDrag::Draw { .. } | CropDrag::Move { .. } | CropDrag::Resize { .. } => app.crop.drag_moved,
+    };
     if ok && changed {
         app.crop.default_frame = false;
     }
