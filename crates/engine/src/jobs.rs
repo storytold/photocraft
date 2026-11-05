@@ -34,6 +34,8 @@ use serde_json::{Value, json};
 
 use crate::{EngineError, Result, Session};
 
+const MAX_BACKGROUND_JOBS: usize = 16;
+
 type Authorization = fn(&str, &Value) -> Result<()>;
 
 thread_local! {
@@ -549,6 +551,17 @@ struct Draining {
     release: bool,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn reap_draining(draining: &mut Vec<Draining>) -> bool {
+    let mut release = false;
+    draining.retain(|d| {
+        let done = d.handle.is_finished();
+        release |= done && d.release;
+        !done
+    });
+    release
+}
+
 /// The session's job table (see the module docs).
 #[derive(Default)]
 pub struct Jobs {
@@ -678,6 +691,16 @@ pub fn run<T: Send + 'static>(
     if s.jobs.pending.is_some() {
         return Err(EngineError::Other(format!("`{label}` started a second background job in one command")));
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    s.reap_draining_jobs();
+    let admitted = s.jobs.running.len();
+    #[cfg(not(target_arch = "wasm32"))]
+    let admitted = admitted.saturating_add(s.jobs.draining.len());
+    if admitted >= MAX_BACKGROUND_JOBS {
+        return Err(EngineError::Other(format!(
+            "too many background jobs ({MAX_BACKGROUND_JOBS}); wait for a running or cancelling job to finish before starting another"
+        )));
+    }
     let (doc, snapshot, layers) = match (lock_document, s.active()) {
         (true, Some(st)) => (Some(st.doc.id), Some(Arc::downgrade(&st.doc)), Some(LayerSelection::of(st))),
         (true, None) => return Err(EngineError::NoDocument),
@@ -692,7 +715,7 @@ pub fn run<T: Send + 'static>(
         let t = any.downcast::<T>().map_err(|_| EngineError::Other("internal error: job result type mismatch".into()))?;
         apply(s, *t)
     });
-    s.jobs.next += 1;
+    s.jobs.next = s.jobs.next.checked_add(1).ok_or_else(|| EngineError::Other("background job identifier space exhausted".into()))?;
     let id = JobId(s.jobs.next);
     #[cfg(not(target_arch = "wasm32"))]
     let handle = {
@@ -1292,18 +1315,15 @@ impl Session {
             }
         }
         #[cfg(not(target_arch = "wasm32"))]
-        {
-            let mut release = false;
-            self.jobs.draining.retain(|d| {
-                let done = d.handle.is_finished();
-                release |= done && d.release;
-                !done
-            });
-            if release {
-                photocraft_raster::scratch::release();
-            }
-        }
+        self.reap_draining_jobs();
         std::mem::take(&mut self.jobs.events)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn reap_draining_jobs(&mut self) {
+        if reap_draining(&mut self.jobs.draining) {
+            photocraft_raster::scratch::release();
+        }
     }
 
     /// Block until job `id` ends, apply it, and return its result (the control channel's and
@@ -1482,6 +1502,7 @@ impl Session {
         if !(params.is_object() || params.is_null()) {
             return Err(EngineError::BadParams { cmd: id.to_string(), msg: "params must be a JSON object".into() });
         }
+        let params = crate::file_cmds::batch_open_params(self, id, &params).unwrap_or(params);
         // Untrusted sessions gate every command, including the ones a command runs on its own
         // behalf (`file.automate.conditionalModeChange` runs `image.mode.*`), before any side
         // effect.
@@ -1573,6 +1594,13 @@ impl Session {
             self.hint_before = None;
         }
         let pending = self.jobs.pending.take();
+        // Shape Blur by an installed shape's id or name records the geometry it ran with, as the
+        // filter's own prepared params carry it: the journal (Last Filter, recorded actions)
+        // replays where that shape is not installed. The run resolved it already, so it can't fail.
+        let mut params = params;
+        if r.is_ok() {
+            let _ = crate::filters_ext::resolve_shape_path(self, id, &mut params);
+        }
         let out = match (r, pending) {
             (Err(e), Some(job)) => {
                 job.ctx.cancel();

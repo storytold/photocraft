@@ -169,6 +169,7 @@ By default PhotoCraft's own crates log at `info` and everything else at `warn`. 
 
 | Variable | Effect |
 |---|---|
+| `PHOTOCRAFT_GPU=1` (or `=0`) | Headless CLI: prefer GPU composition and flat export (0 to disable, empty to unset). Explicit `--gpu`/`--no-gpu` CLI flags override this variable. `file.export.quickExport` composites and encodes inside the engine, which has no renderer, so it always runs on the CPU; `run --gpu` prints a one-time warning when a step uses it |
 | `PHOTOCRAFT_CONTROL_PORT` | Same as `--control <port>`; also the port for `photocraft-cli serve --port` and `mcp --bridge` when the flag is absent. Empty is unset |
 | `PHOTOCRAFT_NO_PRINT` | Set to anything but `0`: `file.print` / `file.printOneCopy` refuse to spool (`dryRun` still works). CI sets it, with `LPDEST=photocraft-no-such-printer` as a second net; set both when running the panic hunt or fuzzers locally |
 | `RUST_LOG` | Log levels for standard error and the log file (see [Logs](#logs)) |
@@ -249,6 +250,7 @@ See `docs/control-protocol.md` for every method. Tips:
 ```sh
 cargo run -p photocraft-cli -- convert in.psd out.pcraft               # any supported format -> any
 cargo run -p photocraft-cli -- info out.pcraft                          # JSON: size, mode, depth, layer tree
+cargo run -p photocraft-cli -- info out.psd --detail                    # also text runs, anti-aliasing, full layer-effect settings
 cargo run -p photocraft-cli -- run in.png --cmd layer.new.layer --params '{"name":"Ink"}' \
                                           --cmd filter.blur.gaussianBlur --params '{"radius":3}' --out out.psd
 cargo run -p photocraft-cli -- run --new '{"width":800,"height":600}' --cmd document.inspect
@@ -267,6 +269,17 @@ ln -s photocraft-<version>-linux-x86_64.AppImage photocraft-cli
 ```
 
 The `--cli` selector is removed; all remaining arguments, stdin, stdout, stderr and the exit status are passed through. CLI launches skip desktop integration. The symlink form uses the AppImage runtime's `ARGV0`; the normal AppImage name launches the GUI.
+
+### GPU rendering
+
+PhotoCraft CLI supports optional native GPU acceleration for flat exports and composition in `convert`, `run`, `batch`, `serve`, and headless `mcp`:
+
+- `--gpu`: Opt into GPU acceleration. Prefers a hardware adapter, performs bounded multi-band readback, and automatically falls back to CPU if an unsupported document feature (such as unsupported blend modes or layered saves) is encountered or if the GPU device becomes unavailable.
+- `--no-gpu`: Explicitly disable GPU rendering and use CPU composition (the default).
+- `PHOTOCRAFT_GPU`: Environment variable equivalent when neither flag is supplied (`1` enables GPU, `0` disables it). An empty or whitespace-only value is treated as unset (defaulting to CPU). Any other value is rejected with a usage error naming the variable. Explicit `--gpu` or `--no-gpu` flags always override the environment variable.
+- **Backend scope and limitations**: GPU acceleration applies to flat exports (e.g. PNG, JPEG, WebP, flat TIFF). Layered/native saves (`.pcraft`, PSD, TIFF with layers) and embedded thumbnail generation remain CPU operations.
+- **Diagnostics and protocol safety**: GPU initialization status, adapter information, and deduplicated fallback warnings are written to standard error. Standard output (JSON lines in `run`, MCP protocol frames, etc.) is never polluted with diagnostics.
+- **Bridge MCP**: When `photocraft-cli mcp` is bridged to a running desktop app (`--bridge`), explicit `--gpu` / `--no-gpu` flags are rejected because the desktop process controls rendering. `PHOTOCRAFT_GPU` is ignored in bridge mode to prevent ambient environment variables from disrupting live bridges.
 
 `actions.json` holds the steps of a recorded action: `[["<id>", {…}], …]`, `[{"command": "<id>", "params": {…}}, …]` or bare ids, as a list or wrapped in `{"actions": …}` or `{"steps": …}`; a droplet file works too. It can also be an Actions set (the Actions panel's `actions.json`, `{"actions": [{"name": …, "steps": […]}, …]}`): `--action <name>` picks the action to play (optional when the set holds one), and the whole set is loaded for each file, so a step that plays another action of the set works. `batch` refuses an `--out` folder that is the `--in` folder, since the results would replace the originals, unless `--in-place` is given. `run` prints one JSON line per command result.
 
@@ -428,9 +441,30 @@ can't run.
 - **Numbers** (7360 × 4912, 8 text layers + one painted layer with drop shadow + stroke + bevel, Hue/Saturation on top; M4 Pro; `cargo run --release -p photocraft-ui-egui --example fx_bench`), CPU fallback → GPU: full refresh with warm effect maps 5.7 s → 47 ms; Hue/Saturation tweak above the effects 4.7 s → 31 ms; brush dab on a plain layer 32 → 1.7 ms; brush dab on the effect layer (its maps rebuilt around the dab) 659 → 3.7 ms; first refresh (all maps built) 6.4 s → 0.39 s. With the CPU ~14× oversubscribed by parallel builds (min of 7 runs): 8.1 s → 0.33 s, 9.9 s → 0.28 s, 28 → 2.2 ms, 1.7 s → 89 ms; moving a text layer 7 px 336 → 13 ms. `fx_bench --compare corpus/psd/…/*.psd` reports the GPU vs CPU difference on real files (30 of the 31 corpus files with effects render on the GPU, worst 0.12/255).
 - On the CPU path `compose::effect_maps` caches shadow, glow, bevel and satin maps per layer state (LRU, 768 MB budget).
 - Live adjustment previews on large documents use a downsampled proxy (`ui-egui/src/proxy.rs`).
+- **Opening JPEG and PNG files** (#10259). `cargo run --release -p photocraft-ui-egui --example flat_open_bench` generates 24 and 36 MP JPEG, PNG RGB 8-bit, RGB 16-bit and RGBA 8-bit inputs (and a JPEG with EXIF orientation 6) from seeded gradients and noise, caches them in the target directory's `fixtures/` (`--cache`), and times the real open (`import`), session `admission`, the codec `decode`, `orient`, `tiles` (`image_to_document`), the `first composite` and the whole `editable` chain. Each case runs in its own process (`--case <key>` runs one by hand). Its peak resident memory (`VmHWM`, Linux only, else `n/a`) is a process-lifetime high-water mark: `peak_process_after_import_bytes` is read after real import and admission, while `peak_process_after_all_passes_bytes` also includes the standalone decode/orient/tiles pass, GPU setup and warm-up, and editable-open passes. The latter is not an isolated composite or editable-open peak. Each timing row identifies which reading it carries in `peak_rss_provenance`. `--quick` uses 1200x800 images, `--only <substring>` filters cases, `--cpu` skips the GPU, `--json <file>` writes the report `cargo xtask perf` reads (scenarios P83 to P86).
 - **Content-Aware tools** (`algo::inpaint`, `algo::content_aware`: Fill, Spot Healing, Patch, Content-Aware Move). `cargo run --release -p photocraft-engine --example content_aware_bench -- bench caf|heal|cancel` times the P21, P22 and P49 rows without the UI, one sample per line, so two builds can be run in turn and pooled. `-- hash` prints a hash of every tool's output at 8, 16 and 32 bits and in Gray, CMYK and Lab: the fill is fitted to Photoshop, so a speed-up must leave both builds' lists equal. The solver works only over the hole's bounds grown by a patch radius (nothing else changes or is matched). PatchMatch sweeps its bands in wavefronts when there are fewer bands than threads; each cell sees the same neighbours and random numbers as in raster order, so the result does not depend on the thread count. Cancellation is checked per row: a 24 MP fill stops within tens of milliseconds, most of it spent freeing its buffers.
 - `ui.inspect` returns `perf` timings (UI ms per frame, composite ms, upload ms).
 - Never scan full surfaces per frame. Cache per document revision (`PhotocraftApp::cached_bounds`). An uncached `content_bounds()` on a 36 MP layer once cost 77 ms per frame.
+
+### Headless GPU rendering and flat export (issue #8062)
+
+PhotoCraft foundation PR 1 adds an optional, additive headless GPU rendering backend for flat export and headless automation sessions:
+
+- **Layering & Contracts:**
+  - `photocraft-gpu` (L3) provides windowless native context creation ([`NativeContext`]), checked bounded band readback ([`readback::render_bands`]), and device health monitoring ([`DeviceHealth`]). It does not depend on IO or UI crates.
+  - `photocraft-io` (L4) defines the renderer contract ([`BandRenderer`], [`CpuRenderer`], [`RenderBand`], [`RenderError`]) and additive export entrypoints ([`export_with_renderer`], [`export_flat_with_renderer`], [`document_to_image_with_renderer`]). Wgpu types are excluded from the public IO contract.
+  - `photocraft-automation` (L6) provides the [`GpuRenderer`] adapter behind the `gpu` cargo feature, with lazy adapter initialization, compositor caching across edits, capability-scoped writes, and preview sizing.
+
+- **Supported Matrix:**
+  - Color modes: RGB and Grayscale (including ICC profile conversions and working spaces).
+  - Depth: 8-bit unsigned integer. 16-bit unsigned integer and 32-bit floating point documents use the CPU compositor: layer content is uploaded as half-precision textures, which cannot preserve their samples.
+  - Features: Straight-alpha transparency, Photoshop blend modes, opacity × fill opacity, layer masks, vector masks, clipping groups, isolated/pass-through groups, adjustments, solid/gradient fills, and GPU-supported layer effects.
+  - Targets: Flat raster exports (PNG, JPEG, TIFF, WebP, etc.) and automation `render_png` previews.
+
+- **Conservative CPU Fallback:**
+  - Documents requiring ink-value mixing ([`cmyk::renders_inks`]), Multichannel documents, and unproven features fall back to the CPU reference compositor.
+  - Any compositor rejection ([`Compositor::supports`]), device loss, shader compiler error, staging allocation limit, or buffer mapping failure triggers a 100% whole-export restart on the CPU compositor, discarding partial GPU attempts. No CPU and GPU bands are ever mixed.
+  - Atomic destination writes guarantee that failed exports never corrupt or replace existing files on disk.
 
 ## Scorecard and performance budgets
 
@@ -911,6 +945,46 @@ scripts/fetch-corpus.sh            # the same as cargo xtask corpus --all
   manifest gives the same reproducibility.
 - The third-party sets (psd-tools, ag-psd, PngSuite) are fetched from their upstreams the same way,
   and are never copied into photocraft-corpus.
+
+## PSD write recipes
+
+The PSD write oracle exercises actual edits before export. The recipe runner opens each
+base with `photocraft-cli`, applies its commands to a uniquely selected layer, exports
+and reopens the PSD, and checks the specified properties (it reads layers with
+`photocraft-cli info --detail`). It records the generated
+files and results for a later independent Photoshop verification (#6130).
+
+```sh
+cargo xtask corpus --photoshop
+cargo build -p photocraft-cli --release
+cargo xtask psd-write-oracle xtask/psd-write-oracle/starter.json corpus/photoshop target/release/photocraft-cli target/psd-write-oracle
+```
+
+The output directory must not exist. It contains `report.json`, `manifest.json`, a
+candidate PSD per successful export, and CLI stdout/stderr for diagnosis. A failed
+case does not prevent the other cases from running, but the command exits nonzero.
+The manifest records the checkout revision, whether tracked files were modified, the
+CLI binary hash, recipe hash, corpus revision and candidate hashes (revision and
+dirty state are `unknown` outside a git checkout). The checkout
+revision does not establish where a supplied binary was built; use a binary built from
+that revision and preserve the CI run's provenance. Missing fonts and other warnings
+are recorded. The runner never overwrites its input PSDs.
+
+Recipes are versioned JSON (`version` must be `1`; any other value is rejected). Unknown keys anywhere in a recipe are an error, so a typo never passes as "nothing to check". A case has a unique `id`, a relative `base` PSD path,
+its `base_sha256`, a `target` with layer `kind` and optional `name`, and `checks`.
+An optional list of `commands` contains a `command` id and `params`; the runner
+supplies the resolved `layer` id. Targets that match zero or multiple layers fail.
+Only `type.*` and `layer.layerStyle.*` commands are accepted. Checks use JSON pointers
+relative to the inspected layer: `unchanged` requires a present, equal value before
+and after; `equals` checks the exported value; `changed_to` requires the exported
+value to match and differ from the base. Every edited case needs a `changed_to` check.
+Every check is run and reported (not only the first failure), each result naming the layer and the property path. See the starter recipes for examples. Regenerate hashes when deliberately changing
+the corpus pin, and review them against `xtask/photoshop-corpus.sha256`.
+
+These checks use PhotoCraft's own importer and inspector; they do **not** prove that
+Photoshop can open the output or interprets it correctly. The report marks those
+stages `not_run`. The ordinary CI corpus job does not yet run this recipe command or
+upload its artifacts; that integration and the Photoshop judge are separate work.
 
 ## Rendering fidelity (PSD oracle)
 
