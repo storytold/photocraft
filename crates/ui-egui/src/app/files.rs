@@ -7,72 +7,36 @@ impl PhotocraftApp {
     /// Record `path` as the most-recently-opened file (File › Open Recent): de-duplicated, newest
     /// first, capped at Preferences › File Handling › Recent File List Contains. The list lives in
     /// the preferences (`fileHandling.recentFiles`), so it survives a restart; `ui.recent_files`
-    /// mirrors it for the menus and the Home screen. The time goes to `fileHandling.recentOpened`
-    /// (UTC seconds), which keeps entries only for the files listed. If a document is open from
-    /// `path`, its thumbnail is cached for the Home screen on a worker thread.
+    /// mirrors it for the menus and the Home screen.
     pub fn push_recent(&mut self, path: &str) {
-        // A preference edit may have dropped paths since the last frame: settle the UI list first,
-        // so their thumbnail seeds are revoked before it is replaced below.
-        self.sync_recent();
         let cap = self.recent_cap();
-        let old = self.session.prefs().file_handling.recent_files.clone();
-        let mut r = old.clone();
+        let mut r = self.session.prefs().file_handling.recent_files.clone();
         r.retain(|p| p != path);
         r.insert(0, path.to_string());
+        let evicted: Vec<String> = if r.len() > cap { r[cap..].to_vec() } else { Vec::new() };
         r.truncate(cap);
-        // Files the cap pushed off the list lose their cached thumbnails too.
-        for gone in old.iter().filter(|p| !r.contains(p)) {
-            self.recent_view.forget(self.services.thumbnail_cache_dir.as_deref(), Some(gone));
-        }
         self.ui.recent_files = r.clone();
-        let now = crate::recent_thumbs::unix_now();
-        let listed = r.iter().any(|p| p == path);
-        self.session.prefs.edit(|p| {
-            let fh = &mut p.file_handling;
-            fh.recent_opened.retain(|k, _| r.contains(k));
-            if listed {
-                fh.recent_opened.insert(path.to_string(), now);
-            }
-            fh.recent_files = r;
-        });
-        // A zero cap leaves the path unlisted: nothing to seed for it.
-        if listed {
-            self.seed_recent_thumbnail(path);
+        self.session.prefs.edit(|p| p.file_handling.recent_files = r);
+        let mut cache = self.thumbnail_cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        cache.invalidate(path);
+        for evicted_path in evicted {
+            cache.invalidate(&evicted_path);
         }
     }
-
-    /// Hand the thumbnail of the open document `path` was just opened from or saved to to the
-    /// Home screen's cache. The document is shared, not copied, and the work is done by the
-    /// worker threads. Nothing without a cache folder (the web, tests).
-    #[cfg(not(target_arch = "wasm32"))]
-    fn seed_recent_thumbnail(&mut self, path: &str) {
-        let Some(cache) = self.services.thumbnail_cache_dir.clone() else { return };
-        let Some(doc) = self.session.documents().iter().find(|d| d.path.as_deref() == Some(path)).map(|d| d.doc.clone()) else { return };
-        self.recent_view.seed(path, doc, Some(cache));
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    fn seed_recent_thumbnail(&mut self, _: &str) {}
 
     /// File › Open Recent › Clear Recent File List.
     pub fn clear_recent(&mut self) {
         self.ui.recent_files.clear();
-        self.recent_view.forget(self.services.thumbnail_cache_dir.as_deref(), None);
-        self.session.prefs.edit(|p| {
-            p.file_handling.recent_files.clear();
-            p.file_handling.recent_opened.clear();
-        });
+        self.session.prefs.edit(|p| p.file_handling.recent_files.clear());
+        self.thumbnail_cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clear();
     }
 
     /// Take one file off the recent list (the Home screen's × or Remove from Recent, #2691). The
     /// file stays on disk, and opening it again lists it again.
     pub fn remove_recent(&mut self, path: &str) {
         self.ui.recent_files.retain(|p| p != path);
-        self.recent_view.forget(self.services.thumbnail_cache_dir.as_deref(), Some(path));
-        self.session.prefs.edit(|p| {
-            p.file_handling.recent_files.retain(|r| r != path);
-            p.file_handling.recent_opened.remove(path);
-        });
+        self.session.prefs.edit(|p| p.file_handling.recent_files.retain(|r| r != path));
+        self.thumbnail_cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner).invalidate(path);
     }
 
     /// How many recent files to remember ("Recent File List Contains", 0–100).
@@ -88,14 +52,7 @@ impl PhotocraftApp {
         let stored = &self.session.prefs().file_handling.recent_files;
         let want = stored.get(..cap.min(stored.len())).unwrap_or_default();
         if self.ui.recent_files.as_slice() != want {
-            // A path that left the list (a preference change, not the × or Clear) may still have
-            // a thumbnail seed allowed or queued: revoke it, as `remove_recent` does.
-            let dropped: Vec<String> = self.ui.recent_files.iter().filter(|p| !want.contains(p)).cloned().collect();
-            let want = want.to_vec();
-            self.ui.recent_files = want;
-            for path in &dropped {
-                self.recent_view.forget(self.services.thumbnail_cache_dir.as_deref(), Some(path));
-            }
+            self.ui.recent_files = want.to_vec();
         }
     }
 
@@ -711,6 +668,7 @@ impl PhotocraftApp {
             // A copy written over the document's own file is this app's change too.
             self.remember_stamp(doc, path);
         }
+        self.thumbnail_cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner).invalidate(path);
         self.ui.status_error = false;
         let what = crate::i18n::fmt(tl!("Saved {name}"), &[("name", file_open::display_name(path).as_str())]);
         notices::io_warnings(self, &what, warnings);

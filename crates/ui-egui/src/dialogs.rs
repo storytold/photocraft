@@ -295,7 +295,6 @@ fn command_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: 
         _ if crate::delete_layer_prompt::owns(fields) => crate::delete_layer_prompt::body(ui, fields),
         _ if crate::disk_change_prompt::owns(fields) => crate::disk_change_prompt::body(ui, fields),
         _ if crate::replace_prompt::owns(fields) => crate::replace_prompt::body(ui, fields),
-        _ if crate::recent_missing_prompt::owns(fields) => crate::recent_missing_prompt::body(ui, fields),
         _ if crate::preset_group_prompt::owns(fields) => crate::preset_group_prompt::body(ui, fields),
         _ if crate::actions::owns_insert_stop(fields) => crate::actions::insert_stop_body(ui, fields),
         _ if crate::actions::owns_new_set(fields) => crate::actions::new_set_body(ui, fields),
@@ -530,8 +529,6 @@ fn ok_label(d: &Dialog) -> &'static str {
         tl!("Delete")
     } else if crate::disk_change_prompt::owns(&d.fields) || crate::replace_prompt::owns(&d.fields) {
         tl!("Replace")
-    } else if crate::recent_missing_prompt::owns(&d.fields) {
-        tl!("Remove from Recent")
     } else if d.fields.contains_key("__export") {
         tl!("Export")
     } else {
@@ -873,7 +870,6 @@ const ROUTES: &[fn(&Fields) -> bool] = &[
     crate::prefs_ui::owns,
     crate::open_prompt::owns,
     crate::replace_prompt::owns,
-    crate::recent_missing_prompt::owns,
     crate::preset_group_prompt::owns,
     crate::layer_style::color_picker::owns,
     |f| f.contains_key("__export"),
@@ -1025,7 +1021,6 @@ fn confirm_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, String> 
         _ if crate::delete_layer_prompt::owns(&d.fields) => crate::delete_layer_prompt::confirm(app, &d.fields),
         _ if crate::disk_change_prompt::owns(&d.fields) => crate::disk_change_prompt::confirm(app, &d.fields),
         _ if crate::replace_prompt::owns(&d.fields) => crate::replace_prompt::confirm(app),
-        _ if crate::recent_missing_prompt::owns(&d.fields) => crate::recent_missing_prompt::confirm(app, &d.fields),
         _ if crate::preset_group_prompt::owns(&d.fields) => crate::preset_group_prompt::confirm(app, &d.fields),
         _ if crate::actions::owns_insert_stop(&d.fields) => crate::actions::insert_stop_confirm(app, &d.fields),
         _ if crate::actions::owns_new_set(&d.fields) => crate::actions::new_set_confirm(app, &d.fields),
@@ -1209,7 +1204,6 @@ pub mod palette;
 pub(crate) mod pattern_fill_ui;
 pub mod preset_group_prompt;
 pub mod rasterize_prompt;
-pub mod recent_missing_prompt;
 pub mod replace_prompt;
 pub(super) mod rgb_histogram;
 pub mod screen_picker;

@@ -40,7 +40,7 @@ fn bars_shown(h: &Harness<'static, PhotocraftApp>) -> (bool, bool) {
     (h.query_all_by_label_contains("Auto-Select").next().is_some(), h.query_all_by_label("Zoom").next().is_some())
 }
 
-/// Click the Home button nearest the top: the header's (or the options bar's), not the rail's row.
+/// Click the Home entry: the options bar's button with a document in front, the rail's on Home.
 fn click_home(h: &mut Harness<'static, PhotocraftApp>) {
     let top = h.query_all_by_label("Home").min_by(|a, b| a.rect().min.y.total_cmp(&b.rect().min.y)).expect("a Home button");
     top.click();
@@ -67,7 +67,7 @@ fn toggling_home_swaps_the_chrome_and_keeps_the_panel_prefs() {
         assert_eq!(bars_shown(&h), (false, false), "{theme:?}: no options bar or status bar on Home");
         assert!(h.query_by_label("New file").is_some(), "{theme:?}: Home content");
         assert!(!chrome_shown(&h, &format!("{theme:?}, on Home")), "{theme:?}: no chrome on Home");
-        assert!(h.query_all_by_label("Home").count() >= 2, "{theme:?}: the header's Home toggle and the rail's entry");
+        assert!(h.query_all_by_label("Home").count() >= 1, "{theme:?}: the header's Home toggle or the rail's entry stays to go back");
         assert_eq!(h.state().ui.panels, panels, "{theme:?}: showing Home leaves the saved panels alone");
         click_home(&mut h);
         assert!(h.query_by_label("New file").is_none(), "{theme:?}: Home dismissed");

@@ -2230,23 +2230,6 @@ fn reveal_in_finder_reveals_the_documents_saved_path() {
     assert_eq!(r["args"], json!(args));
 }
 
-/// The Home screen's Recent files are revealed by `path`, with no document open; a bad `path` is
-/// an error.
-#[test]
-fn reveal_in_finder_takes_a_path_with_no_document_open() {
-    let mut s = Session::new();
-    assert!(s.is_enabled("file.revealInFinder"));
-    let path = "/tmp/pics/recent.psd";
-    let r = s.execute("file.revealInFinder", json!({"path": path, "dryRun": true})).unwrap();
-    let (program, args) = crate::layer_menu_cmds::reveal_command(path).unwrap();
-    assert_eq!((r["program"].clone(), r["args"].clone()), (json!(program), json!(args)));
-    for bad in [json!(""), json!(7), json!(null), json!("x".repeat(5000))] {
-        assert!(s.execute("file.revealInFinder", json!({"path": bad, "dryRun": true})).is_err(), "{bad}");
-    }
-    // Neither a path nor a document: nothing to show.
-    assert!(s.execute("file.revealInFinder", json!({"dryRun": true})).is_err());
-}
-
 #[cfg(windows)]
 #[test]
 fn reveal_in_finder_on_windows_passes_the_clicked_tabs_saved_path() {

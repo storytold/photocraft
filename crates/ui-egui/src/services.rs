@@ -522,10 +522,6 @@ pub struct Services {
     /// Reads the displays and their ICC profiles in the background (desktop macOS; see
     /// `monitor_status`). Without one, the canvas uses the profile chosen in Color Settings, or sRGB.
     pub read_displays: Option<monitor_status::ReadDisplaysFn>,
-    /// Where the Home screen keeps the thumbnails of recent files so they come back at once the
-    /// next time (a cache: it may be deleted at any time). Without one the thumbnails live in
-    /// memory only (the web, tests).
-    pub thumbnail_cache_dir: Option<std::path::PathBuf>,
     /// The macOS menu bar, when the desktop app installed one; the in-window menus are hidden then.
     pub native_menu: Option<native_menu::NativeMenu>,
     /// Ends the app once leaving is settled (nothing unsaved, or the prompt answered), instead of

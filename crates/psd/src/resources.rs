@@ -2,9 +2,7 @@
 
 use crate::descriptor::UnicodeString;
 use crate::error::{PsdError, Result};
-use crate::header::Header;
 use crate::io::{Reader, WriteExt, read_pascal, write_pascal};
-use crate::source::ReadAt;
 
 /// Well-known resource ids.
 pub mod ids {
@@ -248,44 +246,6 @@ pub(crate) fn read_section(r: &mut Reader<'_>) -> Result<Vec<ImageResource>> {
     Ok(v)
 }
 
-/// Most bytes [`read_resources`] reads for the resource section. Real files hold a few hundred
-/// kilobytes at most (a profile, XMP, paths); a length past this is a damaged file.
-pub const MAX_SECTION_READ: u64 = 32 << 20;
-
-/// The image resources of the file in `src`, read from its header and resource section alone:
-/// no layer, channel or merged-image data is read or decoded, so a thumbnail can be had from a
-/// multi-gigabyte file. Every length is checked against the source and [`MAX_SECTION_READ`]
-/// before anything is allocated; a truncated or damaged file is an error, never a panic.
-pub fn read_resources<R: ReadAt + ?Sized>(src: &R) -> Result<Vec<ImageResource>> {
-    let mut head = [0u8; 26];
-    src.read_at(0, &mut head)?;
-    Header::read(&mut Reader::new(&head))?;
-    let mut len = [0u8; 4];
-    // The colour mode data section's length, then the resource section's.
-    src.read_at(26, &mut len)?;
-    let at = 30u64.checked_add(u64::from(u32::from_be_bytes(len))).ok_or(PsdError::LimitExceeded("colour mode data length"))?;
-    src.read_at(at, &mut len)?;
-    let section = u64::from(u32::from_be_bytes(len));
-    if section > MAX_SECTION_READ {
-        return Err(PsdError::LimitExceeded("image resources section is too large"));
-    }
-    let start = at + 4;
-    if start.checked_add(section).is_none_or(|end| end > src.len()) {
-        return Err(PsdError::UnexpectedEof { offset: usize::try_from(start).unwrap_or(usize::MAX), needed: usize::try_from(section).unwrap_or(usize::MAX) });
-    }
-    let n = usize::try_from(section).map_err(|_| PsdError::LimitExceeded("image resources section is too large"))?;
-    let mut buf = Vec::new();
-    buf.try_reserve_exact(n).map_err(|_| PsdError::OutOfMemory("not enough memory to read the image resources"))?;
-    buf.resize(n, 0);
-    src.read_at(start, &mut buf)?;
-    let mut r = Reader::new(&buf);
-    let mut out = Vec::new();
-    while !r.is_empty() {
-        out.push(ImageResource::read(&mut r)?);
-    }
-    Ok(out)
-}
-
 /// Serialized size of the resource section [`write_section`] writes, its length field included.
 pub(crate) fn section_len(res: &[ImageResource]) -> u64 {
     res.iter().fold(4u64, |n, r| {
@@ -330,50 +290,6 @@ mod tests {
         let back = read_section(&mut Reader::new(&out)).unwrap();
         assert_eq!(back, res);
         out
-    }
-
-    /// A 4×4 RGB PSD holding only the header, an empty colour mode section and `res`.
-    fn header_and_resources(res: &[ImageResource]) -> Vec<u8> {
-        let mut out = b"8BPS".to_vec();
-        out.extend_from_slice(&1u16.to_be_bytes());
-        out.extend_from_slice(&[0; 6]);
-        out.extend_from_slice(&3u16.to_be_bytes());
-        out.extend_from_slice(&4u32.to_be_bytes());
-        out.extend_from_slice(&4u32.to_be_bytes());
-        out.extend_from_slice(&8u16.to_be_bytes());
-        out.extend_from_slice(&3u16.to_be_bytes());
-        out.extend_from_slice(&0u32.to_be_bytes());
-        write_section(&mut out, res).unwrap();
-        out
-    }
-
-    #[test]
-    fn resources_are_read_without_the_rest_of_the_file() {
-        let res = [ImageResource::new(1005, ResolutionInfo::from_dpi(72.0).to_bytes()), ImageResource::new(ids::THUMBNAIL, vec![1, 2, 3])];
-        let bytes = header_and_resources(&res);
-        assert_eq!(read_resources(&bytes[..]).unwrap(), res);
-        assert_eq!(read_resources(&bytes).unwrap(), res, "the same from a Vec");
-    }
-
-    #[test]
-    fn damaged_files_are_errors_not_panics() {
-        let bytes = header_and_resources(&[ImageResource::new(ids::THUMBNAIL, vec![7; 9])]);
-        // Every truncation fails cleanly.
-        for cut in 0..bytes.len() {
-            assert!(read_resources(&bytes[..cut]).is_err(), "cut at {cut}");
-        }
-        // A section length past the end of the file, and one past the read limit.
-        let mut long = bytes.clone();
-        long[30..34].copy_from_slice(&u32::MAX.to_be_bytes());
-        assert!(matches!(read_resources(&long[..]), Err(PsdError::LimitExceeded(_))));
-        long[30..34].copy_from_slice(&1000u32.to_be_bytes());
-        assert!(read_resources(&long[..]).is_err());
-        // A colour mode data length past the end.
-        let mut far = bytes.clone();
-        far[26..30].copy_from_slice(&u32::MAX.to_be_bytes());
-        assert!(read_resources(&far[..]).is_err());
-        // Not a PSD at all.
-        assert!(read_resources(&b"not a psd file at all, but long enough to read"[..]).is_err());
     }
 
     #[test]

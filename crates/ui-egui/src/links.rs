@@ -9,6 +9,7 @@ use crate::PhotocraftApp;
 pub const DISCORD: &str = "https://discord.gg/artcraft";
 pub const ARTCRAFT_WEBSITE: &str = "https://getartcraft.com";
 pub const APP_PAGE: &str = "https://getartcraft.com/apps/photocraft";
+pub const TUTORIALS: &str = "https://getartcraft.com/tutorials";
 pub const GITHUB: &str = "https://github.com/storytold/photocraft";
 pub const ISSUES: &str = "https://github.com/storytold/photocraft/issues";
 
@@ -63,26 +64,6 @@ pub fn link_row(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             }
         }
     });
-    if let Some(url) = clicked {
-        open(app, ui.ctx(), url);
-    }
-}
-
-/// The same links as [`link_row`], one under the other and left-aligned: they fit a narrow column
-/// (the Home screen's rail). In a bottom-up layout they are added in reverse, so they still read
-/// top to bottom.
-pub fn link_list(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    let t = crate::theme::Tokens::get(ui.ctx());
-    let mut links = [(tl!("PhotoCraft website"), APP_PAGE), (tl!("GitHub"), GITHUB), (tl!("ArtCraft"), ARTCRAFT_WEBSITE)];
-    if ui.layout().main_dir() == egui::Direction::BottomUp {
-        links.reverse();
-    }
-    let mut clicked: Option<&str> = None;
-    for (label, url) in links {
-        if ui.link(egui::RichText::new(label).font(egui::FontId::proportional(12.5)).color(t.accent)).on_hover_text(url).clicked() {
-            clicked = Some(url);
-        }
-    }
     if let Some(url) = clicked {
         open(app, ui.ctx(), url);
     }

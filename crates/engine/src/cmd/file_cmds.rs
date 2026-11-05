@@ -54,7 +54,7 @@ pub use paths::{
     extension, holds, holds_at, is_template, layered_extension, list_images, losses_at, portable_device_name, same_destination, same_file, saves_in_place,
     template_name, untitled_name,
 };
-pub(crate) use paths::{file_name, forward_slashes, is_windows_device_name, join, read_file, sanitize, stem, write_file};
+pub(crate) use paths::{file_name, forward_slashes, is_windows_device_name, join, read_file, read_file_limited, sanitize, stem, write_file};
 use processing::{conditional_mode_change, fit_image, flatten_all_effects, flatten_all_masks, image_processor, load_files_into_stack};
 use save::save_a_copy;
 pub(crate) use save::{SaveOpts, encode, save_doc};
@@ -237,40 +237,23 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             close_others
         ),
-        // The document tab's menu (UI-217-6): the tab's own file in the platform file manager. The
-        // Home screen's Recent files name a file by `path` instead, with no document open.
-        // Not a menu-bar item; enabled when the target document has a saved path.
-        spec!(
-            "file.revealInFinder",
-            "Reveal in Finder",
-            &[],
-            None,
-            r##"{"document":index? (default active),"path":str? (a file to show instead of a document's),"dryRun":bool=false}"##,
-            native,
-            |s, p| {
-                let dry_run = p.get("dryRun").and_then(Value::as_bool).unwrap_or(false);
-                if let Some(v) = p.get("path") {
-                    let path = v
-                        .as_str()
-                        .filter(|path| !path.is_empty() && path.len() <= 4096)
-                        .ok_or_else(|| EngineError::BadParams { cmd: "file.revealInFinder".into(), msg: "`path` must be a file path".into() })?;
-                    return crate::layer_menu_cmds::reveal(path, dry_run);
-                }
-                let i = match p.get("document") {
-                    Some(v) => v
-                        .as_u64()
-                        .and_then(|v| usize::try_from(v).ok())
-                        .ok_or_else(|| EngineError::BadParams { cmd: "file.revealInFinder".into(), msg: "`document` must be an index".into() })?,
-                    None => s.active_index().ok_or(EngineError::NoDocument)?,
-                };
-                let path = s
-                    .documents()
-                    .get(i)
-                    .and_then(|d| d.path.clone())
-                    .ok_or_else(|| EngineError::BadParams { cmd: "file.revealInFinder".into(), msg: format!("document {i} has no saved file") })?;
-                crate::layer_menu_cmds::reveal(&path, dry_run)
-            }
-        ),
+        // The document tab's menu (UI-217-6): the tab's own file in the platform file manager.
+        // Not a Photoshop menu-bar item; enabled when the target document has a saved path.
+        spec!("file.revealInFinder", "Reveal in Finder", &[], None, r##"{"document":index? (default active),"dryRun":bool=false}"##, native_doc, |s, p| {
+            let i = match p.get("document") {
+                Some(v) => v
+                    .as_u64()
+                    .and_then(|v| usize::try_from(v).ok())
+                    .ok_or_else(|| EngineError::BadParams { cmd: "file.revealInFinder".into(), msg: "`document` must be an index".into() })?,
+                None => s.active_index().ok_or(EngineError::NoDocument)?,
+            };
+            let path = s
+                .documents()
+                .get(i)
+                .and_then(|d| d.path.clone())
+                .ok_or_else(|| EngineError::BadParams { cmd: "file.revealInFinder".into(), msg: format!("document {i} has no saved file") })?;
+            crate::layer_menu_cmds::reveal(&path, p.get("dryRun").and_then(Value::as_bool).unwrap_or(false))
+        }),
         spec!("file.revert", "Revert", &["File"], Some("F12"), "{} (reloads the saved file as one undoable step)", can_revert, |s, _| revert(s)),
         spec!(
             "file.saveACopy",
