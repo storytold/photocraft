@@ -590,7 +590,14 @@ fn duplicating_several_artboards_places_each_copy_in_a_free_spot() {
         s.execute("layer.select", json!({"layer": a.0})).unwrap();
         s.execute("layer.select", json!({"layer": b, "mode": "add"})).unwrap();
         let r = s.execute(command, json!({})).unwrap();
-        assert_eq!(r["layers"].as_array().unwrap().len(), 2, "{command}");
+        let copies = r["layers"].as_array().unwrap();
+        assert_eq!(copies.len(), 2, "{command}");
+        // The originals stay; each copy goes right of its own, the artboard gap away.
+        assert_eq!(board_rect(&s, a.0), Rect::new(10, 10, 50, 50), "{command}");
+        assert_eq!(board_rect(&s, b), Rect::new(10, 100, 50, 140), "{command}");
+        let mut beside: Vec<Rect> = copies.iter().map(|id| board_rect(&s, id.as_u64().unwrap())).collect();
+        beside.sort_by_key(|r| r.y0);
+        assert_eq!(beside, [Rect::new(150, 10, 190, 50), Rect::new(150, 100, 190, 140)], "{command}");
         let boards: Vec<Rect> = doc(&s).artboards().iter().map(|b| b.2.rect).collect();
         assert_eq!(boards.len(), 4, "{command}");
         for (i, x) in boards.iter().enumerate() {
