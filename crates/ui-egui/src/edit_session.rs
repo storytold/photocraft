@@ -4,16 +4,6 @@
 //! only its local draft. Store small parameters here, not a full document per pointer event.
 //! A context must include stable document/target identity and a revision that changes on
 //! every relevant edit (including undo/redo). Comparing values alone cannot detect ABA edits.
-#![no_std]
-#![forbid(unsafe_code)]
-#![deny(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    clippy::unimplemented,
-    clippy::todo,
-    clippy::unreachable
-)]
 
 /// Why a draft cannot be committed to the current host state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -50,12 +40,7 @@ pub struct EditSession<T, C> {
 impl<T: Clone, C> EditSession<T, C> {
     /// Begin from a value already validated by the application.
     pub fn new(original: T, context: C) -> Self {
-        Self {
-            preview: original.clone(),
-            original,
-            context,
-            valid: true,
-        }
+        Self { preview: original.clone(), original, context, valid: true }
     }
 }
 
@@ -65,6 +50,7 @@ impl<T, C> EditSession<T, C> {
     }
 
     /// Last valid preview, even when a later incomplete/invalid input is present.
+    #[cfg(test)]
     pub fn preview(&self) -> &T {
         &self.preview
     }
@@ -73,6 +59,7 @@ impl<T, C> EditSession<T, C> {
         &self.context
     }
 
+    #[cfg(test)]
     pub fn is_valid(&self) -> bool {
         self.valid
     }
@@ -116,23 +103,9 @@ impl<T: PartialEq, C: PartialEq> EditSession<T, C> {
     /// The host still validates and applies the command and handles execution failure.
     pub fn finish(self, live: &T, context: &C) -> Result<Option<Change<T>>, FinishError> {
         self.check(live, context)?;
-        if self.original == self.preview {
-            Ok(None)
-        } else {
-            Ok(Some(Change {
-                before: self.original,
-                after: self.preview,
-            }))
-        }
+        if self.original == self.preview { Ok(None) } else { Ok(Some(Change { before: self.original, after: self.preview })) }
     }
 }
 
-/// A session cannot be finished twice.
-///
-/// ```compile_fail
-/// use edit_session::EditSession;
-/// let draft = EditSession::new(100, ("document", 7));
-/// let _ = draft.finish(&100, &("document", 7));
-/// let _ = draft.finish(&100, &("document", 7));
-/// ```
-const _: () = ();
+#[cfg(test)]
+mod tests;

@@ -9,7 +9,7 @@ If the final command is refused (for example by the automation policy), the dial
 with the typed fields, error and last valid preview. Retrying uses the original target and
 revision; switching documents or editing the target before retry still invalidates the draft.
 
-The UI uses a [vendored snapshot of edit-session](../vendor/README.md) for the draft lifecycle and no-op/stale checks.
+The UI uses the `edit_session` module in ui-egui (`crates/ui-egui/src/edit_session.rs`) for the draft lifecycle and no-op/stale checks.
 PhotoCraft retains guide selection, parsing, rendering and history ownership. Validation runs
 the existing command on a temporary COW document only when parameters change. The live document
 is changed only by the ordinary command after successful confirmation. Rounded ruler text that

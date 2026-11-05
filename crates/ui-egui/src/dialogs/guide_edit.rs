@@ -1,6 +1,7 @@
-//! A guide dialog's draft. Rendering and command validation stay in PhotoCraft; edit-session
-//! owns proposal validity, stale-context rejection and the single-use/no-op commit decision.
-use edit_session::{EditSession, FinishError};
+//! A guide dialog's draft. Rendering and command validation stay in PhotoCraft; the
+//! [`edit_session`](crate::edit_session) module owns proposal validity, stale-context rejection
+//! and the single-use/no-op commit decision.
+use crate::edit_session::{EditSession, FinishError};
 use photocraft_doc::{DocId, Document, Guides};
 use photocraft_engine::prefs::{PointSize, Unit};
 use serde_json::{Map, Value};

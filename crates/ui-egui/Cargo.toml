@@ -8,7 +8,6 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-edit-session = { workspace = true }
 craft-print = { workspace = true }
 craft-ui = { workspace = true }
 photocraft-geom = { workspace = true }
