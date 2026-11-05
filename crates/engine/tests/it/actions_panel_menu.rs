@@ -76,10 +76,12 @@ fn set_duplication_preserves_metadata_call_targets_and_empty_folder_order() {
     });
     let result = s.execute("actions.duplicate", json!({"set":"S"})).unwrap();
     assert_eq!(result["set"], "S copy");
-    assert_eq!(actions_edit_cmds::set_names(&s), ["S", "S copy", "T"]);
-    assert_eq!(s.actions.list.iter().map(|a| a.name.as_str()).collect::<Vec<_>>(), ["A", "A copy", "B copy", "Other", "B"]);
+    // Logical copies follow the complete source group, preserving its existing flat indices.
+    assert_eq!(result["index"], 3);
+    assert_eq!(actions_edit_cmds::set_names(&s), ["S", "T", "S copy"]);
+    assert_eq!(s.actions.list.iter().map(|a| a.name.as_str()).collect::<Vec<_>>(), ["A", "Other", "B", "A copy", "B copy"]);
     for a in &s.actions.list {
-        assert_eq!(a.steps[0].1["action"], 4);
+        assert_eq!(a.steps[0].1["action"], 2, "the call still targets the original B");
         assert_eq!(a.color, "red");
         assert!(a.disabled.contains(&0));
         assert!(a.dialogs.contains(&0));
