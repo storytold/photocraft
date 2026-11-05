@@ -99,6 +99,8 @@ impl PhotocraftApp {
             ppp: 1.0,
             drop_canvas_rect: None,
             tab_strip: None,
+            frame_tool_ctx: None,
+            frame_preview: None,
             drop_places: Default::default(),
             view_docs: Vec::new(),
             path_document: None,
@@ -112,6 +114,7 @@ impl PhotocraftApp {
             proxy: None,
             proxy_uploaded: None,
             outline_cache: None,
+            guide_edit: None,
             filter_preview: None,
             smart_filter_targets: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
