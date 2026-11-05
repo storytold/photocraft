@@ -161,6 +161,8 @@ pub(crate) fn selection_mode(app: &PhotocraftApp, m: egui::Modifiers) -> &'stati
 
 /// Shift constrains a Polygonal Lasso segment to Photoshop's 45° directions.
 /// Work in document coordinates so zoom, view rotation and mirroring cannot skew it.
+/// A diagonal keeps the shorter of the two offsets on both axes, as Photoshop does (#11393);
+/// a horizontal or vertical snap keeps the segment's length.
 pub(crate) fn constrained_polygon_point(from: [f64; 2], point: [f64; 2]) -> [f64; 2] {
     let dx = point[0] - from[0];
     let dy = point[1] - from[1];
@@ -171,7 +173,12 @@ pub(crate) fn constrained_polygon_point(from: [f64; 2], point: [f64; 2]) -> [f64
     if length == 0.0 {
         return point;
     }
-    let angle = (dy.atan2(dx) / std::f64::consts::FRAC_PI_4).round() * std::f64::consts::FRAC_PI_4;
+    let octant = (dy.atan2(dx) / std::f64::consts::FRAC_PI_4).round();
+    let angle = octant * std::f64::consts::FRAC_PI_4;
+    if octant.rem_euclid(2.0) == 1.0 {
+        let m = dx.abs().min(dy.abs());
+        return [from[0] + m * angle.cos().signum(), from[1] + m * angle.sin().signum()];
+    }
     [from[0] + length * angle.cos(), from[1] + length * angle.sin()]
 }
 
@@ -246,7 +253,7 @@ pub fn commit_polygon(app: &mut PhotocraftApp) {
     if pts.len() >= 3 {
         let mode = if mode.is_empty() { selection_mode(app, egui::Modifiers::NONE).to_owned() } else { mode };
         let o = &app.ui.tool_options;
-        let _ = app.run("select.lasso", json!({"points": pts, "mode": mode, "antiAlias": o.anti_alias, "feather": o.feather}));
+        let _ = app.run("select.lasso", json!({"points": pts, "mode": mode, "antiAlias": o.anti_alias, "feather": o.feather, "polygonal": true}));
     }
 }
 
