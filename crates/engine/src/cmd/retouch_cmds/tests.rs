@@ -75,7 +75,7 @@ fn periodic_clone_preview_interpolates_across_transformed_source_seam() {
         paint_layer(&mut s, |x, _| if x == 0 { [1.0, 0.0, 0.0, 1.0] } else { [0.0, 0.0, 1.0, 1.0] });
         let before = s.active().unwrap().doc.clone();
         // A rotated mapping samples halfway between the last and first columns.
-        let map = Mapping { source: (31.5, 10.0), anchor: (0.0, 0.0), m: [0.0, 1.0, -1.0, 0.0] };
+        let map = Mapping { source: (31.5, 10.0), anchor: (0.0, 0.0), m: [0.0, 1.0, -1.0, 0.0], document: None };
         let r = Rect::new(0, 0, 1, 1);
         let wrapped = clone_preview_periodic(&s, r, &map, "current", true).unwrap();
         assert_eq!(wrapped.px, [[0.5, 0.0, 0.5, 1.0]]);
@@ -208,7 +208,7 @@ fn clone_preview_matches_source_without_mutating_session() {
         s.execute("cloneSource.set", json!({"source": [8,8]})).unwrap();
         let revision = s.active().unwrap().revision;
         let slots = s.presets.clone.clone();
-        let map = Mapping { source: (8.0, 8.0), anchor: (20.0, 20.0), m: [1.0, 0.0, 0.0, 1.0] };
+        let map = Mapping { source: (8.0, 8.0), anchor: (20.0, 20.0), m: [1.0, 0.0, 0.0, 1.0], document: None };
         let buf = clone_preview(&s, Rect::new(20, 20, 21, 21), &map, "current").unwrap();
         let expected = rgba(&s, 8, 8);
         for (actual, expected) in buf.px[0].iter().zip(expected) {
@@ -2531,4 +2531,202 @@ fn periodic_clone_interior_matches_ordinary_brush_masks_and_transparency() {
             assert!(error <= tolerance, "depth={depth}, brush={brush}, max native-channel error={error}");
         }
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Clone source in another document
+// ---------------------------------------------------------------------------------------------
+
+/// Two open documents: 0 holds `source`, 1 (active) holds `dest`; the clone source is set at
+/// `at` in document 0.
+fn two_documents(depth: u64, source: impl Fn(i32, i32) -> [f32; 4], dest: impl Fn(i32, i32) -> [f32; 4], at: [i32; 2]) -> Session {
+    let mut s = session(48, 40, depth, "rgb");
+    paint_layer(&mut s, source);
+    s.execute("cloneSource.set", json!({"source": at})).unwrap();
+    s.execute("file.new", json!({"width": 64, "height": 48, "depth": depth, "mode": "rgb"})).unwrap();
+    paint_layer(&mut s, dest);
+    s
+}
+
+/// Straight RGBA of document `i`'s active layer at a pixel.
+fn doc_rgba(s: &Session, i: usize, x: i32, y: i32) -> [f32; 4] {
+    let d = &s.documents()[i];
+    d.doc.layer(d.active_layer.unwrap()).unwrap().surface().unwrap().rgba(x, y)
+}
+
+fn ramp(x: i32, y: i32) -> [f32; 4] {
+    [x as f32 / 48.0, y as f32 / 40.0, ((x * 7 + y * 3) % 11) as f32 / 11.0, 1.0]
+}
+
+#[test]
+fn clone_stamp_paints_from_the_document_the_source_was_set_in() {
+    for depth in DEPTHS {
+        for wrap in [false, true] {
+            let mut s = two_documents(depth, ramp, |_, _| [0.0, 0.0, 1.0, 1.0], [10, 12]);
+            let source_before = s.documents()[0].doc.clone();
+            assert_eq!(s.active_index(), Some(1));
+            let r = s.execute("paint.cloneStamp", json!({"points": [[30, 20], [40, 20]], "size": 8, "hardness": 100, "wrap": wrap})).unwrap();
+            assert_eq!(r["offset"], json!([-20, -8]));
+            for x in [30, 35, 40] {
+                let (got, want) = (doc_rgba(&s, 1, x, 20), doc_rgba(&s, 0, x - 20, 12));
+                for c in 0..4 {
+                    assert!((got[c] - want[c]).abs() <= tol(depth), "depth {depth} wrap {wrap} x {x}: {got:?} vs {want:?}");
+                }
+            }
+            assert_eq!(s.documents()[0].doc, source_before, "the source document is only read");
+            // Aligned: the next stroke keeps the pairing, still in the other document.
+            s.execute("paint.cloneStamp", json!({"points": [[50, 30]], "size": 4, "hardness": 100, "wrap": wrap})).unwrap();
+            let (got, want) = (doc_rgba(&s, 1, 50, 30), doc_rgba(&s, 0, 30, 22));
+            assert!((got[0] - want[0]).abs() <= tol(depth) && (got[1] - want[1]).abs() <= tol(depth), "{got:?} vs {want:?}");
+            assert!(s.undo() && s.undo());
+            assert_eq!(doc_rgba(&s, 1, 35, 20), [0.0, 0.0, 1.0, 1.0], "undo restores the painted document");
+        }
+    }
+}
+
+#[test]
+fn clone_source_in_the_painted_document_still_samples_it() {
+    let mut s = two_documents(8, ramp, |x, _| [0.0, x as f32 / 64.0, 1.0, 1.0], [10, 12]);
+    // ⌥-click in the document being painted: it is its own source again.
+    s.execute("cloneSource.set", json!({"source": [10, 12]})).unwrap();
+    s.execute("paint.cloneStamp", json!({"points": [[30, 20]], "size": 4, "hardness": 100})).unwrap();
+    let (got, want) = (doc_rgba(&s, 1, 30, 20), doc_rgba(&s, 1, 10, 12));
+    assert!((got[1] - want[1]).abs() <= tol(8), "{got:?} vs {want:?}");
+    assert_eq!(s.execute("cloneSource.list", json!({})).unwrap()["sources"][0]["document"], json!(1));
+}
+
+#[test]
+fn clone_from_another_document_converts_its_colour_mode() {
+    // A grayscale 8-bit source cloned into a 16-bit RGB document, and an RGB source into CMYK.
+    let mut s = session(24, 24, 8, "gray");
+    paint_layer(&mut s, |x, _| [x as f32 / 24.0, x as f32 / 24.0, x as f32 / 24.0, 1.0]);
+    s.execute("cloneSource.set", json!({"source": [12, 12]})).unwrap();
+    s.execute("file.new", json!({"width": 40, "height": 40, "depth": 16, "mode": "rgb"})).unwrap();
+    paint_layer(&mut s, |_, _| [1.0, 0.0, 0.0, 1.0]);
+    s.execute("paint.cloneStamp", json!({"points": [[30, 30]], "size": 4, "hardness": 100})).unwrap();
+    let got = doc_rgba(&s, 1, 30, 30);
+    let want = doc_rgba(&s, 0, 12, 12);
+    for c in 0..3 {
+        assert!((got[c] - want[0]).abs() <= tol(8), "gray copied into every channel: {got:?} vs {want:?}");
+    }
+    // Aligned, (38, 2) maps to source (20, -16): past the smaller source document's edge there is
+    // nothing to clone, so the destination keeps its pixels.
+    let before = doc_rgba(&s, 1, 38, 2);
+    s.execute("paint.cloneStamp", json!({"points": [[38, 2]], "size": 2, "hardness": 100})).unwrap();
+    assert_eq!(doc_rgba(&s, 1, 38, 2), before, "no source pixels: the destination is unchanged");
+
+    let mut s = two_documents(8, |_, _| [0.0, 1.0, 1.0, 1.0], |_, _| [1.0, 1.0, 1.0, 1.0], [5, 5]);
+    s.execute("file.new", json!({"width": 16, "height": 16, "depth": 8, "mode": "cmyk"})).unwrap();
+    paint_layer(&mut s, |_, _| [1.0, 1.0, 1.0, 1.0]);
+    s.execute("paint.cloneStamp", json!({"points": [[8, 8]], "size": 4, "hardness": 100})).unwrap();
+    let cyan = doc_rgba(&s, 2, 8, 8);
+    assert!(cyan[0] < 0.3 && cyan[1] > 0.6 && cyan[2] > 0.6, "cyan through CMYK: {cyan:?}");
+}
+
+#[test]
+fn clone_from_another_document_samples_the_layer_it_was_set_on() {
+    // Document 0: red background, and an empty layer above it, active when the source is set.
+    let mut s = session(32, 32, 8, "rgb");
+    paint_layer(&mut s, |_, _| [1.0, 0.0, 0.0, 1.0]);
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("cloneSource.set", json!({"source": [10, 10]})).unwrap();
+    s.execute("file.new", json!({"width": 32, "height": 32, "depth": 8, "mode": "rgb"})).unwrap();
+    paint_layer(&mut s, |_, _| [0.0, 0.0, 1.0, 1.0]);
+    // Current Layer reads the empty layer: nothing to paint. Non-aligned: every stroke starts at
+    // the source point.
+    s.execute("paint.cloneStamp", json!({"points": [[20, 20]], "size": 4, "hardness": 100, "sampleLayer": "current", "aligned": false})).unwrap();
+    assert_eq!(doc_rgba(&s, 1, 20, 20), [0.0, 0.0, 1.0, 1.0]);
+    // Current & Below and All Layers read the source document's composite down from that layer.
+    for (sample, at) in [("currentAndBelow", 10), ("all", 24)] {
+        s.execute("paint.cloneStamp", json!({"points": [[at, 6]], "size": 4, "hardness": 100, "sampleLayer": sample, "aligned": false})).unwrap();
+        let px = doc_rgba(&s, 1, at, 6);
+        assert!(px[0] > 0.99 && px[2] < 0.01, "{sample}: {px:?}");
+    }
+    // Removing that layer falls back to the source document's active layer.
+    s.set_active(0);
+    s.execute("layer.delete", json!({})).unwrap();
+    s.set_active(1);
+    s.execute("paint.cloneStamp", json!({"points": [[6, 26]], "size": 4, "hardness": 100, "sampleLayer": "current", "aligned": false})).unwrap();
+    assert!(doc_rgba(&s, 1, 6, 26)[0] > 0.99);
+}
+
+#[test]
+fn healing_brush_heals_from_another_document() {
+    let mut s = two_documents(16, texture, |_, _| [0.4, 0.6, 0.5, 1.0], [20, 20]);
+    let before = s.active().unwrap().doc.clone();
+    s.execute("paint.healingBrush", json!({"points": [[30, 24]], "size": 12, "hardness": 100})).unwrap();
+    let after = s.active().unwrap().doc.clone();
+    let id = s.active().unwrap().active_layer.unwrap();
+    let r = Rect::new(26, 20, 34, 28);
+    let (a, b) = (before.layer(id).unwrap().surface().unwrap().read_region(r), after.layer(id).unwrap().surface().unwrap().read_region(r));
+    assert_ne!(a, b, "the source document's texture is healed in");
+}
+
+#[test]
+fn live_clone_from_another_document_matches_the_commit() {
+    for depth in DEPTHS {
+        let mut s = two_documents(depth, texture, |_, _| [0.1, 0.2, 0.3, 1.0], [12, 12]);
+        let params = json!({"points": [[30, 22], [38, 26]], "size": 10, "hardness": 60, "opacity": 80});
+        let live = LiveRetouch::begin(&s, "paint.cloneStamp", &params).unwrap();
+        let id = s.active().unwrap().active_layer.unwrap();
+        let bounds = s.active().unwrap().doc.bounds();
+        let shown = live.doc.layer(id).unwrap().surface().unwrap().read_region(bounds);
+        s.execute("paint.cloneStamp", params).unwrap();
+        let committed = s.active().unwrap().doc.layer(id).unwrap().surface().unwrap().read_region(bounds);
+        assert_eq!(shown, committed, "depth {depth}");
+    }
+}
+
+#[test]
+fn clone_preview_reads_another_document() {
+    use crate::presets::clone_source::{Mapping, SourceDoc};
+    let s = two_documents(8, ramp, |_, _| [0.0, 0.0, 1.0, 1.0], [10, 12]);
+    let source = SourceDoc { id: s.documents()[0].doc.id, layer: s.documents()[0].active_layer };
+    let map = Mapping { source: (10.0, 12.0), anchor: (30.0, 30.0), m: [1.0, 0.0, 0.0, 1.0], document: Some(source) };
+    let buf = clone_preview(&s, Rect::new(30, 30, 31, 31), &map, "current").unwrap();
+    let want = doc_rgba(&s, 0, 10, 12);
+    for (a, b) in buf.px[0].iter().zip(want) {
+        assert!((a - b).abs() < 0.01, "{:?} vs {want:?}", buf.px[0]);
+    }
+}
+
+#[test]
+fn clone_source_document_closed_or_invalid_is_an_error() {
+    let mut s = two_documents(8, ramp, |_, _| [0.0, 0.0, 1.0, 1.0], [10, 12]);
+    s.execute("file.close", json!({"document": 0})).unwrap();
+    let before = s.active().unwrap().doc.clone();
+    for cmd in ["paint.cloneStamp", "paint.healingBrush"] {
+        let e = s.execute(cmd, json!({"points": [[20, 20]], "size": 4})).unwrap_err();
+        assert!(e.to_string().contains("closed"), "{cmd}: {e}");
+        assert!(LiveRetouch::begin(&s, cmd, &json!({"points": [[20, 20]], "size": 4})).is_err());
+    }
+    assert_eq!(s.active().unwrap().doc, before, "nothing painted");
+    assert_eq!(s.presets.clone.active().anchor, None, "a refused stroke pairs nothing");
+    assert_eq!(s.execute("cloneSource.list", json!({})).unwrap()["sources"][0]["document"], Value::Null);
+    // Explicit `source`/`offset` params sample the painted document, whatever the slot says.
+    s.execute("paint.cloneStamp", json!({"points": [[20, 20]], "offset": [4, 0], "size": 4})).unwrap();
+    // Setting a source in the painted document recovers.
+    s.execute("cloneSource.set", json!({"source": [5, 5]})).unwrap();
+    s.execute("paint.cloneStamp", json!({"points": [[20, 20]], "size": 4})).unwrap();
+}
+
+#[test]
+fn clone_source_set_names_the_source_document() {
+    let mut s = two_documents(8, ramp, |_, _| [0.0, 0.0, 1.0, 1.0], [0, 0]);
+    // From document 1, set a source in document 0 by index.
+    let r = s.execute("cloneSource.set", json!({"source": [10, 12], "document": 0})).unwrap();
+    assert_eq!(r["document"], json!(0));
+    assert_eq!(r["layer"], json!(s.documents()[0].active_layer.unwrap().0));
+    s.execute("paint.cloneStamp", json!({"points": [[30, 20]], "size": 4, "hardness": 100})).unwrap();
+    let (got, want) = (doc_rgba(&s, 1, 30, 20), doc_rgba(&s, 0, 10, 12));
+    assert!((got[0] - want[0]).abs() <= tol(8), "{got:?} vs {want:?}");
+    for bad in [
+        json!({"source": [1, 1], "document": 2}),
+        json!({"source": [1, 1], "document": -1}),
+        json!({"source": [1, 1], "document": "0"}),
+        json!({"document": 0}),
+    ] {
+        assert!(s.execute("cloneSource.set", bad.clone()).is_err(), "{bad}");
+    }
+    assert_eq!(s.presets.clone.active().source, Some([10.0, 12.0]), "a refused call changes nothing");
 }
