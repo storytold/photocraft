@@ -29,6 +29,7 @@ fn srgb_xmp_metadata(xmp: &str) -> std::borrow::Cow<'_, str> {
         ("exif:ColorSpace=\"65535\"", "exif:ColorSpace=\"1\""),
         ("exif:ColorSpace=\"2\"", "exif:ColorSpace=\"1\""),
         ("exif:ColorSpace='65535'", "exif:ColorSpace='1'"),
+        ("exif:ColorSpace='2'", "exif:ColorSpace='1'"),
         ("<exif:ColorSpace>65535</exif:ColorSpace>", "<exif:ColorSpace>1</exif:ColorSpace>"),
         ("<exif:ColorSpace>2</exif:ColorSpace>", "<exif:ColorSpace>1</exif:ColorSpace>"),
         ("exif:InteroperabilityIndex=\"R03\"", "exif:InteroperabilityIndex=\"R98\""),
@@ -227,10 +228,22 @@ pub(crate) fn encode(image: &Image, plan: Plan, opts: &crate::EncodeOptions) -> 
     }))
     .unwrap_or_else(|_| Err(CodecError::encode(F, "the JPEG XL encoder failed")))?;
     if opts.embed_metadata {
-        // These modular codestreams use sRGB: metadata describing a source
-        // Adobe RGB profile must not contradict the exported pixels.
-        let exif = image.meta.exif.as_deref().map(crate::exif_color::srgb_exif_metadata);
-        let xmp = image.meta.xmp.as_deref().map(srgb_xmp_metadata);
+        // The RGB modular codestream is sRGB. Only its RGB metadata needs
+        // colour-space reconciliation; leave grayscale EXIF/XMP untouched.
+        let exif = image.meta.exif.as_deref().map(|b| {
+            if image.layout().is_rgb() {
+                crate::exif_color::srgb_exif_metadata(b)
+            } else {
+                std::borrow::Cow::Borrowed(b)
+            }
+        });
+        let xmp = image.meta.xmp.as_deref().map(|packet| {
+            if image.layout().is_rgb() {
+                srgb_xmp_metadata(packet)
+            } else {
+                std::borrow::Cow::Borrowed(packet)
+            }
+        });
         jxl_with_metadata(codestream, exif.as_deref(), xmp.as_deref())
     } else {
         Ok(codestream)
@@ -246,6 +259,20 @@ mod tests {
         for bytes in [&[][..], &[0xff, 0x0a][..], &[0; 32][..]] {
             assert!(correct_16_bit_alpha_header(bytes, 2, 2).is_err());
         }
+    }
+
+    #[test]
+    fn xmp_colour_metadata_is_reconciled_without_changing_unrelated_fields() {
+        let source = "<rdf:Description exif:ColorSpace=\"2\" photoshop:ICCProfile=\"Adobe RGB (1998)\" dc:creator=\"Camera A\"><exif:InteroperabilityIndex>R03</exif:InteroperabilityIndex></rdf:Description>";
+        let adjusted = srgb_xmp_metadata(source);
+        assert!(adjusted.contains("exif:ColorSpace=\"1\""));
+        assert!(adjusted.contains("photoshop:ICCProfile=\"sRGB\""));
+        assert!(adjusted.contains("<exif:InteroperabilityIndex>R98</exif:InteroperabilityIndex>"));
+        assert!(adjusted.contains("dc:creator=\"Camera A\""));
+        assert!(!adjusted.contains("Adobe RGB (1998)"));
+        assert!(matches!(srgb_xmp_metadata(&adjusted), std::borrow::Cow::Borrowed(_)));
+        let unchanged = "free-form text about Adobe RGB (1998) is not a colour tag";
+        assert!(matches!(srgb_xmp_metadata(unchanged), std::borrow::Cow::Borrowed(_)));
     }
 
     #[test]
