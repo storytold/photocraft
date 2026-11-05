@@ -1300,7 +1300,7 @@ fn preflight(page: &Page) -> Result<(), IoError> {
 /// multiplies through the cached lists, so it costs no more than the cap.
 fn form_draws(page: &Page) -> Result<(), IoError> {
     let mut forms = Forms::default();
-    let page_scope = Scope { x: page.resources().x_objects.clone(), id: page.raw().obj_id() };
+    let page_scope = Scope { x: page.resources().x_objects.clone(), id: ScopeId::Page };
     let mut drawn = 0u64;
     let top = forms.children(page.typed_operations(), &page_scope.x);
     for child in top {
@@ -1330,14 +1330,28 @@ fn form_draws(page: &Page) -> Result<(), IoError> {
 #[derive(Clone)]
 struct Scope<'a> {
     x: Dict<'a>,
-    id: Option<ObjectIdentifier>,
+    id: ScopeId,
+}
+
+/// Which `/Resources` a [`Scope`] came from, unique within one page: a font dictionary is often
+/// direct (no object number), so fonts are told apart by their name in the page's `/Font`.
+#[derive(Clone, PartialEq, Eq, Hash)]
+enum ScopeId {
+    /// The page's own resources.
+    Page,
+    /// No resources (an annotation appearance without its own).
+    Empty,
+    /// The `/Resources` of the page's Type 3 font with this name.
+    Font(Vec<u8>),
+    /// The `/Resources` of this stream.
+    Stream(ObjectIdentifier),
 }
 
 impl<'a> Scope<'a> {
     /// `stream`'s own resources, or `inherited` when it has none.
     fn of(stream: &Stream<'a>, inherited: &Scope<'a>) -> Scope<'a> {
         match stream.dict().get::<Dict<'a>>(b"Resources") {
-            Some(r) => Scope { x: Resources::new(r).x_objects, id: Some(stream.obj_id()) },
+            Some(r) => Scope { x: Resources::new(r).x_objects, id: ScopeId::Stream(stream.obj_id()) },
             None => inherited.clone(),
         }
     }
@@ -1349,13 +1363,13 @@ impl<'a> Scope<'a> {
 /// font's resources, else the page's) and `/ExtGState` soft-mask groups (the page's).
 fn other_contents<'a>(page: &Page<'a>, page_scope: &Scope<'a>) -> Vec<(Stream<'a>, Scope<'a>)> {
     let res = page.resources();
-    let none = Scope { x: Dict::default(), id: None };
+    let none = Scope { x: Dict::default(), id: ScopeId::Empty };
     let mut out: Vec<(Stream<'a>, Scope<'a>)> = appearance_streams(page).into_iter().map(|s| (s, none.clone())).collect();
     for name in res.fonts.keys() {
         let Some(font) = res.fonts.get::<Dict<'a>>(&name) else { continue };
         let Some(procs) = font.get::<Dict<'a>>(b"CharProcs") else { continue };
         let scope = match font.get::<Dict<'a>>(b"Resources") {
-            Some(r) => Scope { x: Resources::new(r).x_objects, id: font.obj_id() },
+            Some(r) => Scope { x: Resources::new(r).x_objects, id: ScopeId::Font(name.as_ref().to_vec()) },
             None => page_scope.clone(),
         };
         for glyph in procs.keys() {
@@ -1400,7 +1414,7 @@ fn appearance_streams<'a>(page: &Page<'a>) -> Vec<Stream<'a>> {
 struct Forms<'a> {
     /// A content stream's children, by the stream's object and the [`Scope`] its names
     /// resolved in.
-    children: HashMap<(ObjectIdentifier, Option<ObjectIdentifier>), Vec<Stream<'a>>>,
+    children: HashMap<(ObjectIdentifier, ScopeId), Vec<Stream<'a>>>,
     /// The forms being drawn right now (a form among them that draws itself loops).
     open: HashSet<ObjectIdentifier>,
 }
@@ -1456,7 +1470,7 @@ impl<'a> Forms<'a> {
     /// The Form XObjects `stream`'s content draws with its names resolved in `scope`, read once
     /// per stream and scope.
     fn kids(&mut self, stream: &Stream<'a>, scope: &Scope<'a>) -> Vec<Stream<'a>> {
-        let key = (stream.obj_id(), scope.id);
+        let key = (stream.obj_id(), scope.id.clone());
         if let Some(k) = self.children.get(&key) {
             return k.clone();
         }

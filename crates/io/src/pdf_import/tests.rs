@@ -733,6 +733,28 @@ fn inline_images_count_toward_the_page_total() {
 
 /// A chain of `levels` Form XObjects (objects 5..), each drawing the next `fan` times; the page
 /// draws the first once.
+/// Two direct Type 3 fonts (no object numbers) share glyph 5, which draws `/X`: form 6 in both,
+/// with no `/Resources`, so its `/Y` resolves in the font's. `/Y` is leaf 7 in font A and in font
+/// B `b_y`: 7 again, or 8, the head of a chain that draws 2^18 forms.
+fn shared_glyph_fonts(a_y: usize, b_y: usize) -> Vec<u8> {
+    let font = |y: usize| {
+        format!(
+            "<< /Type /Font /Subtype /Type3 /FontBBox [0 0 10 10] /FontMatrix [0.1 0 0 0.1 0 0] /CharProcs << /a 5 0 R >> /Encoding << /Differences [97 /a] >> /FirstChar 97 /LastChar 97 /Widths [10] /Resources << /XObject << /X 6 0 R /Y {y} 0 R >> >> >>"
+        )
+    };
+    let form = |res: String, content: &str| stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 10 10] {res}"), content.as_bytes());
+    let mut objs = vec![stream("", b"10 0 d0 /X Do"), form(String::new(), "/Y Do"), form(String::new(), "0 0 10 10 re f")];
+    let levels = 18;
+    for i in 0..levels {
+        if i + 1 < levels {
+            objs.push(form(format!("/Resources << /XObject << /C {} 0 R >> >>", 9 + i), "/C Do\n/C Do\n"));
+        } else {
+            objs.push(form(String::new(), ""));
+        }
+    }
+    objects_pdf(&format!("/Font << /A {} /B {} >>", font(a_y), font(b_y)), "", "", b"", objs)
+}
+
 fn form_chain(levels: usize, fan: usize) -> Vec<u8> {
     let forms = (0..levels)
         .map(|i| {
@@ -750,6 +772,18 @@ fn form_chain(levels: usize, fan: usize) -> Vec<u8> {
         })
         .collect();
     objects_pdf("/XObject << /F 5 0 R >>", "", "", b"/F Do", forms)
+}
+
+/// A form without `/Resources` drawn under two direct Type 3 fonts resolves its names in each
+/// font's resources, so its children are cached per font: whichever font comes first, the font
+/// whose `/Y` is the 2^18 chain is counted with the chain, not with the other font's leaf.
+#[test]
+fn direct_type3_fonts_keep_their_own_form_children() {
+    for (a, b) in [(7, 8), (8, 7)] {
+        let e = refused(&shared_glyph_fonts(a, b), "chain behind one of two direct fonts");
+        assert!(e.contains("Form XObjects more than"), "{e}");
+    }
+    assert!(import_pdf("fonts.pdf", &shared_glyph_fonts(7, 7), &PdfOpenOptions::default(), &Interrupt::NONE).is_ok());
 }
 
 /// The interpreter bounds how deep forms nest, not how often they're drawn: a form drawing its
