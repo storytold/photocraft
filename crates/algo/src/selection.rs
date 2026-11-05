@@ -778,6 +778,8 @@ pub fn tone_range(px: &[[f32; 4]], lo: f32, hi: f32, falloff: f32) -> Vec<f32> {
 }
 
 mod distance;
+#[cfg(test)]
+mod ellipse_aa_edge_tests;
 mod inverse;
 mod lasso;
 mod marquee;
