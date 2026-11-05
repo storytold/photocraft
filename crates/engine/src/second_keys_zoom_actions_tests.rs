@@ -4,7 +4,8 @@
 //! The engine owns the key tables and the Keyboard Shortcuts command. The zoom itself and the
 //! Actions panel are UI state (`window.panel.actions` is a menu item the engine does not run), so
 //! these tests check that each key resolves to its command exactly as the main key does and
-//! that the user can remove it; the UI crate's shortcut tests cover the key press reaching the UI.
+//! that the user can remove it. They do not exercise key dispatch; `alternate_keys_run_their_command`
+//! in the UI crate's `shortcut_dispatch` tests does, and lists both keys.
 
 use crate::Session;
 use crate::prefs::{ALTERNATE_SHORTCUTS, default_alternates, normalize_shortcut};
