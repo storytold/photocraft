@@ -258,22 +258,47 @@ fn shift_click_adds_shape_layers_one_after_another() {
     assert_eq!(selected, ids);
 }
 
-/// #8208: with Show Transform Controls on, one click outside a resized box both commits the
-/// resize and Auto-Selects the layer under the pointer; it no longer takes a second click.
-#[test]
-fn one_click_accepts_a_resized_box_and_picks_the_layer_under_it() {
+/// Opens B's transform controls (Show Transform Controls on) and resizes the box to twice B's
+/// size from its top-left corner, so it covers (40..72)².
+fn resized_box() -> (PhotocraftApp, LayerId, LayerId) {
     let (mut app, a, b) = app();
     app.ui.tool_options.move_show_transform = true;
     crate::transform_tool::begin(&mut app, &egui::Context::default()).unwrap();
-    // Resize B's box to twice its size from its top-left corner.
     let t = app.ui.transform.as_mut().unwrap();
     t.quad[2] = [t.quad[2][0] + 16.0, t.quad[2][1] + 16.0];
     t.quad[1][0] += 16.0;
     t.quad[3][1] += 16.0;
-    let click = egui::Modifiers::NONE;
-    crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 16.0, y: 16.0, pressure: 1.0 }, click);
-    crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 16.0, y: 16.0 }, click);
-    assert!(app.ui.transform.is_none(), "the click accepted the box");
+    (app, a, b)
+}
+
+/// A plain click (press and release without moving) at document point `p`.
+fn click(app: &mut PhotocraftApp, p: [f64; 2]) {
+    crate::canvas::tool_event(app, ToolEvent::Down { x: p[0], y: p[1], pressure: 1.0 }, egui::Modifiers::NONE);
+    crate::canvas::tool_event(app, ToolEvent::Up { x: p[0], y: p[1] }, egui::Modifiers::NONE);
+}
+
+/// #8208, #11100, as measured in the reference application: a click outside a resized box on
+/// another layer's pixels commits the resize as one Free Transform step and keeps the transformed
+/// layer selected; the second click on that layer is the one that picks it.
+#[test]
+fn a_click_on_another_layer_accepts_a_resized_box_and_the_next_one_picks_it() {
+    let (mut app, a, b) = resized_box();
+    click(&mut app, [16.0, 16.0]);
+    assert!(app.ui.transform.is_none(), "the click on A accepted the box");
     assert_eq!(bounds(&app, b), Rect::new(40, 40, 72, 72), "B keeps its resize");
-    assert_eq!(active(&app), Some(a), "and the same click selected A");
+    let last = app.session.active().unwrap().history.entries().last().map(ToString::to_string);
+    assert_eq!(last.as_deref(), Some("Free Transform"));
+    assert_eq!(active(&app), Some(b), "the accepting click leaves B selected");
+    click(&mut app, [16.0, 16.0]);
+    assert_eq!(active(&app), Some(a), "the second click picks A");
+}
+
+/// #11100: a click outside the box where only the Background has pixels keeps it open, B still
+/// selected.
+#[test]
+fn a_click_on_the_background_alone_keeps_the_resized_box_open() {
+    let (mut app, _, b) = resized_box();
+    click(&mut app, [30.0, 30.0]);
+    assert!(app.ui.transform.is_some(), "the box stays open");
+    assert_eq!(active(&app), Some(b));
 }

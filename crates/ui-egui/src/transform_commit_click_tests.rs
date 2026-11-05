@@ -72,6 +72,36 @@ fn a_click_on_the_pasteboard_commits_one_free_transform_step() {
     }
 }
 
+/// #11100, measured in the reference application: a click outside the box on another layer's
+/// pixels commits one Free Transform step, and the transformed layer stays the only selected one
+/// (the click doesn't pick the layer under it).
+#[test]
+fn a_click_on_another_layers_pixels_commits_and_keeps_the_selection() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 200, "height": 200, "background": "white"})).unwrap();
+    app.sync_views();
+    app.ui.extras.rulers = false;
+    app.ui.extras.snap = false;
+    // "Other" has a blue block at x 120..160, y 120..160; "Paint" a red one at x 20..60, y 20..60.
+    for (name, at, color) in [("Other", 120, "#0000ff"), ("Paint", 20, "#ff0000")] {
+        let id = app.run("layer.new.layer", json!({"name": name})).unwrap()["layer"].as_u64().unwrap();
+        app.run("layer.select", json!({"layer": id})).unwrap();
+        app.run("select.rect", json!({"x": at, "y": at, "width": 40, "height": 40})).unwrap();
+        app.run("edit.fill", json!({"contents": "color", "color": color})).unwrap();
+        app.run("select.deselect", json!({})).unwrap();
+    }
+    let paint = app.session.active().unwrap().active_layer.unwrap();
+    crate::menus::invoke(&mut app, &egui::Context::default(), "edit.freeTransform", json!({})).unwrap();
+    let t = app.ui.transform.as_mut().unwrap();
+    t.quad = t.quad.map(|[x, y]| [x + 10.0, y]);
+    let before = steps(&app);
+    click(&mut app, [140.0, 140.0]);
+    assert!(app.ui.transform.is_none(), "committed");
+    assert_eq!(steps(&app), before + 1);
+    assert_eq!(app.session.active().unwrap().history.entries().last().map(ToString::to_string).as_deref(), Some("Free Transform"));
+    assert_eq!(app.session.active().unwrap().selected_layers(), vec![paint], "the selection doesn't change");
+}
+
 #[test]
 fn a_drag_outside_the_box_still_rotates() {
     let mut app = app();
