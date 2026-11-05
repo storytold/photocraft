@@ -306,6 +306,12 @@ mod tests {
         out
     }
 
+    /// The bytes of each sample: `-0.0` and `+0.0` compare equal as `f32`, so the differential
+    /// checks below compare bit patterns rather than values.
+    fn bits(v: &[f32]) -> Vec<u32> {
+        v.iter().map(|x| x.to_bits()).collect()
+    }
+
     fn line(w: usize, n: usize, seed: u32) -> Vec<f32> {
         let mut s = seed | 1;
         (0..w * n)
@@ -323,13 +329,16 @@ mod tests {
     #[test]
     fn split_row_pass_matches_the_clamped_reference() {
         let mut scratch = Vec::new();
+        // `-0.0 == 0.0` as `f32`; comparing bits is what makes the check below fail on a signed-zero
+        // regression, so keep the helper rather than a plain `assert_eq!`.
+        assert_ne!(bits(&[-0.0]), bits(&[0.0]));
         for r in 1..=50usize {
             for w in [1usize, 2, 3, 5, 7, 13, 32, 64, r.saturating_sub(1).max(1), r, r + 1, r + 2] {
                 for n in 1..=4usize {
                     let src = line(w, n, (r * 1013 + w * 31 + n) as u32);
                     let mut got = src.clone();
                     box_line_n(&mut got, w, n, r, &mut scratch);
-                    assert_eq!(got, reference_line(&src, w, n, r), "w {w} n {n} r {r}");
+                    assert_eq!(bits(&got), bits(&reference_line(&src, w, n, r)), "w {w} n {n} r {r}");
                 }
             }
         }
@@ -345,7 +354,7 @@ mod tests {
             for row in 0..h {
                 let a = &src[row * w * n..(row + 1) * w * n];
                 let b = &got[row * w * n..(row + 1) * w * n];
-                assert_eq!(b, &reference_line(a, w, n, r)[..], "w {w} h {h} n {n} r {r} row {row}");
+                assert_eq!(bits(b), bits(&reference_line(a, w, n, r)), "w {w} h {h} n {n} r {r} row {row}");
             }
         }
     }
