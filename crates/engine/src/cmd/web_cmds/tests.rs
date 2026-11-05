@@ -204,6 +204,55 @@ fn platform_writer_failure_stops_export_and_preserves_saved_settings() {
     assert_eq!(s.file_menu.last_web.as_ref(), Some(&saved));
 }
 
+#[test]
+fn invalid_slice_mode_and_whole_image_destination_refuse_before_writing() {
+    let mut s = session(8);
+    s.execute("slice.new", json!({"rect": [0, 0, 32, 48], "name": "left"})).unwrap();
+    s.execute("slice.new", json!({"rect": [32, 0, 32, 48], "name": "right"})).unwrap();
+    let slices = photocraft_doc::slices::resolve(&s.active().unwrap().doc);
+    let right = slices.iter().find(|slice| slice.name == "right").unwrap().number;
+    let dir = tmp("web-slice-mode-destination");
+    let path = format!("{dir}/whole.png");
+    let saved = json!({"format": "png24", "path": "last.png"});
+    save_for_web_with_writer(&mut s, &saved, &mut |_, _| Ok(())).unwrap();
+    s.execute("select.rect", json!({"x": 8, "y": 8, "width": 4, "height": 4})).unwrap();
+    s.execute("select.float", json!({"dx": 32})).unwrap();
+
+    for (p, expected) in [
+        (json!({"dir": dir, "slices": "selcted", "numbers": [right]}), "slices must be all, user, or selected"),
+        (json!({"dir": dir, "slices": 2}), "slices must be all, user, or selected"),
+        (json!({"path": path, "numbers": [right]}), "use `dir`"),
+        (json!({"path": path, "dir": "", "slices": null, "numbers": [right]}), "use `dir`"),
+    ] {
+        let err = save_for_web_with_writer(&mut s, &p, &mut |_, _| panic!("a refused export must not call the writer")).unwrap_err().to_string();
+        assert!(err.contains(expected), "{p}: {err}");
+        assert_eq!(s.file_menu.last_web.as_ref(), Some(&saved));
+        assert!(crate::float_cmds::floating(s.active().unwrap()).is_some());
+    }
+    let p = json!({"path": path, "numbers": [right]});
+    assert!(s.execute("file.export.saveForWebLegacy", p).unwrap_err().to_string().contains("use `dir`"));
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+    assert_eq!(s.file_menu.last_web.as_ref(), Some(&saved));
+
+    // A directory or an explicit slice mode still exports only the chosen slice.
+    for p in [json!({"path": path, "dir": dir, "numbers": [right]}), json!({"path": path, "slices": "selected", "numbers": [right]})] {
+        let mut paths = Vec::new();
+        save_for_web_with_writer(&mut s, &p, &mut |out, _| {
+            paths.push(out.to_string());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(paths.len(), 1, "{p}");
+        assert!(paths[0].ends_with("/images/right.png"), "{p}: {paths:?}");
+    }
+    // The only number in a document without slices is the whole image.
+    let result = s.execute("file.export.saveForWebLegacy", json!({"path": path})).unwrap();
+    assert_eq!(result["files"], json!([path]));
+    let result = session(8).execute("file.export.saveForWebLegacy", json!({"path": path, "numbers": [1]})).unwrap();
+    assert_eq!(result["files"], json!([path]));
+    assert_eq!(decode(&path).dimensions(), (64, 48));
+}
+
 /// Check every chosen image before writing, preserving codec boundaries and unchosen slices.
 #[test]
 fn selected_slice_format_limits_are_checked_before_any_write() {
@@ -775,6 +824,7 @@ fn generator_naming_grammar() {
 fn image_assets_needs_the_generator_preference() {
     let dir = tmp("generator_pref");
     let mut s = session(8);
+    let doc = s.active().unwrap().doc.id;
     let id = s.active().unwrap().active_layer.unwrap();
     s.execute("layer.renameLayer", json!({"layer": id.0, "name": "logo.png"})).unwrap();
     assert!(!s.prefs().plug_ins.generator_enabled, "off by default, as in Photoshop");
@@ -785,19 +835,20 @@ fn image_assets_needs_the_generator_preference() {
     assert!(s.is_enabled("file.generate.imageAssets"));
     assert_eq!(s.execute("file.generate.imageAssets", json!({"dir": dir})).unwrap()["enabled"], true);
     s.active_mut().unwrap().path = Some(format!("{dir}/doc.psd"));
-    assert!(crate::automate_cmds::document_saved(&mut s, 0).is_some(), "assets are written on save");
+    assert!(crate::automate_cmds::document_saved(&mut s, doc).is_some(), "assets are written on save");
 
     // Turning it off again takes the menu item away and stops the export, even for a document
     // left switched on.
     s.execute("prefs.set", json!({"path": "plugIns.generatorEnabled", "value": false})).unwrap();
     assert!(!s.is_enabled("file.generate.imageAssets"));
-    assert!(crate::automate_cmds::document_saved(&mut s, 0).is_none(), "no assets while Generator is off");
+    assert!(crate::automate_cmds::document_saved(&mut s, doc).is_none(), "no assets while Generator is off");
 }
 
 #[test]
 fn image_assets_are_generated_now_and_on_save() {
     let dir = tmp("assets");
     let mut s = session(8);
+    let doc = s.active().unwrap().doc.id;
     // Preferences ▸ Plug-ins ▸ Enable Generator: the feature is opt-in.
     s.execute("prefs.set", json!({"path": "plugIns.generatorEnabled", "value": true})).unwrap();
     let id = s.active().unwrap().active_layer.unwrap();
@@ -812,12 +863,12 @@ fn image_assets_are_generated_now_and_on_save() {
     // On save: written to <name>-assets next to the file.
     let saved = format!("{dir}/doc.psd");
     s.active_mut().unwrap().path = Some(saved.clone());
-    let r = crate::automate_cmds::document_saved(&mut s, 0).unwrap();
+    let r = crate::automate_cmds::document_saved(&mut s, doc).unwrap();
     assert_eq!(r["dir"], json!(format!("{dir}/doc-assets")));
     assert!(std::path::Path::new(&format!("{dir}/doc-assets/logo.png")).is_file());
     // Off: nothing on save.
     assert_eq!(s.execute("file.generate.imageAssets", json!({})).unwrap()["enabled"], false);
-    assert!(crate::automate_cmds::document_saved(&mut s, 0).is_none());
+    assert!(crate::automate_cmds::document_saved(&mut s, doc).is_none());
     // A default layer adds variants.
     let s2 = session(8);
     let doc = s2.active().unwrap().doc.clone();
@@ -832,6 +883,82 @@ fn image_assets_are_generated_now_and_on_save() {
     assert!(errors.is_empty(), "{errors:?}");
     assert_eq!(files.iter().map(|p| std::path::PathBuf::from(p.as_str())).collect::<Vec<_>>(), vec![std::path::Path::new(&dir).join("icon@2x.png")]);
     assert_eq!(decode(&files[0]).dimensions(), (128, 80));
+}
+
+/// A Save Document script that closes an earlier clean tab (#11121): the asset generation that
+/// follows re-resolves the saved document's identity, so the shifted list neither skips A's
+/// outputs nor exports some other tab's.
+#[test]
+fn a_save_script_closing_another_tab_still_generates_the_saved_documents_assets() {
+    let dir = tmp("script_close_tab");
+    let mut s = Session::new();
+    // Document B first (tab 0), then document A with an eligible layer (tab 1, active).
+    s.execute("file.new", json!({"width": 8, "height": 8, "name": "b"})).unwrap();
+    s.execute("file.new", json!({"width": 64, "height": 48, "name": "a"})).unwrap();
+    let a = s.active().unwrap().doc.id;
+    s.edit("logo", |doc, active| {
+        let fmt = doc.pixel_format();
+        let mut l = Layer::raster("logo.png", fmt);
+        l.surface_mut().unwrap().fill_rect(Rect::new(4, 4, 12, 12), &photocraft_raster::from_rgba(&fmt, [1.0, 0.0, 0.0, 1.0]));
+        let id = doc.insert_above(None, l);
+        *active = Some(id);
+        Ok(())
+    })
+    .unwrap();
+    s.execute("prefs.set", json!({"path": "plugIns.generatorEnabled", "value": true})).unwrap();
+    s.execute("file.generate.imageAssets", json!({"dir": dir})).unwrap();
+    s.active_mut().unwrap().path = Some(format!("{dir}/a.psd"));
+    s.execute("file.scripts.scriptEventsManager", json!({"enabled": true, "add": {"event": "saveDocument", "steps": [["file.close", {"document": 0}]]}}))
+        .unwrap();
+
+    let r = crate::automate_cmds::document_saved(&mut s, a).expect("A survived the script, so its assets generate");
+    assert_eq!(r["files"].as_array().unwrap().len(), 1, "{r}");
+    assert!(std::path::Path::new(&format!("{dir}/a-assets/logo.png")).is_file(), "A's asset is written although the script closed B");
+    assert_eq!(s.documents().len(), 1);
+    assert_eq!(s.documents()[0].doc.id, a, "the survivor is A, and A's own assets were written");
+}
+
+/// The sibling condition (#11121): when the script closes the saved document itself, the
+/// continuation must generate nothing — least of all the replacement tab's assets.
+#[test]
+fn a_save_script_closing_the_saved_document_generates_no_replacement_assets() {
+    let dir = tmp("script_close_saved");
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 64, "height": 48, "name": "a"})).unwrap();
+    let a = s.active().unwrap().doc.id;
+    s.edit("logo", |doc, active| {
+        let fmt = doc.pixel_format();
+        let mut l = Layer::raster("logo.png", fmt);
+        l.surface_mut().unwrap().fill_rect(Rect::new(4, 4, 12, 12), &photocraft_raster::from_rgba(&fmt, [1.0, 0.0, 0.0, 1.0]));
+        let id = doc.insert_above(None, l);
+        *active = Some(id);
+        Ok(())
+    })
+    .unwrap();
+    s.active_mut().unwrap().path = Some(format!("{dir}/a.psd"));
+    s.execute("prefs.set", json!({"path": "plugIns.generatorEnabled", "value": true})).unwrap();
+    s.execute("file.generate.imageAssets", json!({"dir": dir})).unwrap();
+    s.execute("file.new", json!({"width": 64, "height": 48, "name": "b"})).unwrap();
+    s.edit("logo2", |doc, active| {
+        let fmt = doc.pixel_format();
+        let mut l = Layer::raster("logo2.png", fmt);
+        l.surface_mut().unwrap().fill_rect(Rect::new(4, 4, 12, 12), &photocraft_raster::from_rgba(&fmt, [0.0, 1.0, 0.0, 1.0]));
+        let id = doc.insert_above(None, l);
+        *active = Some(id);
+        Ok(())
+    })
+    .unwrap();
+    s.active_mut().unwrap().path = Some(format!("{dir}/b.psd"));
+    s.execute("file.generate.imageAssets", json!({"dir": dir})).unwrap();
+    // Both tabs have a path and an eligible layer: whichever tab the continuation mistakes the
+    // saved one for would produce a file.
+    // The script closes the saved document (A, tab 0); B shifts up into its place.
+    s.execute("file.scripts.scriptEventsManager", json!({"enabled": true, "add": {"event": "saveDocument", "steps": [["file.close", {"document": 0}]]}}))
+        .unwrap();
+
+    assert!(crate::automate_cmds::document_saved(&mut s, a).is_none(), "the saved document is gone, so nothing generates");
+    assert!(!std::path::Path::new(&format!("{dir}/a-assets")).exists());
+    assert!(!std::path::Path::new(&format!("{dir}/b-assets/logo2.png")).exists(), "the replacement tab's assets are not exported");
 }
 
 /// Photoshop's Generator exports an artboard named like an asset at the board's size, transparent
@@ -1376,4 +1503,26 @@ fn embed_color_profile_tags_an_untagged_document_srgb() {
         s.execute("file.export.saveForWebLegacy", json!({"format": format, "embedIcc": false, "path": off})).unwrap();
         assert_eq!(profile(&off), None, "{format}");
     }
+}
+
+/// #5305: `folder` writes the whole image there under the document's own name, so an action
+/// recorded with the suggested name saves each document it is played on under that name; it is
+/// a destination, never a remembered setting.
+#[test]
+fn folder_saves_under_the_documents_own_name() {
+    let dir = tmp("folder_own_name");
+    let mut s = session(8);
+    let r = s.execute("file.export.saveForWebLegacy", json!({"folder": dir, "format": "png24"})).unwrap();
+    let first = format!("{dir}/web.png");
+    assert_eq!(r["files"], json!([first]));
+    assert_eq!(decode(&first).dimensions(), (64, 48));
+    assert!(s.prefs().dialogs.get("file.export.saveForWebLegacy").is_some_and(|m| m.get("folder").is_none()));
+    s.execute("file.new", json!({"width": 8, "height": 4, "name": "second.psd"})).unwrap();
+    let r = s.execute("file.export.saveForWebLegacy", json!({"folder": dir, "format": "jpeg"})).unwrap();
+    assert_eq!(r["files"], json!([format!("{dir}/second.jpg")]));
+    assert_eq!(decode(&format!("{dir}/second.jpg")).dimensions(), (8, 4));
+    // A `path` wins over `folder`.
+    let r = s.execute("file.export.saveForWebLegacy", json!({"path": format!("{dir}/named.png"), "folder": dir, "format": "png24"})).unwrap();
+    assert_eq!(r["files"], json!([format!("{dir}/named.png")]));
+    let _ = std::fs::remove_dir_all(&dir);
 }

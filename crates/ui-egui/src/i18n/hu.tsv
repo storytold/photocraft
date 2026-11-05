@@ -1181,6 +1181,7 @@
 	History Brush	Előzményecset
 	Paints from the History panel's source state	Az Előzmények panel forrásállapotából fest
 	Sets the source for the history brush	Beállítja az előzményecset forrását
+	The History Brush source was deleted: set a new source in the History panel	Az előzményecset forrása törölve lett: állítson be új forrást az Előzmények panelen
 	Horizontal scale	Vízszintes méretarány
 	Horizontal type	Vízszintes szöveg
 	Hue Jitter	Színárnyalat ingadozása
@@ -1979,6 +1980,7 @@ layerLabel	Magenta	Bíbor
 	Size:	Méret:
 	Source: not set ({key}-click with Clone Stamp)	Forrás: nincs beállítva ({key}+kattintás a klónozó bélyegzővel)
 	Source: set	Forrás: beállítva
+	Source: {name}	Forrás: {name}
 	Style	Stílus
 	Subtract from selection  ({key})	Kivonás a kijelölésből  ({key})
 	Swap colours (X)	Színek cseréje (X)
@@ -3208,6 +3210,8 @@ cameraRaw	Yellow	Sárga
 	Constrain proportions	Arányok megtartása
 	Constraints	Megkötések
 	Background (Default)	Háttér (alapértelmezett)
+	Background (default)	Háttér (alapértelmezett)
+	Transparent (default)	Átlátszó (alapértelmezett)
 	Content-Aware Fill	Tartalomérzékeny kitöltés
 	Content-Aware Move Tool	Tartalomérzékeny mozgatás
 	Contract	Szűkítés
@@ -4144,6 +4148,9 @@ cameraRaw	Yellow	Sárga
 @plural	{n} step has no PhotoCraft equivalent yet|{n} steps have no PhotoCraft equivalent yet	{n} lépésnek még nincs megfelelője a PhotoCraftban
 @plural	Saved {n} action to {file}|Saved {n} actions to {file}	{n} művelet mentve. Cél: {file}
 @plural	{n} step with no Photoshop equivalent left out|{n} steps with no Photoshop equivalent left out	{n} Photoshop-megfelelő nélküli lépés kihagyva
+@plural	{n} action file loaded|{n} action files loaded	{n} műveletfájl betöltve
+	{set} from {file} replaced the one from {earlier}	A(z) {file} {set} készlete lecserélte a(z) {earlier} készletét
+@plural	{n} file could not be loaded: {errors}|{n} files could not be loaded: {errors}	{n} fájlt nem sikerült betölteni: {errors}
 	Starting serial	Kezdő sorszám
 	Insert Stop…	Leállítás beszúrása…
 	Save Set…	Készlet mentése…
@@ -4192,6 +4199,7 @@ cameraRaw	Yellow	Sárga
 	Kept {name}: written by another application	{name} megtartva: egy másik alkalmazás írta
 	Shadow Tint	Árnyék színezet
 	Redrawing	Újrarajzolás
+	Memory usage percent	Memóriahasználat százaléka
 	Show Favorite Fonts	Kedvenc betűtípusok megjelenítése
 	No favorite fonts yet: click the star beside a font to add it.	Még nincsenek kedvenc betűtípusok: kattintson a betűtípus melletti csillagra a hozzáadáshoz.
 	Favorite fonts	Kedvenc betűtípusok
@@ -4241,6 +4249,7 @@ cameraRaw	Yellow	Sárga
 	Chisel Soft	Lágy vésés
 	Open color-less EXR as ACEScg	Színinformáció nélküli EXR megnyitása ACEScg-ként
 	Do not append "copy" to filename when saving a copy	Ne fűzze a „copy” szót a fájlnévhez másolat mentésekor
+	Save Full-Size Composite in .pcraft Files	Teljes méretű kompozit kép mentése a .pcraft fájlokba
 	Edit Selected Guides	Kijelölt segédvonalak szerkesztése
 	Clear Selected Guides	Kijelölt segédvonalak törlése
 	Bicubic Automatic	Automatikus bikubikus
@@ -4316,6 +4325,7 @@ cameraRaw	Yellow	Sárga
 	This document's layers: {needed} of {budget} for layers	A dokumentum rétegei: {needed} / {budget} a rétegeknek
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	A dokumentum rétegeinek {needed} kell, de {budget} foglalhatnak: a teljes dokumentum újrarajzolása a CPU-n fut
 	GPU Memory (MB, 0 = Automatic)	GPU-memória (MB, 0 = Automatikus)
+	Scratch Size Limit (MB, 0 = No Limit)	Lapozólemez méretkorlátja (MB, 0 = nincs korlát)
 	{path}: the path is not valid Unicode; save under another name.	{path}: az elérési út nem érvényes Unicode-szöveg. Mentsd más néven.
 	{name} was changed by another app after it was opened or saved here.	A(z) {name} fájlt egy másik alkalmazás módosította, miután itt megnyitották vagy mentették.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Cserélje le erre a dokumentumra, vagy válassza a Mégse gombot, és a Fájl › Mentés másként paranccsal tartsa meg mindkettőt.
@@ -4410,6 +4420,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Font size presets	Betűméret-előbeállítások
 	Leading presets	Sorköz-előbeállítások
 	Tracking presets	Betűköz-előbeállítások
+
+	The GPU compositor is still being prepared	The GPU compositor is still being prepared
 	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	Érvénytelen számbevitel. {min}% és {max}% közötti egész szám szükséges. Az előző érték lett beillesztve.
 	Color Aware	Színalapú
 	Decontaminate Colors	Színek fertőtlenítése
@@ -4434,3 +4446,41 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Színpont színe
 	Shapes can't use patterns yet	Az alakzatok még nem használhatnak mintákat
 	Edit Brush…	Ecset szerkesztése…
+
+# Action Stop message (#8386)
+	Message	Üzenet
+# Playback Options (#5212)
+	Playback Options…	Lejátszási beállítások…
+	Playback Options	Lejátszási beállítások
+	Accelerated	Gyorsított
+	Step by Step	Lépésenként
+	Pause For:	Szünet ennyi ideig:
+	Pause For	Szünet ennyi ideig
+	seconds	másodperc
+	Create a single history state	Egyetlen előzményállapot létrehozása
+	This Layer:	Ez a réteg:
+	Generator enabled	Generátor bekapcsolva
+	Move Up	Mozgatás felfelé
+	Move Down	Mozgatás lefelé
+	On your computer	A számítógépen
+	New file	Új fájl
+	Learn	Tanulás
+	Website	Weboldal
+
+# Frame Tool and other branch translations.
+	A frame supports affine transforms; select its image for perspective transforms	A keret affin transzformációkat támogat; perspektivikus transzformációhoz válassza ki a képét
+	A frame supports affine transforms; select its image to warp it	A keret affin transzformációkat támogat; a hajlításhoz válassza ki a képét
+	Convert to Frame…	Átalakítás keretté…
+	Create a new custom frame	Új egyéni keret létrehozása
+	Create a new polygonal frame	Új sokszögű keret létrehozása
+	Create a new triangular frame	Új háromszögű keret létrehozása
+	Fit Content to Frame	Tartalom igazítása a kerethez
+	Fit Frame to Content	Keret igazítása a tartalomhoz
+	Frame coordinates must be finite and within 600000 pixels	A keret koordinátáinak végesnek és 600000 képponton belülinek kell lenniük
+	Import Image…	Kép importálása…
+	Invalid frame transform	Érvénytelen kerettranszformáció
+	Invalid nested file drop	Érvénytelen beágyazott fájlejtés
+	New Frame	Új keret
+	Replace Image…	Kép cseréje…
+	The frame is locked	A keret zárolva van
+	The frame is unavailable	A keret nem érhető el
