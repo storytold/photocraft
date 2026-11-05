@@ -235,6 +235,75 @@ fn editing_an_existing_guide_accepts_the_selected_unit_and_undo_restores_it() {
 }
 
 #[test]
+fn edit_unit_changes_preserve_the_exact_position_preview_and_redo() {
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    for (rulers, original) in [("pixels", 12.5), ("cm", 123.45678901234567), ("percent", -1e-100)] {
+        let (mut app, _) = app(rulers);
+        app.run(COMMAND, json!({"orientation": "vertical", "position": original})).unwrap();
+        app.run("view.moveGuide", json!({"orientation": "vertical", "index": 0, "position": original + 1.0})).unwrap();
+        assert!(app.session.undo());
+        crate::guide_select::select(&mut app, true, 0);
+        let history = app.session.active().unwrap().history.past_len();
+        let mut h = Harness::builder().with_size(egui::vec2(800.0, 600.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
+        let d = open_edit(h.state_mut()).unwrap();
+        if rulers == "pixels" {
+            assert_eq!(h.state_mut().ui.dialog_mut(d).unwrap().fields["position"], "13 px");
+        }
+        h.run_steps(3);
+        for label in ["Millimeters", "Inches", "Percent", "Pixels", "Millimeters"] {
+            h.get_by_label("Units").click();
+            h.run_steps(3);
+            h.get_by_label(label).click();
+            h.run_steps(3);
+            crate::guide_edit::sync(h.state_mut());
+            let preview = edit_preview(h.state(), &h.state().session.active().unwrap().doc).unwrap();
+            assert_eq!(preview.vertical, vec![original], "{rulers} to {label}");
+            assert_eq!(guides(h.state()).1, vec![original]);
+        }
+        crate::dialogs::confirm(h.state_mut(), d).unwrap();
+        assert_eq!(guides(h.state()).1, vec![original]);
+        assert_eq!(h.state().session.active().unwrap().history.past_len(), history);
+        assert!(h.state().session.active().unwrap().history.can_redo(), "unit changes must remain a no-op");
+    }
+}
+
+#[test]
+fn editing_the_position_after_a_unit_change_releases_the_exact_original() {
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    let (mut app, _) = app("pixels");
+    app.run(COMMAND, json!({"orientation": "vertical", "position": 12.5})).unwrap();
+    crate::guide_select::select(&mut app, true, 0);
+    let mut h = Harness::builder().with_size(egui::vec2(800.0, 600.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
+    let d = open_edit(h.state_mut()).unwrap();
+    h.run_steps(3);
+    h.get_by_label("Units").click();
+    h.run_steps(3);
+    h.get_by_label("Millimeters").click();
+    h.run_steps(3);
+    h.get_by_label("Position").click();
+    h.run_steps(3);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.event(egui::Event::Text("13 px".into()));
+    h.run_steps(3);
+    crate::guide_edit::sync(h.state_mut());
+    assert_eq!(edit_preview(h.state(), &h.state().session.active().unwrap().doc).unwrap().vertical, vec![13.0]);
+    for label in ["Inches", "Pixels"] {
+        h.get_by_label("Units").click();
+        h.run_steps(3);
+        h.get_by_label(label).click();
+        h.run_steps(3);
+    }
+    crate::dialogs::confirm(h.state_mut(), d).unwrap();
+    assert_eq!(guides(h.state()).1, vec![13.0]);
+    assert!(h.state_mut().session.undo());
+    assert_eq!(guides(h.state()).1, vec![12.5]);
+}
+
+#[test]
 fn unit_dropdown_converts_the_draft_and_bare_typing_uses_its_selection() {
     use egui_kittest::{Harness, kittest::Queryable};
 
