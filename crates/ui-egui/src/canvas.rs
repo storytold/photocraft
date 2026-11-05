@@ -48,11 +48,12 @@ mod strokes;
 mod tabs;
 mod textures;
 pub(super) mod tile_overlay;
-pub(super) mod tool_cursor;
+pub mod tool_cursor;
 pub mod tool_feedback;
 mod tool_input;
 mod transform_controls;
 mod view_xform;
+pub(crate) mod viewport_pages;
 pub mod wheel_nav;
 pub mod zoom_field;
 pub mod zoom_hold;
@@ -65,7 +66,6 @@ pub(crate) use cursors::{alt_picks, alt_samples, composite_color, paint_bucket_c
 use cursors::{brush_tip_centre, eyedropper_ring, precise_other_cursor, visible_crosshair};
 #[cfg(test)]
 pub(crate) use display::GPU_OUTPUT;
-#[cfg(test)]
 use display::texture_key;
 pub(crate) use display::{cache_key, canvas_display, display_doc, display_image};
 use display::{checker, hdr_preview, sync_display_lut};
@@ -95,8 +95,7 @@ use paint::{
 use selection::selection_shown_offset;
 pub use selection::{SelCursor, selection_cursor};
 pub(crate) use selection::{floating_outline, selection_drag_delta};
-#[cfg(test)]
-use start_screen::start_screen_drop_hint;
+pub(crate) use start_screen::start_screen_drop_hint;
 pub(crate) use strokes::multiple_color_target;
 pub use strokes::paint_target;
 pub(crate) use strokes::{ClonePreviewCache, CommittedStroke, LiveStroke, cancel_mixer_on_context_change, freehand_tool, spread_ms, strokes_live};
@@ -413,6 +412,29 @@ fn paint_canvas(
             pixel_grid: false,
             view_key: egui::Id::unique(("pc-canvas-proxy", ctx.viewport_id(), idx)).value(),
             display: sync_display_lut(app, &shown, key, output),
+            output: output.unwrap_or(0),
+            hdr: hdr_preview(app, doc),
+            offset: [0.0, 0.0],
+        };
+        paint_gpu_view(painter, rect, params, &pattern);
+    } else if gpu_ok && viewport_pages::show(app, ctx, idx, &xf, view.zoom) {
+        // Too large for the document's texture set: the pages in view, rendered in the background.
+        on_gpu = true;
+        app.perf.gpu = true;
+        let key = viewport_pages::stream_key(doc.id.0);
+        let params = crate::gpu_canvas::ViewParams {
+            doc: key,
+            doc_size: [doc.size.width, doc.size.height],
+            zoom: point_zoom,
+            center: xf.center,
+            rotation: if view.rotation.is_finite() { view.rotation.to_radians() } else { 0.0 },
+            shadow: {
+                let t = crate::theme::Tokens::get(ctx);
+                !t.bevel && !t.pro && drop_shadow
+            },
+            pixel_grid,
+            view_key: egui::Id::unique(("pc-canvas-pages", ctx.viewport_id(), doc.id.0)).value(),
+            display: sync_display_lut(app, doc, key, output),
             output: output.unwrap_or(0),
             hdr: hdr_preview(app, doc),
             offset: [0.0, 0.0],

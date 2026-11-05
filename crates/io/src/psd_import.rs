@@ -1228,6 +1228,30 @@ pub(crate) fn psd_to_document_decoded_integrity(
     psd_to_document_global(file, ctl, decoded, global, false).map(|(doc, warnings, damaged, _)| (doc, warnings, damaged))
 }
 
+/// Admission for a legacy conversion.
+///
+/// A nested conversion spends the enclosing attempt's remaining allowance and never resets it.
+/// A standalone conversion refuses an ineligible file before waiting for the decode gate and
+/// rechecks the fresh measurement once admitted, so a refused file never waits behind an active
+/// decode and a memory drop during the wait is seen before any pixel is decoded.
+fn legacy_admission(est: &crate::psd_budget::PsdMemoryEstimate, ctl: &photocraft_raster::Interrupt) -> Result<crate::psd_gate::AdmissionGuard, crate::IoError> {
+    if crate::psd_gate::is_holding_admission() {
+        // Cancellation is checked before the charge and admission is reentrant here, so a
+        // cancelled or refused nested conversion never spends its parent's allowance.
+        ctl.check().map_err(|_| crate::IoError::Cancelled)?;
+        let guard = crate::psd_gate::acquire_decode_admission(ctl)?;
+        crate::psd_gate::consume_attempt_allowance(est.total_bytes)?;
+        return Ok(guard);
+    }
+    let snapshot = || crate::memory::MemorySnapshot::current();
+    // Legacy standalone is unconfirmed: it cannot silently auto allow an estimate above S.
+    crate::memory::evaluate_psd_admission(est.total_bytes, est.tile_bytes, 0, false, None, snapshot())?;
+    let guard = crate::psd_gate::acquire_decode_admission(ctl)?;
+    let outcome = crate::memory::evaluate_psd_admission(est.total_bytes, est.tile_bytes, 0, false, None, snapshot())?;
+    crate::psd_gate::set_active_attempt_budget(outcome.authorized_total.saturating_sub(est.total_bytes));
+    Ok(guard)
+}
+
 fn psd_to_document_global(
     file: &PsdFile,
     ctl: &photocraft_raster::Interrupt,
@@ -1238,11 +1262,26 @@ fn psd_to_document_global(
     // Legacy conversion APIs return warnings rather than Result. Reject before metadata or
     // pixels are decoded, and retain the fatal error for the ordinary import path. An import
     // that checked the file against its own limit first (`preflighted`) does not estimate twice.
-    if !preflighted && let Err(error) = crate::psd_budget::check(file, crate::DEFAULT_PSD_IMPORT_PIXEL_BYTES) {
-        let message = error.to_string();
-        let doc = Document::new("Untitled", Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
-        return Some((doc, vec![message], true, Some(error)));
-    }
+    let _guard = if !preflighted || !crate::psd_gate::is_holding_admission() {
+        let est = match crate::psd_budget::estimate(file) {
+            Ok(e) => e,
+            Err(error) => {
+                let message = error.to_string();
+                let doc = Document::new("Untitled", Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
+                return Some((doc, vec![message], true, Some(error)));
+            }
+        };
+        match legacy_admission(&est, ctl) {
+            Ok(guard) => Some(guard),
+            Err(error) => {
+                let message = error.to_string();
+                let doc = Document::new("Untitled", Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
+                return Some((doc, vec![message], true, Some(error)));
+            }
+        }
+    } else {
+        None
+    };
     let (mode, layered, multichannel, depth) = import_format(file);
     let h = &file.header;
     let mut warnings = Vec::new();
@@ -1369,7 +1408,7 @@ fn import_decoded_content(import: DecodedImport<'_>, doc: &mut Document, cx: &mu
 
 fn import_multichannel(file: &PsdFile, merged: &Option<photocraft_psd::Result<Vec<u8>>>, doc: &mut Document, cx: &mut Ctx<'_>) {
     if let Some(Ok(all)) = merged {
-        let names = file.resource(1045).map(|r| unicode_names(&r.data)).unwrap_or_default();
+        let names = file.alpha_channel_names();
         if let Err(error) = crate::multichannel_map::import(file, all, doc, &names, &mut cx.warnings) {
             cx.fatal_error.get_or_insert(error);
         }
@@ -1512,6 +1551,32 @@ fn import_flattened(
     }
 }
 
+/// Spot inks whose DisplayInfo colour is in a space PhotoCraft doesn't read take their colour
+/// from the Alternate Spot Colors (1067), matched by the identifiers of 1053. `ids_from` is the
+/// first imported channel's position in 1053 (1 past a merged transparency), `skip` the
+/// DisplayInfo records before it.
+pub(crate) fn alternate_spot_inks(file: &PsdFile, ids_from: usize, skip: usize, channels: &mut [AlphaChannel]) {
+    let (Some(alt), Some(info), Some(ids)) = (
+        file.resource(crate::channel_map::ALTERNATE_SPOT_COLORS),
+        file.resource(crate::channel_map::DISPLAY_INFO).map(|r| (r, true)).or_else(|| file.resource(crate::channel_map::DISPLAY_INFO_OLD).map(|r| (r, false))),
+        file.resource(crate::channel_map::ALPHA_IDENTIFIERS),
+    ) else {
+        return;
+    };
+    let alt = crate::channel_map::alternate_spot_colors(&alt.data);
+    let spaces = crate::channel_map::display_spaces(&info.0.data, info.1, skip);
+    let ids: Vec<u32> = ids.data.as_chunks::<4>().0.iter().map(|c| u32::from_be_bytes(*c)).skip(ids_from).collect();
+    for ((ch, space), id) in channels.iter_mut().zip(spaces).zip(ids) {
+        let Some((_, solidity)) = ch.spot else { continue };
+        if crate::channel_map::decode_known_color(space, [0; 4]).is_some() {
+            continue;
+        }
+        if let Some((_, ink)) = alt.iter().find(|(alt_id, _)| *alt_id == id) {
+            ch.spot = Some((*ink, solidity));
+        }
+    }
+}
+
 fn import_extra_channels(import: DecodedImport<'_>, doc: &mut Document, cx: &mut Ctx<'_>) {
     // Extra (alpha / spot) channels of the merged image.
     if !import.layered {
@@ -1522,7 +1587,7 @@ fn import_extra_channels(import: DecodedImport<'_>, doc: &mut Document, cx: &mut
     let Some((n, plane)) = sizes else { return };
     let cc = cx.cc;
     let first = cc + usize::from(file.merged_has_alpha());
-    let names = file.resource(1045).map(|r| unicode_names(&r.data)).unwrap_or_default();
+    let names = file.alpha_channel_names();
     // Photoshop lists every extra channel, the merged transparency first when there is one.
     let skip = usize::from(file.merged_has_alpha() && names.len() == usize::from(file.header.channels).saturating_sub(cc));
     let names = names.get(skip..).unwrap_or_default();
@@ -1564,6 +1629,7 @@ fn import_extra_channels(import: DecodedImport<'_>, doc: &mut Document, cx: &mut
     } else if let Some(r) = file.resource(crate::channel_map::DISPLAY_INFO_OLD) {
         crate::channel_map::apply_display_info(&r.data, false, skip, &mut doc.channels);
     }
+    alternate_spot_inks(file, first.saturating_sub(cc), skip, &mut doc.channels);
     if let Some(r) = file.resource(crate::channel_map::QUICK_MASK_INFO)
         && r.data.len() >= 2
         && let Some(k) = usize::from(u16::from_be_bytes([r.data[0], r.data[1]])).checked_sub(first)

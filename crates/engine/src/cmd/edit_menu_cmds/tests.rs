@@ -1,6 +1,8 @@
 use super::*;
 use photocraft_doc::vector::Subpath;
 
+static PURGE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn session(depth: u32) -> Session {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 64, "height": 48, "depth": depth, "background": "white"})).unwrap();
@@ -184,6 +186,7 @@ fn fade_ignores_a_target_the_command_doesnt_take() {
 
 #[test]
 fn purge_commands() {
+    let _purge_test_guard = PURGE_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut s = session(8);
     assert!(!s.is_enabled("edit.purge.undo"));
     assert!(s.is_enabled("edit.purge.videoCache"));
@@ -210,6 +213,30 @@ fn purge_commands() {
     let _ = s.execute("edit.purge.all", json!({}));
 }
 
+#[test]
+fn purge_all_releases_prepared_brush_tips_even_without_a_document() {
+    let _purge_test_guard = PURGE_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    use photocraft_paint::{BrushContext, BrushSettings, Dab, GrayTile, TipShape};
+    let mut s = Session::new();
+    let brush = BrushSettings { tip: TipShape::Sampled(GrayTile::from_fn(31, 17, |x, y| ((x + y) % 5) as f32 / 4.0)), ..Default::default() };
+    let ctx = BrushContext::new(&brush);
+    let dab = Dab::round(photocraft_geom::Point::new(12.5, 14.5), 10.0, 1.0);
+    let rect = ctx.dab_rect(&dab, false);
+    let mut before = Vec::new();
+    ctx.rasterize(&dab, false, rect, &mut before);
+    assert!(s.is_enabled("edit.purge.all"), "prepared tips alone enable All");
+    let result = s.execute("edit.purge.all", json!({})).unwrap();
+    assert!(result["purged"].as_array().unwrap().contains(&json!("brush mip cache")));
+    assert!(result["bytes"].as_u64().unwrap() > 0);
+    // An already prepared brush remains valid after the cache releases its Arc.
+    let mut after = Vec::new();
+    ctx.rasterize(&dab, false, rect, &mut after);
+    assert_eq!(before, after);
+    let next = BrushContext::new(&brush);
+    next.rasterize(&dab, false, rect, &mut after);
+    assert_eq!(before, after);
+}
+
 /// White canvas with vertical black stripes, a red blob to remove, and a selection around it.
 fn blob_session(depth: u32) -> Session {
     let mut s = session(depth);
@@ -224,6 +251,16 @@ fn blob_session(depth: u32) -> Session {
     .unwrap();
     s.execute("select.rect", json!({"x": 26, "y": 16, "width": 12, "height": 14})).unwrap();
     s
+}
+
+#[test]
+fn content_aware_fill_uses_a_named_nonactive_source_layer() {
+    let mut s = blob_session(8);
+    let id = s.active().unwrap().active_layer.unwrap();
+    let name = s.active().unwrap().doc.layer(id).unwrap().name.clone();
+    s.execute("layer.new.layer", json!({"name": "Top"})).unwrap();
+    let result = s.execute("edit.contentAwareFill", json!({"layer": name, "colorAdaptation": "none"})).unwrap();
+    assert_eq!(result["layer"], id.0, "fill must use the recorded source rather than the active layer");
 }
 
 #[test]
