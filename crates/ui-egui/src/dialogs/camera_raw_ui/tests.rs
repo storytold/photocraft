@@ -606,6 +606,111 @@ fn a_raw_that_fails_to_open_stays_in_the_filmstrip_with_its_settings() {
     assert_eq!(app.session.documents().len(), 2, "one and three stay open");
 }
 
+/// A raw that can't be shown leaves things as they were: the dialog stays on the raw being left,
+/// and the other keeps its place in the filmstrip with its settings.
+#[test]
+fn a_raw_that_cannot_be_shown_keeps_the_dialog_and_the_filmstrip() {
+    let (mut app, dng) = raw_app();
+    let ctx = egui::Context::default();
+    app.open_bytes("one.dng", &dng).unwrap();
+    app.open_bytes("two.dng", &dng).unwrap();
+    let ids: Vec<_> = app.raw_shelf.iter().map(|h| h.raw.document).collect();
+    let kept = CameraRaw { exposure: 0.5, ..Default::default() };
+    app.raw_shelf[1].kept = Some((kept.clone(), CameraRaw::default()));
+    filmstrip::open_held(&mut app, &ctx, 0).unwrap();
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": 1.0}}})).unwrap().unwrap();
+    let two = document_index(&app, ids[1]).unwrap();
+    app.session.close(two);
+    assert!(filmstrip::show_raw(&mut app, &ctx, 1).is_err());
+    let d = app.camera_raw.as_ref().expect("the dialog stays");
+    assert_eq!((d.raw_open.as_ref().unwrap().document, d.params.exposure), (ids[0], 1.0));
+    assert_eq!(app.raw_shelf.len(), 2);
+    assert_eq!(app.raw_shelf[1].kept.as_ref().map(|(p, _)| p), Some(&kept));
+}
+
+/// Leaving a raw before its preview has caught up: its thumbnail shows the settings it keeps, not
+/// the frame before them.
+#[test]
+fn a_raw_left_before_its_preview_lands_gets_a_thumbnail_of_its_settings() {
+    let (mut app, dng) = raw_app();
+    let ctx = egui::Context::default();
+    app.open_bytes("one.dng", &dng).unwrap();
+    app.open_bytes("two.dng", &dng).unwrap();
+    filmstrip::open_held(&mut app, &ctx, 0).unwrap();
+    let d = app.camera_raw.as_mut().unwrap();
+    d.params.exposure = 2.0;
+    d.dirty = true;
+    filmstrip::keep_settings(&mut app);
+    let thumb = app.raw_shelf[0].thumb.clone().expect("a thumbnail");
+    app.camera_raw.as_mut().unwrap().render(&ctx);
+    filmstrip::keep_settings(&mut app);
+    assert!(thumb == app.raw_shelf[0].thumb.clone().unwrap(), "the thumbnail matches a finished develop of the same settings");
+}
+
+/// Open returns once a background develop has started; if that develop then fails, the raw comes
+/// back to the filmstrip with its settings, as one that failed at once stays there.
+#[test]
+fn a_raw_whose_background_develop_fails_comes_back_to_the_filmstrip() {
+    let (mut app, dng) = raw_app();
+    let ctx = egui::Context::default();
+    app.open_bytes("one.dng", &dng).unwrap();
+    app.open_bytes("two.dng", &dng).unwrap();
+    let ids: Vec<_> = app.raw_shelf.iter().map(|h| h.raw.document).collect();
+    let (kept, from) = (CameraRaw { exposure: 0.5, contrast: 20.0, ..Default::default() }, CameraRaw { contrast: 5.0, ..Default::default() });
+    app.raw_shelf[1].raw.bytes = Some(std::sync::Arc::new(b"not a raw file".to_vec()));
+    app.raw_shelf[1].kept = Some((kept.clone(), from.clone()));
+    filmstrip::open_held(&mut app, &ctx, 0).unwrap();
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": 1.0}}})).unwrap().unwrap();
+    app.background_jobs = true;
+    let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
+    assert_eq!(r["opened"].as_array().map(Vec::len), Some(2), "both started: {r}");
+    assert!(app.raw_shelf.is_empty());
+    for _ in 0..3000 {
+        crate::jobs_ui::tick(&mut app, &ctx);
+        if app.raw_redevelop.is_empty() && !app.session.has_jobs() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(app.raw_redevelop.is_empty() && !app.session.has_jobs(), "the jobs never finished");
+    let left: Vec<_> = app.raw_shelf.iter().map(|h| h.raw.document).collect();
+    assert_eq!(left, vec![ids[1]], "only the failed raw comes back");
+    assert_eq!(app.raw_shelf[0].kept, Some((kept, from)), "with its settings");
+    app.background_jobs = false;
+    filmstrip::open_held(&mut app, &ctx, 0).unwrap();
+    assert_eq!(app.camera_raw.as_ref().unwrap().params.contrast, 20.0);
+}
+
+/// Camera Raw Defaults' Auto reads the same pixels whether a raw was shown or not, so Open gives
+/// it the same settings either way: a fine pattern that a sparse sample misreads shows it.
+#[test]
+fn auto_tone_of_a_never_shown_raw_matches_the_dialogs() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    let ctx = egui::Context::default();
+    app.run("prefs.set", json!({"path": "rawDefaults.applyAutoTone", "value": true})).unwrap();
+    app.run("file.new", json!({"width": 1800, "height": 1200})).unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    let st = app.session.active_mut().unwrap();
+    let id = st.doc.layers.iter().find(|l| l.surface().is_some()).unwrap().id;
+    st.active_layer = Some(id);
+    let document = st.doc.id;
+    let Some(photocraft_doc::LayerContent::Raster(s)) = std::sync::Arc::make_mut(&mut st.doc).layer_mut(id).map(|l| &mut l.content) else { panic!("a pixel layer") };
+    let format = s.format().clone();
+    let (dark, light) = (photocraft_raster::from_rgba(&format, [0.1, 0.1, 0.1, 1.0]), photocraft_raster::from_rgba(&format, [0.9, 0.9, 0.9, 1.0]));
+    for y in 0..1200 {
+        for x in 0..1800 {
+            s.write_pixel(x, y, if (x + y) % 2 == 0 { &dark } else { &light });
+        }
+    }
+    let method = photocraft_io::raw::Demosaic::Ahd;
+    let raw = RawOpen { document, name: "pattern.dng".into(), path: None, bytes: None, developed_with: method, demosaic: method };
+    let (unshown, _) = filmstrip::first_settings(&app, &raw);
+    open_raw(&mut app, &ctx, raw).unwrap();
+    let shown = &app.camera_raw.as_ref().unwrap().params;
+    let tone = |p: &CameraRaw| [p.exposure, p.contrast, p.highlights, p.shadows, p.whites, p.blacks];
+    assert_eq!(tone(&unshown), tone(shown));
+}
+
 #[test]
 fn cancel_closes_the_raw_and_the_preference_skips_the_dialog() {
     let (mut app, dng) = raw_app();

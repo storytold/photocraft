@@ -179,6 +179,9 @@ pub struct Redevelop {
     filter_step: bool,
     /// The Camera Raw Defaults the open started with, for the conversions after the filter step.
     defaults: photocraft_engine::prefs::RawDefaults,
+    /// The dialog's Open started this, from these settings: if the re-develop fails, the raw goes
+    /// back to the filmstrip to be tried again or cancelled.
+    back_to_filmstrip: Option<CameraRaw>,
 }
 
 /// The sliders a raw open applies while developing, before the tone curve (as Camera Raw does).
@@ -251,11 +254,20 @@ pub(super) fn commit_open_raw(app: &mut PhotocraftApp, params: &CameraRaw, raw: 
         }
         photocraft_engine::jobs::Started::Job(job) => {
             let defaults = app.session.prefs().raw_defaults.clone();
-            app.raw_redevelop.push(Redevelop { job, params: params.clone(), raw: raw.clone(), filter_step: false, defaults });
+            app.raw_redevelop.push(Redevelop { job, params: params.clone(), raw: raw.clone(), filter_step: false, defaults, back_to_filmstrip: None });
             app.ui.status = label;
             app.ui.status_error = false;
             Ok(json!({"job": job.0, "pending": true}))
         }
+    }
+}
+
+/// `reply` is [`commit_open_raw`]'s from the dialog's Open: if it started a background re-develop
+/// and that fails, the raw comes back to the filmstrip, its settings having started from `original`.
+pub(super) fn return_on_failure(app: &mut PhotocraftApp, reply: &Value, original: &CameraRaw) {
+    let job = reply.get("job").and_then(Value::as_u64);
+    if let Some(pending) = app.raw_redevelop.iter_mut().find(|r| Some(r.job.0) == job && !r.filter_step) {
+        pending.back_to_filmstrip = Some(original.clone());
     }
 }
 
@@ -350,7 +362,7 @@ fn finish_open_raw(
             && let Some(job) = r.get("job").and_then(Value::as_u64)
         {
             let job = photocraft_engine::jobs::JobId(job);
-            app.raw_redevelop.push(Redevelop { job, params: rest.clone(), raw: raw.clone(), filter_step: true, defaults: d.clone() });
+            app.raw_redevelop.push(Redevelop { job, params: rest.clone(), raw: raw.clone(), filter_step: true, defaults: d.clone(), back_to_filmstrip: None });
             result["filter"] = r;
             mark_unmodified(app, index);
             return Ok(result);
@@ -461,7 +473,15 @@ pub fn on_redevelop_event(app: &mut PhotocraftApp, e: &photocraft_engine::jobs::
             Err(err) => crate::notices::error(app, format!("{}: {err}", e.label)),
         },
         photocraft_engine::jobs::JobOutcome::Failed(err) => {
-            // The document stays open, developed with the defaults.
+            // The document stays open, developed with the defaults; from the dialog, it goes back
+            // to the filmstrip with its settings, which may have no sidecar to keep them.
+            if let Some(original) = pending.back_to_filmstrip
+                && document_index(app, pending.raw.document).is_some()
+            {
+                let mut held = super::filmstrip::HeldRaw::new(app, pending.raw);
+                held.kept = Some((pending.params, original));
+                app.raw_shelf.push(held);
+            }
             app.sync_views();
             crate::notices::error(app, format!("{}: {err}", e.label));
         }

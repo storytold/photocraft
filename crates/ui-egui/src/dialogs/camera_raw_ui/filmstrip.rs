@@ -2,7 +2,7 @@
 //! dialog, as in Photoshop's. Each keeps its own settings and demosaic choice when another is
 //! shown, Open develops every one and Cancel closes every one.
 
-use super::open::{Target, commit_open_raw, open_raw_with};
+use super::open::{Target, commit_open_raw, open_raw_with, return_on_failure};
 use super::sidecar::read_sidecar;
 use super::{
     Align2, CameraRaw, CameraRawDialog, Color32, ERect, FontId, PhotocraftApp, RawOpen, Rect, Sense, Stroke, Tokens, Value, json, pos2, vec2, widgets,
@@ -93,8 +93,16 @@ pub(super) fn show_raw(app: &mut PhotocraftApp, ctx: &egui::Context, to: usize) 
         return Ok(());
     }
     keep_settings(app);
-    app.camera_raw = None;
-    open_held(app, ctx, to)
+    // On success this replaces the dialog. On failure the dialog stays on the raw being left, and
+    // the other keeps its place in the filmstrip.
+    let active = app.session.active_index();
+    let shown = open_held(app, ctx, to);
+    if shown.is_err()
+        && let Some(i) = active
+    {
+        app.session.set_active(i);
+    }
+    shown
 }
 
 /// Stores the dialog's settings (and demosaic choice) on its filmstrip raw, and refreshes the
@@ -105,8 +113,11 @@ pub(super) fn keep_settings(app: &mut PhotocraftApp) {
     let Some(held) = app.raw_shelf.iter_mut().find(|h| h.raw.document == raw.document) else { return };
     held.kept = Some((d.params.clone(), d.original.clone()));
     held.raw.demosaic = raw.demosaic;
-    if !d.processed.is_empty() {
-        let (px, w, h) = shrink(&d.processed, d.pw, d.ph);
+    // The preview may not have caught up with the last edit: the thumbnail shows what was kept.
+    let frame = (d.dirty || d.render_pending()).then(|| d.proxy_job().run().px);
+    let developed = frame.as_deref().unwrap_or(&d.processed);
+    if !developed.is_empty() {
+        let (px, w, h) = shrink(developed, d.pw, d.ph);
         held.thumb = Some(CameraRawDialog::image(&px, w, h, &d.display));
         held.tex = None;
     }
@@ -114,31 +125,33 @@ pub(super) fn keep_settings(app: &mut PhotocraftApp) {
 
 /// The settings Open develops a never-shown filmstrip raw with, and what they started from:
 /// its sidecar's, else the Camera Raw Defaults' Auto when that is on, else the defaults.
-fn first_settings(app: &PhotocraftApp, raw: &RawOpen) -> (CameraRaw, Option<CameraRaw>) {
+pub(super) fn first_settings(app: &PhotocraftApp, raw: &RawOpen) -> (CameraRaw, Option<CameraRaw>) {
     if let Some((loaded, _, _)) = raw.path.as_deref().and_then(read_sidecar) {
         return (loaded.clone(), Some(loaded));
     }
     let mut p = CameraRaw::default();
+    // From the proxy the dialog would use, so showing a raw doesn't change what Auto gives it.
     if app.session.prefs().raw_defaults.apply_auto_tone
-        && let Some(px) = super::open::document_index(app, raw.document)
-            .and_then(|i| app.session.documents().get(i))
-            .and_then(|st| st.doc.layers.iter().find_map(|l| l.surface()))
-            .map(|s| super::open::sample_pixels(s, 512))
+        && let Some(st) = super::open::document_index(app, raw.document).and_then(|i| app.session.documents().get(i))
+        && let Some(surf) = st.doc.layers.iter().find_map(|l| l.surface())
+        && let Ok((area, w, h)) = super::convert::preview_area(st.doc.bounds(), surf)
     {
-        photocraft_algo::camera_raw::auto_tone(&px, &mut p);
+        let (proxy, ..) = super::convert::box_proxy(surf, area, w, h);
+        photocraft_algo::camera_raw::auto_tone(&proxy, &mut p);
     }
     (p, None)
 }
 
 /// Open with raws in the filmstrip: the shown one as the dialog has it, then every other with
 /// its own settings. One reply for one raw, `{"opened": [...]}` for several. A raw leaves the
-/// filmstrip only once it has opened: one that fails stays there with its settings, so the
-/// dialog comes back for it (or Cancel still closes it).
+/// filmstrip once it has opened or its background develop has started: one that fails stays or
+/// comes back there with its settings, so the dialog returns for it (or Cancel still closes it).
 pub(super) fn open_all(app: &mut PhotocraftApp, params: &CameraRaw, raw: &RawOpen, original: &CameraRaw) -> Result<Value, String> {
     keep_settings(app);
     let others: Vec<photocraft_doc::DocId> = app.raw_shelf.iter().map(|h| h.raw.document).filter(|id| *id != raw.document).collect();
     let first = commit_open_raw(app, params, raw, Some(original));
-    if first.is_ok() {
+    if let Ok(v) = &first {
+        return_on_failure(app, v, original);
         app.raw_shelf.retain(|h| h.raw.document != raw.document);
     }
     if others.is_empty() {
@@ -159,6 +172,7 @@ pub(super) fn open_all(app: &mut PhotocraftApp, params: &CameraRaw, raw: &RawOpe
         };
         match commit_open_raw(app, &p, &held_raw, loaded.as_ref()) {
             Ok(v) => {
+                return_on_failure(app, &v, loaded.as_ref().unwrap_or(&CameraRaw::default()));
                 opened.push(v);
                 app.raw_shelf.retain(|h| h.raw.document != id);
             }
