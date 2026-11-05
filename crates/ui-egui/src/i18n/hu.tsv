@@ -1944,7 +1944,7 @@ layerLabel	Magenta	Bíbor
 	Panel locations are saved in the workspace. Keyboard shortcuts, menus and toolbar are optional.	A panelek helye a munkaterülettel együtt mentődik. A billentyűparancsok, a menük és az eszköztár mentése választható.
 	Panel menu	Panelmenü
 	Patterns	Mintázatok
-	Pause	Szünet
+	Pause	Szüneteltetés
 	Pixel Replacement	Pixelcsere
 	Play	Lejátszás
 	Pressure for Opacity	Nyomásfüggő átlátszatlanság
@@ -2941,7 +2941,7 @@ cameraRaw	Yellow	Sárga
 	Not a web colour: click for the nearest web colour	Nem webes szín: kattintson a legközelebbi webes színért
 	Notification Duration (seconds)	Értesítés időtartama (másodperc)
 	Bundle Arrow-Key Nudges	Nyílbillentyűs mozgatások összevonása
-	Nudge Bundle Pause (ms)	Összevonási szünet (ms)
+	Nudge Bundle Pause (ms)	Összevonási szüneteltetés (ms)
 	Number	Szám
 	OK	OK
 	Only Web Colors	Csak webes színek
@@ -3216,6 +3216,8 @@ cameraRaw	Yellow	Sárga
 	Constrain proportions	Arányok megtartása
 	Constraints	Megkötések
 	Background (Default)	Háttér (alapértelmezett)
+	Background (default)	Háttér (alapértelmezett)
+	Transparent (default)	Átlátszó (alapértelmezett)
 	Content-Aware Fill	Tartalomérzékeny kitöltés
 	Content-Aware Move Tool	Tartalomérzékeny mozgatás
 	Contract	Szűkítés
@@ -4448,6 +4450,18 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Színpont színe
 	Shapes can't use patterns yet	Az alakzatok még nem használhatnak mintákat
 	Edit Brush…	Ecset szerkesztése…
+
+# Action Stop message (#8386)
+	Message	Üzenet
+# Playback Options (#5212)
+	Playback Options…	Lejátszási beállítások…
+	Playback Options	Lejátszási beállítások
+	Accelerated	Gyorsított
+	Step by Step	Lépésenként
+	Pause For:	Szüneteltetés ennyi ideig:
+	Pause For	Szüneteltetés ennyi ideig
+	seconds	másodperc
+	Create a single history state	Egyetlen előzményállapot létrehozása
 	This Layer:	Ez a réteg:
 	Generator enabled	Előállító bekapcsolva
 	Move Up	Mozgatás felfelé
