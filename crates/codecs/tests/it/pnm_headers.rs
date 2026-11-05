@@ -73,6 +73,15 @@ fn pfm_scale_magnitude_is_applied() {
 }
 
 #[test]
+fn pfm_large_scale_does_not_overflow_samples() {
+    let mut bytes = b"Pf\n1 1\n-3e38\n".to_vec();
+    bytes.extend_from_slice(&2.0f32.to_le_bytes());
+
+    let image = decode(&bytes).unwrap();
+    assert_eq!(image.to_f32_samples().unwrap(), vec![f32::MAX]);
+}
+
+#[test]
 fn binary_pnm_keeps_its_single_whitespace_separator() {
     for separator in *b" \t\r\n" {
         for first in *b" \t\r\n#" {

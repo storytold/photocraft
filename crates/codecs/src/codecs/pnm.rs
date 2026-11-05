@@ -255,7 +255,8 @@ pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError>
                 };
                 for (d, s) in dst.as_chunks_mut::<4>().0.iter_mut().zip(src.as_chunks::<4>().0) {
                     let v = if le { f32::from_le_bytes(*s) } else { f32::from_be_bytes(*s) };
-                    *d = (v * magnitude).to_ne_bytes();
+                    // The PFM scale magnitude multiplies samples; keep overflow finite for HDR data.
+                    *d = (v * magnitude).clamp(-f32::MAX, f32::MAX).to_ne_bytes();
                 }
             }
             Image::from_raw(w, h, layout, SampleType::F32, out)
