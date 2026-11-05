@@ -1600,8 +1600,8 @@ fn paste_on_the_same_artboard_or_off_the_boards_is_unchanged() {
     let doc = &s.active().unwrap().doc;
     let on_b = doc.artboards().iter().find(|x| x.1 == "B").map(|x| x.0);
     let inside = doc.layer(on_b.unwrap()).unwrap().id;
-    assert!(board_shift(&clip, doc, Some(inside), &json!({"clampToCanvas": false})).is_none());
-    assert!(board_shift(&clip, doc, Some(inside), &json!({})).is_some());
+    assert!(board_shift(&clip, doc, Some(inside), &json!({"clampToCanvas": false}), true).is_none());
+    assert!(board_shift(&clip, doc, Some(inside), &json!({}), true).is_some());
 }
 
 /// A copied layer taken whole (a group here) is moved onto the other board the same way.
@@ -1869,4 +1869,22 @@ fn paste_into_a_mask_on_another_artboard_keeps_the_place_on_the_board() {
         assert!((mask_at(&s, m, 205, 25) - lum).abs() < 2.0 / 255.0, "{cmd} {params}: the same spot on B");
         assert_eq!(mask_at(&s, m, 15, 15), 0.0, "{cmd} {params}: not at the old spot on A");
     }
+}
+
+/// Paste into the mask of a position-locked artboard itself takes the board's shift too
+/// (#11441 review): the lock keeps a new layer off the board, but a mask paste adds no layer and
+/// mask edits don't check position locks, so it lands at the same spot on the board, not at the
+/// old spot on board A.
+#[test]
+fn paste_into_a_position_locked_artboards_own_mask_keeps_the_place_on_the_board() {
+    let (mut s, red, _a, b) = two_boards();
+    s.execute("layer.select", json!({"layer": red.0})).unwrap();
+    s.execute("edit.copy", json!({})).unwrap();
+    let lum = luminosity(&s, red, 15, 15);
+    s.execute("layer.select", json!({"layer": b.0})).unwrap();
+    s.execute("layer.layerMask.hideAll", json!({})).unwrap();
+    s.execute("layer.lockLayers", json!({"position": true})).unwrap();
+    let r = s.execute("edit.paste", json!({"target": "mask"})).unwrap();
+    assert_eq!(r["offset"], json!([190, 10]), "moved by B's origin minus A's");
+    assert!((mask_at(&s, b, 205, 25) - lum).abs() < 2.0 / 255.0, "the same spot on B");
 }

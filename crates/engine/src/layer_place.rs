@@ -72,6 +72,14 @@ pub fn insert_new(doc: &mut Document, anchor: Option<LayerId>, mut layer: Layer,
                 index += 1;
             }
             layer.clipped = false;
+        } else if index > 0 && sib.get(index - 1).is_some_and(|below| below.artboard().is_some()) {
+            // Directly above an artboard (content pasted off its board goes there): never clipped
+            // to it, where the board would clip it away, and past the clipped layers above the
+            // slot so their clipping mask stays whole, as a new artboard goes.
+            while sib.get(index).is_some_and(|above| above.clipped) {
+                index += 1;
+            }
+            layer.clipped = false;
         } else if sib.get(index).is_some_and(|above| above.clipped) {
             layer.clipped = true;
         } else if index == 0 {

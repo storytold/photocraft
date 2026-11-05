@@ -354,7 +354,7 @@ fn source_board(d: &crate::DocState, merged: bool, bounds: Rect) -> Option<(Laye
 /// document, and not for Paste Into / Outside (`"clampToCanvas": false`), which centre on the
 /// selection. `active` is the layer the paste lands beside; the board is its board. Returns the
 /// shift and that board, which the pasted layer then joins ([`join_board`]).
-pub(crate) fn board_shift(clip: &Clip, doc: &Document, active: Option<LayerId>, p: &Value) -> Option<(i32, i32, LayerId)> {
+pub(crate) fn board_shift(clip: &Clip, doc: &Document, active: Option<LayerId>, p: &Value, new_layer: bool) -> Option<(i32, i32, LayerId)> {
     if p.get("clampToCanvas").and_then(Value::as_bool) == Some(false) || clip.source != Some(doc.id) {
         return None;
     }
@@ -367,9 +367,11 @@ pub(crate) fn board_shift(clip: &Clip, doc: &Document, active: Option<LayerId>, 
     // Pasted with a locked board itself selected, the layer goes above the board, not into it
     // (`layer_place`'s rule for layers edited right after they are made), so it keeps its usual
     // place instead of one on a board it isn't on. A layer inside a locked board is placed by its
-    // own rules and still lands on the board.
+    // own rules and still lands on the board. A paste into the board's own mask (`new_layer`
+    // false) adds no layer and mask edits don't check position locks, so it always takes the
+    // board's shift.
     let board = doc.layer(to)?;
-    if active == to && !takes_pastes(board) {
+    if new_layer && active == to && !takes_pastes(board) {
         return None;
     }
     let dst = board.artboard()?.rect;
@@ -516,7 +518,7 @@ fn paste(s: &mut Session, p: &Value, in_place: bool) -> Result<Value> {
     }
     let canvas = d.doc.bounds();
     let fmt = d.doc.pixel_format();
-    let shift = board_shift(&clip, &d.doc, d.active_layer, p);
+    let shift = board_shift(&clip, &d.doc, d.active_layer, p, true);
     let board = shift.map(|(_, _, b)| b);
     let (dx, dy) = shift.map(|(dx, dy, _)| (dx, dy)).unwrap_or_else(|| paste_offset(&clip, d.doc.id, canvas, p, in_place));
     if mode.is_none()
@@ -650,7 +652,7 @@ pub(crate) fn paste_to_target(s: &mut Session, p: &Value, in_place: bool, limit:
     let layer = d.active_layer;
     // Into a mask or channel on another board of this document, the pixels keep their place on
     // the board, as a layer paste beside the same layer does ([`board_shift`]).
-    let shift = board_shift(&clip, &d.doc, layer, p).map(|(dx, dy, _)| (dx, dy));
+    let shift = board_shift(&clip, &d.doc, layer, p, false).map(|(dx, dy, _)| (dx, dy));
     let (dx, dy) = shift.unwrap_or_else(|| paste_offset(&clip, d.doc.id, canvas, p, in_place));
     let src = shifted(&clip.surface, dx, dy);
     let area = src.content_bounds().intersect(&canvas);
