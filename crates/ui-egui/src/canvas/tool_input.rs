@@ -637,7 +637,8 @@ fn covers(sel: &photocraft_raster::Surface, p: [f64; 2]) -> bool {
 /// drag; the Polygonal Lasso and Magic Wand need ⌘, as a plain press there places or samples),
 /// `Some(false)` just the outline (no ⇧ / ⌥ and the options bar on New Selection, so a combining
 /// drag still draws). The Single Row / Single Column Marquee drag the outline too (#11392); a click
-/// without moving still selects the line under the pointer (`finish_gesture`).
+/// without moving, inside the selection or on a floating piece (dropped first), still selects the
+/// line under the pointer (`finish_gesture`).
 pub fn selection_drag_kind(app: &PhotocraftApp, tool: Tool, p: [f64; 2], mods: egui::Modifiers) -> Option<bool> {
     // Click-driven selection tools (a press places a point or samples): only ⌘ drags the
     // selection, and not while a polygon is being drawn.

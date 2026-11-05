@@ -215,3 +215,43 @@ fn combining_drag_from_inside_selects_a_line() {
     drag(&mut app, Tool::SingleColumnMarquee, [300.5, 250.0], [400.5, 320.0], Modifiers::SHIFT);
     assert!(selected(&app, 200, 10) && selected(&app, 300, 10) && selected(&app, 400, 10));
 }
+
+/// Ctrl held at the release turns snapping off for a click inside, as it does during a drag: the
+/// line under the pointer, not the guide 2 px away.
+#[test]
+fn ctrl_release_inside_does_not_snap_the_line_to_a_guide() {
+    let mut app = app();
+    app.run("view.newGuide", json!({"orientation": "horizontal", "position": 252})).unwrap();
+    two_rows(&mut app);
+    app.ui.extras.snap = true;
+    app.ui.tool = Tool::SingleRowMarquee;
+    tool_event(&mut app, ToolEvent::Down { x: 600.0, y: 250.5, pressure: 1.0 }, Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Up { x: 600.0, y: 250.5 }, Modifiers::CTRL);
+    assert_eq!(bounds(&app), Rect::new(0, 250, 800, 251));
+}
+
+/// A click on a floating piece drops it where it is and selects the line under the pointer, as
+/// before a press on the piece dragged it: a click inside the selection selects a line with these
+/// tools. It only dropped an unmoved piece (keeping its outline) and left a moved one floating.
+#[test]
+fn click_on_a_floating_piece_drops_it_and_selects_the_line() {
+    let floats = |app: &PhotocraftApp| app.session.active().is_some_and(|st| photocraft_engine::float_cmds::floating(st).is_some());
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 800, "height": 600, "background": "transparent"})).unwrap();
+    app.ui.extras.snap = false;
+    app.run("select.rect", json!({"x": 100, "y": 100, "width": 200, "height": 100})).unwrap();
+    app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+
+    app.run("select.float", json!({"dx": 0, "dy": 0})).unwrap();
+    click(&mut app, Tool::SingleRowMarquee, [200.0, 150.5], Modifiers::NONE);
+    assert!(!floats(&app), "an unmoved piece is dropped");
+    assert_eq!(bounds(&app), Rect::new(0, 150, 800, 151), "row 150, not the piece's outline");
+    assert_eq!(step(&app).as_deref(), Some("Single Row Marquee"));
+
+    app.run("select.rect", json!({"x": 100, "y": 100, "width": 200, "height": 100})).unwrap();
+    app.run("select.float", json!({"dx": 50, "dy": 20})).unwrap();
+    click(&mut app, Tool::SingleColumnMarquee, [250.5, 170.0], Modifiers::NONE);
+    assert!(!floats(&app), "a moved piece is dropped where it is");
+    assert_eq!(bounds(&app), Rect::new(250, 0, 251, 600));
+    assert_eq!(step(&app).as_deref(), Some("Single Column Marquee"));
+}
