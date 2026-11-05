@@ -112,7 +112,7 @@ Baseline: 2026-10-05, 1 run, commit `f5d2bcb54a`, Apple M4 Pro (48 GB), GPU Appl
 | P89 | App frame after Paste Into on 24 MP (CPU canvas) | track only | – | – | – | – | – | not run | [#9329](https://github.com/storytold/photocraft/issues/9329) |
 | P90 | Free Transform begin, 2 layers on 24 MP (Ctrl+T + first preview frame) | ≤ 300 ms p95 | – | – | – | – | – | not run | [#11103](https://github.com/storytold/photocraft/issues/11103) |
 | P91 | Free Transform drag update, 2 layers on 24 MP (scale through new mip levels) | ≤ 16 ms max | – | – | – | – | – | not run | [#11103](https://github.com/storytold/photocraft/issues/11103) |
-| P92 | Filter dialog preview publish at k 1, 36 MP (display + texels) | ≤ 16 ms p95 | – | – | – | – | – | not run | [#5772](https://github.com/storytold/photocraft/issues/5772) |
+| P92 | Filter dialog preview canvas upload at k 1, 36 MP, 1920x1080 view (display + texels) | ≤ 16 ms p95 | – | – | – | – | – | not run | [#5772](https://github.com/storytold/photocraft/issues/5772) |
 | P93 | Filter dialog preview window texture at k 1, 36 MP | ≤ 16 ms p95 | – | – | – | – | – | not run | [#5772](https://github.com/storytold/photocraft/issues/5772) |
 
 **Not measurable yet** (the code can't do it yet; no number is recorded):
