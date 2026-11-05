@@ -245,6 +245,7 @@ fn only_per_user_launches_without_process_options_take_part() {
         new_instance_env: None,
         control: false,
         unreadable_paths: false,
+        stdin: false,
         launch_options: &[],
     };
     assert_eq!(skip_reason(&base), None);
@@ -256,6 +257,8 @@ fn only_per_user_launches_without_process_options_take_part() {
     assert_eq!(skip_reason(&LaunchContext { new_instance_env: Some(""), ..base }), None);
     assert!(skip_reason(&LaunchContext { control: true, ..base }).is_some());
     assert!(skip_reason(&LaunchContext { unreadable_paths: true, ..base }).is_some());
+    // Piped image bytes can't be handed over as a path.
+    assert!(skip_reason(&LaunchContext { stdin: true, ..base }).is_some_and(|r| r.contains("standard input")));
     let reason = skip_reason(&LaunchContext { launch_options: &[PerProcess::SafeGpu, PerProcess::GpuAdapterEnv], ..base });
     assert_eq!(reason.as_deref(), Some("--safe-gpu, PHOTOCRAFT_GPU_ADAPTER only applies to a new process"));
 }
@@ -360,6 +363,7 @@ fn an_environment_override_counts_as_a_process_option() {
         new_instance_env: None,
         control: false,
         unreadable_paths: false,
+        stdin: false,
         launch_options: &[],
     };
     let reason = skip_reason(&LaunchContext { launch_options: &with(&[("PHOTOCRAFT_PRESENT_MODE", "novsync")]), ..base });
