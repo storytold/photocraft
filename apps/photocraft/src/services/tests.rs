@@ -379,6 +379,21 @@ fn save_as_offers_only_writable_formats_including_ico() {
     assert!(err.contains("256"), "{err}");
 }
 
+/// #1049: the DPX Options answer in the export settings reaches the DPX header through the
+/// desktop's `export_options`, which `save_through` and the native export both use.
+#[test]
+fn export_options_writes_the_dpx_depth_the_settings_ask_for() {
+    use photocraft_io::DpxBits;
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 4, "height": 4})).unwrap();
+    let doc = s.active().unwrap().doc.clone();
+    for (bits, want) in [(None, 8), (Some(DpxBits::Bits10), 10), (Some(DpxBits::Bits12), 12), (Some(DpxBits::Bits16), 16)] {
+        let settings = photocraft_ui_egui::ExportSettings { dpx_bits: bits, ..Default::default() };
+        let out = photocraft_io::export(&doc, "x.dpx", &export_options(&settings)).unwrap();
+        assert_eq!((&out.bytes[..4], out.bytes[803]), (&b"SDPX"[..], want), "{bits:?}");
+    }
+}
+
 /// #4394: with File name extensions shown, Windows kept `image.psd` when the type was changed to
 /// PhotoCraft. Given the bare `image`, it adds the extension of whichever type is picked
 /// (checked by hand with rfd 0.17.2 on Windows 11), defaulting to the first type's.

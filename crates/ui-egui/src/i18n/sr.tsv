@@ -4609,3 +4609,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	New file	Novi fajl
 	Learn	Učenje
 	Website	Veb-sajt
+
+# DPX Options (#1049)
+	DPX Options	DPX opcije
+	10 Bits/Channel	10 bita/kanal
+	12 Bits/Channel	12 bita/kanal
