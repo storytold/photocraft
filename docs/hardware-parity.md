@@ -51,7 +51,7 @@ HDR display to verify.
 
 | Feature | Photoshop | PhotoCraft | Status |
 |---|---|---|---|
-| Trackpad pinch zoom, two-finger pan | yes | yes; pinch scrolls instead in 0.6.0 (#2463) | partial |
+| Trackpad pinch zoom, two-finger pan | yes | yes; drivers that send a pinch as whole-notch Ctrl + wheel need Preferences › Enhanced Controls › Ctrl scroll acts as pinch (#2463) | partial |
 | Trackpad rotate (Rotate View) | yes | yes (`rotate_view.rs`) | done |
 | Touch Bar | yes (Intel Macs) | no | missing (low value) |
 | Touch screens (Windows) | yes | basic pointer only | partial |
