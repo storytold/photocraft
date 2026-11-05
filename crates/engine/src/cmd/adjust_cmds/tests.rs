@@ -668,6 +668,17 @@ fn replace_color_smart_filter_keeps_the_foreground_it_was_run_with() {
     assert_eq!(max_diff(&flatten(&s), &baked), 0.0, "changing the foreground leaves the filter unchanged");
 }
 
+/// Lab bounds edit pixels in place; a smart object keeps its pixels, so they are refused there.
+#[test]
+fn replace_color_lab_bounds_are_refused_on_a_smart_object() {
+    let mut s = smart_session();
+    let before = flatten(&s);
+    let r = s.execute("image.adjustments.replaceColor", json!({"labMinimum": [0, -128, -128], "labMaximum": [100, 127, 127], "hue": 90}));
+    assert!(r.is_err(), "Lab bounds on a smart object must be refused");
+    assert!(smart_filters_of(&s).is_empty());
+    assert_eq!(max_diff(&flatten(&s), &before), 0.0);
+}
+
 /// #5335: Curves (⌘M) edits the targeted layer mask, saved channel or Quick Mask at every depth.
 #[test]
 fn curves_apply_to_non_colour_targets_at_every_depth() {

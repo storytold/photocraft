@@ -63,7 +63,7 @@ pub(super) fn filter_key(below: &StageKey, f: &SmartFilter, mask: Option<&photoc
         tiles.sort_by_key(|(coord, _)| **coord);
         for (coord, tile) in tiles {
             h.update(format!("{coord:?}").as_bytes());
-            h.update(tile.bytes());
+            h.update(&tile.bytes());
         }
     }
     *h.finalize().as_bytes()
