@@ -1,6 +1,6 @@
 use super::paths::{file_name, read_file, stem, template_name};
 use super::{
-    Affine, Arc, Document, EngineError, Layer, LayerContent, PixelFormat, Resample, Result, Session, SmartObject, SmartSource, Value, f64_param, json,
+    Affine, Arc, Document, EngineError, Layer, LayerContent, LayerId, PixelFormat, Resample, Result, Session, SmartObject, SmartSource, Value, f64_param, json,
     str_param, translate_surface,
 };
 use crate::jobs::JobCtx;
@@ -273,12 +273,33 @@ pub(crate) struct PlaceInput {
     smart: bool,
     /// The document as the job sees it, for rendering a vector source at its placement scale.
     doc: Option<Arc<Document>>,
+    /// The frame the image goes into: the active layer's, `"frame"` in the params, or none
+    /// (`"frame": false`). Its image renders through a smart object.
+    frame: Option<(LayerId, photocraft_doc::Frame)>,
 }
 
 impl PlaceInput {
     pub(crate) fn new(s: &Session, name: &str, bytes: Vec<u8>, linked: Option<String>, p: &Value) -> Result<Self> {
         let d = s.active().ok_or(EngineError::NoDocument)?;
         let prefs = s.prefs();
+        let frame_id = match p.get("frame") {
+            Some(Value::Bool(false)) => None,
+            Some(v) if !v.is_null() => Some(LayerId(v.as_u64().ok_or_else(|| EngineError::Other("frame must be a frame id or false".into()))?)),
+            _ => d.active_layer.and_then(|id| crate::frame_cmds::frame_of(&d.doc, id)),
+        };
+        let frame = frame_id
+            .map(|id| {
+                d.doc
+                    .layer(id)
+                    .and_then(|l| l.frame.as_deref().cloned())
+                    .map(|f| (id, f))
+                    .ok_or_else(|| EngineError::Other("the destination frame is unavailable".into()))
+            })
+            .transpose()?;
+        let canvas = frame.as_ref().map_or((d.doc.size.width as f64, d.doc.size.height as f64), |(_, f)| {
+            let [a, b, c, d, _, _] = f.transform.m;
+            (a.hypot(b), c.hypot(d))
+        });
         let approve = match p.get("approveHighMemory") {
             None | Some(Value::Null) => false,
             Some(Value::Bool(b)) => *b,
@@ -291,7 +312,7 @@ impl PlaceInput {
         opts.psd_approved_estimate = None;
         Ok(Self {
             name: name.to_string(),
-            canvas: (d.doc.size.width as f64, d.doc.size.height as f64),
+            canvas,
             fmt: d.doc.pixel_format(),
             opts,
             // The implicit `fit` is Preferences ▸ General ▸ Resize Image During Place (on by default).
@@ -299,7 +320,8 @@ impl PlaceInput {
             // Preferences ▸ General ▸ Always Create Smart Objects When Placing (on by default): off,
             // an embedded place lands as a plain pixel layer.
             smart: linked.is_some() || p.get("smartObject").and_then(Value::as_bool).unwrap_or(prefs.general.always_create_smart_objects_when_placing),
-            doc: photocraft_io::is_svg_input(name, &bytes).then(|| Arc::clone(&d.doc)),
+            doc: (frame.is_some() || photocraft_io::is_svg_input(name, &bytes)).then(|| Arc::clone(&d.doc)),
+            frame,
             params: p.clone(),
             bytes,
             linked,
@@ -326,13 +348,15 @@ pub(crate) struct Prepared {
     scale: f64,
     bounds: [f64; 4],
     smart: bool,
+    /// The frame the layer fills, if any (it becomes the frame's content instead of a new layer).
+    frame: Option<LayerId>,
 }
 
 /// The heavy part of a place: decode, flatten, resize and translate (and render a vector source at
 /// its placement scale). Touches no [`Session`], so it can run on a worker; `ctx` reports progress
 /// and stops it between stages when cancelled.
 pub(crate) fn prepare_place(input: PlaceInput, ctx: &JobCtx) -> Result<Prepared> {
-    let PlaceInput { name, bytes, linked, params: p, canvas: (cw, ch), fmt, opts, fit, smart, doc } = input;
+    let PlaceInput { name, bytes, linked, params: p, canvas: (cw, ch), fmt, opts, fit, smart, doc, frame } = input;
     let imported = ctx.stage(0.0, 0.6, "Decoding", |ctl| photocraft_io::import_with_options_and_interrupt(&name, &bytes, &opts, ctl)).map_err(|e| match e {
         photocraft_io::IoError::Cancelled => EngineError::Cancelled,
         e => crate::error::io_open_error(&name, e),
@@ -347,6 +371,7 @@ pub(crate) fn prepare_place(input: PlaceInput, ctx: &JobCtx) -> Result<Prepared>
     let (w, h) = (src.size.width as f64, src.size.height as f64);
     let scale = match f64_param(&p, "scale") {
         Some(k) => (k / 100.0).max(1e-4),
+        None if frame.is_some() && fit => (cw / w).max(ch / h),
         None if fit && (w > cw || h > ch) => (cw / w).min(ch / h),
         None => 1.0,
     };
@@ -355,32 +380,51 @@ pub(crate) fn prepare_place(input: PlaceInput, ctx: &JobCtx) -> Result<Prepared>
         _ => (cw / 2.0, ch / 2.0),
     };
     let (dx, dy) = ((center.0 - w * scale / 2.0).round(), (center.1 - h * scale / 2.0).round());
-    ctx.progress(0.6, "Flattening");
-    let bounds = src.bounds();
-    if u64::from(bounds.width()) * u64::from(bounds.height()) > photocraft_compose::MAX_RENDER_PIXELS {
-        return Err(EngineError::Other("the document canvas is too large to flatten".into()));
-    }
-    let mut px = ctx
-        .stage(0.6, 0.7, "Flattening", |ctl| photocraft_compose::composite_to_surface_with_interrupt(&src, bounds, fmt, None, ctl))
-        .map_err(|_| EngineError::Cancelled)?;
-    drop(src);
-    ctx.check()?;
-    if (scale - 1.0).abs() > 1e-9 {
-        ctx.progress(0.7, "Resizing");
-        px = ctx
-            .stage(0.7, 0.9, "Resizing", |ctl| photocraft_algo::resample::resize_surface_with_interrupt(&px, scale, scale, Resample::Bicubic, ctl))
+    // A frame's image renders through its smart object below, which refuses a placement past the
+    // memory budget; resampling it to the frame's size first would allocate that surface twice.
+    let px = if frame.is_none() {
+        ctx.progress(0.6, "Flattening");
+        let bounds = src.bounds();
+        if u64::from(bounds.width()) * u64::from(bounds.height()) > photocraft_compose::MAX_RENDER_PIXELS {
+            return Err(EngineError::Other("the document canvas is too large to flatten".into()));
+        }
+        let mut px = ctx
+            .stage(0.6, 0.7, "Flattening", |ctl| photocraft_compose::composite_to_surface_with_interrupt(&src, bounds, fmt, None, ctl))
             .map_err(|_| EngineError::Cancelled)?;
         ctx.check()?;
-    }
-    let px = translate_surface(&px, dx as i32, dy as i32);
+        if (scale - 1.0).abs() > 1e-9 {
+            ctx.progress(0.7, "Resizing");
+            px = ctx
+                .stage(0.7, 0.9, "Resizing", |ctl| photocraft_algo::resample::resize_surface_with_interrupt(&px, scale, scale, Resample::Bicubic, ctl))
+                .map_err(|_| EngineError::Cancelled)?;
+            ctx.check()?;
+        }
+        Some(translate_surface(&px, dx as i32, dy as i32))
+    } else {
+        None
+    };
+    drop(src);
+    let placement = frame
+        .as_ref()
+        .map_or(Affine { m: [scale, 0.0, 0.0, scale, dx, dy] }, |(_, f)| f.transform.mul(&Affine { m: [scale / cw, 0.0, 0.0, scale / ch, dx / cw, dy / ch] }));
+    let corners = [(0.0, 0.0), (w, 0.0), (0.0, h), (w, h)].map(|(x, y)| placement.apply(photocraft_geom::Point::new(x, y)));
+    let bounds = [
+        corners.iter().map(|q| q.x).fold(f64::INFINITY, f64::min),
+        corners.iter().map(|q| q.y).fold(f64::INFINITY, f64::min),
+        corners.iter().map(|q| q.x).fold(f64::NEG_INFINITY, f64::max),
+        corners.iter().map(|q| q.y).fold(f64::NEG_INFINITY, f64::max),
+    ];
+    // A frame's image is always a smart object.
+    let smart = smart || frame.is_some();
     let label = if linked.is_some() { "Place Linked" } else { PLACE_EMBEDDED };
     let content = if smart {
         let source = match linked {
             Some(path) => SmartSource::Linked { path },
             None => SmartSource::Embedded { file_name: file_name(&name), bytes: Arc::new(bytes) },
         };
-        let mut so = SmartObject::new(source, Affine { m: [scale, 0.0, 0.0, scale, dx, dy] }, Some(px));
-        // A vector source (SVG) renders at its placement scale instead of as a resampled raster.
+        let mut so = SmartObject::new(source, placement, px);
+        // A vector source (SVG) and a frame's image render at their placement scale instead of as
+        // a resampled raster.
         if let Some(doc) = doc {
             ctx.progress(0.9, "Rendering");
             ctx.check()?;
@@ -388,22 +432,32 @@ pub(crate) fn prepare_place(input: PlaceInput, ctx: &JobCtx) -> Result<Prepared>
                 so.cache = Some(sharp);
             }
         }
+        if so.cache.is_none() {
+            return Err(EngineError::Other(format!("{name}: the placed image could not be rendered")));
+        }
         LayerContent::Smart(so)
     } else {
-        LayerContent::Raster(px)
+        LayerContent::Raster(px.ok_or_else(|| EngineError::Other(format!("{name}: a frame's image must be a smart object")))?)
     };
-    Ok(Prepared { content, layer_name: stem(&name), label, scale, bounds: [dx, dy, dx + w * scale, dy + h * scale], smart })
+    Ok(Prepared { content, layer_name: stem(&name), label, scale, bounds, smart, frame: frame.map(|(id, _)| id) })
 }
 
 /// Insert the prepared layer as one undo step and report the place. Runs on the session's thread.
 pub(crate) fn apply_place(s: &mut Session, p: Prepared) -> Result<Value> {
-    let Prepared { content, layer_name, label, scale, bounds, smart } = p;
-    let id = s.edit(label, move |doc, active| {
-        let id = crate::layer_place::insert_new(doc, *active, Layer::new(layer_name, content), crate::layer_place::Place::AutoEditable);
-        *active = Some(id);
-        Ok(id)
+    let Prepared { content, layer_name, label, scale, bounds, smart, frame } = p;
+    let layer = Layer::new(layer_name, content);
+    let id = layer.id;
+    s.edit(label, move |doc, active| {
+        if let Some(frame_id) = frame {
+            crate::frame_cmds::put_content(doc, frame_id, layer)?;
+            *active = Some(frame_id);
+        } else {
+            crate::layer_place::insert_new(doc, *active, layer, crate::layer_place::Place::AutoEditable);
+            *active = Some(id);
+        }
+        Ok(())
     })?;
-    Ok(json!({"layer": id.0, "scale": scale * 100.0, "bounds": bounds, "smartObject": smart}))
+    Ok(json!({"layer": id.0, "frame": frame.map(|f| f.0), "scale": scale * 100.0, "bounds": bounds, "smartObject": smart}))
 }
 
 pub(super) fn place(s: &mut Session, p: &Value, linked: bool) -> Result<Value> {

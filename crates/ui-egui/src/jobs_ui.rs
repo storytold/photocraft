@@ -206,11 +206,11 @@ pub fn run(app: &mut PhotocraftApp, id: &str, params: Value) -> Result<Value, St
 /// file read by the browser): like [`run`] for `file.placeEmbedded`, the result is
 /// `{"job": id, "pending": true}` and the layer lands when [`tick`] applies the job. `linked`
 /// makes it Place Linked to that path. Hand the result to [`track_place`].
-pub(crate) fn start_place_bytes(app: &mut PhotocraftApp, name: &str, bytes: Vec<u8>, linked: Option<String>) -> Result<Value, String> {
+pub(crate) fn start_place_bytes(app: &mut PhotocraftApp, name: &str, bytes: Vec<u8>, linked: Option<String>, params: &Value) -> Result<Value, String> {
     if app.jobs.place.is_some() {
         return Err(tl!("A file is still being placed; try again when it has finished.").into());
     }
-    match app.session.start_place_bytes(name, bytes, linked, json!({})).map_err(|e| e.to_string())? {
+    match app.session.start_place_bytes(name, bytes, linked, params.clone()).map_err(|e| e.to_string())? {
         Started::Done(v) => Ok(v),
         Started::Job(job) => {
             app.jobs.last_started = Some(job);
@@ -237,10 +237,11 @@ pub(crate) fn track_place(app: &mut PhotocraftApp, name: &str, started: &Value) 
 fn finish_place(app: &mut PhotocraftApp, ctx: &egui::Context, place: PlaceJob, outcome: JobOutcome) {
     app.sync_views();
     match outcome {
-        JobOutcome::Done(_) => {
+        JobOutcome::Done(result) => {
             // The tab can change while the file is placed: the box opens only on the document it
-            // was placed in, and never over another one.
+            // was placed in, and never over another one. An image placed into a frame has none.
             if app.ui.transform.is_none()
+                && result.get("frame").and_then(Value::as_u64).is_none()
                 && app.session.active().is_some_and(|st| st.doc.id == place.doc)
                 && let Err(e) = crate::transform_tool::begin_placed(app, ctx)
             {

@@ -341,7 +341,7 @@ fn menu_place_runs_in_the_background_and_starts_transform_when_it_lands() {
     assert!(app.ui.transform.is_none(), "Free Transform waits for the layer");
     assert_eq!(app.session.active().unwrap().doc.layer_count(), layers);
     // Another place is refused while this one runs, and the first one stays tracked.
-    assert!(crate::jobs_ui::start_place_bytes(&mut app, "other.png", bytes, None).is_err());
+    assert!(crate::jobs_ui::start_place_bytes(&mut app, "other.png", bytes, None, &serde_json::json!({})).is_err());
     assert_eq!(app.jobs.place.as_ref().map(|p| p.job), Some(place.job));
     let t = std::time::Instant::now();
     while app.jobs.place.is_some() {
