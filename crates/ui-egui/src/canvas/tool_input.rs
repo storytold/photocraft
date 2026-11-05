@@ -1,7 +1,7 @@
 use super::cancel_stale_vector_drag;
 use super::cursors::{alt_eyedropper, sample_eyedropper};
 use super::drag::Drag;
-use super::gesture::{finish_gesture, polygon_click, selection_mode};
+use super::gesture::{finish_release, polygon_click, selection_mode};
 use super::selection::finish_selection_drag;
 use super::strokes::{HOLD_REPEAT_MS, begin_live_stroke, feed_live_stroke, paint_target, snap_aliased_tip, stroke_params, strokes_live};
 use super::{PhotocraftApp, Tool, json, multiple_color_target};
@@ -572,7 +572,7 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
             let last = d.points.last().map_or(d.start, |p| [p[0], p[1]]);
             let [x, y] = crate::stroke_constraint::constrain(d.tool, &mut d.constrain, d.start, last, [x, y], mods.shift, zoom);
             let [x, y] = crate::move_mods::selection_drag_to(&mut d, [x, y], mods.shift && app.active_tool() != Tool::Move);
-            let [x, y] = selection_release(&d, raw, [x, y]);
+            let (click, [x, y]) = selection_release(&d, raw, [x, y]);
             // A Move-tool click (released where it was pressed) selects, it never moves: snapping
             // the release point would otherwise nudge the layer onto a nearby edge.
             if d.tool == Tool::Move && d.points.len() < 2 && matches!(raw, ToolEvent::Up { x, y } if [x, y] == d.start) {
@@ -587,21 +587,22 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
                 d.points.push([x, y, d.points.last().map_or(1.0, |p| p[2])]);
                 app.stylus.record_point();
             }
-            finish_gesture(app, d);
+            finish_release(app, d, click);
             crate::move_mods::finish(app);
         }
     }
 }
 
-/// Where selection drag `d` ends for a release at `p` (snapped; `raw` before snapping): where it
-/// was pressed when the pointer is back within half a pixel of it (the click `finish_gesture`
-/// rounds to, a zoomed-in hand's jitter included), as with snapping off. Snapping the release would
-/// nudge the selection's edges onto a nearby guide or the canvas edge, moving it instead of
-/// deselecting (a Single Row / Column Marquee: selecting the line, #11392).
-fn selection_release(d: &Drag, raw: ToolEvent, p: [f64; 2]) -> [f64; 2] {
+/// Whether the release `raw` of selection drag `d` is a click, and where it ends (`p`: snapped). A
+/// click comes back within half a pixel of the press before snapping, a zoomed-in hand's jitter
+/// included, and ends where it was pressed, as with snapping off: snapping the release would nudge
+/// the selection's edges onto a nearby guide or the canvas edge, moving it instead of deselecting
+/// (a Single Row / Column Marquee: selecting the line). A drag that snapping pulls back onto the
+/// press point is not a click (#11392).
+fn selection_release(d: &Drag, raw: ToolEvent, p: [f64; 2]) -> (bool, [f64; 2]) {
     match raw {
-        ToolEvent::Up { x, y } if d.sel_move.is_some() && (x - d.start[0]).round() == 0.0 && (y - d.start[1]).round() == 0.0 => d.start,
-        _ => p,
+        ToolEvent::Up { x, y } if d.sel_move.is_some() && (x - d.start[0]).round() == 0.0 && (y - d.start[1]).round() == 0.0 => (true, d.start),
+        _ => (false, p),
     }
 }
 

@@ -6,7 +6,20 @@ use super::strokes::{
 use super::textures::shown_as_document;
 use super::{PhotocraftApp, Tool, json};
 
-pub(crate) fn finish_gesture(app: &mut PhotocraftApp, mut d: Drag) {
+pub(crate) fn finish_gesture(app: &mut PhotocraftApp, d: Drag) {
+    finish(app, d, None);
+}
+
+/// [`finish_gesture`] for a pointer release. `click`: the release, before snapping, came back
+/// within half a pixel of the press (`tool_input`). A selection drag that snapping pulled back onto
+/// its press point is not one (#11392).
+pub(crate) fn finish_release(app: &mut PhotocraftApp, d: Drag, click: bool) {
+    finish(app, d, Some(click));
+}
+
+/// `click`: whether the gesture was a click, when the caller saw the release before snapping;
+/// otherwise the end point decides.
+fn finish(app: &mut PhotocraftApp, mut d: Drag, click: Option<bool>) {
     // Control can select a different tool and release before the next frame cancels the drag.
     // Cancel before even recording a Shift-stroke anchor, including the preview fallback paths.
     if d.tool == Tool::MixerBrush && app.ui.tool != Tool::MixerBrush {
@@ -20,31 +33,9 @@ pub(crate) fn finish_gesture(app: &mut PhotocraftApp, mut d: Drag) {
     let (sx, sy) = snap_aliased_tip(app, d.tool, end[0], end[1]);
     end[0] = sx;
     end[1] = sy;
-    // A Single Row / Single Column click inside the selection or on a floating piece selects a
-    // line, as it does elsewhere, instead of deselecting or dropping as other marquees do (#11392).
-    // A release where the press was ends here unsnapped (`tool_input`), so a click is never a move;
-    // the line snaps as a click outside the selection does (its press began as a move, which keeps
-    // the press point).
-    let line_click = d.sel_move.is_some()
-        && matches!(d.tool, Tool::SingleRowMarquee | Tool::SingleColumnMarquee)
-        && (end[0] - d.start[0]).round() == 0.0
-        && (end[1] - d.start[1]).round() == 0.0;
-    if line_click {
-        // The piece drops where it is first, as a press off it drops it (`tool_input`).
-        if d.sel_move == Some(true)
-            && app.session.active().and_then(photocraft_engine::float_cmds::floating).is_some()
-            && let Err(e) = app.run("select.drop", json!({}))
-        {
-            app.ui.status = e;
-            app.ui.status_error = true;
-            return;
-        }
-        let [x, y] = crate::snap_ui::snap_click(app, d.start, d.live);
-        d.points.push([x, y, end[2]]);
-        end = [x, y, end[2]];
-    } else if let Some(floating) = d.sel_move {
-        finish_selection_drag(app, floating, d.start, [end[0], end[1]]);
-        return;
+    if d.sel_move.is_some() {
+        let Some(line) = finish_selection_release(app, &mut d, end, click) else { return };
+        end = line;
     }
     // Where the next ⇧-click line starts.
     if crate::stroke_constraint::connects(d.tool)
@@ -173,6 +164,38 @@ pub(crate) fn finish_gesture(app: &mut PhotocraftApp, mut d: Drag) {
         }
         _ => {}
     }
+}
+
+/// The release of selection drag `d` at `end` (`click`: see [`finish`]). A Single Row / Single
+/// Column click inside the selection or on a floating piece selects a line, as it does elsewhere,
+/// instead of deselecting or dropping as other marquees do (#11392): the point it selects at, for
+/// the tool's own release to go on with. `None`: the release is done. A click ends here unsnapped
+/// (`tool_input`), so it is never a move; the line snaps as a click outside the selection does (its
+/// press began as a move, which keeps the press point).
+fn finish_selection_release(app: &mut PhotocraftApp, d: &mut Drag, end: [f64; 3], click: Option<bool>) -> Option<[f64; 3]> {
+    let floating = d.sel_move?;
+    let unmoved = (end[0] - d.start[0]).round() == 0.0 && (end[1] - d.start[1]).round() == 0.0;
+    let click = click.unwrap_or(unmoved);
+    if unmoved && !click {
+        // A drag that snapping pulled back where it started leaves the selection as it was.
+        return None;
+    }
+    if !click || !matches!(d.tool, Tool::SingleRowMarquee | Tool::SingleColumnMarquee) {
+        finish_selection_drag(app, floating, d.start, [end[0], end[1]]);
+        return None;
+    }
+    // The piece drops where it is first, as a press off it drops it (`tool_input`).
+    if floating
+        && app.session.active().and_then(photocraft_engine::float_cmds::floating).is_some()
+        && let Err(e) = app.run("select.drop", json!({}))
+    {
+        app.ui.status = e;
+        app.ui.status_error = true;
+        return None;
+    }
+    let [x, y] = crate::snap_ui::snap_click(app, d.start, d.live);
+    d.points.push([x, y, end[2]]);
+    Some([x, y, end[2]])
 }
 
 /// Selection mode from the options bar, overridden by modifier keys (⇧ add, ⌥ subtract, ⇧⌥ intersect).

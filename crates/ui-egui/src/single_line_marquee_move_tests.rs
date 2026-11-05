@@ -128,7 +128,8 @@ fn click_inside_selects_the_line_under_the_pointer() {
 }
 
 /// With snapping on, a click inside is still a click when the selection's edge is within reach of
-/// the canvas edge: the snapped release moved both rows up 3 px ("Transform Selection") instead.
+/// the canvas edge: the snapped release moved both rows up 3 px ("Transform Selection") instead,
+/// and the Rectangular Marquee's selection with them instead of deselecting.
 #[test]
 fn click_inside_with_snapping_on_selects_the_line() {
     let mut app = app();
@@ -139,6 +140,38 @@ fn click_inside_with_snapping_on_selects_the_line() {
     click(&mut app, Tool::SingleRowMarquee, [300.0, 250.5], Modifiers::NONE);
     assert_eq!(bounds(&app), Rect::new(0, 250, 800, 251));
     assert_eq!(step(&app).as_deref(), Some("Single Row Marquee"));
+
+    app.run("select.rect", json!({"x": 3, "y": 3, "width": 100, "height": 50})).unwrap();
+    click(&mut app, Tool::RectMarquee, [50.5, 30.5], Modifiers::NONE);
+    assert!(app.session.active().unwrap().doc.selection.is_none(), "deselected, not moved onto the edge");
+}
+
+/// A drag from inside that snapping pulls back to where it started (the selection's edge on a
+/// guide, 2 px away) is not a click: the selection stays, with no step. It took the click's path:
+/// one line replaced the rows, a floating piece was dropped, and the Rectangular Marquee deselected.
+#[test]
+fn a_drag_snapped_back_to_its_start_leaves_the_selection() {
+    let floats = |app: &PhotocraftApp| app.session.active().is_some_and(|st| photocraft_engine::float_cmds::floating(st).is_some());
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 800, "height": 600, "background": "transparent"})).unwrap();
+    app.run("view.newGuide", json!({"orientation": "horizontal", "position": 150})).unwrap();
+    app.ui.extras.snap = false;
+    two_rows(&mut app);
+    app.ui.extras.snap = true;
+    let before = steps(&app);
+    drag(&mut app, Tool::SingleRowMarquee, [300.0, 250.5], [300.0, 252.5], Modifiers::NONE);
+    assert_eq!(bounds(&app), Rect::new(0, 150, 800, 251), "both rows where they were");
+    assert_eq!(steps(&app), before, "no step");
+
+    drag(&mut app, Tool::RectMarquee, [300.0, 250.5], [300.0, 252.5], Modifiers::NONE);
+    assert_eq!(bounds(&app), Rect::new(0, 150, 800, 251), "the Rectangular Marquee keeps them too");
+
+    app.run("select.rect", json!({"x": 100, "y": 150, "width": 200, "height": 100})).unwrap();
+    app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    app.run("select.float", json!({"dx": 0, "dy": 0})).unwrap();
+    drag(&mut app, Tool::SingleRowMarquee, [200.0, 200.5], [200.0, 202.5], Modifiers::NONE);
+    assert!(floats(&app), "the piece still floats");
+    assert_eq!(bounds(&app), Rect::new(100, 150, 300, 250));
 }
 
 /// A click whose release drifts under a pixel from the press (a zoomed-in hand jitter) is still a
