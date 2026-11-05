@@ -284,7 +284,9 @@ struct GroupRenderSegment {
     show_header: bool,
     folder_path: Vec<String>,
     show_folder_header: bool,
-    item_indices: Vec<usize>,
+    /// Source group and item index for each card. Root card runs can span backing groups;
+    /// nested segments still naturally contain entries from their owning group only.
+    item_indices: Vec<(usize, usize)>,
 }
 
 fn last_visible_descendant_bounds(node: &HierarchyNode, bounds: &std::collections::BTreeMap<NodeId, Rect>) -> Option<Rect> {
@@ -446,8 +448,8 @@ fn build_hierarchy_projection(
         for child in node.children() {
             match child {
                 HierarchyNode::Item(id) => {
-                    if let Some((_, item_index)) = item_indices.get(id) {
-                        run.push(*item_index);
+                    if let Some((source_group_index, item_index)) = item_indices.get(id) {
+                        run.push((*source_group_index, *item_index));
                     }
                 }
                 HierarchyNode::Group { .. } => {
@@ -565,8 +567,8 @@ fn build_hierarchy_projection(
     for root in hierarchy.roots() {
         if let HierarchyNode::Item(id) = root {
             if let Some((group_index, item_index)) = item_indices.get(id) {
-                if let Some(segment) = out.last_mut().filter(|segment: &&mut GroupRenderSegment| segment.root_items && segment.group_index == *group_index) {
-                    segment.item_indices.push(*item_index);
+                if let Some(segment) = out.last_mut().filter(|segment: &&mut GroupRenderSegment| segment.root_items) {
+                    segment.item_indices.push((*group_index, *item_index));
                 } else {
                     out.push(GroupRenderSegment {
                         group_index: *group_index,
@@ -575,7 +577,7 @@ fn build_hierarchy_projection(
                         show_header: false,
                         folder_path: Vec::new(),
                         show_folder_header: false,
-                        item_indices: vec![*item_index],
+                        item_indices: vec![(*group_index, *item_index)],
                     });
                 }
             }
@@ -1742,6 +1744,18 @@ pub(crate) fn browser_with_root_sequence(
         let Some(group) = groups.get(segment.group_index) else { continue };
         let group_matches = group_matches_query(group, &query);
         let has_matching_items = group.items.iter().any(|item| item_matches_query(item, &query));
+        if segment.root_items {
+            for (group_index, item_index) in &segment.item_indices {
+                let Some(source_group) = groups.get(*group_index) else { continue };
+                let Some(item) = source_group.items.get(*item_index) else { continue };
+                if item_visible_for_query(item, &query, group_matches_query(source_group, &query))
+                    && let Some(id) = item_node_for_identity(&source_group.name, &item.group_path, &item.key, &hierarchy_identities)
+                {
+                    visible_selection_order.push(id);
+                }
+            }
+            continue;
+        }
         if !group_visible_for_query(&query, group_matches, has_matching_items) {
             continue;
         }
@@ -1778,9 +1792,11 @@ pub(crate) fn browser_with_root_sequence(
             }
         }
         if folder_open {
-            for index in &segment.item_indices {
-                if let Some(item) = group.items.get(*index).filter(|item| item_visible_for_query(item, &query, group_matches))
-                    && let Some(id) = item_node_for_identity(&group.name, &item.group_path, &item.key, &hierarchy_identities)
+            for (group_index, item_index) in &segment.item_indices {
+                if let Some(source_group) = groups.get(*group_index)
+                    && let Some(item) =
+                        source_group.items.get(*item_index).filter(|item| item_visible_for_query(item, &query, group_matches_query(source_group, &query)))
+                    && let Some(id) = item_node_for_identity(&source_group.name, &item.group_path, &item.key, &hierarchy_identities)
                 {
                     visible_selection_order.push(id);
                 }
@@ -1833,15 +1849,22 @@ pub(crate) fn browser_with_root_sequence(
                 let Some(g) = groups.get(gi) else { continue };
                 let group_matches = group_matches_query(g, &query);
                 let has_matching_items = g.items.iter().any(|item| item_matches_query(item, &query));
-                if !group_visible_for_query(&query, group_matches, has_matching_items) {
+                let root_run_visible = segment.root_items
+                    && segment.item_indices.iter().any(|(group_index, item_index)| {
+                        groups.get(*group_index).is_some_and(|source_group| {
+                            source_group.items.get(*item_index)
+                                .is_some_and(|item| item_visible_for_query(item, &query, group_matches_query(source_group, &query)))
+                        })
+                    });
+                if (segment.root_items && !root_run_visible) || (!segment.root_items && !group_visible_for_query(&query, group_matches, has_matching_items)) {
                     continue;
                 }
                 let parent = parents.get(&g.name);
-                if segment.show_header && parent.is_some_and(|p| hidden_groups.contains(p)) {
+                if !segment.root_items && segment.show_header && parent.is_some_and(|p| hidden_groups.contains(p)) {
                     hidden_groups.insert(g.name.clone());
                     continue;
                 }
-                if hidden_groups.contains(&g.name) && !segment.show_header {
+                if !segment.root_items && hidden_groups.contains(&g.name) && !segment.show_header {
                     continue;
                 }
                 if !segment.folder_path.is_empty()
@@ -1851,7 +1874,7 @@ pub(crate) fn browser_with_root_sequence(
                 }
                 // A non-empty query should reveal matching items even when their group was
                 // collapsed before the search began.
-                let open = !segment.show_header || !query.is_empty() || group_open(st, panel, gi, &g.name, all_groups_open);
+                let open = segment.root_items || !segment.show_header || !query.is_empty() || group_open(st, panel, gi, &g.name, all_groups_open);
                 if !open {
                     hidden_groups.insert(g.name.clone());
                 } else {
@@ -2034,11 +2057,15 @@ pub(crate) fn browser_with_root_sequence(
                 if open {
                     let mut group_toggles = Vec::new();
                     {
-                        let segment_items: Vec<&ItemView> = segment
+                        let segment_items: Vec<(usize, usize, &ItemView)> = segment
                             .item_indices
                             .iter()
-                            .filter_map(|index| g.items.get(*index))
-                            .filter(|item| item_visible_for_query(item, &query, group_matches))
+                            .filter_map(|(group_index, item_index)| {
+                                let source_group = groups.get(*group_index)?;
+                                let item = source_group.items.get(*item_index)?;
+                                item_visible_for_query(item, &query, group_matches_query(source_group, &query))
+                                    .then_some((*group_index, *item_index, item))
+                            })
                             .collect();
                         let st_cell = std::cell::RefCell::new(&mut *st);
                         let ev_cell = std::cell::RefCell::new(&mut ev);
@@ -2171,7 +2198,7 @@ pub(crate) fn browser_with_root_sequence(
                                 }
                             }
                         };
-                        let mut draw_items = |ui: &mut egui::Ui, items: &[&ItemView], group_path: &[String]| {
+                        let mut draw_items = |ui: &mut egui::Ui, items: &[(usize, usize, &ItemView)], group_path: &[String]| {
                             let w = ui.available_width();
                             let root_level_items = segment.root_items;
                             // Cards are children of their containing group and retain the
@@ -2197,12 +2224,13 @@ pub(crate) fn browser_with_root_sequence(
                             // Anchor to the same clip edge as group headers so the full hierarchy
                             // indent is applied exactly once, not on top of the area's base inset.
                             let item_origin_x = ui.clip_rect().left() + 1.0;
-                            if grid_height > 0.0 {
+                            if grid_height > 0.0 && !root_level_items {
                                 group_content_areas.push((g.name.clone(), area));
                             }
                             let mut insertion_markers = Vec::new();
-                            for (run_i, it) in items.iter().enumerate() {
-                                let ii = g.items.iter().position(|original| std::ptr::eq(original, *it)).unwrap_or(run_i);
+                            for (run_i, (item_group_index, ii, it)) in items.iter().enumerate() {
+                                let Some(item_group) = groups.get(*item_group_index) else { continue };
+                                let it = *it;
                                 let (cx, cy) = item_grid_position(run_i, rows, cols, wrap_list);
                                 let r = Rect::from_min_size(pos2(item_origin_x + pad + center_offset + cx * (cell.x + gap), area.min.y + cy * (cell.y + gap)), cell);
                                 let next_rect = (run_i + 1 < items.len()).then(|| {
@@ -2213,7 +2241,7 @@ pub(crate) fn browser_with_root_sequence(
                                         cell,
                                     )
                                 });
-                                let resp = ui.interact(r, ui.id().with((panel, gi, ii)), Sense::click_and_drag());
+                                let resp = ui.interact(r, ui.id().with((panel, item_group_index, ii)), Sense::click_and_drag());
                                 let cursor = if resp.is_pointer_button_down_on() {
                                     Some(egui::CursorIcon::Grabbing)
                                 } else if panel == "gradients" {
@@ -2222,13 +2250,14 @@ pub(crate) fn browser_with_root_sequence(
                                     None
                                 };
                                 let resp = if let Some(cursor) = cursor { resp.on_hover_cursor(cursor) } else { resp };
-                                let node_id = item_node_for_identity(&g.name, &it.group_path, &it.key, &hierarchy_identities);
+                                let node_id = item_node_for_identity(&item_group.name, &it.group_path, &it.key, &hierarchy_identities);
+                                let item_depth = depth + it.group_path.len() + usize::from(!root_level_items);
                                 let is_sel = {
                                     let state = st_cell.borrow();
                                     if state.browser_selection.contains_key(panel) {
                                         node_id.as_ref().is_some_and(|id| state.browser_node_selected(panel, id))
                                     } else {
-                                        state.is_selected_item(panel, &g.name, &it.group_path, &it.key)
+                                        state.is_selected_item(panel, &item_group.name, &it.group_path, &it.key)
                                     }
                                 };
                                 if list {
@@ -2245,7 +2274,7 @@ pub(crate) fn browser_with_root_sequence(
                                         crate::widgets::elided_label(&mut label_ui, &it.name, label_rect.width());
                                     } else if let Some(paint) = paint_list_item.as_deref_mut() {
                                         asset_browser_item_info(&resp, &it.name, is_sel);
-                                        paint(ui, r, gi, ii, is_sel);
+                                        paint(ui, r, *item_group_index, *ii, is_sel);
                                         if !is_sel && resp.hovered() {
                                             ui.painter().rect_filled(r, 2.0, t.hover.gamma_multiply(0.5));
                                         }
@@ -2254,7 +2283,7 @@ pub(crate) fn browser_with_root_sequence(
                                         asset_browser_list_row(ui, &resp, r, &it.name, is_sel);
                                         let thumb_size = (cell.y - 2.0).max(0.0);
                                         let tr = Rect::from_min_size(r.min + vec2(1.0, 1.0), vec2(thumb_size, thumb_size));
-                                        paint_item(ui, tr, gi, ii, ItemPaintState::Item { selected: is_sel });
+                                        paint_item(ui, tr, *item_group_index, *ii, ItemPaintState::Item { selected: is_sel });
                                         ui.painter().text(
                                             pos2(tr.right() + 8.0, r.center().y),
                                             Align2::LEFT_CENTER,
@@ -2266,7 +2295,7 @@ pub(crate) fn browser_with_root_sequence(
                                     }
                                 } else {
                                     asset_browser_item_info(&resp, &it.name, is_sel);
-                                    paint_item(ui, r, gi, ii, ItemPaintState::Item { selected: is_sel });
+                                    paint_item(ui, r, *item_group_index, *ii, ItemPaintState::Item { selected: is_sel });
                                     ui.painter().rect_stroke(
                                         r,
                                         CornerRadius::ZERO,
@@ -2279,9 +2308,9 @@ pub(crate) fn browser_with_root_sequence(
                                 let hierarchy_accepts = resp.dnd_hover_payload::<AssetDrag>().is_some_and(|payload| match payload.as_ref() {
                                     AssetDrag::Group { scope, name, path } if scope == panel => {
                                         if path.is_empty() {
-                                            if domain_hierarchy_actions { !group_is_descendant(&parents, name, &g.name) && name != &g.name } else { true }
+                                            if domain_hierarchy_actions { !group_is_descendant(&parents, name, &item_group.name) && name != &item_group.name } else { true }
                                         } else {
-                                            domain_hierarchy_actions && !(name == &g.name && it.group_path.starts_with(path))
+                                            domain_hierarchy_actions && !(name == &item_group.name && it.group_path.starts_with(path))
                                         }
                                     }
                                     _ => false,
@@ -2295,22 +2324,22 @@ pub(crate) fn browser_with_root_sequence(
                                     non_root_hierarchy_target_hovered.set(true);
                                 }
                                 if capabilities.group_drag {
-                                    item_hierarchy_targets.push((resp.clone(), r, !list, hierarchy_accepts, ii, g.name.clone(), it.group_path.clone()));
+                                    item_hierarchy_targets.push((resp.clone(), r, !list, hierarchy_accepts, *ii, item_group.name.clone(), it.group_path.clone()));
                                 }
                                 if canonical_hierarchy_drag {
                                     if capabilities.item_drag
-                                        && let Some(source_id) = item_node_for_identity(&g.name, &it.group_path, &it.key, &hierarchy_identities) {
+                                        && let Some(source_id) = item_node_for_identity(&item_group.name, &it.group_path, &it.key, &hierarchy_identities) {
                                             let selected_nodes = selected_drag_nodes(&st_cell.borrow(), panel, &visible_selection_order, &source_id, &hierarchy);
                                             asset_browser_item_drag_source_with_id(&resp, panel, &it.key, source_id, &selected_nodes);
                                         }
-                                    if let Some(target_id) = item_node_for_identity(&g.name, &it.group_path, &it.key, &hierarchy_identities) {
+                                    if let Some(target_id) = item_node_for_identity(&item_group.name, &it.group_path, &it.key, &hierarchy_identities) {
                                         canonical_node_bounds.borrow_mut().insert(target_id.clone(), r);
                                         let hit_index = canonical_drop_hits.borrow().len();
                                         // The same hit widget backs both cards and list rows. In
                                         // list mode its leading/trailing halves are top/bottom;
                                         // card_drop_hits owns that orientation and the matching
                                         // horizontal insertion preview.
-                                        for hit in card_drop_hits(r, !list, target_id, depth + it.group_path.len() + 1, hit_index) {
+                                        for hit in card_drop_hits(r, !list, target_id, item_depth, hit_index) {
                                             canonical_drop_hits.borrow_mut().push((hit, resp.clone()));
                                         }
                                     }
@@ -2333,23 +2362,23 @@ pub(crate) fn browser_with_root_sequence(
                                     let pointer = ui.ctx().pointer_interact_pos();
                                     if canonical_hierarchy_drag
                                         && let Some(edge_rect) = right_edge {
-                                            let edge_response = ui.interact(edge_rect, ui.id().with((panel, gi, ii, "right")), Sense::hover());
-                                            if let Some(target_id) = item_node_for_identity(&g.name, &it.group_path, &it.key, &hierarchy_identities) {
+                                            let edge_response = ui.interact(edge_rect, ui.id().with((panel, item_group_index, ii, "right")), Sense::hover());
+                                            if let Some(target_id) = item_node_for_identity(&item_group.name, &it.group_path, &it.key, &hierarchy_identities) {
                                                 let hit_index = canonical_drop_hits.borrow().len();
-                                                let mut hit = card_drop_hit(r, Pos2::new(r.right(), r.center().y), true, target_id, depth + it.group_path.len() + 1, hit_index);
+                                                let mut hit = card_drop_hit(r, Pos2::new(r.right(), r.center().y), true, target_id, item_depth, hit_index);
                                                 hit.hit_rect = edge_rect;
                                                 canonical_drop_hits.borrow_mut().push((hit, edge_response));
                                             }
                                         }
                                     let edge_target = right_edge.filter(|rect| pointer.is_some_and(|pointer| rect.contains(pointer))).map(|rect| ("right", rect));
                                     if let Some((side, edge_rect)) = edge_target {
-                                        let edge_response = ui.interact(edge_rect, ui.id().with((panel, gi, ii, side)), Sense::hover());
+                                        let edge_response = ui.interact(edge_rect, ui.id().with((panel, item_group_index, ii, side)), Sense::hover());
                                         let edge_hierarchy_accepts = edge_response.dnd_hover_payload::<AssetDrag>().is_some_and(|payload| match payload.as_ref() {
                                             AssetDrag::Group { scope, name, path } if scope == panel => {
                                                 if path.is_empty() {
-                                                    if domain_hierarchy_actions { !group_is_descendant(&parents, name, &g.name) && name != &g.name } else { true }
+                                                    if domain_hierarchy_actions { !group_is_descendant(&parents, name, &item_group.name) && name != &item_group.name } else { true }
                                                 } else {
-                                                    domain_hierarchy_actions && !(name == &g.name && it.group_path.starts_with(path))
+                                                    domain_hierarchy_actions && !(name == &item_group.name && it.group_path.starts_with(path))
                                                 }
                                             }
                                             _ => false,
@@ -2358,7 +2387,7 @@ pub(crate) fn browser_with_root_sequence(
                                             matches!(payload.as_ref(), AssetDrag::Group { scope, .. } if scope == panel)
                                         });
                                         if capabilities.group_drag {
-                                            item_hierarchy_targets.push((edge_response.clone(), r, true, edge_hierarchy_accepts, ii, g.name.clone(), it.group_path.clone()));
+                                            item_hierarchy_targets.push((edge_response.clone(), r, true, edge_hierarchy_accepts, *ii, item_group.name.clone(), it.group_path.clone()));
                                         }
                                         if !edge_hierarchy_drag && !canonical_hierarchy_drag {
                                             released_drag = asset_browser_item_target(
@@ -2376,48 +2405,63 @@ pub(crate) fn browser_with_root_sequence(
                                         }
                                     }
                                 }
-                                if let Some(AssetDrag::Preset { scope, key, .. }) = released_drag
+                                if let Some(AssetDrag::Preset { scope, key, node_id, .. }) = released_drag
                                     && scope.as_str() == panel
                                     && key.as_str() != it.key.as_str()
                                 {
                                     browser_item_drop = true;
                                     let after = ui.ctx().pointer_interact_pos().is_some_and(|p| item_drop_after(r, p, !list));
-                                    let mut index = ii + usize::from(after);
+                                    let mut index = *ii + usize::from(after);
                                     if let Some((source_group, source_index)) = item_occurrence_position(groups, &key)
-                                        && source_group == gi
+                                        && source_group == *item_group_index
                                         && source_index < index
                                     {
                                         index = index.saturating_sub(1);
                                     }
-                                    if it.group_path.is_empty() {
+                                    if root_level_items {
+                                        let source_identity = node_id.as_ref().and_then(|id| hierarchy_identities.get(id)).cloned().or_else(|| {
+                                            item_occurrence_position(groups, &key).and_then(|(source_group_index, _)| {
+                                                groups.get(source_group_index).map(|source_group| HierarchyIdentity::Item { group: source_group.name.clone(), key: key.clone() })
+                                            })
+                                        });
+                                        if let Some(HierarchyIdentity::Item { group: source_group, key: source_key }) = source_identity {
+                                            let source_entry = HierarchyOrderEntry::RootItem { group: source_group.clone(), key: source_key.clone() };
+                                            let target_entry = HierarchyOrderEntry::RootItem { group: item_group.name.clone(), key: it.key.clone() };
+                                            let entries = hierarchy_orders.get("").cloned().unwrap_or_default();
+                                            let before = entries.iter().position(|entry| entry == &target_entry)
+                                                .and_then(|position| if after { entries.get(position + 1).cloned() } else { entries.get(position).cloned() });
+                                            st_cell.borrow_mut().move_hierarchy_entry(panel, "", entries, source_entry, before.as_ref());
+                                            select_dropped_item(&mut st_cell.borrow_mut(), panel, &source_group, &[], &key);
+                                        }
+                                    } else if it.group_path.is_empty() {
                                         if !domain_hierarchy_actions
                                             && let Some((source_group_index, _)) = item_occurrence_position(groups, &key)
                                             && let Some(source_group) = groups.get(source_group_index)
                                         {
-                                            let entries = hierarchy_orders.get(&g.name).cloned().unwrap_or_default();
+                                            let entries = hierarchy_orders.get(&item_group.name).cloned().unwrap_or_default();
                                             let target = HierarchyOrderEntry::Item(it.key.clone());
                                             let before = entries
                                                 .iter()
                                                 .position(|entry| entry == &target)
                                                 .and_then(|position| if after { entries.get(position + 1).cloned() } else { entries.get(position).cloned() });
-                                            move_item_sibling_order(&mut st_cell.borrow_mut(), panel, &hierarchy_orders, &source_group.name, &g.name, &key, before.as_ref());
+                                            move_item_sibling_order(&mut st_cell.borrow_mut(), panel, &hierarchy_orders, &source_group.name, &item_group.name, &key, before.as_ref());
                                         }
-                                        select_dropped_item(&mut st_cell.borrow_mut(), panel, &g.name, &[], &key);
-                                        ev_cell.borrow_mut().push(BrowserAction::MoveItem(key, g.name.clone(), Some(index)));
+                                        select_dropped_item(&mut st_cell.borrow_mut(), panel, &item_group.name, &[], &key);
+                                        ev_cell.borrow_mut().push(BrowserAction::MoveItem(key, item_group.name.clone(), Some(index)));
                                     } else {
                                         let before = if after {
-                                            g.items
+                                            item_group.items
                                                 .iter()
-                                                .skip(ii + 1)
+                                                .skip(*ii + 1)
                                                 .find(|candidate| candidate.group_path == it.group_path && candidate.key != key)
                                                 .map(|candidate| candidate.key.clone())
                                         } else {
                                             Some(it.key.clone())
                                         };
-                                        select_dropped_item(&mut st_cell.borrow_mut(), panel, &g.name, &it.group_path, &key);
+                                        select_dropped_item(&mut st_cell.borrow_mut(), panel, &item_group.name, &it.group_path, &key);
                                         ev_cell.borrow_mut().push(BrowserAction::MoveItemToGroup {
                                             key,
-                                            group: g.name.clone(),
+                                            group: item_group.name.clone(),
                                             group_path: it.group_path.clone(),
                                             before,
                                         });
@@ -2435,9 +2479,9 @@ pub(crate) fn browser_with_root_sequence(
                                     }
                                 }
                                 if activated {
-                                    ev_cell.borrow_mut().push(BrowserAction::ActivateItem { group: g.name.clone(), group_path: it.group_path.clone(), key: it.key.clone() });
+                                    ev_cell.borrow_mut().push(BrowserAction::ActivateItem { group: item_group.name.clone(), group_path: it.group_path.clone(), key: it.key.clone() });
                                 } else if selected {
-                                    ev_cell.borrow_mut().push(BrowserAction::SelectItem { group: g.name.clone(), group_path: it.group_path.clone(), key: it.key.clone() });
+                                    ev_cell.borrow_mut().push(BrowserAction::SelectItem { group: item_group.name.clone(), group_path: it.group_path.clone(), key: it.key.clone() });
                                 }
                                 if capabilities.item_drag && resp.dragged() {
                                     ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
@@ -2446,13 +2490,13 @@ pub(crate) fn browser_with_root_sequence(
                                     && let Some(ghost_rect) = browser_drag_ghost_rect(
                                         ui,
                                         panel,
-                                        BrowserDragGhostSource::Item { group: gi, item: ii },
+                                        BrowserDragGhostSource::Item { group: *item_group_index, item: *ii },
                                         resp.dragged(),
                                         r,
                                         browser_bounds,
                                     )
                                 {
-                                    item_drag_ghosts.push((ghost_rect, gi, ii, display_mode, is_sel));
+                                    item_drag_ghosts.push((ghost_rect, *item_group_index, *ii, display_mode, is_sel));
                                 }
                                 if capabilities.item_drag
                                     && resp.drag_stopped()
@@ -2469,7 +2513,7 @@ pub(crate) fn browser_with_root_sequence(
                                 }
                                 if let Some(menu) = item_context_menu {
                                     if compact_context_menus {
-                                        let args = ItemContextMenuArgs { panel, item: it, group: g, group_names: &group_names, selected_items: &selected_items };
+                                        let args = ItemContextMenuArgs { panel, item: it, group: item_group, group_names: &group_names, selected_items: &selected_items };
                                         compact_context_menu_target(ui, resp.clone(), |ui| {
                                             let start = ev_cell.borrow().len();
                                             let mut state = st_cell.borrow_mut();
@@ -2479,12 +2523,12 @@ pub(crate) fn browser_with_root_sequence(
                                                 start,
                                                 &state,
                                                 panel,
-                                                node_id.as_ref().unwrap_or(&NodeId::item(&g.name, &it.key)),
+                                                node_id.as_ref().unwrap_or(&NodeId::item(&item_group.name, &it.key)),
                                                 &BrowserDeleteContext { selection_order: &visible_selection_order, hierarchy: &hierarchy, identities: &hierarchy_identities },
                                             );
                                         });
                                     } else {
-                                        let args = ItemContextMenuArgs { panel, item: it, group: g, group_names: &group_names, selected_items: &selected_items };
+                                        let args = ItemContextMenuArgs { panel, item: it, group: item_group, group_names: &group_names, selected_items: &selected_items };
                                         context_menu_target(resp.clone(), |ui| {
                                             let start = ev_cell.borrow().len();
                                             let mut state = st_cell.borrow_mut();
@@ -2494,7 +2538,7 @@ pub(crate) fn browser_with_root_sequence(
                                                 start,
                                                 &state,
                                                 panel,
-                                                node_id.as_ref().unwrap_or(&NodeId::item(&g.name, &it.key)),
+                                                node_id.as_ref().unwrap_or(&NodeId::item(&item_group.name, &it.key)),
                                                 &BrowserDeleteContext { selection_order: &visible_selection_order, hierarchy: &hierarchy, identities: &hierarchy_identities },
                                             );
                                         });
@@ -3370,7 +3414,7 @@ mod filter_tests {
         assert_eq!(segments.len(), 1);
         assert!(segments[0].root_items);
         assert_eq!(segments[0].depth, 0);
-        assert_eq!(segments[0].item_indices, [0, 1]);
+        assert_eq!(segments[0].item_indices, [(0, 0), (0, 1)]);
     }
 
     #[test]
@@ -3405,6 +3449,38 @@ mod filter_tests {
                 ("First".into(), false, vec!["first-b".into()]),
             ]
         );
+    }
+
+    #[test]
+    fn consecutive_root_cards_from_different_backing_groups_share_one_segment() {
+        let groups = vec![
+            group("First", vec![item("first-a", "First A", &[]), item("first-after", "First after", &[])]),
+            group("Second", vec![item("second-a", "Second A", &[])]),
+            group("Middle", vec![]),
+        ];
+        let orders = std::collections::BTreeMap::from([(
+            "".into(),
+            vec![
+                HierarchyOrderEntry::RootItem { group: "First".into(), key: "first-a".into() },
+                HierarchyOrderEntry::RootItem { group: "Second".into(), key: "second-a".into() },
+                HierarchyOrderEntry::Group("Middle".into()),
+                HierarchyOrderEntry::RootItem { group: "First".into(), key: "first-after".into() },
+            ],
+        )]);
+
+        let segments = group_render_segments(&groups, &[(0, 0), (1, 0), (2, 0)], &Default::default(), &orders);
+
+        assert_eq!(segments.len(), 5, "each root card bunch must remain a single segment, with the intervening backing groups preserved");
+        assert!(segments[0].root_items);
+        assert_eq!(segments[0].item_indices, [(0, 0), (1, 0)]);
+        assert!(segments[1].show_header);
+        assert_eq!(segments[1].group_index, 2);
+        assert!(segments[2].root_items);
+        assert_eq!(segments[2].item_indices, [(0, 1)]);
+        assert!(segments[3].show_header);
+        assert_eq!(segments[3].group_index, 0);
+        assert!(segments[4].show_header);
+        assert_eq!(segments[4].group_index, 1);
     }
 
     #[test]
@@ -3489,7 +3565,12 @@ mod filter_tests {
             .iter()
             .map(|segment| {
                 let group = &groups[segment.group_index];
-                let items = segment.item_indices.iter().filter_map(|index| group.items.get(*index)).map(|item| item.key.clone()).collect();
+                let items = segment
+                    .item_indices
+                    .iter()
+                    .filter_map(|(group_index, item_index)| groups.get(*group_index)?.items.get(*item_index))
+                    .map(|item| item.key.clone())
+                    .collect();
                 (group.name.clone(), segment.show_header, items)
             })
             .collect()

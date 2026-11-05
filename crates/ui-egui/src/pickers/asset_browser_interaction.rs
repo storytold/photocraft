@@ -175,12 +175,13 @@ pub(crate) fn group_gap_drop_hits(spec: GroupGapDropSpec) -> Vec<DropHitRegion> 
     let GroupGapDropSpec { rect, upper, lower, upper_bounds, lower_bounds, upper_depth, lower_depth, order } = spec;
     debug_assert!(rect.height() >= 2.0);
     let middle = rect.center().y;
-    // The six-pixel gap is the hit area, not the marker thickness. Keep both four-pixel
-    // previews vertically centered in that area; only their horizontal extents follow the
-    // corresponding adjacent element and therefore the destination hierarchy level.
+    // The six-pixel gap is the hit area, not the marker thickness. The upper half means
+    // inserting after the preceding sibling, so its marker belongs on the lower header's top
+    // boundary (the bottom of the gap), not at the gap center. The lower half remains centered
+    // in the gap as its before-target affordance.
     let marker_top = middle - 2.0;
     let marker_bottom = middle + 2.0;
-    let upper_line = Rect::from_min_max(Pos2::new(upper_bounds.left(), marker_top), Pos2::new(upper_bounds.right(), marker_bottom));
+    let upper_line = Rect::from_min_max(Pos2::new(upper_bounds.left(), marker_top + 3.0), Pos2::new(upper_bounds.right(), marker_bottom + 3.0));
     let lower_line = Rect::from_min_max(Pos2::new(lower_bounds.left(), marker_top), Pos2::new(lower_bounds.right(), marker_bottom));
     vec![
         DropHitRegion {
@@ -442,7 +443,7 @@ mod insertion_marker_tests {
         assert_eq!(split[1].region, PointerRegion::LeadingEdge);
         assert_eq!(split[1].target, Some(NodeId::from("lower")));
         assert_eq!(split[1].hit_rect.height(), 3.0);
-        assert_eq!(split[0].indicator_rect, Rect::from_min_max(Pos2::new(31.0, 101.0), Pos2::new(131.0, 105.0)));
+        assert_eq!(split[0].indicator_rect, Rect::from_min_max(Pos2::new(31.0, 104.0), Pos2::new(131.0, 108.0)));
         assert_eq!(split[1].indicator_rect, Rect::from_min_max(Pos2::new(31.0, 101.0), Pos2::new(231.0, 105.0)));
         assert_eq!(split[0].indicator_rect.height(), 4.0);
         assert_eq!(split[1].indicator_rect.height(), 4.0);
@@ -505,7 +506,7 @@ mod insertion_marker_tests {
                     assert_eq!(hits[1].hit_rect, Rect::from_min_max(Pos2::new(left, top + 3.0), gap.max));
                     assert_eq!(hits[0].hit_rect.height(), 3.0);
                     assert_eq!(hits[1].hit_rect.height(), 3.0);
-                    assert_eq!(hits[0].indicator_rect, Rect::from_min_max(Pos2::new(left + 3.0, top + 1.0), Pos2::new(left + 3.0 + width * 0.4, top + 5.0)));
+                    assert_eq!(hits[0].indicator_rect, Rect::from_min_max(Pos2::new(left + 3.0, top + 4.0), Pos2::new(left + 3.0 + width * 0.4, top + 8.0)));
                     assert_eq!(hits[1].indicator_rect, Rect::from_min_max(Pos2::new(left + 3.0, top + 1.0), Pos2::new(left + 3.0 + width * 0.8, top + 5.0)));
                     assert_eq!(hits[0].indicator_rect.height(), 4.0);
                     assert_eq!(hits[1].indicator_rect.height(), 4.0);

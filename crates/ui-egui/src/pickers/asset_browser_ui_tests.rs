@@ -313,6 +313,22 @@ fn with_root_item_between_groups(group: &str, key: &str) -> PresetUi {
     state
 }
 
+fn with_consecutive_root_cards_from_different_groups() -> PresetUi {
+    let mut state = PresetUi::default();
+    state.set_hierarchy_order(
+        PANEL,
+        "",
+        vec![
+            HierarchyOrderEntry::RootItem { group: "A".into(), key: "a1".into() },
+            HierarchyOrderEntry::RootItem { group: "B".into(), key: "b1".into() },
+            HierarchyOrderEntry::Group("A".into()),
+            HierarchyOrderEntry::Group("B".into()),
+            HierarchyOrderEntry::Group("C".into()),
+        ],
+    );
+    state
+}
+
 fn pointer_drag<S>(h: &mut Harness<'static, S>, source: Pos2, target: Pos2) {
     h.event(Event::PointerMoved(source));
     h.run_steps(1);
@@ -1018,6 +1034,84 @@ fn actual_root_card_selection_keeps_its_source_group_identity() {
 }
 
 #[test]
+fn root_cards_from_different_backing_groups_share_one_grid_and_keep_owner_identity() {
+    let groups = nested_group_tree();
+    let mut h = Harness::builder().with_size(vec2(520.0, 900.0)).build_ui_state(
+        move |ui, state: &mut (PresetUi, Vec<BrowserAction>, Vec<(usize, usize)>)| {
+            if !ui.ctx().fonts(|fonts| fonts.definitions().families.contains_key(&egui::FontFamily::Name("semibold".into()))) {
+                return;
+            }
+            let (preset_ui, actions, painted) = state;
+            let mut paint_item = |_: &egui::Ui, _: Rect, group: usize, item: usize, _: ItemPaintState| painted.push((group, item));
+            let mut adapter = BrowserAdapter {
+                panel: PANEL,
+                groups: &groups,
+                options: super::BrowserOptions {
+                    canvas: Rect::NOTHING,
+                    flush: false,
+                    center_grid: false,
+                    all_groups_open: true,
+                    compact_context_menus: false,
+                    domain_hierarchy_actions: false,
+                    root_item_group: None,
+                },
+                capabilities: super::BrowserCapabilities {
+                    item_drag: true,
+                    item_drop: true,
+                    group_drag: true,
+                    selection: true,
+                    activation: true,
+                    canonical_hierarchy_drag: true,
+                },
+                item_context_menu: None,
+                group_context_menu: None,
+                nested_group_context_menu: None,
+                canonical_hierarchy_move: None,
+                hierarchy_item_move: None,
+                paint_group: None,
+                paint_item: &mut paint_item,
+                paint_list_item: None,
+            };
+            actions.extend(browser(ui, preset_ui, &mut adapter, 900.0));
+        },
+        (with_consecutive_root_cards_from_different_groups(), Vec::new(), Vec::new()),
+    );
+    crate::PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
+    h.run_steps(3);
+
+    let first = h.get_by_label("A card 1").rect();
+    let second = h.get_by_label("B card 1").rect();
+    assert_eq!(first.top(), second.top(), "adjacent root cards must occupy the same grid row");
+    assert!(second.left() >= first.right(), "the second backing group's card must share the horizontal bunch: {first:?}, {second:?}");
+    assert!(h.state().2.contains(&(0, 0)), "the first card must paint through its owning group and item index");
+    assert!(h.state().2.contains(&(1, 0)), "the second card must paint through its owning group and item index");
+
+    let point = second.center();
+    h.event(Event::PointerMoved(point));
+    h.event(Event::PointerButton { pos: point, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    h.event(Event::PointerButton { pos: point, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+    assert!(h.state().0.browser_node_selected(PANEL, &NodeId::item("B", "b1")));
+    assert!(matches!(h.state().1.last(), Some(BrowserAction::SelectItem { group, key, .. }) if group == "B" && key == "b1"));
+}
+
+#[test]
+fn root_cards_from_different_backing_groups_remain_rows_in_list_mode() {
+    use crate::pickers::picker_state::PickerDisplayMode as Mode;
+
+    let mut state = with_consecutive_root_cards_from_different_groups();
+    state.display_modes.insert(PANEL.to_owned(), Mode::SmallList);
+    state.wrap_list.insert(PANEL.to_owned(), false);
+    let h = harness_with_state_layout(nested_group_tree(), vec2(520.0, 900.0), state, true);
+    let first = h.get_by_label("A card 1").rect();
+    let second = h.get_by_label("B card 1").rect();
+
+    assert_eq!(first.left(), second.left());
+    assert!(second.top() > first.top(), "list mode keeps one card per row: {first:?}, {second:?}");
+}
+
+#[test]
 fn actual_root_cards_reorder_each_other_without_losing_owner_identity() {
     for (source_label, target_label, after) in [("B card 1", "A card 1", false), ("A card 1", "B card 1", true)] {
         let mut initial = PresetUi::default();
@@ -1034,6 +1128,9 @@ fn actual_root_cards_reorder_each_other_without_losing_owner_identity() {
         let mut h = harness_with_state(nested_group_tree(), vec2(520.0, 900.0), initial);
         let source = h.get_by_label(source_label).rect().center();
         let target_rect = h.get_by_label(target_label).rect();
+        let source_rect = h.get_by_label(source_label).rect();
+        assert_eq!(source_rect.top(), target_rect.top(), "cross-owner root cards must be one horizontal grid before drag");
+        assert!(source_rect.left() != target_rect.left(), "the two cards must have distinct columns");
         let target = if after { pos2(target_rect.right() - 2.0, target_rect.center().y) } else { pos2(target_rect.left() + 2.0, target_rect.center().y) };
 
         pointer_drag(&mut h, source, target);

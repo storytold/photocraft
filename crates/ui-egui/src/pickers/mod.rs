@@ -13,6 +13,7 @@ pub(crate) mod picker_browser_data;
 pub(crate) mod picker_browser_dragging;
 pub(crate) mod picker_browser_hierarchy;
 pub(crate) mod picker_browser_model;
+pub(crate) mod picker_model;
 pub(crate) mod picker_footer;
 pub(crate) mod picker_shell;
 pub(crate) mod picker_state;
