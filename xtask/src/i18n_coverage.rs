@@ -71,7 +71,8 @@ fn check_documented_languages(languages: &[Language], doc: &str) -> Result<(), S
     let mut documented = BTreeSet::new();
     for line in table.lines().filter(|line| line.starts_with('|')) {
         let cell = line.split('|').nth(2).map_or("", str::trim);
-        let separator = !cell.is_empty() && cell.chars().all(|c| matches!(c, '-' | ':'));
+        let mut cells = line.split('|').map(str::trim).filter(|cell| !cell.is_empty()).peekable();
+        let separator = cells.peek().is_some() && cells.all(|cell| cell.chars().all(|c| matches!(c, '-' | ':')));
         if cell == "Preference code" || separator {
             continue;
         }
@@ -631,6 +632,17 @@ mod tests {
             assert_eq!(
                 check_documented_languages(&documentation_languages(), &doc),
                 Err(format!("docs/localization.md's Supported languages table has a row with no preference code: {row}"))
+            );
+        }
+    }
+
+    #[test]
+    fn documented_languages_report_a_dash_code_as_unregistered() {
+        for code in ["-", ":", "---"] {
+            let doc = LANGUAGE_DOC.replace("## Catalogs", &format!("| Klingon | {code} | one form |\n\n## Catalogs"));
+            assert_eq!(
+                check_documented_languages(&documentation_languages(), &doc),
+                Err(format!("docs/localization.md's Supported languages table is out of date:\n  listed but not registered: {code}"))
             );
         }
     }
