@@ -49,6 +49,7 @@ struct Step {
     params: Value,
 }
 
+/// Fallback serde default producing an empty JSON object.
 fn empty_object() -> Value {
     json!({})
 }
@@ -64,6 +65,7 @@ enum Check {
     Equals { path: String, value: Value },
 }
 
+/// Reject nonregular files and files whose metadata exceeds the caller’s byte limit.
 fn read_limited_to(path: &Path, max: u64) -> Result<Vec<u8>, String> {
     let meta = fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
     if !meta.is_file() || meta.len() > max {
@@ -72,14 +74,17 @@ fn read_limited_to(path: &Path, max: u64) -> Result<Vec<u8>, String> {
     fs::read(path).map_err(|e| format!("{}: {e}", path.display()))
 }
 
+/// Read one recipe artifact within the runner’s file-size limit.
 fn read_limited(path: &Path) -> Result<Vec<u8>, String> {
     read_limited_to(path, MAX_FILE)
 }
 
+/// Accept a case identifier that can safely name one output subdirectory.
 fn valid_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 100 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
+/// Reject unsupported recipes, unsafe paths, duplicate IDs, and incomplete checks.
 fn validate(recipes: &Recipes) -> Result<(), String> {
     if recipes.version != 1 || recipes.corpus_revision.is_empty() || recipes.cases.is_empty() || recipes.cases.len() > MAX_RECIPES {
         return Err("expected version 1, a corpus revision and 1..=1000 cases".into());
@@ -123,6 +128,7 @@ fn validate(recipes: &Recipes) -> Result<(), String> {
     Ok(())
 }
 
+/// Resolve a corpus input and reject paths escaping the canonical corpus root.
 fn input_path(root: &Path, relative: &str) -> Result<PathBuf, String> {
     let p = root.join(relative).canonicalize().map_err(|e| format!("{relative}: {e}"))?;
     if !p.starts_with(root) {
@@ -131,6 +137,7 @@ fn input_path(root: &Path, relative: &str) -> Result<PathBuf, String> {
     Ok(p)
 }
 
+/// Find exactly one layer matching the recipe’s kind and optional name.
 fn target<'a>(doc: &'a Value, wanted: &Target) -> Result<&'a Value, String> {
     let mut stack = vec![(doc.get("layers").and_then(Value::as_array).ok_or("missing layers")?, 0usize)];
     let mut found = Vec::new();
@@ -210,12 +217,14 @@ fn invoke(cli: &Path, args: &[String], dir: &Path, tag: &str) -> Result<(String,
     Ok((out, err))
 }
 
+/// Request detailed CLI inspection and parse the returned document JSON.
 fn inspect(cli: &Path, file: &Path, dir: &Path, tag: &str) -> Result<Value, String> {
     let path = file.to_str().ok_or("non-UTF-8 path")?;
     let (out, _) = invoke(cli, &["info".into(), path.into(), "--compact".into(), "--detail".into()], dir, tag)?;
     serde_json::from_str(&out).map_err(|e| format!("invalid CLI inspection: {e}"))
 }
 
+/// Export and check one case, retaining candidate provenance after export succeeds.
 fn execute(case: &Recipe, corpus: &Path, cli: &Path, output: &Path) -> Result<Value, String> {
     let input = input_path(corpus, &case.base)?;
     let input_bytes = read_limited(&input)?;
@@ -246,6 +255,7 @@ fn execute(case: &Recipe, corpus: &Path, cli: &Path, output: &Path) -> Result<Va
         "photoshop": {"opens": "not_run", "meaning": "not_run", "rendering": "not_run"}}))
 }
 
+/// Create a report artifact without overwriting an existing file.
 fn write_json(path: &Path, value: &Value) -> Result<(), String> {
     use std::io::Write;
     let mut f = OpenOptions::new().write(true).create_new(true).open(path).map_err(|e| e.to_string())?;
@@ -262,6 +272,7 @@ fn git(root: &Path, args: &[&str]) -> Option<String> {
     String::from_utf8(out.stdout).ok().map(|s| s.trim().to_string())
 }
 
+/// Execute a batch of recipes against an oracle corpus and write a verification report.
 pub fn run(root: &Path, args: &[&str]) -> Result<(), String> {
     let [recipe_path, corpus, cli, output] = args else {
         return Err("usage: cargo xtask psd-write-oracle <recipes.json> <corpus-dir> <photocraft-cli> <new-output-dir>".into());
@@ -386,8 +397,8 @@ mod tests {
     #[test]
     fn export_batch_checks_reopened_result_and_propagates_command_failure() {
         use std::os::unix::fs::PermissionsExt;
-        let root = std::env::temp_dir().join(format!("psd-write-oracle-{}-{:?}", std::process::id(), std::thread::current().id()));
-        fs::create_dir(&root).unwrap();
+        let tmp = tempfile::Builder::new().prefix("psd-write-oracle-").tempdir().unwrap();
+        let root = tmp.path().to_path_buf();
         let corpus = root.join("corpus");
         let output = root.join("output");
         fs::create_dir(&corpus).unwrap();
@@ -431,6 +442,5 @@ exit 1
         assert_eq!(good["status"], "pass");
         assert_eq!(good["photoshop"]["opens"], "not_run");
         assert!(execute(&make_case("bad", "type.bad"), &corpus, &cli, &output).unwrap_err().contains("bad command"));
-        fs::remove_dir_all(root).unwrap();
     }
 }
