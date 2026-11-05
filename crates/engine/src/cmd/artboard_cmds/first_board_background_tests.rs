@@ -20,6 +20,8 @@ fn session(depth: u32) -> Session {
     s
 }
 
+const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
+
 fn doc(s: &Session) -> &Document {
     &s.active().unwrap().doc
 }
@@ -52,6 +54,11 @@ fn the_first_board_takes_the_background_in_as_layer_0() {
         assert_eq!(names(kids), ["Layer 0"], "{depth} bit");
         let l0 = kids.first().unwrap();
         assert!(!l0.locks.transparency && !l0.locks.position, "{depth} bit");
+        // The Background's own pixels travel with it: white at both samples, and Red still red.
+        assert_eq!(l0.surface().unwrap().rgba(150, 150), WHITE, "{depth} bit");
+        assert_eq!(l0.surface().unwrap().rgba(700, 500), WHITE, "{depth} bit");
+        let red = d.layers.first().unwrap();
+        assert_eq!(red.surface().unwrap().rgba(150, 150), [1.0, 0.0, 0.0, 1.0], "{depth} bit");
         assert_eq!((d.size.width, d.size.height), (800, 600), "{depth} bit");
         assert_eq!(s.active().unwrap().active_layer, Some(board));
         let after = steps(&s);
@@ -63,6 +70,8 @@ fn the_first_board_takes_the_background_in_as_layer_0() {
         assert_eq!(names(&d.layers), ["Background", "Red"], "{depth} bit");
         let bg = d.background().unwrap();
         assert!(bg.locks.transparency && bg.locks.position, "{depth} bit");
+        assert_eq!(bg.surface().unwrap().rgba(150, 150), WHITE, "{depth} bit");
+        assert_eq!(bg.surface().unwrap().rgba(700, 500), WHITE, "{depth} bit");
         assert!(d.artboards().is_empty());
         assert_eq!((d.size.width, d.size.height), (800, 600));
     }
