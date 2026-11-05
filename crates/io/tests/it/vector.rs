@@ -135,6 +135,42 @@ fn shape_layer_typed_roundtrip() {
     }
 }
 
+/// #1281: a shape whose fill lives in `vscg`, as in every shape Photoshop writes, saves that
+/// fill in `vscg` alone (also after the fill is edited), never with an added `SoCo`/`GdFl`/`PtFl`
+/// next to it.
+#[test]
+fn vscg_shape_fill_is_not_doubled_by_a_fill_block() {
+    let fill_keys = |bytes: &[u8]| -> Vec<[u8; 4]> {
+        let f = photocraft_psd::PsdFile::from_bytes(bytes).unwrap();
+        let l = f.layers().iter().find(|l| l.name() == "Shape").expect("shape record");
+        l.blocks.iter().map(|b| b.key).filter(|k| matches!(k, b"vscg" | b"SoCo" | b"GdFl" | b"PtFl")).collect()
+    };
+    let red = Fill::Solid(Color::rgb(1.0, 0.0, 0.0));
+    let sh = ShapeLayer { path: path(), fill: Some(red.clone()), ..Default::default() };
+    let mut layer = shape_layer(sh);
+    layer.psd_blocks.push((*b"vscg", std::sync::Arc::new(photocraft_io::vector_map::vscg_bytes(&red))));
+    let mut d = doc();
+    d.layers.push(layer);
+    for psb in [false, true] {
+        let name = if psb { "x.psb" } else { "x.psd" };
+        let out = export(&d, name, &ExportOptions { force_psb: psb, ..Default::default() }).unwrap();
+        assert_eq!(out.bytes.get(4..6), Some(&[0, u8::from(psb) + 1][..]), "{name}: version");
+        assert_eq!(fill_keys(&out.bytes), vec![*b"vscg"], "{name}: unedited");
+        let back = import(name, &out.bytes).unwrap().document;
+        let LayerContent::Shape(s) = &back.layers[1].content else { panic!("not a shape") };
+        assert_eq!(s.fill, Some(red.clone()), "{name}");
+    }
+    // An edited fill is rewritten in `vscg`, still without a second fill block.
+    let blue = Fill::Solid(Color::rgb(0.0, 0.0, 1.0));
+    let LayerContent::Shape(s) = &mut d.layers[1].content else { panic!("not a shape") };
+    s.fill = Some(blue.clone());
+    let out = export(&d, "x.psd", &ExportOptions::default()).unwrap();
+    assert_eq!(fill_keys(&out.bytes), vec![*b"vscg"], "edited");
+    let back = import("x.psd", &out.bytes).unwrap().document;
+    let LayerContent::Shape(s) = &back.layers[1].content else { panic!("not a shape") };
+    assert_eq!(s.fill, Some(blue));
+}
+
 /// #6180: Appearance fill and stroke alphas survive PSD save/load, and a redraw
 /// (move/crop) uses those values instead of snapping to opaque.
 #[test]
