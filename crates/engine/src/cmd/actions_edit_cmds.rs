@@ -294,14 +294,19 @@ fn clear_all(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(cmd, "clearing all actions requires `confirm`: true"));
     }
     let count = s.actions.list.len();
+    if count == 0 && s.actions.sets.is_empty() {
+        return Ok(json!({"cleared":0}));
+    }
+    let removed_keys: std::collections::HashSet<_> =
+        s.actions.list.iter().map(|action| format!("{}{}", crate::actions_cmds::PLAY_SHORTCUT_PREFIX, action.name)).collect();
     let mut proposed = crate::actions_cmds::library::definition_copy(&s.actions);
     proposed.list.clear();
     let names = proposed.sets.iter().cloned().collect();
     crate::atn_cmds::sidecar::retire_sets(&mut proposed, &names);
     let mut shortcuts = s.prefs().shortcuts.clone();
     let mut alternate = s.prefs().alternate_shortcuts.clone();
-    shortcuts.retain(|key, _| !key.starts_with(crate::actions_cmds::PLAY_SHORTCUT_PREFIX));
-    alternate.retain(|key, _| !key.starts_with(crate::actions_cmds::PLAY_SHORTCUT_PREFIX));
+    shortcuts.retain(|key, _| !removed_keys.contains(key));
+    alternate.retain(|key, _| !removed_keys.contains(key));
     crate::actions_cmds::library::check_definition(&proposed, &shortcuts).map_err(|error| bad(cmd, error))?;
     s.actions.list = proposed.list;
     s.actions.sets = proposed.sets;

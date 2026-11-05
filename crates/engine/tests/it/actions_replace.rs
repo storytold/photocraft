@@ -25,6 +25,7 @@ fn session() -> Session {
     s.prefs.edit(|p| {
         for (id, key) in [("actions.play:OldA", "F5"), ("actions.play:OldB", "F6"), ("actions.play:Unloaded", "F9"), ("view.zoomIn", "Cmd+0")] {
             p.shortcuts.insert(id.into(), key.into());
+            p.alternate_shortcuts.insert(id.into(), vec![format!("Shift+{key}")]);
         }
     });
     s
@@ -44,7 +45,7 @@ fn replace_preserves_imported_flags_references_and_keys_without_inheriting_old_b
     let result = s.execute("actions.replace", json!({"data": data, "confirm": true})).unwrap();
     assert_eq!(result["actions"], json!(["Caller", "NewChild", "OldA"]));
     assert_eq!(s.actions.list.len(), 3);
-    assert!(s.actions.sets.is_empty(), "old empty folders are replaced too");
+    assert_eq!(s.actions.sets, ["Incoming"], "only incoming physical folders remain; old empty folders are replaced too");
     assert!(s.actions.list.iter().all(|a| a.set.as_deref() == Some("Incoming")));
     assert_eq!(s.actions.list[0].disabled.iter().copied().collect::<Vec<_>>(), [1]);
     assert_eq!(s.actions.list[0].dialogs.iter().copied().collect::<Vec<_>>(), [0]);
@@ -53,6 +54,10 @@ fn replace_preserves_imported_flags_references_and_keys_without_inheriting_old_b
     assert_eq!(s.prefs().shortcuts["actions.play:NewChild"], "F8");
     assert_eq!(s.prefs().shortcuts["actions.play:Unloaded"], "F9");
     assert_eq!(s.prefs().shortcuts["view.zoomIn"], "Cmd+0");
+    assert!(!s.prefs().alternate_shortcuts.contains_key("actions.play:OldA"));
+    assert!(!s.prefs().alternate_shortcuts.contains_key("actions.play:OldB"));
+    assert_eq!(s.prefs().alternate_shortcuts["actions.play:Unloaded"], ["Shift+F9"]);
+    assert_eq!(s.prefs().alternate_shortcuts["view.zoomIn"], ["Shift+Cmd+0"]);
     assert_eq!(s.active().unwrap().revision, revision);
     assert_eq!(s.active().unwrap().history.entries(), history);
     assert_eq!(s.journal, journal);
@@ -65,6 +70,8 @@ fn replace_preserves_imported_flags_references_and_keys_without_inheriting_old_b
     assert!(s.actions.list.is_empty());
     assert_eq!(s.actions.sets, ["Empty"]);
     assert!(!s.prefs().shortcuts.contains_key("actions.play:NewChild"));
+    assert_eq!(s.prefs().shortcuts["actions.play:Unloaded"], "F9");
+    assert_eq!(s.prefs().alternate_shortcuts["actions.play:Unloaded"], ["Shift+F9"]);
 }
 
 /// Rejected input, absent consent and active recording/playback never clear or flush definitions.
@@ -75,6 +82,7 @@ fn invalid_or_unconfirmed_replacement_preserves_the_library_and_preferences() {
     let list = s.actions.list.clone();
     let sets = s.actions.sets.clone();
     let shortcuts = s.prefs().shortcuts.clone();
+    let alternate = s.prefs().alternate_shortcuts.clone();
     let revision = s.active().unwrap().revision;
     let rev = s.actions.rev;
     for params in [
@@ -92,6 +100,7 @@ fn invalid_or_unconfirmed_replacement_preserves_the_library_and_preferences() {
         assert_eq!(s.actions.list, list);
         assert_eq!(s.actions.sets, sets);
         assert_eq!(s.prefs().shortcuts, shortcuts);
+        assert_eq!(s.prefs().alternate_shortcuts, alternate);
         assert_eq!(s.actions.rev, rev);
         assert_eq!(s.active().unwrap().revision, revision);
     }
@@ -108,4 +117,5 @@ fn invalid_or_unconfirmed_replacement_preserves_the_library_and_preferences() {
     assert!(result["failed"].is_object(), "{result}");
     assert_eq!(s.actions.list, list);
     assert_eq!(s.prefs().shortcuts, shortcuts);
+    assert_eq!(s.prefs().alternate_shortcuts, alternate);
 }

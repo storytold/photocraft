@@ -143,8 +143,10 @@ fn import_actions(s: &mut Session, p: &Value, whole: bool) -> Result<Value> {
     let mut shortcuts = s.prefs().shortcuts.clone();
     let mut alternate = s.prefs().alternate_shortcuts.clone();
     if whole {
-        shortcuts.retain(|key, _| !key.starts_with(crate::actions_cmds::PLAY_SHORTCUT_PREFIX));
-        alternate.retain(|key, _| !key.starts_with(crate::actions_cmds::PLAY_SHORTCUT_PREFIX));
+        let removed_keys: std::collections::HashSet<_> =
+            s.actions.list.iter().map(|action| format!("{}{}", crate::actions_cmds::PLAY_SHORTCUT_PREFIX, action.name)).collect();
+        shortcuts.retain(|key, _| !removed_keys.contains(key));
+        alternate.retain(|key, _| !removed_keys.contains(key));
     }
     for (name, key) in &keys {
         shortcuts.retain(|id, value| !(id.starts_with(crate::actions_cmds::PLAY_SHORTCUT_PREFIX) && value == key));

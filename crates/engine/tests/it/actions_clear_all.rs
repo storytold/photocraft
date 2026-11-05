@@ -15,18 +15,21 @@ fn confirmed_clear_is_atomic_for_definitions_shortcuts_and_recording() {
     s.prefs.edit(|p| {
         for (id, key) in [("actions.play:A", "F5"), ("actions.play:B", "F6"), ("actions.play:Unloaded", "F7"), ("view.zoomIn", "Cmd+0")] {
             p.shortcuts.insert(id.into(), key.into());
+            p.alternate_shortcuts.insert(id.into(), vec![format!("Shift+{key}")]);
         }
     });
     let definitions = s.actions.list.clone();
     s.execute("actions.newSet", json!({"name": "Empty"})).unwrap();
     let sets = s.actions.sets.clone();
     let shortcuts = s.prefs().shortcuts.clone();
+    let alternate = s.prefs().alternate_shortcuts.clone();
     let rev = s.actions.rev;
     for params in [json!({}), json!({"confirm": false}), json!({"confirm": null}), json!({"confirm": "yes"})] {
         assert!(s.execute("actions.clearAll", params.clone()).is_err(), "{params}");
         assert_eq!(s.actions.list, definitions);
         assert_eq!(s.actions.sets, sets);
         assert_eq!(s.prefs().shortcuts, shortcuts);
+        assert_eq!(s.prefs().alternate_shortcuts, alternate);
         assert_eq!(s.actions.rev, rev);
     }
     s.execute("actions.record", json!({"action": "A"})).unwrap();
@@ -51,12 +54,17 @@ fn confirmed_clear_is_atomic_for_definitions_shortcuts_and_recording() {
     assert!(!s.prefs().shortcuts.contains_key("actions.play:B"));
     assert_eq!(s.prefs().shortcuts.get("actions.play:Unloaded"), shortcuts.get("actions.play:Unloaded"));
     assert_eq!(s.prefs().shortcuts.get("view.zoomIn"), shortcuts.get("view.zoomIn"));
+    assert!(!s.prefs().alternate_shortcuts.contains_key("actions.play:A"));
+    assert!(!s.prefs().alternate_shortcuts.contains_key("actions.play:B"));
+    assert_eq!(s.prefs().alternate_shortcuts.get("actions.play:Unloaded"), alternate.get("actions.play:Unloaded"));
+    assert_eq!(s.prefs().alternate_shortcuts.get("view.zoomIn"), alternate.get("view.zoomIn"));
     assert_eq!(s.active().unwrap().revision, revision);
     assert_eq!(s.active().unwrap().history.entries(), history);
     assert_eq!(s.journal, journal);
     let rev = s.actions.rev;
     assert_eq!(s.execute("actions.clearAll", json!({"confirm": true})).unwrap()["cleared"], 0);
     assert_eq!(s.actions.rev, rev);
+    assert_eq!(s.prefs().alternate_shortcuts.get("actions.play:Unloaded"), alternate.get("actions.play:Unloaded"));
     s.execute("actions.newSet", json!({"name": "Only Empty"})).unwrap();
     let rev = s.actions.rev;
     s.execute("actions.clearAll", json!({"confirm": true})).unwrap();
