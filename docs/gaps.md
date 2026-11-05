@@ -413,8 +413,9 @@ what an agent can't finish alone.
 ## Localization gaps
 
 ### G13. Hindi, Arabic, Vietnamese, RTL and engine messages
-- **Missing:** catalogs for Hindi, Arabic and Vietnamese (3 of the 12 key languages); right-to-
-  left UI layout; Devanagari fallback fonts (Thai #1909 and Khmer, Lao and Myanmar #3259 landed); engine error and status messages in
+- **Missing:** native-speaker review of the Hindi, Arabic and Vietnamese catalogs (measured
+  2026-11-05: hi 2,272, ar 2,202, vi 2,200 of 2,272 keys); right-to-
+  left UI layout; a Devanagari font for the web build (desktop uses the installed one); engine error and status messages in
   English in every language; browser-locale detection and CJK fonts on the web; Japanese IME on
   Windows (#590); installed Japanese fonts missing from the font list (#2330); Arabic layer names
   as tofu (#1408, #1693).
