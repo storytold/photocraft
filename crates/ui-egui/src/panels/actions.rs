@@ -33,7 +33,7 @@ pub struct ActionsUi {
     #[serde(skip)]
     pub selected_set: Option<String>,
     #[serde(skip)]
-    reveal_recording: Option<(usize, usize)>,
+    reveal_recording: Option<(u64, usize, usize)>,
     /// The action whose name is being edited in place (double-click on its name).
     #[serde(skip)]
     renaming: Option<RenameAction>,
@@ -420,10 +420,6 @@ fn begin_recording(app: &mut PhotocraftApp, append: bool) {
         app.ui.actions.expanded.resize(i + 1, false);
     }
     app.ui.actions.expanded[i] = true;
-    // Its set too, in case its folder is collapsed.
-    if let Some(set) = app.session.actions.list.get(i).and_then(|a| a.set.as_ref()) {
-        app.ui.actions.collapsed_sets.retain(|c| c != set);
-    }
 }
 
 pub(crate) fn report_play(app: &mut PhotocraftApp, v: &Value) {
@@ -808,7 +804,7 @@ fn restore_recording(app: &mut PhotocraftApp, owner: Option<&Value>) {
 }
 
 /// Whether a paused playback holds a suspended recording.
-fn suspended(app: &PhotocraftApp) -> bool {
+pub(crate) fn suspended(app: &PhotocraftApp) -> bool {
     app.paused_playbacks.paused.values().any(|p| p.record.is_some())
 }
 
@@ -1437,6 +1433,7 @@ fn action_context_menu(app: &mut PhotocraftApp, response: &egui::Response, index
     });
 }
 
+/// Draws the Actions panel and remembers set-folder disclosure changes.
 pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let recording = app.session.actions.recording;
@@ -1479,8 +1476,17 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let mut play_idx: Option<Vec<usize>> = None;
     let mut moved = None;
     let recording_row = recording.and_then(|(_, i)| rows.get(i).map(|r| (i, r.steps.len())));
-    let reveal = recording_row.filter(|row| app.ui.actions.reveal_recording != Some(*row));
-    app.ui.actions.reveal_recording = recording_row;
+    let take = app.session.actions.take;
+    let recording_key = recording_row.map(|(i, steps)| (take, i, steps));
+    let started = recording_key.is_some_and(|(take, _, _)| app.ui.actions.reveal_recording.is_none_or(|(previous, _, _)| previous != take));
+    let reveal = recording_row.filter(|(i, steps)| app.ui.actions.reveal_recording != Some((take, *i, *steps)));
+    // Keep the take across suspension: resuming a call must not undo a manual folder collapse.
+    if let Some(key) = recording_key {
+        app.ui.actions.reveal_recording = Some(key);
+    }
+    if started && let Some(set) = recording_row.and_then(|(i, _)| rows.get(i)).and_then(|row| row.set.as_ref()) {
+        app.ui.actions.collapsed_sets.retain(|name| name != set);
+    }
     if let Some((i, _)) = reveal {
         app.ui.actions.expanded.resize(rows.len(), false);
         if let Some(expanded) = app.ui.actions.expanded.get_mut(i) {
@@ -1625,12 +1631,15 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         }
         // The disclosure triangle collapses or expands the set and leaves the selection alone.
         if toggle {
-            match app.ui.actions.collapsed_sets.iter().position(|c| *c == set) {
-                Some(i) => {
-                    app.ui.actions.collapsed_sets.remove(i);
-                }
-                None => app.ui.actions.collapsed_sets.push(set),
+            let collapsed = !app.ui.actions.collapsed_sets.contains(&set);
+            if collapsed {
+                app.ui.actions.collapsed_sets.push(set.clone());
+            } else {
+                app.ui.actions.collapsed_sets.retain(|name| name != &set);
             }
+            app.session.prefs.edit(|p| {
+                p.collapsed_action_sets.insert(set, collapsed);
+            });
         }
     }
     if let Some(set) = save_set

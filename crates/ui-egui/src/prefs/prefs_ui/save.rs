@@ -1,5 +1,5 @@
 use super::appearance::{canvas_style, sync_animations, sync_appearance, sync_display_scale, sync_tooltips};
-use super::startup::{load, presets_store, recovery, sync_rulers};
+use super::startup::{load, presets_store, recovery, sync_view_state};
 use super::{DocId, HashMap, PhotocraftApp, Value, prefs};
 
 /// Per-frame upkeep: theme sync, persistence, autosave and the history log.
@@ -8,7 +8,7 @@ pub fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
         load(app);
     }
     recovery(app);
-    sync_rulers(app);
+    sync_view_state(app);
     sync_display_scale(app, ctx);
     sync_appearance(app, ctx);
     crate::theme::set_ui_font_size(ctx, app.session.prefs().interface.ui_font_size);

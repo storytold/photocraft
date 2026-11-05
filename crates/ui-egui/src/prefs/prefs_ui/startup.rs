@@ -1,12 +1,35 @@
 use super::{JobEvent, JobOutcome, PhotocraftApp, Started, Value, json, prefs};
 
-/// View › Rulers follows `unitsAndRulers.showRulers` when the preference changes (at launch, from
-/// `prefs.set` or a reset), so documents open with the rulers as last set.
-pub(super) fn sync_rulers(app: &mut PhotocraftApp) {
+/// Restore saved rulers and Action-folder disclosures at launch and after preference changes.
+pub(super) fn sync_view_state(app: &mut PhotocraftApp) {
     let want = app.session.prefs().units_and_rulers.show_rulers;
     if app.prefs_rt.show_rulers != Some(want) {
         app.ui.extras.rulers = want;
         app.prefs_rt.show_rulers = Some(want);
+    }
+    let rev = app.session.prefs.rev();
+    if app.prefs_rt.action_sets_state.as_ref().map(|(rev, _)| *rev) != Some(rev) {
+        let recording = app.session.actions.recording.is_some() || crate::actions::suspended(app);
+        let choices = &app.session.prefs().collapsed_action_sets;
+        if let Some((_, previous)) = app.prefs_rt.action_sets_state.as_ref().filter(|_| recording) {
+            // An unrelated preference must not erase a temporary reveal or a manual collapse.
+            // Explicit changes to a folder's own preference still apply while recording.
+            for (name, collapsed) in choices {
+                if previous.get(name) != Some(collapsed) {
+                    app.ui.actions.collapsed_sets.retain(|set| set != name);
+                    if *collapsed {
+                        app.ui.actions.collapsed_sets.push(name.clone());
+                    }
+                }
+            }
+            for name in previous.keys().filter(|name| !choices.contains_key(*name)) {
+                app.ui.actions.collapsed_sets.retain(|set| set != name);
+            }
+            app.ui.actions.collapsed_sets.sort();
+        } else {
+            app.ui.actions.collapsed_sets = choices.iter().filter(|(_, collapsed)| **collapsed).map(|(name, _)| name.clone()).collect();
+        }
+        app.prefs_rt.action_sets_state = Some((rev, choices.clone()));
     }
 }
 
@@ -46,7 +69,7 @@ pub fn load(app: &mut PhotocraftApp) {
     crate::color_panel_ui::restore(app);
     crate::brush_picker::restore(app);
     crate::last_brush::restore(app);
-    sync_rulers(app);
+    sync_view_state(app);
     crate::tool_memory::restore(app);
     crate::view_cmds::restore(app);
     app.sync_recent();
