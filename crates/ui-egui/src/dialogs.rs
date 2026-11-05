@@ -317,6 +317,7 @@ fn command_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: 
 fn command_body_more(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: &mut Fields, id: egui::Id) -> Option<bool> {
     let mut outcome: Option<bool> = None;
     match d.kind {
+        _ if merge_channels_ui::owns(fields) => merge_channels_ui::body(ui, fields),
         _ if crate::file_ui::owns(fields) => crate::file_ui::body(app, ui, fields, d.id),
         _ if crate::color_picker_ui::owns(fields) => {
             outcome = crate::color_picker_ui::body(ui, fields);
@@ -860,6 +861,7 @@ const ROUTES: &[fn(&Fields) -> bool] = &[
     crate::stroke_ui::owns,
     crate::channel_options_ui::owns,
     crate::channel_options_ui::owns_new_spot,
+    merge_channels_ui::owns,
     crate::shape_dialog::owns,
     crate::delete_layer_prompt::owns,
     crate::disk_change_prompt::owns,
@@ -1054,6 +1056,7 @@ fn confirm_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, String> 
 /// The rest of the command dialogs: files, colour, preferences and export, then any other command.
 fn confirm_command_more(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, String> {
     match d.kind {
+        _ if merge_channels_ui::owns(&d.fields) => merge_channels_ui::confirm(app, &d.fields),
         _ if crate::file_ui::owns(&d.fields) => crate::file_ui::confirm(app, &d.fields),
         _ if crate::new_guide_ui::owns(&d.fields) => crate::new_guide_ui::confirm(app, &d.fields),
         _ if crate::color_picker_ui::owns(&d.fields) => {
@@ -1212,6 +1215,7 @@ pub mod layer_picker;
 pub mod layer_style;
 pub mod liquify_ui;
 pub mod mask_trash_prompt;
+pub mod merge_channels_ui;
 pub mod new_doc_ui;
 pub mod new_group_ui;
 pub mod new_guide_ui;

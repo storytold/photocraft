@@ -764,7 +764,7 @@ fn actions_panel_menu_includes_load_and_save_actions() {
 }
 
 /// The Channels panel menu (☰) has the channel items, not only the rows' context menu (#11451):
-/// New Spot Channel… opens its dialog and New Channel… adds a channel.
+/// New Spot Channel… and New Channel… open their dialogs, and OK in New Channel adds a channel.
 #[test]
 fn channels_panel_menu_opens_new_spot_and_adds_a_channel() {
     use egui_kittest::kittest::NodeT;
@@ -791,9 +791,15 @@ fn channels_panel_menu_opens_new_spot_and_adds_a_channel() {
     menu.run_steps(2);
     let dialogs = &menu.state().ui.dialogs;
     assert!(dialogs.iter().any(|d| crate::channel_options_ui::owns_new_spot(&d.fields)), "New Spot Channel… opens its dialog");
+    menu.state_mut().ui.dialogs.clear();
     menu.get_by_label("New Channel…").click();
     menu.run_steps(2);
-    assert_eq!(menu.state().session.active().unwrap().doc.channels.len(), 1, "New Channel… adds an alpha channel");
+    assert!(menu.state().session.active().unwrap().doc.channels.is_empty(), "New Channel… asks first");
+    let dialog = menu.state().ui.dialogs.last().expect("the New Channel dialog");
+    assert_eq!(dialog.fields["__label"], json!("New Channel…"));
+    let id = dialog.id;
+    crate::dialogs::confirm(menu.state_mut(), id).unwrap();
+    assert_eq!(menu.state().session.active().unwrap().doc.channels.len(), 1, "OK adds an alpha channel");
     assert!(!menu.state().ui.status_error, "{}", menu.state().ui.status);
 }
 

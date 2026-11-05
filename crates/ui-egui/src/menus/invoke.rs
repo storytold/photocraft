@@ -430,6 +430,21 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
             let dialog = crate::channel_options_ui::open(app, &channel).ok_or("no such channel")?;
             Ok(json!({"dialog": dialog}))
         }
+        // Channels › New Channel… without params: its dialog (with params: the engine). The
+        // panel's New button makes one at once, as Photoshop's does.
+        crate::channel_options_ui::NEW_CHANNEL if params.as_object().is_none_or(|o| o.is_empty()) => {
+            let dialog = crate::channel_options_ui::open_new_channel(app).ok_or("no document is open")?;
+            Ok(json!({"dialog": dialog}))
+        }
+        // Channels › Merge Channels… without params: its dialog, which picks the mode and the
+        // documents (with params: the engine).
+        crate::dialogs::merge_channels_ui::COMMAND if params.as_object().is_none_or(|o| o.is_empty()) => {
+            if let Some(Err(why)) = photocraft_engine::commands::find(id).map(|c| (c.enabled)(&app.session)) {
+                return Err(why);
+            }
+            let dialog = crate::dialogs::merge_channels_ui::open(app).ok_or("no document is open")?;
+            Ok(json!({"dialog": dialog}))
+        }
         // Channels › New Spot Channel… without params: its dialog (with params: the engine).
         crate::channel_options_ui::NEW_SPOT if params.as_object().is_none_or(|o| o.is_empty()) => {
             let dialog = crate::channel_options_ui::open_new_spot(app).ok_or("no document is open")?;

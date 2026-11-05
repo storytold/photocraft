@@ -177,11 +177,11 @@ fn draw_row_menu(ui: &mut egui::Ui, row: Row, doc: &photocraft_doc::Document, ma
             Row::LayerMask => draw_mask_menu(ui, masked, actions),
         }
         ui.separator();
-        item(ui, actions, "New Channel…", "channel.new", json!({}));
+        item(ui, actions, "New Channel…", "ui.newChannel", json!({}));
         item(ui, actions, "New Spot Channel…", "ui.newSpotChannel", json!({}));
         ui.separator();
         item(ui, actions, "Split Channels", "channel.split", json!({}));
-        item(ui, actions, "Merge Channels…", "channel.merge", json!({}));
+        item(ui, actions, "Merge Channels…", "ui.mergeChannels", json!({}));
     });
 }
 
@@ -499,6 +499,20 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             }
             continue;
         }
+        // The row menu's New Channel… and Merge Channels… ask first, as the panel menu's do
+        // (the footer's New button makes a channel at once).
+        let asks = match id.as_str() {
+            "ui.newChannel" => Some("channel.new"),
+            "ui.mergeChannels" => Some("channel.merge"),
+            _ => None,
+        };
+        if let Some(cmd) = asks {
+            if let Err(e) = crate::menus::invoke(app, &ctx, cmd, json!({})) {
+                app.ui.status = e;
+                app.ui.status_error = true;
+            }
+            continue;
+        }
         if id == "ui.newSpotChannel" {
             crate::channel_options_ui::open_new_spot(app);
             continue;
@@ -541,7 +555,8 @@ fn mask_row_name(layer: &photocraft_doc::Layer) -> String {
 /// order: New Channel…, Duplicate Channel, Delete Channel, New Spot Channel…, Merge Spot Channel,
 /// Channel Options…, Split Channels, Merge Channels…. The ones that act on one channel take the
 /// targeted row and are greyed without one (a colour composite, several colour channels). New
-/// Spot Channel… and Channel Options… open their dialogs, as from the command palette.
+/// Channel…, New Spot Channel…, Channel Options… and Merge Channels… open their dialogs, as from
+/// the command palette; Split Channels runs at once.
 pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     use crate::layers_panel_ui::run_menu_command;
     let target = MenuTarget::of(app);

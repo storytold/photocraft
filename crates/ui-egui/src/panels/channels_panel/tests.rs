@@ -578,14 +578,58 @@ fn panel_menu_greys_items_without_one_channel_or_a_document() {
     }
 }
 
-/// Merge Spot Channel prints the targeted spot channel into the image and removes it.
+/// Merge Spot Channel prints the targeted spot channel into the image and removes it: a solid
+/// blue ink over the left half turns those pixels blue and leaves the rest white.
 #[test]
 fn panel_menu_merges_the_targeted_spot_channel() {
     let mut app = menu_app("rgb");
     app.run("channel.new", json!({"name": "Alpha 1"})).unwrap();
-    app.run("channel.newSpot", json!({"name": "Ink", "fromSelection": false})).unwrap();
+    app.run("select.rect", json!({"x": 0, "y": 0, "width": 16, "height": 24})).unwrap();
+    app.run("channel.newSpot", json!({"name": "Ink", "color": "#0000ff", "solidity": 100})).unwrap();
+    app.run("select.deselect", json!({})).unwrap();
     app.run("channel.target", json!({"channel": 1})).unwrap();
+    let pixel = |app: &PhotocraftApp, x: usize, y: usize| {
+        let doc = &app.session.active().unwrap().doc;
+        let comp = photocraft_compose::render(doc, doc.bounds());
+        let p = comp.px[y * doc.size.width as usize + x];
+        [p[0], p[1], p[2]].map(|v| (v * 255.0).round() as u8)
+    };
+    assert_eq!((pixel(&app, 4, 4), pixel(&app, 24, 4)), ([255, 255, 255], [255, 255, 255]), "the ink is not in the image yet");
     let mut h = menu_harness(app);
     menu_click(&mut h, "Merge Spot Channel");
     assert_eq!(alpha_names(h.state()), ["Alpha 1"], "the spot channel is merged, the alpha kept");
+    assert_eq!(pixel(h.state(), 4, 4), [0, 0, 255], "the ink is printed where the channel had it");
+    assert_eq!(pixel(h.state(), 24, 4), [255, 255, 255], "and nowhere else");
+}
+
+/// Merge Channels… asks first, as in Photoshop: the dialog picks the mode and the document for
+/// each channel; nothing merges until OK. With params the command runs directly.
+#[test]
+fn panel_menu_merge_channels_opens_its_dialog() {
+    let mut app = menu_app("grayscale");
+    for _ in 0..2 {
+        app.run("file.new", json!({"width": 32, "height": 24, "mode": "grayscale"})).unwrap();
+    }
+    let mut h = menu_harness(app);
+    menu_click(&mut h, "Merge Channels…");
+    assert_eq!(h.state().session.documents().len(), 3, "nothing is merged before OK");
+    let d = h.state().ui.dialogs.last().expect("the Merge Channels dialog");
+    assert_eq!(d.fields["__label"], json!("Merge Channels…"));
+    let id = d.id;
+    h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("mode".into(), json!("lab"));
+    crate::dialogs::confirm(h.state_mut(), id).unwrap();
+    let docs = h.state().session.documents();
+    assert_eq!(docs.len(), 1, "the sources close");
+    assert_eq!(docs[0].doc.mode, photocraft_doc::ColorMode::Lab, "in the mode picked");
+
+    let ctx = egui::Context::default();
+    let mut app = menu_app("grayscale");
+    for _ in 0..2 {
+        app.run("file.new", json!({"width": 32, "height": 24, "mode": "grayscale"})).unwrap();
+    }
+    let r = crate::menus::invoke(&mut app, &ctx, "channel.merge", json!({})).unwrap();
+    assert!(r["dialog"].is_u64() && app.session.documents().len() == 3, "the dispatcher asks too");
+    app.ui.dialogs.clear();
+    crate::menus::invoke(&mut app, &ctx, "channel.merge", json!({"mode": "rgb"})).unwrap();
+    assert!(app.ui.dialogs.is_empty() && app.session.documents().len() == 1, "explicit params merge directly");
 }
