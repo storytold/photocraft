@@ -454,15 +454,12 @@ fn main() {
         let displace = |scale: f32| {
             let content = doc.layer(target).and_then(|l| l.surface()).map(|s| s.content_bounds()).unwrap_or(Rect::EMPTY);
             let extent = photocraft_algo::separable::edge_extent(doc.bounds(), content);
-            let d = photocraft_gpu::DisplaceParams {
-                map: map.clone(),
-                map_size: [512, 512],
+            let d = photocraft_gpu::RemapParams {
+                mapping: photocraft_gpu::Mapping::Displace { map: map.clone(), map_size: [512, 512], scale: [scale, scale], stretch: true },
                 bounds: doc.bounds(),
-                scale: [scale, scale],
-                stretch: true,
                 undefined: photocraft_gpu::Undefined::Wrap,
             };
-            let blur = photocraft_gpu::SeparableBlur::Displace(std::sync::Arc::new(d));
+            let blur = photocraft_gpu::SeparableBlur::Remap(std::sync::Arc::new(d));
             let program = photocraft_gpu::GaussianBlur::new(blur, extent, doc.bounds(), None, false, doc.depth).expect("a runnable displace");
             photocraft_gpu::LayerOperator { layer: target, target: photocraft_gpu::OperatorTarget::Content, program: std::sync::Arc::new(program) }
         };
@@ -492,6 +489,51 @@ fn main() {
             let t = Instant::now();
             std::hint::black_box(photocraft_algo::apply(surf, &fp, doc.bounds(), doc.bounds(), None));
             println!("  (the CPU's Displace over the whole layer: {:.0} ms)", ms(t));
+        }
+        // The distort filters: their mapping per slider step.
+        let content = doc.layer(target).and_then(|l| l.surface()).map(|s| s.content_bounds()).unwrap_or(Rect::EMPTY);
+        let extent = photocraft_algo::separable::edge_extent(doc.bounds(), content);
+        let distort = |fp: &photocraft_algo::FilterParams| {
+            let (warp, _) = photocraft_algo::separable::Warp::of(fp, doc.bounds()).expect("a distort mapping");
+            let d = photocraft_gpu::RemapParams {
+                mapping: photocraft_ui_egui::filter_gpu_preview::gpu_warp(warp),
+                bounds: doc.bounds(),
+                undefined: photocraft_gpu::Undefined::Repeat,
+            };
+            let program =
+                photocraft_gpu::GaussianBlur::new(photocraft_gpu::SeparableBlur::Remap(std::sync::Arc::new(d)), extent, doc.bounds(), None, false, doc.depth)
+                    .expect("a runnable distort");
+            photocraft_gpu::LayerOperator { layer: target, target: photocraft_gpu::OperatorTarget::Content, program: std::sync::Arc::new(program) }
+        };
+        let distorts: [(&str, ParamsAt); 2] = [
+            ("Twirl 120°", Box::new(|d| photocraft_algo::FilterParams::Twirl { angle: 120.0 + d })),
+            (
+                "Wave (5 generators)",
+                Box::new(|d| photocraft_algo::FilterParams::Wave {
+                    generators: 5,
+                    wavelength_min: 10.0,
+                    wavelength_max: 120.0 + d,
+                    amplitude_min: 5.0,
+                    amplitude_max: 35.0,
+                    wave_type: photocraft_algo::WaveType::Sine,
+                    undefined: photocraft_algo::UndefinedAreas::Wrap,
+                    seed: 7,
+                }),
+            ),
+        ];
+        for (name, params) in &distorts {
+            let mut step = 0;
+            b.time(&format!("{name} dialog preview (GPU resident)"), |b| {
+                step += 1;
+                if let Some(g) = &mut b.gpu {
+                    g.comp.set_operators(doc.id, vec![distort(&params((step % 2) as f32))]);
+                }
+                b.render(&doc, view)
+            });
+            let surf = doc.layer(target).and_then(|l| l.surface()).expect("surface");
+            let t = Instant::now();
+            std::hint::black_box(photocraft_algo::apply(surf, &params(0.0), doc.bounds(), doc.bounds(), None));
+            println!("  (the CPU's {name} over the whole layer: {:.0} ms)", ms(t));
         }
         if let Some(g) = &mut b.gpu {
             g.comp.clear_operators(doc.id);

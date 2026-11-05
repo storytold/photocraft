@@ -486,3 +486,37 @@ fn captured_subset_preview_stays_on_the_command_path_when_the_panel_changes() {
         assert!(on_layer(&mut app, 0), "explicit composite target overrides the panel too");
     }
 }
+
+/// Closing the dialog drops its zoomed-out proxy too: a filter dialog's GPU preview draws into the
+/// same proxy texture, so a reopened adjustment with the same settings must draw it again rather
+/// than take the old `drawn` hash for what the texture holds.
+#[test]
+fn a_closed_dialog_drops_its_gpu_proxy() {
+    let _guard = photocraft_testkit::gpu_lock();
+    let rs = match std::panic::catch_unwind(|| egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), Default::default())) {
+        Ok(rs) => rs,
+        Err(error) => {
+            // A run that asks for the GPU tests fails rather than skipping them.
+            if std::env::var_os("PHOTOCRAFT_REQUIRE_GPU_TESTS").is_some() {
+                std::panic::resume_unwind(error);
+            }
+            eprintln!("skipping: no GPU adapter");
+            return;
+        }
+    };
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.set_wgpu(rs);
+    app.run("file.new", json!({"width": 2600, "height": 2000})).unwrap();
+    app.run("edit.fill", json!({"color": "#3366cc"})).unwrap();
+    let open = |app: &mut PhotocraftApp| crate::adjust_dialog::open(app, "image.adjustments.levels").unwrap();
+    let id = open(&mut app);
+    let frame = gpu_proxy(&mut app, 0, 0.25).expect("a zoomed-out preview");
+    assert!(frame.stale, "drawn the first time");
+    proxy_drawn(&mut app, &frame);
+    assert!(!gpu_proxy(&mut app, 0, 0.25).unwrap().stale, "then kept");
+    crate::dialogs::cancel(&mut app, id).unwrap();
+    assert!(gpu_proxy(&mut app, 0, 0.25).is_none(), "closed");
+    assert!(app.adjust_preview.as_ref().is_none_or(|p| p.proxy.is_none()), "its proxy went with it");
+    open(&mut app);
+    assert!(gpu_proxy(&mut app, 0, 0.25).expect("reopened").stale, "the same settings draw again");
+}

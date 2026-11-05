@@ -1215,6 +1215,58 @@ fn only_the_main_canvas_gives_the_preview_window_its_view() {
     }
 }
 
+/// Phase 4: the distort filters preview on the GPU at 100 %, matching the CPU preview (a few of
+/// them through the app: the mappings themselves are covered in `photocraft-gpu`'s parity tests).
+#[test]
+fn distort_filters_preview_on_the_gpu() {
+    let _guard = photocraft_testkit::gpu_lock();
+    let Some(rs) = render_state() else { return };
+    let (mut h, mut open) = harness(rs, 4.0, true);
+    if !gpu_path(&h) {
+        return;
+    }
+    let cases = [
+        ("filter.distort.twirl", json!({"angle": 120.0})),
+        (
+            "filter.distort.wave",
+            json!({"generators": 3, "wavelengthMin": 30, "wavelengthMax": 200, "amplitudeMin": 10, "amplitudeMax": 40, "type": "sine", "undefinedAreas": "wrap", "seed": 3}),
+        ),
+        ("filter.distort.polarCoordinates", json!({"mode": "rectangularToPolar"})),
+        ("filter.distort.shear", json!({"points": [[0.0, 0.0], [0.5, 0.2], [1.0, -0.1]], "undefinedAreas": "repeat"})),
+    ];
+    for (command, params) in cases {
+        crate::dialogs::cancel(h.state_mut(), open).unwrap();
+        open = crate::filter_dialog::open(h.state_mut(), command).unwrap();
+        {
+            let d = h.state_mut().ui.dialogs.iter_mut().find(|d| d.id == open).unwrap();
+            for (k, v) in params.as_object().unwrap() {
+                d.fields.insert(k.clone(), v.clone());
+            }
+            d.fields.insert("__preview".into(), json!(true));
+        }
+        settle(&mut h, |app| on_gpu(app, 0));
+        assert!(h.state().filter_preview.as_ref().is_none_or(|p| p.result.is_none()), "{command}: the CPU preview stands aside");
+        let what = format!("{command} {params}");
+        let oracle = {
+            let st = h.state().session.active().unwrap();
+            std::sync::Arc::new(crate::filter_dialog::preview_document(&st.doc, st.active_layer, command, &params, 1).unwrap())
+        };
+        let plain = h.state().session.active().unwrap().doc.clone();
+        let shown = probes_named(&mut h, Some(&what));
+        let (mut checked, mut differs) = (0, 0);
+        for (p, px) in &shown {
+            let (want, alpha) = expected_in(h.state(), &oracle, *p);
+            if alpha < 0.999 {
+                continue;
+            }
+            assert!(within(&want, *px), "{what}: at {p:?} the canvas shows {px:?}, the CPU {want:?}");
+            checked += 1;
+            differs += usize::from(!within(&expected_around(h.state(), &plain, *p, 0).0, *px));
+        }
+        assert!(checked >= 40 && differs >= 10, "{what}: {checked} probes checked, {differs} differ from the undistorted image");
+    }
+}
+
 /// The canvas budget shrinking mid-session (the canvas then draws on the CPU, which can't show the
 /// operator): the session fails over to the CPU preview instead of hiding it, with its operator
 /// cleared (nothing stale for the canvas to draw once it fits again), and is back on the GPU when

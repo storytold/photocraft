@@ -1,4 +1,4 @@
-use super::batch::{batch_kernel, batch_op_words, op_words, submit_batch};
+use super::batch::{batch_kernel, batch_op_words, op_words, submit_batch, tile_grid};
 use super::consts::{FLUSH_OPS, MAP32, STRIDE};
 use super::convert::{convert_tile, convert_tiles, keep_overlap, put_tiles, words};
 use super::kit::{Bound, FrameRes, texture_group, uniform_group};
@@ -8,6 +8,9 @@ use super::{
     Arc, Compositor, DocId, HashMap, I, Kernel, LayerOperator, OperatorTarget, Pattern, Plan, Rect, Role, SeparableBlur, Surface, TILE_SIZE, Tile, TileCoord,
     operator, plan,
 };
+
+/// The 1×1 map a remap other than Displace binds.
+static MAP_STAND_IN: std::sync::LazyLock<Arc<Vec<[f32; 4]>>> = std::sync::LazyLock::new(|| Arc::new(vec![[0.0; 4]]));
 
 impl Compositor {
     /// Bring the pages of `cell` that `plan` samples up to date and resolve its effect maps.
@@ -346,8 +349,15 @@ impl Compositor {
         // a drag doesn't upload every window again at each step. The blur and its output cover
         // only the part this refresh draws.
         let needed = region.inflate(blur.reach());
+        // A whole-extent program has one window for every cell (they share its key): the extent
+        // rounded out to whole tiles holds every cell's part of it (cells are tile-aligned, and
+        // the last ones reach past an extent that doesn't end on a tile), and a held window that
+        // covers it is kept. Per cell, the window changed at the canvas's edge, so each such cell
+        // uploaded the whole layer again.
+        let whole_window = tile_grid(blur.extent).union(&region);
         let window = match self.residents.get(&wk).map(|r| r.region) {
-            _ if whole => blur.extent.union(&region),
+            Some(held) if whole && held.contains_rect(&whole_window) => held,
+            _ if whole => whole_window,
             Some(held) if held.contains_rect(&needed) => held,
             _ => region.inflate(operator::apron(blur.reach().saturating_add(blur.reach() / 4))),
         };
@@ -453,24 +463,34 @@ impl Compositor {
         }
         // Displace's map, once per map (shared by every cell).
         let map_key = (op.layer, Role::OperatorMap, WHOLE);
-        if let SeparableBlur::Displace(d) = &blur.blur {
+        // (Another remap binds a 1×1 stand-in.)
+        let map_input = match &blur.blur {
+            SeparableBlur::Remap(r) => match &r.mapping {
+                operator::Mapping::Displace { map, map_size, .. } => Some((Arc::clone(map), *map_size)),
+                // One stand-in for all of them: its identity is part of the map's fingerprint, so a
+                // new one per call uploaded it and ran the passes again on every refresh.
+                _ => Some((Arc::clone(&MAP_STAND_IN), [1, 1])),
+            },
+            _ => None,
+        };
+        if let Some((map, map_size)) = &map_input {
             let print = {
                 let mut h = std::collections::hash_map::DefaultHasher::new();
-                std::hash::Hash::hash(&(Arc::as_ptr(&d.map) as usize, d.map_size), &mut h);
+                std::hash::Hash::hash(&(Arc::as_ptr(map) as usize, *map_size), &mut h);
                 std::hash::Hasher::finish(&h)
             };
-            let r = Rect::from_xywh(0, 0, d.map_size[0], d.map_size[1]);
+            let r = Rect::from_xywh(0, 0, map_size[0], map_size[1]);
             if fresh(self, &map_key, r, print) {
                 touch(self, &map_key);
             } else {
                 let texture = self.create_layer_texture(device, &desc("pc_operator_map", r), map_key, bytes(r), stats)?;
-                operator::write_texels(queue, &texture, r.width(), r.height(), &d.map);
+                operator::write_texels(queue, &texture, r.width(), r.height(), map);
                 self.staged += bytes(r);
                 stats.bytes_uploaded += bytes(r) as usize;
                 let resident = self.operator_resident(texture, r, surface, doc);
                 self.residents.insert(map_key, resident);
                 self.op_made.insert(map_key, print);
-                self.op_maps.insert(map_key, Arc::clone(&d.map));
+                self.op_maps.insert(map_key, Arc::clone(map));
                 changed = true;
             }
         }
@@ -527,9 +547,9 @@ impl Compositor {
             let (Some(Some(kit)), Some((_, scratch))) = (self.op_kit.as_ref(), self.op_scratch.as_ref()) else { return None };
             let origin = [(sub.x0 - window.x0) as u32, (sub.y0 - window.y0) as u32];
             let blurred = match &blur.blur {
-                SeparableBlur::Displace(d) => {
+                SeparableBlur::Remap(d) => {
                     let map = self.residents.get(&map_key).map(|r| r.texture.clone())?;
-                    operator::record_displace(device, encoder, kit, d, &source, window, &map, region, surface.format().alpha, scratch)?
+                    operator::record_remap(device, encoder, kit, d, &source, window, &map, region, surface.format().alpha, scratch)?
                 }
                 other => operator::record_blur(device, encoder, kit, other, &source, origin, size, scratch)?,
             };
@@ -813,10 +833,14 @@ impl Compositor {
 }
 
 /// Whether every texture `blur`'s passes need over source `window` and output part `sub` is
-/// within `max` px a side: the window, the output and Displace's map.
+/// within `max` px a side: the window (a warp's is the layer's whole extent), the output and
+/// Displace's map.
 fn fits_device(blur: &SeparableBlur, max: u32, window: Rect, sub: Rect) -> bool {
     let map_size = match blur {
-        SeparableBlur::Displace(d) => d.map_size,
+        SeparableBlur::Remap(r) => match &r.mapping {
+            operator::Mapping::Displace { map_size, .. } => *map_size,
+            _ => [1, 1],
+        },
         _ => [1, 1],
     };
     let fits = |w: u32, h: u32| w <= max && h <= max;

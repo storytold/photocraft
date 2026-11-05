@@ -206,8 +206,11 @@ fn update(app: &mut PhotocraftApp, idx: usize) -> Option<&AdjustPreview> {
     let Some((kind, params, preview)) = dialog(app) else {
         // Keep a closed dialog's session for the canvas's switch back (see `switch_region`) but
         // never show it.
+        // Nor its proxy: a filter dialog's GPU preview draws into the same proxy texture (both
+        // are `proxy_base` documents), so a reopened adjustment would take its stale `drawn`
+        // hash for the texture's contents.
         if let Some(p) = app.adjust_preview.as_mut() {
-            (p.hash, p.layer_path, p.shown) = (0, false, None);
+            (p.hash, p.layer_path, p.shown, p.proxy) = (0, false, None, None);
         }
         crate::render_path::adjust_preview_ok(app);
         return None;
