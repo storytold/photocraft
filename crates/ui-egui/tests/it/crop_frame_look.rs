@@ -110,6 +110,19 @@ fn a_press_that_has_not_moved_yet_is_not_a_change() {
     }
 }
 
+/// A click inside the untouched frame that doesn't move is no change either: released, the frame
+/// keeps its untouched look, with no shield and no overlay (noted in review).
+#[test]
+fn a_click_inside_the_untouched_frame_is_not_a_change() {
+    for show in MODES {
+        let mut app = crop_app(show);
+        let before = app.ui.crop_rect;
+        control(&mut app, "ui.pointer", json!({"tool": "Crop", "events": [{"kind": "down", "x": 50, "y": 40}, {"kind": "up", "x": 50, "y": 40}]}));
+        assert_eq!(app.ui.crop_rect, before, "{show:?}: the frame is where it was");
+        assert_eq!(drawn(&app), (false, false, FrameLook::Untouched), "{show:?}: clicked, not changed");
+    }
+}
+
 #[test]
 fn show_cropped_area_off_still_hides_what_is_outside_an_untouched_frame() {
     let mut app = crop_app(OverlayShow::Always);

@@ -949,9 +949,11 @@ fn outside_drag(app: &PhotocraftApp, p: [f64; 2], rect: [f64; 4], deg: f64) -> C
 /// Ends `drag`: keeps a valid frame or restores the previous one, and records an undo step when it changed.
 fn release(app: &mut PhotocraftApp, drag: CropDrag) {
     let ok = app.ui.crop_rect.is_some_and(size_ok);
-    // A click outside the untouched default frame (no turn) leaves it the default.
+    // A click outside the untouched default frame (no turn) leaves it the default, and so does a
+    // click inside it that drew nothing: the frame is the one it was pressed on (noted in review).
     let changed = !matches!(drag, CropDrag::Rotate { from, .. } | CropDrag::TurnImage { from, .. } if from == angle(app))
-        && !matches!(drag, CropDrag::MoveImage { rect, .. } if app.ui.crop_rect == Some(rect));
+        && !matches!(drag, CropDrag::MoveImage { rect, .. } if app.ui.crop_rect == Some(rect))
+        && !matches!(drag, CropDrag::Draw { prev, .. } if app.ui.crop_rect == prev);
     if ok && changed {
         app.crop.default_frame = false;
     }
