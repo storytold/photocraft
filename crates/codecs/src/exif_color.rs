@@ -241,6 +241,65 @@ mod tests {
     }
 
     #[test]
+    fn srgb_export_normalizes_long_color_space_and_keeps_other_exif_bytes() {
+        for big in [false, true] {
+            let input = exif(big, &[(TAG_COLOR_SPACE, TYPE_LONG, 1, 0xffff), (0x9000, 7, 4, 0x3032_3330)]);
+            let mut expected = input.clone();
+            let one = if big { 1u32.to_be_bytes() } else { 1u32.to_le_bytes() };
+            // First entry in Exif IFD: 26-byte IFD0+header, count (2), value (+8).
+            expected[36..40].copy_from_slice(&one);
+            let converted = srgb_exif_metadata(&input);
+            assert_eq!(converted.as_ref(), expected.as_slice(), "big-endian: {big}");
+            assert_eq!(exif_color_space(&converted), Some(1));
+            assert!(matches!(srgb_exif_metadata(&converted), std::borrow::Cow::Borrowed(_)));
+        }
+    }
+
+    #[test]
+    fn srgb_export_rewrites_inline_and_out_of_line_interoperability_index() {
+        for big in [false, true] {
+            for inline in [true, false] {
+                let u16b = |v: u16| if big { v.to_be_bytes() } else { v.to_le_bytes() };
+                let u32b = |v: u32| if big { v.to_be_bytes() } else { v.to_le_bytes() };
+                // Exif IFD: two entries (ColorSpace and pointer to interoperability IFD).
+                // Its IFD begins immediately after IFD0, at TIFF offset 26.
+                let interop_ifd = 26 + 2 + 2 * ENTRY + 4;
+                let mut input = exif(
+                    big,
+                    &[(TAG_COLOR_SPACE, TYPE_SHORT, 1, 0xffff), (0xA005, TYPE_LONG, 1, interop_ifd as u32)],
+                );
+                assert_eq!(input.len(), interop_ifd);
+                input.extend(u16b(1));
+                // InteroperabilityIndex = tag 1, ASCII; R03 indicates Adobe RGB.
+                input.extend(u16b(1));
+                input.extend(u16b(2));
+                input.extend(u32b(if inline { 4 } else { 6 }));
+                let value_at = if inline {
+                    interop_ifd + 2 + 8
+                } else {
+                    interop_ifd + 2 + ENTRY + 4
+                };
+                if inline {
+                    input.extend(b"R03\0");
+                } else {
+                    input.extend(u32b(value_at as u32));
+                }
+                input.extend(u32b(0)); // next IFD pointer
+                if !inline {
+                    assert_eq!(input.len(), value_at);
+                    input.extend(b"R03\0\0\0");
+                }
+                let mut expected = input.clone();
+                expected[36..38].copy_from_slice(&u16b(1));
+                expected[value_at..value_at + 3].copy_from_slice(b"R98");
+                let corrected = srgb_exif_metadata(&input);
+                assert_eq!(corrected.as_ref(), expected.as_slice(), "big-endian: {big}, inline: {inline}");
+                assert!(matches!(srgb_exif_metadata(&corrected), std::borrow::Cow::Borrowed(_)));
+            }
+        }
+    }
+
+    #[test]
     fn missing_or_malformed_reads_as_no_tag() {
         assert_eq!(exif_color_space(&exif(false, &[(0x9000, 7, 4, 0)])), None, "no ColorSpace entry");
         assert_eq!(exif_color_space(&exif(false, &[(TAG_COLOR_SPACE, TYPE_SHORT, 2, 1)])), None, "count ≠ 1");
