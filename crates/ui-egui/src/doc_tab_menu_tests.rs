@@ -166,10 +166,15 @@ fn move_to_new_window_floats_the_clicked_tab_even_with_one_document() {
     crate::menus::invoke(&mut h.state_mut().app, &ctx, id, params).unwrap();
     assert!(h.state().app.ui.windows.iter().any(|w| w.floating && w.document == 0));
 
+    // The clicked tab (2) is not the active document (0).
     let (mut h, _) = probe(3, 2, true);
+    h.state_mut().app.session.set_active(0);
+    assert_eq!(h.state().app.session.active_index(), Some(0));
     let (id, params) = click(&mut h, "Move to New Window");
     crate::menus::invoke(&mut h.state_mut().app, &ctx, id, params).unwrap();
-    assert!(h.state().app.ui.windows.iter().any(|w| w.floating && w.document == 2), "the clicked tab, not the active one");
+    let windows = &h.state().app.ui.windows;
+    assert!(windows.iter().any(|w| w.floating && w.document == 2), "the clicked tab floats");
+    assert!(!windows.iter().any(|w| w.document == 0), "the active document does not float");
 }
 
 #[test]
