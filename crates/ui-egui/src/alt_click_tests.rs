@@ -261,13 +261,13 @@ fn grabbed_alt_click(h: &mut Harness<'static, PhotocraftApp>, x: f32, y: f32, re
 #[test]
 fn an_alt_click_the_window_manager_took_says_so() {
     // Windows and macOS have no window-move key to point at, so they say nothing (#10904).
-    let says_so = !cfg!(any(windows, target_os = "macos"));
+    let expected = if cfg!(any(windows, target_os = "macos")) { "" } else { crate::alt_grab::message() };
     for tool in [Tool::Brush, Tool::Pencil, Tool::CloneStamp, Tool::Healing, Tool::Zoom] {
         let mut h = harness(two_colours());
         h.state_mut().ui.tool = tool;
         grabbed_alt_click(&mut h, 50.0, 50.0, true);
-        assert_eq!(h.state().ui.status == crate::alt_grab::message(), says_so, "{tool:?}");
-        assert_eq!(h.state().ui.status_error, says_so, "{tool:?}");
+        assert_eq!(h.state().ui.status, expected, "{tool:?}");
+        assert_eq!(h.state().ui.status_error, !expected.is_empty(), "{tool:?}");
     }
 }
 
