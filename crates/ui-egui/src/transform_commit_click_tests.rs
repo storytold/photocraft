@@ -102,6 +102,24 @@ fn a_click_on_another_layers_pixels_commits_and_keeps_the_selection() {
     assert_eq!(app.session.active().unwrap().selected_layers(), vec![paint], "the selection doesn't change");
 }
 
+/// The press decides where a click lands: one on the image that jitters past the canvas edge
+/// before the release keeps the box open, one on the pasteboard that jitters onto the image commits.
+#[test]
+fn a_click_counts_where_it_was_pressed() {
+    let mut app = app();
+    let (before, quad) = (steps(&app), app.ui.transform.as_ref().unwrap().quad);
+    tool_event(&mut app, ToolEvent::Down { x: 199.5, y: 150.0, pressure: 1.0 }, Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Up { x: 200.5, y: 150.0 }, Modifiers::NONE);
+    assert!(app.ui.transform.is_some(), "pressed on the image: the box stays open");
+    assert_eq!(app.ui.transform.as_ref().unwrap().quad, quad);
+    assert_eq!(steps(&app), before);
+
+    tool_event(&mut app, ToolEvent::Down { x: 200.5, y: 150.0, pressure: 1.0 }, Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Up { x: 199.5, y: 150.0 }, Modifiers::NONE);
+    assert!(app.ui.transform.is_none(), "pressed on the pasteboard: committed");
+    assert_eq!(steps(&app), before + 1);
+}
+
 #[test]
 fn a_drag_outside_the_box_still_rotates() {
     let mut app = app();
@@ -166,6 +184,23 @@ fn a_double_click_inside_the_box_commits() {
 #[test]
 fn a_double_click_outside_the_box_does_nothing() {
     let mut h = harness(app());
+    let before = steps(h.state());
+    let at = screen(h.state(), [150.0, 150.0]);
+    double_click(&mut h, at);
+    assert!(h.state().ui.transform.is_some(), "the box stays open");
+    assert_eq!(steps(h.state()), before);
+}
+
+/// With Toggle Reference Point off, an ⌥-click outside the box moves the hidden reference point
+/// there; a double-click on that spot is still outside the box and must not commit.
+#[test]
+fn a_double_click_on_a_hidden_reference_point_outside_the_box_does_nothing() {
+    let mut app = app();
+    app.ui.tool_options.transform_reference_point = false;
+    tool_event(&mut app, ToolEvent::Down { x: 150.0, y: 150.0, pressure: 1.0 }, Modifiers::ALT);
+    tool_event(&mut app, ToolEvent::Up { x: 150.0, y: 150.0 }, Modifiers::ALT);
+    assert_eq!(app.ui.transform.as_ref().unwrap().pivot, [150.0, 150.0], "the ⌥-click moved the reference point");
+    let mut h = harness(app);
     let before = steps(h.state());
     let at = screen(h.state(), [150.0, 150.0]);
     double_click(&mut h, at);
