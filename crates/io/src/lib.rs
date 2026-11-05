@@ -1000,9 +1000,9 @@ fn export_stages(doc: &Document, name_or_ext: &str, opts: &ExportOptions, ctl: &
     }
     // A document with a frame animation saves as an animated GIF, each frame with its own delay.
     if ext == "gif"
-        && let Some(bytes) = gif_anim::export(doc, ctl)?
+        && let Some((bytes, warnings)) = gif_anim::export_with_warnings(doc, ctl)?
     {
-        return Ok(ExportResult { bytes, warnings: Vec::new() }.into());
+        return Ok(ExportResult { bytes, warnings }.into());
     }
     if ext == photocraft_format::EXTENSION {
         let doc = named_for_file(doc, name_or_ext);

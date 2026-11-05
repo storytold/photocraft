@@ -75,8 +75,9 @@ pub(crate) fn import_flat_with_options(
     // Asked for: every frame of an animated GIF or WebP as its own layer, to edit by hand.
     if opts.animation == AnimationImport::Frames
         && matches!(format, Some(Format::Gif | Format::WebP))
-        && let Some(r) = import_animation_layers(name, bytes)?
+        && let Some(mut r) = import_animation_layers(name, bytes)?
     {
+        r.document.file_encoding = file_encoding_as(format, bytes);
         return Ok(r);
     }
     let img = codecs::decode_as(format.ok_or(codecs::CodecError::UnknownFormat)?, bytes)?;

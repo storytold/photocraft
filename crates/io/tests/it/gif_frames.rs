@@ -339,3 +339,23 @@ fn an_animated_webp_opened_as_frames_keeps_its_durations_and_loop_count() {
     let a = import_frames("a.webp", &webp(&colours, 3)).unwrap().document.frame_animation.unwrap();
     assert_eq!(a.loops, LoopCount::from_plays(3));
 }
+
+/// A colour conversion a still GIF warns about is reported for an animated one too, once.
+#[test]
+fn an_animated_export_reports_what_a_still_one_warns_about_once() {
+    use photocraft_cms::Builtin;
+    use photocraft_doc::ColorMode;
+    let d = tagged(ColorMode::Rgb, Builtin::ProPhotoCompat.profile().to_bytes().to_vec(), &[0.4, 0.6, 0.2, 1.0]);
+    let warnings = photocraft_io::export(&d, "a.gif", &Default::default()).unwrap().warnings;
+    let notes: Vec<_> = warnings.iter().filter(|w| w.contains("converted to sRGB")).collect();
+    assert_eq!(notes.len(), 1, "{warnings:?}");
+}
+
+/// A WebP opened as frames keeps the source encoding, which Save reads back.
+#[test]
+fn frames_of_a_webp_keep_its_file_encoding() {
+    let bytes = webp(&[([255, 0, 0], 50), ([0, 255, 0], 50)], 0);
+    let r = import_frames("a.webp", &bytes).unwrap();
+    assert_eq!(r.document.file_encoding, photocraft_io::file_encoding(&bytes));
+    assert_ne!(r.document.file_encoding, Default::default(), "the source's encoding, not an unset one");
+}

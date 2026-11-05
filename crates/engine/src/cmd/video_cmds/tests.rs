@@ -931,3 +931,28 @@ fn render_video_names_frames_after_the_leaf_of_the_document_name() {
         assert!(!stem.contains(['/', '\\']) && !stem.is_empty() && stem.chars().any(|c| c != '.'), "{hostile:?} -> {stem:?}");
     }
 }
+
+/// A document's name comes from its file or a script: a frame animation's GIF stays in the chosen folder.
+#[test]
+fn a_frame_animation_gif_name_cannot_leave_the_folder() {
+    use photocraft_doc::{AnimFrame, FrameAnimation, LoopCount};
+    let mut s = session();
+    let st = s.active_mut().unwrap();
+    let mut d = (*st.doc).clone();
+    d.name = "../../outside/evil.png".into();
+    d.frame_animation =
+        Some(FrameAnimation { frames: vec![AnimFrame::default().into(); 2], current: 0, loops: LoopCount::Forever, defaults: Default::default() });
+    st.doc = std::sync::Arc::new(d);
+    let mut written = Vec::new();
+    render_video_with(
+        &s,
+        &json!({"format": "gif"}),
+        |name, _| {
+            written.push(name.to_string());
+            Ok(())
+        },
+        |_, _| true,
+    )
+    .unwrap();
+    assert_eq!(written, ["evil.gif"]);
+}

@@ -611,7 +611,7 @@ pub fn render_video_with(
         && let Some(a) = &base.frame_animation
     {
         let n = a.frames.len();
-        let stem = base.name.rsplit_once('.').map_or(base.name.as_str(), |(a, _)| a).to_string();
+        let stem = safe_stem(&base.name);
         // Progress and cancellation reach the export between frames and while it compresses, so Esc stops
         // a long render; the last frame is reported once the file is written.
         let bytes = photocraft_io::gif_anim::export_stepped(&base, &mut |done, total| progress(done.min(total.saturating_sub(1)), total))

@@ -72,10 +72,25 @@ pub const WORKING_BYTES_PER_PIXEL: u64 = 64;
 /// The document's frame animation as an animated GIF, or `None` when it has none. Reports progress
 /// through `ctl` and stops between frames when it is cancelled.
 pub fn export(doc: &Document, ctl: &Interrupt) -> Result<Option<Vec<u8>>, IoError> {
-    export_stepped(doc, &mut |done, total| {
-        ctl.progress(done as f32 / total as f32 * 0.95);
-        ctl.check().is_ok()
-    })
+    Ok(export_with_warnings(doc, ctl)?.map(|(bytes, _)| bytes))
+}
+
+/// The encoded GIF and its warnings.
+pub type ExportedGif = (Vec<u8>, Vec<String>);
+
+/// [`export`], with what a still GIF of the same frames would warn about (colours converted to
+/// sRGB, transparency flattened): each note once, however many frames it applies to.
+pub fn export_with_warnings(doc: &Document, ctl: &Interrupt) -> Result<Option<ExportedGif>, IoError> {
+    let mut warnings = Vec::new();
+    let bytes = export_stepped_noting(
+        doc,
+        &mut |done, total| {
+            ctl.progress(done as f32 / total as f32 * 0.95);
+            ctl.check().is_ok()
+        },
+        &mut warnings,
+    )?;
+    Ok(bytes.map(|b| (b, warnings)))
 }
 
 /// Refuses an animation of `total` frames of `w` × `h` pixels that an export could not hold at once: see
@@ -97,6 +112,10 @@ pub fn check_size(w: usize, h: usize, total: usize) -> Result<(), IoError> {
 /// [`export`] for a caller with its own progress: `step(done, total)` is called before the first frame
 /// and after each one, and the export stops with [`IoError::Cancelled`] when it returns false.
 pub fn export_stepped(doc: &Document, step: &mut dyn FnMut(usize, usize) -> bool) -> Result<Option<Vec<u8>>, IoError> {
+    export_stepped_noting(doc, step, &mut Vec::new())
+}
+
+fn export_stepped_noting(doc: &Document, step: &mut dyn FnMut(usize, usize) -> bool, warnings: &mut Vec<String>) -> Result<Option<Vec<u8>>, IoError> {
     let Some(a) = &doc.frame_animation else { return Ok(None) };
     let bounds = doc.bounds();
     let (w, h) = (bounds.width() as usize, bounds.height() as usize);
@@ -111,7 +130,12 @@ pub fn export_stepped(doc: &Document, step: &mut dyn FnMut(usize, usize) -> bool
         a.apply(i, &mut d.layers);
         // The colours a still GIF of this frame would have: converted from the document's profile to
         // sRGB (CMYK through its own profile), since the file can't carry the profile.
-        let (img, _) = crate::flat::flat_image(&d, Format::Gif, &ExportOptions::default(), &Interrupt::NONE)?;
+        let (img, notes) = crate::flat::flat_image(&d, Format::Gif, &ExportOptions::default(), &Interrupt::NONE)?;
+        for note in notes {
+            if !warnings.contains(&note) {
+                warnings.push(note);
+            }
+        }
         let px = rgba_pixels(&img);
         if px.len() != w * h {
             return Err(IoError::Unsupported("a frame did not render at the size of the canvas".into()));
