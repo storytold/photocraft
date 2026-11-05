@@ -17,6 +17,7 @@ pub(super) fn place_from(d: &Descriptor) -> Mapped {
     step(if get_bool(d, "Lnkd") == Some(true) { "file.placeLinked" } else { "file.placeEmbedded" }, p)
 }
 
+/// Encode supported Place options and its source reference as a Photoshop descriptor.
 pub(super) fn place_to(id: &str, p: &Value) -> Option<Descriptor> {
     let mut d = desc("null").with("null", path_value(jstr(p, "path")?)).with("FTcs", enm("QCSt", "Qcsa"));
     if let Some(s) = jnum(p, "scale") {
@@ -76,6 +77,7 @@ pub(super) fn save_from(d: &Descriptor) -> Mapped {
     step(if get_bool(d, "Cpy ") == Some(true) { "file.saveACopy" } else { "file.saveAs" }, json!({"path": path}))
 }
 
+/// Translate supported Save choices into a descriptor without inventing absent file options.
 pub(super) fn save_to(id: &str, p: &Value) -> Option<Descriptor> {
     if id == "file.save" {
         return Some(desc("null"));
@@ -110,9 +112,27 @@ pub(super) fn conditional_from(d: &Descriptor) -> Mapped {
         Some(Target::Name(n)) => Some(clip_name(&n)),
         _ => None,
     };
-    step("actions.conditional", json!({"if": condition, "then": branch("then"), "else": branch("else")}))
+    let mut params = json!({"if": condition, "then": branch("then"), "else": branch("else")});
+    let scopes = ["then", "else"].map(|key| (key, get_ref(d, key).and_then(super::steps_layer::action_set)));
+    let shared = scopes
+        .iter()
+        .filter(|(key, _)| params[*key].is_string())
+        .find_map(|(_, set)| set.as_deref())
+        .filter(|set| scopes.iter().all(|(key, scope)| !params[*key].is_string() || scope.as_deref() == Some(*set)));
+    if let Some(set) = shared {
+        // Preserve the existing command shape when every active branch has the same scope.
+        params["set"] = json!(set);
+    } else {
+        for (key, set) in scopes {
+            if let Some(set) = set {
+                params[format!("{key}Set")] = json!(set);
+            }
+        }
+    }
+    step("actions.conditional", params)
 }
 
+/// Write independent branch references, retaining each explicit set before the shared fallback set.
 pub(super) fn conditional_to(_: &str, p: &Value) -> Option<Descriptor> {
     let condition = jstr(p, "if")?;
     let code = lookup_back(CONDITION_CODES, condition).unwrap_or(condition);
@@ -120,7 +140,7 @@ pub(super) fn conditional_to(_: &str, p: &Value) -> Option<Descriptor> {
     for key in ["then", "else"] {
         if let Some(name) = jstr(p, key) {
             let mut items = vec![ReferenceItem::Name { class: class("Actn"), name: UnicodeString::new_nul(name) }];
-            if let Some(set) = jstr(p, "set") {
+            if let Some(set) = p.get(format!("{key}Set")).and_then(Value::as_str).or_else(|| jstr(p, "set")) {
                 items.push(ReferenceItem::Name { class: class("ASet"), name: UnicodeString::new_nul(set) });
             }
             d = d.with(key, D::Reference(items));
@@ -187,6 +207,7 @@ pub(super) fn export_from(d: &Descriptor) -> Mapped {
     step("file.export.saveForWebLegacy", p)
 }
 
+/// Encode the export format and supported options, refusing values the event cannot represent.
 pub(super) fn export_to(_: &str, p: &Value) -> Option<Descriptor> {
     // A step recorded with the document's own name keeps only its folder (#5305).
     let (path, in_folder) = match (jstr(p, "path").filter(|v| !v.is_empty()), jstr(p, "folder")) {
@@ -582,6 +603,7 @@ pub(super) fn image_size_to(_: &str, p: &Value) -> Option<Descriptor> {
     Some(d)
 }
 
+/// Project a Photoshop crop rectangle and supported options into command parameters.
 pub(super) fn crop_from(d: &Descriptor) -> Mapped {
     let mut p = Map::new();
     if let Some(t) = get_obj(d, "To  ") {
@@ -608,6 +630,7 @@ pub(super) fn crop_from(d: &Descriptor) -> Mapped {
     step("image.crop", Value::Object(p))
 }
 
+/// Encode a supported crop while refusing output-size options this event cannot preserve.
 pub(super) fn crop_to(_: &str, p: &Value) -> Option<Descriptor> {
     // The W x H x Resolution output options have no field here: refuse rather than export a plain
     // rectangle crop that keeps the old size and resolution on replay.

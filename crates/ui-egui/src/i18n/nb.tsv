@@ -4773,3 +4773,107 @@ cameraRaw	White Balance: As Shot	Hvitbalanse: som fotografert
 	The path was discarded	Banen ble forkastet
 	The path was kept as the Work Path	Banen ble beholdt som arbeidsbane
 	Edit Brush…	Rediger pensel…
+
+# Actions list and editor (10945/10946)
+	Action saved, but confirmation preference could not be saved: {error}	Handlingen ble lagret, men bekreftelsesinnstillingen kunne ikke lagres: {error}
+	Add a brief description for this action…	Legg til en kort beskrivelse av denne handlingen…
+	Allow Tool Recording	Tillat opptak av verktøy
+	Answer the open Actions editor question first	Svar først på det åpne spørsmålet i handlingsredigereren
+	Apply to background	Bruk på bakgrunnen
+	Apply to subject	Bruk på motivet
+	Black and white	Svart-hvitt
+	Cancel and continue editing	Avbryt og fortsett å redigere
+	Choose color	Velg farge
+	Choose icon	Velg ikon
+	Classic Actions	Klassiske handlinger
+	Clear All Actions	Tøm alle handlinger
+	Clear search	Tøm søket
+	Click action	Klikkhandling
+	Close the open Actions editor first	Lukk først den åpne handlingsredigereren
+	Collapse all	Fold sammen alle
+	Colour lookup tables	Fargeoppslagstabeller
+	Confirm or cancel the open action dialog first	Bekreft eller avbryt først den åpne handlingsdialogen
+	Control	Ctrl
+	Default icon	Standardikon
+	Delete Action	Slett handling
+	Delete action	Slett handling
+	Delete group	Slett gruppe
+	Delete step	Slett trinn
+	Delete the action "{name}"?	Slette handlingen «{name}»?
+	Delete the group "{name}"?	Slette gruppen «{name}»?
+	Discard	Forkast
+	Download	Last ned
+	Duplicate Action	Dupliser handling
+	Duplicate action	Dupliser handling
+	Duplicate group	Dupliser gruppe
+	Duplicate step	Dupliser trinn
+	Edit Action	Rediger handling
+	Edit action	Rediger handling
+	Edit step settings	Rediger trinninnstillinger
+	Enable step	Aktiver trinn
+	Expand all	Utvid alle
+	Export Action…	Eksporter handling…
+	Finish or cancel action playback and the pending step first	Fullfør eller avbryt først avspillingen av handlingen og det ventende trinnet
+	Finishing step…	Fullfører trinn…
+	Generated layer effects	Genererte lageffekter
+	Generated styles	Genererte stiler
+	Grey	Grå
+	Harmonize layers	Harmoniser lag
+	Hue and saturation	Fargetone og metning
+	Import Actions…	Importer handlinger…
+	Import actions or create a new action to get started.	Importer handlinger eller opprett en ny handling for å komme i gang.
+	Insert Action	Sett inn handling
+	Insert Conditional	Sett inn betingelse
+	Insert Menu Item	Sett inn menyelement
+	Insert Path	Sett inn bane
+	Insert Stop	Sett inn stopp
+	Insert…	Sett inn…
+	Keyboard shortcut	Hurtigtast
+	Lavender	Lavendel
+	Layer effects	Lageffekter
+	Light blue	Lyseblå
+	List size	Listestørrelse
+	Magic wand	Tryllestav
+	Merge layers	Slå sammen lag
+	Move step down	Flytt trinn ned
+	Move step up	Flytt trinn opp
+	New group	Ny gruppe
+	No steps yet	Ingen trinn ennå
+	Object selection	Objektvalg
+	Play Action	Spill av handling
+	Play Actions	Spill av handlinger
+	Play action	Spill av handling
+	Play from selected step	Spill av fra valgt trinn
+	Playback Options…	Avspillingsalternativer…
+	Play…	Spill av…
+	Preview on hover	Forhåndsvis når pekeren holdes over
+	Record	Ta opp
+	Recording	Opptak
+	Remove background	Fjern bakgrunn
+	Save Action	Lagre handling
+	Search actions	Søk etter handlinger
+	Select an existing action step to play	Velg et eksisterende handlingstrinn som skal spilles av
+	Select subject	Velg motiv
+	Show grid	Vis rutenett
+	Show step settings	Vis trinninnstillinger
+	Smart removal	Smart fjerning
+	Sort & View options	Sorterings- og visningsalternativer
+	Start recording to build your action	Start opptaket for å opprette handlingen din
+	Steps	Trinn
+	Stored action step	Lagret handlingstrinn
+	Stored settings	Lagrede innstillinger
+	Teal	Blågrønn
+	Text	Tekst
+	Text colour	Tekstfarge
+	The draft steps changed. Cancel this dialog and reopen the step.	Trinnene i utkastet er endret. Avbryt denne dialogen og åpne trinnet på nytt.
+	The dragged action changed; drag it again	Handlingen som dras, er endret; dra den på nytt
+	The editor response does not belong to this draft	Svaret fra redigereren tilhører ikke dette utkastet
+	There are unsaved changes. Do you want to save or discard them?	Det finnes ulagrede endringer. Vil du lagre eller forkaste dem?
+	This editor page is closed	Denne redigeringssiden er lukket
+	This step dialog belongs to another editor	Denne trinndialogen tilhører en annen redigerer
+	Wait for the current action step to finish	Vent til det gjeldende handlingstrinnet er ferdig
+	You haven't created any actions	Du har ikke opprettet noen handlinger
+	Yours	Dine
+
+# Actions reserved category caption (10945/10946)
+	Ungrouped Actions	Ugrupperte handlinger

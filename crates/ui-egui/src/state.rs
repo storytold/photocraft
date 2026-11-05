@@ -17,6 +17,23 @@ pub use panel_state::{
 pub use tool::Tool;
 pub use tool_options::{SampleAllLayers, ToolOptions};
 use tool_options::{default_brush_tool, default_layer_filter_mode, layer_filter_mode_or_normal, yes};
+
+/// The Actions panel's remembered presentation. Runtime owners live on the app.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ActionsLayout {
+    #[default]
+    Modern,
+    Classic,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ActionsListSize {
+    #[default]
+    Large,
+    Small,
+}
 pub use transform::{
     BoxResize, CamTransform, ContentAwareOptions, Extras, MadeLayer, TextEdit, TransformMode, TransformSession, TypeInsertionStyle, TypeTransform,
 };
@@ -379,6 +396,10 @@ pub struct UiState {
     /// Actions panel: which row is selected and which are expanded. The list lives on the session.
     #[serde(default)]
     pub actions: crate::actions::ActionsUi,
+    #[serde(default)]
+    pub actions_layout: ActionsLayout,
+    #[serde(default)]
+    pub actions_list_size: ActionsListSize,
     /// Layer Comps panel: the selected comp (by comp id).
     #[serde(default)]
     pub layer_comp_selected: Option<u32>,
@@ -569,6 +590,8 @@ impl Default for UiState {
             extras: Extras::default(),
             view: Default::default(),
             actions: Default::default(),
+            actions_layout: Default::default(),
+            actions_list_size: Default::default(),
             layer_comp_selected: None,
             presets_ui: Default::default(),
             web_view: None,

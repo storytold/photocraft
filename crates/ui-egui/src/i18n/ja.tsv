@@ -4199,6 +4199,112 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	分岐点のカラー
 	Shapes can't use patterns yet	シェイプではまだパターンを使用できません
 	Edit Brush…	ブラシを編集…
+
+# Actions list and editor (10945/10946)
+	Action saved, but confirmation preference could not be saved: {error}	アクションは保存されましたが、確認の設定を保存できませんでした: {error}
+	Add a brief description for this action…	このアクションの簡単な説明を追加…
+	Allow Tool Recording	ツール操作の記録を許可
+	Answer the open Actions editor question first	まずアクションエディターで開いている質問に回答してください
+	Apply to background	背景に適用
+	Apply to subject	被写体に適用
+	Back	戻る
+	Black and white	白黒
+	Cancel and continue editing	キャンセルして編集を続ける
+	Choose color	色を選択
+	Choose icon	アイコンを選択
+	Classic Actions	クラシックアクション
+	Clear All Actions	すべてのアクションを消去
+	Clear search	検索をクリア
+	Click action	クリック操作
+	Close the open Actions editor first	まず開いているアクションエディターを閉じてください
+	Collapse all	すべて折りたたむ
+	Colour lookup tables	カラールックアップテーブル
+	Confirm or cancel the open action dialog first	まず開いているアクションのダイアログを確定またはキャンセルしてください
+	Control	Ctrl
+	Default icon	既定のアイコン
+	Delete Action	アクションを削除
+	Delete action	アクションを削除
+	Delete group	グループを削除
+	Delete step	ステップを削除
+	Delete the action "{name}"?	アクション「{name}」を削除しますか？
+	Delete the group "{name}"?	グループ「{name}」を削除しますか？
+	Discard	破棄
+	Download	ダウンロード
+	Duplicate Action	アクションを複製
+	Duplicate action	アクションを複製
+	Duplicate group	グループを複製
+	Duplicate step	ステップを複製
+	Edit Action	アクションを編集
+	Edit action	アクションを編集
+	Edit step settings	ステップの設定を編集
+	Enable step	ステップを有効にする
+	Expand all	すべて展開
+	Export Action…	アクションを書き出し…
+	Finish or cancel action playback and the pending step first	まずアクションの再生と保留中のステップを完了またはキャンセルしてください
+	Finishing step…	ステップを完了中…
+	Generated layer effects	生成されたレイヤー効果
+	Generated styles	生成されたスタイル
+	Grey	グレー
+	Harmonize layers	レイヤーを調和
+	Hue and saturation	色相と彩度
+	Import Actions…	アクションを読み込み…
+	Import actions or create a new action to get started.	アクションを読み込むか、新しいアクションを作成して始めましょう。
+	Insert Action	アクションを挿入
+	Insert Conditional	条件を挿入
+	Insert Menu Item	メニュー項目を挿入
+	Insert Path	パスを挿入
+	Insert Stop	ストップを挿入
+	Insert…	挿入…
+	Keyboard shortcut	キーボードショートカット
+	Lavender	ラベンダー
+	Layer effects	レイヤー効果
+	Light blue	ライトブルー
+	List size	リストのサイズ
+	Magic wand	自動選択
+	Merge layers	レイヤーを結合
+	Move step down	ステップを下に移動
+	Move step up	ステップを上に移動
+	New group	新規グループ
+	No steps yet	まだステップがありません
+	Object selection	オブジェクト選択
+	On	オン
+	Play Action	アクションを再生
+	Play Actions	アクションを再生
+	Play action	アクションを再生
+	Play from selected step	選択したステップから再生
+	Playback Options…	再生オプション…
+	Play…	再生…
+	Preview on hover	ホバー時にプレビュー
+	Record	記録
+	Recording	記録中
+	Remove background	背景を削除
+	Save Action	アクションを保存
+	Search actions	アクションを検索
+	Select an existing action step to play	再生する既存のアクションステップを選択してください
+	Select subject	被写体を選択
+	Show grid	グリッドを表示
+	Show step settings	ステップの設定を表示
+	Smart removal	スマート削除
+	Sort & View options	並べ替えと表示のオプション
+	Start recording to build your action	記録を開始してアクションを作成しましょう
+	Steps	ステップ
+	Stored action step	保存済みのアクションステップ
+	Stored settings	保存済みの設定
+	Teal	青緑
+	Text	テキスト
+	Text colour	文字色
+	The draft steps changed. Cancel this dialog and reopen the step.	下書きのステップが変更されました。このダイアログをキャンセルし、ステップを開き直してください。
+	The dragged action changed; drag it again	ドラッグしたアクションが変更されました。もう一度ドラッグしてください
+	The editor response does not belong to this draft	エディターの応答はこの下書きに属していません
+	There are unsaved changes. Do you want to save or discard them?	未保存の変更があります。保存しますか、破棄しますか？
+	This editor page is closed	このエディターページは閉じられています
+	This step dialog belongs to another editor	このステップのダイアログは別のエディターに属しています
+	Wait for the current action step to finish	現在のアクションステップが完了するまでお待ちください
+	You haven't created any actions	まだアクションを作成していません
+	Yours	マイアクション
+
+# Actions reserved category caption (10945/10946)
+	Ungrouped Actions	未分類のアクション
 	Drag to move the active shape's path or the Work Path	ドラッグして、アクティブなシェイプのパスまたは作業用パスを移動
 	Generator enabled	自動生成を有効にする
 	This Layer:	現在のレイヤー:

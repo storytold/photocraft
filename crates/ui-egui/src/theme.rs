@@ -179,6 +179,10 @@ pub struct Tokens {
     pub text_dim: Color32,
     pub text_faint: Color32,
     pub icon: Color32,
+    /// Measured Actions tile fills in ATN colour-index order. Slot zero follows the card.
+    pub action_tiles: [Color32; 12],
+    /// Theme-family ink shared by Modern Actions rows and the editor thumbnail.
+    pub action_glyph: Color32,
     pub accent: Color32,
     pub accent_soft: Color32,
     pub accent_border: Color32,
@@ -214,16 +218,61 @@ pub struct Tokens {
 }
 
 impl Tokens {
+    /// Fixed Actions picker swatches in ATN order, excluding the neutral entry.
+    pub(crate) const ACTION_PICKER_SWATCHES: [Color32; 11] = [
+        Color32::from_rgb(255, 117, 110),
+        Color32::from_rgb(250, 168, 85),
+        Color32::from_rgb(227, 219, 93),
+        Color32::from_rgb(148, 223, 125),
+        Color32::from_rgb(137, 189, 248),
+        Color32::from_rgb(163, 141, 221),
+        Color32::from_rgb(172, 172, 172),
+        Color32::from_rgb(27, 149, 154),
+        Color32::from_rgb(103, 103, 236),
+        Color32::from_rgb(216, 55, 144),
+        Color32::from_rgb(192, 56, 204),
+    ];
+
+    /// Swatch selection marks choose the greater WCAG contrast against the supplied fill.
+    pub fn action_thumbnail_ink(fill: Color32) -> Color32 {
+        let linear = |channel: u8| {
+            let value = f32::from(channel) / 255.0;
+            if value <= 0.04045 { value / 12.92 } else { ((value + 0.055) / 1.055).powf(2.4) }
+        };
+        let luminance = 0.2126 * linear(fill.r()) + 0.7152 * linear(fill.g()) + 0.0722 * linear(fill.b());
+        if (luminance + 0.05) / 0.05 >= 1.05 / (luminance + 0.05) { Color32::BLACK } else { Color32::WHITE }
+    }
+
+    /// Resolve the displayed tile without changing the stored colour name.
+    pub(crate) fn action_tile_fill(&self, color: &str) -> Color32 {
+        let index = photocraft_engine::actions_cmds::BUTTON_COLORS.iter().position(|name| *name == color).unwrap_or(0);
+        self.action_tiles[index]
+    }
+
     /// Tool outlines need contrast on arbitrary document pixels, independently of UI theme.
     pub(crate) fn cursor_outline() -> [Color32; 2] {
         [Color32::from_black_alpha(160), Color32::from_white_alpha(235)]
     }
 
     pub fn for_kind(kind: ThemeKind) -> Self {
-        match kind {
+        let mut tokens = match kind {
             // Sampled from Photoshop 2026's default brightness (raw display values).
             ThemeKind::ProMedium => Tokens {
                 kind,
+                action_tiles: [
+                    Color32::TRANSPARENT,
+                    Color32::from_rgb(176, 66, 63),
+                    Color32::from_rgb(165, 98, 10),
+                    Color32::from_rgb(158, 127, 9), // Yellow, darkened for the 80% white glyph.
+                    Color32::from_rgb(95, 130, 60),
+                    Color32::from_rgb(82, 111, 153),
+                    Color32::from_rgb(113, 85, 160),
+                    Color32::from_rgb(106, 106, 106),
+                    Color32::from_rgb(0, 102, 98),
+                    Color32::from_rgb(70, 73, 160),
+                    Color32::from_rgb(170, 47, 100),
+                    Color32::from_rgb(134, 37, 135),
+                ],
                 chrome: Color32::from_rgb(83, 83, 83),
                 dock: Color32::from_rgb(66, 66, 66),
                 card: Color32::from_rgb(83, 83, 83),
@@ -245,6 +294,21 @@ impl Tokens {
             // Photoshop's medium-light brightness: #B8B8B8 panels, dark text, a mid-grey canvas.
             ThemeKind::ProLightGray => Tokens {
                 kind,
+                action_tiles: [
+                    Color32::TRANSPARENT,
+                    Color32::from_rgb(235, 114, 106),
+                    Color32::from_rgb(231, 158, 98),
+                    Color32::from_rgb(218, 214, 101),
+                    Color32::from_rgb(143, 198, 101),
+                    Color32::from_rgb(141, 162, 215),
+                    Color32::from_rgb(153, 131, 201),
+                    Color32::from_rgb(151, 151, 151),
+                    Color32::from_rgb(0, 161, 154),
+                    Color32::from_rgb(132, 135, 238),
+                    Color32::from_rgb(219, 109, 156),
+                    Color32::from_rgb(202, 114, 203),
+                ],
+                action_glyph: Color32::from_black_alpha(204),
                 chrome: Color32::from_rgb(184, 184, 184),
                 canvas: Color32::from_rgb(160, 160, 160),
                 canvas_dot: Color32::from_rgb(160, 160, 160),
@@ -270,6 +334,21 @@ impl Tokens {
             // Photoshop's lightest brightness: #F0F0F0 panels, dark text, a light-grey canvas.
             ThemeKind::ProLight => Tokens {
                 kind,
+                action_tiles: [
+                    Color32::TRANSPARENT,
+                    Color32::from_rgb(255, 136, 129),
+                    Color32::from_rgb(251, 183, 103),
+                    Color32::from_rgb(233, 227, 128),
+                    Color32::from_rgb(171, 219, 128),
+                    Color32::from_rgb(166, 189, 244),
+                    Color32::from_rgb(178, 158, 222),
+                    Color32::from_rgb(172, 172, 172),
+                    Color32::from_rgb(1, 193, 185),
+                    Color32::from_rgb(142, 146, 242),
+                    Color32::from_rgb(220, 109, 157),
+                    Color32::from_rgb(201, 125, 202),
+                ],
+                action_glyph: Color32::from_black_alpha(204),
                 chrome: Color32::from_rgb(240, 240, 240),
                 canvas: Color32::from_rgb(214, 214, 214),
                 canvas_dot: Color32::from_rgb(214, 214, 214),
@@ -294,6 +373,21 @@ impl Tokens {
             },
             ThemeKind::Pro => Tokens {
                 kind,
+                action_tiles: [
+                    Color32::TRANSPARENT,
+                    Color32::from_rgb(141, 45, 45),
+                    Color32::from_rgb(147, 82, 2),
+                    Color32::from_rgb(150, 124, 0),
+                    Color32::from_rgb(63, 99, 53),
+                    Color32::from_rgb(62, 79, 133),
+                    Color32::from_rgb(93, 70, 130),
+                    Color32::from_rgb(83, 83, 83),
+                    Color32::from_rgb(0, 102, 98),
+                    Color32::from_rgb(50, 54, 168),
+                    Color32::from_rgb(170, 47, 100),
+                    Color32::from_rgb(134, 37, 135),
+                ],
+                action_glyph: Color32::from_white_alpha(204),
                 chrome: Color32::from_rgb(50, 50, 50),
                 canvas: Color32::from_rgb(40, 40, 40),
                 canvas_dot: Color32::from_rgb(40, 40, 40),
@@ -373,6 +467,7 @@ impl Tokens {
                 caption_close: Color32::from_rgb(196, 43, 28),
                 caption_close_text: Color32::WHITE,
                 scrim: Color32::from_black_alpha(110),
+                ..Tokens::for_kind(ThemeKind::ProMedium)
             },
             ThemeKind::StudioLight => Tokens {
                 kind,
@@ -413,6 +508,7 @@ impl Tokens {
                 caption_close: Color32::from_rgb(196, 43, 28),
                 caption_close_text: Color32::WHITE,
                 scrim: Color32::from_black_alpha(110),
+                ..Tokens::for_kind(ThemeKind::ProLightGray)
             },
             ThemeKind::Classic => Tokens {
                 kind,
@@ -453,6 +549,7 @@ impl Tokens {
                 caption_close: Color32::from_rgb(196, 43, 28),
                 caption_close_text: Color32::WHITE,
                 scrim: Color32::from_black_alpha(110),
+                ..Tokens::for_kind(ThemeKind::ProLightGray)
             },
             // libadwaita's named colours (window, sidebar, card, view, accent, destructive) and
             // radii (6 px buttons, 12 px cards), mapped onto the Studio layout. GNOME's close
@@ -496,6 +593,7 @@ impl Tokens {
                 caption_close: Color32::from_rgb(212, 212, 216),
                 caption_close_text: Color32::from_rgb(50, 50, 54),
                 scrim: Color32::from_black_alpha(110),
+                ..Tokens::for_kind(ThemeKind::ProLightGray)
             },
             ThemeKind::AdwaitaDark => Tokens {
                 kind,
@@ -536,6 +634,7 @@ impl Tokens {
                 caption_close: Color32::from_rgb(72, 72, 76),
                 caption_close_text: Color32::WHITE,
                 scrim: Color32::from_black_alpha(110),
+                ..Tokens::for_kind(ThemeKind::ProMedium)
             },
             // The light counterpart, adapted the same way: our own values, chosen a few levels
             // from Breeze Light's surfaces so the app blends into a Plasma desktop without being a
@@ -582,6 +681,7 @@ impl Tokens {
                 caption_close: Color32::from_rgb(213, 51, 60),
                 caption_close_text: Color32::WHITE,
                 scrim: Color32::from_black_alpha(110),
+                ..Tokens::for_kind(ThemeKind::ProLightGray)
             },
             // An adaptation of KDE Plasma's Breeze Dark look on the Studio layout, not a copy: our
             // own values, chosen a few levels from Breeze Dark's surfaces (the darkest canvas, then
@@ -632,6 +732,7 @@ impl Tokens {
                 caption_close: Color32::from_rgb(213, 51, 60),
                 caption_close_text: Color32::WHITE,
                 scrim: Color32::from_black_alpha(110),
+                ..Tokens::for_kind(ThemeKind::ProMedium)
             },
             // Soft Dark: our own low-contrast palette on the Studio layout. Muted violet-grey
             // surfaces (never near-black), softened off-white text and a periwinkle accent; the
@@ -675,6 +776,7 @@ impl Tokens {
                 caption_close: Color32::from_rgb(200, 72, 86),
                 caption_close_text: Color32::WHITE,
                 scrim: Color32::from_black_alpha(100),
+                ..Tokens::for_kind(ThemeKind::ProMedium)
             },
             // Soft Light: pale violet-grey surfaces, softened dark-violet text (not black) and a
             // periwinkle accent, with the same generous radii as Soft Dark.
@@ -717,6 +819,7 @@ impl Tokens {
                 caption_close: Color32::from_rgb(200, 60, 72),
                 caption_close_text: Color32::WHITE,
                 scrim: Color32::from_black_alpha(90),
+                ..Tokens::for_kind(ThemeKind::ProLightGray)
             },
             // Ethan Schoonover's Solarized Dark palette: base03 canvas, base02 surfaces, base0
             // body text and the Solarized blue accent. https://ethanschoonover.com/solarized/
@@ -760,8 +863,11 @@ impl Tokens {
                 caption_close: Color32::from_rgb(220, 50, 47),
                 caption_close_text: Color32::from_rgb(253, 246, 227),
                 scrim: Color32::from_black_alpha(110),
+                ..Tokens::for_kind(ThemeKind::ProMedium)
             },
-        }
+        };
+        tokens.action_tiles[0] = tokens.card;
+        tokens
     }
 
     /// Tokens for the active theme (stored in egui's context data by [`apply`]).
@@ -1249,6 +1355,7 @@ pub mod live {
             "card" => {
                 if let Some(c) = color(value) {
                     t.card = c;
+                    t.action_tiles[0] = c;
                 }
             }
             "card_border" => {
@@ -1301,6 +1408,11 @@ pub mod live {
             "icon" => {
                 if let Some(c) = color(value) {
                     t.icon = c;
+                }
+            }
+            "action_glyph" => {
+                if let Some(c) = color(value) {
+                    t.action_glyph = c;
                 }
             }
             "separator" => {

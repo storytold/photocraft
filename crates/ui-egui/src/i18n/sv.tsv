@@ -4771,3 +4771,107 @@ cameraRaw	White Balance: As Shot	Vitbalans: som tagen
 	The path was discarded	Banan kasserades
 	The path was kept as the Work Path	Banan behölls som arbetsbana
 	Edit Brush…	Redigera pensel…
+
+# Actions list and editor (10945/10946)
+	Action saved, but confirmation preference could not be saved: {error}	Åtgärden sparades, men bekräftelseinställningen kunde inte sparas: {error}
+	Add a brief description for this action…	Lägg till en kort beskrivning av åtgärden…
+	Allow Tool Recording	Tillåt verktygsinspelning
+	Answer the open Actions editor question first	Besvara först den öppna frågan i åtgärdsredigeraren
+	Apply to background	Tillämpa på bakgrunden
+	Apply to subject	Tillämpa på motivet
+	Black and white	Svartvitt
+	Cancel and continue editing	Avbryt och fortsätt redigera
+	Choose color	Välj färg
+	Choose icon	Välj ikon
+	Classic Actions	Klassiska åtgärder
+	Clear All Actions	Rensa alla åtgärder
+	Clear search	Rensa sökningen
+	Click action	Klickåtgärd
+	Close the open Actions editor first	Stäng först den öppna åtgärdsredigeraren
+	Collapse all	Fäll ihop alla
+	Colour lookup tables	Färguppslagstabeller
+	Confirm or cancel the open action dialog first	Bekräfta eller avbryt först den öppna åtgärdsdialogrutan
+	Control	Ctrl
+	Default icon	Standardikon
+	Delete Action	Ta bort åtgärd
+	Delete action	Ta bort åtgärd
+	Delete group	Ta bort grupp
+	Delete step	Ta bort steg
+	Delete the action "{name}"?	Ta bort åtgärden ”{name}”?
+	Delete the group "{name}"?	Ta bort gruppen ”{name}”?
+	Discard	Förkasta
+	Download	Hämta
+	Duplicate Action	Duplicera åtgärd
+	Duplicate action	Duplicera åtgärd
+	Duplicate group	Duplicera grupp
+	Duplicate step	Duplicera steg
+	Edit Action	Redigera åtgärd
+	Edit action	Redigera åtgärd
+	Edit step settings	Redigera steginställningar
+	Enable step	Aktivera steg
+	Expand all	Fäll ut alla
+	Export Action…	Exportera åtgärd…
+	Finish or cancel action playback and the pending step first	Slutför eller avbryt först åtgärdsuppspelningen och det väntande steget
+	Finishing step…	Slutför steg…
+	Generated layer effects	Genererade lagereffekter
+	Generated styles	Genererade stilar
+	Grey	Grå
+	Harmonize layers	Harmonisera lager
+	Hue and saturation	Nyans och mättnad
+	Import Actions…	Importera åtgärder…
+	Import actions or create a new action to get started.	Importera åtgärder eller skapa en ny åtgärd för att komma igång.
+	Insert Action	Infoga åtgärd
+	Insert Conditional	Infoga villkor
+	Insert Menu Item	Infoga menyalternativ
+	Insert Path	Infoga bana
+	Insert Stop	Infoga stopp
+	Insert…	Infoga…
+	Keyboard shortcut	Kortkommando
+	Lavender	Lavendel
+	Layer effects	Lagereffekter
+	Light blue	Ljusblå
+	List size	Liststorlek
+	Magic wand	Trollstav
+	Merge layers	Sammanfoga lager
+	Move step down	Flytta steget nedåt
+	Move step up	Flytta steget uppåt
+	New group	Ny grupp
+	No steps yet	Inga steg ännu
+	Object selection	Objektmarkering
+	Play Action	Spela upp åtgärd
+	Play Actions	Spela upp åtgärder
+	Play action	Spela upp åtgärd
+	Play from selected step	Spela upp från markerat steg
+	Playback Options…	Uppspelningsalternativ…
+	Play…	Spela upp…
+	Preview on hover	Förhandsvisa vid hovring
+	Record	Spela in
+	Recording	Inspelning
+	Remove background	Ta bort bakgrund
+	Save Action	Spara åtgärd
+	Search actions	Sök åtgärder
+	Select an existing action step to play	Välj ett befintligt åtgärdssteg att spela upp
+	Select subject	Markera motiv
+	Show grid	Visa rutnät
+	Show step settings	Visa steginställningar
+	Smart removal	Smart borttagning
+	Sort & View options	Sorterings- och visningsalternativ
+	Start recording to build your action	Starta inspelningen för att skapa din åtgärd
+	Steps	Steg
+	Stored action step	Lagrat åtgärdssteg
+	Stored settings	Lagrade inställningar
+	Teal	Blågrön
+	Text	Text
+	Text colour	Textfärg
+	The draft steps changed. Cancel this dialog and reopen the step.	Utkastets steg har ändrats. Avbryt den här dialogrutan och öppna steget igen.
+	The dragged action changed; drag it again	Den dragna åtgärden har ändrats; dra den igen
+	The editor response does not belong to this draft	Redigerarens svar hör inte till det här utkastet
+	There are unsaved changes. Do you want to save or discard them?	Det finns osparade ändringar. Vill du spara eller förkasta dem?
+	This editor page is closed	Den här redigerarsidan är stängd
+	This step dialog belongs to another editor	Den här stegdialogrutan hör till en annan redigerare
+	Wait for the current action step to finish	Vänta tills det aktuella åtgärdssteget är klart
+	You haven't created any actions	Du har inte skapat några åtgärder
+	Yours	Dina
+
+# Actions reserved category caption (10945/10946)
+	Ungrouped Actions	Ogrupperade åtgärder

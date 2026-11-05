@@ -4601,6 +4601,110 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Boja tačke
 	Shapes can't use patterns yet	Oblici još ne mogu da koriste šare
 	Edit Brush…	Uredi četkicu…
+
+# Actions list and editor (10945/10946)
+	Action saved, but confirmation preference could not be saved: {error}	Radnja je sačuvana, ali podešavanje potvrde nije moglo da se sačuva: {error}
+	Add a brief description for this action…	Dodajte kratak opis ove radnje…
+	Allow Tool Recording	Dozvoli snimanje alata
+	Answer the open Actions editor question first	Prvo odgovorite na otvoreno pitanje u uređivaču radnji
+	Apply to background	Primeni na pozadinu
+	Apply to subject	Primeni na subjekat
+	Black and white	Crno-belo
+	Cancel and continue editing	Otkaži i nastavi uređivanje
+	Choose color	Izaberi boju
+	Choose icon	Izaberi ikonu
+	Classic Actions	Klasične radnje
+	Clear All Actions	Obriši sve radnje
+	Clear search	Obriši pretragu
+	Click action	Radnja klika
+	Close the open Actions editor first	Prvo zatvorite otvoreni uređivač radnji
+	Collapse all	Skupi sve
+	Colour lookup tables	Tabele preslikavanja boja
+	Confirm or cancel the open action dialog first	Prvo potvrdite ili otkažite otvoreni dijalog radnje
+	Control	Ctrl
+	Default icon	Podrazumevana ikona
+	Delete Action	Obriši radnju
+	Delete action	Obriši radnju
+	Delete group	Obriši grupu
+	Delete step	Obriši korak
+	Delete the action "{name}"?	Obrisati radnju „{name}“?
+	Delete the group "{name}"?	Obrisati grupu „{name}“?
+	Discard	Odbaci
+	Download	Preuzmi
+	Duplicate Action	Dupliraj radnju
+	Duplicate action	Dupliraj radnju
+	Duplicate group	Dupliraj grupu
+	Duplicate step	Dupliraj korak
+	Edit Action	Uredi radnju
+	Edit action	Uredi radnju
+	Edit step settings	Uredi podešavanja koraka
+	Enable step	Omogući korak
+	Expand all	Proširi sve
+	Export Action…	Izvezi radnju…
+	Finish or cancel action playback and the pending step first	Prvo završite ili otkažite reprodukciju radnje i korak na čekanju
+	Finishing step…	Završavanje koraka…
+	Generated layer effects	Generisani efekti sloja
+	Generated styles	Generisani stilovi
+	Grey	Siva
+	Harmonize layers	Uskladi slojeve
+	Hue and saturation	Nijansa i zasićenost
+	Import Actions…	Uvezi radnje…
+	Import actions or create a new action to get started.	Uvezite radnje ili napravite novu radnju da biste počeli.
+	Insert Action	Umetni radnju
+	Insert Conditional	Umetni uslov
+	Insert Menu Item	Umetni stavku menija
+	Insert Path	Umetni putanju
+	Insert Stop	Umetni zaustavljanje
+	Insert…	Umetni…
+	Keyboard shortcut	Prečica na tastaturi
+	Lavender	Boja lavande
+	Layer effects	Efekti sloja
+	Light blue	Svetloplava
+	List size	Veličina liste
+	Magic wand	Čarobni štapić
+	Merge layers	Spoji slojeve
+	Move step down	Pomeri korak nadole
+	Move step up	Pomeri korak nagore
+	New group	Nova grupa
+	No steps yet	Još nema koraka
+	Object selection	Izbor objekta
+	Play Action	Pusti radnju
+	Play Actions	Pusti radnje
+	Play action	Pusti radnju
+	Play from selected step	Pusti od izabranog koraka
+	Playback Options…	Opcije reprodukcije…
+	Play…	Pusti…
+	Preview on hover	Pregled pri prelasku pokazivača
+	Record	Snimi
+	Recording	Snimanje
+	Remove background	Ukloni pozadinu
+	Save Action	Sačuvaj radnju
+	Search actions	Pretraži radnje
+	Select an existing action step to play	Izaberite postojeći korak radnje za reprodukciju
+	Select subject	Izaberi subjekat
+	Show grid	Prikaži mrežu
+	Show step settings	Prikaži podešavanja koraka
+	Smart removal	Pametno uklanjanje
+	Sort & View options	Opcije sortiranja i prikaza
+	Start recording to build your action	Pokrenite snimanje da biste napravili radnju
+	Steps	Koraci
+	Stored action step	Sačuvan korak radnje
+	Stored settings	Sačuvana podešavanja
+	Teal	Plavozelena
+	Text	Tekst
+	Text colour	Boja teksta
+	The draft steps changed. Cancel this dialog and reopen the step.	Koraci nacrta su promenjeni. Otkažite ovaj dijalog i ponovo otvorite korak.
+	The dragged action changed; drag it again	Radnja koju prevlačite je promenjena; prevucite je ponovo
+	The editor response does not belong to this draft	Odgovor uređivača ne pripada ovom nacrtu
+	There are unsaved changes. Do you want to save or discard them?	Postoje nesačuvane izmene. Želite li da ih sačuvate ili odbacite?
+	This editor page is closed	Ova stranica uređivača je zatvorena
+	This step dialog belongs to another editor	Ovaj dijalog koraka pripada drugom uređivaču
+	Wait for the current action step to finish	Sačekajte da se završi trenutni korak radnje
+	You haven't created any actions	Još niste napravili nijednu radnju
+	Yours	Vaše
+
+# Actions reserved category caption (10945/10946)
+	Ungrouped Actions	Negrupisane radnje
 	Generator enabled	Generator je omogućen
 	This Layer:	Ovaj sloj:
 	Move Up	Pomeri nagore

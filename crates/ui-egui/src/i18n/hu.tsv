@@ -4442,6 +4442,110 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Színpont színe
 	Shapes can't use patterns yet	Az alakzatok még nem használhatnak mintákat
 	Edit Brush…	Ecset szerkesztése…
+
+# Actions list and editor (10945/10946)
+	Action saved, but confirmation preference could not be saved: {error}	A művelet mentve, de a megerősítési beállítást nem sikerült menteni: {error}
+	Add a brief description for this action…	Adja meg a művelet rövid leírását…
+	Allow Tool Recording	Eszközrögzítés engedélyezése
+	Answer the open Actions editor question first	Először válaszoljon a műveletszerkesztő nyitott kérdésére
+	Apply to background	Alkalmazás a háttérre
+	Apply to subject	Alkalmazás a témára
+	Black and white	Fekete-fehér
+	Cancel and continue editing	Mégse és a szerkesztés folytatása
+	Choose color	Szín kiválasztása
+	Choose icon	Ikon kiválasztása
+	Classic Actions	Klasszikus műveletsorok
+	Clear All Actions	Összes művelet törlése
+	Clear search	Keresés törlése
+	Click action	Kattintási művelet
+	Close the open Actions editor first	Először zárja be a nyitott műveletszerkesztőt
+	Collapse all	Összes összecsukása
+	Colour lookup tables	Színkeresési táblázatok
+	Confirm or cancel the open action dialog first	Először erősítse meg vagy szakítsa meg a nyitott műveletpárbeszédet
+	Control	Ctrl
+	Default icon	Alapértelmezett ikon
+	Delete Action	Művelet törlése
+	Delete action	Művelet törlése
+	Delete group	Csoport törlése
+	Delete step	Lépés törlése
+	Delete the action "{name}"?	Törli a(z) „{name}” műveletet?
+	Delete the group "{name}"?	Törli a(z) „{name}” csoportot?
+	Discard	Elvetés
+	Download	Letöltés
+	Duplicate Action	Művelet megkettőzése
+	Duplicate action	Művelet megkettőzése
+	Duplicate group	Csoport megkettőzése
+	Duplicate step	Lépés megkettőzése
+	Edit Action	Művelet szerkesztése
+	Edit action	Művelet szerkesztése
+	Edit step settings	Lépésbeállítások szerkesztése
+	Enable step	Lépés engedélyezése
+	Expand all	Összes kibontása
+	Export Action…	Művelet exportálása…
+	Finish or cancel action playback and the pending step first	Először fejezze be vagy szakítsa meg a művelet lejátszását és a függőben lévő lépést
+	Finishing step…	Lépés befejezése…
+	Generated layer effects	Létrehozott réteghatások
+	Generated styles	Létrehozott stílusok
+	Grey	Szürke
+	Harmonize layers	Rétegek összehangolása
+	Hue and saturation	Színezet és telítettség
+	Import Actions…	Műveletek importálása…
+	Import actions or create a new action to get started.	A kezdéshez importáljon műveleteket, vagy hozzon létre új műveletet.
+	Insert Action	Művelet beszúrása
+	Insert Conditional	Feltétel beszúrása
+	Insert Menu Item	Menüelem beszúrása
+	Insert Path	Görbe beszúrása
+	Insert Stop	Leállítás beszúrása
+	Insert…	Beszúrás…
+	Keyboard shortcut	Billentyűparancs
+	Lavender	Levendula
+	Layer effects	Réteghatások
+	Light blue	Világoskék
+	List size	Lista mérete
+	Magic wand	Varázspálca
+	Merge layers	Rétegek egyesítése
+	Move step down	Lépés mozgatása lefelé
+	Move step up	Lépés mozgatása felfelé
+	New group	Új csoport
+	No steps yet	Még nincsenek lépések
+	Object selection	Objektumkijelölés
+	Play Action	Művelet lejátszása
+	Play Actions	Műveletek lejátszása
+	Play action	Művelet lejátszása
+	Play from selected step	Lejátszás a kijelölt lépéstől
+	Playback Options…	Lejátszási beállítások…
+	Play…	Lejátszás…
+	Preview on hover	Előnézet rámutatáskor
+	Record	Rögzítés
+	Recording	Rögzítés folyamatban
+	Remove background	Háttér eltávolítása
+	Save Action	Művelet mentése
+	Search actions	Műveletek keresése
+	Select an existing action step to play	Válasszon egy meglévő műveletlépést a lejátszáshoz
+	Select subject	Fő téma kijelölése
+	Show grid	Rács megjelenítése
+	Show step settings	Lépésbeállítások megjelenítése
+	Smart removal	Intelligens eltávolítás
+	Sort & View options	Rendezési és nézetbeállítások
+	Start recording to build your action	Indítsa el a rögzítést a művelet létrehozásához
+	Steps	Lépések
+	Stored action step	Tárolt műveletlépés
+	Stored settings	Tárolt beállítások
+	Teal	Kékeszöld
+	Text	Szöveg
+	Text colour	Szövegszín
+	The draft steps changed. Cancel this dialog and reopen the step.	A piszkozat lépései megváltoztak. Szakítsa meg ezt a párbeszédet, és nyissa meg újra a lépést.
+	The dragged action changed; drag it again	A húzott művelet megváltozott; húzza újra
+	The editor response does not belong to this draft	A szerkesztő válasza nem ehhez a piszkozathoz tartozik
+	There are unsaved changes. Do you want to save or discard them?	Nem mentett módosítások vannak. Menti vagy elveti őket?
+	This editor page is closed	Ez a szerkesztőoldal be van zárva
+	This step dialog belongs to another editor	Ez a lépéspárbeszéd egy másik szerkesztőhöz tartozik
+	Wait for the current action step to finish	Várja meg az aktuális műveletlépés befejezését
+	You haven't created any actions	Még nem hozott létre műveletet
+	Yours	Saját
+
+# Actions reserved category caption (10945/10946)
+	Ungrouped Actions	Nem csoportosított műveletsorok
 	This Layer:	Ez a réteg:
 	Generator enabled	Generátor bekapcsolva
 	Move Up	Mozgatás felfelé

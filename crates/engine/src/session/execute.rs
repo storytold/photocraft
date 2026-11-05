@@ -95,6 +95,7 @@ impl Session {
     /// document, a hidden target. The run params (the Channels panel's target filled in) when it
     /// may run.
     pub(crate) fn admit(&mut self, id: &str, spec: &commands::CommandSpec, params: &Value) -> Result<Value> {
+        crate::actions_cmds::playback::admit(self, id)?;
         let run_params = channel_cmds::inject_target(self, id, commands::inject_kind(id, params.clone()));
         if let Some(why) = color_channels::refusal(self, id, &run_params) {
             return Err(EngineError::Disabled(id.into(), why));

@@ -92,6 +92,7 @@ impl PhotocraftApp {
         // shortcuts see Esc).
         if !screen_picker::tick(self, ctx) {
             jobs_ui::tick(self, ctx);
+            crate::actions::tick(self, ctx);
             #[cfg(not(target_arch = "wasm32"))]
             crate::dialogs::filter_preview_worker::discard_closed(self);
             if type_tool::in_ui_pass(ctx) {
@@ -326,6 +327,7 @@ impl PhotocraftApp {
             workspace_ui::windows(self, &ctx);
         }
         palette::show(self, &ctx);
+        crate::actions::modals(self, &ctx);
         dialogs::show(self, &ctx);
         layers_panel_ui::show_dialog(self, &ctx);
         rasterize_prompt::run_pending(self, &ctx);
@@ -365,6 +367,7 @@ impl PhotocraftApp {
         tool_memory::persist(self, &ctx);
         // So are View › Extras, Show and Snap To (#3762).
         view_cmds::persist(self, &ctx);
+        crate::actions::persist(self, &ctx);
         // Remember the 0.37 panel sizes so a later 0.36 rollback's newer old-key values win on
         // the next upgrade (see `panels::migrate_panel_state`).
         panels::remember_panel_state(&ctx);

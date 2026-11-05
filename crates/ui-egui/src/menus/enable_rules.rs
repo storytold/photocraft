@@ -340,12 +340,12 @@ mod tests {
         for sel in selections {
             for copied in [false, true] {
                 for (cmd, must_change) in commands {
-                    let app = crate::PhotocraftApp::new(world(sel, copied), crate::Services::default());
+                    let mut app = crate::PhotocraftApp::new(world(sel, copied), crate::Services::default());
                     let enabled = crate::menus::is_enabled(&app, cmd);
-                    let mut s = app.session;
-                    let before = fingerprint(&s);
+                    let s = &mut app.session;
+                    let before = fingerprint(s);
                     let r = s.execute(cmd, json!({}));
-                    let changed = fingerprint(&s) != before;
+                    let changed = fingerprint(s) != before;
                     let what = format!(
                         "{cmd} for {sel:?} (copied style: {copied}), enabled={enabled}, result={:?}",
                         r.as_ref().map(|_| ()).map_err(|e| e.to_string())

@@ -18,6 +18,109 @@ layers and documents, newer and older events and files, and a measured reference
 map yet, with everything needed to implement them without
 the reference application.
 
+## Durable Actions library
+
+The preset store keeps the complete library in `actions.atn`. Physical set and action
+occurrences, empty folders, function keys, header colours, step flags, descriptions and
+icons survive a restart. Untouched version-16 records retain their original bytes,
+including unknown events and descriptor fields. Editing one record does not normalize
+unrelated records. A known metadata sidecar carries descriptions and icons; a sidecar-only
+archive represents an empty PhotoCraft library without inventing a user folder.
+
+When ATN is absent, PhotoCraft reads the old `actions.json` once, validates and encodes
+the complete library, then publishes ATN before renaming the exact JSON input to
+`actions.json.migrated`. It never overwrites a backup. Invalid input stays unchanged
+with a warning. Existing ATN always takes precedence, including an unreadable ATN;
+there is no fallback that overwrites it. A receipt inside migrated ATN identifies the
+exact legacy bytes for recovery after interrupted retirement. Native publication and
+retirement are separate steps; a retirement failure retains ATN and the legacy input.
+Browser migration uses one acknowledged IndexedDB transaction. Pending or failed
+transactions remain marked unsaved.
+
+PhotoCraft commands that have no lossless Photoshop representation use a string event
+named `photocraftCommand`. Its descriptor has TEXT fields `command` and `params`;
+`params` contains JSON. Loading it validates the payload without running the command
+or requiring its registration. Portable import and Save Actions admit registered native
+commands only when recording permits them or they are playback controls; a refused export
+returns an error. The local preset library retains every native command and its complete
+JSON. `skipUnsupported: true` omits native steps and reports each skipped step. Photoshop
+does not implement these PhotoCraft events.
+
+CLI file inputs accept ATN libraries and PhotoCraft droplets. Legacy JSON action-library
+files are rejected. The control protocol and MCP still use command JSON.
+
+## Action header colours
+
+Load and Save Actions preserve each action's colour index. Indices 0–11 map to
+`""`, `red`, `orange`, `yellow`, `green`, `blue`, `violet`, `gray`, `teal`, `blue2`,
+`magenta`, and `purple`, respectively. The existing `blue` name remains index 5
+(light blue); `blue2` is the newer blue at index 9. `actions.setColor` accepts
+these measured names. The classic colour menu keeps its eight choices.
+
+An unknown u16 colour index is retained in the runtime action model as the reserved
+String `@atn-color:N`, where `N` is its canonical decimal index from 12 to 65535.
+It survives library reloads and ATN export, but cannot be selected with
+`actions.setColor`. Invalid colour strings fail export, including exports with
+`skipUnsupported`, rather than silently becoming index 0. New colours and unknown
+indices use a neutral theme card in Classic Button Mode until their swatches are
+provided by the newer editor. The integrated sidecar support below is separate from
+these header colour indices.
+
+## Unpublished action editor backend
+
+The backend editor commands keep one complete action draft outside the live library:
+
+- `actions.editor.open {action}` copies an existing action. With no `action`, it
+  prepares a new value with an optional `name` and `set`, without creating a row.
+  It returns a `draft` identity; subsequent mutations must supply that identity.
+- `actions.editor.get {draft?}` reports the complete action, proposed shortcut,
+  dirty/recording state and opening library revision. `update {draft,name?,description?,icon?,color?,shortcut?}`
+  stages metadata without publishing it. Description and raw icon text are retained,
+  including unknown icon identifiers; non-string values fail without changing the draft.
+  Native Actions libraries default both fields to empty when loading older files.
+- `actions.editor.step {draft,op,step,...}` stages insert, replace, delete, move,
+  duplicate, enabled and dialog operations. Moved flags follow their steps. Opaque
+  unedited original steps, flags and imported colours are retained.
+- `actions.editor.record` / `stop` capture normalized logical commands into the
+  draft, including named calls and job-take ownership, without publishing a placeholder.
+  Completed pending steps are visible immediately. Classic `actions.record` / `stop`
+  retain their existing immediate-library behavior and require no editor Save.
+- `actions.editor.save {draft}` validates the opening action/revision and action
+  shortcut namespace before one logical definition/reference/shortcut update. It
+  ends its own capture when publishing. Collisions and stale state leave the draft
+  and committed components intact. Save ends an empty capture too, while leaving
+  unchanged committed definitions, shortcuts and revisions alone; an untouched
+  default new draft remains unpublished. Shortcut conflicts follow Classic assignment,
+  including its `removeConflicts:false` behavior for alternates. The preset store keeps its existing I/O
+  warning/retry behavior, not a new multi-file durable transaction.
+- `actions.editor.discard {draft}` drops only that draft and capture. It does not
+  restore an old library snapshot, erase the journal or undo document edits made
+  while recording. Old editor identities cannot mutate a reopened editor.
+
+Descriptions and icons use the same ATN library and metadata sidecar as Load/Save
+Actions. The one-time JSON migration and recovery rules above apply to editor
+changes too.
+Actions belong to that library, not to `.pcraft` documents. The integrated ATN
+sidecar reader and writer preserve descriptions, icons and opaque imported metadata.
+Unedited physical set rows, including empty and duplicate-name rows, retain their
+positional carriers; deliberate logical group/action moves retain panel ordering.
+Editing a description preserves unknown thumbnail data; an explicitly supplied icon
+choice replaces it. `skipUnsupported` permits omitting unsupported steps, not silently
+dropping sidecar metadata. Untouched names and record bytes remain preserved.
+
+The Modern editor stages changes in an unpublished draft. Save publishes the
+edited action; Discard leaves the library unchanged, and Cancel keeps editing.
+The shell's owned preview adapter retains the complete unpublished snapshot, original
+step indices and flags, authorization gate and step budget across dialogs. It resumes
+the parent tail after a nested preview call pauses. Preview executes normal document
+commands, with no temporary library row, definition Save, self-call or document rollback.
+New definition edits wait for the owning step dialog to finish or cancel. A preview
+waits for existing jobs before taking capture; jobs started by its step dialogs retain
+the normal completion/failure and foreign-take handling. The raw legacy `begin_playback`
+entry still refuses an active draft recorder; the owned adapter suspends it explicitly.
+Headless `Session::execute(actions.play)` and deliberate shell library calls capture
+one named call in either recorder.
+
 ## Action playback history
 
 Actions create one history entry named `Action: <name>` by default. Nested plays
@@ -2161,3 +2264,12 @@ Copy and Paste Layer Style (`copyEffects`, `pasteEffects`), Align (`align`), Ren
 layer's name), Deselect (Set of the selection to None). Steps recorded with Backlight, Fill Flash, Color
 Cast, Variations, Texture Fill and the old Snapshot events come only from very old versions and stay kept
 steps.
+
+
+Native commands in imported files follow the action recorder's command eligibility.
+Registered configuration commands, including plug-in installation and script wrappers,
+are refused before the imported library is installed. Replayable edits, recorded file
+operations, and playback controls remain available. Unknown command IDs can be retained
+for future versions but fail normal playback dispatch while unsupported. The local ATN
+preset library preserves all native command IDs and JSON parameters without executing
+steps during load.

@@ -171,15 +171,11 @@ pub(crate) enum Step {
 
 /// Apply an action list to every image in a directory
 ///
-/// A Photoshop Actions file (.atn) is a set: its action --action names plays, as below. JSON steps
-/// are [id, params] pairs, {"command": id, "params": {…}} objects or bare ids, as a recorded
-/// action or droplet stores them (a list, or wrapped in {"actions": …}, {"steps": …} or a
-/// droplet). An Actions set (the Actions panel's actions.json, {"actions": [{"name", "steps"}…]})
-/// plays the action --action names (needed when the set holds more than one) with the whole set
-/// loaded, so its steps can play other actions of the set.
+/// Process images using an ATN Actions library or a PhotoCraft droplet. --action selects
+/// one action from a library, with the whole library available for nested action calls.
 #[derive(Args)]
 pub(crate) struct BatchArgs {
-    /// The action list: actions.json, a droplet, or a Photoshop Actions file (.atn)
+    /// An ATN Actions library (.atn) or a PhotoCraft droplet
     #[arg(long, value_name = "FILE")]
     pub(crate) actions: PathBuf,
     /// Which action of an Actions set to play

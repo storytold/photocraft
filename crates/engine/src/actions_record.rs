@@ -54,7 +54,7 @@ pub(crate) fn portable(s: &Session, id: &str, mut params: Value, before: &Before
         return serde_json::json!({"offset": offset});
     }
     let Some(doc) = before.doc.as_deref() else { return params };
-    if id == "type.create" && s.actions.recording.is_some() && params.get("box").is_none() && doc.size.width > 0 && doc.size.height > 0 {
+    if id == "type.create" && s.actions.recording_active() && params.get("box").is_none() && doc.size.width > 0 && doc.size.height > 0 {
         let x = params.get("x").and_then(Value::as_f64).unwrap_or(0.0);
         let y = params.get("y").and_then(Value::as_f64).unwrap_or(0.0);
         let x_percent = x / f64::from(doc.size.width) * 100.0;
@@ -132,7 +132,7 @@ pub(crate) fn fold_keystroke(s: &mut Session, id: &str, params: &Value, previous
     }
     // A new recording starts at a journal boundary. Its first edit cannot change an entry
     // before that boundary, or actions.stop would miss the edit altogether.
-    if s.actions.recording.is_some_and(|(start, _)| s.journal.len() <= start) {
+    if s.actions.recording_cursor().is_some_and(|start| s.journal.len() <= start) {
         return Keystroke::None;
     }
     let Some((last, lp)) = s.journal.last_mut() else { return Keystroke::None };

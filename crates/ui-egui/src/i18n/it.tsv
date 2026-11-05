@@ -4634,6 +4634,110 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Colore del punto
 	Shapes can't use patterns yet	Le forme non possono ancora usare pattern
 	Edit Brush…	Modifica pennello…
+
+# Actions list and editor (10945/10946)
+	Action saved, but confirmation preference could not be saved: {error}	L’azione è stata salvata, ma non è stato possibile salvare la preferenza di conferma: {error}
+	Add a brief description for this action…	Aggiungi una breve descrizione di questa azione…
+	Allow Tool Recording	Consenti la registrazione degli strumenti
+	Answer the open Actions editor question first	Rispondi prima alla domanda aperta nell’editor delle azioni
+	Apply to background	Applica allo sfondo
+	Apply to subject	Applica al soggetto
+	Black and white	Bianco e nero
+	Cancel and continue editing	Annulla e continua a modificare
+	Choose color	Scegli colore
+	Choose icon	Scegli icona
+	Classic Actions	Azioni classiche
+	Clear All Actions	Cancella tutte le azioni
+	Clear search	Cancella ricerca
+	Click action	Azione di clic
+	Close the open Actions editor first	Chiudi prima l’editor delle azioni aperto
+	Collapse all	Comprimi tutto
+	Colour lookup tables	Tabelle di corrispondenza dei colori
+	Confirm or cancel the open action dialog first	Conferma o annulla prima la finestra di dialogo dell’azione aperta
+	Control	Ctrl
+	Default icon	Icona predefinita
+	Delete Action	Elimina azione
+	Delete action	Elimina azione
+	Delete group	Elimina gruppo
+	Delete step	Elimina passaggio
+	Delete the action "{name}"?	Eliminare l’azione «{name}»?
+	Delete the group "{name}"?	Eliminare il gruppo «{name}»?
+	Discard	Scarta
+	Download	Scarica
+	Duplicate Action	Duplica azione
+	Duplicate action	Duplica azione
+	Duplicate group	Duplica gruppo
+	Duplicate step	Duplica passaggio
+	Edit Action	Modifica azione
+	Edit action	Modifica azione
+	Edit step settings	Modifica impostazioni del passaggio
+	Enable step	Abilita passaggio
+	Expand all	Espandi tutto
+	Export Action…	Esporta azione…
+	Finish or cancel action playback and the pending step first	Completa o annulla prima la riproduzione dell’azione e il passaggio in sospeso
+	Finishing step…	Completamento del passaggio…
+	Generated layer effects	Effetti di livello generati
+	Generated styles	Stili generati
+	Grey	Grigio
+	Harmonize layers	Armonizza livelli
+	Hue and saturation	Tonalità e saturazione
+	Import Actions…	Importa azioni…
+	Import actions or create a new action to get started.	Importa azioni o crea una nuova azione per iniziare.
+	Insert Action	Inserisci azione
+	Insert Conditional	Inserisci condizione
+	Insert Menu Item	Inserisci voce di menu
+	Insert Path	Inserisci tracciato
+	Insert Stop	Inserisci interruzione
+	Insert…	Inserisci…
+	Keyboard shortcut	Scorciatoia da tastiera
+	Lavender	Lavanda
+	Layer effects	Effetti di livello
+	Light blue	Blu chiaro
+	List size	Dimensione elenco
+	Magic wand	Bacchetta magica
+	Merge layers	Unisci livelli
+	Move step down	Sposta passaggio in basso
+	Move step up	Sposta passaggio in alto
+	New group	Nuovo gruppo
+	No steps yet	Ancora nessun passaggio
+	Object selection	Selezione oggetto
+	Play Action	Riproduci azione
+	Play Actions	Riproduci azioni
+	Play action	Riproduci azione
+	Play from selected step	Riproduci dal passaggio selezionato
+	Playback Options…	Opzioni di riproduzione…
+	Play…	Riproduci…
+	Preview on hover	Anteprima al passaggio del puntatore
+	Record	Registra
+	Recording	Registrazione
+	Remove background	Rimuovi sfondo
+	Save Action	Salva azione
+	Search actions	Cerca azioni
+	Select an existing action step to play	Seleziona un passaggio di azione esistente da riprodurre
+	Select subject	Seleziona soggetto
+	Show grid	Mostra griglia
+	Show step settings	Mostra impostazioni del passaggio
+	Smart removal	Rimozione intelligente
+	Sort & View options	Opzioni di ordinamento e visualizzazione
+	Start recording to build your action	Avvia la registrazione per creare la tua azione
+	Steps	Passaggi
+	Stored action step	Passaggio di azione memorizzato
+	Stored settings	Impostazioni memorizzate
+	Teal	Verde petrolio
+	Text	Testo
+	Text colour	Colore del testo
+	The draft steps changed. Cancel this dialog and reopen the step.	I passaggi della bozza sono cambiati. Annulla questa finestra di dialogo e riapri il passaggio.
+	The dragged action changed; drag it again	L’azione trascinata è cambiata; trascinala di nuovo
+	The editor response does not belong to this draft	La risposta dell’editor non appartiene a questa bozza
+	There are unsaved changes. Do you want to save or discard them?	Ci sono modifiche non salvate. Vuoi salvarle o scartarle?
+	This editor page is closed	Questa pagina dell’editor è chiusa
+	This step dialog belongs to another editor	Questa finestra di dialogo del passaggio appartiene a un altro editor
+	Wait for the current action step to finish	Attendi il completamento del passaggio di azione corrente
+	You haven't created any actions	Non hai ancora creato azioni
+	Yours	Le tue azioni
+
+# Actions reserved category caption (10945/10946)
+	Ungrouped Actions	Azioni non raggruppate
 	Generator enabled	Generatore abilitato
 	This Layer:	Questo livello:
 	Move Up	Sposta su

@@ -4449,6 +4449,110 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Cor da parada
 	Shapes can't use patterns yet	Formas ainda não podem usar padrões
 	Edit Brush…	Editar pincel…
+
+# Actions list and editor (10945/10946)
+	Action saved, but confirmation preference could not be saved: {error}	A ação foi salva, mas não foi possível salvar a preferência de confirmação: {error}
+	Add a brief description for this action…	Adicione uma breve descrição desta ação…
+	Allow Tool Recording	Permitir gravação de ferramentas
+	Answer the open Actions editor question first	Responda primeiro à pergunta aberta no editor de ações
+	Apply to background	Aplicar ao plano de fundo
+	Apply to subject	Aplicar ao assunto
+	Black and white	Preto e branco
+	Cancel and continue editing	Cancelar e continuar editando
+	Choose color	Escolher cor
+	Choose icon	Escolher ícone
+	Classic Actions	Ações clássicas
+	Clear All Actions	Limpar todas as ações
+	Clear search	Limpar pesquisa
+	Click action	Ação de clique
+	Close the open Actions editor first	Feche primeiro o editor de ações aberto
+	Collapse all	Recolher tudo
+	Colour lookup tables	Tabelas de consulta de cores
+	Confirm or cancel the open action dialog first	Confirme ou cancele primeiro a caixa de diálogo de ação aberta
+	Control	Ctrl
+	Default icon	Ícone padrão
+	Delete Action	Excluir ação
+	Delete action	Excluir ação
+	Delete group	Excluir grupo
+	Delete step	Excluir etapa
+	Delete the action "{name}"?	Excluir a ação “{name}”?
+	Delete the group "{name}"?	Excluir o grupo “{name}”?
+	Discard	Descartar
+	Download	Baixar
+	Duplicate Action	Duplicar ação
+	Duplicate action	Duplicar ação
+	Duplicate group	Duplicar grupo
+	Duplicate step	Duplicar etapa
+	Edit Action	Editar ação
+	Edit action	Editar ação
+	Edit step settings	Editar configurações da etapa
+	Enable step	Ativar etapa
+	Expand all	Expandir tudo
+	Export Action…	Exportar ação…
+	Finish or cancel action playback and the pending step first	Conclua ou cancele primeiro a reprodução da ação e a etapa pendente
+	Finishing step…	Concluindo etapa…
+	Generated layer effects	Efeitos de camada gerados
+	Generated styles	Estilos gerados
+	Grey	Cinza
+	Harmonize layers	Harmonizar camadas
+	Hue and saturation	Matiz e saturação
+	Import Actions…	Importar ações…
+	Import actions or create a new action to get started.	Importe ações ou crie uma nova ação para começar.
+	Insert Action	Inserir ação
+	Insert Conditional	Inserir condição
+	Insert Menu Item	Inserir item de menu
+	Insert Path	Inserir caminho
+	Insert Stop	Inserir parada
+	Insert…	Inserir…
+	Keyboard shortcut	Atalho de teclado
+	Lavender	Lavanda
+	Layer effects	Efeitos de camada
+	Light blue	Azul-claro
+	List size	Tamanho da lista
+	Magic wand	Varinha mágica
+	Merge layers	Mesclar camadas
+	Move step down	Mover etapa para baixo
+	Move step up	Mover etapa para cima
+	New group	Novo grupo
+	No steps yet	Ainda não há etapas
+	Object selection	Seleção de objetos
+	Play Action	Reproduzir ação
+	Play Actions	Reproduzir ações
+	Play action	Reproduzir ação
+	Play from selected step	Reproduzir a partir da etapa selecionada
+	Playback Options…	Opções de reprodução…
+	Play…	Reproduzir…
+	Preview on hover	Visualizar ao passar o cursor
+	Record	Gravar
+	Recording	Gravando
+	Remove background	Remover plano de fundo
+	Save Action	Salvar ação
+	Search actions	Pesquisar ações
+	Select an existing action step to play	Selecione uma etapa de ação existente para reproduzir
+	Select subject	Selecionar assunto
+	Show grid	Mostrar grade
+	Show step settings	Mostrar configurações da etapa
+	Smart removal	Remoção inteligente
+	Sort & View options	Opções de classificação e visualização
+	Start recording to build your action	Inicie a gravação para criar sua ação
+	Steps	Etapas
+	Stored action step	Etapa de ação armazenada
+	Stored settings	Configurações armazenadas
+	Teal	Verde-azulado
+	Text	Texto
+	Text colour	Cor do texto
+	The draft steps changed. Cancel this dialog and reopen the step.	As etapas do rascunho foram alteradas. Cancele esta caixa de diálogo e abra a etapa novamente.
+	The dragged action changed; drag it again	A ação arrastada foi alterada; arraste-a novamente
+	The editor response does not belong to this draft	A resposta do editor não pertence a este rascunho
+	There are unsaved changes. Do you want to save or discard them?	Há alterações não salvas. Deseja salvá-las ou descartá-las?
+	This editor page is closed	Esta página do editor está fechada
+	This step dialog belongs to another editor	Esta caixa de diálogo de etapa pertence a outro editor
+	Wait for the current action step to finish	Aguarde a conclusão da etapa de ação atual
+	You haven't created any actions	Você ainda não criou nenhuma ação
+	Yours	Suas ações
+
+# Actions reserved category caption (10945/10946)
+	Ungrouped Actions	Ações sem grupo
 	Drag to move the active shape's path or the Work Path	Arraste para mover o demarcador da forma ativa ou o demarcador de trabalho
 	Generator enabled	Gerador ativado
 	Move Up	Mover para cima
