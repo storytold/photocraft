@@ -313,6 +313,19 @@ fn with_root_item_between_groups(group: &str, key: &str) -> PresetUi {
     state
 }
 
+fn with_root_item_before_group(group: &str, key: &str, lower_group: &str) -> PresetUi {
+    let mut state = PresetUi::default();
+    state.set_hierarchy_order(
+        PANEL,
+        "",
+        vec![
+            HierarchyOrderEntry::RootItem { group: group.into(), key: key.into() },
+            HierarchyOrderEntry::Group(lower_group.into()),
+        ],
+    );
+    state
+}
+
 fn with_consecutive_root_cards_from_different_groups() -> PresetUi {
     let mut state = PresetUi::default();
     state.set_hierarchy_order(
@@ -736,6 +749,58 @@ fn actual_six_pixel_group_gap_selects_upper_append_and_lower_sibling_levels() {
             assert!(c_index < b_index, "lower gap half inserts before the lower group: {a:?}");
         }
     }
+}
+
+#[test]
+fn actual_card_above_group_shows_the_upper_horizontal_sibling_marker() {
+    let mut h = harness_with_state(
+        nested_group_tree(),
+        vec2(520.0, 900.0),
+        with_root_item_before_group("A", "a1", "B"),
+    );
+    let source = h.get_by_label("C").rect().center();
+    let card = h.get_by_label("A card 1").rect();
+    let lower_group = h.get_by_label("B").rect();
+    assert!(card.bottom() <= lower_group.top(), "the root card should be the immediately preceding sibling: card={card:?}, group={lower_group:?}");
+
+    let target = pos2(card.center().x, lower_group.top() - 4.0);
+    h.event(Event::PointerMoved(source));
+    h.run_steps(1);
+    h.event(Event::PointerButton { pos: source, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    for step in 1..=8 {
+        h.event(Event::PointerMoved(source + (target - source) * (step as f32 / 8.0)));
+        h.run_steps(1);
+    }
+
+    let accent = crate::theme::Tokens::get(&h.ctx).accent.to_array();
+    let image = h.render().expect("render card-to-group sibling marker");
+    let ppp = h.ctx.pixels_per_point();
+    let y = (lower_group.top() * ppp).round() as i32;
+    let x0 = (card.left() * ppp).round() as i32;
+    let x1 = (card.right() * ppp).round() as i32;
+    let has_accent = |x: i32| {
+        (y - 3..=y + 3).any(|py| {
+            x >= 0 && py >= 0 && (x as u32) < image.width() && (py as u32) < image.height() && image.get_pixel(x as u32, py as u32).0[..3] == accent[..3]
+        })
+    };
+    assert!(
+        (x0..=x1).filter(|x| has_accent(*x)).count() > (x1 - x0) as usize * 3 / 4,
+        "dragging over the upper half of a card→group boundary must paint a horizontal marker across the preceding card; card={card:?}, group={lower_group:?}, y={y}, accent_pixels={}, width={}, order={:?}",
+        (x0..=x1).filter(|x| has_accent(*x)).count(),
+        x1 - x0,
+        h.state().0.hierarchy_order[PANEL]
+    );
+    h.event(Event::PointerButton { pos: target, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+    let root_order = &h.state().0.hierarchy_order[PANEL][""];
+    let card_index = root_order.iter().position(|entry| *entry == HierarchyOrderEntry::RootItem { group: "A".into(), key: "a1".into() }).unwrap();
+    let dragged_index = root_order.iter().position(|entry| *entry == HierarchyOrderEntry::Group("C".into())).unwrap();
+    let lower_index = root_order.iter().position(|entry| *entry == HierarchyOrderEntry::Group("B".into())).unwrap();
+    assert!(
+        card_index < dragged_index && dragged_index < lower_index,
+        "the upper half of the card→group boundary should insert the dragged group after the card and before the lower group: {root_order:?}"
+    );
 }
 
 #[test]

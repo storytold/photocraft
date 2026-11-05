@@ -175,14 +175,13 @@ pub(crate) fn group_gap_drop_hits(spec: GroupGapDropSpec) -> Vec<DropHitRegion> 
     let GroupGapDropSpec { rect, upper, lower, upper_bounds, lower_bounds, upper_depth, lower_depth, order } = spec;
     debug_assert!(rect.height() >= 2.0);
     let middle = rect.center().y;
-    // The six-pixel gap is the hit area, not the marker thickness. The upper half means
-    // inserting after the preceding sibling, so its marker belongs on the lower header's top
-    // boundary (the bottom of the gap), not at the gap center. The lower half remains centered
-    // in the gap as its before-target affordance.
+    // The six-pixel gap is the hit area, not the marker thickness. Both halves resolve to the
+    // same sibling boundary, so both markers belong on the lower header's top edge, not at the
+    // gap center.
     let marker_top = middle - 2.0;
     let marker_bottom = middle + 2.0;
     let upper_line = Rect::from_min_max(Pos2::new(upper_bounds.left(), marker_top + 3.0), Pos2::new(upper_bounds.right(), marker_bottom + 3.0));
-    let lower_line = Rect::from_min_max(Pos2::new(lower_bounds.left(), marker_top), Pos2::new(lower_bounds.right(), marker_bottom));
+    let lower_line = Rect::from_min_max(Pos2::new(lower_bounds.left(), marker_top + 3.0), Pos2::new(lower_bounds.right(), marker_bottom + 3.0));
     vec![
         DropHitRegion {
             target: Some(upper),
@@ -205,10 +204,15 @@ pub(crate) fn group_gap_drop_hits(spec: GroupGapDropSpec) -> Vec<DropHitRegion> 
     ]
 }
 
-/// Vertical trailing-edge marker for appending after a card in the grid layout.
-pub(crate) fn card_trailing_marker_rect(rect: Rect) -> Rect {
-    let x = rect.right();
-    Rect::from_min_max(Pos2::new(x - 2.0, rect.top()), Pos2::new(x + 2.0, rect.bottom()))
+/// Trailing-edge marker for appending after a card, oriented for its layout.
+pub(crate) fn card_trailing_marker_rect(rect: Rect, grid: bool) -> Rect {
+    if grid {
+        let x = rect.right();
+        Rect::from_min_max(Pos2::new(x - 2.0, rect.top()), Pos2::new(x + 2.0, rect.bottom()))
+    } else {
+        let y = rect.bottom();
+        Rect::from_min_max(Pos2::new(rect.left(), y - 2.0), Pos2::new(rect.right(), y + 2.0))
+    }
 }
 
 /// Vertical leading-edge marker for inserting before a card in the grid layout.
@@ -336,10 +340,12 @@ mod insertion_marker_tests {
     }
 
     #[test]
-    fn card_trailing_marker_is_vertical_and_matches_the_card_height() {
+    fn card_trailing_marker_matches_grid_or_list_orientation() {
         let card = Rect::from_min_max(Pos2::new(40.0, 20.0), Pos2::new(140.0, 80.0));
-        let marker = card_trailing_marker_rect(card);
-        assert_eq!(marker, Rect::from_min_max(Pos2::new(138.0, 20.0), Pos2::new(142.0, 80.0)));
+        let grid_marker = card_trailing_marker_rect(card, true);
+        assert_eq!(grid_marker, Rect::from_min_max(Pos2::new(138.0, 20.0), Pos2::new(142.0, 80.0)));
+        let list_marker = card_trailing_marker_rect(card, false);
+        assert_eq!(list_marker, Rect::from_min_max(Pos2::new(40.0, 78.0), Pos2::new(140.0, 82.0)));
     }
 
     #[test]
@@ -444,7 +450,7 @@ mod insertion_marker_tests {
         assert_eq!(split[1].target, Some(NodeId::from("lower")));
         assert_eq!(split[1].hit_rect.height(), 3.0);
         assert_eq!(split[0].indicator_rect, Rect::from_min_max(Pos2::new(31.0, 104.0), Pos2::new(131.0, 108.0)));
-        assert_eq!(split[1].indicator_rect, Rect::from_min_max(Pos2::new(31.0, 101.0), Pos2::new(231.0, 105.0)));
+        assert_eq!(split[1].indicator_rect, Rect::from_min_max(Pos2::new(31.0, 104.0), Pos2::new(231.0, 108.0)));
         assert_eq!(split[0].indicator_rect.height(), 4.0);
         assert_eq!(split[1].indicator_rect.height(), 4.0);
 
@@ -507,7 +513,7 @@ mod insertion_marker_tests {
                     assert_eq!(hits[0].hit_rect.height(), 3.0);
                     assert_eq!(hits[1].hit_rect.height(), 3.0);
                     assert_eq!(hits[0].indicator_rect, Rect::from_min_max(Pos2::new(left + 3.0, top + 4.0), Pos2::new(left + 3.0 + width * 0.4, top + 8.0)));
-                    assert_eq!(hits[1].indicator_rect, Rect::from_min_max(Pos2::new(left + 3.0, top + 1.0), Pos2::new(left + 3.0 + width * 0.8, top + 5.0)));
+                    assert_eq!(hits[1].indicator_rect, Rect::from_min_max(Pos2::new(left + 3.0, top + 4.0), Pos2::new(left + 3.0 + width * 0.8, top + 8.0)));
                     assert_eq!(hits[0].indicator_rect.height(), 4.0);
                     assert_eq!(hits[1].indicator_rect.height(), 4.0);
                     assert_eq!(hits[0].depth, 0);

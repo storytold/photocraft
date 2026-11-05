@@ -2793,14 +2793,10 @@ pub(crate) fn browser_with_root_sequence(
                             // append target, not be demoted by the generic gap-hit assignment.
                             hits[0].depth = usize::MAX;
                         }
-                        // A card's trailing edge is a vertical insertion point (the same
-                        // orientation used when inserting after a card in the grid). Group
-                        // anchors retain the horizontal boundary marker spanning the header.
-                        if let Some((anchor, _)) = upper_anchor.as_ref()
-                            && hierarchy.node(anchor).is_some_and(|node| !node.is_group())
-                        {
-                            hits[0].indicator_rect = card_trailing_marker_rect(upper_bounds);
-                        }
+                        // This is the upper half of a group boundary, so its feedback is the
+                        // horizontal sibling line at the lower group's top edge even when the
+                        // preceding sibling is a card. Card-edge markers are for card-to-card
+                        // insertion, not for this group boundary.
                         // If the lower group is first in its sibling sequence, append to its parent.
                         // Otherwise insert after the actual preceding sibling (card or group).
                         if let Some((anchor, _)) = upper_anchor.filter(|_| !anchor_is_parent) {
@@ -2901,6 +2897,58 @@ pub(crate) fn browser_with_root_sequence(
                         },
                         response,
                     ));
+                }
+                // A root card (or nested item) can be the immediate preceding sibling of a
+                // group. Header-only gap pairing above cannot see that boundary when there is
+                // no earlier group header, so register the same two-sided group boundary from
+                // the actual hierarchy sibling sequence.
+                fn collect_item_group_sibling_pairs(nodes: &[HierarchyNode], out: &mut Vec<(NodeId, NodeId)>) {
+                    for pair in nodes.windows(2) {
+                        if matches!(pair, [HierarchyNode::Item(_), HierarchyNode::Group { .. }]) {
+                            out.push((pair[0].id().clone(), pair[1].id().clone()));
+                        }
+                    }
+                    for node in nodes {
+                        if node.is_group() {
+                            collect_item_group_sibling_pairs(node.children(), out);
+                        }
+                    }
+                }
+                let mut item_group_pairs = Vec::new();
+                collect_item_group_sibling_pairs(hierarchy.roots(), &mut item_group_pairs);
+                for (item_id, group_id) in item_group_pairs {
+                    let Some(item_bounds) = canonical_node_bounds.borrow().get(&item_id).copied() else {
+                        continue;
+                    };
+                    let Some(group_bounds) = canonical_node_bounds.borrow().get(&group_id).copied() else {
+                        continue;
+                    };
+                    let gap = Rect::from_min_max(
+                        pos2(item_bounds.left().min(group_bounds.left()), group_bounds.top() - GROUP_GAP_DROP_HEIGHT),
+                        pos2(group_bounds.right(), group_bounds.top()),
+                    );
+                    if !gap.is_positive() {
+                        continue;
+                    }
+                    let response = ui.interact(gap, ui.id().with(("group-card-sibling-gap", panel, &item_id, &group_id)), Sense::hover());
+                    let order = canonical_drop_hits.borrow().len();
+                    let mut hits = group_gap_drop_hits(GroupGapDropSpec {
+                        rect: gap,
+                        upper: item_id,
+                        lower: group_id,
+                        upper_bounds: item_bounds,
+                        lower_bounds: group_bounds,
+                        upper_depth: 0,
+                        lower_depth: 0,
+                        order,
+                    });
+                    // This structural boundary is more specific than the overlapping card
+                    // trailing edge and group leading edge targets.
+                    hits[0].depth = usize::MAX;
+                    hits[1].depth = usize::MAX;
+                    for hit in hits {
+                        canonical_drop_hits.borrow_mut().push((hit, response.clone()));
+                    }
                 }
             }
             // `dnd_release_payload` takes the one global egui payload. Resolve the card target
@@ -3012,7 +3060,7 @@ pub(crate) fn browser_with_root_sequence(
                         .borrow()
                         .get(last.id())
                         .copied()
-                        .map(card_trailing_marker_rect)
+                        .map(|bounds| card_trailing_marker_rect(bounds, !list))
                         .unwrap_or_else(|| Rect::from_min_max(pos2(ui.clip_rect().left(), root_end_rect.top() - 2.0), pos2(ui.clip_rect().right(), root_end_rect.top() + 2.0))),
                     _ => Rect::from_min_max(pos2(ui.clip_rect().left(), root_end_rect.top() - 2.0), pos2(ui.clip_rect().right(), root_end_rect.top() + 2.0)),
                 };
