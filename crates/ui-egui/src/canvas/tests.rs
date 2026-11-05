@@ -935,20 +935,38 @@ fn navigator_damage_updates_match_a_full_thumbnail() {
 #[test]
 fn tab_context_uses_clicked_document_and_existing_close_commands() {
     let items = tab_context_items(2, 3, true);
-    assert_eq!(items.iter().map(|(_, id, _, _)| *id).collect::<Vec<_>>(), ["file.close", "file.closeOthers", "file.closeAll", "file.revealInFinder"]);
-    assert_eq!(items[0].2, json!({"document": 2}));
+    assert_eq!(
+        items.iter().map(|(_, id, _, _)| *id).collect::<Vec<_>>(),
+        [
+            "window.arrange.consolidateAllToTabs",
+            "file.close",
+            "file.closeAll",
+            "file.closeOthers",
+            "window.arrange.floatInWindow",
+            "file.new",
+            "file.open",
+            "file.revealInFinder"
+        ]
+    );
     assert_eq!(items[1].2, json!({"document": 2}));
-    assert_eq!(items[2].2, json!({}));
     assert_eq!(items[3].2, json!({"document": 2}));
-    assert!(items[3].3, "a saved document can be revealed in the file manager");
-    assert!(!tab_context_items(2, 3, false)[3].3, "an unsaved document cannot");
-    assert!(!tab_context_items(0, 1, false)[1].3);
-    assert!(items.iter().all(|(_, id, _, _)| photocraft_engine::commands::find(id).is_some()));
+    assert_eq!(items[2].2, json!({}));
+    assert_eq!(items[7].2, json!({"document": 2}));
+    assert!(items[7].3, "a saved document can be revealed in the file manager");
+    assert!(!tab_context_items(2, 3, false)[7].3, "an unsaved document cannot");
+    assert!(!tab_context_items(0, 1, false)[3].3);
+    // The window.* rows and file.new / file.open are UI commands; the doc_tab_menu tests check them.
+    assert!(
+        items
+            .iter()
+            .filter(|r| r.1.starts_with("file.close") || r.1 == "file.revealInFinder")
+            .all(|(_, id, _, _)| photocraft_engine::commands::find(id).is_some())
+    );
 }
 
 #[test]
 fn tab_context_reveal_names_the_platform_file_manager() {
-    let (label, id, _, _) = &tab_context_items(0, 1, true)[3];
+    let (label, id, _, _) = &tab_context_items(0, 1, true)[7];
     assert_eq!((*label, *id), (crate::menus::reveal_label(), "file.revealInFinder"));
 }
 
@@ -1099,7 +1117,7 @@ fn tab_close_others_prompts_for_unsaved_nonactive_document() {
     app.run("file.new", json!({"width": 8, "height": 8, "name": "Edited"})).unwrap();
     app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
     assert_eq!(app.session.active_index(), Some(1));
-    let (_, id, params, _) = tab_context_items(0, 2, false)[1].clone();
+    let (_, id, params, _) = tab_context_items(0, 2, false)[3].clone();
     crate::menus::invoke(&mut app, &egui::Context::default(), id, params).unwrap();
     assert!(app.discard.is_some(), "close others must ask before discarding the edited tab");
     assert_eq!(app.session.documents().len(), 2);
