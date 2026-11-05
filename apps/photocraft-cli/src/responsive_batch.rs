@@ -161,10 +161,8 @@ pub(crate) fn responsive_batch(a: &ResponsiveBatchArgs, out: &mut dyn Write, err
                         json!({"layer": master.0, "width": preset.width, "height": preset.height, "name": preset.name, "layout": preset.layout}),
                     )
                     .map_err(|source| CliError::Other(format!("preset `{}`: {source}", preset.name)))?;
-                let artboard = created
-                    .get("layer")
-                    .and_then(Value::as_u64)
-                    .ok_or_else(|| CliError::Other(format!("preset `{}` returned no artboard ID", preset.name)))?;
+                let artboard =
+                    created.get("layer").and_then(Value::as_u64).ok_or_else(|| CliError::Other(format!("preset `{}` returned no artboard ID", preset.name)))?;
                 let state = h.session.active().ok_or_else(|| CliError::Other("active document disappeared during batch".into()))?;
                 let one = photocraft_engine::artboard_cmds::artboard_document(&state.doc, photocraft_doc::LayerId(artboard))
                     .map_err(|source| CliError::Other(source.to_string()))?
