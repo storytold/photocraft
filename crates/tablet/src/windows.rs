@@ -13,7 +13,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 static BARREL_DOWN: AtomicBool = AtomicBool::new(false);
 /// The barrel state of the last `WM_POINTERDOWN`. Unlike [`BARREL_DOWN`] it outlives the
 /// `WM_POINTERUP`: a quick tap's press and release can reach egui in the same frame, after the
-/// release already cleared [`BARREL_DOWN`] (#5364).
+/// release already cleared [`BARREL_DOWN`] (#5364). Its press takes it ([`take_barrel_press`]),
+/// so a later contact can't inherit it.
 static BARREL_AT_PRESS: AtomicBool = AtomicBool::new(false);
 
 #[repr(C)]
@@ -184,9 +185,10 @@ pub fn is_barrel_button_down() -> bool {
     BARREL_DOWN.load(Ordering::Relaxed)
 }
 
-/// Returns true if the barrel button was held when the pen last touched down.
-pub fn was_barrel_held_at_press() -> bool {
-    BARREL_AT_PRESS.load(Ordering::Relaxed)
+/// Returns true if the barrel button was held when the pen last touched down, once: for the press
+/// that pen down made. Only a pen sets it, so true also says that press is a pen's.
+pub fn take_barrel_press() -> bool {
+    BARREL_AT_PRESS.swap(false, Ordering::Relaxed)
 }
 
 #[cfg(test)]
@@ -208,6 +210,13 @@ mod tests {
     fn pen_barrel_flag_is_detected() {
         assert!(is_barrel_pressed(Some(PEN_FLAG_BARREL), 0));
         assert!(is_barrel_pressed(Some(PEN_FLAG_BARREL), POINTER_FLAG_INCONTACT));
+    }
+
+    #[test]
+    fn a_barrel_press_is_taken_once() {
+        BARREL_AT_PRESS.store(true, Ordering::Relaxed);
+        assert!(take_barrel_press());
+        assert!(!take_barrel_press(), "a later contact can't inherit the press");
     }
 
     #[test]

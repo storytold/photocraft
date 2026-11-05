@@ -266,9 +266,11 @@ impl eframe::App for PhotocraftApp {
         widgets::cap_text_events(&mut raw_input.events);
         // A pen held still is no touch screen's press-and-hold right click (stylus.rs).
         let pen_down = self.stylus.pen_contacts.observe(&raw_input.events);
-        // A pen press with the barrel button held is a right-click (#5364). Only a pen press: a
-        // mouse click after a barrel tap stays a left click.
-        let pen_barrel = pen_down && self.services.pen_barrel_press.as_ref().is_some_and(|f| f());
+        // A pen press with the barrel button held is a right-click (#5364). The service speaks for
+        // a real pen, so no guess from pressure or hover here (a pen lowered with the button held
+        // has neither), and only for its one press: read it when a contact starts.
+        let touch_start = raw_input.events.iter().any(|e| matches!(e, egui::Event::Touch { phase: egui::TouchPhase::Start, .. }));
+        let pen_barrel = touch_start && self.services.pen_barrel_press.as_ref().is_some_and(|f| f());
         self.control_click.normalize_with_pen(&mut raw_input.events, cfg!(target_os = "macos"), pen_barrel);
         stylus::pen_hold_is_no_right_click(ctx, pen_down);
         if self.custom_titlebar {

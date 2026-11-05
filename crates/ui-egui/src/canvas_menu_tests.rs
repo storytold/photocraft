@@ -266,6 +266,59 @@ fn pen_barrel_through_the_raw_input_hook() {
     }
 }
 
+/// What the Windows hook records, read the way the app reads it: once per press.
+fn barrel_latch(h: &mut Harness<'static, PhotocraftApp>) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let latch = std::sync::Arc::new(AtomicBool::new(false));
+    let read = latch.clone();
+    h.state_mut().services.pen_barrel_press = Some(Box::new(move || read.swap(false, Ordering::Relaxed)));
+    latch
+}
+
+/// A whole tap of touch contact `id` through `raw_input_hook`, as egui-winit sends it.
+fn hook_tap(h: &mut Harness<'static, PhotocraftApp>, at: Pos2, id: u64, force: Option<f32>) {
+    let touch = |phase, force| Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(id), phase, pos: at, force };
+    let button = |pressed| Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    hook_frame(h, vec![touch(egui::TouchPhase::Start, force), Event::PointerMoved(at), button(true)]);
+    hook_frame(h, vec![]);
+    hook_frame(h, vec![touch(egui::TouchPhase::End, None), button(false)]);
+    for _ in 0..3 {
+        hook_frame(h, vec![]);
+    }
+}
+
+#[test]
+fn a_finger_tap_after_a_pen_barrel_tap_stays_a_left_click() {
+    let mut h = harness(Tool::Brush, false, 1.0);
+    let latch = barrel_latch(&mut h);
+    let at = fractional_point(&h, 1.0);
+    hook_frame(&mut h, vec![Event::PointerMoved(at)]);
+    hook_frame(&mut h, vec![]);
+    latch.store(true, std::sync::atomic::Ordering::Relaxed);
+    hook_tap(&mut h, at, 1, Some(0.5));
+    assert!(is_open(&h, Popup::Brush));
+    dismiss_outside(&mut h, Popup::Brush);
+    let before = document_state(&h);
+    // A touch screen that reports pressure: the finger looks like a pen to `PenContacts`.
+    hook_tap(&mut h, at, 2, Some(0.5));
+    assert!(!is_open(&h, Popup::Brush), "the barrel press is spent, a finger opens no menu");
+    assert!(document_state(&h) != before, "the finger paints");
+}
+
+#[test]
+fn a_zero_pressure_pen_barrel_press_with_no_hover_opens_the_brush_picker() {
+    let mut h = harness(Tool::Brush, false, 1.0);
+    let latch = barrel_latch(&mut h);
+    let at = fractional_point(&h, 1.0);
+    hook_frame(&mut h, vec![]);
+    let before = document_state(&h);
+    // Lowered with the button already held: the driver presses before any hover reaches the app.
+    latch.store(true, std::sync::atomic::Ordering::Relaxed);
+    hook_tap(&mut h, at, 7, Some(0.0));
+    assert!(is_open(&h, Popup::Brush));
+    assert!(document_state(&h) == before, "a barrel press paints nothing");
+}
+
 #[test]
 fn reopened_canvas_menus_still_choose_their_actions() {
     let mut h = harness(Tool::RectMarquee, true, 1.0);

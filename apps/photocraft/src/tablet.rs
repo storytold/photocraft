@@ -55,7 +55,7 @@ pub fn right_button_service() -> Option<photocraft_ui_egui::RightButtonDownFn> {
 /// barrel button held is a right-click (#5364).
 #[cfg(target_os = "windows")]
 pub fn barrel_press_service() -> Option<photocraft_ui_egui::RightButtonDownFn> {
-    Some(Box::new(photocraft_tablet::windows::was_barrel_held_at_press))
+    Some(Box::new(photocraft_tablet::windows::take_barrel_press))
 }
 
 #[cfg(not(target_os = "windows"))]
