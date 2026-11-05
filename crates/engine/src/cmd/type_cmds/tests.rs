@@ -219,6 +219,16 @@ fn a_copy_shaped_name_given_in_the_layers_panel_or_at_creation_is_kept() {
     assert_eq!(layer_name_of(&s, named), "Head copy", "named at creation");
 }
 
+/// #9023: a copy-shaped name typed for a duplicate into a new document is the user's too.
+#[test]
+fn a_copy_shaped_name_given_when_duplicating_into_a_new_document_is_kept() {
+    let mut s = session();
+    let id = s.execute("type.create", json!({"x": 0, "y": 40, "text": "Title"})).unwrap()["layer"].as_u64().unwrap();
+    let copy = s.execute("layer.duplicate", json!({"layer": id, "document": "new", "name": "Title copy 2"})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("type.edit", json!({"layer": copy, "text": "Other"})).unwrap();
+    assert_eq!(layer_name_of(&s, copy), "Title copy 2");
+}
+
 /// #9023: only a change of its text renames a copy. Size, style and layout edits keep "Title
 /// copy" (they used to rename it "Title"); editing its text still renames it after the text.
 #[test]
