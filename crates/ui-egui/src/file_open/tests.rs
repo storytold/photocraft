@@ -719,7 +719,8 @@ fn closing_the_document_discards_its_dropped_files() {
 }
 
 /// The closed-document notice survives the same call that would start the next queued file: the
-/// placement waits one frame, so the message is drawn.
+/// placement waits one frame, so the message is drawn. That frame is asked for at once, so B's file
+/// doesn't wait for the next input event.
 #[test]
 fn the_closed_document_notice_stays_when_the_next_queued_file_starts() {
     let ctx = egui::Context::default();
@@ -731,9 +732,14 @@ fn the_closed_document_notice_stays_when_the_next_queued_file_starts() {
     app.drop_places.push_back((a, crate::file_open::DropPlace::Bytes("a.png".into(), png_bytes(4, 3))));
     app.drop_places.push_back((b, crate::file_open::DropPlace::Bytes("b.png".into(), png_bytes(4, 3))));
     app.run("file.close", json!({"document": 0})).unwrap();
+    for _ in 0..4 {
+        ctx.run_ui(egui::RawInput::default(), |_| {}).textures_delta.clear();
+    }
+    assert!(!ctx.has_requested_repaint(), "idle");
     app.place_next_dropped(&ctx);
     assert!(app.ui.status.contains("closed"), "{}", app.ui.status);
     assert_eq!(app.drop_places.len(), 1, "B's file waits for the next frame");
+    assert!(ctx.has_requested_repaint(), "and asks for it");
     assert!(app.jobs.place.is_none() && app.ui.transform.is_none());
     app.place_next_dropped(&ctx);
     assert_eq!(layer_count(&app), b_layers + 1);
@@ -756,6 +762,22 @@ fn the_drop_queue_is_bounded() {
     assert!(crate::file_open::queue_takes_drop(0, crate::file_open::MAX_QUEUED_DROP_BYTES, 0));
     assert!(!crate::file_open::queue_takes_drop(0, crate::file_open::MAX_QUEUED_DROP_BYTES, 1));
     assert!(!crate::file_open::queue_takes_drop(crate::file_open::MAX_QUEUED_DROPS, 0, 0));
+}
+
+/// Path drops hold no file contents while they wait, so the cap on browser drops doesn't apply to
+/// them: dropping 40 files on the canvas queues all of them, and a browser drop after them still fits.
+#[test]
+fn many_path_drops_all_queue() {
+    let ctx = egui::Context::default();
+    let mut app = app_with_canvas();
+    let doc = app.session.active().unwrap().doc.id;
+    // More than the browser drops' cap; none is read while it waits.
+    let n = crate::file_open::MAX_QUEUED_DROPS + 8;
+    app.open_dropped(&ctx, (0..n).map(|i| dropped(format!("p{i}.png"), Ok(Vec::new()))).collect(), Some(egui::pos2(400.0, 300.0)));
+    assert_eq!(app.drop_places.len(), n);
+    assert!(!app.ui.status_error, "{}", app.ui.status);
+    app.queue_drop(doc, crate::file_open::DropPlace::Bytes("web.png".into(), vec![0]));
+    assert_eq!(app.drop_places.len(), n + 1, "path drops don't use up the browser drops' room");
 }
 
 /// Closing A while its file is being placed: nothing lands anywhere, and A's next file is dropped.
@@ -848,8 +870,8 @@ fn overlapping_web_drop_deliveries_keep_each_target() {
     assert!(app.drop_places.is_empty());
 }
 
-/// A file dropped from a path is placed by the `file.placeEmbedded` job, read by the worker's
-/// caller, and a drop that arrives meanwhile queues behind it.
+/// A file dropped from a path is placed by the `file.placeEmbedded` job, read on its worker, and a
+/// drop that arrives meanwhile queues behind it.
 #[test]
 fn a_background_drop_from_a_path_is_tracked_and_later_drops_queue() {
     let dir = std::env::temp_dir().join(format!("photocraft-drop-place-job-{}", std::process::id()));

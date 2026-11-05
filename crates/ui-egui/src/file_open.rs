@@ -55,15 +55,28 @@ impl DropPlace {
             Self::Bytes(_, bytes) => bytes.len(),
         }
     }
+
+    /// Whether it holds its file's contents while it waits (a browser drop); a path drop is read
+    /// only when its turn comes.
+    fn holds_bytes(&self) -> bool {
+        match self {
+            Self::At { source, .. } => source.holds_bytes(),
+            Self::File(_) => false,
+            Self::Bytes(..) => true,
+        }
+    }
 }
 
-/// The most dropped files that can wait for their document to come back in view.
+/// The most browser drops, each holding its whole file, that can wait for their document to come
+/// back in view. Path drops hold only their path and aren't counted: dropping a folder's worth of
+/// files on the canvas places them all.
 const MAX_QUEUED_DROPS: usize = 32;
 /// The most dropped file contents kept in memory while they wait: a browser drop carries its whole
 /// file, and anything queued on a document in another tab stays until it is back in view.
 const MAX_QUEUED_DROP_BYTES: usize = 256 * 1024 * 1024;
 
-/// Whether the drop queue takes `incoming` more bytes when it holds `queued` files and `bytes`.
+/// Whether the drop queue takes a browser drop of `incoming` bytes when it holds `queued` of them
+/// and `bytes` in all.
 fn queue_takes_drop(queued: usize, bytes: usize, incoming: usize) -> bool {
     queued < MAX_QUEUED_DROPS && bytes.saturating_add(incoming) <= MAX_QUEUED_DROP_BYTES
 }
@@ -380,8 +393,12 @@ impl PhotocraftApp {
     /// (with a message) when it is closed.
     pub(crate) fn place_next_dropped(&mut self, ctx: &egui::Context) {
         // Leave the closed-document notice up for this frame: starting the next queued placement
-        // would clear the status bar, and the next frame retries the queue anyway.
+        // would clear the status bar. The next frame retries the queue, so ask for one at once:
+        // another document's files would otherwise wait for the next input event.
         if self.discard_drops_of_closed_documents() {
+            if !self.drop_places.is_empty() {
+                ctx.request_repaint();
+            }
             return;
         }
         while self.ui.transform.is_none() && self.jobs.place.is_none() && self.session.active_job().is_none() {
@@ -447,11 +464,13 @@ impl PhotocraftApp {
         }
     }
 
-    /// Queue a canvas drop for the document it was dropped on, keeping the queue bounded: files
-    /// dropped on a document in another tab wait here, and a browser drop carries its whole file.
+    /// Queue a canvas drop for the document it was dropped on, keeping the file contents it holds
+    /// bounded: files dropped on a document in another tab wait here, and a browser drop carries
+    /// its whole file. A path drop holds no contents, so any number of them queue.
     fn queue_drop(&mut self, doc: DocId, place: DropPlace) {
+        let held = self.drop_places.iter().filter(|(_, p)| p.holds_bytes()).count();
         let bytes = self.drop_places.iter().fold(0usize, |sum, (_, p)| sum.saturating_add(p.queued_bytes()));
-        if !queue_takes_drop(self.drop_places.len(), bytes, place.queued_bytes()) {
+        if place.holds_bytes() && !queue_takes_drop(held, bytes, place.queued_bytes()) {
             self.ui.status = tl!("Dropped files weren't placed: too many are waiting for their document.").into();
             self.ui.status_error = true;
             return;
