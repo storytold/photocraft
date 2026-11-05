@@ -230,6 +230,10 @@ fn a_lost_window_device_saves_unsaved_work_for_recovery_and_closes() {
     let _gpu = gpu_lock();
     let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
     let (autosaves, flushes) = (log.clone(), log.clone());
+    let restarts = std::sync::Arc::new(std::sync::Mutex::new(Vec::<photocraft_ui_egui::WindowRestart>::new()));
+    let (restart_sink, restart_log) = (restarts.clone(), log.clone());
+    let pending = std::sync::Arc::new(std::sync::Mutex::new(Vec::<(u64, u64)>::new()));
+    let queued = pending.clone();
     let render_state = std::sync::Arc::new(std::sync::Mutex::new(None::<RenderState>));
     let window = render_state.clone();
     let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
@@ -238,11 +242,17 @@ fn a_lost_window_device_saves_unsaved_work_for_recovery_and_closes() {
             let services = photocraft_ui_egui::Services {
                 autosave: Some(Box::new(move |doc: &std::sync::Arc<Document>, revision: u64, _: Option<&str>| {
                     autosaves.lock().unwrap().push(format!("autosave {} {revision}", doc.id.0));
+                    queued.lock().unwrap().push((doc.id.0, revision));
                     Ok(())
                 })),
                 flush_autosaves: Some(Box::new(move || {
                     flushes.lock().unwrap().push("flush".into());
-                    Vec::new()
+                    // Every queued write finished, so the app may close (and ask for a restart).
+                    pending.lock().unwrap().drain(..).map(|(id, revision)| (id, revision, Ok(()))).collect()
+                })),
+                restart_after_window_loss: Some(Box::new(move |request| {
+                    restart_log.lock().unwrap().push("restart".into());
+                    restart_sink.lock().unwrap().push(request);
                 })),
                 ..Default::default()
             };
@@ -288,7 +298,16 @@ fn a_lost_window_device_saves_unsaved_work_for_recovery_and_closes() {
     }
     h.run_steps(2);
     assert!(h.state().window_lost(), "the loss was noticed");
-    assert_eq!(*log.lock().unwrap(), vec![format!("autosave {doc} {revision}"), "flush".to_string()], "saved for recovery once");
+    // The host is asked to start PhotoCraft again, once, and only after the work is saved and the
+    // write confirmed (#10464): the unsaved document comes back from recovery, so no file is named.
+    assert_eq!(
+        *log.lock().unwrap(),
+        vec![format!("autosave {doc} {revision}"), "flush".to_string(), "restart".to_string()],
+        "saved for recovery once, then the restart"
+    );
+    let restarts = restarts.lock().unwrap().clone();
+    assert_eq!(restarts.len(), 1, "one restart request: {restarts:?}");
+    assert!(!restarts[0].reason.is_empty() && restarts[0].reopen.is_empty(), "{restarts:?}");
     // The frame on the lost device has nothing to draw, so egui-wgpu has nothing to upload.
     assert_eq!(upload(&h), (0, true), "a frame with shapes panics inside egui-wgpu on a lost device");
     assert_eq!(h.state().session.documents().len(), 1, "the document stays until the app closes");
@@ -302,6 +321,8 @@ fn a_lost_window_device_closes_only_once_unsaved_work_is_saved() {
     let disk_full = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
     let attempts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let (full, tries) = (disk_full.clone(), attempts.clone());
+    let restarts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let restart_count = restarts.clone();
     let pending = std::sync::Arc::new(std::sync::Mutex::new(Vec::<(u64, u64)>::new()));
     let queued = pending.clone();
     let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
@@ -317,6 +338,9 @@ fn a_lost_window_device_closes_only_once_unsaved_work_is_saved() {
                     tries.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     let outcome = if full.load(std::sync::atomic::Ordering::SeqCst) { Err("disk full".to_string()) } else { Ok(()) };
                     pending.lock().unwrap().drain(..).map(|(id, revision)| (id, revision, outcome.clone())).collect()
+                })),
+                restart_after_window_loss: Some(Box::new(move |_| {
+                    restart_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 })),
                 ..Default::default()
             };
@@ -346,17 +370,22 @@ fn a_lost_window_device_closes_only_once_unsaved_work_is_saved() {
     let tries = || attempts.load(std::sync::atomic::Ordering::SeqCst);
     assert_eq!(tries(), 1);
     assert!(h.state().has_unsaved_work(), "a failed recovery save doesn't let the app close");
+    let restarted = || restarts.load(std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(restarted(), 0, "no restart while the work is unsaved");
     // Each step is 0.25 s: no new attempt before the retry interval.
     h.run_steps(4);
     assert_eq!(tries(), 1, "waits before trying again");
     h.run_steps(5);
     assert_eq!(tries(), 2, "tries again");
     assert!(h.state().has_unsaved_work());
+    assert_eq!(restarted(), 0, "still no restart after a second failed save");
     disk_full.store(false, std::sync::atomic::Ordering::SeqCst);
     h.run_steps(9);
     assert_eq!(tries(), 3);
     assert!(!h.state().has_unsaved_work(), "closes once the work is saved");
+    assert_eq!(restarted(), 1, "the restart is asked for once the save worked");
     h.run_steps(9);
     assert_eq!(tries(), 3, "saved once, not again");
+    assert_eq!(restarted(), 1, "asked for once");
     assert_eq!(h.state().session.documents().len(), 1, "the document stays until the app closes");
 }
