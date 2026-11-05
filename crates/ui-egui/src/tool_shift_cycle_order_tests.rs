@@ -126,3 +126,24 @@ fn the_cycle_order_is_the_flattened_toolbar_order() {
         assert_eq!(toolbar_position(*t), i, "{t:?}");
     }
 }
+
+#[test]
+fn with_the_shift_switch_preference_off_plain_w_keeps_the_old_order() {
+    let mut app = app();
+    app.session.edit_prefs(|p| p.tools.use_shift_key_for_tool_switch = false);
+    app.ui.tool = Tool::MagicWand;
+    let mut seen = Vec::new();
+    for _ in 0..3 {
+        let ctx = egui::Context::default();
+        let modifiers = Modifiers::NONE;
+        let raw = egui::RawInput {
+            events: vec![egui::Event::Key { key: Key::W, physical_key: None, pressed: true, repeat: false, modifiers }],
+            ..Default::default()
+        };
+        ctx.begin_pass(raw);
+        crate::shortcuts::handle(&mut app, &ctx);
+        ctx.end_pass().textures_delta.clear();
+        seen.push(app.ui.tool);
+    }
+    assert_eq!(seen, vec![Tool::QuickSelection, Tool::ObjectSelection, Tool::MagicWand]);
+}
