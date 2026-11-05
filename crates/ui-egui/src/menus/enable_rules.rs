@@ -126,6 +126,26 @@ pub fn disabled(app: &crate::PhotocraftApp, id: &str) -> bool {
     if transform && (target.is_object() || target == "quickMask") {
         return false;
     }
+    // Several layers selected: one box moves them all, the Background left out (#6501). It doesn't
+    // warp, and doesn't distort while editable type is among them.
+    if transform {
+        let targets = photocraft_engine::transform_cmds::selection_targets(st);
+        // Judged on the layers the box moves, linked ones included (#11217): one linked layer
+        // selected is a box over its link group, which doesn't warp either.
+        let targets = photocraft_engine::transform_cmds::box_targets(&st.doc, &targets);
+        if targets.len() > 1 || targets.first() != st.active_layer.as_ref() {
+            let text = targets.iter().any(|t| st.doc.layer(*t).is_some_and(|l| matches!(l.content, LayerContent::Text(_))));
+            return match id {
+                "edit.transform.warp"
+                | "edit.transform.splitWarpCrosswise"
+                | "edit.transform.splitWarpHorizontally"
+                | "edit.transform.splitWarpVertically"
+                | "edit.transform.removeWarpSplit" => true,
+                "edit.transform.distort" | "edit.transform.perspective" => text,
+                _ => false,
+            };
+        }
+    }
     // Editable type can be scaled, rotated and skewed but not distorted (#2630): Photoshop greys
     // Distort and Perspective until the type is rasterized, and the split warps (Warp on type
     // offers only the warp styles, #3004). A targeted unlinked mask or channel of the type layer
@@ -343,6 +363,27 @@ mod tests {
             }
         }
         assert_eq!(checked, selections.len() * 2 * commands.len());
+    }
+
+    /// #11217 review: one linked layer selected opens a box over its link group, which refuses
+    /// Warp, so the menu greys Warp the same way it does for several selected layers; an unlinked
+    /// layer keeps it.
+    #[test]
+    fn warp_is_greyed_for_a_layer_with_linked_partners() {
+        let mut s = session();
+        let id = |r: serde_json::Value| photocraft_doc::LayerId(r["layer"].as_u64().unwrap());
+        let a = id(s.execute("layer.new.layer", json!({})).unwrap());
+        let b = id(s.execute("layer.new.layer", json!({})).unwrap());
+        let c = id(s.execute("layer.new.layer", json!({})).unwrap());
+        s.execute("layer.select", json!({"layer": a.0})).unwrap();
+        s.execute("layer.select", json!({"layer": b.0, "mode": "add"})).unwrap();
+        assert_eq!(s.execute("layer.linkLayers", json!({})).unwrap()["linked"], true);
+        s.execute("layer.select", json!({"layer": a.0})).unwrap();
+        let mut app = crate::PhotocraftApp::new(s, crate::Services::default());
+        assert!(disabled(&app, "edit.transform.warp"), "a linked layer warps with its partner: not available");
+        assert!(!disabled(&app, "edit.freeTransform") && !disabled(&app, "edit.transform.distort"), "the box itself is");
+        app.session.execute("layer.select", json!({"layer": c.0})).unwrap();
+        assert!(!disabled(&app, "edit.transform.warp"), "an unlinked layer warps");
     }
 
     #[test]
