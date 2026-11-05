@@ -1,5 +1,6 @@
 //! The crate's integration tests, linked into one test binary.
 
+mod adjustments;
 mod analysis;
 mod autosave;
 mod common;

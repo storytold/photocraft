@@ -125,16 +125,23 @@ fn video_m(v: &photocraft_doc::VideoData, sink: &mut dyn Sink) -> crate::manifes
     }
 }
 
-fn layer_m(l: &Layer, sink: &mut dyn Sink) -> LayerM {
+fn layer_m(l: &Layer, sink: &mut dyn Sink) -> Result<LayerM> {
+    // Keep large conversion locals off the stack that grows with group nesting, as on load.
+    let mut children = Vec::new();
+    if let LayerContent::Group(group) = &l.content {
+        for child in &group.children {
+            children.push(layer_m(child, sink)?);
+        }
+    }
+    layer_m_with(l, sink, children)
+}
+
+#[inline(never)]
+fn layer_m_with(l: &Layer, sink: &mut dyn Sink, children: Vec<LayerM>) -> Result<LayerM> {
     let content = match &l.content {
         LayerContent::Raster(s) => ContentM::Raster { surface: surface_m(s, sink) },
-        LayerContent::Group(g) => ContentM::Group {
-            children: g.children.iter().map(|c| layer_m(c, sink)).collect(),
-            expanded: g.expanded,
-            artboard: g.artboard.clone(),
-            frame_stroke: g.frame_stroke.clone(),
-        },
-        LayerContent::Adjustment(a) => ContentM::Adjustment { adjustment: a.clone() },
+        LayerContent::Group(g) => ContentM::Group { children, expanded: g.expanded, artboard: g.artboard.clone(), frame_stroke: g.frame_stroke.clone() },
+        LayerContent::Adjustment(a) => ContentM::Adjustment { adjustment: crate::adjustment::AdjustmentM::store(a, sink)? },
         LayerContent::Fill(f) => ContentM::Fill { fill: f.clone() },
         LayerContent::Text(t) => ContentM::Text {
             text: t.text.clone(),
@@ -194,7 +201,7 @@ fn layer_m(l: &Layer, sink: &mut dyn Sink) -> LayerM {
             perspective: s.perspective,
         },
     };
-    LayerM {
+    Ok(LayerM {
         id: l.id.0,
         name: l.name.clone(),
         visible: l.visible,
@@ -228,7 +235,7 @@ fn layer_m(l: &Layer, sink: &mut dyn Sink) -> LayerM {
         advanced: l.advanced,
         video: l.video.as_ref().map(|v| video_m(v, sink)),
         xmp: l.xmp.as_deref().map(str::to_string),
-    }
+    })
 }
 
 fn channel_m(c: &AlphaChannel, sink: &mut dyn Sink) -> ChannelM {
@@ -237,8 +244,8 @@ fn channel_m(c: &AlphaChannel, sink: &mut dyn Sink) -> ChannelM {
     ChannelM { name: name.clone(), surface: surface_m(surface, sink), spot: *spot, color: *color, opacity: *opacity, indicates: *indicates }
 }
 
-pub(crate) fn doc_m(d: &Document, sink: &mut dyn Sink) -> DocM {
-    DocM {
+pub(crate) fn doc_m(d: &Document, sink: &mut dyn Sink) -> Result<DocM> {
+    Ok(DocM {
         id: d.id.0,
         name: d.name.clone(),
         size: d.size,
@@ -246,7 +253,7 @@ pub(crate) fn doc_m(d: &Document, sink: &mut dyn Sink) -> DocM {
         mode: d.mode,
         depth: d.depth,
         icc_profile: opt_blob(&d.icc_profile, sink),
-        layers: d.layers.iter().map(|l| layer_m(l, sink)).collect(),
+        layers: d.layers.iter().map(|l| layer_m(l, sink)).collect::<Result<_>>()?,
         channels: d.channels.iter().map(|c| channel_m(c, sink)).collect(),
         guides: d.guides.clone(),
         ruler_origin: d.ruler_origin,
@@ -281,7 +288,7 @@ pub(crate) fn doc_m(d: &Document, sink: &mut dyn Sink) -> DocM {
         notes: d.notes.clone(),
         text_styles: d.text_styles.clone(),
         slices: d.slices.clone(),
-    }
+    })
 }
 
 fn effects_m(e: &Effects, sink: &mut dyn Sink) -> EffectsM {
@@ -468,7 +475,7 @@ impl Loader<'_> {
             ContentM::Group { expanded, artboard, frame_stroke, .. } => {
                 LayerContent::Group(Group { artboard: artboard.clone(), children, expanded: *expanded, frame_stroke: frame_stroke.clone() })
             }
-            ContentM::Adjustment { adjustment } => LayerContent::Adjustment(adjustment.clone()),
+            ContentM::Adjustment { adjustment } => LayerContent::Adjustment(adjustment.load(self.fetch)?),
             ContentM::Fill { fill } => LayerContent::Fill(fill.clone()),
             ContentM::Text { text, font_family, size_pt, color, transform, cache, psd_raw, runs, paragraphs, shape, orientation, antialias, warp } => {
                 LayerContent::Text(TextLayer {

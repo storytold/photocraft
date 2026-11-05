@@ -8,9 +8,7 @@
 //! bytes (little-endian samples for tiles).
 
 use photocraft_color::{BlendMode, Color, ColorMode, PixelFormat, SampleType};
-use photocraft_doc::{
-    Adjustment, ClippingPath, Effect, Fill, GlobalLight, Guides, LabelColor, LiveShape, Locks, Path, ShapeStroke, SmartFilter, VectorMask, text,
-};
+use photocraft_doc::{ClippingPath, Effect, Fill, GlobalLight, Guides, LabelColor, LiveShape, Locks, Path, ShapeStroke, SmartFilter, VectorMask, text};
 use photocraft_geom::{Affine, Size};
 use serde::{Deserialize, Serialize};
 
@@ -246,7 +244,7 @@ pub enum ContentM {
         frame_stroke: Option<ShapeStroke>,
     },
     Adjustment {
-        adjustment: Adjustment,
+        adjustment: crate::adjustment::AdjustmentM,
     },
     Fill {
         fill: Fill,
