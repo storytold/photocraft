@@ -55,7 +55,9 @@ mod steps_other;
 mod steps_render;
 mod steps_selection;
 mod steps_shape_blur;
+mod steps_stack;
 mod steps_stylize;
+mod steps_video;
 mod tables;
 
 #[cfg(test)]

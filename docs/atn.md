@@ -214,6 +214,8 @@ row; the action still adds only one Undo entry.
 | (string ID only) | ungroupLayersEvent | Ungroup Layers | `layer.ungroupLayers` |
 | `UnsM` | unsharpMask | Unsharp Mask | `filter.sharpen.unsharpMask` |
 | (string ID only) | updatePlacedLayer | Update Smart Objects | `layer.smartObjects.updateModifiedContent` |
+| (string ID only) | applyImageStackPluginRenderer | Smart Object Stack Mode | `layer.smartObjects.stackMode.*` (eleven measured modes) |
+| (string ID only) | imageStackConvertSmartObject | Stack Mode: None | `layer.smartObjects.stackMode.none` |
 | (string ID only) | vibrance | Vibrance | `image.adjustments.vibrance` |
 | `Wave` | wave | Wave | `filter.distort.wave` |
 | `ZgZg` | zigZag | ZigZag | `filter.distort.zigZag` |
@@ -228,6 +230,9 @@ row; the action still adds only one Undo entry.
 | (string ID only) | placedLayerUpdateAllModified | Update All Modified Content | `layer.smartObjects.updateAllModifiedContent` |
 | (string ID only) | rasterizeAll | Rasterize All Layers | `layer.rasterize.allLayers` |
 | (string ID only) | addBlankVideoLayer | New Blank Video Layer | `layer.videoLayers.newBlankVideoLayer` |
+| (string ID only) | insertBlankFrame | Insert Blank Frame | `layer.videoLayers.insertBlankFrame` |
+| (string ID only) | duplicateFrame | Duplicate Frame | `layer.videoLayers.duplicateFrame` |
+| (string ID only) | deleteFrame | Delete Frame | `layer.videoLayers.deleteFrame` |
 | (string ID only) | isolateLayers | Isolate Layers | `select.isolateLayers` |
 | (string ID only) | textLoadDefaultTypeStyles | Load Default Type Styles | `type.loadDefaultTypeStyles` |
 | (string ID only) | textSaveDefaultTypeStyles | Save Default Type Styles | `type.saveDefaultTypeStyles` |
@@ -278,6 +283,19 @@ A positive integer `LyrI` is a recording-session hint, never a PhotoCraft layer
 identity, and is omitted on save under the normalization rule below. Undecodable
 paths or extra keys keep the entire step. File access happens at playback; a
 missing or unusable file reports the native command's error.
+
+Stack Mode uses the active Smart Object. For `applyImageStackPluginRenderer`,
+the measured `imageStackPlugin` class selects the mode; the localized `Nm  `
+label is preserved on save. Stack Mode: None uses
+`imageStackConvertSmartObject` with no settings. Save preserves whether an
+imported None step had an empty descriptor or no descriptor. Unknown classes,
+extra settings and unrecognized descriptor forms stay as kept steps. Native
+steps with explicit layer targets cannot be exported to these forms.
+
+Insert Blank Frame, Duplicate Frame and Delete Frame use the active video layer
+and current playhead. They take no settings. Extra keys or unrecognized
+descriptor metadata stay as kept steps. Save retains whether the recorded item
+had an empty descriptor or no descriptor.
 
 Convert Type to Shape retains Make's `contentLayer` class reference and `Usng`
 target `textLayer` reference; it does not export a separate `convertToShape`
