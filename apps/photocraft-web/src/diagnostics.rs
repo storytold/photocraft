@@ -33,18 +33,22 @@ pub fn take_panic() -> Option<String> {
 }
 
 /// `true` when an uncaught error, by its `name` and `message`, is the module trapping or the
-/// browser refusing it memory, rather than some other script error or failed request.
+/// browser refusing it memory, rather than some other script error or failed request. Browsers
+/// word and capitalize these differently (Safari: `Unreachable code should not be executed`), so
+/// the message is matched ignoring case.
 pub fn is_trap(name: &str, message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
     name == "RuntimeError"
-        || ["unreachable", "memory access out of bounds", "Maximum call stack", "could not allocate memory", "Out of memory"]
+        || ["unreachable", "memory access out of bounds", "maximum call stack", "could not allocate memory", "out of memory"]
             .iter()
             .any(|m| message.contains(m))
 }
 
-/// Trap messages that mean an allocation failed: `unreachable` with no panic before it is the
-/// allocation-failure abort (the only one that runs no Rust), the others are the browser
-/// refusing to grow the memory. `memory access out of bounds` is not among them: it is a bug.
-const OUT_OF_MEMORY: [&str; 3] = ["unreachable", "could not allocate memory", "Out of memory"];
+/// Trap messages (lowercase, matched ignoring case) that mean an allocation failed:
+/// `unreachable` with no panic before it is the allocation-failure abort (the only one that runs
+/// no Rust), the others are the browser refusing to grow the memory. `memory access out of
+/// bounds` is not among them: it is a bug.
+const OUT_OF_MEMORY: [&str; 3] = ["unreachable", "could not allocate memory", "out of memory"];
 
 /// The line under "PhotoCraft stopped": a captured panic means an internal error; a trap with no
 /// panic before it is out of memory when its message says so (or says nothing), and otherwise
@@ -53,7 +57,8 @@ pub fn detail(panic: Option<&str>, trap_message: &str) -> String {
     if let Some(p) = panic {
         return format!("It hit an internal error: {p}");
     }
-    if trap_message.is_empty() || OUT_OF_MEMORY.iter().any(|m| trap_message.contains(m)) {
+    let lower = trap_message.to_ascii_lowercase();
+    if lower.is_empty() || OUT_OF_MEMORY.iter().any(|m| lower.contains(m)) {
         "It ran out of memory.".to_owned()
     } else {
         format!("It stopped unexpectedly: {}", truncate(trap_message))
@@ -86,6 +91,9 @@ mod tests {
         assert_eq!(detail(None, "RuntimeError: unreachable executed"), "It ran out of memory.");
         assert_eq!(detail(None, ""), "It ran out of memory.");
         assert_eq!(detail(None, "WebAssembly.Memory(): could not allocate memory"), "It ran out of memory.");
+        // Safari and Firefox word and capitalize theirs differently.
+        assert_eq!(detail(None, "Unreachable code should not be executed"), "It ran out of memory.");
+        assert_eq!(detail(None, "out of memory"), "It ran out of memory.");
     }
 
     #[test]
@@ -103,6 +111,9 @@ mod tests {
         assert!(is_trap("RuntimeError", ""));
         assert!(is_trap("RangeError", "Maximum call stack size exceeded"));
         assert!(is_trap("RangeError", "WebAssembly.Memory(): could not allocate memory"));
+        // Matched ignoring case: Safari's wording, reported without the RuntimeError name.
+        assert!(is_trap("Error", "Unreachable code should not be executed"));
+        assert!(is_trap("Error", "Out of memory"));
         assert!(!is_trap("TypeError", "Failed to fetch"));
         assert!(!is_trap("Error", "ResizeObserver loop completed"));
     }
