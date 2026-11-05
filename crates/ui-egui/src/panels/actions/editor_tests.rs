@@ -46,8 +46,7 @@ fn picker_choices_reach_the_owned_draft_and_only_save_publishes_them() {
                 return;
             }
             let view = state.page.get(&mut state.app).unwrap();
-            let swatches = crate::theme::Tokens::get(ui.ctx()).action_swatches();
-            let _ = state.page.metadata(&mut state.app, ui, &view, &swatches);
+            let _ = state.page.metadata(&mut state.app, ui, &view);
         },
         State { app, page },
     );
@@ -360,8 +359,7 @@ fn back_button_and_escape_route_through_the_same_owned_cancel_decision() {
                 return;
             }
             let mut page = state.page.take().unwrap();
-            let swatches = [Tokens::get(ui.ctx()).card; 12];
-            if let Some(event) = page.show(&mut state.app, ui, &swatches, Activity::default()) {
+            if let Some(event) = page.show(&mut state.app, ui, Activity::default()) {
                 state.events.push(event);
             }
             state.page = Some(page);

@@ -346,11 +346,9 @@ fn context(ui: &mut egui::Ui, action: Option<usize>, group: Option<&str>, play: 
 
 fn thumbnail(ui: &mut egui::Ui, action: &Action, size: f32, tokens: &Tokens) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(vec2(size, size), Sense::click_and_drag());
-    let color = actions_cmds::BUTTON_COLORS.iter().position(|name| *name == action.color).filter(|index| *index > 0);
-    let fill = color.and_then(|index| tokens.action_swatches().get(index).copied()).unwrap_or(tokens.card);
-    ui.painter().rect_filled(rect, tokens.radius_sm, fill);
+    ui.painter().rect_filled(rect, tokens.radius_sm, tokens.action_tile_fill(&action.color));
     let glyph = if action.icon.is_empty() { "action-editor-click" } else { editor_glyphs::display_glyph(&action.icon) };
-    icons::paint(ui, rect, glyph, size * 0.6, if color.is_some() { Tokens::ACTION_THUMBNAIL_GLYPH } else { tokens.text });
+    icons::paint(ui, rect, glyph, size * 0.6, tokens.action_glyph);
     response
 }
 
@@ -410,8 +408,7 @@ pub(super) fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if let Some(mut page) = app.actions_runtime.page.take() {
         app.actions_runtime.page_drawn = Some(app.frame);
         let active = activity(app);
-        let swatches = Tokens::get(ui.ctx()).action_swatches();
-        let answer = page.show(app, ui, &swatches, active);
+        let answer = page.show(app, ui, active);
         let closed = matches!(answer, Some(editor::Event::Closed { .. }));
         if !closed {
             app.actions_runtime.page = Some(page);

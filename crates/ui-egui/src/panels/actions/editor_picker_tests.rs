@@ -2,7 +2,7 @@
 use egui::{Color32, Id, accesskit::Role};
 use egui_kittest::{Harness, kittest::Queryable};
 
-use super::{Choice, show, thumbnail_style};
+use super::{Choice, show, swatch_style};
 use crate::{
     PhotocraftApp,
     theme::{ThemeKind, Tokens},
@@ -17,11 +17,6 @@ struct State {
     choices: Vec<Choice>,
 }
 
-// Synthetic indexed sentinels, not a proposed application/reference palette.
-fn swatches() -> [Color32; 12] {
-    std::array::from_fn(|index| Color32::from_rgb(index as u8, 31, 47))
-}
-
 fn harness(icon: &str, color: &str) -> Harness<'static, State> {
     let state = State { icon: icon.into(), color: color.into(), choices: Vec::new() };
     let mut h = Harness::builder().with_size(egui::vec2(600.0, 700.0)).build_ui_state(
@@ -29,7 +24,7 @@ fn harness(icon: &str, color: &str) -> Harness<'static, State> {
             if !ui.ctx().fonts(|fonts| fonts.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 return;
             }
-            if let Some(choice) = show(ui, Id::unique("action-editor-picker-test"), &state.icon, &state.color, &swatches()) {
+            if let Some(choice) = show(ui, Id::unique("action-editor-picker-test"), &state.icon, &state.color) {
                 state.choices.push(choice);
             }
         },
@@ -175,23 +170,31 @@ fn two_by_six_colour_grid_keeps_classic_blue_and_new_blue_distinct() {
 }
 
 #[test]
-fn thumbnail_uses_the_callers_indexed_palette_and_theme_neutral_fallback() {
-    let palette = swatches();
+fn picker_colours_are_fixed_and_unknown_metadata_stays_neutral() {
+    let measured = [
+        ("red", 0xff756e),
+        ("orange", 0xfaa855),
+        ("yellow", 0xe3db5d),
+        ("green", 0x94df7d),
+        ("blue", 0x89bdf8),
+        ("violet", 0xa38ddd),
+        ("gray", 0xacacac),
+        ("teal", 0x1b959a),
+        ("blue2", 0x6767ec),
+        ("magenta", 0xd83790),
+        ("purple", 0xc038cc),
+    ];
     for kind in ThemeKind::ALL {
         let tokens = Tokens::for_kind(kind);
         for unknown_or_none in ["", UNKNOWN_COLOR, "future-color", "Blue", "blue2 "] {
-            assert_eq!(thumbnail_style(unknown_or_none, &palette, &tokens), (tokens.card, tokens.text));
-            assert_eq!(super::swatch_style(unknown_or_none, &palette, &tokens), (tokens.card, tokens.text));
+            assert_eq!(tokens.action_tile_fill(unknown_or_none), tokens.card);
+            assert_eq!(swatch_style(unknown_or_none, &tokens), (tokens.card, tokens.text));
         }
-        assert_eq!(thumbnail_style("blue", &palette, &tokens).0, palette[5]);
-        assert_eq!(thumbnail_style("blue2", &palette, &tokens).0, palette[9]);
-        assert_ne!(palette[5], palette[9]);
-        let actual = tokens.action_swatches();
-        for (index, name) in photocraft_engine::actions_cmds::BUTTON_COLORS.iter().enumerate().skip(1) {
-            assert_eq!(thumbnail_style(name, &actual, &tokens), (actual[index], Color32::WHITE), "{kind:?}: {name}");
-            assert_eq!(super::swatch_style(name, &actual, &tokens), (actual[index], Tokens::action_thumbnail_ink(actual[index])));
+        for (name, rgb) in measured {
+            let (fill, _) = swatch_style(name, &tokens);
+            assert_eq!(u32::from_be_bytes([0, fill.r(), fill.g(), fill.b()]), rgb, "{kind:?}: {name}");
         }
-        assert_eq!(super::swatch_style("yellow", &actual, &tokens).1, Color32::BLACK);
+        assert_eq!(swatch_style("yellow", &tokens).1, Color32::BLACK);
     }
     assert_eq!(super::display_glyph(UNKNOWN_ICON), "square");
     assert_eq!(super::display_glyph(""), "square");

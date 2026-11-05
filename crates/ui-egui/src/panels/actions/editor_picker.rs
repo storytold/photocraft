@@ -65,23 +65,15 @@ const COLOR_GRID: [(&str, &str); 12] = [
     ("gray", "Gray"),
 ];
 
-fn thumbnail_style(color: &str, swatches: &[Color32; 12], tokens: &Tokens) -> (Color32, Color32) {
-    let index = BUTTON_COLORS.iter().position(|name| *name == color).filter(|index| *index > 0);
-    match index.and_then(|index| swatches.get(index)).copied() {
-        Some(fill) => (fill, Tokens::ACTION_THUMBNAIL_GLYPH),
-        None => (tokens.card, tokens.text),
-    }
+/// Selection marks contrast with the picker swatch, independent of tile glyph ink.
+fn swatch_style(color: &str, tokens: &Tokens) -> (Color32, Color32) {
+    let Some(index) = BUTTON_COLORS[1..].iter().position(|name| *name == color) else { return (tokens.card, tokens.text) };
+    let fill = Tokens::ACTION_PICKER_SWATCHES[index];
+    (fill, Tokens::action_thumbnail_ink(fill))
 }
 
-/// Selection marks remain legible independently of the fixed action-glyph ink.
-fn swatch_style(color: &str, swatches: &[Color32; 12], tokens: &Tokens) -> (Color32, Color32) {
-    let (fill, glyph) = thumbnail_style(color, swatches, tokens);
-    let coloured = BUTTON_COLORS.iter().skip(1).any(|name| *name == color);
-    (fill, if coloured { Tokens::action_thumbnail_ink(fill) } else { glyph })
-}
-
-fn color_button(ui: &mut egui::Ui, color: &str, label: &str, selected: bool, swatches: &[Color32; 12], tokens: &Tokens) -> egui::Response {
-    let (fill, ink) = swatch_style(color, swatches, tokens);
+fn color_button(ui: &mut egui::Ui, color: &str, label: &str, selected: bool, tokens: &Tokens) -> egui::Response {
+    let (fill, ink) = swatch_style(color, tokens);
     let style = IconButtonStyle {
         normal: ButtonVisuals { fill, stroke: Stroke::new(1.0, tokens.field_border), icon: ink },
         hovered: ButtonVisuals { fill, stroke: Stroke::new(1.0, tokens.text), icon: ink },
@@ -103,7 +95,7 @@ fn color_button(ui: &mut egui::Ui, color: &str, label: &str, selected: bool, swa
         .on_hover_text(tl!(label))
 }
 
-fn contents(ui: &mut egui::Ui, icon: &str, color: &str, swatches: &[Color32; 12], tokens: &Tokens) -> Option<Choice> {
+fn contents(ui: &mut egui::Ui, icon: &str, color: &str, tokens: &Tokens) -> Option<Choice> {
     let mut choice = None;
     ui.label(tl!("Choose icon"));
     if icons::button(ui, "square", CELL, icon.is_empty(), tl!("Default icon")).clicked() {
@@ -123,7 +115,7 @@ fn contents(ui: &mut egui::Ui, icon: &str, color: &str, swatches: &[Color32; 12]
     ui.label(tl!("Choose color"));
     egui::Grid::new("action-editor-color-grid").num_columns(6).spacing(egui::vec2(4.0, 4.0)).show(ui, |ui| {
         for (index, (name, label)) in COLOR_GRID.into_iter().enumerate() {
-            if color_button(ui, name, label, color == name, swatches, tokens).clicked() {
+            if color_button(ui, name, label, color == name, tokens).clicked() {
                 choice = Some(Choice::Color(name));
             }
             if index % 6 == 5 {
@@ -140,20 +132,17 @@ fn contents(ui: &mut egui::Ui, icon: &str, color: &str, swatches: &[Color32; 12]
 /// Draw the thumbnail and its picker, returning only an explicit selection.
 ///
 /// `id` scopes popup/widget state for this editor. `icon`/`color` are authoritative raw values;
-/// unknowns display neutrally and are never returned as replacements without a click. `swatches`
-/// are caller-selected PhotoCraft colours in ATN index order, not measured reference RGB samples.
-/// Slot zero uses the neutral theme surface. The editor and modern rows share the thirty
-/// glyph assets registered in the existing icon table.
-pub fn show(ui: &mut egui::Ui, id: Id, icon: &str, color: &str, swatches: &[Color32; 12]) -> Option<Choice> {
+/// unknowns display neutrally and are never returned as replacements without a click.
+/// The preview shares the Modern row's tile palette and theme glyph ink.
+pub fn show(ui: &mut egui::Ui, id: Id, icon: &str, color: &str) -> Option<Choice> {
     let tokens = Tokens::get(ui.ctx());
     ui.push_id(id, |ui| {
         let mut choice = None;
         ui.horizontal(|ui| {
             let (rect, _) = ui.allocate_exact_size(Vec2::splat(48.0), egui::Sense::hover());
-            let (fill, ink) = thumbnail_style(color, swatches, &tokens);
-            ui.painter().rect_filled(rect, tokens.radius_sm, fill);
-            icons::paint(ui, rect, display_glyph(icon), 28.0, ink);
-            ui.menu_button(tl!("Choose icon"), |ui| choice = contents(ui, icon, color, swatches, &tokens));
+            ui.painter().rect_filled(rect, tokens.radius_sm, tokens.action_tile_fill(color));
+            icons::paint(ui, rect, display_glyph(icon), 28.0, tokens.action_glyph);
+            ui.menu_button(tl!("Choose icon"), |ui| choice = contents(ui, icon, color, &tokens));
         });
         choice
     })

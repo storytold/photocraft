@@ -1,7 +1,7 @@
 //! Runtime-only Actions editor page. Definitions change through owned backend commands only.
 use std::collections::BTreeSet;
 
-use egui::{Color32, Id};
+use egui::Id;
 use serde_json::{Map, Value, json};
 
 use super::editor_picker::{self, Choice};
@@ -441,10 +441,10 @@ impl Page {
         Ok(())
     }
 
-    fn metadata(&mut self, app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &Value, swatches: &[Color32; 12]) -> Option<Value> {
+    fn metadata(&mut self, app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &Value) -> Option<Value> {
         let mut latest = None;
         let picker_id = ui.scope_id().with(("thumbnail", self.draft));
-        let choice = editor_picker::show(ui, picker_id, action_text(view, "icon"), action_text(view, "color"), swatches);
+        let choice = editor_picker::show(ui, picker_id, action_text(view, "icon"), action_text(view, "color"));
         if let Some(choice) = choice {
             let params = match choice {
                 Choice::Icon(icon) => json!({"icon": icon}),
@@ -700,7 +700,7 @@ impl Page {
     }
 
     /// Render only after parent extraction from its runtime state, passing the shared adapter's activity.
-    pub fn show(&mut self, app: &mut PhotocraftApp, ui: &mut egui::Ui, swatches: &[Color32; 12], activity: Activity) -> Option<Event> {
+    pub fn show(&mut self, app: &mut PhotocraftApp, ui: &mut egui::Ui, activity: Activity) -> Option<Event> {
         if self.closed {
             return None;
         }
@@ -725,7 +725,7 @@ impl Page {
                 if self.closed || self.has_modal() {
                     return;
                 }
-                if let Some(updated) = self.metadata(app, ui, &view, swatches) {
+                if let Some(updated) = self.metadata(app, ui, &view) {
                     view = updated;
                 }
                 event = self.toolbar(app, ui, &view).or(event.take());

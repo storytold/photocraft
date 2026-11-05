@@ -1,12 +1,10 @@
 use super::*;
 
 #[test]
-fn action_swatch_selection_marks_remain_readable_on_every_theme_swatch() {
-    for kind in ThemeKind::ALL {
-        for fill in Tokens::for_kind(kind).action_swatches().into_iter().skip(1) {
-            let ink = Tokens::action_thumbnail_ink(fill);
-            assert!(contrast(ink, fill) >= 4.5, "{kind:?}: {ink:?} on {fill:?}");
-        }
+fn action_picker_selection_marks_remain_readable() {
+    for fill in Tokens::ACTION_PICKER_SWATCHES {
+        let ink = Tokens::action_thumbnail_ink(fill);
+        assert!(contrast(ink, fill) >= 4.5, "{ink:?} on {fill:?}");
     }
     assert_eq!(Tokens::action_thumbnail_ink(Color32::from_rgb(255, 240, 90)), Color32::BLACK);
     assert_eq!(Tokens::action_thumbnail_ink(Color32::from_rgb(20, 25, 35)), Color32::WHITE);
@@ -376,10 +374,56 @@ fn breeze_themes_parse_and_meet_text_contrast() {
 }
 
 #[test]
-fn action_gray_swatch_is_the_same_mid_grey_in_every_theme() {
-    for kind in ThemeKind::ALL {
-        let gray = Tokens::for_kind(kind).action_swatches()[7];
-        assert_eq!(gray, Tokens::ACTION_GRAY_SWATCH, "{kind:?}");
-        assert!(contrast(Tokens::ACTION_THUMBNAIL_GLYPH, gray) >= 3.0, "{kind:?}: white glyph on {gray:?}");
+fn action_tiles_match_the_measured_pro_palettes() {
+    let measured = [
+        (ThemeKind::Pro, [0x323232, 0x8d2d2d, 0x935202, 0x967c00, 0x3f6335, 0x3e4f85, 0x5d4682, 0x535353, 0x006662, 0x3236a8, 0xaa2f64, 0x862587]),
+        (ThemeKind::ProMedium, [0x535353, 0xb0423f, 0xa5620a, 0xaa890a, 0x5f823c, 0x526f99, 0x7155a0, 0x6a6a6a, 0x006662, 0x4649a0, 0xaa2f64, 0x862587]),
+        (ThemeKind::ProLightGray, [0xb8b8b8, 0xeb726a, 0xe79e62, 0xdad665, 0x8fc665, 0x8da2d7, 0x9983c9, 0x979797, 0x00a19a, 0x8487ee, 0xdb6d9c, 0xca72cb]),
+        (ThemeKind::ProLight, [0xf0f0f0, 0xff8881, 0xfbb767, 0xe9e380, 0xabdb80, 0xa6bdf4, 0xb29ede, 0xacacac, 0x01c1b9, 0x8e92f2, 0xdc6d9d, 0xc97dca]),
+    ];
+    for (kind, expected) in measured {
+        let actual = Tokens::for_kind(kind).action_tiles.map(|fill| u32::from_be_bytes([0, fill.r(), fill.g(), fill.b()]));
+        assert_eq!(actual, expected, "{kind:?}");
     }
+}
+
+#[test]
+fn action_glyph_uses_theme_family_ink_and_measured_tile_contrast() {
+    for kind in ThemeKind::ALL {
+        let tokens = Tokens::for_kind(kind);
+        let glyph = tokens.action_glyph;
+        let expected = if kind.is_dark() { Color32::from_white_alpha(204) } else { Color32::from_black_alpha(204) };
+        assert_eq!(glyph, expected, "{kind:?}");
+        assert_eq!(tokens.action_tiles[0], tokens.card, "{kind:?}");
+        let family = if kind.is_dark() { ThemeKind::ProMedium } else { ThemeKind::ProLightGray };
+        if !kind.is_pro() {
+            assert_eq!(tokens.action_tiles[1..], Tokens::for_kind(family).action_tiles[1..], "{kind:?}");
+        }
+        let background_weight = u16::from(255 - glyph.a());
+        let blend = |ink: u8, fill: u8| ink + ((u16::from(fill) * background_weight + 127) / 255) as u8;
+        for (index, fill) in tokens.action_tiles.into_iter().enumerate() {
+            let blended = Color32::from_rgb(blend(glyph.r(), fill.r()), blend(glyph.g(), fill.g()), blend(glyph.b(), fill.b()));
+            let ratio = contrast(blended, fill);
+            // The measured Pro Medium yellow is the sole exception in the reference palettes.
+            if index == 3 && (kind == ThemeKind::ProMedium || (!kind.is_pro() && kind.is_dark())) {
+                assert!((2.69..2.71).contains(&ratio), "{kind:?}: measured yellow contrast {ratio}");
+            } else {
+                assert!(ratio >= 3.0, "{kind:?}: tile {index} has contrast {ratio}");
+            }
+            if kind == ThemeKind::ProLight && index == 3 {
+                assert_eq!(blended, Color32::from_rgb(47, 45, 26));
+            }
+        }
+    }
+}
+
+#[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+#[test]
+fn live_action_ink_and_neutral_tile_follow_overrides() {
+    let mut tokens = Tokens::for_kind(ThemeKind::ProMedium);
+    let original_gray = tokens.action_tile_fill("gray");
+    assert!(live::apply_overrides(&mut tokens, &serde_json::json!({"card":"#333333","action_glyph":"#00000099"})).is_empty());
+    assert_eq!(tokens.action_glyph, Color32::from_black_alpha(153));
+    assert_eq!(tokens.action_tile_fill(""), Color32::from_rgb(51, 51, 51));
+    assert_eq!(tokens.action_tile_fill("gray"), original_gray);
 }
