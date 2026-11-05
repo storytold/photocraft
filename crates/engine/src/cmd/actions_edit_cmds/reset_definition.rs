@@ -2,7 +2,11 @@
 //! The caller owns the single latest undo slot; no recording/playback/editor state is copied.
 use std::collections::BTreeMap;
 
-use crate::{Session, Result, actions_cmds::{Action, ActionState, library}, atn_cmds::sidecar::SetRowMetadata};
+use crate::{
+    Result, Session,
+    actions_cmds::{Action, ActionState, library},
+    atn_cmds::sidecar::SetRowMetadata,
+};
 use serde_json::{Value, json};
 
 use super::{bad, defaults, not_playing};
@@ -81,7 +85,10 @@ pub(super) fn apply(s: &mut Session, replace: bool) -> Result<(Value, ResetUndo)
         after_alternate_shortcuts: alternate.clone(),
         revision: 0,
     };
-    s.edit_prefs(|prefs| { prefs.shortcuts = shortcuts; prefs.alternate_shortcuts = alternate; });
+    s.edit_prefs(|prefs| {
+        prefs.shortcuts = shortcuts;
+        prefs.alternate_shortcuts = alternate;
+    });
     s.actions.touch();
     let undo = ResetUndo { revision: s.actions.rev, ..undo };
     Ok((json!({"set":defaults::NAME,"slot":s.actions.sets.len().saturating_sub(1),"appended":!replace,"actions":2}), undo))
@@ -107,7 +114,10 @@ pub(super) fn restore(s: &mut Session, undo: ResetUndo) -> Result<Value> {
     s.actions.sets = proposed.sets;
     s.actions.library = proposed.library;
     s.actions.atn_set_rows = proposed.atn_set_rows;
-    s.edit_prefs(|prefs| { prefs.shortcuts = undo.shortcuts; prefs.alternate_shortcuts = undo.alternate_shortcuts; });
+    s.edit_prefs(|prefs| {
+        prefs.shortcuts = undo.shortcuts;
+        prefs.alternate_shortcuts = undo.alternate_shortcuts;
+    });
     s.actions.touch();
     Ok(json!({"undone":true}))
 }
@@ -183,7 +193,9 @@ mod tests {
         s.actions.list.clear();
         let (_, undo) = apply(&mut s, false).unwrap();
         let current = library::encode(&s.actions, &[]).unwrap();
-        s.edit_prefs(|prefs| { prefs.alternate_shortcuts.insert("file.save".into(), vec!["F4".into()]); });
+        s.edit_prefs(|prefs| {
+            prefs.alternate_shortcuts.insert("file.save".into(), vec!["F4".into()]);
+        });
         assert!(restore(&mut s, undo).is_err());
         assert_eq!(library::encode(&s.actions, &[]).unwrap(), current);
         s.execute("actions.record", json!({"action":0})).unwrap();

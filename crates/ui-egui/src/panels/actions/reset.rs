@@ -63,11 +63,14 @@ pub(crate) fn can_default_confirm(app: &PhotocraftApp, dialog: u64) -> bool {
 pub(crate) fn buttons(app: &PhotocraftApp, ui: &mut egui::Ui, dialog: u64, fields: &mut Map<String, Value>) -> Option<crate::widgets::ButtonRole> {
     use crate::widgets::{ButtonRole, DialogButton, dialog_buttons};
     let held = app.held_actions_reset.as_ref().filter(|held| held.dialog == dialog);
-    let hit = dialog_buttons(ui, &[
-        DialogButton::new(ButtonRole::Default, tl!("OK"), 84.0).enabled(held.is_some_and(|held| held.replace)),
-        DialogButton::new(ButtonRole::Cancel, tl!("Cancel"), 84.0),
-        DialogButton::new(ButtonRole::Alternate, tl!("Append"), 84.0).enabled(held.is_some_and(|held| held.append)),
-    ]);
+    let hit = dialog_buttons(
+        ui,
+        &[
+            DialogButton::new(ButtonRole::Default, tl!("OK"), 84.0).enabled(held.is_some_and(|held| held.replace)),
+            DialogButton::new(ButtonRole::Cancel, tl!("Cancel"), 84.0),
+            DialogButton::new(ButtonRole::Alternate, tl!("Append"), 84.0).enabled(held.is_some_and(|held| held.append)),
+        ],
+    );
     if hit == Some(ButtonRole::Default) {
         fields.insert("mode".into(), json!("replace"));
     } else if hit == Some(ButtonRole::Alternate) {
@@ -106,8 +109,12 @@ pub(crate) fn confirm(app: &mut PhotocraftApp, dialog: u64, fields: &Map<String,
     app.ui.actions.selected_step = None;
     app.ui.actions.selected_set = result.get("set").and_then(Value::as_str).map(str::to_string);
     let folders = photocraft_engine::actions_edit_cmds::set_occurrences(&app.session)?;
-    app.ui.actions.selected_folder = result.get("slot").and_then(Value::as_u64).and_then(|slot| usize::try_from(slot).ok())
-        .and_then(|slot| folders.iter().find(|row| row.slot == Some(slot))).map(super::FolderSelection::from_row);
+    app.ui.actions.selected_folder = result
+        .get("slot")
+        .and_then(Value::as_u64)
+        .and_then(|slot| usize::try_from(slot).ok())
+        .and_then(|slot| folders.iter().find(|row| row.slot == Some(slot)))
+        .map(super::FolderSelection::from_row);
     app.ui.actions.collapsed_folders.retain(|key| folders.iter().any(|row| key.matches(row)));
     if let Some(selected) = &app.ui.actions.selected_folder {
         app.ui.actions.collapsed_folders.retain(|key| key != selected);

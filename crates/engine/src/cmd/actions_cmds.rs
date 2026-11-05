@@ -548,11 +548,14 @@ fn get(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// Start capture into the selected or newly created definition while refusing incompatible playback state.
 fn record(s: &mut Session, p: &Value) -> Result<Value> {
-    let destination = library::RowBinding::requested(&s.actions, p, library::placement::SelectorUse::NewAction).map_err(|error| bad("actions.record", error))?;
+    let destination =
+        library::RowBinding::requested(&s.actions, p, library::placement::SelectorUse::NewAction).map_err(|error| bad("actions.record", error))?;
     if p.get("action").is_some() && (p.get("set").is_some() || p.get("name").is_some()) {
         return Err(bad("actions.record", "record an existing action without replacement name/set fields"));
     }
-    if destination.is_some() { library::placement::idle(s, "actions.record")?; }
+    if destination.is_some() {
+        library::placement::idle(s, "actions.record")?;
+    }
     not_playing(s, "actions.record")?;
     if s.actions.recording_active() {
         return Err(bad("actions.record", "already recording; stop first"));
@@ -585,9 +588,17 @@ fn record(s: &mut Session, p: &Value) -> Result<Value> {
         };
         let value = Action { set, ..Action::new(name, Vec::new()) };
         if let Some(destination) = destination {
-            let prepared = library::placement::prepare(&s.actions, &s.prefs().shortcuts, &s.prefs().alternate_shortcuts,
-                library::placement::Edit::Insert { destination, action:value }).map_err(|error| bad("actions.record", error))?;
-            let index = prepared.result["index"].as_u64().and_then(|value| usize::try_from(value).ok()).ok_or_else(|| bad("actions.record", "missing prepared action index"))?;
+            let prepared = library::placement::prepare(
+                &s.actions,
+                &s.prefs().shortcuts,
+                &s.prefs().alternate_shortcuts,
+                library::placement::Edit::Insert { destination, action: value },
+            )
+            .map_err(|error| bad("actions.record", error))?;
+            let index = prepared.result["index"]
+                .as_u64()
+                .and_then(|value| usize::try_from(value).ok())
+                .ok_or_else(|| bad("actions.record", "missing prepared action index"))?;
             prepared.publish(s);
             index
         } else {
@@ -926,7 +937,9 @@ fn move_item(s: &mut Session, p: &Value) -> Result<Value> {
             for &key in call_keys(id) {
                 let Some(old) = params.get(key).and_then(num).and_then(|value| usize::try_from(value).ok()).filter(|&old| old < count) else { continue };
                 let new = moved_index(old, idx, to);
-                if new != old { params[key] = json!(new); }
+                if new != old {
+                    params[key] = json!(new);
+                }
             }
         }
         if let Some((_, recording)) = s.actions.recording.as_mut() {
@@ -955,8 +968,9 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
     let physical = library::RowBinding::requested(&s.actions, p, library::placement::SelectorUse::Folder).map_err(|error| bad("actions.delete", error))?;
     if let Some(source) = physical {
         library::placement::idle(s, "actions.delete")?;
-        let prepared = library::placement::prepare(&s.actions, &s.prefs().shortcuts, &s.prefs().alternate_shortcuts,
-            library::placement::Edit::Delete { source }).map_err(|error| bad("actions.delete", error))?;
+        let prepared =
+            library::placement::prepare(&s.actions, &s.prefs().shortcuts, &s.prefs().alternate_shortcuts, library::placement::Edit::Delete { source })
+                .map_err(|error| bad("actions.delete", error))?;
         return Ok(prepared.publish(s));
     }
     not_playing(s, "actions.delete")?;

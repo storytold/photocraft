@@ -340,13 +340,17 @@ pub(crate) fn assign_set_metadata(state: &mut ActionState, action: usize, target
 
 /// Change only the destination SET carrier; action-level opaque bytes and origins stay intact.
 pub(crate) fn place_metadata(action: &mut Action, source: Option<Arc<SetMetadata>>) {
-    if let Some(metadata) = action.atn_metadata.as_mut() { metadata.set = source; }
+    if let Some(metadata) = action.atn_metadata.as_mut() {
+        metadata.set = source;
+    }
 }
 
 /// Select one action with its set metadata and exact raw-row provenance when still available.
 pub(crate) fn selection<'a>(state: &ActionState, action: &'a Action) -> Result<Selection<'a>> {
     crate::actions_cmds::library::placement::validate(state)?;
-    if let Some(binding) = &action.library_row { binding.slot(state)?; }
+    if let Some(binding) = &action.library_row {
+        binding.slot(state)?;
+    }
     let source = action.library_row.as_ref().map(|binding| binding.carrier.clone()).unwrap_or_else(|| {
         action.atn_metadata.as_ref().and_then(|metadata| metadata.set.clone()).or_else(|| group_source(state, super::logical_set_name(action.set.as_deref())))
     });
@@ -388,9 +392,11 @@ fn groups_ordered<'a>(state: &'a ActionState, only: Option<&str>, durable: bool)
     };
     for action in ordered {
         let name = super::logical_set_name(action.set.as_deref());
-        let source = action.library_row.as_ref().map(|binding| binding.carrier.clone()).unwrap_or_else(|| {
-            action.atn_metadata.as_ref().and_then(|metadata| metadata.set.clone()).or_else(|| sources.get(name).cloned().flatten())
-        });
+        let source = action
+            .library_row
+            .as_ref()
+            .map(|binding| binding.carrier.clone())
+            .unwrap_or_else(|| action.atn_metadata.as_ref().and_then(|metadata| metadata.set.clone()).or_else(|| sources.get(name).cloned().flatten()));
         let raw = raw_rows.source(action)?;
         let existing = out.last_mut().filter(|(previous, selection)| {
             *previous == name

@@ -29,7 +29,9 @@ pub const DEFAULT_SET_NAME: &str = defaults::NAME;
 /// Prepare real starter definitions and all admission checks before replacement.
 fn reset(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "actions.reset";
-    if p.get("confirm").and_then(Value::as_bool) != Some(true) { return Err(bad(cmd, "resetting actions requires `confirm`: true")); }
+    if p.get("confirm").and_then(Value::as_bool) != Some(true) {
+        return Err(bad(cmd, "resetting actions requires `confirm`: true"));
+    }
     let replace = match p.get("mode").and_then(Value::as_str) {
         Some("append") => false,
         Some("replace") => true,
@@ -42,7 +44,9 @@ fn reset(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// The one latest panel undo uses canonical definition fields, independent of document History.
 fn undo_reset(s: &mut Session, p: &Value) -> Result<Value> {
-    if p.as_object().is_none_or(|params| !params.is_empty()) { return Err(bad("actions.undoReset", "Undo Reset Actions takes no parameters")); }
+    if p.as_object().is_none_or(|params| !params.is_empty()) {
+        return Err(bad("actions.undoReset", "Undo Reset Actions takes no parameters"));
+    }
     let undo = s.actions.reset_undo.as_deref().ok_or_else(|| bad("actions.undoReset", "no Reset Actions is available to undo"))?;
     reset_definition::can_restore(s, undo)?;
     let undo = s.actions.reset_undo.take().ok_or_else(|| bad("actions.undoReset", "no Reset Actions is available to undo"))?;
@@ -162,7 +166,9 @@ pub(crate) fn shift_action_calls(actions: &mut [Action], at: usize, count: usize
             } else {
                 n.as_f64().filter(|n| n.round() >= at as f64).map(|n| Value::from(n + count as f64))
             };
-            if let Some(value) = shifted { params[key] = value; }
+            if let Some(value) = shifted {
+                params[key] = value;
+            }
         }
     }
 }
@@ -225,8 +231,8 @@ fn duplicate_set(s: &mut Session, p: &Value) -> Result<Value> {
         placement::idle(s, cmd)?;
         let mut names = crate::atn_cmds::UniqueNames::new(set_names(s));
         let name = names.claim(&format!("{} copy", source.name));
-        let prepared = placement::prepare(&s.actions, &s.prefs().shortcuts, &s.prefs().alternate_shortcuts,
-            placement::Edit::Duplicate { source, name }).map_err(|error| bad(cmd, error))?;
+        let prepared = placement::prepare(&s.actions, &s.prefs().shortcuts, &s.prefs().alternate_shortcuts, placement::Edit::Duplicate { source, name })
+            .map_err(|error| bad(cmd, error))?;
         return Ok(prepared.publish(s));
     }
     if p.get("action").is_some() || p.get("step").is_some() {
@@ -253,7 +259,9 @@ fn duplicate_set(s: &mut Session, p: &Value) -> Result<Value> {
         .map(|mut a| {
             a.name = names.claim(&format!("{} copy", a.name));
             a.set = Some(name.clone());
-            if let Some(binding) = &mut a.library_row { binding.name = name.clone(); }
+            if let Some(binding) = &mut a.library_row {
+                binding.name = name.clone();
+            }
             a
         })
         .collect();
@@ -279,8 +287,12 @@ fn duplicate_set(s: &mut Session, p: &Value) -> Result<Value> {
 fn clear_all(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "actions.clearAll";
     not_playing(s, cmd)?;
-    if s.actions.recording_active() { return Err(bad(cmd, "stop recording before clearing actions")); }
-    if p.get("confirm").and_then(Value::as_bool) != Some(true) { return Err(bad(cmd, "clearing all actions requires `confirm`: true")); }
+    if s.actions.recording_active() {
+        return Err(bad(cmd, "stop recording before clearing actions"));
+    }
+    if p.get("confirm").and_then(Value::as_bool) != Some(true) {
+        return Err(bad(cmd, "clearing all actions requires `confirm`: true"));
+    }
     let count = s.actions.list.len();
     let mut proposed = crate::actions_cmds::library::definition_copy(&s.actions);
     proposed.list.clear();
@@ -295,7 +307,10 @@ fn clear_all(s: &mut Session, p: &Value) -> Result<Value> {
     s.actions.sets = proposed.sets;
     s.actions.library = proposed.library;
     s.actions.atn_set_rows = proposed.atn_set_rows;
-    s.edit_prefs(|prefs| { prefs.shortcuts = shortcuts; prefs.alternate_shortcuts = alternate; });
+    s.edit_prefs(|prefs| {
+        prefs.shortcuts = shortcuts;
+        prefs.alternate_shortcuts = alternate;
+    });
     s.actions.touch();
     Ok(json!({"cleared":count}))
 }
@@ -344,10 +359,13 @@ fn assign_set(s: &mut Session, p: &Value) -> Result<Value> {
         placement::idle(s, cmd)?;
         let index = resolve(&s.actions.list, p, cmd)?;
         if destination.contains(&s.actions, &s.actions.list[index]).map_err(|error| bad(cmd, error))? {
-            return Ok(json!({"action":s.actions.list[index].name,"set":destination.name,"index":index,"slot":destination.slot(&s.actions).map_err(|error| bad(cmd, error))?}));
+            return Ok(
+                json!({"action":s.actions.list[index].name,"set":destination.name,"index":index,"slot":destination.slot(&s.actions).map_err(|error| bad(cmd, error))?}),
+            );
         }
-        let mut prepared = placement::prepare(&s.actions, &s.prefs().shortcuts, &s.prefs().alternate_shortcuts,
-            placement::Edit::Assign { destination, action:index }).map_err(|error| bad(cmd, error))?;
+        let mut prepared =
+            placement::prepare(&s.actions, &s.prefs().shortcuts, &s.prefs().alternate_shortcuts, placement::Edit::Assign { destination, action: index })
+                .map_err(|error| bad(cmd, error))?;
         prepared.result["action"] = json!(s.actions.list[index].name);
         return Ok(prepared.publish(s));
     }
@@ -361,7 +379,9 @@ fn assign_set(s: &mut Session, p: &Value) -> Result<Value> {
     };
     crate::atn_cmds::sidecar::assign_set_metadata(&mut s.actions, idx, set.as_deref());
     let action = &mut s.actions.list[idx];
-    if crate::atn_cmds::logical_set_name(action.set.as_deref()) != crate::atn_cmds::logical_set_name(set.as_deref()) { action.library_row = None; }
+    if crate::atn_cmds::logical_set_name(action.set.as_deref()) != crate::atn_cmds::logical_set_name(set.as_deref()) {
+        action.library_row = None;
+    }
     action.set = set;
     let result = json!({"action": action.name, "set": action.set});
     s.actions.touch();

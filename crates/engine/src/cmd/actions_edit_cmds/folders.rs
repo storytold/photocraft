@@ -19,13 +19,18 @@ pub struct SetOccurrence {
 pub fn set_occurrences(s: &Session) -> Result<Vec<SetOccurrence>, String> {
     let state = &s.actions;
     crate::actions_cmds::library::placement::validate(state)?;
-    let mut rows: Vec<_> = state.sets.iter().enumerate().map(|(slot, name)| SetOccurrence {
-        name: name.clone(),
-        slot: Some(slot),
-        origin: state.library.rows.get(slot).and_then(Option::as_ref).map(|row| row.key()),
-        actions: Vec::new(),
-        _source: state.library.rows.get(slot).cloned().flatten(),
-    }).collect();
+    let mut rows: Vec<_> = state
+        .sets
+        .iter()
+        .enumerate()
+        .map(|(slot, name)| SetOccurrence {
+            name: name.clone(),
+            slot: Some(slot),
+            origin: state.library.rows.get(slot).and_then(Option::as_ref).map(|row| row.key()),
+            actions: Vec::new(),
+            _source: state.library.rows.get(slot).cloned().flatten(),
+        })
+        .collect();
     let mut first = std::collections::HashMap::new();
     let mut physical = std::collections::HashMap::new();
     for (slot, name) in state.sets.iter().enumerate() {

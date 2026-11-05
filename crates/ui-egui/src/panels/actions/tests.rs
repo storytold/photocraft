@@ -1789,15 +1789,15 @@ fn moving_an_action_next_to_another_set_joins_it() {
     app.session.actions.list.push(b);
     app.session.actions.list.push(Action::new("C", vec![]));
     // C dropped below B: it joins B's set, "Two".
-    let drag = DragRow { action: 2, step: None, revision:app.session.actions.rev, origin:None };
+    let drag = DragRow { action: 2, step: None, revision: app.session.actions.rev, origin: None };
     move_row(&mut app, drag, 2);
     assert_eq!(app.session.actions.list[2].set.as_deref(), Some("Two"));
     // B dropped to the top, above A: the row below decides when there is none above.
-    let drag = DragRow { action: 1, step: None, revision:app.session.actions.rev, origin:None };
+    let drag = DragRow { action: 1, step: None, revision: app.session.actions.rev, origin: None };
     move_row(&mut app, drag, 0);
     assert_eq!((app.session.actions.list[0].name.as_str(), app.session.actions.list[0].set.as_deref()), ("B", Some("One")));
     // C dropped between A (One) and nothing: the row above wins.
-    let drag = DragRow { action: 2, step: None, revision:app.session.actions.rev, origin:None };
+    let drag = DragRow { action: 2, step: None, revision: app.session.actions.rev, origin: None };
     move_row(&mut app, drag, 2);
     assert_eq!((app.session.actions.list[2].name.as_str(), app.session.actions.list[2].set.as_deref()), ("C", Some("One")));
 }
@@ -3065,43 +3065,46 @@ fn bulk_load_contents_budget_does_not_limit_native_paths() {
     assert_eq!(app.session.actions.list[0].name, "From disk");
 }
 
-
 /// Classic recorder, Duplicate and Delete dispatch the selected occurrence's current slot.
 #[test]
 fn classic_physical_folder_adapters_keep_new_record_copy_and_delete_local() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.background_jobs = false;
-    app.run("file.new",json!({"width":8,"height":8})).unwrap();
-    for _ in 0..2 { app.session.execute("actions.reset",json!({"mode":"append","confirm":true})).unwrap(); }
+    app.run("file.new", json!({"width":8,"height":8})).unwrap();
+    for _ in 0..2 {
+        app.session.execute("actions.reset", json!({"mode":"append","confirm":true})).unwrap();
+    }
     let rows = photocraft_engine::actions_edit_cmds::set_occurrences(&app.session).unwrap();
     app.ui.actions.collapsed_folders = rows.iter().map(FolderSelection::from_row).collect();
     app.ui.actions.select_folder(FolderSelection::from_row(&rows[1]));
-    begin_recording(&mut app,false);
-    assert_eq!(app.ui.actions.collapsed_folders.len(),1,"recording reveals only its actual folder");
-    app.run("actions.stop",json!({})).unwrap();
+    begin_recording(&mut app, false);
+    assert_eq!(app.ui.actions.collapsed_folders.len(), 1, "recording reveals only its actual folder");
+    app.run("actions.stop", json!({})).unwrap();
     let rows = photocraft_engine::actions_edit_cmds::set_occurrences(&app.session).unwrap();
-    assert_eq!(rows.iter().map(|row| row.actions.len()).collect::<Vec<_>>(),[2,3]);
+    assert_eq!(rows.iter().map(|row| row.actions.len()).collect::<Vec<_>>(), [2, 3]);
     app.ui.actions.select_folder(FolderSelection::from_row(&rows[0]));
     duplicate_selection(&mut app).unwrap();
     let rows = photocraft_engine::actions_edit_cmds::set_occurrences(&app.session).unwrap();
-    assert_eq!(rows.iter().map(|row| row.actions.len()).collect::<Vec<_>>(),[2,2,3]);
+    assert_eq!(rows.iter().map(|row| row.actions.len()).collect::<Vec<_>>(), [2, 2, 3]);
     let dialog = request_delete(&mut app).unwrap()["dialog"].as_u64().unwrap();
-    crate::dialogs::confirm(&mut app,dialog).unwrap();
+    crate::dialogs::confirm(&mut app, dialog).unwrap();
     let rows = photocraft_engine::actions_edit_cmds::set_occurrences(&app.session).unwrap();
-    assert_eq!(rows.iter().map(|row| row.actions.len()).collect::<Vec<_>>(),[2,3]);
-    assert_eq!(rows[0].name,rows[1].name,"the two original namesakes remain");
+    assert_eq!(rows.iter().map(|row| row.actions.len()).collect::<Vec<_>>(), [2, 3]);
+    assert_eq!(rows[0].name, rows[1].name, "the two original namesakes remain");
 }
 
 /// A delayed Classic drag refuses a same-caption replacement before any move or assignment.
 #[test]
 fn classic_physical_drag_refuses_changed_revision_without_partial_reorder() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-    for _ in 0..2 { app.session.execute("actions.reset",json!({"mode":"append","confirm":true})).unwrap(); }
+    for _ in 0..2 {
+        app.session.execute("actions.reset", json!({"mode":"append","confirm":true})).unwrap();
+    }
     let rows = photocraft_engine::actions_edit_cmds::set_occurrences(&app.session).unwrap();
-    let drag = DragRow { action:2,step:None,revision:app.session.actions.rev,origin:rows[1].origin };
-    app.session.execute("actions.reset",json!({"mode":"replace","confirm":true})).unwrap();
+    let drag = DragRow { action: 2, step: None, revision: app.session.actions.rev, origin: rows[1].origin };
+    app.session.execute("actions.reset", json!({"mode":"replace","confirm":true})).unwrap();
     let definitions = app.session.actions.list.clone();
-    move_row(&mut app,drag,0);
+    move_row(&mut app, drag, 0);
     assert!(app.ui.status_error);
-    assert_eq!(app.session.actions.list,definitions);
+    assert_eq!(app.session.actions.list, definitions);
 }

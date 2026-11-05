@@ -22,7 +22,13 @@ pub struct Owner {
 
 /// Restore a Classic recorder only to one unchanged definition, allowing reorder but rejecting ambiguity.
 fn classic_index(s: &Session, action: &Action) -> Option<usize> {
-    let mut matches = s.actions.list.iter().enumerate().filter(|(_, candidate)| *candidate == action && super::library::same_placement(candidate, action)).map(|(index, _)| index);
+    let mut matches = s
+        .actions
+        .list
+        .iter()
+        .enumerate()
+        .filter(|(_, candidate)| *candidate == action && super::library::same_placement(candidate, action))
+        .map(|(index, _)| index);
     let index = matches.next()?;
     matches.next().is_none().then_some(index)
 }

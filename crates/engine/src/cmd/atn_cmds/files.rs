@@ -152,7 +152,10 @@ fn import_actions(s: &mut Session, p: &Value, whole: bool) -> Result<Value> {
     s.actions.sets = proposed.sets;
     s.actions.library = proposed.library;
     s.actions.atn_set_rows = proposed.atn_set_rows;
-    s.edit_prefs(|prefs| { prefs.shortcuts = shortcuts; prefs.alternate_shortcuts = alternate; });
+    s.edit_prefs(|prefs| {
+        prefs.shortcuts = shortcuts;
+        prefs.alternate_shortcuts = alternate;
+    });
     s.actions.touch();
     Ok(json!({
         "set": imp.set,
@@ -169,8 +172,8 @@ fn import_actions(s: &mut Session, p: &Value, whole: bool) -> Result<Value> {
 /// Encode the selected action or library while retaining its physical source and metadata.
 pub(super) fn save(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "actions.save";
-    let physical = crate::actions_cmds::library::RowBinding::requested(&s.actions, p,
-        crate::actions_cmds::library::placement::SelectorUse::Folder).map_err(|error| bad(cmd, error))?;
+    let physical = crate::actions_cmds::library::RowBinding::requested(&s.actions, p, crate::actions_cmds::library::placement::SelectorUse::Folder)
+        .map_err(|error| bad(cmd, error))?;
     crate::actions_cmds::flush_recording(s)?;
     let skip = match p.get("skipUnsupported") {
         None | Some(Value::Null) => false,
@@ -188,20 +191,30 @@ pub(super) fn save(s: &mut Session, p: &Value) -> Result<Value> {
     let physical_slot = physical.as_ref().map(|binding| binding.slot(&s.actions)).transpose().map_err(|error| bad(cmd, error))?;
     let mut groups = if let Some(slot) = physical_slot {
         let name = s.actions.sets.get(slot).ok_or_else(|| bad(cmd, "the action folder no longer exists"))?;
-        if set_param.as_ref().is_some_and(|selected| selected != name) { return Err(bad(cmd, "the physical folder name changed")); }
+        if set_param.as_ref().is_some_and(|selected| selected != name) {
+            return Err(bad(cmd, "the physical folder name changed"));
+        }
         let origin = s.actions.library.rows.get(slot).and_then(Option::as_ref).map(|row| row.key());
         if origin.is_none() && s.actions.sets.iter().filter(|caption| *caption == name).count() != 1 {
             return Err(bad(cmd, "the physical folder has no unambiguous canonical origin"));
         }
-        let selected: Vec<_> = sidecar::library_groups(&s.actions).map_err(|error| bad(cmd, error))?.into_iter()
+        let selected: Vec<_> = sidecar::library_groups(&s.actions)
+            .map_err(|error| bad(cmd, error))?
+            .into_iter()
             .filter(|(caption, selection)| *caption == name && selection.raw.as_ref().map(|row| row.key()) == origin)
-            .map(|(caption, selection)| (caption.to_string(), selection)).collect();
-        if selected.is_empty() { return Err(bad(cmd, "the physical action folder is unavailable")); }
+            .map(|(caption, selection)| (caption.to_string(), selection))
+            .collect();
+        if selected.is_empty() {
+            return Err(bad(cmd, "the physical action folder is unavailable"));
+        }
         selected
     } else if p.get("action").is_some() {
         let idx = crate::actions_cmds::resolve(&s.actions.list, p, cmd)?;
         let a = &s.actions.list[idx];
-        vec![(set_param.clone().unwrap_or_else(|| super::logical_set_name(a.set.as_deref()).to_string()), sidecar::selection(&s.actions, a).map_err(|error| bad(cmd, error))?)]
+        vec![(
+            set_param.clone().unwrap_or_else(|| super::logical_set_name(a.set.as_deref()).to_string()),
+            sidecar::selection(&s.actions, a).map_err(|error| bad(cmd, error))?,
+        )]
     } else if let Some(set) = &set_param {
         let groups = sidecar::groups(&s.actions, Some(set)).map_err(|error| bad(cmd, error))?;
         if groups.is_empty() {

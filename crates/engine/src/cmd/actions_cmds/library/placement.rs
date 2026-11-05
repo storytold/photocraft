@@ -1,8 +1,11 @@
 //! Checked physical placement used by existing Actions command adapters.
 //! Prepared candidates own definitions/maps only; callers must retain their normal lifetime gates.
-use std::{collections::{BTreeMap, HashMap, HashSet}, sync::Arc};
-use super::{Action, ActionState, RowOrigin, Result, atn_cmds, sidecar};
+use super::{Action, ActionState, Result, RowOrigin, atn_cmds, sidecar};
 use serde_json::{Value, json};
+use std::{
+    collections::{BTreeMap, HashMap, HashSet},
+    sync::Arc,
+};
 
 type Keys = BTreeMap<String, String>;
 type Alternates = BTreeMap<String, Vec<String>>;
@@ -17,16 +20,24 @@ pub struct RowBinding {
 }
 
 /// Existing-action replacement selectors remain forbidden for new recorder/draft adapters.
-pub(crate) enum SelectorUse { NewAction, Assign, Folder }
+pub(crate) enum SelectorUse {
+    NewAction,
+    Assign,
+    Folder,
+}
 
 impl RowBinding {
     /// A bare integer selects the CURRENT physical slot; delayed callers separately bind revision.
     pub(crate) fn at(state: &ActionState, slot: usize, caption: Option<&str>) -> Result<Self> {
         let name = state.sets.get(slot).ok_or("the Actions folder slot is out of range")?;
-        if caption.is_some_and(|caption| caption != name) { return Err("the Actions folder caption changed".into()); }
+        if caption.is_some_and(|caption| caption != name) {
+            return Err("the Actions folder caption changed".into());
+        }
         let binding = Self { name: name.clone(), row: state.library.rows.get(slot).cloned().flatten(), carrier: sidecar::empty_source(state, slot) };
         let resolved = state.library.row_index(&state.sets).destination(&binding)?;
-        if resolved != slot { return Err("the Actions folder slot is ambiguous".into()); }
+        if resolved != slot {
+            return Err("the Actions folder slot is ambiguous".into());
+        }
         Ok(binding)
     }
 
@@ -36,9 +47,15 @@ impl RowBinding {
         let Some(value) = params.get("setSlot") else { return Ok(None) };
         let slot = value.as_u64().and_then(|value| usize::try_from(value).ok()).ok_or("setSlot must be a current unsigned folder slot")?;
         match usage {
-            SelectorUse::NewAction if params.get("action").is_some() || params.get("step").is_some() => return Err("existing actions cannot replace their folder through a new-action selector".into()),
-            SelectorUse::Folder if params.get("action").is_some() || params.get("step").is_some() => return Err("select either a folder or an action/step".into()),
-            SelectorUse::Assign if params.get("action").is_none_or(Value::is_null) || params.get("step").is_some() => return Err("folder assignment requires one action".into()),
+            SelectorUse::NewAction if params.get("action").is_some() || params.get("step").is_some() => {
+                return Err("existing actions cannot replace their folder through a new-action selector".into());
+            }
+            SelectorUse::Folder if params.get("action").is_some() || params.get("step").is_some() => {
+                return Err("select either a folder or an action/step".into());
+            }
+            SelectorUse::Assign if params.get("action").is_none_or(Value::is_null) || params.get("step").is_some() => {
+                return Err("folder assignment requires one action".into());
+            }
             _ => {}
         }
         let caption = match params.get("set") {
@@ -51,7 +68,9 @@ impl RowBinding {
 
     pub(crate) fn slot(&self, state: &ActionState) -> Result<usize> {
         let slot = state.library.row_index(&state.sets).destination(self)?;
-        if sidecar::empty_source(state, slot) != self.carrier { return Err("the Actions folder metadata changed".into()); }
+        if sidecar::empty_source(state, slot) != self.carrier {
+            return Err("the Actions folder metadata changed".into());
+        }
         Ok(slot)
     }
 
@@ -67,16 +86,22 @@ impl RowBinding {
     pub(crate) fn contains(&self, state: &ActionState, action: &Action) -> Result<bool> {
         self.slot(state)?;
         let raw = state.library.row_index(&state.sets).source(action)?;
-        Ok(atn_cmds::logical_set_name(action.set.as_deref()) == self.name
-            && raw.as_ref().map(RowOrigin::key) == self.row.as_ref().map(RowOrigin::key))
+        Ok(atn_cmds::logical_set_name(action.set.as_deref()) == self.name && raw.as_ref().map(RowOrigin::key) == self.row.as_ref().map(RowOrigin::key))
     }
 }
 
 /// Runtime snapshot comparison only; ordinary Action equality retains its reload contract.
 pub fn same_placement(left: &Action, right: &Action) -> bool {
-    let row = |action: &Action| action.library_row.as_ref().map(|binding| binding.row.as_ref().map(RowOrigin::key))
-        .unwrap_or_else(|| action.library_origin.as_ref().map(|origin| origin.row.key()));
-    if atn_cmds::logical_set_name(left.set.as_deref()) != atn_cmds::logical_set_name(right.set.as_deref()) || row(left) != row(right) { return false; }
+    let row = |action: &Action| {
+        action
+            .library_row
+            .as_ref()
+            .map(|binding| binding.row.as_ref().map(RowOrigin::key))
+            .unwrap_or_else(|| action.library_origin.as_ref().map(|origin| origin.row.key()))
+    };
+    if atn_cmds::logical_set_name(left.set.as_deref()) != atn_cmds::logical_set_name(right.set.as_deref()) || row(left) != row(right) {
+        return false;
+    }
     match (&left.library_row, &right.library_row) {
         (Some(left), Some(right)) => left.carrier == right.carrier,
         _ => true,
@@ -90,9 +115,14 @@ pub(crate) fn publish(s: &mut crate::Session, definition: ActionState, shortcuts
     s.actions.library = definition.library;
     s.actions.atn_set_rows = definition.atn_set_rows;
     if shortcuts != s.prefs().shortcuts || alternates != s.prefs().alternate_shortcuts {
-        s.edit_prefs(|prefs| { prefs.shortcuts = shortcuts; prefs.alternate_shortcuts = alternates; });
+        s.edit_prefs(|prefs| {
+            prefs.shortcuts = shortcuts;
+            prefs.alternate_shortcuts = alternates;
+        });
     }
-    if changed { s.actions.touch(); }
+    if changed {
+        s.actions.touch();
+    }
 }
 
 impl Prepared {
@@ -114,13 +144,17 @@ pub(crate) fn idle(s: &crate::Session, command: &str) -> crate::Result<()> {
 /// All readers use the same checked destination and current row-local carrier.
 /// Temporary indexes preserve linear validation even when many actions share a caption.
 pub(crate) fn validate(state: &ActionState) -> Result<()> {
-    if !state.list.iter().any(|action| action.library_row.is_some()) { return Ok(()) }
+    if !state.list.iter().any(|action| action.library_row.is_some()) {
+        return Ok(());
+    }
     let index = state.library.row_index(&state.sets);
     let mut carriers = HashMap::new();
     for row in &state.atn_set_rows {
         if state.sets.get(row.slot) == Some(&row.row) {
             if let Some(old) = carriers.insert(row.slot, &row.source) {
-                if old != &row.source { return Err("the Actions folder metadata is ambiguous".into()); }
+                if old != &row.source {
+                    return Err("the Actions folder metadata is ambiguous".into());
+                }
             }
         }
     }
@@ -128,7 +162,9 @@ pub(crate) fn validate(state: &ActionState) -> Result<()> {
         if let Some(binding) = &action.library_row {
             let slot = index.destination(binding)?;
             index.source(action)?;
-            if carriers.get(&slot).copied() != binding.carrier.as_ref() { return Err("the Actions folder metadata changed".into()); }
+            if carriers.get(&slot).copied() != binding.carrier.as_ref() {
+                return Err("the Actions folder metadata changed".into());
+            }
         }
     }
     Ok(())
@@ -167,18 +203,26 @@ fn members(state: &ActionState, row: &RowBinding) -> Result<Vec<usize>> {
 fn insertion(state: &ActionState, row: &RowBinding) -> Result<usize> {
     let slot = row.slot(state)?;
     let current = members(state, row)?;
-    if current.windows(2).any(|pair| pair[1] != pair[0] + 1) { return Err("the Actions folder is not a contiguous block".into()); }
-    if let Some(last) = current.last() { return Ok(last + 1); }
+    if current.windows(2).any(|pair| pair[1] != pair[0] + 1) {
+        return Err("the Actions folder is not a contiguous block".into());
+    }
+    if let Some(last) = current.last() {
+        return Ok(last + 1);
+    }
     let index = state.library.row_index(&state.sets);
     let mut slots = HashMap::new();
     for (position, name) in state.sets.iter().enumerate() {
         let key = (name.as_str(), state.library.rows.get(position).and_then(Option::as_ref).map(RowOrigin::key));
-        if slots.insert(key, position).is_some() { return Err("the Actions folder is ambiguous".into()); }
+        if slots.insert(key, position).is_some() {
+            return Err("the Actions folder is ambiguous".into());
+        }
     }
     for (position, action) in state.list.iter().enumerate() {
         let raw = index.source(action)?;
         let key = (atn_cmds::logical_set_name(action.set.as_deref()), raw.as_ref().map(RowOrigin::key));
-        if slots.get(&key).is_some_and(|&next| next > slot) { return Ok(position); }
+        if slots.get(&key).is_some_and(|&next| next > slot) {
+            return Ok(position);
+        }
     }
     Ok(state.list.len())
 }
@@ -186,15 +230,18 @@ fn insertion(state: &ActionState, row: &RowBinding) -> Result<usize> {
 /// Require exactly one emitted group per current physical slot in its retained slot order.
 /// This checks the existing writer's actual order decision, including empty rows and carriers.
 fn representable(state: &ActionState) -> Result<()> {
-    let expected: Vec<_> = state.sets.iter().enumerate().map(|(slot, name)| {
-        (name.as_str(), state.library.rows.get(slot).and_then(Option::as_ref).map(RowOrigin::key))
-    }).collect();
+    let expected: Vec<_> =
+        state.sets.iter().enumerate().map(|(slot, name)| (name.as_str(), state.library.rows.get(slot).and_then(Option::as_ref).map(RowOrigin::key))).collect();
     let distinct: HashSet<_> = expected.iter().copied().collect();
-    if distinct.len() != expected.len() { return Err("the physical Actions rows are ambiguous".into()); }
+    if distinct.len() != expected.len() {
+        return Err("the physical Actions rows are ambiguous".into());
+    }
     let groups = sidecar::library_groups(state)?;
-    let emitted: Vec<_> = groups.iter().map(|(name, selection)| (*name, selection.raw.as_ref().map(RowOrigin::key)))
-        .filter(|key| distinct.contains(key)).collect();
-    if emitted != expected { return Err("the physical Actions edit cannot preserve flat call order and folder occurrences".into()); }
+    let emitted: Vec<_> =
+        groups.iter().map(|(name, selection)| (*name, selection.raw.as_ref().map(RowOrigin::key))).filter(|key| distinct.contains(key)).collect();
+    if emitted != expected {
+        return Err("the physical Actions edit cannot preserve flat call order and folder occurrences".into());
+    }
     Ok(())
 }
 
@@ -204,7 +251,9 @@ fn permute_calls(actions: &mut [Action], old_to_new: &[usize]) {
         for &key in super::super::call_keys(id) {
             let Some(old) = params.get(key).and_then(super::super::num).and_then(|value| usize::try_from(value).ok()) else { continue };
             if let Some(&new) = old_to_new.get(old) {
-                if new != old { params[key] = json!(new); }
+                if new != old {
+                    params[key] = json!(new);
+                }
             }
         }
     }
@@ -213,10 +262,16 @@ fn permute_calls(actions: &mut [Action], old_to_new: &[usize]) {
 /// A move may remap numeric calls, but must not change which duplicate name resolves first.
 fn preserve_first_names(state: &ActionState, order: &[usize]) -> Result<()> {
     let mut original = HashMap::new();
-    for (index, action) in state.list.iter().enumerate() { original.entry(action.name.as_str()).or_insert(index); }
+    for (index, action) in state.list.iter().enumerate() {
+        original.entry(action.name.as_str()).or_insert(index);
+    }
     let mut reordered = HashMap::new();
-    for &index in order { reordered.entry(state.list[index].name.as_str()).or_insert(index); }
-    if original != reordered { return Err("moving this action would change first-name call resolution".into()); }
+    for &index in order {
+        reordered.entry(state.list[index].name.as_str()).or_insert(index);
+    }
+    if original != reordered {
+        return Err("moving this action would change first-name call resolution".into());
+    }
     Ok(())
 }
 
@@ -228,7 +283,9 @@ pub(crate) fn prepare(state: &ActionState, shortcuts: &Keys, alternates: &Altern
     let mut other = alternates.clone();
     let result = match edit {
         Edit::Insert { destination, mut action } => {
-            if state.list.iter().any(|old| old.name == action.name) { return Err("an action with this name already exists".into()); }
+            if state.list.iter().any(|old| old.name == action.name) {
+                return Err("an action with this name already exists".into());
+            }
             let at = insertion(state, &destination)?;
             destination.apply(&mut action);
             definition.list.insert(at, action);
@@ -248,13 +305,18 @@ pub(crate) fn prepare(state: &ActionState, shortcuts: &Keys, alternates: &Altern
             order.insert(at, action);
             preserve_first_names(state, &order)?;
             let mut inverse = vec![0; order.len()];
-            for (new, &old) in order.iter().enumerate() { inverse[old] = new; }
+            for (new, &old) in order.iter().enumerate() {
+                inverse[old] = new;
+            }
             permute_calls(&mut definition.list, &inverse);
             json!({"index":at,"set":destination.name,"slot":destination.slot(state)?})
         }
         Edit::Duplicate { source, name } => {
             let slot = source.slot(state)?;
-            if name.trim().is_empty() || state.sets.iter().any(|old| old == &name) || state.list.iter().any(|action| atn_cmds::logical_set_name(action.set.as_deref()) == name) {
+            if name.trim().is_empty()
+                || state.sets.iter().any(|old| old == &name)
+                || state.list.iter().any(|action| atn_cmds::logical_set_name(action.set.as_deref()) == name)
+            {
                 return Err("the copied folder needs an unused nonblank caption".into());
             }
             let selected = members(state, &source)?;
@@ -264,19 +326,24 @@ pub(crate) fn prepare(state: &ActionState, shortcuts: &Keys, alternates: &Altern
             definition.sets.insert(destination_slot, name.clone());
             definition.library.rows.insert(destination_slot, source.row.clone());
             for row in &mut definition.atn_set_rows {
-                if row.slot >= destination_slot { row.slot = row.slot.checked_add(1).ok_or("Actions folder count overflow")?; }
+                if row.slot >= destination_slot {
+                    row.slot = row.slot.checked_add(1).ok_or("Actions folder count overflow")?;
+                }
             }
             if let Some(carrier) = &source.carrier {
                 definition.atn_set_rows.push(sidecar::SetRowMetadata { slot: destination_slot, row: name.clone(), source: carrier.clone() });
             }
             let destination = RowBinding::at(&definition, destination_slot, Some(&name))?;
             let mut names = atn_cmds::UniqueNames::new(state.list.iter().map(|action| action.name.clone()));
-            let copied: Vec<_> = selected.iter().map(|&index| {
-                let mut value = state.list[index].clone();
-                value.name = names.claim(&format!("{} copy", value.name));
-                destination.apply(&mut value);
-                value
-            }).collect();
+            let copied: Vec<_> = selected
+                .iter()
+                .map(|&index| {
+                    let mut value = state.list[index].clone();
+                    value.name = names.claim(&format!("{} copy", value.name));
+                    destination.apply(&mut value);
+                    value
+                })
+                .collect();
             let count = copied.len();
             let copied_names: Vec<_> = copied.iter().map(|action| action.name.clone()).collect();
             definition.list.splice(at..at, copied);
@@ -287,12 +354,19 @@ pub(crate) fn prepare(state: &ActionState, shortcuts: &Keys, alternates: &Altern
             let slot = source.slot(state)?;
             let selected = members(state, &source)?;
             let (removed, vanished_keys) = super::super::remove_definitions(&mut definition.list, &selected);
-            for key in vanished_keys { keys.remove(&key); other.remove(&key); }
+            for key in vanished_keys {
+                keys.remove(&key);
+                other.remove(&key);
+            }
             definition.sets.remove(slot);
             definition.library.rows.resize(state.sets.len(), None);
             definition.library.rows.remove(slot);
             definition.atn_set_rows.retain(|row| row.slot != slot);
-            for row in &mut definition.atn_set_rows { if row.slot > slot { row.slot -= 1; } }
+            for row in &mut definition.atn_set_rows {
+                if row.slot > slot {
+                    row.slot -= 1;
+                }
+            }
             json!({"deletedSet":source.name,"deleted":removed,"slot":slot})
         }
     };

@@ -1588,7 +1588,8 @@ impl Session {
                 job.command = id.to_string();
                 job.params = params;
                 job.journal = spec.journal;
-                job.recorded_by = (self.actions.recording_active() && crate::actions_cmds::recording_accepts(self, id, &job.params)).then_some(self.actions.take);
+                job.recorded_by =
+                    (self.actions.recording_active() && crate::actions_cmds::recording_accepts(self, id, &job.params)).then_some(self.actions.take);
                 job.pre_selected = pre_selected.clone();
                 job.before = std::mem::take(&mut record_before);
                 let jid = job.id;

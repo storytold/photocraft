@@ -184,7 +184,9 @@ fn reset_warning_has_three_buttons_and_undo_is_outside_document_history() {
     let revision = h.state().session.active().unwrap().revision;
     open(&mut h, "Reset Actions…");
     assert!(h.query_by_label("Replace the current actions?").is_some());
-    for label in ["OK", "Cancel", "Append"] { assert!(h.query_by_label(label).is_some()); }
+    for label in ["OK", "Cancel", "Append"] {
+        assert!(h.query_by_label(label).is_some());
+    }
     snapshots::capture(&mut h, "reset-warning");
     h.get_by_label("Append").click();
     h.run_steps(3);

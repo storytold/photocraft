@@ -161,7 +161,11 @@ fn insert_path_captures_cubic_geometry_without_editing_the_document() {
     let (bytes, skipped) = atn_cmds::export("S", &[&s.actions.list[0]], &[], false).unwrap();
     assert!(skipped.is_empty());
     let wire = photocraft_psd::atn::parse(&bytes).unwrap();
-    assert_eq!(wire.actions[0].items[0].event, photocraft_psd::atn::AtnEvent::name("photocraftCommand"), "unmeasured inverted geometry uses the canonical native carrier, not a guessed Photoshop descriptor");
+    assert_eq!(
+        wire.actions[0].items[0].event,
+        photocraft_psd::atn::AtnEvent::name("photocraftCommand"),
+        "unmeasured inverted geometry uses the canonical native carrier, not a guessed Photoshop descriptor"
+    );
     let back = atn_cmds::import(&bytes).unwrap();
     assert_eq!(back.actions[0].steps, s.actions.list[0].steps, "the full native path value must survive");
 }
@@ -263,11 +267,12 @@ fn tool_recording_opt_in_has_the_same_journal_policy_in_both_recorders() {
     }
 }
 
-
 fn physical_session() -> Session {
     let mut s = Session::new();
     s.execute("file.new", json!({"width":8,"height":6})).unwrap();
-    for _ in 0..2 { s.execute("actions.reset", json!({"mode":"append","confirm":true})).unwrap(); }
+    for _ in 0..2 {
+        s.execute("actions.reset", json!({"mode":"append","confirm":true})).unwrap();
+    }
     s
 }
 fn physical_counts(s: &Session) -> Vec<usize> {
@@ -281,98 +286,98 @@ fn physical_record_and_new_draft_save_keep_destinations_and_runtime_counters() {
     s.actions.playback_nonce = 73;
     s.actions.playback_steps = 19;
     let recorded = s.execute("actions.record", json!({"name":"Earlier recorder","setSlot":0,"set":actions_edit_cmds::DEFAULT_SET_NAME})).unwrap();
-    assert_eq!(recorded["index"],2);
-    s.execute("image.adjustments.invert",json!({})).unwrap();
-    s.execute("actions.stop",json!({})).unwrap();
-    assert_eq!(physical_counts(&s),[3,2]);
-    let id = s.execute("actions.editor.open",json!({"name":"Second draft","setSlot":1})).unwrap()["draft"].as_u64().unwrap();
+    assert_eq!(recorded["index"], 2);
+    s.execute("image.adjustments.invert", json!({})).unwrap();
+    s.execute("actions.stop", json!({})).unwrap();
+    assert_eq!(physical_counts(&s), [3, 2]);
+    let id = s.execute("actions.editor.open", json!({"name":"Second draft","setSlot":1})).unwrap()["draft"].as_u64().unwrap();
     let take = s.actions.take;
-    s.execute("actions.editor.update",json!({"draft":id,"description":"Published only by Save"})).unwrap();
-    let saved = s.execute("actions.editor.save",json!({"draft":id})).unwrap();
-    assert_eq!(saved["source"],5);
-    assert_eq!(saved["dirty"],false);
-    assert_eq!(physical_counts(&s),[3,3]);
-    assert_eq!(s.actions.take,take);
-    assert_eq!((s.actions.playback_nonce,s.actions.playback_steps),(73,19));
+    s.execute("actions.editor.update", json!({"draft":id,"description":"Published only by Save"})).unwrap();
+    let saved = s.execute("actions.editor.save", json!({"draft":id})).unwrap();
+    assert_eq!(saved["source"], 5);
+    assert_eq!(saved["dirty"], false);
+    assert_eq!(physical_counts(&s), [3, 3]);
+    assert_eq!(s.actions.take, take);
+    assert_eq!((s.actions.playback_nonce, s.actions.playback_steps), (73, 19));
     let revision = s.actions.rev;
-    s.execute("actions.editor.save",json!({"draft":id})).unwrap();
-    assert_eq!(s.actions.rev,revision,"unchanged Save is still a no-op");
-    s.execute("actions.editor.discard",json!({"draft":id})).unwrap();
+    s.execute("actions.editor.save", json!({"draft":id})).unwrap();
+    assert_eq!(s.actions.rev, revision, "unchanged Save is still a no-op");
+    s.execute("actions.editor.discard", json!({"draft":id})).unwrap();
     let before = s.actions.list.len();
-    let id = s.execute("actions.editor.open",json!({"name":"Untouched new draft","setSlot":0})).unwrap()["draft"].as_u64().unwrap();
-    s.execute("actions.editor.save",json!({"draft":id})).unwrap();
-    assert_eq!(s.actions.list.len(),before,"unchanged New Save keeps C's no-publication contract");
+    let id = s.execute("actions.editor.open", json!({"name":"Untouched new draft","setSlot":0})).unwrap()["draft"].as_u64().unwrap();
+    s.execute("actions.editor.save", json!({"draft":id})).unwrap();
+    assert_eq!(s.actions.list.len(), before, "unchanged New Save keeps C's no-publication contract");
 }
 
 /// A placement-only move changes revision despite logical equality; occurrence deletion owns both maps.
 #[test]
 fn physical_assign_duplicate_delete_preserve_namesakes_and_both_binding_maps() {
     let mut s = physical_session();
-    let index = s.execute("actions.record",json!({"name":"Move me","setSlot":1})).unwrap()["index"].as_u64().unwrap() as usize;
-    s.execute("select.all",json!({})).unwrap();
-    s.execute("actions.stop",json!({})).unwrap();
+    let index = s.execute("actions.record", json!({"name":"Move me","setSlot":1})).unwrap()["index"].as_u64().unwrap() as usize;
+    s.execute("select.all", json!({})).unwrap();
+    s.execute("actions.stop", json!({})).unwrap();
     s.prefs.edit(|prefs| {
-        prefs.shortcuts.insert("actions.play:Move me".into(),"F4".into());
-        prefs.alternate_shortcuts.insert("actions.play:Move me".into(),vec!["F5".into()]);
-        prefs.shortcuts.insert("actions.play:Invert Colors".into(),"F6".into());
+        prefs.shortcuts.insert("actions.play:Move me".into(), "F4".into());
+        prefs.alternate_shortcuts.insert("actions.play:Move me".into(), vec!["F5".into()]);
+        prefs.shortcuts.insert("actions.play:Invert Colors".into(), "F6".into());
     });
     let old = s.actions.list[index].clone();
     let revision = s.actions.rev;
-    let moved = s.execute("actions.assignSet",json!({"action":index,"setSlot":0})).unwrap();
+    let moved = s.execute("actions.assignSet", json!({"action":index,"setSlot":0})).unwrap();
     let moved_index = moved["index"].as_u64().unwrap() as usize;
-    assert_eq!(s.actions.list[moved_index],old,"ordinary logical equality remains unchanged");
-    assert!(!photocraft_engine::actions_cmds::library::same_placement(&s.actions.list[moved_index],&old));
+    assert_eq!(s.actions.list[moved_index], old, "ordinary logical equality remains unchanged");
+    assert!(!photocraft_engine::actions_cmds::library::same_placement(&s.actions.list[moved_index], &old));
     assert!(s.actions.rev > revision);
-    assert_eq!(physical_counts(&s),[3,2]);
+    assert_eq!(physical_counts(&s), [3, 2]);
     let revision = s.actions.rev;
-    s.execute("actions.assignSet",json!({"action":moved_index,"setSlot":0})).unwrap();
-    assert_eq!(s.actions.rev,revision,"same actual occurrence is a no-op");
+    s.execute("actions.assignSet", json!({"action":moved_index,"setSlot":0})).unwrap();
+    assert_eq!(s.actions.rev, revision, "same actual occurrence is a no-op");
     let document = s.active().unwrap().doc.clone();
     let take = s.actions.take;
-    let copied = s.execute("actions.duplicate",json!({"setSlot":1})).unwrap();
-    assert_eq!(copied["actions"].as_array().unwrap().len(),2);
-    assert_eq!(physical_counts(&s),[3,2,2]);
-    s.execute("actions.delete",json!({"setSlot":0})).unwrap();
-    assert_eq!(physical_counts(&s),[2,2]);
+    let copied = s.execute("actions.duplicate", json!({"setSlot":1})).unwrap();
+    assert_eq!(copied["actions"].as_array().unwrap().len(), 2);
+    assert_eq!(physical_counts(&s), [3, 2, 2]);
+    s.execute("actions.delete", json!({"setSlot":0})).unwrap();
+    assert_eq!(physical_counts(&s), [2, 2]);
     assert!(!s.prefs().shortcuts.contains_key("actions.play:Move me"));
     assert!(!s.prefs().alternate_shortcuts.contains_key("actions.play:Move me"));
-    assert!(s.prefs().shortcuts.contains_key("actions.play:Invert Colors"),"the other namesake still owns this name");
-    assert!(std::sync::Arc::ptr_eq(&document,&s.active().unwrap().doc));
-    assert_eq!(s.actions.take,take);
+    assert!(s.prefs().shortcuts.contains_key("actions.play:Invert Colors"), "the other namesake still owns this name");
+    assert!(std::sync::Arc::ptr_eq(&document, &s.active().unwrap().doc));
+    assert_eq!(s.actions.take, take);
     // Set-only remains a logical group operation, including actions carrying explicit placement.
-    s.execute("actions.duplicate",json!({"set":copied["set"]})).unwrap();
+    s.execute("actions.duplicate", json!({"set":copied["set"]})).unwrap();
 }
 
 /// Invalid selectors and stale Saves never flush or consume the active Classic/draft capture.
 #[test]
 fn physical_adapter_refusals_preserve_capture_and_stale_draft() {
     let mut s = physical_session();
-    s.execute("actions.record",json!({"action":0})).unwrap();
-    s.execute("select.all",json!({})).unwrap();
+    s.execute("actions.record", json!({"action":0})).unwrap();
+    s.execute("select.all", json!({})).unwrap();
     let cursor = s.actions.recording;
     let take = s.actions.take;
     let definitions = s.actions.list.clone();
-    for params in [json!({"setSlot":99}),json!({"setSlot":null}),json!({"setSlot":0,"set":null}),json!({"setSlot":0,"action":0})] {
-        assert!(s.execute("actions.record",params.clone()).is_err());
-        assert!(s.execute("actions.editor.open",params.clone()).is_err());
-        assert!(s.execute("actions.save",params).is_err());
-        assert_eq!(s.actions.recording,cursor);
-        assert_eq!(s.actions.take,take);
-        assert_eq!(s.actions.list,definitions);
+    for params in [json!({"setSlot":99}), json!({"setSlot":null}), json!({"setSlot":0,"set":null}), json!({"setSlot":0,"action":0})] {
+        assert!(s.execute("actions.record", params.clone()).is_err());
+        assert!(s.execute("actions.editor.open", params.clone()).is_err());
+        assert!(s.execute("actions.save", params).is_err());
+        assert_eq!(s.actions.recording, cursor);
+        assert_eq!(s.actions.take, take);
+        assert_eq!(s.actions.list, definitions);
     }
-    assert!(s.execute("actions.assignSet",json!({"action":0,"setSlot":1})).is_err());
-    assert!(s.execute("actions.delete",json!({"setSlot":1})).is_err());
-    s.execute("actions.stop",json!({})).unwrap();
-    let id = s.execute("actions.editor.open",json!({"name":"Held destination","setSlot":1})).unwrap()["draft"].as_u64().unwrap();
-    s.execute("actions.editor.update",json!({"draft":id,"description":"Still unpublished"})).unwrap();
+    assert!(s.execute("actions.assignSet", json!({"action":0,"setSlot":1})).is_err());
+    assert!(s.execute("actions.delete", json!({"setSlot":1})).is_err());
+    s.execute("actions.stop", json!({})).unwrap();
+    let id = s.execute("actions.editor.open", json!({"name":"Held destination","setSlot":1})).unwrap()["draft"].as_u64().unwrap();
+    s.execute("actions.editor.update", json!({"draft":id,"description":"Still unpublished"})).unwrap();
     let draft = s.actions.editor.clone();
     let take = s.actions.take;
-    s.execute("actions.newSet",json!({"name":"External change"})).unwrap();
+    s.execute("actions.newSet", json!({"name":"External change"})).unwrap();
     let definitions = s.actions.list.clone();
-    assert!(s.execute("actions.editor.save",json!({"draft":id})).is_err());
-    assert_eq!(s.actions.editor,draft);
-    assert_eq!(s.actions.take,take);
-    assert_eq!(s.actions.list,definitions);
+    assert!(s.execute("actions.editor.save", json!({"draft":id})).is_err());
+    assert_eq!(s.actions.editor, draft);
+    assert_eq!(s.actions.take, take);
+    assert_eq!(s.actions.list, definitions);
 }
 
 /// Direct list reorder follows numeric Conditional branches as well as Play.
@@ -381,13 +386,13 @@ fn list_reorder_remaps_both_call_forms_without_traversing_foreign_json() {
     let mut s = physical_session();
     let foreign = json!({"actions":[{"steps":[["actions.play",{"action":0}]]}]});
     s.actions.list[1].steps.extend([
-        ("actions.play".into(),json!({"action":0})),
-        ("actions.conditional".into(),json!({"if":"always","then":0,"else":1})),
-        ("file.automate.batch".into(),foreign.clone()),
+        ("actions.play".into(), json!({"action":0})),
+        ("actions.conditional".into(), json!({"if":"always","then":0,"else":1})),
+        ("file.automate.batch".into(), foreign.clone()),
     ]);
-    s.execute("actions.move",json!({"action":0,"to":1})).unwrap();
+    s.execute("actions.move", json!({"action":0,"to":1})).unwrap();
     let steps = &s.actions.list[0].steps;
-    assert_eq!(steps[1].1,json!({"action":1}));
-    assert_eq!(steps[2].1,json!({"if":"always","then":1,"else":0}));
-    assert_eq!(steps[3].1,foreign);
+    assert_eq!(steps[1].1, json!({"action":1}));
+    assert_eq!(steps[2].1, json!({"if":"always","then":1,"else":0}));
+    assert_eq!(steps[3].1, foreign);
 }

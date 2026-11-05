@@ -511,27 +511,28 @@ fn canonical_ungrouped_category_keeps_classic_loose_rows_flat_and_order_stable()
     assert!(h.query_all_by_label(photocraft_engine::atn_cmds::UNGROUPED_SET).any(|node| node.rect().width() > 24.0));
 }
 
-
 /// The real Modern New entry point retains its selected occurrence through backend Save/delete.
 #[test]
 fn modern_new_draft_and_delete_question_keep_selected_namesake() {
     let mut app = app();
-    for _ in 0..2 { app.session.execute("actions.reset",json!({"mode":"append","confirm":true})).unwrap(); }
+    for _ in 0..2 {
+        app.session.execute("actions.reset", json!({"mode":"append","confirm":true})).unwrap();
+    }
     let rows = photocraft_engine::actions_edit_cmds::set_occurrences(&app.session).unwrap();
     app.ui.actions.select_folder(super::super::FolderSelection::from_row(&rows[1]));
     let mut h = harness(app);
     h.get_by_label("Create new action").click();
     h.run_steps(3);
     let id = h.state().session.actions.editor.as_ref().unwrap().id();
-    h.state_mut().run("actions.editor.update",json!({"draft":id,"description":"Modern selected row"})).unwrap();
-    h.state_mut().run("actions.editor.save",json!({"draft":id})).unwrap();
-    h.state_mut().run("actions.editor.discard",json!({"draft":id})).unwrap();
+    h.state_mut().run("actions.editor.update", json!({"draft":id,"description":"Modern selected row"})).unwrap();
+    h.state_mut().run("actions.editor.save", json!({"draft":id})).unwrap();
+    h.state_mut().run("actions.editor.discard", json!({"draft":id})).unwrap();
     let rows = photocraft_engine::actions_edit_cmds::set_occurrences(&h.state().session).unwrap();
-    assert_eq!(rows.iter().map(|row| row.actions.len()).collect::<Vec<_>>(),[2,3]);
+    assert_eq!(rows.iter().map(|row| row.actions.len()).collect::<Vec<_>>(), [2, 3]);
     let target = super::super::FolderSelection::from_row(&rows[1]);
-    let dialog = ask_delete(h.state_mut(),None,Some(target)).unwrap()["dialog"].as_u64().unwrap();
-    crate::dialogs::confirm(h.state_mut(),dialog).unwrap();
+    let dialog = ask_delete(h.state_mut(), None, Some(target)).unwrap()["dialog"].as_u64().unwrap();
+    crate::dialogs::confirm(h.state_mut(), dialog).unwrap();
     let rows = photocraft_engine::actions_edit_cmds::set_occurrences(&h.state().session).unwrap();
-    assert_eq!(rows.len(),1);
-    assert_eq!(rows[0].actions.len(),2);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].actions.len(), 2);
 }
