@@ -172,23 +172,17 @@ fn lookup_params(key: &str) -> Value {
     }
 }
 
-/// How many LUT folder files stay read for stepped previews before the lot goes (#11341).
-const LUT_TEXTS: usize = 8;
-
 /// The preview params of a dropdown key for a step of the wheel or the arrow keys (#11341): a
-/// built-in by its id, a LUT folder file by its path, read here, once, into `app.lut_texts`, from
+/// built-in by its id, a LUT folder file by its path, read here, once, into `app.lut_text`, from
 /// which the preview is built and the rest commits (`adjust_preview::live_params`) without reading
-/// the file again, while the params themselves stay small for the per-frame hashing. A file that
-/// can't be read, or isn't text, is left to `layer.setAdjustment` by path, which reports it.
+/// the file again, while the params themselves stay small for the per-frame hashing. The last
+/// step's text goes whatever this one reads: a file that can't be read, or isn't text, is left to
+/// `layer.setAdjustment` by path, which reports it.
 fn preview_params(app: &mut PhotocraftApp, key: &str) -> Value {
-    if let Some(path) = key.strip_prefix(FOLDER_LUT)
-        && let Some(text) = std::fs::read(path).ok().and_then(|bytes| String::from_utf8(bytes).ok())
-    {
-        if app.lut_texts.len() >= LUT_TEXTS && !app.lut_texts.contains_key(path) {
-            app.lut_texts.clear();
-        }
-        app.lut_texts.insert(path.to_owned(), std::sync::Arc::from(text));
-    }
+    app.lut_text = key.strip_prefix(FOLDER_LUT).and_then(|path| {
+        let text = std::fs::read(path).ok().and_then(|bytes| String::from_utf8(bytes).ok())?;
+        Some((path.to_owned(), std::sync::Arc::from(text)))
+    });
     lookup_params(key)
 }
 
@@ -310,6 +304,7 @@ pub fn color_lookup_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: Layer
         // Errors (an unreadable LUT file) land in the status bar.
         let _ = app.run("layer.setAdjustment", p);
         app.live_adjust = None;
+        app.lut_text = None;
         ui.ctx().data_mut(|data| data.remove::<f64>(cycle_key));
     }
 }

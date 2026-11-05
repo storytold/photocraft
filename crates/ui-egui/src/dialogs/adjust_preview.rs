@@ -524,10 +524,13 @@ pub fn live_key(app: &mut PhotocraftApp, doc: &Document, revision: u64, layer: L
     LIVE_TAG | ((session & LIVE_SESSION_MASK) << LIVE_SESSION_SHIFT) | (h & ((1 << LIVE_SESSION_SHIFT) - 1))
 }
 
-/// The text of the LUT folder file that `params` (a live Color Lookup preview) names by path, when
-/// the step that started the preview read it (`app.lut_texts`, #11341).
+/// The text of the LUT folder file that `params` name by path, when it is the file of the live
+/// Color Lookup preview and the step that started it read it (`app.lut_text`, #11341). Nothing
+/// without a live preview, or for another file: a click reads its own file.
 pub(crate) fn lut_text(app: &PhotocraftApp, params: &Value) -> Option<std::sync::Arc<str>> {
-    app.lut_texts.get(params.get("file")?.as_str()?).cloned()
+    app.live_adjust.as_ref()?;
+    let (path, text) = app.lut_text.as_ref()?;
+    (params.get("file")?.as_str()? == path).then(|| text.clone())
 }
 
 /// `params` with the LUT folder file they name by path carried as `text` (`data`, with `fileName`

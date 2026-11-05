@@ -274,8 +274,10 @@ fn color_lookup_picker_steps_into_the_lut_folder_and_back() {
     h.run_steps(1);
     assert!(previewed(&h, second), "a second ArrowDown steps on from the previewed file: {:?}", h.state().live_adjust);
     assert_eq!(shown_name(&mut h), "grain.cube");
+    assert!(h.state().lut_text.as_ref().is_some_and(|(p, _)| p == second), "the step's text is the preview's: {:?}", h.state().lut_text.as_ref().map(|t| &t.0));
     h.run_steps(4);
     assert_eq!(name_of(&h), "grain.cube", "the rest commits the folder's file");
+    assert!(h.state().lut_text.is_none(), "the text goes with the preview");
     assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1);
     assert!(h.state().live_adjust.is_none());
     // Up twice: the first file, then the last built-in again.

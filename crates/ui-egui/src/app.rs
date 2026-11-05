@@ -86,7 +86,7 @@ impl PhotocraftApp {
             type_ime: type_tool::ImeState::default(),
             input_waiters: Vec::new(),
             live_adjust: None,
-            lut_texts: std::collections::HashMap::new(),
+            lut_text: None,
             frame: 0,
             notices_hovered: false,
             styled: false,
