@@ -870,6 +870,8 @@ mod field_wheel_app_tests;
 mod dropdown_press_tests;
 
 #[cfg(test)]
+mod marquee_press_mods_tests;
+#[cfg(test)]
 mod marquee_tests;
 
 #[cfg(test)]
