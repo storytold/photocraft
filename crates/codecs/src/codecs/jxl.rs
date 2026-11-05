@@ -1,7 +1,7 @@
 //! Pure-Rust lossless JPEG XL (Modular) writer.
 //!
-//! Currently writes a bare JPEG XL codestream. The encoder accepts 8- or 16-bit
-//! gray, RGB and RGBA samples, but does not write ICC/EXIF/XMP boxes.
+//! Writes a bare JPEG XL codestream unless EXIF/XMP embedding is requested.
+//! The encoder accepts 8- or 16-bit gray, RGB and RGBA samples, but not ICC embedding.
 //! Gray+alpha sources are expanded losslessly to RGBA by the export plan.
 //! The flat export pipeline converts tagged RGB documents to sRGB first.
 
@@ -16,6 +16,57 @@ use crate::format::Format;
 use crate::image::{ChannelLayout, Image, SampleType};
 
 const F: Format = Format::Jxl;
+
+// Preserve the bare codestream when embedding metadata is not requested.
+// JPEG XL stores EXIF and XMP in ISO 18181-2 container boxes.
+fn append_jxl_box(out: &mut Vec<u8>, name: &[u8; 4], payload: &[u8]) -> Result<(), CodecError> {
+    let short_len = payload
+        .len()
+        .checked_add(8)
+        .ok_or_else(|| CodecError::encode(F, "JPEG XL box size overflow"))?;
+    if let Ok(len) = u32::try_from(short_len) {
+        out.extend_from_slice(&len.to_be_bytes());
+        out.extend_from_slice(name);
+    } else {
+        let long_len = u64::try_from(payload.len())
+            .ok()
+            .and_then(|n| n.checked_add(16))
+            .ok_or_else(|| CodecError::encode(F, "JPEG XL box size overflow"))?;
+        out.extend_from_slice(&1u32.to_be_bytes());
+        out.extend_from_slice(name);
+        out.extend_from_slice(&long_len.to_be_bytes());
+    }
+    out.extend_from_slice(payload);
+    Ok(())
+}
+
+fn jxl_with_metadata(codestream: Vec<u8>, exif: Option<&[u8]>, xmp: Option<&str>) -> Result<Vec<u8>, CodecError> {
+    let exif = exif.filter(|b| !b.is_empty());
+    let xmp = xmp.filter(|s| !s.is_empty());
+    if exif.is_none() && xmp.is_none() {
+        return Ok(codestream);
+    }
+    if !codestream.starts_with(&[0xff, 0x0a]) {
+        return Err(CodecError::encode(F, "expected a JPEG XL codestream"));
+    }
+
+    let mut output = Vec::new();
+    output.extend_from_slice(b"\0\0\0\x0cJXL \r\n\x87\n");
+    output.extend_from_slice(b"\0\0\0\x14ftypjxl \0\0\0\0jxl ");
+    if let Some(exif) = exif {
+        // TIFF data follows a four-byte big-endian offset of zero.
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&0u32.to_be_bytes());
+        payload.extend_from_slice(exif);
+        append_jxl_box(&mut output, b"Exif", &payload)?;
+    }
+    if let Some(xmp) = xmp {
+        append_jxl_box(&mut output, b"xml ", xmp.as_bytes())?;
+    }
+    append_jxl_box(&mut output, b"jxlc", &codestream)?;
+    Ok(output)
+}
+
 
 // zune-jpegxl 0.5.2 emits ExtraChannelInfo(all_default=true) for every alpha
 // channel. In JPEG XL that flag means *8-bit* alpha, even when the modular
@@ -113,7 +164,7 @@ fn correct_16_bit_alpha_header(bytes: &[u8], width: u32, height: u32) -> Result<
     Ok(fixed)
 }
 
-pub(crate) fn encode(image: &Image, plan: Plan) -> Result<Vec<u8>, CodecError> {
+pub(crate) fn encode(image: &Image, plan: Plan, opts: &crate::EncodeOptions) -> Result<Vec<u8>, CodecError> {
     let image = image.converted(plan.layout, plan.sample);
     let space = match image.layout() {
         ChannelLayout::Gray => ColorSpace::Luma,
@@ -137,13 +188,18 @@ pub(crate) fn encode(image: &Image, plan: Plan) -> Result<Vec<u8>, CodecError> {
         return Err(CodecError::InvalidImage("incorrect JPEG XL pixel buffer length".into()));
     }
     // A panic in an external image encoder must not terminate the host application.
-    catch_unwind(AssertUnwindSafe(|| {
+    let codestream = catch_unwind(AssertUnwindSafe(|| {
         let options = ZuneOptions::new(width as usize, height as usize, space, depth);
         let mut output = Vec::new();
         JxlSimpleEncoder::new(image.data(), options).encode(&mut output).map_err(|e| CodecError::encode(F, e.to_string()))?;
         if depth == BitDepth::Sixteen && image.layout() == ChannelLayout::Rgba { correct_16_bit_alpha_header(&output, width, height) } else { Ok(output) }
     }))
-    .unwrap_or_else(|_| Err(CodecError::encode(F, "the JPEG XL encoder failed")))
+    .unwrap_or_else(|_| Err(CodecError::encode(F, "the JPEG XL encoder failed")))?;
+    if opts.embed_metadata {
+        jxl_with_metadata(codestream, image.meta.exif.as_deref(), image.meta.xmp.as_deref())
+    } else {
+        Ok(codestream)
+    }
 }
 
 #[cfg(test)]
@@ -155,5 +211,40 @@ mod tests {
         for bytes in [&[][..], &[0xff, 0x0a][..], &[0; 32][..]] {
             assert!(correct_16_bit_alpha_header(bytes, 2, 2).is_err());
         }
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn metadata_container_keeps_exif_xmp_and_codestream_bytes() {
+        let stream = vec![0xff, 0x0a, 0x12, 0x34];
+        let exif = b"II*\0\x08\0\0\0";
+        let xmp = "<xmp>test</xmp>";
+        let result = jxl_with_metadata(stream.clone(), Some(exif), Some(xmp)).unwrap();
+        assert_eq!(&result[..12], b"\0\0\0\x0cJXL \r\n\x87\n");
+        assert_eq!(&result[12..32], b"\0\0\0\x14ftypjxl \0\0\0\0jxl ");
+        let mut pos = 32;
+        let mut exif_box = vec![0, 0, 0, 0];
+        exif_box.extend_from_slice(exif);
+        for (name, expected) in [
+            (b"Exif".as_slice(), exif_box),
+            (b"xml ".as_slice(), xmp.as_bytes().to_vec()),
+            (b"jxlc".as_slice(), stream),
+        ] {
+            let len = u32::from_be_bytes(result[pos..pos + 4].try_into().unwrap()) as usize;
+            assert!(len >= 8);
+            assert_eq!(&result[pos + 4..pos + 8], name);
+            assert_eq!(&result[pos + 8..pos + len], expected.as_slice());
+            pos += len;
+        }
+        assert_eq!(pos, result.len());
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn missing_metadata_preserves_the_existing_bare_codestream() {
+        let original = vec![0xff, 0x0a, 0x12, 0x34];
+        assert_eq!(jxl_with_metadata(original.clone(), None, None).unwrap(), original);
+        assert_eq!(jxl_with_metadata(original.clone(), Some(&[]), Some("")).unwrap(), original);
+        assert!(jxl_with_metadata(vec![1, 2], Some(b"TIFF"), None).is_err());
     }
 }
