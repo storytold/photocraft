@@ -673,11 +673,15 @@ pub(super) fn paste_from(d: &Descriptor) -> Mapped {
 
 pub(super) fn paste_to(id: &str, p: &Value) -> Option<Descriptor> {
     let mut d = desc("null");
+    // The descriptor carries no placement, so a step that sets one would replay at the original
+    // position (#11504). A plain `edit.paste` is refused for the same keys as the `as` form.
+    let unwritable = ["center", "clampToCanvas", "document", "layer", "layers", "path"].iter().any(|key| p.get(key).is_some_and(|v| !v.is_null()))
+        || p.get("target").is_some_and(|v| !v.is_null() && v.as_str() != Some("pixels"));
+    if unwritable {
+        return None;
+    }
     if let Some(mode) = p.get("as") {
-        if id != "edit.paste"
-            || ["center", "inPlace", "clampToCanvas", "document", "layer", "layers", "path"].iter().any(|key| p.get(key).is_some())
-            || p.get("target").is_some_and(|v| v.as_str() != Some("pixels"))
-        {
+        if id != "edit.paste" || p.get("inPlace").is_some() {
             return None;
         }
         let id = match mode.as_str()? {

@@ -6363,3 +6363,23 @@ fn adjustment_layer_name_must_round_trip() {
         }
     }
 }
+
+/// #11504: the Paste descriptor has no placement, so `edit.paste` with a `center` would reload as
+/// a paste at the original position. Strict export refuses it and a skipping one lists it; a paste
+/// without placement still exports and reloads unchanged.
+#[test]
+fn paste_with_center_refuses_strict_export() {
+    let one = |id: &str, p: Value| Action { name: "Probe".into(), steps: vec![(id.into(), p)], ..Default::default() };
+    for p in [json!({"center": [3, 2]}), json!({"center": [3.5, 2.5], "clampToCanvas": false}), json!({"clampToCanvas": false}), json!({"layer": 1})] {
+        let err = export("Audit", &[&one("edit.paste", p.clone())], &[], false).unwrap_err();
+        assert!(err.contains("`edit.paste`"), "{p}: {err}");
+        let (_, skipped) = export("Audit", &[&one("edit.paste", p.clone())], &[], true).unwrap();
+        assert_eq!(skipped, vec![Skipped { action: "Probe".into(), step: 0, id: "edit.paste".into() }], "{p}");
+    }
+    for (id, p) in [("edit.paste", json!({})), ("edit.pasteSpecial.pasteInPlace", json!({})), ("edit.paste", json!({"as": "path"}))] {
+        let (bytes, skipped) = export("Audit", &[&one(id, p.clone())], &[], false).unwrap();
+        assert!(skipped.is_empty(), "{id} {p}");
+        let steps = import(&bytes).unwrap().actions[0].steps.clone();
+        assert_eq!(steps, vec![(id.to_string(), p.clone())], "{id} {p}");
+    }
+}
