@@ -339,6 +339,9 @@ fn azerbaijani_covers_every_menu_label_and_path() {
             assert!(lang.catalog().plain(source).is_some(), "az: missing menu translation for {source:?}");
         }
     }
+    for source in ["Convert to Frame…", "Replace Image…", "Import Image…", "Fit Content to Frame", "Fit Frame to Content"] {
+        assert!(lang.catalog().plain(source).is_some(), "az: missing frame translation for {source:?}");
+    }
     for id in
         ["edit.clear", "edit.purge.undo", "edit.stroke", "edit.transform.scale", "file.close", "filter.sharpen.sharpen", "layer.layerMask.apply", "select.all"]
     {

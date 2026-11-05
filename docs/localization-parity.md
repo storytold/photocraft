@@ -68,7 +68,7 @@ rule, and Cyrillic `bs` locales read it too. It is AI-assisted, shares its wordi
 storytold/craft-i18n `locales/bs/`, and has not had a native-speaker review yet.
 
 Azerbaijani `az` (Latin script) brings the runtime registry to 29 languages including
-English. Its catalog has 4,595 entries, including the dynamic-label key union and current OpenType menu keys
+English. Its catalog has 4,600 entries, including the initial dynamic-label key union, current OpenType menus and five frame labels
 and 32 plural messages. It uses one/other integer forms, with singular counted nouns.
 Complete menu keys, regional locale matching and English fallback are covered by tests.
 Native-speaker review remains pending; validation results and limits are recorded in the
@@ -98,7 +98,7 @@ engine localization or native review is complete.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-05 | minor | Preserved Bosnian while merging current main; 29 registered languages, 17 outside the table; Azerbaijani has 4,595 entries, including 29 current OpenType menu keys and checks for all eight command-ID overrides; native review pending |
+| 2026-11-05 | minor | Preserved Bosnian while merging current main; 29 registered languages, 17 outside the table; Azerbaijani has 4,600 entries, including 29 current OpenType menu keys and checks for all eight command-ID overrides; native review pending |
 | 2026-11-01 | minor | Azerbaijani UI catalog, 4,566 entries; regional tags and one/other plurals; PR narrowed to Azerbaijani, 28 registered languages and 16 outside the table; native review pending; validation limits in the language notes; readiness estimates unchanged |
 | 2026-10-10 | major | First version, measured from the catalogs with the `i18n-coverage` rules |
 | 2026-10-10 | minor | Right-to-left shell layout (menu bar, title, options and status bars, toolbox and dock sides) |

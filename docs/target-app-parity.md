@@ -586,7 +586,7 @@ See [method, raw measurements and reproduction](five-algorithm-performance.md).
    UXP / .atn), Flathub (#173), Wayland pen pressure (#79).
 
 
-Azerbaijani (az, Latin script) adds 4,566 UI entries, regional locale matching and one/other
+Azerbaijani (az, Latin script) adds 4,600 UI entries, regional locale matching and one/other
 integer plurals. This PR is limited to Azerbaijani. Native-speaker review remains pending;
 readiness estimates are unchanged. See [localization notes](localization-az.md) for validation
 results and limits.
@@ -595,7 +595,7 @@ results and limits.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-05 | minor | Merged current main while preserving Bosnian; Azerbaijani has 4,595 entries and checks for all eight command-ID overrides; native review pending; readiness estimates unchanged |
+| 2026-11-05 | minor | Merged current main while preserving Bosnian; Azerbaijani has 4,600 entries and checks for all eight command-ID overrides; native review pending; readiness estimates unchanged |
 | 2026-11-01 | minor | Azerbaijani UI catalog, 4,566 entries; regional tags and one/other plurals; PR narrowed to Azerbaijani, 29 registered languages and 17 outside the table; native review pending; validation limits in the language notes; readiness estimates unchanged |
 | 2026-11-02 | minor | Automation Batch: Esc Continue/Stop preserves one file plan and error log; a read-only input preview replaces the progress bar; full live tabs remain open, AUTO-219-5 partial (#4579); percentages and estimates unchanged |
 | 2026-11-02 | minor | AUTO-219-1: action recording folds Move-tool nudges, records relative document switches and scales point text placement to the playback canvas; duplicate names and paragraph box placement remain open; Automation parity estimate unchanged |

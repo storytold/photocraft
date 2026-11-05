@@ -5,9 +5,9 @@ system locales such as `az-AZ`, `az_Latn_AZ.UTF-8` and `AZ-LATN-AZ` use the exis
 matcher. English remains the source and fallback. The runtime registry has 29 languages
 including English; this PR adds only Azerbaijani.
 
-The catalog contains 4,595 entries, including 32 plural messages, 118 contextual entries and
+The catalog contains 4,600 entries, including 32 plural messages, 118 contextual entries and
 eight command-ID overrides. The 2026-11-05 merge added the 29 new OpenType menu keys from
-current `main`; all menu labels and the eight intentional command-ID overrides are checked.
+current `main`. The follow-up also adds five frame conversion/tool labels; all menu labels and the eight intentional command-ID overrides are checked.
 The 2026-11-01 source scan covered 2,204/2,204 keys. Catalog completeness does not establish linguistic
 quality or include untranslated engine errors.
 
@@ -45,7 +45,9 @@ hundreds, thousands and `u64::MAX`.
 
 ## Validation
 
-The merged revision was checked on 2026-11-05 with Rust 1.99.1/MSVC on Windows x64:
+Validation on 2026-11-05 used Rust 1.99.1/MSVC on Windows x64. The checks below were run
+on the first merge (`25ed8e5cb`); the subsequent merge of `405b56c3c` and five frame labels
+is separately rechecked below:
 
 - All six Azerbaijani regressions passed, including actual preference persistence, the full
   menu tree and all eight intentional command-ID overrides.
@@ -53,10 +55,16 @@ The merged revision was checked on 2026-11-05 with Rust 1.99.1/MSVC on Windows x
   packed-catalog/source consistency. These overlap with four Azerbaijani regressions.
 - Workspace formatting, Clippy (`--all-targets -- -D warnings`), layering (31 crates),
   wasm (24 crates plus optional HEIF) and the offscreen snapshot build passed.
-- Current source coverage is 2,248/2,321 keys (96.85%); 73 newer strings fall back to English.
+- Latest source coverage is 2,254/2,331 keys (96.70%); 77 newer strings fall back to English.
   The 666 menu-catalog keys and eight command-ID overrides are present.
 - Editor and Interface Preferences were rendered at 1440 × 900 logical pixels, 1.5× scale,
   using `--safe-gpu`, and both screenshots were visually inspected.
+
+After merging `405b56c3c`, all six Azerbaijani regressions and all 40 i18n unit checks
+were rerun and passed, including the five frame-label assertions and packed catalogs.
+Formatting, the 31-crate layering check, Clippy (`--all-targets -- -D warnings`)
+and wasm (24 crates plus optional HEIF) also passed again. The full suite and CPU
+snapshots were not rerun for this follow-up; their earlier results above still apply.
 
 **The full test gate is not green.** The complete i18n subset finished with 61 passed and
 eight CJK/Arabic missing-glyph failures without the optional craft-fonts input. All Azerbaijani
