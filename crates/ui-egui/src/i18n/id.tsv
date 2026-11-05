@@ -3588,3 +3588,13 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	The frame is locked	Bingkai terkunci
 	The frame is unavailable	Bingkai tidak tersedia
 	Frame	Bingkai
+
+# Channels panel menu (#11451)
+	New Channel…	Channel Baru…
+	Duplicate Channel	Duplikat Channel
+	Delete Channel	Hapus Channel
+	New Spot Channel…	Spot Channel Baru…
+	Merge Spot Channel	Gabungkan Spot Channel
+	Channel Options…	Opsi Channel…
+	Split Channels	Pisahkan Channel
+	Merge Channels…	Gabungkan Channel…

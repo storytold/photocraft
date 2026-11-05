@@ -3788,3 +3788,13 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	The frame is unavailable	프레임을 사용할 수 없습니다
 	X	X
 	Y	Y
+
+# Channels panel menu (#11451)
+	New Channel…	새 채널…
+	Duplicate Channel	채널 복제
+	Delete Channel	채널 삭제
+	New Spot Channel…	새 별색 채널…
+	Merge Spot Channel	별색 채널 병합
+	Channel Options…	채널 옵션…
+	Split Channels	채널 분할
+	Merge Channels…	채널 병합…

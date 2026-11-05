@@ -4787,3 +4787,6 @@ cameraRaw	White Balance: As Shot	Hvidbalance: Som fotograferet
 	Pause For	Pause i
 	seconds	sekunder
 	Create a single history state	Opret én historiktilstand
+
+# Channels panel menu (#11451)
+	Channel Options…	Kanalindstillinger…

@@ -4482,3 +4482,6 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Replace Image…	Kép cseréje…
 	The frame is locked	A keret zárolva van
 	The frame is unavailable	A keret nem érhető el
+
+# Channels panel menu (#11451)
+	Channel Options…	Csatornabeállítások…

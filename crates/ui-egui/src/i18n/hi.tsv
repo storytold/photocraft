@@ -643,3 +643,13 @@ cameraRaw	Yellow	पीला
 	Pause For	इतने समय रुकें
 	seconds	सेकंड
 	Create a single history state	एक ही इतिहास स्थिति बनाएँ
+
+# Channels panel menu (#11451)
+	New Channel…	नया चैनल…
+	Duplicate Channel	चैनल को डुप्लीकेट करें
+	Delete Channel	चैनल हटाएँ
+	New Spot Channel…	नया स्पॉट चैनल…
+	Merge Spot Channel	स्पॉट चैनल मर्ज करें
+	Channel Options…	चैनल विकल्प…
+	Split Channels	चैनल्स विभाजित करें
+	Merge Channels…	चैनल्स मर्ज करें…

@@ -4243,3 +4243,6 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Replace Image…	画像を置き換え…
 	The frame is locked	フレームはロックされています
 	The frame is unavailable	フレームを利用できません
+
+# Channels panel menu (#11451)
+	Channel Options…	チャンネルオプション…

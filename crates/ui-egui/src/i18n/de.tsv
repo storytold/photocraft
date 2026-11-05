@@ -3597,3 +3597,13 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	The frame is unavailable	Der Rahmen ist nicht verfügbar
 	X	X
 	Y	Y
+
+# Channels panel menu (#11451)
+	New Channel…	Neuer Kanal…
+	Duplicate Channel	Kanal duplizieren
+	Delete Channel	Kanal löschen
+	New Spot Channel…	Neuer Schmuckfarbenkanal…
+	Merge Spot Channel	Schmuckfarbenkanal zusammenfügen
+	Channel Options…	Kanaloptionen…
+	Split Channels	Kanäle teilen
+	Merge Channels…	Kanäle zusammenfügen…
