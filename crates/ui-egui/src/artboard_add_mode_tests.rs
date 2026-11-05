@@ -187,3 +187,33 @@ fn the_add_new_artboard_button_toggles_the_mode_and_adds_no_board() {
     assert!(!h.state().ui.artboard_tool.adding, "the second click turns it off");
     assert_eq!(boards(h.state()), before);
 }
+
+#[test]
+fn the_tool_shortcuts_away_and_back_leave_the_mode_off() {
+    let mut app = app_with_selected_board();
+    app.ui.artboard_tool.adding = true;
+    let ctx = egui::Context::default();
+    let press = |app: &mut PhotocraftApp, modifiers| {
+        let key = egui::Key::V;
+        let raw = egui::RawInput {
+            events: vec![
+                egui::Event::ModifiersChanged(modifiers),
+                egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers },
+                egui::Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers },
+            ],
+            ..Default::default()
+        };
+        ctx.begin_pass(raw);
+        crate::shortcuts::handle(app, &ctx);
+        ctx.end_pass().textures_delta.clear();
+    };
+    // Shift+V leaves the Artboard tool for Move, and Shift+V again comes back, with no pointer or options-bar call between.
+    press(&mut app, Modifiers::SHIFT);
+    assert_eq!(app.ui.tool, Tool::Move);
+    press(&mut app, Modifiers::SHIFT);
+    assert_eq!(app.ui.tool, Tool::Artboard);
+    assert!(!app.ui.artboard_tool.adding);
+    let before = boards(&app);
+    click(&mut app, 222.0, 600.0);
+    assert_eq!(boards(&app), before);
+}
