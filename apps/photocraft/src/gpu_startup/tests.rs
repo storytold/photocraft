@@ -64,6 +64,9 @@ fn no_marker_uses_the_preference() {
     }
     assert_eq!(plan(Dx12, None, None, false, Os::Windows).backend, Dx12);
     assert_eq!(plan(Gl, None, None, false, Os::Other).backend, Gl);
+    // Windows has GL too: on an old GPU it is the only hardware backend (#7331).
+    assert_eq!(plan(Gl, None, None, false, Os::Windows).backend, Gl);
+    assert_eq!(backends(&plan(Gl, None, None, false, Os::Windows), Os::Windows), Some(wgpu::Backends::GL));
     // A backend the platform lacks is `auto`.
     assert_eq!(plan(Metal, None, None, false, Os::Windows).backend, Auto);
     assert_eq!(plan(Dx12, None, None, false, Os::Mac).backend, Auto);
@@ -140,7 +143,17 @@ fn safe_gpu_forces_the_cpu_for_one_launch() {
 }
 
 fn cand(vendor: u32, device_type: wgpu::DeviceType, backend: wgpu::Backend) -> Candidate {
-    Candidate { vendor, device_type, backend, surface_ok: true, wanted: false }
+    Candidate { vendor, device_type, backend, surface_ok: true, wanted: false, kind: Kind::Gpu }
+}
+
+/// `cand` as a VM's emulated GPU is named ([`kind`]).
+fn vm(vendor: u32, device_type: wgpu::DeviceType, backend: wgpu::Backend) -> Candidate {
+    Candidate { kind: Kind::Virtual, ..cand(vendor, device_type, backend) }
+}
+
+/// `cand` as a software rasterizer is named ([`kind`]).
+fn soft(vendor: u32, device_type: wgpu::DeviceType, backend: wgpu::Backend) -> Candidate {
+    Candidate { kind: Kind::Software, ..cand(vendor, device_type, backend) }
 }
 
 #[test]
@@ -334,18 +347,99 @@ fn cpu_on_linux_falls_back_to_vulkan_only_when_gl_cannot_present() {
     assert_eq!(pick(&[nvidia_gl, nvidia_vk], Auto, Os::Other), Some(1));
 }
 
-/// #5191, #1788: a Windows VM offers VMware's SVGA3D over GL (`Other`) and WARP (`Cpu`, DX12).
-/// GL drew a black window; WARP works. GL stays the last resort.
+/// #7331: a GPU driver that offers no DX12 and no Vulkan leaves only WARP over DX12, so the whole
+/// window is drawn by software while a working GL adapter sits unused (an Intel HD 4600 with a 2015
+/// driver spends 20 ms per frame on the UI under WARP and 2 ms under GL). A GL adapter of a real GPU
+/// now beats WARP. #5191, #1788: the virtual GPU's GL (VMware SVGA3D) drew a black window, so it
+/// stays last.
 #[test]
-fn windows_auto_prefers_warp_over_gl() {
+fn windows_auto_prefers_hardware_gl_over_software_warp() {
     use wgpu::{Backend as B, DeviceType as T};
-    let svga_gl = cand(0x15ad, T::Other, B::Gl);
+    const NVIDIA: u32 = 0x10de;
     let warp = cand(0x1414, T::Cpu, B::Dx12);
+    // A VM's SVGA3D: `Other`, with a vendor wgpu's GL backend doesn't know (0).
+    let svga_gl = vm(0, T::Other, B::Gl);
     assert_eq!(pick(&[svga_gl, warp], Auto, Os::Windows), Some(1));
-    assert_eq!(pick(&[cand(INTEL, T::IntegratedGpu, B::Gl), warp], Auto, Os::Windows), Some(1));
+    assert_eq!(pick(&[vm(0x15ad, T::Other, B::Gl), warp], Auto, Os::Windows), Some(1));
+    assert_eq!(pick(&[vm(0x15ad, T::VirtualGpu, B::Gl), warp], Auto, Os::Windows), Some(1));
     assert_eq!(pick(&[svga_gl], Auto, Os::Windows), Some(0));
+    // A hardware GL adapter beats software graphics. GL reports an NVIDIA card as `Other` (it only
+    // recognises integrated GPUs by name) and an Intel one as `IntegratedGpu`.
+    let nvidia_gl = cand(NVIDIA, T::Other, B::Gl);
+    assert_eq!(pick(&[nvidia_gl, warp], Auto, Os::Windows), Some(0));
+    assert_eq!(pick(&[cand(0x1002, T::Other, B::Gl), warp], Auto, Os::Windows), Some(0), "an AMD card");
+    assert_eq!(pick(&[cand(INTEL, T::IntegratedGpu, B::Gl), warp], Auto, Os::Windows), Some(0));
+    assert_eq!(pick(&[cand(NVIDIA, T::DiscreteGpu, B::Gl), warp], Auto, Os::Windows), Some(0));
+    // ...but hardware DX12 still beats it, so no working DX12 machine changes.
+    assert_eq!(pick(&[nvidia_gl, cand(INTEL, T::IntegratedGpu, B::Dx12), warp], Auto, Os::Windows), Some(1));
+    // Hardware GL is the compatibility path: a real GPU on Vulkan or DX12 stays ahead even when GL
+    // reports the better device type (an integrated GL adapter vs a discrete one on Vulkan).
+    assert_eq!(pick(&[cand(INTEL, T::IntegratedGpu, B::Gl), cand(NVIDIA, T::Other, B::Vulkan)], Auto, Os::Windows), Some(1), "a discrete Vulkan adapter");
+    assert_eq!(pick(&[cand(INTEL, T::IntegratedGpu, B::Gl), cand(NVIDIA, T::DiscreteGpu, B::Vulkan)], Auto, Os::Windows), Some(1));
+    // A VM's emulated Intel GPU is `IntegratedGpu` (the renderer name contains "intel"), and a
+    // software rasterizer wgpu doesn't know is `Other`; neither may outrank WARP.
+    assert_eq!(pick(&[vm(0, T::IntegratedGpu, B::Gl), warp], Auto, Os::Windows), Some(1), "virgl");
+    assert_eq!(pick(&[soft(0, T::Other, B::Gl), warp], Auto, Os::Windows), Some(1), "softpipe");
+    assert_eq!(pick(&[soft(0xffff, T::Cpu, B::Gl), warp], Auto, Os::Windows), Some(1), "llvmpipe");
     // Elsewhere GL keeps its rank.
     assert_eq!(pick(&[svga_gl, warp], Auto, Os::Other), Some(0));
+}
+
+/// wgpu's GL backend reports a VM's emulated GPU with an unknown vendor (0), the same as an AMD
+/// card, so only the name tells them apart. It knows llvmpipe, swiftshader and mesa offscreen as
+/// software, but not the other rasterizers, and calls a VM's Intel GPU integrated.
+#[test]
+fn an_adapters_name_says_what_it_is() {
+    for name in [
+        "SVGA3D; build: RELEASE;LLVM;",
+        "VMware SVGA 3D",
+        "VirtualBox Graphics Adapter",
+        "Parallels Display Adapter",
+        "virgl (Mesa Intel(R) UHD Graphics 620 (CML GT2))",
+    ] {
+        assert_eq!(kind(name), Kind::Virtual, "{name}");
+    }
+    for name in ["llvmpipe (LLVM 15.0.7, 256 bits)", "softpipe", "swrast", "Google SwiftShader", "GDI Generic"] {
+        assert_eq!(kind(name), Kind::Software, "{name}");
+    }
+    for name in ["NVIDIA GeForce GTX 970/PCIe/SSE2", "AMD Radeon RX 580 Series", "ATI Radeon HD 5700 Series", "Intel(R) HD Graphics 4600", ""] {
+        assert_eq!(kind(name), Kind::Gpu, "{name}");
+    }
+}
+
+/// #7331, #5191: the selector builds each [`Candidate`] through [`candidate`], which takes its
+/// `kind` from the adapter's name, so a VM's GL adapter (`DeviceType::Other`, vendor 0, exactly
+/// like an AMD card) is `Virtual` and never outranks WARP, while a real GPU's GL adapter stays
+/// `Gpu`.
+#[test]
+fn a_candidate_takes_its_kind_from_the_adapter_name() {
+    let info = |name: &str| wgpu::AdapterInfo {
+        name: name.into(),
+        vendor: 0,
+        device: 0,
+        device_type: wgpu::DeviceType::Other,
+        device_pci_bus_id: String::new(),
+        driver: String::new(),
+        driver_info: String::new(),
+        backend: wgpu::Backend::Gl,
+        subgroup_min_size: 0,
+        subgroup_max_size: 0,
+        transient_saves_memory: None,
+        limit_bucket: None,
+    };
+    let svga = candidate(&info("VMware SVGA 3D"), true, None);
+    assert_eq!(svga.kind, Kind::Virtual);
+    assert!(!hardware(&svga), "a VM's GL must not count as hardware");
+    let amd = candidate(&info("AMD Radeon RX 580 Series"), true, None);
+    assert_eq!(amd.kind, Kind::Gpu);
+    assert!(hardware(&amd), "a real GPU's GL counts as hardware");
+    // The surface and the wanted name are the caller's, not the adapter's.
+    let wanted = candidate(&info("Intel(R) HD Graphics 4600"), false, Some("HD Graphics 4600"));
+    assert!(wanted.wanted, "the name matches the one asked for");
+    assert!(!wanted.surface_ok);
+    // `auto` keeps WARP: the VM's GL is not a hardware adapter.
+    let warp = cand(0x1414, wgpu::DeviceType::Cpu, wgpu::Backend::Dx12);
+    assert_eq!(pick(&[svga, warp], Auto, Os::Windows), Some(1));
 }
 
 #[test]

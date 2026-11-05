@@ -1,6 +1,6 @@
 use super::batch::tile_grid;
 use super::consts::{ACC_FORMAT, CHUNK, CHUNK_UNIFORM, FX_BUDGET, MAX_PATTERN_TEXTURE_BYTES, OP_UNIFORM, PAGE, PATTERN_BUDGET, RESIDENT_BUDGET};
-use super::kit::{Kit, SHADER, build_jobs, tex_entry, uniform_entry, vertex_shader};
+use super::kit::{BuildJob, Kit, SHADER, build_jobs, tex_entry, uniform_entry, vertex_shader};
 use super::paging::{cell_rect, field_reaches, first_error, grid_rects};
 use super::textures::{FxEntry, Resident, Tex, TexKind};
 use super::{
@@ -54,6 +54,11 @@ impl Compositor {
     /// while the cache still held it, and dropping the device then aborted the process. So each
     /// job has its own vertex entry point and fragment shaders ([`build_jobs`]), and builds of
     /// several compositors take turns.
+    ///
+    /// Not on GL: wgpu-hal's GL device puts every call behind one context lock that panics after
+    /// a second ("Could not lock adapter context. This is most-likely a deadlock"), and that panic
+    /// while another thread drops a pipeline aborts the process, so GL builds them on one thread
+    /// ([`parallel_pipelines`]).
     fn build(device: &wgpu::Device, acc_format: wgpu::TextureFormat) -> (Self, Option<wgpu::Error>) {
         static BUILDING: std::sync::Mutex<()> = std::sync::Mutex::new(());
         let _building = BUILDING.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -98,7 +103,7 @@ impl Compositor {
         };
         // Effect maps render to R32Float / R16Float, which some adapters (e.g. GL without float
         // render targets) can't: then layer effects use the CPU compositor and the rest stays here.
-        let built = fx::par_map(jobs, |job| {
+        let build = |job: BuildJob| {
             job.keys
                 .into_iter()
                 .map(|key| {
@@ -106,7 +111,12 @@ impl Compositor {
                     (key, built, error)
                 })
                 .collect::<Vec<_>>()
-        });
+        };
+        let built: Vec<_> = if parallel_pipelines(device.adapter_info().backend) {
+            fx::par_map(jobs, build)
+        } else {
+            jobs.into_iter().map(build).collect()
+        };
         let built = built.into_iter().flatten();
         let (mut pipelines, mut maps) = (HashMap::new(), Vec::new());
         let (mut error, mut map_error) = (None, None);
@@ -547,4 +557,15 @@ impl Compositor {
     pub fn take_gpu_timing(&mut self) -> Option<timing::GpuTiming> {
         self.timer.as_mut().and_then(timing::GpuTimer::take)
     }
+}
+
+/// Whether [`Compositor::build`] may create its pipelines from several threads on `backend`.
+///
+/// Not on GL: wgpu-hal's GL device puts every call behind one context lock that gives up after a
+/// second ("Could not lock adapter context. This is most-likely a deadlock"), so a second thread
+/// creating a pipeline panics — and that panic while another thread drops a pipeline aborts the
+/// process. Elsewhere the parallelism is what keeps startup short: on DX12, FXC compiles one shader
+/// at a time and the ~30 pipelines took about 8 s on one core (#6419).
+pub(crate) fn parallel_pipelines(backend: wgpu::Backend) -> bool {
+    backend != wgpu::Backend::Gl
 }

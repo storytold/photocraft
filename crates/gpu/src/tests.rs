@@ -426,3 +426,46 @@ fn colour_managed_tiles_match_the_per_pixel_conversion() {
 fn grid_rounds_out() {
     assert_eq!(tile_grid(Rect::new(0, 0, 300, 256)), Rect::new(0, 0, 512, 256));
 }
+
+#[test]
+fn gl_builds_its_pipelines_on_one_thread() {
+    // wgpu-hal's GL device takes one context lock around every call and panics after a second
+    // ("Could not lock adapter context. This is most-likely a deadlock"), so two threads creating
+    // pipelines abort the process; every other backend keeps the parallel build (#6419).
+    assert!(!super::setup::parallel_pipelines(wgpu::Backend::Gl));
+    assert!(super::setup::parallel_pipelines(wgpu::Backend::Vulkan));
+    assert!(super::setup::parallel_pipelines(wgpu::Backend::Dx12));
+    assert!(super::setup::parallel_pipelines(wgpu::Backend::Metal));
+}
+
+/// Guards the shader pattern behind #10636: naga turns a vertex output struct that holds only
+/// `@builtin(position)` into GLSL Intel's Windows OpenGL driver rejects, which fails every pipeline
+/// and silently costs the whole GPU canvas, so every vertex entry point returns the position itself.
+///
+/// Checked on naga's parse of each module, not on its text: a comment or another function repeating
+/// the signature would satisfy a `contains` check while the entry point returned a struct.
+#[test]
+fn the_vertex_shaders_return_the_position_directly() {
+    let generated = super::kit::vertex_shader(&super::kit::build_jobs(super::consts::ACC_FORMAT));
+    for (name, src) in [("compose (generated)", generated.as_str()), ("camera raw", super::camera_raw::CAMERA_RAW_SHADER)] {
+        let module = wgpu::naga::front::wgsl::parse_str(src).unwrap_or_else(|e| panic!("{name}: {}", e.emit_to_string(src)));
+        let vs: Vec<_> = module.entry_points.iter().filter(|ep| ep.stage == wgpu::naga::ShaderStage::Vertex).collect();
+        assert!(!vs.is_empty(), "{name}: no vertex entry point");
+        for ep in vs {
+            let result = ep.function.result.as_ref().unwrap_or_else(|| panic!("{name}: {} returns nothing", ep.name));
+            assert!(
+                matches!(result.binding, Some(wgpu::naga::Binding::BuiltIn(wgpu::naga::BuiltIn::Position { .. }))),
+                "{name}: {} must return `@builtin(position)`",
+                ep.name
+            );
+            let position = matches!(
+                module.types[result.ty].inner,
+                wgpu::naga::TypeInner::Vector {
+                    size: wgpu::naga::VectorSize::Quad,
+                    scalar: wgpu::naga::Scalar { kind: wgpu::naga::ScalarKind::Float, width: 4 },
+                }
+            );
+            assert!(position, "{name}: {} must return `vec4<f32>` itself, not a struct", ep.name);
+        }
+    }
+}
