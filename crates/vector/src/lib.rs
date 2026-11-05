@@ -87,6 +87,15 @@ enum MaskGeometry {
     Path(Rasterizer),
 }
 
+/// Bytes a feathered fill's dense coverage plane and blur may hold: three `f32` planes over the
+/// fill's area, as the compositor charges a feathered vector mask.
+const MAX_FEATHER_WORKING_BYTES: u64 = 512 << 20;
+
+/// Whether a `w` x `h` feathered plane fits [`MAX_FEATHER_WORKING_BYTES`].
+fn fits_feather_budget(w: usize, h: usize) -> bool {
+    (w as u64).checked_mul(h as u64).and_then(|px| px.checked_mul(3 * size_of::<f32>() as u64)).is_some_and(|b| b <= MAX_FEATHER_WORKING_BYTES)
+}
+
 /// A vector mask's immutable geometry and density, reusable across render rectangles.
 pub struct CompiledVectorMask {
     geometry: MaskGeometry,
@@ -504,6 +513,12 @@ impl FillCoverage {
         let outside = far.first().copied().unwrap_or(0.0);
         let region = feather::path_area(&shape.path, sigma).intersect(&canvas);
         let (w, h) = (region.width() as usize, region.height() as usize);
+        // The plane spans the path's whole bounds, so a few distant contours can make it
+        // canvas-sized; with the blur's line buffers it is held at once. Same budget as the
+        // compositor's feathered vector masks (`photocraft-compose::masks::build_mask`).
+        if !fits_feather_budget(w, h) {
+            return FillCoverage::Dense(area.clone(), density);
+        }
         let mut values = Vec::new();
         if values.try_reserve_exact(w.saturating_mul(h)).is_err() {
             // Too large to blur: keep the edge hard rather than fail the render.
