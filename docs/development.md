@@ -432,6 +432,26 @@ can't run.
 - `ui.inspect` returns `perf` timings (UI ms per frame, composite ms, upload ms).
 - Never scan full surfaces per frame. Cache per document revision (`PhotocraftApp::cached_bounds`). An uncached `content_bounds()` on a 36 MP layer once cost 77 ms per frame.
 
+### Headless GPU rendering and flat export (issue #8062)
+
+PhotoCraft foundation PR 1 adds an optional, additive headless GPU rendering backend for flat export and headless automation sessions:
+
+- **Layering & Contracts:**
+  - `photocraft-gpu` (L3) provides windowless native context creation ([`NativeContext`]), checked bounded band readback ([`readback::render_bands`]), and device health monitoring ([`DeviceHealth`]). It does not depend on IO or UI crates.
+  - `photocraft-io` (L4) defines the renderer contract ([`BandRenderer`], [`CpuRenderer`], [`RenderBand`], [`RenderError`]) and additive export entrypoints ([`export_with_renderer`], [`export_flat_with_renderer`], [`document_to_image_with_renderer`]). Wgpu types are excluded from the public IO contract.
+  - `photocraft-automation` (L6) provides the [`GpuRenderer`] adapter behind the `gpu` cargo feature, with lazy adapter initialization, compositor caching across edits, capability-scoped writes, and preview sizing.
+
+- **Supported Matrix:**
+  - Color modes: RGB and Grayscale (including ICC profile conversions and working spaces).
+  - Depth: 8-bit unsigned integer. 16-bit unsigned integer and 32-bit floating point documents use the CPU compositor: layer content is uploaded as half-precision textures, which cannot preserve their samples.
+  - Features: Straight-alpha transparency, Photoshop blend modes, opacity × fill opacity, layer masks, vector masks, clipping groups, isolated/pass-through groups, adjustments, solid/gradient fills, and GPU-supported layer effects.
+  - Targets: Flat raster exports (PNG, JPEG, TIFF, WebP, etc.) and automation `render_png` previews.
+
+- **Conservative CPU Fallback:**
+  - Documents requiring ink-value mixing ([`cmyk::renders_inks`]), Multichannel documents, and unproven features fall back to the CPU reference compositor.
+  - Any compositor rejection ([`Compositor::supports`]), device loss, shader compiler error, staging allocation limit, or buffer mapping failure triggers a 100% whole-export restart on the CPU compositor, discarding partial GPU attempts. No CPU and GPU bands are ever mixed.
+  - Atomic destination writes guarantee that failed exports never corrupt or replace existing files on disk.
+
 ## Scorecard and performance budgets
 
 [`docs/scorecard.md`](scorecard.md) says, with numbers, where PhotoCraft stands per area. It is
@@ -512,6 +532,16 @@ That writes the row's own report and stops there: it does **not** evaluate the b
 want the verdict, the merged `results.json`/`summary.md` and the regression check.
 Every `--bench` name must match a `[[bench]]` name in `perf/budgets.toml`; an unknown name
 is rejected before any benchmark runs or any report or baseline is written.
+
+`perf_scenarios` rows that time a command and then the canvas refresh after it also split each
+sample: `cmd_samples_ms` and `refresh_samples_ms` (`samples_ms`, what budgets judge, is their sum),
+`refresh_kinds` (how many refreshes were `gpu-rect`, `gpu-full`, `rect`/`full` on the CPU
+compositor, also without an adapter, `none` when nothing needed drawing, …) and `fallbacks` (why
+the wgpu compositor didn't draw, `CpuReason::kind`). The console line ends with the medians, e.g.
+`cmd 0.06 + refresh 1.71 ms {"gpu-rect": 7}`, so a slow row says whether the engine or the canvas
+is the cost before you profile it. The bench refreshes like the app's `damage_since`: the last
+edit's rect only when the canvas showed the revision before it, else everything; a row whose timed
+refresh also had to draw untimed setup edits is reported on stderr.
 
 Read the sample count before quoting a percentile. `--reps` defaults to 7 in `--quick` and 15
 otherwise, it is per bench, and some rows cap it themselves (the `#211` algorithm rows use
