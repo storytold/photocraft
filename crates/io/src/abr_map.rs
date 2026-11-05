@@ -18,6 +18,8 @@ use photocraft_psd::patterns::PsdPattern;
 
 /// Largest sampled tip edge kept as is; bigger tips are downsampled to it.
 pub const MAX_TIP_EDGE: u32 = 2500;
+/// Longest group name an import takes: every preset carries a copy of it.
+pub const MAX_GROUP_NAME_BYTES: usize = 256;
 /// Largest texture pattern edge kept as is; bigger patterns are downsampled to it.
 pub const MAX_PATTERN_EDGE: u32 = 1024;
 
@@ -40,6 +42,9 @@ pub fn read_abr(bytes: &[u8], group: &str) -> Result<AbrImport, String> {
 /// [`read_abr`] that checks `ctl` before each brush (and reports progress): a cancelled import
 /// fails with "cancelled".
 pub fn read_abr_with(bytes: &[u8], group: &str, ctl: &photocraft_raster::Interrupt) -> Result<AbrImport, String> {
+    if group.len() > MAX_GROUP_NAME_BYTES {
+        return Err(format!("the group name is longer than {MAX_GROUP_NAME_BYTES} bytes"));
+    }
     let f = abr::parse(bytes).map_err(|e| format!("not a readable brush file (.abr): {e}"))?;
     // Parsing is the small part; mapping (tip decoding) reports 10–100 %.
     ctl.progress(0.1);

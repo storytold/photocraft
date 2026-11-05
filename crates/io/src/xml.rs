@@ -29,7 +29,7 @@ pub fn parse<'i>(text: &'i str, opts: ParsingOptions<'i>) -> Result<Document<'i>
 /// come first, a `[` outside quotes opens the subset, a `>` ends a DOCTYPE without one. Scans in
 /// the same quote state go on alike, so one pass keeps just three flags (outside quotes, in `"`,
 /// in `'`) and stays linear however many `<!DOCTYPE`s a comment holds.
-fn internal_subset(xml: &[u8]) -> bool {
+pub(crate) fn internal_subset(xml: &[u8]) -> bool {
     const DOCTYPE: &[u8] = b"<!DOCTYPE";
     let (mut bare, mut double, mut single) = (false, false, false);
     for (at, &b) in xml.iter().enumerate() {

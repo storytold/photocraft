@@ -89,16 +89,22 @@ struct Reader<'a, 'c> {
 
 impl Reader<'_, '_> {
     fn file(&self, name: &str) -> Result<Option<Vec<u8>>> {
+        self.file_up_to(name, MAX_LAYER_FILE)
+    }
+
+    /// [`file`](Self::file) refusing a member that inflates past `max` bytes.
+    fn file_up_to(&self, name: &str, max: usize) -> Result<Option<Vec<u8>>> {
         let path = format!("{}{name}", self.dir);
         match self.zip.find(&path) {
             None => Ok(None),
-            Some(e) => self.zip.read(e, MAX_LAYER_FILE).map(Some).map_err(|err| invalid(format!("{path}: {err}"))),
+            Some(e) => self.zip.read(e, max).map(Some).map_err(|err| invalid(format!("{path}: {err}"))),
         }
     }
 
     /// The default pixel Krita stores next to a tiled file, decoded to `space` samples.
     fn default_pixel(&self, name: &str, space: Space) -> Result<Option<Vec<f32>>> {
-        let Some(bytes) = self.file(&format!("{name}.defaultpixel"))? else { return Ok(None) };
+        // One pixel: a member declaring the generic layer-file limit must not be inflated first.
+        let Some(bytes) = self.file_up_to(&format!("{name}.defaultpixel"), space.pixel_size())? else { return Ok(None) };
         if bytes.len() != space.pixel_size() {
             return Err(invalid(format!("{name}.defaultpixel has {} bytes, expected {}", bytes.len(), space.pixel_size())));
         }

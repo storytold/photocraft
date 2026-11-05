@@ -907,3 +907,18 @@ fn only_stored_previews_refuse_unreadable_embedded_images() {
     assert!(import_svg_bounded_with_work("edit", svg.as_bytes(), MAX_RASTER_PIXELS).is_ok());
     assert!(import_svg_preview_with_work("preview", svg.as_bytes(), MAX_RASTER_PIXELS).is_err());
 }
+
+/// usvg parses with DTDs on: an internal subset's entities would expand into markup the depth
+/// check never counted, top level and inside an embedded SVG image alike.
+#[test]
+fn internal_dtd_subsets_are_refused_before_parsing() {
+    let deep = format!("<!DOCTYPE svg [<!ENTITY g \"{}{}\">]>", "<g>".repeat(8), "</g>".repeat(8));
+    let svg = format!("{deep}<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1\" height=\"1\">&g;</svg>");
+    let error = import_svg("dtd", svg.as_bytes()).unwrap_err().to_string();
+    assert!(error.contains("internal DTD"), "{error}");
+    let embedded = image_svg(&embedded_image("image/svg+xml", svg.as_bytes()));
+    // an embedded drawing only fails the strict (preview) import; the editable import skips it
+    assert!(import_svg("dtd", embedded.as_bytes()).is_ok());
+    let error = import_svg_preview_with_work("dtd", embedded.as_bytes(), MAX_RASTER_PIXELS).unwrap_err().to_string();
+    assert!(error.contains("embedded SVG"), "{error}");
+}

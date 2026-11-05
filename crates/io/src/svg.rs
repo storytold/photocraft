@@ -353,6 +353,11 @@ fn parse(bytes: &[u8]) -> Result<Parsed, IoError> {
 /// [`parse`] with the font database `fonts` supplies (the tests hand in an empty one).
 fn parse_with(bytes: &[u8], fonts: fn() -> Arc<usvg::fontdb::Database>) -> Result<Parsed, IoError> {
     let xml = inflate(bytes)?;
+    // usvg parses with DTDs on, and an internal subset's entities can expand into markup the
+    // depth check below never sees (it skips quoted declarations).
+    if crate::xml::internal_subset(&xml) {
+        return Err(IoError::Svg("internal DTD subsets aren't supported".into()));
+    }
     let depth = nesting_depth(&xml, MAX_XML_DEPTH);
     if depth > MAX_XML_DEPTH {
         return Err(IoError::Svg(format!("elements are nested more than {MAX_XML_DEPTH} levels deep")));
@@ -592,6 +597,9 @@ fn parse_image_bounded_with(
         return Err(overrun(IoError::Svg("embedded SVG source exceeds the 16 MiB byte limit".into())));
     }
     let xml = inflate_with_limit(bytes, MAX_BOUNDED_SVG_BYTES).map_err(overrun)?;
+    if crate::xml::internal_subset(&xml) {
+        return Err(IoError::Svg("internal DTD subsets aren't supported".into()));
+    }
     // Charged before anything can leave the image out, so skipped images still use up the budget.
     let xml_len = u64::try_from(xml.len()).unwrap_or(u64::MAX);
     let left = {
