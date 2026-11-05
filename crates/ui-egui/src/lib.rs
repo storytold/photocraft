@@ -960,3 +960,4 @@ mod pen_path_ownership_tests;
 
 #[cfg(test)]
 mod selection_move_step_tests;
+mod preferences_submenu_tests;
