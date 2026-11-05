@@ -28,6 +28,9 @@ const SEED: u64 = 1;
 /// The largest canvas (pixels) the uncovered area is worked out for: the Content-Aware window cap.
 const MAX_PIXELS: u64 = 400_000_000;
 
+/// Limit for the dense native-float input read when reaching beyond the normal sampling window.
+const MAX_WIDENED_SAMPLE_BYTES: usize = 512 << 20;
+
 /// Where the cropped canvas came from in the original document.
 #[derive(Clone, Debug)]
 pub(crate) struct Coverage {
@@ -157,11 +160,7 @@ fn fill_layer(doc: &mut Document, id: Result<LayerId>, cov: &Coverage, own_pixel
     let donor_bounds = own_pixels.then(|| if has_alpha { surf.content_bounds().intersect(&canvas) } else { canvas });
     // The added target is optional when it has no covered pixels of its own to sample.
     // This check does not absorb errors from synthesis or allocation.
-    if donor_bounds.is_some_and(|bounds| {
-        !(bounds.y0..bounds.y1).any(|y| {
-            (bounds.x0..bounds.x1).any(|x| labels[y as usize * w + x as usize] == 0 && has_pixel(x, y))
-        })
-    }) {
+    if donor_bounds.is_some_and(|bounds| !contains_donor(bounds, |x, y| labels[y as usize * w + x as usize] == 0 && has_pixel(x, y))) {
         return Ok(false);
     }
     let pieces = label_components(&mut labels, w, h)?;
@@ -178,10 +177,10 @@ fn fill_layer(doc: &mut Document, id: Result<LayerId>, cov: &Coverage, own_pixel
         let usable = |x, y| label(x, y) == 0 && (!own_pixels || has_pixel(x, y));
         let sampling_bounds = if let Some(donor_bounds) = donor_bounds {
             let window = crate::fill_cmds::sampling_window(*bounds, canvas).intersect(&donor_bounds);
-            if (window.y0..window.y1).any(|y| (window.x0..window.x1).any(|x| usable(x, y))) {
+            if contains_donor(window, usable) {
                 *bounds
             } else {
-                bounds.union(&donor_bounds)
+                widened_sampling_bounds(*bounds, donor_bounds, canvas, n)?
             }
         } else {
             *bounds
@@ -198,7 +197,7 @@ fn fill_layer(doc: &mut Document, id: Result<LayerId>, cov: &Coverage, own_pixel
             usable,
         )?;
         // The piece's bounds, its pixels from the fill and the rest as they were.
-        let mut out = surf.read_region(*bounds);
+        let mut out = crate::allocation::read_region(surf, *bounds, "Content-Aware crop output")?;
         let ww = window.width() as usize;
         for y in bounds.y0..bounds.y1 {
             for x in bounds.x0..bounds.x1 {
@@ -225,6 +224,25 @@ fn fill_layer(doc: &mut Document, id: Result<LayerId>, cov: &Coverage, own_pixel
         surf.write_region(r, &px);
     }
     Ok(true)
+}
+
+/// Checks the candidate rectangle for a covered pixel that passes the target's donor policy.
+fn contains_donor(bounds: Rect, usable: impl Fn(i32, i32) -> bool) -> bool {
+    (bounds.y0..bounds.y1).any(|y| (bounds.x0..bounds.x1).any(|x| usable(x, y)))
+}
+
+/// Widens the sampling envelope to include distant donors, after pricing the actual float read.
+fn widened_sampling_bounds(piece: Rect, donors: Rect, canvas: Rect, channels: usize) -> Result<Rect> {
+    let expanded = piece.union(&donors);
+    let window = crate::fill_cmds::sampling_window(expanded, canvas);
+    let bytes = (window.width() as usize)
+        .checked_mul(window.height() as usize)
+        .and_then(|pixels| pixels.checked_mul(channels))
+        .and_then(|samples| samples.checked_mul(std::mem::size_of::<f32>()));
+    if bytes.is_none_or(|bytes| bytes > MAX_WIDENED_SAMPLE_BYTES) {
+        return Err(EngineError::Other("the expanded Content-Aware crop sampling window is too large".into()));
+    }
+    Ok(expanded)
 }
 
 /// Only the measured, editable active-raster case adds a target to the Background. Ancestor

@@ -31,9 +31,9 @@ fn raster(d: &Document, name: &str, bounds: Rect, color: [f32; 4]) -> Layer {
     layer
 }
 
+/// Keeps the measured straight geometry and fits turned controls under the 1 MiB transform limit
+/// that the preference test can set process-wide.
 fn scene_divisor(turned: bool) -> i32 {
-    // Preserve the measured straight geometry. Half-size turned controls fit even when
-    // the transform-budget preference test sets the process-wide limit to 1 MiB.
     if turned { 2 } else { 1 }
 }
 
@@ -70,11 +70,13 @@ fn select(s: &mut Session, id: LayerId) {
     s.execute("layer.select", json!({"layer":id.0})).unwrap();
 }
 
+/// Extends the frame to the right by one eighth of the original width.
 fn frame(turned: bool) -> Value {
     let divisor = scene_divisor(turned);
     json!({"x":0,"y":0,"width":900/divisor,"height":500/divisor,"angle":if turned { 10 } else { 0 },"deleteCroppedPixels":true})
 }
 
+/// Samples the same relative point inside the new strip in both fixture sizes.
 fn extension_sample(turned: bool) -> (i32, i32) {
     let divisor = scene_divisor(turned);
     (850 / divisor, 400 / divisor)
@@ -92,11 +94,13 @@ fn plain_control(s: &mut Session, p: &Value) -> Document {
     plain
 }
 
+/// Checks donor colour with room for the resampling and synthesis tolerance.
 fn pixel(d: &Document, id: LayerId, x: i32, y: i32, want: [f32; 4]) {
     let actual = d.layer(id).unwrap().surface().unwrap().rgba(x, y);
     assert!(actual.iter().zip(want).all(|(a, b)| (a - b).abs() < 0.06), "layer {id:?} at ({x},{y}): {actual:?}, expected {want:?}");
 }
 
+/// Compares complete layers with plain crop, including any legitimate turn or clipping.
 fn unchanged(d: &Document, plain: &Document, ids: &[LayerId]) {
     for id in ids {
         // Includes bounds, pixels and metadata; turned crops legitimately transform these layers.
@@ -119,6 +123,7 @@ fn undo_redo(s: &mut Session, before: &Document) {
     assert_eq!(s.active().unwrap().history.undo_label(), Some("Content-aware Crop"));
 }
 
+/// Matches the three measured rows at their original size, bounds and sample points.
 #[test]
 fn measured_straight_rows_fill_background_and_only_the_active_raster() {
     for row in 0..3 {
@@ -159,6 +164,7 @@ fn measured_straight_rows_fill_background_and_only_the_active_raster() {
     }
 }
 
+/// Checks own-layer donors and exact non-target parity after rotation.
 #[test]
 fn turned_rows_sample_each_target_and_leave_other_layers_at_plain_crop() {
     let (x, y) = extension_sample(true);
@@ -199,6 +205,7 @@ fn turned_rows_sample_each_target_and_leave_other_layers_at_plain_crop() {
     }
 }
 
+/// Selecting the Background leaves each other layer identical to its plain crop.
 #[test]
 fn background_active_is_not_a_second_target() {
     for turned in [false, true] {
@@ -215,6 +222,7 @@ fn background_active_is_not_a_second_target() {
     }
 }
 
+/// Verifies Background-only fill for ineligible active layers and Delete Cropped Pixels off.
 #[test]
 fn unmeasured_active_targets_and_delete_off_keep_the_legacy_target() {
     for turned in [false, true] {
@@ -261,6 +269,7 @@ fn unmeasured_active_targets_and_delete_off_keep_the_legacy_target() {
     }
 }
 
+/// Checks the plain history name for interior crops and crops with synthesis disabled.
 #[test]
 fn no_fill_or_content_aware_off_keeps_the_crop_history_name() {
     for (p, aware, turned) in [
@@ -277,6 +286,7 @@ fn no_fill_or_content_aware_off_keeps_the_crop_history_name() {
     }
 }
 
+/// Gives exactly one target a strip of held pixels outside the original canvas.
 fn overhang_scene(held_active: bool) -> (Session, LayerId, LayerId) {
     let mut s = Session::new();
     s.execute("file.new", json!({"width":64,"height":48,"background":"white"})).unwrap();
@@ -297,6 +307,7 @@ fn overhang_scene(held_active: bool) -> (Session, LayerId, LayerId) {
     (s, bg, active)
 }
 
+/// Confirms that held pixels protect only the layer that owned them before the turn.
 #[test]
 fn turned_hidden_overhang_coverage_belongs_to_each_layer() {
     for held_active in [false, true] {
@@ -316,6 +327,7 @@ fn turned_hidden_overhang_coverage_belongs_to_each_layer() {
     }
 }
 
+/// An empty active raster leaves the successful Background fill and undo step intact.
 #[test]
 fn donorless_added_target_keeps_the_background_fill() {
     for turned in [false, true] {
@@ -344,6 +356,7 @@ fn donorless_added_target_keeps_the_background_fill() {
     }
 }
 
+/// Confirms both layers synthesize their own colours at every RGB depth.
 #[test]
 fn both_target_colours_remain_native_at_each_rgb_depth() {
     for depth in [8, 16, 32] {
