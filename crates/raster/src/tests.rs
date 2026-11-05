@@ -853,3 +853,19 @@ fn fallible_interleaved_writes_match_encoded_pixels_and_reject_bad_lengths() {
         assert_eq!(shared.to_interleaved(rect), replacement);
     }
 }
+
+#[test]
+fn content_bounds_handles_extreme_tile_coordinates_without_overflow() {
+    for format in [PixelFormat::RGBA8, PixelFormat::RGBA16, PixelFormat::RGBA32F] {
+        for coords in [
+            [TileCoord::new(i32::MIN, 0), TileCoord::new(0, 0), TileCoord::new(i32::MAX, 0)],
+            [TileCoord::new(0, i32::MIN), TileCoord::new(0, 0), TileCoord::new(0, i32::MAX)],
+            [TileCoord::new(i32::MIN, i32::MIN), TileCoord::new(0, 0), TileCoord::new(i32::MAX, i32::MAX)],
+        ] {
+            let mut surface = Surface::new(format);
+            let white = surface.solid_tile(&[1.0, 1.0, 1.0, 1.0]);
+            surface.put_tiles(coords.into_iter().map(|coord| (coord, Arc::clone(&white))));
+            assert_eq!(surface.content_bounds(), surface.tile_bounds());
+        }
+    }
+}
