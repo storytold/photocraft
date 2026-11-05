@@ -567,6 +567,8 @@ cameraRaw	Yellow	पीला
 	Target	लक्ष्य
 	Units	इकाइयाँ
 	Demosaic	डिमोज़ेक
+
+	The GPU compositor is still being prepared	The GPU compositor is still being prepared
 	Clear Selection	चयन साफ़ करें
 	Color Aware	रंग-आधारित
 	Decontaminate Colors	रंग शुद्ध करें
@@ -4732,3 +4734,9 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 # Merged from main (2026-11-05): canvas background choices.
 	Background (default)	बैकग्राउंड (डिफ़ॉल्ट)
 	Transparent (default)	पारदर्शी (डिफ़ॉल्ट)
+
+# Merged from main (2026-11-06): placing dropped files in the background (#10147).
+	Dropped files weren't placed: too many are waiting for their document.	छोड़ी गई फ़ाइलें नहीं रखी गईं: बहुत सी फ़ाइलें अपने दस्तावेज़ की प्रतीक्षा कर रही हैं।
+	Dropped files weren't placed: their document was closed.	छोड़ी गई फ़ाइलें नहीं रखी गईं: उनका दस्तावेज़ बंद कर दिया गया।
+	A file is still being placed; try again when it has finished.	एक फ़ाइल अभी रखी जा रही है; उसके पूरा होने पर फिर से प्रयास करें।
+	Cancelled placing {name}	{name} रखना रद्द किया गया
