@@ -963,3 +963,4 @@ mod pen_path_ownership_tests;
 mod selection_move_step_tests;
 mod preferences_submenu_tests;
 mod layers_empty_area_menu_tests;
+mod doc_tab_menu_tests;
