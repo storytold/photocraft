@@ -752,6 +752,9 @@ impl SyntheticTarget {
 }
 
 #[cfg(test)]
+mod artboard_add_mode_tests;
+
+#[cfg(test)]
 mod lifecycle_tests;
 
 #[cfg(test)]
