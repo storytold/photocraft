@@ -338,10 +338,7 @@ mod selected_export_923 {
     // is not part of exporting. Save-folder memory is intentionally outside the snapshot.
     fn document_state(app: &PhotocraftApp) -> String {
         let st = app.session.active().unwrap();
-        format!(
-            "{:?}",
-            (&st.history, st.revision, st.saved_revision, st.view_revision, &st.path, st.active_layer, &st.selected_layers, &st.coalesce)
-        )
+        format!("{:?}", (&st.history, st.revision, st.saved_revision, st.view_revision, &st.path, st.active_layer, &st.selected_layers, &st.coalesce))
     }
 
     impl Fixture {
@@ -457,7 +454,8 @@ mod selected_export_923 {
             assert_eq!(open.len(), 1, "one actual service request");
             assert!(
                 matches!(&open[0].0, FileDialogRequest::Save { suggested } if Path::new(suggested).file_name().unwrap() == "Measurements.csv"),
-                "{:?}", open[0].0
+                "{:?}",
+                open[0].0
             );
         }
 
