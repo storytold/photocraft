@@ -11,6 +11,7 @@ use serde_json::{Value, json};
 use photocraft_engine::actions_cmds::{self, Action};
 
 use crate::PhotocraftApp;
+use crate::file_dialog::{FileDialogAnswer, FileDialogRequest};
 use crate::icons;
 use crate::theme::Tokens;
 
@@ -109,7 +110,7 @@ fn play_targets(app: &mut PhotocraftApp, targets: &[usize], before: u64) -> Resu
         let mut v = app.run("actions.play", json!({"action": i}))?;
         ran = ran.saturating_add(v.get("ran").and_then(Value::as_u64).unwrap_or(0));
         let failed = v.get("failed").is_some_and(Value::is_object);
-        let paused = v.get("paused").filter(|p| p.is_object()).and_then(|p| p.get("dialog")).and_then(Value::as_u64);
+        let paused = v.get("paused").filter(|p| p.is_object()).and_then(waiting_dialog).cloned();
         if let Some(o) = v.as_object_mut() {
             o.insert("ran".into(), json!(ran));
         }
@@ -119,7 +120,7 @@ fn play_targets(app: &mut PhotocraftApp, targets: &[usize], before: u64) -> Resu
             // (`actions.move`), and one deleted and made again under its name isn't the same action.
             let list = &app.session.actions.list;
             let rest: Vec<Action> = targets.get(n + 1..).unwrap_or_default().iter().filter_map(|i| list.get(*i).cloned()).collect();
-            let token = app.ui.dialog_mut(dialog).and_then(|d| d.fields.get(RESUME)).and_then(Value::as_u64);
+            let token = paused_token(app, &dialog);
             if let Some(entry) = token.and_then(|t| app.paused_playbacks.paused.get_mut(&t))
                 && name.as_ref() == Some(&entry.action)
             {
@@ -133,6 +134,19 @@ fn play_targets(app: &mut PhotocraftApp, targets: &[usize], before: u64) -> Resu
         }
     }
     Ok(last)
+}
+
+/// The dialog a paused playback waits at: a step dialog by id, or Check Spelling.
+fn waiting_dialog(paused: &Value) -> Option<&Value> {
+    paused.get("dialog").filter(|d| d.is_u64() || d.as_str() == Some(crate::type_panels_ui::SPELLING))
+}
+
+/// The token of the paused playback waiting at `dialog` (see [`waiting_dialog`]).
+fn paused_token(app: &mut PhotocraftApp, dialog: &Value) -> Option<u64> {
+    match dialog.as_u64() {
+        Some(id) => app.ui.dialog_mut(id).and_then(|d| d.fields.get(RESUME)).and_then(Value::as_u64),
+        None => app.ui.type_panels.spell.as_ref().and_then(|d| d.resume),
+    }
 }
 
 /// Index of the playback target. Photoshop's Play button uses the first action when
@@ -182,6 +196,7 @@ fn play_owned(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>)
     let (action, from) = match actions_cmds::playback_plan(&app.session, params) {
         Ok(plan) => plan,
         Err(e) => {
+            actions_cmds::finish_pending_history(&mut app.session);
             restore_recording(app, suspended.as_ref());
             return Err(e.to_string());
         }
@@ -189,6 +204,7 @@ fn play_owned(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>)
     let recording = match actions_cmds::begin_playback(&mut app.session, &action) {
         Ok(r) => r,
         Err(e) => {
+            actions_cmds::finish_pending_history(&mut app.session);
             restore_recording(app, suspended.as_ref());
             return Err(e.to_string());
         }
@@ -227,16 +243,51 @@ fn play_owned(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>)
         // from the next step when it is confirmed (`resume`). Agents play headlessly.
         if action.dialogs.contains(&i) && !app.automation_input && (crate::filter_dialog::has_dialog(id) || crate::adjust_dialog::has_dialog(id)) {
             let label = label_of(id);
+            let active_layer = app.session.active().and_then(|st| st.active_layer);
             let dialog = crate::dialogs::open_command_dialog(app, id, &label);
             let token = app.paused_playbacks.pause(action.name.clone(), i + 1, app.session.authorize);
+            let mut receiver = None;
             if let Some(d) = app.ui.dialog_mut(dialog) {
                 if let Some(o) = p.as_object() {
                     // `__` keys are the dialog's own markers (`params_of` drops them), not step values.
                     d.fields.extend(o.iter().filter(|(k, _)| !k.starts_with("__")).map(|(k, v)| (k.clone(), v.clone())));
                 }
                 d.fields.insert(RESUME.into(), json!(token));
+                // Kept for every implicit step, also one opened on a document target: the dialog
+                // may switch it to a layer-owned one, and `run_step_dialog` checks the receiver
+                // for the target it confirms.
+                if p.get("layer").is_none_or(Value::is_null) {
+                    receiver = Some(active_layer);
+                }
+            }
+            if let Some(paused) = app.paused_playbacks.paused.get_mut(&token) {
+                paused.filter_receiver = receiver;
             }
             paused = Some(json!({"step": i, "id": id, "dialog": dialog}));
+            break;
+        }
+        // Check Spelling's dialog opens with Check All Layers as recorded; Done continues the action.
+        // While the dialog is open (for another action or by hand), this step fails and the open
+        // one keeps its place and ignored words.
+        // A correction (`action` set) opens no dialog and runs below.
+        if action.dialogs.contains(&i) && !app.automation_input && id == "edit.checkSpelling" && p.get("action").is_none() {
+            if let Some(open) = app.ui.type_panels.spell.as_ref() {
+                let error = if open.resume.is_some() { "Check Spelling is already open for another action" } else { "Check Spelling is already open" };
+                failed = Some(json!({"step": i, "id": id, "error": error}));
+                break;
+            }
+            if let Err(error) = crate::type_panels_ui::open_spelling(app, p.get("allLayers").and_then(Value::as_bool).unwrap_or(true)) {
+                failed = Some(json!({"step": i, "id": id, "error": error}));
+                break;
+            }
+            let token = app.paused_playbacks.pause(action.name.clone(), i + 1, app.session.authorize);
+            if let Some(entry) = app.paused_playbacks.paused.get_mut(&token) {
+                entry.doc = app.session.active().map(|d| d.doc.id);
+            }
+            if let Some(d) = app.ui.type_panels.spell.as_mut() {
+                d.resume = Some(token);
+            }
+            paused = Some(json!({"step": i, "id": id, "dialog": crate::type_panels_ui::SPELLING}));
             break;
         }
         let target = app.session.active().map(|d| d.doc.id);
@@ -253,6 +304,9 @@ fn play_owned(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>)
             r
         } else if actions_cmds::shell_view_command(id) {
             app.sync_views();
+            app.run(id, p.clone())
+        } else if id == "edit.paste" && p.get("as").is_some() {
+            // An explicit vector paste needs the original OS source, not just an old pixel copy.
             app.run(id, p.clone())
         } else {
             app.session.execute(id, p.clone()).map_err(|e| e.to_string())
@@ -276,18 +330,29 @@ fn play_owned(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>)
             }
         }
     }
+    let history = if failed.is_none() && paused.is_some() { actions_cmds::suspend_history(&mut app.session) } else { None };
     actions_cmds::finish_playback(&mut app.session, None, &action, from);
-    match paused.as_ref().and_then(|p| p.get("dialog")).and_then(Value::as_u64).and_then(|d| app.ui.dialog_mut(d)) {
+    match paused.as_ref().and_then(waiting_dialog).cloned() {
         // Paused for a dialog: the call goes on after it, so recording stays suspended.
-        Some(d) if failed.is_none() => {
-            let entry = d.fields.get(RESUME).and_then(Value::as_u64).and_then(|t| app.paused_playbacks.paused.get_mut(&t));
-            match (owner, entry) {
-                (Some(owner), Some(p)) => p.record = Some(owner),
+        Some(dialog) if failed.is_none() => {
+            let token = paused_token(app, &dialog);
+            let entry = token.and_then(|t| app.paused_playbacks.paused.get_mut(&t));
+            match entry {
+                Some(p) => {
+                    p.record = owner;
+                    p.history = history;
+                }
                 // No continuation to carry the recording: the call ends here.
-                (owner, _) => restore_recording(app, owner.as_ref()),
+                _ => {
+                    drop(history);
+                    restore_recording(app, owner.as_ref());
+                }
             }
         }
-        _ => restore_recording(app, owner.as_ref()),
+        _ => {
+            drop(history);
+            restore_recording(app, owner.as_ref());
+        }
     }
     Ok(match (failed, paused) {
         (Some(f), _) => json!({"action": action.name, "ran": ran, "failed": f}),
@@ -465,7 +530,12 @@ fn source(name: &str, bytes: &[u8]) -> Value {
 
 /// Load a `.atn` file's bytes into the Actions panel (the panel menu's Load Actions…).
 pub fn load_bytes(app: &mut PhotocraftApp, name: &str, bytes: &[u8]) -> Result<Value, String> {
-    let r = app.run("actions.load", source(name, bytes))?;
+    load_source(app, name, source(name, bytes))
+}
+
+/// Import one set and reveal its first action, for both native paths and browser contents.
+fn load_source(app: &mut PhotocraftApp, name: &str, params: Value) -> Result<Value, String> {
+    let r = app.run("actions.load", params)?;
     let n = r["actions"].as_array().map_or(0, Vec::len) as u64;
     let unsupported = r["unsupported"].as_array().map_or(0, Vec::len);
     let shown = crate::file_open::display_name(name);
@@ -499,8 +569,82 @@ pub fn load_bytes(app: &mut PhotocraftApp, name: &str, bytes: &[u8]) -> Result<V
     Ok(r)
 }
 
+/// Load every chosen action file in order, retaining failures and unsupported-step warnings.
 fn load_dialog(app: &mut PhotocraftApp) -> Result<Value, String> {
-    app.pick_file_bytes_filtered(&["atn"], |app, name, bytes| load_bytes(app, &name, &bytes))
+    let initial_dir = crate::file_dialog::last_used_dir(&app.ui.recent_files);
+    app.ask_file(FileDialogRequest::Open { multiple: true, initial_dir, extensions: Some(vec!["atn".into()]) }, |app, answer| {
+        let files: Vec<_> = match answer {
+            FileDialogAnswer::Paths(paths) => paths.into_iter().map(|name| (name, None)).collect(),
+            FileDialogAnswer::Contents(name, bytes) => vec![(name, Some(bytes))],
+            FileDialogAnswer::ContentsMany(files) => files.into_iter().map(|(name, bytes)| (name, Some(bytes))).collect(),
+            _ => return Err("the file dialog gave an unexpected answer".into()),
+        };
+        let count = files.len();
+        if count == 0 {
+            return Err(crate::file_dialog::CANCELLED.into());
+        }
+        let mut loaded = 0usize;
+        // What the panel holds afterwards, per set name: `actions.load` replaces a set of the same
+        // name, so a later file's set takes the earlier one's place (and its counts).
+        let mut sets: Vec<(String, String, usize, usize)> = Vec::new(); // set, file, actions, unsupported
+        let mut replaced = Vec::new();
+        let mut errors = Vec::new();
+        let mut last = Value::Null;
+        for (name, bytes) in files {
+            // Native paths go through the engine's size check before reading the file.
+            let params = match bytes {
+                Some(bytes) => source(&name, &bytes),
+                None => json!({"path": name}),
+            };
+            match load_source(app, &name, params) {
+                Ok(r) => {
+                    loaded += 1;
+                    let shown = crate::file_open::display_name(&name);
+                    let set = r["set"].as_str().unwrap_or_default().to_string();
+                    let n = r["actions"].as_array().map_or(0, Vec::len);
+                    let unsupported = r["unsupported"].as_array().map_or(0, Vec::len);
+                    if let Some(entry) = sets.iter_mut().find(|e| e.0 == set) {
+                        replaced.push(crate::i18n::fmt(
+                            tl!("{set} from {file} replaced the one from {earlier}"),
+                            &[("file", &shown), ("earlier", &entry.1), ("set", &set)],
+                        ));
+                        *entry = (set, shown, n, unsupported);
+                    } else {
+                        sets.push((set, shown, n, unsupported));
+                    }
+                    last = r;
+                }
+                Err(e) => errors.push(format!("{}: {e}", crate::file_open::display_name(&name))),
+            }
+        }
+        if count == 1 {
+            return match errors.pop() {
+                Some(e) => Err(e),
+                None => Ok(last),
+            };
+        }
+        let actions = sets.iter().fold(0usize, |sum, e| sum.saturating_add(e.2));
+        let unsupported = sets.iter().fold(0usize, |sum, e| sum.saturating_add(e.3));
+        let lang = crate::i18n::current();
+        let files = crate::i18n::trn(lang, loaded as u64, "{n} action file loaded", "{n} action files loaded");
+        let mut notes = vec![crate::i18n::trn(lang, actions as u64, "{n} action", "{n} actions")];
+        if unsupported > 0 {
+            notes.push(crate::i18n::trn(lang, unsupported as u64, "{n} step has no PhotoCraft equivalent yet", "{n} steps have no PhotoCraft equivalent yet"));
+        }
+        notes.extend(replaced);
+        if !errors.is_empty() {
+            let failed = crate::i18n::trn(lang, errors.len() as u64, "{n} file could not be loaded: {errors}", "{n} files could not be loaded: {errors}");
+            notes.push(crate::i18n::fmt(&failed, &[("errors", &errors.join("; "))]));
+        }
+        let template = "{message} ({note})";
+        let summary = crate::i18n::fmt(tl!(template), &[("message", &files), ("note", &notes.join("; "))]);
+        if !errors.is_empty() {
+            return Err(summary);
+        }
+        app.ui.status = summary;
+        app.ui.status_error = false;
+        Ok(json!({"files": loaded, "actions": actions, "unsupported": unsupported}))
+    })
 }
 
 /// Save Actions…: the selected action's set (every action of it), else the selected set folder,
@@ -681,12 +825,27 @@ pub(crate) fn suspended_guard(app: &PhotocraftApp, id: &str) -> Result<(), Strin
 
 /// A step dialog's command failed: the action ends there.
 pub fn abandoned(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Value>) {
-    let record = fields.get(RESUME).and_then(|t| app.paused_playbacks.take(t)).and_then(|p| p.record);
+    let paused = fields.get(RESUME).and_then(|t| app.paused_playbacks.take(t));
+    let record = paused.and_then(|p| {
+        drop(p.history);
+        p.record
+    });
+    actions_cmds::finish_pending_history(&mut app.session);
     restore_recording(app, record.as_ref());
 }
 
 /// The automation gate a session installs ([`photocraft_engine::Session::authorize`]).
 type Gate = fn(&str, &Value) -> photocraft_engine::Result<()>;
+
+/// A function-pointer dispatch gate cannot carry two different policies into nested jobs.
+/// Changed gates and distinct simultaneous Session/service gates both end this continuation;
+/// hosts that need both policies must supply one composed gate at both boundaries.
+fn continuation_gate(captured: Option<Gate>, live: Option<Gate>) -> Result<Option<Gate>, String> {
+    if captured.zip(live).is_some_and(|(before, now)| !std::ptr::fn_addr_eq(before, now)) {
+        return Err("the authorization context changed or uses policies that cannot be combined for this paused action".into());
+    }
+    Ok(live.or(captured))
+}
 
 /// A playback paused at a step dialog: the action and step it continues from, and the gate it
 /// was playing under (`None` for one a person started).
@@ -701,6 +860,7 @@ pub(crate) struct PausedPlayback {
     /// box, automation), which end the call through `resume`, `abandoned` or `stopped`, so the
     /// recording comes back exactly once.
     record: Option<Value>,
+    history: Option<actions_cmds::ActionHistoryContinuation>,
     /// The actions still to play after this one, as they were when Play started a whole set.
     /// Actions have no id, so the whole action stands in for one: an action deleted and made again
     /// under the same name, or edited, while the dialog is open no longer matches.
@@ -708,6 +868,12 @@ pub(crate) struct PausedPlayback {
     /// The steps that Play ran before this pause (earlier actions of the set, and this one's
     /// steps before the dialog), so the final count covers the whole Play.
     ran: u64,
+    /// The document a pause at Check Spelling was playing on. That dialog doesn't block the
+    /// document tabs, so Done ([`resume_spelling`]) continues only on this document.
+    doc: Option<photocraft_doc::DocId>,
+    /// An implicit filter/adjustment step resolves this active layer at the pause. The outer Option marks
+    /// that binding even when there was no active layer; explicit-layer and other dialogs omit it.
+    filter_receiver: Option<Option<photocraft_doc::LayerId>>,
 }
 
 /// The paused playbacks, by the token their dialog carries. The dialog's fields hold only the
@@ -719,15 +885,121 @@ pub(crate) struct PausedPlaybacks {
 }
 
 impl PausedPlaybacks {
+    /// Allocate an opaque token retaining the action, resume position and captured authorization gate.
     fn pause(&mut self, action: String, from: usize, gate: Option<Gate>) -> u64 {
         self.last = self.last.wrapping_add(1);
-        self.paused.insert(self.last, PausedPlayback { action, from, gate, record: None, then: Vec::new(), ran: 0 });
+        self.paused
+            .insert(self.last, PausedPlayback { action, from, gate, record: None, history: None, then: Vec::new(), ran: 0, doc: None, filter_receiver: None });
         self.last
     }
 
+    /// Consume the continuation named by a numeric dialog token; malformed or expired tokens identify no playback.
     fn take(&mut self, token: &Value) -> Option<PausedPlayback> {
         token.as_u64().and_then(|token| self.paused.remove(&token))
     }
+}
+
+/// Whether a dialog command's `target` belongs to the document rather than to a layer: alpha
+/// channels and Quick Mask do; masks and colour components still belong to a layer.
+fn document_target(params: &Value) -> bool {
+    params.get("target").is_some_and(|target| target.as_str() == Some("quickMask") || target.get("channel").and_then(Value::as_u64).is_some())
+}
+
+/// Admit the final dialog command before resuming history or starting a worker. The captured
+/// policy judges the edited parameters; a current live gate still governs dispatch and nested
+/// work. With no live gate, reinstall the captured gate for job admission and rendering.
+pub(crate) fn run_step_dialog(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Value>, command: &str, params: Value) -> Result<Value, String> {
+    let Some(token) = fields.get(RESUME) else { return app.run(command, params) };
+    let token = token.as_u64().ok_or("this dialog doesn't belong to a paused action")?;
+    let paused = app.paused_playbacks.paused.get(&token).ok_or("this dialog doesn't belong to a paused action")?;
+    if let Some(receiver) = paused.filter_receiver
+        && !document_target(&params)
+        && app.session.active().and_then(|st| st.active_layer) != receiver
+    {
+        return Err("the paused command's receiver changed while its dialog was open".into());
+    }
+    let captured = paused.gate;
+    let saved = app.session.authorize;
+    let service = if app.automation_input { app.services.automation_authorize } else { None };
+    for authorize in [captured, saved, service].into_iter().flatten() {
+        authorize(command, &params).map_err(|e| e.to_string())?;
+    }
+    if app.automation_input
+        && let Some(authorize) = app.services.automation_command.as_ref()
+    {
+        authorize(command, &params)?;
+    }
+    let gate = continuation_gate(captured, continuation_gate(saved, service)?)?;
+    prepare_history(app, fields)?;
+    app.session.authorize = gate;
+    let result = app.run(command, params);
+    app.session.authorize = saved;
+    result
+}
+
+/// Bind the dialog's own edit to its suspended action before it runs or starts a worker.
+pub(crate) fn prepare_history(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Value>) -> Result<(), String> {
+    let Some(token) = fields.get(RESUME).and_then(Value::as_u64) else { return Ok(()) };
+    let history = app.paused_playbacks.paused.get_mut(&token).ok_or("this dialog doesn't belong to a paused action")?.history.take();
+    if let Some(history) = history
+        && let Err(e) = history.resume(&mut app.session)
+    {
+        if let Some(paused) = app.paused_playbacks.paused.get_mut(&token) {
+            paused.history = Some(history);
+        }
+        return Err(e.to_string());
+    }
+    Ok(())
+}
+
+/// Check Spelling owns each correction only while it runs; the open window owns a bound token.
+pub(crate) fn spelling_change(app: &mut PhotocraftApp, params: Value) -> Result<Value, String> {
+    let Some(token) = app.ui.type_panels.spell.as_ref().and_then(|dialog| dialog.resume) else {
+        return app.run("edit.checkSpelling", params);
+    };
+    let paused = app.paused_playbacks.paused.get(&token).ok_or("this dialog doesn't belong to a paused action")?;
+    if paused.doc.is_some_and(|doc| Some(doc) != app.session.active().map(|state| state.doc.id)) {
+        return Err("the active document changed while Check Spelling was open".into());
+    }
+    let history = paused.history.clone();
+    let fields = serde_json::Map::from_iter([(RESUME.to_string(), json!(token))]);
+    let result = run_step_dialog(app, &fields, "edit.checkSpelling", params);
+    // A rejected admission did not resume this continuation. Keep the original token intact.
+    if app.paused_playbacks.paused.get(&token).is_some_and(|paused| paused.history.is_some()) {
+        return result;
+    }
+    if let Some(history) = history {
+        match history.suspend_after_edit(&mut app.session) {
+            Ok(history) => {
+                let paused = app.paused_playbacks.paused.get_mut(&token).ok_or("the spelling continuation ended during its correction")?;
+                paused.history = Some(history);
+            }
+            Err(error) => {
+                if let Some(paused) = app.paused_playbacks.paused.get_mut(&token) {
+                    paused.history = Some(history);
+                }
+                return Err(error.to_string());
+            }
+        }
+    }
+    result
+}
+
+/// Check Spelling's Done for the action paused at its step: the action continues when the document
+/// it was playing on is still the active one, and otherwise ends there with the reason in the
+/// status bar. Returns `Ok` when nothing failed.
+pub(crate) fn resume_spelling(app: &mut PhotocraftApp, token: u64) -> Result<(), String> {
+    let fields = serde_json::Map::from_iter([(RESUME.to_string(), json!(token))]);
+    let Some((from, doc)) = app.paused_playbacks.paused.get(&token).map(|p| (p.from, p.doc)) else {
+        return resume(app, &fields);
+    };
+    if doc.is_none() || doc == app.session.active().map(|d| d.doc.id) {
+        return resume(app, &fields);
+    }
+    abandoned(app, &fields);
+    let error = "the active document changed while Check Spelling was open";
+    report_play(app, &json!({"failed": {"step": from.saturating_sub(1), "id": "edit.checkSpelling", "error": error}}));
+    Err(error.into())
 }
 
 /// A step dialog confirmed: continue the action after it (`dialogs::confirm` calls this).
@@ -740,10 +1012,8 @@ pub fn resume(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Value>) 
         return Err("this dialog doesn't belong to a paused action".into());
     };
     let owner = paused.record.clone();
-    // The dialog's command may run as a background job; the next step needs its result.
-    if let Some(doc) = app.session.active().map(|d| d.doc.id)
-        && let Some(job) = app.session.job_on(doc)
-        && let Err(e) = app.session.wait_job(job.id)
+    if let Some(history) = &paused.history
+        && let Err(e) = history.resume(&mut app.session)
     {
         restore_recording(app, owner.as_ref());
         let template = "Action playback failed: {error}";
@@ -751,15 +1021,49 @@ pub fn resume(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Value>) 
         app.ui.status_error = true;
         return Err(e.to_string());
     }
-    let params = json!({"action": paused.action, "from": paused.from});
+    // The dialog's command may run as a background job; the next step needs its result.
+    if let Some(doc) = app.session.active().map(|d| d.doc.id)
+        && let Some(job) = app.session.job_on(doc)
+        && let Err(e) = app.session.wait_job(job.id)
+    {
+        actions_cmds::finish_pending_history(&mut app.session);
+        restore_recording(app, owner.as_ref());
+        let template = "Action playback failed: {error}";
+        app.ui.status = crate::i18n::fmt(tl!(template), &[("error", &e.to_string())]);
+        app.ui.status_error = true;
+        return Err(e.to_string());
+    }
     let saved = app.session.authorize;
-    app.session.authorize = paused.gate.or(saved);
+    let service = if app.automation_input { app.services.automation_authorize } else { None };
+    let remaining = !paused.then.is_empty()
+        || app
+            .session
+            .actions
+            .list
+            .iter()
+            .find(|action| action.name == paused.action)
+            .is_some_and(|action| action.enabled_steps().any(|(i, _)| i >= paused.from));
+    let gate =
+        if remaining { continuation_gate(saved, service).and_then(|live| continuation_gate(paused.gate, live)) } else { Ok(saved.or(service).or(paused.gate)) };
+    let gate = match gate {
+        Ok(gate) => gate,
+        Err(error) => {
+            // The admitted dialog edit has completed; preserve it while rejecting the tail.
+            actions_cmds::finish_pending_history(&mut app.session);
+            restore_recording(app, owner.as_ref());
+            app.ui.status = error.clone();
+            app.ui.status_error = true;
+            return Err(error);
+        }
+    };
+    let params = json!({"action": paused.action, "from": paused.from});
+    app.session.authorize = gate;
     let mut played = play_owned(app, &params, owner);
     // Paused again at a later dialog of the same action (not of one it calls, which resumes
     // alone): that dialog carries the rest of the set.
     if let Ok(v) = &played
-        && let Some(dialog) = v.get("paused").and_then(|p| p.get("dialog")).and_then(Value::as_u64)
-        && let Some(token) = app.ui.dialog_mut(dialog).and_then(|d| d.fields.get(RESUME)).and_then(Value::as_u64)
+        && let Some(dialog) = v.get("paused").and_then(waiting_dialog)
+        && let Some(token) = paused_token(app, dialog)
         && let Some(entry) = app.paused_playbacks.paused.get_mut(&token)
         && entry.action == paused.action
     {
