@@ -34,6 +34,18 @@ fn roundtrip(d: &photocraft_doc::Document) -> (PsdFile, photocraft_doc::Document
 }
 
 #[test]
+fn multichannel_names_decode_mac_roman_unless_unicode_is_present() {
+    let mut f = file(8);
+    f.resources.push(ImageResource::new(1006, b"\x04caf\x8e\x05Alpha".to_vec()));
+    let opened = import("multi.psd", &f.to_bytes().unwrap()).unwrap().document;
+    assert_eq!(opened.channels.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["café", "Alpha"]);
+    assert!(opened.channels[0].spot.is_some());
+    f.resources.push(ImageResource::new(1045, vec![0, 0, 0, 1, 0, b'Z', 0, 0, 0, 1, 0, b'Y']));
+    let opened = import("multi.psd", &f.to_bytes().unwrap()).unwrap().document;
+    assert_eq!(opened.channels.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["Z", "Y"]);
+}
+
+#[test]
 fn alpha_type_channels_import_as_alpha_and_round_trip() {
     for depth in [8, 16] {
         let f = file(depth);

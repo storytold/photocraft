@@ -597,7 +597,7 @@ impl PsdFile {
     }
 
     /// The alpha channel names: the Unicode names (resource 1045), else the Pascal names (1006)
-    /// older writers and psd-tools store alone. Empty when the file names no channel.
+    /// older writers and psd-tools store alone, decoded as MacRoman. Empty when the file names no channel.
     pub fn alpha_channel_names(&self) -> Vec<String> {
         let mut names = Vec::new();
         if let Some(r) = self.resource(1045) {
@@ -614,7 +614,7 @@ impl PsdFile {
             let mut at = 0usize;
             while let Some(&len) = r.data.get(at) {
                 let Some(name) = r.data.get(at + 1..at + 1 + usize::from(len)) else { break };
-                names.push(String::from_utf8_lossy(name).into_owned());
+                names.push(crate::codepage::decode(name, encoding_rs::MACINTOSH));
                 at += 1 + usize::from(len);
             }
         }
@@ -1119,6 +1119,16 @@ mod write_tests {
         cut.resources.push(ImageResource::new(1006, vec![9, b'a']));
         assert!(cut.alpha_channel_names().is_empty());
         assert!(cut.merged_has_alpha());
+    }
+
+    #[test]
+    fn pascal_channel_names_use_mac_roman_and_unicode_takes_precedence() {
+        let mut file = testgen::small(Version::Psd, Compression::Raw);
+        file.resources.retain(|r| !matches!(r.id, 1006 | 1045));
+        file.resources.push(ImageResource::new(1006, b"\x04caf\x8e\x03x".to_vec()));
+        assert_eq!(file.alpha_channel_names(), ["café"]);
+        file.resources.push(ImageResource::new(1045, vec![0, 0, 0, 1, 0, b'Z']));
+        assert_eq!(file.alpha_channel_names(), ["Z"]);
     }
 
     /// A positive layer count plus a merged-transparency marker still makes the first extra

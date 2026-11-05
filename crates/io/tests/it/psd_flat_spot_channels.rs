@@ -87,6 +87,19 @@ fn flat_file_keeps_its_spot_and_alpha_channels() {
     }
 }
 
+#[test]
+fn flat_extra_channel_names_decode_mac_roman_unless_unicode_is_present() {
+    let doc = flat_doc(ColorMode::Rgb, SampleType::U8);
+    let mut file = without_layer_records(&doc);
+    file.resources.iter_mut().find(|r| r.id == 1006).unwrap().data = b"\x04caf\x8e\x07Alpha 1".to_vec();
+    let opened = import("flat.psd", &file.to_bytes().unwrap()).unwrap().document;
+    assert_eq!(opened.channels[0].name, "light teal", "Unicode resource takes precedence");
+    file.resources.retain(|r| r.id != 1045);
+    let opened = import("flat.psd", &file.to_bytes().unwrap()).unwrap().document;
+    assert_eq!(opened.channels.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["café", "Alpha 1"]);
+    assert!(opened.channels[0].spot.is_some());
+}
+
 /// A flat file from a writer that names no channel (a plain RGBA file) still reads its extra
 /// channel as the merged transparency, and so does one whose first name is "Transparency".
 #[test]
