@@ -144,6 +144,10 @@ fn layered_psd_is_refused_before_decode_without_changing_the_document() {
     let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::U8, true);
     assert!(photocraft_engine::smart_cmds::source_image("layers.psd", &bytes, fmt).is_err());
 
+    let err = s.execute("file.placeEmbedded", json!({"path": path})).unwrap_err().to_string();
+    assert!(!err.contains("Purge"), "freeing memory cannot help an unbounded source: {err}");
+    assert!(err.contains("flatten"), "{err}");
+
     // This budget passed the old canvas-only estimate even though the layers retain more.
     room.set(Some(headroom::RESERVE + budget));
     for cmd in ["file.placeEmbedded", "file.placeLinked"] {

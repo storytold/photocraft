@@ -43,7 +43,10 @@ pub fn ensure_for_save(what: &str, need: u64) -> Result<()> {
 fn check(what: &str, need: u64, advice: &str) -> Result<()> {
     photocraft_raster::headroom::ensure(need).map_err(|_| {
         if need == u64::MAX {
-            EngineError::Other(format!("Not enough memory to safely {what}: the required memory cannot be bounded. {advice}"))
+            // Freeing memory cannot satisfy an unbounded need, so the retry advice would mislead.
+            EngineError::Other(format!(
+                "Not enough memory to safely {what} in the browser: the file has layers or a format whose memory use cannot be bounded in advance. Open it in the desktop app, or flatten it to a plain 8-bit RGB or grayscale image first."
+            ))
         } else {
             EngineError::Other(format!("Not enough memory to {what} (it needs about {} MB). {advice}", mb(need)))
         }
