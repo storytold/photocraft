@@ -561,11 +561,12 @@ mod tests {
             ([0.0, 0.0, 0.0, 1.0], "lighten", 0.5),
         ] {
             let mut s = two_states(first, [0.5, 0.5, 0.5, 1.0]);
+            let outside = rgba(&s, 24, 1);
             stroke(&mut s, json!({"state": 1, "mode": mode})).unwrap();
             let v = rgba(&s, 24, 16);
             assert!((v[0] - centre).abs() < 0.02, "{mode} from {first:?}: {v:?}");
             // Outside the stroke the layer is untouched.
-            assert!((rgba(&s, 24, 1)[0] - 0.5).abs() < 1.0e-6);
+            assert_eq!(rgba(&s, 24, 1), outside, "{mode} from {first:?}");
         }
     }
 

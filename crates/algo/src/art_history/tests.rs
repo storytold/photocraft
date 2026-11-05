@@ -434,7 +434,10 @@ fn long_curls_space_wider_and_turn_less_per_dab() {
 /// layer (`reference`), not with the buffer: an unchanged layer still paints nothing.
 #[test]
 fn tolerance_reads_the_reference_not_the_stroke_buffer() {
-    let (w, h, src, _, dab) = fixture(4);
+    // A uniform history state: the dab's rotated read sees the same colour everywhere, so the
+    // only difference left is between the history state and what Tolerance compares it with.
+    let (w, h, _, _, dab) = fixture(4);
+    let src = fill(w, h, 4, |_, _, c| if c == 3 { 1.0 } else { 0.3 });
     let layer = src.clone();
     for (reference, paints) in [(None, true), (Some(layer.as_slice()), false)] {
         let mut buffer = vec![0.0f32; w * h * 4];
