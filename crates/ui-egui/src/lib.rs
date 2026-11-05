@@ -29,6 +29,7 @@ pub mod canvas;
 pub mod control;
 pub mod dialogs;
 pub mod dock;
+pub(crate) mod edit_session;
 pub mod file_dialog;
 pub mod file_open;
 pub mod frame_stages;
@@ -152,6 +153,7 @@ pub use dialogs::fill_ui;
 pub use dialogs::filter_dialog;
 use dialogs::filter_preview_ui;
 pub use dialogs::gallery_ui;
+use dialogs::guide_edit;
 pub use dialogs::guide_layout_ui;
 pub use dialogs::history_options_ui;
 pub use dialogs::jpeg_options_ui;
@@ -508,6 +510,7 @@ pub struct PhotocraftApp {
     pub(crate) proxy_uploaded: Option<(DocId, u64)>,
     /// Selection outline cache: (doc, revision, segments).
     /// Live filter preview (proxy document with the filter applied).
+    pub(crate) guide_edit: Option<guide_edit::Draft>,
     pub(crate) filter_preview: Option<filter_dialog::FilterPreview>,
     pub(crate) smart_filter_targets: smart_filter_dialog::Targets,
     #[cfg(not(target_arch = "wasm32"))]
@@ -600,6 +603,8 @@ pub struct PhotocraftApp {
     /// The filter a "Rasterize?" prompt answered for, run after the dialog closes, where the
     /// egui context is available again (rasterize_prompt).
     pub(crate) pending_after_prompt: Option<(String, serde_json::Value)>,
+    /// A command clicked while Free Transform commits in the background, run when it lands.
+    pub(crate) after_transform_commit: Option<(String, serde_json::Value)>,
     /// Last mirrored or imported OS image; this can predate the current internal copy.
     os_clip_sig: Option<u64>,
     /// Last observed SVG bytes, to distinguish an unchanged OS source from a newer internal copy.
@@ -792,7 +797,12 @@ mod tool_shortcut_tests;
 mod pixel_aspect_tests;
 
 #[cfg(test)]
+mod transform_controls_pointer_tests;
+#[cfg(test)]
 mod transform_fx_tests;
+
+#[cfg(test)]
+mod transform_commit_click_tests;
 
 #[cfg(test)]
 mod layer_props_ui_tests;
@@ -808,6 +818,9 @@ mod transform_rotate_snap_tests;
 
 #[cfg(test)]
 mod transform_type_tests;
+
+#[cfg(test)]
+mod transform_reference_point_tests;
 
 #[cfg(test)]
 mod transform_several_tests;
