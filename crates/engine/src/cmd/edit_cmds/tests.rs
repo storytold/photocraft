@@ -1844,3 +1844,29 @@ fn a_paste_from_off_the_boards_beside_a_layer_on_a_board_stays_visible() {
     assert_eq!(board_of_active(&s), Some(b));
     assert_eq!(active_bounds(&s), Rect::new(215, 35, 225, 45));
 }
+
+/// Paste into a mask on another artboard lands where a layer paste does (#10538 follow-up): at
+/// the same spot on the board, moved by the offset between the boards' origins, for Paste and
+/// Paste in Place alike. `paste_offset` alone left it at the old spot on board A (in place) or in
+/// the middle of the view.
+#[test]
+fn paste_into_a_mask_on_another_artboard_keeps_the_place_on_the_board() {
+    for (cmd, params) in [
+        ("edit.paste", json!({"target": "mask"})),
+        ("edit.paste", json!({"target": "mask", "center": [500.0, 500.0]})),
+        ("edit.pasteSpecial.pasteInPlace", json!({"target": "mask"})),
+    ] {
+        let (mut s, red, _a, b) = two_boards();
+        s.execute("layer.select", json!({"layer": red.0})).unwrap();
+        s.execute("edit.copy", json!({})).unwrap();
+        let lum = luminosity(&s, red, 15, 15);
+        let m = s.execute("layer.new.layer", json!({"name": "m"})).unwrap()["layer"].as_u64().map(LayerId).unwrap();
+        s.execute("layer.moveTo", json!({"layer": m.0, "target": b.0, "position": "into"})).unwrap();
+        s.execute("layer.select", json!({"layer": m.0})).unwrap();
+        s.execute("layer.layerMask.hideAll", json!({})).unwrap();
+        let r = s.execute(cmd, params.clone()).unwrap();
+        assert_eq!(r["offset"], json!([190, 10]), "{cmd} {params}: moved by B's origin minus A's");
+        assert!((mask_at(&s, m, 205, 25) - lum).abs() < 2.0 / 255.0, "{cmd} {params}: the same spot on B");
+        assert_eq!(mask_at(&s, m, 15, 15), 0.0, "{cmd} {params}: not at the old spot on A");
+    }
+}
