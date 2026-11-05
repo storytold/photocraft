@@ -15,7 +15,8 @@ fn lang(code: &str) -> Lang {
     Lang::from_code(code).expect("registered language")
 }
 
-/// Regional preferences resolve to their registered base catalog across all requested languages.
+/// Regional locale tags (`fr-CA`, `ko-KR`, `bs-BA` …) resolve to their registered catalog, as
+/// a preference and as a system tag.
 #[test]
 fn requested_languages_resolve_regional_preferences() {
     for (tag, code) in [
@@ -30,6 +31,7 @@ fn requested_languages_resolve_regional_preferences() {
         ("vi-VN", "vi"),
         ("sr-RS", "sr"),
         ("az-Latn-AZ", "az"),
+        ("bs-BA", "bs"),
     ] {
         assert_eq!(Lang::from_pref(tag), lang(code), "{tag}");
     }

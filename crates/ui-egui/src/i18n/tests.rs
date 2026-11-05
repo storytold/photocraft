@@ -330,7 +330,7 @@ fn azerbaijani_keeps_context_placeholders_and_command_names() {
     assert!(fmt(tr(lang, "About {app}"), &[("app", "PhotoCraft")]).contains("PhotoCraft"));
 }
 
-/// Every menu label and submenu segment has a lookup entry in the Azerbaijani catalog.
+/// Every menu label, submenu segment and intentional command-ID override has a catalog entry.
 #[test]
 fn azerbaijani_covers_every_menu_label_and_path() {
     let lang = Lang::from_code("az").expect("az registered");
@@ -339,6 +339,34 @@ fn azerbaijani_covers_every_menu_label_and_path() {
             assert!(lang.catalog().plain(source).is_some(), "az: missing menu translation for {source:?}");
         }
     }
+    for id in
+        ["edit.clear", "edit.purge.undo", "edit.stroke", "edit.transform.scale", "file.close", "filter.sharpen.sharpen", "layer.layerMask.apply", "select.all"]
+    {
+        assert!(lang.catalog().id(id).is_some(), "az: missing @id translation for {id:?}");
+    }
+}
+
+/// Bosnian locales, with or without region, script or encoding, select the Latin catalog.
+#[test]
+fn bosnian_resolves_locales_and_preferences() {
+    let bs = Lang::from_code("bs").expect("bs registered");
+    assert_eq!(bs.name(), "Bosanski");
+    for tag in ["bs", "BS", "bs-BA", "bs_BA", "bs_BA.UTF-8", "bs-Latn", "bs-Latn-BA", "bs-Cyrl-BA", "bs_BA@cyrillic"] {
+        assert_eq!(lang_from_tag(tag), Some(bs), "{tag}");
+        assert_eq!(Lang::from_pref(tag), bs, "{tag}");
+    }
+    assert_ne!(lang_from_tag("hr-HR"), Some(bs), "Croatian is not Bosnian");
+}
+
+/// Bosnian counts: 1, 21, 101 are `one`; 2–4, 22–24 (not 12–14) `few`; everything else `other`.
+#[test]
+fn bosnian_plural_rule_handles_teens_and_compound_counts() {
+    let bs = Lang::from_code("bs").expect("bs registered");
+    let counts = [0, 1, 2, 4, 5, 11, 12, 14, 21, 22, 25, 101, 111, 112, 122];
+    let forms: Vec<usize> = counts.into_iter().map(bs.0.plural).collect();
+    assert_eq!(forms, [2, 0, 1, 1, 2, 2, 2, 2, 0, 1, 2, 0, 2, 2, 1]);
+    assert_eq!(trn(bs, 3, "{n} pixel", "{n} pixels"), "3 piksela");
+    assert_eq!(trn(bs, 5, "{n} document", "{n} documents"), "5 dokumenata");
 }
 
 #[test]

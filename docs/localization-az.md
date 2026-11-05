@@ -2,12 +2,13 @@
 
 Azerbaijani (Latin script) is offered as **Azərbaycanca** (`az`). Regional preferences and
 system locales such as `az-AZ`, `az_Latn_AZ.UTF-8` and `AZ-LATN-AZ` use the existing locale
-matcher. English remains the source and fallback. The runtime registry has 28 languages
+matcher. English remains the source and fallback. The runtime registry has 29 languages
 including English; this PR adds only Azerbaijani.
 
-The catalog contains 4,566 entries, including 32 plural messages, 118 contextual entries and
-eight command-ID overrides. It covers the existing catalogs' dynamic-label union and all
-2,204 keys from the source coverage scan. Catalog completeness does not establish linguistic
+The catalog contains 4,595 entries, including 32 plural messages, 118 contextual entries and
+eight command-ID overrides. The 2026-11-05 merge added the 29 new OpenType menu keys from
+current `main`; all menu labels and the eight intentional command-ID overrides are checked.
+The 2026-11-01 source scan covered 2,204/2,204 keys. Catalog completeness does not establish linguistic
 quality or include untranslated engine errors.
 
 ## Terminology and provenance
@@ -44,21 +45,22 @@ hundreds, thousands and `u64::MAX`.
 
 ## Validation
 
-The Azerbaijani-only revision was checked on 2026-11-01, using Rust 1.99.1/MSVC on Windows x64:
+The merged revision was checked on 2026-11-05 with Rust 1.99.1/MSVC on Windows x64:
 
-- All six Azerbaijani regression tests passed: locale tags, fallback, contexts, menu coverage,
-  plurals, alphabet glyphs, live switching and actual save/load persistence across restart.
-- All 38 `i18n::tests::` unit checks passed, including catalog consistency and the test comparing
-  the packed catalogs with the source files.
-- The native application and offscreen snapshot tool built with locked dependencies. Full
-  workspace formatting, Clippy with `--all-targets -- -D warnings`, layering, wasm (24 crates
-  plus optional HEIF) and catalog coverage passed. Azerbaijani covered 2,204/2,204 source keys.
-- The editor and Interface Preferences were rendered offscreen at 1440 × 900 logical pixels,
-  1.5× scale, using `--safe-gpu`, and both screenshots were visually inspected.
+- All six Azerbaijani regressions passed, including actual preference persistence, the full
+  menu tree and all eight intentional command-ID overrides.
+- All 40 `i18n::tests::` unit checks passed, including the preserved Bosnian tests and
+  packed-catalog/source consistency. These overlap with four Azerbaijani regressions.
+- Workspace formatting, Clippy (`--all-targets -- -D warnings`), layering (31 crates),
+  wasm (24 crates plus optional HEIF) and the offscreen snapshot build passed.
+- Current source coverage is 2,248/2,321 keys (96.85%); 73 newer strings fall back to English.
+  The 666 menu-catalog keys and eight command-ID overrides are present.
+- Editor and Interface Preferences were rendered at 1440 × 900 logical pixels, 1.5× scale,
+  using `--safe-gpu`, and both screenshots were visually inspected.
 
-**Full-suite validation remains incomplete.** The full UI test run terminated both unit and
-integration test processes with `0xc0000005` (`STATUS_ACCESS_VIOLATION`), also with one test
-thread. The full i18n subset finished with 59 passed and eight existing CJK/Arabic missing-glyph
-failures without the optional craft-fonts input; the six Azerbaijani tests passed. No full-suite
-success is claimed. Native-speaker review remains pending. Offscreen CPU captures do not
-establish hardware-GPU or native window/input acceptance.
+**The full test gate is not green.** The complete i18n subset finished with 61 passed and
+eight CJK/Arabic missing-glyph failures without the optional craft-fonts input. All Azerbaijani
+and Bosnian checks passed. The full UI unit and integration processes again terminated with
+`0xc0000005` (`STATUS_ACCESS_VIOLATION`), with one test thread; full-suite success is not established.
+Native-speaker review remains pending. CPU captures do not establish hardware-GPU or native
+window/input acceptance.
