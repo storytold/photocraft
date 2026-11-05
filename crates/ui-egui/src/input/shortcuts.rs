@@ -906,9 +906,9 @@ fn select_tool_by_key(app: &mut PhotocraftApp, ctx: &egui::Context, pressed: &im
         if cycle_shift || pressed(k) {
             let before = app.ui.tool;
             let mut group: Vec<Tool> = Tool::ALL.iter().copied().filter(|x| x.key() == t.key() && crate::tool_shortcuts::uses_default(app, *x)).collect();
-            // With the Shift-switch preference, Shift+key steps in the toolbar flyout's order; with it off
-            // plain keys keep the `Tool::ALL` order.
-            if shift_switch {
+            // Shift+key (the cycle and the fallback to the group's first tool) uses the toolbar
+            // flyout's order; plain keys keep the `Tool::ALL` order.
+            if cycle_shift {
                 group.sort_by_key(|x| crate::panels::toolbar::toolbar_position(*x));
             }
             app.ui.tool = match group.iter().position(|x| *x == app.ui.tool) {

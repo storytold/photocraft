@@ -147,3 +147,18 @@ fn with_the_shift_switch_preference_off_plain_w_keeps_the_old_order() {
     }
     assert_eq!(seen, vec![Tool::QuickSelection, Tool::ObjectSelection, Tool::MagicWand]);
 }
+
+#[test]
+fn a_plain_w_from_outside_the_group_keeps_selecting_what_it_selected_before() {
+    let mut app = app();
+    app.ui.tool = Tool::Move;
+    let ctx = egui::Context::default();
+    let raw = egui::RawInput {
+        events: vec![egui::Event::Key { key: Key::W, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }],
+        ..Default::default()
+    };
+    ctx.begin_pass(raw);
+    crate::shortcuts::handle(&mut app, &ctx);
+    ctx.end_pass().textures_delta.clear();
+    assert_eq!(app.ui.tool, Tool::MagicWand, "the first W tool in Tool::ALL, not the first in the flyout");
+}
