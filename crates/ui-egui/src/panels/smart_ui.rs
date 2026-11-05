@@ -496,6 +496,7 @@ pub fn open_editor(app: &mut PhotocraftApp, ctx: &egui::Context, layer: u64, sm:
             return;
         }
     };
+    let mode = app.session.active().map_or(photocraft_doc::ColorMode::Rgb, |s| s.doc.mode);
     let Some(id) = crate::adjust_dialog::open(app, &f.command).or_else(|| {
         let id = crate::filter_dialog::has_dialog(&f.command).then(|| crate::filter_dialog::open(app, &f.command)).flatten()?;
         // The filter dialog opens on the user's last-used values; a recorded filter that lacks a
@@ -509,12 +510,31 @@ pub fn open_editor(app: &mut PhotocraftApp, ctx: &egui::Context, layer: u64, sm:
     };
     if let Some(d) = app.ui.dialog_mut(id) {
         d.fields.insert("__smartFilter".into(), target);
-        if let Value::Object(p) = &f.params {
-            for (k, v) in p {
-                if !k.starts_with("__") {
-                    d.fields.insert(k.clone(), v.clone());
+        // An adjustment dialog holds the kind's complete settings: show the ones the filter renders
+        // with, read as the engine reads the recorded params. Copying only the recorded keys would
+        // leave the others at the defaults (a monochrome Channel Mixer's gray row, a pencil Curves),
+        // and OK on the untouched dialog would change the image.
+        let adjustment = d
+            .fields
+            .get("__adjust")
+            .and_then(Value::as_str)
+            .and_then(|kind| photocraft_engine::adjust_params::from_params(kind, &f.params, None, mode).ok())
+            .map(|adj| photocraft_engine::adjust_params::to_params(&adj));
+        match (adjustment, &f.params) {
+            (Some(Value::Object(p)), _) => {
+                d.fields.retain(|k, _| k.starts_with("__"));
+                d.fields.extend(p);
+                // OK sets these complete settings, keys the editor drops included (`edit_command`).
+                d.fields.insert("__replace".into(), json!(true));
+            }
+            (_, Value::Object(p)) => {
+                for (k, v) in p {
+                    if !k.starts_with("__") {
+                        d.fields.insert(k.clone(), v.clone());
+                    }
                 }
             }
+            _ => {}
         }
     }
 }
