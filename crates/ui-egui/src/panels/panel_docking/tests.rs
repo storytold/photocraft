@@ -604,6 +604,18 @@ fn legacy_control_updates_authoritative_custom_visibility_and_selection_atomical
 }
 
 #[test]
+fn ui_set_opens_a_free_panel_with_or_without_a_theme_change() {
+    for request in [json!({"panels":{"brush_settings":true}}), json!({"panels":{"brush_settings":true},"theme":"studio"})] {
+        let mut app = app();
+        app.ui.theme = crate::theme::ThemeKind::ProMedium;
+        app.run("window.panel.float", json!({"panel":"properties"})).unwrap();
+        assert_eq!(control_set(&mut app, &egui::Context::default(), request.clone())["ok"], true, "{request}");
+        assert!(app.ui.panels.brush_settings, "{request}");
+        assert!(lay(&app).contains(&"brushSettings".into()), "{request}");
+    }
+}
+
+#[test]
 fn legacy_dock_width_is_consumed_by_custom_renderer_and_clamped_to_existing_range() {
     let mut app = app();
     app.run("window.panel.float", json!({"panel":"properties"})).unwrap();
@@ -763,6 +775,25 @@ fn actions_panel_menu_includes_load_and_save_actions() {
     assert!(menu.query_all_by_label("New Action…").count() > 0);
 }
 
+/// The Styles panel keeps its .asl library menu now that it docks (the floating window had it).
+#[test]
+fn styles_panel_menu_imports_and_exports_style_libraries() {
+    let mut ready = false;
+    let mut menu = Harness::builder().build_ui_state(
+        move |ui, app: &mut PhotocraftApp| {
+            if !ready {
+                PhotocraftApp::setup_context(ui.ctx(), crate::theme::ThemeKind::ProMedium);
+                ready = true;
+            }
+            panel_menu(app, ui, "styles");
+        },
+        self::app(),
+    );
+    menu.run_steps(2);
+    assert!(menu.query_all_by_label("Import Styles…").count() > 0);
+    assert!(menu.query_all_by_label("Export Styles…").count() > 0);
+}
+
 #[test]
 fn custom_workspace_saves_shared_layout_and_timeline_without_embedding_flags() {
     let mut app = app();
@@ -832,6 +863,102 @@ fn mixed_theme_and_legacy_selection_projects_the_selected_panel_in_the_new_theme
     assert_eq!(control_set(&mut app, &ctx, json!({"theme":"proMedium","dockTabs":{"color":0}}))["ok"], true);
     assert!(panel_active(lay(&app), "color"));
     assert_eq!(app.ui.dock_tabs.color, 0);
+}
+
+/// #4818: a panel that used to be a floating-only window (Brush Settings here) floats beside the
+/// canvas when first opened, groups or splits into the dock like any other panel, and reopens
+/// where it was closed.
+#[test]
+fn a_formerly_floating_only_panel_floats_first_then_docks_and_reopens_in_place() {
+    let mut app = app();
+    let tabs = app.ui.dock_tabs;
+    app.ui.panels.brush_settings = true;
+    reconcile(&mut app);
+    assert!(lay(&app).floating.iter().any(|w| w.panels().map(String::as_str).eq(["brushSettings"])));
+    assert_eq!(app.ui.dock_tabs, tabs, "opening it leaves the dock's selected tabs alone");
+    app.run("window.panel.move", json!({"panel":"brushSettings","anchor":"swatches"})).unwrap();
+    assert!(group_members(lay(&app), "swatches").contains(&"brushSettings".into()));
+    app.run("window.panel.move", json!({"panel":"brushSettings","anchor":"layers","zone":"top"})).unwrap();
+    let docked = lay(&app).clone();
+    assert_eq!(group_members(&docked, "brushSettings"), ["brushSettings"]);
+    assert!(docked.floating.is_empty());
+    app.run("window.panel.close", json!({"panel":"brushSettings"})).unwrap();
+    assert!(!app.ui.panels.brush_settings, "the dock's close button clears the module's flag");
+    app.ui.panels.brush_settings = true;
+    reconcile(&mut app);
+    assert_eq!(lay(&app), &docked, "F5 brings it back where it was");
+}
+
+/// Character Styles and Paragraph Styles were two tabs drawn inside one window; now they are two
+/// panels, open together or apart, and the Window menu toggles each on its own.
+#[test]
+fn character_and_paragraph_styles_are_separate_panels() {
+    let mut app = app();
+    let ctx = egui::Context::default();
+    crate::menus::invoke(&mut app, &ctx, "window.panel.characterStyles", json!({})).unwrap();
+    crate::menus::invoke(&mut app, &ctx, "window.panel.paragraphStyles", json!({})).unwrap();
+    reconcile(&mut app);
+    assert!(lay(&app).contains(&"characterStyles".into()) && lay(&app).contains(&"paragraphStyles".into()));
+    crate::menus::invoke(&mut app, &ctx, "window.panel.characterStyles", json!({})).unwrap();
+    reconcile(&mut app);
+    assert!(!lay(&app).contains(&"characterStyles".into()) && lay(&app).contains(&"paragraphStyles".into()));
+}
+
+/// A docked Brush Settings is part of the remembered workspace; a floating one still closes at
+/// launch (#3548). Free panels also round-trip through saved workspaces.
+#[test]
+fn free_panels_persist_with_the_workspace_and_only_a_floating_brush_settings_closes_at_launch() {
+    let ctx = egui::Context::default();
+    for docked in [true, false] {
+        let mut app = app();
+        app.ui.panels.brush_settings = true;
+        app.ui.presets_ui.styles = true;
+        reconcile(&mut app);
+        if docked {
+            app.run("window.panel.move", json!({"panel":"brushSettings","anchor":"layers","zone":"top"})).unwrap();
+        }
+        crate::dock::persist(&mut app, &ctx);
+        app.ui = Default::default();
+        crate::dock::restore(&mut app);
+        reconcile(&mut app);
+        assert_eq!(app.ui.panels.brush_settings, docked);
+        assert!(app.ui.presets_ui.styles, "Styles reopens with the workspace");
+        assert!(lay(&app).contains(&"styles".into()));
+    }
+}
+
+/// Scripts that asked for Brush Settings' old Brushes tab get the Brushes panel.
+#[test]
+fn the_old_brushes_tab_request_shows_the_brushes_panel() {
+    let mut app = app();
+    let ctx = egui::Context::default();
+    assert_eq!(control_set(&mut app, &ctx, json!({"brushTab":1}))["ok"], true);
+    assert!(lay(&app).contains(&"brushes".into()));
+}
+
+/// An old Brushes tab request that the saved layout can't show changes nothing else either.
+#[test]
+fn an_unshowable_brushes_tab_request_changes_nothing() {
+    let mut app = app();
+    let ctx = egui::Context::default();
+    app.run("window.panel.activate", json!({"panel":"layers"})).unwrap();
+    let workspace = serde_json::to_string(app.ui.docking.as_ref().unwrap()).unwrap().replace("\"layers\"", "\"nope\"");
+    app.ui.docking = Some(serde_json::from_str(&workspace).unwrap());
+    let section = app.ui.brush_section;
+    assert_ne!(control_set(&mut app, &ctx, json!({"brushSection": section + 1, "brushTab": 1}))["ok"], true);
+    assert_eq!(app.ui.brush_section, section);
+}
+
+/// Docking Brush Settings widens its column to fit, as in Photoshop.
+#[test]
+fn docking_a_wide_panel_widens_the_column() {
+    let mut app = app();
+    app.ui.panels.brush_settings = true;
+    reconcile(&mut app);
+    app.run("window.panel.move", json!({"panel":"brushSettings","anchor":"layers","zone":"top"})).unwrap();
+    let Some(Node::Split { second, .. }) = &lay(&app).root else { panic!("expected the canvas split") };
+    let Node::Dock { columns, .. } = second.as_ref() else { panic!("expected the dock") };
+    assert_eq!(columns[0].width, 400.0);
 }
 
 /// #7896: the dock's widest is the window less what the toolbar and the canvas keep, never

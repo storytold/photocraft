@@ -43,6 +43,64 @@ const PANELS: &[(&str, &str, Group)] = &[
     ("brushes", "Brushes", Group::Brushes),
 ];
 
+/// Panels with no native dock group: they float when first opened, as in Photoshop. Each keeps
+/// the open flag its module already had, so its menu items, shortcuts and automation are
+/// unchanged; [`reconcile`] moves the layout to match the flag, and [`sync_visibility`] writes it
+/// back after a docking change.
+struct FreePanel {
+    id: &'static str,
+    label: &'static str,
+    /// Size of its first floating window.
+    size: [f32; 2],
+    min_width: f32,
+    open: fn(&mut PhotocraftApp) -> &mut bool,
+    body: fn(&mut PhotocraftApp, &mut egui::Ui),
+}
+
+#[rustfmt::skip]
+const FREE_PANELS: &[FreePanel] = &[
+    FreePanel { id: "brushSettings", label: "Brush Settings", size: [540.0, 600.0], min_width: 400.0, open: |a| &mut a.ui.panels.brush_settings, body: crate::brush_panel::panel },
+    FreePanel { id: "styles", label: "Styles", size: [250.0, 420.0], min_width: 220.0, open: |a| &mut a.ui.presets_ui.styles, body: crate::preset_panels::styles_panel },
+    FreePanel { id: "shapes", label: "Shapes", size: [250.0, 420.0], min_width: 220.0, open: |a| &mut a.ui.presets_ui.shapes, body: crate::preset_panels::shapes_panel },
+    FreePanel { id: "toolPresets", label: "Tool Presets", size: [250.0, 420.0], min_width: 220.0, open: |a| &mut a.ui.presets_ui.tool_presets, body: crate::preset_panels::tool_presets_panel },
+    FreePanel { id: "cloneSource", label: "Clone Source", size: [270.0, 400.0], min_width: 220.0, open: |a| &mut a.ui.presets_ui.clone_source, body: crate::preset_panels::clone_source_panel },
+    FreePanel { id: "characterStyles", label: "Character Styles", size: [290.0, 400.0], min_width: 220.0, open: |a| &mut a.ui.type_panels.character_styles, body: |a, ui| crate::type_panels_ui::styles_panel(a, ui, false) },
+    FreePanel { id: "paragraphStyles", label: "Paragraph Styles", size: [290.0, 400.0], min_width: 220.0, open: |a| &mut a.ui.type_panels.paragraph_styles, body: |a, ui| crate::type_panels_ui::styles_panel(a, ui, true) },
+    FreePanel { id: "glyphs", label: "Glyphs", size: [340.0, 420.0], min_width: 220.0, open: |a| &mut a.ui.type_panels.glyphs, body: crate::type_panels_ui::glyphs_panel },
+    FreePanel { id: "notes", label: "Notes", size: [260.0, 260.0], min_width: 220.0, open: |a| &mut a.ui.analysis.notes, body: crate::analysis_ui::notes_panel },
+    FreePanel { id: "modifierKeys", label: "Modifier Keys", size: [220.0, 120.0], min_width: 200.0, open: |a| &mut a.ui.shell.modifier_keys, body: crate::workspace_ui::modifier_keys_panel },
+];
+
+fn free(id: &str) -> Option<&'static FreePanel> {
+    FREE_PANELS.iter().find(|p| p.id == id)
+}
+
+fn label(id: &str) -> String {
+    let label = PANELS.iter().find(|p| p.0 == id).map(|p| p.1).or_else(|| free(id).map(|p| p.label));
+    label.map_or_else(|| id.to_owned(), |label| tl!(label).to_string())
+}
+
+/// Opens or closes each free panel whose flag a menu item, shortcut or script changed. A closed
+/// panel reopens where it was; one never laid out floats beside the canvas ([`ensure`]).
+pub(crate) fn reconcile(app: &mut PhotocraftApp) {
+    let mut pending = Vec::new();
+    for panel in FREE_PANELS {
+        let open = *(panel.open)(app);
+        if open != app.ui.docking.as_ref().is_some_and(|workspace| workspace.layout.contains(&panel.id.to_owned())) {
+            pending.push((panel, open));
+        }
+    }
+    // Each command syncs every flag from its layout, so the wanted states are read first.
+    for (panel, open) in pending {
+        let id = panel.id.to_owned();
+        let command = if open { DockCommand::Activate { panel: id } } else { DockCommand::Close { panel: id } };
+        if let Err(error) = run(app, command) {
+            app.ui.status = error;
+            *(panel.open)(app) = !open;
+        }
+    }
+}
+
 /// PhotoCraft's wording of craft-ui's docking labels, translated through `tl!`. The others keep
 /// craft-ui's English.
 const DOCK_LABELS: &[(&str, &str)] = &[
@@ -121,7 +179,13 @@ fn docked(layout: &Layout<String>) -> Layout<String> {
 }
 
 pub(crate) fn normalize(raw: &str) -> Option<&'static str> {
-    PANELS.iter().find(|(id, label, _)| id.eq_ignore_ascii_case(raw.trim()) || label.eq_ignore_ascii_case(raw.trim())).map(|p| p.0)
+    let raw = raw.trim();
+    PANELS
+        .iter()
+        .map(|p| (p.0, p.1))
+        .chain(FREE_PANELS.iter().map(|p| (p.id, p.label)))
+        .find(|(id, label)| id.eq_ignore_ascii_case(raw) || label.eq_ignore_ascii_case(raw))
+        .map(|p| p.0)
 }
 
 fn registered(id: &str) -> bool {
@@ -219,8 +283,9 @@ fn workspace_of(app: &PhotocraftApp) -> Result<Workspace, String> {
     Ok(workspace)
 }
 
-fn commit(app: &mut PhotocraftApp, workspace: Workspace, mut returns: Returns) {
+fn commit(app: &mut PhotocraftApp, mut workspace: Workspace, mut returns: Returns) {
     returns.retain(|panel, _| floats(&workspace.layout, panel));
+    fit_columns(&mut workspace.layout);
     app.ui.docking = Some(workspace);
     app.ui.docking_returns = returns;
     app.ui.panels.dock = true;
@@ -264,6 +329,12 @@ fn ensure(app: &PhotocraftApp, workspace: &mut Workspace, panel: &str) -> Result
     if workspace.hidden.iter().any(|(id, _)| id == panel) {
         let anchor = first_root(&workspace.layout, panel);
         return workspace.set_visible(panel.to_owned(), true, anchor, permissions).map_err(|e| e.to_string());
+    }
+    if let Some(FreePanel { size: [w, h], .. }) = free(panel) {
+        let canvas = app.last_canvas_rect;
+        let rect = [(canvas.right() - w - 30.0).max(canvas.left() + 8.0), canvas.top() + 40.0, *w, *h];
+        workspace.layout.floating.push(Floating::single(vec![panel.to_owned()], 0, rect));
+        return workspace.validate().map_err(|e| e.to_string());
     }
     let action = default_place(app, &workspace.layout, panel);
     workspace.apply(action, permissions).map(drop).map_err(|e| e.to_string())
@@ -349,10 +420,13 @@ fn closes(command: &DockCommand<String>) -> bool {
 }
 
 pub(crate) fn command(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
+    // A flag a module set this frame joins the layout before a command changes it.
+    reconcile(app);
     if id == "window.panel.group" {
         return Some(group_command(app, params));
     }
-    if let Some(panel) = id.strip_prefix("window.panel.").or_else(|| id.strip_prefix("window.toggle.")).and_then(normalize) {
+    // A free panel's own module toggles its flag, with any extra parameters it takes.
+    if let Some(panel) = id.strip_prefix("window.panel.").or_else(|| id.strip_prefix("window.toggle.")).and_then(normalize).filter(|p| free(p).is_none()) {
         if app.ui.docking.is_none() && panel != "brushes" {
             return None;
         }
@@ -380,7 +454,7 @@ pub(crate) fn command(app: &mut PhotocraftApp, id: &str, params: &Value) -> Opti
 
 pub(crate) fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
     let workspace = app.ui.docking.as_ref()?;
-    let panel = id.strip_prefix("window.panel.").or_else(|| id.strip_prefix("window.toggle.")).and_then(normalize)?;
+    let panel = id.strip_prefix("window.panel.").or_else(|| id.strip_prefix("window.toggle.")).and_then(normalize).filter(|p| free(p).is_none())?;
     Some(workspace.layout.contains(&panel.to_string()))
 }
 
@@ -595,17 +669,19 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         ui,
         &layout,
         &style,
-        |id| PANELS.iter().find(|p| p.0 == id).map(|p| tl!(p.1).to_string()).unwrap_or_else(|| id.clone()),
+        |id| label(id),
         permissions,
         |id| {
+            // Brush Settings needs more room than the others; its column keeps at least that.
+            let width = free(id).map_or(220.0, |p| p.min_width);
             if id == CANVAS {
                 craft_ui::docking::PanelLimits { min: egui::vec2(200.0, 120.0), ..Default::default() }
             } else if collapsed.contains(id) {
-                craft_ui::docking::PanelLimits { min: egui::vec2(220.0, 0.0), max: egui::vec2(1_000_000.0, 0.0) }
+                craft_ui::docking::PanelLimits { min: egui::vec2(width, 0.0), max: egui::vec2(1_000_000.0, 0.0) }
             } else {
                 // The native group's smallest height, tab strip included.
                 let height = PANELS.iter().find(|p| p.0 == id).map_or(80.0, |p| p.2.min_height() - strip);
-                craft_ui::docking::PanelLimits { min: egui::vec2(220.0, height), ..Default::default() }
+                craft_ui::docking::PanelLimits { min: egui::vec2(width, height), ..Default::default() }
             }
         },
         &mut PanelContent { app, collapsed: &collapsed, fillers: &fillers, card: &card, strip, commands: &mut commands },
@@ -788,6 +864,24 @@ fn native_dock_width(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
 }
 
+/// A dock column widens to fit a free panel docked in it that needs more room (Brush Settings),
+/// as in Photoshop. craft-ui only keeps a column from being dragged narrower than that.
+fn fit_columns(layout: &mut Layout<String>) {
+    let mut pending: Vec<&mut Node<String>> = layout.root.iter_mut().collect();
+    while let Some(node) = pending.pop() {
+        match node {
+            Node::Split { first, second, .. } => pending.extend([first.as_mut(), second.as_mut()]),
+            Node::Dock { columns, .. } => {
+                for column in columns {
+                    let need = column.groups.iter().flat_map(|g| &g.panels).filter_map(|id| free(id)).map(|p| p.min_width).fold(0.0, f32::max);
+                    column.width = column.width.max(need);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 /// `layout` as drawn: a dock group whose panels are all collapsed shows only its tab strip.
 fn presented(mut layout: Layout<String>, collapsed: &std::collections::HashSet<String>) -> Layout<String> {
     let mut pending: Vec<&mut Node<String>> = layout.root.iter_mut().collect();
@@ -824,6 +918,11 @@ fn fillers(layout: &Layout<String>) -> std::collections::HashSet<String> {
 }
 
 fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: &str) {
+    if let Some(panel) = free(id) {
+        ui.spacing_mut().scroll.fade.strength = 0.0;
+        egui::ScrollArea::vertical().id_salt(("shared-panel-body", id)).auto_shrink([false, false]).show(ui, |ui| (panel.body)(app, ui));
+        return;
+    }
     let Some((_, label, group)) = PANELS.iter().find(|p| p.0 == id) else { return };
     let pro = crate::theme::Tokens::get(ui.ctx()).pro;
     let Some(tab) = group.tabs(pro).iter().position(|name| name == label) else { return };
@@ -1152,8 +1251,13 @@ pub(crate) fn commit_legacy_update(app: &mut PhotocraftApp, update: LegacyUpdate
         let ids: Vec<_> = PANELS.iter().filter(|p| p.2 == group).map(|p| p.0).collect();
         app.ui.docking_collapsed.retain(|id| !ids.contains(&id.as_str()));
     }
+    // Free panels the request opened are not in the staged workspace; add them before syncing.
+    app.ui.docking = Some(update.workspace);
+    reconcile(app);
     let returns = app.ui.docking_returns.clone();
-    commit(app, update.workspace, returns);
+    if let Some(workspace) = app.ui.docking.take() {
+        commit(app, workspace, returns);
+    }
     for group in Group::ALL {
         if request.get("dockTabs").and_then(|p| p.get(group.key())).is_some()
             || request.get("panels").and_then(|p| p.get(group.key())).and_then(Value::as_bool) == Some(true)
@@ -1204,6 +1308,10 @@ fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, panel: &str) {
         }
         "histogram" => {
             crate::histogram_panel::panel_menu(app, ui);
+            ui.separator();
+        }
+        "styles" => {
+            crate::preset_panels::styles_menu(app, ui);
             ui.separator();
         }
         _ => {}
@@ -1305,6 +1413,10 @@ pub(crate) fn sync_visibility(app: &mut PhotocraftApp) {
             {
                 *group.tab_mut(&mut app.ui.dock_tabs) = selected;
             }
+        }
+        let open: Vec<bool> = FREE_PANELS.iter().map(|p| layout.contains(&p.id.to_owned())).collect();
+        for (panel, open) in FREE_PANELS.iter().zip(open) {
+            *(panel.open)(app) = open;
         }
     }
 }

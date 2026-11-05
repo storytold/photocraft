@@ -230,7 +230,10 @@ for partial sets; [scope, tests and visual evidence](multi-channel-editing.md).
 30 of 35 Window-menu panels exist (measured). Missing: Libraries, Comments, Contextual Task Bar,
 Discover, Generative variations. Dock tabs: Layers, Channels, Paths, History, Actions, Layer
 Comps, Properties, Adjustments, Navigator, Histogram, Info, Color, Swatches, Character,
-Paragraph; the rest open as in-app floating windows.
+Paragraph, Brushes. Brush Settings, Styles, Shapes, Tool Presets, Clone Source, Character Styles,
+Paragraph Styles, Glyphs, Notes and Modifier Keys float when first opened and then dock, group,
+split and resize like the dock tabs (#4818); Timeline and Measurement Log open as in-app floating
+windows.
 
 | Behaviour | Status | Evidence |
 |---|---|---|
@@ -271,6 +274,7 @@ Paragraph; the rest open as in-app floating windows.
 | 2026-11-02 | minor | Edit › Transform › Distort: the side handles move their edge freely, both its corners by the drag, stopping before the box folds as a corner does; Perspective's side handles skew along their edge, as in Photoshop (#10085). Not a new command, so no percentage changed |
 | 2026-11-01 | minor | Every preference takes effect: 11 of 183 do nothing (was 12); Graphics Adapter always worked, but startup read it by raw JSON key, which the scorecard audit can't see |
 | 2026-10-31 | minor | Layers panel filter-type dropdown: Color filters by the layers' label colour (#5898); Kind, Name, Mode, Color, Smart Object and Artboard, the other three missing; no percentage changed |
+| 2026-10-27 | minor | Brush Settings (split from Brushes), Styles, Shapes, Tool Presets, Clone Source, Character Styles, Paragraph Styles (split apart), Glyphs, Notes and Modifier Keys are dock panels: they float when first opened, then dock, group, split, resize and reopen where they were closed (#4818) |
 | 2026-10-29 | minor | Paragraph box overflow: text a box can't hold enlarges the box's lower-right handle and shows a black + in it, as the reference application does (#8311); agents read `typeBoxOverflow` in `ui.inspect`. Not a new command, so no percentage changed |
 | 2026-10-28 | minor | The text and gradient stop Color Pickers preview the picked colour on the canvas before OK, as Photoshop's do (#5530); no percentage changed |
 | 2026-10-27 | minor | Shape Fill/Stroke popover as Photoshop's (paint types, Color Picker button, Recently Used Colors, swatch folders, with the Gradient tab) and every colour swatch opens the full Color Picker; rows added (partial, done); Recently Used Colors is a new preference, so 12 of 183 do nothing; no percentage changed; 2026-10-30: the swatches preview live while their Color Picker is open |
