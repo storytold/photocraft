@@ -4,6 +4,7 @@ mod cli;
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 mod malloc_tuning;
 mod man_and_completions;
+mod mcp_stdout;
 mod orientation;
 
 /// Nextest archives relocate binaries; plain Cargo keeps the compile-time path valid.

@@ -587,7 +587,8 @@ impl PhotocraftMcp {
     }
 
     pub fn with_backend(backend: Backend) -> Self {
-        let mut tool_router = Self::tool_router();
+        // The generic tools plus the task-shaped image tools (server/image_tools.rs).
+        let mut tool_router = Self::tool_router() + Self::image_tool_router();
         for route in tool_router.map.values_mut() {
             let mut schema = (*route.attr.input_schema).clone();
             strict_schema(&mut schema);
@@ -1228,6 +1229,7 @@ impl PhotocraftMcp {
 }
 
 mod conventions;
+pub mod image_tools;
 mod progress;
 mod transport;
 

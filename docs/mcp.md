@@ -131,6 +131,136 @@ for the shared restrictions.
 and `command_list`. Resource reads are uncached; tool/resource catalogs are private and cached
 for ten minutes. List/read responses include the MCP 2026-07-28 result/cache fields.
 
+## Task tools
+
+Besides the generic tools, headless mode offers task-shaped image tools with typed, validated
+arguments. Each tool runs ordinary engine commands through `command_run`'s path (same
+authorization, history and filesystem roots). Their document edits join the history, so
+`edit.undo` reverts them like any other command. Files they write are not rolled back:
+`save_image`, `export_image` and `batch_process` change the disk, and undo does not restore an
+earlier file.
+Agents need no command ids or parameter grammars for everyday edits. `command_run` stays available
+for the rest of the engine's commands.
+
+| Tool | Arguments | Engine commands |
+|---|---|---|
+| `open_image` | `path` | `doc_open` |
+| `inspect_image` | `path` (read without touching the session) or `index` | open + `doc_inspect` + close |
+| `save_image` | `path` (extension picks the format), `quality`, `overwrite` | `doc_save` |
+| `export_image` | `path`, `format`, `quality`, `overwrite` | `doc_export` |
+| `resize_image` | `width` and/or `height` (one side keeps the aspect ratio), or `percent`, or `fit` (+`enlarge`), `resample` | `image.imageSize` |
+| `crop_image` | `x`, `y`, `width`, `height` | `image.crop` |
+| `rotate_image` | `angle` (clockwise; multiples of 90 are lossless), `interpolation` | `image.imageRotation.*`, `image.rotation.arbitrary` |
+| `flip_image` | `direction`: horizontal \| vertical | `image.imageRotation.flipCanvas*` |
+| `adjust_brightness` / `adjust_contrast` | `amount` (-150..150 / -50..100) | `image.adjustments.brightnessContrast` |
+| `adjust_saturation` | `amount` (-100..100) | `image.adjustments.hueSaturation` |
+| `apply_blur` | `kind`: gaussian \| box \| motion \| surface, `radius`, `angle`, `distance`, `threshold` | `filter.blur.*` |
+| `apply_sharpen` | `kind`: unsharp_mask \| smart \| basic, `amount`, `radius`, `threshold`, `reduce_noise` | `filter.sharpen.*` |
+| `remove_background` | `refine`, `apply_mask`, `trim`, `background_color` | `layer.removeBackground` (+ mask apply, trim, solid fill) |
+| `add_text` | `text`, `x`, `y`, `size`, `font`, `color`, `align`, `name` | `type.create` |
+| `manage_layers` | `action` (list, new, duplicate, delete, rename, set_props, select, bring_forward, send_backward, bring_to_front, send_to_back, merge_down, flatten), `layer` (id or exact name), `name`, `visible`, `opacity` (%), `blend` | `layer.*` |
+| `batch_process` | `input_dir`, `output_dir`, `operations`, `format`, `quality`, `suffix`, `extensions`, `max_files`, `overwrite`, `stop_on_error` | open → operations → save → close, per file |
+
+Behaviour shared by the task tools:
+
+- **Structured replies.** Every reply carries `structuredContent`, and the same JSON as a text
+  block for text-only clients. Every success has `"ok": true` and `"tool"`. The rest depends on
+  the tool:
+  - The editing tools and `manage_layers` return `result` (the engine's reply) and `document`
+    (`{index, name, width, height, mode, depth, resolution, layerCount, …}`, plus `layers` for
+    `manage_layers`).
+  - `open_image` returns `document` and `warnings`.
+  - `save_image` and `export_image` return `path`, `warnings` and `document`.
+  - `inspect_image` returns the summary fields at the top level (`width`, `height`, `layers`, …,
+    and `file` for a path).
+  - `batch_process` returns `processed`, `failed`, `skipped`, `truncated` and `files` at the top
+    level.
+
+  Failure is `isError: true` with `{"ok": false, "tool": …, "error": "<reason>"}`. Unknown argument keys are
+  JSON-RPC `-32602` errors before anything runs. Out-of-range values name the accepted range.
+- **No silent overwrites.** `save_image`, `export_image` and `batch_process` refuse an existing
+  target unless `overwrite: true`. Even then, the write root's rule still applies: only image and
+  document files are ever replaced. Missing folders below the write root are created.
+- **Bounded work.** `resize_image` and `crop_image` refuse results over 256 megapixels.
+  `open_image`, `inspect_image` and `batch_process` read a file's header first. A PNG, JPEG,
+  PSD/PSB, WebP, OpenEXR, GIF, BMP, TGA, ICO, QOI or HDR that declares more than 256 megapixels
+  is refused before it is read in full or decoded. Other formats rely on the decoder's own
+  limits. `batch_process` looks at no more than 500 files (default 100) and skips inputs over
+  512 MiB. It applies at most 32 operations and handles one file at a time, closing each document
+  before opening the next.
+- **Batches never replace an unread input.** Before writing anything, `batch_process` checks
+  every planned output. The whole batch is refused when an output would replace another file of
+  the input folder, for example `photo.jpg` becoming `photo.png` next to the original
+  `photo.png`. It is also refused when two inputs would write the same output. A file may still
+  be written back over its own source with `overwrite: true`.
+- **Headless only.** In bridge mode the task tools reply with an error that points to
+  `command_run`. The live app takes the same command ids.
+
+`batch_process` operations name a task tool and carry its arguments (without `index`):
+
+```json
+{"input_dir": "photos", "output_dir": "web", "format": "webp", "quality": 82, "suffix": "_1080",
+ "operations": [
+   {"tool": "resize_image", "width": 1080, "height": 1080, "fit": true},
+   {"tool": "adjust_contrast", "amount": 10},
+   {"tool": "apply_sharpen", "kind": "unsharp_mask", "amount": 60, "radius": 1}
+ ]}
+```
+
+The reply lists every file with `status` (`ok`, `failed` or `skipped`, with a reason) and the
+totals `processed`, `failed`, `skipped` and `truncated`. A failing file never stops the batch
+unless `stop_on_error` is true.
+
+### Logging
+
+Set `PHOTOCRAFT_LOG` (`error`, `warn`, `info`, `debug` or `trace`) in the server's environment
+to log to **stderr**. Stdout carries only the protocol. Unset, the server logs nothing. Each level
+includes the ones above it:
+
+- `warn`: every batch file that failed, whatever the stage (name, path, decoding, an operation,
+  saving). The reply's `failed` counter and per-file `status` are the authoritative record:
+  check them rather than relying on the log.
+- `info`: also every task tool call with its duration and outcome (and the MCP session's own
+  start-up events).
+- `debug`: also each engine command a task tool runs, with its parameters.
+
+### Client configuration
+
+Claude Code (user scope; use `--scope project` to write `.mcp.json` into the project):
+
+```sh
+claude mcp add photocraft --env PHOTOCRAFT_LOG=warn -- photocraft-cli mcp --automation-read-root /work/project --automation-write-root /work/project/out
+```
+
+A project `.mcp.json` file ([`mcp-examples/claude-code.mcp.json`](mcp-examples/claude-code.mcp.json)):
+
+```json
+{"mcpServers": {"photocraft": {"command": "photocraft-cli",
+  "args": ["mcp", "--automation-read-root", "/work/project", "--automation-write-root", "/work/project/out"],
+  "env": {"PHOTOCRAFT_LOG": "warn"}}}}
+```
+
+Codex (`~/.codex/config.toml`, [`mcp-examples/codex-config.toml`](mcp-examples/codex-config.toml)):
+
+```toml
+[mcp_servers.photocraft]
+command = "photocraft-cli"
+args = ["mcp", "--automation-read-root", "/work/project", "--automation-write-root", "/work/project/out"]
+env = { PHOTOCRAFT_LOG = "warn" }
+# batch_process over a large folder can take minutes
+tool_timeout_sec = 600
+```
+
+On Windows, use the full path of `photocraft-cli.exe` as `command` when it isn't on `PATH`.
+Write JSON backslashes as `\\`, or use forward slashes, which Windows accepts.
+
+### Building
+
+`scripts/build-mcp.sh` (Linux, macOS) and `scripts/build-mcp.ps1` (Windows) build the release
+CLI with `--locked` and run the MCP test suites. `--install` / `-Install` then puts
+`photocraft-cli` on `PATH` with `cargo install`. `--check-targets` / `-CheckTargets` also
+type-checks the MCP crates for the other desktop platforms.
+
 ## Progress and cancellation
 
 A direct headless `command_run` of `file.export.renderVideo` reports frame counts when
