@@ -28,6 +28,10 @@ pub(crate) fn select(app: &mut PhotocraftApp, tool: Tool) {
     if app.ui.tool == Tool::Frame && tool != Tool::Frame {
         crate::frame_tool::cancel(app);
     }
+    if tool != Tool::Artboard {
+        // Add New Artboard's placing mode ends with the tool (#11386).
+        app.ui.artboard_tool.adding = false;
+    }
     app.ui.tool = tool;
 }
 

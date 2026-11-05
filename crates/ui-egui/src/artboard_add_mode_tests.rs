@@ -131,3 +131,59 @@ fn another_tool_turns_the_mode_off() {
     click(&mut app, 3000.0, 100.0);
     assert_eq!(boards(&app), before);
 }
+
+#[test]
+fn ui_inspect_reports_the_mode_on_and_off() {
+    let ctx = egui::Context::default();
+    let mut app = app_with_selected_board();
+    let adding = |app: &mut PhotocraftApp| {
+        let (req, _) = crate::control::ControlRequest::new("ui.inspect", json!({}));
+        let crate::control::Outcome::Done(v) = crate::control::handle(app, &ctx, &req) else { panic!("inspect") };
+        v["result"]["artboardTool"]["adding"].clone()
+    };
+    assert_eq!(adding(&mut app), json!(false));
+    app.ui.artboard_tool.adding = true;
+    assert_eq!(adding(&mut app), json!(true));
+}
+
+#[test]
+fn selecting_another_tool_and_coming_back_leaves_the_mode_off() {
+    let mut app = app_with_selected_board();
+    app.ui.artboard_tool.adding = true;
+    // Both changes in one pass, with no pointer or options-bar call between them.
+    crate::tool_memory::select(&mut app, Tool::Move);
+    crate::tool_memory::select(&mut app, Tool::Artboard);
+    assert!(!app.ui.artboard_tool.adding);
+    let before = boards(&app);
+    click(&mut app, 222.0, 600.0);
+    assert_eq!(boards(&app), before);
+}
+
+#[test]
+fn the_add_new_artboard_button_toggles_the_mode_and_adds_no_board() {
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable;
+
+    let mut app = app_with_selected_board();
+    app.ui.tool = Tool::Artboard;
+    let before = boards(&app);
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 200.0)).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                crate::panels::options_bar(app, ui);
+            }
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Pro);
+    h.run_steps(4);
+    assert!(!h.state().ui.artboard_tool.adding);
+    h.get_by_label("Add New Artboard").click();
+    h.run_steps(4);
+    assert!(h.state().ui.artboard_tool.adding, "the first click turns the mode on");
+    assert_eq!(boards(h.state()), before);
+    h.get_by_label("Add New Artboard").click();
+    h.run_steps(4);
+    assert!(!h.state().ui.artboard_tool.adding, "the second click turns it off");
+    assert_eq!(boards(h.state()), before);
+}
