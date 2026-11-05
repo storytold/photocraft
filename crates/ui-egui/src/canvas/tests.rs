@@ -2210,6 +2210,56 @@ fn smoothed_stroke_lags_while_drawing_and_release_adds_the_catch_up() {
     assert!(same_pixels(&s.active().unwrap().doc, &done));
 }
 
+#[test]
+fn a_smoothed_stroke_dropped_before_pen_up_leaves_no_tail_and_a_tool_switch_still_catches_up() {
+    // A Brush stroke has no Esc, and a tool switch mid-stroke doesn't end it: the drag keeps its
+    // tool and commits at pen-up, catch-up included (Photoshop does the same). A drag that is
+    // dropped instead (what any cancel does) never reaches pen-up, so `finish` never runs, and
+    // the live stroke's pixels lived only on its own copy of the document: nothing of it, lagging
+    // part or catch-up, is left on the canvas or in the document.
+    let xs = [30.0, 50.0, 70.0, 90.0, 110.0, 130.0, 150.0, 170.0];
+    let end = |d: &Document| (0..200).rev().find(|&x| (0..80).any(|y| d.layers[0].surface().unwrap().rgba(x, y)[3] > 0.0));
+    for switch_tool in [false, true] {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width": 200, "height": 80, "background": "transparent"})).unwrap();
+        app.run("tools.setBrush", json!({"brush": {"size": 16, "hardness": 0.5}})).unwrap();
+        app.session.tools.brush.smoothing.amount = 0.6;
+        app.ui.tool = Tool::Brush;
+        let before = app.session.active().unwrap().doc.clone();
+        let steps = app.session.active().unwrap().history.past_len();
+        let m = egui::Modifiers::NONE;
+        tool_event(&mut app, ToolEvent::Down { x: 10.0, y: 40.0, pressure: 1.0 }, m);
+        for &x in &xs {
+            tool_event(&mut app, ToolEvent::Move { x, y: 40.0, pressure: 1.0 }, m);
+        }
+        let (live, key) = display_doc(&mut app, 0);
+        assert!(key != 0 && end(&live).is_some_and(|e| e < 170), "the live stroke lags behind the pen");
+        if switch_tool {
+            app.ui.tool = Tool::Eraser;
+            tool_event(&mut app, ToolEvent::Up { x: 170.0, y: 40.0 }, m);
+            let st = app.session.active().unwrap();
+            assert_eq!(st.history.past_len(), steps + 1, "the Brush stroke commits");
+            assert!(end(&st.doc).is_some_and(|e| e >= 170), "with its catch-up: {:?}", end(&st.doc));
+            assert!(app.committed_stroke.is_some(), "from the live stroke");
+            continue;
+        }
+        app.drag = None;
+        let (shown, key) = display_doc(&mut app, 0);
+        assert_eq!(key, 0, "the canvas shows the document again");
+        assert!(std::sync::Arc::ptr_eq(&shown, &before) && std::sync::Arc::ptr_eq(&app.session.active().unwrap().doc, &before), "untouched");
+        assert_eq!(app.session.active().unwrap().history.past_len(), steps);
+        // The next stroke starts clean: only its own pixels, nothing of the dropped one's tail.
+        tool_event(&mut app, ToolEvent::Down { x: 10.0, y: 10.0, pressure: 1.0 }, m);
+        tool_event(&mut app, ToolEvent::Move { x: 60.0, y: 10.0, pressure: 1.0 }, m);
+        tool_event(&mut app, ToolEvent::Up { x: 60.0, y: 10.0 }, m);
+        let st = app.session.active().unwrap();
+        assert_eq!(st.history.past_len(), steps + 1);
+        let surf = st.doc.layers[0].surface().unwrap();
+        assert!(surf.rgba(50, 10)[3] > 0.0, "the next stroke painted");
+        assert!((25..80).all(|y| (0..200).all(|x| surf.rgba(x, y)[3] == 0.0)), "nothing of the dropped stroke");
+    }
+}
+
 /// Shapes the drag preview paints for `app` this frame.
 fn drag_preview_shapes(app: &mut PhotocraftApp, ctx: &egui::Context, zoom: f32) -> Vec<egui::epaint::ClippedShape> {
     let out = ctx.run_ui(egui::RawInput::default(), |ui| {
