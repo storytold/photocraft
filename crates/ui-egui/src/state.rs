@@ -338,6 +338,9 @@ pub struct UiState {
     /// A live rectangle's corner radius widget being dragged (TOOL-214-12).
     #[serde(skip)]
     pub corner_radius: Option<crate::corner_radius::Drag>,
+    /// The bounding box of several selected shape layers, a handle being dragged.
+    #[serde(skip)]
+    pub shape_box: Option<crate::shape_bounds_box::Drag>,
     /// Selected row in the Paths panel ("work" or a saved path name).
     #[serde(default)]
     pub selected_path: Option<String>,
@@ -596,6 +599,7 @@ impl Default for UiState {
             stroke_editor: None,
             direct_selection: Default::default(),
             corner_radius: None,
+            shape_box: None,
             selected_path: None,
             hidden_work_path: None,
             panels: Panels::default(),

@@ -306,6 +306,7 @@ pub use tools::perspective_crop_ui;
 pub use tools::perspective_ui;
 pub use tools::puppet_ui;
 pub use tools::retouch_ui;
+pub use tools::shape_bounds_box;
 use tools::shape_gradient_ui;
 use tools::shape_options;
 use tools::shape_paint_ui;
@@ -758,6 +759,7 @@ impl SyntheticTarget {
 
 #[cfg(test)]
 mod artboard_add_mode_tests;
+mod shape_bounds_box_tests;
 
 #[cfg(test)]
 mod lifecycle_tests;

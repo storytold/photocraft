@@ -160,6 +160,11 @@ fn filter_event_before_tool(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::
     if crate::corner_radius::pointer(app, raw, mods) {
         return None;
     }
+    // The box round several selected shape layers: its handles scale them (Path Selection and the
+    // shape tools).
+    if crate::shape_bounds_box::pointer(app, raw, mods) {
+        return None;
+    }
     // Direct Selection, and the Pen's ⌘ (Direct Selection) and ⌥ (Convert Point) modes (#790).
     if crate::direct_select::pointer(app, ev, mods) {
         return None;
