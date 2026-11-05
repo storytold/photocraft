@@ -246,6 +246,72 @@ fn translated_layer_style_aligns_header_and_actions_with_the_frame() {
     }
 }
 
+/// Translated action labels narrow the settings page, including at the 640 pt minimum width.
+#[test]
+fn translated_layer_style_pattern_controls_stay_inside_the_page() {
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    for language in ["en", "fr", "de"] {
+        for screen_width in [680.0, 1280.0] {
+            let lang = crate::i18n::Lang::from_pref(language);
+            let text = |key| crate::i18n::with_language(lang, || crate::i18n::t(key).to_owned());
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
+            app.run("layer.new.layer", json!({})).unwrap();
+            let mut h = Harness::builder()
+                .with_size(egui::vec2(screen_width, 800.0))
+                .build_ui_state(move |ui, app| crate::i18n::with_language(lang, || show(app, ui.ctx())), app);
+            PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Pro);
+            crate::layer_style::open(h.state_mut(), Some("patternOverlay")).unwrap();
+            h.state_mut().ui.dialogs.last_mut().unwrap().fields.insert("patternList".into(), json!([["checker", "Checkerboard"]]));
+            h.run_steps(4);
+            let pattern = h.get_by_role_and_label(egui::accesskit::Role::ComboBox, &text("Pattern")).rect();
+            let pattern_clip = h
+                .output()
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Rect(r) if (r.rect.min - pattern.min).length() < 1.0 && (r.rect.max - pattern.max).length() < 1.0 => Some(shape.clip_rect),
+                    _ => None,
+                })
+                .expect("the pattern dropdown's painted background");
+            assert!(pattern_clip.expand(1.0).contains_rect(pattern), "{language}, {screen_width} pt: pattern {pattern:?} is clipped by {pattern_clip:?}");
+            // The bordered settings column is the smallest tall frame around this row.
+            let page = h
+                .output()
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Rect(r) if r.stroke.width > 0.0 && r.rect.height() > 300.0 && r.rect.contains(pattern.left_center()) => Some(r.rect),
+                    _ => None,
+                })
+                .min_by(|a, b| a.area().total_cmp(&b.area()))
+                .expect("the settings page frame");
+            // boxed() leaves a 4 pt inset plus its 1 pt stroke around page controls.
+            let content = page.shrink(5.0).expand(1.0);
+            for label in ["Blend Mode", "Pattern"] {
+                let control = h.get_by_role_and_label(egui::accesskit::Role::ComboBox, &text(label)).rect();
+                assert!(content.contains_rect(control), "{language}, {screen_width} pt: {label} {control:?} escapes page {content:?}");
+            }
+            let frame = rects(&h.ctx)[0];
+            // An oversized control can expand its enclosing frame instead of being clipped.
+            let body_width = (screen_width - 40.0).clamp(640.0, 800.0);
+            let expected_width = body_width + header::frame(&h.ctx).total_margin().sum().x;
+            assert!(
+                frame.width() <= expected_width + 1.0,
+                "{language}, {screen_width} pt: content widened the fixed dialog: {frame:?}, expected {expected_width}"
+            );
+            for label in ["OK", "Cancel", "New Style…"] {
+                let button = h.get_by_label(&text(label)).rect();
+                assert!((frame.right() - button.right() - 16.0).abs() <= 1.0, "{language}: action buttons keep their right inset");
+            }
+            if screen_width > 1000.0 {
+                assert!((pattern.width() - 180.0).abs() <= 1.0, "{language}: the regular dropdown width is preserved");
+            }
+        }
+    }
+}
+
 /// #9515: Bevel & Emboss is taller than a small window (1435 × 858, the reporter's): its page
 /// scrolls, so OK and Cancel stay on screen.
 #[test]

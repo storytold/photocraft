@@ -1671,7 +1671,9 @@ fn page(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, 
                         .or_else(|| list.first().map(|l| l.0.clone()))
                         .unwrap_or_default();
                     let opts: Vec<(String, &str)> = list.iter().map(|(id, n)| (id.clone(), n.as_str())).collect();
-                    if widgets::dropdown(ui, &format!("fx-{sel_kind}-{key}"), tl!(&label), &mut cur, &opts, 180.0)
+                    // Translated action buttons can narrow the page at the dialog's minimum width.
+                    let width = ui.available_width().min(180.0);
+                    if widgets::dropdown(ui, &format!("fx-{sel_kind}-{key}"), tl!(&label), &mut cur, &opts, width)
                         || disp.get(key).and_then(Value::as_str).is_none_or(str::is_empty)
                     {
                         let value = json!(cur);
