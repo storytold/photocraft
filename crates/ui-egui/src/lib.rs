@@ -798,6 +798,8 @@ mod pencil_tests;
 #[cfg(test)]
 mod tool_options_theme_tests;
 #[cfg(test)]
+mod tool_shift_cycle_order_tests;
+#[cfg(test)]
 mod tool_shortcut_tests;
 #[cfg(test)]
 mod toolbar_group_order_tests;
