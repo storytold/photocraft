@@ -197,6 +197,10 @@ fn board_under(boards: &[(LayerId, photocraft_geom::Rect)], bounds: photocraft_g
     boards.iter().find(|(_, r)| r.contains(cx, cy)).map(|(id, _)| *id)
 }
 
+/// One planned auto-nest move: its order (walk order, then its place above a clip base), the
+/// layer, and the boards it leaves and joins.
+type Nest = ((usize, usize), LayerId, Option<LayerId>, Option<LayerId>);
+
 /// Move-tool auto-nesting, as in Photoshop: after a Move drag, a layer now on another artboard
 /// joins that board, on top of its stack, and a layer moved off every board leaves its board for
 /// the top level, directly above the board it left. Artboards share one canvas, so without this a
@@ -221,7 +225,7 @@ fn auto_nest(doc: &mut Document, ids: &[LayerId]) -> Vec<LayerId> {
     let locked_board = |doc: &Document, id: LayerId| doc.layer(id).is_some_and(|l| l.locks.artboard || l.locks.all);
     // Bottom to top, so layers moving together keep their order in their new parent: by walk
     // order, and a carried clipped layer by its base's and then its place above the base.
-    let mut plan: Vec<((usize, usize), LayerId, Option<LayerId>, Option<LayerId>)> = Vec::new();
+    let mut plan: Vec<Nest> = Vec::new();
     // The paths of the layers planned so far: a layer inside one of them goes with it.
     let mut carried: Vec<Vec<usize>> = Vec::new();
     for (order, (path, _, l)) in doc.walk().into_iter().enumerate() {
