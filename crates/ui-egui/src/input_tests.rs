@@ -1445,4 +1445,18 @@ fn a_missed_undo_release_cant_keep_undoing() {
     }
     assert!(zoom(&h) > z0, "an unrelated repeat still runs");
     h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    // A user's configured alternate repeats the same way: ⌥⇧Z on edit.undo undoes once and its
+    // stuck-key repeats are dropped like the default binding's.
+    h.state_mut().run("prefs.set", json!({"path": "alternateShortcuts.edit.undo", "value": ["Alt+Shift+Z"]})).unwrap();
+    h.run_steps(1);
+    let altz = Modifiers { alt: true, shift: true, ..Default::default() };
+    let az = |pressed: bool, repeat: bool| egui::Event::Key { key: Key::Z, physical_key: None, pressed, repeat, modifiers: altz };
+    h.event(az(true, false));
+    h.run_steps(2);
+    assert_eq!(past(&h), n - 1, "the alternate undoes once");
+    for _ in 0..6 {
+        h.event(az(true, true));
+    }
+    h.run_steps(4);
+    assert_eq!(past(&h), n - 1, "alternate repeats don't keep undoing");
 }
