@@ -975,7 +975,7 @@ fn confirm_generic_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, 
 }
 
 /// The checks before a dialog is confirmed: no open child picker, the automation gate for a handler
-/// that touches files itself, a valid guide layout, and Equalize's own document.
+/// that touches files itself, a valid guide layout, and Equalize's own document, layer and selection.
 pub(crate) fn confirm_preflight(app: &mut PhotocraftApp, id: u64) -> Result<(), String> {
     if crate::layer_style::color_picker::has_child(app, id) {
         return Err("confirm or cancel the Layer Style color picker first".into());

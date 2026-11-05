@@ -97,6 +97,39 @@ fn ok_refuses_after_the_selection_is_cleared() {
     assert!((gray(&app, 1, 1) - 0.4).abs() < 0.01 && (gray(&app, 30, 20) - 0.5).abs() < 0.01, "the layer is unchanged");
 }
 
+/// OK after another layer became active equalizes nothing and leaves the dialog open; it runs once
+/// the layer the dialog was opened for is active again.
+#[test]
+fn ok_refuses_after_the_active_layer_changes() {
+    let (mut app, ctx) = setup(true);
+    let layer = app.session.active().unwrap().active_layer.unwrap();
+    let d = menu(&mut app, &ctx, COMMAND, json!({})).unwrap()["dialog"].as_u64().unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("edit.fill", json!({"color": [0.4, 0.4, 0.4]})).unwrap();
+    assert!(crate::dialogs::confirm(&mut app, d).is_err());
+    assert!(app.ui.dialogs.iter().any(|x| x.id == d), "the dialog stays open");
+    assert!((gray(&app, 1, 1) - 0.4).abs() < 0.01, "the new layer is unchanged");
+    app.run("layer.select", json!({"layer": layer.0})).unwrap();
+    assert!((gray(&app, 1, 1) - 0.4).abs() < 0.01, "nothing ran on the dialog's layer either");
+    crate::dialogs::confirm(&mut app, d).unwrap();
+    assert!(gray(&app, 1, 1) < 0.05 && gray(&app, 1, 20) > 0.95, "OK runs once its layer is active again");
+}
+
+/// OK after the selection changed equalizes nothing and leaves the dialog open; it runs once the
+/// selection is the one the dialog was opened with again.
+#[test]
+fn ok_refuses_after_the_selection_changes() {
+    let (mut app, ctx) = setup(true);
+    let d = menu(&mut app, &ctx, COMMAND, json!({})).unwrap()["dialog"].as_u64().unwrap();
+    app.run("select.rect", json!({"x": 20, "y": 0, "width": 20, "height": 30})).unwrap();
+    assert!(crate::dialogs::confirm(&mut app, d).is_err());
+    assert!(app.ui.dialogs.iter().any(|x| x.id == d), "the dialog stays open");
+    assert!((gray(&app, 1, 1) - 0.4).abs() < 0.01 && (gray(&app, 30, 1) - 0.4).abs() < 0.01, "the layer is unchanged");
+    app.run("select.rect", json!({"x": 0, "y": 0, "width": 20, "height": 30})).unwrap();
+    crate::dialogs::confirm(&mut app, d).unwrap();
+    assert!(gray(&app, 1, 1) < 0.05 && (gray(&app, 30, 1) - 0.4).abs() < 0.01, "OK runs on the selection it was opened with");
+}
+
 #[test]
 fn cancel_leaves_the_layer_unchanged() {
     let (mut app, ctx) = setup(true);
