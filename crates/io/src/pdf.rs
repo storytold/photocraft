@@ -15,6 +15,10 @@ use photocraft_doc::Document;
 
 use crate::{ExportResult, IoError};
 
+mod selection;
+mod shapes;
+mod text;
+
 /// The image placed on a page: 8-bit interleaved samples, 1 (gray), 3 (RGB) or 4 (CMYK,
 /// 1 = full ink), with the profile it was authored in if any.
 pub struct PrintImage {
@@ -43,7 +47,7 @@ pub struct PrintPage {
     pub label: Option<String>,
 }
 
-fn pdf_string(s: &str) -> String {
+pub(super) fn pdf_string(s: &str) -> String {
     let mut o = String::from("(");
     for c in s.chars() {
         match c {
@@ -106,7 +110,7 @@ fn marks_ops(m: Marks, (x, y, w, h): (f64, f64, f64, f64)) -> String {
 
 /// A one-page PDF.
 pub fn print_pdf(page: &PrintPage) -> Vec<u8> {
-    write_pdf(page, None)
+    write_pdf(page, None, "", &selection::SelectionFont::default())
 }
 
 /// A PDF/X standard (ISO 15930) a save can claim, as Photoshop's PDF presets name them.
@@ -283,7 +287,9 @@ fn stream(dict: &str, data: &[u8]) -> Vec<u8> {
     body
 }
 
-fn write_pdf(page: &PrintPage, x: Option<&XPage>) -> Vec<u8> {
+/// The page, with `vectors` (content operators, drawn over the image) and the invisible
+/// `selection_font` their text uses, in a plain PDF. PDF/X pages are the image alone.
+fn write_pdf(page: &PrintPage, x: Option<&XPage>, vectors: &str, selection_font: &selection::SelectionFont) -> Vec<u8> {
     let version = x.map_or("1.4", |x| x.standard.pdf_version());
     let mut out: Vec<u8> = format!("%PDF-{version}\n").into_bytes();
     out.extend_from_slice(b"%\xe2\xe3\xcf\xd3\n");
@@ -304,6 +310,8 @@ fn write_pdf(page: &PrintPage, x: Option<&XPage>) -> Vec<u8> {
     // XMP metadata (PDF/X-4).
     let icc_obj = if x.is_some() { 8 } else { 7 };
     let xmp_obj = if icc.is_some() { 9 } else { 8 };
+    // A plain PDF's invisible selection font follows its last object.
+    let selection_base = if icc.is_some() { 8 } else { 7 };
     let producer = format!("PhotoCraft {}", env!("CARGO_PKG_VERSION"));
     match x {
         Some(x) => {
@@ -339,13 +347,14 @@ fn write_pdf(page: &PrintPage, x: Option<&XPage>) -> Vec<u8> {
         None => obj(
             &mut out,
             format!(
-                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {pw:.2} {ph:.2}] /Resources << /XObject << /Im0 5 0 R >> /Font << /F1 6 0 R >> >> /Contents 4 0 R >>"
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {pw:.2} {ph:.2}] /Resources << /XObject << /Im0 5 0 R >> /Font << /F1 6 0 R /FSelect {selection_base} 0 R >> >> /Contents 4 0 R >>"
             )
             .as_bytes(),
         ),
     }
     // An explicit white page, so every viewer (and rasteriser) shows paper, not transparency.
     let mut content = format!("q 1 g 0 0 {pw:.2} {ph:.2} re f Q\nq {w:.3} 0 0 {h:.3} {x0:.3} {y0:.3} cm /Im0 Do Q\n");
+    content.push_str(vectors);
     content.push_str(&marks_ops(page.marks, page.rect));
     let any_marks = page.marks.corner_crop || page.marks.center_crop || page.marks.registration;
     let pad = if any_marks { 30.0 } else { 6.0 };
@@ -396,6 +405,11 @@ fn write_pdf(page: &PrintPage, x: Option<&XPage>) -> Vec<u8> {
         // Unfiltered, so preflight tools and asset managers read it without decoding.
         obj(&mut out, &stream("/Type /Metadata /Subtype /XML", xmp_packet(x, &producer).as_bytes()));
     }
+    if x.is_none() {
+        for body in selection_font.objects(selection_base) {
+            obj(&mut out, &body);
+        }
+    }
     let xref = out.len();
     out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", offsets.len() + 1).as_bytes());
     for o in &offsets {
@@ -406,9 +420,82 @@ fn write_pdf(page: &PrintPage, x: Option<&XPage>) -> Vec<u8> {
     out
 }
 
+/// The vector operators for the contiguous visible top prefix of `doc`, top to bottom, with the
+/// indices of the layers they replace, and the selection font covering their text (plus, when a
+/// lower candidate is rejected during emission, that layer's unused characters).
+/// Hidden and blocked layers contribute no characters, so they cannot exhaust the font's codes.
+fn collect_vectors(doc: &Document) -> (Vec<(usize, String)>, selection::SelectionFont) {
+    enum Candidate<'a> {
+        Ops(String),
+        Text(text::PreparedText<'a>),
+    }
+    let mut candidates = Vec::new();
+    if doc.icc_profile.is_none() {
+        let mut repertoire = std::collections::BTreeSet::new();
+        for (index, layer) in doc.layers.iter().enumerate().rev() {
+            if !layer.visible {
+                continue;
+            }
+            if layer.blend != photocraft_color::BlendMode::Normal
+                || layer.opacity != 1.0
+                || layer.fill_opacity != 1.0
+                || layer.clipped
+                || layer.mask.is_some()
+                || layer.vector_mask.is_some()
+                || (layer.effects.enabled && !layer.effects.items.is_empty())
+                || layer.excluded_channels != 0
+                || layer.blend_if != Default::default()
+                || layer.advanced != Default::default()
+                || layer.video.is_some()
+            {
+                break;
+            }
+            let candidate = match &layer.content {
+                photocraft_doc::LayerContent::Shape(shape) => match shapes::shape_path(shape, doc.mode) {
+                    Some(ops) => Candidate::Ops(ops),
+                    None => break,
+                },
+                photocraft_doc::LayerContent::Text(text_layer) => {
+                    let Some(prepared) = text::prepare(text_layer, doc.mode, doc.resolution_dpi) else { break };
+                    for ch in text_layer.text.chars() {
+                        repertoire.insert(ch);
+                        if repertoire.len() > 255 {
+                            break;
+                        }
+                    }
+                    if repertoire.len() > 255 {
+                        break;
+                    }
+                    Candidate::Text(prepared)
+                }
+                _ => break,
+            };
+            candidates.push((index, candidate));
+        }
+    }
+    let selection_font = selection::SelectionFont::new(candidates.iter().filter_map(|(_, candidate)| match candidate {
+        Candidate::Text(prepared) => Some(prepared.text()),
+        Candidate::Ops(_) => None,
+    }));
+    let mut layers = Vec::with_capacity(candidates.len());
+    for (index, candidate) in candidates {
+        let ops = match candidate {
+            Candidate::Ops(ops) => ops,
+            Candidate::Text(prepared) => match text::ops(&prepared, doc.mode, &selection_font) {
+                Some(ops) => ops,
+                // Keep the successful upper vectors; this layer and everything below stay raster.
+                None => break,
+            },
+        };
+        layers.push((index, ops));
+    }
+    (layers, selection_font)
+}
+
 /// The document flattened over paper for a PDF page: `(channels, samples)`, one row after
 /// another, 1 (gray), 3 (RGB) or 4 (CMYK, 1 = full ink) values per pixel in `0..=1`.
-fn page_samples(doc: &Document) -> std::result::Result<(usize, Vec<f32>), IoError> {
+/// The layers at the indices in `hidden` are left out (they're drawn as vectors).
+fn page_samples(doc: &Document, hidden: &[usize]) -> std::result::Result<(usize, Vec<f32>), IoError> {
     let (w, h) = (usize::try_from(doc.size.width).unwrap_or(0), usize::try_from(doc.size.height).unwrap_or(0));
     if w == 0 || h == 0 {
         return Err(IoError::Unsupported("PDF needs a document with non-zero width and height; nothing was written".into()));
@@ -422,7 +509,13 @@ fn page_samples(doc: &Document) -> std::result::Result<(usize, Vec<f32>), IoErro
     let fmt = doc.pixel_format();
     let n = fmt.channels().max(1);
     let canvas = photocraft_geom::Rect::new(0, 0, w as i32, h as i32);
-    let surface = photocraft_compose::flatten_to_surface(doc, PixelFormat::new(fmt.mode, fmt.sample, true), None);
+    let mut backdrop = doc.clone();
+    for index in hidden {
+        if let Some(layer) = backdrop.layers.get_mut(*index) {
+            layer.visible = false;
+        }
+    }
+    let surface = photocraft_compose::flatten_to_surface(&backdrop, PixelFormat::new(fmt.mode, fmt.sample, true), None);
     let values = surface.read_region(canvas);
     // Straight alpha, composited here over paper: white in RGB/Gray (1 = full light), zero ink
     // in CMYK (0 = paper).
@@ -453,7 +546,12 @@ const FLATTENED: &str = "PDF was saved flattened: layers, masks-as-editable and 
 /// (pixels ÷ resolution × 72 pt), as a one-page PDF. Layers and transparency are dropped — the
 /// warning says so — and the embedded profile travels with the image.
 pub fn export(doc: &Document) -> std::result::Result<ExportResult, IoError> {
-    let (device, samples) = page_samples(doc)?;
+    // Simple topmost shapes and text layers can be drawn over the flattened backdrop without changing
+    // compositing. Stop at the first unsupported visible layer, since it may depend on the
+    // backdrop (adjustments, blend modes, masks, effects, or clipping).
+    let (vector_layers, selection_font) = collect_vectors(doc);
+    let hidden: Vec<usize> = vector_layers.iter().map(|(index, _)| *index).collect();
+    let (device, samples) = page_samples(doc, &hidden)?;
     let data = samples.into_iter().map(to8).collect();
     let image = PrintImage { width: doc.size.width, height: doc.size.height, channels: device, data, icc: doc.icc_profile.as_ref().map(|p| p.to_vec()) };
     let (pw, ph) = page_size(doc);
@@ -462,7 +560,13 @@ pub fn export(doc: &Document) -> std::result::Result<ExportResult, IoError> {
     if !doc.metadata.text.is_empty() {
         warnings.push("free-form text metadata is not supported by PDF; it will be dropped".into());
     }
-    Ok(ExportResult { bytes: print_pdf(&page), warnings })
+    let scale = 72.0 / f64::from(doc.resolution_dpi.max(1.0));
+    let mut vectors = format!("q {scale} 0 0 -{scale} 0 {ph} cm\n");
+    for (_, ops) in vector_layers.iter().rev() {
+        vectors.push_str(ops);
+    }
+    vectors.push_str("Q\n");
+    Ok(ExportResult { bytes: write_pdf(&page, None, &vectors, &selection_font), warnings })
 }
 
 /// The PDF Options a save asks for (File › Save As › PDF): a plain PDF, or a PDF/X file for
@@ -548,7 +652,7 @@ fn export_x(doc: &Document, x: &PdfX, secs: u64) -> std::result::Result<ExportRe
     if !b.is_finite() || q(pw - b) - q(b) < 0.005 || q(ph - b) - q(b) < 0.005 {
         return Err(bad(format!("a {b:.2} pt bleed leaves no trim on a {pw:.2} × {ph:.2} pt page")));
     }
-    let (device, samples) = page_samples(doc)?;
+    let (device, samples) = page_samples(doc, &[])?;
     let mut warnings = vec![FLATTENED.to_string()];
     let space = |m: ColorMode| match m {
         ColorMode::Grayscale => ColorSpace::Gray,
@@ -627,7 +731,7 @@ fn export_x(doc: &Document, x: &PdfX, secs: u64) -> std::result::Result<ExportRe
     let page = PrintPage { paper: (pw, ph), image, rect: (0.0, 0.0, pw, ph), marks: Marks::default(), description: None, label: None };
     let created = i64::try_from(secs).ok().and_then(|s| chrono::DateTime::from_timestamp(s, 0)).unwrap_or_default();
     let xp = XPage { standard: x.standard, profile: &x.profile, condition: &dst.description, title, trim: (b, b, pw - b, ph - b), created, id };
-    Ok(ExportResult { bytes: write_pdf(&page, Some(&xp)), warnings })
+    Ok(ExportResult { bytes: write_pdf(&page, Some(&xp), "", &selection::SelectionFont::default()), warnings })
 }
 
 #[cfg(test)]
