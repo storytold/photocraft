@@ -551,6 +551,17 @@ struct Draining {
     release: bool,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn reap_draining(draining: &mut Vec<Draining>) -> bool {
+    let mut release = false;
+    draining.retain(|d| {
+        let done = d.handle.is_finished();
+        release |= done && d.release;
+        !done
+    });
+    release
+}
+
 /// The session's job table (see the module docs).
 #[derive(Default)]
 pub struct Jobs {
@@ -1310,13 +1321,7 @@ impl Session {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn reap_draining_jobs(&mut self) {
-        let mut release = false;
-        self.jobs.draining.retain(|d| {
-            let done = d.handle.is_finished();
-            release |= done && d.release;
-            !done
-        });
-        if release {
+        if reap_draining(&mut self.jobs.draining) {
             photocraft_raster::scratch::release();
         }
     }
