@@ -1038,13 +1038,16 @@ impl ColorBvh {
 }
 
 /// Bytes of memory the index is charged per distinct colour: the dedupe set entry and its
-/// table slack, the colour in the point list, and its share of the tree nodes, rounded up.
+/// table slack, the colour in the point list, and its share of the tree nodes. It is an
+/// approximate average, not a worst case: while the set rehashes or the point list doubles,
+/// the peak runs to roughly 70–90 bytes per colour.
 const COLOR_INDEX_BYTES: usize = 64;
 
 /// The most memory the index may be charged. It scales with the distinct colours rather than the
 /// canvas, so a noisy 24 MP photo, or a float document where every pixel is its own colour,
-/// still builds; it only keeps the index within the sampled pixels' own budget.
-const COLOR_INDEX_BUDGET: usize = if cfg!(target_pointer_width = "64") { 4 << 30 } else { 256 << 20 };
+/// still builds; it only keeps the index within the sampled pixels' own budget. On 32-bit
+/// (the web build) 1 GiB still admits every distinct colour of a 24 MP photo.
+const COLOR_INDEX_BUDGET: usize = if cfg!(target_pointer_width = "64") { 4 << 30 } else { 1 << 30 };
 
 impl ColorMatcher {
     /// Creates a color matcher from selected RGBA colors and an $L_\\infty$ tolerance in $[0, 1]$.
@@ -1080,6 +1083,8 @@ impl ColorMatcher {
             a[0].total_cmp(&b[0]).then_with(|| a[1].total_cmp(&b[1])).then_with(|| a[2].total_cmp(&b[2])).then_with(|| a[3].total_cmp(&b[3]))
         });
         opaque_or_semi.dedup_by(|a, b| a == b);
+        // The tree keeps this list; give back the slack its doubling left.
+        opaque_or_semi.shrink_to_fit();
 
         Ok(Self { has_transparent, tree: ColorBvh::build(opaque_or_semi)?, tol: tol.max(0.0) })
     }

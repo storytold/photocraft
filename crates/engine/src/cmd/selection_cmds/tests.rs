@@ -80,6 +80,20 @@ fn selection_sampling_allocation_failure_keeps_the_selection() {
 }
 
 #[test]
+fn selection_sampling_all_layers_reports_a_failed_composite_and_keeps_the_selection() {
+    let mut s = session();
+    s.execute("select.rect", json!({"x": 5, "y": 5, "width": 4, "height": 4})).unwrap();
+    let before = s.active().unwrap().doc.clone();
+    let history = s.active().unwrap().history.entries();
+    // Sample All Layers renders the composite: the failure is reported there, before the mask.
+    crate::allocation::fail_next_for_test();
+    let err = s.execute("select.similar", json!({"sampleAllLayers": true})).unwrap_err().to_string();
+    assert!(err.contains("not enough memory for sampling pixels for a selection"), "{err}");
+    assert_eq!(*s.active().unwrap().doc, *before);
+    assert_eq!(s.active().unwrap().history.entries(), history);
+}
+
+#[test]
 fn modify_rejects_oversized_canvases_before_reading_the_mask() {
     let mut s = Session::new();
     let mut doc = photocraft_doc::Document::new(

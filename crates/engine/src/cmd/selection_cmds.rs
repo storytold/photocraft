@@ -70,7 +70,11 @@ fn sample_pixels(s: &Session, all_layers: bool, window: Option<Rect>) -> Result<
             surf.read_rgba_into(area, &mut px);
             Ok((area, px))
         }
-        _ => Ok((area, photocraft_compose::render(&d.doc, area).into_px())),
+        _ => {
+            // The composite allocates inside compose; report a failure at its boundary.
+            crate::allocation::checkpoint("sampling pixels for a selection")?;
+            Ok((area, photocraft_compose::render(&d.doc, area).into_px()))
+        }
     }
 }
 
