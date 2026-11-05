@@ -2339,6 +2339,11 @@
 	Show canvas dots	Näytä kankaan pisteet
 	Clip thumbnails to layer bounds	Rajaa pikkukuvat tason rajoihin
 	Clip Thumbnails to Layer Bounds	Rajaa pikkukuvat tason rajoihin
+	No Thumbnails	Ei pikkukuvia
+	Small Thumbnails	Pienet pikkukuvat
+	Medium Thumbnails	Keskikokoiset pikkukuvat
+	Large Thumbnails	Suuret pikkukuvat
+	Clip Thumbnails to Document Bounds	Rajaa pikkukuvat asiakirjan rajoihin
 	Canvas color	Kankaan väri
 	Canvas custom color	Kankaan mukautettu väri
 	Classic	Klassinen

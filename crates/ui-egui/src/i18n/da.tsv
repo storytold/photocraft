@@ -2338,6 +2338,11 @@
 	Show canvas dots	Vis lærredsprikker
 	Clip thumbnails to layer bounds	Klip miniaturer til laggrænser
 	Clip Thumbnails to Layer Bounds	Klip miniaturer til laggrænser
+	No Thumbnails	Ingen miniaturer
+	Small Thumbnails	Små miniaturer
+	Medium Thumbnails	Mellemstore miniaturer
+	Large Thumbnails	Store miniaturer
+	Clip Thumbnails to Document Bounds	Klip miniaturer til dokumentgrænser
 	Canvas color	Lærredsfarve
 	Canvas custom color	Brugerdefineret lærredsfarve
 	Classic	Klassisk

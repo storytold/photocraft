@@ -1901,6 +1901,11 @@
 	Show canvas dots	Tuval noktalarını göster
 	Clip thumbnails to layer bounds	Küçük resimleri katman sınırlarına kırp
 	Clip Thumbnails to Layer Bounds	Küçük resimleri katman sınırlarına kırp
+	No Thumbnails	Küçük Resim Yok
+	Small Thumbnails	Küçük Boyutlu Küçük Resimler
+	Medium Thumbnails	Orta Boyutlu Küçük Resimler
+	Large Thumbnails	Büyük Boyutlu Küçük Resimler
+	Clip Thumbnails to Document Bounds	Küçük resimleri belge sınırlarına kırp
 	Canvas color	Tuval rengi
 	Canvas custom color	Tuval özel rengi
 	Color picker	Renk seçici

@@ -1989,6 +1989,11 @@
 	Show canvas dots	Prikaži tačke na platnu
 	Clip thumbnails to layer bounds	Iseci sličice prema granicama sloja
 	Clip Thumbnails to Layer Bounds	Iseci sličice prema granicama sloja
+	No Thumbnails	Bez sličica
+	Small Thumbnails	Male sličice
+	Medium Thumbnails	Srednje sličice
+	Large Thumbnails	Velike sličice
+	Clip Thumbnails to Document Bounds	Iseci sličice prema granicama dokumenta
 	Canvas color	Boja platna
 	Canvas custom color	Prilagođena boja platna
 	Color picker	Birač boja

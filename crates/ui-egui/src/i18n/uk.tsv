@@ -2394,6 +2394,11 @@
 	Show canvas dots	Показувати крапки полотна
 	Clip thumbnails to layer bounds	Обрізати мініатюри до меж шару
 	Clip Thumbnails to Layer Bounds	Обрізати мініатюри до меж шару
+	No Thumbnails	Без мініатюр
+	Small Thumbnails	Малі мініатюри
+	Medium Thumbnails	Середні мініатюри
+	Large Thumbnails	Великі мініатюри
+	Clip Thumbnails to Document Bounds	Обрізати мініатюри до меж документа
 	Canvas color	Колір полотна
 	Canvas custom color	Довільний колір полотна
 	Classic	Класична

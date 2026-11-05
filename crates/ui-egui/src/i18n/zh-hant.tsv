@@ -2020,6 +2020,11 @@
 	Show canvas dots	顯示畫布圓點
 	Clip thumbnails to layer bounds	將縮圖裁切至圖層邊界
 	Clip Thumbnails to Layer Bounds	將縮圖裁切至圖層邊界
+	No Thumbnails	無縮圖
+	Small Thumbnails	小縮圖
+	Medium Thumbnails	中縮圖
+	Large Thumbnails	大縮圖
+	Clip Thumbnails to Document Bounds	將縮圖裁切至文件邊界
 	Canvas color	畫布顏色
 	Canvas custom color	畫布自訂顏色
 	Color picker	檢色器

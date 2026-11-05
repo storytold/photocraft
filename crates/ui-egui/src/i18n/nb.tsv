@@ -2338,6 +2338,11 @@
 	Show canvas dots	Vis lerretprikker
 	Clip thumbnails to layer bounds	Klipp miniatyrer til laggrensene
 	Clip Thumbnails to Layer Bounds	Klipp miniatyrer til laggrensene
+	No Thumbnails	Ingen miniatyrer
+	Small Thumbnails	Små miniatyrer
+	Medium Thumbnails	Middels miniatyrer
+	Large Thumbnails	Store miniatyrer
+	Clip Thumbnails to Document Bounds	Klipp miniatyrer til dokumentgrensene
 	Canvas color	Lerretfarge
 	Canvas custom color	Egendefinert lerretfarge
 	Classic	Klassisk

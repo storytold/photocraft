@@ -2018,6 +2018,11 @@
 	Show canvas dots	Mostra punti del quadro
 	Clip thumbnails to layer bounds	Ritaglia le miniature ai limiti del livello
 	Clip Thumbnails to Layer Bounds	Ritaglia le miniature ai limiti del livello
+	No Thumbnails	Nessuna miniatura
+	Small Thumbnails	Miniature piccole
+	Medium Thumbnails	Miniature medie
+	Large Thumbnails	Miniature grandi
+	Clip Thumbnails to Document Bounds	Ritaglia le miniature ai limiti del documento
 	Canvas color	Colore quadro
 	Canvas custom color	Colore personalizzato quadro
 	Color picker	Selettore colore

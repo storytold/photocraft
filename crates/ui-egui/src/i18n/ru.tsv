@@ -2431,6 +2431,11 @@
 	Show canvas dots	Показывать точки холста
 	Clip thumbnails to layer bounds	Обрезать миниатюры по границам слоя
 	Clip Thumbnails to Layer Bounds	Обрезать миниатюры по границам слоя
+	No Thumbnails	Без миниатюр
+	Small Thumbnails	Мелкие миниатюры
+	Medium Thumbnails	Средние миниатюры
+	Large Thumbnails	Крупные миниатюры
+	Clip Thumbnails to Document Bounds	Обрезать миниатюры по границам документа
 	Canvas color	Цвет холста
 	Canvas custom color	Свой цвет холста
 	Classic	Классическая

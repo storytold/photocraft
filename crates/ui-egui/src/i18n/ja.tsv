@@ -2026,6 +2026,11 @@
 	Show canvas dots	カンバスのドットを表示
 	Clip thumbnails to layer bounds	サムネールをレイヤーの境界でクリップ
 	Clip Thumbnails to Layer Bounds	サムネールをレイヤーの境界でクリップ
+	No Thumbnails	サムネールなし
+	Small Thumbnails	小さいサムネール
+	Medium Thumbnails	中サイズのサムネール
+	Large Thumbnails	大きいサムネール
+	Clip Thumbnails to Document Bounds	サムネールをドキュメントの境界でクリップ
 	Canvas color	カンバスの色
 	Canvas custom color	カンバスのカスタム色
 	Color picker	カラーピッカー

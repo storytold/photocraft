@@ -1987,6 +1987,11 @@
 	Show canvas dots	Tampilkan titik kanvas
 	Clip thumbnails to layer bounds	Pangkas thumbnail ke batas layer
 	Clip Thumbnails to Layer Bounds	Pangkas Thumbnail ke Batas Layer
+	No Thumbnails	Tanpa Thumbnail
+	Small Thumbnails	Thumbnail Kecil
+	Medium Thumbnails	Thumbnail Sedang
+	Large Thumbnails	Thumbnail Besar
+	Clip Thumbnails to Document Bounds	Pangkas Thumbnail ke Batas Dokumen
 	Canvas color	Warna kanvas
 	Canvas custom color	Warna kustom kanvas
 	Color picker	Pemilih warna

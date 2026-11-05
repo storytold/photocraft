@@ -1973,6 +1973,11 @@
 	Show canvas dots	Mostrar puntos del lienzo
 	Clip thumbnails to layer bounds	Recortar miniaturas a los límites de la capa
 	Clip Thumbnails to Layer Bounds	Recortar miniaturas a los límites de la capa
+	No Thumbnails	Sin miniaturas
+	Small Thumbnails	Miniaturas pequeñas
+	Medium Thumbnails	Miniaturas medianas
+	Large Thumbnails	Miniaturas grandes
+	Clip Thumbnails to Document Bounds	Recortar miniaturas a los límites del documento
 	Canvas color	Color del lienzo
 	Canvas custom color	Color personalizado del lienzo
 	Color picker	Selector de color

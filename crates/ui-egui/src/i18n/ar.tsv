@@ -1924,6 +1924,11 @@
 	Show canvas dots	إظهار نقاط مساحة الرسم
 	Clip thumbnails to layer bounds	قصر الصور المصغرة على حدود الطبقة
 	Clip Thumbnails to Layer Bounds	قصر الصور المصغرة على حدود الطبقة
+	No Thumbnails	بلا صور مصغرة
+	Small Thumbnails	صور مصغرة صغيرة
+	Medium Thumbnails	صور مصغرة متوسطة
+	Large Thumbnails	صور مصغرة كبيرة
+	Clip Thumbnails to Document Bounds	قصر الصور المصغرة على حدود المستند
 	Canvas color	لون مساحة الرسم
 	Canvas custom color	لون مخصص لمساحة الرسم
 	Color picker	منتقي الألوان
