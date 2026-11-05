@@ -4320,3 +4320,13 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Replace Image…	Afbeelding vervangen…
 	The frame is locked	Het kader is vergrendeld
 	The frame is unavailable	Het kader is niet beschikbaar
+
+# Move tool options bar (#11381)
+	Align top edges	Bovenranden uitlijnen
+	Align vertical centers	Verticale middens uitlijnen
+	Align bottom edges	Onderranden uitlijnen
+	Distribute vertically	Verticaal verdelen
+	Distribute horizontally	Horizontaal verdelen
+	Show layer bounds on hover	Laaggrenzen tonen bij aanwijzen
+	Expand layer group on click	Laaggroep uitvouwen bij klikken
+	Show hover bounds from Layers	Aanwijsgrenzen tonen vanuit Lagen

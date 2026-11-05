@@ -4760,3 +4760,13 @@ shape	Appearance	Оформление
 	Replace Image…	Заменить изображение…
 	The frame is locked	Рамка заблокирована
 	The frame is unavailable	Рамка недоступна
+
+# Move tool options bar (#11381)
+	Align top edges	Выровнять верхние края
+	Align vertical centers	Выровнять центры по вертикали
+	Align bottom edges	Выровнять нижние края
+	Distribute vertically	Распределить по вертикали
+	Distribute horizontally	Распределить по горизонтали
+	Show layer bounds on hover	Показывать границы слоя при наведении
+	Expand layer group on click	Раскрывать группу слоёв по щелчку
+	Show hover bounds from Layers	Показывать границы при наведении из панели «Слои»

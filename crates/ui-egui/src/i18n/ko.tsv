@@ -3788,3 +3788,13 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	The frame is unavailable	프레임을 사용할 수 없습니다
 	X	X
 	Y	Y
+
+# Move tool options bar (#11381)
+	Align top edges	위쪽 가장자리 정렬
+	Align vertical centers	세로 중심 정렬
+	Align bottom edges	아래쪽 가장자리 정렬
+	Distribute vertically	세로로 분포
+	Distribute horizontally	가로로 분포
+	Show layer bounds on hover	마우스를 올리면 레이어 경계 표시
+	Expand layer group on click	클릭하면 레이어 그룹 펼치기
+	Show hover bounds from Layers	레이어 패널에서 마우스를 올릴 때 경계 표시

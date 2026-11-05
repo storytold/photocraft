@@ -643,3 +643,13 @@ cameraRaw	Yellow	पीला
 	Pause For	इतने समय रुकें
 	seconds	सेकंड
 	Create a single history state	एक ही इतिहास स्थिति बनाएँ
+
+# Move tool options bar (#11381)
+	Align top edges	ऊपरी किनारे संरेखित करें
+	Align vertical centers	ऊर्ध्वाधर केंद्र संरेखित करें
+	Align bottom edges	निचले किनारे संरेखित करें
+	Distribute vertically	ऊर्ध्वाधर रूप से वितरित करें
+	Distribute horizontally	क्षैतिज रूप से वितरित करें
+	Show layer bounds on hover	होवर पर लेयर की सीमाएँ दिखाएँ
+	Expand layer group on click	क्लिक पर लेयर समूह विस्तृत करें
+	Show hover bounds from Layers	लेयर्स से होवर सीमाएँ दिखाएँ

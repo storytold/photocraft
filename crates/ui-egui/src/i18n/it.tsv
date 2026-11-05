@@ -4674,3 +4674,13 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Replace Image…	Sostituisci immagine…
 	The frame is locked	La cornice è bloccata
 	The frame is unavailable	La cornice non è disponibile
+
+# Move tool options bar (#11381)
+	Align top edges	Allinea i bordi superiori
+	Align vertical centers	Allinea i centri verticali
+	Align bottom edges	Allinea i bordi inferiori
+	Distribute vertically	Distribuisci verticalmente
+	Distribute horizontally	Distribuisci orizzontalmente
+	Show layer bounds on hover	Mostra i limiti del livello al passaggio del mouse
+	Expand layer group on click	Espandi il gruppo di livelli al clic
+	Show hover bounds from Layers	Mostra i limiti al passaggio dal pannello Livelli

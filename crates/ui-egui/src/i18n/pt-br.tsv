@@ -4489,3 +4489,13 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Replace Image…	Substituir imagem…
 	The frame is locked	A moldura está bloqueada
 	The frame is unavailable	A moldura não está disponível
+
+# Move tool options bar (#11381)
+	Align top edges	Alinhar bordas superiores
+	Align vertical centers	Alinhar centros verticais
+	Align bottom edges	Alinhar bordas inferiores
+	Distribute vertically	Distribuir verticalmente
+	Distribute horizontally	Distribuir horizontalmente
+	Show layer bounds on hover	Mostrar limites da camada ao passar o cursor
+	Expand layer group on click	Expandir grupo de camadas ao clicar
+	Show hover bounds from Layers	Mostrar limites ao passar o cursor em Camadas

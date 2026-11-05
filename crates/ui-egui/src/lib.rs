@@ -854,6 +854,9 @@ mod blur_pins_tests;
 mod move_outline_tests;
 
 #[cfg(test)]
+mod move_bar_distribute_gear_tests;
+
+#[cfg(test)]
 mod layer_thumb_bounds_tests;
 #[cfg(test)]
 mod mask_thumb_refresh_tests;

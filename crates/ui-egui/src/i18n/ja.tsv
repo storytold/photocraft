@@ -4243,3 +4243,13 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Replace Image…	画像を置き換え…
 	The frame is locked	フレームはロックされています
 	The frame is unavailable	フレームを利用できません
+
+# Move tool options bar (#11381)
+	Align top edges	上端を揃える
+	Align vertical centers	垂直方向中央を揃える
+	Align bottom edges	下端を揃える
+	Distribute vertically	垂直方向に分布
+	Distribute horizontally	水平方向に分布
+	Show layer bounds on hover	ホバー時にレイヤーの境界を表示
+	Expand layer group on click	クリックでレイヤーグループを展開
+	Show hover bounds from Layers	レイヤーパネルからのホバー境界を表示

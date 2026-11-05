@@ -4598,3 +4598,13 @@ shape	Appearance	Apparence
 	Replace Image…	Remplacer l’image…
 	The frame is locked	Le cadre est verrouillé
 	The frame is unavailable	Le cadre n’est pas disponible
+
+# Move tool options bar (#11381)
+	Align top edges	Aligner les bords supérieurs
+	Align vertical centers	Aligner les centres verticaux
+	Align bottom edges	Aligner les bords inférieurs
+	Distribute vertically	Répartir verticalement
+	Distribute horizontally	Répartir horizontalement
+	Show layer bounds on hover	Afficher les limites du calque au survol
+	Expand layer group on click	Développer le groupe de calques au clic
+	Show hover bounds from Layers	Afficher les limites au survol depuis Calques

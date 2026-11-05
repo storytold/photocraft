@@ -34,7 +34,9 @@ pub fn track(app: &mut PhotocraftApp, ctx: &egui::Context) -> Option<LayerId> {
         _ => return None,
     }
     let id = active?;
-    for group in closed_ancestors(app, id) {
+    // Move tool, gear menu, Expand layer group on click (#11381); the row still scrolls into view.
+    let expand = app.ui.tool != crate::state::Tool::Move || app.ui.tool_options.move_expand_group_on_click;
+    for group in closed_ancestors(app, id).into_iter().filter(|_| expand) {
         // A view change (no history step); a failure just leaves the group closed.
         let _ = app.session.execute("layer.setExpanded", json!({"layer": group.0, "expanded": true}));
     }

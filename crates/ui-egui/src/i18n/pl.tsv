@@ -4183,3 +4183,13 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Replace Image…	Zastąp obraz…
 	The frame is locked	Ramka jest zablokowana
 	The frame is unavailable	Ramka jest niedostępna
+
+# Move tool options bar (#11381)
+	Align top edges	Wyrównaj górne krawędzie
+	Align vertical centers	Wyrównaj środki w pionie
+	Align bottom edges	Wyrównaj dolne krawędzie
+	Distribute vertically	Rozmieść w pionie
+	Distribute horizontally	Rozmieść w poziomie
+	Show layer bounds on hover	Pokaż granice warstwy po najechaniu
+	Expand layer group on click	Rozwiń grupę warstw po kliknięciu
+	Show hover bounds from Layers	Pokaż granice po najechaniu z panelu Warstwy

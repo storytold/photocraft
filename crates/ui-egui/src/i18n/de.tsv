@@ -3597,3 +3597,13 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	The frame is unavailable	Der Rahmen ist nicht verfügbar
 	X	X
 	Y	Y
+
+# Move tool options bar (#11381)
+	Align top edges	Obere Kanten ausrichten
+	Align vertical centers	Vertikale Mitten ausrichten
+	Align bottom edges	Untere Kanten ausrichten
+	Distribute vertically	Vertikal verteilen
+	Distribute horizontally	Horizontal verteilen
+	Show layer bounds on hover	Ebenenbegrenzung beim Darüberfahren anzeigen
+	Expand layer group on click	Ebenengruppe per Klick erweitern
+	Show hover bounds from Layers	Begrenzung beim Darüberfahren aus Ebenen anzeigen

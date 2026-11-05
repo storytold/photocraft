@@ -3564,3 +3564,13 @@ curves	Smooth	تنعيم
 	Pause For	إيقاف مؤقت لمدة
 	seconds	ثانية
 	Create a single history state	إنشاء حالة سجل واحدة
+
+# Move tool options bar (#11381)
+	Align top edges	محاذاة الحواف العلوية
+	Align vertical centers	محاذاة المراكز الرأسية
+	Align bottom edges	محاذاة الحواف السفلية
+	Distribute vertically	توزيع رأسي
+	Distribute horizontally	توزيع أفقي
+	Show layer bounds on hover	إظهار حدود الطبقة عند التمرير
+	Expand layer group on click	توسيع مجموعة الطبقات عند النقر
+	Show hover bounds from Layers	إظهار حدود التمرير من الطبقات

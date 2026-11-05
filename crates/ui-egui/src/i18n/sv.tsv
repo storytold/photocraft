@@ -4785,3 +4785,13 @@ cameraRaw	White Balance: As Shot	Vitbalans: som tagen
 	Pause For	Paus i
 	seconds	sekunder
 	Create a single history state	Skapa ett enda historikläge
+
+# Move tool options bar (#11381)
+	Align top edges	Justera överkanter
+	Align vertical centers	Justera vertikala mittpunkter
+	Align bottom edges	Justera underkanter
+	Distribute vertically	Fördela vertikalt
+	Distribute horizontally	Fördela horisontellt
+	Show layer bounds on hover	Visa lagrets gränser vid hovring
+	Expand layer group on click	Expandera lagergrupp vid klick
+	Show hover bounds from Layers	Visa hovringsgränser från Lager

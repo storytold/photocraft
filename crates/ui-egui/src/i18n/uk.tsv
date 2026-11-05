@@ -4276,3 +4276,13 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Replace Image…	Замінити зображення…
 	The frame is locked	Рамку заблоковано
 	The frame is unavailable	Рамка недоступна
+
+# Move tool options bar (#11381)
+	Align top edges	Вирівняти верхні краї
+	Align vertical centers	Вирівняти центри по вертикалі
+	Align bottom edges	Вирівняти нижні краї
+	Distribute vertically	Розподілити по вертикалі
+	Distribute horizontally	Розподілити по горизонталі
+	Show layer bounds on hover	Показувати межі шару під час наведення
+	Expand layer group on click	Розгортати групу шарів за клацанням
+	Show hover bounds from Layers	Показувати межі під час наведення з панелі «Шари»

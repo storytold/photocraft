@@ -4788,3 +4788,13 @@ cameraRaw	White Balance: As Shot	Valkotasapaino: kuvauksen mukainen
 	Pause For	Tauko
 	seconds	sekuntia
 	Create a single history state	Luo yksi historiatila
+
+# Move tool options bar (#11381)
+	Align top edges	Tasaa yläreunat
+	Align vertical centers	Tasaa pystykeskikohdat
+	Align bottom edges	Tasaa alareunat
+	Distribute vertically	Jaa pystysuunnassa
+	Distribute horizontally	Jaa vaakasuunnassa
+	Show layer bounds on hover	Näytä tason rajat osoitettaessa
+	Expand layer group on click	Laajenna tasoryhmä napsautuksella
+	Show hover bounds from Layers	Näytä rajat osoitettaessa Tasot-paneelista

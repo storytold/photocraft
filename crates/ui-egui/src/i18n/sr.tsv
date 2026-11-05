@@ -4641,3 +4641,13 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Replace Image…	Замени слику…
 	The frame is locked	Оквир је закључан
 	The frame is unavailable	Оквир није доступан
+
+# Move tool options bar (#11381)
+	Align top edges	Poravnaj gornje ivice
+	Align vertical centers	Poravnaj vertikalne centre
+	Align bottom edges	Poravnaj donje ivice
+	Distribute vertically	Raspodeli vertikalno
+	Distribute horizontally	Raspodeli horizontalno
+	Show layer bounds on hover	Prikaži granice sloja pri prelasku miša
+	Expand layer group on click	Proširi grupu slojeva klikom
+	Show hover bounds from Layers	Prikaži granice pri prelasku iz panela Slojevi

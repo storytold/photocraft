@@ -4266,3 +4266,13 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	The frame is unavailable	Το πλαίσιο δεν είναι διαθέσιμο
 	X	X
 	Y	Y
+
+# Move tool options bar (#11381)
+	Align top edges	Στοίχιση πάνω άκρων
+	Align vertical centers	Στοίχιση κατακόρυφων κέντρων
+	Align bottom edges	Στοίχιση κάτω άκρων
+	Distribute vertically	Κατανομή κατακόρυφα
+	Distribute horizontally	Κατανομή οριζόντια
+	Show layer bounds on hover	Εμφάνιση ορίων στρώσης στο πέρασμα του δείκτη
+	Expand layer group on click	Ανάπτυξη ομάδας στρώσεων με κλικ
+	Show hover bounds from Layers	Εμφάνιση ορίων στο πέρασμα από τις Στρώσεις

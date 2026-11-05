@@ -4072,3 +4072,13 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Replace Image…	Thay ảnh…
 	The frame is locked	Khung đã bị khóa
 	The frame is unavailable	Khung không khả dụng
+
+# Move tool options bar (#11381)
+	Align top edges	Căn các cạnh trên
+	Align vertical centers	Căn các tâm dọc
+	Align bottom edges	Căn các cạnh dưới
+	Distribute vertically	Phân bố theo chiều dọc
+	Distribute horizontally	Phân bố theo chiều ngang
+	Show layer bounds on hover	Hiện ranh giới lớp khi di chuột
+	Expand layer group on click	Mở rộng nhóm lớp khi nhấp
+	Show hover bounds from Layers	Hiện ranh giới khi di chuột từ bảng Lớp

@@ -3254,3 +3254,13 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Frame	框架
 	X	X
 	Y	Y
+
+# Move tool options bar (#11381)
+	Align top edges	顶端对齐
+	Align vertical centers	垂直居中对齐
+	Align bottom edges	底端对齐
+	Distribute vertically	垂直分布
+	Distribute horizontally	水平分布
+	Show layer bounds on hover	悬停时显示图层边界
+	Expand layer group on click	单击时展开图层组
+	Show hover bounds from Layers	显示来自图层面板的悬停边界
