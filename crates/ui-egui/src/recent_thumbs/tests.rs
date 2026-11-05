@@ -522,6 +522,19 @@ fn a_changed_status_drops_the_thumbnail() {
     assert!(matches!(view.preview("/p.png"), Preview::Loading), "changed: made again when shown");
 }
 
+/// A file that goes from missing to unreadable (not missing) gets its colour thumbnail back.
+#[test]
+fn an_unavailable_file_does_not_keep_its_gray_thumbnail() {
+    let ctx = egui::Context::default();
+    let mut view = RecentView::default();
+    view.entries.insert("/p.png".into(), Entry::new());
+    let image = || Outcome::Image(rgba(2, 2, [1, 1, 1, 255]));
+    view.apply(&ctx, Done { path: "/p.png".into(), id: 0, stat: Some(FileStat::Missing), key: Some(1), outcome: image() });
+    assert!(matches!(view.entries.get("/p.png").map(|e| &e.thumb), Some(Thumb::Ready { gray: true, .. })));
+    view.apply(&ctx, Done { path: "/p.png".into(), id: 0, stat: Some(FileStat::Unavailable), key: Some(1), outcome: Outcome::Unchanged });
+    assert!(matches!(view.preview("/p.png"), Preview::Loading), "made again, in colour, when shown");
+}
+
 /// Zero bytes read as 0 KB, not 1 KB.
 #[test]
 fn an_empty_file_is_zero_kb() {

@@ -475,6 +475,12 @@ impl RecentView {
                 if missing && matches!(e.thumb, Thumb::Ready { gray: false, .. }) {
                     e.thumb = Thumb::Unrequested;
                 }
+                // A grayed thumbnail for a file that is not missing after all (it could not be
+                // statted) comes back in colour from the cache.
+                if e.stat == Some(FileStat::Unavailable) && matches!(e.thumb, Thumb::Ready { gray: true, .. }) {
+                    e.key = None;
+                    e.thumb = Thumb::Unrequested;
+                }
             }
             Outcome::NoPreview => {
                 e.key = done.key;
