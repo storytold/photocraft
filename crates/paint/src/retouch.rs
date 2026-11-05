@@ -17,6 +17,7 @@
 use photocraft_color::{BlendMode, PixelFormat};
 use photocraft_geom::Rect;
 use photocraft_raster::{Surface, from_rgba_into, to_rgba};
+use rayon::prelude::*;
 
 use crate::{Dab, Stroke, dab_coverage, dabs};
 
@@ -76,6 +77,13 @@ impl Region {
         s.write_region(self.rect, &self.data);
     }
 }
+
+/// Dabs of at least this many pixels are worked a row per task; below it, handing the rows to
+/// other threads costs more than it saves.
+pub const PARALLEL_DAB_PIXELS: usize = 128 * 128;
+/// The same for work that mostly copies pixels (a live stroke's working copy, the mix back), which
+/// is bound by memory and only gains from more threads over a large area.
+pub const PARALLEL_COPY_PIXELS: usize = 512 * 512;
 
 /// One dab's footprint: coverage (hardness falloff × dab alpha) over its bounding rectangle.
 #[derive(Clone, Debug, PartialEq)]
@@ -273,17 +281,20 @@ pub fn mix_back(target: &mut Surface, orig: &Region, work: &Region, rect: Rect, 
     let fmt = target.format();
     let a = alpha_index(&fmt);
     let mut out = orig.crop(rect);
-    let n = out.ch;
+    let (rect, n, w) = (out.rect, out.ch, out.width());
+    if w == 0 {
+        return;
+    }
     let opacity = opacity.clamp(0.0, 1.0);
-    for y in rect.y0..rect.y1 {
+    let row = |i: usize, line: &mut [f32]| {
+        let y = rect.y0 + i as i32;
         for x in rect.x0..rect.x1 {
             let k = opacity * selection.map_or(1.0, |s| s.sample_channel(x, y, 0));
             if k <= 0.0 {
                 continue;
             }
             let wv = work.px(x, y);
-            let i = out.index(x, y) * n;
-            let o = &mut out.data[i..i + n];
+            let o = &mut line[(x - rect.x0) as usize * n..][..n];
             // Untouched by the dabs: keep the pixel exactly (the premultiplied mix can round it).
             if *o == *wv {
                 continue;
@@ -301,8 +312,15 @@ pub fn mix_back(target: &mut Surface, orig: &Region, work: &Region, rect: Rect, 
                 }
             }
         }
+    };
+    // Each pixel mixes on its own, so a large area's rows run in parallel.
+    if out.data.len() / n.max(1) >= PARALLEL_COPY_PIXELS {
+        out.data.par_chunks_mut(w * n).enumerate().for_each(|(i, line)| row(i, line));
+        target.write_region_par(rect, &out.data);
+    } else {
+        out.data.chunks_mut(w * n).enumerate().for_each(|(i, line)| row(i, line));
+        out.write(target);
     }
-    out.write(target);
 }
 
 /// `dst ← lerp(dst, src, k)` in premultiplied space (straight in, straight out; `a` = alpha index).
@@ -386,57 +404,61 @@ impl Smudge {
             }
             c
         });
-        // Lay down the carried colour.
-        for y in fp.rect.y0.max(wr.y0)..fp.rect.y1.min(wr.y1) {
-            for x in fp.rect.x0.max(wr.x0)..fp.rect.x1.min(wr.x1) {
-                let k = fp.at(x, y) * self.strength;
-                let (qx, qy) = (x - cx + r, y - cy + r);
-                if k <= 0.0 || qx < 0 || qy < 0 || qx >= side as i32 || qy >= side as i32 {
-                    continue;
-                }
-                let q = (qy as usize * side + qx as usize) * n;
-                let px = work.px_mut(x, y);
-                match alpha {
-                    Some(a) => {
-                        // Back to straight for the mix (premultiplied lerp towards the carried colour).
-                        let ca = carry[q + a];
-                        let mut buf = [0.0f32; 16];
-                        let m = n.min(buf.len());
-                        buf[..m].copy_from_slice(&carry[q..q + m]);
-                        let src = &mut buf[..m];
-                        if ca > 1e-6 {
-                            for (c, v) in src.iter_mut().enumerate() {
-                                if c != a {
-                                    *v /= ca;
+        // Every pixel of the pickup square lays down and picks up only its own carried cell, so the
+        // square's rows run in parallel, each pixel laid down before it is picked up.
+        let square = Rect::new(cx - r, cy - r, cx + r + 1, cy + r + 1).intersect(&wr);
+        if square.is_empty() {
+            return;
+        }
+        let lay = fp.rect.intersect(&square);
+        let (strength, keep) = (self.strength, self.strength);
+        let row = |y: i32, wrow: &mut [f32], crow: &mut [f32]| {
+            for x in square.x0..square.x1 {
+                let px = &mut wrow[(x - wr.x0) as usize * n..][..n];
+                let c = &mut crow[(x - cx + r) as usize * n..][..n];
+                // Lay down the carried colour.
+                let k = if lay.contains(x, y) { fp.at(x, y) * strength } else { 0.0 };
+                if k > 0.0 {
+                    match alpha {
+                        Some(a) => {
+                            // Back to straight for the mix (premultiplied lerp towards the carried colour).
+                            let ca = c[a];
+                            let mut buf = [0.0f32; 16];
+                            let m = n.min(buf.len());
+                            buf[..m].copy_from_slice(&c[..m]);
+                            let src = &mut buf[..m];
+                            if ca > 1e-6 {
+                                for (ch, v) in src.iter_mut().enumerate() {
+                                    if ch != a {
+                                        *v /= ca;
+                                    }
                                 }
                             }
+                            mix_premultiplied(px, src, a, k);
                         }
-                        mix_premultiplied(px, src, a, k);
-                    }
-                    None => {
-                        for c in 0..n {
-                            px[c] += (carry[q + c] - px[c]) * k;
+                        None => {
+                            for ch in 0..n {
+                                px[ch] += (c[ch] - px[ch]) * k;
+                            }
                         }
                     }
                 }
-            }
-        }
-        // Pick up: the carried colour keeps `strength` of itself.
-        let keep = self.strength;
-        for qy in 0..side {
-            for qx in 0..side {
-                let (x, y) = (cx + qx as i32 - r, cy + qy as i32 - r);
-                if !wr.contains(x, y) {
-                    continue;
-                }
-                let q = (qy * side + qx) * n;
-                let px = work.px(x, y);
+                // Pick up: the carried colour keeps `strength` of itself.
                 let pa = alpha.map_or(1.0, |a| px[a]);
-                for c in 0..n {
-                    let v = if alpha.is_some_and(|a| a != c) { px[c] * pa } else { px[c] };
-                    carry[q + c] = carry[q + c] * keep + v * (1.0 - keep);
+                for ch in 0..n {
+                    let v = if alpha.is_some_and(|a| a != ch) { px[ch] * pa } else { px[ch] };
+                    c[ch] = c[ch] * keep + v * (1.0 - keep);
                 }
             }
+        };
+        let (ww, rows) = (work.width() * n, square.height() as usize);
+        let (wy, qy) = ((square.y0 - wr.y0) as usize, (square.y0 - cy + r) as usize);
+        let work_rows = &mut work.data[wy * ww..(wy + rows) * ww];
+        let carry_rows = &mut carry[qy * side * n..(qy + rows) * side * n];
+        if rows * square.width() as usize >= PARALLEL_DAB_PIXELS {
+            work_rows.par_chunks_mut(ww).zip(carry_rows.par_chunks_mut(side * n)).enumerate().for_each(|(i, (w, c))| row(square.y0 + i as i32, w, c));
+        } else {
+            work_rows.chunks_mut(ww).zip(carry_rows.chunks_mut(side * n)).enumerate().for_each(|(i, (w, c))| row(square.y0 + i as i32, w, c));
         }
     }
 }

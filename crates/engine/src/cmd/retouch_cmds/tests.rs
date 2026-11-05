@@ -1954,6 +1954,33 @@ fn live_dab_batches_match_the_accumulating_renderer() {
     }
 }
 
+/// Big brushes take the paths the 40 px strokes above don't reach: dabs rasterised, toned and
+/// smudged a row per task, and the live working copy and mix back worked in parallel. Their live
+/// pixels are still exactly the command's.
+#[test]
+fn big_live_dab_strokes_commit_their_pixels_and_they_are_the_commands() {
+    let points = [[100.0, 200.0], [300.0, 230.0], [520.0, 170.0], [360.0, 210.0]];
+    let mut s = session(600, 400, 32, "rgb");
+    s.execute("layer.new.layer", json!({})).unwrap();
+    paint_layer(&mut s, |x, y| {
+        let mut c = texture(x % 150, y % 90);
+        c[3] = if (x / 23 + y / 17) % 4 == 0 { 0.0 } else { 0.35 + 0.065 * ((x * 7 + y * 3) % 11) as f32 };
+        c
+    });
+    for (cmd, mut extra) in dab_cases() {
+        extra["size"] = json!(400);
+        let rendered = s.execute(cmd, dab_opts(&points, 0, &extra)).unwrap();
+        let want = layer_pixels(&s);
+        s.execute("edit.undo", json!({})).unwrap();
+        offer_live(&mut s, cmd, &points, 0, &extra);
+        let taken = s.execute(cmd, dab_opts(&points, 0, &extra)).unwrap();
+        assert_eq!(taken["fromLive"], json!(true), "{cmd}");
+        assert_eq!(taken["damage"], rendered["damage"], "{cmd}");
+        assert!(layer_pixels(&s) == want, "{cmd}: the live pixels aren't the command's");
+        s.execute("edit.undo", json!({})).unwrap();
+    }
+}
+
 /// The offer is only taken by its own stroke: another stroke, a brush or option changed during
 /// the stroke, or a stroke whose commit renders itself (Color Replacement) render as before.
 #[test]
