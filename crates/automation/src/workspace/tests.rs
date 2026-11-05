@@ -540,6 +540,19 @@ fn built_in_working_spaces_convert_without_a_profile_under_the_desktop_gate() {
     assert_eq!(rgb["profile"], photocraft_cms::Builtin::AdobeRgbCompat.description());
 }
 
+#[test]
+fn a_stale_working_space_id_is_not_mistaken_for_a_profile_file() {
+    // Preferences are loaded without validation, so a working space can hold an id this build no
+    // longer knows. It names no file: the conversion uses the mode's built-in default.
+    let mut session = photocraft_engine::Session::new();
+    session.color.settings.working_gray = "obsolete-profile".into();
+    session.execute("file.new", serde_json::json!({"width": 16, "height": 16, "profile": "srgb"})).unwrap();
+    session.authorize = Some(authorize_desktop_engine_step);
+    let gray = session.execute("image.mode.grayscale", serde_json::json!({})).unwrap();
+    let default = photocraft_engine::color_cmds::working_profile(photocraft_engine::doc::ColorMode::Grayscale);
+    assert_eq!(gray["profile"], default.description.as_str());
+}
+
 // Regression test for #3763: `edit.installedProfiles` scans the OS and user ICC folders but
 // takes no path parameter, so automation let it through until it was listed as ambient.
 #[test]

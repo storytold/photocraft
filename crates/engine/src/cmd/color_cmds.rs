@@ -248,7 +248,9 @@ impl ColorState {
             Some("working-gray" | "workingGray") => ColorSpace::Gray,
             Some(_) => return false,
         };
-        self.settings.working_spec(space).is_some_and(|working| Builtin::from_id(working).is_none())
+        // As `resolve_profile` reads it: a stale id that is neither built in nor a path reads
+        // nothing (`working` falls back to the built-in default).
+        self.settings.working_spec(space).is_some_and(|working| Builtin::from_id(working).is_none() && spec_is_path(working))
     }
 
     /// Resolve a profile spec, reading "working…" specs from Color Settings.
@@ -588,6 +590,12 @@ pub fn composite_profile(doc: &Document) -> Arc<Profile> {
     }
 }
 
+/// Whether [`resolve_profile`] reads a spec that is not a built-in profile from the filesystem.
+fn spec_is_path(spec: &str) -> bool {
+    let lower = spec.to_ascii_lowercase();
+    lower.ends_with(".icc") || lower.ends_with(".icm") || spec.contains('/') || spec.contains('\\')
+}
+
 /// Resolves a profile parameter: a built-in id/alias/description, `"working"` (with `mode`),
 /// `"document"`, or a path to an `.icc`/`.icm` file.
 pub fn resolve_profile(spec: &str, doc: Option<&Document>, mode: Option<ColorMode>) -> Result<Arc<Profile>> {
@@ -605,8 +613,7 @@ pub fn resolve_profile(spec: &str, doc: Option<&Document>, mode: Option<ColorMod
     if let Some(b) = Builtin::from_id(spec) {
         return Ok(Arc::new(b.profile().clone()));
     }
-    let lower = spec.to_ascii_lowercase();
-    if lower.ends_with(".icc") || lower.ends_with(".icm") || spec.contains('/') || spec.contains('\\') {
+    if spec_is_path(spec) {
         // Regular files only: a device or FIFO path would be read until it ends, which it never does.
         let bytes = crate::file_cmds::read_file(spec).map_err(|e| EngineError::Other(format!("cannot read profile `{spec}`: {e}")))?;
         return Profile::parse(&bytes).map(Arc::new).map_err(cms_err);
