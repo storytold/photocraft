@@ -16,6 +16,12 @@ fn keeps_layers(ext: &str) -> bool {
     matches!(ext, "psd" | "psb" | "pcraft" | "ora" | "kra" | "xcf")
 }
 
+/// Formats whose writer fills a composite of the canvas: every flat format, and OpenRaster for
+/// its `mergedimage.png`.
+fn fills_composite(ext: &str) -> bool {
+    !keeps_layers(ext) || ext == "ora"
+}
+
 /// The extension of `name_or_ext` (a file name, path or bare extension), lowercase.
 fn extension(name_or_ext: &str) -> String {
     let file = name_or_ext.rsplit(['/', '\\']).next().unwrap_or(name_or_ext);
@@ -24,10 +30,11 @@ fn extension(name_or_ext: &str) -> String {
 
 /// The bytes exporting `doc` to `name_or_ext` may need before anything it allocates can fail
 /// cleanly: the output model, about one copy of every layer's and mask's pixel tiles plus the
-/// embedded smart-object files (each distinct one counted once); a flat format also fills a
-/// composite of the canvas, and PSD/PSB their merged image ([`merged_image_bytes`]). The encoded file is not counted: its buffer is reserved fallibly
-/// (`PsdFile::to_bytes`), so if it doesn't fit the save fails with an error rather than trapping,
-/// and counting it would refuse saves that fit. Saturates; never panics.
+/// embedded smart-object files (each distinct one counted once); a flat format and OpenRaster
+/// also fill a composite of the canvas, and PSD/PSB their merged image ([`merged_image_bytes`]).
+/// The encoded file is not counted: its buffer is reserved fallibly (`PsdFile::to_bytes`), so if
+/// it doesn't fit the save fails with an error rather than trapping, and counting it would refuse
+/// saves that fit. Saturates; never panics.
 pub fn estimate_export_bytes(doc: &Document, name_or_ext: &str) -> u64 {
     let tile_bytes = (TILE_SIZE as u64) * (TILE_SIZE as u64) * doc.pixel_format().bytes_per_pixel().max(1) as u64;
     let mut seen = HashSet::new();
@@ -44,7 +51,7 @@ pub fn estimate_export_bytes(doc: &Document, name_or_ext: &str) -> u64 {
     }
     let mut need = total;
     let ext = extension(name_or_ext);
-    if !keeps_layers(&ext) {
+    if fills_composite(&ext) {
         need = need.saturating_add(canvas_px(doc).saturating_mul(COMPOSITE_BYTES_PER_PX));
     }
     if matches!(ext.as_str(), "psd" | "psb") {
@@ -90,6 +97,8 @@ mod tests {
         assert_eq!(estimate_export_bytes(&doc, "/a/b/x.PSD"), (10 << 20) + merged);
         assert_eq!(estimate_export_bytes(&doc, "x.pcraft"), 10 << 20);
         assert_eq!(estimate_export_bytes(&doc, "png"), (10 << 20) + 64 * 64 * 16);
+        // OpenRaster keeps the layers but also writes a merged image, flattened first.
+        assert_eq!(estimate_export_bytes(&doc, "x.ora"), (10 << 20) + 64 * 64 * 16);
     }
 
     #[test]
