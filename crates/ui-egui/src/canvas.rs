@@ -676,6 +676,8 @@ struct DialogCanvasInput<'a> {
     temporary: Option<crate::hold_keys::Temporary>,
     free_hover: bool,
     img_rect: Rect,
+    size: [u32; 2],
+    idx: usize,
 }
 
 fn handle_dialog_canvas_input(app: &mut PhotocraftApp, input: DialogCanvasInput<'_>) {
@@ -716,7 +718,14 @@ fn handle_dialog_canvas_input(app: &mut PhotocraftApp, input: DialogCanvasInput<
         .flatten()
         .map(|m| crate::workspace_ui::sticky_mods(app, m))
         .filter(|m| m.command);
-    let dialog_hand = app.ui.tool == Tool::Hand && !picking && !range_picking && !refine_brushing && !pinning && !shadow_drag && curve_point_press.is_none();
+    let dialog_hand = app.ui.tool == Tool::Hand
+        && !crate::plugin_points::active(app, input.idx)
+        && !picking
+        && !range_picking
+        && !refine_brushing
+        && !pinning
+        && !shadow_drag
+        && curve_point_press.is_none();
     // ⌘Space / ⌥Space zoom under the dialog as they do without one, before Space pans (#6460).
     // With the Hand tool, ⌘ alone is Zoom In (#6434); under Curves that press is the dialog's
     // point (#7325), not a zoom.
@@ -786,6 +795,8 @@ fn handle_dialog_canvas_input(app: &mut PhotocraftApp, input: DialogCanvasInput<
     {
         let d = input.xf.to_doc(p);
         crate::adjust_dialog::add_point_at(app, input.ctx, d[0], d[1], mods.shift);
+    } else if input.primary && !input.middle && crate::plugin_points::active(app, input.idx) {
+        crate::plugin_points::interact(app, input.ctx, input.xf, input.size, input.rect, input.idx);
     } else if input.primary
         && !input.middle
         && let Some(p) = crate::dialogs::free_pointer_over(input.ctx, input.rect).filter(|p| input.img_rect.contains(*p))
@@ -1981,8 +1992,13 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                 temporary,
                 free_hover,
                 img_rect,
+                size,
+                idx,
             },
         );
+    }
+    if primary {
+        crate::plugin_points::draw(app, &painter, &xf, size, idx);
     }
 
     // The selected Hand yields to an open Free Transform box in this (primary) window: the box
@@ -2428,6 +2444,35 @@ mod rotation_preview_isolation_tests {
         app.ui.dialogs.last_mut().unwrap().fields.insert("__preview".into(), json!(false));
         assert!(ensure_filter_preview(&mut app, 0, &egui::Context::default()).is_none(), "disabling Preview must hide the preview");
         assert_eq!([app.session.active().unwrap().doc.size.width, app.session.active().unwrap().doc.size.height], [96, 48]);
+    }
+
+    /// The CPU canvas (no GPU canvas: a window on a software rasterizer) shows a plug-in filter's
+    /// live preview too. Only the GPU path asked for it, so the canvas showed nothing until OK.
+    #[test]
+    fn cpu_canvas_shows_a_plugin_filters_live_preview() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../plugins/tests/fixtures/invert.wasm");
+        app.run("plugin.install", json!({"path": path})).unwrap();
+        app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+        assert!(app.gpu.is_none());
+        let ctx = egui::Context::default();
+        let id = app.session.active().unwrap().doc.id;
+        let shown = |app: &mut PhotocraftApp| {
+            ensure_texture(app, &ctx, 0, None).expect("canvas texture");
+            app.canvases[&cache_key(id, None)].tex_preview_key
+        };
+        let plain = shown(&mut app);
+        let mut fixed = serde_json::Map::new();
+        fixed.insert("id".into(), json!("org.photocraft.example.invert"));
+        let dialog = crate::filter_dialog::open_with_spec(&mut app, "plugin.run", "Invert", r#"{"start":point=[10,10]}"#, fixed);
+        let before = app.session.active().unwrap().doc.layers[0].surface().unwrap().pixel(1, 1);
+        let (doc, _) = filter_channel_preview(&mut app, 0, &ctx).expect("the CPU canvas shows the preview");
+        let px = doc.layers[0].surface().unwrap().pixel(1, 1);
+        assert!((px[0] - (1.0 - before[0])).abs() < 1e-6, "the plug-in ran for the preview");
+        assert_ne!(shown(&mut app), plain, "the canvas texture is the preview");
+        assert_eq!(app.session.active().unwrap().doc.layers[0].surface().unwrap().pixel(1, 1), before, "the document is untouched");
+        crate::dialogs::cancel(&mut app, dialog).unwrap();
+        assert_eq!(shown(&mut app), plain, "Cancel shows the document again");
     }
 
     /// A dialog operates on the active document and cannot render a preview into a

@@ -400,7 +400,12 @@ fn filter_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: &
     // Long parameter lists (Flame, Lighting Effects) scroll, so the title and the
     // OK / Cancel buttons stay inside a small window. The preview window below the
     // parameters reserves its own space (#3769).
-    let room = (ui.ctx().content_rect().height() - DIALOG_CHROME - crate::filter_preview_ui::reserved_height(fields)).max(120.0);
+    let mut room = (ui.ctx().content_rect().height() - DIALOG_CHROME - crate::filter_preview_ui::reserved_height(fields)).max(120.0);
+    if crate::plugin_presets_ui::owns(fields) {
+        let top = ui.cursor().top();
+        crate::plugin_presets_ui::body(app, ui, fields);
+        room = (room - (ui.cursor().top() - top)).max(120.0);
+    }
     let body = |ui: &mut egui::Ui, fields: &mut serde_json::Map<String, Value>| {
         egui::ScrollArea::vertical().id_salt(id.with("body")).max_height(room).show(ui, |ui| {
             if crate::bitmap_dialog::owns(fields) {

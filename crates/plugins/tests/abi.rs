@@ -143,6 +143,28 @@ fn params_and_image_context_reach_the_plugin() {
 }
 
 #[test]
+fn point_params_reach_the_plugin() {
+    // Writes params_len into every sample: the `[x, y]` arrays must reach the plug-in as JSON.
+    let fill = r#"(local $i i32)
+      (block $done (loop $l
+        (br_if $done (i32.ge_u (local.get $i) (local.get $len)))
+        (f32.store (i32.add (local.get $buf) (local.get $i)) (f32.convert_i32_u (local.get $pl)))
+        (local.set $i (i32.add (local.get $i) (i32.const 4)))
+        (br $l)))
+      (i32.const 0)"#;
+    let man = r#"{"id":"test.points","name":"P","kind":"filter","params":{"start":{"type":"point","default":[12,12]},"end":{"type":"point","default":[88,62]}},"guide":{"from":"start","to":"end"}}"#;
+    let p = Plugin::load(&module(man, 1, fill, ""), Limits::default()).unwrap();
+    assert_eq!(p.manifest().params_notation(), r#"{"start":point=[12,12],"end":point=[88,62]}"#);
+    let s = surface(PixelFormat::RGBA32F, 8, 8);
+    let len = |params: serde_json::Value| p.apply(&s, Rect::new(0, 0, 8, 8), None, &params).map(|out| out.pixel(1, 1)[0]);
+    // Same digits, so the same JSON length: defaults and given values travel the same way.
+    assert_eq!(len(json!({})).unwrap(), len(json!({"start": [12, 12], "end": [88, 62]})).unwrap());
+    assert!(len(json!({"start": [500, -3]})).is_ok(), "out-of-canvas points are clamped, not refused");
+    assert!(matches!(len(json!({"start": "here"})), Err(Error::Params(_))));
+    assert!(matches!(len(json!({"start": [1, 2, 3]})), Err(Error::Params(_))));
+}
+
+#[test]
 fn nan_and_out_of_range_output_is_sanitised() {
     // Fills the buffer with NaN: every pixel keeps its value.
     let nan = r#"(local $i i32)
