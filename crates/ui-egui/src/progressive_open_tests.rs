@@ -57,7 +57,7 @@ fn until_opened(app: &mut PhotocraftApp) {
 fn the_full_document_takes_over_the_preview_tab_with_its_view_and_a_clean_state() {
     for with_jpeg in [false, true] {
         let mut app = app_with_a_document();
-        start_open(&mut app, "s.dng", None, OpenSource::Bytes(Arc::new(dng(with_jpeg)))).unwrap();
+        start_open(&mut app, "s.dng", None, OpenSource::Bytes(Arc::new(dng(with_jpeg))), None, None).unwrap();
         until_previewed(&mut app);
         // The preview is a normal tab after the first document, locked by the open job.
         assert_eq!(app.session.documents().len(), 2);
@@ -83,7 +83,7 @@ fn the_full_document_takes_over_the_preview_tab_with_its_view_and_a_clean_state(
 #[test]
 fn closing_the_preview_cancels_the_open_without_leaking_a_lock_or_a_tab() {
     let mut app = app_with_a_document();
-    start_open(&mut app, "s.dng", None, OpenSource::Bytes(Arc::new(dng(true)))).unwrap();
+    start_open(&mut app, "s.dng", None, OpenSource::Bytes(Arc::new(dng(true))), None, None).unwrap();
     until_previewed(&mut app);
     app.session.close(1);
     app.sync_views();
@@ -95,7 +95,7 @@ fn closing_the_preview_cancels_the_open_without_leaking_a_lock_or_a_tab() {
 #[test]
 fn cancelling_the_open_closes_its_preview() {
     let mut app = app_with_a_document();
-    start_open(&mut app, "s.dng", None, OpenSource::Bytes(Arc::new(dng(false)))).unwrap();
+    start_open(&mut app, "s.dng", None, OpenSource::Bytes(Arc::new(dng(false))), None, None).unwrap();
     until_previewed(&mut app);
     let job = app.jobs.previews[0].0;
     assert!(cancel(&mut app, job));
@@ -111,7 +111,7 @@ fn a_failing_open_closes_its_preview_and_reports_the_error() {
     let cut = bytes.len() - 4000;
     bytes.truncate(cut.max(200));
     let mut app = app_with_a_document();
-    start_open(&mut app, "bad.dng", None, OpenSource::Bytes(Arc::new(bytes))).unwrap();
+    start_open(&mut app, "bad.dng", None, OpenSource::Bytes(Arc::new(bytes)), None, None).unwrap();
     until_opened(&mut app);
     assert_eq!(app.session.documents().len(), 1);
     assert!(app.jobs.previews.is_empty() && app.session.jobs().is_empty());
