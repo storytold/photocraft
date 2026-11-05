@@ -61,6 +61,11 @@ pub(super) fn accepts_outside_click(g: Gesture, end: [f64; 2], tol: f64) -> bool
     g.hit == Hit::Outside && (end[0] - g.start[0]).hypot(end[1] - g.start[1]) <= 2.0 * tol / HANDLE_PX
 }
 
+/// Whether a document point is outside the document, on the pasteboard around the canvas.
+fn on_pasteboard(app: &PhotocraftApp, p: [f64; 2]) -> bool {
+    app.session.active().is_some_and(|st| p[0] < 0.0 || p[1] < 0.0 || p[0] >= f64::from(st.doc.size.width) || p[1] >= f64::from(st.doc.size.height))
+}
+
 /// Pointer input while transforming. Returns false when no transform is active.
 pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) -> bool {
     let Some(t) = app.ui.transform.clone() else { return false };
@@ -84,7 +89,7 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
                 s.pivot = [x, y];
                 h = Hit::Pivot;
             }
-            // Distort moves corners and edges (and the whole box from inside), but doesn't rotate.
+            // Distort only moves corners (and the whole box from inside): no rotating, no edges.
             // Even in Distort mode, remember an outside press so a plain click can
             // accept the transform. A drag outside remains inert in that mode, in Skew, and in
             // Content-Aware Scale, which only scales and moves.
@@ -95,16 +100,16 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
             if matches!(ev, ToolEvent::Up { .. }) {
                 pv.gesture = None;
             }
-            // Clicking an empty spot commits instead of silently arming rotation (#2851).
-            // Dragging the rotation zone and Option-clicking to move the pivot
-            // keep their existing behavior.
+            // Clicking the pasteboard (outside the document) commits; a click outside the box on the
+            // image does nothing and the box stays open (#11100). Dragging the rotation zone and
+            // Option-clicking to move the pivot keep their existing behavior.
             if matches!(ev, ToolEvent::Up { .. }) && g.is_some_and(|g| accepts_outside_click(g, [x, y], tol)) {
-                commit(app);
-                // The Move tool's click that accepted the box also picks what is under it
-                // (Auto-Select), rather than needing a second click (#8208).
-                if app.ui.transform.is_none() && app.ui.tool == crate::state::Tool::Move {
-                    crate::canvas::tool_event(app, ToolEvent::Down { x, y, pressure: 1.0 }, mods);
-                    crate::canvas::tool_event(app, ToolEvent::Up { x, y }, mods);
+                if on_pasteboard(app, [x, y]) {
+                    commit(app);
+                } else if let (Some(g), Some(s)) = (g, app.ui.transform.as_mut()) {
+                    // Jitter before the release may have turned the box a little: put it back.
+                    s.quad = g.quad0;
+                    s.pivot = g.pivot0;
                 }
                 return true;
             }
