@@ -481,8 +481,9 @@ impl LiquifyField {
         }
         let (gx0, gy0) = self.to_grid(c[0] - r, c[1] - r);
         let (gx1, gy1) = self.to_grid(c[0] + r, c[1] + r);
-        let i0 = gx0.floor().max(0.0) as usize;
-        let j0 = gy0.floor().max(0.0) as usize;
+        // Clamped to the grid before the casts: a huge index must not wrap negative as isize.
+        let i0 = gx0.floor().max(0.0).min(self.w as f64) as usize;
+        let j0 = gy0.floor().max(0.0).min(self.h as f64) as usize;
         let i1 = (gx1.ceil().max(-1.0) as isize).min(self.w as isize - 1);
         let j1 = (gy1.ceil().max(-1.0) as isize).min(self.h as isize - 1);
         if i1 < i0 as isize || j1 < j0 as isize {
