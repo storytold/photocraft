@@ -575,6 +575,8 @@ fn build() -> Vec<CommandSpec> {
                         dup.name.clone_from(name);
                     }
                     let nid = doc.insert_above(Some(id), dup);
+                    // A lone copy joins its original's link group, as in the reference application (#11217).
+                    crate::layer_multi_cmds::relink_copies(doc, &[nid])?;
                     if !in_place {
                         crate::artboard_cmds::place_copy(doc, nid)?;
                     }
@@ -1098,7 +1100,7 @@ fn build() -> Vec<CommandSpec> {
                 };
                 if s.set_active(idx) { Ok(json!({"document": idx})) } else { Err(EngineError::Other(format!("no document at index {idx}"))) }
             },
-            journal: false,
+            journal: true,
         },
         CommandSpec {
             id: "document.move",
