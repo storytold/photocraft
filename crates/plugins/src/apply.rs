@@ -1,8 +1,6 @@
 //! Running a filter plug-in over a surface, band by band.
 
 use std::sync::Arc;
-#[cfg(not(target_arch = "wasm32"))]
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use photocraft_color::{ColorMode, PixelFormat, SampleType};
@@ -84,22 +82,6 @@ fn hard_error_in_discarded_attempt(results: &[(Result<Surface>, bool)]) -> Optio
     results.iter().find_map(|(result, denied)| if *denied { None } else { result.as_ref().err().cloned() })
 }
 
-/// Interpreter-heavy plug-ins can keep more cores busy than Rayon’s usual one worker per
-/// available CPU. Share the extra workers across runs, and honour explicit Rayon pool settings.
-#[cfg(not(target_arch = "wasm32"))]
-fn plugin_pool() -> Option<&'static rayon::ThreadPool> {
-    if rayon::current_thread_index().is_some() || std::env::var_os("RAYON_NUM_THREADS").is_some() {
-        return None;
-    }
-    static POOL: OnceLock<Option<rayon::ThreadPool>> = OnceLock::new();
-    POOL.get_or_init(|| {
-        let cores = std::thread::available_parallelism().map(std::num::NonZeroUsize::get).unwrap_or(1);
-        let workers = cores.saturating_mul(5).div_ceil(2).clamp(1, 64);
-        rayon::ThreadPoolBuilder::new().num_threads(workers).build().ok()
-    })
-    .as_ref()
-}
-
 impl Plugin {
     /// The rectangle a run writes: the layer's content (grown by the plug-in's overlap) or the
     /// canvas, limited to the selection's bounds.
@@ -162,9 +144,7 @@ impl Plugin {
         let ctx = BandCtx { surface, extent, canvas, selection, fmt, ov, params: Value::Object(resolved) };
         let budget = RunBudget::new(self.limits());
         #[cfg(not(target_arch = "wasm32"))]
-        let pool = (bands.len() >= 16).then(plugin_pool).flatten();
-        #[cfg(not(target_arch = "wasm32"))]
-        let workers = pool.map_or_else(rayon::current_num_threads, rayon::ThreadPool::current_num_threads);
+        let workers = rayon::current_num_threads();
         // Start with the conservative bound. Its first group supplies a real memory footprint
         // for later groups while preserving the existing parallel error cancellation.
         #[cfg(not(target_arch = "wasm32"))]
@@ -196,7 +176,7 @@ impl Plugin {
                 #[cfg(not(target_arch = "wasm32"))]
                 let results: Vec<(Result<Surface>, bool)> = {
                     use rayon::prelude::*;
-                    if let Some(pool) = pool { pool.install(|| slice.par_iter().map(run).collect()) } else { slice.par_iter().map(run).collect() }
+                    slice.par_iter().map(run).collect()
                 };
                 #[cfg(target_arch = "wasm32")]
                 let results: Vec<(Result<Surface>, bool)> = slice.iter().map(run).collect();
