@@ -80,7 +80,7 @@ pub fn import_scaled(name: &str, bytes: &[u8], scale: f32, ctl: &Interrupt) -> R
     };
     unpremultiply(&mut rgba);
     let img = Image::from_raw(width, height, ChannelLayout::Rgba, SampleType::U8, rgba)?;
-    let mut r = crate::flat::image_to_document(name, &img)?;
+    let mut r = crate::flat::image_to_document_with(name, &img, ctl)?;
     r.document.resolution_dpi = PPI * drawn_scale;
     // craft-pdf draws in sRGB.
     r.document.icc_profile = Some(photocraft_cms::Builtin::Srgb.profile().to_bytes());

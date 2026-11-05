@@ -643,7 +643,7 @@ pub fn image_to_document(name: &str, img: &Image) -> Result<ImportResult, IoErro
 
 /// [`image_to_document`], checking `ctl` before and after the tiles are built (progress 0.95
 /// once they are), and refusing tiles the machine can't hold beside the decoded image.
-fn image_to_document_with(name: &str, img: &Image, ctl: &Interrupt) -> Result<ImportResult, IoError> {
+pub(crate) fn image_to_document_with(name: &str, img: &Image, ctl: &Interrupt) -> Result<ImportResult, IoError> {
     image_to_document_with_memory(name, img, ctl, crate::memory::available())
 }
 

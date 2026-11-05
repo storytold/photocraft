@@ -1922,7 +1922,7 @@ fn place_embedded_centres_fits_and_embeds() {
 
 /// A `.vectorcraft` file carrying a one-page PDF of `w` × `h` points, its left half filled with
 /// the RGB color `rgb` (PDF operands, such as `0 0 1` for blue).
-fn vectorcraft_file(w: u32, h: u32, rgb: &str) -> Vec<u8> {
+pub(super) fn vectorcraft_file(w: u32, h: u32, rgb: &str) -> Vec<u8> {
     let content = format!("{rgb} rg 0 0 {} {h} re f", w / 2);
     let pdf = format!(
         "%PDF-1.7\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {w} {h}] /Contents 4 0 R >>\nendobj\n4 0 obj\n<< /Length {} >>\nstream\n{content}\nendstream\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n",
