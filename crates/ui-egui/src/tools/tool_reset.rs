@@ -69,6 +69,10 @@ pub fn confirm(app: &mut PhotocraftApp) -> Result<Value, String> {
 
 /// Reset Tool: `tool`'s options, its selection mode and its brush.
 fn reset_tool(app: &mut PhotocraftApp, tool: Tool) {
+    if tool == Tool::Frame {
+        crate::frame_tool::cancel(app);
+        app.ui.frame_tool = Default::default();
+    }
     reset_options(&mut app.ui.tool_options, tool);
     if is_selection_tool(tool) {
         app.ui.selection_mode = 0;
@@ -83,6 +87,8 @@ fn reset_tool(app: &mut PhotocraftApp, tool: Tool) {
 
 /// Reset All Tools: every option, the selection mode and every tool's brush.
 fn reset_all(app: &mut PhotocraftApp) {
+    crate::frame_tool::cancel(app);
+    app.ui.frame_tool = Default::default();
     app.ui.tool_options = ToolOptions::default();
     app.ui.selection_mode = 0;
     app.ui.tool_brushes.clear();
@@ -156,7 +162,7 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
         }};
     }
     match tool {
-        Tool::Move => reset!(move_auto_select, move_target, move_show_transform, transform_interpolation),
+        Tool::Move => reset!(move_auto_select, move_target, move_show_transform, transform_interpolation, transform_reference_point),
         Tool::RectMarquee | Tool::EllipseMarquee => reset!(feather, anti_alias, marquee_style, marquee_width, marquee_height, marquee_unit),
         // The single-pixel marquees are never anti-aliased: Feather is their only option.
         Tool::SingleRowMarquee | Tool::SingleColumnMarquee => reset!(feather),
