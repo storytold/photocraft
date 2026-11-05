@@ -109,6 +109,110 @@ fn picking_the_tool_frames_the_canvas_or_the_selection() {
     assert_eq!(app.ui.crop_rect, None);
 }
 
+/// #9730: the options bar's Reset puts the box back to its first frame, as an Undo step.
+#[test]
+fn reset_frames_the_canvas_again_and_can_be_undone() {
+    let mut app = app(SampleType::U8);
+    ensure_frame(&mut app);
+    assert!(!modified(&app), "the untouched default frame has nothing to reset");
+    reset(&mut app);
+    assert!(app.crop.undo.is_empty(), "so resetting it adds no step");
+
+    drag(&mut app, &[[50.0, 20.0], [80.0, 40.0], [120.0, 70.0]], NONE);
+    assert_eq!(app.ui.crop_rect, Some([50.0, 20.0, 120.0, 70.0]));
+    assert!(modified(&app));
+    reset(&mut app);
+    assert_eq!(app.ui.crop_rect, Some([0.0, 0.0, 200.0, 100.0]));
+    assert!(!modified(&app) && app.crop.default_frame);
+    assert_eq!(app.session.active().unwrap().doc.size, Size::new(200, 100), "nothing is cropped");
+
+    // The box's own Undo brings the drawn frame back, and Redo resets it again.
+    assert!(!shows_beyond_canvas(&app), "the reset frame is not being edited");
+    assert!(intercept(&mut app, "edit.undo").is_some());
+    assert_eq!(app.ui.crop_rect, Some([50.0, 20.0, 120.0, 70.0]));
+    assert!(shows_beyond_canvas(&app), "the drawn frame is being edited again: the canvas shows the pixels past it");
+    assert!(intercept(&mut app, "edit.redo").is_some());
+    assert_eq!(app.ui.crop_rect, Some([0.0, 0.0, 200.0, 100.0]));
+
+    // A turned default frame is a changed one too: Reset makes it upright.
+    app.ui.crop_angle = 0.3;
+    assert!(modified(&app));
+    reset(&mut app);
+    assert_eq!((app.ui.crop_angle, modified(&app)), (0.0, false));
+
+    // With a selection, the first frame is its bounds.
+    drag(&mut app, &[[50.0, 20.0], [80.0, 40.0], [120.0, 70.0]], NONE);
+    app.run("select.rect", json!({"x": 10, "y": 10, "width": 30, "height": 20})).unwrap();
+    reset(&mut app);
+    assert_eq!(app.ui.crop_rect, Some([10.0, 10.0, 40.0, 30.0]));
+
+    // Another tool has no box to reset.
+    drag(&mut app, &[[60.0, 30.0], [100.0, 60.0]], NONE);
+    app.ui.tool = Tool::Brush;
+    assert!(!modified(&app));
+}
+
+/// Reset frames the canvas as a new frame is: held to the ratio preset picked in the bar.
+#[test]
+fn reset_holds_the_frame_to_the_ratio_preset() {
+    let mut app = app(SampleType::U8);
+    ensure_frame(&mut app);
+    drag(&mut app, &[[50.0, 20.0], [80.0, 40.0], [120.0, 70.0]], NONE);
+    let drawn = Some([50.0, 20.0, 120.0, 70.0]);
+    assert_eq!(app.ui.crop_rect, drawn);
+    // A 1:1 preset on the 200 x 100 canvas: the first frame is the largest square, centred.
+    app.ui.tool_options.crop_ratio = "1:1".into();
+    reset(&mut app);
+    assert_eq!(app.ui.crop_rect, Some([50.0, 0.0, 150.0, 100.0]), "not the whole canvas, a 2:1 frame under a 1:1 preset");
+    assert!(!modified(&app) && app.crop.default_frame);
+    assert!(intercept(&mut app, "edit.undo").is_some());
+    assert_eq!(app.ui.crop_rect, drawn, "Undo brings the drawn frame back");
+}
+
+/// A W x H x Resolution preset keeps the reset frame a pending crop (it sets an output size), so
+/// Commit still crops; Reset has nothing more to do on it until the frame changes again.
+#[test]
+fn reset_under_an_output_size_leaves_nothing_to_reset() {
+    let mut app = app(SampleType::U8);
+    ensure_frame(&mut app);
+    let o = &mut app.ui.tool_options;
+    o.crop_ratio = crate::crop_size::WHR.into();
+    (o.crop_width, o.crop_height, o.crop_resolution) = ("100 px".into(), "100 px".into(), "72".into());
+    drag(&mut app, &[[50.0, 20.0], [80.0, 40.0], [120.0, 70.0]], NONE);
+    assert!(modified(&app));
+    reset(&mut app);
+    assert_eq!(app.ui.crop_rect, Some([50.0, 0.0, 150.0, 100.0]));
+    assert!(pending(&app), "the output size is still a crop to commit");
+    assert!(!modified(&app), "and Reset has nothing more to do");
+    drag(&mut app, &[[60.0, 10.0], [90.0, 40.0]], NONE);
+    assert!(modified(&app), "a new frame can be reset again");
+}
+
+/// #9730: the Crop tool's options bar has a Reset button beside Cancel and Commit, live once
+/// the frame was changed.
+#[test]
+fn the_options_bar_reset_button_resets_a_changed_frame() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.run("file.new", json!({"width": 200, "height": 100})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_max_steps(64).build_eframe(move |cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        app
+    });
+    h.state_mut().ui.tool = Tool::Crop;
+    h.run_steps(8);
+    let button = |h: &egui_kittest::Harness<'_, PhotocraftApp>| h.get_by_role_and_label(egui::accesskit::Role::Button, "Reset").accesskit_node().is_disabled();
+    assert!(button(&h), "an untouched frame has nothing to reset");
+    h.state_mut().ui.crop_rect = Some([50.0, 20.0, 120.0, 70.0]);
+    h.state_mut().crop.default_frame = false;
+    h.run_steps(4);
+    assert!(!button(&h), "a changed frame can be reset");
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Reset").click();
+    h.run_steps(4);
+    assert_eq!(h.state().ui.crop_rect, Some([0.0, 0.0, 200.0, 100.0]));
+    assert!(button(&h));
+}
+
 #[test]
 fn enter_on_the_selection_frame_crops_to_it_at_8_and_16_bit() {
     // #1789: selection, C, ↵ did nothing, as the untouched frame was always treated as a no-op.
@@ -1215,6 +1319,128 @@ fn readout_shows_the_frame_size_while_drawing_or_resizing() {
     assert_eq!(frame_size([0.0, 0.0, 0.2, 0.4]), Some([1.0, 1.0]));
     assert_eq!(frame_size([f64::NAN, 0.0, 1.0, 1.0]), None);
     assert_eq!(frame_size([-f64::MAX, 0.0, f64::MAX, 1.0]), None);
+}
+
+/// Esc through the real shortcut handler.
+fn press_esc(app: &mut PhotocraftApp) {
+    let key = egui::Key::Escape;
+    let input = egui::RawInput {
+        focused: true,
+        events: vec![egui::Event::Key { key, physical_key: Some(key), pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }],
+        ..Default::default()
+    };
+    egui::Context::default().run_ui(input, |ui| crate::shortcuts::handle(app, ui.ctx())).textures_delta.clear();
+}
+
+#[test]
+fn esc_hides_the_frame_until_a_press() {
+    // #10370: Esc cancelled the crop but the next frame made the default frame again. It now hides
+    // the frame as a commit does: picking the tool again keeps it hidden, a press brings it back.
+    for classic in [false, true] {
+        let mut app = app(SampleType::U8);
+        app.ui.tool_options.crop_shield.classic_mode = classic;
+        ensure_frame(&mut app);
+        assert!(app.ui.crop_rect.is_some() && app.crop.default_frame);
+        // The untouched default frame: Esc hides it, and it stays hidden frame after frame.
+        press_esc(&mut app);
+        for _ in 0..3 {
+            ensure_frame(&mut app);
+            assert_eq!(app.ui.crop_rect, None, "classic={classic}");
+        }
+        // A press on the canvas draws a new frame.
+        drag(&mut app, &[[50.0, 20.0], [80.0, 40.0], [120.0, 70.0]], NONE);
+        assert_eq!(app.ui.crop_rect, Some([50.0, 20.0, 120.0, 70.0]));
+        // A drawn frame: Esc hides it too, and crops nothing.
+        press_esc(&mut app);
+        ensure_frame(&mut app);
+        assert_eq!(app.ui.crop_rect, None);
+        assert_eq!(app.session.active().unwrap().doc.size, Size::new(200, 100));
+        // Leaving the tool after Esc crops nothing, and back on it the frame stays hidden.
+        app.ui.tool = Tool::Brush;
+        ensure_frame(&mut app);
+        assert_eq!(app.session.active().unwrap().doc.size, Size::new(200, 100), "classic={classic}");
+        app.ui.tool = Tool::Crop;
+        ensure_frame(&mut app);
+        assert_eq!(app.ui.crop_rect, None, "picking the tool again keeps it hidden");
+        // A press brings it back; the options bar's cancel hides it as well.
+        show_frame(&mut app);
+        assert!(app.ui.crop_rect.is_some() && app.crop.default_frame);
+        dismiss(&mut app);
+        ensure_frame(&mut app);
+        assert_eq!(app.ui.crop_rect, None);
+        // A plain cancel (stale document) does not hide it.
+        show_frame(&mut app);
+        cancel(&mut app);
+        ensure_frame(&mut app);
+        assert!(app.ui.crop_rect.is_some());
+    }
+}
+
+#[test]
+fn closing_a_dismissed_document_never_hides_the_next_tabs_frame() {
+    // A same-size tab that takes the closed document's index must still show its frame.
+    let mut app = app(SampleType::U8);
+    let doc = Document::with_background("other", Size::new(200, 100), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+    app.session.add_document(doc, None);
+    assert!(app.session.set_active(0));
+    ensure_frame(&mut app);
+    press_esc(&mut app);
+    ensure_frame(&mut app);
+    assert_eq!(app.ui.crop_rect, None);
+    assert!(app.session.close(0).is_some());
+    assert_eq!(app.session.active_index(), Some(0));
+    ensure_frame(&mut app);
+    assert!(app.ui.crop_rect.is_some() && app.crop.default_frame);
+}
+
+#[test]
+fn a_straighten_press_ends_the_dismissal() {
+    // Straighten takes the press before `begin_drag`; a click too short to level anything still
+    // ends the dismissal.
+    let mut app = app(SampleType::U8);
+    ensure_frame(&mut app);
+    press_esc(&mut app);
+    ensure_frame(&mut app);
+    assert_eq!(app.ui.crop_rect, None);
+    app.crop.straighten.armed = true;
+    drag(&mut app, &[[50.0, 20.0], [50.5, 20.0]], NONE);
+    ensure_frame(&mut app);
+    assert!(app.ui.crop_rect.is_some());
+}
+
+#[test]
+fn undoing_a_crop_after_esc_brings_the_frame_back() {
+    // Esc crops nothing, so it adds no step; an Undo that changes the canvas size shows a frame for it.
+    let mut app = app(SampleType::U8);
+    ensure_frame(&mut app);
+    drag(&mut app, &[[20.0, 10.0], [70.0, 30.0], [120.0, 60.0]], NONE);
+    crate::canvas::commit_crop(&mut app);
+    assert_eq!(app.session.active().unwrap().doc.size, Size::new(100, 50));
+    ensure_frame(&mut app);
+    let steps = app.session.active().unwrap().history.entries().len();
+    press_esc(&mut app);
+    ensure_frame(&mut app);
+    assert_eq!(app.ui.crop_rect, None);
+    assert_eq!(app.session.active().unwrap().history.entries().len(), steps);
+    assert!(app.session.undo());
+    assert_eq!(app.session.active().unwrap().doc.size, Size::new(200, 100));
+    ensure_frame(&mut app);
+    assert!(app.ui.crop_rect.is_some() && app.crop.default_frame);
+}
+
+#[test]
+fn an_undo_that_keeps_the_canvas_size_leaves_the_frame_hidden() {
+    // Only a size change brings the frame back: undoing an edit that keeps the size doesn't.
+    let mut app = app(SampleType::U8);
+    app.run("image.adjustments.invert", json!({})).unwrap();
+    ensure_frame(&mut app);
+    press_esc(&mut app);
+    ensure_frame(&mut app);
+    assert_eq!(app.ui.crop_rect, None);
+    assert!(app.session.undo());
+    assert_eq!(app.session.active().unwrap().doc.size, Size::new(200, 100));
+    ensure_frame(&mut app);
+    assert_eq!(app.ui.crop_rect, None);
 }
 
 /// #3145: the Info panel shows the pending frame's W × H while the Crop tool is active
