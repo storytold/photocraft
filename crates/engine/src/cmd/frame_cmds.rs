@@ -87,7 +87,7 @@ fn new_frame(s: &mut Session, p: &Value) -> Result<Value> {
     let f = geometry(p)?;
     let content = match p.get("layer") {
         None | Some(Value::Null) => None,
-        Some(v) => Some(LayerId(v.as_u64().ok_or_else(|| bad("layer must be a layer id"))?)),
+        Some(_) => Some(crate::commands::layer_param(s, p)?),
     };
     let name = p.get("name").map(|v| v.as_str().map(str::to_owned).ok_or_else(|| bad("name must be a string"))).transpose()?;
     let gid = s.edit("New Frame", |doc, active| {
