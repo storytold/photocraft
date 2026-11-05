@@ -1001,7 +1001,7 @@ fn gradient_map_stop_picker_closed_without_a_colour_changes_nothing() {
 #[test]
 fn selective_color_properties_switch_colour_without_committing() {
     let mut h = app_harness("selectiveColor", "rgb", 8);
-    let (id, before) = layer(&h);
+    let (_, before) = layer(&h);
     let steps = h.state().session.active().unwrap().history.past_len();
     let nudge = |h: &mut Harness<'static, PhotocraftApp>| {
         let r = label_rect(h, "Cyan").expect("Cyan label");
@@ -1012,9 +1012,30 @@ fn selective_color_properties_switch_colour_without_committing() {
     let (_, reds) = layer(&h);
     assert_ne!(reds, before);
     assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1);
-    // Switch to Blues.
-    h.ctx.data_mut(|d| d.insert_temp(egui::Id::unique(("adjust-layer", id.0)).with("selc-range"), 4usize));
+    // Switch to Blues through the Colors dropdown: press it, drag onto the option, release.
+    let named = |n: &egui_kittest::Node<'_>| {
+        let a = n.accesskit_node();
+        a.value().as_deref() == Some("Reds") || a.label().as_deref() == Some("Reds")
+    };
+    let at = h.query_all_by_role(egui::accesskit::Role::ComboBox).find(|n| named(n)).expect("the Colors dropdown").rect().center();
+    h.hover_at(at);
+    h.run_steps(1);
+    h.drag_at(at);
+    h.run_steps(3);
+    let blues = h.query_by_label("Blues").expect("the list opened on the press").rect().center();
+    for k in 1..=6 {
+        h.hover_at(at + (blues - at) * (k as f32 / 6.0));
+        h.run_steps(1);
+    }
+    h.drop_at(blues);
     h.run_steps(4);
+    assert!(
+        h.query_all_by_role(egui::accesskit::Role::ComboBox).any(|n| {
+            let a = n.accesskit_node();
+            a.value().as_deref() == Some("Blues") || a.label().as_deref() == Some("Blues")
+        }),
+        "the dropdown keeps its choice"
+    );
     assert_eq!(layer(&h).1, reds, "switching colour changes nothing");
     assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1);
     assert!(h.state().live_adjust.is_none());

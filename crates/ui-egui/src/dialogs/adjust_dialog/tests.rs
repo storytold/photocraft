@@ -1117,10 +1117,10 @@ fn selective_color_dialog_ok_applies_every_colour_in_one_step() {
 #[test]
 fn selective_color_dialog_cancel_leaves_the_document_untouched() {
     let (mut h, id) = selective_dialog();
+    let before = h.state().session.active().unwrap().doc.clone();
     drag_slider(&mut h, 0, true);
     set_field(&mut h, id, "blues", json!([0.0, 0.0, 0.0, 60.0]));
     h.run_steps(2);
-    let before = h.state().session.active().unwrap().doc.clone();
     h.state_mut().ui.close_dialog(id);
     h.run_steps(2);
     assert!(std::sync::Arc::ptr_eq(&before, &h.state().session.active().unwrap().doc));
@@ -1158,6 +1158,29 @@ fn selective_color_dialog_folds_the_single_colour_form_into_the_rows() {
     // A later slider edit is not overridden by the old scalars.
     drag_slider(&mut h, 0, false);
     assert!(field(&h, id, "blues")[0].as_f64().unwrap() < 30.0);
+}
+
+/// `relative` overrides `method` in the engine, so a dialog holding both would show one and apply
+/// the other. The editor keeps only `method`, and the edits made so far.
+#[test]
+fn selective_color_dialog_folds_relative_into_the_method() {
+    let (mut h, id) = selective_dialog();
+    set_field(&mut h, id, "reds", json!([10.0, 0.0, 0.0, 0.0]));
+    set_field(&mut h, id, "colors", json!("blues"));
+    set_field(&mut h, id, "method", json!("relative"));
+    set_field(&mut h, id, "relative", json!(false));
+    h.run_steps(3);
+    assert_eq!(field(&h, id, "relative"), Value::Null, "folded");
+    assert_eq!(field(&h, id, "method"), json!("absolute"));
+    assert_eq!(field(&h, id, "reds")[0].as_f64(), Some(10.0));
+    assert_eq!(field(&h, id, "colors"), json!("blues"));
+    // The Method button now decides what OK applies.
+    set_field(&mut h, id, "method", json!("relative"));
+    h.run_steps(2);
+    crate::dialogs::confirm(h.state_mut(), id).unwrap();
+    let (_, params) = h.state().session.journal.last().unwrap();
+    assert_eq!(params["method"], json!("relative"));
+    assert!(params.get("relative").is_none());
 }
 
 #[test]

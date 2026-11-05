@@ -29,9 +29,10 @@ fn selected_range(ui: &egui::Ui, v: &Value, cx: &EditorCx) -> usize {
 pub(super) fn selective_color(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     let t = Tokens::get(ui.ctx());
     let mut e = Edit::default();
-    // Params in the older single-colour form move into the rows; unparsable ones stay as they
-    // are, for the command to report on OK.
-    if SCALARS.iter().any(|k| v.get(*k).is_some())
+    // Params in the older single-colour form move into the rows, and `relative`, which the engine
+    // reads over `method`, into `method`, so the controls show what OK applies. Unparsable ones
+    // stay as they are, for the command to report on OK.
+    if (SCALARS.iter().any(|k| v.get(*k).is_some()) || v.get("relative").is_some())
         && let Ok(adj) = adjust_params::from_params("selectiveColor", &*v, None, photocraft_doc::ColorMode::Rgb)
     {
         let mut folded = adjust_params::to_params(&adj);
