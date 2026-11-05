@@ -445,9 +445,9 @@ what an agent can't finish alone.
   accumulate (#10030), Place decoding on the UI thread (#10031), Image Size re-rendering every
   smart object at once (#10032), and recovering the document after a crash (#6615). Not every
   allocation is gated, so a trap is still possible.
-  Layered PSD/PSB sources have no canvas-only memory bound (the decoder keeps a surface per
-  layer), so on the web Place and smart-object rendering refuse them up front; a flat PSD still
-  uses the width x height estimate. A layer-aware estimate that admits small layered files is open.
+  A layered PSD/PSB source is estimated as a canvas-sized surface per layer (the decoder keeps
+  one per layer; layers larger than the canvas are not counted), and one that isn't 8-bit RGB or
+  grayscale is refused on the web before Place or smart-object rendering.
 - **Estimate:** 30–60 h. **Human:** signing certificates.
 
 ## Revision history

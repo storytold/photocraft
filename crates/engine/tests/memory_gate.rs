@@ -144,9 +144,9 @@ fn layered_psd_is_refused_before_decode_without_changing_the_document() {
     let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::U8, true);
     assert!(photocraft_engine::smart_cmds::source_image("layers.psd", &bytes, fmt).is_err());
 
+    // The layers make the need bigger but bounded, so the error names it.
     let err = s.execute("file.placeEmbedded", json!({"path": path})).unwrap_err().to_string();
-    assert!(!err.contains("Purge"), "freeing memory cannot help an unbounded source: {err}");
-    assert!(err.contains("flatten"), "{err}");
+    assert!(err.contains("MB"), "{err}");
 
     // This budget passed the old canvas-only estimate even though the layers retain more.
     room.set(Some(headroom::RESERVE + budget));
@@ -174,6 +174,59 @@ fn small_flat_psd_still_places_and_renders() {
     assert_eq!(state(&s).2, before.2 + 1);
     let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::U8, true);
     assert!(photocraft_engine::smart_cmds::source_image("flat.psd", &bytes, fmt).is_ok());
+    drop(room);
+}
+
+/// Every Photoshop file has image resources (resolution, ICC profile, thumbnail); they hold no
+/// pixels, so a PSD that has them, flat or with a few layers, still places and renders when the
+/// memory is there.
+#[test]
+fn a_psd_with_image_resources_places_and_renders_when_it_fits() {
+    use photocraft_psd::{LayerSpec, PixelData, PsdBuilder};
+
+    let room = Room::new(Some(headroom::RESERVE + 256 * MIB));
+    const SIDE: u32 = 64;
+    let rgba = |r: u8| -> Vec<u8> { (0..SIDE * SIDE).flat_map(|_| [r, 80, 160, 255]).collect() };
+    let mut flat = PsdBuilder::new(SIDE, SIDE).resolution(72.0);
+    flat.composite(PixelData::Rgba8(rgba(10)));
+    let mut layered = PsdBuilder::new(SIDE, SIDE).resolution(150.0);
+    for (i, r) in [20u8, 30].into_iter().enumerate() {
+        layered.push_layer(LayerSpec::new(format!("layer {i}"), 0, 0, SIDE, SIDE, PixelData::Rgba8(rgba(r))));
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::U8, true);
+    let mut s = new_doc();
+    for (name, builder) in [("resources.psd", flat), ("resources-layers.psd", layered)] {
+        let bytes = builder.to_bytes().unwrap();
+        // No color-mode data for RGB, then a non-empty image resources section.
+        assert_ne!(&bytes[30..34], &[0u8; 4][..], "{name} has image resources");
+        assert!(photocraft_engine::smart_cmds::source_image(name, &bytes, fmt).is_ok(), "{name}");
+        let path = dir.path().join(name);
+        std::fs::write(&path, &bytes).unwrap();
+        let before = state(&s);
+        s.execute("file.placeEmbedded", json!({"path": path})).unwrap();
+        assert_eq!(state(&s).2, before.2 + 1, "{name}");
+    }
+    drop(room);
+}
+
+/// A PSD with no safe bound (here 16-bit) is refused whatever the free memory, so the error
+/// doesn't suggest freeing some.
+#[test]
+fn a_psd_without_a_bound_says_to_flatten_it() {
+    let room = Room::new(Some(headroom::RESERVE + 1024 * MIB));
+    let mut bytes = b"8BPS\0\x01\0\0\0\0\0\0\0\x03\0\0\0\x02\0\0\0\x02\0\x10\0\x03".to_vec();
+    bytes.extend_from_slice(&[0; 14]);
+    bytes.extend_from_slice(&[128; 24]);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("deep.psd");
+    std::fs::write(&path, &bytes).unwrap();
+    let mut s = new_doc();
+    let before = state(&s);
+    let err = s.execute("file.placeEmbedded", json!({"path": path})).unwrap_err().to_string();
+    assert!(!err.contains("Purge"), "freeing memory cannot help an unbounded source: {err}");
+    assert!(err.contains("flatten"), "{err}");
+    assert_eq!(state(&s), before);
     drop(room);
 }
 
