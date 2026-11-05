@@ -104,6 +104,22 @@ fn alt_drag_duplicates_and_moves_the_copy_in_one_step() {
     assert_eq!(bounds(&app, st.active_layer.unwrap()), photocraft_geom::Rect::new(22, 8, 38, 24));
 }
 
+/// Allow Non-Linear History: the copy's step moves the later states in front of it, and
+/// folding the copy and the move into one step must keep them.
+#[test]
+fn alt_drag_keeps_the_later_states_in_non_linear_history() {
+    let mut app = app_with_layer();
+    app.session.execute("history.options", json!({"allowNonLinearHistory": true})).unwrap();
+    let id = app.session.active().unwrap().active_layer.unwrap();
+    app.session.execute("layer.setProps", json!({"layer": id.0, "opacity": 0.5})).unwrap();
+    assert!(app.session.undo());
+    let mut expected = app.session.active().unwrap().history.entries();
+    expected.extend(app.session.active().unwrap().history.redo_labels().map(str::to_string));
+    expected.push(DUPLICATE_MOVE_LABEL.into());
+    drag(&mut app, &[[16.0, 16.0], [20.0, 16.0], [26.0, 21.0]], egui::Modifiers::ALT);
+    assert_eq!(app.session.active().unwrap().history.entries(), expected, "the later state stays");
+}
+
 #[test]
 fn alt_drag_duplicates_every_selected_layer() {
     let mut app = app_with_layer();
@@ -482,4 +498,28 @@ fn free_transform_nudges_bundle_into_one_undo_step() {
     }
     app.run("edit.undo", json!({})).unwrap();
     assert_eq!(quad(&app), moved(2.0, 0.0));
+}
+
+/// Arrow keys while editing text must not nudge layers, leaving the keys to the type tool (#5355).
+#[test]
+fn arrow_keys_ignored_during_text_edit() {
+    let mut app = app_with_layer();
+    let id = app.session.active().unwrap().active_layer.unwrap();
+    let b0 = bounds(&app, id);
+    app.ui.text_edit = Some(crate::state::TextEdit {
+        layer: id.0,
+        document: None,
+        caret: 0,
+        anchor: 0,
+        session: "test".into(),
+        created: false,
+        mask: false,
+        dragging: false,
+        resize: None,
+        preedit: None,
+    });
+    assert!(!press(&mut app, egui::Key::ArrowRight, egui::Modifiers::NONE));
+    assert!(!press(&mut app, egui::Key::ArrowDown, egui::Modifiers::SHIFT));
+    assert!(!press(&mut app, egui::Key::ArrowLeft, egui::Modifiers::ALT));
+    assert_eq!(bounds(&app, id), b0, "arrow keys do not nudge while editing text");
 }

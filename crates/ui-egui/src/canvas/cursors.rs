@@ -1,6 +1,6 @@
 use super::tool_input::ToolEvent;
 use super::view_xform::ViewXform;
-use super::*;
+use super::{Color32, PhotocraftApp, Pos2, Rect, Stroke, Tool, json, pos2, vec2};
 
 /// Windows' crosshair cursor inverts the pixels under it, so over mid-grey (the pasteboard, many
 /// photos) it vanishes (#737), and the Linux themes' and macOS's differ. Use the same black-and-white
@@ -125,8 +125,12 @@ pub(super) fn precise_other_cursor(app: &PhotocraftApp) -> bool {
 }
 
 /// A pen tool's standard cursor: its toolbar icon with the nib (the Convert Point tool: the
-/// anchor) on `p`. Draws it at `p` and returns the OS cursor to set (hidden).
-pub(crate) fn pen_cursor(ctx: &egui::Context, tool: Tool, p: Pos2) -> egui::CursorIcon {
+/// anchor) on `p`. Uses an OS cursor bitmap where supported so its movement tracks hardware
+/// pointer input without waiting for canvas frames (#9122); falls back to drawing the tooltip icon.
+pub fn pen_cursor(ctx: &egui::Context, tool: Tool, p: Pos2) -> egui::CursorIcon {
+    if let Some(icon) = crate::tool_cursor::pen(ctx, tool) {
+        return icon;
+    }
     // Where each icon's point is in its 24-unit box: the full-size pen's nib at (2.3, 2.3); the
     // Freeform and Curvature pens draw it at 0.68 × from (7, 7); Convert Point's apex anchor.
     let hot = match tool {
@@ -159,7 +163,7 @@ pub(crate) fn paint_bucket_cursor(ctx: &egui::Context, p: Pos2) -> egui::CursorI
 pub(super) fn alt_eyedropper(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) -> bool {
     if matches!(ev, ToolEvent::Down { .. }) {
         let physical_right = app.services.right_button_down.as_ref().is_some_and(|f| f());
-        app.alt_sampling = !physical_right && alt_samples(app.active_tool(), mods);
+        app.alt_sampling = !physical_right && !app.secondary_erase && alt_samples(app.active_tool(), mods);
     }
     if !app.alt_sampling {
         return false;
@@ -173,9 +177,12 @@ pub(super) fn alt_eyedropper(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui:
 }
 
 pub(super) fn sample_eyedropper(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifiers) {
-    if let Some([r, g, b]) = eyedropper_color(app, x, y) {
+    if let Some(mut rgb) = eyedropper_color(app, x, y) {
+        if super::paint_target(app) != json!("pixels") {
+            rgb = [photocraft_color::convert::rgb_to_gray(rgb); 3];
+        }
         let key = if mods.alt { "background" } else { "foreground" };
-        let _ = app.run("tools.setColors", json!({ key: [r, g, b, 1.0] }));
+        let _ = app.run("tools.setColors", json!({ key: [rgb[0],rgb[1],rgb[2],1.0] }));
     }
 }
 
@@ -206,4 +213,11 @@ pub(crate) fn eyedropper_color(app: &mut PhotocraftApp, x: f64, y: f64) -> Optio
 /// `None` off the image or over transparency.
 pub(crate) fn composite_color(app: &mut PhotocraftApp, x: f64, y: f64) -> Option<[f32; 3]> {
     sample_color(app, x, y, "all")
+}
+
+pub(crate) fn alt_loads_mixer(tool: Tool, mods: egui::Modifiers) -> bool {
+    mods.alt && !mods.ctrl && tool == Tool::MixerBrush
+}
+pub(crate) fn alt_picks(tool: Tool, mods: egui::Modifiers) -> bool {
+    alt_samples(tool, mods) || alt_loads_mixer(tool, mods)
 }
