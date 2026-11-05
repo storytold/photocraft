@@ -323,9 +323,9 @@ impl PhotocraftApp {
 
     /// File › Save over the flat file the document came from, which still holds it
     /// ([`crate::saves_flat_in_place`]): a JPEG asks JPEG Options first, as Photoshop does
-    /// (#2223), and an RGB Targa or a DDS texture its Targa or DDS Options, unless `choices` answer
-    /// them; the answer writes the file and is recorded as a plain `file.save` (#3531). Anything
-    /// else is written straight back.
+    /// (#2223), a TIFF its TIFF Options, and an RGB Targa or a DDS texture its Targa or DDS
+    /// Options, unless `choices` answer them; the answer writes the file and is recorded as a
+    /// plain `file.save` (#3531). Anything else is written straight back.
     pub(crate) fn save_flat_in_place(&mut self, path: String, choices: FormatChoices) -> Result<Value, String> {
         if self.save_options_open() {
             return Err(SAVE_OPTIONS_OPEN.into());
@@ -343,6 +343,11 @@ impl PhotocraftApp {
         if choices.jpeg.is_none() && jpeg_options_ui::wants_prompt(self, &path) {
             let copy = self.saves_copy(&path, None)?;
             jpeg_options_ui::park(self, path.clone(), copy, "file.save")?;
+            return Ok(serde_json::json!({"path": path, "warnings": []}));
+        }
+        // A TIFF asks TIFF Options over its own file too, as Save As does.
+        if choices.tiff.is_none() && tiff_options_ui::wants_prompt(self, &path) {
+            tiff_options_ui::park(self, path.clone(), false, "file.save")?;
             return Ok(serde_json::json!({"path": path, "warnings": []}));
         }
         self.save_in_place(path, choices)

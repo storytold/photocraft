@@ -5,6 +5,7 @@ use crate::common::raster;
 use photocraft_codecs::web::{GifFrame, encode_gif_animated};
 use photocraft_io::import;
 
+/// A 3×2 animated GIF of `frames` identical frames.
 fn gif(frames: usize) -> Vec<u8> {
     let frames: Vec<GifFrame> = (0..frames).map(|_| GifFrame { indices: vec![0; 6], palette: vec![[255, 0, 0]], transparent: None, delay_cs: 5 }).collect();
     encode_gif_animated(3, 2, &frames, true).unwrap()
@@ -29,12 +30,15 @@ fn ico(entries: u16) -> Vec<u8> {
     out
 }
 
+/// An animated GIF records how many frames it holds; a single frame records nothing.
 #[test]
 fn an_animation_records_its_frame_count() {
     assert_eq!(import("a.gif", &gif(2)).unwrap().document.file_encoding.source_images, Some(2));
     assert_eq!(import("a.gif", &gif(1)).unwrap().document.file_encoding.source_images, None);
 }
 
+/// A multi-size icon records its directory count and opens one size; a single-size icon
+/// records nothing.
 #[test]
 fn a_multi_size_icon_records_its_entry_count() {
     let two = import("a.ico", &ico(2)).unwrap().document;

@@ -1470,6 +1470,8 @@ fn replace_after_the_document_outgrew_its_flat_file_asks_where_to_save() {
     assert!(written.borrow().is_empty(), "the JPEG is not written over");
 }
 
+/// File › Save in place over a flat JPEG another app changed asks first (#6596), then JPEG
+/// Options (#2223); Cancel in either writes nothing, and OK in both writes a plain Save.
 #[test]
 fn save_in_place_of_a_flat_file_asks_first_when_another_app_changed_it() {
     let ctx = egui::Context::default();
