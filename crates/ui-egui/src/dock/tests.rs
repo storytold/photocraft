@@ -902,3 +902,212 @@ fn a_workspace_from_a_newer_version_shows_the_default_and_stays_saved() {
     let docking = &app.session.prefs().panel_layout["docking"];
     assert_eq!(docking["version"], json!(craft_ui::docking::Workspace::<String>::VERSION), "a changed layout replaces it: {docking}");
 }
+
+#[test]
+fn unreadable_workspace_payload_survives_restore_persist_and_explicit_save() {
+    for version in [json!(2), json!(99), Value::Null] {
+        let (mut app, _, _) = app_with_layers();
+        app.session.prefs.edit(|p| p.workspace.remember_workspace_changes = true);
+        let mut saved = snapshot(&app);
+        saved["docking"] = json!({"version": version, "layout": {"kind":"unsupported-tree"}, "opaque": {"keep":[1,2,3]}});
+        saved["dockingReturns"] = json!({"future-return": {"unknown":true}});
+        saved["dockingCollapsed"] = json!(["future-panel"]);
+        saved["panelPresentation"] = json!({"future":"preserve"});
+        saved["toolbarFloating"] = json!({"future-position":42});
+        app.session.prefs.edit(|p| p.panel_layout = saved.clone());
+        restore(&mut app);
+        assert!(app.ui.docking.is_none());
+        assert!(app.ui.docking_kept.is_some(), "version={version}");
+        let ctx = egui::Context::default();
+        ctx.run_ui(Default::default(), |ui| persist(&mut app, ui.ctx())).textures_delta.clear();
+        let written = snapshot(&app);
+        for key in ["docking", "dockingReturns", "dockingCollapsed", "panelPresentation", "toolbarFloating"] {
+            assert_eq!(app.session.prefs().panel_layout.get(key), saved.get(key), "persist {key}, version={version}");
+            assert_eq!(written.get(key), saved.get(key), "snapshot {key}, version={version}");
+        }
+        let notice = app.ui.status.clone();
+        ctx.run_ui(Default::default(), |ui| persist(&mut app, ui.ctx())).textures_delta.clear();
+        assert_eq!(app.ui.status, notice, "idle frames do not repeat the restore warning");
+        app.run("window.panel.close", json!({"panel":"layers"})).unwrap();
+        ctx.run_ui(Default::default(), |ui| persist(&mut app, ui.ctx())).textures_delta.clear();
+        assert!(app.ui.docking_kept.is_none());
+        assert!(crate::panel_docking::load(&app.session.prefs().panel_layout).is_some(), "explicit edit replaces the unreadable payload");
+    }
+}
+
+#[test]
+fn obsolete_bare_layout_and_absent_workspace_do_not_become_retained_payloads() {
+    for docking in [Value::Null, json!({"root":null,"floating":[]})] {
+        let (mut app, _, _) = app_with_layers();
+        let mut saved = snapshot(&app);
+        saved["docking"] = docking;
+        apply(&mut app, &saved);
+        assert!(app.ui.docking.is_none());
+        assert!(app.ui.docking_kept.is_none());
+    }
+}
+
+#[test]
+fn readable_workspace_is_loaded_without_retaining_fallback_data() {
+    let (mut app, _, _) = app_with_layers();
+    app.run("window.panel.float", json!({"panel":"info"})).unwrap();
+    let saved = snapshot(&app);
+    let before = app.ui.docking.clone();
+    apply(&mut app, &saved);
+    assert_eq!(app.ui.docking, before);
+    assert!(app.ui.docking_kept.is_none());
+}
+
+#[test]
+fn future_workspace_envelope_without_layout_keeps_existing_forward_compatibility() {
+    let (mut app, _, _) = app_with_layers();
+    let mut saved = snapshot(&app);
+    saved["docking"] = json!({"version":99,"future-envelope":{"keep":true}});
+    apply(&mut app, &saved);
+    assert!(app.ui.docking.is_none());
+    assert_eq!(snapshot(&app)["docking"], saved["docking"]);
+}
+
+#[test]
+fn unreadable_workspace_survives_fallback_rendering_with_restore_notice() {
+    let _gpu = photocraft_testkit::gpu_lock();
+    let mut h = Harness::builder().with_size(vec2(1440.0, 900.0)).build_eframe(|cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, ThemeKind::Pro);
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut saved = snapshot(&app);
+        saved["docking"] = json!({"version":2,"layout":{"kind":"unreadable"}});
+        apply(&mut app, &saved);
+        app
+    });
+    h.run_steps(8);
+    assert!(h.state().ui.docking.is_none());
+    assert!(h.state().ui.status.contains("has been preserved"));
+    assert_eq!(snapshot(h.state())["docking"]["layout"]["kind"], "unreadable");
+    let image = h.render().unwrap();
+    if let Some(path) = std::env::var_os("PHOTOCRAFT_WORKSPACE_RECOVERY_CAPTURE") {
+        image.save(path).unwrap();
+    }
+}
+
+fn retained_fallback(app: &mut PhotocraftApp) -> Value {
+    let mut saved = snapshot(app);
+    saved["docking"] = json!({"version":2,"layout":{"kind":"unreadable"}});
+    apply(app, &saved);
+    assert!(app.ui.docking_kept.is_some());
+    saved
+}
+fn set_ui(app: &mut PhotocraftApp, params: Value) -> Value {
+    let (request, _rx) = crate::control::ControlRequest::new("ui.set", params);
+    match crate::control::handle(app, &egui::Context::default(), &request) {
+        crate::control::Outcome::Done(reply) => reply,
+        _ => panic!("ui.set must reply immediately"),
+    }
+}
+#[test]
+fn native_fallback_edits_replace_retained_data_but_appearance_and_noops_keep_it() {
+    for case in ["toggle", "rail", "tabs", "dock", "visibility"] {
+        let (mut app, _, _) = app_with_layers();
+        retained_fallback(&mut app);
+        match case {
+            "toggle" => {
+                crate::menus::invoke(&mut app, &egui::Context::default(), "window.toggle.properties", json!({})).unwrap();
+            }
+            "rail" => rail_click(&mut app, Group::Color, true),
+            "tabs" => assert_eq!(set_ui(&mut app, json!({"dockTabs":{"color":1}}))["ok"], true),
+            "dock" => assert_eq!(set_ui(&mut app, json!({"dock":{"heights":{"color":190}}}))["ok"], true),
+            _ => {
+                let show = !app.ui.panels.color;
+                assert_eq!(set_ui(&mut app, json!({"panels":{"color":show}}))["ok"], true);
+            }
+        }
+        assert!(app.ui.docking_kept.is_none(), "{case}");
+        assert!(crate::panel_docking::load(&snapshot(&app)).is_some(), "native edit becomes a saved shared Workspace: {case}");
+        assert!(!app.ui.status.contains("has been preserved"));
+    }
+    let (mut app, _, _) = app_with_layers();
+    let saved = retained_fallback(&mut app);
+    crate::menus::invoke(&mut app, &egui::Context::default(), "window.toggle.toolbar", json!({})).unwrap();
+    assert_eq!(snapshot(&app)["docking"], saved["docking"]);
+    let same_tabs = serde_json::to_value(app.ui.dock_tabs).unwrap();
+    for params in [json!({"theme":"promedium"}), json!({"dockTabs":same_tabs}), json!({"panels":{"status_bar":false}})] {
+        assert_eq!(set_ui(&mut app, params)["ok"], true);
+        assert_eq!(snapshot(&app)["docking"], saved["docking"]);
+    }
+    assert_eq!(set_ui(&mut app, json!({"dock":"invalid"}))["ok"], false);
+    assert_eq!(snapshot(&app)["docking"], saved["docking"]);
+}
+#[test]
+fn successful_restore_and_reset_clear_only_the_owned_warning_and_notice() {
+    for reset in [false, true] {
+        for unrelated in [false, true] {
+            let (mut app, _, _) = app_with_layers();
+            let good = snapshot(&app);
+            retained_fallback(&mut app);
+            retained_fallback(&mut app);
+            assert_eq!(app.ui.notices.iter().filter(|n| n.title == "The saved panel layout could not be restored.").count(), 1);
+            crate::notices::post(&mut app, "Unrelated notice", vec![], false, None);
+            if unrelated {
+                app.ui.status = "Unrelated status".into();
+                app.ui.status_error = true;
+            }
+            if reset {
+                crate::menus::apply_workspace(&mut app);
+                assert!(app.ui.docking.is_none(), "reset must leave the preset native layout active");
+            } else {
+                apply(&mut app, &good);
+            }
+            assert!(app.ui.docking_kept.is_none());
+            assert!(!app.ui.notices.iter().any(|n| n.title == "The saved panel layout could not be restored."));
+            assert!(app.ui.notices.iter().any(|n| n.title == "Unrelated notice"));
+            assert_eq!(app.ui.status, if unrelated { "Unrelated status" } else { "" });
+            assert_eq!(app.ui.status_error, unrelated);
+        }
+    }
+}
+#[test]
+fn restore_notice_is_visible_with_hidden_status_bar_and_fullscreen_chrome() {
+    use egui_kittest::kittest::Queryable as _;
+    let _gpu = photocraft_testkit::gpu_lock();
+    for mode in ["standard", "fullScreen"] {
+        let mut h = Harness::builder().with_size(vec2(1440.0, 900.0)).build_eframe(|cc| {
+            PhotocraftApp::setup_context(&cc.egui_ctx, ThemeKind::Pro);
+            let (mut app, _, _) = app_with_layers();
+            app.ui.view.screen_mode = mode.into();
+            app.ui.panels.status_bar = false;
+            retained_fallback(&mut app);
+            app
+        });
+        h.run_steps(8);
+        assert!(h.query_by_label("The saved panel layout could not be restored.").is_some());
+        assert!(h.state().ui.docking_kept.is_some());
+        let image = h.render().unwrap();
+        if let Some(folder) = std::env::var_os("PHOTOCRAFT_RECOVERY_REVIEW_CAPTURES") {
+            std::fs::create_dir_all(&folder).unwrap();
+            image.save(std::path::PathBuf::from(folder).join(format!("{mode}.png"))).unwrap();
+        }
+    }
+}
+
+#[test]
+fn window_menu_reveals_hides_and_expands_replace_fallback_but_noop_show_keeps_it() {
+    let ctx = egui::Context::default();
+    for (id, group) in [("window.panel.history", Group::History), ("window.panel.gradients", Group::Color)] {
+        let (mut app, _, _) = app_with_layers();
+        crate::menus::invoke(&mut app, &ctx, id, json!({"show":true})).unwrap();
+        let saved = retained_fallback(&mut app);
+        assert!(app.ui.status.contains("editing panels or resetting"));
+        assert!(app.ui.notices.iter().any(|n| n.lines.iter().any(|line| line.contains("editing panels or resetting"))));
+        crate::menus::invoke(&mut app, &ctx, id, json!({"show":true})).unwrap();
+        assert_eq!(snapshot(&app)["docking"], saved["docking"], "no-op {id}");
+        crate::menus::invoke(&mut app, &ctx, id, json!({"show":false})).unwrap();
+        assert!(app.ui.docking_kept.is_none(), "hide {id}");
+        retained_fallback(&mut app);
+        crate::menus::invoke(&mut app, &ctx, id, json!({"show":true})).unwrap();
+        assert!(app.ui.docking_kept.is_none(), "show {id}");
+        app.ui.dock.set_collapsed(group, true);
+        retained_fallback(&mut app);
+        crate::menus::invoke(&mut app, &ctx, id, json!({"show":true})).unwrap();
+        assert!(app.ui.docking_kept.is_none(), "expand {id}");
+        assert!(!app.ui.dock.is_collapsed(group));
+    }
+}
