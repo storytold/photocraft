@@ -715,6 +715,53 @@ fn live_stroke_matches_the_committed_stroke() {
     assert!(LiveStroke::begin(&Session::new(), &json!({"points": [[1, 1]]})).is_err());
 }
 
+/// A custom (sampled-tip) brush, the path #8950 is about: the live stroke the canvas shows is
+/// what the release commits (it takes the live pixels), the same as rendering the stroke anew,
+/// across tile boundaries and off the canvas edge, at every depth; undo restores the layer
+/// exactly and redo brings the stroke back.
+#[test]
+fn sampled_tip_live_stroke_commits_undoes_and_redoes() {
+    let tip: Vec<f32> = (0..24 * 16).map(|i| ((i * 37) % 11) as f32 / 10.0).collect();
+    let brush = json!({"tip": {"sampled": {"width": 24, "height": 16, "data": tip}}, "pressureSize": false, "spacing": 0.15,
+        "shapeDynamics": {"enabled": true, "angle": {"jitter": 1.0}}});
+    for depth in [8, 16, 32] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 300, "height": 300, "depth": depth, "background": "white"})).unwrap();
+        s.execute("layer.new.layer", json!({"name": "paint"})).unwrap();
+        let before = surface(&s);
+        // From off the left edge across the 256 px layer tiles and the 64 px coverage tiles.
+        let pts: Vec<[f64; 3]> = (0..30).map(|i| [-40.0 + f64::from(i) * 12.0, 250.0 + (f64::from(i) * 0.5).sin() * 30.0, 1.0]).collect();
+        let p = json!({"points": [pts[0]], "brush": brush, "size": 70, "smoothing": 0.0, "color": "#2040c0"});
+        let mut live = LiveStroke::begin(&s, &p).unwrap();
+        for c in pts[1..].chunks(3) {
+            live.push(&c.iter().map(|q| StrokePoint::new(q[0], q[1], q[2] as f32)).collect::<Vec<_>>()).unwrap();
+        }
+        let mut commit = p.clone();
+        commit["points"] = json!(pts);
+        commit["seed"] = json!(live.seed);
+        let shown = live.doc.layer(s.active().unwrap().active_layer.unwrap()).unwrap().surface().unwrap().clone();
+        let bounds = live.bounds();
+        assert!(bounds.x0 < 0 && bounds.x1 > 256, "{bounds:?} crosses the canvas edge and a layer tile");
+        s.offer_live_stroke(live).unwrap();
+        let r = s.execute("paint.stroke", commit.clone()).unwrap();
+        s.clear_live_stroke();
+        assert_eq!(r["fromLive"], json!(true), "depth {depth}: the release took the live pixels");
+        let painted = surface(&s);
+        let all = Rect::new(-64, 0, 300, 300);
+        assert!(same_pixels(&shown, &painted, all), "depth {depth}: commit = preview");
+        assert!(!same_pixels(&before, &painted, all), "depth {depth}: the stroke painted");
+        // Undo, redo, and a fresh render of the same stroke (no live pixels to take).
+        s.execute("edit.undo", json!({})).unwrap();
+        assert!(same_pixels(&before, &surface(&s), all), "depth {depth}: undo restores the layer");
+        s.execute("edit.redo", json!({})).unwrap();
+        assert!(same_pixels(&painted, &surface(&s), all), "depth {depth}: redo restores the stroke");
+        s.execute("edit.undo", json!({})).unwrap();
+        let r = s.execute("paint.stroke", commit).unwrap();
+        assert_ne!(r.get("fromLive"), Some(&json!(true)));
+        assert!(same_pixels(&painted, &surface(&s), all), "depth {depth}: rendering anew gives the live pixels");
+    }
+}
+
 #[test]
 fn stroke_coordinate_validation_keeps_the_existing_bounds() {
     let edges = [StrokePoint::new(-MAX_COORD, MAX_COORD, 1.0), StrokePoint::new(MAX_COORD, -MAX_COORD, 1.0)];

@@ -285,6 +285,64 @@ impl BrushContext {
         self.rasterize_into(d, dual, rect, out, None);
     }
 
+    /// A sampled tip's dab, laid down in blocks of [`LANES`] pixels by [`SampledTip`]: the general
+    /// loop's arithmetic, then its per-pixel steps (noise, per-tip Texture, Wet Edges, the stroke's
+    /// depth) in its order. `out` (and `depth`) are already the rectangle's size, all 0.
+    fn rasterize_sampled(&self, tip: &SampledTip<'_>, pass: SampledPass, d: &Dab, rect: Rect, out: &mut [f32], mut depth: Option<&mut Vec<f32>>) {
+        let SampledPass { cy, projected, aliased, noise, texture: tex_tip, wet } = pass;
+        let b = &self.brush;
+        let w = rect.width() as usize;
+        let features = noise || tex_tip || wet || depth.is_some();
+        for (yy, row) in out.chunks_exact_mut(w).enumerate() {
+            let y = rect.y0 + yy as i32;
+            let dy = y as f32 + 0.5 - cy;
+            // Only the columns that can pass the window test run it: about half a rotated
+            // tip's rectangle cannot. The others keep their 0 either way.
+            let (first, last) = tip.columns(rect.x0, rect.x1, dy, projected).unwrap_or((i64::MIN, i64::MAX));
+            let (blocks, rest) = row.as_chunks_mut::<LANES>();
+            let tail = (!rest.is_empty()).then_some(rest);
+            for (bi, block) in blocks.iter_mut().map(|b| &mut b[..]).chain(tail).enumerate() {
+                let x0 = rect.x0.wrapping_add((bi * LANES) as i32);
+                if i64::from(x0) + LANES as i64 <= first || i64::from(x0) > last {
+                    continue;
+                }
+                let (s, inside) = if projected { tip.block::<true>(x0, dy) } else { tip.block::<false>(x0, dy) };
+                if !features {
+                    store_plain(block, &s, &inside, aliased, d.alpha);
+                    continue;
+                }
+                // Noise, per-tip Texture, Wet Edges and the stroke's depth: the general
+                // loop's per-pixel steps, in its order.
+                for (i, slot) in block.iter_mut().enumerate() {
+                    if !inside[i] {
+                        continue;
+                    }
+                    let (xx, x) = (bi * LANES + i, x0.wrapping_add(i as i32));
+                    let mut val = if aliased { if s[i] >= 0.5 { 1.0 } else { 0.0 } } else { s[i] };
+                    let rn = 1.0 - s[i];
+                    if val <= 0.0 {
+                        continue;
+                    }
+                    if noise && val < 1.0 {
+                        let n = hash2(x, y, NOISE_SALT);
+                        let hard = if n < val { 1.0 } else { 0.0 };
+                        val += (hard - val) * 0.7;
+                    }
+                    if tex_tip {
+                        val = texture_combine(b.texture.mode, val, self.texture_at(x, y), d.depth);
+                    }
+                    if wet {
+                        val *= wet_factor(rn);
+                    }
+                    if let Some(dp) = depth.as_deref_mut().and_then(|dp| dp.get_mut(yy * w + xx)) {
+                        *dp = (1.0 - rn).clamp(0.0, 1.0);
+                    }
+                    *slot = val * d.alpha;
+                }
+            }
+        }
+    }
+
     /// [`rasterize`](Self::rasterize); with `depth`, Wet Edges is left out of `out` and each
     /// painted pixel's depth inside the dab (`1 − rn`) goes to `depth`, for the stroke to apply it.
     pub fn rasterize_into(&self, d: &Dab, dual: bool, rect: Rect, out: &mut Vec<f32>, mut depth: Option<&mut Vec<f32>>) {
@@ -358,6 +416,18 @@ impl BrushContext {
             && w > 0
         {
             rasterize_round(d, rect, out, profile, aliased);
+            return;
+        }
+        // Sampled tips (every custom brush) run the general loop's arithmetic on blocks of
+        // pixels (`SampledTip`). Block mode paints its square whatever the tip, so it stays below.
+        if let Some(m) = mips
+            && !(aliased && b.square)
+            && let Some((lw, lh, data)) = m.levels.get(level)
+            && w > 0
+        {
+            let tip = SampledTip { cx, sn, cs, flip_x: fx, flip_y: fy, proj: proj.unwrap_or((0.0, 0.0, 0.0)), inv_scale, tw, th, ro, lw: *lw, lh: *lh, data };
+            let pass = SampledPass { cy, projected: proj.is_some(), aliased, noise, texture: tex_tip, wet };
+            self.rasterize_sampled(&tip, pass, d, rect, out, depth);
             return;
         }
         for yy in 0..h {
@@ -1355,6 +1425,204 @@ impl RoundTip {
                 *dst = if val <= 0.0 { 0.0 } else { val * self.alpha };
             }
         }
+    }
+}
+
+/// Pixels per block of the sampled-tip kernel ([`SampledTip::block`]): two 128-bit NEON vectors
+/// (one 256-bit AVX vector) per value.
+const LANES: usize = 8;
+
+/// A sampled tip's mapping from a dab's pixels to the texels of the mip level it samples, as the
+/// general loop of [`BrushContext::rasterize_into`] evaluates it per pixel: `to_tip`, the
+/// sampling window test, then `Mips::sample_clamped`.
+///
+/// [`Self::block`] evaluates it on [`LANES`] neighbouring pixels of a row at once, in
+/// fixed-length loops over lane arrays that the compiler vectorises (NEON on Apple Silicon):
+/// the same operations in the same order and the same tests (Rust never fuses them into
+/// multiply-adds), so the coverage has the same bits, except that a NaN may carry another
+/// payload. Only the four texel reads of each bilinear sample stay scalar, and inside the level
+/// they read two adjacent texels per row without testing each texel against the level's edges.
+/// How [`BrushContext::rasterize_sampled`] lays a sampled dab down: the dab centre's row, Brush
+/// Projection on or off, and the general loop's per-pixel steps that apply.
+#[derive(Clone, Copy)]
+struct SampledPass {
+    cy: f32,
+    projected: bool,
+    aliased: bool,
+    noise: bool,
+    texture: bool,
+    wet: bool,
+}
+
+struct SampledTip<'a> {
+    cx: f32,
+    sn: f32,
+    cs: f32,
+    flip_x: f32,
+    flip_y: f32,
+    /// Brush Projection `(ax, ay, k)`; read only by `block::<true>`.
+    proj: (f32, f32, f32),
+    inv_scale: f32,
+    tw: f32,
+    th: f32,
+    ro: f32,
+    /// The sampled mip level: width, height, values.
+    lw: usize,
+    lh: usize,
+    data: &'a [f32],
+}
+
+impl SampledTip<'_> {
+    /// Texel `(x, y)` of the level, 0 outside it (`Mips::sample_clamped`).
+    #[inline]
+    fn texel(&self, x: i64, y: i64) -> f32 {
+        if x < 0 || y < 0 || x >= self.lw as i64 || y >= self.lh as i64 {
+            return 0.0;
+        }
+        self.data.get(y as usize * self.lw + x as usize).copied().unwrap_or(0.0)
+    }
+
+    /// The four texels a bilinear sample at `(x0, y0)` blends, 0 outside the level.
+    #[inline]
+    fn quad(&self, x0: i64, y0: i64) -> [f32; 4] {
+        if x0 >= 0 && y0 >= 0 && x0 < self.lw as i64 - 1 && y0 < self.lh as i64 - 1 {
+            let at = y0 as usize * self.lw + x0 as usize;
+            if let (Some(&[a, b]), Some(&[c, d])) = (self.data.get(at..at + 2), self.data.get(at + self.lw..at + self.lw + 2)) {
+                return [a, b, c, d];
+            }
+        }
+        let (x1, y1) = (x0.saturating_add(1), y0.saturating_add(1));
+        [self.texel(x0, y0), self.texel(x1, y0), self.texel(x0, y1), self.texel(x1, y1)]
+    }
+
+    /// The columns `[first, last]` of the row `dy` below the dab centre, within `x0..x1`, whose
+    /// pixels can pass the sampling window test: every other pixel fails it, so its coverage
+    /// stays 0. The window is grown by an upper bound on the rounding error of the f32 mapping,
+    /// and the row's mapping (affine along the row) is solved in f64 between its two ends; an
+    /// empty range has `first > last`. `None` when no such bound is proved (non-finite or
+    /// enormous inputs): then every pixel takes the test.
+    fn columns(&self, x0: i32, x1: i32, dy: f32, proj: bool) -> Option<(i64, i64)> {
+        let eps = f64::from(f32::EPSILON);
+        let (ax, ay, k) = if proj { (f64::from(self.proj.0), f64::from(self.proj.1), f64::from(self.proj.2)) } else { (0.0, 0.0, 0.0) };
+        let (cx, dy) = (f64::from(self.cx), f64::from(dy));
+        let (sn, cs, flip_x, flip_y) = (f64::from(self.sn), f64::from(self.cs), f64::from(self.flip_x), f64::from(self.flip_y));
+        let (inv, tw, th, ro) = (f64::from(self.inv_scale), f64::from(self.tw), f64::from(self.th), f64::from(self.ro));
+        // The error terms take magnitudes: a direct caller's negative radius (and roundness)
+        // makes `inv` (and `ro`) negative, which would shrink the margin and the size below.
+        let (inv_a, ro_a) = (inv.abs(), ro.abs());
+        // Rounding error of the f32 mapping: `dx` carries at most three roundings of magnitudes
+        // up to `d`, the projection and rotation scale it by at most `2p`, and each of their 14
+        // roundings (counted 24 times) is of a magnitude up to `g`; then the scale and offset.
+        let d = (f64::from(x0).abs().max(f64::from(x1).abs()) + 1.0 + cx.abs()).max(dy.abs() + 1.0);
+        let e_d = 3.0 * eps * d;
+        let p = 1.0 + 2.0 * k.abs();
+        let g = 2.0 * p * (d + e_d) * (1.0 + 8.0 * eps);
+        let e_uv = 2.0 * p * e_d + 24.0 * eps * g;
+        let e_px = inv_a * e_uv + 3.0 * eps * (g * inv_a + tw);
+        let e_py = inv_a / ro_a * e_uv + 4.0 * eps * (g * inv_a / ro_a + th);
+        let margin = 2.0 * (e_px.max(e_py) + eps * (tw + th + 2.0)) + 1e-3;
+        // Below 1e9 nothing overflows and f64's own error (~1e-6) is far inside the margin.
+        let size = g * inv_a / ro_a + g * inv_a + tw + th;
+        if !(size < 1e9 && margin.is_finite() && [ax, ay, k, sn, cs, flip_x, flip_y, inv, tw, th, ro].iter().all(|v| v.is_finite())) {
+            return None;
+        }
+        let map = |x: i32| {
+            let (mut ux, mut uy) = (f64::from(x) + 0.5 - cx, -dy);
+            let t = (ux * ax + uy * ay) * k;
+            ux += t * ax;
+            uy += t * ay;
+            let (u, v) = ((ux * cs + uy * sn) * flip_x, (-ux * sn + uy * cs) * flip_y);
+            (u * inv + tw / 2.0, -(v / ro) * inv + th / 2.0)
+        };
+        // Along the row each coordinate runs linearly from its value at `x0` to that at `x1`:
+        // keep the part `t` (0 at `x0`, 1 at `x1`) inside the grown window for both.
+        let ((sx, sy), (ex, ey)) = (map(x0), map(x1));
+        let (mut lo, mut hi) = (0.0f64, 1.0f64);
+        for (start, end, top) in [(sx, ex, tw), (sy, ey, th)] {
+            let (wlo, whi) = (-1.0 - margin, top + 1.0 + margin);
+            if start == end {
+                if !(wlo..=whi).contains(&start) {
+                    return Some((1, 0));
+                }
+                continue;
+            }
+            let (a, b) = ((wlo - start) / (end - start), (whi - start) / (end - start));
+            lo = lo.max(a.min(b));
+            hi = hi.min(a.max(b));
+        }
+        // `max`/`min` drop NaN, and every value here is finite: an empty part is `lo > hi`.
+        if lo > hi {
+            return Some((1, 0));
+        }
+        let span = f64::from(x1) - f64::from(x0);
+        // One column of slack each side.
+        let first = (f64::from(x0) + lo * span).floor() as i64 - 1;
+        let last = (f64::from(x0) + hi * span).ceil() as i64 + 1;
+        Some((first, last))
+    }
+
+    /// The tip value and whether it is inside the sampling window, for the [`LANES`] pixels of
+    /// the row `dy` below the dab centre from column `x`. With `PROJ`, Brush Projection.
+    #[inline(always)]
+    #[allow(clippy::needless_range_loop)] // lanes index several arrays in lockstep
+    fn block<const PROJ: bool>(&self, x: i32, dy: f32) -> ([f32; LANES], [bool; LANES]) {
+        let (mut px, mut py) = ([0.0f32; LANES], [0.0f32; LANES]);
+        for i in 0..LANES {
+            // To y-up, project, rotate by -angle, flip; then to tip texels.
+            let dx = x.wrapping_add(i as i32) as f32 + 0.5 - self.cx;
+            let (mut ux, mut uy) = (dx, -dy);
+            if PROJ {
+                let (ax, ay, k) = self.proj;
+                let t = (ux * ax + uy * ay) * k;
+                ux += t * ax;
+                uy += t * ay;
+            }
+            let u = (ux * self.cs + uy * self.sn) * self.flip_x;
+            let v = (-ux * self.sn + uy * self.cs) * self.flip_y;
+            px[i] = u * self.inv_scale + self.tw / 2.0;
+            py[i] = -(v / self.ro) * self.inv_scale + self.th / 2.0;
+        }
+        let mut inside = [false; LANES];
+        let (mut gx, mut gy, mut tx, mut ty) = ([0.0f32; LANES], [0.0f32; LANES], [0.0f32; LANES], [0.0f32; LANES]);
+        let (lw, lh) = (self.lw as f32, self.lh as f32);
+        for i in 0..LANES {
+            // The window test lets NaN through, as the general loop's does. `|`, not `||`: the
+            // block stays free of branches.
+            inside[i] = !((px[i] < -1.0) | (py[i] < -1.0) | (px[i] > self.tw + 1.0) | (py[i] > self.th + 1.0));
+            let sx = px[i] / self.tw * lw - 0.5;
+            let sy = py[i] / self.th * lh - 0.5;
+            gx[i] = sx.floor();
+            gy[i] = sy.floor();
+            tx[i] = sx - gx[i];
+            ty[i] = sy - gy[i];
+        }
+        let mut s = [0.0f32; LANES];
+        if !inside.contains(&true) {
+            return (s, inside);
+        }
+        let mut q = [[0.0f32; 4]; LANES];
+        for i in 0..LANES {
+            if inside[i] {
+                q[i] = self.quad(gx[i] as i64, gy[i] as i64);
+            }
+        }
+        for i in 0..LANES {
+            let [g00, g10, g01, g11] = q[i];
+            let a = g00 + (g10 - g00) * tx[i];
+            let b = g01 + (g11 - g01) * tx[i];
+            s[i] = a + (b - a) * ty[i];
+        }
+        (s, inside)
+    }
+}
+
+/// A block of sampled-tip coverage without per-pixel features: the general loop's value
+/// (aliased tips cut at half), 0 outside the window or where the tip paints nothing.
+#[inline(always)]
+fn store_plain(out: &mut [f32], s: &[f32; LANES], inside: &[bool; LANES], aliased: bool, alpha: f32) {
+    for ((o, &s), &inside) in out.iter_mut().zip(s).zip(inside) {
+        let val = if aliased { if s >= 0.5 { 1.0 } else { 0.0 } } else { s };
+        *o = if !inside | (val <= 0.0) { 0.0 } else { val * alpha };
     }
 }
 
