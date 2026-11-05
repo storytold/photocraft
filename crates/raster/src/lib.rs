@@ -46,9 +46,34 @@ impl fmt::Display for AllocationError {
 }
 
 impl std::error::Error for AllocationError {}
+
+/// Failure to prepare an interruptible row write.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RowWriteError {
+    Allocation(AllocationError),
+    Cancelled(Cancelled),
+}
+
+impl From<AllocationError> for RowWriteError {
+    fn from(error: AllocationError) -> Self {
+        Self::Allocation(error)
+    }
+}
+
+impl fmt::Display for RowWriteError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Allocation(error) => write!(f, "{error}"),
+            Self::Cancelled(error) => write!(f, "{error}"),
+        }
+    }
+}
+
+impl std::error::Error for RowWriteError {}
 pub mod memory;
 mod scratch_file;
 pub mod spill;
+pub mod stage_file;
 
 /// One shared tile per pixel value (and tile size), for [`Surface::share_uniform_tiles`].
 #[derive(Debug, Default)]
@@ -401,10 +426,13 @@ fn copy_tiles(tiles: &mut [(TileCoord, Arc<Tile>)], r: Rect, bytes: &[u8], w: us
 
 /// Fills one tile of [`Surface::try_write_rows_with`]: makes it writable, then calls `fill` for
 /// each row of `r` inside it.
-fn fill_tile<F>(slot: &mut (TileCoord, Option<Arc<Tile>>), r: Rect, format: &PixelFormat, default_pixel: &[u8], fill: &F) -> Result<(), AllocationError>
+fn fill_tile<F, C, E>(slot: &mut (TileCoord, Option<Arc<Tile>>), r: Rect, format: &PixelFormat, default_pixel: &[u8], fill: &F, check: &C) -> Result<(), E>
 where
     F: Fn(i32, i32, &mut [u8]) + Sync,
+    C: Fn() -> Result<(), E> + Sync,
+    E: From<AllocationError> + Send,
 {
+    check()?;
     let (tc, tile) = slot;
     match tile {
         None => *tile = Some(Arc::new(Tile::try_filled(format, default_pixel)?)),
@@ -414,43 +442,41 @@ where
             }
         }
     }
-    let tile = tile.as_mut().and_then(Arc::get_mut).ok_or(AllocationError::SizeOverflow)?;
+    let data = tile.as_mut().and_then(Arc::get_mut).ok_or(AllocationError::SizeOverflow)?;
+    let mut data = data.bytes_mut();
     let bpp = format.bytes_per_pixel();
     let tr = tc.rect().intersect(&r);
     let span = tr.width() as usize * bpp;
-    {
-        // One guard per tile, as for every other tile write: the pixels are on the scratch disk
-        // again if it was evicted, and come back for the rows below.
-        let mut target = tile.bytes_mut();
-        for y in tr.y0..tr.y1 {
-            let row = (y - tc.ty * TILE_SIZE) as usize * TILE_SIZE as usize + (tr.x0 - tc.tx * TILE_SIZE) as usize;
-            let Some(start) = row.checked_mul(bpp) else { continue };
-            let Some(end) = start.checked_add(span) else { continue };
-            let Some(dst) = target.get_mut(start..end) else { continue };
+    for y in tr.y0..tr.y1 {
+        check()?;
+        let row = (y - tc.ty * TILE_SIZE) as usize * TILE_SIZE as usize + (tr.x0 - tc.tx * TILE_SIZE) as usize;
+        if let Some(dst) = row.checked_mul(bpp).and_then(|o| data.get_mut(o..o.checked_add(span)?)) {
             fill(y, tr.x0, dst);
         }
     }
-    // A tile whose scratch copy could not be read back wrote into a discarded placeholder:
-    // report that instead of claiming its rows hold the new pixels.
-    tile.scratch_health().map_err(AllocationError::ScratchRead)
+    Ok(())
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn fill_tiles<F>(tiles: &mut [(TileCoord, Option<Arc<Tile>>)], r: Rect, format: &PixelFormat, default_pixel: &[u8], fill: &F) -> Result<(), AllocationError>
+fn fill_tiles<F, C, E>(tiles: &mut [(TileCoord, Option<Arc<Tile>>)], r: Rect, format: &PixelFormat, default_pixel: &[u8], fill: &F, check: &C) -> Result<(), E>
 where
     F: Fn(i32, i32, &mut [u8]) + Sync,
+    C: Fn() -> Result<(), E> + Sync,
+    E: From<AllocationError> + Send,
 {
     use rayon::prelude::*;
-    tiles.par_iter_mut().try_for_each(|slot| fill_tile(slot, r, format, default_pixel, fill))
+    tiles.par_iter_mut().try_for_each(|slot| fill_tile(slot, r, format, default_pixel, fill, check))
 }
 
 /// Serial counterpart, for the web build.
 #[cfg(target_arch = "wasm32")]
-fn fill_tiles<F>(tiles: &mut [(TileCoord, Option<Arc<Tile>>)], r: Rect, format: &PixelFormat, default_pixel: &[u8], fill: &F) -> Result<(), AllocationError>
+fn fill_tiles<F, C, E>(tiles: &mut [(TileCoord, Option<Arc<Tile>>)], r: Rect, format: &PixelFormat, default_pixel: &[u8], fill: &F, check: &C) -> Result<(), E>
 where
     F: Fn(i32, i32, &mut [u8]) + Sync,
+    C: Fn() -> Result<(), E> + Sync,
+    E: From<AllocationError> + Send,
 {
-    tiles.iter_mut().try_for_each(|slot| fill_tile(slot, r, format, default_pixel, fill))
+    tiles.iter_mut().try_for_each(|slot| fill_tile(slot, r, format, default_pixel, fill, check))
 }
 
 fn decode_tile_row_rgba(fmt: &PixelFormat, t: &[u8], base: usize, dst: &mut [[f32; 4]], row: &mut Vec<f32>) {
@@ -1145,17 +1171,33 @@ impl Surface {
     /// without staging a copy of the region first.
     ///
     /// Tiles are filled on all cores (serially on the web), so `fill` must not depend on call
-    /// order. Missing tiles start as the default pixel and tiles another surface still shares
-    /// are copied first (copy-on-write), both allocated fallibly. An empty `r` writes nothing.
-    /// On an error the surface stays valid but `r` may be partly written; a tile whose scratch
-    /// copy is unreadable fails with [`AllocationError::ScratchRead`] instead of being written
-    /// through a placeholder.
+    /// order. Missing tiles start as the default pixel; existing tiles are copied fallibly so
+    /// the surface is unchanged if preparation fails. An empty `r` writes nothing.
     ///
     /// Like [`Surface::write_region_par`] this enters Rayon, so don't call it from a `OnceLock`
     /// initializer.
     pub fn try_write_rows_with<F>(&mut self, r: Rect, fill: F) -> Result<(), AllocationError>
     where
         F: Fn(i32, i32, &mut [u8]) + Sync,
+    {
+        self.try_prepare_rows(r, |tiles, format, default_pixel| fill_tiles(tiles, r, format, default_pixel, &fill, &|| Ok(())))
+    }
+
+    /// Interruptible row write. Cancellation or allocation failure leaves the surface unchanged.
+    /// Checks run before each tile and row; already running callbacks may finish after cancellation.
+    pub fn try_write_rows_with_interrupt<F>(&mut self, r: Rect, ctl: &Interrupt, fill: F) -> Result<(), RowWriteError>
+    where
+        F: Fn(i32, i32, &mut [u8]) + Sync,
+    {
+        self.try_prepare_rows(r, |tiles, format, default_pixel| {
+            fill_tiles(tiles, r, format, default_pixel, &fill, &|| ctl.check().map_err(RowWriteError::Cancelled))
+        })
+    }
+
+    fn try_prepare_rows<F, E>(&mut self, r: Rect, prepare: F) -> Result<(), E>
+    where
+        F: FnOnce(&mut [(TileCoord, Option<Arc<Tile>>)], &PixelFormat, &[u8]) -> Result<(), E>,
+        E: From<AllocationError>,
     {
         if r.is_empty() {
             return Ok(());
@@ -1164,16 +1206,18 @@ impl Surface {
         let bytes = count.checked_mul(std::mem::size_of::<(TileCoord, Option<Arc<Tile>>)>()).ok_or(AllocationError::SizeOverflow)?;
         let mut tiles: Vec<(TileCoord, Option<Arc<Tile>>)> = Vec::new();
         tiles.try_reserve_exact(count).map_err(|_| AllocationError::NotEnoughMemory { bytes })?;
-        tiles.extend(r.tiles().map(|c| (c, self.tiles.remove(&c))));
-        let (format, default_pixel) = (self.format, &self.default_pixel);
-        let result = fill_tiles(&mut tiles, r, &format, default_pixel, &fill);
-        // Give every tile back, filled or not, so a failure leaves the surface whole.
-        for (c, t) in tiles {
-            if let Some(t) = t {
-                self.tiles.insert(c, t);
+        tiles.extend(r.tiles().map(|c| (c, self.tiles.get(&c).cloned())));
+        prepare(&mut tiles, &self.format, &self.default_pixel)?;
+        for (c, tile) in tiles {
+            if let Some(tile) = tile {
+                if let Some(existing) = self.tiles.get_mut(&c) {
+                    *existing = tile;
+                } else {
+                    self.tiles.insert(c, tile);
+                }
             }
         }
-        result
+        Ok(())
     }
 
     /// Read `r` as interleaved encoded bytes in the surface's format.
