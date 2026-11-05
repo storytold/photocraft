@@ -8,14 +8,15 @@ A TIFF saved by Photoshop with its layers carries them in two private tags: 3772
 
 ## JPEG XL
 
-Save As, Export As and the CLI can write a lossless, single-image `.jxl` bare
+Save As, Export As and the CLI can write a lossless, single-image `.jxl`
 codestream at 8 or 16 bits per sample. Gray, RGB and RGBA are encoded
 natively. Grayscale with alpha is expanded to RGBA at the original bit depth
 to preserve both grayscale and alpha samples. For 16-bit RGBA the encoder's
 incorrect default 8-bit alpha header is corrected to explicitly describe
 16-bit alpha, with an independent decoder oracle checking alpha values.
-The bare codestream has no ICC, EXIF, XMP or DPI boxes; the export path
-converts tagged RGB to sRGB and surfaces metadata losses as fidelity warnings.
+With metadata enabled, EXIF/XMP are wrapped in standard JPEG XL container boxes;
+without metadata the original bare codestream is kept. ICC and explicit DPI
+embedding are not supported; tagged RGB is converted to sRGB.
 JPEG XL opening remains under review in #2868.
 
 ## WebP
