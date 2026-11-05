@@ -792,6 +792,8 @@ mod pencil_tests;
 mod tool_options_theme_tests;
 #[cfg(test)]
 mod tool_shortcut_tests;
+#[cfg(test)]
+mod toolbar_group_order_tests;
 
 #[cfg(test)]
 mod pixel_aspect_tests;
