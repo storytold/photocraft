@@ -964,7 +964,6 @@ cameraRaw	Yellow	पीला
 	Contents:	सामग्री:
 	Contextual Alternates	संदर्भगत विकल्प
 	Contiguous	सन्निहित
-	Continue	जारी रखें
 	Contour Editor	कंटूर एडिटर
 	Contract	संकुचित करें
 	Contributors	योगदानकर्ता
@@ -2213,7 +2212,6 @@ cameraRaw	Yellow	पीला
 	Start Recording	रिकॉर्डिंग शुरू करें
 	Statistics…	आँकड़े…
 	Std Dev:	मानक विचलन:
-	Stop	रोकें
 	Stop Color	स्टॉप रंग
 	Stop Recording	रिकॉर्डिंग रोकें
 	Stop playing/recording	प्लेबैक/रिकॉर्डिंग रोकें
@@ -2607,3 +2605,23 @@ cameraRaw	Yellow	पीला
 	Website	वेबसाइट
 	{ok} written to {dir}	{ok} को {dir} में लिखा गया
 @plural	{what}: {n} Image Assets output failed|{what}: {n} Image Assets outputs failed	{what}: {n} इमेज एसेट्स आउटपुट विफल रहा|{what}: {n} इमेज एसेट्स आउटपुट विफल रहे
+	Toggle reference point	संदर्भ बिंदु दिखाएँ/छिपाएँ
+
+# Action Stop message (#8386)
+	Message	संदेश
+	Continue	जारी रखें
+	Stop	रोकें
+# Playback Options (#5212)
+	Playback Options…	प्लेबैक विकल्प…
+	Playback Options	प्लेबैक विकल्प
+	Accelerated	त्वरित
+	Step by Step	चरण दर चरण
+	Pause For:	इतने समय रुकें:
+	Pause For	इतने समय रुकें
+	seconds	सेकंड
+	Create a single history state	एक ही इतिहास स्थिति बनाएँ
+
+# Strings added on main after 2026-11-05
+	Background (default)	बैकग्राउंड (डिफ़ॉल्ट)
+	Performance	परफॉरमेंस
+	Transparent (default)	पारदर्शी (डिफ़ॉल्ट)
