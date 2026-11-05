@@ -141,3 +141,59 @@ observations, not a cross-platform performance guarantee.
 
 [Per-run measurements and executable SHA-256](average-filter-benchmark-2026-10-24.json)
 retain the raw timings, peak-memory readings, hashes and source commit.
+
+### Windows peak-working-set collector
+
+For a reproducible collection, build first, then launch the executable directly
+so Cargo and the compiler are excluded from the measured process:
+
+```powershell
+cargo build -p photocraft-algo --release --example average_memory --locked
+$exe = (Resolve-Path 'target/release/examples/average_memory.exe').Path
+$results = foreach ($selected in $false, $true) {
+    foreach ($run in 1..5) {
+        foreach ($mode in 'dense', 'stream') {
+            $arguments = @($mode)
+            if ($selected) { $arguments += 'selected' }
+            $stdout = [IO.Path]::GetTempFileName()
+            $stderr = [IO.Path]::GetTempFileName()
+            $process = Start-Process -FilePath $exe -ArgumentList $arguments `
+                -PassThru -WindowStyle Hidden `
+                -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+            $peak = 0L
+            do {
+                $process.Refresh()
+                $peak = [Math]::Max($peak, $process.PeakWorkingSet64)
+            } while (-not $process.WaitForExit(25))
+            $process.WaitForExit()
+            if ($process.ExitCode -ne 0 -or $peak -le 0) {
+                throw "Benchmark failed or no peak was observed: $(Get-Content $stderr -Raw)"
+            }
+            [pscustomobject]@{
+                mode = $mode
+                selected = $selected
+                run = $run
+                peak_working_set_bytes = $peak
+                output = (Get-Content $stdout -Raw).Trim()
+            }
+            $process.Dispose()
+            Remove-Item -LiteralPath $stdout, $stderr
+        }
+    }
+}
+$results | ConvertTo-Json | Set-Content -Encoding utf8 average-memory-runs.json
+```
+
+`System.Diagnostics.Process.PeakWorkingSet64` is the Windows process peak
+working-set counter, in bytes, rather than the instantaneous `WorkingSet64` or
+private-byte count. The collector retains the largest high-water mark observed
+at 25 ms intervals. A peak first reached after the last successful sample may
+be missed; this is sampled process evidence, not allocator instrumentation.
+Redirects keep each process's reported filtering time and full-output hash
+alongside its memory reading. Adjust the executable path if using
+`CARGO_TARGET_DIR` or an explicit target triple.
+
+This is a reproduction command for the documented counter and sampling method.
+The original 2026-10-24 collection script was not retained with the artifact;
+these instructions do not establish its exact implementation or constitute new
+measurements on the current branch.

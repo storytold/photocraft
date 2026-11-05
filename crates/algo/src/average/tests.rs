@@ -147,3 +147,24 @@ fn large_average_starts_with_a_bounded_cancellable_read() {
     assert!(progressed.load(Ordering::Relaxed), "a large image should start processing, not be refused for a full-image float allocation");
     assert_eq!(source.tile_count(), 0);
 }
+#[test]
+fn soft_selection_weights_the_mean_and_output_mix() {
+    let bounds = Rect::new(0, 0, 2, 1);
+    for sample in SampleType::ALL {
+        let mut surface = Surface::new(PixelFormat::new(ColorMode::Rgb, sample, true));
+        surface.write_region(bounds, &[1.0, 0.0, 0.0, 0.25, 0.0, 0.0, 1.0, 0.75]);
+        let before = surface.read_region(bounds);
+        let mut selection = Surface::new(PixelFormat::new(ColorMode::Gray, SampleType::F32, false));
+        selection.write_region(bounds, &[0.25, 1.0]);
+        let out = apply(&surface, bounds, Some(&selection), &Interrupt::NONE).unwrap();
+        // Unequal coverage makes the mean [0.2, 0, 0.8]. Each pixel then mixes
+        // toward it using its own coverage, independently of its original alpha.
+        for (i, expected) in [[0.8, 0.0, 0.2], [0.2, 0.0, 0.8]].iter().enumerate() {
+            let pixel = out.pixel(i as i32, 0);
+            for (actual, expected) in pixel.iter().zip(expected) {
+                assert!((actual - expected).abs() <= 1.0 / 255.0, "{sample:?}: {pixel:?}");
+            }
+            assert_eq!(pixel[3], before[i * 4 + 3]);
+        }
+    }
+}
