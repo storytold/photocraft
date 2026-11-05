@@ -1421,7 +1421,6 @@ cameraRaw	Yellow	पीला
 	Contents:	सामग्री:
 	Contextual Alternates	प्रासंगिक विकल्प
 	Contiguous	सन्निहित
-	Continue	जारी रखें
 	Contour	कंटूर
 	Contour Editor	कंटूर एडिटर
 	Contract	संकुचित करें
@@ -4139,7 +4138,6 @@ cameraRaw	Yellow	पीला
 	Step Backward	एक चरण पीछे
 	Step Forward	एक चरण आगे
 	Stippled	बिंदुकित
-	Stop	रोकें
 	Stop Color	स्टॉप रंग
 	Stop For Errors	त्रुटियों पर रोकें
 	Stop playing/recording	प्लेबैक/रिकॉर्डिंग रोकें
@@ -4328,7 +4326,6 @@ cameraRaw	Yellow	पीला
 	Toggle count group visibility	काउंट समूह की दृश्यता टॉगल करें
 	Toggle Last State	अंतिम स्थिति टॉगल करें
 	Toggle Layer Mask Overlay	लेयर मास्क ओवरले टॉगल करें
-	Toggle reference point	रेफ़रेंस पॉइंट टॉगल करें
 	Toggle text orientation	टेक्स्ट ओरिएंटेशन टॉगल करें
 	Toggle the Brush Settings panel	ब्रश सेटिंग्स पैनल टॉगल करें
 	Toggle the Brush Settings panel  (F5)	ब्रश सेटिंग्स पैनल टॉगल करें  (F5)
@@ -4715,3 +4712,23 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Set 18	सेट 18
 	Set 19	सेट 19
 	Set 20	सेट 20
+
+	Toggle reference point	संदर्भ बिंदु दिखाएँ/छिपाएँ
+
+# Action Stop message (#8386)
+	Message	संदेश
+	Continue	जारी रखें
+	Stop	रोकें
+# Playback Options (#5212)
+	Playback Options…	प्लेबैक विकल्प…
+	Playback Options	प्लेबैक विकल्प
+	Accelerated	त्वरित
+	Step by Step	चरण दर चरण
+	Pause For:	इतने समय रुकें:
+	Pause For	इतने समय रुकें
+	seconds	सेकंड
+	Create a single history state	एक ही इतिहास स्थिति बनाएँ
+
+# Merged from main (2026-11-05): canvas background choices.
+	Background (default)	बैकग्राउंड (डिफ़ॉल्ट)
+	Transparent (default)	पारदर्शी (डिफ़ॉल्ट)
