@@ -486,6 +486,22 @@ fn index_layer_ids_and_text(doc: &Document, ex: &mut Ex<'_>) {
                 .collect();
             let mixed = text_layers.iter().any(|(_, t)| t.psd_raw.as_deref().is_some_and(|d| !d.windows(15).any(|w| w == b"SuperscriptSize")));
             ex.regen_text = !text_layers.is_empty() && (mixed || photocraft_text::psd::build_txt2_at(&text_layers, Some(prev), ex.dpi) != prev[..]);
+            // Every type layer is rewritten, the untouched ones too: say what that costs.
+            if ex.regen_text {
+                let on_path: Vec<&str> = walk
+                    .iter()
+                    .filter(|(_, _, l)| matches!(&l.content, LayerContent::Text(t) if matches!(t.shape, photocraft_doc::text::TextShape::Path { .. })))
+                    .map(|(_, _, l)| l.name.as_str())
+                    .collect();
+                let mut w = format!(
+                    "all {} type layers, unedited ones included, are written without the file's Txt2 block (Photoshop can't open the file with it): what only that block held, such as Photoshop's glyph positions and type on a path, is not kept",
+                    text_layers.len()
+                );
+                if !on_path.is_empty() {
+                    w.push_str(&format!("; type on a path reopens as point text in \"{}\"", on_path.join("\", \"")));
+                }
+                ex.warnings.push(w);
+            }
         }
     }
 }
