@@ -1207,7 +1207,13 @@ fn reaping_finished_workers_preserves_the_release_request() {
     let (tx, rx) = std::sync::mpsc::channel::<()>();
     let mut draining = vec![
         Draining { handle: std::thread::spawn(|| {}), doc: None, release: true },
-        Draining { handle: std::thread::spawn(move || drop(rx.recv())), doc: None, release: true },
+        Draining {
+            handle: std::thread::spawn(move || {
+                let _ = rx.recv();
+            }),
+            doc: None,
+            release: true,
+        },
     ];
     let start = Instant::now();
     while !draining[0].handle.is_finished() {
