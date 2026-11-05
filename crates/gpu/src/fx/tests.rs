@@ -77,6 +77,47 @@ fn vector_masked_shape_band_matches_reference() {
     }
 }
 
+/// Fill opacity, Blend If and clipping change compositing, not the content shape used by effects.
+/// A translated surface also keeps its stored alpha outside the document canvas.
+#[test]
+fn direct_alpha_shape_matches_reference_with_layer_blending_and_overhang() {
+    use photocraft_color::{ColorMode, SampleType};
+    use photocraft_doc::{BlendRange, Document};
+    use photocraft_geom::Size;
+
+    for depth in SampleType::ALL {
+        let doc = Document::new("overhang", Size::new(30, 30), ColorMode::Rgb, depth);
+        let mut raster = Layer::raster("offset", doc.pixel_format());
+        raster.surface_mut().unwrap().fill_rect(Rect::new(2, 3, 24, 25), &[0.2, 0.4, 0.6, 0.7]);
+        let surface = raster.surface().unwrap();
+        let moved = surface.translated(-8, 7, surface.content_bounds());
+        *raster.surface_mut().unwrap() = moved;
+        let region = Rect::new(-10, -4, 38, 40);
+
+        for kind in ["raster", "text", "smart"] {
+            let base = if kind == "raster" { raster.clone() } else { cached_layer(kind, raster.surface().cloned()) };
+            let expected = photocraft_compose::layer_shape(&doc, &base, region);
+            assert!(expected.iter().any(|&a| a > 0.0), "{kind} {depth:?}: no content");
+            let width = region.width() as usize;
+            let outside_canvas = (12 - region.y0) as usize * width + (-4 - region.x0) as usize;
+            assert!(expected[outside_canvas] > 0.0, "{kind} {depth:?}: no overhang");
+            assert_eq!(shape_band(&doc, &base, region), expected, "{kind} {depth:?}: translated");
+
+            let mut changed = base.clone();
+            let check = |layer: &Layer, setting: &str| {
+                assert_eq!(photocraft_compose::layer_shape(&doc, layer, region), expected, "{kind} {depth:?}: {setting} changed the oracle");
+                assert_eq!(shape_band(&doc, layer, region), expected, "{kind} {depth:?}: {setting}");
+            };
+            changed.fill_opacity = 0.25;
+            check(&changed, "fill opacity");
+            changed.blend_if.set(0, [BlendRange { black: [200, 200], white: [255, 255] }, BlendRange::FULL]);
+            check(&changed, "Blend If");
+            changed.clipped = true;
+            check(&changed, "clipping");
+        }
+    }
+}
+
 #[test]
 fn banded_shape_comparison_matches_full_shape_and_detects_edits() {
     use photocraft_color::{ColorMode, SampleType};
