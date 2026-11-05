@@ -211,6 +211,36 @@ mod tests {
     }
 
     #[test]
+    fn srgb_export_corrects_exif_colour_space_but_preserves_other_tags() {
+        for big_endian in [false, true] {
+            let input = exif(
+                big_endian,
+                &[
+                    (TAG_COLOR_SPACE, TYPE_SHORT, 1, 0xffff),
+                    (0x9000, 7, 4, 0x3032_3330), // ExifVersion: untouched
+                ],
+            );
+            let output = srgb_exif_metadata(&input);
+            assert_eq!(exif_color_space(&output), Some(1));
+            assert_eq!(output.len(), input.len());
+            // Only the two-byte ColorSpace value may change.
+            let differences: Vec<_> = input.iter().zip(output.iter()).enumerate().filter(|(_, (a, b))| a != b).map(|(i, _)| i).collect();
+            assert!(!differences.is_empty());
+            assert!(differences.iter().all(|&i| (38..40).contains(&i)));
+            assert!(matches!(srgb_exif_metadata(&output), std::borrow::Cow::Borrowed(_)));
+
+            let mut prefixed = b"Exif\0\0".to_vec();
+            prefixed.extend_from_slice(&input);
+            let corrected = srgb_exif_metadata(&prefixed);
+            assert!(corrected.starts_with(b"Exif\0\0"));
+            assert_eq!(exif_color_space(&corrected), Some(1));
+        }
+
+        assert!(matches!(srgb_exif_metadata(b"not an EXIF payload"), std::borrow::Cow::Borrowed(_)));
+        assert!(matches!(srgb_exif_metadata(&exif(false, &[(0x9000, 7, 4, 0)])), std::borrow::Cow::Borrowed(_)));
+    }
+
+    #[test]
     fn missing_or_malformed_reads_as_no_tag() {
         assert_eq!(exif_color_space(&exif(false, &[(0x9000, 7, 4, 0)])), None, "no ColorSpace entry");
         assert_eq!(exif_color_space(&exif(false, &[(TAG_COLOR_SPACE, TYPE_SHORT, 2, 1)])), None, "count ≠ 1");
