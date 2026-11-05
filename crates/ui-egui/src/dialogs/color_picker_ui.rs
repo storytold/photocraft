@@ -6,6 +6,8 @@
 //! `ui.dialog.set` drives the same state; OK runs the target command.
 //! While it is the top dialog the image is its eyedropper, as in Photoshop: the pointer over the
 //! canvas is a pipette, and a click or drag there samples into the new colour ([`sample_at`]).
+//! A picker for another dialog's colour field or the Crop shield shows its colour there before
+//! OK, and Cancel puts it back ([`live_preview`]).
 
 use egui::{Color32, Mesh, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 use photocraft_color::convert::{hsb_to_rgb, rgb_to_hsb};
@@ -266,9 +268,9 @@ pub fn open_for_command(app: &mut PhotocraftApp, label: &str, rgb: [f32; 3], com
     app.ui.open_dialog(DialogKind::Command, f)
 }
 
-/// Open the picker on `rgb` for a colour field of another dialog (e.g. Edit › Fill's Color…): OK
-/// writes the colour into `field` of dialog `dialog`, which stays open. Fill and Stroke support
-/// float RGB; other fields keep hex. Cancel leaves the parent alone.
+/// Open the picker on `rgb` for a colour field of another dialog (e.g. Edit › Fill's Color…).
+/// Preview and OK use float RGB for Fill and Stroke in float documents, and hex otherwise.
+/// Cancel restores the parent field's original value.
 pub fn open_for_field(app: &mut PhotocraftApp, label: &str, rgb: [f32; 3], dialog: u64, field: &str) -> u64 {
     let mut f = fields_with_web(app, "field", label, rgb);
     if field == "color" && app.ui.dialogs.iter().find(|d| d.id == dialog).is_some_and(|d| crate::fill_ui::owns(&d.fields) || crate::stroke_ui::owns(&d.fields))
@@ -277,13 +279,20 @@ pub fn open_for_field(app: &mut PhotocraftApp, label: &str, rgb: [f32; 3], dialo
     }
     f.insert("__dialog".into(), json!(dialog));
     f.insert("__field".into(), json!(field));
-    app.ui.open_dialog(DialogKind::Command, f)
+    let id = app.ui.open_dialog(DialogKind::Command, f);
+    live_preview::begin_field(app, id, dialog, field);
+    id
 }
 
 /// Open the picker on `rgb` for a colour the shell keeps itself (e.g. the Crop shield's custom
-/// colour): OK hands `"#rrggbb"` to `target`'s setter in [`confirm`]; Cancel leaves it alone.
+/// colour): OK hands `"#rrggbb"` to `target`'s setter in [`confirm`]; Cancel leaves it alone. The
+/// Crop shield shows the picked colour while the picker is open ([`live_preview`]).
 pub fn open_for_target(app: &mut PhotocraftApp, target: &str, label: &str, rgb: [f32; 3]) -> u64 {
-    app.ui.open_dialog(DialogKind::Command, fields_with_web(app, target, label, rgb))
+    let id = app.ui.open_dialog(DialogKind::Command, fields_with_web(app, target, label, rgb));
+    if target == "cropShield" {
+        live_preview::begin_crop_shield(app, id);
+    }
+    id
 }
 
 /// Set by a dialog body (to the picker's title) to open the Color Picker on its `color` field.
@@ -1164,6 +1173,8 @@ fn confirm_target(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Val
     }
     Ok(r)
 }
+
+pub(crate) mod live_preview;
 
 #[cfg(test)]
 mod tests;

@@ -79,7 +79,7 @@ fn float_picker_rgb_fields_accept_fractional_hdr_and_negative_values() {
     }
 }
 
-/// Nested Fill/Stroke pickers preserve float values in the parent, pixels and saved choices.
+/// Nested Fill/Stroke pickers preview raw RGB, restore it on Cancel and commit it on OK.
 #[test]
 fn float_picker_fields_reach_fill_and_stroke_without_hex_conversion() {
     for (command, swatch) in [("edit.fill", "Fill color"), ("edit.stroke", "Stroke color")] {
@@ -88,10 +88,15 @@ fn float_picker_fields_reach_fill_and_stroke_without_hex_conversion() {
         let rgb = [0.12345, 2.0, -0.25];
         app.run("tools.setColors", json!({"foreground": rgb})).unwrap();
         app.run("select.rect", json!({"x": 1, "y": 1, "width": 6, "height": 6})).unwrap();
-        let before = app.session.active().unwrap().doc.clone();
+        let state = app.session.active().unwrap();
+        let before = state.doc.clone();
+        let history = state.history.past_len();
         let mut h = Harness::builder().with_size(vec2(760.0, 480.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
         PhotocraftApp::setup_context(&h.ctx, Default::default());
         let parent = if command == "edit.fill" { crate::fill_ui::open(h.state_mut()) } else { crate::stroke_ui::open(h.state_mut()) };
+        // The parent value need not be serialized with the same precision as the picker.
+        let original = json!([0.12345_f64, 2.0, -0.25]);
+        h.state_mut().ui.dialog_mut(parent).unwrap().fields.insert("color".into(), original.clone());
         if command == "edit.fill" {
             h.state_mut().ui.dialog_mut(parent).unwrap().fields.insert("contents".into(), json!("color"));
         }
@@ -101,20 +106,31 @@ fn float_picker_fields_reach_fill_and_stroke_without_hex_conversion() {
         let child = h.state().ui.dialogs.last().unwrap().id;
         assert_ne!(child, parent);
         assert_eq!(current(&h.state().ui.dialogs.last().unwrap().fields).rgb, rgb, "{command} opening and passive frames");
-        h.state_mut().ui.dialog_mut(child).unwrap().fields.insert("color".into(), json!([0.54321, 3.0, -0.125]));
+        let chosen = [0.54321, 3.0, -0.125];
+        let same_hex = [0.54322, 3.5, -0.25];
+        assert_eq!(hex(chosen), hex(same_hex));
+        for preview in [chosen, same_hex] {
+            h.state_mut().ui.dialog_mut(child).unwrap().fields.insert("color".into(), json!(preview));
+            h.run_steps(3);
+            assert_eq!(h.state_mut().ui.dialog_mut(parent).unwrap().fields["color"], json!(preview), "{command} before OK");
+            assert!(std::sync::Arc::ptr_eq(&before, &h.state().session.active().unwrap().doc));
+        }
         crate::dialogs::cancel(h.state_mut(), child).unwrap();
-        assert_eq!(h.state_mut().ui.dialog_mut(parent).unwrap().fields["color"], json!(rgb));
+        assert_eq!(h.state_mut().ui.dialog_mut(parent).unwrap().fields["color"], original);
         h.run_steps(2);
         h.get_by_label(swatch).click();
         h.run_steps(3);
         let child = h.state().ui.dialogs.last().unwrap().id;
-        let chosen = [0.54321, 3.0, -0.125];
         h.state_mut().ui.dialog_mut(child).unwrap().fields.insert("color".into(), json!(chosen));
+        h.run_steps(3);
         crate::dialogs::confirm(h.state_mut(), child).unwrap();
         h.run_steps(3);
         assert_eq!(h.state_mut().ui.dialog_mut(parent).unwrap().fields["color"], json!(chosen));
-        assert!(std::sync::Arc::ptr_eq(&before, &h.state().session.active().unwrap().doc));
+        let state = h.state().session.active().unwrap();
+        assert!(std::sync::Arc::ptr_eq(&before, &state.doc));
+        assert_eq!(state.history.past_len(), history);
         crate::dialogs::confirm(h.state_mut(), parent).unwrap();
+        assert_eq!(h.state().session.active().unwrap().history.past_len(), history + 1);
         let pixel: [f32; 4] = serde_json::from_value(h.state_mut().run("document.sampleColor", json!({"x": 1, "y": 3, "size": 1})).unwrap()).unwrap();
         for i in 0..3 {
             assert!((pixel[i] - chosen[i]).abs() < 1e-6, "{command} channel {i}: {pixel:?}");
