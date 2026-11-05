@@ -8,8 +8,8 @@ use photocraft_doc::{AlphaChannel, Document, Layer, LayerContent};
 use photocraft_geom::{Rect, Size, TILE_SIZE};
 use photocraft_raster::{AllocationError, Interrupt, RowWriteError, Surface};
 
-use crate::{ExportOptions, ExportResult, ImportResult, IoError, TgaBits, XmpEmbed};
 use crate::renderer::{BandRenderer, RenderError};
+use crate::{ExportOptions, ExportResult, ImportResult, IoError, TgaBits, XmpEmbed};
 
 /// Bytes per band when converting or exporting a band of rows at a time.
 const BAND_BYTES: usize = 32 << 20;
@@ -391,7 +391,7 @@ fn import_tiff_layered(
     before_composite_decode();
     // The orientation is applied after the layer check: rotating the composite but not the
     // layers would misalign them, so a layered TIFF keeps its stored orientation.
-    let keep = codecs::DecodeOptions { keep_orientation: true, limits: decode_limits(opts), ..Default::default() };
+    let keep = codecs::DecodeOptions { keep_orientation: true, limits: decode_limits(opts) };
     let (mut img, orientation) = match page {
         None => (codecs::decode_with(bytes, &keep)?, codecs::tiff_orientation(bytes)),
         Some(p) => (codecs::decode_tiff_page(bytes, p, &keep)?, codecs::tiff_page_orientation(bytes, p)),
@@ -458,7 +458,7 @@ fn import_tiff_with_extras(
     ctl: &photocraft_raster::Interrupt,
 ) -> Result<ImportResult, IoError> {
     ctl.check().map_err(|_| IoError::Cancelled)?;
-    let keep = codecs::DecodeOptions { keep_orientation: true, limits: decode_limits(opts), ..Default::default() };
+    let keep = codecs::DecodeOptions { keep_orientation: true, limits: decode_limits(opts) };
     let (img, orientation) = match page {
         None => (codecs::decode_with(bytes, &keep)?, codecs::tiff_orientation(bytes)),
         Some(p) => (codecs::decode_tiff_page(bytes, p, &keep)?, codecs::tiff_page_orientation(bytes, p)),
@@ -739,13 +739,7 @@ fn flat_document(
 /// upright; the caller then decodes the whole image as for any other format. Errors, limits and
 /// metadata are the whole-image decoder's. The tiles and one group of rows are checked against
 /// free memory before the first tile exists (see [`crate::memory`]).
-fn import_png_streamed(
-    name: &str,
-    bytes: &[u8],
-    opts: &crate::ImportOptions,
-    ctl: &Interrupt,
-    min_bytes: u64,
-) -> Result<Option<ImportResult>, IoError> {
+fn import_png_streamed(name: &str, bytes: &[u8], opts: &crate::ImportOptions, ctl: &Interrupt, min_bytes: u64) -> Result<Option<ImportResult>, IoError> {
     import_png_streamed_with(name, bytes, opts, ctl, min_bytes, crate::memory::available)
 }
 
@@ -825,7 +819,14 @@ fn import_png_streamed_with(
         ctl.progress(0.02 + 0.53 * (y0 + n) as f32 / h.max(1) as f32);
         Ok(())
     };
-    let Some(extras) = codecs::decode_png_rows::<IoError>(bytes, &codecs::DecodeOptions { limits: decode_limits(opts), ..Default::default() }, TILE_SIZE as u32, &mut begin, &mut rows)? else {
+    let Some(extras) = codecs::decode_png_rows::<IoError>(
+        bytes,
+        &codecs::DecodeOptions { limits: decode_limits(opts), ..Default::default() },
+        TILE_SIZE as u32,
+        &mut begin,
+        &mut rows,
+    )?
+    else {
         return Ok(None);
     };
     ctl.check().map_err(|_| IoError::Cancelled)?;
