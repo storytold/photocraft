@@ -2995,6 +2995,7 @@ fontWeight	Italic	Курсивний
 	Soft	М'який
 	Soften	Пом'якшити
 	Source: set	Джерело: задано
+	Source: {name}	Джерело: {name}
 	Spread	Поширення
 	Square, 12 x 12	Квадратна, 12 x 12
 	Square, 5 x 5	Квадратна, 5 x 5
@@ -4036,6 +4037,7 @@ curves	Smooth	Згладити
 	Automatically Check for Updates	Автоматично перевіряти оновлення
 	Paints from the History panel's source state	Малює з вихідного стану панелі «Історія»
 	Sets the source for the history brush	Задає джерело для пензля історії
+	The History Brush source was deleted: set a new source in the History panel	Джерело для пензля історії було видалено: задайте нове джерело на панелі «Історія»
 	Highlight Mode	Режим світлих тонів
 	Highlight Color	Колір світлих тонів
 	Highlight Opacity	Непрозорість світлих тонів
@@ -4234,3 +4236,32 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	⌘H Hides PhotoCraft	⌘H приховує PhotoCraft
 	View › Extras uses ⌃⌘H.	Перегляд › Допоміжні елементи — ⌃⌘H.
 	Hide PhotoCraft uses ⌃⌘H.	Приховати PhotoCraft — ⌃⌘H.
+	Drag to move the active shape's path or the Work Path	Перетягніть, щоб перемістити контур активної фігури або робочий контур
+	Generator enabled	Генератор увімкнено
+	Move Up	Перемістити вгору
+	Move Down	Перемістити вниз
+	Grid view	Режим сітки
+	List view	Режим списку
+	On your computer	На вашому комп’ютері
+	New file	Новий файл
+	Learn	Навчання
+	No recent files	Немає останніх файлів
+	Website	Вебсайт
+
+# Frame Tool and other branch translations.
+	A frame supports affine transforms; select its image for perspective transforms	Рамка підтримує афінні перетворення; для перспективних перетворень виберіть її зображення
+	A frame supports affine transforms; select its image to warp it	Рамка підтримує афінні перетворення; для деформації виберіть її зображення
+	Convert to Frame…	Перетворити на рамку…
+	Create a new custom frame	Створити нову довільну рамку
+	Create a new polygonal frame	Створити нову багатокутну рамку
+	Create a new triangular frame	Створити нову трикутну рамку
+	Fit Content to Frame	Припасувати вміст до рамки
+	Fit Frame to Content	Припасувати рамку до вмісту
+	Frame coordinates must be finite and within 600000 pixels	Координати рамки мають бути скінченними та в межах 600000 пікселів
+	Import Image…	Імпортувати зображення…
+	Invalid frame transform	Неприпустиме перетворення рамки
+	Invalid nested file drop	Неприпустиме вкладене перетягування файлу
+	New Frame	Нова рамка
+	Replace Image…	Замінити зображення…
+	The frame is locked	Рамку заблоковано
+	The frame is unavailable	Рамка недоступна

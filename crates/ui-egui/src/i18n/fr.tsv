@@ -1904,6 +1904,7 @@
 	Soften	Adoucir
 	Source	Source
 	Source: set	Source : définie
+	Source: {name}	Source : {name}
 	Sponge Tool	Outil Éponge
 	Spot Healing Brush Tool	Outil Correcteur localisé
 	Spread	Grossissement
@@ -3341,6 +3342,7 @@ curves	Smooth	Lisser
 	Automatically Check for Updates	Rechercher automatiquement des mises à jour
 	Paints from the History panel's source state	Peint à partir de l'état source du panneau Historique
 	Sets the source for the history brush	Définit la source du pinceau d'historique
+	The History Brush source was deleted: set a new source in the History panel	La source du pinceau d'historique a été supprimée : définissez une nouvelle source dans le panneau Historique
 	Highlight Mode	Mode des tons clairs
 	Highlight Color	Couleur des tons clairs
 	Highlight Opacity	Opacité des tons clairs
@@ -4559,3 +4561,29 @@ shape	Appearance	Apparence
 	⌘H Hides PhotoCraft	⌘H masque PhotoCraft
 	View › Extras uses ⌃⌘H.	Affichage › Extras utilise ⌃⌘H.
 	Hide PhotoCraft uses ⌃⌘H.	Masquer PhotoCraft utilise ⌃⌘H.
+	Generator enabled	Générateur activé
+	Move Up	Déplacer vers le haut
+	Move Down	Déplacer vers le bas
+	Hidden	Masqué
+	On your computer	Sur votre ordinateur
+	New file	Nouveau fichier
+	Learn	Apprendre
+	Website	Site web
+
+# Frame Tool and other branch translations.
+	A frame supports affine transforms; select its image for perspective transforms	Un cadre accepte les transformations affines ; sélectionnez son image pour les transformations de perspective
+	A frame supports affine transforms; select its image to warp it	Un cadre accepte les transformations affines ; sélectionnez son image pour la déformer
+	Convert to Frame…	Convertir en cadre…
+	Create a new custom frame	Créer un cadre personnalisé
+	Create a new polygonal frame	Créer un cadre polygonal
+	Create a new triangular frame	Créer un cadre triangulaire
+	Fit Content to Frame	Adapter le contenu au cadre
+	Fit Frame to Content	Adapter le cadre au contenu
+	Frame coordinates must be finite and within 600000 pixels	Les coordonnées du cadre doivent être finies et comprises dans une limite de 600000 pixels
+	Import Image…	Importer une image…
+	Invalid frame transform	Transformation du cadre non valide
+	Invalid nested file drop	Dépôt de fichier imbriqué non valide
+	New Frame	Nouveau cadre
+	Replace Image…	Remplacer l’image…
+	The frame is locked	Le cadre est verrouillé
+	The frame is unavailable	Le cadre n’est pas disponible

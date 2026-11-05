@@ -1964,6 +1964,7 @@
 	Soften	Změkčení
 	Source	Zdroj
 	Source: set	Zdroj: nastaven
+	Source: {name}	Zdroj: {name}
 	Sponge Tool	Nástroj houba
 	Spot Healing Brush Tool	Nástroj bodový retušovací štětec
 	Spread	Rozprostření
@@ -3951,6 +3952,7 @@ navigator	Zoom	Zvětšení
 	Automatically Check for Updates	Automaticky kontrolovat aktualizace
 	Paints from the History panel's source state	Maluje ze zdrojového stavu panelu Historie
 	Sets the source for the history brush	Nastaví zdroj pro štětec historie
+	The History Brush source was deleted: set a new source in the History panel	Zdroj štětce historie byl smazán: nastavte nový zdroj v panelu Historie
 	Highlight Mode	Režim světel
 	Highlight Color	Barva světel
 	Highlight Opacity	Krytí světel
@@ -4269,3 +4271,31 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	⌘H Hides PhotoCraft	⌘H skryje PhotoCraft
 	View › Extras uses ⌃⌘H.	Zobrazení › Pomocné prvky používá ⌃⌘H.
 	Hide PhotoCraft uses ⌃⌘H.	Skrýt PhotoCraft používá ⌃⌘H.
+	Drag to move the active shape's path or the Work Path	Tažením přesunete cestu aktivního tvaru nebo pracovní cestu
+	Generator enabled	Generátor zapnut
+	This Layer:	Tato vrstva:
+	Move Up	Přesunout nahoru
+	Move Down	Přesunout dolů
+	On your computer	V tomto počítači
+	New file	Nový soubor
+	Learn	Učit se
+	No recent files	Žádné nedávné soubory
+	Website	Web
+
+# Frame Tool and other branch translations.
+	A frame supports affine transforms; select its image for perspective transforms	Rámeček podporuje afinní transformace; pro perspektivní transformace vyberte jeho obrázek
+	A frame supports affine transforms; select its image to warp it	Rámeček podporuje afinní transformace; pro pokřivení vyberte jeho obrázek
+	Convert to Frame…	Převést na rámeček…
+	Create a new custom frame	Vytvořit nový vlastní rámeček
+	Create a new polygonal frame	Vytvořit nový mnohoúhelníkový rámeček
+	Create a new triangular frame	Vytvořit nový trojúhelníkový rámeček
+	Fit Content to Frame	Přizpůsobit obsah rámečku
+	Fit Frame to Content	Přizpůsobit rámeček obsahu
+	Frame coordinates must be finite and within 600000 pixels	Souřadnice rámečku musí být konečné a v rozsahu 600000 pixelů
+	Import Image…	Importovat obrázek…
+	Invalid frame transform	Neplatná transformace rámečku
+	Invalid nested file drop	Neplatné vnořené přetažení souboru
+	New Frame	Nový rámeček
+	Replace Image…	Nahradit obrázek…
+	The frame is locked	Rámeček je zamčený
+	The frame is unavailable	Rámeček není dostupný

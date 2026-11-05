@@ -1941,6 +1941,7 @@
 	Soften	Ammorbidisci
 	Source	Sorgente
 	Source: set	Sorgente: impostata
+	Source: {name}	Sorgente: {name}
 	Sponge Tool	Strumento Spugna
 	Spot Healing Brush Tool	Strumento Pennello correttivo al volo
 	Spread	Estendi
@@ -4297,6 +4298,7 @@ navigator	Zoom	Zoom
 	Automatically Check for Updates	Cerca automaticamente aggiornamenti
 	Paints from the History panel's source state	Dipinge dallo stato di origine del pannello Cronologia
 	Sets the source for the history brush	Imposta l'origine del pennello storia
+	The History Brush source was deleted: set a new source in the History panel	L'origine del pennello storia è stata eliminata: imposta una nuova origine nel pannello Cronologia
 	Highlight Mode	Metodo luci
 	Highlight Color	Colore luci
 	Highlight Opacity	Opacità luci
@@ -4635,3 +4637,29 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	⌘H Hides PhotoCraft	⌘H nasconde PhotoCraft
 	View › Extras uses ⌃⌘H.	Vista › Extra usa ⌃⌘H.
 	Hide PhotoCraft uses ⌃⌘H.	Nascondi PhotoCraft usa ⌃⌘H.
+	Generator enabled	Generatore abilitato
+	This Layer:	Questo livello:
+	Move Up	Sposta su
+	Move Down	Sposta giù
+	On your computer	Sul computer
+	New file	Nuovo file
+	Learn	Impara
+	Website	Sito web
+
+# Frame Tool and other branch translations.
+	A frame supports affine transforms; select its image for perspective transforms	Una cornice supporta trasformazioni affini; selezionate la sua immagine per le trasformazioni prospettiche
+	A frame supports affine transforms; select its image to warp it	Una cornice supporta trasformazioni affini; selezionate la sua immagine per alterarla
+	Convert to Frame…	Converti in cornice…
+	Create a new custom frame	Crea una nuova cornice personalizzata
+	Create a new polygonal frame	Crea una nuova cornice poligonale
+	Create a new triangular frame	Crea una nuova cornice triangolare
+	Fit Content to Frame	Adatta contenuto alla cornice
+	Fit Frame to Content	Adatta cornice al contenuto
+	Frame coordinates must be finite and within 600000 pixels	Le coordinate della cornice devono essere finite e comprese entro 600000 pixel
+	Import Image…	Importa immagine…
+	Invalid frame transform	Trasformazione della cornice non valida
+	Invalid nested file drop	Rilascio di file annidato non valido
+	New Frame	Nuova cornice
+	Replace Image…	Sostituisci immagine…
+	The frame is locked	La cornice è bloccata
+	The frame is unavailable	La cornice non è disponibile

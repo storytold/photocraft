@@ -1850,6 +1850,7 @@
 	Paints from the document's opening state	Slika iz stanja dokumenta pri otvaranju
 	Paints from the History panel's source state	Slika iz izvornog stanja panela Istorija
 	Sets the source for the history brush	Postavlja izvor za četkicu istorije
+	The History Brush source was deleted: set a new source in the History panel	Izvor četkice istorije je izbrisan: postavite novi izvor u panelu Istorija
 	Path Selection Tool	Alatka za selekciju putanje
 	Direct Selection Tool	Alatka za direktnu selekciju
 	Add Anchor Point Tool	Alatka za dodavanje sidrišne tačke
@@ -1913,6 +1914,7 @@
 	Soften	Omekšaj
 	Source	Izvor
 	Source: set	Izvor: postavljen
+	Source: {name}	Izvor: {name}
 	Sponge Tool	Alatka sunđer
 	Spot Healing Brush Tool	Alatka četkica za tačkastu popravku
 	Spread	Raširenost
@@ -4603,3 +4605,29 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	⌘H Hides PhotoCraft	⌘H sakriva PhotoCraft
 	View › Extras uses ⌃⌘H.	Prikaz › Dodatni elementi koristi ⌃⌘H.
 	Hide PhotoCraft uses ⌃⌘H.	Sakrij PhotoCraft koristi ⌃⌘H.
+	Generator enabled	Generator je omogućen
+	This Layer:	Ovaj sloj:
+	Move Up	Pomeri nagore
+	Move Down	Pomeri nadole
+	On your computer	На вашем рачунару
+	New file	Novi fajl
+	Learn	Učenje
+	Website	Veb-sajt
+
+# Frame Tool and other branch translations.
+	A frame supports affine transforms; select its image for perspective transforms	Оквир подржава афине трансформације; за перспективне трансформације изаберите његову слику
+	A frame supports affine transforms; select its image to warp it	Оквир подржава афине трансформације; за изобличавање изаберите његову слику
+	Convert to Frame…	Претвори у оквир…
+	Create a new custom frame	Направи нови прилагођени оквир
+	Create a new polygonal frame	Направи нови многоугаони оквир
+	Create a new triangular frame	Направи нови троугаони оквир
+	Fit Content to Frame	Прилагоди садржај оквиру
+	Fit Frame to Content	Прилагоди оквир садржају
+	Frame coordinates must be finite and within 600000 pixels	Координате оквира морају бити коначне и унутар 600000 пиксела
+	Import Image…	Увези слику…
+	Invalid frame transform	Неважећа трансформација оквира
+	Invalid nested file drop	Неважеће угнежђено испуштање датотеке
+	New Frame	Нови оквир
+	Replace Image…	Замени слику…
+	The frame is locked	Оквир је закључан
+	The frame is unavailable	Оквир није доступан
