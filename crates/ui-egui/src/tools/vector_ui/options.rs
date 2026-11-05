@@ -297,8 +297,17 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
     {
         crate::props_layout::control_group(ui, |ui| {
             let num = |ui: &mut egui::Ui, label: &str, v: &mut f32, range: std::ops::RangeInclusive<f32>, unit: &str| -> bool {
-                ui.label(egui::RichText::new(tl!(&label)).color(t.text_dim).size(12.0));
-                crate::widgets::value_field(ui, v, range, unit, 64.0).accessible_name(tl!(&label)).changed()
+                let label = tl!(&label);
+                let gap = ui.spacing().item_spacing.x;
+                let label_w = ui.painter().layout_no_wrap(label.to_owned(), egui::FontId::proportional(12.0), t.text_dim).size().x;
+                let label_w = label_w.min((ui.max_rect().width() - 64.0 - gap).max(0.0));
+                let height = crate::widgets::VALUE_FIELD_H;
+                // Wrap each caption with its field, reserving only the pair's measured width.
+                ui.allocate_ui_with_layout(egui::vec2(label_w + gap + 64.0, height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    ui.add_sized(egui::vec2(label_w, height), egui::Label::new(egui::RichText::new(label).color(t.text_dim).size(12.0)).truncate());
+                    crate::widgets::value_field(ui, v, range, unit, 64.0).accessible_name(label).changed()
+                })
+                .inner
             };
             match live {
                 photocraft_doc::vector::LiveShape::Rect { rect, .. }

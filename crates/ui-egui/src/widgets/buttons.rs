@@ -54,7 +54,7 @@ pub fn fitted_secondary_button(ui: &mut Ui, label: &str, width: f32) -> Response
     let mut job = egui::text::LayoutJob::simple_singleline(tl!(label).to_owned(), theme::medium(13.0), t.text);
     job.wrap = egui::text::TextWrapping::truncate_at_width((width - 28.0).max(0.0));
     let galley = ui.painter().layout_job(job);
-    paint_button(ui, label, t.field, t.text, false, galley, vec2(width, button_height(ui.ctx()))).on_hover_text(tl!(label))
+    paint_button(ui, label, t.field, t.text, false, galley, vec2(width, button_height(ui.ctx()))).on_hover_text(tl!(label)).on_disabled_hover_text(tl!(label))
 }
 
 /// A [`secondary_button`] `height` points tall, for slim bars such as the status bar (#2823).

@@ -17,30 +17,35 @@ const STYLES: [(GradientStyle, &str); 5] = [
 pub(super) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
     let document = app.session.active().map(|s| s.doc.id);
     ui.push_id(("gradient-properties", document, layer.id.0), |ui| {
-        layer_controls(app, ui, layer);
+        layer_controls(app, ui, layer, true);
     });
 }
 
 pub(super) fn editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
     let document = app.session.active().map(|s| s.doc.id);
     ui.push_id(("gradient-editor-layer", document, layer.id.0), |ui| {
-        layer_controls(app, ui, layer);
+        layer_controls(app, ui, layer, false);
     });
 }
 
-fn layer_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
+fn layer_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer, compact: bool) {
     if props_layout::section(ui, "gradient-fill-stops", "Gradient")
         && let Some(fill) = current_fill(app, layer.id)
     {
-        props_layout::control_group(ui, |ui| stops_editor_for(app, ui, Sink::Layer(layer.id), fill));
+        control_group(ui, compact, |ui| stops_editor_for(app, ui, Sink::Layer(layer.id), fill));
     }
-    options(app, ui, layer);
+    options(app, ui, layer, compact);
 }
 
-fn options(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
+/// Only the docked Properties form is bounded; the separate editor follows its resized window.
+fn control_group<R>(ui: &mut egui::Ui, compact: bool, contents: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    if compact { props_layout::control_group(ui, contents) } else { contents(ui) }
+}
+
+fn options(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer, compact: bool) {
     let Some(Fill::Gradient { angle, scale, style, reverse, dither, align, .. }) = fill_of(layer).cloned() else { return };
     if props_layout::section(ui, "gradient-fill-options", "Gradient Options") {
-        crate::props_layout::control_group(ui, |ui| {
+        control_group(ui, compact, |ui| {
             ui.horizontal_wrapped(|ui| {
                 row_label(ui, "Style");
                 ui.spacing_mut().item_spacing.x = 3.0;
