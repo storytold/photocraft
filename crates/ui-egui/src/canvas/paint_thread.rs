@@ -52,6 +52,12 @@ struct State {
     failed: bool,
     /// The canvas let go of the stroke: the thread ends.
     closed: bool,
+    /// Tests: the thread holds a step it took until this is cleared (see `PaintThread::hold`).
+    #[cfg(test)]
+    held: bool,
+    /// Tests: the next step panics (see `PaintThread::panic_next_step`).
+    #[cfg(test)]
+    panic_next: bool,
 }
 
 impl State {
@@ -80,6 +86,8 @@ impl Shared {
             let Some(stroke) = st.stroke.take() else { return };
             (std::mem::take(&mut st.pending), stroke)
         };
+        #[cfg(test)]
+        self.test_hooks();
         let mut stroke = stroke;
         let step = stroke.push(&pts);
         let mut st = self.lock();
@@ -93,6 +101,18 @@ impl Shared {
         st.stroke = Some(stroke);
         drop(st);
         self.changed.notify_all();
+    }
+
+    /// Tests: wait while the step is held (the stroke is busy with it), then panic if asked to.
+    #[cfg(test)]
+    fn test_hooks(&self) {
+        let mut st = self.lock();
+        while st.held && !st.closed {
+            st = self.changed.wait(st).unwrap_or_else(PoisonError::into_inner);
+        }
+        let panic = std::mem::take(&mut st.panic_next);
+        drop(st);
+        assert!(!panic, "a step panicked on the live stroke's thread (test)");
     }
 
     fn run(&self) {
@@ -122,7 +142,18 @@ pub(super) struct PaintThread {
 impl PaintThread {
     pub(super) fn start(stroke: EngineStroke) -> Self {
         let shown = Shown::of(&stroke);
-        let state = State { pending: Vec::new(), stroke: Some(stroke), steps: Vec::new(), shown: shown.clone(), failed: false, closed: false };
+        let state = State {
+            pending: Vec::new(),
+            stroke: Some(stroke),
+            steps: Vec::new(),
+            shown: shown.clone(),
+            failed: false,
+            closed: false,
+            #[cfg(test)]
+            held: false,
+            #[cfg(test)]
+            panic_next: false,
+        };
         let shared = Arc::new(Shared { state: Mutex::new(state), changed: Condvar::new() });
         let thread = if cfg!(target_arch = "wasm32") {
             None
@@ -181,6 +212,31 @@ impl PaintThread {
         let steps = self.catch_up(Duration::MAX);
         let stroke = self.shared.lock().stroke.take();
         (steps, stroke)
+    }
+
+    /// Tests: from now on the thread holds the next step it takes, as a slow brush would, until
+    /// the returned function lets it go (from any thread).
+    #[cfg(test)]
+    pub(super) fn hold(&self) -> impl FnOnce() + Send + 'static {
+        self.shared.lock().held = true;
+        let shared = self.shared.clone();
+        move || {
+            shared.lock().held = false;
+            shared.changed.notify_all();
+        }
+    }
+
+    /// Tests: the next step panics on the thread, which then stops with the stroke.
+    #[cfg(test)]
+    pub(super) fn panic_next_step(&self) {
+        self.shared.lock().panic_next = true;
+    }
+
+    /// Tests: is the thread still running? (It keeps the shared state alive until it ends.)
+    #[cfg(test)]
+    pub(super) fn thread_alive(&self) -> impl Fn() -> bool + use<> {
+        let weak = Arc::downgrade(&self.shared);
+        move || weak.strong_count() > 0
     }
 
     /// Look at the stroke once it has painted everything handed over.

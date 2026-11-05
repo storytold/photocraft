@@ -445,6 +445,12 @@ pub(crate) fn cancel_mixer_on_context_change(app: &mut PhotocraftApp, ctx: &egui
 /// Render the drag points the live stroke hasn't seen yet, with the pen pressure, tilt and
 /// rotation the commit's `paint.stroke` gets for them.
 pub(super) fn feed_live_stroke(app: &mut PhotocraftApp) {
+    feed_live_stroke_waiting(app, LIVE_STROKE_WAIT);
+}
+
+/// [`feed_live_stroke`], waiting at most `wait` for the stroke to paint (tests: not at all, to
+/// hand points to a stroke that is busy).
+pub(super) fn feed_live_stroke_waiting(app: &mut PhotocraftApp, wait: std::time::Duration) {
     // A batched move replays several samples in one frame and calls this once at the end, so the
     // per-sample calls from `tool_event` are skipped (see `canvas_view`).
     if app.defer_live_stroke {
@@ -470,7 +476,7 @@ pub(super) fn feed_live_stroke(app: &mut PhotocraftApp) {
     l.fed = d.points.len();
     let started = crate::gpu_canvas::now_ms();
     l.paint.push(pts);
-    let steps = l.paint.catch_up(LIVE_STROKE_WAIT);
+    let steps = l.paint.catch_up(wait);
     let tool = d.tool;
     take_steps(app, tool, steps);
     app.perf.stage.stroke_ms += crate::gpu_canvas::now_ms() - started;

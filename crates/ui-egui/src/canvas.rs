@@ -34,6 +34,8 @@ pub mod outline;
 mod paint;
 pub mod paint_mouse;
 mod paint_thread;
+#[cfg(test)]
+mod paint_thread_tests;
 pub mod patch_preview;
 pub mod pattern_preview;
 pub mod pixel_grid;
