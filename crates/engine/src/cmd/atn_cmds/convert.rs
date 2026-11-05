@@ -87,6 +87,15 @@ fn convert_action(file: &AtnFile, a: &AtnAction, set: &str, unsupported: &mut Ve
         };
         for mut s in new_steps {
             normalise(&mut s.1);
+            // A Play step qualified with the set this very file is: the qualifier names the set
+            // every action of this import belongs to, so it carries no target. Dropping it here
+            // keeps a call of a *different* set, which is the one that must survive (#11523).
+            if s.0 == "actions.play"
+                && s.1.get("set").and_then(Value::as_str) == Some(set)
+                && let Some(object) = s.1.as_object_mut()
+            {
+                object.remove("set");
+            }
             let idx = action.steps.len();
             action.steps.push(s);
             if !enabled {

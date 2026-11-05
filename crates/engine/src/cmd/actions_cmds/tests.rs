@@ -1499,6 +1499,79 @@ fn rename_follows_named_batch_steps_in_their_set() {
     assert!(caller[4].1["action"].is_array());
 }
 
+/// A Play call qualified with an action set reaches that set's child and never a same-named child
+/// of another set: the set's own `Child`, the child an earlier load renamed to `Child 2`, and an
+/// error when the set holds no such child or two children of the renamed form. An unqualified call
+/// still reaches the first action of the name (#11523).
+#[test]
+fn a_set_qualified_play_reaches_that_sets_child() {
+    let child = |name: &str, set: &str, color: &str| Action {
+        set: Some(set.into()),
+        ..Action::new(name, vec![("edit.fill".into(), json!({"contents": "color", "color": color}))])
+    };
+    let mut s = Session::new();
+    for a in [
+        child("Child", "Red", "#ff0000"),
+        child("Child", "Blue", "#0000ff"),
+        child("Child 2", "Green", "#00ff00"),
+        child("Child 2", "Two", "#ff00ff"),
+        child("Child 3", "Two", "#000000"),
+    ] {
+        s.actions.list.push(a);
+    }
+    let cases = [
+        (json!({"action": "Child"}), [1.0, 0.0, 0.0, 1.0], "unqualified: the first of the name"),
+        (json!({"action": "Child", "set": "Blue"}), [0.0, 0.0, 1.0, 1.0], "that set's own child"),
+        (json!({"action": "Child", "set": "Green"}), [0.0, 1.0, 0.0, 1.0], "the child the loader renamed there"),
+        (json!({"action": "Child 2", "set": "Green"}), [0.0, 1.0, 0.0, 1.0], "by the loaded name"),
+    ];
+    for (params, want, why) in cases {
+        s.execute("file.new", json!({"width": 4, "height": 4, "mode": "rgb", "depth": 8})).unwrap();
+        let played = s.execute("actions.play", params.clone()).unwrap();
+        assert!(played.get("failed").is_none(), "{params} ({why}): {played}");
+        assert_eq!(pixel(&s, 0, 1, 1), want, "{params} ({why})");
+    }
+    // A set with no such child, and one holding two children of the renamed form, are reported
+    // rather than answered with another set's action or a guess.
+    s.execute("file.new", json!({"width": 4, "height": 4, "mode": "rgb", "depth": 8})).unwrap();
+    for params in [json!({"action": "Child", "set": "Missing"}), json!({"action": "Child", "set": "Two"}), json!({"action": "Nope", "set": "Blue"})] {
+        let error = s.execute("actions.play", params.clone()).unwrap_err().to_string();
+        let name = params["action"].as_str().unwrap_or_default();
+        assert!(error.contains(name), "{params}: {error}");
+        if let Some(set) = params["set"].as_str() {
+            assert!(error.contains(set), "{params}: {error}");
+        }
+        assert_eq!(pixel(&s, 0, 1, 1), [1.0, 1.0, 1.0, 1.0], "{params} must change nothing");
+    }
+    // As a step of an action, the lost call stops it there instead of running later steps.
+    s.actions.list.push(Action::new(
+        "Caller",
+        vec![("actions.play".into(), json!({"action": "Child", "set": "Missing"})), ("edit.fill".into(), json!({"contents": "color", "color": "#000000"}))],
+    ));
+    let played = s.execute("actions.play", json!({"action": "Caller"})).unwrap();
+    let error = played["failed"]["error"].as_str().unwrap_or_default();
+    assert!(error.contains("Child") && error.contains("Missing"), "{played}");
+    assert_eq!(pixel(&s, 0, 1, 1), [1.0, 1.0, 1.0, 1.0], "the steps after the lost call do not run");
+}
+
+/// A rename follows a Play call qualified with the set the call reaches, and leaves a call that
+/// reaches another set's same-named child naming it still.
+#[test]
+fn rename_follows_a_set_qualified_play_call_that_reaches_the_action() {
+    let mut s = Session::new();
+    for set in ["A", "B"] {
+        s.actions.list.push(Action { set: Some(set.into()), ..Action::new("Child", Vec::new()) });
+    }
+    s.actions.list.push(Action::new(
+        "Caller",
+        vec![("actions.play".into(), json!({"action": "Child", "set": "B"})), ("actions.play".into(), json!({"action": "Child"}))],
+    ));
+    s.execute("actions.rename", json!({"action": 1, "name": "Renamed"})).unwrap();
+    let caller = &s.actions.list[2].steps;
+    assert_eq!(caller[0].1, json!({"action": "Renamed", "set": "B"}), "the call reaching B's child follows it");
+    assert_eq!(caller[1].1, json!({"action": "Child"}), "the unqualified call reaches A's child and stays");
+}
+
 /// All Batch files saved, but the requested error log could not be written: the calling action
 /// stops at that step instead of going on as if the Batch had finished.
 #[test]
