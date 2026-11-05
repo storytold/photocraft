@@ -93,7 +93,7 @@ fn browse_color_lookup(app: &mut PhotocraftApp, layer: LayerId) -> Result<Value,
 }
 
 /// Dropdown key prefix of a LUT listed from the LUT folder; the rest of the key is its path.
-const FOLDER_LUT: &str = "file:";
+pub(crate) const FOLDER_LUT: &str = "file:";
 
 type FolderLuts = Vec<(String, String)>;
 
@@ -109,9 +109,10 @@ struct FolderScan {
 
 /// The LUT folder's files (Preferences › File Handling › LUT Folder, #6558). The folder is
 /// scanned on a worker thread at most every couple of seconds, since a network share can be
-/// slow; until a scan finishes the dropdown shows the previous one.
-fn folder_luts(app: &PhotocraftApp, ctx: &egui::Context) -> FolderLuts {
-    let folder = app.session.prefs().file_handling.lut_folder.clone();
+/// slow; until a scan finishes the dropdown shows the previous one. Image › Adjustments › Color
+/// Lookup lists them too (#9754).
+pub(crate) fn folder_luts(folder: &str, ctx: &egui::Context) -> FolderLuts {
+    let folder = folder.to_string();
     let now = ctx.input(|input| input.time);
     let key = egui::Id::unique("color-lookup-folder");
     let mut scan = ctx.data(|data| data.get_temp::<FolderScan>(key)).unwrap_or_default();
@@ -178,7 +179,7 @@ pub fn color_lookup_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: Layer
         return;
     };
     let builtins = photocraft_engine::adjust_cmds::LOOKS;
-    let folder = folder_luts(app, ui.ctx());
+    let folder = folder_luts(&app.session.prefs().file_handling.lut_folder, ui.ctx());
     let current = current_lookup(name, lut.is_some(), &folder);
     let current = app
         .live_adjust
@@ -315,13 +316,14 @@ mod lookup_picker_tests {
         app.run("prefs.set", json!({"path": "fileHandling.lutFolder", "value": dir.to_str().unwrap()})).unwrap();
         // The scan runs on a worker thread: ask again until it has finished.
         let ctx = egui::Context::default();
-        let mut folder = folder_luts(&app, &ctx);
+        let lut_folder = app.session.prefs().file_handling.lut_folder.clone();
+        let mut folder = folder_luts(&lut_folder, &ctx);
         for _ in 0..500 {
             if !folder.is_empty() {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
-            folder = folder_luts(&app, &ctx);
+            folder = folder_luts(&lut_folder, &ctx);
         }
         let key = format!("{FOLDER_LUT}{}", path.to_str().unwrap());
         assert_eq!(folder, [("film.cube".to_string(), path.to_str().unwrap().to_string())]);
