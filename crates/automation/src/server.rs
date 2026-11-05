@@ -1,6 +1,7 @@
 //! The MCP server (rmcp). Tool names use `snake_case` with underscores (dots
 //! are not valid in every client's tool-name grammar).
 
+use std::io::Write as _;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -370,11 +371,13 @@ pub struct UiSetParams {
     /// `shape.edit` names and units; colour comes from `tools.setColors`. camTransformOnDrop (bool,
     /// the Content-Aware Move tool's Transform On Drop). tileGrid (bool, a developer overlay of the
     /// active layer's storage tiles). layerFilter (an object patching by ("kind", "name", "effect",
-    /// "mode", "color", "smartObject" or "artboard", which lists the artboards that hold the
-    /// selected layers), kinds (a list of layer kinds), name (matches part of the layer name),
-    /// effect ("bevelEmboss", "stroke", "innerShadow", "innerGlow", "satin", "overlay",
-    /// "outerGlow" or "dropShadow"), mode (a blend mode name), color (a layer colour label, or
-    /// "none") and smart (a list of "linked", "missing" and "embedded") for the Layers panel
+    /// "mode", "attribute", "color", "smartObject" or "artboard", which lists the artboards that
+    /// hold the selected layers), kinds (a list of layer kinds), name (matches part of the layer
+    /// name), effect ("bevelEmboss", "stroke", "innerShadow", "innerGlow", "satin", "overlay",
+    /// "outerGlow" or "dropShadow"), mode (a blend mode name), attribute ("visible", "locked",
+    /// "empty", "linked", "clipped", "layerMask", "vectorMask", "layerEffects",
+    /// "advancedBlending", or "notVisible" … "noAdvancedBlending"), color (a layer colour label,
+    /// or "none") and smart (a list of "linked", "missing" and "embedded") for the Layers panel
     /// filter). strokeTrace (true, false, "stderr" or "off": the stroke latency trace at runtime; a
     /// CSV file is set at launch with --stroke-trace, not over this channel). updatesOpen (bool,
     /// the Help › Check for Updates window).
@@ -576,8 +579,12 @@ impl PhotocraftMcp {
         Self::with_backend(Backend::Headless(Arc::new(Mutex::new(Headless::new()))))
     }
 
+    pub fn with_headless(headless: Headless) -> Self {
+        Self::with_backend(Backend::Headless(Arc::new(Mutex::new(headless))))
+    }
+
     pub fn headless_with_workspace(workspace: AuthorizedWorkspace) -> Self {
-        Self::with_backend(Backend::Headless(Arc::new(Mutex::new(Headless::with_workspace(workspace)))))
+        Self::with_headless(Headless::with_workspace(workspace))
     }
 
     pub fn bridge(addr: &str, token: &str) -> Result<Self, AutomationError> {
@@ -900,7 +907,17 @@ impl PhotocraftMcp {
     #[tool(description = "Render the flattened document and return it as a PNG image (bridge mode: window screenshot).")]
     async fn doc_render_preview(&self, Parameters(p): Parameters<PreviewParams>) -> Result<CallToolResult, McpError> {
         let max = p.max_side.unwrap_or(1024);
-        if let Some(r) = self.headless_op(move |h| h.render_png(p.index, max)).await {
+        if let Some(r) = self
+            .headless_op(move |h| {
+                let res = h.render_png(p.index, max);
+                for d in h.drain_diagnostics() {
+                    // Ignore a failed stderr write: the completed render must still be returned.
+                    let _ = writeln!(std::io::stderr(), "warning: {d}");
+                }
+                res
+            })
+            .await
+        {
             return Ok(match r {
                 Ok(png) => png_result(&png, format!("flattened preview (max side {max})")),
                 Err(e) => fail(e),
@@ -1215,7 +1232,12 @@ impl PhotocraftMcp {
                     opts.encode.webp_lossless = false;
                 }
                 let path = p.path.map(PathBuf::from);
-                h.save(p.index, path.as_deref(), p.format.as_deref(), &opts)
+                let res = h.save(p.index, path.as_deref(), p.format.as_deref(), &opts);
+                for d in h.drain_diagnostics() {
+                    // Ignore a failed stderr write: the completed save must still be returned.
+                    let _ = writeln!(std::io::stderr(), "warning: {d}");
+                }
+                res
             })
             .await
         else {
