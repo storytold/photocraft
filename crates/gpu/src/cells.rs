@@ -566,10 +566,7 @@ impl Compositor {
             stats.operator_cells += 1;
         }
         for k in [wk, ok, mk, map_key, depth_key, weight_key] {
-            if let Some(r) = self.residents.get_mut(&k) {
-                r.last_used = self.frame;
-                r.stamp = self.stamp;
-            }
+            self.op_touch(&k);
         }
         let r = self.residents.get(&ok)?;
         Some((ok, [r.region.x0, r.region.y0, r.region.width() as i32, r.region.height() as i32]))
