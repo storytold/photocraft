@@ -590,6 +590,37 @@ cameraRaw	Yellow	पीला
 	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	अमान्य संख्यात्मक प्रविष्टि। {min}% और {max}% के बीच एक पूर्णांक आवश्यक है। पिछला मान डाला गया।
 	Edit Brush…	ब्रश संपादित करें…
 
+# Frame Tool and other branch translations.
+	A frame supports affine transforms; select its image for perspective transforms	फ़्रेम एफ़ाइन रूपांतरणों का समर्थन करता है; परिप्रेक्ष्य रूपांतरणों के लिए उसकी छवि चुनें
+	A frame supports affine transforms; select its image to warp it	फ़्रेम एफ़ाइन रूपांतरणों का समर्थन करता है; वार्प करने के लिए उसकी छवि चुनें
+	Convert to Frame…	फ़्रेम में बदलें…
+	Create a new custom frame	नया कस्टम फ़्रेम बनाएँ
+	Create a new polygonal frame	नया बहुभुजीय फ़्रेम बनाएँ
+	Create a new triangular frame	नया त्रिकोणीय फ़्रेम बनाएँ
+	Fit Content to Frame	सामग्री को फ़्रेम में फ़िट करें
+	Fit Frame to Content	फ़्रेम को सामग्री के अनुसार फ़िट करें
+	Frame coordinates must be finite and within 600000 pixels	फ़्रेम के निर्देशांक परिमित और 600000 पिक्सेल की सीमा में होने चाहिए
+	Import Image…	छवि आयात करें…
+	Invalid frame transform	अमान्य फ़्रेम रूपांतरण
+	Invalid nested file drop	अमान्य नेस्टेड फ़ाइल ड्रॉप
+	New Frame	नया फ़्रेम
+	Replace Image…	छवि बदलें…
+	The frame is locked	फ़्रेम लॉक है
+	The frame is unavailable	फ़्रेम उपलब्ध नहीं है
+	Both	दोनों
+	Center	केंद्र
+	Create a new elliptical frame	नया अंडाकार फ़्रेम बनाएँ
+	Create a new rectangular frame	नया आयताकार फ़्रेम बनाएँ
+	Frame	फ़्रेम
+	H	H
+	Inside	अंदर
+	Outside	बाहर
+	Sides:	भुजाएँ:
+	Stroke	स्ट्रोक
+	W	W
+	X	X
+	Y	Y
+
 # Actions panel: loading several action files at once
 	{message} ({note})	{message} ({note})
 @plural	{n} action|{n} actions	{n} एक्शन|{n} एक्शन
@@ -1037,7 +1068,6 @@ cameraRaw	Yellow	पीला
 	Bold Italic	बोल्ड इटैलिक
 	Border	बॉर्डर
 	Border Thickness	बॉर्डर की मोटाई
-	Both	दोनों
 	Both Axes	दोनों अक्ष
 	Bottom	नीचे
 	Bottom Edges	निचले किनारे
@@ -1145,7 +1175,6 @@ cameraRaw	Yellow	पीला
 	Catch-up on Stroke End	स्ट्रोक के अंत में कैच-अप
 	Ccw	वामावर्त
 	Cell Size	सेल साइज़
-	Center	केंद्र
 	Center Columns	कॉलम केंद्र में करें
 	Center Crop Marks	केंद्र क्रॉप मार्क्स
 	Center text	टेक्स्ट केंद्र में करें
@@ -1474,11 +1503,9 @@ cameraRaw	Yellow	पीला
 	Create	बनाएँ
 	Create a new count group	नया गिनती समूह बनाएँ
 	Create a new document or open an existing file.	नया दस्तावेज़ बनाएँ या कोई मौजूदा फ़ाइल खोलें।
-	Create a new elliptical frame	नया अंडाकार फ़्रेम बनाएँ
 	Create a new group	नया समूह बनाएँ
 	Create a new layer	नई लेयर बनाएँ
 	Create a new layer  (⇧⌘N)	नई लेयर बनाएँ  (⇧⌘N)
-	Create a new rectangular frame	नया आयताकार फ़्रेम बनाएँ
 	Create By	इसके द्वारा बनाएँ
 	Create Clipping Mask	क्लिपिंग मास्क बनाएँ
 	Create Date	निर्माण तिथि
@@ -2122,7 +2149,6 @@ cameraRaw	Yellow	पीला
 	Forward Warp	फ़ॉरवर्ड वार्प
 	Fractions	भिन्न
 	Fragment	फ़्रैगमेंट
-	Frame	फ़्रेम
 	Frame {current} / {total}	फ़्रेम {current} / {total}
 	Frame Duration	फ़्रेम अवधि
 	Frame from Layers	लेयर्स से फ़्रेम
@@ -2284,7 +2310,6 @@ cameraRaw	Yellow	पीला
 	Guides, Grid & Slices	गाइड्स, ग्रिड और स्लाइस
 	Guides, Grid & Slices…	गाइड्स, ग्रिड और स्लाइस…
 	Gutter	गटर
-	H	ऊँ
 	Half Round	अर्ध गोल
 	Halftone Pattern	हाफ़टोन पैटर्न
 	Halftone Screen	हाफ़टोन स्क्रीन
@@ -2461,7 +2486,6 @@ cameraRaw	Yellow	पीला
 	Input:	इनपुट:
 	Insert Blank Frame	खाली फ़्रेम डालें
 	Insert Stop…	स्टॉप डालें…
-	Inside	अंदर
 	Install Plug-in	प्लग-इन इंस्टॉल करें
 	Install Plug-in…	प्लग-इन इंस्टॉल करें…
 	Installed RAM: {ram} MB; this limit: {percent}%	इंस्टॉल की गई RAM: {ram} MB; यह सीमा: {percent}%
@@ -3152,7 +3176,6 @@ cameraRaw	Yellow	पीला
 	Output Settings	आउटपुट सेटिंग्स
 	Output To	आउटपुट यहाँ
 	Output:	आउटपुट:
-	Outside	बाहर
 	Oval	अंडाकार
 	Overlay	ओवरले
 	Overlay Color	ओवरले रंग
@@ -3968,7 +3991,6 @@ cameraRaw	Yellow	पीला
 	Show:	दिखाएँ:
 	Shutter Speed	शटर स्पीड
 	Sides	भुजाएँ
-	Sides:	भुजाएँ:
 	Simple	सरल
 	Simulate Paper	पेपर सिम्युलेट करें
 	Simulate Pressure	प्रेशर सिम्युलेट करें
@@ -4130,7 +4152,6 @@ cameraRaw	Yellow	पीला
 	Strength:	शक्ति:
 	Stretch	खींचें
 	Strikethrough	स्ट्राइकथ्रू
-	Stroke	स्ट्रोक
 	Stroke Catch-up	स्ट्रोक कैच-अप
 	Stroke color	स्ट्रोक रंग
 	Stroke Color	स्ट्रोक रंग
@@ -4500,9 +4521,8 @@ cameraRaw	Yellow	पीला
 	Visible	दृश्यमान
 	Vivid Light	विविड लाइट
 	Vulkan	Vulkan
-	W	चौ
-	W x H x Resolution	चौ x ऊँ x रिज़ॉल्यूशन
-	W:	चौ:
+	W x H x Resolution	W x H x रिज़ॉल्यूशन
+	W:	W:
 	Wait for the current job to finish.	मौजूदा कार्य पूरा होने तक प्रतीक्षा करें।
 	Wand	वैंड
 	Warm	गर्म
@@ -4579,10 +4599,8 @@ cameraRaw	Yellow	पीला
 	World ready	वर्ल्ड-रेडी
 	Wrap	रैप
 	Write xmp sidecars	XMP साइडकार फ़ाइलें लिखें
-	X	X
 	X11	X11
 	XOR	XOR
-	Y	Y
 	yellow	पीला
 	Yellow  ·  Blue	पीला  ·  नीला
 	Yellows	पीले
@@ -4667,3 +4685,33 @@ layers	Fill:	फ़िल:
 navigator	Zoom	ज़ूम
 shape	Appearance	रूप
 smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded source; format-specific features may change.	AI/PDF/EPS सामग्री SVG के रूप में संपादित की जाएगी। सहेजने पर एम्बेडेड स्रोत बदल जाता है; फ़ॉर्मेट-विशिष्ट सुविधाएँ बदल सकती हैं।
+
+# Merged from main (2026-11-05): start screen, History Brush source, Type › OpenType › Stylistic Sets.
+	Learn	सीखें
+	New file	नई फ़ाइल
+	On your computer	आपके कंप्यूटर पर
+	Website	वेबसाइट
+	Source: {name}	स्रोत: {name}
+	The History Brush source was deleted: set a new source in the History panel	हिस्ट्री ब्रश का स्रोत हटा दिया गया: हिस्ट्री पैनल में नया स्रोत सेट करें
+	Stylistic Sets	स्टाइलिस्टिक सेट्स
+	Set 	सेट 
+	Set 1	सेट 1
+	Set 2	सेट 2
+	Set 3	सेट 3
+	Set 4	सेट 4
+	Set 5	सेट 5
+	Set 6	सेट 6
+	Set 7	सेट 7
+	Set 8	सेट 8
+	Set 9	सेट 9
+	Set 10	सेट 10
+	Set 11	सेट 11
+	Set 12	सेट 12
+	Set 13	सेट 13
+	Set 14	सेट 14
+	Set 15	सेट 15
+	Set 16	सेट 16
+	Set 17	सेट 17
+	Set 18	सेट 18
+	Set 19	सेट 19
+	Set 20	सेट 20

@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-11-05 · **Change:** minor (Hindi UI catalog complete; previously minor: Swedish, Finnish, Danish and Norwegian Bokmål UI catalogs) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-11-05 · **Change:** minor (Hindi UI catalog complete; previously minor: Bosnian UI catalog; previously minor: Swedish, Finnish, Danish and Norwegian Bokmål UI catalogs) · **Target:** Adobe Photoshop 2026
 
 Per-language status of PhotoCraft's UI. How catalogs work and how to add one:
 [`localization.md`](localization.md). Language notes: [Korean](localization-ko.md), [Spanish](localization-es.md),
@@ -35,7 +35,7 @@ speakers, ~55% ready. Remaining: 80–140 h, plus native-speaker review (recorde
 | English | `en` | 1,608 / 1,608 (100%) | source | all | Latin | – | full | 0 h |
 | Simplified Chinese | `zh-hans` | 1,608 / 1,608 (100%) | 2,366 | dialogs, tooltips yes; engine messages English | CJK fonts (lazy loader), IME preedit/commit, vertical type | no | partial | 8–12 h |
 | Spanish | `es` | 1,844 / 1,844 (100%) | 4,010 | as above; complete dynamic UI key set | Latin | no | partial | 6–10 h |
-| Hindi | `hi` | 2,272 / 2,272 (100%, 2026-11-05) | 4,611 | as above; the dynamic labels the other complete catalogs translate ([notes](localization-hi.md)) | Devanagari shaped by HarfRust in the UI (egui 0.37) and the text engine; UI falls back to an installed Devanagari font (Nirmala UI, Kohinoor/ITF Devanagari, Noto/Lohit), none bundled for the web build | no | partial | 4–8 h (on-screen layout check, web font) |
+| Hindi | `hi` | 2,321 / 2,321 (100%, 2026-11-05) | 4,655 | as above; the dynamic labels the other complete catalogs translate ([notes](localization-hi.md)) | Devanagari shaped by HarfRust in the UI (egui 0.37) and the text engine; UI falls back to an installed Devanagari font (Nirmala UI, Kohinoor/ITF Devanagari, Noto/Lohit), none bundled for the web build | no | partial | 4–8 h (on-screen layout check, web font) |
 | Arabic | `ar` | 2,175 / 2,175 (100%, 2026-10-28) | 3,410 | as above; combined from the community catalogs with one term per concept | Arabic shaping and bidi in the UI (egui 0.37) and the text engine, Arabic fallback font; RTL shell layout but not inside panels (DIST-220-4), paragraph direction buttons but no visual RTL caret (TYPE-218-2 partial) | no | partial | 15–25 h |
 | French | `fr` | 1,608 / 1,608 (100%) | 2,766 | as above | Latin | no | partial | 6–10 h |
 | Portuguese (Brazil) | `pt-br` | 1,608 / 1,608 (100%) | 2,788 | as above | Latin; every `pt` locale uses it | no | partial | 6–10 h |
@@ -60,7 +60,10 @@ term per concept; the contested terms follow a native speaker's questionnaire an
 `fi` (4,552 rows, combined from #5666 and #6961), Danish `da` (4,552 rows, based on #7267 and
 completed for the current UI) and Norwegian Bokmål `nb` (4,552 rows, combined from #8072 and #9025;
 `no` and `nn` locales resolve to it), all added 2026-10-29, cover the same keys with one term per
-concept; none has had a native-speaker review yet.
+concept; none has had a native-speaker review yet. Bosnian `bs` (4,552 rows, Latin script,
+Ijekavian, added 2026-10-30) covers the same keys; its one/few/other plurals reuse the Russian
+rule, and Cyrillic `bs` locales read it too. It is AI-assisted, shares its wording with
+storytold/craft-i18n `locales/bs/`, and has not had a native-speaker review yet.
 
 Czech UI follow-up (2026-10-11): status and notice wrappers, hardware labels, brush and
 transform accessibility names, rasterization prompts, profile mismatch messages and preset
@@ -101,4 +104,5 @@ engine localization or native review is complete.
 | 2026-10-28 | minor | Arabic (`ar`) UI catalog: every measured key, six plural forms; layer names and the title bar no longer reversed on egui 0.37 |
 | 2026-10-29 | minor | Swedish (`sv`) UI catalog: every measured key plus the dynamic labels, combined from #5985 and #9536 |
 | 2026-10-29 | minor | Finnish (`fi`), Danish (`da`) and Norwegian Bokmål (`nb`) UI catalogs: every measured key plus the dynamic labels, combined from #5666, #6961, #7267, #8072 and #9025 |
-| 2026-11-05 | minor | Hindi (`hi`) UI catalog: every measured key (2,272) plus the dynamic labels (4,611 rows), singular for 0 and 1, terminology note ([localization-hi](localization-hi.md)); no native-speaker review yet |
+| 2026-10-30 | minor | Bosnian (`bs`, Latin, Ijekavian) catalog: the same 4,552 keys as the newest catalogs, `bs-*` locales (Cyrillic included) and one/few/other plurals |
+| 2026-11-05 | minor | Hindi (`hi`) UI catalog: every measured key (2,321) plus the dynamic labels (4,655 rows), singular for 0 and 1, terminology note ([localization-hi](localization-hi.md)); no native-speaker review yet |

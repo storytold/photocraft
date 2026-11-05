@@ -84,7 +84,7 @@ forms, `one|other`. Hindi often uses the same noun for both (*{n} लेयर|{
 | Shape (form) | आकार | a generic outline: *ब्रश टिप आकार*, *आकार ब्लर*, *आकार डायनेमिक्स* |
 | Working space | वर्किंग स्पेस | colour settings; not *कार्यस्थान* (Workspace) |
 | File path (disk) | फ़ाइल पथ | *पाथ* is only the vector path |
-| W / H (abbreviations) | चौ / ऊँ | short for चौड़ाई / ऊँचाई |
+| W / H, X / Y (field letters) | W / H, X / Y | kept Latin, as the Frame tool's fields already have them |
 | Highlights / Midtones / Shadows | हाइलाइट्स / मिडटोन्स / शैडो | spelled *शैडो* everywhere |
 | Hue / Saturation / Brightness | ह्यू / सैचुरेशन / ब्राइटनेस | *चमक* only in *चमक/कंट्रास्ट…* |
 | Contrast | कंट्रास्ट | |
