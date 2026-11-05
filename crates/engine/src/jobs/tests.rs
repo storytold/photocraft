@@ -1201,6 +1201,32 @@ fn background_admission_counts_cancelled_workers_until_they_finish() {
     assert_eq!(s.wait_job(id).unwrap(), json!("resumed"));
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn reaping_finished_workers_preserves_the_release_request() {
+    let (tx, rx) = std::sync::mpsc::channel::<()>();
+    let mut draining = vec![
+        Draining { handle: std::thread::spawn(|| {}), doc: None, release: true },
+        Draining { handle: std::thread::spawn(move || drop(rx.recv())), doc: None, release: true },
+    ];
+    let start = Instant::now();
+    while !draining[0].handle.is_finished() {
+        assert!(start.elapsed() < Duration::from_secs(30));
+        std::thread::yield_now();
+    }
+    assert!(reap_draining(&mut draining));
+    assert_eq!(draining.len(), 1);
+    assert!(!reap_draining(&mut draining), "a running worker must retain its release request");
+    drop(tx);
+    let start = Instant::now();
+    while !draining[0].handle.is_finished() {
+        assert!(start.elapsed() < Duration::from_secs(30));
+        std::thread::yield_now();
+    }
+    assert!(reap_draining(&mut draining));
+    assert!(draining.is_empty());
+}
+
 #[cfg(unix)]
 fn tmp_dir(name: &str) -> std::path::PathBuf {
     let d = std::env::temp_dir().join(format!("photocraft-engine-jobs-{}-{name}", std::process::id()));
