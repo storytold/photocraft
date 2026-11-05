@@ -33,6 +33,7 @@ pub mod file_dialog;
 pub mod file_open;
 pub mod frame_stages;
 pub mod gpu_status;
+pub mod home_recent_ui;
 pub mod i18n;
 mod icon_data;
 pub mod icons;
@@ -356,6 +357,7 @@ pub struct PhotocraftApp {
     info_samplers: Option<panels::SamplerReadouts>,
     /// Display profile readings (#569).
     monitors: monitor_status::State,
+    pub(crate) thumbnail_cache: std::sync::Arc<std::sync::Mutex<crate::home_recent_ui::ThumbnailCache>>,
     checker: Option<egui::TextureHandle>,
     drag: Option<canvas::Drag>,
     /// An owned vector drag was cancelled (`canvas::cancel_stale_vector_drag`): the rest of its
@@ -590,6 +592,9 @@ pub struct PhotocraftApp {
     pub(crate) wide_angle: Option<wide_angle_ui::WideAngleDialog>,
     /// ⌘Z history of each open parameter dialog (edit_history).
     pub(crate) dialog_edits: edit_history::DialogEdits,
+    /// What each open Color Picker's live target was when it opened, to put back on Cancel
+    /// (`color_picker_ui::live_preview`).
+    pub(crate) color_picker_live: Vec<color_picker_ui::live_preview::Live>,
     /// The filter a "Rasterize?" prompt answered for, run after the dialog closes, where the
     /// egui context is available again (rasterize_prompt).
     pub(crate) pending_after_prompt: Option<(String, serde_json::Value)>,
@@ -793,6 +798,9 @@ mod notice_text_tests;
 mod transform_switch_tests;
 #[cfg(test)]
 mod transform_undo_tests;
+
+#[cfg(test)]
+mod transform_rotate_snap_tests;
 
 #[cfg(test)]
 mod transform_type_tests;
