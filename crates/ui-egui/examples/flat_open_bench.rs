@@ -96,6 +96,7 @@ impl Case {
     }
 }
 
+/// Return the value following a named command-line option.
 fn arg(args: &[String], name: &str) -> Option<String> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1).cloned())
 }
@@ -317,10 +318,12 @@ fn rows_of(res: &Value) -> Vec<Value> {
         .collect()
 }
 
+/// Format a measured byte count in MiB, retaining unavailable measurements.
 fn mb(v: &Value) -> String {
     v.as_u64().map_or_else(|| "n/a".into(), |b| format!("{}", b >> 20))
 }
 
+/// Print phase timings and identify the scope of both process RSS readings.
 fn print_case(res: &Value) {
     println!("{} ({}x{}, {:.1} MB file)", res["label"].as_str().unwrap_or("?"), res["width"], res["height"], res["file_bytes"].as_f64().unwrap_or(0.0) / 1e6);
     for r in rows_of(res) {
@@ -374,6 +377,7 @@ fn spawn_case(case: &Case, args: &[String], dir: &Path, reps: usize) -> Result<V
     serde_json::from_str(line).map_err(|e| format!("{}: bad result: {e}", case.key))
 }
 
+/// Run isolated benchmark cases and optionally write their combined report.
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let quick = args.iter().any(|a| a == "--quick");
