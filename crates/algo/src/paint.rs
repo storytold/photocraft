@@ -63,7 +63,23 @@ pub fn sample_stops(stops: &[(f32, [f32; 4])], t: f32) -> [f32; 4] {
     }
 }
 
-/// Composites `color(i)` over `area` of the surface with per-pixel coverage.
+/// `o`, the pixel `d` with `c` composited at coverage `k`, with what is left of `d`'s transparency
+/// filled by `c` up to coverage `full` (≥ `k`) as well, behind the colour already there: the
+/// transparent part of the pixel takes the fill at `full` while its colour keeps the softer `k`.
+fn fill_transparency(o: [f32; 4], d: [f32; 4], c: [f32; 4], k: f32, full: f32) -> [f32; 4] {
+    let add = ((full - k).max(0.0) * c[3].clamp(0.0, 1.0) * (1.0 - d[3]).max(0.0)).min((1.0 - o[3]).max(0.0));
+    let a = o[3] + add;
+    if add.is_nan() || add <= 0.0 || a <= 0.0 {
+        return o;
+    }
+    let mix = |i: usize| (o[i] * o[3] + c[i] * add) / a;
+    [mix(0), mix(1), mix(2), a]
+}
+
+/// Composites `color(i)` over `area` of the surface with per-pixel coverage. With `transparency`,
+/// a covered pixel's transparency takes the fill at that coverage instead (see
+/// [`fill_transparency`]); Lock Transparent Pixels and Clear ignore it.
+#[allow(clippy::too_many_arguments)]
 fn composite_area(
     s: &mut Surface,
     area: Rect,
@@ -72,6 +88,7 @@ fn composite_area(
     color: impl Fn(i32, i32) -> [f32; 4] + Sync,
     lock_transparency: bool,
     inks: Option<[f32; 4]>,
+    transparency: Option<&(dyn Fn(i32, i32) -> f32 + Sync)>,
 ) {
     // Composite tile by tile (in parallel on native); tiles with zero coverage are left untouched,
     // so their copy-on-write storage (and GPU residency) survives.
@@ -99,7 +116,11 @@ fn composite_area(
                 let d = photocraft_raster::to_rgba(&fmt, px);
                 let o = match mode {
                     FillMode::Blend(m) if lock_transparency => blend::composite_atop(m, d, color(x, y), k),
-                    FillMode::Blend(m) => blend::composite(m, d, color(x, y), k),
+                    FillMode::Blend(m) => {
+                        let c = color(x, y);
+                        let o = blend::composite(m, d, c, k);
+                        transparency.map_or(o, |full| fill_transparency(o, d, c, k, full(x, y)))
+                    }
                     // Locked transparency keeps the alpha, so Clear leaves the pixel as it is.
                     FillMode::Clear if lock_transparency => d,
                     FillMode::Clear => [d[0], d[1], d[2], d[3] * (1.0 - k.min(1.0))],
@@ -165,6 +186,7 @@ pub fn paint_gradient(
         },
         lock_transparency,
         None,
+        None,
     );
 }
 
@@ -227,8 +249,16 @@ pub fn bucket_fill_inks(
     }
     let img = crate::selection::rgba8_image(s, area);
     let Some(region) = crate::selection::wand_region(&img, area, seed, tolerance, contiguous, anti_alias) else { return false };
+    // Clicked on transparency: the flood fills empty pixels, and the empty part of the pixels
+    // along its anti-aliased edge (the soft rim a cleared selection leaves) is that same empty
+    // area, so it is filled in full rather than left as a semi-transparent ring (#11311).
+    let at_seed = usize::try_from(seed.1 - area.y0)
+        .ok()
+        .and_then(|y| y.checked_mul(area.width() as usize))
+        .and_then(|row| row.checked_add(usize::try_from(seed.0 - area.x0).ok()?));
+    let empty_seed = at_seed.and_then(|i| img.get(i)).is_some_and(|p| p[3] == 0);
     drop(img);
-    bucket_fill_region_inks(s, &region, opacity, selection, lock_transparency, src, inks, mode);
+    fill_region(s, &region, opacity, selection, lock_transparency, src, inks, mode, empty_seed);
     true
 }
 
@@ -257,9 +287,30 @@ pub fn bucket_fill_region_inks(
     inks: Option<[f32; 4]>,
     mode: FillMode,
 ) {
+    fill_region(s, region, opacity, selection, lock_transparency, src, inks, mode, false);
+}
+
+/// [`bucket_fill_region_inks`]; with `fill_empty`, the transparent part of every pixel the region
+/// touches takes the fill at the full opacity and selection coverage, while the region's
+/// anti-aliasing still softens the colour over what is already there. Opaque pixels come out
+/// exactly as without it.
+#[allow(clippy::too_many_arguments)]
+fn fill_region(
+    s: &mut Surface,
+    region: &crate::selection::Region,
+    opacity: f32,
+    selection: Option<&Surface>,
+    lock_transparency: bool,
+    src: impl Fn(i32, i32) -> [f32; 4] + Sync,
+    inks: Option<[f32; 4]>,
+    mode: FillMode,
+    fill_empty: bool,
+) {
     // Composite only over the filled region's box.
     let b = region.bbox;
-    composite_area(s, b, mode, |x, y| region.at(x, y) * opacity * selection.map_or(1.0, |m| m.sample_channel(x, y, 0)), src, lock_transparency, inks);
+    let strength = |x: i32, y: i32| opacity * selection.map_or(1.0, |m| m.sample_channel(x, y, 0));
+    let empty: Option<&(dyn Fn(i32, i32) -> f32 + Sync)> = if fill_empty { Some(&strength) } else { None };
+    composite_area(s, b, mode, |x, y| region.at(x, y) * strength(x, y), src, lock_transparency, inks, empty);
 }
 
 #[cfg(test)]
@@ -342,6 +393,51 @@ mod tests {
         assert!((s.rgba(-2, 4)[3] - 0.125).abs() < 0.005);
         assert_eq!(s.rgba(-1, 4), [0.0; 4], "outside the selection");
         assert_eq!(s.rgba(-4, 4), [0.0; 4], "outside the region");
+    }
+
+    /// #11311: flooding transparency with anti-aliasing fills the empty part of the region's edge
+    /// pixels at the fill's opacity, so the edge is no semi-transparent ring; opaque pixels the
+    /// anti-aliasing reaches blend exactly as before.
+    #[test]
+    fn bucket_on_transparency_fills_the_edge_pixels_in_full() {
+        let a = Rect::new(0, 0, 8, 1);
+        let white = |_, _| [1.0, 1.0, 1.0, 1.0];
+        for fmt in [PixelFormat::RGBA8, PixelFormat::RGBA16, PixelFormat::RGBA32F] {
+            for (opaque, opacity) in [([1.0, 1.0, 1.0, 1.0], 1.0), ([1.0, 1.0, 1.0, 1.0], 0.5), ([1.0, 0.0, 0.0, 1.0], 1.0)] {
+                let mut s = Surface::new(fmt);
+                s.fill_rect(Rect::new(4, 0, 8, 1), &opaque);
+                // The same region filled without the rule: what the bucket used to do.
+                let mut before = s.clone();
+                let img = crate::selection::rgba8_image(&before, a);
+                let region = crate::selection::wand_region(&img, a, (1, 0), 0.0, true, true).unwrap();
+                bucket_fill_region_inks(&mut before, &region, opacity, None, false, white, None, FillMode::Blend(BlendMode::Normal));
+                assert!(before.rgba(3, 0)[3] < opacity * 0.97, "{fmt:?}: the old edge was semi-transparent: {:?}", before.rgba(3, 0));
+
+                assert!(bucket_fill_inks(&mut s, a, (1, 0), 0.0, true, true, opacity, None, false, white, None, FillMode::Blend(BlendMode::Normal)));
+                for x in 0..4 {
+                    let p = s.rgba(x, 0);
+                    assert!(p[..3].iter().all(|c| (c - 1.0).abs() < 1e-3) && (p[3] - opacity).abs() < 3e-3, "{fmt:?} {opaque:?} at {x}: {p:?}");
+                }
+                for x in 4..8 {
+                    assert_eq!(s.rgba(x, 0), before.rgba(x, 0), "{fmt:?} {opaque:?} at {x}: opaque pixels blend as before");
+                }
+                assert!(s.rgba(4, 0)[3] > 0.999);
+            }
+        }
+    }
+
+    /// The rule is for a click on transparency only: from an opaque seed, a semi-transparent
+    /// neighbour along the edge keeps its own transparency (it belongs to another area).
+    #[test]
+    fn bucket_on_opaque_pixels_keeps_neighbouring_transparency() {
+        let a = Rect::new(0, 0, 8, 1);
+        let mut s = Surface::new(PixelFormat::RGBA8);
+        s.fill_rect(Rect::new(0, 0, 4, 1), &[1.0, 1.0, 1.0, 0.5]);
+        s.fill_rect(Rect::new(4, 0, 8, 1), &[1.0, 1.0, 1.0, 1.0]);
+        assert!(bucket_fill_inks(&mut s, a, (6, 0), 0.0, true, true, 1.0, None, false, |_, _| [1.0; 4], None, FillMode::Blend(BlendMode::Normal)));
+        let edge = s.rgba(3, 0)[3];
+        assert!(edge > 0.5 && edge < 0.6, "only the anti-aliased coverage lands: {edge}");
+        assert!((s.rgba(1, 0)[3] - 0.5).abs() < 0.01, "outside the region");
     }
 
     /// The Paint Bucket's Mode: Multiply darkens what's there, Clear erases it (half at 50 %).
