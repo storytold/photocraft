@@ -465,7 +465,8 @@
 	Smart Object	스마트 오브젝트
 	Convert to Smart Object	스마트 오브젝트로 변환
 	Convert to Embedded	포함된 오브젝트로 변환
-	Embed Linked	포함된 오브젝트로 변환
+	Embed Linked	연결된 항목 포함
+	Embed All Linked	모든 연결된 항목 포함
 	Convert to Layers	레이어로 변환
 	Convert to Linked…	연결된 오브젝트로 변환…
 	Edit Contents	내용 편집

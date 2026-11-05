@@ -483,7 +483,8 @@
 	Smart Object	智能对象
 	Convert to Smart Object	转换为智能对象
 	Convert to Embedded	转换为嵌入对象
-	Embed Linked	转换为嵌入对象
+	Embed Linked	嵌入链接对象
+	Embed All Linked	嵌入所有链接对象
 	Convert to Layers	转换为图层
 	Convert to Linked…	转换为链接对象…
 	Edit Contents	编辑内容
