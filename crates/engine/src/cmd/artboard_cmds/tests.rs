@@ -614,6 +614,22 @@ fn duplicating_several_artboards_places_each_copy_in_a_free_spot() {
 }
 
 #[test]
+fn copying_several_artboards_changes_nothing_when_one_copy_has_no_room() {
+    // Copies are made bottom to top, so the failure comes after the first copy has landed.
+    for command in ["layer.duplicate", "layer.new.layerViaCopy"] {
+        let mut s = session(8);
+        let a = board_with_square(&mut s);
+        let b = s.execute("layer.new.artboard", json!({"x": i32::MAX - 50, "y": 0, "width": 50, "height": 50})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("layer.select", json!({"layer": a.0})).unwrap();
+        s.execute("layer.select", json!({"layer": b, "mode": "add"})).unwrap();
+        let before = doc(&s).clone();
+        let error = s.execute(command, json!({})).expect_err(command);
+        assert!(error.to_string().contains("no room"), "{command}: {error}");
+        assert!(*doc(&s) == before, "{command}: the document stays as it was");
+    }
+}
+
+#[test]
 fn moving_an_artboard_past_the_canvas_grows_it() {
     // #1531: a board dragged right of the canvas was cut off at the old edge.
     let mut s = session(8);
