@@ -47,10 +47,26 @@ fn guides_submenu_lists_the_nine_rows_in_order() {
 #[test]
 fn no_guide_row_is_left_flat_in_view() {
     let app = app();
-    let flat = vec!["View".to_string()];
+    let items = crate::menus::menu_items(&app);
+    let guides = vec!["View".to_string(), "Guides".to_string()];
     for (_, id) in ORDER {
-        assert_ne!(item(&app, id).path, flat, "{id}");
+        let rows: Vec<_> = items.iter().filter(|i| i.id == id).collect();
+        assert_eq!(rows.len(), 1, "{id} appears exactly once");
+        assert_eq!(rows[0].path, guides, "{id} is in View > Guides, not flat in View");
     }
+}
+
+#[test]
+fn the_menu_cache_follows_the_selected_guide() {
+    let mut app = app();
+    let none = crate::native_menu::state_hash(&app, None);
+    crate::guide_select::select(&mut app, true, 0);
+    let one = crate::native_menu::state_hash(&app, None);
+    assert_ne!(none, one, "selecting a guide changes the menu state");
+    assert!(item(&app, "view.clearSelectedGuides").enabled);
+    crate::guide_select::clear(&mut app);
+    assert_eq!(crate::native_menu::state_hash(&app, None), none);
+    assert!(!item(&app, "view.clearSelectedGuides").enabled);
 }
 
 #[test]
