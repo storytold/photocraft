@@ -239,8 +239,8 @@ pub(crate) fn decode(b: &[u8], limits: &Limits) -> Result<Image, CodecError> {
     if samples != want_samples {
         return Err(CodecError::unsupported(F, format!("{samples} samples per pixel with {photometric}")));
     }
-    if planar > 1 {
-        return Err(CodecError::unsupported(F, format!("planar configuration {planar}")));
+    if samples == 3 && planar > 1 {
+        return Err(bad(format!("planar configuration {planar}")));
     }
     if ybr && bits != 8 {
         return Err(CodecError::unsupported(F, format!("{bits}-bit {photometric} (8-bit only)")));
@@ -438,7 +438,10 @@ mod tests {
     #[test]
     fn rejects_invalid_planar_configuration() {
         let b = synth("1.2.840.10008.1.2.1", true, false, 2, 1, 1, 3, 8, "RGB", &[10, 20, 30]);
-        assert!(decode(&b, &Limits::default()).is_err());
+        assert!(matches!(decode(&b, &Limits::default()), Err(CodecError::Malformed { .. })));
+
+        let mono = synth("1.2.840.10008.1.2.1", true, false, 2, 1, 1, 1, 8, "MONOCHROME2", &[10]);
+        assert!(decode(&mono, &Limits::default()).is_ok());
     }
 
     #[test]
