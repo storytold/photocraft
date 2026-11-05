@@ -1850,6 +1850,7 @@
 	Paints from the document's opening state	Slika iz stanja dokumenta pri otvaranju
 	Paints from the History panel's source state	Slika iz izvornog stanja panela Istorija
 	Sets the source for the history brush	Postavlja izvor za četkicu istorije
+	The History Brush source was deleted: set a new source in the History panel	Izvor četkice istorije je izbrisan: postavite novi izvor u panelu Istorija
 	Path Selection Tool	Alatka za selekciju putanje
 	Direct Selection Tool	Alatka za direktnu selekciju
 	Add Anchor Point Tool	Alatka za dodavanje sidrišne tačke
@@ -1913,6 +1914,7 @@
 	Soften	Omekšaj
 	Source	Izvor
 	Source: set	Izvor: postavljen
+	Source: {name}	Izvor: {name}
 	Sponge Tool	Alatka sunđer
 	Spot Healing Brush Tool	Alatka četkica za tačkastu popravku
 	Spread	Raširenost
@@ -4334,6 +4336,7 @@ shape	Appearance	Izgled
 	Kept {name}: written by another application	{name} je zadržan: upisala ga je druga aplikacija
 	Shadow Tint	Nijansa senki
 	Redrawing	Ponovno iscrtavanje
+	Memory usage percent	Проценат употребе меморије
 	Show Favorite Fonts	Прикажи омиљене фонтове
 	No favorite fonts yet: click the star beside a font to add it.	Још нема омиљених фонтова: кликните на звездицу поред фонта да бисте га додали.
 	Favorite fonts	Омиљени фонтови
@@ -4473,6 +4476,7 @@ shape	Appearance	Izgled
 	This document's layers: {needed} of {budget} for layers	Slojevi ovog dokumenta: {needed} od {budget} za slojeve
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Slojevima ovog dokumenta treba {needed}, a smeju da zauzmu {budget}: ceo dokument se ponovo iscrtava na CPU-u
 	GPU Memory (MB, 0 = Automatic)	GPU memorija (MB, 0 = Automatski)
+	Scratch Size Limit (MB, 0 = No Limit)	Ograničenje veličine radnog diska (MB, 0 = bez ograničenja)
 	{path}: the path is not valid Unicode; save under another name.	{path}: putanja nije ispravan Unicode; sačuvajte pod drugim imenom.
 	{name} was changed by another app after it was opened or saved here.	Datoteku {name} je izmenila druga aplikacija nakon što je ovde otvorena ili sačuvana.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Zameni je ovim dokumentom ili otkaži i koristi Datoteka › Sačuvaj kao da zadržiš obe.
@@ -4597,3 +4601,29 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Boja tačke
 	Shapes can't use patterns yet	Oblici još ne mogu da koriste šare
 	Edit Brush…	Uredi četkicu…
+	Generator enabled	Generator je omogućen
+	This Layer:	Ovaj sloj:
+	Move Up	Pomeri nagore
+	Move Down	Pomeri nadole
+	On your computer	На вашем рачунару
+	New file	Novi fajl
+	Learn	Učenje
+	Website	Veb-sajt
+
+# Frame Tool and other branch translations.
+	A frame supports affine transforms; select its image for perspective transforms	Оквир подржава афине трансформације; за перспективне трансформације изаберите његову слику
+	A frame supports affine transforms; select its image to warp it	Оквир подржава афине трансформације; за изобличавање изаберите његову слику
+	Convert to Frame…	Претвори у оквир…
+	Create a new custom frame	Направи нови прилагођени оквир
+	Create a new polygonal frame	Направи нови многоугаони оквир
+	Create a new triangular frame	Направи нови троугаони оквир
+	Fit Content to Frame	Прилагоди садржај оквиру
+	Fit Frame to Content	Прилагоди оквир садржају
+	Frame coordinates must be finite and within 600000 pixels	Координате оквира морају бити коначне и унутар 600000 пиксела
+	Import Image…	Увези слику…
+	Invalid frame transform	Неважећа трансформација оквира
+	Invalid nested file drop	Неважеће угнежђено испуштање датотеке
+	New Frame	Нови оквир
+	Replace Image…	Замени слику…
+	The frame is locked	Оквир је закључан
+	The frame is unavailable	Оквир није доступан
