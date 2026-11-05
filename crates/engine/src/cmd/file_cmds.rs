@@ -292,7 +292,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Place Embedded…",
             &["File"],
             None,
-            r##"{"path":str,"scale":%? (default: fit when larger than the canvas),"fit":bool? (default: Preferences > General > Resize Image During Place),"smartObject":bool? (default: Preferences > General > Always Create Smart Objects When Placing),"center":[x,y]?,"approveHighMemory":bool=false (explicitly approve high memory usage),"page":int? (PDF: the page, from 1),"resolution":ppi? (PDF: 300 by default),"crop":"boundingBox|mediaBox|cropBox|bleedBox|trimBox|artBox"? (PDF),"mode":"rgb|gray|cmyk|lab"? (PDF),"depth":8|16? (PDF),"antiAlias":bool? (PDF),"image":int? (PDF: place embedded image N instead of a page),"password":str? (PDF),"suppressWarnings":bool? (PDF)}"##,
+            r##"{"path":str,"scale":%? (default: fit when larger than the canvas),"fit":bool? (default: Preferences > General > Resize Image During Place),"smartObject":bool? (default: Preferences > General > Always Create Smart Objects When Placing),"center":[x,y]?,"approveHighMemory":bool=false (explicitly approve high memory usage),"frame":id|false? (default: selected frame),"page":int? (PDF: the page, from 1),"resolution":ppi? (PDF: 300 by default),"crop":"boundingBox|mediaBox|cropBox|bleedBox|trimBox|artBox"? (PDF),"mode":"rgb|gray|cmyk|lab"? (PDF),"depth":8|16? (PDF),"antiAlias":bool? (PDF),"image":int? (PDF: place embedded image N instead of a page),"password":str? (PDF),"suppressWarnings":bool? (PDF)}"##,
             native_doc,
             |s, p| place(s, p, false)
         ),
@@ -301,7 +301,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Place Linked…",
             &["File"],
             None,
-            r##"{"path":str,"scale":%?,"fit":bool? (default: Preferences > General > Resize Image During Place),"center":[x,y]?,"approveHighMemory":bool=false (explicitly approve high memory usage)} (a PDF places page 1 at 300 ppi; Import PDF options are refused, as the link keeps only the path: use file.placeEmbedded)"##,
+            r##"{"path":str,"scale":%?,"fit":bool? (default: Preferences > General > Resize Image During Place),"center":[x,y]?,"approveHighMemory":bool=false (explicitly approve high memory usage),"frame":id|false? (default: selected frame)} (a PDF places page 1 at 300 ppi; Import PDF options are refused, as the link keeps only the path: use file.placeEmbedded)"##,
             native_doc,
             |s, p| place(s, p, true)
         ),
