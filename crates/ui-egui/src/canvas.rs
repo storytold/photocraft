@@ -65,7 +65,6 @@ pub mod zoom_window_fit;
 pub(crate) use cursors::eyedropper_ring_colors;
 pub(crate) use cursors::{alt_picks, alt_samples, composite_color, paint_bucket_cursor, pen_cursor, pencil_cursor_rect, pencil_tip_is_round, pipette_cursor};
 use cursors::{brush_tip_centre, eyedropper_ring, precise_other_cursor, visible_crosshair};
-#[cfg(test)]
 pub(crate) use display::GPU_OUTPUT;
 use display::texture_key;
 pub(crate) use display::{cache_key, canvas_display, display_doc, display_image};
@@ -1600,7 +1599,7 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
             if precise_other_cursor(app) {
                 egui::CursorIcon::Crosshair
             } else {
-                paint_bucket_cursor(ui.ctx(), p)
+                paint_bucket_cursor(app, painter, p)
             }
         }
         // Over the first anchor, the close-path pointer (#4596), before the pens' own cursors.
