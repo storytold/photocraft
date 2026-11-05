@@ -37,7 +37,7 @@ fn reference_rect(d: &Descriptor) -> Option<[f64; 4]> {
         return None;
     }
     let number = |key| match r.get(key)? {
-        D::UnitFloat { unit, value } if unit == b"#Pxl" => Some(*value),
+        D::UnitFloat { unit: b"#Pxl", value } => Some(*value),
         _ => None,
     };
     let r = [number("Left")?, number("Top ")?, number("Rght")?, number("Btom")?];
