@@ -226,7 +226,7 @@ mod tests {
             // Only the two-byte ColorSpace value may change.
             let differences: Vec<_> = input.iter().zip(output.iter()).enumerate().filter(|(_, (a, b))| a != b).map(|(i, _)| i).collect();
             assert!(!differences.is_empty());
-            assert!(differences.iter().all(|&i| (38..40).contains(&i)));
+            assert!(differences.iter().all(|&i| (36..38).contains(&i)));
             assert!(matches!(srgb_exif_metadata(&output), std::borrow::Cow::Borrowed(_)));
 
             let mut prefixed = b"Exif\0\0".to_vec();
