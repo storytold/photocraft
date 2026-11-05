@@ -415,6 +415,14 @@ psd/src/
   - `thumb.png` and `composite/` mips for quick look and previews.
 - **Saving is incremental.** Tiles are content-addressed, so a save writes only new tiles plus the manifest, and garbage-collects unreferenced ones.
 - **Autosave and crash recovery** reuse the same writer into a recovery directory, reading from a snapshot on a background thread.
+- **Adjustment payloads:** `.pcraft` stores Color Lookup samples as little-endian f32
+  blobs and original LUT files and unsupported adjustment bytes as separate compressed,
+  content-addressed blobs. Decoded tables are shared by hash within a load; blob byte
+  limits still apply once per distinct payload. Other adjustment schemas are unchanged.
+  Current readers also accept the earlier inline adjustment representation. The envelope
+  remains `format_version` 1: builds predating blob-backed adjustments cannot open the
+  new Color Lookup or Unsupported records and report a manifest JSON deserialization
+  error rather than `TooNew`. Use a current build to reopen these saves.
 - **PSD is the interchange format,** and `.pcraft` is the lossless native one.
 
 ---

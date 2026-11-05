@@ -430,11 +430,13 @@ fn admit_canvas(size: photocraft_geom::Size, opts: &LoadOptions) -> Result<()> {
     Ok(())
 }
 
+/// Load a bounded bundle, sharing verified blobs, decoded tiles, and LUT samples.
 pub(crate) fn load(src: &dyn ByteSource, opts: &LoadOptions) -> Result<Document> {
     let m = read_manifest(src, opts)?;
     admit_canvas(m.document.size, opts)?;
     let mut fetch = LoadFetch { src, opts: *opts, total: 0, blobs: HashMap::new() };
     let mut loader = Loader {
+        luts: HashMap::new(),
         fetch: &mut fetch,
         preserve_ids: opts.preserve_ids,
         id_map: HashMap::new(),

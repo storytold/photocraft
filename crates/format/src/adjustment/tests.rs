@@ -13,6 +13,7 @@ impl Fetch for Blob {
     }
 }
 
+/// Reject incomplete samples and non-finite binary values without panicking.
 #[test]
 fn malformed_binary_luts_fail_cleanly() {
     for bytes in [vec![0], vec![0; 3], f32::NAN.to_le_bytes().to_vec(), f32::INFINITY.to_le_bytes().to_vec()] {
@@ -20,6 +21,7 @@ fn malformed_binary_luts_fail_cleanly() {
     }
 }
 
+/// Preserve exact finite sample bits, including signed zero and extreme values.
 #[test]
 fn samples_are_little_endian_and_keep_finite_bit_patterns() {
     let samples = [0.0f32, -0.0, f32::MIN_POSITIVE, f32::MAX, -1.0];

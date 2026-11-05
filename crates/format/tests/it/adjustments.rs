@@ -6,12 +6,14 @@ use photocraft_doc::adjust::{LutFormat, LutSource};
 use photocraft_doc::{Adjustment, Document, Layer, LayerContent, Size};
 use photocraft_format::{FormatError, LoadOptions, PcraftWriter, SaveOptions, load_from_bytes, load_from_bytes_with, load_path, save_to_bytes, zip};
 
+/// Build a minimal document containing the requested adjustment and sample depth.
 fn document(adjustment: Adjustment, depth: SampleType) -> Document {
     let mut doc = Document::new("adjustments", Size::new(2, 2), ColorMode::Rgb, depth);
     doc.layers.push(Layer::new("lookup", LayerContent::Adjustment(adjustment)));
     doc
 }
 
+/// Build a small LUT with its original source bytes and non-default options.
 fn lookup() -> Adjustment {
     Adjustment::ColorLookup {
         name: "look.cube".into(),
@@ -23,11 +25,13 @@ fn lookup() -> Adjustment {
     }
 }
 
+/// Read the uncompressed manifest for schema assertions.
 fn manifest(bytes: &[u8]) -> serde_json::Value {
     let zip = zip::ZipReader::new(bytes).unwrap();
     serde_json::from_slice(&zip.read_by_name("manifest.json", usize::MAX).unwrap()).unwrap()
 }
 
+/// Replace one adjustment record while preserving every other bundle entry.
 fn with_adjustment(bytes: &[u8], adjustment: serde_json::Value) -> Vec<u8> {
     let input = zip::ZipReader::new(bytes).unwrap();
     let mut output = zip::ZipWriter::new();
@@ -43,6 +47,7 @@ fn with_adjustment(bytes: &[u8], adjustment: serde_json::Value) -> Vec<u8> {
     output.finish().unwrap()
 }
 
+/// Verify large payloads round-trip at every depth through ZIP and directory bundles.
 #[test]
 fn large_lookup_and_source_use_blobs_and_roundtrip_at_every_depth() {
     let mut adjustment = lookup();
@@ -71,6 +76,7 @@ fn large_lookup_and_source_use_blobs_and_roundtrip_at_every_depth() {
     }
 }
 
+/// Verify pre-blob inline adjustment records remain readable.
 #[test]
 fn legacy_inline_adjustments_still_open() {
     for adjustment in [lookup(), Adjustment::Unsupported { psd_key: "test".into(), raw: Arc::from([1, 2, 3]) }] {
@@ -81,6 +87,7 @@ fn legacy_inline_adjustments_still_open() {
     }
 }
 
+/// Keep opaque adjustment data outside the manifest value budget.
 #[test]
 fn unsupported_adjustment_bytes_use_blobs() {
     let doc = document(Adjustment::Unsupported { psd_key: "test".into(), raw: vec![3; 4_194_305].into() }, SampleType::U8);
@@ -89,6 +96,7 @@ fn unsupported_adjustment_bytes_use_blobs() {
     assert_eq!(load_from_bytes(&bytes).unwrap(), doc);
 }
 
+/// Reject payloads beyond the load budgets and malformed or missing blob hashes.
 #[test]
 fn lookup_blobs_obey_load_budgets_and_require_valid_hashes() {
     let doc = document(lookup(), SampleType::U8);
@@ -103,6 +111,7 @@ fn lookup_blobs_obey_load_budgets_and_require_valid_hashes() {
     }
 }
 
+/// Reject non-finite LUT samples before publishing a save.
 #[test]
 fn nonfinite_lookup_samples_cannot_be_saved() {
     for value in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
@@ -113,6 +122,7 @@ fn nonfinite_lookup_samples_cannot_be_saved() {
     }
 }
 
+/// Preserve the existing schema and values of every other adjustment type.
 #[test]
 fn other_adjustments_keep_their_json_schema_and_roundtrip() {
     use photocraft_doc::adjust::{CurvePoint, HueRange, LevelsChannel, ToneSpace};
@@ -157,9 +167,34 @@ fn other_adjustments_keep_their_json_schema_and_roundtrip() {
     }
 }
 
+/// Preserve profile lookups that do not contain a decoded LUT or source file.
 #[test]
 fn profile_lookup_without_a_table_or_source_roundtrips() {
     let doc = document(Adjustment::ColorLookup { name: "profile".into(), lut: None, size: 0, tetrahedral: false, dither: false, source: None }, SampleType::U8);
     let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
     assert_eq!(load_from_bytes(&bytes).unwrap(), doc);
+}
+
+/// Charge shared blobs once and reuse both decoded samples and original source bytes.
+#[test]
+fn shared_lookup_tables_obey_distinct_blob_budget() {
+    let adjustment = lookup();
+    let Adjustment::ColorLookup { lut: Some(lut), source: Some(source), .. } = &adjustment else { unreachable!() };
+    let budget = (lut.len() * 4 + source.bytes.len()) as u64;
+    let mut doc = document(adjustment.clone(), SampleType::U8);
+    doc.layers.push(Layer::new("second lookup", LayerContent::Adjustment(adjustment)));
+    let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+    let loaded = load_from_bytes_with(&bytes, &LoadOptions { max_total_bytes: budget, ..Default::default() }).unwrap();
+    assert_eq!(loaded, doc);
+    let tables: Vec<_> = loaded
+        .layers
+        .iter()
+        .map(|layer| {
+            let LayerContent::Adjustment(Adjustment::ColorLookup { lut: Some(lut), source: Some(source), .. }) = &layer.content else { unreachable!() };
+            (lut, &source.bytes)
+        })
+        .collect();
+    assert!(Arc::ptr_eq(tables[0].0, tables[1].0));
+    assert!(Arc::ptr_eq(tables[0].1, tables[1].1));
+    assert!(matches!(load_from_bytes_with(&bytes, &LoadOptions { max_total_bytes: budget - 1, ..Default::default() }), Err(FormatError::LimitExceeded(_))));
 }

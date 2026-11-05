@@ -1,4 +1,5 @@
 //! Large adjustment payloads use the bundle's bounded, content-addressed blob storage.
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use photocraft_doc::Adjustment;
@@ -17,6 +18,7 @@ pub enum AdjustmentM {
     Inline(Adjustment),
 }
 
+/// Adjustment records whose large binary payloads are referenced by blob hash.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum StoredAdjustment {
     ColorLookup {
@@ -36,6 +38,7 @@ pub enum StoredAdjustment {
     },
 }
 
+/// Original LUT file metadata and its content-addressed payload.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LutSourceM {
     pub format: LutFormat,
@@ -43,6 +46,7 @@ pub struct LutSourceM {
 }
 
 impl AdjustmentM {
+    /// Move large payloads to blobs while preserving small adjustment schemas.
     pub(crate) fn store(adjustment: &Adjustment, sink: &mut dyn Sink) -> Result<Self> {
         let stored = match adjustment {
             Adjustment::ColorLookup { name, lut, size, tetrahedral, dither, source } => StoredAdjustment::ColorLookup {
@@ -59,7 +63,8 @@ impl AdjustmentM {
         Ok(Self::Stored(stored))
     }
 
-    pub(crate) fn load(&self, fetch: &mut dyn Fetch) -> Result<Adjustment> {
+    /// Restore an adjustment, sharing each decoded LUT across all references in this load.
+    pub(crate) fn load(&self, fetch: &mut dyn Fetch, luts: &mut HashMap<Hash, Arc<Vec<f32>>>) -> Result<Adjustment> {
         match self {
             Self::Inline(adjustment) => Ok(adjustment.clone()),
             Self::Stored(StoredAdjustment::Unsupported { psd_key, raw }) => {
@@ -67,7 +72,7 @@ impl AdjustmentM {
             }
             Self::Stored(StoredAdjustment::ColorLookup { name, lut, size, tetrahedral, dither, source }) => Ok(Adjustment::ColorLookup {
                 name: name.clone(),
-                lut: lut.as_ref().map(|hash| load_lut(hash, fetch)).transpose()?,
+                lut: lut.as_ref().map(|hash| shared_lut(hash, fetch, luts)).transpose()?,
                 size: *size,
                 tetrahedral: *tetrahedral,
                 dither: *dither,
@@ -80,6 +85,7 @@ impl AdjustmentM {
     }
 }
 
+/// Encode finite samples exactly as little-endian f32 values in a blob.
 fn store_lut(values: &[f32], sink: &mut dyn Sink) -> Result<Hash> {
     let len = values.len().checked_mul(4).ok_or_else(|| FormatError::LimitExceeded("Color Lookup table is too large".into()))?;
     let mut bytes = Vec::new();
@@ -93,6 +99,17 @@ fn store_lut(values: &[f32], sink: &mut dyn Sink) -> Result<Hash> {
     Ok(sink.blob(&Arc::new(bytes)))
 }
 
+/// Decode a distinct LUT once; repeated references retain the same sample allocation.
+fn shared_lut(hash: &str, fetch: &mut dyn Fetch, luts: &mut HashMap<Hash, Arc<Vec<f32>>>) -> Result<Arc<Vec<f32>>> {
+    if let Some(lut) = luts.get(hash) {
+        return Ok(lut.clone());
+    }
+    let lut = load_lut(hash, fetch)?;
+    luts.insert(hash.to_owned(), lut.clone());
+    Ok(lut)
+}
+
+/// Validate and decode a bounded, hash-verified blob into finite native f32 samples.
 fn load_lut(hash: &str, fetch: &mut dyn Fetch) -> Result<Arc<Vec<f32>>> {
     let bytes = fetch.blob(hash)?;
     let (samples, remainder) = bytes.as_chunks::<4>();

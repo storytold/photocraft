@@ -125,6 +125,7 @@ fn video_m(v: &photocraft_doc::VideoData, sink: &mut dyn Sink) -> crate::manifes
     }
 }
 
+/// Convert group children before their parent, keeping recursive stack frames small.
 fn layer_m(l: &Layer, sink: &mut dyn Sink) -> Result<LayerM> {
     // Keep large conversion locals off the stack that grows with group nesting, as on load.
     let mut children = Vec::new();
@@ -136,6 +137,7 @@ fn layer_m(l: &Layer, sink: &mut dyn Sink) -> Result<LayerM> {
     layer_m_with(l, sink, children)
 }
 
+/// Serialize one layer with its already converted children and fallible adjustment payloads.
 #[inline(never)]
 fn layer_m_with(l: &Layer, sink: &mut dyn Sink, children: Vec<LayerM>) -> Result<LayerM> {
     let content = match &l.content {
@@ -244,6 +246,7 @@ fn channel_m(c: &AlphaChannel, sink: &mut dyn Sink) -> ChannelM {
     ChannelM { name: name.clone(), surface: surface_m(surface, sink), spot: *spot, color: *color, opacity: *opacity, indicates: *indicates }
 }
 
+/// Convert a document to manifest records and register its binary payloads.
 pub(crate) fn doc_m(d: &Document, sink: &mut dyn Sink) -> Result<DocM> {
     Ok(DocM {
         id: d.id.0,
@@ -328,6 +331,8 @@ fn comp_m(c: &LayerComp, sink: &mut dyn Sink) -> LayerCompM {
 // ---------------------------------------------------------------------------
 
 pub(crate) struct Loader<'a> {
+    /// Decoded LUT samples shared by content hash for the lifetime of this load.
+    pub luts: std::collections::HashMap<Hash, Arc<Vec<f32>>>,
     pub fetch: &'a mut dyn Fetch,
     pub preserve_ids: bool,
     /// Stored layer id → loaded id (differs when ids are remapped), for layer comp states.
@@ -475,7 +480,7 @@ impl Loader<'_> {
             ContentM::Group { expanded, artboard, frame_stroke, .. } => {
                 LayerContent::Group(Group { artboard: artboard.clone(), children, expanded: *expanded, frame_stroke: frame_stroke.clone() })
             }
-            ContentM::Adjustment { adjustment } => LayerContent::Adjustment(adjustment.load(self.fetch)?),
+            ContentM::Adjustment { adjustment } => LayerContent::Adjustment(adjustment.load(self.fetch, &mut self.luts)?),
             ContentM::Fill { fill } => LayerContent::Fill(fill.clone()),
             ContentM::Text { text, font_family, size_pt, color, transform, cache, psd_raw, runs, paragraphs, shape, orientation, antialias, warp } => {
                 LayerContent::Text(TextLayer {
