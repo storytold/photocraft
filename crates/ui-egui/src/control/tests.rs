@@ -884,14 +884,15 @@ fn ui_set_gradient_blend_mode_validates_and_updates_options() {
 fn ui_set_drives_the_layers_panel_artboard_filter() {
     use crate::layer_filter_ui::FilterBy;
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width":8,"height":8})).unwrap();
     let ctx = egui::Context::default();
     let ok = call(&mut app, &ctx, "ui.set", json!({"layerFilter": {"by": "artboard"}}));
     assert_eq!(ok["ok"], true, "{ok}");
-    assert_eq!(app.ui.layer_filter_by, FilterBy::Artboard);
+    assert_eq!(crate::layer_filter_ui::Filter::of(&app).by, FilterBy::Artboard);
     let bad = call(&mut app, &ctx, "ui.set", json!({"layerFilter": {"by": "artboards"}}));
     assert_eq!(bad["ok"], false, "{bad}");
     assert!(bad.to_string().contains("kind, name, effect, mode, attribute, color, smartObject or artboard"), "{bad}");
-    assert_eq!(app.ui.layer_filter_by, FilterBy::Artboard, "a bad value changed nothing");
+    assert_eq!(crate::layer_filter_ui::Filter::of(&app).by, FilterBy::Artboard, "a bad value changed nothing");
 }
 
 /// The Layers panel's Smart Object filter takes a list of its toggles.
@@ -899,14 +900,15 @@ fn ui_set_drives_the_layers_panel_artboard_filter() {
 fn ui_set_drives_the_layers_panel_smart_object_filter() {
     use crate::layer_filter_ui::FilterBy;
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width":8,"height":8})).unwrap();
     let ctx = egui::Context::default();
     let ok = call(&mut app, &ctx, "ui.set", json!({"layerFilter": {"by": "smartObject", "smart": ["missing", "embedded", "missing"]}}));
     assert_eq!(ok["ok"], true, "{ok}");
-    assert_eq!(app.ui.layer_filter_by, FilterBy::SmartObject);
-    assert_eq!(app.ui.layer_filter_smart, ["missing", "embedded"], "toggles are kept once each");
+    assert_eq!(crate::layer_filter_ui::Filter::of(&app).by, FilterBy::SmartObject);
+    assert_eq!(crate::layer_filter_ui::Filter::of(&app).smart, ["missing", "embedded"], "toggles are kept once each");
     let ok = call(&mut app, &ctx, "ui.set", json!({"layerFilter": {"smart": []}}));
     assert_eq!(ok["ok"], true, "{ok}");
-    assert!(app.ui.layer_filter_smart.is_empty());
+    assert!(crate::layer_filter_ui::Filter::of(&app).smart.is_empty());
     for bad in [
         json!({"layerFilter": {"smart": ["library"]}}),
         json!({"layerFilter": {"smart": "linked"}}),
@@ -915,7 +917,11 @@ fn ui_set_drives_the_layers_panel_smart_object_filter() {
     ] {
         let r = call(&mut app, &ctx, "ui.set", bad.clone());
         assert_eq!(r["ok"], false, "{bad} → {r}");
-        assert_eq!((app.ui.layer_filter_by, app.ui.layer_filter_smart.len()), (FilterBy::SmartObject, 0), "{bad} changed nothing");
+        assert_eq!(
+            (crate::layer_filter_ui::Filter::of(&app).by, crate::layer_filter_ui::Filter::of(&app).smart.len()),
+            (FilterBy::SmartObject, 0),
+            "{bad} changed nothing"
+        );
     }
 }
 
@@ -924,15 +930,19 @@ fn ui_set_drives_the_layers_panel_smart_object_filter() {
 fn ui_set_drives_the_layers_panel_filter() {
     use crate::layer_filter_ui::FilterBy;
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width":8,"height":8})).unwrap();
     let ctx = egui::Context::default();
     let ok = call(&mut app, &ctx, "ui.set", json!({"layerFilter": {"by": "name", "name": "ink"}}));
     assert_eq!(ok["ok"], true, "{ok}");
-    assert_eq!((app.ui.layer_filter_by, app.ui.layer_filter_name.as_str()), (FilterBy::Name, "ink"));
+    assert_eq!((crate::layer_filter_ui::Filter::of(&app).by, crate::layer_filter_ui::Filter::of(&app).name), (FilterBy::Name, "ink".to_owned()));
     let ok = call(&mut app, &ctx, "ui.set", json!({"layerFilter": {"by": "mode", "mode": "Multiply", "kinds": ["type", "pixel", "type"]}}));
     assert_eq!(ok["ok"], true, "{ok}");
-    assert_eq!((app.ui.layer_filter_by, app.ui.layer_filter_mode), (FilterBy::Mode, photocraft_color::BlendMode::Multiply));
-    assert_eq!(app.ui.layer_filter, ["type", "pixel"], "kinds are kept once each");
-    assert_eq!(app.ui.layer_filter_name, "ink", "fields left out keep their value");
+    assert_eq!(
+        (crate::layer_filter_ui::Filter::of(&app).by, crate::layer_filter_ui::Filter::of(&app).mode),
+        (FilterBy::Mode, photocraft_color::BlendMode::Multiply)
+    );
+    assert_eq!(crate::layer_filter_ui::Filter::of(&app).kinds, ["type", "pixel"], "kinds are kept once each");
+    assert_eq!(crate::layer_filter_ui::Filter::of(&app).name, "ink", "fields left out keep their value");
     for bad in [
         json!({"layerFilter": "name"}),
         json!({"layerFilter": {"by": "colour"}}),
@@ -948,13 +958,16 @@ fn ui_set_drives_the_layers_panel_filter() {
     ] {
         let r = call(&mut app, &ctx, "ui.set", bad.clone());
         assert_eq!(r["ok"], false, "{bad} → {r}");
-        assert_eq!(app.ui.layer_filter_by, FilterBy::Mode, "{bad} changed nothing");
-        assert_eq!(app.ui.layer_filter_mode, photocraft_color::BlendMode::Multiply, "{bad} left the mode alone");
+        assert_eq!(crate::layer_filter_ui::Filter::of(&app).by, FilterBy::Mode, "{bad} changed nothing");
+        assert_eq!(crate::layer_filter_ui::Filter::of(&app).mode, photocraft_color::BlendMode::Multiply, "{bad} left the mode alone");
     }
     // #5898: the Color filter through the same path.
     let ok = call(&mut app, &ctx, "ui.set", json!({"layerFilter": {"by": "color", "color": "red"}}));
     assert_eq!(ok["ok"], true, "{ok}");
-    assert_eq!((app.ui.layer_filter_by, app.ui.layer_filter_color), (FilterBy::Color, photocraft_doc::LabelColor::Red));
+    assert_eq!(
+        (crate::layer_filter_ui::Filter::of(&app).by, crate::layer_filter_ui::Filter::of(&app).color),
+        (FilterBy::Color, photocraft_doc::LabelColor::Red)
+    );
 }
 
 #[test]

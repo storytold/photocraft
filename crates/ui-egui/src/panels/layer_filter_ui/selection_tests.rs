@@ -6,7 +6,6 @@ use egui_kittest::Harness;
 use photocraft_doc::LayerId;
 use serde_json::json;
 
-use super::FilterBy;
 use crate::PhotocraftApp;
 
 /// "Red" and "Deep Pixel" (pixel layers) and "Hello" (type) over the Background, in the panel.
@@ -61,10 +60,10 @@ fn none() -> (Vec<String>, Option<String>) {
 fn a_filter_that_hides_the_selected_layer_deselects_it_and_turning_it_off_keeps_that() {
     let mut h = harness();
     select(&mut h, &["Red"]);
-    h.state_mut().ui.layer_filter = vec!["type".into()];
+    set(h.state_mut(), json!({"kinds": ["type"]}));
     h.run_steps(4);
     assert_eq!(selection(&h), none(), "Kind › Type hides Red: no layer is selected");
-    h.state_mut().ui.layer_filter.clear();
+    set(h.state_mut(), json!({"kinds": []}));
     h.run_steps(4);
     assert_eq!(selection(&h), none(), "turning the filter off does not bring the selection back");
 }
@@ -82,7 +81,7 @@ fn a_filter_on_before_the_rows_first_draw_deselects_the_hidden_layers() {
     let mut h = Harness::builder().with_size(vec2(1440.0, 900.0)).with_max_steps(64).build_eframe(move |cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
         let mut app = PhotocraftApp::new(s, crate::Services::default());
-        app.ui.layer_filter = vec!["type".into()];
+        set(&mut app, json!({"kinds": ["type"]}));
         app
     });
     h.run_steps(8);
@@ -93,8 +92,7 @@ fn a_filter_on_before_the_rows_first_draw_deselects_the_hidden_layers() {
 fn a_filter_that_lists_none_of_the_selected_layers_deselects_them_all() {
     let mut h = harness();
     select(&mut h, &["Hello", "Deep Pixel"]);
-    h.state_mut().ui.layer_filter_by = FilterBy::SmartObject;
-    h.state_mut().ui.layer_filter_smart = vec!["embedded".into()];
+    set(h.state_mut(), json!({"by": "smartObject", "smart": ["embedded"]}));
     h.run_steps(4);
     assert_eq!(selection(&h), none(), "Smart Object › Embedded matches neither");
 }
@@ -104,13 +102,12 @@ fn the_listed_layers_stay_selected_and_one_of_them_becomes_active() {
     let mut h = harness();
     select(&mut h, &["Red", "Hello", "Deep Pixel"]);
     assert_eq!(selection(&h).1.as_deref(), Some("Deep Pixel"));
-    h.state_mut().ui.layer_filter = vec!["type".into()];
+    set(h.state_mut(), json!({"kinds": ["type"]}));
     h.run_steps(4);
     assert_eq!(selection(&h), (vec!["Hello".to_string()], Some("Hello".to_string())));
     let history = h.state().session.active().unwrap().history.entries().len();
     // Changing the criteria while the filter is on acts again: Name "zzzz" lists nothing.
-    h.state_mut().ui.layer_filter_by = FilterBy::Name;
-    h.state_mut().ui.layer_filter_name = "zzzz".into();
+    set(h.state_mut(), json!({"by": "name", "name": "zzzz"}));
     h.run_steps(4);
     assert_eq!(selection(&h), none());
     assert_eq!(h.state().session.active().unwrap().history.entries().len(), history, "deselecting is no history step");
@@ -120,7 +117,7 @@ fn the_listed_layers_stay_selected_and_one_of_them_becomes_active() {
 fn a_layer_selected_while_the_filter_hides_it_stays_selected() {
     let mut h = harness();
     select(&mut h, &["Hello"]);
-    h.state_mut().ui.layer_filter = vec!["type".into()];
+    set(h.state_mut(), json!({"kinds": ["type"]}));
     h.run_steps(4);
     assert_eq!(selection(&h).0, ["Hello"]);
     select(&mut h, &["Red"]);
@@ -131,8 +128,13 @@ fn a_layer_selected_while_the_filter_hides_it_stays_selected() {
 fn a_filter_set_through_the_control_channel_deselects_too() {
     let mut h = harness();
     select(&mut h, &["Red"]);
-    let f = super::patched(&h.state().ui, &json!({"by": "name", "name": "hello"})).unwrap();
-    super::apply(&mut h.state_mut().ui, f);
+    let f = super::patched(&super::Filter::of(h.state()), &json!({"by": "name", "name": "hello"})).unwrap();
+    super::apply(h.state_mut(), f);
     h.run_steps(4);
     assert_eq!(selection(&h), none());
+}
+
+fn set(app: &mut PhotocraftApp, patch: serde_json::Value) {
+    let f = super::patched(&super::Filter::of(app), &patch).unwrap();
+    super::apply(app, f);
 }
