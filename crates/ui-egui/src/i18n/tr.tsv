@@ -3376,6 +3376,8 @@ cameraRaw	Color	Renk
 	Condensed	Dar
 	Conditional Mode Change	Koşullu Mod Değişikliği
 	Background (Default)	Arka plan (varsayılan)
+	Background (default)	Arka plan (varsayılan)
+	Transparent (default)	Saydam (varsayılan)
 	Content-Aware Fill	İçeriğe Duyarlı Dolgu
 	Convert Frames > Video Layers	Kareleri Dönüştür > Video Katmanları
 	Convert to Linked	Bağlantılıya Dönüştür
@@ -4227,6 +4229,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Font size presets	Yazı tipi boyutu hazır ayarları
 	Leading presets	Satır aralığı hazır ayarları
 	Tracking presets	İzleme hazır ayarları
+
+	The GPU compositor is still being prepared	The GPU compositor is still being prepared
 	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	Geçersiz sayısal giriş. {min}% ile {max}% arasında bir tam sayı gerekiyor. Önceki değer eklendi.
 	Color Aware	Renge Duyarlı
 	Decontaminate Colors	Renkleri Arındır
@@ -4256,6 +4260,18 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Durak Rengi
 	Shapes can't use patterns yet	Şekiller henüz desen kullanamaz
 	Edit Brush…	Fırçayı Düzenle…
+
+# Action Stop message (#8386)
+	Message	İleti
+# Playback Options (#5212)
+	Playback Options…	Oynatma Seçenekleri…
+	Playback Options	Oynatma Seçenekleri
+	Accelerated	Hızlandırılmış
+	Step by Step	Adım adım
+	Pause For:	Şu kadar duraklat:
+	Pause For	Şu kadar duraklat
+	seconds	saniye
+	Create a single history state	Tek bir geçmiş durumu oluştur
 	Generator enabled	Oluşturucu etkin
 	Move Up	Yukarı taşı
 	Move Down	Aşağı taşı
