@@ -1,33 +1,30 @@
 //! Session-only ownership and the Layers filter's switch. Criteria stay in `Filter`.
-use std::sync::{Arc, Weak};
+use std::sync::Weak;
 
 use egui::{Color32, Sense, Stroke, pos2, vec2};
-use photocraft_doc::Document;
 
 use super::Filter;
 use crate::PhotocraftApp;
 
-/// A saved document can reopen with the same DocId. Match the existing view-state policy:
-/// a new snapshot without a newer revision belongs to a newly opened instance.
+/// Filter state belongs to one open editing instance, including when its snapshot changes.
 #[derive(Clone, Debug)]
 pub struct DocumentFilter {
     pub filter: Filter,
     /// Last criteria applied to selection in this open document, not the last active tab.
     applied: Option<Filter>,
-    revision: u64,
-    source: Weak<Document>,
+    instance: Weak<()>,
 }
 
 impl PartialEq for DocumentFilter {
     fn eq(&self, other: &Self) -> bool {
-        // Snapshot provenance is bookkeeping, not a change to the UI's filter value.
+        // Document identity is bookkeeping, separate from the UI filter value.
         self.filter == other.filter
     }
 }
 
 impl DocumentFilter {
     fn belongs_to(&self, state: &photocraft_engine::DocState) -> bool {
-        state.revision > self.revision || self.source.as_ptr() == Arc::as_ptr(&state.doc)
+        self.instance.ptr_eq(&state.open_instance())
     }
 }
 
@@ -38,15 +35,7 @@ pub(super) fn current(app: &PhotocraftApp) -> Filter {
 
 pub(super) fn retain_open(app: &mut PhotocraftApp) {
     let documents = app.session.documents();
-    app.ui.layer_filters.retain(|id, saved| {
-        let Some(state) = documents.iter().find(|state| state.doc.id == *id) else { return false };
-        if !saved.belongs_to(state) {
-            return false;
-        }
-        saved.revision = state.revision;
-        saved.source = Arc::downgrade(&state.doc);
-        true
-    });
+    app.ui.layer_filters.retain(|id, saved| documents.iter().any(|state| state.doc.id == *id && saved.belongs_to(state)));
 }
 
 pub(super) fn apply(app: &mut PhotocraftApp, filter: Filter) {
@@ -55,8 +44,7 @@ pub(super) fn apply(app: &mut PhotocraftApp, filter: Filter) {
         app.ui.layer_filters.entry(state.doc.id).and_modify(|saved| saved.filter = filter.clone()).or_insert_with(|| DocumentFilter {
             filter,
             applied: None,
-            revision: state.revision,
-            source: Arc::downgrade(&state.doc),
+            instance: state.open_instance(),
         });
     }
 }

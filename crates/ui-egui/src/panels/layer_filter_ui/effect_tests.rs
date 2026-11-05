@@ -90,7 +90,12 @@ fn ui_set_picks_the_effect_by_id() {
 
 #[test]
 fn saved_settings_without_the_effect_still_load() {
-    for legacy in [json!({}), json!({"layer_filter_by": "effect", "layer_filter_effect": "satin"})] {
+    for effect in [None, Some("satin")] {
+        let mut legacy = serde_json::to_value(UiState::default()).unwrap();
+        if let Some(effect) = effect {
+            legacy["layer_filter_by"] = json!("effect");
+            legacy["layer_filter_effect"] = json!(effect);
+        }
         let ui: UiState = serde_json::from_value(legacy).unwrap();
         assert!(ui.layer_filters.is_empty(), "legacy global criteria are not document state");
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());

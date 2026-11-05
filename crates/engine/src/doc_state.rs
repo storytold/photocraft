@@ -3,6 +3,7 @@ use super::{Arc, Document, History, LayerId, LayerTarget, channel_cmds, float_cm
 /// Per-document editing state.
 #[derive(Clone, Debug)]
 pub struct DocState {
+    open_instance: Arc<()>,
     pub doc: Arc<Document>,
     pub history: History,
     /// The primary ("key") layer: what single-layer commands act on. Always a member of
@@ -59,6 +60,12 @@ pub struct DocState {
 }
 
 impl DocState {
+    /// A non-owning identity for this open editing state. It survives snapshot replacements and
+    /// differs after reopening a file that retains the same document ID.
+    pub fn open_instance(&self) -> std::sync::Weak<()> {
+        Arc::downgrade(&self.open_instance)
+    }
+
     /// Trim the history to its budget, counting the tiles only History panel snapshots hold
     /// against it too (#4530). Returns how many states were dropped.
     pub fn trim_history(&mut self) -> usize {
@@ -83,6 +90,7 @@ impl DocState {
         // panel's top row can always bring it back (#2966).
         let first = history_cmds::Snapshot { id: 0, name: doc.name.clone(), doc: doc.clone(), layers: target };
         Self {
+            open_instance: Arc::new(()),
             doc,
             history,
             active_layer,
