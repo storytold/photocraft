@@ -360,6 +360,14 @@ fn play_owned(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>,
     let played = play_steps(app, params, suspended, inner);
     if kept.is_some() {
         app.session.authorize = None;
+        // A pause under the kept gate records it as this action's own, not the set's.
+        if let Ok(v) = &played
+            && let Some(dialog) = v.get("paused").and_then(waiting_dialog)
+            && let Some(token) = paused_token(app, dialog)
+            && let Some(entry) = app.paused_playbacks.paused.get_mut(&token)
+        {
+            entry.kept = true;
+        }
     }
     played
 }
@@ -1129,6 +1137,11 @@ pub(crate) struct PausedPlayback {
     /// The continuation goes on by name, so an action edited, deleted or replaced by a new one of
     /// the same name meanwhile ends it there instead of playing the new action's tail ([`resume`]).
     played: Vec<Action>,
+    /// `gate` is the kept gate of an action automation wrote that the user played
+    /// ([`actions_cmds::kept_gate`]), not the gate of the whole call: it still judges the dialog's
+    /// own command ([`run_step_dialog`]), but [`resume`] lets each such action take it again as it
+    /// plays, so its callers and the rest of the set keep the gate they had.
+    kept: bool,
 }
 
 /// The longest caller chain a paused playback keeps; [`actions_cmds::playback_plan`] refuses deeper
@@ -1172,6 +1185,7 @@ impl PausedPlaybacks {
                 allow_continue: false,
                 timed: false,
                 played: Vec::new(),
+                kept: false,
             },
         );
         self.last
@@ -1341,6 +1355,9 @@ pub fn resume(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Value>) 
             return Err(error);
         }
     };
+    // A kept gate belongs to the action automation wrote: it takes the gate again as it plays
+    // ([`play_owned`]), while its callers and the rest of the set keep the gate they had.
+    let gate = if paused.kept { service.or(saved) } else { gate };
     // The rest plays by name: refuse it when an action of the paused call changed meanwhile, so a
     // new action of the same name never plays from the old one's step. With nothing left to play,
     // the call simply ends. (Another document coming to the front fails `history.resume` above.)

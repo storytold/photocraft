@@ -2810,6 +2810,53 @@ fn a_users_key_plays_an_action_automation_wrote_under_its_gate() {
     assert!(app.session.authorize.is_none(), "the kept gate is removed after playback");
 }
 
+/// CodeRabbit on #9783: the kept gate of an action automation wrote stays with that action. A set
+/// the user plays pauses at the marked action's step dialog; after OK the marked action's tail
+/// plays under the gate, and the user's own action after it in the set keeps the user's access.
+#[test]
+fn a_kept_gate_does_not_carry_into_the_rest_of_a_set_after_a_pause() {
+    use egui_kittest::kittest::Queryable;
+    /// The automation policy this test stands in for: it refuses only a layer named `b`.
+    fn deny_layer_b(id: &str, p: &Value) -> photocraft_engine::Result<()> {
+        if id == "layer.new.layer" && p.get("name").and_then(Value::as_str) == Some("b") {
+            Err(photocraft_engine::EngineError::Other("layer b denied".into()))
+        } else {
+            Ok(())
+        }
+    }
+    let services = crate::Services { automation_authorize: Some(deny_layer_b), ..Default::default() };
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+    app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let mut a = Action::new(
+        "A",
+        vec![
+            ("layer.new.layer".into(), json!({"name": "a"})),
+            ("filter.blur.gaussianBlur".into(), json!({"radius": 1})),
+            ("layer.new.layer".into(), json!({"name": "a2"})),
+        ],
+    );
+    a.set = Some("S".into());
+    a.dialogs.insert(1);
+    a.automation = true;
+    let mut b = Action::new("B", vec![("layer.new.layer".into(), json!({"name": "b"}))]);
+    b.set = Some("S".into());
+    app.session.actions.list.extend([a, b]);
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(360.0, 400.0)).build_ui_state(|ui, app| panel(app, ui), app);
+    h.run_steps(2);
+    h.get_by_label("S").click();
+    h.run_steps(2);
+    h.get_by_label("Play selection").click();
+    h.run_steps(2);
+    assert_eq!(layer_names(h.state()), ["a"]);
+    let dialog = h.state().ui.dialogs.last().map(|d| d.id).expect("the blur's dialog");
+    crate::dialogs::confirm(h.state_mut(), dialog).unwrap();
+    h.run_steps(2);
+    let mut names = layer_names(h.state());
+    names.sort();
+    assert_eq!(names, ["a", "a2", "b"], "B played with the user's access: {}", h.state().ui.status);
+    assert!(h.state().session.authorize.is_none(), "no gate is left installed");
+}
+
 /// The dialog names only its pause: changing its fields can't resume another action.
 #[test]
 fn a_step_dialog_resumes_only_the_playback_that_paused_it() {
