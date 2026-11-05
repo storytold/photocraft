@@ -190,38 +190,17 @@ pub fn separable(mode: BlendMode) -> bool {
 /// channel's brightness (1 − ink), as CMYK channels are blended, so Multiply adds ink and Screen
 /// takes it away.
 pub fn blend_ink(mode: BlendMode, cb: [f32; 4], cs: [f32; 4]) -> [f32; 4] {
-    let b = |i: usize| 1.0 - cb[i];
-    let s = |i: usize| 1.0 - cs[i];
-    let cmy = super::psblend::blend_rgb(mode, [b(0), b(1), b(2)], [s(0), s(1), s(2)]);
-    let k = super::psblend::blend_rgb(mode, [b(3); 3], [s(3); 3]);
-    // A result that is one of the inputs (Normal, Darken, Lighten, ...) is that ink exactly.
-    let ink = |r: f32, i: usize| {
-        if r == s(i) {
-            cs[i]
-        } else if r == b(i) {
-            cb[i]
-        } else {
-            1.0 - r
-        }
-    };
-    [ink(cmy[0], 0), ink(cmy[1], 1), ink(cmy[2], 2), ink(k[0], 3)]
+    blend_ink_fill(mode, cb, cs, 1.0)
 }
 
-/// [`blend_ink`] for a layer at `fill` (0..1): for the special eight
-/// ([`super::psblend::fill_is_special`]) Fill below 100% changes the blend itself
-/// ([`super::psblend::blend_rgb_fill`], on each ink's brightness); every other mode, or
-/// `fill >= 1`, is plain [`blend_ink`]. The adjustment-layer counterpart of
-/// [`composite_ink_fill`]'s blend (there is no source alpha to composite, only a result to mix).
+/// [`blend_ink`] at `fill`: below 100% the special eight change the blend itself
+/// (`psblend::blend_rgb_fill`, on each ink's brightness); other modes ignore `fill`.
 fn blend_ink_fill(mode: BlendMode, cb: [f32; 4], cs: [f32; 4], fill: f32) -> [f32; 4] {
-    let f = fill.clamp(0.0, 1.0);
-    if f >= 1.0 || !super::psblend::fill_is_special(mode) {
-        return blend_ink(mode, cb, cs);
-    }
     let b = |i: usize| 1.0 - cb[i];
     let s = |i: usize| 1.0 - cs[i];
-    let cmy = super::psblend::blend_rgb_fill(mode, [b(0), b(1), b(2)], [s(0), s(1), s(2)], f);
-    let k = super::psblend::blend_rgb_fill(mode, [b(3); 3], [s(3); 3], f);
-    // A result that is one of the inputs is that ink exactly (as in `blend_ink`).
+    let cmy = super::psblend::blend_rgb_fill(mode, [b(0), b(1), b(2)], [s(0), s(1), s(2)], fill);
+    let k = super::psblend::blend_rgb_fill(mode, [b(3); 3], [s(3); 3], fill);
+    // A result that is one of the inputs (Normal, Darken, Lighten, ...) is that ink exactly.
     let ink = |r: f32, i: usize| {
         if r == s(i) {
             cs[i]

@@ -1963,3 +1963,48 @@ fn every_cmyk_route_rounds_after_an_adjustment_layer() {
         assert_eq!((display, export), (105.0 / 255.0, 105.0 / 255.0), "opacity {opacity}");
     }
 }
+
+/// An adjustment layer in one of the special eight below 100% Fill: Fill is part of the blend and
+/// Opacity alone mixes it in, on the ink path as on the RGB compositor (#9512; Linear Burn at
+/// Fill 71% put Y 0.957 where the split route gives 0.988).
+#[test]
+fn adjustment_layers_keep_the_special_fill_rule() {
+    let levels = AdjSpec::Levels { channel: 3, levels: [0.125, 0.8, 1.1, 0.14, 0.78] };
+    let s = Spec {
+        w: 3,
+        h: 1,
+        layers: vec![
+            raster_spec(BlendMode::Normal, (Rect::new(0, 0, 3, 1), [0.0, 0.0, 0.88, 1.0, 1.0]), 1.0, false),
+            LayerSpec::Pixels {
+                kind: Kind::Adjust(levels.clone()),
+                blend: BlendMode::LinearBurn,
+                fills: vec![],
+                opacity: 0.9,
+                fill: 0.71,
+                clipped: false,
+                visible: true,
+                mask: None,
+            },
+        ],
+    };
+    assert_split_matches_exact(&s);
+    for mode in SEPARABLE.iter().copied().filter(|m| crate::psblend::fill_is_special(*m)) {
+        let mut d = doc(4, 2);
+        d.layers.push(paper(4, 2, [0.2, 0.5, 0.1, 0.1]));
+        d.layers.push(layer(&[(Rect::new(0, 0, 3, 2), [0.6, 0.1, 0.4, 0.2, 0.8])]));
+        let mut a = build(&LayerSpec::Pixels {
+            kind: Kind::Adjust(levels.clone()),
+            blend: mode,
+            fills: vec![],
+            opacity: 0.9,
+            fill: 0.4,
+            clipped: false,
+            visible: true,
+            mask: None,
+        });
+        a.mask = Some(mask(&[(Rect::new(2, 0, 4, 2), 0.5)], 1.0, 1.0, true));
+        d.layers.push(a);
+        assert_matches_reference(&d);
+        assert_routes_agree(&d);
+    }
+}
