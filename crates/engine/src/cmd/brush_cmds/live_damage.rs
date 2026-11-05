@@ -1,49 +1,7 @@
 //! Frame-relative gradient damage for one live Brush/Pencil/Eraser, without document snapshots.
-use photocraft_doc::{Document, Effect, FxPaint, Gradient, GradientStyle, Layer, LayerId};
+use photocraft_compose::effects::GradientMapping;
+use photocraft_doc::{Document, Effect, FxPaint, Gradient, Layer, LayerId};
 use photocraft_geom::Rect;
-
-#[derive(PartialEq)]
-enum Geometry {
-    Linear { c: f32, s: f32, chord: f32, cx: Option<f32>, cy: Option<f32> },
-    Radial { cx: f32, cy: f32, length: f32 },
-    Diamond { cx: f32, cy: f32, c: f32, s: f32, length: f32 },
-    Angle { cx: f32, cy: f32, angle: f32 },
-}
-
-#[derive(PartialEq)]
-struct Mapping {
-    style: GradientStyle,
-    reverse: bool,
-    geometry: Geometry,
-}
-
-impl Mapping {
-    /// Capture the effective paint mapping so frame changes with identical mappings stay local.
-    fn new(g: &Gradient, frame: Rect) -> Self {
-        // Match paint_fx's actual layout, including snapping and offset. Overlay/stroke paint
-        // does not use Gradient.align or the effects reference (the latter anchors patterns).
-        let (angle, scale, offset) = photocraft_compose::fill_layout::gradient_layout(g.style, g.angle, g.scale, g.offset, frame);
-        let (w, h) = (frame.width().max(1) as f32, frame.height().max(1) as f32);
-        let (cx, cy) = (frame.x0 as f32 + w / 2.0 + offset.0 * w, frame.y0 as f32 + h / 2.0 + offset.1 * h);
-        let (s, c) = angle.to_radians().sin_cos();
-        let (chord, length) = photocraft_compose::effects::gradient_units(angle, w, h);
-        let (chord, length) = (chord * scale.max(1e-3), length * scale.max(1e-3));
-        let geometry = match g.style {
-            GradientStyle::Linear | GradientStyle::Reflected => Geometry::Linear {
-                c,
-                s,
-                chord,
-                // Ignore only an actually zero coefficient, not an approximate right angle.
-                cx: (c != 0.0).then_some(cx),
-                cy: (s != 0.0).then_some(cy),
-            },
-            GradientStyle::Radial => Geometry::Radial { cx, cy, length },
-            GradientStyle::Diamond => Geometry::Diamond { cx, cy, c, s, length },
-            GradientStyle::Angle => Geometry::Angle { cx, cy, angle },
-        };
-        Self { style: g.style, reverse: g.reverse, geometry }
-    }
-}
 
 /// Select visible, enabled gradient overlays and gradient strokes with positive opacity.
 fn gradients(layer: &Layer) -> impl Iterator<Item = &Gradient> {
@@ -57,15 +15,15 @@ fn gradients(layer: &Layer) -> impl Iterator<Item = &Gradient> {
     })
 }
 
-fn mappings(layer: &Layer, frame: Rect) -> Vec<Mapping> {
-    gradients(layer).map(|gradient| Mapping::new(gradient, frame)).collect()
+fn mappings(layer: &Layer, frame: Rect) -> Vec<GradientMapping> {
+    gradients(layer).map(|gradient| GradientMapping::for_effect(gradient, frame)).collect()
 }
 
 struct Watched {
     path: Vec<usize>,
     id: LayerId,
     frame: Rect,
-    mappings: Vec<Mapping>,
+    mappings: Vec<GradientMapping>,
     bounds: Rect,
 }
 
@@ -113,7 +71,7 @@ impl Tracker {
             let bounds = photocraft_compose::change_bounds(layer, doc.bounds()).unwrap_or_else(|| doc.bounds());
             if frame != watched.frame {
                 let mappings = mappings(layer, frame);
-                if mappings != watched.mappings {
+                if mappings.len() != watched.mappings.len() || mappings.iter().zip(&watched.mappings).any(|(a, b)| !a.same_mapping(b)) {
                     damage = damage.union(&watched.bounds).union(&bounds);
                 }
                 watched.frame = frame;

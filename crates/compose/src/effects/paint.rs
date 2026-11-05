@@ -140,31 +140,81 @@ pub fn gradient_units(angle: f32, w: f32, h: f32) -> (f32, f32) {
 /// Gradient parameter `t` in `0..=1` for pixel centre `(x, y)` inside `bounds`.
 #[allow(clippy::too_many_arguments)]
 pub fn gradient_t(style: GradientStyle, angle: f32, scale: f32, reverse: bool, offset: (f32, f32), bounds: Rect, x: f32, y: f32) -> f32 {
-    let w = bounds.width().max(1) as f32;
-    let h = bounds.height().max(1) as f32;
-    let cx = bounds.x0 as f32 + w / 2.0 + offset.0 * w;
-    let cy = bounds.y0 as f32 + h / 2.0 + offset.1 * h;
-    let (s, c) = angle.to_radians().sin_cos();
-    let (dx, dy) = (x - cx, y - cy);
-    // Distance along the gradient direction (y axis points down).
-    let along = dx * c - dy * s;
-    let across = dx * s + dy * c;
-    let (chord, len) = gradient_units(angle, w, h);
-    let (chord, len) = (chord * scale.max(1e-3), len * scale.max(1e-3));
-    // Linear / Reflected sample the pixel's top-left corner, half a pixel before its centre
-    // (with the whole-pixel end points of `fill_layout`: layer_effects' overlay 5.8 → 1.8/255,
-    // shape-fx2 2.8 → 1.1/255, gradient-fill.psd 1.9 → 0.5/255).
-    let corner = 0.5 * (c - s);
-    let mut t = match style {
-        GradientStyle::Linear => (along - corner) / chord + 0.5,
-        GradientStyle::Reflected => ((along - corner) / (chord / 2.0)).abs(),
-        GradientStyle::Radial => (dx * dx + dy * dy).sqrt() / (len / 2.0),
-        GradientStyle::Diamond => (along.abs() + across.abs()) / (len / 2.0),
-        // Clockwise sweep starting at the gradient angle.
-        GradientStyle::Angle => ((angle.to_radians() - (-dy).atan2(dx)) / std::f32::consts::TAU).rem_euclid(1.0),
-    };
-    t = t.clamp(0.0, 1.0);
-    if reverse { 1.0 - t } else { t }
+    GradientMapping::new(style, angle, scale, reverse, offset, bounds).t(x, y)
+}
+
+/// Geometry used to sample a gradient. Stops and coverage are independent of this mapping.
+pub struct GradientMapping {
+    style: GradientStyle,
+    reverse: bool,
+    angle: f32,
+    cx: f32,
+    cy: f32,
+    s: f32,
+    c: f32,
+    chord: f32,
+    len: f32,
+}
+
+impl GradientMapping {
+    fn new(style: GradientStyle, angle: f32, scale: f32, reverse: bool, offset: (f32, f32), bounds: Rect) -> Self {
+        let w = bounds.width().max(1) as f32;
+        let h = bounds.height().max(1) as f32;
+        let cx = bounds.x0 as f32 + w / 2.0 + offset.0 * w;
+        let cy = bounds.y0 as f32 + h / 2.0 + offset.1 * h;
+        let (s, c) = angle.to_radians().sin_cos();
+        let (chord, len) = gradient_units(angle, w, h);
+        let (chord, len) = (chord * scale.max(1e-3), len * scale.max(1e-3));
+        Self { style, reverse, angle, cx, cy, s, c, chord, len }
+    }
+
+    /// Prepare the same snapped mapping used to paint a layer effect in its supplied frame.
+    pub fn for_effect(gradient: &Gradient, frame: Rect) -> Self {
+        let (angle, scale, offset) = crate::fill_layout::gradient_layout(gradient.style, gradient.angle, gradient.scale, gradient.offset, frame);
+        Self::new(gradient.style, angle, scale, gradient.reverse, offset, frame)
+    }
+
+    /// Compare only inputs used by the current style. For Linear and Reflected, a centre
+    /// coordinate drops out only when its coefficient is exactly zero.
+    pub fn same_mapping(&self, other: &Self) -> bool {
+        self.style == other.style
+            && self.reverse == other.reverse
+            && match self.style {
+                GradientStyle::Linear | GradientStyle::Reflected => {
+                    self.c == other.c
+                        && self.s == other.s
+                        && self.chord == other.chord
+                        && (self.c == 0.0 || self.cx == other.cx)
+                        && (self.s == 0.0 || self.cy == other.cy)
+                }
+                GradientStyle::Radial => self.cx == other.cx && self.cy == other.cy && self.len == other.len,
+                GradientStyle::Diamond => {
+                    self.cx == other.cx && self.cy == other.cy && self.c == other.c && self.s == other.s && self.len == other.len
+                }
+                GradientStyle::Angle => self.cx == other.cx && self.cy == other.cy && self.angle == other.angle,
+            }
+    }
+
+    fn t(&self, x: f32, y: f32) -> f32 {
+        let (dx, dy) = (x - self.cx, y - self.cy);
+        // Distance along the gradient direction (y axis points down).
+        let along = dx * self.c - dy * self.s;
+        let across = dx * self.s + dy * self.c;
+        // Linear / Reflected sample the pixel's top-left corner, half a pixel before its centre
+        // (with the whole-pixel end points of `fill_layout`: layer_effects' overlay 5.8 → 1.8/255,
+        // shape-fx2 2.8 → 1.1/255, gradient-fill.psd 1.9 → 0.5/255).
+        let corner = 0.5 * (self.c - self.s);
+        let t = match self.style {
+            GradientStyle::Linear => (along - corner) / self.chord + 0.5,
+            GradientStyle::Reflected => ((along - corner) / (self.chord / 2.0)).abs(),
+            GradientStyle::Radial => (dx * dx + dy * dy).sqrt() / (self.len / 2.0),
+            GradientStyle::Diamond => (along.abs() + across.abs()) / (self.len / 2.0),
+            // Clockwise sweep starting at the gradient angle.
+            GradientStyle::Angle => ((self.angle.to_radians() - (-dy).atan2(dx)) / std::f32::consts::TAU).rem_euclid(1.0),
+        };
+        let t = t.clamp(0.0, 1.0);
+        if self.reverse { 1.0 - t } else { t }
+    }
 }
 
 /// Samples colour and opacity stops at `t`.
@@ -362,14 +412,14 @@ pub(super) fn paint_fx(
         FxPaint::Color(c) => paint_color(dst, m, rgb(c), blend, opacity),
         FxPaint::Gradient(g) => {
             let prepared = PreparedGradient::new(g);
-            let (angle, scale, offset) = crate::fill_layout::gradient_layout(g.style, g.angle, g.scale, g.offset, shape_bounds);
+            let mapping = GradientMapping::for_effect(g, shape_bounds);
             let w = big.width() as usize;
             paint(
                 dst,
                 m,
                 |i| {
                     let (x, y) = ((big.x0 + (i % w) as i32) as f32 + 0.5, (big.y0 + (i / w) as i32) as f32 + 0.5);
-                    prepared.sample(gradient_t(g.style, angle, scale, g.reverse, offset, shape_bounds, x, y))
+                    prepared.sample(mapping.t(x, y))
                 },
                 blend,
                 opacity,
