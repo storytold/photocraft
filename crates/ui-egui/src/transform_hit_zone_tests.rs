@@ -216,12 +216,17 @@ fn outside_rotation_has_eight_edge_and_corner_orientations() {
 #[test]
 fn outside_reference_point_owns_the_pointer_only_when_shown() {
     let p = [80.0, 40.0];
+    let pivot = [76.0, 40.0];
+    let to = [80.0, 48.0];
     for shown in [false, true] {
         let mut app = app(QUAD, 1.0);
         app.ui.transform = None;
+        app.ui.extras.snap = false;
         app.session.execute("shape.create", serde_json::json!({"kind": "rect", "rect": [4, 4, 16, 16], "fill": "#ff0000"})).unwrap();
         crate::transform_tool::begin(&mut app, &egui::Context::default()).unwrap();
-        app.ui.transform.as_mut().unwrap().pivot = p;
+        let t = app.ui.transform.as_mut().unwrap();
+        t.pivot = pivot;
+        let quad = t.quad;
         app.ui.tool_options.transform_reference_point = shown;
         assert_eq!(rotate_cursor_dir(&app, p).is_some(), !shown);
         let icon = if shown { CursorIcon::Crosshair } else { CursorIcon::None };
@@ -229,8 +234,16 @@ fn outside_reference_point_owns_the_pointer_only_when_shown() {
 
         let down = crate::canvas::ToolEvent::Down { x: p[0], y: p[1], pressure: 1.0 };
         crate::transform_tool::pointer(&mut app, down, Modifiers::NONE);
-        let gesture = app.transform_preview.as_ref().unwrap().gesture.unwrap();
-        assert_eq!(gesture.hit, if shown { Hit::Pivot } else { Hit::Outside });
+        let drag = crate::canvas::ToolEvent::Move { x: to[0], y: to[1], pressure: 1.0 };
+        crate::transform_tool::pointer(&mut app, drag, Modifiers::NONE);
+        let t = app.ui.transform.as_ref().unwrap();
+        if shown {
+            assert_eq!(t.quad, quad, "the reference-point drag leaves the box in place");
+            assert_eq!(t.pivot, to);
+        } else {
+            assert_ne!(t.quad, quad, "the outside drag turns the box");
+            assert_eq!(t.pivot, pivot);
+        }
     }
 }
 
