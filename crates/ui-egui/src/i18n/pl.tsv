@@ -171,6 +171,7 @@
 	Right	Prawa
 	Open Recent	Otwórz ostatnie
 	Clear Recent Files	Wyczyść listę ostatnich plików
+	Clear Recent File List	Wyczyść listę ostatnich plików
 	Remove from Recent	Usuń z ostatnich plików
 	Remove {name} from Recent	Usuń {name} z ostatnich plików
 	Close	Zamknij
@@ -547,7 +548,9 @@
 	Unite Shapes	Złącz kształty
 	Subtract Front Shape	Odejmij kształt z przodu
 	Intersect Shape Areas	Część wspólna obszarów kształtów
+	Unite Shapes at Overlap	Część wspólna obszarów kształtów
 	Exclude Overlapping Shapes	Wyklucz nakładające się kształty
+	Subtract Shapes at Overlap	Wyklucz nakładające się kształty
 	Merge Shape Components	Scal składniki kształtu
 	Path operations	Operacje na ścieżkach
 	Align	Wyrównaj
@@ -740,9 +743,9 @@
 	Working Magenta Plate	Robocza płyta magenty
 	Working Yellow Plate	Robocza płyta żółci
 	Working Black Plate	Robocza płyta czerni
-	Working CMY Plate	Robocza płyta CMY
-	Legacy Macintosh RGB	Starszy Macintosh RGB
-	Internet Standard RGB	Standardowy RGB dla Internetu
+	Working CMY Plates	Robocza płyta CMY
+	Legacy Macintosh RGB (Gamma 1.8)	Starszy Macintosh RGB (Gamma 1.8)
+	Internet Standard RGB (sRGB)	Standardowy RGB dla Internetu (sRGB)
 	Monitor RGB	RGB monitora
 	Color Blindness — Protanopia-type	Ślepota barw — typ protanopii
 	Color Blindness — Deuteranopia-type	Ślepota barw — typ deuteranopii
@@ -834,7 +837,7 @@
 	Consolidate All to Tabs	Połącz wszystko w karty
 	Float in Window	Odłącz do okna
 	Float All in Windows	Odłącz wszystko do okien
-	New Window for Document	Nowe okno dla dokumentu
+	New Window	Nowe okno dla dokumentu
 	Workspace	Obszar roboczy
 	Essentials	Podstawowe
 	Graphic and Web	Grafika i Internet

@@ -95,6 +95,7 @@
 	Right	Sağ
 	Open Recent	Son Kullanılanları Aç
 	Clear Recent Files	Son Dosyaları Temizle
+	Clear Recent File List	Son Dosyaları Temizle
 	Remove from Recent	Son Kullanılanlardan Kaldır
 	Remove {name} from Recent	{name} öğesini Son Kullanılanlardan kaldır
 	Close	Kapat
@@ -469,7 +470,9 @@
 	Unite Shapes	Şekil Alanlarını Birleştir
 	Subtract Front Shape	Ön Şekli Çıkar
 	Intersect Shape Areas	Şekil Alanlarını Kesiştir
+	Unite Shapes at Overlap	Şekil Alanlarını Kesiştir
 	Exclude Overlapping Shapes	Çakışan Şekilleri Hariç Tut
+	Subtract Shapes at Overlap	Çakışan Şekilleri Hariç Tut
 	Merge Shape Components	Şekil Bileşenlerini Birleştir
 	Path operations	Yol işlemleri
 	Align	Hizala
@@ -660,9 +663,9 @@
 	Working Magenta Plate	Çalışma Macenta Plakası
 	Working Yellow Plate	Çalışma Sarı Plakası
 	Working Black Plate	Çalışma Siyah Plakası
-	Working CMY Plate	Çalışma CMY Plakası
-	Legacy Macintosh RGB	Eski Macintosh RGB
-	Internet Standard RGB	İnternet Standardı RGB
+	Working CMY Plates	Çalışma CMY Plakası
+	Legacy Macintosh RGB (Gamma 1.8)	Eski Macintosh RGB (Gamma 1.8)
+	Internet Standard RGB (sRGB)	İnternet Standardı RGB (sRGB)
 	Monitor RGB	Monitör RGB
 	Color Blindness — Protanopia-type	Renk Körlüğü — Protanopi tipi
 	Color Blindness — Deuteranopia-type	Renk Körlüğü — Döteranopi tipi
@@ -744,7 +747,6 @@
 	Consolidate All to Tabs	Tümünü Sekmelerde Birleştir
 	Float in Window	Pencerede Yüzdür
 	Float All in Windows	Tümünü Pencerelerde Yüzdür
-	New Window for Document	Belge için Yeni Pencere
 	Workspace	Çalışma alanı
 	Essentials	Temel Öğeler
 	Graphic and Web	Grafik ve Web

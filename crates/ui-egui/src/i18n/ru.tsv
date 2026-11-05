@@ -272,6 +272,7 @@
 	Right	Правый
 	Open Recent	Открыть недавние
 	Clear Recent Files	Очистить список недавних файлов
+	Clear Recent File List	Очистить список недавних файлов
 	Remove from Recent	Удалить из недавних
 	Remove {name} from Recent	Удалить {name} из недавних
 	Close	Закрыть
@@ -676,7 +677,6 @@
 	Match Location	Согласовать положение
 	Match Rotation	Согласовать поворот
 	Match All	Согласовать всё
-	New Window for Document	Новое окно документа
 	Workspace	Рабочая среда
 	Extensions	Расширения
 	Panels	Панели
@@ -1068,8 +1068,8 @@
 	ACES	ACES
 	Industry Standard	Отраслевой стандарт
 	Web	Web
-	Internet Standard RGB	Стандартный RGB для Интернета
-	Legacy Macintosh RGB	Устаревший RGB Macintosh
+	Internet Standard RGB (sRGB)	Стандартный RGB для Интернета (sRGB)
+	Legacy Macintosh RGB (Gamma 1.8)	Устаревший RGB Macintosh (Gamma 1.8)
 	Monitor RGB	Монитор RGB
 	Windows LCD	Windows LCD
 	Coated CMYK	Мелованная бумага CMYK
@@ -2150,7 +2150,7 @@
 	Vertical Centers	Центры по вертикали
 	Video Frames to Layers…	Видеокадры в слои…
 	WIA Support…	Поддержка WIA…
-	Working CMY Plate	Рабочая голубая форма
+	Working CMY Plates	Рабочая голубая форма
 	Absolute	Абсолютный
 	Action	Операция
 	Adaptive	Адаптивный

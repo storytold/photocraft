@@ -164,6 +164,7 @@
 	Right	Kanan
 	Open Recent	Terakhir Dibuka
 	Clear Recent Files	Hapus Daftar Berkas Terakhir
+	Clear Recent File List	Hapus Daftar Berkas Terakhir
 	Remove from Recent	Hapus dari Daftar Terakhir
 	Remove {name} from Recent	Hapus {name} dari Daftar Terakhir
 	Close	Tutup
@@ -526,7 +527,9 @@
 	Unite Shapes	Satukan Bentuk
 	Subtract Front Shape	Kurangi Bentuk Depan
 	Intersect Shape Areas	Irisan Area Bentuk
+	Unite Shapes at Overlap	Irisan Area Bentuk
 	Exclude Overlapping Shapes	Kecualikan Bentuk yang Tumpang Tindih
+	Subtract Shapes at Overlap	Kecualikan Bentuk yang Tumpang Tindih
 	Merge Shape Components	Gabungkan Komponen Bentuk
 	Path operations	Operasi path
 	Align	Rata
@@ -719,9 +722,9 @@
 	Working Magenta Plate	Pelat Magenta Kerja
 	Working Yellow Plate	Pelat Kuning Kerja
 	Working Black Plate	Pelat Hitam Kerja
-	Working CMY Plate	Pelat CMY Kerja
-	Legacy Macintosh RGB	RGB Macintosh Lawas
-	Internet Standard RGB	RGB Standar Internet
+	Working CMY Plates	Pelat CMY Kerja
+	Legacy Macintosh RGB (Gamma 1.8)	RGB Macintosh Lawas (Gamma 1.8)
+	Internet Standard RGB (sRGB)	RGB Standar Internet (sRGB)
 	Monitor RGB	RGB Monitor
 	Color Blindness — Protanopia-type	Buta Warna — Tipe Protanopia
 	Color Blindness — Deuteranopia-type	Buta Warna — Tipe Deuteranopia
@@ -813,7 +816,7 @@
 	Consolidate All to Tabs	Gabungkan Semua ke Tab
 	Float in Window	Mengambang di Jendela
 	Float All in Windows	Mengambangkan Semua di Jendela
-	New Window for Document	Jendela Baru untuk Dokumen
+	New Window	Jendela Baru untuk Dokumen
 	Workspace	Ruang Kerja
 	Essentials	Esensial
 	Graphic and Web	Grafis dan Web

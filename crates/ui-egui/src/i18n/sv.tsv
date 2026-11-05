@@ -84,6 +84,7 @@
 	Right	Höger
 	Open Recent	Öppna senaste
 	Clear Recent Files	Rensa senaste filer
+	Clear Recent File List	Rensa senaste filer
 	Remove from Recent	Ta bort från senaste
 	Remove {name} from Recent	Ta bort {name} från senaste
 	Close	Stäng
@@ -506,7 +507,6 @@
 	Match Location	Matcha plats
 	Match Rotation	Matcha rotation
 	Match All	Matcha alla
-	New Window for Document	Nytt fönster för dokument
 	Workspace	Arbetsyta
 	Extensions	Tillägg
 	Panels	Paneler
@@ -918,8 +918,8 @@
 	ACES	ACES
 	Industry Standard	Branschstandard
 	Web	Webb
-	Internet Standard RGB	Internetstandard-RGB
-	Legacy Macintosh RGB	Äldre Macintosh RGB
+	Internet Standard RGB (sRGB)	Internetstandard-RGB (sRGB)
+	Legacy Macintosh RGB (Gamma 1.8)	Äldre Macintosh RGB (Gamma 1.8)
 	Monitor RGB	Bildskärms-RGB
 	Windows LCD	Windows LCD
 	Coated CMYK	Bestruket CMYK
@@ -2050,7 +2050,7 @@
 	Vertical Centers	Lodräta mittpunkter
 	Video Frames to Layers…	Videobildrutor till lager…
 	WIA Support…	WIA-stöd…
-	Working CMY Plate	CMY-arbetsplåt
+	Working CMY Plates	CMY-arbetsplåt
 
 # tl! literals (third pass)
 	Absolute	Absolut

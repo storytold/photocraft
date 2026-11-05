@@ -87,6 +87,7 @@
 	Right	Oikea
 	Open Recent	Viimeksi avatut
 	Clear Recent Files	Tyhjennä viimeisimmät tiedostot
+	Clear Recent File List	Tyhjennä viimeisimmät tiedostot
 	Remove from Recent	Poista viimeisimmistä
 	Remove {name} from Recent	Poista {name} viimeisimmistä
 	Close	Sulje
@@ -509,7 +510,6 @@
 	Match Location	Täsmäytä sijainti
 	Match Rotation	Täsmäytä kierto
 	Match All	Täsmäytä kaikki
-	New Window for Document	Uusi ikkuna asiakirjalle
 	Workspace	Työtila
 	Extensions	Laajennukset
 	Panels	Paneelit
@@ -921,8 +921,8 @@
 	ACES	ACES
 	Industry Standard	Alan standardi
 	Web	Verkko
-	Internet Standard RGB	Internetin standardi-RGB
-	Legacy Macintosh RGB	Vanha Macintosh RGB
+	Internet Standard RGB (sRGB)	Internetin standardi-RGB (sRGB)
+	Legacy Macintosh RGB (Gamma 1.8)	Vanha Macintosh RGB (Gamma 1.8)
 	Monitor RGB	Näytön RGB
 	Windows LCD	Windows LCD
 	Coated CMYK	CMYK, päällystetty paperi
@@ -2053,7 +2053,7 @@
 	Vertical Centers	Pystykeskikohdat
 	Video Frames to Layers…	Videoruudut tasoiksi…
 	WIA Support…	WIA-tuki…
-	Working CMY Plate	Työ-CMY-levy
+	Working CMY Plates	Työ-CMY-levy
 
 # tl! literals (third pass)
 	Absolute	Absoluuttinen

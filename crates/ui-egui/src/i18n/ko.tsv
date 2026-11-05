@@ -166,6 +166,7 @@
 	Right	오른쪽
 	Open Recent	최근 파일 열기
 	Clear Recent Files	최근 파일 목록 지우기
+	Clear Recent File List	최근 파일 목록 지우기
 	Remove from Recent	최근 항목에서 제거
 	Remove {name} from Recent	최근 항목에서 {name} 제거
 	Close	닫기
@@ -537,7 +538,9 @@
 	Unite Shapes	모양 합치기
 	Subtract Front Shape	앞쪽 모양 빼기
 	Intersect Shape Areas	모양 영역 교차
+	Unite Shapes at Overlap	모양 영역 교차
 	Exclude Overlapping Shapes	겹치는 모양 제외
+	Subtract Shapes at Overlap	겹치는 모양 제외
 	Merge Shape Components	모양 구성 요소 병합
 	Path operations	패스 작업
 	Align	정렬
@@ -729,9 +732,9 @@
 	Working Magenta Plate	작업용 마젠타 판
 	Working Yellow Plate	작업용 노랑 판
 	Working Black Plate	작업용 검정 판
-	Working CMY Plate	작업용 CMY 판
-	Legacy Macintosh RGB	기존 Macintosh RGB
-	Internet Standard RGB	인터넷 표준 RGB
+	Working CMY Plates	작업용 CMY 판
+	Legacy Macintosh RGB (Gamma 1.8)	기존 Macintosh RGB (Gamma 1.8)
+	Internet Standard RGB (sRGB)	인터넷 표준 RGB (sRGB)
 	Monitor RGB	모니터 RGB
 	Color Blindness — Protanopia-type	색각 이상 — 적색맹
 	Color Blindness — Deuteranopia-type	색각 이상 — 녹색맹
@@ -813,7 +816,7 @@
 	Consolidate All to Tabs	모두 탭으로 통합
 	Float in Window	별도 창으로 띄우기
 	Float All in Windows	모두 별도 창으로 띄우기
-	New Window for Document	문서의 새 창
+	New Window	문서의 새 창
 	Workspace	작업 영역
 	Essentials	필수
 	Graphic and Web	그래픽 및 웹

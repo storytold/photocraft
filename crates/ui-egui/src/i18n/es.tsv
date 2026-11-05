@@ -139,6 +139,7 @@
 	Right	Derecha
 	Open Recent	Abrir recientes
 	Clear Recent Files	Vaciar archivos recientes
+	Clear Recent File List	Vaciar archivos recientes
 	Remove from Recent	Quitar de recientes
 	Remove {name} from Recent	Quitar {name} de recientes
 	Close	Cerrar
@@ -710,9 +711,9 @@
 	Working Magenta Plate	Placa magenta de trabajo
 	Working Yellow Plate	Placa amarilla de trabajo
 	Working Black Plate	Placa negra de trabajo
-	Working CMY Plate	Placa CMY de trabajo
-	Legacy Macintosh RGB	RGB heredado de Macintosh
-	Internet Standard RGB	RGB estándar de Internet
+	Working CMY Plates	Placa CMY de trabajo
+	Legacy Macintosh RGB (Gamma 1.8)	RGB heredado de Macintosh (Gamma 1.8)
+	Internet Standard RGB (sRGB)	RGB estándar de Internet (sRGB)
 	Monitor RGB	RGB del monitor
 	Color Blindness — Protanopia-type	Daltonismo — tipo protanopia
 	Color Blindness — Deuteranopia-type	Daltonismo — tipo deuteranopia
@@ -804,7 +805,6 @@
 	Consolidate All to Tabs	Consolidar todo en pestañas
 	Float in Window	Hacer flotante en ventana
 	Float All in Windows	Hacer flotantes todas en ventanas
-	New Window for Document	Nueva ventana para el documento
 	Workspace	Espacio de trabajo
 	Essentials	Esenciales
 	Graphic and Web	Gráficos y web

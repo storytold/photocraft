@@ -171,6 +171,7 @@
 	Right	Droite
 	Open Recent	Ouvrir un fichier récent
 	Clear Recent Files	Effacer la liste des fichiers récents
+	Clear Recent File List	Effacer la liste des fichiers récents
 	Remove from Recent	Retirer des fichiers récents
 	Remove {name} from Recent	Retirer {name} des fichiers récents
 	Close	Fermer
@@ -726,9 +727,9 @@
 	Working Magenta Plate	Plaque magenta de travail
 	Working Yellow Plate	Plaque jaune de travail
 	Working Black Plate	Plaque noire de travail
-	Working CMY Plate	Plaque CMJ de travail
-	Legacy Macintosh RGB	RVB Macintosh (ancien)
-	Internet Standard RGB	RVB standard d'Internet
+	Working CMY Plates	Plaque CMJ de travail
+	Legacy Macintosh RGB (Gamma 1.8)	RVB Macintosh (ancien) (Gamma 1.8)
+	Internet Standard RGB (sRGB)	RVB standard d'Internet (sRGB)
 	Monitor RGB	RVB du moniteur
 	Color Blindness — Protanopia-type	Daltonisme — type protanopie
 	Color Blindness — Deuteranopia-type	Daltonisme — type deutéranopie
@@ -820,7 +821,6 @@
 	Consolidate All to Tabs	Tout regrouper dans des onglets
 	Float in Window	Flottante dans une fenêtre
 	Float All in Windows	Toutes flottantes dans des fenêtres
-	New Window for Document	Nouvelle fenêtre pour le document
 	Workspace	Espace de travail
 	Essentials	Essentiel
 	Graphic and Web	Graphisme et Web

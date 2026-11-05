@@ -81,6 +81,7 @@
 	Right	يمين
 	Open Recent	فتح الملفات الأخيرة
 	Clear Recent Files	مسح الملفات الأخيرة
+	Clear Recent File List	مسح الملفات الأخيرة
 	Remove from Recent	إزالة من الملفات الأخيرة
 	Remove {name} from Recent	إزالة {name} من الملفات الأخيرة
 	Close	إغلاق
@@ -459,7 +460,9 @@
 	Unite Shapes	توحيد الأشكال
 	Subtract Front Shape	طرح الشكل الأمامي
 	Intersect Shape Areas	تقاطع مناطق الأشكال
+	Unite Shapes at Overlap	تقاطع مناطق الأشكال
 	Exclude Overlapping Shapes	استبعاد الأشكال المتداخلة
+	Subtract Shapes at Overlap	استبعاد الأشكال المتداخلة
 	Merge Shape Components	دمج مكونات الشكل
 	Align	محاذاة
 	Top Edges	الحواف العلوية
@@ -668,9 +671,9 @@
 	Working Magenta Plate	لوح الأرجواني العامل
 	Working Yellow Plate	لوح الأصفر العامل
 	Working Black Plate	لوح الأسود العامل
-	Working CMY Plate	لوح CMY العامل
-	Legacy Macintosh RGB	RGB القديم لنظام Macintosh
-	Internet Standard RGB	RGB القياسي للإنترنت
+	Working CMY Plates	لوح CMY العامل
+	Legacy Macintosh RGB (Gamma 1.8)	RGB القديم لنظام Macintosh (Gamma 1.8)
+	Internet Standard RGB (sRGB)	RGB القياسي للإنترنت (sRGB)
 	Monitor RGB	RGB الشاشة
 	Color Blindness — Protanopia-type	عمى الألوان — نوع بروتانوبيا
 	Color Blindness — Deuteranopia-type	عمى الألوان — نوع ديوتيرانوبيا
@@ -752,7 +755,7 @@
 	Consolidate All to Tabs	توحيد الكل في علامات تبويب
 	Float in Window	تعويم في نافذة
 	Float All in Windows	تعويم الكل في نوافذ
-	New Window for Document	نافذة جديدة للمستند
+	New Window	نافذة جديدة للمستند
 	Workspace	مساحة العمل
 	Essentials	الأساسيات
 	Graphic and Web	الرسومات والويب

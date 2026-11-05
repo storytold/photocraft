@@ -173,6 +173,7 @@
 	Right	Rechts
 	Open Recent	Zuletzt geöffnete Dateien
 	Clear Recent Files	Zuletzt geöffnete Dateien leeren
+	Clear Recent File List	Zuletzt geöffnete Dateien leeren
 	Remove from Recent	Aus zuletzt geöffneten Dateien entfernen
 	Remove {name} from Recent	{name} aus zuletzt geöffneten Dateien entfernen
 	Close	Schließen
@@ -551,7 +552,9 @@
 	Unite Shapes	Formen vereinigen
 	Subtract Front Shape	Vordere Form subtrahieren
 	Intersect Shape Areas	Schnittmenge der Formen
+	Unite Shapes at Overlap	Schnittmenge der Formen
 	Exclude Overlapping Shapes	Überlappende Formen ausschließen
+	Subtract Shapes at Overlap	Überlappende Formen ausschließen
 	Merge Shape Components	Formkomponenten zusammenfügen
 	Path operations	Pfadvorgänge
 	Align	Ausrichten
@@ -743,9 +746,9 @@
 	Working Magenta Plate	Arbeits-Magenta-Druckplatte
 	Working Yellow Plate	Arbeits-Gelb-Druckplatte
 	Working Black Plate	Arbeits-Schwarz-Druckplatte
-	Working CMY Plate	Arbeits-CMY-Druckplatte
-	Legacy Macintosh RGB	Legacy-Macintosh-RGB
-	Internet Standard RGB	Internet-Standard-RGB
+	Working CMY Plates	Arbeits-CMY-Druckplatte
+	Legacy Macintosh RGB (Gamma 1.8)	Legacy-Macintosh-RGB (Gamma 1.8)
+	Internet Standard RGB (sRGB)	Internet-Standard-RGB (sRGB)
 	Monitor RGB	Monitor-RGB
 	Color Blindness — Protanopia-type	Farbenblindheit — Protanopie-Typ
 	Color Blindness — Deuteranopia-type	Farbenblindheit — Deuteranopie-Typ
@@ -827,7 +830,7 @@
 	Consolidate All to Tabs	Alle in Registerkarten zusammenfassen
 	Float in Window	In Fenster schweben lassen
 	Float All in Windows	Alle in Fenstern schweben lassen
-	New Window for Document	Neues Fenster für Dokument
+	New Window	Neues Fenster für Dokument
 	Workspace	Arbeitsbereich
 	Essentials	Essentials
 	Graphic and Web	Grafik und Web
