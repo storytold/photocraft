@@ -111,3 +111,43 @@ fn a_polygon_in_progress_keeps_its_starting_mode() {
     assert!(!ws(&app).add);
     assert_eq!(ws(&app).poly.as_ref().map(|(a, _)| *a), Some(true));
 }
+
+fn e_event() -> egui::RawInput {
+    let ev = egui::Event::Key { key: Key::E, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE };
+    egui::RawInput { events: vec![ev], ..Default::default() }
+}
+
+/// Through the shortcut handler, as the app runs it: a focused text field keeps the E.
+#[test]
+fn e_through_handle_is_ignored_while_a_text_field_has_focus() {
+    let mut app = opened();
+    let ctx = egui::Context::default();
+    let mut text = String::new();
+    ctx.run_ui(Default::default(), |ui| {
+        ui.text_edit_singleline(&mut text).request_focus();
+    })
+    .textures_delta
+    .clear();
+    ctx.run_ui(e_event(), |ui| {
+        assert!(ui.ctx().text_edit_focused());
+        crate::shortcuts::handle(&mut app, ui.ctx());
+        ui.text_edit_singleline(&mut text);
+    })
+    .textures_delta
+    .clear();
+    assert!(ws(&app).add);
+}
+
+/// The same path with no text field focused: E flips the mode.
+#[test]
+fn e_through_handle_flips_the_mode_without_a_focused_text_field() {
+    let mut app = opened();
+    let ctx = egui::Context::default();
+    ctx.run_ui(e_event(), |ui| {
+        assert!(!ui.ctx().text_edit_focused());
+        crate::shortcuts::handle(&mut app, ui.ctx());
+    })
+    .textures_delta
+    .clear();
+    assert!(!ws(&app).add);
+}
