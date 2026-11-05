@@ -1871,6 +1871,7 @@
 	Soften	Verzachten
 	Source	Bron
 	Source: set	Bron: ingesteld
+	Source: {name}	Bron: {name}
 	Sponge Tool	Sponsgereedschap
 	Spot Healing Brush Tool	Snel herstelpenseel
 	Spread	Spreiden
@@ -4093,6 +4094,7 @@ curves	Smooth	Vloeiend maken
 	Automatically Check for Updates	Automatisch op updates controleren
 	Paints from the History panel's source state	Schildert vanuit de bronstatus van het deelvenster Geschiedenis
 	Sets the source for the history brush	Stelt de bron voor het historiepenseel in
+	The History Brush source was deleted: set a new source in the History panel	De bron voor het historiepenseel is verwijderd: stel een nieuwe bron in het deelvenster Geschiedenis in
 	Highlight Mode	Hooglichtmodus
 	Highlight Color	Hooglichtkleur
 	Highlight Opacity	Hooglichtdekking
@@ -4277,3 +4279,30 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Kleur van het punt
 	Shapes can't use patterns yet	Vormen kunnen nog geen patronen gebruiken
 	Edit Brush…	Penseel bewerken…
+	Generator enabled	Generator ingeschakeld
+	Move Up	Omhoog
+	Move Down	Omlaag
+	Grid view	Rasterweergave
+	List view	Lijstweergave
+	On your computer	Op je computer
+	New file	Nieuw bestand
+	Learn	Leren
+	Website	Website
+
+# Frame Tool and other branch translations.
+	A frame supports affine transforms; select its image for perspective transforms	Een kader ondersteunt affiene transformaties; selecteer de afbeelding voor perspectieftransformaties
+	A frame supports affine transforms; select its image to warp it	Een kader ondersteunt affiene transformaties; selecteer de afbeelding om deze te verdraaien
+	Convert to Frame…	Omzetten naar kader…
+	Create a new custom frame	Nieuw aangepast kader maken
+	Create a new polygonal frame	Nieuw veelhoekig kader maken
+	Create a new triangular frame	Nieuw driehoekig kader maken
+	Fit Content to Frame	Inhoud aanpassen aan kader
+	Fit Frame to Content	Kader aanpassen aan inhoud
+	Frame coordinates must be finite and within 600000 pixels	Kadercoördinaten moeten eindig zijn en binnen 600000 pixels liggen
+	Import Image…	Afbeelding importeren…
+	Invalid frame transform	Ongeldige kadertransformatie
+	Invalid nested file drop	Ongeldige geneste bestandsneerzetting
+	New Frame	Nieuw kader
+	Replace Image…	Afbeelding vervangen…
+	The frame is locked	Het kader is vergrendeld
+	The frame is unavailable	Het kader is niet beschikbaar
