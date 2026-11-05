@@ -590,12 +590,15 @@ fn txt2_only_opentype(style: &CharStyle) -> bool {
 
 /// Whether the document `Txt2` block is needed for `objects`: a non-Metrics auto-kern mode
 /// (`Optical`) is exclusive to `Txt2` — EngineData's `AutoKerning` cannot distinguish Metrics from
-/// Optical — and so are Stylistic Sets and the other [`TXT2_FEATURES`] flags (#10308). A fresh
+/// Optical — and so are Stylistic Sets and the other [`TXT2_FEATURES`] flags (#10308), and type
+/// on a path, whose path lives only in the block's frame (#7962). A fresh
 /// document of ordinary Metrics text with no such OpenType settings has nothing to put in the
 /// block. Writing Photoshop's empty `<< /0 << >> >>` stub anyway makes some readers (Photopea)
 /// fail (#3514); the export omits the block for such a document.
 pub fn needs_txt2(objects: &[(i32, &TextLayer)]) -> bool {
-    objects.iter().any(|(_, l)| l.char_runs().iter().any(|r| r.style.kerning == Kerning::Optical || txt2_only_opentype(&r.style)))
+    objects.iter().any(|(_, l)| {
+        matches!(l.shape, TextShape::Path { .. }) || l.char_runs().iter().any(|r| r.style.kerning == Kerning::Optical || txt2_only_opentype(&r.style))
+    })
 }
 
 /// A `/53` SimplePaint dictionary (`<< /99 /SimplePaint /0 << >> >>`) for a fresh style run.
@@ -615,6 +618,14 @@ fn minimal_txt2_style_run() -> E {
 /// A point-text object with a view naming frame `frame` and empty style runs, for a layer the
 /// file's block has no object for and no template to copy (#10308, #7698). Style runs are filled
 /// by [`txt2_style_runs`] next.
+/// A paragraph run's style as Photoshop reads it: `<< /0 << /0 () /5 << >> /6 1 >> >>`, the
+/// style's (empty) name, its properties and its sheet. Photoshop refuses a block whose paragraph
+/// runs hold an empty dictionary instead ("general Photoshop error").
+fn paragraph_run_style() -> E {
+    let data = E::Dict(vec![("0".into(), E::String(String::new())), ("5".into(), E::dict()), ("6".into(), E::Int(1))]);
+    E::Dict(vec![("0".into(), data)])
+}
+
 fn fresh_point_text_object(frame: usize, text: &str) -> E {
     let frame = i64::try_from(frame).unwrap_or(0);
     let view = E::Dict(vec![("0".into(), E::Array(vec![E::Dict(vec![("0".into(), E::Int(frame))])]))]);
@@ -622,7 +633,7 @@ fn fresh_point_text_object(frame: usize, text: &str) -> E {
     // `edited_object` refits them.
     let paragraphs = text
         .split_inclusive('\r')
-        .map(|p| E::Dict(vec![("0".into(), E::dict()), ("1".into(), E::Int(i64::try_from(p.encode_utf16().count()).unwrap_or(i64::MAX)))]))
+        .map(|p| E::Dict(vec![("0".into(), paragraph_run_style()), ("1".into(), E::Int(i64::try_from(p.encode_utf16().count()).unwrap_or(i64::MAX)))]))
         .collect();
     let model = E::Dict(vec![
         ("0".into(), E::String(text.to_string())),
@@ -827,10 +838,24 @@ pub fn build_txt2_at(objects: &[(i32, &TextLayer)], previous: Option<&[u8]>, dpi
     // `/1` whatever it holds beside the text objects. A PhotoCraft-native block gets a frame list
     // (`/0 /8 /0`) so each object's view can name a frame (#10308, #7698); a file's block is never
     // given a `/0` or a frame list it didn't have (#2374).
+    // Photoshop also needs, in a native block, a paragraph style sheet (`/0 /6`) and the document
+    // settings' `/1 /0 /2` (without either it refuses the file: "general Photoshop error"), and a
+    // character style sheet (`/0 /5`): without it the file opens, but the text can't be drawn, so
+    // exporting or flattening it fails.
     let mut outer = prev.clone().unwrap_or_else(|| {
+        let sheet = E::Dict(vec![("0".into(), E::Dict(vec![("0".into(), E::String("Normal RGB".into())), ("5".into(), E::dict())]))]);
+        let char_sheet = E::Dict(vec![("0".into(), E::Dict(vec![("0".into(), E::String("Normal RGB".into())), ("6".into(), E::dict())]))]);
         E::Dict(vec![
             ("98".into(), E::Dict(vec![("0".into(), E::Int(14))])),
-            ("0".into(), E::Dict(vec![("8".into(), E::Dict(vec![("0".into(), E::Array(vec![]))]))])),
+            (
+                "0".into(),
+                E::Dict(vec![
+                    ("8".into(), E::Dict(vec![("0".into(), E::Array(vec![]))])),
+                    ("5".into(), E::Dict(vec![("0".into(), E::Array(vec![char_sheet]))])),
+                    ("6".into(), E::Dict(vec![("0".into(), E::Array(vec![sheet]))])),
+                ]),
+            ),
+            ("1".into(), E::Dict(vec![("0".into(), E::Dict(vec![("2".into(), E::Int(0))]))])),
         ])
     });
     pad_frames(&mut outer, slots.len().max(frames_needed));

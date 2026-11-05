@@ -95,26 +95,107 @@ fn fresh_metrics_text_writes_no_txt2_block() {
         photocraft_psd::PsdFile::from_bytes(&bytes).unwrap().global_blocks.iter().any(|b| &b.key == b"Txt2")
     };
     assert!(!saves_txt2(Kerning::Metrics), "a plain Metrics layer must not write the empty Txt2 stub");
-    assert!(!saves_txt2(Kerning::Optical), "a Txt2 written here makes Photoshop refuse the file");
+    assert!(saves_txt2(Kerning::Optical), "Optical lives only in Txt2");
 }
 
-/// Photoshop 27 refuses a `Txt2` block PhotoCraft writes ("general Photoshop error"), and Optical
-/// lives only there: an Optical layer is saved as Metrics, with a warning, and stays live text.
+/// #1348: the automatic mode (Metrics/Optical) lives in the document `Txt2` block, one model
+/// object per `TextIndex`. A PhotoCraft-authored PSD must carry it or a reopened layer falls
+/// back to Metrics — Optical used to be silently lost.
 #[test]
-fn optical_kerning_saves_as_metrics_without_txt2() {
-    let t = layer("AVATAR", &[(6, Kerning::Optical, 0.0)]);
+fn optical_kerning_round_trips_through_psd() {
+    use Kerning::{Metrics as M, Optical as P};
+    let t1 = layer("AVATAR", &[(4, P, 0.0), (2, M, 0.0)]);
+    let t2 = layer("Wave", &[(2, M, 0.0), (2, P, 0.0)]);
+    let mut doc = Document::new("k", photocraft_geom::Size::new(64, 32), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
+    for (name, want) in [("one", &t1), ("two", &t2)] {
+        let mut t = want.clone();
+        photocraft_text::TextEngine::new().render_layer(&mut t, doc.resolution_dpi, doc.pixel_format());
+        doc.layers.push(Layer::new(name, LayerContent::Text(t)));
+    }
+    let bytes = photocraft_io::export(&doc, "k.psd", &Default::default()).unwrap().bytes;
+    let back = photocraft_io::import("k.psd", &bytes).unwrap().document;
+    for (want, l) in [(&t1, &back.layers[0]), (&t2, &back.layers[1])] {
+        let LayerContent::Text(b) = &l.content else { panic!("not text") };
+        assert_eq!(chars(b), chars(want), "{}", l.name);
+    }
+}
+
+/// #10308: stylistic sets (and other Txt2-only OpenType flags) on a PhotoCraft-native document
+/// write a `Txt2` block and round-trip through save and reopen.
+#[test]
+fn fresh_stylistic_sets_round_trip_through_psd() {
+    use photocraft_doc::text::FontFeature;
+    let base = CharStyle { font_family: "Inter".into(), size_pt: 24.0, ..Default::default() };
+    let mut t = TextLayer {
+        text: "Hi".into(),
+        runs: vec![TextRun {
+            len: 2,
+            style: CharStyle { features: vec![FontFeature { tag: "ss01".into(), value: 1 }, FontFeature { tag: "ss05".into(), value: 1 }], ..base },
+        }],
+        ..Default::default()
+    };
+    t.sync_summary();
     let mut doc = Document::new("k", photocraft_geom::Size::new(64, 32), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
     let mut r = t.clone();
     photocraft_text::TextEngine::new().render_layer(&mut r, doc.resolution_dpi, doc.pixel_format());
     doc.layers.push(Layer::new("t", LayerContent::Text(r)));
-    let saved = photocraft_io::export(&doc, "k.psd", &Default::default()).unwrap();
-    assert!(saved.warnings.iter().any(|w| w.contains("Optical kerning is saved as Metrics")), "{:?}", saved.warnings);
-    let file = photocraft_psd::PsdFile::from_bytes(&saved.bytes).unwrap();
-    assert!(!file.global_blocks.iter().any(|b| &b.key == b"Txt2"));
-    let back = photocraft_io::import("k.psd", &saved.bytes).unwrap().document;
+    let bytes = photocraft_io::export(&doc, "k.psd", &Default::default()).unwrap().bytes;
+    let file = photocraft_psd::PsdFile::from_bytes(&bytes).unwrap();
+    let txt2 =
+        file.global_blocks.iter().find(|b| &b.key == b"Txt2").and_then(|b| photocraft_text::psd::parse_txt2(&b.data)).expect("Txt2 written for stylistic sets");
+    let style = txt2
+        .path(&["1", "1"])
+        .and_then(E::as_array)
+        .and_then(|a| a.first())
+        .and_then(|o| o.path(&["0", "6", "0"]))
+        .and_then(E::as_array)
+        .and_then(|a| a.first())
+        .and_then(|r| r.path(&["0", "0", "6"]))
+        .expect("style run");
+    // Bits 0 and 4 → sets 1 and 5.
+    assert_eq!(style.get("85").and_then(E::as_i64), Some((1 << 0) | (1 << 4)));
+    assert_eq!(style.path(&["53", "99"]).and_then(E::as_str), Some("SimplePaint"), "paint stream tag");
+    assert_eq!(style.path(&["53", "0", "0"]).and_then(E::as_i64), Some(1), "fill colour type RGB");
+    assert!(style.path(&["53", "0", "1"]).and_then(E::as_array).is_some_and(|v| v.len() == 4), "fill colour values");
+    assert_eq!(style.get("0").and_then(E::as_i64), Some(0), "font index 0");
+    assert_eq!(
+        txt2.path(&["0", "1", "0"]).and_then(E::as_array).and_then(|a| a.first()).and_then(|f| f.path(&["0", "0", "0"])).and_then(E::as_str),
+        Some("Inter-Regular"),
+        "fresh Txt2 seeds a font entry"
+    );
+    assert!(txt2.path(&["0", "8", "0"]).and_then(E::as_array).is_some_and(|f| !f.is_empty()), "fresh Txt2 names a frame");
+    let back = photocraft_io::import("k.psd", &bytes).unwrap().document;
     let LayerContent::Text(b) = &back.layers[0].content else { panic!("not text") };
-    assert_eq!(b.text, "AVATAR");
-    assert!(chars(b).iter().all(|(mode, _)| *mode == Kerning::Metrics));
+    let runs = b.char_runs();
+    assert_eq!(runs.iter().map(|r| r.len).sum::<usize>(), b.text.len(), "the runs cover the text");
+    for r in &runs {
+        let on = |tag: &str| r.style.features.iter().any(|f| f.tag == tag && f.value == 1);
+        assert!(on("ss01") && on("ss05"), "both sets on every character: {:?}", r.style.features);
+    }
+}
+
+/// Two imported layers can name the same Txt2 object; export must update the second
+/// preserved TySh pointer so each layer restores its own automatic kerning mode.
+#[test]
+fn duplicate_preserved_text_indices_get_distinct_txt2_objects() {
+    let mut doc = Document::new("k", photocraft_geom::Size::new(64, 32), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
+    let cases = [("optical", "AV", Kerning::Optical), ("metrics", "BC", Kerning::Metrics)];
+    for (name, text, mode) in cases {
+        let mut t = layer(text, &[(text.len(), mode, 0.0)]);
+        photocraft_text::TextEngine::new().render_layer(&mut t, doc.resolution_dpi, doc.pixel_format());
+        let raw = photocraft_text::psd::build_tysh(&t, doc.resolution_dpi, None);
+        t.psd_raw = Some(std::sync::Arc::new(photocraft_text::psd::set_text_index(&raw, 0).unwrap()));
+        doc.layers.push(Layer::new(name, LayerContent::Text(t)));
+    }
+    let bytes = photocraft_io::export(&doc, "k.psd", &Default::default()).unwrap().bytes;
+    let file = photocraft_psd::PsdFile::from_bytes(&bytes).unwrap();
+    let txt2 = file.global_blocks.iter().find(|b| &b.key == b"Txt2").and_then(|b| photocraft_text::psd::parse_txt2(&b.data)).unwrap();
+    assert_eq!(txt2.path(&["1", "1"]).and_then(E::as_array).unwrap().len(), 2);
+    let back = photocraft_io::import("k.psd", &bytes).unwrap().document;
+    for (i, expected) in [Kerning::Optical, Kerning::Metrics].into_iter().enumerate() {
+        let LayerContent::Text(t) = &back.layers[i].content else { panic!("expected text layer") };
+        assert!(chars(t).iter().all(|(mode, _)| *mode == expected), "layer {i} used another layer's Txt2 object");
+    }
 }
 
 /// A type layer added below preserved ones takes a number past theirs: claiming the next free
@@ -197,18 +278,13 @@ fn hostile_text_index_never_sizes_the_save() {
     doc.layers.push(Layer::new("hostile", LayerContent::Text(r)));
     let bytes = photocraft_io::export(&doc, "k.psd", &Default::default()).unwrap().bytes;
     let file = photocraft_psd::PsdFile::from_bytes(&bytes).unwrap();
-    let slots = file
-        .global_blocks
-        .iter()
-        .find(|b| &b.key == b"Txt2")
-        .and_then(|b| photocraft_text::psd::parse_txt2(&b.data))
-        .and_then(|txt2| txt2.path(&["1", "1"]).and_then(E::as_array).map(<[E]>::len))
-        .unwrap_or(0);
-    assert!(slots <= 8, "a file-controlled TextIndex sized the save: {slots} slots");
+    let txt2 = file.global_blocks.iter().find(|b| &b.key == b"Txt2").and_then(|b| photocraft_text::psd::parse_txt2(&b.data)).unwrap();
+    let slots = txt2.path(&["1", "1"]).and_then(E::as_array).unwrap();
+    assert!(slots.len() <= 8, "a file-controlled TextIndex sized the save: {} slots", slots.len());
     let back = photocraft_io::import("k.psd", &bytes).unwrap().document;
     let LayerContent::Text(b) = &back.layers[0].content else { panic!("not text") };
     assert_eq!(b.text, "AV");
-    assert_eq!(chars(b).len(), chars(&t).len(), "the text survives a hostile TextIndex");
+    assert_eq!(chars(b), chars(&t), "a remapped TextIndex must still restore Optical kerning");
 }
 
 /// A save must not drop what the file held beyond the style runs: an unedited resave writes the
@@ -304,6 +380,36 @@ fn edited_type_drops_the_files_txt2() {
     let (txt2, texts) = save(vec![kept, fresh]);
     assert!(txt2.is_none(), "a new type layer drops the file's Txt2");
     assert_eq!(texts, ["AV", "Hi"], "every type layer is still live text");
+}
+
+/// A PhotoCraft-native `Txt2` carries what Photoshop 27 needs, found by building the block up in
+/// Photoshop: to open the file, paragraph runs whose style is `<< /0 << /0 () /5 << >> /6 1 >> >>`
+/// (an empty dictionary there makes it refuse the file), a paragraph style sheet (`/0 /6`) and the
+/// document settings' `/1 /0 /2`; to draw the text (export, flatten), a character style sheet
+/// (`/0 /5`). Type on a path asks for the block too: its path is in the frame.
+#[test]
+fn native_txt2_carries_what_photoshop_needs() {
+    let mut t = layer("AV\rWA", &[(5, Kerning::Optical, 0.0)]);
+    photocraft_text::TextEngine::new().render_layer(&mut t, 72.0, photocraft_color::PixelFormat::RGBA8);
+    assert!(photocraft_text::psd::needs_txt2(&[(0, &t)]));
+    let txt2 = photocraft_text::psd::parse_txt2(&photocraft_text::psd::build_txt2(&[(0, &t)], None)).unwrap();
+    assert_eq!(txt2.path(&["1", "0", "2"]), Some(&E::Int(0)), "document settings");
+    assert_eq!(txt2.path(&["0", "6", "0"]).and_then(E::as_array).map(<[E]>::len), Some(1), "a paragraph style sheet");
+    assert_eq!(txt2.path(&["0", "5", "0"]).and_then(E::as_array).map(<[E]>::len), Some(1), "a character style sheet");
+    let object = &txt2.path(&["1", "1"]).and_then(E::as_array).unwrap()[0];
+    let runs = object.path(&["0", "5", "0"]).and_then(E::as_array).unwrap();
+    assert_eq!(runs.len(), 2, "one run per paragraph");
+    for run in runs {
+        assert_eq!(run.path(&["0", "0", "6"]), Some(&E::Int(1)), "{run:?}");
+        assert!(matches!(run.path(&["0", "0", "5"]), Some(E::Dict(_))), "{run:?}");
+    }
+    let mut on_path = layer("AV", &[(2, Kerning::Metrics, 0.0)]);
+    on_path.shape = photocraft_doc::text::TextShape::Path {
+        path: photocraft_doc::vector::Subpath::polygon(&[(0.0, 0.0), (100.0, 0.0), (100.0, 50.0)]),
+        start: 0.0,
+        flip: false,
+    };
+    assert!(photocraft_text::psd::needs_txt2(&[(0, &on_path)]), "type on a path is kept in Txt2");
 }
 
 /// Kerning that can't be represented (non-finite) and bad PSD fields never panic and stay sane.

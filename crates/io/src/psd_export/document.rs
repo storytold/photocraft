@@ -176,11 +176,9 @@ fn export_supported_document(
         (!text_layers.is_empty() && !ex.regen_text).then(|| preserved.iter().find(|(_, key, _)| key == b"Txt2").map(|(_, _, data)| data.to_vec())).flatten();
     // A fresh document of ordinary (Metrics) text has nothing to put in `Txt2`, and Photoshop never
     // writes its empty `<< /0 << >> >>` stub — readers such as Photopea reject it (#3514). Keep the
-    // block only when the file had one and its type is unchanged (round-trip its pen positions and
-    // extras). A `Txt2` written here, e.g. for Optical kerning (the one mode EngineData can't carry;
-    // #1348) or stylistic sets and other Txt2-only OpenType settings (#10308), makes Photoshop 27
-    // refuse the file ("general Photoshop error"), so those are not saved until a `Txt2` Photoshop
-    // accepts can be written.
+    // file's block when its type is unchanged (round-trip its pen positions and extras); otherwise
+    // write a native one when a layer needs it: Optical kerning, the one mode EngineData can't
+    // carry (#1348), Txt2-only OpenType settings (#10308), or type on a path (#7962).
     let txt2 = saved_txt2(&text_layers, previous.as_deref(), &mut ex);
     for (sig, key, data) in preserved {
         // With no type layers left the opened file's `Txt2` describes text that is gone (fonts and
@@ -400,16 +398,14 @@ fn merged_image(doc: &Document, opts: &PsdExportOptions, ctl: &Interrupt, fmt: &
     (planes, has_alpha)
 }
 
-/// The `Txt2` block to write: the file's own, when it is kept (see `index_layer_ids_and_text`),
-/// else none, with a warning when a layer loses what only `Txt2` carries.
+/// The `Txt2` block to write: the file's own, when it is kept (see `index_layer_ids_and_text`);
+/// else a PhotoCraft-native one when a layer needs it (Optical kerning, Txt2-only OpenType
+/// settings, type on a path); else none.
 fn saved_txt2(text_layers: &[(i32, &photocraft_doc::TextLayer)], previous: Option<&[u8]>, ex: &mut Ex<'_>) -> Option<Vec<u8>> {
-    if previous.is_none() && photocraft_text::psd::needs_txt2(text_layers) {
-        ex.warnings.push(
-            "Optical kerning is saved as Metrics, and stylistic sets and other Txt2-only OpenType settings are not saved: Photoshop does not open a Txt2 block written by PhotoCraft"
-                .into(),
-        );
+    match previous {
+        Some(prev) => Some(photocraft_text::psd::build_txt2_at(text_layers, Some(prev), ex.dpi)),
+        None => photocraft_text::psd::needs_txt2(text_layers).then(|| photocraft_text::psd::build_txt2_at(text_layers, None, ex.dpi)),
     }
-    previous.map(|prev| photocraft_text::psd::build_txt2_at(text_layers, Some(prev), ex.dpi))
 }
 
 fn index_layer_ids_and_text(doc: &Document, ex: &mut Ex<'_>) {
@@ -486,21 +482,21 @@ fn index_layer_ids_and_text(doc: &Document, ex: &mut Ex<'_>) {
                 .collect();
             let mixed = text_layers.iter().any(|(_, t)| t.psd_raw.as_deref().is_some_and(|d| !d.windows(15).any(|w| w == b"SuperscriptSize")));
             ex.regen_text = !text_layers.is_empty() && (mixed || photocraft_text::psd::build_txt2_at(&text_layers, Some(prev), ex.dpi) != prev[..]);
-            // Every type layer is rewritten, the untouched ones too: say what that costs.
+            // Every type layer is rewritten, the untouched ones too: numbered afresh for the native
+            // block written in place of the file's (no empty slots for objects that are gone), and
+            // the export says what that costs.
             if ex.regen_text {
-                let on_path: Vec<&str> = walk
-                    .iter()
-                    .filter(|(_, _, l)| matches!(&l.content, LayerContent::Text(t) if matches!(t.shape, photocraft_doc::text::TextShape::Path { .. })))
-                    .map(|(_, _, l)| l.name.as_str())
-                    .collect();
-                let mut w = format!(
-                    "all {} type layers, unedited ones included, are written without the file's Txt2 block (Photoshop can't open the file with it): what only that block held, such as Photoshop's glyph positions and type on a path, is not kept",
-                    text_layers.len()
-                );
-                if !on_path.is_empty() {
-                    w.push_str(&format!("; type on a path reopens as point text in \"{}\"", on_path.join("\", \"")));
+                let mut next = 0;
+                for (_, _, l) in &walk {
+                    if matches!(l.content, LayerContent::Text(_)) {
+                        ex.text_index.insert(l.id, next);
+                        next += 1;
+                    }
                 }
-                ex.warnings.push(w);
+                ex.warnings.push(format!(
+                    "all {} type layers, unedited ones included, are written without the file's Txt2 block (Photoshop can't open the file with it): what only that block held, such as Photoshop's glyph positions, is not kept",
+                    text_layers.len()
+                ));
             }
         }
     }
