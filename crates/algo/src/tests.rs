@@ -66,6 +66,21 @@ fn radius_filter_admission_counts_no_more_workers_than_tiles() {
     assert_eq!(working_bytes(&one, small, small, 4), single);
 }
 
+/// Every radius filter but Shape Blur keeps three tile-sized float buffers per worker beside its
+/// source window (output plus intermediate passes), and no Shape Blur terms (#11493).
+#[test]
+fn radius_filter_admission_counts_three_tile_buffers() {
+    let area = Rect::new(0, 0, 6000, 4000);
+    let blur = FilterParams::GaussianBlur { radius: 10.0 };
+    let Halo::Radius(reach) = blur.halo_for(area) else { panic!("Gaussian Blur has a radius halo") };
+    let tile = auto_tile(&blur, area) as u64;
+    let tiles = 6000u64.div_ceil(tile) * 4000u64.div_ceil(tile);
+    let workers = (rayon::current_num_threads().max(1) as u64).min(tiles);
+    let window = tile + 2 * reach as u64;
+    let windows = (area.size().area() * 16).min(RESULT_BUDGET as u64) * 3 + (window * window + 3 * tile * tile) * 16 * workers;
+    assert_eq!(working_bytes(&blur, area, area, 4), windows);
+}
+
 /// Issue #11493: Shape Blur radius 500 on 6000 x 4000 peaked at 5.37 GB on a 32-thread machine
 /// (24 workers, one per tile). Each worker holds its f32 source window, its f32 output tile and
 /// its f64 prefix sums (plus one f64 row): the admission counts exactly that, so the estimate
