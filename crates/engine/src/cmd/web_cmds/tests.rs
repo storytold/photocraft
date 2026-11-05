@@ -1376,6 +1376,19 @@ fn save_for_web_writes_a_gif_of_a_frame_animation_as_an_animation() {
     assert_eq!(gif_frames(&format!("{dir}/still.gif")).len(), 1);
 }
 
+/// A recorded Save for Web gives a folder, not a file: a frame animation is as animated there as at a path.
+#[test]
+fn save_for_web_to_a_folder_writes_a_frame_animation_as_an_animation() {
+    let dir = tmp("animated_folder");
+    let mut s = session(8);
+    s.execute("animation.makeFramesFromLayers", json!({"delayMs": 100})).unwrap();
+    s.execute("animation.setDelay", json!({"delayMs": 400, "frames": [1]})).unwrap();
+    let r = s.execute("file.export.saveForWebLegacy", json!({"format": "gif", "colors": 16, "folder": dir})).unwrap();
+    let path = r["files"][0].as_str().unwrap();
+    assert_eq!(gif_frames(path), [10, 40], "every frame, each with its delay");
+    assert_eq!(r["bytes"].as_u64(), Some(std::fs::metadata(path).unwrap().len()));
+}
+
 #[test]
 fn quick_export_exr_preserves_linear_hdr_and_alpha() {
     use photocraft_codecs::{ChannelLayout, Format, Image, SampleType};

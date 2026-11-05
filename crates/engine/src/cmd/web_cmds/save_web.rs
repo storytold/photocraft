@@ -227,7 +227,11 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
         );
     }
     if let Some(folder) = folder {
-        let o = optimize(&buf.px, bw, wdoc.bounds(), &st, icc, exif, xmp.as_deref(), dpi, false)?;
+        let o = if animates(&wdoc, &st) {
+            animated_gif(&wdoc, wdoc.bounds(), &st)?
+        } else {
+            optimize(&buf.px, bw, wdoc.bounds(), &st, icc, exif, xmp.as_deref(), dpi, false)?
+        };
         let name = format!("{}.{}", portable_generated_stem(slices::base_name(&doc)), o.ext);
         write(&web_derived_path(folder, &name, native_paths)?, &o.bytes)?;
         remember_web_settings(s, cmd, &last_web);
