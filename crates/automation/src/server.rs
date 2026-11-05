@@ -350,7 +350,8 @@ pub struct MenuParams {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct UiSetParams {
-    /// Fields for the control method `ui.set`: tool, panels, dock, dockTabs, dockWidth, colorPanel
+    /// Fields for the control method `ui.set`: tool, moveShowTransform (bool, the Move tool's
+    /// Show Transform Controls option), panels, dock, dockTabs, dockWidth, colorPanel
     /// ({background: bool} picks which swatch the Color panel edits), infoPanel ({readouts:
     /// [...]}, the Info panel's readouts: actualColor, grayscale, rgb, web, hsb, hsl, cmyk, lab,
     /// totalInk, totalSpotInk, opacity, spotChannels, alphaChannels), maskTarget,

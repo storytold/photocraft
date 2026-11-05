@@ -3289,6 +3289,8 @@ curves	Smooth	Lisser
 	Step {step} is waiting for its dialog	L’étape {step} attend sa boîte de dialogue
 @plural	{n} action|{n} actions	{n} action|{n} actions
 	Background (Default)	Arrière-plan (par défaut)
+	Background (default)	Arrière-plan (par défaut)
+	Transparent (default)	Transparent (par défaut)
 	Content-Aware Fill	Remplissage d'après le contenu
 	Include All Subfolders	Inclure tous les sous-dossiers
 	Auto Add/Delete	Ajout/suppr. auto
@@ -4564,6 +4566,18 @@ shape	Appearance	Apparence
 	Info Panel Options	Options du panneau Informations
 	Readouts	Lectures
 	Total Spot Ink	Encrage total des tons directs
+
+# Action Stop message (#8386)
+	Message	Message
+# Playback Options (#5212)
+	Playback Options…	Options d'exécution…
+	Playback Options	Options d'exécution
+	Accelerated	Accélérée
+	Step by Step	Pas à pas
+	Pause For:	Pause de :
+	Pause For	Pause de
+	seconds	secondes
+	Create a single history state	Créer un seul état d'historique
 	Generator enabled	Générateur activé
 	Move Up	Déplacer vers le haut
 	Move Down	Déplacer vers le bas
