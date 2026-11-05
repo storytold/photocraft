@@ -2120,10 +2120,10 @@ fn bulk_load_reply_cannot_replace_a_suspended_recording() {
         let dialog = pause_child(&mut app);
         let before = app.session.actions.clone();
         let fields = app.ui.dialog_mut(dialog).unwrap().fields.clone();
-        let record = app.paused_playbacks.paused.values().next().unwrap().record.clone();
+        let lease = app.session.actions.held_playback;
         let journal = app.session.journal.clone();
         let panel = app.ui.actions.clone();
-        assert!(before.recording.is_none() && record.is_some());
+        assert!(before.recording.is_none() && lease.is_some());
         waiting
             .borrow_mut()
             .take()
@@ -2140,7 +2140,8 @@ fn bulk_load_reply_cannot_replace_a_suspended_recording() {
         assert_eq!(app.session.journal, journal);
         assert_eq!(app.ui.dialog_mut(dialog).unwrap().fields, fields);
         assert_eq!(app.paused_playbacks.paused.len(), 1);
-        assert_eq!(app.paused_playbacks.paused.values().next().unwrap().record, record);
+        assert_eq!(app.session.actions.held_playback, lease);
+        app.paused_playbacks.paused.values().next().unwrap().record.as_ref().unwrap().validate(&app.session).unwrap();
 
         if confirm {
             crate::dialogs::confirm(&mut app, dialog).unwrap();
