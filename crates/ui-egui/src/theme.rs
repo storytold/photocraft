@@ -214,6 +214,23 @@ pub struct Tokens {
 }
 
 impl Tokens {
+    /// Subtle lift for dialog titles, derived from the active chrome palette.
+    pub(crate) fn dialog_header(&self) -> Color32 {
+        self.chrome.lerp_to_gamma(Color32::WHITE, 0.04)
+    }
+
+    /// Raised modal rim: a soft top highlight and cool-grey sides/bottom.
+    pub(crate) fn dialog_border(&self) -> [Color32; 2] {
+        // Cool-grey #3D4248 in Pro, adapted to the active theme's chrome elsewhere.
+        let rim = self.chrome.lerp_to_gamma(Color32::from_rgb(105, 130, 160), 0.2);
+        [self.dialog_header().lerp_to_gamma(Color32::WHITE, 0.14), rim]
+    }
+
+    /// Broad, low-opacity modal shadow without a dense band below the frame.
+    pub(crate) fn dialog_shadow(&self) -> egui::Shadow {
+        egui::Shadow { offset: [0, 6], blur: 40, spread: 0, color: self.shadow.gamma_multiply(0.65) }
+    }
+
     /// Tool outlines need contrast on arbitrary document pixels, independently of UI theme.
     pub(crate) fn cursor_outline() -> [Color32; 2] {
         [Color32::from_black_alpha(160), Color32::from_white_alpha(235)]
