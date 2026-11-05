@@ -995,3 +995,34 @@ fn gradient_map_stop_picker_closed_without_a_colour_changes_nothing() {
         assert!(h.state().live_adjust.is_none());
     }
 }
+
+/// Selective Color in Properties: the Colors dropdown's choice lives in editor memory, so
+/// switching colour commits nothing, and each colour keeps its own row.
+#[test]
+fn selective_color_properties_switch_colour_without_committing() {
+    let mut h = app_harness("selectiveColor", "rgb", 8);
+    let (id, before) = layer(&h);
+    let steps = h.state().session.active().unwrap().history.past_len();
+    let nudge = |h: &mut Harness<'static, PhotocraftApp>| {
+        let r = label_rect(h, "Cyan").expect("Cyan label");
+        let y = r.bottom() + 14.0;
+        drag(h, Pos2::new(r.left() + 40.0, y), Pos2::new(r.left() + 120.0, y));
+    };
+    nudge(&mut h);
+    let (_, reds) = layer(&h);
+    assert_ne!(reds, before);
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1);
+    // Switch to Blues.
+    h.ctx.data_mut(|d| d.insert_temp(egui::Id::unique(("adjust-layer", id.0)).with("selc-range"), 4usize));
+    h.run_steps(4);
+    assert_eq!(layer(&h).1, reds, "switching colour changes nothing");
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1);
+    assert!(h.state().live_adjust.is_none());
+    nudge(&mut h);
+    let (Adjustment::SelectiveColor { adjustments: first, .. }, (_, Adjustment::SelectiveColor { adjustments: now, .. })) = (&reds, layer(&h)) else {
+        panic!("Selective Color layer")
+    };
+    assert_eq!(now[0], first[0], "Reds untouched by editing Blues");
+    assert_ne!(now[4], [0.0; 4], "Blues edited");
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 2);
+}

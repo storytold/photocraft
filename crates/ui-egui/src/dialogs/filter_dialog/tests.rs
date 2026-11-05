@@ -905,20 +905,6 @@ fn notes_after_a_spec_are_not_parameters() {
     }
 }
 
-#[test]
-fn selective_color_dialog_ok_applies() {
-    // With the junk `reds: 0` the dialog's OK failed (`reds` must be an array of 4 numbers).
-    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-    app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
-    let id = open(&mut app, "image.adjustments.selectiveColor").unwrap();
-    let fields = app.ui.dialogs.last().unwrap().fields.clone();
-    assert!(fields.keys().all(|k| k.starts_with("__") || k.chars().all(|ch| ch.is_ascii_alphanumeric())), "{fields:?}");
-    assert!(!fields.contains_key("reds"), "the per-range arrays are not dialog fields");
-    app.ui.dialog_mut(id).unwrap().fields.insert("black".into(), json!(40.0));
-    crate::dialogs::confirm(&mut app, id).unwrap();
-    assert_eq!(app.session.journal.last().map(|j| j.0.as_str()), Some("image.adjustments.selectiveColor"));
-}
-
 /// A filtered test image with structure at every scale (low-frequency waves plus a ramp).
 fn waves(n: u32) -> Document {
     let mut doc = Document::with_background(
