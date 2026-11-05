@@ -1,17 +1,27 @@
 use super::content::{render_content, surface_to_buffer};
 use super::ctx::Ctx;
-use super::*;
+use super::{BlendMode, Document, Layer, LayerContent, Rect, advanced, bounds, effects, masks, shape_split};
 
 /// Bounds of a layer's own pixels (union over group children; the canvas
 /// for fill layers; an artboard's board).
 pub fn layer_bounds(layer: &Layer, canvas: Rect) -> Rect {
+    if let Some(f) = &layer.frame {
+        // Empty placeholders are shell overlays, so they must not schedule a full frame-sized
+        // mask/composite on either renderer (particularly on 24+ MP documents).
+        if layer.children().is_some_and(|c| c.is_empty()) && f.stroke.as_ref().is_none_or(|s| s.width <= 0.0 || s.opacity <= 0.0) {
+            return Rect::EMPTY;
+        }
+        let b = f.bounds();
+        let n = f.stroke.as_ref().map_or(0, |s| s.width.ceil() as i32);
+        return Rect::new(b.x0.saturating_sub(n), b.y0.saturating_sub(n), b.x1.saturating_add(n), b.y1.saturating_add(n));
+    }
     // Transparency Shapes Layer off: effects and knockout cover the whole layer (the canvas).
     if advanced::shapeless(layer) {
         return canvas;
     }
     match &layer.content {
         LayerContent::Group(g) if g.artboard.is_some() => g.artboard.as_ref().map_or(Rect::EMPTY, |a| a.rect),
-        LayerContent::Group(g) => g.children.iter().filter(|c| c.visible).fold(Rect::EMPTY, |acc, c| {
+        LayerContent::Group(g) => g.children.iter().filter(|c| c.visible).fold(frame_stroke_bounds(layer, canvas), |acc, c| {
             let b = layer_bounds(c, canvas);
             if b.is_empty() {
                 acc
@@ -47,23 +57,39 @@ pub fn layer_bounds(layer: &Layer, canvas: Rect) -> Rect {
     }
 }
 
+/// Where a Photoshop Frame's stroke ([`shape_split::frame_shape`]) draws, within `canvas`; empty
+/// for other layers. Taken from the compiled stroke the renderer draws, not the path grown by the
+/// stroke width: a mitered corner reaches up to `miter_limit` widths past the path, and a frame
+/// has no pixels of its own that would cover it.
+fn frame_stroke_bounds(layer: &Layer, canvas: Rect) -> Rect {
+    shape_split::frame_shape(layer)
+        .and_then(|sh| photocraft_vector::CompiledShape::new(&sh, photocraft_vector::DEFAULT_TOLERANCE, canvas).bounds())
+        .map_or(Rect::EMPTY, |r| r.intersect(&canvas))
+}
+
 /// Where a layer's effects take their shape from: [`layer_bounds`], except that a group's
 /// children count with their own effects (a child's outside stroke shapes the group's drop
 /// shadow and must not be cut off at the child's pixels, #3274).
 pub fn effect_source_bounds(layer: &Layer, canvas: Rect) -> Rect {
+    if layer.frame.is_some() {
+        return layer_bounds(layer, canvas);
+    }
     match &layer.content {
-        LayerContent::Group(g) if g.artboard.is_none() && !advanced::shapeless(layer) => g.children.iter().filter(|c| c.visible).fold(Rect::EMPTY, |acc, c| {
-            let m = if effects::has_effects(c) { effects::margin(c) } else { 0 };
-            let b = effect_source_bounds(c, canvas);
-            let b = if b.is_empty() { b } else { b.inflate(m) };
-            if b.is_empty() {
-                acc
-            } else if acc.is_empty() {
-                b
-            } else {
-                acc.union(&b)
-            }
-        }),
+        // A Frame's stroke is part of the group's content its effects are built from.
+        LayerContent::Group(g) if g.artboard.is_none() && !advanced::shapeless(layer) => {
+            g.children.iter().filter(|c| c.visible).fold(frame_stroke_bounds(layer, canvas), |acc, c| {
+                let m = if effects::has_effects(c) { effects::margin(c) } else { 0 };
+                let b = effect_source_bounds(c, canvas);
+                let b = if b.is_empty() { b } else { b.inflate(m) };
+                if b.is_empty() {
+                    acc
+                } else if acc.is_empty() {
+                    b
+                } else {
+                    acc.union(&b)
+                }
+            })
+        }
         _ => layer_bounds(layer, canvas),
     }
 }
@@ -121,6 +147,7 @@ pub(crate) fn effect_shape(layer: &Layer, rect: Rect, cx: &Ctx) -> Vec<f32> {
             out[i] = v * mask_k(&mv, i);
         }
     }
+    recycle_mask(mv);
     out
 }
 
@@ -270,13 +297,13 @@ pub(crate) fn mask_vals(layer: &Layer, rect: Rect, cx: &Ctx) -> Option<Vec<f32>>
     if masks::has_feather(layer)
         && let Some(s) = masks::combined_mask(layer, cx.canvas)
     {
-        let mut v = Vec::new();
+        let mut v = photocraft_raster::scratch::take_cap(rect.width() as usize * rect.height() as usize);
         s.read_region_into(rect, &mut v);
         return Some(v);
     }
     let vector = layer.vector_mask.as_ref().map(|vm| cx.vector_masks.values(vm, rect));
     let Some(m) = layer.mask.as_ref() else { return vector };
-    let mut v = Vec::new();
+    let mut v = photocraft_raster::scratch::take_cap(rect.width() as usize * rect.height() as usize);
     m.values_into(rect, &mut v);
     if let Some(vm) = vector {
         for (a, b) in v.iter_mut().zip(vm) {
@@ -284,6 +311,13 @@ pub(crate) fn mask_vals(layer: &Layer, rect: Rect, cx: &Ctx) -> Option<Vec<f32>>
         }
     }
     Some(v)
+}
+
+/// Hand a [`mask_vals`] result back to the scratch pool once its tile is done.
+pub(crate) fn recycle_mask(m: Option<Vec<f32>>) {
+    if let Some(v) = m {
+        photocraft_raster::scratch::give(v);
+    }
 }
 
 #[inline]
@@ -338,12 +372,16 @@ pub(crate) fn shapeless_stroke_bounds(layer: &Layer) -> Option<Rect> {
 /// Adjustment layers count as empty: they only change pixels already there (which is what an
 /// isolated group needs; see [`change_bounds`] for the document-level question).
 pub fn composite_bounds(layer: &Layer, canvas: Rect) -> Option<Rect> {
+    if layer.frame.is_some() {
+        let bounds = layer_bounds(layer, canvas);
+        return Some(if bounds.is_empty() { bounds } else { bounds.inflate(effects::margin(layer)).intersect(&canvas) });
+    }
     if !transparent_outside(layer) {
         return None;
     }
     let own = match &layer.content {
         LayerContent::Group(g) if g.artboard.is_none() => {
-            let mut acc = Rect::EMPTY;
+            let mut acc = frame_stroke_bounds(layer, canvas);
             for c in g.children.iter().filter(|c| c.visible) {
                 let b = composite_bounds(c, canvas)?;
                 if !b.is_empty() {

@@ -1,10 +1,10 @@
-use super::*;
+use super::{Outcome, PhotocraftApp, Value, json};
 
 /// The fields `ui.set` reads. Anything else is rejected before a field is applied, and every
 /// field's value is validated before the first one is applied, so a typo, an unknown field, a
 /// bad value or a bad nested key can't reply with success while nothing — or only half of it —
 /// changed (#412).
-pub const UI_SET_FIELDS: [&str; 43] = [
+pub const UI_SET_FIELDS: [&str; 49] = [
     "updatesOpen",
     "tool",
     "strokeTrace",
@@ -41,8 +41,14 @@ pub const UI_SET_FIELDS: [&str; 43] = [
     "cropOverlayOrientation",
     "cropShield",
     "cropFill",
+    "penMode",
+    "penPathOp",
     "shapeStroke",
+    "frameShape",
+    "frameSides",
+    "frameTarget",
     "camTransformOnDrop",
+    "moveShowTransform",
     "tileGrid",
     "layerFilter",
     "histogramPanel",

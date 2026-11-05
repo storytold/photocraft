@@ -60,7 +60,7 @@ fn selection_sampling_refuses_oversized_canvases_before_reading_pixels() {
         None,
     );
     for all_layers in [false, true] {
-        assert!(sample_pixels(&s, all_layers).unwrap_err().to_string().contains("too large to sample"));
+        assert!(sample_pixels(&s, all_layers, None).unwrap_err().to_string().contains("too large to sample"));
     }
     assert!(!s.active().unwrap().history.can_undo());
 }
@@ -275,7 +275,7 @@ fn color_range_prepared_query_samples_visible_layers_not_the_active_layer() {
         clear_selection(&mut s);
         let p = json!({"points": [[7, 7]], "sampleAllLayers": all_layers, "fuzziness": 0});
         let query = ColorRangeSamples::new(&s, &p).unwrap();
-        let (area, px) = sample_pixels(&s, all_layers).unwrap();
+        let (area, px) = sample_pixels(&s, all_layers, None).unwrap();
         let shown = query.coverage(&px, area.width() as usize, 1.0, [0.0, 0.0]);
         s.execute("select.colorRange", p).unwrap();
         assert_eq!(shown[7 * 40 + 7], coverage(&s, 7, 7));
@@ -639,6 +639,39 @@ fn grow_and_similar() {
     s.execute("select.similar", json!({"tolerance": 5})).unwrap();
     assert_eq!(coverage(&s, 30, 10), 1.0);
     assert_eq!(coverage(&s, 20, 20), 0.0);
+}
+
+#[test]
+fn grow_and_similar_multi_color_does_not_select_intermediate_hull() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 40, "height": 30})).unwrap();
+    s.edit("paint", |doc, _| {
+        let bg = doc.layers[0].surface_mut().unwrap();
+        bg.fill_rect(Rect::new(5, 5, 15, 15), &[1.0, 0.0, 0.0, 1.0]);
+        bg.fill_rect(Rect::new(25, 5, 35, 15), &[0.0, 0.0, 1.0, 1.0]);
+        bg.fill_rect(Rect::new(5, 18, 15, 28), &[0.0, 0.0, 0.0, 1.0]);
+        bg.fill_rect(Rect::new(25, 18, 35, 28), &[0.5, 0.0, 0.5, 1.0]);
+        Ok(())
+    })
+    .unwrap();
+
+    // Select a patch of Red and a patch of Blue
+    s.execute("select.rect", json!({"x": 6, "y": 6, "width": 2, "height": 2})).unwrap();
+    s.execute("select.rect", json!({"x": 26, "y": 6, "width": 2, "height": 2, "mode": "add"})).unwrap();
+
+    // Similar should select the remaining Red and Blue, but NOT Black or Purple
+    s.execute("select.similar", json!({"tolerance": 5})).unwrap();
+    assert_eq!(coverage(&s, 10, 10), 1.0, "red rect should be selected");
+    assert_eq!(coverage(&s, 30, 10), 1.0, "blue rect should be selected");
+    assert_eq!(coverage(&s, 10, 22), 0.0, "black rect must not be selected");
+    assert_eq!(coverage(&s, 30, 22), 0.0, "purple rect must not be selected");
+
+    // Grow from just the Red patch should not reach disconnected Blue
+    s.execute("select.deselect", json!({})).unwrap();
+    s.execute("select.rect", json!({"x": 6, "y": 6, "width": 2, "height": 2})).unwrap();
+    s.execute("select.grow", json!({"tolerance": 5})).unwrap();
+    assert_eq!(coverage(&s, 10, 10), 1.0, "contiguous red rect should be grown");
+    assert_eq!(coverage(&s, 30, 10), 0.0, "disconnected blue rect must not be grown");
 }
 
 #[test]
