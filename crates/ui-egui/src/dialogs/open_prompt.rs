@@ -373,6 +373,7 @@ pub fn answer_animated(app: &mut PhotocraftApp, choice: &str, remember: bool) ->
         }
     }
     advance(app);
+    crate::jobs_ui::end_batch(app);
     match failed.first() {
         Some((0, e)) => Err(e.clone()),
         _ => Ok(json!({"choice": choice.name(), "remembered": remember})),

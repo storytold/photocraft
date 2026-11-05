@@ -132,6 +132,26 @@ fn a_remembered_answer_covers_the_files_already_waiting() {
     assert_eq!(docs.iter().map(|d| (d.doc.name.as_str(), d.doc.layers.len())).collect::<Vec<_>>(), [("a.gif", 1), ("b.gif", 1)]);
 }
 
+/// A set is forgotten once its last file has answered the prompt and opened, as it is after the
+/// profile prompt's answer.
+#[test]
+fn answering_the_prompt_forgets_the_finished_set() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("a.gif");
+    std::fs::write(&path, gif(2)).unwrap();
+    for background in [false, true] {
+        let mut h = harness(background);
+        h.state_mut().open_paths(&[path.to_string_lossy().into_owned()]);
+        settle(&mut h);
+        assert!(prompt(&h).is_some(), "the file waits on its prompt");
+        assert_eq!(h.state().jobs.batches.len(), 1, "the set is kept while its file waits");
+        click(&mut h, "First frame only");
+        click(&mut h, "OK");
+        assert_eq!(shape(&h), (1, None, None));
+        assert!(h.state().jobs.batches.is_empty(), "background {background}");
+    }
+}
+
 #[test]
 fn cancel_opens_nothing_and_still_images_never_ask() {
     let mut h = harness(true);
