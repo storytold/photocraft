@@ -73,6 +73,20 @@ pub struct PlaceParams {
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct ReplaceSmartObjectParams {
+    /// Path beneath the configured automation read root: relative (forward slashes) or absolute.
+    pub path: String,
+    /// Headless mode only: document index from `session_list` (default: the active document).
+    /// Bridge mode rejects `index`.
+    #[serde(default)]
+    pub index: Option<usize>,
+    /// The Smart Object layer: an id or a name (default: the active layer).
+    #[serde(default)]
+    pub layer: Option<Value>,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ExportLayersParams {
     /// Directory beneath the configured automation write root: relative (forward slashes) or absolute.
     pub dir: String,
@@ -315,7 +329,7 @@ pub struct MenuParams {
 pub struct UiSetParams {
     /// Fields for the control method `ui.set`: tool, panels, dock, dockTabs, dockWidth, colorPanel
     /// ({background: bool} picks which swatch the Color panel edits), maskTarget,
-    /// vectorMaskTarget, selectionMode, zoom, center, rotation (view angle in degrees), fit, theme (pro, proMedium, studio,
+    /// vectorMaskTarget, filterMaskTarget (paint the active smart object's filter mask), selectionMode, zoom, center, rotation (view angle in degrees), fit, theme (pro, proMedium, studio,
     /// studioLight, classic, solarizedDark, adwaita, adwaitaDark, breezeLight, breezeDark, softLight, softDark), brushSection, brushTab,
     /// brushesView, brushPicker ([x, y] opens the Brush Preset picker there, null closes it),
     /// brushPickerName, brushPickerStroke, brushPickerTip (the picker card's parts, at least one
@@ -328,7 +342,9 @@ pub struct UiSetParams {
     /// cropOverlayOrientation (0..3), cropShield (an object patching show_cropped_area, enabled,
     /// color ("matchCanvas" or "custom"), custom_color ([r, g, b]), opacity (0..100),
     /// auto_adjust, classic_mode and auto_center_preview), cropFill (background or contentAware,
-    /// the Crop tool's Fill), shapeStroke (an object patching width, align, cap, join, miterLimit,
+    /// the Crop tool's Fill), penMode (path or shape, the Pen tools' mode), penPathOp (newLayer,
+    /// combine, subtract, intersect or exclude: how the next Pen path joins the selected shape
+    /// layer or path), shapeStroke (an object patching width, align, cap, join, miterLimit,
     /// dashes, dashOffset and opacity; null disables the stroke). Shape stroke fields use
     /// `shape.edit` names and units; colour comes from `tools.setColors`. camTransformOnDrop (bool,
     /// the Content-Aware Move tool's Transform On Drop). tileGrid (bool, a developer overlay of the
@@ -336,7 +352,14 @@ pub struct UiSetParams {
     /// "mode"), kinds (a list of layer kinds), name (matches part of the layer name) and mode (a
     /// blend mode name) for the Layers panel filter). strokeTrace (true, false, "stderr" or "off":
     /// the stroke latency trace at runtime; a CSV file is set at launch with --stroke-trace, not
-    /// over this channel). Other fields are an error.
+    /// over this channel). updatesOpen (bool, the Help › Check for Updates window).
+    /// histogramPanel (an object patching view ("compact", "expanded" or "allChannels"), channel
+    /// ("composite", "red", "green", "blue", "cyan", "magenta", "yellow", "black", "a", "b",
+    /// "luminosity" or "colors"), showChannelsInColor, showStatistics and source ("entireImage",
+    /// "selectedLayer" or "adjustmentComposite") for the Histogram panel), histogramRange ([from,
+    /// to] levels 0..255 whose Count and Percentile the panel shows, or null) and histogramRefresh
+    /// (true: an Uncached Refresh); `ui.inspect` reports them and the statistics under
+    /// `histogram`. Other fields are an error.
     pub fields: Value,
 }
 
@@ -642,6 +665,32 @@ impl PhotocraftMcp {
             return to_result(r);
         }
         self.run_command("file.placeEmbedded".into(), bridge_params, true).await
+    }
+
+    #[tool(
+        description = "Replace a Smart Object's contents with the file at `path` beneath the read root, keeping its transform and filters (the capability-scoped Replace Contents). `layer` is the Smart Object's id or name (default: the active layer)."
+    )]
+    async fn doc_replace_smart_object(&self, Parameters(p): Parameters<ReplaceSmartObjectParams>) -> Result<CallToolResult, McpError> {
+        let mut opts = serde_json::Map::new();
+        if let Some(v) = p.layer {
+            opts.insert("layer".into(), v);
+        }
+        let opts = Value::Object(opts);
+        // Bridge mode runs the app on this machine, which reads the path itself like any command.
+        let mut bridge_params = opts.clone();
+        if let Some(o) = bridge_params.as_object_mut() {
+            o.insert("path".into(), Value::String(p.path.clone()));
+        }
+        let (path, index) = (p.path, p.index);
+        if let Some(r) = self.headless_op(move |h| h.replace_smart_object(index, &path, &opts)).await {
+            return to_result(r);
+        }
+        // The app's command runs on its active document: an `index` it cannot honour is refused
+        // rather than dropped, or another document's contents would be replaced.
+        if index.is_some() {
+            return Ok(fail("`index` is only supported in headless mode; in bridge mode select the document in the app first"));
+        }
+        self.run_command("layer.smartObjects.replaceContents".into(), bridge_params, true).await
     }
 
     #[tool(

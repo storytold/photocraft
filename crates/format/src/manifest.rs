@@ -259,6 +259,9 @@ pub enum ContentM {
         /// Artboard (Layer › New › Artboard).
         #[serde(default)]
         artboard: Option<photocraft_doc::Artboard>,
+        /// A Photoshop Frame's stroke, drawn along the group's vector mask.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        frame_stroke: Option<ShapeStroke>,
     },
     Adjustment {
         adjustment: Adjustment,
@@ -309,6 +312,8 @@ pub enum ContentM {
         #[serde(default)]
         contents_id: Option<u64>,
         source: SmartSourceM,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        vector_preview: Option<VectorPreviewM>,
         transform: Affine,
         smart_filters: Vec<SmartFilter>,
         cache: Option<SurfaceM>,
@@ -325,6 +330,13 @@ pub enum ContentM {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         perspective: Option<[f64; 9]>,
     },
+}
+
+/// The native source remains separate from this optional display-only SVG blob.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VectorPreviewM {
+    pub source_hash: [u8; 32],
+    pub svg: Hash,
 }
 
 fn full_density() -> f32 {

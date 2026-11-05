@@ -414,7 +414,7 @@ pub(crate) fn import(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<Im
     }
     let xml = zip.read_by_name("stack.xml", MAX_STACK_XML).map_err(|e| invalid(e.to_string()))?;
     let xml = std::str::from_utf8(&xml).map_err(|_| invalid("stack.xml is not UTF-8"))?;
-    let tree = roxmltree::Document::parse(xml).map_err(|e| invalid(format!("stack.xml: {e}")))?;
+    let tree = crate::xml::parse(xml, roxmltree::ParsingOptions::default()).map_err(|e| invalid(format!("stack.xml: {e}")))?;
     let image = tree.root_element();
     if image.tag_name().name() != "image" {
         return Err(invalid("stack.xml has no <image> root"));
@@ -520,6 +520,20 @@ fn png(w: u32, h: u32, px: &[[f32; 4]], sample: CSample) -> Result<Vec<u8>> {
 
 /// `px` (row-major over `rect`) cut down to the pixels that aren't fully transparent, with
 /// transparent pixels zeroed, so masked-out or empty margins aren't written.
+/// Most bytes of straight RGBA floats one layer may take while it is written. A layer is one PNG
+/// of its content's bounding box, so a few pixels far apart make a box of mostly nothing; refuse
+/// that rather than allocate it. 1.5 × [`MAX_ENTRY`] of floats is at most 8 B/px × a third of that
+/// raw, so the PNG stays within what [`Reader::png`] will read back.
+const MAX_EXPORT_LAYER_BYTES: u64 = 3 * MAX_ENTRY as u64 / 2;
+
+fn admit_layer(rect: Rect) -> Result<()> {
+    let bytes = u64::from(rect.width()).saturating_mul(u64::from(rect.height())).saturating_mul(std::mem::size_of::<[f32; 4]>() as u64);
+    if bytes > MAX_EXPORT_LAYER_BYTES {
+        return Err(IoError::Unsupported(format!("a {}×{} layer is too large to save to OpenRaster", rect.width(), rect.height())));
+    }
+    Ok(())
+}
+
 fn crop(rect: Rect, mut px: Vec<[f32; 4]>) -> (Rect, Vec<[f32; 4]>) {
     let w = rect.width() as usize;
     if w == 0 {
@@ -609,11 +623,12 @@ impl Writer<'_> {
     }
 
     /// The layer's own pixels (straight RGBA floats) and their bounds; its pixel mask applied.
-    fn pixels(&mut self, layer: &Layer) -> (Rect, Vec<[f32; 4]>) {
+    fn pixels(&mut self, layer: &Layer) -> Result<(Rect, Vec<[f32; 4]>)> {
         let canvas = self.doc.bounds();
         let (rect, mut buf) = match &layer.content {
             LayerContent::Raster(s) => {
                 let r = s.content_bounds();
+                admit_layer(r)?;
                 (r, photocraft_compose::surface_to_buffer(s, r).px)
             }
             _ => {
@@ -627,6 +642,7 @@ impl Writer<'_> {
                 solo.mask = None;
                 solo.effects = Default::default();
                 let r = photocraft_compose::composite_bounds(&solo, canvas).unwrap_or(canvas).intersect(&canvas);
+                admit_layer(r)?;
                 (r, photocraft_compose::render_layer(&solo, r).px)
             }
         };
@@ -642,7 +658,7 @@ impl Writer<'_> {
                 p[3] *= layer.fill_opacity.clamp(0.0, 1.0);
             }
         }
-        crop(rect, buf)
+        Ok(crop(rect, buf))
     }
 
     fn layers(&mut self, layers: &[Layer], depth: usize) -> Result<()> {
@@ -671,7 +687,7 @@ impl Writer<'_> {
                     if self.dry {
                         continue;
                     }
-                    let (rect, px) = self.pixels(layer);
+                    let (rect, px) = self.pixels(layer)?;
                     let (rect, px) = if rect.is_empty() { (Rect::from_xywh(0, 0, 1, 1), vec![[0.0; 4]]) } else { (rect, px) };
                     let src = format!("data/layer{}.png", self.next);
                     self.next += 1;

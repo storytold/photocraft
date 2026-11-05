@@ -18,6 +18,7 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod art_history;
 mod artistic;
 mod artistic_fx;
 mod blur;
@@ -25,6 +26,7 @@ mod blur2;
 pub mod camera_raw;
 pub mod color_to_alpha;
 pub mod content_aware;
+mod cutout;
 mod denoise;
 pub mod dff;
 pub mod direct;
@@ -71,6 +73,7 @@ pub mod seam;
 pub mod segment;
 pub mod selection;
 mod selection_blur;
+pub mod separable;
 mod shape_blur;
 mod sharpen;
 pub mod stack;
@@ -86,6 +89,7 @@ pub mod warp;
 pub mod wideangle;
 
 pub use artistic::{GALLERY_CATEGORIES, GalleryEffect, GalleryFilter, GalleryParam, GalleryParamKind};
+pub use distort::MAX_WAVE_GENERATORS;
 pub use image::{Edge, Image};
 pub use params_ext::*;
 
@@ -562,6 +566,9 @@ impl FilterParams {
     pub fn halo(&self) -> Halo {
         let g = |sigma: f32| Halo::Radius(((sigma.max(0.0) * 3.0).ceil() as i32).saturating_add(1));
         match self {
+            // Small Gaussian radii use the calibrated seven-tap kernel as well: its reach is
+            // three pixels even when ceil(3 * radius) + 1 would be smaller.
+            FilterParams::GaussianBlur { radius } | FilterParams::HighPass { radius } if (0.05..1.0).contains(radius) => Halo::Radius(3),
             FilterParams::GaussianBlur { radius } | FilterParams::HighPass { radius } => g(*radius),
             FilterParams::UnsharpMask { radius, .. } => Halo::Radius(sharpen::exact::halo(*radius)),
             FilterParams::SmartSharpen { radius, .. } => g(*radius),
@@ -728,6 +735,7 @@ fn halo_ext(p: &FilterParams) -> Halo {
         FilterParams::PathBlur { paths } => r(paths.iter().map(|p| p.speed.abs()).fold(0.0, f32::max) / 2.0 + 1.0),
         FilterParams::Custom { .. } => r(2.0),
         FilterParams::DeInterlace { .. } => r(1.0),
+        FilterParams::FilterGallery { effects } if artistic_fx::is_global(effects) => Halo::Bounds,
         FilterParams::FilterGallery { effects } => Halo::Radius(artistic_fx::reach(effects)),
         _ => Halo::Radius(0),
     }
@@ -1118,6 +1126,14 @@ fn apply_tiled_with_impl(
         }
     }
     let shared = (halo == Halo::Bounds).then(|| Image::read(surface, bounds.union(&area)));
+    // A Filter Gallery stack with a Cutout traces the whole image once; tiles only fill it in.
+    let gallery = match (params, &shared) {
+        (FilterParams::FilterGallery { effects }, Some(src)) => artistic_fx::Prepared::new(effects, src, &ctx),
+        _ => None,
+    };
+    if ctl.cancelled() {
+        return None;
+    }
     // Shape rasterization depends only on params, not on a tile's pixels.
     let shape = match params {
         FilterParams::ShapeBlur { radius, shape } => {
@@ -1141,16 +1157,43 @@ fn apply_tiled_with_impl(
     // Tiles finished so far, for progress reported per tile (from any worker thread).
     let finished = std::sync::atomic::AtomicUsize::new(0);
     let total = tiles.len().max(1);
-    let run = |t: &Rect| -> (Rect, Vec<f32>) {
+    enum TileData {
+        Samples(Vec<f32>),
+        Encoded(Vec<u8>),
+    }
+    // Cell filters become writeback-bound once their geometry is reused. Encode
+    // on the tile workers; committing the group then only copies native bytes.
+    let finish = |data: Vec<f32>| {
+        if matches!(params, FilterParams::Crystallize { .. } | FilterParams::Pointillize { .. })
+            && let Some(bytes) = pixelate::cells::encode(fmt, &data)
+        {
+            TileData::Encoded(bytes)
+        } else {
+            TileData::Samples(data)
+        }
+    };
+    let run = |t: &Rect| -> (Rect, TileData) {
         // Cancelled: skip the remaining tiles of the group (the result is discarded).
         if ctl.cancelled() {
-            return (*t, Vec::new());
+            return (*t, TileData::Samples(Vec::new()));
         }
         let tick = || {
             let n = finished.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
             // The last few percent are the writes after each group.
             ctl.progress(0.98 * n as f32 / total as f32);
         };
+        let sparse = match *params {
+            FilterParams::Crystallize { cell_size, seed } => pixelate::cells::tile(surface, *t, &ctx, cell_size, seed, None, extent),
+            FilterParams::Pointillize { cell_size, seed, background } => pixelate::cells::tile(surface, *t, &ctx, cell_size, seed, Some(background), extent),
+            _ => None,
+        };
+        if let Some((src, mut data)) = sparse {
+            if let Some(sel) = selection {
+                mix_selection(&mut data, *t, sel, &src, fmt.alpha);
+            }
+            tick();
+            return (*t, finish(data));
+        }
         let owned;
         let src = match (&shared, halo) {
             (Some(s), _) => s,
@@ -1168,6 +1211,7 @@ fn apply_tiled_with_impl(
             }
         };
         let Some(mut data) = (match (&shape, &radial) {
+            _ if gallery.is_some() => gallery.as_ref().map(|g| g.run(src, *t, &ctx)),
             (Some(shape), _) => shape.checked_run(src, *t, &ctx),
             (None, Some(plan)) => match plan.filter(src, *t, &ctx, ctl) {
                 Some(data) => Some(data),
@@ -1179,13 +1223,13 @@ fn apply_tiled_with_impl(
                 _ => Some(kernel(params, src, *t, &ctx)),
             },
         }) else {
-            return (*t, Vec::new());
+            return (*t, TileData::Samples(Vec::new()));
         };
         if let Some(sel) = selection {
             mix_selection(&mut data, *t, sel, src, fmt.alpha);
         }
         tick();
-        (*t, data)
+        (*t, finish(data))
     };
     // Tiles are filtered in groups of about RESULT_BUDGET bytes (at least one per core) and each
     // group is written before the next starts, so a huge layer never holds all its results as
@@ -1201,24 +1245,33 @@ fn apply_tiled_with_impl(
             return None;
         }
         #[cfg(not(target_arch = "wasm32"))]
-        let results: Vec<(Rect, Vec<f32>)> = {
+        let results: Vec<(Rect, TileData)> = {
             use rayon::prelude::*;
             chunk.par_iter().map(run).collect()
         };
         #[cfg(target_arch = "wasm32")]
-        let results: Vec<(Rect, Vec<f32>)> = chunk.iter().map(run).collect();
+        let results: Vec<(Rect, TileData)> = chunk.iter().map(run).collect();
         if ctl.cancelled() {
             return None;
         }
         // Checked filters can reject malformed geometry or an allocation failure.
         // Do not hand an incomplete tile to Surface::write_region.
         if (shape.is_some() || matches!(params, FilterParams::UnsharpMask { .. }))
-            && results.iter().any(|(t, data)| data.len() != t.width() as usize * t.height() as usize * fmt.channels())
+            && results.iter().any(|(t, data)| {
+                let pixels = t.width() as usize * t.height() as usize;
+                match data {
+                    TileData::Samples(v) => v.len() != pixels * fmt.channels(),
+                    TileData::Encoded(v) => v.len() != pixels * fmt.bytes_per_pixel(),
+                }
+            })
         {
             return None;
         }
         for (t, data) in results {
-            out.write_region(t, &data);
+            match data {
+                TileData::Samples(data) => out.write_region(t, &data),
+                TileData::Encoded(data) => out.write_interleaved(t, &data),
+            }
         }
     }
     out.prune();
@@ -1337,15 +1390,6 @@ const RESULT_BUDGET: usize = 256 << 20;
 
 #[cfg(test)]
 mod tests;
-#[cfg(test)]
-mod tests_ext;
-
-#[cfg(test)]
-mod tests_mosaic;
-
-#[cfg(test)]
-mod tests_selection_mix;
-
 /// The current upstream sampler through the identical source/selection/tile pipeline.
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)]

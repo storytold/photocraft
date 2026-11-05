@@ -12,6 +12,46 @@ use photocraft_raster::Rgba8Image;
 const MODES: [ColorMode; 4] = [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab];
 
 #[test]
+fn gradient_overlay_interpolation_roundtrips_in_native_documents() {
+    use photocraft_doc::effects::GradientInterpolation;
+    use photocraft_doc::{Color, Effect, FxCommon, Gradient};
+
+    for mode in MODES {
+        for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+            let mut doc = rich_doc(mode, depth);
+            let source = GradientInterpolation {
+                method: "smooth".into(),
+                smoothness: 73.0,
+                stops: vec![(0.0, Color::rgb(0.123456, 0.4, 0.9)), (0.4, Color::WHITE), (1.0, Color::BLACK)],
+            };
+            let effect = Effect::GradientOverlay {
+                common: FxCommon::new(photocraft_doc::BlendMode::Normal, 1.0),
+                gradient: Gradient::default(),
+                dither: true,
+                interpolation: Some(source),
+            }
+            .in_mode(mode);
+            doc.layers.first_mut().unwrap().effects.items.push(effect);
+            let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+            assert_eq!(load_from_bytes(&bytes).unwrap(), doc);
+        }
+    }
+}
+
+#[test]
+fn old_effect_snapshots_need_no_interpolation_record() {
+    let effect = photocraft_doc::Effect::GradientOverlay {
+        common: photocraft_doc::FxCommon::new(photocraft_doc::BlendMode::Normal, 1.0),
+        gradient: photocraft_doc::Gradient::default(),
+        dither: false,
+        interpolation: None,
+    };
+    let json = serde_json::to_value(&effect).unwrap();
+    assert!(json["GradientOverlay"].get("interpolation").is_none());
+    assert_eq!(serde_json::from_value::<photocraft_doc::Effect>(json).unwrap(), effect);
+}
+
+#[test]
 fn custom_shape_stroke_roundtrip_keeps_every_style_field() {
     for mode in MODES {
         for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
@@ -240,10 +280,11 @@ fn text_run_baseline_roundtrips() {
 fn zip_incremental_only_new_tiles() {
     let mut doc = rich_doc(ColorMode::Rgb, SampleType::U16);
     let mut w = PcraftWriter::new();
-    let (_, s1) = w.save_zip(&doc, &SaveOptions::default()).unwrap();
+    let (first, s1) = w.save_zip(&doc, &SaveOptions::default()).unwrap();
     assert!(s1.tiles_total > 5);
     assert_eq!(s1.tiles_written, s1.tiles_total);
-    let (_, s2) = w.save_zip(&doc, &SaveOptions::default()).unwrap();
+    let (cached, s2) = w.save_zip(&doc, &SaveOptions::default()).unwrap();
+    assert_eq!(first, cached);
     assert_eq!(s2.tiles_written, 0);
     assert_eq!(s2.tiles_reused, s2.tiles_total);
     assert_eq!(s2.blobs_written, 0);
@@ -253,6 +294,7 @@ fn zip_incremental_only_new_tiles() {
     let (bytes, s3) = w.save_zip(&doc, &SaveOptions::default()).unwrap();
     assert_eq!(s3.tiles_written, 1);
     assert_eq!(load_from_bytes(&bytes).unwrap(), doc);
+    assert_eq!(bytes, PcraftWriter::new().save_zip(&doc, &SaveOptions::default()).unwrap().0);
 }
 
 #[test]
@@ -599,6 +641,32 @@ fn path_text_shape_roundtrips() {
     assert_eq!(shape, Some(TextShape::Path { path, start: 12.5, flip: true }));
 }
 
+/// Area type (#218): the whole path, ops and fill rule included, survives .pcraft.
+#[test]
+fn area_text_shape_roundtrips() {
+    use photocraft_doc::text::TextShape;
+    use photocraft_doc::vector::{FillRule, Path, PathOp, Subpath};
+    let mut doc = rich_doc(ColorMode::Rgb, SampleType::U8);
+    let mut path = Path::new(vec![
+        Subpath::polygon(&[(0.0, 0.0), (200.0, 0.0), (200.0, 120.0), (0.0, 120.0)]),
+        Subpath::polygon(&[(80.0, 40.0), (120.0, 40.0), (120.0, 80.0)]).with_op(PathOp::Subtract),
+    ]);
+    path.fill_rule = FillRule::EvenOdd;
+    let ids: Vec<LayerId> = doc.walk().into_iter().filter(|(_, _, l)| matches!(l.content, LayerContent::Text(_))).map(|(_, _, l)| l.id).collect();
+    assert!(!ids.is_empty());
+    for id in ids {
+        if let Some(LayerContent::Text(t)) = doc.layer_mut(id).map(|l| &mut l.content) {
+            t.shape = TextShape::Area { path: path.clone() };
+        }
+    }
+    let back = load_from_bytes(&save_to_bytes(&doc, &SaveOptions::default()).unwrap()).unwrap();
+    let shape = back.walk().into_iter().find_map(|(_, _, l)| match &l.content {
+        LayerContent::Text(t) => Some(t.shape.clone()),
+        _ => None,
+    });
+    assert_eq!(shape, Some(TextShape::Area { path }));
+}
+
 #[test]
 fn channel_restrictions_and_bevel_elements_roundtrip() {
     use photocraft_doc::{Bevel, BevelContour, BevelTexture, Contour, Effect};
@@ -816,6 +884,25 @@ fn variables_follow_layer_id_remapping() {
     assert_eq!(defs.iter().find(|d| d.name == "badge").unwrap().layer, id_of(&back, "Inner"));
     let gone = defs.iter().find(|d| d.name == "gone").unwrap().layer;
     assert!(back.walk().into_iter().all(|(_, _, l)| l.id != gone), "dangling target must not address a live layer");
+}
+
+#[test]
+fn color_lookup_lut_file_round_trips_and_old_files_load() {
+    use photocraft_doc::Adjustment;
+    use photocraft_doc::adjust::{LutFormat, LutSource};
+    let lut = Some(std::sync::Arc::new(vec![0.5f32; 24]));
+    let source = Some(LutSource { format: LutFormat::ThreeDl, bytes: std::sync::Arc::new(b"0 1023\n0 0 0\n".to_vec()) });
+    let adj = Adjustment::ColorLookup { name: "Film.3dl".into(), lut, size: 2, tetrahedral: false, dither: false, source };
+    let mut doc = Document::new("d", photocraft_doc::Size::new(4, 4), ColorMode::Rgb, SampleType::U8);
+    doc.insert_above(None, Layer::new("lookup", LayerContent::Adjustment(adj.clone())));
+    let back = load_from_bytes(&save_to_bytes(&doc, &SaveOptions::default()).unwrap()).unwrap();
+    assert_eq!(back, doc, "the LUT file survives a .pcraft round trip (#6544)");
+    // A .pcraft written before the field existed has no `source`: it loads as None.
+    let mut v = serde_json::to_value(&adj).unwrap();
+    let removed = v.as_object_mut().and_then(|o| o.values_mut().next()).and_then(|f| f.as_object_mut()).and_then(|f| f.remove("source"));
+    assert!(removed.is_some(), "{v}");
+    let Adjustment::ColorLookup { source: None, name, .. } = serde_json::from_value(v).unwrap() else { panic!("old lookup must load") };
+    assert_eq!(name, "Film.3dl");
 }
 
 /// Removing previews is post-commit housekeeping, not part of publishing the new document.
