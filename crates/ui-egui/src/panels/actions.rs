@@ -1395,11 +1395,16 @@ pub(crate) fn validate_editor(app: &PhotocraftApp, dialog: u64, fields: &serde_j
     Ok(())
 }
 
-/// Record Again and the canonical frame both retain their preview authority and document.
-pub(crate) fn authorize_preview(app: &PhotocraftApp, dialog: u64, command: &str, params: &Value) -> Result<(), String> {
+/// Authorize a live preview or a confirmed edit using the owning dialog's fields.
+pub(crate) fn authorize_dialog_edit(
+    app: &PhotocraftApp,
+    dialog: u64,
+    fields: &serde_json::Map<String, Value>,
+    command: &str,
+    params: &Value,
+) -> Result<(), String> {
     record_again::authorize_preview(app, dialog, command, params)?;
     if let Some(paused) = app.paused_playbacks.paused.values().find(|paused| paused.dialog == dialog) {
-        let fields = &app.ui.dialogs.iter().find(|value| value.id == dialog).ok_or("the action step dialog closed")?.fields;
         validate_editor(app, dialog, fields)?;
         if fields.get("__command").and_then(Value::as_str) != Some(command) {
             return Err("the paused action preview command changed".into());
@@ -1421,7 +1426,7 @@ pub(crate) fn run_dialog_command(
 ) -> Result<Value, String> {
     with_step_gate(app, fields, Some(dialog), |app| {
         validate_editor(app, dialog, fields)?;
-        authorize_preview(app, dialog, command, &params)?;
+        authorize_dialog_edit(app, dialog, fields, command, &params)?;
         run_step_dialog(app, fields, command, params)
     })
 }

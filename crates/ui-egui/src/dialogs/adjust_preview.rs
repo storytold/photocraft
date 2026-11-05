@@ -192,7 +192,7 @@ fn dialog(app: &PhotocraftApp) -> Option<(String, Value, bool)> {
     let kind = d.fields.get("__adjust")?.as_str()?.to_string();
     let preview = d.fields.get("__preview").and_then(Value::as_bool).unwrap_or(true);
     let params = crate::filter_dialog::params_of(&d.fields);
-    crate::actions::authorize_preview(app, d.id, &format!("image.adjustments.{kind}"), &params).ok()?;
+    crate::actions::authorize_dialog_edit(app, d.id, &d.fields, &format!("image.adjustments.{kind}"), &params).ok()?;
     Some((kind, params, preview))
 }
 
