@@ -4788,3 +4788,124 @@ cameraRaw	White Balance: As Shot	Valkotasapaino: kuvauksen mukainen
 	Pause For	Tauko
 	seconds	sekuntia
 	Create a single history state	Luo yksi historiatila
+# 2026-11-03: SVG Smart Objects, gradient stop colour, preferences (AI-assisted, not separately native-reviewed)
+	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	Virheellinen lukuarvo. Anna kokonaisluku väliltä {min}–{max} %. Edellinen arvo palautettiin.
+	Memory usage percent	Muistin käyttöprosentti
+	Save Full-Size Composite in .pcraft Files	Tallenna täysikokoinen yhdistelmäkuva .pcraft-tiedostoihin
+smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded source; format-specific features may change.	AI-, PDF- ja EPS-sisältöä muokataan SVG:nä. Tallennus korvaa upotetun lähteen; tiedostomuodon omat ominaisuudet voivat muuttua.
+	Recently Used Colors	Viimeksi käytetyt värit
+	Stop Color	Liukuvärin pisteen väri
+	Shapes can't use patterns yet	Muodot eivät vielä voi käyttää kuvioita
+	Drag to move the selected path	Siirrä valittua polkua vetämällä
+	Select Layer Under Cursor	Valitse osoittimen alla oleva taso
+smartSvg	Edit SVG Smart Object	Muokkaa älykästä SVG-objektia
+smartSvg	Choose the application used to edit this SVG:	Valitse sovellus, jolla tätä SVG:tä muokataan:
+smartSvg	Other application	Muu sovellus
+smartSvg	PhotoCraft (internal editor)	PhotoCraft (sisäinen editori)
+smartSvg	Choose executable…	Valitse ohjelmatiedosto…
+smartSvg	Save to the opened SVG file. Each saved change becomes one undo step in PhotoCraft.	Tallenna avattuun SVG-tiedostoon. Jokaisesta tallennetusta muutoksesta tulee PhotoCraftissa yksi kumottava vaihe.
+smartSvg	Updates wait while another document or an editing dialog is active.	Päivitykset odottavat, kun toinen asiakirja tai muokkausikkuna on aktiivinen.
+smartSvg	Stop syncing this Smart Object	Lopeta tämän älykkään objektin synkronointi
+smartSvg	SVG editor opened. Save the SVG to update this Smart Object.	SVG-editori avattu. Päivitä tämä älykäs objekti tallentamalla SVG.
+	Answer the open import question first, then import this file again.	Vastaa ensin avoinna olevaan tuontikysymykseen ja tuo sitten tämä tiedosto uudelleen.
+	Arrowhead options	Nuolenkärjen asetukset
+	Arrowheads	Nuolenkärjet
+	Concavity	Koveruus
+	End	Loppu
+	Start	Alku
+	Set as default	Aseta oletukseksi
+	Use these settings for new arrows	Käytä näitä asetuksia uusissa nuolissa
+	High Memory Photoshop Document	Paljon muistia vaativa Photoshop-asiakirja
+	Opening this document uses more memory and may slow down your computer or other running applications.	Tämän asiakirjan avaaminen vie paljon muistia ja voi hidastaa tietokonetta tai muita käynnissä olevia sovelluksia.
+	Opening “{name}” requires an estimated {est} GiB of memory ({avail} GiB available).	Tiedoston ”{name}” avaaminen vaatii arviolta {est} GiB muistia (käytettävissä {avail} GiB).
+	Opening “{name}” requires an estimated {est} GiB of memory. The available memory could not be measured.	Tiedoston ”{name}” avaaminen vaatii arviolta {est} GiB muistia. Käytettävissä olevaa muistia ei voitu mitata.
+	Open anyway	Avaa silti
+	Image Compression	Kuvan pakkaus
+	LZW	LZW
+	ZIP	ZIP
+	Save Image Pyramid	Tallenna kuvapyramidi
+	Save Transparency	Tallenna läpinäkyvyys
+	Import as New Group	Tuo uutena ryhmänä
+	Import as New Group keeps “{group}” and adds the file as a new group beside it.	Tuo uutena ryhmänä säilyttää ryhmän ”{group}” ja lisää tiedoston uutena ryhmänä sen rinnalle.
+	No import is waiting. Import the file again.	Mikään tuonti ei ole odottamassa. Tuo tiedosto uudelleen.
+	Replace deletes everything in “{group}” first, including presets you edited or moved there. This can't be undone.	Korvaa poistaa ensin kaiken ryhmästä ”{group}”, myös sinne muokkaamasi tai siirtämäsi esiasetukset. Tätä ei voi kumota.
+	{message} into “{group}”	{message} ryhmään ”{group}”
+@plural	The brush group “{group}” already has {n} brush of yours.|The brush group “{group}” already has {n} brushes of yours.	Sivellinryhmässä ”{group}” on jo {n} oma siveltimesi.|Sivellinryhmässä ”{group}” on jo {n} omaa sivellintäsi.
+@plural	The gradient group “{group}” already exists ({n} gradient).|The gradient group “{group}” already exists ({n} gradients).	Liukuväriryhmä ”{group}” on jo olemassa ({n} liukuväri).|Liukuväriryhmä ”{group}” on jo olemassa ({n} liukuväriä).
+	No matching fonts	Ei vastaavia fontteja
+	Numerals	Numerot
+	Lining	Versaalinumerot
+	Proportional	Suhteelliset
+	Proportional Lining	Suhteelliset versaalinumerot
+	Proportional Oldstyle	Suhteelliset tekstinumerot
+	Tabular	Tasalevyiset
+	Tabular Lining	Tasalevyiset versaalinumerot
+	Tabular Oldstyle	Tasalevyiset tekstinumerot
+	A command was cancelled or stopped during batch processing. Continue with the next file or stop?	Komento peruutettiin tai pysäytettiin eräajon aikana. Jatketaanko seuraavaan tiedostoon vai lopetetaanko?
+	Batch preview	Eräajon esikatselu
+	Data Sets as Files is unavailable on the web	Tietojoukot tiedostoiksi ei ole käytettävissä verkkoversiossa
+	Effect	Tehoste
+	Filter for embedded smart objects	Suodata upotetut älykkäät objektit
+	Filter for linked smart objects that are missing	Suodata puuttuvat linkitetyt älykkäät objektit
+	Filter for smart objects linked locally	Suodata paikallisesti linkitetyt älykkäät objektit
+	{ok} written to {dir}	{ok} kirjoitettu kansioon {dir}
+@plural	{what}: {n} Image Assets output failed|{what}: {n} Image Assets outputs failed	{what}: {n} kuvaresurssin tuottaminen epäonnistui|{what}: {n} kuvaresurssin tuottaminen epäonnistui
+# 2026-11-05: frames, History Brush source, start screen (AI-assisted, not separately native-reviewed)
+	A frame supports affine transforms; select its image for perspective transforms	Kehys tukee affiineja muunnoksia; valitse sen kuva perspektiivimuunnoksia varten
+	A frame supports affine transforms; select its image to warp it	Kehys tukee affiineja muunnoksia; valitse sen kuva taivuttaaksesi sitä
+	Convert to Frame…	Muunna kehykseksi…
+	Create a new custom frame	Luo uusi mukautettu kehys
+	Create a new polygonal frame	Luo uusi monikulmiokehys
+	Create a new triangular frame	Luo uusi kolmiokehys
+	Fit Content to Frame	Sovita sisältö kehykseen
+	Fit Frame to Content	Sovita kehys sisältöön
+	Frame coordinates must be finite and within 600000 pixels	Kehyksen koordinaattien on oltava äärellisiä ja enintään 600000 pikselin päässä
+	Import Image…	Tuo kuva…
+	Invalid frame transform	Virheellinen kehyksen muunnos
+	Invalid nested file drop	Virheellinen sisäkkäinen tiedoston pudotus
+	New Frame	Uusi kehys
+	Replace Image…	Korvaa kuva…
+	The frame is locked	Kehys on lukittu
+	The frame is unavailable	Kehys ei ole käytettävissä
+	Source: {name}	Lähde: {name}
+	The History Brush source was deleted: set a new source in the History panel	Historiasiveltimen lähde poistettiin: aseta uusi lähde Historia-paneelissa
+	On your computer	Tietokoneellasi
+	New file	Uusi tiedosto
+	Learn	Opi
+	Website	Verkkosivusto
+# Layers panel filter by attribute, OpenType stylistic sets
+	Attribute	Ominaisuus
+	Empty	Tyhjä
+	Linked	Linkitetty
+	Layer Effects	Tasotehosteet
+	Not Visible	Ei näkyvissä
+	Not Locked	Ei lukittu
+	Not Empty	Ei tyhjä
+	Not Linked	Ei linkitetty
+	Not Clipped	Ei leikattu
+	No Layer Mask	Ei tasomaskia
+	No Vector Mask	Ei vektorimaskia
+	No Layer Effects	Ei tasotehosteita
+	No Adv. Blending	Ei sekoit. lisäas.
+	Stylistic Sets	Tyylisarjat
+	Set 	Sarja 
+	Set 1	Sarja 1
+	Set 2	Sarja 2
+	Set 3	Sarja 3
+	Set 4	Sarja 4
+	Set 5	Sarja 5
+	Set 6	Sarja 6
+	Set 7	Sarja 7
+	Set 8	Sarja 8
+	Set 9	Sarja 9
+	Set 10	Sarja 10
+	Set 11	Sarja 11
+	Set 12	Sarja 12
+	Set 13	Sarja 13
+	Set 14	Sarja 14
+	Set 15	Sarja 15
+	Set 16	Sarja 16
+	Set 17	Sarja 17
+	Set 18	Sarja 18
+	Set 19	Sarja 19
+	Set 20	Sarja 20
