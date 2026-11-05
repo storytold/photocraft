@@ -1,6 +1,6 @@
-use super::planes::{color_count, edit_mode, luminosity, read_plane};
+use super::planes::{color_count, edit_mode, luminosity, read_plane, tone};
 use super::view::{color_names, composite_name};
-use super::*;
+use super::{BlendMode, Document, EngineError, LayerContent, LayerId, Result, Session, Value, blend_channel, from_rgba, sel, to_rgba};
 
 // ---------------------------------------------------------------------------------------------
 // Channel references
@@ -20,12 +20,22 @@ pub enum ChanRef {
     VectorMask,
 }
 
+/// Resolve channel references; a color-name object cannot fall back to a named alpha channel.
 pub fn parse_ref(v: &Value, doc: &Document) -> Option<ChanRef> {
     let mode = edit_mode(doc);
     match v {
         Value::Number(n) => n.as_u64().map(|i| ChanRef::Alpha(i as usize)),
         Value::Object(o) => {
-            if let Some(k) = o.get("color").and_then(Value::as_u64) {
+            if o.len() == 1
+                && let Some(name) = o.get("name").and_then(Value::as_str)
+            {
+                return doc.channels.iter().position(|c| c.name == name).map(ChanRef::Alpha);
+            }
+            if let Some(name) = o.get("color").and_then(Value::as_str) {
+                let names = color_names(mode);
+                let k = names.iter().position(|n| n.eq_ignore_ascii_case(name))?;
+                Some(if names.len() == 1 { ChanRef::Composite } else { ChanRef::Color(k) })
+            } else if let Some(k) = o.get("color").and_then(Value::as_u64) {
                 Some(ChanRef::Color(k as usize))
             } else {
                 o.get("alpha").and_then(Value::as_u64).map(|i| ChanRef::Alpha(i as usize))
@@ -86,7 +96,15 @@ pub(super) fn native_pixels(doc: &Document, layer: Option<LayerId>) -> Result<(V
     match layer {
         Some(id) => {
             let l = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
-            let s = l.surface().ok_or_else(|| EngineError::Other(format!("layer \"{}\" has no pixels", l.name)))?;
+            let s = match l.surface() {
+                Some(s) => s,
+                None => {
+                    if let LayerContent::Shape(shape) = &l.content {
+                        return Ok((photocraft_vector::render_shape(shape, fmt, r).read_region(r), n));
+                    }
+                    return Err(EngineError::Other(format!("layer \"{}\" has no pixels", l.name)));
+                }
+            };
             if s.format() == fmt {
                 return Ok((s.read_region(r), n));
             }
@@ -102,19 +120,29 @@ pub(super) fn native_pixels(doc: &Document, layer: Option<LayerId>) -> Result<(V
 }
 
 /// `"layer"` param of a source: a layer id, a layer name (the topmost of that name, as a loaded
-/// Photoshop action refers to it), or `"merged"` (default). An unknown name is an error.
+/// Photoshop action refers to it), `{"name":"merged"}` for a literal name, `{"background":true}`,
+/// or `"merged"` (default).
+/// An unknown name or a missing requested Background is an error.
 fn source_layer(doc: &Document, p: &Value, cmd: &str) -> Result<Option<LayerId>> {
-    match p.get("layer") {
-        Some(Value::Number(n)) => Ok(n.as_u64().map(LayerId)),
-        Some(Value::String(name)) if !name.is_empty() && name != "merged" => doc
-            .walk()
-            .into_iter()
-            .rev()
-            .find(|(_, _, l)| l.name == *name)
-            .map(|(_, _, l)| Some(l.id))
-            .ok_or_else(|| bad(cmd, format!("no source layer named \"{name}\""))),
-        _ => Ok(None),
-    }
+    let name = match p.get("layer") {
+        Some(Value::Number(n)) => return Ok(n.as_u64().map(LayerId)),
+        Some(v) if *v == serde_json::json!({"background": true}) => {
+            return doc.background().map(|l| Some(l.id)).ok_or_else(|| bad(cmd, "the source document has no Background layer"));
+        }
+        Some(Value::Object(selector)) => selector
+            .get("name")
+            .filter(|_| selector.len() == 1)
+            .and_then(Value::as_str)
+            .ok_or_else(|| bad(cmd, "a source layer selector must be {\"background\":true} or {\"name\":\"layer name\"}"))?,
+        Some(Value::String(name)) if !name.is_empty() && name != "merged" => name,
+        _ => return Ok(None),
+    };
+    doc.walk()
+        .into_iter()
+        .rev()
+        .find(|(_, _, l)| l.name == name)
+        .map(|(_, _, l)| Some(l.id))
+        .ok_or_else(|| bad(cmd, format!("no source layer named \"{name}\"")))
 }
 
 /// Planes of channel `r` from document `doc` (`layer` = None: merged). A composite gives one
@@ -127,11 +155,19 @@ fn ref_planes(doc: &Document, layer: Option<LayerId>, active: Option<LayerId>, r
             let (px, n) = native_pixels(doc, layer)?;
             let planes: Vec<Vec<f32>> = (0..colors).map(|c| px.chunks_exact(n).map(|p| p[c]).collect()).collect();
             match r {
-                ChanRef::Color(k) => vec![planes.get(k).cloned().ok_or_else(|| EngineError::Other(format!("no colour channel {k}")))?],
+                ChanRef::Color(k) => {
+                    let plane = planes.get(k).ok_or_else(|| EngineError::Other(format!("no colour channel {k}")))?;
+                    vec![plane.iter().map(|&v| tone(edit_mode(doc), v)).collect()]
+                }
                 _ => planes,
             }
         }
-        ChanRef::Alpha(i) => vec![read_plane(&doc.channels.get(i).ok_or_else(|| EngineError::Other(format!("no alpha channel {i}")))?.surface, area)],
+        ChanRef::Alpha(i) => {
+            let ch = doc.channels.get(i).ok_or_else(|| EngineError::Other(format!("no alpha channel {i}")))?;
+            let plane = read_plane(&ch.surface, area);
+            // A spot channel stores ink (1 = solid) but reads as its tone, as in Photoshop.
+            vec![if ch.spot.is_some() { plane.into_iter().map(|v| 1.0 - v).collect() } else { plane }]
+        }
         ChanRef::QuickMask => vec![read_plane(&doc.quick_mask.as_ref().ok_or_else(|| EngineError::Other("not in Quick Mask mode".into()))?.surface, area)],
         ChanRef::Selection => vec![sel::mask_from_surface(doc.selection.as_ref(), area)],
         ChanRef::Transparency => {
@@ -153,7 +189,7 @@ fn ref_planes(doc: &Document, layer: Option<LayerId>, active: Option<LayerId>, r
                             .map(|p| p[3])
                             .collect(),
                     ],
-                    // Adjustment and fill layers cover the whole canvas.
+                    // Groups, adjustment and fill layers cover the whole canvas.
                     _ => vec![vec![1.0; area.width() as usize * area.height() as usize]],
                 },
             }
@@ -208,9 +244,28 @@ pub(super) fn source(s: &Session, p: &Value, cmd: &str, gray: bool) -> Result<Ve
     if st.doc.size != target.doc.size {
         return Err(bad(cmd, format!("source document \"{}\" is {}×{}; it must match the target size", st.doc.name, st.doc.size.width, st.doc.size.height)));
     }
-    let r = p.get("channel").map_or(Some(ChanRef::Composite), |v| parse_ref(v, &st.doc)).ok_or_else(|| bad(cmd, "unknown `channel`"))?;
+    let r = if p.get("channel") == Some(&serde_json::json!({"targeted": true})) {
+        // Resolve on replay, before the calculation creates a channel. A string selector would
+        // collide with an existing alpha named "targeted".
+        match st.channel_view.target {
+            super::view::ChannelTarget::Color(k) if st.channel_view.selected_colors.len() <= 1 => ChanRef::Color(k),
+            super::view::ChannelTarget::Alpha(i) => ChanRef::Alpha(i),
+            super::view::ChannelTarget::Composite if color_count(&st.doc) == 1 => ChanRef::Composite,
+            _ => return Err(bad(cmd, "the source must target one colour or alpha channel")),
+        }
+    } else {
+        p.get("channel").map_or(Some(ChanRef::Composite), |v| parse_ref(v, &st.doc)).ok_or_else(|| bad(cmd, "unknown `channel`"))?
+    };
     let layer = source_layer(&st.doc, p, cmd)?;
-    let mut planes = if gray { vec![gray_plane(&st.doc, layer, st.active_layer, r)?] } else { ref_planes(&st.doc, layer, st.active_layer, r)? };
+    let mut planes = if r == ChanRef::Transparency && p.get("layer").is_some_and(|v| v == "merged") {
+        // An explicit merged transparency source reads all visible layers. An omitted layer
+        // retains the existing active-layer transparency behavior.
+        vec![photocraft_compose::render(&st.doc, st.doc.bounds()).px.iter().map(|p| p[3]).collect()]
+    } else if gray {
+        vec![gray_plane(&st.doc, layer, st.active_layer, r)?]
+    } else {
+        ref_planes(&st.doc, layer, st.active_layer, r)?
+    };
     // Guard every caller (`.remove(0)` / `src[0]`) against an empty source.
     if planes.is_empty() {
         return Err(bad(cmd, "the source has no channels"));
@@ -273,7 +328,11 @@ pub(crate) fn source_spec(p: &Value, key: &str, prefix: &str) -> Option<Value> {
     for (k, field) in [("document", "Document"), ("layer", "Layer"), ("channel", "Channel"), ("invert", "Invert")] {
         match p.get(format!("{prefix}{field}")) {
             None | Some(Value::Null) => {}
-            Some(Value::String(s)) if s.is_empty() || (k == "layer" && s == "merged") => {}
+            Some(Value::String(s))
+                if s.is_empty()
+                    || (k == "layer"
+                        && s == "merged"
+                        && !p.get(format!("{prefix}Channel")).and_then(Value::as_str).is_some_and(|channel| channel.eq_ignore_ascii_case("transparency"))) => {}
             Some(v) => {
                 m.insert(k.into(), v.clone());
             }

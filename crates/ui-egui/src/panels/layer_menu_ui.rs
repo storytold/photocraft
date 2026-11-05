@@ -55,15 +55,18 @@ pub fn entries(l: &Layer, multi: bool, has_selection: bool) -> Vec<Entry> {
     v.push(None);
     v.push(Some((if multi { tl!("Duplicate Layers…") } else { tl!("Duplicate Layer…") }, "layer.duplicate")));
     v.push(Some((if multi { tl!("Delete Layers") } else { tl!("Delete Layer") }, "layer.delete")));
-    if !multi {
-        v.push(Some((tl!("Group from Layers…"), "layer.groupLayers")));
-    }
+    // Groups the clicked layer, or the whole selection when several layers are selected, after
+    // Photoshop's New Group dialog.
+    v.push(Some((tl!("Group from Layers…"), "layer.new.groupFromLayers")));
     v.push(None);
     v.push(Some((tl!("Quick Export As PNG"), "layer.quickExportAsPng")));
     v.push(Some((tl!("Export As…"), "layer.exportAs")));
     v.push(None);
     v.push(Some((tl!("Artboard from Layers…"), "layer.new.artboardFromLayers")));
     v.push(Some((tl!("Frame from Layers…"), "layer.new.frameFromLayers")));
+    if !multi && matches!(l.content, LayerContent::Shape(_) | LayerContent::Text(_)) {
+        v.push(Some((tl!("Convert to Frame…"), "layer.frame.convert")));
+    }
     v.push(None);
     v.push(Some((tl!("Convert to Smart Object"), "layer.smartObjects.convertToSmartObject")));
     if multi {

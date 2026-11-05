@@ -1,4 +1,4 @@
-use super::*;
+use super::{Arc, Document, History, LayerId, LayerTarget, channel_cmds, float_cmds, history_cmds, layer_multi_cmds, symmetry_cmds};
 
 /// Per-document editing state.
 #[derive(Clone, Debug)]
@@ -56,6 +56,10 @@ pub struct DocState {
     /// The snapshot set as the History Brush's source (`history.setSource {snapshot}`); `None`:
     /// the source is a state, kept by the history ([`photocraft_ops::History::brush_source`]).
     pub(crate) source_snapshot: Option<u64>,
+    /// Names the user gave layers (Rename Layer, Duplicate Layer's Name, `type.edit`'s name): a
+    /// type layer keeps such a name although it looks like a copy's ("Title copy 2"), while a
+    /// name Duplicate Layer made still follows the text (#9023). Kept for the session only.
+    pub(crate) typed_names: std::collections::HashMap<LayerId, String>,
 }
 
 impl DocState {
@@ -67,7 +71,7 @@ impl DocState {
     }
 
     /// Pixel bytes of the document, the tiles only its history holds and the tiles only its
-    /// History panel snapshots hold.
+    /// History panel snapshots hold; embedded smart object contents count too.
     pub fn memory_bytes(&self) -> usize {
         let snaps: Vec<&Document> = self.snapshots.iter().map(|s| &*s.doc).collect();
         self.history.pixel_bytes(&self.doc).saturating_add(self.history.extra_bytes(&self.doc, &snaps))
@@ -106,6 +110,7 @@ impl DocState {
             snapshots: vec![first],
             next_snapshot: 1,
             source_snapshot: None,
+            typed_names: Default::default(),
         }
     }
     /// The selected layers in bottom-to-top document order, always including the active layer.

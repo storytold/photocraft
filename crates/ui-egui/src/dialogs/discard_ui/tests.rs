@@ -614,6 +614,9 @@ fn a_synthetic_save_press_on_the_drawn_prompt_is_refused_and_reported() {
 #[path = "tests/tiff_tests.rs"]
 mod tiff_tests;
 
+#[path = "tests/tiff_options_tests.rs"]
+mod tiff_options_tests;
+
 #[path = "tests/targa_tests.rs"]
 mod targa_tests;
 

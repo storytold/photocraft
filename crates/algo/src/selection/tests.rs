@@ -1,3 +1,95 @@
+#[test]
+fn color_matcher_bvh_and_transparency() {
+    let red = [1.0, 0.0, 0.0, 1.0];
+    let blue = [0.0, 0.0, 1.0, 1.0];
+    let matcher = ColorMatcher::new([red, blue], 10.0 / 255.0);
+    assert!(!matcher.is_empty());
+
+    assert!(matcher.matches([0.98, 0.02, 0.0, 1.0]));
+    assert!(matcher.matches([0.0, 0.02, 0.98, 1.0]));
+
+    assert!(!matcher.matches([0.0, 0.0, 0.0, 1.0]));
+    assert!(!matcher.matches([0.0, 1.0, 0.0, 1.0]));
+    assert!(!matcher.matches([1.0, 1.0, 0.0, 1.0]));
+    assert!(!matcher.matches([0.5, 0.0, 0.5, 1.0]));
+    assert!(!matcher.matches([0.0, 0.0, 0.0, 0.0]));
+
+    let matcher_trans = ColorMatcher::new([red, [0.0, 0.0, 0.0, 0.0]], 10.0 / 255.0);
+    assert!(matcher_trans.matches([0.0, 0.0, 0.0, 0.0]));
+    assert!(matcher_trans.matches([0.5, 0.2, 0.1, 0.0]));
+    assert!(matcher_trans.matches([0.98, 0.0, 0.0, 1.0]));
+    assert!(!matcher_trans.matches([0.0, 1.0, 0.0, 1.0]));
+
+    let empty = ColorMatcher::new([], 10.0 / 255.0);
+    assert!(empty.is_empty());
+    assert!(!empty.matches(red));
+
+    // Only an exactly transparent pair ignores RGB: a faint pixel is compared like any other.
+    let faint = [0.0, 0.0, 0.0, 1e-6];
+    assert!(!matcher_trans.matches([0.5, 0.2, 0.1, 1e-6]));
+    assert!(matcher_trans.matches(faint));
+    let matcher_faint = ColorMatcher::new([faint], 10.0 / 255.0);
+    assert!(matcher_faint.matches([0.0, 0.0, 0.0, 0.0]));
+    assert!(!matcher_faint.matches([0.5, 0.0, 0.0, 0.0]));
+}
+
+#[test]
+fn color_matcher_preserves_distinct_faint_32f_colors_at_zero_tolerance() {
+    let zero = [0.0, 0.0, 0.0, 0.0];
+    let faint = [0.0, 0.0, 0.0, 8e-6];
+    let matcher = ColorMatcher::new([zero, faint], 0.0);
+    assert!(matcher.matches(zero));
+    assert!(matcher.matches(faint));
+    assert!(!matcher.matches([0.0, 0.0, 0.0, 2e-5]));
+}
+
+#[test]
+fn color_matcher_coalesces_exact_repeated_colors() {
+    let red = [1.0, 0.0, 0.0, 1.0];
+    let transparent = [0.0, 0.0, 0.0, 0.0];
+    let colors = std::iter::repeat_n(red, 10_000).chain(std::iter::repeat_n(transparent, 10_000));
+    let matcher = ColorMatcher::new(colors, 0.0);
+    assert!(matcher.matches(red));
+    assert!(matcher.matches(transparent));
+    assert!(!matcher.matches([0.0, 1.0, 0.0, 1.0]));
+}
+
+#[test]
+fn color_matcher_splits_colors_that_are_all_nearly_equal() {
+    // Distinct colours a few ulps apart: no spread to split on usefully, but still no leaf past 16.
+    let mut c = 0.5f32;
+    let selected: Vec<[f32; 4]> = (0..200)
+        .map(|_| {
+            c = c.next_up();
+            [c, 0.25, 0.75, 1.0]
+        })
+        .collect();
+    let matcher = ColorMatcher::new(selected.iter().copied(), 0.0);
+    assert!(matches!(matcher.tree, ColorBvh::Node { .. }), "more than 16 colours must not share one leaf");
+    for p in &selected {
+        assert!(matcher.matches(*p));
+    }
+    assert!(!matcher.matches([0.6, 0.25, 0.75, 1.0]));
+}
+
+#[test]
+fn color_matcher_tree_matches_brute_force() {
+    // More than 16 distinct colors, so the tree has nodes and not just one leaf.
+    let selected: Vec<[f32; 4]> = (0..200)
+        .map(|i| {
+            let t = i as f32 / 199.0;
+            [t, (t * 7.0).fract(), (t * 13.0).fract(), if i % 25 == 0 { 0.0 } else { 1.0 }]
+        })
+        .collect();
+    let tol = 0.05;
+    let matcher = ColorMatcher::new(selected.iter().copied(), tol);
+    for i in 0..2000 {
+        let t = i as f32 / 1999.0;
+        let q = [(t * 3.0).fract(), (t * 5.0).fract(), (t * 11.0).fract(), if i % 7 == 0 { 0.0 } else { 1.0 }];
+        let want = selected.iter().any(|p| (q[3] == 0.0 && p[3] == 0.0) || (0..4).all(|c| (q[c] - p[c]).abs() <= tol + 1e-6));
+        assert_eq!(matcher.matches(q), want, "{q:?}");
+    }
+}
 use super::*;
 
 fn img(w: usize, h: usize, f: impl Fn(usize, usize) -> [f32; 4]) -> Vec<[f32; 4]> {
@@ -653,4 +745,37 @@ fn combine_region_matches_combine() {
         }
     }
     assert!(combine_region(None, None, SelectionMode::Subtract).is_none());
+}
+
+#[test]
+fn polygon_window_keeps_full_canvas_fractional_coverage() {
+    for canvas in [Rect::new(0, 0, 110_000, 12), Rect::new(-123, -7, 109_877, 5)] {
+        let points = [(100_003.12, -2.3), (100_043.71, 2.19), (100_032.39, 9.2), (100_001.52, 4.17)];
+        for aa in [false, true] {
+            let full = polygon(&points, canvas, aa);
+            for requested in [Rect::new(99_998, -10, 100_048, 15), Rect::new(100_010, -3, 100_030, 6), Rect::EMPTY] {
+                let area = requested.intersect(&canvas);
+                let local = polygon_window(&points, canvas, requested, aa);
+                let mut crop = Vec::new();
+                for y in area.y0..area.y1 {
+                    let start = (y - canvas.y0) as usize * canvas.width() as usize + (area.x0 - canvas.x0) as usize;
+                    crop.extend_from_slice(&full[start..start + area.width() as usize]);
+                }
+                assert_eq!(local, crop, "canvas={canvas:?}, requested={requested:?}, aa={aa}");
+            }
+        }
+    }
+}
+
+#[test]
+fn feather_leaves_everything_beyond_its_reach_at_zero() {
+    for radius in [0.05, 0.5, 2.5, 7.0, 40.0] {
+        let reach = feather_reach(radius);
+        let w = 3 * reach + 20;
+        let mut m = vec![0.0; w];
+        m[0] = 1.0;
+        let out = feather(&m, w, 1, radius);
+        assert!(out[0] > 0.0, "radius {radius}");
+        assert!(out[reach + 1..].iter().all(|v| *v == 0.0), "radius {radius}: nonzero past reach {reach}");
+    }
 }
