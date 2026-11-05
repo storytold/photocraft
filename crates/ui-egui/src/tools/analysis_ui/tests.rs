@@ -391,14 +391,16 @@ mod selected_export_923 {
             let original_state = document_state(&app);
             let original_log = app.session.analysis.log.clone();
             let original_points = app.session.analysis.data_points.clone();
-            let mut h = Harness::builder().with_size(egui::vec2(1600.0, 1100.0)).build_ui_state(
-                |ui, app| {
-                    windows(app, ui.ctx());
-                    app.poll_file_dialog(ui.ctx(), None);
-                },
-                app,
-            );
-            PhotocraftApp::setup_context(&h.ctx, Default::default());
+            let mut h = Harness::builder()
+                .with_size(egui::vec2(1600.0, 1100.0))
+                .with_context_setup(|ctx| PhotocraftApp::setup_context(ctx, Default::default()))
+                .build_ui_state(
+                    |ui, app| {
+                        windows(app, ui.ctx());
+                        app.poll_file_dialog(ui.ctx(), None);
+                    },
+                    app,
+                );
             h.run_steps(4);
             Self { h, open, attempts, output, original_doc, original_state, original_log, original_points }
         }
