@@ -149,13 +149,15 @@ mod tests {
                 *h.state_mut() = true;
                 h.run_steps(4);
                 let label = h.get_by_label(title).rect();
+                let band = h.ctx.read_response(egui::Id::unique("header-test").with("title")).unwrap().rect;
+                // The drag band stops at the close target, so recover the full header width.
+                let right = band.left() + width + 2.0 * f32::from(MARGIN);
+                assert!(label.right() <= right - f32::from(MARGIN) + 1.0, "{theme:?}: title stays inside the header at {width} pt");
                 if super::super::CLOSE_BOX {
                     let close = h.get_by_label("Close").rect();
                     assert!((close.width() - CLOSE_SIZE).abs() < 0.5, "{theme:?}: a usable close target");
                     assert!((label.center().y - close.center().y).abs() < 0.5, "{theme:?}: common center line");
                     assert!(label.right() <= close.left() - 7.0, "{theme:?}: title never overlaps close at {width} pt");
-                    let band = h.ctx.read_response(egui::Id::unique("header-test").with("title")).unwrap().rect;
-                    let right = band.left() + width + 2.0 * f32::from(MARGIN);
                     assert!((right - close.right() - (close.top() - band.top())).abs() < 1.0, "{theme:?}: equal close insets");
                     assert!((label.left() - band.left() - 42.0).abs() < 1.0, "{theme:?}: compact icon and title inset");
                 }
