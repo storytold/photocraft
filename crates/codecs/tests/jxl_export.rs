@@ -136,7 +136,9 @@ fn jpeg_xl_metadata_export_respects_embed_option() {
         pos += len;
     }
     assert_eq!(pos, encoded.len());
-    assert_eq!(exif_payload, Some([&[0u8; 4][..], input.meta.exif.as_deref().unwrap()].concat().as_slice()));
+    let mut expected_exif = vec![0u8; 4];
+    expected_exif.extend_from_slice(input.meta.exif.as_deref().unwrap());
+    assert_eq!(exif_payload, Some(expected_exif.as_slice()));
     assert_eq!(xmp_payload, Some(input.meta.xmp.as_deref().unwrap().as_bytes()));
     assert!(codestream_found);
 
