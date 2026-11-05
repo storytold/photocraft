@@ -55,9 +55,7 @@ pub struct FilterContext {
 
 impl FilterContext {
     pub fn of_app(app: &PhotocraftApp, filter: &Filter) -> Self {
-        Self::with_artboard_rows(app, filter, || {
-            app.session.active().map_or_else(HashSet::new, |state| board_rows(&state.doc, &state.selected_layers()))
-        })
+        Self::with_artboard_rows(app, filter, || app.session.active().map_or_else(HashSet::new, |state| board_rows(&state.doc, &state.selected_layers())))
     }
 
     /// Use the document and selection that the Layers panel already read for this frame.
