@@ -2362,6 +2362,72 @@ fn black_white_adjustment_layer_saves_as_photoshops_class_and_old_class_still_im
     assert_eq!(t.actions.list[0].steps[1].1["reds"], 17, "{r}");
 }
 
+/// #11517: a native Black & White coefficient may be fractional, but an ATN long cannot.
+#[test]
+fn black_white_fractional_coefficients_refuse_lossy_export() {
+    for key in ["reds", "yellows", "greens", "cyans", "blues", "magentas"] {
+        for id in ["layer.newAdjustmentLayer.blackWhite", "image.adjustments.blackWhite", "layer.setAdjustment"] {
+            let mut params = json!({key: 40.4});
+            if id == "layer.setAdjustment" {
+                params["kind"] = json!("blackWhite");
+            }
+            let action = Action::new("Fractional BW", vec![(id.into(), params.clone())]);
+            let error = export("BW", &[&action], &[], false).unwrap_err();
+            assert!(error.contains(id) && error.contains("skipUnsupported"), "{id} {key}: {error}");
+            let (bytes, skipped) = export("BW", &[&action], &[], true).unwrap();
+            assert_eq!(skipped, vec![Skipped { action: "Fractional BW".into(), step: 0, id: id.into() }]);
+            assert!(import(&bytes).unwrap().actions[0].steps.is_empty());
+            assert_eq!(action.steps[0].1, params, "export must preserve the native action");
+        }
+    }
+}
+
+#[test]
+fn black_white_whole_coefficients_and_defaults_round_trip() {
+    for id in ["layer.newAdjustmentLayer.blackWhite", "image.adjustments.blackWhite", "layer.setAdjustment"] {
+        for mut params in [
+            json!({}),
+            json!({"reds": 40.0}),
+            json!({"reds": 17, "yellows": 83, "greens": -12, "cyans": 107, "blues": 51, "magentas": 133, "tint": true, "tintColor": "#c08040"}),
+        ] {
+            if id == "layer.setAdjustment" && params == json!({}) {
+                continue;
+            }
+            if id == "layer.setAdjustment" {
+                params["kind"] = json!("blackWhite");
+            }
+            let action = Action::new("Whole BW", vec![(id.into(), params.clone())]);
+            let (bytes, skipped) = export("BW", &[&action], &[], false).unwrap();
+            assert!(skipped.is_empty());
+            let imported = import(&bytes).unwrap();
+            assert!(imported.unsupported.is_empty() && imported.warnings.is_empty());
+            let (back_id, back) = &imported.actions[0].steps[0];
+            assert_eq!(back_id, id);
+            for key in ["reds", "yellows", "greens", "cyans", "blues", "magentas"] {
+                assert_eq!(back.get(key).and_then(Value::as_f64), params.get(key).and_then(Value::as_f64), "{id} {key}: {back}");
+            }
+            for key in ["tint", "tintColor"] {
+                assert_eq!(back.get(key), params.get(key), "{id} {key}");
+            }
+        }
+    }
+}
+
+/// The reported fraction remains a real native edit at every supported document depth.
+#[test]
+fn black_white_native_fraction_keeps_its_pixels_at_every_depth() {
+    for depth in [8, 16, 32] {
+        let mut samples = Vec::new();
+        for reds in [40.4, 40.0] {
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width": 1, "height": 1, "background": "#ff0000", "depth": depth})).unwrap();
+            s.execute("layer.newAdjustmentLayer.blackWhite", json!({"reds": reds})).unwrap();
+            samples.push(photocraft_compose::flatten(&s.active().unwrap().doc).into_px());
+        }
+        assert_ne!(samples[0], samples[1], "{depth}-bit native 40.4 must differ from rounded 40");
+    }
+}
+
 /// Smart Blur's quality uses Photoshop's `SmBQ` codes (`SBQL`/`SBQM`/`SBQH`): measured in
 /// Photoshop, the old `Hgh `/`Mdm `/`Low ` play back as its fallback quality. Old codes still read.
 #[test]
