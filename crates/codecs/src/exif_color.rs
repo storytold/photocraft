@@ -56,6 +56,107 @@ pub fn exif_color_space(exif: &[u8]) -> Option<u16> {
     }
 }
 
+/// Normalize EXIF colour-space declarations for an sRGB JPEG XL codestream.
+///
+/// JXL export cannot embed an ICC profile and its default colour encoding is sRGB.
+/// Only the existing inline ColorSpace value and an existing Adobe RGB
+/// InteroperabilityIndex (R03 -> R98) are rewritten. All other EXIF bytes,
+/// including GPS, camera data and offsets, remain untouched. Unknown or
+/// malformed TIFF structures are returned unchanged.
+pub(crate) fn srgb_exif_metadata(exif: &[u8]) -> std::borrow::Cow<'_, [u8]> {
+    let body = tiff_body(exif);
+    let prefix = exif.len() - body.len();
+    let edits = (|| -> Option<Vec<(usize, Vec<u8>)>> {
+        let (order, first, count, entry_bytes, big_tiff) = ifd0_entries(body)?;
+        if big_tiff {
+            return None;
+        }
+        let ptr = find(order, body, first, count, entry_bytes, TAG_EXIF_IFD)?;
+        if !matches!(order.u16(body, ptr.checked_add(2)?)?, TYPE_LONG | TYPE_IFD)
+            || order.u32(body, ptr.checked_add(4)?)? != 1
+        {
+            return None;
+        }
+        let ifd = usize::try_from(order.u32(body, ptr.checked_add(8)?)?).ok()?;
+        if ifd < HEADER {
+            return None;
+        }
+        let count = usize::from(order.u16(body, ifd)?);
+        let first = ifd.checked_add(2)?;
+        let end = first.checked_add(count.checked_mul(ENTRY)?)?;
+        if end.checked_add(4)? > body.len() {
+            return None;
+        }
+        let mut edits = Vec::new();
+        for i in 0..count {
+            let e = first.checked_add(i.checked_mul(ENTRY)?)?;
+            let ty = order.u16(body, e.checked_add(2)?)?;
+            if order.u32(body, e.checked_add(4)?)? != 1 {
+                continue;
+            }
+            if order.u16(body, e)? == TAG_COLOR_SPACE {
+                let at = e.checked_add(8)?;
+                let replacement = match (ty, order) {
+                    (TYPE_SHORT, Order::Little) => 1u16.to_le_bytes().to_vec(),
+                    (TYPE_SHORT, Order::Big) => 1u16.to_be_bytes().to_vec(),
+                    (TYPE_LONG, Order::Little) => 1u32.to_le_bytes().to_vec(),
+                    (TYPE_LONG, Order::Big) => 1u32.to_be_bytes().to_vec(),
+                    _ => continue,
+                };
+                if body.get(at..at.checked_add(replacement.len())?)? != replacement.as_slice() {
+                    edits.push((prefix.checked_add(at)?, replacement));
+                }
+            }
+            // ExifIFD 0xA005 points to an Interoperability IFD. R03 means
+            // Adobe RGB, while R98 means sRGB. Rewrite an existing R03 only.
+            if order.u16(body, e)? == 0xA005 && matches!(ty, TYPE_LONG | TYPE_IFD) {
+                let sub = usize::try_from(order.u32(body, e.checked_add(8)?)?).ok()?;
+                if sub < HEADER {
+                    continue;
+                }
+                let Some(n) = order.u16(body, sub) else { continue };
+                let Some(start) = sub.checked_add(2) else { continue };
+                let Some(end) = start.checked_add(usize::from(n).checked_mul(ENTRY)?) else { continue };
+                if end.checked_add(4)? > body.len() {
+                    continue;
+                }
+                for j in 0..usize::from(n) {
+                    let entry = start.checked_add(j.checked_mul(ENTRY)?)?;
+                    if order.u16(body, entry) != Some(1)
+                        || order.u16(body, entry.checked_add(2)?) != Some(2)
+                    {
+                        continue;
+                    }
+                    let length = usize::try_from(order.u32(body, entry.checked_add(4)?)?).ok()?;
+                    if length < 4 {
+                        continue;
+                    }
+                    let data_at = if length <= 4 {
+                        entry.checked_add(8)?
+                    } else {
+                        usize::try_from(order.u32(body, entry.checked_add(8)?)?).ok()?
+                    };
+                    if body.get(data_at..data_at.checked_add(3)?) == Some(b"R03".as_slice()) {
+                        edits.push((prefix.checked_add(data_at)?, b"R98".to_vec()));
+                    }
+                }
+            }
+        }
+        Some(edits)
+    })();
+    let Some(edits) = edits else { return std::borrow::Cow::Borrowed(exif) };
+    if edits.is_empty() {
+        return std::borrow::Cow::Borrowed(exif);
+    }
+    let mut updated = exif.to_vec();
+    for (at, bytes) in edits {
+        if let Some(slot) = updated.get_mut(at..at + bytes.len()) {
+            slot.copy_from_slice(&bytes);
+        }
+    }
+    std::borrow::Cow::Owned(updated)
+}
+
 /// Offset of the first entry tagged `tag` in the IFD whose `count` entries start at `first`.
 fn find(order: Order, b: &[u8], first: usize, count: usize, entry_bytes: usize, tag: u16) -> Option<usize> {
     (0..count).filter_map(|i| first.checked_add(i.checked_mul(entry_bytes)?)).find(|&e| order.u16(b, e) == Some(tag))
