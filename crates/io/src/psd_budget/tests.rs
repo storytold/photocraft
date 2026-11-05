@@ -1,5 +1,5 @@
 use super::*;
-use photocraft_psd::{ColorMode, Compression, Version, testgen};
+use photocraft_psd::{ColorMode, Compression, PsdError, ReadAt, Source, Version, testgen};
 
 #[test]
 fn retained_storage_is_summed_but_workspace_is_reused() {
@@ -90,6 +90,202 @@ fn merged_bitmap_and_multichannel_expansion_are_budgeted() {
         file.header.height = 60_000;
         assert!(matches!(check(&file, DEFAULT_PSD_IMPORT_PIXEL_BYTES), Err(IoError::PsdImportBudget { .. })));
     }
+}
+
+#[test]
+fn opaque_rgb8_merged_budget_preserves_pixels_and_enforces_caller_limit() {
+    for compression in [Compression::Raw, Compression::Rle] {
+        let file = testgen::merged_only(Version::Psd, ColorMode::Rgb, 8, compression, 257, 259);
+        let planes = file.decode_merged().unwrap();
+        let n = 257 * 259;
+        let expected: Vec<u8> = (0..n).flat_map(|i| [planes[i], planes[n + i], planes[2 * n + i], 255]).collect();
+        let budget = super::estimate(&file).unwrap();
+        // The byte path needs an RGBA interleave, not the old 60 bytes/pixel workspace.
+        assert!(budget.workspace_bytes >= n as u64 * 4);
+        assert!(budget.workspace_bytes < n as u64 * 8);
+        assert!(budget.retained_bytes - budget.tile_bytes >= n as u64 * 3 + file.image_data.encoded_len());
+        let limit = estimate(&file);
+        let bytes = file.to_bytes().unwrap();
+        let opts = crate::ImportOptions { psd_max_pixel_bytes: limit, ..Default::default() };
+        let opened = crate::import_with_options("opaque.psd", &bytes, &opts).unwrap().document;
+        let photocraft_doc::LayerContent::Raster(surface) = &opened.layers[0].content else { panic!("expected raster") };
+        assert_eq!(surface.to_interleaved(opened.bounds()), expected);
+        let source = photocraft_psd::Source::new(bytes.clone());
+        let (opened, damaged) = crate::import_source_with_options("opaque.psd", source, &photocraft_raster::Interrupt::NONE, &opts).unwrap();
+        assert!(!damaged);
+        let photocraft_doc::LayerContent::Raster(surface) = &opened.document.layers[0].content else { panic!("expected raster") };
+        assert_eq!(surface.to_interleaved(opened.document.bounds()), expected);
+        let opts = crate::ImportOptions { psd_max_pixel_bytes: limit - 1, ..opts };
+        assert!(matches!(crate::import_with_options("opaque.psd", &bytes, &opts), Err(IoError::PsdImportBudget { .. })));
+        let source = photocraft_psd::Source::new(bytes);
+        assert!(matches!(
+            crate::import_source_with_options("opaque.psd", source, &photocraft_raster::Interrupt::NONE, &opts),
+            Err(IoError::PsdImportBudget { .. })
+        ));
+    }
+}
+
+#[test]
+fn opaque_rgb8_large_merged_budget_counts_bytes_without_float_expansion() {
+    let mut file = testgen::merged_only(Version::Psd, ColorMode::Rgb, 8, Compression::Rle, 1, 1);
+    // Header-only estimate: never allocate this full-resolution synthetic image.
+    file.header.width = 25_400;
+    file.header.height = 17_780;
+    let pixels = 25_400u64 * 17_780;
+    let est = super::estimate(&file).unwrap();
+    assert!(est.workspace_bytes >= pixels * 4);
+    assert!(est.retained_bytes >= pixels * 7);
+    assert!(est.total_bytes < 8 << 30);
+    // A merged alpha channel uses the separate unmatting path and keeps its bound.
+    file.header.channels = 4;
+    assert!(super::estimate(&file).unwrap().workspace_bytes >= pixels * 60);
+}
+
+#[test]
+fn opaque_rgb8_merged_budget_includes_oversized_encoded_source() {
+    for compression in [Compression::Raw, Compression::Rle] {
+        let file = testgen::merged_only(Version::Psd, ColorMode::Rgb, 8, compression, 1, 1);
+        let opts = crate::ImportOptions { psd_max_pixel_bytes: estimate(&file) + (64 << 10), ..Default::default() };
+        let mut bytes = file.to_bytes().unwrap();
+        // The low pixel count must not hide a large encoded payload. Preflight must
+        // reject before the parser validates or decodes these trailing bytes.
+        bytes.resize(bytes.len() + (1 << 20), 0);
+        for result in [
+            crate::import_with_options("opaque.psd", &bytes, &opts),
+            crate::import_source_with_options("opaque.psd", photocraft_psd::Source::new(bytes.clone()), &photocraft_raster::Interrupt::NONE, &opts)
+                .map(|(r, _)| r),
+        ] {
+            assert!(matches!(result, Err(IoError::PsdImportBudget { required, .. }) if required >= 2 << 20), "{result:?}");
+        }
+    }
+}
+
+#[test]
+fn merged_preflight_keeps_other_pixel_formats_on_the_conservative_path() {
+    let merged = |mode, depth, compression| testgen::merged_only(Version::Psd, mode, depth, compression, 512, 512);
+    let mut alpha = merged(ColorMode::Rgb, 8, Compression::Raw);
+    alpha.header.channels = 4;
+    alpha.image_data = photocraft_psd::ImageData::encode(Compression::Raw, &vec![255; 512 * 512 * 4], &alpha.header).unwrap();
+    assert!(alpha.merged_has_alpha());
+    let mut layered = testgen::small(Version::Psd, Compression::Raw);
+    layered.header = alpha.header.clone();
+    layered.image_data = alpha.image_data.clone();
+    // The fourth plane is an extra channel, so this layered file needs the merged image.
+    layered.layer_info.as_mut().unwrap().merged_alpha = false;
+    assert!(!layered.layers().is_empty());
+    let mut unknown = merged(ColorMode::Rgb, 8, Compression::Raw);
+    unknown.image_data.compression = Compression::Unknown(99);
+    // Fixed pre-change totals for 512x512 fixtures, independent of the new estimator.
+    for (file, required) in [
+        (alpha, 19_922_944),
+        (layered, 20_774_912),
+        (merged(ColorMode::Rgb, 8, Compression::Zip), 19_398_657),
+        (merged(ColorMode::Rgb, 8, Compression::ZipPrediction), 19_398_657),
+        (merged(ColorMode::Rgb, 16, Compression::Raw), 25_690_112),
+        (merged(ColorMode::Rgb, 32, Compression::Rle), 37_748_736),
+        (merged(ColorMode::Grayscale, 8, Compression::Raw), 9_437_185),
+        (unknown, 19_398_657),
+    ] {
+        assert!(crate::psd_import::merged_needed(&file));
+        assert_eq!(estimate(&file), required, "{:?}", file.header);
+        let opts = crate::ImportOptions { psd_max_pixel_bytes: required - 1, ..Default::default() };
+        let bytes = file.to_bytes().unwrap();
+        for result in [
+            crate::import_with_options("conservative.psd", &bytes, &opts),
+            crate::import_source_with_options("conservative.psd", photocraft_psd::Source::new(bytes.clone()), &photocraft_raster::Interrupt::NONE, &opts)
+                .map(|(r, _)| r),
+        ] {
+            assert!(matches!(result, Err(IoError::PsdImportBudget { required: n, .. }) if n == required), "{result:?}");
+        }
+    }
+    let opaque = merged(ColorMode::Rgb, 8, Compression::Raw);
+    assert_eq!(super::estimate_with_merged(&opaque, None, 0).unwrap().total_bytes, 19_398_657);
+    assert!(super::estimate_with_merged(&opaque, Some(Compression::Raw), u64::MAX).is_err());
+}
+
+#[test]
+fn preflight_info_reports_merged_compression_and_length_before_decoding() {
+    for version in [Version::Psd, Version::Psb] {
+        for compression in Compression::ALL {
+            let file = testgen::merged_only(version, ColorMode::Rgb, 8, compression, 17, 9);
+            let bytes = file.to_bytes().unwrap();
+            let preflight = |preview: &PsdFile, actual, len| {
+                assert_eq!(preview.image_data.encoded_len(), 0);
+                assert_eq!(actual, Some(compression));
+                assert_eq!(len, file.image_data.encoded_len());
+                Ok(true)
+            };
+            let (_, merged) = PsdFile::from_bytes_and_merged_preflight_info(&bytes, preflight, |_| false).unwrap();
+            assert_eq!(merged.unwrap().unwrap(), file.decode_merged().unwrap());
+            let (_, merged) = PsdFile::from_source_and_merged_preflight_info(Source::new(bytes), preflight, |_| false).unwrap();
+            assert_eq!(merged.unwrap().unwrap(), file.decode_merged().unwrap());
+        }
+    }
+}
+
+#[test]
+fn preflight_info_refusal_precedes_missing_fields_and_invalid_payloads() {
+    for compression in Compression::ALL {
+        let file = testgen::merged_only(Version::Psd, ColorMode::Rgb, 8, compression, 17, 9);
+        let original = file.to_bytes().unwrap();
+        let start = original.len() - file.image_data.data.len() - 2;
+        for keep in 0..=3 {
+            let bytes = original[..start + keep].to_vec();
+            let preflight = |_: &PsdFile, actual, len| {
+                assert_eq!(actual, (keep >= 2).then_some(compression));
+                assert_eq!(len, keep.saturating_sub(2) as u64);
+                Err(PsdError::LimitExceeded("test import budget"))
+            };
+            let recover = |_: &PsdFile| panic!("a refused preflight must not recover");
+            assert!(matches!(PsdFile::from_bytes_and_merged_preflight_info(&bytes, preflight, recover), Err(PsdError::LimitExceeded("test import budget"))));
+            assert!(matches!(
+                PsdFile::from_source_and_merged_preflight_info(Source::new(bytes.clone()), preflight, recover),
+                Err(PsdError::LimitExceeded("test import budget"))
+            ));
+            assert!(PsdFile::from_bytes_and_merged_preflight_info(&bytes, |_, _, _| Ok(true), |_| false).is_err());
+            assert!(PsdFile::from_source_and_merged_preflight_info(Source::new(bytes), |_, _, _| Ok(true), |_| false).is_err());
+        }
+    }
+}
+
+#[test]
+fn source_preflight_info_reads_only_compression_and_defers_read_errors() {
+    struct HeaderOnly {
+        bytes: Vec<u8>,
+        merged_at: u64,
+        fail_compression: bool,
+    }
+    impl ReadAt for HeaderOnly {
+        fn len(&self) -> u64 {
+            self.bytes.len() as u64
+        }
+        fn read_at(&self, offset: u64, buf: &mut [u8]) -> photocraft_psd::Result<()> {
+            assert!(offset + buf.len() as u64 <= self.merged_at + 2, "preflight read encoded pixels");
+            if self.fail_compression && offset >= self.merged_at {
+                return Err(PsdError::Read("compression read failed".into()));
+            }
+            self.bytes.read_at(offset, buf)
+        }
+    }
+    let file = testgen::merged_only(Version::Psd, ColorMode::Rgb, 8, Compression::Rle, 17, 9);
+    let bytes = file.to_bytes().unwrap();
+    let merged_at = (bytes.len() - file.image_data.data.len() - 2) as u64;
+    let source = |fail_compression| Source::new(HeaderOnly { bytes: bytes.clone(), merged_at, fail_compression });
+    for fail in [false, true] {
+        let preflight = |_: &PsdFile, compression, len| {
+            assert_eq!(compression, (!fail).then_some(Compression::Rle));
+            assert_eq!(len, file.image_data.encoded_len());
+            Err(PsdError::LimitExceeded("test import budget"))
+        };
+        assert!(matches!(
+            PsdFile::from_source_and_merged_preflight_info(source(fail), preflight, |_| panic!("preflight cannot recover")),
+            Err(PsdError::LimitExceeded("test import budget"))
+        ));
+    }
+    assert!(matches!(
+        PsdFile::from_source_and_merged_preflight_info(source(true), |_, _, _| Ok(true), |_| panic!("read failure cannot recover")),
+        Err(PsdError::Read(message)) if message == "compression read failed"
+    ));
 }
 
 #[test]
