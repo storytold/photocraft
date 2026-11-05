@@ -146,31 +146,41 @@ fn fill_layer(doc: &mut Document, id: Result<LayerId>, cov: &Coverage, own_pixel
         return Ok(false);
     }
     if !labels.contains(&0) {
-        return Err(EngineError::Other("Content-Aware fill needs some of the image inside the crop to sample from".into()));
+        return if own_pixels { Ok(false) } else { Err(EngineError::Other("Content-Aware fill needs some of the image inside the crop to sample from".into())) };
     }
     // Resolve an absent target only after the no-fill/sample checks, preserving the legacy path.
     let id = id?;
-    let pieces = label_components(&mut labels, w, h)?;
     let surf = doc.layer(id).and_then(|l| l.surface()).ok_or_else(|| EngineError::Other("Content-Aware fill needs a pixel layer".into()))?;
+    let n = surf.format().channels().max(1);
+    let has_alpha = surf.format().alpha;
+    let has_pixel = |x, y| !has_alpha || surf.sample_channel(x, y, n - 1) > 0.0;
+    let donor_bounds = own_pixels.then(|| if has_alpha { surf.content_bounds().intersect(&canvas) } else { canvas });
+    // The added target is optional when it has no covered pixels of its own to sample.
+    // This check does not absorb errors from synthesis or allocation.
+    if donor_bounds.is_some_and(|bounds| {
+        !(bounds.y0..bounds.y1).any(|y| {
+            (bounds.x0..bounds.x1).any(|x| labels[y as usize * w + x as usize] == 0 && has_pixel(x, y))
+        })
+    }) {
+        return Ok(false);
+    }
+    let pieces = label_components(&mut labels, w, h)?;
     let label = |x: i32, y: i32| -> u32 {
         if x < 0 || y < 0 {
             return 0;
         }
         (y as usize).checked_mul(w).and_then(|i| i.checked_add(x as usize)).and_then(|i| labels.get(i)).copied().unwrap_or(0)
     };
-    let n = surf.format().channels().max(1);
-    let donor_bounds = own_pixels.then(|| if surf.format().alpha { surf.content_bounds().intersect(&canvas) } else { canvas });
     let fill_piece = |(k, bounds): (usize, &Rect)| -> Result<(Rect, Vec<f32>)> {
         let k = k as u32 + 1;
         // A partial active layer can have no donor near a distant turned corner. Only that
         // added target may widen its sampling envelope; its hole and output stay unchanged.
-        let usable = |x, y| label(x, y) == 0 && (!own_pixels || !surf.format().alpha || surf.sample_channel(x, y, n.saturating_sub(1)) > 0.0);
+        let usable = |x, y| label(x, y) == 0 && (!own_pixels || has_pixel(x, y));
         let sampling_bounds = if let Some(donor_bounds) = donor_bounds {
             let window = crate::fill_cmds::sampling_window(*bounds, canvas).intersect(&donor_bounds);
             if (window.y0..window.y1).any(|y| (window.x0..window.x1).any(|x| usable(x, y))) {
                 *bounds
             } else {
-                // Empty donors still reach the existing native sampling error and roll back.
                 bounds.union(&donor_bounds)
             }
         } else {

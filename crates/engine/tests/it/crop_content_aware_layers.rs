@@ -219,7 +219,7 @@ fn background_active_is_not_a_second_target() {
 fn unmeasured_active_targets_and_delete_off_keep_the_legacy_target() {
     for turned in [false, true] {
         let (x, y) = extension_sample(turned);
-        for case in 0..8 {
+        for case in 0..10 {
             let (mut s, ids) = scene(turned);
             let active = match case {
                 0 => ids.text,
@@ -229,6 +229,21 @@ fn unmeasured_active_targets_and_delete_off_keep_the_legacy_target() {
             if (2..7).contains(&case) {
                 s.edit("Lock active", |d, _| {
                     assert!(d.layer_mut(active).unwrap().locks.set(["all", "pixels", "transparency", "position", "artboard"][case - 2], true));
+                    Ok(())
+                })
+                .unwrap();
+            }
+            if case >= 8 {
+                s.edit("Group active", |d, _| {
+                    let i = d.layers.iter().position(|layer| layer.id == active).unwrap();
+                    let child = d.layers.remove(i);
+                    let mut group = Layer::group("Ancestor", vec![child]);
+                    if case == 8 {
+                        group.visible = false;
+                    } else {
+                        assert!(group.locks.set("pixels", true));
+                    }
+                    d.layers.insert(i, group);
                     Ok(())
                 })
                 .unwrap();
@@ -302,10 +317,9 @@ fn turned_hidden_overhang_coverage_belongs_to_each_layer() {
 }
 
 #[test]
-fn a_failure_on_the_added_target_rolls_back_background_crop_and_history() {
-    // An empty added target has no donor pixels. This checks transaction atomicity, not a new
-    // reference-application claim for an unmeasured empty layer.
+fn donorless_added_target_keeps_the_background_fill() {
     for turned in [false, true] {
+        let (x, y) = extension_sample(turned);
         let (mut s, ids) = scene(turned);
         let empty = s
             .edit("Empty target", |d, active| {
@@ -318,15 +332,15 @@ fn a_failure_on_the_added_target_rolls_back_background_crop_and_history() {
             .unwrap();
         assert_ne!(empty, ids.background);
         let before = doc(&s).clone();
+        let p = frame(turned);
+        let plain = plain_control(&mut s, &p);
         let past = s.active().unwrap().history.past_len();
-        let label = s.active().unwrap().history.undo_label().map(str::to_owned);
-        let mut p = frame(turned);
-        p["contentAware"] = json!(true);
-        assert!(s.execute("image.crop", p).is_err());
-        assert_eq!(doc(&s), &before);
-        assert_eq!(s.active().unwrap().history.past_len(), past);
-        assert_eq!(s.active().unwrap().history.undo_label(), label.as_deref());
+        crop(&mut s, p, true);
+        pixel(doc(&s), ids.background, x, y, WHITE);
+        unchanged(doc(&s), &plain, &[empty, ids.quads, ids.small, ids.edge, ids.hidden, ids.text]);
         assert_eq!(s.active().unwrap().active_layer, Some(empty));
+        named_one_step(&s, past, "Content-aware Crop");
+        undo_redo(&mut s, &before);
     }
 }
 
