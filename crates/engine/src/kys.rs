@@ -285,7 +285,8 @@ pub fn photoshop_key(sc: &str) -> Option<String> {
     Some(out.join("+"))
 }
 
-fn xml_escape(s: &str) -> String {
+/// Escape text for XML element content or a quoted attribute.
+pub(crate) fn xml_escape(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&apos;")
 }
 
