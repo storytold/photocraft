@@ -40,6 +40,9 @@ pub(crate) struct JpegMeta {
     pub adobe_transform: Option<u8>,
     /// (width, height, components) from the first SOFn.
     pub frame: Option<(u32, u32, u8)>,
+    /// A DHT defines a one-bit Huffman code (a flat image's optimised tables), which
+    /// `zune-jpeg` 0.5 decodes as garbage after the first few MCU rows.
+    pub one_bit_huffman: bool,
 }
 
 /// Walk the marker segments up to SOS and collect metadata.
@@ -100,6 +103,18 @@ pub(crate) fn scan_metadata(b: &[u8]) -> JpegMeta {
                 let h = u16::from_be_bytes([seg[1], seg[2]]) as u32;
                 let w = u16::from_be_bytes([seg[3], seg[4]]) as u32;
                 m.frame = Some((w, h, seg[5]));
+            }
+            0xC4 => {
+                let mut at = 0;
+                while let Some(rest) = seg.get(at..) {
+                    let Some(counts) = rest.get(1..17) else { break };
+                    if counts[0] != 0 {
+                        m.one_bit_huffman = true;
+                        break;
+                    }
+                    let symbols = counts.iter().map(|&c| usize::from(c)).sum::<usize>();
+                    at += 17 + symbols;
+                }
             }
             0xEE if seg.len() >= 12 && seg.starts_with(b"Adobe") => {
                 m.adobe_transform = Some(seg[11]);
@@ -247,11 +262,13 @@ fn without_extended_xmp(b: &[u8]) -> Option<Vec<u8>> {
 /// Whether `craft-jpeg` (rather than `zune-jpeg`) decodes the file: arithmetic coding
 /// (SOF9–SOF11) or a DCT frame whose precision isn't 8 bits (#4934, #5003). Lossless (SOF3) and
 /// 12-bit progressive Huffman (SOF2) go there too: craft-jpeg reports them unsupported, where
-/// zune-jpeg's failure would read as a damaged file.
-fn uses_craft_jpeg(bytes: &[u8]) -> bool {
+/// zune-jpeg's failure would read as a damaged file. Baseline and extended-sequential frames with
+/// a one-bit Huffman code (a flat image's optimised tables) go there because zune-jpeg 0.5
+/// decodes the bottom of the image as black/green (#11342).
+fn uses_craft_jpeg(bytes: &[u8], meta: &JpegMeta) -> bool {
     match craft_jpeg::frame(bytes) {
         Some(f) if (0xC9..=0xCB).contains(&f.marker) || f.marker == 0xC3 => true,
-        Some(f) if matches!(f.marker, 0xC0..=0xC2) => f.precision != 8,
+        Some(f) if matches!(f.marker, 0xC0..=0xC2) => f.precision != 8 || (meta.one_bit_huffman && f.marker <= 0xC1),
         _ => false,
     }
 }
@@ -299,7 +316,7 @@ pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError>
     if let Some((w, h, nc)) = meta.frame {
         limits.check_bytes(w, h, u64::from(nc.max(1)))?;
     }
-    if uses_craft_jpeg(bytes) {
+    if uses_craft_jpeg(bytes, &meta) {
         // craft-jpeg sizes its buffers from the frame header before it reads a scan.
         if scan_bytes == 0 {
             return Err(err("the file has no scan data"));
@@ -806,15 +823,20 @@ mod tests {
 
     #[test]
     fn routing() {
-        assert!(!uses_craft_jpeg(&[0xFF, 0xD8, 0xFF, 0xC0, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0]));
-        assert!(!uses_craft_jpeg(&[0xFF, 0xD8, 0xFF, 0xC1, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0]));
-        assert!(uses_craft_jpeg(&[0xFF, 0xD8, 0xFF, 0xC9, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0]));
-        assert!(uses_craft_jpeg(&[0xFF, 0xD8, 0xFF, 0xC1, 0, 11, 12, 0, 8, 0, 8, 1, 1, 0x11, 0]));
-        assert!(uses_craft_jpeg(&[0xFF, 0xD8, 0xFF, 0xC0, 0, 11, 12, 0, 8, 0, 8, 1, 1, 0x11, 0]));
-        assert!(!uses_craft_jpeg(&[0xFF, 0xD8]));
-        assert!(!uses_craft_jpeg(&[0xFF, 0xD8, 0xFF, 0xC2, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0]));
-        assert!(uses_craft_jpeg(&[0xFF, 0xD8, 0xFF, 0xC2, 0, 11, 12, 0, 8, 0, 8, 1, 1, 0x11, 0]));
-        assert!(uses_craft_jpeg(&[0xFF, 0xD8, 0xFF, 0xC3, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0]));
+        let plain = JpegMeta::default();
+        let one_bit = JpegMeta { one_bit_huffman: true, ..Default::default() };
+        assert!(!uses_craft_jpeg(&[0xFF, 0xD8, 0xFF, 0xC0, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0], &plain));
+        assert!(!uses_craft_jpeg(&[0xFF, 0xD8, 0xFF, 0xC1, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0], &plain));
+        assert!(uses_craft_jpeg(&[0xFF, 0xD8, 0xFF, 0xC9, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0], &plain));
+        assert!(uses_craft_jpeg(&[0xFF, 0xD8, 0xFF, 0xC1, 0, 11, 12, 0, 8, 0, 8, 1, 1, 0x11, 0], &plain));
+        assert!(uses_craft_jpeg(&[0xFF, 0xD8, 0xFF, 0xC0, 0, 11, 12, 0, 8, 0, 8, 1, 1, 0x11, 0], &plain));
+        assert!(!uses_craft_jpeg(&[0xFF, 0xD8], &plain));
+        assert!(!uses_craft_jpeg(&[0xFF, 0xD8, 0xFF, 0xC2, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0], &plain));
+        assert!(uses_craft_jpeg(&[0xFF, 0xD8, 0xFF, 0xC2, 0, 11, 12, 0, 8, 0, 8, 1, 1, 0x11, 0], &plain));
+        assert!(uses_craft_jpeg(&[0xFF, 0xD8, 0xFF, 0xC3, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0], &plain));
+        assert!(uses_craft_jpeg(&[0xFF, 0xD8, 0xFF, 0xC0, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0], &one_bit));
+        assert!(uses_craft_jpeg(&[0xFF, 0xD8, 0xFF, 0xC1, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0], &one_bit));
+        assert!(!uses_craft_jpeg(&[0xFF, 0xD8, 0xFF, 0xC2, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0], &one_bit));
     }
 
     #[test]
@@ -871,7 +893,7 @@ mod tests {
         let mut with = stream[..2].to_vec();
         segment(&mut with, 0xED, &app13);
         with.extend_from_slice(&stream[2..]);
-        assert!(uses_craft_jpeg(&with));
+        assert!(uses_craft_jpeg(&with, &scan_metadata(&with)));
         let img = crate::decode(&with).unwrap();
         assert_eq!(img.meta.photoshop_resources.as_deref(), Some(resources.as_slice()));
     }
