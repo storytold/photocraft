@@ -1057,22 +1057,29 @@ pub fn working_bytes(params: &FilterParams, area: Rect, bounds: Rect, channels: 
         Halo::Bounds => base.saturating_add(bounds.union(&area).size().area().saturating_mul(floats)),
         Halo::Radius(r) => {
             let side = tile.saturating_add((r.max(0) as u64).saturating_mul(2));
-            base.saturating_add(
-                side.saturating_mul(side).saturating_add(tile.saturating_mul(tile).saturating_mul(3)).saturating_mul(floats).saturating_mul(threads),
-            )
+            let scratch = tile.saturating_mul(tile).saturating_mul(tile_buffers(params));
+            base.saturating_add(side.saturating_mul(side).saturating_add(scratch).saturating_mul(floats).saturating_mul(threads))
         }
     };
     windows.saturating_add(shape_blur_bytes(params, bounds, tile, channels as u64, threads))
 }
 
+/// Tile-sized float buffers a radius filter's worker holds beside its source window. Shape Blur
+/// holds one, its output tile (its other scratch is f64, counted by [`shape_blur_bytes`]); the
+/// other kernels are allowed three (output plus intermediate passes).
+fn tile_buffers(params: &FilterParams) -> u64 {
+    if matches!(params, FilterParams::ShapeBlur { .. } | FilterParams::CustomShapeBlur { .. }) { 1 } else { 3 }
+}
+
 /// What Shape Blur holds beyond the float windows: each worker's f64 prefix sums over its
-/// halo-expanded tile, and for a custom shape the kernel mask kept for the whole run plus its
-/// prepared coverage runs (at most [`shape_blur::max_spans`], 20 bytes each).
+/// halo-expanded tile and its f64 row accumulator, and for a custom shape the kernel mask kept
+/// for the whole run plus its prepared coverage runs (at most [`shape_blur::max_spans`], 20 bytes
+/// each).
 fn shape_blur_bytes(params: &FilterParams, bounds: Rect, tile: u64, channels: u64, threads: u64) -> u64 {
     let (FilterParams::ShapeBlur { .. } | FilterParams::CustomShapeBlur { .. }) = params else { return 0 };
     let Halo::Radius(r) = params.halo_for(bounds) else { return 0 };
     let side = tile.min(2048).saturating_add((r.max(0) as u64).saturating_mul(2)).saturating_add(1);
-    let prefix = side.saturating_mul(side).saturating_mul(channels).saturating_mul(8).saturating_mul(threads);
+    let prefix = side.saturating_mul(side).saturating_add(tile.min(2048)).saturating_mul(channels).saturating_mul(8).saturating_mul(threads);
     let FilterParams::CustomShapeBlur { kernel: Some(mask), .. } = params else { return prefix };
     let size = (mask.rect.width() as usize).max(mask.rect.height() as usize);
     let spans = (shape_blur::max_spans(size) as u64).saturating_mul(20);
