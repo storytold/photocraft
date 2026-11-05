@@ -41,6 +41,34 @@ fn photocraft_gets_a_mac_app_menu() {
 }
 
 #[test]
+fn simplified_chinese_translates_the_mac_app_menu() {
+    let lang = Lang::from_pref("zh-hans");
+    for doc in [false, true] {
+        let items = crate::menus::menu_items(&app(doc));
+        let english = photocraft_layout(&items, Lang::EN, "en").bar;
+        let chinese = photocraft_layout(&items, lang, "zh-hans").bar;
+        let app_menu = chinese.menu(MenuRole::App).unwrap();
+        assert_eq!(app_menu.title, "PhotoCraft");
+        assert!(app_menu.children.iter().any(|n| matches!(n, Node::Submenu { label, role: Some(ItemRole::Settings), .. } if label == "设置")));
+        for (id, label) in [("help.about", "关于 PhotoCraft"), (HIDE, "隐藏 PhotoCraft"), ("file.exit", "退出 PhotoCraft")] {
+            let item = chinese.find(id).unwrap();
+            assert_eq!(item.label, label);
+            assert_eq!(item.shortcut, english.find(id).unwrap().shortcut, "translating {id} keeps its shortcut");
+        }
+        for (standard, source, label) in [
+            (Standard::Services, "Services", "服务"),
+            (Standard::HideOthers, "Hide Others", "隐藏其他"),
+            (Standard::ShowAll, "Show All", "全部显示"),
+        ] {
+            assert!(app_menu.children.contains(&Node::Standard(standard)));
+            // The macOS backend supplies these labels through the same catalog lookup.
+            assert_eq!(tr(lang, source), label);
+        }
+        assert_ne!(structure_key(&english), structure_key(&chinese), "switching languages rebuilds the native menu");
+    }
+}
+
+#[test]
 fn moved_items_leave_their_old_menus() {
     let l = layout(true);
     let by = |t: &str| l.bar.menus.iter().find(|m| m.title == t).unwrap();
