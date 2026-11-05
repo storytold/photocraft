@@ -272,7 +272,7 @@ fn handle_move_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tool: Tool, mods:
             // With a selection: cut the selected pixels (⌥ copies them) and drag them as a floating
             // piece, from anywhere, as a marquee ⌘-drag does.
             if crate::move_ui::moves_selected_pixels_with(app, tool) {
-                if crate::move_ui::float_selected(app, mods.alt, 0.0, 0.0) {
+                if crate::move_ui::float_selected_for_drag(app, mods.alt) {
                     let mut d = Drag::new(tool, [x, y], vec![[x, y, pressure as f64]], mods, false);
                     d.sel_move = Some(true);
                     app.drag = Some(d);
