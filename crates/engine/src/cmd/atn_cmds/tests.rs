@@ -659,6 +659,11 @@ fn settings_at_the_value_the_event_plays_still_export() {
 fn every_mapped_command_exports_and_imports_back() {
     let cases: Vec<(&str, Value)> = vec![
         (
+            "edit.perspectiveWarp",
+            json!({"planes":[{"src":[[4,4],[16,4],[16,20],[4,20]],"dst":[[5,5],[17,4],[18,20],[4,19]]}],
+                "target":"pixels","__atnPerspectiveWarpRect":[0,0,32,24]}),
+        ),
+        (
             "paint.gradient",
             json!({"from":[1,1],"to":[6,2],"style":"linear","method":"classic","smoothness":100,
             "stops":[[0,"#0020ff"],[1,"#ffe000"]],"transparency":[],"opacity":100,"mode":"Normal","reverse":false,"dither":false}),
@@ -1079,6 +1084,9 @@ fn every_mapped_command_exports_and_imports_back() {
                 if *id == "paint.gradient" {
                     // Executable values match; independent public tests verify the source carrier.
                     back.as_object_mut().unwrap().remove("__atnClassicGradient");
+                }
+                if *id == "edit.perspectiveWarp" {
+                    back.as_object_mut().unwrap().remove("__atnPerspectiveWarp");
                 }
                 normalise(&mut back);
                 if *id == "actions.play" || *id == "actions.conditional" {

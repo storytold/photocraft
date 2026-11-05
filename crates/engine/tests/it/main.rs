@@ -13,6 +13,7 @@ mod atn_dialog_filters;
 mod atn_direct_adjustments;
 mod atn_layer_style;
 mod atn_newer_events;
+mod atn_perspective_warp;
 mod atn_reference_forms;
 mod atn_review_regressions;
 mod atn_ripple_amount;

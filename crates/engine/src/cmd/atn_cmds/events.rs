@@ -1069,6 +1069,14 @@ pub(super) const EVENTS: &[Event] = &[
     Event { code: "ClrR", name: "colorRange", label: "Color Range", ids: &["select.colorRange"], from: color_range_from, to: color_range_to },
     // Edit.
     Event {
+        code: "",
+        name: "perspectiveWarpTransform",
+        label: "Perspective Warp",
+        ids: &[crate::distort_cmds::PERSPECTIVE],
+        from: super::steps_perspective_warp::from,
+        to: super::steps_perspective_warp::to,
+    },
+    Event {
         code: "Grdn",
         name: "gradientClassEvent",
         label: "Gradient",
