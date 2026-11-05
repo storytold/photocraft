@@ -463,6 +463,7 @@ fn only_the_columns_view_puts_list_rows_side_by_side() {
 #[test]
 fn list_rows_keep_their_order_while_the_panel_and_previews_change() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.session.edit_prefs(|p| p.general.auto_show_home_screen = false);
     app.run("window.panel.float", json!({"panel": "brushes", "x": 20, "y": 20, "width": 420, "height": 760})).unwrap();
     let names: Vec<String> = app.session.tools.presets.iter().take(4).map(|p| p.name.clone()).collect();
     let mut h = Harness::builder().with_size(vec2(1200.0, 900.0)).build_eframe(move |cc| {
@@ -494,6 +495,7 @@ fn list_rows_keep_their_order_while_the_panel_and_previews_change() {
 #[test]
 fn the_brushes_list_fills_a_tall_panel() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.session.edit_prefs(|p| p.general.auto_show_home_screen = false);
     app.run("window.panel.float", json!({"panel": "brushes", "x": 20, "y": 20, "width": 420, "height": 1340})).unwrap();
     app.ui.brushes_panel.view = BrushesView::List;
     let footer = format!("{} presets", app.session.tools.presets.len());
@@ -513,6 +515,7 @@ fn the_brushes_list_fills_a_tall_panel() {
 fn a_brush_dropped_on_a_rows_upper_right_lands_by_the_views_rule() {
     for view in [BrushesView::Columns, BrushesView::List] {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.session.edit_prefs(|p| p.general.auto_show_home_screen = false);
         app.run("window.panel.float", json!({"panel": "brushes", "x": 20, "y": 20, "width": 420, "height": 760})).unwrap();
         app.ui.brushes_panel.view = view;
         app.ui.brushes_panel.scale = 0.6;
