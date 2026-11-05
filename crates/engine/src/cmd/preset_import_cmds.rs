@@ -353,7 +353,8 @@ fn import_grd(s: &mut Session, p: &Value) -> Result<Value> {
         None => "Imported Gradients".to_string(),
     };
     let grads = photocraft_psd::grd::parse(&bytes).map_err(|e| bad(cmd, format!("not a readable gradient file (.grd): {e}")))?;
-    let replace = p.get("replace").and_then(Value::as_bool).unwrap_or(true);
+    // Same default as the group insertion below and the documented contract (#10640).
+    let replace = p.get("replace").and_then(Value::as_bool).unwrap_or(false);
     let mut taken =
         UniqueNames::new_exact(s.presets.gradients.iter().filter(|g| !replace || g.name != group).flat_map(|g| g.items.iter().map(|i| i.name.as_str())));
     let original_names: Vec<String> =
@@ -400,7 +401,7 @@ fn import_grd(s: &mut Session, p: &Value) -> Result<Value> {
     let names: Vec<String> = items.iter().map(|g| g.name.clone()).collect();
     let st = &mut s.presets;
     // As with brushes: a new group beside one of the same name unless `replace` (#10640).
-    let group = if p.get("replace").and_then(Value::as_bool).unwrap_or(false) {
+    let group = if replace {
         st.gradients.retain(|g| g.name != group);
         group
     } else {
@@ -558,6 +559,32 @@ mod tests {
         assert_eq!(s.presets.gradient.name, "Duplicate 2");
         let result = s.execute("gradient.presets.importGrd", json!({"data": data, "group": "Other", "replace": false})).unwrap();
         assert_eq!(result["imported"], json!(["Duplicate 3", "Duplicate 4"]));
+    }
+
+    /// Re-importing without `replace` (the default) adds a sibling group, so its presets must get
+    /// names distinct from the existing group's, keeping name-only selection unambiguous.
+    #[test]
+    fn default_gradient_reimport_keeps_names_unique_across_sibling_groups() {
+        use photocraft_psd::grd::{GrdColor, GrdGradient, GrdStop, write};
+        let gradients = vec![GrdGradient {
+            name: "Sunset".into(),
+            stops: vec![
+                GrdStop { location: 0.0, midpoint: 0.5, color: GrdColor::Rgb([1.0, 0.0, 0.0]) },
+                GrdStop { location: 1.0, midpoint: 0.5, color: GrdColor::Rgb([1.0, 1.0, 1.0]) },
+            ],
+            ..Default::default()
+        }];
+        let data = photocraft_paint::tile::b64_encode(&write(&gradients));
+        let mut s = Session::new();
+        let first = s.execute("gradient.presets.importGrd", json!({"data": data, "group": "Sky"})).unwrap();
+        assert_eq!(first["imported"], json!(["Sunset"]));
+        let second = s.execute("gradient.presets.importGrd", json!({"data": data, "group": "Sky"})).unwrap();
+        assert_eq!(second["group"], json!("Sky (2)"));
+        assert_eq!(second["imported"], json!(["Sunset 2"]));
+        // Explicit `replace` drops the same-named group, so the original name is free again.
+        let third = s.execute("gradient.presets.importGrd", json!({"data": data, "group": "Sky", "replace": true})).unwrap();
+        assert_eq!(third["group"], json!("Sky"));
+        assert_eq!(third["imported"], json!(["Sunset"]));
     }
 
     #[test]
