@@ -565,7 +565,7 @@ impl PsdFile {
     /// and some of its 16-bit PSBs carry no other mark (#4654): when the layers sit in a global
     /// `Lr16`/`Lr32` block, that name with one name per extra channel marks it too.
     ///
-    /// A file without layer records is read as having one unless its alpha channel names
+    /// A file without layer records has one when it is marked, or unless its alpha channel names
     /// account for every extra channel without "Transparency" among them: a flat file from the
     /// reference editor lists only its alpha and spot channels there (psd-tools
     /// cmyk-alpha-spot.psd), while writers of plain RGBA files name nothing.
@@ -584,7 +584,7 @@ impl PsdFile {
             }
             None => {
                 let names = self.alpha_channel_names();
-                names.len() != usize::from(self.header.channels - color) || names.first().is_some_and(|n| n == TRANSPARENCY_NAME)
+                marked || names.len() != usize::from(self.header.channels - color) || names.first().is_some_and(|n| n == TRANSPARENCY_NAME)
             }
         }
     }
@@ -597,7 +597,7 @@ impl PsdFile {
     }
 
     /// The alpha channel names: the Unicode names (resource 1045), else the Pascal names (1006)
-    /// older writers and psd-tools store alone. Empty when the file names no channel.
+    /// older writers and psd-tools store alone, decoded as MacRoman. Empty when the file names no channel.
     pub fn alpha_channel_names(&self) -> Vec<String> {
         let mut names = Vec::new();
         if let Some(r) = self.resource(1045) {
@@ -614,7 +614,7 @@ impl PsdFile {
             let mut at = 0usize;
             while let Some(&len) = r.data.get(at) {
                 let Some(name) = r.data.get(at + 1..at + 1 + usize::from(len)) else { break };
-                names.push(String::from_utf8_lossy(name).into_owned());
+                names.push(crate::codepage::decode(name, encoding_rs::MACINTOSH));
                 at += 1 + usize::from(len);
             }
         }
@@ -1109,11 +1109,26 @@ mod write_tests {
             assert_eq!(u.merged_has_alpha(), transparency, "1045 {names:?}");
             assert_eq!(u.alpha_channel_names(), names, "1045");
         }
+        // A merged-transparency marker wins over a complete list of names.
+        let mut marked = file.clone();
+        marked.resources.push(ImageResource::new(1006, pascal(&["Spot", "Alpha 1"])));
+        marked.global_blocks.push(TaggedBlock::new(*b"Mt32", Vec::new()));
+        assert!(marked.merged_has_alpha());
         // Truncated names stop at the damage.
         let mut cut = file.clone();
         cut.resources.push(ImageResource::new(1006, vec![9, b'a']));
         assert!(cut.alpha_channel_names().is_empty());
         assert!(cut.merged_has_alpha());
+    }
+
+    #[test]
+    fn pascal_channel_names_use_mac_roman_and_unicode_takes_precedence() {
+        let mut file = testgen::small(Version::Psd, Compression::Raw);
+        file.resources.retain(|r| !matches!(r.id, 1006 | 1045));
+        file.resources.push(ImageResource::new(1006, b"\x04caf\x8e\x03x".to_vec()));
+        assert_eq!(file.alpha_channel_names(), ["café"]);
+        file.resources.push(ImageResource::new(1045, vec![0, 0, 0, 1, 0, b'Z']));
+        assert_eq!(file.alpha_channel_names(), ["Z"]);
     }
 
     /// A positive layer count plus a merged-transparency marker still makes the first extra

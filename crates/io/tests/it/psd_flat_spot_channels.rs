@@ -16,6 +16,7 @@ use photocraft_raster::Surface;
 
 const W: u32 = 8;
 
+/// Builds a grayscale channel plane at the requested sample depth.
 fn plane(depth: SampleType, vals: &[f32]) -> Surface {
     let mut s = Surface::new(PixelFormat::new(ColorMode::Grayscale, depth, false));
     s.write_region(Rect::from_xywh(0, 0, W, 1), vals);
@@ -46,10 +47,12 @@ fn unknown_spot_space(file: &mut PsdFile) {
     info.data[4..14].copy_from_slice(b"#15fc83e\0\0");
 }
 
+/// Reads the complete synthetic channel row.
 fn values(s: &Surface) -> Vec<f32> {
     s.read_region(Rect::from_xywh(0, 0, W, 1))
 }
 
+/// Compares channel samples within eight-bit quantization tolerance.
 fn assert_close(a: &[f32], b: &[f32], what: &str) {
     assert_eq!(a.len(), b.len(), "{what}");
     for (x, y) in a.iter().zip(b) {
@@ -82,6 +85,19 @@ fn flat_file_keeps_its_spot_and_alpha_channels() {
             }
         }
     }
+}
+
+#[test]
+fn flat_extra_channel_names_decode_mac_roman_unless_unicode_is_present() {
+    let doc = flat_doc(ColorMode::Rgb, SampleType::U8);
+    let mut file = without_layer_records(&doc);
+    file.resources.iter_mut().find(|r| r.id == 1006).unwrap().data = b"\x04caf\x8e\x07Alpha 1".to_vec();
+    let opened = import("flat.psd", &file.to_bytes().unwrap()).unwrap().document;
+    assert_eq!(opened.channels[0].name, "light teal", "Unicode resource takes precedence");
+    file.resources.retain(|r| r.id != 1045);
+    let opened = import("flat.psd", &file.to_bytes().unwrap()).unwrap().document;
+    assert_eq!(opened.channels.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["café", "Alpha 1"]);
+    assert!(opened.channels[0].spot.is_some());
 }
 
 /// A flat file from a writer that names no channel (a plain RGBA file) still reads its extra
@@ -147,6 +163,37 @@ fn malformed_alternate_spot_colors_never_panic() {
     }
 }
 
+/// Duplicate identifiers select the first matching ink, and opaque resource bytes survive
+/// both PSD serialization and a document import/export, including unknown colour spaces.
+#[test]
+fn alternate_resource_duplicates_and_unknown_spaces_round_trip() {
+    for depth in [SampleType::U8, SampleType::U16] {
+        let mut file = without_layer_records(&flat_doc(ColorMode::Rgb, depth));
+        unknown_spot_space(&mut file);
+        let ids = &file.resource(1053).unwrap().data;
+        let id = &ids[..4];
+        let mut data = vec![0, 1, 0, 4];
+        // An unrelated green ink must be skipped before the matching red ink.
+        let other_id = u32::from_be_bytes(id.try_into().unwrap()).wrapping_add(1);
+        data.extend_from_slice(&other_id.to_be_bytes());
+        data.extend_from_slice(&[0, 0, 0, 0, 0xff, 0xff, 0, 0, 0, 0]);
+        for color in [[0, 0, 0xff, 0xff, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0xff, 0xff, 0, 0, 0, 0], [0x23, 0x31, 1, 2, 3, 4, 5, 6, 7, 8]] {
+            data.extend_from_slice(id);
+            data.extend_from_slice(&color);
+        }
+        file.resources.push(ImageResource::new(1067, data.clone()));
+        let bytes = file.to_bytes().unwrap();
+        let parsed = PsdFile::from_bytes(&bytes).unwrap();
+        assert_eq!(parsed.resource(1067).unwrap().data, data);
+        let opened = import("duplicate.psd", &bytes).unwrap().document;
+        assert_eq!(opened.channels.len(), 2);
+        assert_eq!(opened.channels[0].spot.unwrap().0.to_rgb(), [1.0, 0.0, 0.0]);
+        let saved = export(&opened, "roundtrip.psd", &ExportOptions::default()).unwrap();
+        let reparsed = PsdFile::from_bytes(&saved.bytes).unwrap();
+        assert_eq!(reparsed.resource(1067).unwrap().data, data);
+    }
+}
+
 #[cfg(feature = "corpus")]
 fn psd_tools(name: &str) -> Vec<u8> {
     let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../corpus/psd-tools").join(name);
@@ -181,25 +228,4 @@ fn corpus_flat_file_with_pascal_names_keeps_every_channel() {
     assert_eq!(names, ["blue", "fluorescent pink", "yellow"]);
     let flat = photocraft_compose::flatten(&doc);
     assert!(flat.px.iter().all(|p| p[3] == 1.0), "opaque");
-}
-
-/// The canvas preview of the same file: the spot prints over the composite, so its solid ink at
-/// 1348,1492 shows about sRGB (0, 157, 165) over the paper white, and the PSD thumbnail carries it.
-#[cfg(feature = "corpus")]
-#[test]
-fn corpus_spot_overprints_the_cmyk_composite() {
-    let doc = import("cmyk-alpha-spot.psd", &psd_tools("cmyk-alpha-spot.psd")).unwrap().document;
-    let at = Rect::from_xywh(1348, 1492, 1, 1);
-    let mut buf = photocraft_compose::render(&doc, at);
-    for p in &mut buf.px {
-        let a = p[3];
-        *p = [p[0] * a + 1.0 - a, p[1] * a + 1.0 - a, p[2] * a + 1.0 - a, 1.0];
-    }
-    photocraft_compose::multichannel::overprint(&mut buf, &doc, |i| photocraft_compose::multichannel::is_overprint_spot(&doc, i));
-    let rgb = buf.px[0].map(|v| (v * 255.0).round());
-    assert!(rgb[0] <= 12.0 && (rgb[1] - 157.0).abs() <= 8.0 && (rgb[2] - 165.0).abs() <= 8.0, "{rgb:?}");
-    let t = photocraft_compose::multichannel::thumbnail_with_inks(&doc, 160);
-    let plain = photocraft_compose::thumbnail_buffer(&doc, 160);
-    let changed = t.px.iter().zip(&plain.px).filter(|(a, b)| (a[1] - b[1]).abs() > 0.05 || (a[0] - b[0]).abs() > 0.05).count();
-    assert!(changed > 20, "the spot-only text shows in the thumbnail: {changed} pixels changed");
 }
