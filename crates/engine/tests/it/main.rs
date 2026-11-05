@@ -36,6 +36,7 @@ mod convert_keeps_references;
 mod copy_shape_placement;
 mod corpus_atn;
 mod crop_content_aware;
+mod crop_content_aware_layers;
 mod crop_delete_off_background;
 mod current_affinity_artboards;
 mod duplicate_layer_comps;
