@@ -268,6 +268,17 @@ mod tests {
         }
     }
 
+    /// More set cells than `bounds` keeps (`KEEP`): it drops its cell list, and the direct path
+    /// rescans the box instead.
+    #[test]
+    fn a_mask_with_more_cells_than_are_kept_matches_the_oracle() {
+        let (w, h) = (200, 200);
+        let mask = Rng(0x2545_f491_4f6c_dd1d).mask(w * h, 130);
+        let Some(b) = bounds(w, &mask) else { panic!("cells are set") };
+        assert!(b.count > KEEP && b.cells.is_empty(), "{} cells, {} kept", b.count, b.cells.len());
+        check(w, h, &mask, 1, "more than KEEP");
+    }
+
     #[test]
     fn the_remove_tool_dilate_is_unchanged() {
         for (w, h) in [(64, 48), (1, 97), (7, 3)] {
