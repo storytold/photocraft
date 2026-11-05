@@ -217,7 +217,9 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let main_focused = ctx.input(|i| i.viewport().focused.unwrap_or(false));
     if let Some(d) = app.camera_raw.as_mut() {
         if raise_camera_raw(d.main_focused, main_focused, scrim.inner.clicked() || scrim.inner.drag_started()) {
-            ctx.send_viewport_cmd_to(window, egui::ViewportCommand::Focus);
+            for command in raise_commands() {
+                ctx.send_viewport_cmd_to(window, command);
+            }
         }
         d.main_focused = main_focused;
     }
@@ -239,6 +241,12 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
 /// (it came forward over Camera Raw's) or is clicked.
 fn raise_camera_raw(was_focused: bool, focused: bool, clicked: bool) -> bool {
     (focused && !was_focused) || clicked
+}
+
+/// Brings Camera Raw's window to the front, restoring it first if it was minimized (a minimized
+/// window ignores Focus).
+fn raise_commands() -> [egui::ViewportCommand; 2] {
+    [egui::ViewportCommand::Minimized(false), egui::ViewportCommand::Focus]
 }
 
 impl CameraRawDialog {
@@ -554,5 +562,12 @@ mod tests {
         assert!(!raise_camera_raw(true, true, false), "only once, so Camera Raw's own focus isn't fought");
         assert!(!raise_camera_raw(true, false, false) && !raise_camera_raw(false, false, false));
         assert!(raise_camera_raw(true, true, true), "a click on the dimmed main window");
+    }
+
+    /// Focus does nothing for a minimized window, which would leave only the dimmed main window
+    /// that takes no input: Camera Raw's is restored first.
+    #[test]
+    fn raising_camera_raw_restores_it_when_minimized() {
+        assert_eq!(raise_commands(), [egui::ViewportCommand::Minimized(false), egui::ViewportCommand::Focus]);
     }
 }
