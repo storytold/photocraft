@@ -2341,6 +2341,11 @@
 	Show canvas dots	Visa punkter på arbetsytan
 	Clip thumbnails to layer bounds	Begränsa miniatyrer till lagergränser
 	Clip Thumbnails to Layer Bounds	Begränsa miniatyrer till lagergränser
+	No Thumbnails	Inga miniatyrer
+	Small Thumbnails	Små miniatyrer
+	Medium Thumbnails	Medelstora miniatyrer
+	Large Thumbnails	Stora miniatyrer
+	Clip Thumbnails to Document Bounds	Begränsa miniatyrer till dokumentgränser
 	Canvas color	Arbetsytans färg
 	Canvas custom color	Anpassad färg för arbetsytan
 	Classic	Klassisk

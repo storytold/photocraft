@@ -2007,6 +2007,11 @@
 	Show canvas dots	캔버스 점 표시
 	Clip thumbnails to layer bounds	썸네일을 레이어 경계로 자르기
 	Clip Thumbnails to Layer Bounds	썸네일을 레이어 경계로 자르기
+	No Thumbnails	썸네일 없음
+	Small Thumbnails	작은 썸네일
+	Medium Thumbnails	중간 썸네일
+	Large Thumbnails	큰 썸네일
+	Clip Thumbnails to Document Bounds	썸네일을 문서 경계로 자르기
 	Canvas color	캔버스 색상
 	Canvas custom color	캔버스 사용자 정의 색상
 	Color picker	색상 피커

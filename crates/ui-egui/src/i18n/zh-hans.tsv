@@ -2060,6 +2060,11 @@
 	Show canvas dots	显示画布圆点
 	Clip thumbnails to layer bounds	将缩略图裁剪到图层边界
 	Clip Thumbnails to Layer Bounds	将缩略图裁剪到图层边界
+	No Thumbnails	无缩略图
+	Small Thumbnails	小缩略图
+	Medium Thumbnails	中缩略图
+	Large Thumbnails	大缩略图
+	Clip Thumbnails to Document Bounds	将缩略图裁剪到文档边界
 	Canvas color	画布颜色
 	Canvas custom color	画布自定颜色
 	Color picker	拾色器

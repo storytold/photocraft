@@ -1978,6 +1978,11 @@
 	Show canvas dots	Mostrar pontos da tela de pintura
 	Clip thumbnails to layer bounds	Recortar miniaturas aos limites da camada
 	Clip Thumbnails to Layer Bounds	Recortar miniaturas aos limites da camada
+	No Thumbnails	Sem miniaturas
+	Small Thumbnails	Miniaturas pequenas
+	Medium Thumbnails	Miniaturas médias
+	Large Thumbnails	Miniaturas grandes
+	Clip Thumbnails to Document Bounds	Recortar miniaturas aos limites do documento
 	Canvas color	Cor da tela de pintura
 	Canvas custom color	Cor personalizada da tela de pintura
 	Color picker	Seletor de cores

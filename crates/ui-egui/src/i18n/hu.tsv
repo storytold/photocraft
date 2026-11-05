@@ -3635,6 +3635,11 @@ cameraRaw	Yellow	Sárga
 	Show canvas dots	Vászonpontok megjelenítése
 	Clip thumbnails to layer bounds	Bélyegképek levágása a réteg határaira
 	Clip Thumbnails to Layer Bounds	Bélyegképek levágása a réteg határaira
+	No Thumbnails	Nincs bélyegkép
+	Small Thumbnails	Kis bélyegképek
+	Medium Thumbnails	Közepes bélyegképek
+	Large Thumbnails	Nagy bélyegképek
+	Clip Thumbnails to Document Bounds	Bélyegképek levágása a dokumentum határaira
 	Show channels in color	Csatornák megjelenítése színesen
 	Show crosshair in brush tip	Szálkereszt az ecsethegyben
 	Show extension panels	Bővítménypanelek megjelenítése

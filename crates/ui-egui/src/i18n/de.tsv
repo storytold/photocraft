@@ -2008,6 +2008,11 @@
 	Show canvas dots	Punkte der Zeichenfläche anzeigen
 	Clip thumbnails to layer bounds	Miniaturbilder auf Ebenenbegrenzung beschneiden
 	Clip Thumbnails to Layer Bounds	Miniaturbilder auf Ebenenbegrenzung beschneiden
+	No Thumbnails	Keine Miniaturbilder
+	Small Thumbnails	Kleine Miniaturbilder
+	Medium Thumbnails	Mittlere Miniaturbilder
+	Large Thumbnails	Große Miniaturbilder
+	Clip Thumbnails to Document Bounds	Miniaturbilder auf Dokumentbegrenzung beschneiden
 	Canvas color	Zeichenflächenfarbe
 	Canvas custom color	Benutzerdefinierte Zeichenflächenfarbe
 	Color picker	Farbwähler

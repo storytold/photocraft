@@ -2047,6 +2047,11 @@
 	Show canvas dots	Zobrazit tečky plátna
 	Clip thumbnails to layer bounds	Oříznout miniatury na hranice vrstvy
 	Clip Thumbnails to Layer Bounds	Oříznout miniatury na hranice vrstvy
+	No Thumbnails	Bez miniatur
+	Small Thumbnails	Malé miniatury
+	Medium Thumbnails	Střední miniatury
+	Large Thumbnails	Velké miniatury
+	Clip Thumbnails to Document Bounds	Oříznout miniatury na hranice dokumentu
 	Canvas color	Barva plátna
 	Canvas custom color	Vlastní barva plátna
 	Color picker	Výběr barvy

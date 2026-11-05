@@ -2763,6 +2763,11 @@ shape	Appearance	Diện mạo
 	Show canvas dots	Hiện chấm vùng vẽ
 	Clip thumbnails to layer bounds	Cắt hình thu nhỏ theo biên của lớp
 	Clip Thumbnails to Layer Bounds	Cắt hình thu nhỏ theo biên của lớp
+	No Thumbnails	Không có hình thu nhỏ
+	Small Thumbnails	Hình thu nhỏ cỡ nhỏ
+	Medium Thumbnails	Hình thu nhỏ cỡ vừa
+	Large Thumbnails	Hình thu nhỏ cỡ lớn
+	Clip Thumbnails to Document Bounds	Cắt hình thu nhỏ theo biên của tài liệu
 	Color picker	Bộ chọn màu
 	Color space	Không gian màu
 	Column width	Độ rộng cột

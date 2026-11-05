@@ -1955,6 +1955,11 @@
 	Show canvas dots	Canvasstippen tonen
 	Clip thumbnails to layer bounds	Miniaturen bijsnijden tot laaggrenzen
 	Clip Thumbnails to Layer Bounds	Miniaturen bijsnijden tot laaggrenzen
+	No Thumbnails	Geen miniaturen
+	Small Thumbnails	Kleine miniaturen
+	Medium Thumbnails	Middelgrote miniaturen
+	Large Thumbnails	Grote miniaturen
+	Clip Thumbnails to Document Bounds	Miniaturen bijsnijden tot documentgrenzen
 	Canvas color	Canvaskleur
 	Canvas custom color	Aangepaste canvaskleur
 	Color picker	Kleurkiezer

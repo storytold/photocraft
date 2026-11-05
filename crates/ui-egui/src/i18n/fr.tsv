@@ -1984,6 +1984,11 @@
 	Show canvas dots	Afficher les points du canevas
 	Clip thumbnails to layer bounds	Rogner les vignettes aux limites du calque
 	Clip Thumbnails to Layer Bounds	Rogner les vignettes aux limites du calque
+	No Thumbnails	Aucune vignette
+	Small Thumbnails	Petites vignettes
+	Medium Thumbnails	Vignettes moyennes
+	Large Thumbnails	Grandes vignettes
+	Clip Thumbnails to Document Bounds	Rogner les vignettes aux limites du document
 	Canvas color	Couleur du canevas
 	Canvas custom color	Couleur personnalisée du canevas
 	Color picker	Sélecteur de couleurs
