@@ -1251,6 +1251,42 @@ fn file_info_round_trips_through_xmp_and_psd() {
     assert_eq!(read_file_info(Some(&out))["authorTitle"], "Artist");
 }
 
+#[test]
+fn file_info_reads_rdf_bound_to_a_foreign_prefix() {
+    let xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><q:RDF xmlns:q="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><q:Description q:about="" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title><q:Alt><q:li xml:lang="x-default">Pier</q:li></q:Alt></dc:title><dc:creator><q:Seq><q:li>A</q:li><q:li>B</q:li></q:Seq></dc:creator><dc:subject><q:Bag><q:li>sea</q:li><q:li>wood</q:li></q:Bag></dc:subject></q:Description></q:RDF></x:xmpmeta>"#;
+    let info = read_file_info(Some(xmp));
+    assert_eq!(info["title"], "Pier");
+    assert_eq!(info["author"], "A; B");
+    assert_eq!(info["keywords"], json!(["sea", "wood"]));
+}
+
+#[test]
+fn file_info_reads_rdf_as_the_default_namespace() {
+    let xmp = r#"<RDF xmlns="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:dc="http://purl.org/dc/elements/1.1/"><Description about=""><dc:title><Alt><li xml:lang="x-default">Pier</li></Alt></dc:title><dc:creator><Seq><li>A</li><li>B</li></Seq></dc:creator></Description></RDF>"#;
+    let info = read_file_info(Some(xmp));
+    assert_eq!(info["title"], "Pier");
+    assert_eq!(info["author"], "A; B");
+}
+
+#[test]
+fn file_info_reads_dc_and_rights_bound_to_foreign_prefixes() {
+    let xmp = r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:e="http://purl.org/dc/elements/1.1/" xmlns:r="http://ns.adobe.com/xap/1.0/rights/" xmlns:ps="http://ns.adobe.com/photoshop/1.0/" r:Marked="True" ps:AuthorsPosition="Painter"><e:title><rdf:Alt><rdf:li xml:lang="x-default">Pier</rdf:li></rdf:Alt></e:title><r:WebStatement>https://example.org/c</r:WebStatement></rdf:Description></rdf:RDF>"#;
+    let info = read_file_info(Some(xmp));
+    assert_eq!(info["title"], "Pier");
+    assert_eq!(info["authorTitle"], "Painter");
+    assert_eq!(info["copyrightStatus"], "copyrighted");
+    assert_eq!(info["copyrightUrl"], "https://example.org/c");
+}
+
+#[test]
+fn file_info_reads_literal_prefixes_without_declarations() {
+    let xmp = r#"<rdf:Description><dc:title><rdf:Alt><rdf:li xml:lang="x-default">Pier</rdf:li></rdf:Alt></dc:title><dc:creator><rdf:Seq><rdf:li>A</rdf:li></rdf:Seq></dc:creator><xmpRights:Marked>False</xmpRights:Marked></rdf:Description>"#;
+    let info = read_file_info(Some(xmp));
+    assert_eq!(info["title"], "Pier");
+    assert_eq!(info["author"], "A");
+    assert_eq!(info["copyrightStatus"], "publicDomain");
+}
+
 fn camera_exif() -> Vec<u8> {
     photocraft_algo::exif::build(&photocraft_algo::exif::CameraInfo {
         make: Some("SONY".into()),
@@ -3011,4 +3047,94 @@ fn open_as_and_place_keep_the_typed_hard_budget_fields() {
             }
         });
     });
+}
+
+#[test]
+fn file_info_picks_the_earliest_spelling_in_the_packet() {
+    // #11200: the Dublin Core namespace is bound to dc and e, with dc declared first, so a
+    // spelling-order lookup finds dc:title — but e:title comes first in the packet and the
+    // earliest match must win, as it does for list items.
+    let xmp = "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:e=\"http://purl.org/dc/elements/1.1/\">\
+      <rdf:Description><e:title><rdf:Alt><rdf:li xml:lang=\"x-default\">First</rdf:li></rdf:Alt></e:title></rdf:Description>\
+      <rdf:Description><dc:title><rdf:Alt><rdf:li xml:lang=\"x-default\">Second</rdf:li></rdf:Alt></dc:title></rdf:Description>\
+      </rdf:RDF></x:xmpmeta>";
+    let info = read_file_info(Some(xmp));
+    assert_eq!(info["title"], "First");
+}
+
+#[test]
+fn file_info_ignores_xmlns_lookalikes_in_element_text() {
+    // #11200: the description's text mentions a binding for q. Only declarations inside a
+    // start tag count, so the q:li planted in the keywords container is not an RDF item.
+    let xmp = "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\">\
+      <rdf:Description>\
+      <dc:description><rdf:Alt><rdf:li xml:lang=\"x-default\">prose with xmlns:q=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\" inside</rdf:li></rdf:Alt></dc:description>\
+      <dc:subject><rdf:Bag><rdf:li>Real</rdf:li><q:li>Fake</q:li></rdf:Bag></dc:subject>\
+      </rdf:Description></rdf:RDF></x:xmpmeta>";
+    let info = read_file_info(Some(xmp));
+    assert_eq!(info["keywords"], json!(["Real"]));
+}
+
+#[test]
+fn file_info_write_removes_foreign_spelling_elements() {
+    // #11200: clearing a field removes its element under every spelling, not just the
+    // literal one — a foreign-prefix title otherwise survives the clear and reads straight
+    // back. Fields the dialog did not change keep their elements.
+    let xmp = "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\" xmlns:q=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\" xmlns:e=\"http://purl.org/dc/elements/1.1/\">\
+      <rdf:Description>\
+      <e:title><q:Alt><q:li xml:lang=\"x-default\">Old Title</q:li></q:Alt></e:title>\
+      <e:creator><q:Seq><q:li>Jane</q:li></q:Seq></e:creator>\
+      </rdf:Description></rdf:RDF></x:xmpmeta>";
+    let out = write_file_info(Some(xmp), &json!({ "title": "" }));
+    assert!(!out.contains("Old Title"), "cleared title must be removed: {out}");
+    let info = read_file_info(Some(&out));
+    assert_eq!(info["title"], "");
+    assert_eq!(info["author"], "Jane");
+}
+
+#[test]
+fn file_info_write_removes_foreign_spelling_attributes() {
+    // #11200: the attribute form removes under every spelling too. The note attribute's
+    // quoted value carries an e:title shape: that is text, so the read must take the real
+    // attribute, and clearing the title must leave the note untouched.
+    let xmp = "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\" xmlns:e=\"http://purl.org/dc/elements/1.1/\">\
+      <rdf:Description rdf:about=\"\" data-note='see e:title=\"Trap\" here' e:title=\"Old Title\"/>\
+      </rdf:RDF></x:xmpmeta>";
+    assert_eq!(read_file_info(Some(xmp))["title"], "Old Title");
+    let out = write_file_info(Some(xmp), &json!({ "title": "" }));
+    assert!(!out.contains("Old Title"), "cleared attribute must be removed: {out}");
+    assert!(out.contains("Trap"), "the quoted lookalike is text and stays: {out}");
+    assert_eq!(read_file_info(Some(&out))["title"], "");
+}
+
+#[test]
+fn file_info_reads_attributes_after_newlines_and_single_quotes() {
+    // Valid XML the exact-byte matcher skipped: attributes on their own lines
+    // (newline/tab before the name), whitespace around `=`, single-quoted values.
+    let xmp = "<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"><rdf:Description rdf:about=\"\"\n\txmlns:photoshop=\"http://ns.adobe.com/photoshop/1.0/\"\n\tphotoshop:AuthorsPosition = 'Painter'\n\txmlns:xmpRights=\"http://ns.adobe.com/xap/1.0/rights/\" xmpRights:Marked = \"True\"/></rdf:RDF>";
+    let info = read_file_info(Some(xmp));
+    assert_eq!(info["authorTitle"], "Painter");
+    assert_eq!(info["copyrightStatus"], "copyrighted");
+}
+
+#[test]
+fn file_info_write_removes_newline_separated_single_quoted_attribute() {
+    let xmp = "<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\" xmlns:photoshop=\"http://ns.adobe.com/photoshop/1.0/\"><rdf:Description rdf:about=\"\"\n        photoshop:AuthorsPosition = 'Painter'/></rdf:RDF>";
+    assert_eq!(read_file_info(Some(xmp))["authorTitle"], "Painter");
+    let out = write_file_info(Some(xmp), &json!({ "authorTitle": "" }));
+    assert!(!out.contains("Painter"), "cleared attribute must be removed: {out}");
+    assert!(out.contains("rdf:about=\"\""), "the rest of the Description stays: {out}");
+    assert_eq!(read_file_info(Some(&out))["authorTitle"], "");
+}
+
+#[test]
+fn file_info_ignores_xmlns_lookalikes_in_attribute_values() {
+    // #11200: a quoted attribute value that mentions a binding registers nothing (the same
+    // rule as element text), so the q:li planted in the keywords container is not an item.
+    let xmp = "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\">\
+      <rdf:Description data-note=\"binds xmlns:q='http://www.w3.org/1999/02/22-rdf-syntax-ns#' inline\">\
+      <dc:subject><rdf:Bag><rdf:li>Real</rdf:li><q:li>Fake</q:li></rdf:Bag></dc:subject>\
+      </rdf:Description></rdf:RDF></x:xmpmeta>";
+    let info = read_file_info(Some(xmp));
+    assert_eq!(info["keywords"], json!(["Real"]));
 }

@@ -75,14 +75,174 @@ pub(super) fn find_element<'a>(xmp: &'a str, tag: &str) -> Option<(usize, usize,
     None
 }
 
-/// `rdf:li` values of a container (or the element text for simple properties).
-fn li_values(inner: &str) -> Vec<String> {
+const NS_RDF: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+const NS_DC: &str = "http://purl.org/dc/elements/1.1/";
+const NS_PHOTOSHOP: &str = "http://ns.adobe.com/photoshop/1.0/";
+const NS_XMP_RIGHTS: &str = "http://ns.adobe.com/xap/1.0/rights/";
+
+/// The namespace URI a conventional prefix stands for, for the properties the reader looks up.
+fn ns_uri(prefix: &str) -> Option<&'static str> {
+    match prefix {
+        "rdf" => Some(NS_RDF),
+        "dc" => Some(NS_DC),
+        "photoshop" => Some(NS_PHOTOSHOP),
+        "xmpRights" => Some(NS_XMP_RIGHTS),
+        _ => None,
+    }
+}
+
+/// The packet's namespace declarations: `xmlns:prefix="uri"` pairs and the default `xmlns="uri"`.
+///
+/// RDF/XML lets a producer bind any prefix (or the default namespace) to a namespace, so the
+/// reader resolves names through these bindings instead of matching literal prefixes. Bindings
+/// are collected document-wide rather than per element scope: a packet rebinding a prefix to
+/// another namespace mid-document is not a case real producers emit, and a string scan stays
+/// in this file's style without an XML parser. Declarations count only inside a start tag, so
+/// `xmlns`-looking text in element content, comments or CDATA never registers a binding.
+#[derive(Default)]
+struct NsBindings {
+    prefixed: Vec<(String, String)>,
+    default: Vec<String>,
+}
+
+impl NsBindings {
+    fn collect(xmp: &str) -> Self {
+        let mut b = NsBindings::default();
+        let mut from = 0;
+        while let Some(lt) = xmp.get(from..).and_then(|r| r.find('<')).map(|i| i + from) {
+            let rest = &xmp[lt..];
+            // Comment and CDATA content is text, however declaration-like it looks.
+            if let Some(skip) = span_len(rest, "<!--", "-->").or_else(|| span_len(rest, "<![CDATA[", "]]>")) {
+                from = lt + skip;
+                continue;
+            }
+            if rest.starts_with("</") || rest.starts_with("<?") || rest.starts_with("<!") {
+                from = lt + 2;
+                continue;
+            }
+            let end = tag_end(xmp, lt);
+            b.collect_tag(&xmp[lt..end]);
+            from = end;
+        }
+        b
+    }
+
+    /// The `xmlns` declarations inside one start tag (`<` through its `>`).
+    fn collect_tag(&mut self, tag: &str) {
+        // Quoted attribute values are text: a declaration shape inside one registers nothing.
+        let quoted = quoted_spans(tag);
+        let mut from = 0;
+        while let Some(i) = tag.get(from..).and_then(|r| r.find("xmlns")).map(|i| i + from) {
+            from = i + "xmlns".len();
+            if quoted.iter().any(|&(a, b)| (a..b).contains(&i)) {
+                continue;
+            }
+            // An attribute name: preceded by whitespace.
+            if !tag.get(..i).and_then(|s| s.chars().next_back()).is_some_and(char::is_whitespace) {
+                continue;
+            }
+            let Some(rest) = tag.get(from..) else { break };
+            let (prefix, rest) = match rest.strip_prefix(':') {
+                Some(r) => {
+                    let end = r.find(|c: char| c == '=' || c.is_whitespace() || c == '>' || c == '<').unwrap_or(r.len());
+                    let (p, r) = r.split_at(end);
+                    if p.is_empty() {
+                        continue;
+                    }
+                    (Some(p), r)
+                }
+                None => (None, rest),
+            };
+            let Some(rest) = rest.trim_start().strip_prefix('=') else { continue };
+            let rest = rest.trim_start();
+            let Some(quote) = rest.chars().next().filter(|c| matches!(c, '"' | '\'')) else { continue };
+            let Some(end) = rest.get(1..).and_then(|v| v.find(quote)) else { continue };
+            let Some(uri) = rest.get(1..1 + end) else { continue };
+            let uri = xml_unescape(uri);
+            match prefix {
+                Some(p) => self.prefixed.push((p.to_string(), uri)),
+                None => self.default.push(uri),
+            }
+        }
+    }
+
+    /// Whether the packet declares any binding (prefixed or default) for `uri`.
+    fn binds(&self, uri: &str) -> bool {
+        self.prefixed.iter().any(|(_, u)| u == uri) || self.default.iter().any(|u| u == uri)
+    }
+
+    /// Every spelling of the qualified name `literal` (e.g. `dc:title`) in this packet: `P:local`
+    /// for each prefix P bound to its namespace, plus the bare `local` when that namespace is the
+    /// default and `element` is set (the default namespace does not apply to attributes). A
+    /// packet that declares no binding for the namespace keeps the literal spelling.
+    fn spellings(&self, literal: &str, element: bool) -> Vec<String> {
+        let Some((prefix, local)) = literal.split_once(':') else { return vec![literal.to_string()] };
+        let Some(uri) = ns_uri(prefix) else { return vec![literal.to_string()] };
+        if !self.binds(uri) {
+            return vec![literal.to_string()];
+        }
+        let mut out: Vec<String> = Vec::new();
+        for (p, u) in &self.prefixed {
+            let name = format!("{p}:{local}");
+            if u == uri && !out.contains(&name) {
+                out.push(name);
+            }
+        }
+        if element && self.default.iter().any(|u| u == uri) {
+            out.push(local.to_string());
+        }
+        out
+    }
+
+    /// The tags of RDF list items in this packet (`rdf:li` unless the packet binds RDF otherwise).
+    fn li_tags(&self) -> Vec<String> {
+        self.spellings("rdf:li", true)
+    }
+
+    /// The first element `prop` under any of its spellings: the earliest match in the packet,
+    /// as with list items, not the first spelling that matches anywhere.
+    fn find_element<'a>(&self, xmp: &'a str, prop: &str) -> Option<(usize, usize, &'a str)> {
+        self.spellings(prop, true).iter().filter_map(|t| find_element(xmp, t)).min_by_key(|(a, _, _)| *a)
+    }
+
+    /// The attribute `prop` under any of its spellings, earliest match first as above.
+    fn find_attr<'a>(&self, xmp: &'a str, prop: &str) -> Option<(usize, usize, &'a str)> {
+        self.spellings(prop, false).iter().filter_map(|t| find_attr(xmp, t)).min_by_key(|(a, _, _)| *a)
+    }
+}
+
+/// The length of the `open`…`close` span at the start of `s`, if it starts with `open`
+/// (to the end of `s` when the close never comes).
+fn span_len(s: &str, open: &str, close: &str) -> Option<usize> {
+    let rest = s.strip_prefix(open)?;
+    Some(open.len() + rest.find(close).map_or(rest.len(), |i| i + close.len()))
+}
+
+/// The index just past the `>` that closes the tag opening at `from` (a `<`), honouring
+/// quoted attribute values, which may themselves contain `>`.
+fn tag_end(xmp: &str, from: usize) -> usize {
+    let mut quote = None;
+    for (i, c) in xmp[from..].char_indices() {
+        match quote {
+            Some(q) if c == q => quote = None,
+            Some(_) => {}
+            None if matches!(c, '"' | '\'') => quote = Some(c),
+            None if c == '>' => return from + i + 1,
+            None => {}
+        }
+    }
+    xmp.len()
+}
+
+/// List item values of a container (or the element text for simple properties); `li_tags` are
+/// the item tags the packet uses (see [`NsBindings::li_tags`]).
+fn li_values(inner: &str, li_tags: &[String]) -> Vec<String> {
     let mut out = Vec::new();
     let mut rest = inner;
-    while let Some((a, b, v)) = find_element(rest, "rdf:li") {
+    // The earliest item under any spelling, so mixed spellings keep document order.
+    while let Some((_, b, v)) = li_tags.iter().filter_map(|t| find_element(rest, t)).min_by_key(|(a, _, _)| *a) {
         out.push(xml_unescape(v.trim()));
-        rest = &rest[b..];
-        let _ = a;
+        rest = rest.get(b..).unwrap_or("");
     }
     if out.is_empty() && !inner.contains('<') && !inner.trim().is_empty() {
         out.push(xml_unescape(inner.trim()));
@@ -90,23 +250,96 @@ fn li_values(inner: &str) -> Vec<String> {
     out
 }
 
-/// Attribute form `prop="value"` on an `rdf:Description`.
+/// The `(start, end)` spans of `s` that sit inside quotes, quotes included: attribute values,
+/// where declaration- or attribute-shaped text is just text (#11200).
+fn quoted_spans(s: &str) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    let mut quote = None;
+    for (i, c) in s.char_indices() {
+        match quote {
+            Some((q, start)) if c == q => {
+                out.push((start, i + c.len_utf8()));
+                quote = None;
+            }
+            Some(_) => {}
+            None if matches!(c, '"' | '\'') => quote = Some((c, i)),
+            None => {}
+        }
+    }
+    out
+}
+
+/// Attribute form `prop="value"` on an `rdf:Description`. The name must sit at an attribute
+/// position — inside a start tag, outside any quoted value: `prop="…"` inside another
+/// attribute's value (or in element text) is text, and matching it would read, or on removal
+/// cut, the wrong thing (#11200). The name may follow any XML whitespace (space, tab, or
+/// newline), whitespace may surround the `=`, and the value may be single- or double-quoted;
+/// the returned span runs from the whitespace before the name through the closing quote.
 fn find_attr<'a>(xmp: &'a str, prop: &str) -> Option<(usize, usize, &'a str)> {
-    let key = format!(" {prop}=\"");
-    let i = xmp.find(&key)?;
-    let v0 = i + key.len();
-    let v1 = xmp[v0..].find('"')? + v0;
-    Some((i, v1 + 1, &xmp[v0..v1]))
+    let mut from = 0;
+    while let Some(lt) = xmp.get(from..).and_then(|r| r.find('<')).map(|i| i + from) {
+        let rest = &xmp[lt..];
+        if let Some(skip) = span_len(rest, "<!--", "-->").or_else(|| span_len(rest, "<![CDATA[", "]]>")).or_else(|| span_len(rest, "<?", "?>")) {
+            from = lt + skip;
+            continue;
+        }
+        if rest.starts_with("</") || rest.starts_with("<!") {
+            from = lt + 2;
+            continue;
+        }
+        let end = tag_end(xmp, lt);
+        let tag = &xmp[lt..end];
+        let mut in_quote = vec![false; tag.len()];
+        for (a, b) in quoted_spans(tag) {
+            in_quote[a..b].fill(true);
+        }
+        let bytes = tag.as_bytes();
+        let mut at = 0;
+        while at < tag.len() {
+            // Anchor on whitespace outside quoted values; the attribute name
+            // starts after the whitespace run.
+            let Some(ws) = (at..tag.len()).find(|&i| bytes[i].is_ascii_whitespace() && !in_quote[i]) else {
+                break;
+            };
+            let name = ws + tag[ws..].bytes().take_while(|b| b.is_ascii_whitespace()).count();
+            let after = name + prop.len();
+            // `name..after` must be exactly `prop`, then optional whitespace,
+            // `=`, optional whitespace, and a quote.
+            let mut i = after;
+            while bytes.get(i).is_some_and(|b| b.is_ascii_whitespace()) {
+                i += 1;
+            }
+            if tag.get(name..after) == Some(prop) && bytes.get(i) == Some(&b'=') {
+                i += 1;
+                while bytes.get(i).is_some_and(|b| b.is_ascii_whitespace()) {
+                    i += 1;
+                }
+                if let Some(&q) = bytes.get(i) {
+                    if q == b'"' || q == b'\'' {
+                        let v0 = i + 1;
+                        if let Some(v1) = tag[v0..].find(q as char).map(|j| j + v0) {
+                            return Some((lt + ws, lt + v1 + 1, &tag[v0..v1]));
+                        }
+                    }
+                }
+            }
+            at = name.max(at + 1);
+        }
+        from = end;
+    }
+    None
 }
 
 /// File Info fields read from an XMP packet.
 pub fn read_file_info(xmp: Option<&str>) -> Value {
     let mut m = serde_json::Map::new();
     let x = xmp.unwrap_or("");
+    let ns = NsBindings::collect(x);
+    let li = ns.li_tags();
     for (key, prop, kind) in INFO_FIELDS {
-        let vals = match find_element(x, prop) {
-            Some((_, _, inner)) => li_values(inner),
-            None => find_attr(x, prop).map(|(_, _, v)| vec![xml_unescape(v)]).unwrap_or_default(),
+        let vals = match ns.find_element(x, prop) {
+            Some((_, _, inner)) => li_values(inner, &li),
+            None => ns.find_attr(x, prop).map(|(_, _, v)| vec![xml_unescape(v)]).unwrap_or_default(),
         };
         let v = if kind == "Bag" {
             json!(vals)
@@ -117,8 +350,10 @@ pub fn read_file_info(xmp: Option<&str>) -> Value {
         };
         m.insert(key.into(), v);
     }
-    let marked =
-        find_element(x, "xmpRights:Marked").map(|(_, _, v)| v.trim().to_string()).or_else(|| find_attr(x, "xmpRights:Marked").map(|(_, _, v)| v.to_string()));
+    let marked = ns
+        .find_element(x, "xmpRights:Marked")
+        .map(|(_, _, v)| v.trim().to_string())
+        .or_else(|| ns.find_attr(x, "xmpRights:Marked").map(|(_, _, v)| v.to_string()));
     m.insert(
         "copyrightStatus".into(),
         json!(match marked.as_deref() {
@@ -127,9 +362,10 @@ pub fn read_file_info(xmp: Option<&str>) -> Value {
             _ => "unknown",
         }),
     );
-    let url = find_element(x, "xmpRights:WebStatement")
+    let url = ns
+        .find_element(x, "xmpRights:WebStatement")
         .map(|(_, _, v)| xml_unescape(v.trim()))
-        .or_else(|| find_attr(x, "xmpRights:WebStatement").map(|(_, _, v)| xml_unescape(v)));
+        .or_else(|| ns.find_attr(x, "xmpRights:WebStatement").map(|(_, _, v)| xml_unescape(v)));
     m.insert("copyrightUrl".into(), json!(url.unwrap_or_default()));
     Value::Object(m)
 }
@@ -201,10 +437,10 @@ fn date_text(s: &str) -> String {
     if digits(&[11, 12, 14, 15, 17, 18]) && sep(10, b" T") && sep(13, b":") && sep(16, b":") { format!("{date} {}", part(11..19)) } else { date }
 }
 
-/// A single XMP value: the first `rdf:li` of a container, element text or attribute.
+/// A single XMP value: the first list item of a container, element text or attribute.
 fn xmp_value(x: &str, prop: &str) -> Option<String> {
     let v = match find_element(x, prop) {
-        Some((_, _, inner)) => li_values(inner).into_iter().next(),
+        Some((_, _, inner)) => li_values(inner, &NsBindings::collect(x).li_tags()).into_iter().next(),
         None => find_attr(x, prop).map(|(_, _, v)| xml_unescape(v)),
     }?;
     let v = v.trim().to_string();
@@ -264,15 +500,23 @@ pub fn write_file_info(xmp: Option<&str>, info: &Value) -> String {
     let mut x = xmp.filter(|s| s.contains("</rdf:RDF>")).map(str::to_string).unwrap_or_else(|| {
         "<?xpacket begin=\"\u{feff}\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n </rdf:RDF>\n</x:xmpmeta>\n<?xpacket end=\"w\"?>".to_string()
     });
+    // Removal must see every spelling the reader does, or a foreign-prefix element survives a
+    // clear and the old value reads straight back (#11200). Bindings are collected once, up
+    // front: removing an element must not unbind a prefix a later removal still needs.
+    let ns = NsBindings::collect(&x);
     for (key, prop, _) in INFO_FIELDS.into_iter().chain([("copyrightStatus", "xmpRights:Marked", ""), ("copyrightUrl", "xmpRights:WebStatement", "")]) {
         if !changed(key) {
             continue;
         }
-        while let Some((a, b, _)) = find_element(&x, prop) {
-            x.replace_range(a..b, "");
+        for tag in ns.spellings(prop, true) {
+            while let Some((a, b, _)) = find_element(&x, &tag) {
+                x.replace_range(a..b, "");
+            }
         }
-        while let Some((a, b, _)) = find_attr(&x, prop) {
-            x.replace_range(a..b, "");
+        for attr in ns.spellings(prop, false) {
+            while let Some((a, b, _)) = find_attr(&x, &attr) {
+                x.replace_range(a..b, "");
+            }
         }
     }
     let get = |k: &str| info.get(k).filter(|_| changed(k)).cloned().unwrap_or(Value::Null);
