@@ -236,6 +236,21 @@ impl ColorState {
             .unwrap_or_else(|| working_profile(mode))
     }
 
+    /// Whether resolving `spec` (as [`Self::resolve`] does with `mode`; `None` is the mode's
+    /// working space, as for an Image › Mode conversion without a `profile`) would read a
+    /// working space from Color Settings that is not a built-in profile, i.e. a file. Automation
+    /// sessions refuse that: it is a path the caller's directory capabilities do not cover.
+    pub fn working_reads_file(&self, spec: Option<&str>, mode: ColorMode) -> bool {
+        let space = match spec {
+            None | Some("working" | "default") => mode_space(mode),
+            Some("working-rgb" | "workingRgb") => ColorSpace::Rgb,
+            Some("working-cmyk" | "workingCmyk") => ColorSpace::Cmyk,
+            Some("working-gray" | "workingGray") => ColorSpace::Gray,
+            Some(_) => return false,
+        };
+        self.settings.working_spec(space).is_some_and(|working| Builtin::from_id(working).is_none())
+    }
+
     /// Resolve a profile spec, reading "working…" specs from Color Settings.
     pub fn resolve(&self, spec: &str, doc: Option<&Document>, mode: Option<ColorMode>) -> Result<Arc<Profile>> {
         match spec {
@@ -881,7 +896,22 @@ pub fn convert_mode(s: &mut Session, mode: ColorMode, p: &Value) -> Result<Value
     if doc.mode == mode && p.get("profile").is_none() {
         return Ok(Value::Null);
     }
-    let dst = match p.get("profile").and_then(Value::as_str) {
+    let spec = p.get("profile").and_then(Value::as_str);
+    // An automation gate means the caller only holds directory capabilities: a desktop working
+    // space stored as an .icc path is outside them (a fresh headless session's never is).
+    if s.authorize.is_some() && s.color.working_reads_file(spec, mode) {
+        let example = match mode_space(mode) {
+            ColorSpace::Cmyk => Builtin::CoatedCmyk,
+            ColorSpace::Gray => Builtin::DotGain20Compat,
+            ColorSpace::Lab => Builtin::LabD50,
+            _ => Builtin::Srgb,
+        };
+        return Err(EngineError::Other(format!(
+            "the working {mode:?} space in Color Settings is a profile file, which automation can't read; pass a built-in `profile` (for example `{}`)",
+            example.id()
+        )));
+    }
+    let dst = match spec {
         Some(spec) => s.color.resolve(spec, Some(doc), Some(mode))?,
         None => s.color.working(mode),
     };

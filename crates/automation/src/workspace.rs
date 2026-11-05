@@ -408,11 +408,33 @@ pub fn authorize_engine_command(id: &str, params: &Value) -> Result<(), Automati
 /// cannot acquire such settings through the automation interface.
 pub fn authorize_desktop_engine_command(id: &str, params: &Value) -> Result<(), AutomationError> {
     authorize_engine_command(id, params)?;
-    if id.starts_with("image.mode.") {
+    if id.starts_with("image.mode.") && !DESKTOP_MODE_CHANGES.contains(&id) {
         return Err(command_error(id));
     }
     Ok(())
 }
+
+/// Image › Mode commands judged safe in a desktop session, whose Color Settings may name `.icc`
+/// files. Bitmap, Indexed Color, Color Table, Duotone, Multichannel and the bit depths take no
+/// profile. RGB, Grayscale, CMYK and Lab convert from the document's embedded profile (or the
+/// mode's built-in default) to their `profile`: a path there is refused above
+/// ([`params_contain_ambient_path`]), and when they would fall back to a working space that is
+/// not built in, the engine refuses them under any automation gate before reading it
+/// (`ColorState::working_reads_file`). Any other `image.mode.*` stays denied until it is judged.
+const DESKTOP_MODE_CHANGES: &[&str] = &[
+    "image.mode.rgb",
+    "image.mode.grayscale",
+    "image.mode.cmyk",
+    "image.mode.lab",
+    "image.mode.bitmap",
+    "image.mode.indexedColor",
+    "image.mode.colorTable",
+    "image.mode.duotone",
+    "image.mode.multichannel",
+    "image.mode.bits8",
+    "image.mode.bits16",
+    "image.mode.bits32",
+];
 
 /// [`authorize_engine_command`] as the function pointer [`photocraft_engine::Session::authorize`]
 /// stores. `actions.play` calls it for every nested step.

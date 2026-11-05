@@ -43,6 +43,10 @@ Automation is a privilege boundary because requests can cause filesystem access,
   user-configured script-event paths. The policy also covers every command a command runs on its
   own behalf (an action's steps, `file.automate.conditionalModeChange` running `image.mode.*`), so
   an allowed command can't reach a denied one.
+- A desktop session's Color Settings may name `.icc` files. Image › Mode conversions under
+  automation refuse to fall back to such a working space (no `profile`, or `working`/`default`)
+  before reading it; built-in profiles and conversions without a profile (Bitmap, Indexed Color,
+  Duotone, Multichannel, bit depth) run.
 - `prefs.set` applies the engine's dotted-path normalization before checking for filesystem-bearing
   preference sections, including paths with leading or repeated dots. It refuses whole-preferences
   updates and those sections; individual safe preference keys remain available.
