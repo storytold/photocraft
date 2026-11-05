@@ -936,6 +936,7 @@
 	Show Extras Options	Εμφάνιση επιπλέον επιλογών
 	Soften	Απαλότητα
 	Source: set	Πηγή: ορίστηκε
+	Source: {name}	Πηγή: {name}
 	Std Dev:	Τυπική απόκλιση:
 	Subtract	Αφαίρεση
 	Text Replacement	Αντικατάσταση κειμένου
@@ -3990,6 +3991,7 @@ curves	Smooth	Εξομάλυνση
 	Sent to {printer}	Στάλθηκε στον {printer}
 	set in Print Settings…	ορίζεται στις ρυθμίσεις εκτύπωσης…
 	ICO is limited to 256 × 256 pixels	Το ICO περιορίζεται σε 256 × 256 εικονοστοιχεία
+	Memory usage percent	Χρήση μνήμης (%)
 	Show Favorite Fonts	Εμφάνιση αγαπημένων γραμματοσειρών
 	No favorite fonts yet: click the star beside a font to add it.	Δεν υπάρχουν ακόμη αγαπημένες γραμματοσειρές: κάντε κλικ στο αστέρι δίπλα σε μια γραμματοσειρά για να την προσθέσετε.
 	Favorite fonts	Αγαπημένες γραμματοσειρές
@@ -4033,6 +4035,7 @@ curves	Smooth	Εξομάλυνση
 	Automatically Check for Updates	Αυτόματος έλεγχος ενημερώσεων
 	Paints from the History panel's source state	Βάφει από την κατάσταση πηγής του πίνακα Ιστορικό
 	Sets the source for the history brush	Ορίζει την πηγή για το πινέλο ιστορικού
+	The History Brush source was deleted: set a new source in the History panel	Η πηγή για το πινέλο ιστορικού διαγράφηκε: ορίστε νέα πηγή στον πίνακα Ιστορικό
 	Highlight Mode	Λειτουργία φωτεινών τόνων
 	Highlight Color	Χρώμα φωτεινών τόνων
 	Highlight Opacity	Αδιαφάνεια φωτεινών τόνων
@@ -4052,6 +4055,7 @@ curves	Smooth	Εξομάλυνση
 	Chisel Soft	Μαλακή σμίλευση
 	Open color-less EXR as ACEScg	Άνοιγμα EXR χωρίς χρωματική δήλωση ως ACEScg
 	Do not append "copy" to filename when saving a copy	Να μην προστίθεται «copy» στο όνομα αρχείου κατά την αποθήκευση αντιγράφου
+	Save Full-Size Composite in .pcraft Files	Αποθήκευση σύνθετης εικόνας πλήρους μεγέθους στα αρχεία .pcraft
 	EXIF	EXIF
 	Edit Selected Guides	Επεξεργασία επιλεγμένων οδηγών
 	Clear Selected Guides	Απαλοιφή επιλεγμένων οδηγών
@@ -4105,6 +4109,7 @@ curves	Smooth	Εξομάλυνση
 	This document's layers: {needed} of {budget} for layers	Επίπεδα αυτού του εγγράφου: {needed} από {budget} για επίπεδα
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Τα επίπεδα αυτού του εγγράφου χρειάζονται {needed} αλλά μπορούν να καταλάβουν {budget}: η επανασχεδίαση όλου του εγγράφου γίνεται στη CPU
 	GPU Memory (MB, 0 = Automatic)	Μνήμη GPU (MB, 0 = Αυτόματο)
+	Scratch Size Limit (MB, 0 = No Limit)	Όριο μεγέθους δίσκου προσωρινής αποθήκευσης (MB, 0 = χωρίς όριο)
 	{path}: the path is not valid Unicode; save under another name.	{path}: η διαδρομή δεν είναι έγκυρο Unicode· αποθηκεύστε με άλλο όνομα.
 	{name} was changed by another app after it was opened or saved here.	Το {name} άλλαξε από άλλη εφαρμογή αφού ανοίχτηκε ή αποθηκεύτηκε εδώ.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Αντικαταστήστε το με αυτό το έγγραφο ή ακυρώστε και χρησιμοποιήστε Αρχείο › Αποθήκευση ως για να κρατήσετε και τα δύο.
