@@ -1333,6 +1333,42 @@ fn tail_preview_shows_the_stroke_as_finishing_it_would() {
 }
 
 #[test]
+fn sampled_dabs_are_the_same_in_their_tight_box_with_rows_cut_to_the_tip() {
+    // A sampled dab is computed over the rotated tip's own box, and in each row only where the
+    // tip can land; at any angle (just off a right angle too), flip, roundness and projection,
+    // the pixels match scanning the whole square that fits any rotation, which is 0 elsewhere.
+    let tip = GrayTile::from_fn(37, 23, |x, y| 0.05 + ((x * 7 + y * 13) % 11) as f32 / 11.0);
+    let dual = DualBrush { enabled: true, tip: TipShape::Sampled(GrayTile::from_fn(15, 40, |x, _| 0.1 + (x % 3) as f32 / 3.0)), ..Default::default() };
+    let b = BrushSettings { tip: TipShape::Sampled(tip), dual_brush: dual, ..brush() };
+    let ctx = BrushContext::new(&b);
+    let half_pi = std::f32::consts::FRAC_PI_2;
+    for angle in [0.0, 0.3, -1.1, half_pi, half_pi + 1e-6, half_pi - 3e-7, 3.0, std::f32::consts::PI] {
+        for (roundness, flip, proj) in [(1.0, false, 1.0), (0.35, true, 1.0), (0.8, false, 0.4)] {
+            let d = Dab { angle, roundness, flip_x: flip, proj_scale: proj, proj_angle: 0.7, ..Dab::round(Point::new(60.3, 41.7), 40.0, 0.9) };
+            for dual in [false, true] {
+                let what = format!("angle {angle}, roundness {roundness}, flip {flip}, projection {proj}, dual {dual}");
+                let r = ctx.dab_rect(&d, dual);
+                let square = crate::render::rect_around(&d, d.radius * std::f32::consts::SQRT_2);
+                let (mut cut, mut full) = (Vec::new(), Vec::new());
+                ctx.rasterize(&d, dual, r, &mut cut);
+                crate::render::FULL_SCAN.with(|f| f.set(true));
+                ctx.rasterize(&d, dual, square, &mut full);
+                crate::render::FULL_SCAN.with(|f| f.set(false));
+                assert!(full.iter().any(|&v| v > 0.0), "{what}");
+                let (sw, rw) = (square.width() as i32, r.width() as i32);
+                for y in square.y0..square.y1 {
+                    for x in square.x0..square.x1 {
+                        let v = full[((y - square.y0) * sw + (x - square.x0)) as usize];
+                        let got = if r.contains(x, y) { cut[((y - r.y0) * rw + (x - r.x0)) as usize] } else { 0.0 };
+                        assert!(v == got, "{what}: pixel ({x}, {y}) is {got}, scanning the square gives {v}");
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn live_union_of_passes_matches_merging_the_passes_after_every_chunk_and_at_the_end() {
     // Symmetric painting previews the stroke and its mirrors with `composite_union_live`, which
     // redraws only changed tiles; after every chunk, and once the passes finish, the target must
@@ -1867,6 +1903,44 @@ fn large_tips_render_the_same_in_parallel_and_serially() {
         let diff = p.iter().zip(s).filter(|(a, b)| a != b).count();
         assert_eq!(diff, 0, "stroke {i}: {diff} pixels differ between the parallel and the serial render");
         assert!(p.iter().any(|v| (*v - 0.5).abs() > 0.1), "stroke {i} painted something");
+    }
+}
+
+/// The general loop (sampled tips, per-tip textures) paints the same pixels on the thread pool
+/// and serially, at 8-bit, 16-bit and float depth.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn general_loop_strokes_render_the_same_in_parallel_and_serially_at_every_depth() {
+    let tip = GrayTile::from_fn(16, 16, |x, y| if (x + y) % 3 == 0 { 1.0 } else { 0.4 });
+    let mut textured = BrushSettings { size: 120.0, hardness: 0.3, ..brush() };
+    textured.texture = Texture { enabled: true, pattern: Pattern::Tile(tip.clone()), each_tip: true, ..Default::default() };
+    let strokes = [BrushSettings { size: 120.0, tip: TipShape::Sampled(tip), color: [0.9, 0.2, 0.1, 1.0], ..brush() }, textured];
+    let full = Rect::new(0, 0, 400, 200);
+    let formats = [PixelFormat::RGBA8, PixelFormat::RGBA8.with_sample(SampleType::U16), PixelFormat::RGBA32F];
+    struct Restore;
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            crate::render::set_parallel_min_pixels(crate::render::DEFAULT_PARALLEL_MIN_PIXELS);
+        }
+    }
+    let _restore = Restore;
+    for fmt in formats {
+        for (i, b) in strokes.iter().enumerate() {
+            let render = |parallel_from: usize| -> Vec<f32> {
+                crate::render::set_parallel_min_pixels(parallel_from);
+                let mut s = Surface::new(fmt);
+                s.fill_rect(full, &[0.5, 0.5, 0.5, 1.0]);
+                render_stroke(&mut s, b, &line(80.0, 320.0, 100.0), None, false, 1.0);
+                s.read_region(full)
+            };
+            let parallel = render(0);
+            let serial = render(usize::MAX);
+            assert_eq!(parallel.len(), serial.len());
+            let diff = parallel.iter().zip(&serial).filter(|(a, b)| a.to_bits() != b.to_bits()).count();
+            assert_eq!(diff, 0, "stroke {i} at {fmt:?}: {diff} pixels differ between the parallel and the serial render");
+            // Colour channels only: the opaque background's alpha (1.0) is always 0.5 away from 0.5.
+            assert!(parallel.as_chunks::<4>().0.iter().any(|px| px[..3].iter().any(|v| (*v - 0.5).abs() > 0.1)), "stroke {i} at {fmt:?} painted something");
+        }
     }
 }
 
