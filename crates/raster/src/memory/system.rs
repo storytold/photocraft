@@ -210,7 +210,10 @@ pub(super) mod linux {
         // shows the process its membership path but no interface files, so no limit is
         // observable. Failing closed there reported 0 bytes free and refused every PSD on a
         // machine with tens of GB. A present directory still takes the guarded path below.
-        if !sys_root.exists() && mountinfo.as_deref().is_some_and(|info| !has_cgroup_mount(info)) {
+        // Only a confirmed NotFound counts as absent: a stat that fails for another reason
+        // (permissions) leaves the directory possibly present, so that case stays fail-closed.
+        let sys_root_absent = matches!(std::fs::metadata(sys_root), Err(e) if e.kind() == std::io::ErrorKind::NotFound);
+        if sys_root_absent && mountinfo.as_deref().is_some_and(|info| !has_cgroup_mount(info)) {
             return CgroupLimits::NotConstrained;
         }
 
@@ -951,6 +954,17 @@ mod tests {
         write(&proc.join("self/cgroup"), "0::/app.slice/app-flatpak.scope\n");
         write(&proc.join("self/mountinfo"), "25 20 0:23 / /proc rw - proc proc rw\n");
         assert_eq!(linux::cgroup_limits(&proc, &sys), linux::CgroupLimits::NotConstrained);
+        std::fs::remove_dir_all(proc.parent().unwrap()).unwrap();
+
+        // A cgroup2 mount at an alternate path must be honoured while /sys/fs/cgroup is absent.
+        let (proc, _) = fixture("alternate-cgroup-mount");
+        let sys = proc.parent().unwrap().join("absent-sys");
+        let alt = proc.parent().unwrap().join("alt-cgroup");
+        write(&proc.join("self/cgroup"), "0::/app\n");
+        write(&proc.join("self/mountinfo"), &format!("30 20 0:26 / {} rw - cgroup2 cgroup2 rw\n", alt.display()));
+        write(&alt.join("app/memory.max"), "1073741824\n");
+        write(&alt.join("app/memory.current"), "0\n");
+        assert_eq!(linux::cgroup_limits(&proc, &sys), linux::CgroupLimits::Limited { ram: Some(1 << 30), swap: None });
         std::fs::remove_dir_all(proc.parent().unwrap()).unwrap();
 
         // Available but not delegated anywhere on the path: no cgroup limit applies.
