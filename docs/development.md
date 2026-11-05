@@ -250,6 +250,7 @@ See `docs/control-protocol.md` for every method. Tips:
 ```sh
 cargo run -p photocraft-cli -- convert in.psd out.pcraft               # any supported format -> any
 cargo run -p photocraft-cli -- info out.pcraft                          # JSON: size, mode, depth, layer tree
+cargo run -p photocraft-cli -- info out.psd --detail                    # also text runs, anti-aliasing, full layer-effect settings
 cargo run -p photocraft-cli -- run in.png --cmd layer.new.layer --params '{"name":"Ink"}' \
                                           --cmd filter.blur.gaussianBlur --params '{"radius":3}' --out out.psd
 cargo run -p photocraft-cli -- run --new '{"width":800,"height":600}' --cmd document.inspect
@@ -599,7 +600,9 @@ trunk serve --release              # dev server on http://127.0.0.1:8765
 
 Any static file server works for `dist/web`, for example `python3 -m http.server 8765` run inside that directory. Trunk downloads the matching `wasm-bindgen` and `wasm-opt` itself. `trunk build --release` uses the `wasm-release` Cargo profile (`data-cargo-profile` in `index.html`: fat LTO, opt-level "z" for the UI, engine, I/O and web shells and for large crates off the hot paths (document model, file parsers, JSON, SVG parsing, shader translation), "s" for other crates except pixel processing, which keeps level 3). The UI override reduces browser code size while retaining the speed-oriented settings for filters and compositing. Serve the `.wasm` with compression; its raw size varies with the source and compiler. Some static hosts refuse a file that large (Cloudflare's per-file cap is 25 MiB), so the release site doesn't hold it as one file: `packaging/web/package.sh` gzips it, cuts it into parts of at most 20 MiB under `app/`, and ships the page of `apps/photocraft-web-boot`, a small module that fetches the parts, has the browser inflate them (or inflates them itself where the browser can't) and passes the stream to the app's own loader (issue #5302). The script fails if any file in the site is over 24 MiB; the wasm's own size is no longer limited, but it is still what every visitor downloads, so watch it. Pull-request CI also builds the actual browser app with the same pinned Trunk version as the release job and runs `packaging/web/package.sh`, including the relative-URL and file-size checks. The `web build and wasm size gate` check runs on main and on PRs that change something the web build compiles or packages (`apps/photocraft-web`, `apps/photocraft-web-boot`, `packaging/web`, crate sources and manifests, `Cargo.toml`/`Cargo.lock`, the CI workflow), and reports the wasm's size and the site's largest file in the Actions job summary. The web build never embeds craft-fonts (see Fonts above). To see where the bytes go, run `twiggy top -n 40` on `target/wasm32-unknown-unknown/wasm-release/photocraft-web.wasm` (before wasm-opt strips the names).
 
-URL flags: `?webgl` forces the WebGL2 backend, and `?cpu` forces the CPU canvas path.
+URL flags: `?webgl` forces the WebGL2 backend, and `?cpu` forces the CPU canvas path. `?free-mb=N` is a diagnostic: the memory gates and the low-memory warning behave as if only N MiB could be allocated, so they can be checked in a browser without gigabytes of images (for example `?free-mb=300`, then Place a large image, or `?free-mb=400` for the warning).
+
+Running out of memory in the browser: a failed allocation aborts the WebAssembly module, and stable Rust can't turn that into an error, so the page froze on its last frame. Three layers now cover it (#10024). **Gate:** Place, Image Size, a smart-object re-render and every save or export (Save, Save a Copy, Export As, layer and batch exports) ask `photocraft_raster::headroom::ensure` first (a trial `try_reserve_exact` of the operation's estimated need plus 128 MiB, freed at once; always passes off the web), and refuse with an error naming the operation and the need when it won't fit (`photocraft_engine::memory_gate`, estimates per operation; `photocraft_io::estimate_export_bytes` for saves). **Warn:** `memory_warning` posts a sticky notice when linear memory is within 512 MiB of the 4 GiB wasm32 ceiling (`headroom::below` reads the memory size and allocates nothing, since a periodic trial reservation would grow memory that never shrinks), and re-arms at or above 768 MiB in simulations. Real wasm linear memory normally does not shrink, so the warning cannot normally re-arm. A PSD/PSB source's estimate adds a canvas-sized surface per layer (the layer count is read from its layer info, without decoding); one that isn't 8-bit RGB or grayscale, or whose sections can't be read, has no safe bound and is refused before Place or smart-object rendering on the web. **Backstop:** if the module still traps, `index.html` holds a hidden `#photocraft_stopped` message that `web.rs` reveals (the `error` and `unhandledrejection` events), saying whether it ran out of memory or hit an internal error (a panic's message is kept by a chained panic hook), with a Reload link; the "Leave site?" prompt is skipped then.
 
 To build and serve the web app entirely in Docker, run from the repository root:
 
@@ -944,6 +947,46 @@ scripts/fetch-corpus.sh            # the same as cargo xtask corpus --all
   manifest gives the same reproducibility.
 - The third-party sets (psd-tools, ag-psd, PngSuite) are fetched from their upstreams the same way,
   and are never copied into photocraft-corpus.
+
+## PSD write recipes
+
+The PSD write oracle exercises actual edits before export. The recipe runner opens each
+base with `photocraft-cli`, applies its commands to a uniquely selected layer, exports
+and reopens the PSD, and checks the specified properties (it reads layers with
+`photocraft-cli info --detail`). It records the generated
+files and results for a later independent Photoshop verification (#6130).
+
+```sh
+cargo xtask corpus --photoshop
+cargo build -p photocraft-cli --release
+cargo xtask psd-write-oracle xtask/psd-write-oracle/starter.json corpus/photoshop target/release/photocraft-cli target/psd-write-oracle
+```
+
+The output directory must not exist. It contains `report.json`, `manifest.json`, a
+candidate PSD per successful export, and CLI stdout/stderr for diagnosis. A failed
+case does not prevent the other cases from running, but the command exits nonzero.
+The manifest records the checkout revision, whether tracked files were modified, the
+CLI binary hash, recipe hash, corpus revision and candidate hashes (revision and
+dirty state are `unknown` outside a git checkout). The checkout
+revision does not establish where a supplied binary was built; use a binary built from
+that revision and preserve the CI run's provenance. Missing fonts and other warnings
+are recorded. The runner never overwrites its input PSDs.
+
+Recipes are versioned JSON (`version` must be `1`; any other value is rejected). Unknown keys anywhere in a recipe are an error, so a typo never passes as "nothing to check". A case has a unique `id`, a relative `base` PSD path,
+its `base_sha256`, a `target` with layer `kind` and optional `name`, and `checks`.
+An optional list of `commands` contains a `command` id and `params`; the runner
+supplies the resolved `layer` id. Targets that match zero or multiple layers fail.
+Only `type.*` and `layer.layerStyle.*` commands are accepted. Checks use JSON pointers
+relative to the inspected layer: `unchanged` requires a present, equal value before
+and after; `equals` checks the exported value; `changed_to` requires the exported
+value to match and differ from the base. Every edited case needs a `changed_to` check.
+Every check is run and reported (not only the first failure), each result naming the layer and the property path. See the starter recipes for examples. Regenerate hashes when deliberately changing
+the corpus pin, and review them against `xtask/photoshop-corpus.sha256`.
+
+These checks use PhotoCraft's own importer and inspector; they do **not** prove that
+Photoshop can open the output or interprets it correctly. The report marks those
+stages `not_run`. The ordinary CI corpus job does not yet run this recipe command or
+upload its artifacts; that integration and the Photoshop judge are separate work.
 
 ## Rendering fidelity (PSD oracle)
 
