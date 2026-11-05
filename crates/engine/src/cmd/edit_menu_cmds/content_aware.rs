@@ -5,7 +5,7 @@ use super::{
 
 // ------------------------------------------------------------------ Content-Aware Fill
 
-pub(super) fn can_caf(s: &Session) -> std::result::Result<(), String> {
+pub(crate) fn can_caf(s: &Session) -> std::result::Result<(), String> {
     pixel_layer(s)?;
     let d = s.active().ok_or("no document open")?;
     if d.doc.selection.as_ref().is_none_or(|m| m.content_bounds().is_empty()) {

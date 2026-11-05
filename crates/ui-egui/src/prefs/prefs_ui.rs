@@ -64,6 +64,7 @@ pub use crate::shortcuts::{default_shortcut, effective_shortcut};
 mod appearance;
 mod dialogs;
 mod fields;
+mod generative_fill;
 mod graphics;
 mod save;
 mod shortcuts;

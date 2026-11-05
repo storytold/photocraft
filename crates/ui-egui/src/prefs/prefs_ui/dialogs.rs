@@ -49,6 +49,12 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &V
             }
             dialog(d)
         }
+        "edit.generativeFill" => {
+            if !app.session.is_enabled(id) {
+                return Some(Err("Generative Fill needs a selection on a pixel layer".into()));
+            }
+            dialog(super::generative_fill::generative_fill_dialog(app, ctx, id))
+        }
         // Photoshop's Content-Aware Fill workspace (caf_ui); the engine command with params
         // still runs directly.
         "edit.contentAwareFill" => Some(crate::caf_ui::open(app).map(|_| json!({"contentAwareFill": app.distort.describe()["contentAwareFill"]}))),
