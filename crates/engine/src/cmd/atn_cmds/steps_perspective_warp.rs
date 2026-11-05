@@ -46,9 +46,8 @@ fn reference_rect(d: &Descriptor) -> Option<[f64; 4]> {
 
 fn objects<'a>(d: &'a Descriptor, key: &str, class: &str, keys: &[&str], max: usize) -> Option<&'a [D]> {
     let D::List(items) = d.get(key)? else { return None };
-    (!items.is_empty() && items.len() <= max
-        && items.iter().all(|item| matches!(item, D::Descriptor(d) if d.class_id.is(class) && exact_keys(d, keys))))
-    .then_some(items)
+    (!items.is_empty() && items.len() <= max && items.iter().all(|item| matches!(item, D::Descriptor(d) if d.class_id.is(class) && exact_keys(d, keys))))
+        .then_some(items)
 }
 
 /// Each recorded index must link exactly the corners the native command would link. Edges
@@ -93,9 +92,7 @@ fn parameters(d: &Descriptor) -> Option<Value> {
     objects(d, "warpedVertices", "Pnt ", &["Hrzn", "Vrtc"], 4 * MAX_PLANES)?;
     objects(d, "quads", "perspectiveWarpQuad", &["indices"], MAX_PLANES)?;
     let (planes, indices) = perspective_warp_indexed_geometry(d)?;
-    if !planes.iter().all(|p| {
-        p.src.iter().chain(&p.dst).flatten().copied().all(coordinate) && convex_quad(&p.src) && convex_quad(&p.dst)
-    }) {
+    if !planes.iter().all(|p| p.src.iter().chain(&p.dst).flatten().copied().all(coordinate) && convex_quad(&p.src) && convex_quad(&p.dst)) {
         return None;
     }
     same_topology(&planes, &indices, src.len())?;
@@ -129,13 +126,15 @@ fn canonical(p: &Value) -> Option<Descriptor> {
     let planes: Vec<Plane> = serde_json::from_value(Value::Array(planes.clone())).ok()?;
     let rect = desc("Rctn").with("Top ", px(top)).with("Left", px(left)).with("Btom", px(bottom)).with("Rght", px(right));
     let (src, dst, quads) = perspective_warp_geometry(&planes);
-    Some(desc(EVENT)
-        .with("null", layer_ref(p)?)
-        .with("Md  ", enm("perspectiveWarpMode", "warp"))
-        .with("referenceRect", D::Descriptor(rect))
-        .with("vertices", src)
-        .with("warpedVertices", dst)
-        .with("quads", quads))
+    Some(
+        desc(EVENT)
+            .with("null", layer_ref(p)?)
+            .with("Md  ", enm("perspectiveWarpMode", "warp"))
+            .with("referenceRect", D::Descriptor(rect))
+            .with("vertices", src)
+            .with("warpedVertices", dst)
+            .with("quads", quads),
+    )
 }
 
 /// Reuses source bytes only while they still describe the same target, rectangle and planes.

@@ -42,7 +42,8 @@ fn fixture(name: Option<&str>) -> Descriptor {
 }
 
 fn imported(d: Descriptor, with_dialog: bool, enabled: bool) -> atn_cmds::Imported {
-    let item = AtnItem { event: AtnEvent::name(EVENT), dictionary: b"Perspective Warp".to_vec(), descriptor: Some(d), with_dialog, enabled, ..Default::default() };
+    let item =
+        AtnItem { event: AtnEvent::name(EVENT), dictionary: b"Perspective Warp".to_vec(), descriptor: Some(d), with_dialog, enabled, ..Default::default() };
     let file = AtnFile {
         name: UnicodeString::new_nul("Set"),
         actions: vec![AtnAction { name: UnicodeString::new_nul("Warp"), items: vec![item], ..Default::default() }],
@@ -97,9 +98,7 @@ fn unsupported_recordings_are_kept_without_partial_mapping() {
     let mut layout = d.clone();
     *value_mut(&mut layout, "Md  ") = D::Enumerated { type_id: Id::new("perspectiveWarpMode"), value: Id::new("layout") };
     let mut wrong_target = d.clone();
-    *value_mut(&mut wrong_target, "null") = D::Reference(vec![ReferenceItem::Class(Class {
-        class_id: Id::new("Chnl"), name: UnicodeString::new_nul(""),
-    })]);
+    *value_mut(&mut wrong_target, "null") = D::Reference(vec![ReferenceItem::Class(Class { class_id: Id::new("Chnl"), name: UnicodeString::new_nul("") })]);
     let mut bad_index = d.clone();
     *value_mut(&mut bad_index, "quads") = D::List(vec![quad([1, 4, 99, 3])]);
     let mut wrong_units = d.clone();

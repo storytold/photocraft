@@ -137,9 +137,7 @@ fn template(params: &J) -> Result<Option<Descriptor>, String> {
 /// The planes to write: as rendered, so a `straighten` is baked in.
 fn export_planes(params: &J) -> Result<Vec<Plane>, String> {
     let object = params.as_object().ok_or("Perspective Warp parameters must be an object")?;
-    let supported = |k: &str| {
-        super::is_meta(k) || ["planes", "straighten", "interpolation"].contains(&k) || (k == "target" && params["target"] == "pixels")
-    };
+    let supported = |k: &str| super::is_meta(k) || ["planes", "straighten", "interpolation"].contains(&k) || (k == "target" && params["target"] == "pixels");
     if let Some(k) = object.keys().find(|k| !supported(k)) {
         return Err(format!("Perspective Warp setting `{k}` has no PSD equivalent"));
     }
