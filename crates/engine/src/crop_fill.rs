@@ -164,7 +164,12 @@ fn fill_layer(doc: &mut Document, id: Result<LayerId>, cov: &Coverage, own_pixel
     let donor_bounds = own_pixels.then(|| if has_alpha { surf.content_bounds().intersect(&canvas) } else { canvas });
     // The added target is optional when it has no covered pixels of its own to sample.
     // This check does not absorb errors from synthesis or allocation.
-    if donor_bounds.is_some_and(|bounds| !contains_donor(bounds, |x, y| labels[y as usize * w + x as usize] == 0 && has_pixel(x, y))) {
+    if donor_bounds.is_some_and(|bounds| {
+        !contains_donor(bounds, |x, y| {
+            let at = usize::try_from(y).ok().and_then(|y| y.checked_mul(w)).zip(usize::try_from(x).ok()).and_then(|(r, x)| r.checked_add(x));
+            at.and_then(|i| labels.get(i)) == Some(&0) && has_pixel(x, y)
+        })
+    }) {
         return Ok(false);
     }
     let pieces = label_components(&mut labels, w, h)?;
