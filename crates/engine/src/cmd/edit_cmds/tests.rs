@@ -1804,3 +1804,43 @@ fn a_clipped_paste_joining_a_board_stays_clipped_only_over_a_layer() {
     assert_eq!(paste_on(&mut s, sb), (Some(sb), true), "S holds a layer to clip to");
     assert_eq!(paste_on(&mut s, eb), (Some(eb), false), "E is empty");
 }
+
+/// A layer copied off every board and pasted with a layer on board B selected goes above B, at
+/// the top level, where it shows (#10538 follow-up): the clip has no source board, so it isn't
+/// moved onto B, and inside B, beside the selected layer, B hid it. Content centred on B (pasted
+/// at the view centre there) still goes inside B, by the rule a paste with B itself selected
+/// follows.
+#[test]
+fn a_paste_from_off_the_boards_beside_a_layer_on_a_board_stays_visible() {
+    let (mut s, _red, _a, b) = two_boards();
+    s.execute("select.deselectLayers", json!({})).unwrap();
+    let loose = s.execute("layer.new.layer", json!({"name": "Loose"})).unwrap()["layer"].as_u64().map(LayerId).unwrap();
+    s.edit("paint", |doc, _| {
+        doc.layer_mut(loose).unwrap().surface_mut().unwrap().fill_rect(Rect::new(60, 60, 70, 70), &[1.0, 0.0, 0.0, 1.0]);
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(s.active().unwrap().doc.artboard_of(loose), None);
+    let on_b = s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().map(LayerId).unwrap();
+    s.execute("layer.moveTo", json!({"layer": on_b.0, "target": b.0, "position": "into"})).unwrap();
+    s.execute("layer.select", json!({"layer": loose.0})).unwrap();
+    s.execute("edit.copy", json!({})).unwrap();
+    assert_eq!(s.clipboard.as_ref().unwrap().board, None, "copied off every board");
+    // Hidden, so only the paste can show at its spot.
+    s.execute("layer.setProps", json!({"layer": loose.0, "visible": false})).unwrap();
+    s.execute("layer.select", json!({"layer": on_b.0})).unwrap();
+    let r = s.execute("edit.paste", json!({})).unwrap();
+    assert_eq!(r["offset"], json!([0, 0]));
+    assert_eq!(board_of_active(&s), None, "not inside B, which would hide it");
+    let st = s.active().unwrap();
+    let top: Vec<LayerId> = st.doc.layers.iter().map(|l| l.id).collect();
+    let at = |id: LayerId| top.iter().position(|x| *x == id);
+    assert_eq!(at(st.active_layer.unwrap()), at(b).map(|i| i + 1), "directly above B");
+    let px = photocraft_compose::render(&st.doc, Rect::new(65, 65, 66, 66)).px[0];
+    assert!(px[0] > 0.99 && px[1] < 0.01, "the paste shows");
+    // Centred on B, it lands inside B, beside the selected layer.
+    s.execute("layer.select", json!({"layer": on_b.0})).unwrap();
+    s.execute("edit.paste", json!({"center": [220.0, 40.0]})).unwrap();
+    assert_eq!(board_of_active(&s), Some(b));
+    assert_eq!(active_bounds(&s), Rect::new(215, 35, 225, 45));
+}
