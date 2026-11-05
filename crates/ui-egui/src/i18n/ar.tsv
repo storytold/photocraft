@@ -30,6 +30,57 @@
 	Selected Areas	المناطق المحددة
 	Ink Characteristics	خصائص الحبر
 
+# Help > System Info: section and row labels (the copied report stays in English)
+System Info	Application	التطبيق
+System Info	System	النظام
+System Info	Graphics	الرسومات
+System Info	Displays	الشاشات
+System Info	Pen input	إدخال القلم
+System Info	Fonts	الخطوط
+System Info	Session	الجلسة
+System Info	Files	الملفات
+System Info	Version	الإصدار
+System Info	Build	البناء
+System Info	Install	التثبيت
+System Info	Language	اللغة
+System Info	Running for	مدة التشغيل
+System Info	OS	نظام التشغيل
+System Info	Kernel	النواة
+System Info	Desktop	سطح المكتب
+System Info	CPU	المعالج
+System Info	Worker threads	خيوط العمل
+System Info	Memory	الذاكرة
+System Info	Adapter	بطاقة الرسومات
+System Info	Type	النوع
+System Info	Graphics API	واجهة الرسومات
+System Info	Driver	برنامج التشغيل
+System Info	Backend preference	الواجهة الخلفية المفضلة
+System Info	Startup fallback	البديل عند بدء التشغيل
+System Info	Image compositor	مركّب الصور
+System Info	This session	هذه الجلسة
+System Info	GPU memory budget	ميزانية ذاكرة وحدة معالجة الرسومات
+System Info	Window's display	شاشة النافذة
+System Info	UI scale	مقياس الواجهة
+System Info	Window	النافذة
+System Info	Monitor profile	ملف تعريف الشاشة
+System Info	Monitor profile on {display}	ملف تعريف الشاشة على {display}
+System Info	Monitor profile on {display} (main window)	ملف تعريف الشاشة على {display} (النافذة الرئيسية)
+System Info	Display profiles	ملفات تعريف الشاشات
+System Info	Source	المصدر
+System Info	Seen this session	شوهد في هذه الجلسة
+System Info	Use Tablet Pressure	استخدام ضغط اللوح
+System Info	craft-fonts bundle	حزمة craft-fonts
+System Info	Families	العائلات
+System Info	Fallbacks	الخطوط البديلة
+System Info	Open documents	المستندات المفتوحة
+System Info	Document {n}	المستند {n}
+System Info	PhotoCraft memory	ذاكرة PhotoCraft
+System Info	Memory Usage limit	حد استخدام الذاكرة
+System Info	Plug-ins	المكونات الإضافية
+System Info	Settings	الإعدادات
+System Info	Log file	ملف السجل
+System Info	Crash recovery	الاستعادة بعد الانهيار
+
 # Guide layout dialog
 
 # Custom print paper (#3820)
