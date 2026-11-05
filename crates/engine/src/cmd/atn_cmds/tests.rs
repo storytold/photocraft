@@ -6363,3 +6363,69 @@ fn adjustment_layer_name_must_round_trip() {
         }
     }
 }
+
+/// #11505, #11506, #11507: Levels, Hue/Saturation and Color Balance descriptors store integers, so
+/// a fractional setting would reload rounded. Export refuses it (a skipping one lists it, naming the
+/// step), through `layer.setAdjustment` and `layer.newAdjustmentLayer.*` alike; whole numbers still
+/// export and reload equal, and Levels gamma stays free to be fractional.
+#[test]
+fn fractional_levels_hue_saturation_and_color_balance_refuse_strict_export() {
+    let one = |id: &str, p: Value| Action { name: "Probe".into(), steps: vec![(id.into(), p)], ..Default::default() };
+    let hue = |extra: Value| {
+        let mut p = json!({"colorize": false, "hue": 0, "saturation": 0, "lightness": 0});
+        for (k, v) in extra.as_object().cloned().unwrap_or_default() {
+            p[k] = v;
+        }
+        p
+    };
+    let balance = |mid: Value| json!({"shadows": [0, 0, 0], "midtones": mid, "highlights": [0, 0, 0], "preserveLuminosity": true});
+    let range = |hue: Value, bounds: Value| json!({"hue": hue, "saturation": 5, "lightness": -5, "range": bounds});
+    let cases = [
+        ("layer.newAdjustmentLayer.levels", json!({"inBlack": 13.4})),
+        ("layer.newAdjustmentLayer.levels", json!({"inBlack": 13, "inWhite": 240.5})),
+        ("layer.newAdjustmentLayer.levels", json!({"outBlack": 0.5, "outWhite": 255})),
+        ("layer.newAdjustmentLayer.levels", json!({"red": {"inBlack": 1.5, "inWhite": 250}})),
+        ("layer.newAdjustmentLayer.hueSaturation", hue(json!({"hue": 17.3}))),
+        ("layer.newAdjustmentLayer.hueSaturation", hue(json!({"saturation": -4.5}))),
+        ("layer.newAdjustmentLayer.hueSaturation", hue(json!({"reds": range(json!(10.5), json!([315, 345, 15, 45]))}))),
+        ("layer.newAdjustmentLayer.hueSaturation", hue(json!({"reds": range(json!(10), json!([315, 345.5, 15, 45]))}))),
+        ("layer.newAdjustmentLayer.colorBalance", balance(json!([13.4, 0, 0]))),
+        ("layer.setAdjustment", {
+            let mut p = json!({"kind": "levels", "inBlack": 13.4, "inWhite": 240});
+            p["gamma"] = json!(1.2);
+            p
+        }),
+        ("layer.setAdjustment", {
+            let mut p = hue(json!({"hue": 17.3}));
+            p["kind"] = json!("hueSaturation");
+            p
+        }),
+        ("layer.setAdjustment", {
+            let mut p = balance(json!([13.4, 0, 0]));
+            p["kind"] = json!("colorBalance");
+            p
+        }),
+    ];
+    for (id, p) in cases {
+        let err = export("Audit", &[&one(id, p.clone())], &[], false).unwrap_err();
+        assert!(err.contains(&format!("`{id}`")), "{id} {p}: {err}");
+        let (_, skipped) = export("Audit", &[&one(id, p.clone())], &[], true).unwrap();
+        assert_eq!(skipped, vec![Skipped { action: "Probe".into(), step: 0, id: id.into() }], "{id} {p}");
+    }
+    let whole = [
+        ("layer.newAdjustmentLayer.levels", json!({"inBlack": 13, "inWhite": 240, "outBlack": 4, "outWhite": 250, "gamma": 1.25})),
+        ("layer.newAdjustmentLayer.hueSaturation", hue(json!({"hue": 17, "saturation": -4, "reds": range(json!(10), json!([315, 345, 15, 45]))}))),
+        ("layer.newAdjustmentLayer.colorBalance", balance(json!([13, -2, 0]))),
+    ];
+    for (id, p) in whole {
+        let (bytes, skipped) = export("Audit", &[&one(id, p.clone())], &[], false).unwrap();
+        assert!(skipped.is_empty(), "{id} {p}");
+        let steps = import(&bytes).unwrap().actions[0].steps.clone();
+        let (got, params) = steps.first().unwrap();
+        assert_eq!(got, id, "{p}");
+        for (k, v) in p.as_object().unwrap() {
+            let back = params.get(k).unwrap_or(&Value::Null);
+            assert_eq!(back, v, "{id} {k}: {params}");
+        }
+    }
+}
