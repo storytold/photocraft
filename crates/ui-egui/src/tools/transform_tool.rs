@@ -228,6 +228,9 @@ struct Follow {
     revision: u64,
     /// The moving layers hidden in `doc` (nothing was lifted out of them).
     hidden: Vec<LayerId>,
+    /// The Layers panel's selection when the box opened, sorted; `None` when the box doesn't
+    /// follow it. Any change to it applies the box (`end_if_left`, #11101).
+    selected: Option<Vec<LayerId>>,
 }
 
 /// Photoshop's alert when Free Transform (⌘T, Edit › Transform, the Move tool's transform controls)

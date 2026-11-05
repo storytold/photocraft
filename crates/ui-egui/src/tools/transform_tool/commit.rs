@@ -199,24 +199,26 @@ pub fn end_if_left(app: &mut PhotocraftApp) {
 /// layers changed, since the box opened: the session ends ([`end_if_left`], #1400, #11101).
 fn switched_away(app: &PhotocraftApp) -> bool {
     let (Some(t), Some(st)) = (&app.ui.transform, app.session.active()) else { return false };
+    let opened = app.transform_preview.as_ref().and_then(|pv| pv.follow.as_ref()).and_then(|f| f.selected.as_deref());
     app.transform_preview.as_ref().is_some_and(|pv| pv.tool != app.ui.tool)
         || (!t.selection && st.active_layer.is_some_and(|active| active.0 != t.layer))
-        || selected_layers_changed(st, t)
+        || selected_layers_changed(st, t, opened)
 }
 
-/// A box the Layers panel's selection opened (Free Transform of one or several layers) no longer
-/// matches it: a layer was added to the selection or taken out of it. Photoshop applies the box
-/// first, to the layers it moves, and doesn't open it again (#11101). Boxes over a selection,
-/// a mask or channel, a path, a placed file or Content-Aware Scale don't follow the selection.
-fn selected_layers_changed(st: &photocraft_engine::DocState, t: &TransformSession) -> bool {
+/// A layer's box no longer matches the Layers panel's selection it opened with (`opened`): a layer
+/// was added to the selection or taken out of it, a group's child included. Photoshop applies the
+/// box first, to the layers it moves, and doesn't open it again (#11101). The selection itself is
+/// compared, not the layers the box moves: those also hold the layers linked to it (#11217) and
+/// leave out the children of a selected group. Boxes over a selection, a mask or channel, a path,
+/// a placed file or Content-Aware Scale don't follow the selection.
+fn selected_layers_changed(st: &photocraft_engine::DocState, t: &TransformSession, opened: Option<&[LayerId]>) -> bool {
     if t.selection || t.target.is_some() || t.path.is_some() || t.made == Some(MadeLayer::Place) || t.content_aware.is_some() {
         return false;
     }
-    let mut now = photocraft_engine::transform_cmds::selection_targets(st);
-    let mut moving = moving_layers(t);
+    let Some(opened) = opened else { return false };
+    let mut now = st.selected_layers();
     now.sort_unstable();
-    moving.sort_unstable();
-    now != moving
+    now != opened
 }
 
 /// Edits made while the box is open show in the preview at once, not only after the commit

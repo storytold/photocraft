@@ -22,8 +22,9 @@ pub(crate) fn layer_edges_rect(app: &PhotocraftApp, idx: usize) -> Option<photoc
     Some(b.translate(dx, dy))
 }
 
-/// The layers Move › Show Transform Controls frames: every selected layer, none when the Background
-/// is among several, and none for the Background alone.
+/// The layers Move › Show Transform Controls frames: every selected layer, the Background too when
+/// it is among several (a handle drag then refuses, [`begin_transform_controls_at`]), but not the
+/// Background alone (#11101).
 /// A corner radius drag hides the box, as in Photoshop. So does View › Extras (⌘H, #6699): the
 /// controls are an Extra, hidden and inert until Extras comes back, while Show Transform Controls
 /// keeps its setting.
@@ -38,13 +39,9 @@ pub(super) fn transform_controls_layers(app: &PhotocraftApp) -> Vec<&photocraft_
         return Vec::new();
     }
     let Some(st) = app.session.active() else { return Vec::new() };
-    // The Background among several selected layers: Free Transform refuses them as locked, so no
-    // box frames them either, rather than one leaving the Background out (#11101).
     let selected = st.selected_layers();
-    if photocraft_engine::transform_cmds::background_among(&st.doc, &selected).is_some() {
-        return Vec::new();
-    }
-    selected.into_iter().filter_map(|id| st.doc.layer(id)).filter(|l| !crate::doc_props_ui::is_background(&st.doc, l)).collect()
+    let several = selected.len() > 1;
+    selected.into_iter().filter_map(|id| st.doc.layer(id)).filter(|l| several || !crate::doc_props_ui::is_background(&st.doc, l)).collect()
 }
 
 /// Move tool › Show Transform Controls: the boxes Free Transform would open on the selected
@@ -111,12 +108,23 @@ pub(super) fn transform_controls_hit(r: Rect, p: Pos2) -> bool {
     transform_controls_cursor(r, p).is_some()
 }
 
+/// The reference application's alert when a Move-tool transform control is dragged on a frame
+/// that holds the Background among other layers (measured, #11101).
+pub(crate) const CONTROLS_LOCKED: &str = "Could not transform because the layer is locked.";
+
 /// Enter the existing Free Transform session when a Move-tool transform control is pressed: on
-/// every selected layer, as the frame shows them (#6501).
+/// every selected layer, as the frame shows them (#6501). With the Background among them the press
+/// shows the locked-layer alert and changes nothing (#11101).
 pub(super) fn begin_transform_controls_at(app: &mut PhotocraftApp, ctx: &egui::Context, xf: &ViewXform, p: Pos2) -> bool {
     let Some(r) = transform_controls_rect(app, xf) else { return false };
     if !transform_controls_hit(r, p) {
         return false;
+    }
+    let background = app.session.active().is_some_and(|st| photocraft_engine::transform_cmds::background_among(&st.doc, &st.selected_layers()).is_some());
+    if background {
+        let message = serde_json::json!({ "message": tl!(CONTROLS_LOCKED) });
+        app.ui.open_dialog(crate::state::DialogKind::Error, message.as_object().cloned().unwrap_or_default());
+        return true;
     }
     match crate::transform_tool::begin(app, ctx) {
         Ok(()) => true,

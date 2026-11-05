@@ -85,7 +85,7 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
         opacity: layer.opacity * layer.fill_opacity,
         above: (!frame_only).then_some(above),
         styled: (styled && !frame_only).then(|| crate::transform_fx::StyledPreview::new(format!("transform-{session}-styled"))),
-        follow: Some(Follow { revision, hidden: if lifted.is_none() && !frame_only { vec![id] } else { Vec::new() } }),
+        follow: Some(Follow { revision, hidden: if lifted.is_none() && !frame_only { vec![id] } else { Vec::new() }, selected: selected_now(app) }),
         committing: None,
         gesture: None,
         warp_drag: None,
@@ -193,7 +193,7 @@ fn begin_several(app: &mut PhotocraftApp, ctx: &egui::Context, doc: Arc<Document
         opacity: 1.0,
         above: Some(above),
         styled: None,
-        follow: Some(Follow { revision, hidden }),
+        follow: Some(Follow { revision, hidden, selected: selected_now(app) }),
         committing: None,
         gesture: None,
         warp_drag: None,
@@ -239,6 +239,13 @@ pub(crate) fn moving_texel(app: &PhotocraftApp, p: [i32; 2]) -> (Option<Color32>
         (x < image.size[0] && y < image.size[1]).then(|| image.pixels[y * image.size[0] + x])
     });
     (texel, texture_quad(t, pv))
+}
+
+/// The Layers panel's selection, sorted, as a layer's box records it when it opens (#11101).
+pub(super) fn selected_now(app: &PhotocraftApp) -> Option<Vec<LayerId>> {
+    let mut ids = app.session.active()?.selected_layers();
+    ids.sort_unstable();
+    Some(ids)
 }
 
 /// The layers the box moves: every layer of a several-layer session (#6501), else its one layer.
@@ -334,7 +341,7 @@ pub(crate) fn begin_content_aware(
         texture,
         opacity: layer.opacity * layer.fill_opacity,
         above: Some(above),
-        follow: Some(Follow { revision, hidden: Vec::new() }),
+        follow: Some(Follow { revision, hidden: Vec::new(), selected: None }),
         committing: None,
         gesture: None,
         warp_drag: None,

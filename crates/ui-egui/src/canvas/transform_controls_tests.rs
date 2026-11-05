@@ -146,11 +146,11 @@ fn several_selected_layers_share_one_frame_that_transforms_them_all() {
     assert!(both.contains_rect(one) && both.width() > one.width() && both.height() > one.height(), "{both:?} frames both");
     let (lt, rb) = (xf.to_doc(both.left_top()), xf.to_doc(both.right_bottom()));
     assert!((lt[0] - 20.0).abs() < 1e-3 && (lt[1] - 30.0).abs() < 1e-3 && (rb[0] - 150.0).abs() < 1e-3 && (rb[1] - 150.0).abs() < 1e-3, "{lt:?} {rb:?}");
-    // The Background among them: Free Transform refuses them as locked, so no box shows (#11101).
+    // The Background among them joins the frame, as in Photoshop; its handles refuse (#11101).
     let bg = app.session.active().unwrap().doc.layers[0].id;
     app.session.execute("layer.select", json!({"layer": bg.0, "mode": "add"})).unwrap();
-    assert!(transform_controls_layers(&app).is_empty());
-    assert_eq!(transform_controls_rect(&app, &xf), None);
+    assert_eq!(transform_controls_layers(&app).len(), 3);
+    assert_eq!(transform_controls_rect(&app, &xf), Some(Rect::from_min_size(Pos2::ZERO, vec2(200.0, 200.0))));
     app.session.execute("layer.select", json!({"layer": bg.0, "mode": "toggle"})).unwrap();
     assert_eq!(transform_controls_layers(&app).len(), 2);
     assert_eq!(transform_controls_rect(&app, &xf), Some(both));
@@ -359,4 +359,43 @@ fn transform_control_hit_keeps_move_interior_free_and_has_rotation_band() {
     assert!(transform_controls_hit(r, pos2(60.0, 18.0)));
     assert!(!transform_controls_hit(r, r.center()));
     assert!(!transform_controls_hit(r, pos2(60.0, 4.0)));
+}
+
+#[test]
+fn the_background_among_several_joins_the_frame_and_its_handles_refuse() {
+    // Measured in the reference application (#11101): the box frames them all, the Background
+    // included, and a handle drag shows its locked alert and changes nothing.
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.session.execute("file.new", json!({"width": 200, "height": 200})).unwrap();
+    app.session.execute("shape.create", json!({"kind": "rect", "rect": [20, 30, 40, 40], "fill": "#ff0000"})).unwrap();
+    let a = app.session.active().unwrap().active_layer.unwrap();
+    app.session.execute("shape.create", json!({"kind": "rect", "rect": [100, 120, 50, 30], "fill": "#ff0000"})).unwrap();
+    let b = app.session.active().unwrap().active_layer.unwrap();
+    let bg = app.session.active().unwrap().doc.layers[0].id;
+    app.session.execute("layer.select", json!({"layer": bg.0, "mode": "add"})).unwrap();
+    app.sync_views();
+    app.ui.tool = Tool::Move;
+    app.ui.tool_options.move_show_transform = true;
+    let xf =
+        ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(200.0, 200.0)), zoom: 1.0, center: [100.0, 100.0], flip: false, rotation: 0.0, aspect: 1.0 };
+    let r = transform_controls_rect(&app, &xf).expect("the box frames them all");
+    assert_eq!(r, Rect::from_min_size(Pos2::ZERO, vec2(200.0, 200.0)), "the Background included");
+    let before = app.session.active().unwrap().doc.clone();
+    let ctx = egui::Context::default();
+    assert!(begin_transform_controls_at(&mut app, &ctx, &xf, r.right_bottom()), "the press is taken, not a move");
+    assert!(app.ui.transform.is_none(), "no box opens");
+    let alerts: Vec<_> =
+        app.ui.dialogs.iter().filter(|d| d.kind == crate::state::DialogKind::Error).filter_map(|d| d.fields.get("message")?.as_str()).collect();
+    assert_eq!(alerts, [super::transform_controls::CONTROLS_LOCKED]);
+    assert!(app.session.active().unwrap().doc == before, "nothing changed");
+    // The Background alone: no box at all.
+    app.session.execute("layer.select", json!({"layer": bg.0})).unwrap();
+    assert_eq!(transform_controls_rect(&app, &xf), None);
+    // Without the Background the handles start Free Transform, as before.
+    app.ui.dialogs.clear();
+    app.session.execute("layer.select", json!({"layer": a.0})).unwrap();
+    app.session.execute("layer.select", json!({"layer": b.0, "mode": "add"})).unwrap();
+    let r = transform_controls_rect(&app, &xf).unwrap();
+    assert!(begin_transform_controls_at(&mut app, &ctx, &xf, r.right_bottom()));
+    assert_eq!(app.ui.transform.as_ref().unwrap().layers, [a.0, b.0]);
 }

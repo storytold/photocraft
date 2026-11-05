@@ -162,3 +162,46 @@ fn the_background_alone_keeps_todays_box() {
     assert_ne!(r, Err(LOCKED.into()), "not the several-layers alert");
     assert!(alerts(&app).is_empty());
 }
+
+#[test]
+fn a_box_over_a_linked_layer_stays_open_while_the_selection_stays() {
+    // The box over A also moves B, linked to it (#11217); the selection is still A alone, so
+    // nothing changed and the box stays open.
+    let (mut app, _, a, b) = app();
+    select(&mut app, a, "add");
+    app.run("layer.linkLayers", json!({})).unwrap();
+    select(&mut app, a, "replace");
+    invoke(&mut app, "edit.freeTransform").unwrap();
+    assert_eq!(app.ui.transform.as_ref().unwrap().layers, [a.0, b.0], "the box moves the link group");
+    nudge(&mut app, 10.0);
+    crate::transform_tool::end_if_left(&mut app);
+    assert!(app.ui.transform.is_some(), "the box stays open");
+    // Adding B to the selection is a change, though the box already moves B.
+    select(&mut app, b, "add");
+    select(&mut app, a, "add");
+    crate::transform_tool::end_if_left(&mut app);
+    assert!(app.ui.transform.is_none(), "the box is applied");
+    assert_eq!(bounds(&app, a), Rect::new(20, 10, 60, 30));
+    assert_eq!(bounds(&app, b), Rect::new(110, 100, 150, 120));
+}
+
+#[test]
+fn taking_a_child_of_a_selected_group_out_of_the_selection_applies_the_box() {
+    // The box over group G moves its child A whether A is selected or not; ⌘-clicking A out of
+    // the selection still changes the selection, so the box is applied first.
+    let (mut app, _, a, b) = app();
+    select(&mut app, a, "replace");
+    let g = LayerId(app.run("layer.new.groupFromLayers", json!({"name": "G"})).unwrap()["layer"].as_u64().unwrap());
+    select(&mut app, g, "replace");
+    select(&mut app, a, "add");
+    select(&mut app, b, "add");
+    select(&mut app, g, "add");
+    invoke(&mut app, "edit.freeTransform").unwrap();
+    nudge(&mut app, 10.0);
+    select(&mut app, a, "toggle");
+    assert_eq!(app.session.active().unwrap().active_layer, Some(g));
+    crate::transform_tool::end_if_left(&mut app);
+    assert!(app.ui.transform.is_none(), "the box is applied and not opened again");
+    assert_eq!(bounds(&app, a), Rect::new(20, 10, 60, 30), "A moved with its group");
+    assert_eq!(bounds(&app, b), Rect::new(110, 100, 150, 120));
+}
