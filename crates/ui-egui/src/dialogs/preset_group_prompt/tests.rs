@@ -113,7 +113,14 @@ impl Fixture {
         assert!(self.app.ui.dialogs.iter().all(|d| d.id != id));
         assert_eq!(group(&self.app, self.kind, "Unrelated"), self.unrelated);
         if replace {
-            assert_eq!(group(&self.app, self.kind, self.stem), self.original, "only the requested group is replaced with the file's values");
+            let mut expected = self.original.clone();
+            if matches!(self.kind, Kind::Gradients) {
+                // The fixture renamed Fire's Ember before importing Unrelated, which now owns
+                // Ember. Replace frees only Fire's names, so the new gradient must be Ember 2.
+                assert_eq!(self.unrelated[0]["items"][0]["name"], "Ember");
+                expected[0]["items"][0]["name"] = json!("Ember 2");
+            }
+            assert_eq!(group(&self.app, self.kind, self.stem), expected, "only the requested group is replaced with the file's values");
             assert_eq!(group(&self.app, self.kind, &format!("{} (2)", self.stem)), json!([]));
         } else {
             assert_eq!(group(&self.app, self.kind, self.stem), self.edited, "a new group keeps the existing edits");
