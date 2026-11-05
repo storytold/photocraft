@@ -17,6 +17,35 @@ use crate::image::{ChannelLayout, Image, SampleType};
 
 const F: Format = Format::Jxl;
 
+/// A JPEG XL codestream exported here is labelled sRGB. Rewrite only known,
+/// well-formed XMP colour-space declarations when they refer to the source
+/// profile. Unrelated metadata (camera, dates, GPS, copyright, etc.) stays
+/// byte-for-byte unchanged. Unrecognized XML forms are left untouched rather
+/// than risking damage to a valid XMP packet.
+fn srgb_xmp_metadata(xmp: &str) -> std::borrow::Cow<'_, str> {
+    let mut out = xmp.to_owned();
+    // Exact attribute/element values only; do not replace free-form user text.
+    for (old, new) in [
+        ("exif:ColorSpace=\"65535\"", "exif:ColorSpace=\"1\""),
+        ("exif:ColorSpace='65535'", "exif:ColorSpace='1'"),
+        ("<exif:ColorSpace>65535</exif:ColorSpace>", "<exif:ColorSpace>1</exif:ColorSpace>"),
+        ("exif:InteroperabilityIndex=\"R03\"", "exif:InteroperabilityIndex=\"R98\""),
+        ("exif:InteroperabilityIndex='R03'", "exif:InteroperabilityIndex='R98'"),
+        ("<exif:InteroperabilityIndex>R03</exif:InteroperabilityIndex>",
+         "<exif:InteroperabilityIndex>R98</exif:InteroperabilityIndex>"),
+        ("photoshop:ICCProfile=\"Adobe RGB (1998)\"", "photoshop:ICCProfile=\"sRGB\""),
+        ("photoshop:ICCProfile='Adobe RGB (1998)'", "photoshop:ICCProfile='sRGB'"),
+        ("<photoshop:ICCProfile>Adobe RGB (1998)</photoshop:ICCProfile>",
+         "<photoshop:ICCProfile>sRGB</photoshop:ICCProfile>"),
+    ] {
+        if out.contains(old) {
+            out = out.replace(old, new);
+        }
+    }
+    if out == xmp { std::borrow::Cow::Borrowed(xmp) } else { std::borrow::Cow::Owned(out) }
+}
+
+
 // Preserve the bare codestream when embedding metadata is not requested.
 // JPEG XL stores EXIF and XMP in ISO 18181-2 container boxes.
 fn append_jxl_box(out: &mut Vec<u8>, name: &[u8; 4], payload: &[u8]) -> Result<(), CodecError> {
@@ -196,7 +225,11 @@ pub(crate) fn encode(image: &Image, plan: Plan, opts: &crate::EncodeOptions) -> 
     }))
     .unwrap_or_else(|_| Err(CodecError::encode(F, "the JPEG XL encoder failed")))?;
     if opts.embed_metadata {
-        jxl_with_metadata(codestream, image.meta.exif.as_deref(), image.meta.xmp.as_deref())
+        // These modular codestreams use sRGB: metadata describing a source
+        // Adobe RGB profile must not contradict the exported pixels.
+        let exif = image.meta.exif.as_deref().map(crate::exif_color::srgb_exif_metadata);
+        let xmp = image.meta.xmp.as_deref().map(srgb_xmp_metadata);
+        jxl_with_metadata(codestream, exif.as_deref(), xmp.as_deref())
     } else {
         Ok(codestream)
     }
