@@ -541,26 +541,69 @@ fn duplicate_artboard_lands_beside_the_original_with_its_contents() {
 }
 
 #[test]
-fn duplicating_several_artboards_places_each_copy_in_a_free_spot() {
-    let mut s = session(8);
-    let a = board_with_square(&mut s);
-    let b = s.execute("layer.new.artboard", json!({"rect": [10, 100, 40, 40]})).unwrap()["layer"].as_u64().unwrap();
-    s.execute("layer.select", json!({"layer": a.0})).unwrap();
-    s.execute("layer.select", json!({"layer": b, "mode": "add"})).unwrap();
-    let r = s.execute("layer.duplicate", json!({})).unwrap();
-    assert_eq!(r["layers"].as_array().unwrap().len(), 2);
-    let boards: Vec<Rect> = doc(&s).artboards().iter().map(|b| b.2.rect).collect();
-    assert_eq!(boards.len(), 4);
-    for (i, x) in boards.iter().enumerate() {
-        for y in &boards[i + 1..] {
-            assert!(x.intersect(y).is_empty(), "{x:?} overlaps {y:?}");
-        }
+fn layer_via_copy_lands_an_artboard_beside_the_original() {
+    // #11347: ⌘J left the copy exactly on the original, as Duplicate Layer did before #1531.
+    for depth in [8, 16, 32] {
+        let mut s = session(depth);
+        let gid = board_with_square(&mut s);
+        let size = doc(&s).size;
+        let copy = s.execute("layer.new.layerViaCopy", json!({})).unwrap()["layer"].as_u64().unwrap();
+        assert_eq!(board_rect(&s, gid.0), Rect::new(10, 10, 50, 50), "the original stays");
+        assert_eq!(board_rect(&s, copy), Rect::new(150, 10, 190, 50), "{depth}");
+        assert!(red_at(&s, 155, 15), "the copy's contents moved with it");
+        assert!(red_at(&s, 15, 15), "the original's contents stay");
+        assert_eq!(doc(&s).layer(LayerId(copy)).unwrap().name, "Board copy");
+        // One undo step: the copy and the canvas growth go together.
+        s.undo();
+        assert_eq!(doc(&s).artboards().len(), 1);
+        assert_eq!(doc(&s).size, size);
     }
-    let canvas = doc(&s).bounds();
-    assert!(boards.iter().all(|r| r.intersect(&canvas) == *r), "{boards:?} in {canvas:?}");
-    // One undo step.
-    s.undo();
+}
+
+#[test]
+fn layer_via_copy_keeps_a_layer_on_its_artboard_in_place() {
+    let mut s = session(8);
+    let (red, a, _) = two_boards(&mut s);
+    s.execute("layer.select", json!({"layer": red.0})).unwrap();
+    let copy = LayerId(s.execute("layer.new.layerViaCopy", json!({})).unwrap()["layer"].as_u64().unwrap());
+    assert_eq!(doc(&s).artboard_of(copy), Some(a));
+    assert_eq!(content(&s, copy), content(&s, red));
     assert_eq!(doc(&s).artboards().len(), 2);
+}
+
+#[test]
+fn layer_via_copy_with_no_room_beside_the_artboard_changes_nothing() {
+    let mut s = session(8);
+    s.execute("layer.new.artboard", json!({"x": i32::MAX - 50, "y": 0, "width": 50, "height": 50})).unwrap();
+    let before = doc(&s).clone();
+    let error = s.execute("layer.new.layerViaCopy", json!({})).expect_err("no room right of the board");
+    assert!(error.to_string().contains("no room"), "{error}");
+    assert!(*doc(&s) == before, "the document stays as it was");
+}
+
+#[test]
+fn duplicating_several_artboards_places_each_copy_in_a_free_spot() {
+    for command in ["layer.duplicate", "layer.new.layerViaCopy"] {
+        let mut s = session(8);
+        let a = board_with_square(&mut s);
+        let b = s.execute("layer.new.artboard", json!({"rect": [10, 100, 40, 40]})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("layer.select", json!({"layer": a.0})).unwrap();
+        s.execute("layer.select", json!({"layer": b, "mode": "add"})).unwrap();
+        let r = s.execute(command, json!({})).unwrap();
+        assert_eq!(r["layers"].as_array().unwrap().len(), 2, "{command}");
+        let boards: Vec<Rect> = doc(&s).artboards().iter().map(|b| b.2.rect).collect();
+        assert_eq!(boards.len(), 4, "{command}");
+        for (i, x) in boards.iter().enumerate() {
+            for y in &boards[i + 1..] {
+                assert!(x.intersect(y).is_empty(), "{command}: {x:?} overlaps {y:?}");
+            }
+        }
+        let canvas = doc(&s).bounds();
+        assert!(boards.iter().all(|r| r.intersect(&canvas) == *r), "{command}: {boards:?} in {canvas:?}");
+        // One undo step.
+        s.undo();
+        assert_eq!(doc(&s).artboards().len(), 2, "{command}");
+    }
 }
 
 #[test]

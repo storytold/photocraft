@@ -600,7 +600,7 @@ fn layer_via(s: &mut Session, cut: bool) -> Result<Value> {
     let has_sel = d.doc.selection.is_some();
     if !has_sel && !cut && crate::layer_multi_cmds::multi(s, &Value::Null) {
         // No selection, several layers selected: copy every one of them (Photoshop, #2777).
-        return crate::layer_multi_cmds::duplicate_selected(s, true, "Layer Via Copy");
+        return crate::layer_multi_cmds::duplicate_selected(s, false, "Layer Via Copy");
     }
     if !has_sel && !cut {
         // No selection: Layer via Copy duplicates the whole layer (Photoshop).
@@ -612,6 +612,8 @@ fn layer_via(s: &mut Session, cut: bool) -> Result<Value> {
             let nid = doc.insert_above(Some(id), dup);
             // A lone copy joins its original's link group, as in the reference application (#11217).
             crate::layer_multi_cmds::relink_copies(doc, &[nid])?;
+            // An artboard's copy goes beside it, as Duplicate Layer's does (#11347).
+            crate::artboard_cmds::place_copy(doc, nid)?;
             *active = Some(nid);
             Ok(nid)
         })?;
