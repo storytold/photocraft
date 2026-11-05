@@ -202,9 +202,10 @@ fn convolve_pass(@builtin(global_invocation_id) g: vec3<u32>) {
     store(at, vec4<f32>(acc / weights[0] + vec3<f32>(weights[1]), here.w));
 }
 
-// ---- Displace (`distort2::displace`): each pixel samples the source where the map shifts it ----
+// ---- The distort filters (`distort::remap`): each pixel samples the source at the point its
+// mapping gives (Displace's from a map), with the CPU's arithmetic ----
 
-struct DisplacePass {
+struct RemapPass {
     // The output, in document pixels: its size and where it starts.
     size: vec2<u32>,
     out_origin: vec2<i32>,
@@ -213,20 +214,122 @@ struct DisplacePass {
     win_size: vec2<u32>,
     // The filter's bounds (x0, y0, x1, y1), document pixels.
     bounds: vec4<i32>,
+    // Displace's map size (1×1 for the other mappings).
     map_size: vec2<u32>,
-    // The largest shift along each axis, pixels.
-    scale: vec2<f32>,
-    stretch: u32,
-    // 0 Transparent, 1 Repeat Edge Pixels, 2 Wrap Around.
+    _pad0: vec2<u32>,
+    _pad1: u32,
+    // Past the bounds: 0 Transparent, 1 Repeat Edge Pixels, 2 Wrap Around.
     edge: u32,
     has_alpha: u32,
-    _pad: u32,
+    // 0 Displace, 1 Twirl, 2 Pinch, 3 Spherize, 4 Wave, 5 Ripple, 6 Polar Coordinates, 7 ZigZag,
+    // 8 Shear (operator.rs `Mapping::uniforms`).
+    kind: u32,
+    p: vec4<f32>,
+    e: vec4<u32>,
 }
 
 @group(0) @binding(0) var dsrc: texture_2d<f32>;
 @group(0) @binding(1) var dmap: texture_2d<f32>;
 @group(0) @binding(2) var dout: texture_storage_2d<rgba32float, write>;
-@group(0) @binding(3) var<uniform> q: DisplacePass;
+@group(0) @binding(3) var<uniform> q: RemapPass;
+@group(0) @binding(4) var<storage, read> rdata: array<f32>;
+
+const TAU: f32 = 6.2831855;
+const PI: f32 = 3.1415927;
+
+// `x` modulo 2π in [0, 2π), with the multiple of 2π taken in two parts (Cody–Waite) so a large
+// argument (Wave's and Ripple's phases run to thousands of radians across a big layer) loses no
+// accuracy: the CPU's `f32::sin` and `rem_euclid` reduce exactly, a GPU's built-in `sin` doesn't.
+fn reduce(x: f32) -> f32 {
+    let k = floor(x / TAU);
+    var r = (x - k * 6.28125) - k * 0.0019353072;
+    if r < 0.0 {
+        r += TAU;
+    }
+    if r >= TAU {
+        r -= TAU;
+    }
+    return r;
+}
+
+// Sine and cosine of `x`, reduced as above and then to an eighth of a turn, where Cephes'
+// single-precision `sinf`/`cosf` polynomials hold to about an ulp. WGSL only asks a built-in `sin`
+// for an absolute error of 2^-11: enough, on some GPUs (Intel's, WARP), to move a distort's samples a
+// visible fraction of a pixel from the CPU's.
+fn sin_cos(x: f32) -> vec2<f32> {
+    let r = reduce(x);
+    let j = floor(r / (PI / 2.0) + 0.5);
+    let y = (r - j * 1.5707964) + j * 4.371139e-8;
+    let z = y * y;
+    let s = ((-1.9515296e-4 * z + 8.332161e-3) * z - 1.6666655e-1) * z * y + y;
+    let c = ((2.4433157e-5 * z - 1.3887316e-3) * z + 4.1666646e-2) * z * z - 0.5 * z + 1.0;
+    switch u32(j) % 4u {
+        case 0u: { return vec2<f32>(s, c); }
+        case 1u: { return vec2<f32>(c, -s); }
+        case 2u: { return vec2<f32>(-s, -c); }
+        default: { return vec2<f32>(-c, s); }
+    }
+}
+
+fn sin_r(x: f32) -> f32 {
+    return sin_cos(x).x;
+}
+
+fn cos_r(x: f32) -> f32 {
+    return sin_cos(x).y;
+}
+
+// Arcsine and arctangent as polynomials (Cephes' single-precision `asinf` and `atanf`), accurate to
+// a few ulps everywhere. Built-in `asin` and `atan2` aren't held to that: WARP's are off by enough
+// to move Spherize's and ZigZag's samples a visible fraction of a pixel from the CPU's.
+fn asin_p(x: f32) -> f32 {
+    let a = abs(x);
+    var y: f32;
+    if a > 0.5 {
+        let z = 0.5 * (1.0 - a);
+        let s = sqrt(z);
+        let p = (((4.2163199048e-2 * z + 2.4181311049e-2) * z + 4.5470025998e-2) * z + 7.4953002686e-2) * z + 1.6666752422e-1;
+        y = PI / 2.0 - 2.0 * (s + s * z * p);
+    } else {
+        let z = a * a;
+        let p = (((4.2163199048e-2 * z + 2.4181311049e-2) * z + 4.5470025998e-2) * z + 7.4953002686e-2) * z + 1.6666752422e-1;
+        y = a + a * z * p;
+    }
+    return select(y, -y, x < 0.0);
+}
+
+// Arctangent of `t` >= 0.
+fn atan_p(t: f32) -> f32 {
+    var x = t;
+    var y0 = 0.0;
+    if x > 2.4142137 {
+        y0 = PI / 2.0;
+        x = -1.0 / x;
+    } else if x > 0.41421357 {
+        y0 = PI / 4.0;
+        x = (x - 1.0) / (x + 1.0);
+    }
+    let z = x * x;
+    return y0 + (((8.05374449538e-2 * z - 1.38776856032e-1) * z + 1.99777106478e-1) * z - 3.33329491539e-1) * z * x + x;
+}
+
+fn atan2_p(y: f32, x: f32) -> f32 {
+    let ax = abs(x);
+    let ay = abs(y);
+    if ax == 0.0 && ay == 0.0 {
+        return 0.0;
+    }
+    // The angle from the nearer axis, so the ratio stays at or below 1.
+    var t = atan_p(min(ax, ay) / max(ax, ay));
+    if ay > ax {
+        t = PI / 2.0 - t;
+    }
+    if x < 0.0 {
+        t = PI - t;
+    }
+    // By the sign bit, so -0 gives -π like the CPU's `atan2`.
+    return select(t, -t, (bitcast<u32>(y) >> 31u) == 1u);
+}
 
 // The map's red and green at map texel (x, y), clamped to the map.
 fn map_texel(x: i32, y: i32) -> vec2<f32> {
@@ -316,27 +419,202 @@ fn rem_euclid_f(v: f32, m: f32) -> f32 {
     return select(r, r + abs(m), r < 0.0);
 }
 
+// `distort::sphere_1d`.
+fn sphere_1d(rn: f32, a: f32) -> f32 {
+    var aim = sin_r(rn * (PI / 2.0));
+    if a >= 0.0 {
+        aim = asin_p(rn) * 2.0 / PI;
+    }
+    return rn + abs(a) * (aim - rn);
+}
+
+// `distort::shape`: one wave of `t` (0 Sine, 1 Triangle, 2 Square) at `phase`.
+fn wave_shape(t: u32, phase: f32) -> f32 {
+    let p = reduce(phase) / TAU;
+    if t == 0u {
+        return sin_r(phase);
+    } else if t == 1u {
+        return 1.0 - 4.0 * abs(p - 0.5);
+    }
+    return select(-1.0, 1.0, p < 0.5);
+}
+
+// The point output pixel centre (x, y) samples, per mapping.
+fn mapped(x: f32, y: f32) -> vec2<f32> {
+    let b = q.bounds;
+    let w = f32(b.z - b.x);
+    let h = f32(b.w - b.y);
+    // `distort::ellipse`.
+    let cx = f32(b.x) + w / 2.0;
+    let cy = f32(b.y) + h / 2.0;
+    let hx = w / 2.0;
+    let hy = h / 2.0;
+    let lx = x - f32(b.x);
+    let ly = y - f32(b.y);
+    switch q.kind {
+        case 0u: {
+            // Displace (`distort2::displace`).
+            let mw = f32(q.map_size.x);
+            let mh = f32(q.map_size.y);
+            var u = rem_euclid_f(lx, mw);
+            var v = rem_euclid_f(ly, mh);
+            if q.e.x != 0u {
+                u = lx / f32(max(b.z - b.x, 1)) * mw;
+                v = ly / f32(max(b.w - b.y, 1)) * mh;
+            }
+            let m = map_sample(u, v);
+            let shift = (m - vec2<f32>(0.5)) * 2.0 * q.p.xy;
+            return vec2<f32>(x, y) + shift;
+        }
+        case 1u: {
+            // Twirl.
+            if hx <= 0.0 || hy <= 0.0 {
+                return vec2<f32>(x, y);
+            }
+            let u = (x - cx) / hx;
+            let v = (y - cy) / hy;
+            let r = sqrt(u * u + v * v);
+            if r >= 1.0 {
+                return vec2<f32>(x, y);
+            }
+            let t = q.p.x * (1.0 - r);
+            let s = sin_r(t);
+            let c = cos_r(t);
+            return vec2<f32>(cx + (u * c - v * s) * hx, cy + (u * s + v * c) * hy);
+        }
+        case 2u: {
+            // Pinch.
+            if hx <= 0.0 || hy <= 0.0 {
+                return vec2<f32>(x, y);
+            }
+            let u = (x - cx) / hx;
+            let v = (y - cy) / hy;
+            let r = sqrt(u * u + v * v);
+            if r >= 1.0 || r <= 0.0 {
+                return vec2<f32>(x, y);
+            }
+            let k = pow(r, 1.0 - q.p.x * 0.5) / r;
+            return vec2<f32>(cx + u * k * hx, cy + v * k * hy);
+        }
+        case 3u: {
+            // Spherize.
+            let a = q.p.x;
+            let dx = x - cx;
+            let dy = y - cy;
+            if q.e.x == 1u {
+                if abs(dx) >= hx {
+                    return vec2<f32>(x, y);
+                }
+                return vec2<f32>(cx + sign(dx) * hx * sphere_1d(abs(dx) / hx, a), y);
+            }
+            if q.e.x == 2u {
+                if abs(dy) >= hy {
+                    return vec2<f32>(x, y);
+                }
+                return vec2<f32>(x, cy + sign(dy) * hy * sphere_1d(abs(dy) / hy, a));
+            }
+            if hx <= 0.0 || hy <= 0.0 {
+                return vec2<f32>(x, y);
+            }
+            let u = dx / hx;
+            let v = dy / hy;
+            let r = sqrt(u * u + v * v);
+            if r >= 1.0 || r <= 0.0 {
+                return vec2<f32>(x, y);
+            }
+            let k = sphere_1d(r, a) / r;
+            return vec2<f32>(cx + u * k * hx, cy + v * k * hy);
+        }
+        case 4u: {
+            // Wave: the generators' mean.
+            var d = vec2<f32>(0.0);
+            let n = q.e.x;
+            for (var g = 0u; g < n; g++) {
+                let len = rdata[4u * g];
+                let amp = rdata[4u * g + 1u];
+                d.x += amp * wave_shape(q.e.y, TAU * ly / len + rdata[4u * g + 2u]);
+                d.y += amp * wave_shape(q.e.y, TAU * lx / len + rdata[4u * g + 3u]);
+            }
+            return vec2<f32>(x + d.x / f32(n), y + d.y / f32(n));
+        }
+        case 5u: {
+            // Ripple.
+            let amp = q.p.x;
+            let len = q.p.y;
+            return vec2<f32>(x + amp * sin_r(TAU * ly / len), y + amp * sin_r(TAU * lx / len));
+        }
+        case 6u: {
+            // Polar Coordinates (`distort::polar_map`, at pixel corners).
+            let pw = f32(max(b.z - b.x, 1));
+            let ph = f32(max(b.w - b.y, 1));
+            let pcx = f32(b.x) + pw / 2.0;
+            let pcy = f32(b.y) + ph / 2.0;
+            let rmax = min(pw, ph) / 2.0;
+            let px = x - 0.5;
+            let py = y - 0.5;
+            var s = vec2<f32>(0.0);
+            if q.e.x != 0u {
+                let dx = px - pcx;
+                let dy = py - pcy;
+                var theta = atan2_p(-dx, -dy);
+                if theta <= 0.0 {
+                    theta += TAU;
+                }
+                let r = sqrt(dx * dx + dy * dy);
+                s = vec2<f32>(f32(b.x) + theta / TAU * pw, f32(b.y) + r / rmax * ph);
+            } else {
+                let theta = (px + 1.0 - f32(b.x)) / pw * TAU;
+                let r = (py - f32(b.y)) / ph * rmax;
+                s = vec2<f32>(pcx - r * sin_r(theta), pcy - r * cos_r(theta));
+            }
+            return s + vec2<f32>(0.5);
+        }
+        case 7u: {
+            // ZigZag (`distort2::zigzag`, in the bounds' inscribed circle).
+            let rr = min(w, h) / 2.0;
+            let a = q.p.x;
+            let k = q.p.y;
+            let dx = x - cx;
+            let dy = y - cy;
+            let r = sqrt(dx * dx + dy * dy);
+            if r >= rr || r <= 0.0 || a == 0.0 {
+                return vec2<f32>(x, y);
+            }
+            let rn = r / rr;
+            let wave = sin_r(TAU * k * rn) * (1.0 - rn);
+            var radial = 0.0;
+            var angular = 0.0;
+            if q.e.x == 1u {
+                radial = a * wave * rr / (4.0 * k);
+            } else if q.e.x == 0u {
+                angular = a * wave * PI / (2.0 * k);
+            } else {
+                radial = a * wave * rr / (8.0 * k);
+                angular = a * wave * PI / (4.0 * k);
+            }
+            let th = atan2_p(dy, dx) + angular;
+            let rs = max(r + radial, 0.0);
+            let sc = sin_cos(th);
+            return vec2<f32>(cx + rs * sc.y, cy + rs * sc.x);
+        }
+        default: {
+            // Shear: the row's offset.
+            let n = i32(q.e.x);
+            let i = clamp(i32(y - 0.5) - b.y, 0, n - 1);
+            return vec2<f32>(x - rdata[i], y);
+        }
+    }
+}
+
 @compute @workgroup_size(8, 8)
-fn displace_pass(@builtin(global_invocation_id) g: vec3<u32>) {
+fn remap_pass(@builtin(global_invocation_id) g: vec3<u32>) {
     if g.x >= q.size.x || g.y >= q.size.y {
         return;
     }
-    let b = q.bounds;
     let x = f32(q.out_origin.x + i32(g.x)) + 0.5;
     let y = f32(q.out_origin.y + i32(g.y)) + 0.5;
-    let lx = x - f32(b.x);
-    let ly = y - f32(b.y);
-    let mw = f32(q.map_size.x);
-    let mh = f32(q.map_size.y);
-    var u = rem_euclid_f(lx, mw);
-    var v = rem_euclid_f(ly, mh);
-    if q.stretch != 0u {
-        u = lx / f32(max(b.z - b.x, 1)) * mw;
-        v = ly / f32(max(b.w - b.y, 1)) * mh;
-    }
-    let m = map_sample(u, v);
-    let shift = (m - vec2<f32>(0.5)) * 2.0 * q.scale;
-    textureStore(dout, vec2<i32>(g.xy), src_sample(x + shift.x, y + shift.y));
+    let at = mapped(x, y);
+    textureStore(dout, vec2<i32>(g.xy), src_sample(at.x, at.y));
 }
 
 // ---- The final pass: the filter's output as the layer's new pixels ----

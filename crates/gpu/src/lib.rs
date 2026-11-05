@@ -65,7 +65,7 @@ pub use camera_raw::{CAMERA_RAW_SHADER, CameraRawDevelop};
 pub use camera_raw_tone::{CAMERA_RAW_FILTERS_SHADER, CAMERA_RAW_TONE_SHADER};
 pub use health::{DeviceHealth, Fault};
 pub use operator::{
-    Combine, DisplaceParams, GaussianBlur, LayerOperator, MAX_AXIS_TAPS, MAX_DISC_RADIUS, OperatorInput, OperatorProgram, OperatorTarget, SeparableBlur,
+    Combine, GaussianBlur, LayerOperator, MAX_AXIS_TAPS, MAX_DISC_RADIUS, Mapping, OperatorInput, OperatorProgram, OperatorTarget, RemapParams, SeparableBlur,
     Undefined,
 };
 pub use plan::{Kernel, Plan, Role, Unsupported, plan};

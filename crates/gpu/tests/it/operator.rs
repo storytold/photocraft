@@ -253,6 +253,43 @@ fn two_operators_on_one_layer_fail_the_render() {
     assert!(photocraft_gpu::render_to_vec(&mut g.comp, &g.device, &g.queue, &doc, doc.bounds()).is_ok(), "one is fine");
 }
 
+/// A whole-extent operator (a distort) uploads its window once: a slider step reruns the passes
+/// without uploading anything. Its window was different at the canvas's edge cells (the
+/// 300 × 200 canvas doesn't end on a page), and a non-Displace remap made a new map stand-in each
+/// call: both uploaded again on every step.
+#[test]
+fn a_whole_extent_window_is_uploaded_once() {
+    let Some(mut g) = gpu() else { return };
+    if !g.comp.operators_supported(&g.device) {
+        return;
+    }
+    let (doc, id) = blur_doc(SampleType::U8);
+    let content = doc.layer(id).unwrap().surface().unwrap().content_bounds();
+    let twirl = |angle: f32| {
+        let params = FilterParams::Twirl { angle };
+        let (warp, _) = photocraft_algo::separable::Warp::of(&params, doc.bounds()).unwrap();
+        let photocraft_algo::separable::Warp::Twirl { angle } = warp else { panic!("twirl") };
+        let d = photocraft_gpu::RemapParams {
+            mapping: photocraft_gpu::Mapping::Twirl { angle },
+            bounds: doc.bounds(),
+            undefined: photocraft_gpu::Undefined::Repeat,
+        };
+        let area = photocraft_algo::output_area(&params, content, doc.bounds(), None);
+        let program = GaussianBlur::new(SeparableBlur::Remap(Arc::new(d)), edge_extent(doc.bounds(), content), area, None, false, doc.depth).unwrap();
+        LayerOperator { layer: id, target: photocraft_gpu::OperatorTarget::Content, program: Arc::new(program) }
+    };
+    for (label, comp) in [("", &mut g.comp), (" (paged)", &mut g.paged)] {
+        comp.set_operators(doc.id, vec![twirl(120.0)]);
+        photocraft_gpu::render_to_vec_stats(comp, &g.device, &g.queue, &doc, doc.bounds()).unwrap();
+        for angle in [121.0, 122.0] {
+            comp.set_operators(doc.id, vec![twirl(angle)]);
+            let step = photocraft_gpu::render_to_vec_stats(comp, &g.device, &g.queue, &doc, doc.bounds()).unwrap().1;
+            assert!(step.operator_cells > 0, "{label} {angle}°: the passes run");
+            assert_eq!(step.bytes_uploaded, 0, "{label} {angle}°: nothing uploaded");
+        }
+    }
+}
+
 #[test]
 fn blur_descriptions_the_passes_cant_run_are_refused() {
     let r = Rect::new(0, 0, 10, 10);
@@ -708,19 +745,21 @@ fn a_displace_operator_matches_the_cpu_filter() {
                     result.write_region(r, &new);
                 }
                 *surf = result;
-                let d = photocraft_gpu::DisplaceParams {
-                    map: texels.clone(),
-                    map_size: [37, 23],
+                let d = photocraft_gpu::RemapParams {
+                    mapping: photocraft_gpu::Mapping::Displace {
+                        map: texels.clone(),
+                        map_size: [37, 23],
+                        scale: [horizontal / 100.0 * 128.0, vertical / 100.0 * 128.0],
+                        stretch,
+                    },
                     bounds,
-                    scale: [horizontal / 100.0 * 128.0, vertical / 100.0 * 128.0],
-                    stretch,
                     undefined: match undefined {
                         UndefinedAreas::Wrap => photocraft_gpu::Undefined::Wrap,
                         UndefinedAreas::Repeat => photocraft_gpu::Undefined::Repeat,
                         UndefinedAreas::Transparent => photocraft_gpu::Undefined::Transparent,
                     },
                 };
-                let program = GaussianBlur::new(SeparableBlur::Displace(Arc::new(d)), extent, area, doc.selection.clone().map(Arc::new), keep_alpha, depth)
+                let program = GaussianBlur::new(SeparableBlur::Remap(Arc::new(d)), extent, area, doc.selection.clone().map(Arc::new), keep_alpha, depth)
                     .expect("a runnable displace");
                 let op = LayerOperator { layer: id, target: photocraft_gpu::OperatorTarget::Content, program: Arc::new(program) };
                 if let Err(e) = compare(&mut g, &doc, &op, &expected, tolerance(depth), &what) {
@@ -749,15 +788,171 @@ fn a_displace_map_past_the_texture_limit_falls_back_without_an_error() {
     }
     let (doc, id) = blur_doc(SampleType::U8);
     let content = doc.layer(id).unwrap().surface().unwrap().content_bounds();
-    let d = photocraft_gpu::DisplaceParams {
-        map: Arc::new(vec![[0.5, 0.5, 0.5, 1.0]; 300]),
-        map_size: [300, 1],
+    let d = photocraft_gpu::RemapParams {
+        mapping: photocraft_gpu::Mapping::Displace { map: Arc::new(vec![[0.5, 0.5, 0.5, 1.0]; 300]), map_size: [300, 1], scale: [10.0, 10.0], stretch: true },
         bounds: doc.bounds(),
-        scale: [10.0, 10.0],
-        stretch: true,
         undefined: photocraft_gpu::Undefined::Repeat,
     };
-    let program = GaussianBlur::new(SeparableBlur::Displace(Arc::new(d)), edge_extent(doc.bounds(), content), content, None, false, doc.depth).unwrap();
+    let program = GaussianBlur::new(SeparableBlur::Remap(Arc::new(d)), edge_extent(doc.bounds(), content), content, None, false, doc.depth).unwrap();
+    comp.set_operators(doc.id, vec![LayerOperator { layer: id, target: photocraft_gpu::OperatorTarget::Content, program: Arc::new(program) }]);
+    let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let result = photocraft_gpu::render_to_vec_stats(&mut comp, &device, &queue, &doc, doc.bounds());
+    let error = pollster::block_on(scope.pop());
+    assert!(error.is_none(), "no validation error: {error:?}");
+    let message = result.err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(message.contains("256 px limit"), "the refresh falls back to the CPU, saying why: {message:?}");
+}
+
+/// algo's distort mapping as the GPU operator's (as the filter preview converts it).
+fn gpu_mapping(w: photocraft_algo::separable::Warp) -> photocraft_gpu::Mapping {
+    use photocraft_algo::separable::Warp;
+    use photocraft_gpu::Mapping;
+    match w {
+        Warp::Twirl { angle } => Mapping::Twirl { angle },
+        Warp::Pinch { amount } => Mapping::Pinch { amount },
+        Warp::Spherize { amount, mode } => Mapping::Spherize { amount, mode },
+        Warp::Wave { generators, wave_type } => Mapping::Wave { generators, wave_type },
+        Warp::Ripple { amplitude, wavelength } => Mapping::Ripple { amplitude, wavelength },
+        Warp::Polar { to_polar } => Mapping::Polar { to_polar },
+        Warp::ZigZag { amount, ridges, style } => Mapping::ZigZag { amount, ridges, style },
+        Warp::Shear { rows } => Mapping::Shear { rows },
+    }
+}
+
+/// Phase 4: the distort filters (Twirl, Pinch, Spherize, Wave, Ripple, Polar Coordinates, ZigZag,
+/// Shear) as layer operators, against the CPU filters applied as the engine applies them. Where
+/// a mapping is discontinuous (Wave's Square and Triangle, Polar Coordinates' 12 o'clock seam) a
+/// last-bit difference in a sine can put a pixel on the other side, so at most 0.1 % of pixels
+/// may differ there; nothing else may.
+#[test]
+fn distort_operators_match_the_cpu_filters() {
+    use photocraft_algo::{PolarMode, RippleSize, SpherizeMode, UndefinedAreas, WaveType, ZigZagStyle};
+    let Some(mut g) = gpu() else { return };
+    if !g.comp.operators_supported(&g.device) {
+        eprintln!("skipping distort parity: no compute");
+        return;
+    }
+    let wave = |wave_type, undefined| FilterParams::Wave {
+        generators: 5,
+        wavelength_min: 10.0,
+        wavelength_max: 120.0,
+        amplitude_min: 5.0,
+        amplitude_max: 35.0,
+        wave_type,
+        undefined,
+        seed: 7,
+    };
+    let cases: Vec<(FilterParams, bool)> = vec![
+        (FilterParams::Twirl { angle: 50.0 }, false),
+        (FilterParams::Twirl { angle: -300.0 }, false),
+        (FilterParams::Pinch { amount: 50.0 }, false),
+        (FilterParams::Pinch { amount: -80.0 }, false),
+        (FilterParams::Spherize { amount: 60.0, mode: SpherizeMode::Normal }, false),
+        (FilterParams::Spherize { amount: -50.0, mode: SpherizeMode::Normal }, false),
+        (FilterParams::Spherize { amount: 70.0, mode: SpherizeMode::HorizontalOnly }, false),
+        (FilterParams::Spherize { amount: -40.0, mode: SpherizeMode::VerticalOnly }, false),
+        (wave(WaveType::Sine, UndefinedAreas::Wrap), false),
+        (wave(WaveType::Triangle, UndefinedAreas::Repeat), true),
+        (wave(WaveType::Square, UndefinedAreas::Wrap), true),
+        (FilterParams::Ripple { amount: 200.0, size: RippleSize::Medium }, false),
+        (FilterParams::Ripple { amount: -500.0, size: RippleSize::Large }, false),
+        (FilterParams::PolarCoordinates { mode: PolarMode::RectangularToPolar }, true),
+        (FilterParams::PolarCoordinates { mode: PolarMode::PolarToRectangular }, true),
+        (FilterParams::ZigZag { amount: 50.0, ridges: 5.0, style: ZigZagStyle::AroundCenter }, false),
+        (FilterParams::ZigZag { amount: -70.0, ridges: 9.0, style: ZigZagStyle::OutFromCenter }, false),
+        (FilterParams::ZigZag { amount: 40.0, ridges: 3.0, style: ZigZagStyle::PondRipples }, false),
+        (FilterParams::Shear { points: vec![[0.0, 0.0], [0.5, 0.3], [1.0, -0.2]], undefined: UndefinedAreas::Wrap }, false),
+        (FilterParams::Shear { points: vec![[0.0, -0.4], [1.0, 0.4]], undefined: UndefinedAreas::Transparent }, false),
+    ];
+    let mut failures = Vec::new();
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        for (params, discontinuous) in &cases {
+            for selection in [false, true] {
+                let (mut doc, id) = blur_doc(depth);
+                if selection {
+                    doc.selection = Some(feathered_selection());
+                }
+                let what = format!("{depth:?} {params:?}{}", if selection { ", selection" } else { "" });
+                let content = doc.layer(id).unwrap().surface().unwrap().content_bounds();
+                let sel_bounds = doc.selection.as_ref().map(Surface::content_bounds);
+                let bounds = sel_bounds.filter(|b| !b.is_empty()).unwrap_or(doc.bounds());
+                let area = photocraft_algo::output_area(params, content, bounds, sel_bounds);
+                let extent = edge_extent(doc.bounds(), content);
+                let mut expected = doc.clone();
+                let surf = expected.layer_mut(id).unwrap().surface_mut().unwrap();
+                *surf = photocraft_algo::apply_in_with(surf, params, area, bounds, doc.selection.as_ref(), extent, &Interrupt::NONE).unwrap();
+                let (warp, edge) = photocraft_algo::separable::Warp::of(params, bounds).expect("a distort mapping");
+                let undefined = match edge {
+                    photocraft_algo::Edge::Transparent => photocraft_gpu::Undefined::Transparent,
+                    photocraft_algo::Edge::Repeat => photocraft_gpu::Undefined::Repeat,
+                    photocraft_algo::Edge::Wrap => photocraft_gpu::Undefined::Wrap,
+                };
+                let d = photocraft_gpu::RemapParams { mapping: gpu_mapping(warp), bounds, undefined };
+                let program = GaussianBlur::new(SeparableBlur::Remap(Arc::new(d)), extent, area, doc.selection.clone().map(Arc::new), false, depth)
+                    .expect("a runnable distort");
+                let op = LayerOperator { layer: id, target: photocraft_gpu::OperatorTarget::Content, program: Arc::new(program) };
+                let rect = doc.bounds();
+                let cpu = photocraft_compose::render(&expected, rect);
+                for (label, comp) in [("", &mut g.comp), (" (paged)", &mut g.paged)] {
+                    comp.set_operators(doc.id, vec![op.clone()]);
+                    let out = match photocraft_gpu::render_to_vec_stats(comp, &g.device, &g.queue, &doc, rect) {
+                        Ok((out, _)) => out,
+                        Err(e) => {
+                            failures.push(format!("{what}{label}: {e}"));
+                            continue;
+                        }
+                    };
+                    let tol = tolerance(depth);
+                    let off: Vec<usize> = cpu
+                        .px
+                        .iter()
+                        .zip(&out)
+                        .enumerate()
+                        .filter(|(_, (c, o))| (0..4).any(|k| (c[k] * c[3] - o[k] * o[3]).abs() > tol))
+                        .map(|(i, _)| i)
+                        .collect();
+                    let allowed = if *discontinuous { cpu.px.len() / 1000 } else { 0 };
+                    if off.len() > allowed {
+                        let i = off[0];
+                        let w = rect.width() as usize;
+                        failures.push(format!(
+                            "{what}{label}: {} pixels off (allowed {allowed}), first at ({}, {}): cpu {:?} gpu {:?}",
+                            off.len(),
+                            i % w,
+                            i / w,
+                            cpu.px[i],
+                            out[i]
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// A whole-extent warp on a layer wider than the device's size limit falls back to the CPU
+/// without a validation error, as an oversized Displace map does.
+#[test]
+fn an_operator_past_the_texture_limit_falls_back_without_an_error() {
+    let _lock = crate::GPU_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Ok(adapter) = pollster::block_on(wgpu::Instance::default().request_adapter(&wgpu::RequestAdapterOptions::default())) else { return };
+    let limits = wgpu::Limits { max_texture_dimension_2d: 256, ..adapter.limits() };
+    let descriptor = wgpu::DeviceDescriptor { required_limits: limits, ..Default::default() };
+    let Ok((device, queue)) = pollster::block_on(adapter.request_device(&descriptor)) else { return };
+    assert_eq!(device.limits().max_texture_dimension_2d, 256);
+    let Ok(mut comp) = Compositor::try_new_with_format(&device, wgpu::TextureFormat::Rgba32Float) else { return };
+    if !comp.operators_supported(&device) {
+        return;
+    }
+    // 300 px wide: Twirl's window (the layer's whole extent) can't be one texture.
+    let (doc, id) = blur_doc(SampleType::U8);
+    let content = doc.layer(id).unwrap().surface().unwrap().content_bounds();
+    let params = FilterParams::Twirl { angle: 90.0 };
+    let (warp, _) = photocraft_algo::separable::Warp::of(&params, doc.bounds()).unwrap();
+    let d = photocraft_gpu::RemapParams { mapping: gpu_mapping(warp), bounds: doc.bounds(), undefined: photocraft_gpu::Undefined::Repeat };
+    let area = photocraft_algo::output_area(&params, content, doc.bounds(), None);
+    let program = GaussianBlur::new(SeparableBlur::Remap(Arc::new(d)), edge_extent(doc.bounds(), content), area, None, false, doc.depth).unwrap();
     comp.set_operators(doc.id, vec![LayerOperator { layer: id, target: photocraft_gpu::OperatorTarget::Content, program: Arc::new(program) }]);
     let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
     let result = photocraft_gpu::render_to_vec_stats(&mut comp, &device, &queue, &doc, doc.bounds());

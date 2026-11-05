@@ -53,8 +53,37 @@ pub const CUSTOM: &str = "filter.other.custom";
 /// Displace: the source sampled where an open document's map shifts it.
 pub const DISPLACE: &str = "filter.distort.displace";
 
+/// The distort filters that are a mapping (`photocraft_algo::separable::Warp`).
+pub const DISTORTS: [&str; 8] = [
+    "filter.distort.twirl",
+    "filter.distort.pinch",
+    "filter.distort.spherize",
+    "filter.distort.wave",
+    "filter.distort.ripple",
+    "filter.distort.polarCoordinates",
+    "filter.distort.zigZag",
+    "filter.distort.shear",
+];
+
 /// The filters this path previews.
-pub const COMMANDS: [&str; 8] = [COMMAND, UNSHARP, HIGH_PASS, BOX_BLUR, MINIMUM, MAXIMUM, CUSTOM, DISPLACE];
+pub const COMMANDS: [&str; 16] = [
+    COMMAND,
+    UNSHARP,
+    HIGH_PASS,
+    BOX_BLUR,
+    MINIMUM,
+    MAXIMUM,
+    CUSTOM,
+    DISPLACE,
+    DISTORTS[0],
+    DISTORTS[1],
+    DISTORTS[2],
+    DISTORTS[3],
+    DISTORTS[4],
+    DISTORTS[5],
+    DISTORTS[6],
+    DISTORTS[7],
+];
 
 /// Displace's map as the GPU uploads it: straight RGBA texels and their size.
 type Map = (Arc<Vec<[f32; 4]>>, [u32; 2]);
@@ -265,12 +294,10 @@ fn blur_for(
         // `distort2::displace`: the map from an open document, the scale in pixels.
         photocraft_algo::FilterParams::Displace { horizontal, vertical, stretch, undefined, .. } => {
             let (map, map_size) = map?;
-            SeparableBlur::Displace(Arc::new(photocraft_gpu::DisplaceParams {
-                map,
-                map_size,
+            let mapping = photocraft_gpu::Mapping::Displace { map, map_size, scale: [horizontal / 100.0 * 128.0, vertical / 100.0 * 128.0], stretch };
+            SeparableBlur::Remap(Arc::new(photocraft_gpu::RemapParams {
+                mapping,
                 bounds,
-                scale: [horizontal / 100.0 * 128.0, vertical / 100.0 * 128.0],
-                stretch,
                 undefined: match undefined {
                     photocraft_algo::UndefinedAreas::Wrap => photocraft_gpu::Undefined::Wrap,
                     photocraft_algo::UndefinedAreas::Repeat => photocraft_gpu::Undefined::Repeat,
@@ -278,7 +305,11 @@ fn blur_for(
                 },
             }))
         }
-        _ => gpu_blur(photocraft_algo::separable::Separable::of(&fp)?),
+        // The other distort filters: their mapping as the CPU works it out (`Warp`).
+        _ => match photocraft_algo::separable::Warp::of(&fp, bounds) {
+            Some((warp, edge)) => SeparableBlur::Remap(Arc::new(photocraft_gpu::RemapParams { mapping: gpu_warp(warp), bounds, undefined: gpu_edge(edge) })),
+            None => gpu_blur(photocraft_algo::separable::Separable::of(&fp)?),
+        },
     };
     // Lock Transparency keeps a layer's alpha; a mask has none.
     let keep_alpha = on == OperatorTarget::Content && doc.effective_locks(target).transparency;
@@ -329,6 +360,32 @@ fn displace_map(app: &mut PhotocraftApp, command: &str, params: &Value, k: u32) 
         p.maps.push((key, map.clone()));
     }
     Some(map)
+}
+
+/// algo's description of a distort filter's mapping (`photocraft_algo::separable::Warp`) as the
+/// GPU operator's.
+pub fn gpu_warp(w: photocraft_algo::separable::Warp) -> photocraft_gpu::Mapping {
+    use photocraft_algo::separable::Warp;
+    use photocraft_gpu::Mapping;
+    match w {
+        Warp::Twirl { angle } => Mapping::Twirl { angle },
+        Warp::Pinch { amount } => Mapping::Pinch { amount },
+        Warp::Spherize { amount, mode } => Mapping::Spherize { amount, mode },
+        Warp::Wave { generators, wave_type } => Mapping::Wave { generators, wave_type },
+        Warp::Ripple { amplitude, wavelength } => Mapping::Ripple { amplitude, wavelength },
+        Warp::Polar { to_polar } => Mapping::Polar { to_polar },
+        Warp::ZigZag { amount, ridges, style } => Mapping::ZigZag { amount, ridges, style },
+        Warp::Shear { rows } => Mapping::Shear { rows },
+    }
+}
+
+/// algo's edge rule as the GPU operator's Undefined Areas.
+fn gpu_edge(e: photocraft_algo::Edge) -> photocraft_gpu::Undefined {
+    match e {
+        photocraft_algo::Edge::Transparent => photocraft_gpu::Undefined::Transparent,
+        photocraft_algo::Edge::Repeat => photocraft_gpu::Undefined::Repeat,
+        photocraft_algo::Edge::Wrap => photocraft_gpu::Undefined::Wrap,
+    }
 }
 
 /// algo's description of a CPU filter (`photocraft_algo::separable`) as the GPU operator's.
