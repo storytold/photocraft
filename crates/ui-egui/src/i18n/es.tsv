@@ -200,6 +200,7 @@
 	Create Smart Object after Loading Layers	Crear objeto inteligente tras cargar las capas
 	Reveal in Finder	Mostrar en Finder
 	Show in Explorer	Mostrar en el Explorador
+	Reveal in Explorer	Mostrar en el Explorador
 	Show in Folder	Mostrar en la carpeta
 	File Info…	Información del archivo…
 	Print…	Imprimir…
@@ -445,6 +446,8 @@
 	Smart Object	Objeto inteligente
 	Convert to Smart Object	Convertir en objeto inteligente
 	Convert to Embedded	Convertir en incrustado
+	Embed Linked	Incrustar vinculado
+	Embed All Linked	Incrustar todos los vinculados
 	Convert to Layers	Convertir en capas
 	Convert to Linked…	Convertir en vinculado…
 	Edit Contents	Editar contenido

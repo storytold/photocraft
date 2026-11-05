@@ -256,6 +256,7 @@
 	Create Smart Object after Loading Layers	レイヤーの読み込み後にスマートオブジェクトを作成
 	Reveal in Finder	Finder で表示
 	Show in Explorer	エクスプローラーで表示
+	Reveal in Explorer	エクスプローラーで表示
 	Show in Folder	フォルダーで表示
 	File Info…	ファイル情報…
 	Print…	プリント…
@@ -500,6 +501,8 @@
 	Smart Object	スマートオブジェクト
 	Convert to Smart Object	スマートオブジェクトに変換
 	Convert to Embedded	埋め込みに変換
+	Embed Linked	リンクを埋め込む
+	Embed All Linked	すべてのリンクを埋め込む
 	Convert to Layers	レイヤーに変換
 	Convert to Linked…	リンクに変換…
 	Edit Contents	コンテンツを編集

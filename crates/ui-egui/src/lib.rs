@@ -796,6 +796,8 @@ mod lock_layers_shortcut_tests;
 #[cfg(test)]
 mod pencil_tests;
 #[cfg(test)]
+mod smart_objects_menu_tests;
+#[cfg(test)]
 mod tool_options_theme_tests;
 #[cfg(test)]
 mod tool_shift_cycle_order_tests;

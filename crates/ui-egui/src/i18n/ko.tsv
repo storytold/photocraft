@@ -227,6 +227,7 @@
 	Create Smart Object after Loading Layers	레이어를 불러온 후 스마트 오브젝트 만들기
 	Reveal in Finder	Finder에서 보기
 	Show in Explorer	파일 탐색기에서 보기
+	Reveal in Explorer	파일 탐색기에서 보기
 	Show in Folder	폴더에서 보기
 	File Info…	파일 정보…
 	Print…	인쇄…
@@ -465,6 +466,8 @@
 	Smart Object	스마트 오브젝트
 	Convert to Smart Object	스마트 오브젝트로 변환
 	Convert to Embedded	포함된 오브젝트로 변환
+	Embed Linked	연결된 항목 포함
+	Embed All Linked	모든 연결된 항목 포함
 	Convert to Layers	레이어로 변환
 	Convert to Linked…	연결된 오브젝트로 변환…
 	Edit Contents	내용 편집

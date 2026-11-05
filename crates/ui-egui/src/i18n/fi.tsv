@@ -1743,6 +1743,7 @@
 	Saved	Tallennettu
 	Reveal in Finder	Näytä Finderissa
 	Show in Explorer	Näytä Resurssienhallinnassa
+	Reveal in Explorer	Näytä Resurssienhallinnassa
 	Show in Folder	Näytä kansiossa
 	Before (Y)	Ennen (Y)
 	Save Settings…	Tallenna asetukset…
@@ -1922,6 +1923,8 @@
 	Combine Shapes	Yhdistä muodot
 	Contract…	Supista…
 	Convert to Embedded	Muunna upotetuksi
+	Embed Linked	Upota linkitetty
+	Embed All Linked	Upota kaikki linkitetyt
 	Convert to Layers	Muunna tasoiksi
 	Convert to Linked…	Muunna linkitetyksi…
 	Count	Laskuri

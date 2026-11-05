@@ -142,6 +142,7 @@
 	Create Smart Object after Loading Layers	إنشاء كائن ذكي بعد تحميل الطبقات
 	Reveal in Finder	إظهار في Finder
 	Show in Explorer	إظهار في Explorer
+	Reveal in Explorer	إظهار في Explorer
 	Show in Folder	إظهار في المجلد
 	File Info…	معلومات الملف…
 	Print…	طباعة…
@@ -387,6 +388,8 @@
 	Smart Object	كائن ذكي
 	Convert to Smart Object	تحويل إلى كائن ذكي
 	Convert to Embedded	تحويل إلى مضمّن
+	Embed Linked	تضمين المرتبط
+	Embed All Linked	تضمين كل المرتبط
 	Convert to Layers	تحويل إلى طبقات
 	Convert to Linked…	تحويل إلى مرتبط…
 	Edit Contents	تحرير المحتويات

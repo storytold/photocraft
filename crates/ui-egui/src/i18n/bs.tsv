@@ -124,6 +124,7 @@
 	Create Smart Object after Loading Layers	Kreiraj pametni objekat nakon učitavanja slojeva
 	Reveal in Finder	Prikaži u Finderu
 	Show in Explorer	Prikaži u Exploreru
+	Reveal in Explorer	Prikaži u Exploreru
 	Show in Folder	Prikaži u folderu
 	File Info…	Informacije o datoteci…
 	Print…	Štampaj…
@@ -356,6 +357,8 @@
 	Smart Object	Pametni objekat
 	Convert to Smart Object	Pretvori u pametni objekat
 	Convert to Embedded	Pretvori u ugrađeno
+	Embed Linked	Ugradi povezano
+	Embed All Linked	Ugradi sve povezano
 	Convert to Layers	Pretvori u slojeve
 	Convert to Linked…	Pretvori u povezano…
 	Edit Contents	Uredi sadržaj

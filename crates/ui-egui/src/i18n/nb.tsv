@@ -1742,6 +1742,7 @@
 	Saved	Lagret
 	Reveal in Finder	Vis i Finder
 	Show in Explorer	Vis i Utforsker
+	Reveal in Explorer	Vis i Utforsker
 	Show in Folder	Vis i mappe
 	Before (Y)	Før (Y)
 	Save Settings…	Lagre innstillinger…
@@ -1921,6 +1922,8 @@
 	Combine Shapes	Kombiner former
 	Contract…	Trekk sammen…
 	Convert to Embedded	Konverter til innebygd
+	Embed Linked	Bygg inn koblet
+	Embed All Linked	Bygg inn alle koblede
 	Convert to Layers	Konverter til lag
 	Convert to Linked…	Konverter til koblet…
 	Count	Telling

@@ -374,6 +374,8 @@
 	Color Table…	Bảng màu…
 	Combine Shapes	Kết hợp hình
 	Convert to Embedded	Chuyển thành nhúng
+	Embed Linked	Nhúng mục liên kết
+	Embed All Linked	Nhúng tất cả mục liên kết
 	Convert to Layers	Chuyển thành lớp
 	Convert to Linked…	Chuyển thành liên kết…
 	Convert to Smart Object	Chuyển thành đối tượng thông minh
@@ -2617,6 +2619,7 @@ shape	Appearance	Diện mạo
 	(coming soon)	(sắp có)
 	Add beauty precomp from the AOVs	Thêm precomp beauty từ các AOV
 	Show in Explorer	Hiện trong Explorer
+	Reveal in Explorer	Hiện trong Explorer
 	Show in Folder	Hiện trong thư mục
 	Delete and Fill Selection	Xoá và tô vùng chọn
 	Transform Again on a Copy	Biến đổi lại trên một bản sao

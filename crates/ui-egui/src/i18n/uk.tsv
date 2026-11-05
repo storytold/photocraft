@@ -1823,6 +1823,7 @@
 	Saved	Збережено
 	Reveal in Finder	Показати у Finder
 	Show in Explorer	Показати у Провіднику
+	Reveal in Explorer	Показати у Провіднику
 	Show in Folder	Показати в теці
 	Before (Y)	До (Y)
 	Save Settings…	Зберегти налаштування…
@@ -1986,6 +1987,8 @@
 	Combine Shapes	Об'єднати фігури
 	Contract…	Стиснути…
 	Convert to Embedded	Перетворити на вбудований
+	Embed Linked	Вбудувати пов'язаний
+	Embed All Linked	Вбудувати всі пов'язані
 	Convert to Layers	Перетворити на шари
 	Convert to Linked…	Перетворити на пов'язаний…
 	Count	Підрахунок

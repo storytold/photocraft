@@ -155,6 +155,7 @@
 	Create Smart Object after Loading Layers	Katmanları Yükledikten Sonra Akıllı Nesne Oluştur
 	Reveal in Finder	Finder'da Göster
 	Show in Explorer	Explorer'da Göster
+	Reveal in Explorer	Explorer'da Göster
 	Show in Folder	Klasörde Göster
 	File Info…	Dosya Bilgileri…
 	Print…	Yazdır…
@@ -398,6 +399,8 @@
 	Smart Object	Akıllı Nesne
 	Convert to Smart Object	Akıllı Nesneye Dönüştür
 	Convert to Embedded	Gömülüye Dönüştür
+	Embed Linked	Bağlantılıyı Göm
+	Embed All Linked	Tüm Bağlantılıları Göm
 	Convert to Layers	Katmanlara Dönüştür
 	Convert to Linked…	Bağlantılıya Dönüştür…
 	Edit Contents	İçeriği Düzenle

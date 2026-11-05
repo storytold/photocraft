@@ -235,6 +235,7 @@
 	Create Smart Object after Loading Layers	载入图层后创建智能对象
 	Reveal in Finder	在 Finder 中显示
 	Show in Explorer	在文件资源管理器中显示
+	Reveal in Explorer	在文件资源管理器中显示
 	Show in Folder	在文件夹中显示
 	File Info…	文件信息…
 	Print…	打印…
@@ -483,6 +484,8 @@
 	Smart Object	智能对象
 	Convert to Smart Object	转换为智能对象
 	Convert to Embedded	转换为嵌入对象
+	Embed Linked	嵌入链接对象
+	Embed All Linked	嵌入所有链接对象
 	Convert to Layers	转换为图层
 	Convert to Linked…	转换为链接对象…
 	Edit Contents	编辑内容

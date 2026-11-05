@@ -211,7 +211,7 @@ pub(crate) fn reveal_label() -> &'static str {
     if cfg!(target_os = "macos") {
         "Reveal in Finder"
     } else if cfg!(windows) {
-        "Show in Explorer"
+        "Reveal in Explorer"
     } else {
         "Show in Folder"
     }

@@ -232,6 +232,7 @@
 	Create Smart Object after Loading Layers	Utwórz obiekt inteligentny po wczytaniu warstw
 	Reveal in Finder	Pokaż w Finderze
 	Show in Explorer	Pokaż w Eksploratorze
+	Reveal in Explorer	Pokaż w Eksploratorze
 	Show in Folder	Pokaż w folderze
 	File Info…	Informacje o pliku…
 	Print…	Drukuj…
@@ -475,6 +476,8 @@
 	Smart Object	Obiekt inteligentny
 	Convert to Smart Object	Konwertuj na obiekt inteligentny
 	Convert to Embedded	Konwertuj na osadzony
+	Embed Linked	Osadź połączony
+	Embed All Linked	Osadź wszystkie połączone
 	Convert to Layers	Konwertuj na warstwy
 	Convert to Linked…	Konwertuj na połączony…
 	Edit Contents	Edytuj zawartość
