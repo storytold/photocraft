@@ -1193,14 +1193,37 @@ pub fn pcraft_full_composite(doc: &Document) -> Option<photocraft_raster::Rgba8I
 /// native reduced previews: an RGB document's own profile as stored,
 /// a gray document's gray profile as RGB, and sRGB for CMYK, Lab and documents without a usable
 /// profile ([`psd_thumbnail::composite_profile`]).
+///
+/// A gray document's RGB view gets an invertible colorant matrix ([`neutral_rgb_matrix`]), so
+/// viewers that invert the matrix accept the profile; `(v, v, v)` keeps the color of gray `v`.
 pub fn pcraft_full_composite_icc(doc: &Document) -> Vec<u8> {
     let own = doc.icc_profile.as_ref().filter(|bytes| {
         doc.mode == photocraft_color::ColorMode::Rgb && photocraft_cms::Profile::parse(bytes).is_ok_and(|p| p.color_space == photocraft_cms::ColorSpace::Rgb)
     });
     match own {
         Some(bytes) => bytes.to_vec(),
-        None => psd_thumbnail::composite_profile(doc).to_bytes().to_vec(),
+        None => {
+            let mut profile = psd_thumbnail::composite_profile(doc);
+            if profile.matrix.is_some_and(|m| photocraft_cms::math::invert(&m).is_none()) {
+                profile.matrix = Some(neutral_rgb_matrix());
+            }
+            profile.to_bytes().to_vec()
+        }
     }
+}
+
+/// The built-in sRGB colorant matrix with each row scaled to sum to the PCS white (D50), so
+/// `(v, v, v)` maps to `v` times the white, as the gray-as-RGB matrix does.
+fn neutral_rgb_matrix() -> photocraft_cms::math::Mat3 {
+    let white = photocraft_cms::math::D50;
+    let mut m = photocraft_cms::Builtin::Srgb.profile().matrix.unwrap_or(photocraft_cms::math::IDENTITY);
+    for (row, w) in m.iter_mut().zip(white) {
+        let sum: f64 = row.iter().sum();
+        if sum.abs() > f64::EPSILON {
+            row.iter_mut().for_each(|v| *v *= w / sum);
+        }
+    }
+    m
 }
 
 /// [`pcraft_full_composite`] rendered in bands: `ctl` gets the fraction of rows done, and a

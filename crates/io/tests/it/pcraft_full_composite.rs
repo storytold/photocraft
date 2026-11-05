@@ -97,6 +97,26 @@ fn png_has_srgb(png: &[u8]) -> bool {
     false
 }
 
+/// Asserts that `icc` is an RGB profile with an invertible colorant matrix whose `(v, v, v)`
+/// has the color of gray `v` in `gray`.
+fn assert_rgb_view_of_gray(icc: &[u8], gray: &photocraft_cms::Profile, what: &str) {
+    use photocraft_cms::{Builtin, ColorSpace, Intent, Profile, Transform, math};
+    let rgb = Profile::parse(icc).expect("profile");
+    assert_eq!(rgb.color_space, ColorSpace::Rgb, "{what}");
+    assert!(math::invert(&rgb.matrix.expect("a colorant matrix")).is_some(), "{what}: the colorant matrix is not invertible");
+    let lab = Builtin::LabD50.profile();
+    let from_rgb = Transform::new(&rgb, lab, Intent::RelativeColorimetric, false).expect("RGB to Lab");
+    let from_gray = Transform::new(gray, lab, Intent::RelativeColorimetric, false).expect("gray to Lab");
+    let decode = |o: [f32; 3]| [f64::from(o[0]) * 100.0, f64::from(o[1]) * 255.0 - 128.0, f64::from(o[2]) * 255.0 - 128.0];
+    for step in 0..=16 {
+        let v = step as f32 / 16.0;
+        let (mut a, mut b) = ([0f32; 3], [0f32; 3]);
+        from_rgb.eval(&[v, v, v], &mut a);
+        from_gray.eval(&[v], &mut b);
+        assert!(math::delta_e76(decode(a), decode(b)) < 0.1, "{what}: gray {v} is {a:?} as RGB and {b:?} as gray");
+    }
+}
+
 #[test]
 /// Reduced RGBA previews use adapted RGB gray profiles or the compositor's sRGB fallback,
 /// never a document's incompatible gray, CMYK or Lab profile.
@@ -106,18 +126,18 @@ fn reduced_native_profiles_follow_the_compositor_color_model() {
 
     let srgb = Builtin::Srgb.profile().to_bytes();
     let gray = Builtin::GrayGamma22.profile();
-    let gray_rgb = gray.gray_as_rgb().unwrap().to_bytes();
-    let default_gray = Builtin::SGray.profile().gray_as_rgb().unwrap().to_bytes();
+    let default_gray = Builtin::SGray.profile();
+    // `Err` names the gray profile whose RGB view the previews carry.
     for (mode, own, expected) in [
-        (ColorMode::Rgb, None, srgb.clone()),
-        (ColorMode::Rgb, Some(Arc::new(vec![0; 128])), srgb.clone()),
-        (ColorMode::Rgb, Some(gray.to_bytes()), srgb.clone()),
-        (ColorMode::Grayscale, Some(gray.to_bytes()), gray_rgb.clone()),
-        (ColorMode::Bitmap, Some(gray.to_bytes()), gray_rgb.clone()),
-        (ColorMode::Duotone, Some(gray.to_bytes()), gray_rgb),
-        (ColorMode::Grayscale, None, default_gray),
-        (ColorMode::Cmyk, Some(Builtin::CoatedCmyk.profile().to_bytes()), srgb.clone()),
-        (ColorMode::Lab, Some(Builtin::LabD50.profile().to_bytes()), srgb),
+        (ColorMode::Rgb, None, Ok(srgb.clone())),
+        (ColorMode::Rgb, Some(Arc::new(vec![0; 128])), Ok(srgb.clone())),
+        (ColorMode::Rgb, Some(gray.to_bytes()), Ok(srgb.clone())),
+        (ColorMode::Grayscale, Some(gray.to_bytes()), Err(gray)),
+        (ColorMode::Bitmap, Some(gray.to_bytes()), Err(gray)),
+        (ColorMode::Duotone, Some(gray.to_bytes()), Err(gray)),
+        (ColorMode::Grayscale, None, Err(default_gray)),
+        (ColorMode::Cmyk, Some(Builtin::CoatedCmyk.profile().to_bytes()), Ok(srgb.clone())),
+        (ColorMode::Lab, Some(Builtin::LabD50.profile().to_bytes()), Ok(srgb.clone())),
     ] {
         let mut d = Document::new("policy", Size::new(2, 1), mode, SampleType::U8);
         d.icc_profile = own;
@@ -126,7 +146,10 @@ fn reduced_native_profiles_follow_the_compositor_color_model() {
         for (name, side) in [("thumb.png", 256), ("composite/preview.png", 1024)] {
             let png = zip.read_by_name(name, usize::MAX).unwrap();
             let image = photocraft_codecs::decode(&png).unwrap();
-            assert_eq!(image.icc.as_deref(), Some(expected.as_slice()), "{mode:?}, {name}");
+            match &expected {
+                Ok(bytes) => assert_eq!(image.icc.as_deref(), Some(bytes.as_slice()), "{mode:?}, {name}"),
+                Err(gray) => assert_rgb_view_of_gray(image.icc.as_ref().unwrap(), gray, &format!("{mode:?}, {name}")),
+            }
             assert_eq!(Profile::parse(image.icc.as_ref().unwrap()).unwrap().color_space, ColorSpace::Rgb);
             assert_eq!(image.to_rgba8(), photocraft_compose::thumbnail(&d, side).pixels);
         }
@@ -206,7 +229,13 @@ fn the_full_composite_carries_the_profile_of_its_pixels() {
     g.icc_profile = Some(std::sync::Arc::new(gray.to_bytes().to_vec()));
     let tagged = Profile::parse(&full_icc(&g)).expect("profile");
     assert_eq!(tagged.color_space, ColorSpace::Rgb);
-    assert_eq!(tagged.to_bytes(), gray.gray_as_rgb().expect("gray as RGB").to_bytes());
+    assert_rgb_view_of_gray(&full_icc(&g), &gray, "full composite");
+    // A linear gray profile keeps its curve in the RGB view.
+    let mut linear = Builtin::GrayGamma22.profile().clone();
+    linear.gray_trc = Some(photocraft_cms::Curve::Identity);
+    let linear = linear.with_encoded_bytes();
+    g.icc_profile = Some(std::sync::Arc::new(linear.to_bytes().to_vec()));
+    assert_rgb_view_of_gray(&full_icc(&g), &linear, "linear full composite");
 }
 
 #[test]
