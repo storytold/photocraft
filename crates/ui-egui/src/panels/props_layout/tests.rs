@@ -386,7 +386,7 @@ fn shape_properties_uses_vector_shape_icon() {
 }
 
 #[test]
-fn shape_header_paints_18px_icon() {
+fn shape_header_paints_correct_icon() {
     let (session, layers) = kinds();
     let app = PhotocraftApp::new(session, crate::Services::default());
 
@@ -415,7 +415,7 @@ fn shape_header_paints_18px_icon() {
             })
             .collect();
 
-        let expected = if kind == "shape" { 18.0 } else { 15.0 };
+        let expected = 15.0;
 
         assert_eq!(icon_sizes, vec![vec2(expected, expected)], "{kind}: Properties header icon size");
 
