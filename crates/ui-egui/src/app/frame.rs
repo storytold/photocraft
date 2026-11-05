@@ -21,6 +21,12 @@ impl PhotocraftApp {
 }
 
 impl PhotocraftApp {
+    /// Canvas drops still waiting to be placed. A running transform pauses the queue, so the
+    /// browser admission lease has to outlive the inbox drain.
+    pub fn has_pending_drop_places(&self) -> bool {
+        !self.drop_places.is_empty()
+    }
+
     /// Shared logic body. A wrapping host owns the final reset tail after its own work.
     pub fn logic_frame(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         self.cap_frame_rate();
