@@ -538,9 +538,8 @@ fn save(s: &mut Session, p: &Value) -> Result<Value> {
     let target;
     if draft.source.is_none() && value.library_row.is_some() {
         let destination = value.library_row.clone().ok_or_else(|| bad(SAVE, "missing draft destination"))?;
-        let prepared =
-            super::library::placement::prepare(&proposed, &keys, &alternates, super::library::placement::Edit::Insert { destination, action: value })
-                .map_err(|error| bad(SAVE, error))?;
+        let edit = super::library::placement::Edit::Insert { destination, action: Box::new(value) };
+        let prepared = super::library::placement::prepare(&proposed, &keys, &alternates, edit).map_err(|error| bad(SAVE, error))?;
         target = prepared.result["index"].as_u64().and_then(|index| usize::try_from(index).ok()).ok_or_else(|| bad(SAVE, "missing prepared action index"))?;
         proposed = prepared.definition;
         keys = prepared.shortcuts;

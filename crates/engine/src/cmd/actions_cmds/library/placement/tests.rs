@@ -54,11 +54,11 @@ fn earlier_folder_insert_preserves_occurrences_calls_raw_events_and_reload_equal
         ],
     );
     let second = RowBinding::at(&state, 1, Some("Same")).unwrap();
-    let with_caller = prepared(&state, Edit::Insert { destination: second, action: caller }).definition;
+    let with_caller = prepared(&state, Edit::Insert { destination: second, action: Box::new(caller) }).definition;
     let before = encoded(&with_caller);
     let first = RowBinding::at(&with_caller, 0, Some("Same")).unwrap();
     let value = Action::new("New", vec![]);
-    let result = prepared(&with_caller, Edit::Insert { destination: first, action: value });
+    let result = prepared(&with_caller, Edit::Insert { destination: first, action: Box::new(value) });
     assert_eq!(result.result["index"], 1);
     assert_eq!(result.definition.list.iter().map(|action| action.name.as_str()).collect::<Vec<_>>(), ["A", "New", "B", "Caller"]);
     let caller = &result.definition.list[3];
@@ -80,7 +80,7 @@ fn earlier_folder_insert_preserves_occurrences_calls_raw_events_and_reload_equal
 fn assignment_permutation_remaps_all_known_call_keys_and_preserves_raw_source() {
     let state = plain();
     let first = RowBinding::at(&state, 0, None).unwrap();
-    let mut state = prepared(&state, Edit::Insert { destination: first, action: Action::new("C", vec![]) }).definition;
+    let mut state = prepared(&state, Edit::Insert { destination: first, action: Box::new(Action::new("C", vec![])) }).definition;
     state.list[2].steps.push(("actions.play".into(), json!({"action":1})));
     state.list[2].steps.push(("actions.conditional".into(), json!({"if":"always","then":0,"else":1})));
     let original = state.list[0].library_origin.clone();
@@ -117,7 +117,7 @@ fn row_local_carrier_survives_assign_duplicate_delete_and_both_shortcut_maps() {
     assert!(sidecar::tests::physical_set_action_payloads(&reload, 1).is_empty());
     // A new action without action metadata still uses its selected row's opaque SET carrier.
     let second = RowBinding::at(&state, 1, None).unwrap();
-    let added = prepared(&state, Edit::Insert { destination: second.clone(), action: Action::new("Fresh", vec![]) });
+    let added = prepared(&state, Edit::Insert { destination: second.clone(), action: Box::new(Action::new("Fresh", vec![])) });
     let reload = library::decode(&encoded(&added.definition)).unwrap();
     assert_eq!(counts(&reload), [1, 2, 0]);
     assert_eq!(sidecar::tests::physical_set_carrier_payload(&reload, 1), second_carrier);
@@ -129,7 +129,7 @@ fn row_local_carrier_survives_assign_duplicate_delete_and_both_shortcut_maps() {
     let reload = library::decode(&encoded(&copied.definition)).unwrap();
     assert_eq!(counts(&reload), [1, 1, 1, 0]);
     assert_eq!(sidecar::tests::physical_set_carrier_payload(&reload, 2), second_carrier);
-    assert_eq!(sidecar::tests::physical_set_action_payloads(&reload, 2), [payload.clone()]);
+    assert_eq!(sidecar::tests::physical_set_action_payloads(&reload, 2).as_slice(), std::slice::from_ref(&payload));
     assert_eq!(sidecar::tests::physical_action_payload(&reload.list[2]), payload);
     let keys = Keys::from([("actions.play:Only second".into(), "F4".into()), ("file.save".into(), "Ctrl+S".into())]);
     let alternates = Alternates::from([("actions.play:Only second".into(), vec!["F5".into()])]);
@@ -164,7 +164,7 @@ fn stale_ambiguous_unrepresentable_and_first_name_moves_refuse_atomically() {
     assert!(RowBinding::at(&rawless, 0, None).is_err());
     let mut split = library::definition_copy(&state);
     split.list.push(split.list[0].clone());
-    assert!(prepare(&split, &Keys::new(), &Alternates::new(), Edit::Insert { destination: first, action: Action::new("New", vec![]) }).is_err());
+    assert!(prepare(&split, &Keys::new(), &Alternates::new(), Edit::Insert { destination: first, action: Box::new(Action::new("New", vec![])) }).is_err());
     let duplicate_names = library::decode(&sidecar::tests::physical_placement_fixture()).unwrap();
     let second = RowBinding::at(&duplicate_names, 1, None).unwrap();
     assert!(prepare(&duplicate_names, &Keys::new(), &Alternates::new(), Edit::Assign { destination: second, action: 0 }).is_err());

@@ -150,12 +150,11 @@ pub(crate) fn validate(state: &ActionState) -> Result<()> {
     let index = state.library.row_index(&state.sets);
     let mut carriers = HashMap::new();
     for row in &state.atn_set_rows {
-        if state.sets.get(row.slot) == Some(&row.row) {
-            if let Some(old) = carriers.insert(row.slot, &row.source) {
-                if old != &row.source {
-                    return Err("the Actions folder metadata is ambiguous".into());
-                }
-            }
+        if state.sets.get(row.slot) == Some(&row.row)
+            && let Some(old) = carriers.insert(row.slot, &row.source)
+            && old != &row.source
+        {
+            return Err("the Actions folder metadata is ambiguous".into());
         }
     }
     for action in &state.list {
@@ -171,7 +170,7 @@ pub(crate) fn validate(state: &ActionState) -> Result<()> {
 }
 
 pub(crate) enum Edit {
-    Insert { destination: RowBinding, action: Action },
+    Insert { destination: RowBinding, action: Box<Action> },
     Assign { destination: RowBinding, action: usize },
     Duplicate { source: RowBinding, name: String },
     Delete { source: RowBinding },
@@ -250,10 +249,10 @@ fn permute_calls(actions: &mut [Action], old_to_new: &[usize]) {
     for (id, params) in actions.iter_mut().flat_map(|action| &mut action.steps) {
         for &key in super::super::call_keys(id) {
             let Some(old) = params.get(key).and_then(super::super::num).and_then(|value| usize::try_from(value).ok()) else { continue };
-            if let Some(&new) = old_to_new.get(old) {
-                if new != old {
-                    params[key] = json!(new);
-                }
+            if let Some(&new) = old_to_new.get(old)
+                && new != old
+            {
+                params[key] = json!(new);
             }
         }
     }
@@ -288,7 +287,7 @@ pub(crate) fn prepare(state: &ActionState, shortcuts: &Keys, alternates: &Altern
             }
             let at = insertion(state, &destination)?;
             destination.apply(&mut action);
-            definition.list.insert(at, action);
+            definition.list.insert(at, *action);
             crate::actions_edit_cmds::shift_action_calls(&mut definition.list, at, 1);
             json!({"index":at,"set":destination.name,"slot":destination.slot(state)?})
         }

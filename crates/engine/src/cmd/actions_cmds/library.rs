@@ -163,9 +163,12 @@ pub struct Library {
     pub(crate) legacy: Option<LegacyOrigin>,
 }
 
+type ExactRowKey<'a> = (&'a str, (usize, usize));
+type ExactRowEntry = (RowOrigin, usize, usize);
+
 pub(crate) struct RowIndex<'a> {
     first: std::collections::HashMap<&'a str, RowOrigin>,
-    exact: std::collections::HashMap<(&'a str, (usize, usize)), (RowOrigin, usize, usize)>,
+    exact: std::collections::HashMap<ExactRowKey<'a>, ExactRowEntry>,
     slots: std::collections::HashMap<&'a str, (usize, usize, bool)>,
 }
 impl RowIndex<'_> {
