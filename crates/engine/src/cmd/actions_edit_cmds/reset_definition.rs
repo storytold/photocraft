@@ -185,11 +185,24 @@ mod tests {
     #[test]
     fn reset_and_undo_refusals_do_not_publish_partial_state() {
         let mut s = Session::new();
-        s.actions.list.push(Action::new("Unknown", vec![("not.a.command".into(), json!({}))]));
+        // Canonical kept-native storage preserves unknown commands without executing them.
+        let unknown = Action::new("Unknown", vec![("not.a.command".into(), json!({}))]);
+        s.actions.list.push(unknown.clone());
+        let (_, undo) = apply(&mut s, false).unwrap();
+        assert_eq!(s.actions.list[0], unknown);
+        assert_eq!(s.actions.list.len(), 3);
+        restore(&mut s, undo).unwrap();
+        assert_eq!(s.actions.list, [unknown]);
+
+        // A color outside both supported and preserved ATN colors is not durably representable.
+        s.actions.list[0].color = "not-a-library-color".into();
         let before = s.actions.list.clone();
+        let revision = s.actions.rev;
+        assert!(library::check_definition(&s.actions, &s.prefs().shortcuts).is_err());
         assert!(apply(&mut s, false).is_err());
         assert_eq!(s.actions.list, before);
         assert!(s.actions.sets.is_empty());
+        assert_eq!(s.actions.rev, revision);
         s.actions.list.clear();
         let (_, undo) = apply(&mut s, false).unwrap();
         let current = library::encode(&s.actions, &[]).unwrap();
