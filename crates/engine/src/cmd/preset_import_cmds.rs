@@ -539,8 +539,9 @@ mod tests {
             .collect();
         let data = photocraft_paint::tile::b64_encode(&write(&gradients));
         let mut s = Session::new();
+        // Re-importing over the group replaces it (`replace`, #10640), so it keeps the same names.
         for _ in 0..2 {
-            let result = s.execute("gradient.presets.importGrd", json!({"data": data, "group": "Duplicates"})).unwrap();
+            let result = s.execute("gradient.presets.importGrd", json!({"data": data, "group": "Duplicates", "replace": true})).unwrap();
             assert_eq!(result["imported"], json!(["Duplicate", "Duplicate 2"]));
         }
         s.execute("gradient.presets.select", json!({"preset": "Duplicate"})).unwrap();
