@@ -50,8 +50,9 @@ pub fn confirm(app: &mut PhotocraftApp, fields: &Map<String, Value>) -> Result<V
     let choices = crate::FormatChoices::from_step(&Value::Object(fields.clone()), "file.save")?;
     app.with_document(doc, |app| {
         if flat {
+            let from = app.session.journal.len();
             let r = app.save_to(path.clone(), choices)?;
-            app.journal_as_plain_save(&path);
+            app.journal_as_plain_save(&path, from);
             Ok(r)
         } else if app.session.active().is_some_and(|st| crate::saves_flat_in_place(&st.doc, &path)) {
             // Its own flat file: a JPEG, Targa or DDS texture asks its format's options next (#2223).
