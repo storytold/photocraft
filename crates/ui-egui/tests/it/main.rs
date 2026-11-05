@@ -19,6 +19,7 @@ mod crop_frame_look;
 mod crop_overlay_icons;
 mod crop_popup_keys;
 mod crop_shift_corner;
+mod crop_turn_grid;
 mod crop_turn_keeps_frame_inside;
 mod custom_print_paper;
 mod display_shadows;

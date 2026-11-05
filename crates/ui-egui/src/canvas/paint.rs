@@ -550,14 +550,20 @@ pub(super) fn draw_tool_state(app: &PhotocraftApp, painter: &egui::Painter, xf: 
         let shield = crate::crop_shield::current(app, painter.ctx());
         if deg == 0.0 && xf.rotation == 0.0 {
             let r = Rect::from_two_pos(xf.to_screen(c[0] as f32, c[1] as f32), xf.to_screen(c[2] as f32, c[3] as f32));
-            crop_overlay(painter, r, shield, &crate::crop_overlay::current_guides(app, r.width(), r.height()), crate::crop_overlay::frame_look(app));
+            crop_overlay(
+                painter,
+                r,
+                shield,
+                &crate::crop_overlay::current_guides_for_frame(app, [r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom()], painter.clip_rect()),
+                crate::crop_overlay::frame_look(app),
+            );
         } else {
             let q = crate::crop_ui::corners(c, deg).map(|p| xf.to_screen(p[0] as f32, p[1] as f32));
             crop_overlay_turned(
                 painter,
                 q,
                 shield,
-                &crate::crop_overlay::current_guides(app, q[0].distance(q[1]), q[0].distance(q[3])),
+                &crate::crop_overlay::current_guides_for_frame(app, q, painter.clip_rect()),
                 crate::crop_overlay::frame_look(app),
             );
         }
