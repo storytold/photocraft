@@ -825,6 +825,19 @@ fn form_xobject_fan_out_is_bounded_before_the_page_is_interpreted() {
     objs.extend(chain(7, 11));
     let e = refused(&objects_pdf("/XObject << /F 5 0 R >>", "", "", b"/F Do", objs), "pattern in a form");
     assert!(e.contains("tiling pattern"), "{e}");
+    // A form without /Resources draws `/C` from its parent's: the same leaf form under two parents
+    // that map /C differently. Parent A (drawn first) maps it to an empty form, parent B to a 2^30
+    // chain. Caching the leaf's children by object alone would reuse A's and miss B's chain.
+    // Objects: 5 A, 6 B, 7 the shared leaf (no /Resources, draws /C), 8 empty, 9.. the chain.
+    let mut objs = vec![
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 10 10] /Resources << /XObject << /L 7 0 R /C 8 0 R >> >>", b"/L Do"),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 10 10] /Resources << /XObject << /L 7 0 R /C 9 0 R >> >>", b"/L Do"),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 10 10]", b"/C Do"),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 10 10]", b""),
+    ];
+    objs.extend(chain(9, 30));
+    let e = refused(&objects_pdf("/XObject << /A 5 0 R /B 6 0 R >>", "", "", b"/A Do /B Do", objs), "scoped leaf");
+    assert!(e.contains("Form XObjects more than"), "{e}");
     // A pattern cell drawing a few forms opens.
     let mut objs = vec![
         stream("/Type /XObject /Subtype /Form /BBox [0 0 10 10] /Resources << /Pattern << /P 6 0 R >> >>", b"/Pattern cs /P scn 0 0 10 10 re f"),
@@ -899,6 +912,9 @@ fn a_content_stream_that_inflates_too_far_is_refused_before_decoding() {
     assert!(e.contains("inflates past"), "{e}");
     let e = refused(&objects_pdf("", "", "/Filter [/LZWDecode /FlateDecode]", b"x", Vec::new()), "LZW then Flate");
     assert!(e.contains("decompressed twice"), "{e}");
+    // ASCII data the measurement can't read is refused rather than left to a lenient decoder.
+    let e = refused(&objects_pdf("", "", "/Filter [/ASCII85Decode /FlateDecode]", b"\x80\x81 not ascii85", Vec::new()), "bad ASCII85");
+    assert!(e.contains("can't be read"), "{e}");
     // Deflate twice: the first stage stays under the limit, the second would expand it unmeasured.
     let e = refused(&objects_pdf("", "", "/Filter [/FlateDecode /FlateDecode]", &deflated_spaces(1 << 20), Vec::new()), "Flate then Flate");
     assert!(e.contains("decompressed twice"), "{e}");

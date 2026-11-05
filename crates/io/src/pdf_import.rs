@@ -860,8 +860,10 @@ fn content_bounded(stream: &Stream<'_>, what: &str) -> Result<(), IoError> {
                 return Err(IoError::Pdf(format!("PDF: {what} is decompressed twice in a row, so its size can't be checked; the page can't be opened")));
             }
         };
-        // Data that doesn't decode is dropped by the interpreter too: nothing to inflate.
-        let Some(d) = decoded else { return Ok(()) };
+        // Data these decoders refuse might still get through a more lenient one, unmeasured.
+        let Some(d) = decoded else {
+            return Err(IoError::Pdf(format!("PDF: {what} has ASCII-encoded data that can't be read, so its size can't be checked; the page can't be opened")));
+        };
         data = std::borrow::Cow::Owned(d);
     }
     // `hayro` reads zlib data, or raw deflate when there's no zlib header.
@@ -1298,52 +1300,74 @@ fn preflight(page: &Page) -> Result<(), IoError> {
 /// multiplies through the cached lists, so it costs no more than the cap.
 fn form_draws(page: &Page) -> Result<(), IoError> {
     let mut forms = Forms::default();
-    let page_x = &page.resources().x_objects;
+    let page_scope = Scope { x: page.resources().x_objects.clone(), id: page.raw().obj_id() };
     let mut drawn = 0u64;
-    let top = forms.children(page.typed_operations(), page_x);
+    let top = forms.children(page.typed_operations(), &page_scope.x);
     for child in top {
-        forms.draw(&child, page_x, 1, &mut drawn)?;
+        forms.draw(&child, &page_scope, 1, &mut drawn)?;
     }
     // The other content the renderer interprets on its own, on the same count: annotation
     // appearances, and the page's tiling patterns, Type 3 glyphs and soft-mask groups.
     for name in page.resources().patterns.keys() {
         if let Some(p) = page.resources().patterns.get::<Stream<'_>>(&name) {
-            forms.pattern(&p, page_x, 1, &mut drawn)?;
+            forms.pattern(&p, &page_scope, 1, &mut drawn)?;
         }
     }
-    for (stream, inherited) in other_contents(page) {
-        let x = stream.dict().get::<Dict<'_>>(b"Resources").map_or(inherited, |r| Resources::new(r).x_objects);
+    for (stream, inherited) in other_contents(page, &page_scope) {
+        let scope = Scope::of(&stream, &inherited);
         let Ok(data) = stream.decoded() else { continue };
-        let kids = forms.children(TypedIter::new(&data), &x);
+        let kids = forms.children(TypedIter::new(&data), &scope.x);
         for child in kids {
-            forms.draw(&child, &x, 1, &mut drawn)?;
+            forms.draw(&child, &scope, 1, &mut drawn)?;
         }
     }
     Ok(())
+}
+
+/// The `/XObject` dictionary `Do` names resolve in, and the object whose `/Resources` supplied
+/// it: a form without `/Resources` resolves names in its parent's, so the same form can draw
+/// different children under different parents.
+#[derive(Clone)]
+struct Scope<'a> {
+    x: Dict<'a>,
+    id: Option<ObjectIdentifier>,
+}
+
+impl<'a> Scope<'a> {
+    /// `stream`'s own resources, or `inherited` when it has none.
+    fn of(stream: &Stream<'a>, inherited: &Scope<'a>) -> Scope<'a> {
+        match stream.dict().get::<Dict<'a>>(b"Resources") {
+            Some(r) => Scope { x: Resources::new(r).x_objects, id: Some(stream.obj_id()) },
+            None => inherited.clone(),
+        }
+    }
 }
 
 /// The content streams of a page the renderer interprets besides its own content, each with the
 /// `/XObject` dictionary it falls back on when it has no `/Resources`: annotation normal
 /// appearances (none), and the page's tiling patterns (the page's), Type 3 glyph procedures (the
 /// font's resources, else the page's) and `/ExtGState` soft-mask groups (the page's).
-fn other_contents<'a>(page: &Page<'a>) -> Vec<(Stream<'a>, Dict<'a>)> {
+fn other_contents<'a>(page: &Page<'a>, page_scope: &Scope<'a>) -> Vec<(Stream<'a>, Scope<'a>)> {
     let res = page.resources();
-    let page_x = res.x_objects.clone();
-    let mut out: Vec<(Stream<'a>, Dict<'a>)> = appearance_streams(page).into_iter().map(|s| (s, Dict::default())).collect();
+    let none = Scope { x: Dict::default(), id: None };
+    let mut out: Vec<(Stream<'a>, Scope<'a>)> = appearance_streams(page).into_iter().map(|s| (s, none.clone())).collect();
     for name in res.fonts.keys() {
         let Some(font) = res.fonts.get::<Dict<'a>>(&name) else { continue };
         let Some(procs) = font.get::<Dict<'a>>(b"CharProcs") else { continue };
-        let x = font.get::<Dict<'a>>(b"Resources").map_or_else(|| page_x.clone(), |r| Resources::new(r).x_objects);
+        let scope = match font.get::<Dict<'a>>(b"Resources") {
+            Some(r) => Scope { x: Resources::new(r).x_objects, id: font.obj_id() },
+            None => page_scope.clone(),
+        };
         for glyph in procs.keys() {
             if let Some(s) = procs.get::<Stream<'a>>(&glyph) {
-                out.push((s, x.clone()));
+                out.push((s, scope.clone()));
             }
         }
     }
     for name in res.ext_g_states.keys() {
         let group = res.ext_g_states.get::<Dict<'a>>(&name).and_then(|gs| gs.get::<Dict<'a>>(b"SMask")).and_then(|sm| sm.get::<Stream<'a>>(b"G"));
         if let Some(s) = group {
-            out.push((s, page_x.clone()));
+            out.push((s, page_scope.clone()));
         }
     }
     out
@@ -1374,8 +1398,9 @@ fn appearance_streams<'a>(page: &Page<'a>) -> Vec<Stream<'a>> {
 /// The Form XObjects each form draws, read once per form for [`form_draws`].
 #[derive(Default)]
 struct Forms<'a> {
-    /// A form's children, by the form's object.
-    children: HashMap<ObjectIdentifier, Vec<Stream<'a>>>,
+    /// A content stream's children, by the stream's object and the [`Scope`] its names
+    /// resolved in.
+    children: HashMap<(ObjectIdentifier, Option<ObjectIdentifier>), Vec<Stream<'a>>>,
     /// The forms being drawn right now (a form among them that draws itself loops).
     open: HashSet<ObjectIdentifier>,
 }
@@ -1397,7 +1422,7 @@ impl<'a> Forms<'a> {
 
     /// One draw of `form` (its `/Resources`, or `inherited` without them), and everything it
     /// draws in turn, counted into `drawn`.
-    fn draw(&mut self, form: &Stream<'a>, inherited: &Dict<'a>, depth: usize, drawn: &mut u64) -> Result<(), IoError> {
+    fn draw(&mut self, form: &Stream<'a>, inherited: &Scope<'a>, depth: usize, drawn: &mut u64) -> Result<(), IoError> {
         *drawn = drawn.saturating_add(1);
         if *drawn > MAX_FORM_DRAWS {
             return Err(IoError::Pdf(format!("PDF: the page draws Form XObjects more than {MAX_FORM_DRAWS} times, so it can't be opened")));
@@ -1410,17 +1435,17 @@ impl<'a> Forms<'a> {
             return Err(IoError::Pdf("PDF: a Form XObject draws itself, so the page can't be opened".into()));
         }
         let own = form.dict().get::<Dict<'a>>(b"Resources").map(Resources::new);
-        let xobjects = own.as_ref().map_or_else(|| inherited.clone(), |r| r.x_objects.clone());
-        let kids = self.kids(form, &xobjects);
+        let scope = Scope::of(form, inherited);
+        let kids = self.kids(form, &scope);
         for kid in &kids {
-            self.draw(kid, &xobjects, depth + 1, drawn)?;
+            self.draw(kid, &scope, depth + 1, drawn)?;
         }
         // The tiling patterns in the form's own resources, counted on every draw of the form (a
         // form without resources uses its parent's, whose patterns are counted there).
         if let Some(r) = own {
             for name in r.patterns.keys() {
                 if let Some(p) = r.patterns.get::<Stream<'a>>(&name) {
-                    self.pattern(&p, &xobjects, depth + 1, drawn)?;
+                    self.pattern(&p, &scope, depth + 1, drawn)?;
                 }
             }
         }
@@ -1428,28 +1453,29 @@ impl<'a> Forms<'a> {
         Ok(())
     }
 
-    /// The Form XObjects `stream`'s content draws, read once per stream.
-    fn kids(&mut self, stream: &Stream<'a>, xobjects: &Dict<'a>) -> Vec<Stream<'a>> {
-        let id = stream.obj_id();
-        if let Some(k) = self.children.get(&id) {
+    /// The Form XObjects `stream`'s content draws with its names resolved in `scope`, read once
+    /// per stream and scope.
+    fn kids(&mut self, stream: &Stream<'a>, scope: &Scope<'a>) -> Vec<Stream<'a>> {
+        let key = (stream.obj_id(), scope.id);
+        if let Some(k) = self.children.get(&key) {
             return k.clone();
         }
         // An undecodable stream draws nothing (the interpreter skips it too).
-        let k = stream.decoded().map(|data| self.children(TypedIter::new(&data), xobjects)).unwrap_or_default();
-        self.children.insert(id, k.clone());
+        let k = stream.decoded().map(|data| self.children(TypedIter::new(&data), &scope.x)).unwrap_or_default();
+        self.children.insert(key, k.clone());
         k
     }
 
     /// One interpretation of a tiling pattern's cell (its `/Resources`, or `inherited`), counted
     /// into `drawn`; a cell drawing more than [`MAX_PATTERN_FORM_DRAWS`] forms is refused.
-    fn pattern(&mut self, pattern: &Stream<'a>, inherited: &Dict<'a>, depth: usize, drawn: &mut u64) -> Result<(), IoError> {
+    fn pattern(&mut self, pattern: &Stream<'a>, inherited: &Scope<'a>, depth: usize, drawn: &mut u64) -> Result<(), IoError> {
         if depth > MAX_FORM_DEPTH {
             return Err(IoError::Pdf(format!("PDF: Form XObjects nest deeper than {MAX_FORM_DEPTH}, so the page can't be opened")));
         }
-        let xobjects = pattern.dict().get::<Dict<'a>>(b"Resources").map_or_else(|| inherited.clone(), |r| Resources::new(r).x_objects);
+        let scope = Scope::of(pattern, inherited);
         let before = *drawn;
-        for kid in self.kids(pattern, &xobjects) {
-            self.draw(&kid, &xobjects, depth + 1, drawn)?;
+        for kid in self.kids(pattern, &scope) {
+            self.draw(&kid, &scope, depth + 1, drawn)?;
             if drawn.saturating_sub(before) > MAX_PATTERN_FORM_DRAWS {
                 return Err(IoError::Pdf(format!(
                     "PDF: a tiling pattern draws Form XObjects more than {MAX_PATTERN_FORM_DRAWS} times per fill, so the page can't be opened"
