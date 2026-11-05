@@ -1054,3 +1054,16 @@ fn absolute_paths_are_checked_against_the_authority_s_own_root() {
     let none = AuthorizedWorkspace::default();
     assert!(none.read(&target.to_string_lossy()).is_err());
 }
+
+#[cfg(unix)]
+#[test]
+fn write_keeps_the_mode_of_the_file_it_replaces() {
+    use std::os::unix::fs::PermissionsExt;
+    let (inside, _, workspace) = roots("keep-mode");
+    let target = inside.join("secret.txt");
+    std::fs::write(&target, b"old").unwrap();
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
+    workspace.write("secret.txt", b"new").unwrap();
+    assert_eq!(std::fs::read(&target).unwrap(), b"new");
+    assert_eq!(std::fs::metadata(&target).unwrap().permissions().mode() & 0o777, 0o600);
+}

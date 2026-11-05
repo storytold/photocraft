@@ -470,6 +470,110 @@ fn keeps_the_original_file_mode() {
     assert_eq!(std::fs::metadata(&p).unwrap().permissions().mode() & 0o777, 0o600);
 }
 
+/// The real file system, except that carrying the original's metadata onto the temporary file is
+/// refused with `kind`: `chmod` on vfat/exFAT drives and many SMB/NTFS mounts fails like this.
+struct RefusesMetadata(io::ErrorKind);
+
+impl AtomicFs for RefusesMetadata {
+    fn write_new(&self, tmp: &Path, bytes: &[u8]) -> io::Result<()> {
+        RealFs.write_new(tmp, bytes)
+    }
+    fn write_new_like(&self, tmp: &Path, bytes: &[u8], progress: &dyn Fn(f32), replacing: bool) -> io::Result<()> {
+        RealFs.write_new_like(tmp, bytes, progress, replacing)
+    }
+    fn write_new_stream_like(&self, tmp: &Path, write: &mut StreamWriter<'_>, replacing: bool) -> io::Result<()> {
+        RealFs.write_new_stream_like(tmp, write, replacing)
+    }
+    fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+        RealFs.rename(from, to)
+    }
+    fn remove(&self, path: &Path) -> io::Result<()> {
+        RealFs.remove(path)
+    }
+    fn sync_dir(&self, dir: &Path) -> io::Result<()> {
+        RealFs.sync_dir(dir)
+    }
+    fn copy_metadata(&self, _from: &Path, _to: &Path) -> io::Result<()> {
+        Err(io::Error::new(self.0, "injected: cannot set permissions"))
+    }
+}
+
+/// The permission bits of the temporary file in `dir` right now (there is one while a save writes).
+#[cfg(unix)]
+fn temp_file_mode(dir: &Path) -> u32 {
+    use std::os::unix::fs::PermissionsExt;
+    let is_tmp = |e: &std::fs::DirEntry| e.file_name().to_string_lossy().ends_with(".tmp");
+    let tmp = std::fs::read_dir(dir).unwrap().flatten().find(is_tmp).expect("a temporary file while writing");
+    tmp.metadata().unwrap().permissions().mode() & 0o777
+}
+
+/// A file system that refuses `chmod` (vfat/exFAT drives, many SMB/NTFS mounts: EPERM or ENOTSUP)
+/// still saves, as it did before permissions were kept; so does any other metadata failure.
+#[test]
+fn a_file_system_that_refuses_chmod_still_saves() {
+    for kind in [io::ErrorKind::PermissionDenied, io::ErrorKind::Unsupported, io::ErrorKind::Other] {
+        let d = TempDir::new("chmod-refused");
+        let p = d.0.join("doc.psd");
+        std::fs::write(&p, ORIGINAL).unwrap();
+        atomic_write_with(&RefusesMetadata(kind), NO_RETRY, &p, b"new").unwrap();
+        assert_eq!(std::fs::read(&p).unwrap(), b"new", "{kind:?}");
+        assert_no_temp(&d.0);
+    }
+}
+
+/// #4963: the temporary file that replaces a file is owner-only from the moment it exists, so a
+/// file system that refuses the permission copy cannot leave the new bytes readable by others.
+/// Fails without the owner-only create mode in [`RealFs`].
+#[cfg(unix)]
+#[test]
+fn the_temporary_file_is_owner_only_while_it_is_written_even_if_chmod_is_refused() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = TempDir::new("tmp-mode");
+    let p = d.0.join("doc.psd");
+    std::fs::write(&p, ORIGINAL).unwrap();
+    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o640)).unwrap();
+    let seen = Cell::new(None);
+    let fs = RefusesMetadata(io::ErrorKind::PermissionDenied);
+    atomic_write_with_progress(&fs, NO_RETRY, &p, b"new", &|_| seen.set(Some(temp_file_mode(&d.0)))).unwrap();
+    assert_eq!(seen.get().map(|m| m & 0o077), Some(0), "mode while writing: {:?}", seen.get());
+    assert_eq!(std::fs::read(&p).unwrap(), b"new");
+    assert_no_temp(&d.0);
+}
+
+/// The same for a save that streams its bytes into the temporary file.
+#[cfg(unix)]
+#[test]
+fn the_streamed_temporary_file_is_owner_only_while_it_is_written_even_if_chmod_is_refused() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = TempDir::new("tmp-mode-stream");
+    let p = d.0.join("doc.psd");
+    std::fs::write(&p, ORIGINAL).unwrap();
+    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o640)).unwrap();
+    let seen = Cell::new(None);
+    let fs = RefusesMetadata(io::ErrorKind::Unsupported);
+    let result = atomic_write_stream_with(&fs, NO_RETRY, &p, &mut |w| {
+        seen.set(Some(temp_file_mode(&d.0)));
+        w.write_all(b"new")
+    });
+    result.unwrap();
+    assert_eq!(seen.get().map(|m| m & 0o077), Some(0), "mode while writing: {:?}", seen.get());
+    assert_eq!(std::fs::read(&p).unwrap(), b"new");
+    assert_no_temp(&d.0);
+}
+
+/// Replacing a file keeps its mode, also when the bytes are streamed (the copy is not skipped).
+#[cfg(unix)]
+#[test]
+fn a_streamed_replacement_keeps_the_original_file_mode() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = TempDir::new("mode-stream");
+    let p = d.0.join("doc.psd");
+    std::fs::write(&p, ORIGINAL).unwrap();
+    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o640)).unwrap();
+    atomic_write_stream(&p, &mut |w| w.write_all(b"new")).unwrap();
+    assert_eq!(std::fs::metadata(&p).unwrap().permissions().mode() & 0o777, 0o640);
+}
+
 #[cfg(unix)]
 #[test]
 fn new_file_follows_the_process_umask() {

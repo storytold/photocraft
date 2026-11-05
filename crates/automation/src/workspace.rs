@@ -117,11 +117,31 @@ impl AuthorizedWorkspace {
         let tmp = parent.join(photocraft_format::atomic::temp_name(&leaf));
         let mut options = OpenOptions::new();
         options.write(true).create_new(true);
+        // Replacing a file: create the temporary file owner-only, so a refused chmod below never
+        // leaves the copy more open than the file it replaces.
+        #[cfg(unix)]
+        {
+            if root.dir.metadata(&relative).is_ok() {
+                cap_std::fs::OpenOptionsExt::mode(&mut options, 0o600);
+            }
+        }
         let opened = root.dir.open_with(&tmp, &options);
         // Removes the temporary file on every way out but a rename, a panicking writer included
         // (unwinding closes the handle inside the closure first), and only one this call made.
         let mut cleanup = TempRemoval { dir: &root.dir, path: &tmp, armed: opened.is_ok() };
         let written = opened.and_then(|file| {
+            // Replacing a file keeps its permissions (e.g. 0600), set before any byte is written;
+            // a new file keeps the process default. A file system that refuses chmod (vfat/exFAT,
+            // SMB/NTFS mounts) still saves. Unix only: copying the Windows read-only attribute
+            // would stop the temporary file from being removed if the save fails.
+            #[cfg(unix)]
+            {
+                match root.dir.metadata(&relative) {
+                    Ok(existing) => photocraft_format::atomic::tolerate_chmod_refusal(file.set_permissions(existing.permissions()))?,
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => return Err(e),
+                }
+            }
             let mut file = file.into_std();
             write(&mut file)?;
             #[cfg(unix)]
