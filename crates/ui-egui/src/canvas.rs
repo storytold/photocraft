@@ -48,11 +48,12 @@ mod strokes;
 mod tabs;
 mod textures;
 pub(super) mod tile_overlay;
-pub(super) mod tool_cursor;
+pub mod tool_cursor;
 pub mod tool_feedback;
 mod tool_input;
 mod transform_controls;
 mod view_xform;
+pub(crate) mod viewport_pages;
 pub mod wheel_nav;
 pub mod zoom_field;
 pub mod zoom_hold;
@@ -65,7 +66,6 @@ pub(crate) use cursors::{alt_picks, alt_samples, composite_color, paint_bucket_c
 use cursors::{brush_tip_centre, eyedropper_ring, precise_other_cursor, visible_crosshair};
 #[cfg(test)]
 pub(crate) use display::GPU_OUTPUT;
-#[cfg(test)]
 use display::texture_key;
 pub(crate) use display::{cache_key, canvas_display, display_doc, display_image};
 use display::{checker, hdr_preview, sync_display_lut};
@@ -87,15 +87,15 @@ use navigator::navigator_waits_for_drag;
 pub use navigator::{NAVIGATOR_SIDE, navigator_gpu_view, navigator_texture, navigator_waits_for_gpu};
 #[cfg(test)]
 use paint::draw_tool_state;
-pub(crate) use paint::{clip_line, marching_ants_lines, marching_ants_mapped};
+pub(crate) use paint::{clip_line, marching_ants_line_shapes, marching_ants_mapped};
 use paint::{
-    draw_beyond_canvas, draw_drag_preview, marching_ants_segments, paint_cpu_detail, paint_cpu_document, paint_gpu_view, paint_mapped_image_at, pattern_xf,
+    draw_beyond_canvas, draw_drag_preview, marching_ants_segment_shapes, paint_cpu_detail, paint_cpu_document, paint_gpu_view, paint_mapped_image_at,
+    pattern_xf,
 };
 use selection::selection_shown_offset;
 pub use selection::{SelCursor, selection_cursor};
 pub(crate) use selection::{floating_outline, selection_drag_delta};
-#[cfg(test)]
-use start_screen::start_screen_drop_hint;
+pub(crate) use start_screen::start_screen_drop_hint;
 pub(crate) use strokes::multiple_color_target;
 pub use strokes::paint_target;
 pub(crate) use strokes::{ClonePreviewCache, CommittedStroke, LiveStroke, cancel_mixer_on_context_change, freehand_tool, spread_ms, strokes_live};
@@ -232,7 +232,11 @@ struct SelectionPaintInput<'a> {
     idx: usize,
 }
 
-fn paint_selection_outline(app: &mut PhotocraftApp, input: SelectionPaintInput<'_>) {
+/// The marching ants of the selection, traced from this frame's snapshot like the image under
+/// them, returned to be painted over the grid and guides (#10671): a guide on the same device
+/// pixel as an edge used to hide it, at some zoom levels and not others.
+fn paint_selection_outline(app: &mut PhotocraftApp, input: SelectionPaintInput<'_>) -> Vec<egui::Shape> {
+    let mut ants = Vec::new();
     // Select and Mask outlines its refined selection (on its preview proxy, reduced by `k`) in
     // the Marching Ants view and hides the ants in the others.
     let refined = crate::select_mask_view::ants(app, input.idx);
@@ -316,15 +320,23 @@ fn paint_selection_outline(app: &mut PhotocraftApp, input: SelectionPaintInput<'
                 shown.center = [input.xf.center[0] - dx as f32, input.xf.center[1] - dy as f32];
             }
             // Under a Free Transform box they are where the box puts them (#5297).
-            if !(carried && crate::transform_tool::draw_selection(app, input.painter, &input.xf, input.doc.id, segs, time)) {
-                marching_ants_segments(input.painter, &shown, segs, time);
-            }
+            let boxed = carried.then(|| crate::transform_tool::selection_ants(app, input.painter, &input.xf, input.doc.id, segs, time)).flatten();
+            ants = boxed.unwrap_or_else(|| marching_ants_segment_shapes(input.painter, &shown, segs, time));
             input.ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
     }
+    ants
 }
 
-fn paint_canvas(app: &mut PhotocraftApp, ui: &egui::Ui, view: &View, xf: ViewXform, input: &CanvasPaintInput<'_>) -> (bool, egui::layers::ShapeIdx, Rect) {
+/// Paints the document, and returns whether the pixels past the canvas show, the Layer Edges slot,
+/// the canvas edge on screen, and the selection's ants still to be painted ([`paint_selection_outline`]).
+fn paint_canvas(
+    app: &mut PhotocraftApp,
+    ui: &egui::Ui,
+    view: &View,
+    xf: ViewXform,
+    input: &CanvasPaintInput<'_>,
+) -> (bool, egui::layers::ShapeIdx, Rect, Vec<egui::Shape>) {
     let ctx = input.ctx;
     let rect = input.rect;
     let painter = input.painter;
@@ -400,6 +412,29 @@ fn paint_canvas(app: &mut PhotocraftApp, ui: &egui::Ui, view: &View, xf: ViewXfo
             pixel_grid: false,
             view_key: egui::Id::unique(("pc-canvas-proxy", ctx.viewport_id(), idx)).value(),
             display: sync_display_lut(app, &shown, key, output),
+            output: output.unwrap_or(0),
+            hdr: hdr_preview(app, doc),
+            offset: [0.0, 0.0],
+        };
+        paint_gpu_view(painter, rect, params, &pattern);
+    } else if gpu_ok && viewport_pages::show(app, ctx, idx, &xf, view.zoom) {
+        // Too large for the document's texture set: the pages in view, rendered in the background.
+        on_gpu = true;
+        app.perf.gpu = true;
+        let key = viewport_pages::stream_key(doc.id.0);
+        let params = crate::gpu_canvas::ViewParams {
+            doc: key,
+            doc_size: [doc.size.width, doc.size.height],
+            zoom: point_zoom,
+            center: xf.center,
+            rotation: if view.rotation.is_finite() { view.rotation.to_radians() } else { 0.0 },
+            shadow: {
+                let t = crate::theme::Tokens::get(ctx);
+                !t.bevel && !t.pro && drop_shadow
+            },
+            pixel_grid,
+            view_key: egui::Id::unique(("pc-canvas-pages", ctx.viewport_id(), doc.id.0)).value(),
+            display: sync_display_lut(app, doc, key, output),
             output: output.unwrap_or(0),
             hdr: hdr_preview(app, doc),
             offset: [0.0, 0.0],
@@ -546,9 +581,9 @@ fn paint_canvas(app: &mut PhotocraftApp, ui: &egui::Ui, view: &View, xf: ViewXfo
     // in (`layer_edges_rect`), so a press that Auto-Selects a layer outlines that layer.
     let layer_edges = painter.add(egui::Shape::Noop);
 
-    paint_selection_outline(app, SelectionPaintInput { ctx, painter, ui, view, xf, rect, doc, idx });
+    let ants = paint_selection_outline(app, SelectionPaintInput { ctx, painter, ui, view, xf, rect, doc, idx });
 
-    (beyond, layer_edges, edge_rect)
+    (beyond, layer_edges, edge_rect, ants)
 }
 
 struct CanvasNavigationInput<'a> {
@@ -1176,6 +1211,15 @@ fn handle_canvas_tool_clicks(
             }
         }
     }
+    // A Frame drag uses a temporary Free Transform for its image/both target. That owns
+    // the release, so the generic tool-click gate can be false even for a double click.
+    if tool == Tool::Frame
+        && response.contains_pointer()
+        && ctx.input(|i| i.pointer.button_double_clicked(PointerButton::Primary))
+        && let Some(p) = response.interact_pointer_pos().or_else(|| ctx.pointer_hover_pos())
+    {
+        crate::frame_tool::double_click(app, xf.to_doc(p));
+    }
     // Magnetic Lasso: between clicks the border follows the pointer with the button up.
     if tool == Tool::MagneticLasso && app.ui.magnetic.active() && !(buttons.started || buttons.dragged || buttons.stopped) && response.hovered() {
         let moves: Vec<Pos2> = ui.input(|i| i.events.iter().filter_map(|e| if let egui::Event::PointerMoved(p) = e { Some(*p) } else { None }).collect());
@@ -1246,7 +1290,7 @@ struct CanvasOverlayInput<'a> {
     zoom_out: &'a dyn Fn(bool) -> bool,
 }
 
-fn paint_primary_overlays(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut View, input: &CanvasOverlayInput<'_>) {
+fn paint_primary_overlays(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut View, input: &CanvasOverlayInput<'_>, ants: Vec<egui::Shape>) {
     let ctx = input.ctx;
     let painter = input.painter;
     let xf = input.xf;
@@ -1267,6 +1311,8 @@ fn paint_primary_overlays(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut
     if app.ui.view.shows(app.ui.view.show.canvas_guides) || crate::guide_layout_ui::preview(app, doc).is_some() {
         crate::rulers::draw_guides(app, painter, xf, doc);
     }
+    // The selection's ants go over the grid and guides, as in Photoshop (#10671).
+    painter.extend(ants);
     // The pending crop frame shows on its own document only, not on the other tiles (#1918).
     let foreign_crop = if app.session.active_index() == Some(idx) { None } else { app.ui.crop_rect.take() };
     draw_drag_preview(app, painter, xf);
@@ -1312,6 +1358,7 @@ fn paint_primary_overlays(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut
     crate::gradient_ui::draw_overlay(app, painter, xf);
     crate::slice_ui::draw_overlay(app, painter, xf);
     crate::frame_tool::draw_overlay(app, painter, xf);
+    crate::frame_tool::task_bar(app, ui, xf);
     crate::artboard_tool::draw_overlay(app, painter, xf);
 
     draw_canvas_tool_cursor(app, ui, input, resizing);
@@ -1376,6 +1423,8 @@ fn draw_canvas_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &C
         let mods = crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers));
         crate::type_transform::cursor(app, ctx, xf, p, mods)
     }) {
+        ui.ctx().set_cursor_icon(c);
+    } else if let Some(c) = response.hover_pos().filter(|_| tool == Tool::Frame).and_then(|p| crate::frame_tool::cursor(app, xf.to_doc(p))) {
         ui.ctx().set_cursor_icon(c);
     } else if let Some(c) = response.hover_pos().filter(|_| tool == Tool::Artboard).and_then(|p| crate::artboard_tool::cursor(app, xf, xf.to_doc(p))) {
         ui.ctx().set_cursor_icon(c);
@@ -1761,6 +1810,11 @@ fn update_polygon_camera(app: &mut PhotocraftApp, ctx: &egui::Context, (idx, pri
 
 pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect: Rect, mut view: View, primary: bool) -> View {
     let ctx = ui.ctx().clone();
+    // The Frame tool starts transforms from pointer events, which carry no context; the options
+    // bar that also records it can be hidden.
+    if primary {
+        app.frame_tool_ctx = Some(ctx.clone());
+    }
     // The camera as the app holds it before this frame's input. The canvas works on its own copy
     // (`view`) and writes it back at the end; a tool that moves the camera itself meanwhile (the
     // Crop tool's default mode pans and turns the view with the image, `crop_mode`) must not be
@@ -2015,7 +2069,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     } else {
         xf
     };
-    let (beyond, layer_edges, edge_rect) = painted.unwrap_or_else(|| paint_canvas(app, ui, &display_view, xf, &paint_input));
+    let (beyond, layer_edges, edge_rect, ants) = painted.unwrap_or_else(|| paint_canvas(app, ui, &display_view, xf, &paint_input));
     // A Hand drag (the tool, Space or the middle button) keeps every overlay on screen, as in
     // Photoshop: the Pen path being drawn, paths, guides, grid, transform box (#6592). Only the
     // tool cursors below give way to the fist.
@@ -2036,7 +2090,9 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             panning,
             zoom_out: &zoom_out,
         };
-        paint_primary_overlays(app, ui, &mut view, &input);
+        paint_primary_overlays(app, ui, &mut view, &input, ants);
+    } else {
+        painter.extend(ants);
     }
     let tail = CanvasTailInput {
         ctx: &ctx,
@@ -2103,6 +2159,9 @@ mod transform_controls_tests;
 
 #[cfg(test)]
 mod layer_edges_tests;
+
+#[cfg(test)]
+mod guide_ants_tests;
 
 #[cfg(test)]
 mod rotation_preview_isolation_tests {
