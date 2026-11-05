@@ -168,11 +168,18 @@ pub(crate) fn flattened(doc: &Document, fmt: PixelFormat) -> Surface {
 /// a sparse bundle declares its canvas, and one the size of the format allows would be rendered
 /// in full, however little it holds. Refused past the compositor's own per-render limit.
 pub(crate) fn flattened_checked(doc: &Document, fmt: PixelFormat, cmd: &str) -> Result<Surface> {
+    check_flattenable(doc, cmd)?;
+    Ok(flattened(doc, fmt))
+}
+
+/// The refusal [`flattened_checked`] gives a canvas past the compositor's per-render limit, for a
+/// caller that flattens `doc` some other way (a place job, which can be cancelled while it does).
+pub(crate) fn check_flattenable(doc: &Document, cmd: &str) -> Result<()> {
     let b = doc.bounds();
     if u64::from(b.width()) * u64::from(b.height()) > photocraft_compose::MAX_RENDER_PIXELS {
         return Err(EngineError::BadParams { cmd: cmd.into(), msg: format!("the document's {}×{} canvas is too large to flatten", b.width(), b.height()) });
     }
-    Ok(flattened(doc, fmt))
+    Ok(())
 }
 
 fn new_guide_layout(s: &mut Session, p: &Value) -> Result<Value> {

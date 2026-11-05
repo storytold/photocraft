@@ -252,15 +252,29 @@ pub const PLACE_EMBEDDED: &str = "Place Embedded";
 /// step on the calling thread, as one undo step.
 pub fn place_bytes(s: &mut Session, name: &str, bytes: Vec<u8>, linked: Option<String>, p: &Value) -> Result<Value> {
     let input = PlaceInput::new(s, name, bytes, linked, p)?;
+    place_input(s, input)
+}
+
+/// Run a place: in the background when the command was started with [`Session::start`].
+fn place_input(s: &mut Session, input: PlaceInput) -> Result<Value> {
     let label = input.job_label();
     crate::jobs::run(s, &label, true, move |ctx| prepare_place(input, ctx), apply_place)
+}
+
+/// The file a place reads.
+enum PlaceFile {
+    /// Its contents, already read (a dropped or picked file with no path, a script's bytes).
+    Bytes(Vec<u8>),
+    /// Its path, read by [`prepare_place`]: on the job's worker when the place runs in the
+    /// background, so a large file doesn't hold up the window while it is read.
+    Path(String),
 }
 
 /// Everything a place reads from the session, taken up front so [`prepare_place`] can run on a
 /// worker that never sees the [`Session`].
 pub(crate) struct PlaceInput {
     name: String,
-    bytes: Vec<u8>,
+    file: PlaceFile,
     linked: Option<String>,
     params: Value,
     canvas: (f64, f64),
@@ -271,7 +285,8 @@ pub(crate) struct PlaceInput {
     /// Preferences ▸ General ▸ Always Create Smart Objects When Placing, unless the params say
     /// otherwise. A linked place is always a smart object.
     smart: bool,
-    /// The document as the job sees it, for rendering a vector source at its placement scale.
+    /// The document as the job sees it, for rendering a vector source at its placement scale. A
+    /// path isn't read yet, so whether it is a vector source is decided once it is.
     doc: Option<Arc<Document>>,
     /// The frame the image goes into: the active layer's, `"frame"` in the params, or none
     /// (`"frame": false`). Its image renders through a smart object.
@@ -280,6 +295,10 @@ pub(crate) struct PlaceInput {
 
 impl PlaceInput {
     pub(crate) fn new(s: &Session, name: &str, bytes: Vec<u8>, linked: Option<String>, p: &Value) -> Result<Self> {
+        Self::with_file(s, name, PlaceFile::Bytes(bytes), linked, p)
+    }
+
+    fn with_file(s: &Session, name: &str, file: PlaceFile, linked: Option<String>, p: &Value) -> Result<Self> {
         let d = s.active().ok_or(EngineError::NoDocument)?;
         let prefs = s.prefs();
         let frame_id = match p.get("frame") {
@@ -320,10 +339,13 @@ impl PlaceInput {
             // Preferences ▸ General ▸ Always Create Smart Objects When Placing (on by default): off,
             // an embedded place lands as a plain pixel layer.
             smart: linked.is_some() || p.get("smartObject").and_then(Value::as_bool).unwrap_or(prefs.general.always_create_smart_objects_when_placing),
-            doc: (frame.is_some() || photocraft_io::is_svg_input(name, &bytes)).then(|| Arc::clone(&d.doc)),
+            doc: match &file {
+                PlaceFile::Bytes(bytes) => (frame.is_some() || photocraft_io::is_svg_input(name, bytes)).then(|| Arc::clone(&d.doc)),
+                PlaceFile::Path(_) => Some(Arc::clone(&d.doc)),
+            },
             frame,
             params: p.clone(),
-            bytes,
+            file,
             linked,
         })
     }
@@ -352,11 +374,21 @@ pub(crate) struct Prepared {
     frame: Option<LayerId>,
 }
 
-/// The heavy part of a place: decode, flatten, resize and translate (and render a vector source at
-/// its placement scale). Touches no [`Session`], so it can run on a worker; `ctx` reports progress
-/// and stops it between stages when cancelled.
+/// The heavy part of a place: read (a path), decode, flatten, resize and translate (and render a
+/// vector source at its placement scale). Touches no [`Session`], so it can run on a worker; `ctx`
+/// reports progress and stops it between stages when cancelled.
 pub(crate) fn prepare_place(input: PlaceInput, ctx: &JobCtx) -> Result<Prepared> {
-    let PlaceInput { name, bytes, linked, params: p, canvas: (cw, ch), fmt, opts, fit, smart, doc, frame } = input;
+    let PlaceInput { name, file, linked, params: p, canvas: (cw, ch), fmt, opts, fit, smart, doc, frame } = input;
+    let bytes = match file {
+        PlaceFile::Bytes(bytes) => bytes,
+        PlaceFile::Path(path) => {
+            ctx.progress(0.0, "Reading");
+            let bytes = read_file(&path)?;
+            ctx.check()?;
+            bytes
+        }
+    };
+    let doc = doc.filter(|_| frame.is_some() || photocraft_io::is_svg_input(&name, &bytes));
     let imported = ctx.stage(0.0, 0.6, "Decoding", |ctl| photocraft_io::import_with_options_and_interrupt(&name, &bytes, &opts, ctl)).map_err(|e| match e {
         photocraft_io::IoError::Cancelled => EngineError::Cancelled,
         e => crate::error::io_open_error(&name, e),
@@ -384,10 +416,8 @@ pub(crate) fn prepare_place(input: PlaceInput, ctx: &JobCtx) -> Result<Prepared>
     // memory budget; resampling it to the frame's size first would allocate that surface twice.
     let px = if frame.is_none() {
         ctx.progress(0.6, "Flattening");
+        super::check_flattenable(&src, "file.place")?;
         let bounds = src.bounds();
-        if u64::from(bounds.width()) * u64::from(bounds.height()) > photocraft_compose::MAX_RENDER_PIXELS {
-            return Err(EngineError::Other("the document canvas is too large to flatten".into()));
-        }
         let mut px = ctx
             .stage(0.6, 0.7, "Flattening", |ctl| photocraft_compose::composite_to_surface_with_interrupt(&src, bounds, fmt, None, ctl))
             .map_err(|_| EngineError::Cancelled)?;
@@ -466,7 +496,6 @@ pub(super) fn place(s: &mut Session, p: &Value, linked: bool) -> Result<Value> {
         return Err(EngineError::BadParams { cmd: cmd.into(), msg: "expected boolean for approveHighMemory".into() });
     }
     let path = str_param(p, "path", cmd)?.to_string();
-    let bytes = read_file(&path)?;
     // The link is stored absolute: a relative one would later be taken from the document's
     // folder (`doc_path`), not the working directory the path was given in.
     let link = linked.then(|| {
@@ -476,5 +505,7 @@ pub(super) fn place(s: &mut Session, p: &Value, linked: bool) -> Result<Value> {
             path.clone()
         }
     });
-    place_bytes(s, &path, bytes, link, p)
+    // The file is read by the place itself, on the job's worker when it runs in the background.
+    let input = PlaceInput::with_file(s, &path, PlaceFile::Path(path.clone()), link, p)?;
+    place_input(s, input)
 }

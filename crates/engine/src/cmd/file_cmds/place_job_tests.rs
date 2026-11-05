@@ -217,3 +217,46 @@ fn bad_input_as_a_place_job_fails_without_panicking() {
     assert!(matches!(place_bytes(&mut none, "a.png", Vec::new(), None, &json!({})), Err(EngineError::NoDocument)));
     assert!(matches!(none.start_place_bytes("a.png", Vec::new(), None, json!({})), Err(EngineError::NoDocument)));
 }
+
+/// A place from a path reads the file in the job, not in the command that starts it: a large file
+/// doesn't hold up the window while it is read. A file that can't be read fails the job with the
+/// error the inline place gives, and changes nothing.
+#[test]
+fn a_place_job_reads_its_file_on_the_worker() {
+    let dir = tmp("read");
+    let missing = join(&dir, "missing.png");
+    let mut inline = session(64, 64, 8);
+    let want = inline.execute("file.placeEmbedded", json!({"path": missing})).unwrap_err().to_string();
+    assert!(want.contains(&missing), "{want}");
+
+    let mut s = session(64, 64, 8);
+    let (doc, before) = (s.active().unwrap().doc.clone(), steps(&s));
+    let id = job(s.start("file.placeEmbedded", json!({"path": missing})).expect("the job starts before the file is read"));
+    let e = wait_event(&mut s, id);
+    let JobOutcome::Failed(err) = &e.outcome else { panic!("{e:?}") };
+    assert_eq!(err, &want);
+    assert!(Arc::ptr_eq(&doc, &s.active().unwrap().doc));
+    assert_eq!(steps(&s), before);
+}
+
+/// A placed file whose canvas is past the compositor's limit is refused with the same error the
+/// place gave before it ran as a job: bad params naming the canvas.
+#[test]
+fn a_canvas_too_large_to_flatten_is_refused_as_before() {
+    let huge = Document::new("huge", photocraft_doc::Size::new(40_000, 30_000), ColorMode::Rgb, photocraft_color::SampleType::U8);
+    let bytes = photocraft_format::save_to_bytes(&huge, &Default::default()).unwrap();
+    let mut s = session(100, 100, 8);
+    let before = steps(&s);
+    match place_bytes(&mut s, "huge.pcraft", bytes.clone(), None, &json!({})) {
+        Err(EngineError::BadParams { cmd, msg }) => {
+            assert_eq!(cmd, "file.place");
+            assert_eq!(msg, "the document's 40000×30000 canvas is too large to flatten");
+        }
+        other => panic!("{other:?}"),
+    }
+    let id = job(s.start_place_bytes("huge.pcraft", bytes, None, json!({})).unwrap());
+    let e = wait_event(&mut s, id);
+    let JobOutcome::Failed(err) = &e.outcome else { panic!("{e:?}") };
+    assert!(err.contains("40000×30000 canvas is too large to flatten"), "{err}");
+    assert_eq!(steps(&s), before, "nothing was placed");
+}
