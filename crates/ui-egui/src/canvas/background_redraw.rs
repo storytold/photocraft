@@ -14,6 +14,12 @@
 //! The last finished redraws are kept ([`Kept`]), keyed by the whole document they drew (#6528):
 //! going back to a state drawn a moment ago (⌥-click on an eye and again, an undo and its redo)
 //! uploads those blocks instead of compositing every layer again.
+//!
+//! Zoomed out to 50% or less, the worker first composites a reduced copy of the document at the
+//! view's scale ([`preview_document`]) and the canvas puts it in the mip level the view samples,
+//! so a whole picture shows in a fraction of the full redraw's time. Each full-resolution block
+//! rebuilds its mip levels from level 0 as it lands, replacing the reduced picture there, so the
+//! finished canvas is the same as without it.
 
 use std::collections::VecDeque;
 #[cfg(test)]
@@ -22,9 +28,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, TryRecvError};
 use std::sync::{Arc, Weak};
 
-use photocraft_doc::{DocId, Document};
+use photocraft_doc::{DocId, Document, Effect, Fill, FxPaint, Layer, LayerContent};
 use photocraft_engine::display_color::CanvasDisplay;
-use photocraft_geom::Rect;
+use photocraft_geom::{Affine, Rect};
 #[cfg(not(target_arch = "wasm32"))]
 use rayon::prelude::*;
 
@@ -94,10 +100,16 @@ impl Drop for HoldRedraws {
     }
 }
 
-/// One finished block, as texels of the canvas texture.
-struct Piece {
-    block: usize,
-    texels: Vec<u8>,
+/// The coarsest mip level a reduced first picture goes to (1/16 of the document's size): finer
+/// than any view zoomed out further needs, and already a small fraction of the full redraw.
+const MAX_PREVIEW_LEVEL: u32 = 4;
+
+/// What the worker hands over, as texels of the canvas texture.
+enum Piece {
+    /// One finished block.
+    Block { block: usize, texels: Vec<u8> },
+    /// The reduced first picture: `rect` of mip `level`.
+    Preview { level: u32, rect: Rect, texels: Vec<u8> },
 }
 
 /// A redraw in progress for one document's GPU texture.
@@ -107,6 +119,11 @@ pub(crate) struct Redraw {
     left: usize,
     /// Pixels uploaded so far.
     drawn: u64,
+    /// The mip level of a reduced first picture still to land.
+    preview: Option<u32>,
+    /// The reduced picture once it landed (mip level, its rect there, texels; about the size of
+    /// the view), put back along each finished block's pending neighbours (see [`poll`]).
+    shown: Option<(u32, Rect, Vec<u8>)>,
     rx: Receiver<Piece>,
     stop: Arc<AtomicBool>,
     started_ms: f64,
@@ -260,6 +277,103 @@ fn blocks(bounds: Rect) -> Vec<Rect> {
     out
 }
 
+/// The mip level a view at `scale` (screen pixels per document pixel) samples, if a reduced
+/// first picture is worth drawing there: at 50% or less, capped at [`MAX_PREVIEW_LEVEL`].
+fn preview_level(scale: f32) -> Option<u32> {
+    (scale.is_finite() && scale > 0.0 && scale <= 0.5).then(|| ((-scale.log2()).floor() as u32).clamp(1, MAX_PREVIEW_LEVEL))
+}
+
+/// `r` (document pixels) in the pixels of a level `k` times smaller, covering every pixel `r`
+/// touches.
+fn reduce(r: Rect, k: i32) -> Rect {
+    Rect::new(
+        r.x0.div_euclid(k),
+        r.y0.div_euclid(k),
+        r.x1.div_euclid(k) + i32::from(r.x1.rem_euclid(k) != 0),
+        r.y1.div_euclid(k) + i32::from(r.y1.rem_euclid(k) != 0),
+    )
+}
+
+/// `doc` scaled down by `k` for a reduced first picture: [`photocraft_compose::proxy::proxy_document`]
+/// with what is measured in document pixels scaled too (layer effects and their pattern tiles,
+/// mask and shape feathers, vector mask and shape paths, stroke widths, pattern fill tiles), so styled documents look right
+/// at the reduced size. Only a stand-in: the full redraw replaces it.
+pub(crate) fn preview_document(doc: &Document, k: u32) -> Document {
+    fn scale_layer(l: &mut Layer, k: f32) {
+        photocraft_engine::image_cmds::scale_effects(&mut l.effects, 1.0 / k);
+        // Pattern tiles and offsets the style scaling leaves alone.
+        for e in &mut l.effects.items {
+            match e {
+                Effect::OuterGlow(g) | Effect::InnerGlow(g) => {
+                    if let FxPaint::Pattern { scale, .. } = &mut g.paint {
+                        *scale /= k;
+                    }
+                }
+                Effect::BevelEmboss(b) => {
+                    if let Some(t) = &mut b.texture {
+                        t.scale /= k;
+                        t.phase = (t.phase.0 / k, t.phase.1 / k);
+                    }
+                }
+                Effect::PatternOverlay { phase, .. } => *phase = (phase.0 / k, phase.1 / k),
+                _ => {}
+            }
+        }
+        l.effects.reference = l.effects.reference.map(|(x, y)| (x / f64::from(k), y / f64::from(k)));
+        if let Some(m) = &mut l.mask {
+            m.feather /= k;
+        }
+        if let Some(v) = &mut l.vector_mask {
+            v.path = v.path.transform(&Affine::scale(1.0 / f64::from(k)));
+            v.feather /= k;
+        }
+        match &mut l.content {
+            // The compositor re-renders a stroked shape from its path (split into fill and stroke),
+            // so the path and stroke shrink with the pixels.
+            LayerContent::Shape(sh) => {
+                photocraft_engine::vector_cmds::transform_shape(sh, &Affine::scale(1.0 / f64::from(k)));
+                sh.feather /= k;
+                if let Some(st) = &mut sh.stroke {
+                    st.width /= k;
+                }
+            }
+            LayerContent::Group(g) => {
+                for c in &mut g.children {
+                    scale_layer(c, k);
+                }
+            }
+            // The tile is kept at full size, so it is drawn smaller. A cached render (already
+            // downsampled) stays in use: its fill changes with the layer's. A stale one goes, as
+            // the scaled fill could come to equal it.
+            LayerContent::Fill(f @ Fill::Pattern { .. }) => {
+                let cached = l.fill_cache.as_ref().is_some_and(|c| c.fill == *f);
+                if let Fill::Pattern { scale, phase, .. } = f {
+                    *scale /= k;
+                    *phase = (phase.0 / k, phase.1 / k);
+                }
+                match &mut l.fill_cache {
+                    Some(c) if cached => c.fill = f.clone(),
+                    stale => *stale = None,
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut p = photocraft_compose::proxy::proxy_document(doc, k);
+    if k > 1 {
+        for l in &mut p.layers {
+            scale_layer(l, k as f32);
+        }
+    }
+    p
+}
+
+/// The area (document pixels) a reduced first picture covers: the blocks still to draw, `todo`,
+/// that the view shows. The others aren't in sight, and draw as they come.
+fn preview_area(blocks: &[Rect], todo: &[usize], visible: Rect) -> Rect {
+    todo.iter().map(|&i| blocks[i]).filter(|b| !b.intersect(&visible).is_empty()).fold(Rect::EMPTY, |r, b| if r.is_empty() { b } else { r.union(&b) })
+}
+
 /// The order to draw `wanted` blocks in: those `visible` shows first, then the rest, each group
 /// nearest the view's centre first.
 fn order(blocks: &[Rect], wanted: impl Iterator<Item = usize>, visible: Rect) -> Vec<usize> {
@@ -274,8 +388,9 @@ fn order(blocks: &[Rect], wanted: impl Iterator<Item = usize>, visible: Rect) ->
 }
 
 /// Redraw `region` of document `doc` (`doc.id`'s texture, prepared by
-/// [`GpuCanvas::refresh_with`]) in the background. A redraw already running for it continues on
-/// `doc` with `region`'s blocks added.
+/// [`GpuCanvas::refresh_with`]) in the background, for a view at `scale` screen pixels per
+/// document pixel. A redraw already running for it continues on `doc` with `region`'s blocks
+/// added.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn start(
     app: &mut PhotocraftApp,
@@ -284,6 +399,7 @@ pub(crate) fn start(
     doc: Arc<Document>,
     display: Option<Arc<CanvasDisplay>>,
     visible: Rect,
+    scale: f32,
     region: Rect,
     fallback: Option<crate::render_path::CpuReason>,
 ) {
@@ -293,15 +409,25 @@ pub(crate) fn start(
     // Taken again when a running redraw continues: the edit (or Memory Usage) may have changed it.
     let cap = keep_cap(app, doc.id);
     app.kept.trim(cap);
-    let (mut pending, since, fallback, mut keep) = match app.redraws.remove(&doc.id) {
+    let (mut pending, since, fallback, mut keep, preview, shown) = match app.redraws.remove(&doc.id) {
         Some(mut old) if old.blocks == all => {
             // Blocks drawn from another state aren't part of this one's composite.
             let same = old.display == display_key && old.text_gamma == gamma && (Arc::ptr_eq(&old.doc, &doc) || *old.doc == *doc);
             let (collected, bytes) =
                 if same && old.collected_bytes <= cap { (std::mem::take(&mut old.collected), old.collected_bytes) } else { (vec![None; all.len()], 0) };
-            (std::mem::take(&mut old.pending), (old.started_ms, old.drawn), fallback.or_else(|| old.fallback.take()), (collected, bytes, cap))
+            // A landed reduced picture is still put back along finished blocks while it shows
+            // this state; after an edit it would cover what the edit drew.
+            let shown = old.shown.take().filter(|_| same);
+            (
+                std::mem::take(&mut old.pending),
+                (old.started_ms, old.drawn),
+                fallback.or_else(|| old.fallback.take()),
+                (collected, bytes, cap),
+                old.preview,
+                shown,
+            )
         }
-        _ => (vec![false; all.len()], (crate::gpu_canvas::now_ms(), 0), fallback, (vec![None; all.len()], 0, cap)),
+        _ => (vec![false; all.len()], (crate::gpu_canvas::now_ms(), 0), fallback, (vec![None; all.len()], 0, cap), None, None),
     };
     for (p, b) in pending.iter_mut().zip(&all) {
         *p |= !b.intersect(&region).is_empty();
@@ -309,6 +435,10 @@ pub(crate) fn start(
     if !pending.contains(&true) {
         return;
     }
+    // A reduced first picture when the redraw covers what the view shows (one still to land is
+    // drawn again from `doc`).
+    let in_view = visible.intersect(&doc.bounds());
+    let preview = preview_level(scale).filter(|_| !in_view.is_empty() && region.contains_rect(&in_view)).or(preview);
     let Some(format) = gpu.prepare_texture(doc.id.0, &doc) else { return };
     // This exact state was drawn a moment ago: upload its blocks rather than composite them.
     if let Some(k) = app.kept.find(&doc, display_key, gamma, format, &all) {
@@ -328,14 +458,14 @@ pub(crate) fn start(
         }
         keep = (vec![None; all.len()], 0, keep.2);
     }
-    spawn(app, ctx, Spawn { doc, display, display_key, text_gamma: gamma, format, visible, blocks: all, pending, since, fallback, keep });
+    spawn(app, ctx, Spawn { doc, display, display_key, text_gamma: gamma, format, visible, blocks: all, pending, preview, shown, since, fallback, keep });
 }
 
 /// After an edit drew its own damage: continue document `doc.id`'s redraw, if one is running, on
 /// the edited document, so blocks still to come don't bring back what was there before it.
 pub(crate) fn restart(app: &mut PhotocraftApp, ctx: &egui::Context, gpu: &GpuCanvas, doc: Arc<Document>, display: Option<Arc<CanvasDisplay>>, visible: Rect) {
     if app.redraws.contains_key(&doc.id) {
-        start(app, ctx, gpu, doc, display, visible, Rect::EMPTY, None);
+        start(app, ctx, gpu, doc, display, visible, 1.0, Rect::EMPTY, None);
     }
 }
 
@@ -348,14 +478,25 @@ pub(crate) fn poll(app: &mut PhotocraftApp, gpu: &GpuCanvas, doc: DocId) {
     r.forget_if_gamma_changed(gamma);
     loop {
         match r.rx.try_recv() {
-            Ok(p) => {
-                let b = r.blocks[p.block];
-                if r.pending[p.block] && gpu.upload_rect(doc.0, [b.x0 as u32, b.y0 as u32], [b.width(), b.height()], &p.texels) {
-                    r.pending[p.block] = false;
+            Ok(Piece::Block { block, texels }) => {
+                let b = r.blocks[block];
+                if r.pending[block] && gpu.upload_rect(doc.0, [b.x0 as u32, b.y0 as u32], [b.width(), b.height()], &texels) {
+                    r.pending[block] = false;
                     r.left -= 1;
                     r.drawn += b.width() as u64 * b.height() as u64;
-                    collect(r, p);
+                    // Rebuilding the block's mip levels pads each level by a texel, which spills
+                    // into the reduced picture of pending neighbours (from their stale level 0):
+                    // put it back there.
+                    if let Some((level, rect, texels)) = &r.shown {
+                        upload_preview(r, gpu, doc, *level, *rect, texels, Some(b.inflate(1)));
+                    }
+                    collect(r, block, texels);
                 }
+            }
+            Ok(Piece::Preview { level, rect, texels }) => {
+                upload_preview(r, gpu, doc, level, rect, &texels, None);
+                r.preview = None;
+                r.shown = Some((level, rect, texels));
             }
             Err(TryRecvError::Empty) => return,
             Err(TryRecvError::Disconnected) => break,
@@ -387,10 +528,10 @@ pub(crate) fn poll(app: &mut PhotocraftApp, gpu: &GpuCanvas, doc: DocId) {
     crate::notices::slow_cpu_refresh(app, doc.0, ms, r.fallback.as_ref());
 }
 
-/// Keep uploaded block `p` for [`Kept`], unless the composite would pass the cap.
-fn collect(r: &mut Redraw, p: Piece) {
-    let len = p.texels.len() as u64;
-    let Some(slot) = r.collected.get_mut(p.block) else { return };
+/// Keep uploaded block `block`'s `texels` for [`Kept`], unless the composite would pass the cap.
+fn collect(r: &mut Redraw, block: usize, texels: Vec<u8>) {
+    let len = texels.len() as u64;
+    let Some(slot) = r.collected.get_mut(block) else { return };
     let before = slot.as_ref().map_or(0, |t| t.len() as u64);
     let bytes = r.collected_bytes.saturating_sub(before).saturating_add(len);
     if bytes > r.cap {
@@ -398,8 +539,39 @@ fn collect(r: &mut Redraw, p: Piece) {
         r.collected_bytes = 0;
         return;
     }
-    *slot = Some(p.texels);
+    *slot = Some(texels);
     r.collected_bytes = bytes;
+}
+
+/// Put a reduced first picture (`rect` of mip `level`) where blocks are still to come: they
+/// replace it as they land. Elsewhere the texture already shows the finished composite. With
+/// `near`, only under the pending blocks that touch it.
+fn upload_preview(r: &Redraw, gpu: &GpuCanvas, doc: DocId, level: u32, rect: Rect, texels: &[u8], near: Option<Rect>) {
+    let (k, stride) = (1 << level, rect.width());
+    let px = stride as usize * rect.height() as usize;
+    if px == 0 || !texels.len().is_multiple_of(px) {
+        return;
+    }
+    let bpp = texels.len() / px;
+    let put = |at: Rect| {
+        let at = at.intersect(&rect);
+        if at.is_empty() {
+            return;
+        }
+        let offset = ((at.y0 - rect.y0) as usize * stride as usize + (at.x0 - rect.x0) as usize) * bpp;
+        if let Some(t) = texels.get(offset..) {
+            gpu.upload_level(doc.0, level, [at.x0 as u32, at.y0 as u32], [at.width(), at.height()], stride, t);
+        }
+    };
+    let touched = |b: &Rect| !reduce(*b, k).intersect(&rect).is_empty() && near.is_none_or(|n| !b.intersect(&n).is_empty());
+    // A fresh redraw: every block under the picture is pending, so one upload covers them all.
+    if near.is_none() && r.blocks.iter().zip(&r.pending).all(|(b, &p)| p || !touched(b)) {
+        put(rect);
+    } else {
+        for (b, _) in r.blocks.iter().zip(&r.pending).filter(|(b, p)| **p && touched(b)) {
+            put(reduce(*b, k));
+        }
+    }
 }
 
 /// The active document's redraw in the status bar: "Redrawing" and how much is done.
@@ -452,6 +624,10 @@ struct Spawn {
     visible: Rect,
     blocks: Vec<Rect>,
     pending: Vec<bool>,
+    /// The mip level of a reduced first picture to draw first.
+    preview: Option<u32>,
+    /// One that already landed ([`Redraw::shown`]).
+    shown: Option<(u32, Rect, Vec<u8>)>,
     /// When it started and the pixels uploaded so far.
     since: (f64, u64),
     fallback: Option<crate::render_path::CpuReason>,
@@ -469,6 +645,8 @@ fn spawn(app: &mut PhotocraftApp, ctx: &egui::Context, s: Spawn) {
         visible,
         blocks,
         pending,
+        preview,
+        shown,
         since: (started_ms, drawn),
         fallback,
         keep: (collected, collected_bytes, cap),
@@ -476,6 +654,7 @@ fn spawn(app: &mut PhotocraftApp, ctx: &egui::Context, s: Spawn) {
     let id = doc.id;
     let kept_doc = doc.clone();
     let todo = order(&blocks, (0..blocks.len()).filter(|&i| pending[i]), visible);
+    let first = preview.map(|level| (level, preview_area(&blocks, &todo, visible))).filter(|(_, area)| !area.is_empty());
     let left = todo.len();
     let (tx, rx) = std::sync::mpsc::sync_channel(BATCH);
     let stop = Arc::new(AtomicBool::new(false));
@@ -491,9 +670,9 @@ fn spawn(app: &mut PhotocraftApp, ctx: &egui::Context, s: Spawn) {
         // A panic stops the redraw: the receiver sees the worker gone and drops it.
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             #[cfg(test)]
-            draw(&doc, display.as_deref(), format, &blocks, &todo, &stop, &tx, &ctx, &worker_hold);
+            draw(&doc, display.as_deref(), format, first, &blocks, &todo, &stop, &tx, &ctx, &worker_hold);
             #[cfg(not(test))]
-            draw(&doc, display.as_deref(), format, &blocks, &todo, &stop, &tx, &ctx);
+            draw(&doc, display.as_deref(), format, first, &blocks, &todo, &stop, &tx, &ctx);
         }));
         ctx.request_repaint();
     });
@@ -508,6 +687,8 @@ fn spawn(app: &mut PhotocraftApp, ctx: &egui::Context, s: Spawn) {
             pending,
             left,
             drawn,
+            preview,
+            shown,
             rx,
             stop,
             started_ms,
@@ -527,13 +708,15 @@ fn spawn(app: &mut PhotocraftApp, ctx: &egui::Context, s: Spawn) {
     );
 }
 
-/// The worker: composite `todo`'s blocks of `doc` in batches and hand each over, until done or
+/// The worker: composite the reduced first picture of `first`'s area (mip level, document
+/// pixels), if any, then `todo`'s blocks of `doc` in batches, handing each over, until done or
 /// stopped.
 #[allow(clippy::too_many_arguments)]
 fn draw(
     doc: &Document,
     display: Option<&CanvasDisplay>,
     format: eframe::wgpu::TextureFormat,
+    first: Option<(u32, Rect)>,
     blocks: &[Rect],
     todo: &[usize],
     stop: &AtomicBool,
@@ -541,6 +724,16 @@ fn draw(
     ctx: &egui::Context,
     #[cfg(test)] reached_hold: &AtomicBool,
 ) {
+    if let Some((level, area)) = first {
+        let k = 1 << level;
+        let small = preview_document(doc, k as u32);
+        let rect = reduce(area, k).intersect(&small.bounds());
+        let texels = crate::gpu_canvas::display_texels(format, display, &photocraft_compose::render(&small, rect));
+        if stop.load(Ordering::Relaxed) || tx.send(Piece::Preview { level, rect, texels }).is_err() {
+            return;
+        }
+        ctx.request_repaint();
+    }
     for batch in todo.chunks(BATCH) {
         // A test may hold the worker here; a cancelled redraw must still exit, not wait for release.
         #[cfg(test)]
@@ -559,7 +752,7 @@ fn draw(
         #[cfg(target_arch = "wasm32")]
         let batch = batch.iter();
         let pieces: Vec<Piece> = batch
-            .map(|&block| Piece { block, texels: crate::gpu_canvas::display_texels(format, display, &photocraft_compose::render(doc, blocks[block])) })
+            .map(|&block| Piece::Block { block, texels: crate::gpu_canvas::display_texels(format, display, &photocraft_compose::render(doc, blocks[block])) })
             .collect();
         for p in pieces {
             if stop.load(Ordering::Relaxed) || tx.send(p).is_err() {

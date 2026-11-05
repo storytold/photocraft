@@ -440,7 +440,7 @@ fn paint_canvas(
             offset: [0.0, 0.0],
         };
         paint_gpu_view(painter, rect, params, &pattern);
-    } else if gpu_ok && ensure_gpu(app, ctx, idx, redraw_focus(&target_xf, &xf)) {
+    } else if gpu_ok && ensure_gpu(app, ctx, idx, redraw_focus(&target_xf, &xf), target_xf.zoom.max(xf.zoom) * ctx.pixels_per_point()) {
         on_gpu = true;
         app.perf.gpu = true;
         // Shadow, checkerboard, document and pixel grid in one custom shader (gpu_canvas.rs).

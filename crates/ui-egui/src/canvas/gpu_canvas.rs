@@ -196,6 +196,14 @@ pub fn supports_f16_canvas(adapter: &wgpu::Adapter) -> bool {
     f.allowed_usages.contains(usages) && f.flags.contains(wgpu::TextureFormatFeatureFlags::FILTERABLE)
 }
 
+/// The texture tile side for a preferred one (default [`DEFAULT_TILE`]) on a device whose
+/// textures are at most `max` texels wide: a power of two, so every tile starts on each mip
+/// level's grid (a reduced first picture is written into those levels).
+fn tile_side(preferred: Option<u32>, max: u32) -> u32 {
+    let floor_pow2 = |v: u32| 1u32 << (u32::BITS - 1 - v.max(1).leading_zeros());
+    floor_pow2(preferred.unwrap_or(DEFAULT_TILE).clamp(64, floor_pow2(max).max(64)))
+}
+
 impl GpuCanvas {
     /// Create pipelines and register resources with the egui renderer.
     pub fn new(rs: &RenderState) -> Self {
@@ -206,7 +214,7 @@ impl GpuCanvas {
     pub fn with_tile(rs: &RenderState, tile: Option<u32>) -> Self {
         let max = rs.device.limits().max_texture_dimension_2d;
         let env_tile = std::env::var("PHOTOCRAFT_GPU_TILE").ok().and_then(|v| v.parse::<u32>().ok());
-        let tile = env_tile.or(tile).unwrap_or(DEFAULT_TILE).clamp(64, max);
+        let tile = tile_side(env_tile.or(tile), max);
         let high = match std::env::var("PHOTOCRAFT_CANVAS_F16").ok().as_deref() {
             _ if !supports_f16_canvas(&rs.adapter) => HighPolicy::Off,
             Some("0") => HighPolicy::Off,
@@ -568,6 +576,30 @@ impl GpuCanvas {
         }
         d.write(queue, origin, size, size[0], texels);
         d.regenerate_mips(device, queue, res, [origin[0], origin[1], origin[0] + size[0], origin[1] + size[1]]);
+        true
+    }
+
+    /// Replace a rectangle of mip `level` of an uploaded document (`origin` and `size` in that
+    /// level's pixels, `texels` with a row stride of `stride` texels) and rebuild the levels below
+    /// it there. The next level-0 upload of the area replaces it: a redraw's reduced first picture.
+    /// Returns false if the document isn't uploaded or the buffer is too short.
+    pub fn upload_level(&self, doc: u64, level: u32, origin: [u32; 2], size: [u32; 2], stride: u32, texels: &[u8]) -> bool {
+        if !self.health.is_ok() {
+            return false;
+        }
+        let (device, queue) = (&self.rs.device, &self.rs.queue);
+        let mut renderer = self.rs.renderer.write();
+        let Some(res) = renderer.callback_resources.get_mut::<Resources>() else { return false };
+        let Some(d) = res.docs.get(&doc) else { return false };
+        if size[0] == 0 || size[1] == 0 {
+            return true;
+        }
+        let need = (u64::from(size[1]) - 1) * u64::from(stride) + u64::from(size[0]);
+        if stride < size[0] || (texels.len() as u64) < need * texel_bytes(d.format) {
+            return false;
+        }
+        d.write_level(queue, level, origin, size, stride, texels);
+        d.regenerate_mips_from(device, queue, res, level, [origin[0], origin[1], origin[0] + size[0], origin[1] + size[1]]);
         true
     }
 
@@ -975,6 +1007,12 @@ impl GpuCanvas {
     /// and debugging.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn read_texels(&self, key: u64) -> Option<(wgpu::TextureFormat, [u32; 2], Vec<[f32; 4]>)> {
+        self.read_level(key, 0)
+    }
+
+    /// [`Self::read_texels`] of mip `level` (its size is the tiles' level sizes put together).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn read_level(&self, key: u64, level: u32) -> Option<(wgpu::TextureFormat, [u32; 2], Vec<[f32; 4]>)> {
         if !self.health.is_ok() {
             return None;
         }
@@ -982,10 +1020,11 @@ impl GpuCanvas {
         let renderer = self.rs.renderer.read();
         let d = renderer.callback_resources.get::<Resources>()?.docs.get(&key)?;
         let bpp = texel_bytes(d.format);
-        let (w, h) = (d.size[0] as usize, d.size[1] as usize);
+        let rects: Vec<[u32; 4]> = d.tiles.iter().map(|t| t.level_rect(level)).collect::<Option<_>>()?;
+        let size = rects.iter().fold([0, 0], |s, r| [s[0].max(r[0] + r[2]), s[1].max(r[1] + r[3])]);
+        let (w, h) = (size[0] as usize, size[1] as usize);
         let mut out = vec![[0.0f32; 4]; w.checked_mul(h)?];
-        for t in &d.tiles {
-            let [tx, ty, tw, th] = t.rect;
+        for (t, &[tx, ty, tw, th]) in d.tiles.iter().zip(&rects) {
             let row = (tw as u64 * bpp).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as u64);
             let buf = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("pc_canvas_readback"),
@@ -995,7 +1034,7 @@ impl GpuCanvas {
             });
             let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("pc_canvas_readback") });
             enc.copy_texture_to_buffer(
-                t.texture.as_image_copy(),
+                wgpu::TexelCopyTextureInfo { texture: &t.texture, mip_level: level, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
                 wgpu::TexelCopyBufferInfo {
                     buffer: &buf,
                     layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row as u32), rows_per_image: Some(th) },
@@ -1017,7 +1056,7 @@ impl GpuCanvas {
                 }
             }
         }
-        Some((d.format, d.size, out))
+        Some((d.format, size, out))
     }
 
     /// Add the paint callback drawing `params` into `rect` (clipped by the painter's clip rect).

@@ -120,6 +120,200 @@ fn kept_composites_come_back_only_for_the_exact_state_and_stay_bounded() {
     assert!(cache.entries.is_empty());
 }
 
+#[test]
+fn the_reduced_picture_goes_to_the_mip_level_the_view_samples() {
+    // The canvas shader samples level -log2(scale) when zoomed out (trilinear between the two
+    // around it): the picture goes to the finer one.
+    assert_eq!(preview_level(1.0), None);
+    assert_eq!(preview_level(0.6), None);
+    assert_eq!(preview_level(0.5), Some(1));
+    assert_eq!(preview_level(0.3), Some(1));
+    assert_eq!(preview_level(0.25), Some(2));
+    assert_eq!(preview_level(0.1), Some(3));
+    assert_eq!(preview_level(0.01), Some(MAX_PREVIEW_LEVEL));
+    for bad in [0.0, -0.5, f32::NAN, f32::INFINITY] {
+        assert_eq!(preview_level(bad), None, "{bad}");
+    }
+    assert_eq!(reduce(Rect::new(0, 1024, 2600, 1700), 4), Rect::new(0, 256, 650, 425));
+    assert_eq!(reduce(Rect::new(1024, 0, 2047, 5), 2), Rect::new(512, 0, 1024, 3));
+}
+
+#[test]
+fn the_reduced_picture_covers_only_blocks_still_to_draw_in_view() {
+    let b = blocks(Rect::new(0, 0, 8192, 4096));
+    let all: Vec<usize> = (0..b.len()).collect();
+    // Zoomed out over the whole document, or onto part of it.
+    assert_eq!(preview_area(&b, &all, Rect::new(-500, -500, 9000, 5000)), Rect::new(0, 0, 8192, 4096));
+    assert_eq!(preview_area(&b, &all, Rect::new(1500, 900, 3000, 2100)), Rect::new(1024, 0, 3072, 3072));
+    // Blocks already drawn are left out, and a view of none of the rest gets no picture.
+    let rest: Vec<usize> = all.iter().copied().filter(|&i| b[i].x0 >= 4096).collect();
+    assert_eq!(preview_area(&b, &rest, Rect::new(0, 0, 9000, 5000)), Rect::new(4096, 0, 8192, 4096));
+    assert!(preview_area(&b, &rest, Rect::new(0, 0, 2000, 2000)).is_empty());
+}
+
+#[test]
+fn the_reduced_document_scales_what_is_measured_in_document_pixels() {
+    use photocraft_doc::vector::{Path, Subpath, VectorMask};
+    use photocraft_doc::{Effect, LayerMask};
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 800, "height": 600})).expect("new");
+    s.execute("layer.new.layer", json!({})).expect("layer");
+    s.execute("edit.fill", json!({"color": "#cc8844"})).expect("fill");
+    s.execute("layer.layerStyle.dropShadow", json!({"distance": 12, "size": 16})).expect("shadow");
+    let mut doc = (*s.active().expect("document").doc).clone();
+    let l = doc.layers.last_mut().expect("layer");
+    l.mask = Some(LayerMask { feather: 8.0, ..LayerMask::reveal_all() });
+    l.vector_mask = Some(VectorMask { feather: 4.0, ..VectorMask::new(Path::new(vec![Subpath::polygon(&[(40.0, 40.0), (400.0, 40.0), (400.0, 320.0)])])) });
+    // In a group too.
+    let inner = l.clone();
+    doc.layers.push(photocraft_doc::Layer::group("group", vec![inner]));
+    let p = preview_document(&doc, 4);
+    assert_eq!((p.size.width, p.size.height), (200, 150));
+    for l in [&p.layers[1], &p.layers[2].children().expect("group")[0]] {
+        match &l.effects.items[0] {
+            Effect::DropShadow(sh) => assert_eq!((sh.distance, sh.size), (3.0, 4.0)),
+            e => panic!("{e:?}"),
+        }
+        assert_eq!(l.mask.as_ref().map(|m| m.feather), Some(2.0));
+        let v = l.vector_mask.as_ref().expect("vector mask");
+        assert_eq!(v.feather, 1.0);
+        let a = v.path.subpaths[0].knots[1].anchor;
+        assert_eq!((a.x, a.y), (100.0, 10.0));
+    }
+    // The original is untouched.
+    assert!(matches!(&doc.layers[1].effects.items[0], Effect::DropShadow(sh) if sh.size == 16.0));
+}
+
+#[test]
+fn the_reduced_picture_of_a_stroked_styled_shape_matches_the_full_one() {
+    // A stroked shape with an effect composites from its path (#5561 review): left at full
+    // size, the reduced picture showed it four times too large.
+    use photocraft_color::{Color, ColorMode, SampleType};
+    use photocraft_doc::vector::{Path, ShapeLayer, ShapeStroke, Subpath};
+    use photocraft_doc::{Effect, Fill};
+    use photocraft_geom::Size;
+    let mut doc = Document::with_background("shape", Size::new(256, 256), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+    let mut sh = ShapeLayer {
+        path: Path::new(vec![Subpath::polygon(&[(16.0, 16.0), (144.0, 16.0), (144.0, 144.0), (16.0, 144.0)])]),
+        fill: Some(Fill::Solid(Color::BLACK)),
+        stroke: Some(ShapeStroke { width: 8.0, paint: Fill::Solid(Color::rgb(1.0, 0.0, 0.0)), ..Default::default() }),
+        // Feathered too: the blur is in document pixels.
+        feather: 8.0,
+        ..Default::default()
+    };
+    sh.cache = Some(photocraft_vector::render_shape(&sh, doc.pixel_format(), doc.bounds()));
+    let mut layer = Layer::new("shape", LayerContent::Shape(sh));
+    layer.effects.items = vec![Effect::default_drop_shadow()];
+    doc.layers.push(layer);
+    let full = photocraft_compose::render(&doc, doc.bounds());
+    let p = preview_document(&doc, 4);
+    let reduced = photocraft_compose::render(&p, p.bounds());
+    // Every 4th pixel of the full picture, as the reduced one samples; only the anti-aliased
+    // and blurred edges may differ.
+    let differing = (0..64)
+        .flat_map(|y| (0..64).map(move |x| (x, y)))
+        .filter(|&(x, y)| reduced.px[y * 64 + x].iter().zip(&full.px[y * 4 * 256 + x * 4]).any(|(a, b)| (a - b).abs() > 0.1))
+        .count();
+    assert!(differing < 200, "{differing} of 4096 pixels differ");
+    assert_eq!(reduced.px[48 * 64 + 48], full.px[192 * 256 + 192], "outside the shape");
+    assert_eq!(reduced.px[20 * 64 + 20], full.px[80 * 256 + 80], "inside the shape");
+}
+
+#[test]
+fn the_reduced_document_scales_the_pattern_tiles_of_effects() {
+    // Glow pattern paint, bevel textures and pattern overlay phases are laid out in document
+    // pixels too (#5561 review).
+    use photocraft_doc::effects::{BevelTexture, FxCommon};
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 800, "height": 600})).expect("new");
+    s.execute("layer.new.layer", json!({})).expect("layer");
+    s.execute("edit.fill", json!({"color": "#cc8844"})).expect("fill");
+    s.execute("layer.layerStyle.outerGlow", json!({})).expect("glow");
+    s.execute("layer.layerStyle.bevelEmboss", json!({})).expect("bevel");
+    let mut doc = (*s.active().expect("document").doc).clone();
+    let l = doc.layers.last_mut().expect("layer");
+    for e in &mut l.effects.items {
+        match e {
+            Effect::OuterGlow(g) => g.paint = FxPaint::Pattern { name: "p".into(), id: String::new(), scale: 2.0 },
+            Effect::BevelEmboss(b) => {
+                b.texture = Some(BevelTexture { name: "p".into(), id: String::new(), scale: 2.0, depth: 1.0, invert: false, link: true, phase: (8.0, 4.0) })
+            }
+            _ => {}
+        }
+    }
+    l.effects.items.push(Effect::PatternOverlay {
+        common: FxCommon::new(photocraft_color::BlendMode::Normal, 1.0),
+        name: "p".into(),
+        id: String::new(),
+        scale: 2.0,
+        angle: 0.0,
+        link: true,
+        phase: (8.0, 4.0),
+    });
+    let p = preview_document(&doc, 4);
+    let items = &p.layers.last().expect("layer").effects.items;
+    assert_eq!(items.len(), 3);
+    for e in items {
+        match e {
+            Effect::OuterGlow(g) => assert!(matches!(g.paint, FxPaint::Pattern { scale: 0.5, .. }), "{:?}", g.paint),
+            Effect::BevelEmboss(b) => {
+                let t = b.texture.as_ref().expect("texture");
+                assert_eq!((t.scale, t.phase), (0.5, (2.0, 1.0)));
+            }
+            Effect::PatternOverlay { scale, phase, .. } => assert_eq!((*scale, *phase), (0.5, (2.0, 1.0))),
+            e => panic!("{e:?}"),
+        }
+    }
+}
+
+#[test]
+fn the_reduced_picture_of_a_pattern_fill_matches_the_full_one() {
+    // A pattern fill renders from its full-size tile (#5561 review): left at full scale, the
+    // reduced picture's tiles were four times too large.
+    use photocraft_color::{Color, ColorMode, PixelFormat, SampleType};
+    use photocraft_doc::pattern::Pattern;
+    use photocraft_geom::Size;
+    let mut doc = Document::with_background("pattern", Size::new(256, 256), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+    // 16 × 16 tile, red left half, blue right, drawn at half size from x = 12.
+    let mut tile = photocraft_raster::Surface::new(PixelFormat::RGBA8);
+    tile.fill_rect(Rect::new(0, 0, 8, 16), &[1.0, 0.0, 0.0, 1.0]);
+    tile.fill_rect(Rect::new(8, 0, 16, 16), &[0.0, 0.0, 1.0, 1.0]);
+    let pat = Pattern::new("rb", tile, 16, 16);
+    let fill = Fill::Pattern { name: "rb".into(), scale: 2.0, id: pat.id.clone(), angle: 0.0, link: false, phase: (12.0, 0.0) };
+    doc.patterns.push(pat);
+    doc.layers.push(Layer::new("pattern", LayerContent::Fill(fill)));
+    let full = photocraft_compose::render(&doc, doc.bounds());
+    let p = preview_document(&doc, 4);
+    let reduced = photocraft_compose::render(&p, p.bounds());
+    for x in 0..64 {
+        let (a, b) = (reduced.px[10 * 64 + x], full.px[(10 * 4 + 2) * 256 + x * 4 + 2]);
+        assert!(a.iter().zip(&b).all(|(a, b)| (a - b).abs() < 0.01), "x = {x}: {a:?} vs {b:?}");
+    }
+}
+
+#[test]
+fn a_cached_pattern_fill_keeps_its_cache_in_the_reduced_picture() {
+    use photocraft_color::{ColorMode, SampleType};
+    use photocraft_doc::FillCache;
+    use photocraft_geom::Size;
+    let mut doc = Document::new("cached", Size::new(64, 64), ColorMode::Rgb, SampleType::U8);
+    let fill = Fill::Pattern { name: "gone".into(), scale: 1.0, id: String::new(), angle: 0.0, link: true, phase: (8.0, 4.0) };
+    let mut l = Layer::new("pattern", LayerContent::Fill(fill.clone()));
+    l.fill_cache = Some(FillCache { fill, surface: photocraft_raster::Surface::with_default(doc.pixel_format(), &[0.0, 1.0, 0.0, 1.0]) });
+    doc.layers.push(l);
+    let p = preview_document(&doc, 4);
+    let l = &p.layers[0];
+    let LayerContent::Fill(f) = &l.content else { panic!("{:?}", l.content) };
+    assert!(matches!(f, Fill::Pattern { scale, phase, .. } if *scale == 0.25 && *phase == (2.0, 1.0)), "{f:?}");
+    assert_eq!(l.fill_cache.as_ref().map(|c| &c.fill), Some(f), "the cache still matches");
+    // A stale cache that the scaled fill would match is dropped, not drawn.
+    let stale = Fill::Pattern { name: "gone".into(), scale: 0.25, id: String::new(), angle: 0.0, link: true, phase: (2.0, 1.0) };
+    if let Some(c) = &mut doc.layers[0].fill_cache {
+        c.fill = stale;
+    }
+    assert!(preview_document(&doc, 4).layers[0].fill_cache.is_none());
+}
+
 struct Gpu {
     harness: egui_kittest::Harness<'static, PhotocraftApp>,
     observer: GpuCanvas,
@@ -769,4 +963,95 @@ fn a_flipped_view_records_why_it_draws_on_the_cpu() {
     g.harness.state_mut().ui.view.flip_horizontal = false;
     g.harness.run_steps(3);
     assert!(on_gpu_canvas(&g), "back on the GPU");
+}
+
+#[test]
+fn a_zoomed_out_redraw_shows_a_reduced_picture_before_its_blocks() {
+    let _gpu = photocraft_testkit::gpu_lock();
+    let Some(mut g) = gpu_app() else { return };
+    // 4×3 blocks, fit in a 1000×700 window: about 22%, so level 2.
+    let doc = cpu_only_document(g.harness.state_mut(), 4096, 3072);
+    g.harness.step();
+    let level = g.harness.state().redraws.get(&doc).and_then(|r| r.preview).expect("a redraw with a reduced first picture");
+    assert_eq!(level, 2);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while g.harness.state().redraws.get(&doc).is_some_and(|r| r.preview.is_some()) {
+        assert!(std::time::Instant::now() < deadline, "the reduced picture didn't land");
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        g.harness.step();
+    }
+    // It came first: most blocks are still to draw (the worker can only queue a few ahead).
+    let left = g.harness.state().redraws.get(&doc).map_or(0, |r| r.left);
+    assert!(left >= 6, "{left} blocks left when the reduced picture landed");
+    let (_, size, early) = g.observer.read_level(doc.0, level).expect("level");
+    assert_eq!(size, [1024, 768]);
+    settle(&mut g);
+    let (_, _, done) = g.observer.read_level(doc.0, level).expect("level");
+    // The document is flat colour, so the reduced picture is already the finished level (the
+    // texture starts out transparent).
+    assert!(done.iter().all(|t| t[3] > 0.99), "the finished level is opaque");
+    let differ = early.iter().zip(&done).filter(|(a, b)| a.iter().zip(*b).any(|(x, y)| (x - y).abs() > 2.0 / 255.0)).count();
+    assert_eq!(differ, 0, "{differ} texels of the reduced picture differ from the finished level");
+    assert_eq!(g.harness.state().perf.last_refresh, "background");
+    assert_matches_synchronous(&mut g, doc);
+}
+
+#[test]
+fn a_finished_block_leaves_the_reduced_picture_of_its_pending_neighbours_alone() {
+    pending_blocks_keep_the_reduced_picture(false);
+}
+
+#[test]
+fn a_redraw_continued_on_the_same_state_keeps_putting_its_reduced_picture_back() {
+    // Started again on the same document (#5561 review): the landed picture went with the old
+    // redraw, so finished blocks' mip rebuilds left seams in their pending neighbours.
+    pending_blocks_keep_the_reduced_picture(true);
+}
+
+/// Each block landing after the reduced picture leaves the picture whole under every pending
+/// block; with `continued`, the redraw is first started again on the same state once it is in.
+fn pending_blocks_keep_the_reduced_picture(continued: bool) {
+    let _gpu = photocraft_testkit::gpu_lock();
+    let Some(mut g) = gpu_app() else { return };
+    // Flat colour: the reduced picture is opaque everywhere, and the texture starts transparent.
+    let doc = cpu_only_document(g.harness.state_mut(), 4096, 3072);
+    g.harness.step();
+    let level = g.harness.state().redraws.get(&doc).and_then(|r| r.preview).expect("a redraw with a reduced first picture");
+    let k = 1 << level;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    let (mut checked, mut last_left, mut again, mut landed) = (0, usize::MAX, continued, false);
+    while let Some(r) = g.harness.state().redraws.get(&doc) {
+        landed |= r.shown.is_some();
+        if again && landed && r.left > 1 {
+            again = false;
+            let ctx = g.harness.ctx.clone();
+            let app = g.harness.state_mut();
+            let d = app.session.active().expect("document").doc.clone();
+            let (display, _) = crate::canvas::canvas_display(app, &d, None);
+            start(app, &ctx, &g.observer, d.clone(), display, d.bounds(), 1.0, d.bounds(), None);
+            assert!(app.redraws.get(&doc).is_some_and(|r| r.shown.is_some()), "the continued redraw keeps the landed picture");
+            continue;
+        }
+        // After each of the first blocks to land once the picture is in: every pending block's
+        // part of the level is still the opaque reduced picture, edges included.
+        if landed && r.left < r.blocks.len() && r.left > 0 && r.left != last_left && checked < 4 {
+            last_left = r.left;
+            let pending: Vec<Rect> = r.blocks.iter().zip(&r.pending).filter(|(_, p)| **p).map(|(b, _)| reduce(*b, k)).collect();
+            let (_, size, texels) = g.observer.read_level(doc.0, level).expect("level");
+            for b in &pending {
+                let clear = (b.y0..b.y1)
+                    .flat_map(|y| (b.x0..b.x1).map(move |x| (x, y)))
+                    .filter(|&(x, y)| texels[y as usize * size[0] as usize + x as usize][3] < 0.99)
+                    .count();
+                assert_eq!(clear, 0, "{clear} texels of pending block {b:?} (level {level}) lost the reduced picture");
+            }
+            checked += 1;
+        }
+        assert!(std::time::Instant::now() < deadline, "the redraw didn't finish");
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        g.harness.step();
+    }
+    assert!(checked > 0, "no frame had both finished and pending blocks");
+    assert!(!again, "the reduced picture never landed");
+    assert_matches_synchronous(&mut g, doc);
 }
