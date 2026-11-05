@@ -31,23 +31,31 @@ fn raster(d: &Document, name: &str, bounds: Rect, color: [f32; 4]) -> Layer {
     layer
 }
 
-/// The measured 800 × 500 scene, with a deliberately different crop extension colour.
-fn scene(depth: u32) -> (Session, Layers) {
+fn scene_divisor(turned: bool) -> i32 {
+    // Preserve the measured straight geometry. Half-size turned controls fit even when
+    // the transform-budget preference test sets the process-wide limit to 1 MiB.
+    if turned { 2 } else { 1 }
+}
+
+/// The measured scene, with a deliberately different crop extension colour.
+fn scene(turned: bool) -> (Session, Layers) {
+    let divisor = scene_divisor(turned);
+    let rect = |x0, y0, x1, y1| Rect::new(x0 / divisor, y0 / divisor, x1 / divisor, y1 / divisor);
     let mut s = Session::new();
-    s.execute("file.new", json!({"width":800,"height":500,"depth":depth,"background":"white"})).unwrap();
+    s.execute("file.new", json!({"width":800/divisor,"height":500/divisor,"depth":8,"background":"white"})).unwrap();
     s.execute("tools.setColors", json!({"background":"#ff00ff"})).unwrap();
     let ids = s
         .edit("Fixture", |d, _| {
             let background = d.background().unwrap().id;
-            let mut quads = raster(d, "Quads", Rect::new(0, 0, 800, 500), RED);
+            let mut quads = raster(d, "Quads", rect(0, 0, 800, 500), RED);
             let fmt = d.pixel_format();
             let surf = quads.surface_mut().unwrap();
-            for (bounds, color) in [(Rect::new(400, 0, 800, 250), GREEN), (Rect::new(0, 250, 400, 500), BLUE), (Rect::new(400, 250, 800, 500), YELLOW)] {
+            for (bounds, color) in [(rect(400, 0, 800, 250), GREEN), (rect(0, 250, 400, 500), BLUE), (rect(400, 250, 800, 500), YELLOW)] {
                 surf.fill_rect(bounds, &photocraft_raster::from_rgba(&fmt, color));
             }
-            let small = raster(d, "Small", Rect::new(350, 200, 450, 300), RED);
-            let edge = raster(d, "EdgeHalf", Rect::new(600, 0, 800, 250), BLUE);
-            let mut hidden = raster(d, "Hidden", Rect::new(0, 0, 800, 500), RED);
+            let small = raster(d, "Small", rect(350, 200, 450, 300), RED);
+            let edge = raster(d, "EdgeHalf", rect(600, 0, 800, 250), BLUE);
+            let mut hidden = raster(d, "Hidden", rect(0, 0, 800, 500), RED);
             hidden.visible = false;
             let text = Layer::new("T", LayerContent::Text(TextLayer { text: "T".into(), ..Default::default() }));
             let ids = Layers { background, quads: quads.id, small: small.id, edge: edge.id, hidden: hidden.id, text: text.id };
@@ -63,7 +71,13 @@ fn select(s: &mut Session, id: LayerId) {
 }
 
 fn frame(turned: bool) -> Value {
-    json!({"x":0,"y":0,"width":900,"height":500,"angle":if turned { 10 } else { 0 },"deleteCroppedPixels":true})
+    let divisor = scene_divisor(turned);
+    json!({"x":0,"y":0,"width":900/divisor,"height":500/divisor,"angle":if turned { 10 } else { 0 },"deleteCroppedPixels":true})
+}
+
+fn extension_sample(turned: bool) -> (i32, i32) {
+    let divisor = scene_divisor(turned);
+    (850 / divisor, 400 / divisor)
 }
 
 fn crop(s: &mut Session, mut p: Value, aware: bool) {
@@ -108,7 +122,7 @@ fn undo_redo(s: &mut Session, before: &Document) {
 #[test]
 fn measured_straight_rows_fill_background_and_only_the_active_raster() {
     for row in 0..3 {
-        let (mut s, ids) = scene(8);
+        let (mut s, ids) = scene(false);
         let active = if row == 1 { ids.edge } else { ids.quads };
         if row == 2 {
             s.edit("Layer 0", |d, _| {
@@ -147,12 +161,14 @@ fn measured_straight_rows_fill_background_and_only_the_active_raster() {
 
 #[test]
 fn turned_rows_sample_each_target_and_leave_other_layers_at_plain_crop() {
+    let (x, y) = extension_sample(true);
     for row in 0..3 {
-        let (mut s, ids) = scene(8);
+        let (mut s, ids) = scene(true);
         // Uniform donors isolate target selection from the existing turned-fill sampling policy.
         s.edit("Uniform Quads", |d, _| {
             let fmt = d.pixel_format();
-            d.layer_mut(ids.quads).unwrap().surface_mut().unwrap().fill_rect(Rect::new(0, 0, 800, 500), &photocraft_raster::from_rgba(&fmt, GREEN));
+            let bounds = d.bounds();
+            d.layer_mut(ids.quads).unwrap().surface_mut().unwrap().fill_rect(bounds, &photocraft_raster::from_rgba(&fmt, GREEN));
             if row == 2 {
                 d.layer_mut(ids.background).unwrap().locks = Default::default();
             }
@@ -169,13 +185,13 @@ fn turned_rows_sample_each_target_and_leave_other_layers_at_plain_crop() {
         p["contentAware"] = json!(true);
         s.execute("image.crop", p).unwrap_or_else(|error| panic!("turned row {row}, active {active:?}: {error}"));
         let d = doc(&s);
-        pixel(d, active, 850, 400, if row == 1 { BLUE } else { GREEN });
-        assert!(d.layer(active).unwrap().surface().unwrap().content_bounds().contains(850, 400));
+        pixel(d, active, x, y, if row == 1 { BLUE } else { GREEN });
+        assert!(d.layer(active).unwrap().surface().unwrap().content_bounds().contains(x, y));
         let mut untouched = vec![ids.small, ids.hidden, ids.text, if row == 1 { ids.quads } else { ids.edge }];
         if row == 2 {
             untouched.push(ids.background);
         } else {
-            pixel(d, ids.background, 850, 400, WHITE);
+            pixel(d, ids.background, x, y, WHITE);
         }
         unchanged(d, &plain, &untouched);
         named_one_step(&s, past, "Content-aware Crop");
@@ -186,13 +202,14 @@ fn turned_rows_sample_each_target_and_leave_other_layers_at_plain_crop() {
 #[test]
 fn background_active_is_not_a_second_target() {
     for turned in [false, true] {
-        let (mut s, ids) = scene(8);
+        let (x, y) = extension_sample(turned);
+        let (mut s, ids) = scene(turned);
         select(&mut s, ids.background);
         let p = frame(turned);
         let plain = plain_control(&mut s, &p);
         let past = s.active().unwrap().history.past_len();
         crop(&mut s, p, true);
-        pixel(doc(&s), ids.background, 850, 400, WHITE);
+        pixel(doc(&s), ids.background, x, y, WHITE);
         unchanged(doc(&s), &plain, &[ids.quads, ids.small, ids.edge, ids.hidden, ids.text]);
         named_one_step(&s, past, "Content-aware Crop");
     }
@@ -201,8 +218,9 @@ fn background_active_is_not_a_second_target() {
 #[test]
 fn unmeasured_active_targets_and_delete_off_keep_the_legacy_target() {
     for turned in [false, true] {
+        let (x, y) = extension_sample(turned);
         for case in 0..8 {
-            let (mut s, ids) = scene(8);
+            let (mut s, ids) = scene(turned);
             let active = match case {
                 0 => ids.text,
                 1 => ids.hidden,
@@ -222,7 +240,7 @@ fn unmeasured_active_targets_and_delete_off_keep_the_legacy_target() {
             }
             let plain = plain_control(&mut s, &p);
             crop(&mut s, p, true);
-            pixel(doc(&s), ids.background, 850, 400, WHITE);
+            pixel(doc(&s), ids.background, x, y, WHITE);
             unchanged(doc(&s), &plain, &[ids.quads, ids.small, ids.edge, ids.hidden, ids.text]);
         }
     }
@@ -230,13 +248,13 @@ fn unmeasured_active_targets_and_delete_off_keep_the_legacy_target() {
 
 #[test]
 fn no_fill_or_content_aware_off_keeps_the_crop_history_name() {
-    for (p, aware) in [
-        (json!({"x":20,"y":20,"width":40,"height":30}), true),
-        (json!({"x":20,"y":20,"width":40,"height":30,"angle":10}), true),
-        (frame(false), false),
-        (frame(true), false),
+    for (p, aware, turned) in [
+        (json!({"x":20,"y":20,"width":40,"height":30}), true, false),
+        (json!({"x":20,"y":20,"width":40,"height":30,"angle":10}), true, true),
+        (frame(false), false, false),
+        (frame(true), false, true),
     ] {
-        let (mut s, ids) = scene(8);
+        let (mut s, ids) = scene(turned);
         select(&mut s, ids.quads);
         let past = s.active().unwrap().history.past_len();
         crop(&mut s, p, aware);
@@ -288,7 +306,7 @@ fn a_failure_on_the_added_target_rolls_back_background_crop_and_history() {
     // An empty added target has no donor pixels. This checks transaction atomicity, not a new
     // reference-application claim for an unmeasured empty layer.
     for turned in [false, true] {
-        let (mut s, ids) = scene(8);
+        let (mut s, ids) = scene(turned);
         let empty = s
             .edit("Empty target", |d, active| {
                 let layer = Layer::raster("Empty", d.pixel_format());
