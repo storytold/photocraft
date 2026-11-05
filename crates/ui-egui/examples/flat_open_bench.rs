@@ -338,26 +338,6 @@ fn print_case(res: &Value) {
     );
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn rows_identify_the_process_peak_reading() {
-        let res = json!({
-            "label": "fixture", "phases": {},
-            "peak_process_after_import_bytes": 100,
-            "peak_process_after_all_passes_bytes": 200,
-        });
-        let rows = rows_of(&res);
-        for (row, phase) in rows.iter().zip(PHASES) {
-            let all_passes = matches!(phase, "first composite" | "editable");
-            assert_eq!(row["peak_rss_bytes"], if all_passes { 200 } else { 100 });
-            assert_eq!(row["peak_rss_provenance"], if all_passes { "whole_case_process_after_all_passes" } else { "case_process_after_import_and_admission" });
-        }
-    }
-}
-
 /// Starts this binary for one case so its peak memory is its own; returns the parsed result.
 fn spawn_case(case: &Case, args: &[String], dir: &Path, reps: usize) -> Result<Value, String> {
     let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
@@ -445,5 +425,25 @@ fn main() {
     }
     if !errors.is_empty() {
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rows_identify_the_process_peak_reading() {
+        let res = json!({
+            "label": "fixture", "phases": {},
+            "peak_process_after_import_bytes": 100,
+            "peak_process_after_all_passes_bytes": 200,
+        });
+        let rows = rows_of(&res);
+        for (row, phase) in rows.iter().zip(PHASES) {
+            let all_passes = matches!(phase, "first composite" | "editable");
+            assert_eq!(row["peak_rss_bytes"], if all_passes { 200 } else { 100 });
+            assert_eq!(row["peak_rss_provenance"], if all_passes { "whole_case_process_after_all_passes" } else { "case_process_after_import_and_admission" });
+        }
     }
 }
