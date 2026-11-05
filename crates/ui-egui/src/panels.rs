@@ -60,7 +60,7 @@ pub mod swatches_ui;
 pub(super) mod timeline_ui;
 pub(crate) mod title_bar;
 pub(super) mod titlebar;
-mod toolbar;
+pub(crate) mod toolbar;
 pub mod type_panels_ui;
 pub(super) mod variables_ui;
 

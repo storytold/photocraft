@@ -739,10 +739,10 @@ mod tests {
         assert_eq!(Tool::from_name("Vertical Type Mask Tool"), Some(Tool::VerticalTypeMask));
         assert_eq!(Tool::from_name("addAnchorPoint"), Some(Tool::AddAnchorPoint));
         assert_eq!(Tool::from_name("Delete Anchor Point Tool"), Some(Tool::DeleteAnchorPoint));
-        assert_eq!(Tool::DeleteAnchorPoint.key(), 'P');
+        assert_eq!(Tool::DeleteAnchorPoint.key(), ' ');
         assert_eq!(Tool::from_name("convertPoint"), Some(Tool::ConvertPoint));
         assert_eq!(Tool::from_name("Convert Point Tool"), Some(Tool::ConvertPoint));
-        assert_eq!(Tool::ConvertPoint.key(), 'P', "it shares the Pen's key");
+        assert_eq!(Tool::ConvertPoint.key(), ' ', "P never reaches it");
         assert!(!Tool::ConvertPoint.is_brushlike());
         assert_eq!(Tool::from_name("Remove Tool"), Some(Tool::Remove));
         assert_eq!(Tool::Remove.key(), 'J');
