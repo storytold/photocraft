@@ -421,8 +421,8 @@ fn the_password_prompt_names_its_field() {
     PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
     h.run_steps(4);
     assert!(h.query_by_label("The PDF is protected by a password.").is_some(), "the password prompt is shown");
-    // The caption next to it is a separate label, so look for the text field itself.
-    let named: Vec<String> = h.query_all_by_role(egui::accesskit::Role::TextInput).filter_map(|n| n.accesskit_node().label()).collect();
+    // The caption next to it is a separate label, so look for the (masked) field itself.
+    let named: Vec<String> = h.query_all_by_role(egui::accesskit::Role::PasswordInput).filter_map(|n| n.accesskit_node().label()).collect();
     assert!(named.iter().any(|l| l == "Password:"), "the password field has no accessible name: {named:?}");
 }
 
@@ -491,4 +491,54 @@ fn background_pages_keep_their_order_and_the_drop_slot() {
     // seq 0 is page 3 (Open In Reverse Order), so page 1 ends up last, as in the inline open.
     assert_eq!(docs, ["a.psd", "seq0", "seq1", "seq2", "b.psd"], "the set's order, at the drop slot");
     assert!(app.jobs.batches.is_empty(), "the set is forgotten once every page opened");
+}
+
+/// A harness drawing the dialogs over `app`.
+fn dialog_harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+    let h = Harness::builder().with_size(egui::vec2(1100.0, 800.0)).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            let ctx = ui.ctx().clone();
+            if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                return;
+            }
+            crate::dialogs::show(app, &ctx);
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h
+}
+
+/// The password is masked as it is typed: the field never shows (or tells assistive technology)
+/// the characters.
+#[test]
+fn the_password_field_is_masked() {
+    let mut app = app();
+    app.open_bytes("locked.pdf", &encrypted_pdf()).expect("open");
+    set(&mut app, "password", json!("hunter2"));
+    let mut h = dialog_harness(app);
+    h.run_steps(4);
+    let fields: Vec<_> =
+        h.query_all_by_role(egui::accesskit::Role::PasswordInput).filter(|n| n.accesskit_node().label().as_deref() == Some("Password:")).collect();
+    assert_eq!(fields.len(), 1, "one masked password field");
+    let shown = fields[0].accesskit_node().value().unwrap_or_default();
+    assert!(!shown.contains("hunter2"), "the password shows as {shown:?}");
+    assert!(h.query_all_by_label_contains("hunter2").next().is_none(), "no label shows it either");
+}
+
+/// Switching between Pages and Images forgets the ⇧-click anchor: an index from one list must not
+/// start a range in the other.
+#[test]
+fn switching_lists_forgets_the_range_anchor() {
+    let mut app = app();
+    app.open_bytes("multi.pdf", &three_pages()).expect("open");
+    let mut h = dialog_harness(app);
+    h.run_steps(4);
+    h.state_mut().pdf_import[0].anchor = Some(2);
+    h.get_by_label("Pages").click();
+    h.run_steps(2);
+    assert_eq!(h.state().pdf_import[0].anchor, Some(2), "clicking the list already shown keeps it");
+    h.get_by_label("Images").click();
+    h.run_steps(2);
+    assert_eq!(h.state().pdf_import[0].anchor, None);
 }

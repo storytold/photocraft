@@ -413,7 +413,7 @@ fn password_body(ui: &mut egui::Ui, f: &mut Map<String, Value>, t: &Tokens) {
         ui.label(egui::RichText::new(tl!("Password:")).color(t.text_dim));
         let mut pw = s(f, "password", "").to_string();
         let id = ui.scope_id().with("pdf-password");
-        let r = widgets::text_field(ui, id, &mut pw, "", 220.0, false).accessible_name(tl!("Password:"));
+        let r = widgets::password_field(ui, id, &mut pw, 220.0).accessible_name(tl!("Password:"));
         if r.changed() {
             f.insert("password".into(), json!(pw));
         }
@@ -428,10 +428,17 @@ fn left_column(ui: &mut egui::Ui, f: &mut Map<String, Value>, st: &mut PdfImport
     ui.label(egui::RichText::new(tl!("Select:")).color(t.text_dim));
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 16.0;
+        // A ⇧-click range must not start from an index in the other list.
         if radio(ui, !images, "Pages").clicked() {
+            if images {
+                st.anchor = None;
+            }
             f.insert("select".into(), json!("pages"));
         }
         if radio(ui, images, "Images").clicked() {
+            if !images {
+                st.anchor = None;
+            }
             f.insert("select".into(), json!("images"));
         }
     });

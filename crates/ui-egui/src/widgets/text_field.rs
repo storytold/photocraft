@@ -57,13 +57,18 @@ pub fn text_field(ui: &mut Ui, id: egui::Id, text: &mut String, hint: &str, widt
 /// [`text_field`] limited to `char_limit` characters (a hex field's six digits, say), or to
 /// [`TEXT_FIELD_LIMIT`] without one.
 pub fn text_field_ex(ui: &mut Ui, id: egui::Id, text: &mut String, hint: &str, width: f32, mono: bool, char_limit: Option<usize>) -> Response {
-    text_field_in(ui, id, text, hint, [width, 0.0], mono, char_limit).0
+    text_field_in(ui, id, text, hint, [width, 0.0], [mono, false], char_limit).0
+}
+
+/// [`text_field`] that shows bullets instead of what is typed (a password).
+pub fn password_field(ui: &mut Ui, id: egui::Id, text: &mut String, width: f32) -> Response {
+    text_field_in(ui, id, text, "", [width, 0.0], [false, true], None).0
 }
 
 /// A plain text field reserving space at its right for an embedded popup arrow.
 /// Returns the editor and the full field rectangle; the arrow gets its own interaction id.
 pub fn text_field_with_trailing(ui: &mut Ui, id: egui::Id, text: &mut String, hint: &str, width: f32, trailing: f32) -> (Response, Rect) {
-    text_field_in(ui, id, text, hint, [width, trailing], false, None)
+    text_field_in(ui, id, text, hint, [width, trailing], [false, false], None)
 }
 
 fn text_field_in(
@@ -72,7 +77,8 @@ fn text_field_in(
     text: &mut String,
     hint: &str,
     [width, trailing]: [f32; 2],
-    mono: bool,
+    // `mono`: the monospaced face; `password`: bullets instead of the text.
+    [mono, password]: [bool; 2],
     char_limit: Option<usize>,
 ) -> (Response, Rect) {
     let t = Tokens::get(ui.ctx());
@@ -102,7 +108,8 @@ fn text_field_in(
         .font(font)
         .min_size(inner.size())
         .align(egui::Align2::LEFT_CENTER)
-        .char_limit(limit);
+        .char_limit(limit)
+        .password(password);
     // A child Ui keeps the field's selection colour local: `Visuals::selection` also fills selected
     // list rows and slider trails, which must keep the theme's.
     let layout = egui::Layout::centered_and_justified(egui::Direction::TopDown);

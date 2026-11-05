@@ -838,16 +838,86 @@ fn filter_chain<'a>(dict: &Dict<'a>) -> Vec<(Filter, Dict<'a>)> {
 /// no decode limit of its own. Streams whose first filter isn't FlateDecode are left to it: the
 /// ASCII filters shrink their input, and LZW and run-length content is rare.
 fn content_bounded(stream: &Stream<'_>, what: &str) -> Result<(), IoError> {
-    if !matches!(filter_chain(stream.dict()).first(), Some((Filter::FlateDecode, _))) {
-        return Ok(());
-    }
+    let chain: Vec<Filter> = filter_chain(stream.dict()).into_iter().map(|(f, _)| f).collect();
+    let Some(flate) = chain.iter().position(|f| *f == Filter::FlateDecode) else { return Ok(()) };
     let raw = stream.raw_data();
+    let mut data = std::borrow::Cow::Borrowed(raw.as_ref());
+    // The ASCII filters only shrink their input, so they're undone here to reach the Deflate data.
+    // Anything else ahead of FlateDecode (LZW, run-length) could expand it unmeasured.
+    for f in chain.iter().take(flate) {
+        let decoded = match f {
+            Filter::AsciiHexDecode => ascii_hex(&data),
+            Filter::Ascii85Decode => ascii85(&data),
+            _ => {
+                return Err(IoError::Pdf(format!("PDF: {what} is decompressed twice in a row, so its size can't be checked; the page can't be opened")));
+            }
+        };
+        // Data that doesn't decode is dropped by the interpreter too: nothing to inflate.
+        let Some(d) = decoded else { return Ok(()) };
+        data = std::borrow::Cow::Owned(d);
+    }
     // `hayro` reads zlib data, or raw deflate when there's no zlib header.
-    let n = inflated_len(flate2::read::ZlibDecoder::new(raw.as_ref())).max(inflated_len(flate2::read::DeflateDecoder::new(raw.as_ref())));
+    let n = inflated_len(flate2::read::ZlibDecoder::new(data.as_ref())).max(inflated_len(flate2::read::DeflateDecoder::new(data.as_ref())));
     if n > MAX_CONTENT_BYTES {
         return Err(IoError::Pdf(format!("PDF: {what} inflates past {} MB, so the page can't be opened", MAX_CONTENT_BYTES >> 20)));
     }
     Ok(())
+}
+
+/// ASCIIHexDecode: pairs of hex digits, whitespace ignored, up to `>`; an odd last digit is
+/// followed by 0. `None` on any other byte.
+fn ascii_hex(data: &[u8]) -> Option<Vec<u8>> {
+    let mut out = Vec::with_capacity(data.len() / 2);
+    let mut high: Option<u8> = None;
+    for &c in data {
+        let v = match c {
+            b'>' => break,
+            b'0'..=b'9' => c - b'0',
+            b'a'..=b'f' => c - b'a' + 10,
+            b'A'..=b'F' => c - b'A' + 10,
+            c if c.is_ascii_whitespace() || c == 0 => continue,
+            _ => return None,
+        };
+        match high.take() {
+            Some(h) => out.push(h << 4 | v),
+            None => high = Some(v),
+        }
+    }
+    if let Some(h) = high {
+        out.push(h << 4);
+    }
+    Some(out)
+}
+
+/// ASCII85Decode: groups of five characters `!` to `u` give four bytes, `z` four zeros,
+/// whitespace is ignored, `~>` ends it. `None` on any other byte or an overflowing group.
+fn ascii85(data: &[u8]) -> Option<Vec<u8>> {
+    let word = |g: &[u8; 5]| g.iter().try_fold(0u32, |a, &d| a.checked_mul(85)?.checked_add(u32::from(d)));
+    let mut out = Vec::with_capacity(data.len() / 5 * 4 + 4);
+    let mut group = [0u8; 5];
+    let mut n = 0;
+    for &c in data {
+        match c {
+            b'~' => break,
+            b'z' if n == 0 => out.extend_from_slice(&[0; 4]),
+            b'!'..=b'u' => {
+                group[n] = c - b'!';
+                n += 1;
+                if n == 5 {
+                    out.extend_from_slice(&word(&group)?.to_be_bytes());
+                    n = 0;
+                }
+            }
+            c if c.is_ascii_whitespace() || c == 0 => {}
+            _ => return None,
+        }
+    }
+    if n > 1 {
+        // A partial last group: padded with `u`, n - 1 bytes kept.
+        group.iter_mut().skip(n).for_each(|g| *g = 84);
+        out.extend_from_slice(&word(&group)?.to_be_bytes()[..n - 1]);
+    }
+    Some(out)
 }
 
 /// How many bytes `r` yields, counting stops just past [`MAX_CONTENT_BYTES`]; data after a
@@ -919,8 +989,12 @@ fn image_parts(stream: &Stream<'_>, what: &'static str) -> Result<Vec<Part>, IoE
 /// The buffer a CCITT fax filter allocates before it reads any data, `/Columns` (1728 when absent)
 /// by the larger of `/Rows` and the image's `/Height`, read exactly as `hayro-syntax` reads them.
 fn ccitt_size(params: &Dict<'_>, height: u32) -> (u32, u32) {
-    let columns = params.get::<usize>(b"Columns").unwrap_or(1728) as u32;
-    (columns, params.get::<u32>(b"Rows").unwrap_or(0).max(height))
+    // Past `u32` keeps `u32::MAX`, which the per-image limits refuse; `as u32` wrapped it small.
+    let columns = params.get::<usize>(b"Columns").map_or(1728, |c| u32::try_from(c).unwrap_or(u32::MAX));
+    // `/Rows` read as the decoder reads it (`usize`), so a value past `u32` isn't dropped in
+    // favour of the smaller `/Height`.
+    let rows = params.get::<usize>(b"Rows").map_or(0, |r| u32::try_from(r).unwrap_or(u32::MAX));
+    (columns, rows.max(height))
 }
 
 /// The `/JBIG2Globals` a JBIG2 filter's parameters name, decoded as the decoder decodes them (one
@@ -1182,7 +1256,6 @@ impl Budget {
 /// drawn from a stream the walk didn't reach, and a resource tree too deep or too large to walk.
 fn preflight(page: &Page) -> Result<(), IoError> {
     codec_check(page)?;
-    form_draws(page)?;
     let mut walk = Walk::default();
     // What the content places, once per drawing.
     let mut unsourced = Vec::new();
@@ -1217,12 +1290,77 @@ fn preflight(page: &Page) -> Result<(), IoError> {
 /// multiplies through the cached lists, so it costs no more than the cap.
 fn form_draws(page: &Page) -> Result<(), IoError> {
     let mut forms = Forms::default();
-    let top = forms.children(page.typed_operations(), &page.resources().x_objects);
+    let page_x = &page.resources().x_objects;
     let mut drawn = 0u64;
+    let top = forms.children(page.typed_operations(), page_x);
     for child in top {
-        forms.draw(&child, &page.resources().x_objects, 1, &mut drawn)?;
+        forms.draw(&child, page_x, 1, &mut drawn)?;
+    }
+    // The other content the renderer interprets on its own, on the same count: annotation
+    // appearances, and the page's tiling patterns, Type 3 glyphs and soft-mask groups.
+    for (stream, inherited) in other_contents(page) {
+        let x = stream.dict().get::<Dict<'_>>(b"Resources").map_or(inherited, |r| Resources::new(r).x_objects);
+        let Ok(data) = stream.decoded() else { continue };
+        let kids = forms.children(TypedIter::new(&data), &x);
+        for child in kids {
+            forms.draw(&child, &x, 1, &mut drawn)?;
+        }
     }
     Ok(())
+}
+
+/// The content streams of a page the renderer interprets besides its own content, each with the
+/// `/XObject` dictionary it falls back on when it has no `/Resources`: annotation normal
+/// appearances (none), and the page's tiling patterns (the page's), Type 3 glyph procedures (the
+/// font's resources, else the page's) and `/ExtGState` soft-mask groups (the page's).
+fn other_contents<'a>(page: &Page<'a>) -> Vec<(Stream<'a>, Dict<'a>)> {
+    let res = page.resources();
+    let page_x = res.x_objects.clone();
+    let mut out: Vec<(Stream<'a>, Dict<'a>)> = appearance_streams(page).into_iter().map(|s| (s, Dict::default())).collect();
+    for name in res.patterns.keys() {
+        if let Some(s) = res.patterns.get::<Stream<'a>>(&name) {
+            out.push((s, page_x.clone()));
+        }
+    }
+    for name in res.fonts.keys() {
+        let Some(font) = res.fonts.get::<Dict<'a>>(&name) else { continue };
+        let Some(procs) = font.get::<Dict<'a>>(b"CharProcs") else { continue };
+        let x = font.get::<Dict<'a>>(b"Resources").map_or_else(|| page_x.clone(), |r| Resources::new(r).x_objects);
+        for glyph in procs.keys() {
+            if let Some(s) = procs.get::<Stream<'a>>(&glyph) {
+                out.push((s, x.clone()));
+            }
+        }
+    }
+    for name in res.ext_g_states.keys() {
+        let group = res.ext_g_states.get::<Dict<'a>>(&name).and_then(|gs| gs.get::<Dict<'a>>(b"SMask")).and_then(|sm| sm.get::<Stream<'a>>(b"G"));
+        if let Some(s) = group {
+            out.push((s, page_x.clone()));
+        }
+    }
+    out
+}
+
+/// The appearance streams the interpreter draws for the page's annotations: the normal
+/// appearance, in the state `/AS` selects; hidden annotations are skipped.
+fn appearance_streams<'a>(page: &Page<'a>) -> Vec<Stream<'a>> {
+    let Some(annots) = page.raw().get::<Array<'a>>(b"Annots") else { return Vec::new() };
+    let mut out = Vec::new();
+    for annot in annots.iter::<Dict<'a>>() {
+        if annot.get::<u32>(b"F").unwrap_or(0) & 2 != 0 {
+            continue;
+        }
+        let Some(ap) = annot.get::<Dict<'a>>(b"AP") else { continue };
+        let stream = match ap.get::<Object<'a>>(b"N") {
+            Some(Object::Stream(s)) => Some(s),
+            Some(Object::Dict(states)) => {
+                annot.get::<Name<'_>>(b"AS").and_then(|state| states.get::<Stream<'a>>(state)).or_else(|| states.get::<Stream<'a>>(b"Off"))
+            }
+            _ => None,
+        };
+        out.extend(stream);
+    }
+    out
 }
 
 /// The Form XObjects each form draws, read once per form for [`form_draws`].
@@ -1422,22 +1560,8 @@ impl Walk {
     /// The appearance streams the interpreter draws for the page's annotations: the normal
     /// appearance, in the state `/AS` selects; hidden annotations are skipped.
     fn annotations(&mut self, page: &Page) -> Result<(), IoError> {
-        let Some(annots) = page.raw().get::<Array<'_>>(b"Annots") else { return Ok(()) };
-        for annot in annots.iter::<Dict<'_>>() {
-            if annot.get::<u32>(b"F").unwrap_or(0) & 2 != 0 {
-                continue;
-            }
-            let Some(ap) = annot.get::<Dict<'_>>(b"AP") else { continue };
-            let stream = match ap.get::<Object<'_>>(b"N") {
-                Some(Object::Stream(s)) => Some(s),
-                Some(Object::Dict(states)) => {
-                    annot.get::<Name<'_>>(b"AS").and_then(|state| states.get::<Stream<'_>>(state)).or_else(|| states.get::<Stream<'_>>(b"Off"))
-                }
-                _ => None,
-            };
-            if let Some(s) = stream {
-                self.content(&s, 0)?;
-            }
+        for s in appearance_streams(page) {
+            self.content(&s, 0)?;
         }
         Ok(())
     }
@@ -1454,7 +1578,8 @@ impl Walk {
 /// group and annotation appearances reach is walked; a stream counts as an image only where the
 /// interpreter decodes one, an `/XObject` entry with `/Subtype /Image` and the `/SMask` and
 /// `/Mask` streams of an image, and such an image's own codec is [`preflight`]'s to size. A walk
-/// past [`MAX_OBJECTS`] or [`MAX_OBJECT_DEPTH`] refuses the page.
+/// past [`MAX_OBJECTS`] or [`MAX_OBJECT_DEPTH`] refuses the page. So does a non-image stream that
+/// inflates past [`MAX_CONTENT_BYTES`], and Form XObject draws past [`MAX_FORM_DRAWS`].
 fn codec_check(page: &Page) -> Result<(), IoError> {
     let mut walk = Codecs::default();
     match page.raw().get::<Object<'_>>(b"Contents") {
@@ -1481,7 +1606,9 @@ fn codec_check(page: &Page) -> Result<(), IoError> {
             }
         }
     }
-    Ok(())
+    // Every entry point that interprets a page runs this first, so the Form XObject draw count
+    // is checked here too (after the streams it decodes were measured above).
+    form_draws(page)
 }
 
 /// The indirect object `d`'s entry `key` refers to, if it is a reference. (A dictionary's own

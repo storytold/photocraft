@@ -776,6 +776,60 @@ fn form_xobject_fan_out_is_bounded_before_the_page_is_interpreted() {
     // 2^10 draws in all, well within the cap, open.
     let r = import_pdf("forms.pdf", &form_chain(10, 2), &PdfOpenOptions::default(), &Interrupt::NONE).expect("opens");
     assert_eq!(r.document.layers.len(), 1);
+    // Every entry point that interprets the page checks it first, not only the page import.
+    let deep = form_chain(30, 2);
+    assert!(!opens_as_image(&deep, None));
+    assert!(bounding_box(&deep, 1, None).is_err());
+    assert!(images(&deep, None).is_err());
+    assert!(import_image("deep.pdf", &deep, 1, None, None, &Interrupt::NONE).is_err());
+    assert!(thumbnail(&deep, 1, 32, None).is_err());
+    // Draws that start outside the page's content count too: here an annotation's appearance
+    // draws the chain (objects 5..34), and the page content draws nothing.
+    let mut forms: Vec<Vec<u8>> = (0..30)
+        .map(|i| {
+            let (res, content) = if i + 1 < 30 {
+                (format!("/Resources << /XObject << /C {} 0 R >> >>", 6 + i), "/C Do\n/C Do\n".to_string())
+            } else {
+                (String::new(), String::new())
+            };
+            stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 10 10] {res}"), content.as_bytes())
+        })
+        .collect();
+    forms.push(stream("/Type /XObject /Subtype /Form /BBox [0 0 10 10] /Resources << /XObject << /F 5 0 R >> >>", b"/F Do"));
+    forms.push(b"<< /Type /Annot /Subtype /Square /Rect [0 0 10 10] /AP << /N 35 0 R >> >>".to_vec());
+    let annotated = objects_pdf("", "/Annots [36 0 R]", "", b"", forms);
+    let e = refused(&annotated, "fan-out in an appearance");
+    assert!(e.contains("Form XObjects more than"), "{e}");
+}
+
+/// `data` in ASCII85 (no `z` shorthand), ended by `~>`.
+fn ascii85_encode(data: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(data.len() / 4 * 5 + 8);
+    for chunk in data.chunks(4) {
+        let mut word = [0u8; 4];
+        word[..chunk.len()].copy_from_slice(chunk);
+        let mut v = u32::from_be_bytes(word);
+        let mut digits = [0u8; 5];
+        for d in digits.iter_mut().rev() {
+            *d = (v % 85) as u8 + b'!';
+            v /= 85;
+        }
+        out.extend_from_slice(&digits[..chunk.len() + 1]);
+    }
+    out.extend_from_slice(b"~>");
+    out
+}
+
+#[test]
+fn the_ascii_decoders_read_what_the_spec_writes() {
+    assert_eq!(super::ascii_hex(b"48 65 6c 6C 6f>ignored").as_deref(), Some(b"Hello".as_slice()));
+    assert_eq!(super::ascii_hex(b"7").as_deref(), Some([0x70].as_slice()), "an odd last digit is followed by 0");
+    assert_eq!(super::ascii_hex(b"zz"), None);
+    for data in [b"".as_slice(), b"a", b"ab", b"abc", b"abcd", b"Hello, ASCII85!", &[0, 0, 0, 0, 255, 255, 255]] {
+        assert_eq!(super::ascii85(&ascii85_encode(data)).as_deref(), Some(data), "{data:?}");
+    }
+    assert_eq!(super::ascii85(b"z~>").as_deref(), Some([0u8; 4].as_slice()));
+    assert_eq!(super::ascii85(b"uuuuu~>"), None, "a group past 2^32 - 1");
 }
 
 /// `n` bytes of spaces, deflated (zlib): a few hundred KB that inflate to `n`.
@@ -801,6 +855,15 @@ fn a_content_stream_that_inflates_too_far_is_refused_before_decoding() {
     let form = stream("/Type /XObject /Subtype /Form /BBox [0 0 10 10] /Filter /FlateDecode", &bomb);
     let e = refused(&objects_pdf("/XObject << /F 5 0 R >>", "", "", b"", vec![form]), "deflate bomb form");
     assert!(e.contains("inflates past"), "{e}");
+    // FlateDecode behind ASCII85Decode is measured too; behind LZW it can't be, so it's refused.
+    let wrapped = ascii85_encode(&bomb);
+    let e = refused(&objects_pdf("", "", "/Filter [/ASCII85Decode /FlateDecode]", &wrapped, Vec::new()), "ASCII85 bomb");
+    assert!(e.contains("inflates past"), "{e}");
+    let hexed: String = bomb.iter().map(|b| format!("{b:02x}")).collect::<String>() + ">";
+    let e = refused(&objects_pdf("", "", "/Filter [/ASCIIHexDecode /FlateDecode]", hexed.as_bytes(), Vec::new()), "ASCIIHex bomb");
+    assert!(e.contains("inflates past"), "{e}");
+    let e = refused(&objects_pdf("", "", "/Filter [/LZWDecode /FlateDecode]", b"x", Vec::new()), "LZW then Flate");
+    assert!(e.contains("decompressed twice"), "{e}");
     let fine = {
         use std::io::Write;
         let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
@@ -842,6 +905,13 @@ fn a_ccitt_image_is_sized_by_its_decode_parameters() {
     assert!(e.contains("8000 × 9000"), "{e}");
     assert!(passes(&xobject_pdf(&[(CCITT_10, &[0u8; 8])], 1, DRAW_X0)), "1728 × 10 by default");
     assert!(passes(&xobject_pdf(&[(&parms(10, 10), &[0u8; 8])], 1, DRAW_X0)));
+    // /Columns or /Rows past u32 keep u32::MAX and are refused; `as u32` wrapped 2^32 + 5 to 5.
+    let wide = format!("{CCITT_10} /DecodeParms << /K -1 /Columns {} /Rows 10 >>", (1u64 << 32) + 5);
+    let e = refused(&xobject_pdf(&[(&wide, &[0u8; 8])], 1, DRAW_X0), "columns past u32");
+    assert!(e.contains(&format!("{} ×", u32::MAX)), "{e}");
+    let tall_rows = format!("{CCITT_10} /DecodeParms << /K -1 /Columns 10 /Rows {} >>", (1u64 << 32) + 5);
+    let e = refused(&xobject_pdf(&[(&tall_rows, &[0u8; 8])], 1, DRAW_X0), "rows past u32");
+    assert!(e.contains(&format!("× {}", u32::MAX)), "{e}");
     // Behind another filter, its own parameters in the array.
     let chained = "/Type /XObject /Subtype /Image /Width 10 /Height 10 /ColorSpace /DeviceGray /BitsPerComponent 1 /Filter [/FlateDecode /CCITTFaxDecode] /DecodeParms [null << /K -1 /Columns 20000 /Rows 20000 >>]";
     let e = refused(&xobject_pdf(&[(chained, &[0u8; 8])], 1, DRAW_X0), "chained");
