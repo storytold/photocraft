@@ -70,13 +70,16 @@ fn check_documented_languages(languages: &[Language], doc: &str) -> Result<(), S
         .unwrap_or_default();
     let mut documented = BTreeSet::new();
     for line in table.lines().filter(|line| line.starts_with('|')) {
-        let Some(cell) = line.split('|').nth(2).map(str::trim) else {
-            continue;
-        };
-        if cell == "Preference code" || cell.chars().all(|c| matches!(c, '-' | ':')) {
+        let cell = line.split('|').nth(2).map_or("", str::trim);
+        let separator = !cell.is_empty() && cell.chars().all(|c| matches!(c, '-' | ':'));
+        if cell == "Preference code" || separator {
             continue;
         }
-        documented.insert(cell.trim_matches('`').to_string());
+        let code = cell.trim_matches('`').trim();
+        if code.is_empty() {
+            return Err(format!("docs/localization.md's Supported languages table has a row with no preference code: {}", line.trim()));
+        }
+        documented.insert(code.to_string());
     }
     let registered: BTreeSet<String> = languages.iter().map(|language| language.code.clone()).collect();
     let missing: Vec<&str> = registered.difference(&documented).map(String::as_str).collect();
@@ -619,6 +622,17 @@ mod tests {
         );
         let doc = LANGUAGE_DOC.replace("`tr`", "tr");
         assert_eq!(check_documented_languages(&documentation_languages(), &doc), Ok(()));
+    }
+
+    #[test]
+    fn documented_languages_reject_a_row_without_a_code() {
+        for row in ["| Klingon |  | one form |", "| Klingon | `` | one form |", "| Klingon"] {
+            let doc = LANGUAGE_DOC.replace("## Catalogs", &format!("{row}\n\n## Catalogs"));
+            assert_eq!(
+                check_documented_languages(&documentation_languages(), &doc),
+                Err(format!("docs/localization.md's Supported languages table has a row with no preference code: {row}"))
+            );
+        }
     }
 
     #[test]
