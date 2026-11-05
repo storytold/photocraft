@@ -4658,3 +4658,26 @@ smartSvg	Updates wait while another document or an editing dialog is active.	გ
 	Memory usage percent	მეხსიერების გამოყენება (%)
 	Save Full-Size Composite in .pcraft Files	სრული ზომის გაერთიანებული გამოსახულების შენახვა .pcraft ფაილებში
 	Scratch Size Limit (MB, 0 = No Limit)	დროებითი დისკის ზომის ლიმიტი (მბ, 0 = ლიმიტის გარეშე)
+	A frame supports affine transforms; select its image for perspective transforms	ჩარჩო აფინურ გარდაქმნებს უჭერს მხარს; პერსპექტიული გარდაქმნისთვის მონიშნეთ მისი გამოსახულება
+	A frame supports affine transforms; select its image to warp it	ჩარჩო აფინურ გარდაქმნებს უჭერს მხარს; დეფორმაციისთვის მონიშნეთ მისი გამოსახულება
+	Convert to Frame…	ჩარჩოდ გარდაქმნა…
+	Create a new custom frame	ახალი მორგებული ჩარჩოს შექმნა
+	Create a new polygonal frame	ახალი მრავალკუთხა ჩარჩოს შექმნა
+	Create a new triangular frame	ახალი სამკუთხა ჩარჩოს შექმნა
+	Fit Content to Frame	შიგთავსის ჩარჩოზე მორგება
+	Fit Frame to Content	ჩარჩოს შიგთავსზე მორგება
+	Frame coordinates must be finite and within 600000 pixels	ჩარჩოს კოორდინატები სასრული უნდა იყოს და 600000 პიქსელს არ უნდა აღემატებოდეს
+	Generator enabled	გენერატორი ჩართულია
+	Import Image…	გამოსახულების იმპორტი…
+	Invalid frame transform	ჩარჩოს არასწორი გარდაქმნა
+	Invalid nested file drop	ჩადგმული ფაილის არასწორი ჩაგდება
+	Learn	სწავლა
+	New Frame	ახალი ჩარჩო
+	New file	ახალი ფაილი
+	On your computer	თქვენს კომპიუტერზე
+	Replace Image…	გამოსახულების ჩანაცვლება…
+	Source: {name}	წყარო: {name}
+	The History Brush source was deleted: set a new source in the History panel	ისტორიის ფუნჯის წყარო წაიშალა: დააყენეთ ახალი წყარო ისტორიის პანელში
+	The frame is locked	ჩარჩო ჩაკეტილია
+	The frame is unavailable	ჩარჩო მიუწვდომელია
+	Website	ვებსაიტი
