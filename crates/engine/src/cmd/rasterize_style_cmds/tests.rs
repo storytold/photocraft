@@ -175,11 +175,7 @@ fn a_later_layer_failing_takes_back_the_baked_ones() {
     let calls = std::cell::Cell::new(0);
     let r = bake_layers(&mut s, vec![LayerId(id), LayerId(id)], |s, id, key| {
         calls.set(calls.get() + 1);
-        if calls.get() == 1 {
-            bake_one(s, id, key)
-        } else {
-            Err(EngineError::Other("second layer failed".into()))
-        }
+        if calls.get() == 1 { bake_one(s, id, key) } else { Err(EngineError::Other("second layer failed".into())) }
     });
     assert!(r.is_err());
     assert_eq!(calls.get(), 2);

@@ -784,11 +784,7 @@ fn a_later_layer_failing_takes_back_the_rasterized_ones() {
 
     let ids = vec![LayerId(a), LayerId(b)];
     let r = rasterize_layers(&mut s, ids.clone(), None, |s, id, only, key| {
-        if id.0 == b {
-            Err(EngineError::Other("second layer failed".into()))
-        } else {
-            rasterize_one(s, id, only, key)
-        }
+        if id.0 == b { Err(EngineError::Other("second layer failed".into())) } else { rasterize_one(s, id, only, key) }
     });
     assert!(r.is_err());
     assert!(matches!(layer_of(&s, a).content, LayerContent::Fill(_)));
