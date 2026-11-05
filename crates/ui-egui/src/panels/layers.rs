@@ -494,7 +494,7 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         crate::press_menu::show(&fx, |ui, menu| {
             ui.set_min_width(180.0);
             if menu.item(ui, tl!("Blending Options…")) {
-                crate::layer_style::open(app, None);
+                crate::layer_style::open(app, Some(crate::layer_style::BLENDING));
             }
             ui.separator();
             for &(kind, label) in crate::layer_style::KINDS {
