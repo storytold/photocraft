@@ -945,7 +945,7 @@ fn build() -> Vec<CommandSpec> {
             "Reorder Layer",
             [],
             None,
-            r##"{"layer":id|{"index":uint}|{"ordinal":"Trgt|Frwr|Bckw|Frnt|Back"}?| "layers":[id,…]?, "target":id|name|{"index":uint},"targetOccurrence":n? (which of several layers named `target`, in document order),"position":"above|below|into"="above","copy":bool=false} (typed target: pre-move recorded stack boundary, omit position; layers: one undoable move, document order preserved; copy: place duplicates there and leave the layers, as ⌥-dragging a Layers panel row; recorded typed references retain their form)"##,
+            r##"{"layer":id|{"index":uint}|{"ordinal":"Trgt|Frwr|Bckw|Frnt|Back"}?| "layers":[id,…]?, "target":id|name|{"index":uint},"targetOccurrence":n? (which of several layers named `target`, in document order),"position":"above|below|into"="above","copy":bool=false} (typed target: pre-move recorded stack boundary, omit position; position "into" moves the layers into the target group, reparenting them out of their current parent; layers: one undoable move, document order preserved; copy: place duplicates there and leave the layers, as ⌥-dragging a Layers panel row; recorded typed references retain their form)"##,
             has_layer,
             crate::layer_multi_cmds::move_to
         ),
