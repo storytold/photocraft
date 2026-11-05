@@ -817,6 +817,9 @@ mod save_identity_tests;
 mod move_auto_select_tests;
 
 #[cfg(test)]
+mod move_shift_diagonal_tests;
+
+#[cfg(test)]
 mod new_group_button_tests;
 
 #[cfg(test)]
