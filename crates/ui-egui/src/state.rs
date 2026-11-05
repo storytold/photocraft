@@ -656,6 +656,7 @@ impl UiState {
     }
 
     /// The last tool used in the shortcut group of `key`, if any.
+    #[cfg(test)]
     pub fn group_tool(&self, key: char) -> Option<Tool> {
         self.group_tools.iter().copied().find(|t| t.key() == key)
     }
