@@ -776,7 +776,8 @@ fn full_canvas_layer_scenarios(b: &mut Bench, sz: &Sizes) {
     let opacity = "opacity of a layer among many full-canvas layers + refresh";
     let hide = "hide a layer among many full-canvas layers + refresh";
     let adjust = "hide the top adjustment layer among many full-canvas layers, over the GPU budget + refresh";
-    if !b.wanted(opacity) && !b.wanted(hide) && !b.wanted(adjust) {
+    let settings = "change the top adjustment layer's settings among many full-canvas layers, over the GPU budget + refresh";
+    if !b.wanted(opacity) && !b.wanted(hide) && !b.wanted(adjust) && !b.wanted(settings) {
         return;
     }
     b.current = Some(opacity.to_string());
@@ -846,6 +847,17 @@ fn full_canvas_layer_scenarios(b: &mut Bench, sz: &Sizes) {
                 let t = Instant::now();
                 exec(s, "layer.setProps", json!({"layer": adj, "visible": false}))?;
                 b.after_cmd(s, t, false)
+            });
+            // #6533: dragging the adjustment's own setting (its Properties slider), each update
+            // a full redraw on the CPU.
+            if b.wanted(settings) {
+                let _ = exec(&mut s, "layer.setProps", json!({"layer": adj, "visible": true}));
+                let _ = b.refresh(&s, false);
+            }
+            b.time(settings, &mut s, reps.min(5), true, |b, s, i| {
+                let t = Instant::now();
+                exec(s, "layer.setAdjustment", json!({"layer": adj, "gamma": if i % 2 == 0 { 1.2 } else { 0.9 }}))?;
+                Ok(ms(t) + b.refresh(s, false)?)
             });
         }
         Err(e) => b.errors.push((adjust.to_string(), e)),
