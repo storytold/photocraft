@@ -263,7 +263,7 @@ impl Tokens {
                     Color32::TRANSPARENT,
                     Color32::from_rgb(176, 66, 63),
                     Color32::from_rgb(165, 98, 10),
-                    Color32::from_rgb(170, 137, 10),
+                    Color32::from_rgb(158, 127, 9), // Yellow, darkened for the 80% white glyph.
                     Color32::from_rgb(95, 130, 60),
                     Color32::from_rgb(82, 111, 153),
                     Color32::from_rgb(113, 85, 160),

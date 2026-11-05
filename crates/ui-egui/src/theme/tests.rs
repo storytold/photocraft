@@ -374,21 +374,21 @@ fn breeze_themes_parse_and_meet_text_contrast() {
 }
 
 #[test]
-fn action_tiles_match_the_measured_pro_palettes() {
-    let measured = [
+fn action_tiles_match_the_default_pro_palettes() {
+    let defaults = [
         (ThemeKind::Pro, [0x323232, 0x8d2d2d, 0x935202, 0x967c00, 0x3f6335, 0x3e4f85, 0x5d4682, 0x535353, 0x006662, 0x3236a8, 0xaa2f64, 0x862587]),
-        (ThemeKind::ProMedium, [0x535353, 0xb0423f, 0xa5620a, 0xaa890a, 0x5f823c, 0x526f99, 0x7155a0, 0x6a6a6a, 0x006662, 0x4649a0, 0xaa2f64, 0x862587]),
+        (ThemeKind::ProMedium, [0x535353, 0xb0423f, 0xa5620a, 0x9e7f09, 0x5f823c, 0x526f99, 0x7155a0, 0x6a6a6a, 0x006662, 0x4649a0, 0xaa2f64, 0x862587]),
         (ThemeKind::ProLightGray, [0xb8b8b8, 0xeb726a, 0xe79e62, 0xdad665, 0x8fc665, 0x8da2d7, 0x9983c9, 0x979797, 0x00a19a, 0x8487ee, 0xdb6d9c, 0xca72cb]),
         (ThemeKind::ProLight, [0xf0f0f0, 0xff8881, 0xfbb767, 0xe9e380, 0xabdb80, 0xa6bdf4, 0xb29ede, 0xacacac, 0x01c1b9, 0x8e92f2, 0xdc6d9d, 0xc97dca]),
     ];
-    for (kind, expected) in measured {
+    for (kind, expected) in defaults {
         let actual = Tokens::for_kind(kind).action_tiles.map(|fill| u32::from_be_bytes([0, fill.r(), fill.g(), fill.b()]));
         assert_eq!(actual, expected, "{kind:?}");
     }
 }
 
 #[test]
-fn action_glyph_uses_theme_family_ink_and_measured_tile_contrast() {
+fn action_glyph_uses_theme_family_ink_and_meets_tile_contrast() {
     for kind in ThemeKind::ALL {
         let tokens = Tokens::for_kind(kind);
         let glyph = tokens.action_glyph;
@@ -404,12 +404,7 @@ fn action_glyph_uses_theme_family_ink_and_measured_tile_contrast() {
         for (index, fill) in tokens.action_tiles.into_iter().enumerate() {
             let blended = Color32::from_rgb(blend(glyph.r(), fill.r()), blend(glyph.g(), fill.g()), blend(glyph.b(), fill.b()));
             let ratio = contrast(blended, fill);
-            // The measured Pro Medium yellow is the sole exception in the reference palettes.
-            if index == 3 && (kind == ThemeKind::ProMedium || (!kind.is_pro() && kind.is_dark())) {
-                assert!((2.69..2.71).contains(&ratio), "{kind:?}: measured yellow contrast {ratio}");
-            } else {
-                assert!(ratio >= 3.0, "{kind:?}: tile {index} has contrast {ratio}");
-            }
+            assert!(ratio >= 3.0, "{kind:?}: tile {index} has contrast {ratio}");
             if kind == ThemeKind::ProLight && index == 3 {
                 assert_eq!(blended, Color32::from_rgb(47, 45, 26));
             }
