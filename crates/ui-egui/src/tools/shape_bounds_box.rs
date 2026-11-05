@@ -14,8 +14,9 @@ use photocraft_geom::Affine;
 use serde_json::json;
 
 use crate::PhotocraftApp;
-use crate::canvas::ToolEvent;
+use crate::canvas::{ToolEvent, ViewXform};
 use crate::state::Tool;
+use crate::tool_cursor;
 
 /// The scale a drag can reach, as `path.transform`'s.
 const MIN_SCALE: f64 = 0.01;
@@ -26,6 +27,10 @@ const GRAB_PX: f64 = 7.0;
 /// A handle drag in progress.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Drag {
+    /// The document and its revision at the press: a drag outlives neither a switch to another
+    /// document nor an edit under it (Undo, say).
+    doc: photocraft_doc::DocId,
+    revision: u64,
     /// The selected shape layers, as at the press.
     layers: Vec<u64>,
     /// Their union box `[x0, y0, x1, y1]` at the press.
@@ -38,9 +43,11 @@ pub struct Drag {
     scale: [f64; 2],
 }
 
-/// The tools that show the box.
+/// The tools that show the box, while View › Extras and View › Show › Target Path show paths
+/// (the overlay draws it only then, so a hidden handle must not take a press either).
 fn shows(app: &PhotocraftApp) -> bool {
     app.ui.transform.is_none()
+        && app.ui.view.shows(app.ui.view.show.target_path)
         && matches!(app.ui.tool, Tool::PathSelection | Tool::Rectangle | Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::Line)
 }
 
@@ -131,15 +138,41 @@ fn hit(app: &PhotocraftApp, p: [f64; 2]) -> Option<[i8; 2]> {
     handles(r).into_iter().map(|(h, at)| (h, (at[0] - p[0]).hypot(at[1] - p[1]))).filter(|(_, d)| *d <= tol).min_by(|a, b| a.1.total_cmp(&b.1)).map(|(h, _)| h)
 }
 
-/// The scale cursor over a handle at document point `p`, or while one is dragged.
-pub fn cursor(app: &PhotocraftApp, p: [f64; 2]) -> Option<CursorIcon> {
-    let handle = app.ui.shape_box.as_ref().map(|d| d.handle).or_else(|| hit(app, p))?;
+/// The scale cursor over a handle at document point `p`, or while one is dragged, turned with the
+/// view (its rotation, flip and pixel aspect) as Free Transform's.
+pub fn cursor(app: &PhotocraftApp, xf: &ViewXform, p: [f64; 2]) -> Option<CursorIcon> {
+    let (handle, r) = match app.ui.shape_box.as_ref() {
+        Some(d) => (d.handle, d.rect),
+        None => (hit(app, p)?, selection(app)?.1),
+    };
+    let [x0, y0, x1, y1] = r;
+    let quad = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
     Some(match handle {
-        [1, 1] | [-1, -1] => CursorIcon::ResizeNwSe,
-        [1, -1] | [-1, 1] => CursorIcon::ResizeNeSw,
-        [_, 0] => CursorIcon::ResizeHorizontal,
-        _ => CursorIcon::ResizeVertical,
+        [-1, -1] => tool_cursor::corner_resize(&quad, 0, xf),
+        [1, -1] => tool_cursor::corner_resize(&quad, 1, xf),
+        [1, 1] => tool_cursor::corner_resize(&quad, 2, xf),
+        [-1, 1] => tool_cursor::corner_resize(&quad, 3, xf),
+        [_, 0] => tool_cursor::resize([1.0, 0.0], xf),
+        _ => tool_cursor::resize([0.0, 1.0], xf),
     })
+}
+
+/// Drop a handle drag without applying it (Esc, or its document or tool gone); the rest of the
+/// press, its moves and release, does nothing.
+pub fn cancel(app: &mut PhotocraftApp) {
+    if app.ui.shape_box.take().is_some() {
+        app.cancelled_vector_drag = true;
+    }
+}
+
+/// Cancel a handle drag whose tool, document or document revision is no longer the one it
+/// started on, or whose box is hidden now. Run every frame from `sync_views`.
+pub fn cancel_stale(app: &mut PhotocraftApp) {
+    let Some(d) = app.ui.shape_box.as_ref() else { return };
+    let current = app.session.active().is_some_and(|st| st.doc.id == d.doc && st.revision == d.revision);
+    if !current || !shows(app) {
+        cancel(app);
+    }
 }
 
 /// Canvas pointer events for the box; false when the event is not its.
@@ -151,7 +184,8 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool 
             }
             let Some(handle) = hit(app, [x, y]) else { return false };
             let Some((layers, rect)) = selection(app) else { return false };
-            app.ui.shape_box = Some(Drag { layers, rect, handle, start: [x, y], scale: [1.0, 1.0] });
+            let Some((doc, revision)) = app.session.active().map(|st| (st.doc.id, st.revision)) else { return false };
+            app.ui.shape_box = Some(Drag { doc, revision, layers, rect, handle, start: [x, y], scale: [1.0, 1.0] });
             // The press may have started the Move tool's snapping, which a box drag has none of.
             app.prefs_rt.snap = None;
             app.prefs_rt.snap_lines.clear();
@@ -164,6 +198,7 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool 
             true
         }
         ToolEvent::Up { x, y } => {
+            cancel_stale(app);
             if app.ui.shape_box.is_none() {
                 return false;
             }
@@ -216,8 +251,10 @@ pub fn draw(app: &PhotocraftApp, painter: &egui::Painter, to_scr: &dyn Fn([f64; 
             }
         }
     }
-    let (a, b) = (to_scr([shown[0], shown[1]]), to_scr([shown[2], shown[3]]));
-    painter.rect_stroke(egui::Rect::from_two_pos(a, b), 0.0, Stroke::new(1.0, accent), egui::StrokeKind::Middle);
+    // Through all four corners: under a rotated view two opposite ones don't span the box.
+    let [x0, y0, x1, y1] = shown;
+    let corners = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]].map(to_scr);
+    painter.add(egui::Shape::closed_line(corners.to_vec(), Stroke::new(1.0, accent)));
     for (_, at) in handles(shown) {
         let h = egui::Rect::from_center_size(to_scr(at), vec2(7.0, 7.0));
         painter.rect_filled(h, 0.0, Color32::WHITE);

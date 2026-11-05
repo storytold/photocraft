@@ -7,11 +7,27 @@ use photocraft_doc::LayerContent;
 use serde_json::json;
 
 use crate::PhotocraftApp;
-use crate::canvas::{ToolEvent, tool_event};
+use crate::canvas::{ToolEvent, ViewXform, tool_event};
 use crate::shape_bounds_box::scale_for;
 use crate::state::Tool;
 
 const NONE: Modifiers = Modifiers::NONE;
+
+/// A 1:1 view of the 1000 × 700 document, turned by `rotation` degrees.
+fn view(rotation: f32) -> ViewXform {
+    ViewXform {
+        rect: egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1000.0, 700.0)),
+        zoom: 1.0,
+        center: [500.0, 350.0],
+        flip: false,
+        rotation,
+        aspect: 1.0,
+    }
+}
+
+fn cursor(app: &PhotocraftApp, p: [f64; 2]) -> Option<egui::CursorIcon> {
+    crate::shape_bounds_box::cursor(app, &view(0.0), p)
+}
 
 /// A 1000 × 700 document with the two measured rectangles, both selected.
 fn app_with_two_shapes(tool: Tool) -> (PhotocraftApp, u64, u64) {
@@ -93,8 +109,8 @@ fn one_selected_shape_gets_the_box_and_other_tools_none() {
     // Photoshop shows the box for a single shape too: its corner handle scales that shape.
     let (mut app, a, b) = app_with_two_shapes(Tool::PathSelection);
     app.run("layer.select", json!({"layer": a})).unwrap();
-    assert_eq!(crate::shape_bounds_box::cursor(&app, [403.0, 301.0]), Some(egui::CursorIcon::ResizeNwSe));
-    assert!(crate::shape_bounds_box::cursor(&app, [723.0, 451.0]).is_none(), "the other shape's corner is not a handle");
+    assert_eq!(cursor(&app, [403.0, 301.0]), Some(egui::CursorIcon::ResizeNwSe));
+    assert!(cursor(&app, [723.0, 451.0]).is_none(), "the other shape's corner is not a handle");
     drag(&mut app, [403.0, 301.0], [303.0, 241.0]);
     let s = 1.0 + (-100.0 * 303.0 + -60.0 * 203.0) / (303.0f64 * 303.0 + 203.0 * 203.0);
     near(bounds(&app, a), [100.0, 98.0, 100.0 + 303.0 * s, 98.0 + 203.0 * s]);
@@ -103,16 +119,16 @@ fn one_selected_shape_gets_the_box_and_other_tools_none() {
 
     // Another tool has none.
     let (mut app, ..) = app_with_two_shapes(Tool::Move);
-    assert!(crate::shape_bounds_box::cursor(&app, [723.0, 451.0]).is_none());
+    assert!(cursor(&app, [723.0, 451.0]).is_none());
     app.ui.tool = Tool::Brush;
-    assert!(crate::shape_bounds_box::cursor(&app, [723.0, 451.0]).is_none());
+    assert!(cursor(&app, [723.0, 451.0]).is_none());
 }
 
 #[test]
 fn the_handles_show_their_scale_cursors() {
     use egui::CursorIcon::{ResizeHorizontal, ResizeNeSw, ResizeNwSe, ResizeVertical};
     let (app, ..) = app_with_two_shapes(Tool::PathSelection);
-    let at = |p: [f64; 2]| crate::shape_bounds_box::cursor(&app, p);
+    let at = |p: [f64; 2]| cursor(&app, p);
     assert_eq!(at([100.0, 98.0]), Some(ResizeNwSe));
     assert_eq!(at([723.0, 451.0]), Some(ResizeNwSe));
     assert_eq!(at([723.0, 98.0]), Some(ResizeNeSw));
@@ -155,4 +171,103 @@ fn scale_for_projects_a_corner_drag_onto_the_diagonal() {
     assert_eq!(scale_for(r, [1, 0], [-9000.0, 0.0]), [0.01, 1.0]);
     assert_eq!(scale_for(r, [1, 1], [f64::NAN, 0.0]), [1.0, 1.0]);
     assert_eq!(scale_for(r, [0, 0], [10.0, 10.0]), [1.0, 1.0]);
+}
+
+#[test]
+fn a_rotated_view_turns_the_handle_cursors() {
+    use egui::CursorIcon::{ResizeHorizontal, ResizeNeSw, ResizeNwSe, ResizeVertical};
+    let (app, ..) = app_with_two_shapes(Tool::PathSelection);
+    let at = |rotation: f32, p: [f64; 2]| crate::shape_bounds_box::cursor(&app, &view(rotation), p);
+    assert_eq!(at(0.0, [723.0, 451.0]), Some(ResizeNwSe));
+    // A quarter turn swaps the diagonals and the edge arrows.
+    assert_eq!(at(90.0, [723.0, 451.0]), Some(ResizeNeSw));
+    assert_eq!(at(90.0, [723.0, 98.0]), Some(ResizeNwSe));
+    assert_eq!(at(90.0, [723.0, 274.5]), Some(ResizeVertical));
+    assert_eq!(at(90.0, [411.5, 98.0]), Some(ResizeHorizontal));
+}
+
+#[test]
+fn hidden_paths_hide_the_box_and_its_handles_take_no_press() {
+    // View › Extras off, or View › Show › Target Path off.
+    for (extras, target_path) in [(false, true), (true, false)] {
+        let (mut app, a, b) = app_with_two_shapes(Tool::PathSelection);
+        app.ui.view.extras = extras;
+        app.ui.view.show.target_path = target_path;
+        assert!(cursor(&app, [723.0, 451.0]).is_none(), "extras {extras}");
+        tool_event(&mut app, ToolEvent::Down { x: 723.0, y: 451.0, pressure: 1.0 }, NONE);
+        assert!(app.ui.shape_box.is_none(), "extras {extras}: no scale drag starts");
+        tool_event(&mut app, ToolEvent::Up { x: 723.0, y: 451.0 }, NONE);
+        near(bounds(&app, a), [100.0, 98.0, 403.0, 301.0]);
+        near(bounds(&app, b), [420.0, 318.0, 723.0, 451.0]);
+    }
+}
+
+/// Press the bottom-right handle and drag it, without releasing.
+fn press_and_drag(app: &mut PhotocraftApp) {
+    tool_event(app, ToolEvent::Down { x: 723.0, y: 451.0, pressure: 1.0 }, NONE);
+    tool_event(app, ToolEvent::Move { x: 623.0, y: 391.0, pressure: 1.0 }, NONE);
+    assert!(app.ui.shape_box.is_some());
+}
+
+fn release_changes_nothing(app: &mut PhotocraftApp, a: u64, b: u64, steps: usize, why: &str) {
+    tool_event(app, ToolEvent::Up { x: 623.0, y: 391.0 }, NONE);
+    assert!(app.ui.shape_box.is_none(), "{why}");
+    near(bounds(app, a), [100.0, 98.0, 403.0, 301.0]);
+    near(bounds(app, b), [420.0, 318.0, 723.0, 451.0]);
+    assert_eq!(app.session.active().unwrap().history.past_len(), steps, "{why}: no history step");
+}
+
+#[test]
+fn escape_or_a_tool_change_cancels_a_handle_drag() {
+    // Esc.
+    let (mut app, a, b) = app_with_two_shapes(Tool::PathSelection);
+    let steps = app.session.active().unwrap().history.past_len();
+    press_and_drag(&mut app);
+    crate::shape_bounds_box::cancel(&mut app);
+    release_changes_nothing(&mut app, a, b, steps, "Esc");
+    // The next press works again.
+    drag(&mut app, [723.0, 451.0], [623.0, 391.0]);
+    near(bounds(&app, a), [100.0, 98.0, 354.0, 268.0]);
+
+    // Another tool, picked mid-drag.
+    let (mut app, a, b) = app_with_two_shapes(Tool::Rectangle);
+    let steps = app.session.active().unwrap().history.past_len();
+    press_and_drag(&mut app);
+    app.ui.tool = Tool::Brush;
+    app.sync_views();
+    assert!(app.ui.shape_box.is_none());
+    release_changes_nothing(&mut app, a, b, steps, "tool change");
+
+    // Even without a frame between the change and the release.
+    let (mut app, a, b) = app_with_two_shapes(Tool::Rectangle);
+    let steps = app.session.active().unwrap().history.past_len();
+    press_and_drag(&mut app);
+    app.ui.tool = Tool::Move;
+    release_changes_nothing(&mut app, a, b, steps, "tool change, same frame");
+}
+
+#[test]
+fn a_document_switch_or_an_undo_cancels_a_handle_drag() {
+    let (mut app, a, b) = app_with_two_shapes(Tool::PathSelection);
+    let steps = app.session.active().unwrap().history.past_len();
+    press_and_drag(&mut app);
+    app.run("file.new", json!({"width": 1000, "height": 700, "background": "white"})).unwrap();
+    app.sync_views();
+    assert!(app.ui.shape_box.is_none());
+    let other = app.session.active().unwrap().history.past_len();
+    tool_event(&mut app, ToolEvent::Up { x: 623.0, y: 391.0 }, NONE);
+    assert_eq!(app.session.active().unwrap().history.past_len(), other, "nothing lands in the other document");
+    assert!(app.session.set_active(0));
+    near(bounds(&app, a), [100.0, 98.0, 403.0, 301.0]);
+    near(bounds(&app, b), [420.0, 318.0, 723.0, 451.0]);
+    assert_eq!(app.session.active().unwrap().history.past_len(), steps);
+
+    // An edit under the drag (Undo here): the release applies nothing to the changed shapes.
+    let (mut app, ..) = app_with_two_shapes(Tool::PathSelection);
+    press_and_drag(&mut app);
+    app.run("edit.undo", json!({})).unwrap();
+    let steps = app.session.active().unwrap().history.past_len();
+    tool_event(&mut app, ToolEvent::Up { x: 623.0, y: 391.0 }, NONE);
+    assert!(app.ui.shape_box.is_none());
+    assert_eq!(app.session.active().unwrap().history.past_len(), steps);
 }
