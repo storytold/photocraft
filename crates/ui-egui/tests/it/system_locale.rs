@@ -25,6 +25,5 @@ fn native_first_launch_follows_os_ui_preferences() {
     assert_eq!(i18n::current(), expected, "native language preferences: {tags:?}");
     let (shown, _) = photocraft_ui_egui::menu_keys::localized(&[i18n::tr(expected, "File").to_string()], &["File"], &[Some('F')]);
     let title = shown.into_iter().next().unwrap_or_else(|| i18n::tr(expected, "File").to_string());
-    assert!(h.query_by_label(&title).is_some() || h.query_by_label_contains(i18n::tr(expected, "File")).is_some(), "the first-launch menu must use the OS UI language");
-
+    assert!(h.query_by_label(&title).is_some(), "the first-launch menu must use the OS UI language");
 }
