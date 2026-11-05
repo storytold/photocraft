@@ -986,7 +986,7 @@ fn batch_interrupt_dialog(app: &mut PhotocraftApp, ctx: &egui::Context, id: JobI
         ui.set_width(390.0);
         ui.label(RichText::new(tl!("Batch")).font(crate::theme::semibold(15.0)));
         ui.add_space(8.0);
-        ui.label(RichText::new(tl!("A command was cancelled or stopped during batch processing. Continue with the next file or stop?")).color(t.text_dim));
+        ui.label(RichText::new(tl!("A command was canceled or stopped during batch processing. Continue with the next file or stop?")).color(t.text_dim));
         ui.add_space(14.0);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if crate::widgets::primary_button(ui, tl!("Continue"), 96.0).clicked() {
