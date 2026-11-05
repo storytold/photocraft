@@ -335,3 +335,90 @@ fn advanced_blending_falls_back_to_the_cpu() {
     d.layers.push(Layer::group("g", vec![inner]));
     assert!(plan(&d).is_err(), "knockout inside a group");
 }
+
+/// Adjustments whose LUT rows the planner caches (#11498), with settings away from identity.
+fn row_cached_adjustments() -> Vec<Adjustment> {
+    use photocraft_doc::adjust::{CurvePoint, HueRange, LevelsChannel};
+    let ch = |g: f32| LevelsChannel { in_black: 0.05, in_white: 0.9, gamma: g, out_black: 0.02, out_white: 0.97 };
+    let mut ranges = HueRange::defaults();
+    ranges[1].hue = 20.0;
+    let pts = vec![CurvePoint { input: 0.0, output: 0.0 }, CurvePoint { input: 0.4, output: 0.55 }, CurvePoint { input: 1.0, output: 1.0 }];
+    vec![
+        Adjustment::Levels { master: ch(1.3), per_channel: [ch(0.8), ch(1.0), ch(1.6)], space: ToneSpace::Rgb, black: Default::default() },
+        Adjustment::Curves { master: pts.clone(), per_channel: [pts.clone(), vec![], pts], space: ToneSpace::Rgb, black: vec![], pencil: false },
+        Adjustment::HueSaturation { hue: 0.0, saturation: 10.0, lightness: 0.0, colorize: false, ranges },
+        Adjustment::ColorBalance { shadows: [10.0, 0.0, -5.0], midtones: [0.0, 5.0, 0.0], highlights: [0.0, 0.0, 10.0], preserve_luminosity: true },
+    ]
+}
+
+#[test]
+fn cached_adjustment_rows_match_freshly_built_tables() {
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        for a in row_cached_adjustments() {
+            let fresh: Vec<Vec<f32>> = match &a {
+                Adjustment::Levels { .. } | Adjustment::Curves { .. } => adjust::tone_luts_depth(&a, Some(depth)).into_iter().take(3).collect(),
+                Adjustment::HueSaturation { ranges, .. } => adjust::hue_range_tables(ranges).into_iter().collect(),
+                Adjustment::ColorBalance { shadows, midtones, highlights, preserve_luminosity } => {
+                    let curves = adjust::BalanceCurve::rgb([*shadows, *midtones, *highlights], *preserve_luminosity);
+                    (0..3).map(|ch| (0..4096).map(|k| curves[ch].eval(k as f32 / 4095.0)).collect()).collect()
+                }
+                _ => panic!("not a row-cached adjustment"),
+            };
+            // The first plan may fill the cache, the second reads it: both give the fresh rows.
+            for _ in 0..2 {
+                let (_, _, rows) = adjustment_program(&a, Transfer::Srgb, depth, ColorMode::Rgb);
+                let rows = rows.expect("LUT rows");
+                if matches!(a, Adjustment::Levels { .. }) && depth == SampleType::F32 {
+                    continue; // The analytic float Levels kernel takes coefficients, not tables.
+                }
+                assert_eq!(rows.len(), fresh.len(), "{} at {depth:?}", a.label());
+                for (row, f) in rows.iter().zip(&fresh) {
+                    assert!(row.iter().zip(f).all(|(x, y)| x.to_bits() == y.to_bits()), "{} at {depth:?}", a.label());
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn row_keys_cover_exactly_what_the_rows_are_built_from() {
+    use photocraft_doc::adjust::LevelsChannel;
+    let key = |a: &Adjustment, depth| lower::row_key(a, depth).expect("a row-cached adjustment");
+    let [levels, curves, hue_sat, balance] = <[Adjustment; 4]>::try_from(row_cached_adjustments()).expect("four adjustments");
+    // The same settings give the same key on every plan, so later plans read the stored rows.
+    for a in [&levels, &curves, &hue_sat, &balance] {
+        assert_eq!(key(a, SampleType::U8), key(&a.clone(), SampleType::U8), "{}", a.label());
+    }
+    // Levels and Curves round to the document's quantum, so their keys hold the depth.
+    assert_ne!(key(&levels, SampleType::U8), key(&levels, SampleType::U16));
+    assert_ne!(key(&curves, SampleType::U16), key(&curves, SampleType::F32));
+    // Hue/Saturation range tables and Color Balance curves don't depend on depth.
+    assert_eq!(key(&hue_sat, SampleType::U8), key(&hue_sat, SampleType::F32));
+    assert_eq!(key(&balance, SampleType::U8), key(&balance, SampleType::U16));
+    // Dragging the master Hue/Saturation sliders leaves the range tables (and their entry) alone.
+    let Adjustment::HueSaturation { ranges, .. } = &hue_sat else { panic!("Hue/Saturation") };
+    let master = Adjustment::HueSaturation { hue: 40.0, saturation: -30.0, lightness: 12.0, colorize: false, ranges: ranges.clone() };
+    assert_eq!(key(&hue_sat, SampleType::U8), key(&master, SampleType::U8));
+    let mut moved = ranges.clone();
+    moved[4].bounds[2] += 1.0;
+    let moved = Adjustment::HueSaturation { hue: 0.0, saturation: 10.0, lightness: 0.0, colorize: false, ranges: moved };
+    assert_ne!(key(&hue_sat, SampleType::U8), key(&moved, SampleType::U8));
+    // Values `==` can't tell apart still get their own rows.
+    let black = |out_black: f32| {
+        let ch = LevelsChannel { out_black, ..Default::default() };
+        Adjustment::Levels { master: ch.clone(), per_channel: [ch.clone(), ch.clone(), ch], space: ToneSpace::Rgb, black: Default::default() }
+    };
+    assert_ne!(key(&black(0.0), SampleType::U8), key(&black(-0.0), SampleType::U8));
+    // Every field the builders read changes the key.
+    let Adjustment::Curves { master, per_channel, black, .. } = &curves else { panic!("Curves") };
+    let pencil = Adjustment::Curves { master: master.clone(), per_channel: per_channel.clone(), space: ToneSpace::Rgb, black: black.clone(), pencil: true };
+    let lab = Adjustment::Curves { master: master.clone(), per_channel: per_channel.clone(), space: ToneSpace::Lab, black: black.clone(), pencil: false };
+    assert_ne!(key(&curves, SampleType::U8), key(&pencil, SampleType::U8));
+    assert_ne!(key(&curves, SampleType::U8), key(&lab, SampleType::U8));
+    let Adjustment::ColorBalance { shadows, midtones, highlights, .. } = balance.clone() else { panic!("Color Balance") };
+    let plain = Adjustment::ColorBalance { shadows, midtones, highlights, preserve_luminosity: false };
+    assert_ne!(key(&balance, SampleType::U8), key(&plain, SampleType::U8));
+    // Levels and Curves don't share keys with each other, and adjustments without rows have none.
+    assert_ne!(key(&Adjustment::identity_levels(), SampleType::U8), key(&Adjustment::identity_curves(), SampleType::U8));
+    assert_eq!(lower::row_key(&Adjustment::Vibrance { vibrance: 10.0, saturation: 0.0 }, SampleType::U8), None);
+}
