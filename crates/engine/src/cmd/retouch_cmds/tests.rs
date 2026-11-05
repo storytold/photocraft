@@ -1776,6 +1776,45 @@ fn live_dodge_matches_the_commit_across_cells() {
     assert!(worst <= 3e-4, "live and commit differ by {worst}");
 }
 
+#[test]
+fn dodge_out_of_memory_is_an_error_and_leaves_the_layer() {
+    // CodeRabbit on #11533: the stroke's tone cache grows with the area it touches.
+    let mut s = session(200, 90, 8, "rgb");
+    paint_layer(&mut s, texture);
+    let (before, history) = (layer_pixels(&s), s.active().unwrap().history.past_len());
+    let opts = json!({"points": [[10, 40], [180, 40]], "size": 40, "hardness": 100});
+    crate::allocation::fail_next_for_test();
+    let result = s.execute("paint.dodge", opts.clone());
+    let _ = crate::allocation::capacity::<u8>(0, "reset failpoint");
+    let err = result.expect_err("running out of memory is the stroke's error").to_string();
+    assert!(err.contains("Dodge or Burn stroke"), "{err}");
+    assert_eq!(layer_pixels(&s), before);
+    assert_eq!(s.active().unwrap().history.past_len(), history);
+    s.execute("paint.dodge", opts).unwrap();
+    assert_ne!(layer_pixels(&s), before, "the next stroke has its memory back");
+}
+
+#[test]
+fn live_burn_out_of_memory_is_an_error_and_keeps_the_preview() {
+    let mut s = session(200, 90, 8, "rgb");
+    paint_layer(&mut s, texture);
+    let opts = json!({"points": [[10, 40], [90, 40]], "size": 40, "hardness": 100});
+    crate::allocation::fail_next_for_test();
+    let begun = LiveDab::begin(&s, "paint.burn", &opts);
+    let _ = crate::allocation::capacity::<u8>(0, "reset failpoint");
+    assert!(begun.is_err_and(|e| e.to_string().contains("Dodge or Burn stroke")));
+
+    let mut live = LiveDab::begin(&s, "paint.burn", &opts).unwrap();
+    let shown = live.doc.clone();
+    crate::allocation::fail_next_for_test();
+    let pushed = live.push(&[StrokePoint::new(180.0, 40.0, 1.0)]);
+    let _ = crate::allocation::capacity::<u8>(0, "reset failpoint");
+    assert!(pushed.is_err_and(|e| e.to_string().contains("Dodge or Burn stroke")));
+    assert_eq!(live.doc, shown, "the failed batch isn't shown");
+    assert!(live.push(&[StrokePoint::new(100.0, 70.0, 1.0)]).is_err(), "a failed stroke stays failed");
+    assert!(s.offer_live_dab(live).is_err(), "and isn't committed with dabs missing");
+}
+
 /// The sequential-dab tools' options for the live hand-off tests.
 fn dab_cases() -> [(&'static str, Value); 6] {
     [
@@ -1913,7 +1952,7 @@ fn live_dab_batches_match_the_accumulating_renderer() {
                 p["flow"] = json!(63);
                 let (stroke, _) = parse_brush(&s, &p, cmd).unwrap();
                 let (tool, _) = DabTool::parse(&s, cmd, &p, &stroke).unwrap();
-                let mut effect = tool.effect(pre.format(), stroke.brush.spacing);
+                let (mut effect, _) = tool.effect(pre.format(), stroke.brush.spacing);
                 let mut reference = StrokeRenderer::new(&stroke.brush, None, 1.0).record_dabs();
                 // A fixed region containing all dabs plus their read neighbourhoods.
                 let orig = Region::read(&pre, Rect::new(-128, -128, 384, 256));

@@ -91,9 +91,11 @@ pub fn dodge_burn(c: [f32; 3], e: f32, range: ToneRange, burn: bool, protect_ton
     if protect_tones {
         let l = luma(c);
         let nl = tone_curve(l, e, range, burn);
-        // Widened around luma so a grey pixel still gets the local slope instead of 0 ÷ 0.
-        let lo = c[0].min(c[1]).min(c[2]).min(l - 1e-3);
-        let hi = c[0].max(c[1]).max(c[2]).max(l + 1e-3);
+        // Widened around luma so a grey pixel still gets the local slope instead of 0 ÷ 0. The
+        // widening stops at 0 and 1, where the curve bends: past them its slope belongs to no
+        // in-gamut tone, and averaging it in skewed near-black and near-white casts.
+        let lo = c[0].min(c[1]).min(c[2]).min((l - 1e-3).max(0.0));
+        let hi = c[0].max(c[1]).max(c[2]).max((l + 1e-3).min(1.0));
         let k = ((tone_curve(hi, e, range, burn) - tone_curve(lo, e, range, burn)) / (hi - lo)).max(0.0);
         compress_gamut([nl + (c[0] - l) * k, nl + (c[1] - l) * k, nl + (c[2] - l) * k], nl)
     } else {
@@ -359,6 +361,20 @@ mod tests {
                 let spread = |v: [f32; 3]| v[0].max(v[1]).max(v[2]) - v[0].min(v[1]).min(v[2]);
                 assert!(spread(p) <= spread(per_channel) * 1.1 + 1e-4, "{range:?} burn={burn}: {c:?} -> {p:?}, per channel {per_channel:?}");
                 assert!(spread(p) <= spread(c) * 2.0, "{range:?} burn={burn}: {c:?} -> {p:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn protect_tones_keeps_casts_by_white_and_black_faint() {
+        for c in [[1.0f32, 0.9993, 0.9993], [0.9995, 1.0, 0.9990], [0.0, 0.0007, 0.0007], [0.0005, 0.0, 0.0010]] {
+            for (range, burn) in CURVES {
+                for e in [0.3, 0.6, 1.0] {
+                    let p = dodge_burn(c, e, range, burn, true);
+                    let per_channel = dodge_burn(c, e, range, burn, false);
+                    let spread = |v: [f32; 3]| v[0].max(v[1]).max(v[2]) - v[0].min(v[1]).min(v[2]);
+                    assert!(spread(p) <= spread(per_channel) * 1.1 + 1e-5, "{range:?} burn={burn} e={e}: {c:?} -> {p:?}, per channel {per_channel:?}");
+                }
             }
         }
     }
