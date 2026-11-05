@@ -20,7 +20,15 @@ pub(crate) fn finish_gesture(app: &mut PhotocraftApp, d: Drag) {
     let (sx, sy) = snap_aliased_tip(app, d.tool, end[0], end[1]);
     end[0] = sx;
     end[1] = sy;
-    if let Some(floating) = d.sel_move {
+    // A Single Row / Single Column Marquee click inside the selection that never moved selects
+    // the line under the pointer, as a click elsewhere does, instead of deselecting (#11392).
+    let line_click = d.sel_move == Some(false)
+        && matches!(d.tool, Tool::SingleRowMarquee | Tool::SingleColumnMarquee)
+        && (end[0] - d.start[0]).round() == 0.0
+        && (end[1] - d.start[1]).round() == 0.0;
+    if let Some(floating) = d.sel_move
+        && !line_click
+    {
         finish_selection_drag(app, floating, d.start, [end[0], end[1]]);
         return;
     }

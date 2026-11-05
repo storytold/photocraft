@@ -901,6 +901,8 @@ mod stroke_timing_tests;
 
 #[cfg(test)]
 mod polygon_lasso_tests;
+#[cfg(test)]
+mod single_line_marquee_move_tests;
 
 #[cfg(test)]
 mod window_frame_tests;
