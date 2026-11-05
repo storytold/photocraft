@@ -2995,6 +2995,7 @@ fontWeight	Italic	Курсивний
 	Soft	М'який
 	Soften	Пом'якшити
 	Source: set	Джерело: задано
+	Source: {name}	Джерело: {name}
 	Spread	Поширення
 	Square, 12 x 12	Квадратна, 12 x 12
 	Square, 5 x 5	Квадратна, 5 x 5
@@ -3992,6 +3993,7 @@ curves	Smooth	Згладити
 	Sent to {printer}	Надіслано на {printer}
 	set in Print Settings…	задається в параметрах друку…
 	ICO is limited to 256 × 256 pixels	ICO обмежено розміром 256 × 256 пікселів
+	Memory usage percent	Використання пам’яті (%)
 	Show Favorite Fonts	Показати вибрані шрифти
 	No favorite fonts yet: click the star beside a font to add it.	Вибраних шрифтів ще немає: натисніть зірочку біля шрифту, щоб додати його.
 	Favorite fonts	Вибрані шрифти
@@ -4035,6 +4037,7 @@ curves	Smooth	Згладити
 	Automatically Check for Updates	Автоматично перевіряти оновлення
 	Paints from the History panel's source state	Малює з вихідного стану панелі «Історія»
 	Sets the source for the history brush	Задає джерело для пензля історії
+	The History Brush source was deleted: set a new source in the History panel	Джерело для пензля історії було видалено: задайте нове джерело на панелі «Історія»
 	Highlight Mode	Режим світлих тонів
 	Highlight Color	Колір світлих тонів
 	Highlight Opacity	Непрозорість світлих тонів
@@ -4054,6 +4057,7 @@ curves	Smooth	Згладити
 	Chisel Soft	М'яке різьблення
 	Open color-less EXR as ACEScg	Відкривати EXR без колірного профілю як ACEScg
 	Do not append "copy" to filename when saving a copy	Не додавати «copy» до імені файлу під час збереження копії
+	Save Full-Size Composite in .pcraft Files	Зберігати зведене зображення в повному розмірі у файлах .pcraft
 	Edit Selected Guides	Редагувати вибрані напрямні
 	Clear Selected Guides	Очистити вибрані напрямні
 	Bicubic Automatic	Бікубічна, автоматично
@@ -4106,6 +4110,7 @@ curves	Smooth	Згладити
 	This document's layers: {needed} of {budget} for layers	Шари цього документа: {needed} з {budget} для шарів
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Шарам цього документа потрібно {needed}, але займати вони можуть {budget}: увесь документ перемальовується на CPU
 	GPU Memory (MB, 0 = Automatic)	Пам'ять GPU (МБ, 0 = автоматично)
+	Scratch Size Limit (MB, 0 = No Limit)	Обмеження розміру робочого диска (МБ, 0 = без обмеження)
 	{path}: the path is not valid Unicode; save under another name.	{path}: шлях не є коректним Unicode; збережіть під іншою назвою.
 	Replace	Замінити
 	{name} was changed by another app after it was opened or saved here.	Файл {name} змінила інша програма після того, як його тут відкрили або зберегли.

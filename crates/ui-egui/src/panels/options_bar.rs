@@ -111,7 +111,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                     brush.mode = m;
                                 }
                             }
-                            if tool == Tool::CloneStamp {
+                            if matches!(tool, Tool::CloneStamp | Tool::HistoryBrush) {
                                 let width = if t.pro { 62.0 } else { 66.0 };
                                 percent_field(ui, tl!("Opacity"), &mut brush.opacity, 1.0..=100.0, width);
                                 percent_field(ui, tl!("Flow"), &mut brush.flow, 1.0..=100.0, width);
@@ -540,7 +540,7 @@ fn selection_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: 
                     crate::canvas::commit_crop(app);
                 }
                 if icons::button(ui, "ban", 26.0, false, tl!("Cancel current crop operation  (Esc)")).clicked() {
-                    crate::crop_ui::cancel(app);
+                    crate::crop_ui::dismiss(app);
                 }
             });
         }
