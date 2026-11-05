@@ -225,7 +225,7 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
                     if screen < CLICK_PX || r[2] <= r[0] || r[3] <= r[1] {
                         return true;
                     }
-                    app.run("layer.new.artboard", json!({"rect": xywh(r)}))
+                    app.run("layer.new.artboard", json!({"rect": xywh(r), "takeBackground": true}))
                 }
                 ArtboardDrag::Move { id, rect, .. } if r != rect => app.run("layer.artboard.set", json!({"layer": id.0, "x": r[0], "y": r[1]})),
                 // Resizing leaves the contents where they are, as in Photoshop.
