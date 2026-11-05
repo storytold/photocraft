@@ -45,6 +45,10 @@ pub struct Refresh {
     pub gpu: Option<photocraft_gpu::GpuTiming>,
     /// Why the wgpu compositor wasn't used.
     pub fallback: Option<CpuReason>,
+    /// The wgpu compositor was still being built in the background (see
+    /// [`GpuCanvas::warm_up`]): the CPU compositor drew this refresh, and the app redraws on the
+    /// GPU as soon as the build is done. Not a fault: `fallback` stays empty.
+    pub warming: bool,
 }
 
 /// How the app creates its wgpu device: egui's defaults clamped to the adapter's supported limits,

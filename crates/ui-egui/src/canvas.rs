@@ -148,6 +148,9 @@ pub struct CanvasCache {
     /// The CPU path's sharper textures of the part in view, over a reduced `texture` (#7568),
     /// by `InView::key` (two windows of a document can show different parts).
     pub detail: Vec<(u64, DetailTexture)>,
+    /// The background GPU-compositor build's generation this canvas was last drawn at: when it
+    /// changes, the compositor is ready and the document is redrawn on the GPU (#6419, #8733).
+    pub warm_gen: u64,
 }
 
 /// [`CanvasCache::detail`]: the part of the document `DetailPlan` chose, uploaded at its factor.
