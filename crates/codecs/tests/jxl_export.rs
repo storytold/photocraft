@@ -116,9 +116,29 @@ fn jpeg_xl_metadata_export_respects_embed_option() {
     input.meta.xmp = Some("<xmp>PhotoCraft</xmp>".into());
     let encoded = encode(&input, Format::Jxl, &EncodeOptions::default()).unwrap();
     assert!(encoded.starts_with(b"\0\0\0\x0cJXL \r\n\x87\n"));
-    assert!(encoded.windows(4).any(|w| w == b"Exif"));
-    assert!(encoded.windows(4).any(|w| w == b"xml "));
-    assert!(encoded.windows(4).any(|w| w == b"jxlc"));
+    // Read actual JXL container boxes, not just byte patterns that might
+    // also occur inside the codestream or a different box.
+    let mut pos = 12; // the fixed 12-byte JXL signature box
+    let mut exif_payload = None;
+    let mut xmp_payload = None;
+    let mut codestream_found = false;
+    while pos < encoded.len() {
+        let len = u32::from_be_bytes(encoded[pos..pos + 4].try_into().unwrap()) as usize;
+        assert!(len >= 8 && pos + len <= encoded.len(), "invalid JXL box length");
+        let name = &encoded[pos + 4..pos + 8];
+        let payload = &encoded[pos + 8..pos + len];
+        match name {
+            b"Exif" => exif_payload = Some(payload),
+            b"xml " => xmp_payload = Some(payload),
+            b"jxlc" => codestream_found = true,
+            _ => {}
+        }
+        pos += len;
+    }
+    assert_eq!(pos, encoded.len());
+    assert_eq!(exif_payload, Some([&[0u8; 4][..], input.meta.exif.as_deref().unwrap()].concat().as_slice()));
+    assert_eq!(xmp_payload, Some(input.meta.xmp.as_deref().unwrap().as_bytes()));
+    assert!(codestream_found);
 
     #[cfg(not(target_arch = "wasm32"))]
     {
