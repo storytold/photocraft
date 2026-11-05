@@ -22,6 +22,10 @@ use photocraft_doc::Document;
 
 use crate::{ExportResult, IoError};
 
+mod selection;
+mod shapes;
+mod text;
+
 /// The image placed on a page: 8-bit interleaved samples, 1 (gray), 3 (RGB) or 4 (CMYK,
 /// 1 = full ink), with the profile it was authored in if any.
 pub struct PrintImage {
@@ -75,7 +79,7 @@ pub struct PrintPage {
     pub xmp: Option<String>,
 }
 
-fn pdf_string(s: &str) -> String {
+pub(super) fn pdf_string(s: &str) -> String {
     let mut o = String::from("(");
     for c in s.chars() {
         match c {
@@ -172,8 +176,15 @@ fn image_object(width: u32, height: u32, colour_space: &str, data: &[u8]) -> Vec
 ///
 /// Objects: 1 catalog, 2 pages, 3 page, 4 contents, 5 font, then the image, its ICC profile,
 /// the overprint ExtGState, one image XObject per plate and the XMP metadata stream, each only
-/// when present.
+/// when present, and last the selection font's three objects.
 pub fn print_pdf(page: &PrintPage) -> Vec<u8> {
+    print_pdf_with_vectors(page, "", &selection::SelectionFont::default())
+}
+
+/// [`print_pdf`] with `vectors`, content-stream operators painted after the image and before the
+/// plates and marks (the top layers kept as paths and selectable text), and the selection font
+/// their text refers to as `/FSelect`.
+fn print_pdf_with_vectors(page: &PrintPage, vectors: &str, selection_font: &selection::SelectionFont) -> Vec<u8> {
     let mut out: Vec<u8> = b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n".to_vec();
     let mut offsets: Vec<usize> = Vec::new();
     let mut obj = |out: &mut Vec<u8>, body: &[u8]| {
@@ -196,6 +207,8 @@ pub fn print_pdf(page: &PrintPage) -> Vec<u8> {
     let gs_obj = take(!page.plates.is_empty());
     let plate_objs: Vec<usize> = page.plates.iter().filter_map(|_| take(true)).collect();
     let xmp_obj = take(page.xmp.is_some());
+    // The selection font (three objects) comes last, whatever is present before it.
+    let selection_base = next;
 
     let metadata = xmp_obj.map(|n| format!(" /Metadata {n} 0 R")).unwrap_or_default();
     obj(&mut out, format!("<< /Type /Catalog /Pages 2 0 R{metadata} >>").as_bytes());
@@ -211,7 +224,7 @@ pub fn print_pdf(page: &PrintPage) -> Vec<u8> {
     obj(
         &mut out,
         format!(
-            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {pw:.2} {ph:.2}] /Resources << /XObject << {xobjects}>> {ext_gstate}/Font << /F1 5 0 R >> >> /Contents 4 0 R >>"
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {pw:.2} {ph:.2}] /Resources << /XObject << {xobjects}>> {ext_gstate}/Font << /F1 5 0 R /FSelect {selection_base} 0 R >> >> /Contents 4 0 R >>"
         )
         .as_bytes(),
     );
@@ -220,6 +233,7 @@ pub fn print_pdf(page: &PrintPage) -> Vec<u8> {
     if image_obj.is_some() {
         content.push_str(&format!("q {w:.3} 0 0 {h:.3} {x:.3} {y:.3} cm /Im0 Do Q\n"));
     }
+    content.push_str(vectors);
     // Each plate overprints what is already on the page: with `/OP true` a Separation paints its
     // own colorant only, leaving the others (and the composite) as they are.
     for i in 0..page.plates.len() {
@@ -280,6 +294,9 @@ pub fn print_pdf(page: &PrintPage) -> Vec<u8> {
         let mut body = format!("<< /Type /Metadata /Subtype /XML /Length {} >>\nstream\n", xmp.len()).into_bytes();
         body.extend_from_slice(xmp.as_bytes());
         body.extend_from_slice(b"\nendstream");
+        obj(&mut out, &body);
+    }
+    for body in selection_font.objects(selection_base) {
         obj(&mut out, &body);
     }
     let xref = out.len();
@@ -450,14 +467,89 @@ fn plates_of(doc: &Document, w: usize, h: usize) -> Vec<SpotPlate> {
         .collect()
 }
 
+/// The vector operators for the contiguous visible top prefix of `doc`, top to bottom, with the
+/// indices of the layers they replace, and the selection font covering their text (plus, when a
+/// lower candidate is rejected during emission, that layer's unused characters).
+/// Hidden and blocked layers contribute no characters, so they cannot exhaust the font's codes.
+fn collect_vectors(doc: &Document) -> (Vec<(usize, String)>, selection::SelectionFont) {
+    enum Candidate<'a> {
+        Ops(String),
+        Text(text::PreparedText<'a>),
+    }
+    let mut candidates = Vec::new();
+    if doc.icc_profile.is_none() {
+        let mut repertoire = std::collections::BTreeSet::new();
+        for (index, layer) in doc.layers.iter().enumerate().rev() {
+            if !layer.visible {
+                continue;
+            }
+            if layer.blend != photocraft_color::BlendMode::Normal
+                || layer.opacity != 1.0
+                || layer.fill_opacity != 1.0
+                || layer.clipped
+                || layer.mask.is_some()
+                || layer.vector_mask.is_some()
+                || (layer.effects.enabled && !layer.effects.items.is_empty())
+                || layer.excluded_channels != 0
+                || layer.blend_if != Default::default()
+                || layer.advanced != Default::default()
+                || layer.video.is_some()
+            {
+                break;
+            }
+            let candidate = match &layer.content {
+                photocraft_doc::LayerContent::Shape(shape) => match shapes::shape_path(shape, doc.mode) {
+                    Some(ops) => Candidate::Ops(ops),
+                    None => break,
+                },
+                photocraft_doc::LayerContent::Text(text_layer) => {
+                    let Some(prepared) = text::prepare(text_layer, doc.mode, doc.resolution_dpi) else { break };
+                    for ch in text_layer.text.chars() {
+                        repertoire.insert(ch);
+                        if repertoire.len() > 255 {
+                            break;
+                        }
+                    }
+                    if repertoire.len() > 255 {
+                        break;
+                    }
+                    Candidate::Text(prepared)
+                }
+                _ => break,
+            };
+            candidates.push((index, candidate));
+        }
+    }
+    let selection_font = selection::SelectionFont::new(candidates.iter().filter_map(|(_, candidate)| match candidate {
+        Candidate::Text(prepared) => Some(prepared.text()),
+        Candidate::Ops(_) => None,
+    }));
+    let mut layers = Vec::with_capacity(candidates.len());
+    for (index, candidate) in candidates {
+        let ops = match candidate {
+            Candidate::Ops(ops) => ops,
+            Candidate::Text(prepared) => match text::ops(&prepared, doc.mode, &selection_font) {
+                Some(ops) => ops,
+                // Keep the successful upper vectors; this layer and everything below stay raster.
+                None => break,
+            },
+        };
+        layers.push((index, ops));
+    }
+    (layers, selection_font)
+}
+
 /// File › Save As / Save a Copy › PDF (#3401): the flattened document, at its print size
 /// (pixels ÷ resolution × 72 pt), as a one-page PDF. Layers and transparency are dropped — the
 /// warning says so — and the embedded profile travels with the image.
 ///
-/// With `spot_plates`, the document's spot channels follow the image as overprinting
-/// `/Separation` plates (FILE-215-17), and a Multichannel document, which is nothing but its
-/// channels, is written as plates alone. Without it a Multichannel document has nothing to
-/// write and is refused.
+/// The topmost simple shape and text layers stay vectors over the flattened rest, with
+/// selectable text ([`collect_vectors`]).
+///
+/// With `spot_plates`, the document's spot channels follow the image and those vectors as
+/// overprinting `/Separation` plates (FILE-215-17), and a Multichannel document, which is nothing
+/// but its channels, is written as plates alone. Without it a Multichannel document has nothing
+/// to write and is refused.
 pub fn export(doc: &Document, spot_plates: bool) -> std::result::Result<ExportResult, IoError> {
     export_with(doc, spot_plates, doc.metadata.xmp.as_deref())
 }
@@ -489,11 +581,22 @@ pub fn export_with(doc: &Document, spot_plates: bool, doc_xmp: Option<&str>) -> 
     let dpi = f64::from(doc.resolution_dpi.max(1.0));
     let (pw, ph) = (f64::from(doc.size.width) * 72.0 / dpi, f64::from(doc.size.height) * 72.0 / dpi);
     let mut warnings = Vec::new();
+    // Simple topmost shapes and text layers can be drawn over the flattened backdrop without changing
+    // compositing. Stop at the first unsupported visible layer, since it may depend on the
+    // backdrop (adjustments, blend modes, masks, effects, or clipping). A Multichannel document
+    // has no composite for them to sit on: it is its plates alone.
+    let (vector_layers, selection_font) = if device.is_some() { collect_vectors(doc) } else { (Vec::new(), selection::SelectionFont::default()) };
     let image = device.map(|device| {
         let fmt = doc.pixel_format();
         let n = fmt.channels().max(1);
         let canvas = photocraft_geom::Rect::new(0, 0, w as i32, h as i32);
-        let surface = photocraft_compose::flatten_to_surface(doc, PixelFormat::new(fmt.mode, fmt.sample, true), None);
+        let mut backdrop = doc.clone();
+        for (index, _) in &vector_layers {
+            if let Some(layer) = backdrop.layers.get_mut(*index) {
+                layer.visible = false;
+            }
+        }
+        let surface = photocraft_compose::flatten_to_surface(&backdrop, PixelFormat::new(fmt.mode, fmt.sample, true), None);
         let values = surface.read_region(canvas);
         let to8 = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
         // Straight alpha, composited here over paper: white in RGB/Gray (1 = full light), zero ink
@@ -526,7 +629,18 @@ pub fn export_with(doc: &Document, spot_plates: bool, doc_xmp: Option<&str>) -> 
     if !doc.metadata.text.is_empty() {
         warnings.push("free-form text metadata is not supported by PDF; it will be dropped".into());
     }
-    Ok(ExportResult { bytes: print_pdf(&page), warnings })
+    // The vector layers, bottom to top, in the document's pixel space (y down), over the image
+    // and under the plates.
+    let mut vectors = String::new();
+    if !vector_layers.is_empty() {
+        let scale = 72.0 / dpi;
+        vectors.push_str(&format!("q {scale} 0 0 -{scale} 0 {ph} cm\n"));
+        for (_, ops) in vector_layers.iter().rev() {
+            vectors.push_str(ops);
+        }
+        vectors.push_str("Q\n");
+    }
+    Ok(ExportResult { bytes: print_pdf_with_vectors(&page, &vectors, &selection_font), warnings })
 }
 
 #[cfg(test)]
