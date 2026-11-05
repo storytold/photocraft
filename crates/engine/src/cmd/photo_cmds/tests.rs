@@ -571,6 +571,18 @@ fn photomerge_refuses_an_oversized_file_before_reading_or_decoding_it() {
     assert!(!err.to_string().contains("image format"), "{err}");
 }
 
+/// A source that cannot be opened is a file error under a budget too, not a memory error.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn photomerge_reports_a_missing_file_as_a_file_error_under_a_budget() {
+    let cmd = "file.automate.photomerge";
+    let missing = temp_dir("missing-file").join("does-not-exist.png");
+    let err = load_sources(&Session::new(), &json!({"paths": [missing.to_string_lossy()]}), cmd, Some(1 << 30)).err().expect("a missing file must fail");
+    let message = err.to_string();
+    assert!(!message.contains("not enough memory"), "{message}");
+    assert!(message.contains("does-not-exist.png"), "{message}");
+}
+
 #[test]
 #[cfg(not(target_arch = "wasm32"))]
 fn photomerge_file_source_is_charged_beside_the_sources_already_loaded() {

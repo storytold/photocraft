@@ -173,8 +173,14 @@ impl SourceLoad {
             return Ok((name.clone(), import(&name, &bytes)?, bytes.len()));
         }
         let left = self.remaining(cmd)?;
-        let bytes = read_file_limited(path, u64::try_from(left).unwrap_or(u64::MAX))
-            .map_err(|e| crate::allocation::error(cmd, &format!("{e} (only {} is left of the budget for a source file's bytes)", bytes_text(left))))?;
+        let bytes = read_file_limited(path, u64::try_from(left).unwrap_or(u64::MAX)).map_err(|e| match e.kind() {
+            // Only a file over what is left, or one memory cannot hold, is a memory error; a
+            // missing or unreadable file is a file error, as without a budget.
+            std::io::ErrorKind::FileTooLarge | std::io::ErrorKind::OutOfMemory => {
+                crate::allocation::error(cmd, &format!("{e} (only {} is left of the budget for a source file's bytes)", bytes_text(left)))
+            }
+            _ => EngineError::Other(format!("{path}: {e}")),
+        })?;
         let available = left.saturating_sub(bytes.len());
         let opts = self.import_options(s, &name, &bytes, available, cmd)?;
         let doc = import_with_options(&name, &bytes, &opts).map_err(|e| match e {
