@@ -206,6 +206,13 @@ pub(super) mod linux {
             MembershipParse::Malformed => return CgroupLimits::Unreadable,
         };
         let mountinfo = std::fs::read_to_string(proc_root.join("self/mountinfo")).ok();
+        // A sandbox with no cgroup filesystem mounted and no `/sys/fs/cgroup` at all (Flatpak)
+        // shows the process its membership path but no interface files, so no limit is
+        // observable. Failing closed there reported 0 bytes free and refused every PSD on a
+        // machine with tens of GB. A present directory still takes the guarded path below.
+        if !sys_root.exists() && mountinfo.as_deref().is_some_and(|info| !has_cgroup_mount(info)) {
+            return CgroupLimits::NotConstrained;
+        }
 
         if let Some(path) = membership.v1_memory {
             let Some(dir) = resolve_dir(sys_root, mountinfo.as_deref(), path, "cgroup", Some("memory")) else {
@@ -334,6 +341,11 @@ pub(super) mod linux {
             }
         }
         best.map(|(_, _, dir)| dir)
+    }
+
+    /// Whether any cgroup (v1 or v2) filesystem is mounted in this mount namespace.
+    fn has_cgroup_mount(info: &str) -> bool {
+        parse_mountinfo(info).iter().any(|m| m.fstype == "cgroup" || m.fstype == "cgroup2")
     }
 
     /// Trims trailing slashes so `Path` equality holds while walking ancestors, keeping `/`.
@@ -931,6 +943,14 @@ mod tests {
         std::fs::remove_file(sys.join("cgroup.controllers")).unwrap();
         std::fs::remove_file(sys.join("cgroup.subtree_control")).unwrap();
         assert_eq!(linux::cgroup_limits(&proc, &sys), linux::CgroupLimits::Unreadable, "without metadata the absence of a constraint cannot be established");
+        std::fs::remove_dir_all(proc.parent().unwrap()).unwrap();
+
+        // No cgroup filesystem mounted (Flatpak): the limit is invisible, host memory applies.
+        let (proc, _) = fixture("no-cgroup-mount");
+        let sys = proc.parent().unwrap().join("absent-sys");
+        write(&proc.join("self/cgroup"), "0::/app.slice/app-flatpak.scope\n");
+        write(&proc.join("self/mountinfo"), "25 20 0:23 / /proc rw - proc proc rw\n");
+        assert_eq!(linux::cgroup_limits(&proc, &sys), linux::CgroupLimits::NotConstrained);
         std::fs::remove_dir_all(proc.parent().unwrap()).unwrap();
 
         // Available but not delegated anywhere on the path: no cgroup limit applies.
