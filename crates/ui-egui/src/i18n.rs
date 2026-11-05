@@ -42,7 +42,7 @@ pub struct LangInfo {
     /// [`LangInfo::text`].
     pub source: &'static [u8],
     /// Plural form index for a count (English: 0 = one, 1 = other; Japanese, Chinese and Hungarian: always 0;
-    /// Czech: 0 = one, 1 = few (2–4), 2 = other; Russian, Ukrainian and Bosnian: 0 = one (1, 21 …), 1 = few (2–4, 22–24 …), 2 = other; French: 0 = one (0 and 1), 1 = other). A catalog's `@plural` entries list one form per
+    /// Czech: 0 = one, 1 = few (2–4), 2 = other; Russian, Ukrainian and Bosnian: 0 = one (1, 21 …), 1 = few (2–4, 22–24 …), 2 = other; French and Hindi: 0 = one (0 and 1), 1 = other). A catalog's `@plural` entries list one form per
     /// index.
     pub plural: fn(u64) -> usize,
     /// Does the catalog cover every menu string? (`cargo xtask i18n-coverage` lists what it lacks)

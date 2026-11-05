@@ -13,8 +13,8 @@
 # Hindi computing and image-editing vocabulary. No proprietary localisation resource, string
 # table or product UI was consulted or copied; add entries the same way. Product and technology
 # names (PhotoCraft, ArtCraft, OpenType, RGB, CMYK, Lab, PSD, PNG, JPEG, WebP, OpenEXR, AVIF …)
-# stay as they are; the trailing "…" of dialog commands is kept. Plural rule: one / other
-# (`plural_one_other` in i18n/mod.rs).
+# stay as they are; the trailing "…" of dialog commands is kept. Plural rule: 0 and 1 take the
+# singular, 2+ the plural (`plural_fr` in i18n.rs); @plural rows list one|other.
 
 # Top-level Menus
 
