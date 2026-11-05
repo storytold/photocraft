@@ -38,6 +38,8 @@ const CUSTOM: &str = "custom";
 /// New Guide's colour when nothing was remembered, as in Photoshop.
 const DEFAULT_COLOR: &str = "cyan";
 const UNIT: &str = "__unit";
+/// Exact pixels behind an unedited ruler readout, also retained across unit changes.
+const EXACT_POSITION: &str = "__exactPosition";
 
 const UNITS: [(Unit, &str); 7] = [
     (Unit::Pixels, "Pixels"),
@@ -90,6 +92,16 @@ fn ruler_unit(app: &PhotocraftApp) -> Unit {
 
 fn selected_unit(app: &PhotocraftApp, f: &Map<String, Value>) -> Unit {
     f.get(UNIT).and_then(Value::as_str).and_then(Unit::from_suffix).unwrap_or_else(|| ruler_unit(app))
+}
+
+/// Only a text edit releases the exact position. Turning the guide still uses the usual
+/// orientation-dependent interpretation of its displayed text (notably for percent).
+fn exact_position(f: &Map<String, Value>, position: &str, orientation: &str) -> Option<f64> {
+    let saved = f.get(EXACT_POSITION)?;
+    if saved.get("text")?.as_str()? != position || f.get(EDIT)?.get("orientation")?.as_str()? != orientation {
+        return None;
+    }
+    saved.get("pixels")?.as_f64().filter(|px| px.is_finite())
 }
 
 /// Keep subpixel positions when switching units: ruler readout rounding would move the guide.
@@ -178,7 +190,9 @@ pub fn open_edit(app: &mut PhotocraftApp) -> Result<u64, String> {
     f.insert("__label".into(), json!("Edit Selected Guides"));
     f.insert(EDIT.into(), json!({"orientation": orientation, "index": index}));
     f.insert("orientation".into(), json!(orientation));
-    f.insert("position".into(), json!(in_ruler_unit(app, px, vertical)));
+    let position = in_ruler_unit(app, px, vertical);
+    f.insert("position".into(), json!(position));
+    f.insert(EXACT_POSITION.into(), json!({"text": position, "pixels": px}));
     f.insert(UNIT.into(), json!(ruler_unit(app).suffix()));
     f.insert(INITIAL_COLOR.into(), json!(if color == CUSTOM { custom.clone() } else { color.clone() }));
     f.insert("color".into(), json!(color));
@@ -217,14 +231,28 @@ pub fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) 
             if response.gained_focus() {
                 crate::field_tab::select_all(ui.ctx(), response.id, &position);
             }
+            if f.contains_key(EDIT)
+                && (response.changed()
+                    || f.get(EXACT_POSITION).and_then(|saved| saved.get("text")).and_then(Value::as_str).is_some_and(|text| text != position))
+            {
+                f.remove(EXACT_POSITION);
+                f.insert("__positionEdited".into(), json!(true));
+            }
             if let Some((_, Some(typed_unit))) = Unit::parse_length(&position) {
                 unit = typed_unit;
             }
             let previous = unit;
-            if crate::widgets::dropdown(ui, "new-guide-unit", tl!("Units"), &mut unit, &UNITS, 110.0)
-                && let Some(converted) = convert_position(app, &position, previous, unit, orientation == "vertical")
-            {
-                position = converted;
+            if crate::widgets::dropdown(ui, "new-guide-unit", tl!("Units"), &mut unit, &UNITS, 110.0) {
+                let exact = exact_position(f, &position, &orientation);
+                let source = exact.map(|px| with_unit(&px.to_string(), Unit::Pixels));
+                if let Some(converted) = convert_position(app, source.as_deref().unwrap_or(&position), previous, unit, orientation == "vertical") {
+                    if exact.is_some()
+                        && let Some(saved) = f.get_mut(EXACT_POSITION).and_then(Value::as_object_mut)
+                    {
+                        saved.insert("text".into(), json!(converted));
+                    }
+                    position = converted;
+                }
             }
         });
         ui.end_row();
@@ -253,14 +281,18 @@ pub fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) 
 }
 
 /// The command's parameters: a bare number gets the selected unit; anything else goes as typed, for
-/// the engine to read (or refuse, keeping the dialog open). Custom… sends its "#rrggbb".
+/// the engine to read (or refuse, keeping the dialog open). An unedited guide keeps its exact
+/// pixels behind the readout. Custom… sends its "#rrggbb".
 pub fn params(app: &PhotocraftApp, f: &Map<String, Value>) -> Value {
     let orientation = f.get("orientation").and_then(Value::as_str).unwrap_or("horizontal");
-    let typed = f.get("position").and_then(Value::as_str).unwrap_or_default().trim();
+    let raw = f.get("position").and_then(Value::as_str).unwrap_or_default();
+    let typed = raw.trim();
     let position = match Unit::parse_length(typed) {
         Some((_, None)) => with_unit(typed, selected_unit(app, f)),
         _ => typed.to_string(),
     };
+    // Sending the retained pixels also avoids a round-trip conversion consuming Redo on OK.
+    let position = exact_position(f, raw, orientation).map_or_else(|| json!(position), |px| json!(px));
     let color = f.get("color").and_then(Value::as_str).filter(|c| is_color_name(c)).unwrap_or(DEFAULT_COLOR);
     let color = if color == CUSTOM { custom_color(f) } else { color.to_string() };
     match f.get(EDIT) {
