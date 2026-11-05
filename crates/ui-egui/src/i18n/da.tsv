@@ -3199,6 +3199,8 @@ curves	Smooth	Udjævn
 	Step {step} is waiting for its dialog	Trin {step} venter på sin dialog
 @plural	{n} action|{n} actions	{n} handling|{n} handlinger
 	Background (Default)	Baggrund (standard)
+	Background (default)	Baggrund (standard)
+	Transparent (default)	Gennemsigtig (standard)
 	Content-Aware Fill	Indholdsbevidst udfyldning
 # Batch / Image Processor
 	Include All Subfolders	Medtag alle undermapper
@@ -3361,6 +3363,7 @@ curves	Smooth	Udjævn
 	This document's layers: {needed} of {budget} for layers	Dette dokuments lag: {needed} af {budget} til lag
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Dette dokuments lag kræver {needed}, men kan rumme {budget}: gentegninger af hele dokumentet bruger CPU'en
 	GPU Memory (MB, 0 = Automatic)	GPU-hukommelse (MB, 0 = automatisk)
+	Scratch Size Limit (MB, 0 = No Limit)	Størrelsesgrænse for arbejdsdisk (MB, 0 = ingen grænse)
 	{path}: the path is not valid Unicode; save under another name.	{path}: stien er ikke gyldig Unicode; gem under et andet navn.
 	Replace	Erstat
 	{name} was changed by another app after it was opened or saved here.	{name} blev ændret af et andet program, efter at den blev åbnet eller gemt her.
@@ -4772,3 +4775,15 @@ cameraRaw	White Balance: As Shot	Hvidbalance: Som fotograferet
 	The path was discarded	Stien blev kasseret
 	The path was kept as the Work Path	Stien blev bevaret som arbejdssti
 	Edit Brush…	Rediger pensel…
+
+# Action Stop message (#8386)
+	Message	Meddelelse
+# Playback Options (#5212)
+	Playback Options…	Afspilningsindstillinger…
+	Playback Options	Afspilningsindstillinger
+	Accelerated	Accelereret
+	Step by Step	Trin for trin
+	Pause For:	Pause i:
+	Pause For	Pause i
+	seconds	sekunder
+	Create a single history state	Opret én historiktilstand

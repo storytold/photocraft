@@ -3200,6 +3200,8 @@ curves	Smooth	Tasoita
 	Step {step} is waiting for its dialog	Vaihe {step} odottaa valintaikkunaansa
 @plural	{n} action|{n} actions	{n} toiminto|{n} toimintoa
 	Background (Default)	Tausta (oletus)
+	Background (default)	Tausta (oletus)
+	Transparent (default)	Läpinäkyvä (oletus)
 	Content-Aware Fill	Sisältötietoinen täyttö
 # Batch / Image Processor
 	Include All Subfolders	Sisällytä kaikki alikansiot
@@ -3362,6 +3364,7 @@ curves	Smooth	Tasoita
 	This document's layers: {needed} of {budget} for layers	Tämän asiakirjan tasot: {needed} / {budget} tasoille
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Tämän asiakirjan tasot tarvitsevat {needed}, mutta saavat käyttää {budget}: koko asiakirjan uudelleenpiirrot käyttävät suoritinta
 	GPU Memory (MB, 0 = Automatic)	GPU-muisti (Mt, 0 = automaattinen)
+	Scratch Size Limit (MB, 0 = No Limit)	Työlevyn kokoraja (Mt, 0 = ei rajaa)
 	{path}: the path is not valid Unicode; save under another name.	{path}: polku ei ole kelvollista Unicodea; tallenna toisella nimellä.
 	Replace	Korvaa
 	{name} was changed by another app after it was opened or saved here.	Toinen ohjelma on muuttanut tiedostoa {name} sen jälkeen, kun se avattiin tai tallennettiin täällä.
@@ -4773,3 +4776,15 @@ cameraRaw	White Balance: As Shot	Valkotasapaino: kuvauksen mukainen
 	The path was discarded	Polku hylättiin
 	The path was kept as the Work Path	Polku säilytettiin työpolkuna
 	Edit Brush…	Muokkaa sivellintä…
+
+# Action Stop message (#8386)
+	Message	Viesti
+# Playback Options (#5212)
+	Playback Options…	Toistoasetukset…
+	Playback Options	Toistoasetukset
+	Accelerated	Kiihdytetty
+	Step by Step	Vaihe kerrallaan
+	Pause For:	Tauko:
+	Pause For	Tauko
+	seconds	sekuntia
+	Create a single history state	Luo yksi historiatila
