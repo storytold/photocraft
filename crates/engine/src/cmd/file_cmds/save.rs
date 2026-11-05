@@ -29,6 +29,8 @@ pub(crate) struct SaveOpts {
     /// TIFF: Save Transparency (`"tiffTransparency": bool`); unset, the transparency is kept
     /// unless the document has alpha or spot channels ([`photocraft_io::ExportOptions::tiff_transparency`]).
     pub tiff_transparency: Option<bool>,
+    /// Protect RGB Targa24 alpha and flat-TIFF transparency for Save and Close; not a user option.
+    pub preserve_alpha: bool,
     /// TIFF: Save Image Pyramid (`"tiffPyramid": bool`); unset, off.
     pub tiff_pyramid: bool,
     /// DDS: the compression and whether to write the mip chain (`"ddsCompression"`,
@@ -58,6 +60,7 @@ impl Default for SaveOpts {
             dpx_bits: None,
             tiff_compression: None,
             tiff_transparency: None,
+            preserve_alpha: false,
             tiff_pyramid: false,
             dds: photocraft_io::DdsOptions::default(),
             pdf_spot_plates: true,
@@ -85,6 +88,7 @@ impl SaveOpts {
             dpx_bits: dpx_bits_param(p, cmd)?,
             tiff_compression: tiff_compression_param(p, cmd)?,
             tiff_transparency: tiff_bool_param(p, "tiffTransparency", cmd)?,
+            preserve_alpha: false,
             tiff_pyramid: tiff_bool_param(p, "tiffPyramid", cmd)?.unwrap_or(false),
             dds: dds_param(p, cmd)?.unwrap_or_default(),
             pdf_spot_plates: pdf_spot_plates_param(p, cmd)?,
@@ -230,6 +234,7 @@ pub(crate) fn encode(doc: &Document, path: &str, save: impl Into<SaveOpts>) -> R
     let mut opts = photocraft_io::ExportOptions {
         tiff_layers: save.tiff_layers,
         tiff_transparency: save.tiff_transparency,
+        preserve_alpha: save.preserve_alpha,
         tga_bits: save.tga_bits,
         pdf_spot_plates: save.pdf_spot_plates,
         image_previews: save.image_previews,
