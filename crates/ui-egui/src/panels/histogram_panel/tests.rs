@@ -459,13 +459,15 @@ fn a_result_computed_before_a_selection_change_is_not_cached() {
     app.run("select.rect", json!({"x": 0, "y": 0, "width": 8, "height": 8})).unwrap();
     // A worker still holding the pre-selection result lands: the panel must reject it.
     let (tx, rx) = std::sync::mpsc::channel();
-    let _ = tx.send((before.key, 1.0, before.hist.clone()));
+    let stale = Arc::new((*before.hist).clone());
+    let _ = tx.send((before.key, 1.0, stale.clone()));
     app.hist_job = Some((before.key, rx));
     let ctx = egui::Context::default();
     update(&mut app, &ctx);
     assert!(app.hist_job.is_none(), "the stale job was consumed, not kept");
     let after = app.doc_hist.clone().expect("the previous entry stands");
     assert_eq!(after.key.revision, before.key.revision, "the stale result was not cached over it");
+    assert!(!Arc::ptr_eq(&after.hist, &stale), "the stale result was not accepted");
     assert!(Arc::ptr_eq(&after.hist, &before.hist), "the previous histogram still stands");
 }
 
@@ -479,14 +481,15 @@ fn a_result_one_revision_behind_still_lands() {
     let before = app.doc_hist.clone().expect("landed");
     app.run("edit.fill", json!({"color": "#000000"})).unwrap(); // a newer revision exists
     let (tx, rx) = std::sync::mpsc::channel();
-    let _ = tx.send((before.key, 1.0, before.hist.clone()));
+    let newer = Arc::new((*before.hist).clone());
+    let _ = tx.send((before.key, 1.0, newer.clone()));
     app.hist_job = Some((before.key, rx));
     let ctx = egui::Context::default();
     update(&mut app, &ctx);
     assert!(app.hist_job.is_none(), "the job was consumed");
     let landed = app.doc_hist.clone().expect("the one-revision-old result lands");
     assert_eq!(landed.key.revision, before.key.revision, "landed as computed");
-    assert!(Arc::ptr_eq(&landed.hist, &before.hist));
+    assert!(Arc::ptr_eq(&landed.hist, &newer));
     assert_eq!(inspect(&app)["current"], false, "still marked stale for the newer revision");
 }
 
@@ -530,6 +533,8 @@ fn the_panel_reports_the_selection_size_over_transparent_pixels() {
     app.run("select.rect", json!({"x": 0, "y": 0, "width": 16, "height": 32})).unwrap();
     settle(&mut app);
     assert_eq!(inspect_stats(&app)["pixels"], 16 * 32, "the transparent selected pixels still count");
+    app.ui.histogram_panel.view = HistView::Expanded;
+    frame(&mut app);
 }
 
 /// The tone editors' histogram shows the adjustment's whole input (Photoshop's dialogs are not

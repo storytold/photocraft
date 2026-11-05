@@ -741,16 +741,18 @@ fn outline(p: &egui::Painter, r: Rect, h: &[u32; 256], color: Color32) {
 /// The statistics grid: Mean, Std Dev, Median, Pixels | Level, Count, Percentile, Cache Level.
 fn statistics(ui: &mut egui::Ui, h: &Histograms, mode: ColorMode, channel: HistChannel, levels: Option<[u8; 2]>, t: &Tokens) {
     let ch = if channel == HistChannel::Colors { HistChannel::Composite } else { channel };
-    let Some(s) = stats(bins(h, mode, ch), levels, h.pixel_count) else { return };
+    let histogram = bins(h, mode, ch);
+    let Some(s) = stats(histogram, levels, h.pixel_count) else { return };
+    let no_visible_samples = histogram.iter().all(|&v| v == 0);
     let level = match s.level {
         Some([a, b]) if a == b => a.to_string(),
         Some([a, b]) => format!("{a}..{b}"),
         None => String::new(),
     };
     let rows = [
-        (tl!("Mean:"), format!("{:.2}", s.mean), tl!("Level:"), level),
-        (tl!("Std Dev:"), format!("{:.2}", s.std_dev), tl!("Count:"), s.count.map(|c| c.to_string()).unwrap_or_default()),
-        (tl!("Median:"), s.median.to_string(), tl!("Percentile:"), s.percentile.map(|p| format!("{p:.2}")).unwrap_or_default()),
+        (tl!("Mean:"), if no_visible_samples { "--".into() } else { format!("{:.2}", s.mean) }, tl!("Level:"), level),
+        (tl!("Std Dev:"), if no_visible_samples { "--".into() } else { format!("{:.2}", s.std_dev) }, tl!("Count:"), s.count.map(|c| c.to_string()).unwrap_or_default()),
+        (tl!("Median:"), if no_visible_samples { "--".into() } else { s.median.to_string() }, tl!("Percentile:"), s.percentile.filter(|_| !no_visible_samples).map(|p| format!("{p:.2}")).unwrap_or_default()),
         (tl!("Pixels:"), s.pixels.to_string(), tl!("Cache Level:"), h.level.max(1).to_string()),
     ];
     let mono = crate::theme::mono(11.5);
