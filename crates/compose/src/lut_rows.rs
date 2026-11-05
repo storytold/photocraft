@@ -114,10 +114,12 @@ mod tests {
     fn a_known_key_is_served_without_building() {
         let cache = Mutex::new(RowCache::new(4));
         let builds = Cell::new(0);
-        let get = |key: u64, v: f32| cached_in(&cache, key, || {
-            builds.set(builds.get() + 1);
-            rows(v)
-        });
+        let get = |key: u64, v: f32| {
+            cached_in(&cache, key, || {
+                builds.set(builds.get() + 1);
+                rows(v)
+            })
+        };
         assert_eq!(get(1, 0.25)[2][7], 0.25);
         assert_eq!(get(1, 0.75)[2][7], 0.25, "the stored rows, not a rebuild");
         assert_eq!(builds.get(), 1);
@@ -129,10 +131,12 @@ mod tests {
     fn the_least_recently_used_entry_is_dropped_first() {
         let cache = Mutex::new(RowCache::new(CAPACITY));
         let builds = Cell::new(0);
-        let get = |key: u64| cached_in(&cache, key, || {
-            builds.set(builds.get() + 1);
-            rows(0.0)
-        });
+        let get = |key: u64| {
+            cached_in(&cache, key, || {
+                builds.set(builds.get() + 1);
+                rows(0.0)
+            })
+        };
         // A slider drag through many states keeps only the most recent ones.
         for key in 0..200 {
             get(key);
