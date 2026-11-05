@@ -620,6 +620,9 @@ fn handle_modal_canvas_keys(app: &mut PhotocraftApp, ctx: &egui::Context, focus:
     if focus == Focus::None && crate::perspective_crop_ui::keys(app, ctx) {
         return true;
     }
+    if focus == Focus::None && crate::frame_tool::keys(app, ctx) {
+        return true;
+    }
     // A live gradient on a layer mask: ↩ paints it into the mask, Esc drops it (#10703).
     if focus == Focus::None && crate::gradient_ui::mask::keys(app, ctx) {
         return true;
@@ -792,6 +795,10 @@ fn handle_registry_and_tool_keys(app: &mut PhotocraftApp, ctx: &egui::Context, f
             return true;
         }
     }
+    if app.ui.frame_tool.drag.is_some() && pressed(Key::Escape) {
+        crate::frame_tool::cancel(app);
+        return true;
+    }
     // Enter / Escape commit or cancel in-progress tool state (polygonal lasso, crop).
     if crate::lasso_ui::active(app) {
         let mods = ctx.input(|i| i.modifiers);
@@ -823,7 +830,7 @@ fn handle_registry_and_tool_keys(app: &mut PhotocraftApp, ctx: &egui::Context, f
             app.ui.polygon.clear();
             app.ui.polygon_mode.clear();
             app.ui.polygon_doc = None;
-            crate::crop_ui::cancel(app);
+            crate::crop_ui::dismiss(app);
             return true;
         }
     }
