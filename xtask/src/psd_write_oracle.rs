@@ -157,6 +157,7 @@ fn target<'a>(doc: &'a Value, wanted: &Target) -> Result<&'a Value, String> {
 
 fn verify(checks: &[Check], before: &Value, after: &Value) -> Vec<Value> {
     let mut results = Vec::new();
+    let layer = after.get("name").or_else(|| before.get("name"));
     for check in checks {
         let (path, op, expected) = match check {
             Check::ChangedTo { path, value } => (path, "changed_to", Some(value)),
@@ -170,7 +171,9 @@ fn verify(checks: &[Check], before: &Value, after: &Value) -> Vec<Value> {
             Check::Equals { value, .. } => new == Some(value),
             Check::Unchanged { .. } => old.is_some() && old == new,
         };
-        results.push(json!({"path": path, "op": op, "expected": expected, "before": old, "after": new, "status": if pass { "pass" } else { "fail" }}));
+        results.push(
+            json!({"layer": layer, "path": path, "op": op, "expected": expected, "before": old, "after": new, "status": if pass { "pass" } else { "fail" }}),
+        );
     }
     results
 }
@@ -315,6 +318,48 @@ mod tests {
         assert_eq!(verify(&checks, &before, &before)[0]["status"], "fail");
         let missing = [Check::Unchanged { path: "/missing".into() }];
         assert_eq!(verify(&missing, &before, &after)[0]["status"], "fail");
+    }
+
+    #[test]
+    fn every_failed_check_is_reported_with_layer_name_and_property() {
+        let before = json!({"name":"Title","text":{"tracking":0,"value":"a"}});
+        let after = json!({"name":"Title","text":{"tracking":0,"value":"b"}});
+        let checks = [
+            Check::ChangedTo { path: "/text/tracking".into(), value: json!(30) },
+            Check::Unchanged { path: "/text/value".into() },
+            Check::Equals { path: "/text/value".into(), value: json!("c") },
+        ];
+        let results = verify(&checks, &before, &after);
+        assert_eq!(results.len(), 3);
+        assert!(results.iter().all(|r| r["status"] == "fail" && r["layer"] == "Title"));
+        assert_eq!(results[0]["path"], "/text/tracking");
+        assert_eq!(results[1]["path"], "/text/value");
+    }
+
+    #[test]
+    fn wrong_layer_count_and_unsupported_version_are_errors() {
+        let selector = Target { kind: "Text".into(), name: None };
+        let none = json!({"layers":[{"kind":"Raster"}]});
+        assert!(target(&none, &selector).unwrap_err().contains("matched 0 layers"));
+        let two = json!({"layers":[{"kind":"Text"},{"kind":"Text"}]});
+        assert!(target(&two, &selector).unwrap_err().contains("matched 2 layers"));
+        let recipe = json!({"version":2,"corpus_revision":"pin","cases":[{"id":"x","base":"x.psd","base_sha256":"a".repeat(64),"target":{"kind":"Type"},"checks":[{"op":"unchanged","path":"/name"}]}]});
+        assert!(validate(&serde_json::from_value(recipe).unwrap()).unwrap_err().contains("version 1"));
+    }
+
+    #[test]
+    fn unknown_keys_are_rejected_in_every_object() {
+        let case = |extra: Value| {
+            let mut c = json!({"id":"x","base":"x.psd","base_sha256":"a".repeat(64),"target":{"kind":"Type"},"checks":[{"op":"unchanged","path":"/name"}]});
+            c.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            json!({"version":1,"corpus_revision":"pin","cases":[c]})
+        };
+        assert!(serde_json::from_value::<Recipes>(case(json!({"target":{"kind":"Type","nmae":"x"}}))).is_err());
+        assert!(serde_json::from_value::<Recipes>(case(json!({"checks":[{"op":"unchanged","path":"/name","extra":1}]}))).is_err());
+        assert!(serde_json::from_value::<Recipes>(case(json!({"commands":[{"command":"type.x","parms":{}}]}))).is_err());
+        let mut top = case(json!({}));
+        top["extra"] = json!(1);
+        assert!(serde_json::from_value::<Recipes>(top).is_err());
     }
 
     #[test]
