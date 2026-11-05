@@ -750,6 +750,7 @@ fn save_for_web_matte_caches_a_middle_click_paste_that_arrives_with_focus() {
     assert_eq!(matte(&h), json!("#ffffff"), "a partial value must not reach the settings");
 }
 
+/// Resizing Save for Web grows its preview, which still accepts zoom and pan gestures.
 #[test]
 fn web_preview_grows_with_resize_and_accepts_zoom_and_pan() {
     let (mut app, _) = app();

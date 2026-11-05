@@ -156,6 +156,7 @@ fn dragging_a_dialog_title_does_not_pan_the_canvas() {
     assert!(click.is_none(), "and the drag is not a canvas tool drag: {click:?}");
 }
 
+/// The Color Picker keeps its body and action column aligned with the shared frame insets.
 #[test]
 fn color_picker_has_inset_content_and_actions_at_the_right_edge() {
     use egui_kittest::{Harness, kittest::Queryable};
@@ -219,6 +220,7 @@ fn layer_style_title_gutters_can_start_drags() {
     }
 }
 
+/// Translated Layer Style titles and action labels retain the frame's horizontal insets.
 #[test]
 fn translated_layer_style_aligns_header_and_actions_with_the_frame() {
     use egui_kittest::{Harness, kittest::Queryable};
@@ -648,6 +650,7 @@ fn fit_image_is_as_narrow_as_its_content() {
     }
 }
 
+/// German labels fit the Color Picker's action column and its translated header.
 #[test]
 fn german_color_picker_fits_its_actions_and_translates_the_title() {
     use egui_kittest::{Harness, kittest::Queryable};

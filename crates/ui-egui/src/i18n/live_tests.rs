@@ -141,6 +141,7 @@ fn fill_dialog_draws_in_the_selected_language() {
     });
 }
 
+/// File Info translates the camera-data labels while preserving their read-only metadata values.
 #[test]
 fn file_info_camera_data_draws_in_the_selected_language_read_only() {
     use egui_kittest::kittest::Queryable;
