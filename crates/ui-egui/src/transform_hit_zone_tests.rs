@@ -106,7 +106,7 @@ fn an_edge_survives_the_actual_f32_view_round_trip() {
     }
 }
 
-/// The same small-edge press must be ignored by Distort and stretch one axis in legacy unlinked scaling.
+/// The same small-edge press moves the Distort edge and stretches one axis in legacy unlinked scaling.
 #[test]
 fn a_small_edge_keeps_distort_and_legacy_aspect_behavior() {
     for mode in [TransformMode::Distort, TransformMode::Free] {
@@ -121,14 +121,19 @@ fn a_small_edge_keeps_distort_and_legacy_aspect_behavior() {
         let before = app.ui.transform.as_ref().unwrap().quad;
         for event in [
             crate::canvas::ToolEvent::Down { x: 24.0, y: 16.0, pressure: 1.0 },
-            crate::canvas::ToolEvent::Move { x: 40.0, y: 16.0, pressure: 1.0 },
-            crate::canvas::ToolEvent::Up { x: 40.0, y: 16.0 },
+            crate::canvas::ToolEvent::Move { x: 40.0, y: 20.0, pressure: 1.0 },
+            crate::canvas::ToolEvent::Up { x: 40.0, y: 20.0 },
         ] {
             crate::canvas::tool_event(&mut app, event, Modifiers::NONE);
         }
         let q = app.ui.transform.as_ref().unwrap().quad;
         if mode == TransformMode::Distort {
-            assert_eq!(q, before, "Distort still ignores an edge press");
+            let mut expected = before;
+            for corner in [1, 2] {
+                expected[corner][0] += 16.0;
+                expected[corner][1] += 4.0;
+            }
+            assert_eq!(q, expected, "Distort moves the pressed edge and holds the opposite edge");
         } else {
             assert!((q[2][0] - q[0][0] - 32.0).abs() < 1e-6 && (q[2][1] - q[0][1] - 16.0).abs() < 1e-6, "a legacy edge stretches one axis: {q:?}");
         }
@@ -204,6 +209,28 @@ fn outside_rotation_has_eight_edge_and_corner_orientations() {
         near(rotate_cursor_dir(&app, p), direction);
         assert_eq!(cursor(&app, &view(1.0), p, Modifiers::NONE), Some(CursorIcon::None));
         assert_eq!(cursor(&app, &view(1.0), p, Modifiers::COMMAND), Some(CursorIcon::None));
+    }
+}
+
+/// A hidden reference point outside the quad must leave both hover and the press free to rotate.
+#[test]
+fn outside_reference_point_owns_the_pointer_only_when_shown() {
+    let p = [80.0, 40.0];
+    for shown in [false, true] {
+        let mut app = app(QUAD, 1.0);
+        app.ui.transform = None;
+        app.session.execute("shape.create", serde_json::json!({"kind": "rect", "rect": [4, 4, 16, 16], "fill": "#ff0000"})).unwrap();
+        crate::transform_tool::begin(&mut app, &egui::Context::default()).unwrap();
+        app.ui.transform.as_mut().unwrap().pivot = p;
+        app.ui.tool_options.transform_reference_point = shown;
+        assert_eq!(rotate_cursor_dir(&app, p).is_some(), !shown);
+        let icon = if shown { CursorIcon::Crosshair } else { CursorIcon::None };
+        assert_eq!(cursor(&app, &view(1.0), p, Modifiers::NONE), Some(icon));
+
+        let down = crate::canvas::ToolEvent::Down { x: p[0], y: p[1], pressure: 1.0 };
+        crate::transform_tool::pointer(&mut app, down, Modifiers::NONE);
+        let gesture = app.transform_preview.as_ref().unwrap().gesture.unwrap();
+        assert_eq!(gesture.hit, if shown { Hit::Pivot } else { Hit::Outside });
     }
 }
 
