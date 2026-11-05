@@ -1636,7 +1636,9 @@ fn resume_scope(app: &mut PhotocraftApp, paused: &mut PausedPlayback) -> Result<
 pub fn resume(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Value>) -> Result<(), String> {
     let Some(token) = fields.get(RESUME) else { return Ok(()) };
     let owner = token.as_u64().and_then(|t| app.paused_playbacks.paused.get(&t)).ok_or("this dialog doesn't belong to a paused action")?;
-    validate_playback_document(app, owner)?;
+    if owner.doc != app.session.active().map(|state| state.doc.id) {
+        return Err("the paused action belongs to a different document".into());
+    }
     let Some(paused) = app.paused_playbacks.take(token) else {
         return Err("this dialog doesn't belong to a paused action".into());
     };
@@ -1700,11 +1702,9 @@ pub fn resume(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Value>) 
 }
 
 /// A step dialog cancelled: the action stops there, as in Photoshop.
-pub fn stopped(app: &mut PhotocraftApp, dialog: u64, _fields: &serde_json::Map<String, Value>) {
-    let token = app.paused_playbacks.paused.iter().find_map(|(token, p)| p.editor.as_ref().is_some_and(|(id, _)| *id == dialog).then_some(*token));
-    if let Some(token) = token {
-        let record = app.paused_playbacks.paused.remove(&token).and_then(|p| p.record);
-        restore_recording(app, record.as_ref());
+pub fn stopped(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Value>) {
+    if fields.contains_key(RESUME) {
+        abandoned(app, fields);
         app.ui.status = tl!("Action playback stopped").to_string();
         app.ui.status_error = false;
     }
