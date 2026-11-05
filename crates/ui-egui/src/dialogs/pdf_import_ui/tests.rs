@@ -1,5 +1,5 @@
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use photocraft_engine::Session;
 use serde_json::{Value, json};
 
@@ -390,4 +390,38 @@ fn a_failed_thumbnail_is_not_retried_and_does_not_hold_back_the_rest() {
     render_thumbs(&mut st, &ctx, false, "large");
     assert!(st.thumbs[..3].iter().all(|s| matches!(s, Slot::Failed)));
     assert!(st.thumbs[3].is_pending());
+}
+
+/// A PDF that needs a user password: a Standard security handler whose `/U` entry doesn't
+/// match the empty password, so opening it without one fails with "password required".
+fn encrypted_pdf() -> Vec<u8> {
+    let plain = String::from_utf8(three_pages()).expect("the hand-written PDF is ASCII");
+    let filler = "AB".repeat(32);
+    let encrypt = format!("/Encrypt << /Filter /Standard /V 1 /R 2 /Length 40 /P -4 /O <{filler}> /U <{filler}> >> /ID [<{filler}> <{filler}>]");
+    plain.replace("/Root 1 0 R >>", &format!("/Root 1 0 R {encrypt} >>")).into_bytes()
+}
+
+#[test]
+fn the_password_prompt_names_its_field() {
+    let bytes = encrypted_pdf();
+    assert!(pdf_import::needs_password(&bytes), "the fixture must ask for a password");
+    let mut app = app();
+    app.open_bytes("locked.pdf", &bytes).expect("open");
+    assert_eq!(dialog(&app).and_then(|d| d.fields.get("__needsPassword")), Some(&json!(true)));
+    let mut h = Harness::builder().with_size(egui::vec2(700.0, 400.0)).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            let ctx = ui.ctx().clone();
+            if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                return;
+            }
+            crate::dialogs::show(app, &ctx);
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.run_steps(4);
+    assert!(h.query_by_label("The PDF is protected by a password.").is_some(), "the password prompt is shown");
+    // The caption next to it is a separate label, so look for the text field itself.
+    let named: Vec<String> = h.query_all_by_role(egui::accesskit::Role::TextInput).filter_map(|n| n.accesskit_node().label()).collect();
+    assert!(named.iter().any(|l| l == "Password:"), "the password field has no accessible name: {named:?}");
 }
