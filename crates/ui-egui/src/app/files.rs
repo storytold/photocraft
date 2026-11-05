@@ -11,6 +11,9 @@ impl PhotocraftApp {
     /// (UTC seconds), which keeps entries only for the files listed. If a document is open from
     /// `path`, its thumbnail is cached for the Home screen on a worker thread.
     pub fn push_recent(&mut self, path: &str) {
+        // A preference edit may have dropped paths since the last frame: settle the UI list first,
+        // so their thumbnail seeds are revoked before it is replaced below.
+        self.sync_recent();
         let cap = self.recent_cap();
         let old = self.session.prefs().file_handling.recent_files.clone();
         let mut r = old.clone();

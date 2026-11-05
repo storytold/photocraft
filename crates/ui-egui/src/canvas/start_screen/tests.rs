@@ -425,3 +425,21 @@ fn a_path_dropped_by_a_preference_change_loses_its_thumbnail_seed() {
     assert!(app.ui.recent_files.is_empty());
     assert!(!app.recent_view.is_allowed(&kept));
 }
+
+#[test]
+fn a_push_after_a_preference_edit_still_revokes_the_dropped_seed() {
+    let (mut app, dir) = with_files(&[("a.txt", 1, 1), ("b.txt", 1, 2), ("c.txt", 1, 3)]);
+    app.services.thumbnail_cache_dir = Some(dir.path().join("cache"));
+    app.sync_recent();
+    let listed = app.ui.recent_files.clone();
+    let doc = std::sync::Arc::new(Document::new("d", Size::new(4, 4), ColorMode::Rgb, SampleType::U8));
+    for p in &listed {
+        app.recent_view.seed(p, doc.clone(), app.services.thumbnail_cache_dir.clone());
+    }
+    let dropped = listed[1].clone();
+    // The preference edit and the next open happen with no frame (no `sync_recent`) in between.
+    app.session.prefs.edit(|p| p.file_handling.recent_files.retain(|r| *r != dropped));
+    app.push_recent(&listed[2]);
+    assert!(!app.recent_view.is_allowed(&dropped), "the dropped path's seed is revoked");
+    assert!(app.recent_view.is_allowed(&listed[0]));
+}
