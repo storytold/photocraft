@@ -321,7 +321,6 @@ Paragraph; the rest open as in-app floating windows.
 | 2026-10-11 | minor | Selection modifiers at press: evidence now names the marquee, Lasso and Polygonal Lasso tests (still partial: no marquee ⇧⌥ intersect test). ⌥-wheel zoom: missing → partial (works at ×1.1 a notch; #217 asked for ~5 %) |
 | 2026-10-11 | minor | Pen ⇧ 45° done: ⇧-click puts the next anchor on the nearest 45° ray, ⇧-drag turns its handles in 45° steps (TOOL-214-10 done, #3751) |
 | 2026-10-12 | minor | General › Animated Zoom is visible and gates every discrete zoom transition; disabling it snaps all views to their target on the next frame |
-| 2026-10-12 | minor | Closed #3632: Distort and Ctrl/Cmd corner drags snap actual corners to guides and intersections; shared guide snapping respects Extras and Canvas Guides visibility, with offset, visibility and constrained-alignment regressions |
 | 2026-10-12 | minor | Pen Auto Add/Delete on the active path, with its options-bar checkbox, hover feedback and + / − cursor badge (#4144) |
 | 2026-10-12 | minor | Toolbar tool shortcuts can be reassigned, removed and reset in Keyboard Shortcuts (#4086); capture, restart, group cycling, conflict and text-focus regressions |
 | 2026-10-12 | minor | Smart filter rows can be selected, and dragged (⌥: copied) onto another smart object or onto Delete (#4271) |
