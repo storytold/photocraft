@@ -4773,3 +4773,10 @@ cameraRaw	White Balance: As Shot	Hvidbalance: Som fotograferet
 	The path was discarded	Stien blev kasseret
 	The path was kept as the Work Path	Stien blev bevaret som arbejdssti
 	Edit Brush…	Rediger pensel…
+
+# TIFF Options: compression, image pyramid and transparency (#8827)
+	Image Compression	Billedkomprimering
+	Save Image Pyramid	Gem billedpyramide
+	Save Transparency	Gem gennemsigtighed
+	LZW	LZW
+	ZIP	ZIP

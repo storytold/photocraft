@@ -4197,3 +4197,10 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	分岐点のカラー
 	Shapes can't use patterns yet	シェイプではまだパターンを使用できません
 	Edit Brush…	ブラシを編集…
+
+# TIFF Options: compression, image pyramid and transparency (#8827)
+	Image Compression	画像圧縮
+	Save Image Pyramid	画像ピラミッドを保存
+	Save Transparency	透明部分を保存
+	LZW	LZW
+	ZIP	ZIP

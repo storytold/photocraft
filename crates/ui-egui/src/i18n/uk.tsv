@@ -4231,3 +4231,10 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Колір контрольної точки
 	Shapes can't use patterns yet	Фігури поки не можуть використовувати візерунки
 	Edit Brush…	Редагувати пензель…
+
+# TIFF Options: compression, image pyramid and transparency (#8827)
+	Image Compression	Стиснення зображення
+	Save Image Pyramid	Зберегти піраміду зображення
+	Save Transparency	Зберегти прозорість
+	LZW	LZW
+	ZIP	ZIP

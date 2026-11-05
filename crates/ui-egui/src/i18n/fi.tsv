@@ -4774,3 +4774,10 @@ cameraRaw	White Balance: As Shot	Valkotasapaino: kuvauksen mukainen
 	The path was discarded	Polku hylättiin
 	The path was kept as the Work Path	Polku säilytettiin työpolkuna
 	Edit Brush…	Muokkaa sivellintä…
+
+# TIFF Options: compression, image pyramid and transparency (#8827)
+	Image Compression	Kuvan pakkaus
+	Save Image Pyramid	Tallenna kuvapyramidi
+	Save Transparency	Tallenna läpinäkyvyys
+	LZW	LZW
+	ZIP	ZIP

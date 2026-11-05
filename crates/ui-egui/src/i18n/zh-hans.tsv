@@ -3205,3 +3205,10 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Solid Color	纯色
 	Tint Color	色调颜色
 	Edit Brush…	编辑画笔…
+
+# TIFF Options: compression, image pyramid and transparency (#8827)
+	Image Compression	图像压缩
+	Save Image Pyramid	存储图像金字塔
+	Save Transparency	存储透明区域
+	LZW	LZW
+	ZIP	ZIP

@@ -4556,3 +4556,10 @@ shape	Appearance	Apparence
 	Stop Color	Couleur du point
 	Shapes can't use patterns yet	Les formes ne peuvent pas encore utiliser de motifs
 	Edit Brush…	Modifier le pinceau…
+
+# TIFF Options: compression, image pyramid and transparency (#8827)
+	Image Compression	Compression de l'image
+	Save Image Pyramid	Enregistrer la pyramide d'images
+	Save Transparency	Enregistrer la transparence
+	LZW	LZW
+	ZIP	ZIP

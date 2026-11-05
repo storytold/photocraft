@@ -4771,3 +4771,10 @@ cameraRaw	White Balance: As Shot	Vitbalans: som tagen
 	The path was discarded	Banan kasserades
 	The path was kept as the Work Path	Banan behölls som arbetsbana
 	Edit Brush…	Redigera pensel…
+
+# TIFF Options: compression, image pyramid and transparency (#8827)
+	Image Compression	Bildkomprimering
+	Save Image Pyramid	Spara bildpyramid
+	Save Transparency	Spara genomskinlighet
+	LZW	LZW
+	ZIP	ZIP

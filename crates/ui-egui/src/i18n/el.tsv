@@ -4220,3 +4220,10 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Χρώμα στάσης
 	Shapes can't use patterns yet	Τα σχήματα δεν μπορούν ακόμη να χρησιμοποιούν μοτίβα
 	Edit Brush…	Επεξεργασία πινέλου…
+
+# TIFF Options: compression, image pyramid and transparency (#8827)
+	Image Compression	Συμπίεση εικόνας
+	Save Image Pyramid	Αποθήκευση πυραμίδας εικόνας
+	Save Transparency	Αποθήκευση διαφάνειας
+	LZW	LZW
+	ZIP	ZIP
