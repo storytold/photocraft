@@ -68,6 +68,22 @@ fn periodic_clone_projection_is_disjoint_and_matches_pixel_modulo() {
 }
 
 #[test]
+fn a_hugely_scaled_clone_source_is_refused_before_the_dense_read() {
+    use super::clone::clone_sample;
+    use super::sampling::sample_layers;
+    use crate::presets::clone_source::Mapping;
+    let s = session(32, 24, 8, "rgb");
+    let d = s.active().unwrap();
+    let id = d.active_layer.unwrap();
+    let surf = d.doc.layer(id).unwrap().surface().unwrap();
+    let which = sample_layers(&json!({"sampleLayer": "current"}), "paint.cloneStamp").unwrap();
+    // 1000x: a 100x100 destination asks for a ~100000x100000 source window.
+    let map = Mapping { source: (0.0, 0.0), anchor: (0.0, 0.0), m: [1000.0, 0.0, 0.0, 1000.0] };
+    let r = clone_sample(&d.doc, Some(id), surf, which, Rect::new(0, 0, 100, 100), &map, false, "paint.cloneStamp");
+    assert!(r.is_err());
+}
+
+#[test]
 fn periodic_clone_preview_interpolates_across_transformed_source_seam() {
     use crate::presets::clone_source::Mapping;
     for depth in DEPTHS {

@@ -53,7 +53,7 @@ fn file_bytes_within(p: &Value, cmd: &str, what: &str, max: u64) -> Result<(Vec<
     if len > max {
         return Err(bad(cmd, format!("{path}: file too large ({len} bytes)")));
     }
-    let bytes = std::fs::read(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
+    let bytes = crate::allocation::read_file_within(path, max).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
     let stem = std::path::Path::new(path).file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
     Ok((bytes, stem))
 }

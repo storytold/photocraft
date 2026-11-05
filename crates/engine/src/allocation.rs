@@ -15,6 +15,23 @@ pub(crate) fn filled<T: Clone>(len: usize, value: T, purpose: &str) -> Result<Ve
     Ok(out)
 }
 
+/// Reads a regular file of at most `max` bytes. The opened handle must be a regular file (a
+/// device such as `/dev/zero` never ends) and reading stops one byte past `max`, so neither a
+/// special file nor one that grows after a size check can fill memory.
+pub(crate) fn read_file_within(path: &str, max: u64) -> std::io::Result<Vec<u8>> {
+    use std::io::{Error, ErrorKind, Read};
+    let file = std::fs::File::open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(Error::new(ErrorKind::InvalidInput, "not a regular file"));
+    }
+    let mut out = Vec::new();
+    file.take(max.saturating_add(1)).read_to_end(&mut out)?;
+    if out.len() as u64 > max {
+        return Err(Error::new(ErrorKind::InvalidData, format!("file is larger than {max} bytes")));
+    }
+    Ok(out)
+}
+
 /// Reserve a vector for a known number of operation results.
 pub(crate) fn capacity<T>(len: usize, purpose: &str) -> Result<Vec<T>> {
     let bytes = len.checked_mul(std::mem::size_of::<T>()).ok_or_else(|| error(purpose, "requested size overflowed"))?;
@@ -118,5 +135,19 @@ mod tests {
         assert!(filled::<u8>(4, 0, "skipped").is_ok(), "the counted attempt has not run out of clean attempts");
         assert!(filled::<u8>(4, 0, "counted").is_err_and(|e| e.to_string().contains("not enough memory for counted")));
         assert!(filled::<u8>(4, 0, "done").is_ok());
+    }
+
+    #[test]
+    fn read_file_within_bounds_the_bytes_and_refuses_special_files() {
+        let path = std::env::temp_dir().join(format!("pc-read-within-{}", std::process::id()));
+        std::fs::write(&path, [7u8; 10]).unwrap();
+        let p = path.to_str().unwrap();
+        assert_eq!(read_file_within(p, 10).unwrap(), vec![7u8; 10]);
+        assert!(read_file_within(p, 9).is_err_and(|e| e.kind() == std::io::ErrorKind::InvalidData));
+        std::fs::remove_file(&path).unwrap();
+        // A directory (and on unix a device that never ends) is not a regular file.
+        assert!(read_file_within(std::env::temp_dir().to_str().unwrap(), 10).is_err());
+        #[cfg(unix)]
+        assert!(read_file_within("/dev/zero", 1 << 30).is_err_and(|e| e.kind() == std::io::ErrorKind::InvalidInput));
     }
 }

@@ -387,7 +387,10 @@ fn load_frames(path: &str, fmt: photocraft_color::PixelFormat, opts: &photocraft
         Ok(())
     };
     for f in &files {
-        let bytes = std::fs::read(f).map_err(|e| EngineError::Other(format!("read `{}`: {e}", f.display())))?;
+        let bytes = f
+            .to_str()
+            .map_or_else(|| Err(std::io::Error::other("path is not UTF-8")), |p| crate::allocation::read_file_within(p, max_footage_bytes))
+            .map_err(|e| EngineError::Other(format!("read `{}`: {e}", f.display())))?;
         let name = f.to_string_lossy();
         // A GIF (a still one is its only frame) or an animated WebP brings every frame.
         let animation = match photocraft_codecs::detect(&bytes) {

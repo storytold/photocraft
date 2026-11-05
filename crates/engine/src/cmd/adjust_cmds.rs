@@ -226,7 +226,7 @@ pub fn folder_luts(_: &str) -> Vec<(String, String)> {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn read_file(path: &str) -> Option<Vec<u8>> {
-    std::fs::read(path).ok()
+    crate::allocation::read_file_within(path, MAX_FOLDER_LUT_BYTES).ok()
 }
 #[cfg(target_arch = "wasm32")]
 fn read_file(_: &str) -> Option<Vec<u8>> {
