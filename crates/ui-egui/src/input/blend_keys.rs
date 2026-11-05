@@ -118,11 +118,20 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
 pub const HEALING_MODES: [BlendMode; 7] =
     [BlendMode::Normal, BlendMode::Multiply, BlendMode::Screen, BlendMode::Darken, BlendMode::Lighten, BlendMode::Color, BlendMode::Luminosity];
 
-/// The mode a brush-based tool paints with: its brush's, or Normal for a Healing Brush whose brush
+/// Photoshop's Art History Brush modes.
+pub const ART_HISTORY_MODES: [BlendMode; 7] =
+    [BlendMode::Normal, BlendMode::Darken, BlendMode::Lighten, BlendMode::Hue, BlendMode::Saturation, BlendMode::Color, BlendMode::Luminosity];
+
+/// The mode a brush-based tool paints with: its brush's, or Normal for a Healing or Art History Brush whose brush
 /// holds a mode its short menu lacks (the Brush's Overlay remembered from before it had a menu, a
 /// preset with tool settings, `tools.setBrush`). The stroke, the dropdown and the keys share it.
 pub fn brush_tool_mode(tool: Tool, mode: BlendMode) -> BlendMode {
-    if tool == Tool::Healing && !HEALING_MODES.contains(&mode) { BlendMode::Normal } else { mode }
+    let menu: &[BlendMode] = match tool {
+        Tool::Healing => &HEALING_MODES,
+        Tool::ArtHistoryBrush => &ART_HISTORY_MODES,
+        _ => return mode,
+    };
+    if menu.contains(&mode) { mode } else { BlendMode::Normal }
 }
 
 /// A painting tool's options-bar Mode menu in order, `None` being Clear (after Dissolve, on the
@@ -138,6 +147,7 @@ pub fn tool_modes(tool: Tool) -> Option<Vec<Option<BlendMode>>> {
         }
         Tool::Gradient | Tool::CloneStamp | Tool::PatternStamp | Tool::HistoryBrush => layer(),
         Tool::Healing => HEALING_MODES.iter().copied().map(Some).collect(),
+        Tool::ArtHistoryBrush => ART_HISTORY_MODES.iter().copied().map(Some).collect(),
         _ => return None,
     })
 }
@@ -157,7 +167,7 @@ fn target(tool: Tool) -> Target {
         return Target::Tool(modes);
     }
     match tool {
-        Tool::SpotHealing | Tool::ColorReplacement | Tool::Blur | Tool::Sharpen | Tool::Smudge | Tool::ArtHistoryBrush => Target::Nothing,
+        Tool::SpotHealing | Tool::ColorReplacement | Tool::Blur | Tool::Sharpen | Tool::Smudge => Target::Nothing,
         // Photoshop's ⇧⌥S/M/H pick the Dodge and Burn Range and ⇧⌥D/S the Sponge's mode: never
         // the layer's.
         Tool::Dodge | Tool::Burn | Tool::Sponge => Target::Nothing,

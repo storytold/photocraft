@@ -88,6 +88,7 @@ fn stamp_dabs(w: usize, h: usize, ch: usize, src: &[f32], dest: &mut [f32], dabs
         selection: None,
         lock_transparent: false,
         alpha: (ch > 1).then_some(ch - 1),
+        reference: None,
     };
     stamp(&mut p).unwrap()
 }
@@ -160,8 +161,7 @@ fn unrotated_dab_restores_the_source_pixel() {
 #[test]
 fn halo_covers_rotated_read_reach() {
     let size = 40.0;
-    for style in [Style::TightShort, Style::TightMedium, Style::TightLong, Style::LooseMedium, Style::LooseLong, Style::Dab, Style::TightCurl, Style::LooseCurl]
-    {
+    for style in Style::ALL {
         let halo = halo_radius(size, style).unwrap();
         let side = sample_side(size, style).unwrap();
         let reach = (side + 1) / 2;
@@ -194,6 +194,7 @@ fn tolerance_skips_an_unchanged_layer() {
         selection: None,
         lock_transparent: false,
         alpha: Some(3),
+        reference: None,
     };
     let n = stamp(&mut p).unwrap();
     assert_eq!(n, 0);
@@ -225,6 +226,7 @@ fn tolerance_zero_writes_where_history_differs() {
         selection: None,
         lock_transparent: false,
         alpha: Some(3),
+        reference: None,
     };
     let n = stamp(&mut p).unwrap();
     assert!(n > 0);
@@ -260,6 +262,7 @@ fn tolerance_ignores_unchanged_alpha() {
             selection: None,
             lock_transparent: false,
             alpha: Some(3),
+            reference: None,
         };
         let n = stamp(&mut p).unwrap();
         assert_eq!(n > 0, paints, "tolerance {tolerance}");
@@ -297,6 +300,7 @@ fn tolerance_sees_an_erased_patch() {
         selection: None,
         lock_transparent: false,
         alpha: Some(3),
+        reference: None,
     };
     assert!(stamp(&mut p).unwrap() > 0, "alpha 1 -> 0.6 is over tolerance 0.25");
     let i = (24 * w + 24) * ch;
@@ -326,6 +330,7 @@ fn empty_or_mismatched_buffers_error() {
         selection: None,
         lock_transparent: false,
         alpha: None,
+        reference: None,
     };
     assert_eq!(stamp(&mut p), Err(StampError::Empty));
     let mut dest = vec![0.0f32; 16];
@@ -349,6 +354,7 @@ fn empty_or_mismatched_buffers_error() {
         selection: None,
         lock_transparent: false,
         alpha: None,
+        reference: None,
     };
     assert!(stamp(&mut p).is_err());
     assert!(place_dabs(&[], 10.0, 50.0, Style::TightMedium, 0).is_err());
@@ -383,6 +389,7 @@ fn two_stamps_with_the_same_seed_match() {
             selection: None,
             lock_transparent: false,
             alpha: Some(3),
+            reference: None,
         };
         stamp(&mut p).unwrap()
     };
@@ -390,4 +397,96 @@ fn two_stamps_with_the_same_seed_match() {
     let mut b = dest0;
     assert_eq!(run(&mut a), run(&mut b));
     assert_eq!(a, b);
+}
+
+#[test]
+fn every_style_round_trips_its_id() {
+    assert_eq!(Style::ALL.len(), 10, "Photoshop's Style menu has ten entries");
+    for style in Style::ALL {
+        assert_eq!(Style::parse(style.as_str()), Some(style), "{}", style.as_str());
+    }
+    let mut ids: Vec<&str> = Style::ALL.iter().map(|s| s.as_str()).collect();
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(ids.len(), 10, "ids are distinct");
+}
+
+#[test]
+fn long_curls_space_wider_and_turn_less_per_dab() {
+    let pts = horizontal(120.0);
+    for (short, long) in [(Style::TightCurl, Style::TightCurlLong), (Style::LooseCurl, Style::LooseCurlLong)] {
+        let s = place_dabs(&pts, 12.0, 50.0, short, RNG_SEED).unwrap();
+        let l = place_dabs(&pts, 12.0, 50.0, long, RNG_SEED).unwrap();
+        assert!(l.len() < s.len(), "{}: {} dabs, {}: {}", long.as_str(), l.len(), short.as_str(), s.len());
+        assert!(l.len() >= 3);
+        // A tight curl turns by a fixed step per dab; the long one by a smaller one.
+        if short == Style::TightCurl {
+            let step = |d: &[Dab]| d.windows(2).map(|w| w[1].theta - w[0].theta).sum::<f32>() / (d.len() - 1) as f32;
+            assert!(step(&l) > 0.05 && step(&l) < step(&s), "steps {} vs {}", step(&l), step(&s));
+        }
+    }
+    // The loose long curl still scatters off the line.
+    let loose = place_dabs(&pts, 12.0, 50.0, Style::LooseCurlLong, RNG_SEED).unwrap();
+    assert!(loose.iter().map(|d| (d.y - 32.0).abs()).sum::<f32>() > 1.0);
+}
+
+/// A stroke buffer starts transparent, so Tolerance must compare the history state with the
+/// layer (`reference`), not with the buffer: an unchanged layer still paints nothing.
+#[test]
+fn tolerance_reads_the_reference_not_the_stroke_buffer() {
+    let (w, h, src, _, dab) = fixture(4);
+    let layer = src.clone();
+    for (reference, paints) in [(None, true), (Some(layer.as_slice()), false)] {
+        let mut buffer = vec![0.0f32; w * h * 4];
+        let mut p = StampParams {
+            dest: &mut buffer,
+            dest_w: w,
+            dest_h: h,
+            dest_origin: (0, 0),
+            src: &src,
+            src_w: w,
+            src_h: h,
+            src_origin: (0, 0),
+            ch: 4,
+            dabs: std::slice::from_ref(&dab),
+            hardness: 1.0,
+            opacity: 1.0,
+            flow: 1.0,
+            tolerance: 0.25,
+            tile: 64,
+            selection: None,
+            lock_transparent: false,
+            alpha: Some(3),
+            reference,
+        };
+        assert_eq!(stamp(&mut p).unwrap() > 0, paints, "reference given: {}", reference.is_some());
+    }
+}
+
+#[test]
+fn a_short_reference_is_refused() {
+    let (w, h, src, mut dest, dab) = fixture(4);
+    let short = vec![0.0f32; 4];
+    let mut p = StampParams {
+        dest: &mut dest,
+        dest_w: w,
+        dest_h: h,
+        dest_origin: (0, 0),
+        src: &src,
+        src_w: w,
+        src_h: h,
+        src_origin: (0, 0),
+        ch: 4,
+        dabs: std::slice::from_ref(&dab),
+        hardness: 1.0,
+        opacity: 1.0,
+        flow: 1.0,
+        tolerance: 0.5,
+        tile: 64,
+        selection: None,
+        lock_transparent: false,
+        alpha: Some(3),
+        reference: Some(&short),
+    };
+    assert_eq!(stamp(&mut p), Err(StampError::Mismatched));
 }

@@ -4221,6 +4221,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Dab	Benek
 	Tight Curl	Sıkı Kıvrım
 	Loose Curl	Gevşek Kıvrım
+	Tight Curl Long	Sıkı Uzun Kıvrım
+	Loose Curl Long	Gevşek Uzun Kıvrım
 	Stylized dabs from a history state	Bir geçmiş durumundan stilize benekler
 	Font size presets	Yazı tipi boyutu hazır ayarları
 	Leading presets	Satır aralığı hazır ayarları

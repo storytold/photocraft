@@ -4412,6 +4412,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Dab	Pötty
 	Tight Curl	Szoros göndör
 	Loose Curl	Laza göndör
+	Tight Curl Long	Szoros hosszú göndör
+	Loose Curl Long	Laza hosszú göndör
 	Stylized dabs from a history state	Stilizált pöttyök egy előzményállapotból
 	Font size presets	Betűméret-előbeállítások
 	Leading presets	Sorköz-előbeállítások

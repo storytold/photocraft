@@ -1,10 +1,11 @@
 //! Art History Brush: stylized, oriented dabs sampled from a history state.
 
 use photocraft_algo::art_history::{self, Dab, MAX_COVERAGE, MAX_DABS, RNG_SEED, StampError, StampParams, Style};
-use photocraft_color::BlendMode;
+use photocraft_color::{BlendMode, PixelFormat};
 use photocraft_geom::Rect;
 use photocraft_paint::MAX_BRUSH_SIZE;
 use photocraft_paint::retouch::{Region, alpha_index};
+use photocraft_raster::{from_rgba_into, to_rgba};
 use serde_json::{Value, json};
 
 use super::{EngineError, Result, Session, bad, blend_param, damage_json, parse_brush, run_stroke};
@@ -154,13 +155,126 @@ fn stamp_region(
         selection: sel,
         lock_transparent: lock,
         alpha,
+        reference: None,
     };
-    match art_history::stamp(&mut p) {
-        Ok(n) => Ok(n),
-        Err(StampError::Empty) => Err(err("no stroke points")),
-        Err(StampError::Mismatched) => Err(err("source and destination do not match")),
-        Err(StampError::TooLarge) => Err(err("stroke too large")),
+    art_history::stamp(&mut p).map_err(stamp_err)
+}
+
+fn stamp_err(e: StampError) -> EngineError {
+    match e {
+        StampError::Empty => err("no stroke points"),
+        StampError::Mismatched => err("source and destination do not match"),
+        StampError::TooLarge => err("stroke too large"),
     }
+}
+
+/// `region`'s pixels with an alpha channel last: its own, or opaque for a format without one.
+fn with_alpha(region: &Region, fmt: &PixelFormat) -> Result<Vec<f32>> {
+    let n = region.ch;
+    let cc = fmt.mode.color_channels();
+    if n == 0 || cc > n {
+        return Err(err("source and destination do not match"));
+    }
+    let a = alpha_index(fmt);
+    let px = region.width().saturating_mul(region.height());
+    let len = px.checked_mul(cc + 1).ok_or_else(|| err("stroke too large"))?;
+    let mut out = Vec::with_capacity(len);
+    for chunk in region.data.chunks_exact(n) {
+        out.extend_from_slice(chunk.get(..cc).ok_or_else(|| err("source and destination do not match"))?);
+        out.push(a.and_then(|a| chunk.get(a).copied()).unwrap_or(1.0));
+    }
+    if out.len() != len {
+        return Err(err("source and destination do not match"));
+    }
+    Ok(out)
+}
+
+/// Any mode but Normal: the dabs build up in a transparent stroke buffer (dab over dab, as
+/// Normal paints them onto the layer), which is composited onto the layer once, in `mode`.
+/// Blending each dab with the already-mixed result instead would ring every dab edge.
+#[allow(clippy::too_many_arguments)]
+fn stamp_buffered(
+    dest: &mut Region,
+    src: &Region,
+    fmt: &PixelFormat,
+    dabs: &[Dab],
+    hardness: f32,
+    opacity: f32,
+    flow: f32,
+    tolerance: f32,
+    sel: Option<&[f32]>,
+    lock: bool,
+    mode: BlendMode,
+) -> Result<u32> {
+    if dest.ch != src.ch || dest.rect != src.rect || dest.ch != fmt.channels() {
+        return Err(err("source and destination do not match"));
+    }
+    let n = dest.ch;
+    let cc = fmt.mode.color_channels();
+    let bch = cc + 1;
+    let paint = with_alpha(src, fmt)?;
+    let layer = with_alpha(dest, fmt)?;
+    let mut buffer = vec![0.0f32; layer.len()];
+    let mut p = StampParams {
+        dest: &mut buffer,
+        dest_w: dest.width(),
+        dest_h: dest.height(),
+        dest_origin: (dest.rect.x0, dest.rect.y0),
+        src: &paint,
+        src_w: src.width(),
+        src_h: src.height(),
+        src_origin: (src.rect.x0, src.rect.y0),
+        ch: bch,
+        dabs,
+        hardness,
+        opacity,
+        flow,
+        tolerance,
+        tile: 64,
+        selection: sel,
+        // The buffer starts transparent; the lock applies when it meets the layer, below.
+        lock_transparent: false,
+        alpha: Some(cc),
+        reference: Some(&layer),
+    };
+    if art_history::stamp(&mut p).map_err(stamp_err)? == 0 {
+        return Ok(0);
+    }
+    // Counted as they meet the layer: a stroke wholly on locked transparency writes nothing.
+    let mut written = 0u32;
+    let a = alpha_index(fmt);
+    let mut native = vec![0.0f32; n];
+    let mut enc = [0.0f32; 8];
+    if n > enc.len() {
+        return Err(err("source and destination do not match"));
+    }
+    for (px, stroke) in dest.data.chunks_exact_mut(n).zip(buffer.chunks_exact(bch)) {
+        let Some(&sa) = stroke.get(cc) else { continue };
+        if sa <= 0.0 {
+            continue;
+        }
+        if lock && a.is_some_and(|a| px.get(a).is_some_and(|&v| v <= 0.0)) {
+            continue;
+        }
+        let (Some(colour), Some(slot)) = (stroke.get(..cc), native.get_mut(..cc)) else { continue };
+        slot.copy_from_slice(colour);
+        if let Some(a) = a
+            && let Some(v) = native.get_mut(a)
+        {
+            *v = sa;
+        }
+        let mut s = to_rgba(fmt, &native);
+        s[3] = sa;
+        let d = to_rgba(fmt, px);
+        let o = if lock { photocraft_color::blend::composite_atop(mode, d, s, 1.0) } else { photocraft_color::blend::composite(mode, d, s, 1.0) };
+        from_rgba_into(fmt, o, &mut enc);
+        if let Some(e) = enc.get(..n) {
+            px.copy_from_slice(e);
+            written = written.saturating_add(1);
+        }
+    }
+    super::clamp_samples(fmt, &mut dest.data);
+    Ok(written)
 }
 
 /// Run `paint.artHistoryBrush`.
@@ -187,11 +301,8 @@ pub fn run(s: &mut Session, p: &Value) -> Result<Value> {
     // Percent of the channel range; 0 (paint everywhere) is the default, as in Photoshop.
     let tolerance = ranged(p, "tolerance", 0.0, 0.0, 100.0)? / 100.0;
     let style = style_of(p)?;
-    // The stamp mixes the source in by coverage, so only Normal is right; other modes need a
-    // stroke buffer (blending each dab with the already-mixed result rings every dab edge).
-    if blend_param(p, CMD)? != BlendMode::Normal {
-        return Err(err("only the Normal mode is supported"));
-    }
+    // Normal stamps straight onto the layer; any other mode goes through a stroke buffer.
+    let mode = blend_param(p, CMD)?;
     let (stroke, id) = parse_brush(s, p, CMD)?;
     let _ = stroke;
     // The same source as the History Brush: the `state` or `snapshot` passed, else the History
@@ -230,7 +341,11 @@ pub fn run(s: &mut Session, p: &Value) -> Result<Value> {
             return Err(err("source and destination do not match"));
         }
         let sel_mask = selection_mask(sel, outer);
-        let n = stamp_region(&mut dest, &src_reg, &dabs, hardness, opacity, flow, tolerance, sel_mask.as_deref(), lock, alpha_index(&fmt))?;
+        let n = if mode == BlendMode::Normal {
+            stamp_region(&mut dest, &src_reg, &dabs, hardness, opacity, flow, tolerance, sel_mask.as_deref(), lock, alpha_index(&fmt))?
+        } else {
+            stamp_buffered(&mut dest, &src_reg, &fmt, &dabs, hardness, opacity, flow, tolerance, sel_mask.as_deref(), lock, mode)?
+        };
         if n == 0 {
             nothing_written = true;
             return Err(err("the stroke changed no pixel"));
@@ -415,19 +530,143 @@ mod tests {
         assert_eq!(s.active().unwrap().history.past_len(), steps);
     }
 
-    #[test]
-    fn only_the_normal_mode_paints() {
+    /// Row 1 of the History panel is `first`, the layer now holds `now`.
+    fn two_states(first: [f32; 4], now: [f32; 4]) -> Session {
         let mut s = session(48, 32, 8, "rgb");
+        paint_layer(&mut s, move |_, _| first);
+        paint_layer(&mut s, move |_, _| now);
+        s
+    }
+
+    #[test]
+    fn multiply_by_a_white_state_leaves_the_layer_alone() {
+        let mut s = two_states([1.0, 1.0, 1.0, 1.0], [0.5, 0.5, 0.5, 1.0]);
+        // Blending each dab with the already-mixed result darkened every dab edge; the stroke
+        // buffer composites the whole stroke once, and grey × white is grey.
+        stroke(&mut s, json!({"state": 1, "mode": "multiply"})).unwrap();
+        for x in 0..48 {
+            for y in [10, 13, 16, 19, 22] {
+                let v = rgba(&s, x, y);
+                assert!((v[0] - 0.5).abs() < 0.01 && (v[3] - 1.0).abs() < 1.0e-6, "({x}, {y}): {v:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn darken_and_lighten_keep_the_darker_or_lighter() {
+        for (first, mode, centre) in [
+            ([1.0, 1.0, 1.0, 1.0], "lighten", 1.0),
+            ([1.0, 1.0, 1.0, 1.0], "darken", 0.5),
+            ([0.0, 0.0, 0.0, 1.0], "darken", 0.0),
+            ([0.0, 0.0, 0.0, 1.0], "lighten", 0.5),
+        ] {
+            let mut s = two_states(first, [0.5, 0.5, 0.5, 1.0]);
+            stroke(&mut s, json!({"state": 1, "mode": mode})).unwrap();
+            let v = rgba(&s, 24, 16);
+            assert!((v[0] - centre).abs() < 0.02, "{mode} from {first:?}: {v:?}");
+            // Outside the stroke the layer is untouched.
+            assert!((rgba(&s, 24, 1)[0] - 0.5).abs() < 1.0e-6);
+        }
+    }
+
+    #[test]
+    fn luminosity_and_color_split_hue_from_brightness() {
+        let red = [1.0, 0.0, 0.0, 1.0];
+        let blue = [0.0, 0.0, 1.0, 1.0];
+        let mut s = two_states(red, blue);
+        stroke(&mut s, json!({"state": 1, "mode": "luminosity"})).unwrap();
+        let lum = rgba(&s, 24, 16);
+        // Red's luminosity on blue's hue: still blue, brighter.
+        assert!(lum[2] > lum[0] && lum[2] > lum[1], "{lum:?}");
+        assert!(lum[0] > 0.05 || lum[1] > 0.05, "brighter than pure blue: {lum:?}");
+
+        let mut s = two_states(red, blue);
+        stroke(&mut s, json!({"state": 1, "mode": "color"})).unwrap();
+        let col = rgba(&s, 24, 16);
+        // Red's hue at blue's (low) luminosity: a dark red.
+        assert!(col[0] > col[1] && col[0] > col[2], "{col:?}");
+        assert!(col[0] < 0.9, "kept blue's luminosity: {col:?}");
+    }
+
+    #[test]
+    fn modes_paint_at_every_depth_and_model() {
+        for (depth, model) in [(8u64, "rgb"), (16, "rgb"), (32, "rgb"), (8, "gray"), (16, "gray"), (8, "cmyk"), (8, "lab")] {
+            let mut s = session(48, 32, depth, model);
+            paint_layer(&mut s, |_, _| [0.9, 0.9, 0.9, 1.0]);
+            paint_layer(&mut s, |_, _| [0.3, 0.3, 0.3, 1.0]);
+            let steps = s.active().unwrap().history.past_len();
+            let before = rgba(&s, 24, 16);
+            let r = stroke(&mut s, json!({"state": 1, "mode": "lighten", "opacity": 100})).unwrap();
+            assert!(!r["damage"].is_null(), "{depth} {model}: {r}");
+            assert_eq!(s.active().unwrap().history.past_len(), steps + 1);
+            let after = rgba(&s, 24, 16);
+            assert!(after[0] > before[0] + 0.2, "{depth} {model}: {before:?} -> {after:?}");
+            s.execute("edit.undo", json!({})).unwrap();
+            assert_eq!(rgba(&s, 24, 16), before, "{depth} {model}: undo");
+        }
+    }
+
+    #[test]
+    fn a_moded_stroke_on_locked_transparency_is_a_no_op() {
+        let mut s = session(48, 32, 8, "rgb");
+        s.execute("layer.new.layer", json!({})).unwrap();
+        // Row 2 holds opaque white on the layer; it is cleared again and locked.
         paint_layer(&mut s, |_, _| [1.0, 1.0, 1.0, 1.0]);
-        paint_layer(&mut s, |_, _| [0.5, 0.5, 0.5, 1.0]);
+        paint_layer(&mut s, |_, _| [0.0, 0.0, 0.0, 0.0]);
+        s.edit("lock", |doc, active| {
+            doc.layer_mut(active.unwrap()).unwrap().locks.transparency = true;
+            Ok(())
+        })
+        .unwrap();
         let steps = s.active().unwrap().history.past_len();
-        // Multiply by a white source would leave the grey as it is, but blending each dab with the
-        // already-mixed result darkened every dab edge: refused until a stroke buffer exists.
-        assert!(stroke(&mut s, json!({"state": 1, "mode": "multiply"})).is_err());
+        let r = stroke(&mut s, json!({"state": 2, "mode": "lighten"})).unwrap();
+        assert!(r["damage"].is_null(), "{r}");
         assert_eq!(s.active().unwrap().history.past_len(), steps);
-        assert!((rgba(&s, 24, 16)[0] - 0.5).abs() < 0.01);
-        stroke(&mut s, json!({"state": 1, "mode": "normal"})).unwrap();
-        assert!(rgba(&s, 24, 16)[0] > 0.9, "{:?}", rgba(&s, 24, 16));
+    }
+
+    #[test]
+    fn opacity_scales_a_moded_stroke() {
+        let mut full = two_states([1.0, 1.0, 1.0, 1.0], [0.2, 0.2, 0.2, 1.0]);
+        let mut half = two_states([1.0, 1.0, 1.0, 1.0], [0.2, 0.2, 0.2, 1.0]);
+        stroke(&mut full, json!({"state": 1, "mode": "screen", "opacity": 100})).unwrap();
+        stroke(&mut half, json!({"state": 1, "mode": "screen", "opacity": 30})).unwrap();
+        let (f, h) = (rgba(&full, 24, 16)[0], rgba(&half, 24, 16)[0]);
+        assert!(f > 0.95 && h > 0.25 && h < f - 0.2, "full {f} 30% {h}");
+    }
+
+    /// The stroke buffer composited in Normal must paint what stamping straight onto the layer
+    /// paints (dabs build up the same way, whichever buffer they land in).
+    #[test]
+    fn the_stroke_buffer_in_normal_matches_the_direct_stamp() {
+        let fmt = PixelFormat::RGBA8;
+        let rect = Rect::new(0, 0, 64, 40);
+        let px = |x: i32, y: i32| [((x * 7 + y * 3) % 50) as f32 / 50.0, (y % 9) as f32 / 9.0, 0.4, 1.0];
+        let mut src = Region::new(rect, 4);
+        let mut dest = Region::new(rect, 4);
+        for y in 0..40 {
+            for x in 0..64 {
+                src.px_mut(x, y).copy_from_slice(&px(x, y));
+                dest.px_mut(x, y).copy_from_slice(&[0.9, 0.1, 0.2, 1.0]);
+            }
+        }
+        let dabs = art_history::place_dabs(&[[6.0, 20.0], [58.0, 22.0]], 14.0, 50.0, Style::LooseCurl, RNG_SEED).unwrap();
+        let mut direct = dest.clone();
+        let mut buffered = dest.clone();
+        stamp_region(&mut direct, &src, &dabs, 0.6, 0.7, 0.8, 0.0, None, false, Some(3)).unwrap();
+        stamp_buffered(&mut buffered, &src, &fmt, &dabs, 0.6, 0.7, 0.8, 0.0, None, false, BlendMode::Normal).unwrap();
+        let worst = direct.data.iter().zip(&buffered.data).fold(0.0f32, |m, (a, b)| m.max((a - b).abs()));
+        assert!(worst < 1.0e-4, "worst difference {worst}");
+        assert_ne!(direct.data, dest.data, "the stroke painted");
+    }
+
+    #[test]
+    fn unknown_modes_are_errors() {
+        let mut s = two_states([1.0, 1.0, 1.0, 1.0], [0.5, 0.5, 0.5, 1.0]);
+        let steps = s.active().unwrap().history.past_len();
+        let before = rgba(&s, 24, 16);
+        assert!(stroke(&mut s, json!({"state": 1, "mode": "sparkle"})).unwrap_err().to_string().contains("unknown blend mode"));
+        assert_eq!(s.active().unwrap().history.past_len(), steps);
+        assert_eq!(rgba(&s, 24, 16), before);
     }
 
     #[test]

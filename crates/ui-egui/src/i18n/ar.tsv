@@ -3513,6 +3513,8 @@ curves	Smooth	تنعيم
 	Dab	لمسة
 	Tight Curl	تجعيد ضيق
 	Loose Curl	تجعيد فضفاض
+	Tight Curl Long	تجعيد ضيق طويل
+	Loose Curl Long	تجعيد فضفاض طويل
 	Stylized dabs from a history state	لمسات منمقة من حالة في السجل
 
 # Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)

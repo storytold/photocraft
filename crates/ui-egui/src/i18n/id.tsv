@@ -3506,6 +3506,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Dab	Cap
 	Tight Curl	Ikal rapat
 	Loose Curl	Ikal longgar
+	Tight Curl Long	Ikal rapat panjang
+	Loose Curl Long	Ikal longgar panjang
 	Area	Area
 	Stylized dabs from a history state	Cap bergaya dari sebuah keadaan riwayat
 	Color Table	Tabel Warna

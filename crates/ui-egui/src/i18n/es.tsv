@@ -4403,6 +4403,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Dab	Toque
 	Tight Curl	Rizo apretado
 	Loose Curl	Rizo suelto
+	Tight Curl Long	Rizo apretado largo
+	Loose Curl Long	Rizo suelto largo
 	Stylized dabs from a history state	Toques estilizados desde un estado del historial
 	Font size presets	Valores predefinidos de tamaño de fuente
 	Leading presets	Valores predefinidos de interlineado
