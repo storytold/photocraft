@@ -198,11 +198,12 @@ pub fn camera_raw_surface(surf: &Surface, area: Rect, p: &CameraRaw) -> Surface 
     let src = if warped && !surf.format().alpha { surf.convert(PixelFormat::new(surf.format().mode, surf.format().sample, true)) } else { surf.clone() };
     let fmt = src.format();
     let n = fmt.channels();
-    let orig = src.read_region(area);
+    // Only an unwarped layer keeps its alpha, so a warp doesn't need the original pixels.
+    let orig = (fmt.alpha && !warped).then(|| src.read_region(area));
     let mut data = vec![0.0f32; w * h * n];
     for (i, (q, o)) in px.iter().zip(data.chunks_exact_mut(n)).enumerate() {
         from_rgba_into(&fmt, *q, o);
-        if fmt.alpha && !warped {
+        if let Some(orig) = &orig {
             o[n - 1] = orig[i * n + n - 1];
         }
     }
