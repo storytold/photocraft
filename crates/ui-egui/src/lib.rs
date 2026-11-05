@@ -759,6 +759,7 @@ impl SyntheticTarget {
 
 #[cfg(test)]
 mod artboard_add_mode_tests;
+#[cfg(test)]
 mod shape_bounds_box_tests;
 
 #[cfg(test)]
@@ -852,8 +853,9 @@ mod save_identity_tests;
 mod move_auto_select_tests;
 
 #[cfg(test)]
-mod move_shift_diagonal_tests;
 mod move_history_names_tests;
+#[cfg(test)]
+mod move_shift_diagonal_tests;
 
 #[cfg(test)]
 mod new_group_button_tests;
@@ -962,8 +964,12 @@ mod menu_item_labels_tests;
 mod pen_path_ownership_tests;
 
 #[cfg(test)]
-mod selection_move_step_tests;
-mod preferences_submenu_tests;
-mod layers_empty_area_menu_tests;
 mod doc_tab_menu_tests;
+#[cfg(test)]
+mod layers_empty_area_menu_tests;
+#[cfg(test)]
+mod preferences_submenu_tests;
+#[cfg(test)]
+mod selection_move_step_tests;
+#[cfg(test)]
 mod view_guides_submenu_tests;
