@@ -4822,3 +4822,29 @@ smartSvg	Updates wait while another document or an editing dialog is active.	Upp
 	The estimate is above 8 GiB and the available memory is unknown, so this process or browser tab may run out of memory. You can still try to open it.	Uppskattningen överstiger 8 GiB och det tillgängliga minnet är okänt, så den här processen eller webbläsarfliken kan få slut på minne. Du kan ändå försöka öppna det.
 	ZIP	ZIP
 	{ok} written to {dir}	{ok} har skrivits till {dir}
+	PhotoCraft Updates	PhotoCraft-uppdateringar
+	Checking for updates…	Söker efter uppdateringar…
+	Open Download Page	Öppna hämtningssidan
+	PhotoCraft is up to date.	PhotoCraft är uppdaterat.
+	Could not check for updates.	Det gick inte att söka efter uppdateringar.
+	Updates have not been checked yet.	Ingen sökning efter uppdateringar har gjorts än.
+	Check Again	Kontrollera igen
+	Installed version: {version}	Installerad version: {version}
+	PhotoCraft {version} is available.	PhotoCraft {version} är tillgängligt.
+	Release Notes	Versionsinformation
+	Update and Restart	Uppdatera och starta om
+	Attribute	Attribut
+	Empty	Tom
+	Layer Effects	Lagereffekter
+	Linked	Länkad
+	No Adv. Blending	Ingen avanc. blandning
+	No Layer Effects	Inga lagereffekter
+	No Layer Mask	Ingen lagermask
+	No Vector Mask	Ingen vektormask
+	Not Clipped	Inte urklippt
+	Not Empty	Inte tom
+	Not Linked	Inte länkad
+	Not Locked	Inte låst
+	Not Visible	Inte synlig
+	Source: {name}	Källa: {name}
+	The History Brush source was deleted: set a new source in the History panel	Historikpenselns källa har raderats: ange en ny källa i panelen Historik
