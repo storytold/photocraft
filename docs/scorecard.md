@@ -107,7 +107,7 @@ Baseline: 2026-10-05, 1 run, commit `f5d2bcb54a`, Apple M4 Pro (48 GB), GPU Appl
 | P84 | Open a 36 MP PNG (RGB 8-bit): import (decode + tiles) (#10259) | ≤ 400 ms p95 | – | – | – | – | – | not run | [#10259](https://github.com/storytold/photocraft/issues/10259) |
 | P85 | Open a 36 MP PNG (RGB 16-bit): import (decode + tiles) (#10259) | ≤ 700 ms p95 | – | – | – | – | – | not run | [#10259](https://github.com/storytold/photocraft/issues/10259) |
 | P86 | Open a 36 MP JPEG (RGB 8-bit): import + session admission + first composite (#10259) | ≤ 500 ms p95 | – | – | – | – | – | not run | [#10259](https://github.com/storytold/photocraft/issues/10259) |
-| P87 | Filter dialog preview publish at k 1, 36 MP (display + texels) | ≤ 16 ms p95 | – | – | – | – | – | not run | [#5772](https://github.com/storytold/photocraft/issues/5772) |
+| P87 | Filter dialog preview canvas upload at k 1, 36 MP, 1920x1080 view (display + texels) | ≤ 16 ms p95 | – | – | – | – | – | not run | [#5772](https://github.com/storytold/photocraft/issues/5772) |
 | P88 | Filter dialog preview window texture at k 1, 36 MP | ≤ 16 ms p95 | – | – | – | – | – | not run | [#5772](https://github.com/storytold/photocraft/issues/5772) |
 
 **Not measurable yet** (the code can't do it yet; no number is recorded):
