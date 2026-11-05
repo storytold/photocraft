@@ -71,6 +71,15 @@ pub fn preview_factor(p: &Value, k: u32) -> u32 {
     }
 }
 
+/// Whether the `plugin.run` target's manifest marks any parameter `"unit": "px"`. Only then can a
+/// reduced live preview scale its lengths (#7524); without that contract it previews at full size.
+pub fn declares_pixel_units(p: &Value) -> bool {
+    plugin_by_id(RUN, p).is_ok_and(|plugin| {
+        let m = plugin.manifest();
+        m.params.iter().any(|(key, _)| m.is_pixel_param(key))
+    })
+}
+
 /// Rewrites `plugin.run` params `p` for a live preview on a copy of the document reduced `k`
 /// times: the plug-in's pixel-sized parameters (`"unit": "px"`, under `params` or at the top
 /// level, as [`plugin_params`] reads them) are divided by `k`, so the preview shows the lengths OK
@@ -131,6 +140,11 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
                 Ok(())
             }
             LayerContent::Smart(_) => {
+                if selection.is_some() && resolved.as_object().is_some_and(|params| plugin.manifest().uses_selection_shape(params)) {
+                    return Err(EngineError::Other(
+                        "This effect needs a pixel layer when a selection is active. Rasterize the smart object or clear the selection.".into(),
+                    ));
+                }
                 let sf = SmartFilter {
                     command: RUN.into(),
                     params: json!({"id": id, "params": resolved}),
