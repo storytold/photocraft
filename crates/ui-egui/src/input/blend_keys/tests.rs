@@ -420,13 +420,22 @@ fn dodge_burn_and_sponge_leave_the_layer_alone() {
     }
 }
 
+/// The Art History Brush has a Mode of its own with Photoshop's seven entries: the keys pick
+/// within it and never reach the layer.
 #[test]
-fn art_history_brush_leaves_the_layer_alone() {
-    // Photoshop's Art History Brush has a Mode of its own; ours has no Mode control yet.
+fn art_history_brush_takes_only_its_own_modes() {
     let ctx = egui::Context::default();
     let mut a = app(Tool::ArtHistoryBrush);
     alt_shift(&mut a, &ctx, Key::M, Key::M);
+    assert_eq!(tool_mode(&mut a), Some(BlendMode::Normal), "Multiply isn't an Art History mode");
+    alt_shift(&mut a, &ctx, Key::G, Key::G);
+    assert_eq!(tool_mode(&mut a), Some(BlendMode::Lighten));
+    alt_shift(&mut a, &ctx, Key::Y, Key::Y);
+    assert_eq!(tool_mode(&mut a), Some(BlendMode::Luminosity));
     key_press(&mut a, &ctx, 1);
+    assert_eq!(tool_mode(&mut a), Some(BlendMode::Normal), "wraps within the Art History list");
+    key_press(&mut a, &ctx, 1);
+    assert_eq!(tool_mode(&mut a), Some(BlendMode::Darken));
     assert_eq!(layer_blend(&a), BlendMode::Normal);
     assert_eq!(a.ui.tool, Tool::ArtHistoryBrush);
 }

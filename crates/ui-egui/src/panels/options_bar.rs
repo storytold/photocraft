@@ -99,7 +99,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                             crate::brush_picker::settings_toggle(app, ui);
                             widgets::vline(ui, 22.0);
                         }
-                        if matches!(tool, Tool::CloneStamp | Tool::PatternStamp | Tool::HistoryBrush | Tool::Healing) {
+                        if matches!(tool, Tool::CloneStamp | Tool::PatternStamp | Tool::HistoryBrush | Tool::ArtHistoryBrush | Tool::Healing) {
                             let before = app.session.tools.brush.clone();
                             let mut brush = before.clone();
                             // Mode is the tool's own brush's, kept per tool like its size.
@@ -115,6 +115,10 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                 let width = if t.pro { 62.0 } else { 66.0 };
                                 percent_field(ui, tl!("Opacity"), &mut brush.opacity, 1.0..=100.0, width);
                                 percent_field(ui, tl!("Flow"), &mut brush.flow, 1.0..=100.0, width);
+                            }
+                            // Photoshop's Art History Brush has Opacity but no Flow.
+                            if tool == Tool::ArtHistoryBrush {
+                                percent_field(ui, tl!("Opacity"), &mut brush.opacity, 1.0..=100.0, if t.pro { 62.0 } else { 66.0 });
                             }
                             crate::brush_panel::commit_gesture(app, ui.ctx(), &before, &brush);
                             widgets::vline(ui, 22.0);

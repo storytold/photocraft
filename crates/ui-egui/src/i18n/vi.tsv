@@ -3996,6 +3996,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Dab	Chấm
 	Tight Curl	Xoắn chặt
 	Loose Curl	Xoắn lỏng
+	Tight Curl Long	Xoắn chặt dài
+	Loose Curl Long	Xoắn lỏng dài
 	Stylized dabs from a history state	Các chấm cách điệu từ một trạng thái lịch sử
 	Aspect Ratio	Tỷ lệ khung hình
 	Font size presets	Cỡ chữ đặt sẵn

@@ -4167,6 +4167,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Dab	ダブ
 	Tight Curl	タイトカール
 	Loose Curl	ルーズカール
+	Tight Curl Long	タイトカール (長)
+	Loose Curl Long	ルーズカール (長)
 	Stylized dabs from a history state	履歴状態から様式化したダブを描きます
 	Font size presets	フォントサイズのプリセット
 	Leading presets	行送りのプリセット

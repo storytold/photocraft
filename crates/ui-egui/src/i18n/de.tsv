@@ -3513,6 +3513,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Dab	Tupfer
 	Tight Curl	Eng gewellt
 	Loose Curl	Locker gewellt
+	Tight Curl Long	Eng gewellt lang
+	Loose Curl Long	Locker gewellt lang
 	Stylized dabs from a history state	Stilisierte Tupfer aus einem Protokollzustand
 	Aspect Ratio	Seitenverhältnis
 	Category	Kategorie

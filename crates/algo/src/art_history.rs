@@ -36,10 +36,26 @@ pub enum Style {
     LooseLong,
     Dab,
     TightCurl,
+    TightCurlLong,
     LooseCurl,
+    LooseCurlLong,
 }
 
 impl Style {
+    /// Every style, in the order of Photoshop's Style menu.
+    pub const ALL: [Style; 10] = [
+        Self::TightShort,
+        Self::TightMedium,
+        Self::TightLong,
+        Self::LooseMedium,
+        Self::LooseLong,
+        Self::Dab,
+        Self::TightCurl,
+        Self::TightCurlLong,
+        Self::LooseCurl,
+        Self::LooseCurlLong,
+    ];
+
     /// Parse a command-style identifier (`tightMedium`, …).
     pub fn parse(name: &str) -> Option<Self> {
         Some(match name {
@@ -50,7 +66,9 @@ impl Style {
             "looseLong" => Self::LooseLong,
             "dab" => Self::Dab,
             "tightCurl" => Self::TightCurl,
+            "tightCurlLong" => Self::TightCurlLong,
             "looseCurl" => Self::LooseCurl,
+            "looseCurlLong" => Self::LooseCurlLong,
             _ => return None,
         })
     }
@@ -65,7 +83,9 @@ impl Style {
             Self::LooseLong => "looseLong",
             Self::Dab => "dab",
             Self::TightCurl => "tightCurl",
+            Self::TightCurlLong => "tightCurlLong",
             Self::LooseCurl => "looseCurl",
+            Self::LooseCurlLong => "looseCurlLong",
         }
     }
 
@@ -78,7 +98,9 @@ impl Style {
             Self::LooseLong => 1.10,
             Self::Dab => 1.60,
             Self::TightCurl => 0.50,
+            Self::TightCurlLong => 0.80,
             Self::LooseCurl => 0.80,
+            Self::LooseCurlLong => 1.10,
         }
     }
 
@@ -91,14 +113,19 @@ impl Style {
             Self::LooseLong => 0.70,
             Self::Dab => 0.10,
             Self::TightCurl => 0.05,
+            Self::TightCurlLong => 0.05,
             Self::LooseCurl => 0.40,
+            Self::LooseCurlLong => 0.55,
         }
     }
 
     fn curl_deg(self) -> f32 {
         match self {
             Self::TightCurl => 18.0,
+            // The long curls turn less per dab with wider spacing: a looser spiral, longer strands.
+            Self::TightCurlLong => 12.0,
             Self::LooseCurl => 28.0,
+            Self::LooseCurlLong => 20.0,
             _ => 0.0,
         }
     }
@@ -112,7 +139,9 @@ impl Style {
             Self::LooseLong => 1.2,
             Self::Dab => 1.0,
             Self::TightCurl => 0.9,
+            Self::TightCurlLong => 1.1,
             Self::LooseCurl => 1.1,
+            Self::LooseCurlLong => 1.2,
         }
     }
 }
@@ -439,6 +468,10 @@ pub struct StampParams<'a> {
     pub selection: Option<&'a [f32]>,
     pub lock_transparent: bool,
     pub alpha: Option<usize>,
+    /// What Tolerance compares the history state with, laid out as `dest`; `None` compares with
+    /// `dest` itself. A stroke buffer (`dest` starting transparent, composited onto the layer in a
+    /// blend mode afterwards) passes the layer's pre-stroke pixels here.
+    pub reference: Option<&'a [f32]>,
 }
 
 fn dest_pixels(p: &StampParams<'_>) -> Result<u64, StampError> {
@@ -583,7 +616,8 @@ fn dab_mean_diff(p: &StampParams<'_>, dab: &Dab) -> Option<f32> {
                 continue;
             }
             let Some(di) = origin_index(p.dest_origin, x, y, p.dest_w, p.dest_h, p.ch) else { continue };
-            let Some(dst) = p.dest.get(di..di.saturating_add(p.ch)) else { continue };
+            let against: &[f32] = p.reference.unwrap_or(p.dest);
+            let Some(dst) = against.get(di..di.saturating_add(p.ch)) else { continue };
             let (sx, sy) = rotated_source(dab, x, y);
             if !sample_bilinear(SrcView { data: p.src, w: p.src_w, h: p.src_h, origin: p.src_origin, ch: p.ch }, sx, sy, &mut sampled) {
                 continue;
@@ -625,6 +659,9 @@ pub fn stamp(p: &mut StampParams<'_>) -> Result<u32, StampError> {
     }
     if p.dabs.is_empty() {
         return Err(StampError::Empty);
+    }
+    if p.reference.is_some_and(|r| r.len() < p.dest.len()) {
+        return Err(StampError::Mismatched);
     }
     let dest_area = (p.dest_w as u64).saturating_mul(p.dest_h as u64);
     if dest_area > MAX_COVERAGE {

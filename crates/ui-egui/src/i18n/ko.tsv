@@ -3705,6 +3705,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Dab	찍기
 	Tight Curl	타이트 컬
 	Loose Curl	루즈 컬
+	Tight Curl Long	타이트 컬 롱
+	Loose Curl Long	루즈 컬 롱
 	Stylized dabs from a history state	작업 내역 상태에서 양식화된 찍기
 	Aspect Ratio	종횡비
 	Category	카테고리

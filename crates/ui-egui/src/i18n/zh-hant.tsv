@@ -3120,6 +3120,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Dab	點塗
 	Tight Curl	緊密捲曲
 	Loose Curl	寬鬆捲曲
+	Tight Curl Long	緊密長捲曲
+	Loose Curl Long	寬鬆長捲曲
 	Area	區域
 	Stylized dabs from a history state	從歷史狀態繪製風格化點塗
 	Aspect Ratio	外觀比例

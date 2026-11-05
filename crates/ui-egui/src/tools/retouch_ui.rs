@@ -53,6 +53,20 @@ pub(crate) fn history_brush_params(app: &PhotocraftApp) -> Value {
     json!({"mode": app.session.tools.brush.mode.label()})
 }
 
+/// `paint.artHistoryBrush` params from the options bar (without `points` and `target`): the
+/// tool's own brush's Mode (one of its seven) and Opacity, then Style, Area and Tolerance.
+pub(crate) fn art_history_params(app: &PhotocraftApp) -> Value {
+    let o = &app.ui.tool_options;
+    let b = &app.session.tools.brush;
+    json!({
+        "mode": crate::blend_keys::brush_tool_mode(Tool::ArtHistoryBrush, b.mode).label(),
+        "opacity": b.opacity * 100.0,
+        "style": o.art_history_style,
+        "area": o.art_history_area,
+        "tolerance": o.art_history_tolerance,
+    })
+}
+
 /// The command and options-bar params (without `points` and `target`) of a sequential-dab tool:
 /// Blur, Sharpen, Smudge, Dodge, Burn, Sponge. Shared by the live preview and the commit.
 pub(crate) fn dab_params(app: &PhotocraftApp, tool: Tool) -> Option<(&'static str, Value)> {
@@ -152,14 +166,7 @@ pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], m
             (if tool == Tool::Healing { "paint.healingBrush" } else { "paint.cloneStamp" }, p)
         }
         Tool::HistoryBrush => ("paint.historyBrush", history_brush_params(app)),
-        Tool::ArtHistoryBrush => (
-            "paint.artHistoryBrush",
-            json!({
-                "style": o.art_history_style,
-                "area": o.art_history_area,
-                "tolerance": o.art_history_tolerance,
-            }),
-        ),
+        Tool::ArtHistoryBrush => ("paint.artHistoryBrush", art_history_params(app)),
         Tool::Blur | Tool::Sharpen | Tool::Smudge | Tool::Dodge | Tool::Burn | Tool::Sponge => match dab_params(app, tool) {
             Some(cp) => cp,
             None => return false,
@@ -676,7 +683,9 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                 ("looseLong".to_string(), tl!("Loose Long")),
                 ("dab".to_string(), tl!("Dab")),
                 ("tightCurl".to_string(), tl!("Tight Curl")),
+                ("tightCurlLong".to_string(), tl!("Tight Curl Long")),
                 ("looseCurl".to_string(), tl!("Loose Curl")),
+                ("looseCurlLong".to_string(), tl!("Loose Curl Long")),
             ];
             crate::widgets::dropdown(ui, "art-history-style", tl!("Style"), &mut o.art_history_style, &styles, 130.0);
             opt(ui, tl!("Area"));
