@@ -7,12 +7,21 @@ use photocraft_ui_egui::{PhotocraftApp, camera_raw_ui, control, theme::ThemeKind
 use serde_json::{Value, json};
 
 fn fixture() -> Harness<'static, PhotocraftApp> {
-    let mut h = Harness::builder().with_step_dt(1.0 / 60.0).with_size(vec2(1200.0, 800.0)).build_eframe(|cc| {
+    fixture_with(false)
+}
+/// A grey layer, with a thin white post at about 28% of its width if `post`.
+fn fixture_with(post: bool) -> Harness<'static, PhotocraftApp> {
+    let mut h = Harness::builder().with_step_dt(1.0 / 60.0).with_size(vec2(1200.0, 800.0)).build_eframe(move |cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, ThemeKind::Pro);
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
         app.run("file.new", json!({"width":600,"height":400})).unwrap();
         app.run("layer.new.layer", json!({})).unwrap();
         app.run("edit.fill", json!({"color":"#808080"})).unwrap();
+        if post {
+            app.run("select.rect", json!({"x":162,"y":0,"width":12,"height":400})).unwrap();
+            app.run("edit.fill", json!({"color":"#ffffff"})).unwrap();
+            app.run("select.deselect", json!({})).unwrap();
+        }
         camera_raw_ui::open(&mut app, &cc.egui_ctx).unwrap();
         app
     });
@@ -113,6 +122,33 @@ fn shift_t_then_two_guides_straighten_and_undo_one_at_a_time() {
     assert_eq!(params(&h)["upright"], "off");
 }
 
+/// The guides move the developed picture, not only the stored parameters: a sampler on a post
+/// reads white until the second guide straightens the frame, and again once that guide is undone.
+#[test]
+fn the_second_guide_moves_the_developed_pixels_and_undo_puts_them_back() {
+    let mut h = fixture_with(true);
+    let ctx = h.ctx.clone();
+    camera_raw_ui::menu(h.state_mut(), &ctx, "filter.cameraRaw", &json!({"ui":{"scope":{"samplers":[[0.28,0.1]]}}})).unwrap().unwrap();
+    h.run_steps(2);
+    let sampled = |h: &Harness<'_, PhotocraftApp>| inspect(h)["samplerReadouts"][0]["values"][0].as_f64().unwrap();
+    key(&mut h, Key::T, Modifiers::SHIFT);
+    settle(&mut h, |_| true);
+    let r = preview_rect(&h);
+    drag(&mut h, at(r, 0.22, 0.1), at(r, 0.18, 0.9));
+    settle(&mut h, |_| true);
+    let before = sampled(&h);
+    let revision = inspect(&h)["previewRevision"].clone();
+    drag(&mut h, at(r, 0.78, 0.1), at(r, 0.82, 0.9));
+    settle(&mut h, |d| d["previewRevision"] != revision);
+    let straightened = sampled(&h);
+    assert!((before - straightened).abs() > 20.0, "the sampler reads {before} before the guide and {straightened} after");
+    let revision = inspect(&h)["previewRevision"].clone();
+    key(&mut h, Key::Z, Modifiers::COMMAND);
+    assert_eq!(params(&h)["uprightGuides"].as_array().unwrap().len(), 1);
+    settle(&mut h, |d| d["previewRevision"] != revision);
+    assert_eq!(sampled(&h), before, "undo puts the pixels back");
+}
+
 #[test]
 fn shift_t_again_puts_the_tool_down_and_clicks_zoom_again() {
     let mut h = fixture();
@@ -121,7 +157,10 @@ fn shift_t_again_puts_the_tool_down_and_clicks_zoom_again() {
     assert_eq!(inspect(&h)["guidedUprightTool"]["active"], false);
     assert_eq!(params(&h)["upright"], "guided", "the mode stays");
     let r = preview_rect(&h);
-    drag(&mut h, at(r, 0.3, 0.2), at(r, 0.3, 0.8));
+    let view = inspect(&h)["view"].clone();
+    // The preview's zoom follows the drag's horizontal movement.
+    drag(&mut h, at(r, 0.3, 0.5), at(r, 0.7, 0.5));
+    assert_ne!(inspect(&h)["view"], view, "the drag zooms the preview");
     assert_eq!(params(&h)["uprightGuides"].as_array().unwrap().len(), 0, "no tool, no guide");
     // Escape puts the tool down before it cancels the dialog.
     key(&mut h, Key::T, Modifiers::SHIFT);
