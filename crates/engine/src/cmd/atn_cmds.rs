@@ -45,6 +45,7 @@ mod steps_image;
 mod steps_layer;
 mod steps_layer_style;
 mod steps_make;
+mod steps_perspective_warp;
 mod steps_type_path;
 
 mod steps_stylize;
