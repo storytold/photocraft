@@ -8,14 +8,14 @@ use serde_json::{Value, json};
 
 /// The binary, without the variables `mcp` and `serve` fall back to: a test that wants one sets it.
 fn bin() -> Command {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_photocraft-cli"));
+    let mut cmd = Command::new(crate::binary());
     for var in ENV_VARS {
         cmd.env_remove(var);
     }
     cmd
 }
 
-const ENV_VARS: [&str; 3] = ["PHOTOCRAFT_CONTROL_PORT", "PHOTOCRAFT_CONTROL_TOKEN", "PHOTOCRAFT_CONTROL_TOKEN_FILE"];
+const ENV_VARS: [&str; 4] = ["PHOTOCRAFT_CONTROL_PORT", "PHOTOCRAFT_CONTROL_TOKEN", "PHOTOCRAFT_CONTROL_TOKEN_FILE", "PHOTOCRAFT_GPU"];
 
 fn tmp(name: &str) -> PathBuf {
     let d = std::env::temp_dir().join(format!("pc-cli-{}-{name}", std::process::id()));
@@ -74,7 +74,15 @@ fn every_subcommand_answers_help() {
         }
     }
     // Help where a flag's value should be is still help, not a missing value or a file named `-h`.
-    for args in [&["run", "x.png", "--out", "--help"][..], &["commands", "--filter", "-h"], &["mcp", "--bridge", "-h"], &["serve", "--port", "--help"]] {
+    // So is help after another mistake.
+    for args in [
+        &["run", "x.png", "--out", "--help"][..],
+        &["commands", "--filter", "-h"],
+        &["mcp", "--bridge", "-h"],
+        &["serve", "--port", "--help"],
+        &["mcp", "stray.psd", "--help"],
+        &["serve", "--port", "abc", "--port", "1", "-h"],
+    ] {
         let o = bin().current_dir(&d).args(args).stdin(Stdio::null()).output().unwrap();
         assert_eq!(o.status.code(), Some(0), "{args:?}: {}", String::from_utf8_lossy(&o.stderr));
         assert!(String::from_utf8_lossy(&o.stdout).contains(&format!("photocraft-cli {}", args[0])), "{args:?}");
@@ -161,14 +169,14 @@ fn server_modes_reject_ignored_or_conflicting_options() {
         }
         for flag in ["--automation-read-root", "--automation-write-root"] {
             server_usage_error(&[sub, flag, ".", flag, "."], "cannot be used multiple times");
-            server_usage_error(&[sub, &format!("{flag}=")], &format!("'{flag} "));
+            server_usage_error(&[sub, &format!("{flag}=")], &format!("a value is required for '{flag} "));
             server_usage_error(&[sub, flag, "--automation-write-root", "."], &format!("a value is required for '{flag} "));
         }
         let transport = if sub == "mcp" { "--bridge" } else { "--port" };
         for flag in [transport, "--control-token", "--control-token-file"] {
             // Valid values, so the repeat is what is refused (a transport value is parsed first).
             server_usage_error(&[sub, flag, "7878", &format!("{flag}=7879")], "cannot be used multiple times");
-            server_usage_error(&[sub, flag, ""], &format!("'{flag} "));
+            server_usage_error(&[sub, flag, ""], &format!("for '{flag} "));
         }
         server_usage_error(&[sub, transport, "7878", "--control-token", "unused", "--control-token-file", "unused"], "cannot be used with");
     }
@@ -426,9 +434,25 @@ fn batch_applies_actions_to_directory() {
     write_png(&inp.join("two.png"), 9, 9, 2);
     std::fs::write(inp.join("notes.txt"), "ignored").unwrap();
     let actions = d.join("actions.json");
+    let log = d.join("errors.txt");
     std::fs::write(&actions, json!([{"command": "layer.new.layer", "params": {"name": "Batch"}}]).to_string()).unwrap();
-    let out = ok(bin().args(["batch", "--actions"]).arg(&actions).arg("--in").arg(&inp).arg("--out").arg(&outp).args(["--format", "pcraft"])).stdout;
+    let out = ok(bin()
+        .args(["batch", "--actions"])
+        .arg(&actions)
+        .arg("--in")
+        .arg(&inp)
+        .arg("--out")
+        .arg(&outp)
+        .args(["--format", "pcraft", "--error-log"])
+        .arg(&log))
+    .stdout;
     assert!(out.contains("2 succeeded, 0 failed"), "{out}");
+    let clean_log = std::fs::read(&log).unwrap();
+    assert!(clean_log.starts_with(&[0xff, 0xfe]));
+    let (pairs, remainder) = clean_log[2..].as_chunks::<2>();
+    assert!(remainder.is_empty());
+    let body = String::from_utf16(&pairs.iter().map(|pair| u16::from_le_bytes(*pair)).collect::<Vec<_>>()).unwrap();
+    assert_eq!(body, "Batch Start\r\n\r\nBatch End\r\n");
     for n in ["one", "two"] {
         let info = ok(bin().arg("info").arg(outp.join(format!("{n}.pcraft")))).stdout;
         let v: Value = serde_json::from_str(&info).unwrap();
@@ -440,6 +464,127 @@ fn batch_applies_actions_to_directory() {
     assert_eq!(o.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&o.stderr).contains("FAIL"));
     std::fs::remove_dir_all(d).unwrap();
+}
+
+#[test]
+fn batch_recursive_naming_stop_and_error_log() {
+    let root = tmp("batch-recursive-options");
+    let input = root.join("in");
+    std::fs::create_dir_all(input.join("sub")).unwrap();
+    for file in ["a.png", "sub/a.png", "sub/c.png"] {
+        write_png(&input.join(file), 8, 6, 3);
+    }
+    std::fs::write(input.join("sub/b.png"), b"not a png").unwrap();
+    let actions = root.join("actions.json");
+    std::fs::write(&actions, r#"[["image.imageRotation.90cw", {}]]"#).unwrap();
+    let output = root.join("out");
+    let log = root.join("errors.txt");
+    let run = |out: &Path, extra: &[&str]| {
+        bin().args(["batch", "--actions"]).arg(&actions).arg("--in").arg(&input).arg("--out").arg(out).args(extra).output().unwrap()
+    };
+    let result = run(&output, &["--recursive", "--naming", "{name}-{serial:2}.{ext}", "--start-serial", "5", "--error-log", &log.to_string_lossy()]);
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    assert!(!result.status.success(), "{stdout}");
+    assert!(stdout.contains("3 succeeded, 1 failed"), "{stdout}");
+    for file in ["a-05.png", "a-06.png", "c-08.png"] {
+        assert!(output.join(file).is_file(), "{file}: {stdout}");
+    }
+    let bytes = std::fs::read(log).unwrap();
+    assert!(bytes.starts_with(&[0xff, 0xfe]));
+    let (pairs, remainder) = bytes[2..].as_chunks::<2>();
+    assert!(remainder.is_empty());
+    let errors = String::from_utf16(&pairs.iter().map(|pair| u16::from_le_bytes(*pair)).collect::<Vec<_>>()).unwrap();
+    assert!(errors.contains("Batch Start\r\n") && errors.contains("b.png") && errors.ends_with("Batch End\r\n"), "{errors}");
+
+    let stopped = root.join("stopped");
+    let result = run(&stopped, &["--recursive", "--stop-on-error"]);
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(!result.status.success(), "{stdout}");
+    assert!(stdout.contains("2 succeeded, 1 failed, 1 skipped"), "{stdout}");
+    assert!(stderr.contains("--stop-on-error"), "{stderr}");
+    assert!(!stopped.join("c.png").exists());
+
+    let collision = root.join("collision");
+    let alias = collision.join("../collision/a.png");
+    let result = run(&collision, &["--recursive", "--error-log", &alias.to_string_lossy()]);
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("--error-log"));
+    assert!(!collision.join("a.png").exists());
+}
+
+/// `{serial}` numbers a recursive batch in the engine's order (a folder's files before its
+/// subfolders), `--format` encodes the bytes whatever extension `--naming` writes, and an
+/// `--error-log` that can't be written still leaves the summary printed.
+#[test]
+fn batch_naming_keeps_the_tree_order_and_the_selected_encoder() {
+    let root = tmp("batch-naming-order");
+    let input = root.join("in");
+    std::fs::create_dir_all(input.join("sub")).unwrap();
+    write_png(&input.join("z.png"), 8, 6, 3);
+    write_png(&input.join("sub/a.png"), 5, 4, 3);
+    let actions = root.join("actions.json");
+    std::fs::write(&actions, "[]").unwrap();
+    let run = |out: &Path, extra: &[&str]| {
+        bin().args(["batch", "--actions"]).arg(&actions).arg("--in").arg(&input).arg("--out").arg(out).args(extra).output().unwrap()
+    };
+    let png_width = |path: &Path| {
+        let bytes = std::fs::read(path).unwrap();
+        u32::from_be_bytes(bytes[16..20].try_into().unwrap())
+    };
+    let ordered = root.join("ordered");
+    let result = run(&ordered, &["--recursive", "--naming", "{serial:2}.{ext}"]);
+    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+    assert_eq!(png_width(&ordered.join("01.png")), 8, "the root file comes first");
+    assert_eq!(png_width(&ordered.join("02.png")), 5);
+
+    let jpeg = root.join("jpeg");
+    let result = run(&jpeg, &["--format", "jpg", "--naming", "{name}_{serial}"]);
+    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+    assert!(std::fs::read(jpeg.join("z_001")).unwrap().starts_with(&[0xff, 0xd8]), "JPEG bytes without an extension");
+    let png = root.join("png");
+    let result = run(&png, &["--format", "png", "--naming", "{name}.jpg"]);
+    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+    assert!(std::fs::read(png.join("z.jpg")).unwrap().starts_with(b"\x89PNG"), "PNG bytes under a .jpg name");
+
+    let log = root.join("log-is-a-folder");
+    std::fs::create_dir_all(&log).unwrap();
+    let result = run(&root.join("logged"), &["--error-log", &log.to_string_lossy()]);
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    assert!(!result.status.success(), "{stdout}");
+    assert!(stdout.contains("1 succeeded, 0 failed"), "{stdout}");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// Without --format, a file PhotoCraft only opens is saved as PSD, with or without --naming:
+/// the encoder gets the format the planned name uses, not the input's import-only extension.
+#[test]
+fn batch_saves_import_only_inputs_as_psd() {
+    let root = tmp("batch-import-only");
+    let input = root.join("in");
+    std::fs::create_dir_all(&input).unwrap();
+    std::fs::write(
+        input.join("logo.xpm"),
+        "/* XPM */
+static char *logo[] = {
+\"2 2 1 1\",
+\"a c #FF0000\",
+\"aa\",
+\"aa\"
+};
+",
+    )
+    .unwrap();
+    let actions = root.join("actions.json");
+    std::fs::write(&actions, "[]").unwrap();
+    for (name, extra) in [("plain", &[][..]), ("named", &["--naming", "{name}.{ext}"][..])] {
+        let out = root.join(name);
+        let result = bin().args(["batch", "--actions"]).arg(&actions).arg("--in").arg(&input).arg("--out").arg(&out).args(extra).output().unwrap();
+        assert!(result.status.success(), "{name}: {}{}", String::from_utf8_lossy(&result.stdout), String::from_utf8_lossy(&result.stderr));
+        assert!(std::fs::read(out.join("logo.psd")).unwrap().starts_with(b"8BPS"), "{name}: PSD bytes");
+        assert!(!out.join("logo.xpm").exists(), "{name}");
+    }
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -796,6 +941,33 @@ fn batch_refuses_to_write_over_its_inputs() {
     assert!(after.iter().zip(&before).all(|(a, b)| a.0 == b.0 && a.1 != b.1), "both inputs replaced");
 }
 
+#[test]
+fn batch_naming_rejects_unread_input_alias_through_a_missing_directory() {
+    let d = tmp("batch-missing-directory-alias");
+    let input = d.join("in");
+    std::fs::create_dir_all(&input).unwrap();
+    write_png(&input.join("a.png"), 8, 4, 3);
+    write_png(&input.join("b.png"), 8, 4, 7);
+    let original = std::fs::read(input.join("b.png")).unwrap();
+    let actions = d.join("actions.json");
+    std::fs::write(&actions, r#"[{"command":"image.adjustments.invert"}]"#).unwrap();
+    let output = bin()
+        .arg("batch")
+        .arg("--actions")
+        .arg(&actions)
+        .arg("--in")
+        .arg(&input)
+        .arg("--out")
+        .arg(input.join("missing/.."))
+        .args(["--in-place", "--naming", "b.{ext}"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "{}", String::from_utf8_lossy(&output.stdout));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("replace an input"));
+    assert_eq!(std::fs::read(input.join("b.png")).unwrap(), original);
+    assert!(!input.join("missing").exists());
+}
+
 /// #7437: `convert` to its own input file, however the output is spelt, is refused before
 /// anything is read or written, unless `--in-place` asks for it (as `batch` does, #492).
 #[test]
@@ -936,9 +1108,9 @@ fn mcp_bridge_takes_a_port_or_an_address() {
     let _ = child.wait();
 }
 
-/// `--format` mapping two inputs to one name fails the second instead of overwriting the first (#420).
+/// Photoshop Batch processes every input in order, replacing earlier flat results with the same name.
 #[test]
-fn batch_fails_inputs_that_share_an_output_name() {
+fn batch_later_input_replaces_a_same_named_output() {
     let d = tmp("batch-collide");
     let input = d.join("in");
     std::fs::create_dir_all(&input).unwrap();
@@ -953,15 +1125,10 @@ fn batch_fails_inputs_that_share_an_output_name() {
     let out_dir = d.join("out");
     let o = bin().args(["batch", "--actions"]).arg(&actions).arg("--in").arg(&input).arg("--out").arg(&out_dir).args(["--format", "png"]).output().unwrap();
     let (out, err) = (String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
-    assert!(
-        !o.status.success(),
-        "a lost result must fail the run
-{out}
-{err}"
-    );
-    assert!(out.contains("1 succeeded, 2 failed"), "{out}");
-    assert_eq!(err.matches("not written").count(), 2, "{err}");
-    assert_eq!(std::fs::read_dir(&out_dir).unwrap().count(), 1);
+    assert!(o.status.success(), "{out}{err}");
+    assert!(out.contains("3 succeeded, 0 failed"), "{out}");
+    assert!(out_dir.join("a.png").is_file());
+    assert!(std::fs::read_dir(&out_dir).unwrap().count() <= 2);
     // Keeping each file's format, every input gets its own output.
     let out_dir = d.join("same");
     let out = ok(bin().args(["batch", "--actions"]).arg(&actions).arg("--in").arg(&input).arg("--out").arg(&out_dir)).stdout;
@@ -1014,6 +1181,26 @@ fn tiff_output_is_flat_unless_tiff_layers_is_given() {
     let kept = d.join("kept.tif");
     ok(bin().arg("convert").arg(&src).arg(&kept).arg("--tiff-layers"));
     assert_eq!(layer_count(&kept), 2);
+    std::fs::remove_dir_all(d).unwrap();
+}
+
+#[test]
+fn pcraft_output_has_no_full_composite_unless_asked() {
+    let d = tmp("pcraft-full-composite");
+    let full = |path: &std::path::Path| photocraft_format::read_full_composite(&std::fs::read(path).unwrap()).unwrap().is_some();
+    for (name, flag, expect) in [("plain.pcraft", None, false), ("full.pcraft", Some("--pcraft-full-composite"), true)] {
+        let out = d.join(name);
+        let mut cmd = bin();
+        cmd.args(["run", "--new", r#"{"width":16,"height":16}"#]);
+        if let Some(flag) = flag {
+            cmd.arg(flag);
+        }
+        ok(cmd.arg("--out").arg(&out));
+        assert_eq!(full(&out), expect, "{name}");
+    }
+    let converted = d.join("converted.pcraft");
+    ok(bin().arg("convert").arg(d.join("plain.pcraft")).arg(&converted).arg("--pcraft-full-composite"));
+    assert!(full(&converted));
     std::fs::remove_dir_all(d).unwrap();
 }
 
@@ -1080,6 +1267,20 @@ fn batch_plays_a_photoshop_actions_file() {
     let err = String::from_utf8_lossy(&o.stderr);
     assert!(err.contains("Generative Fill"), "{err}");
     assert!(!o.status.success());
+}
+
+/// A version 12 Actions file (Photoshop 5, often saved on classic Mac OS without an extension) is
+/// recognised by its version word like version 16, not read as a JSON actions list.
+#[test]
+fn extensionless_version_12_actions_file_is_read_as_atn() {
+    let d = tmp("atn-v12");
+    let path = d.join("Legacy Actions");
+    std::fs::write(&path, include_bytes!("../../../../crates/psd/tests/fixtures/atn/v12-commands.atn")).unwrap();
+    let (steps, set, warnings) = photocraft_cli::load_actions_file(&path, None).unwrap();
+    assert_eq!(set.len(), 1);
+    assert_eq!(steps, vec![("actions.play".to_string(), json!({"action": set[0].name}))]);
+    assert!(warnings.is_empty(), "{warnings:?}");
+    std::fs::remove_dir_all(d).unwrap();
 }
 
 /// What `photocraft_cli::run` returned and wrote, in-process.
@@ -1412,4 +1613,111 @@ fn control_token_env_vars_are_the_flags_fallbacks() {
     assert!(err.contains("photocraft-cli serving on") && !err.contains("control token"), "{err}");
     let err = serve_tcp_stderr(bin().args(["serve", "--port"]).arg(free_port().to_string()).env("PHOTOCRAFT_CONTROL_TOKEN", ""));
     assert!(err.contains("photocraft-cli serving on") && err.contains("photocraft-cli control token: "), "{err}");
+}
+
+/// #8802: Deselect with nothing selected is skipped in a `run`, as action playback does (#6744),
+/// so a script that deselects after Reveal Selection still finishes and saves.
+#[test]
+fn run_skips_deselect_with_nothing_selected() {
+    let folder = tmp("deselect-run");
+    let native = folder.join("out.pcraft").to_string_lossy().to_string();
+    let Invoke { code, stdout, stderr } = invoke(&[
+        "run",
+        "--new",
+        r#"{"width":16,"height":16}"#,
+        "--cmd",
+        "select.rect",
+        "--params",
+        r#"{"x":0,"y":0,"width":8,"height":16}"#,
+        "--cmd",
+        "layer.new.layer",
+        "--cmd",
+        "layer.layerMask.revealSelection",
+        "--cmd",
+        "select.deselect",
+        "--cmd",
+        "layer.new.layer",
+        "--params",
+        r#"{"name":"after"}"#,
+        "--out",
+        &native,
+    ]);
+    assert_eq!(code, 0, "{stderr}");
+    let results: Vec<Value> = stdout.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    assert_eq!(results.len(), 5, "every command reports a result: {stdout}");
+    assert_eq!(results[3], json!({"command": "select.deselect", "result": null}));
+    let Invoke { code, stdout, stderr } = invoke(&["info", &native, "--compact"]);
+    assert_eq!(code, 0, "{stderr}");
+    let info: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(info["layers"][0]["name"], "after", "the steps after Deselect ran: {info}");
+
+    // Deselect with a selection still deselects: Inverse afterwards finds nothing to invert.
+    let Invoke { code, stderr, .. } = invoke(&[
+        "run",
+        "--new",
+        r#"{"width":16,"height":16}"#,
+        "--cmd",
+        "select.all",
+        "--cmd",
+        "select.deselect",
+        "--cmd",
+        "select.inverse",
+        "--out",
+        &native,
+    ]);
+    assert_eq!(code, 1, "{stderr}");
+    assert!(stderr.contains("select.inverse") && stderr.contains("no selection"), "{stderr}");
+    let _ = std::fs::remove_dir_all(&folder);
+}
+
+/// #8802: a batched action that starts with Deselect plays on files with nothing selected, as the
+/// same action does in the Actions panel (#6744).
+#[test]
+fn batch_skips_deselect_with_nothing_selected() {
+    let dir = tmp("deselect-batch");
+    let path = |name: &str| dir.join(name).to_string_lossy().to_string();
+    std::fs::create_dir_all(dir.join("in")).unwrap();
+    let Invoke { code, stderr, .. } = invoke(&["run", "--new", r#"{"width":8,"height":6}"#, "--out", &path("in/a.png")]);
+    assert_eq!(code, 0, "{stderr}");
+    std::fs::write(dir.join("steps.json"), json!([["select.deselect", {}], ["image.imageRotation.90cw", {}]]).to_string()).unwrap();
+    let Invoke { code, stdout, stderr } = invoke(&["batch", "--actions", &path("steps.json"), "--in", &path("in"), "--out", &path("out")]);
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    assert!(stdout.contains("1 succeeded, 0 failed"), "{stdout}");
+    let Invoke { code, stdout, stderr } = invoke(&["info", &path("out/a.png"), "--compact"]);
+    assert_eq!(code, 0, "{stderr}");
+    let info: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!((info["width"].as_u64(), info["height"].as_u64()), (Some(6), Some(8)), "the step after Deselect ran: {info}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// TIFF Options from the command line (#8827): `--tiff-compression`, `--tiff-transparency on|off`
+/// and `--tiff-pyramid`; a bad value is a usage error that writes nothing.
+#[test]
+fn tiff_options_choose_compression_transparency_and_pyramid() {
+    let d = tmp("tiff-options");
+    let a = d.join("a.png");
+    write_png(&a, 200, 100, 3);
+    // (flags, compression tag, alpha, directories)
+    for (flags, compression, alpha, dirs) in [
+        (&[][..], 1, true, 1),
+        (&["--tiff-compression", "lzw"][..], 5, true, 1),
+        (&["--tiff-transparency", "off", "--tiff-compression", "zip"][..], 8, false, 1),
+        (&["--tiff-transparency", "on", "--tiff-pyramid"][..], 1, true, 3),
+    ] {
+        let out = d.join("a.tif");
+        ok(bin().arg("convert").arg(&a).arg(&out).args(flags));
+        let bytes = std::fs::read(&out).unwrap();
+        let info = photocraft_codecs::tiff_info(&bytes).unwrap();
+        assert_eq!(info.pages.len(), dirs, "{flags:?}");
+        assert!(info.pages.iter().all(|p| p.compression == compression), "{flags:?}: {:?}", info.pages);
+        assert_eq!(photocraft_codecs::decode(&bytes).unwrap().layout().has_alpha(), alpha, "{flags:?}");
+    }
+    for (flag, bad, expected) in [("--tiff-transparency", "maybe", "expected on or off"), ("--tiff-compression", "jpeg", "expected none, lzw or zip")] {
+        let out = d.join("bad.tif");
+        let o = bin().arg("convert").arg(&a).arg(&out).args([flag, bad]).output().unwrap();
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert_eq!(o.status.code(), Some(2), "{flag} {bad}");
+        assert!(err.contains(flag) && err.contains(expected), "{flag} {bad}: {err}");
+        assert!(!out.exists(), "{flag} {bad} wrote a file");
+    }
 }

@@ -232,6 +232,37 @@ fn patch_long(b: &mut [u8], tag: u16, to: u32) -> bool {
     patched == 1
 }
 
+/// Tiles that all point at the same bytes decode once and fill every tile (the range is shared,
+/// not decoded per tile), and give the image a lossless JPEG of that one tile repeated.
+#[test]
+fn tiles_sharing_one_range_fill_every_tile() {
+    let mut d = DngSpec::cfa(16, 16, mosaic(&scene(16, 16), 16, [0, 1, 1, 2], 64, 4000));
+    d.bits = 12;
+    d.white = 4000;
+    d.black = vec![64];
+    d.storage = DngStorage::Lj92Tiles { width: 8, height: 8 };
+    let mut b = d.build();
+    // TileOffsets (324) and TileByteCounts (325): LONG x 4, stored out of line.
+    for tag in [324u16, 325] {
+        let e = (8..b.len() - 12)
+            .find(|&i| b[i..i + 2] == tag.to_le_bytes() && b[i + 2..i + 4] == 4u16.to_le_bytes() && b[i + 4..i + 8] == 4u32.to_le_bytes())
+            .expect("tile tag");
+        let at = u32::from_le_bytes(b[e + 8..e + 12].try_into().unwrap()) as usize;
+        let first: [u8; 4] = b[at..at + 4].try_into().unwrap();
+        for k in 1..4 {
+            b[at + 4 * k..at + 4 * k + 4].copy_from_slice(&first);
+        }
+    }
+    let shared = decode(&b, &Limits::default()).expect("a repeated tile range decodes");
+    let plane = &shared.data;
+    // Every 8x8 tile holds the first tile's samples.
+    for (ty, tx) in [(0, 8), (8, 0), (8, 8)] {
+        for y in 0..8 {
+            assert_eq!(plane[(ty + y) * 16 + tx..(ty + y) * 16 + tx + 8], plane[y * 16..y * 16 + 8]);
+        }
+    }
+}
+
 /// The lossless-JPEG intermediate is sized from the segment, so the plane check alone
 /// does not bound it: it has to be charged against `max_alloc` too (#2925).
 #[test]
@@ -269,4 +300,19 @@ fn lossless_jpeg_frame_larger_than_the_budget_is_refused() {
     // Holds the image (128 B) and the tile (128 KiB), but not the frame's 512 KiB.
     let budget = Limits { max_alloc: 256 << 10, ..Limits::default() };
     assert!(matches!(decode(&b, &budget), Err(RawError::LimitExceeded(_))));
+}
+
+#[test]
+fn a_non_finite_black_level_develops_without_panicking() {
+    // A BlackLevel DOUBLE beyond f32 reads as inf: the planes must not turn into NaN and trip
+    // the AHD demosaic.
+    let (w, h) = (64, 48);
+    let mut sensor = decode(&DngSpec::cfa(w, h, vec![1000; w * h]).build(), &Limits::default()).unwrap();
+    for black in [f32::INFINITY, f32::NEG_INFINITY, f32::NAN] {
+        sensor.black = BlackLevels::uniform(black);
+        for demosaic in [Demosaic::Ahd, Demosaic::Bilinear, Demosaic::Mhc] {
+            let d = develop_sensor(&sensor, &DevelopOptions { demosaic, ..DevelopOptions::default() });
+            assert!(d.is_ok(), "{black} {demosaic:?}: {:?}", d.err());
+        }
+    }
 }
