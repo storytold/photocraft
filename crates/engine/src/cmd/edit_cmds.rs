@@ -7,6 +7,7 @@ use photocraft_doc::{Adjustment, DocId, Document, Layer, LayerContent, LayerId};
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
+use std::sync::Arc;
 
 use crate::commands::CommandSpec;
 use crate::{EngineError, Result, Session};
@@ -38,6 +39,10 @@ pub struct Clip {
     /// The document the pixels were copied from: Paste keeps them in place only there, and
     /// centres them in any other (#8945). None for an image from another app.
     pub source: Option<DocId>,
+    /// The ICC profile the pixels are in: the source document's for a copy, the embedded one of
+    /// an image from another app. Paste converts them into the destination's profile. None (an
+    /// untagged image, a mask or a channel) pastes the values as they are.
+    pub profile: Option<Arc<Vec<u8>>>,
     /// The artboard the pixels were copied from (its id and rect at the time), when they came
     /// from one: Paste into another board of the same document keeps their place on the board
     /// ([`board_shift`], #8788). None outside boards, across several, or for a copied board.
@@ -213,7 +218,17 @@ fn lift(src: &Surface, sel: Option<&Surface>, canvas: Rect) -> Result<Clip> {
     };
     let mut out = Surface::new(with_alpha);
     if area.is_empty() {
-        return Ok(Clip { svg: None, components: None, surface: out, bounds: Rect::EMPTY, layers: None, resolution: None, source: None, board: None });
+        return Ok(Clip {
+            svg: None,
+            components: None,
+            surface: out,
+            bounds: Rect::EMPTY,
+            layers: None,
+            resolution: None,
+            source: None,
+            board: None,
+            profile: None,
+        });
     }
     // Only the selected area is read: converting the whole layer (a 24 MP Background gaining
     // alpha) cost about a second per Layer via Copy (#668).
@@ -235,7 +250,7 @@ fn lift(src: &Surface, sel: Option<&Surface>, canvas: Rect) -> Result<Clip> {
     out.put_tiles(shared);
     out.prune();
     let bounds = out.content_bounds();
-    Ok(Clip { svg: None, components: None, surface: out, bounds, layers: None, resolution: None, source: None, board: None })
+    Ok(Clip { svg: None, components: None, surface: out, bounds, layers: None, resolution: None, source: None, board: None, profile: None })
 }
 
 /// [`lift`] over one rectangle: `src`'s pixels with alpha (`n` channels), the selection
@@ -317,8 +332,9 @@ fn copy(s: &mut Session, merged: bool) -> Result<Value> {
         return Err(EngineError::Other("Could not copy: the selected area is empty".into()));
     }
     let b = clip.bounds;
+    let profile = Some(crate::color_cmds::document_profile(&d.doc).to_bytes());
     let board = source_board(d, merged, b);
-    let clip = Clip { resolution: Some(d.doc.resolution_dpi), source: Some(d.doc.id), board, ..clip };
+    let clip = Clip { resolution: Some(d.doc.resolution_dpi), source: Some(d.doc.id), board, profile, ..clip };
     s.clipboard = Some(clip);
     Ok(json!({"bounds": [b.x0, b.y0, b.width(), b.height()]}))
 }
@@ -450,7 +466,7 @@ fn copy_mask(s: &mut Session, filter: bool) -> Result<Value> {
     }
     let b = bounds;
     let (resolution, source) = (Some(d.doc.resolution_dpi), Some(d.doc.id));
-    s.clipboard = Some(Clip { svg: None, components: None, surface, bounds: b, layers: None, resolution, source, board: None });
+    s.clipboard = Some(Clip { svg: None, components: None, surface, bounds: b, layers: None, resolution, source, board: None, profile: None });
     Ok(json!({"bounds": [b.x0, b.y0, b.width(), b.height()], "target": if filter { "filterMask" } else { "mask" }}))
 }
 
@@ -526,7 +542,7 @@ fn paste(s: &mut Session, p: &Value, in_place: bool) -> Result<Value> {
     {
         return paste_layers(s, layers, dx, dy, board);
     }
-    let moved = shifted(&clip.surface, dx, dy);
+    let moved = in_doc_colors(s, shifted(&clip.surface, dx, dy), clip.profile.as_ref(), &d.doc)?;
     let target = PixelFormat::new(fmt.mode, fmt.sample, true);
     let surf = if moved.format() == target { moved } else { moved.convert(target) };
     let id = s.edit("Paste", |doc, active| {
@@ -543,6 +559,27 @@ fn paste(s: &mut Session, p: &Value, in_place: bool) -> Result<Value> {
     })?;
     // `edit` reports only where the pasted pixels land as damage, not the whole document (#2901).
     Ok(json!({"layer": id.0, "offset": [dx, dy]}))
+}
+
+/// `surface`, in the colours of `profile`, converted into `doc`'s profile when they differ (Color
+/// Settings' intent and black point compensation, as layers dragged between documents convert).
+/// Pixels without a profile, or with one of another colour space, are left as they are.
+pub(crate) fn in_doc_colors(s: &Session, surface: Surface, profile: Option<&Arc<Vec<u8>>>, doc: &Document) -> Result<Surface> {
+    let mode = surface.format().mode;
+    let Some(from) = profile.and_then(|b| crate::color_cmds::profile_from_bytes(b).ok()) else { return Ok(surface) };
+    let to = crate::color_cmds::document_profile(doc);
+    let layered = crate::layer_copy_cmds::layered;
+    if !layered(mode) || !layered(doc.mode) || from.color_space != crate::color_cmds::mode_space(mode) || from.same_colors(&to) {
+        return Ok(surface);
+    }
+    let mut scratch = Document::new("Clipboard", doc.size, mode, surface.format().sample);
+    scratch.icc_profile = profile.cloned();
+    scratch.layers = vec![Layer::new("Clipboard", LayerContent::Raster(surface))];
+    crate::color_cmds::convert_document(&mut scratch, &to, s.color.settings.intent(), s.color.settings.bpc)?;
+    match scratch.layers.pop().map(|l| l.content) {
+        Some(LayerContent::Raster(converted)) => Ok(converted),
+        _ => Err(EngineError::Other("the clipboard pixels could not be converted".into())),
+    }
 }
 
 /// Paste of a whole copied layer ([`whole_layer`]): fresh copies (a group's children too),
@@ -696,6 +733,8 @@ fn new_from_clipboard(s: &mut Session) -> Result<Value> {
     if let Some(r) = clip.resolution.filter(|r| r.is_finite() && *r > 0.0) {
         doc.resolution_dpi = r;
     }
+    // Tagged with the profile the pixels are in, so they keep their colours.
+    doc.icc_profile = clip.profile.filter(|b| crate::color_cmds::profile_from_bytes(b).is_ok_and(|p| p.color_space == crate::color_cmds::mode_space(fmt.mode)));
     let mut l = Layer::raster(doc.next_layer_name("Layer"), target);
     *crate::pixels_mut(&mut l)? = if moved.format() == target { moved } else { moved.convert(target) };
     doc.layers.push(l);
