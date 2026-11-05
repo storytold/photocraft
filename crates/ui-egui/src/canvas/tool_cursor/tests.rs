@@ -132,6 +132,28 @@ fn bucket_cursor_errors_preserve_the_concise_rasterization_message_across_frames
 
 #[test]
 #[cfg(not(target_arch = "wasm32"))]
+fn a_bucket_cursor_error_leaves_the_status_bar_when_the_cursor_recovers() {
+    let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    let ctx = egui::Context::default();
+    ctx.set_zoom_factor(100.0);
+    frame(&ctx, |ui| {
+        crate::canvas::paint_bucket_cursor(&mut app, ui.painter(), pos2(100.0, 100.0));
+    });
+    assert!(app.ui.status_error, "the failure reaches the status bar");
+    assert!(app.ui.status.contains("Paint Bucket"), "{}", app.ui.status);
+
+    ctx.set_zoom_factor(1.0);
+    for _ in 0..2 {
+        frame(&ctx, |ui| {
+            crate::canvas::paint_bucket_cursor(&mut app, ui.painter(), pos2(100.0, 100.0));
+        });
+    }
+    assert!(!app.ui.status_error, "the cursor works again");
+    assert!(app.ui.status.is_empty(), "{}", app.ui.status);
+}
+
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
 fn bucket_cursor_reuses_the_native_bitmap_while_the_hotspot_moves() {
     let ctx = egui::Context::default();
     ctx.add_plugin(CursorLifecycle);

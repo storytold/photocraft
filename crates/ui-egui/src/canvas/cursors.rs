@@ -154,10 +154,20 @@ pub(crate) fn pipette_cursor(ctx: &egui::Context, p: Pos2) -> egui::CursorIcon {
 /// failures once per distinct message, with the same concise error in the dialog and status bar.
 pub(crate) fn paint_bucket_cursor(app: &mut PhotocraftApp, painter: &egui::Painter, p: Pos2) -> egui::CursorIcon {
     let ctx = painter.ctx();
+    let id = egui::Id::unique("photocraft-bucket-cursor-error");
     match crate::tool_cursor::bucket(painter, p) {
-        Ok(icon) => icon,
+        Ok(icon) => {
+            // The failure belonged to another scale: its status goes, and a new one reports again.
+            if let Some(error) = ctx.data(|data| data.get_temp::<String>(id)) {
+                ctx.data_mut(|data| data.remove::<String>(id));
+                if app.ui.status == error {
+                    app.ui.status.clear();
+                    app.ui.status_error = false;
+                }
+            }
+            icon
+        }
         Err(error) => {
-            let id = egui::Id::unique("photocraft-bucket-cursor-error");
             if ctx.data(|data| data.get_temp::<String>(id)).as_ref() != Some(&error) {
                 if !app.ui.dialogs.iter().any(|dialog| {
                     dialog.kind == crate::state::DialogKind::Error && dialog.fields.get("message").and_then(serde_json::Value::as_str) == Some(&error)
