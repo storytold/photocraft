@@ -3200,6 +3200,8 @@ curves	Smooth	Tasoita
 	Step {step} is waiting for its dialog	Vaihe {step} odottaa valintaikkunaansa
 @plural	{n} action|{n} actions	{n} toiminto|{n} toimintoa
 	Background (Default)	Tausta (oletus)
+	Background (default)	Tausta (oletus)
+	Transparent (default)	Läpinäkyvä (oletus)
 	Content-Aware Fill	Sisältötietoinen täyttö
 # Batch / Image Processor
 	Include All Subfolders	Sisällytä kaikki alikansiot
@@ -4775,6 +4777,17 @@ cameraRaw	White Balance: As Shot	Valkotasapaino: kuvauksen mukainen
 	The path was kept as the Work Path	Polku säilytettiin työpolkuna
 	Edit Brush…	Muokkaa sivellintä…
 
+# Action Stop message (#8386)
+	Message	Viesti
+# Playback Options (#5212)
+	Playback Options…	Toistoasetukset…
+	Playback Options	Toistoasetukset
+	Accelerated	Kiihdytetty
+	Step by Step	Vaihe kerrallaan
+	Pause For:	Tauko:
+	Pause For	Tauko
+	seconds	sekuntia
+	Create a single history state	Luo yksi historiatila
 # 2026-11-03: SVG Smart Objects, gradient stop colour, preferences (AI-assisted, not separately native-reviewed)
 	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	Virheellinen lukuarvo. Anna kokonaisluku väliltä {min}–{max} %. Edellinen arvo palautettiin.
 	Memory usage percent	Muistin käyttöprosentti
@@ -4837,3 +4850,26 @@ smartSvg	SVG editor opened. Save the SVG to update this Smart Object.	SVG-editor
 	Filter for smart objects linked locally	Suodata paikallisesti linkitetyt älykkäät objektit
 	{ok} written to {dir}	{ok} kirjoitettu kansioon {dir}
 @plural	{what}: {n} Image Assets output failed|{what}: {n} Image Assets outputs failed	{what}: {n} kuvaresurssin tuottaminen epäonnistui|{what}: {n} kuvaresurssin tuottaminen epäonnistui
+# 2026-11-05: frames, History Brush source, start screen (AI-assisted, not separately native-reviewed)
+	A frame supports affine transforms; select its image for perspective transforms	Kehys tukee affiineja muunnoksia; valitse sen kuva perspektiivimuunnoksia varten
+	A frame supports affine transforms; select its image to warp it	Kehys tukee affiineja muunnoksia; valitse sen kuva taivuttaaksesi sitä
+	Convert to Frame…	Muunna kehykseksi…
+	Create a new custom frame	Luo uusi mukautettu kehys
+	Create a new polygonal frame	Luo uusi monikulmiokehys
+	Create a new triangular frame	Luo uusi kolmiokehys
+	Fit Content to Frame	Sovita sisältö kehykseen
+	Fit Frame to Content	Sovita kehys sisältöön
+	Frame coordinates must be finite and within 600000 pixels	Kehyksen koordinaattien on oltava äärellisiä ja enintään 600000 pikselin päässä
+	Import Image…	Tuo kuva…
+	Invalid frame transform	Virheellinen kehyksen muunnos
+	Invalid nested file drop	Virheellinen sisäkkäinen tiedoston pudotus
+	New Frame	Uusi kehys
+	Replace Image…	Korvaa kuva…
+	The frame is locked	Kehys on lukittu
+	The frame is unavailable	Kehys ei ole käytettävissä
+	Source: {name}	Lähde: {name}
+	The History Brush source was deleted: set a new source in the History panel	Historiasiveltimen lähde poistettiin: aseta uusi lähde Historia-paneelissa
+	On your computer	Tietokoneellasi
+	New file	Uusi tiedosto
+	Learn	Opi
+	Website	Verkkosivusto

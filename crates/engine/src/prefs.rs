@@ -1085,6 +1085,40 @@ impl Default for Integrations {
     }
 }
 
+choice!(
+    /// Playback Options › Performance: how fast a person's Play runs an action's steps.
+    PlaybackPerformance { Accelerated = "accelerated", StepByStep = "step", Pause = "pause" } default Accelerated
+);
+
+/// Actions panel Playback Options. These are saved independently of an action library.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Actions {
+    pub create_single_history_state: bool,
+    /// Accelerated, Step by Step or Pause For. Agents and headless playback always run at once.
+    pub performance: PlaybackPerformance,
+    /// Pause For's whole seconds between steps, 1 to 60 (the dialog keeps it while another mode
+    /// is chosen, as the reference application does).
+    pub pause_seconds: u8,
+}
+
+impl Default for Actions {
+    fn default() -> Self {
+        Self { create_single_history_state: true, performance: PlaybackPerformance::Accelerated, pause_seconds: 1 }
+    }
+}
+
+impl Actions {
+    /// Shortest and longest Pause For, in seconds.
+    pub const PAUSE_SECONDS: std::ops::RangeInclusive<u8> = 1..=60;
+
+    /// Pause For's seconds, within [`Self::PAUSE_SECONDS`] also when a hand-edited file holds
+    /// another number.
+    pub fn pause_seconds(&self) -> u8 {
+        self.pause_seconds.clamp(*Self::PAUSE_SECONDS.start(), *Self::PAUSE_SECONDS.end())
+    }
+}
+
 /// The History panel's History Options… (not part of Edit › Preferences in Photoshop either).
 /// Photoshop's snapshot options come with #3634.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1169,6 +1203,7 @@ impl LayerMaskOverlay {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Preferences {
+    pub actions: Actions,
     pub general: General,
     pub interface: Interface,
     pub workspace: Workspace,
@@ -1563,6 +1598,9 @@ impl Session {
             }
         } else {
             next.set(path, value)?;
+        }
+        if next.actions.create_single_history_state != self.prefs().actions.create_single_history_state && crate::actions_cmds::history_policy_in_use(self) {
+            return Err("cannot change action history settings during playback".into());
         }
         // Old `prefs.set interface.theme` clients (by path or inside a section object) still
         // select a visible theme.
