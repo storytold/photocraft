@@ -731,6 +731,85 @@ fn inline_images_count_toward_the_page_total() {
     assert!(e.contains("together"), "{e}");
 }
 
+/// A chain of `levels` Form XObjects (objects 5..), each drawing the next `fan` times; the page
+/// draws the first once.
+fn form_chain(levels: usize, fan: usize) -> Vec<u8> {
+    let forms = (0..levels)
+        .map(|i| {
+            let (res, content) = if i + 1 < levels {
+                (
+                    format!("/Resources << /XObject << /C {} 0 R >> >>", 6 + i),
+                    "/C Do
+"
+                    .repeat(fan),
+                )
+            } else {
+                (String::new(), "0 0 1 rg 0 0 10 10 re f".into())
+            };
+            stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 10 10] {res}"), content.as_bytes())
+        })
+        .collect();
+    objects_pdf("/XObject << /F 5 0 R >>", "", "", b"/F Do", forms)
+}
+
+/// The interpreter bounds how deep forms nest, not how often they're drawn: a form drawing its
+/// child twice, 40 levels down, is 2^40 draws, which never finished interpreting. It's refused
+/// before anything interprets the page. Ordinary reuse opens.
+#[test]
+fn form_xobject_fan_out_is_bounded_before_the_page_is_interpreted() {
+    let e = refused(&form_chain(30, 2), "2^30 form draws");
+    assert!(e.contains("Form XObjects more than"), "{e}");
+    // Two forms drawing each other twice: hayro doesn't resolve the reference back into a form
+    // being drawn, so the cycle ends at once and the page opens (the walk refuses a loop it can
+    // follow).
+    let cycle = objects_pdf(
+        "/XObject << /F 5 0 R >>",
+        "",
+        "",
+        b"/F Do",
+        vec![
+            stream("/Type /XObject /Subtype /Form /BBox [0 0 10 10] /Resources << /XObject << /B 6 0 R >> >>", b"/B Do /B Do"),
+            stream("/Type /XObject /Subtype /Form /BBox [0 0 10 10] /Resources << /XObject << /A 5 0 R >> >>", b"/A Do /A Do"),
+        ],
+    );
+    assert!(import_pdf("cycle.pdf", &cycle, &PdfOpenOptions::default(), &Interrupt::NONE).is_ok());
+    // 2^10 draws in all, well within the cap, open.
+    let r = import_pdf("forms.pdf", &form_chain(10, 2), &PdfOpenOptions::default(), &Interrupt::NONE).expect("opens");
+    assert_eq!(r.document.layers.len(), 1);
+}
+
+/// `n` bytes of spaces, deflated (zlib): a few hundred KB that inflate to `n`.
+fn deflated_spaces(n: usize) -> Vec<u8> {
+    use std::io::Write;
+    let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
+    let chunk = vec![b' '; 1 << 20];
+    for _ in 0..n / chunk.len() {
+        z.write_all(&chunk).unwrap();
+    }
+    z.finish().unwrap()
+}
+
+/// A content stream that inflates past 256 MB is refused before it is decoded (hayro has no
+/// decode limit): as the page's content and as a form the page never draws. Ordinary deflated
+/// content opens.
+#[test]
+fn a_content_stream_that_inflates_too_far_is_refused_before_decoding() {
+    let bomb = deflated_spaces(300 << 20);
+    assert!(bomb.len() < 2 << 20, "the test file stays small: {}", bomb.len());
+    let e = refused(&objects_pdf("", "", "/Filter /FlateDecode", &bomb, Vec::new()), "deflate bomb content");
+    assert!(e.contains("inflates past 256 MB"), "{e}");
+    let form = stream("/Type /XObject /Subtype /Form /BBox [0 0 10 10] /Filter /FlateDecode", &bomb);
+    let e = refused(&objects_pdf("/XObject << /F 5 0 R >>", "", "", b"", vec![form]), "deflate bomb form");
+    assert!(e.contains("inflates past"), "{e}");
+    let fine = {
+        use std::io::Write;
+        let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        z.write_all(b"0 0 1 rg 10 10 50 50 re f").unwrap();
+        z.finish().unwrap()
+    };
+    assert!(import_pdf("ok.pdf", &objects_pdf("", "", "/Filter /FlateDecode", &fine, Vec::new()), &PdfOpenOptions::default(), &Interrupt::NONE).is_ok());
+}
+
 // ---- CCITT and JBIG2: sized from their parameters and segment headers, not the dictionary. ----
 
 /// A one-page PDF: objects 5.. are `more`, the page has `resources` and `page_extra` (which may

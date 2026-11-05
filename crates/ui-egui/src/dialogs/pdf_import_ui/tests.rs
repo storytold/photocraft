@@ -425,3 +425,70 @@ fn the_password_prompt_names_its_field() {
     let named: Vec<String> = h.query_all_by_role(egui::accesskit::Role::TextInput).filter_map(|n| n.accesskit_node().label()).collect();
     assert!(named.iter().any(|l| l == "Password:"), "the password field has no accessible name: {named:?}");
 }
+
+/// A `pixelSize` side past `u32` keeps `u32::MAX` (the importer's page cap then scales it down
+/// with its warning); `as u32` wrapped 2^32 + 5 to 5 pixels.
+#[test]
+fn an_oversized_pixel_size_is_not_wrapped() {
+    let mut f = Map::new();
+    f.insert("pixelSize".into(), json!([(1u64 << 32) + 5, 600]));
+    assert_eq!(pixel_size_field(&f), Some((u32::MAX, 600)));
+    assert_eq!(options(&f, 1, false, None).pixel_size, Some((u32::MAX, 600)));
+    f.insert("pixelSize".into(), json!([800, "tall"]));
+    assert_eq!(pixel_size_field(&f), None);
+}
+
+/// When the images can't be listed, the reason is kept for the panel instead of an empty list
+/// that looks like a PDF without images.
+#[test]
+fn a_failed_image_listing_keeps_its_error() {
+    let mut app = app();
+    app.open_bytes("locked.pdf", &encrypted_pdf()).expect("open");
+    let mut st = app.pdf_import.pop().expect("held");
+    render_thumbs(&mut st, &egui::Context::default(), true, "small");
+    assert_eq!(st.images.as_ref().map(Vec::len), Some(0));
+    let e = st.images_error.as_deref().expect("the listing error is kept");
+    assert!(e.contains(pdf_import::PASSWORD_REQUIRED), "{e}");
+}
+
+/// With background opens, the chosen pages are one ordered set: their tabs keep the chosen order
+/// (here, Open In Reverse Order) however the decodes finish, and a PDF dropped between tabs puts
+/// its pages there.
+#[test]
+fn background_pages_keep_their_order_and_the_drop_slot() {
+    use crate::jobs_ui::{self, OpenTab};
+    let mut app = app();
+    for name in ["a.psd", "b.psd"] {
+        app.session.add_document(
+            photocraft_doc::Document::new(name, photocraft_geom::Size::new(4, 4), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8),
+            None,
+        );
+    }
+    app.background_jobs = true;
+    app.open_bytes_placed("multi.pdf", &three_pages(), None, Some(1), None).expect("dialog");
+    let id = dialog(&app).unwrap().id;
+    set(&mut app, "pages", json!([1, 2, 3]));
+    crate::dialogs::confirm(&mut app, id).expect("OK");
+    let orders: Vec<_> = app.jobs.opens.iter().map(|o| o.order.map(|x| x.seq)).collect();
+    assert_eq!(orders, [Some(0), Some(1), Some(2)], "every page is a member of one set, in the chosen order");
+    // The decodes finish out of order: the middle page first, then the last, then the first.
+    for seq in [1usize, 2, 0] {
+        let i = app.jobs.opens.iter().position(|o| o.order.is_some_and(|x| x.seq == seq)).expect("still opening");
+        let tab: OpenTab = app.jobs.opens.remove(i);
+        let index = app.session.add_document(
+            photocraft_doc::Document::new(
+                format!("seq{seq}"),
+                photocraft_geom::Size::new(4, 4),
+                photocraft_color::ColorMode::Rgb,
+                photocraft_color::SampleType::U8,
+            ),
+            None,
+        );
+        let doc = app.session.documents()[index].doc.id;
+        jobs_ui::finish_open_tab(&mut app, &tab, &json!({"document": index, "docId": doc.0})).expect("placed");
+    }
+    let docs: Vec<&str> = app.session.documents().iter().map(|d| d.doc.name.as_str()).collect();
+    // seq 0 is page 3 (Open In Reverse Order), so page 1 ends up last, as in the inline open.
+    assert_eq!(docs, ["a.psd", "seq0", "seq1", "seq2", "b.psd"], "the set's order, at the drop slot");
+    assert!(app.jobs.batches.is_empty(), "the set is forgotten once every page opened");
+}

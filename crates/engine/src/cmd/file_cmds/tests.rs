@@ -3106,6 +3106,40 @@ fn null_pdf_options_count_as_absent() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A linked placement keeps only the path, so Import PDF answers would be lost on Update
+/// Modified Content: they're refused for `file.placeLinked`, and a linked PDF with none places.
+#[test]
+fn linked_pdf_placements_refuse_options_they_cannot_keep() {
+    let dir = tmp("pdf-linked-options");
+    let pdf = pdf_file(&dir, "doc.pdf");
+    let mut s = session(100, 100, 8);
+    let layers = doc(&s).layers.len();
+    let e = s.execute("file.placeLinked", json!({"path": pdf, "page": 2})).expect_err("options can't be kept");
+    assert!(e.to_string().contains("embedded"), "{e}");
+    assert_eq!(doc(&s).layers.len(), layers, "nothing placed");
+    s.execute("file.placeLinked", json!({"path": pdf, "page": null})).expect("no options: places");
+    assert_eq!(doc(&s).layers.len(), layers + 1);
+    s.execute("file.placeEmbedded", json!({"path": pdf, "page": 2})).expect("embedded keeps them");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A resolution past f32's range keeps the maximum instead of becoming infinite (which the
+/// importer would replace with the 300 ppi default), and a page or image number that doesn't fit
+/// `usize` is refused rather than truncated (wasm32's `usize` is 32 bits).
+#[test]
+fn huge_pdf_numbers_clamp_or_are_refused_not_wrapped() {
+    let o = pdf_options(&json!({"resolution": 1e300})).unwrap().expect("given");
+    assert_eq!(o.resolution, photocraft_io::pdf_import::MAX_RESOLUTION);
+    let o = pdf_options(&json!({"resolution": 1e-300})).unwrap().expect("given");
+    assert_eq!(o.resolution, photocraft_io::pdf_import::MIN_RESOLUTION);
+    let past = u64::try_from(usize::MAX).map_or(None, |m| m.checked_add(1));
+    if let Some(n) = past {
+        assert!(pdf_options(&json!({"page": n})).is_err());
+        assert!(pdf_options(&json!({"image": n})).is_err());
+    }
+    assert_eq!(pdf_options(&json!({"page": 3})).unwrap().expect("given").page, 3);
+}
+
 /// A page or an embedded image opened with Import PDF answers is untitled (not tied to the PDF
 /// for Save), as in Photoshop; so is a rasterised page opened with the defaults.
 #[test]

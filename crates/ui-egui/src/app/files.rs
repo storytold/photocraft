@@ -76,7 +76,7 @@ impl PhotocraftApp {
         }
         // A PDF asks how to open first (Import PDF), as Photoshop does.
         if crate::pdf_import_ui::wants_dialog(name, bytes) {
-            return crate::pdf_import_ui::open(self, name, path, bytes).map(|_| Vec::new());
+            return crate::pdf_import_ui::open_placed(self, name, path, bytes, slot).map(|_| Vec::new());
         }
         self.open_decoded(name, bytes, path, slot, order, None)
     }
@@ -89,8 +89,9 @@ impl PhotocraftApp {
         bytes: &[u8],
         path: Option<&str>,
         pdf: photocraft_io::pdf_import::PdfOpenOptions,
+        order: Option<crate::jobs_ui::OpenOrder>,
     ) -> Result<Vec<String>, String> {
-        self.open_decoded(name, bytes, path, None, None, Some(pdf))
+        self.open_decoded(name, bytes, path, None, order, Some(pdf))
     }
 
     /// The decode half of [`Self::open_bytes_placed`], after preset files and the Import PDF
@@ -109,7 +110,7 @@ impl PhotocraftApp {
         // (warnings are shown then).
         if self.background_jobs {
             match pdf {
-                Some(pdf) => jobs_ui::start_open_pdf(self, name, path.map(str::to_string), jobs_ui::bytes(bytes), pdf)?,
+                Some(pdf) => jobs_ui::start_open_pdf(self, name, path.map(str::to_string), jobs_ui::bytes(bytes), pdf, order)?,
                 None => jobs_ui::start_open(self, name, path.map(str::to_string), jobs_ui::bytes(bytes), slot, order)?,
             }
             return Ok(Vec::new());

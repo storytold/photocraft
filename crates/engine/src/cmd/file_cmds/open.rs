@@ -138,14 +138,18 @@ pub fn pdf_options(p: &Value) -> Result<Option<photocraft_io::pdf_import::PdfOpe
     }
     let mut o = PdfOpenOptions::default();
     if let Some(v) = get("page") {
-        o.page = v.as_u64().filter(|n| *n >= 1).ok_or_else(|| EngineError::Other("page: a page number from 1".into()))? as usize;
+        o.page = v.as_u64().filter(|n| *n >= 1).and_then(|n| usize::try_from(n).ok()).ok_or_else(|| EngineError::Other("page: a page number from 1".into()))?;
     }
     if let Some(v) = get("image") {
-        o.image = Some(v.as_u64().filter(|n| *n >= 1).ok_or_else(|| EngineError::Other("image: an image number from 1".into()))? as usize);
+        o.image = Some(
+            v.as_u64().filter(|n| *n >= 1).and_then(|n| usize::try_from(n).ok()).ok_or_else(|| EngineError::Other("image: an image number from 1".into()))?,
+        );
     }
     if let Some(v) = get("resolution") {
         let r = v.as_f64().filter(|r| r.is_finite() && *r > 0.0).ok_or_else(|| EngineError::Other("resolution: pixels per inch".into()))?;
-        o.resolution = r as f32;
+        // Clamped while still f64: a huge value would otherwise become an infinite f32, which
+        // the importer replaces with the 300 ppi default instead of the maximum.
+        o.resolution = r.clamp(f64::from(photocraft_io::pdf_import::MIN_RESOLUTION), f64::from(photocraft_io::pdf_import::MAX_RESOLUTION)) as f32;
     }
     if let Some(v) = get("crop") {
         let c = v.as_str().and_then(CropTo::from_id).ok_or_else(|| EngineError::Other("crop: boundingBox|mediaBox|cropBox|bleedBox|trimBox|artBox".into()))?;
@@ -336,6 +340,15 @@ pub fn place_bytes(s: &mut Session, name: &str, bytes: Vec<u8>, linked: Option<S
     opts.psd_high_memory_approved = approve;
     opts.psd_approved_estimate = None;
     opts.pdf = pdf_options(p)?;
+    // A linked smart object keeps only the path, so Update Modified Content would reopen the
+    // PDF with the defaults (page 1, 300 ppi) and lose these answers. Refuse rather than drift.
+    if linked.is_some() && opts.pdf.is_some() {
+        return Err(EngineError::BadParams {
+            cmd: "file.placeLinked".into(),
+            msg: "Import PDF options (page, resolution, crop, mode, depth, image, password…) aren't kept with a linked file yet; place it embedded instead"
+                .into(),
+        });
+    }
     let imported = photocraft_io::import_with_options(name, &bytes, &opts).map_err(|e| crate::error::io_open_error(name, e))?;
     if imported.preview_only {
         return Err(EngineError::Other(format!(

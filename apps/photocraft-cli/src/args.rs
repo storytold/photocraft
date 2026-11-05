@@ -120,6 +120,11 @@ impl PdfArgs {
     /// The Import PDF answers these flags give, validated as `file.openAs` validates them;
     /// `None` when none is given (a PDF then opens with Photoshop's defaults).
     pub(crate) fn options(&self) -> Result<Option<photocraft_io::pdf_import::PdfOpenOptions>, photocraft_engine::EngineError> {
+        // JSON has no NaN or infinity: they would become `null`, which counts as absent, and the
+        // PDF would silently open at the default resolution.
+        if self.resolution.is_some_and(|r| !r.is_finite()) {
+            return Err(photocraft_engine::EngineError::Other("resolution: pixels per inch".into()));
+        }
         let mut p = serde_json::Map::new();
         let mut put = |key: &str, v: Option<serde_json::Value>| {
             if let Some(v) = v {

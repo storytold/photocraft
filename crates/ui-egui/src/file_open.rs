@@ -110,7 +110,7 @@ impl PhotocraftApp {
         }
         // A PDF asks how to open first (Import PDF), as Photoshop does.
         if crate::pdf_import_ui::wants_dialog(path, bytes) {
-            return crate::pdf_import_ui::open(self, &display_name(path), Some(path), bytes).map(|_| Vec::new());
+            return crate::pdf_import_ui::open_placed(self, &display_name(path), Some(path), bytes, slot).map(|_| Vec::new());
         }
         if self.background_jobs {
             // The path and Open Recent are recorded when the background open finishes.

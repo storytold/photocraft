@@ -83,6 +83,8 @@ pub struct PdfImport {
     pub info: Option<PdfInfo>,
     /// The raster images, listed when Images is first chosen.
     images: Option<Vec<PdfImage>>,
+    /// Why the images couldn't be listed, shown in the panel instead of an empty list.
+    images_error: Option<String>,
     /// The accepted user password of an encrypted file.
     pub password: Option<String>,
     thumbs: Vec<Slot>,
@@ -93,6 +95,8 @@ pub struct PdfImport {
     bounds: Vec<Option<[f32; 4]>>,
     /// The item a ⇧-click range starts from.
     anchor: Option<usize>,
+    /// The tab position the PDF was dropped at, where its pages go; `None`: the end.
+    slot: Option<usize>,
 }
 
 /// Whether `bytes` should open through this dialog: a PDF, unless it is the one-image kind
@@ -139,6 +143,11 @@ pub fn forget(app: &mut PhotocraftApp, id: u64) {
 /// Opens the dialog for the PDF `bytes` read from `path` (when known) as `name`. An encrypted
 /// file asks for its password first. Returns the dialog id.
 pub fn open(app: &mut PhotocraftApp, name: &str, path: Option<&str>, bytes: &[u8]) -> Result<u64, String> {
+    open_placed(app, name, path, bytes, None)
+}
+
+/// [`open`] for a PDF dropped on a tab slot: the pages it opens start there.
+pub fn open_placed(app: &mut PhotocraftApp, name: &str, path: Option<&str>, bytes: &[u8], slot: Option<usize>) -> Result<u64, String> {
     let bytes = Arc::new(bytes.to_vec());
     let mut f = Map::new();
     f.insert(FIELD.into(), json!(true));
@@ -162,12 +171,14 @@ pub fn open(app: &mut PhotocraftApp, name: &str, path: Option<&str>, bytes: &[u8
         bytes,
         info,
         images: None,
+        images_error: None,
         password: None,
         thumbs: (0..pages).map(|_| Slot::Pending).collect(),
         image_thumbs: Vec::new(),
         thumb_key: String::new(),
         bounds: (0..pages).map(|_| None).collect(),
         anchor: None,
+        slot,
     };
     Ok(show(app, st, f))
 }
@@ -221,10 +232,7 @@ pub fn options(f: &Map<String, Value>, n: usize, images: bool, password: Option<
         _ => photocraft_color::ColorMode::Rgb,
     };
     let depth = if f.get("depth").and_then(Value::as_u64) == Some(16) { photocraft_color::SampleType::U16 } else { photocraft_color::SampleType::U8 };
-    let sized = f.get("pixelSize").and_then(Value::as_array).and_then(|a| match a.as_slice() {
-        [w, h] => Some((w.as_u64()? as u32, h.as_u64()? as u32)),
-        _ => None,
-    });
+    let sized = pixel_size_field(f);
     PdfOpenOptions {
         page: if images { 1 } else { n },
         image: images.then_some(n),
@@ -237,6 +245,16 @@ pub fn options(f: &Map<String, Value>, n: usize, images: bool, password: Option<
         pixel_size: sized.filter(|_| !images),
         password: password.map(str::to_string),
         suppress_warnings: flag(f, "suppressWarnings", false),
+    }
+}
+
+/// The `pixelSize` field as `[width, height]`. A side past `u32` keeps `u32::MAX` rather than
+/// wrapping to a small number, so the importer's page cap scales it down with its warning.
+fn pixel_size_field(f: &Map<String, Value>) -> Option<(u32, u32)> {
+    let side = |v: &Value| v.as_u64().map(|n| u32::try_from(n).unwrap_or(u32::MAX));
+    match f.get("pixelSize").and_then(Value::as_array)?.as_slice() {
+        [w, h] => Some((side(w)?, side(h)?)),
+        _ => None,
     }
 }
 
@@ -265,10 +283,7 @@ fn page_size_pt(st: &mut PdfImport, f: &Map<String, Value>, index: usize) -> Opt
 /// The pixel size the dialog shows: the typed one, else the first selected page's box at the
 /// resolution.
 fn pixel_size(st: &mut PdfImport, f: &Map<String, Value>) -> Option<(u32, u32)> {
-    if let Some((w, h)) = f.get("pixelSize").and_then(Value::as_array).and_then(|a| match a.as_slice() {
-        [w, h] => Some((w.as_u64()? as u32, h.as_u64()? as u32)),
-        _ => None,
-    }) {
+    if let Some((w, h)) = pixel_size_field(f) {
         return Some((w.max(1), h.max(1)));
     }
     let first = picks(f, "pages").first().copied()?;
@@ -317,7 +332,13 @@ fn render_thumbs(st: &mut PdfImport, ctx: &egui::Context, images: bool, size: &s
     let mut budget = 3;
     if images {
         if st.images.is_none() {
-            st.images = Some(pdf_import::images(&st.bytes, st.password.as_deref()).unwrap_or_default());
+            st.images = Some(match pdf_import::images(&st.bytes, st.password.as_deref()) {
+                Ok(v) => v,
+                Err(e) => {
+                    st.images_error = Some(e.to_string());
+                    Vec::new()
+                }
+            });
             st.image_thumbs = st.images.as_ref().map_or(Vec::new(), |v| v.iter().map(|_| Slot::Pending).collect());
         }
         for (i, slot) in st.image_thumbs.iter_mut().enumerate() {
@@ -419,6 +440,11 @@ fn left_column(ui: &mut egui::Ui, f: &mut Map<String, Value>, st: &mut PdfImport
     let (panel, _) = ui.allocate_exact_size(PANEL, Sense::hover());
     ui.painter().rect_filled(panel, t.radius_sm, t.field);
     ui.painter().rect_stroke(panel, t.radius_sm, Stroke::new(1.0, t.field_border), StrokeKind::Inside);
+    if let Some(e) = st.images_error.as_deref().filter(|_| images) {
+        let c = panel.center();
+        ui.painter().text(c - vec2(0.0, 9.0), egui::Align2::CENTER_CENTER, tl!("The PDF couldn't be read."), egui::FontId::proportional(12.0), t.danger);
+        ui.painter().text(c + vec2(0.0, 9.0), egui::Align2::CENTER_CENTER, e, egui::FontId::proportional(11.0), t.text_dim);
+    }
     let key = if images { "images" } else { "pages" };
     let count = if images { st.images.as_ref().map_or(0, Vec::len) } else { st.info.as_ref().map_or(0, |i| i.pages.len()) };
     let mut selected = picks(f, key);
@@ -715,12 +741,17 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
     let name = Some(s(f, "name", "").trim()).filter(|n| !n.is_empty()).map_or(st.file_name.clone(), str::to_string);
     let mut opened = 0;
     let mut failed = Vec::new();
-    for n in selected {
-        match app.open_pdf_choice(&name, &st.bytes, st.path.as_deref(), options(f, n, images, st.password.as_deref())) {
+    // One set: the tabs keep the chosen order (Open In Reverse Order included) however the
+    // background opens finish, starting where the PDF was dropped.
+    let batch = crate::jobs_ui::begin_batch_at(app, st.slot);
+    for (seq, n) in selected.into_iter().enumerate() {
+        let order = Some(crate::jobs_ui::OpenOrder { batch, seq });
+        match app.open_pdf_choice(&name, &st.bytes, st.path.as_deref(), options(f, n, images, st.password.as_deref()), order) {
             Ok(_) => opened += 1,
             Err(e) => failed.push(e),
         }
     }
+    crate::jobs_ui::end_batch(app);
     if let Some(e) = failed.first() {
         app.open_failed(&st.file_name, e);
     }

@@ -74,6 +74,14 @@ const MAX_XOBJECTS: usize = 10_000;
 const MAX_JPX_TILES: u64 = 65_536;
 /// Deepest nesting of Form XObjects the walk follows.
 const MAX_FORM_DEPTH: usize = 32;
+/// Most Form XObject draws a page's content may make, repeats included. The interpreter limits
+/// how deep forms nest (50) but not how often one is drawn, so a form drawing its child twice,
+/// 40 levels down, is 2^40 draws: the page would never finish interpreting or rendering.
+const MAX_FORM_DRAWS: u64 = 100_000;
+/// Most bytes one content stream (the page's contents, a form, a tiling pattern, a Type 3 glyph,
+/// a soft-mask group, an appearance) may inflate to. Deflate reaches about 1000:1, so a few MB in
+/// the file could otherwise ask for gigabytes when the stream is decoded.
+const MAX_CONTENT_BYTES: u64 = 256 << 20;
 /// Most dictionaries, arrays and streams [`codec_check`] walks through for one page.
 const MAX_OBJECTS: usize = 200_000;
 /// Deepest nesting of dictionaries and arrays [`codec_check`] follows.
@@ -382,9 +390,8 @@ fn import_pdf_inner(name: &str, bytes: &[u8], opts: &PdfOpenOptions, ctl: &Inter
     let mut doc = Document::new(page_name(name, opts.name.as_deref(), opts.page, count), Size::new(w, h), mode, depth);
     doc.resolution_dpi = ppi;
     let fmt = doc.pixel_format();
-    let px = pixels(&rgba, fmt.mode)?;
     let mut surface = Surface::new(fmt);
-    surface.write_region(doc.bounds(), &px);
+    write_bands(&mut surface, &rgba, (w, h), fmt.mode, ctl)?;
     surface.prune();
     doc.layers.push(Layer::new("Layer 1", LayerContent::Raster(surface)));
     Ok(ImportResult { document: doc, warnings, source_read_only: true, preview_only: false })
@@ -616,20 +623,45 @@ fn render_page(page: &Page, bx: [f32; 4], rotation: u16, (w, h): (u32, u32), ant
 /// Straight-alpha sRGB bytes → the document's interleaved normalised channels: sRGB as is, and
 /// the other modes through the working profiles Photoshop assigns (Dot Gain 20 %, the coated
 /// CMYK profile, Lab D50), relative colorimetric with black point compensation.
-fn pixels(rgba: &[u8], mode: ColorMode) -> Result<Vec<f32>, IoError> {
-    let src: Vec<f32> = rgba.iter().map(|&v| f32::from(v) / 255.0).collect();
+/// Rows converted at a time. Converting the whole page at once held an f32 copy of it, plus a
+/// second one for Gray, CMYK and Lab: about 1 GB and 1.3 GB at the 64 MP cap, on top of the
+/// rendered RGBA. A band keeps that to a few MB.
+const BAND_ROWS: u32 = 256;
+
+/// Writes the rendered `w × h` RGBA page into `surface` in `mode`, a band of rows at a time.
+fn write_bands(surface: &mut Surface, rgba: &[u8], (w, h): (u32, u32), mode: ColorMode, ctl: &Interrupt) -> Result<(), IoError> {
     let dst = match mode {
-        ColorMode::Grayscale => Builtin::DotGain20Compat,
-        ColorMode::Cmyk => Builtin::CoatedCmyk,
-        ColorMode::Lab => Builtin::LabD50,
-        _ => return Ok(src),
+        ColorMode::Grayscale => Some(Builtin::DotGain20Compat),
+        ColorMode::Cmyk => Some(Builtin::CoatedCmyk),
+        ColorMode::Lab => Some(Builtin::LabD50),
+        _ => None,
     };
-    let n = mode.color_channels();
-    let t = Transform::new(Builtin::Srgb.profile(), dst.profile(), Intent::RelativeColorimetric, true)
+    let t = dst
+        .map(|d| Transform::new(Builtin::Srgb.profile(), d.profile(), Intent::RelativeColorimetric, true))
+        .transpose()
         .map_err(|e| IoError::Pdf(format!("colour conversion: {e}")))?;
-    let mut out = vec![0.0f32; src.len() / 4 * (n + 1)];
-    t.convert_f32(&src, 4, &mut out, n + 1, true);
-    Ok(out)
+    let n = if t.is_some() { mode.color_channels() } else { 3 };
+    let row = (w as usize).checked_mul(4).ok_or_else(|| IoError::Pdf("PDF: the page is too wide".into()))?;
+    let mut y = 0u32;
+    while y < h {
+        ctl.check().map_err(|_| IoError::Cancelled)?;
+        let rows = BAND_ROWS.min(h - y);
+        let start = (y as usize).saturating_mul(row);
+        let band = rgba.get(start..start.saturating_add(rows as usize * row)).ok_or_else(|| IoError::Pdf("PDF: the rendered page is short".into()))?;
+        let src: Vec<f32> = band.iter().map(|&v| f32::from(v) / 255.0).collect();
+        let px = match &t {
+            Some(t) => {
+                let mut out = vec![0.0f32; src.len() / 4 * (n + 1)];
+                t.convert_f32(&src, 4, &mut out, n + 1, true);
+                out
+            }
+            None => src,
+        };
+        let y0 = i32::try_from(y).map_err(|_| IoError::Pdf("PDF: the page is too tall".into()))?;
+        surface.write_region(photocraft_geom::Rect::from_xywh(0, y0, w, rows), &px);
+        y += rows;
+    }
+    Ok(())
 }
 
 // --------------------------------------------------------------------------------- budgets
@@ -799,6 +831,38 @@ fn filter_chain<'a>(dict: &Dict<'a>) -> Vec<(Filter, Dict<'a>)> {
         }
     }
     out
+}
+
+/// Refuses a content stream whose Deflate data would inflate past [`MAX_CONTENT_BYTES`], measured
+/// by inflating into nothing (no buffer is kept) before anything decodes it for real. `hayro` has
+/// no decode limit of its own. Streams whose first filter isn't FlateDecode are left to it: the
+/// ASCII filters shrink their input, and LZW and run-length content is rare.
+fn content_bounded(stream: &Stream<'_>, what: &str) -> Result<(), IoError> {
+    if !matches!(filter_chain(stream.dict()).first(), Some((Filter::FlateDecode, _))) {
+        return Ok(());
+    }
+    let raw = stream.raw_data();
+    // `hayro` reads zlib data, or raw deflate when there's no zlib header.
+    let n = inflated_len(flate2::read::ZlibDecoder::new(raw.as_ref())).max(inflated_len(flate2::read::DeflateDecoder::new(raw.as_ref())));
+    if n > MAX_CONTENT_BYTES {
+        return Err(IoError::Pdf(format!("PDF: {what} inflates past {} MB, so the page can't be opened", MAX_CONTENT_BYTES >> 20)));
+    }
+    Ok(())
+}
+
+/// How many bytes `r` yields, counting stops just past [`MAX_CONTENT_BYTES`]; data after a
+/// decoding error isn't counted (the decoder stops there too).
+fn inflated_len(mut r: impl std::io::Read) -> u64 {
+    // On the heap: this runs at the bottom of `codec_check`'s recursive walk.
+    let mut buf = vec![0u8; 64 * 1024];
+    let mut n = 0u64;
+    while n <= MAX_CONTENT_BYTES {
+        match r.read(&mut buf) {
+            Ok(0) | Err(_) => break,
+            Ok(k) => n = n.saturating_add(k as u64),
+        }
+    }
+    n
 }
 
 /// Refuses `stream` when an image codec decodes it: for anything but an image (a content stream,
@@ -1118,6 +1182,7 @@ impl Budget {
 /// drawn from a stream the walk didn't reach, and a resource tree too deep or too large to walk.
 fn preflight(page: &Page) -> Result<(), IoError> {
     codec_check(page)?;
+    form_draws(page)?;
     let mut walk = Walk::default();
     // What the content places, once per drawing.
     let mut unsourced = Vec::new();
@@ -1144,6 +1209,76 @@ fn preflight(page: &Page) -> Result<(), IoError> {
         }
     }
     Ok(())
+}
+
+/// Refuses a page whose content draws Form XObjects more than [`MAX_FORM_DRAWS`] times in all
+/// (counting a form drawn twice by a form drawn twice as four), or a form that draws itself,
+/// before anything interprets the page. Each form's content is read once; the count then
+/// multiplies through the cached lists, so it costs no more than the cap.
+fn form_draws(page: &Page) -> Result<(), IoError> {
+    let mut forms = Forms::default();
+    let top = forms.children(page.typed_operations(), &page.resources().x_objects);
+    let mut drawn = 0u64;
+    for child in top {
+        forms.draw(&child, &page.resources().x_objects, 1, &mut drawn)?;
+    }
+    Ok(())
+}
+
+/// The Form XObjects each form draws, read once per form for [`form_draws`].
+#[derive(Default)]
+struct Forms<'a> {
+    /// A form's children, by the form's object.
+    children: HashMap<ObjectIdentifier, Vec<Stream<'a>>>,
+    /// The forms being drawn right now (a form among them that draws itself loops).
+    open: HashSet<ObjectIdentifier>,
+}
+
+impl<'a> Forms<'a> {
+    /// The Form XObjects `ops` draws, in order, repeats kept; `Do` names resolve in `xobjects`.
+    fn children(&self, mut ops: TypedIter<'_>, xobjects: &Dict<'a>) -> Vec<Stream<'a>> {
+        let mut out = Vec::new();
+        while let Some(op) = ops.next() {
+            if let TypedInstruction::XObject(x) = op
+                && let Some(s) = xobjects.get::<Stream<'a>>(x.0)
+                && matches!(s.dict().get::<Name<'_>>(b"Subtype").as_ref().map(AsRef::<[u8]>::as_ref), Some(b"Form"))
+            {
+                out.push(s);
+            }
+        }
+        out
+    }
+
+    /// One draw of `form` (its `/Resources`, or `inherited` without them), and everything it
+    /// draws in turn, counted into `drawn`.
+    fn draw(&mut self, form: &Stream<'a>, inherited: &Dict<'a>, depth: usize, drawn: &mut u64) -> Result<(), IoError> {
+        *drawn = drawn.saturating_add(1);
+        if *drawn > MAX_FORM_DRAWS {
+            return Err(IoError::Pdf(format!("PDF: the page draws Form XObjects more than {MAX_FORM_DRAWS} times, so it can't be opened")));
+        }
+        if depth > MAX_FORM_DEPTH {
+            return Err(IoError::Pdf(format!("PDF: Form XObjects nest deeper than {MAX_FORM_DEPTH}, so the page can't be opened")));
+        }
+        let id = form.obj_id();
+        if !self.open.insert(id) {
+            return Err(IoError::Pdf("PDF: a Form XObject draws itself, so the page can't be opened".into()));
+        }
+        let xobjects = form.dict().get::<Dict<'a>>(b"Resources").map_or_else(|| inherited.clone(), |r| Resources::new(r).x_objects);
+        let kids = match self.children.get(&id) {
+            Some(k) => k.clone(),
+            None => {
+                // An undecodable form draws nothing (the interpreter skips it too).
+                let k = form.decoded().map(|data| self.children(TypedIter::new(&data), &xobjects)).unwrap_or_default();
+                self.children.insert(id, k.clone());
+                k
+            }
+        };
+        for kid in &kids {
+            self.draw(kid, &xobjects, depth + 1, drawn)?;
+        }
+        self.open.remove(&id);
+        Ok(())
+    }
 }
 
 /// The walk of a page's resources for [`preflight`].
@@ -1462,7 +1597,9 @@ impl Codecs {
         if !self.enter(Some(s.obj_id()), false, depth)? {
             return Ok(());
         }
-        not_image_coded(s, &format!("the /{} stream", String::from_utf8_lossy(key)))?;
+        let what = format!("the /{} stream", String::from_utf8_lossy(key));
+        not_image_coded(s, &what)?;
+        content_bounded(s, &what)?;
         self.entries(s.dict(), false, depth)
     }
 
