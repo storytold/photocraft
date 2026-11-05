@@ -211,8 +211,11 @@ fn color_lookup_picker_cycles_luts_with_the_mouse_wheel() {
 #[test]
 fn color_lookup_picker_steps_into_the_lut_folder_and_back() {
     let tmp = tempfile::tempdir().unwrap();
+    let cube = "LUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n";
     let path = tmp.path().join("film.cube");
-    std::fs::write(&path, "LUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n").unwrap();
+    std::fs::write(&path, cube).unwrap();
+    let grain = tmp.path().join("grain.cube");
+    std::fs::write(&grain, cube).unwrap();
     let mut h = app_harness("colorLookup", "rgb", 8);
     h.state_mut().run("prefs.set", json!({"path": "fileHandling.lutFolder", "value": tmp.path().to_str().unwrap()})).unwrap();
     let (id, _) = layer(&h);
@@ -223,7 +226,19 @@ fn color_lookup_picker_steps_into_the_lut_folder_and_back() {
         other => panic!("{other:?}"),
     };
     let previewed = |h: &Harness<'_, PhotocraftApp>, key: &str| {
-        h.state().live_adjust.as_ref().is_some_and(|(_, p)| p.get("file").or(p.get("lut")).and_then(serde_json::Value::as_str) == Some(key))
+        h.state()
+            .live_adjust
+            .as_ref()
+            .is_some_and(|(_, p)| p.get("fileName").or(p.get("file")).or(p.get("lut")).and_then(serde_json::Value::as_str) == Some(key))
+    };
+    // What the canvas shows: the previewed look, or the committed one.
+    let shown_name = |h: &mut Harness<'_, PhotocraftApp>| {
+        let id = layer(h).0;
+        let doc = crate::canvas::display_doc(h.state_mut(), 0).0;
+        match &doc.layer(id).unwrap().content {
+            LayerContent::Adjustment(Adjustment::ColorLookup { name, .. }) => name.clone(),
+            other => panic!("{other:?}"),
+        }
     };
     let label = label_rect(&h, "3D LUT File").expect("Color Lookup file label");
     let picker = |h: &Harness<'_, PhotocraftApp>| {
@@ -241,29 +256,39 @@ fn color_lookup_picker_steps_into_the_lut_folder_and_back() {
         .expect("Color Lookup picker")
         .click();
     h.run_steps(1);
-    // The folder scan runs on a worker thread: frames until its file is listed in the open popup.
+    // The folder scan runs on a worker thread: frames until its files are listed in the open popup.
     for _ in 0..500 {
-        if h.query_by_label("film.cube").is_some() {
+        if h.query_by_label("film.cube").is_some() && h.query_by_label("grain.cube").is_some() {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
         h.run_steps(1);
     }
-    assert!(h.query_by_label("film.cube").is_some(), "the folder's file is listed after the built-ins");
-    let file = path.to_str().unwrap();
-    // Down from the last built-in: the folder's file, previewed, then committed when the keys rest.
+    assert!(h.query_by_label("film.cube").is_some() && h.query_by_label("grain.cube").is_some(), "the folder's files are listed after the built-ins");
+    let (file, second) = (path.to_str().unwrap(), grain.to_str().unwrap());
+    // Down from the last built-in: the folder's first file, previewed and shown; down again before
+    // the rest: the second, stepped from the preview, not from the committed Cross Process.
     h.key_press(egui::Key::ArrowDown);
     h.run_steps(1);
     assert!(previewed(&h, file), "ArrowDown past Cross Process previews the folder's file: {:?}", h.state().live_adjust);
+    assert_eq!(shown_name(&mut h), "film.cube", "the canvas shows the folder's file");
     assert_eq!(h.state().session.active().unwrap().history.past_len(), steps, "still a preview");
+    h.key_press(egui::Key::ArrowDown);
+    h.run_steps(1);
+    assert!(previewed(&h, second), "a second ArrowDown steps on from the previewed file: {:?}", h.state().live_adjust);
+    assert_eq!(shown_name(&mut h), "grain.cube");
     h.run_steps(4);
-    assert_eq!(name_of(&h), "film.cube", "the rest commits the folder's file");
+    assert_eq!(name_of(&h), "grain.cube", "the rest commits the folder's file");
     assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1);
     assert!(h.state().live_adjust.is_none());
-    // Up from it: the last built-in again.
+    // Up twice: the first file, then the last built-in again.
     h.key_press(egui::Key::ArrowUp);
     h.run_steps(1);
-    assert!(previewed(&h, "crossProcess"), "ArrowUp from the folder's file previews Cross Process: {:?}", h.state().live_adjust);
+    assert!(previewed(&h, file), "{:?}", h.state().live_adjust);
+    h.key_press(egui::Key::ArrowUp);
+    h.run_steps(1);
+    assert!(previewed(&h, "crossProcess"), "ArrowUp from the folder's first file previews Cross Process: {:?}", h.state().live_adjust);
+    assert_eq!(shown_name(&mut h), "Cross Process", "the canvas shows Cross Process");
     h.run_steps(4);
     assert_eq!(name_of(&h), "Cross Process");
     // The wheel steps into the folder too.
@@ -277,6 +302,7 @@ fn color_lookup_picker_steps_into_the_lut_folder_and_back() {
     });
     h.run_steps(1);
     assert!(previewed(&h, file), "a wheel notch down from Cross Process previews the folder's file: {:?}", h.state().live_adjust);
+    assert_eq!(shown_name(&mut h), "film.cube", "the canvas shows the wheel's folder file");
     h.run_steps(4);
     assert_eq!(name_of(&h), "film.cube");
 }
