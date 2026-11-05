@@ -178,10 +178,10 @@ fn the_color_filter_lists_one_label() {
     assert_eq!(listed(doc, &by_color(photocraft_doc::LabelColor::None)), ["ink notes", "Background"]);
     assert!(listed(doc, &by_color(photocraft_doc::LabelColor::Blue)).is_empty(), "a colour no layer has lists nothing");
     // Over the control channel.
-    let f = super::patched(&UiState::default(), &json!({"by": "color", "color": "red"})).unwrap();
+    let f = super::patched(&Filter::default(), &json!({"by": "color", "color": "red"})).unwrap();
     assert_eq!((f.by, f.color), (FilterBy::Color, photocraft_doc::LabelColor::Red));
-    assert!(super::patched(&UiState::default(), &json!({"color": "crimson"})).unwrap_err().contains("crimson"));
-    assert!(super::patched(&UiState::default(), &json!({"color": 2})).is_err());
+    assert!(super::patched(&Filter::default(), &json!({"color": "crimson"})).unwrap_err().contains("crimson"));
+    assert!(super::patched(&Filter::default(), &json!({"color": 2})).is_err());
 }
 
 /// On a Background: the artboard "Back" holding "Grass", the artboard "Front" holding the group
