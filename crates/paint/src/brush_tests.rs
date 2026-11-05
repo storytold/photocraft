@@ -1907,7 +1907,7 @@ fn general_loop_strokes_render_the_same_in_parallel_and_serially_at_every_depth(
             let diff = parallel.iter().zip(&serial).filter(|(a, b)| a.to_bits() != b.to_bits()).count();
             assert_eq!(diff, 0, "stroke {i} at {fmt:?}: {diff} pixels differ between the parallel and the serial render");
             // Colour channels only: the opaque background's alpha (1.0) is always 0.5 away from 0.5.
-            assert!(parallel.chunks_exact(4).any(|px| px[..3].iter().any(|v| (*v - 0.5).abs() > 0.1)), "stroke {i} at {fmt:?} painted something");
+            assert!(parallel.as_chunks::<4>().0.iter().any(|px| px[..3].iter().any(|v| (*v - 0.5).abs() > 0.1)), "stroke {i} at {fmt:?} painted something");
         }
     }
 }
