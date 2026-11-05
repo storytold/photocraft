@@ -38,6 +38,12 @@ fn open_recent_clear_item_is_labelled_with_and_without_recent_files() {
     assert_eq!(clear.label, "Clear Recent File List");
     assert!(clear.enabled);
     assert_eq!(clear.path, vec!["File".to_string(), "Open Recent".to_string()]);
+    // With nothing to clear the item stays in the submenu, greyed.
+    app.ui.recent_files.clear();
+    let items = menu_items(&app);
+    let clear = items.iter().find(|i| i.id == "file.clearRecent").expect("clear item");
+    assert_eq!(clear.label, "Clear Recent File List");
+    assert!(!clear.enabled);
 }
 
 #[test]
