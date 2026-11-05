@@ -922,6 +922,8 @@ mod stamp_tests;
 #[cfg(test)]
 mod alt_click_tests;
 #[cfg(test)]
+mod artboard_first_board_tests;
+#[cfg(test)]
 mod status_bar_tests;
 #[cfg(test)]
 mod stroke_timing_tests;
