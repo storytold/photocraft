@@ -3205,3 +3205,5 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Solid Color	纯色
 	Tint Color	色调颜色
 	Edit Brush…	编辑画笔…
+	Automation read folder	自动化读取文件夹
+	Automation write folder	自动化写入文件夹

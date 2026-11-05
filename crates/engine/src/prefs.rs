@@ -1077,11 +1077,17 @@ pub struct Integrations {
     pub allow_agent_control: bool,
     /// Default control port (0 = only when `--control` is given).
     pub control_port: u32,
+    /// The folder automation may read from when no `--automation-read-root` is given (empty =
+    /// none). Read at launch, like the flag.
+    pub read_root: String,
+    /// The folder automation may write to when no `--automation-write-root` is given (empty =
+    /// none). Read at launch, like the flag.
+    pub write_root: String,
 }
 
 impl Default for Integrations {
     fn default() -> Self {
-        Self { allow_agent_control: true, control_port: 0 }
+        Self { allow_agent_control: true, control_port: 0, read_root: String::new(), write_root: String::new() }
     }
 }
 

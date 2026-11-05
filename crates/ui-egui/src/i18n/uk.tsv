@@ -4231,3 +4231,5 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Колір контрольної точки
 	Shapes can't use patterns yet	Фігури поки не можуть використовувати візерунки
 	Edit Brush…	Редагувати пензель…
+	Automation read folder	Тека читання для автоматизації
+	Automation write folder	Тека запису для автоматизації
