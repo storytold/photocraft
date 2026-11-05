@@ -579,6 +579,8 @@ fn press_drag_release_on_the_fx_button_opens_that_style() {
     assert!(effects.iter().any(|e| e["kind"] == json!("dropShadow")), "on Drop Shadow: {effects:?}");
 }
 
+/// Opening Blending Options shows its controls immediately for unstyled layers and layers
+/// with disabled effects; cancelling preserves the original effects in both cases.
 #[test]
 fn fx_menu_blending_options_opens_the_blending_page_without_changing_effects() {
     for with_effect in [false, true] {
