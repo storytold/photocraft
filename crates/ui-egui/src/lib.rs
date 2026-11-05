@@ -851,6 +851,7 @@ mod move_auto_select_tests;
 
 #[cfg(test)]
 mod move_shift_diagonal_tests;
+mod move_history_names_tests;
 
 #[cfg(test)]
 mod new_group_button_tests;
