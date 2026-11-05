@@ -6,27 +6,83 @@ use photocraft_codecs::{self as codecs, ChannelLayout, Format, Image, SampleType
 use photocraft_color::{BlendMode, ColorMode, PixelFormat, SampleType};
 use photocraft_doc::{AlphaChannel, Document, Layer, LayerContent};
 use photocraft_geom::{Rect, Size, TILE_SIZE};
-use photocraft_raster::Surface;
+use photocraft_raster::{Interrupt, Surface};
 
+use crate::renderer::{BandRenderer, RenderError};
 use crate::{ExportOptions, ExportResult, ImportResult, IoError, TgaBits, XmpEmbed};
 
 /// Bytes per band when converting or exporting a band of rows at a time.
 const BAND_BYTES: usize = 32 << 20;
 
+#[cfg(test)]
+thread_local! {
+    /// Called on this thread just before a layered TIFF's composite is decoded. A test proves
+    /// that admission refused a file without ever reaching that decode.
+    static TEST_BEFORE_COMPOSITE_DECODE: std::cell::RefCell<Option<std::rc::Rc<dyn Fn()>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Runs `f` with `hook` called on this thread just before a layered TIFF's composite is decoded.
+#[cfg(test)]
+pub(crate) fn with_before_composite_decode<R>(hook: std::rc::Rc<dyn Fn()>, f: impl FnOnce() -> R) -> R {
+    struct Reset(Option<std::rc::Rc<dyn Fn()>>);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            TEST_BEFORE_COMPOSITE_DECODE.with(|h| *h.borrow_mut() = self.0.take());
+        }
+    }
+    let prev = TEST_BEFORE_COMPOSITE_DECODE.with(|h| h.borrow_mut().replace(hook));
+    let _reset = Reset(prev);
+    f()
+}
+
+/// Runs the test hook installed by [`with_before_composite_decode`], if any.
+#[cfg(test)]
+fn before_composite_decode() {
+    if let Some(hook) = TEST_BEFORE_COMPOSITE_DECODE.with(|h| h.borrow().clone()) {
+        hook();
+    }
+}
+
+/// No-op outside tests: production decodes have no pre-composite hook.
+#[cfg(not(test))]
+fn before_composite_decode() {}
+
+/// The codec limits a flat import uses: the caller's decoded-pixel allowance lowers the codec's
+/// default cap; 0 keeps the defaults.
+fn decode_limits(opts: &crate::ImportOptions) -> codecs::Limits {
+    let mut limits = codecs::Limits::default();
+    if opts.flat_max_pixel_bytes > 0 {
+        limits.max_alloc = limits.max_alloc.min(opts.flat_max_pixel_bytes);
+    }
+    limits
+}
+
 /// Decodes a flat image into a single-layer document; a TIFF with Photoshop layer data opens
 /// layered (see [`crate::tiff_layers`]).
 pub fn import_flat(name: &str, bytes: &[u8]) -> Result<ImportResult, IoError> {
-    import_flat_with_limit(name, bytes, crate::DEFAULT_PSD_IMPORT_PIXEL_BYTES)
+    import_flat_with_options(name, bytes, &crate::ImportOptions::default(), &photocraft_raster::Interrupt::NONE)
 }
 
-/// [`import_flat`] with the caller's PSD pixel allowance, which a layered TIFF is held to.
-pub(crate) fn import_flat_with_limit(name: &str, bytes: &[u8], pixel_limit: u64) -> Result<ImportResult, IoError> {
+/// [`import_flat`] with the user's import settings and the job's cancellation.
+///
+/// A layered TIFF's composite, layer and retained-image estimate is admitted through
+/// [`crate::memory::evaluate_psd_admission`] with these settings; a zero
+/// `psd_max_pixel_bytes` therefore means the adaptive budget, and
+/// `psd_high_memory_approved`/`psd_approved_estimate` apply to it like to a PSD. The other flat
+/// decoders keep their own limits.
+pub(crate) fn import_flat_with_options(
+    name: &str,
+    bytes: &[u8],
+    opts: &crate::ImportOptions,
+    ctl: &photocraft_raster::Interrupt,
+) -> Result<ImportResult, IoError> {
     // Detected once; every step below branches on it.
     let format = codecs::detect(bytes);
     if format == Some(Format::Tiff) {
-        return import_tiff_page_with_limit(name, bytes, None, pixel_limit);
+        return import_tiff_page_with_options(name, bytes, None, opts, ctl);
     }
-    let img = codecs::decode_as(format.ok_or(codecs::CodecError::UnknownFormat)?, bytes)?;
+    let limits = decode_limits(opts);
+    let img = codecs::decode_as_with(format.ok_or(codecs::CodecError::UnknownFormat)?, bytes, &codecs::DecodeOptions { limits, ..Default::default() })?;
     // A palette BMP, PNG or GIF opens in Indexed Color mode with its colour table, as in
     // Photoshop (#3802, #4804, #7886). A GIF is always palette-based: the first frame's table.
     let palette = match format {
@@ -234,47 +290,151 @@ pub fn tga_alpha_channel_to_transparency(doc: &mut Document) {
 /// rows at a time straight into the layer's tiles, so it opens up to 300,000 px a side without
 /// a second full-size copy (#8169), when the machine has the memory for it (see
 /// [`crate::memory`]).
+///
+/// A layered page is admitted by the adaptive budget like a PSD, with
+/// [`crate::ImportOptions`]' defaults: it can be refused with [`IoError::PsdApprovalRequired`]
+/// or [`IoError::PsdImportBudget`]. Callers that can ask the user or carry cancellation use
+/// [`import_tiff_page_with_options`].
 pub fn import_tiff_page(name: &str, bytes: &[u8], page: Option<usize>) -> Result<ImportResult, IoError> {
-    import_tiff_page_with_limit(name, bytes, page, crate::DEFAULT_PSD_IMPORT_PIXEL_BYTES)
+    import_tiff_page_with_options(name, bytes, page, &crate::ImportOptions::default(), &photocraft_raster::Interrupt::NONE)
 }
 
-fn import_tiff_page_with_limit(name: &str, bytes: &[u8], page: Option<usize>, pixel_limit: u64) -> Result<ImportResult, IoError> {
+/// [`import_tiff_page`] with the user's import settings and the job's cancellation.
+///
+/// A layered page takes the same caller limit and high-memory approval as a PSD
+/// (`ImportOptions::psd_*`): its composite, PSD layer model and retained decoded image are
+/// estimated from the page's tags and admitted *before* the composite is decoded. A cancelled
+/// job stops waiting for the PSD decode gate and between bands.
+pub fn import_tiff_page_with_options(
+    name: &str,
+    bytes: &[u8],
+    page: Option<usize>,
+    opts: &crate::ImportOptions,
+    ctl: &photocraft_raster::Interrupt,
+) -> Result<ImportResult, IoError> {
+    ctl.check().map_err(|_| IoError::Cancelled)?;
     let bands = codecs::TiffBands::open(bytes, page, &codecs::Limits::banded())?;
-    // A page with layers or extra samples (alpha and spot channels) is decoded whole: the layers
-    // and channels are built from the full image. Only one copy of the layer data is kept through
-    // that decode.
-    if bands.meta.photoshop_layers.as_deref().is_some_and(|l| !l.is_empty()) || bands.extra_samples() > 0 {
-        drop(bands);
-        return import_tiff_whole(name, bytes, page, pixel_limit);
+    // Photoshop layer data is decoded whole, so the layers can be built from the complete
+    // composite; the tags are read (not decoded) first, to admit the import before that decode.
+    if bands.meta.photoshop_layers.as_deref().is_some_and(|l| !l.is_empty()) {
+        return import_tiff_layered(name, bytes, page, bands, opts, ctl);
     }
-    tiff_to_document(name, bands.upright(), crate::memory::available, BAND_BYTES)
+    // Extra samples (alpha and spot channels) are only available from a whole-image decode.
+    if bands.extra_samples() > 0 {
+        drop(bands);
+        return import_tiff_with_extras(name, bytes, page, opts, ctl);
+    }
+    tiff_to_document(name, bands.upright(), crate::memory::available, BAND_BYTES, ctl)
 }
 
-/// A layered TIFF, or a flat one with extra samples, decoded whole: the layers are built from the
-/// composite, the channels from the extra samples.
-fn import_tiff_whole(name: &str, bytes: &[u8], page: Option<usize>, pixel_limit: u64) -> Result<ImportResult, IoError> {
+/// A layered TIFF page: its layer tag and resources are read into a plan, the plan's estimate is
+/// admitted, and only then is the composite decoded.
+///
+/// The admission guard is held across the composite decode and the PSD conversion that follows,
+/// so nested decodes spend the same attempt's allowance and nothing here is charged twice.
+fn import_tiff_layered(
+    name: &str,
+    bytes: &[u8],
+    page: Option<usize>,
+    bands: codecs::TiffBands<'_>,
+    opts: &crate::ImportOptions,
+    ctl: &photocraft_raster::Interrupt,
+) -> Result<ImportResult, IoError> {
+    let plan = crate::tiff_layers::preflight(&bands)?;
+    // A file this machine cannot open is refused here, before any composite pixel is decoded,
+    // and an eligible one rechecks a fresh measurement after the gate.
+    let _admission = tiff_admission(plan.required, plan.tiles, opts, ctl)?;
+    drop(bands);
+    before_composite_decode();
     // The orientation is applied after the layer check: rotating the composite but not the
     // layers would misalign them, so a layered TIFF keeps its stored orientation.
     let keep = codecs::DecodeOptions { keep_orientation: true, ..Default::default() };
+    let (mut img, orientation) = match page {
+        None => (codecs::decode_with(bytes, &keep)?, codecs::tiff_orientation(bytes)),
+        Some(p) => (codecs::decode_tiff_page(bytes, p, &keep)?, codecs::tiff_page_orientation(bytes, p)),
+    };
+    // The plan already holds both tags, parsed: a layered page drops the decoder's copies
+    // instead of keeping two of each through the conversion. A flattened fallback still needs
+    // the resources for its channels.
+    if plan.is_layered() {
+        img.meta.photoshop_layers = None;
+        img.meta.photoshop_resources = None;
+    }
+    ctl.check().map_err(|_| IoError::Cancelled)?;
+    let mut r = crate::tiff_layers::import_layered(name, &img, plan, ctl)?;
+    if orientation != 1 {
+        r.warnings.push("the TIFF's orientation tag was ignored so the layers stay aligned with the image".to_string());
+    }
+    Ok(r)
+}
+
+/// Admits a layered TIFF import for `required` bytes, `spillable` of them tile pixels (see
+/// [`crate::memory::evaluate_psd_admission`]), and holds decode admission for it.
+///
+/// A nested import of a different file spends the enclosing attempt's remaining allowance: it
+/// never resolves a fresh budget, resets the parent or charges the parent's image again. A
+/// top-level import is refused before waiting for the gate and rechecked with a fresh
+/// measurement once admitted, so a memory drop during the wait is seen before pixels are
+/// decoded. Cancellation is checked before an allowance is consumed, so a cancelled nested
+/// import never spends its parent's budget.
+fn tiff_admission(
+    required: u64,
+    spillable: u64,
+    opts: &crate::ImportOptions,
+    ctl: &photocraft_raster::Interrupt,
+) -> Result<crate::psd_gate::AdmissionGuard, IoError> {
+    let caller_limit = opts.psd_max_pixel_bytes;
+    let admit = |snapshot: crate::memory::MemorySnapshot| {
+        crate::memory::evaluate_psd_admission(required, spillable, caller_limit, opts.psd_high_memory_approved, opts.psd_approved_estimate, snapshot)
+    };
+    if crate::psd_gate::is_holding_admission() {
+        // A nested, independent TIFF: the same-file continuation never gets here, because
+        // `import_tiff_layered` admits once and `import_layered` does not admit again. It spends
+        // the enclosing attempt's remaining allowance, and the caller's explicit bounds still
+        // apply before that charge (a refused nested import leaves the parent untouched).
+        ctl.check().map_err(|_| IoError::Cancelled)?;
+        crate::memory::nested_import_local_bound(required, caller_limit, opts.psd_approved_estimate)?;
+        let guard = crate::psd_gate::acquire_decode_admission(ctl)?;
+        crate::psd_gate::consume_attempt_allowance(required)?;
+        return Ok(guard);
+    }
+    admit(crate::memory::MemorySnapshot::current())?;
+    let guard = crate::psd_gate::acquire_decode_admission(ctl)?;
+    let outcome = admit(crate::memory::MemorySnapshot::current())?;
+    crate::psd_gate::set_active_attempt_budget(outcome.authorized_total.saturating_sub(required));
+    Ok(guard)
+}
+
+/// A flat TIFF page with extra samples, decoded whole: the composite becomes the layer, the
+/// extra samples its channels.
+fn import_tiff_with_extras(
+    name: &str,
+    bytes: &[u8],
+    page: Option<usize>,
+    opts: &crate::ImportOptions,
+    ctl: &photocraft_raster::Interrupt,
+) -> Result<ImportResult, IoError> {
+    ctl.check().map_err(|_| IoError::Cancelled)?;
+    let keep = codecs::DecodeOptions { keep_orientation: true, limits: decode_limits(opts) };
     let (img, orientation) = match page {
         None => (codecs::decode_with(bytes, &keep)?, codecs::tiff_orientation(bytes)),
         Some(p) => (codecs::decode_tiff_page(bytes, p, &keep)?, codecs::tiff_page_orientation(bytes, p)),
     };
-    if let Some(layers) = img.meta.photoshop_layers.as_deref().filter(|l| !l.is_empty()) {
-        let mut r = crate::tiff_layers::import_layered(name, &img, layers, pixel_limit)?;
-        if orientation != 1 {
-            r.warnings.push("the TIFF's orientation tag was ignored so the layers stay aligned with the image".to_string());
-        }
-        return Ok(r);
-    }
+    ctl.check().map_err(|_| IoError::Cancelled)?;
     image_to_document(name, &img.oriented(orientation)?)
 }
 
 /// A flat TIFF page as a single-layer document, decoded a group of rows at a time into the
 /// layer's tiles: only one group exists beside the document. `available`: the memory this
 /// process can still use (see [`crate::memory::available`]); `budget`: the source bytes per core
-/// converted at a time ([`BAND_BYTES`]).
-fn tiff_to_document(name: &str, mut bands: codecs::TiffBands<'_>, available: impl FnOnce() -> Option<u64>, budget: usize) -> Result<ImportResult, IoError> {
+/// converted at a time ([`BAND_BYTES`]); `ctl`: the job's cancellation, checked per group.
+fn tiff_to_document(
+    name: &str,
+    mut bands: codecs::TiffBands<'_>,
+    available: impl FnOnce() -> Option<u64>,
+    budget: usize,
+    ctl: &photocraft_raster::Interrupt,
+) -> Result<ImportResult, IoError> {
     let (w, h) = bands.dimensions();
     let (layout, sample) = (bands.layout(), bands.sample_type());
     let f = document_format(layout, sample);
@@ -284,11 +444,13 @@ fn tiff_to_document(name: &str, mut bands: codecs::TiffBands<'_>, available: imp
         // The layer's tiles, plus a group as decoded, turned upright, converted and read into a
         // worker's scratch buffer. Linux overcommits, so the tiles below are allocated even when
         // they can't be backed, and writing them would have the process killed: refuse first.
-        let tiles = |n: u32| u64::from(n).div_ceil(TILE_SIZE as u64).saturating_mul(TILE_SIZE as u64);
-        let layer = tiles(w).saturating_mul(tiles(h)).saturating_mul(bpp);
         let group = bands.group_bytes()? as u64;
         let group_px = group / (layout.channels() as u64 * sample.bytes() as u64).max(1);
-        let needed = layer.saturating_add(group.saturating_mul(3)).saturating_add(group_px.saturating_mul(bpp));
+        let surface = surface_bytes(w, h, fmt);
+        let needed = surface.saturating_add(group.saturating_mul(3)).saturating_add(group_px.saturating_mul(bpp));
+        // The layer is streamed into tiles a group at a time, so while the scratch disk is
+        // spilling the tiles it has room for need no RAM; the groups always do.
+        let needed = needed.saturating_sub(crate::memory::scratch_credit(surface));
         crate::memory::check_fits(w, h, needed, available())?;
     }
     let mut s = Surface::new(fmt);
@@ -297,6 +459,7 @@ fn tiff_to_document(name: &str, mut bands: codecs::TiffBands<'_>, available: imp
         IoError::Unsupported(format!("not enough memory to open this {w} × {h} px image: it needs about {gb:.1} GB ({e})"))
     };
     bands.decode(|x, y, group: &Image| -> Result<(), IoError> {
+        ctl.check().map_err(|_| IoError::Cancelled)?;
         let (gw, gh) = group.dimensions();
         let (x, y) = (x as i32, y as i32);
         let rect = |rows: &std::ops::Range<usize>| Rect::new(x, y + rows.start as i32, x.saturating_add(gw as i32), y + rows.end as i32);
@@ -324,6 +487,40 @@ fn tiff_to_document(name: &str, mut bands: codecs::TiffBands<'_>, available: imp
     warnings.extend(f.warning.clone());
     let meta = std::mem::take(&mut bands.meta);
     Ok(single_layer_document(name, (w, h), f, layout.has_alpha(), s, bands.icc.take(), meta, warnings))
+}
+
+/// Bytes a `w` × `h` px document surface of `fmt` allocates: whole tiles, including the padding
+/// of a partly covered edge tile, as [`Surface`] holds them.
+fn surface_bytes(w: u32, h: u32, fmt: PixelFormat) -> u64 {
+    let tiles = |n: u32| u64::from(n).div_ceil(TILE_SIZE as u64).saturating_mul(TILE_SIZE as u64);
+    tiles(w).saturating_mul(tiles(h)).saturating_mul(fmt.bytes_per_pixel() as u64)
+}
+
+/// Bytes a flat page that is decoded whole needs: the decoded image and its extra-sample planes,
+/// the band buffers [`image_surface`] converts through when the document format differs from the
+/// page's, the layer's tiles and, per extra sample, its channel's tiles and its copied plane.
+///
+/// A TIFF whose Photoshop layer tag cannot be read still opens its composite flattened; this
+/// bounds that whole-image decode and its conversion before anything is allocated.
+///
+/// Every term saturates instead of wrapping: an estimate that overflows `u64` is the
+/// `u64::MAX` sentinel, which admission always refuses (see
+/// [`crate::memory::MemoryBudget::decide`]) rather than admitting a wrapped-around value.
+pub(crate) fn flattened_import_bytes(w: u32, h: u32, layout: ChannelLayout, sample: CSample, extras: usize, scratch: u64) -> u64 {
+    let f = document_format(layout, sample);
+    let fmt = PixelFormat::new(f.mode, f.depth, true);
+    let pixels = u64::from(w).saturating_mul(u64::from(h));
+    let in_bps = sample.bytes() as u64;
+    let out_bps = f.sample.bytes() as u64;
+    let e = extras as u64;
+    let decoded = pixels.saturating_mul((layout.channels() as u64).saturating_add(e.saturating_mul(2))).saturating_mul(in_bps);
+    // A band of rows is copied, normalized to 32-bit floats and converted; a few bands' worth
+    // are live at once and the scratch pool reuses the rest within its own budget.
+    let convert = if layout == f.layout && sample == f.sample { 0 } else { (BAND_BYTES as u64).saturating_mul(16) };
+    let layer = surface_bytes(w, h, fmt);
+    let channel = surface_bytes(w, h, PixelFormat::new(ColorMode::Grayscale, f.depth, false));
+    let channels = e.saturating_mul(channel.saturating_add(pixels.saturating_mul(out_bps)));
+    layer.saturating_add(decoded).saturating_add(convert).saturating_add(channels).saturating_add(scratch)
 }
 
 /// Whether a `w` × `h` flat TIFF is checked against free memory before it opens: only the sizes
@@ -452,9 +649,16 @@ pub(crate) fn image_surface(img: &Image, target_layout: ChannelLayout, csample: 
         let band = (BAND_BYTES / row.max(1)).max(1);
         for (i, rows) in img.data().chunks(row.max(1) * band).enumerate() {
             let n = (rows.len() / row.max(1)) as u32;
-            let part = Image::from_raw(w, n, img.layout(), img.sample_type(), rows.to_vec())?.convert(target_layout, csample);
+            // Band buffers cycle through the scratch pool: at this size each fresh one is an
+            // mmap that gets page-faulted in.
+            let mut src = photocraft_raster::scratch::take_cap::<u8>(rows.len());
+            src.extend_from_slice(rows);
+            let src = Image::from_raw(w, n, img.layout(), img.sample_type(), src)?;
+            let part = src.convert(target_layout, csample);
             let y0 = (i * band) as i32;
             s.write_interleaved(Rect::new(0, y0, w as i32, y0 + n as i32), part.data());
+            photocraft_raster::scratch::give(src.into_data());
+            photocraft_raster::scratch::give(part.into_data());
         }
     }
     Ok(s)
@@ -509,12 +713,31 @@ pub(crate) fn csample(s: SampleType) -> CSample {
 
 /// Renders the document to a flat codec image (native pixels when possible).
 pub fn document_to_image(doc: &Document, warnings: &mut Vec<String>) -> Result<Image, IoError> {
-    document_to_image_for(doc, warnings, true, false)
+    document_to_image_with_renderer(doc, warnings, None)
 }
 
-/// `cmyk_target` / `lab_target`: the format stores CMYK / Lab pixels.
-fn document_to_image_for(doc: &Document, warnings: &mut Vec<String>, cmyk_target: bool, lab_target: bool) -> Result<Image, IoError> {
+/// [`document_to_image`] with an optional custom [`BandRenderer`].
+pub fn document_to_image_with_renderer(doc: &Document, warnings: &mut Vec<String>, renderer: Option<&mut dyn BandRenderer>) -> Result<Image, IoError> {
+    document_to_image_for_with_renderer(doc, warnings, true, false, &Interrupt::NONE, renderer)
+}
+
+/// Reported in the export's own warnings (not through the renderer's diagnostics, which a custom
+/// renderer may ignore) when a single plain layer is copied natively although a renderer was given.
+const NATIVE_COPY_CPU_NOTICE: &str =
+    "custom renderer unsupported: a single-layer export copies the document's own pixels with the CPU path; falling back to CPU";
+
+fn document_to_image_for_with_renderer(
+    doc: &Document,
+    warnings: &mut Vec<String>,
+    cmyk_target: bool,
+    lab_target: bool,
+    ctl: &Interrupt<'_>,
+    renderer: Option<&mut dyn BandRenderer>,
+) -> Result<Image, IoError> {
     let src = FlatSource::new(doc, warnings, cmyk_target, lab_target)?;
+    if renderer.is_some() && src.native.is_some() {
+        warnings.push(NATIVE_COPY_CPU_NOTICE.into());
+    }
     let (w, h) = (doc.size.width, doc.size.height);
     // The single layer's alpha is dropped up front when it is opaque. A composite is rendered
     // with alpha, dropped afterwards, in place, when every pixel turned out opaque.
@@ -522,7 +745,7 @@ fn document_to_image_for(doc: &Document, warnings: &mut Vec<String>, cmyk_target
     let bytes = src.sample.bytes();
     let mut data = try_buffer((w as usize) * (h as usize), src.layout(alpha).channels() * bytes)?;
     let mut opaque = true;
-    src.bands(alpha, |_, band, translucent| {
+    src.bands(alpha, ctl, renderer, |_, band, translucent| {
         opaque &= !translucent;
         data.extend_from_slice(&band);
         Ok(())
@@ -533,6 +756,61 @@ fn document_to_image_for(doc: &Document, warnings: &mut Vec<String>, cmyk_target
         layout = src.layout(false);
     }
     Ok(Image::from_raw(w, h, layout, src.sample, data)?.with_icc(src.icc.clone()).with_meta(src.meta()))
+}
+
+/// The document composited as an 8-bit RGBA image, through `renderer` when one is supplied.
+fn document_to_preview_with_renderer(doc: &Document, warnings: &mut Vec<String>, renderer: Option<&mut dyn BandRenderer>) -> Result<Image, IoError> {
+    let src = FlatSource::preview(doc, warnings)?;
+    let (w, h) = (doc.size.width, doc.size.height);
+    let pixels = (w as usize).checked_mul(h as usize).ok_or_else(|| IoError::Unsupported("image too large".into()))?;
+    let mut data = try_buffer(pixels, ChannelLayout::Rgba.channels())?;
+    src.bands(true, &Interrupt::NONE, renderer, |_, band, _| {
+        data.extend_from_slice(&band);
+        Ok(())
+    })?;
+    Ok(Image::from_raw(w, h, ChannelLayout::Rgba, CSample::U8, data)?)
+}
+
+/// A full-size preview as an 8-bit RGBA PNG: what [`photocraft_compose::thumbnail`] returns at
+/// the document's own size, rendered through `renderer` when one is supplied. Keeping previews
+/// at 8-bit RGBA stops a 16-bit document's preview from outgrowing the preview size limit; saved
+/// exports still keep the document's native depth. Like the CPU preview, it carries no export
+/// metadata (EXIF, XMP or resolution).
+pub fn export_preview_png_with_renderer(doc: &Document, renderer: Option<&mut dyn BandRenderer>) -> Result<ExportResult, IoError> {
+    if let Some(r) = renderer {
+        let mut warnings = Vec::new();
+        match document_to_preview_with_renderer(doc, &mut warnings, Some(&mut *r)) {
+            Ok(img) => {
+                // Leave queued diagnostics in the renderer when encoding fails, as a flat
+                // export does, so the caller can still report the fallback reason.
+                let mut res = encode_image(&img, Format::Png, &ExportOptions::default(), warnings)?;
+                res.warnings.extend(r.drain_diagnostics());
+                return Ok(res);
+            }
+            Err(IoError::Render(render_err)) if render_err.is_retryable() => {
+                let fallback_warning = format!("custom renderer unavailable ({render_err}); falling back to CPU");
+                // Keep the fallback reason in this export's warnings only. Move this attempt's
+                // queued diagnostics into its retry result too: leaving either on the renderer
+                // would leak them into a later successful GPU export. If the retry fails, `?`
+                // returns the CPU error and the fallback reason is queued on the renderer for the caller.
+                let mut cpu_result = match export_preview_png_with_renderer(doc, None) {
+                    Ok(res) => res,
+                    Err(e) => {
+                        // Keep the reason the CPU retry happened queued on the renderer, so the caller reports it next to the CPU error.
+                        r.push_diagnostic(fallback_warning);
+                        return Err(e);
+                    }
+                };
+                cpu_result.warnings.extend(r.drain_diagnostics());
+                cpu_result.warnings.push(fallback_warning);
+                return Ok(cpu_result);
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    let mut warnings = Vec::new();
+    let img = document_to_preview_with_renderer(doc, &mut warnings, None)?;
+    encode_image(&img, Format::Png, &ExportOptions::default(), warnings)
 }
 
 /// How a document becomes flat codec pixels, a band of rows at a time: [`document_to_image`]
@@ -610,6 +888,20 @@ impl<'a> FlatSource<'a> {
         Ok(Self { doc, native: None, mode, sample, inks: false, space: None, icc, rows: 0 })
     }
 
+    /// The full-size preview source: the composite as 8-bit RGBA whatever the document's model
+    /// and depth, matching [`photocraft_compose::thumbnail`] at the document's own size. Nothing
+    /// is written to `warnings`: previews do not report flattening or colour conversion, which
+    /// describe exports, not the image on screen.
+    fn preview(doc: &'a Document, _warnings: &mut Vec<String>) -> Result<Self, IoError> {
+        let mut ignored = Vec::new();
+        let mut src = Self::new(doc, &mut ignored, false, false)?;
+        src.native = None;
+        src.sample = CSample::U8;
+        src.mode = ColorMode::Rgb;
+        src.rows = 0;
+        Ok(src)
+    }
+
     fn layout(&self, alpha: bool) -> ChannelLayout {
         layout_for(self.mode, alpha)
     }
@@ -631,7 +923,13 @@ impl<'a> FlatSource<'a> {
     /// whether a composite band held a pixel that isn't fully opaque (its alpha is dropped all
     /// the same when `alpha` is false). A single layer's band is never translucent without
     /// `alpha`: drop it only when [`opaque_surface`] says so.
-    fn bands(&self, alpha: bool, mut sink: impl FnMut(u32, Vec<u8>, bool) -> Result<(), IoError>) -> Result<(), IoError> {
+    fn bands(
+        &self,
+        alpha: bool,
+        ctl: &Interrupt<'_>,
+        mut renderer: Option<&mut dyn BandRenderer>,
+        mut sink: impl FnMut(u32, Vec<u8>, bool) -> Result<(), IoError>,
+    ) -> Result<(), IoError> {
         let doc = self.doc;
         let (w, h) = (doc.size.width, doc.size.height);
         let fmt = doc.pixel_format();
@@ -644,6 +942,7 @@ impl<'a> FlatSource<'a> {
             let rows = if self.rows > 0 { self.rows } else { (BAND_BYTES / (w as usize * ch * bps).max(1)).max(1) as i32 };
             let mut y = 0;
             while y < h as i32 {
+                ctl.check().map_err(|_| IoError::Cancelled)?;
                 let y1 = y.saturating_add(rows).min(h as i32);
                 let mut band = s.to_interleaved(Rect::new(0, y, w as i32, y1));
                 if !alpha {
@@ -666,6 +965,9 @@ impl<'a> FlatSource<'a> {
         let colors = self.layout(false).channels();
         // Bands of quantised samples with alpha; the alpha is dropped here when not wanted.
         let mut emit = |rows: u32, parts: Vec<Vec<u8>>, translucent: bool| -> Result<(), IoError> {
+            // The CPU retry after a retryable GPU error composes through this sink with no
+            // renderer to poll `ctl` for it: check once per band, as `CpuRenderer` does.
+            ctl.check().map_err(|_| IoError::Cancelled)?;
             let mut data = Vec::with_capacity(parts.iter().map(Vec::len).sum());
             for part in parts {
                 data.extend_from_slice(&part);
@@ -676,6 +978,9 @@ impl<'a> FlatSource<'a> {
             sink(rows, data, translucent)
         };
         if self.inks {
+            if let Some(r) = renderer.as_mut() {
+                r.push_diagnostic("custom renderer unsupported: CMYK ink mixing uses the CPU compositor; falling back to CPU".into());
+            }
             // Mixed on ink values, rendered and quantised in bands.
             let rendered = photocraft_compose::cmyk::render_cmyk_bands(doc, doc.bounds(), self.rows, |band| -> Result<(), IoError> {
                 let translucent = band.px.iter().any(|p| p[4] < 1.0 || p[4].is_nan());
@@ -695,15 +1000,27 @@ impl<'a> FlatSource<'a> {
         let cmyk = self.mode == ColorMode::Cmyk;
         let gray = self.mode == ColorMode::Grayscale;
         let space = &self.space;
-        // Rendered and quantised in bands (no full-size float composite), with alpha.
-        photocraft_compose::render_bands(doc, doc.bounds(), self.rows, |band| -> Result<(), IoError> {
-            let translucent = band.px.iter().any(|p| p[3] < 1.0 || p[3].is_nan());
-            let parts = crate::pixels::par_map(crate::pixels::bands(band.px.len()), |range| {
+        let mut expected_y = 0i32;
+        let mut render_one_band = |rect: Rect, px: Vec<[f32; 4]>| -> Result<(), IoError> {
+            if rect.x0 != 0 || rect.width() != w || rect.y0 != expected_y || rect.y1 <= rect.y0 || rect.y1 > h as i32 {
+                return Err(IoError::Render(RenderError::Execution(format!(
+                    "invalid band geometry: expected y={expected_y}.. to span full canvas width {w}, got rect {rect:?}"
+                ))));
+            }
+            let expected_px = (rect.width() as usize)
+                .checked_mul(rect.height() as usize)
+                .ok_or_else(|| IoError::Render(RenderError::Execution("band pixel count overflow".into())))?;
+            if px.len() != expected_px {
+                return Err(IoError::Render(RenderError::Execution(format!("band pixel count mismatch: expected {expected_px}, got {}", px.len()))));
+            }
+            expected_y = rect.y1;
+            let translucent = px.iter().any(|p| p[3] < 1.0 || p[3].is_nan());
+            let parts = crate::pixels::par_map(crate::pixels::bands(px.len()), |range| {
                 // A CMYK composite came through the document's CMYK profile: convert back through it.
                 photocraft_color::convert::with_cmyk_space(space.as_ref(), || {
                     let mut out = Vec::with_capacity(range.len() * (colors + 1) * cs.bytes());
                     let mut converted = [0.0; 5];
-                    for p in band.px.get(range).unwrap_or_default() {
+                    for p in px.get(range).unwrap_or_default() {
                         if cmyk {
                             let channels = photocraft_raster::from_rgba_into(&fmt, *p, &mut converted);
                             for value in converted.iter().take(channels) {
@@ -722,8 +1039,18 @@ impl<'a> FlatSource<'a> {
                     out
                 })
             });
-            emit(band.rect.height(), parts, translucent)
-        })
+            emit(rect.height(), parts, translucent)
+        };
+
+        if let Some(r) = renderer {
+            r.render_bands(doc, doc.bounds(), self.rows, ctl, &mut |band| render_one_band(band.rect, band.pixels))?;
+        } else {
+            photocraft_compose::render_bands(doc, doc.bounds(), self.rows, |band| render_one_band(band.rect, band.into_px()))?;
+        }
+        if expected_y != h as i32 {
+            return Err(IoError::Render(RenderError::Execution(format!("incomplete bands: covered up to y={expected_y}, expected canvas height {h}"))));
+        }
+        Ok(())
     }
 }
 
@@ -786,22 +1113,97 @@ fn composite_share(format: Format) -> f32 {
 
 /// Flattens and encodes as `format`.
 pub fn export_flat(doc: &Document, format: Format, opts: &ExportOptions) -> Result<ExportResult, IoError> {
-    export_flat_with(doc, format, opts, &photocraft_raster::Interrupt::NONE)
+    export_flat_with_renderer(doc, format, opts, &photocraft_raster::Interrupt::NONE, None)
 }
 
 /// [`export_flat`] reporting a coarse step through `ctl` once the composite is rendered; the
 /// encoder does the rest (#3389).
 pub(crate) fn export_flat_with(doc: &Document, format: Format, opts: &ExportOptions, ctl: &photocraft_raster::Interrupt) -> Result<ExportResult, IoError> {
-    if let Some(r) = export_mode_specific(doc, format, opts)? {
+    export_flat_with_renderer(doc, format, opts, ctl, None)
+}
+
+/// [`export_flat`] with an optional custom [`BandRenderer`] and complete CPU retry upon render failure.
+pub fn export_flat_with_renderer(
+    doc: &Document,
+    format: Format,
+    opts: &ExportOptions,
+    ctl: &photocraft_raster::Interrupt,
+    mut renderer: Option<&mut dyn BandRenderer>,
+) -> Result<ExportResult, IoError> {
+    if let Some(mut r) = export_mode_specific(doc, format, opts)? {
+        // Palette PNG/BMP and Duotone exports render on their own paths before the renderer
+        // branch: say so, or `--gpu` would silently do nothing for them.
+        if let Some(renderer) = &mut renderer {
+            let why = match doc.mode {
+                ColorMode::Indexed => "palette (Indexed Color) PNG/BMP export uses the CPU compositor",
+                ColorMode::Duotone => "Duotone export uses the CPU compositor",
+                _ => "this export uses the CPU compositor",
+            };
+            renderer.push_diagnostic(format!("custom renderer unsupported: {why}; falling back to CPU"));
+            r.warnings.extend(renderer.drain_diagnostics());
+        }
         return Ok(r);
     }
     if format == Format::Png && streams_png(doc) {
-        return export_png_streamed(doc, opts, ctl, 0);
+        return export_png_streamed_with_renderer(doc, opts, ctl, 0, renderer);
     }
+
+    if let Some(r) = renderer {
+        let mut warnings = Vec::new();
+        let cmyk_target = format.caps().layouts.iter().any(|layout| layout.is_cmyk());
+        let lab_target = format.caps().layouts.iter().any(|layout| layout.is_lab());
+        match document_to_image_for_with_renderer(doc, &mut warnings, cmyk_target, lab_target, ctl, Some(r)) {
+            Ok(mut img) => {
+                ctl.check().map_err(|_| IoError::Cancelled)?;
+                ctl.progress(composite_share(format));
+                strip_xmp(&mut img.meta, opts);
+                let mut img = prepare_flat(img, format, &mut warnings)?;
+                if format == Format::Tga {
+                    img = tga_image(doc, img, opts.tga_bits, &mut warnings)?;
+                }
+                if format == Format::Dds {
+                    img = dds_image(doc, img, &mut warnings)?;
+                }
+                if format == Format::Tiff {
+                    warnings.extend(crate::tiff_layers::flat_transparency_and_channels(doc, &mut img, opts.tiff_transparency));
+                }
+                // Drain only once encoding succeeded: if it fails, the queued diagnostics stay
+                // with the renderer for the caller to report alongside the error.
+                let mut res = encode_image(&img, format, opts, warnings)?;
+                res.warnings.extend(r.drain_diagnostics());
+                return Ok(res);
+            }
+            Err(IoError::Render(render_err)) if render_err.is_retryable() => {
+                let fallback_warning = format!("custom renderer unavailable ({render_err}); falling back to CPU");
+                // Keep the fallback reason in this export's warnings only. Move this attempt's
+                // queued diagnostics into its retry result too: leaving either on the renderer
+                // would leak them into a later successful GPU export. If the retry fails, `?`
+                // returns the CPU error and the fallback reason is queued on the renderer for the caller.
+                // A cancelled export stops before compositing the document again.
+                if ctl.check().is_err() {
+                    r.push_diagnostic(fallback_warning);
+                    return Err(IoError::Cancelled);
+                }
+                let mut cpu_result = match export_flat_with_renderer(doc, format, opts, ctl, None) {
+                    Ok(res) => res,
+                    Err(e) => {
+                        // Keep the reason the CPU retry happened queued on the renderer, so the caller reports it next to the CPU error.
+                        r.push_diagnostic(fallback_warning);
+                        return Err(e);
+                    }
+                };
+                cpu_result.warnings.extend(r.drain_diagnostics());
+                cpu_result.warnings.push(fallback_warning);
+                return Ok(cpu_result);
+            }
+            Err(e) => return Err(e),
+        }
+    }
+
     let mut warnings = Vec::new();
     let cmyk_target = format.caps().layouts.iter().any(|layout| layout.is_cmyk());
     let lab_target = format.caps().layouts.iter().any(|layout| layout.is_lab());
-    let mut img = document_to_image_for(doc, &mut warnings, cmyk_target, lab_target)?;
+    let mut img = document_to_image_for_with_renderer(doc, &mut warnings, cmyk_target, lab_target, ctl, None)?;
     ctl.check().map_err(|_| IoError::Cancelled)?;
     ctl.progress(composite_share(format));
     strip_xmp(&mut img.meta, opts);
@@ -813,7 +1215,7 @@ pub(crate) fn export_flat_with(doc: &Document, format: Format, opts: &ExportOpti
         img = dds_image(doc, img, &mut warnings)?;
     }
     if format == Format::Tiff {
-        warnings.extend(crate::tiff_layers::stamp_flat_channels(doc, &mut img));
+        warnings.extend(crate::tiff_layers::flat_transparency_and_channels(doc, &mut img, opts.tiff_transparency));
     }
     encode_image(&img, format, opts, warnings)
 }
@@ -894,18 +1296,75 @@ fn streams_png(doc: &Document) -> bool {
 /// when every pixel turns out opaque (that is only known once the last row is written).
 ///
 /// `rows`: rows per band, 0 to size them to the document.
-fn export_png_streamed(doc: &Document, opts: &ExportOptions, ctl: &photocraft_raster::Interrupt, rows: i32) -> Result<ExportResult, IoError> {
-    // A wrong guess (a knockout or a blend mode the guess doesn't foresee) shows in a band and
-    // the export starts again with alpha.
+#[cfg(test)]
+pub(crate) fn export_png_streamed(doc: &Document, opts: &ExportOptions, ctl: &photocraft_raster::Interrupt, rows: i32) -> Result<ExportResult, IoError> {
+    export_png_streamed_with_renderer(doc, opts, ctl, rows, None)
+}
+
+/// [`export_png_streamed`] with an optional custom [`BandRenderer`] and complete CPU retry upon render failure.
+pub fn export_png_streamed_with_renderer(
+    doc: &Document,
+    opts: &ExportOptions,
+    ctl: &photocraft_raster::Interrupt,
+    rows: i32,
+    renderer: Option<&mut dyn BandRenderer>,
+) -> Result<ExportResult, IoError> {
+    if let Some(r) = renderer {
+        let opaque = match single_layer(doc) {
+            Some(s) => opaque_surface(s, doc.bounds()),
+            None => opaque_bottom(doc),
+        };
+        let mut progress = 0.0;
+        let first_try = stream_png_with_renderer(doc, opts, ctl, !opaque, rows, &mut progress, Some(&mut *r));
+        let attempt = match first_try {
+            Ok(Some(res)) => Ok(Some(res)),
+            Ok(None) => {
+                // Alpha was mispredicted: retry with alpha enabled, retaining the GPU provider!
+                stream_png_with_renderer(doc, opts, ctl, true, rows, &mut progress, Some(&mut *r))
+            }
+            Err(e) => Err(e),
+        };
+        match attempt {
+            Ok(Some(mut res)) => {
+                res.warnings.extend(r.drain_diagnostics());
+                return Ok(res);
+            }
+            Ok(None) => return Err(IoError::Unsupported("PNG export lost its alpha channel".into())),
+            Err(IoError::Render(render_err)) if render_err.is_retryable() => {
+                let fallback_warning = format!("custom renderer unavailable ({render_err}); falling back to CPU");
+                // Keep the fallback reason in this export's warnings only. Move this attempt's
+                // queued diagnostics into its retry result too: leaving either on the renderer
+                // would leak them into a later successful GPU export. If the retry fails, `?`
+                // returns the CPU error and the fallback reason is queued on the renderer for the caller.
+                // A cancelled export stops before streaming the PNG again.
+                if ctl.check().is_err() {
+                    r.push_diagnostic(fallback_warning);
+                    return Err(IoError::Cancelled);
+                }
+                let mut cpu_result = match export_png_streamed_with_renderer(doc, opts, ctl, rows, None) {
+                    Ok(res) => res,
+                    Err(e) => {
+                        // Keep the reason the CPU retry happened queued on the renderer, so the caller reports it next to the CPU error.
+                        r.push_diagnostic(fallback_warning);
+                        return Err(e);
+                    }
+                };
+                cpu_result.warnings.extend(r.drain_diagnostics());
+                cpu_result.warnings.push(fallback_warning);
+                return Ok(cpu_result);
+            }
+            Err(e) => return Err(e),
+        }
+    }
     let opaque = match single_layer(doc) {
         Some(s) => opaque_surface(s, doc.bounds()),
         None => opaque_bottom(doc),
     };
-    // Progress never goes back: a second pass reports nothing new until it passes the first.
     let mut progress = 0.0;
-    match stream_png(doc, opts, ctl, !opaque, rows, &mut progress)? {
+    match stream_png_with_renderer(doc, opts, ctl, !opaque, rows, &mut progress, None)? {
         Some(r) => Ok(r),
-        None => stream_png(doc, opts, ctl, true, rows, &mut progress)?.ok_or_else(|| IoError::Unsupported("PNG export lost its alpha channel".into())),
+        None => stream_png_with_renderer(doc, opts, ctl, true, rows, &mut progress, None)?
+            .ok_or_else(|| IoError::Unsupported("PNG export lost its alpha channel".into())),
     }
 }
 
@@ -918,6 +1377,7 @@ fn opaque_bottom(doc: &Document) -> bool {
 /// [`export_png_streamed`] with or without `alpha`, in bands of `rows` rows (0: sized to the
 /// document). `None` when a translucent pixel shows up without `alpha`. `progress` is the most
 /// reported so far, by this pass or an earlier one.
+#[cfg(test)]
 fn stream_png(
     doc: &Document,
     opts: &ExportOptions,
@@ -926,12 +1386,27 @@ fn stream_png(
     rows: i32,
     progress: &mut f32,
 ) -> Result<Option<ExportResult>, IoError> {
+    stream_png_with_renderer(doc, opts, ctl, alpha, rows, progress, None)
+}
+
+fn stream_png_with_renderer(
+    doc: &Document,
+    opts: &ExportOptions,
+    ctl: &photocraft_raster::Interrupt,
+    alpha: bool,
+    rows: i32,
+    progress: &mut f32,
+    renderer: Option<&mut dyn BandRenderer>,
+) -> Result<Option<ExportResult>, IoError> {
     let format = Format::Png;
     let (w, h) = (doc.size.width, doc.size.height);
     let mut warnings = Vec::new();
     let cmyk_target = format.caps().layouts.iter().any(|layout| layout.is_cmyk());
     let lab_target = format.caps().layouts.iter().any(|layout| layout.is_lab());
     let src = FlatSource { rows, ..FlatSource::new(doc, &mut warnings, cmyk_target, lab_target)? };
+    if renderer.is_some() && src.native.is_some() {
+        warnings.push(NATIVE_COPY_CPU_NOTICE.into());
+    }
     let mut encode = opts.encode.clone();
     let mut late = Vec::new();
     if encode.png_interlaced {
@@ -964,7 +1439,7 @@ fn stream_png(
     let mut bytes = Vec::new();
     let mut png = codecs::PngRows::new(&mut bytes, &first, h, &encode)?;
     let (mut done, mut translucent) = (0u64, false);
-    let streamed = src.bands(alpha, |rows, data, see_through| {
+    let streamed = src.bands(alpha, ctl, renderer, |rows, data, see_through| {
         if see_through && !alpha {
             translucent = true;
             return Err(IoError::Cancelled);
@@ -1388,7 +1863,7 @@ mod tiff_banded_tests {
         let img = Image::from_raw(64, 64, ChannelLayout::Rgb, CSample::U8, vec![77; 64 * 64 * 3]).unwrap();
         let bytes = codecs::encode(&img, Format::Tiff, &codecs::EncodeOptions::default()).unwrap();
         let bands = codecs::TiffBands::open(&bytes, None, &codecs::Limits::banded()).unwrap();
-        let r = tiff_to_document("small.tif", bands.upright(), || Some(0), BAND_BYTES).unwrap();
+        let r = tiff_to_document("small.tif", bands.upright(), || Some(0), BAND_BYTES, &photocraft_raster::Interrupt::NONE).unwrap();
         assert_eq!((r.document.size.width, r.document.size.height), (64, 64));
     }
 
@@ -1404,7 +1879,7 @@ mod tiff_banded_tests {
             let bytes = codecs::encode(&img, Format::Tiff, &codecs::EncodeOptions::default()).unwrap();
             let bands = codecs::TiffBands::open(&bytes, None, &codecs::Limits::banded()).unwrap();
             let row = w as usize * layout.channels() * sample.bytes();
-            let r = tiff_to_document("rounds.tif", bands, || None, 3 * row).unwrap();
+            let r = tiff_to_document("rounds.tif", bands, || None, 3 * row, &photocraft_raster::Interrupt::NONE).unwrap();
             let f = document_format(layout, sample);
             let want = codecs::decode(&bytes).unwrap().convert(f.layout, f.sample);
             let LayerContent::Raster(s) = &r.document.layers[0].content else { panic!("not a raster layer") };
@@ -1633,6 +2108,37 @@ mod streamed_png_tests {
         assert!(decoded(&r.bytes).data() == whole.data());
     }
 
+    /// The native single-layer copy checks for cancellation before every band, so a cancel
+    /// raised mid-copy stops it instead of copying the rest of the document.
+    #[test]
+    fn a_cancelled_native_single_layer_copy_stops_with_cancelled() {
+        let mut doc = Document::new("native", Size::new(40, 30), ColorMode::Rgb, SampleType::U8);
+        doc.layers = vec![layer(&doc, &[(doc.bounds(), &[0.5, 0.5, 0.5, 1.0])])];
+        let mut ignored = Vec::new();
+        let mut src = FlatSource::new(&doc, &mut ignored, false, false).unwrap();
+        assert!(src.native.is_some(), "a single plain layer takes the native copy");
+        src.rows = 4;
+        let checks = std::sync::atomic::AtomicUsize::new(0);
+        // Pre-cancelled: no band is copied at all.
+        let yes = || true;
+        let mut copied = 0;
+        let r = src.bands(true, &Interrupt::cancel_only(&yes), None, |_, _, _| {
+            copied += 1;
+            Ok(())
+        });
+        assert!(matches!(r, Err(IoError::Cancelled)), "{:?}", r.map(|_| ()));
+        assert_eq!(copied, 0);
+        // Cancelled after the second check: the copy stops after one band, not eight.
+        let after_one = || checks.fetch_add(1, std::sync::atomic::Ordering::SeqCst) >= 1;
+        let mut copied = 0;
+        let r = src.bands(true, &Interrupt::cancel_only(&after_one), None, |_, _, _| {
+            copied += 1;
+            Ok(())
+        });
+        assert!(matches!(r, Err(IoError::Cancelled)), "{:?}", r.map(|_| ()));
+        assert_eq!(copied, 1);
+    }
+
     #[test]
     fn a_cancelled_stream_stops_with_cancelled() {
         let mut doc = Document::new("cancel", Size::new(40, 30), ColorMode::Rgb, SampleType::U8);
@@ -1649,5 +2155,72 @@ mod streamed_png_tests {
         assert!(streams_png(&doc(10_000, 8000, SampleType::U8)));
         assert!(streams_png(&doc(8000, 6000, SampleType::U16)));
         assert!(streams_png(&doc(117_504, 22_464, SampleType::U8)));
+    }
+
+    /// A cancelled nested TIFF import never spends its parent's remaining allowance: the
+    /// cancellation check comes before the charge, and the reentrant guard is taken first.
+    #[test]
+    fn a_cancelled_nested_tiff_admission_leaves_the_parent_allowance_untouched() {
+        let _parent = crate::psd_gate::acquire_decode_admission(&Interrupt::NONE).expect("parent admission");
+        crate::psd_gate::set_active_attempt_budget(1000);
+        let yes = || true;
+        let cancelled = Interrupt::cancel_only(&yes);
+        match tiff_admission(100, 0, &crate::ImportOptions::default(), &cancelled) {
+            Err(IoError::Cancelled) => {}
+            other => panic!("expected a cancelled nested admission, got {:?}", other.map(|_| ())),
+        }
+        assert_eq!(crate::psd_gate::active_attempt_remaining(), Some(1000), "a cancelled nested import must not consume the parent's budget");
+    }
+
+    /// A nested TIFF import still enforces the caller's explicit bounds, before the parent's
+    /// allowance is charged; one within those bounds is charged exactly once.
+    #[test]
+    fn nested_tiff_admission_enforces_the_callers_local_bounds_before_charging_the_parent() {
+        let ctl = Interrupt::NONE;
+        let _parent = crate::psd_gate::acquire_decode_admission(&ctl).expect("parent admission");
+        let ample = 1000u64;
+        crate::psd_gate::set_active_attempt_budget(ample);
+
+        let lowered = crate::ImportOptions { psd_max_pixel_bytes: 99, ..Default::default() };
+        match tiff_admission(100, 0, &lowered, &ctl) {
+            Err(IoError::PsdImportBudget { required, limit }) => assert_eq!((required, limit), (100, 99)),
+            other => panic!("expected the caller's limit to refuse, got {:?}", other.map(|_| ())),
+        }
+        assert_eq!(crate::psd_gate::active_attempt_remaining(), Some(ample), "a refused nested import leaves the parent's allowance untouched");
+
+        let stale = crate::ImportOptions { psd_high_memory_approved: true, psd_approved_estimate: Some(99), ..Default::default() };
+        match tiff_admission(100, 0, &stale, &ctl) {
+            Err(IoError::PsdImportBudget { required, limit }) => assert_eq!((required, limit), (100, 99)),
+            other => panic!("expected the approved estimate bound to refuse, got {:?}", other.map(|_| ())),
+        }
+        assert_eq!(crate::psd_gate::active_attempt_remaining(), Some(ample), "a refused nested import leaves the parent's allowance untouched");
+
+        let allowed = crate::ImportOptions { psd_max_pixel_bytes: 100, psd_high_memory_approved: true, psd_approved_estimate: Some(100), ..Default::default() };
+        let guard = tiff_admission(100, 0, &allowed, &ctl).expect("within the caller's bounds");
+        assert_eq!(crate::psd_gate::active_attempt_remaining(), Some(ample - 100), "the nested import is charged once");
+        drop(guard);
+        assert_eq!(crate::psd_gate::active_attempt_remaining(), Some(ample - 100), "releasing the nested guard neither refunds nor resets the parent");
+    }
+
+    /// A layered TIFF estimate that overflowed `u64` saturates at `u64::MAX`. Unknown native
+    /// memory has `u64::MAX` as its hard limit, so approval used to admit the sentinel; it is
+    /// refused before the gate and before any composite is decoded.
+    #[test]
+    fn a_saturated_tiff_estimate_is_refused_before_any_decode() {
+        if cfg!(target_pointer_width = "32") {
+            return;
+        }
+        crate::memory::with_mock_memory(crate::memory::MemorySnapshot::UNKNOWN, || {
+            for opts in [
+                crate::ImportOptions::default(),
+                crate::ImportOptions { psd_high_memory_approved: true, ..Default::default() },
+                crate::ImportOptions { psd_high_memory_approved: true, psd_approved_estimate: Some(u64::MAX), ..Default::default() },
+            ] {
+                match tiff_admission(u64::MAX, 0, &opts, &Interrupt::NONE) {
+                    Err(IoError::PsdImportBudget { required, limit }) => assert_eq!((required, limit), (u64::MAX, u64::MAX)),
+                    other => panic!("expected a hard refusal for {opts:?}, got {:?}", other.map(|_| ())),
+                }
+            }
+        });
     }
 }
