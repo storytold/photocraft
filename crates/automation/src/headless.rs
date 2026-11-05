@@ -16,7 +16,7 @@ use crate::{AuthorizedWorkspace, AutomationError, files};
 fn untrusted(filesystem: Filesystem) -> Headless {
     let mut session = Session::new();
     session.authorize = Some(authorize_engine_step);
-    Headless { session, writers: HashMap::new(), filesystem, waited: HashMap::new() }
+    Headless { session, writers: HashMap::new(), filesystem, renderer: None, pending_diagnostics: Vec::new(), waited: HashMap::new() }
 }
 
 enum Filesystem {
@@ -34,6 +34,11 @@ pub struct Headless {
     /// Jobs a caller waits on ([`Headless::command_begin`]), with their outcome once they end.
     /// Kept here because `jobs.list` holds only the last few jobs that ended.
     waited: HashMap<JobId, Option<JobEvent>>,
+    renderer: Option<Box<dyn photocraft_io::BandRenderer>>,
+    /// Export warnings kept when a write fails, and preview fallback warnings: the next
+    /// [`Headless::drain_diagnostics`] still reports them, whatever the renderer does with
+    /// [`photocraft_io::BandRenderer::push_diagnostic`].
+    pending_diagnostics: Vec<String>,
 }
 
 /// A waited job's state, from [`Headless::job_poll`].
@@ -67,13 +72,64 @@ impl Headless {
     /// not a remote automation client, supplies these host paths. Nested
     /// `actions.play` steps are not re-checked: this caller is already trusted.
     pub fn trusted_local() -> Self {
-        Self { session: Session::new(), writers: HashMap::new(), filesystem: Filesystem::TrustedLocal, waited: HashMap::new() }
+        Self {
+            session: Session::new(),
+            writers: HashMap::new(),
+            filesystem: Filesystem::TrustedLocal,
+            renderer: None,
+            pending_diagnostics: Vec::new(),
+            waited: HashMap::new(),
+        }
     }
 
     /// Create an automation session with capability-scoped file access.
     /// Each step of `actions.play` is checked with [`authorize_engine_step`].
     pub fn with_workspace(workspace: AuthorizedWorkspace) -> Self {
         untrusted(Filesystem::Workspace(workspace))
+    }
+
+    /// Configure a custom [`photocraft_io::BandRenderer`] for flat exports and previews.
+    pub fn with_renderer(mut self, renderer: Box<dyn photocraft_io::BandRenderer>) -> Self {
+        self.renderer = Some(renderer);
+        self
+    }
+
+    /// Set or clear the active [`photocraft_io::BandRenderer`].
+    pub fn set_renderer(&mut self, renderer: Option<Box<dyn photocraft_io::BandRenderer>>) {
+        self.renderer = renderer;
+    }
+
+    /// Take the active renderer out of this session.
+    pub fn take_renderer(&mut self) -> Option<Box<dyn photocraft_io::BandRenderer>> {
+        self.renderer.take()
+    }
+
+    /// Mutable reference to the active renderer if any.
+    pub fn renderer_mut(&mut self) -> Option<&mut dyn photocraft_io::BandRenderer> {
+        self.renderer.as_mut().map(|b| &mut **b as &mut dyn photocraft_io::BandRenderer)
+    }
+
+    /// Drain diagnostics from the active renderer if any, and the export warnings a failed
+    /// capability-scoped write kept. Each is returned once.
+    pub fn drain_diagnostics(&mut self) -> Vec<String> {
+        let mut drained = std::mem::take(&mut self.pending_diagnostics);
+        if let Some(renderer) = self.renderer.as_mut() {
+            drained.extend(renderer.drain_diagnostics());
+        }
+        drained
+    }
+
+    #[cfg(all(feature = "gpu", not(target_arch = "wasm32")))]
+    /// Enable the native GPU renderer backend with lazy device initialization.
+    pub fn enable_gpu(&mut self) {
+        self.renderer = Some(Box::new(crate::gpu::GpuRenderer::lazy()));
+    }
+
+    #[cfg(all(feature = "gpu", not(target_arch = "wasm32")))]
+    /// Builder method to enable the native GPU renderer backend.
+    pub fn with_gpu(mut self) -> Self {
+        self.enable_gpu();
+        self
     }
 
     /// Apply background jobs that finished since the last request, so every request (save,
@@ -321,14 +377,36 @@ impl Headless {
             Filesystem::Denied => return Err(AutomationError::BadRequest("automation filesystem access is not granted: write authority is absent".into())),
             Filesystem::TrustedLocal => {
                 let writer = self.writers.entry(doc.id.0).or_default();
-                files::save(&doc, &target, format, opts, Some(writer))?
+                // Export warnings of a failed write stay in `pending_diagnostics`, whatever the
+                // renderer does with `push_diagnostic`.
+                files::save_with_renderer_keeping(
+                    &doc,
+                    &target,
+                    format,
+                    opts,
+                    Some(writer),
+                    self.renderer.as_mut().map(|b| &mut **b as &mut dyn photocraft_io::BandRenderer),
+                    &mut self.pending_diagnostics,
+                )?
             }
             Filesystem::Workspace(workspace) => {
                 // Only the target is granted: a linked smart object's stored path is document
                 // data, so PSD export writes that layer as pixels instead of embedding the file.
                 let opts = ExportOptions { read_linked_files: false, ..opts.clone() };
-                let (bytes, warnings) = files::save_bytes(&doc, target_text, format, &opts)?;
-                workspace.write(target_text, &bytes)?;
+                let (bytes, warnings) = files::save_bytes_with_renderer(
+                    &doc,
+                    target_text,
+                    format,
+                    &opts,
+                    self.renderer.as_mut().map(|b| &mut **b as &mut dyn photocraft_io::BandRenderer),
+                )?;
+                if let Err(error) = workspace.write(target_text, &bytes) {
+                    // Keep the export diagnostics for the caller, as the local save path does:
+                    // they are reported with the write error and by the next drain, even when the
+                    // renderer's `push_diagnostic` is the default no-op.
+                    self.pending_diagnostics.extend(warnings);
+                    return Err(error);
+                }
                 warnings
             }
         };
@@ -367,13 +445,16 @@ impl Headless {
         Ok(photocraft_engine::inspect::document(&self.session.documents()[i]))
     }
 
-    pub fn render_png(&self, index: Option<usize>, max_side: u32) -> Result<Vec<u8>, AutomationError> {
+    pub fn render_png(&mut self, index: Option<usize>, max_side: u32) -> Result<Vec<u8>, AutomationError> {
         let i = self.doc_index(index)?;
         let doc = &self.session.documents()[i].doc;
         if !matches!(&self.filesystem, Filesystem::TrustedLocal) {
             crate::budgets::check_preview(doc.size.width, doc.size.height, max_side)?;
         }
-        let png = files::render_png(doc, max_side)?;
+        let (png, warnings) = files::render_png_with_warnings(doc, max_side, self.renderer.as_mut().map(|b| &mut **b as &mut dyn photocraft_io::BandRenderer))?;
+        // Kept here so `drain_diagnostics` returns them whatever the renderer does with
+        // `push_diagnostic`.
+        self.pending_diagnostics.extend(warnings);
         if !matches!(&self.filesystem, Filesystem::TrustedLocal) {
             crate::budgets::check_png(png.len())?;
         }
@@ -391,7 +472,13 @@ impl Headless {
     pub fn close(&mut self, index: Option<usize>) -> Result<Value, AutomationError> {
         let i = self.doc_index(index)?;
         if let Some(d) = self.session.close(i) {
-            self.writers.remove(&d.doc.id.0);
+            let id = d.doc.id;
+            self.writers.remove(&id.0);
+            // Release this document's GPU caches now instead of keeping them until another
+            // document renders or the server exits.
+            if let Some(r) = self.renderer.as_mut() {
+                r.forget_document(id);
+            }
         }
         // The closed document's buffers went to the scratch pool: hand them back to the OS.
         photocraft_raster::scratch::release();
@@ -414,13 +501,19 @@ impl Headless {
             Admitted::Run(params) => params,
             Admitted::Done(value) => return Ok(value),
         };
-        if wait {
-            return Ok(self.session.execute(id, params)?);
-        }
-        Ok(match self.session.start(id, params)? {
-            Started::Done(v) => v,
-            Started::Job(job) => json!({"job": job.0, "pending": true}),
-        })
+        // Commands such as `file.close`, `file.closeAll` and `file.closeOthers` remove
+        // documents directly through the session, so release their GPU caches here too.
+        let before = self.document_ids();
+        let result = if wait {
+            self.session.execute(id, params).map_err(AutomationError::from)
+        } else {
+            self.session.start(id, params).map_err(AutomationError::from).map(|started| match started {
+                Started::Done(v) => v,
+                Started::Job(job) => json!({"job": job.0, "pending": true}),
+            })
+        };
+        self.forget_removed_documents(&before);
+        result
     }
 
     /// Start a command for a caller that waits without holding the session: a job-capable
@@ -431,7 +524,10 @@ impl Headless {
             Admitted::Run(params) => params,
             Admitted::Done(value) => return Ok(Started::Done(value)),
         };
-        let started = self.session.start(id, params)?;
+        let before = self.document_ids();
+        let started = self.session.start(id, params);
+        self.forget_removed_documents(&before);
+        let started = started?;
         if let Started::Job(job) = started {
             self.waited.insert(job, None);
         }
@@ -490,6 +586,22 @@ impl Headless {
         // Background jobs that finished since the last request (or batch step) are applied first.
         self.sync_jobs();
         Ok(Admitted::Run(params))
+    }
+
+    fn document_ids(&self) -> Vec<photocraft_doc::DocId> {
+        self.session.documents().iter().map(|st| st.doc.id).collect()
+    }
+
+    /// Release the writer and GPU caches of every document a command removed.
+    fn forget_removed_documents(&mut self, before: &[photocraft_doc::DocId]) {
+        let after: std::collections::HashSet<_> = self.document_ids().into_iter().collect();
+        let removed: Vec<_> = before.iter().copied().filter(|id| !after.contains(id)).collect();
+        for id in removed {
+            self.writers.remove(&id.0);
+            if let Some(r) = self.renderer.as_mut() {
+                r.forget_document(id);
+            }
+        }
     }
 }
 
