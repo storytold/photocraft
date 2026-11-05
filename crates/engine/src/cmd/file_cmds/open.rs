@@ -332,6 +332,8 @@ pub fn place_bytes(s: &mut Session, name: &str, bytes: Vec<u8>, linked: Option<S
     let fmt = d.doc.pixel_format();
     let vectorcraft = photocraft_io::vectorcraft::is_vectorcraft(&bytes);
     let vector = photocraft_io::svg::is_svg(&bytes) || vectorcraft;
+    // Refuse before decoding if the operation cannot fit.
+    crate::memory_gate::ensure(&format!("place \u{201c}{}\u{201d}", file_name(name)), crate::memory_gate::place_need(&bytes, fmt.bytes_per_pixel()))?;
     let approve = match p.get("approveHighMemory") {
         None | Some(Value::Null) => false,
         Some(Value::Bool(b)) => *b,
