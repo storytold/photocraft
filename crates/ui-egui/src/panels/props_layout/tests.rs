@@ -137,7 +137,7 @@ fn other_kinds_use_the_same_headers() {
 }
 
 #[test]
-fn type_controls_fill_the_panel_at_every_width_and_scale() {
+fn type_controls_fit_a_bounded_form_at_every_width_and_scale() {
     for ppp in [1.0, 2.0] {
         for dw in [250.0, 380.0, 520.0] {
             let (s, layers) = kinds();
@@ -145,7 +145,8 @@ fn type_controls_fill_the_panel_at_every_width_and_scale() {
             let mut h = harness(s, ppp, dw);
             select(&mut h, ty);
             let hs = headers(&h);
-            let header = hs.iter().find(|(n, _)| n == "Character").unwrap().1;
+            let mut header = hs.iter().find(|(n, _)| n == "Character").unwrap().1;
+            header.max.x = header.left() + header.width().min(CONTROL_MAX_W);
             let what = format!("{ppp}x @ {dw}");
             // The editable family field and the style dropdown span the section.
             let name = h

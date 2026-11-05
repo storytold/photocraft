@@ -86,27 +86,41 @@ pub fn properties_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
 fn adjustment_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, adj: &photocraft_doc::Adjustment) {
     // Keep the scope reachable before tall editors and within a compact dock (#5231).
     // Adjustment layers affect the stack by default; clipping limits them to their base.
-    if let Some(mut clip) = app.session.active().and_then(|s| s.doc.layer(id).map(|l| l.clipped))
-        && widgets::toggle(ui, &mut clip, tl!("Clip to layer below")).changed()
-    {
-        let _ = app.run("layer.setProps", json!({"layer": id.0, "clipped": clip}));
+    crate::props_layout::control_group(ui, |ui| {
+        if let Some(mut clip) = app.session.active().and_then(|s| s.doc.layer(id).map(|l| l.clipped))
+            && ui
+                .scope(|ui| {
+                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+                    widgets::toggle(ui, &mut clip, tl!("Clip to layer below")).changed()
+                })
+                .inner
+        {
+            let _ = app.run("layer.setProps", json!({"layer": id.0, "clipped": clip}));
+        }
+    });
+    ui.add_space(6.0);
+    if matches!(adj, photocraft_doc::Adjustment::Curves { .. }) {
+        // The graph is an editing surface: preserve its scalable, square workspace.
+        crate::adjust_editors::layer_editor(app, ui, id, adj);
+    } else {
+        crate::props_layout::control_group(ui, |ui| crate::adjust_editors::layer_editor(app, ui, id, adj));
     }
     ui.add_space(6.0);
-    crate::adjust_editors::layer_editor(app, ui, id, adj);
-    ui.add_space(6.0);
-    if let Some(mut vis) = app.session.active().and_then(|s| s.doc.layer(id).map(|l| l.visible))
-        && widgets::toggle(ui, &mut vis, tl!("Adjustment visible")).changed()
-    {
-        let _ = app.run("layer.setProps", json!({"layer": id.0, "visible": vis}));
-    }
-    ui.add_space(6.0);
-    if widgets::secondary_button(ui, tl!("Reset to defaults"), ui.available_width()).clicked() {
-        let doc = app.session.active().map_or(0, |s| s.doc.id.0);
-        // Photoshop's two-step Reset where measured (Color Balance), else the defaults.
-        let params = crate::adjust_editors::properties_reset(ui.ctx(), doc, id, adj).unwrap_or_else(|| json!({"layer": id.0}));
-        let _ = app.run("layer.setAdjustment", params);
-        app.live_adjust = None;
-    }
+    crate::props_layout::control_group(ui, |ui| {
+        if let Some(mut vis) = app.session.active().and_then(|s| s.doc.layer(id).map(|l| l.visible))
+            && widgets::toggle(ui, &mut vis, tl!("Adjustment visible")).changed()
+        {
+            let _ = app.run("layer.setProps", json!({"layer": id.0, "visible": vis}));
+        }
+        ui.add_space(6.0);
+        if widgets::fitted_secondary_button(ui, tl!("Reset to defaults"), ui.available_width()).clicked() {
+            let doc = app.session.active().map_or(0, |s| s.doc.id.0);
+            // Photoshop's two-step Reset where measured (Color Balance), else the defaults.
+            let params = crate::adjust_editors::properties_reset(ui.ctx(), doc, id, adj).unwrap_or_else(|| json!({"layer": id.0}));
+            let _ = app.run("layer.setAdjustment", params);
+            app.live_adjust = None;
+        }
+    });
 }
 
 fn layer_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
@@ -137,7 +151,7 @@ fn layer_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
 /// Docked Properties body (Pro theme).
 pub(super) fn properties_body(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let identity = app.session.active().map(|st| (st.doc.id, st.active_layer, app.ui.mask_target, app.ui.vector_mask_target, app.ui.properties_layer));
-    ui.push_id(("properties-target", identity), |ui| properties_body_inner(app, ui));
+    ui.push_id(("properties-target", identity), |ui| crate::props_layout::panel(ui, |ui| properties_body_inner(app, ui)));
 }
 
 fn properties_body_inner(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
@@ -152,7 +166,7 @@ fn properties_body_inner(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     {
         crate::props_layout::header(ui, layer);
         if layer.frame.is_some() {
-            crate::frame_tool::properties(app, ui, layer);
+            crate::props_layout::control_group(ui, |ui| crate::frame_tool::properties(app, ui, layer));
             return;
         }
         crate::mask_props_ui::properties(app, ui, layer);
@@ -172,7 +186,7 @@ fn properties_body_inner(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         if t.pro && st.selected_layers().len() > 1 {
             crate::layer_props_ui::selection_align(app, ui);
         }
-        crate::doc_props_ui::properties(app, ui);
+        crate::doc_props_ui::properties_body(app, ui);
         return;
     }
     let Some(id) = st.active_layer else { return };
@@ -189,9 +203,9 @@ fn properties_body_inner(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if let LayerContent::Adjustment(adj) = &layer.content {
         adjustment_controls(app, ui, id, adj);
     } else if layer.artboard().is_some() {
-        crate::artboard_ui::properties(app, ui, layer);
+        crate::props_layout::control_group(ui, |ui| crate::artboard_ui::properties(app, ui, layer));
     } else if layer.frame.is_some() {
-        crate::frame_tool::properties(app, ui, layer);
+        crate::props_layout::control_group(ui, |ui| crate::frame_tool::properties(app, ui, layer));
     } else if t.pro {
         // Transform, Align, the kind's sections and Quick Actions.
         crate::layer_props_ui::properties(app, ui, layer);
@@ -200,7 +214,7 @@ fn properties_body_inner(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             crate::gradient_ui::properties(app, ui, layer);
             ui.add_space(6.0);
         }
-        layer_controls(app, ui, layer);
+        crate::props_layout::control_group(ui, |ui| layer_controls(app, ui, layer));
         if matches!(layer.content, LayerContent::Text(_)) {
             crate::type_tool::type_properties(app, ui);
         }

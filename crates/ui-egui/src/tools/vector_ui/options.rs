@@ -215,206 +215,212 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
     // The shared collapsible section headers (#155).
     // Prefs "Appearance" is theme chrome (Giao diện); shape fill/stroke is Diện mạo.
     if crate::props_layout::section(ui, "appearance", crate::i18n::tr_ctx(crate::i18n::current(), "shape", "Appearance")) {
-        let (fg, bg) = (app.session.tools.foreground, app.session.tools.background);
-        let lib = crate::paint_picker::library(&app.session, ui.ctx());
-        let mut picks: Vec<(bool, PaintChange)> = Vec::new();
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(tl!("Fill")).color(t.text_dim).size(12.0));
-            let mut gradients = GradientChoices {
-                presets: &app.session.presets.gradients,
-                current: &app.session.presets.gradient,
-                recent: &mut app.ui.recent_gradients,
-                fg,
-                bg,
-            };
-            if let Some(change) = swatch(ui, &lib, sh.fill.as_ref(), fg, tl!("Set shape fill type"), &mut gradients) {
-                let fill = match &change {
-                    PaintChange::None => Some(Value::Null),
-                    PaintChange::Color(color) => Some(json!(color)),
-                    PaintChange::Gradient(g) => Some(paint_param(g)),
-                    PaintChange::OpenPicker => None,
+        crate::props_layout::control_group(ui, |ui| {
+            let (fg, bg) = (app.session.tools.foreground, app.session.tools.background);
+            let lib = crate::paint_picker::library(&app.session, ui.ctx());
+            let mut picks: Vec<(bool, PaintChange)> = Vec::new();
+            ui.horizontal_wrapped(|ui| {
+                ui.label(egui::RichText::new(tl!("Fill")).color(t.text_dim).size(12.0));
+                let mut gradients = GradientChoices {
+                    presets: &app.session.presets.gradients,
+                    current: &app.session.presets.gradient,
+                    recent: &mut app.ui.recent_gradients,
+                    fg,
+                    bg,
                 };
-                if let Some(fill) = fill {
-                    edit = Some(json!({"fill": fill, "coalesce": coalesce("fill")}));
+                if let Some(change) = swatch(ui, &lib, sh.fill.as_ref(), fg, tl!("Set shape fill type"), &mut gradients) {
+                    let fill = match &change {
+                        PaintChange::None => Some(Value::Null),
+                        PaintChange::Color(color) => Some(json!(color)),
+                        PaintChange::Gradient(g) => Some(paint_param(g)),
+                        PaintChange::OpenPicker => None,
+                    };
+                    if let Some(fill) = fill {
+                        edit = Some(json!({"fill": fill, "coalesce": coalesce("fill")}));
+                    }
+                    picks.push((false, change));
                 }
-                picks.push((false, change));
-            }
-            ui.add_space(12.0);
-            ui.label(egui::RichText::new(tl!("Stroke")).color(t.text_dim).size(12.0));
-            if let Some(change) = swatch(ui, &lib, sh.stroke.as_ref().map(|s| &s.paint), fg, tl!("Set shape stroke type"), &mut gradients) {
-                let width = enabled_stroke_width(sh.stroke.as_ref().map_or(0.0, |s| s.width));
-                let stroke = match &change {
-                    PaintChange::None => Some(Value::Null),
-                    PaintChange::Color(color) => Some(json!({"color": color, "width": width})),
-                    PaintChange::Gradient(g) => Some(json!({"color": paint_param(g), "width": width})),
-                    PaintChange::OpenPicker => None,
-                };
-                if let Some(stroke) = stroke {
-                    edit = Some(json!({"stroke": stroke, "coalesce": coalesce("stroke")}));
+                ui.add_space(12.0);
+                ui.label(egui::RichText::new(tl!("Stroke")).color(t.text_dim).size(12.0));
+                if let Some(change) = swatch(ui, &lib, sh.stroke.as_ref().map(|s| &s.paint), fg, tl!("Set shape stroke type"), &mut gradients) {
+                    let width = enabled_stroke_width(sh.stroke.as_ref().map_or(0.0, |s| s.width));
+                    let stroke = match &change {
+                        PaintChange::None => Some(Value::Null),
+                        PaintChange::Color(color) => Some(json!({"color": color, "width": width})),
+                        PaintChange::Gradient(g) => Some(json!({"color": paint_param(g), "width": width})),
+                        PaintChange::OpenPicker => None,
+                    };
+                    if let Some(stroke) = stroke {
+                        edit = Some(json!({"stroke": stroke, "coalesce": coalesce("stroke")}));
+                    }
+                    picks.push((true, change));
                 }
-                picks.push((true, change));
+                let mut w = sh.stroke.as_ref().map_or(0.0, |s| s.width);
+                if crate::widgets::value_field(ui, &mut w, 0.0..=288.0, "px", 60.0).accessible_name(tl!("Stroke:")).changed()
+                    && (sh.stroke.is_some() || w > 0.0)
+                {
+                    edit = Some(json!({"stroke": {"width": w}, "coalesce": coalesce("stroke-w")}));
+                }
+            });
+            let style = sh.stroke.as_ref().map(crate::shape_stroke_ui::StrokeOptions::from).unwrap_or_default();
+            let stroke_enabled = sh.stroke.as_ref().is_some_and(|stroke| stroke.width > 0.0);
+            if let Some(change) = crate::shape_stroke_ui::button(
+                ui,
+                &key("style"),
+                &style,
+                &mut app.ui.stroke_editor,
+                sh.path.subpaths.iter().all(|s| s.closed),
+                !matches!(sh.live, Some(photocraft_doc::LiveShape::Ellipse { .. })),
+                app.session.active().map(|st| (st.doc.id, id)),
+                stroke_enabled,
+            ) {
+                let mut stroke = change.options.params();
+                if !stroke_enabled {
+                    stroke["width"] = json!(3.0);
+                }
+                edit = Some(json!({"stroke": stroke, "coalesce": change.coalesce}));
             }
-            let mut w = sh.stroke.as_ref().map_or(0.0, |s| s.width);
-            if crate::widgets::value_field(ui, &mut w, 0.0..=288.0, "px", 60.0).accessible_name(tl!("Stroke:")).changed() && (sh.stroke.is_some() || w > 0.0) {
-                edit = Some(json!({"stroke": {"width": w}, "coalesce": coalesce("stroke-w")}));
+            for (is_stroke, change) in picks {
+                match change {
+                    PaintChange::OpenPicker => {
+                        let which = if is_stroke { crate::shape_fill_ui::Paint::Stroke } else { crate::shape_fill_ui::Paint::Fill };
+                        crate::shape_fill_ui::open_paint(app, which, Some(id), false, fg);
+                    }
+                    PaintChange::Color(c) => recent = Some([c[0], c[1], c[2]]),
+                    PaintChange::None | PaintChange::Gradient(_) => {}
+                }
             }
         });
-        let style = sh.stroke.as_ref().map(crate::shape_stroke_ui::StrokeOptions::from).unwrap_or_default();
-        let stroke_enabled = sh.stroke.as_ref().is_some_and(|stroke| stroke.width > 0.0);
-        if let Some(change) = crate::shape_stroke_ui::button(
-            ui,
-            &key("style"),
-            &style,
-            &mut app.ui.stroke_editor,
-            sh.path.subpaths.iter().all(|s| s.closed),
-            !matches!(sh.live, Some(photocraft_doc::LiveShape::Ellipse { .. })),
-            app.session.active().map(|st| (st.doc.id, id)),
-            stroke_enabled,
-        ) {
-            let mut stroke = change.options.params();
-            if !stroke_enabled {
-                stroke["width"] = json!(3.0);
-            }
-            edit = Some(json!({"stroke": stroke, "coalesce": change.coalesce}));
-        }
-        for (is_stroke, change) in picks {
-            match change {
-                PaintChange::OpenPicker => {
-                    let which = if is_stroke { crate::shape_fill_ui::Paint::Stroke } else { crate::shape_fill_ui::Paint::Fill };
-                    crate::shape_fill_ui::open_paint(app, which, Some(id), false, fg);
-                }
-                PaintChange::Color(c) => recent = Some([c[0], c[1], c[2]]),
-                PaintChange::None | PaintChange::Gradient(_) => {}
-            }
-        }
     }
     if let Some(live) = &sh.live
         && crate::props_layout::section(ui, "liveShape", tl!("Shape"))
     {
-        let num = |ui: &mut egui::Ui, label: &str, v: &mut f32, range: std::ops::RangeInclusive<f32>, unit: &str| -> bool {
-            ui.label(egui::RichText::new(tl!(&label)).color(t.text_dim).size(12.0));
-            crate::widgets::value_field(ui, v, range, unit, 64.0).accessible_name(tl!(&label)).changed()
-        };
-        match live {
-            photocraft_doc::vector::LiveShape::Rect { rect, .. }
-            | photocraft_doc::vector::LiveShape::Ellipse { rect }
-            | photocraft_doc::vector::LiveShape::Polygon { rect, .. } => {
-                ui.horizontal(|ui| {
-                    let (mut w, mut h) = (rect[2] as f32, rect[3] as f32);
-                    let cw = num(ui, "W", &mut w, 1.0..=300000.0, "px");
-                    let ch = num(ui, "H", &mut h, 1.0..=300000.0, "px");
-                    if cw || ch {
-                        edit = Some(json!({"rect": [rect[0], rect[1], w.round(), h.round()], "coalesce": key("wh")}));
-                    }
-                });
-            }
-            photocraft_doc::vector::LiveShape::Line { .. } | photocraft_doc::vector::LiveShape::ArrowLine { .. } => {}
-        }
-        ui.vertical(|ui| match live {
-            photocraft_doc::vector::LiveShape::Rect { radii, .. } => {
-                // Keep the uniform workflow available after independent corner edits too.
-                ui.horizontal(|ui| {
-                    let mut all = radii[0] as f32;
-                    if num(ui, tl!("Corner radius"), &mut all, 0.0..=100000.0, "px") {
-                        edit = Some(json!({"radii": all, "coalesce": key("radius-all")}));
-                    }
-                });
-                // Separate rows also fit the narrow Properties dock. The labels use the
-                // localized corner names, rather than untranslated abbreviations.
-                for (index, label) in [(0, tl!("Top Left")), (1, tl!("Top Right")), (3, tl!("Bottom Left")), (2, tl!("Bottom Right"))] {
-                    ui.horizontal(|ui| {
-                        let mut radius = radii[index] as f32;
-                        if num(ui, label, &mut radius, 0.0..=100000.0, "px") {
-                            let mut patch = corner_radii_patch(*radii, index, radius);
-                            patch["coalesce"] = json!(key(&format!("radius-{index}")));
-                            edit = Some(patch);
+        crate::props_layout::control_group(ui, |ui| {
+            let num = |ui: &mut egui::Ui, label: &str, v: &mut f32, range: std::ops::RangeInclusive<f32>, unit: &str| -> bool {
+                ui.label(egui::RichText::new(tl!(&label)).color(t.text_dim).size(12.0));
+                crate::widgets::value_field(ui, v, range, unit, 64.0).accessible_name(tl!(&label)).changed()
+            };
+            match live {
+                photocraft_doc::vector::LiveShape::Rect { rect, .. }
+                | photocraft_doc::vector::LiveShape::Ellipse { rect }
+                | photocraft_doc::vector::LiveShape::Polygon { rect, .. } => {
+                    ui.horizontal_wrapped(|ui| {
+                        let (mut w, mut h) = (rect[2] as f32, rect[3] as f32);
+                        let cw = num(ui, "W", &mut w, 1.0..=300000.0, "px");
+                        let ch = num(ui, "H", &mut h, 1.0..=300000.0, "px");
+                        if cw || ch {
+                            edit = Some(json!({"rect": [rect[0], rect[1], w.round(), h.round()], "coalesce": key("wh")}));
                         }
                     });
                 }
+                photocraft_doc::vector::LiveShape::Line { .. } | photocraft_doc::vector::LiveShape::ArrowLine { .. } => {}
             }
-            photocraft_doc::vector::LiveShape::Polygon { sides, star_ratio, corner_radius, .. } => {
-                // One radius rounds every vertex of a triangle, polygon or star, as in Photoshop.
-                ui.horizontal(|ui| {
-                    let mut r = *corner_radius as f32;
-                    if num(ui, tl!("Corner radius"), &mut r, 0.0..=100000.0, "px") {
-                        edit = Some(json!({"cornerRadius": r, "coalesce": key("corner-radius")}));
-                    }
-                });
-                ui.horizontal(|ui| {
-                    let mut n = *sides as f32;
-                    if num(ui, tl!("Sides"), &mut n, 3.0..=100.0, "") {
-                        edit = Some(json!({"sides": n.round() as u32, "coalesce": key("sides")}));
-                    }
-                    let mut sr = (*star_ratio * 100.0) as f32;
-                    if num(ui, tl!("Star ratio"), &mut sr, 1.0..=100.0, "%") {
-                        edit = Some(json!({"starRatio": sr as f64 / 100.0, "coalesce": key("star")}));
-                    }
-                })
-                .inner
-            }
-            photocraft_doc::vector::LiveShape::ArrowLine { weight, start, end, width, length, concavity, .. } => {
-                // This is a selected, saved Arrow; unlike the tool's defaults, edits update its geometry.
-                ui.horizontal(|ui| {
-                    let mut value = *start;
-                    if ui.checkbox(&mut value, tl!("Start")).changed() {
-                        edit = Some(json!({"arrowStart": value, "coalesce": key("arrow-start")}));
-                    }
-                    let mut value = *end;
-                    if ui.checkbox(&mut value, tl!("End")).changed() {
-                        edit = Some(json!({"arrowEnd": value, "coalesce": key("arrow-end")}));
-                    }
-                });
-                ui.horizontal(|ui| {
-                    let mut v = *width as f32;
-                    if num(ui, "Width", &mut v, 1.0..=4096.0, "px") {
-                        edit = Some(json!({"arrowWidth": v, "coalesce": key("arrow-width")}));
-                    }
-                });
-                ui.horizontal(|ui| {
-                    let mut v = *length as f32;
-                    if num(ui, "Length", &mut v, 1.0..=4096.0, "px") {
-                        edit = Some(json!({"arrowLength": v, "coalesce": key("arrow-length")}));
-                    }
-                });
-                ui.horizontal(|ui| {
-                    let mut v = *weight as f32;
-                    if num(ui, "Weight", &mut v, 1.0..=10000.0, "px") {
-                        edit = Some(json!({"weight": v, "coalesce": key("arrow-weight")}));
-                    }
-                });
-                ui.horizontal(|ui| {
-                    let mut v = *concavity as f32;
-                    if num(ui, "Concavity", &mut v, 0.0..=100.0, "%") {
-                        edit = Some(json!({"arrowConcavity": v, "coalesce": key("arrow-concavity")}));
-                    }
-                });
-
-                // Explicitly adopt this arrow's values as defaults for new arrows.
-                let target = app.session.active().map(|st| (st.doc.id.0, id.0));
-                let mut linked = ui.ctx().data(|data| {
-                    let state = data.get_temp::<ArrowDefaultLink>(arrow_default_link_id()).unwrap_or_default();
-                    state.target == target && state.enabled
-                });
-
-                if ui.checkbox(&mut linked, tl!("Set as default")).on_hover_text(tl!("Use these settings for new arrows")).changed() {
-                    ui.ctx().data_mut(|data| {
-                        data.insert_temp(arrow_default_link_id(), ArrowDefaultLink { target, enabled: linked });
+            ui.vertical(|ui| match live {
+                photocraft_doc::vector::LiveShape::Rect { radii, .. } => {
+                    // Keep the uniform workflow available after independent corner edits too.
+                    ui.horizontal_wrapped(|ui| {
+                        let mut all = radii[0] as f32;
+                        if num(ui, tl!("Corner radius"), &mut all, 0.0..=100000.0, "px") {
+                            edit = Some(json!({"radii": all, "coalesce": key("radius-all")}));
+                        }
                     });
-                    if linked {
-                        copy_arrow_to_tool_defaults(app, id);
+                    // Separate rows also fit the narrow Properties dock. The labels use the
+                    // localized corner names, rather than untranslated abbreviations.
+                    for (index, label) in [(0, tl!("Top Left")), (1, tl!("Top Right")), (3, tl!("Bottom Left")), (2, tl!("Bottom Right"))] {
+                        ui.horizontal_wrapped(|ui| {
+                            let mut radius = radii[index] as f32;
+                            if num(ui, label, &mut radius, 0.0..=100000.0, "px") {
+                                let mut patch = corner_radii_patch(*radii, index, radius);
+                                patch["coalesce"] = json!(key(&format!("radius-{index}")));
+                                edit = Some(patch);
+                            }
+                        });
                     }
                 }
-            }
-            photocraft_doc::vector::LiveShape::Line { weight, .. } => {
-                ui.horizontal(|ui| {
-                    let mut w = *weight as f32;
-                    if num(ui, tl!("Weight"), &mut w, 1.0..=10000.0, "px") {
-                        edit = Some(json!({"weight": w, "coalesce": key("weight")}));
+                photocraft_doc::vector::LiveShape::Polygon { sides, star_ratio, corner_radius, .. } => {
+                    // One radius rounds every vertex of a triangle, polygon or star, as in Photoshop.
+                    ui.horizontal_wrapped(|ui| {
+                        let mut r = *corner_radius as f32;
+                        if num(ui, tl!("Corner radius"), &mut r, 0.0..=100000.0, "px") {
+                            edit = Some(json!({"cornerRadius": r, "coalesce": key("corner-radius")}));
+                        }
+                    });
+                    ui.horizontal_wrapped(|ui| {
+                        let mut n = *sides as f32;
+                        if num(ui, tl!("Sides"), &mut n, 3.0..=100.0, "") {
+                            edit = Some(json!({"sides": n.round() as u32, "coalesce": key("sides")}));
+                        }
+                        let mut sr = (*star_ratio * 100.0) as f32;
+                        if num(ui, tl!("Star ratio"), &mut sr, 1.0..=100.0, "%") {
+                            edit = Some(json!({"starRatio": sr as f64 / 100.0, "coalesce": key("star")}));
+                        }
+                    })
+                    .inner
+                }
+                photocraft_doc::vector::LiveShape::ArrowLine { weight, start, end, width, length, concavity, .. } => {
+                    // This is a selected, saved Arrow; unlike the tool's defaults, edits update its geometry.
+                    ui.horizontal_wrapped(|ui| {
+                        let mut value = *start;
+                        if ui.checkbox(&mut value, tl!("Start")).changed() {
+                            edit = Some(json!({"arrowStart": value, "coalesce": key("arrow-start")}));
+                        }
+                        let mut value = *end;
+                        if ui.checkbox(&mut value, tl!("End")).changed() {
+                            edit = Some(json!({"arrowEnd": value, "coalesce": key("arrow-end")}));
+                        }
+                    });
+                    ui.horizontal_wrapped(|ui| {
+                        let mut v = *width as f32;
+                        if num(ui, "Width", &mut v, 1.0..=4096.0, "px") {
+                            edit = Some(json!({"arrowWidth": v, "coalesce": key("arrow-width")}));
+                        }
+                    });
+                    ui.horizontal_wrapped(|ui| {
+                        let mut v = *length as f32;
+                        if num(ui, "Length", &mut v, 1.0..=4096.0, "px") {
+                            edit = Some(json!({"arrowLength": v, "coalesce": key("arrow-length")}));
+                        }
+                    });
+                    ui.horizontal_wrapped(|ui| {
+                        let mut v = *weight as f32;
+                        if num(ui, "Weight", &mut v, 1.0..=10000.0, "px") {
+                            edit = Some(json!({"weight": v, "coalesce": key("arrow-weight")}));
+                        }
+                    });
+                    ui.horizontal_wrapped(|ui| {
+                        let mut v = *concavity as f32;
+                        if num(ui, "Concavity", &mut v, 0.0..=100.0, "%") {
+                            edit = Some(json!({"arrowConcavity": v, "coalesce": key("arrow-concavity")}));
+                        }
+                    });
+
+                    // Explicitly adopt this arrow's values as defaults for new arrows.
+                    let target = app.session.active().map(|st| (st.doc.id.0, id.0));
+                    let mut linked = ui.ctx().data(|data| {
+                        let state = data.get_temp::<ArrowDefaultLink>(arrow_default_link_id()).unwrap_or_default();
+                        state.target == target && state.enabled
+                    });
+
+                    if ui.checkbox(&mut linked, tl!("Set as default")).on_hover_text(tl!("Use these settings for new arrows")).changed() {
+                        ui.ctx().data_mut(|data| {
+                            data.insert_temp(arrow_default_link_id(), ArrowDefaultLink { target, enabled: linked });
+                        });
+                        if linked {
+                            copy_arrow_to_tool_defaults(app, id);
+                        }
                     }
-                })
-                .inner
-            }
-            _ => {}
+                }
+                photocraft_doc::vector::LiveShape::Line { weight, .. } => {
+                    ui.horizontal_wrapped(|ui| {
+                        let mut w = *weight as f32;
+                        if num(ui, tl!("Weight"), &mut w, 1.0..=10000.0, "px") {
+                            edit = Some(json!({"weight": w, "coalesce": key("weight")}));
+                        }
+                    })
+                    .inner
+                }
+                _ => {}
+            });
         });
     }
     if let Some(mut p) = edit {
