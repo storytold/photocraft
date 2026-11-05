@@ -730,6 +730,10 @@ fn build() -> Vec<CommandSpec> {
                     }
                     Ok(())
                 })?;
+                // The Layers panel's in-place rename: a name the user typed (#9023).
+                if let (Some(name), [id]) = (p.get("name").and_then(Value::as_str), ids.as_slice()) {
+                    crate::type_cmds::note_typed_name(s, *id, name);
+                }
                 Ok(Value::Null)
             }
         ),

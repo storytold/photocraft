@@ -205,6 +205,20 @@ fn a_duplicated_type_layer_follows_its_new_text() {
     }
 }
 
+/// #9023: a copy-shaped name given in the Layers panel (`layer.setProps`) or by `type.create`'s
+/// `name` is the user's, so editing the text keeps it.
+#[test]
+fn a_copy_shaped_name_given_in_the_layers_panel_or_at_creation_is_kept() {
+    let mut s = session();
+    let id = s.execute("type.create", json!({"x": 0, "y": 40, "text": "Title"})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("layer.setProps", json!({"layer": id, "name": "Title copy 2"})).unwrap();
+    s.execute("type.edit", json!({"layer": id, "text": "Other"})).unwrap();
+    assert_eq!(layer_name_of(&s, id), "Title copy 2", "renamed in the Layers panel");
+    let named = s.execute("type.create", json!({"x": 0, "y": 80, "text": "Head", "name": "Head copy"})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("type.edit", json!({"layer": named, "text": "Body"})).unwrap();
+    assert_eq!(layer_name_of(&s, named), "Head copy", "named at creation");
+}
+
 /// #9023: only a change of its text renames a copy. Size, style and layout edits keep "Title
 /// copy" (they used to rename it "Title"); editing its text still renames it after the text.
 #[test]
