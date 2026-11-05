@@ -207,8 +207,11 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> (std::sync::Ar
         && let LayerContent::Adjustment(a) = &l.content
     {
         let key = crate::adjust_preview::live_key(app, &snapshot, revision, layer, &params);
+        // A stepped LUT folder file comes from the text its step read, not from the disk (#11341).
+        let text = crate::adjust_preview::lut_text(app, &params);
         let shown = memo_display(app, &snapshot, key, || {
             let kind = photocraft_engine::commands::adjustment_kind(a);
+            let params = crate::adjust_preview::live_params(text.as_deref(), &params);
             let preview = photocraft_engine::adjust_params::from_params(kind, &params, Some(a), snapshot.mode).unwrap_or_else(|_| a.clone());
             let mut doc = (*snapshot).clone();
             if let Some(lm) = doc.layer_mut(layer) {

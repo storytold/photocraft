@@ -172,19 +172,24 @@ fn lookup_params(key: &str) -> Value {
     }
 }
 
+/// How many LUT folder files stay read for stepped previews before the lot goes (#11341).
+const LUT_TEXTS: usize = 8;
+
 /// The preview params of a dropdown key for a step of the wheel or the arrow keys (#11341): a
-/// built-in by its id; a LUT folder file read here, once, and carried as its text (`data`, with
-/// `fileName` for its name and format), so the memoised preview reads nothing and the rest commits
-/// the very table shown. A file that can't be read, or isn't text, goes by path to
-/// `layer.setAdjustment`, which reports it.
-fn preview_params(key: &str) -> Value {
-    match key.strip_prefix(FOLDER_LUT) {
-        Some(path) => match std::fs::read(path).ok().and_then(|bytes| String::from_utf8(bytes).ok()) {
-            Some(text) => json!({"data": text, "fileName": path}),
-            None => json!({"file": path}),
-        },
-        None => json!({"lut": key}),
+/// built-in by its id, a LUT folder file by its path, read here, once, into `app.lut_texts`, from
+/// which the preview is built and the rest commits (`adjust_preview::live_params`) without reading
+/// the file again, while the params themselves stay small for the per-frame hashing. A file that
+/// can't be read, or isn't text, is left to `layer.setAdjustment` by path, which reports it.
+fn preview_params(app: &mut PhotocraftApp, key: &str) -> Value {
+    if let Some(path) = key.strip_prefix(FOLDER_LUT)
+        && let Some(text) = std::fs::read(path).ok().and_then(|bytes| String::from_utf8(bytes).ok())
+    {
+        if app.lut_texts.len() >= LUT_TEXTS && !app.lut_texts.contains_key(path) {
+            app.lut_texts.clear();
+        }
+        app.lut_texts.insert(path.to_owned(), std::sync::Arc::from(text));
     }
+    lookup_params(key)
 }
 
 pub fn color_lookup_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, adj: &Adjustment) {
@@ -201,13 +206,10 @@ pub fn color_lookup_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: Layer
         .live_adjust
         .as_ref()
         .filter(|(layer, _)| *layer == id)
-        .and_then(|(_, params)| {
-            let path = params.get("fileName").or(params.get("file")).and_then(Value::as_str);
-            match (params.get("lut").and_then(Value::as_str), path) {
-                (Some(lut), _) => Some(lut.to_owned()),
-                (None, Some(path)) => Some(format!("{FOLDER_LUT}{path}")),
-                (None, None) => None,
-            }
+        .and_then(|(_, params)| match (params.get("lut").and_then(Value::as_str), params.get("file").and_then(Value::as_str)) {
+            (Some(lut), _) => Some(lut.to_owned()),
+            (None, Some(path)) => Some(format!("{FOLDER_LUT}{path}")),
+            (None, None) => None,
         })
         .unwrap_or(current);
     let custom_label = format!("{name} ({size}³)");
@@ -235,10 +237,11 @@ pub fn color_lookup_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: Layer
             if cycle_input {
                 // The wheel and the arrow keys preview the LUT folder's files like the built-ins
                 // (#11341): skipping them left the step at the last built-in, the choice falling
-                // back. A folder file is read here, once per step, and carried in the preview
-                // (`preview_params`); the rest commits that same table.
+                // back. A folder file is read here, once per step, and kept for the preview and
+                // its commit (`preview_params`, `app.lut_texts`).
                 if sel != "load" && sel != "custom" {
-                    app.live_adjust = Some((id, preview_params(&sel)));
+                    let p = preview_params(app, &sel);
+                    app.live_adjust = Some((id, p));
                     cycling_preview = true;
                 }
             } else if sel == "load" {
@@ -256,9 +259,10 @@ pub fn color_lookup_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: Layer
         if ui.input(|input| input.time - since) >= 0.75 {
             if let Some((layer, preview)) = &app.live_adjust
                 && *layer == id
-                && (preview.get("lut").is_some() || preview.get("file").is_some() || preview.get("data").is_some())
+                && (preview.get("lut").is_some() || preview.get("file").is_some())
             {
-                params = Some(preview.clone());
+                // A folder file commits as the text its step read: the table that was shown.
+                params = Some(crate::adjust_preview::live_params(crate::adjust_preview::lut_text(app, preview).as_deref(), preview));
             }
             ui.ctx().data_mut(|data| data.remove::<f64>(cycle_key));
         } else {
@@ -293,11 +297,14 @@ pub fn color_lookup_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: Layer
             && let Some((layer, preview)) = &app.live_adjust
             && *layer == id
         {
-            for k in ["lut", "file", "data", "fileName"] {
+            for k in ["lut", "file"] {
                 if let Some(v) = preview.get(k) {
                     p[k] = v.clone();
                 }
             }
+        }
+        if let Some(text) = crate::adjust_preview::lut_text(app, &p) {
+            p = crate::adjust_preview::live_params(Some(&text), &p);
         }
         p["layer"] = json!(id.0);
         // Errors (an unreadable LUT file) land in the status bar.

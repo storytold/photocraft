@@ -226,10 +226,7 @@ fn color_lookup_picker_steps_into_the_lut_folder_and_back() {
         other => panic!("{other:?}"),
     };
     let previewed = |h: &Harness<'_, PhotocraftApp>, key: &str| {
-        h.state()
-            .live_adjust
-            .as_ref()
-            .is_some_and(|(_, p)| p.get("fileName").or(p.get("file")).or(p.get("lut")).and_then(serde_json::Value::as_str) == Some(key))
+        h.state().live_adjust.as_ref().is_some_and(|(_, p)| p.get("file").or(p.get("lut")).and_then(serde_json::Value::as_str) == Some(key))
     };
     // What the canvas shows: the previewed look, or the committed one.
     let shown_name = |h: &mut Harness<'_, PhotocraftApp>| {

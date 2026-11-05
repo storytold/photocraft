@@ -295,6 +295,7 @@ pub(super) fn ensure_proxy_preview(app: &mut PhotocraftApp, idx: usize, zoom: f3
         let l = proxy.layer(layer)?;
         let LayerContent::Adjustment(a) = &l.content else { return None };
         let kind = photocraft_engine::commands::adjustment_kind(a);
+        let params = crate::adjust_preview::live_params(crate::adjust_preview::lut_text(app, &params).as_deref(), &params);
         let preview = photocraft_engine::adjust_params::from_params(kind, &params, Some(a), proxy.mode).unwrap_or_else(|_| a.clone());
         let mut p = (*proxy).clone();
         if let Some(lm) = p.layer_mut(layer) {

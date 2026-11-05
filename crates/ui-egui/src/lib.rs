@@ -446,6 +446,10 @@ pub struct PhotocraftApp {
     input_waiters: Vec<Sender<ControlResponse>>,
     /// Live (uncommitted) adjustment edit shown on canvas while a slider is dragged.
     pub live_adjust: Option<(photocraft_doc::LayerId, Value)>,
+    /// LUT folder files read for a stepped Color Lookup preview, by path (#11341): the preview is
+    /// built from the text and the rest commits it, without reading the file again. A few entries
+    /// at most; cleared when full.
+    pub(crate) lut_texts: std::collections::HashMap<String, std::sync::Arc<str>>,
     /// Frames rendered (for tests and the status bar).
     pub frame: u64,
     /// The pointer rested on the notice stack last frame. Used to give a fresh auto-hide delay in
