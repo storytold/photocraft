@@ -23,7 +23,9 @@
 mod catalog;
 mod system;
 
-pub use system::system_lang;
+#[cfg(test)]
+pub(crate) use system::with_decimal_separator;
+pub use system::{decimal_separator, system_lang};
 
 use std::cell::Cell;
 use std::sync::OnceLock;
@@ -40,7 +42,7 @@ pub struct LangInfo {
     /// [`LangInfo::text`].
     pub source: &'static [u8],
     /// Plural form index for a count (English: 0 = one, 1 = other; Japanese, Chinese and Hungarian: always 0;
-    /// Czech: 0 = one, 1 = few (2–4), 2 = other; French: 0 = one (0 and 1), 1 = other). A catalog's `@plural` entries list one form per
+    /// Czech: 0 = one, 1 = few (2–4), 2 = other; Russian, Ukrainian and Bosnian: 0 = one (1, 21 …), 1 = few (2–4, 22–24 …), 2 = other; French: 0 = one (0 and 1), 1 = other). A catalog's `@plural` entries list one form per
     /// index.
     pub plural: fn(u64) -> usize,
     /// Does the catalog cover every menu string? (`cargo xtask i18n-coverage` lists what it lacks)
@@ -199,7 +201,7 @@ fn expand(packed: &str, keys: &[&str]) -> Result<String, String> {
 }
 
 /// The registry. English first: it is the fallback and the source language.
-pub static LANGUAGES: [LangInfo; 23] = [
+pub static LANGUAGES: [LangInfo; 28] = [
     LangInfo { code: "en", name: "English", source: b"", plural: plural_one_other, complete_menus: false, catalog: OnceLock::new() },
     LangInfo { code: "ja", name: "日本語", source: catalog!("ja"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
     LangInfo { code: "zh-hans", name: "简体中文", source: catalog!("zh-hans"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
@@ -214,6 +216,10 @@ pub static LANGUAGES: [LangInfo; 23] = [
     // `sr-Latn-*` and `sr_RS@latin` resolve here; so do Cyrillic `sr` locales, which read Latin
     // rather than English.
     LangInfo { code: "sr", name: "Srpski", source: catalog!("sr"), plural: plural_russian, complete_menus: true, catalog: OnceLock::new() },
+    // Bosnian (Latin script, Ijekavian), the same one/few/other rule for integer counts. `bs-BA`,
+    // `bs-Latn-*` and `bs_BA.UTF-8` resolve here; so do Cyrillic `bs` locales, which read Latin
+    // rather than English.
+    LangInfo { code: "bs", name: "Bosanski", source: catalog!("bs"), plural: plural_russian, complete_menus: true, catalog: OnceLock::new() },
     LangInfo { code: "cs", name: "Čeština", source: catalog!("cs"), plural: plural_cs, complete_menus: true, catalog: OnceLock::new() },
     LangInfo { code: "fr", name: "Français", source: catalog!("fr"), plural: plural_fr, complete_menus: true, catalog: OnceLock::new() },
     LangInfo { code: "id", name: "Bahasa Indonesia", source: catalog!("id"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
@@ -237,6 +243,16 @@ pub static LANGUAGES: [LangInfo; 23] = [
     // Arabic (Modern Standard); `ar-SA`, `ar-EG` and the other regional locales resolve here. The
     // chrome mirrors right to left (`dir_for_code`), and egui lays each label out right to left.
     LangInfo { code: "ar", name: "العربية", source: catalog!("ar"), plural: plural_arabic, complete_menus: true, catalog: OnceLock::new() },
+    // Swedish; `sv-SE` and `sv-FI` locales resolve here.
+    LangInfo { code: "sv", name: "Svenska", source: catalog!("sv"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
+    // Finnish; `fi-FI` resolves here (Swedish in Finland, `sv-FI`, stays Swedish). One/other: the
+    // partitive singular follows any number but 1 ("1 taso", "2 tasoa").
+    LangInfo { code: "fi", name: "Suomi", source: catalog!("fi"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
+    // Danish; `da-DK` and the other `da-*` locales resolve here.
+    LangInfo { code: "da", name: "Dansk", source: catalog!("da"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
+    // Norwegian Bokmål; `nb-NO`, and the macrolanguage `no` and Nynorsk `nn` from POSIX locales,
+    // resolve here (see `candidates`).
+    LangInfo { code: "nb", name: "Norsk bokmål", source: catalog!("nb"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
 ];
 
 impl LangInfo {
@@ -365,6 +381,11 @@ fn candidates(tag: &str) -> Vec<String> {
     if primary == "pt" && !out.iter().any(|c| c == "pt-br") {
         // The only Portuguese catalog is Brazilian; other regions use it rather than English.
         out.insert(out.len() - 1, "pt-br".to_string());
+    }
+    if matches!(primary, "no" | "nn") && !out.iter().any(|c| c == "nb") {
+        // The only Norwegian catalog is Bokmål; the macrolanguage code and Nynorsk use it rather
+        // than English.
+        out.insert(out.len() - 1, "nb".to_string());
     }
     out
 }
