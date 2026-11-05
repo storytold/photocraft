@@ -23,8 +23,9 @@ installed per Creative Cloud install, here `en_US`). It has no Hindi, Arabic, In
 Vietnamese UI; Arabic and Hebrew users get English "Middle East" builds with the World-Ready
 composer, and its text engine handles RTL, Devanagari and Indic scripts.
 
-**Summary.** 7 of the 12 key languages at 100% of measured keys (status `partial` because of the
-engine messages), 2 absent (Hindi, Vietnamese), plus 8 other languages. Weighted by
+**Summary.** Re-measured 2026-11-05 on the current 2,321-key universe: Hindi at 100%, the other
+10 key languages at 95–96% (each lacks the ~90 keys added since late October), none absent (status
+`partial` because of the engine messages), plus the other shipped languages. Weighted by
 speakers, ~55% ready. Remaining: 80–140 h, plus native-speaker review (recorded only for Italian,
 2026-10-12).
 
