@@ -150,8 +150,10 @@ fn live_brush_and_eraser_match_commit_at_all_native_depths() {
                 subset(&mut s);
                 let before = surface(&s);
                 let mut p = json!({"points":[[6,7,1],[23,15,0.7]],"size":9,"color":"#ffffff","erase":erase,"seed":42});
-                let live = LiveStroke::begin(&s, &p).unwrap();
+                let mut live = LiveStroke::begin(&s, &p).unwrap();
                 p["seed"] = json!(live.seed);
+                // Pen up: the brush catches up to the last point, as the commit does.
+                live.finish().unwrap();
                 let st = s.active().unwrap();
                 let shown = live.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().clone();
                 unchanged(&before, &shown);
