@@ -106,10 +106,15 @@ fn a_polygon_in_progress_keeps_its_starting_mode() {
     let mut app = opened();
     let ctx = egui::Context::default();
     app.distort.select_mask.as_mut().unwrap().pick(SmTool::PolygonalLasso);
-    app.distort.select_mask.as_mut().unwrap().poly = Some((true, vec![[10.0, 10.0], [50.0, 10.0]]));
+    app.distort.select_mask.as_mut().unwrap().poly = Some((true, vec![[10.0, 10.0], [50.0, 10.0], [50.0, 50.0]]));
     press(&mut app, &ctx, Key::E, Modifiers::NONE);
     assert!(!ws(&app).add);
     assert_eq!(ws(&app).poly.as_ref().map(|(a, _)| *a), Some(true));
+    assert!(enter(&mut app), "Enter closes the polygon");
+    let edit = ws(&app).edits.last().expect("the closed polygon is recorded");
+    assert_eq!(edit["tool"].as_str(), Some("lasso"));
+    assert_eq!(edit["mode"].as_str(), Some("add"), "the mode the polygon started with");
+    assert!(!ws(&app).add, "the workspace mode is still the one E chose");
 }
 
 fn e_event() -> egui::RawInput {
