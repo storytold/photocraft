@@ -410,6 +410,27 @@ fn incompatible_archive_notes_refuse_export_even_when_skipping_unsupported() {
 }
 
 #[test]
+fn whole_replacement_uses_incoming_notes_and_retains_only_the_legacy_receipt() {
+    let old = fixture(&["Old"], true, "First note\0");
+    let incoming = fixture(&["Incoming"], false, "Second note\0");
+    let mut session = loaded(&old.bytes);
+    let legacy = crate::actions_cmds::library::LegacyOrigin::new(br#"{"actions":[]}"#).unwrap();
+    session.actions.library.legacy = Some(legacy.clone());
+    session.execute("actions.replace", json!({"data": photocraft_paint::tile::b64_encode(&incoming.bytes), "confirm": true})).unwrap();
+    assert_eq!(session.actions.sets, ["Incoming"]);
+    assert_eq!(session.actions.list.len(), 1);
+    assert!(session.actions.list.iter().all(|action| action.set.as_deref() == Some("Incoming")));
+    assert_eq!(session.actions.library.legacy, Some(legacy.clone()));
+    let bytes = crate::actions_cmds::library::encode(&session.actions, &[]).unwrap();
+    let restored = crate::actions_cmds::library::decode(&bytes).unwrap();
+    assert_eq!(restored.library.legacy, Some(legacy));
+    let files = atn::parse_sets(&bytes).unwrap();
+    let outer = files.last().unwrap().actions[0].items[0].descriptor.as_ref().unwrap();
+    let D::Text(note) = outer.get("Msge").unwrap() else { panic!("the incoming archive note must remain text") };
+    assert_eq!(note.0, "Second note\0".encode_utf16().collect::<Vec<_>>());
+}
+
+#[test]
 fn malformed_metadata_or_later_set_never_commits_a_partial_library() {
     let fixture = fixture(&["A", "B"], false, "Note\0");
     let mut session = Session::new();

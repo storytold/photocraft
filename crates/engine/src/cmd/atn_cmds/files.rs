@@ -95,7 +95,7 @@ fn import_actions(s: &mut Session, p: &Value, whole: bool) -> Result<Value> {
     }
     drop(retained_groups);
     drop(old_groups);
-    let previous_rows: std::collections::HashSet<String> = s.actions.sets.iter().filter(|name| targets.contains(*name)).cloned().collect();
+    let previous_rows: std::collections::HashSet<String> = s.actions.sets.iter().filter(|name| !whole && targets.contains(*name)).cloned().collect();
     let old_rows = s.actions.sets.iter().filter(|name| !whole && (!replace || !targets.contains(*name))).count();
     let new_rows = if provenance.is_some() || imp.sets.iter().any(|set| set.metadata.is_some()) {
         imp.sets.len()
@@ -116,12 +116,15 @@ fn import_actions(s: &mut Session, p: &Value, whole: bool) -> Result<Value> {
     let steps: usize = imp.actions.iter().map(|action| action.steps.len()).sum();
     let added = imp.actions;
     let set_names: Vec<String> = imp.sets.iter().map(|set| set.name.clone()).collect();
-    let mut proposed = crate::actions_cmds::library::definition_copy(&s.actions);
-    if whole {
-        proposed.list.clear();
-        let names = proposed.sets.iter().cloned().collect();
-        sidecar::retire_sets(&mut proposed, &names);
-    } else if replace {
+    let mut proposed = if whole {
+        // Replacement owns incoming archive provenance, not the discarded wrapper or notes.
+        let mut fresh = crate::actions_cmds::ActionState::default();
+        fresh.library.legacy = s.actions.library.legacy.clone();
+        fresh
+    } else {
+        crate::actions_cmds::library::definition_copy(&s.actions)
+    };
+    if !whole && replace {
         proposed.list.retain(|action| !targets.contains(super::logical_set_name(action.set.as_deref())));
         sidecar::retire_sets(&mut proposed, &targets);
     }
@@ -147,7 +150,13 @@ fn import_actions(s: &mut Session, p: &Value, whole: bool) -> Result<Value> {
         shortcuts.retain(|id, value| !(id.starts_with(crate::actions_cmds::PLAY_SHORTCUT_PREFIX) && value == key));
         shortcuts.insert(format!("{}{name}", crate::actions_cmds::PLAY_SHORTCUT_PREFIX), key.clone());
     }
-    crate::actions_cmds::library::check_definition(&proposed, &shortcuts).map_err(|error| bad(cmd, error))?;
+    if whole {
+        crate::actions_cmds::library::check_definition(&proposed, &shortcuts).map_err(|error| bad(cmd, error))?;
+    } else {
+        // Load may collect archives with different notes for separate export, as before.
+        // Preserve checked physical bindings without requiring a combined durable archive.
+        crate::actions_cmds::library::placement::validate(&proposed).map_err(|error| bad(cmd, error))?;
+    }
     s.actions.list = proposed.list;
     s.actions.sets = proposed.sets;
     s.actions.library = proposed.library;
