@@ -504,15 +504,42 @@ fn no_room(dir: &Path, cap: Option<u64>) -> String {
 }
 
 /// (available, total) bytes of the volume holding `dir`: the mount point that is its longest
-/// prefix. `None` if unknown, which disables only the free-space check, not spilling. Network
-/// scratch folders are not listed as disks, so they report `None`: they earn no scratch allowance
-/// at import and the free-space reserve doesn't apply to them, though a Scratch Size Limit still does.
+/// prefix. `None` if unknown, which disables only the free-space check, not spilling. On Windows a
+/// network scratch folder isn't listed, so it reports `None` (no free-space reserve; import
+/// allowance only up to a Scratch Size Limit, if one is set). On Linux an unlisted network mount
+/// matches its listed parent mount, such as `/`, and uses that volume's numbers.
 #[cfg(not(target_arch = "wasm32"))]
 fn free_space(dir: &Path) -> Option<(u64, u64)> {
     let dir = std::fs::canonicalize(dir).ok()?;
     let dir = without_verbatim_disk_prefix(&dir).unwrap_or(dir);
     let disks = sysinfo::Disks::new_with_refreshed_list_specifics(sysinfo::DiskRefreshKind::nothing().with_storage()).ok()?;
-    disks.iter().filter(|d| dir.starts_with(d.mount_point())).max_by_key(|d| d.mount_point().as_os_str().len()).map(|d| (d.available_space(), d.total_space()))
+    disks
+        .iter()
+        .filter(|d| dir.starts_with(d.mount_point()))
+        .max_by_key(|d| d.mount_point().as_os_str().len())
+        .and_then(|d| known_space(available_to_caller(d.mount_point()).unwrap_or_else(|| d.available_space()), d.total_space()))
+}
+
+/// sysinfo keeps a volume whose space query failed, with both numbers zero; treating that as an
+/// empty disk would pause spilling, so it counts as unknown.
+#[cfg(not(target_arch = "wasm32"))]
+fn known_space(available: u64, total: u64) -> Option<(u64, u64)> {
+    (total != 0).then_some((available, total))
+}
+
+/// Bytes the current user can write to the volume at `mount`, which a per-user disk quota can make
+/// less than the volume's free space that sysinfo reports. `None` if the query fails.
+#[cfg(windows)]
+fn available_to_caller(mount: &Path) -> Option<u64> {
+    let mut available = 0;
+    winsafe::GetDiskFreeSpaceEx(Some(mount.to_str()?), Some(&mut available), None, None).ok()?;
+    Some(available)
+}
+
+/// Elsewhere sysinfo's figure already is what the user can write.
+#[cfg(all(not(windows), not(target_arch = "wasm32")))]
+fn available_to_caller(_mount: &Path) -> Option<u64> {
+    None
 }
 
 /// The plain form of a verbatim disk path (`\\?\C:\x` to `C:\x`), or `None` to keep the path as
@@ -848,6 +875,24 @@ mod tests {
         let (available, total) = free_space(&std::env::temp_dir()).unwrap();
         assert!(total > 0);
         assert!(available <= total);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_volume_with_no_total_is_unknown() {
+        assert_eq!(known_space(0, 0), None);
+        assert_eq!(known_space(5, 0), None);
+        assert_eq!(known_space(0, 10), Some((0, 10)));
+        assert_eq!(known_space(5, 10), Some((5, 10)));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn available_to_caller_reads_the_temp_volume() {
+        let temp = std::fs::canonicalize(std::env::temp_dir()).unwrap();
+        let temp = without_verbatim_disk_prefix(&temp).unwrap_or(temp);
+        let root = temp.ancestors().last().unwrap();
+        assert!(available_to_caller(root).is_some());
     }
 
     #[test]
