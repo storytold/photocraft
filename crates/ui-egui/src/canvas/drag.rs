@@ -27,6 +27,9 @@ pub struct Drag {
     /// `Some(false)` moves the outline, `Some(true)` moves the floating piece (`select.float`), as
     /// every Move-tool drag with a selection does (`move_ui::moves_selected_pixels_with`).
     pub sel_move: Option<bool>,
+    /// The pointer, before snapping, has been half a pixel or more from the press: the gesture is
+    /// not a click even if it comes back there (`tool_input::selection_release`, #11392).
+    pub left_press: bool,
     /// The last ⇧-locked offset of a selection-tool drag of the selection (`move_mods`, #6231);
     /// keeps the locked direction stable between events. The Move tool's own drags use `move_mods`.
     pub sel_axis: Option<[f64; 2]>,
@@ -50,6 +53,7 @@ impl Drag {
             released: egui::Modifiers::NONE,
             reposition: false,
             sel_move: None,
+            left_press: false,
             sel_axis: None,
             lasso: None,
             vector_owner: None,
