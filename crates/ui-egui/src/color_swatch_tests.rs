@@ -29,9 +29,9 @@ fn harness(setup: impl FnOnce(&mut PhotocraftApp) + 'static) -> Harness<'static,
 /// Clicks the swatch called `label` (a colour button), answers the Color Picker it opens with
 /// [`PICKED`], and returns the picker's title. Panics when no Color Picker opens.
 fn pick(h: &mut Harness<'_, PhotocraftApp>, label: &str) -> String {
-    // Panels scroll: bring the swatch into view first.
+    // Panels scroll: bring the swatch into view and let scrolling settle before clicking.
     h.get_by_role_and_label(Role::ColorWell, label).scroll_to_me();
-    h.run_steps(2);
+    h.run_steps(20);
     h.get_by_role_and_label(Role::ColorWell, label).click();
     answer(h, label)
 }
