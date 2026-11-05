@@ -619,6 +619,11 @@ pub(crate) fn physical_placement_fixture() -> Vec<u8> {
 pub(crate) fn physical_action_payload(action: &Action) -> Vec<u8> {
     action.atn_metadata.as_ref().unwrap().raw.bytes().to_vec()
 }
-pub(crate) fn physical_set_payload(state: &ActionState, slot: usize) -> Vec<u8> {
-    empty_source(state, slot).unwrap().raw.bytes().to_vec()
+pub(crate) fn physical_set_carrier_payload(state: &ActionState, slot: usize) -> Vec<u8> {
+    // The writer must rebuild the known action list when placement changes.
+    // Compare every other field by original bytes, including unknown values.
+    empty_source(state, slot).unwrap().raw.patch(&[("actions", None)]).unwrap()
+}
+pub(crate) fn physical_set_action_payloads(state: &ActionState, slot: usize) -> Vec<Vec<u8>> {
+    empty_source(state, slot).unwrap().raw.list("actions").unwrap().into_iter().map(|entry| entry.bytes().to_vec()).collect()
 }
