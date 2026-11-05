@@ -372,6 +372,9 @@ This is another implemented subset of #10723, not support for its remaining even
 - Close without `Svng` preserves the unanswered save choice. Headless playback refuses to discard a
   changed document. Native `file.close` still defaults to discard; `save: "ask"` opts into this policy.
 - Photo Filter converts recorded Lab colours through `photocraft-cms`.
+- Black & White exports store coefficients as signed 32-bit integers. Strict export refuses
+  fractional coefficients; `skipUnsupported:true` reports the omitted step. Native commands
+  retain fractional coefficients.
 - Direct Vibrance and Gradient Map save as the string events `vibrance` and `gradientMapEvent`.
   Stroke Outside uses `StrL.Otsd`, group Pass Through uses `BlnM.passThrough`, Canvas Size extension
   colours use `FrgC` and `Clr `, and Absolute Colorimetric intent uses `Inte.AClr`.
