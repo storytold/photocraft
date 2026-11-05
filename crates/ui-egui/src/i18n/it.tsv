@@ -4632,3 +4632,38 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Colore del punto
 	Shapes can't use patterns yet	Le forme non possono ancora usare pattern
 	Edit Brush…	Modifica pennello…
+
+# Histogram panel options and statistics, and the update notice (2026-10)
+	Calculating…	Calcolo in corso…
+	Click to refresh histogram with uncached data	Fai clic per aggiornare l'istogramma con dati non in cache
+	Count:	Conteggio:
+	Level:	Livello:
+	Percentile:	Percentile:
+	Source:	Sorgente:
+	Uncached Refresh	Aggiorna senza cache
+	Show Statistics	Mostra statistiche
+	Show Channels in Color	Mostra canali a colori
+	Update and Restart	Aggiorna e riavvia
+	Release Notes	Note di rilascio
+
+# Render path in the status bar, layer comp order and the font picker (2026-10)
+	CPU Rendering	Rendering su CPU
+	Drawn on the CPU: {reason}. Click for System Info.	Disegnato sulla CPU: {reason}. Fai clic per Info sistema.
+	Move Up	Sposta su
+	Move Down	Sposta giù
+	No matching fonts	Nessun font corrispondente
+
+# Line arrowheads and the preset group prompt on import (2026-11)
+	Arrowheads	Punte di freccia
+	Arrowhead options	Opzioni punte di freccia
+	Start	Inizio
+	End	Fine
+	Concavity	Concavità
+	Set as default	Imposta come predefinito
+	Use these settings for new arrows	Usa queste impostazioni per le nuove frecce
+	Import as New Group	Importa come nuovo gruppo
+	Import as New Group keeps “{group}” and adds the file as a new group beside it.	Importa come nuovo gruppo mantiene “{group}” e aggiunge il file come nuovo gruppo accanto.
+	Replace deletes everything in “{group}” first, including presets you edited or moved there. This can't be undone.	Sostituisci elimina prima tutto il contenuto di “{group}”, compresi i predefiniti che hai modificato o spostato lì. L'operazione non può essere annullata.
+	Answer the open import question first, then import this file again.	Rispondi prima alla domanda sull'importazione in corso, poi importa di nuovo questo file.
+	No import is waiting. Import the file again.	Nessuna importazione in attesa. Importa di nuovo il file.
+	{message} into “{group}”	{message} in “{group}”
