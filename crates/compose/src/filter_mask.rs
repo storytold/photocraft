@@ -95,85 +95,127 @@ pub fn unmix(base: &Surface, mixed: &Surface, mask: &LayerMask) -> Surface {
     if area.is_empty() || mixed.format() != fmt {
         return out;
     }
-    let n = fmt.channels();
     // Tile by tile: the union of two sparse surfaces far apart is a rectangle of mostly nothing,
     // and transparent pixels in tiles neither surface has stay as they are.
     let whole = area;
     // Non-alpha still needs every tile whose defaults differ (an unmix through a non-unit mask
     // would change that default, and the clone already holds the old one).
     let same_default = base.default_pixel() == mixed.default_pixel();
-    for t in whole.tiles() {
+    let mut tiles = whole.tiles().filter(|t| {
         let area = t.rect().intersect(&whole);
         let bare = !base.has_tiles_in(area) && !mixed.has_tiles_in(area);
-        if area.is_empty() || (bare && (fmt.alpha || same_default)) {
-            continue;
-        }
-        let (b, x) = (base.read_region(area), mixed.read_region(area));
-        let mut k = Vec::new();
-        mask.values_into(area, &mut k);
-        let mut o = vec![0.0f32; b.len()];
-        for (i, ((bp, xp), op)) in b.chunks_exact(n).zip(x.chunks_exact(n)).zip(o.chunks_exact_mut(n)).enumerate() {
-            let m = k.get(i).copied().unwrap_or(1.0).clamp(0.0, 1.0);
-            if m < HIDDEN {
-                // A transparent base pixel (Photoshop's cache keeps white there) stays empty, so the
-                // stored pixels don't grow past the content.
-                if !fmt.alpha || bp[n - 1] > 0.0 {
-                    op.copy_from_slice(bp);
-                }
-                continue;
+        !area.is_empty() && !(bare && (fmt.alpha || same_default))
+    });
+    #[cfg(not(target_arch = "wasm32"))]
+    if whole.tile_count() >= 8 && rayon::current_num_threads() > 1 {
+        use rayon::prelude::*;
+        // Eight reusable slots bound both scratch and in-flight results, even for a
+        // huge sparse union. Surface publication stays ordered and single-threaded.
+        let mut scratch: [UnmixScratch; 8] = std::array::from_fn(|_| UnmixScratch::default());
+        let mut batch = Vec::with_capacity(scratch.len());
+        loop {
+            batch.clear();
+            batch.extend(tiles.by_ref().take(scratch.len()));
+            if batch.is_empty() {
+                break;
             }
-            if !fmt.alpha {
-                if fmt.sample == SampleType::F32 {
-                    if m == 1.0 {
-                        op.copy_from_slice(xp);
-                    } else {
-                        let m = f64::from(m);
-                        for c in 0..n {
-                            // Invert the weighted sum directly. Native differences can overflow;
-                            // adding the base back also loses small results at full coverage.
-                            let color = (f64::from(xp[c]) - f64::from(bp[c]) * (1.0 - m)) / m;
-                            op[c] = color.clamp(-f64::from(f32::MAX), f64::from(f32::MAX)) as f32;
-                        }
-                    }
-                    continue;
-                }
-                for c in 0..n {
-                    op[c] = (bp[c] + (xp[c] - bp[c]) / m).clamp(0.0, 1.0);
-                }
-                continue;
-            }
-            let a = n - 1;
-            if fmt.sample == SampleType::F32 {
-                let m = f64::from(m);
-                let before = f64::from(bp[a]) * (1.0 - m);
-                let fa = ((f64::from(xp[a]) - before) / m).clamp(0.0, 1.0);
-                if fa <= 0.0 {
-                    continue;
-                }
-                op[a] = fa as f32;
-                for c in 0..a {
-                    // Invert the premultiplied weighted sum directly: F32 differences can
-                    // overflow, and adding the base back can erase the result at full coverage.
-                    let color = (f64::from(xp[c]) * f64::from(xp[a]) - f64::from(bp[c]) * before) / (m * fa);
-                    // Arbitrary stored mixed pixels need not admit a representable inverse.
-                    op[c] = color.clamp(-f64::from(f32::MAX), f64::from(f32::MAX)) as f32;
-                }
-                continue;
-            }
-            let fa = (bp[a] + (xp[a] - bp[a]) / m).clamp(0.0, 1.0);
-            if fa <= 0.0 {
-                continue;
-            }
-            op[a] = fa;
-            for c in 0..a {
-                let pm = bp[c] * bp[a] + (xp[c] * xp[a] - bp[c] * bp[a]) / m;
-                op[c] = (pm / fa).clamp(0.0, 1.0);
+            scratch.par_iter_mut().zip(batch.par_iter()).for_each(|(scratch, t)| {
+                unmix_tile(base, mixed, mask, t.rect().intersect(&whole), scratch);
+            });
+            for (t, scratch) in batch.iter().zip(&scratch) {
+                out.write_region(t.rect().intersect(&whole), &scratch.output);
             }
         }
-        out.write_region(area, &o);
+        out.prune();
+        return out;
+    }
+    let mut scratch = UnmixScratch::default();
+    for t in tiles.by_ref() {
+        let area = t.rect().intersect(&whole);
+        unmix_tile(base, mixed, mask, area, &mut scratch);
+        out.write_region(area, &scratch.output);
     }
     out.prune();
     out
+}
+
+#[derive(Default)]
+struct UnmixScratch {
+    base: Vec<f32>,
+    mixed: Vec<f32>,
+    mask: Vec<f32>,
+    output: Vec<f32>,
+}
+
+/// Recover a tile with the same pixel arithmetic on the serial and bounded parallel paths.
+fn unmix_tile(base: &Surface, mixed: &Surface, mask: &LayerMask, area: photocraft_geom::Rect, scratch: &mut UnmixScratch) {
+    let fmt = base.format();
+    let n = fmt.channels();
+    let UnmixScratch { base: b, mixed: x, mask: k, output: o } = scratch;
+    base.read_region_into(area, b);
+    mixed.read_region_into(area, x);
+    mask.values_into(area, k);
+    o.resize(b.len(), 0.0);
+    // Early-continue branches intentionally leave zero samples. Reset reused slots too.
+    o.fill(0.0);
+    for (i, ((bp, xp), op)) in b.chunks_exact(n).zip(x.chunks_exact(n)).zip(o.chunks_exact_mut(n)).enumerate() {
+        let m = k.get(i).copied().unwrap_or(1.0).clamp(0.0, 1.0);
+        if m < HIDDEN {
+            // A transparent base pixel (Photoshop's cache keeps white there) stays empty, so the
+            // stored pixels don't grow past the content.
+            if !fmt.alpha || bp[n - 1] > 0.0 {
+                op.copy_from_slice(bp);
+            }
+            continue;
+        }
+        if !fmt.alpha {
+            if fmt.sample == SampleType::F32 {
+                if m == 1.0 {
+                    op.copy_from_slice(xp);
+                } else {
+                    let m = f64::from(m);
+                    for c in 0..n {
+                        // Invert the weighted sum directly. Native differences can overflow;
+                        // adding the base back also loses small results at full coverage.
+                        let color = (f64::from(xp[c]) - f64::from(bp[c]) * (1.0 - m)) / m;
+                        op[c] = color.clamp(-f64::from(f32::MAX), f64::from(f32::MAX)) as f32;
+                    }
+                }
+                continue;
+            }
+            for c in 0..n {
+                op[c] = (bp[c] + (xp[c] - bp[c]) / m).clamp(0.0, 1.0);
+            }
+            continue;
+        }
+        let a = n - 1;
+        if fmt.sample == SampleType::F32 {
+            let m = f64::from(m);
+            let before = f64::from(bp[a]) * (1.0 - m);
+            let fa = ((f64::from(xp[a]) - before) / m).clamp(0.0, 1.0);
+            if fa <= 0.0 {
+                continue;
+            }
+            op[a] = fa as f32;
+            for c in 0..a {
+                // Invert the premultiplied weighted sum directly: F32 differences can
+                // overflow, and adding the base back can erase the result at full coverage.
+                let color = (f64::from(xp[c]) * f64::from(xp[a]) - f64::from(bp[c]) * before) / (m * fa);
+                // Arbitrary stored mixed pixels need not admit a representable inverse.
+                op[c] = color.clamp(-f64::from(f32::MAX), f64::from(f32::MAX)) as f32;
+            }
+            continue;
+        }
+        let fa = (bp[a] + (xp[a] - bp[a]) / m).clamp(0.0, 1.0);
+        if fa <= 0.0 {
+            continue;
+        }
+        op[a] = fa;
+        for c in 0..a {
+            let pm = bp[c] * bp[a] + (xp[c] * xp[a] - bp[c] * bp[a]) / m;
+            op[c] = (pm / fa).clamp(0.0, 1.0);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -272,6 +314,142 @@ mod tests {
                         }
                     }
                     assert_eq!((base, filtered, mask), before);
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn native_parallel_unmix_matches_one_worker_bit_for_bit() {
+        let serial = rayon::ThreadPoolBuilder::new().num_threads(1).build().unwrap();
+        let parallel = rayon::ThreadPoolBuilder::new().num_threads(2).build().unwrap();
+        let fmt = PixelFormat::RGBA32F;
+        let bounds = photocraft_geom::Rect::new(-1, -1, 770, 258);
+        let mut base = Surface::new(fmt);
+        let mut mixed = Surface::new(fmt);
+        base.fill_rect(bounds, &[-2., 3., 4., 0.75]);
+        mixed.fill_rect(bounds, &[3., -0.5, 2.5, 0.75]);
+        let mut mask = LayerMask::reveal_all();
+        mask.surface = Surface::with_default(PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false), &[0.5]);
+        let hidden = photocraft_geom::Rect::new(0, 0, 256, 256);
+        base.fill_rect(hidden, &[1., 2., 3., 0.]);
+        mask.surface.fill_rect(hidden, &[0.]);
+        let empty = photocraft_geom::Rect::new(256, 0, 512, 256);
+        base.fill_rect(empty, &[1., 2., 3., 1.]);
+        mixed.fill_rect(empty, &[4., 5., 6., 0.]);
+        let expected = serial.install(|| unmix(&base, &mixed, &mask));
+        let actual = parallel.install(|| unmix(&base, &mixed, &mask));
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn reused_unmix_scratch_matches_fresh_pixels_and_clears_early_continue_outputs() {
+        use photocraft_geom::Rect;
+
+        for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab, ColorMode::Multichannel] {
+            for sample in SampleType::ALL {
+                for alpha in [false, true] {
+                    let fmt = PixelFormat::new(mode, sample, alpha);
+                    let n = fmt.channels();
+                    let colors = n - usize::from(alpha);
+                    let mut bd = vec![0.125; n];
+                    let mut xd = vec![0.75; n];
+                    let mut bp = vec![0.25; n];
+                    let mut xp = vec![0.625; n];
+                    if sample == SampleType::F32 {
+                        for c in 0..colors {
+                            bp[c] = if c % 2 == 0 { -2. } else { 4. };
+                            xp[c] = if c % 2 == 0 { 3. } else { -1. };
+                        }
+                    }
+                    if alpha {
+                        bd[colors] = 0.;
+                        xd[colors] = 0.;
+                        bp[colors] = 0.25;
+                        xp[colors] = 0.75;
+                    }
+                    let mut base = Surface::with_default(fmt, &bd);
+                    let mut mixed = Surface::with_default(fmt, &xd);
+                    let mut mask = LayerMask::reveal_all();
+                    mask.surface = Surface::with_default(PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false), &[0.5]);
+                    // Three consecutive full tiles: nonzero output, hidden transparent base,
+                    // then a nonpositive recovered alpha. Both latter tiles must clear scratch.
+                    base.fill_rect(Rect::new(0, 0, 256, 256), &bp);
+                    mixed.fill_rect(Rect::new(0, 0, 256, 256), &xp);
+                    let (mut hidden_b, mut zero_x, mut opaque_b) = (bp.clone(), xp.clone(), bp.clone());
+                    if alpha {
+                        hidden_b[colors] = 0.;
+                        zero_x[colors] = 0.;
+                        opaque_b[colors] = 1.;
+                    }
+                    base.fill_rect(Rect::new(256, 0, 512, 256), &hidden_b);
+                    mixed.fill_rect(Rect::new(256, 0, 512, 256), &xp);
+                    mask.surface.fill_rect(Rect::new(256, 0, 512, 256), &[HIDDEN / 2.]);
+                    base.fill_rect(Rect::new(512, 0, 768, 256), &opaque_b);
+                    mixed.fill_rect(Rect::new(512, 0, 768, 256), &zero_x);
+                    // Negative and partial boundary tiles vary every scratch buffer's length.
+                    base.write_pixel(-2, -1, &bp);
+                    mixed.write_pixel(-2, -1, &xp);
+                    base.write_pixel(770, 258, &bp);
+                    mixed.write_pixel(770, 258, &xp);
+                    base.write_pixel(768, 256, &hidden_b);
+                    mixed.write_pixel(768, 256, &xp);
+                    mask.surface.write_pixel(768, 256, &[0.]);
+                    base.write_pixel(769, 256, &opaque_b);
+                    mixed.write_pixel(769, 256, &zero_x);
+                    mask.surface.write_pixel(1, 1, &[HIDDEN]);
+                    if sample == SampleType::F32 {
+                        let tiny = f32::from_bits(1);
+                        for (x, y, b, v, ba, xa, coverage) in [
+                            (-2, -1, f32::MAX, -f32::MAX, 0.25, 0.75, 0.5),
+                            (255, 255, -f32::MAX, f32::MAX, 0.5, 0.75, 0.5),
+                            (768, 257, tiny, 2. * tiny, tiny, 2. * tiny, 0.5),
+                            (769, 257, f32::MAX, -tiny, 1., tiny, 1.),
+                            (770, 258, -4., 3., 0.25, 0.75, 1.),
+                        ] {
+                            let (mut b, mut v) = (vec![b; n], vec![v; n]);
+                            if alpha {
+                                b[colors] = ba;
+                                v[colors] = xa;
+                            }
+                            base.write_pixel(x, y, &b);
+                            mixed.write_pixel(x, y, &v);
+                            mask.surface.write_pixel(x, y, &[coverage]);
+                        }
+                    }
+                    let before = (base.clone(), mixed.clone(), mask.clone());
+                    let result = unmix(&base, &mixed, &mask);
+                    for y in [-1, 0, 1, 128, 255, 256, 257, 258] {
+                        for x in [-2, -1, 0, 1, 128, 255, 256, 511, 512, 767, 768, 769, 770] {
+                            let point = Rect::new(x, y, x + 1, y + 1);
+                            if alpha && !base.has_tiles_in(point) && !mixed.has_tiles_in(point) {
+                                // Bare alpha tiles retain the mixed default by design.
+                                assert_eq!(result.pixel(x, y), mixed.default_pixel(), "{fmt:?} bare ({x}, {y})");
+                                continue;
+                            }
+                            let mut isolated_base = Surface::new(fmt);
+                            let mut isolated_mixed = Surface::new(fmt);
+                            isolated_base.write_pixel(0, 0, &base.pixel(x, y));
+                            isolated_mixed.write_pixel(0, 0, &mixed.pixel(x, y));
+                            let mut isolated_mask = LayerMask::reveal_all();
+                            isolated_mask.surface = Surface::with_default(PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false), &[mask.value(x, y)]);
+                            let expected = unmix(&isolated_base, &isolated_mixed, &isolated_mask).pixel(0, 0);
+                            let actual = result.pixel(x, y);
+                            assert!(actual.iter().all(|v| v.is_finite()), "{fmt:?} ({x}, {y}): {actual:?}");
+                            assert_eq!(
+                                actual.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                                expected.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                                "{fmt:?} ({x}, {y})"
+                            );
+                        }
+                    }
+                    if alpha {
+                        for (x, y) in [(256, 0), (511, 255), (512, 0), (767, 255), (768, 256), (769, 256)] {
+                            assert_eq!(result.pixel(x, y).iter().map(|v| v.to_bits()).collect::<Vec<_>>(), vec![0u32; n], "{fmt:?} stale output ({x}, {y})");
+                        }
+                    }
+                    assert_eq!((base, mixed, mask), before);
                 }
             }
         }
