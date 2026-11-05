@@ -21,12 +21,13 @@ pub const CAPACITY: usize = 32;
 pub struct RowCache {
     entries: VecDeque<(u64, Arc<Rows>)>,
     capacity: usize,
+    generation: u64,
 }
 
 impl RowCache {
     /// An empty cache holding at most `capacity` row sets.
     pub fn new(capacity: usize) -> Self {
-        Self { entries: VecDeque::new(), capacity }
+        Self { entries: VecDeque::new(), capacity, generation: 0 }
     }
 
     /// The rows stored for `key`, now the most recently used.
@@ -65,6 +66,7 @@ impl RowCache {
     pub fn clear(&mut self) -> usize {
         let freed = self.bytes();
         self.entries.clear();
+        self.generation = self.generation.wrapping_add(1);
         freed
     }
 }
@@ -72,12 +74,19 @@ impl RowCache {
 /// The rows for `key` in `cache`, built by `build` only when it doesn't hold them. `build` runs
 /// outside the lock, so other renders never wait on it.
 pub fn cached_in(cache: &Mutex<RowCache>, key: u64, build: impl FnOnce() -> Rows) -> Rows {
-    let hit = cache.lock().unwrap_or_else(|e| e.into_inner()).get(key);
+    let (hit, generation) = {
+        let mut cache = cache.lock().unwrap_or_else(|e| e.into_inner());
+        (cache.get(key), cache.generation)
+    };
     if let Some(rows) = hit {
         return rows.to_vec();
     }
     let rows = build();
-    cache.lock().unwrap_or_else(|e| e.into_inner()).insert(key, Arc::new(rows.clone()));
+    let mut cache = cache.lock().unwrap_or_else(|e| e.into_inner());
+    // A purge must not be undone by a build that was already in flight.
+    if cache.generation == generation {
+        cache.insert(key, Arc::new(rows.clone()));
+    }
     rows
 }
 
@@ -151,6 +160,28 @@ mod tests {
         assert_eq!(builds.get(), 201, "kept: it was used recently");
         get(169);
         assert_eq!(builds.get(), 202, "dropped: the oldest when the cache was full");
+    }
+
+    #[test]
+    fn purge_discards_in_flight_builds() {
+        use std::sync::mpsc;
+        let cache = Mutex::new(RowCache::new(CAPACITY));
+        let (started_tx, started_rx) = mpsc::channel();
+        let (resume_tx, resume_rx) = mpsc::channel();
+        std::thread::scope(|scope| {
+            let cache_ref = &cache;
+            scope.spawn(move || {
+                cached_in(cache_ref, 123, || {
+                    started_tx.send(()).unwrap();
+                    resume_rx.recv().unwrap();
+                    rows(0.5)
+                })
+            });
+            started_rx.recv().unwrap();
+            cache.lock().unwrap().clear();
+            resume_tx.send(()).unwrap();
+        });
+        assert!(cache.lock().unwrap().is_empty(), "a build started before purge must not refill the cache");
     }
 
     #[test]
