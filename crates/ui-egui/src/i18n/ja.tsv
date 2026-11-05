@@ -2057,6 +2057,8 @@
 	Export clipboard	クリップボードを書き出す
 	Extra large	特大
 	File Handling	ファイル管理
+	Default save format	デフォルトの保存形式
+	TIFF	TIFF
 	File path	ファイルのパス
 	Fill new type layers with placeholder	新規文字レイヤーにプレースホルダーを入れる
 	Font preview	フォントのプレビュー

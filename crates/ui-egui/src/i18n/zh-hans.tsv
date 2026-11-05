@@ -2083,6 +2083,8 @@
 	Export clipboard	导出剪贴板
 	Extra large	特大
 	File Handling	文件处理
+	Default save format	默认保存格式
+	TIFF	TIFF
 	File path	文件路径
 	Fill new type layers with placeholder	用占位文字填充新文字图层
 	Font preview	字体预览

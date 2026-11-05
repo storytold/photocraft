@@ -88,6 +88,22 @@ choice!(LogDestination { Metadata = "metadata", TextFile = "textFile", Both = "b
 choice!(LogDetail { SessionsOnly = "sessionsOnly", Concise = "concise", Detailed = "detailed" } default Concise);
 choice!(Ask { Always = "always", Never = "never", Ask = "ask" } default Always);
 choice!(QuickExportFormat { Png = "png", Jpg = "jpg", Gif = "gif", Webp = "webp", Exr = "exr" } default Png);
+choice!(
+    /// The format Save As suggests for a document that has no file it can be saved back to (an
+    /// untitled document, or one opened from a format that can't keep its layers). The names are
+    /// file extensions. A flat format (PNG, JPEG) is suggested only when it keeps the whole
+    /// document; one with layers, masks, editable contents, alpha channels, a colour model or bit
+    /// depth the format can't store, or (for JPEG) transparency gets PSD instead, so they aren't
+    /// lost.
+    SaveFormat { Psd = "psd", Pcraft = "pcraft", Tif = "tif", Png = "png", Jpg = "jpg" } default Psd
+);
+
+impl SaveFormat {
+    /// Whether this format can hold only a flattened image.
+    pub fn is_flat(self) -> bool {
+        matches!(self, Self::Png | Self::Jpg)
+    }
+}
 choice!(ExportLocation { Ask = "ask", SameFolder = "sameFolder" } default Ask);
 choice!(ExportMetadata { None = "none", Copyright = "copyright", All = "all" } default Copyright);
 choice!(
@@ -475,6 +491,8 @@ impl Default for HistoryLog {
 pub struct FileHandling {
     pub image_previews: Ask,
     pub lowercase_extension: bool,
+    /// The format Save As suggests when the document has no file of its own to keep.
+    pub default_save_format: SaveFormat,
     /// File › Save a Copy suggests the document's own name rather than "<name> copy" (#8080).
     pub do_not_append_copy: bool,
     /// Saves run in the background while you keep working (on), or in the foreground under a
@@ -519,6 +537,7 @@ impl Default for FileHandling {
         Self {
             image_previews: Ask::Always,
             lowercase_extension: true,
+            default_save_format: SaveFormat::Psd,
             do_not_append_copy: false,
             save_in_background: true,
             autosave: true,

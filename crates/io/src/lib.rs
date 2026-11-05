@@ -49,6 +49,7 @@ pub mod effects_map;
 mod exr_native;
 pub mod exr_parts;
 mod flat;
+pub use flat::flat_holds;
 mod gradient_bake;
 pub mod guides_map;
 pub use gradient_bake::{Method as GradientMethod, bake as bake_gradient};
