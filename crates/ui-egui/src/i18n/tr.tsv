@@ -1824,6 +1824,7 @@
 	Soften	Yumuşat
 	Source	Kaynak
 	Source: set	Kaynak: ayarlandı
+	Source: {name}	Kaynak: {name}
 	Sponge Tool	Sünger Aracı
 	Spot Healing Brush Tool	Nokta Düzeltme Fırçası Aracı
 	Spread	Yayılma
@@ -2243,6 +2244,7 @@
 	History Brush	Geçmiş Fırçası
 	Paints from the History panel's source state	Geçmiş panelinin kaynak durumundan boyar
 	Sets the source for the history brush	Geçmiş fırçasının kaynağını ayarlar
+	The History Brush source was deleted: set a new source in the History panel	Geçmiş fırçasının kaynağı silindi: Geçmiş panelinde yeni bir kaynak ayarlayın
 	Color Replacement	Renk Değiştirme
 	New Group	Yeni Grup
 	New Group from Layers…	Katmanlardan Yeni Grup…
@@ -4254,10 +4256,17 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Durak Rengi
 	Shapes can't use patterns yet	Şekiller henüz desen kullanamaz
 	Edit Brush…	Fırçayı Düzenle…
-
-# Frame Tool and other branch translations.
+	Generator enabled	Oluşturucu etkin
 	Move Up	Yukarı taşı
 	Move Down	Aşağı taşı
+	Grid view	Izgara görünümü
+	List view	Liste görünümü
+	On your computer	Bilgisayarınızda
+	New file	Yeni dosya
+	Learn	Öğrenin
+	Website	Web sitesi
+
+# Frame Tool and other branch translations.
 	A frame supports affine transforms; select its image for perspective transforms	Çerçeve afin dönüşümleri destekler; perspektif dönüşümleri için içindeki görüntüyü seçin
 	A frame supports affine transforms; select its image to warp it	Çerçeve afin dönüşümleri destekler; çarpıtmak için içindeki görüntüyü seçin
 	Convert to Frame…	Çerçeveye Dönüştür…
