@@ -10,7 +10,7 @@ fn jpeg_xl_is_export_only_and_detects_both_signatures() {
     assert!(c.write && !c.read);
     assert_eq!(c.depths, &[SampleType::U8, SampleType::U16]);
     assert_eq!(c.layouts, &[ChannelLayout::Gray, ChannelLayout::Rgb, ChannelLayout::Rgba]);
-    assert!(c.alpha && !c.icc && !c.exif && !c.xmp && !c.dpi && !c.lossy);
+    assert!(c.alpha && !c.icc && c.exif && c.xmp && !c.dpi && !c.lossy);
     assert_eq!(Format::Jxl.mime_type(), "image/jxl");
     assert_eq!(from_extension("image.JXL"), Some(Format::Jxl));
     assert_eq!(detect(&[0xff, 0x0a, 0, 0]), Some(Format::Jxl));
@@ -107,4 +107,27 @@ fn jpeg_xl_rejects_one_pixel_images_without_panicking() {
     // zune-jpegxl currently requires at least two pixels on each axis.
     let image = Image::from_u8(1, 1, ChannelLayout::Rgb, vec![42, 100, 255]).unwrap();
     assert!(matches!(encode(&image, Format::Jxl, &EncodeOptions::default()), Err(CodecError::Encode { format: Format::Jxl, .. })));
+}
+
+#[test]
+fn jpeg_xl_metadata_export_respects_embed_option() {
+    let mut input = Image::from_u8(2, 2, ChannelLayout::Rgb, vec![10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120]).unwrap();
+    input.meta.exif = Some(b"II*\0\x08\0\0\0\0\0\0\0\0\0".to_vec());
+    input.meta.xmp = Some("<xmp>PhotoCraft</xmp>".into());
+    let encoded = encode(&input, Format::Jxl, &EncodeOptions::default()).unwrap();
+    assert!(encoded.starts_with(b"\0\0\0\x0cJXL \r\n\x87\n"));
+    assert!(encoded.windows(4).any(|w| w == b"Exif"));
+    assert!(encoded.windows(4).any(|w| w == b"xml "));
+    assert!(encoded.windows(4).any(|w| w == b"jxlc"));
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let decoder = jxl_oxide::JxlImage::builder().read(&encoded[..]).unwrap();
+        assert_eq!((decoder.width(), decoder.height()), (2, 2));
+    }
+
+    let mut without_metadata = EncodeOptions::default();
+    without_metadata.embed_metadata = false;
+    let plain = encode(&input, Format::Jxl, &without_metadata).unwrap();
+    assert!(plain.starts_with(&[0xff, 0x0a]));
 }
