@@ -342,6 +342,7 @@ impl Layouter {
             flow.pending_space += para.ps.space_before_pt * env.k;
         }
         let nlines = layout.len();
+        let mut leading_spaces = 0.0;
         for (li, line) in layout.lines().enumerate() {
             // Area type: the slot the breaker gave this line.
             let slot = area_slots.get(li).copied();
@@ -353,7 +354,7 @@ impl Layouter {
                 flow.stop = true;
                 break;
             };
-            para.place_line(&mut self.optical, out, &line, &frame);
+            leading_spaces = para.place_line(&mut self.optical, out, &line, &frame, leading_spaces);
         }
         if area_full {
             // The shape is full: later paragraphs are hidden too.

@@ -405,15 +405,20 @@ impl Para<'_> {
     }
 
     /// Appends one line's clusters, glyphs, decorations and `LineInfo` to `out`.
-    pub(super) fn place_line(&self, optical: &mut crate::optical::Cache, out: &mut TextLayout, line: &Line<'_>, f: &LineFrame) {
+    pub(super) fn place_line(&self, optical: &mut crate::optical::Cache, out: &mut TextLayout, line: &Line<'_>, f: &LineFrame, leading_spaces: f32) -> f32 {
         let env = self.env;
         let m = *line.metrics();
-        let adv = m.advance - m.trailing_whitespace;
+        let adv = m.advance - m.trailing_whitespace + leading_spaces;
         let slots = collect_kern_slots(line, self);
         let mut kern_px = self.kerning(optical, &slots);
         let (trailing_tabs, trailing_growth) = self.apply_tab_stops(&slots, &mut kern_px, f.index);
         let line_kern: f32 = kern_px.iter().sum::<f32>() - trailing_tabs;
-        let dx = self.line_start(f, m.offset, adv, line_kern);
+        let align = match self.ps.align {
+            TextAlign::Center | TextAlign::JustifyCenter => 0.5,
+            TextAlign::Right | TextAlign::JustifyRight => 1.0,
+            _ => 0.0,
+        };
+        let dx = self.line_start(f, m.offset, adv, line_kern) + leading_spaces * (1.0 - align);
         let lc = LineCtx { dx, baseline: f.baseline, slots: &slots, kern_px: &kern_px, line_index: out.lines.len() };
         let (g0, c0) = (out.glyphs.len(), out.clusters.len());
         let mut state = LineState { cursors: kern_cursors(line, &slots), seen_runs: Vec::new(), vinfo: Vec::new(), extra: 0.0 };
@@ -433,7 +438,7 @@ impl Para<'_> {
             rotate_to_text_space(&mut out.glyphs[g0..], &state.vinfo, f.baseline);
         }
         let lr = line.text_range();
-        let x0 = dx + m.offset;
+        let x0 = dx + m.offset - leading_spaces;
         out.lines.push(LineInfo {
             range: self.map_offset(lr.start)..self.map_offset(lr.end).min(self.content_end),
             baseline: f.baseline,
@@ -443,6 +448,20 @@ impl Para<'_> {
             descent: f.descent,
             paragraph: self.index,
         });
+        if !env.vertical || !matches!(line.break_reason(), parley::BreakReason::Regular | parley::BreakReason::Emergency) {
+            return 0.0;
+        }
+        let Some(current) = out.lines.last() else { return 0.0 };
+        let Some(text) = env.text.get(current.range.clone()) else { return 0.0 };
+        let content_end = text.trim_end_matches(' ').len();
+        if content_end == text.len() {
+            return 0.0;
+        }
+        // Carry trailing ASCII spaces into the next vertical column, except one
+        // line-break separator directly after a non-CJK word character.
+        let separator = text[..content_end].chars().next_back().is_some_and(|c| c.is_alphanumeric() && crate::cjk::classify(c).is_none());
+        let start = current.range.start + content_end + usize::from(separator);
+        out.clusters.iter().filter(|c| c.line == lc.line_index && c.range.start >= start).map(|c| c.advance).sum()
     }
 
     /// Emits one glyph run of the line: its face, clusters (once per shaping run), glyphs and
