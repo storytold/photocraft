@@ -5438,10 +5438,13 @@ dependencies = [
  "photocraft-io",
  "photocraft-raster",
  "photocraft-raw",
+ "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.21",
  "tokio",
  "winresource",
+ "xtask",
 ]
 
 [[package]]
@@ -9721,6 +9724,7 @@ dependencies = [
  "chrono",
  "serde",
  "serde_json",
+ "tempfile",
  "toml",
 ]
 
