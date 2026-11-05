@@ -164,11 +164,17 @@ fn keep_main_and_nearby(mask: &[bool], w: usize, h: usize) -> Vec<bool> {
     let margin = ((mx1 - mx0 + 1).max(my1 - my0 + 1) as f32 * 0.15).ceil() as usize;
     let (nx0, ny0, nx1, ny1) = (mx0.saturating_sub(margin), my0.saturating_sub(margin), mx1 + margin, my1 + margin);
     let (big, speck) = ((largest as f32 * 0.2).ceil() as usize, ((largest as f32 * 0.005).ceil() as usize).max(4));
+    // A thin disconnected strip entering from the frame is likely edge clutter.
     let keep: Vec<bool> = sizes
         .iter()
         .zip(&bbox)
         .enumerate()
-        .map(|(l, (n, b))| l != 0 && (*n >= big || (*n >= speck && b.0 <= nx1 && b.2 >= nx0 && b.1 <= ny1 && b.3 >= ny0)))
+        .map(|(l, (n, b))| {
+            l != 0
+                && (l == main
+                    || (!(((b.0 == 0 || b.2 + 1 == w) && b.3 - b.1 + 1 < h * 12 / 100) || ((b.1 == 0 || b.3 + 1 == h) && b.2 - b.0 + 1 < w * 12 / 100))
+                        && (*n >= big || (*n >= speck && b.0 <= nx1 && b.2 >= nx0 && b.1 <= ny1 && b.3 >= ny0))))
+        })
         .collect();
     lab.iter().map(|l| keep.get(*l as usize).copied().unwrap_or(false)).collect()
 }
@@ -217,7 +223,7 @@ fn fit_backdrop(samples: &[[f32; 3]]) -> Option<(Gmm, f32)> {
 /// this, such a part trains the backdrop model and is fixed as background, so a cream shirt on a
 /// near-white wall is lost. A floor or a table runs up the sides too, so the frame off the
 /// bottom knows its colour and it stays backdrop; only a band confined to one side's strip is
-/// released (and is then left to the cut). Patches under half a frame square stay backdrop.
+/// released (and is then left to the cut). Small or narrow edge patches stay backdrop.
 fn subject_at_edge(img: &super::RgbImage, frame: usize, edge: &dyn Fn(usize) -> bool) -> Vec<bool> {
     let (w, h) = (img.w, img.h);
     // Top, bottom, left, right.
@@ -238,7 +244,25 @@ fn subject_at_edge(img: &super::RgbImage, frame: usize, edge: &dyn Fn(usize) -> 
     // A stray pixel (noise, a dead pixel) is not a subject: only patches of some size count.
     let (lab, sizes) = super::components(&odd, w, h);
     let min = (frame * frame / 2).max(4);
-    lab.iter().map(|l| *l != 0 && sizes.get(*l as usize).is_some_and(|n| *n >= min)).collect()
+    let mut bounds = vec![(w, h, 0usize, 0usize); sizes.len()];
+    for (i, &label) in lab.iter().enumerate() {
+        if label != 0 {
+            if let Some(b) = bounds.get_mut(label as usize) {
+                let (x, y) = (i % w, i / w);
+                *b = (b.0.min(x), b.1.min(y), b.2.max(x), b.3.max(y));
+            }
+        }
+    }
+    lab.iter()
+        .map(|l| {
+            let i = *l as usize;
+            *l != 0
+                && sizes.get(i).is_some_and(|n| *n >= min)
+                && bounds
+                    .get(i)
+                    .is_some_and(|b| ((b.1 == 0 || b.3 + 1 == h) && b.2 - b.0 + 1 >= 2 * frame) || ((b.0 == 0 || b.2 + 1 == w) && b.3 - b.1 + 1 >= 2 * frame))
+        })
+        .collect()
 }
 
 /// Per-pixel saliency in `0..=1` (see the module docs).
