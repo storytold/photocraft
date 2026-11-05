@@ -71,8 +71,10 @@ fn check_documented_languages(languages: &[Language], doc: &str) -> Result<(), S
     let mut documented = BTreeSet::new();
     for line in table.lines().filter(|line| line.starts_with('|')) {
         let cell = line.split('|').nth(2).map_or("", str::trim);
-        let mut cells = line.split('|').map(str::trim).filter(|cell| !cell.is_empty()).peekable();
-        let separator = cells.peek().is_some() && cells.all(|cell| cell.chars().all(|c| matches!(c, '-' | ':')));
+        let row = line.trim();
+        let row = row.strip_prefix('|').unwrap_or(row);
+        let row = row.strip_suffix('|').unwrap_or(row);
+        let separator = row.split('|').map(str::trim).all(|column| column.contains('-') && column.chars().all(|c| matches!(c, '-' | ':')));
         if cell == "Preference code" || separator {
             continue;
         }
@@ -627,7 +629,7 @@ mod tests {
 
     #[test]
     fn documented_languages_reject_a_row_without_a_code() {
-        for row in ["| Klingon |  | one form |", "| Klingon | `` | one form |", "| Klingon"] {
+        for row in ["| Klingon |  | one form |", "| Klingon | `` | one form |", "| Klingon", "|---||---|", "|---||"] {
             let doc = LANGUAGE_DOC.replace("## Catalogs", &format!("{row}\n\n## Catalogs"));
             assert_eq!(
                 check_documented_languages(&documentation_languages(), &doc),
