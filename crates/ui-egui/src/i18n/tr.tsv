@@ -3376,6 +3376,8 @@ cameraRaw	Color	Renk
 	Condensed	Dar
 	Conditional Mode Change	Koşullu Mod Değişikliği
 	Background (Default)	Arka plan (varsayılan)
+	Background (default)	Arka plan (varsayılan)
+	Transparent (default)	Saydam (varsayılan)
 	Content-Aware Fill	İçeriğe Duyarlı Dolgu
 	Convert Frames > Video Layers	Kareleri Dönüştür > Video Katmanları
 	Convert to Linked	Bağlantılıya Dönüştür
@@ -4256,3 +4258,42 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Durak Rengi
 	Shapes can't use patterns yet	Şekiller henüz desen kullanamaz
 	Edit Brush…	Fırçayı Düzenle…
+
+# Action Stop message (#8386)
+	Message	İleti
+# Playback Options (#5212)
+	Playback Options…	Oynatma Seçenekleri…
+	Playback Options	Oynatma Seçenekleri
+	Accelerated	Hızlandırılmış
+	Step by Step	Adım adım
+	Pause For:	Şu kadar duraklat:
+	Pause For	Şu kadar duraklat
+	seconds	saniye
+	Create a single history state	Tek bir geçmiş durumu oluştur
+	Generator enabled	Oluşturucu etkin
+	Move Up	Yukarı taşı
+	Move Down	Aşağı taşı
+	Grid view	Izgara görünümü
+	List view	Liste görünümü
+	On your computer	Bilgisayarınızda
+	New file	Yeni dosya
+	Learn	Öğrenin
+	Website	Web sitesi
+
+# Frame Tool and other branch translations.
+	A frame supports affine transforms; select its image for perspective transforms	Çerçeve afin dönüşümleri destekler; perspektif dönüşümleri için içindeki görüntüyü seçin
+	A frame supports affine transforms; select its image to warp it	Çerçeve afin dönüşümleri destekler; çarpıtmak için içindeki görüntüyü seçin
+	Convert to Frame…	Çerçeveye Dönüştür…
+	Create a new custom frame	Yeni özel çerçeve oluştur
+	Create a new polygonal frame	Yeni çokgen çerçeve oluştur
+	Create a new triangular frame	Yeni üçgen çerçeve oluştur
+	Fit Content to Frame	İçeriği Çerçeveye Sığdır
+	Fit Frame to Content	Çerçeveyi İçeriğe Sığdır
+	Frame coordinates must be finite and within 600000 pixels	Çerçeve koordinatları sonlu olmalı ve 600000 piksel sınırları içinde kalmalıdır
+	Import Image…	Görüntü İçe Aktar…
+	Invalid frame transform	Geçersiz çerçeve dönüşümü
+	Invalid nested file drop	Geçersiz iç içe dosya bırakma
+	New Frame	Yeni Çerçeve
+	Replace Image…	Görüntüyü Değiştir…
+	The frame is locked	Çerçeve kilitli
+	The frame is unavailable	Çerçeve kullanılamıyor
