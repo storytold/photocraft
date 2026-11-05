@@ -476,7 +476,7 @@ fn the_fallback_search_reads_each_font_file_once() {
     // Inter has no box-drawing characters; JetBrains Mono has.
     let svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"200\" height=\"60\"><text x=\"5\" y=\"45\" font-size=\"48\" font-family=\"Inter\">I\u{2500}I</text></svg>";
     let outlines = |parsed: Parsed| {
-        let layers = import_parsed("t", parsed, MAX_GROUP_DEPTH).unwrap().document.layers;
+        let layers = import_parsed("t", parsed, MAX_GROUP_DEPTH, None, false).unwrap().document.layers;
         let groups = layers.into_iter().filter_map(|l| if let LayerContent::Group(g) = l.content { Some(g) } else { None });
         groups.flat_map(|g| g.children).filter_map(|l| if let LayerContent::Shape(s) = l.content { Some(s.path) } else { None }).collect::<Vec<_>>()
     };
