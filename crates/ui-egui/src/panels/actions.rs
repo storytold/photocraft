@@ -511,6 +511,39 @@ fn pause_spelling_step(app: &mut PhotocraftApp, frame: &Frame, from: usize, para
     Ok(())
 }
 
+/// Open and seed a step dialog after the caller has authorized the concrete command.
+fn pause_step_dialog(app: &mut PhotocraftApp, frame: &Frame, next: usize, id: &str, p: &Value, menu: bool) -> Result<u64, String> {
+    let label = label_of(id);
+    let active_layer = app.session.active().and_then(|state| state.active_layer);
+    let dialog = if menu {
+        // Use the same populated Image Size dialog as the native menu, after the
+        // concrete command's gate and enablement check, rather than a bare confirm.
+        app.session.precheck(id, p).map_err(|e| e.to_string())?;
+        if crate::sizing::is_sizing(id) {
+            crate::sizing::open(app, id).ok_or("no document")?
+        } else {
+            crate::dialogs::open_command_dialog(app, id, &label)
+        }
+    } else {
+        crate::dialogs::open_command_dialog(app, id, &label)
+    };
+    let token = pause_frame(app, frame, next, dialog).inspect_err(|_| {
+        app.ui.close_dialog(dialog);
+    })?;
+    if let Some(d) = app.ui.dialog_mut(dialog) {
+        if let Some(o) = p.as_object() {
+            d.fields.extend(o.iter().filter(|(k, _)| !k.starts_with("__")).map(|(k, v)| (k.clone(), v.clone())));
+        }
+        d.fields.insert(RESUME.into(), json!(token));
+    }
+    if let Some(paused) = app.paused_playbacks.paused.get_mut(&token)
+        && p.get("layer").is_none_or(Value::is_null)
+    {
+        paused.filter_receiver = Some(active_layer);
+    }
+    Ok(dialog)
+}
+
 /// Execute one immutable frame with normal shell view/save, authorization and job ordering.
 fn run_frame(app: &mut PhotocraftApp, frame: Frame, used: Option<u64>, preserve_tail: bool) -> Result<Value, String> {
     frame.validate(&app.session)?;
@@ -575,46 +608,13 @@ fn run_frame(app: &mut PhotocraftApp, frame: Frame, used: Option<u64>, preserve_
         if menu_settings
             || (!menu && action.dialogs.contains(&i) && !app.automation_input && (crate::filter_dialog::has_dialog(id) || crate::adjust_dialog::has_dialog(id)))
         {
-            let label = label_of(id);
-            let active_layer = app.session.active().and_then(|state| state.active_layer);
-            let dialog = if menu {
-                // Use the same populated Image Size dialog as the native menu, after the
-                // concrete command's gate and enablement check, rather than a bare confirm.
-                if let Err(e) = app.session.precheck(id, p) {
-                    failed = Some(json!({"step": i, "id": id, "error": e.to_string()}));
-                    break;
-                }
-                if crate::sizing::is_sizing(id) {
-                    let Some(dialog) = crate::sizing::open(app, id) else {
-                        failed = Some(json!({"step":i,"id":id,"error":"no document"}));
-                        break;
-                    };
-                    dialog
-                } else {
-                    crate::dialogs::open_command_dialog(app, id, &label)
-                }
-            } else {
-                crate::dialogs::open_command_dialog(app, id, &label)
-            };
-            let token = match pause_frame(app, &frame, i + 1, dialog) {
-                Ok(token) => token,
+            let dialog = match pause_step_dialog(app, &frame, i + 1, id, p, menu) {
+                Ok(dialog) => dialog,
                 Err(error) => {
-                    app.ui.close_dialog(dialog);
                     failed = Some(json!({"step": i, "id": id, "error": error}));
                     break;
                 }
             };
-            if let Some(d) = app.ui.dialog_mut(dialog) {
-                if let Some(o) = p.as_object() {
-                    d.fields.extend(o.iter().filter(|(k, _)| !k.starts_with("__")).map(|(k, v)| (k.clone(), v.clone())));
-                }
-                d.fields.insert(RESUME.into(), json!(token));
-            }
-            if let Some(paused) = app.paused_playbacks.paused.get_mut(&token)
-                && p.get("layer").is_none_or(Value::is_null)
-            {
-                paused.filter_receiver = Some(active_layer);
-            }
             paused = Some(json!({"step": i, "id": id, "dialog": dialog}));
             break;
         }
@@ -766,10 +766,10 @@ fn new_action_params(app: &PhotocraftApp) -> Result<Value, String> {
     }
     if let Some(index) = app.ui.actions.selected.filter(|&index| index < app.session.actions.list.len()) {
         let rows = photocraft_engine::actions_edit_cmds::set_occurrences(&app.session)?;
-        if let Some(row) = rows.iter().find(|row| row.actions.contains(&index)) {
-            if row.slot.is_some() {
-                return FolderSelection::from_row(row).checked_params(app, revision);
-            }
+        if let Some(row) = rows.iter().find(|row| row.actions.contains(&index))
+            && row.slot.is_some()
+        {
+            return FolderSelection::from_row(row).checked_params(app, revision);
         }
     }
     Ok(new_action_set(app).map_or(json!({}), |set| json!({"set":set})))
@@ -806,13 +806,13 @@ fn begin_recording(app: &mut PhotocraftApp, append: bool) {
         }
     }
     // Reveal only the actual recording folder, retaining independent namesake disclosure.
-    if let Ok(rows) = photocraft_engine::actions_edit_cmds::set_occurrences(&app.session) {
-        if let Some(row) = rows.iter().find(|row| row.actions.contains(&i)) {
-            let key = FolderSelection::from_row(row);
-            app.ui.actions.collapsed_folders.retain(|old| old != &key);
-            if row.origin.is_none() {
-                app.ui.actions.collapsed_sets.retain(|name| name != &row.name);
-            }
+    if let Ok(rows) = photocraft_engine::actions_edit_cmds::set_occurrences(&app.session)
+        && let Some(row) = rows.iter().find(|row| row.actions.contains(&i))
+    {
+        let key = FolderSelection::from_row(row);
+        app.ui.actions.collapsed_folders.retain(|old| old != &key);
+        if row.origin.is_none() {
+            app.ui.actions.collapsed_sets.retain(|name| name != &row.name);
         }
     }
 }
@@ -2218,6 +2218,29 @@ fn action_context_menu(app: &mut PhotocraftApp, response: &egui::Response, index
     });
 }
 
+fn draw_physical_folder_header(
+    ui: &mut egui::Ui,
+    app: &PhotocraftApp,
+    folder: &photocraft_engine::actions_edit_cmds::SetOccurrence,
+    tokens: &Tokens,
+    set_toggled: &mut Option<(FolderSelection, bool, bool)>,
+    save_set: &mut Option<FolderSelection>,
+) {
+    let key = FolderSelection::from_row(folder);
+    let selected = app.ui.actions.selected.is_none() && app.ui.actions.selected_folder.as_ref().is_some_and(|value| value.matches(folder));
+    let result = ui
+        .push_id(("physical-action-folder", key.origin, key.slot, &key.name), |ui| {
+            draw_set_header(ui, &folder.name, folder.actions.len() as u64, app.ui.actions.folder_collapsed(&key), selected, tokens)
+        })
+        .inner;
+    if result.toggled || result.picked {
+        *set_toggled = Some((key.clone(), result.toggled, result.picked));
+    }
+    if result.save {
+        *save_set = Some(key);
+    }
+}
+
 fn classic_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let recording = app.session.actions.recording;
@@ -2309,44 +2332,19 @@ fn classic_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         scroll_actions_during_drag(ui);
         let mut shown_folder = None;
         for (folder_index, action_index) in order.iter().copied() {
-            if action_index.is_none() {
+            let Some(i) = action_index else {
                 if let Some(folder) = folder_index.and_then(|index| folders.get(index)) {
-                    let key = FolderSelection::from_row(folder);
-                    let selected = app.ui.actions.selected.is_none() && app.ui.actions.selected_folder.as_ref().is_some_and(|value| value.matches(folder));
-                    let result = ui
-                        .push_id(("physical-action-folder", key.origin, key.slot, &key.name), |ui| {
-                            draw_set_header(ui, &folder.name, folder.actions.len() as u64, app.ui.actions.folder_collapsed(&key), selected, &t)
-                        })
-                        .inner;
-                    if result.toggled || result.picked {
-                        set_toggled = Some((key.clone(), result.toggled, result.picked));
-                    }
-                    if result.save {
-                        save_set = Some(key);
-                    }
+                    draw_physical_folder_header(ui, app, folder, &t, &mut set_toggled, &mut save_set);
                 }
                 continue;
-            }
-            let Some(i) = action_index else { continue };
+            };
             let Row { name, steps, disabled, dialogs, set, color: swatch } = &rows[i];
             let folder = folder_index.and_then(|index| folders.get(index));
             let has_header = set.is_some() || folder.is_some_and(|folder| folder.origin.is_some());
             if !physical_order && has_header && shown_folder != folder_index {
                 shown_folder = folder_index;
                 if let Some(folder) = folder {
-                    let key = FolderSelection::from_row(folder);
-                    let selected = app.ui.actions.selected.is_none() && app.ui.actions.selected_folder.as_ref().is_some_and(|value| value.matches(folder));
-                    let result = ui
-                        .push_id(("physical-action-folder", key.origin, key.slot, &key.name), |ui| {
-                            draw_set_header(ui, &folder.name, folder.actions.len() as u64, app.ui.actions.folder_collapsed(&key), selected, &t)
-                        })
-                        .inner;
-                    if result.toggled || result.picked {
-                        set_toggled = Some((key.clone(), result.toggled, result.picked));
-                    }
-                    if result.save {
-                        save_set = Some(key);
-                    }
+                    draw_physical_folder_header(ui, app, folder, &t, &mut set_toggled, &mut save_set);
                 }
             }
             if has_header && folder.is_some_and(|folder| app.ui.actions.folder_collapsed(&FolderSelection::from_row(folder))) {
@@ -2468,11 +2466,11 @@ fn classic_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
     if let Some(folder) = save_set {
         app.ui.actions.select_folder(folder);
-        if let Err(error) = save_dialog(app, None) {
-            if error != "cancelled" {
-                app.ui.status = error;
-                app.ui.status_error = true;
-            }
+        if let Err(error) = save_dialog(app, None)
+            && error != "cancelled"
+        {
+            app.ui.status = error;
+            app.ui.status_error = true;
         }
     }
     if let Some((index, name)) = renamed {

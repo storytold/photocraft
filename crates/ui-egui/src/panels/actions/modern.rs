@@ -39,7 +39,7 @@ struct Progress {
 
 enum Delete {
     Action(Box<Action>),
-    Group(super::FolderSelection, Vec<Action>, u64),
+    Group(Box<super::FolderSelection>, Vec<Action>, u64),
 }
 
 /// Include backend drafts and suspended playback so layout/navigation guards cannot bypass hidden owners.
@@ -865,7 +865,7 @@ pub(super) fn ask_delete(app: &mut PhotocraftApp, index: Option<usize>, group: O
             let row = rows.iter().find(|row| group.matches(row)).ok_or("The selected group no longer exists")?;
             let members = row.actions.iter().filter_map(|&index| app.session.actions.list.get(index).cloned()).collect();
             let message = crate::i18n::fmt(tl!("Delete the group \"{name}\"?"), &[("name", &group.name)]);
-            (Delete::Group(group, members, revision), message)
+            (Delete::Group(Box::new(group), members, revision), message)
         }
         None => {
             let action = index.and_then(|index| app.session.actions.list.get(index)).cloned().ok_or("The selected action no longer exists")?;
