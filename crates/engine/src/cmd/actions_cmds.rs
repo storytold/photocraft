@@ -592,7 +592,7 @@ fn record(s: &mut Session, p: &Value) -> Result<Value> {
                 &s.actions,
                 &s.prefs().shortcuts,
                 &s.prefs().alternate_shortcuts,
-                library::placement::Edit::Insert { destination, action: value },
+                library::placement::Edit::Insert { destination, action: Box::new(value) },
             )
             .map_err(|error| bad("actions.record", error))?;
             let index = prepared.result["index"]
