@@ -224,6 +224,17 @@ fn auto_blend(s: &mut Session, p: &Value) -> Result<Value> {
     if area.is_empty() {
         return Err(EngineError::Other("the selected layers are empty".into()));
     }
+    // The fallback (the canvas) can still be past the budget: a huge canvas, or sparse layers
+    // whose content bounds fill it. Refuse before any layer is expanded into dense buffers.
+    if px_of(&area).saturating_mul(per_px) > MAX_BLEND_BYTES {
+        return Err(EngineError::Other(format!(
+            "Auto-Blend would need more than {} MB for {} layers over {} x {} px; blend fewer or smaller layers",
+            MAX_BLEND_BYTES >> 20,
+            ids.len(),
+            area.width(),
+            area.height()
+        )));
+    }
     let (w, h) = (area.width() as usize, area.height() as usize);
     let mut imgs: Vec<Vec<f32>> = Vec::new();
     let mut luma: Vec<Vec<f32>> = Vec::new();

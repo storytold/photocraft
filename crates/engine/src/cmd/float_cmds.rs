@@ -153,8 +153,22 @@ fn cut_piece(base: &Surface, sel: &Surface, b: photocraft_geom::Rect, with_alpha
     let alpha_off = dst_bpp - sb;
     let src_empty_default = same_fmt && base.default_bytes().iter().all(|&v| v == 0);
     let oom = |e| EngineError::Other(format!("not enough memory while floating selection ({e}); the document was not changed"));
-    let mut coords = crate::allocation::capacity(b.tiles().count(), "floating selection")?;
-    coords.extend(b.tiles());
+    // Only tiles that can hold a piece of the result are visited. With an empty source default,
+    // that is the source's stored tiles; with an empty selection default, the selection's. Two
+    // distant tiles make `b` a grid of millions of tiles that hold nothing, so the full grid is
+    // walked only when neither default is empty, after checking what it could produce.
+    let sel_default_empty = sel.default_pixel().first().is_none_or(|v| *v <= 0.0);
+    let stored = |s: &Surface| s.tiles().map(|(c, _)| *c).filter(|c| !c.rect().intersect(&b).is_empty()).collect::<Vec<_>>();
+    let coords: Vec<TileCoord> = if src_empty_default {
+        stored(base)
+    } else if sel_default_empty {
+        stored(sel)
+    } else {
+        crate::allocation::check_dense(b, dst_bpp as u64, "floating selection")?;
+        let mut coords = crate::allocation::capacity(usize::try_from(b.tile_count()).unwrap_or(usize::MAX), "floating selection")?;
+        coords.extend(b.tiles());
+        coords
+    };
     let tiles = coords
         .into_par_iter()
         .map(|tc| -> Result<Option<(TileCoord, Arc<Tile>)>> {

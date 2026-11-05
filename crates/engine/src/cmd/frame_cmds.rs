@@ -21,17 +21,23 @@ fn has_layer(s: &Session) -> std::result::Result<(), String> {
     }
 }
 
-/// A reveal mask that is on inside `rect` and off (hidden) everywhere else.
-fn clip_mask(rect: Rect) -> LayerMask {
+/// A reveal mask that is on inside `rect` and off (hidden) everywhere else. Filled without a
+/// dense buffer (whole tiles share one); refused when the mask's tiles, which a later depth
+/// conversion stores one by one, together with the GRAY8 source they are converted from, would pass the
+/// working budget: the selected layers' bounds
+/// can span far more than the canvas when their tiles lie far apart.
+fn clip_mask(rect: Rect, depth: photocraft_color::SampleType) -> Result<LayerMask> {
     let mut mask = LayerMask::hide_all();
-    let (w, h) = (rect.width() as usize, rect.height() as usize);
-    if w > 0 && h > 0 {
-        mask.surface.write_region(rect, &vec![1.0f32; w * h]);
+    if !rect.is_empty() {
+        // Both the GRAY8 source (1 B) and the depth-sized copy (`depth` B) are live while `mask_at_depth`
+        // converts, each counted as dense, which holds for partial edge tiles too.
+        crate::allocation::check_dense(rect, (depth.bytes() as u64).saturating_add(1), "the frame's mask")?;
+        mask.surface.fill_rect(rect, &[1.0]);
         mask.surface.prune();
     }
     // Default to GRAY8 like the other mask constructors.
     debug_assert_eq!(mask.surface.format(), PixelFormat::GRAY8);
-    mask
+    Ok(mask)
 }
 
 /// Groups the selected layers, then turns the group into a frame, as one history step: one undo
@@ -69,7 +75,7 @@ fn frame_group(s: &mut Session, grouped: &Value) -> Result<Value> {
         crate::layer_multi_cmds::layer_bounds(d.doc.layer(gid).ok_or(EngineError::NoLayer(gid))?).filter(|r| !r.is_empty()).unwrap_or_else(|| d.doc.bounds());
 
     s.edit("Frame from Layers", |doc, _| {
-        let mask = crate::commands::mask_at_depth(clip_mask(rect), doc.depth)?;
+        let mask = crate::commands::mask_at_depth(clip_mask(rect, doc.depth)?, doc.depth)?;
         doc.layer_mut(gid).ok_or(EngineError::NoLayer(gid))?.mask = Some(mask);
         Ok(())
     })?;
@@ -127,8 +133,10 @@ fn new_frame(s: &mut Session, p: &Value) -> Result<Value> {
     let content = crate::commands::explicit_layer(s, p)?;
     let name = p.get("name").and_then(Value::as_str).map(str::to_string);
     let gid = s.edit("New Frame", |doc, active| {
-        let mask =
-            crate::commands::mask_at_depth(if ellipse { ellipse_mask(rect, doc.bounds()) } else { clip_mask(rect.intersect(&doc.bounds())) }, doc.depth)?;
+        let mask = crate::commands::mask_at_depth(
+            if ellipse { ellipse_mask(rect, doc.bounds()) } else { clip_mask(rect.intersect(&doc.bounds()), doc.depth)? },
+            doc.depth,
+        )?;
         let name = name.unwrap_or_else(|| doc.next_layer_name("Frame"));
         let gid = match content {
             Some(id) => {
@@ -302,5 +310,19 @@ mod tests {
     fn needs_a_selected_layer() {
         let mut s = Session::new();
         assert!(s.execute("layer.new.frameFromLayers", json!({})).is_err());
+    }
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+
+    /// The GRAY8 source is live beside the depth-sized copy: 5 B per pixel at F32, which a
+    /// 40,000 × 47,000 px frame (7.5 GB at 4 B) no longer fits.
+    #[test]
+    fn the_frame_mask_budget_counts_the_gray8_source_too() {
+        let rect = Rect::new(0, 0, 40_000, 47_000);
+        let e = clip_mask(rect, photocraft_color::SampleType::F32).err().map(|e| e.to_string());
+        assert!(e.is_some_and(|e| e.contains("working memory")));
     }
 }

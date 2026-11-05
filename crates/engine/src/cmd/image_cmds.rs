@@ -268,6 +268,9 @@ fn image_size(s: &mut Session, p: &Value) -> Result<Value> {
         s.set_sampler_map(photocraft_geom::Affine { m: [sx, 0.0, 0.0, sy, 0.0, 0.0] });
     }
     s.edit("Image Size", |doc, _| {
+        if !matches!(resample, Method::None) && (nw, nh) != (ow, oh) {
+            check_scaled_surfaces("image.imageSize", doc, nw, nh)?;
+        }
         if let Some(r) = dpi {
             // Type keeps its pixel size; resampling below then scales it with the pixels.
             crate::canvas_geom::set_resolution(doc, r.clamp(1.0, 10_000.0));
@@ -310,6 +313,38 @@ pub(crate) fn check_working_budget(cmd: &str, doc: &Document, nw: u32, nh: u32, 
     }
     let max_mp = MAX_RESAMPLE_BYTES / bpp / 1_000_000;
     Err(bad(cmd, format!("{nw} x {nh} px is {} megapixels; this conversion is limited to {max_mp} megapixels. Choose a smaller size{hint}", px / 1_000_000)))
+}
+
+/// Refuses to resample `doc` to `nw` x `nh` px when one of its surfaces would be resampled over
+/// more than the budget. [`check_resample_budget`] covers the canvas, but each surface is
+/// resampled over its own content bounds, off-canvas pixels included: a few distant tiles make
+/// those bounds vastly larger than the canvas, and the resampled bands and output span all of it.
+pub(crate) fn check_scaled_surfaces(cmd: &str, doc: &mut Document, nw: u32, nh: u32) -> Result<()> {
+    let (ow, oh) = (doc.size.width, doc.size.height);
+    let (sx, sy) = (f64::from(nw) / f64::from(ow.max(1)), f64::from(nh) / f64::from(oh.max(1)));
+    // The surface whose resampled output is largest: (its output rect, bytes per pixel, total
+    // bytes). Counted like `check_resample_budget` counts the canvas, so a surface within the
+    // canvas passes whenever the canvas does.
+    let mut worst: Option<(Rect, u64, u64)> = None;
+    let mut visit = |surf: &Surface| {
+        let r = photocraft_algo::resample::scaled_rect(surf.content_bounds(), sx, sy);
+        let per_px = surf.format().bytes_per_pixel().max(1) as u64;
+        let bytes = u64::from(r.width()).saturating_mul(u64::from(r.height())).saturating_mul(per_px);
+        if worst.is_none_or(|(_, _, b)| bytes > b) {
+            worst = Some((r, per_px, bytes));
+        }
+    };
+    for_each_surface(&mut doc.layers, true, &mut |surf, _| visit(surf));
+    for ch in doc.channels.iter().chain(doc.quick_mask.as_ref()) {
+        visit(&ch.surface);
+    }
+    if let Some(sel) = &doc.selection {
+        visit(sel);
+    }
+    match worst {
+        Some((r, per_px, _)) => crate::allocation::check_dense(r, per_px, &format!("{cmd} (a layer's pixels reach far past the canvas)")),
+        None => Ok(()),
+    }
 }
 
 /// Resamples the whole document (pixels, masks, channels, selection, effects, vectors, guides) to
