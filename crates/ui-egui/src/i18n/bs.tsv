@@ -4555,11 +4555,11 @@ cameraRaw	Highlight Clipping Warning (O)	Upozorenje o odsijecanju svijetlih tono
 cameraRaw	Highlight Priority	Prioritet svijetlih tonova
 cameraRaw	Load Settings…	Učitaj postavke…
 cameraRaw	Load settings from a Camera Raw .xmp file	Učitaj postavke iz Camera Raw .xmp datoteke
-cameraRaw	Loaded Camera Raw settings from {file}	Camera Raw postavke su učitane iz {file}
+cameraRaw	Loaded Camera Raw settings from {file}	Učitane postavke Camera Raw iz {file}
 cameraRaw	Noise Reduction	Smanjenje šuma
 cameraRaw	OK	U redu
 cameraRaw	Open	Otvori
-cameraRaw	Opened {name}	Otvoreno {name}
+cameraRaw	Opened {name}	Otvoreno: {name}
 cameraRaw	Paint Overlay	Preklop boje
 cameraRaw	Save Settings…	Sačuvaj postavke…
 cameraRaw	Save these settings as a Camera Raw .xmp file	Sačuvaj ove postavke kao Camera Raw .xmp datoteku
@@ -4567,9 +4567,39 @@ cameraRaw	Shadow Clipping Warning (U)	Upozorenje o odsijecanju sjena (U)
 cameraRaw	Sharpening	Izoštravanje
 cameraRaw	Show Lab Color Readouts	Prikaži Lab očitanja boja
 cameraRaw	Show Red at 3 o'clock	Prikaži crvenu na 3 sata
-cameraRaw	Show Selected Region	Prikaži odabranu oblast
+cameraRaw	Show Selected Region	Prikaži odabranu regiju
 cameraRaw	Show Skin Tone Indicator	Prikaži indikator tona kože
 cameraRaw	Show Vectorscope	Prikaži vektorskop
-cameraRaw	Tone Histogram	Histogram tonova
+cameraRaw	Tone Histogram	Tonski histogram
 cameraRaw	Vignetting	Vinjetiranje
-cameraRaw	White Balance: As Shot	Balans bijele: Kako je snimljeno
+cameraRaw	White Balance: As Shot	Balans bijele: kako je snimljeno
+	Path operations	Operacije s putanjama
+	Move effect up	Pomakni efekat gore
+	Move effect down	Pomakni efekat dolje
+	Delete effect	Izbriši efekat
+	Current Layer:	Trenutni sloj:
+@plural	{n} action file loaded|{n} action files loaded	Učitana je {n} datoteka akcija|Učitane su {n} datoteke akcija|Učitano je {n} datoteka akcija
+	{set} from {file} replaced the one from {earlier}	Skup {set} iz {file} zamijenio je skup iz {earlier}
+@plural	{n} file could not be loaded: {errors}|{n} files could not be loaded: {errors}	Nije moguće učitati {n} datoteku: {errors}|Nije moguće učitati {n} datoteke: {errors}|Nije moguće učitati {n} datoteka: {errors}
+	Memory usage percent	Postotak upotrebe memorije
+	Save Full-Size Composite in .pcraft Files	Sačuvaj složenu sliku pune veličine u .pcraft datotekama
+	Scratch Size Limit (MB, 0 = No Limit)	Ograničenje veličine radnog diska (MB, 0 = bez ograničenja)
+smartSvg	Choose executable…	Odaberi izvršnu datoteku…
+smartSvg	Choose the application used to edit this SVG:	Odaberite aplikaciju za uređivanje ovog SVG-a:
+smartSvg	Edit SVG Smart Object	Uredi SVG pametni objekat
+smartSvg	Other application	Druga aplikacija
+smartSvg	PhotoCraft (internal editor)	PhotoCraft (interni uređivač)
+smartSvg	SVG editor opened. Save the SVG to update this Smart Object.	SVG uređivač je otvoren. Sačuvajte SVG da biste ažurirali ovaj pametni objekat.
+smartSvg	Save to the opened SVG file. Each saved change becomes one undo step in PhotoCraft.	Sačuvajte u otvorenu SVG datoteku. Svaka sačuvana izmjena postaje jedan korak poništavanja u PhotoCraftu.
+smartSvg	Stop syncing this Smart Object	Zaustavi sinhronizaciju ovog pametnog objekta
+smartSvg	Updates wait while another document or an editing dialog is active.	Ažuriranja čekaju dok je aktivan drugi dokument ili dijalog za uređivanje.
+smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded source; format-specific features may change.	Sadržaj AI/PDF/EPS uređivat će se kao SVG. Čuvanje zamjenjuje ugrađeni izvor; svojstva specifična za format mogu se promijeniti.
+	The path was kept as the Work Path	Putanja je zadržana kao radna putanja
+	The path was discarded	Putanja je odbačena
+	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	Neispravan numerički unos. Potreban je cijeli broj između {min}% i {max}%. Umetnuta je prethodna vrijednost.
+	Select Layer Under Cursor	Odaberi sloj ispod kursora
+	Drag to move the selected path	Prevucite da pomaknete odabranu putanju
+	Recently Used Colors	Nedavno korištene boje
+	Stop Color	Boja tačke
+	Shapes can't use patterns yet	Oblici još ne mogu koristiti uzorke
+	Edit Brush…	Uredi četkicu…
