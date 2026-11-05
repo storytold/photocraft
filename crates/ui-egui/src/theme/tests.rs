@@ -374,3 +374,12 @@ fn breeze_themes_parse_and_meet_text_contrast() {
         assert!(contrast(t.caption_close_text, t.caption_close) >= 4.5, "{kind:?}: close button glyph");
     }
 }
+
+#[test]
+fn action_gray_swatch_is_the_same_mid_grey_in_every_theme() {
+    for kind in ThemeKind::ALL {
+        let gray = Tokens::for_kind(kind).action_swatches()[7];
+        assert_eq!(gray, Tokens::ACTION_GRAY_SWATCH, "{kind:?}");
+        assert!(contrast(Tokens::ACTION_THUMBNAIL_GLYPH, gray) >= 3.0, "{kind:?}: white glyph on {gray:?}");
+    }
+}

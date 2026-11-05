@@ -217,6 +217,10 @@ impl Tokens {
     /// Coloured Actions thumbnails use a white glyph on the chosen colour.
     pub const ACTION_THUMBNAIL_GLYPH: Color32 = Color32::WHITE;
 
+    /// The grey action colour is a fixed mid grey in every theme, like the other swatches, so the
+    /// white glyph stays readable on it (a theme text colour can be nearly white).
+    pub const ACTION_GRAY_SWATCH: Color32 = Color32::from_rgb(128, 128, 128);
+
     /// Swatch selection marks choose the greater WCAG contrast against the supplied fill.
     /// Action glyphs use ACTION_THUMBNAIL_GLYPH instead.
     pub fn action_thumbnail_ink(fill: Color32) -> Color32 {
@@ -239,7 +243,7 @@ impl Tokens {
             Color32::from_rgb(56, 140, 72),
             Color32::from_rgb(64, 158, 216),
             Color32::from_rgb(152, 120, 192),
-            self.text_dim,
+            Self::ACTION_GRAY_SWATCH,
             Color32::from_rgb(40, 152, 152),
             Color32::from_rgb(48, 104, 176),
             Color32::from_rgb(192, 64, 144),

@@ -153,7 +153,7 @@ pub fn show(ui: &mut egui::Ui, id: Id, icon: &str, color: &str, swatches: &[Colo
             let (fill, ink) = thumbnail_style(color, swatches, &tokens);
             ui.painter().rect_filled(rect, tokens.radius_sm, fill);
             icons::paint(ui, rect, display_glyph(icon), 28.0, ink);
-            ui.menu_button(tl!("Choose icon and color"), |ui| choice = contents(ui, icon, color, swatches, &tokens));
+            ui.menu_button(tl!("Choose icon"), |ui| choice = contents(ui, icon, color, swatches, &tokens));
         });
         choice
     })

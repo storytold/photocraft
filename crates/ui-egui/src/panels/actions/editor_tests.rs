@@ -54,7 +54,7 @@ fn picker_choices_reach_the_owned_draft_and_only_save_publishes_them() {
     PhotocraftApp::setup_context(&harness.ctx, crate::theme::ThemeKind::Studio);
     harness.run_steps(3);
     for label in ["Text color", "Yellow"] {
-        harness.get_by_role_and_label(Role::Button, "Choose icon and color").click();
+        harness.get_by_role_and_label(Role::Button, "Choose icon").click();
         harness.run_steps(3);
         harness.get_by_role_and_label(Role::Button, label).click();
         harness.run_steps(3);
