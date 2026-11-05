@@ -24,10 +24,7 @@ fn has_doc(s: &Session) -> std::result::Result<(), String> {
 }
 
 fn layer_id(s: &Session, p: &Value) -> Result<LayerId> {
-    match p.get("layer").and_then(Value::as_u64) {
-        Some(id) => Ok(LayerId(id)),
-        None => s.active().and_then(|d| d.active_layer).ok_or(EngineError::Other("no active layer".into())),
-    }
+    crate::commands::layer_param(s, p)
 }
 
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
@@ -674,26 +671,34 @@ pub(crate) fn check_text_unlocked(doc: &Document, id: LayerId) -> Result<()> {
 fn with_text_layer<R>(s: &mut Session, p: &Value, label: &str, f: impl FnOnce(&mut TextLayer, f32, &mut Option<String>) -> Result<R>) -> Result<R> {
     let id = layer_id(s, p)?;
     check_text_unlocked(&s.active().ok_or(EngineError::NoDocument)?.doc, id)?;
+    let typed = typed_name(s, id);
+    let mut named = None;
     let (r, damage) = s.edit(label, |doc, _| {
         let (dpi, format) = (doc.resolution_dpi, doc.pixel_format());
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
-        let auto_named = is_auto_named(l);
+        let auto_named = is_auto_named(l, typed.as_deref());
         let LayerContent::Text(t) = &mut l.content else {
             return Err(EngineError::Other(format!("layer {} is {} {} layer, not a type layer", id.0, l.content.article(), l.content.kind_name())));
         };
         let before = t.cache.as_ref().map(|c| c.tile_bounds());
+        // Only a text change renames: a style or layout edit keeps a copy's "Title copy" (#9023).
+        let old_text = auto_named.then(|| t.text.clone());
         let mut rename = None;
         let r = f(t, dpi, &mut rename)?;
         refresh_at(dpi, format, t);
         // Only this layer's pixels changed: the canvas recomposites their old and new area
         // instead of the whole document (#124). Unknown old pixels mean a full refresh.
         let damage = before.zip(t.cache.as_ref().map(|c| c.tile_bounds())).map(|(a, b)| a.union(&b));
-        let name = rename.or_else(|| auto_named.then(|| layer_name(&t.text)));
+        named.clone_from(&rename);
+        let name = rename.or_else(|| old_text.is_some_and(|old| old != t.text).then(|| layer_name(&t.text)));
         if let Some(n) = name {
             l.name = n;
         }
         Ok((r, damage))
     })?;
+    if let Some(n) = named {
+        note_typed_name(s, id, &n);
+    }
     if let Some(d) = damage {
         s.hint_damage(d);
     }
@@ -792,9 +797,33 @@ fn shown_style_params<'a>(t: &TextLayer, p: &'a Value) -> Result<std::borrow::Co
 }
 
 /// Whether a type layer still has the name it got from its text, so the name follows edits to
-/// the text. A layer renamed to anything else keeps its name (#483).
-pub(crate) fn is_auto_named(l: &Layer) -> bool {
-    matches!(&l.content, LayerContent::Text(t) if l.name == layer_name(&t.text))
+/// the text. A layer renamed to anything else keeps its name (#483). A duplicate's name ("Title
+/// copy", "Title copy 2") still comes from its text, so the copy is renamed after its new text
+/// as Photoshop does, unless the user typed that name (`typed`, #9023).
+pub(crate) fn is_auto_named(l: &Layer, typed: Option<&str>) -> bool {
+    let LayerContent::Text(t) = &l.content else { return false };
+    let auto = layer_name(&t.text);
+    // Duplicate Layer names a copy of "Title copy" "Title copy 2", not "Title copy copy".
+    l.name == auto || (typed != Some(l.name.as_str()) && copy_root(&l.name).is_some_and(|root| root == copy_root(&auto).unwrap_or(&auto)))
+}
+
+/// The name the user last gave layer `id` in the active document, if any (see
+/// [`crate::DocState::typed_names`]).
+pub(crate) fn typed_name(s: &Session, id: LayerId) -> Option<String> {
+    s.active().and_then(|d| d.typed_names.get(&id)).cloned()
+}
+
+/// Records that the user named layer `id` of the active document `name` (#9023).
+pub(crate) fn note_typed_name(s: &mut Session, id: LayerId, name: &str) {
+    if let Some(d) = s.active_mut() {
+        d.typed_names.insert(id, name.to_string());
+    }
+}
+
+/// The name a Duplicate Layer copy was made from: "Title" for "Title copy" or "Title copy 2".
+fn copy_root(name: &str) -> Option<&str> {
+    let (root, rest) = name.rsplit_once(" copy")?;
+    (rest.is_empty() || rest.strip_prefix(' ').is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))).then_some(root)
 }
 
 /// The name a type layer gets from its text: its first non-empty line, at most 40 characters.
@@ -910,65 +939,6 @@ pub(crate) fn new_text_layer(s: &Session, p: &Value, cmd: &str) -> Result<TextLa
 
 const CHAR_PARAMS: &str = r##""font":str,"fontStyle":str,"weight":100..900,"italic":bool,"size":0.1..=1296 pt,"color":"#rrggbb"|[r,g,b,a],"tracking":-1000..=10000 (1/1000 em),"leading":pt|"auto","baselineShift":pt,"horizontalScale":%,"verticalScale":%,"underline":bool,"strikethrough":bool,"fauxBold":bool,"fauxItalic":bool,"kerning":1/1000em (manual, after each character)|"metrics"|"optical"|"off","caps":"normal|small|all","baseline":"normal|superscript|subscript","ligatures":bool,"discretionaryLigatures":bool,"features":{"ss01":1},"variations":{"wght":650},"language":str"##;
 
-/// The keys a typing edit carries: its text and the session that groups its keystrokes.
-const TYPING_KEYS: [&str; 4] = ["layer", "coalesce", "replace", "text"];
-
-/// While an action records, one typing session is one step, as Photoshop records "Make text
-/// layer" or "Set current text layer" once (#10113). Its keystrokes (`type.edit` with the
-/// session's `coalesce` key, changing the text) fold into the `type.create` that made the layer
-/// (in the same document), whose `text` becomes the layer's text, or into one `type.edit` that
-/// sets the whole text. Neither names the layer, so the step plays on the new or the current type
-/// layer of any document, as Batch needs. A layer with more than one character or paragraph style
-/// keeps a step per edit, as before: setting its whole text would give it one style on replay.
-/// Other edits are journaled as before (`recorded_step` drops the id of a sole selected layer).
-/// Returns true when it journaled the step itself.
-pub fn coalesce_journal(s: &mut Session, id: &str, params: &Value) -> bool {
-    let Some((from, _)) = s.actions.recording else { return false };
-    if id == "type.create" {
-        // Remembered for the typing that follows; journaled as usual.
-        s.actions.typing_layer = s.active().and_then(|st| Some((st.doc.id.0, st.active_layer?.0)));
-        return false;
-    }
-    if id != "type.edit" {
-        return false;
-    }
-    let Some(st) = s.active() else { return false };
-    // An edit that names no layer edits the active one, and coalesces the same.
-    let Some(layer) = params.get("layer").and_then(Value::as_u64).or(st.active_layer.map(|l| l.0)) else { return false };
-    if st.active_layer != Some(LayerId(layer)) {
-        return false;
-    }
-    let typing =
-        params.as_object().is_some_and(|o| o.keys().all(|k| TYPING_KEYS.contains(&k.as_str())) && (o.contains_key("replace") || o.contains_key("text")));
-    let key = params.get("coalesce").filter(|k| !k.is_null()).cloned();
-    let (Some(key), true) = (key, typing) else { return false };
-    let Some(text) = st.doc.layer(LayerId(layer)).and_then(|l| match &l.content {
-        LayerContent::Text(t) if one_style(&t.runs, |r| &r.style) && one_style(&t.paragraphs, |r| &r.style) => Some(t.text.clone()),
-        _ => None,
-    }) else {
-        return false;
-    };
-    // The step before made, or typed in, this very layer of this document: the type tool makes a
-    // layer, then types in it. Typing in another document is a step of its own.
-    let here = Some((st.doc.id.0, layer));
-    let same_target = s.actions.typing_layer == here;
-    let last = s.journal.len().checked_sub(1).filter(|&i| i >= from);
-    match last.and_then(|i| s.journal.get_mut(i)) {
-        Some((last_id, p)) if last_id == "type.create" && same_target => p["text"] = json!(text),
-        Some((last_id, p)) if last_id == "type.edit" && same_target && p.get("coalesce") == Some(&key) && p.get("layer").is_none() => {
-            *p = json!({"text": text, "coalesce": key});
-        }
-        _ => s.journal.push((id.to_string(), json!({"text": text, "coalesce": key}))),
-    }
-    s.actions.typing_layer = here;
-    true
-}
-
-/// Do `runs` all have the same style?
-fn one_style<R, S: PartialEq>(runs: &[R], style: impl Fn(&R) -> &S) -> bool {
-    runs.windows(2).all(|w| matches!(w, [a, b] if style(a) == style(b)))
-}
-
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec {
@@ -981,13 +951,17 @@ pub fn specs() -> Vec<CommandSpec> {
             journal: true,
             run: |s, p| {
                 let mut t = new_text_layer(s, p, "type.create")?;
-                let name = p.get("name").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| layer_name(&t.text));
+                let given = p.get("name").and_then(Value::as_str).map(str::to_string);
+                let name = given.clone().unwrap_or_else(|| layer_name(&t.text));
                 let id = s.edit("New Type Layer", |doc, active| {
                     refresh(doc, &mut t);
                     let id = crate::layer_place::insert_new(doc, *active, Layer::new(name, LayerContent::Text(t)), crate::layer_place::Place::AutoEditable);
                     *active = Some(id);
                     Ok(id)
                 })?;
+                if let Some(given) = given {
+                    note_typed_name(s, id, &given);
+                }
                 let bounds = s.active().and_then(|d| d.doc.layer(id)).and_then(|l| l.surface()).map(|c| c.content_bounds());
                 let mut out = json!({ "layer": id.0, "bounds": bounds.map(|r| [r.x0, r.y0, r.x1, r.y1]) });
                 if let Some(LayerContent::Text(t)) = s.active().and_then(|d| d.doc.layer(id)).map(|l| &l.content) {

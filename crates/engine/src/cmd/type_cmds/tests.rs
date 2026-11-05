@@ -169,6 +169,136 @@ fn auto_name_follows_the_text() {
     assert_eq!(layer_name_of(&s, id), "Type Layer");
 }
 
+/// #9023: a duplicated type layer ("Title copy") is named after its new text once that is
+/// edited, as the original would be; a renamed copy keeps its name.
+#[test]
+fn a_duplicated_type_layer_follows_its_new_text() {
+    let mut s = session();
+    let id = s.execute("type.create", json!({"x": 0, "y": 40, "text": "Title"})).unwrap()["layer"].as_u64().unwrap();
+    let mut copies = Vec::new();
+    for expected in ["Title copy", "Title copy 2"] {
+        s.execute("layer.select", json!({"layer": id})).unwrap();
+        s.execute("layer.duplicate", json!({})).unwrap();
+        let copy = s.active().unwrap().active_layer.unwrap().0;
+        assert_ne!(copy, id);
+        assert_eq!(layer_name_of(&s, copy), expected);
+        copies.push(copy);
+    }
+    s.execute("type.edit", json!({"layer": copies[0], "text": "Subtitle"})).unwrap();
+    assert_eq!(layer_name_of(&s, copies[0]), "Subtitle", "the copy follows its new text");
+    s.execute("type.edit", json!({"layer": copies[1], "text": "Caption"})).unwrap();
+    assert_eq!(layer_name_of(&s, copies[1]), "Caption");
+    assert_eq!(layer_name_of(&s, id), "Title", "the original keeps its own");
+    // A layer whose text ends in " copy": its duplicate is "Draft copy 2", not "Draft copy copy".
+    let draft = s.execute("type.create", json!({"x": 0, "y": 80, "text": "Draft copy"})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("layer.select", json!({"layer": draft})).unwrap();
+    s.execute("layer.duplicate", json!({})).unwrap();
+    let draft_copy = s.active().unwrap().active_layer.unwrap().0;
+    assert_eq!(layer_name_of(&s, draft_copy), "Draft copy 2");
+    s.execute("type.edit", json!({"layer": draft_copy, "text": "Final"})).unwrap();
+    assert_eq!(layer_name_of(&s, draft_copy), "Final");
+    // Names that only look like copies, or a copy renamed by hand, are kept.
+    for name in ["Title copy two", "Title copy 2b", "Title copyedit", "Title  copy", "My Title copy", "Title copy -1", "Title copy ", "Tit"] {
+        s.execute("type.edit", json!({"layer": id, "name": name})).unwrap();
+        s.execute("type.edit", json!({"layer": id, "text": "Title"})).unwrap();
+        assert_eq!(layer_name_of(&s, id), name, "{name}");
+    }
+}
+
+/// #9023: a copy-shaped name given in the Layers panel (`layer.setProps`) or by `type.create`'s
+/// `name` is the user's, so editing the text keeps it.
+#[test]
+fn a_copy_shaped_name_given_in_the_layers_panel_or_at_creation_is_kept() {
+    let mut s = session();
+    let id = s.execute("type.create", json!({"x": 0, "y": 40, "text": "Title"})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("layer.setProps", json!({"layer": id, "name": "Title copy 2"})).unwrap();
+    s.execute("type.edit", json!({"layer": id, "text": "Other"})).unwrap();
+    assert_eq!(layer_name_of(&s, id), "Title copy 2", "renamed in the Layers panel");
+    let named = s.execute("type.create", json!({"x": 0, "y": 80, "text": "Head", "name": "Head copy"})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("type.edit", json!({"layer": named, "text": "Body"})).unwrap();
+    assert_eq!(layer_name_of(&s, named), "Head copy", "named at creation");
+}
+
+/// #9023: a copy-shaped name typed for a duplicate into a new document is the user's too.
+#[test]
+fn a_copy_shaped_name_given_when_duplicating_into_a_new_document_is_kept() {
+    let mut s = session();
+    let id = s.execute("type.create", json!({"x": 0, "y": 40, "text": "Title"})).unwrap()["layer"].as_u64().unwrap();
+    let copy = s.execute("layer.duplicate", json!({"layer": id, "document": "new", "name": "Title copy 2"})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("type.edit", json!({"layer": copy, "text": "Other"})).unwrap();
+    assert_eq!(layer_name_of(&s, copy), "Title copy 2");
+}
+
+/// #9023: only a change of its text renames a copy. Size, style and layout edits keep "Title
+/// copy" (they used to rename it "Title"); editing its text still renames it after the text.
+#[test]
+fn a_duplicated_type_layer_keeps_its_name_until_its_text_changes() {
+    let mut s = session();
+    let id = s.execute("type.create", json!({"x": 0, "y": 40, "text": "Title"})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("layer.select", json!({"layer": id})).unwrap();
+    s.execute("layer.duplicate", json!({})).unwrap();
+    let copy = s.active().unwrap().active_layer.unwrap().0;
+    assert_eq!(layer_name_of(&s, copy), "Title copy");
+    s.execute("type.increaseSize", json!({"layer": copy})).unwrap();
+    assert_eq!(layer_name_of(&s, copy), "Title copy", "Change Type Size");
+    s.execute("type.edit", json!({"layer": copy, "color": "#ff0000", "tracking": 50})).unwrap();
+    assert_eq!(layer_name_of(&s, copy), "Title copy", "a style-only type.edit");
+    s.execute("type.edit", json!({"layer": copy, "kerning": "optical"})).unwrap();
+    assert_eq!(layer_name_of(&s, copy), "Title copy", "kerning");
+    s.execute("type.edit", json!({"layer": copy, "text": "Title"})).unwrap();
+    assert_eq!(layer_name_of(&s, copy), "Title copy", "the same text again");
+    s.execute("type.convertToParagraphText", json!({"layer": copy})).unwrap();
+    assert_eq!(layer_name_of(&s, copy), "Title copy", "Convert to Paragraph Text");
+    s.execute("type.convertToPointText", json!({"layer": copy})).unwrap();
+    assert_eq!(layer_name_of(&s, copy), "Title copy", "Convert to Point Text");
+    s.execute("type.edit", json!({"layer": copy, "text": "Subtitle"})).unwrap();
+    assert_eq!(layer_name_of(&s, copy), "Subtitle", "a text change still renames it");
+    // A layer named exactly after its text behaves as before.
+    s.execute("type.increaseSize", json!({"layer": id})).unwrap();
+    assert_eq!(layer_name_of(&s, id), "Title");
+    s.execute("type.edit", json!({"layer": id, "text": "Heading"})).unwrap();
+    assert_eq!(layer_name_of(&s, id), "Heading");
+}
+
+/// #9023 review: a copy-shaped name the user typed ("Title copy 2" on a layer whose text is
+/// "Title") is kept when the text changes, however it was typed; one Duplicate Layer made, also
+/// through its dialog's offered name, still follows the text, and so does one restored by undo.
+#[test]
+fn a_typed_copy_shaped_name_is_kept() {
+    let mut s = session();
+    let typed = |s: &mut Session, how: &str, id: u64, name: &str| match how {
+        "rename" => s.execute("layer.renameLayer", json!({"layer": id, "name": name})).map(|_| id),
+        "type.edit" => s.execute("type.edit", json!({"layer": id, "name": name})).map(|_| id),
+        _ => {
+            s.execute("layer.select", json!({"layer": id})).unwrap();
+            s.execute("layer.duplicate", json!({"name": name})).map(|v| v["layer"].as_u64().unwrap())
+        }
+    };
+    for how in ["rename", "type.edit", "dialog"] {
+        // The dialog offers "Title copy" itself (checked below).
+        for name in ["Title copy", "Title copy 2", "Title copy 17"].into_iter().filter(|n| how != "dialog" || *n != "Title copy") {
+            let id = s.execute("type.create", json!({"x": 0, "y": 40, "text": "Title"})).unwrap()["layer"].as_u64().unwrap();
+            let named = typed(&mut s, how, id, name).unwrap();
+            assert_eq!(layer_name_of(&s, named), name, "{how} {name}");
+            s.execute("type.edit", json!({"layer": named, "text": "Subtitle"})).unwrap();
+            assert_eq!(layer_name_of(&s, named), name, "{how}: a typed {name:?} is kept");
+            s.execute("layer.delete", json!({"layer": named})).unwrap();
+        }
+    }
+    // The dialog's own offer ("Title copy") is Duplicate Layer's name, not a typed one.
+    let id = s.execute("type.create", json!({"x": 0, "y": 40, "text": "Title"})).unwrap()["layer"].as_u64().unwrap();
+    let copy = typed(&mut s, "dialog", id, "Title copy").unwrap();
+    s.execute("type.edit", json!({"layer": copy, "text": "Caption"})).unwrap();
+    assert_eq!(layer_name_of(&s, copy), "Caption");
+    // Undoing a rename brings back the generated name, which follows the text again.
+    let copy = typed(&mut s, "dialog", id, "Title copy").unwrap();
+    s.execute("layer.renameLayer", json!({"layer": copy, "name": "Title copy 9"})).unwrap();
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(layer_name_of(&s, copy), "Title copy");
+    s.execute("type.edit", json!({"layer": copy, "text": "Footer"})).unwrap();
+    assert_eq!(layer_name_of(&s, copy), "Footer");
+}
+
 #[test]
 fn size_keys_step_each_run_and_respect_layer_scale() {
     let mut s = session();
@@ -792,139 +922,4 @@ fn relative_steps_move_each_character_from_its_own_value() {
     let empty = s.execute("type.create", json!({"x": 0, "y": 80, "text": "", "size": 10})).unwrap()["layer"].as_u64().unwrap();
     s.execute("type.setStyle", json!({"layer": empty, "range": [0, 0], "leadingBy": -2})).unwrap();
     assert_eq!(text_layer(&s, empty).char_runs()[0].style.leading_pt, Some(10.0));
-}
-
-/// Keystrokes as the Type tool sends them: one `replace` per character, in one session.
-fn type_in(s: &mut Session, layer: u64, at: usize, text: &str, session: &str) {
-    for (i, c) in text.chars().enumerate() {
-        let p = json!({"layer": layer, "replace": {"start": at + i, "end": at + i, "text": c.to_string()}, "coalesce": session});
-        s.execute("type.edit", p).unwrap();
-    }
-}
-
-fn the_active_text(s: &Session) -> String {
-    let d = s.active().unwrap();
-    match &d.doc.layer(d.active_layer.unwrap()).unwrap().content {
-        LayerContent::Text(t) => t.text.clone(),
-        other => panic!("{}", other.kind_name()),
-    }
-}
-
-/// #10113: recording a new type layer records one "make a text layer" step with the typed text,
-/// not one step per keystroke, and it names no layer id, so Batch plays it in other documents.
-#[test]
-fn recording_typed_text_records_one_step_that_plays_in_another_document() {
-    let mut s = session();
-    s.execute("actions.record", json!({"name": "Caption"})).unwrap();
-    let id = s.execute("type.create", json!({"x": 20, "y": 50, "text": "", "size": 24})).unwrap()["layer"].as_u64().unwrap();
-    type_in(&mut s, id, 0, "Hello", "s1");
-    s.execute("actions.stop", json!({})).unwrap();
-    let steps = &s.actions.list[0].steps;
-    assert_eq!(steps.len(), 1, "one step, not one per keystroke: {steps:?}");
-    assert_eq!(steps[0].0, "type.create");
-    assert_eq!(steps[0].1["text"], "Hello");
-    assert!(steps[0].1.get("layer").is_none());
-    // Another document, as Batch opens one per file.
-    s.execute("file.new", json!({"width": 120, "height": 80})).unwrap();
-    let played = s.execute("actions.play", json!({"action": "Caption"})).unwrap();
-    assert!(played.get("failed").is_none(), "{played}");
-    assert_eq!(the_active_text(&s), "Hello");
-}
-
-/// Typing into an existing type layer records one "set the current text layer's text" step with
-/// no layer id; it plays on the current type layer of another document.
-#[test]
-fn recording_an_edit_of_existing_text_records_the_whole_text_once() {
-    let mut s = session();
-    let id = s.execute("type.create", json!({"x": 20, "y": 50, "text": "Hi", "size": 24})).unwrap()["layer"].as_u64().unwrap();
-    s.execute("actions.record", json!({"name": "Greet"})).unwrap();
-    type_in(&mut s, id, 2, " there", "s2");
-    s.execute("actions.stop", json!({})).unwrap();
-    let steps = &s.actions.list[0].steps;
-    assert_eq!(steps.len(), 1, "{steps:?}");
-    assert_eq!((steps[0].0.as_str(), steps[0].1.get("layer"), steps[0].1["text"].as_str()), ("type.edit", None, Some("Hi there")));
-    s.execute("file.new", json!({"width": 120, "height": 80, "background": "transparent"})).unwrap();
-    s.execute("type.create", json!({"x": 10, "y": 40, "text": "Hey", "size": 24})).unwrap();
-    let played = s.execute("actions.play", json!({"action": "Greet"})).unwrap();
-    assert!(played.get("failed").is_none(), "{played}");
-    assert_eq!(the_active_text(&s), "Hi there");
-}
-
-/// Outside a recording the journal keeps every edit as it ran.
-#[test]
-fn typing_without_recording_keeps_the_journal_as_it_ran() {
-    let mut s = session();
-    let id = s.execute("type.create", json!({"x": 20, "y": 50, "text": "", "size": 24})).unwrap()["layer"].as_u64().unwrap();
-    let before = s.journal.len();
-    type_in(&mut s, id, 0, "abc", "s3");
-    assert_eq!(s.journal.len(), before + 3);
-    assert!(s.journal.iter().rev().take(3).all(|(id, p)| id == "type.edit" && p.get("replace").is_some()));
-}
-
-/// CodeRabbit on #10730: typing in a type layer of another document, switched to as a tab is
-/// (no step), after a recorded `type.create` is no part of that step, though that layer is the
-/// newest of its own document.
-#[test]
-fn typing_in_another_document_is_not_folded_into_the_layer_made_in_the_first() {
-    let mut s = session();
-    let other = s.execute("type.create", json!({"x": 10, "y": 40, "text": "Old", "size": 24})).unwrap()["layer"].as_u64().unwrap();
-    s.execute("file.new", json!({"width": 200, "height": 100, "background": "transparent"})).unwrap();
-    s.execute("actions.record", json!({"name": "Two"})).unwrap();
-    s.execute("type.create", json!({"x": 20, "y": 50, "text": "", "size": 24})).unwrap();
-    // Back in the first document, its own type layer is its newest layer.
-    assert!(s.set_active(0));
-    type_in(&mut s, other, 3, "!", "s4");
-    s.execute("actions.stop", json!({})).unwrap();
-    let steps = &s.actions.list[0].steps;
-    assert_eq!(steps.len(), 2, "{steps:?}");
-    assert_eq!((steps[0].0.as_str(), steps[0].1["text"].as_str()), ("type.create", Some("")), "the new layer keeps its own text");
-    assert_eq!((steps[1].0.as_str(), steps[1].1["text"].as_str()), ("type.edit", Some("Old!")));
-}
-
-/// CodeRabbit on #10730: typing in a layer with more than one style keeps a step per edit, as
-/// before: a step setting its whole text would give all of it one style on replay.
-#[test]
-fn typing_in_styled_text_keeps_a_step_per_edit() {
-    let mut s = session();
-    let id = s.execute("type.create", json!({"x": 20, "y": 50, "text": "Hi there", "size": 24})).unwrap()["layer"].as_u64().unwrap();
-    s.execute("type.setStyle", json!({"layer": id, "range": [3, 8], "fauxBold": true})).unwrap();
-    s.execute("actions.record", json!({"name": "Bold"})).unwrap();
-    type_in(&mut s, id, 8, "!!", "s5");
-    s.execute("actions.stop", json!({})).unwrap();
-    let steps = &s.actions.list[0].steps;
-    assert_eq!(steps.len(), 2, "{steps:?}");
-    assert!(steps.iter().all(|(id, p)| id == "type.edit" && p.get("replace").is_some()), "{steps:?}");
-}
-
-/// CodeRabbit on #10730: one typing session's key going on in another document (a tab switched
-/// mid-session, no step) is a step of its own there, not folded into the first document's.
-#[test]
-fn a_typing_session_going_on_in_another_document_is_a_step_of_its_own() {
-    let mut s = session();
-    let first = s.execute("type.create", json!({"x": 10, "y": 40, "text": "One", "size": 24})).unwrap()["layer"].as_u64().unwrap();
-    s.execute("file.new", json!({"width": 200, "height": 100, "background": "transparent"})).unwrap();
-    let second = s.execute("type.create", json!({"x": 10, "y": 40, "text": "Two", "size": 24})).unwrap()["layer"].as_u64().unwrap();
-    s.execute("actions.record", json!({"name": "Both"})).unwrap();
-    type_in(&mut s, second, 3, "!", "same");
-    assert!(s.set_active(0));
-    type_in(&mut s, first, 3, "?", "same");
-    s.execute("actions.stop", json!({})).unwrap();
-    let texts: Vec<_> = s.actions.list[0].steps.iter().map(|(_, p)| p["text"].as_str().map(str::to_string)).collect();
-    assert_eq!(texts, [Some("Two!".to_string()), Some("One?".to_string())], "one step per document");
-}
-
-/// CodeRabbit on #10730: an edit that names no layer edits the active one, and coalesces like one
-/// that names it.
-#[test]
-fn typing_edits_that_name_no_layer_coalesce_too() {
-    let mut s = session();
-    s.execute("type.create", json!({"x": 20, "y": 50, "text": "Hi", "size": 24})).unwrap();
-    s.execute("actions.record", json!({"name": "Plain"})).unwrap();
-    for (i, c) in "!!".chars().enumerate() {
-        s.execute("type.edit", json!({"replace": {"start": 2 + i, "end": 2 + i, "text": c.to_string()}, "coalesce": "s6"})).unwrap();
-    }
-    s.execute("actions.stop", json!({})).unwrap();
-    let steps = &s.actions.list[0].steps;
-    assert_eq!(steps.len(), 1, "{steps:?}");
-    assert_eq!(steps[0].1["text"], "Hi!!");
 }
