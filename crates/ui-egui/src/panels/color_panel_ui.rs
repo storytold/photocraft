@@ -575,6 +575,10 @@ fn wheel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // The ring or the triangle, from where the press began (kept for frames without a press
     // origin), so a drag that leaves the ring keeps turning the hue.
     let drag_key = ui.scope_id().with("color-wheel-drag");
+    // Knobs: on the ring at the hue, in the triangle at the saturation and brightness.
+    let a = h * TAU;
+    let ring_knob = center + vec2(a.cos(), -a.sin()) * (inner + ring_w / 2.0);
+    let tri_knob = triangle_point(tri, s, b);
     if (resp.dragged() || resp.clicked())
         && let Some(p) = resp.interact_pointer_pos()
     {
@@ -589,7 +593,10 @@ fn wheel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 // is one on a corner's knob just outside it (up to half the ring's width, so the
                 // ring's middle stays the ring).
                 let near = (ring_w / 2.0).min(5.0);
-                let part = (d <= outer + 7.0).then_some(d >= inner - 2.0 && !triangle_near(tri, origin, near));
+                // A press on the triangle's knob, as drawn, is the triangle unless the hue knob
+                // is nearer.
+                let on_knob = origin.distance(tri_knob) <= KNOB_R && origin.distance(tri_knob) < origin.distance(ring_knob);
+                let part = (d <= outer + 7.0).then_some(d >= inner - 2.0 && !on_knob && !triangle_near(tri, origin, near));
                 ui.data_mut(|data| data.insert_temp(drag_key, part));
                 part
             }
@@ -611,13 +618,9 @@ fn wheel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             None => {}
         }
     }
-    // Knobs: on the ring at the hue, in the triangle at the saturation and brightness.
-    let a = h * TAU;
-    let ring_knob = center + vec2(a.cos(), -a.sin()) * (inner + ring_w / 2.0);
-    let tri_knob = triangle_point(tri, s, b);
     for k in [ring_knob, tri_knob] {
         ui.painter().circle_stroke(k, 5.0, Stroke::new(1.5, Color32::WHITE));
-        ui.painter().circle_stroke(k, 6.5, Stroke::new(1.0, Color32::from_black_alpha(160)));
+        ui.painter().circle_stroke(k, KNOB_R - 0.5, Stroke::new(1.0, Color32::from_black_alpha(160)));
     }
     // Photoshop's add-to-swatches button under the wheel.
     let add = Rect::from_min_size(pos2(area.right() - 16.0, area.bottom() - 16.0), vec2(14.0, 14.0));
@@ -636,6 +639,10 @@ fn wheel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         apply_values(app, ui, Model::Hsb, v);
     }
 }
+
+/// How far a Color Wheel knob reaches from its centre: its outer circle (6.5 pt) and half its
+/// 1 pt stroke.
+const KNOB_R: f32 = 7.0;
 
 /// The wheel in `area`: its centre and the hue ring's inner and outer radii.
 pub(crate) fn wheel_geometry(area: Rect) -> (Pos2, f32, f32) {
@@ -681,8 +688,13 @@ pub(crate) fn triangle_point([hue, white, black]: [Pos2; 3], s: f32, b: f32) -> 
     black + (white - black) * b + (hue - white) * (b * s)
 }
 
-/// Whether `p` lies inside the triangle or within `tol` of it; `false` for a non-finite `p`.
+/// Whether `p` lies inside the triangle or within `tol` of it; `false` for a non-finite `p` and for
+/// a triangle with no area (a wheel too small for one), which would otherwise hold every point.
 pub(crate) fn triangle_near([a, b, c]: [Pos2; 3], p: Pos2, tol: f32) -> bool {
+    let area2 = (b - a).x * (c - a).y - (b - a).y * (c - a).x;
+    if area2.is_nan() || area2.abs() < 1e-6 {
+        return false;
+    }
     let side = |u: Pos2, v: Pos2| (v - u).x * (p - u).y - (v - u).y * (p - u).x;
     let (s1, s2, s3) = (side(a, b), side(b, c), side(c, a));
     let inside = (s1 >= 0.0 && s2 >= 0.0 && s3 >= 0.0) || (s1 <= 0.0 && s2 <= 0.0 && s3 <= 0.0);
