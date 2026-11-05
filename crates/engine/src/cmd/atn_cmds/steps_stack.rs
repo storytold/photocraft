@@ -64,6 +64,11 @@ fn original(p: &Value) -> Option<Descriptor> {
     Descriptor::from_bytes(&photocraft_paint::tile::b64_decode(jstr(p, SOURCE)?)?).ok()
 }
 
+/// The descriptorless form reaches the mapper as a default empty `null` descriptor.
+fn is_none_descriptor(d: &Descriptor) -> bool {
+    d.items.is_empty() && d.class_id.is("null")
+}
+
 /// Unknown mode classes, types, duplicate keys and extra settings stay complete kept steps.
 pub(super) fn mode_from(d: &Descriptor) -> Mapped {
     let Some((code, mode)) = recorded_mode(d) else { return Mapped::Unsupported { harmless: false } };
@@ -82,7 +87,7 @@ pub(super) fn mode_to(id: &str, p: &Value) -> Option<Descriptor> {
         return Some(canonical);
     }
     let source = original(p)?;
-    if source.items.is_empty() && source.class_id.is("null") {
+    if is_none_descriptor(&source) {
         return Some(canonical);
     }
     let (_, recorded) = recorded_mode(&source)?;
@@ -91,7 +96,7 @@ pub(super) fn mode_to(id: &str, p: &Value) -> Option<Descriptor> {
 
 /// None has no recorded settings and removes the native Smart Object stack mode.
 pub(super) fn none_from(d: &Descriptor) -> Mapped {
-    if d.items.is_empty() { step(NONE, json!({})) } else { Mapped::Unsupported { harmless: false } }
+    if is_none_descriptor(d) { step(NONE, json!({})) } else { Mapped::Unsupported { harmless: false } }
 }
 
 pub(super) fn none_to(_: &str, p: &Value) -> Option<Descriptor> {
@@ -102,7 +107,7 @@ pub(super) fn none_to(_: &str, p: &Value) -> Option<Descriptor> {
         return Some(desc("null"));
     }
     let source = original(p)?;
-    if source.items.is_empty() {
+    if is_none_descriptor(&source) {
         return Some(source);
     }
     recorded_mode(&source).map(|_| desc("null"))
