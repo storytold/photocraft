@@ -43,7 +43,7 @@ fn soft_selection_weights_the_mean_and_output_mix() {
         let mut surface = Surface::new(PixelFormat::new(ColorMode::Rgb, sample, true));
         surface.write_region(bounds, &[1.0, 0.0, 0.0, 0.25, 0.0, 0.0, 1.0, 0.75]);
         let before = surface.read_region(bounds);
-        let mut selection = Surface::new(PixelFormat::new(ColorMode::Gray, SampleType::F32, false));
+        let mut selection = Surface::new(PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false));
         selection.write_region(bounds, &[0.25, 1.0]);
         let out = apply(&surface, bounds, Some(&selection), &Interrupt::NONE).unwrap();
         // Unequal coverage makes the mean [0.2, 0, 0.8]. Each pixel then mixes
