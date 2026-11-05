@@ -507,9 +507,30 @@ fn no_room(dir: &Path, cap: Option<u64>) -> String {
 /// prefix. `None` if unknown, which disables only the free-space check, not spilling.
 #[cfg(not(target_arch = "wasm32"))]
 fn free_space(dir: &Path) -> Option<(u64, u64)> {
-    let dir = std::fs::canonicalize(dir).ok()?;
+    let mut dir = std::fs::canonicalize(dir).ok()?;
+    // Only on Windows: `\\?\C:\x` is a legal file name on Unix.
+    if cfg!(windows)
+        && let Some(plain) = dir.to_str().and_then(without_verbatim_prefix)
+    {
+        dir = std::path::PathBuf::from(plain);
+    }
     let disks = sysinfo::Disks::new_with_refreshed_list_specifics(sysinfo::DiskRefreshKind::nothing().with_storage()).ok()?;
     disks.iter().filter(|d| dir.starts_with(d.mount_point())).max_by_key(|d| d.mount_point().as_os_str().len()).map(|d| (d.available_space(), d.total_space()))
+}
+
+/// The plain form of a Windows verbatim path (`\\?\C:\x` to `C:\x`, `\\?\UNC\s\h\x` to `\\s\h\x`),
+/// or `None` to keep the path as is. `canonicalize` returns verbatim paths, whose prefix never
+/// compares equal to the plain prefix of a disk's mount point.
+#[cfg(not(target_arch = "wasm32"))]
+fn without_verbatim_prefix(path: &str) -> Option<String> {
+    let rest = path.strip_prefix(r"\\?\")?;
+    if let Some(unc) = rest.strip_prefix(r"UNC\") {
+        return Some(format!(r"\\{unc}"));
+    }
+    match rest.as_bytes().get(..2) {
+        Some([letter, b':']) if letter.is_ascii_alphabetic() => Some(rest.to_string()),
+        _ => None,
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -783,6 +804,37 @@ fn log_error(msg: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn verbatim_prefix_is_stripped_only_for_disks_and_unc() {
+        let cases: &[(&str, Option<&str>)] = &[
+            (r"\\?\UNC\server\share\x", Some(r"\\server\share\x")),
+            (r"\\?\C:\x", Some(r"C:\x")),
+            (r"\\?\c:", Some("c:")),
+            (r"\\?\Volume{0000-1}\x", None),
+            (r"C:\x", None),
+            ("/tmp/x", None),
+            (r"\\?\", None),
+            (r"\\?\C", None),
+            (r"\\?\1:\x", None),
+            (r"\\?\é:\x", None),
+            ("", None),
+        ];
+        for (input, want) in cases {
+            assert_eq!(without_verbatim_prefix(input).as_deref(), *want, "{input}");
+        }
+    }
+
+    // `free_space` returned `None` on Windows before the fix: `canonicalize` gives `\\?\C:\..`,
+    // which never started with the mount point `C:\`.
+    #[cfg(windows)]
+    #[test]
+    fn free_space_finds_the_temp_volume_on_windows() {
+        let (available, total) = free_space(&std::env::temp_dir()).unwrap();
+        assert!(total > 0);
+        assert!(available <= total);
+    }
 
     #[test]
     fn failed_read_retains_backing_and_blocks_commit_until_repaired() {
