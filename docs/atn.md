@@ -18,7 +18,30 @@ layers and documents, newer and older events and files, and a measured reference
 map yet, with everything needed to implement them without
 the reference application.
 
-## Supported events (144)
+## Action playback history
+
+Actions create one history entry named `Action: <name>` by default. Nested plays
+share the outer action's entry, and a failing or Stop step keeps the completed
+prefix. A play with no document change adds no entry and preserves redo.
+`actions.setHistory {"singleState":false}` restores per-step history. The option
+is saved as `actions.createSingleHistoryState` in preferences and defaults to true
+when loading older preferences. It is separate from Playback Options' performance
+modes; the Playback Options dialog can use the same setting when #5212 lands.
+
+Step-dialog confirmation joins the original play only while its document and
+history still match the paused state. Cancel keeps the completed prefix; an
+intervening edit or document switch prevents the stale dialog from applying.
+Batch and droplets group each processed document independently under the action's
+name and use the same saved option.
+Existing non-linear History ordering and visibility options continue to apply.
+
+Explicit Clear History and Purge Histories steps keep their normal effects. Later
+edits form a grouped entry from that new boundary, without restoring discarded
+states. If an action explicitly chooses an intermediate row as the History Brush
+source, its pixels are retained as a named snapshot when grouping removes that
+row; the action still adds only one Undo entry.
+
+## Supported events
 
 | Code | String ID | Label | PhotoCraft command(s) |
 |---|---|---|---|
@@ -45,6 +68,7 @@ the reference application.
 | (string ID only) | collapseAllGroupsEvent | Collapse All Groups | `layer.setExpanded` |
 | `ClrB` | colorBalance | Color Balance | `image.adjustments.colorBalance` |
 | `ClrR` | colorRange | Color Range | `select.colorRange` |
+| (string ID only) | cafWorkspace | Content-Aware Fill | `edit.contentAwareFill` |
 | `Cntc` | contract | Contract | `select.modify.contract` |
 | `CnvM` | convertMode | Convert Mode | `image.mode.rgb`, `image.mode.grayscale`, `image.mode.cmyk`, `image.mode.lab`, `image.mode.multichannel`, `image.mode.bits8`, `image.mode.bits16`, `image.mode.bits32`, `image.mode.bitmap` |
 | (string ID only) | convertToProfile | Convert to Profile | `edit.convertToProfile` |
@@ -83,7 +107,10 @@ the reference application.
 | `Flip` | flip | Flip | `image.imageRotation.flipCanvasHorizontal`, `image.imageRotation.flipCanvasVertical`, `edit.transform.flipHorizontal`, `edit.transform.flipVertical` |
 | (string ID only) | focusMask | Focus Area | `select.focusArea` |
 | `GsnB` | gaussianBlur | Gaussian Blur | `filter.blur.gaussianBlur` |
+| `Grdn` | gradientClassEvent | Classic Gradient (custom RGB, centred midpoints) | `paint.gradient` |
 | (string ID only) | gradientMapEvent | Gradient Map | `image.adjustments.gradientMap` |
+| `GrMp` | (code only) | Gradient Map (recorded classic form) | `image.adjustments.gradientMap` |
+| `RplC` | replaceColor | Replace Color (Lab sample box) | `image.adjustments.replaceColor` |
 | `Grow` | grow | Grow | `select.grow` |
 | `Hd  ` | hide | Hide | `layer.hideLayers` |
 | `HghP` | highPass | High Pass | `filter.other.highPass` |
@@ -97,7 +124,7 @@ the reference application.
 | `CtTL` | cutToLayer | Layer Via Cut | `layer.new.layerViaCut` |
 | `LnsF` | lensFlare | Lens Flare | `filter.render.lensFlare` |
 | `Lvls` | levels | Levels | `image.adjustments.levels`, `image.autoTone`, `image.autoContrast` |
-| `Mk  ` | make | Make | `layer.new.layer`, `layer.new.group`, `layer.groupLayers`, `layer.duplicate`, `layer.new.layerViaCopy`, `layer.new.layerViaCut`, `layer.newFillLayer.solidColor`, `layer.newFillLayer.pattern`, `layer.newAdjustmentLayer.levels`, `layer.newAdjustmentLayer.curves`, `layer.newAdjustmentLayer.hueSaturation`, `layer.newAdjustmentLayer.brightnessContrast`, `layer.newAdjustmentLayer.threshold`, `layer.newAdjustmentLayer.posterize`, `layer.newAdjustmentLayer.invert`, `layer.newAdjustmentLayer.colorBalance`, `layer.newAdjustmentLayer.vibrance`, `layer.newAdjustmentLayer.exposure`, `layer.newAdjustmentLayer.photoFilter`, `layer.newAdjustmentLayer.blackWhite`, `layer.newAdjustmentLayer.channelMixer`, `layer.newAdjustmentLayer.selectiveColor`, `layer.newAdjustmentLayer.gradientMap`, `layer.layerMask.revealAll`, `layer.layerMask.hideAll`, `layer.layerMask.revealSelection`, `layer.layerMask.hideSelection`, `file.new`, `file.newFromClipboard`, `history.newSnapshot` |
+| `Mk  ` | make | Make | `layer.layerStyle.createLayer`, `layer.new.layer`, `layer.new.group`, `layer.groupLayers`, `layer.duplicate`, `layer.new.layerViaCopy`, `layer.new.layerViaCut`, `layer.newFillLayer.solidColor`, `layer.newFillLayer.pattern`, `layer.newAdjustmentLayer.levels`, `layer.newAdjustmentLayer.curves`, `layer.newAdjustmentLayer.hueSaturation`, `layer.newAdjustmentLayer.brightnessContrast`, `layer.newAdjustmentLayer.threshold`, `layer.newAdjustmentLayer.posterize`, `layer.newAdjustmentLayer.invert`, `layer.newAdjustmentLayer.colorBalance`, `layer.newAdjustmentLayer.vibrance`, `layer.newAdjustmentLayer.exposure`, `layer.newAdjustmentLayer.photoFilter`, `layer.newAdjustmentLayer.blackWhite`, `layer.newAdjustmentLayer.channelMixer`, `layer.newAdjustmentLayer.selectiveColor`, `layer.newAdjustmentLayer.gradientMap`, `layer.layerMask.revealAll`, `layer.layerMask.hideAll`, `layer.layerMask.revealSelection`, `layer.layerMask.hideSelection`, `file.new`, `file.newFromClipboard`, `history.newSnapshot`, `type.convertToShape`, `type.createWorkPath` |
 | (string ID only) | animationFramesFromLayers | Make Frames from Layers |  |
 | (string ID only) | matchColor | Match Color | `image.adjustments.matchColor` |
 | `Mxm ` | maximum | Maximum | `filter.other.maximum` |
@@ -127,6 +154,7 @@ the reference application.
 | (string ID only) | removeBackground | Remove Background | `layer.removeBackground` |
 | `RmvB` | removeBlackMatte | Remove Black Matte | `layer.matting.removeBlackMatte` |
 | `RmvW` | removeWhiteMatte | Remove White Matte | `layer.matting.removeWhiteMatte` |
+| `Shr ` | shear | Shear | `filter.distort.shear` |
 | `Rset` | reset | Reset | `tools.defaultColors` |
 | `RvlA` | revealAll | Reveal All | `image.revealAll` |
 | `Rvrt` | revert | Revert | `file.revert` |
@@ -147,6 +175,7 @@ the reference application.
 | `Shw ` | show | Show | `layer.showLayers`, `layer.showOnly` |
 | `Smlr` | similar | Similar | `select.similar` |
 | (string ID only) | selectSky | Sky | `select.sky` |
+| (string ID only) | scaleEffectsEvent | Scale Effects | `layer.layerStyle.scaleEffects` |
 | `SmrB` | smartBlur | Smart Blur | `filter.blur.smartBlur` |
 | (string ID only) | smartSharpen | Smart Sharpen | `filter.sharpen.smartSharpen` |
 | `Smth` | smoothness | Smooth | `select.modify.smooth` |
@@ -166,6 +195,149 @@ the reference application.
 | (string ID only) | vibrance | Vibrance | `image.adjustments.vibrance` |
 | `Wave` | wave | Wave | `filter.distort.wave` |
 | `ZgZg` | zigZag | ZigZag | `filter.distort.zigZag` |
+| (string ID only) | reverse | Reverse | `layer.arrange.reverse` |
+| (string ID only) | linkSelectedLayers | Link Layers (toggles, as measured) | `layer.linkLayers` |
+| (string ID only) | unlinkSelectedLayers | Unlink Layers | `layer.linkLayers {"linked":false}` |
+| (string ID only) | selectLinkedLayers | Select Linked Layers | `layer.selectLinkedLayers` |
+| (string ID only) | disableLayerStyle | Clear Layer Style | `layer.layerStyle.clear` |
+| (string ID only) | placedLayerMakeCopy | New Smart Object via Copy | `layer.smartObjects.newSmartObjectViaCopy` |
+| (string ID only) | placedLayerConvertToLayers | Convert to Layers | `layer.smartObjects.convertToLayers` |
+| (string ID only) | placedLayerConvertToEmbedded | Embed Linked | `layer.smartObjects.convertToEmbedded` |
+| (string ID only) | placedLayerUpdateAllModified | Update All Modified Content | `layer.smartObjects.updateAllModifiedContent` |
+| (string ID only) | rasterizeAll | Rasterize All Layers | `layer.rasterize.allLayers` |
+| (string ID only) | addBlankVideoLayer | New Blank Video Layer | `layer.videoLayers.newBlankVideoLayer` |
+| (string ID only) | isolateLayers | Isolate Layers | `select.isolateLayers` |
+| (string ID only) | textLoadDefaultTypeStyles | Load Default Type Styles | `type.loadDefaultTypeStyles` |
+| (string ID only) | textSaveDefaultTypeStyles | Save Default Type Styles | `type.saveDefaultTypeStyles` |
+| (string ID only) | recordMeasurements | Record Measurements | `image.analysis.recordMeasurements` |
+| (string ID only) | CropPhotosAuto0001 | Crop and Straighten Photos | `file.automate.cropAndStraightenPhotos` |
+| (string ID only) | placedLayerExportContents | Export Contents | `layer.smartObjects.exportContents` |
+| (string ID only) | placedLayerConvertToLinked | Convert to Linked | `layer.smartObjects.convertToLinked` |
+| (string ID only) | placedLayerRelinkToFile | Relink to File | `layer.smartObjects.relinkToFile` |
+| (string ID only) | placedLayerReplaceContents | Replace Contents | `layer.smartObjects.replaceContents` |
+| (string ID only) | shapeBlur | Shape Blur (radius-only form) | `filter.blur.shapeBlur` |
+| (string ID only) | artboardFromLayerGroupEvent | Artboard from Group | `layer.new.artboardFromGroup` |
+| (string ID only) | editArtboardEvent | Artboard background color (flags 8/1) | `layer.artboard.set` |
+
+### Newer event mapping boundaries
+
+The 23 requested forms in the two **Measured** tables under
+[Newer events](#newer-events-string-id-only) are mapped. Artboard from Group
+retains the current-layer target, preset tag, fractional RGB, background type
+and integer `changeBackground`, including absence. A flag of 1 or absence applies
+the background; other integers give white. An omitted type defaults to white.
+Recorded guide IDs are preserved on save and ignored on playback, as measured
+in [the guide/background reference below](#newer-events-string-id-only).
+Existing document guides remain unchanged. The preset does not resize the group.
+
+The additional `editArtboardEvent` maps background-only changes with `changeSizes`
+8 and `changeBackground` 1. Its rectangle and preset remain recording metadata:
+they do not move or resize the target artboard. Colors remain in the saved step
+even for white, black or transparent backgrounds. Other flags, extra settings,
+unknown targets and forms that cannot reconstruct exactly remain whole kept
+steps. Native geometry edits without a matching wire form refuse export.
+
+The sixteen target-only events accept an empty descriptor or the current-layer
+`null` reference (`Lyr `/`Ordn.Trgt`). Save retains which form was imported.
+Unknown targets or extra keys stay complete kept steps. Unrepresented native
+options are refused on export. Playback uses the native command's preconditions
+and current state. Isolate Layers toggles the panel view; type defaults remain
+session settings; Record Measurements uses the current measurement configuration.
+
+Link Layers plays as the toggle the reference application performs (played twice on the same
+layers it links, then unlinks them; see the measurements below). Unlink is explicit and
+idempotent: it keeps an already unlinked selection unlinked and clears singleton link groups.
+Undo restores an edit. Explicit native layer lists cannot be exported as these targeted events.
+
+The four Smart Object file events use Open/Place's `Pth `/`txtu` path encoding.
+Export Contents uses `null` for its path; Convert to Linked uses the current-layer
+`null` reference and `Usng` for its path; Relink and Replace use `null` for the path.
+A positive integer `LyrI` is a recording-session hint, never a PhotoCraft layer
+identity, and is omitted on save under the normalization rule below. Undecodable
+paths or extra keys keep the entire step. File access happens at playback; a
+missing or unusable file reports the native command's error.
+
+Convert Type to Shape retains Make's `contentLayer` class reference and `Usng`
+target `textLayer` reference; it does not export a separate `convertToShape`
+event. Other Make mappings, including Solid Color and Pattern fills, are unchanged.
+Shape Blur maps only the measured radius form (`Rds ` pixels, 5–1000; omitted
+radius uses the native factory value 10). Later dialog forms carrying
+`customShape` or `keyOriginType` remain kept. Native explicit shape choices cannot
+be saved as radius-only descriptors; no custom asset lookup or new kernel is added.
+
+Crop and Straighten Photos executes the native scan operation once, creating one
+document per photo found inside the selection and leaving the source unchanged.
+It requires a selected, visible layer with no pixel or full lock, including
+inherited group state, and remains unavailable for Indexed Color documents.
+The separate `CropPhotos0001` helper remains a complete kept Photoshop step.
+Playback stops at that enabled helper before subsequent duplicate/crop steps can
+run. This covers the parent event, not complete recordings with generated helpers.
+
+### Content-Aware Fill recordings
+
+`cafWorkspace` maps Rectangular / Default color adaptation / None rotation with New Layer or
+Current Layer output to `edit.contentAwareFill`, retaining all seven keys and the three booleans:
+Sample All Layers, Scale and Mirror. The selection comes from the preceding selection step.
+New Layer is in the measured reference; Current Layer and the enumeration type IDs are explicit
+in [Stephen Marsh's published Action Manager example](https://community.adobe.com/questions-712/expand-and-content-aware-fill-functions-are-not-working-via-javascript-1172085).
+
+| Recorded key, in order | Supported value | Native parameter |
+|---|---|---|
+| `cafSamplingRegion` | `cafSamplingRegionRectangular` | `sampling: "rectangular"` |
+| `cafSampleAllLayers` | boolean | `sampleAllLayers` |
+| `cafColorAdaptationLevel` | `cafColorAdaptationDefault` | `colorAdaptation: "default"` |
+| `cafRotationAmount` | `cafRotationAmountNone` | `rotationAdaptation: "none"` |
+| `cafScale` | boolean | `scale` |
+| `cafMirror` | boolean | `mirror` |
+| `cafOutput` | `cafOutputToNewLayer`, `cafOutputToCurrentLayer` | `output: "new"`, `"current"` |
+
+Descriptor types, source identity and key order survive save while its native settings are
+unchanged. Editing a supported setting exports the new values in canonical form instead of
+restoring stale source values; malformed preservation data still refuses export.
+Native export writes the seven keys explicitly; the known native boolean, color
+adaptation, rotation and Current Layer output defaults are supported when sampling is explicitly
+Rectangular. A native call using the Auto sampling default cannot yet be exported.
+
+The reference's ellipses do not establish additional enum forms. Auto/Custom sampling,
+other adaptation levels, Duplicate Layer output, absent keys, unknown settings and
+malformed or repeated fields remain complete kept steps. Native layer targets, sampling/fill
+edits and nondefault seeds also refuse export rather than lose their settings. Playback uses
+the existing native fill and its selection, authorization, job and Undo/Redo behavior. The
+remaining CAF forms and the other recorded tools in #10710 are still separate work.
+
+### Layer Style menu recordings
+
+`scaleEffectsEvent` maps to `layer.layerStyle.scaleEffects` with the recorded `Scl `
+whole percentage in `#Prc`, from 1 through 1000. A missing recorded value is not
+given a guessed default. Native export makes its effective default of 100 explicit;
+fractional, out-of-range and unrepresented options refuse export.
+
+Create Layer(s) maps Make (`Mk  ` / `make`) to `layer.layerStyle.createLayer` when
+`null` is the `Lyr ` class reference and `Usng` is the `Lefx` property of the target
+layer (`Prpr.Lefx`, `Lyr .Ordn.Trgt`). It has no recorded operation settings.
+The existing native command creates the effect layers. The warning dialog is not
+an extra action parameter. Explicit native layer IDs have no measured export form.
+Malformed references stay complete kept steps, rather than creating a blank layer;
+ordinary layer creation still uses its layer-options object or class-only form.
+
+Both mappings retain descriptor identity, order and step flags while unchanged.
+A supported scale edit exports its new value canonically; damaged preservation
+metadata remains refused. These two rows are the implemented subset of #10723;
+the other menu recordings remain separate work. Playback reuses native history
+and rendering; this does not claim Photoshop pixel equivalence.
+
+### Type Create Work Path recordings
+
+Make (`Mk  ` / `make`) maps to `type.createWorkPath` when `null` is the `Path`
+class reference and `From` is the target text layer (`TxLr.Ordn.Trgt`). Playback
+uses the existing native glyph-outline command and leaves the text layer editable.
+Undo restores the previous work path; Redo restores the new one.
+
+The mapping preserves the complete descriptor, including key order and reference
+names. Unknown or duplicate keys, named sources, other source classes and other
+reference chains remain complete kept Photoshop steps. Native export supports
+the implicit active text layer only; explicit layer targets refuse export.
+This is another implemented subset of #10723, not support for its remaining events.
 
 ### Settings retained by mapped events
 
@@ -235,9 +407,84 @@ supported-event count and the measured unmapped reference.
 |---|---|
 | animationFramesFromLayers | Make Frames from Layers |
 
+### Supported direct adjustment settings
+
+#### Gradient Map (direct)
+
+- Event: `GrMp` (no string ID)
+- PhotoCraft command: `image.adjustments.gradientMap`
+- Supported: classic (`Gcls`, also when omitted), 2..64 ordered custom RGB stops at midpoint 50, smoothness 4096, and the two opaque endpoint transparency stops. Fractional RGB components retain their precision and the recorded name and event survive save.
+- Other interpolation methods, midpoints, transparency, unsorted stops and unsupported descriptor forms remain kept steps. This does not change the separate legacy `GdMp` event mapping.
+
+| Key | String ID | Type | Unit | Default | Allowed |
+|---|---|---|---|---|---|
+| `` | gradientsInterpolationMethod | enumerated |  |  gradientInterpolationMethodType.'Gcls' classic |  |
+| `Grad` | gradient | object |  | obj 'Grdn' gradientClassEvent |  |
+
+Nested values as recorded (defaults):
+```
+    'Nm  ' name : STRINGTYPE = "Vorder- zu Hintergrundfarbe"
+    'GrdF' gradientForm : ENUMERATEDTYPE = 'GrdF' gradientForm.'CstS' customStops
+    'Intr' interfaceIconFrameDimmed : DOUBLETYPE = 4096
+    'Clrs' colors : LISTTYPE = list[2]
+        [0] OBJECTTYPE = obj 'Clrt' colorStop
+            'Clr ' color : OBJECTTYPE = obj 'RGBC' RGBColor
+                'Rd  ' red : DOUBLETYPE = 0
+                'Grn ' green : DOUBLETYPE = 0
+                'Bl  ' blue : DOUBLETYPE = 0
+            'Type' type : ENUMERATEDTYPE = 'Clry' colorStopType.'UsrS' userStop
+            'Lctn' location : INTEGERTYPE = 0
+            'Mdpn' midpoint : INTEGERTYPE = 50
+        [1] OBJECTTYPE = obj 'Clrt' colorStop
+            'Clr ' color : OBJECTTYPE = obj 'RGBC' RGBColor
+                'Rd  ' red : DOUBLETYPE = 255
+                'Grn ' green : DOUBLETYPE = 255
+                'Bl  ' blue : DOUBLETYPE = 255
+            'Type' type : ENUMERATEDTYPE = 'Clry' colorStopType.'UsrS' userStop
+            'Lctn' location : INTEGERTYPE = 4096
+            'Mdpn' midpoint : INTEGERTYPE = 50
+    'Trns' transparency : LISTTYPE = list[2]
+        [0] OBJECTTYPE = obj 'TrnS' transferSpec
+            'Opct' opacity : UNITDOUBLE = 100 '#Prc' percentUnit
+            'Lctn' location : INTEGERTYPE = 0
+            'Mdpn' midpoint : INTEGERTYPE = 50
+        [1] OBJECTTYPE = obj 'TrnS' transferSpec
+            'Opct' opacity : UNITDOUBLE = 100 '#Prc' percentUnit
+            'Lctn' location : INTEGERTYPE = 4096
+            'Mdpn' midpoint : INTEGERTYPE = 50
+```
+
+#### Replace Color
+
+- Event: `RplC` / `replaceColor`
+- PhotoCraft command: `image.adjustments.replaceColor`
+- Supported: the explicit D50 Lab minimum/maximum box and `colorModel` 0, with the four integer settings clamped to the ranges below. Matching uses original pixel channels through the document profile. Unsupported color models, malformed or missing samples and unknown keys remain kept steps.
+- Measured with example values in a prepared document: the Value column shows what was sent and recorded, not a factory default (a step always carries the values the user set).
+
+| Key | String ID | Type | Unit | Example value | Allowed |
+|---|---|---|---|---|---|
+| `Fzns` | fuzziness | integer |  | 40 | 0 .. 200 (out-of-range values are clamped) |
+| `Mnm ` | minimum | object |  | obj 'LbCl' labColor |  |
+| `Mxm ` | maximum | object |  | obj 'LbCl' labColor |  |
+| `H   ` | hue | integer |  | 30 | -180 .. 180 (out-of-range values are clamped) |
+| `Strt` | saturation | integer |  | 0 | -100 .. 100 (out-of-range values are clamped) |
+| `Lght` | lightness | integer |  | 0 | -100 .. 100 (out-of-range values are clamped) |
+| `` | colorModel | integer |  | 0 |  |
+
+Nested values as recorded (example values):
+```
+    'Lmnc' luminance : DOUBLETYPE = 40
+    'A   ' a : DOUBLETYPE = 30
+    'B   ' b : DOUBLETYPE = 40
+    'Lmnc' luminance : DOUBLETYPE = 40
+    'A   ' a : DOUBLETYPE = 30
+    'B   ' b : DOUBLETYPE = 40
+```
+
+
 ## Known gaps in mapped events
 
-A mapped event can still lose a setting. Every mapped event was checked on 2026-11-01: the 5 296 steps of
+A mapped event can still lose a setting. The original 117-event mapping was checked on 2026-11-01: the 5 296 steps of
 the `.atn` corpus (sets the reference application recorded) and factory descriptors measured in the
 reference application went through `actions.load` and `actions.save`, and each saved descriptor was compared
 with the original. Then every step PhotoCraft saves for the cases in
@@ -262,6 +509,32 @@ differences that do not change what a step does.
 - An adjustment layer's values equal to the defaults are not written back (other values are).
 - Colours are kept as 8-bit values (51.0031 becomes 51); gradient names become "Custom".
 - Levels and Curves write the composite as `Chnl.Cmps` (the application skips `Ordn.Trgt`, #8543).
+
+### Classic Gradient recordings
+
+`Grdn` / `gradientClassEvent` maps to `paint.gradient` for custom RGB gradients
+with byte-valued colours and centred colour/transparency midpoints. The five
+measured styles are Linear, Radial, Angle, Reflected and Diamond. Pixel endpoints,
+opacity, blend mode, reverse, dither and the transparency switch are explicit;
+an omitted `Dthr` is off, rather than the native command's on default. The
+recorded interpolation method maps to the existing Classic, Perceptual, Linear
+or Smooth implementation, and `Intr` supplies smoothness.
+
+Unchanged recordings retain their complete descriptor bytes, key order, ID
+encoding and explicit defaults. A supported edit writes the recorded key order:
+`From`, `T   `, non-default `Opct` and `Md  `, `Type`, non-default `Rvrs`, enabled
+`Dthr` and `UsMs`, `gradientsInterpolationMethod`, then required `Grad`. Source
+data is never replayed in place of edited executable settings. Native export
+requires explicit stops, transparency (an empty list means opaque) and method;
+it does not resolve a named or current gradient preset at save time.
+
+Unknown/duplicate keys, absent interpolation methods, non-centred midpoints,
+fractional RGB colours, noise gradients and dynamic foreground/background stops
+remain kept steps. The current preset model does not represent those forms
+faithfully. Invalid units/enums or missing `Grad` also stay kept, rather than
+using a different gradient. The default Make/Set gradient fill-layer recordings
+are separate work. Synthetic fixtures follow the measured reference below;
+no new Photoshop recording or pixel-equivalence measurement is claimed.
 
 ## Reference forms
 
@@ -323,12 +596,15 @@ name form today; the index, ID and ordinal forms load as kept steps.
 
 ## Newer events (string ID only)
 
-The events the reference application records for the menu items PhotoCraft has that are neither mapped
-nor in the reference below: 63 candidates from PhotoCraft's menu catalogue, each run in the reference
+The original survey covered menu events that were neither mapped nor in the reference below:
+63 candidates from PhotoCraft's menu catalogue, each run in the reference
 application without a dialog on a document prepared for it (layers, a selection, a smart object, a type
 layer, a layer style or a group) on 2026-11-01. 27 more menu items record no event of their own (puppet
 warp and warp splits, combine shapes, scripts such as Load Files into Stack and Statistics, artboard and
 video export, missing-font commands): they cannot be recorded or play as a script step.
+
+The two Measured tables remain the recording reference. The mappings and remaining
+limits added since that survey are listed under [Newer event mapping boundaries](#newer-event-mapping-boundaries).
 
 **Measured: no settings beyond the target.** A step with these events carries at most `null` (the target
 layer reference, `Ordn.Trgt`); mapping them needs only the event name.
@@ -366,8 +642,6 @@ layer reference, `Ordn.Trgt`); mapping them needs only the event name.
 
 | Menu | Recorded step | Keys |
 |---|---|---|
-| Layer > Layer Style > Scale Effects | `scaleEffectsEvent` | `Scl ` percent, whole number 1..1000 (the dialog clamps) |
-| Layer > Layer Style > Create Layer(s) | Make, `null` = class `Lyr `, `Usng` = reference to the `Lefx` property of the target layer | none; the dialog first warns that some effects cannot be reproduced with layers (OK / Cancel) |
 | Layer > New > Frame from Layers | Make, `null` = class `framedGroupSection`, `From` = layer **by name**, `layerSectionStart`, `layerSectionEnd` long, `Nm  ` text | the dialog also shows width and height, which are not recorded |
 | Layer > New > Artboard from Layers | Make, `null` = class `artboardSection`, `From` = layer target, `layerSectionStart`, `layerSectionEnd`, `Nm  ` | |
 | Layer > New > Artboard | Make, `null` = class `artboardSection`, `layerSectionStart`, `layerSectionEnd`, `Nm  `, `artboardRect` (`Top `, `Left`, `Btom`, `Rght` doubles, pixels) | |
@@ -376,7 +650,6 @@ layer reference, `Ordn.Trgt`); mapping them needs only the event name.
 | Layer > Smart Objects > Stack Mode > None | `imageStackConvertSmartObject` | none |
 | Layer > Video Layers > New Blank Video Layer, Insert Blank Frame, Delete Frame, Show / Hide Altered Video | `addBlankVideoLayer`, `insertBlankFrame`, `deleteFrame`, `showAlteredVideo` / `hideAlteredVideo` | none |
 | Layer > Video Layers > Interpret Footage | `interpretFootage` | `Vrsn` long (1), `interpretAlpha` (`alphaInterpretation`: `Ignr` ignore, …), `colorConvertAlterations` bool |
-| Type > Create Work Path | Make, `null` = class `Path`, `From` = text layer (`TxLr`) target | |
 | Edit > Find and Replace Text (Replace All) | `replace`, `null` = reference: property `replace` of all text layers (`TxLr` `Ordn.Al`), `Usng` = `find` text, `replace` text, `checkAll`, `Fwd `, `caseSensitive`, `wholeWord`, `ignoreAccents` bool | |
 | Edit > Check Spelling | `spellCheck`, `null` = property `spellCheck` of all text layers, `Usng` = `checkAll` bool | recorded with its dialog switched on; the corrections themselves are not recorded |
 | Image > Analysis > Set Measurement Scale > Custom | Set, `null` = property `measurementScale` of the document target, `T   ` = `pixelLength` long, `logicalLength` double, `logicalUnits` text | |
@@ -433,6 +706,11 @@ commands record).
   with more than one layer is refused.
 - **Load Actions** with a set whose name is already in the panel adds a second set of that name; nothing is replaced.
 
+- PhotoCraft preserves fractional recorded RGB values exactly. Native actions with partial settings export an empty preset and guide list when absent.
+  An absent native color exports as white: it matches the native custom-color fallback and is visually ignored for white, black and transparent backgrounds.
+  A custom background without a color uses the White variant (type 1); an explicit custom white color keeps type 4.
+  This is canonical export metadata, not a claim about the reference application's remembered color. Imported steps retain their recorded color instead.
+
 ## Measured through dialogs and recordings
 
 Measured on 2026-11-01 in two ways: by running the event with its dialog and pressing OK (the reference
@@ -458,9 +736,7 @@ the recorded steps back from the saved Actions panel. Ranges come from the dialo
 | Convert Mode, several layers, "Don't Flatten" | `T   ` as a **class** (`Grys`), `Fltt` false, `Rstr` false | With `Fltt` and `Rstr` the step plays without the flatten question. |
 | New Group with a colour | `Usng` (`Clr ` label), `layerSectionStart`, `layerSectionEnd`, top-level `Nm  ` | |
 | Shear (`Shr `) | `ShrP` list of `Pnt ` (`Hrzn`, `Vrtc` doubles), `UndA` (`WrpA` wrap around, `RptE` repeat edge pixels), `ShrS` long, `ShrE` long | The dialog writes whole numbers: `Hrzn` -64..63 (dragging past the grid clamps), `Vrtc` 1..128 with the first point at 1 and the last at 128; dragging a point out of the grid deletes it. `ShrS` is 0 and `ShrE` the last point's index (count - 1). Script runs take any value unclamped and crashed on far-off `ShrE`/`ShrS` or a first `Vrtc` below 1. |
-| Gradient tool, classic (`Grdn` / `gradientClassEvent`) | `From`, `T   ` points in pixels; `Opct` percent, `Md  ` blend mode, `Type` (`GrdT`: `Lnr `, `Rdl `, `Angl`, `Rflc`, `Dmnd`), `Rvrs` bool, `Dthr` bool, `UsMs` bool (transparency), `gradientsInterpolationMethod` (`Perc` perceptual, …), `Grad` gradient object (as in Gradient Map) | Recorded in that order. `Opct`, `Md  ` and `Rvrs` appear only when they differ from 100 %, Normal and off; `Dthr` and `UsMs` only when on. The five types are the only accepted values. A step without `Grad` fails. |
 | Gradient tool, default mode | two steps: Make (`null` = class `contentLayer`, `Usng` = `Type` gradient layer object) then Set (`null` = `contentLayer` target, `T   ` = the same object plus `Algn` false) | The object: `Dthr`, `gradientsInterpolationMethod`, `Angl` angle, `Type`, `Scl ` percent, `Ofst` (`Hrzn`, `Vrtc` percent), `Grad`. The new tool makes a gradient fill layer; Make holds the first click, Set the finished drag. |
-| Content-Aware Fill (`cafWorkspace`) | `cafSamplingRegion` (`cafSamplingRegionRectangular`, …), `cafSampleAllLayers` bool, `cafColorAdaptationLevel` (`cafColorAdaptationDefault`, …), `cafRotationAmount` (`cafRotationAmountNone`, …), `cafScale` bool, `cafMirror` bool, `cafOutput` (`cafOutputToNewLayer`, …) | Runs on the selection, which is recorded as its own step before it. |
 | Perspective Warp (`perspectiveWarpTransform`) | `null` = layer target, `Md  ` (`perspectiveWarpMode`: `warp`), `referenceRect` rectangle in pixels, `vertices` list of points in pixels (the layout quad), `warpedVertices` (the same points after warping), `quads` list of `indices` (4 vertex indexes each) | Layout and warp are one step. |
 | Print (`print`) then Print One Copy (`printOneCopy`) | `print`: `null` = reference `printOutput` property of the target document; `printOutput` (`PstS`, `Inte`, `printSixteenBit`, `printerName` text, `printProofSetup`), `printViewProofSetup`, `printOutputOptions` (caption, marks, `Bckg` colour, `BrdT`, `Bld `, `Rslt`, `vectorData`, `PgPs`, `Left`, `Top `, `Scl `, crop rectangle), `osSpecificPrintInfo` raw data, `Cptn` text. `printOneCopy` has no keys. | Pressing Print in the dialog records both steps. |
 | Create Droplet (`CrtD`) | `In  ` alias: the droplet file; `Fldr` bool (include subfolders); `Usng` reference to the action; then the Batch keys below (destination, file naming, error log) when set | The same settings as Batch, with the droplet file instead of a source folder. |
@@ -561,6 +837,20 @@ Measured with a folder `in` holding `a.png`, `b.png`, `notes.txt` and `sub/a.png
   during batch processing. Continue with the next file or stop?" (Continue / Stop). Stop ends the batch
   at once; the file being processed is not saved (12 of 60 written in the test). There is no progress
   bar: the documents open and close in the window as they are processed.
+
+Batch cancellation conformance (Photoshop 2026 observation above; PhotoCraft's producer is
+`file_cmds::batch_run::process_batch_outputs`, and its desktop consumer is `jobs_ui::tick`):
+
+| Reference step | Acceptance gate | Status |
+|---|---|---|
+| Plan folder order, names and serials once | Continue retains the original plan and next serial | Implemented and tested; Esc between inputs does not skip the unopened input |
+| Show the opened input while its action runs | A read-only document preview appears in the canvas and closes with the input | Implemented and visually checked; deliberate deviation: worker snapshots are not live tabs or Layers panel targets, so they cannot be edited or saved by mistake |
+| Interrupt the current command on Esc | The current input reaches a checkpoint before any output write | Implemented and tested before save; once the crash-safe atomic write begins, Esc is refused because publication cannot be retracted |
+| Ask Continue or Stop | Continue skips the interrupted input; Stop returns prior outputs and skips the rest | Implemented and tested in engine and UI |
+| Keep headless cancellation direct | `jobs.cancel` returns partial results without an interactive question | Implemented and tested, including a worker waiting for a desktop decision |
+| No progress bar | The desktop Batch preview is the visible feedback | Implemented, UI tested and visually checked |
+| Preserve error policy and log | Continue retains earlier errors and writes one final UTF-16 LE log | Implemented and tested with errors before and after Esc |
+
 - **Return value:** when any file failed, the Batch step itself reports "cancelled" (the dialog returns no
   descriptor); a script run with Stop For Errors reports success even though it stopped.
 
@@ -669,6 +959,7 @@ and string ID, the PhotoCraft command it maps to (or should map to), and every k
 order it is recorded, with type, unit, factory default and allowed values. The Supported events table says
 which of them PhotoCraft maps today; for the others an entry has everything needed to implement them. When
 an event is implemented, add it to that table in the same change.
+Current support and limits of the newer events are described under [Newer event mapping boundaries](#newer-event-mapping-boundaries).
 
 ### How these values were measured
 
@@ -1292,7 +1583,7 @@ Nested values as recorded (defaults):
 
 ### Group C: The Distort filters (Pinch, Polar Coordinates, Shear, Spherize, Twirl, Wave, ZigZag)
 
-All commands exist in PhotoCraft (`filter.distort.*`); only the `.atn` mapping is missing. Displace needs a displacement map file and is listed separately at the end.
+The seven Distort events below map to PhotoCraft's `filter.distort.*` commands for their documented supported forms, including complete Shear curves. Displace needs a displacement map file and is listed separately at the end.
 
 #### Pinch
 
@@ -1317,6 +1608,19 @@ All commands exist in PhotoCraft (`filter.distort.*`); only the `.atn` mapping i
 - Event: `Shr ` / `shear`
 - PhotoCraft command: `filter.distort.shear`
 - `shearPoints` is a list of curve points; keep their order and count.
+
+Supported for complete curves: import clamps finite grid coordinates to the measured ranges below,
+maps them to the native top-to-bottom position `(Vrtc - 1) / 127` and half-width offset `Hrzn / 64`,
+and preserves fractional recorded coordinates exactly on save. Both edge modes are supported.
+Only `ShrS` 0 and `ShrE` equal to the last point's index map; an omitted `ShrE` still defaults to 1.
+The adapter accepts 2..4096 points as an execution safety budget, not a measured Photoshop format
+maximum. This bounds point-vector allocation and the renderer's linear per-row curve search while
+allowing fractional scripted points. Larger recorded curves stay intact as kept steps, and native
+exports above that budget are refused before point conversion. No renderer performance is claimed.
+The budget covers adapter mapping and playback; input parsing and generic export copies remain outside it.
+Malformed settings, unknown keys, nonfinite values, and curves whose order or points the native
+renderer would change remain complete kept steps. Export refuses unrepresentable native options
+and mask targets. The native Shear renderer and its ordinary command behavior are unchanged.
 
 | Key | String ID | Type | Unit | Default | Allowed |
 |---|---|---|---|---|---|
@@ -1507,7 +1811,7 @@ No parameters: the step carries an empty descriptor.
 
 ### Group E: Video, Other and matting filters and the direct Gradient Map / Replace Color adjustments
 
-All commands exist in PhotoCraft; only the `.atn` mapping is missing. Gradient Map and Replace Color here are the direct adjustments (Image > Adjustments), not adjustment layers (those are already mapped).
+All commands exist in PhotoCraft. The two direct adjustments, classic Gradient Map and Lab-range Replace Color, are supported above; the remaining events below still need their `.atn` mappings. These direct adjustments are separate from adjustment layers.
 
 #### De-Interlace
 
@@ -1550,50 +1854,6 @@ No parameters: the step carries an empty descriptor.
 
 No parameters: the step carries an empty descriptor.
 
-#### Gradient Map (direct)
-
-- Event: `GrMp` (no string ID)
-- PhotoCraft command: `image.adjustments.gradientMap`
-- The `gradient` object is the same gradient form the adjustment layer already maps; reuse that code.
-
-| Key | String ID | Type | Unit | Default | Allowed |
-|---|---|---|---|---|---|
-| `` | gradientsInterpolationMethod | enumerated |  |  gradientInterpolationMethodType.'Gcls' classic |  |
-| `Grad` | gradient | object |  | obj 'Grdn' gradientClassEvent |  |
-
-Nested values as recorded (defaults):
-```
-    'Nm  ' name : STRINGTYPE = "Vorder- zu Hintergrundfarbe"
-    'GrdF' gradientForm : ENUMERATEDTYPE = 'GrdF' gradientForm.'CstS' customStops
-    'Intr' interfaceIconFrameDimmed : DOUBLETYPE = 4096
-    'Clrs' colors : LISTTYPE = list[2]
-        [0] OBJECTTYPE = obj 'Clrt' colorStop
-            'Clr ' color : OBJECTTYPE = obj 'RGBC' RGBColor
-                'Rd  ' red : DOUBLETYPE = 0
-                'Grn ' green : DOUBLETYPE = 0
-                'Bl  ' blue : DOUBLETYPE = 0
-            'Type' type : ENUMERATEDTYPE = 'Clry' colorStopType.'UsrS' userStop
-            'Lctn' location : INTEGERTYPE = 0
-            'Mdpn' midpoint : INTEGERTYPE = 50
-        [1] OBJECTTYPE = obj 'Clrt' colorStop
-            'Clr ' color : OBJECTTYPE = obj 'RGBC' RGBColor
-                'Rd  ' red : DOUBLETYPE = 255
-                'Grn ' green : DOUBLETYPE = 255
-                'Bl  ' blue : DOUBLETYPE = 255
-            'Type' type : ENUMERATEDTYPE = 'Clry' colorStopType.'UsrS' userStop
-            'Lctn' location : INTEGERTYPE = 4096
-            'Mdpn' midpoint : INTEGERTYPE = 50
-    'Trns' transparency : LISTTYPE = list[2]
-        [0] OBJECTTYPE = obj 'TrnS' transferSpec
-            'Opct' opacity : UNITDOUBLE = 100 '#Prc' percentUnit
-            'Lctn' location : INTEGERTYPE = 0
-            'Mdpn' midpoint : INTEGERTYPE = 50
-        [1] OBJECTTYPE = obj 'TrnS' transferSpec
-            'Opct' opacity : UNITDOUBLE = 100 '#Prc' percentUnit
-            'Lctn' location : INTEGERTYPE = 4096
-            'Mdpn' midpoint : INTEGERTYPE = 50
-```
-
 #### Average
 
 - Event: `Avrg` (no string ID)
@@ -1613,32 +1873,6 @@ No parameters: the step carries an empty descriptor.
 | `Scl ` | scale | integer |  | 1 | 1 .. 9999 (measured in the dialog); applied also when played without the dialog (scale 2 halves the result) |
 | `Ofst` | offset | integer |  | 0 | -9999 .. 9999 (measured in the dialog); applied also when played without the dialog (offset 50 adds 50) |
 | `Mtrx` | matrix | list |  | none: a step always carries all 25 cells | exactly 25 integers (5 x 5, row by row), each -999 .. 999; a 3 x 3 list makes the application fail |
-
-#### Replace Color
-
-- Event: `RplC` / `replaceColor`
-- PhotoCraft command: `image.adjustments.replaceColor`
-- Measured with example values in a prepared document: the Value column shows what was sent and recorded, not a factory default (a step always carries the values the user set).
-
-| Key | String ID | Type | Unit | Example value | Allowed |
-|---|---|---|---|---|---|
-| `Fzns` | fuzziness | integer |  | 40 | 0 .. 200 (out-of-range values are clamped) |
-| `Mnm ` | minimum | object |  | obj 'LbCl' labColor |  |
-| `Mxm ` | maximum | object |  | obj 'LbCl' labColor |  |
-| `H   ` | hue | integer |  | 30 | -180 .. 180 (out-of-range values are clamped) |
-| `Strt` | saturation | integer |  | 0 | -100 .. 100 (out-of-range values are clamped) |
-| `Lght` | lightness | integer |  | 0 | -100 .. 100 (out-of-range values are clamped) |
-| `` | colorModel | integer |  | 0 |  |
-
-Nested values as recorded (example values):
-```
-    'Lmnc' luminance : DOUBLETYPE = 40
-    'A   ' a : DOUBLETYPE = 30
-    'B   ' b : DOUBLETYPE = 40
-    'Lmnc' luminance : DOUBLETYPE = 40
-    'A   ' a : DOUBLETYPE = 30
-    'B   ' b : DOUBLETYPE = 40
-```
 
 ### Group F: Selection combinations, Paste Into/Outside, Fade, Link, Distribute, Define Pattern and older merge/mask events
 

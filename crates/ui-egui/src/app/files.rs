@@ -13,15 +13,22 @@ impl PhotocraftApp {
         let mut r = self.session.prefs().file_handling.recent_files.clone();
         r.retain(|p| p != path);
         r.insert(0, path.to_string());
+        let evicted: Vec<String> = if r.len() > cap { r[cap..].to_vec() } else { Vec::new() };
         r.truncate(cap);
         self.ui.recent_files = r.clone();
         self.session.prefs.edit(|p| p.file_handling.recent_files = r);
+        let mut cache = self.thumbnail_cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        cache.invalidate(path);
+        for evicted_path in evicted {
+            cache.invalidate(&evicted_path);
+        }
     }
 
     /// File › Open Recent › Clear Recent File List.
     pub fn clear_recent(&mut self) {
         self.ui.recent_files.clear();
         self.session.prefs.edit(|p| p.file_handling.recent_files.clear());
+        self.thumbnail_cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clear();
     }
 
     /// Take one file off the recent list (the Home screen's × or Remove from Recent, #2691). The
@@ -29,6 +36,7 @@ impl PhotocraftApp {
     pub fn remove_recent(&mut self, path: &str) {
         self.ui.recent_files.retain(|p| p != path);
         self.session.prefs.edit(|p| p.file_handling.recent_files.retain(|r| r != path));
+        self.thumbnail_cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner).invalidate(path);
     }
 
     /// How many recent files to remember ("Recent File List Contains", 0–100).
@@ -248,9 +256,10 @@ impl PhotocraftApp {
                 {
                     return r;
                 }
+                let from = app.session.journal.len();
                 let r = app.save_to(path.clone(), choices)?;
                 if plain_save && own.as_deref() == Some(path.as_str()) {
-                    app.journal_as_plain_save(&path);
+                    app.journal_as_plain_save(&path, from);
                 }
                 Ok(r)
             })
@@ -310,8 +319,8 @@ impl PhotocraftApp {
     /// Writes the Save As and journals it as a `file.saveAs` step with its path (and TIFF,
     /// Targa, DDS or JPEG answer), so an action being recorded keeps it (#2032).
     fn save_as_step(&mut self, path: String, tiff_layers: Option<bool>, choices: FormatChoices) -> Result<Value, String> {
-        let r = self.write_save(path.clone(), tiff_layers, choices)?;
-        let mut step = serde_json::json!({"path": path});
+        let mut step = self.save_as_record(&path);
+        let r = self.write_save(path, tiff_layers, choices)?;
         if let Some(layers) = tiff_layers {
             step["tiffLayers"] = layers.into();
         }
@@ -320,11 +329,67 @@ impl PhotocraftApp {
         Ok(r)
     }
 
+    /// The `file.saveAs` step that records a Save As of the active document to `path`, taken
+    /// before the save renames the document. With the document's own name kept (the name Save
+    /// As suggests), only the folder and the extension are recorded, so the action saves each
+    /// document it is played on under that document's name, as in Photoshop (#5305); a name
+    /// typed in is recorded as it is.
+    pub(crate) fn save_as_record(&self, path: &str) -> Value {
+        let file = std::path::Path::new(path);
+        let kept = self.own_file_stem().is_some_and(|own| file.file_stem().is_some_and(|s| s.to_string_lossy() == own));
+        match (kept, file.extension()) {
+            (true, Some(ext)) => {
+                let folder = file.parent().map(|d| d.to_string_lossy().into_owned()).unwrap_or_default();
+                serde_json::json!({"folder": folder, "extension": ext.to_string_lossy()})
+            }
+            _ => serde_json::json!({"path": path}),
+        }
+    }
+
+    /// `step` (a save answered in a format prompt, recorded with its `path`) as
+    /// [`Self::save_as_record`] records it when it is a Save As of the active document.
+    pub(crate) fn record_answered_save_as(&self, record: &str, step: &mut Value) {
+        if record != "file.saveAs" {
+            return;
+        }
+        let Some(path) = step.get("path").and_then(Value::as_str).map(str::to_owned) else { return };
+        if let (Some(s), Value::Object(r)) = (step.as_object_mut(), self.save_as_record(&path)) {
+            s.remove("path");
+            s.extend(r);
+        }
+    }
+
+    /// The name Save As suggests for the active document, without its extension: its file's,
+    /// or its own for a document never saved ("Untitled" for one with no name).
+    fn own_file_stem(&self) -> Option<String> {
+        let st = self.session.active()?;
+        let source = st.path.as_deref().unwrap_or(&st.doc.name);
+        let stem = std::path::Path::new(source).file_stem().map(|s| s.to_string_lossy().into_owned()).filter(|s| !s.is_empty());
+        Some(stem.unwrap_or_else(|| "Untitled".into()))
+    }
+
+    /// The file a recorded `file.saveAs` step writes: its `path`, or for a step recorded with
+    /// the document's own name, that folder and extension with the active document's name.
+    fn recorded_save_path(&self, params: &Value) -> Result<String, String> {
+        if let Some(path) = params.get("path").and_then(Value::as_str).filter(|p| !p.is_empty()) {
+            return Ok(path.to_string());
+        }
+        let (Some(folder), Some(ext)) =
+            (params.get("folder").and_then(Value::as_str), params.get("extension").and_then(Value::as_str).filter(|e| !e.is_empty()))
+        else {
+            return Err("Save As needs a `path`, or a `folder` and an `extension`".into());
+        };
+        let stem = self.own_file_stem().ok_or("no document")?;
+        let name = format!("{stem}.{ext}");
+        Ok(if folder.is_empty() { name } else { std::path::Path::new(folder).join(name).to_string_lossy().into_owned() })
+    }
+
     /// Re-label the Save As just journaled for `path` as File › Save (see [`Self::save_dialog_flow`]),
     /// keeping its Targa, DDS, JPEG or TIFF answer so playback writes the file the same way. A save
     /// parked behind Targa, DDS, JPEG or TIFF Options hasn't been journaled yet: it is recorded as
-    /// File › Save once answered.
-    pub(crate) fn journal_as_plain_save(&mut self, path: &str) {
+    /// File › Save once answered. Only a step journaled at index `from` or later (by this save)
+    /// is re-labeled.
+    pub(crate) fn journal_as_plain_save(&mut self, path: &str, from: usize) {
         let parked = [
             self.targa_options.as_mut().map(|p| (&p.path, &mut p.record)),
             self.dds_options.as_mut().map(|p| (&p.path, &mut p.record)),
@@ -337,19 +402,34 @@ impl PhotocraftApp {
         }
         // Only the path goes: a script's format answer stays, so a replay writes the file it is
         // played on the same way. Any other answer (TIFF layers) keeps the Save As.
-        if let Some(last) = self.session.journal.last_mut()
-            && last.0 == "file.saveAs"
-            && last.1.get("path").and_then(Value::as_str) == Some(path)
+        // A Save As that kept the document's own name was recorded as its folder (#5305); the
+        // document now has that file, so it resolves back to `path`.
+        let journal = &self.session.journal;
+        let recorded = journal.last().filter(|last| last.0 == "file.saveAs" && journal.len() > from).and_then(|last| self.recorded_save_path(&last.1).ok());
+        if recorded.is_some_and(|r| std::path::Path::new(&r) == std::path::Path::new(path))
+            && let Some(last) = self.session.journal.last_mut()
             && let Some(step) = last.1.as_object()
             && step.keys().all(|k| {
                 matches!(
                     k.as_str(),
-                    "path" | "tgaBits" | "ddsCompression" | "ddsMipmaps" | "quality" | "jpegFormat" | "tiffCompression" | "tiffTransparency" | "tiffPyramid"
+                    "path"
+                        | "folder"
+                        | "extension"
+                        | "tgaBits"
+                        | "ddsCompression"
+                        | "ddsMipmaps"
+                        | "quality"
+                        | "jpegFormat"
+                        | "tiffCompression"
+                        | "tiffTransparency"
+                        | "tiffPyramid"
                 )
             })
         {
             let mut step = step.clone();
-            step.remove("path");
+            for k in ["path", "folder", "extension"] {
+                step.remove(k);
+            }
             *last = ("file.save".into(), Value::Object(step));
         }
     }
@@ -382,14 +462,15 @@ impl PhotocraftApp {
             // Export As has its own settings, its TGA bits included (#7207).
             return crate::export_dialog::replay(self, params);
         }
-        let path = params.get("path").and_then(Value::as_str).filter(|p| !p.is_empty()).ok_or("Save As needs a `path`")?;
         let choices = FormatChoices::from_step(params, id)?;
         if id == "file.saveACopy" {
+            let path = params.get("path").and_then(Value::as_str).filter(|p| !p.is_empty()).ok_or("Save a Copy needs a `path`")?;
             // A copy: the document keeps its own file and unsaved state, as when recorded (#4373).
             let doc = self.session.active().ok_or("no document")?.doc.clone();
             return crate::view_cmds::write_copy(self, &doc, path, choices);
         }
-        self.save_as_step(path.to_string(), params.get("tiffLayers").and_then(Value::as_bool), choices)
+        let path = self.recorded_save_path(params)?;
+        self.save_as_step(path, params.get("tiffLayers").and_then(Value::as_bool), choices)
     }
 
     /// What a save writes by default under the preferences: File Handling › Image Previews
@@ -526,6 +607,11 @@ impl PhotocraftApp {
     }
 
     fn saved_inner(&mut self, doc: DocId, revision: u64, path: &str, warnings: &[String], copy: bool, kind: SaveKind) {
+        // Per-output Image Assets failures from the after-save hook, reported with this save (#11117).
+        let mut asset_errors: Vec<String> = Vec::new();
+        // The successful outputs and their folder, kept for the partial-failure status line.
+        let mut asset_ok = 0usize;
+        let mut asset_dir = String::new();
         // Automation: only a layered save becomes the document's file; a flat one is a
         // copy, as in the headless server (#2579).
         let (hooks, arm) = match kind {
@@ -551,15 +637,25 @@ impl PhotocraftApp {
                     app.remember_stamp(doc, path);
                 }
                 // "Save Document" script events and File › Generate › Image Assets.
-                if hooks
-                    && let Some(i) = app.session.active_index()
-                    && let Some(r) = photocraft_engine::automate_cmds::document_saved(&mut app.session, i)
-                {
-                    let template = "Saved {path}; image assets: {n} in {dir}";
-                    app.ui.status = crate::i18n::fmt(
-                        tl!(template),
-                        &[("path", path), ("n", &r["files"].as_array().map_or(0, Vec::len).to_string()), ("dir", r["dir"].as_str().unwrap_or(""))],
-                    );
+                if hooks && let Some(r) = photocraft_engine::automate_cmds::document_saved(&mut app.session, doc) {
+                    let files = r["files"].as_array().map_or(0, Vec::len);
+                    asset_ok = files;
+                    asset_dir = r["dir"].as_str().unwrap_or("").to_string();
+                    let n = files.to_string();
+                    let dir = r["dir"].as_str().unwrap_or("");
+                    asset_errors = r["errors"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .map(|e| format!("{}: {}", e["asset"].as_str().unwrap_or("an asset"), e["error"].as_str().unwrap_or("the export failed")))
+                        .collect();
+                    let template = if asset_errors.is_empty() {
+                        "Saved {path}; image assets: {n} in {dir}"
+                    } else {
+                        "Saved {path}; image assets: {n} in {dir} ({e} failed)"
+                    };
+                    let e = asset_errors.len().to_string();
+                    app.ui.status = crate::i18n::fmt(tl!(template), &[("path", path), ("n", &n), ("dir", dir), ("e", &e)]);
                 }
                 Ok(())
             });
@@ -572,9 +668,25 @@ impl PhotocraftApp {
             // A copy written over the document's own file is this app's change too.
             self.remember_stamp(doc, path);
         }
+        self.thumbnail_cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner).invalidate(path);
         self.ui.status_error = false;
         let what = crate::i18n::fmt(tl!("Saved {name}"), &[("name", file_open::display_name(path).as_str())]);
         notices::io_warnings(self, &what, warnings);
+        // #11117: a successful save whose Image Assets partially failed must say which outputs
+        // did not land, and of which document: the status keeps the full saved path (same-named
+        // documents only differ by their folder) and what did go out, the notice lists every failure.
+        if !asset_errors.is_empty() {
+            let e = asset_errors.len();
+            let full = crate::i18n::fmt(tl!("Saved {name}"), &[("name", path)]);
+            let title = crate::i18n::fmt(
+                &crate::i18n::trn(crate::i18n::current(), e as u64, "{what}: {n} Image Assets output failed", "{what}: {n} Image Assets outputs failed"),
+                &[("what", &full), ("n", &e.to_string())],
+            );
+            let written = crate::i18n::fmt(tl!("{ok} written to {dir}"), &[("ok", &asset_ok.to_string()), ("dir", &asset_dir)]);
+            self.ui.status = format!("{title} ({written}): {}", asset_errors[0]);
+            self.ui.status_error = true;
+            notices::post(self, title, asset_errors, true, None);
+        }
         self.sync_views();
     }
 
@@ -604,9 +716,15 @@ impl PhotocraftApp {
     /// (#2032, #4373), reports a failure in the status bar, and releases a close prompt waiting on
     /// the save.
     pub(crate) fn write_answered_save(&mut self, ctx: &egui::Context, doc: DocId, path: String, settings: &ExportSettings, copy: bool, step: (&str, Value)) {
-        let written = self.with_document(doc, |app| app.write_document(path, settings, copy));
+        let (record, mut step) = step;
+        let written = self.with_document(doc, |app| {
+            // Before the save renames the document: a Save As that keeps its own name records
+            // only the folder (#5305).
+            app.record_answered_save_as(record, &mut step);
+            app.write_document(path, settings, copy)
+        });
         if written.is_ok() {
-            self.session.journal.push((step.0.into(), step.1));
+            self.session.journal.push((record.into(), step));
         }
         match written {
             Err(e) => {
@@ -729,5 +847,72 @@ impl PhotocraftApp {
             crate::new_doc_ui::set_clipboard(&mut f, c.bounds.width(), c.bounds.height());
         }
         f
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #11117: when Image Assets partially failed after a successful user save, the failures
+    /// were dropped with the hook result and the status only counted the assets that worked.
+    #[test]
+    fn a_user_save_reports_image_assets_outputs_that_failed() {
+        let unique = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+        let root = std::env::temp_dir().join(format!("photocraft-11117-{}-{unique}", std::process::id()));
+        let assets = root.join("probe-assets");
+        std::fs::create_dir_all(&assets).unwrap();
+        // `blocked` is a regular file, so the `blocked/fail.png` asset cannot create its folder;
+        // `good.png` stays writable. No permissions or artificial results are involved.
+        std::fs::write(assets.join("blocked"), "not a folder").unwrap();
+        let path = root.join("probe.psd").to_string_lossy().into_owned();
+
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        // A save script closes this earlier tab, shifting the saved document's index.
+        app.session.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+        app.session.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+        let doc = app.session.active().unwrap().doc.id;
+        for name in ["good.png", "blocked/fail.png"] {
+            let id = app.session.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap();
+            // A layer with no pixels is "the layer is empty" before its path is even looked at,
+            // so both layers carry a painted pixel and only the blocked folder can fail.
+            app.session.execute("edit.fill", json!({"contents": "color", "color": "#808080"})).unwrap();
+            app.session.execute("layer.renameLayer", json!({"layer": id, "name": name})).unwrap();
+        }
+        app.session.prefs.edit(|p| p.plug_ins.generator_enabled = true);
+        app.session.file_menu.image_assets.push(doc);
+        app.session
+            .execute("file.scripts.scriptEventsManager", json!({"enabled": true, "add": {"event": "saveDocument", "steps": [["file.close", {"document": 0}]]}}))
+            .unwrap();
+
+        let revision = app.session.active().unwrap().revision;
+        app.saved(doc, revision, &path, &[], false);
+
+        assert_eq!(app.session.documents().len(), 1);
+        assert_eq!(app.session.active().unwrap().doc.id, doc);
+
+        assert_eq!(app.session.active().unwrap().path.as_deref(), Some(path.as_str()), "the document save itself succeeded");
+        assert!(assets.join("good.png").is_file(), "the good asset was exported");
+        let notice = app.ui.notices.iter().find(|notice| notice.error).expect("the failed asset is reported as an error notice");
+        assert_eq!(notice.title, format!("Saved {path}: 1 Image Assets output failed"), "the failure names the saved document by its full path");
+        assert_eq!(notice.lines.len(), 1, "{:?}", notice.lines);
+        assert!(notice.lines[0].starts_with("blocked/fail.png: asset path"), "{:?}", notice.lines[0]);
+        assert!(app.ui.status_error, "the status line carries the failure");
+        assert!(app.ui.status.starts_with(&notice.title), "{}", app.ui.status);
+        assert!(
+            app.ui.status.contains("1 written to") && app.ui.status.contains("blocked/fail.png"),
+            "the status keeps the success count, folder and first failure: {}",
+            app.ui.status
+        );
+        // A clean generation afterwards reports the success line with no error notice (#11079 control).
+        app.ui.notices.clear();
+        app.session.execute("file.scripts.scriptEventsManager", json!({"enabled": false})).unwrap();
+        std::fs::remove_file(assets.join("blocked")).unwrap();
+        let revision = app.session.active().unwrap().revision;
+        app.saved(doc, revision, &path, &[], false);
+        assert!(app.ui.notices.iter().all(|notice| !notice.error), "no notice when every asset went out");
+        assert!(!app.ui.status_error);
+        assert!(app.ui.status.contains("image assets: 2 in"), "{}", app.ui.status);
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

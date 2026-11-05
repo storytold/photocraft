@@ -169,6 +169,7 @@ By default PhotoCraft's own crates log at `info` and everything else at `warn`. 
 
 | Variable | Effect |
 |---|---|
+| `PHOTOCRAFT_GPU=1` (or `=0`) | Headless CLI: prefer GPU composition and flat export (0 to disable, empty to unset). Explicit `--gpu`/`--no-gpu` CLI flags override this variable. `file.export.quickExport` composites and encodes inside the engine, which has no renderer, so it always runs on the CPU; `run --gpu` prints a one-time warning when a step uses it |
 | `PHOTOCRAFT_CONTROL_PORT` | Same as `--control <port>`; also the port for `photocraft-cli serve --port` and `mcp --bridge` when the flag is absent. Empty is unset |
 | `PHOTOCRAFT_NO_PRINT` | Set to anything but `0`: `file.print` / `file.printOneCopy` refuse to spool (`dryRun` still works). CI sets it, with `LPDEST=photocraft-no-such-printer` as a second net; set both when running the panic hunt or fuzzers locally |
 | `RUST_LOG` | Log levels for standard error and the log file (see [Logs](#logs)) |
@@ -267,6 +268,17 @@ ln -s photocraft-<version>-linux-x86_64.AppImage photocraft-cli
 ```
 
 The `--cli` selector is removed; all remaining arguments, stdin, stdout, stderr and the exit status are passed through. CLI launches skip desktop integration. The symlink form uses the AppImage runtime's `ARGV0`; the normal AppImage name launches the GUI.
+
+### GPU rendering
+
+PhotoCraft CLI supports optional native GPU acceleration for flat exports and composition in `convert`, `run`, `batch`, `serve`, and headless `mcp`:
+
+- `--gpu`: Opt into GPU acceleration. Prefers a hardware adapter, performs bounded multi-band readback, and automatically falls back to CPU if an unsupported document feature (such as unsupported blend modes or layered saves) is encountered or if the GPU device becomes unavailable.
+- `--no-gpu`: Explicitly disable GPU rendering and use CPU composition (the default).
+- `PHOTOCRAFT_GPU`: Environment variable equivalent when neither flag is supplied (`1` enables GPU, `0` disables it). An empty or whitespace-only value is treated as unset (defaulting to CPU). Any other value is rejected with a usage error naming the variable. Explicit `--gpu` or `--no-gpu` flags always override the environment variable.
+- **Backend scope and limitations**: GPU acceleration applies to flat exports (e.g. PNG, JPEG, WebP, flat TIFF). Layered/native saves (`.pcraft`, PSD, TIFF with layers) and embedded thumbnail generation remain CPU operations.
+- **Diagnostics and protocol safety**: GPU initialization status, adapter information, and deduplicated fallback warnings are written to standard error. Standard output (JSON lines in `run`, MCP protocol frames, etc.) is never polluted with diagnostics.
+- **Bridge MCP**: When `photocraft-cli mcp` is bridged to a running desktop app (`--bridge`), explicit `--gpu` / `--no-gpu` flags are rejected because the desktop process controls rendering. `PHOTOCRAFT_GPU` is ignored in bridge mode to prevent ambient environment variables from disrupting live bridges.
 
 `actions.json` holds the steps of a recorded action: `[["<id>", {…}], …]`, `[{"command": "<id>", "params": {…}}, …]` or bare ids, as a list or wrapped in `{"actions": …}` or `{"steps": …}`; a droplet file works too. It can also be an Actions set (the Actions panel's `actions.json`, `{"actions": [{"name": …, "steps": […]}, …]}`): `--action <name>` picks the action to play (optional when the set holds one), and the whole set is loaded for each file, so a step that plays another action of the set works. `batch` refuses an `--out` folder that is the `--in` folder, since the results would replace the originals, unless `--in-place` is given. `run` prints one JSON line per command result.
 
@@ -428,9 +440,30 @@ can't run.
 - **Numbers** (7360 × 4912, 8 text layers + one painted layer with drop shadow + stroke + bevel, Hue/Saturation on top; M4 Pro; `cargo run --release -p photocraft-ui-egui --example fx_bench`), CPU fallback → GPU: full refresh with warm effect maps 5.7 s → 47 ms; Hue/Saturation tweak above the effects 4.7 s → 31 ms; brush dab on a plain layer 32 → 1.7 ms; brush dab on the effect layer (its maps rebuilt around the dab) 659 → 3.7 ms; first refresh (all maps built) 6.4 s → 0.39 s. With the CPU ~14× oversubscribed by parallel builds (min of 7 runs): 8.1 s → 0.33 s, 9.9 s → 0.28 s, 28 → 2.2 ms, 1.7 s → 89 ms; moving a text layer 7 px 336 → 13 ms. `fx_bench --compare corpus/psd/…/*.psd` reports the GPU vs CPU difference on real files (30 of the 31 corpus files with effects render on the GPU, worst 0.12/255).
 - On the CPU path `compose::effect_maps` caches shadow, glow, bevel and satin maps per layer state (LRU, 768 MB budget).
 - Live adjustment previews on large documents use a downsampled proxy (`ui-egui/src/proxy.rs`).
+- **Opening JPEG and PNG files** (#10259). `cargo run --release -p photocraft-ui-egui --example flat_open_bench` generates 24 and 36 MP JPEG, PNG RGB 8-bit, RGB 16-bit and RGBA 8-bit inputs (and a JPEG with EXIF orientation 6) from seeded gradients and noise, caches them in the target directory's `fixtures/` (`--cache`), and times the real open (`import`), session `admission`, the codec `decode`, `orient`, `tiles` (`image_to_document`), the `first composite` and the whole `editable` chain. Each case runs in its own process (`--case <key>` runs one by hand). Its peak resident memory (`VmHWM`, Linux only, else `n/a`) is a process-lifetime high-water mark: `peak_process_after_import_bytes` is read after real import and admission, while `peak_process_after_all_passes_bytes` also includes the standalone decode/orient/tiles pass, GPU setup and warm-up, and editable-open passes. The latter is not an isolated composite or editable-open peak. Each timing row identifies which reading it carries in `peak_rss_provenance`. `--quick` uses 1200x800 images, `--only <substring>` filters cases, `--cpu` skips the GPU, `--json <file>` writes the report `cargo xtask perf` reads (scenarios P83 to P86).
 - **Content-Aware tools** (`algo::inpaint`, `algo::content_aware`: Fill, Spot Healing, Patch, Content-Aware Move). `cargo run --release -p photocraft-engine --example content_aware_bench -- bench caf|heal|cancel` times the P21, P22 and P49 rows without the UI, one sample per line, so two builds can be run in turn and pooled. `-- hash` prints a hash of every tool's output at 8, 16 and 32 bits and in Gray, CMYK and Lab: the fill is fitted to Photoshop, so a speed-up must leave both builds' lists equal. The solver works only over the hole's bounds grown by a patch radius (nothing else changes or is matched). PatchMatch sweeps its bands in wavefronts when there are fewer bands than threads; each cell sees the same neighbours and random numbers as in raster order, so the result does not depend on the thread count. Cancellation is checked per row: a 24 MP fill stops within tens of milliseconds, most of it spent freeing its buffers.
 - `ui.inspect` returns `perf` timings (UI ms per frame, composite ms, upload ms).
 - Never scan full surfaces per frame. Cache per document revision (`PhotocraftApp::cached_bounds`). An uncached `content_bounds()` on a 36 MP layer once cost 77 ms per frame.
+
+### Headless GPU rendering and flat export (issue #8062)
+
+PhotoCraft foundation PR 1 adds an optional, additive headless GPU rendering backend for flat export and headless automation sessions:
+
+- **Layering & Contracts:**
+  - `photocraft-gpu` (L3) provides windowless native context creation ([`NativeContext`]), checked bounded band readback ([`readback::render_bands`]), and device health monitoring ([`DeviceHealth`]). It does not depend on IO or UI crates.
+  - `photocraft-io` (L4) defines the renderer contract ([`BandRenderer`], [`CpuRenderer`], [`RenderBand`], [`RenderError`]) and additive export entrypoints ([`export_with_renderer`], [`export_flat_with_renderer`], [`document_to_image_with_renderer`]). Wgpu types are excluded from the public IO contract.
+  - `photocraft-automation` (L6) provides the [`GpuRenderer`] adapter behind the `gpu` cargo feature, with lazy adapter initialization, compositor caching across edits, capability-scoped writes, and preview sizing.
+
+- **Supported Matrix:**
+  - Color modes: RGB and Grayscale (including ICC profile conversions and working spaces).
+  - Depth: 8-bit unsigned integer. 16-bit unsigned integer and 32-bit floating point documents use the CPU compositor: layer content is uploaded as half-precision textures, which cannot preserve their samples.
+  - Features: Straight-alpha transparency, Photoshop blend modes, opacity × fill opacity, layer masks, vector masks, clipping groups, isolated/pass-through groups, adjustments, solid/gradient fills, and GPU-supported layer effects.
+  - Targets: Flat raster exports (PNG, JPEG, TIFF, WebP, etc.) and automation `render_png` previews.
+
+- **Conservative CPU Fallback:**
+  - Documents requiring ink-value mixing ([`cmyk::renders_inks`]), Multichannel documents, and unproven features fall back to the CPU reference compositor.
+  - Any compositor rejection ([`Compositor::supports`]), device loss, shader compiler error, staging allocation limit, or buffer mapping failure triggers a 100% whole-export restart on the CPU compositor, discarding partial GPU attempts. No CPU and GPU bands are ever mixed.
+  - Atomic destination writes guarantee that failed exports never corrupt or replace existing files on disk.
 
 ## Scorecard and performance budgets
 
@@ -512,6 +545,16 @@ That writes the row's own report and stops there: it does **not** evaluate the b
 want the verdict, the merged `results.json`/`summary.md` and the regression check.
 Every `--bench` name must match a `[[bench]]` name in `perf/budgets.toml`; an unknown name
 is rejected before any benchmark runs or any report or baseline is written.
+
+`perf_scenarios` rows that time a command and then the canvas refresh after it also split each
+sample: `cmd_samples_ms` and `refresh_samples_ms` (`samples_ms`, what budgets judge, is their sum),
+`refresh_kinds` (how many refreshes were `gpu-rect`, `gpu-full`, `rect`/`full` on the CPU
+compositor, also without an adapter, `none` when nothing needed drawing, …) and `fallbacks` (why
+the wgpu compositor didn't draw, `CpuReason::kind`). The console line ends with the medians, e.g.
+`cmd 0.06 + refresh 1.71 ms {"gpu-rect": 7}`, so a slow row says whether the engine or the canvas
+is the cost before you profile it. The bench refreshes like the app's `damage_since`: the last
+edit's rect only when the canvas showed the revision before it, else everything; a row whose timed
+refresh also had to draw untimed setup edits is reported on stderr.
 
 Read the sample count before quoting a percentile. `--reps` defaults to 7 in `--quick` and 15
 otherwise, it is per bench, and some rows cap it themselves (the `#211` algorithm rows use
@@ -637,6 +680,22 @@ PhotoCraft equivalent.
 
 Events outside the table load as `actions.photoshopStep` steps that keep the descriptor
 verbatim (so Save Actions writes them back) and fail at playback with the step's Photoshop name.
+
+Recorded direct Gradient Map (`GrMp`) and Replace Color (`RplC`) forms are described in
+[the ATN reference](atn.md#supported-direct-adjustment-settings), based on davidmann4's
+measurements in #10603. Gradient Map keeps its event, fractional RGB stops and recorded name;
+unsupported interpolation, midpoint and transparency settings remain preserved steps.
+Replace Color accepts `labMinimum` / `labMaximum` (three D50 Lab numbers each), mutually
+exclusive with RGB samples and localized settings. The new option matches native surface samples through
+the document profile, retains alpha and untouched native pixels, and uses one undoable edit.
+A zero tone shift validates its inputs without changing pixels. The existing RGB option keeps
+its previous behavior. Explicit Lab bounds require a composite pixel-layer target.
+
+Artboard from Group action settings follow [the measured guide/background behavior](atn.md#newer-events-string-id-only):
+guide IDs are ignored session metadata, 1 or absent `changeBackground` applies the
+background, and other integer flags give white. The group's bounds are retained.
+Background-only `editArtboardEvent` uses the existing Artboard edit command; its
+recorded rectangle/preset are retained for saving, without resizing the target.
 
 `crates/psd/tests/it/atn_contract.rs` checks the parser's public API against small, independently
 encoded version-16 fixtures (the version-12 ones are read by `atn_v12::`) in `crates/psd/tests/fixtures/atn/` (provenance and checksums in
