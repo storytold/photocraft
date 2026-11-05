@@ -391,28 +391,10 @@ impl Compositor {
         let read = window.intersect(&blur.extent);
         let read = if read.is_empty() { window } else { read };
         let tiles: Vec<(TileCoord, Arc<Tile>)> = read.tiles().filter_map(|c| surface.tile(c).map(|t| (c, t.clone()))).collect();
-        let source_print = {
-            let mut h = std::collections::hash_map::DefaultHasher::new();
-            // The depth picks the source texels' format (RGBA8 or floats).
-            std::hash::Hash::hash(&(window, blur.extent, blur.depth as u8), &mut h);
-            for (c, t) in &tiles {
-                std::hash::Hash::hash(&(c.tx, c.ty, Arc::as_ptr(t) as usize), &mut h);
-            }
-            std::hash::Hash::hash(&surface.default_pixel().iter().map(|v| v.to_bits()).collect::<Vec<_>>(), &mut h);
-            std::hash::Hasher::finish(&h)
-        };
-        let fresh = |s: &Self, k: &ResKey, r: Rect, print: u64| s.residents.get(k).is_some_and(|x| x.region == r) && s.op_made.get(k) == Some(&print);
-        // A page reused in this call is marked used now, so making the next one can't evict it.
-        let touch = |s: &mut Self, k: &ResKey| {
-            let (frame, stamp) = (s.frame, s.stamp);
-            if let Some(r) = s.residents.get_mut(k) {
-                r.last_used = frame;
-                r.stamp = stamp;
-            }
-        };
+        let source_print = source_fingerprint(window, blur, &tiles, surface);
         let mut changed = false;
-        if fresh(self, &wk, window, source_print) {
-            touch(self, &wk);
+        if self.op_fresh(&wk, window, source_print) {
+            self.op_touch(&wk);
         } else {
             // 8-bit sources as 8-bit texels: exact, and a quarter of the upload.
             let eight = operator::source_is_8bit(blur.depth);
@@ -447,8 +429,8 @@ impl Compositor {
                 std::hash::Hash::hash(&(Arc::as_ptr(sel) as usize, *sr), &mut h);
                 std::hash::Hasher::finish(&h)
             };
-            if fresh(self, &mk, *sr, print) {
-                touch(self, &mk);
+            if self.op_fresh(&mk, *sr, print) {
+                self.op_touch(&mk);
             } else if !sr.is_empty() {
                 let texture = self.create_layer_texture(device, &desc("pc_operator_selection", *sr), mk, bytes(*sr), stats)?;
                 let k: Vec<[f32; 4]> = operator::read_selection(sel, *sr).into_iter().map(|v| [v, 0.0, 0.0, 0.0]).collect();
@@ -480,8 +462,8 @@ impl Compositor {
                 std::hash::Hasher::finish(&h)
             };
             let r = Rect::from_xywh(0, 0, map_size[0], map_size[1]);
-            if fresh(self, &map_key, r, print) {
-                touch(self, &map_key);
+            if self.op_fresh(&map_key, r, print) {
+                self.op_touch(&map_key);
             } else {
                 let texture = self.create_layer_texture(device, &desc("pc_operator_map", r), map_key, bytes(r), stats)?;
                 operator::write_texels(queue, &texture, r.width(), r.height(), map);
@@ -494,13 +476,17 @@ impl Compositor {
                 changed = true;
             }
         }
+        // Lens Blur's depth map over the output, once per map (`op_pins` holds it).
+        let depth_key = (op.layer, Role::OperatorMap, cell);
+        let texture = desc("pc_operator_depth", region);
+        changed |= self.sync_lens_depth(device, queue, &texture, &blur.blur, depth_key, region, surface, doc, stats)?;
         // The output: redrawn when the program, the window or the selection changed.
         let print = {
             let mut h = std::collections::hash_map::DefaultHasher::new();
             std::hash::Hash::hash(&(op.program.key(), source_print, region, self.op_made.get(&mk).copied()), &mut h);
             std::hash::Hasher::finish(&h)
         };
-        if changed || !fresh(self, &ok, region, print) {
+        if changed || !self.op_fresh(&ok, region, print) {
             if !self.operators_supported(device) {
                 self.layer_alloc = Some("GPU layer operators are unavailable on this device".into());
                 return None;
@@ -511,9 +497,10 @@ impl Compositor {
                 None => self.create_layer_texture(device, &desc("pc_operator_output", region), ok, bytes(region), stats)?,
             };
             let size = [sub.width(), sub.height()];
+            let scratch_size = operator::scratch_size(&blur.blur, size);
             let count = operator::scratch_count(&blur.blur);
-            if self.op_scratch.as_ref().is_none_or(|(s, t)| s[0] < size[0] || s[1] < size[1] || t.len() < count) {
-                let grown = self.op_scratch.as_ref().map_or(size, |(s, _)| [s[0].max(size[0]), s[1].max(size[1])]);
+            if self.op_scratch.as_ref().is_none_or(|(s, t)| s[0] < scratch_size[0] || s[1] < scratch_size[1] || t.len() < count) {
+                let grown = self.op_scratch.as_ref().map_or(scratch_size, |(s, _)| [s[0].max(scratch_size[0]), s[1].max(scratch_size[1])]);
                 // Within the budget and its fallback, as layer pages are: the old set goes first,
                 // room is made for the whole new set, and each texture counts once made.
                 self.op_scratch = None;
@@ -551,6 +538,12 @@ impl Compositor {
                     let map = self.residents.get(&map_key).map(|r| r.texture.clone())?;
                     operator::record_remap(device, encoder, kit, d, &source, window, &map, region, surface.format().alpha, scratch)?
                 }
+                SeparableBlur::Lens(lens) => {
+                    let out = region.translate(-sub.x0, -sub.y0);
+                    self.lens_depth_texture(device, lens, &depth_key).and_then(|depth| {
+                        operator::record_lens(device, encoder, kit, lens, &source, origin, size, [sub.x0, sub.y0], out, &depth, surface.format(), scratch)
+                    })?
+                }
                 other => operator::record_blur(device, encoder, kit, other, &source, origin, size, scratch)?,
             };
             let fmt = surface.format();
@@ -579,7 +572,7 @@ impl Compositor {
             self.op_made.insert(ok, print);
             stats.operator_cells += 1;
         }
-        for k in [wk, ok, mk, map_key] {
+        for k in [wk, ok, mk, map_key, depth_key] {
             if let Some(r) = self.residents.get_mut(&k) {
                 r.last_used = self.frame;
                 r.stamp = self.stamp;
@@ -590,6 +583,68 @@ impl Compositor {
     }
 
     /// A resident holding an operator's float texture over `region`.
+    /// Whether operator page `k` covers `r` and was made from `print`.
+    fn op_fresh(&self, k: &ResKey, r: Rect, print: u64) -> bool {
+        self.residents.get(k).is_some_and(|x| x.region == r) && self.op_made.get(k) == Some(&print)
+    }
+
+    /// Marks page `k` used now: one reused while a refresh makes others can't be evicted by them.
+    fn op_touch(&mut self, k: &ResKey) {
+        let (frame, stamp) = (self.frame, self.stamp);
+        if let Some(r) = self.residents.get_mut(k) {
+            r.last_used = frame;
+            r.stamp = stamp;
+        }
+    }
+
+    /// Lens Blur's depth map over `region` as page `key` (described by `desc`), uploaded once per
+    /// map (`op_pins` holds it): whether it was uploaded now (never for other programs, or a Lens
+    /// Blur without a map). `None` when a texture can't be had.
+    #[allow(clippy::too_many_arguments)]
+    fn sync_lens_depth(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        desc: &wgpu::TextureDescriptor<'_>,
+        blur: &SeparableBlur,
+        key: ResKey,
+        region: Rect,
+        surface: &Surface,
+        doc: DocId,
+        stats: &mut Stats,
+    ) -> Option<bool> {
+        let SeparableBlur::Lens(lens) = blur else { return Some(false) };
+        let operator::LensDepth::Map(depth) = &lens.depth else { return Some(false) };
+        let print = {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            std::hash::Hash::hash(&(Arc::as_ptr(depth) as usize, region), &mut h);
+            std::hash::Hasher::finish(&h)
+        };
+        if self.op_fresh(&key, region, print) {
+            self.op_touch(&key);
+            return Some(false);
+        }
+        let bytes = u64::from(region.width()) * u64::from(region.height()) * 16;
+        let texture = self.create_layer_texture(device, desc, key, bytes, stats)?;
+        let k: Vec<[f32; 4]> = operator::read_selection(depth, region).into_iter().map(|v| [v, 0.0, 0.0, 0.0]).collect();
+        operator::write_texels(queue, &texture, region.width(), region.height(), &k);
+        self.staged += bytes;
+        let resident = self.operator_resident(texture, region, surface, doc);
+        self.residents.insert(key, resident);
+        self.op_made.insert(key, print);
+        self.op_pins.insert(key, Arc::clone(depth));
+        Some(true)
+    }
+
+    /// The depth texture Lens Blur's passes read: its map's page (`sync_lens_depth`), or a
+    /// stand-in when it has none. `None` when the page isn't there.
+    fn lens_depth_texture(&self, device: &wgpu::Device, lens: &operator::LensParams, key: &ResKey) -> Option<wgpu::Texture> {
+        match &lens.depth {
+            operator::LensDepth::Map(_) => self.residents.get(key).map(|r| r.texture.clone()),
+            _ => Some(operator::float_texture(device, "pc_operator_depth_none", 1, 1)),
+        }
+    }
+
     fn operator_resident(&self, texture: wgpu::Texture, region: Rect, surface: &Surface, doc: DocId) -> Resident {
         let view = texture.create_view(&Default::default());
         Resident {
@@ -832,9 +887,23 @@ impl Compositor {
     }
 }
 
+/// What a layer operator's source window holds: the window, the extent and depth it reads, and
+/// its tiles (by identity) and the surface's default pixel, so an unchanged window isn't uploaded
+/// again.
+fn source_fingerprint(window: Rect, blur: &operator::GaussianBlur, tiles: &[(TileCoord, Arc<Tile>)], surface: &Surface) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    // The depth picks the source texels' format (RGBA8 or floats).
+    std::hash::Hash::hash(&(window, blur.extent, blur.depth as u8), &mut h);
+    for (c, t) in tiles {
+        std::hash::Hash::hash(&(c.tx, c.ty, Arc::as_ptr(t) as usize), &mut h);
+    }
+    std::hash::Hash::hash(&surface.default_pixel().iter().map(|v| v.to_bits()).collect::<Vec<_>>(), &mut h);
+    std::hash::Hasher::finish(&h)
+}
+
 /// Whether every texture `blur`'s passes need over source `window` and output part `sub` is
-/// within `max` px a side: the window (a warp's is the layer's whole extent), the output and
-/// Displace's map.
+/// within `max` px a side: the window (a warp's is the layer's whole extent), the scratch
+/// textures (Lens Blur's prefix sums are one column wider than `sub`) and Displace's map.
 fn fits_device(blur: &SeparableBlur, max: u32, window: Rect, sub: Rect) -> bool {
     let map_size = match blur {
         SeparableBlur::Remap(r) => match &r.mapping {
@@ -844,5 +913,5 @@ fn fits_device(blur: &SeparableBlur, max: u32, window: Rect, sub: Rect) -> bool 
         _ => [1, 1],
     };
     let fits = |w: u32, h: u32| w <= max && h <= max;
-    fits(window.width(), window.height()) && fits(sub.width(), sub.height()) && fits(map_size[0], map_size[1])
+    fits(window.width(), window.height()) && fits(sub.width().saturating_add(1), sub.height()) && fits(map_size[0], map_size[1])
 }

@@ -617,6 +617,213 @@ fn remap_pass(@builtin(global_invocation_id) g: vec3<u32>) {
     textureStore(dout, vec2<i32>(g.xy), src_sample(at.x, at.y));
 }
 
+// ---- Lens Blur (`blur2::lens_blur`) ----
+// `lens_prefix`: per window row, the running sums of the premultiplied pixels (highlights above
+// the threshold boosted first), one column wider than the window. `lens_mean`: per output pixel,
+// the iris for its depth as the sum of its rows' prefix differences, blended between two depth
+// levels, back to straight, with noise.
+
+struct LensPass {
+    // The window: its size, and where it starts in `lsrc`.
+    size: vec2<u32>,
+    origin: vec2<u32>,
+    // The output area inside the window, window pixels: where it starts, and its size.
+    out_origin: vec2<u32>,
+    out_size: vec2<u32>,
+    // The window's first pixel in document pixels (the noise is seeded by document position).
+    doc_origin: vec2<i32>,
+    levels: u32,
+    // 0 none, 1 the layer's transparency, 2 the depth map in `ldepth`.
+    depth: u32,
+    boost: f32,
+    threshold: f32,
+    focal: f32,
+    noise: f32,
+    // 1 alpha, 2 Grayscale, 4 Gaussian noise, 8 monochromatic, 16 invert the depth.
+    flags: u32,
+    seed: u32,
+    // Where the area summed starts in the result (it is written in window pixels).
+    store_offset: vec2<u32>,
+}
+
+@group(0) @binding(0) var lsrc: texture_2d<f32>;
+@group(0) @binding(1) var lprefix: texture_2d<f32>;
+@group(0) @binding(2) var ldepth: texture_2d<f32>;
+@group(0) @binding(3) var lout: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(4) var<uniform> lp: LensPass;
+@group(0) @binding(5) var<storage, read> lspans: array<i32>;
+
+fn lens_flag(bit: u32) -> bool {
+    return (lp.flags & bit) != 0u;
+}
+
+// `fxutil::smoothstep`.
+fn smooth01(e0: f32, e1: f32, x: f32) -> f32 {
+    if e1 <= e0 {
+        return select(0.0, 1.0, x >= e1);
+    }
+    let t = clamp((x - e0) / (e1 - e0), 0.0, 1.0);
+    return t * t * (3.0 - 2.0 * t);
+}
+
+// The window pixel at `at`, premultiplied, its highlight boosted (as `lens_blur` does before
+// blurring).
+fn lens_pixel(at: vec2<i32>) -> vec4<f32> {
+    let v = textureLoad(lsrc, at + vec2<i32>(lp.origin), 0);
+    let alpha = lens_flag(1u);
+    let a = select(1.0, v.w, alpha);
+    var p = vec4<f32>(select(v.xyz, v.xyz * a, alpha), select(v.w, a, alpha));
+    if lp.boost > 0.0 && a > 0.0 {
+        // The straight colour as the CPU recovers it from the premultiplied one.
+        let st = select(p.xyz, p.xyz / a, alpha);
+        var l = 0.299 * st.x + 0.587 * st.y + 0.114 * st.z;
+        if lens_flag(2u) {
+            l = st.x;
+        }
+        let k = 1.0 + lp.boost * smooth01(lp.threshold, lp.threshold + 0.02, l);
+        p = vec4<f32>(p.xyz * k, p.w);
+    }
+    return p;
+}
+
+// Each row's chunks' sums, scanned into running sums for the chunks after them.
+var<workgroup> lens_chunks: array<vec4<f32>, 128>;
+
+// One workgroup per row: each invocation sums its chunk of the row, the chunks' sums are scanned
+// (in log steps), then each writes its chunk's running sums from the chunks before it.
+@compute @workgroup_size(128)
+fn lens_prefix(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_index) li: u32) {
+    let y = wg.x;
+    if y >= lp.size.y {
+        return;
+    }
+    let per = (lp.size.x + 127u) / 128u;
+    let x0 = min(li * per, lp.size.x);
+    let x1 = min(x0 + per, lp.size.x);
+    var acc = vec4<f32>(0.0);
+    for (var x = x0; x < x1; x++) {
+        acc += lens_pixel(vec2<i32>(i32(x), i32(y)));
+    }
+    lens_chunks[li] = acc;
+    for (var step = 1u; step < 128u; step *= 2u) {
+        workgroupBarrier();
+        var v = lens_chunks[li];
+        if li >= step {
+            v += lens_chunks[li - step];
+        }
+        workgroupBarrier();
+        lens_chunks[li] = v;
+    }
+    workgroupBarrier();
+    acc = vec4<f32>(0.0);
+    if li > 0u {
+        acc = lens_chunks[li - 1u];
+    } else {
+        textureStore(lout, vec2<i32>(0, i32(y)), acc);
+    }
+    for (var x = x0; x < x1; x++) {
+        acc += lens_pixel(vec2<i32>(i32(x), i32(y)));
+        textureStore(lout, vec2<i32>(i32(x) + 1, i32(y)), acc);
+    }
+}
+
+// `Prefix::mean`: the mean over iris level `level` at window pixel (x, y).
+fn lens_level_mean(level: u32, x: i32, y: i32) -> vec4<f32> {
+    let start = u32(lspans[level]);
+    let end = u32(lspans[level + 1u]);
+    let count = bitcast<f32>(lspans[lp.levels + 1u + level]);
+    let base = 2u * lp.levels + 1u;
+    let w = i32(lp.size.x);
+    var acc = vec4<f32>(0.0);
+    for (var k = start; k < end; k++) {
+        let dy = lspans[base + 3u * k];
+        let a = lspans[base + 3u * k + 1u];
+        let b = lspans[base + 3u * k + 2u];
+        let yy = y + dy;
+        if yy < 0 || yy >= i32(lp.size.y) {
+            continue;
+        }
+        let x0 = clamp(x + a, 0, w);
+        let x1 = clamp(x + b + 1, 0, w);
+        acc += textureLoad(lprefix, vec2<i32>(x1, yy), 0) - textureLoad(lprefix, vec2<i32>(x0, yy), 0);
+    }
+    return acc / count;
+}
+
+// `noise::hash01`.
+fn hash01(x: i32, y: i32, c: u32, seed: u32) -> f32 {
+    var h = (bitcast<u32>(x) * 0x8da6b343u) ^ (bitcast<u32>(y) * 0xd8163841u) ^ (c * 0xcb1ab31fu) ^ (seed * 0x9e3779b9u);
+    h ^= h >> 16u;
+    h *= 0x7feb352du;
+    h ^= h >> 15u;
+    h *= 0x846ca68bu;
+    h ^= h >> 16u;
+    return f32(h >> 8u) / 16777216.0;
+}
+
+// The noise for channel `c` at document (x, y).
+fn lens_noise(x: i32, y: i32, c: u32) -> f32 {
+    let ch = select(c, 0u, lens_flag(8u));
+    if lens_flag(4u) {
+        let u1 = max(hash01(x, y, ch * 2u + 301u, lp.seed), 1e-7);
+        let u2 = hash01(x, y, ch * 2u + 302u, lp.seed);
+        return sqrt(-2.0 * log(u1)) * cos(6.2831855 * u2) * lp.noise * 0.5;
+    }
+    return (hash01(x, y, ch + 200u, lp.seed) - 0.5) * 2.0 * lp.noise;
+}
+
+@compute @workgroup_size(8, 8)
+fn lens_mean(@builtin(global_invocation_id) g: vec3<u32>) {
+    if g.x >= lp.out_size.x || g.y >= lp.out_size.y {
+        return;
+    }
+    let at = vec2<i32>(lp.out_origin + g.xy);
+    let levels = lp.levels - 1u;
+    var level = f32(levels);
+    if lp.depth != 0u {
+        var d = 0.0;
+        if lp.depth == 1u {
+            d = select(0.0, textureLoad(lsrc, at + vec2<i32>(lp.origin), 0).w, lens_flag(1u));
+        } else {
+            d = textureLoad(ldepth, vec2<i32>(g.xy), 0).x;
+        }
+        if lens_flag(16u) {
+            d = 1.0 - d;
+        }
+        // No alpha to read: the whole iris, as the CPU's `None`.
+        if lp.depth == 1u && !lens_flag(1u) {
+            level = f32(levels);
+        } else {
+            level = min(abs(d - lp.focal) * f32(levels), f32(levels));
+        }
+    }
+    let lo = u32(floor(level));
+    let f = level - f32(lo);
+    var acc = lens_level_mean(lo, at.x, at.y);
+    if f > 1e-4 && lo < levels {
+        let acc2 = lens_level_mean(lo + 1u, at.x, at.y);
+        acc += (acc2 - acc) * f;
+    }
+    var px = acc;
+    let alpha = lens_flag(1u);
+    if alpha {
+        px = vec4<f32>(select(vec3<f32>(0.0), px.xyz / px.w, px.w > 1e-7), px.w);
+    } else {
+        px.w = 1.0;
+    }
+    if lp.noise > 0.0 && (!alpha || px.w > 0.0) {
+        let x = lp.doc_origin.x + at.x;
+        let y = lp.doc_origin.y + at.y;
+        if lens_flag(2u) {
+            let n = lens_noise(x, y, 0u);
+            px = vec4<f32>(px.xyz + vec3<f32>(n), px.w);
+        } else {
+            px = vec4<f32>(px.x + lens_noise(x, y, 0u), px.y + lens_noise(x, y, 1u), px.z + lens_noise(x, y, 2u), px.w);
+        }
+    }
+    textureStore(lout, at + vec2<i32>(lp.store_offset), px);
+}
+
 // ---- The final pass: the filter's output as the layer's new pixels ----
 
 struct Finish {

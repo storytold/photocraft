@@ -962,6 +962,153 @@ fn an_operator_past_the_texture_limit_falls_back_without_an_error() {
     assert!(message.contains("256 px limit"), "the refresh falls back to the CPU, saying why: {message:?}");
 }
 
+/// algo's Lens Blur as the GPU operator's (as the filter preview converts it), its depth map
+/// `map` for a Layer Mask or Channel depth.
+fn gpu_lens(l: photocraft_algo::separable::Lens, map: Option<Arc<Surface>>) -> photocraft_gpu::LensParams {
+    use photocraft_algo::DepthSource;
+    use photocraft_gpu::LensDepth;
+    let depth = match (l.depth, map) {
+        (DepthSource::None, _) => LensDepth::None,
+        (DepthSource::Transparency, _) => LensDepth::Transparency,
+        (DepthSource::LayerMask | DepthSource::Channel, Some(m)) => LensDepth::Map(m),
+        // No map: the CPU reads no depth either.
+        (DepthSource::LayerMask | DepthSource::Channel, None) => LensDepth::None,
+    };
+    photocraft_gpu::LensParams {
+        levels: l.levels.into_iter().map(|(rows, count)| (rows, count as f32)).collect(),
+        boost: l.boost,
+        threshold: l.threshold,
+        depth,
+        invert: l.invert,
+        focal: l.focal,
+        noise: l.noise,
+        gaussian: l.gaussian,
+        mono: l.mono,
+        seed: l.seed,
+    }
+}
+
+/// A depth map over the document: a diagonal ramp.
+fn depth_ramp() -> Surface {
+    let mut s = Surface::new(PixelFormat::GRAY8);
+    let data: Vec<f32> = (0..300 * 200).map(|i| ((i % 300) as f32 / 300.0 + (i / 300) as f32 / 400.0).fract()).collect();
+    s.write_region(Rect::new(0, 0, 300, 200), &data);
+    s
+}
+
+/// Phase 4: Lens Blur as a layer operator, against the CPU filter applied as the engine applies
+/// it: each iris shape, each depth source (the depth map as its second input), Specular
+/// Highlights, and both noise distributions.
+#[test]
+fn lens_blur_operators_match_the_cpu_filter() {
+    use photocraft_algo::{DepthSource, Distribution};
+    let Some(mut g) = gpu() else { return };
+    if !g.comp.operators_supported(&g.device) {
+        eprintln!("skipping lens parity: no compute");
+        return;
+    }
+    let lens = |radius: f32, blades: u32, curvature: f32, depth: DepthSource, brightness: f32, noise: f32, distribution: Distribution, mono: bool| {
+        FilterParams::LensBlur {
+            radius,
+            blades,
+            curvature,
+            rotation: 20.0,
+            depth,
+            focal_distance: 100.0,
+            invert_depth: false,
+            brightness,
+            threshold: 180.0,
+            noise,
+            distribution,
+            monochromatic: mono,
+            seed: 11,
+            depth_map: None,
+        }
+    };
+    let cases = vec![
+        lens(15.0, 6, 0.0, DepthSource::None, 0.0, 0.0, Distribution::Uniform, false),
+        lens(9.0, 3, 50.0, DepthSource::None, 0.0, 0.0, Distribution::Uniform, false),
+        lens(30.0, 8, 100.0, DepthSource::None, 60.0, 0.0, Distribution::Uniform, false),
+        lens(20.0, 5, 0.0, DepthSource::Transparency, 0.0, 0.0, Distribution::Uniform, false),
+        lens(20.0, 6, 30.0, DepthSource::LayerMask, 30.0, 0.0, Distribution::Uniform, false),
+        lens(12.0, 6, 0.0, DepthSource::Channel, 0.0, 40.0, Distribution::Uniform, false),
+        lens(12.0, 4, 0.0, DepthSource::None, 0.0, 60.0, Distribution::Gaussian, true),
+        lens(0.0, 6, 0.0, DepthSource::None, 0.0, 20.0, Distribution::Gaussian, false),
+    ];
+    let map = Arc::new(depth_ramp());
+    let map_image = Arc::new(photocraft_algo::Image::read(&map, Rect::new(0, 0, 300, 200)));
+    let mut failures = Vec::new();
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        for case in &cases {
+            for (selection, invert) in [(false, false), (true, true)] {
+                let mut params = case.clone();
+                if let FilterParams::LensBlur { depth_map, depth: source, invert_depth, .. } = &mut params {
+                    *invert_depth = invert;
+                    if matches!(source, DepthSource::LayerMask | DepthSource::Channel) {
+                        *depth_map = Some(Arc::clone(&map_image));
+                    }
+                }
+                let (mut doc, id) = blur_doc(depth);
+                if selection {
+                    doc.selection = Some(feathered_selection());
+                }
+                let what = format!("{depth:?} {params:?}{}", if selection { ", selection" } else { "" });
+                let content = doc.layer(id).unwrap().surface().unwrap().content_bounds();
+                let sel_bounds = doc.selection.as_ref().map(Surface::content_bounds);
+                let bounds = sel_bounds.filter(|b| !b.is_empty()).unwrap_or(doc.bounds());
+                let area = photocraft_algo::output_area(&params, content, bounds, sel_bounds);
+                let extent = edge_extent(doc.bounds(), content);
+                let mut expected = doc.clone();
+                let surf = expected.layer_mut(id).unwrap().surface_mut().unwrap();
+                *surf = photocraft_algo::apply_in_with(surf, &params, area, bounds, doc.selection.as_ref(), extent, &Interrupt::NONE).unwrap();
+                let l = photocraft_algo::separable::Lens::of(&params).expect("lens blur");
+                let program = GaussianBlur::new(
+                    SeparableBlur::Lens(Arc::new(gpu_lens(l, Some(Arc::clone(&map))))),
+                    extent,
+                    area,
+                    doc.selection.clone().map(Arc::new),
+                    false,
+                    depth,
+                )
+                .expect("a runnable lens blur");
+                let op = LayerOperator { layer: id, target: photocraft_gpu::OperatorTarget::Content, program: Arc::new(program) };
+                if let Err(e) = compare(&mut g, &doc, &op, &expected, tolerance(depth), &what) {
+                    failures.push(e);
+                }
+            }
+        }
+    }
+    // A Grayscale layer: its one channel is the luma, and takes one noise sample.
+    for depth in [SampleType::U8, SampleType::F32] {
+        for case in [
+            lens(25.0, 6, 0.0, DepthSource::None, 70.0, 0.0, Distribution::Uniform, false),
+            lens(10.0, 5, 0.0, DepthSource::Transparency, 0.0, 50.0, Distribution::Uniform, false),
+            lens(10.0, 5, 0.0, DepthSource::None, 0.0, 50.0, Distribution::Gaussian, false),
+        ] {
+            let fmt = PixelFormat::new(ColorMode::Grayscale, depth, true);
+            let mut doc = Document::new("gray", Size::new(300, 200), ColorMode::Grayscale, depth);
+            doc.layers.push(noise_layer("bg", fmt, Rect::new(0, 0, 300, 200), 1, 1.0));
+            let target = noise_layer("target", fmt, Rect::new(40, 30, 260, 170), 2, 0.2);
+            let id = target.id;
+            doc.layers.push(target);
+            let what = format!("Gray {depth:?} {case:?}");
+            let content = doc.layer(id).unwrap().surface().unwrap().content_bounds();
+            let area = photocraft_algo::output_area(&case, content, doc.bounds(), None);
+            let extent = edge_extent(doc.bounds(), content);
+            let mut expected = doc.clone();
+            let surf = expected.layer_mut(id).unwrap().surface_mut().unwrap();
+            *surf = photocraft_algo::apply_in_with(surf, &case, area, doc.bounds(), None, extent, &Interrupt::NONE).unwrap();
+            let l = photocraft_algo::separable::Lens::of(&case).expect("lens blur");
+            let program = GaussianBlur::new(SeparableBlur::Lens(Arc::new(gpu_lens(l, None))), extent, area, None, false, depth).expect("a runnable lens blur");
+            let op = LayerOperator { layer: id, target: photocraft_gpu::OperatorTarget::Content, program: Arc::new(program) };
+            if let Err(e) = compare(&mut g, &doc, &op, &expected, tolerance(depth), &what) {
+                failures.push(e);
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
 /// Closing the last document with operators frees their scratch textures (they were kept for the
 /// rest of the session).
 #[test]
