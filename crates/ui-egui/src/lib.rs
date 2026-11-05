@@ -921,6 +921,8 @@ mod window_frame_tests;
 #[cfg(test)]
 mod browse_field_tests;
 #[cfg(test)]
+mod export_quality_tests;
+#[cfg(test)]
 mod options_hit_area_tests;
 #[cfg(test)]
 mod select_and_mask_button_tests;
