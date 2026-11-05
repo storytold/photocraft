@@ -109,7 +109,7 @@ fn the_close_box_and_the_title_drag_keep_apart() {
     let x = h.get_by_label("Close").rect();
     let frame = rects(&h.ctx)[0];
     assert!((x.center().y - title.center().y).abs() < 2.0 && x.left() > title.right(), "the × is on the title row: {x:?}, {title:?}");
-    assert!(frame.right() - x.right() < 16.0, "at its right end: {x:?} in {frame:?}");
+    assert!((frame.right() - x.right() - (x.top() - frame.top())).abs() <= 1.0, "equal horizontal and vertical inset: {x:?} in {frame:?}");
     let drag = |h: &mut egui_kittest::Harness<'static, PhotocraftApp>, from: egui::Pos2, to: egui::Pos2| {
         h.hover_at(from);
         h.drag_at(from);
@@ -171,12 +171,12 @@ fn color_picker_has_inset_content_and_actions_at_the_right_edge() {
         let ok = h.get_by_label("OK").rect();
         let cancel = h.get_by_label("Cancel").rect();
         let web = h.get_by_label("Only Web Colors").rect();
-        assert!((ok.right() - title.right()).abs() < 1.0, "OK aligns with the right content edge: {ok:?} vs {title:?}");
+        assert!((frame.right() - ok.right() - 16.0).abs() <= 1.0, "OK aligns with the right content edge: {ok:?} vs {frame:?}");
         assert!((cancel.right() - ok.right()).abs() < 1.0);
         assert!(frame.right() - ok.right() >= 16.0, "buttons retain the window's padding");
         assert!(web.left() - frame.left() >= 16.0, "checkbox has comfortable left padding");
         assert!(frame.bottom() - web.bottom() >= 16.0, "checkbox has comfortable bottom padding");
-        assert!(title.top() - frame.top() >= 16.0, "title has top padding");
+        assert!((title.center().y - frame.top() - 16.0).abs() <= 1.0, "title is vertically centered in the compact shared header");
         assert!(egui::Rect::from_min_size(egui::Pos2::ZERO, size).contains_rect(frame), "padded picker fits {size:?}: {frame:?}");
         // A click anywhere inside the added margin must stay out of the canvas eyedropper.
         let margin = egui::pos2(frame.left() + 8.0, web.center().y);
@@ -216,6 +216,33 @@ fn layer_style_title_gutters_can_start_drags() {
         let delta = h.get_by_label("Layer Style").rect().min - before.min;
         assert!((delta - egui::vec2(64.0, -32.0)).length() < 2.0, "point {point}: moved {delta:?}");
         assert_eq!(h.state().ui.dialogs.len(), 1);
+    }
+}
+
+#[test]
+fn translated_layer_style_aligns_header_and_actions_with_the_frame() {
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    for language in ["en", "fr", "de"] {
+        let lang = crate::i18n::Lang::from_pref(language);
+        let text = |key| crate::i18n::with_language(lang, || crate::i18n::t(key).to_owned());
+        let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(1280.0, 800.0))
+            .build_ui_state(move |ui, app| crate::i18n::with_language(lang, || show(app, ui.ctx())), app);
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Pro);
+        h.state_mut().ui.open_dialog(DialogKind::LayerStyle, Default::default());
+        h.run_steps(4);
+        let frame = rects(&h.ctx)[0];
+        let buttons = ["OK", "Cancel", "New Style…"].map(|label| h.get_by_label(&text(label)).rect());
+        for button in buttons {
+            assert!((frame.right() - button.right() - 16.0).abs() <= 1.0, "{language}: even right inset, {button:?} in {frame:?}");
+            assert!((button.width() - buttons[0].width()).abs() < 1.0, "{language}: one action width");
+        }
+        if CLOSE_BOX {
+            let close = h.get_by_label(&text("Close")).rect();
+            assert!((frame.right() - close.right() - (close.top() - frame.top())).abs() < 1.0, "{language}: even header insets");
+        }
     }
 }
 
@@ -569,10 +596,11 @@ fn german_color_picker_fits_its_actions_and_translates_the_title() {
     let title = h.get_by_label("Farbwähler (Vordergrundfarbe)").rect();
     let swatch = h.get_by_label(&text("Click to restore the current colour")).rect();
     let frame = rects(&h.ctx)[0];
+    assert!((title.left() - frame.left() - 42.0).abs() <= 1.0, "translated title uses the compact icon and divider inset");
     for label in ["OK", "Cancel", "Add to Swatches"] {
         let r = h.get_by_label(&text(label)).rect();
         assert!(r.left() > swatch.right(), "{label} must stay beside the swatches: {r:?}, {swatch:?}");
-        assert!((r.right() - title.right()).abs() < 1.0, "{label} aligns with the title edge");
+        assert!((frame.right() - r.right() - 16.0).abs() <= 1.0, "{label} aligns with the right content edge");
     }
     assert!(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(760.0, 480.0)).contains_rect(frame), "{frame:?}");
 }

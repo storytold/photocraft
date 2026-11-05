@@ -143,6 +143,8 @@ fn fill_dialog_draws_in_the_selected_language() {
 
 #[test]
 fn file_info_camera_data_draws_in_the_selected_language_read_only() {
+    use egui_kittest::kittest::Queryable;
+
     with_language(Lang::EN, || {
         let mut h = harness();
         let exif = photocraft_algo::exif::build(&photocraft_algo::exif::CameraInfo {
@@ -163,8 +165,20 @@ fn file_info_camera_data_draws_in_the_selected_language_read_only() {
         let dialog = crate::menus::invoke(h.state_mut(), &ctx, "file.fileInfo", json!({})).expect("file info")["dialog"].as_u64().expect("dialog id");
         assert_eq!(h.state_mut().ui.dialog_mut(dialog).expect("open").fields["__camera"]["exposure"], "1/250 s");
         h.run_steps(4);
-        let text = drawn_text(&h);
+        let mut text = drawn_text(&h);
         let de = lang("de");
+        // Camera data is at the bottom of a scrolling form. Include the rows below the fold
+        // when the shared dialog header or translated fields need more vertical space.
+        h.hover_at(h.get_by_label(tr(de, "Camera Data")).rect().center());
+        h.event(egui::Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, -400.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.run_steps(4);
+        text.extend(drawn_text(&h));
         let labels = [tr(de, "Camera Data"), tr_ctx(de, "cameraData", "Make"), tr_ctx(de, "cameraData", "Exposure"), tr_ctx(de, "cameraData", "F-Stop")];
         for want in labels.into_iter().chain(["SONY", "1/250 s", "f/8"]) {
             assert!(text.iter().any(|text| text == want), "missing {want}: {text:?}");
