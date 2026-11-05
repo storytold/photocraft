@@ -41,28 +41,34 @@ pub enum EngineError {
 enum BuildMemoryLimit {
     /// Measured from the computer's memory (64-bit desktop).
     Measured,
-    /// Fixed by the 32-bit desktop build.
-    FixedDesktop32Bit,
+    /// The 32-bit desktop build: its cap, or the computer's memory if lower.
+    Desktop32Bit,
     /// Fixed by the browser build.
     FixedWeb,
 }
 
-/// The wasm32 check comes first: wasm32 is also 32-bit.
+/// This build's memory-limit source, from its target.
 fn build_memory_limit() -> BuildMemoryLimit {
-    if cfg!(target_arch = "wasm32") {
+    memory_limit_for(cfg!(target_arch = "wasm32"), cfg!(target_pointer_width = "32"))
+}
+
+/// The limit source for a target. The wasm32 check comes first: wasm32 is also 32-bit.
+fn memory_limit_for(is_wasm32: bool, is_32_bit: bool) -> BuildMemoryLimit {
+    if is_wasm32 {
         BuildMemoryLimit::FixedWeb
-    } else if cfg!(target_pointer_width = "32") {
-        BuildMemoryLimit::FixedDesktop32Bit
+    } else if is_32_bit {
+        BuildMemoryLimit::Desktop32Bit
     } else {
         BuildMemoryLimit::Measured
     }
 }
 
+/// The text after "hard limit" that says where the limit comes from and what to do.
 fn build_limit_scope(limit: BuildMemoryLimit) -> &'static str {
     match limit {
         BuildMemoryLimit::Measured => " on this machine",
-        BuildMemoryLimit::FixedDesktop32Bit => {
-            " of this 32-bit build of PhotoCraft, however much memory this computer has; install the 64-bit build to open it"
+        BuildMemoryLimit::Desktop32Bit => {
+            " on this machine; 32-bit builds of PhotoCraft can use at most 2 GiB of memory for a file, so the 64-bit build may open it if this computer has more free"
         }
         BuildMemoryLimit::FixedWeb => " of the browser version of PhotoCraft; open it in the desktop app",
     }
@@ -111,8 +117,8 @@ mod tests {
     fn hard_budget_scope_text_per_build() {
         assert_eq!(build_limit_scope(BuildMemoryLimit::Measured), " on this machine");
         assert_eq!(
-            build_limit_scope(BuildMemoryLimit::FixedDesktop32Bit),
-            " of this 32-bit build of PhotoCraft, however much memory this computer has; install the 64-bit build to open it"
+            build_limit_scope(BuildMemoryLimit::Desktop32Bit),
+            " on this machine; 32-bit builds of PhotoCraft can use at most 2 GiB of memory for a file, so the 64-bit build may open it if this computer has more free"
         );
         assert_eq!(build_limit_scope(BuildMemoryLimit::FixedWeb), " of the browser version of PhotoCraft; open it in the desktop app");
     }
@@ -120,8 +126,21 @@ mod tests {
     #[test]
     fn hard_budget_message_names_file_numbers_and_scope() {
         let text = EngineError::PsdHardBudget { name: "big.psd".into(), required: 9000, limit: 8000 }.to_string();
-        for part in ["big.psd", "9000", "8000", build_limit_scope(build_memory_limit())] {
+        for part in ["big.psd", "9000", "8000", "hard limit", build_limit_scope(build_memory_limit())] {
             assert!(text.contains(part), "{text}");
         }
+    }
+
+    #[test]
+    fn memory_limit_follows_the_target() {
+        assert_eq!(memory_limit_for(true, true), BuildMemoryLimit::FixedWeb);
+        assert_eq!(memory_limit_for(true, false), BuildMemoryLimit::FixedWeb);
+        assert_eq!(memory_limit_for(false, true), BuildMemoryLimit::Desktop32Bit);
+        assert_eq!(memory_limit_for(false, false), BuildMemoryLimit::Measured);
+    }
+
+    #[test]
+    fn two_gib_in_the_text_matches_the_cap() {
+        assert_eq!(photocraft_io::memory::NATIVE_32BIT_PEAK_CAP, 2 << 30);
     }
 }

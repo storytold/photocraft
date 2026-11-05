@@ -46,6 +46,9 @@ spilling resumes on its own once the directory is usable and has room, and chang
 preferences retries at once. Preferences → Scratch Disks → Scratch Size Limit
 (`scratchDisks.sizeLimitMb`, 0 = no limit; `spill::set_size_cap`) caps the scratch file:
 reaching it pauses spilling the same way, and the free-space reserve applies regardless.
+Network scratch folders are not listed as disks, so their free space isn't measured: they earn
+no scratch allowance when admitting large imports and the free-space reserve doesn't apply to
+them (the Scratch Size Limit still does).
 A failed read retains its backing extent and blocks editing, saving and exporting of the
 document that holds the tile until it is readable again; other open documents keep working.
 Each commit checks the health of its own document (before and after an edit, the document a

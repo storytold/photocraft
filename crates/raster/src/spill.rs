@@ -504,33 +504,33 @@ fn no_room(dir: &Path, cap: Option<u64>) -> String {
 }
 
 /// (available, total) bytes of the volume holding `dir`: the mount point that is its longest
-/// prefix. `None` if unknown, which disables only the free-space check, not spilling.
+/// prefix. `None` if unknown, which disables only the free-space check, not spilling. Network
+/// scratch folders are not listed as disks, so they report `None`: they earn no scratch allowance
+/// at import and the free-space reserve doesn't apply to them, though a Scratch Size Limit still does.
 #[cfg(not(target_arch = "wasm32"))]
 fn free_space(dir: &Path) -> Option<(u64, u64)> {
-    let mut dir = std::fs::canonicalize(dir).ok()?;
-    // Only on Windows: `\\?\C:\x` is a legal file name on Unix.
-    if cfg!(windows)
-        && let Some(plain) = dir.to_str().and_then(without_verbatim_prefix)
-    {
-        dir = std::path::PathBuf::from(plain);
-    }
+    let dir = std::fs::canonicalize(dir).ok()?;
+    let dir = without_verbatim_disk_prefix(&dir).unwrap_or(dir);
     let disks = sysinfo::Disks::new_with_refreshed_list_specifics(sysinfo::DiskRefreshKind::nothing().with_storage()).ok()?;
     disks.iter().filter(|d| dir.starts_with(d.mount_point())).max_by_key(|d| d.mount_point().as_os_str().len()).map(|d| (d.available_space(), d.total_space()))
 }
 
-/// The plain form of a Windows verbatim path (`\\?\C:\x` to `C:\x`, `\\?\UNC\s\h\x` to `\\s\h\x`),
-/// or `None` to keep the path as is. `canonicalize` returns verbatim paths, whose prefix never
-/// compares equal to the plain prefix of a disk's mount point.
+/// The plain form of a verbatim disk path (`\\?\C:\x` to `C:\x`), or `None` to keep the path as
+/// is. `canonicalize` returns `\\?\C:\x` on Windows, whose prefix never equals a mount point's
+/// plain `C:\`. Unix paths never have a prefix component, so this is `None` there.
 #[cfg(not(target_arch = "wasm32"))]
-fn without_verbatim_prefix(path: &str) -> Option<String> {
-    let rest = path.strip_prefix(r"\\?\")?;
-    if let Some(unc) = rest.strip_prefix(r"UNC\") {
-        return Some(format!(r"\\{unc}"));
-    }
-    match rest.as_bytes().get(..2) {
-        Some([letter, b':']) if letter.is_ascii_alphabetic() => Some(rest.to_string()),
-        _ => None,
-    }
+fn without_verbatim_disk_prefix(path: &Path) -> Option<PathBuf> {
+    use std::path::{Component, Prefix};
+    let mut components = path.components();
+    let Some(Component::Prefix(prefix)) = components.next() else {
+        return None;
+    };
+    let Prefix::VerbatimDisk(letter) = prefix.kind() else {
+        return None;
+    };
+    let mut out = PathBuf::from(format!("{}:", char::from(letter)));
+    out.extend(components);
+    Some(out)
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -805,25 +805,39 @@ fn log_error(msg: &str) {
 mod tests {
     use super::*;
 
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(windows)]
     #[test]
-    fn verbatim_prefix_is_stripped_only_for_disks_and_unc() {
+    fn verbatim_disk_prefix_is_stripped_only_for_disks() {
         let cases: &[(&str, Option<&str>)] = &[
-            (r"\\?\UNC\server\share\x", Some(r"\\server\share\x")),
-            (r"\\?\C:\x", Some(r"C:\x")),
-            (r"\\?\c:", Some("c:")),
+            (r"\\?\C:\x\y", Some(r"C:\x\y")),
+            (r"\\?\C:\", Some(r"C:\")),
+            (r"\\?\UNC\server\share\x", None),
             (r"\\?\Volume{0000-1}\x", None),
             (r"C:\x", None),
-            ("/tmp/x", None),
-            (r"\\?\", None),
-            (r"\\?\C", None),
-            (r"\\?\1:\x", None),
-            (r"\\?\é:\x", None),
-            ("", None),
+            (r"\\server\share\x", None),
         ];
         for (input, want) in cases {
-            assert_eq!(without_verbatim_prefix(input).as_deref(), *want, "{input}");
+            assert_eq!(without_verbatim_disk_prefix(Path::new(input)).as_deref(), want.map(Path::new), "{input}");
         }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn verbatim_disk_prefix_keeps_non_utf8_names() {
+        use std::os::windows::ffi::OsStringExt;
+        let mut wide: Vec<u16> = r"\\?\C:\a".encode_utf16().collect();
+        wide.push(0xD800);
+        let path = PathBuf::from(std::ffi::OsString::from_wide(&wide));
+        let plain = without_verbatim_disk_prefix(&path).unwrap();
+        assert!(plain.starts_with(r"C:\"));
+        assert!(plain.to_str().is_none());
+    }
+
+    #[cfg(not(any(windows, target_arch = "wasm32")))]
+    #[test]
+    fn verbatim_disk_prefix_is_none_on_unix() {
+        assert_eq!(without_verbatim_disk_prefix(Path::new("/tmp/x")), None);
+        assert_eq!(without_verbatim_disk_prefix(Path::new(r"\\?\C:\x")), None);
     }
 
     // `free_space` returned `None` on Windows before the fix: `canonicalize` gives `\\?\C:\..`,
