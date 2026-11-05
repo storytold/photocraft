@@ -224,6 +224,7 @@
 	Create Smart Object after Loading Layers	Buat Smart Object setelah Memuat Layer
 	Reveal in Finder	Tampilkan di Finder
 	Show in Explorer	Tampilkan di Explorer
+	Reveal in Explorer	Tampilkan di Explorer
 	Show in Folder	Tampilkan di Folder
 	File Info…	Info Berkas…
 	Print…	Cetak…
@@ -459,6 +460,7 @@
 	Smart Object	Smart Object
 	Convert to Smart Object	Konversi ke Smart Object
 	Convert to Embedded	Konversi ke Tertanam
+	Embed Linked	Konversi ke Tertanam
 	Convert to Layers	Konversi ke Layer
 	Convert to Linked…	Konversi ke Tertaut…
 	Edit Contents	Edit Isi

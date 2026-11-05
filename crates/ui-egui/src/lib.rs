@@ -787,6 +787,8 @@ mod live_retouch_tests;
 #[cfg(test)]
 mod pencil_tests;
 #[cfg(test)]
+mod smart_objects_menu_tests;
+#[cfg(test)]
 mod tool_options_theme_tests;
 #[cfg(test)]
 mod tool_shortcut_tests;

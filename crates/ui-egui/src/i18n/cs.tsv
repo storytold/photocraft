@@ -262,6 +262,7 @@
 	Create Smart Object after Loading Layers	Po načtení vrstev vytvořit chytrý objekt
 	Reveal in Finder	Zobrazit ve Finderu
 	Show in Explorer	Zobrazit v Průzkumníkovi
+	Reveal in Explorer	Zobrazit v Průzkumníkovi
 	Show in Folder	Zobrazit ve složce
 	File Info…	Informace o souboru…
 	Print…	Tisk…
@@ -507,6 +508,7 @@
 	Smart Object	Chytrý objekt
 	Convert to Smart Object	Převést na chytrý objekt
 	Convert to Embedded	Převést na vložený
+	Embed Linked	Převést na vložený
 	Convert to Layers	Převést na vrstvy
 	Convert to Linked…	Převést na propojený…
 	Edit Contents	Upravit obsah

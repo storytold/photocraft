@@ -1740,6 +1740,7 @@
 	Saved	Sparat
 	Reveal in Finder	Visa i Finder
 	Show in Explorer	Visa i Utforskaren
+	Reveal in Explorer	Visa i Utforskaren
 	Show in Folder	Visa i mapp
 	Before (Y)	Före (Y)
 	Save Settings…	Spara inställningar…
@@ -1919,6 +1920,7 @@
 	Combine Shapes	Kombinera former
 	Contract…	Dra ihop…
 	Convert to Embedded	Konvertera till inbäddat
+	Embed Linked	Konvertera till inbäddat
 	Convert to Layers	Konvertera till lager
 	Convert to Linked…	Konvertera till länkat…
 	Count	Antal

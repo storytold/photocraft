@@ -245,6 +245,7 @@
 	Create Smart Object after Loading Layers	Crea oggetto avanzato dopo il caricamento dei livelli
 	Reveal in Finder	Mostra nel Finder
 	Show in Explorer	Mostra in Esplora file
+	Reveal in Explorer	Mostra in Esplora file
 	Show in Folder	Mostra nella cartella
 	File Info…	Info file…
 	Print…	Stampa…
@@ -490,6 +491,7 @@
 	Smart Object	Oggetto avanzato
 	Convert to Smart Object	Converti in oggetto avanzato
 	Convert to Embedded	Converti in incorporato
+	Embed Linked	Converti in incorporato
 	Convert to Linked…	Converti in oggetto collegato…
 	Edit Contents	Modifica contenuto
 	Replace Contents…	Sostituisci contenuto…

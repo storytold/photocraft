@@ -203,6 +203,7 @@
 	Create Smart Object after Loading Layers	Δημιουργία έξυπνου αντικειμένου μετά τη φόρτωση επιπέδων
 	Reveal in Finder	Εμφάνιση στο Finder
 	Show in Explorer	Εμφάνιση στην Εξερεύνηση αρχείων
+	Reveal in Explorer	Εμφάνιση στην Εξερεύνηση αρχείων
 	Show in Folder	Εμφάνιση στον φάκελο
 	File Info…	Πληροφορίες αρχείου…
 	Print…	Εκτύπωση…
@@ -1951,6 +1952,7 @@
 	Hide Selection	Απόκρυψη επιλογής
 	From Transparency	Από διαφάνεια
 	Convert to Embedded	Μετατροπή σε ενσωματωμένο
+	Embed Linked	Μετατροπή σε ενσωματωμένο
 	Convert to Linked…	Μετατροπή σε συνδεδεμένο…
 	Edit Contents	Επεξεργασία περιεχομένου
 	Replace Contents…	Αντικατάσταση περιεχομένου…

@@ -231,6 +231,7 @@
 	Create Smart Object after Loading Layers	Créer un objet intelligent après le chargement des calques
 	Reveal in Finder	Afficher dans le Finder
 	Show in Explorer	Afficher dans l'Explorateur
+	Reveal in Explorer	Afficher dans l'Explorateur
 	Show in Folder	Afficher dans le dossier
 	File Info…	Informations sur le fichier…
 	Print…	Imprimer…
@@ -466,6 +467,7 @@
 	Smart Object	Objet intelligent
 	Convert to Smart Object	Convertir en objet intelligent
 	Convert to Embedded	Convertir en objet incorporé
+	Embed Linked	Convertir en objet incorporé
 	Convert to Layers	Convertir en calques
 	Convert to Linked…	Convertir en objet lié…
 	Edit Contents	Modifier le contenu

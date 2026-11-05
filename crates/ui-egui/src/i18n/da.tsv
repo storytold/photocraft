@@ -1742,6 +1742,7 @@
 	Saved	Gemt
 	Reveal in Finder	Vis i Finder
 	Show in Explorer	Vis i Stifinder
+	Reveal in Explorer	Vis i Stifinder
 	Show in Folder	Vis i mappe
 	Before (Y)	Før (Y)
 	Save Settings…	Gem indstillinger…
@@ -1921,6 +1922,7 @@
 	Combine Shapes	Kombinér former
 	Contract…	Formindsk…
 	Convert to Embedded	Konvertér til indlejret
+	Embed Linked	Konvertér til indlejret
 	Convert to Layers	Konvertér til lag
 	Convert to Linked…	Konvertér til sammenkædet…
 	Count	Optælling

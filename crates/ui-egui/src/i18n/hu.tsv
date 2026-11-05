@@ -342,6 +342,7 @@
 	Combine Shapes	Alakzatok kombinálása
 	Contract…	Szűkítés…
 	Convert to Embedded	Átalakítás beágyazottá
+	Embed Linked	Átalakítás beágyazottá
 	Convert to Layers	Átalakítás rétegekké
 	Convert to Linked…	Átalakítás csatolttá…
 	Convert to Smart Object	Átalakítás intelligens objektummá
@@ -854,6 +855,7 @@
 	Show All	Összes megjelenítése
 	Show Extras Options…	Segédelemek beállításai…
 	Show in Explorer	Megjelenítés az Intézőben
+	Reveal in Explorer	Megjelenítés az Intézőben
 	Show in Folder	Megjelenítés mappában
 	Show menu colors	Menüszínek megjelenítése
 	Show/Hide All Panels	Összes panel megjelenítése/elrejtése

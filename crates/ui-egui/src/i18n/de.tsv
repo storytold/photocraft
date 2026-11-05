@@ -233,6 +233,7 @@
 	Create Smart Object after Loading Layers	Nach dem Laden der Ebenen Smart-Objekt erstellen
 	Reveal in Finder	Im Finder anzeigen
 	Show in Explorer	Im Explorer anzeigen
+	Reveal in Explorer	Im Explorer anzeigen
 	Show in Folder	Im Ordner anzeigen
 	File Info…	Dateiinformationen…
 	Print…	Drucken…
@@ -478,6 +479,7 @@
 	Smart Object	Smart-Objekt
 	Convert to Smart Object	In Smart-Objekt konvertieren
 	Convert to Embedded	In eingebettetes Smart-Objekt konvertieren
+	Embed Linked	In eingebettetes Smart-Objekt konvertieren
 	Convert to Layers	In Ebenen konvertieren
 	Convert to Linked…	In verknüpftes Smart-Objekt konvertieren…
 	Edit Contents	Inhalt bearbeiten
