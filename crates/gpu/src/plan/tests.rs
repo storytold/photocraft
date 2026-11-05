@@ -415,10 +415,50 @@ fn row_keys_cover_exactly_what_the_rows_are_built_from() {
     let lab = Adjustment::Curves { master: master.clone(), per_channel: per_channel.clone(), space: ToneSpace::Lab, black: black.clone(), pencil: false };
     assert_ne!(key(&curves, SampleType::U8), key(&pencil, SampleType::U8));
     assert_ne!(key(&curves, SampleType::U8), key(&lab, SampleType::U8));
+    let mut nudged = master.clone();
+    nudged[1].output += 0.01;
+    let point = Adjustment::Curves { master: nudged, per_channel: per_channel.clone(), space: ToneSpace::Rgb, black: black.clone(), pencil: false };
+    assert_ne!(key(&curves, SampleType::U8), key(&point, SampleType::U8), "a curve point's value");
     let Adjustment::ColorBalance { shadows, midtones, highlights, .. } = balance.clone() else { panic!("Color Balance") };
     let plain = Adjustment::ColorBalance { shadows, midtones, highlights, preserve_luminosity: false };
     assert_ne!(key(&balance, SampleType::U8), key(&plain, SampleType::U8));
     // Levels and Curves don't share keys with each other, and adjustments without rows have none.
     assert_ne!(key(&Adjustment::identity_levels(), SampleType::U8), key(&Adjustment::identity_curves(), SampleType::U8));
     assert_eq!(lower::row_key(&Adjustment::Vibrance { vibrance: 10.0, saturation: 0.0 }, SampleType::U8), None);
+}
+
+#[test]
+fn planning_reads_cached_rows_instead_of_rebuilding_them() {
+    use photocraft_compose::lut_rows;
+    use photocraft_doc::adjust::{CurvePoint, HueRange, LevelsChannel};
+    // Settings no other test plans, so the planted rows are this test's own; the few keys this
+    // test binary adds can't evict them from the shared cache.
+    let mut ranges = HueRange::defaults();
+    ranges[2].hue = 33.0;
+    let point = |input, output| CurvePoint { input, output };
+    let adjustments = [
+        Adjustment::Levels {
+            master: LevelsChannel { gamma: 1.37, ..Default::default() },
+            per_channel: Default::default(),
+            space: ToneSpace::Rgb,
+            black: Default::default(),
+        },
+        Adjustment::Curves {
+            master: vec![point(0.0, 0.0), point(0.3, 0.61), point(1.0, 1.0)],
+            per_channel: Default::default(),
+            space: ToneSpace::Rgb,
+            black: vec![],
+            pencil: false,
+        },
+        Adjustment::HueSaturation { hue: 0.0, saturation: 0.0, lightness: 0.0, colorize: false, ranges },
+        Adjustment::ColorBalance { shadows: [17.0, 0.0, 0.0], midtones: [0.0; 3], highlights: [0.0; 3], preserve_luminosity: true },
+    ];
+    for (i, a) in adjustments.iter().enumerate() {
+        // Rows no builder makes: the planner returns them only if it reads the cache.
+        let planted = vec![[0.25 + i as f32 / 8.0; lut_rows::ROW_LEN]; 3];
+        let key = lower::row_key(a, SampleType::U8).expect("a row-cached adjustment");
+        assert!(lut_rows::cached(key, || planted.clone()) == planted, "{}: a key no other test uses", a.label());
+        let (_, _, rows) = adjustment_program(a, Transfer::Srgb, SampleType::U8, ColorMode::Rgb);
+        assert!(rows.as_ref() == Some(&planted), "{}: the plan rebuilt rows the cache held", a.label());
+    }
 }
