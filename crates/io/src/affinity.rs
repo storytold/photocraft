@@ -580,7 +580,8 @@ impl Builder {
         let exact = a == 1.0 && d == 1.0 && b == 0.0 && c == 0.0 && e.fract() == 0.0 && f.fract() == 0.0;
         let inv = m.inverse()?;
         let (rw, rh) = (r.width() as usize, r.height() as usize);
-        if !charge(&mut self.pixel_budget, (rw as u64).saturating_mul(rh as u64).saturating_mul(channels as u64)) {
+        // The surface keeps whole tiles: a narrow image stores up to 256 times its pixels.
+        if !charge(&mut self.pixel_budget, photocraft_raster::tile_storage_bytes(r, &format)) {
             self.warn("the document's images need more pixel memory than the import allows; the rest were left out");
             return None;
         }
@@ -697,11 +698,11 @@ mod tests {
 
     #[test]
     fn images_past_the_pixel_budget_are_left_out() {
-        // Two 64×64 RGBA images cost 16 KiB each when resampled; a 16 KiB budget admits one and
+        // Two 64×64 RGBA images each keep a whole 256×256 tile (256 KiB); a one-tile budget admits one and
         // the second is dropped with a warning instead of being staged anyway.
         let d = affinity_document(vec![(64, 64, Pixels::Rgba8(vec![0; 64 * 64 * 4])), (64, 64, Pixels::Rgba8(vec![0; 64 * 64 * 4]))]);
         let mut b = Builder::new("budget", &d).unwrap();
-        b.pixel_budget = 64 * 64 * 4;
+        b.pixel_budget = 256 * 256 * 4; // one whole tile per image
         b.document(&d).unwrap();
         assert_eq!(b.doc.layers.len(), 1, "the image past the budget must not import");
         assert!(b.warnings.iter().any(|w| w.contains("pixel memory")), "{:?}", b.warnings);
@@ -722,7 +723,7 @@ mod tests {
         assert!(b.warnings.iter().any(|w| w.contains("pixel memory")), "{:?}", b.warnings);
         // The same image imports when the budget covers the decode and the resample.
         let mut ok = Builder::new("room", &d).unwrap();
-        ok.pixel_budget = 8 * 8 * 4 * 2;
+        ok.pixel_budget = 8 * 8 * 4 + 256 * 256 * 4;
         ok.document(&d).unwrap();
         assert_eq!(ok.doc.layers.len(), 1, "within the budget the image imports as a smart object");
     }
