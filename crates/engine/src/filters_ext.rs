@@ -56,10 +56,15 @@ fn undefined(p: &Value, d: &str) -> UndefinedAreas {
         _ => UndefinedAreas::Wrap,
     }
 }
-/// A JSON array param deserialized into `T`s (invalid entries are skipped).
+/// Most entries a list param keeps (Blur Gallery pins): every pin is evaluated for every pixel,
+/// so the count multiplies the filter's work, for a new call and a stored filter's replay alike.
+const MAX_LIST_ITEMS: usize = 256;
+
+/// A JSON array param deserialized into `T`s (invalid entries are skipped, entries past
+/// [`MAX_LIST_ITEMS`] dropped).
 fn list<T: serde::de::DeserializeOwned>(p: &Value, k: &str) -> Option<Vec<T>> {
     let a = p.get(k)?.as_array()?;
-    let v: Vec<T> = a.iter().filter_map(|e| serde_json::from_value(e.clone()).ok()).collect();
+    let v: Vec<T> = a.iter().filter_map(|e| serde_json::from_value(e.clone()).ok()).take(MAX_LIST_ITEMS).collect();
     (!v.is_empty()).then_some(v)
 }
 
@@ -512,7 +517,14 @@ pub(crate) fn resolve(s: &Session, fp: &mut FilterParams, p: &Value) -> Result<(
             .ok_or_else(|| EngineError::Other("Lens Blur: `depthMap` channel needs `depthChannel` (an alpha channel's index or name)".into()))?;
         let surface = crate::edit_menu_cmds::channel_mask(doc, channel)
             .ok_or_else(|| EngineError::Other(format!("Lens Blur: the document has no alpha channel {channel}")))?;
-        *depth_map = Some(Arc::new(algo::Image::read(surface, doc.bounds())));
+        // The channel is read densely over the canvas, whatever it holds: hold that to the
+        // memory budget before allocating.
+        let bounds = doc.bounds();
+        let bytes = u64::from(bounds.width()).saturating_mul(u64::from(bounds.height())).saturating_mul(surface.channels() as u64 * 4);
+        if bytes > crate::transform_cmds::budget() {
+            return Err(EngineError::Other(format!("Lens Blur: the depth channel's {}×{} canvas exceeds the memory budget", bounds.width(), bounds.height())));
+        }
+        *depth_map = Some(Arc::new(algo::Image::read(surface, bounds)));
         return Ok(());
     }
     let FilterParams::Displace { map, .. } = fp else { return Ok(()) };
