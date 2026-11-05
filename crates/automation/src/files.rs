@@ -67,7 +67,8 @@ pub fn open_bytes_as(
 pub fn open_as(path: &Path, animation: AnimatedOpen, opts: &photocraft_io::ImportOptions) -> Result<Opened, AutomationError> {
     let opts = photocraft_io::ImportOptions { animation: photocraft_engine::animated_open::import_for(animation), ..*opts };
     let mut opened = open_with_options(path, &opts)?;
-    if !path.is_dir() {
+    // A frame animation saved in a native document is the document: only an import is reshaped.
+    if !path.is_dir() && !path.file_name().is_some_and(|name| is_native_name(&name.to_string_lossy())) {
         photocraft_engine::animated_open::apply(&mut opened.document, animation, path.to_str())?;
     }
     Ok(opened)

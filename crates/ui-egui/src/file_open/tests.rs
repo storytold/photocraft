@@ -80,6 +80,37 @@ fn open_file_sets_name_path_and_recent() {
     assert!(app.ui.notices.is_empty());
 }
 
+/// #6898: an automation open cuts an animated GIF to its first frame, but a frame animation saved
+/// in a native document is the document: cutting it would lose the frames at the next save.
+#[test]
+fn automation_open_keeps_the_frame_animation_of_a_native_document() {
+    use photocraft_codecs::web::{GifFrame, encode_gif_animated};
+    let frames: Vec<GifFrame> =
+        [[255, 0, 0], [0, 0, 255], [0, 255, 0]].iter().map(|&c| GifFrame { indices: vec![0; 6], palette: vec![c], transparent: None, delay_cs: 5 }).collect();
+    let gif = encode_gif_animated(3, 2, &frames, true).unwrap();
+    let services = Services {
+        // Whatever the name says, the import reads a frame animation, as `.pcraft` does for one it saved.
+        import: Some(Box::new(move |name: &str, _bytes: &[u8], _opts: &photocraft_io::ImportOptions| {
+            let opts = photocraft_io::ImportOptions { animation: photocraft_io::AnimationImport::Frames, ..Default::default() };
+            let doc = photocraft_io::import_with_options("a.gif", &gif, &opts).map_err(|e| e.to_string())?.document;
+            assert!(doc.frame_animation.is_some(), "{name}");
+            Ok((doc, Vec::new()))
+        })),
+        ..Default::default()
+    };
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+    let shape = |app: &PhotocraftApp| {
+        let d = &app.session.active().unwrap().doc;
+        (d.layers.len(), d.frame_animation.is_some())
+    };
+    app.open_automation_bytes("a.pcraft", b"x").unwrap();
+    assert_eq!(shape(&app), (3, true), "a native document opens as it was saved");
+    app.open_automation_bytes("A.PCRAFT", b"x").unwrap();
+    assert_eq!(shape(&app), (3, true), "the extension is matched in any case");
+    app.open_automation_bytes("a.gif", b"x").unwrap();
+    assert_eq!(shape(&app), (1, false), "a GIF still opens as its first frame");
+}
+
 #[test]
 fn affinity_preview_does_not_acquire_the_source_path_even_when_renamed() {
     for automation in [false, true] {

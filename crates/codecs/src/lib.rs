@@ -209,6 +209,15 @@ pub fn decode_webp_frames(bytes: &[u8], opts: &DecodeOptions) -> Result<Vec<Anim
     }
 }
 
+/// [`decode_webp_frames`], stopping after the first `keep(width, height)` frames so that a caller
+/// who can only hold those never decodes the rest; the `bool` says that more frames follow.
+pub fn decode_webp_frames_prefix(bytes: &[u8], opts: &DecodeOptions, keep: impl Fn(u32, u32) -> usize) -> Result<(Vec<AnimationFrame>, bool), CodecError> {
+    match crate::codecs::webp::decode_prefix(bytes, &opts.limits, &keep)? {
+        Some(prefix) => Ok(prefix),
+        None => Ok((vec![AnimationFrame { image: decode_as_with(Format::WebP, bytes, opts)?, delay_ms: 0 }], false)),
+    }
+}
+
 /// Whether `bytes` is an animated WebP of more than one frame (which [`decode`] opens as its
 /// first frame, with a warning, and [`decode_webp_frames`] reads whole).
 pub fn webp_is_animated(bytes: &[u8]) -> bool {

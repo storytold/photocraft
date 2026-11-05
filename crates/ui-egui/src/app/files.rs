@@ -202,8 +202,11 @@ impl PhotocraftApp {
         opts.psd_high_memory_approved = approved;
         let (mut doc, warnings) = import(name, bytes, &opts)?;
         photocraft_engine::file_cmds::raw_defaults(&self.session, &warnings, &mut doc);
-        // No source path to reload a video layer from: the capability read the bytes.
-        photocraft_engine::animated_open::apply(&mut doc, animation, None).map_err(|e| e.to_string())?;
+        // No source path to reload a video layer from: the capability read the bytes. A frame
+        // animation saved in a native document is the document: only an import is reshaped.
+        if !std::path::Path::new(name).extension().is_some_and(|e| e.eq_ignore_ascii_case(photocraft_format::EXTENSION)) {
+            photocraft_engine::animated_open::apply(&mut doc, animation, None).map_err(|e| e.to_string())?;
+        }
         // The caller records the path it read from.
         self.session.add_document(doc, None);
         if let Some(st) = self.session.active_mut() {

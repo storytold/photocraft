@@ -1093,6 +1093,30 @@ fn doc_open_takes_an_animations_first_frame_unless_asked() {
     std::fs::remove_dir_all(base).unwrap();
 }
 
+/// #6898: `doc.open` reshapes an animated GIF or WebP, never a frame animation saved in a native
+/// document: cutting it to its first frame here would lose the frames at the next save.
+#[test]
+fn doc_open_keeps_the_frame_animation_of_a_native_document() {
+    use photocraft_codecs::web::{GifFrame, encode_gif_animated};
+    let frames: Vec<GifFrame> =
+        [[255, 0, 0], [0, 0, 255], [0, 255, 0]].iter().map(|&c| GifFrame { indices: vec![0; 6], palette: vec![c], transparent: None, delay_cs: 5 }).collect();
+    let gif = encode_gif_animated(3, 2, &frames, true).unwrap();
+    let opts = photocraft_io::ImportOptions { animation: photocraft_io::AnimationImport::Frames, ..Default::default() };
+    let doc = photocraft_io::import_with_options("a.gif", &gif, &opts).unwrap().document;
+    let base = std::env::temp_dir().join(format!("pc-rpc-native-animation-{}", std::process::id()));
+    std::fs::create_dir_all(&base).unwrap();
+    let file = base.join("a.pcraft");
+    std::fs::write(&file, photocraft_format::save_to_bytes(&doc, &Default::default()).unwrap()).unwrap();
+    let path = file.to_string_lossy().into_owned();
+    let mut h = Headless::trusted_local();
+    for params in [json!({"path": path}), json!({"path": path, "animation": "firstFrame"}), json!({"path": path, "animation": "video"})] {
+        h.handle("doc.open", params.clone()).unwrap();
+        let d = &h.session.active().unwrap().doc;
+        assert_eq!((d.layers.len(), d.frame_animation.is_some(), d.timeline.is_some()), (3, true, false), "{params}");
+    }
+    std::fs::remove_dir_all(base).unwrap();
+}
+
 #[test]
 fn approve_high_memory_rejects_invalid_types_and_formats_structured_error() {
     let h = session();

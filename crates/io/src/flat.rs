@@ -230,18 +230,12 @@ fn gif_layer_frames(bytes: &[u8]) -> usize {
 /// frame with the file's delays. `None` for a still image, which opens as any flat image does.
 fn import_animation_layers(name: &str, bytes: &[u8]) -> Result<Option<ImportResult>, IoError> {
     let gif = codecs::detect(bytes) == Some(Format::Gif);
-    // Only a GIF's first frames are decoded: each is a full-canvas picture, and every frame hides all
+    // Only the first frames are decoded: each is a full-canvas picture, and every frame hides all
     // the other layers, so the animation grows with the square of the frame count.
     let (frames, more) = if gif {
         codecs::decode_gif_frames_prefix(bytes, &codecs::DecodeOptions::default(), gif_layer_frames(bytes))?
     } else {
-        // The WebP decoder reads every frame (within its own limits); the layers keep the budget's share.
-        let Some(frames) = codecs::decode_frames(bytes, &codecs::DecodeOptions::default()) else { return Ok(None) };
-        let mut frames = frames?;
-        let keep = frames.first().map_or(0, |f| layer_frames(u64::from(f.image.width()), u64::from(f.image.height())));
-        let more = frames.len() > keep;
-        frames.truncate(keep);
-        (frames, more)
+        codecs::decode_webp_frames_prefix(bytes, &codecs::DecodeOptions::default(), |w, h| layer_frames(u64::from(w), u64::from(h)))?
     };
     if frames.len() < 2 {
         return Ok(None);
