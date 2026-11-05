@@ -10,9 +10,9 @@
 //! transparent black ink, like the reference editor shows it. Its value is stored as-is
 //! (1 = selected, white in the Channels panel), so its ink is `1 − value`.
 
-//! This is a screen approximation, not a press proof: stored RGB alternate colours are used
-//! directly; CMYK alternates use the document CMYK profile, and Lab/gray alternates use
-//! the colour conversion path below. No spectral ink or paper interaction is modelled.
+//! This is a screen approximation, not a press proof: stored RGB alternate colours are taken as
+//! sRGB and, like Lab/gray alternates, converted into an RGB document's own profile; CMYK
+//! alternates use the document CMYK profile. No spectral ink or paper interaction is modelled.
 //! At full coverage, solidity 0 multiplies the underlying colour and solidity 1 replaces it.
 //! Previewing borrows the document and only changes the supplied display buffer.
 
@@ -90,11 +90,12 @@ impl InkSpace {
         }
     }
 
-    /// The display colour of spot colour `color` in the composite space: RGB colours as stored,
-    /// CMYK ones through the document's CMYK profile (the built-in coated CMYK otherwise), and
-    /// CMYK, Lab and gray colours of an RGB document converted from sRGB into its own profile.
+    /// The display colour of spot colour `color` in the composite space: CMYK colours through the
+    /// document's CMYK profile (the built-in coated CMYK otherwise), and RGB (taken as sRGB), CMYK,
+    /// Lab and gray colours of an RGB document converted from sRGB into its own profile, so an ink
+    /// keeps its colour in a linear (32-bit), Adobe RGB or ProPhoto document.
     pub fn rgb(&self, color: Color) -> [f32; 3] {
-        if matches!(color.mode, ColorMode::Rgb | ColorMode::Indexed | ColorMode::Multichannel) {
+        if matches!(color.mode, ColorMode::Indexed | ColorMode::Multichannel) {
             return color.to_rgb();
         }
         let mut rgb = photocraft_color::convert::with_cmyk_space(self.cmyk.as_ref(), || color.to_rgb());
@@ -366,6 +367,19 @@ mod tests {
         assert_eq!(InkSpace::of(&doc).rgb(cyan), want.map(|v| v.clamp(0.0, 1.0)));
         // RGB inks are taken as stored.
         assert_eq!(InkSpace::of(&doc).rgb(Color::rgb(0.1, 0.2, 0.3)), [0.1, 0.2, 0.3]);
+    }
+
+    /// An RGB spot colour is sRGB, like the other alternates: an sRGB document takes it as stored,
+    /// a linear (32-bit) one gets its linear values, which the canvas encodes back to the colour.
+    #[test]
+    fn rgb_ink_colours_convert_into_the_document_profile() {
+        let teal = Color::rgb(0.0, 0.6, 0.65);
+        let mut doc = Document::new("l", Size::new(1, 1), ColorMode::Rgb, SampleType::F32);
+        assert_eq!(InkSpace::of(&doc).rgb(teal), [0.0, 0.6, 0.65]);
+        doc.icc_profile = Some(Builtin::LinearSrgb.profile().to_bytes());
+        let got = InkSpace::of(&doc).rgb(teal);
+        let want = [0.0, 0.6, 0.65].map(photocraft_color::convert::srgb_to_linear);
+        assert!(got.iter().zip(&want).all(|(g, w)| (g - w).abs() <= 0.005), "{got:?} vs {want:?}");
     }
 
     /// The thumbnail prints the spot inks over the composite (matted over white).

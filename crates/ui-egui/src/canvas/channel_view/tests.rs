@@ -404,7 +404,7 @@ fn spot_eyes_overprint_the_composite() {
 
 /// Only inked pixels replace the canvas: where every visible spot is 0 the overlay stays
 /// transparent, so the normal (colour-managed, full-resolution) canvas shows there, and an empty
-/// spot channel renders no composite at all.
+/// spot channel draws nothing and renders no composite at all.
 #[test]
 fn uninked_pixels_leave_the_canvas_alone() {
     for factor in [1, 2] {
@@ -432,11 +432,88 @@ fn uninked_pixels_leave_the_canvas_alone() {
             Look::default(),
             None,
             CompositeSource { cached: None, fresh: &mut fresh, screen: &Screen::default() },
-        )
-        .unwrap();
-        assert!(px.iter().all(|p| *p == Color32::TRANSPARENT));
+        );
+        assert!(px.is_none(), "/{factor}: an empty spot draws no texture");
         assert!(fresh.is_none(), "/{factor}: an empty spot needs no composite");
     }
+}
+
+/// A few inked pixels composite only their bounding box, not the whole document, and print the
+/// same as over the whole composite; ink everywhere renders the whole one, kept for the cache.
+#[test]
+fn sparse_inks_composite_only_their_bounding_box() {
+    use photocraft_doc::{Layer, LayerContent};
+    for factor in [1, 2, 3] {
+        let mut doc = spot_doc(ColorMode::Rgb, photocraft_color::SampleType::U8, 0.5, 1.0);
+        doc.size = photocraft_geom::Size::new(60, 40);
+        let mut ramp = Surface::new(doc.pixel_format());
+        for y in 0..40 {
+            for x in 0..60 {
+                ramp.write_pixel(x, y, &[x as f32 / 59.0, y as f32 / 39.0, 0.5, 1.0]);
+            }
+        }
+        doc.layers.push(Layer::new("ramp", LayerContent::Raster(ramp)));
+        let fmt = doc.channels[0].surface.format();
+        let mut sparse = Surface::new(fmt);
+        sparse.write_pixel(12, 0, &[1.0]);
+        sparse.write_pixel(18, 6, &[0.5]);
+        doc.channels[0].surface = sparse;
+        doc.channels[1].surface = Surface::new(fmt);
+        let mut v = ChannelView::default();
+        v.set_alpha_visible(0, true);
+        v.set_alpha_visible(1, true);
+        let b = doc.bounds();
+        let mut fresh = None;
+        let source = CompositeSource { cached: None, fresh: &mut fresh, screen: &Screen::default() };
+        let got = render_with_source(&doc, &v, b, factor, Look::default(), None, source).unwrap();
+        assert!(fresh.is_none(), "/{factor}: two inked pixels render no whole composite");
+        let whole = composite_sampled(&doc, b, factor);
+        let ink = photocraft_compose::multichannel::Ink::of(&doc, &doc.channels[0]);
+        let w = 60usize.div_ceil(factor as usize);
+        let f = factor as usize;
+        let inked = [(12 / f, 0), (18 / f, 6 / f)];
+        for (k, px) in got.iter().enumerate() {
+            let Some(&(x, y)) = inked.iter().find(|&&(x, y)| y * w + x == k) else {
+                assert_eq!(*px, Color32::TRANSPARENT, "/{factor} px {k}");
+                continue;
+            };
+            let mut want = [whole[k]];
+            ink.apply(&mut want, [doc.channels[0].surface.pixel((x * f) as i32, (y * f) as i32)[0]]);
+            let want = Color32::from_rgb(q(want[0][0]), q(want[0][1]), q(want[0][2]));
+            assert_eq!(*px, want, "/{factor} ({x}, {y})");
+        }
+        // Ink everywhere: the bounding box is the whole document, rendered once for the cache.
+        let mut solid = Surface::new(fmt);
+        solid.fill_rect(b, &[1.0]);
+        doc.channels[1].surface = solid;
+        let mut fresh = None;
+        let source = CompositeSource { cached: None, fresh: &mut fresh, screen: &Screen::default() };
+        assert!(render_with_source(&doc, &v, b, factor, Look::default(), None, source).is_some());
+        assert!(fresh.is_some(), "/{factor}: ink everywhere renders the whole composite");
+    }
+}
+
+/// A visible spot channel without ink draws no texture over the canvas, and remembers that; a
+/// spot with ink shown later draws one.
+#[test]
+fn uninked_spot_draws_no_texture() {
+    let mut app = PhotocraftApp::new(Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 16, "height": 8, "background": "white"})).unwrap();
+    // No selection: an empty spot channel, shown over the composite.
+    app.run("channel.newSpot", json!({"color": "#00ffff", "solidity": 0})).unwrap();
+    app.sync_views();
+    let ctx = egui::Context::default();
+    let id = app.session.active().unwrap().doc.id.0;
+    let st = app.session.active().unwrap();
+    assert!(prints_inks(&st.doc, &st.channel_view), "the composite and the spot are both shown");
+    assert!(ensure(&mut app, &ctx, 0, None).is_none(), "no ink: nothing drawn");
+    assert!(app.channel_views.get(&id).is_some_and(|c| c.tex.is_none() && c.valid), "and remembered");
+    assert!(ensure(&mut app, &ctx, 0, None).is_none());
+    // A second spot made from a selection has ink: the texture shows it.
+    app.run("select.rect", json!({"x": 0, "y": 0, "width": 4, "height": 4})).unwrap();
+    app.run("channel.newSpot", json!({"color": "#ff00ff", "solidity": 0})).unwrap();
+    assert!(ensure(&mut app, &ctx, 0, None).is_some(), "ink: drawn");
+    assert!(app.channel_views.get(&id).is_some_and(|c| c.tex.is_some()));
 }
 
 /// Printed inks go through the canvas display transform (monitor profile, Proof Colors), as the
@@ -458,12 +535,22 @@ fn printed_inks_follow_the_display_transform() {
     assert_ne!(plain[0], shown[0]);
     assert_eq!(shown[0], Color32::from_rgb(q(teal[0]), q(teal[1]), q(teal[2])));
     assert_eq!((plain[2], shown[2]), (Color32::TRANSPARENT, Color32::TRANSPARENT));
-    // A linear composite is sRGB-encoded on its way to the screen.
+}
+
+/// A linear (32-bit) document's composite is sRGB-encoded on its way to the screen. Its inks are
+/// sRGB colours converted into the linear profile, so a solid ink shows its stored colour, not a
+/// brightened one.
+#[test]
+fn printed_inks_keep_their_colour_in_a_linear_document() {
+    let mut doc = spot_doc(ColorMode::Rgb, photocraft_color::SampleType::F32, 1.0, 1.0);
+    doc.icc_profile = Some(photocraft_cms::Builtin::LinearSrgb.profile().to_bytes());
+    let mut v = ChannelView::default();
+    v.set_alpha_visible(0, true);
     let encoded = Screen { encode_srgb: true, transform: None };
     let shown =
         render_with_source(&doc, &v, doc.bounds(), 1, Look::default(), None, CompositeSource { cached: None, fresh: &mut None, screen: &encoded }).unwrap();
-    let enc = photocraft_color::convert::linear_to_srgb;
-    assert_eq!(shown[0], Color32::from_rgb(0, q(enc(0.6)), q(enc(0.65))));
+    let (got, want) = ([shown[0].r(), shown[0].g(), shown[0].b()], [0, q(0.6), q(0.65)]);
+    assert!(got.iter().zip(want).all(|(g, w)| g.abs_diff(w) <= 1), "{got:?} vs the stored {want:?}");
 }
 
 /// Alpha channels and Quick Mask still tint, over the printed inks.
