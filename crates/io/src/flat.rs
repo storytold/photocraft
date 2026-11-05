@@ -113,7 +113,7 @@ fn import_flat_impl_with_options(
     }
     // A PNG whose rows come in final order is decoded straight into the tiles.
     let streamed = match stream_min {
-        Some(min) if format == Some(Format::Png) => import_png_streamed(name, bytes, ctl, min)?,
+        Some(min) if format == Some(Format::Png) => import_png_streamed(name, bytes, opts, ctl, min)?,
         _ => None,
     };
     let (mut r, img) = match streamed {
@@ -739,8 +739,14 @@ fn flat_document(
 /// upright; the caller then decodes the whole image as for any other format. Errors, limits and
 /// metadata are the whole-image decoder's. The tiles and one group of rows are checked against
 /// free memory before the first tile exists (see [`crate::memory`]).
-fn import_png_streamed(name: &str, bytes: &[u8], ctl: &Interrupt, min_bytes: u64) -> Result<Option<ImportResult>, IoError> {
-    import_png_streamed_with(name, bytes, ctl, min_bytes, crate::memory::available)
+fn import_png_streamed(
+    name: &str,
+    bytes: &[u8],
+    opts: &crate::ImportOptions,
+    ctl: &Interrupt,
+    min_bytes: u64,
+) -> Result<Option<ImportResult>, IoError> {
+    import_png_streamed_with(name, bytes, opts, ctl, min_bytes, crate::memory::available)
 }
 
 /// [`import_png_streamed`], with the memory the machine can still use given (see
@@ -748,6 +754,7 @@ fn import_png_streamed(name: &str, bytes: &[u8], ctl: &Interrupt, min_bytes: u64
 fn import_png_streamed_with(
     name: &str,
     bytes: &[u8],
+    opts: &crate::ImportOptions,
     ctl: &Interrupt,
     min_bytes: u64,
     available: impl FnOnce() -> Option<u64>,
@@ -818,7 +825,7 @@ fn import_png_streamed_with(
         ctl.progress(0.02 + 0.53 * (y0 + n) as f32 / h.max(1) as f32);
         Ok(())
     };
-    let Some(extras) = codecs::decode_png_rows::<IoError>(bytes, &codecs::DecodeOptions::default(), TILE_SIZE as u32, &mut begin, &mut rows)? else {
+    let Some(extras) = codecs::decode_png_rows::<IoError>(bytes, &codecs::DecodeOptions { limits: decode_limits(opts), ..Default::default() }, TILE_SIZE as u32, &mut begin, &mut rows)? else {
         return Ok(None);
     };
     ctl.check().map_err(|_| IoError::Cancelled)?;
