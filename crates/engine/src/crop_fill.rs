@@ -149,7 +149,11 @@ fn fill_layer(doc: &mut Document, id: Result<LayerId>, cov: &Coverage, own_pixel
         return Ok(false);
     }
     if !labels.contains(&0) {
-        return if own_pixels { Ok(false) } else { Err(EngineError::Other("Content-Aware fill needs some of the image inside the crop to sample from".into())) };
+        return if own_pixels {
+            Ok(false)
+        } else {
+            Err(EngineError::Other("Content-Aware fill needs some of the image inside the crop to sample from".into()))
+        };
     }
     // Resolve an absent target only after the no-fill/sample checks, preserving the legacy path.
     let id = id?;
@@ -177,11 +181,7 @@ fn fill_layer(doc: &mut Document, id: Result<LayerId>, cov: &Coverage, own_pixel
         let usable = |x, y| label(x, y) == 0 && (!own_pixels || has_pixel(x, y));
         let sampling_bounds = if let Some(donor_bounds) = donor_bounds {
             let window = crate::fill_cmds::sampling_window(*bounds, canvas).intersect(&donor_bounds);
-            if contains_donor(window, usable) {
-                *bounds
-            } else {
-                widened_sampling_bounds(*bounds, donor_bounds, canvas, n)?
-            }
+            if contains_donor(window, usable) { *bounds } else { widened_sampling_bounds(*bounds, donor_bounds, canvas, n)? }
         } else {
             *bounds
         };
