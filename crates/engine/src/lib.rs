@@ -305,9 +305,9 @@ pub struct Session {
     /// scratch disk that pauses or resumes changes the limit ([`Session::sync_scratch_state`]).
     scratch_epoch: u64,
     /// The document before the latest [`Session::edit`] of the running command, which
-    /// [`Session::hint_damage`] checks a hint against. Set by `edit`, taken by `hint_damage`,
-    /// dropped when the command ends. Debug and test builds only.
-    #[cfg(any(test, debug_assertions))]
+    /// [`Session::hint_damage`] grows a hint by (a feathered mask's halo, #11351) and, in debug and
+    /// test builds, checks it against. Set by `edit`, taken by `hint_damage`, dropped when the
+    /// command ends.
     hint_before: Option<Arc<Document>>,
     /// Damage hints that missed a tile their edit changed ([`Session::hint_damage`]): each one a
     /// command reporting too narrow a redraw area (#4053). Counted in debug and test builds only;

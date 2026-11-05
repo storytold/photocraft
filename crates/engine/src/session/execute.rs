@@ -314,7 +314,6 @@ impl Session {
         // report its own, tighter damage after this.
         let damage = layer_multi_cmds::step_damage(&before, &st.doc);
         let keep_clean = st.keeps_clean(&before);
-        #[cfg(any(test, debug_assertions))]
         let hint_before = before.clone();
         let key = self.coalesce_request.clone();
         let st = self.active_mut().ok_or(EngineError::NoDocument)?;
@@ -336,10 +335,8 @@ impl Session {
         st.bump_revision(keep_clean);
         st.last_damage = damage;
         self.samplers_removed += samplers_removed;
-        #[cfg(any(test, debug_assertions))]
-        {
-            self.hint_before = Some(hint_before);
-        }
+        // An `Arc` clone (history keeps the same document); dropped when the command ends.
+        self.hint_before = Some(hint_before);
         if damage.is_none_or(|d| !d.is_empty()) {
             // Free the mask early; a stale entry would only miss (it is keyed by pixels).
             self.subject_cache = Default::default();
@@ -351,19 +348,29 @@ impl Session {
     /// A command's own rect for the pixels its latest [`Session::edit`] changed: sub-tile precise
     /// for a brush dab, where the edit's own damage ([`layer_multi_cmds::step_damage`]) has tile
     /// precision. The redraw area becomes the intersection of the two, so a hint can only narrow
-    /// it (or bound a change `step_damage` can't). In debug and test builds, a hint that misses a
-    /// tile the edit changed is counted in [`Session::damage_misses`] and logged; it never panics.
+    /// it (or bound a change `step_damage` can't). A hint names the pixels the command wrote; where
+    /// they are a feathered layer mask's, it grows by the feather's reach first, as `step_damage`
+    /// does, so the blurred halo around a mask stroke is redrawn too (#11351). In debug and test
+    /// builds, a hint that misses a tile the edit changed is counted in [`Session::damage_misses`]
+    /// and logged; it never panics.
     pub fn hint_damage(&mut self, rect: photocraft_geom::Rect) {
-        #[cfg(any(test, debug_assertions))]
+        let mut rect = rect;
         if let Some(before) = self.hint_before.take()
             && let Some(st) = self.active()
             && st.doc.id == before.id
         {
-            let misses = layer_multi_cmds::hint_misses(&before, &st.doc, rect);
-            if misses > 0 {
-                let step = st.history.undo_label().unwrap_or("?");
-                eprintln!("warning: `{step}` hinted damage {rect:?} that misses {misses} changed tile(s); the canvas may not redraw them");
-                self.damage_misses += misses;
+            let reach = layer_multi_cmds::hint_reach(&before, &st.doc);
+            #[cfg(any(test, debug_assertions))]
+            {
+                let misses = layer_multi_cmds::hint_misses(&before, &st.doc, rect);
+                if misses > 0 {
+                    let step = st.history.undo_label().unwrap_or("?");
+                    eprintln!("warning: `{step}` hinted damage {rect:?} that misses {misses} changed tile(s); the canvas may not redraw them");
+                    self.damage_misses += misses;
+                }
+            }
+            if reach > 0 && !rect.is_empty() {
+                rect = rect.inflate(reach);
             }
         }
         let Some(st) = self.active_mut() else { return };

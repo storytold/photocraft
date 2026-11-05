@@ -512,6 +512,28 @@ pub(crate) fn hint_misses(before: &Document, after: &Document, hint: Rect) -> us
     misses
 }
 
+/// How far a hint for the pixels an edit wrote must grow to cover the composite: the widest
+/// feather ([`photocraft_compose::masks::pixel_feather_reach`]) of the layer masks whose pixels
+/// differ between `before` and `after` (tile pointers only). A brush dab into a feathered mask
+/// changes the composite past the dab's own rect (#11351); 0 when no feathered mask changed.
+pub(crate) fn hint_reach(before: &Document, after: &Document) -> i32 {
+    let mut reach = 0;
+    for (_, _, y) in after.walk() {
+        let r = photocraft_compose::masks::pixel_feather_reach(y);
+        if r <= reach {
+            continue;
+        }
+        let changed = match (before.layer(y.id).and_then(|x| x.mask.as_ref()), y.mask.as_ref()) {
+            (Some(x), Some(m)) => !surfaces_equal(&x.surface, &m.surface),
+            _ => true,
+        };
+        if changed {
+            reach = r;
+        }
+    }
+    reach
+}
+
 /// The pixels a change from layer `a` to layer `b` (the same layer on either side of a step) can
 /// have changed when only the pixels of its surfaces changed: the tiles that differ
 /// ([`surface_damage`]), a mask's grown by its feather, all grown by the layer's own effects.

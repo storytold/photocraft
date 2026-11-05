@@ -328,6 +328,37 @@ fn pixel_edits_refresh_cached_masks_at_every_depth() {
     }
 }
 
+/// #11351: a dab painted into a feathered mask after its combined mask was cached (in place, as a
+/// live stroke paints its own copy) gives the same soft result as building it from scratch: the
+/// cache is not what showed the stroke hard-edged. The halo is what a redraw must cover
+/// ([`pixel_feather_reach`]), and it reaches past the dab.
+#[test]
+fn a_dab_into_a_cached_feathered_mask_matches_a_fresh_build() {
+    let canvas = Rect::new(0, 0, 200, 120);
+    let mut layer = Layer::raster("dabbed mask", PixelFormat::RGBA8);
+    layer.mask = Some(LayerMask { feather: 10.0, ..LayerMask::reveal_all() });
+    let warm = combined_mask(&layer, canvas).unwrap();
+    assert!((warm.sample_channel(100, 60, 0) - 1.0).abs() < 1e-6);
+    drop(warm);
+    let dab = Rect::new(90, 50, 110, 70);
+    layer.mask.as_mut().unwrap().surface.fill_rect(dab, &[0.0]);
+    let cached = combined_mask(&layer, canvas).unwrap();
+    let fresh = build_mask(&layer, canvas);
+    assert_eq!(cached.read_region(canvas), fresh.read_region(canvas));
+    // Soft across the dab's edge, and changed past it (where the dab's own rect ends).
+    let edge = cached.sample_channel(dab.x1, 60, 0);
+    assert!(edge > 0.05 && edge < 0.95, "a soft edge at the dab's side: {edge}");
+    assert!(cached.sample_channel(dab.x1 + 8, 60, 0) < 0.99, "the feather reaches past the dab");
+    let reach = pixel_feather_reach(&layer);
+    assert_eq!(reach, photocraft_vector::feather::reach(feather_sigma(10.0)));
+    assert!((cached.sample_channel(dab.x1 + reach, 60, 0) - 1.0).abs() < 1e-4, "nothing changes past the reach");
+    layer.mask.as_mut().unwrap().feather = 0.0;
+    assert_eq!(pixel_feather_reach(&layer), 0);
+    layer.mask.as_mut().unwrap().feather = 10.0;
+    layer.mask.as_mut().unwrap().enabled = false;
+    assert_eq!(pixel_feather_reach(&layer), 0);
+}
+
 #[test]
 fn cache_budget_holds_five_50mp_u8_input_u16_result_masks() {
     // Account for whole 256×256 tiles, as entry_bytes does, rather than just logical pixels.

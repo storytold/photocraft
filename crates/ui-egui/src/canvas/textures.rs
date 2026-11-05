@@ -435,18 +435,21 @@ pub(crate) fn shown_as_document(app: &mut PhotocraftApp, doc: photocraft_doc::Do
 }
 
 /// How far beyond an edit's damage rect the composite can change: layer effects (shadows, glows,
-/// strokes, …) on the edited layer and on the groups around it reach that far.
+/// strokes, …) on the edited layer and on the groups around it reach that far, and so does a
+/// feathered layer mask: its blur carries a dab painted into the mask past the dab's rect (#11351).
 pub(crate) fn effect_reach(layers: &[photocraft_doc::Layer]) -> i32 {
     layers
         .iter()
         .filter(|l| l.visible)
         .map(|l| {
-            let own = if photocraft_compose::effects::has_effects(l) { photocraft_compose::effects::margin(l) } else { 0 };
+            let fx = if photocraft_compose::effects::has_effects(l) { photocraft_compose::effects::margin(l) } else { 0 };
+            // Effects are drawn from the masked layer, so they reach past the feather's halo.
+            let own = fx.saturating_add(photocraft_compose::masks::pixel_feather_reach(l));
             let inner = match &l.content {
                 LayerContent::Group(g) => effect_reach(&g.children),
                 _ => 0,
             };
-            own + inner
+            own.saturating_add(inner)
         })
         .max()
         .unwrap_or(0)
