@@ -677,8 +677,9 @@ pub fn refine_surface_with_interrupt(
                     let first = mask.sample_channel(tc.rect().x0, tc.rect().y0, 0);
                     let fmt = mask.format();
                     let bytes = fmt.bytes_per_pixel();
-                    let first_pixel = tile.bytes().get(..bytes)?;
-                    tile.bytes().chunks_exact(bytes).all(|p| p == first_pixel).then_some(first)
+                    let binding = tile.bytes();
+                    let first_pixel = binding.get(..bytes)?;
+                    binding.chunks_exact(bytes).all(|p| p == first_pixel).then_some(first)
                 })
             } else {
                 Some(default)
