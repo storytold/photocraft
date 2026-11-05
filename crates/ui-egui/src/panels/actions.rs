@@ -313,9 +313,7 @@ fn play_owned(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>)
         };
         match result {
             Ok(value) => {
-                if matches!(id.as_str(), "file.placeEmbedded" | "file.placeLinked") {
-                    app.report_place_warnings(&value, id == "file.placeLinked");
-                }
+                report_replayed_place(app, id, &value);
                 if let Some(error) = actions_cmds::nested_failure(id, &value).or_else(|| actions_cmds::save_target_closed(&app.session, id, target)) {
                     failed = Some(json!({"step": i, "id": id, "error": error}));
                     break;
@@ -786,6 +784,13 @@ pub fn insert_stop_confirm(app: &mut PhotocraftApp, fields: &serde_json::Map<Str
 
 /// The key a paused playback leaves in its dialog's fields: the token of its [`PausedPlayback`].
 pub const RESUME: &str = "__resumeAction";
+
+/// Show the import warnings of a replayed Place step, as File › Place does.
+fn report_replayed_place(app: &mut PhotocraftApp, id: &str, value: &Value) {
+    if matches!(id, "file.placeEmbedded" | "file.placeLinked") {
+        app.report_place_warnings(value, id == "file.placeLinked");
+    }
+}
 
 /// Resume the recording a paused call suspended and journal that call, once.
 fn restore_recording(app: &mut PhotocraftApp, owner: Option<&Value>) {
