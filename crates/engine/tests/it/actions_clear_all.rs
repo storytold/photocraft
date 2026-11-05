@@ -2,9 +2,7 @@
 use photocraft_engine::{Session, actions_cmds::Action};
 use serde_json::json;
 
-/// Clearing requires consent and idle playback/recording, and preserves document history.
-#[test]
-fn confirmed_clear_is_atomic_for_definitions_shortcuts_and_recording() {
+fn assert_clear_requires_confirmation() -> Session {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 8, "height": 6})).unwrap();
     for (name, set) in [("A", "One"), ("B", "Two")] {
@@ -32,6 +30,16 @@ fn confirmed_clear_is_atomic_for_definitions_shortcuts_and_recording() {
         assert_eq!(s.prefs().alternate_shortcuts, alternate);
         assert_eq!(s.actions.rev, rev);
     }
+    s
+}
+
+/// Clearing requires consent and idle playback/recording, and preserves document history.
+#[test]
+fn confirmed_clear_is_atomic_for_definitions_shortcuts_and_recording() {
+    let mut s = assert_clear_requires_confirmation();
+    let definitions = s.actions.list.clone();
+    let shortcuts = s.prefs().shortcuts.clone();
+    let alternate = s.prefs().alternate_shortcuts.clone();
     s.execute("actions.record", json!({"action": "A"})).unwrap();
     s.execute("select.all", json!({})).unwrap();
     let recording = s.actions.recording;
