@@ -67,7 +67,47 @@ pub enum SeparableBlur {
     /// past them), so it reads the layer's whole extent ([`SeparableBlur::whole`]) rather than a
     /// reach.
     Remap(Arc<RemapParams>),
+    /// Lens Blur (`photocraft_algo` `blur2::lens_blur`): an iris-shaped mean over per-row prefix
+    /// sums, its size per pixel by depth, with highlights boosted first and noise added after.
+    Lens(Arc<LensParams>),
 }
+
+/// An iris's rows: `(dy, dx0, dx1)`, inclusive.
+pub type IrisRows = Vec<(i32, i32, i32)>;
+
+/// What [`SeparableBlur::Lens`] needs besides the source (`photocraft_algo::separable::Lens`).
+#[derive(Debug, PartialEq)]
+pub struct LensParams {
+    /// The iris at each of the depth levels: its rows `(dy, dx0, dx1)` (inclusive) and how many
+    /// pixels it covers.
+    pub levels: Vec<(IrisRows, f32)>,
+    /// Specular Highlights: the boost above the threshold (a fraction).
+    pub boost: f32,
+    pub threshold: f32,
+    pub depth: LensDepth,
+    pub invert: bool,
+    /// Blur Focal Distance as a fraction.
+    pub focal: f32,
+    /// The noise amount (0 for none), Gaussian or uniform, monochromatic, its seed.
+    pub noise: f32,
+    pub gaussian: bool,
+    pub mono: bool,
+    pub seed: u32,
+}
+
+/// Where Lens Blur's depth comes from.
+#[derive(Debug, PartialEq)]
+pub enum LensDepth {
+    /// No depth: the whole iris everywhere.
+    None,
+    /// The layer's own alpha.
+    Transparency,
+    /// A map (the layer mask, or an alpha channel), read at each output pixel; held by identity.
+    Map(Arc<Surface>),
+}
+
+/// Most depth levels a [`LensParams`] may have.
+const MAX_LENS_LEVELS: usize = 16;
 
 /// What [`SeparableBlur::Remap`] needs besides the source.
 #[derive(Debug, PartialEq)]
@@ -204,6 +244,12 @@ impl SeparableBlur {
             SeparableBlur::Convolve { taps, .. } => taps.iter().map(|&(dx, dy, _)| dx.unsigned_abs().max(dy.unsigned_abs()) as usize).max().unwrap_or(0),
             // Reads its whole window ([`SeparableBlur::whole`]).
             SeparableBlur::Remap(_) => 0,
+            SeparableBlur::Lens(l) => l
+                .levels
+                .iter()
+                .flat_map(|(rows, _)| rows.iter().map(|&(dy, a, b)| dy.unsigned_abs().max(a.unsigned_abs()).max(b.unsigned_abs()) as usize))
+                .max()
+                .unwrap_or(0),
         };
         i32::try_from(reach).unwrap_or(i32::MAX)
     }
@@ -231,6 +277,12 @@ impl SeparableBlur {
                 taps.len() <= MAX_TAPS && taps.iter().all(|t| t.2.is_finite()) && scale.is_finite() && *scale != 0.0 && offset.is_finite()
             }
             SeparableBlur::Remap(r) => !r.bounds.is_empty() && r.mapping.valid(r.bounds),
+            SeparableBlur::Lens(l) => {
+                !l.levels.is_empty()
+                    && l.levels.len() <= MAX_LENS_LEVELS
+                    && l.levels.iter().all(|(rows, count)| !rows.is_empty() && count.is_finite() && *count > 0.0)
+                    && [l.boost, l.threshold, l.focal, l.noise].iter().all(|v| v.is_finite())
+            }
         }
     }
 }
@@ -349,6 +401,16 @@ impl GaussianBlur {
                     _ => (0, [0, 0]),
                 };
                 (7u8, kind, p.map(f32::to_bits), e, data.iter().map(|v| v.to_bits()).collect::<Vec<_>>(), map, r.bounds, r.undefined).hash(&mut h)
+            }
+            // The settings, and the depth map by identity (a dialog session holds one).
+            SeparableBlur::Lens(l) => {
+                let depth = match &l.depth {
+                    LensDepth::None => (0u8, 0usize),
+                    LensDepth::Transparency => (1, 0),
+                    LensDepth::Map(m) => (2, Arc::as_ptr(m) as usize),
+                };
+                let levels: Vec<(&IrisRows, u32)> = l.levels.iter().map(|(rows, count)| (rows, count.to_bits())).collect();
+                (8u8, levels, [l.boost, l.threshold, l.focal, l.noise].map(f32::to_bits), depth, l.invert, l.gaussian, l.mono, l.seed).hash(&mut h)
             }
         }
         (extent, area, keep_alpha, depth as u8).hash(&mut h);
@@ -493,6 +555,7 @@ pub(crate) struct OpKit {
     blur_layout: wgpu::BindGroupLayout,
     disc_layout: wgpu::BindGroupLayout,
     displace_layout: wgpu::BindGroupLayout,
+    lens_layout: wgpu::BindGroupLayout,
     finish_layout: wgpu::BindGroupLayout,
     kernel: wgpu::ComputePipeline,
     boxes: wgpu::ComputePipeline,
@@ -500,6 +563,8 @@ pub(crate) struct OpKit {
     disc: wgpu::ComputePipeline,
     convolve: wgpu::ComputePipeline,
     displace: wgpu::ComputePipeline,
+    lens_prefix: wgpu::ComputePipeline,
+    lens_mean: wgpu::ComputePipeline,
     finish: wgpu::ComputePipeline,
 }
 
@@ -563,6 +628,12 @@ impl OpKit {
                 label: Some("pc_operator_remap"),
                 entries: &[tex(0), tex(1), storage(2), uniform(3), buffer(4)],
             });
+            // Lens Blur: the source window, its prefix sums and the depth in, prefix sums or the
+            // result out, the irises' spans.
+            let lens_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("pc_operator_lens"),
+                entries: &[tex(0), tex(1), tex(2), storage(3), uniform(4), buffer(5)],
+            });
             let finish_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("pc_operator_finish"),
                 entries: &[tex(0), tex(1), tex(2), storage(3), uniform(4)],
@@ -588,8 +659,25 @@ impl OpKit {
             let disc = pipeline(&disc_layout, "disc_step");
             let convolve = pipeline(&blur_layout, "convolve_pass");
             let displace = pipeline(&displace_layout, "remap_pass");
+            let lens_prefix = pipeline(&lens_layout, "lens_prefix");
+            let lens_mean = pipeline(&lens_layout, "lens_mean");
             let finish = pipeline(&finish_layout, "finish");
-            OpKit { blur_layout, disc_layout, displace_layout, finish_layout, kernel, boxes, extreme, disc, convolve, displace, finish }
+            OpKit {
+                blur_layout,
+                disc_layout,
+                displace_layout,
+                lens_layout,
+                finish_layout,
+                kernel,
+                boxes,
+                extreme,
+                disc,
+                convolve,
+                displace,
+                lens_prefix,
+                lens_mean,
+                finish,
+            }
         });
         match error {
             None => Some(kit),
@@ -666,11 +754,11 @@ pub(crate) fn record_blur<'s>(
         SeparableBlur::Boxes(b) => [0u32, 1].iter().flat_map(|&axis| (0..b.len()).map(move |i| (i, axis))).collect(),
         // One 2D pass (a disc has its own, `record_disc`; Displace `record_displace`).
         SeparableBlur::Disc { .. } | SeparableBlur::Convolve { .. } => vec![(0, 0)],
-        SeparableBlur::Remap(_) => return None,
+        SeparableBlur::Remap(_) | SeparableBlur::Lens(_) => return None,
     };
     let weights: Vec<u8> = match blur {
         SeparableBlur::Kernel(k) => k.iter().flat_map(|w| w.to_le_bytes()).collect(),
-        SeparableBlur::Boxes(_) | SeparableBlur::Extreme { .. } | SeparableBlur::Remap(_) => 0f32.to_le_bytes().to_vec(),
+        SeparableBlur::Boxes(_) | SeparableBlur::Extreme { .. } | SeparableBlur::Remap(_) | SeparableBlur::Lens(_) => 0f32.to_le_bytes().to_vec(),
         SeparableBlur::Disc { half_widths, .. } if half_widths.is_empty() => 0f32.to_le_bytes().to_vec(),
         SeparableBlur::Disc { half_widths, .. } => half_widths.iter().flat_map(|w| (*w as f32).to_le_bytes()).collect(),
         // [scale, offset, (dx, dy, weight)...]
@@ -700,7 +788,7 @@ pub(crate) fn record_blur<'s>(
             // Only the empty disc (radius under 1) comes here: a copy.
             SeparableBlur::Disc { max, .. } => (0, f32::from(u8::from(*max)), &kit.extreme),
             SeparableBlur::Convolve { taps, .. } => (taps.len() as u32, 0.0, &kit.convolve),
-            SeparableBlur::Remap(_) => return None,
+            SeparableBlur::Remap(_) | SeparableBlur::Lens(_) => return None,
         };
         let (ox, oy) = if n == 0 { (origin[0], origin[1]) } else { (0, 0) };
         let pre = blur.premultiplies();
@@ -827,10 +915,129 @@ pub(crate) fn record_remap<'s>(
     Some(dst)
 }
 
+/// Record Lens Blur's passes over the `size` window starting at `origin` in `source` (the
+/// cell's part of the source window, `doc_origin` in document pixels): the prefix sums into
+/// `scratch[0]` (one column wider), then the result over `out` (an area inside the window, in
+/// window pixels) into `scratch[1]`, its depth (for a depth map) read from `depth` at `out`'s
+/// origin. `format` is the layer's: a Grayscale one's single channel is the luma, and takes one
+/// noise sample.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn record_lens<'s>(
+    device: &wgpu::Device,
+    encoder: &mut wgpu::CommandEncoder,
+    kit: &OpKit,
+    l: &LensParams,
+    source: &wgpu::Texture,
+    origin: [u32; 2],
+    size: [u32; 2],
+    doc_origin: [i32; 2],
+    out: Rect,
+    depth: &wgpu::Texture,
+    format: photocraft_color::PixelFormat,
+    scratch: &'s [wgpu::Texture],
+) -> Option<&'s wgpu::Texture> {
+    use wgpu::util::DeviceExt;
+    let (has_alpha, gray) = (format.alpha, format.mode == photocraft_color::ColorMode::Grayscale);
+    let (prefix, dst) = (scratch.first()?, scratch.get(1)?);
+    // Only the rows and columns the irises reach from `out` are summed (the window's apron is
+    // for the slider's next steps). The sums' differences don't depend on where they start.
+    let reach = l.levels.iter().flat_map(|(rows, _)| rows.iter().map(|&(dy, a, b)| dy.abs().max(a.abs()).max(b.abs()))).max().unwrap_or(0);
+    let need = out.inflate(reach).intersect(&Rect::new(0, 0, size[0] as i32, size[1] as i32));
+    if need.is_empty() {
+        return None;
+    }
+    let (dx, dy) = (need.x0 as u32, need.y0 as u32);
+    let (origin, size) = ([origin[0] + dx, origin[1] + dy], [need.width(), need.height()]);
+    let (doc_origin, out) = ([doc_origin[0] + need.x0, doc_origin[1] + need.y0], out.translate(-need.x0, -need.y0));
+    // [level starts..., level counts (bits)..., (dy, dx0, dx1) per span...]
+    let levels = l.levels.len() as u32;
+    let mut words: Vec<i32> = Vec::new();
+    let mut at = 0u32;
+    for (rows, _) in &l.levels {
+        words.push(at as i32);
+        at += rows.len() as u32;
+    }
+    words.push(at as i32);
+    words.extend(l.levels.iter().map(|(_, c)| c.to_bits() as i32));
+    for (rows, _) in &l.levels {
+        words.extend(rows.iter().flat_map(|&(dy, a, b)| [dy, a, b]));
+    }
+    let spans = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("pc_operator_lens_spans"),
+        contents: &words.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<u8>>(),
+        usage: wgpu::BufferUsages::STORAGE,
+    });
+    let depth_mode = match l.depth {
+        LensDepth::None => 0u32,
+        LensDepth::Transparency => 1,
+        LensDepth::Map(_) => 2,
+    };
+    let flags = u32::from(has_alpha) | u32::from(gray) << 1 | u32::from(l.gaussian) << 2 | u32::from(l.mono) << 3 | u32::from(l.invert) << 4;
+    let i = |v: i32| v as u32;
+    let params = words_of(&[
+        size[0],
+        size[1],
+        origin[0],
+        origin[1],
+        i(out.x0),
+        i(out.y0),
+        out.width(),
+        out.height(),
+        i(doc_origin[0]),
+        i(doc_origin[1]),
+        levels,
+        depth_mode,
+        l.boost.to_bits(),
+        l.threshold.to_bits(),
+        l.focal.to_bits(),
+        l.noise.to_bits(),
+        flags,
+        l.seed,
+        dx,
+        dy,
+    ]);
+    let params =
+        device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("pc_operator_lens"), contents: &params, usage: wgpu::BufferUsages::UNIFORM });
+    let stand_in = float_texture(device, "pc_operator_lens_none", 1, 1);
+    for (entry, src2, out_tex, groups) in
+        [(&kit.lens_prefix, &stand_in, prefix, [size[1], 1]), (&kit.lens_mean, prefix, dst, [out.width().div_ceil(8), out.height().div_ceil(8)])]
+    {
+        let views = [source, src2, depth, out_tex].map(|t| t.create_view(&Default::default()));
+        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("pc_operator_lens"),
+            layout: &kit.lens_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&views[0]) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&views[1]) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&views[2]) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&views[3]) },
+                wgpu::BindGroupEntry { binding: 4, resource: params.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 5, resource: spans.as_entire_binding() },
+            ],
+        });
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("pc_operator_lens"), timestamp_writes: None });
+        pass.set_pipeline(entry);
+        pass.set_bind_group(0, &group, &[]);
+        pass.dispatch_workgroups(groups[0].max(1), groups[1].max(1), 1);
+    }
+    Some(dst)
+}
+
+/// Little-endian bytes of uniform words.
+fn words_of(w: &[u32]) -> Vec<u8> {
+    words(w)
+}
+
 /// Scratch textures a description's passes need: a disc four (the horizontal extreme and the
 /// result, each ping-ponged), the rest two.
 pub(crate) fn scratch_count(blur: &SeparableBlur) -> usize {
     if matches!(blur, SeparableBlur::Disc { half_widths, .. } if !half_widths.is_empty()) { 4 } else { 2 }
+}
+
+/// The scratch textures' size for passes over a `size` window: Lens Blur's prefix sums are one
+/// column wider than the window.
+pub(crate) fn scratch_size(blur: &SeparableBlur, size: [u32; 2]) -> [u32; 2] {
+    if matches!(blur, SeparableBlur::Lens(_)) { [size[0] + 1, size[1]] } else { size }
 }
 
 /// Minimum or Maximum over a disc in `half_widths.len() / 2 + 1` steps: step `h` holds the
