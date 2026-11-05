@@ -435,7 +435,7 @@ pub static CATALOG: &[(&[&str], &str, Option<&str>, &str)] = &[
     (&["Layer", "Distribute"], "Horizontally", None, "layer.distribute.horizontally"),
     (&["Layer", "Distribute"], "Vertically", None, "layer.distribute.vertically"),
     (&["Layer"], "---", None, "---"),
-    (&["Layer"], "Lock Layers…", None, "layer.lockLayers"),
+    (&["Layer"], "Lock Layers…", Some("Cmd+/"), "layer.lockLayers"),
     (&["Layer"], "---", None, "---"),
     (&["Layer"], "Link Layers", None, "layer.linkLayers"),
     (&["Layer"], "Select Linked Layers", None, "layer.selectLinkedLayers"),

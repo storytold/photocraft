@@ -778,6 +778,8 @@ mod layer_shortcut_tests;
 #[cfg(test)]
 mod live_retouch_tests;
 #[cfg(test)]
+mod lock_layers_shortcut_tests;
+#[cfg(test)]
 mod pencil_tests;
 #[cfg(test)]
 mod tool_options_theme_tests;
