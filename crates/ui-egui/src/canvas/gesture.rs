@@ -6,7 +6,7 @@ use super::strokes::{
 use super::textures::shown_as_document;
 use super::{PhotocraftApp, Tool, json};
 
-pub(crate) fn finish_gesture(app: &mut PhotocraftApp, d: Drag) {
+pub(crate) fn finish_gesture(app: &mut PhotocraftApp, mut d: Drag) {
     // Control can select a different tool and release before the next frame cancels the drag.
     // Cancel before even recording a Shift-stroke anchor, including the preview fallback paths.
     if d.tool == Tool::MixerBrush && app.ui.tool != Tool::MixerBrush {
@@ -20,7 +20,19 @@ pub(crate) fn finish_gesture(app: &mut PhotocraftApp, d: Drag) {
     let (sx, sy) = snap_aliased_tip(app, d.tool, end[0], end[1]);
     end[0] = sx;
     end[1] = sy;
-    if let Some(floating) = d.sel_move {
+    // A Single Row / Single Column click inside the selection selects a line, as it does elsewhere,
+    // instead of deselecting as other marquees do (#11392). A release where the press was ends here
+    // unsnapped (`tool_input`), so a click is never a move; the line snaps as a click outside the
+    // selection does (its press began as a move, which keeps the press point).
+    let line_click = d.sel_move == Some(false)
+        && matches!(d.tool, Tool::SingleRowMarquee | Tool::SingleColumnMarquee)
+        && (end[0] - d.start[0]).round() == 0.0
+        && (end[1] - d.start[1]).round() == 0.0;
+    if line_click {
+        let [x, y] = crate::snap_ui::snap_click(app, d.start, d.live);
+        d.points.push([x, y, end[2]]);
+        end = [x, y, end[2]];
+    } else if let Some(floating) = d.sel_move {
         finish_selection_drag(app, floating, d.start, [end[0], end[1]]);
         return;
     }

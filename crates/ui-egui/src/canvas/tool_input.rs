@@ -572,6 +572,7 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
             let last = d.points.last().map_or(d.start, |p| [p[0], p[1]]);
             let [x, y] = crate::stroke_constraint::constrain(d.tool, &mut d.constrain, d.start, last, [x, y], mods.shift, zoom);
             let [x, y] = crate::move_mods::selection_drag_to(&mut d, [x, y], mods.shift && app.active_tool() != Tool::Move);
+            let [x, y] = selection_release(&d, raw, [x, y]);
             // A Move-tool click (released where it was pressed) selects, it never moves: snapping
             // the release point would otherwise nudge the layer onto a nearby edge.
             if d.tool == Tool::Move && d.points.len() < 2 && matches!(raw, ToolEvent::Up { x, y } if [x, y] == d.start) {
@@ -589,6 +590,18 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
             finish_gesture(app, d);
             crate::move_mods::finish(app);
         }
+    }
+}
+
+/// Where selection drag `d` ends for a release at `p` (snapped; `raw` before snapping): where it
+/// was pressed when the pointer is back within half a pixel of it (the click `finish_gesture`
+/// rounds to, a zoomed-in hand's jitter included), as with snapping off. Snapping the release would
+/// nudge the selection's edges onto a nearby guide or the canvas edge, moving it instead of
+/// deselecting (a Single Row / Column Marquee: selecting the line, #11392).
+fn selection_release(d: &Drag, raw: ToolEvent, p: [f64; 2]) -> [f64; 2] {
+    match raw {
+        ToolEvent::Up { x, y } if d.sel_move.is_some() && (x - d.start[0]).round() == 0.0 && (y - d.start[1]).round() == 0.0 => d.start,
+        _ => p,
     }
 }
 
@@ -623,12 +636,14 @@ fn covers(sel: &photocraft_raster::Surface, p: [f64; 2]) -> bool {
 /// moves the floating piece (⌘ cuts one first, ⌘⌥ copies; a floating piece moves with a plain
 /// drag; the Polygonal Lasso and Magic Wand need ⌘, as a plain press there places or samples),
 /// `Some(false)` just the outline (no ⇧ / ⌥ and the options bar on New Selection, so a combining
-/// drag still draws).
+/// drag still draws). The Single Row / Single Column Marquee drag the outline too (#11392); a click
+/// without moving still selects the line under the pointer (`finish_gesture`).
 pub fn selection_drag_kind(app: &PhotocraftApp, tool: Tool, p: [f64; 2], mods: egui::Modifiers) -> Option<bool> {
     // Click-driven selection tools (a press places a point or samples): only ⌘ drags the
     // selection, and not while a polygon is being drawn.
     let clicky = matches!(tool, Tool::PolygonLasso | Tool::MagicWand);
-    if !(clicky || matches!(tool, Tool::RectMarquee | Tool::EllipseMarquee | Tool::Lasso)) || (clicky && !app.ui.polygon.is_empty()) {
+    let marquee = matches!(tool, Tool::RectMarquee | Tool::EllipseMarquee | Tool::SingleRowMarquee | Tool::SingleColumnMarquee);
+    if !(clicky || marquee || tool == Tool::Lasso) || (clicky && !app.ui.polygon.is_empty()) {
         return None;
     }
     // ⌘ cuts, ⌘⌥ copies (`select.float`'s `copy`).

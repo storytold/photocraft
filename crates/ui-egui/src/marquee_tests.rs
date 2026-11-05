@@ -762,6 +762,32 @@ fn a_moved_selection_snaps_to_guides_and_the_document_not_its_start() {
     }
 }
 
+/// #11392: with View › Snap on (a fresh app's), a click inside a selection whose edges sit within
+/// snapping reach of the canvas edge is still a click: the Rectangular Marquee deselects and the
+/// Single Row Marquee selects the row under the pointer. The snapped release moved the selection
+/// onto the edge instead.
+#[test]
+fn a_click_inside_the_selection_never_snaps_it() {
+    let click = |h: &mut Harness<'static, PhotocraftApp>, x: f32, y: f32| {
+        move_to(h, x, y);
+        let p = screen(h, x, y);
+        button(h, p, true, Modifiers::NONE);
+        button(h, p, false, Modifiers::NONE);
+        h.run_steps(2);
+    };
+    let mut h = harness(Tool::RectMarquee);
+    assert!(h.state().ui.extras.snap);
+    h.state_mut().run("select.rect", json!({"x": 3, "y": 3, "width": 100, "height": 50})).unwrap();
+    click(&mut h, 50.5, 30.5);
+    assert!(h.state().session.active().unwrap().doc.selection.is_none(), "deselected, not moved onto the edge");
+
+    let mut h = harness(Tool::SingleRowMarquee);
+    h.state_mut().run("select.rect", json!({"x": 0, "y": 3, "width": 400, "height": 1})).unwrap();
+    h.state_mut().run("select.rect", json!({"x": 0, "y": 150, "width": 400, "height": 1, "mode": "add"})).unwrap();
+    click(&mut h, 200.5, 150.5);
+    assert_eq!(selection(&h), Rect::new(0, 150, 400, 151), "row 150 alone, not both rows moved up 3 px");
+}
+
 /// #5646: the Move tool keeps Photoshop's arrow pointer instead of the 4-way move cursor (the
 /// hover outline still marks the layer under the pointer).
 #[test]
