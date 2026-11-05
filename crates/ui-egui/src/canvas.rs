@@ -48,7 +48,7 @@ mod strokes;
 mod tabs;
 mod textures;
 pub(super) mod tile_overlay;
-pub(super) mod tool_cursor;
+pub mod tool_cursor;
 pub mod tool_feedback;
 mod tool_input;
 mod transform_controls;
@@ -95,8 +95,7 @@ use paint::{
 use selection::selection_shown_offset;
 pub use selection::{SelCursor, selection_cursor};
 pub(crate) use selection::{floating_outline, selection_drag_delta};
-#[cfg(test)]
-use start_screen::start_screen_drop_hint;
+pub(crate) use start_screen::start_screen_drop_hint;
 pub(crate) use strokes::multiple_color_target;
 pub use strokes::paint_target;
 pub(crate) use strokes::{ClonePreviewCache, CommittedStroke, LiveStroke, cancel_mixer_on_context_change, freehand_tool, spread_ms, strokes_live};
@@ -1212,6 +1211,15 @@ fn handle_canvas_tool_clicks(
             }
         }
     }
+    // A Frame drag uses a temporary Free Transform for its image/both target. That owns
+    // the release, so the generic tool-click gate can be false even for a double click.
+    if tool == Tool::Frame
+        && response.contains_pointer()
+        && ctx.input(|i| i.pointer.button_double_clicked(PointerButton::Primary))
+        && let Some(p) = response.interact_pointer_pos().or_else(|| ctx.pointer_hover_pos())
+    {
+        crate::frame_tool::double_click(app, xf.to_doc(p));
+    }
     // Magnetic Lasso: between clicks the border follows the pointer with the button up.
     if tool == Tool::MagneticLasso && app.ui.magnetic.active() && !(buttons.started || buttons.dragged || buttons.stopped) && response.hovered() {
         let moves: Vec<Pos2> = ui.input(|i| i.events.iter().filter_map(|e| if let egui::Event::PointerMoved(p) = e { Some(*p) } else { None }).collect());
@@ -1300,7 +1308,10 @@ fn paint_primary_overlays(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut
     if app.ui.extras.grid && app.ui.view.extras {
         crate::rulers::draw_grid(app, painter, xf, doc);
     }
-    if app.ui.view.shows(app.ui.view.show.canvas_guides) || crate::guide_layout_ui::preview(app, doc).is_some() {
+    if app.ui.view.shows(app.ui.view.show.canvas_guides)
+        || crate::guide_layout_ui::preview(app, doc).is_some()
+        || crate::new_guide_ui::edit_preview(app, doc).is_some()
+    {
         crate::rulers::draw_guides(app, painter, xf, doc);
     }
     // The selection's ants go over the grid and guides, as in Photoshop (#10671).
@@ -1350,6 +1361,7 @@ fn paint_primary_overlays(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut
     crate::gradient_ui::draw_overlay(app, painter, xf);
     crate::slice_ui::draw_overlay(app, painter, xf);
     crate::frame_tool::draw_overlay(app, painter, xf);
+    crate::frame_tool::task_bar(app, ui, xf);
     crate::artboard_tool::draw_overlay(app, painter, xf);
 
     draw_canvas_tool_cursor(app, ui, input, resizing);
@@ -1414,6 +1426,8 @@ fn draw_canvas_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &C
         let mods = crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers));
         crate::type_transform::cursor(app, ctx, xf, p, mods)
     }) {
+        ui.ctx().set_cursor_icon(c);
+    } else if let Some(c) = response.hover_pos().filter(|_| tool == Tool::Frame).and_then(|p| crate::frame_tool::cursor(app, xf.to_doc(p))) {
         ui.ctx().set_cursor_icon(c);
     } else if let Some(c) = response.hover_pos().filter(|_| tool == Tool::Artboard).and_then(|p| crate::artboard_tool::cursor(app, xf, xf.to_doc(p))) {
         ui.ctx().set_cursor_icon(c);
@@ -1799,6 +1813,11 @@ fn update_polygon_camera(app: &mut PhotocraftApp, ctx: &egui::Context, (idx, pri
 
 pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect: Rect, mut view: View, primary: bool) -> View {
     let ctx = ui.ctx().clone();
+    // The Frame tool starts transforms from pointer events, which carry no context; the options
+    // bar that also records it can be hidden.
+    if primary {
+        app.frame_tool_ctx = Some(ctx.clone());
+    }
     // The camera as the app holds it before this frame's input. The canvas works on its own copy
     // (`view`) and writes it back at the end; a tool that moves the camera itself meanwhile (the
     // Crop tool's default mode pans and turns the view with the image, `crop_mode`) must not be
