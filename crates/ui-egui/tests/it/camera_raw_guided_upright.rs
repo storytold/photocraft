@@ -55,7 +55,12 @@ fn params(h: &Harness<'_, PhotocraftApp>) -> Value {
 /// Runs frames until the preview worker has nothing in flight and `done` holds, for up to 10 s
 /// (CI runners are busy).
 fn settle(h: &mut Harness<'_, PhotocraftApp>, done: impl Fn(&Value) -> bool) {
-    for _ in 0..2000 {
+    settle_within(h, 2000, done);
+}
+/// [`settle`], for up to `polls` looks 5 ms apart; running out of them fails the test, so a late
+/// preview can't pass for the one it waited for.
+fn settle_within(h: &mut Harness<'_, PhotocraftApp>, polls: usize, done: impl Fn(&Value) -> bool) {
+    for _ in 0..polls {
         let d = inspect(h);
         if d["previewPending"] == false && done(&d) {
             return;
@@ -63,6 +68,7 @@ fn settle(h: &mut Harness<'_, PhotocraftApp>, done: impl Fn(&Value) -> bool) {
         std::thread::sleep(std::time::Duration::from_millis(5));
         h.run_steps(1);
     }
+    panic!("the preview didn't settle in {polls} polls");
 }
 /// A point at fractions of the preview image.
 fn at(r: Rect, x: f32, y: f32) -> Pos2 {
@@ -147,4 +153,68 @@ fn shift_t_or_the_guided_button_puts_the_color_sampler_down() {
     h.run_steps(2);
     assert_eq!(inspect(&h)["guidedUprightTool"]["active"], true, "the Guided button takes the guide tool up");
     assert_eq!(inspect(&h)["scope"]["samplerTool"], false, "and puts the sampler down");
+}
+
+#[test]
+#[should_panic(expected = "didn't settle")]
+fn settle_fails_at_its_limit() {
+    settle_within(&mut fixture(), 3, |_| false);
+}
+
+/// The press's own modifiers decide Shift+T: Shift may be up again by the end of the frame.
+#[test]
+fn shift_t_counts_when_shift_comes_up_in_the_same_frame() {
+    let mut h = fixture();
+    h.event(Event::Key { key: Key::T, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::SHIFT });
+    h.run_steps(2);
+    assert_eq!(params(&h)["upright"], "guided");
+    assert_eq!(inspect(&h)["guidedUprightTool"]["active"], true);
+    // Alt+Shift+T is another shortcut.
+    let mut h = fixture();
+    h.event(Event::Key { key: Key::T, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::SHIFT | Modifiers::ALT });
+    h.run_steps(2);
+    assert_eq!(params(&h)["upright"], "off");
+}
+
+/// Shift+T with the pointer held is one undo step: the pointer's release doesn't record the same
+/// settings again, which would leave an Undo that changes nothing.
+#[test]
+fn a_shortcut_with_the_pointer_held_is_one_undo_step() {
+    let mut h = fixture();
+    let ctx = h.ctx.clone();
+    camera_raw_ui::menu(h.state_mut(), &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": 1.0}}})).unwrap().unwrap();
+    h.run_steps(2);
+    let r = preview_rect(&h);
+    press(&mut h, at(r, 0.5, 0.5), true);
+    key(&mut h, Key::T, Modifiers::SHIFT);
+    assert_eq!(params(&h)["upright"], "guided");
+    press(&mut h, at(r, 0.5, 0.5), false);
+    key(&mut h, Key::Z, Modifiers::COMMAND);
+    assert_eq!((params(&h)["upright"].clone(), params(&h)["exposure"].clone()), (json!("off"), json!(1.0)));
+    key(&mut h, Key::Z, Modifiers::COMMAND);
+    assert_eq!(params(&h)["exposure"], 0.0, "the second Undo undoes the edit before Shift+T");
+}
+
+/// Upright's buttons and Clear Guides, activated without the pointer (the keyboard, a screen
+/// reader), are undo steps like clicks, and frames with no edit add none.
+#[test]
+fn controls_activated_without_the_pointer_can_be_undone() {
+    let mut h = fixture();
+    key(&mut h, Key::T, Modifiers::SHIFT);
+    let r = preview_rect(&h);
+    drag(&mut h, at(r, 0.22, 0.1), at(r, 0.18, 0.9));
+    let guides = params(&h)["uprightGuides"].clone();
+    assert_eq!(guides.as_array().unwrap().len(), 1);
+    h.get_by_label("Clear Guides").click_accesskit();
+    h.run_steps(4);
+    assert_eq!(params(&h)["uprightGuides"].as_array().unwrap().len(), 0);
+    key(&mut h, Key::Z, Modifiers::COMMAND);
+    assert_eq!(params(&h)["uprightGuides"], guides, "Undo brings the guides back");
+    h.get_by_label("Full").click_accesskit();
+    h.run_steps(4);
+    assert_eq!((params(&h)["upright"].clone(), params(&h)["uprightGuides"].as_array().unwrap().len()), (json!("full"), 0));
+    key(&mut h, Key::Z, Modifiers::COMMAND);
+    assert_eq!((params(&h)["upright"].clone(), params(&h)["uprightGuides"].clone()), (json!("guided"), guides), "Undo brings Guided and its guides back");
+    key(&mut h, Key::Z, Modifiers::COMMAND);
+    assert_eq!(params(&h)["uprightGuides"].as_array().unwrap().len(), 0, "the frames between added no step: this is the guide's");
 }

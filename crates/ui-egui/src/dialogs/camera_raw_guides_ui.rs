@@ -64,6 +64,8 @@ pub(crate) fn toggle(tool: &mut GuideTool, p: &mut CameraRaw) -> bool {
     tool.active = true;
     if p.upright != "guided" {
         p.upright = "guided".into();
+        // Guides belong to Guided, as with the Guided button: any stored under another mode go.
+        p.upright_guides.clear();
         return true;
     }
     false
@@ -295,6 +297,20 @@ mod tests {
         assert!(!tool.active && p.upright == "guided", "the mode stays");
         assert!(!toggle(&mut tool, &mut p), "already Guided: only the tool");
         assert!(tool.active);
+    }
+
+    /// Guides belong to Guided: switching to it from another mode starts without any, as the
+    /// Guided button does.
+    #[test]
+    fn shift_t_switching_to_guided_starts_without_stale_guides() {
+        let mut tool = GuideTool::default();
+        let mut p = CameraRaw { upright: "auto".into(), upright_guides: vec![[[0.2, 0.1], [0.2, 0.9]]], ..Default::default() };
+        assert!(toggle(&mut tool, &mut p));
+        assert_eq!((p.upright.as_str(), p.upright_guides.len()), ("guided", 0));
+        // Already Guided: only the tool moves, and the guides stay.
+        p.upright_guides = vec![[[0.2, 0.1], [0.2, 0.9]]];
+        assert!(!toggle(&mut tool, &mut p));
+        assert_eq!(p.upright_guides.len(), 1);
     }
 
     #[test]
