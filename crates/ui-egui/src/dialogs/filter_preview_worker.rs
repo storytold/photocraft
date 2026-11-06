@@ -334,3 +334,141 @@ mod tests {
         let _ = finish(&mut worker);
     }
 }
+
+// #11560 R2: a real producer's unpolled native receipt must retire on Cancel before reuse.
+// This tests cancellation/receipt ownership, not algorithm preemption or OS-thread joining.
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod issue_11560_native_lifecycle {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn cancel_unpolled_native_mini_then_reopen_other_command_without_publication() {
+        use std::sync::Arc;
+        use std::time::{Duration, Instant};
+
+        let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.background_jobs = false;
+        app.run("file.new", json!({"width":64,"height":48,"depth":8})).unwrap();
+        app.session
+            .edit("Native lifecycle edge fixture", |doc, active| {
+                let surface = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+                for x in 0..64 {
+                    let v = 0.25 + x as f32 / 256.0 + if x >= 32 { 0.15 } else { 0.0 } + if x % 3 == 0 { 0.04 } else { 0.0 };
+                    surface.fill_rect(photocraft_geom::Rect::new(x, 0, x + 1, 48), &[v, v, v, 1.0]);
+                }
+                Ok(())
+            })
+            .unwrap();
+        let original = app.session.active().unwrap().clone();
+        let pixels = photocraft_compose::flatten(&original.doc).into_px();
+        let history = |st: &photocraft_engine::DocState| {
+            let rows: Vec<_> = st
+                .history
+                .row_ids()
+                .enumerate()
+                .map(|(i, id)| {
+                    let doc = st.history.row_doc(i, &st.doc).unwrap();
+                    json!({"id":id,"pixels":photocraft_compose::flatten(&doc).into_px()})
+                })
+                .collect();
+            json!({"rows":rows,"entries":st.history.entries(),"redo":st.history.redo_labels().collect::<Vec<_>>(),
+                "past":st.history.past_len(),"undo_label":st.history.undo_label(),"redo_label":st.history.redo_label(),
+                "can_undo":st.history.can_undo(),"can_redo":st.history.can_redo(),
+                "brush_source":st.history.brush_source(),"visibility":st.history.current_visibility()})
+        };
+        let original_history = history(&original);
+        let ctx = egui::Context::default();
+        let first = crate::filter_dialog::open(&mut app, "filter.sharpen.unsharpMask").unwrap();
+        let fields = &mut app.ui.dialog_mut(first).unwrap().fields;
+        fields.insert("__preview".into(), json!(false));
+        fields.insert("amount".into(), json!(60));
+        fields.insert("radius".into(), json!(2.0));
+        fields.insert("threshold".into(), json!(0));
+        app.background_jobs = true;
+
+        // The actual canvas producer spawns the actual filter closure. No Running, channel,
+        // cache or Computed is injected. A tiny computation may finish before Cancel; its
+        // receipt is still owned until poll, so no timing race is needed to select this case.
+        discard_closed(&mut app);
+        assert!(crate::canvas::ensure_filter_preview(&mut app, 0, &ctx).is_none());
+        let pending = app.filter_preview_worker.running.as_ref().expect("real producer retained a native job before its first poll");
+        let old_key = pending.key.clone();
+        let old_job = pending.job.clone();
+        assert_eq!(old_key.dialog, first);
+        assert_eq!(old_key.command, "filter.sharpen.unsharpMask");
+        assert!(!old_job.cancelled());
+        assert!(app.filter_preview.is_none(), "starting a native job cannot publish it inline");
+        crate::dialogs::cancel(&mut app, first).unwrap();
+        discard_closed(&mut app);
+        let cancellation_requested = old_job.cancelled();
+        // Exercise the logic cleanup route alone: a hidden/closed canvas need not draw for
+        // the native receipt to be retired. !busy means channel ownership ended, not join.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while app.filter_preview_worker.busy() && Instant::now() < deadline {
+            discard_closed(&mut app);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(cancellation_requested, "Cancel cleanup must signal the real production JobCtx");
+        assert!(!app.filter_preview_worker.busy(), "closed native receipt did not retire");
+        assert!(app.filter_preview_worker.poll().is_none(), "retired result cannot be delivered again");
+        assert!(app.filter_preview.is_none(), "cleanup cannot publish the closed dialog's completion");
+        assert!(app.ui.dialogs.iter().all(|d| d.id != first));
+        let st = app.session.active().unwrap();
+        assert!(Arc::ptr_eq(&st.doc, &original.doc));
+        assert_eq!(photocraft_compose::flatten(&st.doc).px, pixels);
+        assert_eq!(st.revision, original.revision);
+        assert_eq!((st.active_layer, &st.selected_layers), (original.active_layer, &original.selected_layers));
+        assert_eq!(history(st), original_history);
+
+        // Reuse the same Worker for a different mini-owning command, still unchecked.
+        // An independent Session command supplies the pixels, not the preview helper.
+        let command = "filter.sharpen.smartSharpen";
+        let second = crate::filter_dialog::open(&mut app, command).unwrap();
+        assert_ne!(first, second);
+        let fields = &mut app.ui.dialog_mut(second).unwrap().fields;
+        fields.insert("__preview".into(), json!(false));
+        fields.insert("amount".into(), json!(180));
+        fields.insert("radius".into(), json!(2.0));
+        fields.insert("reduceNoise".into(), json!(0));
+        let params = crate::filter_dialog::params_of(fields);
+        let mut oracle = photocraft_engine::Session::new();
+        oracle.color.settings = app.session.color.settings.clone();
+        oracle.add_document(original.doc.as_ref().clone(), None);
+        *oracle.active_mut().unwrap() = original.clone();
+        oracle.execute(command, params.clone()).unwrap();
+        let expected = photocraft_compose::flatten(&oracle.active().unwrap().doc).into_px();
+        assert_ne!(expected, pixels, "a non-vacuous sharpening control");
+        discard_closed(&mut app);
+        assert!(crate::canvas::ensure_filter_preview(&mut app, 0, &ctx).is_none());
+        let pending = app.filter_preview_worker.running.as_ref().expect("the reused real producer starts a native job");
+        let new_key = pending.key.clone();
+        let new_job = pending.job.clone();
+        assert_eq!(new_key.dialog, second);
+        assert_eq!(new_key.command, command);
+        assert_eq!(new_key.params, params);
+        assert_ne!(new_key, old_key);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while app.filter_preview_worker.busy() && Instant::now() < deadline {
+            discard_closed(&mut app);
+            assert!(crate::canvas::ensure_filter_preview(&mut app, 0, &ctx).is_none(), "native mini demand must not substitute the unchecked canvas");
+            assert!(!new_job.cancelled(), "old cancellation must not leak into the demanded reopened job");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(!app.filter_preview_worker.busy(), "reopened native job did not complete");
+        let shown = app.filter_preview.as_ref().expect("the reopened native result is published");
+        assert_eq!(shown.key, new_key);
+        assert_eq!(photocraft_compose::flatten(shown.result.as_ref().unwrap()).px, expected);
+        assert!(!app.ui.status_error, "{}", app.ui.status);
+        crate::dialogs::cancel(&mut app, second).unwrap();
+        discard_closed(&mut app);
+        assert!(app.filter_preview.is_none());
+        assert!(!app.filter_preview_worker.busy());
+        let st = app.session.active().unwrap();
+        assert!(Arc::ptr_eq(&st.doc, &original.doc));
+        assert_eq!(photocraft_compose::flatten(&st.doc).px, pixels);
+        assert_eq!(st.revision, original.revision);
+        assert_eq!((st.active_layer, &st.selected_layers), (original.active_layer, &original.selected_layers));
+        assert_eq!(history(st), original_history);
+    }
+}
