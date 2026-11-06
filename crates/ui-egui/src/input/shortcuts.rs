@@ -620,6 +620,9 @@ fn handle_modal_canvas_keys(app: &mut PhotocraftApp, ctx: &egui::Context, focus:
     if focus == Focus::None && crate::perspective_crop_ui::keys(app, ctx) {
         return true;
     }
+    if focus == Focus::None && crate::frame_tool::keys(app, ctx) {
+        return true;
+    }
     // Move tool / Free Transform: arrows nudge (⇧ ×10, ⌥ duplicates first).
     if focus == Focus::None && crate::move_mods::arrow_keys(app, ctx) {
         return true;
@@ -705,6 +708,11 @@ fn handle_pen_and_work_path_keys(app: &mut PhotocraftApp, ctx: &egui::Context, f
         crate::vector_ui::pen_end(app);
         return true;
     }
+    // A shape box handle drag: Esc drops it, the shapes keep their size (#11107).
+    if app.ui.shape_box.is_some() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+        crate::shape_bounds_box::cancel(app);
+        return true;
+    }
     // A finished work path shown by the Pen or Path Selection: ⌫/Delete deletes it, as in
     // Photoshop (#5702), never Edit › Clear on the pixels under it.
     if focus != crate::shortcut_dispatch::Focus::DeletingWidget && crate::vector_ui::delete_key_deletes_work_path(app) {
@@ -788,6 +796,10 @@ fn handle_registry_and_tool_keys(app: &mut PhotocraftApp, ctx: &egui::Context, f
             return true;
         }
     }
+    if app.ui.frame_tool.drag.is_some() && pressed(Key::Escape) {
+        crate::frame_tool::cancel(app);
+        return true;
+    }
     // Enter / Escape commit or cancel in-progress tool state (polygonal lasso, crop).
     if crate::lasso_ui::active(app) {
         let mods = ctx.input(|i| i.modifiers);
@@ -813,13 +825,17 @@ fn handle_registry_and_tool_keys(app: &mut PhotocraftApp, ctx: &egui::Context, f
             return true;
         }
         // In a full screen mode, the Crop tool's untouched default frame (Straighten off) has nothing to cancel: cancelling only
-        // makes the next one, so Esc goes on to leave full screen (#7315).
-        let untouched = app.ui.view.screen_mode != "standard" && app.ui.polygon.is_empty() && app.crop.default_frame && !crate::crop_straighten::mode(app);
+        // makes the next one, so Esc goes on to leave full screen (#7315). A gesture on it is still cancelled (#9275).
+        let untouched = app.ui.view.screen_mode != "standard"
+            && app.ui.polygon.is_empty()
+            && app.crop.default_frame
+            && app.crop.drag.is_none()
+            && !crate::crop_straighten::mode(app);
         if !untouched && pressed(Key::Escape) {
             app.ui.polygon.clear();
             app.ui.polygon_mode.clear();
             app.ui.polygon_doc = None;
-            crate::crop_ui::cancel(app);
+            crate::crop_ui::dismiss(app);
             return true;
         }
     }
@@ -898,12 +914,18 @@ fn select_tool_by_key(app: &mut PhotocraftApp, ctx: &egui::Context, pressed: &im
         let cycle_shift = shift_switch && ctx.input_mut(|i| i.consume_key(Modifiers::SHIFT, k));
         if cycle_shift || pressed(k) {
             let before = app.ui.tool;
-            let group: Vec<Tool> = Tool::ALL.iter().copied().filter(|x| x.key() == t.key() && crate::tool_shortcuts::uses_default(app, *x)).collect();
+            let mut group: Vec<Tool> = Tool::ALL.iter().copied().filter(|x| x.key() == t.key() && crate::tool_shortcuts::uses_default(app, *x)).collect();
+            // Shift+key (the cycle and the fallback to the group's first tool) uses the toolbar
+            // flyout's order; plain keys keep the `Tool::ALL` order.
+            if cycle_shift {
+                group.sort_by_key(|x| crate::panels::toolbar::toolbar_position(*x));
+            }
             app.ui.tool = match group.iter().position(|x| *x == app.ui.tool) {
                 Some(i) if shift_switch && !cycle_shift => group[i],
                 Some(i) => group[(i + 1) % group.len()],
                 None => app.ui.group_tool(t.key()).filter(|last| group.contains(last)).unwrap_or(group[0]),
             };
+            crate::tool_memory::ended_by_tool(app);
             // `consume_key` ignores extra ⇧ and ⌥: a ⇧/⌥ switch is never spring-loaded.
             let (plain, now) = ctx.input(|i| (!cycle_shift && !i.modifiers.shift && !i.modifiers.alt, i.time));
             crate::spring_tools::pressed(app, t.key(), before, plain, now);
