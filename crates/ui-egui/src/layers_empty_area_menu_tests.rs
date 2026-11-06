@@ -122,9 +122,51 @@ fn each_size_pick_sets_the_panel_option_and_saves_it() {
     }
 }
 
+/// Picking the size that is already checked closes the menu and leaves the saved options as they
+/// were. The harness cannot observe a skipped write directly, so this asserts the saved value is
+/// unchanged.
+#[test]
+fn picking_the_checked_size_closes_the_menu_and_changes_nothing() {
+    let mut h = panel(true);
+    h.state_mut().ui.layers_panel_options.thumbnail_size = LayerThumbnailSize::Large;
+    h.run_steps(2);
+    crate::panels::layers_panel_ui::persist_options(h.state_mut());
+    let saved = |h: &Harness<'static, PhotocraftApp>| h.state().session.prefs().dialogs.get("ui.layersPanelOptions").cloned();
+    let before = saved(&h);
+    assert!(before.is_some(), "an entry is saved to begin with");
+    open_menu(&mut h);
+    assert!(checked(&h, "Large Thumbnails"));
+    pick(&mut h, "Large Thumbnails");
+    assert!(!menu_open(&h), "the menu closes");
+    assert_eq!(size(&h), LayerThumbnailSize::Large);
+    assert_eq!(saved(&h), before, "the saved options are unchanged");
+}
+
+/// The saved entry can be missing (a preferences reset, an older file) while the panel still
+/// shows the size; picking the checked row writes it back.
+#[test]
+fn picking_the_checked_size_restores_a_missing_saved_entry() {
+    let mut h = panel(true);
+    h.state_mut().ui.layers_panel_options.thumbnail_size = LayerThumbnailSize::Large;
+    h.run_steps(2);
+    h.state_mut().session.prefs.edit(|p| {
+        p.dialogs.remove("ui.layersPanelOptions");
+    });
+    let saved = |h: &Harness<'static, PhotocraftApp>| h.state().session.prefs().dialogs.get("ui.layersPanelOptions").cloned();
+    assert!(saved(&h).is_none(), "the saved entry is gone");
+    open_menu(&mut h);
+    assert!(checked(&h, "Large Thumbnails"));
+    pick(&mut h, "Large Thumbnails");
+    assert!(!menu_open(&h), "the menu closes");
+    let restored = saved(&h).expect("the pick writes the entry back");
+    assert_eq!(restored, serde_json::to_value(&h.state().ui.layers_panel_options).unwrap());
+}
+
 #[test]
 fn each_clip_pick_sets_the_preference() {
     let mut h = panel(true);
+    h.state_mut().run("prefs.set", json!({"path": "interface.clipThumbnailsToLayerBounds", "value": false})).unwrap();
+    h.run_steps(2);
     assert!(!clip(&h));
     open_menu(&mut h);
     pick(&mut h, "Clip Thumbnails to Layer Bounds");
@@ -155,8 +197,12 @@ fn a_left_click_on_the_empty_area_still_deselects_and_a_right_click_does_not() {
 
 #[test]
 fn with_no_document_nothing_opens() {
+    // The Layers panel is not drawn without a document, so take its rect from the same layout
+    // with one open.
+    let rect = crate::panel_docking::probe::panel_rect(&panel(true).ctx, "layers").expect("the Layers panel is drawn");
     let mut h = panel(false);
-    let p = pos2(1100.0, 400.0);
+    let p = rect.center();
+    assert!(rect.contains(p));
     click(&mut h, p, PointerButton::Secondary);
     assert!(!menu_open(&h));
 }

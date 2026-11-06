@@ -891,7 +891,7 @@ fn ui_set_drives_the_layers_panel_artboard_filter() {
     assert_eq!(crate::layer_filter_ui::Filter::of(&app).by, FilterBy::Artboard);
     let bad = call(&mut app, &ctx, "ui.set", json!({"layerFilter": {"by": "artboards"}}));
     assert_eq!(bad["ok"], false, "{bad}");
-    assert!(bad.to_string().contains("kind, name, effect, mode, attribute, color, smartObject or artboard"), "{bad}");
+    assert!(bad.to_string().contains("kind, name, effect, mode, attribute, color, smartObject, artboard or group"), "{bad}");
     assert_eq!(crate::layer_filter_ui::Filter::of(&app).by, FilterBy::Artboard, "a bad value changed nothing");
 }
 

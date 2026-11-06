@@ -1,8 +1,9 @@
 //! The Layers panel's filter row (#5048): a filter-type dropdown, as in Photoshop, then the
 //! controls for that type. Kind toggles layer kinds, Name matches part of the layer name, Effect picks one effect kind,
 //! Mode picks one blend mode, Attribute one layer attribute (#10881), Color one layer colour label (#5898), Smart Object toggles linked, missing
-//! and embedded smart objects, Artboard lists only the artboards that hold the selected layers. The
-//! criteria live per open document; missing links and selected-artboard rows are derived context.
+//! and embedded smart objects, Artboard lists only the artboards that hold the selected layers, Group
+//! every group with its contents (#10883). The criteria live per open document; missing links and
+//! the Artboard and Group rows are derived context.
 
 use std::collections::HashSet;
 
@@ -25,6 +26,7 @@ pub enum FilterBy {
     Color,
     SmartObject,
     Artboard,
+    Group,
 }
 
 /// One open document's user criteria. Derived row context is never stored here.
@@ -48,6 +50,8 @@ pub struct Filter {
 #[derive(Default)]
 pub struct FilterContext {
     pub missing: HashSet<String>,
+    /// The rows the Artboard filter ([`board_rows`]) or the Group filter ([`group::listed`])
+    /// lists; empty lists every row under Artboard and none under Group.
     pub board_rows: HashSet<LayerId>,
     /// Empty/Not Empty read this document-derived cache, never stored criteria.
     pub empty: Option<std::sync::Arc<HashSet<LayerId>>>,
@@ -55,15 +59,23 @@ pub struct FilterContext {
 
 impl FilterContext {
     pub fn of_app(app: &PhotocraftApp, filter: &Filter) -> Self {
-        Self::with_artboard_rows(app, filter, || app.session.active().map_or_else(HashSet::new, |state| board_rows(&state.doc, &state.selected_layers())))
+        let Some(state) = app.session.active() else { return Self::default() };
+        Self::with_rows(app, filter, |by| match by {
+            FilterBy::Group => group::listed(&state.doc),
+            _ => board_rows(&state.doc, &state.selected_layers()),
+        })
     }
 
     /// Use the document and selection that the Layers panel already read for this frame.
     pub(super) fn with_selection(app: &PhotocraftApp, filter: &Filter, doc: &Document, selection: &[LayerId]) -> Self {
-        Self::with_artboard_rows(app, filter, || board_rows(doc, selection))
+        Self::with_rows(app, filter, |by| match by {
+            FilterBy::Group => group::listed(doc),
+            _ => board_rows(doc, selection),
+        })
     }
 
-    fn with_artboard_rows(app: &PhotocraftApp, filter: &Filter, artboard_rows: impl FnOnce() -> HashSet<LayerId>) -> Self {
+    /// `rows` gives the Artboard or the Group filter's rows, only for those types.
+    fn with_rows(app: &PhotocraftApp, filter: &Filter, rows: impl FnOnce(FilterBy) -> HashSet<LayerId>) -> Self {
         let mut context = Self::default();
         // Off lists every layer: nothing reads the context, so skip the scans (the emptiness
         // scan reruns after every paint stroke).
@@ -72,7 +84,7 @@ impl FilterContext {
         }
         match filter.by {
             FilterBy::SmartObject => context.missing = app.session.missing_links(),
-            FilterBy::Artboard => context.board_rows = artboard_rows(),
+            FilterBy::Artboard | FilterBy::Group => context.board_rows = rows(filter.by),
             FilterBy::Attribute => context.empty = attribute::empty_layers(app, filter.attribute),
             _ => {}
         }
@@ -98,7 +110,15 @@ impl Filter {
                 FilterBy::Effect | FilterBy::Mode | FilterBy::Attribute | FilterBy::Color => true,
                 FilterBy::SmartObject => !self.smart.is_empty(),
                 FilterBy::Artboard => !context.board_rows.is_empty(),
+                FilterBy::Group => true,
             }
+    }
+
+    /// Whether the panel lists the contents of closed groups: while it is filtered, except by
+    /// Artboard and Group, which list whole subtrees and keep each group open or closed as it is
+    /// (#10883).
+    pub fn show_all(&self) -> bool {
+        self.active() && !matches!(self.by, FilterBy::Artboard | FilterBy::Group)
     }
 
     /// The switch and the type with only the criterion that type reads; the other types' stored
@@ -113,7 +133,7 @@ impl Filter {
             FilterBy::Attribute => f.attribute = self.attribute,
             FilterBy::Color => f.color = self.color,
             FilterBy::SmartObject => f.smart = self.smart.clone(),
-            FilterBy::Artboard => {}
+            FilterBy::Artboard | FilterBy::Group => {}
         }
         f
     }
@@ -124,7 +144,7 @@ impl Filter {
         match self.by {
             FilterBy::Kind => !self.kinds.is_empty(),
             FilterBy::Name => !self.name.trim().is_empty(),
-            FilterBy::Effect | FilterBy::Mode | FilterBy::Attribute | FilterBy::Color | FilterBy::Artboard => true,
+            FilterBy::Effect | FilterBy::Mode | FilterBy::Attribute | FilterBy::Color | FilterBy::Artboard | FilterBy::Group => true,
             FilterBy::SmartObject => !self.smart.is_empty(),
         }
     }
@@ -170,7 +190,7 @@ impl Filter {
                     _ => false,
                 })
             }
-            FilterBy::Artboard => context.board_rows.contains(&l.id),
+            FilterBy::Artboard | FilterBy::Group => context.board_rows.contains(&l.id),
         }
     }
 }
@@ -239,12 +259,12 @@ pub const SMART: [&str; 3] = ["linked", "missing", "embedded"];
 
 /// `ui.set {layerFilter: {on?, by?, kinds?, name?, effect?, mode?, attribute?, color?, smart?}}`:
 /// `current` with the given fields replaced, or an error naming the bad field (nothing changes
-/// then). `by` is `kind`, `name`, `effect`, `mode`, `attribute`, `color`, `smartObject` or
-/// `artboard`; `kinds` a list of [`KINDS`]; `effect` an [`effect::EffectKind`] id; `mode` one of
+/// then). `by` is `kind`, `name`, `effect`, `mode`, `attribute`, `color`, `smartObject`,
+/// `artboard` or `group`; `kinds` a list of [`KINDS`]; `effect` an [`effect::EffectKind`] id; `mode` one of
 /// the layer blend modes such as `Multiply` (not Pass Through, which the Mode list doesn't offer,
 /// #10878); `attribute` an [`attribute::Attribute`] id; `color` a label colour id (`none`, `red`,
 /// … `gray`, [`LabelColor::id`]); `smart` a list of [`SMART`]. Artboard has no criteria of its
-/// own: the selected layers pick the artboards.
+/// own: the selected layers pick the artboards; nor has Group.
 pub fn patched(current: &Filter, v: &serde_json::Value) -> Result<Filter, String> {
     let Some(o) = v.as_object() else { return Err("layerFilter must be an object".into()) };
     if let Some(k) = o.keys().find(|k| !["on", "by", "kinds", "name", "effect", "mode", "attribute", "color", "smart"].contains(&k.as_str())) {
@@ -253,7 +273,7 @@ pub fn patched(current: &Filter, v: &serde_json::Value) -> Result<Filter, String
     let mut f = current.clone();
     if let Some(by) = o.get("by") {
         f.by = serde_json::from_value(by.clone())
-            .map_err(|_| "layerFilter.by must be kind, name, effect, mode, attribute, color, smartObject or artboard".to_string())?;
+            .map_err(|_| "layerFilter.by must be kind, name, effect, mode, attribute, color, smartObject, artboard or group".to_string())?;
     }
     if let Some(kinds) = o.get("kinds") {
         let list = kinds.as_array().ok_or("layerFilter.kinds must be a list")?;
@@ -346,6 +366,7 @@ fn controls(filter: &mut Filter, ui: &mut egui::Ui) {
             (FilterBy::Color, tl!("Color")),
             (FilterBy::SmartObject, tl!("Smart Object")),
             (FilterBy::Artboard, tl!("Artboard")),
+            (FilterBy::Group, tl!("Group")),
         ];
         widgets::dropdown(ui, "layer-filter-by", tl!("Kind"), &mut filter.by, &by, 64.0);
         ui.add_space(4.0);
@@ -404,11 +425,16 @@ fn controls(filter: &mut Filter, ui: &mut egui::Ui) {
             }
             // Artboard has no controls: the selected layers pick the artboards ([`board_rows`]).
             FilterBy::Artboard => {}
+            // Group has no controls either: it lists every group ([`group::listed`]).
+            FilterBy::Group => {}
         }
     });
 }
 
 pub mod effect;
+mod group;
+#[cfg(test)]
+mod group_tests;
 
 #[cfg(test)]
 mod effect_tests;
