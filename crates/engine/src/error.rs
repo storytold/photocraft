@@ -23,8 +23,14 @@ pub enum EngineError {
     PsdApprovalRequired { name: String, required: u64, soft_limit: u64, hard_limit: u64, available_ram: Option<u64> },
     /// The file's estimated memory cannot be admitted within the hard ceiling, which no approval
     /// can raise. The requirement may equal the ceiling when the estimate saturated.
-    #[error("cannot open “{name}”: its estimated memory requirement of {required_text} ({required} bytes) cannot be admitted within the {limit_text} ({limit} byte) hard limit{scope}", required_text = bytes_text(.required), limit_text = bytes_text(.limit), scope = build_limit_scope(build_memory_limit()))]
-    PsdHardBudget { name: String, required: u64, limit: u64 },
+    ///
+    /// `free_memory` is the free memory measured when it set the limit, if it did.
+    #[error(
+        "cannot open “{name}”: its estimated memory requirement of {required_text} ({required} bytes) cannot be admitted within the {limit_text} ({limit} byte) hard limit{scope}{scratch}{advice}",
+        required_text = bytes_text(.required), limit_text = bytes_text(.limit), scope = build_limit_scope(build_memory_limit()),
+        scratch = unmeasured_scratch_hint(scratch_room_unmeasured()), advice = photocraft_io::memory::low_memory_advice(.free_memory)
+    )]
+    PsdHardBudget { name: String, required: u64, limit: u64, free_memory: Option<u64> },
     /// The file behind an opened handle is not the one whose memory estimate was approved.
     /// The document is discarded and is not opened.
     #[error("“{name}” changed since it was checked; open it again to approve the new file")]
@@ -76,6 +82,22 @@ fn build_limit_scope(limit: BuildMemoryLimit) -> String {
     }
 }
 
+/// The current scratch configuration, not the admission-time cause of a refusal.
+fn scratch_room_unmeasured() -> bool {
+    let stats = photocraft_raster::spill::stats();
+    stats.free_space_unmeasured && stats.size_cap_bytes.is_none()
+}
+
+/// Configuration guidance only: the refusal can instead be bound by a caller or build limit,
+/// or by memory that cannot spill. Current scratch stats cannot identify that cause.
+fn unmeasured_scratch_hint(unmeasured: bool) -> &'static str {
+    if unmeasured {
+        ". Current scratch configuration: free space can't be measured and no Scratch Size Limit is set. To configure scratch capacity, set a Scratch Size Limit in Preferences > Scratch Disks, or use a disk whose free space can be measured. Scratch capacity cannot override caller or build limits, or replace memory that cannot spill to disk"
+    } else {
+        ""
+    }
+}
+
 /// A size for people, next to the exact byte count: "21.5 GiB", "900 MiB", "17 B".
 fn bytes_text(bytes: &u64) -> String {
     const GIB: u64 = 1 << 30;
@@ -112,7 +134,7 @@ pub(crate) fn io_open_error(name: &str, error: photocraft_io::IoError) -> Engine
         IoError::PsdApprovalRequired { required, soft_limit, hard_limit, available_ram } => {
             EngineError::PsdApprovalRequired { name: name.to_string(), required, soft_limit, hard_limit, available_ram }
         }
-        IoError::PsdImportBudget { required, limit } => EngineError::PsdHardBudget { name: name.to_string(), required, limit },
+        IoError::PsdImportBudget { required, limit, free_memory } => EngineError::PsdHardBudget { name: name.to_string(), required, limit, free_memory },
         IoError::SourceChanged => EngineError::SourceChanged { name: name.to_string() },
         error => EngineError::Other(format!("{name}: {error}")),
     }
@@ -127,6 +149,35 @@ impl From<photocraft_raster::AllocationError> for EngineError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn hard(free_memory: Option<u64>) -> EngineError {
+        EngineError::PsdHardBudget { name: "big.psd".into(), required: 9000, limit: 4000, free_memory }
+    }
+
+    #[test]
+    fn hard_budget_message_tells_the_user_to_free_memory_when_it_was_measured() {
+        let message = hard(Some(900 << 20)).to_string();
+        assert!(message.ends_with("Close other apps and try again"), "{message}");
+        assert!(message.contains("900 MiB"), "{message}");
+
+        let message = hard(Some(0)).to_string();
+        assert!(message.contains("measured no free memory"), "{message}");
+
+        let message = hard(None).to_string();
+        assert!(message.contains(&build_limit_scope(build_memory_limit())), "{message}");
+        assert!(!message.contains("Close other apps"), "{message}");
+    }
+
+    #[test]
+    fn io_open_error_carries_the_free_memory_through() {
+        for free_memory in [None, Some(0), Some(3 << 30)] {
+            let error = photocraft_io::IoError::PsdImportBudget { required: 9000, limit: 4000, free_memory };
+            match io_open_error("big.psd", error) {
+                EngineError::PsdHardBudget { required: 9000, limit: 4000, free_memory: carried, .. } => assert_eq!(carried, free_memory),
+                other => panic!("expected the typed hard refusal, got {other:?}"),
+            }
+        }
+    }
 
     #[test]
     fn hard_budget_scope_text_per_build() {
@@ -145,12 +196,30 @@ mod tests {
     }
 
     #[test]
+    fn unmeasured_scratch_hint_only_when_unmeasured() {
+        assert_eq!(unmeasured_scratch_hint(false), "");
+        let hint = unmeasured_scratch_hint(true);
+        assert!(hint.starts_with(". Current scratch configuration:"), "{hint}");
+        assert!(hint.contains("Scratch Size Limit in Preferences > Scratch Disks") && hint.contains("disk whose free space can be measured"), "{hint}");
+    }
+
+    #[test]
+    fn scratch_configuration_hint_does_not_promise_to_raise_a_binding_limit() {
+        let hint = unmeasured_scratch_hint(true);
+        // A caller-bound refusal can carry the same live scratch state as a capacity refusal.
+        // The note must describe that state without attributing this file's refusal to it.
+        assert!(hint.contains("cannot override caller or build limits"), "{hint}");
+        assert!(hint.contains("memory that cannot spill to disk"), "{hint}");
+        assert!(!hint.contains("for this file") && !hint.contains("so it adds no room"), "{hint}");
+    }
+
+    #[test]
     fn hard_budget_message_names_file_numbers_and_scope() {
-        let text = EngineError::PsdHardBudget { name: "big.psd".into(), required: 23_049_071_616, limit: 2_147_483_648 }.to_string();
+        let text = EngineError::PsdHardBudget { name: "big.psd".into(), required: 23_049_071_616, limit: 2_147_483_648, free_memory: None }.to_string();
         for part in ["big.psd", "21.5 GiB", "23049071616 bytes", "2.0 GiB", "2147483648 byte", "hard limit"] {
             assert!(text.contains(part), "{text}");
         }
-        assert!(text.ends_with(&build_limit_scope(build_memory_limit())), "{text}");
+        assert!(text.contains(&build_limit_scope(build_memory_limit())), "{text}");
     }
 
     #[test]

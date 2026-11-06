@@ -12,17 +12,6 @@ const RANGE_LABELS: [&str; 9] = ["Reds", "Yellows", "Greens", "Cyans", "Blues", 
 /// folds into the per-colour rows.
 const SCALARS: [&str; 4] = ["cyan", "magenta", "yellow", "black"];
 
-/// For an edit that merges into stored params (`layer.smartFilter.setParams`): nulls for the keys
-/// the editor folded away, so stored copies stop overriding the rows and Method. The engine reads
-/// a null as missing. Keys still present keep their values.
-pub(crate) fn clear_folded_params(params: &mut Value) {
-    if let Some(o) = params.as_object_mut() {
-        for key in SCALARS.into_iter().chain(["relative"]) {
-            o.entry(key).or_insert(Value::Null);
-        }
-    }
-}
-
 /// The colour the editor shows. The dialog keeps it in the `"colors"` field (so automation can
 /// drive it with `ui.dialog.set`); the Properties panel keeps it in egui memory, because its
 /// params go to `layer.setAdjustment`.
