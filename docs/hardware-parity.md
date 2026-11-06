@@ -1,6 +1,6 @@
 # Hardware parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-28 · **Change:** minor (GPU compositor startup builds in the background, measurements pending; Camera Raw's preview develops its per-pixel stages on the GPU) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-06 · **Change:** minor (Windows: flipping the pen to its eraser end selects the Eraser with Windows Ink on, #2285; GPU compositor startup builds in the background, measurements pending; Camera Raw's preview develops its per-pixel stages on the GPU) · **Target:** Adobe Photoshop 2026
 
 Each hardware feature Photoshop 2026 (27.11.0) uses, per platform, against PhotoCraft. Photoshop
 side: its bundle (Metal and OpenCL paths, "Precise Color Management for HDR Display" and EDR
@@ -33,7 +33,7 @@ HDR display to verify.
 | Pressure | yes | yes (AppKit monitor) | yes (WM_POINTER), jumpy (#2046) | yes (XInput2) | via Xwayland only; GNOME 50 pen doesn't click (#2622), KDE (#2297) | yes |
 | Tilt | yes | yes | **no** | yes | no | yes |
 | Barrel rotation | yes | yes (not applied to tip angle, #1301) | no | partial | no | yes (twist) |
-| Eraser end | yes | yes | no (#2285) | partial | no | partial |
+| Eraser end | yes | yes | yes with Windows Ink (#2285) | partial | no | partial |
 | WinTab driver mode | yes | – | no | – | – | – |
 | Pressure curve | Windows Ink / driver | global curve in Preferences (#2195) | same | same | same | same |
 
@@ -63,6 +63,7 @@ HDR display to verify.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-06 | minor | Windows eraser end: the pointer hooks read `PEN_FLAG_INVERTED` and the Eraser switch follows it (Windows Ink on; #2285) |
 | 2026-10-28 | minor | Build GPU compositor pipelines in the background; benchmark baseline pending (#9157) |
 | 2026-10-10 | major | First version |
 | 2026-10-17 | minor | GPU filters: Camera Raw's preview, per-pixel stages (#6916 step 1) |
