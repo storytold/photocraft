@@ -29,7 +29,7 @@ objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std
 
 # Pure-Rust X11 client (no unsafe in the RustConnection path we use).
 [target.'cfg(target_os = "linux")'.dependencies]
-x11rb = { version = "=0.13.2", default-features = false, features = ["xinput"] }
+x11rb = { version = "=0.14.0", default-features = false, features = ["xinput"] }
 
 # WinTab 1.4: a system context on PhotoCraft's real window supplies pressure, tilt, rotation and
 # the eraser end while Windows Ink is disabled. `wintab` safely wraps the vendor's wintab32.dll,
