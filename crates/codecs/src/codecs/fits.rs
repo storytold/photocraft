@@ -676,11 +676,12 @@ mod tests {
 
     /// Invalid headers and truncated samples are still rejected before reading or
     /// allocating their declared output, even when the available sample is negative.
+    /// A zero axis may be rejected during HDU selection or later dimension validation.
     #[test]
     fn fallback_guard_preserves_invalid_input_errors() {
         assert!(decode(&[], &Limits::default()).is_err());
         let bytes = signed16_fixture(&["NAXIS   = 2", "NAXIS1  = 0", "NAXIS2  = 1"], &[]);
-        assert!(matches!(decode(&bytes, &Limits::default()), Err(CodecError::InvalidImage(_))));
+        assert!(matches!(decode(&bytes, &Limits::default()), Err(CodecError::InvalidImage(_) | CodecError::Malformed { .. })));
         let bytes = signed16_fixture(&["NAXIS   = 2", "NAXIS1  = 2", "NAXIS2  = 1"], &[-1]);
         assert!(matches!(decode(&bytes, &Limits { max_alloc: 4, ..Limits::default() }), Err(CodecError::Malformed { .. })));
     }

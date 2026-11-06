@@ -276,6 +276,9 @@ display_name = "Ratul Paul"
 [people.softwaregames1]
 sync_github_name = true
 
+[people.chrisringrose]
+sync_github_name = true
+
 [people.VoiceLessQ]
 display_name = "VoiceLessQ"
 sync_github_name = false
@@ -295,6 +298,3 @@ sync_github_name = true
 real_name = "Simone Recchia"
 display_name = "Simone Recchia"
 sync_github_name = false
-
-[people.chrisringrose]
-sync_github_name = true
