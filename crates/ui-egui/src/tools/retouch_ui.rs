@@ -58,6 +58,11 @@ pub(crate) fn history_brush_params(app: &PhotocraftApp) -> Value {
     });
     if app.ui.tool == Tool::Eraser && app.ui.tool_options.erase_to_history {
         p["eraseToHistory"] = json!(true);
+        // The Eraser's tip: the tool's brush changes with the tool, if a tool key is pressed mid-stroke.
+        let brush = &app.session.tools.brush;
+        p["size"] = json!(brush.size);
+        p["hardness"] = json!(brush.hardness * 100.0);
+        p["spacing"] = json!(brush.spacing * 100.0);
         // The Eraser's Pencil and Block tips (as `strokes::stroke_params`).
         if crate::eraser_ui::pencil_mode(app, Tool::Eraser) {
             p["pencil"] = json!(true);
@@ -70,6 +75,11 @@ pub(crate) fn history_brush_params(app: &PhotocraftApp) -> Value {
         }
     }
     p
+}
+
+/// The options a stroke of `tool` keeps from its press (`canvas::Drag::history_params`).
+pub(crate) fn history_params_at_press(app: &PhotocraftApp, tool: Tool) -> Option<Value> {
+    (tool == Tool::HistoryBrush).then(|| history_brush_params(app))
 }
 
 /// The command and options-bar params (without `points` and `target`) of a sequential-dab tool:
@@ -142,6 +152,11 @@ pub(crate) fn stroke_seed(points: &[[f64; 3]]) -> u64 {
 
 /// Finish a stroke with a retouching tool. Returns false if `tool` isn't one.
 pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], mods: egui::Modifiers) -> bool {
+    finish_stroke_with(app, tool, points, mods, None)
+}
+
+/// [`finish_stroke`], with a History Brush stroke's options as they were at the press.
+pub(crate) fn finish_stroke_with(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], mods: egui::Modifiers, history: Option<Value>) -> bool {
     let o = app.ui.tool_options.clone();
     let pts = json!(points);
     let (cmd, mut p): (&str, Value) = match tool {
@@ -170,7 +185,7 @@ pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], m
             };
             (if tool == Tool::Healing { "paint.healingBrush" } else { "paint.cloneStamp" }, p)
         }
-        Tool::HistoryBrush => ("paint.historyBrush", history_brush_params(app)),
+        Tool::HistoryBrush => ("paint.historyBrush", history.unwrap_or_else(|| history_brush_params(app))),
         Tool::ArtHistoryBrush => (
             "paint.artHistoryBrush",
             json!({

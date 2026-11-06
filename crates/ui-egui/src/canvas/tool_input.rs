@@ -515,6 +515,7 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
             let tool = crate::eraser_ui::drag_tool(app, tool);
             let mut drag = Drag { clear, ..Drag::new(tool, from.map_or([x, y], |p| [p[0], p[1]]), points, mods, erase) };
             drag.capture_vector_owners(app);
+            drag.history_params = crate::retouch_ui::history_params_at_press(app, tool);
             app.drag = Some(drag);
             app.trail = None;
             app.stylus.begin_stroke();

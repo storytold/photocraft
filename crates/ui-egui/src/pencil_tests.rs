@@ -348,3 +348,33 @@ fn erase_to_history_in_pencil_mode_ignores_the_brush_modes_flow() {
     app.ui.tool_options.eraser_mode = "pencil".into();
     assert_eq!(crate::retouch_ui::history_brush_params(&app)["flow"], json!(100.0));
 }
+
+#[test]
+fn a_tool_key_during_an_erase_to_history_stroke_keeps_the_stroke_as_it_began() {
+    for (mode, pencil) in [("brush", false), ("pencil", true)] {
+        let mut app = app();
+        app.run("paint.pencil", json!({"points": [[60.0, 40.0]], "size": 400})).unwrap();
+        let before = layer(&app).surface().unwrap().rgba(60, 40);
+        app.run("history.setSource", json!({"state": 1})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.ui.tool = Tool::Eraser;
+        crate::paint_mouse::sync_tool_brush(&mut app);
+        app.run("tools.setBrush", json!({"brush": {"size": 15, "hardness": 1.0, "smoothing": {"amount": 0.0}}})).unwrap();
+        app.ui.tool_options.eraser_mode = mode.into();
+        app.ui.tool_options.erase_to_history = true;
+        tool_event(&mut app, ToolEvent::Down { x: 55.0, y: 40.0, pressure: 1.0 }, Modifiers::NONE);
+        tool_event(&mut app, ToolEvent::Move { x: 60.0, y: 40.0, pressure: 1.0 }, Modifiers::NONE);
+        // What pressing a tool's letter does (`shortcuts`): the drag is not cancelled.
+        app.ui.tool = Tool::Brush;
+        crate::paint_mouse::sync_tool_brush(&mut app);
+        app.run("tools.setBrush", json!({"brush": {"size": 90}})).unwrap();
+        tool_event(&mut app, ToolEvent::Move { x: 65.0, y: 40.0, pressure: 1.0 }, Modifiers::NONE);
+        tool_event(&mut app, ToolEvent::Up { x: 65.0, y: 40.0 }, Modifiers::NONE);
+        let (id, p) = last(&app);
+        assert_eq!((id.as_str(), &p["eraseToHistory"]), ("paint.historyBrush", &json!(true)), "{mode}: {id} {p}");
+        assert_eq!(p["pencil"] == json!(true), pencil, "{mode}: {p}");
+        assert_eq!(p["size"], json!(15.0), "{mode}: the Eraser's size, not the new tool's");
+        let after = layer(&app).surface().unwrap().rgba(60, 40);
+        assert!(after[3] > 0.99 && (0..3).all(|i| (after[i] - before[i]).abs() < 0.01), "{mode}: {after:?} vs {before:?}");
+    }
+}
