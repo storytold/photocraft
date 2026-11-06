@@ -422,22 +422,8 @@ fn encode_rle(decoded: &[u8], layout: &PlaneLayout) -> Result<Vec<u8>> {
     // payload once, trading temporary encoded bytes for the former second packet scan.
     let mut chunks: Vec<_> = map_chunks(threads, ranges.clone(), |range| -> Result<Vec<u8>> {
         let table = range.len().checked_mul(cs).ok_or(PsdError::LimitExceeded("RLE table overflow"))?;
-        let mut out = Vec::new();
         let hint = if cfg!(target_arch = "wasm32") { table } else { table.saturating_add(range.len().saturating_mul(rb.saturating_add(rb.div_ceil(128)))) };
-        out.try_reserve_exact(hint).map_err(|_| PsdError::OutOfMemory("not enough memory for encoded RLE"))?;
-        out.resize(table, 0);
-        for (i, row) in range.enumerate() {
-            let start = out.len();
-            packbits::encode(&decoded[row * rb..(row + 1) * rb], &mut out);
-            let n = out.len() - start;
-            let count = &mut out[i * cs..(i + 1) * cs];
-            if cs == 2 {
-                count.copy_from_slice(&u16::try_from(n).map_err(|_| PsdError::LimitExceeded("RLE row exceeds 65535 bytes (use PSB)"))?.to_be_bytes());
-            } else {
-                count.copy_from_slice(&u32::try_from(n).map_err(|_| PsdError::LimitExceeded("RLE row too large"))?.to_be_bytes());
-            }
-        }
-        Ok(out)
+        encode_rle_chunk(decoded, layout, range, hint)
     })?
     .into_iter()
     .collect::<Result<_>>()?;
@@ -453,6 +439,35 @@ fn encode_rle(decoded: &[u8], layout: &PlaneLayout) -> Result<Vec<u8>> {
         let counts = range.len() * cs;
         out[range.start * cs..range.end * cs].copy_from_slice(&chunk[..counts]);
         out.extend_from_slice(&chunk[counts..]);
+    }
+    Ok(out)
+}
+
+/// Encode one worker's rows, measuring packets only when the spare capacity cannot bound them.
+fn encode_rle_chunk(decoded: &[u8], layout: &PlaneLayout, range: std::ops::Range<usize>, hint: usize) -> Result<Vec<u8>> {
+    const OOM: PsdError = PsdError::OutOfMemory("not enough memory for encoded RLE");
+    let rb = layout.row_bytes();
+    let cs = layout.count_size();
+    let table = range.len().checked_mul(cs).ok_or(PsdError::LimitExceeded("RLE table overflow"))?;
+    let mut out = Vec::new();
+    out.try_reserve_exact(hint.max(table)).or_else(|_| out.try_reserve_exact(table)).map_err(|_| OOM)?;
+    out.resize(table, 0);
+    let row_bound = rb.saturating_add(rb.div_ceil(128));
+    for (i, row) in range.enumerate() {
+        let src = &decoded[row * rb..(row + 1) * rb];
+        if out.capacity() - out.len() < row_bound {
+            let needed = packbits::encoded_len(src);
+            out.try_reserve(needed).or_else(|_| out.try_reserve_exact(needed)).map_err(|_| OOM)?;
+        }
+        let start = out.len();
+        packbits::encode(src, &mut out);
+        let n = out.len() - start;
+        let count = &mut out[i * cs..(i + 1) * cs];
+        if cs == 2 {
+            count.copy_from_slice(&u16::try_from(n).map_err(|_| PsdError::LimitExceeded("RLE row exceeds 65535 bytes (use PSB)"))?.to_be_bytes());
+        } else {
+            count.copy_from_slice(&u32::try_from(n).map_err(|_| PsdError::LimitExceeded("RLE row too large"))?.to_be_bytes());
+        }
     }
     Ok(out)
 }
@@ -474,12 +489,7 @@ fn map_chunks<T: Send, R: Send>(threads: usize, items: Vec<T>, f: impl Fn(T) -> 
 
 /// zlib-compresses `data` at the default level.
 pub fn zip_compress(data: &[u8]) -> Vec<u8> {
-    // Noisy pixel planes approach their raw size; avoid retaining every geometric growth step.
-    let mut out = Vec::new();
-    if !cfg!(target_arch = "wasm32") {
-        let _ = out.try_reserve_exact(data.len().saturating_add(data.len() / 100).saturating_add(64));
-    }
-    let mut e = flate2::write::ZlibEncoder::new(out, flate2::Compression::default());
+    let mut e = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
     // Writing into a Vec cannot fail.
     let _ = e.write_all(data);
     e.finish().unwrap_or_default()
