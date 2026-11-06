@@ -491,16 +491,13 @@ impl Manager {
     }
 }
 
-/// [`free_space`], remembering whether it got an answer for [`free_space_unmeasured`].
-fn measure_free_space(dir: &Path) -> Option<(u64, u64)> {
+/// Free space on the volume holding `dir`, minus the reserve, sets how far the file may grow.
+/// The caller holds the config lock, so this is the current directory; it also records whether the
+/// volume answered, for [`free_space_unmeasured`].
+fn refresh_space(c: &Config, dir: &Path, used: u64) {
     let space = free_space(dir);
     M.space_unmeasured.store(space.is_none(), Ordering::Relaxed);
-    space
-}
-
-/// Free space on the volume holding `dir`, minus the reserve, sets how far the file may grow.
-fn refresh_space(c: &Config, dir: &Path, used: u64) {
-    let room = measure_free_space(dir).map_or(u64::MAX, |(available, total)| used.saturating_add(available.saturating_sub(RESERVE_MIN.max(total / 20))));
+    let room = space.map_or(u64::MAX, |(available, total)| used.saturating_add(available.saturating_sub(RESERVE_MIN.max(total / 20))));
     let limit = c.size_cap.map_or(room, |cap| cap.min(room));
     M.space_limit.store(limit, Ordering::Relaxed);
     M.next_space_check.store(used.saturating_add(SPACE_CHECK_EVERY), Ordering::Relaxed);
@@ -540,13 +537,13 @@ fn volume_space(dir: &Path) -> Option<(u64, u64)> {
     Some((vfs.f_bavail.saturating_mul(vfs.f_frsize), vfs.f_blocks.saturating_mul(vfs.f_frsize)))
 }
 
-/// (available, total) bytes of the volume holding `dir`, from `GetDiskFreeSpaceEx`. winsafe takes
-/// `&str`, so a non-UTF-8 folder name uses its nearest UTF-8 ancestor (the same volume in practice).
+/// (available, total) bytes of the volume holding `dir`, from `GetDiskFreeSpaceEx`. `dir` is
+/// canonical, so verbatim (`\\?\C:\x`, `\\?\UNC\server\share\x`), which also reaches paths past
+/// MAX_PATH and keeps trailing dots significant; winsafe takes `&str`, so a non-UTF-8 folder name
+/// uses its nearest UTF-8 ancestor (the same volume unless a mount point has such a name).
 #[cfg(windows)]
 fn volume_space(dir: &Path) -> Option<(u64, u64)> {
-    let verbatim = dir.ancestors().find_map(Path::to_str)?;
-    // The plain form first: a plain path over MAX_PATH fails, so the verbatim form is the fallback.
-    without_verbatim_prefix(Path::new(verbatim)).and_then(|plain| disk_free_space(plain.to_str()?)).or_else(|| disk_free_space(verbatim))
+    disk_free_space(dir.ancestors().find_map(Path::to_str)?)
 }
 
 #[cfg(windows)]
@@ -560,8 +557,10 @@ fn disk_free_space(dir: &str) -> Option<(u64, u64)> {
 
 /// `statvfs` doesn't count purgeable space (local snapshots and caches macOS frees on demand) but
 /// sysinfo does: when the listed disk with the longest mount point holding `dir` is this volume,
-/// recognised by an equal total (APFS firmlinks give `/Users` and `/` different device ids, so ids
-/// can't be compared), use its available figure. Never fails.
+/// use its available figure. A listed disk counts as this volume when the mount point's own
+/// `statvfs` gives the same numbers (APFS volumes in one container share them, and firmlinks give
+/// `/Users` and `/` different device ids, so ids can't be compared); a change between the two
+/// readings just keeps the `statvfs` figure. Never fails.
 #[cfg(target_os = "macos")]
 fn with_purgeable_space(dir: &Path, available: u64, total: u64) -> u64 {
     sysinfo::Disks::new_with_refreshed_list_specifics(sysinfo::DiskRefreshKind::nothing().with_storage())
@@ -571,7 +570,7 @@ fn with_purgeable_space(dir: &Path, available: u64, total: u64) -> u64 {
                 .iter()
                 .filter(|d| dir.starts_with(d.mount_point()))
                 .max_by_key(|d| d.mount_point().as_os_str().len())
-                .filter(|d| d.total_space() == total)
+                .filter(|d| volume_space(d.mount_point()) == Some((available, total)))
                 .map(|d| d.available_space())
         })
         .unwrap_or(available)
@@ -580,32 +579,6 @@ fn with_purgeable_space(dir: &Path, available: u64, total: u64) -> u64 {
 #[cfg(all(any(unix, windows), not(target_os = "macos")))]
 fn with_purgeable_space(_dir: &Path, available: u64, _total: u64) -> u64 {
     available
-}
-
-/// The plain form of a verbatim path, or `None` to keep the path as is. `canonicalize` returns
-/// `\\?\C:\x` and `\\?\UNC\server\share\x` on Windows, whose plain forms are `C:\x` and
-/// `\\server\share\x`.
-#[cfg(windows)]
-fn without_verbatim_prefix(path: &Path) -> Option<PathBuf> {
-    use std::ffi::OsString;
-    use std::path::{Component, Prefix};
-    let mut components = path.components();
-    let Some(Component::Prefix(prefix)) = components.next() else {
-        return None;
-    };
-    let mut out = match prefix.kind() {
-        Prefix::VerbatimDisk(letter) => PathBuf::from(format!("{}:", char::from(letter))),
-        Prefix::VerbatimUNC(server, share) => {
-            let mut unc = OsString::from(r"\\");
-            unc.push(server);
-            unc.push("\\");
-            unc.push(share);
-            PathBuf::from(unc)
-        }
-        _ => return None,
-    };
-    out.extend(components);
-    Some(out)
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -802,7 +775,12 @@ pub fn scratch_capacity() -> Option<u64> {
         let c = M.config();
         (c.dir.clone()?, c.file.as_ref().map_or(0, |f| f.used()), c.size_cap)
     };
-    let room = measure_free_space(&dir).map(|(available, total)| available.saturating_sub(RESERVE_MIN.max(total / 20)));
+    let space = free_space(&dir);
+    // A slow query must not overwrite the status of a directory configured meanwhile.
+    if M.config().dir.as_deref() == Some(dir.as_path()) {
+        M.space_unmeasured.store(space.is_none(), Ordering::Relaxed);
+    }
+    let room = space.map(|(available, total)| available.saturating_sub(RESERVE_MIN.max(total / 20)));
     let room = match (room, cap) {
         (Some(room), Some(cap)) => room.min(cap.saturating_sub(used)),
         (Some(room), None) => room,
@@ -892,31 +870,16 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn verbatim_prefix_is_stripped_for_disks_and_unc_shares() {
-        let cases: &[(&str, Option<&str>)] = &[
-            (r"\\?\C:\x\y", Some(r"C:\x\y")),
-            (r"\\?\C:\", Some(r"C:\")),
-            (r"\\?\UNC\server\share\x", Some(r"\\server\share\x")),
-            (r"\\?\UNC\server\share\", Some(r"\\server\share\")),
-            (r"\\?\Volume{0000-1}\x", None),
-            (r"C:\x", None),
-            (r"\\server\share\x", None),
-        ];
-        for (input, want) in cases {
-            assert_eq!(without_verbatim_prefix(Path::new(input)).as_deref(), want.map(Path::new), "{input}");
+    fn free_space_keeps_a_trailing_dot_folder() {
+        let base = std::fs::canonicalize(std::env::temp_dir()).unwrap().join(format!("photocraft-dot-{}", std::process::id()));
+        let dir = base.join("x.");
+        if std::fs::create_dir_all(&dir).is_err() {
+            let _ = std::fs::remove_dir_all(&base);
+            return;
         }
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn verbatim_prefix_keeps_non_utf8_names() {
-        use std::os::windows::ffi::OsStringExt;
-        let mut wide: Vec<u16> = r"\\?\C:\a".encode_utf16().collect();
-        wide.push(0xD800);
-        let path = PathBuf::from(std::ffi::OsString::from_wide(&wide));
-        let plain = without_verbatim_prefix(&path).unwrap();
-        assert!(plain.starts_with(r"C:\"));
-        assert!(plain.to_str().is_none());
+        let space = free_space(&dir);
+        let _ = std::fs::remove_dir_all(&base);
+        assert!(space.is_some());
     }
 
     // `free_space` returned `None` on Windows before: `canonicalize` gives `\\?\C:\..`, which never
@@ -990,15 +953,25 @@ mod tests {
         }
         let (available, total) = free_space(shm).unwrap();
         assert!(available <= total);
-        assert_ne!(total, free_space(Path::new("/")).unwrap().1);
+        // An independent oracle: `df` asks the same mount for its size.
+        let Ok(out) = std::process::Command::new("df").args(["-B1", "--output=size"]).arg(shm).output() else {
+            eprintln!("df couldn't be run; skipping the comparison");
+            return;
+        };
+        let text = String::from_utf8_lossy(&out.stdout);
+        let parsed = text.lines().rev().map(str::trim).find(|l| !l.is_empty()).and_then(|l| l.parse::<u64>().ok());
+        let Some(parsed) = parsed.filter(|_| out.status.success()) else {
+            eprintln!("df gave no size for {}; skipping the comparison", shm.display());
+            return;
+        };
+        assert_eq!(total, parsed);
     }
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn free_space_keeps_purgeable_space_on_the_temp_volume() {
+    fn free_space_reads_the_temp_volume_on_macos() {
         let temp = std::fs::canonicalize(std::env::temp_dir()).unwrap();
-        let (available, _) = free_space(&temp).unwrap();
-        assert!(available >= volume_space(&temp).unwrap().0);
+        assert_eq!(free_space(&temp).unwrap().1, volume_space(&temp).unwrap().1);
     }
 
     #[cfg(target_os = "macos")]
