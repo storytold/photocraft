@@ -646,6 +646,25 @@ pub(super) fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map
     }
 }
 
+/// The Print dialog's **Done** answer: store the settings in the action being recorded instead of
+/// printing them (#11655). The button row sets it, and automation cannot add a marker
+/// (`dialogs::is_route_marker`), so a dialog an agent confirms still prints.
+pub const RECORD_DONE: &str = "__recordPrintSettings";
+
+/// Whether the Print dialog shows **Done**: Photoshop shows it only while an action is recording
+/// (#11655), where it closes the dialog with the settings kept as a step instead of sending a job.
+pub fn shows_record_done(app: &PhotocraftApp, f: &Map<String, Value>) -> bool {
+    f.contains_key("__print") && app.session.actions.recording.is_some()
+}
+
+/// Done: the settings go to `file.printSettings`, which stores them as the settings Print opens
+/// with and Print One Copy sends. No printer is asked and nothing is written, and the command
+/// journals, so the step lands in the action being recorded. The dialog gives no status line, as
+/// Photoshop's Done does not: the new step in the Actions panel is the answer.
+pub(super) fn record_done(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
+    app.run("file.printSettings", print_params(f))
+}
+
 /// `file.print`'s params. The driver's printable area only goes with a print to the printer:
 /// an output path or a preview set in the same frame as the confirm still drops it.
 pub(super) fn print_params(f: &Map<String, Value>) -> Value {

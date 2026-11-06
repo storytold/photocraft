@@ -17,11 +17,11 @@ use crate::theme::Tokens;
 mod print;
 mod web;
 
-pub use print::open_print;
 pub(crate) use print::print_status;
+pub use print::{RECORD_DONE, open_print, shows_record_done};
 #[cfg(test)]
 use print::{drag_print_position, driver_paper_is_wide, print_params, print_preview_image, printer_options, take_turned_page, turn_driver};
-use print::{print_body, print_confirm};
+use print::{print_body, print_confirm, record_done};
 pub use web::open_web;
 #[cfg(test)]
 use web::{WEB_COMMAND, WebCache, WebProxy, advance_preview, download_for_web, variants, web_frame_document};
@@ -191,7 +191,20 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
 }
 
 pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
-    if f.contains_key("__web") { web_confirm(app, f) } else { print_confirm(app, f) }
+    if f.contains_key("__web") {
+        web_confirm(app, f)
+    } else if owns_record_done(f) {
+        // Done while an action records: store the print settings, print nothing (#11655).
+        record_done(app, f)
+    } else {
+        print_confirm(app, f)
+    }
+}
+
+/// Whether this Print dialog answered with **Done** rather than Print (#11655). One of the dialog's
+/// route markers, so automation cannot set it: a confirm an agent sends still prints.
+pub fn owns_record_done(f: &Map<String, Value>) -> bool {
+    f.contains_key(print::RECORD_DONE)
 }
 
 fn params(f: &Map<String, Value>) -> Value {

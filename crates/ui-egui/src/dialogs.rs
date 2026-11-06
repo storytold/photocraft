@@ -508,6 +508,16 @@ fn button_row(
                 fields.insert("choice".into(), json!("new"));
             }
             hit
+        } else if crate::file_ui::shows_record_done(app, fields) {
+            // Photoshop: while an action records, the Print dialog answers with **Done** beside
+            // Print: it keeps the settings as the action's step and closes without printing
+            // (#11655). Print stays the default, so Enter still prints as before.
+            let done = DialogButton::new(ButtonRole::Alternate, tl!("Done"), 84.0);
+            let hit = dialog_buttons(ui, &[ok, done, cancel]);
+            if hit == Some(ButtonRole::Alternate) {
+                fields.insert(crate::file_ui::RECORD_DONE.into(), json!(true));
+            }
+            hit
         } else {
             dialog_buttons(ui, &[ok, cancel])
         };
@@ -879,6 +889,7 @@ const ROUTES: &[fn(&Fields) -> bool] = &[
     crate::crop_presets::owns,
     crate::variables_ui::owns,
     crate::file_ui::owns,
+    crate::file_ui::owns_record_done,
     crate::new_guide_ui::owns,
     crate::color_picker_ui::owns,
     crate::color_range_ui::owns,
@@ -911,7 +922,9 @@ fn file_command(fields: &Fields) -> Option<&'static str> {
     } else if fields.contains_key("__web") {
         Some("file.export.saveForWebLegacy")
     } else if fields.contains_key("__print") {
-        Some("file.print")
+        // Done stores the print settings instead of printing them (#11655), so automation is
+        // judged for that command rather than for the print the dialog would otherwise send.
+        Some(if crate::file_ui::owns_record_done(fields) { "file.printSettings" } else { "file.print" })
     } else {
         None
     }
