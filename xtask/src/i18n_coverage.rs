@@ -68,17 +68,16 @@ fn check_documented_languages(languages: &[Language], doc: &str) -> Result<(), S
         .split("\n#")
         .next()
         .unwrap_or_default();
+    let mut rows = table.lines().filter(|line| line.starts_with('|'));
+    let header = rows.next().map(table_cells).unwrap_or_default();
+    let delimiter = rows.next().map(table_cells).unwrap_or_default();
+    let delimiter_matches = delimiter.len() == header.len() && delimiter.iter().all(|cell| cell.contains('-') && cell.chars().all(|c| matches!(c, '-' | ':')));
+    if header.get(1) != Some(&"Preference code") || !delimiter_matches {
+        return Err("docs/localization.md's Supported languages table must start with a `Preference code` header and a matching delimiter row".into());
+    }
     let mut documented = BTreeSet::new();
-    for line in table.lines().filter(|line| line.starts_with('|')) {
-        let cell = line.split('|').nth(2).map_or("", str::trim);
-        let row = line.trim();
-        let row = row.strip_prefix('|').unwrap_or(row);
-        let row = row.strip_suffix('|').unwrap_or(row);
-        let separator = row.split('|').map(str::trim).all(|column| column.contains('-') && column.chars().all(|c| matches!(c, '-' | ':')));
-        if cell == "Preference code" || separator {
-            continue;
-        }
-        let code = cell.trim_matches('`').trim();
+    for line in rows {
+        let code = table_cells(line).get(1).map_or("", |cell| cell.trim_matches('`').trim());
         if code.is_empty() {
             return Err(format!("docs/localization.md's Supported languages table has a row with no preference code: {}", line.trim()));
         }
@@ -98,6 +97,12 @@ fn check_documented_languages(languages: &[Language], doc: &str) -> Result<(), S
         message.push_str(&format!("\n  listed but not registered: {}", extra.join(", ")));
     }
     Err(message)
+}
+
+fn table_cells(line: &str) -> Vec<&str> {
+    let row = line.trim();
+    let row = row.strip_prefix('|').unwrap_or(row);
+    row.strip_suffix('|').unwrap_or(row).split('|').map(str::trim).collect()
 }
 
 fn source_keys(root: &Path) -> Result<BTreeSet<Key>, String> {
@@ -647,6 +652,33 @@ mod tests {
                 Err(format!("docs/localization.md's Supported languages table is out of date:\n  listed but not registered: {code}"))
             );
         }
+    }
+
+    #[test]
+    fn documented_languages_reject_a_malformed_table_head() {
+        let head = "| Language | Preference code | Integer plural forms |\n|---|---|---|\n";
+        for replacement in [
+            "| Language | Preference code | Integer plural forms |\n|---|---|\n",
+            "| Language | Preference code | Integer plural forms |\n|---||---|\n",
+            "| Language | Preference code | Integer plural forms |\n|:|:|:|\n",
+            "| Language | Code | Integer plural forms |\n|---|---|---|\n",
+            "| Language | Preference code | Integer plural forms |\n",
+        ] {
+            assert_eq!(
+                check_documented_languages(&documentation_languages(), &LANGUAGE_DOC.replace(head, replacement)),
+                Err("docs/localization.md's Supported languages table must start with a `Preference code` header and a matching delimiter row".into()),
+                "{replacement}"
+            );
+        }
+    }
+
+    #[test]
+    fn documented_languages_reject_a_delimiter_row_among_the_languages() {
+        let doc = LANGUAGE_DOC.replace("## Catalogs", "|---|---|---|\n\n## Catalogs");
+        assert_eq!(
+            check_documented_languages(&documentation_languages(), &doc),
+            Err("docs/localization.md's Supported languages table is out of date:\n  listed but not registered: ---".into())
+        );
     }
 
     #[test]
