@@ -220,6 +220,7 @@ fn invalid_profile_prompt_view_reports_failure_and_next_queued_file_opens_protec
     let error = answer(&mut app, Some("preserve")).unwrap_err();
 
     assert!(error.contains("target alpha channel is absent"));
+    assert!(!app.ui.dialogs.iter().any(|dialog| owns(&dialog.fields)), "the answered invalid file cannot leave a modal blocking queue recovery");
     assert!(app.held_opens.is_empty());
     assert_eq!(app.session.documents().len(), 2);
     assert_eq!(app.session.documents()[0].doc, existing);

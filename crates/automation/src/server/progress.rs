@@ -2,7 +2,7 @@
 //! worker; other long commands run as engine jobs that the server polls ([`Waiter`]): the headless
 //! session's own, or the app's over the bridge.
 use super::{Arc, AutomationError, Backend, BridgeClient, CallToolResult, PhotocraftMcp, PoisonError, Value, fail, json, no_backend, ok_json};
-use crate::headless::JobPoll;
+use crate::headless::{Headless, JobPoll};
 use photocraft_engine::jobs::{JobId, Started};
 use rmcp::RoleServer;
 use rmcp::model::ProgressNotificationParam;
@@ -130,17 +130,27 @@ impl PhotocraftMcp {
         if !matches!(&*self.backend, Backend::Headless(_)) {
             return None;
         }
+        self.headless_wait_with_start(id != "jobs.cancel", move |h| h.command_begin(&id, params), waiter, step).await
+    }
+
+    /// Share guarded startup and polling with callers that supply an already-authorized job starter.
+    pub(super) async fn headless_wait_with_start(
+        &self,
+        poll: bool,
+        start: impl FnOnce(&mut Headless) -> Result<Started, AutomationError> + Send + 'static,
+        waiter: &mut Waiter,
+        step: (usize, usize),
+    ) -> Option<Result<Value, AutomationError>> {
         let backend = self.backend.clone();
         let cancel = waiter.context.as_ref().map(|context| context.ct.clone());
         // The guard is armed under the lock that starts the job: when the request is dropped while
         // the start still waits for the lock, the closure's output is dropped unread and cancels it.
-        let poll = id != "jobs.cancel";
         let mut guard = match self
             .headless_op_with_poll(poll, move |h| {
                 if cancel.as_ref().is_some_and(|token| token.is_cancelled()) {
                     return Err(photocraft_engine::EngineError::Cancelled.into());
                 }
-                Ok(match h.command_begin(&id, params)? {
+                Ok(match start(h)? {
                     Started::Job(job) if cancel.as_ref().is_some_and(|token| token.is_cancelled()) => {
                         return h.job_abandon(job).map(Err);
                     }
@@ -174,7 +184,7 @@ impl PhotocraftMcp {
                     // Cancel before answering, so the next call already sees the document unchanged.
                     // A job that ended first is answered with its result, not as cancelled.
                     guard.job = None;
-                    return Some(self.headless_op(move |h| Ok(h.job_abandon(job))).await?.and_then(|result| result));
+                    return Some(self.headless_op_with_poll(false, move |h| Ok(h.job_abandon(job))).await?.and_then(|result| result));
                 }
                 () = tokio::time::sleep(delay) => {}
             }
