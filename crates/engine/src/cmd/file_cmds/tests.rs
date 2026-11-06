@@ -4121,15 +4121,22 @@ fn open_as_and_place_keep_the_typed_hard_budget_fields() {
 }
 
 /// #11544: a machine whose memory reading came out as 0 refused every open, and the message read
-/// as "this machine has no memory". It names the setting the ceiling is derived from and says a
-/// tiny figure may be a failed reading instead.
+/// as "this machine has no memory". A limit of 0 now states what the reading reported; a positive
+/// limit is a figure worth acting on and is never diagnosed as a failed reading. Both point at the
+/// setting the app's own limit lives in.
 #[test]
-fn hard_budget_refusal_message_names_the_setting_and_the_reading() {
-    let msg = EngineError::PsdHardBudget { name: "5.psb".into(), required: 255_959_712, limit: 0 }.to_string();
-    assert!(msg.contains("Preferences › Performance"), "the message must name where the limit is set: {msg}");
-    assert!(msg.contains("system memory reading"), "the message must say the figure is a reading: {msg}");
-    assert!(msg.contains("cannot open “5.psb”"), "{msg}");
-    assert!(msg.contains("255959712") && msg.contains("0 byte"), "the estimate and the limit stay in the message: {msg}");
+fn hard_budget_refusal_message_names_the_setting_and_only_calls_a_zero_limit_a_reading() {
+    let zero = EngineError::PsdHardBudget { name: "5.psb".into(), required: 255_959_712, limit: 0 }.to_string();
+    assert!(zero.contains("Preferences › Performance"), "the message must name where the limit is set: {zero}");
+    assert!(zero.contains("system memory reading found no free memory"), "a 0 limit says what the reading reported: {zero}");
+    assert!(zero.contains("cannot open “5.psb”"), "{zero}");
+    assert!(zero.contains("255959712") && zero.contains("0 byte"), "the estimate and the limit stay in the message: {zero}");
+
+    // A valid small ceiling is not a broken reading.
+    let small = EngineError::PsdHardBudget { name: "small.psd".into(), required: 200 << 20, limit: 50 << 20 }.to_string();
+    assert!(small.contains("Preferences › Performance"), "{small}");
+    assert!(!small.contains("reading"), "a positive limit must not be diagnosed as a failed reading: {small}");
+    assert!(small.contains("209715200") && small.contains("52428800"), "the estimate and the limit stay in the message: {small}");
 }
 
 thread_local! { static REVIEW_CANCEL: std::cell::RefCell<Option<crate::jobs::JobCtx>> = const { std::cell::RefCell::new(None) }; }
