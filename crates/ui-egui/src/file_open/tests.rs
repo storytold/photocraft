@@ -1178,9 +1178,13 @@ fn open_documents_as_tabs_preference_controls_floating_windows() {
     assert_eq!(app.ui.windows[1].document, 1);
     assert!(app.ui.windows[1].floating);
 
-    // Float in Window (or tearing the tab off) finds that window: still one window per document.
+    // Float in Window (or tearing the tab off) finds that window: the same one, and still one
+    // window per document.
     app.session.set_active(0);
-    crate::menus::invoke(&mut app, &egui::Context::default(), "window.arrange.floatInWindow", json!({})).unwrap();
+    let window = app.ui.windows[0].id;
+    let result = crate::menus::invoke(&mut app, &egui::Context::default(), "window.arrange.floatInWindow", json!({})).unwrap();
+    assert_eq!(result, json!({"window": window}), "the document's own window, not a new one");
+    assert!(app.ui.windows.iter().any(|w| w.id == window && w.document == 0));
     assert_eq!(app.ui.windows.iter().filter(|w| w.document == 0).count(), 1, "one window for the document, not a duplicate");
 
     // Opening with preference true docks into tabs, creating no new floating window
