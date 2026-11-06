@@ -26,8 +26,16 @@ pub(crate) fn active_text(app: &PhotocraftApp) -> Option<&TextLayer> {
     }
 }
 
-fn effective_range(text: &TextLayer, geometry: &PathGeometry) -> Option<[f64; 2]> {
+fn alignment_factor(align: photocraft_doc::text::TextAlign) -> f64 {
     use photocraft_doc::text::TextAlign;
+    match align {
+        TextAlign::Center | TextAlign::JustifyCenter => 0.5,
+        TextAlign::Right | TextAlign::JustifyRight => 1.0,
+        _ => 0.0,
+    }
+}
+
+fn effective_range(text: &TextLayer, geometry: &PathGeometry) -> Option<[f64; 2]> {
     let TextShape::Path { path, start, end, .. } = &text.shape else { return None };
     let length = geometry.length();
     let start = f64::from(*start);
@@ -39,13 +47,8 @@ fn effective_range(text: &TextLayer, geometry: &PathGeometry) -> Option<[f64; 2]
     } else {
         // Different paragraph alignments cannot share one equivalent interval.
         let runs = text.paragraph_runs();
-        let factor = |align| match align {
-            TextAlign::Center | TextAlign::JustifyCenter => 0.5,
-            TextAlign::Right | TextAlign::JustifyRight => 1.0,
-            _ => 0.0,
-        };
-        let f = factor(runs.first()?.style.align);
-        if runs.iter().any(|run| factor(run.style.align) != f) {
+        let f = alignment_factor(runs.first()?.style.align);
+        if runs.iter().any(|run| alignment_factor(run.style.align) != f) {
             return None;
         }
         if path.closed {
@@ -238,6 +241,7 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
         original_area,
         areas: VecDeque::new(),
     });
+    damage.original_area = damage.original_area.union(&original_area);
     if damage.areas.len() >= 128 {
         damage.areas.pop_front();
     }
@@ -258,6 +262,7 @@ pub struct Drag {
     geometry: PathGeometry,
     closed: bool,
     endpoint: Option<usize>,
+    alignment: f64,
     original: [f64; 2],
     proposed: [f64; 2],
     previous: f64,
@@ -277,6 +282,7 @@ impl PartialEq for Drag {
             && self.inverse == other.inverse
             && self.closed == other.closed
             && self.endpoint == other.endpoint
+            && self.alignment == other.alignment
             && self.original == other.original
             && self.proposed == other.proposed
             && self.previous == other.previous
@@ -331,10 +337,26 @@ impl Drag {
             [(start + self.delta).clamp(if self.closed { end - length } else { 0.0 }, end), end]
         } else if self.endpoint == Some(1) {
             [start, (end + self.delta).clamp(start, if self.closed { start + length } else { length })]
+        } else if self.closed {
+            [start + self.delta, end + self.delta]
         } else {
-            let delta = if self.closed { self.delta } else { self.delta.clamp(-start, length - end) };
-            [start + delta, end + delta]
+            moved_open_range(self.original, self.delta, self.alignment, length)
         };
+    }
+}
+
+// Preserve the paragraph anchor when an open range reaches an endpoint. Keeping
+// the whole span fixed would prevent a range ending at the path endpoint from moving.
+fn moved_open_range([start, end]: [f64; 2], delta: f64, alignment: f64, length: f64) -> [f64; 2] {
+    let span = end - start;
+    let anchor = (start + span * alignment + delta).clamp(0.0, length);
+    if alignment == 0.0 {
+        [anchor, (anchor + span).min(length)]
+    } else if alignment == 1.0 {
+        [(anchor - span).max(0.0), anchor]
+    } else {
+        let half = (span / 2.0).min(anchor).min(length - anchor);
+        [anchor - half, anchor + half]
     }
 }
 
@@ -409,6 +431,7 @@ pub(crate) fn pointer(app: &mut PhotocraftApp, event: crate::canvas::ToolEvent) 
         geometry,
         closed: path.closed,
         endpoint,
+        alignment: text.paragraph_runs().first().map_or(0.0, |run| alignment_factor(run.style.align)),
         original,
         proposed: original,
         previous,
@@ -616,20 +639,39 @@ mod tests {
         }
     }
 
+    fn body_point(app: &mut PhotocraftApp) -> Point {
+        let id = app.session.active().unwrap().active_layer.unwrap();
+        let (layout, _, _) = crate::type_tool::layout(app, id).unwrap();
+        let cluster = layout.clusters.last().unwrap();
+        let line = &layout.lines[cluster.line];
+        let text = active_text(app).unwrap();
+        let warp = photocraft_text::warp::Warp::on_path(&text.shape).unwrap();
+        let (x, y) = warp.apply(f64::from(cluster.x + cluster.advance / 2.0), f64::from(line.baseline - line.ascent * 0.4));
+        text.transform.apply(Point::new(x, y))
+    }
+
+    #[test]
+    fn body_drag_can_move_text_when_range_reaches_the_open_endpoint() {
+        let mut app = app(Tool::PathSelection);
+        app.run("type.setPathPlacement", json!({"end": null})).unwrap();
+        for expected in [30.0, 40.0] {
+            let point = body_point(&mut app);
+            down(&mut app, point.x, point.y);
+            assert_eq!(app.ui.type_path_drag.as_ref().unwrap().endpoint, None);
+            move_to(&mut app, point.x + 10.0, point.y);
+            up(&mut app, point.x + 10.0, point.y);
+            assert_eq!(placement(&app), (expected, Some(160.0), false));
+        }
+    }
+
     #[test]
     fn body_drag_moves_range_once_and_undoes() {
         for tool in [Tool::PathSelection, Tool::DirectSelection] {
             let mut app = app(tool);
             let before = shape(&app);
             let n = steps(&app);
-            let id = app.session.active().unwrap().active_layer.unwrap();
-            let (layout, _, _) = crate::type_tool::layout(&mut app, id).unwrap();
-            let cluster = layout.clusters.last().unwrap();
-            let line = &layout.lines[cluster.line];
+            let point = body_point(&mut app);
             let text = active_text(&app).unwrap();
-            let warp = photocraft_text::warp::Warp::on_path(&text.shape).unwrap();
-            let (x, y) = warp.apply(f64::from(cluster.x + cluster.advance / 2.0), f64::from(line.baseline - line.ascent * 0.4));
-            let point = text.transform.apply(Point::new(x, y));
             let xf = ViewXform::active(&app).unwrap();
             assert!(marker_hit(markers(text, &xf).unwrap(), xf.to_screen(point.x as f32, point.y as f32)).is_none());
             down(&mut app, point.x, point.y);

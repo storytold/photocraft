@@ -187,7 +187,7 @@ fn q255(v: f32) -> u8 {
 fn path_range_warning(layer: &Layer) -> Option<String> {
     let LayerContent::Text(text) = &layer.content else { return None };
     matches!(text.shape, photocraft_doc::text::TextShape::Path { end: Some(end), .. } if end.is_finite())
-        .then(|| format!("layer \"{}\": the text path end limit is not saved to PSD; text may extend beyond it", layer.name))
+        .then(|| format!("layer \"{}\": the text path end limit is not saved to PSD; placement and overflow may change", layer.name))
 }
 
 impl Ex<'_> {
