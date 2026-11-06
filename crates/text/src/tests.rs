@@ -474,6 +474,26 @@ fn vertical_soft_wrap_carry_participates_in_line_breaking() {
     }
 }
 
+#[test]
+fn vertical_soft_wrap_kerned_carry_stays_inside_reserved_width() {
+    let (mut t, boundary) = vertical_soft_wrap_with_spaces(2, &"鈴".repeat(13));
+    let style = CharStyle { font_family: "Shippori Mincho".into(), size_pt: 36.0, ..Default::default() };
+    t.runs = vec![
+        TextRun { len: boundary, style: style.clone() },
+        TextRun { len: 1, style: CharStyle { kern: 1000.0, ..style.clone() } },
+        TextRun { len: t.text.len() - boundary - 1, style },
+    ];
+    let mut e = TextEngine::new();
+    let l = e.layout(&t, 72.0);
+    assert_eq!(l.lines.len(), 3, "{:?}", l.lines);
+    assert_eq!(l.lines[1].range.start, boundary, "{:?}", l.lines);
+    let spaces: Vec<_> = l.clusters.iter().filter(|c| (boundary..boundary + 2).contains(&c.range.start)).collect();
+    assert_eq!(spaces.len(), 2, "{:?}", l.clusters);
+    assert!(spaces.iter().all(|space| space.line == 1), "{spaces:?}");
+    assert!(spaces[0].advance > spaces[1].advance + 35.0, "the fixture must include the positive manual kern: {spaces:?}");
+    assert!(l.lines[1].x1 <= 480.0 + 0.05, "the receiving column exceeded its reserved width: {:?}", l.lines);
+}
+
 /// A carry adopted into a column's width can move that column's break onto a space run, creating
 /// a carry for the next column, one column further per settle pass. A chain of eight such columns
 /// must still settle: every column ends inside the box.

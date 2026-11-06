@@ -340,7 +340,7 @@ impl Layouter {
     /// Breaks one paragraph and stacks its lines below the previous paragraph's.
     fn layout_paragraph(&mut self, fonts: &mut FontDb, out: &mut TextLayout, flow: &mut Flow, para: Para<'_>) {
         let env = para.env;
-        let (mut layout, area_slots, area_full) = para.break_paragraph(&mut self.lcx, &mut fonts.fcx, flow);
+        let (mut layout, area_slots, area_full) = para.break_paragraph(&mut self.lcx, &mut fonts.fcx, flow, &mut self.optical);
         layout.align(para.alignment(), para.align_options());
         if flow.prev_baseline.is_some() {
             flow.pending_space += para.ps.space_before_pt * env.k;

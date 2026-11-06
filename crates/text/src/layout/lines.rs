@@ -175,6 +175,13 @@ fn collect_kern_slots(line: &Line<'_>, para: &Para<'_>) -> Vec<KernSlot> {
     slots
 }
 
+/// Advance of the trailing spaces carried to the next vertical column, including kerning.
+fn vertical_space_carry_advance(slots: &[KernSlot], kern_px: &[f32], start: usize) -> f32 {
+    let advance =
+        slots.iter().enumerate().filter(|(_, slot)| slot.start >= start).map(|(i, slot)| slot.advance + kern_px.get(i).copied().unwrap_or(0.0)).sum::<f32>();
+    if advance.is_finite() { advance } else { 0.0 }
+}
+
 /// Both characters of a pair kern optically: a mode change splits shaping runs, which ends
 /// automatic kerning, as with Metrics.
 fn optical_pair(st: &CharStyle, next: &CharStyle, a: &KernSlot, b: &KernSlot) -> bool {
@@ -367,13 +374,13 @@ impl Para<'_> {
     }
 
     /// The carried advance as line breaking saw it, including horizontal scale.
-    pub(super) fn shaped_vertical_space_carry(&self, line: &Line<'_>) -> f32 {
+    pub(super) fn shaped_vertical_space_carry(&self, optical: &mut crate::optical::Cache, line: &Line<'_>) -> f32 {
         let Some(start) = self.vertical_space_start(line) else { return 0.0 };
         let slots = collect_kern_slots(line, self);
+        let kern_px = self.kerning(optical, &slots);
         #[cfg(test)]
         CARRY_SCANNED.with(|scanned| scanned.set(scanned.get() + slots.len()));
-        let advance = slots.iter().filter(|s| s.start >= start).map(|s| s.advance).sum::<f32>();
-        if advance.is_finite() { advance } else { 0.0 }
+        vertical_space_carry_advance(&slots, &kern_px, start)
     }
 
     /// Where the line starts along its extent: box and area lines at their box or span edge,
@@ -519,12 +526,10 @@ impl Para<'_> {
             paragraph: self.index,
         });
         let Some(start) = self.vertical_space_start(line) else { return CarriedSpaces::default() };
-        let start = self.map_offset(start);
-        let current = &out.clusters[c0..];
         #[cfg(test)]
-        CARRY_SCANNED.with(|scanned| scanned.set(scanned.get() + current.len()));
-        let advance = current.iter().filter(|c| c.line == line_index && c.range.start >= start).map(|c| c.advance).sum::<f32>();
-        let advance = if advance.is_finite() { advance } else { 0.0 };
+        CARRY_SCANNED.with(|scanned| scanned.set(scanned.get() + out.clusters[c0..].len()));
+        let advance = vertical_space_carry_advance(&slots, &kern_px, start);
+        let start = self.map_offset(start);
         CarriedSpaces { present: true, advance, start, previous_line: line_index, clusters: c0..out.clusters.len() }
     }
 

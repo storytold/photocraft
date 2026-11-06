@@ -469,7 +469,14 @@ impl<'a> Para<'a> {
     }
 
     /// Settles columns whose carried spaces otherwise push their content past the box or area span.
-    fn settle_vertical_carries(&self, layout: &mut Layout<RunBrush>, flow: &Flow, mut slots: Vec<Slot>, mut full: bool) -> (Vec<Slot>, bool) {
+    fn settle_vertical_carries(
+        &self,
+        layout: &mut Layout<RunBrush>,
+        flow: &Flow,
+        mut slots: Vec<Slot>,
+        mut full: bool,
+        optical: &mut crate::optical::Cache,
+    ) -> (Vec<Slot>, bool) {
         // Adopting a carry into a column's width can move its break onto a space run, creating a
         // carry for the next column, so a chain settles one column further per pass. A chain is
         // at most one carry per line: bound the passes by the line count, following it up when
@@ -481,7 +488,7 @@ impl<'a> Para<'a> {
             #[cfg(test)]
             CARRY_SETTLE_PASSES.with(|count| count.set(count.get() + 1));
             passes += 1;
-            let carries: Vec<f32> = layout.lines().map(|line| self.shaped_vertical_space_carry(&line)).collect();
+            let carries: Vec<f32> = layout.lines().map(|line| self.shaped_vertical_space_carry(optical, &line)).collect();
             let converged = carries == settled;
             #[cfg(test)]
             let converged = converged && !CARRY_SETTLE_FORCE_NONCONVERGING.with(Cell::get);
@@ -515,7 +522,13 @@ impl<'a> Para<'a> {
     /// A tab is never wider than a space plus one tab interval, so breaking lines at that width
     /// keeps the expanded tabs inside the box, but can wrap early. Break again with the tab widths
     /// that layout gives until they agree; if they don't settle, keep the safe layout.
-    pub(super) fn break_paragraph(&self, lcx: &mut LayoutContext<RunBrush>, fcx: &mut parley::FontContext, flow: &Flow) -> (Layout<RunBrush>, Vec<Slot>, bool) {
+    pub(super) fn break_paragraph(
+        &self,
+        lcx: &mut LayoutContext<RunBrush>,
+        fcx: &mut parley::FontContext,
+        flow: &Flow,
+        optical: &mut crate::optical::Cache,
+    ) -> (Layout<RunBrush>, Vec<Slot>, bool) {
         let wide = if self.env.wraps { self.tab_px } else { 0.0 };
         let mut roman_spacing: Vec<f32> = self.roman.iter().map(|r| r.1).collect();
         let mut layout = self.shape(lcx, fcx, &vec![wide; self.tabs.len()], &roman_spacing);
@@ -535,7 +548,7 @@ impl<'a> Para<'a> {
             full = settled_full;
         }
         if self.env.vertical && self.env.wraps {
-            (slots, full) = self.settle_vertical_carries(&mut layout, flow, slots, full);
+            (slots, full) = self.settle_vertical_carries(&mut layout, flow, slots, full, optical);
         }
         (layout, slots, full)
     }
