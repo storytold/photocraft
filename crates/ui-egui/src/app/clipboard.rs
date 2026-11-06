@@ -81,6 +81,7 @@ impl PhotocraftApp {
     /// Mirror the session clipboard onto the OS clipboard (RGBA8).
     pub(super) fn export_os_clipboard(&mut self) {
         self.clip_unmirrored = true;
+        self.os_clip_wayland_sig = None;
         if !self.session.prefs().general.export_clipboard {
             return;
         }
@@ -98,10 +99,12 @@ impl PhotocraftApp {
         let arboard_ok = self.services.clipboard_set_image.as_mut().is_some_and(|set| set(b.width(), b.height(), &bytes).is_ok());
         if self.services.is_wayland {
             let color_image = egui::ColorImage::from_rgba_unmultiplied([b.width() as usize, b.height() as usize], &bytes);
+            let wayland_bytes: Vec<u8> = color_image.pixels.iter().flat_map(|c| c.to_srgba_unmultiplied()).collect();
+            let wayland_sig = clip_signature(b.width(), b.height(), &wayland_bytes);
+            self.os_clip_wayland_sig = Some(wayland_sig);
             if !arboard_ok {
-                let wayland_bytes: Vec<u8> = color_image.pixels.iter().flat_map(|c| c.to_srgba_unmultiplied()).collect();
                 self.os_clip_svg = None;
-                self.os_clip_sig = Some(clip_signature(b.width(), b.height(), &wayland_bytes));
+                self.os_clip_sig = Some(wayland_sig);
             }
             self.pending_copy_image = Some(color_image);
         }
@@ -112,6 +115,8 @@ impl PhotocraftApp {
         }
     }
 
+    /// Emit any pending Wayland clipboard image as `OutputCommand::CopyImage` on `ctx` during
+    /// the current input batch so `egui-winit` can claim the selection with the active token.
     pub(super) fn flush_pending_copy_image(&mut self, ctx: &egui::Context) {
         if let Some(image) = self.pending_copy_image.take() {
             ctx.copy_image(image);
@@ -197,7 +202,7 @@ impl PhotocraftApp {
 
     fn finish_import_os_clipboard(&mut self, w: u32, h: u32, bytes: Vec<u8>) -> Result<bool, String> {
         let sig = clip_signature(w, h, &bytes);
-        if self.os_clip_sig == Some(sig) && self.session.clipboard.is_some() {
+        if (self.os_clip_sig == Some(sig) || self.os_clip_wayland_sig == Some(sig)) && self.session.clipboard.is_some() {
             return Ok(false);
         }
         let r = photocraft_geom::Rect::new(0, 0, w as i32, h as i32);

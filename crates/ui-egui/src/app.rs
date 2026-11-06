@@ -32,6 +32,7 @@ pub(crate) use thumbs::layer_thumb_frame;
 pub use thumbs::surface_fingerprint;
 
 impl PhotocraftApp {
+    /// Construct the application state from a document `session` and platform `services`.
     pub fn new(mut session: Session, mut services: Services) -> Self {
         session.updates.check = services.check_updates.take();
         let mut app = Self {
@@ -172,6 +173,7 @@ impl PhotocraftApp {
             hist_uncached: None,
             gpu: None,
             window_device: None,
+            os_clip_wayland_sig: None,
             pending_paste_image: None,
             pending_paste_cmd: None,
             pending_copy_image: None,
@@ -233,10 +235,12 @@ impl eframe::App for PhotocraftApp {
         self.finish_captures(finished);
     }
 
+    /// Run per-frame non-UI state updates, IME reset completion, and pending Wayland clipboard flushes.
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         self.logic_frame(ctx, frame);
         self.finish_type_reset_logic(ctx);
         self.flush_pending_copy_image(ctx);
+        self.pending_paste_image = None;
     }
 
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
@@ -252,15 +256,18 @@ impl eframe::App for PhotocraftApp {
         }
         let mut async_wayland_paste = false;
         let mut got_paste_image = false;
+        let mut got_paste_text = false;
         for event in &raw_input.events {
             if let egui::Event::PasteImage(image) = event {
                 self.pending_paste_image = Some(std::sync::Arc::clone(image));
                 got_paste_image = true;
                 async_wayland_paste |= self.services.is_wayland;
-            } else if matches!(event, egui::Event::Paste(_)) && self.services.is_wayland {
-                async_wayland_paste = true;
+            } else if matches!(event, egui::Event::Paste(_)) {
+                got_paste_text = true;
+                async_wayland_paste |= self.services.is_wayland;
             }
         }
+        let editing_text = ctx.text_edit_focused() || self.ui.text_edit.is_some();
         if got_paste_image
             && let Some(cmd) = self.pending_paste_cmd.take()
             && cmd != "edit.paste"
@@ -270,19 +277,31 @@ impl eframe::App for PhotocraftApp {
                 self.ui.status = error;
                 self.ui.status_error = true;
             }
-        } else if got_paste_image {
+        } else if got_paste_image || got_paste_text {
             self.pending_paste_cmd = None;
         }
         // While a text field of a floating panel's own window has the keyboard, the dock area
         // hands that window the text keys in this input and converts them there.
         if craft_ui::docking::typing_window(ctx).is_none() {
-            shortcuts::clipboard_keys(ctx, ctx.text_edit_focused() || self.ui.text_edit.is_some(), raw_input);
+            let mut paste_key_held = ctx.input(|i| i.key_down(egui::Key::V) || i.key_down(egui::Key::Insert))
+                || ctx.data(|d| d.get_temp::<bool>(egui::Id::unique("pc-paste-key-seen"))).unwrap_or(false);
+            for event in &raw_input.events {
+                if let egui::Event::Key { key: egui::Key::V | egui::Key::Insert, pressed, .. } = event {
+                    paste_key_held = *pressed;
+                }
+            }
+            shortcuts::clipboard_keys(ctx, editing_text, raw_input);
             if async_wayland_paste {
                 ctx.data_mut(|d| {
-                    d.remove_temp::<bool>(egui::Id::unique("pc-paste-key-seen"));
+                    if !paste_key_held {
+                        d.remove_temp::<bool>(egui::Id::unique("pc-paste-key-seen"));
+                    }
                     d.remove_temp::<bool>(egui::Id::unique("pc-paste-command-lately"));
                 });
             }
+        }
+        if editing_text {
+            self.pending_paste_image = None;
         }
         // Windows precision touchpads and some Linux Wayland compositors send pinches
         // as fractional Ctrl + wheel rather than a native Zoom event (#4566).
@@ -305,6 +324,7 @@ impl eframe::App for PhotocraftApp {
         self.perf.stage.start(frame_start, moves);
     }
 
+    /// Render the application user interface and flush any clipboard image copied during the UI pass.
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         photocraft_compose::discard_unreadable_pixel_caches();
         if let Err(error) = photocraft_raster::spill::check_integrity() {
@@ -316,6 +336,8 @@ impl eframe::App for PhotocraftApp {
         }
         self.ui_frame(ui, frame);
         self.finish_type_reset_pass(ui.ctx());
+        self.flush_pending_copy_image(ui.ctx());
+        self.pending_paste_image = None;
     }
 }
 

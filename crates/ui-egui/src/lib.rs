@@ -605,6 +605,8 @@ pub struct PhotocraftApp {
     /// so `run` doesn't read it a second time.
     pub(crate) clip_read_for_paste: bool,
     /// Image delivered by `egui::Event::PasteImage` this frame (Wayland `wl_data_device` paste).
+    /// Signature of the last internal copy after `egui::ColorImage` premultiplied alpha round-trip.
+    pub(crate) os_clip_wayland_sig: Option<u64>,
     pub(crate) pending_paste_image: Option<std::sync::Arc<egui::ColorImage>>,
     /// Menu paste command waiting for `ViewportCommand::RequestPaste` to deliver `Event::PasteImage`.
     pub(crate) pending_paste_cmd: Option<String>,
