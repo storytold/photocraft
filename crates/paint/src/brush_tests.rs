@@ -1797,13 +1797,13 @@ fn overlapping_soft_strokes(fmt: PixelFormat, strokes: u64) -> Surface {
 }
 
 /// Largest root-mean-square difference, in 8-bit levels, of one of `got`'s rows from `want`'s
-/// (red channel): the grain a row shows on top of the true value.
-fn worst_row_grain(got: &Surface, want: &Surface) -> f32 {
+/// (channel `ch`): the grain a row shows on top of the true value.
+fn worst_row_grain(got: &Surface, want: &Surface, ch: usize) -> f32 {
     let mut worst = 0.0f32;
     for y in 30..170 {
         let mut sq = 0.0;
         for x in 100..200 {
-            let d = (got.rgba(x, y)[0] - want.rgba(x, y)[0]) * 255.0;
+            let d = (got.rgba(x, y)[ch] - want.rgba(x, y)[ch]) * 255.0;
             sq += d * d;
         }
         worst = worst.max((sq / 100.0).sqrt());
@@ -1819,10 +1819,27 @@ fn overlapping_8bit_soft_strokes_do_not_build_up_grain() {
     let eight = overlapping_soft_strokes(PixelFormat::RGBA8, 40);
     // Rounding each stroke independently leaves noise that levels off near 2 levels (RMS) and keeps
     // every row's average true; one pattern for all strokes grew past 8 levels and drifted by 1.5.
-    let grain = worst_row_grain(&eight, &reference);
+    let grain = worst_row_grain(&eight, &reference, 0);
     assert!(grain < 3.0, "rows are {grain} levels (RMS) off the float render");
     let err = worst_row_error(&eight, &reference);
     assert!(err < 0.6, "row averages are {err} levels off the float render");
+}
+
+#[test]
+fn overlapping_8bit_soft_erases_do_not_build_up_grain() {
+    // The Eraser's soft strokes are dithered too (#9156), in the alpha they leave.
+    let erase = |fmt: PixelFormat| {
+        let mut s = Surface::with_default(fmt, &[0.0, 0.0, 0.0, 1.0]);
+        for seed in 1..=40 {
+            let b = BrushSettings { size: 120.0, hardness: 0.0, opacity: 0.1, erase: true, pressure_size: false, seed, ..Default::default() };
+            render_stroke(&mut s, &b, &line(0.0, 300.0, 100.0), None, false, 1.0);
+        }
+        s
+    };
+    let reference = erase(PixelFormat::new(ColorMode::Rgb, SampleType::F32, true));
+    let eight = erase(PixelFormat::RGBA8);
+    let grain = worst_row_grain(&eight, &reference, 3);
+    assert!(grain < 3.0, "alpha rows are {grain} levels (RMS) off the float render");
 }
 
 #[test]

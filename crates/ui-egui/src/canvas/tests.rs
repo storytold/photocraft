@@ -2248,6 +2248,24 @@ fn navigator_keeps_its_image_during_a_live_brush_stroke() {
 }
 
 #[test]
+fn brush_strokes_started_on_one_spot_get_their_own_seeds() {
+    // #9156: the seed also picks the 8-bit dither, so repeated dabs on one spot that shared a
+    // seed rounded the same pixels up every time and built up a fixed grain.
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.run("file.new", json!({"width": 200, "height": 80, "background": "white"})).unwrap();
+    app.ui.tool = Tool::Brush;
+    let m = egui::Modifiers::NONE;
+    let mut seeds = Vec::new();
+    for _ in 0..2 {
+        tool_event(&mut app, ToolEvent::Down { x: 50.0, y: 40.0, pressure: 1.0 }, m);
+        tool_event(&mut app, ToolEvent::Move { x: 80.0, y: 40.0, pressure: 1.0 }, m);
+        tool_event(&mut app, ToolEvent::Up { x: 80.0, y: 40.0 }, m);
+        seeds.push(app.session.journal.iter().rev().find(|(id, _)| id == "paint.stroke").and_then(|(_, p)| p.get("seed").cloned()).unwrap());
+    }
+    assert_ne!(seeds[0], seeds[1], "two strokes from (50, 40)");
+}
+
+#[test]
 fn smoothed_stroke_shows_its_catch_up_tail_while_drawing() {
     // #73: with smoothing the brush lags behind the pointer and catches up at the end; the
     // preview draws that tail live, so no frame after release is missing the end.

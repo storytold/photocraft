@@ -391,7 +391,12 @@ pub(super) fn begin_live_stroke(app: &PhotocraftApp) -> Option<LiveStroke> {
         p["target"] = paint_target(app);
         EngineStroke::Retouch(Box::new(photocraft_engine::retouch_cmds::LiveRetouch::begin(&app.session, cmd, &p).ok()?))
     } else {
-        let p = stroke_params(app, d, &app.stylus.stroke_points(&d.points));
+        let mut p = stroke_params(app, d, &app.stylus.stroke_points(&d.points));
+        // The seed (jitter and 8-bit dither) from the first position and the document's revision:
+        // a stroke started where the last one started still rounds differently, so repeated soft
+        // dabs on one spot don't build up a fixed grain (#9156). The commit reuses it.
+        let first = d.points.first().map(|q| json!([q[0], q[1], st.revision])).unwrap_or_default();
+        p["seed"] = json!(photocraft_engine::paint::rng::seed_from_bytes(first.to_string().as_bytes()));
         EngineStroke::Brush(Box::new(photocraft_engine::brush_cmds::LiveStroke::begin_with(&app.session, stroke_command(app, d.tool), &p).ok()?))
     };
     let n = STROKES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) & 0xff_ffff;
