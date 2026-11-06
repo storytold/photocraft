@@ -1417,6 +1417,9 @@ fn draw_canvas_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &C
         ui.ctx().set_cursor_icon(c);
     } else if let Some(c) = response.hover_pos().and_then(|p| crate::cam_transform::cursor(app, ctx, xf, p)) {
         ui.ctx().set_cursor_icon(c);
+    } else if let Some((p, right)) = response.hover_pos().and_then(|p| crate::type_path_placement::cursor(app, xf, p).map(|right| (p, right))) {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::None);
+        crate::type_path_placement::draw_cursor(ctx, p, right);
     } else if let Some(p) = response.hover_pos().filter(|p| crate::corner_radius::hovers(app, xf.to_doc(*p))) {
         // Over a live rectangle's corner widget (or dragging one): the arrow with a rounded
         // corner badge, as Photoshop's corner radius cursor.

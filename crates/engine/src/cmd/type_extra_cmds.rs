@@ -482,6 +482,11 @@ fn set_path_placement(s: &mut Session, p: &Value) -> Result<Value> {
         })
         .transpose()?;
     let flip = p.get("flip").map(|v| v.as_bool().ok_or_else(|| bad("flip must be a boolean"))).transpose()?;
+    let id = layer_param(s, p)?;
+    let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
+    if doc.effective_locks(id).position {
+        return Err(EngineError::Other("the type layer's position is locked".into()));
+    }
     with_text(s, p, "Set Path Placement", |t, _| {
         let TextShape::Path { start: current_start, end: current_end, flip: current_flip, .. } = &mut t.shape else {
             return Err(EngineError::Other("the type layer is not path text".into()));

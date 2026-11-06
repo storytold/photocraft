@@ -84,6 +84,57 @@ pub(crate) fn markers(text: &TextLayer, xf: &ViewXform) -> Option<[(Pos2, Vec2);
     Some([sample(start)?, sample(finish)?])
 }
 
+fn marker_tip(point: Pos2, tangent: Vec2, index: usize) -> Pos2 {
+    let side = if index == 0 { -1.0 } else { 1.0 };
+    point + Vec2::new(-tangent.y, tangent.x) * (10.0 * side)
+}
+
+fn marker_hit(ends: [(Pos2, Vec2); 2], p: Pos2) -> Option<(usize, f32)> {
+    ends.into_iter()
+        .enumerate()
+        .map(|(index, (point, tangent))| (index, marker_tip(point, tangent, index).distance(p)))
+        .filter(|(_, distance)| *distance <= 6.0)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+}
+
+pub(crate) fn cursor(app: &mut PhotocraftApp, xf: &ViewXform, p: Pos2) -> Option<bool> {
+    if let Some(drag) = app.ui.type_path_drag.as_ref().filter(|drag| drag.valid(app)) {
+        return Some(drag.endpoint != Some(1));
+    }
+    if !app.ui.view.shows(app.ui.view.show.target_path) {
+        return None;
+    }
+    let st = app.session.active()?;
+    let layer = st.active_layer?;
+    if (st.doc.effective_locks(layer).all || st.doc.effective_locks(layer).position) || !st.doc.layer(layer)?.visible {
+        return None;
+    }
+    let text = active_text(app)?;
+    let ends = markers(text, xf)?;
+    if let Some((index, _)) = marker_hit(ends, p) {
+        return Some(index == 0);
+    }
+    let d = xf.to_doc(p);
+    (crate::type_tool::hit_layer(app, d[0], d[1]) == Some(layer)).then_some(true)
+}
+
+pub(crate) fn draw_cursor(ctx: &egui::Context, p: Pos2, right: bool) {
+    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("type-path-cursor")));
+    let sign = if right { 1.0 } else { -1.0 };
+    let segments = [
+        (p + Vec2::new(0.0, -7.0), p + Vec2::new(0.0, 7.0)),
+        (p + Vec2::new(-3.0, -7.0), p + Vec2::new(3.0, -7.0)),
+        (p + Vec2::new(-3.0, 7.0), p + Vec2::new(3.0, 7.0)),
+        (p + Vec2::new(2.0 * sign, 0.0), p + Vec2::new(9.0 * sign, 0.0)),
+        (p + Vec2::new(9.0 * sign, 0.0), p + Vec2::new(6.0 * sign, -3.0)),
+        (p + Vec2::new(9.0 * sign, 0.0), p + Vec2::new(6.0 * sign, 3.0)),
+    ];
+    for (a, b) in segments {
+        painter.line_segment([a, b], Stroke::new(3.0, egui::Color32::BLACK));
+        painter.line_segment([a, b], Stroke::new(1.0, egui::Color32::WHITE));
+    }
+}
+
 fn overflows(app: &PhotocraftApp, ctx: &egui::Context, text: &TextLayer) -> bool {
     let Some(st) = app.session.active() else { return false };
     let TextShape::Path { start, end, flip, .. } = &text.shape else { return false };
@@ -116,7 +167,7 @@ pub(crate) fn draw(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform)
     for (index, (point, tangent)) in markers.into_iter().enumerate() {
         let normal = Vec2::new(-tangent.y, tangent.x);
         let side = if index == 0 { -1.0 } else { 1.0 };
-        let tip = point + normal * (10.0 * side);
+        let tip = marker_tip(point, tangent, index);
         painter.line_segment([point, tip], stroke);
         painter.line_segment([tip, tip + tangent * (5.0 * -side)], stroke);
         if index == 1 && overflow {
@@ -331,22 +382,9 @@ pub(crate) fn pointer(app: &mut PhotocraftApp, event: crate::canvas::ToolEvent) 
     let Some(inverse) = text.transform.inverse() else { return false };
     let Some(original) = effective_range(&text, &geometry) else { return false };
     let zoom = f64::from(app.point_zoom().max(0.01));
-    let mut best = None;
-    for (index, arc) in original.into_iter().enumerate() {
-        let Some(((px, py), (tx, ty))) = geometry.sample(arc) else { continue };
-        let a = text.transform.apply(Point::new(px, py));
-        let b = text.transform.apply(Point::new(px - ty, py + tx));
-        let normal_length = (b.x - a.x).hypot(b.y - a.y);
-        if normal_length <= 1e-9 {
-            continue;
-        }
-        let side = if index == 0 { -1.0 } else { 1.0 };
-        let tip = Point::new(a.x + (b.x - a.x) / normal_length * side * 10.0 / zoom, a.y + (b.y - a.y) / normal_length * side * 10.0 / zoom);
-        let distance = (tip.x - x).hypot(tip.y - y) * zoom;
-        if distance <= 6.0 && best.is_none_or(|(_, d)| distance < d) {
-            best = Some((index, distance));
-        }
-    }
+    let Some(xf) = ViewXform::active(app) else { return false };
+    let p = xf.to_screen(x as f32, y as f32);
+    let best = markers(&text, &xf).and_then(|ends| marker_hit(ends, p));
     let active_layer = app.session.active().and_then(|st| st.active_layer);
     let endpoint = if let Some((index, _)) = best {
         Some(index)
@@ -357,7 +395,7 @@ pub(crate) fn pointer(app: &mut PhotocraftApp, event: crate::canvas::ToolEvent) 
     };
     let Some(st) = app.session.active() else { return false };
     let Some(layer) = st.active_layer else { return false };
-    if st.doc.effective_locks(layer).all {
+    if st.doc.effective_locks(layer).all || st.doc.effective_locks(layer).position {
         return false;
     }
     let point = inverse.apply(Point::new(x, y));
@@ -476,6 +514,35 @@ mod tests {
         up(&mut app, 40.0, 90.0);
         assert_eq!(shape(&app), before);
         assert_eq!(steps(&app), count);
+    }
+
+    #[test]
+    fn marker_cursor_and_press_agree_in_transformed_views() {
+        for rotation in [0.0, 37.0, 90.0] {
+            for mirror in [false, true] {
+                let mut app = app(Tool::DirectSelection);
+                let id = app.session.active().unwrap().active_layer.unwrap();
+                app.session
+                    .edit("skew text", |doc, _| {
+                        let LayerContent::Text(text) = &mut doc.layer_mut(id).unwrap().content else { panic!("text") };
+                        text.transform = photocraft_doc::Affine { m: [1.8, 0.3, 0.6, 0.9, 12.0, -7.0] };
+                        Ok(())
+                    })
+                    .unwrap();
+                app.ui.views[0].rotation = rotation;
+                app.ui.view.flip_horizontal = mirror;
+                let xf = ViewXform::active(&app).unwrap();
+                let ends = markers(active_text(&app).unwrap(), &xf).unwrap();
+                for (index, (point, tangent)) in ends.into_iter().enumerate() {
+                    let screen = marker_tip(point, tangent, index);
+                    assert_eq!(cursor(&mut app, &xf, screen), Some(index == 0));
+                    let doc = xf.to_doc(screen);
+                    down(&mut app, doc[0], doc[1]);
+                    assert_eq!(app.ui.type_path_drag.as_ref().unwrap().endpoint, Some(index));
+                    assert!(cancel(&mut app));
+                }
+            }
+        }
     }
 
     #[test]
