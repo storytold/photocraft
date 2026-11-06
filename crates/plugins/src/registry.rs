@@ -68,10 +68,10 @@ fn open_regular(path: &std::path::Path) -> std::io::Result<std::fs::File> {
     std::fs::File::open(path)
 }
 
-/// Reads a `.wasm` file (refusing anything that isn't a regular file or exceeds the module limit)
-/// and loads it.
+/// Reads a `.wasm` file (refusing anything that isn't a regular file or exceeds the module limit),
+/// returning the loaded plug-in alongside its raw bytes.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn load_file(path: &std::path::Path, limits: Limits) -> Result<Plugin> {
+pub fn load_file_with_bytes(path: &std::path::Path, limits: Limits) -> Result<(Plugin, Vec<u8>)> {
     use std::io::Read;
     // Open first, without blocking on a FIFO, and judge the file that was opened: a name checked
     // and then opened again can be swapped for a special file in between.
@@ -85,7 +85,15 @@ pub fn load_file(path: &std::path::Path, limits: Limits) -> Result<Plugin> {
     }
     let mut bytes = Vec::new();
     f.take(limits.max_module_bytes as u64 + 1).read_to_end(&mut bytes).map_err(|e| Error::Io(format!("{}: {e}", path.display())))?;
-    Ok(Plugin::load(&bytes, limits)?.with_source(path.display().to_string()))
+    let plugin = Plugin::load(&bytes, limits)?.with_source(path.display().to_string());
+    Ok((plugin, bytes))
+}
+
+/// Reads a `.wasm` file (refusing anything that isn't a regular file or exceeds the module limit)
+/// and loads it.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn load_file(path: &std::path::Path, limits: Limits) -> Result<Plugin> {
+    load_file_with_bytes(path, limits).map(|(p, _)| p)
 }
 
 /// What [`load_folder`] did.
@@ -109,8 +117,14 @@ pub struct FolderReport {
 #[cfg(not(target_arch = "wasm32"))]
 pub fn load_folder(dir: &std::path::Path) -> Result<FolderReport> {
     let rd = std::fs::read_dir(dir).map_err(|e| Error::Io(format!("{}: {e}", dir.display())))?;
-    let mut files: Vec<std::path::PathBuf> =
-        rd.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("wasm"))).collect();
+    let mut files: Vec<std::path::PathBuf> = Vec::new();
+    for entry in rd {
+        let entry = entry.map_err(|e| Error::Io(format!("{}: {e}", dir.display())))?;
+        let p = entry.path();
+        if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("wasm")) {
+            files.push(p);
+        }
+    }
     files.sort();
     files.truncate(1000);
     let mut report = FolderReport::default();
@@ -122,9 +136,10 @@ pub fn load_folder(dir: &std::path::Path) -> Result<FolderReport> {
     }
     let canonical_dir = dir.canonicalize().ok();
     for p in list() {
-        let from_dir = p.source().and_then(|s| std::path::Path::new(s).parent()).is_some_and(|parent| {
-            parent == dir || (canonical_dir.is_some() && parent.canonicalize().ok().as_deref() == canonical_dir.as_deref())
-        });
+        let from_dir = p
+            .source()
+            .and_then(|s| std::path::Path::new(s).parent())
+            .is_some_and(|parent| parent == dir || (canonical_dir.is_some() && parent.canonicalize().ok().as_deref() == canonical_dir.as_deref()));
         if from_dir && !report.loaded.iter().any(|id| id == p.id()) && remove(p.id()) {
             report.removed.push(p.id().to_string());
         }

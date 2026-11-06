@@ -242,6 +242,8 @@ fn plugin_updates(app: &mut PhotocraftApp, ctx: &egui::Context) {
     ctx.data_mut(|d| d.insert_temp(focus_key, focused));
     let last: f64 = ctx.data(|d| d.get_temp(last_key)).unwrap_or(f64::NEG_INFINITY);
     if now - last < 1.5 && (!focused || was_focused) {
+        let remaining = (1.5 - (now - last)).max(0.05);
+        ctx.request_repaint_after(std::time::Duration::from_secs_f64(remaining));
         return;
     }
     ctx.data_mut(|d| d.insert_temp(last_key, now));
@@ -250,6 +252,7 @@ fn plugin_updates(app: &mut PhotocraftApp, ctx: &egui::Context) {
         app.menu_cache = None;
         ctx.request_repaint();
     }
+    ctx.request_repaint_after(std::time::Duration::from_millis(1500));
 }
 
 /// Background autosave of documents with unsaved changes every N minutes (File Handling).

@@ -94,7 +94,8 @@ pub fn can_confirm(fields: &Map<String, Value>) -> bool {
 /// (supporting `.wasm` plug-ins), and the `Replace` checkbox.
 pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String, Value>) {
     let t = crate::theme::Tokens::get(ui.ctx());
-    let mut path = fields.get("path").and_then(Value::as_str).unwrap_or_default().to_string();
+    let orig_path = fields.get("path").and_then(Value::as_str).unwrap_or_default().to_string();
+    let mut path = orig_path.clone();
     let mut browse_clicked = false;
 
     ui.horizontal(|ui| {
@@ -104,6 +105,9 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String,
             browse_clicked = true;
         }
     });
+    if path != orig_path {
+        fields.remove("data");
+    }
     if path.trim().is_empty() {
         fields.remove("path");
     } else {
@@ -117,7 +121,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String,
 
     if browse_clicked {
         let req = crate::FileDialogRequest::Open { multiple: false, initial_dir: None, extensions: Some(vec!["wasm".into()]) };
-        let _ = app.ask_file(req, |app, answer| {
+        match app.ask_file(req, |app, answer| {
             if let Some(d) = app.ui.dialogs.iter_mut().rev().find(|d| owns(&d.fields)) {
                 match answer {
                     crate::FileDialogAnswer::Paths(paths) => {
@@ -144,7 +148,13 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String,
                 }
             }
             Ok(Value::Null)
-        });
+        }) {
+            Err(e) if e != crate::file_dialog::CANCELLED => {
+                app.ui.status = e;
+                app.ui.status_error = true;
+            }
+            _ => {}
+        }
     }
 }
 

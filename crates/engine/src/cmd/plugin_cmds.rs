@@ -280,8 +280,7 @@ fn install(s: &mut Session, p: &Value) -> Result<Value> {
 #[cfg(not(target_arch = "wasm32"))]
 fn load_path_with_bytes(path: &str) -> Result<(Plugin, Option<Vec<u8>>)> {
     let p = std::path::Path::new(path);
-    let plug = registry::load_file(p, photocraft_plugins::Limits::default()).map_err(err)?;
-    let bytes = std::fs::read(p).map_err(|e| err(photocraft_plugins::Error::Io(format!("{}: {e}", p.display()))))?;
+    let (plug, bytes) = registry::load_file_with_bytes(p, photocraft_plugins::Limits::default()).map_err(err)?;
     Ok((plug, Some(bytes)))
 }
 
