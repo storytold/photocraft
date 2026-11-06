@@ -255,7 +255,7 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
             if mips && interp != Interp::Nearest && s_min.is_finite() && s_min >= 4.0 { ((s_min / 2.0).log2().floor() as usize).min(MAX_LEVEL) } else { 0 }
         })
         .collect();
-    let level = tile_level.iter().copied().filter(|&l| l > 0).min().and_then(|l| level_for(src, src_rect, l, n));
+    let level = tile_level.iter().copied().filter(|&l| l > 0).min().and_then(|l| level_for(src, src_rect, l, n, ctl));
     // Encoded (and dropped if fully transparent) per tile, in parallel, rather than one tile at a
     // time once all are done. `t` lies in one tile.
     let encode = |t: Rect, px: &[f32]| -> Option<(TileCoord, Arc<Tile>)> {
@@ -564,8 +564,15 @@ pub fn reuse_levels() -> LevelScope {
     })
 }
 
+/// Most floats one reduced level may hold (256 MB); a larger one is not built and the warp takes
+/// the exact path.
+const MAX_LEVEL_FLOATS: usize = 1 << 26;
+/// Most floats the levels of one [`reuse_levels`] scope may hold together (512 MB); past it a new
+/// level is used once and not kept.
+const MAX_SCOPE_FLOATS: usize = 1 << 27;
+
 /// [`Level::build`], served from the open [`reuse_levels`] scope when one has it.
-fn level_for(src: &Surface, r: Rect, level: usize, n: usize) -> Option<std::sync::Arc<Level>> {
+fn level_for(src: &Surface, r: Rect, level: usize, n: usize, ctl: &Interrupt) -> Option<std::sync::Arc<Level>> {
     let same = |e: &SharedLevel| {
         e.rect == r
             && e.level.level == level
@@ -578,9 +585,11 @@ fn level_for(src: &Surface, r: Rect, level: usize, n: usize) -> Option<std::sync
     if let Some(hit) = LEVELS.with(|l| l.borrow().as_ref().and_then(|v| v.iter().find(|e| same(e)).map(|e| e.level.clone()))) {
         return Some(hit);
     }
-    let built = std::sync::Arc::new(Level::build(src, r, level, n)?);
+    let built = std::sync::Arc::new(Level::build(src, r, level, n, ctl)?);
     LEVELS.with(|l| {
-        if let Some(v) = l.borrow_mut().as_mut() {
+        if let Some(v) = l.borrow_mut().as_mut()
+            && v.iter().map(|e| e.level.px.len()).sum::<usize>().saturating_add(built.px.len()) <= MAX_SCOPE_FLOATS
+        {
             let tiles = src.tiles().map(|(c, t)| (*c, t.clone())).collect();
             v.push(SharedLevel { tiles, default: src.default_bytes().to_vec(), format: src.format(), rect: r, n, level: built.clone() });
         }
@@ -626,21 +635,30 @@ struct Level {
 }
 
 impl Level {
-    /// `None` when the reduced copy would not fit the memory bound (the exact path is used).
-    fn build(src: &Surface, r: Rect, level: usize, n: usize) -> Option<Level> {
+    /// `None` when the reduced copy would hold [`MAX_LEVEL_FLOATS`] or more (the exact path is
+    /// used), or once `ctl` is cancelled. Bands of the source with no tiles (transparent by
+    /// default) are not read.
+    fn build(src: &Surface, r: Rect, level: usize, n: usize, ctl: &Interrupt) -> Option<Level> {
         LEVEL_BUILDS.with(|b| b.set(b.get() + 1));
         let k = 1usize << level;
         let (sw, sh) = (r.width() as usize, r.height() as usize);
         let (w, h) = (sw.div_ceil(k), sh.div_ceil(k));
         let len = w.checked_mul(h)?.checked_mul(n)?;
-        if len > 1 << 30 || sw == 0 {
+        if len >= MAX_LEVEL_FLOATS || sw == 0 || sh == 0 {
             return None;
         }
+        let transparent = src.default_pixel().get(n - 1).is_none_or(|&a| a <= 0.0);
         let inv = 1.0 / (k * k) as f32;
-        let row = |j: usize| -> Vec<f32> {
+        let row = |(j, out): (usize, &mut [f32])| {
+            if ctl.cancelled() {
+                return;
+            }
             let y0 = r.y0 + (j * k) as i32;
-            let strip = src.read_region(Rect::new(r.x0, y0, r.x1, (y0 + k as i32).min(r.y1)));
-            let mut out = vec![0.0f32; w * n];
+            let band = Rect::new(r.x0, y0, r.x1, (y0 + k as i32).min(r.y1));
+            if transparent && !src.has_tiles_in(band) {
+                return;
+            }
+            let strip = src.read_region(band);
             for line in strip.chunks_exact(sw * n) {
                 for (x, p) in line.chunks_exact(n).enumerate() {
                     let al = p[n - 1];
@@ -651,20 +669,19 @@ impl Level {
                     out[o + n - 1] += al;
                 }
             }
-            for v in &mut out {
+            for v in out.iter_mut() {
                 *v *= inv;
             }
-            out
         };
+        let mut px = vec![0.0f32; len];
         #[cfg(not(target_arch = "wasm32"))]
-        let rows: Vec<Vec<f32>> = {
+        {
             use rayon::prelude::*;
-            (0..h).into_par_iter().map(row).collect()
-        };
+            px.par_chunks_mut(w * n).enumerate().for_each(row);
+        }
         #[cfg(target_arch = "wasm32")]
-        let rows: Vec<Vec<f32>> = (0..h).map(row).collect();
-        let px = rows.concat();
-        (px.len() == len).then_some(Level { level, scale: k as f64, x0: f64::from(r.x0), y0: f64::from(r.y0), w, h, px })
+        px.chunks_mut(w * n).enumerate().for_each(row);
+        (!ctl.cancelled()).then_some(Level { level, scale: k as f64, x0: f64::from(r.x0), y0: f64::from(r.y0), w, h, px })
     }
 
     /// One premultiplied bilinear sample at level position `(u, v)` (pixel centres at integers).
@@ -988,6 +1005,17 @@ mod tests {
         let _ = warp_mesh_surface(&src, r, &f, Interp::Bicubic);
         let got = warp_mesh_surface(&other, r, &f, Interp::Bicubic);
         assert_eq!(got.read_region(got.content_bounds()), expect.read_region(expect.content_bounds()));
+    }
+
+    #[test]
+    fn a_level_is_not_built_past_its_memory_bound_nor_once_cancelled() {
+        let src = textured(64, 64, 1);
+        let r = Rect::new(0, 0, 64, 64);
+        assert!(Level::build(&src, r, 1, 4, &Interrupt::NONE).is_some());
+        // 2^24 × 2^24 at level 1 asks for 2^48 × 4 floats: refused before anything is allocated.
+        assert!(Level::build(&src, Rect::new(0, 0, 1 << 24, 1 << 24), 1, 4, &Interrupt::NONE).is_none());
+        let always = || true;
+        assert!(Level::build(&src, r, 1, 4, &Interrupt::cancel_only(&always)).is_none());
     }
 
     #[test]
