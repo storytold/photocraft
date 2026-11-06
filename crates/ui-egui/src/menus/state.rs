@@ -82,7 +82,6 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
         "view.rulers" | "view.show.grid" | "view.show.guides" | "view.show.safeAreas" | "view.show.responsiveWarnings" | "view.snap" | "view.lockGuides" => {
             true
         }
->>>>>>> 5b8899bd9 (port onto the app/ + cmd/ module split (#9697's restructure))
         "edit.cut" | "edit.copy" if app.ui.text_edit.is_some() => crate::type_tool::selected_range(app).is_some(),
         "edit.paste" | "select.all" if app.ui.text_edit.is_some() => true,
         // An image copied in another app can only be seen by reading the OS clipboard, which happens
