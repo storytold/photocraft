@@ -648,6 +648,7 @@ pub struct PhotocraftApp {
     /// Type tool: (layer, clicks in the current run) for word / line / paragraph / all selection.
     pub(crate) type_clicks: Option<(u64, u32)>,
     pub(crate) type_transform_preview: Option<type_transform::Preview>,
+    pub(crate) type_path_damage: Option<type_path_placement::Damage>,
     /// A font hovered in the Type tool's font picker, shown live (`type_font_preview`).
     pub(crate) type_font_preview: Option<type_font_preview::TypeFontPreview>,
     /// The colour under a text or gradient stop Color Picker, shown live before OK (`color_picker_preview`).

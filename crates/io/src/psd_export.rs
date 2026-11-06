@@ -515,6 +515,9 @@ impl Ex<'_> {
                 crate::vector_map::shape_blocks(sh, &mut raw, w, h, self.dpi);
             }
             LayerContent::Text(t) => {
+                if matches!(t.shape, photocraft_doc::text::TextShape::Path { end: Some(end), .. } if end.is_finite()) {
+                    self.warnings.push(format!("layer \"{}\": the text path end limit is not saved to PSD; text may extend beyond it", l.name));
+                }
                 if matches!(t.shape, photocraft_doc::text::TextShape::Area { .. }) {
                     self.warnings
                         .push(format!("layer \"{}\": area type is saved as paragraph text over its path's bounds (PSD area type is not written yet)", l.name));

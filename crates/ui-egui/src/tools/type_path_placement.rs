@@ -1,8 +1,10 @@
 //! Placement markers for the active layer's type path.
 use crate::{PhotocraftApp, canvas::ViewXform, state::Tool};
+use std::{collections::VecDeque, sync::Arc};
+
 use egui::{Pos2, Stroke, Vec2};
-use photocraft_doc::{LayerContent, TextLayer, text::TextShape};
-use photocraft_geom::Point;
+use photocraft_doc::{Document, LayerContent, TextLayer, text::TextShape};
+use photocraft_geom::{Point, Rect};
 use photocraft_text::warp::PathGeometry;
 
 pub(crate) fn active_text(app: &PhotocraftApp) -> Option<&TextLayer> {
@@ -62,6 +64,75 @@ pub(crate) fn draw(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform)
     }
 }
 
+#[derive(Clone, Debug)]
+struct Preview {
+    range: [f64; 2],
+    flip: bool,
+    shown: Arc<Document>,
+    key: u64,
+}
+
+pub(crate) struct Damage {
+    document: photocraft_doc::DocId,
+    revision: u64,
+    original_area: Rect,
+    areas: VecDeque<(u64, Rect)>,
+}
+
+pub(crate) fn damage(app: &PhotocraftApp, doc: photocraft_doc::DocId, revision: u64, before: u64, after: u64) -> Option<Rect> {
+    let p = app.type_path_damage.as_ref().filter(|p| p.document == doc && p.revision == revision)?;
+    let area = |key| if key == 0 { Some(p.original_area) } else { p.areas.iter().find(|(k, _)| *k == key).map(|(_, r)| *r) };
+    Some(area(before)?.union(&area(after)?))
+}
+
+pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Document>, u64)> {
+    let drag = app.ui.type_path_drag.as_ref()?;
+    if !drag.valid(app) {
+        return None;
+    }
+    let st = app.session.documents().get(idx)?;
+    if st.doc.id != drag.document || st.revision != drag.revision {
+        return None;
+    }
+    if drag.proposed == drag.original && !drag.flipped {
+        return None;
+    }
+    let (range, flip) = drag.placement();
+    if let Some(preview) = &drag.preview
+        && preview.range == range
+        && preview.flip == flip
+    {
+        return Some((preview.shown.clone(), preview.key));
+    }
+    let source = st.doc.clone();
+    let layer = drag.layer;
+    let original_area = source.layer(layer)?.surface().map_or(Rect::EMPTY, |s| s.tile_bounds());
+    let mut shown = (*source).clone();
+    let LayerContent::Text(text) = &mut shown.layer_mut(layer)?.content else { return None };
+    let TextShape::Path { start, end, flip: side, .. } = &mut text.shape else { return None };
+    *start = range[0] as f32;
+    *end = Some(range[1] as f32);
+    *side = flip;
+    photocraft_engine::type_cmds::refresh(&source, text);
+    let area = text.cache.as_ref().map_or(Rect::EMPTY, |s| s.tile_bounds());
+    let shown = Arc::new(photocraft_engine::mode_cmds::display_document(&shown).unwrap_or(shown));
+    const BASE: u64 = 1 << 50;
+    let key = BASE | (app.ui.alloc_id() & (BASE - 1));
+    let mut damage = app.type_path_damage.take().filter(|p| p.document == source.id && p.revision == st.revision).unwrap_or_else(|| Damage {
+        document: source.id,
+        revision: st.revision,
+        original_area,
+        areas: VecDeque::new(),
+    });
+    if damage.areas.len() >= 128 {
+        damage.areas.pop_front();
+    }
+    damage.areas.push_back((key, area));
+    app.type_path_damage = Some(damage);
+    app.ui.type_path_drag.as_mut()?.preview = Some(Preview { range, flip, shown: shown.clone(), key });
+    Some((shown, key))
+}
+
 /// One marker gesture. The document is changed only on release, so Escape is lossless.
 #[derive(Clone, Debug)]
 pub struct Drag {
@@ -82,6 +153,26 @@ pub struct Drag {
     initial_side: f64,
     transform: photocraft_doc::Affine,
     zoom: f64,
+    preview: Option<Preview>,
+}
+
+// Geometry is fixed by the source document revision; cached preview pixels are derived state.
+impl PartialEq for Drag {
+    fn eq(&self, other: &Self) -> bool {
+        (self.document, self.layer, self.revision, self.tool) == (other.document, other.layer, other.revision, other.tool)
+            && self.inverse == other.inverse
+            && self.closed == other.closed
+            && self.endpoint == other.endpoint
+            && self.original == other.original
+            && self.proposed == other.proposed
+            && self.previous == other.previous
+            && self.delta == other.delta
+            && self.original_flip == other.original_flip
+            && self.flipped == other.flipped
+            && self.initial_side == other.initial_side
+            && self.transform == other.transform
+            && self.zoom == other.zoom
+    }
 }
 
 impl Drag {
@@ -231,6 +322,7 @@ pub(crate) fn pointer(app: &mut PhotocraftApp, event: crate::canvas::ToolEvent) 
         initial_side: if distance.abs() > 1e-6 { distance.signum() } else { -1.0 },
         transform: text.transform,
         zoom,
+        preview: None,
     });
     true
 }
@@ -276,6 +368,53 @@ mod tests {
     }
     fn up(app: &mut PhotocraftApp, x: f64, y: f64) {
         assert!(pointer(app, ToolEvent::Up { x, y }));
+    }
+
+    #[test]
+    fn preview_is_cached_and_does_not_change_history() {
+        let mut app = app(Tool::PathSelection);
+        let before = shape(&app);
+        let n = steps(&app);
+        down(&mut app, 40.0, 90.0);
+        assert!(display_doc(&mut app, 0).is_none());
+        move_to(&mut app, 50.0, 90.0);
+        let (shown, key) = display_doc(&mut app, 0).unwrap();
+        let layer = app.session.active().unwrap().active_layer.unwrap();
+        let LayerContent::Text(text) = &shown.layer(layer).unwrap().content else { panic!("expected text") };
+        let TextShape::Path { start, .. } = &text.shape else { panic!("expected path") };
+        assert_eq!(*start, 30.0);
+        let (again, same_key) = display_doc(&mut app, 0).unwrap();
+        assert_eq!(key, same_key);
+        assert!(Arc::ptr_eq(&shown, &again));
+        assert_eq!(shape(&app), before);
+        assert_eq!(steps(&app), n);
+        assert!(cancel(&mut app));
+        assert!(display_doc(&mut app, 0).is_none());
+        down(&mut app, 40.0, 90.0);
+        move_to(&mut app, 50.0, 90.0);
+        up(&mut app, 50.0, 90.0);
+        assert!(display_doc(&mut app, 0).is_none());
+    }
+
+    #[test]
+    fn damage_tracks_preview_and_return() {
+        let mut app = app(Tool::PathSelection);
+        let st = app.session.active().unwrap();
+        let (doc, revision) = (st.doc.id, st.revision);
+        down(&mut app, 40.0, 90.0);
+        move_to(&mut app, 50.0, 90.0);
+        let (_, first) = display_doc(&mut app, 0).unwrap();
+        move_to(&mut app, 60.0, 90.0);
+        let (_, second) = display_doc(&mut app, 0).unwrap();
+        let history = app.type_path_damage.as_ref().unwrap();
+        let original = history.original_area;
+        let first_area = history.areas[0].1;
+        let second_area = history.areas[1].1;
+        assert_eq!(damage(&app, doc, revision, 0, first), Some(original.union(&first_area)));
+        assert_eq!(damage(&app, doc, revision, first, second), Some(first_area.union(&second_area)));
+        assert!(cancel(&mut app));
+        assert_eq!(damage(&app, doc, revision, second, 0), Some(second_area.union(&original)));
+        assert_eq!(damage(&app, doc, revision + 1, second, 0), None);
     }
 
     #[test]

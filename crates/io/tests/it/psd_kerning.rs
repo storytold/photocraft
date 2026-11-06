@@ -553,3 +553,23 @@ fn photoshop_kerning_oracles() {
         assert!(worst <= worst_max && mean <= mean_max, "{name}: mean {mean}, worst {worst}");
     }
 }
+
+#[test]
+fn psd_export_warns_when_text_path_end_is_lost() {
+    use photocraft_doc::text::TextShape;
+    use photocraft_doc::vector::Subpath;
+
+    let mut doc = Document::new("range", photocraft_geom::Size::new(64, 32), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
+    let mut text = layer("hello", &[]);
+    text.shape = TextShape::Path { path: Subpath::polyline(&[(0.0, 0.0), (60.0, 0.0)]), start: 0.0, end: Some(20.0), flip: false };
+    doc.layers.push(Layer::new("limited", LayerContent::Text(text)));
+    let result = photocraft_io::export(&doc, "range.psd", &Default::default()).unwrap();
+    assert!(result.warnings.iter().any(|w| w.contains("limited") && w.contains("text path end limit")), "{:?}", result.warnings);
+    if let LayerContent::Text(text) = &mut doc.layers[0].content {
+        if let TextShape::Path { end, .. } = &mut text.shape {
+            *end = None;
+        }
+    }
+    let result = photocraft_io::export(&doc, "range.psd", &Default::default()).unwrap();
+    assert!(!result.warnings.iter().any(|w| w.contains("text path end limit")), "{:?}", result.warnings);
+}
