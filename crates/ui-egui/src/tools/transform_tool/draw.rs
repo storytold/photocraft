@@ -3,7 +3,10 @@ use super::drag_modes::{HandleIndicator, handle_indicator};
 use super::options_bar::{quad_scale, readout};
 use super::pointer::{Hit, handle_at, rotate_dir, rotation_degrees};
 use super::warp::{on_section_edge, quick_split_kind, single_patch};
-use super::*;
+use super::{
+    BezierMesh, Color32, DocId, HANDLE_PX, Homography, LayerId, PhotocraftApp, Pos2, SplitTool, Stroke, TransformPreview, TransformSession, ViewXform, Warp,
+    WarpDrag, WarpStyle, corners, pos2, vec2,
+};
 
 /// The distort or skew pointer at screen point `at`, where [`super::cursor`] hid the system
 /// pointer over a handle. The canvas calls it from its cursor branch, so nothing is drawn where a
@@ -16,6 +19,12 @@ pub(crate) fn draw_handle_cursor(app: &PhotocraftApp, ctx: &egui::Context, xf: &
         (Hit::Corner(i), Some(HandleIndicator::Distort)) => {
             if let Some(q) = t.quad.get(i) {
                 draw_distort_cursor(ctx, at, scr(*q) - scr(t.pivot));
+            }
+        }
+        // Distort mode's side handles (#10085): the same pointer, out through the edge's middle.
+        (Hit::Edge(i), Some(HandleIndicator::Distort)) => {
+            if let (Some(a), Some(b)) = (t.quad.get(i), t.quad.get((i + 1) % 4)) {
+                draw_distort_cursor(ctx, at, scr(*a).lerp(scr(*b), 0.5) - scr(t.pivot));
             }
         }
         (Hit::Edge(i), Some(HandleIndicator::Skew)) => {
@@ -88,6 +97,9 @@ pub(super) fn front_vertices(h: &Homography, n: usize) -> Vec<bool> {
 /// Photoshop. The box, handles and reference point are [`draw_overlay`], drawn over the guides.
 pub fn draw_content(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform) {
     let (Some(t), Some(pv)) = (&app.ui.transform, &app.transform_preview) else { return };
+    if crate::frame_tool::frame_transform(t) {
+        return;
+    }
     let output = crate::monitor_status::view_display(app, painter.ctx());
     let (display, _) = crate::canvas::canvas_display(app, &pv.doc, output);
     // Selection tint and lone mask/channel values are UI diagnostics, not document colors.
@@ -107,7 +119,7 @@ pub fn draw_content(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
         mesh.add_triangle(0, 1, 2);
         mesh.add_triangle(0, 2, 3);
         painter.add(clip_to_canvas(mesh, canvas_size(pv), |p| xf.to_screen(p.x, p.y)));
-    } else if let Some(h) = Homography::rect_to_quad([0.0, 0.0, 1.0, 1.0], t.quad) {
+    } else if let Some(h) = Homography::rect_to_quad([0.0, 0.0, 1.0, 1.0], texture_quad(t, pv)) {
         // A 24×24 grid keeps perspective previews straight.
         let n = 24;
         let zoom = xf.zoom * painter.ctx().pixels_per_point();
@@ -142,6 +154,18 @@ pub fn draw_content(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
     if let Some(a) = &pv.above {
         a.draw(painter, xf, display);
     }
+}
+
+/// Where the box puts the moving texture's corners: the box's own, or, when the texture covers
+/// more than the frame (the styles of a box over several layers reach past it, [`Several`]),
+/// where the frame's transform takes the texture's rect.
+pub(super) fn texture_quad(t: &TransformSession, pv: &TransformPreview) -> [[f64; 2]; 4] {
+    let Some(sv) = pv.several.as_ref().filter(|sv| sv.rect != sv.frame) else { return t.quad };
+    let Some(h) = Homography::rect_to_quad(t.rect, t.quad) else { return t.quad };
+    corners([sv.rect.x0, sv.rect.y0, sv.rect.x1, sv.rect.y1].map(f64::from)).map(|[x, y]| {
+        let (a, b) = h.apply(x, y);
+        [a, b]
+    })
 }
 
 /// The box, handles, reference point and path outline over the preview that [`draw_content`]
@@ -190,12 +214,15 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
         painter.rect_filled(r, 0.0, Color32::WHITE);
         painter.rect_stroke(r, 0.0, Stroke::new(1.0, accent), egui::StrokeKind::Inside);
     }
-    // Reference point (Photoshop's crosshair circle).
-    let c = scr(t.pivot);
-    painter.circle_stroke(c, 5.0, Stroke::new(1.0, Color32::WHITE));
-    painter.circle_stroke(c, 5.0, Stroke::new(0.5, Color32::BLACK));
-    painter.line_segment([c - vec2(8.0, 0.0), c + vec2(8.0, 0.0)], Stroke::new(1.0, Color32::WHITE));
-    painter.line_segment([c - vec2(0.0, 8.0), c + vec2(0.0, 8.0)], Stroke::new(1.0, Color32::WHITE));
+    // Reference point (Photoshop's crosshair circle): only with Toggle Reference Point on, or
+    // while an ⌥-click is dragging it (#11098).
+    if app.ui.tool_options.transform_reference_point || pv.gesture.is_some_and(|g| g.hit == Hit::Pivot) {
+        let c = scr(t.pivot);
+        painter.circle_stroke(c, 5.0, Stroke::new(1.0, Color32::WHITE));
+        painter.circle_stroke(c, 5.0, Stroke::new(0.5, Color32::BLACK));
+        painter.line_segment([c - vec2(8.0, 0.0), c + vec2(8.0, 0.0)], Stroke::new(1.0, Color32::WHITE));
+        painter.line_segment([c - vec2(0.0, 8.0), c + vec2(0.0, 8.0)], Stroke::new(1.0, Color32::WHITE));
+    }
     if let Some(at) = painter.ctx().pointer_hover_pos().filter(|p| xf.rect.contains(*p)) {
         let p = xf.to_doc(at);
         let tol = HANDLE_PX / f64::from(xf.zoom.max(0.01));
@@ -216,28 +243,36 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
 /// `edit.transform.warp` map it like the pixels. Not Transform Selection (its ants are hidden), a
 /// path, Content-Aware Scale or a type layer's Warp Text, which leave the selection alone.
 fn carries_selection(app: &PhotocraftApp, t: &TransformSession) -> bool {
-    !t.selection && t.path.is_none() && t.content_aware.is_none() && !(t.warp.is_some() && warps_type(app))
+    !t.selection && !crate::frame_tool::frame_transform(t) && t.path.is_none() && t.content_aware.is_none() && !(t.warp.is_some() && warps_type(app))
+}
+
+/// Applying the open box moves the selection outline: Transform Selection's own box, or a box
+/// that [carries the selection along](carries_selection). A path, Content-Aware Scale or Warp Text
+/// leaves it where it is, so its edges stay snap targets.
+pub(crate) fn moves_selection(app: &PhotocraftApp, t: &TransformSession) -> bool {
+    t.selection || carries_selection(app, t)
 }
 
 /// A transform of `document` is open that carries its selection along (#5297): the canvas traces
-/// the whole outline, not only the part in view where it started, for [`draw_selection`].
+/// the whole outline, not only the part in view where it started, for [`selection_ants`].
 pub(crate) fn carries_selection_of(app: &PhotocraftApp, document: DocId) -> bool {
     matches!((&app.ui.transform, &app.transform_preview), (Some(t), Some(pv)) if pv.doc.id == document && carries_selection(app, t))
 }
 
 /// The marching ants where the open box puts them (#5297): the selection follows a move, scale,
 /// rotation, skew, distort, perspective or warp while it is made, to where applying it leaves it.
-/// `segs` is the outline of `document`'s selection at rest. False when no open transform carries
-/// that selection: the caller draws it where it is.
-pub(crate) fn draw_selection(
+/// `segs` is the outline of `document`'s selection at rest. The ants are returned as shapes for
+/// `painter`, not drawn (the canvas paints them over the guides, #10671). `None` when no open
+/// transform carries that selection: the caller draws it where it is.
+pub(crate) fn selection_ants(
     app: &PhotocraftApp,
     painter: &egui::Painter,
     xf: &ViewXform,
     document: DocId,
     segs: &[crate::outline::Segment],
     time: f64,
-) -> bool {
-    let Some(t) = app.ui.transform.as_ref().filter(|_| carries_selection_of(app, document)) else { return false };
+) -> Option<Vec<egui::Shape>> {
+    let t = app.ui.transform.as_ref().filter(|_| carries_selection_of(app, document))?;
     let scr = |(x, y): (f64, f64)| xf.to_screen(x as f32, y as f32);
     let doc = |p: [i32; 2]| [f64::from(p[0]), f64::from(p[1])];
     let along = |a: [f64; 2], b: [f64; 2], k: f64| [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k];
@@ -253,7 +288,7 @@ pub(crate) fn draw_selection(
             };
             (0..n).map(move |i| (at(i), at(i + 1)))
         });
-        crate::canvas::marching_ants_lines(painter, lines, time);
+        Some(crate::canvas::marching_ants_line_shapes(painter, lines, time))
     } else if let Some(h) = Homography::rect_to_quad(t.rect, t.quad) {
         // Past a Distort's horizon the outline has no place, like the pixels (#4863): a run that
         // crosses it stops short of it, where its points are still a finite way off.
@@ -273,9 +308,10 @@ pub(crate) fn draw_selection(
             }
             Some((scr(h.apply(a[0], a[1])), scr(h.apply(b[0], b[1]))))
         });
-        crate::canvas::marching_ants_lines(painter, lines, time);
+        Some(crate::canvas::marching_ants_line_shapes(painter, lines, time))
+    } else {
+        Some(Vec::new())
     }
-    true
 }
 
 /// What the styled preview of the moving layer is drawn from (transform_fx.rs), at `zoom` screen

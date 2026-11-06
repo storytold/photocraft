@@ -1,7 +1,7 @@
 use super::budget::video_memory;
 use super::setup::Refresh;
 use super::texels::LayerFit;
-use super::*;
+use super::wgpu;
 
 /// Milliseconds since the process (or page) started, from a monotonic clock.
 ///
@@ -26,6 +26,8 @@ pub struct Perf {
     /// path the cost of *encoding and submitting* the composite — not of running it, which is
     /// `gpu_ms`.
     pub composite_ms: f64,
+    /// Time spent on a failed GPU composite attempt before CPU fallback.
+    pub gpu_attempt_ms: f64,
     /// Last canvas refresh: conversion + upload (ms).
     pub upload_ms: f64,
     /// Last canvas refresh kind: "full", "rect" or "none".
@@ -46,7 +48,8 @@ pub struct Perf {
     /// Pixels of the refresh `gpu_ms` measured, which is a frame or two behind
     /// `last_refresh_px` and may be a different size.
     pub gpu_ms_px: u64,
-    /// Why the last refresh fell back to the CPU compositor (None = GPU composited).
+    /// Why the active view is drawn on the CPU (None = GPU composited): the current
+    /// [`crate::render_path`] reason as text, written only by `render_path`.
     pub gpu_fallback: Option<String>,
     /// Adapter, backend, driver and fallback state (Help › System Info).
     pub gpu_info: GpuInfo,
@@ -67,9 +70,9 @@ pub struct Perf {
     pub spans: std::collections::BTreeMap<&'static str, f64>,
     #[serde(skip)]
     max_decay: f64,
-    /// Composite and upload time of this frame's canvas refreshes, in ms (the stroke trace).
+    /// This frame's stages, gathered as it runs (see `frame_stages`).
     #[serde(skip)]
-    pub(crate) frame_refresh_ms: f64,
+    pub(crate) stage: crate::frame_stages::FrameStages,
 }
 
 /// What the app renders with and why (Help › System Info, Preferences › Performance, the `perf`
@@ -213,28 +216,37 @@ pub fn backend_name(b: wgpu::Backend) -> &'static str {
 
 impl Perf {
     pub fn record(&mut self, kind: &'static str, px: u64, composite_ms: f64, upload_ms: f64) {
-        self.frame_refresh_ms += composite_ms + upload_ms;
+        self.stage.refresh(kind, px, composite_ms, upload_ms);
         self.last_refresh = kind;
         self.last_refresh_px = px;
         self.composite_ms = composite_ms;
         self.upload_ms = upload_ms;
+        // A refresh that didn't come through `record_refresh` or `record_gpu_attempt` had no failed
+        // GPU attempt: the last one's time would be read as this refresh's.
+        self.gpu_attempt_ms = 0.0;
         if !kind.starts_with("gpu") {
             self.gpu_uploads = 0;
             // The CPU compositor did this one: there is no GPU time, and the last GPU
             // refresh's would be read as this refresh's.
             self.gpu_ms = None;
             self.gpu_ms_px = 0;
-        } else {
-            self.gpu_fallback = None;
         }
     }
 
     /// Record a canvas refresh and any GPU measurement that came back with it.
     pub fn record_refresh(&mut self, r: &Refresh) {
         self.record(r.kind, r.px, r.composite_ms, r.upload_ms);
+        self.record_gpu_attempt(r.gpu_attempt_ms);
         if let Some(t) = r.gpu {
             self.record_gpu(t);
         }
+    }
+
+    /// Record the time a failed GPU composite attempt took before the CPU did the refresh just
+    /// recorded, apart from that refresh's own CPU time.
+    pub fn record_gpu_attempt(&mut self, ms: f64) {
+        self.gpu_attempt_ms = ms;
+        self.stage.composite_ms += ms;
     }
 
     /// Record a GPU composite measurement that came back (see [`photocraft_gpu::GpuTiming`]).
