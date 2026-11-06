@@ -104,6 +104,20 @@ fn plural_pt(n: u64) -> usize {
     usize::from(n > 1)
 }
 
+/// Romanian (CLDR): 1 → one; 0, or n % 100 in 1–19 → few (these take the bare plural noun, e.g.
+/// "2 straturi", "0 straturi", "119 straturi"); everything else (20, 100, 121, ...) → other (these
+/// take "de" plus the plural noun, e.g. "20 de straturi", "121 de straturi"), which matches
+/// Romanian's grammatical rule for when counted nouns need "de" inserted before them.
+fn plural_romanian(n: u64) -> usize {
+    if n == 1 {
+        0
+    } else if n == 0 || (1..=19).contains(&(n % 100)) {
+        1
+    } else {
+        2
+    }
+}
+
 /// Polish: 1 → one; 2–4, except 12–14 → few; everything else → many.
 fn plural_polish(n: u64) -> usize {
     let last = n % 10;
@@ -260,6 +274,9 @@ pub static LANGUAGES: [LangInfo; 29] = [
     LangInfo { code: "he", name: "עברית", source: catalog!("he"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
     // Urdu; written right to left like Arabic (`dir_for_code`). CLDR plural: one|other.
     LangInfo { code: "ur", name: "اردو", source: catalog!("ur"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
+    // Romanian; `ro-RO` and `ro-MD` resolve here. Standard left-to-right; see `plural_romanian`
+    // for the one/few/other rule.
+    LangInfo { code: "ro", name: "Română", source: catalog!("ro"), plural: plural_romanian, complete_menus: true, catalog: OnceLock::new() },
 ];
 
 impl LangInfo {
