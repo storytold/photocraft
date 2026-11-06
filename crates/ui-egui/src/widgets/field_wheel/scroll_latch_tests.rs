@@ -167,3 +167,27 @@ fn a_swipe_that_starts_over_the_panel_does_not_step_a_dropdown_or_slider_it_reac
         assert!(with.offset > without.offset, "{control:?}: the panel kept scrolling: {} after {}", with.offset, without.offset);
     }
 }
+
+/// A slider or dropdown takes ⌥/Alt and ⌘/Ctrl + wheel too (Photoshop's sliders step by 1 with
+/// them), where a value field leaves it to the view; a panel scroll still passes over them.
+#[test]
+fn a_slider_or_dropdown_takes_the_wheel_with_alt_or_ctrl() {
+    for control in [Control::Dropdown, Control::Slider] {
+        for modifiers in [egui::Modifiers::ALT, egui::Modifiers::CTRL] {
+            let mut h = harness(control);
+            h.hover_at(rect(&h, control).center());
+            h.run_steps(1);
+            h.event(egui::Event::MouseWheel {
+                source: egui::MouseWheelSource::Unknown,
+                unit: egui::MouseWheelUnit::Line,
+                delta: vec2(0.0, -1.0),
+                phase: egui::TouchPhase::Move,
+                modifiers,
+            });
+            h.run_steps(18);
+            let s = *h.state();
+            assert!(!untouched(&s), "{control:?} {modifiers:?}: stepped");
+            assert_eq!(s.offset, 0.0, "{control:?} {modifiers:?}: the panel didn't scroll");
+        }
+    }
+}

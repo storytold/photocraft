@@ -179,30 +179,37 @@ pub fn notches(ui: &Ui, field: Id, focused: bool, rect: Rect) -> f32 {
         if !ui.is_enabled() {
             return 0.0;
         }
-        return count(ui, field, &events, 10.0);
+        return count(ui, field, &events, 10.0, for_field);
     }
-    hover_notches(ui, field, ui.rect_contains_pointer(rect), 10.0)
+    let events = claim(ui, field, ui.rect_contains_pointer(rect), for_field);
+    count(ui, field, &events, 10.0, for_field)
 }
 
 /// Wheel notches this frame for control `id` without keyboard focus, while the pointer is over it
 /// (`hovered`; up positive, a notch with Shift counting `shift_notches`): only a gesture that
 /// started over it, so a panel scrolled past it keeps scrolling (#11353). While the control has
-/// the gesture nothing under it scrolls, the smoothed tail included.
+/// the gesture nothing under it scrolls, the smoothed tail included. Unlike a value field's, any
+/// wheel steps it, ⌥/Alt and ⌘/Ctrl included (Photoshop's sliders: Ctrl/Alt step by 1).
 pub(crate) fn hover_notches(ui: &Ui, id: Id, hovered: bool, shift_notches: f32) -> f32 {
-    let events = claim(ui, id, hovered);
-    count(ui, id, &events, shift_notches)
+    let events = claim(ui, id, hovered, any_wheel);
+    count(ui, id, &events, shift_notches, any_wheel)
 }
 
-/// This frame's wheel events for control `id` (see [`hover_notches`]); none unless it has the
-/// gesture.
-fn claim(ui: &Ui, id: Id, hovered: bool) -> Vec<Event> {
+/// Any wheel event: what a slider, a dropdown or the font family field takes.
+fn any_wheel(e: &Event) -> bool {
+    matches!(e, Event::MouseWheel { .. })
+}
+
+/// This frame's wheel events control `id` `takes` (see [`hover_notches`]); none unless it has
+/// the gesture.
+fn claim(ui: &Ui, id: Id, hovered: bool, takes: fn(&Event) -> bool) -> Vec<Event> {
     if !ui.is_enabled() {
         return Vec::new();
     }
     track(ui.ctx());
     let Some(mut g) = ui.data(|d| d.get_temp::<Gesture>(gesture_id())) else { return Vec::new() };
     let (events, wheel): (Vec<Event>, bool) =
-        ui.input(|i| (i.events.iter().filter(|e| for_field(e)).cloned().collect(), i.events.iter().any(|e| matches!(e, Event::MouseWheel { .. }))));
+        ui.input(|i| (i.events.iter().filter(|e| takes(e)).cloned().collect(), i.events.iter().any(|e| matches!(e, Event::MouseWheel { .. }))));
     // Wheel the control doesn't take (a sideways swipe after a zero-delta start), or any wheel
     // with the pointer off the control, hands the rest of the gesture to the view: coming back
     // over the control in the same gesture doesn't step it.
@@ -227,12 +234,12 @@ fn claim(ui: &Ui, id: Id, hovered: bool) -> Vec<Event> {
     events
 }
 
-/// Whole notches in the wheel `events` a control takes, fractions kept under `id`.
-fn count(ui: &Ui, id: Id, events: &[Event], shift_notches: f32) -> f32 {
+/// Whole notches in the wheel `events` a control `takes`, fractions kept under `id`.
+fn count(ui: &Ui, id: Id, events: &[Event], shift_notches: f32, takes: fn(&Event) -> bool) -> f32 {
     let wheel: Vec<(MouseWheelUnit, Vec2, bool)> = events
         .iter()
         .filter_map(|e| match e {
-            Event::MouseWheel { unit, delta, modifiers, .. } if for_field(e) => Some((*unit, *delta, modifiers.shift)),
+            Event::MouseWheel { unit, delta, modifiers, .. } if takes(e) => Some((*unit, *delta, modifiers.shift)),
             _ => None,
         })
         .collect();
