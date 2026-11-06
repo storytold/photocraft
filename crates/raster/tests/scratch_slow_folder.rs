@@ -180,12 +180,16 @@ fn a_folder_that_stops_answering_never_freezes_the_app() {
         poll_until("the late answer to measure the volume", || !spill::free_space_unmeasured());
     }
 
+    poll_until("the previous query to finish", || spill::query_threads_for_tests() == 0);
+
     // H. The growth check never stalls eviction: tiles still spill while it is unanswered.
     spill::set_budget(8 * TILE_BYTES);
     arm();
     spill::set_size_cap(Some(1 << 50));
+    let trigger_tiles = surface(1, 32);
+    poll_until("the growth query to reach the stall", || ENTERED.load(Ordering::SeqCst) >= 1);
     let evictions = spill::stats().evictions;
-    let tiles = surface(1, 32);
+    let tiles = surface(33, 32);
     prompt("settle", spill::settle);
     assert!(spill::stats().evictions > evictions, "{:?}", spill::stats());
     poll_until("the unanswered growth check to count as unknown", spill::free_space_unmeasured);
@@ -198,6 +202,7 @@ fn a_folder_that_stops_answering_never_freezes_the_app() {
     // Cleanup.
     spill::set_query_hook_for_tests(None);
     drop(tiles);
+    drop(trigger_tiles);
     spill::configure(None, 0).unwrap();
     let _ = std::fs::remove_dir_all(&root);
 }

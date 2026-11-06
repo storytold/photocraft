@@ -657,7 +657,7 @@ fn run_query(dir: PathBuf, prepare: bool, done: Arc<QueryDone>) {
     // counted again on top of it. Another folder's file says nothing about this one.
     let (open, used) = {
         let c = M.config();
-        let current = c.file.as_ref().filter(|f| f.path().parent() == Some(dir.as_path()));
+        let current = c.file.as_ref().filter(|_| c.dir.as_deref() == Some(dir.as_path()));
         (prepare && current.is_none(), current.map_or(0, |f| f.used()))
     };
     let file = open.then(|| std::fs::create_dir_all(&dir).and_then(|()| ScratchFile::create(&dir)));
@@ -679,22 +679,26 @@ fn query_overdue(dir: Option<&Path>) -> bool {
 /// Scratch files on their way out, oldest first.
 struct Retired {
     files: VecDeque<(Arc<ScratchFile>, Arc<QueryDone>)>,
-    closing: bool,
+    /// Closer threads alive.
+    closers: usize,
 }
 
-static RETIRED: Mutex<Retired> = Mutex::new(Retired { files: VecDeque::new(), closing: false });
+/// Most closer threads at once: enough that one close stuck on a dead mount doesn't hold up the
+/// files behind it, few enough that stuck closes can't pile up threads.
+const MAX_CLOSERS: usize = 4;
+
+static RETIRED: Mutex<Retired> = Mutex::new(Retired { files: VecDeque::new(), closers: 0 });
 
 /// Let go of a scratch file off this thread: the last reference closes it, which can flush to its
-/// folder, and a dead mount blocks that, while leaving a dead folder is how a user recovers. One
-/// closer thread however many folders are left, so stuck closes can't pile up threads. The returned
-/// handle finishes when this reference is gone.
+/// folder, and a dead mount blocks that, while leaving a dead folder is how a user recovers. The
+/// returned handle finishes when this reference is gone.
 fn retire(file: Arc<ScratchFile>) -> Arc<QueryDone> {
     let done = Arc::new(QueryDone::default());
     let mut retired = RETIRED.lock().unwrap_or_else(PoisonError::into_inner);
     retired.files.push_back((file, done.clone()));
-    if !retired.closing {
-        // If no thread can start, the file waits in the queue for the next one rather than closing here.
-        retired.closing = std::thread::Builder::new().name("pc-scratch-close".into()).spawn(close_retired).is_ok();
+    // If no thread can start, the file waits in the queue for the next one rather than closing here.
+    if retired.closers < MAX_CLOSERS && std::thread::Builder::new().name("pc-scratch-close".into()).spawn(close_retired).is_ok() {
+        retired.closers += 1;
     }
     done
 }
@@ -705,7 +709,7 @@ fn close_retired() {
             let mut retired = RETIRED.lock().unwrap_or_else(PoisonError::into_inner);
             let next = retired.files.pop_front();
             if next.is_none() {
-                retired.closing = false;
+                retired.closers = retired.closers.saturating_sub(1);
             }
             next
         };
