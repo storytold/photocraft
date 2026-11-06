@@ -3528,3 +3528,472 @@ cameraData	Lens	লেন্স
 	Vanishing Point is not active	ভ্যানিশিং পয়েন্ট সক্রিয় নেই
 	Vanishing Point: click four corners to create a plane	ভ্যানিশিং পয়েন্ট: প্লেন তৈরি করতে চার কোণায় ক্লিক করুন
 	{n} of {max} sample points	{n} / {max} নমুনা পয়েন্ট
+	A brush preset with this name already exists	এই নামের একটি ব্রাশ প্রিসেট ইতিমধ্যে আছে
+	A command was cancelled or stopped during batch processing. Continue with the next file or stop?	ব্যাচ প্রসেসিং চলাকালে একটি কমান্ড বাতিল বা বন্ধ করা হয়েছে। পরবর্তী ফাইল দিয়ে চালিয়ে যাবেন নাকি থামাবেন?
+	A file is still being placed; try again when it has finished.	একটি ফাইল এখনও বসানো হচ্ছে; শেষ হলে আবার চেষ্টা করুন।
+	A frame supports affine transforms; select its image for perspective transforms	একটি ফ্রেম অ্যাফাইন ট্রান্সফর্ম সমর্থন করে; পার্সপেক্টিভ ট্রান্সফর্মের জন্য এর ছবি নির্বাচন করুন
+	A frame supports affine transforms; select its image to warp it	একটি ফ্রেম অ্যাফাইন ট্রান্সফর্ম সমর্থন করে; ওয়ার্প করতে এর ছবি নির্বাচন করুন
+	Accelerated	অ্যাক্সিলারেটেড
+	Accept and Go to Conflict	গ্রহণ করুন এবং কনফ্লিক্টে যান
+	Action playback stopped	অ্যাকশন প্লেব্যাক বন্ধ হয়েছে
+	Add Mask to Selection	সিলেকশনে মাস্ক যোগ করুন
+	Add Open Files	খোলা ফাইলসমূহ যোগ করুন
+	Add Shortcut	শর্টকাট যোগ করুন
+	Add to Favorites	প্রিয়তে যোগ করুন
+	Add “copy” to Copied Layers and Groups	কপি করা লেয়ার ও গ্রুপের নামে “copy” যোগ করুন
+	All Classes	সব ক্লাস
+	Allow Continue	চালিয়ে যেতে অনুমতি দিন
+	Allow Non-Linear History	ননলিনিয়ার হিস্ট্রির অনুমতি দিন
+	Alt-click a plane to set the clone source	ক্লোন সোর্স সেট করতে একটি প্লেনে Alt-ক্লিক করুন
+	Animation Options	অ্যানিমেশন বিকল্প
+	Answer the open import question first, then import this file again.	প্রথমে খোলা ইমপোর্ট প্রশ্নের উত্তর দিন, তারপর এই ফাইলটি আবার ইমপোর্ট করুন।
+	Applies immediately when saved. Memory is not reserved in advance.	সংরক্ষণ করলেই সঙ্গে সঙ্গে প্রযোজ্য হয়। মেমরি আগে থেকে রিজার্ভ করা হয় না।
+	Apply the removal ({key})	অপসারণ প্রয়োগ করুন ({key})
+	Arrowhead options	অ্যারোহেড বিকল্প
+	Arrowheads	অ্যারোহেডস
+	Artboards	আর্টবোর্ডস
+	Attempt to Automatically Align Source Images	সোর্স ছবিগুলো স্বয়ংক্রিয়ভাবে অ্যালাইন করার চেষ্টা করুন
+	Attribute	অ্যাট্রিবিউট
+	Auto Add/Delete	অটো যোগ/মুছুন
+	Automatic paragraph direction	স্বয়ংক্রিয় প্যারাগ্রাফ দিক
+	Background (default)	ব্যাকগ্রাউন্ড (ডিফল্ট)
+	Baseline ("Standard")	বেসলাইন ("Standard")
+	Baseline Optimized	বেসলাইন অপ্টিমাইজড
+	Batch preview	ব্যাচ প্রিভিউ
+	Behind	বিহাইন্ড
+	Bicubic Automatic	বাইকিউবিক (স্বয়ংক্রিয়)
+	Bicubic Sharper	বাইকিউবিক (শার্পার)
+	Bicubic Smoother	বাইকিউবিক (মসৃণতর)
+	Blackletter	ব্ল্যাকলেটার
+	Blending Options ({filter})	ব্লেন্ডিং বিকল্প ({filter})
+	Button Mode	বাটন মোড
+	Button Mode On	বাটন মোড চালু
+	CPU Rendering	CPU রেন্ডারিং
+	Calculating…	গণনা করা হচ্ছে…
+	Cancelled placing {name}	{name} বসানো বাতিল হয়েছে
+	Capture Brush Size in Preset	প্রিসেটে ব্রাশের আকার ক্যাপচার করুন
+	Changes undone.	পরিবর্তনগুলো আনডু করা হয়েছে।
+	Channel Color	চ্যানেল রঙ
+	Channel Options…	চ্যানেল বিকল্প…
+	Check for Updates…	আপডেট পরীক্ষা করুন…
+	Choose Stack Mode:	স্ট্যাক মোড বেছে নিন:
+	Choose a format that keeps it, such as Photoshop (PSD), or save a copy.	এমন একটি ফরম্যাট বেছে নিন যা এটি রাখে, যেমন Photoshop (PSD), অথবা একটি কপি সংরক্ষণ করুন।
+	Choose a gradient file (.grd).	একটি গ্রেডিয়েন্ট ফাইল (.grd) বেছে নিন।
+	Choose a new shortcut for this command, or leave it without one.	এই কমান্ডের জন্য একটি নতুন শর্টকাট বেছে নিন, অথবা এটি শর্টকাট ছাড়াই রাখুন।
+	Clean Brush	ব্রাশ পরিষ্কার করুন
+	Clean the brush after each stroke	প্রতিটি স্ট্রোকের পর ব্রাশ পরিষ্কার করুন
+	Clear Brush Controls	ব্রাশ কন্ট্রোল মুছুন
+	Clear Selection	সিলেকশন মুছুন
+	Click the image to add a pin; drag a pin to move it, or its ring to change its blur. Delete removes the selected pin.	পিন যোগ করতে ছবিতে ক্লিক করুন; পিন সরাতে সেটি ড্র্যাগ করুন, অথবা এর ব্লার বদলাতে এর রিং ড্র্যাগ করুন। Delete নির্বাচিত পিনটি সরিয়ে দেয়।
+	Click to refresh histogram with uncached data	ক্যাশ না করা ডেটা দিয়ে হিস্টোগ্রাম রিফ্রেশ করতে ক্লিক করুন
+	Clip Thumbnails to Layer Bounds	থাম্বনেইল লেয়ারের সীমানায় ক্লিপ করুন
+	Color Aware	কালার অ্যাওয়্যার
+	Color Indicates:	রঙ নির্দেশ করে:
+	Color Picker	কালার পিকার
+	Compression	কম্প্রেশন
+	Concavity	কনক্যাভিটি
+	Confirm or cancel the open action step dialog first	প্রথমে খোলা অ্যাকশন স্টেপ ডায়ালগটি নিশ্চিত বা বাতিল করুন
+	Continue	চালিয়ে যান
+	Convert to Frame…	ফ্রেমে রূপান্তর…
+	Convert to the working space ({profile})	ওয়ার্কিং স্পেসে রূপান্তর করুন ({profile})
+	Copy Color as HTML	HTML হিসেবে রঙ কপি করুন
+	Copy Color's Hex Code	রঙের Hex কোড কপি করুন
+	Copy Texture to Other Tools	অন্য টুলে টেক্সচার কপি করুন
+	Copyright Notice	কপিরাইট নোটিশ
+	Could not write {name}: {error}	{name} লেখা যায়নি: {error}
+	Count:	সংখ্যা:
+	Create Smart Object after Loading Layers	লেয়ার লোড করার পর স্মার্ট অবজেক্ট তৈরি করুন
+	Create a new custom frame	নতুন কাস্টম ফ্রেম তৈরি করুন
+	Create a new polygonal frame	নতুন পলিগোনাল ফ্রেম তৈরি করুন
+	Create a new triangular frame	নতুন ত্রিভুজাকার ফ্রেম তৈরি করুন
+	Create a single history state	একটি মাত্র হিস্ট্রি স্টেট তৈরি করুন
+	Create warped text	ওয়ার্পড টেক্সট তৈরি করুন
+	Current Brush Load	বর্তমান ব্রাশ লোড
+	Custom background color	কাস্টম ব্যাকগ্রাউন্ড রঙ
+	DDS Options	DDS বিকল্প
+	Dab	ড্যাব
+	Data Sets as Files is unavailable on the web	ফাইল হিসেবে ডেটা সেটস ওয়েবে উপলব্ধ নয়
+	Decontaminate Colors	রঙগুলো ডিকনটামিনেট করুন
+	Decorative	ডেকোরেটিভ
+	Delete Channel	চ্যানেল মুছুন
+	Delete Contour	কনট্যুর মুছুন
+	Delete effect	ইফেক্ট মুছুন
+	Delete this set	এই সেটটি মুছুন
+	Demosaic	ডিমোজাইক
+	Dissolve is approximated: it blends without Photoshop's dither.	ডিজলভ আনুমানিক: এটি Photoshop-এর ডিদার ছাড়া ব্লেন্ড করে।
+	Document Title	ডকুমেন্টের শিরোনাম
+	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	Print Settings…-এ Mirror Image-এও টিক দেবেন না: দুটি ফ্লিপ একে অপরকে বাতিল করে দেয়।
+	Drag the handles on the outline to resize and turn it, the square to round its corners, and the dots inside to set where the blur starts.	আউটলাইনের হ্যান্ডেলগুলো টেনে আকার পরিবর্তন করুন ও ঘোরান, বর্গটি টেনে এর কোণাগুলো গোল করুন, এবং ভেতরের বিন্দুগুলো টেনে ব্লার কোথা থেকে শুরু হবে তা নির্ধারণ করুন।
+	Drag the handles on the outline to resize and turn it; the ring sets the blur angle.	আউটলাইনের হ্যান্ডেলগুলো টেনে আকার পরিবর্তন করুন ও ঘোরান; রিংটি ব্লারের কোণ নির্ধারণ করে।
+	Drag to move the selected path	নির্বাচিত পাথ সরাতে টেনে আনুন
+	Drag to pan · Scroll to zoom · Double-click to fit	প্যান করতে টেনে আনুন · জুম করতে স্ক্রল করুন · ফিট করতে ডাবল-ক্লিক করুন
+	Drawn on the CPU: {reason}. Click for System Info.	CPU-তে আঁকা হয়েছে: {reason}। সিস্টেম তথ্যের জন্য ক্লিক করুন।
+	Dropped files weren't placed: their document was closed.	ড্রপ করা ফাইলগুলো বসানো হয়নি: তাদের ডকুমেন্ট বন্ধ ছিল।
+	Dropped files weren't placed: too many are waiting for their document.	ড্রপ করা ফাইলগুলো বসানো হয়নি: অনেকগুলোই তাদের ডকুমেন্টের জন্য অপেক্ষা করছে।
+	Duplicate Channel	চ্যানেল ডুপ্লিকেট
+	Edge Detection	এজ ডিটেকশন
+	Effect	ইফেক্ট
+	Empty	খালি
+	End	শেষ
+	Enter a name for the brush preset	ব্রাশ প্রিসেটের জন্য একটি নাম দিন
+	Entire Document	পুরো ডকুমেন্ট
+	Excluded Area	বাদ দেওয়া এলাকা
+	Expand New Effects	নতুন ইফেক্টস প্রসারিত করুন
+	Export Selected Styles…	নির্বাচিত স্টাইলস এক্সপোর্ট…
+	Export Styles…	স্টাইলস এক্সপোর্ট…
+	Files	ফাইলসমূহ
+	Fill Settings	ফিল সেটিংস
+	Filter Options	ফিল্টার বিকল্প
+	Filter for embedded smart objects	এমবেড করা স্মার্ট অবজেক্ট দিয়ে ফিল্টার করুন
+	Filter for linked smart objects that are missing	অনুপস্থিত লিংক করা স্মার্ট অবজেক্ট দিয়ে ফিল্টার করুন
+	Filter for smart objects linked locally	স্থানীয়ভাবে লিংক করা স্মার্ট অবজেক্ট দিয়ে ফিল্টার করুন
+	Fit Content to Frame	কনটেন্ট ফ্রেমে ফিট করুন
+	Fit Frame to Content	ফ্রেম কনটেন্টে ফিট করুন
+	Folder	ফোল্ডার
+	Font preview:	ফন্ট প্রিভিউ:
+	Format Options	ফরম্যাট বিকল্প
+	Frame coordinates must be finite and within 600000 pixels	ফ্রেমের কোঅর্ডিনেট অবশ্যই সসীম এবং 600000 পিক্সেলের মধ্যে হতে হবে
+	Free Transform is still being applied; try again when it has finished.	ফ্রি ট্রান্সফর্ম এখনও প্রয়োগ করা হচ্ছে; শেষ হলে আবার চেষ্টা করুন।
+	Frequency:	ফ্রিকোয়েন্সি:
+	From:	থেকে:
+	Full	সম্পূর্ণ
+	Full Document	সম্পূর্ণ ডকুমেন্ট
+	GPU Memory Full	GPU মেমরি পূর্ণ
+	GPU acceleration resumed.	GPU অ্যাক্সিলারেশন পুনরায় শুরু হয়েছে।
+	GPU adapter	GPU অ্যাডাপ্টার
+	GPU memory budget: {budget}	GPU মেমরি বাজেট: {budget}
+	Generate Mipmaps	Mipmaps তৈরি করুন
+	Global Refinements	গ্লোবাল রিফাইনমেন্টস
+	Gradient Preset Options	গ্রেডিয়েন্ট প্রিসেট বিকল্প
+	Grid view	গ্রিড ভিউ
+	Halftone Screen	হাফটোন স্ক্রিন
+	Handwritten	হাতে লেখা
+	Hide Font Classes	ফন্ট ক্লাসসমূহ লুকান
+	Hide Styles	স্টাইলস লুকান
+	Hide the layer's effects and Smart Filters  ({key}-click: all layers)	লেয়ারের ইফেক্টস ও স্মার্ট ফিল্টার লুকান  ({key}-ক্লিক: সব লেয়ার)
+	High Memory Photoshop Document	উচ্চ মেমরির Photoshop ডকুমেন্ট
+	High Quality Preview	উচ্চ মানের প্রিভিউ
+	ICO is limited to 256 × 256 pixels	ICO 256 × 256 পিক্সেলে সীমাবদ্ধ
+	If you continue, saving over the original may permanently discard unreadable data. Save a copy to keep the original.	আপনি চালিয়ে গেলে, মূল ফাইলের উপর সংরক্ষণ করলে অপঠনযোগ্য ডেটা স্থায়ীভাবে বাতিল হয়ে যেতে পারে। মূলটি রাখতে একটি কপি সংরক্ষণ করুন।
+	Image Compression	ইমেজ কম্প্রেশন
+	Image Options	ইমেজ বিকল্প
+	Import .GRD	.GRD ইমপোর্ট
+	Import Image…	ছবি ইমপোর্ট…
+	Import Styles…	স্টাইলস ইমপোর্ট…
+	Import as New Group	নতুন গ্রুপ হিসেবে ইমপোর্ট
+	Import as New Group keeps “{group}” and adds the file as a new group beside it.	নতুন গ্রুপ হিসেবে ইমপোর্ট করলে “{group}” থাকে এবং ফাইলটি তার পাশে নতুন গ্রুপ হিসেবে যোগ হয়।
+	In Front	সামনে
+	Include All Subfolders	সব সাবফোল্ডার অন্তর্ভুক্ত করুন
+	Include Color	রঙ অন্তর্ভুক্ত করুন
+	Include Tool Settings	টুল সেটিংস অন্তর্ভুক্ত করুন
+	Indicates	নির্দেশ করে
+	Ink Characteristics	কালির বৈশিষ্ট্য
+	Insert Stop…	স্টপ ঢোকান…
+	Installed RAM: {ram} MB; this limit: {percent}%	ইনস্টল করা RAM: {ram} MB; এই সীমা: {percent}%
+	Intersect Mask with Selection	সিলেকশনের সাথে মাস্ক ছেদ করুন
+	Invalid frame transform	অবৈধ ফ্রেম ট্রান্সফর্ম
+	Invalid nested file drop	অবৈধ নেস্টেড ফাইল ড্রপ
+	Its layers need {needed} of GPU memory; the budget leaves them {budget}.	এর লেয়ারগুলোর {needed} GPU মেমরি প্রয়োজন; বাজেটে তাদের জন্য {budget} থাকে।
+	JPEG Options	JPEG বিকল্প
+	Kept {name}: written by another application	{name} রাখা হয়েছে: অন্য অ্যাপ্লিকেশন দিয়ে লেখা
+	LZW	LZW
+	Layer Bounds	লেয়ার সীমানা
+	Layer Effects	লেয়ার ইফেক্টস
+	Layers Panel Options	লেয়ারস প্যানেল বিকল্প
+	Learn	শিখুন
+	Left-to-right paragraph direction	বাম-থেকে-ডান প্যারাগ্রাফ দিক
+	Level:	লেভেল:
+	Limits each open document's pixels plus History. Oldest undo states are discarded when the limit is exceeded.	প্রতিটি খোলা ডকুমেন্টের পিক্সেল ও হিস্ট্রি সীমিত করে। সীমা ছাড়িয়ে গেলে সবচেয়ে পুরনো আনডু অবস্থা বাতিল হয়ে যায়।
+	Lines/Centimeter	লাইন/সেন্টিমিটার
+	Lines/Inch	লাইন/ইঞ্চি
+	Lining	লাইনিং
+	Linked	লিংক করা
+	List view	লিস্ট ভিউ
+	Load Actions…	অ্যাকশনস লোড করুন…
+	Load Brush	ব্রাশ লোড
+	Load Contours…	কনট্যুরস লোড করুন…
+	Load Settings…	সেটিংস লোড করুন…
+	Load settings from a Camera Raw .xmp file	Camera Raw .xmp ফাইল থেকে সেটিংস লোড করুন
+	Load the brush after each stroke	প্রতিটি স্ট্রোকের পরে ব্রাশ লোড করুন
+	Loaded Camera Raw settings from {file}	{file} থেকে Camera Raw সেটিংস লোড হয়েছে
+	Locked	লক করা
+	Loose Curl	লুজ কার্ল
+	Loose Long	লুজ লং
+	Loose Medium	লুজ মিডিয়াম
+	Make Layer Visibility Changes Undoable	লেয়ারের দৃশ্যমানতার পরিবর্তন আনডুযোগ্য করুন
+	Manage submitted jobs in the system print queue	সিস্টেম প্রিন্ট কিউতে জমা দেওয়া কাজ পরিচালনা করুন
+	Mask Options…	মাস্ক বিকল্প…
+	Memory Usage	মেমরি ব্যবহার
+	Merge Channels…	চ্যানেল মার্জ…
+	Merge Group	গ্রুপ মার্জ করুন
+	Merge Spot Channel	স্পট চ্যানেল মার্জ করুন
+	Merged Layers	মার্জ করা লেয়ারসমূহ
+	Message:	বার্তা:
+	Mirror	মিরর
+	Monospace	মনোস্পেস
+	Move Down	নিচে সরান
+	Move Up	উপরে সরান
+	Move effect down	ইফেক্ট নিচে সরান
+	Move effect up	ইফেক্ট উপরে সরান
+	New Action…	নতুন অ্যাকশন…
+	New Artboard…	নতুন আর্টবোর্ড…
+	New Channel…	নতুন চ্যানেল…
+	New Document With Mask	মাস্কসহ নতুন ডকুমেন্ট
+	New Frame	নতুন ফ্রেম
+	New Group from Layers…	লেয়ার থেকে নতুন গ্রুপ…
+	New Group…	নতুন গ্রুপ…
+	New Layer With Mask	মাস্কসহ নতুন লেয়ার
+	New Set…	নতুন সেট…
+	New Spot Channel…	নতুন স্পট চ্যানেল…
+	New file	নতুন ফাইল
+	No Adv. Blending	অ্যাডভান্সড ব্লেন্ডিং নেই
+	No Layer Effects	লেয়ার ইফেক্টস নেই
+	No Layer Mask	লেয়ার মাস্ক নেই
+	No Vector Mask	ভেক্টর মাস্ক নেই
+	No favorite fonts yet: click the star beside a font to add it.	এখনো কোনো প্রিয় ফন্ট নেই: যোগ করতে ফন্টের পাশের তারায় ক্লিক করুন।
+	No fonts match these filters.	এই ফিল্টারগুলোর সাথে কোনো ফন্ট মেলে না।
+	No import is waiting. Import the file again.	কোনো ইমপোর্ট অপেক্ষমাণ নেই। ফাইলটি আবার ইমপোর্ট করুন।
+	No matching fonts	মিলে যাওয়া কোনো ফন্ট নেই
+	No object found there — drag a rectangle around it	সেখানে কোনো অবজেক্ট পাওয়া যায়নি — অবজেক্টের চারপাশে একটি রেক্ট্যাঙ্গেল ড্র্যাগ করুন
+	No pin selected	কোনো পিন নির্বাচিত হয়নি
+	No recent files	কোনো সাম্প্রতিক ফাইল নেই
+	No similar fonts: the current font doesn't say what it looks like.	অনুরূপ কোনো ফন্ট নেই: বর্তমান ফন্টটি দেখতে কেমন তা বলে না।
+	Not Clipped	ক্লিপড নয়
+	Not Empty	খালি নয়
+	Not Linked	লিংক করা নয়
+	Not Locked	লক করা নয়
+	Not Visible	দৃশ্যমান নয়
+	Not rendered: this adjustment ({key}) is kept as imported.	রেন্ডার করা হয়নি: এই অ্যাডজাস্টমেন্ট ({key}) ইমপোর্ট করা অবস্থাতেই রাখা হয়েছে।
+	Nothing to paste: PhotoCraft can't read the system clipboard here	পেস্ট করার মতো কিছু নেই: PhotoCraft এখানে সিস্টেম ক্লিপবোর্ড পড়তে পারে না
+	Numerals	নিউমারালস
+	Object Aware	অবজেক্ট অ্যাওয়্যার
+	Object Aware needs a segmentation model, which isn't available yet	অবজেক্ট অ্যাওয়্যারের জন্য একটি সেগমেন্টেশন মডেল দরকার, যা এখনো উপলব্ধ নয়
+	Object Finder	অবজেক্ট ফাইন্ডার
+	On your computer	আপনার কম্পিউটারে
+	Opacity must be between 0% and 100%.	অস্বচ্ছতা 0% থেকে 100%-এর মধ্যে হতে হবে।
+	Open anyway	তবুও খুলুন
+	OpenType font	OpenType ফন্ট
+	Opening this document uses more memory and may slow down your computer or other running applications.	এই ডকুমেন্টটি খুললে বেশি মেমরি ব্যবহৃত হবে এবং আপনার কম্পিউটার বা অন্যান্য চলমান অ্যাপ্লিকেশন ধীর হয়ে যেতে পারে।
+	Opening “{name}” requires an estimated {est} GiB of memory ({avail} GiB available).	“{name}” খুলতে আনুমানিক {est} GiB মেমরি প্রয়োজন ({avail} GiB উপলব্ধ)।
+	Opening “{name}” requires an estimated {est} GiB of memory. The available memory could not be measured.	“{name}” খুলতে আনুমানিক {est} GiB মেমরি প্রয়োজন। উপলব্ধ মেমরি পরিমাপ করা যায়নি।
+	Output Settings	আউটপুট সেটিংস
+	Output To	আউটপুট গন্তব্য
+	Override Tilt X	হেলানো X ওভাররাইড করুন
+	Override Tilt Y	হেলানো Y ওভাররাইড করুন
+	Paper Height	কাগজের উচ্চতা
+	Paper Width	কাগজের প্রস্থ
+	Path operations	পাথ অপারেশনস
+	Pause For	বিরতির সময়
+	Pause For:	বিরতির সময়:
+	Per-document RAM limit (MB)	প্রতি ডকুমেন্টের RAM সীমা (MB)
+	Percentile:	পারসেন্টাইল:
+	PhotoCraft Defaults	PhotoCraft ডিফল্টসমূহ
+	Playback Options…	প্লেব্যাক বিকল্প…
+	Prevent Auto-Nesting	স্বয়ংক্রিয় নেস্টিং রোধ করুন
+	Preview on canvas when reordering layers	লেয়ার পুনর্বিন্যাসের সময় ক্যানভাসে প্রিভিউ দেখান
+	Preview size	প্রিভিউ সাইজ
+	Print Settings…	প্রিন্ট সেটিংস…
+	Print preview image	প্রিন্ট প্রিভিউ ছবি
+	Proportional	প্রোপোরশনাল
+	Proportional Lining	প্রোপোরশনাল লাইনিং
+	Proportional Oldstyle	প্রোপোরশনাল ওল্ডস্টাইল
+	Put this command's shortcuts back as they were	এই কমান্ডের শর্টকাটগুলো আগের অবস্থায় ফিরিয়ে দিন
+	Real-Time Refinement	রিয়েল-টাইম রিফাইনমেন্ট
+	Recently Used Colors	সম্প্রতি ব্যবহৃত রঙসমূহ
+	Rectangular	রেক্ট্যাঙ্গুলার
+	Redrawing	পুনরায় আঁকা হচ্ছে
+	Refine Edge Brush Tool	রিফাইন এজ ব্রাশ টুল
+	Refine Hair	রিফাইন হেয়ার
+	Refine Hair needs hair detection, which isn't available yet	রিফাইন হেয়ারের জন্য চুল শনাক্তকরণ দরকার, যা এখনো উপলব্ধ নয়
+	Refine Mode	রিফাইন মোড
+	Remember Settings	সেটিংস মনে রাখুন
+	Remember this choice for future images	ভবিষ্যতের ছবির জন্য এই পছন্দটি মনে রাখুন
+	Remember to turn off the printer's own colour management in Print Settings…	প্রিন্ট সেটিংসে প্রিন্টারের নিজস্ব কালার ম্যানেজমেন্ট বন্ধ করতে মনে রাখুন…
+	Remove after each stroke	প্রতিটি স্ট্রোকের পরে সরান
+	Remove from Favorites	প্রিয় থেকে সরান
+	Replace	প্রতিস্থাপন করুন
+	Replace Contours…	কনট্যুর প্রতিস্থাপন…
+	Replace Image…	ইমেজ প্রতিস্থাপন…
+	Replace deletes everything in “{group}” first, including presets you edited or moved there. This can't be undone.	প্রতিস্থাপন করলে প্রথমে “{group}”-এর সবকিছু মুছে যাবে, যেসব প্রিসেট আপনি সম্পাদনা করেছেন বা সেখানে সরিয়েছেন সেগুলোসহ। এটি বাতিল করা যাবে না।
+	Replace it with this document, or cancel and use File › Save As to keep both.	এটিকে এই ডকুমেন্ট দিয়ে প্রতিস্থাপন করুন, অথবা বাতিল করুন এবং দুটোই রাখতে ফাইল › নাম দিয়ে সংরক্ষণ ব্যবহার করুন।
+	Reset All Locked Settings	সব লক করা সেটিংস রিসেট করুন
+	Resize Windows to Fit	ফিট অনুযায়ী উইন্ডো রিসাইজ করুন
+	Response curve	রেসপন্স কার্ভ
+	Retry GPU tries the graphics processor again now.	GPU পুনরায় চেষ্টা করলে এখন গ্রাফিক্স প্রসেসর আবার চেষ্টা করা হবে।
+	Right-to-left paragraph direction	ডান থেকে বামে প্যারাগ্রাফের দিক
+	Rotation Adaptation	ঘূর্ণন অ্যাডাপ্টেশন
+	Sampling Area	স্যাম্পলিং এলাকা
+	Sampling Area Options	স্যাম্পলিং এলাকার বিকল্প
+	Sampling Area Overlay	স্যাম্পলিং এলাকা ওভারলে
+	Sampling Brush Tool	স্যাম্পলিং ব্রাশ টুল
+	Sans Serif	স্যান্স সেরিফ
+	Save Actions…	অ্যাকশনস সংরক্ষণ…
+	Save Contours…	কনট্যুর সংরক্ষণ…
+	Save Image Pyramid	ইমেজ পিরামিড সংরক্ষণ করুন
+	Save Settings…	সেটিংস সংরক্ষণ…
+	Save Set…	সেট সংরক্ষণ…
+	Save Transparency	স্বচ্ছতা সংরক্ষণ করুন
+	Save a list of these shortcuts as a web page	এই শর্টকাটগুলোর তালিকা ওয়েব পেজ হিসেবে সংরক্ষণ করুন
+	Save the changes to this set	এই সেটে পরিবর্তনগুলো সংরক্ষণ করুন
+	Save these settings as a Camera Raw .xmp file	এই সেটিংস Camera Raw .xmp ফাইল হিসেবে সংরক্ষণ করুন
+	Save these shortcuts as a .kys file	এই শর্টকাটগুলো .kys ফাইল হিসেবে সংরক্ষণ করুন
+	Save these shortcuts as a new set	এই শর্টকাটগুলো নতুন সেট হিসেবে সংরক্ষণ করুন
+	Script	স্ক্রিপ্ট
+	Select an action first	প্রথমে একটি অ্যাকশন নির্বাচন করুন
+	Select and Mask was closed: another layer was selected	নির্বাচন ও মাস্ক বন্ধ করা হয়েছে: অন্য একটি লেয়ার নির্বাচন করা হয়েছিল
+	Select and Mask was closed: its document is no longer the active one	নির্বাচন ও মাস্ক বন্ধ করা হয়েছে: এর ডকুমেন্ট আর সক্রিয়টি নয়
+	Sent to {printer}	{printer}-এ পাঠানো হয়েছে
+	Serif	সেরিফ
+	Set 	সেট 
+	Set 1	সেট 1
+	Set 10	সেট 10
+	Set 11	সেট 11
+	Set 12	সেট 12
+	Set 13	সেট 13
+	Set 14	সেট 14
+	Set 15	সেট 15
+	Set 16	সেট 16
+	Set 17	সেট 17
+	Set 18	সেট 18
+	Set 19	সেট 19
+	Set 2	সেট 2
+	Set 20	সেট 20
+	Set 3	সেট 3
+	Set 4	সেট 4
+	Set 5	সেট 5
+	Set 6	সেট 6
+	Set 7	সেট 7
+	Set 8	সেট 8
+	Set 9	সেট 9
+	Set GPU Memory in Preferences › Performance to what your graphics card can hold, at most 3/8 of its memory. Automatic follows Memory Usage, within a quarter of this computer's memory and 3/8 of the card's, and doesn't count the document against a card whose memory is known. The status bar shows GPU Memory Full while they don't fit.	পছন্দসমূহ › পারফরম্যান্সে GPU মেমরি আপনার গ্রাফিক্স কার্ড যতটা ধারণ করতে পারে ততটায় সেট করুন, কার্ডের মেমরির সর্বোচ্চ 3/8। স্বয়ংক্রিয় মেমরি ব্যবহার অনুসরণ করে, এই কম্পিউটারের মেমরির এক-চতুর্থাংশ এবং কার্ডের মেমরির 3/8-এর মধ্যে, এবং যেসব কার্ডের মেমরি জানা আছে সেগুলোর ক্ষেত্রে ডকুমেন্টকে হিসাবের বাইরে রাখে। যতক্ষণ সেগুলো ফিট হয় না, স্ট্যাটাস বারে GPU Memory Full দেখায়।
+	Set as default	ডিফল্ট হিসেবে সেট করুন
+	Set deleted.	সেট মুছে ফেলা হয়েছে।
+	Set horizontal skew	হরাইজন্টাল স্কিউ সেট করুন
+	Set saved.	সেট সংরক্ষণ করা হয়েছে।
+	Set the tone sliders from the image	ছবি থেকে টোন স্লাইডার সেট করুন
+	Set vertical skew	ভার্টিকাল স্কিউ সেট করুন
+	Set:	সেট:
+	Sets the source for the history brush	হিস্ট্রি ব্রাশের উৎস সেট করে
+	Settings from {name}	{name} থেকে সেটিংস
+	Settings from {name}; {count} not supported: {names}	{name} থেকে সেটিংস; {count}টি সমর্থিত নয়: {names}
+	Shapes can't use patterns yet	শেপগুলো এখনো প্যাটার্ন ব্যবহার করতে পারে না
+	Shift Edge	এজ শিফট
+	Show All Fonts	সব ফন্ট দেখান
+	Show Channels in Color	রঙে চ্যানেল দেখান
+	Show Favorite Fonts	প্রিয় ফন্ট দেখান
+	Show Font Classes	ফন্ট ক্লাস দেখান
+	Show Layers	লেয়ারসমূহ দেখান
+	Show Sampling Area	স্যাম্পলিং এলাকা দেখান
+	Show Similar Fonts	অনুরূপ ফন্ট দেখান
+	Show Statistics	পরিসংখ্যান দেখান
+	Show Styles	স্টাইলস দেখান
+	Show Variable Fonts	ভ্যারিয়েবল ফন্ট দেখান
+	Show dialog during playback	প্লেব্যাকের সময় ডায়ালগ দেখান
+	Show layer mask badges	লেয়ার মাস্ক ব্যাজ দেখান
+	Show the layer's effects and Smart Filters  ({key}-click: all layers)	লেয়ারের ইফেক্টস ও স্মার্ট ফিল্টারস দেখান  ({key}-ক্লিক: সব লেয়ার)
+	Slab Serif	স্ল্যাব সেরিফ
+	Smart Radius	স্মার্ট রেডিয়াস
+	Solidity:	সলিডিটি:
+	Some layers, pixels or masks could not be read. Do you want to continue opening it?	কিছু লেয়ার, পিক্সেল বা মাস্ক পড়া যায়নি। এটি খোলা চালিয়ে যাবেন কি?
+	Sort By Name	নাম অনুযায়ী সাজান
+	Source Files	সোর্স ফাইলসমূহ
+	Source:	উৎস:
+	Source: {name}	উৎস: {name}
+	Specify Channels:	চ্যানেল নির্দিষ্ট করুন:
+	Split Channels	চ্যানেল বিভক্ত করুন
+	Start	শুরু
+	Start Recording	রেকর্ডিং শুরু করুন
+	Step by Step	ধাপে ধাপে
+	Stop Color	স্টপ রঙ
+	Stop Recording	রেকর্ডিং থামান
+	Strokes to remove: {n} (Enter applies, Esc cancels)	সরানোর স্ট্রোক: {n} (Enter প্রয়োগ করে, Esc বাতিল করে)
+	Stylistic Sets	স্টাইলিস্টিক সেটস
+	Stylized dabs from a history state	হিস্ট্রি অবস্থা থেকে স্টাইলাইজড ড্যাবস
+	Subtract Mask from Selection	সিলেকশন থেকে মাস্ক বিয়োগ করুন
+	Summarize…	সারসংক্ষেপ…
+	Tabular	ট্যাবুলার
+	Tabular Lining	ট্যাবুলার লাইনিং
+	Tabular Oldstyle	ট্যাবুলার ওল্ডস্টাইল
+	Take the shortcut from the other command and select it	অন্য কমান্ড থেকে শর্টকাটটি নিন এবং সেটি নির্বাচন করুন
+	The GPU compositor is still being prepared	GPU কম্পোজিটর এখনও প্রস্তুত করা হচ্ছে
+	The History Brush source was deleted: set a new source in the History panel	হিস্ট্রি ব্রাশের উৎস মুছে ফেলা হয়েছে: হিস্ট্রি প্যানেলে নতুন উৎস সেট করুন
+	The active layer has no pixels here — turn on Sample All Layers or select a layer with pixels	সক্রিয় লেয়ারে এখানে কোনো পিক্সেল নেই — সব লেয়ার থেকে নমুনা চালু করুন অথবা পিক্সেল আছে এমন লেয়ার নির্বাচন করুন
+	The document or Smart Filter changed. Reopen its dialog.	ডকুমেন্ট বা স্মার্ট ফিল্টার পরিবর্তিত হয়েছে। এর ডায়ালগ আবার খুলুন।
+	The document “{name}” does not have an embedded {mode} profile.	“{name}” ডকুমেন্টে এমবেড করা {mode} প্রোফাইল নেই।
+	The document “{name}” has an embedded color profile that does not match the current {mode} working space.	“{name}” ডকুমেন্টে একটি এমবেড করা কালার প্রোফাইল আছে যা বর্তমান {mode} ওয়ার্কিং স্পেসের সাথে মেলে না।
+	The document “{name}” may be damaged.	“{name}” ডকুমেন্টটি ক্ষতিগ্রস্ত হতে পারে।
+	The frame is locked	ফ্রেমটি লক করা আছে
+	The frame is unavailable	ফ্রেমটি অনুপলব্ধ
+	The name in the save dialog was “{name}”.	সংরক্ষণ ডায়ালগে নাম ছিল “{name}”.
+	The path was discarded	পাথটি বাতিল করা হয়েছে
+	The path was kept as the Work Path	পাথটি ওয়ার্ক পাথ হিসেবে রাখা হয়েছে
+	The transform couldn't be applied.	ট্রান্সফর্ম প্রয়োগ করা যায়নি।
+	There are too many sets: delete one first.	অনেক বেশি সেট আছে: আগে একটি মুছুন।
+	There is no color table to save.	সংরক্ষণ করার মতো কোনো কালার টেবিল নেই।
+	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	এই ডকুমেন্টের লেয়ারগুলোর প্রয়োজন {needed} কিন্তু ধারণ করতে পারে {budget}: পুরো ডকুমেন্টের পুনঃঅঙ্কনে CPU ব্যবহৃত হয়
+	This document's layers: {needed} of {budget} for layers	এই ডকুমেন্টের লেয়ারসমূহ: লেয়ারের জন্য {budget}-এর মধ্যে {needed}
+	Thumbnail Contents	থাম্বনেইল কনটেন্ট
+	Thumbnail Size	থাম্বনেইল সাইজ
+	Tight Curl	টাইট কার্ল
+	Tight Long	টাইট লং
+	Tight Medium	টাইট মিডিয়াম
+	Tight Short	টাইট শর্ট
+	Too many clone strokes: apply Vanishing Point first	অনেক বেশি ক্লোন স্ট্রোক: আগে ভ্যানিশিং পয়েন্ট প্রয়োগ করুন
+	Transparent (default)	স্বচ্ছ (ডিফল্ট)
+	TrueType font	TrueType ফন্ট
+	Turn the prompt back on with Ask On Mismatch in Edit › Color Settings.	Edit › Color Settings-এ Ask On Mismatch দিয়ে প্রম্পট আবার চালু করুন।
+	Uncached Refresh	আনক্যাশড রিফ্রেশ
+	Undo Changes	পরিবর্তন আনডু করুন
+	Use	ব্যবহার করুন
+	Use Default Masks on Fill Layers	ফিল লেয়ারে ডিফল্ট মাস্ক ব্যবহার করুন
+	Use the embedded profile ({profile})	এমবেড করা প্রোফাইল ব্যবহার করুন ({profile})
+	Use these settings for new arrows	নতুন অ্যারোর জন্য এই সেটিংস ব্যবহার করুন
+	Use:	ব্যবহার করুন:
+	Variable font	ভেরিয়েবল ফন্ট
+	Very High	অত্যন্ত উচ্চ
+	View Mode	ভিউ মোড
+	Wait for the current job to finish.	বর্তমান কাজ শেষ হওয়া পর্যন্ত অপেক্ষা করুন।
+	Website	ওয়েবসাইট
+	With GPU Memory set to Automatic, this also limits the GPU layer budget. That budget is capped at one quarter of installed RAM and, when known, three eighths of the graphics card's memory, with a 512 MB minimum. Raising this limit beyond those caps does not increase the GPU budget.	GPU Memory Automatic-এ সেট থাকলে, এটি GPU লেয়ার বাজেটকেও সীমিত করে। সেই বাজেট ইনস্টল করা RAM-এর এক-চতুর্থাংশে সীমাবদ্ধ এবং, জানা থাকলে, গ্রাফিক্স কার্ডের মেমরির আট ভাগের তিন ভাগে সীমাবদ্ধ, সর্বনিম্ন 512 MB সহ। এই সীমা সেই ক্যাপের বাইরে বাড়ালেও GPU বাজেট বাড়ে না।
+	Working: {working}	ওয়ার্কিং: {working}
+	ZIP	ZIP
+	seconds	সেকেন্ড
+	set in Print Settings…	Print Settings-এ সেট করা…
+	set name	সেটের নাম
+	{file} is not a style library (.asl)	{file} একটি স্টাইল লাইব্রেরি (.asl) নয়
+	{message} into “{group}”	{message} “{group}”-এর মধ্যে
+	{name} (Photoshop)	{name} (Photoshop)
+	{name} can't keep everything in this document	{name} এই ডকুমেন্টে সবকিছু রাখতে পারে না
+	{name} was changed by another app after it was opened or saved here.	এখানে খোলা বা সংরক্ষণের পর {name} অন্য একটি অ্যাপ দ্বারা পরিবর্তিত হয়েছে।
+	{ok} written to {dir}	{dir}-এ {ok} লেখা হয়েছে
+	{path}: the path is not valid Unicode; save under another name.	{path}: পাথটি বৈধ Unicode নয়; অন্য নামে সংরক্ষণ করুন।
+	{set} (modified)	{set} (পরিবর্তিত)
+	{set} from {file} replaced the one from {earlier}	{file} থেকে {set} {earlier} থেকে আসাটিকে প্রতিস্থাপন করেছে
+	{shortcut} is reserved by the system and can't be assigned.	{shortcut} সিস্টেম দ্বারা সংরক্ষিত এবং নির্ধারণ করা যাবে না।
+	“{name}” already exists. Replace it?	“{name}” ইতিমধ্যে আছে। প্রতিস্থাপন করবেন?
+@plural	Exported {n} style to {file}|Exported {n} styles to {file}	{file}-এ {n}টি স্টাইল এক্সপোর্ট করা হয়েছে|{file}-এ {n}টি স্টাইল এক্সপোর্ট করা হয়েছে
+@plural	Exported {n} swatch to {file}|Exported {n} swatches to {file}	{file}-এ {n}টি সোয়াচ এক্সপোর্ট করা হয়েছে|{file}-এ {n}টি সোয়াচ এক্সপোর্ট করা হয়েছে
+@plural	Imported {n} brush from {group}|Imported {n} brushes from {group}	{group} থেকে {n}টি ব্রাশ ইমপোর্ট করা হয়েছে|{group} থেকে {n}টি ব্রাশ ইমপোর্ট করা হয়েছে
+@plural	Imported {n} swatch from {file}|Imported {n} swatches from {file}	{file} থেকে {n}টি সোয়াচ ইমপোর্ট করা হয়েছে|{file} থেকে {n}টি সোয়াচ ইমপোর্ট করা হয়েছে
+@plural	Loaded {n} action from {file}|Loaded {n} actions from {file}	{file} থেকে {n}টি অ্যাকশন লোড করা হয়েছে|{file} থেকে {n}টি অ্যাকশন লোড করা হয়েছে
+@plural	Played {n} step|Played {n} steps	{n}টি ধাপ চালানো হয়েছে|{n}টি ধাপ চালানো হয়েছে
+@plural	Saved for Web: {n} file|Saved for Web: {n} files	ওয়েবের জন্য সংরক্ষিত: {n}টি ফাইল|ওয়েবের জন্য সংরক্ষিত: {n}টি ফাইল
+@plural	Saved {n} action to {file}|Saved {n} actions to {file}	{file}-এ {n}টি অ্যাকশন সংরক্ষণ করা হয়েছে|{file}-এ {n}টি অ্যাকশন সংরক্ষণ করা হয়েছে
+@plural	Saved {n} color to {file}|Saved {n} colors to {file}	{file}-এ {n}টি রঙ সংরক্ষণ করা হয়েছে|{file}-এ {n}টি রঙ সংরক্ষণ করা হয়েছে
+@plural	The brush group “{group}” already has {n} brush of yours.|The brush group “{group}” already has {n} brushes of yours.	“{group}” ব্রাশ গ্রুপে ইতিমধ্যে আপনার {n}টি ব্রাশ আছে।|“{group}” ব্রাশ গ্রুপে ইতিমধ্যে আপনার {n}টি ব্রাশ আছে।
+@plural	The gradient group “{group}” already exists ({n} gradient).|The gradient group “{group}” already exists ({n} gradients).	“{group}” গ্রেডিয়েন্ট গ্রুপটি ইতিমধ্যে আছে ({n}টি গ্রেডিয়েন্ট)।|“{group}” গ্রেডিয়েন্ট গ্রুপটি ইতিমধ্যে আছে ({n}টি গ্রেডিয়েন্ট)।
+@plural	Updated {n} linked smart object changed on disk|Updated {n} linked smart objects changed on disk	ডিস্কে পরিবর্তিত {n}টি লিংক করা স্মার্ট অবজেক্ট আপডেট করা হয়েছে|ডিস্কে পরিবর্তিত {n}টি লিংক করা স্মার্ট অবজেক্ট আপডেট করা হয়েছে
+@plural	{n} action file loaded|{n} action files loaded	{n}টি অ্যাকশন ফাইল লোড করা হয়েছে|{n}টি অ্যাকশন ফাইল লোড করা হয়েছে
+@plural	{n} action|{n} actions	{n}টি অ্যাকশন|{n}টি অ্যাকশন
+@plural	{n} file could not be loaded: {errors}|{n} files could not be loaded: {errors}	{n}টি ফাইল লোড করা যায়নি: {errors}|{n}টি ফাইল লোড করা যায়নি: {errors}
+@plural	{n} layer recorded by this comp was deleted. Update the comp, or clear the warning.|{n} layers recorded by this comp were deleted. Update the comp, or clear the warning.	{n}টি লেয়ার যা এই কম্প দ্বারা রেকর্ড করা হয়েছিল তা মুছে ফেলা হয়েছে। কম্পটি আপডেট করুন, অথবা সতর্কতা মুছুন।|{n}টি লেয়ার যা এই কম্প দ্বারা রেকর্ড করা হয়েছিল তা মুছে ফেলা হয়েছে। কম্পটি আপডেট করুন, অথবা সতর্কতা মুছুন।
+@plural	{n} plane|{n} planes	{n}টি প্লেন|{n}টি প্লেন
+@plural	{n} preset|{n} presets	{n}টি প্রিসেট|{n}টি প্রিসেট
+@plural	{n} sample point removed|{n} sample points removed	{n}টি নমুনা পয়েন্ট সরানো হয়েছে|{n}টি নমুনা পয়েন্ট সরানো হয়েছে
+@plural	{n} slice|{n} slices	{n}টি স্লাইস|{n}টি স্লাইস
+@plural	{n} step has no PhotoCraft equivalent yet|{n} steps have no PhotoCraft equivalent yet	{n}টি ধাপের এখনও কোনো PhotoCraft সমতুল্য নেই|{n}টি ধাপের এখনও কোনো PhotoCraft সমতুল্য নেই
+@plural	{n} step with no Photoshop equivalent left out|{n} steps with no Photoshop equivalent left out	Photoshop সমতুল্য নেই এমন {n}টি ধাপ বাদ দেওয়া হয়েছে|Photoshop সমতুল্য নেই এমন {n}টি ধাপ বাদ দেওয়া হয়েছে
+@plural	{n} step|{n} steps	{n}টি ধাপ|{n}টি ধাপ
+@plural	{warning} (+{n} more brush preset warning)|{warning} (+{n} more brush preset warnings)	{warning} (+{n}টি আরও ব্রাশ প্রিসেট সতর্কতা)|{warning} (+{n}টি আরও ব্রাশ প্রিসেট সতর্কতা)
+@plural	{what} with {n} warning|{what} with {n} warnings	{n}টি সতর্কতাসহ {what}|{n}টি সতর্কতাসহ {what}
+@plural	{what}: {n} Image Assets output failed|{what}: {n} Image Assets outputs failed	{what}: {n}টি Image Assets আউটপুট ব্যর্থ হয়েছে|{what}: {n}টি Image Assets আউটপুট ব্যর্থ হয়েছে

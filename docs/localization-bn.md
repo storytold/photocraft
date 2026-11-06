@@ -16,7 +16,7 @@ has no Bengali font fallback and shows the browser's fallback.
 
 - `crates/ui-egui/src/i18n/bn.tsv` contains the translations, independent of
   the lookup implementation. Its UTF-8 columns are `context<TAB>source<TAB>translation`.
-- `crates/ui-egui/src/i18n/mod.rs` registers `bn` with the Bengali plural rule
+- `crates/ui-egui/src/i18n.rs` registers `bn` with the Bengali plural rule
   (CLDR: 0 and 1 take the singular, like French) and `complete_menus: true`.
   Shared tests enforce coverage of every menu string, `tl!` literal, blend
   mode, brush section and generated preference label.
