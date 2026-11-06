@@ -11,12 +11,17 @@
 //!   Saves encode on a worker (PhotoCraft's background save job), so a large document never
 //!   holds up the main thread; the bytes go to the shell on the next frame, and the shells keep
 //!   the app running in the background until they have them ([`CraftApp::busy`]).
+//! - **Crash recovery:** leaving the screen starts writing recovery copies of unsaved documents
+//!   on PhotoCraft's autosave workers and returns at once (the OS ends apps whose main thread
+//!   hangs); the app stays [busy](CraftApp::busy) until they are on disk, so the shells keep it
+//!   running meanwhile. A copy is removed once its document is saved or closed.
 //! - **Native controls** map to PhotoCraft's own commands, exactly as its menu items run them.
 //! - **Panels** see the active document and its layers, top first.
 //! - **Power:** while the device is hot or saving power, live previews run on a reduced copy
 //!   (Preferences › Performance › Low Resolution Previews), whatever the preference says.
 
 use std::cell::{Cell, RefCell};
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -48,6 +53,69 @@ pub struct PhotoCraftMobile {
     encoded: Encoded,
     /// The user's Low Resolution Previews while the power state overrides it.
     previews: PreviewOverride,
+    /// Recovery copies started as the app left the screen.
+    suspended: Shared<Suspended>,
+}
+
+/// State the services and the frame share, one at a time: see [`update`].
+type Shared<T> = Rc<Cell<T>>;
+
+/// Recovery copies written as the app leaves the screen. They write on PhotoCraft's autosave
+/// workers; the app stays busy until each is on disk, and each is removed once its document has
+/// no unsaved changes left (saved, or closed).
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Suspended {
+    /// Document id → the revision being written, until a write of it (or a later one) ends.
+    writing: HashMap<u64, u64>,
+    /// Documents with a copy from a suspend.
+    kept: HashSet<u64>,
+}
+
+impl Suspended {
+    /// A copy of document `id` at `revision` is queued.
+    fn queued(&mut self, id: u64, revision: u64) {
+        self.writing.insert(id, revision);
+        self.kept.insert(id);
+    }
+
+    /// Autosave writes ended, as (document id, revision, outcome). The writer skips to the newest
+    /// queued revision, so a later revision ends the wait for an earlier one.
+    fn ended(&mut self, done: &[(u64, u64, Result<(), String>)]) {
+        for (id, revision, outcome) in done {
+            if self.writing.get(id).is_some_and(|waiting| waiting <= revision) {
+                self.writing.remove(id);
+                match outcome {
+                    Ok(()) => log::info!("photocraft-mobile: recovery copy of document {id} (revision {revision}) written"),
+                    Err(e) => log::warn!("photocraft-mobile: no recovery copy of document {id}: {e}"),
+                }
+            }
+        }
+    }
+
+    /// Whether a copy is still being written.
+    fn writing(&self) -> bool {
+        !self.writing.is_empty()
+    }
+
+    /// Forget the documents `unsaved` no longer says have unsaved changes (saved, or closed),
+    /// and return them: their copies are stale.
+    fn stale(&mut self, unsaved: impl Fn(u64) -> bool) -> Vec<u64> {
+        let stale: Vec<u64> = self.kept.iter().copied().filter(|&id| !unsaved(id)).collect();
+        for id in &stale {
+            self.kept.remove(id);
+            self.writing.remove(id);
+        }
+        stale
+    }
+}
+
+/// Run `f` on the value in `cell`. The services and the frame never call each other while one
+/// runs, so nothing else sees the value taken meanwhile.
+fn update<T: Default, R>(cell: &Cell<T>, f: impl FnOnce(&mut T) -> R) -> R {
+    let mut value = cell.take();
+    let result = f(&mut value);
+    cell.set(value);
+    result
 }
 
 /// See [`PhotoCraftMobile::encoded`]: (path, file) pairs. A mutex, not a channel, so the app can
@@ -98,8 +166,10 @@ struct PendingWrite {
 impl CraftApp for PhotoCraftMobile {
     fn create(ctx: &egui::Context, wgpu: Option<eframe::egui_wgpu::RenderState>, platform: Platform) -> Self {
         let (inbox, located, issued, encoded) = (Inbox::default(), Located::default(), Issued::default(), Encoded::default());
-        let app = create_app(ctx, wgpu, services(&platform, inbox.clone(), located.clone(), issued.clone(), encoded.clone()));
-        Self { app, inbox, located, issued, writing: Vec::new(), encoded, previews: PreviewOverride::default() }
+        let suspended = Shared::<Suspended>::default();
+        let services = services(&platform, inbox.clone(), located.clone(), issued.clone(), encoded.clone(), suspended.clone());
+        let app = create_app(ctx, wgpu, services);
+        Self { app, inbox, located, issued, writing: Vec::new(), encoded, previews: PreviewOverride::default(), suspended }
     }
 
     fn wgpu_configuration() -> eframe::egui_wgpu::WgpuConfiguration {
@@ -173,37 +243,33 @@ impl CraftApp for PhotoCraftMobile {
         }
     }
 
-    /// Write crash-recovery copies of every unsaved document and wait for them: the OS may end
-    /// the app without another word once it's off screen.
+    /// Start writing crash-recovery copies of every unsaved document, and return: they write on
+    /// the autosave workers, and the app is busy until they are on disk (the OS may end it
+    /// without another word once it's off screen, and ends it if this thread hangs).
     fn suspend(&mut self, _ctx: &egui::Context) {
-        let unsaved: Vec<(Arc<Document>, u64, Option<String>)> = self
-            .app
-            .session
-            .documents()
-            .iter()
-            .filter(|st| st.revision != st.saved_revision)
-            .map(|st| (st.doc.clone(), st.revision, st.path.clone()))
-            .collect();
-        if let Some(autosave) = self.app.services.autosave.as_mut() {
-            for (doc, revision, path) in &unsaved {
-                if let Err(e) = autosave(doc, *revision, path.as_deref()) {
-                    log::warn!("photocraft-mobile: no recovery copy of {}: {e}", doc.name);
+        let unsaved: Vec<(Arc<Document>, u64, Option<String>)> =
+            self.app.session.documents().iter().filter(|st| st.is_dirty()).map(|st| (st.doc.clone(), st.revision, st.path.clone())).collect();
+        let Some(autosave) = self.app.services.autosave.as_mut() else { return };
+        let mut queued = 0;
+        for (doc, revision, path) in &unsaved {
+            match autosave(doc, *revision, path.as_deref()) {
+                Ok(()) => {
+                    update(&self.suspended, |s| s.queued(doc.id.0, *revision));
+                    queued += 1;
                 }
+                Err(e) => log::warn!("photocraft-mobile: no recovery copy of {}: {e}", doc.name),
             }
         }
-        if let Some(flush) = self.app.services.flush_autosaves.as_mut() {
-            let written = flush();
-            log::info!(
-                "photocraft-mobile: suspended; {} of {} unsaved documents written for recovery",
-                written.iter().filter(|w| w.2.is_ok()).count(),
-                unsaved.len()
-            );
-        }
+        log::info!("photocraft-mobile: suspended; writing {queued} of {} unsaved documents for recovery", unsaved.len());
     }
 
-    /// A save or another job the user started is running, or its bytes haven't reached the shell.
+    /// A save or another job the user started is running, its bytes haven't reached the shell, or
+    /// a recovery copy started on leaving the screen isn't on disk yet.
     fn busy(&self) -> bool {
-        self.app.session.has_jobs() || !self.app.jobs.saves.is_empty() || !self.encoded.lock().unwrap_or_else(PoisonError::into_inner).is_empty()
+        self.app.session.has_jobs()
+            || !self.app.jobs.saves.is_empty()
+            || !self.encoded.lock().unwrap_or_else(PoisonError::into_inner).is_empty()
+            || update(&self.suspended, |s| s.writing())
     }
 
     /// Hot or saving power: live previews (adjustments, filters) run on a reduced copy.
@@ -279,6 +345,7 @@ impl eframe::App for PhotoCraftMobile {
             }
         }
         self.app.logic(ctx, frame);
+        self.forget_stale_recovery();
         // After the jobs moved on: a save whose job just ended has handed its bytes over.
         self.hand_over_saves();
         self.note_writes();
@@ -300,6 +367,18 @@ fn show_file_names(status: &mut String) {
 }
 
 impl PhotoCraftMobile {
+    /// Remove the recovery copies written on leaving the screen whose documents have no unsaved
+    /// changes left: saved since, or closed. (PhotoCraft removes its own timed autosaves.)
+    fn forget_stale_recovery(&mut self) {
+        let session = &self.app.session;
+        let stale = update(&self.suspended, |s| s.stale(|id| session.documents().iter().any(|st| st.doc.id.0 == id && st.is_dirty())));
+        if let Some(discard) = self.app.services.discard_autosave.as_mut() {
+            for id in stale {
+                discard(id);
+            }
+        }
+    }
+
     /// Send the saves workers encoded to the shell, as an inline save writes them: in place, or
     /// to the exporter.
     fn hand_over_saves(&mut self) {
@@ -370,7 +449,7 @@ fn create_app(ctx: &egui::Context, wgpu: Option<eframe::egui_wgpu::RenderState>,
 
 /// The in-process codecs (as on the web), and files through the shell's picker, its writes in
 /// place and its exporter.
-fn services(platform: &Platform, inbox: Inbox, located: Located, issued: Issued, encoded: Encoded) -> Services {
+fn services(platform: &Platform, inbox: Inbox, located: Located, issued: Issued, encoded: Encoded, suspended: Shared<Suspended>) -> Services {
     let picker = platform.clone();
     let exporter = platform.clone();
     let clipboard = platform.clone();
@@ -438,7 +517,7 @@ fn services(platform: &Platform, inbox: Inbox, located: Located, issued: Issued,
         })),
         ..Default::default()
     };
-    recovery(&mut services, platform.data_dir().map(|dir| dir.join("Recovery")));
+    recovery(&mut services, platform.data_dir().map(|dir| dir.join("Recovery")), suspended);
     services
 }
 
@@ -470,15 +549,20 @@ fn with_store<R>(store: &SharedRecovery, f: impl FnOnce(&mut RecoveryStore) -> R
 }
 
 /// Crash recovery in the app's data folder, as the desktop app keeps it: background .pcraft
-/// autosaves, offered again after the OS ended the app.
-fn recovery(services: &mut Services, dir: Option<PathBuf>) {
+/// autosaves, offered again after the OS ended the app. The writes PhotoCraft polls for each
+/// frame also end the wait for the copies `suspended` started.
+fn recovery(services: &mut Services, dir: Option<PathBuf>, suspended: Shared<Suspended>) {
     let recover_dir = dir.clone();
     let store: SharedRecovery = Rc::new(RefCell::new(dir.map(RecoveryStore::new)));
     let (s1, s2, s3, s4) = (store.clone(), store.clone(), store.clone(), store.clone());
     services.autosave = Some(Box::new(move |doc: &Arc<Document>, revision: u64, path: Option<&str>| {
         with_store(&s1, |s| s.autosave_checked(doc, revision, path.map(str::to_string)))?
     }));
-    services.autosave_results = Some(Box::new(move || with_store(&s2, |s| s.take_completed()).unwrap_or_default()));
+    services.autosave_results = Some(Box::new(move || {
+        let done = with_store(&s2, |s| s.take_completed()).unwrap_or_default();
+        update(&suspended, |s| s.ended(&done));
+        done
+    }));
     services.flush_autosaves = Some(Box::new(move || with_store(&s3, RecoveryStore::flush).unwrap_or_default()));
     services.discard_autosave = Some(Box::new(move |id: u64| {
         let _ = with_store(&s4, |s| s.discard(id));
@@ -600,6 +684,29 @@ mod tests {
         assert_eq!(previews.apply(fine, true), None, "and nothing to give back");
         assert_eq!(previews.apply(hot, false), Some(true));
         assert_eq!(previews.apply(fine, false), None, "turned off meanwhile (in Preferences): nothing to give back");
+    }
+
+    /// Leaving the screen keeps the app busy until each copy is written (or a later revision of
+    /// it is), whatever the outcome; a copy is stale once its document has no unsaved changes.
+    #[test]
+    fn suspend_copies_keep_the_app_busy_until_written_and_go_once_saved() {
+        let mut s = Suspended::default();
+        assert!(!s.writing());
+        s.queued(1, 5);
+        s.queued(2, 3);
+        s.ended(&[(1, 4, Ok(())), (3, 9, Ok(()))]);
+        assert!(s.writing(), "an older revision's write doesn't end the wait");
+        s.ended(&[(1, 6, Ok(()))]);
+        assert_eq!(s.writing.keys().copied().collect::<Vec<_>>(), [2], "a later revision does");
+        s.ended(&[(2, 3, Err("disk full".into()))]);
+        assert!(!s.writing(), "a failed write ends the wait too");
+        assert_eq!(s.stale(|_| true), Vec::<u64>::new(), "both still unsaved");
+        assert_eq!(s.stale(|id| id == 2), [1], "document 1 was saved or closed");
+        assert_eq!(s.stale(|_| false), [2]);
+        assert_eq!(s, Suspended::default());
+        s.queued(4, 1);
+        assert_eq!(s.stale(|_| false), [4]);
+        assert!(!s.writing(), "closed while writing: nothing left to wait for");
     }
 
     #[test]
