@@ -1082,6 +1082,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
                             continue;
                         }
                         let params = crate::actions_cmds::playback_params(scratch, id, params)?;
+                        let params = crate::layer_multi_cmds::playback_retarget(scratch, id, params);
                         let r = scratch.execute(id, params)?;
                         // A nested batch, droplet or played action that hit the nesting or shared playback
                         // limit fails this input too, instead of saving it unprocessed.
@@ -1239,6 +1240,7 @@ fn batch_open_documents(
                     continue;
                 }
                 let params = crate::actions_cmds::playback_params(s, command, params)?;
+                let params = crate::layer_multi_cmds::playback_retarget(s, command, params);
                 let response = s.execute(command, params)?;
                 if let Some(error) = crate::actions_cmds::nested_failure(command, &response) {
                     return Err(FileFailure { error: EngineError::Other(error), result: Some(response) });
