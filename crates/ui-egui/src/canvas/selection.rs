@@ -96,7 +96,7 @@ pub(super) fn finish_selection_drag(app: &mut PhotocraftApp, floating: bool, sta
         (false, true) if app.session.is_enabled("select.deselect") => app.run("select.deselect", json!({})),
         (false, true) => return,
         (true, false) => app.run("select.float", json!({"dx": dx, "dy": dy})),
-        (false, false) => app.run("select.transformSelection", json!({"dx": dx, "dy": dy})),
+        (false, false) => app.run("select.transformSelection", json!({"dx": dx, "dy": dy, "stepName": "Move Selection"})),
     };
     if let Err(e) = r {
         app.ui.status = e;
