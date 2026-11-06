@@ -4,7 +4,13 @@
 //! unavailable. The caller handles failures between separate file operations. Never replace
 //! an exclusive operation with an existence check followed by an overwriting rename.
 
-use std::{io, path::Path};
+use std::{
+    ffi::OsStr,
+    fs::{File, OpenOptions},
+    io::{self, Write},
+    path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 /// Publication failure distinguishes an unchanged destination from a published file whose cleanup or directory flush failed.
 #[derive(Debug)]
@@ -21,31 +27,18 @@ impl std::fmt::Display for PublishNewError {
 impl std::error::Error for PublishNewError {}
 
 /// Publish a complete, flushed file only if its destination is still absent.
-/// Temporary files are created exclusively beside the destination; only our own temp is removed.
+/// Uses an exclusive staging file beside the destination. The caller must use a stable parent
+/// directory where untrusted writers cannot replace the staging entry.
+/// On Windows, non-Unicode paths require a filesystem that supports hard links.
 pub fn write_noreplace(path: &Path, bytes: &[u8]) -> Result<(), PublishNewError> {
     use crate::atomic::{AtomicFs, RealFs};
-    use std::{
-        io::Write,
-        sync::atomic::{AtomicU64, Ordering},
-    };
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let before = |error| PublishNewError { published: false, error };
     let dir = path.parent().ok_or_else(|| before(io::Error::new(io::ErrorKind::InvalidInput, "missing publication directory")))?;
     // A bare filename still needs a real directory path for the final flush.
     let dir = if dir.as_os_str().is_empty() { Path::new(".") } else { dir };
-    let mut owned = None;
-    for _ in 0..32 {
-        let temp = dir.join(format!(".pc-new-{}-{}.tmp", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
-        match std::fs::OpenOptions::new().write(true).create_new(true).open(&temp) {
-            Ok(file) => {
-                owned = Some((temp, file));
-                break;
-            }
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(before(error)),
-        }
-    }
-    let (temp, mut file) = owned.ok_or_else(|| before(io::Error::new(io::ErrorKind::AlreadyExists, "no unused publication temp name")))?;
+    let name = path.file_name().ok_or_else(|| before(io::Error::new(io::ErrorKind::InvalidInput, "missing publication filename")))?;
+    let (temp, mut file) = create_stage(dir, name, &NEXT).map_err(before)?;
     let written = file.write_all(bytes).and_then(|_| crate::atomic::sync_file(&file));
     drop(file);
     let published = written
@@ -57,14 +50,35 @@ pub fn write_noreplace(path: &Path, bytes: &[u8]) -> Result<(), PublishNewError>
     finish_publication(published, || RealFs.sync_dir(dir))
 }
 
-/// Rename within one directory, refusing an existing destination atomically.
+/// Create a staging entry whose name cannot be the destination's native filename.
+fn create_stage(dir: &Path, destination: &OsStr, next: &AtomicU64) -> io::Result<(PathBuf, File)> {
+    // Ignore a Windows stream suffix. A different last ASCII digit stays distinct across
+    // case folding and trailing-dot/space normalization. An uppercase 8.3 staging name
+    // already satisfies DOS short-name rules, so it needs no second name.
+    let name = destination.as_encoded_bytes().split(|&byte| byte == b':').next().unwrap_or_default();
+    let extension = if name.iter().rev().find(|byte| byte.is_ascii_digit()) == Some(&b'1') { "TM2" } else { "TM1" };
+    for _ in 0..32 {
+        let sequence = next.fetch_add(1, Ordering::Relaxed);
+        let nonce = (u64::from(std::process::id()) << 8).wrapping_add(sequence) & 0xff_ffff;
+        let temp = dir.join(format!("PC{nonce:06X}.{extension}"));
+        match OpenOptions::new().write(true).create_new(true).open(&temp) {
+            Ok(file) => return Ok((temp, file)),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(io::Error::new(io::ErrorKind::AlreadyExists, "no unused publication temp name"))
+}
+
+/// Rename within one stable directory, refusing an existing destination atomically.
+/// The caller must ensure untrusted writers cannot replace the source entry.
 /// Unsupported rename primitives use a hard link followed by unlink, never an overwriting
 /// rename or cross-volume copy. If unlink fails, both names retain the same bytes and this
 /// returns an error, so the caller reports retirement as incomplete.
 /// The caller must flush the directory before reporting crash-durable migration completion;
 /// the existing `atomic::AtomicFs::sync_dir` provides that separately fallible operation.
 pub fn rename_noreplace(from: &Path, to: &Path) -> io::Result<()> {
-    if from == to || from.parent() != to.parent() {
+    if from == to || from.parent().is_none() || from.parent() != to.parent() {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "no-replace retirement requires distinct names in one directory"));
     }
     move_noreplace(from, to, platform, |from, to| std::fs::hard_link(from, to), |path| std::fs::remove_file(path)).map_err(|failure| failure.error)
@@ -113,10 +127,16 @@ fn finish_publication(result: Result<(), PublishNewError>, sync: impl FnOnce() -
     }
 }
 
+/// Prefer the native exclusive rename when the Windows wrapper can represent both paths.
 #[cfg(windows)]
 fn platform(from: &Path, to: &Path) -> io::Result<()> {
-    let from = from.to_str().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "legacy file path is not valid Unicode"))?;
-    let to = to.to_str().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "backup path is not valid Unicode"))?;
+    let (Some(from), Some(to)) = (from.to_str(), to.to_str()) else {
+        // The existing hard-link fallback takes native paths, including unpaired surrogates.
+        return Err(io::ErrorKind::Unsupported.into());
+    };
+    if from.contains('\0') || to.contains('\0') {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "file path contains a NUL character"));
+    }
     // MoveFile (unlike MoveFileEx with REPLACE_EXISTING) fails if the destination exists.
     // The same-directory restriction above also excludes its cross-volume copy behavior.
     winsafe::MoveFile(from, to).map_err(|error| io::Error::from_raw_os_error(error.raw() as i32))
@@ -136,10 +156,6 @@ fn platform(_from: &Path, _to: &Path) -> io::Result<()> {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
-    use std::{
-        path::PathBuf,
-        sync::atomic::{AtomicU64, Ordering},
-    };
 
     struct Dir(PathBuf);
     impl Dir {
@@ -202,6 +218,53 @@ mod tests {
         let path = dir.0.join("actions.atn");
         write_noreplace(&path, b"complete ATN").unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), b"complete ATN");
+        assert_eq!(std::fs::read_dir(&dir.0).unwrap().count(), 1);
+    }
+
+    /// Even the first generated candidate cannot create the destination before publication.
+    #[test]
+    fn staging_does_not_create_a_destination_alias() {
+        let dir = Dir::new().unwrap();
+        let (first, file) = create_stage(&dir.0, OsStr::new("actions.atn"), &AtomicU64::new(0)).unwrap();
+        drop(file);
+        std::fs::remove_file(&first).unwrap();
+        let name = first.file_name().unwrap().to_str().unwrap();
+        for alias in [name.to_owned(), name.to_ascii_lowercase(), format!("{name}. "), format!("{name}::$DATA")] {
+            let (temp, file) = create_stage(&dir.0, OsStr::new(&alias), &AtomicU64::new(0)).unwrap();
+            assert_eq!(temp.extension(), Some(OsStr::new("TM2")), "{alias}");
+            assert!(!first.try_exists().unwrap());
+            drop(file);
+            std::fs::remove_file(temp).unwrap();
+        }
+    }
+
+    /// The native-path fallback preserves both byte content and no-clobber behavior.
+    #[cfg(windows)]
+    #[test]
+    fn publication_and_retirement_accept_native_windows_paths() {
+        use std::{ffi::OsString, os::windows::ffi::OsStringExt};
+
+        let dir = Dir::new().unwrap();
+        let path = |suffix: &str| {
+            let mut name = OsString::from_wide(&[0xd800]);
+            name.push(suffix);
+            assert!(name.to_str().is_none());
+            dir.0.join(name)
+        };
+        let from = path("-legacy");
+        let to = path("-retained");
+        write_noreplace(&from, b"original").unwrap();
+        let error = write_noreplace(&from, b"other").unwrap_err();
+        assert!(!error.published);
+        assert_eq!(error.error.kind(), io::ErrorKind::AlreadyExists);
+        std::fs::write(&to, b"existing").unwrap();
+        assert_eq!(rename_noreplace(&from, &to).unwrap_err().kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(std::fs::read(&from).unwrap(), b"original");
+        assert_eq!(std::fs::read(&to).unwrap(), b"existing");
+        std::fs::remove_file(&to).unwrap();
+        rename_noreplace(&from, &to).unwrap();
+        assert!(!from.try_exists().unwrap());
+        assert_eq!(std::fs::read(&to).unwrap(), b"original");
         assert_eq!(std::fs::read_dir(&dir.0).unwrap().count(), 1);
     }
 
