@@ -547,6 +547,10 @@ fn stamp_dab_on_rect(p: &mut StampParams<'_>, dab: &Dab, rect: (i32, i32, i32, i
             if !sample_bilinear(SrcView { data: p.src, w: p.src_w, h: p.src_h, origin: p.src_origin, ch: p.ch, alpha: p.alpha }, sx, sy, &mut sampled) {
                 continue;
             }
+            // Stamping a fully transparent sample leaves the pixel as it is.
+            if p.alpha.is_some_and(|a| sampled.get(a).is_some_and(|&v| v == 0.0)) {
+                continue;
+            }
             let Some(li) = pixel_index(lx, ly, tw, th, p.ch) else { continue };
             let Some(dst) = local.get_mut(li..li + p.ch) else { continue };
             if p.lock_transparent && p.alpha.is_some_and(|a| dst.get(a).is_some_and(|&v| v <= 0.0)) {

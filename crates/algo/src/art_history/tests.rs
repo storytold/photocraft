@@ -96,6 +96,22 @@ fn tolerance_skips_a_dab_whose_source_is_fully_transparent() {
 }
 
 #[test]
+fn zero_tolerance_does_not_write_fully_transparent_samples() {
+    for ch in [2, 4, 5] {
+        for opaque in [1.0, 0.0] {
+            let (w, h) = (4, 4);
+            let src = vec![0.0; w * h * ch];
+            let before = fill(w, h, ch, |_, _, c| if c + 1 == ch { opaque } else { 0.5 });
+            let mut dest = before.clone();
+            let dab = Dab { x: 2.0, y: 2.0, theta: 0.0, radius: 2.0, pressure: 1.0 };
+            let written = stamp_run(w, h, ch, &src, &mut dest, &dab, 0);
+            assert_eq!(written, 0, "channels={ch}, opaque={opaque}");
+            assert_eq!(dest, before);
+        }
+    }
+}
+
+#[test]
 fn rotated_dabs_preserve_color_at_transparent_edges() {
     for ch in [2, 4, 5] {
         for hidden in [0.0, 1.0] {
