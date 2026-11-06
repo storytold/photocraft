@@ -5,6 +5,9 @@ use super::{Color32, PhotocraftApp, Pos2, Rect, Sense, Stroke, TextureOptions, c
 /// Tabs + canvas for the active document, or the start screen; then drops layers dragged onto
 /// another document (`layer_transfer`).
 pub fn document_area(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    if crate::jobs_ui::batch_preview(app, ui) {
+        return;
+    }
     crate::distort_ui::drop_foreign(app);
     documents(app, ui);
     crate::layer_transfer::finish(app, ui.ctx());
@@ -58,7 +61,7 @@ fn documents(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let n = app.session.documents().len();
     // Files opening in the background (#210) have tabs before they have documents.
     let opening = !app.jobs.opens.is_empty();
-    if !opening && app.ui.chrome.shows_home(n, app.session.prefs().general.auto_show_home_screen) {
+    if app.home_screen_up() {
         start_screen(app, ui);
         return;
     }
