@@ -573,6 +573,8 @@ fn gradient_map_stop_dragged_off_the_strip_is_removed_in_one_step() {
         h.run_steps(1);
         h.hover_at(back);
         h.run_steps(1);
+        let preview = h.state().live_adjust.as_ref().map(|(_, v)| v["stops"].as_array().map(Vec::len));
+        assert_eq!(preview, Some(Some(4)), "{depth}: the preview has the stop back while it's held");
         h.drop_at(back);
         h.run_steps(3);
         assert_eq!(map_stops(&layer(&h).1), vec![(0.0, [0, 0, 0]), (0.4, [255, 0, 0]), (0.5, [0, 255, 0]), (1.0, [255, 255, 255])], "{depth}: kept");
