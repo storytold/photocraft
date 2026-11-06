@@ -411,10 +411,10 @@ pub(crate) fn cancel_stale(app: &mut PhotocraftApp) {
 
 pub(crate) fn cancel_missing_release(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let Some(drag) = &app.ui.type_path_drag else { return };
-    if let Some(owner) = drag.viewport {
-        if ctx.viewport_id() != owner {
-            return;
-        }
+    if let Some(owner) = drag.viewport
+        && ctx.viewport_id() != owner
+    {
+        return;
     }
     if ctx.input(|input| !input.focused || !input.pointer.primary_down()) {
         cancel(app);
@@ -442,23 +442,22 @@ pub(crate) fn pointer_with_context(
     viewport: Option<egui::ViewportId>,
 ) -> bool {
     use crate::canvas::ToolEvent;
-    if matches!(event, ToolEvent::Down { .. }) {
-        if let Some(drag) = &app.ui.type_path_drag {
-            if drag.viewport.is_none() || drag.viewport == viewport {
-                cancel(app);
-            } else {
-                return false;
-            }
+    if matches!(event, ToolEvent::Down { .. })
+        && let Some(drag) = &app.ui.type_path_drag
+    {
+        if drag.viewport.is_none() || drag.viewport == viewport {
+            cancel(app);
+        } else {
+            return false;
         }
     }
     if let Some(mut drag) = app.ui.type_path_drag.take() {
-        if let Some(owner) = drag.viewport {
-            if let Some(vp) = viewport {
-                if vp != owner {
-                    app.ui.type_path_drag = Some(drag);
-                    return false;
-                }
-            }
+        if let Some(owner) = drag.viewport
+            && let Some(vp) = viewport
+            && vp != owner
+        {
+            app.ui.type_path_drag = Some(drag);
+            return false;
         }
         if !drag.valid(app) {
             return true;
