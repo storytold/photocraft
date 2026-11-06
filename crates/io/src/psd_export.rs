@@ -417,6 +417,68 @@ impl Ex<'_> {
         }
     }
 
+    /// The adjustment part of [`Self::content_blocks`] for layer `l` holding `a`: keeps a preserved
+    /// block of `raw` that still decodes to `a` (or a Gradient Map retargeted in place, or the
+    /// verbatim block of an unknown type); otherwise drops the stale blocks from `raw` and pushes
+    /// the regenerated ones onto `regenerated`, warning about anything PSD cannot hold as it is.
+    fn adjustment_blocks(&mut self, l: &Layer, a: &photocraft_doc::Adjustment, raw: &mut Vec<([u8; 4], Vec<u8>)>, regenerated: &mut Vec<([u8; 4], Vec<u8>)>) {
+        let channels = match self.fmt.mode {
+            ColorMode::Rgb => adjust_map::Channels::Rgb,
+            ColorMode::Grayscale => adjust_map::Channels::Gray,
+            ColorMode::Cmyk => adjust_map::Channels::Cmyk,
+            ColorMode::Lab => adjust_map::Channels::Lab,
+            _ => adjust_map::Channels::Other,
+        };
+        let cged = raw.iter().find(|(k, _)| k == b"CgEd").map(|(_, d)| d.clone());
+        let keep = raw.iter().any(|(k, d)| {
+            // A previously saved PhotoCraft v2 Photo Filter block may be 18 bytes.
+            // It parses here, but Photoshop requires four-byte alignment, so repair
+            // that legacy record on re-save rather than preserving the broken bytes.
+            let legacy_phfl = k == b"phfl" && d.starts_with(&[0, 2]) && d.len() % 4 != 0;
+            // Older PhotoCraft builds wrote `grdm` 2 bytes short of four-byte alignment,
+            // which makes Photoshop refuse the file (#8070): regenerate it too.
+            let legacy_grdm = k == b"grdm" && adjust_map::is_unpadded_photocraft_gradient_map(d);
+            !legacy_phfl && !legacy_grdm && adjust_map::ADJUSTMENT_KEYS.contains(&k) && adjust_map::parse(k, d, cged.as_deref(), channels) == *a
+        });
+        // A Gradient Map whose stops are unchanged keeps the file's own block (stops in
+        // the document's CMYK/Lab/Gray space, smoothness, method) with Reverse and Dither
+        // updated in place.
+        let keep = keep
+            || (matches!(a, photocraft_doc::Adjustment::GradientMap { .. })
+                && raw
+                    .iter_mut()
+                    .any(|(k, d)| k == b"grdm" && !adjust_map::is_unpadded_photocraft_gradient_map(d) && adjust_map::retarget_gradient_map(d, a, channels)));
+        // An adjustment type no mapper knows (#6575) is its block: kept verbatim, and
+        // never written a second time beside a stale copy.
+        let own = match a {
+            photocraft_doc::Adjustment::Unsupported { psd_key, .. } => Some(psd_key.as_bytes()),
+            _ => None,
+        };
+        let keep =
+            keep || matches!(a, photocraft_doc::Adjustment::Unsupported { raw: r, .. } if raw.iter().any(|(k, d)| own == Some(&k[..]) && d[..] == r[..]));
+        if !keep {
+            raw.retain(|(k, _)| !adjust_map::ADJUSTMENT_KEYS.contains(&k) && k != b"CgEd" && own != Some(&k[..]));
+            // A Channel Mixer whose outputs don't match the document's mode has no
+            // PSD encoding that reads back as it is: save its nearest equivalent.
+            let reshaped = adjust_map::mixer_for(a, channels);
+            if reshaped.is_some() {
+                let shape = if channels == adjust_map::Channels::Cmyk { "cyan, magenta, yellow and black" } else { "red, green and blue" };
+                self.warnings.push(format!("layer \"{}\": Channel Mixer saved with {shape} outputs, the document mode's own", l.name));
+            }
+            let w = adjust_map::write(reshaped.as_ref().unwrap_or(a));
+            if w.is_empty() {
+                self.warnings.push(format!("layer \"{}\": {} adjustment is not yet written to PSD", l.name, a.label()));
+            }
+            // Photoshop's `clrL` descriptor has no interpolation setting, so the
+            // reopened layer renders trilinear.
+            if matches!(a, photocraft_doc::Adjustment::ColorLookup { tetrahedral: true, .. }) {
+                self.warnings
+                    .push(format!("layer \"{}\": Color Lookup tetrahedral interpolation is saved as trilinear (PSD has no interpolation setting)", l.name));
+            }
+            regenerated.extend(w);
+        }
+    }
+
     /// Content blocks for `l`: preserved raw blocks (with `psd_raw`
     /// overrides) plus regenerated adjustment/fill blocks. A preserved
     /// adjustment or fill block is reused verbatim while it still decodes to
@@ -454,65 +516,7 @@ impl Ex<'_> {
             }
         };
         match &l.content {
-            LayerContent::Adjustment(a) => {
-                let channels = match self.fmt.mode {
-                    ColorMode::Rgb => adjust_map::Channels::Rgb,
-                    ColorMode::Grayscale => adjust_map::Channels::Gray,
-                    ColorMode::Cmyk => adjust_map::Channels::Cmyk,
-                    ColorMode::Lab => adjust_map::Channels::Lab,
-                    _ => adjust_map::Channels::Other,
-                };
-                let cged = raw.iter().find(|(k, _)| k == b"CgEd").map(|(_, d)| d.clone());
-                let keep = raw.iter().any(|(k, d)| {
-                    // A previously saved PhotoCraft v2 Photo Filter block may be 18 bytes.
-                    // It parses here, but Photoshop requires four-byte alignment, so repair
-                    // that legacy record on re-save rather than preserving the broken bytes.
-                    let legacy_phfl = k == b"phfl" && d.starts_with(&[0, 2]) && d.len() % 4 != 0;
-                    // Older PhotoCraft builds wrote `grdm` 2 bytes short of four-byte alignment,
-                    // which makes Photoshop refuse the file (#8070): regenerate it too.
-                    let legacy_grdm = k == b"grdm" && adjust_map::is_unpadded_photocraft_gradient_map(d);
-                    !legacy_phfl && !legacy_grdm && adjust_map::ADJUSTMENT_KEYS.contains(&k) && adjust_map::parse(k, d, cged.as_deref(), channels) == *a
-                });
-                // A Gradient Map whose stops are unchanged keeps the file's own block (stops in
-                // the document's CMYK/Lab/Gray space, smoothness, method) with Reverse and Dither
-                // updated in place.
-                let keep = keep
-                    || (matches!(a, photocraft_doc::Adjustment::GradientMap { .. })
-                        && raw.iter_mut().any(|(k, d)| {
-                            k == b"grdm" && !adjust_map::is_unpadded_photocraft_gradient_map(d) && adjust_map::retarget_gradient_map(d, a, channels)
-                        }));
-                // An adjustment type no mapper knows (#6575) is its block: kept verbatim, and
-                // never written a second time beside a stale copy.
-                let own = match a {
-                    photocraft_doc::Adjustment::Unsupported { psd_key, .. } => Some(psd_key.as_bytes()),
-                    _ => None,
-                };
-                let keep = keep
-                    || matches!(a, photocraft_doc::Adjustment::Unsupported { raw: r, .. } if raw.iter().any(|(k, d)| own == Some(&k[..]) && d[..] == r[..]));
-                if !keep {
-                    raw.retain(|(k, _)| !adjust_map::ADJUSTMENT_KEYS.contains(&k) && k != b"CgEd" && own != Some(&k[..]));
-                    // A Channel Mixer whose outputs don't match the document's mode has no
-                    // PSD encoding that reads back as it is: save its nearest equivalent.
-                    let reshaped = adjust_map::mixer_for(a, channels);
-                    if reshaped.is_some() {
-                        let shape = if channels == adjust_map::Channels::Cmyk { "cyan, magenta, yellow and black" } else { "red, green and blue" };
-                        self.warnings.push(format!("layer \"{}\": Channel Mixer saved with {shape} outputs, the document mode's own", l.name));
-                    }
-                    let w = adjust_map::write(reshaped.as_ref().unwrap_or(a));
-                    if w.is_empty() {
-                        self.warnings.push(format!("layer \"{}\": {} adjustment is not yet written to PSD", l.name, a.label()));
-                    }
-                    // Photoshop's `clrL` descriptor has no interpolation setting, so the
-                    // reopened layer renders trilinear.
-                    if matches!(a, photocraft_doc::Adjustment::ColorLookup { tetrahedral: true, .. }) {
-                        self.warnings.push(format!(
-                            "layer \"{}\": Color Lookup tetrahedral interpolation is saved as trilinear (PSD has no interpolation setting)",
-                            l.name
-                        ));
-                    }
-                    regenerated.extend(w);
-                }
-            }
+            LayerContent::Adjustment(a) => self.adjustment_blocks(l, a, &mut raw, &mut regenerated),
             LayerContent::Fill(f) => fill_rule(&mut raw, &mut regenerated, f),
             LayerContent::Shape(sh) => {
                 if let Some(f) = &sh.fill {
