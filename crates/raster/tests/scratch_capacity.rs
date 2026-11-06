@@ -15,6 +15,8 @@ fn scratch_capacity_follows_spilling_the_size_limit_and_pauses() {
 
     spill::configure(Some(&dir), 1 << 20).unwrap();
     assert!(spill::enabled() && !spill::paused());
+    // A test machine's temp volume always reports its space.
+    assert!(!spill::free_space_unmeasured());
     // The free-space reserve applies; an unknown volume without a size limit promises nothing.
     if let Some(room) = spill::scratch_capacity() {
         assert!(room < u64::MAX / 2, "the reserve and margin are applied: {room}");
@@ -36,5 +38,6 @@ fn scratch_capacity_follows_spilling_the_size_limit_and_pauses() {
     spill::set_size_cap(None);
     spill::configure(None, 0).unwrap();
     assert_eq!(spill::scratch_capacity(), None);
+    assert!(!spill::free_space_unmeasured());
     let _ = std::fs::remove_dir_all(&root);
 }

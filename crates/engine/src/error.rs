@@ -23,7 +23,7 @@ pub enum EngineError {
     PsdApprovalRequired { name: String, required: u64, soft_limit: u64, hard_limit: u64, available_ram: Option<u64> },
     /// The file's estimated memory cannot be admitted within the hard ceiling, which no approval
     /// can raise. The requirement may equal the ceiling when the estimate saturated.
-    #[error("cannot open “{name}”: its estimated memory requirement of {required_text} ({required} bytes) cannot be admitted within the {limit_text} ({limit} byte) hard limit{scope}", required_text = bytes_text(.required), limit_text = bytes_text(.limit), scope = build_limit_scope(build_memory_limit()))]
+    #[error("cannot open “{name}”: its estimated memory requirement of {required_text} ({required} bytes) cannot be admitted within the {limit_text} ({limit} byte) hard limit{scope}{scratch}", required_text = bytes_text(.required), limit_text = bytes_text(.limit), scope = build_limit_scope(build_memory_limit()), scratch = unmeasured_scratch_hint(scratch_room_unmeasured()))]
     PsdHardBudget { name: String, required: u64, limit: u64 },
     /// The file behind an opened handle is not the one whose memory estimate was approved.
     /// The document is discarded and is not opened.
@@ -73,6 +73,21 @@ fn build_limit_scope(limit: BuildMemoryLimit) -> String {
             " on this machine. This 32-bit build of PhotoCraft can use at most 2 GiB of memory for a file, or less if the computer has less memory free. The 64-bit build may be able to open it: download it from {releases}"
         ),
         BuildMemoryLimit::FixedWeb => format!(" of the browser version of PhotoCraft. To open it, download the desktop app from {releases}"),
+    }
+}
+
+/// Exactly when spilling is on but gives an import no room: see `spill::scratch_capacity`.
+fn scratch_room_unmeasured() -> bool {
+    let stats = photocraft_raster::spill::stats();
+    stats.free_space_unmeasured && stats.size_cap_bytes.is_none()
+}
+
+/// The hint that follows the scope when the scratch disk's free space can't be measured.
+fn unmeasured_scratch_hint(unmeasured: bool) -> &'static str {
+    if unmeasured {
+        ". The scratch disk's free space can't be measured, so it adds no room for this file: set a Scratch Size Limit in Preferences > Scratch Disks, or use a local disk"
+    } else {
+        ""
     }
 }
 
@@ -142,6 +157,13 @@ mod tests {
             build_limit_scope(BuildMemoryLimit::FixedWeb),
             format!(" of the browser version of PhotoCraft. To open it, download the desktop app from {releases}")
         );
+    }
+
+    #[test]
+    fn unmeasured_scratch_hint_only_when_unmeasured() {
+        assert_eq!(unmeasured_scratch_hint(false), "");
+        let hint = unmeasured_scratch_hint(true);
+        assert!(hint.starts_with(". ") && hint.contains("Scratch Size Limit") && hint.contains("local disk"), "{hint}");
     }
 
     #[test]
