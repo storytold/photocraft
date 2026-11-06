@@ -514,7 +514,15 @@ fn free_space(dir: &Path) -> Option<(u64, u64)> {
         .iter()
         .filter(|d| dir.starts_with(d.mount_point()))
         .max_by_key(|d| d.mount_point().as_os_str().len())
-        .map(|d| (d.available_space(), d.total_space()))
+        .and_then(|d| free_space_of(d.available_space(), d.total_space()))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn free_space_of(available: u64, total: u64) -> Option<(u64, u64)> {
+    // sysinfo reports 0 for tmpfs on some kernels even when the volume has room.
+    // Treat that as unknown free space: it disables only the free-space check,
+    // not spilling itself, so a misreported tmpfs does not pause the scratch disk.
+    (available > 0 && total > 0).then_some((available, total))
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -806,5 +814,18 @@ mod tests {
         assert!(check_integrity().is_ok());
         assert!(check_since(dropped_generation).is_err(), "dropping the failed tile must also reject its placeholder result");
         let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn tmpfs_reports_zero_available_is_treated_as_unknown() {
+        assert_eq!(free_space_of(0, 6 << 30), None);
+        assert_eq!(free_space_of(6 << 30, 0), None);
+        assert_eq!(free_space_of(0, 0), None);
+        assert_eq!(free_space_of(6 << 30, 6 << 30), Some((6 << 30, 6 << 30)));
+        assert_eq!(
+            free_space_of(6_800_000_000, 6_800_000_000),
+            Some((6_800_000_000, 6_800_000_000))
+        );
     }
 }
