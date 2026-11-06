@@ -6,6 +6,15 @@
 //!
 //! Text and vector page objects can be imported as editable layers (`ImportOptions::pdf_text` /
 //! `pdf_vectors`); their page-space points are mapped to document pixels through the effective DPI.
+//!
+//! # Known limits
+//!
+//! - pdfium-render 0.9.5 exposes a path's fill/stroke *presence* but not its paint colour, stroke
+//!   width or dash pattern, so imported paths are painted black (1 pt centre stroke when stroked).
+//! - A text object exposes no fill colour: the colour is sampled from the rendered page's glyph
+//!   ink, and the font is matched by family/name rather than embedded or loaded from the PDF.
+//! - PDFium is provisioned by `packaging/windows/package.ps1` (pinned release, verified DLL); the
+//!   shared craft-common-actions release workflow does not stage it.
 
 use crate::{ImportOptions, ImportResult, IoError};
 use photocraft_color::{ColorMode, PixelFormat, SampleType};
@@ -404,8 +413,10 @@ fn object_layers(
                 }
                 let Ok(bounds) = text.bounds() else { continue };
                 let (x_px, y_px) = frame.to_doc(bounds.left().value, bounds.top().value);
-                // The text layer's size is in points; the transform is in document pixels. The
-                // text object does not expose its fill colour; sample the glyph ink from the page.
+                // The text layer's size is in points; the transform is in document pixels.
+                // The text object does not expose its fill colour; sample the glyph ink from the
+                // page. The font is matched by family/name, not embedded: a document font that is
+                // not installed renders with the closest family the text engine has.
                 let color = frame.text_color(bounds.left().value, bounds.top().value, bounds.right().value, bounds.bottom().value);
                 let size_pt = f64::from(text.scaled_font_size().value).max(1.0);
                 let font = text.font();
@@ -434,7 +445,8 @@ fn object_layers(
                 // PDFium reports the segments in object space; the object's matrix places them on
                 // the page. Without it, scaled or rotated paths land in the wrong place.
                 let matrix = path.matrix().unwrap_or(PdfMatrix::IDENTITY);
-                // The fill and stroke modes are exposed; the colours and dash pattern are not.
+                // The fill and stroke modes are exposed; the colours, stroke width and dash
+                // pattern are not, so both paints are black and a stroke is 1 pt wide.
                 let filled = !matches!(path.fill_mode(), Ok(PdfPathFillMode::None));
                 let stroked = path.is_stroked().unwrap_or(false);
                 if !filled && !stroked {
