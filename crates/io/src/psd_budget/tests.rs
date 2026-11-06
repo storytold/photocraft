@@ -284,27 +284,29 @@ fn zero_available_ram_refuses_admission() {
     });
 }
 
-/// #11544, end to end: the reported Windows failure was plenty of free RAM beside a commit
-/// headroom of 0, which zeroed the ceiling through the `min` chain and refused every open. That
-/// pairing contradicts the RAM reading, so the RAM figure decides: an ordinary file opens, and an
-/// estimate above its ceiling is still refused.
+/// #11544, end to end: the reported Windows failure was a page file with less than its 512 MiB
+/// reserve left, which saturated `C - 512 MiB` to 0 and made that the ceiling for every open. The
+/// reserve now takes at most half of the headroom, so an ordinary file opens and only an estimate
+/// above the honest ceiling is refused.
 #[test]
-fn a_zero_commit_reading_beside_positive_ram_opens_an_ordinary_file() {
+fn a_page_file_below_its_reserve_still_opens_an_ordinary_file() {
     if cfg!(any(target_arch = "wasm32", target_pointer_width = "32")) {
         return; // the web policy ignores a host snapshot; 32-bit caps are below these figures
     }
     let file = testgen::small(Version::Psd, Compression::Zip);
     let bytes = file.to_bytes().unwrap();
-    let gb = 1u64 << 30;
-    let snap = crate::memory::MemorySnapshot { available_ram: Some(12 * gb), swap_free: None, commit_headroom: Some(0) };
+    let mb = 1u64 << 20;
+    // 8 GiB free with 500 MiB of commit headroom: the ceiling is 250 MiB, not 0.
+    let snap = crate::memory::MemorySnapshot { available_ram: Some(8 << 30), swap_free: None, commit_headroom: Some(500 * mb) };
     crate::memory::with_mock_memory(snap, || {
         let opts = crate::ImportOptions::default();
         let res = crate::import_with_options("small.psd", &bytes, &opts);
-        assert!(res.is_ok(), "a failed commit reading must not make every open fail: {res:?}");
-        // 12 GiB free: S = 6 GiB, H = 9 GiB. Above H the refusal still fires, and it names the RAM
-        // ceiling rather than a 0 byte limit.
-        let large = crate::psd_budget::with_test_estimate_charge(10 * gb, || crate::import_with_options("large.psd", &bytes, &opts));
-        assert!(matches!(large, Err(IoError::PsdImportBudget { limit, .. }) if limit == 9 * gb), "a too-large estimate is still refused: {large:?}");
+        assert!(res.is_ok(), "a page file below its reserve must not make every open fail: {res:?}");
+        let large = crate::psd_budget::with_test_estimate_charge(260 * mb, || crate::import_with_options("large.psd", &bytes, &opts));
+        assert!(
+            matches!(large, Err(IoError::PsdImportBudget { limit, .. }) if limit == 250 * mb),
+            "an estimate above the honest ceiling is still refused: {large:?}"
+        );
     });
 }
 

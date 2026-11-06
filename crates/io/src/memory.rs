@@ -258,10 +258,9 @@ pub fn native_platform_cap() -> u64 {
 /// Policy:
 /// - Known RAM: H = min(floor(3*A/4), A - min(1 GiB, A/2), C - min(512 MiB, C/2) if known,
 ///   [`native_platform_cap`]); S = min(A/2, 8 GiB, H). A reserve takes at most half of the reading
-///   it is subtracted from, so a small reading yields a small ceiling rather than zero, and a
-///   commit headroom of exactly zero beside positive RAM is dropped as the contradiction it is
-///   (see [`commit_room`], #11544). H is therefore 0 only where a reading says so: A = 0, or C = 0
-///   with A unknown.
+///   it is subtracted from, so a small reading yields a small ceiling rather than the zero that
+///   used to refuse every open (#11544). H is 0 only where a reading reports no capacity at all:
+///   A = 0, or C = 0 (a host at its commit limit cannot commit more, however much RAM looks free).
 /// - Unknown native RAM: S = min(2 GiB, H) where H is [`native_platform_cap`], reduced by known
 ///   commit headroom; approval above S is possible up to H. 8 GiB is a warning threshold, not H.
 /// - Web (wasm32): S = 1 GiB; H = min([`WASM_MAX_PEAK_BUDGET`], caller limit).
@@ -302,27 +301,10 @@ fn resolve_budget_for(platform: Platform, snapshot: MemorySnapshot, caller_limit
 /// file: `available - 1 GiB` is 0 at 1 GiB free, and `commit - 512 MiB` is 0 for any page file with
 /// less than 512 MiB left, and a zero in that `min` chain decides the ceiling (#11544). A positive
 /// reading now always yields a positive ceiling, and a reading large enough to carry its full
-/// reserve is unaffected.
+/// reserve is unaffected. A reading that reports zero capacity still yields zero: that is a
+/// measurement, not an artefact, and admission fails closed on it (see [`resolve_budget`]).
 fn minus_reserve(reading: u64, reserve: u64) -> u64 {
     reading - reserve.min(reading / 2)
-}
-
-/// The commit term of the ceiling, or `None` when there is none to apply.
-///
-/// A commit headroom of exactly zero beside *positive* available RAM cannot describe a real
-/// machine: pages that are already free are committable, so that pairing is a failed commit query.
-/// `None` drops the term and lets the RAM reading decide, instead of an impossible zero becoming
-/// the ceiling of every import (#11544: a working Windows 11 host reported a "0 byte hard limit"
-/// and could not open any file). Every other commit figure is taken at face value, including one
-/// too small to carry its reserve, so a machine genuinely short of commit space is still refused.
-/// A zero *available RAM* reading is not a contradiction - it is the documented fail-closed figure
-/// (see [`resolve_budget`]) - and still yields a zero ceiling.
-fn commit_room(available: Option<u64>, commit: Option<u64>) -> Option<u64> {
-    match (available, commit) {
-        (Some(a), Some(0)) if a > 0 => None,
-        (_, Some(c)) => Some(minus_reserve(c, COMMIT_RESERVE)),
-        (_, None) => None,
-    }
 }
 
 /// The policy with `credit` bytes of scratch room added to S and H before the caller's limit.
@@ -339,15 +321,15 @@ fn resolve_budget_credited(platform: Platform, snapshot: MemorySnapshot, caller_
     let mut hard = match snapshot.available_ram {
         Some(a) => {
             let mut h = (((a as u128 * 3) / 4) as u64).min(minus_reserve(a, RAM_RESERVE));
-            if let Some(room) = commit_room(Some(a), snapshot.commit_headroom) {
-                h = h.min(room);
+            if let Some(c) = snapshot.commit_headroom {
+                h = h.min(minus_reserve(c, COMMIT_RESERVE));
             }
             h.min(platform_cap)
         }
         None => {
             let mut h = platform_cap;
-            if let Some(room) = commit_room(None, snapshot.commit_headroom) {
-                h = h.min(room);
+            if let Some(c) = snapshot.commit_headroom {
+                h = h.min(minus_reserve(c, COMMIT_RESERVE));
             }
             h
         }
@@ -786,49 +768,66 @@ mod tests {
     }
 
     /// #11544: on a Windows 11 machine *every* open failed with "cannot be admitted within the 0
-    /// byte hard limit on this machine" for a modest 255959712-byte (244 MiB) estimate. A commit
-    /// headroom of 0 beside positive free RAM is the impossible pairing behind it: free pages are
-    /// committable, so the ceiling now comes from the RAM reading. Injected readings throughout, so
-    /// no outcome depends on the test host's free memory.
+    /// byte hard limit on this machine" for a modest 255959712-byte (244 MiB) estimate. The zero was
+    /// manufactured by the arithmetic, not measured: `C - 512 MiB` saturates to 0 for any page file
+    /// with less than its reserve left and `A - 1 GiB` does the same at 1 GiB free, and a zero in
+    /// that `min` chain is the ceiling. A positive reading now always yields a positive ceiling.
     #[test]
-    fn a_zero_commit_reading_beside_positive_ram_does_not_zero_the_ceiling() {
+    fn a_positive_reading_never_yields_a_zero_ceiling() {
         if cfg!(any(target_arch = "wasm32", target_pointer_width = "32")) {
             return; // the web policy ignores host readings; 32-bit caps are below these estimates
         }
         let gb = 1u64 << 30;
         let mb = 1u64 << 20;
-        let reported_estimate = 255_959_712; // the figure in the report
-        for (available, hard, soft) in [(8 * gb, 6 * gb, 4 * gb), (32 * gb, 24 * gb, 8 * gb)] {
-            let snap = MemorySnapshot { available_ram: Some(available), swap_free: None, commit_headroom: Some(0) };
-            let b = resolve_budget_for(Platform::Native, snap, None);
-            assert_eq!((b.soft_limit, b.hard_limit), (soft, hard), "{available} free with a zero commit reading: {b:?}");
-            assert_eq!(b.decide(reported_estimate), BudgetDecision::Automatic, "the reported document must open: {b:?}");
-            assert!(evaluate_psd_admission_for(Platform::Native, reported_estimate, 0, 0, false, None, snap).is_ok(), "{available}: admitted on the real path");
-            assert_eq!(b.available_ram, Some(available), "the RAM reading is still reported as measured");
-            assert_eq!(b.decide(hard + 1), BudgetDecision::Refused, "{available}: the RAM ceiling still refuses: {b:?}");
-        }
-        // Any positive reading yields a positive ceiling, whatever the commit figure beside it.
-        for available in [mb, 100 * mb, gb, 8 * gb] {
-            for commit in [None, Some(0), Some(1), Some(mb), Some(400 * mb), Some(5 * gb)] {
-                let b = resolve_budget_for(Platform::Native, MemorySnapshot { available_ram: Some(available), swap_free: None, commit_headroom: commit }, None);
+        for available in [mb, 100 * mb, gb, 8 * gb, 32 * gb] {
+            for commit in [None, Some(1), Some(mb), Some(400 * mb), Some(500 * mb), Some(5 * gb)] {
+                let snap = MemorySnapshot { available_ram: Some(available), swap_free: None, commit_headroom: commit };
+                let b = resolve_budget_for(Platform::Native, snap, None);
                 assert!(b.hard_limit > 0, "A={available} C={commit:?} must not zero the ceiling: {b:?}");
+                assert!(b.soft_limit <= b.hard_limit, "{snap:?}: {b:?}");
             }
         }
-        // What a reading reports as zero capacity still fails closed: zero available RAM, and a
-        // zero commit figure with no RAM figure to contradict it.
+        // The case behind the report: a page file with less than its reserve left. Half of it is
+        // the honest ceiling, where the old chain produced 0 and refused every file.
+        let tight =
+            resolve_budget_for(Platform::Native, MemorySnapshot { available_ram: Some(8 * gb), swap_free: None, commit_headroom: Some(500 * mb) }, None);
+        assert_eq!((tight.soft_limit, tight.hard_limit), (250 * mb, 250 * mb), "500 MiB headroom minus half of it: {tight:?}");
+        assert_eq!(tight.decide(255_959_712), BudgetDecision::Automatic, "the reported 244 MiB document opens here: {tight:?}");
+        // Same on the RAM axis: 1 GiB free is a working ceiling, not zero.
+        let low_ram = resolve_budget_for(Platform::Native, MemorySnapshot { available_ram: Some(gb), swap_free: None, commit_headroom: None }, None);
+        assert_eq!((low_ram.soft_limit, low_ram.hard_limit), (512 * mb, 512 * mb));
+    }
+
+    /// A reading of no capacity is a measurement, not an artefact, and admission fails closed on
+    /// it. Zero available RAM is also the figure an unreadable container limit fails closed to. A
+    /// commit headroom of exactly zero is genuine and binding even beside plenty of free RAM:
+    /// Windows charges a commit before the pages touch physical memory, so a host at its commit
+    /// limit cannot allocate more however much RAM looks free. A query that failed is reported as
+    /// unknown (`None`), which is the conservative-unknown path instead of a zero ceiling.
+    #[test]
+    fn a_reading_of_zero_capacity_still_fails_closed() {
+        if cfg!(any(target_arch = "wasm32", target_pointer_width = "32")) {
+            return;
+        }
+        let gb = 1u64 << 30;
         for snap in [
             MemorySnapshot { available_ram: Some(0), swap_free: None, commit_headroom: None },
             MemorySnapshot { available_ram: Some(0), swap_free: Some(0), commit_headroom: Some(0) },
+            MemorySnapshot { available_ram: Some(8 * gb), swap_free: None, commit_headroom: Some(0) },
             MemorySnapshot { available_ram: None, swap_free: None, commit_headroom: Some(0) },
         ] {
             let b = resolve_budget_for(Platform::Native, snap, None);
             assert_eq!((b.soft_limit, b.hard_limit), (0, 0), "{snap:?}: a reading of no capacity is failed closed");
             assert_eq!(b.decide(1), BudgetDecision::Refused, "{snap:?}");
+            assert!(evaluate_psd_admission_for(Platform::Native, 1 << 20, 0, 0, true, None, snap).is_err(), "{snap:?}: no approval opens it");
         }
+        // The same host with the commit figure simply unknown keeps its RAM ceiling.
+        let unknown_commit = resolve_budget_for(Platform::Native, MemorySnapshot { available_ram: Some(8 * gb), swap_free: None, commit_headroom: None }, None);
+        assert_eq!((unknown_commit.soft_limit, unknown_commit.hard_limit), (4 * gb, 6 * gb));
     }
 
     /// Reviewer's case: genuine low headroom is the limit, not something to paper over. A machine
-    /// with 100 MiB free refuses a 200 MiB import whatever the commit figure says.
+    /// with 100 MiB free refuses a 200 MiB import at its own ceiling.
     #[test]
     fn a_genuine_low_headroom_reading_refuses_an_import_it_cannot_hold() {
         if cfg!(any(target_arch = "wasm32", target_pointer_width = "32")) {
@@ -836,7 +835,7 @@ mod tests {
         }
         let mb = 1u64 << 20;
         let ceiling = 50 * mb; // min(3*100/4, 100 - min(1 GiB, 50)) MiB
-        for commit in [None, Some(0), Some(1024 * mb), Some(20 * mb)] {
+        for commit in [None, Some(1024 * mb), Some(20 * mb)] {
             let snap = MemorySnapshot { available_ram: Some(100 * mb), swap_free: None, commit_headroom: commit };
             let b = resolve_budget_for(Platform::Native, snap, None);
             assert!(b.hard_limit <= ceiling, "{snap:?}: a small reading stays a small ceiling: {b:?}");

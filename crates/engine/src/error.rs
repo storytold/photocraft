@@ -22,13 +22,13 @@ pub enum EngineError {
     #[error("opening “{name}” requires explicit memory approval: {required} bytes required (soft limit {soft_limit}, hard limit {hard_limit})")]
     PsdApprovalRequired { name: String, required: u64, soft_limit: u64, hard_limit: u64, available_ram: Option<u64> },
     /// The file's estimated memory cannot be admitted within the hard ceiling, which no approval
-    /// can raise. The requirement may equal the ceiling when the estimate saturated. The ceiling is
-    /// measured from this machine's memory, so the message points at where the app's own limit is
-    /// set, and only a limit of 0 - the figure a memory reading reports when it finds no free memory
-    /// at all - says anything about the reading itself (#11544).
+    /// can raise. The requirement may equal the ceiling when the estimate saturated. The limit can
+    /// come from three places - the measured memory of this machine, the app's own limit, or the
+    /// allowance a job is working down - and the error does not carry which, so the message names
+    /// all three instead of diagnosing one (#11544: a "0 byte hard limit" on a working Windows 11
+    /// host read as "this machine has no memory" and left the user nowhere to look).
     #[error(
-        "cannot open “{name}”: its estimated memory requirement of {required} bytes exceeds the {limit} byte memory limit on this machine{advice}",
-        advice = memory_limit_advice(*limit)
+        "cannot open “{name}”: its estimated memory requirement of {required} bytes exceeds the {limit} byte memory limit for this import (this machine's free memory, the app's limit in Preferences › Performance, or the job's own allowance)"
     )]
     PsdHardBudget { name: String, required: u64, limit: u64 },
     /// The file behind an opened handle is not the one whose memory estimate was approved.
@@ -43,21 +43,6 @@ pub enum EngineError {
 }
 
 pub type Result<T> = std::result::Result<T, EngineError>;
-
-/// What the limit in [`EngineError::PsdHardBudget`] means for the user.
-///
-/// A positive limit is a figure worth acting on: an import above it does not fit the memory this
-/// machine has, and the app's own limit is a setting. Nothing is claimed about the reading. A limit
-/// of 0 is a different story - only a memory reading that found no free memory at all produces it -
-/// so the message says what the number is, instead of letting "0 bytes" read as "this machine has
-/// no memory" (#11544, where every open on a working Windows 11 host failed that way).
-fn memory_limit_advice(limit: u64) -> &'static str {
-    if limit == 0 {
-        " (the system memory reading found no free memory on this machine, so no import can be admitted; the app's own memory limit is set in Preferences › Performance)"
-    } else {
-        " (the limit is measured from this machine's available memory; the app's own memory limit is set in Preferences › Performance)"
-    }
-}
 
 impl EngineError {
     /// Whether an approval-required error also carries the unknown-capacity warning: capacity was
