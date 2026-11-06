@@ -2002,11 +2002,7 @@ pub(crate) fn browser_with_root_sequence(
                                 let item_depth = depth + it.group_path.len() + usize::from(!root_level_items);
                                 let is_sel = {
                                     let state = st_cell.borrow();
-                                    if state.browser_selection.contains_key(panel) {
-                                        node_id.as_ref().is_some_and(|id| state.browser_node_selected(panel, id))
-                                    } else {
-                                        state.is_selected_item(panel, &item_group.name, &it.group_path, &it.key)
-                                    }
+                                    node_id.as_ref().is_some_and(|id| state.browser_node_selected(panel, id))
                                 };
                                 if list {
                                     if display_mode == crate::pickers::picker_state::PickerDisplayMode::TextOnly {

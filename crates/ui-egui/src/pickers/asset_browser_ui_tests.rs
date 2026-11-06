@@ -1052,6 +1052,65 @@ fn actual_card_selection_and_double_activation_emit_only_the_enabled_generic_eve
 }
 
 #[test]
+fn domain_active_item_does_not_select_a_card_in_a_fresh_browser() {
+    let groups = vec![group("A", vec![item("a1", "A card 1", &[])])];
+    let mut initial_state = PresetUi::default();
+    initial_state.set_selected_item(PANEL, "A", &[], "a1");
+    let mut h = Harness::builder().with_size(vec2(520.0, 520.0)).build_ui_state(
+        move |ui, state: &mut (PresetUi, Vec<bool>)| {
+            if !ui.ctx().fonts(|fonts| fonts.definitions().families.contains_key(&egui::FontFamily::Name("semibold".into()))) {
+                return;
+            }
+            let (preset_ui, painted_selection) = state;
+            let mut paint_item = |_: &egui::Ui, _: Rect, _: usize, _: usize, state: ItemPaintState| {
+                if let ItemPaintState::Item { selected } = state {
+                    painted_selection.push(selected);
+                }
+            };
+            let mut adapter = BrowserAdapter {
+                panel: PANEL,
+                groups: &groups,
+                projection_keys: None,
+                options: BrowserOptions {
+                    canvas: Rect::NOTHING,
+                    flush: false,
+                    center_grid: false,
+                    all_groups_open: true,
+                    compact_context_menus: false,
+                    domain_hierarchy_actions: false,
+                    root_item_group: None,
+                },
+                capabilities: BrowserCapabilities {
+                    item_drag: false,
+                    item_drop: false,
+                    group_drag: false,
+                    selection: true,
+                    activation: true,
+                    canonical_hierarchy_drag: false,
+                },
+                item_context_menu: None,
+                group_context_menu: None,
+                nested_group_context_menu: None,
+                canonical_hierarchy_move: None,
+                rekey_hierarchy_after_move: None,
+                hierarchy_item_move: None,
+                paint_group: None,
+                paint_item: &mut paint_item,
+                paint_list_item: None,
+            };
+            let _ = browser(ui, preset_ui, &mut adapter, 300.0);
+        },
+        (initial_state, Vec::new()),
+    );
+    crate::PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
+    h.run_steps(3);
+
+    let painted_selection = &h.state().1;
+    assert!(!painted_selection.is_empty(), "the browser should paint its item cards");
+    assert!(!painted_selection.iter().any(|selected| *selected), "the active preset belongs to the domain, not the browser's transient selection");
+}
+
+#[test]
 fn browser_selection_clears_only_when_empty_browser_space_is_clicked() {
     let groups = nested_group_tree();
     let mut h = Harness::builder().with_size(vec2(520.0, 520.0)).build_ui_state(
