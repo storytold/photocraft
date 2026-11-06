@@ -263,6 +263,7 @@ pub use services::{
     LoadTextFn, OpenExternalSvgFn, OpenUrlFn, OsEventsFn, PhotoshopShortcutsFn, PlaceInbox, QuitFn, RecoverFn, Recoverable, RightButtonDownFn, SameFileFn,
     SaveFileFn, SaveTextFn, Services, SystemThemeFn, WindowFrameFn, WriteFn,
 };
+pub(crate) use services::{opaque_layer, saves_flat_in_place};
 pub use text::bidi_text;
 pub use text::cjk_fonts;
 pub use text::direction;

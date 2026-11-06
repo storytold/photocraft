@@ -1091,3 +1091,26 @@ fn arrow_document_is_backward_compatible() {
     let loaded = load_from_bytes(&bytes).unwrap();
     assert_eq!(loaded, doc);
 }
+
+/// `FileEncoding::source_images` is kept in `.pcraft` with the other encoder settings (#5733):
+/// the crash-recovery autosave is a `.pcraft` bundle reopened at the document's original path, so
+/// dropping the count would let Save write one frame over a multi-image file. A manifest written
+/// before the key existed loads with no count.
+#[test]
+fn file_encoding_source_images_roundtrips_and_defaults_when_absent() {
+    for count in [3, u32::MAX] {
+        let mut doc = Document::new("anim", photocraft_doc::Size::new(2, 2), ColorMode::Rgb, SampleType::U8);
+        doc.file_encoding = photocraft_doc::FileEncoding { jpeg_quality: Some(80), source_images: Some(count), ..Default::default() };
+        let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+        let loaded = load_from_bytes(&bytes).unwrap();
+        assert_eq!(loaded.file_encoding.source_images, Some(count));
+        assert_eq!(loaded, doc);
+
+        // The same manifest without the key, as an older build wrote it.
+        let mut json = serde_json::to_value(read_manifest(&bytes).unwrap().document).unwrap();
+        let encoding = json["file_encoding"].as_object_mut().unwrap();
+        assert_eq!(encoding.remove("sourceImages"), Some(serde_json::json!(count)));
+        let old: photocraft_format::manifest::DocM = serde_json::from_value(json).unwrap();
+        assert_eq!(old.file_encoding, photocraft_doc::FileEncoding { jpeg_quality: Some(80), ..Default::default() });
+    }
+}

@@ -202,6 +202,8 @@ fn invoke_shell_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str,
     None
 }
 
+/// The commands the shell answers itself before the engine (File › Open and Save with the
+/// dialogs they ask, loading a path as a selection, …); `Ok(None)` for any other.
 fn invoke_file_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Value) -> Result<Option<Value>, String> {
     let result = match id {
         // ⌘↩ / Ctrl+Enter (#306): load the path selected in the Paths panel (or the one being
@@ -277,7 +279,19 @@ fn invoke_file_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, 
                             crate::notices::post(app, title, lines, false, None);
                             app.save_as_with(None, choices)
                         }
-                        // A flat file asks for its name; confirming its own file records a
+                        // Its own flat file, while it still keeps the whole document (one plain
+                        // layer it can store): written back, as Photoshop's Save does (#5733),
+                        // asking first if another app changed it (#6596), then JPEG Options for a
+                        // JPEG (#2223), or TIFF, Targa or DDS Options for those. Cancel in either writes
+                        // nothing.
+                        Some((false, path, d)) if crate::saves_flat_in_place(&d.doc, &path) => {
+                            let doc = d.doc.id;
+                            if app.save_options_open() {
+                                return Err(crate::SAVE_OPTIONS_OPEN.into());
+                            }
+                            crate::disk_change_prompt::intercept(app, doc, &path, false, choices).unwrap_or_else(|| app.save_flat_in_place(path, choices))
+                        }
+                        // Any other flat file asks for its name; confirming its own file records a
                         // plain Save that writes the file an action is played on (#3531).
                         _ => app.save_dialog_flow(None, choices, true),
                     }

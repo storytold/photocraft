@@ -140,7 +140,9 @@ fn import_flat_impl_with_options(
         r.document.mode = ColorMode::Indexed;
         r.document.color_table = Some(photocraft_doc::ColorTable { colors, transparent });
     }
-    r.document.file_encoding = file_encoding_as(format, bytes);
+    // The decoder's count of frames or pages left out (set above) stays alongside the encoding.
+    let encoding = file_encoding_as(format, bytes);
+    r.document.file_encoding = photocraft_doc::FileEncoding { source_images: r.document.file_encoding.source_images.or(encoding.source_images), ..encoding };
     if format == Some(Format::Tga) && img.as_ref().is_some_and(|i| i.layout() == ChannelLayout::Rgba) {
         tga_alpha_to_channel(&mut r.document)?;
     }
@@ -236,6 +238,11 @@ fn file_encoding_as(format: Option<Format>, bytes: &[u8]) -> photocraft_doc::Fil
             }
             None => {}
         },
+        // An icon file's directory count (ICONDIR: reserved, type, count, little-endian); the
+        // decoder opens one of its sizes.
+        Some(Format::Ico) => {
+            e.source_images = bytes.get(4..6).and_then(|c| <[u8; 2]>::try_from(c).ok()).map(|c| u32::from(u16::from_le_bytes(c))).filter(|&n| n > 1);
+        }
         _ => {}
     }
     e
@@ -405,6 +412,7 @@ fn import_tiff_layered(
     }
     ctl.check().map_err(|_| IoError::Cancelled)?;
     let mut r = crate::tiff_layers::import_layered(name, &img, plan, ctl)?;
+    r.document.file_encoding.source_images = r.document.file_encoding.source_images.or(source_images(&img.warnings));
     if orientation != 1 {
         r.warnings.push("the TIFF's orientation tag was ignored so the layers stay aligned with the image".to_string());
     }
@@ -529,7 +537,9 @@ fn tiff_to_document(
     let mut warnings: Vec<String> = bands.warnings.iter().map(ToString::to_string).collect();
     warnings.extend(f.warning.clone());
     let meta = std::mem::take(&mut bands.meta);
-    Ok(single_layer_document(name, (w, h), f, layout.has_alpha(), s, bands.icc.take(), meta, warnings))
+    let mut r = single_layer_document(name, (w, h), f, layout.has_alpha(), s, bands.icc.take(), meta, warnings);
+    r.document.file_encoding.source_images = source_images(&bands.warnings);
+    Ok(r)
 }
 
 /// The bytes of a layer's tiles holding a `w` × `h` image of `bpp` bytes a pixel: tiles are whole
@@ -663,7 +673,22 @@ fn image_to_document_with_memory(name: &str, img: &Image, ctl: &Interrupt, avail
     let s = image_surface_with(img, target_layout, csample, ctl)?;
     ctl.check().map_err(|_| IoError::Cancelled)?;
     ctl.progress(0.95);
-    flat_document(name, (w, h, img.layout(), mode, depth), s, img.icc.clone(), &img.meta, warnings, Some(img))
+    let mut r = flat_document(name, (w, h, img.layout(), mode, depth), s, img.icc.clone(), &img.meta, warnings, Some(img))?;
+    r.document.file_encoding.source_images = source_images(&img.warnings);
+    Ok(r)
+}
+
+/// How many frames, pages, parts or entries the file holds when the decoder read only one of
+/// them (`u32::MAX` when it couldn't count them), so Save doesn't write the document back over
+/// all of them (#5733).
+fn source_images(warnings: &[codecs::DecodeWarning]) -> Option<u32> {
+    warnings.iter().find_map(|w| match *w {
+        codecs::DecodeWarning::MoreFrames { total } | codecs::DecodeWarning::MorePages { total } | codecs::DecodeWarning::MoreParts { total } => {
+            Some(total.unwrap_or(u32::MAX))
+        }
+        codecs::DecodeWarning::MoreElements { total } => Some(total),
+        _ => None,
+    })
 }
 
 /// The document colour mode, the layout and sample type of its surface, and its depth, for a
@@ -837,7 +862,9 @@ fn import_png_streamed_with(
     ctl.progress(0.95);
     let (mode, _, depth, _) = flat_target(header.layout, header.sample);
     let warnings = extras.warnings.iter().map(ToString::to_string).collect();
-    flat_document(name, (header.width, header.height, header.layout, mode, depth), surface, extras.icc, &extras.meta, warnings, None).map(Some)
+    let mut r = flat_document(name, (header.width, header.height, header.layout, mode, depth), surface, extras.icc, &extras.meta, warnings, None)?;
+    r.document.file_encoding.source_images = source_images(&extras.warnings);
+    Ok(Some(r))
 }
 
 /// The pixels of a decoded image as a surface of the target layout and sample type, converted
@@ -1423,8 +1450,9 @@ fn compact_alpha(data: &mut Vec<u8>, color: usize, alpha: usize) {
     data.truncate(n * color);
 }
 
-/// Whether every pixel of `s` over `r` is fully opaque (read from the tiles, no copy).
-pub(crate) fn opaque_surface(s: &Surface, r: Rect) -> bool {
+/// Whether every pixel of `s` over `r` is fully opaque (read from the tiles, no copy). `s` must
+/// have an alpha channel.
+pub fn opaque_surface(s: &Surface, r: Rect) -> bool {
     let fmt = s.format();
     let (ch, bps) = (fmt.channels(), fmt.sample.bytes());
     let a = ch - 1;
