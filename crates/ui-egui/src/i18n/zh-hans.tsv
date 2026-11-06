@@ -174,6 +174,7 @@
 	Right	右
 	Open Recent	打开最近文件
 	Clear Recent Files	清除最近文件
+	Clear Recent File List	清除最近文件
 	Remove from Recent	从最近文件中移除
 	Remove {name} from Recent	从最近文件中移除 {name}
 	Close	关闭
@@ -182,6 +183,10 @@
 	Restore	向下还原
 	Close All	关闭全部
 	Close Others	关闭其他
+	New Document…	新建文档…
+	Open Document…	打开…
+	Consolidate All to Here	将所有窗口合并到此处
+	Move to New Window	移到新窗口
 	Save	保存
 	Save As…	另存为…
 	Save a Copy…	保存副本…
@@ -234,6 +239,7 @@
 	Create Smart Object after Loading Layers	载入图层后创建智能对象
 	Reveal in Finder	在 Finder 中显示
 	Show in Explorer	在文件资源管理器中显示
+	Reveal in Explorer	在文件资源管理器中显示
 	Show in Folder	在文件夹中显示
 	File Info…	文件信息…
 	Print…	打印…
@@ -323,6 +329,7 @@
 	Units & Rulers…	单位与标尺…
 	Guides, Grid & Slices…	参考线、网格与切片…
 	Plug-ins…	插件…
+	Plugins…	插件…
 	Type…	文字…
 	3D…	3D…
 	Enhanced Controls…	增强控件…
@@ -482,6 +489,8 @@
 	Smart Object	智能对象
 	Convert to Smart Object	转换为智能对象
 	Convert to Embedded	转换为嵌入对象
+	Embed Linked	嵌入链接对象
+	Embed All Linked	嵌入所有链接对象
 	Convert to Layers	转换为图层
 	Convert to Linked…	转换为链接对象…
 	Edit Contents	编辑内容
@@ -555,7 +564,9 @@
 	Unite Shapes	合并形状
 	Subtract Front Shape	减去前面形状
 	Intersect Shape Areas	形状区域相交
+	Unite Shapes at Overlap	形状区域相交
 	Exclude Overlapping Shapes	排除重叠形状
+	Subtract Shapes at Overlap	排除重叠形状
 	Merge Shape Components	合并形状组件
 	Path operations	路径操作
 	Align	对齐
@@ -740,6 +751,7 @@
 	Minimum…	最小值…
 	Offset…	位移…
 	Plug-ins	插件
+	Plugins	插件
 	Proof Setup	校样设置
 	Proof Colors	校样颜色
 	Gamut Warning	色域警告
@@ -748,9 +760,9 @@
 	Working Magenta Plate	工作洋红版
 	Working Yellow Plate	工作黄色版
 	Working Black Plate	工作黑色版
-	Working CMY Plate	工作 CMY 版
-	Legacy Macintosh RGB	旧版 Macintosh RGB
-	Internet Standard RGB	互联网标准 RGB
+	Working CMY Plates	工作 CMY 版
+	Legacy Macintosh RGB (Gamma 1.8)	旧版 Macintosh RGB (Gamma 1.8)
+	Internet Standard RGB (sRGB)	互联网标准 RGB (sRGB)
 	Monitor RGB	显示器 RGB
 	Color Blindness — Protanopia-type	色盲 — 红色盲型
 	Color Blindness — Deuteranopia-type	色盲 — 绿色盲型
@@ -842,7 +854,7 @@
 	Consolidate All to Tabs	将所有窗口合并为选项卡
 	Float in Window	在窗口中浮动
 	Float All in Windows	使所有文档在窗口中浮动
-	New Window for Document	为文档新建窗口
+	New Window	为文档新建窗口
 	Workspace	工作区
 	Essentials	基本功能
 	Graphic and Web	图形与 Web
@@ -2052,6 +2064,11 @@
 	Show canvas dots	显示画布圆点
 	Clip thumbnails to layer bounds	将缩略图裁剪到图层边界
 	Clip Thumbnails to Layer Bounds	将缩略图裁剪到图层边界
+	No Thumbnails	无缩略图
+	Small Thumbnails	小缩略图
+	Medium Thumbnails	中缩略图
+	Large Thumbnails	大缩略图
+	Clip Thumbnails to Document Bounds	将缩略图裁剪到文档边界
 	Canvas color	画布颜色
 	Canvas custom color	画布自定颜色
 	Color picker	拾色器
@@ -2950,6 +2967,9 @@ curves	Smooth	平滑
 	Sent to {printer}	已发送到 {printer}
 	set in Print Settings…	在打印设置中设置…
 	ICO is limited to 256 × 256 pixels	ICO 最大为 256 × 256 像素
+	Automatically Create First Snapshot	自动创建第一幅快照
+	Automatically Create New Snapshot When Saving	存储时自动创建新快照
+	Show New Snapshot Dialog by Default	默认显示新建快照对话框
 	Memory usage percent	内存使用比例 (%)
 	Show Favorite Fonts	显示收藏的字体
 	No favorite fonts yet: click the star beside a font to add it.	还没有收藏的字体：点击字体旁边的星标即可添加。
