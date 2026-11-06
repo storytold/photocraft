@@ -32,7 +32,7 @@ impl PhotocraftApp {
                 crate::control::Outcome::Done(v) => {
                     let _ = reply.send(v);
                 }
-                crate::control::Outcome::AfterInput => self.input_waiters.push(reply),
+                crate::control::Outcome::AfterInput => self.wait_for_input(reply),
                 crate::control::Outcome::AfterJob(job) => self.jobs.waiters.push((job, reply)),
                 crate::control::Outcome::Screenshot { token, path } => {
                     // Admission is budgeted here, after this pass's completed captures were

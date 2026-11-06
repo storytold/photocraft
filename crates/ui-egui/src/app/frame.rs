@@ -216,10 +216,9 @@ impl PhotocraftApp {
         // settled input; an early-returning pass keeps the batch (and the waiting replies).
         if !self.synthetic.is_empty() || self.synthetic_batch.is_some() {
             ctx.request_repaint();
-        } else if !self.input_waiters.is_empty() {
-            for w in self.input_waiters.drain(..) {
-                let _ = w.send(serde_json::json!({"ok": true, "result": null}));
-            }
+        } else {
+            // Each reply carries the refusals its own input caused (#11579).
+            self.settle_input_replies();
         }
         // A menu or dialog can start a filter after `jobs_ui::tick` ran in this frame. Keep
         // polling it even when the platform would otherwise put the event loop to sleep.

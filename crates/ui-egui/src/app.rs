@@ -18,6 +18,7 @@ mod frame;
 mod gpu;
 mod ime;
 mod input;
+pub(crate) mod input_replies;
 mod prefs;
 mod screenshot;
 mod targets;
@@ -86,7 +87,7 @@ impl PhotocraftApp {
             control_rx: None,
             captures: crate::screenshot::Captures::default(),
             type_ime: type_tool::ImeState::default(),
-            input_waiters: Vec::new(),
+            input_replies: Default::default(),
             live_adjust: None,
             frame: 0,
             notices_hovered: false,

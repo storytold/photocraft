@@ -87,7 +87,7 @@ fn a_document_change_before_injection_drops_the_batch_and_replies() {
     app.synthetic.extend([press(Key::V), release(Key::V)]);
     assert!(!hook(&mut app, &ctx).is_empty());
     let (tx, rx) = std::sync::mpsc::channel();
-    app.input_waiters.push(tx);
+    app.wait_for_input(tx);
     // The document changed while the events were still in flight: the next hook sees it before
     // the host consumes them, so it withdraws the batch and fails the waiting reply.
     app.run("file.new", json!({"width": 16, "height": 16})).expect("a second document");
@@ -105,7 +105,7 @@ fn a_document_change_inside_the_pass_is_delivered_and_not_reported_as_cancelled(
     app.synthetic.extend([press(Key::V), release(Key::V)]);
     assert!(!hook(&mut app, &ctx).is_empty());
     let (tx, rx) = std::sync::mpsc::channel();
-    app.input_waiters.push(tx);
+    app.wait_for_input(tx);
     // `logic` opens another document after the hook consumed the events into this pass. They
     // cannot be withdrawn now. Treat the batch as delivered (automation-gated) rather than
     // failing the reply while the input still lands.
@@ -140,7 +140,7 @@ fn an_edit_in_the_same_document_does_not_cancel_the_queued_batch() {
     app.synthetic.extend([press(Key::L), release(Key::L)]);
     assert!(!hook(&mut app, &ctx).is_empty());
     let (tx, rx) = std::sync::mpsc::channel();
-    app.input_waiters.push(tx);
+    app.wait_for_input(tx);
     // A command edits the same document while the step is in flight: the revision changes, the
     // document activation does not, so the step is not cancelled.
     app.run("layer.new.layer", json!({"name": "queued"})).expect("an edit");

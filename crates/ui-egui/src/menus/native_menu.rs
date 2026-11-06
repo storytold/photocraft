@@ -701,8 +701,7 @@ pub fn run(app: &mut PhotocraftApp, ctx: &egui::Context) {
             continue;
         }
         if let Err(e) = crate::menus::invoke(app, ctx, &id, serde_json::json!({})) {
-            app.ui.status = e;
-            app.ui.status_error = true;
+            app.show_error(e);
         }
     }
 }

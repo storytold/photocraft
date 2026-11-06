@@ -764,6 +764,8 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         match outcome {
             Some(true) => {
                 if let Err(error) = confirm(app, d.id) {
+                    // A refused OK answers the synthetic input that pressed it (#11579).
+                    app.note_input_error(&error);
                     app.ui.status = error;
                 }
             }
@@ -772,6 +774,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             }
             None => {
                 if let Err(error) = crate::layer_style::color_picker::take_request(app, d.id) {
+                    app.note_input_error(&error);
                     app.ui.status = error;
                 }
             }

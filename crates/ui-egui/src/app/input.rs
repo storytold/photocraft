@@ -85,10 +85,12 @@ impl PhotocraftApp {
             log::warn!("synthetic input: the document or focus changed inside the pass; delivering it as automation input");
         }
         self.automation_input = true;
+        self.begin_input_errors();
     }
 
     /// One full UI pass handled the in-flight batch: deliver it once and let the next step in.
     pub(crate) fn finish_synthetic_pass(&mut self) {
+        self.finish_input_errors();
         let _ = self.synthetic_batch.take();
         self.synthetic_snapshot = None;
         self.synthetic_reinject = false;
@@ -109,10 +111,8 @@ impl PhotocraftApp {
         self.synthetic_snapshot = None;
         self.synthetic_reinject = false;
         self.automation_input = false;
-        if pending || !self.input_waiters.is_empty() {
-            for w in self.input_waiters.drain(..) {
-                let _ = w.send(serde_json::json!({"ok": false, "error": format!("input cancelled: {reason}")}));
-            }
+        if pending || !self.input_replies.is_empty() {
+            self.fail_input_replies(&format!("input cancelled: {reason}"));
         }
     }
 
@@ -126,6 +126,7 @@ impl PhotocraftApp {
             .position(|e| matches!(e, egui::Event::PointerButton { pressed: false, .. } | egui::Event::Key { pressed: false, .. }))
             .map_or(self.synthetic.len(), |i| i + 1);
         let events: Vec<_> = self.synthetic.drain(..n).collect();
+        self.note_synthetic_taken(events.len());
         if !events.is_empty() {
             self.automation_input = true;
         }

@@ -38,6 +38,13 @@ impl PhotocraftApp {
         self.run_depth += 1;
         let r = self.run_command_at_depth(id, params);
         self.run_depth -= 1;
+        // A refused command that synthetic input ran answers that input's control request
+        // (#11579); a nested step's refusal reaches it through the outer command.
+        if self.run_depth == 0
+            && let Err(e) = &r
+        {
+            self.note_input_error(e);
+        }
         r
     }
 
