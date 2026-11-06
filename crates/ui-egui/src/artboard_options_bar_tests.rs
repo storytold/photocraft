@@ -204,6 +204,92 @@ fn a_placed_board_gets_the_bars_background() {
     assert_eq!(c.to_rgba8(), [0, 255, 0, 255]);
 }
 
+/// With no board selected, a placed board takes the size the bar shows (the tool option), not the canvas's.
+#[test]
+fn a_placed_board_takes_the_bars_size_with_no_board_selected() {
+    let mut app = app();
+    assert!(boards(&app).is_empty());
+    bar::set_size(&mut app, 333.0, 222.0);
+    app.ui.artboard_tool.adding = true;
+    let m = Modifiers::NONE;
+    tool_event(&mut app, ToolEvent::Down { x: 20.0, y: 30.0, pressure: 1.0 }, m);
+    tool_event(&mut app, ToolEvent::Up { x: 20.0, y: 30.0 }, m);
+    assert!(!app.ui.status_error, "{}", app.ui.status);
+    assert_eq!(boards(&app).first().map(|b| b.1), Some(Rect::new(20, 30, 353, 252)));
+}
+
+/// Two boards, both selected.
+fn two_boards(app: &mut PhotocraftApp) -> (u64, u64) {
+    let a = app.run("layer.new.artboard", json!({"rect": [0, 0, 100, 100]})).unwrap()["layer"].as_u64().unwrap();
+    let b = app.run("layer.new.artboard", json!({"rect": [300, 0, 100, 100]})).unwrap()["layer"].as_u64().unwrap();
+    app.run("layer.select", json!({"layer": a})).unwrap();
+    app.run("layer.select", json!({"layer": b, "mode": "add"})).unwrap();
+    (a, b)
+}
+
+fn steps(app: &PhotocraftApp) -> usize {
+    app.session.active().unwrap().history.past_len()
+}
+
+fn last_label(app: &PhotocraftApp) -> Option<String> {
+    app.session.active().unwrap().history.entries().last().cloned()
+}
+
+#[test]
+fn with_a_board_selected_the_bar_shows_its_background() {
+    let mut app = app();
+    let a = app.run("layer.new.artboard", json!({"rect": [0, 0, 100, 100]})).unwrap()["layer"].as_u64().unwrap();
+    app.run("layer.artboard.set", json!({"layer": a, "background": "black"})).unwrap();
+    app.run("layer.select", json!({"layer": a})).unwrap();
+    assert_eq!(app.ui.artboard_tool.background, "white", "the tool option is still white");
+    assert_eq!(bar::shown_background(&app).0, "black");
+    app.run("layer.artboard.set", json!({"layer": a, "background": "custom", "color": "#336699"})).unwrap();
+    assert_eq!(bar::shown_background(&app), ("custom".to_string(), "#336699".to_string()));
+}
+
+#[test]
+fn a_background_choice_recolours_every_selected_board_in_one_step() {
+    let mut app = app();
+    let (a, b) = two_boards(&mut app);
+    let before = steps(&app);
+    bar::set_background(&mut app, "transparent", "#ffffff").unwrap();
+    assert_eq!(steps(&app), before + 1);
+    assert_eq!(last_label(&app).as_deref(), Some("Edit Artboards"));
+    assert!(boards(&app).iter().all(|x| x.2 == ArtboardBackground::Transparent));
+    assert_eq!(boards(&app).iter().map(|x| x.0.0).collect::<Vec<_>>(), vec![a, b]);
+    assert_eq!(app.ui.artboard_tool.background, "transparent", "also the next drawn board's");
+    // Other...: OK in the picker recolours them too.
+    bar::set_custom_background(&mut app, "#00ff00").unwrap();
+    assert_eq!(steps(&app), before + 2);
+    for x in boards(&app) {
+        let ArtboardBackground::Custom(c) = x.2 else { panic!("a custom background") };
+        assert_eq!(c.to_rgba8(), [0, 255, 0, 255]);
+    }
+    assert_eq!((app.ui.artboard_tool.background.as_str(), app.ui.artboard_tool.background_color.as_str()), ("custom", "#00ff00"));
+}
+
+#[test]
+fn one_selected_board_is_edit_artboard() {
+    let mut app = app();
+    let a = app.run("layer.new.artboard", json!({"rect": [0, 0, 100, 100]})).unwrap()["layer"].as_u64().unwrap();
+    app.run("layer.select", json!({"layer": a})).unwrap();
+    let before = steps(&app);
+    bar::set_background(&mut app, "black", "#ffffff").unwrap();
+    assert_eq!(steps(&app), before + 1);
+    assert_eq!(last_label(&app).as_deref(), Some("Edit Artboard"));
+    assert_eq!(boards(&app)[0].2, ArtboardBackground::Black);
+}
+
+#[test]
+fn with_no_board_selected_the_background_edits_only_the_tool_option() {
+    let mut app = app();
+    let before = steps(&app);
+    bar::set_background(&mut app, "black", "#ffffff").unwrap();
+    assert_eq!(app.ui.artboard_tool.background, "black");
+    assert_eq!(steps(&app), before, "no history step");
+    assert!(boards(&app).is_empty());
+}
+
 #[test]
 fn the_background_param_carries_color_only_for_other() {
     let mut app = app();

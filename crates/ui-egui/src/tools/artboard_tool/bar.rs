@@ -4,7 +4,7 @@
 //! the gear menu. The options live in [`ArtboardToolUi`](super::ArtboardToolUi).
 
 use egui::Color32;
-use photocraft_doc::{Layer, LayerId};
+use photocraft_doc::{ArtboardBackground, Layer, LayerId};
 use photocraft_engine::artboard_cmds::PRESETS;
 use serde_json::{Value, json};
 
@@ -70,7 +70,6 @@ impl Gear {
 }
 
 /// "The bar's size": the selected board's size, else the tool option's. `[width, height]` in pixels.
-#[cfg_attr(not(test), allow(dead_code))] // used by the Add New Artboard placing mode (#11386) once both land
 pub fn bar_size(app: &PhotocraftApp) -> [i64; 2] {
     match super::active_board(app) {
         Some((_, r)) => [r[2].saturating_sub(r[0]), r[3].saturating_sub(r[1])],
@@ -109,12 +108,64 @@ pub fn set_size(app: &mut PhotocraftApp, w: f32, h: f32) {
     }
 }
 
-/// OK in the Color Picker opened by Other…: the custom background is `color` (`#rrggbb`).
-pub fn set_custom_background(app: &mut PhotocraftApp, color: &str) -> Result<Value, String> {
-    crate::color_picker_ui::parse_hex(color).ok_or("not a colour")?;
+/// The selected boards: each selected layer's artboard, once, in document order.
+fn selected_boards(app: &PhotocraftApp) -> Vec<LayerId> {
+    let Some(st) = app.session.active() else { return Vec::new() };
+    let mut ids: Vec<LayerId> = Vec::new();
+    for l in st.selected_layers() {
+        if let Some(b) = st.doc.artboard_of(l)
+            && !ids.contains(&b)
+        {
+            ids.push(b);
+        }
+    }
+    ids
+}
+
+/// The background the bar shows as `(name, #rrggbb)`: the first selected board's, else the tool
+/// option's. The colour is the custom one (or the option's remembered one for the named ones).
+pub fn shown_background(app: &PhotocraftApp) -> (String, String) {
+    let o = &app.ui.artboard_tool;
+    let first = selected_boards(app).first().and_then(|id| app.session.active()?.doc.layer(*id)?.artboard().map(|a| a.background));
+    match first {
+        Some(ArtboardBackground::Custom(c)) => {
+            let [r, g, b, _] = c.to_rgba8();
+            ("custom".to_string(), format!("#{r:02x}{g:02x}{b:02x}"))
+        }
+        Some(b) => (b.name().to_string(), o.background_color.clone()),
+        None => (o.background.clone(), o.background_color.clone()),
+    }
+}
+
+/// Choose background `name` (`white`, `black`, `transparent` or `custom` with `color`, `#rrggbb`).
+/// It is the tool option for the next drawn board, and with boards selected also the background of
+/// every selected board in one `layer.artboard.set` step ("Edit Artboard" / "Edit Artboards").
+pub fn set_background(app: &mut PhotocraftApp, name: &str, color: &str) -> Result<Value, String> {
+    let custom = name == "custom";
+    if custom {
+        crate::color_picker_ui::parse_hex(color).ok_or("not a colour")?;
+    }
+    let boards = selected_boards(app);
+    let mut out = json!({});
+    if !boards.is_empty() {
+        let mut params = json!({"layers": boards.iter().map(|b| b.0).collect::<Vec<_>>(), "background": name});
+        if custom {
+            params["color"] = json!(color);
+        }
+        out = app.run("layer.artboard.set", params)?;
+    }
     let o = &mut app.ui.artboard_tool;
-    o.background = "custom".to_string();
-    o.background_color = color.to_string();
+    o.background = name.to_string();
+    if custom {
+        o.background_color = color.to_string();
+    }
+    Ok(out)
+}
+
+/// OK in the Color Picker opened by Other…: the custom background is `color` (`#rrggbb`), for the
+/// selected boards (if any) and the next drawn one.
+pub fn set_custom_background(app: &mut PhotocraftApp, color: &str) -> Result<Value, String> {
+    set_background(app, "custom", color)?;
     Ok(json!({"color": color}))
 }
 
@@ -125,12 +176,12 @@ pub fn run_align(app: &mut PhotocraftApp, group: usize, index: usize) -> Option<
     Some(app.run(cmd, json!({})))
 }
 
-/// The swatch colour of the tool's background option.
-fn background_color(o: &super::ArtboardToolUi) -> Color32 {
-    match o.background.as_str() {
+/// The swatch colour of a background (`name`, with `hex` for custom).
+fn background_color(name: &str, hex: &str) -> Color32 {
+    match name {
         "black" => Color32::BLACK,
         "transparent" => Color32::TRANSPARENT,
-        "custom" => crate::color_picker_ui::parse_hex(&o.background_color).map_or(Color32::WHITE, rgb32),
+        "custom" => crate::color_picker_ui::parse_hex(hex).map_or(Color32::WHITE, rgb32),
         _ => Color32::WHITE,
     }
 }
@@ -142,7 +193,7 @@ fn rgb32(c: [f32; 3]) -> Color32 {
 
 /// Opens the Color Picker for the custom background.
 fn pick_background(app: &mut PhotocraftApp) {
-    let rgb = crate::color_picker_ui::parse_hex(&app.ui.artboard_tool.background_color).unwrap_or([1.0; 3]);
+    let rgb = crate::color_picker_ui::parse_hex(&shown_background(app).1).unwrap_or([1.0; 3]);
     let title = crate::color_picker_ui::title_for(tl!("Color"));
     crate::color_picker_ui::open_for_target(app, "artboardBackground", &title, rgb);
 }
@@ -193,14 +244,17 @@ pub fn size_group(app: &mut PhotocraftApp, ui: &mut egui::Ui, board: Option<(Lay
     edit
 }
 
-/// The background swatch and its dropdown (White, Black, Transparent, Other…). It sets the
-/// background of the boards the tool draws; it never recolours a selected board.
+/// The background swatch and its dropdown (White, Black, Transparent, Other…). With boards selected
+/// they show the first selected board's background and a change recolours every selected board in
+/// one history step (`layer.artboard.set`; "Edit Artboard" for one, "Edit Artboards" for several);
+/// either way it is also the tool option, the background of the next drawn board. With no board
+/// selected it edits the tool option only.
 pub fn background(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    let color = background_color(&app.ui.artboard_tool);
-    if crate::widgets::color_swatch_button(ui, color, tl!("Artboard Background Color")).clicked() {
+    let (name, hex) = shown_background(app);
+    if crate::widgets::color_swatch_button(ui, background_color(&name, &hex), tl!("Artboard Background Color")).clicked() {
         pick_background(app);
     }
-    let mut bg = app.ui.artboard_tool.background.clone();
+    let mut bg = name;
     let opts = [
         ("white".to_string(), tl!("White")),
         ("black".to_string(), tl!("Black")),
@@ -210,8 +264,9 @@ pub fn background(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if crate::widgets::dropdown(ui, "artboard-tool-bg", tl!("Background"), &mut bg, &opts, 120.0) {
         if bg == "custom" {
             pick_background(app);
-        } else {
-            app.ui.artboard_tool.background = bg;
+        } else if let Err(e) = set_background(app, &bg, &hex) {
+            app.ui.status = e;
+            app.ui.status_error = true;
         }
     }
 }
