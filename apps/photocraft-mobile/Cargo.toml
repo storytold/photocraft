@@ -23,6 +23,14 @@ panic = "deny"
 cognitive_complexity = "deny"
 wildcard_imports = "deny"
 
+[features]
+# Open HEIC/HEIF photos (the optional photocraft-heif crate, pure Rust), as the desktop apps'
+# `heif` feature does. On by default here, unlike the desktop apps: the photo pickers hand photos
+# over in their own encoding, usually HEIC, and the shells' build scripts take no features. A
+# build without it: `--no-default-features`.
+default = ["heif"]
+heif = ["photocraft-codecs/heif"]
+
 [dependencies]
 # The shared native-shell host (craft-libs `crates/mobile`).
 craft-mobile = { workspace = true }

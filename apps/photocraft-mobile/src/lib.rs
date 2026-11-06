@@ -969,6 +969,13 @@ mod tests {
         assert_eq!(p, Pastes::default());
     }
 
+    /// Photos from the iPad photo picker and the Android Photo Picker arrive in their own
+    /// encoding, often HEIC: the tablet builds can open it.
+    #[test]
+    fn heic_photos_open() {
+        assert!(photocraft_codecs::caps(photocraft_codecs::Format::Heif).read);
+    }
+
     /// Two pastes asked for before the shell answers the first each run, in order, with the
     /// clipboard read for them: the second doesn't replace the first.
     #[test]
