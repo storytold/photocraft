@@ -65,6 +65,26 @@ pub struct Panels {
     /// floating window rather than a modal so the canvas stays usable while a gradient is edited.
     #[serde(default)]
     pub gradient_editor: bool,
+    /// Window › Contextual Task Bar (#10890): the small floating bar under the Crop tool's frame
+    /// (`crop_task_bar`). Its ⋯ menu's Hide bar clears it too.
+    #[serde(default = "yes")]
+    pub context_task_bar: bool,
+    /// Where that bar sits: following its frame, or dragged or pinned (`widgets::task_bar`).
+    #[serde(default)]
+    pub task_bar: TaskBarPlace,
+}
+
+/// Where the contextual task bar sits (#10890). Part of [`Panels`], so it is kept with the panel
+/// layout across restarts, and `ui.set {panels: {task_bar: …}}` sets it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TaskBarPlace {
+    /// Pin bar position: the bar stays where it is while its frame changes.
+    #[serde(default)]
+    pub pinned: bool,
+    /// The bar's top-left corner in points from the canvas area's top-left, once it was dragged
+    /// by its grip or pinned; `None` follows the frame. Reset bar position clears both.
+    #[serde(default)]
+    pub at: Option<[f32; 2]>,
 }
 
 impl Default for Panels {
@@ -88,6 +108,8 @@ impl Default for Panels {
             rail: true,
             menu_bar: true,
             gradient_editor: false,
+            context_task_bar: true,
+            task_bar: TaskBarPlace::default(),
         }
     }
 }
@@ -338,6 +360,9 @@ pub struct UiState {
     /// A live rectangle's corner radius widget being dragged (TOOL-214-12).
     #[serde(skip)]
     pub corner_radius: Option<crate::corner_radius::Drag>,
+    /// The bounding box of several selected shape layers, a handle being dragged.
+    #[serde(skip)]
+    pub shape_box: Option<crate::shape_bounds_box::Drag>,
     /// Selected row in the Paths panel ("work" or a saved path name).
     #[serde(default)]
     pub selected_path: Option<String>,
@@ -402,6 +427,10 @@ pub struct UiState {
     /// Frame tool (see `frame_tool`).
     #[serde(default)]
     pub frame_tool: crate::frame_tool::FrameToolUi,
+    /// The contextual task bar as drawn in the last frame: its screen rect `[x0, y0, x1, y1]` in
+    /// points, `None` while no bar shows (`ui.inspect` › `taskBar`).
+    #[serde(skip)]
+    pub task_bar_shown: Option<[f32; 4]>,
     /// Artboard tool (see `artboard_tool`).
     pub artboard_tool: crate::artboard_tool::ArtboardToolUi,
     /// Modifier Keys panel, custom pixel aspect ratios, workspace dialogs (see `workspace_ui`).
@@ -577,6 +606,7 @@ impl Default for UiState {
             timeline: Default::default(),
             slices: Default::default(),
             frame_tool: Default::default(),
+            task_bar_shown: None,
             artboard_tool: Default::default(),
             shell: Default::default(),
             layer_filter: Vec::new(),
@@ -596,6 +626,7 @@ impl Default for UiState {
             stroke_editor: None,
             direct_selection: Default::default(),
             corner_radius: None,
+            shape_box: None,
             selected_path: None,
             hidden_work_path: None,
             panels: Panels::default(),
@@ -739,10 +770,10 @@ mod tests {
         assert_eq!(Tool::from_name("Vertical Type Mask Tool"), Some(Tool::VerticalTypeMask));
         assert_eq!(Tool::from_name("addAnchorPoint"), Some(Tool::AddAnchorPoint));
         assert_eq!(Tool::from_name("Delete Anchor Point Tool"), Some(Tool::DeleteAnchorPoint));
-        assert_eq!(Tool::DeleteAnchorPoint.key(), 'P');
+        assert_eq!(Tool::DeleteAnchorPoint.key(), ' ');
         assert_eq!(Tool::from_name("convertPoint"), Some(Tool::ConvertPoint));
         assert_eq!(Tool::from_name("Convert Point Tool"), Some(Tool::ConvertPoint));
-        assert_eq!(Tool::ConvertPoint.key(), 'P', "it shares the Pen's key");
+        assert_eq!(Tool::ConvertPoint.key(), ' ', "P never reaches it");
         assert!(!Tool::ConvertPoint.is_brushlike());
         assert_eq!(Tool::from_name("Remove Tool"), Some(Tool::Remove));
         assert_eq!(Tool::Remove.key(), 'J');
