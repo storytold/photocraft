@@ -24,9 +24,12 @@ use crate::commands::CommandSpec;
 use crate::{EngineError, Result, Session};
 
 mod history;
+mod identity;
 pub(crate) use history::ActionHistory;
 pub use history::{ActionHistoryContinuation, finish_pending_history, suspend_history};
 pub(crate) use history::{before_edit as before_action_edit, begin_document_history, finish_document_history, history_rows, reconcile_history_removal};
+pub use identity::{action_shortcut, commit_action_id, is_action_key, occurrence_key, prepare_action_id, shortcut_row};
+pub(crate) use identity::{invalidate_duplicate_ids, pin_shortcut, remove_shortcuts};
 
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: cmd.into(), msg: msg.into() }
@@ -37,6 +40,9 @@ fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Action {
     pub name: String,
+    /// Stable identity for occurrence shortcuts and stored calls. Legacy rows have no ID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action_id: Option<String>,
     #[serde(default)]
     pub steps: Vec<(String, Value)>,
     /// Indices of steps excluded from playback (unchecked in the Actions panel).
@@ -64,7 +70,7 @@ pub const BUTTON_COLORS: [&str; 8] = ["", "red", "orange", "yellow", "green", "b
 
 impl Action {
     pub fn new(name: impl Into<String>, steps: Vec<(String, Value)>) -> Self {
-        Self { name: name.into(), steps, disabled: BTreeSet::new(), dialogs: BTreeSet::new(), set: None, set_slot: None, color: String::new() }
+        Self { name: name.into(), action_id: None, steps, disabled: BTreeSet::new(), dialogs: BTreeSet::new(), set: None, set_slot: None, color: String::new() }
     }
 
     /// Apply `f` to every per-step index set (`disabled`, `dialogs`) after steps moved.
@@ -278,7 +284,13 @@ pub fn playback_plan(s: &Session, p: &Value) -> Result<(Action, usize)> {
     if s.actions.playing > 0 && s.actions.playback_stack.is_empty() {
         return Err(bad("actions.play", "an action is already playing"));
     }
-    let idx = resolve(&s.actions.list, p, "actions.play")?;
+    let idx = match p.get("actionId") {
+        Some(id) => id
+            .as_str()
+            .and_then(|id| identity::resolve_action_id(&s.actions.list, id))
+            .ok_or_else(|| bad("actions.play", "invalid, missing, or duplicate action ID"))?,
+        None => resolve(&s.actions.list, p, "actions.play")?,
+    };
     let action = s.actions.list.get(idx).cloned().ok_or_else(|| bad("actions.play", "no such action"))?;
     if s.actions.playback_stack.iter().any(|name| name == &action.name) || s.actions.recording.is_some_and(|(_, i)| i == idx) {
         return Err(bad("actions.play", format!("recursive action call to `{}`", action.name)));
@@ -848,6 +860,20 @@ fn move_item(s: &mut Session, p: &Value) -> Result<Value> {
         if to >= s.actions.list.len() {
             return Err(bad("actions.move", "destination is out of range"));
         }
+        let name = &s.actions.list[idx].name;
+        let first = s.actions.list.iter().position(|action| &action.name == name).unwrap_or(idx);
+        let changes_owner = if first == idx { to > idx && s.actions.list[idx + 1..=to].iter().any(|action| &action.name == name) } else { to <= first };
+        if changes_owner {
+            let mut shortcuts = s.prefs().shortcuts.clone();
+            let mut alternates = s.prefs().alternate_shortcuts.clone();
+            pin_shortcut(&mut s.actions.list, first, &mut shortcuts, &mut alternates)?;
+            if shortcuts != s.prefs().shortcuts || alternates != s.prefs().alternate_shortcuts {
+                s.edit_prefs(|prefs| {
+                    prefs.shortcuts = shortcuts;
+                    prefs.alternate_shortcuts = alternates;
+                });
+            }
+        }
         let moved = s.actions.list.remove(idx);
         let result = json!({"action": moved.name, "index": to});
         s.actions.list.insert(to, moved);
@@ -904,16 +930,9 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
     if s.actions.recording.is_some() {
         return Err(bad("actions.delete", "stop recording before deleting an action"));
     }
+    remove_shortcuts(s, |row, _| row == idx);
     let name = s.actions.list.remove(idx).name;
     s.actions.touch();
-    // Its function key goes with it, or the next action given the same name would inherit it.
-    let key = format!("{PLAY_SHORTCUT_PREFIX}{name}");
-    if s.prefs().shortcuts.contains_key(&key) || s.prefs().alternate_shortcuts.contains_key(&key) {
-        s.edit_prefs(|prefs| {
-            prefs.shortcuts.remove(&key);
-            prefs.alternate_shortcuts.remove(&key);
-        });
-    }
     Ok(json!({"deleted": name}))
 }
 
@@ -1012,7 +1031,6 @@ fn rename(s: &mut Session, p: &Value) -> Result<Value> {
     // rename only if it resolved to this action before it, so one reaching the other stays put.
     let before = s.actions.list.clone();
     let by_name = resolve(&before, &json!({"action": old}), "actions.rename").ok() == Some(idx);
-    let ambiguous_binding = ambiguous_shortcut_names(&before).contains(old.as_str());
     let calls = s.actions.list.iter_mut().flat_map(|a| a.steps.iter_mut()).chain(s.journal.iter_mut().skip(pending));
     for (id, params) in calls {
         let keys: &[&str] = match id.as_str() {
@@ -1034,15 +1052,13 @@ fn rename(s: &mut Session, p: &Value) -> Result<Value> {
     }
     s.actions.touch();
     let (from, to) = (format!("{PLAY_SHORTCUT_PREFIX}{old}"), format!("{PLAY_SHORTCUT_PREFIX}{name}"));
-    if s.prefs().shortcuts.contains_key(&from) || (ambiguous_binding && s.prefs().alternate_shortcuts.contains_key(&from)) {
+    if by_name && (s.prefs().shortcuts.contains_key(&from) || s.prefs().alternate_shortcuts.contains_key(&from)) {
         s.edit_prefs(|prefs| {
-            if let Some(key) = prefs.shortcuts.remove(&from)
-                && !ambiguous_binding
-            {
-                prefs.shortcuts.insert(to, key);
+            if let Some(key) = prefs.shortcuts.remove(&from) {
+                prefs.shortcuts.insert(to.clone(), key);
             }
-            if ambiguous_binding {
-                prefs.alternate_shortcuts.remove(&from);
+            if let Some(keys) = prefs.alternate_shortcuts.remove(&from) {
+                prefs.alternate_shortcuts.insert(to, keys);
             }
         });
     }

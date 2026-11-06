@@ -106,6 +106,6 @@ pub(in super::super) fn replace(s: &mut Session, p: &Value) -> Result<Value> {
     let (bytes, _) = crate::preset_import_cmds::file_bytes(p, COMMAND, ".atn file")?;
     let Replacement { list, rows, keys, warnings, unsupported } = Replacement::parse(&bytes, encoding)?;
     let result = json!({"sets":rows,"actions":list.iter().map(|a| &a.name).collect::<Vec<_>>(),"warnings":warnings,"unsupported":unsupported});
-    publish_library(s, list, Vec::new(), rows, Some(keys), "Undo Replace Actions");
+    publish_library(s, list, Vec::new(), rows, Some(keys), "Undo Replace Actions", COMMAND)?;
     Ok(result)
 }

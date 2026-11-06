@@ -125,36 +125,73 @@ fn recording_and_assignment_infer_only_unambiguous_folder_occurrences() {
 /// Repeated factory actions keep their display names. A name-only shortcut is removed
 /// when that name ceases to identify a physical row, and Undo restores the binding.
 #[test]
-fn repeated_reset_and_store_attachment_do_not_retarget_shortcuts() {
+fn repeated_reset_pins_existing_shortcuts_and_undo_restores_legacy_keys() {
     let mut s = Session::new();
-    let store = MemBackend::default();
-    s.attach_preset_store(open(Box::new(store.clone())));
     s.execute("actions.reset", json!({"confirm":true,"mode":"append"})).unwrap();
     let shortcut = format!("{PLAY_SHORTCUT_PREFIX}Invert Colors");
     s.edit_prefs(|prefs| {
         prefs.shortcuts.insert(shortcut.clone(), "F2".into());
         prefs.alternate_shortcuts.insert(shortcut.clone(), vec!["F3".into()]);
     });
+    let before = s.actions.list.clone();
+    let prefs = s.prefs().clone();
+    assert!(s.execute("actions.reset", json!({"confirm":false,"mode":"append"})).is_err());
+    assert_eq!(s.actions.list, before);
+    assert_eq!(s.prefs().shortcuts, prefs.shortcuts);
+    assert_eq!(s.prefs().alternate_shortcuts, prefs.alternate_shortcuts);
+
     s.execute("actions.reset", json!({"confirm":true,"mode":"append"})).unwrap();
+    let key = crate::actions_cmds::occurrence_key(s.actions.list[0].action_id.as_deref().unwrap());
+    assert_eq!(crate::actions_cmds::shortcut_row(&s.actions.list, &key), Some(0));
+    assert_eq!(s.prefs().shortcuts[&key], "F2");
+    assert_eq!(s.prefs().alternate_shortcuts[&key], ["F3"]);
     assert!(!s.prefs().shortcuts.contains_key(&shortcut));
     assert!(!s.prefs().alternate_shortcuts.contains_key(&shortcut));
     assert_eq!(s.actions.list.iter().filter(|action| action.name == "Invert Colors").count(), 2);
+
     s.execute("actions.undoLibrary", json!({})).unwrap();
+    assert_eq!(s.actions.list, before);
     assert_eq!(s.prefs().shortcuts[&shortcut], "F2");
     assert_eq!(s.prefs().alternate_shortcuts[&shortcut], ["F3"]);
-    s.sync_preset_store();
+    assert!(!s.prefs().shortcuts.contains_key(&key));
+}
 
-    let mut attached = Session::new();
-    attached.actions.list.push(Action::new("Invert Colors", Vec::new()));
-    attached.edit_prefs(|prefs| {
-        prefs.shortcuts.insert(shortcut.clone(), "F2".into());
-        prefs.alternate_shortcuts.insert(shortcut.clone(), vec!["F3".into()]);
-    });
-    attached.attach_preset_store(open(Box::new(store)));
-    assert_eq!(attached.actions.list.iter().filter(|action| action.name == "Invert Colors").count(), 2);
-    assert!(!attached.prefs().shortcuts.contains_key(&shortcut));
-    assert!(!attached.prefs().alternate_shortcuts.contains_key(&shortcut));
-    assert_eq!(attached.execute("actions.get", json!({"action":"Invert Colors"})).unwrap()["set"], serde_json::Value::Null);
+#[test]
+fn duplicate_stored_ids_stay_unplayable_after_deleting_one_row() {
+    use crate::preset_store::{ACTIONS_FILE, PresetBackend};
+
+    let store = MemBackend::default();
+    let id = "0".repeat(32);
+    let file = json!({"version":1,"actions":[{"name":"First","action_id":id},{"name":"Second","action_id":id}]});
+    store.write(ACTIONS_FILE, file.to_string().as_bytes()).unwrap();
+    let mut s = Session::new();
+    s.attach_preset_store(open(Box::new(store)));
+    let key = crate::actions_cmds::occurrence_key(&id);
+    assert_eq!(crate::actions_cmds::shortcut_row(&s.actions.list, &key), None);
+    s.execute("actions.delete", json!({"action":"First"})).unwrap();
+    assert_eq!(crate::actions_cmds::shortcut_row(&s.actions.list, &key), None);
+    assert!(s.execute("actions.play", json!({"actionId":id,"action":"Second"})).is_err());
+    assert!(s.execute("actions.play", json!({"actionId":"invalid","action":"Second"})).is_err());
+    assert_eq!(s.execute("actions.play", json!({"action":"Second"})).unwrap()["ran"], 0);
+}
+
+#[test]
+fn atn_export_and_load_keep_function_keys_of_duplicate_rows_separate() {
+    let mut s = Session::new();
+    for _ in 0..2 {
+        s.execute("actions.reset", json!({"confirm":true,"mode":"append"})).unwrap();
+    }
+    for (row, key) in [(0, "F2"), (2, "F3")] {
+        let id = crate::actions_cmds::prepare_action_id(&s.actions.list, row).unwrap();
+        s.edit_prefs(|prefs| prefs.shortcuts.insert(crate::actions_cmds::occurrence_key(&id), key.into()));
+        crate::actions_cmds::commit_action_id(&mut s, row, id);
+    }
+    let archive = s.execute("actions.save", json!({"set":"PhotoCraft Basics","skipUnsupported":true})).unwrap();
+    let mut loaded = Session::new();
+    let result = loaded.execute("actions.load", json!({"data":archive["data"]})).unwrap();
+    assert_eq!(result["functionKeys"], json!([{"action":"Invert Colors","key":"F2"},{"action":"Invert Colors 2","key":"F3"}]));
+    assert_eq!(crate::actions_cmds::action_shortcut(&loaded, 0), Some("F2"));
+    assert_eq!(crate::actions_cmds::action_shortcut(&loaded, 2), Some("F3"));
 }
 
 /// Imported calls follow a local physical folder before falling back to the first archive name.

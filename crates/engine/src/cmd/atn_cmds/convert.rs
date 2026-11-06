@@ -120,21 +120,25 @@ pub(super) struct ReplacementSet {
     pub keys: Vec<(usize, String)>,
 }
 
+pub(super) fn import_first_with_keys(bytes: &[u8], encoding: Option<&str>) -> std::result::Result<ReplacementSet, String> {
+    let file = atn::parse_with_encoding(bytes, encoding).map_err(|error| error.to_string())?;
+    Ok(convert_with_keys(&file))
+}
+
 pub(super) fn import_sets(bytes: &[u8], encoding: Option<&str>) -> std::result::Result<Vec<ReplacementSet>, String> {
     let files = atn::parse_sets_with_encoding(bytes, encoding).map_err(|error| error.to_string())?;
-    Ok(files
+    Ok(files.iter().map(convert_with_keys).collect())
+}
+
+fn convert_with_keys(file: &AtnFile) -> ReplacementSet {
+    let keys = file
+        .actions
         .iter()
-        .map(|file| {
-            let keys = file
-                .actions
-                .iter()
-                .enumerate()
-                .filter(|(_, action)| action.function_key > 0)
-                .map(|(index, action)| (index, function_key_name(action.function_key, action.shift, action.command)))
-                .collect();
-            ReplacementSet { imported: convert_set(file), keys }
-        })
-        .collect())
+        .enumerate()
+        .filter(|(_, action)| action.function_key > 0)
+        .map(|(index, action)| (index, function_key_name(action.function_key, action.shift, action.command)))
+        .collect();
+    ReplacementSet { imported: convert_set(file), keys }
 }
 
 fn convert_set(file: &AtnFile) -> Imported {
@@ -253,11 +257,20 @@ pub fn export(
     function_keys: &[(String, String)],
     skip_unsupported: bool,
 ) -> std::result::Result<(Vec<u8>, Vec<Skipped>), String> {
+    export_with_keys(set, actions, |_, action| function_keys.iter().find(|(name, _)| name == &action.name).map(|(_, key)| key.as_str()), skip_unsupported)
+}
+
+pub(super) fn export_with_keys<'a>(
+    set: &str,
+    actions: &[&Action],
+    key: impl Fn(usize, &Action) -> Option<&'a str>,
+    skip_unsupported: bool,
+) -> std::result::Result<(Vec<u8>, Vec<Skipped>), String> {
     let mut skipped = Vec::new();
     let mut file = AtnFile { name: UnicodeString::new_nul(set), expanded: true, actions: Vec::new(), warnings: Vec::new(), ..Default::default() };
-    for a in actions {
+    for (index, a) in actions.iter().enumerate() {
         let mut out = AtnAction { name: UnicodeString::new_nul(&a.name), expanded: false, ..Default::default() };
-        if let Some((n, shift, command)) = function_keys.iter().find(|(n, _)| n == &a.name).and_then(|(_, key)| parse_function_key(key)) {
+        if let Some((n, shift, command)) = key(index, a).and_then(parse_function_key) {
             (out.function_key, out.shift, out.command) = (n, shift, command);
         }
         for (i, (id, params)) in a.steps.iter().enumerate() {

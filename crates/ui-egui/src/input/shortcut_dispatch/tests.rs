@@ -7,6 +7,7 @@ use egui::{Modifiers, PointerButton, Pos2, vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use photocraft_doc::LayerContent;
+use photocraft_engine::actions_cmds;
 use serde_json::json;
 
 use super::{Focus, Outcome, bindings, set_dry_run, take_log};
@@ -782,6 +783,71 @@ fn clip_key_toggles_several_selected_layers() {
     assert!(!is_clipped(&h, paint) && !is_clipped(&h, top) && !is_clipped(&h, base));
 }
 
+fn action_key(h: &Harness<'_, PhotocraftApp>, index: usize) -> String {
+    actions_cmds::occurrence_key(h.state().session.actions.list[index].action_id.as_deref().unwrap())
+}
+
+fn repeated_reset_shortcuts(h: &mut Harness<'_, PhotocraftApp>) {
+    for _ in 0..2 {
+        h.state_mut().run("actions.reset", json!({"confirm":true,"mode":"append"})).unwrap();
+    }
+    for (index, key, name) in [(0, "F2", "first occurrence"), (2, "F3", "second occurrence")] {
+        h.state_mut().session.actions.list[index].steps = vec![("layer.new.layer".into(), json!({"name":name}))];
+        crate::actions::assign_shortcut(h.state_mut(), index, key).unwrap();
+    }
+}
+
+#[test]
+fn f2_dispatches_only_the_first_same_named_action() {
+    let mut h = harness();
+    repeated_reset_shortcuts(&mut h);
+    let count = h.state().session.active().unwrap().doc.layers.len();
+    press(&mut h, "F2");
+    assert_eq!(active_name(&h), "first occurrence");
+    assert_eq!(h.state().session.active().unwrap().doc.layers.len(), count + 1);
+}
+
+#[test]
+fn f3_dispatches_only_the_second_same_named_action_after_reorder_and_reopen() {
+    use photocraft_engine::preset_store::{MemBackend, open};
+
+    let mut h = harness();
+    let store = MemBackend::default();
+    h.state_mut().session.attach_preset_store(open(Box::new(store.clone())));
+    repeated_reset_shortcuts(&mut h);
+    let first_key = action_key(&h, 0);
+    let second_key = action_key(&h, 2);
+    h.state_mut().run("actions.move", json!({"action":2,"to":0})).unwrap();
+    h.state_mut().session.sync_preset_store();
+    let prefs = h.state().session.prefs_to_json();
+
+    let mut h = harness();
+    h.state_mut().session.load_prefs_json(&prefs).unwrap();
+    h.state_mut().session.attach_preset_store(open(Box::new(store)));
+    assert_eq!(action_key(&h, 0), second_key);
+    let count = h.state().session.active().unwrap().doc.layers.len();
+    press(&mut h, "F3");
+    assert_eq!(active_name(&h), "second occurrence");
+    assert_eq!(h.state().session.active().unwrap().doc.layers.len(), count + 1);
+    h.state_mut().run("actions.delete", json!({"action":1})).unwrap();
+    assert!(!h.state().session.prefs().shortcuts.contains_key(&first_key));
+    assert_eq!(h.state().session.prefs().shortcuts[&second_key], "F3");
+    press(&mut h, "F2");
+    assert_eq!(h.state().session.active().unwrap().doc.layers.len(), count + 1);
+}
+
+#[test]
+fn denied_shortcut_assignment_leaves_identity_and_bindings_unmodified() {
+    let mut h = harness();
+    h.state_mut().session.actions.list.push(actions_cmds::Action::new("Action", Vec::new()));
+    h.state_mut().services.automation_command = Some(Box::new(|_, _| Err("denied shortcut edit".into())));
+    h.state_mut().automation_input = true;
+    let prefs = h.state().session.prefs().shortcuts.clone();
+    assert!(crate::actions::assign_shortcut(h.state_mut(), 0, "F2").is_err());
+    assert!(h.state().session.actions.list[0].action_id.is_none());
+    assert_eq!(h.state().session.prefs().shortcuts, prefs);
+}
+
 #[test]
 fn named_action_function_key_replays_and_survives_preferences_roundtrip() {
     let mut h = harness();
@@ -792,7 +858,7 @@ fn named_action_function_key_replays_and_survives_preferences_roundtrip() {
         ..Default::default()
     };
     h.state_mut().session.actions.list.push(action);
-    crate::actions::assign_shortcut(h.state_mut(), "LivePrint 2R", "F6").unwrap();
+    crate::actions::assign_shortcut(h.state_mut(), 0, "F6").unwrap();
     let saved = serde_json::to_value(h.state().session.prefs()).unwrap();
     let restored = serde_json::from_value(saved).unwrap();
     h.state_mut().session.edit_prefs(|p| *p = restored);
@@ -801,9 +867,9 @@ fn named_action_function_key_replays_and_survives_preferences_roundtrip() {
     assert_eq!(active_name(&h), "F6 overlay");
     assert_eq!(h.state().ui.status, "Played 1 step");
     assert!(!h.state().ui.status_error);
-    assert_eq!(take_log(&h.ctx), vec![(crate::actions::shortcut_id("LivePrint 2R"), Outcome::Ran)]);
+    assert_eq!(take_log(&h.ctx), vec![(action_key(&h, 0), Outcome::Ran)]);
     h.state_mut().run("actions.delete", json!({"action": "LivePrint 2R"})).unwrap();
-    assert!(bindings(h.state()).iter().all(|(id, _)| !id.starts_with(crate::actions::SHORTCUT_PREFIX)));
+    assert!(bindings(h.state()).iter().all(|(id, _)| !actions_cmds::is_action_key(id)));
     assert!(bindings(h.state()).iter().any(|(_, sc)| *sc == parse("F6").unwrap()));
 }
 
@@ -818,14 +884,14 @@ fn assigning_action_function_key_moves_it_and_reports_failed_steps() {
             ..Default::default()
         });
     }
-    crate::actions::assign_shortcut(h.state_mut(), "first", "F6").unwrap();
-    crate::actions::assign_shortcut(h.state_mut(), "second", "F6").unwrap();
-    assert_eq!(h.state().session.prefs().shortcuts[&crate::actions::shortcut_id("first")], "");
+    crate::actions::assign_shortcut(h.state_mut(), 0, "F6").unwrap();
+    crate::actions::assign_shortcut(h.state_mut(), 1, "F6").unwrap();
+    assert_eq!(h.state().session.prefs().shortcuts[&action_key(&h, 0)], "");
     h.state_mut().ui.actions.selected = Some(0);
     press(&mut h, "F6");
     assert!(h.state().ui.status_error);
     assert!(h.state().ui.status.contains("Step 1 (no.such.command) failed"));
-    assert!(matches!(&take_log(&h.ctx)[..], [(id, Outcome::Failed(_))] if id == "actions.play:second"));
+    assert!(matches!(&take_log(&h.ctx)[..], [(id, Outcome::Failed(_))] if id == &action_key(&h, 1)));
 }
 
 #[test]
@@ -837,10 +903,11 @@ fn action_function_key_checks_automation_authorization() {
         disabled: Default::default(),
         ..Default::default()
     });
-    crate::actions::assign_shortcut(h.state_mut(), "restricted", "F6").unwrap();
+    crate::actions::assign_shortcut(h.state_mut(), 0, "F6").unwrap();
     h.state_mut().services.automation_command = Some(Box::new(|id, _| if id == "actions.play" { Err("denied action playback".into()) } else { Ok(()) }));
     h.state_mut().automation_input = true;
-    super::dispatch(h.state_mut(), &egui::Context::default(), "actions.play:restricted");
+    let id = action_key(&h, 0);
+    super::dispatch(h.state_mut(), &egui::Context::default(), &id);
     assert_eq!(h.state().ui.status, "denied action playback");
     assert_eq!(active_name(&h), "paint");
 }
@@ -855,7 +922,7 @@ fn fit_shortcut_records_and_f6_fits_the_resized_canvas() {
     assert_eq!(h.state().session.actions.list[0].steps.iter().map(|s| s.0.as_str()).collect::<Vec<_>>(), ["image.canvasSize", "view.fitOnScreen"]);
     let item = crate::menus::menu_items(h.state()).into_iter().find(|i| i.id == "view.fitOnScreen").unwrap();
     assert_eq!(item.shortcut.as_deref(), Some("Cmd+0"));
-    crate::actions::assign_shortcut(h.state_mut(), "Resize and fit", "F6").unwrap();
+    crate::actions::assign_shortcut(h.state_mut(), 0, "F6").unwrap();
     h.state_mut().ui.views[0].zoom = 0.1;
     h.state_mut().ui.views[0].center = [0.0, 0.0];
     press(&mut h, "F6");
@@ -875,7 +942,7 @@ fn f6_while_recording_records_a_named_call_not_the_child_steps() {
         disabled: Default::default(),
         ..Default::default()
     });
-    crate::actions::assign_shortcut(h.state_mut(), "LivePrint 2R", "F6").unwrap();
+    crate::actions::assign_shortcut(h.state_mut(), 0, "F6").unwrap();
     h.state_mut().run("actions.record", json!({"name":"Action 2"})).unwrap();
     press(&mut h, "F6");
     assert_eq!(active_name(&h), "Nested overlay");

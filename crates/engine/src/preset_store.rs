@@ -754,6 +754,7 @@ fn load_actions(backend: &dyn PresetBackend, warnings: &mut Vec<String>) -> Opti
     };
     match serde_json::from_slice::<crate::actions_cmds::ActionsFile>(&bytes) {
         Ok(mut file) if file.version == 1 => {
+            crate::actions_cmds::invalidate_duplicate_ids(&mut file.actions);
             for action in &mut file.actions {
                 action.set_slot = action.set_slot.filter(|&slot| action.set.is_some() && file.set_rows.get(slot) == action.set.as_ref());
             }

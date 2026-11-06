@@ -225,29 +225,35 @@ pub fn action_steps(action: &Action) -> Vec<Value> {
     action.enabled_steps().map(|(_, (id, p))| json!([id, p])).collect()
 }
 
-/// Named action bindings use the existing persisted shortcut overrides. Keeping the
-/// name in the key means selecting or deleting another row cannot retarget F6.
-pub(crate) const SHORTCUT_PREFIX: &str = actions_cmds::PLAY_SHORTCUT_PREFIX;
-
-pub(crate) fn shortcut_id(name: &str) -> String {
-    format!("{SHORTCUT_PREFIX}{name}")
-}
-
-pub(crate) fn assign_shortcut(app: &mut PhotocraftApp, name: &str, shortcut: &str) -> Result<Value, String> {
-    if actions_cmds::ambiguous_shortcut_names(&app.session.actions.list).contains(name) {
-        return Err(tl!("Rename the action before assigning it a shortcut.").into());
-    }
-    let id = shortcut_id(name);
+pub(crate) fn assign_shortcut(app: &mut PhotocraftApp, index: usize, shortcut: &str) -> Result<Value, String> {
+    let list = &app.session.actions.list;
+    let action_id = actions_cmds::prepare_action_id(list, index).map_err(|error| error.to_string())?;
+    let id = actions_cmds::occurrence_key(&action_id);
+    let legacy = format!("{}{}", actions_cmds::PLAY_SHORTCUT_PREFIX, list[index].name);
+    let prefs = app.session.prefs();
     let mut set = serde_json::Map::new();
-    // A function key belongs to only one action. Ordinary menu bindings remain
-    // intact and become available again when the action binding is removed.
-    for (other, assigned) in &app.session.prefs().shortcuts {
-        if other.starts_with(SHORTCUT_PREFIX) && other != &id && assigned == shortcut && !shortcut.is_empty() {
+    let mut alternates = serde_json::Map::new();
+    // A function key belongs to only one action. Ordinary menu bindings remain intact.
+    for (other, assigned) in &prefs.shortcuts {
+        if actions_cmds::is_action_key(other) && other != &id && assigned == shortcut && !shortcut.is_empty() {
             set.insert(other.clone(), json!(""));
         }
     }
+    if actions_cmds::shortcut_row(list, &legacy) == Some(index) {
+        if prefs.shortcuts.contains_key(&legacy) {
+            set.insert(legacy.clone(), Value::Null);
+        }
+        if let Some(keys) = prefs.alternate_shortcuts.get(&legacy) {
+            if !prefs.alternate_shortcuts.contains_key(&id) {
+                alternates.insert(id.clone(), json!(keys));
+            }
+            alternates.insert(legacy, Value::Null);
+        }
+    }
     set.insert(id, json!(shortcut));
-    app.run("edit.keyboardShortcuts", json!({"set": set, "allowUnknown": true, "removeConflicts": false}))
+    let result = app.run("edit.keyboardShortcuts", json!({"set": set, "alternates": alternates, "allowUnknown": true, "removeConflicts": false}))?;
+    actions_cmds::commit_action_id(&mut app.session, index, action_id);
+    Ok(result)
 }
 
 /// Replay edits synchronously, with view steps handled by the shell in the same order.
@@ -1763,21 +1769,18 @@ fn draw_set_header(ui: &mut egui::Ui, set: &str, count: u64, collapsed: bool, se
     SetHeaderResult { toggled, picked, save }
 }
 
-fn action_context_menu(app: &mut PhotocraftApp, response: &egui::Response, index: usize, name: &str, swatch: &str, ambiguous: bool) {
+fn action_context_menu(app: &mut PhotocraftApp, response: &egui::Response, index: usize, swatch: &str) {
     egui::Popup::context_menu(response).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
         ui.label(tl!("Keyboard Shortcuts"));
-        if ambiguous {
-            ui.label(tl!("Rename the action before assigning it a shortcut."));
-        }
-        ui.add_enabled_ui(!ambiguous, |ui| {
-            let current = app.session.prefs().shortcuts.get(&shortcut_id(name)).cloned().unwrap_or_default();
+        {
+            let current = actions_cmds::action_shortcut(&app.session, index).unwrap_or_default();
             // Photoshop's Action Options: a function key, with Shift and Command (#7646).
-            let (key, mut shift, mut command) = photocraft_engine::atn_cmds::parse_function_key(&current).unwrap_or((0, false, false));
+            let (key, mut shift, mut command) = photocraft_engine::atn_cmds::parse_function_key(current).unwrap_or((0, false, false));
             for number in std::iter::once(0).chain(1..=12) {
                 let label = if number == 0 { tl!("None").to_string() } else { format!("F{number}") };
                 if ui.selectable_label(key == number, label).clicked() {
                     let chosen = if number == 0 { String::new() } else { photocraft_engine::atn_cmds::function_key_name(number, shift, command) };
-                    let _ = assign_shortcut(app, name, &chosen);
+                    let _ = assign_shortcut(app, index, &chosen);
                     ui.close();
                 }
             }
@@ -1785,10 +1788,10 @@ fn action_context_menu(app: &mut PhotocraftApp, response: &egui::Response, index
                 let command_label = if cfg!(target_os = "macos") { tl!("Command") } else { tl!("Ctrl") };
                 let toggled = ui.checkbox(&mut shift, tl!("Shift")).changed() | ui.checkbox(&mut command, command_label).changed();
                 if toggled {
-                    let _ = assign_shortcut(app, name, &photocraft_engine::atn_cmds::function_key_name(key, shift, command));
+                    let _ = assign_shortcut(app, index, &photocraft_engine::atn_cmds::function_key_name(key, shift, command));
                 }
             });
-        });
+        }
         ui.separator();
         ui.menu_button(tl!("Color"), |ui| {
             for (id, label) in [
@@ -1816,8 +1819,6 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
     let t = Tokens::get(ui.ctx());
     let recording = app.session.actions.recording;
-    let ambiguous: std::collections::HashSet<String> = actions_cmds::ambiguous_shortcut_names(&app.session.actions.list)
-        .into_iter().map(str::to_string).collect();
     let rows: Vec<Row> = app
         .session
         .actions
@@ -1943,11 +1944,8 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 ui.painter().text(
                     pos2(rect.right() - 8.0, rect.center().y),
                     Align2::RIGHT_CENTER,
-                    app.session
-                        .prefs()
-                        .shortcuts
-                        .get(&shortcut_id(name))
-                        .filter(|s| !s.is_empty() && !ambiguous.contains(name.as_str()))
+                    actions_cmds::action_shortcut(&app.session, i)
+                        .filter(|key| !key.is_empty())
                         .map_or_else(|| step_count(nsteps, disabled.len()), |key| format!("{key} · {}", step_count(nsteps, disabled.len()))),
                     egui::FontId::proportional(11.0),
                     t.text_faint,
@@ -1971,7 +1969,7 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             }
             // Clicks inside stay open, so Shift and Command can both be ticked; every item that
             // finishes closes the menu itself.
-            action_context_menu(app, &resp, i, name, swatch, ambiguous.contains(name.as_str()));
+            action_context_menu(app, &resp, i, swatch);
             if resp.double_clicked() && !button_mode {
                 // Photoshop renames in place when the name itself is double-clicked.
                 if resp.interact_pointer_pos().is_some_and(|p| name_rect.expand2(vec2(4.0, 13.0)).contains(p)) {

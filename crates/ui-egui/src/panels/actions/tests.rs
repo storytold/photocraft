@@ -60,15 +60,6 @@ fn repeated_factory_rows_select_and_play_independently() {
     app.ui.actions.slot_revision = app.session.actions.set_rows_revision;
     assert_eq!(playback_targets(&app), [2, 3]);
     assert_eq!(new_action_set(&app).unwrap().slot, Some(1));
-
-    // An older or manually edited preferences file can still contain a name-only key.
-    let id = shortcut_id("Invert Colors");
-    app.session.edit_prefs(|prefs| {
-        prefs.shortcuts.insert(id.clone(), "F2".into());
-        prefs.alternate_shortcuts.insert(id.clone(), vec!["F3".into()]);
-    });
-    assert!(!crate::shortcut_dispatch::bindings(&app).iter().any(|(bound, _)| bound == &id));
-    assert!(assign_shortcut(&mut app, "Invert Colors", "F4").is_err());
 }
 
 #[test]
@@ -510,7 +501,7 @@ fn a_function_key_with_shift_and_command_plays_its_action() {
     });
     let key = photocraft_engine::atn_cmds::function_key_name(2, true, true);
     assert_eq!(key, "Cmd+Shift+F2");
-    assign_shortcut(&mut app, "Action 1", &key).unwrap();
+    assign_shortcut(&mut app, 0, &key).unwrap();
     let ctx = egui::Context::default();
     let press = |app: &mut PhotocraftApp, modifiers| {
         ctx.begin_pass(egui::RawInput {
@@ -3026,15 +3017,12 @@ fn replace_picker_checks_selected_source_and_rechecks_payload_on_confirm() {
         if p.get("path").is_some() {
             return Err("path denied by policy".into());
         }
-        if p.get("data").is_some() && policy.get() {
-            Ok(())
-        } else {
-            Err("payload denied by policy".into())
-        }
+        if p.get("data").is_some() && policy.get() { Ok(()) } else { Err("payload denied by policy".into()) }
     });
-    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services {
-        file_dialog: Some(file_dialog), automation_command: Some(automation_command), ..Default::default()
-    });
+    let mut app = PhotocraftApp::new(
+        photocraft_engine::Session::new(),
+        crate::Services { file_dialog: Some(file_dialog), automation_command: Some(automation_command), ..Default::default() },
+    );
     app.run("actions.newSet", json!({"name":"Keep"})).unwrap();
     let ctx = egui::Context::default();
     for attempt in 0..2 {
@@ -3076,9 +3064,10 @@ fn stale_same_caption_selection_does_not_follow_a_compacted_slot() {
 fn dragging_uses_the_displayed_folder_occurrence() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.session.actions.set_rows = vec!["Same".into(), "Same".into()];
-    app.session.actions.list = [("A", 0), ("B", 1), ("C", 0)].into_iter().map(|(name, slot)| {
-        Action { set: Some("Same".into()), set_slot: Some(slot), ..Action::new(name, Vec::new()) }
-    }).collect();
+    app.session.actions.list = [("A", 0), ("B", 1), ("C", 0)]
+        .into_iter()
+        .map(|(name, slot)| Action { set: Some("Same".into()), set_slot: Some(slot), ..Action::new(name, Vec::new()) })
+        .collect();
     move_row(&mut app, DragRow { action: 0, step: None }, 1, 2);
     assert_eq!(app.session.actions.list[1].name, "A");
     assert_eq!(app.session.actions.list[1].set_slot, Some(0));
