@@ -31,7 +31,10 @@ const MAX_SS: f64 = 8.0;
 /// Places a smart object's source image (`src`, its pixels in `src_rect`) in the document:
 /// through `warp` (source space) and then the affine `t` (source → document) in one resampling
 /// pass, an exact shift for whole-pixel translations (so conversions and re-renders are
-/// lossless), bicubic otherwise. Shared by the engine's re-render and PSD export's filter cache.
+/// lossless), bicubic otherwise. A warp samples bilinearly, as the reference application draws a
+/// warped smart object: with bicubic, the sharp detail of a warp (cell borders, a fold's edges)
+/// came out crisper than its render. Shared by the engine's re-render and PSD export's filter
+/// cache.
 pub fn place_source(
     src: &Surface,
     src_rect: Rect,
@@ -44,7 +47,7 @@ pub fn place_source(
             let (u, v) = w.map(x, y);
             (a * u + c * v + e, b * u + d * v + f)
         };
-        return Ok(warp_mesh_surface(src, src_rect, &map, Interp::Bicubic));
+        return Ok(warp_mesh_surface(src, src_rect, &map, Interp::Bilinear));
     }
     let near = |x: f64, y: f64| (x - y).abs() < 1e-9;
     if near(a, 1.0) && near(b, 0.0) && near(c, 0.0) && near(d, 1.0) && near(e, e.round()) && near(f, f.round()) {
@@ -54,7 +57,7 @@ pub fn place_source(
 }
 
 /// [`place_source`] through a projective map `h` (source → document; Distort, Perspective): the
-/// warp first (in source space), then `h`.
+/// warp first (in source space), then `h`; bilinear through a warp, as there.
 pub fn place_source_projective(
     src: &Surface,
     src_rect: Rect,
@@ -66,7 +69,7 @@ pub fn place_source_projective(
             let (u, v) = w.map(x, y);
             h.apply(u, v)
         };
-        return Ok(warp_mesh_surface(src, src_rect, &map, Interp::Bicubic));
+        return Ok(warp_mesh_surface(src, src_rect, &map, Interp::Bilinear));
     }
     crate::transform::warp_surface(src, src_rect, h, Interp::Bicubic)
 }
@@ -682,6 +685,25 @@ mod tests {
             // (up to 0.2 off); point sampling lands wholly on or off a line (up to 0.56 off).
             assert!(worst < 0.25, "{s:?}: worst deviation from the area average {worst}");
         }
+    }
+
+    /// A warped smart object samples bilinearly: between two source pixels it ramps straight from
+    /// one to the other, where bicubic overshoots next to a change (0.957 here, for 0.875).
+    #[test]
+    fn a_warped_smart_object_samples_bilinearly() {
+        let mut src = Surface::new(PixelFormat::RGBA8);
+        for x in 0..4 {
+            let v = if x % 2 == 1 { 1.0 } else { 0.0 };
+            src.fill_rect(Rect::new(x, 0, x + 1, 1), &[v, v, v, 1.0]);
+        }
+        // The 4 x 1 source (black, white, black, white) scaled four times by a warp: an identity
+        // mesh over a box four times as big.
+        let warp = Warp::custom(photocraft_geom::warp::BezierMesh::identity([0.0, 0.0, 16.0, 4.0], 1, 1), [0.0, 0.0, 4.0, 1.0]);
+        let out = place_source(&src, Rect::new(0, 0, 4, 1), &photocraft_geom::Affine::IDENTITY, Some(&warp)).unwrap();
+        // Destination pixel 6 (centre 6.5) is source x = 1.625: an eighth of the way from the white
+        // pixel 1 to the black pixel 2.
+        let v = out.read_region(Rect::new(6, 1, 7, 2))[0];
+        assert!((v - 0.875).abs() < 0.01, "a straight ramp: {v}");
     }
 
     #[test]

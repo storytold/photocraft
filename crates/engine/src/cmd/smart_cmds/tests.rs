@@ -848,7 +848,10 @@ fn identity_mesh_on_a_skewed_smart_object_changes_nothing() {
     let mesh = photocraft_geom::warp::BezierMesh::fit(&place, vec![0.0, 1.0], vec![0.0, 0.25, 1.0]);
     let rect = [x0, y0, x1, y1 + 10.0];
     s.execute("layer.smartObjects.warp", json!({"layer": id, "style": "custom", "rect": rect, "mesh": mesh})).unwrap();
-    assert!(mean_diff(&before, &flat(&s)) < 0.01, "mean diff {}", mean_diff(&before, &flat(&s)));
+    // The same geometry, though a warp samples bilinearly where the plain placement is bicubic:
+    // on this per-pixel noise that alone is a mean of 0.012. A placement lost or shifted (#10325)
+    // is far more.
+    assert!(mean_diff(&before, &flat(&s)) < 0.02, "mean diff {}", mean_diff(&before, &flat(&s)));
 }
 
 fn convert_to_layers(s: &mut Session) -> Value {
