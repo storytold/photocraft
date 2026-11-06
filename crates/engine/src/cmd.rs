@@ -423,11 +423,16 @@ fn build() -> Vec<CommandSpec> {
             "Rectangular Selection",
             [],
             None,
-            r##"{"x":i32,"y":i32,"width":u32,"height":u32,"mode":"replace|add|subtract|intersect"="replace","ellipse":bool=false,"line":"row|column"?,"antiAlias":bool=true,"feather":px=0}"##,
+            r##"{"x":i32,"y":i32,"width":u32,"height":u32,"mode":"replace|add|subtract|intersect"="replace","ellipse":bool=false,"clipToCanvas":bool=true (false keeps the full Fixed Size marquee outside the canvas),"line":"row|column"?,"antiAlias":bool=true,"feather":px=0}"##,
             has_doc,
             |s, p| {
                 let get = |k: &str| int_i32("select.rect", p, k).and_then(|v| v.ok_or_else(|| bad("select.rect", format!("missing `{k}`"))));
-                let r = Rect::from_xywh(get("x")?, get("y")?, get("width")?.max(0) as u32, get("height")?.max(0) as u32);
+                let (x, y, w, h) = (get("x")?, get("y")?, get("width")?.max(0) as u32, get("height")?.max(0) as u32);
+                let clip = p.get("clipToCanvas").and_then(Value::as_bool).unwrap_or(true);
+                if !clip && (x.checked_add_unsigned(w).is_none() || y.checked_add_unsigned(h).is_none()) {
+                    return Err(bad("select.rect", "the full marquee exceeds the pixel coordinate range"));
+                }
+                let r = Rect::from_xywh(x, y, w, h);
                 let mode = p.get("mode").and_then(Value::as_str).unwrap_or("replace").to_string();
                 let ellipse = p.get("ellipse").and_then(Value::as_bool).unwrap_or(false);
                 // The History step is named after the tool: the Single Row / Single Column
@@ -443,9 +448,10 @@ fn build() -> Vec<CommandSpec> {
                 let aa = p.get("antiAlias").and_then(Value::as_bool).unwrap_or(true);
                 let feather = p.get("feather").and_then(Value::as_f64).unwrap_or(0.0).clamp(0.0, 1000.0) as f32;
                 s.edit(step, |doc, _| {
-                    let area = doc.bounds();
-                    // A marquee dragged past the canvas stops at its edge (Photoshop); the ellipse
-                    // keeps the dragged shape and is only cut there.
+                    // Fixed Size keeps the entire shape so moving its outline can recover the
+                    // part initially outside the canvas. Normal marquees retain their clipping.
+                    let canvas = doc.bounds();
+                    let area = if clip { canvas } else { selection_cmds::unclipped_marquee_area(r, feather)? };
                     use photocraft_algo::selection as sel;
                     let shape = if ellipse {
                         sel::ellipse_surface(r, area, aa)
@@ -469,15 +475,15 @@ fn build() -> Vec<CommandSpec> {
                         ("subtract" | "intersect", None) => Surface::new(photocraft_color::PixelFormat::GRAY8),
                         _ => shape,
                     };
-                    // Sparse Add/Subtract keeps untouched pixels outside the canvas. Only pixels
-                    // inside the document count when deciding whether a selection remains.
+                    // Sparse Add/Subtract keeps untouched pixels outside the canvas. Clipped marquees
+                    // count only on-canvas coverage; Fixed Size also retains a wholly outside mask.
                     let has_on_canvas_pixels = (combined.default_bytes().first().copied().unwrap_or(0) != 0 && {
-                        let canvas_tiles = u64::from(area.width().div_ceil(TILE_SIZE as u32)) * u64::from(area.height().div_ceil(TILE_SIZE as u32));
-                        let stored = combined.tiles().filter(|(coord, _)| !coord.rect().intersect(&area).is_empty()).count() as u64;
+                        let canvas_tiles = u64::from(canvas.width().div_ceil(TILE_SIZE as u32)) * u64::from(canvas.height().div_ceil(TILE_SIZE as u32));
+                        let stored = combined.tiles().filter(|(coord, _)| !coord.rect().intersect(&canvas).is_empty()).count() as u64;
                         stored < canvas_tiles
                     }) || combined.tiles().any(|(coord, tile)| {
                         let tile_rect = coord.rect();
-                        let overlap = tile_rect.intersect(&area);
+                        let overlap = tile_rect.intersect(&canvas);
                         if overlap.is_empty() {
                             return false;
                         }
@@ -489,7 +495,7 @@ fn build() -> Vec<CommandSpec> {
                             tile.bytes().get(start..row_start + x1).is_some_and(|row| row.iter().any(|&v| v != 0))
                         })
                     });
-                    doc.selection = has_on_canvas_pixels.then_some(combined);
+                    doc.selection = (has_on_canvas_pixels || (!clip && !combined.content_bounds().is_empty())).then_some(combined);
                     Ok(())
                 })?;
                 Ok(Value::Null)

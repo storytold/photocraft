@@ -17,8 +17,12 @@ fn harness(tool: Tool) -> Harness<'static, PhotocraftApp> {
 }
 
 fn harness_with_step_dt(tool: Tool, step_dt: f32) -> Harness<'static, PhotocraftApp> {
+    harness_with_canvas(tool, step_dt, [400, 300])
+}
+
+fn harness_with_canvas(tool: Tool, step_dt: f32, [width, height]: [u32; 2]) -> Harness<'static, PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-    app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
+    app.run("file.new", json!({"width": width, "height": height})).unwrap();
     app.sync_views();
     app.ui.extras.rulers = false;
     app.ui.tool = tool;
@@ -38,7 +42,7 @@ fn harness_with_step_dt(tool: Tool, step_dt: f32) -> Harness<'static, Photocraft
     // 100 %: one document pixel per point, so drags land on whole pixels.
     let v = &mut h.state_mut().ui.views[0];
     v.zoom = 1.0;
-    v.center = [200.0, 150.0];
+    v.center = [width as f32 / 2.0, height as f32 / 2.0];
     v.fit_pending = false;
     h.run_steps(2);
     h
@@ -300,6 +304,34 @@ fn fixed_size_drag_inside_a_completed_box_still_moves_its_outline() {
             release_at(&mut h, x + 2.0, y + 1.0, Modifiers::NONE);
             assert_eq!(selection(&h), r.translate(2, 1), "zoom {zoom}, snap {snap}");
         }
+    }
+}
+
+/// A 100 × 50 box clicked halfway across a 100² document stays 100 × 50 when moved back.
+#[test]
+fn fixed_size_keeps_the_off_canvas_part_when_its_outline_moves() {
+    for width in [100.0, 160.0] {
+        let mut h = harness_with_canvas(Tool::RectMarquee, 0.25, [100, 100]);
+        h.state_mut().ui.extras.snap = false;
+        let o = &mut h.state_mut().ui.tool_options;
+        o.marquee_style = "fixedSize".into();
+        (o.marquee_width, o.marquee_height) = (width, 50.0);
+        move_to(&mut h, 50.0, 25.0);
+        let p = screen(&h, 50.0, 25.0);
+        button(&mut h, p, true, Modifiers::NONE);
+        button(&mut h, p, false, Modifiers::NONE);
+        assert_eq!(selection(&h), Rect::from_xywh(50, 25, width as u32, 50));
+        press_at(&mut h, 75.0, 40.0, Modifiers::NONE);
+        release_at(&mut h, 25.0, 40.0, Modifiers::NONE);
+        assert_eq!(selection(&h), Rect::from_xywh(0, 25, width as u32, 50));
+        // Cross the left/top edges and move back again, without rebuilding from the options.
+        h.state_mut().ui.tool_options.marquee_width = 11.0;
+        press_at(&mut h, 25.0, 40.0, Modifiers::NONE);
+        release_at(&mut h, 5.0, 5.0, Modifiers::NONE);
+        assert_eq!(selection(&h), Rect::from_xywh(-20, -10, width as u32, 50));
+        press_at(&mut h, 10.0, 10.0, Modifiers::NONE);
+        release_at(&mut h, 30.0, 45.0, Modifiers::NONE);
+        assert_eq!(selection(&h), Rect::from_xywh(0, 25, width as u32, 50));
     }
 }
 
