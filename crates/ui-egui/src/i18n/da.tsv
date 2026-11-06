@@ -86,6 +86,7 @@
 	Right	Højre
 	Open Recent	Åbn seneste
 	Clear Recent Files	Ryd seneste filer
+	Clear Recent File List	Ryd seneste filer
 	Remove from Recent	Fjern fra seneste
 	Remove {name} from Recent	Fjern {name} fra seneste
 	Close	Luk
@@ -94,6 +95,10 @@
 	Restore	Gendan
 	Close All	Luk alle
 	Close Others	Luk andre
+	New Document…	Nyt dokument…
+	Open Document…	Åbn…
+	Consolidate All to Here	Saml alle her
+	Move to New Window	Flyt til nyt vindue
 	Save	Gem
 	Save As…	Gem som…
 	Save a Copy…	Gem en kopi…
@@ -508,7 +513,6 @@
 	Match Location	Afstem placering
 	Match Rotation	Afstem rotation
 	Match All	Afstem alle
-	New Window for Document	Nyt vindue til dokument
 	Workspace	Arbejdsområde
 	Extensions	Udvidelser
 	Panels	Paneler
@@ -686,6 +690,7 @@
 	Units & Rulers…	Enheder og linealer…
 	Guides, Grid & Slices…	Hjælpelinjer, gitter og udsnit…
 	Plug-ins…	Plug-ins…
+	Plugins…	Plug-ins…
 	Technology Previews	Teknologieksempler
 	Scratch Disks…	Arbejdsdiske…
 	Export Preferences…	Eksportpræferencer…
@@ -920,8 +925,8 @@
 	ACES	ACES
 	Industry Standard	Industristandard
 	Web	Web
-	Internet Standard RGB	Internetstandard-RGB
-	Legacy Macintosh RGB	Ældre Macintosh RGB
+	Internet Standard RGB (sRGB)	Internetstandard-RGB (sRGB)
+	Legacy Macintosh RGB (Gamma 1.8)	Ældre Macintosh RGB (Gamma 1.8)
 	Monitor RGB	Skærm-RGB
 	Windows LCD	Windows LCD
 	Coated CMYK	Bestrøget CMYK
@@ -1742,6 +1747,7 @@
 	Saved	Gemt
 	Reveal in Finder	Vis i Finder
 	Show in Explorer	Vis i Stifinder
+	Reveal in Explorer	Vis i Stifinder
 	Show in Folder	Vis i mappe
 	Before (Y)	Før (Y)
 	Save Settings…	Gem indstillinger…
@@ -1921,6 +1927,8 @@
 	Combine Shapes	Kombinér former
 	Contract…	Formindsk…
 	Convert to Embedded	Konvertér til indlejret
+	Embed Linked	Indlejr sammenkædet
+	Embed All Linked	Indlejr alle sammenkædede
 	Convert to Layers	Konvertér til lag
 	Convert to Linked…	Konvertér til sammenkædet…
 	Count	Optælling
@@ -2008,6 +2016,7 @@
 	Pixelate	Pixelér
 	Place Scale Marker…	Placér skalamarkør…
 	Plug-ins	Plug-ins
+	Plugins	Plug-ins
 	Print One Copy	Udskriv én kopi
 	Print…	Udskriv…
 	Range	Spændvidde
@@ -2052,7 +2061,7 @@
 	Vertical Centers	Lodrette midtpunkter
 	Video Frames to Layers…	Videobilleder til lag…
 	WIA Support…	WIA-support…
-	Working CMY Plate	Arbejds-CMY-plade
+	Working CMY Plates	Arbejds-CMY-plade
 
 # tl! literals (third pass)
 	Absolute	Absolut
@@ -2338,6 +2347,11 @@
 	Show canvas dots	Vis lærredsprikker
 	Clip thumbnails to layer bounds	Klip miniaturer til laggrænser
 	Clip Thumbnails to Layer Bounds	Klip miniaturer til laggrænser
+	No Thumbnails	Ingen miniaturer
+	Small Thumbnails	Små miniaturer
+	Medium Thumbnails	Mellemstore miniaturer
+	Large Thumbnails	Store miniaturer
+	Clip Thumbnails to Document Bounds	Klip miniaturer til dokumentgrænser
 	Canvas color	Lærredsfarve
 	Canvas custom color	Brugerdefineret lærredsfarve
 	Classic	Klassisk
