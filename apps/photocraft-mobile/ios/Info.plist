@@ -17,6 +17,8 @@
 	<!-- SwiftUI's scene life cycle (required with the iOS 27 SDK). -->
 	<key>UIApplicationSceneManifest</key>
 	<dict><key>UIApplicationSupportsMultipleScenes</key><false/></dict>
+	<!-- Trackpad and mouse clicks arrive as pointer touches (hover, secondary click, scroll). -->
+	<key>UIApplicationSupportsIndirectInputEvents</key><true/>
 	<key>UIRequiresFullScreen</key><true/>
 	<!-- Without a launch screen iPadOS runs the app letterboxed at a legacy size. -->
 	<key>UILaunchScreen</key><dict/>
