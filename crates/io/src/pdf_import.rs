@@ -131,7 +131,7 @@ pub fn import(name: &str, bytes: &[u8], opts: &ImportOptions, ctl: &Interrupt) -
         let rect = Rect::new(x as i32, 0, (x + width) as i32, height as i32);
         let mut children = vec![layer];
         if opts.pdf_text || opts.pdf_vectors {
-            children.extend(object_layers(&page, *h_pt, dpi, x, opts));
+            children.extend(object_layers(&page, opts, &PageFrame { height_pt: *h_pt, dpi, x, rgba: &bitmap.as_rgba_bytes(), width, height }));
         }
         let group = Group { children, expanded: true, artboard: Some(Artboard::new(rect)), frame_stroke: None };
         doc.layers.push(Layer::new(format!("Page {}", page_index + 1), LayerContent::Group(group)));
@@ -147,10 +147,22 @@ pub fn import(name: &str, bytes: &[u8], opts: &ImportOptions, ctl: &Interrupt) -
     Ok(ImportResult { warnings, document: doc, source_read_only: false, preview_only: false })
 }
 
+/// One rendered page's frame: its point height, DPI, document x, and the RGBA pixels.
+struct PageFrame<'a> {
+    height_pt: f64,
+    dpi: f64,
+    x: u32,
+    rgba: &'a [u8],
+    width: u32,
+    height: u32,
+}
+
 /// Editable text and shape layers for one rendered page, in document pixels.
 #[cfg(not(target_arch = "wasm32"))]
-fn object_layers(page: &pdfium_render::prelude::PdfPage, height_pt: f64, dpi: f64, x: u32, opts: &ImportOptions) -> Vec<Layer> {
+fn object_layers(page: &pdfium_render::prelude::PdfPage, opts: &ImportOptions, frame: &PageFrame) -> Vec<Layer> {
     use pdfium_render::prelude::*;
+
+    let PageFrame { height_pt, dpi, x, rgba, width: page_width, height: page_height } = *frame;
 
     let to_x = |v: f32| f64::from(v) * dpi / 72.0;
     let objects = page.objects();
@@ -166,14 +178,26 @@ fn object_layers(page: &pdfium_render::prelude::PdfPage, height_pt: f64, dpi: f6
                 let x_px = to_x(bounds.left().value).round() + f64::from(x);
                 let y_px = (height_pt - to_x(bounds.top().value)).round();
                 // The text layer's size is in points; the transform is in document pixels.
+                // The text object does not expose its fill colour; sample the rendered page at the
+                // text's centre so the editable layer starts with the right colour.
+                let cx = (to_x(bounds.left().value).round().max(0.0) as u32).min(page_width.saturating_sub(1));
+                let cy = ((height_pt - to_x(bounds.top().value)).round().max(0.0) as u32).min(page_height.saturating_sub(1));
+                let i = (cy as usize * page_width as usize + cx as usize) * 4;
+                let color = if i + 3 < rgba.len() && rgba[i + 3] > 0 {
+                    Color::rgb(f32::from(rgba[i]) / 255.0, f32::from(rgba[i + 1]) / 255.0, f32::from(rgba[i + 2]) / 255.0)
+                } else {
+                    Color::BLACK
+                };
                 let size_pt = f64::from(text.scaled_font_size().value).max(1.0);
+                let font = text.font();
+                let family = if font.family().is_empty() { font.name() } else { font.family() };
                 layers.push(Layer::new(
                     "Text",
                     LayerContent::Text(TextLayer {
                         text: content,
-                        font_family: text.font().family(),
+                        font_family: family,
                         size_pt: size_pt as f32,
-                        color: Color::BLACK,
+                        color,
                         transform: Affine::translate(x_px, y_px),
                         ..Default::default()
                     }),
