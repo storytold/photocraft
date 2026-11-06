@@ -507,6 +507,7 @@ pub fn open_editor(app: &mut PhotocraftApp, ctx: &egui::Context, layer: u64, sm:
     }) else {
         return;
     };
+    let mode = app.session.active().map(|st| st.doc.mode);
     if let Some(d) = app.ui.dialog_mut(id) {
         d.fields.insert("__smartFilter".into(), target);
         if let Value::Object(p) = &f.params {
@@ -515,6 +516,9 @@ pub fn open_editor(app: &mut PhotocraftApp, ctx: &egui::Context, layer: u64, sm:
                     d.fields.insert(k.clone(), v.clone());
                 }
             }
+        }
+        if let Some(mode) = mode {
+            crate::adjust_dialog::seed_from_recorded(&mut d.fields, &f.params, mode);
         }
     }
 }

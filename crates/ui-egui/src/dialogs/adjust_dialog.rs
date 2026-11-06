@@ -307,6 +307,19 @@ pub fn open(app: &mut PhotocraftApp, command: &str) -> Option<u64> {
     Some(app.ui.open_dialog(crate::state::DialogKind::Command, fields))
 }
 
+/// Sets an adjustment dialog's parameters to the complete set `recorded` renders in a `mode`
+/// document, so the controls show it and OK keeps it. Laid over the dialog's defaults instead, a
+/// default can be read over a recorded key that means the same setting (a Lab `lightness` over
+/// `points`). Settings the engine can't read are left as they are, for OK to report on.
+pub(crate) fn seed_from_recorded(fields: &mut Map<String, Value>, recorded: &Value, mode: photocraft_doc::ColorMode) {
+    let Some(kind) = fields.get("__adjust").and_then(Value::as_str) else { return };
+    let Ok(adjustment) = photocraft_engine::adjust_params::from_params(kind, recorded, None, mode) else { return };
+    if let Value::Object(values) = photocraft_engine::adjust_params::to_params(&adjustment) {
+        fields.retain(|k, _| k.starts_with("__") || k == "target");
+        fields.extend(values);
+    }
+}
+
 /// Whether the dialog's captured target is a set of several Lab components, whose Levels and
 /// Curves settings are kept as a separate combined record.
 fn combined_lab_target(fields: &Map<String, Value>) -> bool {
