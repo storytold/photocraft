@@ -22,6 +22,7 @@ mod atn_shear;
 mod atn_stroke_width;
 mod atn_type_path;
 mod atn_v12;
+mod average_smart;
 mod background_and_mask_depth;
 mod background_layer_consistency;
 mod brush_smoothing;

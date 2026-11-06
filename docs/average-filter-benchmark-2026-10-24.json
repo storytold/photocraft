@@ -1,0 +1,88 @@
+{
+  "full": {
+    "dense": {
+      "runs": 5,
+      "seconds": [
+        1.96268,
+        1.877448,
+        1.977076,
+        1.914373,
+        1.772323
+      ],
+      "median_seconds": 1.914373,
+      "peak_working_set_bytes": [
+        1456193536,
+        1453760512,
+        1453760512,
+        1453764608,
+        1453764608
+      ],
+      "median_peak_working_set_bytes": 1453764608
+    },
+    "stream": {
+      "runs": 5,
+      "seconds": [
+        1.187622,
+        1.136437,
+        1.097797,
+        1.007543,
+        0.947543
+      ],
+      "median_seconds": 1.097797,
+      "peak_working_set_bytes": [
+        213184512,
+        213950464,
+        213200896,
+        213540864,
+        213139456
+      ],
+      "median_peak_working_set_bytes": 213200896
+    },
+    "full_output_hash": "9d843acc1e6106bf"
+  },
+  "selected": {
+    "dense": {
+      "runs": 5,
+      "seconds": [
+        2.693447,
+        2.625899,
+        2.589282,
+        2.455371,
+        2.745251
+      ],
+      "median_seconds": 2.625899,
+      "peak_working_set_bytes": [
+        1459486720,
+        1459490816,
+        1459486720,
+        1459494912,
+        1459486720
+      ],
+      "median_peak_working_set_bytes": 1459486720
+    },
+    "stream": {
+      "runs": 5,
+      "seconds": [
+        1.310837,
+        1.169039,
+        1.121842,
+        1.225944,
+        1.095265
+      ],
+      "median_seconds": 1.169039,
+      "peak_working_set_bytes": [
+        218808320,
+        218935296,
+        218906624,
+        218705920,
+        218931200
+      ],
+      "median_peak_working_set_bytes": 218906624
+    },
+    "full_output_hash": "f8e0e6427433728c"
+  },
+  "executable_sha256": "5bb834fd15584f887372e9648a4341c827f16ee91d1d1e62d15a5f15cc92dbab",
+  "source_commit": "1c38945f8ba94c989c609ec142964367df33835e",
+  "tested_base": "1c3db2e5c35a4f8c544011e57c8026ccb9741926",
+  "platform": "Windows x64/MSVC; Rust 1.99.1; Intel Core i7-11370H (4 cores / 8 threads)"
+}
