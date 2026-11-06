@@ -255,7 +255,7 @@ The desktop app also offers an authenticated, loopback-only control channel (`ph
 - **Copy-on-write tiles:** 256² sparse tiles make undo cheap and huge canvases light, and effect maps are cached per layer state.
 - **Runs in the browser:** the whole engine and UI compile to WebAssembly.
 - **Clean-room:** implemented from public specs and observed behaviour only. No proprietary code, shaders or assets.
-- **Tested:** more than 15,000 tests, including PSD round trips, synthetic generators, compositor oracles and multi-depth checks.
+- **Tested:** about 15,000 test functions, including PSD round trips, synthetic generators, compositor oracles and multi-depth checks.
 
 ## Get started
 
