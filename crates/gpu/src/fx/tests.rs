@@ -145,13 +145,17 @@ fn raster_shape_band_keeps_float_alpha_bits() {
     use photocraft_geom::Size;
     let doc = Document::new("float alpha", Size::new(4, 1), ColorMode::Rgb, SampleType::F32);
     let mut layer = Layer::raster("alpha", PixelFormat::RGBA32F);
-    for (x, alpha) in [f32::NAN, f32::NEG_INFINITY, f32::INFINITY, -0.0].into_iter().enumerate() {
+    for (x, alpha) in [f32::from_bits(0x7fc0_0001), f32::NEG_INFINITY, f32::INFINITY, -0.0].into_iter().enumerate() {
         layer.surface_mut().unwrap().fill_rect(Rect::new(x as i32, 0, x as i32 + 1, 1), &[0.2, 0.3, 0.4, alpha]);
     }
     let r = doc.bounds();
     let actual = shape_band(&doc, &layer, r);
     let expected = photocraft_compose::layer_shape(&doc, &layer, r);
     assert_eq!(actual.iter().map(|x| x.to_bits()).collect::<Vec<_>>(), expected.iter().map(|x| x.to_bits()).collect::<Vec<_>>());
+    let cached = shape(&doc, &layer, r);
+    assert!(shape_matches(&doc, &layer, r, &cached), "unchanged NaN alpha must reuse the cached shape");
+    layer.surface_mut().unwrap().fill_rect(Rect::new(0, 0, 1, 1), &[0.2, 0.3, 0.4, f32::from_bits(0x7fc0_0002)]);
+    assert!(!shape_matches(&doc, &layer, r, &cached), "a changed NaN payload must invalidate the cache");
 }
 
 /// Filled-shape identity survives integer moves, including fractional anchors and handles.

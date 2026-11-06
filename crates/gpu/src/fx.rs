@@ -480,7 +480,11 @@ pub(crate) fn shape_matches(doc: &photocraft_doc::Document, layer: &Layer, r: Re
     par_map(bands(r, BAND), |band| {
         let v = shape_band(doc, layer, band);
         let start = (i64::from(band.y0) - i64::from(r.y0)) as usize * width;
-        let equal = start.checked_add(v.len()).and_then(|end| cached.get(start..end)) == Some(v.as_slice());
+        // NaN is unequal to itself, but identical stored coverage must keep its cached maps.
+        let equal = start
+            .checked_add(v.len())
+            .and_then(|end| cached.get(start..end))
+            .is_some_and(|prior| prior.iter().zip(&v).all(|(a, b)| a.to_bits() == b.to_bits()));
         photocraft_raster::scratch::give(v);
         equal
     })
