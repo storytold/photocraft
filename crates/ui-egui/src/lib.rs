@@ -924,6 +924,9 @@ mod single_line_marquee_move_tests;
 mod guide_cursor_tests;
 
 #[cfg(test)]
+mod tool_cursors_tests;
+
+#[cfg(test)]
 mod canvas_menu_tests;
 
 #[cfg(test)]
