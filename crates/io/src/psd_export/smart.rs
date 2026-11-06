@@ -186,13 +186,22 @@ impl SmartOut {
             let data: Vec<u8> = self.add.iter().flat_map(crate::linked::encode_linked_file).collect();
             out.push((*b"8BIM", *b"lnk2", Blob::new(data)));
         }
+        // The copies of each block, appended to it once (not one copy of the block per record).
+        let mut appended: Vec<([u8; 4], [u8; 4], Vec<u8>)> = Vec::new();
         for (sig, key, data) in self.linked_copies.values() {
-            if let Some((_, _, block)) = out.iter_mut().find(|(s, k, _)| s == sig && k == key) {
-                let mut joined = block.resident().to_vec();
-                joined.extend_from_slice(data.resident());
+            match appended.iter_mut().find(|(s, k, _)| s == sig && k == key) {
+                Some((_, _, bytes)) => bytes.extend_from_slice(data.resident()),
+                None => appended.push((*sig, *key, data.resident().to_vec())),
+            }
+        }
+        for (sig, key, extra) in appended {
+            if let Some((_, _, block)) = out.iter_mut().find(|(s, k, _)| *s == sig && *k == key) {
+                let mut joined = Vec::with_capacity(block.resident().len() + extra.len());
+                joined.extend_from_slice(block.resident());
+                joined.extend_from_slice(&extra);
                 *block = Blob::new(joined);
             } else {
-                out.push((*sig, *key, data.clone()));
+                out.push((sig, key, Blob::new(extra)));
             }
         }
         if !fx_placed && !self.new_fx.is_empty() {

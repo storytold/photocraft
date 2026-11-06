@@ -32,14 +32,15 @@ fn main() {
     }
 }
 
-fn embedded(doc: &photocraft_doc::Document) -> Vec<(String, u64)> {
-    let mut v: Vec<(String, u64)> = doc
+/// Each embedded file's uuid, length and content hash: a change of any byte shows.
+fn embedded(doc: &photocraft_doc::Document) -> Vec<(String, u64, [u8; 32])> {
+    let mut v: Vec<(String, u64, [u8; 32])> = doc
         .metadata
         .psd_global_blocks
         .iter()
         .filter(|(_, k, _)| matches!(k, b"lnk2" | b"lnk3" | b"lnkD"))
         .flat_map(|(_, _, d)| photocraft_io::linked::parse_linked_files(&d.bytes().unwrap_or_default()))
-        .map(|f| (f.uuid, f.bytes.len() as u64))
+        .map(|f| (f.uuid, f.bytes.len() as u64, *blake3::hash(&f.bytes).as_bytes()))
         .collect();
     v.sort();
     v

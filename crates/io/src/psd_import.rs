@@ -855,17 +855,25 @@ impl Ctx<'_> {
             _ => stored,
         };
         // The global blocks' data lives in `self.global` (an owned open moves it out of the file).
+        let mut source_read_error = None;
         let vector_preview = rec.block(&crate::vector_preview::PSD_KEY).and_then(|block| {
             let global = &self.global;
+            // A block left in the opened file: this smart object's file is read, unless it is
+            // larger than any vector source a preview can belong to.
             self.vector_previews.decode(&id, &block.data, || {
-                let in_memory = global.iter().filter(|(_, _, d)| d.is_in_memory());
-                match crate::linked::embedded_payload_in_blocks(in_memory.map(|(_, key, data)| (key, data.resident())), &id) {
-                    Some((_, source)) => Some(std::borrow::Cow::Borrowed(source)),
-                    // A block left in the opened file: this smart object's file is read.
-                    None => crate::linked::find_in_globals(global, &id).map(|f| std::borrow::Cow::Owned(f.bytes)),
+                match crate::linked::embedded_payload_in_globals(global, &id, crate::vector_preview::MAX_BYTES as u64) {
+                    Ok(found) => found.map(|(_, source)| source),
+                    Err(e) => {
+                        source_read_error = Some(e);
+                        None
+                    }
                 }
             })
         });
+        // The opened file could not be read: the open fails, as for a layer's pixels.
+        if let Some(e) = source_read_error {
+            self.fatal_error.get_or_insert_with(|| crate::IoError::Read(format!("layer \"{name}\": its smart object's embedded file could not be read: {e}")));
+        }
         LayerContent::Smart(SmartObject {
             contents_id,
             source: SmartSource::Linked { path: id },
