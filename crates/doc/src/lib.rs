@@ -968,7 +968,9 @@ pub struct FileEncoding {
     pub png_stereo: Option<u8>,
     /// How many images (frames, pages, parts, icon sizes) the file held when it held more than
     /// the one the document was opened from; `u32::MAX` when the count is unknown. File › Save
-    /// then goes through Save As rather than writing one image over all of them (#5733).
+    /// then goes through Save As rather than writing one image over all of them (#5733). Kept in
+    /// `.pcraft` on purpose: crash recovery reopens the autosaved bundle at the original path,
+    /// where the count must still hold. A document's own Save or Save As clears it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_images: Option<u32>,
 }
