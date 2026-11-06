@@ -85,7 +85,8 @@ pub fn body(ui: &mut egui::Ui, fields: &Map<String, Value>) {
     ));
 }
 
-/// Whether this is Replace; an omitted choice keeps the default New Group answer.
+/// Return whether to replace the group. A missing choice means New Group; a present invalid value
+/// is rejected so the caller can leave the pending import available for correction.
 pub(crate) fn replace_choice(fields: &Map<String, Value>) -> Result<bool, String> {
     match fields.get("choice") {
         None => Ok(false),
@@ -95,7 +96,8 @@ pub(crate) fn replace_choice(fields: &Map<String, Value>) -> Result<bool, String
     }
 }
 
-/// The held import: as a new group, or replacing the group when `choice` is "replace".
+/// Validate the answer before taking the held import. New Group keeps the existing group;
+/// Replace imports into its place.
 pub fn confirm(app: &mut PhotocraftApp, fields: &Map<String, Value>) -> Result<Value, String> {
     let replace = replace_choice(fields)?;
     let Held { cmd, what, stem, mut params } = app.held_preset_import.take().ok_or(tl!("No import is waiting. Import the file again."))?;

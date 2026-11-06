@@ -44,37 +44,44 @@ fn held(app: &PhotocraftApp) -> Value {
 }
 
 impl Fixture {
+    /// Import two distinct presets, edit one, and seed a neighboring group with the same file.
     fn new(kind: Kind) -> Self {
         let (name, stem, bytes) = match kind {
             Kind::Brushes => {
                 use photocraft_psd::abr::{LegacyBrush, LegacyTip, write_v12};
-                let brush = |name: &str| LegacyBrush {
-                    name: name.into(),
+                let brush = |diameter| LegacyBrush {
+                    name: String::new(),
                     spacing: 25,
                     anti_alias: true,
-                    tip: LegacyTip::Computed { diameter: 9, hardness: 100, angle: 0, roundness: 100 },
+                    tip: LegacyTip::Computed { diameter, hardness: 100, angle: 0, roundness: 100 },
                 };
-                ("Kit.abr", "Kit", write_v12(2, &[brush("Chalk"), brush("Ink")], true).unwrap())
+                ("Kit.abr", "Kit", write_v12(2, &[brush(9), brush(17)], true).unwrap())
             }
             Kind::Gradients => {
                 use photocraft_psd::grd::{GrdColor, GrdGradient, GrdStop, write};
-                let gradient = GrdGradient {
-                    name: "Ember".into(),
+                let gradient = |name: &str, rgb| GrdGradient {
+                    name: name.into(),
                     stops: vec![
                         GrdStop { location: 0.0, midpoint: 0.5, color: GrdColor::Foreground },
-                        GrdStop { location: 1.0, midpoint: 0.5, color: GrdColor::Rgb([1.0, 0.0, 0.0]) },
+                        GrdStop { location: 1.0, midpoint: 0.5, color: GrdColor::Rgb(rgb) },
                     ],
                     ..Default::default()
                 };
-                ("Fire.grd", "Fire", write(&[gradient]))
+                ("Fire.grd", "Fire", write(&[gradient("Ember", [1.0, 0.0, 0.0]), gradient("Tide", [0.0, 0.0, 1.0])]))
             }
         };
         let mut app = Box::new(PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default()));
         app.open_bytes(name, &bytes).unwrap();
         let original = group(&app, kind, stem);
         match kind {
-            Kind::Brushes => app.session.tools.presets.iter_mut().find(|p| p.group == stem).unwrap().brush.size = 77.0,
-            Kind::Gradients => app.session.presets.gradients.iter_mut().find(|g| g.name == stem).unwrap().items[0].name = "Edited gradient".into(),
+            Kind::Brushes => {
+                assert_eq!(original.as_array().unwrap().len(), 2);
+                app.session.tools.presets.iter_mut().find(|p| p.group == stem).unwrap().brush.size = 77.0;
+            }
+            Kind::Gradients => {
+                assert_eq!(original[0]["items"].as_array().unwrap().len(), 2);
+                app.session.presets.gradients.iter_mut().find(|g| g.name == stem).unwrap().items[0].name = "Edited gradient".into();
+            }
         }
         let edited = group(&app, kind, stem);
         assert_ne!(edited, original, "the fixture contains a user's edit");
@@ -108,6 +115,7 @@ impl Fixture {
         self.check_import(id, choice == "replace");
     }
 
+    /// Compare every imported entry and check that a second confirmation cannot replay the import.
     fn check_import(&mut self, id: u64, replace: bool) {
         assert!(self.app.held_preset_import.is_none());
         assert!(self.app.ui.dialogs.iter().all(|d| d.id != id));
@@ -124,7 +132,24 @@ impl Fixture {
             assert_eq!(group(&self.app, self.kind, &format!("{} (2)", self.stem)), json!([]));
         } else {
             assert_eq!(group(&self.app, self.kind, self.stem), self.edited, "a new group keeps the existing edits");
-            assert!(!group(&self.app, self.kind, &format!("{} (2)", self.stem)).as_array().unwrap().is_empty());
+            let sibling = format!("{} (2)", self.stem);
+            let mut expected = self.original.clone();
+            match self.kind {
+                Kind::Brushes => {
+                    // Computed ABR tips get names from their diameters; two groups already own them.
+                    expected[0]["name"] = json!("9 px Round 3");
+                    expected[1]["name"] = json!("17 px Round 3");
+                    expected[0]["group"] = json!(sibling);
+                    expected[1]["group"] = json!(sibling);
+                }
+                Kind::Gradients => {
+                    // Fire's renamed Ember leaves its base name to Unrelated; both groups still own a Tide.
+                    expected[0]["name"] = json!(sibling);
+                    expected[0]["items"][0]["name"] = json!("Ember 2");
+                    expected[0]["items"][1]["name"] = json!("Tide 3");
+                }
+            }
+            assert_eq!(group(&self.app, self.kind, &sibling), expected, "every file entry is imported once into the sibling");
             assert_eq!(group(&self.app, self.kind, &format!("{} (3)", self.stem)), json!([]));
         }
         let after = library(&self.app);
@@ -134,6 +159,7 @@ impl Fixture {
     }
 }
 
+/// A malformed answer must preserve the pending bytes and allow either valid answer on retry.
 fn malformed_choice(kind: Kind) {
     for invalid in [json!("replcae"), json!(""), Value::Null, json!(false), json!(17), json!([]), json!({})] {
         for corrected in ["new", "replace"] {
@@ -167,6 +193,7 @@ fn malformed_gradient_choice_preserves_api_retry() {
     malformed_choice(Kind::Gradients);
 }
 
+/// The visible default, explicit answers and Cancel all use the dialog API.
 #[test]
 fn legitimate_preset_choices_use_the_dialog_api() {
     for kind in [Kind::Brushes, Kind::Gradients] {
@@ -193,6 +220,7 @@ fn legitimate_preset_choices_use_the_dialog_api() {
     }
 }
 
+/// A legacy prompt with no choice field still imports all entries into a new group.
 #[test]
 fn absent_preset_choice_keeps_the_new_group_default() {
     for kind in [Kind::Brushes, Kind::Gradients] {
