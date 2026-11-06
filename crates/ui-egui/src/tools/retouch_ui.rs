@@ -51,7 +51,11 @@ pub(crate) fn clone_params(app: &PhotocraftApp) -> Option<Value> {
 /// options bar's Mode, which is the tool's own brush's. For an Eraser with Erase to History they
 /// also carry `eraseToHistory` and the Eraser's Pencil or Block tip.
 pub(crate) fn history_brush_params(app: &PhotocraftApp) -> Value {
-    let mut p = json!({"mode": app.session.tools.brush.mode.label()});
+    let mut p = json!({
+        "mode": app.session.tools.brush.mode.label(),
+        "opacity": app.session.tools.brush.opacity * 100.0,
+        "flow": app.session.tools.brush.flow * 100.0,
+    });
     if app.ui.tool == Tool::Eraser && app.ui.tool_options.erase_to_history {
         p["eraseToHistory"] = json!(true);
         // The Eraser's Pencil and Block tips (as `strokes::stroke_params`).
@@ -171,6 +175,7 @@ pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], m
                 "style": o.art_history_style,
                 "area": o.art_history_area,
                 "tolerance": o.art_history_tolerance,
+                "opacity": app.session.tools.brush.opacity * 100.0,
             }),
         ),
         Tool::Blur | Tool::Sharpen | Tool::Smudge | Tool::Dodge | Tool::Burn | Tool::Sponge => match dab_params(app, tool) {
@@ -678,7 +683,28 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             crate::widgets::value_field(ui, &mut o.cr_tolerance, 0.0..=100.0, "%", 62.0);
             crate::widgets::checkbox(ui, &mut o.cr_anti_alias, tl!("Anti-alias"));
         }
-        Tool::HistoryBrush => opt(ui, tl!("Paints from the History panel's source state")),
+        Tool::HistoryBrush => {
+            let label = app.session.active().and_then(|st| match photocraft_engine::history_source_cmds::source(st)? {
+                photocraft_engine::history_source_cmds::HistorySource::Snapshot(id) => {
+                    let s = st.snapshots.iter().find(|s| s.id == id)?;
+                    Some(crate::i18n::fmt(tl!("Source: {name}"), &[("name", &s.name)]))
+                }
+                photocraft_engine::history_source_cmds::HistorySource::State(idx) => {
+                    let entries = st.history.entries();
+                    let name =
+                        if idx < entries.len() { entries.get(idx).cloned() } else { st.history.redo_labels().nth(idx - entries.len()).map(str::to_string) }?;
+                    if idx == 0 && name == "Open" {
+                        Some(tl!("Paints from the document's opening state").to_string())
+                    } else {
+                        Some(crate::i18n::fmt(tl!("Source: {name}"), &[("name", &name)]))
+                    }
+                }
+            });
+            match label {
+                Some(text) => opt(ui, &text),
+                None => opt(ui, tl!("The History Brush source was deleted: set a new source in the History panel")),
+            }
+        }
         Tool::ArtHistoryBrush => {
             opt(ui, tl!("Style"));
             let styles = [
