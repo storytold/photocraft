@@ -171,15 +171,32 @@ struct PageFrame<'a> {
     height: u32,
 }
 
+impl PageFrame<'_> {
+    /// Maps a point in PDF page space (points, origin bottom-left) to document pixels: the Y flip
+    /// and the page's X offset both belong to this mapping.
+    fn to_doc(&self, x_pt: f32, y_pt: f32) -> (f64, f64) {
+        let x_px = f64::from(x_pt) * self.dpi / 72.0 + f64::from(self.x);
+        let y_px = (self.height_pt - f64::from(y_pt)) * self.dpi / 72.0;
+        (x_px.round(), y_px.round())
+    }
+
+    /// The rendered page's colour at local pixel (`x`, `y`), or black outside it.
+    fn color_at(&self, x: u32, y: u32) -> Color {
+        let i = (y as usize * self.width as usize + x as usize) * 4;
+        if i + 3 < self.rgba.len() && self.rgba[i + 3] > 0 {
+            Color::rgb(f32::from(self.rgba[i]) / 255.0, f32::from(self.rgba[i + 1]) / 255.0, f32::from(self.rgba[i + 2]) / 255.0)
+        } else {
+            Color::BLACK
+        }
+    }
+}
+
 /// Editable text and shape layers for one rendered page, in document pixels.
 #[cfg(not(target_arch = "wasm32"))]
 fn object_layers(page: &pdfium_render::prelude::PdfPage, opts: &ImportOptions, frame: &PageFrame) -> Vec<Layer> {
     use pdfium_render::prelude::*;
 
-    let PageFrame { height_pt, dpi, x, rgba, width: page_width, height: page_height } = *frame;
-    let height_px = height_pt * dpi / 72.0;
-
-    let to_x = |v: f32| f64::from(v) * dpi / 72.0;
+    let PageFrame { x, width: page_width, height: page_height, .. } = *frame;
     let objects = page.objects();
     let mut layers = Vec::new();
     for object in objects.iter() {
@@ -190,19 +207,13 @@ fn object_layers(page: &pdfium_render::prelude::PdfPage, opts: &ImportOptions, f
                     continue;
                 }
                 let Ok(bounds) = text.bounds() else { continue };
-                let x_px = to_x(bounds.left().value).round() + f64::from(x);
-                let y_px = (height_px - to_x(bounds.top().value)).round();
+                let (x_px, y_px) = frame.to_doc(bounds.left().value, bounds.top().value);
                 // The text layer's size is in points; the transform is in document pixels.
                 // The text object does not expose its fill colour; sample the rendered page at the
-                // text's centre so the editable layer starts with the right colour.
-                let cx = (to_x(bounds.left().value).round().max(0.0) as u32).min(page_width.saturating_sub(1));
-                let cy = ((height_px - to_x(bounds.top().value)).round().max(0.0) as u32).min(page_height.saturating_sub(1));
-                let i = (cy as usize * page_width as usize + cx as usize) * 4;
-                let color = if i + 3 < rgba.len() && rgba[i + 3] > 0 {
-                    Color::rgb(f32::from(rgba[i]) / 255.0, f32::from(rgba[i + 1]) / 255.0, f32::from(rgba[i + 2]) / 255.0)
-                } else {
-                    Color::BLACK
-                };
+                // text's top-left corner so the editable layer starts with the right colour.
+                let cx = ((x_px - f64::from(x)).max(0.0) as u32).min(page_width.saturating_sub(1));
+                let cy = (y_px.max(0.0) as u32).min(page_height.saturating_sub(1));
+                let color = frame.color_at(cx, cy);
                 let size_pt = f64::from(text.scaled_font_size().value).max(1.0);
                 let font = text.font();
                 let family = if font.family().is_empty() { font.name() } else { font.family() };
@@ -237,7 +248,7 @@ fn object_layers(page: &pdfium_render::prelude::PdfPage, opts: &ImportOptions, f
                 let mut closed = false;
                 let mut bezier: Vec<(f64, f64)> = Vec::new();
                 for segment in path.segments().transform(matrix).iter() {
-                    let point = || (to_x(segment.x().value).round(), (height_px - to_x(segment.y().value)).round());
+                    let point = || frame.to_doc(segment.x().value, segment.y().value);
                     if segment.is_close() {
                         closed = true;
                         continue;
@@ -330,4 +341,32 @@ fn bind() -> Result<pdfium_render::prelude::Pdfium, IoError> {
         ))
     })?;
     Ok(Pdfium::new(bindings))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PageFrame;
+
+    fn frame(dpi: f64, x: u32) -> PageFrame<'static> {
+        PageFrame { height_pt: 842.0, dpi, x, rgba: &[], width: 595, height: 842 }
+    }
+
+    #[test]
+    fn page_points_map_to_document_pixels() {
+        assert_eq!(frame(72.0, 0).to_doc(60.0, 420.0), (60.0, 422.0));
+        // The same point at four times the resolution.
+        assert_eq!(frame(300.0, 0).to_doc(60.0, 420.0), (250.0, 1758.0));
+        // Page 2 starts after page 1's width: the document X offset is part of the mapping.
+        assert_eq!(frame(300.0, 2480).to_doc(60.0, 420.0), (2730.0, 1758.0));
+    }
+
+    #[test]
+    fn samples_the_rendered_page() {
+        // Two pixels: white then black.
+        let rgba = [255u8, 255, 255, 255, 0, 0, 0, 255];
+        let page = PageFrame { height_pt: 842.0, dpi: 72.0, x: 0, rgba: &rgba, width: 2, height: 1 };
+        assert_eq!(page.color_at(0, 0), photocraft_doc::Color::rgb(1.0, 1.0, 1.0));
+        assert_eq!(page.color_at(1, 0), photocraft_doc::Color::BLACK);
+        assert_eq!(page.color_at(2, 0), photocraft_doc::Color::BLACK);
+    }
 }
