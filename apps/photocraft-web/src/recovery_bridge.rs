@@ -26,8 +26,7 @@ pub const MAX_SNAPSHOT_BYTES: usize = 256 << 20;
 /// Most entries read back at launch.
 pub const MAX_ENTRIES: usize = 64;
 /// Guidance for a full store, including records from earlier sessions.
-pub const TOTAL_LIMIT_MSG: &str =
-    "the browser's recovery storage is full; data from earlier sessions may be using space; save or close open documents, or enable Recover on launch and restart to review earlier recovery data";
+pub const TOTAL_LIMIT_MSG: &str = "the browser's recovery storage is full; data from earlier sessions may be using space; save or close open documents, or enable Recover on launch and restart to review earlier recovery data";
 const SIDECAR_MAX: usize = 1 << 20;
 
 fn bundle_name(key: &str) -> String {

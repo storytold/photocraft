@@ -8,3 +8,7 @@ Rebased onto upstream main 2ff8f419c. Retained the web runner panic and trap hoo
 - `cargo xtask layers`: 31 crates, no violations.
 - `cargo xtask wasm`: 24 crates and `photocraft-codecs --features heif` passed; dead-code warnings emitted.
 - Live browser verification was not run.
+
+## CI formatting follow-up
+
+CI job 128081392382 stopped at cargo fmt --all -- --check: the final message edit had left the constant split across two lines. Applied rustfmt; no behavior changed. The full formatting check and git diff --check pass.

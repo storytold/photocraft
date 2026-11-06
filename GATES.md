@@ -26,3 +26,8 @@ Scope: Rebase web autosave and clarify total-storage errors without deleting sna
   EVIDENCE: cargo xtask wasm: exit 0, 24 crates and photocraft-codecs --features heif passed; existing dead-code warnings.
 - [x] G7: Wiki index and devlog describe change and verification status.
   EVIDENCE: wiki/INDEX.md, wiki/pr-9645-web-recovery.md, log/devlog.md.
+
+- [x] G8: Final source formatting matches CI.
+  CHECK: cargo fmt --all -- --check
+  EXPECT: /^$/
+  EVIDENCE: Full workspace formatting check exits 0 after formatting TOTAL_LIMIT_MSG; CI job 128081392382 identified the mismatch.
