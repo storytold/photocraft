@@ -212,6 +212,15 @@ fn filter_event_before_tool(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::
     Some((raw, ev, mods))
 }
 
+/// Remember a Move-way pick that changed the active layer (with this frame), so the Layers panel's
+/// reveal can honour Expand layer group on click (layer_reveal.rs).
+fn note_move_pick(app: &mut PhotocraftApp, active_before: Option<photocraft_doc::LayerId>) {
+    let active_after = app.session.active().and_then(|st| st.active_layer);
+    if active_after != active_before {
+        app.move_pick = active_after.map(|id| (id, app.frame));
+    }
+}
+
 fn handle_move_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tool: Tool, mods: egui::Modifiers) -> bool {
     match ev {
         ToolEvent::Down { x, y, pressure } if tool == Tool::Move => {
@@ -253,6 +262,7 @@ fn handle_move_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tool: Tool, mods:
                         // A click still selects the locked layer, as in Photoshop; a drag's
                         // marquee then replaces that selection on release.
                         let _ = app.run("layer.pickAt", json!({"x": x, "y": y, "target": target, "mode": mode}));
+                        note_move_pick(app, active_before);
                     }
                     crate::move_box::begin(app, [x, y], mods.shift);
                     return true;
@@ -264,12 +274,7 @@ fn handle_move_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tool: Tool, mods:
                     crate::move_box::begin(app, [x, y], mods.shift);
                     return true;
                 }
-                // Remember a pick that changed the active layer, so the Layers panel's reveal can
-                // honour Expand layer group on click (layer_reveal.rs).
-                let active_after = app.session.active().and_then(|st| st.active_layer);
-                if active_after != active_before {
-                    app.move_pick = active_after;
-                }
+                note_move_pick(app, active_before);
                 // Snapping (and the drag's box) started before the pick: point it at what moves.
                 if app.session.active().map(|st| st.selected_layers()) != before {
                     crate::snap_ui::retarget_move(app, [x, y], mods);

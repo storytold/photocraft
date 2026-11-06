@@ -357,3 +357,45 @@ fn expand_layer_group_on_click_off_still_opens_the_group_for_other_active_layer_
     assert_eq!(crate::layer_reveal::track(&mut app, &ctx), Some(inner));
     assert!(expanded(&app, group), "a command that changes the active layer reveals it");
 }
+
+#[test]
+fn expand_layer_group_on_click_governs_a_ctrl_click_pick_of_a_position_locked_layer() {
+    for on in [false, true] {
+        let (mut app, inner, group, ctx) = closed_group_doc(Tool::Brush, on);
+        app.ui.tool_options.move_auto_select = false;
+        app.session.execute("layer.setProps", json!({"layer": inner.0, "locks": {"position": true}})).unwrap();
+        ctrl_click(&mut app);
+        assert_eq!(app.session.active().unwrap().active_layer, Some(inner), "the Ctrl-click picked the locked layer (on = {on})");
+        assert_eq!(crate::layer_reveal::track(&mut app, &ctx), Some(inner));
+        assert_eq!(expanded(&app, group), on, "Expand layer group on click = {on}");
+    }
+}
+
+#[test]
+fn a_pick_marker_the_hidden_layers_panel_never_read_does_not_hide_a_later_command_change() {
+    let (mut app, inner, group, ctx) = closed_group_doc(Tool::Brush, false);
+    app.ui.tool_options.move_auto_select = false;
+    // A Move-way pick of the inner layer while the Layers panel draws nothing (no `track`).
+    ctrl_click(&mut app);
+    assert_eq!(app.session.active().unwrap().active_layer, Some(inner));
+    // Frames pass without the panel, then commands change the layer twice and land on it again.
+    app.frame += 5;
+    app.run("layer.select", json!({"layer": group.0})).unwrap();
+    app.run("layer.select", json!({"layer": inner.0})).unwrap();
+    // The panel is shown again: the change was a command's, so the group opens.
+    app.frame += 1;
+    assert_eq!(crate::layer_reveal::track(&mut app, &ctx), Some(inner));
+    assert!(expanded(&app, group), "a command change after a stale pick expands the group");
+}
+
+#[test]
+fn a_pick_marker_is_read_in_its_frame_and_the_next() {
+    for gap in [0, 1] {
+        let (mut app, inner, group, ctx) = closed_group_doc(Tool::Brush, false);
+        app.ui.tool_options.move_auto_select = false;
+        ctrl_click(&mut app);
+        app.frame += gap;
+        assert_eq!(crate::layer_reveal::track(&mut app, &ctx), Some(inner));
+        assert!(!expanded(&app, group), "a pick {gap} frame(s) old still governs the reveal");
+    }
+}

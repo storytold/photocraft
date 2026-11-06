@@ -27,7 +27,9 @@ pub fn track(app: &mut PhotocraftApp, ctx: &egui::Context) -> Option<LayerId> {
     let index = app.session.active_index()?;
     let active = app.session.active()?.active_layer;
     let now = Seen(index, active);
-    let pick = app.move_pick.take();
+    // The canvas sets the marker in its frame and the panel may draw before or after it, so it reads the
+    // marker in that frame or the next. An older one is a pick the hidden panel never saw: discard.
+    let pick = app.move_pick.take().filter(|&(_, frame)| frame + 1 >= app.frame).map(|(id, _)| id);
     let before = ctx.data(|d| d.get_temp::<Seen>(seen_id()));
     ctx.data_mut(|d| d.insert_temp(seen_id(), now));
     match before {
