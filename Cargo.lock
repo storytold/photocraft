@@ -5341,6 +5341,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "wat",
+ "web-time",
  "winsafe",
 ]
 
@@ -5504,6 +5505,7 @@ dependencies = [
  "photocraft-geom",
  "proptest",
  "rayon",
+ "rustix 1.1.5",
  "serde",
  "sysinfo",
  "winsafe",
