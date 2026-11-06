@@ -25,6 +25,20 @@ pub(crate) fn read_file(path: &str) -> Result<Vec<u8>> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+/// [`read_file`] with the caller's own byte limit: a larger file is refused without being read,
+/// for a caller that has to fit it into what is left of a memory budget. The `io::Error` is
+/// returned as is, so the caller can tell a file over its limit (`FileTooLarge`, `OutOfMemory`)
+/// from one it could not open or read.
+pub(crate) fn read_file_limited(path: &str, max: u64) -> std::io::Result<Vec<u8>> {
+    photocraft_format::read_file_limited(std::path::Path::new(path), max)
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn read_file_limited(path: &str, _max: u64) -> std::io::Result<Vec<u8>> {
+    Err(std::io::Error::new(std::io::ErrorKind::Unsupported, format!("cannot read {path}: no file system on the web")))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 /// Every file the engine writes goes through here: crash-safe (temp file + fsync + rename, see
 /// [`photocraft_format::atomic`]), so a failed save never destroys the previous file.
 pub(crate) fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
@@ -37,13 +51,18 @@ pub(crate) fn write_file(path: &str, _bytes: &[u8]) -> Result<()> {
 }
 
 /// Files of a folder that look like images we can open, sorted by name.
-#[cfg(not(target_arch = "wasm32"))]
 pub fn list_images(dir: &str) -> Result<Vec<String>> {
+    list_files(dir, false)
+}
+
+/// Sorted regular files, optionally retaining unsupported names for per-file Batch errors.
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn list_files(dir: &str, include_non_images: bool) -> Result<Vec<String>> {
     let rd = std::fs::read_dir(dir).map_err(|e| EngineError::Other(format!("{dir}: {e}")))?;
     let mut out = Vec::new();
     for entry in rd {
         let path = entry.map_err(|e| EngineError::Other(format!("{dir}: {e}")))?.path();
-        if !openable_name(&path.to_string_lossy()) {
+        if !include_non_images && !openable_name(&path.to_string_lossy()) {
             continue;
         }
         match std::fs::metadata(&path) {
@@ -58,7 +77,7 @@ pub fn list_images(dir: &str) -> Result<Vec<String>> {
 }
 
 #[cfg(target_arch = "wasm32")]
-pub fn list_images(dir: &str) -> Result<Vec<String>> {
+pub(super) fn list_files(dir: &str, _include_non_images: bool) -> Result<Vec<String>> {
     Err(EngineError::Other(format!("cannot list {dir}: no file system on the web")))
 }
 

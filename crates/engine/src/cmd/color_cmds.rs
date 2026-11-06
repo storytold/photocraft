@@ -222,6 +222,12 @@ pub struct ColorState {
 }
 
 impl ColorState {
+    /// Whether resolving this mode's working profile would read a filesystem path.
+    /// Inspect the setting without opening it; other modes do not affect this decision.
+    pub(crate) fn working_profile_is_path_backed(&self, mode: ColorMode) -> bool {
+        self.settings.working_spec(mode_space(mode)).is_some_and(|spec| Builtin::from_id(spec).is_none() && profile_spec_is_path(spec))
+    }
+
     /// The working profile of a mode from Color Settings (the built-in default when the
     /// setting does not resolve or cannot be both an RGB source and editing destination).
     pub fn working(&self, mode: ColorMode) -> Arc<Profile> {
@@ -397,16 +403,16 @@ impl ColorState {
     pub fn display_transform_for(&self, doc: &Document, display: Option<u32>) -> Result<Arc<Transform>> {
         let src = self.canvas_display_for(doc, display)?.source.clone();
         let dst = self.monitor_for(display);
-        let pv = self.proof(doc.id);
-        let proof = pv.enabled.then(|| (pv.setup.profile.content_hash(), pv.setup.intent, pv.setup.bpc, pv.setup.simulate_paper));
+        // Borrowed: the canvas asks per frame, and the default proof state allocates a profile.
+        let pv = self.proof_ref(doc.id).filter(|pv| pv.enabled);
+        let proof = pv.map(|pv| (pv.setup.profile.content_hash(), pv.setup.intent, pv.setup.bpc, pv.setup.simulate_paper));
         let key = (src.content_hash(), dst.content_hash(), proof);
         if let Some(t) = self.display_cache.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
             return Ok(t.clone());
         }
-        let t = if pv.enabled {
-            Transform::proof(&src, &pv.setup.profile, &dst, pv.setup.intent, pv.setup.bpc, pv.setup.simulate_paper)
-        } else {
-            Transform::new(&src, &dst, crate::display_color::DISPLAY_INTENT, crate::display_color::DISPLAY_BPC)
+        let t = match pv {
+            Some(pv) => Transform::proof(&src, &pv.setup.profile, &dst, pv.setup.intent, pv.setup.bpc, pv.setup.simulate_paper),
+            None => Transform::new(&src, &dst, crate::display_color::DISPLAY_INTENT, crate::display_color::DISPLAY_BPC),
         }
         .map_err(cms_err)?;
         let t = Arc::new(t);
@@ -590,14 +596,19 @@ pub fn resolve_profile(spec: &str, doc: Option<&Document>, mode: Option<ColorMod
     if let Some(b) = Builtin::from_id(spec) {
         return Ok(Arc::new(b.profile().clone()));
     }
-    let lower = spec.to_ascii_lowercase();
-    if lower.ends_with(".icc") || lower.ends_with(".icm") || spec.contains('/') || spec.contains('\\') {
+    if profile_spec_is_path(spec) {
         // Regular files only: a device or FIFO path would be read until it ends, which it never does.
         let bytes = crate::file_cmds::read_file(spec).map_err(|e| EngineError::Other(format!("cannot read profile `{spec}`: {e}")))?;
         return Profile::parse(&bytes).map(Arc::new).map_err(cms_err);
     }
     let ids: Vec<&str> = Builtin::ALL.iter().map(|b| b.id()).collect();
     Err(EngineError::Other(format!("unknown profile `{spec}` (built-ins: {}, or a path to an .icc file)", ids.join(", "))))
+}
+
+/// The path forms accepted after built-in profile names have been resolved.
+fn profile_spec_is_path(spec: &str) -> bool {
+    let lower = spec.to_ascii_lowercase();
+    lower.ends_with(".icc") || lower.ends_with(".icm") || spec.contains('/') || spec.contains('\\')
 }
 
 fn intent_param(p: &Value) -> Result<Intent> {

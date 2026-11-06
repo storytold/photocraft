@@ -403,18 +403,11 @@ pub fn authorize_engine_command(id: &str, params: &Value) -> Result<(), Automati
 }
 
 /// Desktop sessions may already contain user-configured ambient colour-profile
-/// paths. Commands which implicitly resolve those settings are denied even
-/// when their request parameters contain no path. Fresh headless sessions
-/// cannot acquire such settings through the automation interface.
+/// paths. Mode conversions remain denied; `file.new` checks the selected mode's
+/// working profile in the engine before resolving it. Fresh headless sessions
+/// cannot acquire external working profiles through the automation interface.
 pub fn authorize_desktop_engine_command(id: &str, params: &Value) -> Result<(), AutomationError> {
     authorize_engine_command(id, params)?;
-    // Unlike a fresh headless session, the desktop can have a path-backed working
-    // profile. Require an explicit spec here; malformed specs also fail closed.
-    if id == "file.new" && params.get("profile").and_then(Value::as_str).unwrap_or("working") == "working" {
-        return Err(AutomationError::BadRequest(
-            "automation command `file.new` may read a working profile from ambient filesystem paths; pass an explicit built-in `profile` (for example `srgb`) or `none`".into(),
-        ));
-    }
     if id.starts_with("image.mode.") {
         return Err(command_error(id));
     }
@@ -502,6 +495,7 @@ fn command_uses_ambient_path(id: &str, params: &Value) -> bool {
         | "brush.presets.importAbr"
         | "brush.presets.importImage"
         | "gradient.presets.importGrd"
+        | "shape.presets.importCsh"
         | "plugin.install"
         | "swatches.import"
         | "style.presets.importAsl"

@@ -572,6 +572,18 @@ fn registry_filesystem_path_params_are_classified() {
     assert!(unclassified.is_empty(), "filesystem path parameters in the command registry need an automation policy: {unclassified:?}");
 }
 
+/// Shape Blur uses inline vector geometry without granting a headless caller filesystem access.
+#[test]
+fn shape_blur_accepts_inline_geometry_and_rejects_filesystem_strings() {
+    let mut headless = crate::headless::Headless::new();
+    headless.command_run("file.new", serde_json::json!({"width":8,"height":8})).unwrap();
+    headless
+        .command_run("filter.blur.shapeBlur", serde_json::json!({"radius":5,"shapePath":{"subpaths":[{"knots":[[0,0],[1,0],[1,1],[0,1]],"closed":true}]}}))
+        .unwrap();
+    let error = headless.command_run("filter.blur.shapeBlur", serde_json::json!({"radius":5,"shapePath":"/outside/shape.svg"})).unwrap_err();
+    assert!(error.to_string().contains("nonempty vector path"), "{error}");
+}
+
 #[test]
 fn native_vector_preview_updates_are_not_an_untrusted_automation_capability() {
     let params = serde_json::json!({"document":1,"layer":1,"contentsId":1,"fingerprint":"00".repeat(32),"extension":"ai","sourceBase64":"JVBERi0=","previewSvg":"<svg/>"});
@@ -698,6 +710,7 @@ fn svg_update_keeps_inline_and_builtin_smart_filters_working() {
     }
 }
 
+/// Distinguish filesystem parameters from descriptions of inline vector paths.
 fn documents_filesystem_path_params(id: &str, params: &str) -> bool {
     // These commands return settings or installed-profile paths; they do not accept a host
     // filesystem path as an automation input.
@@ -707,7 +720,8 @@ fn documents_filesystem_path_params(id: &str, params: &str) -> bool {
     // These registry descriptions refer to document vector paths, not host files.
     if matches!(
         id,
-        "filter.blurGallery.pathBlur"
+        "filter.blur.shapeBlur"
+            | "filter.blurGallery.pathBlur"
             | "filter.render.flame"
             | "shape.create"
             | "shape.edit"
@@ -747,6 +761,7 @@ fn documents_filesystem_path_params(id: &str, params: &str) -> bool {
             | "layer.combineShapes.intersectShapeAreas"
             | "layer.combineShapes.excludeOverlappingShapes"
             | "layer.combineShapes.mergeShapeComponents"
+            | "layer.new.frame"
     ) || id.starts_with("layer.newFillLayer.")
         || id.starts_with("layer.newAdjustmentLayer.")
     {
@@ -1077,18 +1092,19 @@ fn new_document_implicit_profile_is_refused_by_desktop_automation() {
     session.authorize = Some(authorize_desktop_engine_step);
 
     for profile in [None, Some(json!("working")), Some(Value::Null), Some(json!(42))] {
+        let expected = if profile.as_ref().is_none_or(Value::is_string) { "ambient filesystem paths" } else { "profile" };
         let mut params = json!({"width": 2, "height": 2});
         if let Some(profile) = profile {
             params["profile"] = profile;
         }
         let denied = session.execute("file.new", params.clone()).unwrap_err();
-        assert!(denied.to_string().contains("ambient filesystem paths"), "{denied}");
+        assert!(denied.to_string().contains(expected), "{denied}");
         assert_eq!(session.active().unwrap().doc.id, before);
         session.actions.list = vec![Action::new("Create", vec![("file.new".into(), params)])];
         let playback = session.execute("actions.play", json!({"action": "Create"})).unwrap();
         assert_eq!(playback["ran"], 0);
         assert_eq!(playback["failed"]["id"], "file.new");
-        assert!(playback["failed"]["error"].as_str().unwrap().contains("ambient filesystem paths"));
+        assert!(playback["failed"]["error"].as_str().unwrap().contains(expected));
         assert_eq!(session.active().unwrap().doc.id, before);
     }
     // Explicit built-ins and the opt-out don't read the configured path.
@@ -1111,4 +1127,96 @@ fn new_document_implicit_profile_remains_available_headlessly() {
         headless.command_run("file.new", params).unwrap();
         assert!(headless.session.active().unwrap().doc.icc_profile.is_some());
     }
+}
+
+#[test]
+fn csh_import_requires_inline_data_in_automation() {
+    let id = "shape.presets.importCsh";
+    for path in ["/outside/set.csh", "set.csh", "../set.csh", ""] {
+        let params = serde_json::json!({"path": path});
+        assert!(authorize_engine_command(id, &params).is_err(), "{path}");
+        assert!(authorize_desktop_engine_command(id, &params).is_err(), "{path}");
+    }
+    // The importer gives inline data precedence, even when a path is also supplied.
+    for params in [serde_json::json!({"data": "QUJD"}), serde_json::json!({"data": "QUJD", "path": "/outside/set.csh"})] {
+        assert!(authorize_engine_command(id, &params).is_ok());
+        assert!(authorize_desktop_engine_command(id, &params).is_ok());
+    }
+    let mut headless = crate::headless::Headless::new();
+    let error = headless.command_run(id, serde_json::json!({"path": "/outside/set.csh"})).unwrap_err();
+    assert!(error.to_string().contains("uses ambient filesystem paths and is disabled"), "{error}");
+}
+
+/// A one-shape CSH set (version 2) named `name`, with a single open one-knot subpath.
+fn one_shape_csh(name: &str) -> Vec<u8> {
+    use photocraft_psd::path::{PathData, PsdKnot, PsdSubpath};
+    let mut bytes = b"cush".to_vec();
+    bytes.extend_from_slice(&2u32.to_be_bytes());
+    bytes.extend_from_slice(&1u32.to_be_bytes());
+    let units: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
+    bytes.extend_from_slice(&(units.len() as u32).to_be_bytes());
+    for unit in units {
+        bytes.extend_from_slice(&unit.to_be_bytes());
+    }
+    while !bytes.len().is_multiple_of(4) {
+        bytes.push(0);
+    }
+    bytes.extend_from_slice(&1u32.to_be_bytes());
+    let mut body = vec![2, b'i', b'd'];
+    for bound in [0i32, 0, 100, 100] {
+        body.extend_from_slice(&bound.to_be_bytes());
+    }
+    let knot = PsdKnot { linked: true, pre: (0.25, 0.25), anchor: (0.5, 0.5), post: (0.75, 0.75) };
+    body.extend_from_slice(&PathData::from_subpaths(&[PsdSubpath { closed: false, operation: 0, knots: vec![knot] }], false).to_bytes());
+    while !body.len().is_multiple_of(4) {
+        body.push(0);
+    }
+    bytes.extend_from_slice(&(body.len() as u32).to_be_bytes());
+    bytes.extend_from_slice(&body);
+    bytes
+}
+
+/// The headless import itself reads inline `data` before `path`: a valid set imports even when
+/// the path beside it cannot be read (and would be refused as an ambient path on its own).
+#[test]
+fn csh_import_with_inline_data_ignores_an_unreadable_path() {
+    use base64::Engine as _;
+    let data = base64::engine::general_purpose::STANDARD.encode(one_shape_csh("Inline"));
+    let mut headless = crate::headless::Headless::new();
+    let params = serde_json::json!({"data": data, "path": "/outside/missing-set.csh", "group": "Inline Set"});
+    let result = headless.command_run("shape.presets.importCsh", params).unwrap();
+    assert_eq!(result["count"], 1, "{result}");
+    assert_eq!(result["names"], serde_json::json!(["Inline"]), "{result}");
+    assert_eq!(result["group"], "Inline Set", "{result}");
+}
+
+/// Desktop automation can keep the selected built-in working space, including action playback.
+/// Built-in working spaces remain usable directly and through recorded desktop actions.
+#[test]
+fn new_document_implicit_builtin_profile_is_available_to_desktop_automation() {
+    use photocraft_engine::{Session, actions_cmds::Action};
+    use serde_json::json;
+
+    let mut session = Session::new();
+    session.authorize = Some(authorize_desktop_engine_step);
+    session.execute("file.new", json!({})).unwrap();
+    assert!(session.active().unwrap().doc.icc_profile.is_some());
+    for mode in ["rgb", "gray", "cmyk", "lab"] {
+        for profile in [None, Some("working")] {
+            let mut params = json!({"width": 2, "height": 2, "mode": mode});
+            if let Some(profile) = profile {
+                params["profile"] = json!(profile);
+            }
+            session.execute("file.new", params.clone()).unwrap();
+            let expected = session.active().unwrap().doc.icc_profile.clone();
+            assert!(expected.is_some());
+            session.actions.list = vec![Action::new("Create", vec![("file.new".into(), params)])];
+            let result = session.execute("actions.play", json!({"action": "Create"})).unwrap();
+            assert_eq!(result["ran"], 1, "{result}");
+            assert_eq!(session.active().unwrap().doc.icc_profile, expected);
+        }
+    }
+    // A path used only by another colour mode must not block RGB creation.
+    session.color.settings.working_cmyk = "/outside/unused.icc".into();
+    session.execute("file.new", json!({"width": 2, "height": 2, "mode": "rgb"})).unwrap();
 }

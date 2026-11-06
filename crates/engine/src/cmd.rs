@@ -83,7 +83,7 @@ pub mod fill_cmds;
 pub mod fill_key_cmds;
 pub mod float_cmds;
 pub mod font_library_cmds;
-pub(super) mod frame_cmds;
+pub mod frame_cmds;
 pub mod fx_view_cmds;
 pub mod fx_visibility_cmds;
 pub mod gallery_cmds;
@@ -267,6 +267,15 @@ fn build() -> Vec<CommandSpec> {
                 };
                 let (w, h) = (px("width", 1920), px("height", 1080));
                 let mode = color_mode(p.get("mode").and_then(Value::as_str).unwrap_or("rgb")).unwrap_or(ColorMode::Rgb);
+                let spec = p.get("profile").and_then(Value::as_str).unwrap_or("working");
+                // Check the selected mode before reading a desktop preference's ICC path.
+                // Built-in working spaces remain available, including in recorded actions.
+                if spec == "working" && (s.authorize.is_some() || crate::jobs::authorization_installed()) && s.color.working_profile_is_path_backed(mode) {
+                    return Err(EngineError::BadParams {
+                        cmd: "file.new".into(),
+                        msg: "the working profile uses ambient filesystem paths; pass an explicit built-in `profile` or `none`".into(),
+                    });
+                }
                 let depth = sample_type(p.get("depth").and_then(Value::as_u64).unwrap_or(8)).unwrap_or(SampleType::U8);
                 let name = p.get("name").and_then(Value::as_str).unwrap_or("Untitled").to_string();
                 let res = p.get("resolution").and_then(Value::as_f64).unwrap_or(72.0).clamp(1.0, MAX_RESOLUTION) as f32;
@@ -295,7 +304,6 @@ fn build() -> Vec<CommandSpec> {
                 doc.resolution_dpi = res;
                 // Capture the working space shown by New Document, so later Color Settings
                 // changes cannot reinterpret this document (#8832). Explicit profiles still win.
-                let spec = p.get("profile").and_then(Value::as_str).unwrap_or("working");
                 if spec != "none" {
                     let prof = s.color.resolve(spec, Some(&doc), None)?;
                     if prof.color_space != crate::color_cmds::mode_space(doc.mode) {
@@ -570,18 +578,26 @@ fn build() -> Vec<CommandSpec> {
                 }
                 let id = layer_param(s, p)?;
                 let add_copy = layer_panel_option(s, "addCopyToCopiedLayersAndGroups", true);
+                // The dialog offers Duplicate Layer's own name: only a different one was typed (#9023).
+                let mut typed = None;
                 let nid = s.edit("Duplicate Layer", |doc, active| {
                     let mut dup = layer_copy(doc, id, add_copy)?;
-                    if let Some(name) = &name {
+                    if let Some(name) = name.as_ref().filter(|n| **n != dup.name) {
                         dup.name.clone_from(name);
+                        typed = Some(name.clone());
                     }
                     let nid = doc.insert_above(Some(id), dup);
+                    // A lone copy joins its original's link group, as in the reference application (#11217).
+                    crate::layer_multi_cmds::relink_copies(doc, &[nid])?;
                     if !in_place {
                         crate::artboard_cmds::place_copy(doc, nid)?;
                     }
                     *active = Some(nid);
                     Ok(nid)
                 })?;
+                if let Some(name) = typed {
+                    crate::type_cmds::note_typed_name(s, nid, &name);
+                }
                 Ok(json!({ "layer": nid.0 }))
             }
         ),
@@ -723,6 +739,10 @@ fn build() -> Vec<CommandSpec> {
                     }
                     Ok(())
                 })?;
+                // The Layers panel's in-place rename: a name the user typed (#9023).
+                if let (Some(name), [id]) = (p.get("name").and_then(Value::as_str), ids.as_slice()) {
+                    crate::type_cmds::note_typed_name(s, *id, name);
+                }
                 Ok(Value::Null)
             }
         ),
@@ -943,7 +963,7 @@ fn build() -> Vec<CommandSpec> {
             "Move Layer",
             [],
             None,
-            r##"{"layer":id?,"dx":i32,"dy":i32,"units":"px"|"pt"="px" (pt: points, whole pixels at the document's resolution),"target":"pixels"|"mask"="pixels","selection":bool=false} (no layer: every selected layer; linked layers follow; target mask: a layer whose mask is unlinked moves that mask alone, a linked mask moves with the layer; selection: the selection moves too, in the same step)"##,
+            r##"{"layer":id?,"dx":i32,"dy":i32,"units":"px"|"pt"="px" (pt: points, whole pixels at the document's resolution),"target":"pixels"|"mask"="pixels","selection":bool=false,"nest":bool=false} → null | {nested:[id]} (no layer: every selected layer; linked layers follow; target mask: a layer whose mask is unlinked moves that mask alone, a linked mask moves with the layer; selection: the selection moves too, in the same step; nest: auto-nesting as the Move tool does it, a layer whose bounds centre lands on another artboard joins it and one whose centre is off every artboard leaves for the top level; a clipping base takes the layers clipped to it along and a clipped layer goes only where its base goes; artboards, the Background, empty layers, layers whose board doesn't change, groups that would nest too deep and layers locked with Prevent Auto-Nesting (on the layer, a group around it or the destination board) stay put, with their whole clipping group; nested lists the layers that changed board)"##,
             has_layer,
             crate::layer_multi_cmds::translate
         ),
@@ -1206,7 +1226,7 @@ fn build() -> Vec<CommandSpec> {
         (
             "colorLookup",
             "Color Lookup…",
-            r##"{"lut":"none|warm|cool|tealOrange|bleachBypass|fadedFilm|dayForNight|monoContrast|crossProcess"="none","file":text,"interpolation":"trilinear|tetrahedral"="trilinear","dither":bool=false,"data":json} (file: .cube/.3dl/.look path; data: file text + "fileName")"##,
+            r##"{"lut":"none|warm|cool|tealOrange|bleachBypass|fadedFilm|dayForNight|monoContrast|crossProcess"="none","file":text,"interpolation":"trilinear|tetrahedral"="trilinear","dither":bool=false,"data":text,"dataEncoding":"text|base64"="text","fileName":text?,"lutFormat":"cube|3dl|look"?} (file: LUT path; data: file text or encoded bytes; lutFormat overrides format detection)"##,
         ),
     ];
     for &(kind, label, params) in ADJ {
@@ -1217,7 +1237,7 @@ fn build() -> Vec<CommandSpec> {
             label,
             menu: &["Layer", "New Adjustment Layer"],
             shortcut: None,
-            params: Box::leak(format!(r#"{params} + {{{NEW_LAYER_PATH},"opacity":0..1=1}}"#).into_boxed_str()),
+            params: Box::leak(format!(r#"{params} + {{{NEW_LAYER_PATH},"opacity":0..1=1,"name":str?=the adjustment's name + number,"mode":blend mode name="normal" (not Pass Through),"clipToPrevious":bool=false}}"#).into_boxed_str()),
             enabled: has_doc,
             run: |s, p| {
                 let kind = p.get("__kind").and_then(Value::as_str).unwrap_or("invert").to_string();
