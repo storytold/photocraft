@@ -1,16 +1,17 @@
 use super::super::{Action, AtnAction, AtnEvent, AtnFile, AtnItem, UnicodeString, atn};
 use super::*;
 
-// Independent typed fixtures transcribed from10706#6617544257, not made by
-// the converter under test. Fwd is out; Bwd is in.
+/// Construct a pixel point directly from the measured #10706 wire format.
 fn wire_point(x: f64, y: f64) -> D {
     D::Descriptor(Descriptor::new("Pnt ").with("Hrzn", D::UnitFloat { unit: *b"#Pxl", value: x }).with("Vrtc", D::UnitFloat { unit: *b"#Pxl", value: y }))
 }
 
+/// Encode a fixture corner without cubic handles.
 fn corner(x: f64, y: f64) -> D {
     D::Descriptor(Descriptor::new("Pthp").with("Anch", wire_point(x, y)))
 }
 
+/// Build the measured outer and inner contours independently of the exporter.
 fn fixture(operation: &str, joined: bool, reversed: bool) -> Descriptor {
     let mut outer = vec![corner(50.0, 250.0), corner(50.0, 100.0), corner(350.0, 100.0), corner(350.0, 250.0)];
     if !joined {
@@ -51,6 +52,7 @@ fn fixture(operation: &str, joined: bool, reversed: bool) -> Descriptor {
         .with("T   ", D::List(components))
 }
 
+/// Extract the single executable Work Path assignment from a measured descriptor.
 fn params(d: &Descriptor) -> Value {
     let Mapped::Steps(steps) = from(d) else { panic!("measured path must map") };
     assert_eq!(steps.len(), 1);
@@ -58,6 +60,7 @@ fn params(d: &Descriptor) -> Value {
     steps[0].1.clone()
 }
 
+/// Sample the filled contour, its hole and the untouched exterior independently.
 fn check_area(path: &Path) {
     let pixels = photocraft_vector::fill_rasterizer(path, photocraft_vector::DEFAULT_TOLERANCE).render(photocraft_geom::Rect::new(0, 0, 400, 300));
     for (x, y, expected) in [(100, 185, 1.0), (200, 185, 0.0), (10, 20, 0.0)] {

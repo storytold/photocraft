@@ -4,9 +4,10 @@
 use super::events::{EVENTS, Event, event_for};
 use super::{AtnEvent, AtnItem, EngineError, Result, Session, Value, bad, json};
 
-/// Only unambiguous mapped filter events and the verified Image Size event have menu identities.
+/// Find a supported, unambiguous event for a menu step with no settings.
 fn menu_event(id: &str) -> Option<&'static Event> {
-    if id != "image.imageSize" && !id.starts_with("filter.") {
+    // Camera Raw's ATN mapping requires a verified settings descriptor (#8714).
+    if id == crate::lens_cmds::RAW || (id != "image.imageSize" && !id.starts_with("filter.")) {
         return None;
     }
     EVENTS.iter().find(|e| {

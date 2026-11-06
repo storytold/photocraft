@@ -28,6 +28,7 @@ fn keys(d: &Descriptor, required: &[&str], optional: &[&str], budget: &mut usize
         && optional.iter().all(|key| d.items.iter().filter(|(k, _)| k.is(key)).count() <= 1)
 }
 
+/// Require the recorded object class before interpreting its fields as geometry.
 fn object<'a>(value: &'a D, class_id: &str) -> Option<&'a Descriptor> {
     match value {
         D::Descriptor(d) if d.class_id.is(class_id) => Some(d),
@@ -35,6 +36,7 @@ fn object<'a>(value: &'a D, class_id: &str) -> Option<&'a Descriptor> {
     }
 }
 
+/// Read a pixel point within the native coordinate range and charge its fields to the wire budget.
 fn point(value: &D, budget: &mut usize) -> Option<Point> {
     let d = object(value, "Pnt ")?;
     if !keys(d, &["Hrzn", "Vrtc"], &[], budget) {
@@ -47,6 +49,7 @@ fn point(value: &D, budget: &mut usize) -> Option<Point> {
     Some(Point::new(coordinate("Hrzn")?, coordinate("Vrtc")?))
 }
 
+/// A corner stores only its anchor. A cubic knot must supply both handles and its smooth flag.
 fn knot(value: &D, budget: &mut usize) -> Option<Knot> {
     let d = object(value, "Pthp")?;
     if !keys(d, &["Anch"], &["Fwd ", "Bwd ", "Smoo"], budget) {
@@ -62,6 +65,7 @@ fn knot(value: &D, budget: &mut usize) -> Option<Knot> {
     }
 }
 
+/// Decode a Work Path property assignment, preserving the grouping and operation of each component.
 fn path_from(d: &Descriptor) -> Option<Path> {
     let mut budget = MAX_SOURCE_BYTES;
     if !(d.class_id.is("null") || d.class_id.is("setd")) || !keys(d, &["null", "T   "], &[], &mut budget) {
@@ -133,10 +137,12 @@ pub(super) fn from(d: &Descriptor) -> Mapped {
     step("path.set", json!({"name":"work", "path":crate::vector_cmds::path_json(&path), SOURCE:photocraft_paint::tile::b64_encode(&raw)}))
 }
 
+/// Write a point using pixel units for both coordinates.
 fn point_to(p: Point) -> D {
     D::Descriptor(desc("Pnt ").with("Hrzn", px(p.x)).with("Vrtc", px(p.y)))
 }
 
+/// Emit the compact corner form only when the handles coincide and the knot has no smooth flag.
 fn knot_to(k: &Knot) -> D {
     let mut d = desc("Pthp").with("Anch", point_to(k.anchor));
     if k.in_ctrl != k.anchor || k.out_ctrl != k.anchor || k.smooth {

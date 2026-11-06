@@ -552,6 +552,8 @@ pub struct PhotocraftApp {
     /// makes shortcut- and dialog-triggered commands pass the same policy as
     /// direct control calls.
     pub(crate) automation_input: bool,
+    /// The direct control-command route keeps Actions playback synchronous and dialog-free.
+    pub(crate) programmatic_playback: bool,
     /// How many `run_command` calls are on the stack. Only the outermost one writes the frame's
     /// command stage: a nested run (`file.save` → `layer.smartObjects.saveContents`,
     /// `actions.play` → its steps) is already inside the outer call's time.

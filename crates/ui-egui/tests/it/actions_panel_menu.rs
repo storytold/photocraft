@@ -2,8 +2,12 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use egui_kittest::{Harness, kittest::Queryable};
-use photocraft_engine::{EngineError, Session, actions_cmds::Action, actions_edit_cmds, atn_cmds};
-use photocraft_ui_egui::{PhotocraftApp, actions, canvas, dialogs};
+use photocraft_engine::{EngineError, Session, actions_cmds::Action, actions_edit_cmds, atn_cmds, prefs::PlaybackPerformance};
+use photocraft_ui_egui::{
+    PhotocraftApp, actions, canvas,
+    control::{ControlRequest, Outcome, handle},
+    dialogs,
+};
 use serde_json::{Value, json};
 
 /// A real panel and its dialogs with one selected action in a set.
@@ -106,6 +110,44 @@ fn insert_menu_item_chooser_cancels_or_records_descriptor_free_filter_event() {
     dialogs::confirm(h.state_mut(), dialog).unwrap();
     assert_eq!(photocraft_compose::flatten(&h.state().session.active().unwrap().doc).into_px(), expected);
     assert!(h.state().session.active().unwrap().doc.selection.is_some(), "confirmation resumes the following step");
+}
+
+/// The control protocol distinguishes direct playback from a menu click, even with a step gate.
+#[test]
+fn control_playback_opens_menu_settings_only_for_menu_invocation() {
+    let mut h = harness();
+    let ctx = h.ctx.clone();
+    let app = h.state_mut();
+    app.run("actions.insertMenuItem", json!({"action":"A","id":"filter.blur.gaussianBlur"})).unwrap();
+    let steps = &mut app.session.actions.list[0].steps;
+    steps.insert(0, ("select.all".into(), json!({})));
+    steps.push(("select.deselect".into(), json!({})));
+    app.session.edit_prefs(|prefs| prefs.actions.performance = PlaybackPerformance::StepByStep);
+
+    // Starting at the menu step checks the original dialog bug. Starting one step earlier
+    // also verifies Step by Step cannot defer the menu step past the control request.
+    for (from, ran) in [(1, 0), (0, 1)] {
+        let (req, _reply) = ControlRequest::new("engine.execute", json!({"command":"actions.play","params":{"action":"A","from":from}}));
+        let Outcome::Done(reply) = handle(app, &ctx, &req) else { panic!("direct playback must return immediately") };
+        assert_eq!(reply["ok"], true, "{reply}");
+        let played = &reply["result"];
+        assert_eq!(played["ran"], ran, "{reply}");
+        assert_eq!(played["failed"]["step"], 1, "{reply}");
+        assert_eq!(played["failed"]["id"], atn_cmds::MENU_ITEM, "{reply}");
+        assert!(played["failed"]["error"].as_str().unwrap().contains("interactive-required"), "{reply}");
+        assert!(played.get("paused").is_none(), "{reply}");
+        assert!(app.ui.dialogs.is_empty());
+    }
+
+    app.services.automation_authorize = Some(|_, _| Ok(()));
+    let (req, _reply) = ControlRequest::new("ui.menu.invoke", json!({"id":"actions.play","params":{"action":"A","from":1}}));
+    let Outcome::Done(reply) = handle(app, &ctx, &req) else { panic!("menu invocation must return its paused dialog") };
+    assert_eq!(reply["ok"], true, "{reply}");
+    let dialog = reply["result"]["paused"]["dialog"].as_u64().expect("menu playback opens Gaussian Blur settings");
+    assert_eq!(app.ui.dialog_mut(dialog).unwrap().fields["__command"], "filter.blur.gaussianBlur");
+    dialogs::cancel(app, dialog).unwrap();
+    assert!(app.ui.dialogs.is_empty());
+    assert!(app.session.active().unwrap().doc.selection.is_some(), "cancel must not run the following step");
 }
 
 static MENU_PREVIEW_CHECKS: AtomicUsize = AtomicUsize::new(0);

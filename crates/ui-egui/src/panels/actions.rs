@@ -345,11 +345,12 @@ fn stop_step(app: &mut PhotocraftApp, action: &Action, i: usize, p: &Value) -> C
     Called::Paused(json!({"step": i, "id": id, "dialog": dialog}))
 }
 
-/// A descriptor-free menu step opens its command's actual settings editor on desktop.
+/// Let the engine handle programmatic playback and stateless items. Interactive Play opens
+/// the settings editor and retains its command, document and receiver until confirmation.
 fn pause_menu_item(app: &mut PhotocraftApp, action: &str, from: usize, id: &str, params: &Value) -> Result<Option<u64>, String> {
     use photocraft_engine::atn_cmds::{MENU_ITEM, menu_item_command, menu_item_needs_settings};
 
-    if id != MENU_ITEM || app.automation_input {
+    if id != MENU_ITEM || !playback::is_interactive(app) {
         return Ok(None);
     }
     let command = menu_item_command(params).map_err(|error| error.to_string())?;
@@ -374,6 +375,7 @@ fn pause_menu_item(app: &mut PhotocraftApp, action: &str, from: usize, id: &str,
     Ok(Some(dialog))
 }
 
+/// Route playback and Record Again to the same settings editor used by the command.
 fn open_step_editor(app: &mut PhotocraftApp, command: &str) -> Result<u64, String> {
     if crate::sizing::is_sizing(command) {
         crate::sizing::open(app, command).ok_or_else(|| tl!("No document.").into())
@@ -438,6 +440,7 @@ fn play_owned(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>,
         })
         .or(suspended);
     let mut ran = 0u64;
+    let interactive = playback::is_interactive(app);
     let (mut failed, mut paused, mut stopped) = (None, None, None);
     let ended = match replay_inner(app, &action.name, from, inner) {
         // The call was step `from - 1`: a paced Play waits after it as after any other step.
@@ -467,7 +470,7 @@ fn play_owned(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>,
         }
         // A Stop shows its message or ends the playback (`stop_step`). Agents keep the headless
         // semantics of the engine command.
-        if id == photocraft_engine::atn_cmds::STOP_MESSAGE && !app.automation_input {
+        if id == photocraft_engine::atn_cmds::STOP_MESSAGE && interactive {
             end_at(stop_step(app, &action, i, p), &mut ran, &mut failed, &mut paused, &mut stopped);
             break;
         }
@@ -484,7 +487,7 @@ fn play_owned(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>,
         }
         // The dialog toggle: show the step's dialog with its recorded values and continue
         // from the next step when it is confirmed (`resume`). Agents play headlessly.
-        if action.dialogs.contains(&i) && !app.automation_input && (crate::filter_dialog::has_dialog(id) || crate::adjust_dialog::has_dialog(id)) {
+        if action.dialogs.contains(&i) && interactive && (crate::filter_dialog::has_dialog(id) || crate::adjust_dialog::has_dialog(id)) {
             paused = Some(pause_recorded_step(app, &action, i, id, p));
             break;
         }
@@ -492,7 +495,7 @@ fn play_owned(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>,
         // While the dialog is open (for another action or by hand), this step fails and the open
         // one keeps its place and ignored words.
         // A correction (`action` set) opens no dialog and runs below.
-        if action.dialogs.contains(&i) && !app.automation_input && id == "edit.checkSpelling" && p.get("action").is_none() {
+        if action.dialogs.contains(&i) && interactive && id == "edit.checkSpelling" && p.get("action").is_none() {
             if let Some(open) = app.ui.type_panels.spell.as_ref() {
                 let error = if open.resume.is_some() { "Check Spelling is already open for another action" } else { "Check Spelling is already open" };
                 failed = Some(json!({"step": i, "id": id, "error": error}));
@@ -1268,6 +1271,7 @@ pub(crate) fn authorize_panel_preview(
     Ok(())
 }
 
+/// Check that preview and confirmation still target the command and receiver that opened the editor.
 fn check_menu_editor(app: &PhotocraftApp, paused: &PausedPlayback, command: &str, params: &Value) -> Result<(), String> {
     if let Some((_, original)) = &paused.menu_editor
         && (original != command
