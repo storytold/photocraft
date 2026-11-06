@@ -67,7 +67,7 @@ use save::save_a_copy;
 pub(crate) use save::{SaveOpts, encode, save_doc};
 pub use save::{
     dds_param, dpx_bits_param, jpeg_format_param, jpeg_quality, maximize_compatibility_param, pcraft_full_composite_param, pdf_spot_plates_param,
-    tga_bits_param, tiff_bool_param, tiff_compression_param, tiff_would_write_layers,
+    png_compression_param, tga_bits_param, tiff_bool_param, tiff_compression_param, tiff_would_write_layers,
 };
 
 mod batch_naming;
