@@ -731,6 +731,23 @@ fn erase_to_history_refuses_a_new_layer_from_a_state_holding_only_a_group() {
 }
 
 #[test]
+fn erase_to_history_paints_a_single_solid_shapes_colour_past_its_path() {
+    for depth in [8u64, 16, 32] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 40, "height": 20, "depth": depth, "background": "transparent"})).unwrap();
+        let first = s.active().unwrap().active_layer.unwrap();
+        s.execute("shape.create", json!({"kind": "rect", "rect": [1, 1, 5, 5], "fill": "#0000ff"})).unwrap();
+        s.execute("layer.delete", json!({"layer": first.0})).unwrap(); // State 2: the shape alone.
+        assert_eq!(s.active().unwrap().doc.layers.len(), 1);
+        s.execute("layer.new.layer", json!({})).unwrap();
+        s.execute("paint.historyBrush", json!({"points": [[15, 10], [25, 10]], "size": 6, "hardness": 100, "state": 2, "eraseToHistory": true})).unwrap();
+        let got = rgba(&s, 20, 10);
+        assert!(got[3] > 0.99 && got[0] < 0.01 && got[1] < 0.01 && got[2] > 0.99, "depth {depth}: {got:?}");
+        assert!(rgba(&s, 20, 2)[3] < 0.01, "depth {depth}: only under the stroke");
+    }
+}
+
+#[test]
 fn erase_to_history_refuses_a_new_layer_from_a_state_holding_two_layers() {
     let mut s = session(40, 20, 8, "rgb");
     let picture = rgba(&s, 20, 10);

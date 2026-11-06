@@ -85,7 +85,17 @@ pub(super) fn history_source(s: &Session, id: Option<LayerId>, p: &Value, cmd: &
             if flag(p, "eraseToHistory", false) && crate::channel_cmds::target_of(p) == crate::channel_cmds::Target::Pixels && source_doc.layers.len() == 1 =>
         {
             let fmt = id.and_then(|id| st.doc.layer(id)).and_then(|l| l.surface()).map(Surface::format).ok_or(EngineError::NoDocument)?;
-            let only = source_doc.layers.first().and_then(|l| l.surface()).ok_or_else(missing)?;
+            let only = source_doc.layers.first().ok_or_else(missing)?;
+            // A solid shape is its colour cut by its path: Photoshop paints the colour past the path.
+            if let photocraft_doc::LayerContent::Shape(photocraft_doc::ShapeLayer { fill: Some(photocraft_doc::Fill::Solid(color)), .. }) = &only.content {
+                let c = color.in_mode(fmt.mode);
+                let mut pixel = c.c.get(..fmt.mode.color_channels()).unwrap_or_default().to_vec();
+                if fmt.alpha {
+                    pixel.push(c.alpha);
+                }
+                return Ok(Surface::with_default(fmt, &pixel));
+            }
+            let only = only.surface().ok_or_else(missing)?;
             Ok(if only.format() == fmt { only.clone() } else { only.convert(fmt) })
         }
         Err(_) => Err(missing()),
@@ -103,7 +113,8 @@ pub(super) fn history_brush(s: &mut Session, p: &Value) -> Result<Value> {
     let live = s.live_commit.take().filter(|l| l.matches(s, CMD, p, &stroke.points));
     let from_live = live.is_some();
     let src_surface = history_source(s, id, p, CMD)?;
-    let dmg = run_stroke(s, "History Brush", id, p, |_, surf, sel, lock| {
+    let label = if flag(p, "eraseToHistory", false) { "History Eraser" } else { "History Brush" };
+    let dmg = run_stroke(s, label, id, p, |_, surf, sel, lock| {
         if let Some(l) = live {
             *surf = l.surface;
             return Ok(l.bounds);
