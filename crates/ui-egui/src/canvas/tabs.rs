@@ -764,6 +764,7 @@ pub(super) fn open_on_double_click(app: &mut PhotocraftApp, ui: &egui::Ui, area:
 /// Extra OS windows showing documents (multi-window / multi-monitor).
 pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let wins = app.ui.windows.clone();
+    let mut closing = None;
     for w in wins.into_iter().filter(|w| w.open) {
         let Some(st) = app.session.documents().get(w.document) else { continue };
         let title = format!("{} — window {}", st.doc.name, w.id);
@@ -790,6 +791,10 @@ pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 crate::zoom_window_fit::follow(app, ui.ctx(), class, vid, &w, &mut view, rect);
             });
         });
+        if close && closes_document(app, &w) {
+            close = false;
+            closing = Some(w.clone());
+        }
         if let Some(win) = app.ui.windows.iter_mut().find(|x| x.id == w.id) {
             win.view = view;
             win.focused = focused;
@@ -799,6 +804,38 @@ pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
         }
     }
     app.ui.windows.retain(|w| w.open);
+    // After the loop: closing a document renumbers the documents the other windows show.
+    if let Some(window) = closing {
+        close_document_of(app, ctx, &window);
+    }
+}
+
+#[cfg(test)]
+mod close_tests;
+
+/// Closing `window` closes its document, as in Photoshop, when it is the document's last view: it
+/// floats (the document has no tab) and no other window shows the document. Closing a second view
+/// (New Window for Document) only closes that window.
+fn closes_document(app: &PhotocraftApp, window: &crate::state::DocWindow) -> bool {
+    window.floating && !app.ui.windows.iter().any(|other| other.open && other.id != window.id && other.document == window.document)
+}
+
+/// File › Close for the document of `window`, whose close button was clicked: unsaved changes ask
+/// Save / Don't Save / Cancel first (in the main window, which comes forward). The window stays
+/// open meanwhile; closing the document takes it away with it, and Cancel keeps both.
+fn close_document_of(app: &mut PhotocraftApp, ctx: &egui::Context, window: &crate::state::DocWindow) {
+    // A second click while the question is up asks nothing new.
+    if app.discard.is_some() {
+        ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Focus);
+        return;
+    }
+    if let Err(e) = crate::menus::invoke(app, ctx, "file.close", json!({"document": window.document})) {
+        app.ui.status = e;
+        app.ui.status_error = true;
+    }
+    if app.discard.is_some() {
+        ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Focus);
+    }
 }
 
 /// Window › Arrange tiles: each document shown with its tile in `rect`, or `None` when the
