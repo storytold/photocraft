@@ -369,6 +369,9 @@ fn play_owned(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>,
             entry.kept = true;
         }
     }
+    // The call journaled into a recording while automation's gate is installed marks the recorded
+    // action, as the engine's `actions.play` does (the kept gate is already removed).
+    actions_cmds::note_automation_step(&mut app.session, "actions.play", params);
     played
 }
 
@@ -583,6 +586,7 @@ pub(crate) fn run_view(app: &mut PhotocraftApp, id: &str, params: Value) -> Resu
         _ => return Err(format!("unsupported view command: {id}")),
     }
     v.zoom_anchor = None;
+    actions_cmds::note_automation_step(&mut app.session, id, &params);
     app.session.journal.push((id.into(), params));
     Ok(Value::Null)
 }

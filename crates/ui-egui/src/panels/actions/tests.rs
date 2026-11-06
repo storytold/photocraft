@@ -2812,19 +2812,19 @@ fn a_users_key_plays_an_action_automation_wrote_under_its_gate() {
 
 /// CodeRabbit on #9783: the kept gate of an action automation wrote stays with that action. A set
 /// the user plays pauses at the marked action's step dialog; after OK the marked action's tail
-/// plays under the gate, and the user's own action after it in the set keeps the user's access.
+/// still plays under the gate (its refused step is refused), and once that tail passes, the
+/// user's own action after it in the set keeps the user's access.
 #[test]
 fn a_kept_gate_does_not_carry_into_the_rest_of_a_set_after_a_pause() {
     use egui_kittest::kittest::Queryable;
-    /// The automation policy this test stands in for: it refuses only a layer named `b`.
-    fn deny_layer_b(id: &str, p: &Value) -> photocraft_engine::Result<()> {
-        if id == "layer.new.layer" && p.get("name").and_then(Value::as_str) == Some("b") {
-            Err(photocraft_engine::EngineError::Other("layer b denied".into()))
-        } else {
-            Ok(())
+    /// The automation policy this test stands in for: it refuses only layers named `a2` and `b`.
+    fn deny_a2_and_b(id: &str, p: &Value) -> photocraft_engine::Result<()> {
+        match p.get("name").and_then(Value::as_str) {
+            Some(name @ ("a2" | "b")) if id == "layer.new.layer" => Err(photocraft_engine::EngineError::Other(format!("layer {name} denied"))),
+            _ => Ok(()),
         }
     }
-    let services = crate::Services { automation_authorize: Some(deny_layer_b), ..Default::default() };
+    let services = crate::Services { automation_authorize: Some(deny_a2_and_b), ..Default::default() };
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
     app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
     let mut a = Action::new(
@@ -2845,15 +2845,29 @@ fn a_kept_gate_does_not_carry_into_the_rest_of_a_set_after_a_pause() {
     h.run_steps(2);
     h.get_by_label("S").click();
     h.run_steps(2);
+
+    // The marked action's tail after OK: its `a2` step meets the kept gate, and the set stops.
     h.get_by_label("Play selection").click();
     h.run_steps(2);
     assert_eq!(layer_names(h.state()), ["a"]);
     let dialog = h.state().ui.dialogs.last().map(|d| d.id).expect("the blur's dialog");
+    let _confirmed = crate::dialogs::confirm(h.state_mut(), dialog);
+    h.run_steps(2);
+    assert_eq!(layer_names(h.state()), ["a"], "a2 was refused after OK: {}", h.state().ui.status);
+    assert!(h.state().ui.status.contains("a2 denied"), "the refusal is reported: {}", h.state().ui.status);
+    assert!(h.state().session.authorize.is_none(), "no gate is left installed");
+
+    // With that step off, the tail passes, and the user's own action after it plays with the
+    // user's access.
+    h.state_mut().session.actions.list[0].disabled.insert(2);
+    h.get_by_label("Play selection").click();
+    h.run_steps(2);
+    let dialog = h.state().ui.dialogs.last().map(|d| d.id).expect("the blur's dialog");
     crate::dialogs::confirm(h.state_mut(), dialog).unwrap();
     h.run_steps(2);
-    let mut names = layer_names(h.state());
-    names.sort();
-    assert_eq!(names, ["a", "a2", "b"], "B played with the user's access: {}", h.state().ui.status);
+    let names = layer_names(h.state());
+    assert!(names.iter().any(|n| n == "b"), "B played with the user's access: {names:?} {}", h.state().ui.status);
+    assert!(!names.iter().any(|n| n == "a2"), "{names:?}");
     assert!(h.state().session.authorize.is_none(), "no gate is left installed");
 }
 

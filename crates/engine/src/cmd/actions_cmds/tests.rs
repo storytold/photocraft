@@ -972,6 +972,58 @@ fn actions_automation_wrote_keep_its_gate_when_the_user_plays_them() {
     assert!(!s.actions.list.last().unwrap().automation);
 }
 
+/// A step a control client runs while the user records (a `file.` command, or a call to an
+/// action) marks the recorded action as automation's, so it keeps automation's gate when the user
+/// plays it later. The user's own recording, with no gate installed, stays the user's.
+#[test]
+fn a_step_automation_runs_into_the_users_recording_keeps_its_gate() {
+    /// The automation policy these tests stand in for: every `file.` command is refused.
+    fn deny_file(id: &str, _: &Value) -> Result<()> {
+        if id.starts_with("file.") { Err(EngineError::Other(format!("automation command `{id}` is disabled"))) } else { Ok(()) }
+    }
+    /// The gate a control client's request runs under: its policy admitted this step (say, a file
+    /// inside its roots), so the step runs and is journaled into the recording.
+    fn admit(_: &str, _: &Value) -> Result<()> {
+        Ok(())
+    }
+    let mut s = Session::new();
+    s.automation_gate = Some(deny_file);
+    // The user records an action of their own: it is not marked.
+    s.execute("actions.record", json!({"name": "Mine"})).unwrap();
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    s.execute("actions.stop", json!({})).unwrap();
+    assert!(!s.actions.list[0].automation, "the user's own recording is not marked");
+
+    // The user records again; a control client runs a `file.` command meanwhile.
+    s.execute("actions.record", json!({"name": "Shared"})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.authorize = Some(admit);
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    s.authorize = None;
+    s.execute("actions.stop", json!({})).unwrap();
+    let shared = &s.actions.list[1];
+    assert!(shared.steps.iter().any(|(id, _)| id == "file.new"), "the client's step is recorded: {:?}", shared.steps);
+    assert!(shared.automation, "a step the client ran marks the recorded action");
+    // Played ungated (the user's key or the panel), the client's step meets automation's gate.
+    let r = s.execute("actions.play", json!({"action": "Shared"})).unwrap();
+    assert_eq!(r["failed"]["id"], "file.new", "{r}");
+    assert!(r["failed"]["error"].as_str().unwrap().contains("disabled"), "{r}");
+    assert!(s.authorize.is_none(), "the kept gate is removed after playback");
+    // The user's own action still runs with the user's access.
+    let r = s.execute("actions.play", json!({"action": "Mine"})).unwrap();
+    assert!(r.get("failed").is_none(), "{r}");
+
+    // A call to an action the client plays into the user's recording marks it too.
+    s.execute("actions.record", json!({"name": "Caller"})).unwrap();
+    s.authorize = Some(admit);
+    s.execute("actions.play", json!({"action": "Mine"})).unwrap();
+    s.authorize = None;
+    s.execute("actions.stop", json!({})).unwrap();
+    let caller = &s.actions.list[2];
+    assert_eq!(caller.steps.first().map(|(id, _)| id.as_str()), Some("actions.play"), "{:?}", caller.steps);
+    assert!(caller.automation, "a call the client played marks the recorded action");
+}
+
 #[test]
 fn append_delete_and_from_step() {
     let mut s = Session::new();

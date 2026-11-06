@@ -73,6 +73,18 @@ pub(crate) fn note_automation_edit(s: &mut Session, idx: usize) {
     }
 }
 
+/// Mark the action being recorded as automation's when `id` (with `params`) becomes one of its
+/// steps while an automation gate is installed: a step a control client, MCP or synthetic input
+/// runs during the user's recording keeps automation's gate when the action plays.
+pub fn note_automation_step(s: &mut Session, id: &str, params: &Value) {
+    if s.authorize.is_some()
+        && recorded(id, params)
+        && let Some((_, idx)) = s.actions.recording
+    {
+        note_automation_edit(s, idx);
+    }
+}
+
 /// The gate to install while `action` plays: automation's, for an action automation wrote that
 /// plays with none installed. `None` when the session's own gate (or none) applies.
 pub fn kept_gate(s: &Session, action: &Action) -> Option<fn(&str, &Value) -> Result<()>> {
@@ -797,7 +809,8 @@ pub fn nested_failure(id: &str, value: &Value) -> Option<String> {
 }
 
 /// `actions.play`: run an action's enabled steps from `from`, under automation's kept gate
-/// ([`kept_gate`]) when automation wrote it and no gate is installed.
+/// ([`kept_gate`]) when automation wrote it and no gate is installed. A call journaled into a
+/// recording while a gate is installed marks the recorded action ([`note_automation_step`]).
 fn play(s: &mut Session, p: &Value) -> Result<Value> {
     let (action, from) = playback_plan(s, p)?;
     let recording = begin_playback(s, &action)?;
@@ -811,6 +824,9 @@ fn play(s: &mut Session, p: &Value) -> Result<Value> {
         s.authorize = None;
     }
     finish_playback(s, recording, &action, from);
+    // The call journaled into a recording is automation's step when its caller runs under a gate
+    // (the kept gate is already removed, so the user's own play of a marked action is not).
+    note_automation_step(s, "actions.play", p);
     Ok(match failed {
         Some(f) => json!({"action": action.name, "ran": ran, "failed": f}),
         None => json!({"action": action.name, "ran": ran}),

@@ -1712,6 +1712,8 @@ impl Session {
         };
         let params = crate::actions_cmds::recorded_params(self, id, params);
         let params = crate::actions_record::portable(self, id, params, before);
+        // A step a control client runs while the user records keeps automation's gate.
+        crate::actions_cmds::note_automation_step(self, id, &params);
         match crate::actions_record::fold_keystroke(self, id, &params, self.typed_layer) {
             crate::actions_record::Keystroke::Folded => {}
             crate::actions_record::Keystroke::None => {
