@@ -604,6 +604,8 @@ pub struct ResizeSteps {
     filter: Resample,
     scale: (f64, f64),
     run: Option<PassRun>,
+    /// Final pruning must yield too: sparse output can contain many default-filled tiles.
+    prune: Option<photocraft_raster::PruneCursor>,
 }
 
 /// The pass being computed by [`ResizeSteps`].
@@ -619,7 +621,7 @@ impl ResizeSteps {
     /// or [`resize_surface_in_canvas`] does.
     pub fn new(src: Surface, sx: f64, sy: f64, filter: Resample, canvas: Option<Rect>) -> Self {
         let passes = plan(filter, sx, sy);
-        Self { src, total: passes.len(), passes: passes.into_iter(), canvas, filter, scale: (sx, sy), run: None }
+        Self { src, total: passes.len(), passes: passes.into_iter(), canvas, filter, scale: (sx, sy), run: None, prune: None }
     }
 
     /// How far along it is, `0.0..=1.0`: whole passes plus the bands done of the current one.
@@ -630,16 +632,19 @@ impl ResizeSteps {
     }
 
     /// Does at least one unit of work (planning a pass, one band of 64 output rows, or the
-    /// closing step) and goes on while `more()` returns true. `Some` once the resize is done.
+    /// closing prune batch) and goes on while `more()` returns true. `Some` once the resize is done.
     pub fn step(&mut self, more: &mut dyn FnMut() -> bool) -> Option<Surface> {
         loop {
             match self.run.take() {
                 None => {
-                    let Some(pass) = self.passes.next() else { return Some(self.finish()) };
-                    let out = Surface::with_default(self.src.format(), &self.src.default_pixel());
-                    match PassState::new(&self.src, pass, self.canvas, READ_BUDGET) {
-                        Some(state) => self.run = Some(PassRun { pass, state, out, next: 0 }),
-                        None => self.advance(out, pass),
+                    if let Some(pass) = self.passes.next() {
+                        let out = Surface::with_default(self.src.format(), &self.src.default_pixel());
+                        match PassState::new(&self.src, pass, self.canvas, READ_BUDGET) {
+                            Some(state) => self.run = Some(PassRun { pass, state, out, next: 0 }),
+                            None => self.advance(out, pass),
+                        }
+                    } else if let Some(out) = self.finish_step() {
+                        return Some(out);
                     }
                 }
                 Some(mut run) if run.next < run.state.bands() => {
@@ -662,13 +667,21 @@ impl ResizeSteps {
         self.src = out;
     }
 
-    /// The last pass's output, finished as [`resize_with_budget`] finishes it.
-    fn finish(&mut self) -> Surface {
+    /// The last pass's output, with the same final pruning as [`resize_with_budget`], but at
+    /// most four tiles per unit so a broad transparent area cannot monopolize the closing poll.
+    fn finish_step(&mut self) -> Option<Surface> {
+        if self.prune.is_none() {
+            let placeholder = Surface::new(self.src.format());
+            let out = std::mem::replace(&mut self.src, placeholder);
+            self.src = preserve_details(out, self.filter, self.scale.0, self.scale.1);
+            self.prune = Some(self.src.prune_cursor());
+        }
+        let cursor = self.prune.as_mut()?;
+        if !self.src.prune_batch(cursor, 4) {
+            return None;
+        }
         let placeholder = Surface::new(self.src.format());
-        let mut out = std::mem::replace(&mut self.src, placeholder);
-        out = preserve_details(out, self.filter, self.scale.0, self.scale.1);
-        out.prune();
-        out
+        Some(std::mem::replace(&mut self.src, placeholder))
     }
 }
 

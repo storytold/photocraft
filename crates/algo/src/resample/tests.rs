@@ -552,3 +552,44 @@ fn steps_of_an_empty_surface_are_empty() {
     let (got, _) = drive(ResizeSteps::new(src, 0.5, 0.5, Resample::Bicubic, None), 1);
     assert!(got == expected);
 }
+
+/// A transparent image with distant opaque corners keeps broad resize bounds. Its empty
+/// output tiles must be pruned across polls rather than scanning the whole surface at once.
+#[test]
+fn sparse_resize_final_pruning_yields_between_tile_batches() {
+    for sample in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        sparse_resize_final_pruning(sample);
+    }
+}
+
+fn sparse_resize_final_pruning(sample: SampleType) {
+    let mut src = Surface::new(PixelFormat::new(ColorMode::Rgb, sample, true));
+    for (x0, y0) in [(0, 0), (4600, 504)] {
+        for y in y0..y0 + 8 {
+            for x in x0..x0 + 8 {
+                src.write_pixel(x, y, &[1.0, 0.0, 0.0, 1.0]);
+            }
+        }
+    }
+    let expected = resize_surface(&src, 0.5, 0.5, Resample::Nearest);
+    let mut steps = ResizeSteps::new(src, 0.5, 0.5, Resample::Nearest, None);
+    let mut polls = 0;
+    while !steps.passes.as_slice().is_empty() || steps.run.is_some() {
+        assert!(steps.step(&mut || false).is_none());
+        polls += 1;
+        assert!(polls < 100, "the resize passes did not finish");
+    }
+    let unpruned = steps.src.tile_count();
+    assert!(unpruned >= 9, "the fixture must leave a broad output to scan: {unpruned}");
+    let mut closing_polls = 0;
+    let actual = loop {
+        closing_polls += 1;
+        if let Some(out) = steps.step(&mut || false) {
+            break out;
+        }
+        assert!(closing_polls < 100, "the final prune did not finish");
+    };
+    assert!(closing_polls >= unpruned.div_ceil(4), "{unpruned} tiles were scanned in {closing_polls} closing polls");
+    assert!(actual == expected, "stepped pruning must preserve pixels and remove the same empty tiles");
+    assert!(actual.tile_count() < unpruned, "the fixture must include default-filled output tiles");
+}
