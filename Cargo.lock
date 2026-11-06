@@ -5464,7 +5464,6 @@ dependencies = [
  "craft-docpath",
  "crc32fast",
  "flate2",
- "image",
  "imagesize",
  "lopdf",
  "miniz_oxide 0.9.1",

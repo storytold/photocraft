@@ -56,7 +56,6 @@ ttf-parser = { version = "0.25", default-features = false }
 # and the DLL release is pinned separately in packaging/windows/package.ps1, so a lockfile refresh
 # must not move the wrapper under it. Bump deliberately and re-check both.
 pdfium-render = "=0.9.5"
-image = { workspace = true, features = ["png"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 resvg = { version = "0.45", default-features = false, features = ["text", "raster-images"] }
