@@ -403,9 +403,9 @@ impl DragDocument {
 
     /// The document is still the active one.
     pub fn is_active(&self, app: &PhotocraftApp) -> bool {
-        app.session.active().is_some_and(|st| {
-            st.doc.id == self.id && (st.revision > self.revision || self.snapshot.ptr_eq(&std::sync::Arc::downgrade(&st.doc)))
-        })
+        app.session
+            .active()
+            .is_some_and(|st| st.doc.id == self.id && (st.revision > self.revision || self.snapshot.ptr_eq(&std::sync::Arc::downgrade(&st.doc))))
     }
 }
 
