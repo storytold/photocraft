@@ -171,6 +171,7 @@
 	Right	Prawa
 	Open Recent	Otwórz ostatnie
 	Clear Recent Files	Wyczyść listę ostatnich plików
+	Clear Recent File List	Wyczyść listę ostatnich plików
 	Remove from Recent	Usuń z ostatnich plików
 	Remove {name} from Recent	Usuń {name} z ostatnich plików
 	Close	Zamknij
@@ -179,6 +180,10 @@
 	Restore	Przywróć
 	Close All	Zamknij wszystko
 	Close Others	Zamknij pozostałe
+	New Document…	Nowy dokument…
+	Open Document…	Otwórz…
+	Consolidate All to Here	Połącz wszystko tutaj
+	Move to New Window	Przenieś do nowego okna
 	Save	Zapisz
 	Save As…	Zapisz jako…
 	Save a Copy…	Zapisz kopię…
@@ -231,6 +236,7 @@
 	Create Smart Object after Loading Layers	Utwórz obiekt inteligentny po wczytaniu warstw
 	Reveal in Finder	Pokaż w Finderze
 	Show in Explorer	Pokaż w Eksploratorze
+	Reveal in Explorer	Pokaż w Eksploratorze
 	Show in Folder	Pokaż w folderze
 	File Info…	Informacje o pliku…
 	Print…	Drukuj…
@@ -318,6 +324,7 @@
 	Units & Rulers…	Jednostki i linijki…
 	Guides, Grid & Slices…	Prowadnice, siatka i plasterki…
 	Plug-ins…	Wtyczki…
+	Plugins…	Wtyczki…
 	Type…	Tekst…
 	Enhanced Controls…	Ulepszone elementy sterujące…
 	Camera Raw…	Camera Raw…
@@ -474,6 +481,8 @@
 	Smart Object	Obiekt inteligentny
 	Convert to Smart Object	Konwertuj na obiekt inteligentny
 	Convert to Embedded	Konwertuj na osadzony
+	Embed Linked	Osadź połączony
+	Embed All Linked	Osadź wszystkie połączone
 	Convert to Layers	Konwertuj na warstwy
 	Convert to Linked…	Konwertuj na połączony…
 	Edit Contents	Edytuj zawartość
@@ -547,7 +556,9 @@
 	Unite Shapes	Złącz kształty
 	Subtract Front Shape	Odejmij kształt z przodu
 	Intersect Shape Areas	Część wspólna obszarów kształtów
+	Unite Shapes at Overlap	Część wspólna obszarów kształtów
 	Exclude Overlapping Shapes	Wyklucz nakładające się kształty
+	Subtract Shapes at Overlap	Wyklucz nakładające się kształty
 	Merge Shape Components	Scal składniki kształtu
 	Path operations	Operacje na ścieżkach
 	Align	Wyrównaj
@@ -732,6 +743,7 @@
 	Minimum…	Minimum…
 	Offset…	Przesunięcie…
 	Plug-ins	Wtyczki
+	Plugins	Wtyczki
 	Proof Setup	Ustawienia próbnego wydruku
 	Proof Colors	Kolory próbne
 	Gamut Warning	Ostrzeżenie o gamucie
@@ -740,9 +752,9 @@
 	Working Magenta Plate	Robocza płyta magenty
 	Working Yellow Plate	Robocza płyta żółci
 	Working Black Plate	Robocza płyta czerni
-	Working CMY Plate	Robocza płyta CMY
-	Legacy Macintosh RGB	Starszy Macintosh RGB
-	Internet Standard RGB	Standardowy RGB dla Internetu
+	Working CMY Plates	Robocza płyta CMY
+	Legacy Macintosh RGB (Gamma 1.8)	Starszy Macintosh RGB (Gamma 1.8)
+	Internet Standard RGB (sRGB)	Standardowy RGB dla Internetu (sRGB)
 	Monitor RGB	RGB monitora
 	Color Blindness — Protanopia-type	Ślepota barw — typ protanopii
 	Color Blindness — Deuteranopia-type	Ślepota barw — typ deuteranopii
@@ -834,7 +846,7 @@
 	Consolidate All to Tabs	Połącz wszystko w karty
 	Float in Window	Odłącz do okna
 	Float All in Windows	Odłącz wszystko do okien
-	New Window for Document	Nowe okno dla dokumentu
+	New Window	Nowe okno dla dokumentu
 	Workspace	Obszar roboczy
 	Essentials	Podstawowe
 	Graphic and Web	Grafika i Internet
@@ -2012,6 +2024,11 @@
 	Show canvas dots	Pokaż kropki płótna
 	Clip thumbnails to layer bounds	Przycinaj miniatury do granic warstwy
 	Clip Thumbnails to Layer Bounds	Przycinaj miniatury do granic warstwy
+	No Thumbnails	Bez miniaturek
+	Small Thumbnails	Małe miniaturki
+	Medium Thumbnails	Średnie miniaturki
+	Large Thumbnails	Duże miniaturki
+	Clip Thumbnails to Document Bounds	Przycinaj miniatury do granic dokumentu
 	Canvas color	Kolor płótna
 	Canvas custom color	Własny kolor płótna
 	Color picker	Próbnik kolorów

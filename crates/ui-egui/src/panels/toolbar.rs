@@ -6,7 +6,7 @@ use super::{Align2, Color32, PhotocraftApp, Pos2, Rect, Sense, Stroke, StrokeKin
 /// Tool groups separated by hairlines, Photoshop order.
 /// Photoshop toolbar: divider-separated sections of slots; each slot is a flyout group whose button
 /// shows the group's last-used tool.
-pub(super) const TOOL_SECTIONS: &[&[&[Tool]]] = &[
+pub(crate) const TOOL_SECTIONS: &[&[&[Tool]]] = &[
     &[&[Tool::Move, Tool::Artboard]],
     &[
         &[Tool::RectMarquee, Tool::EllipseMarquee, Tool::SingleRowMarquee, Tool::SingleColumnMarquee],
@@ -17,8 +17,8 @@ pub(super) const TOOL_SECTIONS: &[&[&[Tool]]] = &[
         &[Tool::Eyedropper, Tool::ColorSampler, Tool::Ruler, Tool::Note, Tool::Count],
     ],
     &[
-        &[Tool::Remove, Tool::SpotHealing, Tool::Healing, Tool::Patch, Tool::ContentAwareMove, Tool::RedEye],
-        &[Tool::Brush, Tool::Pencil, Tool::MixerBrush, Tool::ColorReplacement],
+        &[Tool::SpotHealing, Tool::Remove, Tool::Healing, Tool::Patch, Tool::ContentAwareMove, Tool::RedEye],
+        &[Tool::Brush, Tool::Pencil, Tool::ColorReplacement, Tool::MixerBrush],
         &[Tool::CloneStamp, Tool::PatternStamp],
         &[Tool::HistoryBrush, Tool::ArtHistoryBrush],
         &[Tool::Eraser, Tool::BackgroundEraser, Tool::MagicEraser],
@@ -46,9 +46,15 @@ fn slot_tool(ui: &egui::Ui, current: Tool, slot: &[Tool], key: egui::Id) -> Tool
 
 /// Next tool in a toolbar flyout slot after `from`, wrapping (Photoshop Alt/Option-click). An
 /// empty slot returns `from` unchanged rather than dividing by zero.
-pub(super) fn next_slot_tool(slot: &[Tool], from: Tool) -> Tool {
+pub(crate) fn next_slot_tool(slot: &[Tool], from: Tool) -> Tool {
     let i = slot.iter().position(|&t| t == from).unwrap_or(0);
     i.checked_add(1).and_then(|n| n.checked_rem(slot.len())).and_then(|n| slot.get(n)).copied().unwrap_or(from)
+}
+
+/// Position of `tool` in [`TOOL_SECTIONS`] read top to bottom, slot by slot. Tools outside the
+/// toolbar sort last. Shift+letter orders a key's group by this so it steps like the flyout.
+pub(crate) fn toolbar_position(tool: Tool) -> usize {
+    TOOL_SECTIONS.iter().flat_map(|section| section.iter()).flat_map(|slot| slot.iter()).position(|&t| t == tool).unwrap_or(usize::MAX)
 }
 
 /// [`TOOL_SECTIONS`] without the tools hidden in Edit › Toolbar (`hidden` holds tool names: the

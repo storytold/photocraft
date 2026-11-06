@@ -176,6 +176,7 @@
 	Right	右
 	Open Recent	最近開啟的檔案
 	Clear Recent Files	清除最近檔案
+	Clear Recent File List	清除最近檔案
 	Remove from Recent	從最近檔案中移除
 	Remove {name} from Recent	從最近檔案中移除 {name}
 	Close	關閉
@@ -184,6 +185,10 @@
 	Restore	向下還原
 	Close All	全部關閉
 	Close Others	關閉其他
+	New Document…	新增文件…
+	Open Document…	開啟…
+	Consolidate All to Here	將所有視窗合併至此處
+	Move to New Window	移至新視窗
 	Save	儲存
 	Save As…	另存新檔…
 	Save a Copy…	儲存拷貝…
@@ -236,6 +241,7 @@
 	Create Smart Object after Loading Layers	載入圖層後建立智慧型物件
 	Reveal in Finder	在 Finder 中顯示
 	Show in Explorer	在檔案總管中顯示
+	Reveal in Explorer	在檔案總管中顯示
 	Show in Folder	在資料夾中顯示
 	File Info…	檔案資訊…
 	Print…	列印…
@@ -324,6 +330,7 @@
 	Units & Rulers…	單位和尺標…
 	Guides, Grid & Slices…	參考線、格點和切片…
 	Plug-ins…	增效模組…
+	Plugins…	增效模組…
 	Type…	文字…
 	Enhanced Controls…	增強控制項…
 	Camera Raw…	Camera Raw…
@@ -481,6 +488,8 @@
 	Smart Object	智慧型物件
 	Convert to Smart Object	轉換為智慧型物件
 	Convert to Embedded	轉換為嵌入
+	Embed Linked	嵌入連結
+	Embed All Linked	嵌入所有連結
 	Convert to Layers	轉換為圖層
 	Convert to Linked…	轉換為連結…
 	Edit Contents	編輯內容
@@ -554,7 +563,9 @@
 	Unite Shapes	聯集形狀
 	Subtract Front Shape	減去前方形狀
 	Intersect Shape Areas	交集形狀區域
+	Unite Shapes at Overlap	交集形狀區域
 	Exclude Overlapping Shapes	排除重疊形狀
+	Subtract Shapes at Overlap	排除重疊形狀
 	Merge Shape Components	合併形狀元件
 	Path operations	路徑操作
 	Align	對齊
@@ -739,6 +750,7 @@
 	Minimum…	最小…
 	Offset…	畫面錯位…
 	Plug-ins	增效模組
+	Plugins	增效模組
 	Proof Setup	校樣設定
 	Proof Colors	校樣色彩
 	Gamut Warning	色域警告
@@ -747,9 +759,9 @@
 	Working Magenta Plate	使用中的洋紅版
 	Working Yellow Plate	使用中的黃色版
 	Working Black Plate	使用中的黑色版
-	Working CMY Plate	使用中的 CMY 版
-	Legacy Macintosh RGB	舊版 Macintosh RGB
-	Internet Standard RGB	網際網路標準 RGB
+	Working CMY Plates	使用中的 CMY 版
+	Legacy Macintosh RGB (Gamma 1.8)	舊版 Macintosh RGB (Gamma 1.8)
+	Internet Standard RGB (sRGB)	網際網路標準 RGB (sRGB)
 	Monitor RGB	顯示器 RGB
 	Color Blindness — Protanopia-type	色盲 — 紅色盲型
 	Color Blindness — Deuteranopia-type	色盲 — 綠色盲型
@@ -841,7 +853,7 @@
 	Consolidate All to Tabs	全部合併至標籤頁
 	Float in Window	在視窗中浮動
 	Float All in Windows	全部在視窗中浮動
-	New Window for Document	為文件新增視窗
+	New Window	為文件新增視窗
 	Workspace	工作區
 	Essentials	基本功能
 	Graphic and Web	繪圖和網頁
@@ -2020,6 +2032,11 @@
 	Show canvas dots	顯示畫布圓點
 	Clip thumbnails to layer bounds	將縮圖裁切至圖層邊界
 	Clip Thumbnails to Layer Bounds	將縮圖裁切至圖層邊界
+	No Thumbnails	無縮圖
+	Small Thumbnails	小縮圖
+	Medium Thumbnails	中縮圖
+	Large Thumbnails	大縮圖
+	Clip Thumbnails to Document Bounds	將縮圖裁切至文件邊界
 	Canvas color	畫布顏色
 	Canvas custom color	畫布自訂顏色
 	Color picker	檢色器
@@ -2911,6 +2928,9 @@ curves	Smooth	平滑
 	Sent to {printer}	已傳送至 {printer}
 	set in Print Settings…	在列印設定中設定…
 	ICO is limited to 256 × 256 pixels	ICO 最大為 256 × 256 像素
+	Automatically Create First Snapshot	自動建立第一個快照
+	Automatically Create New Snapshot When Saving	儲存時自動建立新快照
+	Show New Snapshot Dialog by Default	預設顯示新增快照對話框
 	Memory usage percent	記憶體使用比例 (%)
 	Show Favorite Fonts	顯示我的最愛字體
 	No favorite fonts yet: click the star beside a font to add it.	尚無我的最愛字體：按一下字體旁的星號即可加入。
