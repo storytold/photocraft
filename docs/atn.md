@@ -811,9 +811,13 @@ set only: a child an earlier load renamed to keep names unique (`Child 2` for a 
 still found in its own set, and a set holding no such child is an error, never a same-named child of
 another set (#11523). A call of the loaded file's own set stays unqualified,
 following this load's renames of the child (#6806); an unqualified call (the Actions panel, a
-recorded call, an older file) still resolves by name. A qualified call whose set the session has not
-loaded is reported in `actions.load`'s `warnings` and fails at playback naming the set it could not
-find.
+recorded call, an older file) still resolves by name; a `set` that is not a name, or an empty one,
+is refused rather than ignored, because falling back to the name is how a call lands in the wrong
+set. A qualified call whose set the session has not loaded is reported in `actions.load`'s
+`warnings` and fails at playback naming the set it could not find — the warning says which of the
+two is missing when the set is loaded but holds no such child. While recording, a call whose child
+name the library holds in more than one set is journaled with its set, so the recording replays the
+action it recorded; a uniquely named call is journaled bare, as before.
 
 ## Newer events (string ID only)
 

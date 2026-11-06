@@ -1555,7 +1555,9 @@ fn a_set_qualified_play_reaches_that_sets_child() {
 }
 
 /// A rename follows a Play call qualified with the set the call reaches, and leaves a call that
-/// reaches another set's same-named child naming it still.
+/// reaches another set's same-named child naming it still. A call the loader renamed reaches through
+/// its set too, so it follows the rename rather than dangling, and a call by list index is left
+/// alone.
 #[test]
 fn rename_follows_a_set_qualified_play_call_that_reaches_the_action() {
     let mut s = Session::new();
@@ -1564,12 +1566,107 @@ fn rename_follows_a_set_qualified_play_call_that_reaches_the_action() {
     }
     s.actions.list.push(Action::new(
         "Caller",
-        vec![("actions.play".into(), json!({"action": "Child", "set": "B"})), ("actions.play".into(), json!({"action": "Child"}))],
+        vec![
+            ("actions.play".into(), json!({"action": "Child", "set": "B"})),
+            ("actions.play".into(), json!({"action": "Child"})),
+            ("actions.play".into(), json!({"action": 1})),
+        ],
     ));
     s.execute("actions.rename", json!({"action": 1, "name": "Renamed"})).unwrap();
     let caller = &s.actions.list[2].steps;
     assert_eq!(caller[0].1, json!({"action": "Renamed", "set": "B"}), "the call reaching B's child follows it");
     assert_eq!(caller[1].1, json!({"action": "Child"}), "the unqualified call reaches A's child and stays");
+    assert_eq!(caller[2].1, json!({"action": 1}), "a call by list index names the row outright");
+
+    // The same call recorded with the name the file gave it, which this load renamed to `Child 2`:
+    // the set still identifies the action, so the rename reaches it.
+    let mut s = Session::new();
+    s.actions.list.push(Action { set: Some("A".into()), ..Action::new("Child", Vec::new()) });
+    s.actions.list.push(Action { set: Some("B".into()), ..Action::new("Child 2", Vec::new()) });
+    s.actions.list.push(Action::new("Caller", vec![("actions.play".into(), json!({"action": "Child", "set": "B"}))]));
+    s.execute("actions.rename", json!({"action": 1, "name": "Renamed"})).unwrap();
+    assert_eq!(s.actions.list[2].steps[0].1, json!({"action": "Renamed", "set": "B"}), "the renamed child's qualified call follows it");
+    assert!(s.execute("actions.play", json!({"action": "Caller"})).unwrap().get("failed").is_none(), "and still resolves");
+}
+
+/// Two sets' children of one name may call each other: the cycle check keys on the action the call
+/// resolved to, so set A's `Child` playing set B's `Child` is a call, not a recursion (#11523).
+#[test]
+fn a_cross_set_call_between_same_named_children_is_not_a_cycle() {
+    let mut s = Session::new();
+    s.actions.list.push(Action { set: Some("A".into()), ..Action::new("Child", vec![("actions.play".into(), json!({"action": "Child", "set": "B"}))]) });
+    s.actions.list.push(Action { set: Some("B".into()), ..Action::new("Child", vec![("image.adjustments.invert".into(), json!({}))]) });
+    s.execute("file.new", json!({"width": 2, "height": 2})).unwrap();
+    let played = s.execute("actions.play", json!({"action": "Child", "set": "A"})).unwrap();
+    assert!(played.get("failed").is_none(), "{played}");
+    assert_eq!(played["ran"], 1, "{played}");
+    assert!(s.actions.playback_stack.is_empty());
+
+    // The real cycle is still caught: A's Child playing A's Child.
+    s.actions.list.push(Action { set: Some("A".into()), ..Action::new("Loop", vec![("actions.play".into(), json!({"action": "Loop", "set": "A"}))]) });
+    let played = s.execute("actions.play", json!({"action": "Loop", "set": "A"})).unwrap();
+    assert!(played["failed"]["error"].as_str().unwrap_or_default().contains("recursive"), "{played}");
+}
+
+/// Recording a call of a library that holds one name in two sets keeps the set the call reached;
+/// a uniquely named call is recorded bare, as it always was (#11523).
+#[test]
+fn recording_a_call_between_same_named_actions_keeps_its_set() {
+    let mut s = Session::new();
+    for set in ["A", "B"] {
+        s.actions.list.push(Action { set: Some(set.into()), ..Action::new("Child", vec![("image.adjustments.invert".into(), json!({}))]) });
+    }
+    s.actions.list.push(Action::new("Unique", vec![("image.adjustments.invert".into(), json!({}))]));
+    s.execute("file.new", json!({"width": 2, "height": 2})).unwrap();
+    s.execute("actions.record", json!({"name": "Parent"})).unwrap();
+    assert!(s.execute("actions.play", json!({"action": "Child", "set": "B"})).unwrap().get("failed").is_none());
+    assert!(s.execute("actions.play", json!({"action": "Unique"})).unwrap().get("failed").is_none());
+    s.execute("actions.stop", json!({})).unwrap();
+    let steps = s.actions.list.iter().find(|a| a.name == "Parent").unwrap().steps.clone();
+    assert_eq!(
+        steps,
+        [("actions.play".to_string(), json!({"action": "Child", "set": "B"})), ("actions.play".to_string(), json!({"action": "Unique"}))],
+        "the ambiguous name keeps its set, the unique one stays bare"
+    );
+}
+
+/// A malformed `set` is refused: falling back to the name alone is exactly how a call lands in
+/// another set, so only an absent or null qualifier keeps the plain lookup by name (#11523).
+#[test]
+fn a_malformed_set_qualifier_is_refused() {
+    let mut s = Session::new();
+    s.actions.list.push(Action { set: Some("A".into()), ..Action::new("Child", Vec::new()) });
+    for params in [
+        json!({"action": "Child", "set": 5}),
+        json!({"action": "Child", "set": ""}),
+        json!({"action": "Child", "set": ["A"]}),
+        json!({"action": "Child", "set": true}),
+    ] {
+        let error = s.execute("actions.play", params.clone()).unwrap_err().to_string();
+        assert!(error.contains("set"), "{params}: {error}");
+    }
+    for params in [json!({"action": "Child"}), json!({"action": "Child", "set": null})] {
+        assert!(s.execute("actions.play", params.clone()).is_ok(), "{params}");
+    }
+}
+
+/// Droplet capture keeps a qualified call it could not resolve a failure: the exported list may hold
+/// only one of the candidates, and quietly resolving the call there would play steps nobody chose
+/// (#11523), so it stays a target past the end, as a missing numeric target already does.
+#[test]
+fn captured_calls_keep_an_unresolvable_qualified_target_failing() {
+    let action = |name: &str, id: &str| Action { set: Some("Blue".into()), ..Action::new(name, vec![(id.into(), json!({}))]) };
+    let list = vec![action("Rotate", "image.imageRotation.90cw"), action("Child 2", "image.adjustments.invert"), action("Child 3", "image.imageRotation.180")];
+    let mut steps = vec![
+        ("actions.play".into(), json!({"action": "Rotate", "set": "Blue"})),
+        // Ambiguous: `Blue` holds both `Child 2` and `Child 3` and no plain `Child`.
+        ("actions.play".into(), json!({"action": "Child", "set": "Blue"})),
+    ];
+    let called = called_actions(&list, &mut steps);
+    assert_eq!(called.iter().map(|a| a.name.as_str()).collect::<Vec<_>>(), ["Rotate"], "{called:?}");
+    assert_eq!(steps[0].1, json!({"action": "Rotate", "set": "Blue"}), "the call that resolved keeps its target");
+    assert!(steps[1].1.get("set").is_none(), "{}", steps[1].1);
+    assert!(resolve_call(&called, &steps[1].1, "actions.play").is_err(), "the ambiguous call still fails: {}", steps[1].1);
 }
 
 /// All Batch files saved, but the requested error log could not be written: the calling action

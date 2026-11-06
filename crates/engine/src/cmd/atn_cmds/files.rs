@@ -85,15 +85,24 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     s.actions.list.extend(added);
-    // A call qualified with a set the session does not hold is reported here, so a missing set is
-    // heard of when the file is loaded rather than only when playback refuses to guess (#11523).
+    // A cross-set call the session cannot answer is reported here, so it is heard of when the file
+    // loads rather than only when playback refuses to guess (#11523). The two reasons read
+    // differently: a set the session has not loaded asks for that set, while a loaded set without
+    // that child (or holding two of its renamed forms) asks about the call. A `HashSet` beside the
+    // ordered list keeps the deduplication linear when a big library repeats one lost target.
+    let mut seen: std::collections::HashSet<String> = imp.warnings.iter().cloned().collect();
     let mut lost_targets = Vec::new();
+    let holds_set = |wanted: &str| s.actions.list.iter().any(|a| a.set.as_deref() == Some(wanted)) || s.actions.sets.iter().any(|set| set == wanted);
     for (caller, child, set) in cross_set_calls {
         if crate::actions_cmds::qualified_target(&s.actions.list, &child, &set).is_some() {
             continue;
         }
-        let warning = format!("`{caller}` plays `{child}` in set `{set}`, which is not loaded; load that set before playing it");
-        if !imp.warnings.contains(&warning) && !lost_targets.contains(&warning) {
+        let warning = if holds_set(&set) {
+            format!("`{caller}` plays `{child}`, which set `{set}` does not hold; playback will report that action rather than guess another set's")
+        } else {
+            format!("`{caller}` plays `{child}` in set `{set}`, which is not loaded; load that set before playing it")
+        };
+        if seen.insert(warning.clone()) {
             lost_targets.push(warning);
         }
     }

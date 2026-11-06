@@ -580,6 +580,29 @@ fn a_play_step_naming_an_unloaded_set_is_reported() {
     assert_eq!(pixel(&mut s), [0.0, 0.0, 1.0, 1.0]);
 }
 
+/// The load warning tells the two reasons apart: a set the session has not loaded at all, and a
+/// loaded set that simply does not hold the child the call names (#11523).
+#[test]
+fn a_play_step_warning_names_whether_the_set_or_the_child_is_missing() {
+    let warnings_of =
+        |r: &Value| r["warnings"].as_array().map(|w| w.iter().filter_map(Value::as_str).map(str::to_owned).collect::<Vec<_>>()).unwrap_or_default();
+
+    let mut s = Session::new();
+    s.execute("actions.load", json!({"data": BLUE_ATN})).unwrap();
+    let caller =
+        Action { name: "Outer".into(), steps: vec![("actions.play".into(), json!({"action": "No such child", "set": BLUE_SET}))], ..Default::default() };
+    let (bytes, _) = export("ATNParity_Other", &[&caller], &[], false).unwrap();
+    let r = s.execute("actions.load", json!({"data": b64(&bytes)})).unwrap();
+    let warnings = warnings_of(&r);
+    assert!(warnings.iter().any(|w| w.contains("does not hold") && w.contains("No such child")), "{r}");
+    assert!(!warnings.iter().any(|w| w.contains("not loaded")), "{r}: the set is loaded");
+
+    let mut t = Session::new();
+    let r = t.execute("actions.load", json!({"data": RUNNER_ATN})).unwrap();
+    let warnings = warnings_of(&r);
+    assert!(warnings.iter().any(|w| w.contains("is not loaded") && w.contains(BLUE_SET)), "{r}");
+}
+
 #[test]
 fn load_many_duplicate_names_get_sequential_suffixes() {
     // Several actions share one base name. Deduplication must stay O(n) overall and produce
