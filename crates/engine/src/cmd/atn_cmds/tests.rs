@@ -6396,3 +6396,42 @@ fn paste_with_center_refuses_strict_export() {
         assert_eq!(steps, vec![(id.to_string(), p.clone())], "{id} {p}");
     }
 }
+
+/// #11504: Paste in Place refuses the same unwritable placement keys as Paste, `target: pixels` is
+/// the one allowed target, and the `as` form keeps refusing what it always refused.
+#[test]
+fn paste_in_place_and_as_forms_keep_their_strict_export_rules() {
+    let one = |id: &str, p: Value| Action { name: "Probe".into(), steps: vec![(id.into(), p)], ..Default::default() };
+    let refused = [
+        ("edit.pasteSpecial.pasteInPlace", json!({"center": [3, 2]})),
+        ("edit.pasteSpecial.pasteInPlace", json!({"layer": 1})),
+        ("edit.pasteSpecial.pasteInPlace", json!({"target": "mask"})),
+        ("edit.pasteSpecial.pasteInPlace", json!({"center": null})),
+        // The `as` form: a present `inPlace` (even false), a placement key, an unknown mode.
+        ("edit.paste", json!({"as": "path", "inPlace": true})),
+        ("edit.paste", json!({"as": "path", "inPlace": false})),
+        ("edit.paste", json!({"as": "shape", "inPlace": true})),
+        ("edit.paste", json!({"as": "path", "center": [3, 2]})),
+        ("edit.paste", json!({"as": "shape", "layer": 1})),
+        ("edit.paste", json!({"as": "path", "target": "mask"})),
+        ("edit.paste", json!({"as": "bogus"})),
+        ("edit.pasteSpecial.pasteInPlace", json!({"as": "path"})),
+        ("edit.pasteSpecial.pasteInPlace", json!({"as": "shape"})),
+        ("edit.pasteSpecial.pasteInPlace", json!({"as": "pixels"})),
+    ];
+    for (id, p) in refused {
+        let err = export("Audit", &[&one(id, p.clone())], &[], false).unwrap_err();
+        assert!(err.contains(&format!("`{id}`")), "{id} {p}: {err}");
+        let (_, skipped) = export("Audit", &[&one(id, p.clone())], &[], true).unwrap();
+        assert_eq!(skipped, vec![Skipped { action: "Probe".into(), step: 0, id: id.into() }], "{id} {p}");
+    }
+    // `target: pixels` is the one target the descriptor can express; it reloads as the plain step.
+    for id in ["edit.paste", "edit.pasteSpecial.pasteInPlace"] {
+        let (bytes, skipped) = export("Audit", &[&one(id, json!({"target": "pixels"}))], &[], false).unwrap();
+        assert!(skipped.is_empty(), "{id}");
+        let steps = import(&bytes).unwrap().actions[0].steps.clone();
+        assert_eq!(steps, vec![(id.to_string(), json!({}))], "{id}");
+    }
+    let (bytes, _) = export("Audit", &[&one("edit.paste", json!({"as": "shape"}))], &[], false).unwrap();
+    assert_eq!(import(&bytes).unwrap().actions[0].steps, vec![("edit.paste".to_string(), json!({"as": "shape"}))]);
+}
