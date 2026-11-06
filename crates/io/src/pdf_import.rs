@@ -600,6 +600,7 @@ mod tests {
     }
 
     #[test]
+    /// Page points map through the DPI scale, the Y flip and the page's document X offset.
     fn page_points_map_to_document_pixels() {
         assert_eq!(frame(72.0, 0).to_doc(60.0, 420.0), (60.0, 422.0));
         // The same point at four times the resolution.
@@ -609,6 +610,7 @@ mod tests {
     }
 
     #[test]
+    /// The document-wide budget refuses layers and knots once its limits are reached.
     fn object_budget_stops_at_its_limits() {
         let mut budget = ObjectBudget::default();
         for _ in 0..MAX_OBJECT_LAYERS {
@@ -621,6 +623,7 @@ mod tests {
         assert!(!knots.claim_knots(usize::MAX));
     }
     #[test]
+    /// Crop-box offsets and 90/180/270 rotations land where the raster renders them.
     fn crop_box_offsets_and_rotations_map_like_the_raster() {
         // A 200 x 100 pt crop box at (10, 20), displayed rotated 90 degrees clockwise: 100 x 200.
         let rotated = |rotation| PageFrame {
@@ -644,6 +647,7 @@ mod tests {
     }
 
     #[test]
+    /// The page sampler reads the requested pixel and reports black outside the page.
     fn samples_the_rendered_page() {
         // Two pixels: white then black.
         let rgba = [255u8, 255, 255, 255, 0, 0, 0, 255];
@@ -661,6 +665,7 @@ mod tests {
     }
 
     #[test]
+    /// Glyph ink wins over the background inside a text box, while an empty box keeps background.
     fn text_colour_samples_the_glyph_ink() {
         // An 8 x 4 white page with one black glyph pixel at (2, 1).
         let mut rgba = vec![255u8; 8 * 4 * 4];

@@ -395,6 +395,7 @@ fn leading_newline_stays_in_the_first_selection_span() {
 }
 
 #[test]
+/// Each artboard becomes one labelled page, in document order.
 fn artboards_export_as_one_page_each() {
     use photocraft_doc::{Artboard, Group};
     let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::F32, true);

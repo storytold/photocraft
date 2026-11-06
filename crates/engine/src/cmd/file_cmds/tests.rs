@@ -2539,6 +2539,7 @@ fn layers_to_files_reports_skipped_layers_without_changing_files() {
 }
 
 #[test]
+/// `groups: "layers"` walks into a group and writes each visible leaf as its own file.
 fn layers_to_files_exports_group_children_as_loose_files() {
     let dir = tmp("layers-groups");
     let mut s = session(8, 8, 8);
