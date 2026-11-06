@@ -537,19 +537,30 @@ mod tests {
         assert!(!keys(&mut app2, &ctx));
     }
 
-    /// ⇧I is the Eyedropper group's key even with the Crop tool, not Front Image.
+    /// ⇧I is the Eyedropper group's key even with the Crop tool, not Front Image: with no frame
+    /// yet, over the untouched default frame and with a crop in progress.
     #[test]
     fn shift_i_with_the_crop_tool_switches_to_the_eyedropper() {
-        let mut app = app(SampleType::U8);
-        let ratio = app.ui.tool_options.crop_ratio.clone();
-        let ctx = egui::Context::default();
-        ctx.input_mut(|i| {
-            // Only the event holds ⇧, as with a control-channel `ui.key` (the frame's state lags).
-            i.events.push(egui::Event::Key { key: egui::Key::I, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::SHIFT });
-        });
-        crate::shortcuts::handle(&mut app, &ctx);
-        assert_eq!(app.ui.tool, Tool::Eyedropper);
-        assert_eq!(app.ui.tool_options.crop_ratio, ratio);
+        for frame in ["none", "default", "in progress"] {
+            let mut app = app(SampleType::U8);
+            if frame != "none" {
+                crate::crop_ui::ensure_frame(&mut app);
+                assert!(app.ui.crop_rect.is_some() && app.crop.default_frame, "{frame}");
+            }
+            if frame == "in progress" {
+                app.ui.crop_rect = Some([20.0, 10.0, 120.0, 90.0]);
+                app.crop.default_frame = false;
+            }
+            let ratio = app.ui.tool_options.crop_ratio.clone();
+            let ctx = egui::Context::default();
+            ctx.input_mut(|i| {
+                // Only the event holds ⇧, as with a control-channel `ui.key` (the frame's state lags).
+                i.events.push(egui::Event::Key { key: egui::Key::I, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::SHIFT });
+            });
+            crate::shortcuts::handle(&mut app, &ctx);
+            assert_eq!(app.ui.tool, Tool::Eyedropper, "{frame}");
+            assert_eq!(app.ui.tool_options.crop_ratio, ratio, "{frame}");
+        }
     }
 
     /// Committing a W x H x Resolution crop resamples the frame's area to exactly W x H px and sets

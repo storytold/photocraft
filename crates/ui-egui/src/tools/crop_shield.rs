@@ -389,23 +389,49 @@ mod tests {
         assert!(app.ui.tool_options.crop_shield.show_cropped_area);
     }
 
-    /// ⇧H and ⇧P are the Hand and Pen tool keys even with a crop box: egui's `consume_key` ignores
-    /// an extra ⇧, so the plain-key checks must refuse it.
+    /// A crop in progress: a frame changed from the default one, so [`keys`] gets past its
+    /// early returns (#9731).
+    fn crop_in_progress_app() -> PhotocraftApp {
+        let mut app = crop_app();
+        app.ui.crop_rect = Some([20.0, 10.0, 120.0, 90.0]);
+        app.crop.default_frame = false;
+        app
+    }
+
+    /// ⇧H and ⇧P are the Hand and Pen tool keys with a crop in progress, where plain H and P are
+    /// the crop box's: egui's `consume_key` ignores an extra ⇧, so the plain-key checks must refuse
+    /// it. Over the untouched default frame they are the tool keys too.
     #[test]
     fn shift_h_and_shift_p_switch_tools_instead_of_crop_options() {
-        for (key, tool) in [(Key::H, Tool::Hand), (Key::P, Tool::Pen)] {
-            let mut app = crop_app();
-            assert!(app.session.prefs().tools.use_shift_key_for_tool_switch);
-            let before = app.ui.tool_options.crop_shield.clone();
-            let ctx = egui::Context::default();
-            ctx.input_mut(|i| {
-                // Only the event holds ⇧, as with a control-channel `ui.key` (the frame's state lags).
-                i.events.push(egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::SHIFT });
-            });
-            crate::shortcuts::handle(&mut app, &ctx);
-            assert_eq!(app.ui.tool, tool, "{key:?}");
-            assert_eq!(app.ui.tool_options.crop_shield, before, "{key:?} leaves Show Cropped Area and Classic Mode alone");
+        for in_progress in [true, false] {
+            for (key, tool) in [(Key::H, Tool::Hand), (Key::P, Tool::Pen)] {
+                let mut app = if in_progress { crop_in_progress_app() } else { crop_app() };
+                assert_eq!(app.crop.default_frame, !in_progress);
+                assert!(app.session.prefs().tools.use_shift_key_for_tool_switch);
+                let before = app.ui.tool_options.crop_shield.clone();
+                let ctx = egui::Context::default();
+                ctx.input_mut(|i| {
+                    // Only the event holds ⇧, as with a control-channel `ui.key` (the frame's state lags).
+                    i.events.push(egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::SHIFT });
+                });
+                crate::shortcuts::handle(&mut app, &ctx);
+                assert_eq!(app.ui.tool, tool, "{key:?}, crop in progress: {in_progress}");
+                assert_eq!(app.ui.tool_options.crop_shield, before, "{key:?} leaves Show Cropped Area and Classic Mode alone");
+            }
         }
+    }
+
+    /// The same plain H and P with a crop in progress are still the crop box's keys, so the test
+    /// above really reaches the key checks.
+    #[test]
+    fn plain_p_toggles_classic_mode_while_a_crop_is_in_progress() {
+        let mut app = crop_in_progress_app();
+        let classic = app.ui.tool_options.crop_shield.classic_mode;
+        let ctx = egui::Context::default();
+        ctx.input_mut(|i| i.events.push(egui::Event::Key { key: Key::P, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }));
+        crate::shortcuts::handle(&mut app, &ctx);
+        assert_eq!(app.ui.tool, Tool::Crop, "P doesn't switch to the Pen tool");
+        assert_eq!(app.ui.tool_options.crop_shield.classic_mode, !classic);
     }
 
     /// Alt+H, Alt+P and Alt+I are not the crop box's H, P and I (Show Cropped Area, Classic Mode,
