@@ -485,6 +485,9 @@ fn resolve_symlink(path: &Path) -> io::Result<PathBuf> {
 /// What every [`temp_name`] ends with.
 const TEMP_SUFFIX: &str = ".pcsave.tmp";
 
+/// How many characters of the file name a [`temp_name`] keeps.
+const TEMP_STEM_CHARS: usize = 64;
+
 /// A unique temporary file name to write beside `file` before renaming over it:
 /// `{file}.{pid}-{n}.pcsave.tmp`.
 ///
@@ -500,7 +503,7 @@ pub fn temp_name(file: &str) -> String {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
     // Keep the name short: a long file name plus the suffix must stay under NAME_MAX.
-    let stem: String = file.chars().take(64).collect();
+    let stem: String = file.chars().take(TEMP_STEM_CHARS).collect();
     format!("{stem}.{}-{n}{TEMP_SUFFIX}", std::process::id())
 }
 
@@ -511,6 +514,12 @@ pub fn temp_owner(name: &str) -> Option<u32> {
     let rest = name.strip_suffix(TEMP_SUFFIX)?;
     let (stem, ids) = rest.rsplit_once('.')?;
     let (pid, n) = ids.split_once('-')?;
+    // Only a file part `temp_name` writes: at most `TEMP_STEM_CHARS` characters, or one more when
+    // the first is the dot older versions put in front of them.
+    let chars = stem.chars().count();
+    if chars > TEMP_STEM_CHARS && !(chars == TEMP_STEM_CHARS + 1 && stem.starts_with('.')) {
+        return None;
+    }
     let stem = stem.strip_prefix('.').unwrap_or(stem);
     // Only numbers `temp_name` writes: plain decimal digits with no leading zero (a lone "0" is
     // fine), a `u32` pid and the `u64` counter it counts with. Any other name is someone else's

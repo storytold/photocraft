@@ -740,3 +740,28 @@ fn temp_owner_reads_both_name_forms_and_nothing_else() {
         assert_eq!(temp_owner(other), None, "{other}");
     }
 }
+
+/// A recovery folder can hold someone else's file that only looks like a temp name. `temp_name`
+/// keeps at most 64 characters (not bytes) of the file name, and older versions put one dot in
+/// front of them, so a longer file part is not a leftover of a save and the sweep must keep it.
+#[test]
+fn temp_owner_takes_only_a_file_part_temp_name_writes() {
+    let pid = Some(std::process::id());
+    for file in ["a".repeat(200), "🚀".repeat(70), format!(".{}", "a".repeat(100))] {
+        assert_eq!(temp_owner(&temp_name(&file)), pid, "{file}");
+    }
+    let today = |stem: &str| format!("{stem}.42-7.pcsave.tmp");
+    let older = |stem: &str| format!(".{stem}.42-7.pcsave.tmp");
+    for c in ["a", "é", "🚀"] {
+        let (at, over) = (c.repeat(64), c.repeat(65));
+        assert_eq!(temp_owner(&today(&at)), Some(42), "64 characters: {c}");
+        assert_eq!(temp_owner(&older(&at)), Some(42), "64 characters after the old dot: {c}");
+        assert_eq!(temp_owner(&today(&over)), None, "65 characters: {c}");
+        assert_eq!(temp_owner(&older(&over)), None, "65 characters after the old dot: {c}");
+        // A dot file's own dot counts in its 64 characters; the old form adds one more dot.
+        let dotted = |k: usize| format!(".{}", c.repeat(k));
+        assert_eq!(temp_owner(&today(&dotted(63))), Some(42), "a dot file today: {c}");
+        assert_eq!(temp_owner(&older(&dotted(63))), Some(42), "a dot file in the old form: {c}");
+        assert_eq!(temp_owner(&older(&dotted(64))), None, "a dot file one character over: {c}");
+    }
+}
