@@ -3083,3 +3083,48 @@ fn native_window_title_bar_over_the_tab_strip_docks() {
     assert!(!title_bar_over_strip(above, inner(above), strip), "only the body covers the strip");
     assert!(title_bar_over_strip(on, None, strip), "no decorations reported: top band counts");
 }
+
+/// #10552: a native window moved onto the tab strip docks only once the drag has ended. The OS
+/// moves it, so the app sees the move end as the window resting and then the pointer moving
+/// with no button held; resting over the strip mid-drag, or a resize, never docks it.
+#[test]
+fn native_window_docks_after_its_drag_ends_over_the_tab_strip() {
+    use super::tabs::{WindowMove, native_window_step};
+    let strip = Some(Rect::from_min_max(pos2(100.0, 130.0), pos2(1100.0, 156.0)));
+    let at = |x: f32, y: f32| Some(Rect::from_min_size(pos2(x, y), vec2(800.0, 600.0)));
+    let inner = |r: Option<Rect>| r.map(|r| Rect::from_min_max(r.min + vec2(0.0, 28.0), r.max));
+    let step = |m: &mut WindowMove, outer: Option<Rect>, time: f64, pointer_up: bool| native_window_step(m, outer, inner(outer), time, pointer_up, strip);
+
+    // Moved onto the strip and released: it rests, then the pointer moves with no button held.
+    let mut m = WindowMove::default();
+    assert_eq!(step(&mut m, at(300.0, 400.0), 0.0, false), (false, false), "the first frame is no move");
+    assert_eq!(step(&mut m, at(300.0, 120.0), 0.1, false), (false, true), "a move waits for the window to rest");
+    assert_eq!(step(&mut m, at(300.0, 120.0), 0.2, false), (false, true));
+    assert_eq!(step(&mut m, at(300.0, 120.0), 0.5, false), (false, false), "resting with the button maybe still held does not dock");
+    assert_eq!(step(&mut m, at(300.0, 120.0), 2.0, false), (false, false));
+    assert_eq!(step(&mut m, at(300.0, 120.0), 2.1, true), (true, false), "the drag has ended: it docks");
+    assert_eq!(step(&mut m, at(300.0, 120.0), 2.2, true), (false, false), "it docks once");
+
+    // Paused over the strip mid-drag, then dragged on: the next move disarms it.
+    let mut m = WindowMove::default();
+    step(&mut m, at(300.0, 400.0), 0.0, false);
+    step(&mut m, at(300.0, 120.0), 0.1, false);
+    step(&mut m, at(300.0, 120.0), 0.6, false);
+    step(&mut m, at(300.0, 500.0), 0.7, false);
+    step(&mut m, at(300.0, 500.0), 1.2, false);
+    assert_eq!(step(&mut m, at(300.0, 500.0), 1.3, true), (false, false), "dropped below the strip it stays floating");
+
+    // A resize right after a move, with the title bar over the strip, is not a drop.
+    let mut m = WindowMove::default();
+    step(&mut m, at(300.0, 400.0), 0.0, false);
+    step(&mut m, at(300.0, 120.0), 0.1, false);
+    let taller = Some(Rect::from_min_size(pos2(300.0, 110.0), vec2(800.0, 640.0)));
+    assert_eq!(step(&mut m, taller, 0.2, false), (false, false));
+    assert_eq!(step(&mut m, taller, 0.6, true), (false, false), "a resize never docks");
+
+    // Moved somewhere else: never armed.
+    let mut m = WindowMove::default();
+    step(&mut m, at(300.0, 400.0), 0.0, false);
+    step(&mut m, at(320.0, 420.0), 0.1, false);
+    assert_eq!(step(&mut m, at(320.0, 420.0), 0.6, true), (false, false));
+}
