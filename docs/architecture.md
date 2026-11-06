@@ -142,6 +142,7 @@ photocraft/
 │  ├─ platform/                photocraft-platform  traits: file dialogs, clipboard, fonts, tablet input, menus, storage; native + web impls
 │  ├─ ui-egui/                 photocraft-ui-egui   the (first) GUI shell: panels, dialogs, canvas widget, theme
 │  ├─ automation/              photocraft-automation  MCP server (rmcp) + JSON-RPC over the command registry
+│  ├─ s3/                      photocraft-s3        .pcraft bundles on S3-compatible storage (a format::BundleStore; native only)
 │  └─ testkit/                 photocraft-testkit   golden images, perceptual diff, fixtures, PSD corpus helpers
 ├─ apps/
 │  ├─ photocraft/              desktop binary (winit + wgpu + ui-egui + platform-native)
@@ -167,7 +168,7 @@ photocraft/
 
 ```text
  L7  apps/*                         (binaries: wire everything together)
- L6  ui-egui · automation · platform
+ L6  ui-egui · automation · platform · s3
  L5  engine
  L4  tools · viewport · io · ml · plugins
  L3  compose · gpu · format
@@ -414,6 +415,7 @@ psd/src/
   - `tiles/<blake3>.zst`: content-addressed tiles, zstd-compressed.
   - `thumb.png` and `composite/` mips for quick look and previews.
 - **Saving is incremental.** Tiles are content-addressed, so a save writes only new tiles plus the manifest, and garbage-collects unreferenced ones.
+- **Storage is a trait.** `BundleStore` (read and write) has a ZIP and a directory implementation in the crate; other backends live in their own crates, so no network code enters `format`. `photocraft-s3` (L6, native only) keeps bundles on S3-compatible storage folder-style: each document's `manifest.json` is its head, written only if it is still the version the store read (`If-Match`), and tiles and blobs sit in a content-addressed pool that versions and documents share (#3163).
 - **Autosave and crash recovery** reuse the same writer into a recovery directory, reading from a snapshot on a background thread.
 - **PSD is the interchange format,** and `.pcraft` is the lossless native one.
 

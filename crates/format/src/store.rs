@@ -554,6 +554,9 @@ pub const DEFAULT_REVERIFY_BUDGET: u64 = 16 * 1024 * 1024;
 /// tile hashes (by `Arc` identity), compressed objects, and objects it has
 /// verified in the current directory, so repeated saves stay cheap.
 ///
+/// [`Self::save_zip`] and [`Self::save_dir`] save through the writer's own [`ZipStore`] and
+/// [`DirStore`]; [`Self::save_to`] saves into any [`BundleStore`].
+///
 /// **What the directory cache trusts.** A directory save reuses an existing object file only
 /// after decompressing it and checking its content hash. After that, the writer remembers the
 /// file's signature (length and modification time, plus inode, device and change time on Unix)
@@ -563,29 +566,583 @@ pub const DEFAULT_REVERIFY_BUDGET: u64 = 16 * 1024 * 1024;
 /// the cached objects, oldest-checked first, up to [`DEFAULT_REVERIFY_BUDGET`] bytes (see
 /// [`Self::set_reverify_budget`]). Over enough saves every object is read again, and a damaged
 /// one is rewritten.
+#[derive(Default)]
 pub struct PcraftWriter {
-    hash_cache: TileHashCache,
-    blob_hash_cache: BlobHashCache,
-    /// Compressed objects by bundle path (ZIP mode).
-    compressed: HashMap<String, Arc<Vec<u8>>>,
-    compressed_budget: usize,
-    verified_directory: Option<DirectoryVerificationCache>,
-    reverify_budget: u64,
-    /// How long [`Self::save_dir`] waits for another save of the bundle ([`SAVE_LOCK_WAIT`]).
-    lock_wait: std::time::Duration,
+    hashes: Hashes,
+    zip: ZipStore,
+    dir: DirStore,
 }
 
-impl Default for PcraftWriter {
+/// Tile and blob hashes remembered between saves by allocation, whatever the store.
+#[derive(Default)]
+struct Hashes {
+    tiles: TileHashCache,
+    blobs: BlobHashCache,
+}
+
+// ---------------------------------------------------------------------------
+// Stores
+// ---------------------------------------------------------------------------
+
+/// One content-addressed object a save stores: a tile or a blob, under its bundle path
+/// (`tiles/<blake3>.zst` or `blobs/<blake3>.zst`, the hash of [`Self::content`]).
+pub struct BundleObject<'a> {
+    path: &'a str,
+    object: &'a Object,
+    scratch: Scratch<'a>,
+}
+
+/// The document a save reads tiles from, and the scratch read-error generation at its start.
+#[derive(Clone, Copy)]
+struct Scratch<'a> {
+    doc: &'a Document,
+    generation: u64,
+}
+
+impl Scratch<'_> {
+    fn check(self) -> Result<()> {
+        scratch_ok(self.doc, self.generation)
+    }
+}
+
+impl BundleObject<'_> {
+    pub fn path(&self) -> &str {
+        self.path
+    }
+
+    /// A tile (`tiles/`) rather than a blob (`blobs/`).
+    pub fn is_tile(&self) -> bool {
+        matches!(self.object, Object::Tile(..))
+    }
+
+    /// The bytes the object stands for, uncompressed (tile samples little-endian). Fails, like
+    /// [`Self::compressed`], when a tile's scratch storage could not be read.
+    pub fn content(&self) -> Result<impl std::ops::Deref<Target = [u8]> + '_> {
+        let content = self.object.content();
+        self.scratch.check()?;
+        Ok(content)
+    }
+
+    /// What a store keeps: [`Self::content`] as one zstd frame. Fails when a tile's scratch
+    /// storage could not be read, so a store never keeps placeholder bytes under the tile's hash.
+    pub fn compressed(&self) -> Result<Vec<u8>> {
+        self.compressed_with(&mut Compressor::new())
+    }
+
+    fn compressed_with(&self, compressor: &mut Compressor) -> Result<Vec<u8>> {
+        let data = self.object.compressed(compressor);
+        self.scratch.check()?;
+        Ok(data)
+    }
+}
+
+/// What a store did with one object.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stored {
+    /// Compressed and written.
+    Written,
+    /// A copy the store already had and trusts.
+    Reused,
+}
+
+/// Where a `.pcraft` bundle lives, for reading ([`ByteSource`]) and writing.
+///
+/// [`ZipStore`] and [`DirStore`] are built in; other backends implement it in their own crates.
+/// [`PcraftWriter::save_to`] drives one save in this order:
+///
+/// 1. [`begin`](Self::begin), before the document is collected;
+/// 2. [`plan`](Self::plan), with every object the new manifest references;
+/// 3. [`object`](Self::object), for each of those objects, in path order;
+/// 4. [`preview`](Self::preview), for each preview the save includes;
+/// 5. [`commit`](Self::commit), with the manifest: the save has happened once it returns `Ok`;
+/// 6. [`end`](Self::end), always, whether the save got that far or not (also when a step
+///    panics).
+///
+/// Objects never change once stored (their path is their hash), so a store may keep any copy it
+/// trusts. Nothing the previous manifest references may be removed before `commit`.
+pub trait BundleStore: ByteSource {
+    /// Start a save: take a lock, look at what is already stored.
+    fn begin(&mut self) -> Result<()> {
+        Ok(())
+    }
+
+    /// Every object this save stores, before the first [`Self::object`]: a store can compress
+    /// them ahead, on all cores.
+    fn plan(&mut self, objects: &[BundleObject<'_>]) -> Result<()> {
+        let _ = objects;
+        Ok(())
+    }
+
+    /// Make sure the store holds `object`.
+    fn object(&mut self, object: &BundleObject<'_>) -> Result<Stored>;
+
+    /// Store a preview of the new manifest (`thumb.png`, `composite/preview.png` or
+    /// `composite/full.png`).
+    fn preview(&mut self, path: &str, png: Vec<u8>) -> Result<()>;
+
+    /// Publish `manifest`, which references this save's objects and previews. Returns how many
+    /// objects nothing references any more were removed afterwards.
+    fn commit(&mut self, manifest: &[u8]) -> Result<usize>;
+
+    /// The save is over, committed or not: release what [`Self::begin`] took.
+    fn end(&mut self) {}
+}
+
+/// A store method called outside a save ([`BundleStore::begin`] first).
+fn not_saving() -> FormatError {
+    FormatError::Io(std::io::Error::other("bundle store used outside a save"))
+}
+
+/// A ZIP bundle in memory. Every save builds a new archive ([`Self::bytes`]); compressed objects
+/// are kept between saves (see [`Self::set_compressed_cache_budget`]), so only new ones are
+/// compressed again.
+pub struct ZipStore {
+    /// Compressed objects by bundle path, kept from the last save.
+    compressed: HashMap<String, Arc<Vec<u8>>>,
+    compressed_budget: usize,
+    /// This save: objects compressed by `plan`, then every object and preview in archive order.
+    fresh: HashMap<String, Arc<Vec<u8>>>,
+    objects: Vec<(String, Arc<Vec<u8>>)>,
+    previews: Vec<(String, Vec<u8>)>,
+    /// Compresses what `plan` didn't, created on first use and dropped with the save.
+    compressor: Option<Compressor>,
+    /// Bytes and entries an archive may hold: [`ZIP_LIMIT`], lowered by tests.
+    limit: (u64, usize),
+    archive: Vec<u8>,
+    /// Entries of `archive` by name, built on the first read.
+    index: std::sync::OnceLock<HashMap<String, crate::zip::Entry>>,
+}
+
+impl Default for ZipStore {
     fn default() -> Self {
         Self {
-            hash_cache: HashMap::new(),
-            blob_hash_cache: HashMap::new(),
             compressed: HashMap::new(),
             compressed_budget: usize::MAX,
-            verified_directory: None,
-            reverify_budget: DEFAULT_REVERIFY_BUDGET,
-            lock_wait: SAVE_LOCK_WAIT,
+            fresh: HashMap::new(),
+            objects: Vec::new(),
+            previews: Vec::new(),
+            compressor: None,
+            limit: ZIP_LIMIT,
+            archive: Vec::new(),
+            index: std::sync::OnceLock::new(),
         }
+    }
+}
+
+impl ZipStore {
+    /// An empty store (reads fail until the first save).
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// A store holding an existing archive, to read; a save replaces it.
+    pub fn from_bytes(archive: Vec<u8>) -> Result<Self> {
+        let index = zip_index(&archive)?;
+        Ok(Self { archive, index: index.into(), ..Self::default() })
+    }
+
+    /// The archive of the last save, or the one given to [`Self::from_bytes`] (empty for a new
+    /// store).
+    pub fn bytes(&self) -> &[u8] {
+        &self.archive
+    }
+
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.archive
+    }
+
+    /// Takes the archive out, leaving the store empty for reads (compressed objects are kept).
+    fn take_archive(&mut self) -> Vec<u8> {
+        self.index = std::sync::OnceLock::new();
+        std::mem::take(&mut self.archive)
+    }
+
+    /// Cap compressed payload capacity retained between saves. Clears the previous payload
+    /// cache; tile hashes remain reusable. The default is unbounded; `0` retains no payloads.
+    pub fn set_compressed_cache_budget(&mut self, bytes: usize) {
+        self.compressed_budget = bytes;
+        self.compressed.clear();
+    }
+
+    /// Whether the archive, with a manifest of `manifest_len` bytes, stays within `limit`. A
+    /// STORE entry takes a 30-byte local header plus its name and data, and a 46-byte central
+    /// directory record plus its name again; the archive ends with a 22-byte end record.
+    fn fits(&self, manifest_len: usize) -> bool {
+        let stored = |name: &str, len: usize| 76 + 2 * name.len() as u64 + len as u64;
+        let total = 22
+            + stored(MANIFEST, manifest_len)
+            + self.previews.iter().map(|(name, data)| stored(name, data.len())).sum::<u64>()
+            + self.objects.iter().map(|(path, data)| stored(path, data.len())).sum::<u64>();
+        total <= self.limit.0 && 1 + self.previews.len() + self.objects.len() <= self.limit.1
+    }
+
+    /// [`BundleStore::commit`] for [`PcraftWriter::save_zip`]: the full-size composite is left
+    /// out, and `p`'s manifest no longer names it, rather than fail a save that fits without it
+    /// (past the ZIP limit, or the memory to build the archive).
+    fn commit_fitting(&mut self, p: &mut Prepared) -> Result<usize> {
+        let full = |store: &Self| store.previews.iter().any(|(name, _)| name == FULL_COMPOSITE);
+        if full(self) && !self.fits(p.manifest.len()) {
+            self.drop_full_composite(p)?;
+        }
+        match self.commit(&p.manifest) {
+            Err(FormatError::LimitExceeded(_)) if full(self) => {
+                self.drop_full_composite(p)?;
+                self.commit(&p.manifest)
+            }
+            committed => committed,
+        }
+    }
+
+    fn drop_full_composite(&mut self, p: &mut Prepared) -> Result<()> {
+        self.previews.retain(|(name, _)| name != FULL_COMPOSITE);
+        p.drop_full_composite()
+    }
+}
+
+/// The first entry of each name in `archive`, as [`ZipReader::find`] picks it.
+fn zip_index(archive: &[u8]) -> Result<HashMap<String, crate::zip::Entry>> {
+    let mut index = HashMap::new();
+    for entry in ZipReader::new(archive)?.entries {
+        index.entry(entry.name.clone()).or_insert(entry);
+    }
+    Ok(index)
+}
+
+impl ByteSource for ZipStore {
+    fn get(&self, path: &str, max: usize) -> Result<Vec<u8>> {
+        let index = match self.index.get() {
+            Some(index) => index,
+            None => {
+                let built = zip_index(&self.archive)?;
+                self.index.get_or_init(|| built)
+            }
+        };
+        let entry = index.get(path).ok_or_else(|| FormatError::corrupt(format!("missing `{path}`")))?;
+        crate::zip::read_entry(&self.archive, entry, max)
+    }
+}
+
+impl BundleStore for ZipStore {
+    fn begin(&mut self) -> Result<()> {
+        self.fresh.clear();
+        self.objects.clear();
+        self.previews.clear();
+        Ok(())
+    }
+
+    /// Compresses the objects not kept from the last save, on all cores (zstd dominates a full
+    /// save).
+    fn plan(&mut self, objects: &[BundleObject<'_>]) -> Result<()> {
+        let todo: Vec<&BundleObject<'_>> = objects.iter().filter(|o| !self.compressed.contains_key(o.path)).collect();
+        self.fresh = par_compress(&todo)?.into_iter().map(|(path, data)| (path.to_owned(), data)).collect();
+        Ok(())
+    }
+
+    fn object(&mut self, object: &BundleObject<'_>) -> Result<Stored> {
+        // A kept object goes back into the cache under the same key allocation.
+        let (key, data, stored) = match self.compressed.remove_entry(object.path) {
+            Some((key, data)) => (key, data, Stored::Reused),
+            None => {
+                let data = match self.fresh.remove(object.path) {
+                    Some(data) => data,
+                    None => Arc::new(object.compressed_with(self.compressor.get_or_insert_with(Compressor::new))?),
+                };
+                (object.path.to_owned(), data, Stored::Written)
+            }
+        };
+        self.objects.push((key, data));
+        Ok(stored)
+    }
+
+    fn preview(&mut self, path: &str, png: Vec<u8>) -> Result<()> {
+        self.previews.push((path.to_owned(), png));
+        Ok(())
+    }
+
+    /// Writes the archive: the manifest first (so [`crate::is_pcraft`] finds it at once), then
+    /// the previews and objects.
+    fn commit(&mut self, manifest: &[u8]) -> Result<usize> {
+        // The archive is sized for every entry up front (#7689); the entries stay until it is.
+        let entries = std::iter::once((MANIFEST, manifest.len()))
+            .chain(self.previews.iter().map(|(name, data)| (name.as_str(), data.len())))
+            .chain(self.objects.iter().map(|(path, data)| (path.as_str(), data.len())));
+        let mut z = ZipWriter::with_entries(entries)?;
+        let objects = std::mem::take(&mut self.objects);
+        let previews = std::mem::take(&mut self.previews);
+        z.add(MANIFEST, manifest)?;
+        for (name, data) in &previews {
+            z.add(name, data)?;
+        }
+        let mut next = HashMap::with_capacity(objects.len());
+        let mut cached_bytes = 0usize;
+        for (path, data) in objects {
+            z.add(&path, &data)?;
+            if data.capacity() <= self.compressed_budget.saturating_sub(cached_bytes) {
+                cached_bytes += data.capacity();
+                next.insert(path, data);
+            }
+        }
+        self.compressed = next;
+        self.archive = z.finish()?;
+        self.index = std::sync::OnceLock::new();
+        Ok(0)
+    }
+
+    fn end(&mut self) {
+        self.fresh.clear();
+        self.objects.clear();
+        self.previews.clear();
+        self.compressor = None;
+    }
+}
+
+/// A directory bundle: the files of a ZIP bundle under one folder. A save writes only objects
+/// the folder doesn't hold yet, holds `save.lock` throughout, re-verifies a rolling share of the
+/// objects it reuses (see [`PcraftWriter`]), flushes objects before publishing the manifest, and
+/// removes the objects nothing references after it.
+pub struct DirStore {
+    path: PathBuf,
+    verified: Option<DirectoryVerificationCache>,
+    reverify_budget: u64,
+    /// How long a save waits for another save of the bundle ([`SAVE_LOCK_WAIT`]).
+    lock_wait: std::time::Duration,
+    save: Option<DirSave>,
+}
+
+/// One directory save, from `begin` to `end`.
+struct DirSave {
+    /// The canonical bundle folder.
+    root: PathBuf,
+    /// Held until the end of the save: listing, writing, publishing and cleanup (#4957).
+    _lock: Option<std::fs::File>,
+    existing: HashSet<String>,
+    generation: u64,
+    recheck: HashSet<String>,
+    /// Objects and previews of this save.
+    stored: HashSet<String>,
+    previews: Vec<String>,
+    /// Created on the first object this save writes.
+    compressor: Option<Compressor>,
+}
+
+impl Default for DirStore {
+    fn default() -> Self {
+        Self::new(PathBuf::new())
+    }
+}
+
+impl DirStore {
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self { path: path.into(), verified: None, reverify_budget: DEFAULT_REVERIFY_BUDGET, lock_wait: SAVE_LOCK_WAIT, save: None }
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// See [`PcraftWriter::set_reverify_budget`].
+    pub fn set_reverify_budget(&mut self, bytes: u64) {
+        self.reverify_budget = bytes;
+    }
+
+    /// See [`PcraftWriter::set_lock_wait`].
+    pub fn set_lock_wait(&mut self, wait: std::time::Duration) {
+        self.lock_wait = wait;
+    }
+
+    fn object_with(&mut self, object: &BundleObject<'_>, fs: &dyn crate::atomic::AtomicFs) -> Result<Stored> {
+        let save = self.save.as_mut().ok_or_else(not_saving)?;
+        let (dir, path, obj) = (save.root.as_path(), object.path, object.object);
+        save.stored.insert(path.to_owned());
+        let object_path = dir.join(path);
+        // bundle_root and list_objects validated the fixed parent directories once. Check
+        // each leaf here; write_bundle_file rechecks its parent around every mutation.
+        plain_file_or_missing(&object_path)?;
+        let signature = path_signature(&object_path)?;
+        let already_verified = !save.recheck.contains(path)
+            && signature.is_some_and(|signature| self.verified.as_ref().is_some_and(|cache| cache.objects.get(path).is_some_and(|v| v.signature == signature)));
+        if save.existing.contains(path) && already_verified {
+            return Ok(Stored::Reused);
+        }
+        if save.existing.contains(path) {
+            let (valid, signature) = existing_object_is_valid(&object_path, obj, path)?;
+            if valid {
+                if let Some(signature) = signature
+                    && let Some(cache) = &mut self.verified
+                {
+                    cache.objects.insert(path.to_owned(), Verified { signature, checked_at: save.generation });
+                }
+                return Ok(Stored::Reused);
+            }
+        }
+        write_bundle_file(dir, &object_path, &object.compressed_with(save.compressor.get_or_insert_with(Compressor::new))?, fs)?;
+        let written = path_signature(&object_path)?;
+        if let Some(cache) = &mut self.verified {
+            match written {
+                Some(signature) => {
+                    cache.objects.insert(path.to_owned(), Verified { signature, checked_at: save.generation });
+                }
+                None => {
+                    cache.objects.remove(path);
+                }
+            }
+        }
+        Ok(Stored::Written)
+    }
+
+    fn preview_with(&mut self, path: &str, png: &[u8], fs: &dyn crate::atomic::AtomicFs) -> Result<()> {
+        let save = self.save.as_mut().ok_or_else(not_saving)?;
+        write_bundle_file(&save.root, &save.root.join(path), png, fs)?;
+        save.previews.push(path.to_owned());
+        Ok(())
+    }
+
+    fn commit_with(&mut self, manifest: &[u8], fs: &dyn crate::atomic::AtomicFs) -> Result<usize> {
+        #[cfg(not(windows))]
+        let _ = fs;
+        let save = self.save.as_mut().ok_or_else(not_saving)?;
+        let dir = save.root.as_path();
+        // Pin all GC directories before removing stale previews or objects.
+        // Unix cleanup then stays within these directories even if a pathname is swapped.
+        let gc = BundleGc::new(dir)?;
+        #[cfg(windows)]
+        {
+            // A previous attempt may have published an object and then failed its directory
+            // flush. The retry can reuse those valid bytes (including cached ones), so flush
+            // both object directories again before publishing a manifest that references them.
+            // This also persists the fixed subdirectories of a newly created bundle.
+            for sub in [TILES_DIR, BLOBS_DIR] {
+                fs.sync_dir(&dir.join(sub)).map_err(|e| crate::atomic::publication_error(e, &dir.join(sub)))?;
+            }
+        }
+        #[cfg(not(windows))]
+        for sub in [TILES_DIR, BLOBS_DIR] {
+            let folder = dir.join(sub);
+            if folder.is_dir() {
+                confirm_flushed(&folder, &folder)?;
+            }
+        }
+        write_bundle_file(dir, &dir.join(MANIFEST), manifest, fs)?;
+        // Omitted previews belong to the previous manifest until the new one commits.
+        // After commit, a locked leftover is only housekeeping, just like unused objects.
+        for stale in [THUMB, COMPOSITE, FULL_COMPOSITE] {
+            if !save.previews.iter().any(|n| n == stale) {
+                let _ = remove_bundle_file(dir, &dir.join(stale), &gc);
+            }
+        }
+        // The manifest is committed: the save has succeeded. Removing objects it no longer
+        // references is best-effort housekeeping (a vanished or locked file must not turn a
+        // complete save into a reported failure); a leftover is retried on the next save.
+        let mut removed = 0;
+        for path in std::mem::take(&mut save.existing) {
+            if !save.stored.contains(&path) {
+                if remove_bundle_file(dir, &dir.join(&path), &gc).is_ok() {
+                    removed += 1;
+                }
+                if let Some(cache) = &mut self.verified {
+                    cache.objects.remove(&path);
+                }
+            }
+        }
+        Ok(removed)
+    }
+}
+
+impl ByteSource for DirStore {
+    fn get(&self, path: &str, max: usize) -> Result<Vec<u8>> {
+        DirSource { root: self.path.clone() }.get(path, max)
+    }
+}
+
+impl BundleStore for DirStore {
+    fn begin(&mut self) -> Result<()> {
+        if self.path.as_os_str().is_empty() {
+            return Err(FormatError::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, "directory store has no bundle path (DirStore::new)")));
+        }
+        let root = bundle_root(&self.path)?;
+        let lock = lock_bundle(&root, self.lock_wait)?;
+        let existing = list_objects(&root)?;
+        // Reject a hostile existing entry before writing any object or manifest. This also
+        // covers entries that this save would otherwise leave untouched or garbage-collect.
+        for path in [MANIFEST, THUMB, COMPOSITE, FULL_COMPOSITE] {
+            validate_bundle_file(&root, &root.join(path))?;
+        }
+        self.save = Some(DirSave {
+            root,
+            _lock: lock,
+            existing,
+            generation: 0,
+            recheck: HashSet::new(),
+            stored: HashSet::new(),
+            previews: Vec::new(),
+            compressor: None,
+        });
+        Ok(())
+    }
+
+    fn plan(&mut self, objects: &[BundleObject<'_>]) -> Result<()> {
+        let save = self.save.as_mut().ok_or_else(not_saving)?;
+        if self.verified.as_ref().is_none_or(|cache| cache.directory != save.root) {
+            self.verified = Some(DirectoryVerificationCache { directory: save.root.clone(), ..Default::default() });
+        }
+        if let Some(cache) = &mut self.verified {
+            cache.generation = cache.generation.saturating_add(1);
+            save.generation = cache.generation;
+        }
+        save.recheck = rolling_recheck(self.verified.as_ref(), self.reverify_budget, objects);
+        Ok(())
+    }
+
+    fn object(&mut self, object: &BundleObject<'_>) -> Result<Stored> {
+        self.object_with(object, &crate::atomic::RealFs)
+    }
+
+    fn preview(&mut self, path: &str, png: Vec<u8>) -> Result<()> {
+        self.preview_with(path, &png, &crate::atomic::RealFs)
+    }
+
+    fn commit(&mut self, manifest: &[u8]) -> Result<usize> {
+        self.commit_with(manifest, &crate::atomic::RealFs)
+    }
+
+    fn end(&mut self) {
+        self.save = None;
+    }
+}
+
+/// A [`DirStore`] that publishes through an injected file system, for failure-ordering tests.
+#[cfg(test)]
+struct DirStoreWith<'a> {
+    store: &'a mut DirStore,
+    fs: &'a dyn crate::atomic::AtomicFs,
+}
+
+#[cfg(test)]
+impl ByteSource for DirStoreWith<'_> {
+    fn get(&self, path: &str, max: usize) -> Result<Vec<u8>> {
+        self.store.get(path, max)
+    }
+}
+
+#[cfg(test)]
+impl BundleStore for DirStoreWith<'_> {
+    fn begin(&mut self) -> Result<()> {
+        self.store.begin()
+    }
+    fn plan(&mut self, objects: &[BundleObject<'_>]) -> Result<()> {
+        self.store.plan(objects)
+    }
+    fn object(&mut self, object: &BundleObject<'_>) -> Result<Stored> {
+        self.store.object_with(object, self.fs)
+    }
+    fn preview(&mut self, path: &str, png: Vec<u8>) -> Result<()> {
+        self.store.preview_with(path, &png, self.fs)
+    }
+    fn commit(&mut self, manifest: &[u8]) -> Result<usize> {
+        self.store.commit_with(manifest, self.fs)
+    }
+    fn end(&mut self) {
+        self.store.end();
     }
 }
 
@@ -663,7 +1220,15 @@ fn scratch_ok(doc: &Document, generation: u64) -> Result<()> {
 impl Prepared {
     /// Takes the full-size composite out of the manifest when `previews` does not hold it.
     fn match_previews(&mut self, previews: &[(&str, Vec<u8>)]) -> Result<()> {
-        if self.full_composite && !previews.iter().any(|(name, _)| *name == FULL_COMPOSITE) {
+        if !previews.iter().any(|(name, _)| *name == FULL_COMPOSITE) {
+            self.drop_full_composite()?;
+        }
+        Ok(())
+    }
+
+    /// Takes the full-size composite out of the manifest.
+    fn drop_full_composite(&mut self) -> Result<()> {
+        if self.full_composite {
             self.full_composite = false;
             self.manifest = manifest_json(&self.model, false)?;
             self.stats.manifest_bytes = self.manifest.len();
@@ -1005,14 +1570,15 @@ fn existing_object_is_valid(path: &Path, object: &Object, what: &str) -> Result<
 }
 
 /// A bundle path and its compressed bytes.
-type Compressed<'a> = (&'a String, Arc<Vec<u8>>);
+type Compressed<'a> = (&'a str, Arc<Vec<u8>>);
 
 /// Compresses `objects` on scoped worker threads (sequentially on wasm).
-fn par_compress<'a>(objects: &[(&'a String, &'a Object)]) -> Result<Vec<Compressed<'a>>> {
+fn par_compress<'a>(objects: &[&BundleObject<'a>]) -> Result<Vec<Compressed<'a>>> {
     let threads = if cfg!(target_arch = "wasm32") { 1 } else { std::thread::available_parallelism().map_or(1, |n| n.get()).clamp(1, 32) };
     if threads < 2 || objects.len() < 2 {
         let mut compressor = Compressor::new();
-        return Ok(objects.iter().map(|(p, o)| (*p, Arc::new(o.compressed(&mut compressor)))).collect());
+        let out = objects.iter().map(|o| (o.path, Arc::new(o.object.compressed(&mut compressor)))).collect();
+        return scratch_checked(objects, out);
     }
     let next = std::sync::atomic::AtomicUsize::new(0);
     std::thread::scope(|sc| {
@@ -1023,8 +1589,8 @@ fn par_compress<'a>(objects: &[(&'a String, &'a Object)]) -> Result<Vec<Compress
                     let mut compressor = Compressor::new();
                     loop {
                         let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        let Some((p, o)) = objects.get(i) else { break };
-                        out.push((*p, Arc::new(o.compressed(&mut compressor))));
+                        let Some(o) = objects.get(i) else { break };
+                        out.push((o.path, Arc::new(o.object.compressed(&mut compressor))));
                     }
                     out
                 })
@@ -1037,35 +1603,49 @@ fn par_compress<'a>(objects: &[(&'a String, &'a Object)]) -> Result<Vec<Compress
         for r in joined {
             out.extend(r.map_err(|_| FormatError::Io(std::io::Error::other("compression worker panicked")))?);
         }
-        Ok(out)
+        scratch_checked(objects, out)
     })
 }
 
-impl PcraftWriter {
-    pub fn new() -> Self {
-        Self::default()
+/// `out`, unless a tile `objects` read failed while it was compressed (one check for the batch).
+fn scratch_checked<'a>(objects: &[&BundleObject<'a>], out: Vec<Compressed<'a>>) -> Result<Vec<Compressed<'a>>> {
+    if let Some(o) = objects.first() {
+        o.scratch.check()?;
     }
+    Ok(out)
+}
 
-    /// How many compressed bytes of already-verified objects each directory save re-reads and
-    /// re-checks (oldest-checked first; at least one object when the budget is non-zero). `0`
-    /// trusts unchanged signatures entirely; `u64::MAX` re-verifies everything on every save.
-    pub fn set_reverify_budget(&mut self, bytes: u64) {
-        self.reverify_budget = bytes;
+/// The cached objects this save re-verifies even though their signature is unchanged:
+/// oldest-checked first, until their recorded sizes reach the re-verify budget (always at
+/// least one, so an object larger than the budget is still reached in turn).
+fn rolling_recheck(cache: Option<&DirectoryVerificationCache>, budget: u64, objects: &[BundleObject<'_>]) -> HashSet<String> {
+    let mut out = HashSet::new();
+    let Some(cache) = cache else { return out };
+    if budget == 0 {
+        return out;
     }
-
-    /// Cap compressed payload capacity retained between ZIP saves. Clears the previous payload
-    /// cache; tile hashes remain reusable. The default is unbounded; `0` retains no payloads.
-    pub fn set_compressed_cache_budget(&mut self, bytes: usize) {
-        self.compressed_budget = bytes;
-        self.compressed.clear();
+    let paths: HashSet<&str> = objects.iter().map(|o| o.path).collect();
+    let mut candidates: Vec<(&String, &Verified)> = cache.objects.iter().filter(|(path, _)| paths.contains(path.as_str())).collect();
+    candidates.sort_by(|a, b| a.1.checked_at.cmp(&b.1.checked_at).then_with(|| a.0.cmp(b.0)));
+    let mut spent = 0u64;
+    for (path, verified) in candidates {
+        let next = spent.saturating_add(verified.signature.len);
+        if !out.is_empty() && next > budget {
+            break;
+        }
+        spent = next;
+        out.insert(path.clone());
     }
+    out
+}
 
-    /// How long a directory save waits for another save of the same bundle to finish before
-    /// failing without writing anything (10 s by default; see [`Self::save_dir`]).
-    pub fn set_lock_wait(&mut self, wait: std::time::Duration) {
-        self.lock_wait = wait;
+impl Prepared {
+    fn bundle_objects<'a>(&'a self, scratch: Scratch<'a>) -> Vec<BundleObject<'a>> {
+        self.objects.iter().map(|(path, object)| BundleObject { path, object, scratch }).collect()
     }
+}
 
+impl Hashes {
     fn prepare(&mut self, doc: &Document, opts: &SaveOptions) -> Result<Prepared> {
         doc.scratch_health().map_err(FormatError::corrupt)?;
         let generation = photocraft_raster::spill::read_error_generation();
@@ -1073,17 +1653,17 @@ impl PcraftWriter {
         if let Err(error) = photocraft_raster::spill::check_since(generation) {
             // Failed reads may have hashed display placeholders. Never reuse those hashes
             // when the original backing becomes readable and the same writer retries.
-            self.hash_cache.clear();
+            self.tiles.clear();
             return Err(FormatError::corrupt(error));
         }
         prepared
     }
 
     fn prepare_inner(&mut self, doc: &Document, opts: &SaveOptions) -> Result<Prepared> {
-        self.hash_cache.retain(|_, (w, _)| w.strong_count() > 0);
-        self.blob_hash_cache.retain(|_, (w, _)| w.strong_count() > 0);
+        self.tiles.retain(|_, (w, _)| w.strong_count() > 0);
+        self.blobs.retain(|_, (w, _)| w.strong_count() > 0);
         convert::check_nesting(&doc.layers)?;
-        let mut c = Collect { hash_cache: Some(&mut self.hash_cache), blob_hash_cache: Some(&mut self.blob_hash_cache), ..Default::default() };
+        let mut c = Collect { hash_cache: Some(&mut self.tiles), blob_hash_cache: Some(&mut self.blobs), ..Default::default() };
         let document = convert::doc_m(doc, &mut c);
         let mut model = Manifest::new(format!("photocraft-format {}", env!("CARGO_PKG_VERSION")), document);
         model.thumbnail = opts.thumbnail.as_ref().map(|_| THUMB.to_owned());
@@ -1103,101 +1683,119 @@ impl PcraftWriter {
         Ok(Prepared { manifest, model, full_composite, objects, stats })
     }
 
-    /// Save as a ZIP bundle in memory.
-    pub fn save_zip(&mut self, doc: &Document, opts: &SaveOptions) -> Result<(Vec<u8>, SaveStats)> {
-        self.save_zip_within(doc, opts, ZIP_LIMIT)
+    /// One save into `store`, in the order [`BundleStore`] describes.
+    fn save<S: BundleStore + ?Sized>(&mut self, doc: &Document, opts: &SaveOptions, store: &mut S) -> Result<SaveStats> {
+        self.save_committing(doc, opts, store, |store, p| store.commit(&p.manifest))
     }
 
-    /// [`Self::save_zip`] with `limit` (bytes, entries) in place of [`ZIP_LIMIT`]: an archive that
-    /// the full-size composite would take past either is saved without that composite.
-    fn save_zip_within(&mut self, doc: &Document, opts: &SaveOptions, limit: (u64, usize)) -> Result<(Vec<u8>, SaveStats)> {
-        let generation = photocraft_raster::spill::read_error_generation();
-        // Another thread encodes the previews while the document is collected and its new
-        // objects are compressed on all cores (zstd dominates a full save).
+    /// [`Self::save`] with `commit` in place of [`BundleStore::commit`]; it may change the
+    /// manifest it publishes.
+    fn save_committing<S: BundleStore + ?Sized>(
+        &mut self,
+        doc: &Document,
+        opts: &SaveOptions,
+        store: &mut S,
+        commit: impl FnOnce(&mut S, &mut Prepared) -> Result<usize>,
+    ) -> Result<SaveStats> {
+        // `end` also runs when a step panics, so a caught panic leaves no lock held.
+        struct EndOnDrop<'s, S: BundleStore + ?Sized>(&'s mut S);
+        impl<S: BundleStore + ?Sized> Drop for EndOnDrop<'_, S> {
+            fn drop(&mut self) {
+                self.0.end();
+            }
+        }
+        let store = EndOnDrop(store);
+        store.0.begin().and_then(|()| self.save_begun(doc, opts, &mut *store.0, commit))
+    }
+
+    fn save_begun<S: BundleStore + ?Sized>(
+        &mut self,
+        doc: &Document,
+        opts: &SaveOptions,
+        store: &mut S,
+        commit: impl FnOnce(&mut S, &mut Prepared) -> Result<usize>,
+    ) -> Result<SaveStats> {
+        let scratch = Scratch { doc, generation: photocraft_raster::spill::read_error_generation() };
+        // Another thread encodes the previews while the document is collected and the store
+        // plans its objects.
         let (previews, prepared) = beside(
             opts.thumbnail.is_some() || opts.composite.is_some() || opts.full_composite.is_some(),
             || previews(opts),
             || -> Result<_> {
                 let p = self.prepare(doc, opts)?;
-                let todo: Vec<(&String, &Object)> = p.objects.iter().filter(|(path, _)| !self.compressed.contains_key(*path)).collect();
-                let fresh: HashMap<String, Arc<Vec<u8>>> = par_compress(&todo)?.into_iter().map(|(path, data)| (path.clone(), data)).collect();
-                Ok((p, fresh))
+                store.plan(&p.bundle_objects(scratch))?;
+                Ok(p)
             },
         );
-        let (mut p, mut fresh) = prepared?;
-        let mut previews = previews?;
+        let mut p = prepared?;
+        let previews = previews?;
         p.match_previews(&previews)?;
         let mut stats = p.stats;
-        let mut entries = Vec::with_capacity(p.objects.len());
-        let mut compressor: Option<Compressor> = None;
-        for (path, obj) in &p.objects {
-            let (key, data) = match self.compressed.remove_entry(path) {
-                Some((key, data)) => {
-                    if matches!(obj, Object::Tile(..)) {
-                        stats.tiles_reused += 1;
-                    }
-                    (Some(key), data)
-                }
-                None => {
-                    match obj {
-                        Object::Tile(..) => stats.tiles_written += 1,
-                        Object::Blob(_) => stats.blobs_written += 1,
-                    }
-                    (None, fresh.remove(path).unwrap_or_else(|| Arc::new(obj.compressed(compressor.get_or_insert_with(Compressor::new)))))
-                }
-            };
-            entries.push((path, key, data));
-        }
-        // A STORE entry takes a 30-byte local header plus its name and data, and a 46-byte central
-        // directory record plus its name again; the archive ends with a 22-byte end record. The
-        // full-size composite is left out rather than fail a save that fits without it.
-        let stored = |name: &str, len: usize| 76 + 2 * name.len() as u64 + len as u64;
-        let total = 22
-            + stored(MANIFEST, p.manifest.len())
-            + previews.iter().map(|(name, data)| stored(name, data.len())).sum::<u64>()
-            + entries.iter().map(|(path, _, data)| stored(path, data.len())).sum::<u64>();
-        let mut manifest = p.manifest;
-        if (total > limit.0 || 1 + previews.len() + entries.len() > limit.1)
-            && let Some(at) = previews.iter().position(|(name, _)| *name == FULL_COMPOSITE)
-        {
-            previews.remove(at);
-            manifest = manifest_json(&p.model, false)?;
-            stats.manifest_bytes = manifest.len();
-        }
-        // The archive is sized for every entry up front (#7689): previews, then reused and fresh
-        // objects at their compressed sizes.
-        let sizes = std::iter::once((MANIFEST, manifest.len()))
-            .chain(previews.iter().map(|(name, data)| (*name, data.len())))
-            .chain(entries.iter().map(|(path, _, data)| (path.as_str(), data.len())));
-        let mut z = match ZipWriter::with_entries(sizes) {
-            Ok(z) => z,
-            Err(FormatError::LimitExceeded(_)) if previews.iter().any(|(name, _)| *name == FULL_COMPOSITE) => {
-                previews.retain(|(name, _)| *name != FULL_COMPOSITE);
-                manifest = manifest_json(&p.model, false)?;
-                stats.manifest_bytes = manifest.len();
-                let sizes = std::iter::once((MANIFEST, manifest.len()))
-                    .chain(previews.iter().map(|(name, data)| (*name, data.len())))
-                    .chain(entries.iter().map(|(path, _, data)| (path.as_str(), data.len())));
-                ZipWriter::with_entries(sizes)?
-            }
-            Err(e) => return Err(e),
-        };
-        z.add(MANIFEST, &manifest)?;
-        for (name, data) in &previews {
-            z.add(name, data)?;
-        }
-        let mut next = HashMap::with_capacity(entries.len());
-        let mut cached_bytes = 0usize;
-        for (path, key, data) in entries {
-            z.add(path, &data)?;
-            if data.capacity() <= self.compressed_budget.saturating_sub(cached_bytes) {
-                cached_bytes += data.capacity();
-                next.insert(key.unwrap_or_else(|| path.clone()), data);
+        for object in p.bundle_objects(scratch) {
+            match (store.object(&object)?, object.is_tile()) {
+                (Stored::Written, true) => stats.tiles_written += 1,
+                (Stored::Written, false) => stats.blobs_written += 1,
+                (Stored::Reused, true) => stats.tiles_reused += 1,
+                (Stored::Reused, false) => {}
             }
         }
-        scratch_ok(doc, generation)?;
-        self.compressed = next;
-        Ok((z.finish()?, stats))
+        // Nothing read from a failed scratch tile gets published.
+        scratch.check()?;
+        for (name, data) in previews {
+            store.preview(name, data)?;
+        }
+        stats.objects_removed = commit(store, &mut p)?;
+        stats.manifest_bytes = p.manifest.len();
+        Ok(stats)
+    }
+}
+
+impl PcraftWriter {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// How many compressed bytes of already-verified objects each directory save re-reads and
+    /// re-checks (oldest-checked first; at least one object when the budget is non-zero). `0`
+    /// trusts unchanged signatures entirely; `u64::MAX` re-verifies everything on every save.
+    pub fn set_reverify_budget(&mut self, bytes: u64) {
+        self.dir.set_reverify_budget(bytes);
+    }
+
+    /// Cap compressed payload capacity retained between ZIP saves. Clears the previous payload
+    /// cache; tile hashes remain reusable. The default is unbounded; `0` retains no payloads.
+    pub fn set_compressed_cache_budget(&mut self, bytes: usize) {
+        self.zip.set_compressed_cache_budget(bytes);
+    }
+
+    /// How long a directory save waits for another save of the same bundle to finish before
+    /// failing without writing anything (10 s by default; see [`Self::save_dir`]).
+    pub fn set_lock_wait(&mut self, wait: std::time::Duration) {
+        self.dir.set_lock_wait(wait);
+    }
+
+    /// Save into `store`. Tile and blob hashes are remembered across stores; what is already
+    /// stored is the store's own business.
+    ///
+    /// Into a [`ZipStore`], a save that the full-size composite would take past the ZIP limit
+    /// fails here; [`Self::save_zip`] leaves the composite out instead.
+    pub fn save_to(&mut self, doc: &Document, store: &mut dyn BundleStore, opts: &SaveOptions) -> Result<SaveStats> {
+        self.hashes.save(doc, opts, store)
+    }
+
+    /// Save as a ZIP bundle in memory.
+    pub fn save_zip(&mut self, doc: &Document, opts: &SaveOptions) -> Result<(Vec<u8>, SaveStats)> {
+        let stats = self.hashes.save_committing(doc, opts, &mut self.zip, ZipStore::commit_fitting)?;
+        Ok((self.zip.take_archive(), stats))
+    }
+
+    /// [`Self::save_zip`] with `limit` (bytes, entries) in place of [`ZIP_LIMIT`].
+    #[cfg(test)]
+    fn save_zip_within(&mut self, doc: &Document, opts: &SaveOptions, limit: (u64, usize)) -> Result<(Vec<u8>, SaveStats)> {
+        self.zip.limit = limit;
+        let saved = self.save_zip(doc, opts);
+        self.zip.limit = ZIP_LIMIT;
+        saved
     }
 
     /// Save into a directory bundle: reuses only valid existing objects,
@@ -1205,156 +1803,16 @@ impl PcraftWriter {
     /// atomically and removes unreferenced objects. The whole save holds the bundle's
     /// `save.lock`, so saves of one bundle from other writers or processes wait their turn.
     pub fn save_dir(&mut self, doc: &Document, dir: &Path, opts: &SaveOptions) -> Result<SaveStats> {
-        self.save_dir_with(doc, dir, opts, &crate::atomic::RealFs)
+        self.dir.path = dir.to_path_buf();
+        self.hashes.save(doc, opts, &mut self.dir)
     }
 
     /// The same save path with an injectable publication barrier, for failure/GC ordering tests.
+    #[cfg(test)]
+    #[cfg_attr(not(windows), allow(dead_code))]
     fn save_dir_with(&mut self, doc: &Document, dir: &Path, opts: &SaveOptions, fs: &dyn crate::atomic::AtomicFs) -> Result<SaveStats> {
-        let scratch_generation = photocraft_raster::spill::read_error_generation();
-        let canonical_dir = bundle_root(dir)?;
-        let dir = canonical_dir.as_path();
-        // Held until the end of the save: listing, writing, publishing and cleanup (#4957).
-        let _lock = lock_bundle(dir, self.lock_wait)?;
-        let existing = list_objects(dir)?;
-        // Reject a hostile existing entry before writing any object or manifest. This also
-        // covers entries that this save would otherwise leave untouched or garbage-collect.
-        for path in [MANIFEST, THUMB, COMPOSITE, FULL_COMPOSITE] {
-            validate_bundle_file(dir, &dir.join(path))?;
-        }
-        let mut p = self.prepare(doc, opts)?;
-        let previews = previews(opts)?;
-        p.match_previews(&previews)?;
-        let mut stats = p.stats;
-        if self.verified_directory.as_ref().is_none_or(|cache| cache.directory != canonical_dir) {
-            self.verified_directory = Some(DirectoryVerificationCache { directory: canonical_dir.clone(), ..Default::default() });
-        }
-        let generation = match &mut self.verified_directory {
-            Some(cache) => {
-                cache.generation = cache.generation.saturating_add(1);
-                cache.generation
-            }
-            None => 0,
-        };
-        let recheck = self.rolling_recheck(&p.objects);
-        let mut compressor: Option<Compressor> = None;
-        for (path, obj) in &p.objects {
-            let object_path = dir.join(path);
-            // bundle_root and list_objects validated the fixed parent directories once. Check
-            // each leaf here; write_bundle_file rechecks its parent around every mutation.
-            plain_file_or_missing(&object_path)?;
-            let signature = path_signature(&object_path)?;
-            let already_verified = !recheck.contains(path)
-                && signature.is_some_and(|signature| {
-                    self.verified_directory.as_ref().is_some_and(|cache| cache.objects.get(path).is_some_and(|v| v.signature == signature))
-                });
-            if existing.contains(path) && already_verified {
-                if matches!(obj, Object::Tile(..)) {
-                    stats.tiles_reused += 1;
-                }
-                continue;
-            }
-            if existing.contains(path) {
-                let (valid, signature) = existing_object_is_valid(&object_path, obj, path)?;
-                if valid {
-                    if let Some(signature) = signature
-                        && let Some(cache) = &mut self.verified_directory
-                    {
-                        cache.objects.insert(path.clone(), Verified { signature, checked_at: generation });
-                    }
-                    if matches!(obj, Object::Tile(..)) {
-                        stats.tiles_reused += 1;
-                    }
-                    continue;
-                }
-            }
-            match obj {
-                Object::Tile(..) => stats.tiles_written += 1,
-                Object::Blob(_) => stats.blobs_written += 1,
-            }
-            let compressed = obj.compressed(compressor.get_or_insert_with(Compressor::new));
-            scratch_ok(doc, scratch_generation)?;
-            write_bundle_file(dir, &object_path, &compressed, fs)?;
-            let written = path_signature(&object_path)?;
-            if let Some(cache) = &mut self.verified_directory {
-                match written {
-                    Some(signature) => {
-                        cache.objects.insert(path.clone(), Verified { signature, checked_at: generation });
-                    }
-                    None => {
-                        cache.objects.remove(path);
-                    }
-                }
-            }
-        }
-        for (name, data) in &previews {
-            write_bundle_file(dir, &dir.join(name), data, fs)?;
-        }
-        // Pin all GC directories before removing stale previews or objects.
-        // Unix cleanup then stays within these directories even if a pathname is swapped.
-        let gc = BundleGc::new(dir)?;
-        #[cfg(windows)]
-        {
-            // A previous attempt may have published an object and then failed its directory
-            // flush. The retry can reuse those valid bytes (including cached ones), so flush
-            // both object directories again before publishing a manifest that references them.
-            // This also persists the fixed subdirectories of a newly created bundle.
-            for sub in [TILES_DIR, BLOBS_DIR] {
-                fs.sync_dir(&dir.join(sub)).map_err(|e| crate::atomic::publication_error(e, &dir.join(sub)))?;
-            }
-        }
-        #[cfg(not(windows))]
-        for sub in [TILES_DIR, BLOBS_DIR] {
-            let folder = dir.join(sub);
-            if folder.is_dir() {
-                confirm_flushed(&folder, &folder)?;
-            }
-        }
-        scratch_ok(doc, scratch_generation)?;
-        write_bundle_file(dir, &dir.join(MANIFEST), &p.manifest, fs)?;
-        // Omitted previews belong to the previous manifest until the new one commits.
-        // After commit, a locked leftover is only housekeeping, just like unused objects.
-        for stale in [THUMB, COMPOSITE, FULL_COMPOSITE] {
-            if !previews.iter().any(|(n, _)| *n == stale) {
-                let _ = remove_bundle_file(dir, &dir.join(stale), &gc);
-            }
-        }
-        // The manifest is committed: the save has succeeded. Removing objects it no longer
-        // references is best-effort housekeeping (a vanished or locked file must not turn a
-        // complete save into a reported failure); a leftover is retried on the next save.
-        for path in existing {
-            if !p.objects.contains_key(&path) {
-                if remove_bundle_file(dir, &dir.join(&path), &gc).is_ok() {
-                    stats.objects_removed += 1;
-                }
-                if let Some(cache) = &mut self.verified_directory {
-                    cache.objects.remove(&path);
-                }
-            }
-        }
-        Ok(stats)
-    }
-
-    /// The cached objects this save re-verifies even though their signature is unchanged:
-    /// oldest-checked first, until their recorded sizes reach the re-verify budget (always at
-    /// least one, so an object larger than the budget is still reached in turn).
-    fn rolling_recheck(&self, objects: &BTreeMap<String, Object>) -> HashSet<String> {
-        let mut out = HashSet::new();
-        let Some(cache) = &self.verified_directory else { return out };
-        if self.reverify_budget == 0 {
-            return out;
-        }
-        let mut candidates: Vec<(&String, &Verified)> = cache.objects.iter().filter(|(path, _)| objects.contains_key(*path)).collect();
-        candidates.sort_by(|a, b| a.1.checked_at.cmp(&b.1.checked_at).then_with(|| a.0.cmp(b.0)));
-        let mut spent = 0u64;
-        for (path, verified) in candidates {
-            let next = spent.saturating_add(verified.signature.len);
-            if !out.is_empty() && next > self.reverify_budget {
-                break;
-            }
-            spent = next;
-            out.insert(path.clone());
-        }
-        out
+        self.dir.path = dir.to_path_buf();
+        self.hashes.save(doc, opts, &mut DirStoreWith { store: &mut self.dir, fs })
     }
 
     /// Save to `path`: a directory bundle if `path` is an existing directory
@@ -1418,20 +1876,26 @@ fn compressed_cache_budget_limits_retained_capacity_without_changing_bytes() {
     surface.write_pixel(0, 0, &[0.2, 0.4, 0.6, 1.0]);
     surface.write_pixel(256, 0, &[0.6, 0.4, 0.2, 1.0]);
     doc.layers.push(Layer::new("pixels", LayerContent::Raster(surface)));
+    // A blob's payload is cached and budgeted like a tile's.
+    doc.icc_profile = Some(Arc::new((0..=255).collect()));
     let mut writer = PcraftWriter::new();
     let (expected, _) = writer.save_zip(&doc, &SaveOptions::default()).unwrap();
-    let key = writer.compressed.keys().next().unwrap().clone();
-    let key_allocation = writer.compressed.get_key_value(&key).unwrap().0.as_ptr();
+    assert!(writer.zip.compressed.keys().any(|k| k.starts_with("blobs/")));
+    let key = writer.zip.compressed.keys().next().unwrap().clone();
+    let key_allocation = writer.zip.compressed.get_key_value(&key).unwrap().0.as_ptr();
     assert_eq!(writer.save_zip(&doc, &SaveOptions::default()).unwrap().0, expected);
-    assert_eq!(writer.compressed.get_key_value(&key).unwrap().0.as_ptr(), key_allocation);
-    let budget = writer.compressed.values().map(|v| v.capacity()).min().unwrap();
+    assert_eq!(writer.zip.compressed.get_key_value(&key).unwrap().0.as_ptr(), key_allocation);
+    // Room for the blob (first in archive order) and the smallest tile, not every tile.
+    let capacity = |tiles: bool| writer.zip.compressed.iter().filter(move |(k, _)| k.starts_with("tiles/") == tiles).map(|(_, v)| v.capacity());
+    let budget = capacity(false).sum::<usize>() + capacity(true).min().unwrap();
     writer.set_compressed_cache_budget(budget);
-    assert!(writer.compressed.is_empty());
+    assert!(writer.zip.compressed.is_empty());
     let (bytes, _) = writer.save_zip(&doc, &SaveOptions::default()).unwrap();
     assert_eq!(bytes, expected);
-    assert!(writer.compressed.values().map(|v| v.capacity()).sum::<usize>() <= budget);
-    assert!(!writer.compressed.is_empty());
-    let retained = writer.compressed.len();
+    assert!(writer.zip.compressed.values().map(|v| v.capacity()).sum::<usize>() <= budget);
+    assert!(writer.zip.compressed.keys().any(|k| k.starts_with("blobs/")));
+    assert!(writer.zip.compressed.keys().any(|k| k.starts_with("tiles/")));
+    let retained = writer.zip.compressed.keys().filter(|k| k.starts_with("tiles/")).count();
     let (bytes, stats) = writer.save_zip(&doc, &SaveOptions::default()).unwrap();
     assert_eq!(bytes, expected);
     assert_eq!(stats.tiles_reused, retained);
@@ -1439,7 +1903,7 @@ fn compressed_cache_budget_limits_retained_capacity_without_changing_bytes() {
     let (bytes, stats) = writer.save_zip(&doc, &SaveOptions::default()).unwrap();
     assert_eq!(bytes, expected);
     assert_eq!(stats.tiles_reused, 0);
-    assert!(writer.compressed.is_empty());
+    assert!(writer.zip.compressed.is_empty());
 }
 
 #[cfg(test)]

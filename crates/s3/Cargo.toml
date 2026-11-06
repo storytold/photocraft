@@ -1,0 +1,25 @@
+[package]
+name = "photocraft-s3"
+description = ".pcraft bundles on S3-compatible object storage (AWS S3, Cloudflare R2, MinIO): a format::BundleStore"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+# Native only: the browser reaches storage through signed URLs from its host (README), so on
+# wasm32 the crate is empty and pulls in no HTTP client.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+photocraft-format = { workspace = true }
+chrono = { workspace = true }
+log = { workspace = true }
+# Already in Cargo.lock through craft-update (the app's updater), with the same TLS setup.
+ureq = { version = "3.4", default-features = false, features = ["rustls-no-provider", "_ring", "platform-verifier"] }
+sha2 = "0.10"
+
+[dev-dependencies]
+photocraft-color = { workspace = true }
+photocraft-doc = { workspace = true }
+photocraft-raster = { workspace = true }
