@@ -92,6 +92,7 @@ use save::{SAVE_RETRY_MAX_S, SAVE_RETRY_S, merge_changes, persist};
 pub use save::{autosave_now, tick};
 #[cfg(test)]
 pub(crate) use shortcuts::capture_key_press;
+pub(crate) use shortcuts::capturing_shortcut;
 pub use shortcuts::{is_modifier_key, reserved_shortcut, shortcut_items, shortcut_text};
 pub use startup::load;
 pub(crate) use startup::{on_recovery_event, remember_rulers};
