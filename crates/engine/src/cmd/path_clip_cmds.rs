@@ -116,9 +116,10 @@ fn paste_center(cmd: &str, s: &Session, p: &Value) -> Result<Point> {
 /// Edit › Paste: with `"name"` (and `"layer"`), the path clipboard's components append to the
 /// addressed path — the work path, a saved path, a shape layer's path or its vector mask — in
 /// one undoable step, as Photoshop pastes into the path selected in the Paths panel; without
-/// a name the clipboard becomes a new saved path "Pasted Path" (one replaces an earlier one,
-/// as `path.set` replaces by name). Either way the path is translated so its bounds centre
-/// lands on the paste centre: Photoshop centres the pasted path on the document window; the
+/// a name the clipboard becomes a new saved path "Pasted Path", with a numeric suffix when that
+/// name is taken, so an earlier or edited paste is never replaced. Either way the path is
+/// translated so its bounds centre lands on the paste centre: Photoshop centres the pasted path
+/// on the document window; the
 /// UI passes the view centre, the default is the canvas centre.
 ///
 /// The position and scale rule (review on #10482): path components are resolution-independent
@@ -150,12 +151,16 @@ fn path_paste(s: &mut Session, p: &Value) -> Result<Value> {
             Ok(())
         });
     }
+    let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
+    let name = (1..=doc.paths.len().saturating_add(1))
+        .map(|i| if i == 1 { PASTED.to_owned() } else { format!("{PASTED} {i}") })
+        .find(|name| !doc.paths.iter().any(|p| &p.name == name))
+        .ok_or_else(|| bad(CMD, "no free path name"))?;
     s.edit("Paste", |doc, _| {
-        doc.paths.retain(|q| q.name != PASTED);
-        doc.paths.push(NamedPath { name: PASTED.into(), path: moved.clone(), psd_raw: None });
+        doc.paths.push(NamedPath { name: name.clone(), path: moved.clone(), psd_raw: None });
         Ok(())
     })?;
-    Ok(json!({ "name": PASTED, "path": path_json(&moved) }))
+    Ok(json!({ "name": name, "path": path_json(&moved) }))
 }
 
 const TARGET: &str = r#""name":"work"|"layer"="work","layer":id? (with "layer": a shape layer's path or a vector mask),"subpaths":[i,…]"#;
@@ -187,7 +192,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec(
             "path.paste",
             "Paste Path",
-            r#"{"center":[x,y]? (document coordinates the pasted path's bounds centre lands on; default: the canvas centre),"name":"work"|"layer"|saved-name?,"layer":id? (with "layer": the layer's shape path or vector mask),"op":"combine"|"subtract"|"intersect"|"exclude"|"join"? (the appended components' shape mode)} → {name,path} (with a name: the components append to the addressed path in one step; without: the clipboard becomes a saved path "Pasted Path", replacing an earlier one)"#,
+            r#"{"center":[x,y]? (document coordinates the pasted path's bounds centre lands on; default: the canvas centre),"name":"work"|"layer"|saved-name?,"layer":id? (with "layer": the layer's shape path or vector mask),"op":"combine"|"subtract"|"intersect"|"exclude"|"join"? (the appended components' shape mode)} → {name,path} (with a name: the components append to the addressed path in one step; without: a new saved path "Pasted Path", numbered when the name is taken)"#,
             true,
             path_paste,
         ),
@@ -271,11 +276,13 @@ mod tests {
         let pasted = doc.paths.iter().find(|q| q.name == "Pasted Path").expect("pasted path exists");
         assert_eq!(pasted.path.subpaths.len(), 1);
         assert_eq!(pasted.path.subpaths[0].knots[0].anchor, photocraft_geom::Point::new(80.0, 30.0), "moved by (-20, +10)");
-        // An explicit centre lands there exactly; a second paste replaces the first.
-        s.execute("path.paste", json!({"center": [150.0, 70.0]})).unwrap();
+        // An explicit centre lands there exactly; a second paste preserves the first path.
+        let r = s.execute("path.paste", json!({"center": [150.0, 70.0]})).unwrap();
+        assert_eq!(r["name"], json!("Pasted Path 2"));
         let doc = &s.active().unwrap().doc;
-        assert_eq!(doc.paths.iter().filter(|q| q.name == "Pasted Path").count(), 1);
-        let pasted = doc.paths.iter().find(|q| q.name == "Pasted Path").unwrap();
+        let first = doc.paths.iter().find(|q| q.name == "Pasted Path").expect("the first path survives");
+        assert_eq!(first.path.subpaths[0].knots[0].anchor, photocraft_geom::Point::new(80.0, 30.0));
+        let pasted = doc.paths.iter().find(|q| q.name == "Pasted Path 2").expect("the second path is separate");
         assert_eq!(pasted.path.subpaths[0].knots[0].anchor, photocraft_geom::Point::new(130.0, 50.0), "moved by (+30, +10)");
         assert_eq!(s.active().unwrap().history.undo_label(), Some("Paste"));
     }

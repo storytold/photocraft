@@ -29,16 +29,20 @@ pub mod canvas;
 pub mod control;
 pub mod dialogs;
 pub mod dock;
+pub(crate) mod edit_session;
 pub mod file_dialog;
 pub mod file_open;
 pub mod frame_stages;
+pub mod gpu_memo;
 pub mod gpu_status;
+pub mod home_recent_ui;
 pub mod i18n;
 mod icon_data;
 pub mod icons;
 pub mod jobs_ui;
 pub(crate) mod last_brush;
 pub mod links;
+pub mod memory_warning;
 pub mod menu_catalog;
 pub mod menus;
 pub mod monitor_status;
@@ -151,6 +155,7 @@ pub use dialogs::fill_ui;
 pub use dialogs::filter_dialog;
 use dialogs::filter_preview_ui;
 pub use dialogs::gallery_ui;
+use dialogs::guide_edit;
 pub use dialogs::guide_layout_ui;
 pub use dialogs::history_options_ui;
 pub use dialogs::jpeg_options_ui;
@@ -255,8 +260,8 @@ pub use services::{
     AdoptAutosaveFn, AppendTextFn, AutomationCommandFn, AutomationOpenPcraftFn, AutomationReadFn, AutomationWriteFn, AutosaveFn, AutosaveResultsFn, CapsLockFn,
     CaptionStyleFn, ClipboardGetFn, ClipboardGetSvgFn, ClipboardSetFn, ClipboardUnreadableFn, CursorPosFn, DiscardAutosaveFn, EncodePngFn, ExportFn,
     ExportSettings, ExternalSvgEditor, ExternalSvgSession, ExternalVectorSave, ExternalVectorSource, FileStamp, FileStampFn, FormatChoices, ImportFn, Inbox,
-    LoadTextFn, OpenExternalSvgFn, OpenUrlFn, OsEventsFn, PhotoshopShortcutsFn, QuitFn, RecoverFn, Recoverable, RightButtonDownFn, SameFileFn, SaveFileFn,
-    SaveTextFn, Services, SystemThemeFn, WindowFrameFn, WriteFn,
+    LoadTextFn, OpenExternalSvgFn, OpenUrlFn, OsEventsFn, PhotoshopShortcutsFn, PlaceInbox, QuitFn, RecoverFn, Recoverable, RightButtonDownFn, SameFileFn,
+    SaveFileFn, SaveTextFn, Services, SystemThemeFn, WindowFrameFn, WriteFn,
 };
 pub use text::bidi_text;
 pub use text::cjk_fonts;
@@ -350,10 +355,13 @@ pub struct PhotocraftApp {
     navigator_gpu: HashMap<DocId, crate::gpu_canvas::ViewParams>,
     /// Documents whose GPU canvas texture holds the plain document (`canvas::ensure_gpu`).
     navigator_plain: std::collections::HashSet<DocId>,
+    /// Viewport pages of documents too large for their GPU texture set (`canvas::viewport_pages`).
+    streams: HashMap<DocId, canvas::viewport_pages::Stream>,
     /// The Info panel's Color Sampler readouts for (document, revision) (`panels::sampler_readouts`).
     info_samplers: Option<panels::SamplerReadouts>,
     /// Display profile readings (#569).
     monitors: monitor_status::State,
+    pub(crate) thumbnail_cache: std::sync::Arc<std::sync::Mutex<crate::home_recent_ui::ThumbnailCache>>,
     checker: Option<egui::TextureHandle>,
     drag: Option<canvas::Drag>,
     /// An owned vector drag was cancelled (`canvas::cancel_stale_vector_drag`): the rest of its
@@ -450,6 +458,8 @@ pub struct PhotocraftApp {
     /// the frame the pointer leaves, so a long stationary hover never counts as elapsed time
     /// (#2022); set by `notices::show`.
     pub(crate) notices_hovered: bool,
+    /// The low-memory warning's schedule and state (`memory_warning`).
+    pub(crate) low_memory: memory_warning::Watch,
     /// Apply theme on first frame.
     styled: bool,
     /// Whether the window uses an integrated (transparent) macOS title bar.
@@ -476,8 +486,11 @@ pub struct PhotocraftApp {
     pub(crate) drop_canvas_rect: Option<egui::Rect>,
     /// The document tab strip last frame: a drop there opens the file at the slot under it.
     pub(crate) tab_strip: Option<canvas::TabStrip>,
-    /// Files dropped on the canvas still to place, one Free Transform at a time.
-    pub(crate) drop_places: std::collections::VecDeque<file_open::DropPlace>,
+    pub(crate) frame_tool_ctx: Option<egui::Context>,
+    pub(crate) frame_preview: Option<frame_tool::Preview>,
+    /// Files dropped on the canvas still to place, one Free Transform at a time, each with the
+    /// document it was dropped on.
+    pub(crate) drop_places: std::collections::VecDeque<(DocId, file_open::DropPlace)>,
     /// The document each of `ui.views` belongs to, as of the last [`Self::sync_views`].
     view_docs: Vec<DocId>,
     /// The document `ui.selected_path` belongs to, as of the last [`Self::sync_views`]: a Paths
@@ -489,9 +502,10 @@ pub struct PhotocraftApp {
     /// The document area each layer thumbnail in `thumbs` frames (the canvas, or the layer's
     /// bounds with Clip Thumbnails to Layer Bounds; #4281).
     thumb_frames: HashMap<photocraft_doc::LayerId, photocraft_geom::Rect>,
-    /// History snapshot thumbnails by (document, snapshot id): a snapshot never changes, so each
-    /// is made once (`snapshot_thumb`, #2966).
-    snapshot_thumbs: HashMap<(DocId, u64), egui::TextureHandle>,
+    /// History snapshot thumbnails by (document, snapshot id), each with the snapshot document it
+    /// shows (`snapshot_thumb`, #2966): made once, and again only when that is a different one (a
+    /// preserved-ID reopen, or the first snapshot refreshed for a served font, #6087).
+    snapshot_thumbs: HashMap<(DocId, u64), (std::sync::Weak<Document>, egui::TextureHandle)>,
     /// Snapshots whose live layer/mask keys were last used to prune thumbnail handles.
     thumb_documents: Vec<(DocId, std::sync::Weak<Document>)>,
     /// Content bounds cached per (key, revision): scanning a 36 MP layer every frame cost ~77 ms.
@@ -502,6 +516,7 @@ pub struct PhotocraftApp {
     pub(crate) proxy_uploaded: Option<(DocId, u64)>,
     /// Selection outline cache: (doc, revision, segments).
     /// Live filter preview (proxy document with the filter applied).
+    pub(crate) guide_edit: Option<guide_edit::Draft>,
     pub(crate) filter_preview: Option<filter_dialog::FilterPreview>,
     pub(crate) smart_filter_targets: smart_filter_dialog::Targets,
     #[cfg(not(target_arch = "wasm32"))]
@@ -588,11 +603,16 @@ pub struct PhotocraftApp {
     pub(crate) wide_angle: Option<wide_angle_ui::WideAngleDialog>,
     /// ⌘Z history of each open parameter dialog (edit_history).
     pub(crate) dialog_edits: edit_history::DialogEdits,
+    /// What each open Color Picker's live target was when it opened, to put back on Cancel
+    /// (`color_picker_ui::live_preview`).
+    pub(crate) color_picker_live: Vec<color_picker_ui::live_preview::Live>,
     /// The filter a "Rasterize?" prompt answered for, run after the dialog closes, where the
     /// egui context is available again (rasterize_prompt).
     pub(crate) pending_after_prompt: Option<(String, serde_json::Value)>,
+    /// A command clicked while Free Transform commits in the background, run when it lands.
+    pub(crate) after_transform_commit: Option<(String, serde_json::Value)>,
     /// Last mirrored or imported OS image; this can predate the current internal copy. An SVG
-    /// import records `Unknown` when no stable bitmap signature could be observed.
+    /// import records `Unknown` when no bitmap signature could be read.
     os_clip_sig: Option<app::OsClipSignature>,
     /// Last observed SVG bytes, to distinguish an unchanged OS source from a newer internal copy.
     os_clip_svg: Option<std::sync::Arc<Vec<u8>>>,
@@ -673,8 +693,10 @@ pub struct PhotocraftApp {
     pub(crate) discard: Option<discard_ui::Prompt>,
     /// The Open or Save dialog in progress, and the action waiting on it (see `file_dialog`).
     pub(crate) file_dialog: Option<file_dialog::Pending>,
-    /// A Save As to a layered TIFF parked behind the TIFF Options prompt (see `tiff_options_ui`).
+    /// A Save As or Save a Copy to a TIFF parked behind the TIFF Options prompt (see `tiff_options_ui`).
     pub(crate) tiff_options: Option<tiff_options_ui::Prompt>,
+    /// The last TIFF Options compression and pyramid answer, where the next prompt starts. Session-only.
+    pub(crate) tiff_remembered: tiff_options_ui::Remembered,
     /// Where each document was last saved or exported to through a dialog (#1826): its next Save
     /// As or export dialog starts there rather than beside the document. Session-only.
     pub(crate) save_dirs: HashMap<photocraft_doc::DocId, std::path::PathBuf>,
@@ -690,6 +712,9 @@ pub struct PhotocraftApp {
     /// Files read but not opened yet: the first waits on its profile prompt, the rest behind it
     /// (see `open_prompt`).
     pub(crate) held_opens: std::collections::VecDeque<open_prompt::Held>,
+    /// PSD files whose memory preflight requires user approval before pixel decoding (see `open_prompt`).
+    pub(crate) held_memory_prompts: std::collections::VecDeque<open_prompt::MemoryPrompt>,
+    pub(crate) prompt_order: std::collections::VecDeque<open_prompt::PromptKind>,
     /// A brush or gradient file waiting on the group-name prompt (see `preset_group_prompt`).
     pub(crate) held_preset_import: Option<preset_group_prompt::Held>,
     /// Set once the user has agreed to quit, so the resulting close request goes through.
@@ -756,6 +781,8 @@ mod input_tests;
 
 #[cfg(test)]
 mod empty_workspace_tests;
+#[cfg(test)]
+mod home_chrome_tests;
 
 #[cfg(test)]
 mod pen_variants_tests;
@@ -777,7 +804,12 @@ mod tool_shortcut_tests;
 mod pixel_aspect_tests;
 
 #[cfg(test)]
+mod transform_controls_pointer_tests;
+#[cfg(test)]
 mod transform_fx_tests;
+
+#[cfg(test)]
+mod transform_commit_click_tests;
 
 #[cfg(test)]
 mod layer_props_ui_tests;
@@ -789,7 +821,13 @@ mod transform_switch_tests;
 mod transform_undo_tests;
 
 #[cfg(test)]
+mod transform_rotate_snap_tests;
+
+#[cfg(test)]
 mod transform_type_tests;
+
+#[cfg(test)]
+mod transform_reference_point_tests;
 
 #[cfg(test)]
 mod transform_several_tests;
@@ -845,6 +883,9 @@ mod blend_dropdown_wheel_tests;
 mod paths_scroll_tests;
 
 #[cfg(test)]
+mod blend_dropdown_groups_tests;
+
+#[cfg(test)]
 mod options_bar_mode_wheel_tests;
 
 #[cfg(test)]
@@ -889,6 +930,8 @@ mod window_frame_tests;
 
 #[cfg(test)]
 mod browse_field_tests;
+#[cfg(test)]
+mod export_quality_tests;
 #[cfg(test)]
 mod options_hit_area_tests;
 #[cfg(test)]

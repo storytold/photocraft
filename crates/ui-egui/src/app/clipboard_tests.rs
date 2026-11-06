@@ -135,7 +135,41 @@ fn explicit_pixel_paste_still_reads_raster_clipboards() {
     assert!(app.session.clipboard.as_ref().unwrap().svg.is_none());
 }
 
-/// The bitmap changes between the SVG read and the bitmap read, with the SVG unchanged or
+/// An early intercept return must not leave the menu's one-shot clipboard read for the next
+/// command. This intercept returns directly, without a nested run that could consume the flag.
+#[test]
+fn an_early_intercept_return_clears_the_clipboard_read_flag() {
+    let mut app = PhotocraftApp::new(Session::new(), Services::default());
+    app.clip_read_for_paste = true;
+    assert!(app.run("window.panel.group", json!({})).is_err());
+    assert!(!app.clip_read_for_paste);
+}
+
+/// An SVG import hashes one bitmap read and reads the SVG once, even for a large clipboard.
+#[test]
+fn svg_import_reads_each_os_representation_once() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let bitmap_reads = Arc::new(AtomicUsize::new(0));
+    let svg_reads = Arc::new(AtomicUsize::new(0));
+    let (b, s) = (bitmap_reads.clone(), svg_reads.clone());
+    let services = Services {
+        clipboard_get_image: Some(Box::new(move || {
+            b.fetch_add(1, Ordering::SeqCst);
+            Ok(Some((1, 1, vec![255; 4])))
+        })),
+        clipboard_get_svg: Some(Box::new(move || {
+            s.fetch_add(1, Ordering::SeqCst);
+            Ok(Some(CLIP_SVG.as_bytes().to_vec()))
+        })),
+        ..Default::default()
+    };
+    let mut app = PhotocraftApp::new(Session::new(), services);
+    assert!(app.import_os_svg_clipboard().unwrap());
+    assert_eq!(bitmap_reads.load(Ordering::SeqCst), 1, "one bitmap read, hence one full-byte hash");
+    assert_eq!(svg_reads.load(Ordering::SeqCst), 1, "one SVG read");
+}
+
+/// The bitmap changes after its read, while the SVG is being read, with the SVG unchanged or
 /// changed: the SVG import must not record that newer bitmap as already observed, or the next
 /// Paste beside a newer path clip would skip it. One bitmap is exactly the SVG's raster mirror.
 #[test]

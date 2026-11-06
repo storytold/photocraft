@@ -110,9 +110,12 @@ pub(crate) fn intercept(app: &mut PhotocraftApp, id: &str, params: &Value) -> Op
                 o.extend(t.clone());
             }
             let r = app.run("path.paste", p);
-            if r.is_ok() && target.is_none() {
+            if target.is_none()
+                && let Ok(result) = &r
+                && let Some(name) = result.get("name").and_then(Value::as_str)
+            {
                 // Photoshop selects the pasted path in the Paths panel.
-                app.ui.selected_path = Some("Pasted Path".into());
+                app.ui.selected_path = Some(name.into());
             }
             Some(r)
         }
@@ -207,6 +210,12 @@ mod tests {
         assert_eq!(app.ui.selected_path.as_deref(), Some("Pasted Path"), "Photoshop selects the pasted path");
         assert_eq!(shape(&app).0, id);
         assert_eq!(shape(&app).1.path.subpaths.len(), 2, "the shape is untouched");
+        // Another untargeted paste keeps the first path and selects the new numbered one.
+        app.ui.selected_path = None;
+        app.run("edit.paste", json!({"center": [120.0, 100.0]})).unwrap();
+        assert!(saved(&app, "Pasted Path").is_some(), "the earlier paste survives");
+        assert!(saved(&app, "Pasted Path 2").is_some(), "the second paste has a unique name");
+        assert_eq!(app.ui.selected_path.as_deref(), Some("Pasted Path 2"), "the panel selects the new path");
     }
 
     #[test]
@@ -298,13 +307,13 @@ mod tests {
         app.run("edit.paste", json!({"center": [40.0, 40.0]})).unwrap();
         assert!(app.session.clipboard.is_none(), "the unchanged image did not install a pixel clip");
         assert!(app.session.path_clipboard.is_some(), "and the fresh path clip survived");
-        let first: Vec<_> = saved(&app, "Pasted Path").unwrap().subpaths[0].knots.iter().map(|k| k.anchor).collect();
+        let first: Vec<_> = saved(&app, "Pasted Path 2").unwrap().subpaths[0].knots.iter().map(|k| k.anchor).collect();
         assert_eq!(first[0], photocraft_geom::Point::new(35.0, 35.0), "the paste centred the component on (40, 40)");
-        // The next paste inserted too: paste at another centre and the replaced "Pasted Path" follows.
+        // The next paste inserted too: paste at another centre and the new numbered path follows.
         app.ui.selected_path = None;
         app.run("edit.paste", json!({"center": [30.0, 30.0]})).unwrap();
-        let anchors: Vec<_> = saved(&app, "Pasted Path").unwrap().subpaths[0].knots.iter().map(|k| k.anchor).collect();
-        assert_eq!(anchors[0], photocraft_geom::Point::new(25.0, 25.0), "the paste re-centred the component on (30, 30)");
+        let anchors: Vec<_> = saved(&app, "Pasted Path 3").unwrap().subpaths[0].knots.iter().map(|k| k.anchor).collect();
+        assert_eq!(anchors[0], photocraft_geom::Point::new(25.0, 25.0), "the paste centred the new component on (30, 30)");
         drop(a);
     }
 

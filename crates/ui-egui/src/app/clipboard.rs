@@ -28,8 +28,9 @@ impl PhotocraftApp {
 
     /// Capture SVG and its raster mirror together; failures leave the previous copy intact.
     pub(super) fn import_os_svg_clipboard(&mut self) -> Result<bool, String> {
-        // Baseline before the SVG read, so a bitmap change between the reads is detected.
-        let bitmap_before = self.os_bitmap_signature();
+        // One bitmap read and hash before the SVG: a bitmap changed afterwards keeps a different
+        // signature for the next paste, without a second pair of OS reads.
+        let bitmap = self.os_bitmap_signature();
         let Some(get) = self.services.clipboard_get_svg.as_mut() else { return Ok(false) };
         let source = match get() {
             Ok(source) => source,
@@ -67,18 +68,11 @@ impl PhotocraftApp {
             self.ui.status_error = true;
             error
         })?;
-        // The freshness guard orders OS bitmaps by `os_clip_sig`: record the actual clipboard
-        // bitmap's signature so a later Paste As pixels recognizes an unchanged clipboard
-        // bitmap instead of importing it over a newer path clip. Only learn the bitmap when
-        // both bitmap reads agree and the SVG read is still current.
-        let bitmap_after = self.os_bitmap_signature();
-        let bitmap_is_current = bitmap_before.is_some()
-            && bitmap_before == bitmap_after
-            && self.services.clipboard_get_svg.as_mut().and_then(|get| get().ok().flatten()).is_some_and(|current| current == source);
-        // Unlike a raster-mirror hash, Unknown cannot collide with a valid OS bitmap. It still
-        // counts as a baseline, so a bitmap appearing after this import is not an unknown-age
-        // first observation beside a path clip.
-        self.os_clip_sig = if bitmap_is_current { bitmap_after.map(OsClipSignature::Bitmap) } else { Some(OsClipSignature::Unknown) };
+        // The freshness guard orders OS bitmaps by `os_clip_sig`: record the bitmap read before
+        // the SVG so a later Paste As pixels recognizes an unchanged clipboard bitmap instead of
+        // importing it over a newer path clip. Unknown cannot collide with a valid OS bitmap and
+        // still counts as a baseline beside a path clip.
+        self.os_clip_sig = Some(bitmap.map_or(OsClipSignature::Unknown, OsClipSignature::Bitmap));
         self.os_clip_svg = clip.svg.clone();
         // One clipboard: an imported SVG replaces a path clip, like any installed clip.
         self.session.path_clipboard = None;
@@ -199,8 +193,16 @@ impl PhotocraftApp {
         surface.prune();
         // One clipboard: imported pixels replace a path clip, like a path clip replaces them.
         self.session.path_clipboard = None;
-        self.session.clipboard =
-            Some(photocraft_engine::edit_cmds::Clip { components: None, surface, bounds: r, layers: None, resolution: None, source: None, svg: None });
+        self.session.clipboard = Some(photocraft_engine::edit_cmds::Clip {
+            components: None,
+            surface,
+            bounds: r,
+            layers: None,
+            resolution: None,
+            source: None,
+            svg: None,
+            board: None,
+        });
         // The SVG that came with this image (a vector app puts both): a later internal copy is
         // newer than it, so Paste As must not bring it back while it is unchanged.
         self.os_clip_svg = self.os_svg_now().flatten();
