@@ -69,6 +69,20 @@ pub mod packbits {
 
     /// Encodes one row, appending to `out`. Never emits the `-128` no-op.
     pub fn encode(src: &[u8], out: &mut Vec<u8>) {
+        // Constant 16-bit samples with different bytes contain only literal packets.
+        if src.len() >= 128
+            && let Some(&[a, b]) = src.first_chunk::<2>()
+            && a != b
+        {
+            let (blocks, tail) = src.as_chunks::<8>();
+            if blocks.iter().all(|v| *v == [a, b, a, b, a, b, a, b]) && tail.iter().zip([a, b].into_iter().cycle()).all(|(&v, p)| v == p) {
+                for chunk in src.chunks(128) {
+                    out.push((chunk.len() - 1) as u8);
+                    out.extend_from_slice(chunk);
+                }
+                return;
+            }
+        }
         packets(src, |header, bytes| {
             out.push(header);
             out.extend_from_slice(bytes);

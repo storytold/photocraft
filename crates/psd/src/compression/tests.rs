@@ -87,6 +87,17 @@ fn packbits_block_scan_preserves_scalar_packets() {
             check(&src);
         }
     }
+    for pair in [[0, 1], [0, 255], [128, 127], [255, 255]] {
+        for n in [127, 128, 129, 255, 256, 257, 12000, 12001] {
+            let mut src: Vec<_> = pair.into_iter().cycle().take(n).collect();
+            check(&src);
+            for i in [0, 7, 8, 127.min(n - 1), 128.min(n - 1), n - 1] {
+                src[i] ^= 1;
+                check(&src);
+                src[i] ^= 1;
+            }
+        }
+    }
 }
 
 #[test]
