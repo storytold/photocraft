@@ -4789,6 +4789,14 @@ cameraRaw	White Balance: As Shot	Valkotasapaino: kuvauksen mukainen
 	seconds	sekuntia
 	Create a single history state	Luo yksi historiatila
 
+# Channels panel menu (#11451)
+	Channel Options…	Kanavan asetukset…
+	Specify Channels:	Määritä kanavat:
+	Not enough grayscale documents for this mode.	Harmaasävyasiakirjoja ei ole tarpeeksi tähän tilaan.
+	Pick a different document for each channel.	Valitse jokaiselle kanavalle eri asiakirja.
+	A picked document is no longer open.	Yksi valituista asiakirjoista ei ole enää auki.
+	A picked document is no longer a grayscale document of the same size.	Yksi valituista asiakirjoista ei ole enää samankokoinen harmaasävyasiakirja.
+
 # PDF Options (PDF/X-1a, PDF/X-3, PDF/X-4)
 	A {bleed} mm bleed leaves no trim on this {width} × {height} mm page.	{bleed} mm:n leikkuuvara ei jätä tälle {width} × {height} mm:n sivulle lainkaan leikattua kokoa.
 	No CMYK profile is installed. Install the printer's profile (for example ISO Coated v2 or Coated FOGRA39) on this computer and save again.	CMYK-profiilia ei ole asennettu. Asenna painotalon profiili (esimerkiksi ISO Coated v2 tai Coated FOGRA39) tähän tietokoneeseen ja tallenna uudelleen.

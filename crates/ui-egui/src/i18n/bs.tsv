@@ -4606,6 +4606,14 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Shapes can't use patterns yet	Oblici još ne mogu koristiti uzorke
 	Edit Brush…	Uredi četkicu…
 
+# Channels panel menu (#11451)
+	Channel Options…	Opcije kanala…
+	Specify Channels:	Odredi kanale:
+	Not enough grayscale documents for this mode.	Nema dovoljno dokumenata u nijansama sive za ovaj način.
+	Pick a different document for each channel.	Odaberite drugi dokument za svaki kanal.
+	A picked document is no longer open.	Jedan odabrani dokument više nije otvoren.
+	A picked document is no longer a grayscale document of the same size.	Jedan odabrani dokument više nije dokument u nijansama sive iste veličine.
+
 # PDF Options (PDF/X-1a, PDF/X-3, PDF/X-4)
 	A {bleed} mm bleed leaves no trim on this {width} × {height} mm page.	Napust od {bleed} mm ne ostavlja obrezani format na ovoj stranici od {width} × {height} mm.
 	No CMYK profile is installed. Install the printer's profile (for example ISO Coated v2 or Coated FOGRA39) on this computer and save again.	Nijedan CMYK profil nije instaliran. Instalirajte profil štamparije (na primjer ISO Coated v2 ili Coated FOGRA39) na ovaj računar i ponovo sačuvajte.

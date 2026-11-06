@@ -3718,6 +3718,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Font size presets	글꼴 크기 사전 설정
 	Leading presets	행간 사전 설정
 	Tracking presets	자간 사전 설정
+
+	The GPU compositor is still being prepared	The GPU compositor is still being prepared
 	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	잘못된 숫자 입력입니다. {min}%에서 {max}% 사이의 정수가 필요합니다. 이전 값이 입력되었습니다.
 	Clear Selection	선택 영역 지우기
 	Color Aware	색상 인식
@@ -3788,6 +3790,21 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	The frame is unavailable	프레임을 사용할 수 없습니다
 	X	X
 	Y	Y
+
+# Channels panel menu (#11451)
+	New Channel…	새 채널…
+	Duplicate Channel	채널 복제
+	Delete Channel	채널 삭제
+	New Spot Channel…	새 별색 채널…
+	Merge Spot Channel	별색 채널 병합
+	Channel Options…	채널 옵션…
+	Split Channels	채널 분할
+	Merge Channels…	채널 병합…
+	Specify Channels:	채널 지정:
+	Not enough grayscale documents for this mode.	이 모드에 필요한 회색 음영 문서가 부족합니다.
+	Pick a different document for each channel.	채널마다 다른 문서를 선택하십시오.
+	A picked document is no longer open.	선택한 문서 중 하나가 더 이상 열려 있지 않습니다.
+	A picked document is no longer a grayscale document of the same size.	선택한 문서 중 하나가 더 이상 같은 크기의 회색 음영 문서가 아닙니다.
 
 # PDF Options (PDF/X-1a, PDF/X-3, PDF/X-4)
 	A {bleed} mm bleed leaves no trim on this {width} × {height} mm page.	{bleed} mm 도련을 적용하면 이 {width} × {height} mm 페이지에 재단 후 남는 영역이 없습니다.

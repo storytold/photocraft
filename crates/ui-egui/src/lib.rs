@@ -33,6 +33,7 @@ pub(crate) mod edit_session;
 pub mod file_dialog;
 pub mod file_open;
 pub mod frame_stages;
+pub mod gpu_memo;
 pub mod gpu_status;
 pub mod home_recent_ui;
 pub mod i18n;
@@ -260,8 +261,8 @@ pub use services::{
     AdoptAutosaveFn, AppendTextFn, AutomationCommandFn, AutomationOpenPcraftFn, AutomationReadFn, AutomationWriteFn, AutosaveFn, AutosaveResultsFn, CapsLockFn,
     CaptionStyleFn, ClipboardGetFn, ClipboardGetSvgFn, ClipboardSetFn, ClipboardUnreadableFn, CursorPosFn, DiscardAutosaveFn, EncodePngFn, ExportFn,
     ExportSettings, ExternalSvgEditor, ExternalSvgSession, ExternalVectorSave, ExternalVectorSource, FileStamp, FileStampFn, FormatChoices, ImportFn, Inbox,
-    LoadTextFn, OpenExternalSvgFn, OpenUrlFn, OsEventsFn, PhotoshopShortcutsFn, QuitFn, RecoverFn, Recoverable, RightButtonDownFn, SameFileFn, SaveFileFn,
-    SaveTextFn, Services, SystemThemeFn, WindowFrameFn, WriteFn,
+    LoadTextFn, OpenExternalSvgFn, OpenUrlFn, OsEventsFn, PhotoshopShortcutsFn, PlaceInbox, QuitFn, RecoverFn, Recoverable, RightButtonDownFn, SameFileFn,
+    SaveFileFn, SaveTextFn, Services, SystemThemeFn, WindowFrameFn, WriteFn,
 };
 pub use text::bidi_text;
 pub use text::cjk_fonts;
@@ -486,10 +487,11 @@ pub struct PhotocraftApp {
     pub(crate) drop_canvas_rect: Option<egui::Rect>,
     /// The document tab strip last frame: a drop there opens the file at the slot under it.
     pub(crate) tab_strip: Option<canvas::TabStrip>,
-    /// Files dropped on the canvas still to place, one Free Transform at a time.
     pub(crate) frame_tool_ctx: Option<egui::Context>,
     pub(crate) frame_preview: Option<frame_tool::Preview>,
-    pub(crate) drop_places: std::collections::VecDeque<file_open::DropPlace>,
+    /// Files dropped on the canvas still to place, one Free Transform at a time, each with the
+    /// document it was dropped on.
+    pub(crate) drop_places: std::collections::VecDeque<(DocId, file_open::DropPlace)>,
     /// The document each of `ui.views` belongs to, as of the last [`Self::sync_views`].
     view_docs: Vec<DocId>,
     /// The document `ui.selected_path` belongs to, as of the last [`Self::sync_views`]: a Paths
@@ -501,9 +503,10 @@ pub struct PhotocraftApp {
     /// The document area each layer thumbnail in `thumbs` frames (the canvas, or the layer's
     /// bounds with Clip Thumbnails to Layer Bounds; #4281).
     thumb_frames: HashMap<photocraft_doc::LayerId, photocraft_geom::Rect>,
-    /// History snapshot thumbnails by (document, snapshot id): a snapshot never changes, so each
-    /// is made once (`snapshot_thumb`, #2966).
-    snapshot_thumbs: HashMap<(DocId, u64), egui::TextureHandle>,
+    /// History snapshot thumbnails by (document, snapshot id), each with the snapshot document it
+    /// shows (`snapshot_thumb`, #2966): made once, and again only when that is a different one (a
+    /// preserved-ID reopen, or the first snapshot refreshed for a served font, #6087).
+    snapshot_thumbs: HashMap<(DocId, u64), (std::sync::Weak<Document>, egui::TextureHandle)>,
     /// Snapshots whose live layer/mask keys were last used to prune thumbnail handles.
     thumb_documents: Vec<(DocId, std::sync::Weak<Document>)>,
     /// Content bounds cached per (key, revision): scanning a 36 MP layer every frame cost ~77 ms.
@@ -926,6 +929,8 @@ mod window_frame_tests;
 
 #[cfg(test)]
 mod browse_field_tests;
+#[cfg(test)]
+mod export_quality_tests;
 #[cfg(test)]
 mod options_hit_area_tests;
 #[cfg(test)]

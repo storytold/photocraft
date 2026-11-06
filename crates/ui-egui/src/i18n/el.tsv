@@ -4200,6 +4200,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Font size presets	Προεπιλογές μεγέθους γραμματοσειράς
 	Leading presets	Προεπιλογές διάστιχου
 	Tracking presets	Προεπιλογές διαστήματος χαρακτήρων
+
+	The GPU compositor is still being prepared	The GPU compositor is still being prepared
 	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	Μη έγκυρη αριθμητική τιμή. Απαιτείται ακέραιος αριθμός μεταξύ {min}% και {max}%. Εισήχθη η προηγούμενη τιμή.
 	Color Aware	Με βάση το χρώμα
 	Decontaminate Colors	Απολύμανση χρωμάτων
@@ -4266,6 +4268,21 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	The frame is unavailable	Το πλαίσιο δεν είναι διαθέσιμο
 	X	X
 	Y	Y
+
+# Channels panel menu (#11451)
+	New Channel…	Νέο κανάλι…
+	Duplicate Channel	Δημιουργία αντιγράφου καναλιού
+	Delete Channel	Διαγραφή καναλιού
+	New Spot Channel…	Νέο κανάλι πλακάτου χρώματος…
+	Merge Spot Channel	Συγχώνευση καναλιού πλακάτου χρώματος
+	Channel Options…	Επιλογές καναλιού…
+	Split Channels	Διαχωρισμός καναλιών
+	Merge Channels…	Συγχώνευση καναλιών…
+	Specify Channels:	Καθορισμός καναλιών:
+	Not enough grayscale documents for this mode.	Δεν υπάρχουν αρκετά έγγραφα σε κλίμακα του γκρι για αυτή τη λειτουργία.
+	Pick a different document for each channel.	Επιλέξτε διαφορετικό έγγραφο για κάθε κανάλι.
+	A picked document is no longer open.	Ένα από τα επιλεγμένα έγγραφα δεν είναι πλέον ανοιχτό.
+	A picked document is no longer a grayscale document of the same size.	Ένα από τα επιλεγμένα έγγραφα δεν είναι πλέον έγγραφο σε κλίμακα του γκρι ίδιου μεγέθους.
 
 # PDF Options (PDF/X-1a, PDF/X-3, PDF/X-4)
 	A {bleed} mm bleed leaves no trim on this {width} × {height} mm page.	Περιθώριο ξακρίσματος {bleed} mm δεν αφήνει τελικό μέγεθος σε αυτή τη σελίδα {width} × {height} mm.

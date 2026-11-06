@@ -64,7 +64,6 @@ pub mod zoom_window_fit;
 pub(crate) use cursors::eyedropper_ring_colors;
 pub(crate) use cursors::{alt_picks, alt_samples, composite_color, paint_bucket_cursor, pen_cursor, pencil_cursor_rect, pencil_tip_is_round, pipette_cursor};
 use cursors::{brush_tip_centre, eyedropper_ring, precise_other_cursor, visible_crosshair};
-#[cfg(test)]
 pub(crate) use display::GPU_OUTPUT;
 use display::texture_key;
 pub(crate) use display::{cache_key, canvas_display, display_doc, display_image};
@@ -507,7 +506,7 @@ fn paint_canvas(
         }
     }
     // Channels panel: alpha / Quick Mask overlays and single-channel views (channel_view.rs).
-    if let Some(tex) = crate::channel_view::ensure(app, ctx, idx) {
+    if let Some(tex) = crate::channel_view::ensure(app, ctx, idx, output) {
         // Rendered from the live preview, so over the area the preview is shown in.
         let a = shown_area;
         if view.rotation.abs() > 0.05 {
@@ -2221,12 +2220,12 @@ mod rotation_preview_isolation_tests {
             .unwrap();
         let before = app.session.active().unwrap().doc.clone();
         let ctx = egui::Context::default();
-        let texture = crate::channel_view::ensure(&mut app, &ctx, 0).unwrap();
+        let texture = crate::channel_view::ensure(&mut app, &ctx, 0, None).unwrap();
         ctx.tex_manager().write().take_delta().clear();
         let dialog = crate::filter_dialog::open(&mut app, "filter.blur.gaussianBlur").unwrap();
         app.ui.dialogs.last_mut().unwrap().fields.insert("radius".into(), json!(2.0));
         ensure_filter_preview(&mut app, 0, &ctx).unwrap();
-        crate::channel_view::ensure(&mut app, &ctx, 0);
+        crate::channel_view::ensure(&mut app, &ctx, 0, None);
         let mut delta = ctx.tex_manager().write().take_delta();
         let egui::ImageData::Color(image) = &delta.set.get(&texture).expect("filter preview must update channel overlay")[0].image;
         let st = app.session.active().unwrap();
@@ -2236,16 +2235,16 @@ mod rotation_preview_isolation_tests {
         delta.clear();
         assert!(std::sync::Arc::ptr_eq(&before, &app.session.active().unwrap().doc));
         app.ui.dialogs.last_mut().unwrap().fields.insert("__preview".into(), json!(false));
-        crate::channel_view::ensure(&mut app, &ctx, 0);
+        crate::channel_view::ensure(&mut app, &ctx, 0, None);
         let mut delta = ctx.tex_manager().write().take_delta();
         let egui::ImageData::Color(image) = &delta.set.get(&texture).expect("Preview off restores channel")[0].image;
         assert_eq!(image.pixels, original);
         delta.clear();
         app.ui.dialogs.last_mut().unwrap().fields.insert("__preview".into(), json!(true));
-        crate::channel_view::ensure(&mut app, &ctx, 0);
+        crate::channel_view::ensure(&mut app, &ctx, 0, None);
         ctx.tex_manager().write().take_delta().clear();
         crate::dialogs::cancel(&mut app, dialog).unwrap();
-        crate::channel_view::ensure(&mut app, &ctx, 0);
+        crate::channel_view::ensure(&mut app, &ctx, 0, None);
         let mut delta = ctx.tex_manager().write().take_delta();
         let egui::ImageData::Color(image) = &delta.set.get(&texture).expect("Cancel restores channel")[0].image;
         assert_eq!(image.pixels, original);
@@ -2383,11 +2382,11 @@ mod rotation_preview_isolation_tests {
                 view.set_color_visible(2, false);
             }
             let ctx = egui::Context::default();
-            let texture = crate::channel_view::ensure(&mut app, &ctx, 0).unwrap();
+            let texture = crate::channel_view::ensure(&mut app, &ctx, 0, None).unwrap();
             ctx.tex_manager().write().take_delta().clear();
             let dialog = crate::filter_dialog::open(&mut app, "filter.blur.gaussianBlur").unwrap();
             app.ui.dialogs.last_mut().unwrap().fields.insert("radius".into(), json!(2.0));
-            crate::channel_view::ensure(&mut app, &ctx, 0).unwrap();
+            crate::channel_view::ensure(&mut app, &ctx, 0, None).unwrap();
             let mut delta = ctx.tex_manager().write().take_delta();
             let egui::ImageData::Color(image) = &delta.set.get(&texture).expect("preview must refresh overlay")[0].image;
             crate::dialogs::confirm(&mut app, dialog).unwrap();

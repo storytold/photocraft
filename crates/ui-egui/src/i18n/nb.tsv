@@ -4788,6 +4788,14 @@ cameraRaw	White Balance: As Shot	Hvitbalanse: som fotografert
 	seconds	sekunder
 	Create a single history state	Opprett én historikktilstand
 
+# Channels panel menu (#11451)
+	Channel Options…	Kanalalternativer…
+	Specify Channels:	Angi kanaler:
+	Not enough grayscale documents for this mode.	Ikke nok dokumenter i gråtoner for denne modusen.
+	Pick a different document for each channel.	Velg et annet dokument for hver kanal.
+	A picked document is no longer open.	Et av de valgte dokumentene er ikke lenger åpent.
+	A picked document is no longer a grayscale document of the same size.	Et av de valgte dokumentene er ikke lenger et dokument i gråtoner av samme størrelse.
+
 # PDF Options (PDF/X-1a, PDF/X-3, PDF/X-4)
 	A {bleed} mm bleed leaves no trim on this {width} × {height} mm page.	Et utfall på {bleed} mm gir ikke noe sluttformat igjen på denne siden på {width} × {height} mm.
 	No CMYK profile is installed. Install the printer's profile (for example ISO Coated v2 or Coated FOGRA39) on this computer and save again.	Ingen CMYK-profil er installert. Installer trykkeriets profil (for eksempel ISO Coated v2 eller Coated FOGRA39) på denne datamaskinen, og lagre på nytt.
