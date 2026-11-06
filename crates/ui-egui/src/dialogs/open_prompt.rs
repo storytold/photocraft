@@ -311,6 +311,9 @@ pub fn answer(app: &mut PhotocraftApp, action: Option<&str>) -> Result<Value, St
     };
     let Some(Pending::Decoded(held)) = app.held_opens.pop_front() else { return Err("no decoded file is waiting to open".into()) };
     remove_open_order(app, 0);
+    // Direct answers use this helper too: retire the consumed prompt before
+    // advancing, or its stale modal blocks the next file after an opening error.
+    app.ui.dialogs.retain(|dialog| !owns(&dialog.fields));
     let r = open(app, *held, Some(action));
     advance(app);
     crate::jobs_ui::end_batch(app);
@@ -340,6 +343,7 @@ pub fn answer_remembering(app: &mut PhotocraftApp, action: &str) -> Result<Value
     };
     let Some(Pending::Decoded(held)) = app.held_opens.pop_front() else { return Err("no decoded file is waiting to open".into()) };
     remove_open_order(app, 0);
+    app.ui.dialogs.retain(|dialog| !owns(&dialog.fields));
     let r = open(app, *held, Some(action));
     while app.prompt_order.front() == Some(&PromptKind::Open) && app.held_opens.front().and_then(Pending::decoded).is_some_and(same) {
         if let Some(Pending::Decoded(held)) = app.held_opens.pop_front() {
@@ -409,6 +413,7 @@ pub(crate) fn answer_damage(app: &mut PhotocraftApp, accept: bool) -> Result<Val
         app.ui.status = crate::i18n::fmt(tl!("Canceled opening {name}"), &[("name", &name)]);
         app.ui.status_error = false;
     }
+    app.ui.dialogs.retain(|dialog| !owns_damage(&dialog.fields));
     advance(app);
     crate::jobs_ui::end_batch(app);
     Ok(json!({"name": name, "continued": accept}))
@@ -744,6 +749,7 @@ pub(crate) fn answer_memory(app: &mut PhotocraftApp, accept: bool) -> Result<Val
         app.prompt_order.remove(pos);
     }
     let id = front.id;
+    app.ui.dialogs.retain(|dialog| !(owns_memory(&dialog.fields) && dialog.fields.get("id").and_then(Value::as_u64) == Some(id)));
     let name = front.name.clone();
     let path = front.path.clone();
     let slot = front.slot;
