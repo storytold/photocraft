@@ -904,6 +904,7 @@ fn a_workspace_from_a_newer_version_shows_the_default_and_stays_saved() {
 }
 
 #[test]
+/// Retain unreadable workspace data across automatic and explicit persistence.
 fn unreadable_workspace_payload_survives_restore_persist_and_explicit_save() {
     for version in [json!(2), json!(99), Value::Null] {
         let (mut app, _, _) = app_with_layers();
@@ -936,6 +937,7 @@ fn unreadable_workspace_payload_survives_restore_persist_and_explicit_save() {
 }
 
 #[test]
+/// Keep obsolete bare layouts and missing workspace data on the ordinary fallback path.
 fn obsolete_bare_layout_and_absent_workspace_do_not_become_retained_payloads() {
     for docking in [Value::Null, json!({"root":null,"floating":[]})] {
         let (mut app, _, _) = app_with_layers();
@@ -948,6 +950,7 @@ fn obsolete_bare_layout_and_absent_workspace_do_not_become_retained_payloads() {
 }
 
 #[test]
+/// Restore a readable Workspace without creating an opaque fallback payload.
 fn readable_workspace_is_loaded_without_retaining_fallback_data() {
     let (mut app, _, _) = app_with_layers();
     app.run("window.panel.float", json!({"panel":"info"})).unwrap();
@@ -959,6 +962,7 @@ fn readable_workspace_is_loaded_without_retaining_fallback_data() {
 }
 
 #[test]
+/// Preserve a newer envelope even when its structure lacks the current layout field.
 fn future_workspace_envelope_without_layout_keeps_existing_forward_compatibility() {
     let (mut app, _, _) = app_with_layers();
     let mut saved = snapshot(&app);
@@ -969,6 +973,7 @@ fn future_workspace_envelope_without_layout_keeps_existing_forward_compatibility
 }
 
 #[test]
+/// Render the fallback while retaining the original payload and explaining the restore failure.
 fn unreadable_workspace_survives_fallback_rendering_with_restore_notice() {
     let _gpu = photocraft_testkit::gpu_lock();
     let mut h = Harness::builder().with_size(vec2(1440.0, 900.0)).build_eframe(|cc| {
@@ -989,6 +994,7 @@ fn unreadable_workspace_survives_fallback_rendering_with_restore_notice() {
     }
 }
 
+/// Apply an unreadable version-two layout and return its original saved envelope.
 fn retained_fallback(app: &mut PhotocraftApp) -> Value {
     let mut saved = snapshot(app);
     saved["docking"] = json!({"version":2,"layout":{"kind":"unreadable"}});
@@ -996,6 +1002,7 @@ fn retained_fallback(app: &mut PhotocraftApp) -> Value {
     assert!(app.ui.docking_kept.is_some());
     saved
 }
+/// Dispatch a synchronous ui.set request through the normal control entry point.
 fn set_ui(app: &mut PhotocraftApp, params: Value) -> Value {
     let (request, _rx) = crate::control::ControlRequest::new("ui.set", params);
     match crate::control::handle(app, &egui::Context::default(), &request) {
@@ -1004,6 +1011,7 @@ fn set_ui(app: &mut PhotocraftApp, params: Value) -> Value {
     }
 }
 #[test]
+/// Replace retained data for actual native layout edits while preserving it for appearance changes and no-ops.
 fn native_fallback_edits_replace_retained_data_but_appearance_and_noops_keep_it() {
     for case in ["toggle", "rail", "tabs", "dock", "visibility"] {
         let (mut app, _, _) = app_with_layers();
@@ -1037,6 +1045,7 @@ fn native_fallback_edits_replace_retained_data_but_appearance_and_noops_keep_it(
     assert_eq!(snapshot(&app)["docking"], saved["docking"]);
 }
 #[test]
+/// Clear restore-owned warnings after recovery or reset while preserving unrelated messages.
 fn successful_restore_and_reset_clear_only_the_owned_warning_and_notice() {
     for reset in [false, true] {
         for unrelated in [false, true] {
@@ -1065,6 +1074,7 @@ fn successful_restore_and_reset_clear_only_the_owned_warning_and_notice() {
     }
 }
 #[test]
+/// Keep the restore explanation visible when standard or fullscreen chrome hides the status bar.
 fn restore_notice_is_visible_with_hidden_status_bar_and_fullscreen_chrome() {
     use egui_kittest::kittest::Queryable as _;
     let _gpu = photocraft_testkit::gpu_lock();
@@ -1089,6 +1099,7 @@ fn restore_notice_is_visible_with_hidden_status_bar_and_fullscreen_chrome() {
 }
 
 #[test]
+/// Exercise real Window-menu visibility and collapse edits, including no-op show requests.
 fn window_menu_reveals_hides_and_expands_replace_fallback_but_noop_show_keeps_it() {
     let ctx = egui::Context::default();
     for (id, group) in [("window.panel.history", Group::History), ("window.panel.gradients", Group::Color)] {
@@ -1113,6 +1124,7 @@ fn window_menu_reveals_hides_and_expands_replace_fallback_but_noop_show_keeps_it
 }
 
 #[test]
+/// Require recovery keys in every catalog and verify live Russian-to-German notice translation.
 fn restore_notice_translates_status_and_live_notice_in_all_catalogs() {
     let body = "It has been preserved; editing panels or resetting the workspace will replace it.";
     for lang in crate::i18n::Lang::all().filter(|lang| lang.code() != "en") {
@@ -1138,6 +1150,7 @@ fn restore_notice_translates_status_and_live_notice_in_all_catalogs() {
 }
 
 #[test]
+/// Render and query the Russian restore notice with the status bar hidden.
 fn restore_notice_renders_in_russian_without_status_chrome() {
     use egui_kittest::kittest::Queryable as _;
     let _gpu = photocraft_testkit::gpu_lock();
@@ -1161,6 +1174,7 @@ fn restore_notice_renders_in_russian_without_status_chrome() {
 }
 
 #[test]
+/// Refresh startup and switched-language restore status without overwriting unrelated errors.
 fn restore_status_uses_startup_language_and_follows_switches_only_while_owned() {
     let _gpu = photocraft_testkit::gpu_lock();
     let mut h = Harness::builder().with_size(vec2(1440.0, 900.0)).build_eframe(|cc| {

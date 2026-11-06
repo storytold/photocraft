@@ -72,6 +72,7 @@ pub(crate) fn post_persistent(app: &mut PhotocraftApp, title: &str, lines: Vec<S
     cap_notices(app);
 }
 
+/// Bound the notice stack, preferentially evicting temporary unpinned messages.
 fn cap_notices(app: &mut PhotocraftApp) {
     while app.ui.notices.len() > MAX_NOTICES {
         let oldest_temporary = app.ui.notices.iter().position(|notice| notice.dismiss_pref.is_none() && !notice.persistent).unwrap_or(0);
@@ -546,6 +547,7 @@ mod tests {
         assert!(ctx.has_requested_repaint(), "the frame that drops a notice asks for another");
     }
     #[test]
+    /// Keep the restore warning past auto-hide and transient stack pressure until explicit acknowledgement.
     fn restore_notice_survives_auto_hide_and_stack_pressure_until_acknowledged() {
         let mut app = PhotocraftApp::new(Session::new(), Services::default());
         let mut saved = crate::dock::snapshot(&app);

@@ -264,6 +264,7 @@ fn flag_param(p: &Value, cur: bool) -> bool {
     p.get("on").and_then(Value::as_bool).unwrap_or(!cur)
 }
 
+/// Apply a recognized view command, preserving retained layouts for no-op panel requests.
 fn run(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Result<Value, String> {
     if let Some((panel, tab)) = panel_tab(app, id) {
         let group = crate::dock::Group::from_key(panel);

@@ -745,6 +745,7 @@ fn toggle_panels(app: &mut PhotocraftApp) -> Result<Value, String> {
     Ok(Value::Null)
 }
 
+/// Toggle or expand a panel group and replace retained fallback data after a layout edit.
 fn toggle_panel(app: &mut PhotocraftApp, id: &str) -> Result<Value, String> {
     let key = &id["window.toggle.".len()..];
     // A shown but collapsed dock group is expanded rather than hidden (#129).
