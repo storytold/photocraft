@@ -8,6 +8,10 @@ pub struct ToolOptions {
     pub tolerance: f32,
     pub contiguous: bool,
     pub anti_alias: bool,
+    /// Paint Bucket › Soft Edge (a PhotoCraft addition, off by default): also fill the anti-aliased
+    /// pixels along a line in proportion, so no light halo is left next to it. Anti-alias alone only
+    /// smooths the fill's own edge, as in Photoshop.
+    pub bucket_soft_edge: bool,
     /// Sample All Layers, kept per tool as in Photoshop (#5524). Stored under a new key, so the
     /// single shared `sample_all_layers` of older preferences is ignored on load.
     pub sample_all: SampleAllLayers,
@@ -356,6 +360,7 @@ impl Default for ToolOptions {
             tolerance: 32.0,
             contiguous: true,
             anti_alias: true,
+            bucket_soft_edge: false,
             sample_all: SampleAllLayers::default(),
             object_finder: true,
             remove_new_layer: false,

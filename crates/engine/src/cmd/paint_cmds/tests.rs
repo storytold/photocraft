@@ -98,7 +98,7 @@ fn bucket_sample_all_layers_covers_the_soft_edge_of_a_lower_layers_line() {
         })
         .unwrap();
         let before = s.active().unwrap().doc.layer(bottom).unwrap().clone();
-        let p = json!({"x": 2, "y": 2, "color": "#ff0000", "tolerance": 32, "antiAlias": true, "sampleAllLayers": true});
+        let p = json!({"x": 2, "y": 2, "color": "#ff0000", "tolerance": 32, "softEdge": true, "sampleAllLayers": true});
         assert_eq!(s.execute("paint.bucket", p).unwrap()["filled"], true);
         assert_eq!(px(&s, 2, 5), vec![1.0, 0.0, 0.0, 1.0], "depth {depth}: flat white is filled");
         let (a8, a9) = (px(&s, 8, 5)[3], px(&s, 9, 5)[3]);
@@ -355,9 +355,10 @@ fn bucket_and_gradient_reject_non_numeric_opacity_without_editing() {
     }
 }
 
-/// The Paint Bucket fills right up to a line whose edge is anti-aliased instead of leaving a
-/// light halo between the fill and the line (the soft pixels are filled in proportion to how
-/// much of them is the sheet's colour).
+/// With the Soft Edge option the Paint Bucket fills right up to a line whose edge is anti-aliased
+/// instead of leaving a light halo between the fill and the line (the soft pixels are filled in
+/// proportion to how much of them is the sheet's colour). It is off by default, and Anti-alias
+/// alone behaves as it always did.
 #[test]
 fn bucket_fills_the_soft_edge_of_a_line_without_a_halo() {
     for depth in [8, 16, 32] {
@@ -369,14 +370,18 @@ fn bucket_fills_the_soft_edge_of_a_line_without_a_halo() {
             s.execute("edit.fill", json!({"color": grey})).unwrap();
         }
         s.execute("select.deselect", json!({})).unwrap();
+        // Anti-alias alone (the default) leaves the soft pixels as the Magic Wand would.
         s.execute("paint.bucket", json!({"x": 2, "y": 2, "color": "#ff0000", "tolerance": 32, "antiAlias": true})).unwrap();
+        assert!(px(&s, 9, 2)[1] > 0.4, "depth {depth}: Anti-alias alone does not reach the ramp: {:?}", px(&s, 9, 2));
+        assert!(s.undo());
+        s.execute("paint.bucket", json!({"x": 2, "y": 2, "color": "#ff0000", "tolerance": 32, "softEdge": true})).unwrap();
         assert_eq!(&px(&s, 2, 2)[..3], &[1.0, 0.0, 0.0], "depth {depth}: flat white is filled");
         // Green falls from 0.75 to 0.25 and from 0.5 to 0.25 of what it was: filled in proportion.
         let (g8, g9) = (px(&s, 8, 2)[1], px(&s, 9, 2)[1]);
         assert!(g8 < 0.35 && g9 < 0.35, "depth {depth}: the soft pixels next to the line are mostly filled: {g8} {g9}");
         assert_eq!(&px(&s, 10, 2)[..3], &[0.0, 0.0, 0.0], "depth {depth}: the line is not painted");
         assert_eq!(&px(&s, 15, 2)[..3], &[1.0, 1.0, 1.0], "depth {depth}: the other side of the line is another region");
-        // Without anti-alias the soft pixels are not touched.
+        // Without the soft edge (and without anti-alias) the soft pixels are not touched.
         let mut s2 = Session::new();
         s2.execute("file.new", json!({"width": 20, "height": 6, "depth": depth, "background": "white"})).unwrap();
         for (x, grey) in [(8, "#bfbfbf"), (9, "#808080"), (10, "#000000")] {
@@ -384,8 +389,8 @@ fn bucket_fills_the_soft_edge_of_a_line_without_a_halo() {
             s2.execute("edit.fill", json!({"color": grey})).unwrap();
         }
         s2.execute("select.deselect", json!({})).unwrap();
-        s2.execute("paint.bucket", json!({"x": 2, "y": 2, "color": "#ff0000", "tolerance": 32, "antiAlias": false})).unwrap();
-        assert!((px(&s2, 9, 2)[1] - 128.0 / 255.0).abs() < 0.02, "depth {depth}: unchanged without anti-alias");
+        s2.execute("paint.bucket", json!({"x": 2, "y": 2, "color": "#ff0000", "tolerance": 32, "antiAlias": false, "softEdge": false})).unwrap();
+        assert!((px(&s2, 9, 2)[1] - 128.0 / 255.0).abs() < 0.02, "depth {depth}: unchanged without the soft edge");
     }
 }
 
@@ -409,14 +414,14 @@ fn bucket_timing_on_24_megapixels() {
     .unwrap();
     // The lines stay on the active layer, so the layer-only and all-layer runs fill the same soft edges.
     for all in [false, true] {
-        for (contiguous, aa) in [(true, false), (true, true), (false, false), (false, true)] {
+        for (contiguous, soft) in [(true, false), (true, true), (false, false), (false, true)] {
             let t = std::time::Instant::now();
             s.execute(
                 "paint.bucket",
-                json!({"x": 5, "y": 5, "color": "#ff0000", "tolerance": 32, "antiAlias": aa, "contiguous": contiguous, "sampleAllLayers": all}),
+                json!({"x": 5, "y": 5, "color": "#ff0000", "tolerance": 32, "softEdge": soft, "contiguous": contiguous, "sampleAllLayers": all}),
             )
             .unwrap();
-            println!("paint.bucket sampleAllLayers={all} contiguous={contiguous} antiAlias={aa}: {:?}", t.elapsed());
+            println!("paint.bucket sampleAllLayers={all} contiguous={contiguous} softEdge={soft}: {:?}", t.elapsed());
             assert!(s.undo());
         }
     }

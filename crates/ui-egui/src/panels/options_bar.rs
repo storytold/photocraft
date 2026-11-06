@@ -409,6 +409,8 @@ fn selection_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: 
             opt_label(ui, tl!("Tolerance"));
             widgets::value_field(ui, &mut app.ui.tool_options.tolerance, 0.0..=255.0, "", 58.0);
             widgets::checkbox(ui, &mut app.ui.tool_options.anti_alias, tl!("Anti-alias"));
+            widgets::checkbox(ui, &mut app.ui.tool_options.bucket_soft_edge, tl!("Soft Edge"))
+                .on_hover_text(tl!("Also fill the soft pixels along a line, so no light halo is left next to it"));
             widgets::checkbox(ui, &mut app.ui.tool_options.contiguous, tl!("Contiguous"));
             widgets::checkbox(ui, &mut app.ui.tool_options.sample_all.paint_bucket, tl!("All Layers"));
         }

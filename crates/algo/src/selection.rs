@@ -252,6 +252,21 @@ impl Region {
     }
 }
 
+/// The Magic Wand's tolerance as whole channel steps (the `+ 1e-3` keeps a tolerance of 32.0 from
+/// rounding down to 31 after a float round trip). A NaN or negative tolerance is 0.
+pub(crate) fn tolerance_steps(tolerance: f32) -> i32 {
+    (tolerance + 1e-3).floor().max(0.0) as i32
+}
+
+/// Whether `p` is similar to the seed colour `target` within `tol` steps ([`tolerance_steps`]):
+/// every channel, alpha included, is that close. Copying a selection can leave RGB under zero
+/// alpha, and those invisible colours must not split a transparent region into pieces, so two
+/// fully transparent pixels always match when the seed is transparent. Shared by the Magic Wand
+/// and the Paint Bucket's soft edge so the two cannot disagree on what "similar" means.
+pub(crate) fn similar_to_seed(target: [u8; 4], tol: i32, p: [u8; 4]) -> bool {
+    (target[3] == 0 && p[3] == 0) || (0..4).all(|c| (i32::from(p[c]) - i32::from(target[c])).abs() <= tol)
+}
+
 /// Magic wand on 8-bit pixels: a scanline flood fill (or a global match) that only allocates a
 /// byte mark per pixel, then anti-aliases just the edges inside the touched bounding box.
 /// Matches [`magic_wand`] for 8-bit sources. `None` if the seed is outside `area`.
@@ -264,10 +279,8 @@ pub fn wand_region(img: &[[u8; 4]], area: Rect, seed: (i32, i32), tolerance: f32
         return None;
     }
     let target = img[(seed.1 - area.y0) as usize * w + (seed.0 - area.x0) as usize];
-    let tol = (tolerance + 1e-3).floor().max(0.0) as i32;
-    // Copying a selection can leave RGB under zero alpha. Those invisible colours must not
-    // split a transparent region into pieces, as if the copied source were still visible.
-    let similar = |p: [u8; 4]| (target[3] == 0 && p[3] == 0) || (0..4).all(|c| (p[c] as i32 - target[c] as i32).abs() <= tol);
+    let tol = tolerance_steps(tolerance);
+    let similar = |p: [u8; 4]| similar_to_seed(target, tol, p);
     let mut marks = vec![0u8; w * h];
     let (mut bx0, mut by0, mut bx1, mut by1) = (usize::MAX, usize::MAX, 0usize, 0usize);
     if contiguous {

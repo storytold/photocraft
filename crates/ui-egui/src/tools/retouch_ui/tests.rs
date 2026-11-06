@@ -158,6 +158,32 @@ fn paint_bucket_mode_reaches_the_fill() {
     assert!(active(&app).surface().unwrap().rgba(20, 20)[3] < 0.01, "cleared");
 }
 
+/// Soft Edge is its own Paint Bucket option, off by default: Anti-alias alone does not send it, and
+/// turning it on reaches the command (and survives in the saved tool options).
+#[test]
+fn paint_bucket_soft_edge_is_a_separate_option_off_by_default() {
+    let mut app = app();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.ui.tool = Tool::PaintBucket;
+    assert!(app.ui.tool_options.anti_alias && !app.ui.tool_options.bucket_soft_edge);
+    let click = |app: &mut PhotocraftApp| {
+        let m = egui::Modifiers::NONE;
+        tool_event(app, ToolEvent::Down { x: 20.0, y: 20.0, pressure: 1.0 }, m);
+        tool_event(app, ToolEvent::Up { x: 20.0, y: 20.0 }, m);
+    };
+    click(&mut app);
+    let p = &app.session.journal.last().unwrap().1;
+    assert_eq!((p["antiAlias"].as_bool(), p["softEdge"].as_bool()), (Some(true), Some(false)));
+    app.ui.tool_options.bucket_soft_edge = true;
+    click(&mut app);
+    assert_eq!(app.session.journal.last().unwrap().1["softEdge"], true);
+    // Options saved before the option existed load with it off.
+    let mut saved = serde_json::to_value(&app.ui.tool_options).unwrap();
+    saved.as_object_mut().unwrap().remove("bucket_soft_edge");
+    let old: crate::state::ToolOptions = serde_json::from_value(saved).unwrap();
+    assert!(!old.bucket_soft_edge);
+}
+
 #[test]
 fn clone_without_a_source_names_the_platform_modifier() {
     // Option-click on the Mac, Alt-click elsewhere (#251).

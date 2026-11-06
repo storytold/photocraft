@@ -178,23 +178,25 @@ pub fn bucket_fill(
     tolerance: f32,
     contiguous: bool,
     anti_alias: bool,
+    soft_edge: bool,
     color: [f32; 4],
     opacity: f32,
     selection: Option<&Surface>,
     lock_transparency: bool,
 ) -> bool {
-    bucket_fill_src(s, area, seed, tolerance, contiguous, anti_alias, opacity, selection, lock_transparency, |_, _| color)
+    bucket_fill_src(s, area, seed, tolerance, contiguous, anti_alias, soft_edge, opacity, selection, lock_transparency, |_, _| color)
 }
 
 /// How far (in pixels) the soft edge of a bucket fill reaches past the pixels that match the seed.
 const FRINGE: i32 = 3;
 
 /// The region a Paint Bucket click fills: the pixels similar to the seed (as the Magic Wand finds
-/// them) and, with `anti_alias`, a soft edge.
+/// them), with the Magic Wand's own edge (`anti_alias` smooths just the fill's boundary, as in
+/// [`crate::selection::wand_region`]) or, with `soft_edge`, a soft edge that reaches past it.
 ///
 /// A line's anti-aliased edge is a ramp from the sheet's colour to the line's, and its outer
 /// pixels are too far from the seed colour to match, so a plain flood fill leaves them as a halo
-/// between the fill and the line. With `anti_alias`, every non-matching pixel within [`FRINGE`]
+/// between the fill and the line. With `soft_edge` (`anti_alias` then plays no part), every non-matching pixel within [`FRINGE`]
 /// pixels of the region is covered by how much of it is the seed colour rather than the
 /// strongest different colour on its ramp: `1 - d / d_max`, where `d` is its distance from the
 /// seed colour and `d_max` the distance at the top of the ramp (the line). A ramp climbs in
@@ -203,13 +205,21 @@ const FRINGE: i32 = 3;
 /// side of a thin line (whose ramp leads away from the region) are not, and a hard edge stays hard. Matching pixels keep full coverage (the Magic Wand's own edge blend would under-fill
 /// them). Pixels of a similar colour that are not connected to the seed (`contiguous`) are never
 /// covered.
-pub fn bucket_region(img: &[[u8; 4]], area: Rect, seed: (i32, i32), tolerance: f32, contiguous: bool, anti_alias: bool) -> Option<crate::selection::Region> {
-    let core = crate::selection::wand_region(img, area, seed, tolerance, contiguous, false)?;
-    if !anti_alias {
-        return Some(core);
+pub fn bucket_region(
+    img: &[[u8; 4]],
+    area: Rect,
+    seed: (i32, i32),
+    tolerance: f32,
+    contiguous: bool,
+    anti_alias: bool,
+    soft_edge: bool,
+) -> Option<crate::selection::Region> {
+    if !soft_edge {
+        return crate::selection::wand_region(img, area, seed, tolerance, contiguous, anti_alias);
     }
+    let core = crate::selection::wand_region(img, area, seed, tolerance, contiguous, false)?;
     let w = area.width() as usize;
-    let tol = (tolerance + 1e-3).floor().max(0.0) as i32;
+    let tol = crate::selection::tolerance_steps(tolerance);
     let at = |x: i32, y: i32| -> Option<[u8; 4]> {
         if !area.contains(x, y) {
             return None;
@@ -219,9 +229,9 @@ pub fn bucket_region(img: &[[u8; 4]], area: Rect, seed: (i32, i32), tolerance: f
     let target = at(seed.0, seed.1)?;
     // Distance from the seed colour. Against a transparent seed only opacity counts: the colour
     // under zero alpha is meaningless.
-    // The Magic Wand's own rule (`wand_region`), so a pixel it left out for being a different
-    // colour is never mistaken for a disconnected part of the seed's region.
-    let similar = |p: [u8; 4]| (target[3] == 0 && p[3] == 0) || (0..4).all(|c| (i32::from(p[c]) - i32::from(target[c])).abs() <= tol);
+    // The Magic Wand's own rule (`wand_region`'s, shared), so a pixel it left out for being a
+    // different colour is never mistaken for a disconnected part of the seed's region.
+    let similar = |p: [u8; 4]| crate::selection::similar_to_seed(target, tol, p);
     let dist = |p: [u8; 4]| -> i32 {
         if target[3] == 0 { i32::from(p[3]) } else { (0..4).map(|c| (i32::from(p[c]) - i32::from(target[c])).abs()).max().unwrap_or(0) }
     };
@@ -357,12 +367,27 @@ pub fn bucket_fill_src(
     tolerance: f32,
     contiguous: bool,
     anti_alias: bool,
+    soft_edge: bool,
     opacity: f32,
     selection: Option<&Surface>,
     lock_transparency: bool,
     src: impl Fn(i32, i32) -> [f32; 4] + Sync,
 ) -> bool {
-    bucket_fill_inks(s, area, seed, tolerance, contiguous, anti_alias, opacity, selection, lock_transparency, src, None, FillMode::Blend(BlendMode::Normal))
+    bucket_fill_inks(
+        s,
+        area,
+        seed,
+        tolerance,
+        contiguous,
+        anti_alias,
+        soft_edge,
+        opacity,
+        selection,
+        lock_transparency,
+        src,
+        None,
+        FillMode::Blend(BlendMode::Normal),
+    )
 }
 
 /// [`bucket_fill_src`] where `inks` (CMYK, 0..1) are what a fully covered pixel of a CMYK target
@@ -376,6 +401,7 @@ pub fn bucket_fill_inks(
     tolerance: f32,
     contiguous: bool,
     anti_alias: bool,
+    soft_edge: bool,
     opacity: f32,
     selection: Option<&Surface>,
     lock_transparency: bool,
@@ -387,7 +413,7 @@ pub fn bucket_fill_inks(
         return false;
     }
     let img = crate::selection::rgba8_image(s, area);
-    let Some(region) = bucket_region(&img, area, seed, tolerance, contiguous, anti_alias) else { return false };
+    let Some(region) = bucket_region(&img, area, seed, tolerance, contiguous, anti_alias, soft_edge) else { return false };
     drop(img);
     bucket_fill_region_inks(s, &region, opacity, selection, lock_transparency, src, inks, mode);
     true
@@ -486,10 +512,10 @@ mod tests {
         let a = Rect::new(0, 0, 10, 10);
         s.fill_rect(a, &[1.0, 1.0, 1.0, 1.0]);
         s.fill_rect(Rect::new(5, 0, 6, 10), &[0.0, 0.0, 0.0, 1.0]);
-        assert!(bucket_fill(&mut s, a, (1, 1), 10.0, true, false, [1.0, 0.0, 0.0, 1.0], 1.0, None, false));
+        assert!(bucket_fill(&mut s, a, (1, 1), 10.0, true, false, false, [1.0, 0.0, 0.0, 1.0], 1.0, None, false));
         assert_eq!(s.pixel(2, 2), vec![1.0, 0.0, 0.0, 1.0]);
         assert_eq!(s.pixel(8, 2), vec![1.0, 1.0, 1.0, 1.0]);
-        assert!(!bucket_fill(&mut s, a, (50, 1), 10.0, true, false, [1.0, 0.0, 0.0, 1.0], 1.0, None, false));
+        assert!(!bucket_fill(&mut s, a, (50, 1), 10.0, true, false, false, [1.0, 0.0, 0.0, 1.0], 1.0, None, false));
     }
 
     #[test]
@@ -521,7 +547,7 @@ mod tests {
     fn bucket_covers_the_soft_edge_of_a_line_instead_of_leaving_a_halo() {
         let (mut s, a) = soft_line_sheet();
         let img = crate::selection::rgba8_image(&s, a);
-        let region = bucket_region(&img, a, (2, 2), 32.0, true, true).unwrap();
+        let region = bucket_region(&img, a, (2, 2), 32.0, true, false, true).unwrap();
         // The flat white is filled completely, right up to the ramp (no under-covered edge pixel).
         assert_eq!(region.at(6, 2), 1.0, "flat white next to the ramp");
         assert_eq!(region.at(2, 2), 1.0);
@@ -536,7 +562,7 @@ mod tests {
         assert_eq!(region.at(10, 2), 0.0);
         assert_eq!(region.at(15, 2), 0.0, "the other side of the line is another region");
         // Painted: the ramp pixels move toward the fill colour instead of staying light grey.
-        bucket_fill(&mut s, a, (2, 2), 32.0, true, true, [1.0, 0.0, 0.0, 1.0], 1.0, None, false);
+        bucket_fill(&mut s, a, (2, 2), 32.0, true, false, true, [1.0, 0.0, 0.0, 1.0], 1.0, None, false);
         assert!(s.pixel(8, 2)[1] < 0.5, "the soft pixel next to the line is mostly filled: {:?}", s.pixel(8, 2));
         assert_eq!(s.pixel(10, 2)[0..3], [0.0, 0.0, 0.0], "the line itself is not painted");
     }
@@ -549,12 +575,12 @@ mod tests {
         s.fill_rect(a, &[1.0, 1.0, 1.0, 1.0]);
         s.fill_rect(Rect::new(6, 0, 7, 4), &[0.0, 0.0, 0.0, 1.0]);
         let img = crate::selection::rgba8_image(&s, a);
-        let hard = bucket_region(&img, a, (1, 1), 32.0, true, true).unwrap();
+        let hard = bucket_region(&img, a, (1, 1), 32.0, true, false, true).unwrap();
         assert_eq!((hard.at(5, 1), hard.at(6, 1), hard.at(7, 1)), (1.0, 0.0, 0.0));
         // Anti-alias off: exactly the pixels within tolerance.
         let (s, a) = soft_line_sheet();
         let img = crate::selection::rgba8_image(&s, a);
-        let off = bucket_region(&img, a, (2, 2), 32.0, true, false).unwrap();
+        let off = bucket_region(&img, a, (2, 2), 32.0, true, false, false).unwrap();
         assert_eq!((off.at(6, 2), off.at(8, 2), off.at(9, 2)), (1.0, 0.0, 0.0));
     }
 
@@ -567,13 +593,58 @@ mod tests {
             s.fill_rect(Rect::new(x, 0, x + 1, 4), &[0.0, 0.0, 0.0, alpha]);
         }
         let img = crate::selection::rgba8_image(&s, a);
-        let region = bucket_region(&img, a, (2, 2), 32.0, true, true).unwrap();
+        let region = bucket_region(&img, a, (2, 2), 32.0, true, false, true).unwrap();
         assert_eq!(region.at(2, 2), 1.0);
         assert_eq!(region.at(11, 2), 0.0, "the stroke core");
         // A stroke edge of alpha 0.6 gets 40 % fill: the fill meets the line without a gap.
         assert!((region.at(10, 2) - 0.4).abs() < 0.1, "{}", region.at(10, 2));
         assert!((region.at(9, 2) - 0.8).abs() < 0.1, "{}", region.at(9, 2));
         assert_eq!(region.at(15, 2), 0.0, "beyond the stroke is a separate region");
+    }
+
+    /// Without the soft edge the region is exactly the Magic Wand's, whether or not Anti-alias is on
+    /// (so existing fills, pattern fills included, are unchanged); the soft edge is its own option.
+    #[test]
+    fn bucket_without_a_soft_edge_is_the_magic_wands_region() {
+        let (s, a) = soft_line_sheet();
+        let img = crate::selection::rgba8_image(&s, a);
+        for (contiguous, anti_alias) in [(true, false), (true, true), (false, false), (false, true)] {
+            let wand = crate::selection::wand_region(&img, a, (2, 2), 32.0, contiguous, anti_alias).unwrap();
+            let bucket = bucket_region(&img, a, (2, 2), 32.0, contiguous, anti_alias, false).unwrap();
+            assert_eq!((bucket.bbox, &bucket.mask), (wand.bbox, &wand.mask), "contiguous {contiguous}, anti-alias {anti_alias}");
+        }
+        // And the soft edge reaches past what the Magic Wand takes, with or without Anti-alias.
+        let soft = bucket_region(&img, a, (2, 2), 32.0, true, false, true).unwrap();
+        let wand = crate::selection::wand_region(&img, a, (2, 2), 32.0, true, true).unwrap();
+        assert!(soft.at(9, 2) > wand.at(9, 2) + 0.2, "soft {} vs wand {}", soft.at(9, 2), wand.at(9, 2));
+        let with_aa = bucket_region(&img, a, (2, 2), 32.0, true, true, true).unwrap();
+        assert_eq!(soft.mask, with_aa.mask, "Anti-alias does not change the soft edge");
+    }
+
+    /// The soft edge decides what is "similar" exactly as the Magic Wand does, tolerance and the
+    /// transparent-seed rule included, so a pixel the wand takes is never given a partial edge.
+    #[test]
+    fn the_soft_edge_agrees_with_the_magic_wand_on_what_is_similar() {
+        let a = Rect::new(0, 0, 8, 3);
+        let mut img = vec![[0u8; 4]; 24];
+        for y in 0..3 {
+            for (x, px) in [(4usize, [9u8, 200, 30, 0]), (5, [255, 0, 0, 255]), (6, [255, 0, 0, 255]), (7, [255, 0, 0, 255])] {
+                img[y * 8 + x] = px;
+            }
+        }
+        // A transparent seed: invisible pixels count as similar whatever RGB they hold.
+        let wand = crate::selection::wand_region(&img, a, (0, 1), 8.0, true, false).unwrap();
+        let bucket = bucket_region(&img, a, (0, 1), 8.0, true, false, true).unwrap();
+        assert_eq!(wand.at(4, 1), 1.0);
+        assert_eq!(bucket.at(4, 1), 1.0, "a transparent pixel with other RGB is still part of the region");
+        // Tolerance is the same whole-step rule, NaN and negative included.
+        for tol in [0.0, 7.9999, 8.0, -3.0, f32::NAN] {
+            assert_eq!(crate::selection::tolerance_steps(tol), (tol + 1e-3).floor().max(0.0) as i32);
+        }
+        assert!(crate::selection::similar_to_seed([10, 10, 10, 255], 8, [18, 2, 10, 255]));
+        assert!(!crate::selection::similar_to_seed([10, 10, 10, 255], 8, [19, 10, 10, 255]));
+        assert!(crate::selection::similar_to_seed([0, 0, 0, 0], 0, [9, 9, 9, 0]));
+        assert!(!crate::selection::similar_to_seed([0, 0, 0, 255], 0, [0, 0, 0, 254]));
     }
 
     /// Greyscale rows, three tall, from one brightness per column.
@@ -586,7 +657,7 @@ mod tests {
     fn bucket_fringe_ignores_flat_patches_and_lines_that_are_not_a_ramp() {
         let covered = |cols: &[u8]| {
             let (img, a) = grey_sheet(cols);
-            let r = bucket_region(&img, a, (0, 1), 8.0, true, true).unwrap();
+            let r = bucket_region(&img, a, (0, 1), 8.0, true, false, true).unwrap();
             (0..cols.len() as i32).map(|x| r.at(x, 1)).collect::<Vec<_>>()
         };
         // A two-colour boundary stays hard.
@@ -606,7 +677,7 @@ mod tests {
     fn bucket_fringe_stops_at_the_far_side_of_a_thin_line() {
         // seed | ramp | 1 px line | ramp | other region, all one tolerance apart.
         let (img, a) = grey_sheet(&[255, 255, 128, 0, 128, 255, 255]);
-        let r = bucket_region(&img, a, (0, 1), 8.0, true, true).unwrap();
+        let r = bucket_region(&img, a, (0, 1), 8.0, true, false, true).unwrap();
         assert!((r.at(2, 1) - 0.5).abs() < 0.05);
         assert_eq!((r.at(3, 1), r.at(4, 1), r.at(5, 1), r.at(6, 1)), (0.0, 0.0, 0.0, 0.0), "the other side of the line");
     }
@@ -621,7 +692,7 @@ mod tests {
                 img[y * 6 + x] = [255, 0, 0, alpha];
             }
         }
-        let r = bucket_region(&img, a, (0, 1), 8.0, true, true).unwrap();
+        let r = bucket_region(&img, a, (0, 1), 8.0, true, false, true).unwrap();
         assert!((r.at(3, 1) - (1.0 - 20.0 / 255.0)).abs() < 0.05, "{}", r.at(3, 1));
         assert!((r.at(4, 1) - 0.5).abs() < 0.05);
         assert_eq!(r.at(5, 1), 0.0);
@@ -644,10 +715,10 @@ mod tests {
                 [v.saturating_sub(t), v.saturating_sub(t), v.saturating_sub(t), 255]
             })
             .collect();
-        for (contiguous, aa) in [(true, false), (true, true), (false, false), (false, true)] {
+        for (contiguous, soft) in [(true, false), (true, true), (false, false), (false, true)] {
             let t = Instant::now();
-            let r = bucket_region(&img, a, (5, 5), 32.0, contiguous, aa).unwrap();
-            println!("bucket_region contiguous={contiguous} aa={aa}: {:?} ({} bytes)", t.elapsed(), r.mask.len());
+            let r = bucket_region(&img, a, (5, 5), 32.0, contiguous, false, soft).unwrap();
+            println!("bucket_region contiguous={contiguous} soft_edge={soft}: {:?} ({} bytes)", t.elapsed(), r.mask.len());
         }
         for contiguous in [true, false] {
             let t = Instant::now();
@@ -661,15 +732,15 @@ mod tests {
         let a = Rect::new(0, 0, 3, 3);
         let img = vec![[255u8; 4]; 9];
         // Seed outside the area, an area larger than the data, a one-pixel area, global mode.
-        assert!(bucket_region(&img, a, (5, 5), 32.0, true, true).is_none());
-        assert!(bucket_region(&img[..4], a, (1, 1), 32.0, true, true).is_none());
-        let one = bucket_region(&img[..1], Rect::new(0, 0, 1, 1), (0, 0), 32.0, true, true).unwrap();
+        assert!(bucket_region(&img, a, (5, 5), 32.0, true, false, true).is_none());
+        assert!(bucket_region(&img[..4], a, (1, 1), 32.0, true, false, true).is_none());
+        let one = bucket_region(&img[..1], Rect::new(0, 0, 1, 1), (0, 0), 32.0, true, false, true).unwrap();
         assert_eq!(one.at(0, 0), 1.0);
-        let all = bucket_region(&img, a, (1, 1), 0.0, false, true).unwrap();
+        let all = bucket_region(&img, a, (1, 1), 0.0, false, false, true).unwrap();
         assert!((0..3).all(|y| (0..3).all(|x| all.at(x, y) == 1.0)));
         // NaN and absurd tolerances.
-        assert!(bucket_region(&img, a, (1, 1), f32::NAN, true, true).is_some());
-        assert!(bucket_region(&img, a, (1, 1), 1e30, true, true).is_some());
+        assert!(bucket_region(&img, a, (1, 1), f32::NAN, true, false, true).is_some());
+        assert!(bucket_region(&img, a, (1, 1), 1e30, true, false, true).is_some());
     }
 
     /// The Paint Bucket's Mode: Multiply darkens what's there, Clear erases it (half at 50 %).
@@ -681,13 +752,13 @@ mod tests {
             let mut s = Surface::new(fmt);
             s.fill_rect(a, &grey);
             let red = |_, _| [1.0, 0.0, 0.0, 1.0];
-            assert!(bucket_fill_inks(&mut s, a, (0, 0), 0.0, true, false, 1.0, None, false, red, None, FillMode::Blend(BlendMode::Multiply)));
+            assert!(bucket_fill_inks(&mut s, a, (0, 0), 0.0, true, false, false, 1.0, None, false, red, None, FillMode::Blend(BlendMode::Multiply)));
             let px = s.rgba(1, 0);
             assert!((px[0] - 0.5).abs() < 0.01 && px[1] < 0.01 && (px[3] - 1.0).abs() < 1e-3, "{fmt:?} multiply: {px:?}");
-            assert!(bucket_fill_inks(&mut s, a, (0, 0), 0.0, true, false, 0.5, None, false, red, None, FillMode::Clear));
+            assert!(bucket_fill_inks(&mut s, a, (0, 0), 0.0, true, false, false, 0.5, None, false, red, None, FillMode::Clear));
             assert!((s.rgba(1, 0)[3] - 0.5).abs() < 0.01, "{fmt:?} clear at 50 %");
             // Locked transparency keeps the alpha, so Clear does nothing.
-            assert!(bucket_fill_inks(&mut s, a, (0, 0), 0.0, true, false, 1.0, None, true, red, None, FillMode::Clear));
+            assert!(bucket_fill_inks(&mut s, a, (0, 0), 0.0, true, false, false, 1.0, None, true, red, None, FillMode::Clear));
             assert!((s.rgba(1, 0)[3] - 0.5).abs() < 0.01, "{fmt:?} locked");
         }
     }
