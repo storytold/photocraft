@@ -43,9 +43,10 @@ impl Session {
         self.active_generation
     }
 
-    /// Change marker: advances at least once whenever the active document or layer changes, by any
-    /// path. Compare two readings for equality to know whether anything changed in between; it is
-    /// not an exact count of operations.
+    /// Change marker: advances at least once whenever the active document or layer changes through
+    /// the `Session` API (see the field). Compare two readings for equality to know whether anything
+    /// changed in between; it is not an exact count of operations. A direct write to
+    /// `DocState::active_layer` through `active_mut()` bypasses it.
     pub fn active_layer_changes(&self) -> u64 {
         self.active_layer_changes
     }
