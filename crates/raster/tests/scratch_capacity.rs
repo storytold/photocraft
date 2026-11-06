@@ -9,9 +9,11 @@ use photocraft_raster::spill;
 /// until the room and the status describe the same answer.
 fn answered_capacity() -> Option<u64> {
     let mut room = None;
+    let started = std::time::Instant::now();
     for _ in 0..10 {
         room = spill::scratch_capacity();
         while spill::query_threads_for_tests() != 0 {
+            assert!(started.elapsed() < std::time::Duration::from_secs(30), "scratch capacity query did not finish within 30 seconds: {:?}", spill::stats());
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         if room.is_none() == spill::free_space_unmeasured() {
