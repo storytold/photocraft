@@ -21,7 +21,7 @@ pub const SECTIONS: [(&str, &str); 18] = [
     ("transparencyAndGamut", "Transparency & Gamut"),
     ("unitsAndRulers", "Units & Rulers"),
     ("guidesGridAndSlices", "Guides, Grid & Slices"),
-    ("plugIns", "Plug-ins"),
+    ("plugIns", "Plugins"),
     ("type", "Type"),
     ("enhancedControls", "Enhanced Controls"),
     ("rawDefaults", "Camera Raw Defaults"),
