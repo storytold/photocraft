@@ -48,7 +48,7 @@ tablets against Photoshop side by side.
 | Quick taps keep their pressure | partial | #1967 fixed one case; tap paints a full blob (#1798), tap sensitivity (#1933) |
 | Smooth pressure on Windows | partial | "jumpy" (#2046) |
 | Tilt and rotation drive angle/roundness | partial | macOS, X11, web; not Windows; rotation not applied (#1301) |
-| Eraser end of the pen switches to Eraser | partial | macOS, Windows with Windows Ink (#2285); X11 and web partial |
+| Eraser end of the pen switches to Eraser | partial | macOS, Windows (WinTab; Windows Ink not yet confirmed on hardware, #2285); X11 and web partial |
 
 ## Stroke quality and feel
 

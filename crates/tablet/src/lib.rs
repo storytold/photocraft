@@ -8,6 +8,9 @@
 //! - **Windows** ([`windows::Monitor`]): thread-local message hooks inspect `WM_POINTER*`
 //!   messages on the UI thread to read `PEN_FLAG_BARREL` and the eraser end (`PEN_FLAG_INVERTED`)
 //!   from `GetPointerPenInfo`, which winit 0.30 drops by mapping pen inputs to touch events.
+//! - **Windows WinTab** ([`wintab`]): with Windows Ink disabled for the tablet, a WinTab 1.4
+//!   system context on PhotoCraft's window supplies pressure, tilt, rotation and the eraser end.
+//!   The vendor driver still moves the cursor; [`wintab::poll`] is called once per frame.
 //!   AppKit's monitor API and Windows' thread hooks need OS interop, so `macos.rs` and `windows.rs`
 //!   allow `unsafe` (an isolated, tested helper crate with `SAFETY:`
 //!   comments on every block).
@@ -37,6 +40,8 @@ pub mod xi;
 pub mod macos;
 #[cfg(target_os = "windows")]
 pub mod windows;
+#[cfg(target_os = "windows")]
+pub mod wintab;
 #[cfg(target_os = "linux")]
 pub mod x11;
 

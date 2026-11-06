@@ -6,7 +6,9 @@
 //! each sample into the UI's [`StylusFeed`], where the canvas reads it exactly like the web runner's
 //! Pointer Events and automation's simulated pen. On Windows, winit forwards `WM_POINTER` pressure
 //! as touch force, but drops `PEN_FLAG_BARREL` (`0x0001`) and the eraser end (`PEN_FLAG_INVERTED`);
-//! `photocraft-tablet` recovers them through thread-local message hooks beside winit.
+//! `photocraft-tablet` recovers them through thread-local message hooks beside winit. With Windows
+//! Ink disabled for the tablet, the optional WinTab mode reads pressure, tilt, rotation and the
+//! eraser end from a WinTab 1.4 system context instead ([`install_wintab`]).
 //!
 //! Wayland compositors give a pen only to clients that bind the tablet protocol
 //! (`zwp_tablet_v2`), which winit 0.30 doesn't (and binding it on winit's connection needs
@@ -41,6 +43,41 @@ pub fn install_windows() -> Option<photocraft_tablet::windows::Monitor> {
         log::warn!("tablet input: the WH_CALLWNDPROC hook did not install, so the pen leaving the window may be missed");
     }
     Some(monitor)
+}
+
+/// Installs the WinTab backend on the real PhotoCraft window and returns its per-frame poll.
+///
+/// `enabled` is Preferences > Tools > Pen Tablet > Tablet input set to WinTab. With Windows Ink disabled there, the vendor
+/// driver still moves the cursor; this backend only supplies pressure/tilt/rotation/eraser
+/// through the normal stylus feed. On failure it logs why and leaves Windows Ink untouched.
+#[cfg(target_os = "windows")]
+pub fn install_wintab(cc: &eframe::CreationContext<'_>, feed: &StylusFeed, enabled: bool) -> Option<photocraft_ui_egui::TabletPollFn> {
+    if !enabled {
+        return None;
+    }
+    use eframe::wgpu::rwh::{HasWindowHandle, RawWindowHandle};
+    let hwnd = match cc.window_handle().ok()?.as_raw() {
+        RawWindowHandle::Win32(handle) => handle.hwnd.get(),
+        _ => return None,
+    };
+    let ctx = cc.egui_ctx.clone();
+    if let Err(error) = photocraft_tablet::wintab::install(hwnd, Box::new(move || ctx.request_repaint())) {
+        log::warn!("WinTab backend: {error}");
+        return None;
+    }
+    let sink = sink(feed.clone());
+    log::info!("WinTab backend active (system context)");
+    let logged = std::cell::Cell::new(false);
+    Some(Box::new(move |focused| {
+        photocraft_tablet::wintab::poll(focused, &|sample| {
+            if let Some(sample) = sample
+                && !logged.replace(true)
+            {
+                log::info!("WinTab sample: pressure={:.3} tilt=({:.1},{:.1}) eraser={}", sample.pressure, sample.tilt_x, sample.tilt_y, sample.eraser);
+            }
+            sink(sample);
+        });
+    }))
 }
 
 /// Stylus barrel button down check (Windows). The right mouse button is left to egui, which

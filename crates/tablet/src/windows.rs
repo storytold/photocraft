@@ -217,6 +217,9 @@ unsafe extern "system" fn get_msg_proc(code: i32, w_param: usize, l_param: isize
         // SAFETY: Win32 guarantees that for code >= 0, l_param points to a valid MSG struct
         // dispatched to this thread's message queue.
         let msg = unsafe { &*(l_param as *const MSG) };
+        // The WinTab backend shares this thread hook: it decodes the driver's proximity
+        // messages (and ignores everything else) to clear a pen that left the tablet.
+        crate::wintab::on_message(msg.message, msg.w_param, msg.l_param);
         handle_pointer_message(msg.message, msg.w_param, read_pen_flags);
     }
     // SAFETY: CallNextHookEx passes the parameters down the hook chain. MSDN notes the first

@@ -22,10 +22,16 @@
 //! poisons the tile: edits and saves check the health of the document they publish, plus
 //! [`check_since`] for failures that came and went during the operation. The
 //! infallible display API uses a temporary placeholder, never replacement pixel storage.
+//!
+//! No lock is held across a call into the scratch folder. Opening and measuring it run on a
+//! short-lived query thread, at most one per folder and question; callers wait a bounded time
+//! for the answer, and a late answer still applies if that folder is still the configured one.
+//! Status reads the UI makes every frame stay fast whatever the folder does.
 
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard, Weak};
+use std::sync::{Arc, Condvar, Mutex, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard, Weak};
 use std::time::{Duration, Instant};
 
 use crate::scratch_file::{Extent, ScratchFile};
@@ -261,6 +267,8 @@ struct Config {
     backoff: Duration,
     /// Explicit scratch size limit ([`set_size_cap`]); the free-space reserve always applies.
     size_cap: Option<u64>,
+    /// Scratch bytes the volume allows, as of the last answer; `None` = unmeasured.
+    room: Option<u64>,
 }
 
 struct Pause {
@@ -274,6 +282,51 @@ const RETRY_MAX: Duration = Duration::from_secs(60);
 const SPACE_CHECK_EVERY: u64 = 64 << 20;
 /// Leave at least max(1 GiB, 5 % of the volume) free for the system and other programs.
 const RESERVE_MIN: u64 = 1 << 30;
+/// How long a caller waits for the scratch folder to answer. A healthy disk answers in far less;
+/// the query goes on after this and its answer still counts when it comes.
+const QUERY_WAIT: Duration = Duration::from_secs(2);
+/// Most folder queries in flight at once. A system call on a dead hard mount can't be cancelled,
+/// so each stuck one keeps its thread, and every other folder tried on that mount adds one.
+const MAX_QUERIES: usize = 16;
+
+/// A question in flight about a scratch folder (open it and/or measure it).
+struct Query {
+    dir: PathBuf,
+    prepare: bool,
+    deadline: Instant,
+    done: Arc<QueryDone>,
+}
+
+/// Set once a query's answer has been applied (or discarded).
+#[derive(Default)]
+struct QueryDone {
+    finished: Mutex<bool>,
+    wake: Condvar,
+}
+
+impl QueryDone {
+    fn finish(&self) {
+        *self.finished.lock().unwrap_or_else(PoisonError::into_inner) = true;
+        self.wake.notify_all();
+    }
+
+    fn finished(&self) -> bool {
+        *self.finished.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Wait until the query finishes or `deadline` passes; a deadline already past returns at once.
+    fn wait_until(&self, deadline: Instant) {
+        let Some(left) = deadline.checked_duration_since(Instant::now()) else { return };
+        let done = self.finished.lock().unwrap_or_else(PoisonError::into_inner);
+        drop(self.wake.wait_timeout_while(done, left, |done| !*done).unwrap_or_else(PoisonError::into_inner));
+    }
+}
+
+static QUERIES: Mutex<Vec<Query>> = Mutex::new(Vec::new());
+/// Query threads alive, counted until they finish, including closing any file they opened;
+/// `QUERIES` only dedupes questions.
+static QUERY_THREADS: AtomicUsize = AtomicUsize::new(0);
+static QUERY_HOOK: RwLock<Option<fn(&Path)>> = RwLock::new(None);
 
 static M: Manager = Manager {
     failed: AtomicUsize::new(0),
@@ -288,7 +341,7 @@ static M: Manager = Manager {
     recovering: AtomicBool::new(false),
     space_unmeasured: AtomicBool::new(false),
     registry: Mutex::new(Registry { cells: Vec::new(), hand: 0 }),
-    config: Mutex::new(Config { dir: None, file: None, last_error: None, budget: 0, paused: None, backoff: RETRY_FIRST, size_cap: None }),
+    config: Mutex::new(Config { dir: None, file: None, last_error: None, budget: 0, paused: None, backoff: RETRY_FIRST, size_cap: None, room: None }),
     evictions: AtomicU64::new(0),
     reloads: AtomicU64::new(0),
     written: AtomicU64::new(0),
@@ -348,27 +401,73 @@ impl Manager {
         self.set_active(c.budget);
     }
 
-    /// Open the scratch file and check its volume's room; pause (and say why) if either fails.
-    /// The caller holds the config lock. Returns whether spilling can go ahead.
-    fn prepare(&self, c: &mut Config) -> bool {
-        let Some(dir) = c.dir.clone() else { return false };
-        if c.file.is_none() {
-            match std::fs::create_dir_all(&dir).and_then(|()| ScratchFile::create(&dir)) {
-                Ok(f) => c.file = Some(Arc::new(f)),
-                Err(e) => {
-                    self.pause(c, &format!("could not create a scratch file in {}: {e}", dir.display()));
-                    return false;
-                }
+    /// Apply a finished folder query. `file` is the scratch file a `prepare` query opened (or the
+    /// error), `sampled_used` the scratch bytes in use just before the volume was asked, `space`
+    /// what the volume reported. Discarded if the folder changed meanwhile.
+    fn settle(&self, dir: &Path, prepare: bool, file: Option<std::io::Result<ScratchFile>>, sampled_used: u64, space: Option<(u64, u64)>, done: &QueryDone) {
+        // Declared before the guard so a rejected file closes after the lock is released.
+        let mut _spare: Option<ScratchFile> = None;
+        let mut c = self.config();
+        // Under the config lock, so a caller holding the lock can tell answered from not.
+        done.finish();
+        if c.dir.as_deref() != Some(dir) {
+            return;
+        }
+        match file {
+            Some(Ok(f)) if c.file.is_none() => c.file = Some(Arc::new(f)),
+            Some(Ok(f)) => _spare = Some(f),
+            Some(Err(e)) if c.file.is_none() => {
+                self.pause(&mut c, &format!("could not create a scratch file in {}: {e}", dir.display()));
+                return;
             }
+            Some(Err(_)) | None => {}
         }
         let used = c.file.as_ref().map_or(0, |f| f.used());
-        refresh_space(c, &dir, used);
-        if used >= self.space_limit.load(Ordering::Relaxed) {
-            let msg = no_room(&dir, c.size_cap);
-            self.pause(c, &msg);
-            return false;
+        apply_space(&mut c, sampled_used, space);
+        if !prepare {
+            return;
         }
-        true
+        if c.file.is_none() {
+            // The folder changed away and back while this ran.
+            self.pause(&mut c, &not_responding(dir));
+            return;
+        }
+        if used >= self.space_limit.load(Ordering::Relaxed) {
+            let msg = no_room(dir, c.size_cap);
+            self.pause(&mut c, &msg);
+            return;
+        }
+        if c.paused.is_some() {
+            self.resume(&mut c);
+        }
+    }
+
+    /// Open the scratch file and check its volume's room, waiting up to [`QUERY_WAIT`]; an answer
+    /// that comes later is applied by [`Manager::settle`]. Pauses (and says why) on failure or
+    /// silence. The caller holds no lock.
+    fn prepare(&self, dir: &Path) {
+        let done = ask(dir, true);
+        let mut c = self.config();
+        if c.dir.as_deref() != Some(dir) || done.as_ref().is_some_and(|d| d.finished()) {
+            return;
+        }
+        // No answer in time: it still counts when it comes. Until then:
+        let used = c.file.as_ref().map_or(0, |f| f.used());
+        apply_space(&mut c, used, None);
+        if c.file.is_none() || c.paused.is_some() {
+            self.pause(&mut c, &not_responding(dir));
+        }
+    }
+
+    /// Measure the volume's free space, waiting up to [`QUERY_WAIT`]. The caller holds no lock.
+    fn measure(&self, dir: &Path) {
+        let done = ask(dir, false);
+        let mut c = self.config();
+        if c.dir.as_deref() != Some(dir) || done.as_ref().is_some_and(|d| d.finished()) {
+            return;
+        }
+        let used = c.file.as_ref().map_or(0, |f| f.used());
+        apply_space(&mut c, used, None);
     }
 
     /// Retry a paused scratch disk once its backoff has elapsed. Cheap when not paused.
@@ -376,40 +475,44 @@ impl Manager {
         if !self.paused.load(Ordering::Acquire) {
             return;
         }
-        let mut c = match self.config.try_lock() {
-            Ok(c) => c,
-            Err(std::sync::TryLockError::Poisoned(p)) => p.into_inner(),
-            // Someone else is configuring or retrying.
-            Err(std::sync::TryLockError::WouldBlock) => return,
-        };
+        let c = self.config();
         let due = c.paused.as_ref().is_some_and(|p| Instant::now() >= p.retry_at);
         if !due {
             return;
         }
-        if c.dir.is_none() || c.budget == 0 {
-            c.paused = None;
-            self.paused.store(false, Ordering::Release);
-            return;
+        self.retry_now(c);
+    }
+
+    /// Retry a paused scratch disk now (the guard is released before the folder is asked).
+    fn retry_now(&self, mut c: std::sync::MutexGuard<'_, Config>) {
+        let dir = match c.dir.clone() {
+            Some(dir) if c.budget > 0 => dir,
+            _ => {
+                c.paused = None;
+                self.paused.store(false, Ordering::Release);
+                return;
+            }
+        };
+        // Push the next retry out so other threads don't all wait on this one.
+        let wait = c.backoff;
+        if let Some(p) = &mut c.paused {
+            p.retry_at = Instant::now().checked_add(wait).unwrap_or_else(Instant::now);
         }
-        if self.prepare(&mut c) {
-            self.resume(&mut c);
-        }
+        drop(c);
+        self.prepare(&dir);
     }
 
     /// The scratch file, if spilling is on and the volume still has room.
     fn file(&self) -> Option<Arc<ScratchFile>> {
-        let mut c = self.config();
         if self.budget.load(Ordering::Relaxed) == 0 {
             return None;
         }
-        if c.file.is_none() && !self.prepare(&mut c) {
-            return None;
-        }
-        c.file.clone()
+        self.config().file.clone()
     }
 
-    /// Whether the scratch file may grow further; re-reads free space every
-    /// [`SPACE_CHECK_EVERY`] bytes and pauses spilling when the volume runs low.
+    /// Whether the scratch file may grow further; asks for free space every
+    /// [`SPACE_CHECK_EVERY`] bytes (in the background, never waiting) and pauses spilling when the
+    /// volume runs low.
     fn has_room(&self, file: &ScratchFile) -> bool {
         let used = file.used();
         if used < self.next_space_check.load(Ordering::Relaxed) && used < self.space_limit.load(Ordering::Relaxed) {
@@ -417,8 +520,20 @@ impl Manager {
         }
         let mut c = self.config();
         let Some(dir) = c.dir.clone() else { return false };
-        refresh_space(&c, &dir, used);
         if used < self.space_limit.load(Ordering::Relaxed) {
+            // Ask in the background: this can be any thread, the UI's too. The answer moves the limit.
+            drop(c);
+            let query = start_query(&dir, false);
+            let c = self.config();
+            // A rejected request must remain due. Don't overwrite a new folder's state or an
+            // answer that arrived before this lock was reacquired.
+            if c.dir.as_deref() == Some(dir.as_path()) && !query.as_ref().is_some_and(|(done, _)| done.finished()) {
+                if query.is_some() {
+                    self.next_space_check.store(used.saturating_add(SPACE_CHECK_EVERY), Ordering::Relaxed);
+                } else {
+                    self.space_unmeasured.store(true, Ordering::Relaxed);
+                }
+            }
             return true;
         }
         if c.paused.is_none() {
@@ -491,16 +606,126 @@ impl Manager {
     }
 }
 
-/// Free space on the volume holding `dir`, minus the reserve, sets how far the file may grow.
-/// The caller holds the config lock, so this is the current directory; it also records whether the
-/// volume answered, for [`free_space_unmeasured`].
-fn refresh_space(c: &Config, dir: &Path, used: u64) {
-    let space = free_space(dir);
+/// Record a volume's answer (`None` = it didn't say) and derive the growth limit from it.
+fn apply_space(c: &mut Config, used: u64, space: Option<(u64, u64)>) {
     M.space_unmeasured.store(space.is_none(), Ordering::Relaxed);
-    let room = space.map_or(u64::MAX, |(available, total)| used.saturating_add(available.saturating_sub(RESERVE_MIN.max(total / 20))));
-    let limit = c.size_cap.map_or(room, |cap| cap.min(room));
-    M.space_limit.store(limit, Ordering::Relaxed);
+    c.room = space.map(|(available, total)| used.saturating_add(available.saturating_sub(RESERVE_MIN.max(total / 20))));
+    store_limit(c);
     M.next_space_check.store(used.saturating_add(SPACE_CHECK_EVERY), Ordering::Relaxed);
+}
+
+/// Publish the scratch size the volume and the size limit allow.
+fn store_limit(c: &Config) {
+    let room = c.room.unwrap_or(u64::MAX);
+    M.space_limit.store(c.size_cap.map_or(room, |cap| cap.min(room)), Ordering::Relaxed);
+}
+
+fn not_responding(dir: &Path) -> String {
+    format!("scratch disk {} is not responding", dir.display())
+}
+
+/// Start (or join) a query about `dir`: the same question is never asked by a second thread, and
+/// at most [`MAX_QUERIES`] run at once. `None` if no thread could be started.
+fn start_query(dir: &Path, prepare: bool) -> Option<(Arc<QueryDone>, Instant)> {
+    let mut queries = QUERIES.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(q) = queries.iter().find(|q| q.prepare == prepare && q.dir.as_path() == dir) {
+        return Some((q.done.clone(), q.deadline));
+    }
+    if QUERY_THREADS.load(Ordering::Acquire) >= MAX_QUERIES {
+        return None;
+    }
+    let now = Instant::now();
+    let deadline = now.checked_add(QUERY_WAIT).unwrap_or(now);
+    let done = Arc::new(QueryDone::default());
+    queries.push(Query { dir: dir.to_path_buf(), prepare, deadline, done: done.clone() });
+    let (job_dir, job_done) = (dir.to_path_buf(), done.clone());
+    QUERY_THREADS.fetch_add(1, Ordering::AcqRel);
+    let spawned = std::thread::Builder::new().name("pc-scratch-query".into()).spawn(move || run_query(job_dir, prepare, job_done));
+    if spawned.is_err() {
+        QUERY_THREADS.fetch_sub(1, Ordering::AcqRel);
+        queries.pop();
+        return None;
+    }
+    Some((done, deadline))
+}
+
+/// Ask about `dir` and wait up to [`QUERY_WAIT`] for the answer. The caller holds no lock.
+fn ask(dir: &Path, prepare: bool) -> Option<Arc<QueryDone>> {
+    let (done, deadline) = start_query(dir, prepare)?;
+    done.wait_until(deadline);
+    Some(done)
+}
+
+/// The query thread: touches the folder, then hands the answer to [`Manager::settle`].
+fn run_query(dir: PathBuf, prepare: bool, done: Arc<QueryDone>) {
+    let hook = *QUERY_HOOK.read().unwrap_or_else(PoisonError::into_inner);
+    if let Some(hook) = hook {
+        hook(&dir);
+    }
+    // Before measuring: writes made during the query come off the free space and must not be
+    // counted again on top of it. Another folder's file says nothing about this one.
+    let (open, used) = {
+        let c = M.config();
+        let current = c.file.as_ref().filter(|_| c.dir.as_deref() == Some(dir.as_path()));
+        (prepare && current.is_none(), current.map_or(0, |f| f.used()))
+    };
+    let file = open.then(|| std::fs::create_dir_all(&dir).and_then(|()| ScratchFile::create(&dir)));
+    let space = free_space(&dir);
+    // Forget it first: a caller that joined it can rely on the answer, and a later caller asks anew.
+    QUERIES.lock().unwrap_or_else(PoisonError::into_inner).retain(|q| !Arc::ptr_eq(&q.done, &done));
+    M.settle(&dir, prepare, file, used, space, &done);
+    QUERY_THREADS.fetch_sub(1, Ordering::AcqRel);
+}
+
+/// Whether a query about `dir` is past its wait without an answer.
+fn query_overdue(dir: Option<&Path>) -> bool {
+    let Some(dir) = dir else { return false };
+    let now = Instant::now();
+    let queries = QUERIES.lock().unwrap_or_else(PoisonError::into_inner);
+    queries.iter().any(|q| q.dir.as_path() == dir && now >= q.deadline)
+}
+
+/// Scratch files on their way out, oldest first.
+struct Retired {
+    files: VecDeque<(Arc<ScratchFile>, Arc<QueryDone>)>,
+    /// Closer threads alive.
+    closers: usize,
+}
+
+/// Most closer threads at once: enough that one close stuck on a dead mount doesn't hold up the
+/// files behind it, few enough that stuck closes can't pile up threads.
+const MAX_CLOSERS: usize = 4;
+
+static RETIRED: Mutex<Retired> = Mutex::new(Retired { files: VecDeque::new(), closers: 0 });
+
+/// Let go of a scratch file off this thread: the last reference closes it, which can flush to its
+/// folder, and a dead mount blocks that, while leaving a dead folder is how a user recovers. The
+/// returned handle finishes when this reference is gone.
+fn retire(file: Arc<ScratchFile>) -> Arc<QueryDone> {
+    let done = Arc::new(QueryDone::default());
+    let mut retired = RETIRED.lock().unwrap_or_else(PoisonError::into_inner);
+    retired.files.push_back((file, done.clone()));
+    // If no thread can start, the file waits in the queue for the next one rather than closing here.
+    if retired.closers < MAX_CLOSERS && std::thread::Builder::new().name("pc-scratch-close".into()).spawn(close_retired).is_ok() {
+        retired.closers += 1;
+    }
+    done
+}
+
+fn close_retired() {
+    loop {
+        let next = {
+            let mut retired = RETIRED.lock().unwrap_or_else(PoisonError::into_inner);
+            let next = retired.files.pop_front();
+            if next.is_none() {
+                retired.closers = retired.closers.saturating_sub(1);
+            }
+            next
+        };
+        let Some((file, done)) = next else { return };
+        drop(file);
+        done.finish();
+    }
 }
 
 fn no_room(dir: &Path, cap: Option<u64>) -> String {
@@ -560,21 +785,40 @@ fn disk_free_space(dir: &str) -> Option<(u64, u64)> {
 /// use its available figure. A listed disk counts as this volume when the mount point's own
 /// `statvfs` gives the same numbers (APFS volumes in one container share them, and firmlinks give
 /// `/Users` and `/` different device ids, so ids can't be compared); a change between the two
-/// readings just keeps the `statvfs` figure. Never fails.
+/// readings just keeps the `statvfs` figure. sysinfo asks every mounted volume for its properties,
+/// so an unrelated dead mount must not hold up this measurement: the lookup runs on a helper thread
+/// that is waited for at most [`PURGEABLE_WAIT`]. Never fails.
 #[cfg(target_os = "macos")]
 fn with_purgeable_space(dir: &Path, available: u64, total: u64) -> u64 {
-    sysinfo::Disks::new_with_refreshed_list_specifics(sysinfo::DiskRefreshKind::nothing().with_storage())
-        .ok()
-        .and_then(|disks| {
+    static LISTING: AtomicBool = AtomicBool::new(false);
+    // A listing already running may be stuck on some mount: don't start another.
+    if LISTING.swap(true, Ordering::AcqRel) {
+        return available;
+    }
+    let dir = dir.to_path_buf();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let spawned = std::thread::Builder::new().name("pc-scratch-disks".into()).spawn(move || {
+        let found: Option<u64> = sysinfo::Disks::new_with_refreshed_list_specifics(sysinfo::DiskRefreshKind::nothing().with_storage()).ok().and_then(|disks| {
             disks
                 .iter()
                 .filter(|d| dir.starts_with(d.mount_point()))
                 .max_by_key(|d| d.mount_point().as_os_str().len())
                 .filter(|d| volume_space(d.mount_point()) == Some((available, total)))
                 .map(|d| d.available_space())
-        })
-        .unwrap_or(available)
+        });
+        LISTING.store(false, Ordering::Release);
+        let _ = tx.send(found);
+    });
+    if spawned.is_err() {
+        LISTING.store(false, Ordering::Release);
+        return available;
+    }
+    rx.recv_timeout(PURGEABLE_WAIT).ok().flatten().unwrap_or(available)
 }
+
+/// How long a measurement waits for the mounted-volume listing before using the `statvfs` figure.
+#[cfg(target_os = "macos")]
+const PURGEABLE_WAIT: Duration = Duration::from_millis(500);
 
 #[cfg(all(any(unix, windows), not(target_os = "macos")))]
 fn with_purgeable_space(_dir: &Path, available: u64, _total: u64) -> u64 {
@@ -590,7 +834,11 @@ fn free_space(_dir: &Path) -> Option<(u64, u64)> {
 fn maybe_evict() {
     let budget = M.budget.load(Ordering::Relaxed);
     if budget == 0 {
-        M.retry();
+        // The supervisor retries when there is one; this can be any thread, the UI's too, and a
+        // retry waits for the folder.
+        if MAINTENANCE.load(Ordering::Acquire) == 0 {
+            M.retry();
+        }
         return;
     }
     let resident = M.resident.load(Ordering::Relaxed);
@@ -660,25 +908,28 @@ pub fn set_size_cap(cap: Option<u64>) {
         return;
     }
     c.size_cap = cap;
+    store_limit(&c);
     M.next_space_check.store(0, Ordering::Relaxed);
-    if let Some(p) = &mut c.paused {
-        p.retry_at = Instant::now();
+    if c.paused.is_some() {
         c.backoff = RETRY_FIRST;
+        M.retry_now(c);
     }
-    drop(c);
-    M.retry();
 }
 
 /// Turn the scratch disk on (`dir` and a non-zero `budget_bytes`) or off. Tiles already on disk
 /// stay readable either way. Changing the directory starts a new scratch file there; the old one
 /// is deleted once its last tile is freed or changed. A directory that can't be used is kept and
 /// retried with backoff (spilling stays paused meanwhile); the error is returned and reported.
+/// Waits up to 2 s for the folder; a folder that doesn't answer counts as unusable until it does.
 pub fn configure(dir: Option<&Path>, budget_bytes: usize) -> Result<(), String> {
-    let mut c = M.config();
     let dir = dir.filter(|_| budget_bytes > 0).map(Path::to_path_buf);
-    if dir != c.dir {
-        c.file = None;
-    }
+    let mut c = M.config();
+    let old = if dir != c.dir {
+        c.room = None;
+        c.file.take()
+    } else {
+        None
+    };
     c.dir = dir.clone();
     c.budget = if dir.is_some() { budget_bytes } else { 0 };
     c.backoff = RETRY_FIRST;
@@ -686,7 +937,22 @@ pub fn configure(dir: Option<&Path>, budget_bytes: usize) -> Result<(), String> 
     c.last_error = None;
     M.paused.store(false, Ordering::Release);
     M.next_space_check.store(0, Ordering::Relaxed);
-    if dir.is_some() && !M.prepare(&mut c) {
+    drop(c);
+    let start = Instant::now();
+    let closing = old.map(retire);
+    if let Some(dir) = &dir {
+        M.prepare(dir);
+    }
+    // One wait for the whole change: closing the old file gets what the new folder left over.
+    if let Some(closing) = closing {
+        closing.wait_until(start.checked_add(QUERY_WAIT).unwrap_or(start));
+    }
+    let c = M.config();
+    if c.dir != dir {
+        // A newer configure owns the state now.
+        return Ok(());
+    }
+    if c.paused.is_some() {
         return Err(c.last_error.clone().unwrap_or_default());
     }
     M.set_active(c.budget);
@@ -753,7 +1019,7 @@ pub fn stats() -> SpillStats {
         last_error: c.last_error.clone(),
         paused: c.paused.is_some(),
         size_cap_bytes: c.size_cap,
-        free_space_unmeasured: free_space_unmeasured(),
+        free_space_unmeasured: enabled() && (M.space_unmeasured.load(Ordering::Relaxed) || query_overdue(c.dir.as_deref())),
     }
 }
 
@@ -765,25 +1031,24 @@ pub fn last_error() -> Option<String> {
 /// Uncompressed tile bytes the scratch disk can still take before it reaches its size limit
 /// ([`set_size_cap`]) or the volume's free-space reserve, so an import can admit tile pixels
 /// beyond physical RAM. `None` while spilling is off or paused, and when neither the free space
-/// nor a size limit is known (nothing to promise). Tiles are written compressed; this counts
-/// them uncompressed, less 1/64 for the allocator's block rounding, so it never over-promises.
+/// nor a size limit is known (nothing to promise), which includes a folder that doesn't answer
+/// within 2 s. Tiles are written compressed; this counts them uncompressed, less 1/64 for the allocator's block rounding, so it never over-promises.
 pub fn scratch_capacity() -> Option<u64> {
     if !enabled() || paused() {
         return None;
     }
-    let (dir, used, cap) = {
-        let c = M.config();
-        (c.dir.clone()?, c.file.as_ref().map_or(0, |f| f.used()), c.size_cap)
-    };
-    let space = free_space(&dir);
-    // A slow query must not overwrite the status of a directory configured meanwhile.
-    // The guard is a named local: as a temporary in the `if` condition it would drop before the store.
+    let dir = M.config().dir.clone()?;
+    M.measure(&dir);
     let c = M.config();
-    if c.dir.as_deref() == Some(dir.as_path()) {
-        M.space_unmeasured.store(space.is_none(), Ordering::Relaxed);
+    // A slow query must not describe a directory configured meanwhile, and a sweep can also have
+    // paused spilling meanwhile.
+    if c.dir.as_deref() != Some(dir.as_path()) || c.paused.is_some() {
+        return None;
     }
+    let used = c.file.as_ref().map_or(0, |f| f.used());
+    let cap = c.size_cap;
+    let room = c.room.map(|room| room.saturating_sub(used));
     drop(c);
-    let room = space.map(|(available, total)| available.saturating_sub(RESERVE_MIN.max(total / 20)));
     let room = match (room, cap) {
         (Some(room), Some(cap)) => room.min(cap.saturating_sub(used)),
         (Some(room), None) => room,
@@ -794,10 +1059,18 @@ pub fn scratch_capacity() -> Option<u64> {
 }
 
 /// Whether spilling is on but the scratch directory's volume won't report its free space, so the
-/// reserve doesn't apply and imports earn scratch room only up to a size limit. A plain atomic
-/// read, safe to call every frame.
+/// reserve doesn't apply and imports earn scratch room only up to a size limit. Two short locks,
+/// neither ever held across a query, so it is safe to call every frame. A query past its wait
+/// counts as unmeasured even with nobody waiting on it.
 pub fn free_space_unmeasured() -> bool {
-    enabled() && M.space_unmeasured.load(Ordering::Relaxed)
+    if !enabled() {
+        return false;
+    }
+    if M.space_unmeasured.load(Ordering::Relaxed) {
+        return true;
+    }
+    let c = M.config();
+    query_overdue(c.dir.as_deref())
 }
 
 /// Whether spilling is on (tiles beyond the budget go to disk).
@@ -847,6 +1120,18 @@ pub fn check_since(generation: u64) -> Result<(), String> {
 #[doc(hidden)]
 pub fn scratch_handle_for_tests() -> Option<std::fs::File> {
     M.config().file.as_ref().and_then(|f| f.duplicate_handle().ok())
+}
+
+/// Runs at the start of every folder query, off every lock: tests stall it to simulate a dead mount.
+#[doc(hidden)]
+pub fn set_query_hook_for_tests(hook: Option<fn(&Path)>) {
+    *QUERY_HOOK.write().unwrap_or_else(PoisonError::into_inner) = hook;
+}
+
+/// Query threads still alive, so a test can wait until a stalled query has fully settled.
+#[doc(hidden)]
+pub fn query_threads_for_tests() -> usize {
+    QUERY_THREADS.load(Ordering::Acquire)
 }
 
 /// Evict down to the budget now, on this thread (tests, and before a measurement).
@@ -1000,6 +1285,79 @@ mod tests {
         assert_eq!(known_space(5, 0), None);
         assert_eq!(known_space(0, 10), Some((0, 10)));
         assert_eq!(known_space(5, 10), Some((5, 10)));
+    }
+
+    static CAPPED_GATE: (Mutex<bool>, Condvar) = (Mutex::new(false), Condvar::new());
+
+    fn hold_capped(dir: &Path) {
+        if dir.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("photocraft-capped-")) {
+            let mut open = CAPPED_GATE.0.lock().unwrap_or_else(PoisonError::into_inner);
+            while !*open {
+                open = CAPPED_GATE.1.wait(open).unwrap_or_else(PoisonError::into_inner);
+            }
+        }
+    }
+
+    #[test]
+    fn query_threads_stay_capped_and_single_flight() {
+        set_query_hook_for_tests(Some(hold_capped));
+        let base = std::env::temp_dir().join(format!("photocraft-capped-{}", std::process::id()));
+        let first = start_query(&base, false).unwrap();
+        let again = start_query(&base, false).unwrap();
+        assert!(Arc::ptr_eq(&first.0, &again.0) && first.1 == again.1, "the same question must not start a second thread");
+        let mut started = 1;
+        for i in 0..2 * MAX_QUERIES {
+            if start_query(&base.join(format!("photocraft-capped-{i}")), false).is_some() {
+                started += 1;
+            }
+        }
+        assert_eq!(started, MAX_QUERIES);
+        // Exercise the real growth path while every query slot is occupied. A separate manager
+        // keeps this check independent of other tests' process-wide scratch configuration.
+        let file = ScratchFile::create(&base).unwrap();
+        let manager = Manager {
+            failed: AtomicUsize::new(0),
+            read_errors: AtomicU64::new(0),
+            resident: AtomicUsize::new(0),
+            live: AtomicUsize::new(0),
+            budget: AtomicUsize::new(1),
+            paused: AtomicBool::new(false),
+            epoch: AtomicU64::new(0),
+            space_limit: AtomicU64::new(u64::MAX),
+            next_space_check: AtomicU64::new(0),
+            recovering: AtomicBool::new(false),
+            space_unmeasured: AtomicBool::new(false),
+            registry: Mutex::new(Registry { cells: Vec::new(), hand: 0 }),
+            config: Mutex::new(Config {
+                dir: Some(base.join("growth")),
+                file: None,
+                last_error: None,
+                budget: 1,
+                paused: None,
+                backoff: RETRY_FIRST,
+                size_cap: None,
+                room: None,
+            }),
+            evictions: AtomicU64::new(0),
+            reloads: AtomicU64::new(0),
+            written: AtomicU64::new(0),
+        };
+        let allowed = manager.has_room(&file);
+        let next_check = manager.next_space_check.load(Ordering::Relaxed);
+        let unmeasured = manager.space_unmeasured.load(Ordering::Relaxed);
+        *CAPPED_GATE.0.lock().unwrap_or_else(PoisonError::into_inner) = true;
+        CAPPED_GATE.1.notify_all();
+        let start = Instant::now();
+        while query_threads_for_tests() != 0 {
+            assert!(start.elapsed() < Duration::from_secs(30), "queries never finished");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        set_query_hook_for_tests(None);
+        assert!(allowed, "the last measured growth limit still applies");
+        assert_eq!(next_check, 0, "a rejected growth query must stay due");
+        assert!(unmeasured, "a rejected growth query must not report the old measurement as current");
+        drop(file);
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
