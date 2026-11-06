@@ -92,6 +92,15 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
             })
         }),
         "panels": app.ui.panels,
+        // The contextual task bar (#10890): Window › Contextual Task Bar, whether it shows now and
+        // where (screen points), and its place (pinned, dragged-to corner).
+        "taskBar": json!({
+            "enabled": app.ui.panels.context_task_bar,
+            "visible": app.ui.task_bar_shown.is_some(),
+            "rect": app.ui.task_bar_shown,
+            "pinned": app.ui.panels.task_bar.pinned,
+            "at": app.ui.panels.task_bar.at,
+        }),
         "dockTabs": app.ui.dock_tabs,
         "dock": app.ui.dock,
         "docking": app.ui.docking,

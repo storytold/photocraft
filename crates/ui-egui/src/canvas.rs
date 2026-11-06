@@ -1367,6 +1367,8 @@ fn paint_primary_overlays(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut
     crate::slice_ui::draw_overlay(app, painter, xf);
     crate::frame_tool::draw_overlay(app, painter, xf);
     crate::frame_tool::task_bar(app, ui, xf);
+    // The Crop tool's contextual task bar under its frame (#10890).
+    crate::crop_task_bar::draw(app, ui, xf);
     crate::artboard_tool::draw_overlay(app, painter, xf);
     // Snap lines last: over the transform preview's pixels and the other overlays, which would
     // otherwise hide where the moving content lines up.
