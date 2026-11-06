@@ -424,3 +424,74 @@ fn attribute_criteria_are_per_document_and_read_back_atomically() {
     assert_eq!(Filter::of(&app).attribute, before.attribute);
     assert_eq!(listed(&app).len(), 3, "Off keeps the Attribute criterion and lists the full tree");
 }
+
+fn layer(app: &PhotocraftApp, name: &str) -> photocraft_doc::LayerId {
+    app.session.active().unwrap().doc.walk().into_iter().find(|(_, _, l)| l.name == name).unwrap().2.id
+}
+
+/// A patch to a type that isn't picked changes a dormant value: the switch and the selection stay.
+#[test]
+fn dormant_criteria_leave_the_switch_and_the_selection_alone() {
+    let mut app = app();
+    set(&mut app, json!({"by":"name","name":"Red","on":false}));
+    set(&mut app, json!({"mode":"Multiply"}));
+    assert!(!Filter::of(&app).on, "a Mode value under Name does not undo a manual off");
+    set(&mut app, json!({"on":true}));
+    super::selection::follow(&mut app);
+    let blue = layer(&app, "Blue");
+    app.run("layer.select", json!({"layer": blue.0})).unwrap();
+    super::selection::follow(&mut app);
+    set(&mut app, json!({"mode":"Screen"}));
+    super::selection::follow(&mut app);
+    assert_eq!(app.session.active().unwrap().selected_layers(), [blue], "a dormant edit is not a new application");
+}
+
+/// `ui.set` deselects what the new filter hides at once, also with Filter Options › Hide.
+#[test]
+fn control_patch_deselects_hidden_layers_with_the_row_hidden() {
+    let mut app = app();
+    app.ui.layers_panel_options.show_filters = false;
+    let blue = layer(&app, "Blue");
+    assert_eq!(app.session.active().unwrap().selected_layers(), [blue]);
+    assert_eq!(call(&mut app, "ui.set", json!({"layerFilter":{"by":"name","name":"Red"}}))["ok"], true);
+    assert!(app.session.active().unwrap().selected_layers().is_empty());
+}
+
+/// Deselecting can be refused (here by the automation gate); the next frame tries again.
+#[test]
+fn a_failed_deselection_is_retried() {
+    let mut app = app();
+    let blue = layer(&app, "Blue");
+    app.automation_input = true;
+    app.services.automation_command = Some(Box::new(|id, _| if id == "select.deselectLayers" { Err("refused".into()) } else { Ok(()) }));
+    set(&mut app, json!({"by":"name","name":"Red"}));
+    super::selection::follow(&mut app);
+    assert_eq!(app.session.active().unwrap().selected_layers(), [blue]);
+    app.services.automation_command = None;
+    super::selection::follow(&mut app);
+    assert!(app.session.active().unwrap().selected_layers().is_empty());
+}
+
+/// Off because nothing is picked yet keeps the controls usable: the first Kind button turns it on.
+#[test]
+fn controls_stay_usable_while_nothing_is_picked() {
+    let mut h = harness();
+    assert!(!Filter::of(h.state()).on);
+    let pixel = h.get_by_label("Filter for pixel layers");
+    assert!(!pixel.accesskit_node().is_disabled());
+    pixel.click();
+    h.run_steps(4);
+    let f = Filter::of(h.state());
+    assert!(f.on);
+    assert_eq!(f.kinds, ["pixel"]);
+}
+
+/// Off lists every layer, so no context is gathered (the Empty scan reruns after every stroke).
+#[test]
+fn off_skips_the_derived_context() {
+    let mut app = app();
+    set(&mut app, json!({"by":"attribute","attribute":"empty"}));
+    assert!(super::FilterContext::of_app(&app, &Filter::of(&app)).empty.is_some());
+    set(&mut app, json!({"on":false}));
+    assert!(super::FilterContext::of_app(&app, &Filter::of(&app)).empty.is_none());
+}

@@ -130,6 +130,8 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         crate::layer_filter_ui::bar(app, ui);
         ui.add_space(4.0);
     }
+    // A hidden row still filters, so a changed filter still deselects what it hides.
+    crate::layer_filter_ui::selection::follow(app);
     if let Some(l) = active_layer {
         // With several layers selected, blend mode, Opacity, Fill and the locks change every one
         // of them, as in Photoshop; the controls show the active layer's values.
@@ -304,7 +306,8 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 }
             }
             if filter.active_with(&filter_context) && drawn.is_empty() {
-                let height = if rows_h.is_finite() { rows_h } else { ui.clip_rect().height().max(24.0) };
+                // A short panel sizes the list to its rows: one row's height keeps the footer in view.
+                let height = if rows_h.is_finite() { rows_h } else { 24.0 };
                 ui.allocate_ui_with_layout(vec2(ui.available_width(), height), egui::Layout::centered_and_justified(egui::Direction::TopDown), |ui| {
                     ui.label(tl!("No layers match the filter."));
                 });

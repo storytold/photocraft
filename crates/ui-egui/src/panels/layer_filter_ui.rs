@@ -65,6 +65,11 @@ impl FilterContext {
 
     fn with_artboard_rows(app: &PhotocraftApp, filter: &Filter, artboard_rows: impl FnOnce() -> HashSet<LayerId>) -> Self {
         let mut context = Self::default();
+        // Off lists every layer: nothing reads the context, so skip the scans (the emptiness
+        // scan reruns after every paint stroke).
+        if !filter.on {
+            return context;
+        }
         match filter.by {
             FilterBy::SmartObject => context.missing = app.session.missing_links(),
             FilterBy::Artboard => context.board_rows = artboard_rows(),
@@ -96,11 +101,40 @@ impl Filter {
             }
     }
 
-    /// Only explicit criterion edits update automatic activation; context is not a criterion.
+    /// The switch and the type with only the criterion that type reads; the other types' stored
+    /// values are dormant and left at their defaults, so changing one changes nothing here.
+    pub fn effective(&self) -> Self {
+        let mut f = Self { on: self.on, by: self.by, ..Self::default() };
+        match self.by {
+            FilterBy::Kind => f.kinds = self.kinds.clone(),
+            FilterBy::Name => f.name = self.name.trim().to_lowercase(),
+            FilterBy::Effect => f.effect = self.effect,
+            FilterBy::Mode => f.mode = self.mode,
+            FilterBy::Attribute => f.attribute = self.attribute,
+            FilterBy::Color => f.color = self.color,
+            FilterBy::SmartObject => f.smart = self.smart.clone(),
+            FilterBy::Artboard => {}
+        }
+        f
+    }
+
+    /// Whether the criteria pick something: a Kind or Smart Object button on, a Name typed, or a
+    /// type that always has a value. Off with criteria set is a manual Off.
+    pub fn criteria_set(&self) -> bool {
+        match self.by {
+            FilterBy::Kind => !self.kinds.is_empty(),
+            FilterBy::Name => !self.name.trim().is_empty(),
+            FilterBy::Effect | FilterBy::Mode | FilterBy::Attribute | FilterBy::Color | FilterBy::Artboard => true,
+            FilterBy::SmartObject => !self.smart.is_empty(),
+        }
+    }
+
+    /// Only explicit edits of the active criterion update automatic activation; context and
+    /// dormant criteria are not.
     pub fn activate_changed(&mut self, before: &Self) {
-        let mut old = before.clone();
+        let mut old = before.effective();
         old.on = self.on;
-        if *self != old {
+        if self.effective() != old {
             // Artboard is armed when chosen, even without eligible selected layers. Only
             // user criteria are compared here; selection context cannot undo a manual Off.
             if self.by == FilterBy::Artboard {
@@ -109,13 +143,7 @@ impl Filter {
                 }
                 return;
             }
-            self.on = match self.by {
-                FilterBy::Kind => !self.kinds.is_empty(),
-                FilterBy::Name => !self.name.trim().is_empty(),
-                FilterBy::Effect | FilterBy::Mode | FilterBy::Attribute | FilterBy::Color => true,
-                FilterBy::SmartObject => !self.smart.is_empty(),
-                FilterBy::Artboard => self.on,
-            };
+            self.on = self.criteria_set();
         }
     }
 
@@ -300,10 +328,10 @@ fn kind(l: &Layer) -> &'static str {
     }
 }
 
-/// Draw the filter row: the type dropdown, then that type's controls.
+/// Draw the filter row: the type dropdown, then that type's controls. The Layers panel runs
+/// [`selection::follow`] after it, also while Filter Options › Hide hides the row.
 pub fn bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     switch::bar(app, ui);
-    selection::follow(app);
 }
 
 fn controls(filter: &mut Filter, ui: &mut egui::Ui) {

@@ -406,6 +406,8 @@ impl ToolSet {
         }
         if let Some(f) = self.layer_filter {
             crate::layer_filter_ui::apply(app, f);
+            // As a filter edit in the panel: deselect the layers it now hides, row shown or not.
+            crate::layer_filter_ui::selection::follow(app);
         }
         if let Some(m) = self.pen_mode {
             app.ui.tool_options.vector_mode = m;

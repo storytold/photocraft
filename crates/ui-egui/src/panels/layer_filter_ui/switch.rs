@@ -10,7 +10,8 @@ use crate::PhotocraftApp;
 #[derive(Clone, Debug)]
 pub struct DocumentFilter {
     pub filter: Filter,
-    /// Last criteria applied to selection in this open document, not the last active tab.
+    /// Last effective criteria ([`Filter::effective`]) applied to selection in this open
+    /// document, not the last active tab.
     applied: Option<Filter>,
     instance: Weak<()>,
 }
@@ -49,14 +50,25 @@ pub(super) fn apply(app: &mut PhotocraftApp, filter: Filter) {
     }
 }
 
-/// Remember selection application in the same lifecycle-owned record as the criteria.
+/// Remember selection application in the same lifecycle-owned record as the criteria. Only the
+/// effective criteria count: a dormant type's stored value is not a new application.
 pub(super) fn changed_since_draw(app: &mut PhotocraftApp, filter: &Filter) -> bool {
     apply(app, filter.clone());
     let Some(id) = app.session.active().map(|state| state.doc.id) else { return false };
     let Some(saved) = app.ui.layer_filters.get_mut(&id) else { return false };
-    let changed = saved.applied.as_ref() != Some(filter);
-    saved.applied = Some(filter.clone());
+    let effective = filter.effective();
+    let changed = saved.applied.as_ref() != Some(&effective);
+    saved.applied = Some(effective);
     changed
+}
+
+/// Forget the last application, so the next [`changed_since_draw`] applies the filter again
+/// (after deselecting the hidden layers failed).
+pub(super) fn forget_applied(app: &mut PhotocraftApp) {
+    let Some(id) = app.session.active().map(|state| state.doc.id) else { return };
+    if let Some(saved) = app.ui.layer_filters.get_mut(&id) {
+        saved.applied = None;
+    }
 }
 
 fn toggle(ui: &mut egui::Ui, on: &mut bool) {
@@ -86,7 +98,9 @@ pub(super) fn bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             ui.spacing_mut().item_spacing.x = 2.0;
             let width = (ui.available_width() - 26.0).max(0.0);
             ui.allocate_ui_with_layout(vec2(width, 22.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                ui.add_enabled_ui(filter.on, |ui| super::controls(&mut filter, ui));
+                // A manual Off greys the type and its controls; off because nothing is picked yet
+                // (Kind with no button on, an empty Name) keeps them usable, and picking turns it on.
+                ui.add_enabled_ui(filter.on || !filter.criteria_set(), |ui| super::controls(&mut filter, ui));
             });
             filter.activate_changed(&before);
             ui.add_space(4.0);
