@@ -509,3 +509,28 @@ fn clip_to_canvas_leaves_hidden_instances_unrendered() {
     }
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// A warped placement whose whole render is past Memory Usage is refused, but with the clip only
+/// the canvas is rendered, so it goes through (the test budget is 20 MB).
+#[test]
+fn clip_to_canvas_budgets_the_clipped_render_not_the_whole_placement() {
+    let dir = tmp_dir("clip-budget");
+    let design = std::fs::read(png_file(&dir, "d.png", 30, 20, [0.2, 0.7, 0.4])).unwrap();
+    let huge = |sm: &mut SmartObject, b: [f64; 4]| {
+        // About 3200 × 2300 px of 8-bit RGBA: 29 MB.
+        sm.transform = Affine { m: [70.0, 0.0, 0.0, 70.0, -1000.0, -700.0] };
+        sm.warp = Some(Warp::custom(BezierMesh::identity(b, 1, 1).map_points(|p| [p[0] + 0.1 * p[1], p[1]]), b));
+    };
+    for clip in [false, true] {
+        let (mut s, id) = smart_session();
+        let b = old_box(&s, id);
+        s.edit("setup", |doc, _| {
+            huge(smart_mut(doc, id)?, b);
+            Ok(())
+        })
+        .unwrap();
+        let r = replace_contents_with(&mut s, id, "d.png", design.clone(), Fit::Stretch, clip);
+        assert_eq!(r.is_ok(), clip, "clip {clip}: {r:?}");
+    }
+    std::fs::remove_dir_all(&dir).ok();
+}

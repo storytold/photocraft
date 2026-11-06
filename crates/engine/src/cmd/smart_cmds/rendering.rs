@@ -197,7 +197,11 @@ pub(super) fn place(name: &str, bytes: &[u8], doc: &Document, sm: &SmartObject, 
     // The placed stage is unclipped: a large enough placement (an image scaled to fill a huge
     // frame) would otherwise fill memory before any allocation could fail.
     let h = placement(sm);
-    crate::transform_cmds::check_budget(img.bounds, &h, "smart object", fmt)?;
+    // A clipped warp writes only inside `clip`: budget that, not the whole placement.
+    match clip.filter(|_| sm.warp.as_ref().is_some_and(|w| !w.is_identity())) {
+        Some(r) => crate::transform_cmds::check_budget_rect(r, "smart object", fmt)?,
+        None => crate::transform_cmds::check_budget(img.bounds, &h, "smart object", fmt)?,
+    }
     // Through the warp (source space) and the transform in one pass; whole-pixel moves are exact.
     Ok(match &sm.perspective {
         Some(_) => photocraft_algo::warp::place_source_projective_clipped(&img.surface, img.bounds, &h, sm.warp.as_ref(), clip)?,

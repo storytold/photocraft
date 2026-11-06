@@ -206,13 +206,13 @@ fn hidden_in(doc: &Document, id: LayerId) -> bool {
 }
 
 /// The part of `canvas` where `l` can show anything given its own layer mask: inside the mask's
-/// painted area when the mask hides by default at full density (plus its feather), else the
-/// whole canvas. Group masks and clipping can only hide more, so this is never too small.
+/// painted area when the mask hides by default at full density without a feather, else the whole
+/// canvas (a feather spreads the mask by an amount that depends on its values, which a 32-bit
+/// mask can take past 1). Group masks and clipping can only hide more, so this is never too small.
 fn visible_clip(l: &Layer, canvas: Rect) -> Rect {
     match &l.mask {
-        Some(m) if m.enabled && m.density >= 1.0 && m.surface.default_pixel().first().copied().unwrap_or(1.0) <= 0.0 => {
-            let pad = (f64::from(m.feather.max(0.0)) * 3.0).ceil() as i32 + 1;
-            m.surface.content_bounds().inflate(pad).intersect(&canvas)
+        Some(m) if m.enabled && m.density >= 1.0 && m.feather <= 0.0 && m.surface.default_pixel().first().copied().unwrap_or(1.0) <= 0.0 => {
+            m.surface.content_bounds().inflate(1).intersect(&canvas)
         }
         _ => canvas,
     }

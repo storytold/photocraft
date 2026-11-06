@@ -527,6 +527,7 @@ fn doc_replace_smart_object_fits_a_file_of_another_size() {
     std::fs::write(base.join("logo.png"), png(8, 6, 42)).unwrap();
     std::fs::write(base.join("design.png"), png(4, 3, 200)).unwrap();
     std::fs::write(base.join("tall.png"), png(2, 6, 7)).unwrap();
+    std::fs::write(base.join("wide.png"), png(80, 60, 90)).unwrap();
     let bounds = |h: &mut Headless, layer: &Value| {
         let inspected = h.handle("doc.inspect", json!({})).unwrap();
         inspected["layers"].as_array().unwrap().iter().find(|l| l["id"] == *layer).unwrap()["bounds"].clone()
@@ -569,6 +570,18 @@ fn doc_replace_smart_object_fits_a_file_of_another_size() {
         assert_eq!(clipped["layer"], layer, "{clipped}");
         let refused = h.handle("doc.replaceSmartObject", json!({"layer": layer, "path": path("tall.png"), "clipToCanvas": "yes"})).unwrap_err().to_string();
         assert!(refused.contains("clipToCanvas"), "{refused}");
+        // A warped placement larger than the canvas: clipped, the layer holds only the canvas.
+        h.handle("doc.new", json!({"width": 40, "height": 30})).unwrap();
+        let wide = h.handle("doc.place", json!({"path": path("wide.png"), "scale": 100, "fit": false})).unwrap()["layer"].clone();
+        h.handle("engine.execute", json!({"command": "edit.transform.warp", "params": {"layer": wide, "style": "arc", "bend": 30}})).unwrap();
+        for clip in [false, true] {
+            h.handle("doc.replaceSmartObject", json!({"layer": wide, "path": path("design.png"), "fit": "stretch", "clipToCanvas": clip})).unwrap();
+            let b = bounds(&mut h, &wide);
+            let (x, y, w, ht) = (b[0].as_i64().unwrap(), b[1].as_i64().unwrap(), b[2].as_i64().unwrap(), b[3].as_i64().unwrap());
+            let inside = x >= 0 && y >= 0 && x + w <= 40 && y + ht <= 30;
+            assert_eq!(inside, clip, "clip {clip}: bounds {b}");
+            h.handle("engine.execute", json!({"command": "edit.undo"})).unwrap();
+        }
         drop(h);
     }
     std::fs::remove_dir_all(base).unwrap();
