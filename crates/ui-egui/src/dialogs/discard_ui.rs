@@ -337,21 +337,22 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         answer = buttons.iter().find(|b| b.0 == ButtonRole::Default).map(|b| b.4);
     }
     if let Some(answer) = answer
-        && let Err(e) = apply(app, ctx, doc, answer)
+        && let Err(e) = apply(app, ctx, doc, answer, false)
     {
         app.ui.status = e;
         app.ui.status_error = true;
     }
 }
 
-/// Acts on the answer about `doc`, the document the prompt is asking about. Save is refused
-/// when automation may not run File › Save (see [`authorize_save`]); the prompt stays up.
-fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, doc: DocId, answer: Answer) -> Result<(), String> {
+/// Acts on the answer about `doc`, the document the prompt is asking about. `from_control` says
+/// a control client gave it (`ui.dialog.confirm`). Save is refused when automation may not run
+/// File › Save (see [`authorize_save`]); the prompt stays up.
+fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, doc: DocId, answer: Answer, from_control: bool) -> Result<(), String> {
     match answer {
         Answer::Cancel => app.discard = None,
         Answer::Discard => advance(app, ctx),
         Answer::Save => {
-            authorize_save(app)?;
+            authorize_save(app, from_control)?;
             if save(app, ctx, doc) {
                 advance(app, ctx);
             }
@@ -361,12 +362,14 @@ fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, doc: DocId, answer: Answe
 }
 
 /// Save writes the document back over its own file, as File › Save does, so automation (a
-/// control request's gate or synthetic input) is judged for `file.save` before it runs: a client
-/// allowed to close a document can't use the prompt to write a file its policy keeps it from.
-/// The installed gate (or the services' policy) and the command callback both judge it, and
-/// with neither available the Save is refused rather than run unjudged.
-fn authorize_save(app: &PhotocraftApp) -> Result<(), String> {
-    if !(app.automation_input || app.session.authorize.is_some()) {
+/// control client's answer, a control request's gate or synthetic input) is judged for
+/// `file.save` before it runs: a client allowed to close a document can't use the prompt to
+/// write a file its policy keeps it from. A control answer counts as automation even when its
+/// services install no session gate (only the command callback). The installed gate (or the
+/// services' policy) and the command callback both judge it, and with neither available the
+/// Save is refused rather than run unjudged.
+fn authorize_save(app: &PhotocraftApp, from_control: bool) -> Result<(), String> {
+    if !(from_control || app.automation_input || app.session.authorize.is_some()) {
         return Ok(());
     }
     let params = json!({});
@@ -409,7 +412,14 @@ pub fn pending_command(app: &PhotocraftApp) -> Option<(String, Value)> {
 
 /// Answers the prompt for a control client: `save`, `dontSave` or `cancel` (Revert takes
 /// `dontSave` or `cancel`). Like the buttons, Save may first ask for a path in the save dialog.
+/// Save is always judged as automation for `file.save`, whatever gate the request installed.
 pub fn answer_control(app: &mut PhotocraftApp, ctx: &egui::Context, choice: &str) -> Result<Value, String> {
+    answer_choice(app, ctx, choice, true)
+}
+
+/// Answers the prompt with `choice` (see [`answer_control`]); `from_control` says a control
+/// client chose it, so its Save is judged as automation even without a session gate.
+pub(crate) fn answer_choice(app: &mut PhotocraftApp, ctx: &egui::Context, choice: &str, from_control: bool) -> Result<Value, String> {
     let Some(doc) = app.discard.as_ref().and_then(|p| p.docs.first().copied()) else {
         return Err("no unsaved-changes prompt is open".into());
     };
@@ -426,7 +436,7 @@ pub fn answer_control(app: &mut PhotocraftApp, ctx: &egui::Context, choice: &str
             return Err(format!("unknown choice `{other}`: {choices}"));
         }
     };
-    apply(app, ctx, doc, answer)?;
+    apply(app, ctx, doc, answer, from_control)?;
     Ok(json!({"open": app.discard.is_some(), "fileDialog": app.file_dialog_open()}))
 }
 

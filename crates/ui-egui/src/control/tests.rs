@@ -1646,7 +1646,8 @@ fn automation_confirming_a_file_writing_dialog_is_judged_as_its_file_command() {
 /// Answering the unsaved-changes prompt with Save writes the document back like File › Save,
 /// so automation is judged for `file.save` there too, through a control request or synthetic
 /// input alike: a client allowed to close a document can't write it over its own file. A
-/// user's Save still writes and closes.
+/// control answer is judged even when its services install no session gate, and fails closed
+/// with no policy at all. A user's Save still writes and closes.
 #[test]
 fn automation_saving_from_the_unsaved_changes_prompt_is_judged_as_file_save() {
     // The desktop policy (crates/automation/src/workspace.rs) lets automation close documents
@@ -1674,7 +1675,7 @@ fn automation_saving_from_the_unsaved_changes_prompt_is_judged_as_file_save() {
         let (mut app, ctx, written, _) = prompted();
         let error = if synthetic {
             app.automation_input = true;
-            let r = crate::discard_ui::answer_control(&mut app, &ctx, "save");
+            let r = crate::discard_ui::answer_choice(&mut app, &ctx, "save", false);
             app.automation_input = false;
             r.err().unwrap_or_default()
         } else {
@@ -1693,17 +1694,35 @@ fn automation_saving_from_the_unsaved_changes_prompt_is_judged_as_file_save() {
     let r = call(&mut app, &ctx, "ui.dialog.confirm", json!({"dialog": crate::discard_ui::CONTROL_ID, "choice": "save"}));
     assert!(r["error"].as_str().is_some_and(|e| e.contains("file.save")), "{r}");
     assert!(written.borrow().is_empty() && app.discard.is_some(), "the gate alone keeps the file unwritten");
-    // Synthetic input with no policy at all fails closed instead of saving unjudged.
+    // Services with only the command callback install no session gate for the request: the
+    // control answer is still judged as `file.save` by that callback.
     let (mut app, ctx, written, _) = prompted();
-    app.services.automation_command = None;
     app.services.automation_authorize = None;
-    app.automation_input = true;
-    let r = crate::discard_ui::answer_control(&mut app, &ctx, "save");
-    app.automation_input = false;
-    assert!(r.is_err() && written.borrow().is_empty(), "no policy, no Save: {r:?}");
+    let r = call(&mut app, &ctx, "ui.dialog.confirm", json!({"dialog": crate::discard_ui::CONTROL_ID, "choice": "save"}));
+    assert!(r["error"].as_str().is_some_and(|e| e.contains("file.save")), "{r}");
+    assert!(written.borrow().is_empty(), "the callback alone keeps the file unwritten: {:?}", written.borrow());
+    assert!(app.discard.is_some() && app.session.documents().len() == 1, "the prompt and the document stay");
+    // Synthetic input or a control answer with no policy at all fails closed instead of saving
+    // unjudged.
+    for synthetic in [true, false] {
+        let (mut app, ctx, written, _) = prompted();
+        app.services.automation_command = None;
+        app.services.automation_authorize = None;
+        let r = if synthetic {
+            app.automation_input = true;
+            let r = crate::discard_ui::answer_choice(&mut app, &ctx, "save", false);
+            app.automation_input = false;
+            r.err().unwrap_or_default()
+        } else {
+            let r = call(&mut app, &ctx, "ui.dialog.confirm", json!({"dialog": crate::discard_ui::CONTROL_ID, "choice": "save"}));
+            r["error"].as_str().unwrap_or_default().to_string()
+        };
+        assert!(r.contains("file.save") && written.borrow().is_empty(), "synthetic={synthetic}: no policy, no Save: {r:?}");
+        assert!(app.discard.is_some(), "synthetic={synthetic}: the prompt stays up");
+    }
     // The user answering Save writes the document back and closes it.
     let (mut app, ctx, written, own_file) = prompted();
-    crate::discard_ui::answer_control(&mut app, &ctx, "save").unwrap();
+    crate::discard_ui::answer_choice(&mut app, &ctx, "save", false).unwrap();
     assert_eq!(*written.borrow(), vec![own_file]);
     assert!(app.discard.is_none());
     assert!(app.session.documents().is_empty());
