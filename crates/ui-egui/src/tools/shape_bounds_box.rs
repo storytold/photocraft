@@ -215,17 +215,13 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool 
                 "scaleX": d.scale[0] * 100.0,
                 "scaleY": d.scale[1] * 100.0,
                 "reference": fixed,
+                // Named by the command: with background jobs on, the step lands after `run`
+                // returns, so a rename here would rename the step before it.
+                "stepName": photocraft_engine::transform_cmds::TRANSFORM_PATH,
             });
-            match app.run("edit.transform", params) {
-                Ok(_) => {
-                    if let Some(st) = app.session.active_mut() {
-                        st.history.set_current_label("Transform Path");
-                    }
-                }
-                Err(e) => {
-                    app.ui.status = e;
-                    app.ui.status_error = true;
-                }
+            if let Err(e) = app.run("edit.transform", params) {
+                app.ui.status = e;
+                app.ui.status_error = true;
             }
             true
         }

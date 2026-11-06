@@ -271,3 +271,30 @@ fn a_document_switch_or_an_undo_cancels_a_handle_drag() {
     assert!(app.ui.shape_box.is_none());
     assert_eq!(app.session.active().unwrap().history.past_len(), steps);
 }
+
+/// With background jobs on, as in the desktop app, `edit.transform` lands after `run` returns.
+/// The scale is still one step named "Transform Path", and the step before it (the second
+/// shape's "New Shape Layer") keeps its name. Renaming the top step after `run` named the
+/// shape's step "Transform Path" and left the scale as "Free Transform".
+#[test]
+fn with_background_jobs_the_scale_step_is_named_and_the_one_before_is_kept() {
+    let (mut app, a, b) = app_with_two_shapes(Tool::Rectangle);
+    app.background_jobs = true;
+    let before: Vec<String> = app.session.active().unwrap().history.entries().to_vec();
+    drag(&mut app, [723.0, 451.0], [623.0, 391.0]);
+    let ctx = egui::Context::default();
+    for _ in 0..2000 {
+        crate::jobs_ui::tick(&mut app, &ctx);
+        if !app.session.has_jobs() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(!app.session.has_jobs(), "the transform job never landed");
+    near(bounds(&app, a), [100.0, 98.0, 354.0, 268.0]);
+    near(bounds(&app, b), [368.0, 282.0, 621.0, 394.0]);
+    let after: Vec<String> = app.session.active().unwrap().history.entries().to_vec();
+    assert_eq!(after.len(), before.len() + 1, "one history step: {after:?}");
+    assert_eq!(after[..before.len()], before[..], "the earlier steps keep their names");
+    assert_eq!(after.last().map(String::as_str), Some("Transform Path"));
+}
