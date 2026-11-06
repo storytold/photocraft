@@ -3590,3 +3590,18 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	The frame is locked	Bingkai terkunci
 	The frame is unavailable	Bingkai tidak tersedia
 	Frame	Bingkai
+
+# Channels panel menu (#11451)
+	New Channel…	Channel Baru…
+	Duplicate Channel	Duplikat Channel
+	Delete Channel	Hapus Channel
+	New Spot Channel…	Spot Channel Baru…
+	Merge Spot Channel	Gabungkan Spot Channel
+	Channel Options…	Opsi Channel…
+	Split Channels	Pisahkan Channel
+	Merge Channels…	Gabungkan Channel…
+	Specify Channels:	Tentukan Channel:
+	Not enough grayscale documents for this mode.	Dokumen grayscale tidak cukup untuk mode ini.
+	Pick a different document for each channel.	Pilih dokumen yang berbeda untuk setiap channel.
+	A picked document is no longer open.	Salah satu dokumen yang dipilih sudah tidak terbuka.
+	A picked document is no longer a grayscale document of the same size.	Salah satu dokumen yang dipilih bukan lagi dokumen grayscale dengan ukuran yang sama.

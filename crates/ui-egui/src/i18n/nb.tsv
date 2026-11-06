@@ -4787,3 +4787,11 @@ cameraRaw	White Balance: As Shot	Hvitbalanse: som fotografert
 	Pause For	Pause i
 	seconds	sekunder
 	Create a single history state	Opprett én historikktilstand
+
+# Channels panel menu (#11451)
+	Channel Options…	Kanalalternativer…
+	Specify Channels:	Angi kanaler:
+	Not enough grayscale documents for this mode.	Ikke nok dokumenter i gråtoner for denne modusen.
+	Pick a different document for each channel.	Velg et annet dokument for hver kanal.
+	A picked document is no longer open.	Et av de valgte dokumentene er ikke lenger åpent.
+	A picked document is no longer a grayscale document of the same size.	Et av de valgte dokumentene er ikke lenger et dokument i gråtoner av samme størrelse.
