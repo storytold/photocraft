@@ -331,8 +331,6 @@ pub fn export(doc: &Document, ctl: &photocraft_raster::Interrupt) -> std::result
     let icc = doc.icc_profile.as_ref().map(|p| p.to_vec());
     let artboards = doc.artboards();
     if !artboards.is_empty() {
-        // One flattened pass of the whole document; each artboard is a crop of it.
-        let surface = photocraft_compose::flatten_to_surface(doc, PixelFormat::new(fmt.mode, fmt.sample, true), None);
         let mut pages = Vec::with_capacity(artboards.len());
         for (_, name, artboard) in &artboards {
             ctl.check().map_err(|_| IoError::Cancelled)?;
@@ -341,6 +339,8 @@ pub fn export(doc: &Document, ctl: &photocraft_raster::Interrupt) -> std::result
             if aw == 0 || ah == 0 {
                 continue;
             }
+            // Render only this artboard's rect; the surface never holds the whole document.
+            let surface = photocraft_compose::composite_to_surface(doc, rect, PixelFormat::new(fmt.mode, fmt.sample, true), None);
             let values = surface.read_region(rect);
             let mut data = Vec::with_capacity((aw as usize * ah as usize).saturating_mul(device));
             for px in values.chunks(n) {
