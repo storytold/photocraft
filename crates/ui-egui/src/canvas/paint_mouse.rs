@@ -371,11 +371,15 @@ pub fn canvas_buttons(app: &mut PhotocraftApp, response: &Response, tool: Tool) 
     }
     let right_at = right_click_at(response);
     let right_click = right_at.is_some();
+    // A pen barrel press can drift past a right-click's reach, and a lifting pen leaves no pointer
+    // for it to come up at: its release opens the picker too, unless it resized or erased (#5364).
+    let pen_tap = app.control_click.pen_secondary() && response.drag_stopped_by(PointerButton::Secondary) && !resizing && !erase;
+    let picker_at = right_at.or_else(|| pen_tap.then(|| response.interact_pointer_pos().or_else(|| response.hover_pos())).flatten());
     if !erase
         && !layer_menu
         && !crate::color_hud::is_open(&app.ui)
         && right_click_picker(tool)
-        && let Some(p) = right_at
+        && let Some(p) = picker_at
     {
         crate::brush_picker::open(&mut app.ui, &response.ctx, [p.x, p.y]);
     }

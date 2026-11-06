@@ -522,6 +522,9 @@ pub struct Services {
     pub caption_style: Option<CaptionStyleFn>,
     /// Physical right mouse button or pen barrel button currently down.
     pub right_button_down: Option<RightButtonDownFn>,
+    /// Pen barrel button held when the pen last touched down (Windows), read once per press: that
+    /// press is a right-click, as Windows Ink makes it in other apps (#5364).
+    pub pen_barrel_press: Option<RightButtonDownFn>,
     /// The persistent brush preset store, loading in the background (desktop; see
     /// `photocraft_engine::preset_store`). Attached to the session once it arrives; without
     /// one, brush presets are session-only unless the shell attached a store before startup.

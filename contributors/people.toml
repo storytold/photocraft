@@ -309,6 +309,10 @@ real_name = "Simone Recchia"
 display_name = "Simone Recchia"
 sync_github_name = false
 
+[people.justicemesaya]
+real_name = "I Made Teguh"
+sync_github_name = false
+
 [people.davidvhk]
 real_name = "David Vanhoucke"
 sync_github_name = true

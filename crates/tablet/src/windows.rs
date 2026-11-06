@@ -11,6 +11,11 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 static BARREL_DOWN: AtomicBool = AtomicBool::new(false);
+/// The barrel state of the last `WM_POINTERDOWN`. Unlike [`BARREL_DOWN`] it outlives the
+/// `WM_POINTERUP`: a quick tap's press and release can reach egui in the same frame, after the
+/// release already cleared [`BARREL_DOWN`] (#5364). Its press takes it ([`take_barrel_press`]),
+/// so a later contact can't inherit it.
+static BARREL_AT_PRESS: AtomicBool = AtomicBool::new(false);
 
 #[repr(C)]
 struct POINT {
@@ -71,9 +76,12 @@ unsafe extern "system" {
     fn CallNextHookEx(hhk: *mut std::ffi::c_void, n_code: i32, w_param: usize, l_param: isize) -> isize;
     fn GetCurrentThreadId() -> u32;
     fn GetPointerPenInfo(pointer_id: u32, pen_info: *mut POINTER_PEN_INFO) -> i32;
+    fn GetPointerType(pointer_id: u32, pointer_type: *mut u32) -> i32;
 }
 
 const WH_GETMESSAGE: i32 = 3;
+/// `PT_PEN` (`POINTER_INPUT_TYPE`, winuser.h).
+const PT_PEN: u32 = 3;
 const WM_POINTERUPDATE: u32 = 0x0245;
 const WM_POINTERDOWN: u32 = 0x0246;
 const WM_POINTERUP: u32 = 0x0247;
@@ -114,6 +122,17 @@ unsafe extern "system" fn get_msg_proc(code: i32, w_param: usize, l_param: isize
                 };
                 let is_barrel = is_barrel_pressed(pen_flags, pointer_message_flags);
                 BARREL_DOWN.store(is_barrel, Ordering::Relaxed);
+                // Pens only: a finger's touch-down must not clear a barrel press egui hasn't read
+                // yet. Every pen down records its state, even one whose pen info lookup failed.
+                if msg.message == WM_POINTERDOWN {
+                    let mut pointer_type = 0;
+                    // SAFETY: `pointer_type` is a valid out pointer, and `pointer_id` is the
+                    // pointer identifier from the valid WM_POINTER message.
+                    let pen = unsafe { GetPointerType(pointer_id, &mut pointer_type) != 0 } && pointer_type == PT_PEN;
+                    if pen || pen_flags.is_some() {
+                        BARREL_AT_PRESS.store(is_barrel, Ordering::Relaxed);
+                    }
+                }
             }
             WM_POINTERUP | WM_POINTERLEAVE => {
                 BARREL_DOWN.store(false, Ordering::Relaxed);
@@ -157,12 +176,19 @@ impl Drop for Monitor {
             UnhookWindowsHookEx(self.hook);
         }
         BARREL_DOWN.store(false, Ordering::Relaxed);
+        BARREL_AT_PRESS.store(false, Ordering::Relaxed);
     }
 }
 
 /// Returns true if the stylus barrel button is physically pressed.
 pub fn is_barrel_button_down() -> bool {
     BARREL_DOWN.load(Ordering::Relaxed)
+}
+
+/// Returns true if the barrel button was held when the pen last touched down, once: for the press
+/// that pen down made. Only a pen sets it, so true also says that press is a pen's.
+pub fn take_barrel_press() -> bool {
+    BARREL_AT_PRESS.swap(false, Ordering::Relaxed)
 }
 
 #[cfg(test)]
@@ -184,6 +210,13 @@ mod tests {
     fn pen_barrel_flag_is_detected() {
         assert!(is_barrel_pressed(Some(PEN_FLAG_BARREL), 0));
         assert!(is_barrel_pressed(Some(PEN_FLAG_BARREL), POINTER_FLAG_INCONTACT));
+    }
+
+    #[test]
+    fn a_barrel_press_is_taken_once() {
+        BARREL_AT_PRESS.store(true, Ordering::Relaxed);
+        assert!(take_barrel_press());
+        assert!(!take_barrel_press(), "a later contact can't inherit the press");
     }
 
     #[test]
