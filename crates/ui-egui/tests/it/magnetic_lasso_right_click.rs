@@ -95,6 +95,22 @@ fn agent_right_click_on_another_document_still_opens_the_selection_menu() {
 }
 
 #[test]
+fn agent_right_click_during_an_alt_drag_still_opens_the_selection_menu() {
+    // Not measured in Photoshop: a right-click while an ⌥-drag draws a freehand segment keeps
+    // today's behaviour, the selection menu.
+    let mut app = app();
+    agent_click(&mut app, CORNERS[0], "left", false);
+    let events = json!([{"kind": "down", "x": CORNERS[1][0], "y": CORNERS[1][1]}, {"kind": "move", "x": 200.0, "y": 120.0}]);
+    pointer(&mut app, json!({"tool": "MagneticLasso", "alt": true, "events": events}));
+    assert!(app.ui.magnetic.freehand, "an ⌥-drag is drawing a freehand segment");
+
+    agent_click(&mut app, INSIDE, "right", false);
+    let (_, menu) = inspect(&mut app);
+    let entries = menu["entries"].as_array().expect("the selection menu opened");
+    assert!(entries.iter().any(|e| e["id"] == "select.all"), "{menu}");
+}
+
+#[test]
 fn agent_right_click_without_a_border_still_opens_the_selection_menu() {
     let mut app = app();
     agent_click(&mut app, INSIDE, "right", false);
