@@ -429,3 +429,56 @@ fn a_cmyk_document_without_an_ink_composite_falls_back() {
     // A sample with no coverage keeps the reading it had before.
     assert_eq!(cmyk_readout(doc, [10.5, 10.5], 1, [0.0, 0.0, 0.0, 0.0]), device_cmyk(0.0, 0.0, 0.0));
 }
+
+/// #11681 review: a document whose inks only the plane-splitting route renders (a layer effect) is
+/// not sampled through it. That route stands the whole document up twice per call, hundreds of
+/// milliseconds for one pointer pixel on a six-megapixel page, so the readout keeps the RGB
+/// conversion for it - the reading it had before the ink readout existed.
+#[test]
+fn a_cmyk_document_with_layer_effects_is_not_sampled_on_the_split_route() {
+    use photocraft_doc::effects::{Contour, Effect, FxCommon, Shadow};
+    let mut s = ink_chart(8);
+    s.edit("paint", |doc, _| {
+        let l = &mut doc.layers[0];
+        l.effects.enabled = true;
+        l.effects.items.push(Effect::DropShadow(Shadow {
+            common: FxCommon::new(photocraft_color::BlendMode::Multiply, 0.75),
+            color: photocraft_color::Color { mode: ColorMode::Cmyk, c: [0.0, 0.0, 0.0, 1.0], alpha: 1.0 },
+            angle: 135.0,
+            use_global_light: false,
+            distance: 2.0,
+            spread: 0.0,
+            size: 6.0,
+            contour: Contour::Linear,
+            anti_alias: true,
+            noise: 0.0,
+            knocks_out: false,
+        }));
+        Ok(())
+    })
+    .unwrap();
+    let doc = &s.active().unwrap().doc;
+    assert!(!photocraft_compose::cmyk::supports(doc), "the effect declines the native ink path");
+    assert!(photocraft_compose::cmyk::renders_inks(doc), "only the split route would render its inks");
+    assert_eq!(ink_cmyk(doc, [10.5, 10.5], 1), None, "and a pointer sample does not ask for it");
+    let rgba = crate::sample_cmds::sample_color(doc, None, 10.0, 10.0, 1, crate::sample_cmds::SampleLayers::All);
+    assert_eq!(cmyk_readout(doc, [10.0, 10.0], 1, rgba), device_cmyk(rgba[0], rgba[1], rgba[2]), "it reads the RGB conversion it had before");
+    let (_rgb, cmyk) = readout(doc, [10.0, 10.0]);
+    assert!(cmyk.iter().all(|v| (0..=100).contains(v)), "{cmyk:?}");
+}
+
+/// Gating on the native ink path changes no value: for a stack it does take, the readout is the
+/// ink composite's own pixel.
+#[test]
+fn the_ink_readout_is_the_ink_composite_itself() {
+    let s = ink_chart(8);
+    let doc = &s.active().unwrap().doc;
+    assert!(photocraft_compose::cmyk::supports(doc), "the native ink path renders this stack");
+    for i in 0..4 {
+        let at = [f64::from(i * 20) + 10.5, 10.5];
+        let rect = crate::sample_cmds::sample_rect(at[0], at[1], 1, doc.bounds()).unwrap();
+        let composite = photocraft_compose::cmyk::render_cmyk(doc, rect).expect("the ink composite");
+        let want = composite.px.first().map(|p| [0, 1, 2, 3].map(|c| (p[c] * 100.0).round() as i32));
+        assert_eq!(ink_cmyk(doc, at, 1), want, "square {i}");
+    }
+}

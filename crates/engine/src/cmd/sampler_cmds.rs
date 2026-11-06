@@ -46,10 +46,19 @@ pub fn device_cmyk(r: f32, g: f32, b: f32) -> [i32; 4] {
 /// trip is lossy, and reports a pure cyan ink (100/0/0/0) as 73/15/0/0, a pure black as
 /// 18/11/12/91 (#11640).
 ///
-/// `None` when `doc` is not a CMYK document, when its layers do not composite on inks
-/// ([`photocraft_compose::cmyk::render_cmyk`]), or when the sampled pixels hold no coverage.
+/// `None` when `doc` is not a CMYK document, when the sampled pixels hold no coverage, or when its
+/// layers are not the compositor's native ink path. The other CMYK route
+/// ([`photocraft_compose::cmyk::split`]) renders effects and knockouts by standing the **whole
+/// document** up twice, once per ink plane group: measured on a 3000 × 2000 document with a drop
+/// shadow, one pointer sample cost 446 ms that way, against 1 ms on the native path and 14 ms for
+/// the RGB composite the readout already pays, so a per-pixel readout must not ask for it
+/// (#11681 review). Such a document keeps the colour-managed conversion of its RGB composite.
 pub fn ink_cmyk(doc: &Document, pos: [f64; 2], size: u32) -> Option<[i32; 4]> {
     let rect = crate::sample_cmds::sample_rect(pos[0], pos[1], size, doc.bounds())?;
+    // Asked before rendering, since `render_cmyk` takes the split route rather than return `None`.
+    if !photocraft_compose::cmyk::supports(doc) {
+        return None;
+    }
     let inks = photocraft_compose::cmyk::render_cmyk(doc, rect)?;
     // The same alpha-weighted mean over the square as the RGB readout, on ink values.
     let mut sum = [0.0f64; 4];
