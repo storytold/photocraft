@@ -1,6 +1,7 @@
 use super::display::{canvas_display, checker, display_doc, display_image};
 use super::drag::{
-    angle_readout, draw_marquee_readout, draw_value_readout, marquee_ants, marquee_drag_ants, marquee_preview_px, single_line_drag_px, size_readout,
+    angle_readout, doc_box_corners, draw_marquee_readout, draw_value_readout, marquee_ants, marquee_drag_ants, marquee_preview_px, single_line_drag_px,
+    size_readout,
 };
 use super::gesture::constrained_polygon_point;
 use super::strokes::{EngineStroke, SPOT_HEALING_TRAIL, draw_smoothing_string, strokes_live};
@@ -474,10 +475,15 @@ pub(super) fn draw_tool_state(app: &PhotocraftApp, painter: &egui::Painter, xf: 
         let shield = crate::crop_shield::current(app, painter.ctx());
         if deg == 0.0 && xf.rotation == 0.0 {
             let r = Rect::from_two_pos(xf.to_screen(c[0] as f32, c[1] as f32), xf.to_screen(c[2] as f32, c[3] as f32));
-            crop_overlay(painter, r, shield, &crate::crop_overlay::current_guides(app, r.width(), r.height()));
+            crop_overlay(
+                painter,
+                r,
+                shield,
+                &crate::crop_overlay::current_guides_for_frame(app, [r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom()], painter.clip_rect()),
+            );
         } else {
             let q = crate::crop_ui::corners(c, deg).map(|p| xf.to_screen(p[0] as f32, p[1] as f32));
-            crop_overlay_turned(painter, q, shield, &crate::crop_overlay::current_guides(app, q[0].distance(q[1]), q[0].distance(q[3])));
+            crop_overlay_turned(painter, q, shield, &crate::crop_overlay::current_guides_for_frame(app, q, painter.clip_rect()));
         }
         // The frame's angle beside the pointer while it turns (#1792).
         if let (Some(a), Some(h)) = (crate::crop_ui::turning(app), hover) {
@@ -610,8 +616,8 @@ pub(super) fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter
             painter.circle_filled(b, 3.0, Color32::WHITE);
         }
         Tool::Type | Tool::VerticalType | Tool::HorizontalTypeMask | Tool::VerticalTypeMask => {
-            let r = Rect::from_two_pos(xf.to_screen(d.start[0] as f32, d.start[1] as f32), xf.to_screen(last[0] as f32, last[1] as f32));
-            let pts = [r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom(), r.left_top()];
+            let [p0, p1, p2, p3] = doc_box_corners(xf, d.start, last);
+            let pts = [p0, p1, p2, p3, p0];
             painter.add(egui::Shape::line(pts.to_vec(), Stroke::new(1.0, Color32::WHITE)));
             painter.add(egui::Shape::dashed_line(&pts, Stroke::new(1.0, Color32::BLACK), 3.0, 3.0));
         }

@@ -154,6 +154,11 @@ pub struct ToolOptions {
     /// off (Selection) to their own bounds, or an active selection's (#10337).
     #[serde(default)]
     pub move_align_to_canvas: bool,
+    /// Transform options bar: Toggle Reference Point. Off by default, as in Photoshop: the point
+    /// isn't drawn and isn't a handle, so a drag from the middle of the box moves the content;
+    /// transforms still turn and scale about it (#11098).
+    #[serde(default)]
+    pub transform_reference_point: bool,
     /// Last interpolation selected in the Transform options bar; unset follows General's default.
     #[serde(default)]
     pub transform_interpolation: Option<photocraft_engine::prefs::Interpolation>,
@@ -169,7 +174,7 @@ pub struct ToolOptions {
     pub crop_custom_ratio_height: f32,
     #[serde(default = "yes")]
     pub crop_delete: bool,
-    /// Crop options bar › Fill: false = Background (Default), true = Content-Aware Fill (the area a
+    /// Crop options bar › Fill: false = Background (default), true = Content-Aware Fill (the area a
     /// rotated or extending crop uncovers is filled from its surroundings, #3823).
     #[serde(default)]
     pub crop_content_aware: bool,
@@ -317,6 +322,14 @@ pub(super) fn default_layer_filter_mode() -> photocraft_color::BlendMode {
     photocraft_color::BlendMode::Normal
 }
 
+/// A stored Mode filter set to Pass Through, which the Mode list offered until #10878, loads as
+/// Normal: Pass Through isn't a mode the filter lists any more.
+pub(super) fn layer_filter_mode_or_normal<'de, D: serde::Deserializer<'de>>(d: D) -> Result<photocraft_color::BlendMode, D::Error> {
+    use serde::Deserialize;
+    let mode = photocraft_color::BlendMode::deserialize(d)?;
+    Ok(if mode == photocraft_color::BlendMode::PassThrough { photocraft_color::BlendMode::Normal } else { mode })
+}
+
 fn one_u32() -> u32 {
     1
 }
@@ -453,6 +466,7 @@ impl Default for ToolOptions {
             move_target: default_move_target(),
             move_show_transform: false,
             move_align_to_canvas: false,
+            transform_reference_point: false,
             transform_interpolation: None,
             crop_ratio: String::new(),
             crop_custom_ratio_width: 0.0,
