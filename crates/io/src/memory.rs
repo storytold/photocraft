@@ -251,6 +251,7 @@ pub fn low_memory_advice(free_memory: &Option<u64>) -> String {
     }
 }
 
+/// A size for people: "3.0 GiB", "900 MiB", "512 B".
 fn size_text(bytes: u64) -> String {
     if bytes >= 1 << 30 {
         format!("{:.1} GiB", bytes as f64 / (1u64 << 30) as f64)
@@ -374,14 +375,15 @@ fn resolve_budget_credited(platform: Platform, snapshot: MemorySnapshot, caller_
         soft = soft.min(hard);
     }
 
-    // Report the measured free memory only when it is what set the hard limit.
+    // Report the measured free memory only when it alone set the hard limit: where the platform
+    // cap equals the measured room, more free memory could not raise the limit.
     let measured_free = match (ram, commit) {
         (None, None) => None,
         (Some(a), None) => Some(a),
         (None, Some(c)) => Some(c),
         (Some(a), Some(c)) => Some(a.min(c)),
     }
-    .filter(|_| measured_room.is_some_and(|room| room <= platform_cap) && hard >= machine_limit);
+    .filter(|_| measured_room.is_some_and(|room| room < platform_cap) && hard >= machine_limit);
 
     MemoryBudget { soft_limit: soft, hard_limit: hard, available_ram: ram, warning_threshold, measured_free }
 }
@@ -1303,6 +1305,18 @@ mod tests {
         // A caller limit equal to the machine's limit does not hide the measurement.
         assert_eq!(resolve_budget_for(Platform::Native, snap(Some(8 * GIB), None), Some(6 * GIB)).measured_free, Some(8 * GIB));
         assert_eq!(resolve_budget_for(Platform::Native, snap(Some(8 * GIB), None), Some(6 * GIB - 1)).measured_free, None);
+    }
+
+    /// Only 32-bit native has a finite cap: when it equals the measured room, freeing memory
+    /// cannot raise the limit, so no free-memory figure is reported.
+    #[test]
+    fn a_platform_cap_equal_to_the_measured_room_reports_no_free_memory() {
+        let cap = native_platform_cap();
+        if cap == u64::MAX {
+            return;
+        }
+        assert_eq!(native_budget(None, Some(cap + COMMIT_RESERVE)).measured_free, None);
+        assert_eq!(native_budget(None, Some(cap - 1 + COMMIT_RESERVE)).measured_free, Some(cap - 1 + COMMIT_RESERVE));
     }
 
     #[test]
