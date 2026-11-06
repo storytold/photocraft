@@ -98,7 +98,7 @@ pub const DEFAULT_FX_CACHE_BUDGET: usize = 768 << 20;
 static FX_CACHE_BUDGET: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(DEFAULT_FX_CACHE_BUDGET);
 
 /// Set the memory budget (bytes) of the layer-effect map cache; entries over it are evicted
-/// oldest-first on the next build.
+/// least recently used first on the next build.
 pub fn set_effect_cache_budget(bytes: usize) {
     FX_CACHE_BUDGET.store(bytes.max(1 << 20), std::sync::atomic::Ordering::Relaxed);
 }
@@ -287,8 +287,9 @@ fn evict_fx_cache_over_budget(key: u64) {
 fn cached_effect_maps(layer: &Layer, region: Rect, key: u64, cx: &Ctx) -> std::sync::Arc<effects::FxMaps> {
     let slot = {
         let mut c = fx_cache().lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(s) = c.map.get(&key) {
-            s.clone()
+        if let Some(s) = c.map.get(&key).cloned() {
+            touch_effect_entry(&mut c.order, key);
+            s
         } else {
             let s: FxSlot = Default::default();
             c.map.insert(key, s.clone());
@@ -300,7 +301,32 @@ fn cached_effect_maps(layer: &Layer, region: Rect, key: u64, cx: &Ctx) -> std::s
         Some(e) => e.maps.clone(),
         None => build_fx_slot_maps(layer, region, key, cx, &slot),
     };
-    // Evict the oldest entries over budget (never the one just used).
+    // Evict the least recently used entries over budget (never the one just used).
     evict_fx_cache_over_budget(key);
     maps
+}
+
+/// Marks `key` the most recently used of `order`, so eviction (oldest first) takes the maps that
+/// renders stopped asking for, not those every render uses.
+fn touch_effect_entry(order: &mut std::collections::VecDeque<u64>, key: u64) {
+    if let Some(i) = order.iter().position(|&k| k == key) {
+        order.remove(i);
+    }
+    order.push_back(key);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::touch_effect_entry;
+
+    #[test]
+    fn an_effect_cache_hit_makes_the_entry_the_newest() {
+        // Eviction takes the oldest first: maps used by every render (layers a render server never
+        // changes) must outlive maps of layers that changed and will not be asked for again.
+        let mut order: std::collections::VecDeque<u64> = [1, 2, 3].into_iter().collect();
+        touch_effect_entry(&mut order, 1);
+        assert_eq!(order.iter().copied().collect::<Vec<_>>(), [2, 3, 1]);
+        touch_effect_entry(&mut order, 1);
+        assert_eq!(order.iter().copied().collect::<Vec<_>>(), [2, 3, 1]);
+    }
 }
