@@ -4223,3 +4223,16 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	Wybierz inny dokument dla każdego kanału.
 	A picked document is no longer open.	Jeden z wybranych dokumentów nie jest już otwarty.
 	A picked document is no longer a grayscale document of the same size.	Jeden z wybranych dokumentów nie jest już dokumentem w skali szarości o tym samym rozmiarze.
+
+# Legacy Perspective Warp V2 and review fixes
+	Link Edges	Połącz krawędzie
+	Join matching neighbouring edges within 8 document pixels; preserves other planes	Łączy pasujące sąsiednie krawędzie w odległości do 8 pikseli dokumentu; pozostałe płaszczyzny pozostają bez zmian
+	Perspective Warp preview belongs to another document	Podgląd wypaczenia perspektywy należy do innego dokumentu
+	Perspective Warp: invalid plane; drag ignored	Wypaczenie perspektywy: nieprawidłowa płaszczyzna; przeciąganie zignorowane
+	Perspective Warp: no changes to apply	Wypaczenie perspektywy: brak zmian do zastosowania
+	Perspective Warp: {error}	Wypaczenie perspektywy: {error}
+	a plane is degenerate (its corners must form a quad)	płaszczyzna jest zdegenerowana (jej narożniki muszą tworzyć czworokąt)
+	plane coordinates must be finite	współrzędne płaszczyzny muszą być skończone
+
+# Legacy Perspective Warp linked-edge result
+	Edges linked: {count}	Połączone krawędzie: {count}

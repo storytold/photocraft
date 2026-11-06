@@ -4177,3 +4177,16 @@ document	Orientation	방향
 layers	Fill	칠
 layers	Fill:	칠:
 shape	Appearance	화면 모양
+
+# Legacy Perspective Warp V2 and review fixes
+	Link Edges	모서리 연결
+	Join matching neighbouring edges within 8 document pixels; preserves other planes	문서에서 8픽셀 이내의 일치하는 인접 모서리를 연결합니다. 다른 평면은 변경하지 않습니다
+	Perspective Warp preview belongs to another document	원근 뒤틀기 미리 보기는 다른 문서에 속합니다
+	Perspective Warp: invalid plane; drag ignored	원근 뒤틀기: 잘못된 평면입니다. 드래그를 무시했습니다
+	Perspective Warp: no changes to apply	원근 뒤틀기: 적용할 변경 사항이 없습니다
+	Perspective Warp: {error}	원근 뒤틀기: {error}
+	a plane is degenerate (its corners must form a quad)	평면이 퇴화되었습니다(네 꼭짓점이 사각형을 이루어야 합니다)
+	plane coordinates must be finite	평면 좌표는 유한한 값이어야 합니다
+
+# Legacy Perspective Warp linked-edge result
+	Edges linked: {count}	연결된 모서리: {count}

@@ -4359,3 +4359,16 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	Kies voor elk kanaal een ander document.
 	A picked document is no longer open.	Een gekozen document is niet meer geopend.
 	A picked document is no longer a grayscale document of the same size.	Een gekozen document is geen grijswaardendocument van hetzelfde formaat meer.
+
+# Legacy Perspective Warp V2 and review fixes
+	Link Edges	Randen koppelen
+	Join matching neighbouring edges within 8 document pixels; preserves other planes	Verbindt overeenkomende aangrenzende randen binnen 8 documentpixels; behoudt overige vlakken
+	Perspective Warp preview belongs to another document	Het voorbeeld van perspectiefvervorming hoort bij een ander document
+	Perspective Warp: invalid plane; drag ignored	Perspectiefvervorming: ongeldig vlak; slepen genegeerd
+	Perspective Warp: no changes to apply	Perspectiefvervorming: geen wijzigingen om toe te passen
+	Perspective Warp: {error}	Perspectiefvervorming: {error}
+	a plane is degenerate (its corners must form a quad)	een vlak is gedegenereerd (de hoekpunten moeten een vierhoek vormen)
+	plane coordinates must be finite	vlakcoördinaten moeten eindige waarden hebben
+
+# Legacy Perspective Warp linked-edge result
+	Edges linked: {count}	Verbonden randen: {count}

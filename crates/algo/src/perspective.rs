@@ -9,12 +9,16 @@
 //! planes' images of each edge point as the target and add the difference, faded linearly
 //! across the plane (weight `1 − u`, `u`, `1 − v` or `v` from that edge to the opposite one).
 //! The correction vanishes at the corners (shared corners have one destination), so the map is
-//! exactly continuous across shared edges, exactly the homography for a lone plane, and exactly
-//! the identity when nothing moved. Points outside every plane use the nearest plane, with
-//! `(u, v)` clamped for the corrections.
+//! exactly continuous across shared edges and exactly the homography for a lone plane.
+//! For multiple planes, corrected maps now contribute to one continuous global displacement
+//! field: each plane has unit weight inside its source quad and Gaussian distance-based
+//! falloff outside. This removes hard ownership switches across overlapping or separated
+//! planes without blurring/compositing the raster output. The relative influence is
+//! continuous, not a physical guarantee of identical tangents on different 3D surfaces.
 //!
 //! Corners that coincide (within half a pixel) in the source are linked: they share one
-//! destination (the mean of the given ones), as Photoshop's snapped planes do.
+//! destination (the mean of the given ones), as Photoshop's snapped planes do. Layout
+//! may explicitly weld complete near-adjacent edges before the warp is committed.
 
 use serde::{Deserialize, Serialize};
 
@@ -41,6 +45,26 @@ const UNIT: [[f64; 2]; 4] = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
 
 fn unit_to_quad(q: &[[f64; 2]; 4]) -> Option<Homography> {
     Homography::rect_to_quad([0.0, 0.0, 1.0, 1.0], *q)
+}
+
+/// A valid perspective plane must remain a strictly convex quadrilateral. The homography
+/// solver alone can return a matrix even when the destination collapses to a point or when
+/// consecutive edges cross; accepting such a map can silently deform or destroy pixels.
+/// Both orientations are allowed (e.g. a deliberate mirror).
+fn valid_quad(q: &[[f64; 2]; 4]) -> bool {
+    let mut direction = 0.0_f64;
+    for i in 0..4 {
+        let (a, b, c) = (q[i], q[(i + 1) % 4], q[(i + 2) % 4]);
+        let cross = (b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0]);
+        if !cross.is_finite() || cross.abs() <= 1.0e-9 {
+            return false;
+        }
+        if direction != 0.0 && cross.signum() != direction {
+            return false;
+        }
+        direction = cross.signum();
+    }
+    true
 }
 
 /// Groups of linked corners: `(plane, corner)` pairs that coincide in the source.
@@ -76,6 +100,126 @@ pub fn unify(planes: &mut [Plane]) {
             planes[p].dst[c] = d;
         }
     }
+}
+
+/// Match a complete edge on opposite sides of the same source boundary. Reject edges
+/// belonging to overlapping planes facing the same way: they are not adjacent surfaces.
+/// The two corner indices on `b` correspond to a[k] and a[k+1], respectively.
+fn matched_adjacent_edge(a: &Plane, k: usize, b: &Plane, m: usize, tolerance: f64) -> Option<(usize, usize)> {
+    let (ak, an, bm, bn) = (k, (k + 1) % 4, m, (m + 1) % 4);
+    let (p, q) = (a.src[ak], a.src[an]);
+    let ca = a.src.iter().fold([0.0; 2], |sum, p| [sum[0] + p[0] * 0.25, sum[1] + p[1] * 0.25]);
+    let cb = b.src.iter().fold([0.0; 2], |sum, p| [sum[0] + p[0] * 0.25, sum[1] + p[1] * 0.25]);
+    let side = |c: [f64; 2]| (q[0] - p[0]) * (c[1] - p[1]) - (q[1] - p[1]) * (c[0] - p[0]);
+    if side(ca) * side(cb) >= 0.0 {
+        return None;
+    }
+    let near = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).hypot(a[1] - b[1]) <= tolerance;
+    if near(p, b.src[bm]) && near(q, b.src[bn]) {
+        Some((bm, bn))
+    } else if near(p, b.src[bn]) && near(q, b.src[bm]) {
+        Some((bn, bm))
+    } else {
+        None
+    }
+}
+
+/// Number of true shared edges (as opposed to two unrelated overlapping planes).
+pub fn linked_edge_count(planes: &[Plane]) -> usize {
+    let mut count = 0;
+    for (i, a) in planes.iter().enumerate() {
+        for b in planes.iter().skip(i + 1) {
+            for k in 0..4 {
+                for m in 0..4 {
+                    if matched_adjacent_edge(a, k, b, m, LINK_EPS).is_some() {
+                        count += 1;
+                    }
+                }
+            }
+        }
+    }
+    count
+}
+
+/// Explicitly weld complete near-matching edges, while preserving all unrelated geometry.
+/// Both source and destination corners are linked by group means (including 3+ planes
+/// meeting at one point). No partially matched edges are snapped.
+///
+/// Returns the number of matched edge pairs. Invalid resulting quads abort without altering
+/// the input slice. Tolerances are source document pixels, not screen/zoom pixels.
+pub fn weld_adjacent_edges(planes: &mut [Plane], tolerance: f64) -> Result<usize, &'static str> {
+    if !tolerance.is_finite() || !(0.0..=32.0).contains(&tolerance) {
+        return Err("linkEdges tolerance must be finite and within 0..32 document pixels");
+    }
+    if planes.is_empty() {
+        return Ok(0);
+    }
+    let n = planes.len() * 4;
+    let mut parent: Vec<usize> = (0..n).collect();
+    fn root(parent: &mut [usize], i: usize) -> usize {
+        let mut current = i;
+        while parent[current] != current {
+            current = parent[current];
+        }
+        let root = current;
+        let mut current = i;
+        while parent[current] != root {
+            let next = parent[current];
+            parent[current] = root;
+            current = next;
+        }
+        root
+    }
+    let mut links = 0;
+    for i in 0..planes.len() {
+        for j in (i + 1)..planes.len() {
+            for k in 0..4 {
+                for m in 0..4 {
+                    let Some((bk, bn)) = matched_adjacent_edge(&planes[i], k, &planes[j], m, tolerance) else {
+                        continue;
+                    };
+                    for (ia, ib) in [(4 * i + k, 4 * j + bk), (4 * i + (k + 1) % 4, 4 * j + bn)] {
+                        let (a, b) = (root(&mut parent, ia), root(&mut parent, ib));
+                        if a != b {
+                            parent[b] = a;
+                        }
+                    }
+                    links += 1;
+                }
+            }
+        }
+    }
+    if links == 0 {
+        return Ok(0);
+    }
+    let original = planes.to_vec();
+    let mut groups = vec![Vec::new(); n];
+    for idx in 0..n {
+        let r = root(&mut parent, idx);
+        groups[r].push(idx);
+    }
+    for group in groups.iter().filter(|group| group.len() > 1) {
+        let mut s = [0.0; 2];
+        let mut d = [0.0; 2];
+        let inv = 1.0 / group.len() as f64;
+        for &index in group {
+            let corner = index % 4;
+            let plane = index / 4;
+            for axis in 0..2 {
+                s[axis] += original[plane].src[corner][axis] * inv;
+                d[axis] += original[plane].dst[corner][axis] * inv;
+            }
+        }
+        for &index in group {
+            planes[index / 4].src[index % 4] = s;
+            planes[index / 4].dst[index % 4] = d;
+        }
+    }
+    if PerspectiveMap::new(planes).is_none() {
+        planes.clone_from_slice(&original);
+        return Err("linkEdges would create an invalid plane; no changes applied");
+    }
+    Ok(links)
 }
 
 /// Edge `k` of a plane runs from corner `k` to corner `k + 1`.
@@ -159,6 +303,9 @@ impl PerspectiveMap {
         }
         let mut planes = planes.to_vec();
         unify(&mut planes);
+        if planes.iter().any(|p| !valid_quad(&p.src) || !valid_quad(&p.dst)) {
+            return None;
+        }
         let near = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).abs() <= LINK_EPS && (a[1] - b[1]).abs() <= LINK_EPS;
         let mut maps = Vec::with_capacity(planes.len());
         for (i, p) in planes.iter().enumerate() {
@@ -201,13 +348,14 @@ impl PerspectiveMap {
         (best.0, best.2, best.3)
     }
 
-    /// Maps a source point to the destination.
-    pub fn map(&self, x: f64, y: f64) -> (f64, f64) {
-        let (i, u, v) = self.locate(x, y);
+    /// Maps through one local projective plane, including the pre-existing shared-edge
+    /// correction. Keeping this separate lets the global field blend the same corrected
+    /// geometry rather than jumping between incompatible local maps.
+    fn map_plane(&self, i: usize, u: f64, v: f64) -> Option<(f64, f64)> {
         let pm = &self.planes[i];
         let (mut ox, mut oy) = pm.dst.apply(u, v);
         if !ox.is_finite() || !oy.is_finite() {
-            return (x, y);
+            return None;
         }
         let (cu, cv) = (u.clamp(0.0, 1.0), v.clamp(0.0, 1.0));
         for (k, sh) in pm.shared.iter().enumerate() {
@@ -221,11 +369,61 @@ impl PerspectiveMap {
             let other = &self.planes[j];
             let (ou, ov) = other.src_inv.apply(qx, qy);
             let theirs = other.dst.apply(ou, ov);
-            let target = ((mine.0 + theirs.0) / 2.0, (mine.1 + theirs.1) / 2.0);
-            ox += w * (target.0 - mine.0);
-            oy += w * (target.1 - mine.1);
+            if !mine.0.is_finite() || !mine.1.is_finite() || !theirs.0.is_finite() || !theirs.1.is_finite() {
+                return None;
+            }
+            ox += 0.5 * w * (theirs.0 - mine.0);
+            oy += 0.5 * w * (theirs.1 - mine.1);
         }
-        (ox, oy)
+        if ox.is_finite() && oy.is_finite() { Some((ox, oy)) } else { None }
+    }
+
+    /// Continuous global forward map for multi-plane work. The previous "first containing
+    /// plane, or nearest plane" rule introduced a hard jump wherever overlapping/adjacent
+    /// quads had different local projective maps. Every plane now contributes smoothly:
+    /// full weight inside its quad and a Gaussian falloff with distance outside.
+    ///
+    /// Subtracting the largest log-weight before accumulation is equivalent to a normalized
+    /// weighted mean, without overflowing or allocating per mapped image vertex.
+    /// A single plane keeps its original exact homography path.
+    pub fn map(&self, x: f64, y: f64) -> (f64, f64) {
+        if self.planes.len() == 1 {
+            let (u, v) = self.planes[0].src_inv.apply(x, y);
+            return self.map_plane(0, u, v).unwrap_or((x, y));
+        }
+        const BLEND_RADIUS: f64 = 12.0; // source document pixels; local enough to preserve interiors
+        let (mut best_log, mut weight_sum, mut sum_x, mut sum_y) = (f64::NEG_INFINITY, 0.0, 0.0, 0.0);
+        for (i, pm) in self.planes.iter().enumerate() {
+            let (u, v) = pm.src_inv.apply(x, y);
+            if !u.is_finite() || !v.is_finite() {
+                continue;
+            }
+            let Some((ox, oy)) = self.map_plane(i, u, v) else { continue };
+            let inside = (0.0..=1.0).contains(&u) && (0.0..=1.0).contains(&v);
+            let distance = if inside { 0.0 } else { dist_to_quad(&pm.quad, [x, y]) };
+            let log_weight = -0.5 * (distance / BLEND_RADIUS).powi(2);
+            if log_weight > best_log {
+                let scale = (best_log - log_weight).exp();
+                weight_sum = weight_sum * scale + 1.0;
+                sum_x = sum_x * scale + ox;
+                sum_y = sum_y * scale + oy;
+                best_log = log_weight;
+            } else {
+                let weight = (log_weight - best_log).exp();
+                weight_sum += weight;
+                sum_x += weight * ox;
+                sum_y += weight * oy;
+            }
+        }
+        if weight_sum > 0.0 {
+            let out = (sum_x / weight_sum, sum_y / weight_sum);
+            if out.0.is_finite() && out.1.is_finite() {
+                return out;
+            }
+        }
+        // Preserve the previous fail-safe if all local projections become undefined.
+        let (i, u, v) = self.locate(x, y);
+        self.map_plane(i, u, v).unwrap_or((x, y))
     }
 
     /// Whether every plane maps onto itself (identity).
@@ -271,6 +469,18 @@ mod tests {
     }
 
     #[test]
+    fn reject_collapsed_and_crossing_quads_before_warping() {
+        let square = [[0.0, 0.0], [100.0, 0.0], [100.0, 100.0], [0.0, 100.0]];
+        let collapsed = [[4.0, 4.0]; 4];
+        let crossing = [[0.0, 0.0], [100.0, 100.0], [100.0, 0.0], [0.0, 100.0]];
+        assert!(PerspectiveMap::new(&[Plane { src: square, dst: collapsed }]).is_none());
+        assert!(PerspectiveMap::new(&[Plane { src: crossing, dst: square }]).is_none());
+        assert!(PerspectiveMap::new(&[Plane { src: square, dst: crossing }]).is_none());
+        let mirrored = [[100.0, 0.0], [0.0, 0.0], [0.0, 100.0], [100.0, 100.0]];
+        assert!(PerspectiveMap::new(&[Plane { src: square, dst: mirrored }]).is_some());
+    }
+
+    #[test]
     fn identity_and_a_known_homography() {
         let q = [[10.0, 10.0], [90.0, 12.0], [85.0, 70.0], [12.0, 75.0]];
         let m = PerspectiveMap::new(&[Plane::identity(q)]).unwrap();
@@ -289,6 +499,57 @@ mod tests {
         // The diagonals' crossing stays the crossing: (50, 50) maps to the trapezoid's diagonal intersection.
         let c = m.map(50.0, 50.0);
         assert!((c.0 - 50.0).abs() < 1e-9 && c.1 < 50.0, "{c:?}");
+    }
+
+    #[test]
+    fn overlapping_planes_do_not_create_a_mapping_step() {
+        // On the current first-containing-plane implementation, the overlap changes
+        // ownership at x=70 and instantly changes the vertical displacement by 16px.
+        // Multi-plane warping must instead form one continuous field.
+        let a = Plane { src: [[0.0, 0.0], [70.0, 0.0], [70.0, 100.0], [0.0, 100.0]], dst: [[0.0, 0.0], [70.0, 0.0], [70.0, 100.0], [0.0, 100.0]] };
+        let b = Plane { src: [[60.0, 0.0], [130.0, 0.0], [130.0, 100.0], [60.0, 100.0]], dst: [[60.0, 16.0], [130.0, 16.0], [130.0, 116.0], [60.0, 116.0]] };
+        let m = PerspectiveMap::new(&[a, b]).unwrap();
+        let left = m.map(70.0 - 0.001, 50.0);
+        let right = m.map(70.0 + 0.001, 50.0);
+        assert!((left.0 - right.0).hypot(left.1 - right.1) < 0.2, "hard seam at overlap ownership boundary: {left:?} -> {right:?}");
+        let far_left = m.map(1.0, 50.0);
+        assert!((far_left.1 - 50.0).abs() < 0.1, "far plane must not perturb unaffected interior: {far_left:?}");
+    }
+
+    #[test]
+    fn weld_adjacent_edges_joins_source_and_destination_atomically() {
+        let a = Plane::identity([[0.0, 0.0], [50.0, 0.0], [50.0, 100.0], [0.0, 100.0]]);
+        let b = Plane::identity([[54.0, 0.0], [104.0, 0.0], [104.0, 100.0], [54.0, 100.0]]);
+        let mut ps = vec![a.clone(), b.clone()];
+        assert_eq!(linked_edge_count(&ps), 0);
+        assert_eq!(weld_adjacent_edges(&mut ps, 8.0), Ok(1));
+        assert_eq!(ps[0].src[1], [52.0, 0.0]);
+        assert_eq!(ps[0].src[2], [52.0, 100.0]);
+        assert_eq!(ps[0].src[1], ps[1].src[0]);
+        assert_eq!(ps[0].src[2], ps[1].src[3]);
+        assert_eq!(ps[0].dst[1], ps[1].dst[0]);
+        assert_eq!(ps[0].dst[2], ps[1].dst[3]);
+        assert_eq!(linked_edge_count(&ps), 1);
+        assert!(PerspectiveMap::new(&ps).is_some());
+
+        let before = ps.clone();
+        assert!(weld_adjacent_edges(&mut ps, f64::NAN).is_err());
+        assert!(weld_adjacent_edges(&mut ps, 100.0).is_err());
+        assert_eq!(ps, before, "invalid tolerance must not mutate any plane");
+
+        let mut unrelated = vec![a, Plane::identity([[80.0, 0.0], [130.0, 0.0], [130.0, 100.0], [80.0, 100.0]])];
+        let original = unrelated.clone();
+        assert_eq!(weld_adjacent_edges(&mut unrelated, 8.0), Ok(0));
+        assert_eq!(unrelated, original);
+        // Two overlapping quads with matching top/bottom edges do not face each
+        // other across those edges, so they are not falsely declared adjacent.
+        let mut overlapped = vec![
+            Plane::identity([[0.0, 0.0], [50.0, 0.0], [50.0, 100.0], [0.0, 100.0]]),
+            Plane::identity([[4.0, 0.0], [54.0, 0.0], [54.0, 100.0], [4.0, 100.0]]),
+        ];
+        let original = overlapped.clone();
+        assert_eq!(weld_adjacent_edges(&mut overlapped, 8.0), Ok(0));
+        assert_eq!(overlapped, original);
     }
 
     #[test]

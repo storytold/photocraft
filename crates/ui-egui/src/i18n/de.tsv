@@ -3640,3 +3640,16 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	Wählen Sie für jeden Kanal ein anderes Dokument.
 	A picked document is no longer open.	Ein ausgewähltes Dokument ist nicht mehr geöffnet.
 	A picked document is no longer a grayscale document of the same size.	Ein ausgewähltes Dokument ist kein Graustufen-Dokument derselben Größe mehr.
+
+# Legacy Perspective Warp V2 and review fixes
+	Link Edges	Kanten verbinden
+	Join matching neighbouring edges within 8 document pixels; preserves other planes	Übereinstimmende benachbarte Kanten innerhalb von 8 Dokumentpixeln verbinden; andere Ebenen bleiben unverändert
+	Perspective Warp preview belongs to another document	Die Vorschau der Perspektivverformung gehört zu einem anderen Dokument
+	Perspective Warp: invalid plane; drag ignored	Perspektivisch verkrümmen: Ungültige Ebene; Ziehen ignoriert
+	Perspective Warp: no changes to apply	Perspektivisch verkrümmen: Keine Änderungen anzuwenden
+	Perspective Warp: {error}	Perspektivisch verkrümmen: {error}
+	a plane is degenerate (its corners must form a quad)	Eine Ebene ist degeneriert (ihre Ecken müssen ein Viereck bilden)
+	plane coordinates must be finite	Ebenenkoordinaten müssen endlich sein
+
+# Legacy Perspective Warp linked-edge result
+	Edges linked: {count}	Verbundene Kanten: {count}

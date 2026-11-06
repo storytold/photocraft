@@ -4512,3 +4512,16 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	Minden csatornához másik dokumentumot válasszon.
 	A picked document is no longer open.	Az egyik kiválasztott dokumentum már nincs megnyitva.
 	A picked document is no longer a grayscale document of the same size.	Az egyik kiválasztott dokumentum már nem azonos méretű szürkeárnyalatos dokumentum.
+
+# Legacy Perspective Warp V2 and review fixes
+	Link Edges	Élek összekapcsolása
+	Join matching neighbouring edges within 8 document pixels; preserves other planes	Összekapcsolja az egyező szomszédos éleket 8 dokumentumképponton belül; a többi síkot megőrzi
+	Perspective Warp preview belongs to another document	A perspektivikus torzítás előnézete egy másik dokumentumhoz tartozik
+	Perspective Warp: invalid plane; drag ignored	Perspektivikus torzítás: érvénytelen sík; a húzás figyelmen kívül maradt
+	Perspective Warp: no changes to apply	Perspektivikus torzítás: nincs alkalmazható módosítás
+	Perspective Warp: {error}	Perspektivikus torzítás: {error}
+	a plane is degenerate (its corners must form a quad)	egy sík elfajult (sarkainak négyszöget kell alkotniuk)
+	plane coordinates must be finite	a sík koordinátáinak végesnek kell lenniük
+
+# Legacy Perspective Warp linked-edge result
+	Edges linked: {count}	Összekapcsolt élek: {count}

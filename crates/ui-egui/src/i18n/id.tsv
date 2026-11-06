@@ -3628,3 +3628,16 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	Pilih dokumen yang berbeda untuk setiap channel.
 	A picked document is no longer open.	Salah satu dokumen yang dipilih sudah tidak terbuka.
 	A picked document is no longer a grayscale document of the same size.	Salah satu dokumen yang dipilih bukan lagi dokumen grayscale dengan ukuran yang sama.
+
+# Legacy Perspective Warp V2 and review fixes
+	Link Edges	Tautkan Tepi
+	Join matching neighbouring edges within 8 document pixels; preserves other planes	Tautkan tepi bersebelahan yang cocok dalam jarak 8 piksel dokumen; bidang lain tetap terjaga
+	Perspective Warp preview belongs to another document	Pratinjau distorsi perspektif ini milik dokumen lain
+	Perspective Warp: invalid plane; drag ignored	Distorsi perspektif: bidang tidak valid; seretan diabaikan
+	Perspective Warp: no changes to apply	Distorsi perspektif: tidak ada perubahan untuk diterapkan
+	Perspective Warp: {error}	Distorsi perspektif: {error}
+	a plane is degenerate (its corners must form a quad)	suatu bidang tidak valid (sudut-sudutnya harus membentuk segi empat)
+	plane coordinates must be finite	koordinat bidang harus berupa bilangan berhingga
+
+# Legacy Perspective Warp linked-edge result
+	Edges linked: {count}	Tepi tertaut: {count}

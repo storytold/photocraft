@@ -4345,3 +4345,16 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	Pro každý kanál vyberte jiný dokument.
 	A picked document is no longer open.	Jeden z vybraných dokumentů už není otevřený.
 	A picked document is no longer a grayscale document of the same size.	Jeden z vybraných dokumentů už není dokument ve stupních šedi stejné velikosti.
+
+# Legacy Perspective Warp V2 and review fixes
+	Link Edges	Propojit hrany
+	Join matching neighbouring edges within 8 document pixels; preserves other planes	Propojí odpovídající sousední hrany do vzdálenosti 8 pixelů dokumentu; ostatní roviny zůstanou beze změny
+	Perspective Warp preview belongs to another document	Náhled perspektivní deformace patří jinému dokumentu
+	Perspective Warp: invalid plane; drag ignored	Perspektivní deformace: neplatná rovina; tažení ignorováno
+	Perspective Warp: no changes to apply	Perspektivní deformace: žádné změny k použití
+	Perspective Warp: {error}	Perspektivní deformace: {error}
+	a plane is degenerate (its corners must form a quad)	rovina je degenerovaná (její rohy musí tvořit čtyřúhelník)
+	plane coordinates must be finite	souřadnice roviny musí být konečná čísla
+
+# Legacy Perspective Warp linked-edge result
+	Edges linked: {count}	Propojené hrany: {count}

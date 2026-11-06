@@ -4316,3 +4316,16 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	Виберіть окремий документ для кожного каналу.
 	A picked document is no longer open.	Один із вибраних документів більше не відкрито.
 	A picked document is no longer a grayscale document of the same size.	Один із вибраних документів більше не є документом у градаціях сірого того самого розміру.
+
+# Legacy Perspective Warp V2 and review fixes
+	Link Edges	З’єднати краї
+	Join matching neighbouring edges within 8 document pixels; preserves other planes	З’єднує суміжні краї, що збігаються, у межах 8 пікселів документа; інші площини залишаються без змін
+	Perspective Warp preview belongs to another document	Попередній перегляд перспективної деформації належить іншому документу
+	Perspective Warp: invalid plane; drag ignored	Перспективна деформація: недопустима площина; перетягування проігноровано
+	Perspective Warp: no changes to apply	Перспективна деформація: немає змін для застосування
+	Perspective Warp: {error}	Перспективна деформація: {error}
+	a plane is degenerate (its corners must form a quad)	площина вироджена (її кути мають утворювати чотирикутник)
+	plane coordinates must be finite	координати площини мають бути скінченними
+
+# Legacy Perspective Warp linked-edge result
+	Edges linked: {count}	Зв'язані краї: {count}

@@ -639,6 +639,41 @@ mod tests {
     }
 
     #[test]
+    fn overlapping_perspective_planes_keep_a_horizontal_rail_continuous_in_pixels() {
+        // Regression MP2-001 in the actual triangle rasterizer, not just the
+        // floating-point map: a photo's horizontal cornice must not step 16px
+        // when overlapping source planes transition near x=70.
+        let r = Rect::new(0, 0, 140, 140);
+        let mut src = Surface::new(PixelFormat::new(ColorMode::Rgb, SampleType::F32, true));
+        src.fill_rect(r, &[0.0, 0.0, 0.0, 1.0]);
+        src.fill_rect(Rect::new(0, 50, 140, 54), &[1.0, 0.0, 0.0, 1.0]);
+        let a = crate::perspective::Plane::identity([[0.0, 0.0], [70.0, 0.0], [70.0, 140.0], [0.0, 140.0]]);
+        let b = crate::perspective::Plane {
+            src: [[60.0, 0.0], [140.0, 0.0], [140.0, 140.0], [60.0, 140.0]],
+            dst: [[60.0, 16.0], [140.0, 16.0], [140.0, 156.0], [60.0, 156.0]],
+        };
+        let map = crate::perspective::PerspectiveMap::new(&[a, b]).unwrap();
+        let out = warp_mesh_surface(&src, r, &|x, y| map.map(x, y), Interp::Bilinear);
+        let mut last: Option<f64> = None;
+        for x in 50..90 {
+            let (mut weighted_y, mut mass) = (0.0f64, 0.0f64);
+            for y in 35..90 {
+                let color = out.pixel(x, y);
+                let red = f64::from((color[0] - color[1]).max(0.0) * color[3]);
+                weighted_y += red * f64::from(y);
+                mass += red;
+            }
+            assert!(mass > 0.5, "missing horizontal rail at x={x}: mass={mass}");
+            let center = weighted_y / mass;
+            if let Some(previous) = last {
+                assert!((center - previous).abs() < 3.5, "visible rail step between columns {} and {x}: {previous:.2} -> {center:.2}", x - 1);
+            }
+            assert!(out.pixel(x, 75)[3] > 0.95, "alpha hole in formerly overlapping planes at x={x}");
+            last = Some(center);
+        }
+    }
+
+    #[test]
     fn translation_and_known_arc_points() {
         let src = sample(SampleType::U8);
         let r = src.content_bounds();

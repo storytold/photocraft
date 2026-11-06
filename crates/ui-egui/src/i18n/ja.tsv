@@ -4276,3 +4276,16 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	チャンネルごとに別のドキュメントを選択してください。
 	A picked document is no longer open.	選択したドキュメントの一つが開かれていません。
 	A picked document is no longer a grayscale document of the same size.	選択したドキュメントの一つが、同じサイズのグレースケールのドキュメントではなくなりました。
+
+# Legacy Perspective Warp V2 and review fixes
+	Link Edges	エッジを連結
+	Join matching neighbouring edges within 8 document pixels; preserves other planes	ドキュメント上で8ピクセル以内の隣接する対応エッジを連結し、他の面は変更しません
+	Perspective Warp preview belongs to another document	遠近法ワープのプレビューは別のドキュメントに属しています
+	Perspective Warp: invalid plane; drag ignored	遠近法ワープ：無効な平面です。ドラッグは無視されました
+	Perspective Warp: no changes to apply	遠近法ワープ：適用する変更はありません
+	Perspective Warp: {error}	遠近法ワープ：{error}
+	a plane is degenerate (its corners must form a quad)	平面が退化しています（4つの頂点で四角形を形成する必要があります）
+	plane coordinates must be finite	平面の座標には有限の数値を指定してください
+
+# Legacy Perspective Warp linked-edge result
+	Edges linked: {count}	連結した辺: {count}

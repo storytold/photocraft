@@ -4628,3 +4628,16 @@ shape	Appearance	Apparence
 	Pick a different document for each channel.	Choisissez un document différent pour chaque canal.
 	A picked document is no longer open.	Un des documents choisis n'est plus ouvert.
 	A picked document is no longer a grayscale document of the same size.	Un des documents choisis n'est plus un document en niveaux de gris de même taille.
+
+# Legacy Perspective Warp V2 and review fixes
+	Link Edges	Lier les arêtes
+	Join matching neighbouring edges within 8 document pixels; preserves other planes	Relie les arêtes voisines correspondantes à moins de 8 pixels du document ; préserve les autres plans
+	Perspective Warp preview belongs to another document	L’aperçu de déformation de la perspective appartient à un autre document
+	Perspective Warp: invalid plane; drag ignored	Déformation de la perspective : plan invalide ; déplacement ignoré
+	Perspective Warp: no changes to apply	Déformation de la perspective : aucune modification à appliquer
+	Perspective Warp: {error}	Déformation de la perspective : {error}
+	a plane is degenerate (its corners must form a quad)	un plan est dégénéré (ses coins doivent former un quadrilatère)
+	plane coordinates must be finite	les coordonnées du plan doivent être finies
+
+# Legacy Perspective Warp linked-edge result
+	Edges linked: {count}	Bords liés : {count}

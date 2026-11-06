@@ -3297,3 +3297,16 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	请为每个通道选择不同的文档。
 	A picked document is no longer open.	所选的一个文档已不再打开。
 	A picked document is no longer a grayscale document of the same size.	所选的一个文档已不再是同样大小的灰度文档。
+
+# Legacy Perspective Warp V2 and review fixes
+	Link Edges	连接边缘
+	Join matching neighbouring edges within 8 document pixels; preserves other planes	连接文档中相距不超过 8 像素的匹配相邻边缘；其他平面保持不变
+	Perspective Warp preview belongs to another document	透视变形预览属于另一个文档
+	Perspective Warp: invalid plane; drag ignored	透视变形：平面无效，已忽略拖动
+	Perspective Warp: no changes to apply	透视变形：没有可应用的更改
+	Perspective Warp: {error}	透视变形：{error}
+	a plane is degenerate (its corners must form a quad)	平面已退化（四个角点必须构成四边形）
+	plane coordinates must be finite	平面坐标必须是有限数值
+
+# Legacy Perspective Warp linked-edge result
+	Edges linked: {count}	已链接边数：{count}

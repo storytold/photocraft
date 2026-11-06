@@ -4790,3 +4790,16 @@ shape	Appearance	Оформление
 	Pick a different document for each channel.	Выберите отдельный документ для каждого канала.
 	A picked document is no longer open.	Один из выбранных документов больше не открыт.
 	A picked document is no longer a grayscale document of the same size.	Один из выбранных документов больше не является документом в градациях серого того же размера.
+
+# Legacy Perspective Warp V2 and review fixes
+	Link Edges	Связать края
+	Join matching neighbouring edges within 8 document pixels; preserves other planes	Соединяет совпадающие соседние края на расстоянии до 8 пикселей документа; остальные плоскости не изменяются
+	Perspective Warp preview belongs to another document	Предварительный просмотр перспективной деформации относится к другому документу
+	Perspective Warp: invalid plane; drag ignored	Перспективная деформация: недопустимая плоскость; перетаскивание отклонено
+	Perspective Warp: no changes to apply	Перспективная деформация: нет изменений для применения
+	Perspective Warp: {error}	Перспективная деформация: {error}
+	a plane is degenerate (its corners must form a quad)	плоскость вырождена (её углы должны образовывать четырёхугольник)
+	plane coordinates must be finite	координаты плоскости должны быть конечными
+
+# Legacy Perspective Warp linked-edge result
+	Edges linked: {count}	Связанные края: {count}
