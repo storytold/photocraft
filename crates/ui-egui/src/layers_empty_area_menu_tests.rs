@@ -130,14 +130,36 @@ fn picking_the_checked_size_closes_the_menu_and_changes_nothing() {
     let mut h = panel(true);
     h.state_mut().ui.layers_panel_options.thumbnail_size = LayerThumbnailSize::Large;
     h.run_steps(2);
+    crate::panels::layers_panel_ui::persist_options(h.state_mut());
     let saved = |h: &Harness<'static, PhotocraftApp>| h.state().session.prefs().dialogs.get("ui.layersPanelOptions").cloned();
     let before = saved(&h);
+    assert!(before.is_some(), "an entry is saved to begin with");
     open_menu(&mut h);
     assert!(checked(&h, "Large Thumbnails"));
     pick(&mut h, "Large Thumbnails");
     assert!(!menu_open(&h), "the menu closes");
     assert_eq!(size(&h), LayerThumbnailSize::Large);
     assert_eq!(saved(&h), before, "the saved options are unchanged");
+}
+
+/// The saved entry can be missing (a preferences reset, an older file) while the panel still
+/// shows the size; picking the checked row writes it back.
+#[test]
+fn picking_the_checked_size_restores_a_missing_saved_entry() {
+    let mut h = panel(true);
+    h.state_mut().ui.layers_panel_options.thumbnail_size = LayerThumbnailSize::Large;
+    h.run_steps(2);
+    h.state_mut().session.prefs.edit(|p| {
+        p.dialogs.remove("ui.layersPanelOptions");
+    });
+    let saved = |h: &Harness<'static, PhotocraftApp>| h.state().session.prefs().dialogs.get("ui.layersPanelOptions").cloned();
+    assert!(saved(&h).is_none(), "the saved entry is gone");
+    open_menu(&mut h);
+    assert!(checked(&h, "Large Thumbnails"));
+    pick(&mut h, "Large Thumbnails");
+    assert!(!menu_open(&h), "the menu closes");
+    let restored = saved(&h).expect("the pick writes the entry back");
+    assert_eq!(restored, serde_json::to_value(&h.state().ui.layers_panel_options).unwrap());
 }
 
 #[test]
