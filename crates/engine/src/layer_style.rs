@@ -2,6 +2,7 @@
 
 use photocraft_color::{BlendMode, Color};
 use photocraft_doc::adjust::CurvePoint;
+use photocraft_doc::effects::PATTERN_SCALE_RANGE;
 use photocraft_doc::{
     Bevel, BevelStyle, BevelTechnique, Contour, Effect, FxCommon, FxPaint, Glow, GlowSource, GlowTechnique, Gradient, GradientStyle, Satin, Shadow, StrokeFx,
     StrokePosition,
@@ -795,7 +796,7 @@ fn overlay_pattern(fx: &mut Effect, p: &Value) {
         *id = String::new();
     }
     if let Some(x) = f_of(p, "scale") {
-        *scale = (x / 100.0).clamp(0.01, 10.0);
+        *scale = (x / 100.0).clamp(PATTERN_SCALE_RANGE.0, PATTERN_SCALE_RANGE.1);
     }
     if let Some(x) = f_of(p, "angle") {
         *angle = x;
@@ -903,7 +904,7 @@ fn overlay_bevel(bv: &mut Bevel, p: &Value) {
         bv.texture = Some(photocraft_doc::BevelTexture {
             name: t.to_string(),
             id: t.to_string(),
-            scale: (f(p, "textureScale", 100.0) / 100.0).clamp(0.01, 10.0),
+            scale: (f(p, "textureScale", 100.0) / 100.0).clamp(PATTERN_SCALE_RANGE.0, PATTERN_SCALE_RANGE.1),
             depth: (f(p, "textureDepth", 100.0) / 100.0).clamp(-10.0, 10.0),
             invert: b(p, "textureInvert", false),
             link: b(p, "textureLink", true),

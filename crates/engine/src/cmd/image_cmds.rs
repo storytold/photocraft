@@ -151,21 +151,31 @@ pub fn scale_effects(fx: &mut Effects, k: f32) {
                 b.size *= k;
                 b.soften *= k;
                 if let Some(t) = &mut b.texture {
-                    t.scale *= k;
+                    scale_pattern(&mut t.scale, k);
                 }
             }
-            Effect::PatternOverlay { scale, .. } => *scale *= k,
+            Effect::PatternOverlay { scale, .. } => scale_pattern(scale, k),
             Effect::GradientOverlay { .. } | Effect::ColorOverlay { .. } => {}
         }
         if let Effect::Stroke(s) = e
             && let FxPaint::Pattern { scale, .. } = &mut s.paint
         {
-            *scale *= k;
+            scale_pattern(scale, k);
         }
     }
     // Effects changed: the preserved PSD block no longer applies.
     if k != 1.0 {
         fx.psd_raw = None;
+    }
+}
+
+/// Scale a style's pattern scale, kept within the 1..1000 % the Layer Style dialog and the
+/// reference application allow (a 10 % pattern reduced to 5 % stays at 1 %).
+fn scale_pattern(scale: &mut f32, k: f32) {
+    let (min, max) = photocraft_doc::effects::PATTERN_SCALE_RANGE;
+    let v = *scale * k;
+    if !v.is_nan() {
+        *scale = v.clamp(min, max);
     }
 }
 
