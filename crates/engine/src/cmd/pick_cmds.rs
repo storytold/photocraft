@@ -126,10 +126,10 @@ fn pick(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "layer": target.0 }))
 }
 
-/// Layers whose content touches document rect `r`, top to bottom: visible, not fully locked, not
-/// the locked Background (as Select › All Layers). A layer on an artboard counts only where the
-/// board shows it, and without artboards only where the canvas does (#10665). With `group`, each
-/// counts as its outermost group (deduplicated).
+/// Visible layers whose content touches document rect `r`, top to bottom. The Move marquee skips
+/// the locked Background and layers with effective Position or All locks (#11102). A layer on an
+/// artboard counts only where the board shows it, and without artboards only where the canvas
+/// does (#10665). With `group`, each counts as its outermost group (deduplicated).
 pub fn layers_in_rect(doc: &Document, r: Rect, group: bool) -> Vec<LayerId> {
     let mut out = Vec::new();
     let canvas = doc.bounds();
@@ -140,7 +140,10 @@ pub fn layers_in_rect(doc: &Document, r: Rect, group: bool) -> Vec<LayerId> {
     for (path, _, l) in doc.walk().iter().rev() {
         if matches!(l.content, LayerContent::Group(_) | LayerContent::Adjustment(_))
             || doc.is_background(l.id)
-            || doc.effective_locks(l.id).all
+            || {
+                let locks = doc.effective_locks(l.id);
+                locks.position || locks.all
+            }
             || !(1..=path.len()).all(|n| doc.layer_at(&path[..n]).is_some_and(|a| a.visible))
         {
             continue;
@@ -196,7 +199,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Select Layers in Marquee",
             menu: &[],
             shortcut: None,
-            params: r##"{"x":px,"y":px,"width":px,"height":px,"target":"layer|group"="layer","mode":"replace|add"="replace"} → {layers} (the layers whose content touches the rect, topmost first; no hits clears in replace mode, preserves in add mode)"##,
+            params: r##"{"x":px,"y":px,"width":px,"height":px,"target":"layer|group"="layer","mode":"replace|add"="replace"} → {layers} (layers whose content touches the rect, topmost first, skipping Position and All locks; no hits clears in replace mode, preserves in add mode)"##,
             enabled: has_doc,
             journal: true,
             run: select_in_rect,

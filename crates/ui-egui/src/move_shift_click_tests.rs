@@ -103,6 +103,33 @@ fn point_clicks_toggle_members_but_keep_the_singleton_and_plain_multi_selection(
     assert_eq!(f.bounds(), before, "selection-only gestures move no pixels");
 }
 
+/// Shift-press changes the selected set immediately, and only that set moves on drag (#11102).
+#[test]
+fn shift_drag_moves_the_layers_selected_after_the_press() {
+    for (x, moving) in [(14.0, &[1_usize][..]), (38.0, &[0][..]), (62.0, &[0, 1, 2][..])] {
+        let mut f = Fixture::new();
+        let [a, b, _] = f.layers;
+        f.select(&[a, b]);
+        let selected: Vec<_> = moving.iter().map(|&index| f.layers[index]).collect();
+        let before = f.bounds();
+        let shift = Modifiers::SHIFT;
+
+        tool_event(&mut f.app, ToolEvent::Down { x, y: 14.0, pressure: 1.0 }, shift);
+        f.assert_selected(&selected);
+        assert_eq!(f.bounds(), before, "the press only selects");
+        let x = x + 6.0;
+        tool_event(&mut f.app, ToolEvent::Move { x, y: 14.0, pressure: 1.0 }, shift);
+        tool_event(&mut f.app, ToolEvent::Up { x, y: 14.0 }, shift);
+
+        f.assert_selected(&selected);
+        let mut expected = before;
+        for &index in moving {
+            expected[index + 1] = expected[index + 1].translate(6, 0);
+        }
+        assert_eq!(f.bounds(), expected, "only the layers selected after the press moved");
+    }
+}
+
 #[test]
 fn locked_only_click_clears_each_measured_selection_and_shift_keeps_its_base() {
     let mut f = Fixture::new();
@@ -183,6 +210,27 @@ fn background_marquee_adds_with_shift_and_replaces_without_it_including_empty_hi
         f.select(&initial);
         f.gesture(from, to, mods);
         f.assert_selected(&expected);
+        assert_eq!(f.bounds(), before, "marquees select without moving pixels");
+    }
+}
+
+/// A Background marquee crosses A and B while C starts selected. Only movable hits join the
+/// selection with Shift, or replace it without Shift (#11102).
+#[test]
+fn background_marquee_skips_position_and_all_locked_layers() {
+    for (locks, mods, expected) in [
+        (json!({"position": true}), Modifiers::SHIFT, &[1_usize, 2][..]),
+        (json!({"position": true}), Modifiers::NONE, &[1][..]),
+        (json!({"all": true}), Modifiers::SHIFT, &[1, 2][..]),
+        (json!({}), Modifiers::SHIFT, &[0, 1, 2][..]),
+    ] {
+        let mut f = Fixture::new();
+        let [a, _, c] = f.layers;
+        f.app.run("layer.setProps", json!({"layer": a.0, "locks": locks})).unwrap();
+        f.select(&[c]);
+        let before = f.bounds();
+        f.gesture([4.0, 26.0], [49.0, 13.0], mods);
+        f.assert_selected(&expected.iter().map(|&index| f.layers[index]).collect::<Vec<_>>());
         assert_eq!(f.bounds(), before, "marquees select without moving pixels");
     }
 }
