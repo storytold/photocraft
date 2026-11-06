@@ -1350,14 +1350,14 @@ fn a_failed_job_keeps_its_typed_error_for_wait_and_events() {
             json!({}),
             "Test hard budget",
             false,
-            |_ctx| -> Result<()> { Err(EngineError::PsdHardBudget { name: "too-big.psd".into(), required: 9000, limit: 4000 }) },
+            |_ctx| -> Result<()> { Err(EngineError::PsdHardBudget { name: "too-big.psd".into(), required: 9000, limit: 4000, free_memory: None }) },
             |_, _| Ok(Value::Null),
         )
         .unwrap();
     let id = job(started);
     let err = s.wait_job(id).expect_err("the job fails");
     assert!(
-        matches!(&err, EngineError::PsdHardBudget { name, required, limit } if name == "too-big.psd" && *required == 9000 && *limit == 4000),
+        matches!(&err, EngineError::PsdHardBudget { name, required, limit, .. } if name == "too-big.psd" && *required == 9000 && *limit == 4000),
         "wait_job must not flatten the typed refusal: {err:?}"
     );
     let event = s.poll_jobs().into_iter().find(|e| e.id == id).expect("the job event");

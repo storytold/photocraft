@@ -287,7 +287,8 @@ pub(super) fn approve_memory(s: &mut Session, p: &Value) -> Result<Value> {
     // does not keep the tile share), and the import re-checks the exact split before decoding.
     let budget = photocraft_io::memory::resolve_budget_with_scratch(photocraft_io::memory::MemorySnapshot::current(), None, u64::MAX);
     if preflight.required > budget.hard_limit {
-        return Err(EngineError::PsdHardBudget { name: preflight.name, required: preflight.required, limit: budget.hard_limit });
+        let free_memory = budget.refusal_free_memory(preflight.required);
+        return Err(EngineError::PsdHardBudget { name: preflight.name, required: preflight.required, limit: budget.hard_limit, free_memory });
     }
     let started = s.start_open_approved_with_background(
         &preflight.name,
