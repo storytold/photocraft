@@ -1,7 +1,7 @@
 use photocraft_doc::adjust::{CurvePoint, HueRange, LevelsChannel, LutFormat, LutSource, ToneSpace, curve_map_outputs};
 use photocraft_psd::descriptor::{Descriptor, Id, UnicodeString, Value, VersionedDescriptor};
 
-use super::{BW_KEYS, BW_TINT, clamp_i16, cube_file_name, levels_write, lut_source_for, psd_lut_format, put16, q255, rgb_desc};
+use super::{BW_KEYS, BW_TINT, clamp_i16, cube_file_name, levels_write, lut_source_for, psd_lut_format, put16, q255, rgb_desc, three_dl_file_name};
 
 /// The values as big-endian 16-bit words.
 pub(super) fn words(xs: &[u16]) -> Vec<u8> {
@@ -137,13 +137,19 @@ pub(super) fn color_lookup(name: &str, lut: Option<&[f32]>, size: u32, dither: b
                     title: String::new(),
                     size: n,
                     data: cube.to_vec(),
-                    shaper: None,
+                    shaper: shaper.map(|k| std::sync::Arc::new(k.to_vec())),
                     domain_min: [0.0; 3],
                     domain_max: [1.0; 3],
                 };
-                // A shaper the layer no longer matches its file with can't be written: `.cube`
-                // carries a table only, so the edited table goes out on its own (#11452).
-                (LutFormat::Cube, photocraft_cms::lutfile::write_cube(&file).into_bytes(), cube_file_name(name), dither)
+                // A table edited away from its file: write whichever format can carry what the
+                // layer holds. `.3dl` keeps the shaper, so a save and a reopen render the same
+                // look; `.cube` has no curve, so it is used when there is none to keep and when
+                // `.3dl` can't declare the table (`write_3dl` says so) - there the curve goes the
+                // way of the format, as it does for any `.cube` a user picks (#11452 review).
+                match photocraft_cms::lutfile::write_3dl(&file) {
+                    Some(text) => (LutFormat::ThreeDl, text.into_bytes(), three_dl_file_name(name), dither),
+                    None => (LutFormat::Cube, photocraft_cms::lutfile::write_cube(&file).into_bytes(), cube_file_name(name), dither),
+                }
             }
         },
         _ => {

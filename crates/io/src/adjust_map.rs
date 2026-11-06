@@ -524,6 +524,16 @@ fn cube_file_name(name: &str) -> String {
     }
 }
 
+/// `name` with a `.cube` / `.look` extension swapped for `.3dl`, for a lookup saved as `.3dl`
+/// because only that format carries its shaper (#11452 review).
+fn three_dl_file_name(name: &str) -> String {
+    let lower = name.to_ascii_lowercase();
+    match [".cube", ".look"].iter().find(|ext| lower.ends_with(*ext)) {
+        Some(ext) => format!("{}.3dl", name.get(..name.len() - ext.len()).unwrap_or(name)),
+        None => name.to_string(),
+    }
+}
+
 /// The descriptor of a `vibA` / `blwh` block: a 4-byte descriptor version (16), then the descriptor.
 fn versioned(d: &[u8]) -> Option<Descriptor> {
     VersionedDescriptor::parse_prefix(d).ok().map(|(v, _)| v.descriptor)

@@ -363,6 +363,74 @@ fn color_lookup_table_without_matching_file_is_saved_as_cube_named_to_match() {
     assert_eq!(cube_file_name("x.cube"), "x.cube");
 }
 
+/// #11452 review: a lookup whose table no longer matches its stored file still has a curve to
+/// keep, and `.3dl` is the format that carries it - so a save and a reopen render the same look.
+#[test]
+fn color_lookup_with_a_shaper_is_saved_as_3dl_and_reopens_with_its_curve() {
+    // The issue's worked example as a layer with no file behind it: 3 nodes, red output [0, 0, 1],
+    // shaper [0, 256, 1023] scaled to 0..=1.
+    let mut red = vec![0.0f32; 3 * 3 * 3 * 3];
+    for b in 0..3 {
+        for g in 0..3 {
+            for r in 0..3 {
+                red[((b * 3 + g) * 3 + r) * 3] = f32::from(r == 2);
+            }
+        }
+    }
+    let curve = || vec![0.0f32, 256.0 / 1023.0, 1.0];
+    let lookup = |name: &str, size: u32, table: Vec<f32>| Adjustment::ColorLookup {
+        name: name.to_string(),
+        lut: Some(std::sync::Arc::new(table)),
+        size,
+        shaper: Some(std::sync::Arc::new(curve())),
+        tetrahedral: false,
+        dither: false,
+        source: None,
+    };
+    let a = lookup("bent.3dl", 3, red.clone());
+    let d = written_clrl(&a);
+    assert_eq!(desc_enum(&d, "LUTFormat"), Some(&b"LUTFormat3DL"[..]), "the format that carries a curve");
+    assert_eq!(desc_text(&d, "LUT3DFileName").as_deref(), Some("bent.3dl"));
+    let b = write(&a);
+    let back = parse(&b[0].0, &b[0].1, None, Channels::Rgb);
+    let Adjustment::ColorLookup { size, lut: Some(t), shaper: Some(k), .. } = &back else { panic!("{back:?}") };
+    assert_eq!(*size, 3);
+    // The curve is back to the format's 16-bit codes, and with it the same rendering: red 0.75
+    // still reads 256/1023, where a curve-less cube would have given the table's own 0.5.
+    assert_eq!(k.len(), 3, "{k:?}");
+    assert!((k[1] - 256.0 / 1023.0).abs() < 1e-5, "{k:?}");
+    let file = photocraft_cms::lutfile::LutFile {
+        title: String::new(),
+        size: 3,
+        data: t.to_vec(),
+        shaper: Some(k.clone()),
+        domain_min: [0.0; 3],
+        domain_max: [1.0; 3],
+    };
+    let at = photocraft_cms::lutfile::sample(&file, [0.75, 0.0, 0.0])[0];
+    assert!((at - 256.0 / 1023.0).abs() < 1e-4, "{at}");
+    // A layer that came from a file it no longer matches gets the same treatment: the bytes
+    // written are the layer's look, not the stale file.
+    let edited = Adjustment::ColorLookup {
+        name: "bent.3dl".into(),
+        lut: Some(std::sync::Arc::new(red.clone())),
+        size: 3,
+        shaper: Some(std::sync::Arc::new(curve())),
+        tetrahedral: false,
+        dither: false,
+        source: Some(LutSource { format: LutFormat::ThreeDl, bytes: std::sync::Arc::new(b"0 1023\n0 0 0\n".to_vec()) }),
+    };
+    assert_eq!(desc_enum(&written_clrl(&edited), "LUTFormat"), Some(&b"LUTFormat3DL"[..]));
+    // A table `.3dl` can't declare (2 nodes have no `Mesh` edge) still goes out as a cube, named
+    // as one; and a `.look` name becomes `.3dl` the way the cube path renames a `.3dl`.
+    let tiny = lookup("t.cube", 2, vec![0.5; 24]);
+    assert_eq!(desc_enum(&written_clrl(&tiny), "LUTFormat"), Some(&b"LUTFormatCUBE"[..]));
+    assert_eq!(desc_text(&written_clrl(&tiny), "LUT3DFileName").as_deref(), Some("t.cube"));
+    assert_eq!(desc_text(&written_clrl(&lookup("Grade.look", 3, red)), "LUT3DFileName").as_deref(), Some("Grade.3dl"));
+    assert_eq!(three_dl_file_name("a.b.cube"), "a.b.3dl");
+    assert_eq!(three_dl_file_name("Day for Night"), "Day for Night");
+}
+
 #[test]
 fn color_lookup_synthetic_block() {
     let cube = b"TITLE \"t\"\nLUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n";
