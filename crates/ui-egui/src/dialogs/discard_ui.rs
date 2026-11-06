@@ -414,7 +414,8 @@ fn button_label(mac: bool, label: &str, key: Option<Key>) -> String {
 /// The labels of one dialog's buttons, each with its key in the same style: "(Y)es" when every
 /// translation starts with its key, otherwise appended to all ("Ja (Y)", "Nein (N)") (#5564).
 fn button_labels(mac: bool, buttons: &[(&str, Option<Key>)]) -> Vec<String> {
-    let starts_with_key = |label: &str, k: Key| label.split_at_checked(1).is_some_and(|(first, _)| first.eq_ignore_ascii_case(k.name()));
+    let starts_with_key =
+        |label: &str, k: Key| label.chars().next().and_then(crate::menu_keys::label_key).is_some_and(|c| k.name().chars().eq(std::iter::once(c)));
     let inline = buttons.iter().all(|&(label, key)| key.is_none_or(|k| starts_with_key(tl!(label), k)));
     buttons
         .iter()
@@ -423,7 +424,7 @@ fn button_labels(mac: bool, buttons: &[(&str, Option<Key>)]) -> Vec<String> {
             match key {
                 None => text.to_string(),
                 Some(_) if mac => text.to_string(),
-                Some(k) => match text.split_at_checked(1) {
+                Some(k) => match text.chars().next().and_then(|c| text.split_at_checked(c.len_utf8())) {
                     Some((first, rest)) if inline => format!("({first}){rest}"),
                     _ => format!("{text} ({})", k.name()),
                 },

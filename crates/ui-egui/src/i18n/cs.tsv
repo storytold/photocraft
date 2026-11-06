@@ -876,7 +876,7 @@
 	Consolidate All to Tabs	Sloučit vše do záložek
 	Float in Window	Uvolnit do plovoucího okna
 	Float All in Windows	Uvolnit vše do plovoucích oken
-	New Window	Nové okno dokumentu
+	New Window	Nové okno
 	Workspace	Pracovní prostor
 	Essentials	Základy
 	Graphic and Web	Grafika a web
@@ -938,6 +938,12 @@
 	Timeline	Časová osa
 	Tool Presets	Přednastavení nástrojů
 	Tools	Nástroje
+	Contextual Task Bar	Kontextový panel úloh
+	Hide bar	Skrýt panel
+	Reset bar position	Obnovit polohu panelu
+	Pin bar position	Připnout polohu panelu
+	Move bar	Přesunout panel
+	More options	Další možnosti
 	About PhotoCraft	O aplikaci PhotoCraft
 	PhotoCraft Website	Web PhotoCraft
 	PhotoCraft on GitHub	PhotoCraft na GitHubu
@@ -3239,6 +3245,7 @@ cameraData	Lens	Objektiv
 	Magnetic Lasso	Magnetické laso
 	Make	Výrobce
 	Make Selection	Vytvořit výběr
+	Make Shape	Vytvořit tvar
 	Make Work Path	Vytvořit pracovní cestu
 	Manual	Ručně
 	Map Document	Dokument mapy

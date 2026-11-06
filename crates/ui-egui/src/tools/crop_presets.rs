@@ -576,6 +576,8 @@ mod tests {
             PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
             let mut app = app();
             whr(&mut app, "", "", "", PX_PER_IN);
+            // Only the options bar's dropdown: the contextual task bar shows the same one (#10890).
+            app.ui.panels.context_task_bar = false;
             app
         });
         h.run_steps(4);
