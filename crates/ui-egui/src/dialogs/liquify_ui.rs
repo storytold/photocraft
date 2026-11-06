@@ -22,8 +22,6 @@ use crate::canvas::ToolEvent;
 use crate::theme::Tokens;
 use crate::widgets;
 
-/// Longest side of the preview proxy (px), when the GPU's texture limit isn't known.
-const PROXY_SIDE: usize = 2048;
 /// Most pixels the preview proxy holds at document resolution (RGBA8 twice over: the copy and
 /// the rendered preview, 96 MB each at this size); a larger layer is downsampled.
 const PROXY_MAX_PIXELS: usize = 24_000_000;
@@ -727,9 +725,10 @@ fn open_on(
     Ok(())
 }
 
-/// The longest side a preview texture may have: the GPU's limit, within reason.
+/// The longest side a preview texture may have: the GPU's limit, within reason. A limit
+/// below the usual proxy side is respected, not raised: the proxy is downsampled to fit.
 fn proxy_side(ctx: &egui::Context) -> usize {
-    ctx.input(|i| i.max_texture_side).clamp(PROXY_SIDE, 16384)
+    ctx.input(|i| i.max_texture_side).clamp(1, 16384)
 }
 
 /// Keeps the brush settings for the next time Liquify opens, also after a restart.
