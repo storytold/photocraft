@@ -134,9 +134,21 @@ pub(crate) fn reidentify_copied_layers(doc: &mut Document) {
     }
 }
 
-/// Scale every size and distance of a style by `k` (Image Size's Scale Styles, Layer Style ›
-/// Scale Effects, and previews that draw a style at a reduced resolution).
+/// Scale every size and distance of a style by `k` (Image Size's Scale Styles and Layer Style ›
+/// Scale Effects), with pattern scales kept within the dialog's 1..1000 %.
 pub fn scale_effects(fx: &mut Effects, k: f32) {
+    scale_effects_with(fx, k, true);
+}
+
+/// [`scale_effects`] for a preview that draws a style at a reduced resolution: pattern scales
+/// follow `k` exactly, so the preview matches the style it stands for (a 2 % pattern drawn at a
+/// quarter of the size is 0.5 %, not the dialog's 1 % minimum).
+pub fn scale_effects_preview(fx: &mut Effects, k: f32) {
+    scale_effects_with(fx, k, false);
+}
+
+fn scale_effects_with(fx: &mut Effects, k: f32, clamp: bool) {
+    let pattern = |scale: &mut f32| scale_pattern(scale, k, clamp);
     for e in &mut fx.items {
         match e {
             Effect::DropShadow(s) | Effect::InnerShadow(s) => {
@@ -153,16 +165,16 @@ pub fn scale_effects(fx: &mut Effects, k: f32) {
                 b.size *= k;
                 b.soften *= k;
                 if let Some(t) = &mut b.texture {
-                    scale_pattern(&mut t.scale, k);
+                    pattern(&mut t.scale);
                 }
             }
-            Effect::PatternOverlay { scale, .. } => scale_pattern(scale, k),
+            Effect::PatternOverlay { scale, .. } => pattern(scale),
             Effect::GradientOverlay { .. } | Effect::ColorOverlay { .. } => {}
         }
         if let Effect::Stroke(s) = e
             && let FxPaint::Pattern { scale, .. } = &mut s.paint
         {
-            scale_pattern(scale, k);
+            pattern(scale);
         }
     }
     // Effects changed: the preserved PSD block no longer applies.
@@ -171,13 +183,13 @@ pub fn scale_effects(fx: &mut Effects, k: f32) {
     }
 }
 
-/// Scale a style's pattern scale, kept within the 1..1000 % the Layer Style dialog and the
-/// reference application allow (a 10 % pattern reduced to 5 % stays at 1 %).
-fn scale_pattern(scale: &mut f32, k: f32) {
+/// Scale a style's pattern scale; with `clamp`, kept within the 1..1000 % the Layer Style dialog
+/// and the reference application allow (a 10 % pattern reduced to 5 % stays at 1 %).
+fn scale_pattern(scale: &mut f32, k: f32, clamp: bool) {
     let (min, max) = photocraft_doc::effects::PATTERN_SCALE_RANGE;
     let v = *scale * k;
     if !v.is_nan() {
-        *scale = v.clamp(min, max);
+        *scale = if clamp { v.clamp(min, max) } else { v };
     }
 }
 

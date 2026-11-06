@@ -218,6 +218,33 @@ fn scale_effects_keeps_pattern_scales_within_the_dialog_range() {
     assert_eq!(pattern_scales(&s), (Some(1.0), Some(1.0), Some(1.0)));
 }
 
+/// Previews at a reduced resolution scale the patterns exactly, past the dialog's range: only
+/// commands that store the style clamp them.
+#[test]
+fn preview_scaling_leaves_pattern_scales_unclamped() {
+    let s = pattern_styled(2.0);
+    let mut fx = active(&s).effects.clone();
+    crate::image_cmds::scale_effects_preview(&mut fx, 0.25);
+    let mut clamped = active(&s).effects.clone();
+    crate::image_cmds::scale_effects(&mut clamped, 0.25);
+    let scales = |fx: &photocraft_doc::Effects| {
+        fx.items
+            .iter()
+            .filter_map(|e| match e {
+                Effect::PatternOverlay { scale, .. } => Some(*scale),
+                Effect::BevelEmboss(b) => b.texture.as_ref().map(|t| t.scale),
+                Effect::Stroke(st) => match &st.paint {
+                    photocraft_doc::FxPaint::Pattern { scale, .. } => Some(*scale),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(scales(&fx), vec![0.005; 3]);
+    assert_eq!(scales(&clamped), vec![0.01; 3]);
+}
+
 #[test]
 fn image_size_scale_styles_keeps_pattern_scales_within_the_dialog_range() {
     // 40x30 -> 400x300 with Scale Styles multiplies by 10: 500 % would become 5000 %.
