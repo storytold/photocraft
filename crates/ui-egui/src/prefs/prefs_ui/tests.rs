@@ -142,6 +142,19 @@ fn preferences_search_matches_editable_fields_across_sections() {
     assert_eq!(preference_sections(&values, "").len(), SECTIONS.len());
 }
 
+/// The preview language controls translated search; English schema paths keep their aliases.
+#[test]
+fn azerbaijani_preferences_search_keeps_dotted_i_and_schema_aliases() {
+    let az = crate::i18n::Lang::from_code("az").unwrap();
+    crate::i18n::with_language(az, || {
+        let values = prefs::Preferences::default().to_json();
+        assert!(preference_sections(&values, "İNTERFEYS").iter().any(|(id, _)| *id == "interface"));
+        assert!(super::fields::preference_matches("interface", "language", "DİL"));
+        assert!(!super::fields::preference_matches("interface", "language", "DIL"));
+        assert!(super::fields::preference_matches("interface", "uiScale", "INTERFACE.UISCALE"));
+    });
+}
+
 #[test]
 fn preferences_dialog_width_follows_its_resizable_area() {
     let prefs = serde_json::json!({"__prefsui": "prefs"});
