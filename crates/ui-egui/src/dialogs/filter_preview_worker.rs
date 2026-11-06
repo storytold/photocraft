@@ -342,42 +342,71 @@ mod issue_11560_native_lifecycle {
     use super::*;
     use serde_json::json;
 
-    #[test]
-    fn cancel_unpolled_native_mini_then_reopen_other_command_without_publication() {
-        use std::sync::Arc;
-        use std::time::{Duration, Instant};
-
+    fn native_lifecycle_fixture() -> Result<crate::PhotocraftApp, String> {
         let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
         app.background_jobs = false;
-        app.run("file.new", json!({"width":64,"height":48,"depth":8})).unwrap();
+        app.run("file.new", json!({"width":64,"height":48,"depth":8})).map_err(|error| error.to_string())?;
         app.session
             .edit("Native lifecycle edge fixture", |doc, active| {
-                let surface = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+                let active = active.ok_or_else(|| photocraft_engine::EngineError::Other("native lifecycle fixture has no active layer".into()))?;
+                let surface = doc
+                    .layer_mut(active)
+                    .ok_or(photocraft_engine::EngineError::NoLayer(active))?
+                    .surface_mut()
+                    .ok_or_else(|| photocraft_engine::EngineError::Other("native lifecycle fixture layer has no surface".into()))?;
                 for x in 0..64 {
                     let v = 0.25 + x as f32 / 256.0 + if x >= 32 { 0.15 } else { 0.0 } + if x % 3 == 0 { 0.04 } else { 0.0 };
                     surface.fill_rect(photocraft_geom::Rect::new(x, 0, x + 1, 48), &[v, v, v, 1.0]);
                 }
                 Ok(())
             })
-            .unwrap();
+            .map_err(|error| error.to_string())?;
+        Ok(app)
+    }
+
+    fn history(st: &photocraft_engine::DocState) -> Result<serde_json::Value, String> {
+        let rows: Vec<_> = st
+            .history
+            .row_ids()
+            .enumerate()
+            .map(|(i, id)| {
+                let doc = st.history.row_doc(i, &st.doc).ok_or("native lifecycle history row is missing")?;
+                Ok(json!({"id":id,"pixels":photocraft_compose::flatten(&doc).into_px()}))
+            })
+            .collect::<Result<_, String>>()?;
+        Ok(json!({"rows":rows,"entries":st.history.entries(),"redo":st.history.redo_labels().collect::<Vec<_>>(),
+            "past":st.history.past_len(),"undo_label":st.history.undo_label(),"redo_label":st.history.redo_label(),
+            "can_undo":st.history.can_undo(),"can_redo":st.history.can_redo(),
+            "brush_source":st.history.brush_source(),"visibility":st.history.current_visibility()}))
+    }
+
+    fn drain_closed_native_receipt(app: &mut crate::PhotocraftApp) {
+        use std::time::{Duration, Instant};
+
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while app.filter_preview_worker.busy() && Instant::now() < deadline {
+            discard_closed(app);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    #[test]
+    fn cancel_unpolled_native_mini_then_reopen_other_command_without_publication() {
+        use std::sync::Arc;
+        use std::time::{Duration, Instant};
+
+        let mut app = native_lifecycle_fixture().unwrap();
         let original = app.session.active().unwrap().clone();
         let pixels = photocraft_compose::flatten(&original.doc).into_px();
-        let history = |st: &photocraft_engine::DocState| {
-            let rows: Vec<_> = st
-                .history
-                .row_ids()
-                .enumerate()
-                .map(|(i, id)| {
-                    let doc = st.history.row_doc(i, &st.doc).unwrap();
-                    json!({"id":id,"pixels":photocraft_compose::flatten(&doc).into_px()})
-                })
-                .collect();
-            json!({"rows":rows,"entries":st.history.entries(),"redo":st.history.redo_labels().collect::<Vec<_>>(),
-                "past":st.history.past_len(),"undo_label":st.history.undo_label(),"redo_label":st.history.redo_label(),
-                "can_undo":st.history.can_undo(),"can_redo":st.history.can_redo(),
-                "brush_source":st.history.brush_source(),"visibility":st.history.current_visibility()})
+        let original_history = history(&original).unwrap();
+        let assert_original_unchanged = |app: &crate::PhotocraftApp| {
+            let st = app.session.active().unwrap();
+            assert!(Arc::ptr_eq(&st.doc, &original.doc));
+            assert_eq!(photocraft_compose::flatten(&st.doc).px, pixels);
+            assert_eq!(st.revision, original.revision);
+            assert_eq!((st.active_layer, &st.selected_layers), (original.active_layer, &original.selected_layers));
+            assert_eq!(history(st).unwrap(), original_history);
         };
-        let original_history = history(&original);
         let ctx = egui::Context::default();
         let first = crate::filter_dialog::open(&mut app, "filter.sharpen.unsharpMask").unwrap();
         let fields = &mut app.ui.dialog_mut(first).unwrap().fields;
@@ -404,22 +433,13 @@ mod issue_11560_native_lifecycle {
         let cancellation_requested = old_job.cancelled();
         // Exercise the logic cleanup route alone: a hidden/closed canvas need not draw for
         // the native receipt to be retired. !busy means channel ownership ended, not join.
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while app.filter_preview_worker.busy() && Instant::now() < deadline {
-            discard_closed(&mut app);
-            std::thread::sleep(Duration::from_millis(1));
-        }
+        drain_closed_native_receipt(&mut app);
         assert!(cancellation_requested, "Cancel cleanup must signal the real production JobCtx");
         assert!(!app.filter_preview_worker.busy(), "closed native receipt did not retire");
         assert!(app.filter_preview_worker.poll().is_none(), "retired result cannot be delivered again");
         assert!(app.filter_preview.is_none(), "cleanup cannot publish the closed dialog's completion");
         assert!(app.ui.dialogs.iter().all(|d| d.id != first));
-        let st = app.session.active().unwrap();
-        assert!(Arc::ptr_eq(&st.doc, &original.doc));
-        assert_eq!(photocraft_compose::flatten(&st.doc).px, pixels);
-        assert_eq!(st.revision, original.revision);
-        assert_eq!((st.active_layer, &st.selected_layers), (original.active_layer, &original.selected_layers));
-        assert_eq!(history(st), original_history);
+        assert_original_unchanged(&app);
 
         // Reuse the same Worker for a different mini-owning command, still unchecked.
         // An independent Session command supplies the pixels, not the preview helper.
@@ -464,11 +484,6 @@ mod issue_11560_native_lifecycle {
         discard_closed(&mut app);
         assert!(app.filter_preview.is_none());
         assert!(!app.filter_preview_worker.busy());
-        let st = app.session.active().unwrap();
-        assert!(Arc::ptr_eq(&st.doc, &original.doc));
-        assert_eq!(photocraft_compose::flatten(&st.doc).px, pixels);
-        assert_eq!(st.revision, original.revision);
-        assert_eq!((st.active_layer, &st.selected_layers), (original.active_layer, &original.selected_layers));
-        assert_eq!(history(st), original_history);
+        assert_original_unchanged(&app);
     }
 }
