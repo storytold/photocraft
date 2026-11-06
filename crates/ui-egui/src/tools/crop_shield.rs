@@ -440,7 +440,7 @@ mod tests {
     #[test]
     fn alt_letters_are_not_the_crop_box_keys() {
         for key in [Key::H, Key::P, Key::I] {
-            let mut app = crop_app();
+            let mut app = crop_in_progress_app();
             let (shield, ratio) = (app.ui.tool_options.crop_shield.clone(), app.ui.tool_options.crop_ratio.clone());
             let ctx = egui::Context::default();
             let alt = egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::ALT };
