@@ -4572,3 +4572,49 @@ navigator	Zoom	תקריב
 @plural	{n} action file loaded|{n} action files loaded	נטען {n} קובץ פעולות|נטענו {n} קובצי פעולות
 @plural	{n} file could not be loaded: {errors}|{n} files could not be loaded: {errors}	לא ניתן היה לטעון {n} קובץ: {errors}|לא ניתן היה לטעון {n} קבצים: {errors}
 @plural	{what}: {n} Image Assets output failed|{what}: {n} Image Assets outputs failed	{what}: {n} פלט נכסי תמונה נכשל|{what}: {n} פלטי נכסי תמונה נכשלו
+
+# PDF Options (PDF/X-1a, PDF/X-3, PDF/X-4)
+	A {bleed} mm bleed leaves no trim on this {width} × {height} mm page.	גלישה של {bleed} מ"מ לא משאירה שטח חיתוך בעמוד זה בגודל {width} × {height} מ"מ.
+	No CMYK profile is installed. Install the printer's profile (for example ISO Coated v2 or Coated FOGRA39) on this computer and save again.	לא מותקן פרופיל CMYK. התקן את הפרופיל של בית הדפוס (לדוגמה ISO Coated v2 או Coated FOGRA39) במחשב זה ושמור שוב.
+	PDF/X-4 needs an ICC version 2 or 4 profile. Choose the printer's profile (for example PSO Coated v3 or Coated FOGRA39).	PDF/X-4 דורש פרופיל ICC בגרסה 2 או 4. בחר את הפרופיל של בית הדפוס (לדוגמה PSO Coated v3 או Coated FOGRA39).
+	{standard} needs an ICC version 2 profile. Choose the printer's profile (for example ISO Coated v2 or Coated FOGRA39), or save PDF/X-4.	{standard} דורש פרופיל ICC בגרסה 2. בחר את הפרופיל של בית הדפוס (לדוגמה ISO Coated v2 או Coated FOGRA39), או שמור כ-PDF/X-4.
+	The document's profile ({profile}) is ICC version {version}, which {standard} can't embed. Convert to the output profile, or save PDF/X-4.	הפרופיל של המסמך ({profile}) הוא ICC בגרסה {version}, ש-{standard} אינו יכול להטמיע. המר לפרופיל הפלט, או שמור כ-PDF/X-4.
+	Document: {profile}	מסמך: {profile}
+	Working CMYK: {profile}	CMYK עבודה: {profile}
+	A plain PDF for viewing and for printers that don't ask for PDF/X. The image keeps its colour and its embedded profile.	PDF רגיל לצפייה ולמדפסות שאינן דורשות PDF/X. התמונה שומרת על הצבע שלה ועל הפרופיל המוטמע בה.
+	PDF/X-1a:2001 (ISO 15930-1) for print: all colour is CMYK or gray, converted to the printer's output condition. Most print shops accept it. PDF 1.3, an ICC version 2 output profile.	PDF/X-1a:2001 (ISO 15930-1) להדפסה: כל הצבעים הם CMYK או אפור, מומרים לתנאי הפלט של בית הדפוס. רוב בתי הדפוס מקבלים אותו. PDF 1.3, פרופיל פלט ICC בגרסה 2.
+	PDF/X-3:2002 (ISO 15930-3) for print: like PDF/X-1a, but colour may also keep its own ICC profile for the printer to convert. PDF 1.3, ICC version 2 profiles.	PDF/X-3:2002 (ISO 15930-3) להדפסה: כמו PDF/X-1a, אך הצבע יכול גם לשמור על פרופיל ICC משלו כדי שבית הדפוס ימיר אותו. PDF 1.3, פרופילי ICC בגרסה 2.
+	PDF/X-4:2008 (ISO 15930-7), the current print standard: colour converted to the output condition or kept in its own profile, ICC version 2 or 4 profiles, XMP metadata. PDF 1.6.	PDF/X-4:2008 (ISO 15930-7), תקן ההדפסה הנוכחי: הצבע מומר לתנאי הפלט או נשמר בפרופיל משלו, פרופילי ICC בגרסה 2 או 4, מטא-נתוני XMP. PDF 1.6.
+	The image is saved flattened: layers, type and transparency are not kept as such. Keep the document as .psd or .pcraft to edit it later.	התמונה נשמרת משוטחת: שכבות, טקסט ושקיפות אינם נשמרים כפי שהם. שמור את המסמך כקובץ .psd או .pcraft כדי לערוך אותו בהמשך.
+	Images	תמונות
+	Downsampling:	הקטנת רזולוציה:
+	Do Not Downsample	ללא הקטנת רזולוציה
+	Compression:	דחיסה:
+	ZIP (lossless)	ZIP (ללא אובדן)
+	Image Quality:	איכות תמונה:
+	8 bits per channel	8 סיביות לערוץ
+	Print PDFs are written at full resolution with lossless compression, so nothing is lost on the way to the press.	קובצי PDF להדפסה נכתבים ברזולוציה מלאה ובדחיסה ללא אובדן, כך ששום דבר לא הולך לאיבוד בדרך לדפוס.
+	Color Conversion:	המרת צבע:
+	Convert to Destination	המר ליעד
+	No Conversion	ללא המרה
+	Destination:	יעד:
+	N/A	לא רלוונטי
+	Profile Inclusion Policy:	מדיניות הכללת פרופילים:
+	Include Tagged Source Profiles	כלול פרופילי מקור מתויגים
+	Don't Include Profiles	אל תכלול פרופילים
+	Include Destination Profile	כלול את פרופיל היעד
+	The CMYK numbers are kept.	ערכי ה-CMYK נשמרים.
+	The colours keep the document's profile, embedded in the PDF; the printer converts them.	הצבעים שומרים על הפרופיל של המסמך, המוטמע ב-PDF; בית הדפוס ממיר אותם.
+	The colours are converted to this profile in the PDF; the document is not changed.	הצבעים מומרים לפרופיל זה בתוך ה-PDF; המסמך אינו משתנה.
+	Output Intent Profile Name:	שם פרופיל כוונת הפלט:
+	Output Condition Identifier:	מזהה תנאי הפלט:
+	Bleed:	גלישה:
+	already in the document	כבר במסמך
+	Standard:	תקן:
+	Compatibility:	תאימות:
+	Page:	עמוד:
+	Trim:	גודל חיתוך:
+	Warnings	אזהרות
+	PDF Preset:	הגדרה קבועה מראש ל-PDF:
+	[High Quality Print]	[הדפסה באיכות גבוהה]
+	Save PDF	שמור PDF
