@@ -1435,6 +1435,7 @@ fn color_prompt_prepares_native_contents_before_admitting_the_document() {
             warnings: Vec::new(),
             bytes: None,
             slot: None,
+            order: None,
             question: Some(json!({"missing": true, "ask": true})),
             policy_applied: false,
             color_settings: None,
