@@ -577,8 +577,8 @@ fn clip_to_canvas_budgets_the_clipped_render_not_the_whole_placement() {
     let dir = tmp_dir("clip-budget");
     let design = std::fs::read(png_file(&dir, "d.png", 30, 20, [0.2, 0.7, 0.4])).unwrap();
     let huge = |sm: &mut SmartObject, b: [f64; 4]| {
-        // About 3200 × 2300 px of 8-bit RGBA: 29 MB.
-        sm.transform = Affine { m: [70.0, 0.0, 0.0, 70.0, -1000.0, -700.0] };
+        // The 30 × 20 file 120 times over: 3600 × 2400 px of 8-bit RGBA, 35 MB.
+        sm.transform = Affine { m: [120.0, 0.0, 0.0, 120.0, -1500.0, -1000.0] };
         sm.warp = Some(Warp::custom(BezierMesh::identity(b, 1, 1).map_points(|p| [p[0] + 0.1 * p[1], p[1]]), b));
     };
     for clip in [false, true] {
