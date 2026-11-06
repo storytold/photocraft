@@ -10,7 +10,8 @@ The native build renders Bengali through the generic non-CJK script fallback:
 the first time Bengali text is drawn, the font loader tries the system
 candidates for `Script::Bengali` (Noto Sans Bengali on Linux, Bangla MN on
 macOS, Nirmala UI on Windows; see `photocraft_text::scripts`). The web build
-has no Bengali font fallback and shows the browser's fallback.
+has no automatic Bengali font fallback, so Bengali labels may appear as boxes
+where no Bengali-capable font is served.
 
 ## Files and integration
 
