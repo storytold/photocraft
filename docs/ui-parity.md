@@ -52,7 +52,7 @@ Triangle and Curvature Pen (minus legacy Rounded Rectangle and Targeted Adjustme
 | Letter shortcuts, ⇧+letter cycles the group, "Use Shift Key for Tool Switch" (on by default, as in Photoshop) | done | `shortcuts.rs` `select_tool_by_key` |
 | Alt/Option-click a toolbar button cycles its flyout slot (including tools with no letter key) | done | `toolbar.rs` `next_slot_tool`; `type_flyout_tests.rs` `alt_click_cycles_the_tool_flyout_slot` |
 | Group remembers the last tool used | partial | L always resets to Lasso (#2608) |
-| Press-and-hold or click-drag opens the flyout | done | `toolbar.rs`; right-click, long-press, press-drag |
+| Press-and-hold or click-drag opens the flyout | done | `panels/toolbar.rs`: a press held 0.35 s or dragged off the button opens it, and releasing over a row picks that tool (`tool_flyout_drag_open`; tests `flyout_drag_only_opens_after_a_primary_press_leaves_its_button` and `flyout_press_drag_release_selects_the_row_without_long_press` in `panels.rs`, `long_press_type_button_selects_type_then_vertical_from_the_flyout` in `panels/type_flyout_tests.rs`; #2324, #2301) |
 | Edit Toolbar customization | done | `edit.toolbar` |
 | Last selected tool restored after quitting and relaunching; temporary tool switches excluded | done | `tool_memory.rs`; `prefs_ui::tests::selected_tool_survives_a_restart_without_option_changes`, `selected_tool_excludes_temporary_switches` |
 
@@ -93,7 +93,7 @@ Triangle and Curvature Pen (minus legacy Rounded Rectangle and Targeted Adjustme
 | Arrow 1 px, ⇧-arrow 10 px for layers | done | `move_mods.rs` |
 | Arrow nudge of a selection outline (selection tools) | done | #1502 |
 | Arrow nudge of the crop box, X swaps orientation | done | TOOL-214-19 |
-| Arrow nudge of path points with Direct Selection | missing | no arrow handling in `direct_select.rs` |
+| Arrow nudge of path points with Direct Selection | partial | `direct_select.rs` `arrow_keys`: the selected anchors move 1 px, ⇧ 10 px, one History step per press (`direct_select/tests.rs` `arrow_keys_nudge_the_selected_anchors`, #4486); a selected segment is not nudged, which Photoshop's arrow keys also move |
 | ⌘-arrow nudges the layer from any tool | missing | #2474 |
 | ⌥-drag duplicates, ⇧ constrains to 45° | done | `move_mods.rs` |
 | Dragging selected pixels shrinks the selection to them (the selection limited to where the layer has pixels, so moving again leaves no edge behind) as the drag starts, also with ⌥; the move box, snapping and Show Transform Controls use the moved pixels' bounds | done | #7538, `canvas.rs` `floating_outline` and `transform_controls_rect`, `snap_ui.rs` `follow_cut`, engine `float_cmds.rs` `CutParts::outline` |
@@ -165,7 +165,7 @@ Triangle and Curvature Pen (minus legacy Rounded Rectangle and Targeted Adjustme
 | Snap to guides, grid, layers, document bounds and centre, selection, slices; Ctrl disables other gestures, while Distort corners snap to guides and intersections | done | `engine/src/snap.rs`, `snap_ui.rs` (actual-corner grab-offset regressions, #3632) |
 | Snap vector tools and transforms to the pixel grid | done | `snap_ui.rs:196` |
 | Smart guides (magenta alignment lines) | done | |
-| Smart guide distance and spacing labels | missing | |
+| Smart guide distance and spacing labels | partial | distances: with the Move tool, holding ⌘ over another layer or the canvas labels the distances in the ruler unit, and an ⌥-drag shows the distance to the copy (`move_distance.rs`, #4946); no distances during an ordinary Move drag, and no spacing labels |
 | Ruler units px/in/cm/mm/pt/pica/% | done | |
 | ⇧-drag a guide out of a ruler: it lands on the nearest ruler tick | done | `rulers.rs` `snap_to_tick` (#3770) |
 | A dragged guide shows its position beside the pointer (X for vertical, Y for horizontal, in the ruler unit) | done | `rulers.rs` `guide_drag_readout` (#7680) |
@@ -284,6 +284,7 @@ Paragraph; the rest open as in-app floating windows.
 | 2026-10-24 | minor | Path Selection selects path components and has the Path Operations menu; the menu and `+` / `-` change the selected components' operation (`path.setOperation`); the Pen carries on an open shape layer or vector mask path from its endpoint (#1397 feedback); row stays partial until the Shape tools have the menu; no percentage changed |
 | 2026-10-25 | minor | Every preference takes effect: 12 of 178 do nothing, the scorecard's count (it still said 46 of 149) |
 | 2026-10-25 | minor | Art History Brush is in the History group of the Y flyout (partial, TOOL-213-20, #1610) |
+| 2026-10-24 | minor | Stale rows corrected against main: the tool flyout row is done for press-and-hold or click-drag (#2324, #2301); Direct Selection arrow nudge of selected anchors is partial (#4486; a selected segment is not nudged); Smart Guides distances with ⌘ held are partial (#4946); no percentage changed |
 | 2026-10-24 | minor | Color panel: Hue Cube and Brightness Cube show Photoshop's out-of-gamut ⚠ and the nearest printable colour under the chips when the field is at least 53 pt tall, as the slider modes did; a click takes it (#8672). No percentage changed |
 | 2026-10-24 | minor | Swatches: a click recolours the selected type layers and shape fills whatever the tool, as Photoshop 2025 does (measured with the Move and Brush tools); the Color panel still recolours them only with a Type, shape or Pen tool (#9238). Scores unchanged. |
 | 2026-10-24 | minor | Type options bar: the alignment and paragraph-direction buttons show the edited or selected type layer's paragraph instead of the tool defaults, as Photoshop's bar does. Scores unchanged. |

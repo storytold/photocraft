@@ -156,7 +156,7 @@ workflows, PSD exchange edge cases, and everything excluded above.
 
 Discounts: launch and stability ×0.90 (start failures without a usable GPU, #2519, #2412,
 #1859; Type tool freeze, #2518); discoverability and UI clarity ×0.92 (language option not
-found, #2532; flyouts only on right-click, #2301; toolbar hover issue, #2603); opening files
+found, #2532; toolbar hover issue, #2603); opening files
 people send ×0.95 (JPEG, PNG, HEIC, WebP, PSD open; AVIF and PDF don't, #463, #2541).
 **78% × 0.90 × 0.92 × 0.95 ≈ 61%** (range 55–67), estimated.
 
@@ -174,7 +174,7 @@ parity for the area and are already contained in the dimension rows above.
 | Transform, warp, puppet, perspective, liquify | 55% | 100–180 | Free Transform modifiers right, with a right-click transform menu (TOOL-214-5) and H/V skew fields; Puppet Warp mesh follows the object outline (TOOL-214-6); Liquify called "useless" by a user (#2606) |
 | Adjustments and filters | 70% | 120–200 | All present; smart-filter re-render matches Photoshop on 5 of 30 files; Filter Gallery looks approximate; no Neural Filters |
 | Type | 40% | 120–200 | Engine works; manual/optical kerning, a live Warp Text preview and variable-font axis sliders (2026-10-11); type on a path only places glyphs rigidly (TYPE-218-1 partial); no RTL paragraphs, OpenType panel UI; Type tool freeze on macOS (#2518) |
-| Vector shapes and paths | 55% | 80–140 | Pen, Direct/Path Selection, shapes, shape strokes. Freeform and Curvature Pen (#1054). Add/Delete Anchor Point and Convert Point tools exist (`Tool` enum); on-canvas corner radius widgets on live rectangles (TOOL-214-12, 2026-10-13); shape Density and Feather, the path as the fill's soft vector mask, matching Photoshop's 10 px feather ramp within 1 level (#5846, 2026-10-15); missing path-point nudge; shape parity tracking issue #2496 |
+| Vector shapes and paths | 55% | 80–140 | Pen, Direct/Path Selection, shapes, shape strokes. Freeform and Curvature Pen (#1054). Add/Delete Anchor Point and Convert Point tools exist (`Tool` enum); on-canvas corner radius widgets on live rectangles (TOOL-214-12, 2026-10-13); shape Density and Feather, the path as the fill's soft vector mask, matching Photoshop's 10 px feather ramp within 1 level (#5846, 2026-10-15); Direct Selection arrows nudge the selected anchors (#4486) but not a selected segment; shape parity tracking issue #2496 |
 | Colour management and modes | 70% | 60–100 | Own ICC engine, soft proof, CMYK/Lab/Indexed/Duotone/Multichannel; no Adobe CMYK profiles, spot plates in PSD and TIFF only (FILE-215-17: no PDF Separation), monitor profile only at launch |
 | Camera Raw and computational photo (Photomerge, HDR, lens) | 45% | 120–200 | Raw for DNG/CR2/NEF/ARW/RW2/ORF/RAF(uncompressed)/PEF; no CR3; ACR dialog partial (no masking; no per-camera colour for non-DNG cameras); generic lens profiles only |
 | Automation, actions, batch, scripting | 45% | 120–200 | CLI/MCP/control channel ahead of Photoshop; recording uses implicit active layers, unique layer names, whole-text Type steps, bundled Move-tool nudges, relative keyboard document switches and canvas-relative point text (AUTO-219-1, #4514; duplicate names and paragraph boxes remain open); Actions panel remains partial (AUTO-219-2); `.atn` load/save since 2026-10-12 (112 events mapped, the rest kept verbatim); compound layer properties export as separate Set events with rename last (#8304, 2026-10-21; independent Photoshop replay pending); no ExtendScript/UXP |
@@ -605,6 +605,7 @@ See [method, raw measurements and reproduction](five-algorithm-performance.md).
 | 2026-10-23 | minor | Select and Mask is Photoshop's workspace with its own tools (#7069, #8148); TOOL-214-1 stays partial (Refine Hair, Object Aware, Presets); percentages and estimates unchanged |
 | 2026-10-26 | minor | Selections: classical Select › Sky can seed substantial high-confidence components beneath an obstructed top band; learned segmentation remains open; percentages and estimates unchanged |
 | 2026-10-25 | minor | UI / UX and Workspace rows: 12 of 178 preferences do nothing, the scorecard's count. Camera Raw row: the Calibration panel landed on 2026-10-13 (#5128); what is missing is per-camera colour for non-DNG cameras ([gaps.md](gaps.md) G14). Percentages and estimates unchanged |
+| 2026-10-24 | minor | Discoverability discount: removed the stale "flyouts only on right-click" reason, since a press held or dragged off a toolbar button opens its flyout (#2324); Vector shapes and paths: Direct Selection arrows nudge the selected anchors (#4486), not yet a selected segment; the ×0.92 discount and the percentages are unchanged |
 | 2026-10-23 | minor | Colour management and modes: PSD spot plates are stored as Photoshop stores them (ink 0 = solid), and PSDs from earlier PhotoCraft versions keep their ink (#7415 split, part 4); estimates unchanged |
 | 2026-10-23 | minor | Colour management and modes: spot plates now save and open in TIFF (#7415); estimates unchanged |
 | 2026-10-22 | minor | Platforms: Help › Check for Updates and an opt-out check once per launch (#5485), DIST-220-1 partial; percentages unchanged |

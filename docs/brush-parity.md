@@ -34,7 +34,7 @@ tablets against Photoshop side by side.
 | Smoothing: amount, Pulled String, Stroke Catch-up, Catch-up on End, Adjust for Zoom | done | `brush.rs:428-438` |
 | Section locks | done | #174; `brush_panel_tests.rs` verifies section-specific accessible names and locked state for all 12 controls in 14 themes, plus visible themed focus, Tab blur, Space activation, minimal command patches and replay without selecting or enabling a section. |
 | Noise, Wet Edges, Build-up, Smoothing and Protect Texture: checkbox-only rows keep the selected controls open | done | `brush_panel_tests.rs`, #4283; Smoothing enable/disable preserves its amount and options, including imported ABR tool settings |
-| Brush tip from an image file | missing | TOOL-213-12 |
+| Brush tip from an image file | done | TOOL-213-12: `brush.presets.importImage` (`engine/src/cmd/preset_import_cmds.rs`, `imports_an_image_as_a_brush_tip`); Import Brushes… takes an image (`preset_files_ui.rs`, #3279) |
 | Erodible, Airbrush and Bristle tips (Photoshop's special tips) | partial | not audited in detail; "3D-based brushes don't work" (#1660) |
 | Anti-aliasing off for brushes | missing | #1666 (Pencil is the aliased path) |
 
@@ -44,7 +44,7 @@ tablets against Photoshop side by side.
 |---|---|---|
 | Pressure drives size/opacity/flow per sample (no shared pressure within a frame) | done | #2112 |
 | Global pressure curve in Preferences | done | #2195 |
-| Per-control pressure curves | missing | TOOL-213-11 |
+| Per-control pressure curves | done | TOOL-213-11: each dynamic's own curve (`paint/src/brush.rs` `Dynamic::curve`, `paint/src/dynamics.rs` `dynamic_value`), behind each Control row's curve button (`brush_sections.rs`, `brush_panel/tests.rs` `a_dynamic_gets_its_own_response_curve`, #3294) |
 | Quick taps keep their pressure | partial | #1967 fixed one case; tap paints a full blob (#1798), tap sensitivity (#1933) |
 | Smooth pressure on Windows | partial | "jumpy" (#2046) |
 | Tilt and rotation drive angle/roundness | partial | macOS, X11, web; not Windows; rotation not applied (#1301) |
@@ -122,6 +122,7 @@ tablets against Photoshop side by side.
 |---|---|---|
 | 2026-10-30 | minor | Art History Brush Opacity on the options bar, #10263; no estimate changed |
 | 2026-10-25 | minor | Art History Brush row added as partial (8 of 10 styles, TOOL-213-20, #1610). No brush-feel estimate changed. |
+| 2026-10-24 | minor | Stale rows corrected against main: Brush tip from an image file (TOOL-213-12, #3279) and per-control pressure curves (TOOL-213-11, #3294) are done; no brush-feel estimate changed |
 | 2026-10-23 | minor | Hard-round built-in presets use 5% spacing (#8842); rendered large-tip outline and pressure-opacity continuity tests cover 8/16/32-bit and 0/49% smoothing. Other presets and user settings retain their spacing; percentages and estimates unchanged. |
 | 2026-10-14 | minor | Brush Pose tilt overrides are independent end to end (#3825 partial); ABR flags, legacy JSON/commands, presets and three pixel depths covered; no readiness percentage or estimate changed |
 | 2026-10-13 | minor | Stale "missing tool" row corrected against main: Color Replacement (`paint.colorReplacement`) is a live toolbar tool; no brush-feel estimate changed |
