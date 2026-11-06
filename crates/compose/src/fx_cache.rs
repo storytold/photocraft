@@ -88,7 +88,7 @@ type FxSlot = std::sync::Arc<std::sync::OnceLock<FxEntry>>;
 
 struct FxCache {
     map: std::collections::HashMap<u64, FxSlot>,
-    order: std::collections::VecDeque<u64>,
+    order: Recency,
     bytes: usize,
 }
 
@@ -140,7 +140,7 @@ pub fn discard_unreadable_pixel_caches() {
 
 fn fx_cache() -> &'static std::sync::Mutex<FxCache> {
     static C: std::sync::OnceLock<std::sync::Mutex<FxCache>> = std::sync::OnceLock::new();
-    C.get_or_init(|| std::sync::Mutex::new(FxCache { map: Default::default(), order: Default::default(), bytes: 0 }))
+    C.get_or_init(|| std::sync::Mutex::new(FxCache { map: Default::default(), order: Recency::default(), bytes: 0 }))
 }
 
 /// Where `layer`'s effect maps are built (see [`effect_maps`]) and whether that is clipped to the
@@ -266,11 +266,8 @@ fn evict_fx_cache_over_budget(key: u64) {
     let mut c = fx_cache().lock().unwrap_or_else(|e| e.into_inner());
     let budget = effect_cache_budget();
     while c.bytes > budget && c.order.len() > 1 {
-        let Some(old) = c.order.pop_front() else { break };
-        if old == key {
-            c.order.push_back(old);
-            continue;
-        }
+        let Some(old) = c.order.oldest_except(key) else { break };
+        c.order.remove(old);
         if let Some(s) = c.map.remove(&old) {
             c.bytes = c.bytes.saturating_sub(s.get().map_or(0, |e| e.bytes));
         }
@@ -287,15 +284,16 @@ fn evict_fx_cache_over_budget(key: u64) {
 fn cached_effect_maps(layer: &Layer, region: Rect, key: u64, cx: &Ctx) -> std::sync::Arc<effects::FxMaps> {
     let slot = {
         let mut c = fx_cache().lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(s) = c.map.get(&key).cloned() {
-            touch_effect_entry(&mut c.order, key);
-            s
-        } else {
-            let s: FxSlot = Default::default();
-            c.map.insert(key, s.clone());
-            c.order.push_back(key);
-            s
-        }
+        let s = match c.map.get(&key) {
+            Some(s) => s.clone(),
+            None => {
+                let s: FxSlot = Default::default();
+                c.map.insert(key, s.clone());
+                s
+            }
+        };
+        c.order.touch(key);
+        s
     };
     let maps = match slot.get() {
         Some(e) => e.maps.clone(),
@@ -306,27 +304,61 @@ fn cached_effect_maps(layer: &Layer, region: Rect, key: u64, cx: &Ctx) -> std::s
     maps
 }
 
-/// Marks `key` the most recently used of `order`, so eviction (oldest first) takes the maps that
-/// renders stopped asking for, not those every render uses.
-fn touch_effect_entry(order: &mut std::collections::VecDeque<u64>, key: u64) {
-    if let Some(i) = order.iter().position(|&k| k == key) {
-        order.remove(i);
+/// When each cached key was last used, for least-recently-used eviction: a hit only bumps a
+/// counter (renders hit the cache for every layer with effects), and eviction, which runs over
+/// budget only, looks for the oldest.
+#[derive(Default)]
+struct Recency {
+    tick: u64,
+    last: std::collections::HashMap<u64, u64>,
+}
+
+impl Recency {
+    /// Marks `key` the most recently used.
+    fn touch(&mut self, key: u64) {
+        self.tick += 1;
+        self.last.insert(key, self.tick);
     }
-    order.push_back(key);
+
+    fn remove(&mut self, key: u64) {
+        self.last.remove(&key);
+    }
+
+    fn clear(&mut self) {
+        self.last.clear();
+    }
+
+    fn len(&self) -> usize {
+        self.last.len()
+    }
+
+    /// The least recently used key other than `keep` (the one a render is using now).
+    fn oldest_except(&self, keep: u64) -> Option<u64> {
+        self.last.iter().filter(|&(&k, _)| k != keep).min_by_key(|&(_, &t)| t).map(|(&k, _)| k)
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::touch_effect_entry;
+    use super::Recency;
 
+    /// Eviction takes the oldest first: maps used by every render (layers a render server never
+    /// changes) must outlive maps of layers that changed and will not be asked for again.
     #[test]
-    fn an_effect_cache_hit_makes_the_entry_the_newest() {
-        // Eviction takes the oldest first: maps used by every render (layers a render server never
-        // changes) must outlive maps of layers that changed and will not be asked for again.
-        let mut order: std::collections::VecDeque<u64> = [1, 2, 3].into_iter().collect();
-        touch_effect_entry(&mut order, 1);
-        assert_eq!(order.iter().copied().collect::<Vec<_>>(), [2, 3, 1]);
-        touch_effect_entry(&mut order, 1);
-        assert_eq!(order.iter().copied().collect::<Vec<_>>(), [2, 3, 1]);
+    fn a_cache_hit_makes_the_entry_the_newest() {
+        let mut r = Recency::default();
+        for k in [1, 2, 3] {
+            r.touch(k);
+        }
+        assert_eq!(r.oldest_except(3), Some(1));
+        r.touch(1);
+        assert_eq!(r.oldest_except(3), Some(2), "1 was just used");
+        r.remove(2);
+        assert_eq!(r.oldest_except(1), Some(3));
+        assert_eq!(r.oldest_except(3), Some(1));
+        r.touch(1);
+        assert_eq!(r.len(), 2, "a hit doesn't add a second entry");
+        r.clear();
+        assert_eq!(r.oldest_except(0), None);
     }
 }
