@@ -122,12 +122,15 @@ fn failed_bundle_publication_retains_old_objects_and_same_writer_retry_is_durabl
     }
 }
 
-/// #9440: a network share refuses the object-directory flush with `ERROR_INVALID_FUNCTION` (1).
-/// That counts as flushed, so the bundle save succeeds; `ERROR_ACCESS_DENIED` (5) still fails it.
+/// #9440: a network share refuses a directory flush with `ERROR_INVALID_FUNCTION` (1) or
+/// `ERROR_NOT_SUPPORTED` (50). At each barrier (the tiles and blobs folders before the manifest,
+/// and the bundle folder after it) that counts as flushed, so the bundle save succeeds;
+/// `ERROR_ACCESS_DENIED` (5) still fails it.
 #[test]
-fn an_unsupported_object_directory_flush_still_saves_the_bundle() {
-    for (code, saves) in [(1, true), (50, true), (5, false)] {
-        let dir = std::env::temp_dir().join(format!("pcraft-smb-flush-{}-{code}", std::process::id()));
+fn an_unsupported_directory_flush_still_saves_the_bundle() {
+    let cases = [FailAt::Tiles, FailAt::Blobs, FailAt::Manifest].into_iter().flat_map(|stage| [(stage, 1, true), (stage, 50, true), (stage, 5, false)]);
+    for (stage, code, saves) in cases {
+        let dir = std::env::temp_dir().join(format!("pcraft-smb-flush-{}-{stage:?}-{code}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir(&dir).unwrap();
         let dir = std::fs::canonicalize(dir).unwrap();
@@ -143,16 +146,16 @@ fn an_unsupported_object_directory_flush_still_saves_the_bundle() {
         let fs = PublicationFault {
             old_manifest: std::fs::read(dir.join(MANIFEST)).unwrap(),
             root: dir.clone(),
-            stage: FailAt::Tiles,
+            stage,
             armed: Cell::new(true),
             synced: RefCell::new(Vec::new()),
             raw_error: Some(code),
         };
         let result = writer.save_dir_with(&new, &dir, &SaveOptions::default(), &fs);
-        assert!(!fs.armed.get(), "code {code}: the tiles barrier was reached");
-        assert_eq!(result.is_ok(), saves, "code {code}: {result:?}");
+        assert!(!fs.armed.get(), "{stage:?} with code {code}: the barrier was reached");
+        assert_eq!(result.is_ok(), saves, "{stage:?} with code {code}: {result:?}");
         if saves {
-            assert_eq!(crate::load_path(&dir).unwrap(), new, "code {code}: the new manifest is published");
+            assert_eq!(crate::load_path(&dir).unwrap(), new, "{stage:?} with code {code}: the new manifest is published");
         }
         std::fs::remove_dir_all(dir).unwrap();
     }
