@@ -450,6 +450,8 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
             let dialog = crate::channel_options_ui::open_new_spot(app).ok_or("no document is open")?;
             Ok(json!({"dialog": dialog}))
         }
+        // Select › Find Layers: the Layers panel's Name filter (#10884).
+        "select.findLayers" => crate::layer_filter_ui::find::invoke(app, ctx, params),
         // Photoshop's "Select and Mask…" is the engine's select.refineEdge.
         // Select › Color Range… from the menu: the dialog (with params: the engine directly).
         "select.colorRange" if params.as_object().is_none_or(|o| o.is_empty()) => Ok(json!({"dialog": crate::color_range_ui::open(app)})),
