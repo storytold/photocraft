@@ -19,6 +19,8 @@
 	<dict><key>UIApplicationSupportsMultipleScenes</key><false/></dict>
 	<!-- Trackpad and mouse clicks arrive as pointer touches (hover, secondary click, scroll). -->
 	<key>UIApplicationSupportsIndirectInputEvents</key><true/>
+	<!-- Save to Photos (image exports): add-only access, never reading the library. -->
+	<key>NSPhotoLibraryAddUsageDescription</key><string>PhotoCraft adds the images you export to your photo library.</string>
 	<key>UIRequiresFullScreen</key><true/>
 	<!-- Without a launch screen iPadOS runs the app letterboxed at a legacy size. -->
 	<key>UILaunchScreen</key><dict/>

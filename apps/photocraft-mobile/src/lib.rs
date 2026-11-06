@@ -8,15 +8,20 @@
 //!   does, so File › Save writes it back without a sheet; the shell confirms the write, and only
 //!   then is the document saved. Everything else (Save As, a copy from Share or Photos, a format
 //!   the file can't keep) goes to the shell's exporter, as on the web.
+//!   Saves encode on a worker (PhotoCraft's background save job), so a large document never
+//!   holds up the main thread; the bytes go to the shell on the next frame, and the shells keep
+//!   the app running in the background until they have them ([`CraftApp::busy`]).
 //! - **Native controls** map to PhotoCraft's own commands, exactly as its menu items run them.
 //! - **Panels** see the active document and its layers, top first.
+//! - **Power:** while the device is hot or saving power, live previews run on a reduced copy
+//!   (Preferences › Performance › Low Resolution Previews), whatever the preference says.
 
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::{Arc, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 
-use craft_mobile::{Action, CraftApp, DocumentInfo, Item, PickedFile, Platform, SaveRoute, Snapshot, Stylus, WriteOutcome};
+use craft_mobile::{Action, CraftApp, DocumentInfo, Item, PickedFile, Platform, Power, SaveRoute, Snapshot, Stylus, WriteOutcome};
 use egui::TouchPhase;
 use photocraft_codecs::{ChannelLayout, EncodeOptions, Image};
 use photocraft_doc::{DocId, Document, Layer};
@@ -39,6 +44,41 @@ pub struct PhotoCraftMobile {
     issued: Issued,
     /// Writes in place the shell hasn't confirmed yet, oldest first.
     writing: Vec<PendingWrite>,
+    /// Saves a worker encoded, waiting for the next frame to go to the shell.
+    encoded: Encoded,
+    /// The user's Low Resolution Previews while the power state overrides it.
+    previews: PreviewOverride,
+}
+
+/// See [`PhotoCraftMobile::encoded`]: (path, file) pairs. A mutex, not a channel, so the app can
+/// see it's still busy while saves wait here.
+type Encoded = Arc<Mutex<Vec<(String, Vec<u8>)>>>;
+
+/// Live previews follow the power state: on a reduced copy while it's constrained.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct PreviewOverride {
+    /// The user's setting, kept while the override holds.
+    user: Option<bool>,
+}
+
+impl PreviewOverride {
+    /// The Low Resolution Previews setting to apply for `power`, given the current one; `None`
+    /// leaves it alone. The user's own choice comes back once the device is fine again, unless
+    /// they changed it meanwhile.
+    fn apply(&mut self, power: Power, current: bool) -> Option<bool> {
+        match (power.constrained(), self.user) {
+            (true, None) => {
+                self.user = Some(current);
+                (!current).then_some(true)
+            }
+            (false, Some(user)) => {
+                self.user = None;
+                // Still the override's value: give the user's back.
+                (current && !user).then_some(user)
+            }
+            _ => None,
+        }
+    }
 }
 
 /// See [`PhotoCraftMobile::located`]. A `Cell`: the services and the frame take turns, and
@@ -57,9 +97,9 @@ struct PendingWrite {
 
 impl CraftApp for PhotoCraftMobile {
     fn create(ctx: &egui::Context, wgpu: Option<eframe::egui_wgpu::RenderState>, platform: Platform) -> Self {
-        let (inbox, located, issued) = (Inbox::default(), Located::default(), Issued::default());
-        let app = create_app(ctx, wgpu, services(&platform, inbox.clone(), located.clone(), issued.clone()));
-        Self { app, inbox, located, issued, writing: Vec::new() }
+        let (inbox, located, issued, encoded) = (Inbox::default(), Located::default(), Issued::default(), Encoded::default());
+        let app = create_app(ctx, wgpu, services(&platform, inbox.clone(), located.clone(), issued.clone(), encoded.clone()));
+        Self { app, inbox, located, issued, writing: Vec::new(), encoded, previews: PreviewOverride::default() }
     }
 
     fn wgpu_configuration() -> eframe::egui_wgpu::WgpuConfiguration {
@@ -161,6 +201,31 @@ impl CraftApp for PhotoCraftMobile {
         }
     }
 
+    /// A save or another job the user started is running, or its bytes haven't reached the shell.
+    fn busy(&self) -> bool {
+        self.app.session.has_jobs() || !self.app.jobs.saves.is_empty() || !self.encoded.lock().unwrap_or_else(PoisonError::into_inner).is_empty()
+    }
+
+    /// Hot or saving power: live previews (adjustments, filters) run on a reduced copy.
+    fn power(&mut self, ctx: &egui::Context, power: Power) {
+        let current = self.app.session.prefs().performance.low_resolution_previews;
+        let next = self.previews.apply(power, current);
+        if let Some(reduced) = next {
+            self.app.session.edit_prefs(|p| p.performance.low_resolution_previews = reduced);
+        }
+        log::info!(
+            "photocraft-mobile: power {power:?}: low resolution previews {}",
+            match next {
+                Some(true) => "on while the device is constrained",
+                Some(false) => "back to the user's setting (off)",
+                None => {
+                    if current { "on" } else { "off" }
+                }
+            }
+        );
+        ctx.request_repaint();
+    }
+
     /// Rendered smart-object stages and sources rebuild on demand; undo history is the user's work.
     fn trim_memory(&mut self, ctx: &egui::Context) {
         let freed = photocraft_engine::cmd::smart_cmds::purge_stack_cache() + photocraft_engine::cmd::smart_cmds::purge_source_cache();
@@ -214,16 +279,39 @@ impl eframe::App for PhotoCraftMobile {
             }
         }
         self.app.logic(ctx, frame);
+        // After the jobs moved on: a save whose job just ended has handed its bytes over.
+        self.hand_over_saves();
         self.note_writes();
+        show_file_names(&mut self.app.ui.status);
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         self.app.ui(ui, frame);
         self.note_writes();
+        show_file_names(&mut self.app.ui.status);
+    }
+}
+
+/// The status bar names a document by its file, never by the path the shell writes it through.
+fn show_file_names(status: &mut String) {
+    if let std::borrow::Cow::Owned(shown) = craft_mobile::with_file_names(status) {
+        *status = shown;
     }
 }
 
 impl PhotoCraftMobile {
+    /// Send the saves workers encoded to the shell, as an inline save writes them: in place, or
+    /// to the exporter.
+    fn hand_over_saves(&mut self) {
+        let saves = std::mem::take(&mut *self.encoded.lock().unwrap_or_else(PoisonError::into_inner));
+        let Some(write) = self.app.services.write.as_mut() else { return };
+        for (path, bytes) in saves {
+            if let Err(e) = write(&path, &bytes) {
+                log::warn!("photocraft-mobile: couldn't hand {path} over: {e}");
+            }
+        }
+    }
+
     /// Tie each write in place issued since the last call to the document and revision it
     /// wrote. Saves write the document they're for and record it in the same frame, so the
     /// document now bound to the path is that one, at the revision written.
@@ -282,7 +370,7 @@ fn create_app(ctx: &egui::Context, wgpu: Option<eframe::egui_wgpu::RenderState>,
 
 /// The in-process codecs (as on the web), and files through the shell's picker, its writes in
 /// place and its exporter.
-fn services(platform: &Platform, inbox: Inbox, located: Located, issued: Issued) -> Services {
+fn services(platform: &Platform, inbox: Inbox, located: Located, issued: Issued, encoded: Encoded) -> Services {
     let picker = platform.clone();
     let exporter = platform.clone();
     let clipboard = platform.clone();
@@ -327,6 +415,15 @@ fn services(platform: &Platform, inbox: Inbox, located: Located, issued: Issued)
             }
             Ok(())
         })),
+        // Saves encode on a worker (a background job with progress and Cancel); the bytes reach
+        // `write` on a later frame (`PhotoCraftMobile::hand_over_saves`).
+        save_file: Some(Arc::new(
+            move |doc: &Document, path: &str, settings: &photocraft_ui_egui::ExportSettings, ctl: &photocraft_ui_egui::jobs_ui::SaveCtl| {
+                let (file, warnings) = encode_save(doc, path, settings, ctl)?;
+                encoded.lock().unwrap_or_else(PoisonError::into_inner).push((path.to_string(), file));
+                Ok(warnings)
+            },
+        )),
         // The user may cancel the exporter, and nothing reports back: never mark the document
         // saved here. A write in place is confirmed later (`PhotoCraftMobile::written`).
         write_unconfirmed: true,
@@ -343,6 +440,24 @@ fn services(platform: &Platform, inbox: Inbox, located: Located, issued: Issued)
     };
     recovery(&mut services, platform.data_dir().map(|dir| dir.join("Recovery")));
     services
+}
+
+/// Encode `doc` for `path` on a save job's worker, with its progress and Cancel: the file and
+/// the export warnings. Nothing is handed over once the job is cancelled.
+fn encode_save(
+    doc: &Document,
+    path: &str,
+    settings: &photocraft_ui_egui::ExportSettings,
+    ctl: &photocraft_ui_egui::jobs_ui::SaveCtl,
+) -> Result<(Vec<u8>, Vec<String>), String> {
+    ctl.progress(0.0, "Encoding");
+    let cancelled = || ctl.check().is_err();
+    let progress = |f: f32| ctl.progress(f, "");
+    let interrupt = photocraft_raster::Interrupt::new(&cancelled, &progress);
+    let result = photocraft_io::export_with(doc, path, &settings.io_options(), &interrupt).map_err(|e| e.to_string())?;
+    ctl.commit()?;
+    ctl.progress(1.0, "");
+    Ok((result.bytes, result.warnings))
 }
 
 type SharedRecovery = Rc<RefCell<Option<RecoveryStore>>>;
@@ -468,6 +583,31 @@ mod tests {
         assert_eq!(session.active_index(), Some(1));
         mark_saved(&mut session, &PendingWrite { path: "inplace://2/a.psd".into(), doc, revision: 7 });
         assert_eq!(session.documents().first().map(|st| st.saved_revision), Some(5), "moved elsewhere since: not this file's save");
+    }
+
+    /// Hot or saving power turns reduced previews on for as long as it lasts, then gives the
+    /// user's setting back, unless it already is.
+    #[test]
+    fn previews_are_reduced_while_the_device_is_constrained() {
+        let hot = Power { thermal: craft_mobile::Thermal::Serious, low_power: false };
+        let fine = Power::default();
+        let mut previews = PreviewOverride::default();
+        assert_eq!(previews.apply(fine, false), None);
+        assert_eq!(previews.apply(hot, false), Some(true), "reduced while hot");
+        assert_eq!(previews.apply(hot, true), None, "already overridden");
+        assert_eq!(previews.apply(fine, true), Some(false), "the user's full-resolution previews again");
+        assert_eq!(previews.apply(hot, true), None, "already reduced: nothing to change");
+        assert_eq!(previews.apply(fine, true), None, "and nothing to give back");
+        assert_eq!(previews.apply(hot, false), Some(true));
+        assert_eq!(previews.apply(fine, false), None, "turned off meanwhile (in Preferences): nothing to give back");
+    }
+
+    #[test]
+    fn the_status_names_a_document_by_its_file() {
+        let path = located("a.psd").document_path().unwrap_or_default();
+        let mut status = format!("Saved {path}");
+        show_file_names(&mut status);
+        assert_eq!(status, "Saved a.psd");
     }
 
     #[test]
