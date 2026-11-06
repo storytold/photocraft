@@ -7,7 +7,11 @@ use std::path::{Path, PathBuf};
 use photocraft_automation::{AutomationError, BridgeClient, security};
 use serde_json::{Value, json};
 
-use crate::{Args, R, print_json};
+use crate::{
+    Result,
+    args::RunArgs,
+    output::{JsonStyle, print_json},
+};
 
 const MAX_BYTES: usize = 8 * 1024 * 1024;
 const MAX_LINES: usize = 4096;
@@ -134,22 +138,13 @@ fn load(path: &Path) -> Result<Vec<Step>, String> {
     Ok(steps)
 }
 
-pub(super) fn run(args: &Args, out: &mut dyn Write) -> R {
-    if args.flags.iter().any(|(k, _)| !matches!(k.as_str(), "--control" | "--control-token-file" | "--token-file")) {
-        return Err("remote run accepts only --control and --control-token-file (alias --token-file)".into());
-    }
-    for flag in ["--control", "--control-token-file", "--token-file"] {
-        if args.flags.iter().filter(|(k, _)| k == flag).count() > 1 {
-            return Err(format!("{flag} must be supplied once"));
-        }
-    }
-    if args.has("--control-token-file") && args.has("--token-file") {
-        return Err("use one of --control-token-file or --token-file".into());
-    }
-    let [path] = args.positional.as_slice() else { return Err("remote run needs exactly one <script.jsonl>".into()) };
-    let port = args.get("--control").and_then(|p| p.parse::<u16>().ok()).filter(|p| *p != 0).ok_or("--control must be a port from 1 to 65535")?;
-    let steps = load(Path::new(path))?;
-    let (supplied, token_file) = security::token_inputs(None, args.get("--control-token-file").or_else(|| args.get("--token-file")).map(PathBuf::from));
+pub(super) fn run(args: &RunArgs, out: &mut dyn Write) -> Result<(), String> {
+    let port = args.control.filter(|port| *port != 0).ok_or("--control must be a port from 1 to 65535")?;
+    let path = args.file.as_deref().ok_or("remote run needs exactly one <script.jsonl>")?;
+    let steps = load(path)?;
+    let supplied = std::env::var("PHOTOCRAFT_CONTROL_TOKEN").ok().filter(|value| !value.trim().is_empty());
+    let token_file =
+        args.control_token_file.clone().or_else(|| std::env::var_os("PHOTOCRAFT_CONTROL_TOKEN_FILE").filter(|value| !value.is_empty()).map(PathBuf::from));
     let token = security::client_token(supplied.as_deref(), token_file.as_deref()).map_err(|e| e.to_string())?;
     let client = BridgeClient::new(format!("127.0.0.1:{port}"), token).map_err(|e| e.to_string())?;
     let runtime = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
@@ -176,7 +171,7 @@ pub(super) fn run(args: &Args, out: &mut dyn Write) -> R {
                 remaining = remaining.checked_sub(size).ok_or_else(|| at(step.line, "captured results exceed 8 MiB budget"))?;
                 captures.insert(name, result.clone());
             }
-            print_json(out, &json!({"command": step.command, "result": result}), true)?;
+            print_json(out, &json!({"command": step.command, "result": result}), JsonStyle::Compact).map_err(|e| e.to_string())?;
         }
         Ok(())
     })

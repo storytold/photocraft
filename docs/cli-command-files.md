@@ -6,6 +6,7 @@ runs commands sequentially against a running `photocraft --control 7878` or
 `--token-file` aliases `--control-token-file`; the existing
 `PHOTOCRAFT_CONTROL_TOKEN` / `PHOTOCRAFT_CONTROL_TOKEN_FILE` inputs also work.
 Connections stay on loopback. Remote run cannot be combined with local run flags.
+On Unix, a token file must be readable only by its owner (for example, `chmod 600 control.token`).
 
 Each UTF-8 JSONL line is an object with a nonempty `command`, optional object
 `params` (defaults to `{}`), and optional `saveAs`. Other fields, blank lines,

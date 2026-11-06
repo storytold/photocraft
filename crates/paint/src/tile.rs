@@ -6,11 +6,14 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// A grayscale bitmap, row-major, 1 = full.
+///
+/// The samples are shared: cloning a tile (brush settings are cloned on every pointer event of a
+/// stroke, #4534) copies a pointer, not a sampled tip that may be thousands of pixels across.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GrayTile {
     pub width: u32,
     pub height: u32,
-    pub data: Vec<u16>,
+    pub data: std::sync::Arc<[u16]>,
 }
 
 impl GrayTile {
@@ -22,7 +25,7 @@ impl GrayTile {
                 data.push(q16(f(x, y)));
             }
         }
-        Self { width, height, data }
+        Self { width, height, data: data.into() }
     }
     /// Build from 0..1 floats (`width × height`).
     pub fn from_f32(width: u32, height: u32, v: &[f32]) -> Self {
@@ -37,7 +40,7 @@ impl GrayTile {
         self.data.iter().map(|&v| f32::from(v) / 65535.0).collect()
     }
     pub fn is_valid(&self) -> bool {
-        self.width > 0 && self.height > 0 && self.data.len() == self.width as usize * self.height as usize
+        self.width > 0 && self.height > 0 && (self.width as usize).checked_mul(self.height as usize) == Some(self.data.len())
     }
 
     /// A box-filtered copy whose larger side is at most `max_side` (the whole tile when it is
@@ -47,7 +50,7 @@ impl GrayTile {
     pub fn preview(&self, max_side: u32) -> GrayTile {
         let q8 = |v: u32| ((v + 128) / 257 * 257) as u16;
         if !self.is_valid() {
-            return GrayTile { width: 1, height: 1, data: vec![0] };
+            return GrayTile { width: 1, height: 1, data: vec![0].into() };
         }
         let (w, h) = (self.width as usize, self.height as usize);
         let max = max_side.max(1) as usize;
@@ -64,7 +67,8 @@ impl GrayTile {
                 }
             }
         }
-        let data = sum.iter().zip(&cnt).map(|(s, c)| q8(if *c > 0 { (*s / u64::from(*c)) as u32 } else { 0 })).collect();
+        let data: Vec<u16> = sum.iter().zip(&cnt).map(|(s, c)| q8(if *c > 0 { (*s / u64::from(*c)) as u32 } else { 0 })).collect();
+        let data = data.into();
         GrayTile { width: nw as u32, height: nh as u32, data }
     }
 }
@@ -141,7 +145,7 @@ struct GrayTileIn {
 impl Serialize for GrayTile {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         let mut bytes = Vec::with_capacity(self.data.len() * 2);
-        for v in &self.data {
+        for v in self.data.iter() {
             bytes.extend_from_slice(&v.to_le_bytes());
         }
         let enc = b64_encode(&bytes);
@@ -153,7 +157,9 @@ impl<'de> Deserialize<'de> for GrayTile {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         use serde::de::Error;
         let t = GrayTileIn::deserialize(d)?;
-        let n = t.width as usize * t.height as usize;
+        let Some(n) = (t.width as usize).checked_mul(t.height as usize) else {
+            return Err(D::Error::custom("tile dimensions overflow the address space"));
+        };
         let data: Vec<u16> = match t.data {
             DataIn::B64(s) => {
                 let b = b64_decode(&s).ok_or_else(|| D::Error::custom("invalid base64 in tile data"))?;
@@ -164,7 +170,7 @@ impl<'de> Deserialize<'de> for GrayTile {
         if n == 0 || data.len() != n {
             return Err(D::Error::custom(format!("tile data has {} samples, expected {}×{}", data.len(), t.width, t.height)));
         }
-        Ok(GrayTile { width: t.width, height: t.height, data })
+        Ok(GrayTile { width: t.width, height: t.height, data: data.into() })
     }
 }
 
@@ -228,6 +234,9 @@ pub struct Mips {
 
 impl Mips {
     pub fn new(t: &GrayTile) -> Self {
+        if !t.is_valid() {
+            return Self { levels: vec![(1, 1, vec![0.0])] };
+        }
         let mut levels = vec![(t.width as usize, t.height as usize, t.to_f32())];
         while let Some((w, h, v)) = levels.last() {
             if *w <= 1 && *h <= 1 {
@@ -300,6 +309,20 @@ impl PatternImage {
 mod tests {
     use super::*;
 
+    /// Cloning a tile (and the brush settings holding it, on every pointer event of a stroke)
+    /// shares its samples instead of copying them (#4534).
+    #[test]
+    fn clones_share_their_samples() {
+        let t = GrayTile::from_fn(64, 32, |x, y| ((x + y) % 7) as f32 / 6.0);
+        let c = t.clone();
+        assert!(std::sync::Arc::ptr_eq(&t.data, &c.data));
+        assert_eq!(t, c);
+        let brush = crate::brush::BrushSettings { tip: crate::brush::TipShape::Sampled(t.clone()), ..Default::default() };
+        let copy = brush.clone();
+        let crate::brush::TipShape::Sampled(ct) = &copy.tip else { panic!("sampled") };
+        assert!(std::sync::Arc::ptr_eq(&t.data, &ct.data), "the settings' clone shares the tip");
+    }
+
     #[test]
     fn base64_round_trip() {
         for n in 0..10 {
@@ -315,8 +338,20 @@ mod tests {
         let back: GrayTile = serde_json::from_str(&j).unwrap();
         assert_eq!(back, t);
         let f: GrayTile = serde_json::from_str(r#"{"width":2,"height":1,"data":[0.0,1.0]}"#).unwrap();
-        assert_eq!(f.data, vec![0, 65535]);
+        assert_eq!(f.data, vec![0, 65535].into());
         assert!(serde_json::from_str::<GrayTile>(r#"{"width":2,"height":2,"data":[0.0,1.0]}"#).is_err());
+        assert!(serde_json::from_str::<GrayTile>(r#"{"width":4294967295,"height":4294967295,"data":[0.0]}"#).is_err());
+        let invalid = GrayTile { width: u32::MAX, height: u32::MAX, data: vec![1].into() };
+        assert!(!invalid.is_valid());
+        assert_eq!(Mips::new(&invalid).levels, vec![(1, 1, vec![0.0])]);
+    }
+
+    /// `u32::MAX * u32::MAX` only overflows `usize` on 32-bit targets (wasm); 64-bit hits the length check.
+    #[cfg(target_pointer_width = "32")]
+    #[test]
+    fn oversized_dimensions_report_address_space_overflow() {
+        let err = serde_json::from_str::<GrayTile>(r#"{"width":4294967295,"height":4294967295,"data":[0.0]}"#).unwrap_err();
+        assert!(err.to_string().contains("tile dimensions overflow the address space"));
     }
 
     #[test]
@@ -329,8 +364,8 @@ mod tests {
         assert!(p.data.iter().all(|v| v % 257 == 0), "8-bit levels");
         // Small tiles keep their size; invalid ones never panic.
         assert_eq!(GrayTile::from_fn(5, 3, |_, _| 0.5).preview(96).width, 5);
-        assert!(GrayTile { width: 4, height: 4, data: vec![1] }.preview(96).is_valid());
-        assert!(GrayTile { width: 0, height: 0, data: vec![] }.preview(0).is_valid());
+        assert!(GrayTile { width: 4, height: 4, data: vec![1].into() }.preview(96).is_valid());
+        assert!(GrayTile { width: 0, height: 0, data: vec![].into() }.preview(0).is_valid());
     }
 
     #[test]

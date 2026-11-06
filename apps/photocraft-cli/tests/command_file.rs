@@ -14,18 +14,28 @@ impl Fixture {
         let path = std::env::temp_dir().join(format!("pc-command-file-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
         std::fs::create_dir_all(&path).unwrap();
         std::fs::write(path.join("script.jsonl"), script).unwrap();
-        std::fs::write(path.join("token"), "a".repeat(64)).unwrap();
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        options.open(path.join("token")).unwrap().write_all("a".repeat(64).as_bytes()).unwrap();
         Self(path)
     }
-    fn run(&self, port: u16) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_photocraft-cli"))
+    fn command(&self, port: u16, token_flag: &str) -> Command {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_photocraft-cli"));
+        command
             .env_remove("PHOTOCRAFT_CONTROL_TOKEN")
             .env_remove("PHOTOCRAFT_CONTROL_TOKEN_FILE")
-            .args(["run", "--control", &port.to_string(), "--control-token-file"])
+            .args(["run", "--control", &port.to_string(), token_flag])
             .arg(self.0.join("token"))
-            .arg(self.0.join("script.jsonl"))
-            .output()
-            .unwrap()
+            .arg(self.0.join("script.jsonl"));
+        command
+    }
+    fn run(&self, port: u16) -> Output {
+        self.command(port, "--control-token-file").output().unwrap()
     }
 }
 impl Drop for Fixture {
@@ -41,8 +51,25 @@ fn read(reader: &mut BufReader<TcpStream>) -> Value {
 fn reply(reader: &mut BufReader<TcpStream>, request: &Value, result: Value) {
     writeln!(reader.get_mut(), "{}", json!({"id":request["id"],"ok":true,"result":result})).unwrap();
 }
+fn accept(listener: &TcpListener) -> TcpStream {
+    listener.set_nonblocking(true).unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        match listener.accept() {
+            Ok((stream, _)) => {
+                stream.set_nonblocking(false).unwrap();
+                return stream;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock && std::time::Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => panic!("CLI did not connect to fixture: {error}"),
+        }
+    }
+}
+
 fn auth(listener: &TcpListener) -> BufReader<TcpStream> {
-    let (stream, _) = listener.accept().unwrap();
+    let stream = accept(listener);
     stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
     let mut reader = BufReader::new(stream);
     let request = read(&mut reader);
@@ -130,7 +157,7 @@ fn auth_refusal_does_not_send_commands_or_echo_remote_secrets() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     let server = std::thread::spawn(move || {
-        let (stream, _) = listener.accept().unwrap();
+        let stream = accept(&listener);
         let mut reader = BufReader::new(stream);
         let request = read(&mut reader);
         writeln!(reader.get_mut(), "{}", json!({"id":request["id"],"ok":false,"error":"synthetic-sensitive-message"})).unwrap();
@@ -170,12 +197,27 @@ fn connection_failure_and_unknown_flags_remain_actionable() {
     assert!(String::from_utf8_lossy(&output.stderr).contains("request was not sent"));
     let output = Command::new(env!("CARGO_BIN_EXE_photocraft-cli")).args(["run", "--control", "1", "--typo"]).output().unwrap();
     assert_eq!(output.status.code(), Some(2));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("unknown flag --typo"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("--typo"));
 }
 
 #[test]
 fn remote_flags_do_not_silently_change_local_run_behavior() {
-    for flags in [vec!["--control", "1", "--new", "{}"], vec!["--token-file", "missing"], vec!["--control", "0"], vec!["--control", "1", "--control", "2"]] {
+    for flags in [
+        vec!["--control", "1", "--new", "{}"],
+        vec!["--token-file", "missing"],
+        vec!["--control", "0"],
+        vec!["--control", "1", "--control", "2"],
+        vec!["--control", "1", "--cmd", "file.new"],
+        vec!["--control", "1", "--params", "{}"],
+        vec!["--control", "1", "--out", "result.png"],
+        vec!["--control", "1", "--format", "png"],
+        vec!["--control", "1", "--quality", "50"],
+        vec!["--control", "1", "--tiff-pyramid"],
+        vec!["--control", "1", "--gpu"],
+        vec!["--control", "1", "--no-gpu"],
+        vec!["--control", "1", "--in-place"],
+        vec!["--control", "1", "--approve-high-memory"],
+    ] {
         let output = Command::new(env!("CARGO_BIN_EXE_photocraft-cli")).arg("run").args(flags).arg("missing.jsonl").output().unwrap();
         assert!(!output.status.success());
         assert!(!String::from_utf8_lossy(&output.stderr).contains("cannot open"));
@@ -188,5 +230,17 @@ fn scripts_and_lines_have_bounded_read_budgets() {
         let output = Fixture::new(&script).run(1);
         assert!(!output.status.success());
         assert!(String::from_utf8_lossy(&output.stderr).contains("budget"));
+    }
+}
+
+#[test]
+fn remote_mode_ignores_unused_gpu_environment_and_accepts_token_file_alias() {
+    let fixture = Fixture::new("not valid JSON");
+    for flag in ["--control-token-file", "--token-file"] {
+        let output = fixture.command(1, flag).env("PHOTOCRAFT_GPU", "not-a-local-gpu-policy").output().unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(error.contains("invalid JSON"), "{error}");
+        assert!(!error.contains("PHOTOCRAFT_GPU"), "{error}");
     }
 }
