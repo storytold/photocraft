@@ -23,6 +23,10 @@ fn fill_channels_match_allocating_pixel_conversion() {
             let planes = crate::pixels::deinterleave(&bytes, fmt.channels(), sample, &vec![false; fmt.channels()]);
             doc.layers.push(layer);
             let file = document_to_psd(&doc);
+            assert_eq!(
+                file.layers()[0].channels.iter().map(|c| c.id).collect::<Vec<_>>(),
+                std::iter::once(-1).chain(0..mode.color_channels() as i16).collect::<Vec<_>>()
+            );
             for channel in &file.layers()[0].channels {
                 let c = if channel.id == -1 { mode.color_channels() } else { channel.id as usize };
                 let compression = if sample == SampleType::F32 { Compression::ZipPrediction } else { Compression::Rle };
@@ -30,6 +34,21 @@ fn fill_channels_match_allocating_pixel_conversion() {
             }
         }
     }
+}
+
+#[test]
+fn oversized_sparse_mask_fails_export_without_allocating_its_dense_rectangle() {
+    let mut doc = document(1, 1);
+    let mut layer = Layer::raster("masked", doc.pixel_format());
+    let mut mask = LayerMask::hide_all();
+    let far = if cfg!(target_pointer_width = "32") { 65_535 } else { 1 << 30 };
+    for p in [0, far] {
+        mask.surface.fill_rect(photocraft_geom::Rect::new(p, p, p + 1, p + 1), &[1.0]);
+    }
+    layer.mask = Some(mask);
+    doc.layers.push(layer);
+    assert!(document_to_psd(&doc).to_bytes().is_err());
+    assert!(crate::export(&doc, "psd", &Default::default()).is_err());
 }
 
 #[test]

@@ -127,6 +127,22 @@ fn interleave_into(planes: &[Option<&[u8]>], fill: &[Vec<u8>], n: usize, s: Samp
     });
 }
 
+/// Gather one mask plane with checked dimensions and fallible allocation.
+pub(crate) fn try_surface_plane(surface: &Surface, r: Rect) -> photocraft_psd::Result<Vec<u8>> {
+    let layout = photocraft_psd::compression::PlaneLayout {
+        planes: 1,
+        width: r.width() as usize,
+        height: r.height() as usize,
+        depth: psd_depth(surface.format().sample),
+        version: photocraft_psd::Version::Psb,
+    };
+    let len = layout.decoded_len()?;
+    let mut plane =
+        photocraft_raster::scratch::try_take_exact(len, 0u8).ok_or(photocraft_psd::PsdError::OutOfMemory("not enough memory for the PSD mask plane"))?;
+    surface_planes_into(surface, r, &[false], false, &mut [&mut plane]);
+    Ok(plane)
+}
+
 /// Gather big-endian PSD planes directly from tiles into their final allocations.
 pub(crate) fn surface_planes(surface: &Surface, r: Rect, channels: usize, invert: &[bool], lab16: bool) -> Vec<Vec<u8>> {
     surface_planes_white(surface, r, channels, invert, lab16, None)

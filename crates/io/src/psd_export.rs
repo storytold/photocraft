@@ -242,7 +242,10 @@ impl Ex<'_> {
         let default = s.default_pixel().first().copied().unwrap_or(0.0);
         let r = s.content_bounds();
         let (w, h) = (r.width() as usize, r.height() as usize);
-        let plane = if r.is_empty() { Vec::new() } else { surface_planes(&s, r, 1, &[false], false).remove(0) };
+        let channel = match crate::pixels::try_surface_plane(&s, r) {
+            Ok(plane) => self.encode(-2, plane, w, h),
+            Err(error) => failed_mask_channel(error),
+        };
         let mut flags = 0u8;
         if !m.linked {
             flags |= PsdMask::FLAG_RELATIVE;
@@ -263,7 +266,7 @@ impl Ex<'_> {
             real: None,
             real_first: true,
         };
-        (MaskData::Mask(pm), Some(self.encode(-2, plane, w, h)))
+        (MaskData::Mask(pm), Some(channel))
     }
 
     /// Prefer numbers above imported layer IDs, wrapping safely at u32::MAX.
@@ -1097,6 +1100,23 @@ impl Ex<'_> {
             }
         }
     }
+}
+
+/// Preserve the model API while making every attempt to write a failed mask return its error.
+fn failed_mask_channel(error: photocraft_psd::PsdError) -> ChannelData {
+    use photocraft_psd::source::{ReadAt, Source, Stored};
+    struct Failed(String);
+    impl ReadAt for Failed {
+        fn len(&self) -> u64 {
+            1
+        }
+        fn read_at(&self, _offset: u64, _buf: &mut [u8]) -> photocraft_psd::Result<()> {
+            Err(photocraft_psd::PsdError::Invalid(self.0.clone()))
+        }
+    }
+    let mut channel = ChannelData::new(-2, Some(Compression::Raw), Vec::new());
+    channel.stored = Some(Stored { source: Source::new(Failed(error.to_string())), offset: 0, len: 1 });
+    channel
 }
 
 #[cfg(test)]
