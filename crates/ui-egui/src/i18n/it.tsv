@@ -763,7 +763,7 @@
 	Working Magenta Plate	Lastra magenta di lavoro
 	Working Yellow Plate	Lastra gialla di lavoro
 	Working Black Plate	Lastra nera di lavoro
-	Working CMY Plates	Lastra CMY di lavoro
+	Working CMY Plates	Lastre CMY di lavoro
 	Legacy Macintosh RGB (Gamma 1.8)	RGB legacy Macintosh (Gamma 1.8)
 	Internet Standard RGB (sRGB)	RGB standard Internet (sRGB)
 	Monitor RGB	RGB monitor
@@ -918,6 +918,12 @@
 	Timeline	Timeline
 	Tool Presets	Predefiniti strumento
 	Tools	Strumenti
+	Contextual Task Bar	Barra delle attività contestuale
+	Hide bar	Nascondi barra
+	Reset bar position	Ripristina posizione barra
+	Pin bar position	Blocca posizione barra
+	Move bar	Sposta barra
+	More options	Altre opzioni
 	About PhotoCraft	Informazioni su PhotoCraft
 	PhotoCraft Website	Sito web PhotoCraft
 	PhotoCraft on GitHub	PhotoCraft su GitHub
@@ -2149,7 +2155,6 @@
 	Show only crosshair while painting	Mostra solo mirino durante pittura
 	Show slice numbers	Mostra numeri sezioni
 	Show tooltips	Mostra tooltip
-	Enable animations	Attiva animazioni
 	Show highlight on rollover	Mostra evidenziazione al passaggio del mouse
 	Show bounding box when dragging layer	Mostra riquadro selezione al trascinamento livello
 	System title bar	Barra del titolo di sistema
@@ -2401,6 +2406,7 @@
 	Punctuation	Punteggiatura
 	Make Work Path	Crea tracciato di lavoro
 	Make Selection	Crea selezione
+	Make Shape	Crea forma
 	Fill Path	Riempi tracciato
 	Stroke Path	Traccia tracciato
 	Delete Path	Elimina tracciato

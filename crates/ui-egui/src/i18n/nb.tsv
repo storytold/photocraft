@@ -542,6 +542,12 @@
 	Timeline	Tidslinje
 	Tool Presets	Verktøyforvalg
 	Tools	Verktøy
+	Contextual Task Bar	Kontekstavhengig oppgavelinje
+	Hide bar	Skjul linjen
+	Reset bar position	Tilbakestill linjens plassering
+	Pin bar position	Fest linjens plassering
+	Move bar	Flytt linjen
+	More options	Flere alternativer
 	Libraries	Biblioteker
 	3D	3D
 	Toolbars	Verktøylinjer
@@ -1214,6 +1220,7 @@
 	Path to Illustrator…	Bane til Illustrator…
 	Make Work Path	Opprett arbeidsbane
 	Make Selection	Opprett utvalg
+	Make Shape	Opprett form
 	Fill Path	Fyll bane
 	Stroke Path	Strek opp bane
 	Clipping Path	Klippebane
@@ -2061,7 +2068,7 @@
 	Vertical Centers	Loddrette sentre
 	Video Frames to Layers…	Videorammer til lag…
 	WIA Support…	WIA-støtte…
-	Working CMY Plates	Arbeidsplate for CMY
+	Working CMY Plates	Arbeidsplater for CMY
 
 # tl! literals (third pass)
 	Absolute	Absolutt
@@ -2478,7 +2485,6 @@
 	Show only crosshair while painting	Vis bare trådkors under maling
 	Show slice numbers	Vis segmentnumre
 	Show tooltips	Vis verktøytips
-	Enable animations	Aktiver animasjoner
 	Show highlight on rollover	Vis utheving ved pekerberøring
 	Show bounding box when dragging layer	Vis avgrensningsboks når lag dras
 	System title bar	Systemets tittellinje
