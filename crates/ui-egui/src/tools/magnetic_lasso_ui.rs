@@ -6,8 +6,9 @@
 //! often at a higher Frequency. A click fastens a point; ⌥-click draws a straight segment and
 //! ⌥-drag a freehand one. ⌫ or Delete removes the last fastening point. Clicking the first point,
 //! a double-click or ↩ closes the border along the edges (⌥ with a straight segment); Esc cancels.
-//! [ and ] narrow or widen the detection width by 1 px. As in Photoshop, the border follows the
-//! active layer's pixels (the composite for a layer without pixels of its own).
+//! [ and ] narrow or widen the detection width by 1 px. The border follows the edges of the visible
+//! composite, whichever layer is active (hidden layers add none); documents that are not RGB keep
+//! following the active layer's own pixels.
 //!
 //! The border closes through `select.magneticLasso` with `"trace": false`: the selection is exactly
 //! the outline drawn, in one history step, and an action replays that outline.
