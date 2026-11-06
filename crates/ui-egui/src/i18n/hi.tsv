@@ -577,6 +577,8 @@ cameraRaw	Yellow	पीला
 	Target	लक्ष्य
 	Units	इकाइयाँ
 	Demosaic	डिमोज़ेक
+
+	The GPU compositor is still being prepared	The GPU compositor is still being prepared
 	Clear Selection	चयन साफ़ करें
 	Color Aware	रंग-आधारित
 	Decontaminate Colors	रंग शुद्ध करें
@@ -2621,7 +2623,26 @@ cameraRaw	Yellow	पीला
 	seconds	सेकंड
 	Create a single history state	एक ही इतिहास स्थिति बनाएँ
 
+# Channels panel menu (#11451)
+	New Channel…	नया चैनल…
+	Duplicate Channel	चैनल को डुप्लीकेट करें
+	Delete Channel	चैनल हटाएँ
+	New Spot Channel…	नया स्पॉट चैनल…
+	Merge Spot Channel	स्पॉट चैनल मर्ज करें
+	Channel Options…	चैनल विकल्प…
+	Split Channels	चैनल्स विभाजित करें
+	Merge Channels…	चैनल्स मर्ज करें…
+	Specify Channels:	चैनल्स निर्दिष्ट करें:
+	Not enough grayscale documents for this mode.	इस मोड के लिए पर्याप्त ग्रेस्केल डॉक्यूमेंट नहीं हैं।
+	Pick a different document for each channel.	हर चैनल के लिए अलग डॉक्यूमेंट चुनें।
+	A picked document is no longer open.	चुना गया एक डॉक्यूमेंट अब खुला नहीं है।
+	A picked document is no longer a grayscale document of the same size.	चुना गया एक डॉक्यूमेंट अब उसी आकार का ग्रेस्केल डॉक्यूमेंट नहीं है।
+
 # Strings added on main after 2026-11-05
 	Background (default)	बैकग्राउंड (डिफ़ॉल्ट)
 	Performance	परफॉरमेंस
 	Transparent (default)	पारदर्शी (डिफ़ॉल्ट)
+	A file is still being placed; try again when it has finished.	एक फ़ाइल अभी प्लेस हो रही है; पूरा होने पर फिर से प्रयास करें।
+	Cancelled placing {name}	{name} को प्लेस करना रद्द किया गया
+	Dropped files weren't placed: their document was closed.	छोड़ी गई फ़ाइलें प्लेस नहीं हुईं: उनका दस्तावेज़ बंद कर दिया गया।
+	Dropped files weren't placed: too many are waiting for their document.	छोड़ी गई फ़ाइलें प्लेस नहीं हुईं: उनके दस्तावेज़ के लिए बहुत अधिक फ़ाइलें प्रतीक्षा में हैं।
