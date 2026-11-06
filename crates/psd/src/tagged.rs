@@ -196,6 +196,11 @@ impl TaggedBlock {
     /// Typed view for known keys. `None` for keys without a typed parser,
     /// `Some(Err)` if a known key's data is malformed.
     pub fn parsed(&self) -> Option<Result<BlockData<'_>>> {
+        // Its views borrow `data`: a block still in the source must be loaded first, not read
+        // as empty.
+        if self.stored.is_some() {
+            return Some(Err(PsdError::invalid(format!("{}: block data is still in the source; load it first", self.key_str()))));
+        }
         let d = &self.data[..];
         let mut r = Reader::new(d);
         Some(match &self.key {
@@ -303,7 +308,9 @@ impl TaggedBlock {
     /// ("Additional Layer Information": Placed Layer, Placed Layer Data,
     /// Linked Layer, Object Based Effects Layer Info).
     pub fn check_structure(&self) -> Result<()> {
-        let d = &self.data[..];
+        // A block left in the source (an embedded smart-object file) is checked from there.
+        let data = self.encoded()?;
+        let d = &data[..];
         let mut r = Reader::new(d);
         match &self.key {
             b"PlLd" => {

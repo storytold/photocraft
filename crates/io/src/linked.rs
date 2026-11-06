@@ -100,33 +100,41 @@ const HEADER_WINDOW: u64 = 64 << 10;
 /// by reading each item's length and header only, so finding one file reads kilobytes, not the
 /// block.
 fn blob_item(b: &Blob, uuid: &str) -> Option<(String, String, u64, u64)> {
+    try_blob_item(b, uuid).ok().flatten()
+}
+
+/// [`blob_item`] that tells a failed read of a deferred block (`Err`) from a missing item.
+fn try_blob_item(b: &Blob, uuid: &str) -> Result<Option<(String, String, u64, u64)>, photocraft_doc::BlobError> {
     if uuid.is_empty() {
-        return None;
+        return Ok(None);
     }
     if let Some(d) = b.in_memory() {
-        let (id, name, bytes) = find_slice_in_blocks([(b"lnk2", d.as_slice())], uuid)?;
-        let at = (bytes.as_ptr() as usize).checked_sub(d.as_ptr() as usize)? as u64;
-        return Some((id, name, at, bytes.len() as u64));
+        // `find_slice_in_blocks` filters by key; callers already picked a linked-file block.
+        let found = find_slice_in_blocks([(b"lnk2", d.as_slice())], uuid).and_then(|(id, name, bytes)| {
+            let at = (bytes.as_ptr() as usize).checked_sub(d.as_ptr() as usize)? as u64;
+            Some((id, name, at, bytes.len() as u64))
+        });
+        return Ok(found);
     }
     let total = b.len();
     let mut p = 0u64;
     while p.checked_add(8).is_some_and(|e| e <= total) {
-        let len = u64::from_be_bytes(b.read_part(p, 8).ok()?.as_ref().try_into().ok()?);
+        let Ok(len) = <[u8; 8]>::try_from(b.read_part(p, 8)?.as_ref()).map(u64::from_be_bytes) else { return Ok(None) };
         let start = p + 8;
-        let end = start.checked_add(len).filter(|&e| e <= total)?;
+        let Some(end) = start.checked_add(len).filter(|&e| e <= total) else { return Ok(None) };
         // Only an embedded (`liFD`) item can match: skip the others on their kind alone, rather
         // than reading their whole record looking for a header that will never parse.
-        if len < 4 || b.read_part(start, 4).ok()?.as_ref() != b"liFD" {
+        if len < 4 || b.read_part(start, 4)?.as_ref() != b"liFD" {
             p = end.next_multiple_of(4);
             continue;
         }
         let mut window = len.min(HEADER_WINDOW);
         loop {
-            let head = b.read_part(start, window).ok()?;
+            let head = b.read_part(start, window)?;
             match item_header(&head) {
                 Some((id, name, at, n)) => {
                     if id == uuid && (at as u64).checked_add(n as u64).is_some_and(|e| e <= len) {
-                        return Some((id, name, start + at as u64, n as u64));
+                        return Ok(Some((id, name, start + at as u64, n as u64)));
                     }
                     break;
                 }
@@ -136,8 +144,36 @@ fn blob_item(b: &Blob, uuid: &str) -> Option<(String, String, u64, u64)> {
         }
         p = end.next_multiple_of(4);
     }
-    None
+    Ok(None)
 }
+
+/// The payload of embedded file `uuid` among `globals`, as `(file name, bytes)`: borrowed from a
+/// block in memory, read (that file only) from one left in the opened file when it is at most
+/// `max` bytes. `Ok(None)` when it is not there or too large to read; `Err` when reading the
+/// opened file failed.
+pub fn embedded_payload_in_globals<'a>(
+    globals: &'a [photocraft_doc::PsdGlobalBlock],
+    uuid: &str,
+    max: u64,
+) -> Result<Option<(String, std::borrow::Cow<'a, [u8]>)>, photocraft_doc::BlobError> {
+    let in_memory = globals.iter().filter(|(_, _, d)| d.is_in_memory());
+    if let Some((name, bytes)) = embedded_payload_in_blocks(in_memory.map(|(_, key, data)| (key, data.resident())), uuid) {
+        return Ok(Some((name, std::borrow::Cow::Borrowed(bytes))));
+    }
+    for (_, _, d) in globals.iter().filter(|(_, k, d)| !d.is_in_memory() && matches!(k, b"lnk2" | b"lnk3" | b"lnkD")) {
+        if let Some((_, name, at, n)) = try_blob_item(d, uuid)? {
+            if n > max {
+                return Ok(None);
+            }
+            return Ok(Some((name, std::borrow::Cow::Owned(d.read_part(at, n)?.into_owned()))));
+        }
+    }
+    Ok(None)
+}
+
+/// Largest payload [`embedded_payload`] reads from a block left in the opened file: the vector
+/// sources its callers accept are at most 16 MiB, so a larger file is never read for them.
+pub const MAX_DEFERRED_PAYLOAD: u64 = 16 << 20;
 
 /// The embedded file for smart-object `uuid` in the given global blocks (in memory or deferred).
 pub fn find_in_globals(globals: &[photocraft_doc::PsdGlobalBlock], uuid: &str) -> Option<LinkedFile> {
@@ -162,6 +198,16 @@ pub(crate) fn source_size_in_globals(globals: &[photocraft_doc::PsdGlobalBlock],
             && let Some(size) = d.read_part(at, PREFIX).ok().and_then(|head| header_size(&head)).filter(ok)
         {
             return Some(size);
+        }
+        if n > PREFIX && !d.is_in_memory() {
+            // A header past the prefix: only a TIFF's directory can be (anywhere in the file);
+            // the other formats that size from their header have it at the start, so reading the
+            // whole file would not find it either. Formats sized by decoding need the file.
+            let head = d.read_part(at, 8).ok()?;
+            let tiff = matches!(head.as_ref(), [b'I', b'I', 42 | 43, 0, ..] | [b'M', b'M', 0, 42 | 43, ..]);
+            if !tiff && (crate::is_psd(&head) || matches!(head.as_ref(), [0x89, b'P', b'N', b'G', ..] | [0xFF, 0xD8, ..])) {
+                return None;
+            }
         }
         source_size_probe(&d.read_part(at, n).ok()?).filter(ok)
     })
@@ -192,17 +238,10 @@ pub fn find_linked_file(meta: &Metadata, uuid: &str) -> Option<LinkedFile> {
 }
 
 /// Only the selected embedded payload, without copying other smart objects or reading disk:
-/// borrowed from a block in memory, or read from the opened file (that file's bytes alone) when
-/// the block was left there.
+/// borrowed from a block in memory, or read from the opened file (that file's bytes alone, at
+/// most [`MAX_DEFERRED_PAYLOAD`]) when the block was left there.
 pub fn embedded_payload<'a>(meta: &'a Metadata, uuid: &str) -> Option<(String, std::borrow::Cow<'a, [u8]>)> {
-    let in_memory = meta.psd_global_blocks.iter().filter(|(_, _, d)| d.is_in_memory());
-    if let Some((name, bytes)) = embedded_payload_in_blocks(in_memory.map(|(_, key, data)| (key, data.resident())), uuid) {
-        return Some((name, std::borrow::Cow::Borrowed(bytes)));
-    }
-    meta.psd_global_blocks.iter().filter(|(_, k, d)| !d.is_in_memory() && matches!(k, b"lnk2" | b"lnk3" | b"lnkD")).find_map(|(_, _, d)| {
-        let (_, name, at, n) = blob_item(d, uuid)?;
-        Some((name, std::borrow::Cow::Owned(d.read_part(at, n).ok()?.into_owned())))
-    })
+    embedded_payload_in_globals(&meta.psd_global_blocks, uuid, MAX_DEFERRED_PAYLOAD).ok().flatten()
 }
 
 /// Borrow one selected payload from PSD global blocks without copying unrelated files.

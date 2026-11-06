@@ -70,7 +70,7 @@ fn corpus_text_layers() {
         let doc = imp.document;
         // The document's Txt2 (kept verbatim on export) carries what EngineData can't, e.g.
         // optical kerning; re-reads apply it like an import does.
-        let txt2 = doc.metadata.psd_global_blocks.iter().find(|b| &b.1 == b"Txt2").and_then(|b| photocraft_text::psd::parse_txt2(&b.2));
+        let txt2 = doc.metadata.psd_global_blocks.iter().find(|b| &b.1 == b"Txt2").and_then(|b| photocraft_text::psd::parse_txt2(b.2.resident()));
         let mut all = Vec::new();
         walk(&doc.layers, &mut all);
         for l in all {
@@ -329,7 +329,7 @@ fn corpus_text_psd_legacy_objects_are_edited_in_place() {
     assert!(path.is_file(), "{} is missing: run `cargo xtask corpus --all`", path.display());
     let bytes = std::fs::read(&path).unwrap();
     let doc = photocraft_io::import("text.psd", &bytes).unwrap().document;
-    let txt2 = doc.metadata.psd_global_blocks.iter().find(|b| &b.1 == b"Txt2").map(|b| b.2.clone()).expect("text.psd has a Txt2 block");
+    let txt2 = doc.metadata.psd_global_blocks.iter().find(|b| &b.1 == b"Txt2").map(|b| b.2.resident().to_vec()).expect("text.psd has a Txt2 block");
     let mut all = Vec::new();
     walk(&doc.layers, &mut all);
     let layer = all.iter().find_map(|l| if let LayerContent::Text(t) = &l.content { Some(t.clone()) } else { None }).expect("a type layer");

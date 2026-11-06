@@ -142,12 +142,21 @@ fn check_instances(s: &Session, id: LayerId) -> Result<Vec<LayerId>> {
     }
     let ids: Vec<_> =
         doc.walk().into_iter().filter_map(|(_, _, l)| matches!(&l.content, LayerContent::Smart(sm) if sm.contents_id == contents).then_some(l.id)).collect();
+    // Instances linking the same PSD-embedded file share its payload: it is checked (and, when it
+    // is still in the opened file, read) once.
+    let mut checked = std::collections::HashSet::new();
     for id in &ids {
         let locks = doc.effective_locks(*id);
         if locks.all || locks.pixels {
             return Err(EngineError::Other("a shared smart-object instance is locked".into()));
         }
-        embedded(doc, smart(doc, *id)?)?;
+        let sm = smart(doc, *id)?;
+        if let SmartSource::Linked { path } = &sm.source
+            && !checked.insert(path.clone())
+        {
+            continue;
+        }
+        embedded(doc, sm)?;
     }
     Ok(ids)
 }
@@ -261,7 +270,13 @@ fn update_contents_with_frame_budget(s: &mut Session, p: &Value, native: bool, f
         return Err(bad(UPDATE, "smart-object contents changed since external editing started"));
     }
     for instance in &ids {
-        let (_, bytes) = embedded(doc, smart(doc, *instance)?)?;
+        let sm = smart(doc, *instance)?;
+        // Another instance linking the same PSD-embedded file has the payload just checked: a
+        // deferred one would otherwise be read and hashed again per layer.
+        if matches!((&sm.source, &target.source), (SmartSource::Linked { path: a }, SmartSource::Linked { path: b }) if a == b) {
+            continue;
+        }
+        let (_, bytes) = embedded(doc, sm)?;
         let bytes = &*bytes;
         // Shared instances normally borrow the same immutable payload. Its fingerprint was
         // checked above; don't re-hash a large source once per layer.
