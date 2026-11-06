@@ -3498,6 +3498,9 @@ curves	Smooth	매끄럽게
 	Sent to {printer}	{printer}(으)로 전송됨
 	set in Print Settings…	인쇄 설정에서 지정…
 	ICO is limited to 256 × 256 pixels	ICO는 256 × 256픽셀로 제한됩니다
+	Automatically Create First Snapshot	첫 번째 스냅샷 자동 만들기
+	Automatically Create New Snapshot When Saving	저장할 때 새 스냅샷 자동 만들기
+	Show New Snapshot Dialog by Default	기본적으로 새 스냅샷 대화 상자 표시
 	Memory usage percent	메모리 사용 비율(%)
 	Show Favorite Fonts	즐겨찾는 글꼴 표시
 	No favorite fonts yet: click the star beside a font to add it.	아직 즐겨찾는 글꼴이 없습니다. 글꼴 옆의 별을 클릭하여 추가하세요.
@@ -3789,3 +3792,18 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	The frame is unavailable	프레임을 사용할 수 없습니다
 	X	X
 	Y	Y
+
+# Channels panel menu (#11451)
+	New Channel…	새 채널…
+	Duplicate Channel	채널 복제
+	Delete Channel	채널 삭제
+	New Spot Channel…	새 별색 채널…
+	Merge Spot Channel	별색 채널 병합
+	Channel Options…	채널 옵션…
+	Split Channels	채널 분할
+	Merge Channels…	채널 병합…
+	Specify Channels:	채널 지정:
+	Not enough grayscale documents for this mode.	이 모드에 필요한 회색 음영 문서가 부족합니다.
+	Pick a different document for each channel.	채널마다 다른 문서를 선택하십시오.
+	A picked document is no longer open.	선택한 문서 중 하나가 더 이상 열려 있지 않습니다.
+	A picked document is no longer a grayscale document of the same size.	선택한 문서 중 하나가 더 이상 같은 크기의 회색 음영 문서가 아닙니다.
