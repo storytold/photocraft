@@ -1,8 +1,9 @@
 use super::source::{SourceImage, buffer_to_surface, cache_key, cache_put, source_bytes};
 use super::{
     Affine, Arc, BlendMode, Document, EngineError, Homography, Layer, LayerContent, LayerId, PLACED_KEYS, Rect, Result, Session, Size, SmartContentsId,
-    SmartObject, SmartSource, Surface, Value, encode_source, json, layer_param, other, translate_surface,
+    SmartObject, SmartSource, Surface, Value, encode_source, json, layer_param, other, source_box, translate_surface,
 };
+use photocraft_algo::transform::Interp;
 
 /// Rounds float noise off a composed transform (scale 0.1 then 10 should be exactly 1), so
 /// repeated transforms land back on exact, lossless placements.
@@ -55,6 +56,40 @@ pub(crate) fn shift_smart(sm: &mut SmartObject, dx: i32, dy: i32) {
     if let Some(m) = &mut sm.filter_mask {
         m.surface = crate::layer_multi_cmds::shift_surface(&m.surface, dx, dy);
     }
+}
+
+/// Layer ▸ Smart Objects ▸ Reset Transform, and the same item of the Layers panel menu (#11662):
+/// the placement goes back to 100 % of the current contents' own size with rotation, skew, Distort
+/// and Perspective cleared, centred where the object sits now. Photoshop resets the *transform*,
+/// so the Warp (kept in source space) and the smart filters stay as they are.
+pub(super) fn reset_transform(s: &mut Session, p: &Value) -> Result<Value> {
+    let id = layer_param(s, p)?;
+    let st = s.active().ok_or(EngineError::NoDocument)?;
+    let LayerContent::Smart(sm) = &st.doc.layer(id).ok_or(EngineError::NoLayer(id))?.content else {
+        return Err(other("the layer is not a smart object"));
+    };
+    // The contents' own box in source pixels: 100 % maps it one-to-one onto the document.
+    let [x0, y0, x1, y1] = source_box(&st.doc, sm).ok_or_else(|| other("the smart object's contents are unavailable"))?;
+    let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+    let old = placement(sm);
+    let (dx, dy) = old.apply(cx, cy);
+    let to = Affine { m: [1.0, 0.0, 0.0, 1.0, dx - cx, dy - cy] };
+    let new = affine_homography(&to);
+    // Everything the accumulated transform moved the pixels by, so the linked masks and the Smart
+    // Filter mask follow the placement back as they do under Free Transform.
+    let rel = new.mul(&old.inverse().ok_or_else(|| other("the smart object has a degenerate transform"))?);
+    if ![dx, dy, cx, cy].iter().all(|v| v.is_finite()) || !rel.0.iter().all(|v| v.is_finite()) {
+        return Err(other("the smart object's placement is not a usable transform"));
+    }
+    s.edit("Reset Transform", |doc, _| {
+        crate::transform_cmds::transform_by_map(doc, id, &rel, None, Interp::Bicubic)?;
+        // `new ∘ old⁻¹ ∘ old` only lands on the reset map to within float noise, and could leave a
+        // Distort placement behind as a nearly affine one: store the exact map.
+        if let Some(LayerContent::Smart(sm)) = doc.layer_mut(id).map(|l| &mut l.content) {
+            set_placement(sm, new);
+        }
+        Ok(json!({"layer": id.0, "transform": to.m}))
+    })
 }
 
 /// Forget PSD placed-layer data that no longer describes the smart object (its source changed):

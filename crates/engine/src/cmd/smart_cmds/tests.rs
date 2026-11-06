@@ -503,6 +503,103 @@ fn transforms_re_render_from_source_losslessly() {
     assert!(active_smart(&smart).perspective.is_some());
 }
 
+/// The contents' box centre in document pixels under `sm`'s placement: what Reset Transform keeps.
+fn placed_centre(s: &Session, sm: &SmartObject) -> (f64, f64) {
+    let b = crate::smart_cmds::source_box(&s.active().unwrap().doc, sm).unwrap();
+    placement(sm).apply((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0)
+}
+
+/// Layer ▸ Smart Objects ▸ Reset Transform (#11662): 100 % of the contents' own size, no rotation,
+/// skew, Distort or Perspective, and the object stays centred where it is.
+#[test]
+fn reset_transform_restores_100_percent_in_place() {
+    let mut s = session(8);
+    paint(&mut s);
+    let id = convert(&mut s);
+    let fresh = active_smart(&s).cache.unwrap().content_bounds();
+    s.execute("edit.transform", json!({"layer": id, "scaleX": 200, "scaleY": 200, "rotate": 30})).unwrap();
+    s.execute("layer.translate", json!({"dx": 7, "dy": 4})).unwrap();
+    let sm = active_smart(&s);
+    assert!(sm.transform.m[0].hypot(sm.transform.m[1]) > 1.5, "the object really is scaled up");
+    assert_ne!(sm.transform.m[1], 0.0, "…and rotated");
+    let centre = placed_centre(&s, &sm);
+    s.execute("layer.smartObjects.resetTransform", json!({})).unwrap();
+    let after = active_smart(&s);
+    assert!(after.perspective.is_none(), "no projective placement left");
+    assert_eq!(&after.transform.m[..4], &[1.0, 0.0, 0.0, 1.0], "100 %, square, neither rotated nor skewed");
+    let now = placed_centre(&s, &after);
+    assert!((now.0 - centre.0).abs() < 1e-6 && (now.1 - centre.1).abs() < 1e-6, "centred where it was: {now:?} vs {centre:?}");
+    let r = after.cache.unwrap().content_bounds();
+    assert_eq!((r.width(), r.height()), (fresh.width(), fresh.height()), "the contents at their own size");
+    // Re-rendered from the source rather than resampled from the rotated pixels: the reset object
+    // is exactly the converted layer moved by the same whole-pixel distance.
+    let mut control = session(8);
+    paint(&mut control);
+    convert(&mut control);
+    control.execute("layer.translate", json!({"dx": 7, "dy": 4})).unwrap();
+    let (got, want) = (flat(&s), flat(&control));
+    assert!(max_diff(&got, &want) < 1e-6, "lossless reset (mean {})", mean_diff(&got, &want));
+    // Already reset: the second run changes nothing.
+    s.execute("layer.smartObjects.resetTransform", json!({})).unwrap();
+    assert_eq!(active_smart(&s).transform, after.transform, "idempotent");
+}
+
+/// Reset Transform resets the *transform*: the Warp and the smart filter stack survive it (#11662).
+#[test]
+fn reset_transform_keeps_the_warp_and_the_smart_filters() {
+    let mut s = session(8);
+    paint(&mut s);
+    let id = convert(&mut s);
+    s.execute("edit.transform.warp", json!({"style": "arc", "bend": 30})).unwrap();
+    s.execute("filter.blur.gaussianBlur", json!({"radius": 2})).unwrap();
+    let before = active_smart(&s);
+    let r = before.cache.unwrap().content_bounds();
+    let (x0, y0, x1, y1) = (f64::from(r.x0), f64::from(r.y0), f64::from(r.x1), f64::from(r.y1));
+    s.execute("edit.transform", json!({"layer": id, "rect": [x0, y0, x1, y1], "quad": [[x0, y0], [x1, y0], [x1 - 12.0, y1 - 8.0], [x0, y1]]})).unwrap();
+    assert!(active_smart(&s).perspective.is_some(), "Distort keeps a projective placement");
+    let centre = placed_centre(&s, &active_smart(&s));
+    s.execute("layer.smartObjects.resetTransform", json!({})).unwrap();
+    let after = active_smart(&s);
+    assert_eq!(after.warp, before.warp, "the Warp is not part of the transform");
+    assert_eq!(after.smart_filters.len(), 1, "nor is the smart filter stack");
+    assert!(after.perspective.is_none(), "Distort is cleared");
+    assert_eq!(&after.transform.m[..4], &[1.0, 0.0, 0.0, 1.0]);
+    let now = placed_centre(&s, &after);
+    assert!((now.0 - centre.0).abs() < 1e-6 && (now.1 - centre.1).abs() < 1e-6, "centred where it was: {now:?} vs {centre:?}");
+}
+
+/// Enabled for a smart object only, and one undo step back (#11662).
+#[test]
+fn reset_transform_needs_a_smart_object_and_undoes_in_one_step() {
+    let mut empty = Session::new();
+    assert!(!empty.is_enabled("layer.smartObjects.resetTransform"), "no document");
+    assert!(empty.execute("layer.smartObjects.resetTransform", json!({})).is_err());
+    let mut s = session(8);
+    paint(&mut s);
+    let plain = s.active().unwrap().active_layer.unwrap().0;
+    assert!(!s.is_enabled("layer.smartObjects.resetTransform"), "a pixel layer has no placement to reset");
+    assert!(s.execute("layer.smartObjects.resetTransform", json!({"layer": plain})).is_err());
+    let id = convert(&mut s);
+    assert!(s.is_enabled("layer.smartObjects.resetTransform"));
+    s.execute("edit.transform", json!({"layer": id, "matrix": [2, 0, 0, 2, 0, 0]})).unwrap();
+    let scaled = active_smart(&s);
+    s.execute("layer.smartObjects.resetTransform", json!({})).unwrap();
+    assert_eq!(&active_smart(&s).transform.m[..4], &[1.0, 0.0, 0.0, 1.0]);
+    s.execute("edit.undo", json!({})).unwrap();
+    let back = active_smart(&s);
+    assert_eq!(back.transform, scaled.transform, "one history step back to the scaled placement");
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(&active_smart(&s).transform.m[..4], &[1.0, 0.0, 0.0, 1.0], "…and forward again");
+    // Hostile targets are refused, never acted on.
+    assert!(s.execute("layer.smartObjects.resetTransform", json!({"layer": u64::MAX})).is_err());
+    assert!(s.execute("layer.smartObjects.resetTransform", json!({"layer": "nope"})).is_err());
+    // A locked layer can't be moved.
+    s.execute("layer.lockLayers", json!({"layer": id, "position": true})).unwrap();
+    let locked = active_smart(&s).transform;
+    assert!(s.execute("layer.smartObjects.resetTransform", json!({})).is_err());
+    assert_eq!(active_smart(&s).transform, locked, "the placement is left alone");
+}
+
 #[test]
 fn filters_follow_transforms() {
     let mut s = session(16);
@@ -712,6 +809,7 @@ fn commands_are_registered_with_catalog_ids() {
         "layer.smartObjects.newSmartObjectViaCopy",
         "layer.smartObjects.rasterize",
         "layer.smartObjects.editContents",
+        "layer.smartObjects.resetTransform",
         "layer.smartObjects.replaceContents",
         "layer.smartObjects.exportContents",
         "layer.smartObjects.updateModifiedContent",
