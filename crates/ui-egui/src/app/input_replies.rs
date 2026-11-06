@@ -43,6 +43,9 @@ pub(crate) struct InputReplies {
     /// The status bar as the in-flight batch's pass began: an error that differs from it was
     /// raised by that pass.
     status_before: Option<(String, bool)>,
+    /// A direct control request is being handled (`drain_control`): its failures are its own
+    /// reply's, never the synthetic input's, even while a synthetic step is in flight.
+    direct: bool,
 }
 
 impl InputReplies {
@@ -51,16 +54,34 @@ impl InputReplies {
     }
 
     /// Log a refusal unless it repeats the one this pass logged just before it (a refusal is
-    /// often reported by the command and again by the menu or shortcut that ran it).
+    /// often reported by the command and again by the menu or shortcut that ran it). Past
+    /// `MAX_ERRORS` only the first refusal of the request being handled is kept, so every refused
+    /// request still fails.
     fn log(&mut self, error: &str) {
         let error = error.trim();
-        if error.is_empty()
-            || self.errors.len() >= MAX_ERRORS
-            || self.errors.get(self.pass_start..).and_then(<[String]>::last).is_some_and(|last| last == error)
-        {
+        if error.is_empty() || self.errors.get(self.pass_start..).and_then(<[String]>::last).is_some_and(|last| last == error) {
             return;
         }
+        if self.errors.len() >= MAX_ERRORS {
+            let len = self.errors.len();
+            let current = self.waiters.iter().find(|w| w.to.is_none());
+            let has_own = current.is_none_or(|w| w.from.is_none_or(|from| len > from));
+            if has_own {
+                return;
+            }
+        }
         self.errors.push(error.to_string());
+    }
+
+    /// Whether `status` only wraps a refusal this pass already logged ("Couldn't save: <it>").
+    fn wraps_logged(&self, status: &str) -> bool {
+        self.errors.get(self.pass_start..).unwrap_or_default().iter().any(|e| status == e || status.ends_with(&format!(": {e}")))
+    }
+
+    /// Where the next synthetic step must end so it carries one request's input only: the
+    /// first request boundary after `taken`.
+    fn next_boundary(&self) -> Option<u64> {
+        self.waiters.iter().map(|w| w.until_taken).filter(|&end| end > self.taken).min()
     }
 
     /// The reply for refusals `errors` (none: the input was handled).
@@ -105,14 +126,30 @@ impl PhotocraftApp {
     }
 
     /// Note that `n` synthetic events were taken for delivery.
+    /// Each step is its own pass for folding repeated refusals, also for hosts that feed steps
+    /// themselves and never call `begin_synthetic_pass`.
     pub(super) fn note_synthetic_taken(&mut self, n: usize) {
-        self.input_replies.taken = self.input_replies.taken.saturating_add(n as u64);
+        let r = &mut self.input_replies;
+        r.taken = r.taken.saturating_add(n as u64);
+        r.pass_start = r.errors.len();
+    }
+
+    /// How many of the queued synthetic events the next step may take at most: up to the end of
+    /// the first request that still has input queued (`None`: no limit).
+    pub(super) fn synthetic_step_limit(&self) -> Option<usize> {
+        let r = &self.input_replies;
+        r.next_boundary().map(|end| usize::try_from(end.saturating_sub(r.taken)).unwrap_or(usize::MAX))
+    }
+
+    /// Handle direct control requests with refusal logging off (see `InputReplies::direct`).
+    pub(super) fn set_direct_request(&mut self, direct: bool) {
+        self.input_replies.direct = direct;
     }
 
     /// Record a refusal caused by the synthetic input being handled now, for the control reply
     /// waiting on it. A no-op outside synthetic input. The status bar is the caller's business.
     pub(crate) fn note_input_error(&mut self, error: &str) {
-        if self.automation_input {
+        if self.automation_input && !self.input_replies.direct {
             self.input_replies.log(error);
         }
     }
@@ -126,6 +163,24 @@ impl PhotocraftApp {
         self.ui.status_error = true;
     }
 
+    /// The status bar now, to compare with after shortcut handling (`log_status_change`); `None`
+    /// outside synthetic input.
+    pub(crate) fn input_status(&self) -> Option<(String, bool)> {
+        self.automation_input.then(|| (self.ui.status.clone(), self.ui.status_error))
+    }
+
+    /// Log a status-bar error raised since `before` (from `input_status`) that no refusal path
+    /// logged. Shortcuts run in `logic`, before the UI pass's own comparison begins.
+    pub(crate) fn log_status_change(&mut self, before: Option<(String, bool)>) {
+        let Some(before) = before else { return };
+        if self.ui.status_error && (before.0 != self.ui.status || !before.1) && !self.input_replies.direct {
+            let status = self.ui.status.clone();
+            if !self.input_replies.wraps_logged(&status) {
+                self.input_replies.log(&status);
+            }
+        }
+    }
+
     /// The in-flight batch's pass begins: remember the status bar to compare with at its end.
     pub(super) fn begin_input_errors(&mut self) {
         self.input_replies.status_before = Some((self.ui.status.clone(), self.ui.status_error));
@@ -135,18 +190,8 @@ impl PhotocraftApp {
     /// The in-flight batch's pass finished. A status-bar error it raised that no refusal path
     /// logged is logged now, and requests whose last event this pass handled stop collecting.
     pub(super) fn finish_input_errors(&mut self) {
-        if let Some(before) = self.input_replies.status_before.take()
-            && self.ui.status_error
-            && (before.0 != self.ui.status || !before.1)
-        {
-            let status = self.ui.status.clone();
-            // A wrapped message ("Save failed: <refusal>") says nothing new.
-            let r = &self.input_replies;
-            let known = r.errors.get(r.pass_start..).unwrap_or_default().iter().any(|e| status.contains(e.as_str()));
-            if !known {
-                self.input_replies.log(&status);
-            }
-        }
+        let before = self.input_replies.status_before.take();
+        self.log_status_change(before);
         let (taken, len) = (self.input_replies.taken, self.input_replies.errors.len());
         let mut prev_to = None;
         for w in &mut self.input_replies.waiters {
@@ -173,7 +218,7 @@ impl PhotocraftApp {
 
 #[cfg(test)]
 mod tests {
-    use super::InputReplies;
+    use super::{InputReplies, PhotocraftApp};
     use serde_json::json;
 
     #[test]
@@ -205,5 +250,108 @@ mod tests {
         r.waiters.push(super::Waiter { reply: tx, from: Some(5), until_taken: 0, to: Some(2) });
         r.settle();
         assert_eq!(rx.recv().unwrap()["ok"], true);
+    }
+
+    /// Earlier input filled the capped log: a later refused request still fails.
+    #[test]
+    fn a_full_log_still_keeps_each_requests_first_refusal() {
+        let mut r = InputReplies::default();
+        let (first_tx, first) = std::sync::mpsc::channel();
+        let (second_tx, second) = std::sync::mpsc::channel();
+        r.waiters.push(super::Waiter { reply: first_tx, from: Some(0), until_taken: 1, to: None });
+        r.waiters.push(super::Waiter { reply: second_tx, from: None, until_taken: 2, to: None });
+        for i in 0..super::MAX_ERRORS + 10 {
+            r.log(&format!("first {i}"));
+        }
+        assert_eq!(r.errors.len(), super::MAX_ERRORS, "the first request is capped");
+        let len = r.errors.len();
+        r.waiters[0].to = Some(len);
+        r.waiters[1].from = Some(len);
+        r.log("second refused");
+        r.log("second again");
+        r.settle();
+        assert_eq!(first.recv().unwrap()["errors"].as_array().map(Vec::len), Some(super::MAX_ERRORS));
+        assert_eq!(second.recv().unwrap(), json!({"ok": false, "error": "second refused", "errors": ["second refused"]}));
+    }
+
+    fn app() -> PhotocraftApp {
+        PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default())
+    }
+
+    /// One synthetic pass, as `ui_frame` runs it, around `during`; then the queue settles.
+    fn one_pass(app: &mut PhotocraftApp, during: impl FnOnce(&mut PhotocraftApp)) -> crate::ControlResponse {
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.wait_for_input(tx);
+        app.automation_input = true;
+        app.begin_input_errors();
+        during(app);
+        app.finish_input_errors();
+        app.automation_input = false;
+        app.settle_input_replies();
+        rx.recv().unwrap()
+    }
+
+    /// A failed Actions playback whose message is already in the status bar is still reported.
+    #[test]
+    fn a_repeated_failed_playback_fails_the_input() {
+        let mut app = app();
+        let failed = json!({"failed": {"step": 0, "id": "layer.delete", "error": "no such layer"}});
+        crate::actions::report_play(&mut app, &failed);
+        assert!(app.ui.status_error, "the earlier playback's failure is showing");
+        let r = one_pass(&mut app, |app| crate::actions::report_play(app, &failed));
+        assert_eq!(r["ok"], false, "{r}");
+        assert!(r["error"].as_str().is_some_and(|e| e.contains("no such layer")), "{r}");
+    }
+
+    /// A status error that merely contains an earlier refusal is a separate refusal; one that
+    /// wraps it ("Couldn't save: <it>") is not.
+    #[test]
+    fn a_distinct_refusal_containing_an_earlier_one_is_kept() {
+        let mut app = app();
+        let r = one_pass(&mut app, |app| {
+            app.note_input_error("target layer is hidden");
+            app.ui.status = "Can't paint because the target layer is hidden".into();
+            app.ui.status_error = true;
+        });
+        assert_eq!(r["errors"], json!(["target layer is hidden", "Can't paint because the target layer is hidden"]), "{r}");
+        let r = one_pass(&mut app, |app| {
+            app.note_input_error("disk full");
+            app.ui.status = "Couldn't save: disk full".into();
+            app.ui.status_error = true;
+        });
+        assert_eq!(r["errors"], json!(["disk full"]), "a wrapper adds nothing: {r}");
+    }
+
+    /// A host that feeds steps itself (`take_synthetic_step`, no `begin_synthetic_pass`) still
+    /// reports the same refusal to each of two requests.
+    #[test]
+    fn identical_refusals_in_successive_steps_reach_both_requests() {
+        let services = crate::Services {
+            automation_command: Some(Box::new(|id, _| if id == "file.save" { Err("filesystem command denied".into()) } else { Ok(()) })),
+            export: Some(Box::new(|_: &photocraft_doc::Document, _: &str, _: &crate::ExportSettings| Ok((Vec::new(), Vec::new())))),
+            ..Default::default()
+        };
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+        let ctx = egui::Context::default();
+        let mut replies = Vec::new();
+        for _ in 0..2 {
+            let (req, _) = crate::ControlRequest::new("ui.key", json!({"key": "S", "command": true}));
+            assert!(matches!(crate::control::handle(&mut app, &ctx, &req), crate::control::Outcome::AfterInput));
+            let (tx, rx) = std::sync::mpsc::channel();
+            app.wait_for_input(tx);
+            replies.push(rx);
+        }
+        while !app.synthetic.is_empty() {
+            let events = app.take_synthetic_step();
+            let mut out = ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| crate::shortcuts::handle(&mut app, ui.ctx()));
+            out.textures_delta.clear();
+            app.finish_synthetic_pass();
+            app.automation_input = false;
+        }
+        app.settle_input_replies();
+        for rx in replies {
+            assert_eq!(rx.recv().unwrap()["error"], "filesystem command denied");
+        }
     }
 }

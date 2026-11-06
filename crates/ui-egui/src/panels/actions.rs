@@ -619,8 +619,10 @@ pub(crate) fn report_play(app: &mut PhotocraftApp, v: &Value) {
     let id = failed.get("id").and_then(Value::as_str).unwrap_or("");
     let error = failed.get("error").and_then(Value::as_str).unwrap_or("");
     let template = "Step {step} ({id}) failed: {error}";
-    app.ui.status = crate::i18n::fmt(tl!(template), &[("step", &(step + 1).to_string()), ("id", id), ("error", error)]);
-    app.ui.status_error = true;
+    let message = crate::i18n::fmt(tl!(template), &[("step", &(step + 1).to_string()), ("id", id), ("error", error)]);
+    // A failed playback is a refusal of the synthetic input that started it, even when the
+    // status bar already shows the same failure (#11579).
+    app.show_error(message);
 }
 
 fn visible_steps(app: &PhotocraftApp, action: usize) -> Vec<(String, Value)> {

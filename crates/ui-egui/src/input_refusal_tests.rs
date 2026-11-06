@@ -161,13 +161,48 @@ fn cancelled_input_still_says_so() {
     assert!(r.get("errors").is_none(), "{r}");
 }
 
-/// A refusal a direct control call caused is that call's own error, never a later input's.
+/// A refusal a direct control call caused is that call's own error, never the input's, also
+/// when the direct call is handled while a synthetic step is in flight.
 #[test]
-fn a_refusal_outside_synthetic_input_is_not_reported_to_input() {
+fn a_direct_request_failing_during_synthetic_input_is_not_reported_to_input() {
     let (mut h, tx) = harness(deny_files(), true);
-    let direct = send(&tx, "engine.execute", json!({"command": "layer.delete", "params": {"layer": 999_999}}));
-    pump(&mut h, 2);
-    assert_eq!(direct.try_recv().unwrap()["ok"], false);
     let rx = send(&tx, "ui.key", json!({"key": "V"}));
-    assert_eq!(reply(&mut h, &rx), json!({"ok": true, "result": null}));
+    // This frame queues the key; the next injects it, and its `logic` handles the direct call
+    // while the step is in flight.
+    pump(&mut h, 1);
+    let direct = send(&tx, "engine.execute", json!({"command": "layer.delete", "params": {"layer": 999_999}}));
+    let r = reply(&mut h, &rx);
+    assert_eq!(direct.try_recv().unwrap()["ok"], false, "the direct call failed");
+    assert_eq!(r, json!({"ok": true, "result": null}), "the V press caused no refusal");
+}
+
+/// Input of several requests handled in one frame would share one pass: each request's input
+/// is its own step, so `ui.move` before a refused `ui.key` doesn't take the key's refusal.
+#[test]
+fn a_move_queued_before_a_refused_key_keeps_its_own_reply() {
+    let (mut h, tx) = harness(deny_files(), true);
+    let moved = send(&tx, "ui.move", json!({"x": 5.0, "y": 5.0}));
+    let typed = send(&tx, "ui.type", json!({"text": "x"}));
+    let key = send(&tx, "ui.key", json!({"key": "S", "command": true}));
+    assert_eq!(reply(&mut h, &moved), json!({"ok": true, "result": null}));
+    assert_eq!(reply(&mut h, &typed), json!({"ok": true, "result": null}));
+    assert_eq!(reply(&mut h, &key)["error"], "filesystem command denied");
+}
+
+/// A shortcut handled in `logic` that writes its refusal straight to the status bar (Delete on
+/// a slice while View › Lock Slices is on) answers the input.
+#[test]
+fn a_shortcut_refusal_written_to_the_status_bar_fails_the_input() {
+    let (mut h, tx) = harness(Services::default(), true);
+    {
+        let app = h.state_mut();
+        app.ui.tool = crate::Tool::SliceSelect;
+        app.ui.slices.selected = Some(1);
+        app.session.file_menu.slices_locked = true;
+    }
+    pump(&mut h, 2);
+    let rx = send(&tx, "ui.key", json!({"key": "Delete"}));
+    let r = reply(&mut h, &rx);
+    assert_eq!(r["ok"], false, "{r}");
+    assert!(r["error"].as_str().is_some_and(|e| e.contains("Slices are locked")), "{r}");
 }

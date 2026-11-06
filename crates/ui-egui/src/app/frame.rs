@@ -97,7 +97,11 @@ impl PhotocraftApp {
             crate::dialogs::filter_preview_worker::discard_closed(self);
             if type_tool::in_ui_pass(ctx) {
                 if self.fonts_ready {
+                    // A shortcut's refusal written straight to the status bar answers the
+                    // synthetic input that pressed it (#11579).
+                    let before = self.input_status();
                     shortcuts::handle(self, ctx);
+                    self.log_status_change(before);
                 } else {
                     type_tool::controls_only(self, ctx);
                 }

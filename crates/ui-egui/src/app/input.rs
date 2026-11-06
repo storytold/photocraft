@@ -125,6 +125,8 @@ impl PhotocraftApp {
             .iter()
             .position(|e| matches!(e, egui::Event::PointerButton { pressed: false, .. } | egui::Event::Key { pressed: false, .. }))
             .map_or(self.synthetic.len(), |i| i + 1);
+        // One request's input per step, so each reply gets the refusals its own input caused.
+        let n = self.synthetic_step_limit().map_or(n, |limit| n.min(limit.max(1)));
         let events: Vec<_> = self.synthetic.drain(..n).collect();
         self.note_synthetic_taken(events.len());
         if !events.is_empty() {
