@@ -65,6 +65,7 @@ pub use ora::losses as ora_losses;
 pub mod pattern_map;
 mod pcraft_cache;
 pub mod pdf;
+mod pdf_import;
 mod pdn;
 pub use pcraft_cache::PcraftExportCache;
 pub mod pixels;
@@ -513,8 +514,8 @@ pub enum ImportPreflight {
     /// A flat raster decoded into one image, bounded by
     /// [`ImportOptions::flat_max_pixel_bytes`].
     Flat,
-    /// Affinity, OpenRaster, Krita, XCF, PDN, SVG, camera raw and `.pcraft` files: this build has
-    /// no header-only estimate of their pixel memory before decoding.
+    /// Affinity, OpenRaster, Krita, XCF, PDN, SVG, camera raw, PDF and `.pcraft` files: this
+    /// build has no header-only estimate of their pixel memory before decoding.
     Unbounded,
 }
 
@@ -554,6 +555,10 @@ pub fn import_preflight(name: &str, bytes: &[u8]) -> ImportPreflight {
     }
     if is_psd_input(name, bytes) {
         return ImportPreflight::Psd;
+    }
+    // PDF (PDFium, native only); `.ai` files are PDFs but keep their existing path.
+    if has_extension(name, "pdf") || (pdf_import::is_pdf(bytes) && !has_extension(name, "ai")) {
+        return ImportPreflight::Unbounded;
     }
     if photocraft_codecs::detect(bytes) == Some(photocraft_codecs::Format::Tiff) { ImportPreflight::Tiff } else { ImportPreflight::Flat }
 }
@@ -601,6 +606,9 @@ pub struct ImportOptions {
     /// Decoded-pixel allowance for a flat raster (the buffer a codec decodes into). May lower
     /// the codec's default cap; 0 uses it. PSD/PSB and layered TIFF use `psd_max_pixel_bytes`.
     pub flat_max_pixel_bytes: u64,
+    /// Resolution (dots per inch) PDF pages are rendered at on import; the document keeps it so
+    /// the page's print size is preserved. Defaults to 300.
+    pub pdf_dpi: f32,
     /// Explicit one-shot authorization for imports that exceed the soft budget but fit within the hard budget.
     pub psd_high_memory_approved: bool,
     /// Optional estimate limit for high-memory approval. When set, approval only applies if
@@ -615,6 +623,7 @@ impl Default for ImportOptions {
             demosaic: raw::Demosaic::default(),
             psd_max_pixel_bytes: 0,
             flat_max_pixel_bytes: 0,
+            pdf_dpi: 300.0,
             psd_high_memory_approved: false,
             psd_approved_estimate: None,
         }
@@ -975,6 +984,13 @@ pub(crate) fn route(name: &str, bytes: &[u8]) -> Route {
 /// Dispatches format-specific importers and propagates a structured PSD damage
 /// flag alongside the ordinary best-effort import result.
 fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, opts: &ImportOptions, damaged: &mut bool) -> Result<ImportResult, IoError> {
+    // PDF (PDFium, native only). `.ai` files are PDFs but keep their existing path; a recognized
+    // raster signature wins over a misleading `.pdf` suffix.
+    if pdf_import::is_pdf(bytes)
+        || (has_extension(name, "pdf") && !has_extension(name, "ai") && photocraft_codecs::detect(bytes).is_none())
+    {
+        return pdf_import::import(name, bytes, opts);
+    }
     match route(name, bytes) {
         Route::Pcraft => {
             let document = photocraft_format::load_from_bytes(bytes)?;
