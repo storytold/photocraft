@@ -37,6 +37,8 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
         return begin_several(app, ctx, doc, revision, id, targets);
     }
     let layer = doc.layer(id).ok_or("no layer")?;
+    let frame_only =
+        app.ui.tool == crate::state::Tool::Frame && layer.frame.is_some() && crate::frame_tool::target(app, layer) == crate::frame_tool::Target::Frame;
     if photocraft_engine::transform_cmds::locked_for_transform(&doc, id) {
         // Photoshop refuses before the box opens rather than when it is committed (#2585).
         app.ui.open_dialog(crate::state::DialogKind::Error, json!({"message": tl!(LOCKED)}).as_object().cloned().unwrap_or_default());
@@ -78,12 +80,12 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
     let texture = crate::transform_tex::PreviewTextures::new(ctx, format!("transform-{session}"), image, uv);
     app.transform_preview = Some(TransformPreview {
         session,
-        doc: Arc::new(pd),
+        doc: if frame_only { doc.clone() } else { Arc::new(pd) },
         texture,
         opacity: layer.opacity * layer.fill_opacity,
-        above: Some(above),
-        styled: styled.then(|| crate::transform_fx::StyledPreview::new(format!("transform-{session}-styled"))),
-        follow: Some(Follow { revision, hidden: if lifted.is_none() { vec![id] } else { Vec::new() } }),
+        above: (!frame_only).then_some(above),
+        styled: (styled && !frame_only).then(|| crate::transform_fx::StyledPreview::new(format!("transform-{session}-styled"))),
+        follow: Some(Follow { revision, hidden: if lifted.is_none() && !frame_only { vec![id] } else { Vec::new() } }),
         committing: None,
         gesture: None,
         warp_drag: None,
@@ -106,7 +108,7 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
         interpolation: default_interpolation(app).into(),
         warp: None,
         selection: false,
-        target: None,
+        target: frame_only.then(|| json!({"frame": id.0})),
         path: None,
         made: None,
         mode: Default::default(),
@@ -313,11 +315,21 @@ pub(crate) fn begin_content_aware(
     crate::type_tool::commit(app);
     let rect = [region.x0 as f64, region.y0 as f64, region.x1 as f64, region.y1 as f64];
     let session = app.ui.alloc_id();
-    // The command clears the area before writing the result (a layer without transparency keeps it).
+    // The command vacates the area before writing the result, as Delete does: transparent, or on
+    // the Background the background colour (a layer without transparency otherwise keeps it).
+    let background = doc.is_background(id).then_some(app.session.tools.background);
     let mut pd = (*doc).clone();
-    if let Some(s) = pd.layer_mut(id).and_then(|l| l.surface_mut()).filter(|s| s.format().alpha) {
-        let clear = vec![0.0; s.format().channels()];
-        s.fill_rect(region, &clear);
+    if let Some(s) = pd.layer_mut(id).and_then(|l| l.surface_mut()).filter(|s| background.is_some() || s.format().alpha) {
+        let fmt = s.format();
+        let mut fill = vec![0.0; fmt.channels()];
+        if let Some([r, g, b, _]) = background {
+            let mut enc = [0.0f32; 8];
+            let n = photocraft_raster::from_rgba_into(&fmt, [r, g, b, 1.0], &mut enc);
+            if let (Some(dst), Some(src)) = (fill.get_mut(..n), enc.get(..n)) {
+                dst.copy_from_slice(src);
+            }
+        }
+        s.fill_rect(region, &fill);
         s.prune();
     }
     let max_side = ctx.input(|i| i.max_texture_side).max(app.gpu.as_ref().map_or(1, |g| g.max_texture_side()));
