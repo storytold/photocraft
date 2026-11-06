@@ -155,6 +155,14 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     egui::Grid::new("form-dialog").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
         for k in keys {
             let v = f.get(&k).cloned().unwrap_or(Value::Null);
+            // Photoshop greys these out for Destination Save and Close; hide them so OK writes
+            // over the source files instead of asking for a destination folder.
+            if f.get("__command").and_then(Value::as_str) == Some("file.automate.batch")
+                && f.get("destination").and_then(Value::as_str) == Some("saveAndClose")
+                && matches!(k.as_str(), "output" | "naming" | "startingSerial" | "format" | "quality" | "namingComponents" | "flatOutput")
+            {
+                continue;
+            }
             if k == "naming" && f.get("__command").and_then(Value::as_str) == Some("file.automate.batch") {
                 let label = ui.label(tl!("File Naming"));
                 let mut naming = v.as_str().unwrap_or_default().to_owned();
@@ -249,6 +257,21 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         f.insert(crate::dialogs::BROWSE_FIELD.into(), json!(key));
     }
     camera_data(ui, f);
+}
+
+/// Destination Save and Close overwrites each source in its own format (Photoshop): drop Folder-only
+/// fields and force `format` to `same` so a leftover JPEG choice cannot rewrite a sibling file.
+pub(crate) fn normalize_batch_destination(mut params: Value) -> Value {
+    if params.get("destination").and_then(Value::as_str) != Some("saveAndClose") {
+        return params;
+    }
+    if let Some(obj) = params.as_object_mut() {
+        obj.insert("format".into(), json!("same"));
+        for key in ["output", "naming", "startingSerial", "quality", "namingComponents", "flatOutput"] {
+            obj.remove(key);
+        }
+    }
+    params
 }
 
 /// Batch's inactive Custom quality (#3956): shell state, never a command parameter.
@@ -555,19 +578,29 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
             };
             let (name, set) = (action.name.clone(), action.set.clone());
             let (names, sets) = crate::actions::action_form_choices(app);
+            let mut labels = subfolders_label().as_object().cloned().unwrap_or_default();
+            labels.insert("destination".into(), json!(tl!("Destination")));
+            labels.insert("saveAndClose".into(), json!(tl!("Save and Close")));
+            labels.insert("folder".into(), json!(tl!("Folder")));
             let mut fields = json!({
                 "action": name, "source": "folder", "input": dir,
-                "includeSubfolders": false, "__labels": subfolders_label(),
+                "includeSubfolders": false, "__labels": labels,
+                // Folder is the safe default: Save and Close overwrites every source and must be chosen.
+                "destination": "folder",
                 "output": format!("{dir}/batch"), "format": "same", "quality": null,
                 "__batchQuality": 8, "naming": "", "startingSerial": 1,
                 "stopOnError": false, "errorLog": "",
-                "__order": ["set", "action", "source", "input", "includeSubfolders", "output", "format", "naming", "startingSerial", "quality", "stopOnError", "errorLog"]
+                "__order": ["set", "action", "source", "input", "includeSubfolders", "destination", "output", "format", "naming", "startingSerial", "quality", "stopOnError", "errorLog"]
             });
             // The Set dropdown picks between same-named actions; an action outside any set has none.
             if let Some(set) = set {
                 fields["set"] = json!(set);
             }
-            dialog(app, fields, json!({"set": sets, "action": names, "format": ["same", "png", "jpg", "psd", "tiff", "webp"], "source": ["folder", "open"]}))
+            dialog(
+                app,
+                fields,
+                json!({"set": sets, "action": names, "format": ["same", "png", "jpg", "psd", "tiff", "webp"], "source": ["folder", "open"], "destination": ["folder", "saveAndClose"]}),
+            )
         }
         // Channel workflow dialogs (see channels_panel.rs for the channel references).
         "select.saveSelection" | "select.loadSelection" | "image.applyImage" | "image.calculations" => {

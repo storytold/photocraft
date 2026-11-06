@@ -636,6 +636,12 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
             app.ui.status = crate::i18n::fmt(tl!("Cancelled {label}"), &[("label", &e.label)]);
             app.ui.status_error = false;
         }
+        JobOutcome::Done(ref result) if matches!(e.command.as_str(), "file.automate.batch" | "file.scripts.imageProcessor") => {
+            crate::dialogs::report_batch_run(app, &e.command, Some(result));
+            if app.ui.status_error {
+                notices::error(app, app.ui.status.clone());
+            }
+        }
         JobOutcome::Done(_) => {
             app.sync_views();
             app.ui.status = e.label;

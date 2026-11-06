@@ -20,7 +20,7 @@ mod options;
 
 pub use arrange::cells;
 pub(crate) use arrange::{document_is_floating, float_window};
-pub(crate) use dialogs::write_copy;
+pub(crate) use dialogs::{normalize_batch_destination, write_copy};
 #[cfg(test)]
 use dialogs::{form, front, label_of};
 pub use dialogs::{form_body, form_keys, reset_form};

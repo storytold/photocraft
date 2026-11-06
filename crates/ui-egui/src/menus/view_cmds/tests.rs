@@ -329,7 +329,84 @@ fn batch_menu_requires_a_recorded_action() {
 
     assert!(crate::menus::is_enabled(&app, "file.automate.batch"));
     let dialog = menu(&mut app, &ctx, "file.automate.batch", json!({})).unwrap()["dialog"].as_u64().unwrap();
-    assert_eq!(app.ui.dialog_mut(dialog).unwrap().fields["action"], "Invert");
+    let fields = &app.ui.dialog_mut(dialog).unwrap().fields;
+    assert_eq!(fields["action"], "Invert");
+    // Folder is the safe default: Save and Close overwrites every source and must be chosen.
+    assert_eq!(fields["destination"], "folder");
+    assert_eq!(fields["__choices"]["destination"], json!(["folder", "saveAndClose"]));
+    assert_eq!(fields["__labels"]["saveAndClose"], "Save and Close");
+}
+
+#[test]
+fn normalize_batch_destination_forces_source_format_for_save_and_close() {
+    let cleaned = normalize_batch_destination(json!({
+        "destination": "saveAndClose",
+        "format": "jpg",
+        "output": "/tmp/out",
+        "naming": "{name}",
+        "startingSerial": 3,
+        "quality": 8,
+        "input": "/tmp/in",
+    }));
+    assert_eq!(cleaned["destination"], "saveAndClose");
+    assert_eq!(cleaned["format"], "same");
+    assert_eq!(cleaned["input"], "/tmp/in");
+    for key in ["output", "naming", "startingSerial", "quality"] {
+        assert!(cleaned.get(key).is_none(), "{key} must drop for Save and Close: {cleaned}");
+    }
+    let folder = normalize_batch_destination(json!({"destination": "folder", "format": "jpg", "output": "/tmp/out"}));
+    assert_eq!(folder["format"], "jpg");
+    assert_eq!(folder["output"], "/tmp/out");
+}
+
+/// Confirming Batch at Destination Save and Close overwrites each source and continues.
+#[test]
+fn batch_dialog_save_and_close_overwrites_the_folder() {
+    let (mut app, ctx) = app_with(1);
+    app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let a = dir.path().join("a.png");
+    let b = dir.path().join("b.png");
+    app.run("file.saveACopy", json!({"path": a.to_string_lossy()})).unwrap();
+    app.run("file.saveACopy", json!({"path": b.to_string_lossy()})).unwrap();
+    let open_revision = app.session.active().unwrap().revision;
+    app.session.actions.list.push(photocraft_engine::actions_cmds::Action::new(
+        "Invert",
+        vec![("image.adjustments.invert".into(), json!({}))],
+    ));
+    let d = menu(&mut app, &ctx, "file.automate.batch", json!({})).unwrap()["dialog"].as_u64().unwrap();
+    let fields = &mut app.ui.dialog_mut(d).unwrap().fields;
+    assert_eq!(fields["destination"], "folder");
+    fields.insert("destination".into(), json!("saveAndClose"));
+    fields.insert("format".into(), json!("jpg")); // must be ignored / forced to same
+    fields.insert("input".into(), json!(dir.path().to_string_lossy()));
+    let r = crate::dialogs::confirm(&mut app, d).unwrap();
+    assert_eq!(r["files"].as_array().map(Vec::len), Some(2), "{r}");
+    assert_eq!(r["errors"], json!([]), "{r}");
+    assert_eq!(app.session.active().unwrap().revision, open_revision, "the open document is not the batch");
+    for path in [&a, &b] {
+        let bytes = std::fs::read(path).unwrap();
+        let data = photocraft_codecs::decode(&bytes).unwrap().data().to_vec();
+        assert!(data[2] > 200, "inverted red is cyan: {}", path.display());
+        assert!(!path.with_extension("jpg").exists(), "Save and Close must not write a sibling format");
+    }
+}
+
+/// A folder with no images must not close the Batch dialog as if the run succeeded.
+#[test]
+fn batch_empty_folder_keeps_the_dialog_open() {
+    let (mut app, ctx) = app_with(1);
+    let dir = tempfile::tempdir().unwrap();
+    app.session.actions.list.push(photocraft_engine::actions_cmds::Action::new(
+        "Invert",
+        vec![("image.adjustments.invert".into(), json!({}))],
+    ));
+    let d = menu(&mut app, &ctx, "file.automate.batch", json!({})).unwrap()["dialog"].as_u64().unwrap();
+    let fields = &mut app.ui.dialog_mut(d).unwrap().fields;
+    fields.insert("input".into(), json!(dir.path().to_string_lossy()));
+    fields.insert("output".into(), json!(dir.path().join("out").to_string_lossy()));
+    assert!(crate::dialogs::confirm(&mut app, d).is_err());
+    assert!(app.ui.dialogs.iter().any(|dlg| dlg.id == d), "the dialog stays open so the error is editable");
 }
 
 /// Two actions of one name in sets A and B (a loaded library): the Batch form lists the name once

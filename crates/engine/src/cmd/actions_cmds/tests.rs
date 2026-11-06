@@ -891,6 +891,22 @@ fn play_stops_at_the_failing_step_and_reports_it() {
     assert_eq!(s.execute("actions.play", json!({"action": 0, "from": 1})).unwrap()["ran"], 0);
 }
 
+/// Ordinary Actions playback must not retarget a missing numeric layer onto the active one:
+/// a recorded `layer.delete` of a stale id still fails instead of deleting the wrong layer.
+#[test]
+fn play_missing_layer_delete_still_errors() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    s.execute("layer.new.layer", json!({"name": "Keep"})).unwrap();
+    let before = s.active().unwrap().doc.walk().len();
+    s.actions.list.push(Action::new("DeleteMissing", vec![("layer.delete".into(), json!({"layer": 9_001}))]));
+    let r = s.execute("actions.play", json!({"action": 0})).unwrap();
+    assert_eq!(r["ran"], 0, "{r}");
+    assert_eq!(r["failed"]["id"], "layer.delete", "{r}");
+    assert!(r["failed"]["error"].as_str().is_some_and(|e| e.contains("layer") || e.contains("NoLayer") || e.contains("no such")), "{r}");
+    assert_eq!(s.active().unwrap().doc.walk().len(), before, "the active layer must survive");
+}
+
 #[test]
 fn play_refuses_recursion() {
     let mut s = Session::new();
