@@ -874,13 +874,11 @@ fn a_vanished_save_folder_falls_back_to_beside_the_document() {
     assert_eq!(app.last_save_dir(), Some(std::path::PathBuf::from(&gone)));
     std::fs::remove_dir(&gone).unwrap();
     assert_eq!(app.last_save_dir(), None);
-    for (id, expected) in [("file.saveAs", joined("/clients/a", "design.psd"))] {
-        menus::invoke(&mut app, &ctx, id, json!({})).unwrap();
-        app.poll_file_dialog(&ctx, None);
-        assert!(matches!(&open.borrow()[0].0, FileDialogRequest::Save { suggested } if *suggested == expected), "{id}");
-        answer(&open, None);
-        app.poll_file_dialog(&ctx, None);
-    }
+    menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert!(matches!(&open.borrow()[0].0, FileDialogRequest::Save { suggested } if *suggested == joined("/clients/a", "design.psd")));
+    answer(&open, None);
+    app.poll_file_dialog(&ctx, None);
     app.pick_save("result.png", |_, _| Ok(Value::Null)).unwrap();
     app.poll_file_dialog(&ctx, None);
     assert!(matches!(&open.borrow()[0].0, FileDialogRequest::Save { suggested } if *suggested == joined("/clients/a", "result.png")));
