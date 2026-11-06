@@ -60,11 +60,10 @@ const STRIP: (u32, u32) = (488, 76);
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum BrushesView {
-    /// Rows: tip, size, stroke preview, name.
+    /// Rows: tip, size, stroke preview, name. Small previews put rows side by side, as many as fit
+    /// the panel's width (Photoshop's list).
     #[default]
     List,
-    /// The list's rows side by side, as many as fit the panel's width.
-    Columns,
     /// Tip thumbnails with their sizes.
     Grid,
 }
