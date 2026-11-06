@@ -312,6 +312,7 @@ mod tests {
 
     /// Render the actual panel with a translated, populated document at the requested width.
     fn panel_harness(width: f32, language: &str) -> egui_kittest::Harness<'static, PhotocraftApp> {
+        use egui_kittest::kittest::Queryable;
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.run("file.new", json!({"width":40,"height":60,"background":"white"})).unwrap();
         let lang = crate::i18n::Lang::from_pref(language);
@@ -324,8 +325,35 @@ mod tests {
             app,
         );
         PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Pro);
-        h.run_steps(4);
-        h
+        let mode = crate::i18n::tr(lang, "Color Mode");
+        for _ in 0..16 {
+            h.step();
+            if h.query_by_role_and_label(egui::Role::ComboBox, mode).is_some() {
+                return h;
+            }
+        }
+        panic!("{language}/{width}: Document Properties did not render the {mode} control within 16 steps (requires the medium font)");
+    }
+
+    fn assert_caption(h: &egui_kittest::Harness<'_, PhotocraftApp>, widget: Rect, bounds: Rect, caption: &str, case: &str) {
+        assert!(bounds.expand(1.0).contains_rect(widget), "{case}: widget {widget:?} overflows {bounds:?}");
+        let matches: Vec<_> = h
+            .output()
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == caption => Some((text, shape.clip_rect)),
+                _ => None,
+            })
+            .collect();
+        let [(text, clip)] = matches.as_slice() else {
+            panic!("{case}: expected one painted {caption:?}, found {}", matches.len());
+        };
+        let painted = Rect::from_min_size(text.pos, text.galley.size());
+        assert!(
+            !text.galley.elided && widget.expand(1.0).contains_rect(painted) && clip.contains_rect(painted),
+            "{case}: caption {caption:?} is clipped or elided (paint {painted:?}, widget {widget:?}, clip {clip:?})"
+        );
     }
 
     /// Long translated labels and every control remain inside both narrow and wide panels.
@@ -337,29 +365,24 @@ mod tests {
             let text = |s| crate::i18n::with_language(lang, || crate::i18n::t(s).to_owned());
             for width in [250.0, 290.0, 560.0] {
                 let h = panel_harness(width, language);
-                let bounds = Rect::from_min_max(pos2(8.0, 0.0), pos2(width - 8.0, 760.0)).expand(1.0);
+                let canvas = h.get_by_role_and_label(egui::Role::DisclosureTriangle, &text("Canvas")).rect();
+                let viewport = h.ctx.content_rect();
+                let bounds = Rect::from_x_y_ranges(canvas.x_range(), viewport.y_range()).intersect(viewport);
                 for label in ["Orientation", "Resolution", "Mode", "Depth", "Fill"] {
                     let translated = text(label);
                     let r = h.get_by_role_and_label(egui::Role::Label, &translated).rect();
-                    assert!(bounds.contains_rect(r), "{language}/{width}: {label} {r:?}");
-                    let painted = h
-                        .output()
-                        .shapes
-                        .iter()
-                        .find_map(|s| match &s.shape {
-                            egui::Shape::Text(t) if t.galley.text() == translated => Some((Rect::from_min_size(t.pos, t.galley.size()), s.clip_rect)),
-                            _ => None,
-                        })
-                        .unwrap();
-                    assert!(r.expand(1.0).contains_rect(painted.0) && painted.1.contains_rect(painted.0), "{language}/{width}: {label} is clipped");
+                    assert_caption(&h, r, bounds, &translated, &format!("{language}/{width}/{label}"));
                 }
-                for (role, labels) in
-                    [(egui::Role::ComboBox, &["Color Mode", "Depth", "Background", "Units"][..]), (egui::Role::Button, &["New Guide…", "Clear"][..])]
-                {
-                    for label in labels {
-                        let r = h.get_by_role_and_label(role, &text(label)).rect();
-                        assert!(bounds.contains_rect(r), "{language}/{width}: {label} overflows: {r:?}");
-                    }
+                for (role, label, caption) in [
+                    (egui::Role::ComboBox, "Color Mode", "RGB Color"),
+                    (egui::Role::ComboBox, "Depth", "8 Bits/Channel"),
+                    (egui::Role::ComboBox, "Background", "Background Color"),
+                    (egui::Role::ComboBox, "Units", "Pixels"),
+                    (egui::Role::Button, "New Guide…", "New Guide…"),
+                    (egui::Role::Button, "Clear", "Clear"),
+                ] {
+                    let r = h.get_by_role_and_label(role, &text(label)).rect();
+                    assert_caption(&h, r, bounds, &text(caption), &format!("{language}/{width}/{label}"));
                 }
                 let mode = h.get_by_role_and_label(egui::Role::ComboBox, &text("Color Mode")).rect();
                 let depth = h.get_by_role_and_label(egui::Role::ComboBox, &text("Depth")).rect();
