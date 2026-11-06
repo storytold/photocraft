@@ -601,7 +601,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
             let title_drag = ui.interact(drag_rect, self.id.with(("move-title", panels.first())), Sense::drag());
             let response = title_drag.on_hover_cursor(if move_cursor { egui::CursorIcon::Grab } else { egui::CursorIcon::Default });
             self.register_interaction(ui.ctx(), response.id);
-            if response.dragged() && !ui.input(|i| i.key_pressed(Key::Escape) || !i.focused) {
+            if response.dragged() && !ui.input(|i| i.key_pressed(Key::Escape) || !i.viewport().focused.unwrap_or(i.focused)) {
                 let moved = clamp_float(rect.translate(ui.input(|i| i.pointer.delta())), ui.ctx().content_rect());
                 if let Some(first) = panels.first() {
                     self.output.actions.push(Action::MoveFloating { panel: first.clone(), rect: [moved.left(), moved.top(), moved.width(), moved.height()] });
@@ -638,7 +638,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
             }
             if response.dragged()
                 && ui.ctx().data(|d| d.get_temp::<GroupDrag<P>>(self.id.with("group-drag"))).is_some()
-                && !ui.input(|i| i.key_pressed(Key::Escape) || !i.focused)
+                && !ui.input(|i| i.key_pressed(Key::Escape) || !i.viewport().focused.unwrap_or(i.focused))
             {
                 let moved = clamp_float(rect.translate(ui.input(|i| i.pointer.delta())), ui.ctx().content_rect());
                 if let Some(first) = panels.first() {
@@ -695,7 +695,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
             if panels.iter().all(|p| (self.permissions)(p).movable)
                 && response.dragged()
                 && ui.ctx().data(|d| d.get_temp::<GroupDrag<P>>(self.id.with("group-drag"))).is_some()
-                && !ui.input(|i| i.key_pressed(Key::Escape) || !i.focused)
+                && !ui.input(|i| i.key_pressed(Key::Escape) || !i.viewport().focused.unwrap_or(i.focused))
             {
                 let moved = clamp_float(rect.translate(ui.input(|i| i.pointer.delta())), ui.ctx().content_rect());
                 if let Some(first) = panels.first() {
@@ -953,8 +953,15 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
             ctx.data_mut(|d| d.remove::<GroupDrag<P>>(self.id.with("group-drag")));
             return;
         }
-        let (escape, focused, down, released, pointer) =
-            ctx.input(|i| (i.key_pressed(Key::Escape), i.focused, i.pointer.primary_down(), i.pointer.primary_released(), i.pointer.interact_pos()));
+        let (escape, focused, down, released, pointer) = ctx.input(|i| {
+            (
+                i.key_pressed(Key::Escape),
+                i.viewport().focused.unwrap_or(i.focused),
+                i.pointer.primary_down(),
+                i.pointer.primary_released(),
+                i.pointer.interact_pos(),
+            )
+        });
         if escape || !focused || !down {
             ctx.data_mut(|d| d.remove::<GroupDrag<P>>(self.id.with("group-drag")));
             if escape || !focused {
@@ -972,7 +979,8 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
 
     fn finish_drag(&mut self, ctx: &Context) {
         let Some(drag) = ctx.data(|d| d.get_temp::<Drag<P>>(self.id.with("drag"))) else { return };
-        let (pointer, down, released, focused) = ctx.input(|i| (i.pointer.interact_pos(), i.pointer.primary_down(), i.pointer.primary_released(), i.focused));
+        let (pointer, down, released, focused) =
+            ctx.input(|i| (i.pointer.interact_pos(), i.pointer.primary_down(), i.pointer.primary_released(), i.viewport().focused.unwrap_or(i.focused)));
         let escape = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Escape));
         if escape || !focused || !self.layout.contains(&drag.panel) || (!down && !released) {
             cancel_drag::<P>(ctx, self.id);

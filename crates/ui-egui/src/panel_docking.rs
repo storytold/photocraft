@@ -386,8 +386,11 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> bool {
         ui.ctx().data_mut(|data| data.remove::<LegacyDrag>(area.with("legacy-origin")));
     }
 
-    let cancelled =
-        ui.input(|input| !input.focused || input.key_pressed(egui::Key::Escape) || (!input.pointer.primary_down() && !input.pointer.any_released()));
+    let cancelled = ui.input(|input| {
+        !input.viewport().focused.unwrap_or(input.focused)
+            || input.key_pressed(egui::Key::Escape)
+            || (!input.pointer.primary_down() && !input.pointer.any_released())
+    });
     if cancelled && cancel_legacy_drag(app, ui.ctx()) {
         ui.ctx().data_mut(|data| data.insert_temp(area.with("legacy-suppressed"), true));
         if app.ui.docking.is_none() {
@@ -525,7 +528,7 @@ pub(crate) fn legacy_tab(app: &mut PhotocraftApp, ui: &mut egui::Ui, panel: &str
     // Crossing the dock column horizontally detaches through the shared layout.
     let strip = egui::Rect::from_min_max(egui::pos2(ui.max_rect().left(), response.rect.top()), egui::pos2(ui.max_rect().right(), response.rect.bottom()));
     if response.dragged()
-        && ui.input(|input| input.focused && input.pointer.primary_down() && !input.key_pressed(egui::Key::Escape))
+        && ui.input(|input| input.viewport().focused.unwrap_or(input.focused) && input.pointer.primary_down() && !input.key_pressed(egui::Key::Escape))
         && ui.ctx().pointer_interact_pos().is_some_and(|position| position.x < strip.left() - 24.0 || position.x > strip.right() + 24.0)
         && let Some(id) = normalize(panel)
     {

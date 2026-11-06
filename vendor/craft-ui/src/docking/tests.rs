@@ -294,9 +294,20 @@ fn old_hidden_locations_accept_panel_ids_without_a_default_identity() {
 }
 
 fn frame(ctx: &Context, layout: &Layout<u32>, events: Vec<Event>, focused: bool) -> (DockOutput<u32>, Vec<Id>) {
+    frame_with_viewport_focus(ctx, layout, events, focused, None)
+}
+
+fn frame_with_viewport_focus(
+    ctx: &Context,
+    layout: &Layout<u32>,
+    events: Vec<Event>,
+    focused: bool,
+    viewport_focused: Option<bool>,
+) -> (DockOutput<u32>, Vec<Id>) {
     let mut output = DockOutput::default();
     let mut ids = Vec::new();
-    let input = RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0))), events, focused, ..Default::default() };
+    let mut input = RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0))), events, focused, ..Default::default() };
+    input.viewports.get_mut(&input.viewport_id).unwrap().focused = viewport_focused;
     ctx.run_ui(input, |ui| {
         let style = DockStyle::from_ui(ui);
         output = DockArea::new(Id::new("test-area")).show(
@@ -313,6 +324,7 @@ fn frame(ctx: &Context, layout: &Layout<u32>, events: Vec<Event>, focused: bool)
     })
     .textures_delta
     .clear();
+    assert_eq!(ctx.input(|input| (input.focused, input.viewport().focused)), (focused, viewport_focused));
     (output, ids)
 }
 
@@ -627,6 +639,27 @@ fn floating_group_grip_moves_every_member_while_tab_drag_detaches_one() {
     assert!(detached.iter().any(|a| matches!(a, Action::Float { panel: 5, .. })));
     assert_eq!(layout.floating.len(), 2);
     assert_eq!(layout.floating[0].panels, vec![6]);
+}
+
+#[test]
+fn floating_group_drag_uses_viewport_focus_when_raw_input_focus_is_stale() {
+    let ctx = Context::default();
+    let mut layout = sample();
+    let original = layout.floating[0].rect;
+    for _ in 0..2 {
+        step(&ctx, &mut layout, vec![]);
+    }
+
+    let start = pos2(250.0, 82.0);
+    step(&ctx, &mut layout, vec![Event::PointerMoved(start), pointer_button(start, true)]);
+    let moved = start + vec2(50.0, 40.0);
+    let (output, _) = frame_with_viewport_focus(&ctx, &layout, vec![Event::PointerMoved(moved)], false, Some(true));
+
+    assert!(!ctx.input(|input| input.focused), "test must reproduce stale raw-input focus");
+    assert_eq!(ctx.input(|input| input.viewport().focused), Some(true));
+    assert!(ctx.input(|input| input.pointer.primary_down()), "pointer hold must survive the stale raw-input focus flag");
+    assert_eq!(output.group_drag, Some(5), "viewport focus should keep the floating group drag active");
+    assert_eq!(layout.floating[0].rect, original, "the layout remains unchanged until host actions are applied");
 }
 
 struct CustomContent {
