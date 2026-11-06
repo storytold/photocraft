@@ -572,8 +572,9 @@ fn wheel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let tri = triangle(center, inner - 1.0);
     ui.painter().add(triangle_mesh(tri, h));
     // Which part a drag began on: the ring sets the hue, the triangle saturation and brightness.
-    // The ring or the triangle, from where the press began (kept for frames without a press
-    // origin), so a drag that leaves the ring keeps turning the hue.
+    // The ring or the triangle, from where the press began, picked once and kept for the whole
+    // drag: the knobs move as the colour changes, so the same origin could read differently a
+    // frame later.
     let drag_key = ui.scope_id().with("color-wheel-drag");
     // Knobs: on the ring at the hue, in the triangle at the saturation and brightness.
     let a = h * TAU;
@@ -582,8 +583,14 @@ fn wheel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if (resp.dragged() || resp.clicked())
         && let Some(p) = resp.interact_pointer_pos()
     {
-        // A click is where it landed; a drag goes by where its press began.
-        let origin = if resp.clicked() { Some(p) } else { ui.input(|i| i.pointer.press_origin()) };
+        // A click is where it landed; a drag goes by where its press began, read when it starts.
+        let origin = if resp.clicked() {
+            Some(p)
+        } else if resp.drag_started() {
+            ui.input(|i| i.pointer.press_origin())
+        } else {
+            None
+        };
         // `None`: the press began beside the wheel (the area spans the panel), which picks nothing.
         let part = match origin {
             Some(origin) => {
@@ -593,10 +600,13 @@ fn wheel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 // is one on a corner's knob just outside it (up to half the ring's width, so the
                 // ring's middle stays the ring).
                 let near = (ring_w / 2.0).min(5.0);
-                // A press on the triangle's knob, as drawn, is the triangle unless the hue knob
-                // is nearer.
-                let on_knob = origin.distance(tri_knob) <= KNOB_R && origin.distance(tri_knob) < origin.distance(ring_knob);
-                let part = (d <= outer + 7.0).then_some(d >= inner - 2.0 && !on_knob && !triangle_near(tri, origin, near));
+                // A press on a knob, as drawn, is that knob's part, the nearer one where they
+                // overlap; inside the triangle is always the triangle.
+                let (to_tri, to_ring) = (origin.distance(tri_knob), origin.distance(ring_knob));
+                let on_tri_knob = to_tri <= KNOB_R && to_tri < to_ring;
+                let on_ring_knob = to_ring <= KNOB_R && to_ring <= to_tri;
+                let ring = !triangle_near(tri, origin, 0.0) && (on_ring_knob || (!on_tri_knob && !triangle_near(tri, origin, near)));
+                let part = (d <= outer + 7.0).then_some(d >= inner - 2.0 && ring);
                 ui.data_mut(|data| data.insert_temp(drag_key, part));
                 part
             }
