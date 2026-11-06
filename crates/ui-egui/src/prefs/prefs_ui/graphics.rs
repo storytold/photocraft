@@ -138,6 +138,8 @@ pub(super) fn read_at_launch(path: &str) -> bool {
         "integrations.allowAgentControl" | "integrations.controlPort" | "integrations.readRoot" | "integrations.writeRoot" => {
             cfg!(not(target_arch = "wasm32"))
         }
+        // The WinTab context is opened once, when the window starts.
+        "tools.tabletInput" => cfg!(target_os = "windows"),
         _ => false,
     }
 }

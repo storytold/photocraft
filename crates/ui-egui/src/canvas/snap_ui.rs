@@ -317,6 +317,19 @@ pub fn begin_guide(app: &mut PhotocraftApp, p: [f64; 2]) {
     app.prefs_rt.snap = Some(ActiveSnap { gesture: Gesture::Guide, start: p, targets, smart: SnapTargets::default(), disabled: false });
 }
 
+/// Snap `p` as a point press does (`Gesture::Point`), for a press that began as a selection move
+/// and ended as a click: a Single Row / Column Marquee click inside the selection selects the line
+/// at the snapped point, as one outside does (#11392). Not to the selection's own bounds, which the
+/// click replaces (on a 1 px line they would pick the line beside it). Ctrl held (`mods`) turns
+/// snapping off, as during a drag.
+pub(crate) fn snap_click(app: &PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) -> [f64; 2] {
+    if !snap_on(app) || override_held(mods) {
+        return p;
+    }
+    let targets = build(app, &[], false).filtered(|k| k != SnapKind::Selection);
+    targets.snap_point(p, tolerance(app)).0
+}
+
 /// Round to whole pixels when Preferences › Tools asks vector tools and transforms to snap to
 /// the pixel grid.
 fn pixel_round(app: &PhotocraftApp, p: [f64; 2]) -> [f64; 2] {
