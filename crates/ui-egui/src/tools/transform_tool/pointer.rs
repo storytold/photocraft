@@ -57,9 +57,7 @@ impl TransformSession {
             }
             return Hit::Edge(i);
         }
-        if let Some((i, _)) =
-            quad.iter().enumerate().map(|(i, &q)| (i, distance(q))).filter(|(_, d)| *d <= corner_radius).min_by(|a, b| a.1.total_cmp(&b.1))
-        {
+        if let Some((i, _)) = quad.iter().enumerate().map(|(i, &q)| (i, distance(q))).filter(|(_, d)| *d <= corner_radius).min_by(|a, b| a.1.total_cmp(&b.1)) {
             return Hit::Corner(i);
         }
         match edge {
