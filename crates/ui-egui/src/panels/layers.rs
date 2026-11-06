@@ -322,6 +322,14 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     // A right-click there opens the thumbnail size and clipping choices (#11404).
                     response.context_menu(|ui| super::layers_empty_menu::show(app, ui));
                 }
+            } else {
+                // No row drawn (a filter that matches no layer): the whole list is empty space,
+                // and its right-click opens the same menu.
+                let empty = Rect::from_min_max(pos2(ui.max_rect().left(), rows_bottom), pos2(ui.max_rect().right(), ui.clip_rect().bottom()));
+                if empty.height() > 0.0 && empty.width() > 0.0 {
+                    let response = ui.interact(empty, ui.scope_id().with("layers-empty-space"), Sense::click());
+                    response.context_menu(|ui| super::layers_empty_menu::show(app, ui));
+                }
             }
             // Tab / ⇧Tab in a rename: rename the layer below / above next, as in Photoshop. The
             // Background isn't renamed in place (double-clicking it converts it), so it ends there.

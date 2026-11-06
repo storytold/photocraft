@@ -169,3 +169,16 @@ fn a_right_click_on_a_layer_row_still_opens_the_layer_menu() {
     assert!(h.query_by_label("Duplicate Layer…").is_some() || h.query_by_label("Duplicate Layer").is_some(), "the layer menu opened");
     assert!(h.query_by_label("No Thumbnails").is_none(), "not the empty-area menu");
 }
+
+/// A filter that matches no layer draws no row: the whole list is empty space, and its
+/// right-click still opens the menu.
+#[test]
+fn with_no_row_shown_by_the_filter_the_right_click_still_opens_the_menu() {
+    let mut h = panel(true);
+    h.state_mut().ui.layer_filter_by = crate::layer_filter_ui::FilterBy::Name;
+    h.state_mut().ui.layer_filter_name = "no layer has this name".into();
+    h.run_steps(4);
+    assert!(h.query_by_label("Layer 1").is_none(), "the filter hides every row");
+    open_menu(&mut h);
+    assert!(menu_open(&h), "the empty list's right-click opens the menu");
+}
