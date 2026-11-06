@@ -151,9 +151,11 @@ fn xywh(r: Rect) -> [i64; 4] {
 /// it puts it right of the board, a [`GAP`] away, sliding further right past any board in the
 /// way. Moves the copy, layer `id` (just inserted on top of its original), there with its
 /// contents and grows the canvas to show it; anything that isn't an artboard is left alone.
-pub(crate) fn place_copy(doc: &mut Document, id: LayerId) -> Result<()> {
+/// Returns [`fit_canvas`]'s shift (a board already past the origin, as a PSD can hold, re-bases the
+/// document), for [`follow_shift`].
+pub(crate) fn place_copy(doc: &mut Document, id: LayerId) -> Result<(i32, i32)> {
     let l = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
-    let Some(r) = l.artboard().map(|a| a.rect) else { return Ok(()) };
+    let Some(r) = l.artboard().map(|a| a.rect) else { return Ok((0, 0)) };
     let name = l.name.clone();
     let boards: Vec<Rect> = doc.artboards().iter().filter(|b| b.0 != id).map(|b| b.2.rect).collect();
     let (y0, y1, w) = (i64::from(r.y0), i64::from(r.y1), i64::from(r.width()));
@@ -179,8 +181,7 @@ pub(crate) fn place_copy(doc: &mut Document, id: LayerId) -> Result<()> {
     let copy = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
     crate::commands::translate_layer(&snapshot, copy, dx, 0);
     crate::vector_cmds::translate_vectors(&snapshot, copy, f64::from(dx), 0.0);
-    fit_canvas(doc);
-    Ok(())
+    Ok(fit_canvas(doc))
 }
 
 /// Record a Duplicate's `inPlace` only when a copy (the selection after it) is an artboard: for
@@ -202,7 +203,10 @@ pub(crate) fn recorded_duplicate(s: &Session, mut p: Value) -> Value {
 /// contents, guides, paths…) right/down by its overhang, then the canvas grows to show it. An
 /// axis whose boards span more than the largest canvas, or a shift that would push pixels past
 /// the 32-bit range, stays unshifted: the board stays partly off-canvas, as one past the size
-/// limit does. Returns the shift, for [`follow_shift`].
+/// limit does. Returns the shift, for [`follow_shift`]: `translate_doc` moves the document's own
+/// geometry, but the session's Color Sampler points and painting symmetry stay behind unless the
+/// caller passes it on.
+#[must_use = "pass the shift to `follow_shift`, or the Color Samplers and symmetry stay behind (#9302)"]
 pub(crate) fn fit_canvas(doc: &mut Document) -> (i32, i32) {
     let max = i64::from(crate::document_preset_cmds::MAX_DIMENSION);
     let boards: Vec<Rect> = doc.artboards().iter().map(|b| b.2.rect).collect();

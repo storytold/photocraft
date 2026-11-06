@@ -778,6 +778,33 @@ fn a_board_past_the_origin_moves_the_color_samplers_and_symmetry_with_the_docume
 }
 
 #[test]
+fn duplicating_a_board_beside_one_past_the_origin_moves_the_color_samplers_with_the_document() {
+    // #9302 review: Layer › Duplicate puts the copy right of its board, but `fit_canvas` still
+    // re-bases a document whose boards were already past the origin (as a PSD can hold them).
+    // Single (`layer`) and several selected layers (`duplicate_selected`) both follow the shift.
+    for multi in [false, true] {
+        let mut s = session(8);
+        let gid = board_with_square(&mut s);
+        s.edit("past the origin", |doc, _| {
+            doc.layer_mut(gid).and_then(|l| l.artboard_mut()).unwrap().rect = Rect::new(-40, 10, 0, 50);
+            Ok(())
+        })
+        .unwrap();
+        let sq = add_square(&mut s, Rect::new(60, 10, 80, 30), [1.0, 0.0, 0.0, 1.0]);
+        s.execute("view.colorSamplers.add", json!({"x": 65, "y": 15})).unwrap();
+        if multi {
+            crate::layer_multi_cmds::set_selection(&mut s, vec![gid, sq], Some(gid), Some(gid)).unwrap();
+            s.execute("layer.duplicate", json!({})).unwrap();
+        } else {
+            s.execute("layer.duplicate", json!({"layer": gid.0})).unwrap();
+        }
+        assert_eq!(board_rect(&s, gid.0), Rect::new(0, 10, 40, 50), "multi {multi}: the document shifted right 40");
+        assert_eq!(s.active().unwrap().color_samplers, vec![[105.0, 15.0]], "multi {multi}");
+        assert!(red_at(&s, 105, 15), "multi {multi}: the sampler is still on the square");
+    }
+}
+
+#[test]
 fn add_beside_places_a_board_on_each_side_and_alt_duplicates_contents() {
     // #3033: the Artboard tool's "+" buttons. Board 40×40 at (10, 10) holding a red square.
     let mut s = session(8);
