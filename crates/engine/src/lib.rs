@@ -42,7 +42,6 @@ pub mod preset_store;
 pub mod presets;
 pub mod proof_sim;
 mod scratch;
-pub mod matting_cmds;
 pub mod select_mask_edits;
 pub mod shell_commands;
 pub mod shortcut_sets;
