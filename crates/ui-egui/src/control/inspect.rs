@@ -29,6 +29,9 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
         dialogs.push(json!({"id": SHELL_DIALOG, "kind": kind, "title": crate::workspace_ui::title(kind), "fields": fields}));
     }
     dialogs.extend(crate::discard_ui::inspect(app));
+    // Last frame's task bar rect, unless the bar can't show now (hidden by `ui.set` before the
+    // next draw).
+    let task_bar_rect = app.ui.task_bar_shown.filter(|_| crate::crop_task_bar::eligible(app));
     json!({
         "window": {"width": screen.width(), "height": screen.height(), "pixelsPerPoint": ctx.pixels_per_point()},
         "scratch": photocraft_raster::spill::stats(),
@@ -96,8 +99,8 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
         // where (screen points), and its place (pinned, dragged-to corner).
         "taskBar": json!({
             "enabled": app.ui.panels.context_task_bar,
-            "visible": app.ui.task_bar_shown.is_some(),
-            "rect": app.ui.task_bar_shown,
+            "visible": task_bar_rect.is_some(),
+            "rect": task_bar_rect,
             "pinned": app.ui.panels.task_bar.pinned,
             "at": app.ui.panels.task_bar.at,
         }),

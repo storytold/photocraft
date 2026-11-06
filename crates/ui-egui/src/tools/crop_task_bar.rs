@@ -35,7 +35,14 @@ fn wanted(app: &PhotocraftApp) -> bool {
     app.ui.tool == Tool::Crop && app.ui.panels.context_task_bar && app.ui.dialogs.is_empty() && app.session.active().is_some()
 }
 
-/// Draws the bar under the active document's crop frame (the canvas's overlay pass calls it).
+/// Whether the bar can show now: [`wanted`] and a crop frame. `ui.inspect` checks it, so a bar
+/// hidden by `ui.set` before the next draw no longer reports last frame's rect.
+pub fn eligible(app: &PhotocraftApp) -> bool {
+    wanted(app) && app.ui.crop_rect.is_some()
+}
+
+/// Draws the bar under the active document's crop frame (the canvas's overlay pass calls it on
+/// that document's tile).
 pub fn draw(app: &mut PhotocraftApp, ui: &mut egui::Ui, xf: &ViewXform) {
     if !wanted(app) {
         return;

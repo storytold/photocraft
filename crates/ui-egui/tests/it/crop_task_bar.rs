@@ -206,6 +206,102 @@ fn pin_keeps_the_bar_where_it_is() {
     assert_eq!(bar(&h).expect("bar").left_top(), here.left_top());
 }
 
+/// Runs one control-channel request without drawing after it.
+fn request(h: &mut Harness, method: &str, params: Value) -> Value {
+    let ctx = h.ctx.clone();
+    let (req, _rx) = ControlRequest::new(method, params.clone());
+    let Outcome::Done(v) = handle(h.state_mut(), &ctx, &req) else { panic!("{method} {params}: not done") };
+    v
+}
+
+#[test]
+fn ui_set_changes_only_the_place_fields_it_names() {
+    let mut h = harness();
+    draw_frame(&mut h, [40.0, 30.0], [260.0, 200.0]);
+    drag_grip(&mut h, vec2(-60.0, -120.0));
+    let dropped = bar(&h).expect("bar");
+    let at = h.state().ui.panels.task_bar.at;
+    // Pinning keeps the dragged place: the bar doesn't jump back under the frame.
+    control(&mut h, "ui.set", json!({"panels": {"task_bar": {"pinned": true}}}));
+    assert_eq!(h.state().ui.panels.task_bar.at, at);
+    assert!(h.state().ui.panels.task_bar.pinned);
+    assert_eq!(bar(&h).expect("bar").left_top(), dropped.left_top());
+    // Placing it keeps the pin.
+    control(&mut h, "ui.set", json!({"panels": {"task_bar": {"at": [12.0, 34.0]}}}));
+    assert_eq!(h.state().ui.panels.task_bar, photocraft_ui_egui::state::TaskBarPlace { pinned: true, at: Some([12.0, 34.0]) });
+    // A field the bar doesn't have is refused, and nothing changes.
+    let v = request(&mut h, "ui.set", json!({"panels": {"task_bar": {"pinned": false, "nope": 1}}}));
+    assert_eq!(v["ok"], false, "{v}");
+    assert!(h.state().ui.panels.task_bar.pinned);
+    // Reset bar position over the control channel.
+    control(&mut h, "ui.set", json!({"panels": {"task_bar": {"pinned": false, "at": null}}}));
+    assert_eq!(h.state().ui.panels.task_bar, Default::default());
+    assert_under_frame(&h, "after the reset");
+}
+
+#[test]
+fn the_bars_preset_dropdown_is_the_options_bars() {
+    let mut h = harness();
+    let b = bar(&h).expect("bar");
+    assert_eq!(h.state().ui.crop_rect, Some([0.0, 0.0, 400.0, 300.0]), "the untouched frame is the canvas");
+    // Both bars show the Ratio dropdown: open the task bar's.
+    let ratio = h.get_all_by_value("Ratio").map(|n| n.rect().center()).find(|p| b.contains(*p)).expect("the task bar's Ratio dropdown");
+    click_at(&mut h, ratio);
+    h.get_by_label("1 : 1 (Square)").click();
+    h.run_steps(6);
+    let [x0, y0, x1, y1] = h.state().ui.crop_rect.expect("a frame");
+    assert!(((x1 - x0) - (y1 - y0)).abs() < 1e-6, "a square frame: {:?}", h.state().ui.crop_rect);
+    assert_eq!(h.get_all_by_value("1 : 1 (Square)").count(), 2, "the options bar shows the same preset");
+}
+
+#[test]
+fn inspect_reports_a_bar_hidden_before_the_next_draw_as_hidden() {
+    let mut h = harness();
+    assert!(bar(&h).is_some());
+    for hide in [json!({"panels": {"context_task_bar": false}}), json!({"tool": "brush"})] {
+        let v = request(&mut h, "ui.set", hide.clone());
+        assert_eq!(v["ok"], true, "{v}");
+        let v = request(&mut h, "ui.inspect", json!({}));
+        assert_eq!(v["result"]["taskBar"]["visible"], false, "{hide}");
+        assert_eq!(v["result"]["taskBar"]["rect"], Value::Null, "{hide}");
+        control(&mut h, "ui.set", json!({"tool": "crop", "panels": {"context_task_bar": true}}));
+        assert!(bar(&h).is_some());
+    }
+}
+
+#[test]
+fn with_tiled_documents_the_bar_sits_on_the_active_tile() {
+    let mut h = harness();
+    h.state_mut().run("file.new", json!({"width": 400, "height": 300, "background": "white"})).expect("new");
+    h.run_steps(4);
+    let ctx = h.ctx.clone();
+    photocraft_ui_egui::menus::invoke(h.state_mut(), &ctx, "window.arrange.twoUpVertical", json!({})).expect("2-up");
+    h.run_steps(6);
+    // Each tile active in turn (side by side, the first one left): the first tile is drawn before
+    // the second, so a bar drawn by every tile would end up on the second one both times.
+    let mut centres = Vec::new();
+    for idx in [0, 1] {
+        assert!(h.state_mut().session.set_active(idx));
+        h.run_steps(8);
+        assert_eq!(h.state().session.active_index(), Some(idx));
+        centres.push(bar(&h).unwrap_or_else(|| panic!("document {idx}: no bar")).center().x);
+    }
+    // The documents are the same size at the same zoom: the bars are one tile width apart.
+    assert!(centres[1] - centres[0] > 200.0, "the bar follows the active tile: {centres:?}");
+    // A click into the first tile activates its document while the frame is drawn: the second
+    // tile, drawn after it as the active one, must not put the new document's bar on itself.
+    let y = bar(&h).expect("bar").top() - 120.0;
+    let at = pos2(centres[0], y);
+    h.event(egui::Event::PointerMoved(at));
+    h.run_steps(2);
+    button(&mut h, at, true);
+    assert_eq!(h.state().session.active_index(), Some(0), "the click activates the first tile");
+    if let Some(b) = bar(&h) {
+        assert!((b.center().x - centres[0]).abs() < 100.0, "the bar is on the first tile, not {} (the second)", b.center().x);
+    }
+    button(&mut h, at, false);
+}
+
 #[test]
 fn hide_bar_and_the_window_toggle() {
     let mut h = harness();
