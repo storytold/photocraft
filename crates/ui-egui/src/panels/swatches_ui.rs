@@ -93,11 +93,14 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     drop(recent);
     app.ui.presets_ui = st;
     let mods = ui.input(|i| i.modifiers);
+    // Alt / Ctrl / Cmd click sets the background instead of the foreground and recolours
+    // nothing; the recent tiles take the same modifiers as the library grid (#11524 review).
+    let background = mods.alt || mods.command || mods.ctrl;
     for e in events {
-        handle(app, e, mods.alt || mods.command || mods.ctrl);
+        handle(app, e, background);
     }
     for color in picked {
-        pick_recent_color(app, color);
+        pick_recent_color(app, color, background);
     }
 }
 
@@ -143,9 +146,12 @@ fn recent_row(app: &PhotocraftApp, ui: &mut egui::Ui, size: f32, picked: &mut Ve
 }
 
 /// Clicking a Recently Used Colors tile: it becomes the foreground colour, as picking a swatch
-/// does — the selected characters and shape layers take it too (#364, #9238).
-fn pick_recent_color(app: &mut PhotocraftApp, rgb: [f32; 3]) {
-    if run(app, "tools.setColors", json!({"foreground": [rgb[0], rgb[1], rgb[2], 1.0]})).is_some() {
+/// does — the selected characters and shape layers take it too (#364, #9238). With a held
+/// modifier it goes to the background and recolours nothing, like the library tiles.
+fn pick_recent_color(app: &mut PhotocraftApp, rgb: [f32; 3], background: bool) {
+    let target = if background { "background" } else { "foreground" };
+    let params = json!({ (target): [rgb[0], rgb[1], rgb[2], 1.0] });
+    if run(app, "tools.setColors", params).is_some() && !background {
         crate::apply_color::swatch_picked(app);
     }
 }
@@ -489,6 +495,12 @@ mod tests {
         click(&mut h, at, Modifiers::NONE);
         assert_eq!(h.state().session.tools.foreground, [1.0, 0.0, 0.0, 1.0], "a tile is the foreground");
         assert_eq!(h.state().session.tools.background, [1.0, 1.0, 1.0, 1.0], "its background untouched");
+        // Alt / Ctrl / Cmd follow the library tiles (#11524 review): the colour goes to the
+        // background and the foreground keeps whatever the plain click had set.
+        let green = tile(&h, "#00ff00").expect("the green tile").center();
+        click(&mut h, green, Modifiers::ALT);
+        assert_eq!(h.state().session.tools.background, [0.0, 1.0, 0.0, 1.0], "an Alt-clicked recent tile is the background");
+        assert_eq!(h.state().session.tools.foreground, [1.0, 0.0, 0.0, 1.0], "a modifier click leaves the foreground alone");
     }
 
     /// #4790: the footer (size slider, New Group, New, Delete) stays inside the panel however short
