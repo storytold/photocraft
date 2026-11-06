@@ -150,7 +150,15 @@ pub(crate) fn pipette_cursor(ctx: &egui::Context, p: Pos2) -> egui::CursorIcon {
     egui::CursorIcon::None
 }
 
-/// The Paint Bucket artwork and target share one cached cursor image. Report rasterization
+/// The Paint Bucket's default cursor, as in Photoshop: a bucket whose pouring corner is the filled
+/// pixel. Draws it at `p` and returns the OS cursor to set (hidden).
+pub(crate) fn plain_paint_bucket_cursor(ctx: &egui::Context, p: Pos2) -> egui::CursorIcon {
+    // The left corner of the icon's bucket is at (2, 12) of its 24-unit box.
+    crate::icons::cursor(ctx, "paint-bucket", p, vec2(2.0, 12.0) / 24.0, 22.0);
+    egui::CursorIcon::None
+}
+
+/// With `cursors.paintBucketCrosshair` on, the Paint Bucket artwork and target share one cached cursor image. Report rasterization
 /// failures once per distinct message, with the same concise error in the dialog and status bar.
 pub(crate) fn paint_bucket_cursor(app: &mut PhotocraftApp, painter: &egui::Painter, p: Pos2) -> egui::CursorIcon {
     let ctx = painter.ctx();

@@ -164,9 +164,6 @@ fn caps_lock_swaps_the_other_cursors_between_their_icon_and_the_crosshair() {
             assert_eq!(img.size, expected.size, "{tool:?}: bitmap dimensions match rasterized variant");
             assert_eq!(img.hotspot, expected.hotspot, "{tool:?}: hotspot matches variant");
             assert_eq!(img.rgba, expected.rgba, "{tool:?}: RGBA bitmap matches variant rasterization");
-        } else if tool == Tool::PaintBucket && cfg!(not(target_arch = "wasm32")) {
-            assert_eq!(standard.icon, CursorIcon::Crosshair, "PaintBucket: the OS bitmap has a visible fallback");
-            assert!(standard.image.is_some(), "PaintBucket: the standard cursor is the unified OS bitmap");
         } else {
             assert_eq!(standard.icon, CursorIcon::None, "{tool:?}: the standard cursor is the tool's own icon, drawn");
             assert!(standard.image.is_none(), "{tool:?}: painted fallback has no native cursor bitmap");
@@ -185,4 +182,27 @@ fn caps_lock_swaps_the_other_cursors_between_their_icon_and_the_crosshair() {
         caps(&mut h, false);
         assert_eq!(fp(&h), standard, "{tool:?}: releasing caps lock restores the icon");
     }
+}
+
+/// #7994's opt-in Paint Bucket cursor (`cursors.paintBucketCrosshair`): its standard cursor is the
+/// unified bucket + crosshair OS bitmap, and caps lock still swaps it with the precise crosshair.
+#[test]
+fn caps_lock_swaps_the_opt_in_paint_bucket_crosshair_cursor_too() {
+    let mut h = capslock_harness();
+    h.state_mut().ui.tool = Tool::PaintBucket;
+    h.state_mut().run("prefs.set", json!({"path": "cursors.paintBucketCrosshair", "value": true})).unwrap();
+    other(&mut h, "standard");
+    let standard = fp(&h);
+    if cfg!(not(target_arch = "wasm32")) {
+        assert_eq!(standard.icon, CursorIcon::Crosshair, "the OS bitmap has a visible fallback");
+        assert!(standard.image.is_some(), "the standard cursor is the unified OS bitmap");
+    }
+    other(&mut h, "precise");
+    let precise = fp(&h);
+    assert_ne!(standard, precise, "Standard and Precise differ");
+    assert_eq!(precise.icon, CursorIcon::Crosshair);
+    caps(&mut h, true);
+    assert_eq!(fp(&h), standard, "caps lock turns the precise crosshair back into the bucket");
+    other(&mut h, "standard");
+    assert_eq!(fp(&h), precise, "caps lock turns the bucket into the precise crosshair");
 }

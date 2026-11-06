@@ -3632,6 +3632,7 @@ cameraRaw	Yellow	Sárga
 	Clip Thumbnails to Layer Bounds	Bélyegképek levágása a réteg határaira
 	Show channels in color	Csatornák megjelenítése színesen
 	Show crosshair in brush tip	Szálkereszt az ecsethegyben
+	Show crosshair on Paint Bucket cursor	Szálkereszt a festékesvödör kurzorán
 	Show extension panels	Bővítménypanelek megjelenítése
 	Show font names in english	Betűnevek angolul
 	Show only crosshair while painting	Festéskor csak szálkereszt

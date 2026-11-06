@@ -50,6 +50,10 @@ pub(super) fn humanize(key: &str) -> String {
     if key == "notificationDurationSeconds" {
         return "Notification Duration (seconds)".into();
     }
+    // Cursors: the opt-in fill-target crosshair beside the bucket (#7994).
+    if key == "paintBucketCrosshair" {
+        return "Show crosshair on Paint Bucket cursor".into();
+    }
     // Tools: arrow-key nudges bundle into one History state (#2259).
     if key == "bundleNudges" {
         return "Bundle Arrow-Key Nudges".into();
