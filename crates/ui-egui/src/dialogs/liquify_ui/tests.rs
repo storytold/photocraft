@@ -1216,3 +1216,20 @@ fn the_preview_is_at_document_resolution_unless_the_layer_is_too_large() {
     d.zoom = 1.5;
     assert!(d.uses_view(1.0));
 }
+
+/// A GPU texture limit below the usual proxy side is respected: the proxy and the backdrop are
+/// downsampled to fit it rather than sized past it.
+#[test]
+fn the_proxy_respects_a_small_texture_limit() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.session.execute("file.new", json!({"width": 1800, "height": 100, "depth": 8})).unwrap();
+    app.session.execute("layer.new.layer", json!({})).unwrap();
+    let ctx = egui::Context::default();
+    let mut out = ctx.run_ui(egui::RawInput { max_texture_side: Some(1024), ..Default::default() }, |_| {});
+    out.textures_delta.clear();
+    assert_eq!(ctx.input(|i| i.max_texture_side), 1024);
+    open(&mut app, &ctx).unwrap();
+    let d = app.distort.liquify.as_ref().unwrap();
+    assert!(d.proxy.w <= 1024 && d.proxy.h <= 1024, "proxy {}×{} within the 1024 px limit", d.proxy.w, d.proxy.h);
+    assert_eq!(d.proxy.scale, 2.0);
+}

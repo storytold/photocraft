@@ -36,12 +36,14 @@ fn a_covered_canvas_paints_no_document() {
             .count()
     };
     let document_shapes = |app: &mut PhotocraftApp| document_shapes_in(app, egui::ViewportId::ROOT);
-    assert!(document_shapes(&mut app) > 0, "the document is drawn");
+    let shown = document_shapes(&mut app);
+    assert!(shown > 0, "the document is drawn");
     crate::liquify_ui::open(&mut app, &ctx).unwrap();
     assert!(crate::canvas::canvas_covered(&app));
     assert_eq!(document_shapes(&mut app), 0, "nothing under a full-window workspace");
+    // The same shapes as the uncovered main window: the checker alone wouldn't do.
     let floating = egui::ViewportId::from_hash_of("floating document window");
-    assert!(document_shapes_in(&mut app, floating) > 0, "a floating document window keeps its image");
+    assert_eq!(document_shapes_in(&mut app, floating), shown, "a floating document window keeps its image");
     crate::liquify_ui::cancel(&mut app);
     assert!(document_shapes(&mut app) > 0, "and again once it closes");
 
@@ -67,10 +69,13 @@ fn a_covered_canvas_paints_no_document() {
         ("Adaptive Wide Angle", crate::wide_angle_ui::open, |app| app.wide_angle = None),
     ];
     for (name, open, cancel) in workspaces {
+        // Measured again: the selection adds to the shapes of the uncovered frame.
+        let shown = document_shapes(&mut app);
+        assert!(shown > 0, "the document is drawn before {name}");
         open(&mut app, &ctx).unwrap_or_else(|e| panic!("{name}: {e}"));
         assert!(crate::canvas::canvas_covered(&app), "{name} covers the canvas");
         assert_eq!(document_shapes(&mut app), 0, "nothing under {name}");
-        assert!(document_shapes_in(&mut app, floating) > 0, "a floating document window keeps its image under {name}");
+        assert_eq!(document_shapes_in(&mut app, floating), shown, "a floating document window keeps its image under {name}");
         cancel(&mut app);
         assert!(!crate::canvas::canvas_covered(&app), "{name} closed");
         assert!(document_shapes(&mut app) > 0, "the document is drawn again after {name}");
