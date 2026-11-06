@@ -524,8 +524,6 @@ fn app_owned(app: &mut PhotocraftApp, command: DockCommand<String>) -> Result<Va
     crate::workspace_ui::menu(app, id, &params).unwrap_or_else(|| Err(format!("`{id}` is not available")))
 }
 
-/// Draw the layout, the canvas included, in the space `ui` has left: the customized workspace,
-/// else the native dock's arrangement.
 /// The docking style, shared by the main layout and the peek overlay so a peeked panel
 /// looks exactly like a docked one.
 pub(crate) fn dock_style(ui: &egui::Ui) -> craft_ui::docking::DockStyle {
@@ -567,10 +565,16 @@ pub(crate) fn dock_limits(id: &String, collapsed: &std::collections::HashSet<Str
 
 /// Draws a column-only layout (the peek overlay's dock column, no canvas, no floating) in
 /// a second `DockArea` with its own id, so its hit rects and drag state never collide with
-/// the main layout's. Style, labels, limits and content are the main layout's; actions
-/// route the same way. Group heights are deliberately not pinned: the peek must not pin
-/// state outside the main layout. The caller sizes the `Ui` to the column; the peek never
-/// draws the canvas, so the canvas rect is untouched by it.
+/// the main layout's. Style, labels, limits and content are the main layout's. Group heights
+/// are deliberately not pinned: the peek must not pin state outside the main layout. The
+/// caller sizes the `Ui` to the column; the peek never draws the canvas, so the canvas rect
+/// is untouched by it.
+///
+/// The peek is for using the panels, not for rearranging them: its layout is the dock
+/// column alone, so a drop zone it would offer (an edge, a new dock beside it) means a
+/// different place in the full layout. Its panels neither move nor float, and only actions
+/// that name a panel and keep the arrangement (switch tab, close, minimize, resize) reach
+/// the main layout; the peek's permissions offer no other gesture.
 pub(crate) fn show_column(app: &mut PhotocraftApp, ui: &mut egui::Ui, layout: &Layout<String>) {
     let collapsed = collapsed_members(app, layout);
     let layout = presented(layout.clone(), &collapsed);
@@ -590,7 +594,7 @@ pub(crate) fn show_column(app: &mut PhotocraftApp, ui: &mut egui::Ui, layout: &L
         &layout,
         &style,
         dock_label,
-        permissions,
+        peek_permissions,
         |id| dock_limits(id, &collapsed, strip),
         &mut PanelContent { app, collapsed: &collapsed, fillers: &fillers, card: &card, strip, commands: &mut commands },
     );
@@ -598,6 +602,10 @@ pub(crate) fn show_column(app: &mut PhotocraftApp, ui: &mut egui::Ui, layout: &L
         app.ui.status = error.to_string();
     }
     for action in output.actions {
+        // Not offered by the peek's permissions; never applied to the full layout.
+        if !keeps_arrangement(&action) {
+            continue;
+        }
         let result = match action {
             // A dock group minimizes as PhotoCraft's collapsed group, which the native dock's
             // collapse also sets.
@@ -617,6 +625,32 @@ pub(crate) fn show_column(app: &mut PhotocraftApp, ui: &mut egui::Ui, layout: &L
     }
 }
 
+/// The peek's permissions: the main layout's, but nothing moves or floats (see [`show_column`]).
+fn peek_permissions(id: &String) -> Permissions {
+    Permissions { movable: false, floatable: false, ..permissions(id) }
+}
+
+/// An action the peek may pass to the main layout: it names its panel and leaves the
+/// arrangement as it is, so it means the same in the dock column and in the full layout.
+fn keeps_arrangement(action: &Action<String>) -> bool {
+    matches!(
+        action,
+        Action::Activate { .. }
+            | Action::Close { .. }
+            | Action::CloseGroup { .. }
+            | Action::CloseOthers { .. }
+            | Action::SetMinimized { .. }
+            | Action::SetIconic { .. }
+            | Action::SetStackOpen { .. }
+            | Action::ResizeColumn { .. }
+            | Action::ResizeGroup { .. }
+            | Action::ResizeStack { .. }
+            | Action::ResizeIconic { .. }
+    )
+}
+
+/// Draw the layout, the canvas included, in the space `ui` has left: the customized workspace,
+/// else the native dock's arrangement.
 pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let area = area_id();
     let changed_workspace = ui.ctx().data_mut(|data| {

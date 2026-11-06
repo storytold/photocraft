@@ -13,7 +13,9 @@
 //!   edge itself is never dead.
 //! * Hold: once active, the peek stays while the pointer is over the strip it drew
 //!   (2-point tolerance), a drag that started in the strip is still down, a popup opened
-//!   while it was active is still open, or keyboard focus is on a widget it drew.
+//!   from it (the press that opened it went to the strip) is still open, the toolbar's tool
+//!   flyout is open, or keyboard focus is on a widget it drew. A popup another surface
+//!   opened (a canvas context menu) never holds it.
 //! * Qualification: only panels Tab hid (`hidden_by_tab`) or the dock Shift+Tab hid
 //!   (`dock_hidden_by_shift_tab`, a separate hide source) peek back. A panel hidden any
 //!   other way stays hidden.
@@ -21,7 +23,7 @@
 use std::collections::HashSet;
 
 use craft_ui::docking::{Layout, Node, Side};
-use egui::{Align2, Id, Pos2, Rect, Vec2};
+use egui::{Align2, Id, Order, Pos2, Rect, Vec2};
 
 use crate::PhotocraftApp;
 use crate::canvas::rulers::RULER;
@@ -59,6 +61,33 @@ fn toolbar_focus_id() -> Id {
 /// Widgets that held keyboard focus while the dock peek was active.
 fn dock_focus_id() -> Id {
     Id::unique("dock-peek-focus")
+}
+
+/// Whether the last press went to the toolbar peek: its strip, or a popup it opened.
+fn toolbar_press_id() -> Id {
+    Id::unique("toolbar-peek-press")
+}
+
+/// Whether the last press went to the dock peek: its strip, or a popup it opened.
+fn dock_press_id() -> Id {
+    Id::unique("dock-peek-press")
+}
+
+fn pressed_in_peek(ctx: &egui::Context, id: Id) -> bool {
+    ctx.data(|d| d.get_temp::<bool>(id)).unwrap_or(false)
+}
+
+/// On a press, notes whether it went to the peek behind `strip_id`: its strip, or a popup
+/// the peek opened (a press inside that popup, say on a submenu row, keeps it the peek's).
+/// A popup opened by a press anywhere else, a canvas context menu say, is not the peek's,
+/// so it never holds the peek open.
+fn note_press(ctx: &egui::Context, strip_id: Id, press_id: Id, popup_open: bool) {
+    let Some(origin) = ctx.input(|i| if i.pointer.any_pressed() { i.pointer.press_origin() } else { None }) else {
+        return;
+    };
+    let on_popup = ctx.layer_id_at(origin).is_some_and(|layer| matches!(layer.order, Order::Foreground | Order::Tooltip));
+    let ours = over_strip(ctx, strip_id, origin) || (popup_open && on_popup && pressed_in_peek(ctx, press_id));
+    ctx.data_mut(|d| d.insert_temp(press_id, ours));
 }
 
 fn clear_panel_strip(ctx: &egui::Context, id: Id) {
@@ -147,6 +176,10 @@ pub(crate) fn compute_peek(app: &PhotocraftApp, ctx: &egui::Context, chrome: boo
         clear_panel_strip(ctx, dock_strip_id());
         clear_focus_set(ctx, toolbar_focus_id());
         clear_focus_set(ctx, dock_focus_id());
+        ctx.data_mut(|d| {
+            d.remove::<bool>(toolbar_press_id());
+            d.remove::<bool>(dock_press_id());
+        });
     };
     if !app.session.prefs().workspace.auto_show_hidden_panels || !chrome || tabbed_in {
         clear(ctx);
@@ -179,14 +212,18 @@ pub(crate) fn compute_peek(app: &PhotocraftApp, ctx: &egui::Context, chrome: boo
     let toolbar_tab_hidden = tab_hidden.is_some_and(|[toolbar, _, _]| toolbar);
     let dock_tab_hidden = tab_hidden.is_some_and(|[_, _, dock]| dock);
     let dock_shift_hidden = app.ui.panels.dock_hidden_by_shift_tab;
-    let popup_open = ctx.any_popup_open();
+    // egui's memory of the open popup, kept from the frame that drew it: the peek's own
+    // popups draw after this, so this frame's `any_popup_open` would not see them yet.
+    let popup_open = egui::Popup::is_any_open(ctx);
+    note_press(ctx, toolbar_strip_id(), toolbar_press_id(), popup_open);
+    note_press(ctx, dock_strip_id(), dock_press_id(), popup_open);
     let focused = ctx.memory(|m| m.focused());
     // The hold needs an active peek behind it: the strip only exists while the peek drew.
-    let hold = |ctx: &egui::Context, strip_id: Id, focus_id: Id| {
+    let hold = |ctx: &egui::Context, strip_id: Id, focus_id: Id, press_id: Id| {
         strip(ctx, strip_id).is_some()
             && (over_strip(ctx, strip_id, p)
                 || (button_down && press_origin.is_some_and(|o| strip(ctx, strip_id).is_some_and(|r| r.expand(2.0).contains(o))))
-                || popup_open
+                || (popup_open && pressed_in_peek(ctx, press_id))
                 || focused.is_some_and(|f| focus_set(ctx, focus_id).contains(&f)))
     };
     const ZONE: f32 = 18.0;
@@ -196,7 +233,10 @@ pub(crate) fn compute_peek(app: &PhotocraftApp, ctx: &egui::Context, chrome: boo
         let blocked = if rtl { over_vbar } else { over_ruler };
         let dist = (p.x - edge).abs();
         let trigger = !button_down && dist <= ZONE && (dist <= EDGE_ALWAYS || !blocked);
-        peek.toolbar = trigger || hold(ctx, toolbar_strip_id(), toolbar_focus_id());
+        // The tool flyout is its own Area beside the toolbar: while it is open the toolbar
+        // stays, and the flyout's own rule (any press outside it) closes it.
+        let flyout = super::toolbar::tool_flyout_open(ctx) && strip(ctx, toolbar_strip_id()).is_some();
+        peek.toolbar = trigger || flyout || hold(ctx, toolbar_strip_id(), toolbar_focus_id(), toolbar_press_id());
     }
     if !app.ui.panels.dock && (dock_tab_hidden || dock_shift_hidden) {
         let edge = if rtl { canvas.left() } else { canvas.right() };
@@ -205,19 +245,25 @@ pub(crate) fn compute_peek(app: &PhotocraftApp, ctx: &egui::Context, chrome: boo
         let trigger = !button_down && dist <= ZONE && (dist <= EDGE_ALWAYS || !blocked);
         // A dock column must exist to draw: without one the peek is not active, so its
         // strip clears below instead of lingering.
-        peek.dock = (trigger || hold(ctx, dock_strip_id(), dock_focus_id())) && peek_layout(app).is_some_and(|(_, width)| width > 0.0);
+        peek.dock = (trigger || hold(ctx, dock_strip_id(), dock_focus_id(), dock_press_id())) && peek_layout(app).is_some_and(|(_, width)| width > 0.0);
     }
     if peek.toolbar {
         note_focus(ctx, toolbar_strip_id(), toolbar_focus_id(), p, button_down, press_origin, focused);
     } else {
         clear_panel_strip(ctx, toolbar_strip_id());
         clear_focus_set(ctx, toolbar_focus_id());
+        ctx.data_mut(|d| d.remove::<bool>(toolbar_press_id()));
+        // A flyout the ended peek drew would come back with the next peek.
+        if !app.ui.panels.toolbar {
+            super::toolbar::close_tool_flyout(ctx);
+        }
     }
     if peek.dock {
         note_focus(ctx, dock_strip_id(), dock_focus_id(), p, button_down, press_origin, focused);
     } else {
         clear_panel_strip(ctx, dock_strip_id());
         clear_focus_set(ctx, dock_focus_id());
+        ctx.data_mut(|d| d.remove::<bool>(dock_press_id()));
     }
     peek
 }

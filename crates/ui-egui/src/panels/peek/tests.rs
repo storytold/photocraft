@@ -6,6 +6,7 @@
 
 use egui::{Modifiers, PointerButton, Pos2, Rect, pos2, vec2};
 use egui_kittest::Harness;
+use egui_kittest::kittest::Queryable;
 use serde_json::json;
 
 use super::*;
@@ -15,17 +16,34 @@ use crate::panel_docking::probe;
 /// The canvas plus the peek hook, in the order `ui_body` runs them: the canvas sets
 /// `last_canvas_rect` and the scrollbar flags, then the peek computes and draws.
 fn harness(doc_width: f32, doc_height: f32) -> Harness<'static, PhotocraftApp> {
+    build(doc_width, doc_height, false)
+}
+
+/// A spot on the canvas, left of any peeked dock, with a context menu of its own.
+const CANVAS_MENU: Rect = Rect { min: Pos2 { x: 60.0, y: 300.0 }, max: Pos2 { x: 140.0, y: 380.0 } };
+
+/// [`harness`] plus a context menu on the canvas at [`CANVAS_MENU`], drawn with it.
+fn harness_with_canvas_menu(doc_width: f32, doc_height: f32) -> Harness<'static, PhotocraftApp> {
+    build(doc_width, doc_height, true)
+}
+
+fn build(doc_width: f32, doc_height: f32, canvas_menu: bool) -> Harness<'static, PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": doc_width as i64, "height": doc_height as i64})).unwrap();
     app.sync_views();
     let mut h = Harness::builder().with_size(vec2(1200.0, 800.0)).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
+        move |ui, app: &mut PhotocraftApp| {
             let ctx = ui.ctx().clone();
             if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 return;
             }
             egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
                 crate::canvas::document_area(app, ui);
+                if canvas_menu {
+                    ui.interact(CANVAS_MENU, egui::Id::unique("test-canvas-menu"), egui::Sense::click()).context_menu(|ui| {
+                        ui.label("canvas menu");
+                    });
+                }
             });
             let peek = compute_peek(app, ui.ctx(), true, false);
             if peek.toolbar || peek.dock {
@@ -275,4 +293,176 @@ fn rtl_peek_anchors_at_canvas_start_edge() {
     assert_close(strip.right(), expected.right(), "RTL peek right");
     assert_close(strip.top(), expected.top(), "RTL peek top");
     assert_close(strip.bottom(), expected.bottom(), "RTL peek bottom");
+}
+
+fn secondary_click(h: &mut Harness<'static, PhotocraftApp>, pos: Pos2) {
+    h.event(egui::Event::PointerMoved(pos));
+    h.event(egui::Event::PointerButton { pos, button: PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos, button: PointerButton::Secondary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+}
+
+fn click(h: &mut Harness<'static, PhotocraftApp>, pos: Pos2) {
+    hover(h, pos);
+    press(h, pos);
+    release(h, pos);
+}
+
+/// The dock peeked from its edge and settled, so its widgets are where they are drawn.
+fn peek_dock(h: &mut Harness<'static, PhotocraftApp>) -> Rect {
+    run_window(h, "window.toggle.dock");
+    h.run_steps(1);
+    let canvas = canvas_rect(h);
+    hover(h, pos2(canvas.right() - 2.0, canvas.center().y));
+    h.run_steps(3);
+    dock_strip(h).expect("the edge hover peeks the dock")
+}
+
+/// A text field the peeked dock drew, inside its strip.
+fn text_field_in(h: &Harness<'static, PhotocraftApp>, strip: Rect) -> Rect {
+    h.query_all_by_role(egui::accesskit::Role::TextInput).map(|n| n.rect()).find(|r| strip.contains(r.center())).expect("a text field in the peeked dock")
+}
+
+#[test]
+fn a_popup_opened_from_the_peek_holds_it_until_it_closes() {
+    let mut h = harness(400.0, 300.0);
+    let strip = peek_dock(&mut h);
+    let canvas = canvas_rect(&h);
+    // The Layers panel's filter kind dropdown, in the peeked dock.
+    let combo = h.get_by_label("Kind").rect();
+    assert!(strip.contains(combo.center()), "the dropdown {combo:?} is in the peek {strip:?}");
+    click(&mut h, combo.center());
+    h.run_steps(1);
+    assert!(egui::Popup::is_any_open(&h.ctx), "the dropdown opened");
+
+    // Away from the strip and the list: the popup the peek opened keeps it.
+    let away = pos2(canvas.left() + 40.0, canvas.center().y);
+    hover(&mut h, away);
+    h.run_steps(1);
+    assert!(dock_strip(&h).is_some(), "a popup opened from the peek holds it");
+
+    // A press outside closes the popup, and with it the peek.
+    click(&mut h, away);
+    h.run_steps(2);
+    assert!(!egui::Popup::is_any_open(&h.ctx), "the press outside closed the dropdown");
+    assert!(dock_strip(&h).is_none(), "the peek ends with its popup");
+}
+
+#[test]
+fn a_canvas_popup_does_not_hold_the_peek() {
+    let mut h = harness_with_canvas_menu(400.0, 300.0);
+    let strip = peek_dock(&mut h);
+    // Held by a field focused in it, with the pointer over the canvas, the canvas opens a
+    // context menu of its own. When focus leaves, that menu does not keep the peek: it is
+    // not the peek's.
+    let field = text_field_in(&h, strip);
+    click(&mut h, field.center());
+    hover(&mut h, CANVAS_MENU.center());
+    assert!(dock_strip(&h).is_some(), "the focused field holds the peek");
+    secondary_click(&mut h, CANVAS_MENU.center());
+    h.run_steps(1);
+    assert!(egui::Popup::is_any_open(&h.ctx), "the canvas menu opened");
+    h.ctx.memory_mut(|m| m.stop_text_input());
+    h.run_steps(2);
+    assert!(egui::Popup::is_any_open(&h.ctx), "the canvas menu is still open");
+    assert!(dock_strip(&h).is_none(), "a popup the canvas opened does not hold the peek");
+}
+
+#[test]
+fn a_widget_focused_in_the_peek_holds_it_until_focus_leaves() {
+    let mut h = harness(400.0, 300.0);
+    let strip = peek_dock(&mut h);
+    let canvas = canvas_rect(&h);
+    let field = text_field_in(&h, strip);
+    click(&mut h, field.center());
+    h.run_steps(1);
+    assert!(h.ctx.memory(|m| m.focused()).is_some(), "the field took focus");
+
+    // Typing goes on with the pointer over the canvas: the focused field holds the peek.
+    let away = pos2(canvas.left() + 40.0, canvas.center().y);
+    hover(&mut h, away);
+    h.run_steps(1);
+    assert!(dock_strip(&h).is_some(), "the focused field holds the peek");
+
+    // Focus leaving the field ends it.
+    h.ctx.memory_mut(|m| m.stop_text_input());
+    h.run_steps(2);
+    assert!(dock_strip(&h).is_none(), "the peek ends once focus leaves");
+}
+
+#[test]
+fn the_tool_flyout_holds_the_toolbar_peek() {
+    let mut h = harness(400.0, 300.0);
+    run_window(&mut h, "window.togglePanels");
+    h.run_steps(1);
+    let canvas = canvas_rect(&h);
+    hover(&mut h, pos2(canvas.left() + 2.0, canvas.center().y));
+    h.run_steps(3);
+    let strip = toolbar_strip(&h).expect("the edge hover peeks the toolbar");
+    // The first tool button with a flyout.
+    let index = crate::panels::TOOL_SECTIONS.iter().flat_map(|section| section.iter()).position(|slot| slot.len() > 1).expect("a slot with a flyout");
+    let bx = if crate::theme::Tokens::get(&h.ctx).pro { 30.0 } else { 36.0 };
+    let mut buttons: Vec<Rect> = h.ctx.viewport(|v| {
+        v.prev_pass
+            .widgets
+            .layers()
+            .flat_map(|(_, w)| w.iter())
+            .filter(|w| strip.contains_rect(w.rect) && w.rect.size() == egui::Vec2::splat(bx) && w.sense.senses_click())
+            .map(|w| w.rect)
+            .collect()
+    });
+    buttons.sort_by(|a, b| a.top().total_cmp(&b.top()));
+    let button = *buttons.get(index).expect("the tool buttons in the peeked toolbar");
+    secondary_click(&mut h, button.center());
+    h.run_steps(1);
+    assert!(crate::panels::toolbar::tool_flyout_open(&h.ctx), "the flyout opened");
+
+    // Over the flyout, beside the strip: the toolbar stays.
+    let key = egui::Id::unique(("tool-slot", index));
+    let menu = h.ctx.memory(|m| m.area_rect(key.with("flyout"))).expect("the flyout drew");
+    assert!(!strip.expand(2.0).contains(menu.center()), "the flyout lies outside the strip");
+    hover(&mut h, menu.center());
+    h.run_steps(1);
+    assert!(toolbar_strip(&h).is_some(), "the open flyout holds the toolbar peek");
+
+    // A press on the canvas closes the flyout and ends the peek.
+    click(&mut h, canvas.center());
+    h.run_steps(2);
+    assert!(!crate::panels::toolbar::tool_flyout_open(&h.ctx), "the press outside closed the flyout");
+    assert!(toolbar_strip(&h).is_none(), "the peek ends with its flyout");
+}
+
+#[test]
+fn the_toolbar_peek_fits_the_canvas_rect() {
+    let mut h = harness(400.0, 300.0);
+    run_window(&mut h, "window.togglePanels");
+    h.run_steps(1);
+    let canvas = canvas_rect(&h);
+    hover(&mut h, pos2(canvas.left() + 2.0, canvas.center().y));
+    h.run_steps(3);
+    let strip = toolbar_strip(&h).expect("the edge hover peeks the toolbar");
+    // Sized to the toolbar, not egui's default 600 x 400 area, and inside the canvas.
+    assert!(canvas.expand(1.0).contains_rect(strip), "the toolbar peek {strip:?} lies in the canvas {canvas:?}");
+    assert!(strip.width() < 120.0, "as wide as the toolbar: {strip:?}");
+}
+
+#[test]
+fn a_tab_dragged_in_the_peek_does_not_rearrange_the_layout() {
+    let mut h = harness(400.0, 300.0);
+    peek_dock(&mut h);
+    let before = h.state().ui.docking.clone().map(|w| w.layout);
+    // The column alone cannot say where a drop would land in the full layout, so a tab
+    // dragged out of the peek neither floats nor moves.
+    let tab = craft_ui::docking::DockArea::<String>::hit_rects(&h.ctx, peek_area_id())
+        .into_iter()
+        .find_map(|(hit, rect)| matches!(hit, craft_ui::docking::Hit::Tab(ref p) if p == "layers").then_some(rect))
+        .expect("the peeked Layers tab");
+    press(&mut h, tab.center());
+    for k in 1..=8 {
+        hover(&mut h, tab.center() - vec2(30.0 * k as f32, 0.0));
+    }
+    release(&mut h, tab.center() - vec2(240.0, 0.0));
+    h.run_steps(2);
+    assert_eq!(h.state().ui.docking.clone().map(|w| w.layout), before, "the layout is unchanged");
 }

@@ -82,6 +82,16 @@ pub(super) fn visible_sections(hidden: &[String]) -> Vec<Vec<(usize, Vec<Tool>)>
     sections
 }
 
+/// A tool flyout is open (it is drawn by the toolbar, beside the button that opened it).
+pub(super) fn tool_flyout_open(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<(egui::Id, Rect)>(egui::Id::unique("tool-flyout"))).is_some()
+}
+
+/// Closes the open tool flyout, if any.
+pub(super) fn close_tool_flyout(ctx: &egui::Context) {
+    ctx.data_mut(|d| d.remove::<(egui::Id, Rect)>(egui::Id::unique("tool-flyout")));
+}
+
 /// A primary-button gesture started on this tool; open only after it leaves its hit area.
 /// Using pointer origin rather than `Response::dragged` also works for click-only icon buttons.
 pub(super) fn tool_flyout_drag_open(button: Rect, origin: Option<Pos2>, pointer: Option<Pos2>, primary_down: bool) -> bool {
