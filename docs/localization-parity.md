@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-11-05 · **Change:** minor (Hindi UI catalog covers every measured key; previously minor: Bosnian UI catalog; previously minor: Swedish, Finnish, Danish and Norwegian Bokmål UI catalogs) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-11-06 · **Change:** minor (Hindi UI catalog covers every measured key; previously minor: Bosnian UI catalog; previously minor: Swedish, Finnish, Danish and Norwegian Bokmål UI catalogs) · **Target:** Adobe Photoshop 2026
 
 Per-language status of PhotoCraft's UI. How catalogs work and how to add one:
 [`localization.md`](localization.md). Language notes: [Korean](localization-ko.md), [Spanish](localization-es.md),
@@ -35,7 +35,7 @@ speakers, ~55% ready. Remaining: 80–140 h, plus native-speaker review (recorde
 | English | `en` | 1,608 / 1,608 (100%) | source | all | Latin | – | full | 0 h |
 | Simplified Chinese | `zh-hans` | 1,608 / 1,608 (100%) | 2,366 | dialogs, tooltips yes; engine messages English | CJK fonts (lazy loader), IME preedit/commit, vertical type | no | partial | 8–12 h |
 | Spanish | `es` | 1,844 / 1,844 (100%) | 4,010 | as above; complete dynamic UI key set | Latin | no | partial | 6–10 h |
-| Hindi | `hi` | 2,331 / 2,331 (100%, 2026-11-05) | 2,557 | as above; 0 and 1 take the singular | Devanagari shaping in the text engine (parley/HarfRust); falls back to installed Indic fonts (#4386) | no | partial | 8–12 h |
+| Hindi | `hi` | 2,345 / 2,345 (100%, 2026-11-06) | 2,575 | as above; 0 and 1 take the singular | Devanagari shaping in the text engine (parley/HarfRust); falls back to installed Indic fonts (#4386) | no | partial | 8–12 h |
 | Arabic | `ar` | 2,175 / 2,175 (100%, 2026-10-28) | 3,410 | as above; combined from the community catalogs with one term per concept | Arabic shaping and bidi in the UI (egui 0.37) and the text engine, Arabic fallback font; RTL shell layout but not inside panels (DIST-220-4), paragraph direction buttons but no visual RTL caret (TYPE-218-2 partial) | no | partial | 15–25 h |
 | French | `fr` | 1,608 / 1,608 (100%) | 2,766 | as above | Latin | no | partial | 6–10 h |
 | Portuguese (Brazil) | `pt-br` | 1,608 / 1,608 (100%) | 2,788 | as above | Latin; every `pt` locale uses it | no | partial | 6–10 h |
@@ -105,4 +105,4 @@ engine localization or native review is complete.
 | 2026-10-29 | minor | Swedish (`sv`) UI catalog: every measured key plus the dynamic labels, combined from #5985 and #9536 |
 | 2026-10-29 | minor | Finnish (`fi`), Danish (`da`) and Norwegian Bokmål (`nb`) UI catalogs: every measured key plus the dynamic labels, combined from #5666, #6961, #7267, #8072 and #9025 |
 | 2026-10-30 | minor | Bosnian (`bs`, Latin, Ijekavian) catalog: the same 4,552 keys as the newest catalogs, `bs-*` locales (Cyrillic included) and one/few/other plurals |
-| 2026-10-31 | minor | Hindi (`hi`) UI catalog: every measured key (was 326 of 2,204), with the layer color labels from #9255; plural rule takes the singular for 0 and 1; 2026-11-05: still every key after main grew to 2,331 |
+| 2026-10-31 | minor | Hindi (`hi`) UI catalog: every measured key (was 326 of 2,204), with the layer color labels from #9255; plural rule takes the singular for 0 and 1; 2026-11-05: still every key after main grew to 2,331; 2026-11-06: to 2,345 |
