@@ -567,6 +567,8 @@ cameraRaw	Yellow	पीला
 	Target	लक्ष्य
 	Units	इकाइयाँ
 	Demosaic	डिमोज़ेक
+
+	The GPU compositor is still being prepared	The GPU compositor is still being prepared
 	Clear Selection	चयन साफ़ करें
 	Color Aware	रंग-आधारित
 	Decontaminate Colors	रंग शुद्ध करें
@@ -628,3 +630,33 @@ cameraRaw	Yellow	पीला
 @plural	{n} action file loaded|{n} action files loaded	{n} एक्शन फ़ाइल लोड हुई|{n} एक्शन फ़ाइलें लोड हुईं
 	{set} from {file} replaced the one from {earlier}	{file} के सेट {set} ने {earlier} वाले सेट की जगह ले ली
 @plural	{n} file could not be loaded: {errors}|{n} files could not be loaded: {errors}	{n} फ़ाइल लोड नहीं हो सकी: {errors}|{n} फ़ाइलें लोड नहीं हो सकीं: {errors}
+	Toggle reference point	संदर्भ बिंदु दिखाएँ/छिपाएँ
+
+# Action Stop message (#8386)
+	Message	संदेश
+	Continue	जारी रखें
+	Stop	रोकें
+# Playback Options (#5212)
+	Playback Options…	प्लेबैक विकल्प…
+	Playback Options	प्लेबैक विकल्प
+	Accelerated	त्वरित
+	Step by Step	चरण दर चरण
+	Pause For:	इतने समय रुकें:
+	Pause For	इतने समय रुकें
+	seconds	सेकंड
+	Create a single history state	एक ही इतिहास स्थिति बनाएँ
+
+# Channels panel menu (#11451)
+	New Channel…	नया चैनल…
+	Duplicate Channel	चैनल को डुप्लीकेट करें
+	Delete Channel	चैनल हटाएँ
+	New Spot Channel…	नया स्पॉट चैनल…
+	Merge Spot Channel	स्पॉट चैनल मर्ज करें
+	Channel Options…	चैनल विकल्प…
+	Split Channels	चैनल्स विभाजित करें
+	Merge Channels…	चैनल्स मर्ज करें…
+	Specify Channels:	चैनल्स निर्दिष्ट करें:
+	Not enough grayscale documents for this mode.	इस मोड के लिए पर्याप्त ग्रेस्केल डॉक्यूमेंट नहीं हैं।
+	Pick a different document for each channel.	हर चैनल के लिए अलग डॉक्यूमेंट चुनें।
+	A picked document is no longer open.	चुना गया एक डॉक्यूमेंट अब खुला नहीं है।
+	A picked document is no longer a grayscale document of the same size.	चुना गया एक डॉक्यूमेंट अब उसी आकार का ग्रेस्केल डॉक्यूमेंट नहीं है।

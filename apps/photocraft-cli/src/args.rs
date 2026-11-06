@@ -180,6 +180,9 @@ pub(crate) struct InfoArgs {
     pub(crate) approve_high_memory: bool,
     #[command(flatten)]
     pub(crate) pdf: PdfArgs,
+    /// Also list every text run and paragraph run, anti-aliasing and full layer-effect settings
+    #[arg(long)]
+    pub(crate) detail: bool,
 }
 
 /// Open a file (or start a new document), run engine commands in order, save the result

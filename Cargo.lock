@@ -5400,10 +5400,13 @@ dependencies = [
  "photocraft-io",
  "photocraft-raster",
  "photocraft-raw",
+ "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.21",
  "tokio",
  "winresource",
+ "xtask",
 ]
 
 [[package]]
@@ -5736,6 +5739,7 @@ name = "photocraft-ui-egui"
 version = "0.20.1"
 dependencies = [
  "base64 0.23.1",
+ "chrono",
  "craft-print",
  "craft-ui",
  "craft-update",
@@ -5801,6 +5805,7 @@ dependencies = [
  "photocraft-io",
  "photocraft-paint",
  "photocraft-psd",
+ "photocraft-raster",
  "photocraft-ui-egui",
  "rfd",
  "serde_json",
@@ -9644,6 +9649,7 @@ dependencies = [
  "chrono",
  "serde",
  "serde_json",
+ "tempfile",
  "toml",
 ]
 

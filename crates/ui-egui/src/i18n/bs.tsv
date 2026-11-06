@@ -3724,6 +3724,8 @@ layerLabel	No Color	Bez boje
 	Color Table	Tabela boja
 	Conditional Mode Change	Uslovna promjena načina
 	Background (Default)	Pozadina (zadano)
+	Background (default)	Pozadina (zadano)
+	Transparent (default)	Prozirno (zadano)
 	Content-Aware Fill	Ispuna svjesna sadržaja
 	Convert to Linked	Pretvori u povezano
 	Convert to Profile	Pretvori u profil
@@ -4632,3 +4634,11 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	The PDF couldn't be read.	PDF nije moguće pročitati.
 	Select one or more pages.	Odaberite jednu ili više stranica.
 	Select one or more images.	Odaberite jednu ili više slika.
+
+# Channels panel menu (#11451)
+	Channel Options…	Opcije kanala…
+	Specify Channels:	Odredi kanale:
+	Not enough grayscale documents for this mode.	Nema dovoljno dokumenata u nijansama sive za ovaj način.
+	Pick a different document for each channel.	Odaberite drugi dokument za svaki kanal.
+	A picked document is no longer open.	Jedan odabrani dokument više nije otvoren.
+	A picked document is no longer a grayscale document of the same size.	Jedan odabrani dokument više nije dokument u nijansama sive iste veličine.
