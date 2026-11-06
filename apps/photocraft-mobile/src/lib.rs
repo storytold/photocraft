@@ -6,15 +6,19 @@
 //! - **Files:** File › Open asks the shell's document picker. A file the shell can write back
 //!   (picked, or opened in place from Files) opens with its document path, as a file from disk
 //!   does, so File › Save writes it back without a sheet; the shell confirms the write, and only
-//!   then is the document saved. Everything else (Save As, a copy from Share or Photos, a format
-//!   the file can't keep) goes to the shell's exporter, as on the web.
-//!   Saves encode on a worker (PhotoCraft's background save job), so a large document never
-//!   holds up the main thread; the bytes go to the shell on the next frame, and the shells keep
-//!   the app running in the background until they have them ([`CraftApp::busy`]).
+//!   then is the document saved. A flat file (PNG, JPEG…) is written back too while it keeps the
+//!   whole document (one plain layer). Everything else (Save As, a copy from Share or Photos, a
+//!   format the file can't keep) goes to the shell's exporter, as on the web.
+//!   Saves, Save a Copy and Export As encode on a worker (PhotoCraft's background save job), so a
+//!   large document never holds up the main thread; the bytes go to the shell on the next frame,
+//!   and the shells keep the app running in the background until they have them
+//!   ([`CraftApp::busy`]).
 //! - **Crash recovery:** leaving the screen starts writing recovery copies of unsaved documents
 //!   on PhotoCraft's autosave workers and returns at once (the OS ends apps whose main thread
 //!   hangs); the app stays [busy](CraftApp::busy) until they are on disk, so the shells keep it
 //!   running meanwhile. A copy is removed once its document is saved or closed.
+//! - **Plug-ins** are bundled-only on iOS (App Store guideline 2.5.2): no Install Plug-in… and no
+//!   plug-ins folder. Android keeps both.
 //! - **Native controls** map to PhotoCraft's own commands, exactly as its menu items run them.
 //! - **Panels** see the active document and its layers, top first.
 //! - **Power:** while the device is hot or saving power, live previews run on a reduced copy
@@ -485,7 +489,7 @@ fn services(platform: &Platform, inbox: Inbox, located: Located, issued: Issued,
             FileDialogRequest::Folder { .. } => reply.send(None),
             // The exporter asks where; here only the name is settled. Where the desktop asks (Save
             // As, a format the file can't keep), so does the exporter: only a save PhotoCraft
-            // writes without asking goes back in place.
+            // writes without asking goes back in place (`save_flat_in_place` below).
             FileDialogRequest::Save { suggested } => reply.send(Some(FileDialogAnswer::SaveTo(file_name(&suggested)))),
         })),
         write: Some(Box::new(move |path: &str, bytes: &[u8]| {
@@ -506,6 +510,13 @@ fn services(platform: &Platform, inbox: Inbox, located: Located, issued: Issued,
         // The user may cancel the exporter, and nothing reports back: never mark the document
         // saved here. A write in place is confirmed later (`PhotoCraftMobile::written`).
         write_unconfirmed: true,
+        // File › Save writes a flat file (a PNG, a JPEG) back while it keeps the document: the
+        // desktop's save dialog would suggest that very file, but the exporter can only make a
+        // new one.
+        save_flat_in_place: true,
+        // App Store guideline 2.5.2: no installing code. Plug-ins are only those the app brings;
+        // Android keeps Install Plug-in… and the plug-ins folder (sandboxed WebAssembly).
+        bundled_plugins_only: cfg!(target_os = "ios"),
         inbox: Some(inbox),
         clipboard_set_image: Some(Box::new(move |w, h, rgba: &[u8]| {
             clipboard.copy_image(w, h, rgba.to_vec());
