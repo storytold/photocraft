@@ -44,7 +44,8 @@ repeated dispatch; non-finite evaluation, alpha, Fill, gamma and Lab behavior st
 ## Rebased fixed-main release comparison
 
 The table measures source `1eb800645369d3da187e0363180968f1dc6e2845` rebased onto
-`e55e2f3577ad08cb5ff84779a4eee1b8003bf98f`. Only documentation changes follow this measured source.
+`e55e2f3577ad08cb5ff84779a4eee1b8003bf98f`. The later mask-error preservation fix
+was verified with regression tests without repeating benchmarks; successful encoding is unchanged.
 Fixed main remains `292ce6ab55a3c18636fe599cfbddc20ebc32cea9`; its saved measurements were not rerun or changed.
 No intermediate branch or individual commit was timed.
 
@@ -81,7 +82,7 @@ The standard fixtures do not isolate pattern or smart-cache speedups.
 
 ## Fidelity and review
 
-Fresh untimed comparisons against the fetched main match all 24 standard/large PSD/PSB
+At the measured source, untimed comparisons against the fetched main match all 24 standard/large PSD/PSB
 files, seven import hashes, three standalone pattern blocks and both complete f32 compositor
 hashes. Upstream staged/banded output, fallback and cancellation tests also pass. Large fixtures
 cover masked RGB/CMYK compositions, 2048-square patterns at every depth, filtered embedded
@@ -99,12 +100,16 @@ and private scratch; no new production threads, locks or mutable shared caches w
 No unresolved correctness/race issue was found; review used ownership and deterministic
 checks, not a race detector.
 
-Fresh PSD/I/O release/corpus suites pass,
+The measured source passed PSD/I/O release/corpus suites,
 including staged/banded output, fallback and cancellation. Strict all-target Clippy,
 formatting, layering, wasm and affected performance smoke pass. Unchanged smoke reports are
 explicitly reused. The same two known release SVG failures remain excluded. The unchanged
 raster and compositor source retains its previously passed checks, including the test-only
 reservation mutex fix; fresh compositor hashes also match main.
+The later failure-path fix preserves `LimitExceeded`, `OutOfMemory` and `Invalid` through
+buffered and streaming PSD/PSB writes at 8/16/32-bit depth. Focused export and PSD unit
+tests, strict I/O Clippy and an affected-crate wasm check pass; no benchmarks were rerun.
+
 The SVG exclusions are:
 
 - `svg::tests::bounded_embedded_svg_gets_only_the_nesting_depth_the_drawing_left`

@@ -1105,17 +1105,17 @@ impl Ex<'_> {
 /// Preserve the model API while making every attempt to write a failed mask return its error.
 fn failed_mask_channel(error: photocraft_psd::PsdError) -> ChannelData {
     use photocraft_psd::source::{ReadAt, Source, Stored};
-    struct Failed(String);
+    struct Failed(photocraft_psd::PsdError);
     impl ReadAt for Failed {
         fn len(&self) -> u64 {
             1
         }
         fn read_at(&self, _offset: u64, _buf: &mut [u8]) -> photocraft_psd::Result<()> {
-            Err(photocraft_psd::PsdError::Invalid(self.0.clone()))
+            Err(self.0.clone())
         }
     }
     let mut channel = ChannelData::new(-2, Some(Compression::Raw), Vec::new());
-    channel.stored = Some(Stored { source: Source::new(Failed(error.to_string())), offset: 0, len: 1 });
+    channel.stored = Some(Stored { source: Source::new(Failed(error)), offset: 0, len: 1 });
     channel
 }
 
