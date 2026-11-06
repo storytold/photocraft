@@ -256,6 +256,9 @@ pub static LANGUAGES: [LangInfo; 29] = [
     LangInfo { code: "az", name: "Azərbaycanca", source: catalog!("az"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
     // Vietnamese; `vi-VN` resolves here.
     LangInfo { code: "vi", name: "Tiếng Việt", source: catalog!("vi"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
+    // Thai; `th`, `th-TH` and `th_TH.UTF-8` locales resolve here. Thai has no plural inflection,
+    // so counts use one form.
+    LangInfo { code: "th", name: "ไทย", source: catalog!("th"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
     // Hindi; `hi`, `hi-IN` locales resolve here.
     LangInfo { code: "hi", name: "हिन्दी", source: catalog!("hi"), plural: plural_one_other, complete_menus: false, catalog: OnceLock::new() },
     // Arabic (Modern Standard); `ar-SA`, `ar-EG` and the other regional locales resolve here. The

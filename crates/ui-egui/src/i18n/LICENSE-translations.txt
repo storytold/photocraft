@@ -76,3 +76,8 @@ English labels, and no proprietary translation resources were used.
 Romanian translations: machine-translated for @tronicum with Claude (Anthropic) as an AI
 contributor and not yet reviewed by a native speaker; original translations of PhotoCraft's
 English labels, and no proprietary translation resources were used.
+
+Thai translations: PhotoCraft contributors, with opencode (DeepSeek) as an AI contributor; a
+machine-assisted first draft from PhotoCraft's English labels, reviewed for UI terminology. The
+resulting catalog is licensed under MIT OR Apache-2.0 as stated above, and no proprietary
+localisation resource was used.
