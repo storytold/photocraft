@@ -268,7 +268,19 @@ fn clicking_a_dialog_over_another_tile_keeps_the_active_document() {
     h.run_steps(3);
     let cells = crate::canvas::arranged_cells(h.state(), h.state().last_canvas_rect).expect("tiled");
     assert_eq!(cells.len(), 2);
-    // The user picks the right-hand document (the first tile is not the active one).
+    let ctx = h.ctx.clone();
+    // Positive control: the second document is active after `file.new` twice; a press on the bare
+    // left tile activates the first, so a press that does nothing would be caught. Then the user
+    // goes back to the right-hand document.
+    let left = cells[0].1.center();
+    assert!(ctx.layer_id_at(left).is_none_or(|l| l.order == egui::Order::Background), "nothing floats over the left tile at {left:?}");
+    h.event(egui::Event::PointerMoved(left));
+    h.run_steps(1);
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: left, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+        h.run_steps(1);
+    }
+    assert_eq!(h.state().session.active_index(), Some(0), "a press on a bare tile activates its document (positive control)");
     let right = cells[1].1.center();
     h.event(egui::Event::PointerMoved(right));
     h.run_steps(1);
@@ -276,8 +288,7 @@ fn clicking_a_dialog_over_another_tile_keeps_the_active_document() {
         h.event(egui::Event::PointerButton { pos: right, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
         h.run_steps(1);
     }
-    assert_eq!(h.state().session.active_index(), Some(1));
-    let ctx = h.ctx.clone();
+    assert_eq!(h.state().session.active_index(), Some(1), "and a press on the right tile activates that one");
     crate::menus::invoke(h.state_mut(), &ctx, "image.adjustments.levels", json!({})).unwrap();
     h.run_steps(3);
     // Levels is centred on the window, so its left edge lies over the left tile.
@@ -294,6 +305,15 @@ fn clicking_a_dialog_over_another_tile_keeps_the_active_document() {
     assert_eq!(h.state().session.active_index(), Some(1), "a press on the dialog must not activate the document under it");
 }
 
+/// A point of `canvas` with nothing floating over it (a floating document window may cover part of it).
+fn bare_point(ctx: &egui::Context, canvas: egui::Rect) -> egui::Pos2 {
+    let r = canvas.shrink(12.0);
+    [r.left_bottom(), r.right_bottom(), r.left_top(), r.right_top(), r.center()]
+        .into_iter()
+        .find(|p| ctx.layer_id_at(*p).is_none_or(|l| l.order == egui::Order::Background))
+        .expect("a bare point on the docked canvas")
+}
+
 /// #11612: the same holds for the single canvas: with a floating document active, a press on a
 /// dialog lying over the docked canvas must not activate the docked document.
 #[test]
@@ -303,6 +323,18 @@ fn clicking_a_dialog_over_the_docked_canvas_keeps_the_floating_document_active()
     crate::menus::invoke(h.state_mut(), &ctx, "window.arrange.floatInWindow", json!({"document": 0})).unwrap();
     h.run_steps(3);
     assert_eq!(h.state().session.active_index(), Some(0), "the floated document is active");
+    // Positive control: a press on a bare part of the docked canvas does activate the docked document.
+    let bare = bare_point(&ctx, h.state().last_canvas_rect);
+    h.event(egui::Event::PointerMoved(bare));
+    h.run_steps(1);
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: bare, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+        h.run_steps(1);
+    }
+    assert_eq!(h.state().session.active_index(), Some(1), "a press on the bare docked canvas activates the docked document (positive control)");
+    h.state_mut().session.set_active(0);
+    h.run_steps(2);
+    assert_eq!(h.state().session.active_index(), Some(0));
     crate::menus::invoke(h.state_mut(), &ctx, "image.adjustments.levels", json!({})).unwrap();
     h.run_steps(3);
     let canvas = h.state().last_canvas_rect;
