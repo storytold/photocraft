@@ -306,6 +306,105 @@ fn background_save_does_not_mark_a_different_document_snapshot_clean() {
     }
 }
 
+/// All ready engine jobs pass their Arc guards before the shell handles any completion. A
+/// first save's script must not let the second completion mark newly edited pixels saved.
+#[test]
+fn queued_save_completions_keep_edits_from_an_earlier_save_script_dirty() {
+    use std::sync::{Arc, Mutex};
+
+    for automation in [false, true] {
+        let mut app = app();
+        select_middle(&mut app);
+        Arc::make_mut(&mut app.session.active_mut().unwrap().doc).name = "first.pcraft".into();
+        app.run("file.new", json!({"width": 4, "height": 4, "name": "second.pcraft"})).unwrap();
+        select_middle(&mut app);
+        app.run("edit.fill", json!({"contents": "color", "color": "#3366cc"})).unwrap();
+        let expected = layer_target(&app.session);
+        let written_revision = app.session.active().unwrap().revision;
+        app.run(
+            "file.scripts.scriptEventsManager",
+            json!({"enabled": true, "add": {"event": "saveDocument", "steps": [
+                ["document.activate", {"document": 1}],
+                ["edit.fill", {"contents": "color", "color": "#ff0000"}],
+                // The second completion must not fire another edit that masks a false clean.
+                ["file.scripts.scriptEventsManager", {"enabled": false}]
+            ]}}),
+        )
+        .unwrap();
+        let captured = Arc::new(Mutex::new(std::collections::BTreeMap::new()));
+        let written = captured.clone();
+        let save: crate::services::SaveFileFn = Arc::new(move |doc, path, settings, ctl| {
+            let encoded = photocraft_io::export(doc, path, &settings.io_options()).map_err(|e| e.to_string())?;
+            ctl.commit()?;
+            written.lock().unwrap().insert(path.to_string(), encoded.bytes);
+            Ok(encoded.warnings)
+        });
+        app.services.save_file = Some(save.clone());
+        app.services.automation_save = Some(save);
+        app.background_jobs = true;
+        assert!(app.session.set_active(0));
+        app.save_as(Some("first.pcraft".into())).unwrap();
+        let first = app.jobs.saves.last().unwrap().job;
+        assert!(app.session.set_active(1));
+        if automation {
+            app.save_automation(Some("second.pcraft".into())).unwrap();
+        } else {
+            app.save_as(Some("second.pcraft".into())).unwrap();
+        }
+        let second = app.jobs.saves.last().unwrap().job;
+        // This view change preserves the original Arc, so both engine guards still pass.
+        let top = app.session.active().unwrap().doc.walk().into_iter().find(|(_, _, layer)| layer.name == "Top").unwrap().2.id;
+        app.session.select_layer(top).unwrap();
+        app.session.wait_job(first).unwrap();
+        app.session.wait_job(second).unwrap();
+        assert!(!app.session.has_jobs());
+        assert_eq!(app.jobs.saves.len(), 2, "both completions await shell event handling");
+        crate::jobs_ui::tick(&mut app, &egui::Context::default());
+
+        assert!(app.session.set_active(1));
+        let state = app.session.active().unwrap();
+        assert!(state.revision > written_revision, "the first save's script edited the second document");
+        assert_eq!(state.saved_revision, written_revision, "the second completion records its actual saved content");
+        assert!(state.is_dirty(), "later script edits were never serialized");
+        assert_eq!(state.path.as_deref(), Some("second.pcraft"), "the actual write still establishes its file");
+        assert!(!app.session.prefs().script_events.enabled, "the hook ran only for the first completion");
+        assert!(!app.saving());
+        let captured = captured.lock().unwrap();
+        let bytes = captured.get("second.pcraft").unwrap();
+        assert_saved_layer_target("second.pcraft", bytes, &expected);
+        let saved = photocraft_format::load_from_bytes(bytes).unwrap();
+        let saved_top = saved.walk().into_iter().find(|(_, _, layer)| layer.name == "Top").unwrap().2;
+        assert_eq!(saved_top.surface().unwrap().rgba(0, 0)[3], 0.0, "the saved Top layer was empty");
+        assert_eq!(state.doc.layer(top).unwrap().surface().unwrap().rgba(0, 0), [1.0, 0.0, 0.0, 1.0], "only the live Top layer received the script edit");
+    }
+}
+
+/// Even when a shell service runs asynchronously, an unconfirmed download keeps the previous
+/// saved revision; only a confirmed file write can clear the document's unsaved state.
+#[test]
+fn unconfirmed_background_download_keeps_the_document_unsaved() {
+    use std::sync::Arc;
+
+    let mut app = app();
+    select_middle(&mut app);
+    let previous_saved = app.session.active().unwrap().saved_revision;
+    app.services.write_unconfirmed = true;
+    app.services.save_file = Some(Arc::new(|doc, path, settings, ctl| {
+        let encoded = photocraft_io::export(doc, path, &settings.io_options()).map_err(|e| e.to_string())?;
+        ctl.commit()?;
+        Ok(encoded.warnings)
+    }));
+    app.background_jobs = true;
+    app.save_as(Some("download.pcraft".into())).unwrap();
+    let job = app.jobs.saves.last().unwrap().job;
+    app.session.wait_job(job).unwrap();
+    crate::jobs_ui::tick(&mut app, &egui::Context::default());
+    let state = app.session.active().unwrap();
+    assert_eq!(state.path.as_deref(), Some("download.pcraft"));
+    assert_eq!(state.saved_revision, previous_saved);
+    assert!(state.is_dirty() && app.has_unsaved_work());
+}
+
 #[test]
 fn save_settings_share_only_the_open_documents_native_cache() {
     let mut app = app();

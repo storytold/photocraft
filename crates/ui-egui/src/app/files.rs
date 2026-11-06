@@ -610,18 +610,14 @@ impl PhotocraftApp {
     }
 
     /// Applies completion to the originating document, even when another tab is active.
-    /// Confirmed writes may include later view-only revisions after the worker's Arc guard;
-    /// unconfirmed downloads retain the caller's saved revision, and copies keep their file state.
+    /// Callers provide the verified saved revision, including any view-only revisions or the
+    /// prior revision for an unconfirmed download. Copies keep their file state.
     fn saved_inner(&mut self, doc: DocId, revision: u64, path: &str, warnings: &[String], copy: bool, kind: SaveKind) {
         // Per-output Image Assets failures from the after-save hook, reported with this save (#11117).
         let mut asset_errors: Vec<String> = Vec::new();
         // The successful outputs and their folder, kept for the partial-failure status line.
         let mut asset_ok = 0usize;
         let mut asset_dir = String::new();
-        let confirmed = match kind {
-            SaveKind::User => !self.services.write_unconfirmed,
-            SaveKind::Automation => true,
-        };
         // Automation: only a layered save becomes the document's file; a flat one is a
         // copy, as in the headless server (#2579).
         let (hooks, arm) = match kind {
@@ -642,10 +638,9 @@ impl PhotocraftApp {
                     && arm
                 {
                     st.saved_to(path.to_string());
-                    // Successful background jobs passed the original document Arc guard:
-                    // intervening revisions only changed view state, such as layer targeting.
-                    // Unconfirmed browser downloads must retain their previous saved revision.
-                    st.saved_revision = if confirmed { st.revision } else { revision };
+                    // A preceding completion handler may have edited this document after
+                    // its worker's guard: retain the revision verified by the caller.
+                    st.saved_revision = revision;
                     app.remember_stamp(doc, path);
                 }
                 // "Save Document" script events and File › Generate › Image Assets.
