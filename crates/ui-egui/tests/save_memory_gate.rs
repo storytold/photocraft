@@ -106,3 +106,52 @@ fn no_warning_without_a_document() {
     headroom::simulate_available(None);
     assert_eq!(warnings(&app), 0);
 }
+
+/// Export As on the save worker checks the document it writes, made there at the export's size,
+/// not only the one it was made from: an enlarged export that won't fit is refused before it is
+/// encoded, as the inline export refuses it.
+#[test]
+fn a_background_export_that_does_not_fit_at_its_size_is_refused_before_encoding() {
+    use photocraft_ui_egui::{FileDialogAnswer, export_dialog, jobs_ui};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    let _turn = LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let encoded = Arc::new(AtomicU32::new(0));
+    let counter = Arc::clone(&encoded);
+    let mut app = PhotocraftApp::new(
+        Session::new(),
+        Services {
+            save_file: Some(Arc::new(move |_, _, _, _| {
+                counter.fetch_add(1, Ordering::SeqCst);
+                Ok(Vec::new())
+            })),
+            file_dialog: Some(Box::new(|_, _, reply| reply.send(Some(FileDialogAnswer::SaveTo("/tmp/photocraft-test/big.png".into()))))),
+            ..Default::default()
+        },
+    );
+    app.background_jobs = true;
+    app.run("file.new", json!({"width": 100, "height": 100})).unwrap();
+    let ctx = egui::Context::default();
+    // The 100 × 100 document fits, and so does resizing it to 1000 × 1000 (about 4 MB); encoding
+    // that as a PNG (its layer and a composite, about 8 MB) doesn't.
+    headroom::simulate_available(Some(headroom::RESERVE + (6 << 20)));
+    let settings = json!({"format": "png", "scale": 1000});
+    let asked = export_dialog::confirm(&mut app, settings.as_object().unwrap());
+    let t = std::time::Instant::now();
+    if asked.is_ok() {
+        app.poll_file_dialog(&ctx, None);
+        while t.elapsed() < std::time::Duration::from_secs(30)
+            && !app.ui.notices.iter().any(|n| n.lines.iter().chain([&n.title]).any(|l| l.contains("Save failed")))
+            && encoded.load(Ordering::SeqCst) == 0
+        {
+            jobs_ui::tick(&mut app, &ctx);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+    headroom::simulate_available(None);
+    asked.unwrap();
+    assert_eq!(encoded.load(Ordering::SeqCst), 0, "not encoded");
+    let said: Vec<String> = app.ui.notices.iter().flat_map(|n| n.lines.iter().chain([&n.title]).cloned()).collect();
+    assert!(said.iter().any(|l| l.contains("Not enough memory to save \u{201c}big.png\u{201d}")), "{said:?}");
+}

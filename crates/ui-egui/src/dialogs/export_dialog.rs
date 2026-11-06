@@ -1067,8 +1067,14 @@ fn write_export(app: &mut PhotocraftApp, doc: &Arc<Document>, f: &Map<String, Va
     if app.background_jobs
         && let Some(save) = app.services.save_file.clone()
     {
-        let (doc, f2, profile) = (Arc::clone(doc), f.clone(), Arc::clone(source_profile));
-        let make = move || export_document(&doc, &f2, None, &profile).map(Arc::new);
+        let (doc, f2, profile, target) = (Arc::clone(doc), f.clone(), Arc::clone(source_profile), path.to_string());
+        // The export at its own size must fit too, as the inline export checks it: a resize
+        // can make it larger than the document it came from.
+        let make = move || {
+            let out = export_document(&doc, &f2, None, &profile)?;
+            crate::app::ensure_memory_to_save(&out, &target)?;
+            Ok(Arc::new(out))
+        };
         return Ok(match crate::jobs_ui::start_copy(app, path.to_string(), settings(f), save, make)? {
             Some((path, warnings)) => json!({"path": path, "warnings": warnings}),
             None => json!({"path": path, "warnings": [], "pending": true, "job": app.jobs.last_started.map(|j| j.0)}),
