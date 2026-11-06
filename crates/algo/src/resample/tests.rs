@@ -435,6 +435,27 @@ fn controlled_resize_matches_pixels_and_discards_cancelled_work() {
     }
 }
 
+/// Every band group of a pass asks `ctl` again, not only the start of each pass: counting the
+/// calls catches a missing per-group check, which a cancel (that fails at the first call or at the
+/// final one alike) cannot.
+#[test]
+fn controlled_resize_checks_cancellation_per_band_group() {
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        let src = ramp(depth);
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let cancelled = || {
+            calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            false
+        };
+        let progress = |_| {};
+        let ctl = photocraft_raster::Interrupt::new(&cancelled, &progress);
+        assert!(resize_surface_with_interrupt(&src, 1.7, 0.6, Resample::Bicubic, &ctl).is_ok());
+        let passes = plan(Resample::Bicubic, 1.7, 0.6).len();
+        let checks = calls.load(std::sync::atomic::Ordering::Relaxed);
+        assert!(checks > passes + 2, "{checks} cancellation checks for {passes} passes; per-group checks are missing");
+    }
+}
+
 /// A pseudo-random surface of `w`×`h` in a format of `mode`, `sample` and `alpha`.
 fn noisy(w: i32, h: i32, mode: ColorMode, sample: SampleType, alpha: bool) -> Surface {
     let fmt = PixelFormat::new(mode, sample, alpha);

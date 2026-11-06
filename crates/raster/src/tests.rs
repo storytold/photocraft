@@ -449,6 +449,27 @@ fn content_bounds_and_prune() {
 }
 
 #[test]
+fn prune_in_batches_drops_what_prune_drops() {
+    let mut whole = Surface::new(PixelFormat::RGBA8);
+    whole.fill_rect(Rect::new(300, 10, 310, 20), &[1.0, 1.0, 1.0, 1.0]);
+    whole.write_pixel(-5, -5, &[0.0, 0.0, 0.0, 1.0]);
+    whole.write_pixel(-5, -5, &[0.0, 0.0, 0.0, 0.0]);
+    whole.fill_rect(Rect::new(600, 600, 610, 610), &[1.0, 0.0, 0.0, 1.0]);
+    let mut stepped = whole.clone();
+    whole.prune();
+    let mut cursor = stepped.prune_cursor();
+    let mut calls = 0;
+    while !stepped.prune_batch(&mut cursor, 1) {
+        calls += 1;
+        assert!(calls < 100, "the prune scan never finished");
+    }
+    assert!(calls >= 2, "one tile per call visits every tile over several calls");
+    assert_eq!(stepped.tile_count(), whole.tile_count());
+    assert_eq!(stepped.content_bounds(), whole.content_bounds());
+    assert_eq!(stepped.to_interleaved(whole.content_bounds()), whole.to_interleaved(whole.content_bounds()));
+}
+
+#[test]
 fn interleaved_roundtrip_crossing_tiles() {
     let r = Rect::new(-20, 250, 280, 262);
     let bpp = PixelFormat::RGBA16.bytes_per_pixel();

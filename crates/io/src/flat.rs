@@ -6,7 +6,7 @@ use photocraft_codecs::{self as codecs, ChannelLayout, Format, Image, SampleType
 use photocraft_color::{BlendMode, ColorMode, PixelFormat, SampleType};
 use photocraft_doc::{AlphaChannel, Document, Layer, LayerContent};
 use photocraft_geom::{Rect, Size, TILE_SIZE};
-use photocraft_raster::{AllocationError, Interrupt, RowWriteError, Surface};
+use photocraft_raster::{AllocationError, Interrupt, PruneCursor, RowWriteError, Surface};
 
 use crate::renderer::{BandRenderer, RenderError};
 use crate::{ExportOptions, ExportResult, ImportResult, IoError, TgaBits, XmpEmbed};
@@ -126,6 +126,140 @@ fn import_flat_impl_with_options(
             (image_to_document_with(name, &img, ctl)?, Some(img))
         }
     };
+    apply_flat_format(&mut r, bytes, format, img.as_ref())?;
+    Ok(r)
+}
+
+/// An image becoming a document's surface a bounded band of rows and a bounded batch of empty
+/// tiles at a time, so a caller that must not block (the web build has no threads) can step it.
+/// [`FlatBuilder::finish`] runs whatever is left, so it also gives the one-shot result.
+pub(crate) struct FlatBuilder {
+    name: String,
+    img: Image,
+    mode: ColorMode,
+    depth: SampleType,
+    convert: RowConverter,
+    surface: Surface,
+    warnings: Vec<String>,
+    /// Rows copied into `surface` so far.
+    rows: u32,
+    /// Rows per [`FlatBuilder::copy_step`].
+    band: u32,
+    /// Whether the tiles are scanned for empty ones: only a source with alpha has any.
+    scans: bool,
+    prune: Option<PruneCursor>,
+}
+
+/// Bytes a copy step converts at most; a step is a band of whole rows, so it is never split.
+const COPY_BAND_BYTES: usize = 4 << 20;
+/// Rows a copy step writes at most (a narrow image would otherwise copy the whole one in one step).
+const COPY_BAND_ROWS: u32 = 256;
+/// Tiles a prune step visits at most.
+const PRUNE_BATCH: usize = 256;
+
+impl FlatBuilder {
+    /// Sets up the surface `img` becomes, without copying a pixel yet. Refuses an image whose
+    /// tiles the machine can't hold beside it, as [`image_to_document`] does.
+    pub(crate) fn new(name: &str, img: Image) -> Result<Self, IoError> {
+        let (w, h) = img.dimensions();
+        let (mode, target_layout, depth, csample) = flat_target(img.layout(), img.sample_type());
+        check_layer_fits(w, h, target_layout, csample, crate::memory::available())?;
+        let convert = RowConverter::new((img.layout(), img.sample_type()), (target_layout, csample));
+        let row = (w as usize).saturating_mul(convert.src_px).max(1);
+        let band = (COPY_BAND_BYTES / row).clamp(1, COPY_BAND_ROWS as usize) as u32;
+        Ok(Self {
+            name: name.to_string(),
+            warnings: flat_warnings(&img),
+            surface: Surface::new(surface_format(target_layout, csample)),
+            scans: img.layout().has_alpha(),
+            convert,
+            mode,
+            depth,
+            rows: 0,
+            band: band.min(h.max(1)),
+            prune: None,
+            img,
+        })
+    }
+
+    /// True once every row is in the surface.
+    pub(crate) fn copy_done(&self) -> bool {
+        self.rows >= self.img.dimensions().1
+    }
+
+    /// Copies one bounded band of rows into the tiles, converted as [`image_to_document`] does.
+    pub(crate) fn copy_step(&mut self) -> Result<(), IoError> {
+        if self.copy_done() {
+            return Ok(());
+        }
+        let (w, h) = self.img.dimensions();
+        let y1 = self.rows.saturating_add(self.band).min(h);
+        let row = (w as usize).checked_mul(self.convert.src_px).filter(|&b| b > 0).ok_or_else(|| IoError::Unsupported("image too large".into()))?;
+        let at = (self.rows as usize).saturating_mul(row);
+        let end = (y1 as usize).saturating_mul(row);
+        let data = self.img.data().get(at..end).ok_or_else(|| IoError::Unsupported("the decoded image is shorter than its size".into()))?;
+        let to_i32 = |v: u32| i32::try_from(v).map_err(|_| IoError::Unsupported("image too large".into()));
+        let rect = Rect::new(0, to_i32(self.rows)?, to_i32(w)?, to_i32(y1)?);
+        let convert = &self.convert;
+        let failed = std::sync::atomic::AtomicBool::new(false);
+        self.surface
+            .try_write_rows_with_interrupt(rect, &Interrupt::NONE, |y, x0, dst| {
+                if !convert.fill(data, w as usize, y - rect.y0, x0, dst) {
+                    failed.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+            })
+            .map_err(|e| match e {
+                RowWriteError::Cancelled(_) => IoError::Cancelled,
+                RowWriteError::Allocation(ae) => alloc_error(ae, w, h),
+            })?;
+        if failed.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(IoError::Unsupported("the decoded image does not match its size".into()));
+        }
+        self.rows = y1;
+        Ok(())
+    }
+
+    /// True once every tile has been through the prune scan (at once for a source without alpha).
+    pub(crate) fn prune_done(&self) -> bool {
+        !self.scans || self.prune.as_ref().is_some_and(|c| c.is_done())
+    }
+
+    /// Drops one bounded batch of tiles that are entirely the default pixel; true when done.
+    pub(crate) fn prune_step(&mut self) -> bool {
+        if !self.scans {
+            return true;
+        }
+        if self.prune.is_none() {
+            self.prune = Some(self.surface.prune_cursor());
+        }
+        let Some(cursor) = self.prune.as_mut() else { return true };
+        self.surface.prune_batch(cursor, PRUNE_BATCH)
+    }
+
+    /// The document, after copying and pruning whatever is left: the one-shot result and the last
+    /// step of a stepped one.
+    pub(crate) fn finish(mut self, bytes: &[u8], format: Option<Format>) -> Result<ImportResult, IoError> {
+        let copied = self.copy_done();
+        while !self.copy_done() {
+            self.copy_step()?;
+        }
+        if !copied {
+            // Any scan before the last rows missed the tiles they added: scan them all again.
+            self.prune = None;
+        }
+        while !self.prune_step() {}
+        let Self { name, img, mode, depth, surface, warnings, .. } = self;
+        let (w, h) = img.dimensions();
+        let mut r = flat_document(&name, (w, h, img.layout(), mode, depth), surface, img.icc.clone(), &img.meta, warnings, Some(&img))?;
+        apply_flat_format(&mut r, bytes, format, Some(&img))?;
+        Ok(r)
+    }
+}
+
+/// What every flat format does to the document of its pixels: the palette mode, the save
+/// settings, a Targa's alpha channel and the profile an untagged image needs. `img` is the
+/// decoded image, when the document was built from one (a streamed PNG has none).
+fn apply_flat_format(r: &mut ImportResult, bytes: &[u8], format: Option<Format>, img: Option<&Image>) -> Result<(), IoError> {
     // A palette BMP, PNG or GIF opens in Indexed Color mode with its colour table, as in
     // Photoshop (#3802, #4804, #7886). A GIF is always palette-based: the first frame's table.
     let palette = match format {
@@ -141,7 +275,7 @@ fn import_flat_impl_with_options(
         r.document.color_table = Some(photocraft_doc::ColorTable { colors, transparent });
     }
     r.document.file_encoding = file_encoding_as(format, bytes);
-    if format == Some(Format::Tga) && img.as_ref().is_some_and(|i| i.layout() == ChannelLayout::Rgba) {
+    if format == Some(Format::Tga) && img.is_some_and(|i| i.layout() == ChannelLayout::Rgba) {
         tga_alpha_to_channel(&mut r.document)?;
     }
     // OpenEXR and Radiance HDR hold linear, scene-referred values (Rec. 709 primaries unless
@@ -157,15 +291,15 @@ fn import_flat_impl_with_options(
     }
     if d.icc_profile.is_none() && d.mode == ColorMode::Rgb {
         // Only an image the whole-image path decoded can carry a CICP description (a PNG never does).
-        d.icc_profile = img.as_ref().and_then(cicp_profile);
+        d.icc_profile = img.and_then(cicp_profile);
         if d.icc_profile.is_none()
-            && let Some((profile, warning)) = img.as_ref().and_then(hdr_fallback)
+            && let Some((profile, warning)) = img.and_then(hdr_fallback)
         {
             d.icc_profile = Some(profile);
             r.warnings.push(warning);
         }
     }
-    Ok(r)
+    Ok(())
 }
 
 /// A PQ or HLG image, which the decoder turned into linear light, on primaries
@@ -650,20 +784,31 @@ fn image_to_document_with(name: &str, img: &Image, ctl: &Interrupt) -> Result<Im
 /// [`image_to_document_with`], with the memory the machine can still use given (see
 /// [`crate::memory::available`]): `None` when it isn't known.
 fn image_to_document_with_memory(name: &str, img: &Image, ctl: &Interrupt, available: Option<u64>) -> Result<ImportResult, IoError> {
-    // What the decoder noticed (frames or pages left out, data ending early) comes first.
-    let mut warnings: Vec<String> = img.warnings.iter().map(ToString::to_string).collect();
+    let warnings = flat_warnings(img);
     let (mode, target_layout, depth, csample) = flat_target(img.layout(), img.sample_type());
-    if img.sample_type() == CSample::F16 {
-        warnings.push("16-bit float samples are stored as 32-bit float".to_string());
-    }
     let (w, h) = img.dimensions();
     ctl.check().map_err(|_| IoError::Cancelled)?;
     // The decoded pixels are already here: check the tiles built beside them before they exist.
     check_layer_fits(w, h, target_layout, csample, available)?;
-    let s = image_surface_with(img, target_layout, csample, ctl)?;
+    let mut s = image_surface_with(img, target_layout, csample, ctl)?;
+    // Tiles that are entirely the default pixel (zero, so transparent) can only come from a
+    // source with alpha: an opaque one writes the maximum into every alpha sample.
+    if img.layout().has_alpha() {
+        s.prune();
+    }
     ctl.check().map_err(|_| IoError::Cancelled)?;
     ctl.progress(0.95);
     flat_document(name, (w, h, img.layout(), mode, depth), s, img.icc.clone(), &img.meta, warnings, Some(img))
+}
+
+/// What the decoder noticed (frames or pages left out, data ending early) and the conversion
+/// will add, for the document of `img`.
+fn flat_warnings(img: &Image) -> Vec<String> {
+    let mut warnings: Vec<String> = img.warnings.iter().map(ToString::to_string).collect();
+    if img.sample_type() == CSample::F16 {
+        warnings.push("16-bit float samples are stored as 32-bit float".to_string());
+    }
+    warnings
 }
 
 /// The document colour mode, the layout and sample type of its surface, and its depth, for a
@@ -689,7 +834,7 @@ fn flat_target(layout: ChannelLayout, sample: CSample) -> (ColorMode, ChannelLay
 fn flat_document(
     name: &str,
     shape: (u32, u32, ChannelLayout, ColorMode, SampleType),
-    mut s: Surface,
+    s: Surface,
     icc: Option<Vec<u8>>,
     meta: &codecs::Metadata,
     mut warnings: Vec<String>,
@@ -697,11 +842,6 @@ fn flat_document(
 ) -> Result<ImportResult, IoError> {
     let (w, h, layout, mode, depth) = shape;
     let mut doc = Document::new(name, Size::new(w, h), mode, depth);
-    // Tiles that are entirely the default pixel (zero, so transparent) can only come from a
-    // source with alpha: an opaque one writes the maximum into every alpha sample.
-    if layout.has_alpha() {
-        s.prune();
-    }
     // As in Photoshop: an opaque image opens as the locked Background layer, one with
     // transparency (an alpha channel, or a tRNS chunk the decoder expands to one) as a normal
     // layer named "Layer 0", since a Background can't hold transparency.
@@ -830,12 +970,15 @@ fn import_png_streamed_with(
         return Ok(None);
     };
     ctl.check().map_err(|_| IoError::Cancelled)?;
-    let Some(Stream { surface, header, .. }) = state.into_inner() else { return Ok(None) };
+    let Some(Stream { mut surface, header, .. }) = state.into_inner() else { return Ok(None) };
     if extras.orientation != 1 {
         return Ok(None);
     }
     ctl.progress(0.95);
     let (mode, _, depth, _) = flat_target(header.layout, header.sample);
+    if header.layout.has_alpha() {
+        surface.prune();
+    }
     let warnings = extras.warnings.iter().map(ToString::to_string).collect();
     flat_document(name, (header.width, header.height, header.layout, mode, depth), surface, extras.icc, &extras.meta, warnings, None).map(Some)
 }
@@ -2537,6 +2680,40 @@ mod streamed_png_tests {
                 }
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod build_tests {
+    use super::*;
+
+    /// The stepped builder gives exactly what [`image_to_document`] gives, for every layout, over
+    /// a surface of several tiles.
+    #[test]
+    fn a_stepped_build_equals_image_to_document() {
+        for (layout, sample) in
+            [(ChannelLayout::Gray, CSample::U8), (ChannelLayout::GrayA, CSample::U16), (ChannelLayout::Rgb, CSample::U8), (ChannelLayout::Rgba, CSample::U16)]
+        {
+            let len = 300 * 260 * layout.channels() * sample.bytes();
+            let data: Vec<u8> = (0..len).map(|i| (i.wrapping_mul(2_654_435_761) >> 11) as u8).collect();
+            let mut img = Image::from_raw(300, 260, layout, sample, data).unwrap();
+            img.meta.dpi = Some((300.0, 300.0));
+            img.meta.text.push(("Comment".into(), "kept".into()));
+            let expected = image_to_document("a.png", &img).unwrap();
+            let mut build = FlatBuilder::new("a.png", img).unwrap();
+            while !build.copy_done() {
+                build.copy_step().unwrap();
+            }
+            while !build.prune_step() {}
+            let got = build.finish(&[], None).unwrap();
+            let (mut a, mut b) = (expected.document, got.document);
+            b.id = a.id;
+            for (x, y) in a.layers.iter_mut().zip(&mut b.layers) {
+                y.id = x.id;
+            }
+            assert!(a == b, "{layout:?} {sample:?}: the stepped build differs");
+            assert_eq!(expected.warnings, got.warnings, "{layout:?} {sample:?}");
+        }
     }
 }
 
