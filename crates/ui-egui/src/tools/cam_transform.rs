@@ -107,7 +107,7 @@ fn begin_box(app: &mut PhotocraftApp, offset: [i32; 2], patch: Option<PatchTarge
     } else {
         crate::i18n::fmt(tl!("Scale or rotate the moved area, then press {key}"), &[("key", &crate::shortcuts::pretty("Enter"))])
     };
-    app.ui.cam_transform = Some(CamTransform { document, revision, patch, offset, frame, gesture: None });
+    app.ui.cam_transform = Some(CamTransform { document, revision, patch, offset, frame, gesture: None, outside_drag: false });
     app.ui.status_error = false;
     true
 }
@@ -241,19 +241,23 @@ pub(crate) fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -
                 h = Hit::Pivot;
             }
             t.gesture = Some(Gesture { hit: h, start: p, quad0: t.frame.quad, pivot0: t.frame.pivot });
+            t.outside_drag = false;
         }
         ToolEvent::Move { x, y, .. } | ToolEvent::Up { x, y } => {
             if let Some(g) = t.gesture
                 && [x, y].iter().all(|v| v.is_finite() && v.abs() <= 1e7)
             {
                 // Outside the box a click applies the patch, while a drag rotates it.
-                if t.patch.is_some() && g.hit == Hit::Outside && t.frame.quad == g.quad0 && (x - g.start[0]).hypot(y - g.start[1]) * zoom < 3.0 {
-                    if matches!(ev, ToolEvent::Up { .. }) {
-                        t.gesture = None;
-                        app.patch_hover = Some([x, y]);
-                        commit(app);
+                if t.patch.is_some() && g.hit == Hit::Outside {
+                    t.outside_drag |= (x - g.start[0]).hypot(y - g.start[1]) * zoom >= 3.0;
+                    if !t.outside_drag {
+                        if matches!(ev, ToolEvent::Up { .. }) {
+                            t.gesture = None;
+                            app.patch_hover = Some([x, y]);
+                            commit(app);
+                        }
+                        return true;
                     }
-                    return true;
                 }
                 let before = (t.frame.quad, t.frame.pivot);
                 // Move, scale and rotate only: ⌘ would skew or distort, which the blend can't take.

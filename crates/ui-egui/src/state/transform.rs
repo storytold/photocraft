@@ -190,6 +190,8 @@ pub struct CamTransform {
     pub frame: TransformSession,
     #[serde(skip)]
     pub(crate) gesture: Option<crate::transform_tool::Gesture>,
+    #[serde(skip)]
+    pub(crate) outside_drag: bool,
 }
 
 /// View-menu overlays.

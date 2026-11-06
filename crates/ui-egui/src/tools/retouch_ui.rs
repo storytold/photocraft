@@ -346,10 +346,23 @@ pub(crate) fn patch_bounds(app: &mut PhotocraftApp) -> Option<photocraft_geom::R
 pub(crate) fn affinity_offset(app: &mut PhotocraftApp, at: [f64; 2]) -> Option<[i32; 2]> {
     let b = patch_bounds(app)?;
     let center = [(f64::from(b.x0) + f64::from(b.x1)) / 2.0, (f64::from(b.y0) + f64::from(b.y1)) / 2.0];
+    let offset = rounded_patch_offset(center, at);
     if app.ui.tool_options.patch_mode == "destination" {
-        return Some(rounded_patch_offset(center, at));
+        return Some(offset);
     }
-    Some(patch_offset(app, center, at))
+    let canvas = app.session.active()?.doc.bounds();
+    let bounds = [b.x0, b.y0, b.x1, b.y1].map(f64::from);
+    let quad = crate::cam_transform::patch_placement(app, [0, 0]).quad(bounds);
+    // Match the engine's outward rounding, tolerating numerical noise at integer edges.
+    let mins = [canvas.x0, canvas.y0];
+    let maxs = [canvas.x1, canvas.y1];
+    Some(std::array::from_fn(|axis| {
+        let min = quad.iter().map(|p| p[axis]).fold(f64::INFINITY, f64::min);
+        let max = quad.iter().map(|p| p[axis]).fold(f64::NEG_INFINITY, f64::max);
+        let lo = mins[axis] - (min + 1e-6).floor() as i32;
+        let hi = maxs[axis] - (max - 1e-6).ceil() as i32;
+        if lo <= hi { offset[axis].clamp(lo, hi) } else { offset[axis] }
+    }))
 }
 
 fn rounded_patch_offset(start: [f64; 2], end: [f64; 2]) -> [i32; 2] {

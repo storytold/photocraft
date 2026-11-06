@@ -580,6 +580,12 @@ mod tests {
         assert!(red_at(&wait_for_preview(&mut app), 88, 38));
 
         drag(&mut app, [88.0, 38.0], [96.0, 38.0]);
+        tool_event(&mut app, ToolEvent::Down { x: 123.0, y: 63.0, pressure: 1.0 }, m);
+        tool_event(&mut app, ToolEvent::Move { x: 71.0, y: 65.0, pressure: 1.0 }, m);
+        tool_event(&mut app, ToolEvent::Move { x: 123.0, y: 63.0, pressure: 1.0 }, m);
+        tool_event(&mut app, ToolEvent::Up { x: 123.0, y: 63.0 }, m);
+        assert!(crate::cam_transform::active(&app), "a rotation drag back to its start does not apply the patch");
+        assert_eq!(app.session.documents()[0].history.past_len(), steps);
         drag(&mut app, [123.0, 63.0], [71.0, 65.0]);
         let place = crate::cam_transform::placement(app.ui.cam_transform.as_ref().unwrap()).unwrap();
         assert_eq!(place.offset, [68, 0]);
@@ -607,6 +613,19 @@ mod tests {
         assert_eq!(app.session.documents()[0].history.past_len(), steps + 2);
         app.run("edit.undo", json!({})).unwrap();
         assert!(doc(&app).selection.is_some() && red_at(&doc(&app), 96, 34) && !red_at(&doc(&app), 62, 65));
+    }
+
+    #[test]
+    fn affinity_source_clamps_the_transformed_sample_at_the_canvas_edge() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 144, "height": 96})).unwrap();
+        app.run("select.rect", json!({"x": 12, "y": 22, "width": 40, "height": 20})).unwrap();
+        app.ui.tool_options.patch_mode = "source".into();
+        app.ui.tool_options.patch_scale = [50.0; 2];
+        app.ui.tool_options.patch_rotation = 90.0;
+
+        assert_eq!(crate::retouch_ui::affinity_offset(&mut app, [7.0, 32.0]), Some([-25, 0]));
+        assert_eq!(crate::retouch_ui::affinity_offset(&mut app, [0.0, 32.0]), Some([-27, 0]));
     }
 
     #[test]

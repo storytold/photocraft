@@ -1159,6 +1159,25 @@ fn transformed_patch_rotates_the_texture_in_both_directions() {
     }
 }
 
+#[test]
+fn transformed_patch_requires_opt_in_to_clip_the_destination() {
+    let mut s = session(112, 64, 16, "rgb");
+    paint_layer(&mut s, |x, y| if (15..33).contains(&x) && (30..34).contains(&y) { [1.0, 0.0, 0.0, 1.0] } else { [1.0; 4] });
+    s.execute("select.rect", json!({"x": 8, "y": 16, "width": 32, "height": 32})).unwrap();
+    let mut params = json!({"offset": [72, 0], "mode": "destination", "rotate": 90, "scaleY": 125});
+    let steps = s.active().unwrap().history.past_len();
+    assert!(s.execute("paint.patch", params.clone()).is_err());
+    params["clipDestination"] = json!(false);
+    assert!(patch_preview(&s, &params, u64::MAX, 1).is_err());
+    assert_eq!(s.active().unwrap().history.past_len(), steps);
+
+    params["clipDestination"] = json!(true);
+    let (_, damage) = patch_preview(&s, &params, u64::MAX, 1).unwrap();
+    assert_eq!(damage.x1, 112);
+    s.execute("paint.patch", params).unwrap();
+    assert_eq!(s.active().unwrap().history.past_len(), steps + 1);
+}
+
 // ---------------------------------------------------------------------------------------------
 // Content-Aware Move
 // ---------------------------------------------------------------------------------------------

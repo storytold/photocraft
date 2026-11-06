@@ -190,12 +190,18 @@ fn plan_for(doc: &Document, id: Option<LayerId>, p: &Value) -> Result<Plan> {
         return Err(bad(CMD, "drag the selection to the area to sample from"));
     }
     // A destination patch can be cropped at the canvas edge. Its sample stays on the canvas.
-    if transform.is_none() && !canvas.contains_rect(&area.translate(dx, dy)) {
+    let boxed = transform.as_ref().map_or_else(|| area.translate(dx, dy), |map| mapped_bounds(map, area));
+    if !canvas.contains_rect(&boxed) {
         let clip = mode == PatchMode::Destination && flag(p, "clipDestination", false) && !flag(p, "contentAware", false);
         if !clip {
-            return Err(bad(CMD, "the dragged patch must stay inside the canvas"));
+            let message = if transform.is_some() && mode == PatchMode::Source {
+                "the sample must stay inside the canvas"
+            } else {
+                "the dragged patch must stay inside the canvas"
+            };
+            return Err(bad(CMD, message));
         }
-        if canvas.intersect(&area.translate(dx, dy)).is_empty() {
+        if canvas.intersect(&boxed).is_empty() {
             return Err(bad(CMD, "the patch must overlap the canvas"));
         }
     }
@@ -237,14 +243,8 @@ fn patch_surface(surf: &mut Surface, sel: &Surface, plan: &Plan, lock: bool, ste
 fn transformed_patch(surf: &mut Surface, sel: &Surface, plan: &Plan, map: &Homography, lock: bool, step: usize) -> Result<Rect> {
     let Plan { canvas, area, destination, .. } = *plan;
     let boxed = mapped_bounds(map, area);
-    let (dst_area, sample_map) = if destination {
-        (boxed.intersect(&canvas), map.inverse().ok_or_else(|| bad(CMD, "the transform collapses the selection"))?)
-    } else {
-        if !canvas.contains_rect(&boxed) {
-            return Err(bad(CMD, "the sample must stay inside the canvas"));
-        }
-        (area, *map)
-    };
+    let (dst_area, sample_map) =
+        if destination { (boxed.intersect(&canvas), map.inverse().ok_or_else(|| bad(CMD, "the transform collapses the selection"))?) } else { (area, *map) };
     let g = dst_area.inflate(2).intersect(&canvas);
     let samples = mapped_bounds(&sample_map, g).inflate(1).intersect(&canvas);
     if dst_area.is_empty() || samples.is_empty() {
