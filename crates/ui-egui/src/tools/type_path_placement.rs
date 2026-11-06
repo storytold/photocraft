@@ -458,12 +458,26 @@ mod tests {
         app.sync_views();
         app.ui.tool = tool;
         app.run("path.set", json!({"name":"work", "path":{"subpaths":[{"closed":false,"knots":[[20,100],[180,100]]}]}})).unwrap();
+        app.ui.selected_path = Some("work".into());
         app.run("type.create", json!({"text":"ABC", "x":20, "y":100})).unwrap();
         app.run("type.attachToPath", json!({"start":20})).unwrap();
         app.run("type.setPathPlacement", json!({"end":100})).unwrap();
-        app.ui.selected_path = None;
         app.ui.views[0].zoom = 1.0;
         app
+    }
+
+    #[test]
+    fn attaching_type_selects_its_path_and_preserves_the_source() {
+        let mut app = app(Tool::PathSelection);
+        assert_eq!(app.ui.selected_path.as_deref(), Some("layer"));
+        assert!(active_text(&app).is_some());
+        let source = app.session.active().unwrap().doc.work_path.clone();
+        app.ui.selected_path = Some("work".into());
+        assert!(active_text(&app).is_none());
+        app.run("type.attachToPath", json!({"start":20})).unwrap();
+        assert_eq!(app.ui.selected_path.as_deref(), Some("layer"));
+        assert!(active_text(&app).is_some());
+        assert_eq!(app.session.active().unwrap().doc.work_path, source);
     }
 
     fn shape(app: &PhotocraftApp) -> TextShape {

@@ -209,6 +209,20 @@ impl PhotocraftApp {
         self.tool_override.unwrap_or(self.ui.tool)
     }
 
+    fn select_attached_type_path(&mut self, command: &str, result: &Result<Value, String>) {
+        if command != "type.attachToPath" {
+            return;
+        }
+        let attached = result.as_ref().ok().and_then(|value| value.get("layer")).and_then(Value::as_u64);
+        let active = self.session.active().and_then(|state| state.active_layer).map(|layer| layer.0);
+        if attached.is_some() && attached == active {
+            // New path text becomes the editable target; its source work path stays intact.
+            self.ui.selected_path = Some("layer".into());
+            self.ui.vector_mask_target = false;
+            self.ui.mask_target = false;
+        }
+    }
+
     fn sync_command_side_effects(
         &mut self,
         id: &str,
@@ -269,6 +283,7 @@ impl PhotocraftApp {
         {
             self.ui.view.extras = true;
         }
+        self.select_attached_type_path(id, result);
         if result.is_ok() && id == "select.toWorkPath" {
             // Make Work Path selects the new work path in the Paths panel, as in Photoshop.
             self.ui.selected_path = Some("work".into());
