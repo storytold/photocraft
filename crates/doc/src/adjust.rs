@@ -92,6 +92,54 @@ pub fn lut3d_len(size: u32) -> Option<usize> {
     usize::try_from(size).ok()?.checked_pow(3)?.checked_mul(3)
 }
 
+/// The default Color Lookup input domain's lower end (`.cube` `DOMAIN_MIN 0 0 0`).
+pub const LUT_DOMAIN_MIN: [f32; 3] = [0.0; 3];
+/// The default Color Lookup input domain's upper end (`.cube` `DOMAIN_MAX 1 1 1`).
+pub const LUT_DOMAIN_MAX: [f32; 3] = [1.0; 3];
+
+fn default_lut_domain_min() -> [f32; 3] {
+    LUT_DOMAIN_MIN
+}
+
+fn default_lut_domain_max() -> [f32; 3] {
+    LUT_DOMAIN_MAX
+}
+
+fn is_default_lut_domain_min(v: &[f32; 3]) -> bool {
+    *v == LUT_DOMAIN_MIN
+}
+
+fn is_default_lut_domain_max(v: &[f32; 3]) -> bool {
+    *v == LUT_DOMAIN_MAX
+}
+
+/// How every Color Lookup evaluator (CPU compositor, GPU kernel) maps an input colour onto the
+/// table: per channel `(min, 1 / (max - min))`, so a channel value `c` samples the table at
+/// `(c - min) · inv`, then clamps to 0..1. A stored domain is untrusted: a channel whose span
+/// isn't a finite positive number (or whose reciprocal overflows) falls back to the plain 0..1
+/// domain rather than dividing by zero. The default domain gives `([0; 3], [1; 3])` exactly, so
+/// default-domain lookups sample exactly as before domains were carried through.
+pub fn lut_domain_scale(min: [f32; 3], max: [f32; 3]) -> ([f32; 3], [f32; 3]) {
+    let (lo, hi) = lut_domain_effective(min, max);
+    (lo, std::array::from_fn(|k| 1.0 / (hi[k] - lo[k])))
+}
+
+/// The domain the evaluators actually apply (see [`lut_domain_scale`]): each channel as stored
+/// when its span is a finite positive number with a finite reciprocal, otherwise plain 0..1.
+/// What a save writes, so a file always re-reads as what was rendered.
+pub fn lut_domain_effective(min: [f32; 3], max: [f32; 3]) -> ([f32; 3], [f32; 3]) {
+    let mut lo = LUT_DOMAIN_MIN;
+    let mut hi = LUT_DOMAIN_MAX;
+    for k in 0..3 {
+        let span = max[k] - min[k];
+        if min[k].is_finite() && max[k].is_finite() && span.is_finite() && span > 0.0 && (1.0 / span).is_finite() {
+            lo[k] = min[k];
+            hi[k] = max[k];
+        }
+    }
+    (lo, hi)
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LevelsChannel {
     pub in_black: f32,
@@ -283,6 +331,14 @@ pub enum Adjustment {
         /// it no longer parses to `lut`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         source: Option<LutSource>,
+        /// The table's input domain (`.cube` `DOMAIN_MIN`/`DOMAIN_MAX`, `LUT_3D_INPUT_RANGE`):
+        /// a channel value `c` samples the table at `(c - min) / (max - min)`, clamped to 0..1
+        /// (see [`lut_domain_scale`]). `[0; 3]`..`[1; 3]` (the default, and what documents
+        /// written before domains were carried through load as) is plain 0..1 sampling.
+        #[serde(default = "default_lut_domain_min", skip_serializing_if = "is_default_lut_domain_min")]
+        domain_min: [f32; 3],
+        #[serde(default = "default_lut_domain_max", skip_serializing_if = "is_default_lut_domain_max")]
+        domain_max: [f32; 3],
     },
     Invert,
     Posterize {
@@ -380,6 +436,41 @@ mod tests {
         assert!(matches!(c, Adjustment::Curves { space: ToneSpace::Rgb, pencil: false, .. }));
         let g: Adjustment = serde_json::from_str(r#"{"GradientMap":{"stops":[],"reverse":true}}"#).unwrap();
         assert!(matches!(g, Adjustment::GradientMap { dither: false, .. }));
+        let l: Adjustment = serde_json::from_str(r#"{"ColorLookup":{"name":"x","lut":null,"size":0}}"#).unwrap();
+        assert!(matches!(l, Adjustment::ColorLookup { domain_min, domain_max, .. } if domain_min == LUT_DOMAIN_MIN && domain_max == LUT_DOMAIN_MAX));
+    }
+
+    #[test]
+    fn color_lookup_domain_round_trips_and_default_is_not_written() {
+        let mk = |domain_min, domain_max| Adjustment::ColorLookup {
+            name: "x".into(),
+            lut: None,
+            size: 0,
+            tetrahedral: false,
+            dither: false,
+            source: None,
+            domain_min,
+            domain_max,
+        };
+        let custom = mk([0.25, 0.1, 0.0], [0.75, 0.9, 2.0]);
+        let back: Adjustment = serde_json::from_str(&serde_json::to_string(&custom).unwrap()).unwrap();
+        assert_eq!(back, custom);
+        let json = serde_json::to_string(&mk(LUT_DOMAIN_MIN, LUT_DOMAIN_MAX)).unwrap();
+        assert!(!json.contains("domain"), "{json}");
+    }
+
+    #[test]
+    fn lut_domain_scale_normalises_and_guards_degenerate_domains() {
+        assert_eq!(lut_domain_scale(LUT_DOMAIN_MIN, LUT_DOMAIN_MAX), ([0.0; 3], [1.0; 3]));
+        assert_eq!(lut_domain_scale([0.25; 3], [0.75; 3]), ([0.25; 3], [2.0; 3]));
+        // Empty, NaN and infinite spans fall back per channel to 0..1.
+        assert_eq!(lut_domain_scale([0.5, f32::NAN, 0.0], [0.5, 1.0, f32::INFINITY]), ([0.0; 3], [1.0; 3]));
+        // Inverted spans and spans whose reciprocal overflows do too.
+        assert_eq!(lut_domain_scale([0.9, 0.0, 0.0], [0.1, f32::MIN_POSITIVE / 16.0, 1.0]), ([0.0; 3], [1.0; 3]));
+        // Channels are independent.
+        assert_eq!(lut_domain_scale([-1.0, 0.0, 0.0], [1.0, 1.0, 1.0]), ([-1.0, 0.0, 0.0], [0.5, 1.0, 1.0]));
+        // What a save writes is the domain the evaluators apply.
+        assert_eq!(lut_domain_effective([0.25, f32::NAN, 0.9], [0.75, 1.0, 0.1]), ([0.25, 0.0, 0.0], [0.75, 1.0, 1.0]));
     }
 
     #[test]

@@ -189,6 +189,32 @@ fn embedded_three_dl_retains_its_nonlinear_shaper_through_action_playback() {
     assert_eq!(atn::parse(&out).unwrap().actions[0].items[0].descriptor, Some(bad));
 }
 
+/// #11620: a recorded CUBE with a declared input domain replays natively with that domain (it
+/// used to stay a preserved Photoshop step) and still exports the exact descriptor.
+#[test]
+fn recorded_cube_input_domain_replays_natively() {
+    let cube = b"DOMAIN_MIN 0.25 0.25 0.25\nDOMAIN_MAX 0.75 0.75 0.75\nLUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n";
+    let d = descriptor("LUTFormatCUBE", cube);
+    let imported = atn_cmds::import(&encoded(d.clone())).unwrap();
+    assert!(imported.unsupported.is_empty());
+    assert_eq!(imported.actions[0].steps[0].0, "image.adjustments.colorLookup");
+    let (out, skipped) = atn_cmds::export("Lookup", &[&imported.actions[0]], &[], false).unwrap();
+    assert!(skipped.is_empty());
+    assert_eq!(atn::parse(&out).unwrap().actions[0].items[0].descriptor, Some(d));
+    for depth in [8, 16, 32] {
+        let mut s = fixture(depth);
+        let original = pixels(&s);
+        s.actions.list = imported.actions.clone();
+        assert_eq!(s.execute("actions.play", json!({"action":"Lookup"})).unwrap()["ran"], 1);
+        for (got, old) in pixels(&s).iter().zip(&original) {
+            for c in 0..3 {
+                let expected = ((old[c] - 0.25) * 2.0).clamp(0.0, 1.0);
+                assert!((got[c] - expected).abs() < 2.0 / 255.0, "{depth}-bit channel {c}: {got:?} from {old:?}");
+            }
+        }
+    }
+}
+
 /// Unsupported recording fields and native edits must not silently become partial lookup steps.
 #[test]
 fn unknown_lookup_forms_stay_whole_and_changed_native_steps_refuse_export() {

@@ -108,11 +108,17 @@ pub fn selective_from_params(p: &Value, base: Option<&Adjustment>) -> Result<Adj
 /// error.
 pub fn lookup_from_params(p: &Value, base: Option<&Adjustment>) -> Result<Adjustment> {
     const CMD: &str = "colorLookup";
+    use photocraft_doc::adjust::{LUT_DOMAIN_MAX, LUT_DOMAIN_MIN};
     let (mut name, mut lut, mut size, mut tetrahedral, mut dither, mut source) = match base {
-        Some(Adjustment::ColorLookup { name, lut, size, tetrahedral, dither, source }) => {
+        Some(Adjustment::ColorLookup { name, lut, size, tetrahedral, dither, source, .. }) => {
             (name.clone(), lut.clone(), *size, *tetrahedral, *dither, source.clone())
         }
         _ => (String::new(), None, 0, false, false, None),
+    };
+    // The input domain belongs to the table: it changes only when the table does.
+    let (mut domain_min, mut domain_max) = match base {
+        Some(Adjustment::ColorLookup { domain_min, domain_max, .. }) => (*domain_min, *domain_max),
+        _ => (LUT_DOMAIN_MIN, LUT_DOMAIN_MAX),
     };
     let encoding = opt_str(CMD, p, "dataEncoding")?.unwrap_or("text");
     if !matches!(encoding, "text" | "base64") {
@@ -133,6 +139,7 @@ pub fn lookup_from_params(p: &Value, base: Option<&Adjustment>) -> Result<Adjust
             lut = None;
             size = 0;
             source = None;
+            (domain_min, domain_max) = (LUT_DOMAIN_MIN, LUT_DOMAIN_MAX);
         } else {
             let f = photocraft_cms::lutfile::builtin(id).ok_or_else(|| bad(CMD, format!("unknown look `{id}` (built-ins: {})", builtin_ids())))?;
             let label = f.title.clone();
@@ -158,17 +165,12 @@ pub fn lookup_from_params(p: &Value, base: Option<&Adjustment>) -> Result<Adjust
         loaded = Some((f, base_name(path), Some(lut_source(format, bytes))));
     }
     if let Some((f, label, src)) = loaded {
-        if !f.domain_is_default() {
-            return Err(bad(
-                CMD,
-                format!(
-                    "`{}` declares DOMAIN_MIN {:?} / DOMAIN_MAX {:?}: Color Lookup applies the plain 0..1 domain, so the look would shift; honouring a custom domain is not supported yet",
-                    label, f.domain_min, f.domain_max
-                ),
-            ));
-        }
+        // A declared input domain (`.cube` DOMAIN_MIN/DOMAIN_MAX) travels with the table: the
+        // compositor and the GPU sample at (c - min) / (max - min).
         name = label;
         size = f.size as u32;
+        domain_min = f.domain_min;
+        domain_max = f.domain_max;
         lut = Some(std::sync::Arc::new(f.data));
         source = src;
     }
@@ -184,7 +186,7 @@ pub fn lookup_from_params(p: &Value, base: Option<&Adjustment>) -> Result<Adjust
     if let Some(b) = opt_bool(CMD, p, "dither")? {
         dither = b;
     }
-    Ok(Adjustment::ColorLookup { name, lut, size, tetrahedral, dither, source })
+    Ok(Adjustment::ColorLookup { name, lut, size, tetrahedral, dither, source, domain_min, domain_max })
 }
 
 /// A loaded LUT file, tagged with the format [`photocraft_cms::lutfile::parse`] read it as.

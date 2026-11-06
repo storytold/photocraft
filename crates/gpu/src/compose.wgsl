@@ -778,7 +778,9 @@ fn adjust(c: vec3<f32>) -> vec3<f32> {
         }
         case 15: { return selective_color(c, p0.x > 0.5); }                       // Selective color
         case 16: {                                                             // Color lookup (3D LUT)
-            var o = color_lookup(c, i32(p0.x), p0.y > 0.5);
+            // p1.xyz / p2.xyz: the input domain's lower end and reciprocal span
+            // (compose::adjust::lut3d_sample_in; 0 and 1 for the default 0..1 domain).
+            var o = color_lookup((c - p1.xyz) * p2.xyz, i32(p0.x), p0.y > 0.5);
             if (p0.z > 0.5) { o = clamp(o + bayer4(adj_px) / 255.0, vec3(0.0), vec3(1.0)); }
             return o;
         }

@@ -24,7 +24,7 @@ use channels::{apply_lab, legacy_brightness_contrast, legacy_brightness_contrast
 use color::gradient;
 pub use color::{
     BalanceCurve, VIBRANCE_BOOST, VIBRANCE_GREY, bayer4, black_white_gray, color_balance_channel, colorize_saturation, hdr_saturation_factor, hsl_to_rgb,
-    hue_range_tables, hue_saturation, hue_saturation_in, lut3d_sample, photo_filter_matrix, range_lightness, rgb_to_hsl, selective_color,
+    hue_range_tables, hue_saturation, hue_saturation_in, lut3d_sample, lut3d_sample_in, photo_filter_matrix, range_lightness, rgb_to_hsl, selective_color,
     selective_color_weights, vibrance_lin, vibrance_px,
 };
 #[cfg(test)]
@@ -272,13 +272,16 @@ fn apply_depth_mode(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, dept
             map_rgb(buf, |c| std::array::from_fn(|ch| curves[ch].eval(c[ch])))
         }
         Adjustment::SelectiveColor { relative, adjustments } => map_rgb(buf, |c| selective_color(c, *relative, adjustments)),
-        Adjustment::ColorLookup { lut: Some(table), size, tetrahedral, dither, .. } if lut3d_len(*size).is_some_and(|len| table.len() >= len) => {
+        Adjustment::ColorLookup { lut: Some(table), size, tetrahedral, dither, domain_min, domain_max, .. }
+            if lut3d_len(*size).is_some_and(|len| table.len() >= len) =>
+        {
             let (n, w, x0, y0) = (*size as usize, buf.rect.width().max(1) as usize, buf.rect.x0, buf.rect.y0);
+            let (lo, inv) = photocraft_doc::adjust::lut_domain_scale(*domain_min, *domain_max);
             for (i, p) in buf.px.iter_mut().enumerate() {
                 if p[3] <= 0.0 {
                     continue;
                 }
-                let mut o = lut3d_sample(table, n, [p[0], p[1], p[2]], *tetrahedral);
+                let mut o = lut3d_sample_in(table, n, [p[0], p[1], p[2]], *tetrahedral, lo, inv);
                 if *dither {
                     let d = bayer4(x0 + (i % w) as i32, y0 + (i / w) as i32) / 255.0;
                     o = o.map(|v| (v + d).clamp(0.0, 1.0));
@@ -386,6 +389,70 @@ mod lookup_tests {
         w[6] = [0.0, 0.0, 50.0, 0.0];
         assert_eq!(selective_color([1.0; 3], true, &w), [1.0; 3]);
         assert!(selective_color([1.0; 3], false, &w)[2] < 0.6);
+    }
+
+    /// #11620: an identity table over the domain 0.25..0.75 maps 0.25 to 0, 0.5 to 0.5 and 0.75
+    /// to 1, saturating outside, on both interpolations.
+    #[test]
+    fn lookup_samples_over_its_input_domain() {
+        let t = identity(5);
+        let (lo, inv) = photocraft_doc::adjust::lut_domain_scale([0.25; 3], [0.75; 3]);
+        for tet in [false, true] {
+            for (v, want) in [(0.25, 0.0), (0.5, 0.5), (0.75, 1.0), (0.375, 0.25), (0.0, 0.0), (1.0, 1.0)] {
+                let o = lut3d_sample_in(&t, 5, [v; 3], tet, lo, inv);
+                for k in 0..3 {
+                    assert!((o[k] - want).abs() < 1e-5, "{v} {tet} {o:?}");
+                }
+            }
+            // Channels have their own domains.
+            let (lo, inv) = photocraft_doc::adjust::lut_domain_scale([0.0, 0.5, 0.0], [1.0, 1.0, 0.5]);
+            let o = lut3d_sample_in(&t, 5, [0.5, 0.75, 0.25], tet, lo, inv);
+            for k in 0..3 {
+                assert!((o[k] - 0.5).abs() < 1e-5, "{tet} {o:?}");
+            }
+            // The default domain samples exactly as before.
+            let (lo, inv) = photocraft_doc::adjust::lut_domain_scale([0.0; 3], [1.0; 3]);
+            for c in [[0.1, 0.5, 0.9], [0.33, 0.77, 0.0], [-0.5, 1.5, 0.25]] {
+                assert_eq!(lut3d_sample_in(&t, 5, c, tet, lo, inv), lut3d_sample(&t, 5, c, tet));
+            }
+            // A table that can't be sampled still leaves the colour alone.
+            assert_eq!(lut3d_sample_in(&[0.0; 3], 2, [0.3; 3], tet, [0.25; 3], [2.0; 3]), [0.3; 3]);
+        }
+    }
+
+    /// The Color Lookup adjustment applies the declared domain on a buffer, both interpolations,
+    /// and a default-domain layer is unchanged by the domain support.
+    #[test]
+    fn color_lookup_adjustment_honours_the_domain() {
+        let mk = |tetrahedral, domain_min, domain_max| Adjustment::ColorLookup {
+            name: "id".into(),
+            lut: Some(std::sync::Arc::new(identity(5))),
+            size: 5,
+            tetrahedral,
+            dither: false,
+            source: None,
+            domain_min,
+            domain_max,
+        };
+        let before = vec![[0.25, 0.25, 0.25, 1.0], [0.5, 0.5, 0.5, 1.0], [0.75, 0.6, 0.3, 1.0]];
+        let rect = photocraft_geom::Rect::new(0, 0, 3, 1);
+        for tet in [false, true] {
+            let mut buf = Buffer { rect, px: before.clone() };
+            apply(&mk(tet, [0.25; 3], [0.75; 3]), &mut buf);
+            let want = [[0.0; 3], [0.5; 3], [1.0, 0.7, 0.1]];
+            for (p, w) in buf.px.iter().zip(want) {
+                for k in 0..3 {
+                    assert!((p[k] - w[k]).abs() < 1e-5, "{tet} {p:?} vs {w:?}");
+                }
+                assert_eq!(p[3], 1.0);
+            }
+            let mut plain = Buffer { rect, px: before.clone() };
+            apply(&mk(tet, [0.0; 3], [1.0; 3]), &mut plain);
+            for (p, b) in plain.px.iter().zip(&before) {
+                let o = lut3d_sample(&identity(5), 5, [b[0], b[1], b[2]], tet);
+                assert_eq!(*p, [o[0], o[1], o[2], b[3]], "{tet}");
+            }
+        }
     }
 
     #[test]
