@@ -39,7 +39,7 @@ fn bounds_of(s: &Session, id: LayerId) -> Rect {
 #[test]
 fn several_layers_scale_around_one_shared_frame_in_one_step() {
     let (mut s, a, b) = two_layers();
-    assert_eq!(multi_bounds(&s.active().unwrap().doc, &[a, b]), Rect::new(10, 10, 80, 70));
+    assert_eq!(transform_bounds_of(&s.active().unwrap().doc, &[a, b]), Rect::new(10, 10, 80, 70));
     let steps = s.active().unwrap().history.entries().len();
     // Halve the shared frame about its top-left corner.
     let r = s.execute("edit.transform", json!({"layers": [a.0, b.0], "quad": [[10, 10], [45, 10], [45, 40], [10, 40]]})).unwrap();
@@ -83,7 +83,6 @@ fn several_layers_refuse_when_one_is_locked_and_skip_the_empty() {
     let (mut s, a, b) = two_layers();
     s.execute("layer.new.layer", json!({})).unwrap();
     let empty = s.active().unwrap().active_layer.unwrap();
-    assert_eq!(multi_targets(&s.active().unwrap().doc, &[a, b, empty]), vec![a, b]);
     s.edit("lock", |doc, _| {
         doc.layer_mut(b).unwrap().locks.position = true;
         Ok(())
@@ -118,60 +117,20 @@ fn flip_and_rotate_turn_every_selected_layer_around_the_shared_box() {
 }
 
 #[test]
-fn warp_applies_one_shared_warp_to_every_listed_layer_in_one_step() {
-    let (mut s, a, b) = two_layers();
-    let before = (bounds_of(&s, a), bounds_of(&s, b));
-    let steps = s.active().unwrap().history.entries().len();
-    let r = s.execute("edit.transform.warp", json!({"layers": [a.0, b.0], "style": "arc", "bend": 50})).unwrap();
-    assert_eq!(r["rect"], json!([10, 10, 80, 70]), "the shared box");
-    assert_ne!(bounds_of(&s, a), before.0);
-    assert_ne!(bounds_of(&s, b), before.1);
-    assert_eq!(s.active().unwrap().history.entries().len(), steps + 1);
+fn several_layers_convert_the_background_for_transform() {
+    let mut s = session();
+    let bg = s.active().unwrap().doc.layers[0].id;
+    let layer = s.active().unwrap().active_layer.unwrap();
+    assert!(s.active().unwrap().doc.is_background(bg));
+    let before = s.active().unwrap().doc.clone();
+    let steps = s.active().unwrap().history.past_len();
+    s.execute("edit.transform", json!({"layers": [bg.0, layer.0], "dx": 5})).unwrap();
+    let st = s.active().unwrap();
+    assert!(!st.doc.is_background(bg));
+    assert!(st.doc.layer(bg).unwrap().surface().unwrap().format().alpha);
+    assert_eq!(st.history.past_len(), steps + 1);
     s.execute("edit.undo", json!({})).unwrap();
-    assert_eq!((bounds_of(&s, a), bounds_of(&s, b)), before);
-    // A locked layer refuses the whole warp.
-    s.edit("lock", |doc, _| {
-        doc.layer_mut(b).unwrap().locks.position = true;
-        Ok(())
-    })
-    .unwrap();
-    assert!(s.execute("edit.transform.warp", json!({"layers": [a.0, b.0], "style": "arc", "bend": 50})).is_err());
-    assert_eq!(bounds_of(&s, a), before.0);
-}
-
-#[test]
-fn several_layers_convert_the_background_for_transform_and_warp() {
-    for warp in [false, true] {
-        let mut s = session();
-        let bg = s.active().unwrap().doc.layers[0].id;
-        let layer = s.active().unwrap().active_layer.unwrap();
-        assert!(s.active().unwrap().doc.is_background(bg));
-        let before = s.active().unwrap().doc.clone();
-        let steps = s.active().unwrap().history.past_len();
-        if warp {
-            s.execute("edit.transform.warp", json!({"layers": [bg.0, layer.0], "style": "arc", "bend": 20})).unwrap();
-        } else {
-            s.execute("edit.transform", json!({"layers": [bg.0, layer.0], "dx": 5})).unwrap();
-        }
-        let st = s.active().unwrap();
-        assert!(!st.doc.is_background(bg));
-        assert!(st.doc.layer(bg).unwrap().surface().unwrap().format().alpha);
-        assert_eq!(st.history.past_len(), steps + 1);
-        s.execute("edit.undo", json!({})).unwrap();
-        assert!(s.active().unwrap().doc == before);
-    }
-}
-
-#[test]
-fn an_empty_warp_target_list_never_falls_back_to_the_active_layer() {
-    for layers in [json!([]), json!([u64::MAX]), json!(["invalid"])] {
-        let mut s = session();
-        let before = s.active().unwrap().doc.clone();
-        let steps = s.active().unwrap().history.past_len();
-        assert!(s.execute("edit.transform.warp", json!({"layers": layers, "style": "arc", "bend": 50})).is_err());
-        assert!(s.active().unwrap().doc == before);
-        assert_eq!(s.active().unwrap().history.past_len(), steps);
-    }
+    assert!(s.active().unwrap().doc == before);
 }
 
 #[test]

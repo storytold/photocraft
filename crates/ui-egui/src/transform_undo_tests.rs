@@ -476,28 +476,17 @@ fn shift_x(q: [[f64; 2]; 4], dx: f64) -> [[f64; 2]; 4] {
 }
 
 #[test]
-fn warp_with_several_layers_warps_them_all_with_one_mesh() {
+fn several_layers_grey_warp_but_not_rotate_and_flip() {
+    // As in the reference application: Edit › Transform › Warp and its split items are greyed
+    // with two pixel layers selected; Rotate and Flip turn both around the shared box.
     let mut h = harness();
-    let (red, blue) = two_selected(&mut h);
-    let steps = history(&h);
-    let ctx = h.ctx.clone();
-    crate::menus::invoke(h.state_mut(), &ctx, "edit.transform.warp", json!({})).unwrap();
-    h.run_steps(2);
-    let t = h.state().ui.transform.clone().expect("warping");
-    assert_eq!(t.layers.len(), 2);
-    assert_eq!(t.rect, [100.0, 100.0, 300.0, 250.0], "one mesh over both");
-    let w = t.warp.expect("in Warp");
-    // Slide the whole mesh 10 px right: a warp that moves both layers.
-    let mesh = w.mesh.clone().unwrap().map_points(|p| [p[0] + 10.0, p[1]]);
-    h.state_mut().ui.transform.as_mut().unwrap().warp = Some(photocraft_geom::warp::Warp::custom(mesh, t.rect));
-    key(&mut h, Modifiers::NONE, Key::Enter);
-    assert!(h.state().ui.transform.is_none());
-    assert_eq!(history(&h), steps + 1, "one Warp step");
-    assert_eq!(bounds(&h, red), photocraft_geom::Rect::new(110, 100, 210, 160));
-    assert_eq!(bounds(&h, blue), photocraft_geom::Rect::new(260, 200, 310, 250));
-    key(&mut h, Modifiers::COMMAND, Key::Z);
-    assert_eq!(bounds(&h, red), photocraft_geom::Rect::new(100, 100, 200, 160));
-    assert_eq!(bounds(&h, blue), photocraft_geom::Rect::new(250, 200, 300, 250));
+    two_selected(&mut h);
+    for id in ["edit.transform.warp", "edit.transform.splitWarpCrosswise", "edit.transform.removeWarpSplit"] {
+        assert!(!crate::menus::is_enabled(h.state(), id), "{id}");
+    }
+    for id in ["edit.transform.flipHorizontal", "edit.transform.flipVertical", "edit.transform.rotate180", "edit.transform.rotate90Cw"] {
+        assert!(crate::menus::is_enabled(h.state(), id), "{id}");
+    }
 }
 
 #[test]
