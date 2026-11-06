@@ -46,6 +46,49 @@ pub(crate) fn transform_placement(sm: &mut SmartObject, a: &Affine) {
     }
 }
 
+/// The box around `new`'s centre with `old`'s aspect ratio that just holds `new`: stretching it
+/// onto `old` scales `new` uniformly to fit inside `old`, centred. Degenerate boxes are returned
+/// as they are ([`stretch_placement`] leaves those placements alone).
+pub(super) fn contain_box(old: [f64; 4], new: [f64; 4]) -> [f64; 4] {
+    let (ow, oh, nw, nh) = (old[2] - old[0], old[3] - old[1], new[2] - new[0], new[3] - new[1]);
+    if !(ow > 0.0 && oh > 0.0 && nw > 0.0 && nh > 0.0) || [ow, oh, nw, nh].iter().any(|v| !v.is_finite()) {
+        return new;
+    }
+    let k = (ow / nw).min(oh / nh);
+    let (w, h) = (ow / k, oh / k);
+    let (cx, cy) = ((new[0] + new[2]) / 2.0, (new[1] + new[3]) / 2.0);
+    [cx - w / 2.0, cy - h / 2.0, cx + w / 2.0, cy + h / 2.0]
+}
+
+/// Re-aims `sm`'s placement so that the box `new` (source pixels of new contents) lands where
+/// `old` did: the map becomes `placement ∘ S` with `S` taking `new` onto `old`. A warp absorbs
+/// `S` in its box (a preset first becomes its exact mesh); without one, `S` joins the
+/// perspective or the affine transform. A warp acts in source space, before the perspective
+/// (`place_source_projective`), so with both the perspective stays as it is.
+pub(super) fn stretch_placement(sm: &mut SmartObject, old: [f64; 4], new: [f64; 4]) {
+    let (ow, oh, nw, nh) = (old[2] - old[0], old[3] - old[1], new[2] - new[0], new[3] - new[1]);
+    if !(ow > 0.0 && oh > 0.0 && nw > 0.0 && nh > 0.0) || [ow, oh, nw, nh].iter().any(|v| !v.is_finite()) || old == new {
+        return;
+    }
+    let (kx, ky) = (ow / nw, oh / nh);
+    let (tx, ty) = (old[0] - kx * new[0], old[1] - ky * new[1]);
+    if let Some(w) = sm.warp.as_mut().filter(|w| !w.is_identity()) {
+        // A warp normalises over its box `B`, so `W ∘ S` is the same warp over `S⁻¹(B)`.
+        if w.style != photocraft_geom::warp::WarpStyle::Custom {
+            *w = photocraft_geom::warp::Warp::custom(w.to_mesh(1, 1), w.bounds);
+        }
+        let b = w.bounds;
+        w.bounds = [(b[0] - tx) / kx, (b[1] - ty) / ky, (b[2] - tx) / kx, (b[3] - ty) / ky];
+        return;
+    }
+    if let Some([a, b, c, d, e, f, g, i, j]) = sm.perspective {
+        // H · S, row-major, S = [kx 0 tx; 0 ky ty; 0 0 1]; `set_placement` keeps `transform` in step.
+        set_placement(sm, Homography([a * kx, b * ky, a * tx + b * ty + c, d * kx, e * ky, d * tx + e * ty + f, g * kx, i * ky, g * tx + i * ty + j]));
+        return;
+    }
+    sm.transform = sm.transform.mul(&Affine { m: [kx, 0.0, 0.0, ky, tx, ty] });
+}
+
 /// Moves a smart object by whole pixels without re-rendering.
 pub(crate) fn shift_smart(sm: &mut SmartObject, dx: i32, dy: i32) {
     transform_placement(sm, &Affine::translate(dx as f64, dy as f64));
