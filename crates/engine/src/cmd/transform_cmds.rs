@@ -513,11 +513,15 @@ fn apply_transform(
             t.transform = a.mul(&t.transform);
             // Without its font, a type layer keeps its look: Photoshop transforms the pixels it has
             // (warning they may look fuzzy) instead of setting the text in a substitute (#7278).
-            if keeps_pixels(t)
-                && let Some(c) = &mut t.cache
-            {
-                let src = c.content_bounds();
-                *c = warp_surface_with(c, src, h, interp, ctl)?.ok_or(EngineError::Cancelled)?;
+            if keeps_pixels(t) {
+                // Its saved record takes the change, not `t.transform`: import may have folded the
+                // record's `Txt2` frame into `t.transform`, and reopening applies that frame again.
+                // A record too short to hold a transform is rebuilt by `refresh_text`.
+                t.psd_raw = t.psd_raw.as_deref().and_then(|r| photocraft_text::psd::transform_tysh(r, &a)).map(std::sync::Arc::new);
+                if let Some(c) = &mut t.cache {
+                    let src = c.content_bounds();
+                    *c = warp_surface_with(c, src, h, interp, ctl)?.ok_or(EngineError::Cancelled)?;
+                }
             }
         }
         LayerContent::Shape(sh) => match affine {

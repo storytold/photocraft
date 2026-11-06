@@ -655,13 +655,11 @@ pub fn refresh_at(dpi: f32, format: PixelFormat, t: &mut TextLayer) {
     t.psd_raw = Some(Arc::new(photocraft_text::psd::build_tysh(t, dpi, layout.bounds())));
 }
 
-/// [`refresh`] without the re-render: the saved type record follows `t` (its transform), the
-/// pixels stay as they are.
+/// [`refresh`] without the re-render: the pixels stay as they are, and so does a saved type
+/// record, which the transform already moved (`transform_cmds::apply_transform`) and which keeps
+/// its boxes, measured with the real font. Only a layer without one gets a record, built from `t`.
 pub(crate) fn refresh_record(doc: &Document, t: &mut TextLayer) {
-    // A record already there keeps its boxes, which were measured with the real font: only the
-    // transform follows. Laying the text out here would use the substitute's metrics.
-    if let Some(raw) = t.psd_raw.as_deref().and_then(|r| photocraft_text::psd::retransform_tysh(r, &t.transform)) {
-        t.psd_raw = Some(Arc::new(raw));
+    if t.psd_raw.is_some() {
         return;
     }
     let dpi = doc.resolution_dpi;

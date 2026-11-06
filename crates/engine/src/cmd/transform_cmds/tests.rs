@@ -415,6 +415,73 @@ fn a_type_layer_with_a_missing_font_transforms_its_pixels() {
     assert!((saved.m[4] - 35.0).abs() < 1e-9 && (saved.m[5] - 55.0).abs() < 1e-9, "the saved TySh follows: {saved:?}");
 }
 
+/// A `Txt2` block whose one text object, `text`, is drawn in a frame anchored at `point` with
+/// the frame-to-text-space `matrix` (as Photoshop keeps a point text's position, #1317).
+fn txt2_with_point_frame(text: &str, point: [f64; 2], matrix: [f64; 6]) -> Vec<u8> {
+    let [x, y] = point;
+    let m = matrix.map(|v| format!("{v:.5}")).join(" ");
+    let mut v =
+        format!("\n\n/98 << /0 14 >> /0 << /8 << /0 [ << /0 << /0 [ {x:.5} {y:.5} ] /2 << /2 [ {m} ] >> >> >> ] >> >> /1 << /1 [ << /0 << /0 (").into_bytes();
+    v.extend_from_slice(&[0xfe, 0xff]);
+    v.extend(format!("{text}\r").encode_utf16().flat_map(u16::to_be_bytes));
+    let len = text.encode_utf16().count() + 1;
+    v.extend_from_slice(
+        format!(") /6 << /0 [ << /0 << /0 << /0 (\u{fe}\u{ff}) /6 << /0 0 /11 1 >> >> >> /1 {len} >> ] >> >> /1 << /2 [ << /6 [ << /10 0 >> ] >> ] >> >> ] >>")
+            .as_bytes(),
+    );
+    v
+}
+
+/// #7659 review (CodeRabbit): a Photoshop type layer whose position lives partly in its `Txt2`
+/// frame opens with the frame folded into its transform, so its model transform differs from
+/// the one in its `TySh`. Transformed with its font missing, the record keeps that frame, so it
+/// must take the change, not the model transform: reopened, the frame is applied again and the
+/// type must land where its kept pixels are.
+#[test]
+fn a_missing_font_type_layer_with_a_txt2_frame_reopens_on_its_transformed_pixels() {
+    let mut s = session();
+    let r = s.execute("type.create", json!({"x": 10, "y": 50, "text": "Hi", "size": 20, "font": "NoSuchFamily7278"})).unwrap();
+    let id = LayerId(r["layer"].as_u64().unwrap());
+    // As Photoshop saves it: the transform far away, the anchor (100, 50) only in the frame.
+    s.edit("psd record", |doc, _| {
+        let dpi = doc.resolution_dpi;
+        let LayerContent::Text(t) = &mut doc.layer_mut(id).unwrap().content else { panic!() };
+        let mut file = t.clone();
+        file.transform = Affine::translate(-1000.0, -2000.0);
+        let tysh = photocraft_text::psd::build_tysh(&file, dpi, Some([1100.0, 1980.0, 1160.0, 2050.0]));
+        t.psd_raw = Some(std::sync::Arc::new(photocraft_text::psd::set_text_index(&tysh, 0).unwrap()));
+        let mut c = Surface::new(t.cache.as_ref().unwrap().format());
+        c.fill_rect(Rect::new(20, 30, 40, 40), &[1.0, 0.0, 0.0, 1.0]);
+        t.cache = Some(c);
+        let txt2 = txt2_with_point_frame("Hi", [1000.0, 2100.0], [1.0, 0.0, 0.0, 1.0, 100.0, -50.0]);
+        doc.metadata.psd_global_blocks.push((*b"8BIM", *b"Txt2", std::sync::Arc::new(txt2)));
+        Ok(())
+    })
+    .unwrap();
+    let reopen = |doc: &Document| {
+        let bytes = photocraft_io::export(doc, "x.psd", &photocraft_io::ExportOptions::default()).unwrap().bytes;
+        photocraft_io::import("x.psd", &bytes).unwrap().document
+    };
+    let text_of = |doc: &Document| {
+        doc.layers.iter().find_map(|l| if let LayerContent::Text(t) = &l.content { Some((l.id, t.clone())) } else { None }).expect("a type layer")
+    };
+    let opened = reopen(&s.active().unwrap().doc);
+    let (id, t) = text_of(&opened);
+    let raw = photocraft_text::psd::parse_tysh(t.psd_raw.as_ref().unwrap()).unwrap().transform;
+    let at = |t: &photocraft_doc::TextLayer| t.transform.apply(photocraft_geom::Point::new(0.0, 0.0));
+    assert!(keeps_pixels(&t), "the font is missing and the file's pixels are kept");
+    assert!((at(&t).x - 100.0).abs() < 1e-6 && (at(&t).y - 50.0).abs() < 1e-6, "opened at the frame's anchor: {:?}", t.transform);
+    assert_ne!(raw.m, t.transform.m, "the model transform has the frame folded in, the TySh's has not");
+    s.add_document(opened, None);
+    s.execute("edit.transform", json!({"layer": id.0, "matrix": [1, 0, 0, 1, 25, 5]})).unwrap();
+    let (_, moved) = text_of(&s.active().unwrap().doc);
+    assert_eq!(moved.cache.as_ref().unwrap().content_bounds(), Rect::new(45, 35, 65, 45), "the pixels moved");
+    let (_, back) = text_of(&reopen(&s.active().unwrap().doc));
+    assert_eq!(back.cache.as_ref().unwrap().content_bounds(), Rect::new(45, 35, 65, 45), "the pixels are kept");
+    let p = at(&back);
+    assert!((p.x - 125.0).abs() < 1e-6 && (p.y - 55.0).abs() < 1e-6, "reopened with the pixels, at (125, 55): {p:?} ({:?})", back.transform);
+}
+
 #[test]
 fn shapes_move_and_transform_as_vectors() {
     let mut s = Session::new();
