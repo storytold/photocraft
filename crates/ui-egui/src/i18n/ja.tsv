@@ -2771,6 +2771,7 @@ fontWeight	Italic	斜体
 	Monochromatic	モノクロ
 	Mosaic Tiles	モザイクタイル
 	Move Layer	レイヤーを移動
+	Move Layer to Target	レイヤーを対象へ移動
 	Movie Prime	ムービープライム
 	Multiple Flames Along Path	パスに沿った複数の炎
 	Multiple Flames One Direction	一方向の複数の炎
@@ -2821,7 +2822,6 @@ fontWeight	Italic	斜体
 	Relief	レリーフ
 	Remove Jpeg Artifact	JPEG アーティファクトを除去
 	Remove Tool	削除ツール
-	Reorder Layer	レイヤーを並べ替え
 	Repeat	繰り返し
 	Reticulation	粒状化
 	Rgb	RGB

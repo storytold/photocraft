@@ -3999,6 +3999,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Motion Blur	Flou de mouvement
 	Mouse	Souris
 	Move Layer	Déplacer le calque
+	Move Layer to Target	Déplacer le calque vers la cible
 	Movie Prime	Focale fixe cinéma
 	Multiple Flames Along Path	Plusieurs flammes le long du tracé
 	Multiple Flames One Direction	Plusieurs flammes dans une direction
@@ -4154,7 +4155,6 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Rename Tool Preset	Renommer le préréglage d'outil
 	Render Video	Rendu vidéo
 	Rendering…	Rendu en cours…
-	Reorder Layer	Réorganiser le calque
 	Replace Color	Remplacer la couleur
 	Replace Contents	Remplacer le contenu
 	Replace Footage	Remplacer le métrage

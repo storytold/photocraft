@@ -1703,7 +1703,6 @@ fontWeight	Thin	Hajszálvékony
 	Reflect	Visszaverődés
 	Reflected	Tükrözött
 	Rename Channel…	Csatorna átnevezése…
-	Reorder Layer	Réteg átrendezése
 	Reset to Default	Visszaállítás alapértelmezettre
 	Restore Original Edge	Eredeti él visszaállítása
 	Reverse	Megfordítás
@@ -3459,6 +3458,7 @@ cameraRaw	Yellow	Sárga
 	More documents	További dokumentumok
 	More panels	További panelek
 	Move Layer	Réteg mozgatása
+	Move Layer to Target	Réteg áthelyezése a célpontra
 	Move Tool	Mozgatás
 	name	név
 	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or copy the image in your file manager and paste it with {paste}.	Wayland alatt a natív fájlbehúzás még nem támogatott. Használd a Fájl › Megnyitás… parancsot, vagy másold a képet a fájlkezelőben, és illeszd be ({paste}).
