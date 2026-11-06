@@ -365,17 +365,21 @@ pub fn start_save(
     start_save_of(app, path, settings, copy, save, automation, move || Ok(snapshot))
 }
 
-/// [`start_save`] of a copy made from the active document (Save a Copy, Export As): `make` gives
+/// [`start_save`] of a copy made from the document `source` (Save a Copy, Export As): `make` gives
 /// the document to write, on the worker, so preparing it (an export's resize and colour
 /// conversion) doesn't hold up the window either. The document keeps its path and unsaved state.
+///
+/// `source` is the document copied: the job locks it and records the copy against it, whichever
+/// tab is in view when the copy starts (its save dialog may have been up meanwhile).
 pub(crate) fn start_copy(
     app: &mut PhotocraftApp,
+    source: photocraft_doc::DocId,
     path: String,
     settings: ExportSettings,
     save: SaveFileFn,
     make: impl FnOnce() -> Result<Arc<photocraft_doc::Document>, String> + Send + 'static,
 ) -> Result<Option<(String, Vec<String>)>, String> {
-    start_save_of(app, path, settings, true, save, false, make)
+    app.with_document(source, |app| start_save_of(app, path, settings, true, save, false, make))
 }
 
 /// [`start_save`] of the document `make` gives on the worker.

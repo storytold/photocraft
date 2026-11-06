@@ -464,6 +464,38 @@ fn copies_and_exports_run_on_the_save_worker_and_leave_the_document_alone() {
     assert!(st.is_dirty() && st.path.is_none(), "copies leave the document's file and unsaved state alone");
 }
 
+/// A Save a Copy that starts after the user moved to another tab (the save dialog was up
+/// meanwhile) locks the document it copies, not the tab in view, and a copy over that document's
+/// own file leaves the document on its file.
+#[test]
+fn a_copy_started_from_another_tab_locks_and_keeps_its_own_document() {
+    let mut h = app_harness();
+    let gate = Arc::new(AtomicBool::new(false));
+    let g = gate.clone();
+    h.state_mut().services.save_file = Some(Arc::new(move |_, _, _, ctl| {
+        while !g.load(Ordering::Relaxed) {
+            ctl.check()?;
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        ctl.commit()?;
+        Ok(Vec::new())
+    }));
+    let path = "/tmp/photocraft-test/source.psd";
+    h.state_mut().session.active_mut().unwrap().saved_to(path.into());
+    let source = h.state().session.active().unwrap().doc.clone();
+    h.state_mut().run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    let other = h.state().session.active().unwrap().doc.id;
+    let r = crate::view_cmds::write_copy(h.state_mut(), &source, path, crate::FormatChoices::default()).unwrap();
+    assert_eq!(r["pending"], true, "{r}");
+    assert_eq!(h.state().session.active().unwrap().doc.id, other, "the tab in view stays in view");
+    assert!(h.state().session.job_on(source.id).is_some(), "the copied document is locked");
+    assert!(h.state().session.job_on(other).is_none(), "the tab in view isn't");
+    gate.store(true, Ordering::Relaxed);
+    step_until(&mut h, |a| !a.saving());
+    let st = h.state().session.documents().iter().find(|st| st.doc.id == source.id).unwrap();
+    assert_eq!(st.path.as_deref(), Some(path), "the document stays on its file");
+}
+
 #[test]
 fn saves_run_in_the_background_and_are_recorded_when_they_end() {
     let mut h = app_harness();

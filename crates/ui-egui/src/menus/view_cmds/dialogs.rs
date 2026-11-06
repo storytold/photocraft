@@ -709,7 +709,7 @@ pub(crate) fn write_copy(
         && let Some(save) = app.services.save_file.clone()
     {
         let snapshot = std::sync::Arc::clone(doc);
-        return Ok(match crate::jobs_ui::start_copy(app, path.to_string(), settings, save, move || Ok(snapshot))? {
+        return Ok(match crate::jobs_ui::start_copy(app, doc.id, path.to_string(), settings, save, move || Ok(snapshot))? {
             Some((path, warnings)) => json!({"path": path, "warnings": warnings}),
             None => json!({"path": path, "warnings": [], "pending": true, "job": app.jobs.last_started.map(|j| j.0)}),
         });
