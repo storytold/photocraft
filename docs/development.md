@@ -623,6 +623,39 @@ How the web shell (`apps/photocraft-web/src/web.rs`) differs from desktop:
 - **No control server:** browsers can't listen on TCP. To automate the web build, drive headless Chrome with `--remote-debugging-port`. `Page.setInterceptFileChooserDialog` plus `DOM.setFileInputFiles` covers Open, `Input.dispatchDragEvent` with `files` covers drops, and `Browser.setDownloadBehavior` captures downloads.
 - Headless Chrome on macOS (`--headless=new --enable-unsafe-webgpu`) gets a real WebGPU adapter.
 
+### Jobs without threads (Place, #10031)
+
+wasm32-unknown-unknown has no threads, so on the web `Session::start` runs every command inline
+except Place, which is a job that `poll_jobs` steps on the UI thread (a *cooperative* job):
+
+- `jobs::StepWork` is work that runs a slice at a time; `jobs::run_stepped` / `Session::start_job_stepped`
+  register it. With `Session::cooperative_jobs()` (always on for wasm, `set_cooperative_jobs(true)`
+  runs the same path on a desktop, for tests) each `poll_jobs` gives one such job about 8 ms
+  (`set_job_step_budget`; zero means one unit of work per poll, which tests use to count polls
+  without depending on the machine). Elsewhere the same work runs to the end on a worker thread,
+  or inline under `execute`, and gives the same result.
+- `file_cmds::PlaceSteps` cuts a place into units: a plain PNG decodes a row at a time
+  (`photocraft_codecs::PngDecodeRows`, through `photocraft_io::PngImport`) and, when its rows come
+  in final order, each group of 256 rows becomes tiles at once and is dropped, as the one-shot import
+  does, so the decoded image never exists beside the layer (a 100 MP RGBA8 file would cost about 400 MB
+  more, too much for a browser tab). An interlaced, animated or oriented PNG is decoded whole, turned
+  upright in bands of 64 rows (`photocraft_codecs::OrientSteps`) and copied into tiles in bands; any
+  other format decodes in one unit. The flatten runs in bands of four tiles (`composite_to_surface`,
+  the tiles moved into the result), the resize in bands of 64 output rows
+  (`photocraft_algo::resample::ResizeSteps`, the code `resize_surface` runs), and moving the pixels to
+  where they land a tile at a time (`photocraft_raster::TranslateSteps`, the code
+  `Surface::translated` runs). Without a cooperative session each stage is one unit and a desktop
+  keeps its parallel flatten, resize and translate.
+- The UI places through a job when `background_jobs || session.cooperative_jobs()`
+  (`jobs_ui::place_in_background`); `background_jobs` stays off on the web, since save, print and
+  the other commands gated on it need threads. The status bar shows the progress and Esc cancels.
+- Measure it with `RAYON_NUM_THREADS=1 cargo test --release -p photocraft-engine --test
+  place_steps_measure -- --ignored --nocapture` (a synthetic 4096×4096 RGBA PNG into a
+  3600×4200 document). 2026-10-29, one core: 4096 row units of 0.1 ms, flatten bands 5.3 ms,
+  resize bands 5.8 ms; the units that cannot be cut up are opening the PNG (6 ms), image to document
+  (10 ms) and translate, layer and apply (13 ms, once 23 ms); 95 polls, 950 ms in all, as long as the
+  inline place (1000 ms). Wasm is slower than a desktop core, so check a release web build too.
+
 
 ## Indexed Color timings
 
@@ -643,7 +676,8 @@ On native desktop sessions, Indexed Color live previews calculate and flatten on
 The last preview remains visible while dragging; intermediate settings are coalesced, and only
 a result matching the current document revision, active layer, dialog and parameters is uploaded.
 GPU upload/display conversion still run on the UI thread. Web and `PHOTOCRAFT_INLINE_JOBS=1`
-sessions retain synchronous previews. Closing the dialog invalidates its result; an already
+sessions retain synchronous previews (the web has no threads; only Place is stepped there, see
+Jobs without threads). Closing the dialog invalidates its result; an already
 running calculation finishes without editing the session.
 
 ## Offscreen UI snapshots (no window)
@@ -822,7 +856,10 @@ physical RAM (excluding swap) and, where measurable, system commit headroom:
   modification time (a different file with both preserved is not distinguished there). The
   `file.approveMemory` permission is one-shot and is not journaled or recorded in an action. A
   refusal above the hard ceiling is the typed `PsdHardBudget` error (name, required, limit), not
-  a string, and it releases the queued source.
+  a string, and it releases the queued source. Its message says where the limit comes from:
+  the computer's memory on 64-bit desktop; the web build names its fixed cap; on 32-bit desktop the
+  limit may be either, so the message mentions the 2 GiB cap and that the 64-bit build may open the file.
+  Those two also link the releases page. Sizes appear in GiB or MiB next to the exact bytes.
 - A layered TIFF (Photoshop layer data in tags 37724/34377) is admitted by the same policy
   before its composite is decoded. The page's tags are read into the PSD model first, without
   pixels; then that model's layer/workspace estimate, the decoded composite and its
@@ -963,23 +1000,27 @@ cargo xtask psd-write-oracle xtask/psd-write-oracle/starter.json corpus/photosho
 ```
 
 The output directory must not exist. It contains `report.json`, `manifest.json`, a
-candidate PSD per successful export, and CLI stdout/stderr for diagnosis. A failed
-case does not prevent the other cases from running, but the command exits nonzero.
+candidate PSD per successful export, a `base.psd` copy of the hashed base bytes, and
+CLI stdout/stderr for diagnosis. The CLI runs on that copy, so it never opens the corpus.
+A failed case does not prevent the other cases from running, but the command exits nonzero.
+Once an export succeeded, a failing case keeps its candidate in the manifest, with an
+`exported file: ...` error if reopening or checking it failed.
 The manifest records the checkout revision, whether tracked files were modified, the
 CLI binary hash, recipe hash, corpus revision and candidate hashes (revision and
 dirty state are `unknown` outside a git checkout). The checkout
 revision does not establish where a supplied binary was built; use a binary built from
 that revision and preserve the CI run's provenance. Missing fonts and other warnings
-are recorded. The runner never overwrites its input PSDs.
+are recorded. The runner never overwrites or opens its input PSDs beyond hashing them.
 
-Recipes are versioned JSON (`version` must be `1`; any other value is rejected). Unknown keys anywhere in a recipe are an error, so a typo never passes as "nothing to check". A case has a unique `id`, a relative `base` PSD path,
+Recipes are versioned JSON (`version` must be `1`; any other value is rejected). Unknown keys anywhere in a recipe are an error, so a typo never passes as "nothing to check". A case has an `id` that is unique ignoring letter case (it names the case's output directory), a relative `base` PSD path,
 its `base_sha256`, a `target` with layer `kind` and optional `name`, and `checks`.
 An optional list of `commands` contains a `command` id and `params`; the runner
 supplies the resolved `layer` id. Targets that match zero or multiple layers fail.
-Only `type.*` and `layer.layerStyle.*` commands are accepted. Checks use JSON pointers
+Only `type.*` and `layer.layerStyle.*` commands are accepted, except `layer.layerStyle.contours.*`,
+which edit the contour library rather than the document and can read or write any file. Checks use JSON pointers
 relative to the inspected layer: `unchanged` requires a present, equal value before
 and after; `equals` checks the exported value; `changed_to` requires the exported
-value to match and differ from the base. Every edited case needs a `changed_to` check.
+value to match and differ from the base. Numbers compare by exact value, so `17` equals `17.0`. Every edited case needs a `changed_to` check.
 Every check is run and reported (not only the first failure), each result naming the layer and the property path. See the starter recipes for examples. Regenerate hashes when deliberately changing
 the corpus pin, and review them against `xtask/photoshop-corpus.sha256`.
 
