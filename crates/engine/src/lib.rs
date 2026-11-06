@@ -333,9 +333,13 @@ pub struct Session {
 }
 
 #[cfg(test)]
+mod embed_all_linked_tests;
+#[cfg(test)]
 mod fill_layer_mode_tests;
 #[cfg(test)]
 mod pattern_mode_tests;
+#[cfg(test)]
+mod second_keys_zoom_actions_tests;
 #[cfg(test)]
 mod tests;
 
