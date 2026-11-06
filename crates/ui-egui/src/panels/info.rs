@@ -8,13 +8,15 @@ pub(crate) fn hover_pixel(app: &PhotocraftApp) -> Option<(i32, i32)> {
 
 /// The colours the Info panel reads at document pixel `(x, y)`: the composite RGB (straight RGBA
 /// 0..1, averaged over the Eyedropper's Sample Size, as in Photoshop (#1649)) and its CMYK
-/// percentages. Both are cached per pixel, revision and Sample Size, so neither the composite nor
-/// the ink composite runs again on a frame that shows the same pixel (#4528).
+/// percentages. Both are cached per document, pixel, revision and Sample Size, so neither the
+/// composite nor the ink composite runs again on a frame that shows the same pixel of the same
+/// document (#4528) — and a switch to another document re-reads (#11681 review).
 pub(crate) fn pointer_readout(app: &mut PhotocraftApp, (x, y): (i32, i32)) -> Option<crate::InfoSample> {
-    let rev = app.session.active()?.revision;
+    let st = app.session.active()?;
+    let (doc, rev) = (st.doc.id, st.revision);
     let sample_size = app.ui.tool_options.eyedropper_size;
-    if let Some(((cx, cy, cr, cs), v)) = app.info_sample
-        && (cx, cy, cr, cs) == (x, y, rev, sample_size)
+    if let Some(((cd, cx, cy, cr, cs), v)) = app.info_sample
+        && (cd, cx, cy, cr, cs) == (doc, x, y, rev, sample_size)
     {
         return Some(v);
     }
@@ -26,7 +28,7 @@ pub(crate) fn pointer_readout(app: &mut PhotocraftApp, (x, y): (i32, i32)) -> Op
     // a CMYK document, so a pure ink reads 100 % (#11640), else the colour-managed conversion of
     // its RGB composite, the same one the Color Picker uses (#8101).
     let cmyk = app.session.active().map(|st| photocraft_engine::sampler_cmds::cmyk_readout(&st.doc, at, sample_size, rgba))?;
-    app.info_sample = Some(((x, y, rev, sample_size), (rgba, cmyk)));
+    app.info_sample = Some(((doc, x, y, rev, sample_size), (rgba, cmyk)));
     Some((rgba, cmyk))
 }
 

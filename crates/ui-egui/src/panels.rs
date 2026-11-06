@@ -557,6 +557,33 @@ mod info_panel_sampler_tests {
         h.run_steps(2);
         assert!(h.query_by_label("#1").is_none(), "no points listed once cleared");
     }
+
+    /// #11681 review: the pointer sample cache is keyed by the document as well as the pixel, the
+    /// revision and the Sample Size. Two open documents can hold the same revision, so switching
+    /// back to the first must re-read its own inks instead of repeating the second one's row.
+    #[test]
+    fn pointer_readout_is_keyed_by_the_document() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        // Two CMYK documents at the same revision (one edit each), the first pure cyan, the second
+        // pure magenta, both inked under pixel (3, 3).
+        for ink in [[1.0f32, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]] {
+            app.run("file.new", json!({"width": 8, "height": 8, "mode": "cmyk", "background": "white"})).unwrap();
+            app.session
+                .edit("paint", move |doc, _| {
+                    let surf = doc.layers[0].surface_mut().unwrap();
+                    surf.fill_rect(photocraft_geom::Rect::new(2, 2, 4, 4), &[ink[0], ink[1], ink[2], ink[3], 1.0]);
+                    Ok(())
+                })
+                .unwrap();
+        }
+        let read = |app: &mut PhotocraftApp| super::info::pointer_readout(app, (3, 3)).map(|(_, cmyk)| cmyk);
+        assert_eq!(read(&mut app), Some([0, 100, 0, 0]), "the open document reads its magenta ink");
+        app.run("document.activate", json!({"document": 0})).unwrap();
+        assert_eq!(read(&mut app), Some([100, 0, 0, 0]), "the first document re-reads its own cyan");
+        // And back to the second, still its own values.
+        app.run("document.activate", json!({"document": 1})).unwrap();
+        assert_eq!(read(&mut app), Some([0, 100, 0, 0]), "and so does the second");
+    }
 }
 
 #[cfg(test)]

@@ -336,8 +336,11 @@ use widgets::tab_strip;
 pub use widgets::text_field_menu;
 pub use widgets::tone;
 
-/// The Info panel's cached sample: pixel x, y, document revision and Eyedropper Sample Size.
-type InfoSampleKey = (i32, i32, u64, u32);
+/// The Info panel's cached sample: the document it was read from, then pixel x, y, document
+/// revision and Eyedropper Sample Size. The document is part of the key because two open documents
+/// can hold the same revision number, and switching back to one must re-read the pixel instead of
+/// showing the other document's RGB and CMYK (#11681 review).
+type InfoSampleKey = (photocraft_doc::DocId, i32, i32, u64, u32);
 /// What that sample reads: the composite RGBA and the CMYK percentages shown with it.
 type InfoSample = ([f32; 4], [i32; 4]);
 
