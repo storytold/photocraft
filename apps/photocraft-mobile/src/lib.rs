@@ -19,6 +19,13 @@
 //!   running meanwhile. A copy is removed once its document is saved or closed.
 //! - **Plug-ins** are bundled-only on iOS (App Store guideline 2.5.2): no Install Plug-in… and no
 //!   plug-ins folder. Android keeps both.
+//! - **Menus:** PhotoCraft's own, plus what the tablet has: File › Import from Photos… (the
+//!   system photo picker; photos open as copies) and File › Share… (the active document as Save a
+//!   Copy writes it, in its own format, encoded on the save worker, then the share sheet).
+//! - **Clipboard:** Edit › Paste, Paste in Place and New from Clipboard ask the shell to read the
+//!   clipboard (only now: iPadOS may ask the user to allow it) and run when it answers, as ⌘V does.
+//!   While the clipboard still holds the image PhotoCraft copied, the shell doesn't read it back
+//!   and PhotoCraft pastes its own copy, layers and all. Copies go out as images.
 //! - **Native controls** map to PhotoCraft's own commands, exactly as its menu items run them.
 //! - **Panels** see the active document and its layers, top first.
 //! - **Power:** while the device is hot or saving power, live previews run on a reduced copy
@@ -30,7 +37,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex, PoisonError};
 
-use craft_mobile::{Action, CraftApp, DocumentInfo, Item, PickedFile, Platform, Power, SaveRoute, Snapshot, Stylus, WriteOutcome};
+use craft_mobile::{Action, CraftApp, DocumentInfo, Item, Pasted, PickedFile, Platform, Power, SaveRoute, Snapshot, Stylus, WriteOutcome};
 use egui::TouchPhase;
 use photocraft_codecs::{ChannelLayout, EncodeOptions, Image};
 use photocraft_doc::{DocId, Document, Layer};
@@ -38,8 +45,8 @@ use photocraft_engine::Session;
 use photocraft_format::RecoveryStore;
 use photocraft_ui_egui::stylus::PenSample;
 use photocraft_ui_egui::theme::ThemeKind;
-use photocraft_ui_egui::{FileDialogAnswer, FileDialogRequest, Inbox, PhotocraftApp, Recoverable, Services};
-use serde_json::json;
+use photocraft_ui_egui::{FileDialogAnswer, FileDialogRequest, HostMenu, HostMenuItem, Inbox, PhotocraftApp, Recoverable, Services};
+use serde_json::{Value, json};
 
 /// PhotoCraft as `craft-mobile` hosts it.
 pub struct PhotoCraftMobile {
@@ -59,6 +66,65 @@ pub struct PhotoCraftMobile {
     previews: PreviewOverride,
     /// Recovery copies started as the app left the screen.
     suspended: Shared<Suspended>,
+    /// The shell.
+    platform: Platform,
+    /// The paste waiting for the shell to read the clipboard.
+    pastes: Shared<Pastes>,
+    /// The paste the clipboard this frame brought answers, run before the app's own logic.
+    answered: Option<(String, Value)>,
+    /// PhotoCraft's own copy as it put it on the clipboard, while the clipboard still holds it
+    /// and a paste is reading it (this frame only).
+    own_copy: OwnCopy,
+}
+
+/// PhotoCraft's own copy's pixels for the clipboard service: see [`PhotoCraftMobile::own_copy`].
+type OwnCopy = Rc<RefCell<Option<(u32, u32, Vec<u8>)>>>;
+
+/// File › Import from Photos….
+const IMPORT_PHOTOS: &str = "mobile.importFromPhotos";
+/// File › Share….
+const SHARE: &str = "mobile.share";
+/// What a Save a Copy for File › Share… writes to: the bytes go to the share sheet.
+const SHARE_ROOT: &str = "share://";
+
+/// The clipboard service's answer outside a paste: the clipboard is read only when the user pastes.
+/// PhotoCraft keeps its own copy then, and the message is never shown ([`quiet_clipboard`]).
+const NOT_PASTING: &str = "The clipboard is read when you paste";
+
+/// The status never reports [`NOT_PASTING`]: it isn't a failure the user could act on.
+fn quiet_clipboard(app: &mut PhotocraftApp) {
+    if app.ui.status_error && app.ui.status == NOT_PASTING {
+        app.ui.status.clear();
+        app.ui.status_error = false;
+    }
+}
+
+/// The commands that read the system clipboard: they wait for the shell to read it.
+fn reads_clipboard(id: &str) -> bool {
+    matches!(id, "edit.paste" | "edit.pasteSpecial.pasteInPlace" | "file.newFromClipboard")
+}
+
+/// A paste the user asked for (Edit › Paste, Paste in Place, New from Clipboard), waiting for the
+/// shell to read the clipboard: the command and its parameters.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct Pastes {
+    asked: Option<(String, Value)>,
+}
+
+impl Pastes {
+    /// Run `id`, a command that reads the clipboard: `true` when the clipboard is here (it runs
+    /// now), `false` when it must wait for the shell to read it.
+    fn run(&mut self, id: &str, params: &Value, pasted: bool) -> bool {
+        if !pasted {
+            self.asked = Some((id.to_string(), params.clone()));
+        }
+        pasted
+    }
+
+    /// A frame begins: the paste the clipboard it brought answers.
+    fn answered(&mut self, pasted: bool) -> Option<(String, Value)> {
+        if pasted { self.asked.take() } else { None }
+    }
 }
 
 /// State the services and the frame share, one at a time: see [`update`].
@@ -170,10 +236,24 @@ struct PendingWrite {
 impl CraftApp for PhotoCraftMobile {
     fn create(ctx: &egui::Context, wgpu: Option<eframe::egui_wgpu::RenderState>, platform: Platform) -> Self {
         let (inbox, located, issued, encoded) = (Inbox::default(), Located::default(), Issued::default(), Encoded::default());
-        let suspended = Shared::<Suspended>::default();
-        let services = services(&platform, inbox.clone(), located.clone(), issued.clone(), encoded.clone(), suspended.clone());
+        let (suspended, pastes, own_copy) = (Shared::<Suspended>::default(), Shared::<Pastes>::default(), OwnCopy::default());
+        let mut services = services(&platform, inbox.clone(), located.clone(), issued.clone(), encoded.clone(), suspended.clone());
+        tablet_menus(&mut services, &platform, pastes.clone(), own_copy.clone());
         let app = create_app(ctx, wgpu, services);
-        Self { app, inbox, located, issued, writing: Vec::new(), encoded, previews: PreviewOverride::default(), suspended }
+        Self {
+            app,
+            inbox,
+            located,
+            issued,
+            writing: Vec::new(),
+            encoded,
+            previews: PreviewOverride::default(),
+            suspended,
+            platform,
+            pastes,
+            answered: None,
+            own_copy,
+        }
     }
 
     fn wgpu_configuration() -> eframe::egui_wgpu::WgpuConfiguration {
@@ -338,6 +418,22 @@ fn layer_rows(layers: &[Layer], depth: u32, selected: &dyn Fn(photocraft_doc::La
 
 impl eframe::App for PhotoCraftMobile {
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        let pasted = self.platform.pasted();
+        self.answered = update(&self.pastes, |p| p.answered(pasted.is_some()));
+        if self.answered.is_some() {
+            // The paste asked for runs itself (`logic`), not as the ⌘V these events stand for:
+            // the menu it was chosen from still holds the keyboard for a frame or two.
+            raw_input.events.retain(|e| !matches!(e, egui::Event::Paste(_) | egui::Event::PasteImage(_)));
+        }
+        // The clipboard still holds PhotoCraft's own copy: what it put there, for the paste to
+        // recognise as its own, never read back.
+        *self.own_copy.borrow_mut() = match pasted.as_deref() {
+            Some(Pasted::OwnImage) => {
+                log::info!("photocraft-mobile: the clipboard still holds PhotoCraft's own copy: pasting that");
+                self.app.session.clipboard.as_ref().and_then(clipboard_pixels)
+            }
+            _ => None,
+        };
         self.app.raw_input_hook(ctx, raw_input);
     }
 
@@ -348,18 +444,26 @@ impl eframe::App for PhotoCraftMobile {
                 self.app.open_failed(&photocraft_ui_egui::file_open::display_name(&path), &e);
             }
         }
+        if let Some((id, params)) = self.answered.take()
+            && let Err(e) = photocraft_ui_egui::menus::invoke(&mut self.app, ctx, &id, params)
+        {
+            self.app.ui.status = e;
+            self.app.ui.status_error = true;
+        }
         self.app.logic(ctx, frame);
         self.forget_stale_recovery();
         // After the jobs moved on: a save whose job just ended has handed its bytes over.
         self.hand_over_saves();
         self.note_writes();
         show_file_names(&mut self.app.ui.status);
+        quiet_clipboard(&mut self.app);
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         self.app.ui(ui, frame);
         self.note_writes();
         show_file_names(&mut self.app.ui.status);
+        quiet_clipboard(&mut self.app);
     }
 }
 
@@ -387,6 +491,13 @@ impl PhotoCraftMobile {
     /// to the exporter.
     fn hand_over_saves(&mut self) {
         let saves = std::mem::take(&mut *self.encoded.lock().unwrap_or_else(PoisonError::into_inner));
+        let (shares, saves): (Vec<_>, Vec<_>) = saves.into_iter().partition(|(path, _)| path.starts_with(SHARE_ROOT));
+        for (path, bytes) in shares {
+            let name = file_name(&path);
+            // Saved as a copy: the status says where it's going instead.
+            self.app.ui.status = format!("Sharing {name}");
+            self.platform.share(name, bytes);
+        }
         let Some(write) = self.app.services.write.as_mut() else { return };
         for (path, bytes) in saves {
             if let Err(e) = write(&path, &bytes) {
@@ -405,6 +516,97 @@ impl PhotoCraftMobile {
                 self.writing.push(PendingWrite { path, doc: st.doc.id, revision: st.revision });
             }
         }
+    }
+}
+
+/// PhotoCraft's copy as it mirrors it on the clipboard (`export_os_clipboard`): its bounds as
+/// RGBA8, so a paste knows it for its own.
+fn clipboard_pixels(clip: &photocraft_engine::edit_cmds::Clip) -> Option<(u32, u32, Vec<u8>)> {
+    let b = clip.bounds;
+    if b.is_empty() {
+        return None;
+    }
+    let mut px = vec![[0_u8; 4]; usize::try_from(u64::from(b.width()) * u64::from(b.height())).ok()?];
+    clip.surface.read_rgba8_into(b, &mut px);
+    Some((b.width(), b.height(), px.into_iter().flatten().collect()))
+}
+
+/// The file File › Share… sends: the document's own file when it holds the whole document (its
+/// PSD or .pcraft, or the flat file it came from while that keeps it; a copy from Photos or a
+/// share goes by its name), else a PSD named for it, as File › Save would suggest.
+fn share_name(doc: &Document, path: Option<&str>) -> String {
+    use photocraft_engine::file_cmds::{extension, holds_at};
+    let source = file_name(path.unwrap_or(&doc.name));
+    if holds_at(doc, &source) || photocraft_ui_egui::flat_file_keeps(doc, &source) {
+        return source;
+    }
+    let ext = match extension(&source).as_deref() {
+        Some("pdn") => "pcraft",
+        Some("kra" | "krz") => "ora",
+        _ => "psd",
+    };
+    std::path::Path::new(&source).with_extension(ext).to_string_lossy().into_owned()
+}
+
+/// File › Share…: Save a Copy of the active document, to the share sheet instead of a file.
+fn share(app: &mut PhotocraftApp, ctx: &egui::Context, next: &Shared<Option<String>>) -> Result<Value, String> {
+    let st = app.session.active().ok_or("no document is open")?;
+    next.set(Some(share_name(&st.doc, st.path.as_deref())));
+    let shared = photocraft_ui_egui::menus::invoke(app, ctx, "file.saveACopy", json!({}));
+    if shared.is_err() {
+        // It stopped before asking where: the next save mustn't go to the share sheet.
+        next.set(None);
+    }
+    shared
+}
+
+/// The tablet's File › Import from Photos… and File › Share…, and the clipboard read on paste.
+fn tablet_menus(services: &mut Services, platform: &Platform, pastes: Shared<Pastes>, own_copy: OwnCopy) {
+    let reader = platform.clone();
+    services.clipboard_get_image = Some(Box::new(move || match reader.pasted().as_deref() {
+        Some(Pasted::Image { width, height, rgba }) => Ok(Some((*width, *height, rgba.clone()))),
+        Some(Pasted::OwnImage) => Ok(own_copy.borrow().clone()),
+        Some(Pasted::Text(_)) => Ok(None),
+        // Every paste waits for the shell's read (`tablet_menus`): this is no paste (the New
+        // Document dialog sizing itself, say). Nothing is known, so nothing changes.
+        None => Err(NOT_PASTING.into()),
+    }));
+    let mut items = Vec::new();
+    if platform.has_photo_picker() {
+        items.push(HostMenuItem { id: IMPORT_PHOTOS.into(), label: "Import from Photos…".into(), after: "file.open".into() });
+    }
+    items.push(HostMenuItem { id: SHARE.into(), label: "Share…".into(), after: "file.saveACopy".into() });
+    let shell = platform.clone();
+    let share_next = Shared::<Option<String>>::default();
+    let next = share_next.clone();
+    services.host_menu = Some(HostMenu {
+        items,
+        enabled: Box::new(|app, id| id != SHARE || app.session.active().is_some()),
+        run: Box::new(move |app, ctx, id, params| match id {
+            IMPORT_PHOTOS => {
+                shell.pick_photos();
+                Some(Ok(Value::Null))
+            }
+            SHARE => Some(share(app, ctx, &next)),
+            // Typing in a type layer: PhotoCraft asks for the clipboard's text itself.
+            id if reads_clipboard(id) && app.ui.text_edit.is_none() && !update(&pastes, |p| p.run(id, params, shell.pasted().is_some())) => {
+                shell.request_paste();
+                Some(Ok(json!({"pending": true})))
+            }
+            _ => None,
+        }),
+    });
+    // Save a Copy for File › Share… asks where; the answer sends it to the share sheet.
+    if let Some(mut dialog) = services.file_dialog.take() {
+        services.file_dialog = Some(Box::new(move |request, frame, reply| {
+            if matches!(request, FileDialogRequest::Save { .. })
+                && let Some(name) = share_next.take()
+            {
+                reply.send(Some(FileDialogAnswer::SaveTo(format!("{SHARE_ROOT}{name}"))));
+                return;
+            }
+            dialog(request, frame, reply);
+        }));
     }
 }
 
@@ -493,6 +695,10 @@ fn services(platform: &Platform, inbox: Inbox, located: Located, issued: Issued,
             FileDialogRequest::Save { suggested } => reply.send(Some(FileDialogAnswer::SaveTo(file_name(&suggested)))),
         })),
         write: Some(Box::new(move |path: &str, bytes: &[u8]| {
+            if path.starts_with(SHARE_ROOT) {
+                exporter.share(file_name(path), bytes.to_vec());
+                return Ok(());
+            }
             if exporter.save(path, bytes.to_vec()) == SaveRoute::InPlace {
                 push(&issued, path.to_string());
             }
@@ -745,6 +951,79 @@ mod tests {
         assert!(pen_sample(&Stylus { phase: TouchPhase::End, ..sample }).is_none());
         assert!(pen_sample(&Stylus { phase: TouchPhase::Cancel, ..sample }).is_none());
         assert!(pen_sample(&Stylus { eraser: true, ..sample }).is_some_and(|p| p.eraser));
+    }
+
+    /// A paste waits for the clipboard and runs, once, in the frame that brings it; a paste the
+    /// clipboard is already here for (⌘V on a hardware keyboard) runs at once.
+    #[test]
+    fn a_paste_waits_for_the_clipboard_and_runs_when_it_comes() {
+        let mut p = Pastes::default();
+        assert!(!p.run("edit.pasteSpecial.pasteInPlace", &json!({}), false), "ask the shell");
+        assert_eq!(p.answered(false), None, "still waiting");
+        assert_eq!(p.answered(true), Some(("edit.pasteSpecial.pasteInPlace".into(), json!({}))));
+        assert_eq!(p.answered(true), None, "answered once");
+        assert!(p.run("edit.paste", &json!({}), true), "the clipboard is here");
+        assert_eq!(p, Pastes::default());
+    }
+
+    /// A paste of PhotoCraft's own copy hands back exactly what Copy mirrored to the clipboard,
+    /// soft edges included, so PhotoCraft knows it for its own and pastes the copy itself.
+    #[test]
+    fn the_own_copy_is_what_copy_put_on_the_clipboard() {
+        let mirrored = Rc::new(RefCell::new(None));
+        let sink = Rc::clone(&mirrored);
+        let services = Services {
+            clipboard_set_image: Some(Box::new(move |w, h, rgba: &[u8]| {
+                *sink.borrow_mut() = Some((w, h, rgba.to_vec()));
+                Ok(())
+            })),
+            ..Default::default()
+        };
+        let mut app = PhotocraftApp::new(Session::new(), services);
+        let ctx = egui::Context::default();
+        app.run("file.new", json!({"width": 9, "height": 7, "background": "transparent"})).expect("a document");
+        app.run("select.rect", json!({"x": 1, "y": 1, "width": 5, "height": 4})).expect("a selection");
+        app.run("edit.fill", json!({"color": "#ff8000", "opacity": 37})).expect("a soft fill");
+        photocraft_ui_egui::menus::invoke(&mut app, &ctx, "edit.copy", json!({})).expect("copied");
+        let own = app.session.clipboard.as_ref().and_then(clipboard_pixels);
+        assert!(own.as_ref().is_some_and(|(_, _, px)| px.chunks(4).any(|p| p.get(3).is_some_and(|a| *a > 0 && *a < 255))), "soft pixels");
+        assert_eq!(own, *mirrored.borrow());
+    }
+
+    /// Outside a paste the clipboard isn't read: the New Document dialog, which looks at it, keeps
+    /// PhotoCraft's own copy and says nothing about it.
+    #[test]
+    fn a_read_outside_a_paste_keeps_the_copy_and_says_nothing() {
+        let services = Services {
+            clipboard_set_image: Some(Box::new(|_, _, _: &[u8]| Ok(()))),
+            clipboard_get_image: Some(Box::new(|| Err(NOT_PASTING.into()))),
+            ..Default::default()
+        };
+        let mut app = PhotocraftApp::new(Session::new(), services);
+        let ctx = egui::Context::default();
+        app.run("file.new", json!({"width": 4, "height": 4})).expect("a document");
+        photocraft_ui_egui::menus::invoke(&mut app, &ctx, "edit.copy", json!({})).expect("copied");
+        let _ = photocraft_ui_egui::menus::invoke(&mut app, &ctx, "file.new", json!({}));
+        assert_eq!(app.ui.status, NOT_PASTING, "the dialog looked at the clipboard");
+        quiet_clipboard(&mut app);
+        assert!(app.session.clipboard.is_some(), "the copy stays");
+        assert!(!app.ui.status_error && app.ui.status.is_empty(), "{}", app.ui.status);
+    }
+
+    /// File › Share… sends the document's own file when it keeps everything, else a PSD.
+    #[test]
+    fn a_share_is_the_documents_own_file_or_a_psd() {
+        use photocraft_doc::{Color, ColorMode, SampleType, Size};
+        let flat = Document::with_background("a.png", Size::new(4, 4), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+        let path = located("a.png").document_path().unwrap_or_default();
+        assert_eq!(share_name(&flat, Some(&path)), "a.png", "a flat file that keeps it");
+        assert_eq!(share_name(&flat, Some("inplace://1/b.psd")), "b.psd");
+        assert_eq!(share_name(&flat, None), "a.png", "a copy (from Photos, say): by its name");
+        let mut layered = flat.clone();
+        layered.layers.push(Layer::group("G", vec![]));
+        assert_eq!(share_name(&layered, Some(&path)), "a.psd", "a PNG can't keep its layers");
+        assert_eq!(share_name(&layered, Some("/x/c.pdn")), "c.pcraft");
+        assert_eq!(share_name(&Document::new("Untitled-1", Size::new(1, 1), ColorMode::Rgb, SampleType::U8), None), "Untitled-1.psd", "never saved");
     }
 
     /// The panel lists layers top first, children under their group, as the desktop panel does.
