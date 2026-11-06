@@ -22,7 +22,8 @@ use crate::headless::Headless;
 use crate::security::MAX_BATCH_STEPS;
 use crate::{AuthorizedWorkspace, AutomationError, files};
 
-static SCREENSHOT_DOWNSCALE_LIMIT: LazyLock<Arc<Semaphore>> = LazyLock::new(|| Arc::new(Semaphore::new(2)));
+const SCREENSHOT_DOWNSCALE_CONCURRENCY: usize = 2;
+static SCREENSHOT_DOWNSCALE_LIMIT: LazyLock<Arc<Semaphore>> = LazyLock::new(|| Arc::new(Semaphore::new(SCREENSHOT_DOWNSCALE_CONCURRENCY)));
 
 /// Where tools are executed.
 pub enum Backend {
@@ -674,6 +675,8 @@ async fn downscale_screenshot(bytes: Vec<u8>, max_side: u32) -> Result<Vec<u8>, 
     screenshot_blocking(SCREENSHOT_DOWNSCALE_LIMIT.clone(), move || Ok(downscale_png(&bytes, max_side)?.unwrap_or(bytes))).await?
 }
 
+/// Keep the permit in the blocking closure so a cancelled request still occupies capacity until
+/// its blocking work finishes.
 async fn screenshot_blocking<T: Send + 'static>(limit: Arc<Semaphore>, work: impl FnOnce() -> T + Send + 'static) -> Result<T, AutomationError> {
     let permit = limit.acquire_owned().await.map_err(|error| AutomationError::Other(format!("screenshot downscale limit unavailable: {error}")))?;
     tokio::task::spawn_blocking(move || {
@@ -1361,6 +1364,7 @@ mod tests {
     async fn bridge_screenshot_blocking_downscale_preserves_bytes_and_errors() {
         let image = photocraft_codecs::Image::from_u8(64, 32, photocraft_codecs::ChannelLayout::Rgba, vec![128; 64 * 32 * 4]).unwrap();
         let png = photocraft_codecs::encode(&image, photocraft_codecs::Format::Png, &Default::default()).unwrap();
+        assert_eq!(downscale_screenshot(png.clone(), 0).await.unwrap(), png);
         assert_eq!(downscale_screenshot(png.clone(), 64).await.unwrap(), png);
         let small = downscale_screenshot(png, 32).await.unwrap();
         let decoded = photocraft_codecs::decode_as(photocraft_codecs::Format::Png, &small).unwrap();
@@ -1368,21 +1372,70 @@ mod tests {
         assert!(downscale_screenshot(b"not a png".to_vec(), 32).await.is_err());
     }
 
+    #[tokio::test(flavor = "current_thread")]
+    async fn screenshot_blocking_reports_panics_as_errors() {
+        let error = screenshot_blocking::<()>(Arc::new(Semaphore::new(1)), || panic!("downscale panic")).await.unwrap_err();
+        assert!(matches!(error, AutomationError::Other(message) if message.contains("screenshot downscale task failed")));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn screenshot_downscale_limit_starts_only_two_jobs() {
+        let limit = SCREENSHOT_DOWNSCALE_LIMIT.clone();
+        let mut active = Vec::new();
+        let mut releases = Vec::new();
+        for _ in 0..SCREENSHOT_DOWNSCALE_CONCURRENCY {
+            let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+            let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
+            active.push(tokio::spawn(screenshot_blocking(limit.clone(), move || {
+                let _ = started_tx.send(());
+                let _ = release_rx.blocking_recv();
+            })));
+            releases.push(release_tx);
+            tokio::time::timeout(std::time::Duration::from_secs(10), started_rx).await.unwrap().unwrap();
+        }
+        assert_eq!(limit.available_permits(), 0);
+
+        let (queued_tx, queued_rx) = tokio::sync::oneshot::channel();
+        let (third_started_tx, mut third_started_rx) = tokio::sync::oneshot::channel();
+        let third = tokio::spawn(async move {
+            let _ = queued_tx.send(());
+            screenshot_blocking(limit, move || {
+                let _ = third_started_tx.send(());
+            })
+            .await
+        });
+        queued_rx.await.unwrap();
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), &mut third_started_rx).await.is_err(),
+            "a third blocking job started before either permit was released"
+        );
+
+        releases.remove(0).send(()).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(10), &mut third_started_rx).await.unwrap().unwrap();
+        third.await.unwrap().unwrap();
+        for release in releases {
+            release.send(()).unwrap();
+        }
+        for task in active {
+            task.await.unwrap().unwrap();
+        }
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn screenshot_downscale_permit_survives_request_cancellation() {
         let limit = Arc::new(Semaphore::new(1));
         let (started_tx, started_rx) = tokio::sync::oneshot::channel();
-        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
         let task = tokio::spawn(screenshot_blocking(limit.clone(), move || {
             let _ = started_tx.send(());
-            let _ = release_rx.recv();
+            let _ = release_rx.blocking_recv();
         }));
         started_rx.await.unwrap();
         task.abort();
         let _ = task.await;
         assert_eq!(limit.available_permits(), 0);
         release_tx.send(()).unwrap();
-        let permit = tokio::time::timeout(std::time::Duration::from_secs(1), limit.acquire_owned()).await.unwrap().unwrap();
+        let permit = tokio::time::timeout(std::time::Duration::from_secs(10), limit.acquire_owned()).await.unwrap().unwrap();
         drop(permit);
     }
 

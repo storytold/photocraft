@@ -108,6 +108,7 @@ fn mcp_runtime() -> Result<tokio::runtime::Runtime> {
 #[cfg(test)]
 mod tests {
     use super::mcp_runtime;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn mcp_stdio_defaults_to_one_worker_and_honors_override() {
@@ -127,8 +128,30 @@ mod tests {
             if let Some(workers) = worker_override {
                 command.env("TOKIO_WORKER_THREADS", workers);
             }
-            let output = command.output().unwrap();
-            assert!(output.status.success(), "TOKIO_WORKER_THREADS={worker_override:?}: {}", String::from_utf8_lossy(&output.stdout));
+            let mut child = command.stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn().unwrap();
+            let deadline = Instant::now() + Duration::from_secs(30);
+            loop {
+                if child.try_wait().unwrap().is_some() {
+                    break;
+                }
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let output = child.wait_with_output().unwrap();
+                    panic!(
+                        "TOKIO_WORKER_THREADS={worker_override:?}: child test timed out; stdout: {}; stderr: {}",
+                        String::from_utf8_lossy(&output.stdout),
+                        String::from_utf8_lossy(&output.stderr)
+                    );
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            let output = child.wait_with_output().unwrap();
+            assert!(
+                output.status.success(),
+                "TOKIO_WORKER_THREADS={worker_override:?}: stdout: {}; stderr: {}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
         }
     }
 }
