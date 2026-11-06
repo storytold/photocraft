@@ -103,7 +103,7 @@ fn set_mask_with(s: &mut Session, p: &Value, label: &str, mask: Option<LayerMask
 pub(super) fn move_mask(s: &mut Session, p: &Value) -> Result<Value> {
     let bad = |m: &str| EngineError::BadParams { cmd: "layer.layerMask.moveTo".into(), msg: m.into() };
     let from = layer_param(s, p)?;
-    let to = p.get("to").and_then(Value::as_u64).map(LayerId).ok_or_else(|| bad("`to` must be a layer id"))?;
+    let to = mask_destination(s, p)?;
     let copy = p.get("copy").and_then(Value::as_bool).unwrap_or(false);
     let replace = p.get("replace").and_then(Value::as_bool).unwrap_or(false);
     if from == to {
@@ -128,6 +128,30 @@ pub(super) fn move_mask(s: &mut Session, p: &Value) -> Result<Value> {
         Ok(())
     })?;
     Ok(json!({"layer": from.0, "to": to.0, "copy": copy}))
+}
+
+/// `layer.layerMask.moveTo`'s `to`: an id, or a name (as a recorded step keeps it) with
+/// `toOccurrence` choosing among the layers that share it, in document order (required when
+/// several do).
+fn mask_destination(s: &Session, p: &Value) -> Result<LayerId> {
+    let bad = |m: String| EngineError::BadParams { cmd: "layer.layerMask.moveTo".into(), msg: m };
+    match p.get("to") {
+        Some(Value::String(name)) => {
+            let occurrence = p
+                .get("toOccurrence")
+                .map(|v| v.as_u64().and_then(|n| usize::try_from(n).ok()).ok_or_else(|| bad("`toOccurrence` must be a non-negative integer".into())))
+                .transpose()?;
+            let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
+            let matches: Vec<_> = doc.walk().into_iter().filter(|(_, _, l)| &l.name == name).map(|(_, _, l)| l.id).collect();
+            if matches.len() > 1 && occurrence.is_none() {
+                return Err(bad(format!("multiple layers named `{name}`; specify `toOccurrence`")));
+            }
+            let index = occurrence.unwrap_or(0);
+            matches.get(index).copied().ok_or_else(|| bad(format!("no layer named `{name}` at occurrence {index}")))
+        }
+        Some(v) => v.as_u64().map(LayerId).ok_or_else(|| bad("`to` must be a layer id or name".into())),
+        None => Err(bad("missing `to`".into())),
+    }
 }
 
 /// Move a layer's pixels, linked mask and type by whole pixels (vectors move via

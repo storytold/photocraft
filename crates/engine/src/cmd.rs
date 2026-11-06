@@ -812,7 +812,7 @@ fn build() -> Vec<CommandSpec> {
             "Move Layer Mask",
             [],
             None,
-            r##"{"layer":id? (the mask's layer, default active),"to":id (the layer or group it goes to),"copy":bool=false (⌥-drag: a copy goes and the original stays),"replace":bool=false (replace a mask already there; otherwise refused)} → {layer,to,copy}"##,
+            r##"{"layer":id? (the mask's layer, default active),"to":id|name (the layer or group it goes to; a recorded step names it),"toOccurrence":n? (which of several layers named `to`, in document order),"copy":bool=false (⌥-drag: a copy goes and the original stays),"replace":bool=false (replace a mask already there; otherwise refused)} → {layer,to,copy}"##,
             has_layer,
             move_mask
         ),
