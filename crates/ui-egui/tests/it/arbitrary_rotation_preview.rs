@@ -55,7 +55,30 @@ fn setup(h: &mut Harness, width: u32, height: u32, zoom: f32, center: [f32; 2]) 
 }
 
 fn open(h: &mut Harness) -> u64 {
-    control(h, "ui.menu.invoke", json!({"id":"image.rotation.arbitrary"}))["dialog"].as_u64().expect("rotation dialog")
+    let id = control(h, "ui.menu.invoke", json!({"id":"image.rotation.arbitrary"}))["dialog"].as_u64().expect("rotation dialog");
+    aside(h, id);
+    id
+}
+
+/// Drag the dialog by its title to the window's right edge, over the panels, so it covers none of
+/// the image: opened centred, it hides the top of a tall rotated preview, and `blue` would take the
+/// first rows below it for the image's top.
+fn aside(h: &mut Harness, id: u64) {
+    h.run_steps(3);
+    let dialog = |h: &Harness| h.ctx.memory(|m| m.area_rect(egui::Id::unique(("dialog", id)))).expect("laid-out dialog");
+    let rect = dialog(h);
+    let from = egui::pos2(rect.center().x, rect.top() + 24.0);
+    let to = from + egui::vec2(h.ctx.content_rect().right() - rect.right(), 0.0);
+    h.hover_at(from);
+    h.drag_at(from);
+    h.run_steps(2);
+    for i in 1..=8 {
+        h.hover_at(from + (to - from) * (i as f32 / 8.0));
+        h.run_steps(1);
+    }
+    h.drop_at(to);
+    h.run_steps(3);
+    assert!(dialog(h).left() > h.state().last_canvas_rect.center().x + 240.0, "the dialog moved aside: {:?}", dialog(h));
 }
 
 fn angle(h: &mut Harness, id: u64, value: f64) {

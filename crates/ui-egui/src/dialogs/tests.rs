@@ -109,7 +109,9 @@ fn the_close_box_and_the_title_drag_keep_apart() {
     let x = h.get_by_label("Close").rect();
     let frame = rects(&h.ctx)[0];
     assert!((x.center().y - title.center().y).abs() < 2.0 && x.left() > title.right(), "the × is on the title row: {x:?}, {title:?}");
-    assert!(frame.right() - x.right() < 16.0, "at its right end: {x:?} in {frame:?}");
+    // The title row ends where the dialog's margin starts, so the × sits that far in from the frame.
+    let margin = crate::widgets::DIALOG_MARGIN.right as f32;
+    assert!(frame.right() - x.right() < margin + 4.0, "at its right end: {x:?} in {frame:?}");
     let drag = |h: &mut egui_kittest::Harness<'static, PhotocraftApp>, from: egui::Pos2, to: egui::Pos2| {
         h.hover_at(from);
         h.drag_at(from);
