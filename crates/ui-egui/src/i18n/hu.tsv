@@ -1865,12 +1865,12 @@ layerLabel	Magenta	Bíbor
 	Discord	Discord
 	Doc: {w} × {h} px	Dok.: {w} × {h} px
 	Drag a box or click four corners · drag the corners onto the edges of a skewed shape · {commit} commits · Esc cancels	Húzzon egy keretet, vagy kattintson a négy sarokra · húzza a sarkokat a ferde alakzat éleire · {commit}: véglegesítés · Esc: megszakítás
-	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	Húzzon körbevágási keretet · belül húzva mozgassa · az élekkel méretezze át ({ratio}: arány, {centre}: középről) · Space: mozgatás rajzolás közben · nyilak: léptetés · X: tájolás cseréje · {commit}: véglegesítés · Esc: megszakítás
+	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	Húzzon körbevágási keretet · belül húzva mozgassa · az élekkel méretezze át ({ratio}: arány, {centre}: középről) · Szóköz: mozgatás rajzolás közben · nyilak: léptetés · X: tájolás cseréje · {commit}: véglegesítés · Esc: megszakítás
 	Drag around the centre to rotate the view  ·  Shift constrains to 15°	A középpont körül húzva forgathatja a nézetet  ·  Shift: 15°-os lépésekben
 	Drag or click polygon points · hold Alt during lasso for straight segments · {add} add · {sub} before drawing subtracts	Húzzon vagy kattintson sokszögpontokra · lasszózás közben Alt: egyenes szakaszok · {add}: hozzáadás · {sub} rajzolás előtt: kivonás
 	Drag to draw a gradient	Színátmenet rajzolása húzással
 	Drag to move the active layer	Húzással mozgathatja az aktív réteget
-	Drag to pan  ·  hold Space with any tool	Húzással mozgathatja a nézetet  ·  bármely eszköznél tartsa nyomva a Space billentyűt
+	Drag to pan  ·  hold Space with any tool	Húzással mozgathatja a nézetet  ·  bármely eszköznél tartsa nyomva a szóközbillentyűt
 	Duration	Időtartam
 	Edit in Quick Mask Mode  (Q)	Szerkesztés gyorsmaszk módban  (Q)
 	Edit in Standard Mode  (Q)	Szerkesztés normál módban  (Q)
