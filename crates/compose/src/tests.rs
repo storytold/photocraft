@@ -3177,13 +3177,18 @@ fn selective_color_reporter_matrix_through_an_adjustment_layer() {
     let mut destructive = input.clone();
     adjust::apply_depth(&adj, &mut destructive, adjust::Transfer::Gamma(1.0), Some(SampleType::F32));
     check(&destructive, "Image > Adjustments");
-    let doc = Document::new("selc", Size::new(3, 1), ColorMode::Rgb, SampleType::F32);
-    let patterns = pattern::PreparedPatterns::new(&[], pattern::PREPARED_PATTERN_BYTES);
-    let cx = Ctx::for_doc(&doc, &patterns);
-    let mut layer = input.clone();
-    cx.apply_adjustment(&adj, &mut layer);
-    check(&layer, "adjustment layer");
-    assert_eq!(layer.px, destructive.px);
+    // Through a real adjustment layer in a rendered document (PR #11644 round 3):
+    // applying `adj` to a bare buffer would still pass if the compositor stopped
+    // applying Selective Color layers, so the pins are asserted on render output.
+    let mut doc = Document::new("selc", Size::new(3, 1), ColorMode::Rgb, SampleType::F32);
+    let mut base = Layer::raster("pixels", PixelFormat::RGBA32F);
+    for (x, px) in input.px.iter().enumerate() {
+        base.surface_mut().unwrap().write_pixel(x as i32, 0, &photocraft_raster::from_rgba(&PixelFormat::RGBA32F, *px));
+    }
+    doc.layers = vec![base, Layer::new("selective color", LayerContent::Adjustment(adj.clone()))];
+    let rendered = render(&doc, doc.bounds());
+    check(&rendered, "adjustment layer");
+    assert_eq!(rendered.px, destructive.px);
 }
 
 #[test]
