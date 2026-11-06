@@ -488,6 +488,7 @@ fn preflight_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     // However the tool was picked (toolbar, flyout, shortcut, automation), its group's key brings
     // it back later (#2608).
     app.ui.remember_group_tool();
+    crate::canvas::polygon_cancel_stale(app);
     // Camera Raw is modal like Photoshop's filter dialog: no application shortcut (Save, Undo,
     // tools) runs beneath it, and it handles its own keys (Y, U, O, S). Unlike the other dialogs
     // below it covers the canvas, so canvas zoom keys are blocked too.
@@ -504,6 +505,9 @@ fn preflight_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     // pick an option rather than a tool (#1481). A command shortcut (⌘D, F7…) takes the keyboard
     // off the bar first and runs, as with a native menu bar (#6573).
     crate::menu_keys::leave_for_shortcut(ctx);
+    if app.ui.dialogs.is_empty() && app.discard.is_none() && crate::type_tool::commit_shortcut(app, ctx) {
+        return false;
+    }
     if crate::menu_nav::is_open(ctx) || crate::menu_keys::is_focused(ctx) || crate::widgets::dropdown_list_open(ctx) {
         return false;
     }
@@ -552,6 +556,10 @@ fn preflight_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     if app.distort.caf.is_some() && !ctx.text_edit_focused() {
         crate::caf_ui::keys(app, ctx);
     }
+    // And Select and Mask's tools, views and brush size.
+    if app.distort.select_mask.is_some() && !ctx.text_edit_focused() {
+        crate::select_mask_ui::keys(app, ctx);
+    }
     true
 }
 
@@ -559,8 +567,8 @@ fn handle_modal_canvas_keys(app: &mut PhotocraftApp, ctx: &egui::Context, focus:
     use crate::shortcut_dispatch::{Focus, dispatch_pressed};
     // Dialogs (and Liquify's panel while one of its controls has focus) keep canvas zoom; a
     // focused text field keeps its keys.
-    let liquify_focus = (app.distort.liquify.is_some() || app.distort.caf.is_some()) && focus != Focus::None;
-    if liquify_focus || !app.ui.dialogs.is_empty() || app.discard.is_some() {
+    let liquify_focus = (app.distort.liquify.is_some() || app.distort.caf.is_some() || app.distort.select_mask.is_some()) && focus != Focus::None;
+    if liquify_focus || !app.ui.dialogs.is_empty() || app.discard.is_some() || app.smart_svg.modal_open() || app.save_options_open() {
         if focus != Focus::Text {
             nav_keys(app, ctx);
         }
@@ -610,6 +618,9 @@ fn handle_modal_canvas_keys(app: &mut PhotocraftApp, ctx: &egui::Context, focus:
     }
     // Perspective Crop with a pending quad: ↵ commits, Esc cancels.
     if focus == Focus::None && crate::perspective_crop_ui::keys(app, ctx) {
+        return true;
+    }
+    if focus == Focus::None && crate::frame_tool::keys(app, ctx) {
         return true;
     }
     // Move tool / Free Transform: arrows nudge (⇧ ×10, ⌥ duplicates first).
@@ -688,8 +699,13 @@ fn handle_pen_and_work_path_keys(app: &mut PhotocraftApp, ctx: &egui::Context, f
         }
     }
     // Pen path in progress: ↩ and Esc both end it as an open path and keep it, as in Photoshop (#1769).
-    if app.ui.pen.is_some() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter) || i.consume_key(Modifiers::NONE, Key::Escape)) {
+    // When the document refuses it, ↩ keeps the draft to commit again; Esc keeps it as the Work Path.
+    if app.ui.pen.is_some() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter)) {
         crate::vector_ui::pen_commit(app, false);
+        return true;
+    }
+    if app.ui.pen.is_some() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+        crate::vector_ui::pen_end(app);
         return true;
     }
     // A finished work path shown by the Pen or Path Selection: ⌫/Delete deletes it, as in
@@ -775,6 +791,10 @@ fn handle_registry_and_tool_keys(app: &mut PhotocraftApp, ctx: &egui::Context, f
             return true;
         }
     }
+    if app.ui.frame_tool.drag.is_some() && pressed(Key::Escape) {
+        crate::frame_tool::cancel(app);
+        return true;
+    }
     // Enter / Escape commit or cancel in-progress tool state (polygonal lasso, crop).
     if crate::lasso_ui::active(app) {
         let mods = ctx.input(|i| i.modifiers);
@@ -800,12 +820,17 @@ fn handle_registry_and_tool_keys(app: &mut PhotocraftApp, ctx: &egui::Context, f
             return true;
         }
         // In a full screen mode, the Crop tool's untouched default frame (Straighten off) has nothing to cancel: cancelling only
-        // makes the next one, so Esc goes on to leave full screen (#7315).
-        let untouched = app.ui.view.screen_mode != "standard" && app.ui.polygon.is_empty() && app.crop.default_frame && !crate::crop_straighten::mode(app);
+        // makes the next one, so Esc goes on to leave full screen (#7315). A gesture on it is still cancelled (#9275).
+        let untouched = app.ui.view.screen_mode != "standard"
+            && app.ui.polygon.is_empty()
+            && app.crop.default_frame
+            && app.crop.drag.is_none()
+            && !crate::crop_straighten::mode(app);
         if !untouched && pressed(Key::Escape) {
             app.ui.polygon.clear();
             app.ui.polygon_mode.clear();
-            crate::crop_ui::cancel(app);
+            app.ui.polygon_doc = None;
+            crate::crop_ui::dismiss(app);
             return true;
         }
     }
@@ -830,6 +855,7 @@ fn handle_escape_and_view_keys(app: &mut PhotocraftApp, ctx: &egui::Context) {
         || app.ui.tool == Tool::RotateView
         || app.wide_angle.is_some()
         || app.save_options_open()
+        || app.smart_svg.modal_open()
         || app.distort.gallery.is_some()
         || ctx.any_popup_open()
         || ctx.data(|d| d.get_temp::<(egui::Id, egui::Rect)>(egui::Id::unique("tool-flyout")).is_some());
@@ -849,8 +875,10 @@ fn handle_escape_and_view_keys(app: &mut PhotocraftApp, ctx: &egui::Context) {
         }
         return;
     }
-    // ⇧+ / ⇧− step the blend mode and ⇧⌥ letters pick one (`blend_keys`). Before the tool
-    // letters: `consume_key` ignores extra ⇧ and ⌥, so ⇧⌥M would otherwise pick a tool.
+    // + / − pick a Path Operation with the Pen tools and Path Selection (`path_components`)…
+    crate::path_components::handle_keys(app, ctx);
+    // … and otherwise ⇧+ / ⇧− step the blend mode and ⇧⌥ letters pick one (`blend_keys`). Before the
+    // tool letters: `consume_key` ignores extra ⇧ and ⌥, so ⇧⌥M would otherwise pick a tool.
     crate::blend_keys::handle(app, ctx);
     // Tool keys; pressing the key of the current group cycles within it. With Preferences ›
     // Tools › Use Shift Key for Tool Switch, only ⇧+key cycles and the plain key keeps the
