@@ -1059,6 +1059,64 @@ fn invalid_document_index_is_rejected_not_the_active_document() {
     assert_eq!(count(&h), 1);
 }
 
+/// #6898 review: `doc.open` of an animated GIF opens its first frame unless `animation` asks
+/// for frames or a video layer, from a trusted path and from a workspace alike; `ask` and
+/// unknown values are refused.
+#[test]
+fn doc_open_takes_an_animations_first_frame_unless_asked() {
+    use photocraft_codecs::web::{GifFrame, encode_gif_animated};
+    let frames: Vec<GifFrame> =
+        [[255, 0, 0], [0, 0, 255], [0, 255, 0]].iter().map(|&c| GifFrame { indices: vec![0; 6], palette: vec![c], transparent: None, delay_cs: 5 }).collect();
+    let base = std::env::temp_dir().join(format!("pc-rpc-animated-open-{}", std::process::id()));
+    std::fs::create_dir_all(&base).unwrap();
+    std::fs::write(base.join("a.gif"), encode_gif_animated(3, 2, &frames, true).unwrap()).unwrap();
+    let shape = |h: &mut Headless, params: Value| -> (usize, bool, bool) {
+        h.handle("doc.open", params).unwrap();
+        let d = &h.session.active().unwrap().doc;
+        (d.layers.len(), d.frame_animation.is_some(), d.timeline.is_some())
+    };
+    let trusted = base.join("a.gif").to_string_lossy().into_owned();
+    let mut h = Headless::trusted_local();
+    assert_eq!(shape(&mut h, json!({"path": trusted})), (1, false, false), "no option: the first frame");
+    assert_eq!(shape(&mut h, json!({"path": trusted, "animation": "firstFrame"})), (1, false, false));
+    assert_eq!(shape(&mut h, json!({"path": trusted, "animation": "frames"})), (3, true, false));
+    assert_eq!(shape(&mut h, json!({"path": trusted, "animation": "video"})), (1, false, true));
+    for bad in ["ask", "everything"] {
+        let e = h.handle("doc.open", json!({"path": trusted, "animation": bad})).unwrap_err().to_string();
+        assert!(e.contains("firstFrame, frames or video"), "{bad}: {e}");
+    }
+    let mut w = Headless::with_workspace(crate::AuthorizedWorkspace::new(Some(&base), None).unwrap());
+    assert_eq!(shape(&mut w, json!({"path": "a.gif"})), (1, false, false));
+    assert_eq!(shape(&mut w, json!({"path": "a.gif", "animation": "frames"})), (3, true, false));
+    // Release directory capabilities before cleanup on Windows.
+    drop(w);
+    std::fs::remove_dir_all(base).unwrap();
+}
+
+/// #6898: `doc.open` reshapes an animated GIF or WebP, never a frame animation saved in a native
+/// document: cutting it to its first frame here would lose the frames at the next save.
+#[test]
+fn doc_open_keeps_the_frame_animation_of_a_native_document() {
+    use photocraft_codecs::web::{GifFrame, encode_gif_animated};
+    let frames: Vec<GifFrame> =
+        [[255, 0, 0], [0, 0, 255], [0, 255, 0]].iter().map(|&c| GifFrame { indices: vec![0; 6], palette: vec![c], transparent: None, delay_cs: 5 }).collect();
+    let gif = encode_gif_animated(3, 2, &frames, true).unwrap();
+    let opts = photocraft_io::ImportOptions { animation: photocraft_io::AnimationImport::Frames, ..Default::default() };
+    let doc = photocraft_io::import_with_options("a.gif", &gif, &opts).unwrap().document;
+    let base = std::env::temp_dir().join(format!("pc-rpc-native-animation-{}", std::process::id()));
+    std::fs::create_dir_all(&base).unwrap();
+    let file = base.join("a.pcraft");
+    std::fs::write(&file, photocraft_format::save_to_bytes(&doc, &Default::default()).unwrap()).unwrap();
+    let path = file.to_string_lossy().into_owned();
+    let mut h = Headless::trusted_local();
+    for params in [json!({"path": path}), json!({"path": path, "animation": "firstFrame"}), json!({"path": path, "animation": "video"})] {
+        h.handle("doc.open", params.clone()).unwrap();
+        let d = &h.session.active().unwrap().doc;
+        assert_eq!((d.layers.len(), d.frame_animation.is_some(), d.timeline.is_some()), (3, true, false), "{params}");
+    }
+    std::fs::remove_dir_all(base).unwrap();
+}
+
 #[test]
 fn approve_high_memory_rejects_invalid_types_and_formats_structured_error() {
     let h = session();

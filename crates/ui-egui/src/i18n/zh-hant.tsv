@@ -3088,6 +3088,22 @@ curves	Smooth	平滑
 	In Front	前面
 	Behind	後面
 	Blend	混合
+	Create Frame Animation	建立影格動畫
+	Make Frames From Layers	從圖層建立影格
+	Forever	永遠
+	Once	一次
+	No delay	無延遲
+	First frame	第一個影格
+	Duplicate Selected Frame	複製選取的影格
+	Delete Selected Frame	刪除選取的影格
+	{seconds} sec.	{seconds} 秒
+	{count} times	{count} 次
+	{n} frames	{n} 個影格
+	Frames before	之前的影格
+	Frames after	之後的影格
+	Tween	轉場
+	Last frame	最後一個影格
+	Frames to add	要新增的影格數
 	DDS Options	DDS 選項
 	Compression	壓縮
 	Generate Mipmaps	產生 Mipmap
@@ -3154,6 +3170,18 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Profile	描述檔
 	Target	目標
 	Units	單位
+	A layer per frame, each with its own delay, edited in Window › Timeline	每個影格一個圖層，各有自己的延遲，在「視窗 › 時間軸」中編輯
+	A still image	靜態影像
+	Change it later in Preferences › File Handling.	之後可在「偏好設定 › 檔案處理」中變更。
+	First frame only	僅第一個影格
+	Frame animation	影格動畫
+	One layer holding every frame, played on the timeline	一個包含所有影格的圖層，在時間軸上播放
+	Open Animated {format}	開啟動畫 {format}
+	Remember this choice for {format} files	對 {format} 檔案記住此選擇
+	Video layer	視訊圖層
+	“{name}” is an animated {format} with {frames} frames. Open it as:	「{name}」是包含 {frames} 個影格的動畫 {format}。開啟為：
+	Open animated GIF as	動畫 GIF 開啟為
+	Open animated WebP as	動畫 WebP 開啟為
 	Font size presets	字體大小預設
 	Leading presets	行距預設
 	Tracking presets	字距調整預設

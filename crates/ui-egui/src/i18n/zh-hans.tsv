@@ -3127,6 +3127,22 @@ curves	Smooth	平滑
 	In Front	前面
 	Behind	后面
 	Blend	混合
+	Create Frame Animation	创建帧动画
+	Make Frames From Layers	从图层建立帧
+	Forever	永远
+	Once	一次
+	No delay	无延迟
+	First frame	第一帧
+	Duplicate Selected Frame	复制所选帧
+	Delete Selected Frame	删除所选帧
+	{seconds} sec.	{seconds} 秒
+	{count} times	{count} 次
+	{n} frames	{n} 帧
+	Frames before	之前的帧
+	Frames after	之后的帧
+	Tween	过渡
+	Last frame	最后一帧
+	Frames to add	要添加的帧数
 	DDS Options	DDS 选项
 	Compression	压缩
 	Generate Mipmaps	生成 Mipmap
@@ -3198,6 +3214,18 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Profile	配置文件
 	Target	目标
 	Units	单位
+	A layer per frame, each with its own delay, edited in Window › Timeline	每帧一个图层，各有自己的延迟，在“窗口 › 时间轴”中编辑
+	A still image	静态图像
+	Change it later in Preferences › File Handling.	以后可在“首选项 › 文件处理”中更改。
+	First frame only	仅第一帧
+	Frame animation	帧动画
+	One layer holding every frame, played on the timeline	一个包含所有帧的图层，在时间轴上播放
+	Open Animated {format}	打开动画 {format}
+	Remember this choice for {format} files	对 {format} 文件记住此选择
+	Video layer	视频图层
+	“{name}” is an animated {format} with {frames} frames. Open it as:	“{name}”是包含 {frames} 帧的动画 {format}。打开为：
+	Open animated GIF as	动画 GIF 打开为
+	Open animated WebP as	动画 WebP 打开为
 	Font size presets	字号预设
 	Leading presets	行距预设
 	Tracking presets	字距调整预设

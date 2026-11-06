@@ -10,6 +10,7 @@
 mod actions_record;
 pub mod adjust_params;
 mod allocation;
+pub mod animated_open;
 pub mod build_info;
 mod canvas_geom;
 mod channel_clip;
@@ -45,6 +46,7 @@ pub mod select_mask_edits;
 pub mod shell_commands;
 pub mod shortcut_sets;
 pub mod snap;
+pub use animation_cmds::MAX_TWEEN;
 pub use variables_cmds::{export_data_sets_with, import_data_sets_text};
 pub use video_cmds::render_video_with;
 
@@ -70,6 +72,7 @@ pub use cmd::actions_edit_cmds;
 pub use cmd::adjust_cmds;
 pub use cmd::align_cmds;
 pub use cmd::analysis_cmds;
+use cmd::animation_cmds;
 pub use cmd::artboard_cmds;
 pub use cmd::atn_cmds;
 pub use cmd::automate_cmds;
@@ -198,6 +201,10 @@ pub(crate) fn active_layer_of(s: &Session) -> std::result::Result<&photocraft_do
     d.active_layer.and_then(|id| d.doc.layer(id)).ok_or_else(|| "no active layer".into())
 }
 
+/// A decoded document held back from opening: its id, the document, whether its source is
+/// read-only, and the bytes it came from when the answer may need them.
+type HeldOpen = (u64, Document, bool, Option<std::sync::Arc<Vec<u8>>>);
+
 #[derive(Default)]
 pub struct Session {
     docs: Vec<DocState>,
@@ -312,7 +319,7 @@ pub struct Session {
     /// Documents a background open decoded but held back until the user answers the profile
     /// prompt ([`ColorState::open_question`](color_cmds::ColorState::open_question)): `(id,
     /// document, source read-only)`. The shell takes them with [`Session::take_held_open`].
-    held_opens: Vec<(u64, Document, bool)>,
+    held_opens: Vec<HeldOpen>,
     next_held_open: u64,
     pub(crate) pending_preflights: Vec<jobs::PendingPsdPreflight>,
     next_pending_preflight: u64,

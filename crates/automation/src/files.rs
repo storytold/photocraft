@@ -4,6 +4,7 @@
 use std::path::Path;
 
 use photocraft_doc::Document;
+use photocraft_engine::prefs::AnimatedOpen;
 use photocraft_format::{PcraftWriter, SaveOptions};
 use photocraft_io::{BandRenderer, ExportOptions};
 
@@ -16,14 +17,20 @@ pub struct Opened {
     pub source_read_only: bool,
 }
 
-/// Decode a document that was read through a filesystem capability.
+/// Whether `name` has the native `.pcraft` extension.
+fn is_native_name(name: &str) -> bool {
+    Path::new(name).extension().is_some_and(|extension| extension.eq_ignore_ascii_case(photocraft_format::EXTENSION))
+}
+
+/// Decode a document that was read through a filesystem capability. An animated GIF or WebP
+/// opens as its first frame ([`open_bytes_as`] can open its frames).
 pub fn open_bytes(name: &str, bytes: &[u8]) -> Result<Opened, AutomationError> {
     open_bytes_with_options(name, bytes, &photocraft_io::ImportOptions::default())
 }
 
 /// Decode a document that was read through a filesystem capability with custom import options.
 pub fn open_bytes_with_options(name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions) -> Result<Opened, AutomationError> {
-    if Path::new(name).extension().is_some_and(|extension| extension.eq_ignore_ascii_case(photocraft_format::EXTENSION)) {
+    if is_native_name(name) {
         let document = photocraft_format::load_from_bytes(bytes)?;
         return Ok(Opened { warnings: photocraft_io::open_warnings(&document), document, source_read_only: false });
     }
@@ -32,9 +39,47 @@ pub fn open_bytes_with_options(name: &str, bytes: &[u8], opts: &photocraft_io::I
 }
 
 /// Open a document from disk. Directory bundles and `.pcraft` ZIPs load
-/// natively; everything else goes through `photocraft-io` (PSD, PNG, …).
+/// natively; everything else goes through `photocraft-io` (PSD, PNG, …). An animated GIF or WebP
+/// opens as its first frame ([`open_as`] can open its frames).
 pub fn open(path: &Path) -> Result<Opened, AutomationError> {
     open_with_options(path, &photocraft_io::ImportOptions::default())
+}
+
+/// [`open_bytes_with_options`], opening an animated GIF or WebP as `animation` says (a frame
+/// animation, a video layer, or its first frame; never asking). `path` is the file a video layer
+/// reloads from.
+pub fn open_bytes_as(
+    name: &str,
+    bytes: &[u8],
+    animation: AnimatedOpen,
+    path: Option<&str>,
+    opts: &photocraft_io::ImportOptions,
+) -> Result<Opened, AutomationError> {
+    let opts = photocraft_io::ImportOptions { animation: photocraft_engine::animated_open::import_for(animation), ..*opts };
+    let mut opened = open_bytes_with_options(name, bytes, &opts)?;
+    if animation == AnimatedOpen::Video {
+        photocraft_engine::animated_open::open_as_video(&mut opened.document, &mut opened.warnings, bytes, path, &opts, &photocraft_raster::Interrupt::NONE)?;
+    }
+    Ok(opened)
+}
+
+/// [`open_with_options`], opening an animated GIF or WebP as `animation` says.
+pub fn open_as(path: &Path, animation: AnimatedOpen, opts: &photocraft_io::ImportOptions) -> Result<Opened, AutomationError> {
+    let opts = photocraft_io::ImportOptions { animation: photocraft_engine::animated_open::import_for(animation), ..*opts };
+    let mut opened = open_with_options(path, &opts)?;
+    // Only a read cut short at its first frame has more to read: a native document is the document.
+    if animation == AnimatedOpen::Video && photocraft_engine::animated_open::more_frames(&opened.warnings) {
+        let bytes = std::fs::read(path).map_err(|e| AutomationError::BadRequest(format!("read `{}`: {e}", path.display())))?;
+        photocraft_engine::animated_open::open_as_video(
+            &mut opened.document,
+            &mut opened.warnings,
+            &bytes,
+            path.to_str(),
+            &opts,
+            &photocraft_raster::Interrupt::NONE,
+        )?;
+    }
+    Ok(opened)
 }
 
 /// Open a document from disk with custom import options.

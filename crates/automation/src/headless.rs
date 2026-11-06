@@ -167,7 +167,8 @@ impl Headless {
         result
     }
 
-    /// Open a file and make it the active document.
+    /// Open a file and make it the active document. An animated GIF or WebP opens as its first
+    /// frame ([`Self::open_as`] can open its frames).
     pub fn open(&mut self, path: &Path) -> Result<Value, AutomationError> {
         self.open_with_approval(path, false)
     }
@@ -180,14 +181,42 @@ impl Headless {
 
     /// Open a file with custom import options and make it the active document.
     pub fn open_with_options(&mut self, path: &Path, opts: &photocraft_io::ImportOptions) -> Result<Value, AutomationError> {
+        self.open_reading(path, None, opts)
+    }
+
+    /// [`Self::open_with_options`], opening an animated GIF or WebP as `animation` says
+    /// (`doc.open`'s `animation`): a frame animation, a video layer or its first frame, never
+    /// asking.
+    pub fn open_as(
+        &mut self,
+        path: &Path,
+        animation: photocraft_engine::prefs::AnimatedOpen,
+        opts: &photocraft_io::ImportOptions,
+    ) -> Result<Value, AutomationError> {
+        self.open_reading(path, Some(animation), opts)
+    }
+
+    fn open_reading(
+        &mut self,
+        path: &Path,
+        animation: Option<photocraft_engine::prefs::AnimatedOpen>,
+        opts: &photocraft_io::ImportOptions,
+    ) -> Result<Value, AutomationError> {
         let requested = path.to_str().ok_or_else(|| AutomationError::BadRequest("automation paths must be valid UTF-8".into()))?;
         let mut o = match &self.filesystem {
             Filesystem::Denied => return Err(AutomationError::BadRequest("automation filesystem access is not granted: read authority is absent".into())),
-            Filesystem::TrustedLocal => files::open_with_options(path, opts)?,
+            Filesystem::TrustedLocal => match animation {
+                Some(animation) => files::open_as(path, animation, opts)?,
+                None => files::open_with_options(path, opts)?,
+            },
             Filesystem::Workspace(workspace) => {
                 let bytes = workspace.read(requested)?;
                 let name = path.file_name().and_then(|name| name.to_str()).unwrap_or(requested);
-                files::open_bytes_with_options(name, &bytes, opts)?
+                match animation {
+                    // The workspace read the bytes: no ambient path for a video layer to reload from.
+                    Some(animation) => files::open_bytes_as(name, &bytes, animation, None, opts)?,
+                    None => files::open_bytes_with_options(name, &bytes, opts)?,
+                }
             }
         };
         // Preferences › Raw Defaults › Resolution, as the app's File › Open applies it.

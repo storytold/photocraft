@@ -103,6 +103,7 @@ pub use canvas::gpu_canvas;
 pub use canvas::guide_select;
 pub use canvas::layer_pick_ui;
 pub use canvas::move_ui;
+use canvas::onion_skin;
 pub use canvas::outline;
 pub use canvas::paint_mouse;
 pub use canvas::patch_preview;
@@ -228,6 +229,7 @@ pub use panels::color_hud;
 pub use panels::color_panel_ui;
 pub use panels::comps_ui;
 pub use panels::doc_props_ui;
+use panels::frame_strip_ui;
 pub use panels::histogram_panel;
 pub use panels::history_menu_ui;
 pub use panels::layer_filter_ui;
@@ -779,6 +781,9 @@ mod color_swatch_tests;
 mod profile_open_tests;
 
 #[cfg(test)]
+mod animated_open_tests;
+
+#[cfg(test)]
 mod profile_prompt_tests;
 
 #[cfg(test)]
@@ -946,6 +951,8 @@ mod artboard_first_board_tests;
 mod status_bar_tests;
 #[cfg(test)]
 mod stroke_timing_tests;
+#[cfg(test)]
+mod timeline_dock_tests;
 
 #[cfg(test)]
 mod polygon_lasso_step_snap_tests;

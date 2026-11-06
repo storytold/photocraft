@@ -50,6 +50,7 @@ pub mod export_estimate;
 mod exr_native;
 pub mod exr_parts;
 mod flat;
+pub mod gif_anim;
 mod gradient_bake;
 pub mod guides_map;
 pub use gradient_bake::{Method as GradientMethod, bake as bake_gradient};
@@ -95,9 +96,10 @@ use photocraft_psd::{PsdError, PsdFile};
 
 pub use adjust_map::ADJUSTMENT_KEYS;
 pub use flat::{
-    DEFAULT_LOSSY_WEBP_QUALITY, apply_file_encoding, document_to_image, document_to_image_with_renderer, export_flat, export_flat_with_renderer,
-    export_png_streamed_with_renderer, export_preview_png_with_renderer, file_encoding, import_gif_frames, import_tiff_page, import_tiff_page_with_options,
-    import_webp_frames, tga_alpha_channel_to_transparency, tga_default_bits,
+    DEFAULT_LOSSY_WEBP_QUALITY, MAX_GIF_LAYER_FRAMES, apply_file_encoding, document_to_image, document_to_image_with_renderer, export_flat,
+    export_flat_with_renderer, export_png_streamed_with_renderer, export_preview_png_with_renderer, file_encoding, import_animation_frames,
+    import_animation_frames_with, import_gif_frames, import_tiff_page, import_tiff_page_with_options, import_webp_frames, tga_alpha_channel_to_transparency,
+    tga_default_bits,
 };
 // Re-exported for the `flat_open_bench` example, which times the tile-building phase of a flat open.
 #[doc(hidden)]
@@ -580,6 +582,18 @@ pub fn import_with_svg_group_depth_and_interrupt(
     import_with_options_and_interrupt(name, bytes, &ImportOptions { max_group_depth, ..Default::default() }, ctl)
 }
 
+/// How an animated GIF or WebP imports. A caller that doesn't say gets the first frame, as a
+/// still image with a warning naming how many frames the file has.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AnimationImport {
+    /// The first frame only.
+    #[default]
+    FirstFrame,
+    /// A raster layer per frame and a frame animation with the file's delays (within
+    /// [`MAX_GIF_LAYER_FRAMES`] and the memory budget, with a warning when frames are left out).
+    Frames,
+}
+
 /// The user's settings that shape an import.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ImportOptions {
@@ -587,6 +601,8 @@ pub struct ImportOptions {
     pub max_group_depth: usize,
     /// The demosaic method camera raws are developed with.
     pub demosaic: raw::Demosaic,
+    /// How an animated GIF or WebP opens: its first frame unless asked for its frames.
+    pub animation: AnimationImport,
     /// PSD layer/mask/merged pixel allowance, including conversion workspace, and the
     /// equivalent allowance for a layered TIFF's composite and retained decoded image. May
     /// lower the default cap; 0 uses the adaptive budget. Does not cover metadata or
@@ -607,6 +623,7 @@ impl Default for ImportOptions {
         ImportOptions {
             max_group_depth: photocraft_doc::MAX_GROUP_DEPTH,
             demosaic: raw::Demosaic::default(),
+            animation: AnimationImport::default(),
             psd_max_pixel_bytes: 0,
             flat_max_pixel_bytes: 0,
             psd_high_memory_approved: false,
@@ -1116,6 +1133,12 @@ fn export_stages_with_renderer(
             res.warnings.extend(r.drain_diagnostics());
         }
         return Ok(res.into());
+    }
+    // A document with a frame animation saves as an animated GIF, each frame with its own delay.
+    if ext == "gif"
+        && let Some((bytes, warnings)) = gif_anim::export_with_warnings(doc, ctl)?
+    {
+        return Ok(ExportResult { bytes, warnings }.into());
     }
     if ext == photocraft_format::EXTENSION {
         let doc = named_for_file(doc, name_or_ext);

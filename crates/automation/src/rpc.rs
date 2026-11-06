@@ -137,12 +137,14 @@ impl Headless {
             "session.list" => Ok(self.session_list()),
             "doc.open" => {
                 let path = str_of(&p, "path").ok_or_else(|| bad("doc.open needs `path`"))?;
+                let animation = photocraft_engine::animated_open::requested(str_of(&p, "animation"))?;
                 let approve = match p.get("approveHighMemory") {
                     None | Some(Value::Null) => false,
                     Some(Value::Bool(b)) => *b,
                     Some(_) => return Err(bad("`approveHighMemory` must be a boolean")),
                 };
-                self.open_with_approval(&PathBuf::from(path), approve)
+                let opts = photocraft_io::ImportOptions { psd_high_memory_approved: approve, ..Default::default() };
+                self.open_as(&PathBuf::from(path), animation, &opts)
             }
             "doc.place" => {
                 let path = str_of(&p, "path").ok_or_else(|| bad("doc.place needs `path`"))?;

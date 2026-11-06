@@ -4569,6 +4569,22 @@ shape	Appearance	Aspetto
 	Use	Usa
 	In Front	Davanti
 	Behind	Dietro
+	Create Frame Animation	Crea animazione fotogrammi
+	Make Frames From Layers	Crea fotogrammi da livelli
+	Forever	Per sempre
+	Once	Una volta
+	No delay	Nessun ritardo
+	First frame	Primo fotogramma
+	Duplicate Selected Frame	Duplica fotogramma selezionato
+	Delete Selected Frame	Elimina fotogramma selezionato
+	{seconds} sec.	{seconds} sec.
+	{count} times	{count} volte
+	{n} frames	{n} fotogrammi
+	Frames before	Fotogrammi prima
+	Frames after	Fotogrammi dopo
+	Tween	Interpola
+	Last frame	Ultimo fotogramma
+	Frames to add	Fotogrammi da aggiungere
 	DDS Options	Opzioni DDS
 	Generate Mipmaps	Genera mipmap
 	There is no color table to save.	Non c'è alcuna tabella colori da salvare.
@@ -4623,6 +4639,18 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Tight Curl	Riccio stretto
 	Loose Curl	Riccio largo
 	Stylized dabs from a history state	Tocchi stilizzati da uno stato della storia
+	A layer per frame, each with its own delay, edited in Window › Timeline	Un livello per fotogramma, ciascuno con il proprio ritardo, modificabile in Finestra › Timeline
+	A still image	Un’immagine fissa
+	Change it later in Preferences › File Handling.	Puoi cambiarlo in Preferenze › Gestione file.
+	First frame only	Solo il primo fotogramma
+	Frame animation	Animazione a fotogrammi
+	One layer holding every frame, played on the timeline	Un livello con tutti i fotogrammi, riprodotto nella timeline
+	Open Animated {format}	Apri {format} animato
+	Remember this choice for {format} files	Ricorda questa scelta per i file {format}
+	Video layer	Livello video
+	“{name}” is an animated {format} with {frames} frames. Open it as:	«{name}» è un {format} animato con {frames} fotogrammi. Aprilo come:
+	Open animated GIF as	Apri GIF animato come
+	Open animated WebP as	Apri WebP animato come
 	Font size presets	Predefiniti dimensione font
 	Leading presets	Predefiniti interlinea
 	Tracking presets	Predefiniti spaziatura

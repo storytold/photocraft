@@ -4167,6 +4167,22 @@ curves	Smooth	Згладити
 	Use	Використати
 	In Front	Спереду
 	Behind	Ззаду
+	Create Frame Animation	Створити покадрову анімацію
+	Make Frames From Layers	Створити кадри із шарів
+	Forever	Постійно
+	Once	Один раз
+	No delay	Без затримки
+	First frame	Перший кадр
+	Duplicate Selected Frame	Дублювати вибраний кадр
+	Delete Selected Frame	Видалити вибраний кадр
+	{seconds} sec.	{seconds} с
+	{count} times	{count} разів
+	{n} frames	{n} кадрів
+	Frames before	Кадри до
+	Frames after	Кадри після
+	Tween	Проміжні кадри
+	Last frame	Останній кадр
+	Frames to add	Додати кадрів
 	DDS Options	Параметри DDS
 	Compression	Стиснення
 	Generate Mipmaps	Створити MIP-карти
@@ -4223,6 +4239,18 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Loose Curl	Вільний завиток
 	Stylized dabs from a history state	Стилізовані мазки зі стану історії
 	Target	Ціль
+	A layer per frame, each with its own delay, edited in Window › Timeline	Шар на кожен кадр, кожен із власною затримкою; редагування у Вікно › Шкала часу
+	A still image	Нерухоме зображення
+	Change it later in Preferences › File Handling.	Змінити можна в Налаштування › Обробка файлів.
+	First frame only	Лише перший кадр
+	Frame animation	Покадрова анімація
+	One layer holding every frame, played on the timeline	Один шар з усіма кадрами, відтворюється на шкалі часу
+	Open Animated {format}	Відкрити анімований {format}
+	Remember this choice for {format} files	Запам’ятати цей вибір для файлів {format}
+	Video layer	Відеошар
+	“{name}” is an animated {format} with {frames} frames. Open it as:	«{name}» — анімований {format}, кадрів: {frames}. Відкрити як:
+	Open animated GIF as	Відкривати анімований GIF як
+	Open animated WebP as	Відкривати анімований WebP як
 	Font size presets	Набори розмірів шрифту
 	Leading presets	Набори інтерліньяжу
 	Tracking presets	Набори трекінгу

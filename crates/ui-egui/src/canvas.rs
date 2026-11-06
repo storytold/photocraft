@@ -30,6 +30,7 @@ pub mod guide_select;
 pub mod layer_pick_ui;
 pub mod move_ui;
 mod navigator;
+pub(super) mod onion_skin;
 pub mod outline;
 mod paint;
 pub mod paint_mouse;
@@ -89,7 +90,7 @@ use paint::draw_tool_state;
 pub(crate) use paint::{clip_line, marching_ants_line_shapes, marching_ants_mapped};
 use paint::{
     draw_beyond_canvas, draw_drag_preview, marching_ants_segment_shapes, paint_cpu_detail, paint_cpu_document, paint_gpu_view, paint_mapped_image_at,
-    pattern_xf,
+    paint_overlay, pattern_xf,
 };
 use selection::selection_shown_offset;
 pub use selection::{SelCursor, selection_cursor};
@@ -504,6 +505,10 @@ fn paint_canvas(
         for &c in &copies {
             paint_cpu_document(painter, &pattern_xf(&xf, c, tile), area, rotated, checkerboard, tex, opaque);
         }
+    }
+    // Onion skin: the neighbouring animation frames, faint, over the document (onion_skin.rs).
+    for (tex, tint) in crate::onion_skin::ghosts(app, ctx, doc.id) {
+        paint_overlay(painter, &xf, tex, tint, [doc.size.width as f32, doc.size.height as f32], img_rect, flip);
     }
     // Channels panel: alpha / Quick Mask overlays and single-channel views (channel_view.rs).
     if let Some(tex) = crate::channel_view::ensure(app, ctx, idx, output) {

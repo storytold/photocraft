@@ -1492,10 +1492,14 @@ fn app_methods(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlReques
     let p = &req.params;
     Some(match req.method.as_str() {
         "app.open" => match str_param(p, "path") {
-            Some(path) => match p.get("approveHighMemory") {
-                None | Some(Value::Null) => app_open(app, path, false),
-                Some(Value::Bool(approved)) => app_open(app, path, *approved),
-                Some(_) => err("expected boolean for `approveHighMemory`"),
+            // An animated GIF or WebP: its first frame unless `animation` asks for more.
+            Some(path) => match photocraft_engine::animated_open::requested(str_param(p, "animation")) {
+                Ok(animation) => match p.get("approveHighMemory") {
+                    None | Some(Value::Null) => app_open(app, path, animation, false),
+                    Some(Value::Bool(approved)) => app_open(app, path, animation, *approved),
+                    Some(_) => err("expected boolean for `approveHighMemory`"),
+                },
+                Err(e) => err(e),
             },
             None => err("missing `path`"),
         },
@@ -1516,8 +1520,8 @@ fn app_methods(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlReques
 }
 
 /// The `app.open` control method: opens a path through the configured automation read
-/// capability, with optional high-memory approval.
-fn app_open(app: &mut PhotocraftApp, path: &str, approved: bool) -> Outcome {
+/// capability, as `animation` says for an animated GIF or WebP, with optional high-memory approval.
+fn app_open(app: &mut PhotocraftApp, path: &str, animation: photocraft_engine::prefs::AnimatedOpen, approved: bool) -> Outcome {
     if let Some(outcome) = open_pcraft_directory(app, path) {
         return outcome;
     }
@@ -1527,7 +1531,7 @@ fn app_open(app: &mut PhotocraftApp, path: &str, approved: bool) -> Outcome {
     };
     wrap(opened.and_then(|(name, bytes)| {
         let name = app.open_name(&name);
-        let warnings = app.open_automation_bytes_with_approval(&name, &bytes, approved)?;
+        let warnings = app.open_automation_bytes_as(&name, &bytes, animation, approved)?;
         // Brushes/gradients go to the preset libraries: no document, no Open Recent entry.
         if !crate::preset_files_ui::is_preset_file(&name) {
             app.opened_from(path);

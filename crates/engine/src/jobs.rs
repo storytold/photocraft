@@ -1055,7 +1055,7 @@ impl Session {
         expected_fingerprint: Option<SourceFingerprint>,
         background: bool,
     ) -> Result<Started> {
-        self.start_open_inner(name, source, confirm_damage, true, approved_estimate, expected_fingerprint, background)
+        self.start_open_inner(name, source, confirm_damage, true, approved_estimate, expected_fingerprint, background, None)
     }
 
     /// Open a file in the background: read (for a path) and decode on a worker, with progress
@@ -1065,10 +1065,12 @@ impl Session {
     /// `document` is the tab index at apply time; resolve `docId` before handling a delayed
     /// completion, since earlier handlers may have moved or closed tabs. When
     /// Color Settings ask about the file's profile, the document is held back instead and the
-    /// result is `{held, name, warnings, color}` (`color` the question): take it with
-    /// [`Session::take_held_open`] once answered.
+    /// result is `{held, name, warnings, color, damaged, animated}` (the questions, `null` when
+    /// not asked): take it with [`Session::take_held_open`] once answered. An animated GIF or WebP
+    /// opens as its first frame here; [`Self::start_open_for_user`] opens it as File Handling says
+    /// (asking, `animated`, when it says Ask).
     pub fn start_open(&mut self, name: &str, source: OpenSource) -> Result<Started> {
-        self.start_open_inner(name, source, false, false, None, None, true)
+        self.start_open_inner(name, source, false, false, None, None, true, None)
     }
 
     /// Interactive opening: hold a damaged PSD until the user answers a damage
@@ -1081,7 +1083,13 @@ impl Session {
     /// Interactive open with an explicit background/inline choice: damaged PSD content and
     /// high-memory preflights wait for the user instead of opening non-interactively.
     pub fn start_open_for_user_with_background(&mut self, name: &str, source: OpenSource, background: bool) -> Result<Started> {
-        self.start_open_inner(name, source, true, false, None, None, background)
+        self.start_open_inner(name, source, true, false, None, None, background, None)
+    }
+
+    /// Reads a file again for the answer to the animation prompt, `choice` being Frames or Video:
+    /// an interactive open that doesn't ask, whatever File Handling says.
+    pub fn start_open_answered(&mut self, name: &str, source: OpenSource, choice: crate::prefs::AnimatedOpen, background: bool) -> Result<Started> {
+        self.start_open_inner(name, source, true, false, None, None, background, Some(choice))
     }
 
     /// Place a file's bytes in the background, like `file.placeEmbedded` (`linked`: `file.placeLinked`
@@ -1100,24 +1108,42 @@ impl Session {
         self.start_job(command, json!({"name": name}), &label, true, move |ctx| crate::file_cmds::prepare_place(input, ctx), crate::file_cmds::apply_place)
     }
 
-    /// Decodes a file in a job and optionally holds damaged PSD content for
-    /// interactive confirmation while leaving headless opens non-interactive.
+    /// Decodes a file in a job. `for_user` (File › Open) holds damaged PSD content for
+    /// interactive confirmation, stops at a high-memory preflight for the user's answer and opens
+    /// an animated GIF or WebP as File Handling says, or as `answered` says when the user has
+    /// already chosen; headless opens stay non-interactive and take an animation's first frame.
     // Keep the worker and apply closures together with their execution options.
     #[allow(clippy::too_many_arguments)]
     fn start_open_inner(
         &mut self,
         name: &str,
         source: OpenSource,
-        confirm_damage: bool,
+        for_user: bool,
         approve_high_memory: bool,
         approved_estimate: Option<u64>,
         expected_fingerprint: Option<SourceFingerprint>,
         background: bool,
+        answered: Option<crate::prefs::AnimatedOpen>,
     ) -> Result<Started> {
+        use crate::prefs::AnimatedOpen;
         let label = format!("Opening {name}");
         let name_w = name.to_string();
         let name_a = name.to_string();
         let mut opts = import_options(self.prefs());
+        // File › Open reads an animated GIF or WebP as File Handling or the prompt's answer says
+        // (`animated_open`); a headless open keeps its first frame.
+        let choice = answered.or_else(|| if for_user { crate::animated_open::preferred(self.prefs(), name) } else { None });
+        if let Some(choice) = choice {
+            opts.animation = crate::animated_open::import_for(choice);
+        }
+        let asks = choice == Some(AnimatedOpen::Ask);
+        let video = (choice == Some(AnimatedOpen::Video)).then(|| source.clone());
+        // Bytes have no path to read again from, should the answer need the frames.
+        let held_bytes = match &source {
+            OpenSource::Bytes(bytes) if asks => Some(bytes.clone()),
+            _ => None,
+        };
+        let decode_end = if video.is_some() { 0.2 } else { 0.95 };
         opts.psd_high_memory_approved = approve_high_memory;
         opts.psd_approved_estimate = approved_estimate;
         let test_memory_scope = photocraft_io::memory::TestMemoryScope::capture();
@@ -1150,14 +1176,14 @@ impl Session {
                     return Err(EngineError::SourceChanged { name: name_w.clone() });
                 }
 
-                let outcome = match source {
+                let mut outcome = match source {
                     OpenSource::Bytes(bytes) => {
                         ctx.check()?;
                         ctx.progress(0.02, "Decoding");
-                        let res = ctx.stage(0.02, 0.95, "Decoding", |ctl| photocraft_io::import_for_open_with(&name_w, &bytes, &opts, ctl));
+                        let res = ctx.stage(0.02, decode_end, "Decoding", |ctl| photocraft_io::import_for_open_with(&name_w, &bytes, &opts, ctl));
                         match res {
                             Ok(imported) => WorkResult::Decoded(Box::new(imported)),
-                            Err(photocraft_io::IoError::PsdApprovalRequired { required, soft_limit, hard_limit, available_ram }) if confirm_damage => {
+                            Err(photocraft_io::IoError::PsdApprovalRequired { required, soft_limit, hard_limit, available_ram }) if for_user => {
                                 // The buffer cannot change while it is decoded, so the identity
                                 // captured before reading is still exact.
                                 let fingerprint = initial_fingerprint.clone().ok_or_else(|| EngineError::Other("missing source identity".into()))?;
@@ -1172,10 +1198,11 @@ impl Session {
                     }
                     OpenSource::Path(p) => {
                         let mut opened = None;
-                        let res = ctx.stage(0.0, 0.95, "Decoding", |ctl| import_path(&name_w, &p, &opts, expected_fingerprint.as_ref(), ctl, &mut opened));
+                        let res =
+                            ctx.stage(0.0, decode_end, "Decoding", |ctl| import_path(&name_w, &p, &opts, expected_fingerprint.as_ref(), ctl, &mut opened));
                         match res {
                             Ok(imported) => WorkResult::Decoded(Box::new(imported)),
-                            Err(photocraft_io::IoError::PsdApprovalRequired { required, soft_limit, hard_limit, available_ram }) if confirm_damage => {
+                            Err(photocraft_io::IoError::PsdApprovalRequired { required, soft_limit, hard_limit, available_ram }) if for_user => {
                                 // This identity is the one read from the handle that was
                                 // estimated, and the verified import refused a handle that is
                                 // not the approved file or changed while preflighting.
@@ -1191,6 +1218,21 @@ impl Session {
                         }
                     }
                 };
+
+                // A video layer: the first frame read above gives the document; its frames are read
+                // now as footage, with their own limits.
+                if let (WorkResult::Decoded(imported), Some(video)) = (&mut outcome, video)
+                    && crate::animated_open::more_frames(&imported.0.warnings)
+                {
+                    let (bytes, path) = match video {
+                        OpenSource::Bytes(bytes) => (bytes, None),
+                        OpenSource::Path(p) => (Arc::new(std::fs::read(&p).map_err(|e| EngineError::Other(format!("read `{p}`: {e}")))?), Some(p)),
+                    };
+                    let r = &mut imported.0;
+                    ctx.stage(decode_end, 0.95, "Decoding", |ctl| {
+                        crate::animated_open::open_as_video(&mut r.document, &mut r.warnings, &bytes, path.as_deref(), &opts, ctl)
+                    })?;
+                }
 
                 match &outcome {
                     WorkResult::PreflightNeeded { .. } => Ok(outcome),
@@ -1222,7 +1264,7 @@ impl Session {
                         soft_limit,
                         hard_limit,
                         available_ram,
-                        confirm_damage,
+                        confirm_damage: for_user,
                     })?;
                     Ok(json!({
                         "pendingPreflight": id,
@@ -1239,12 +1281,16 @@ impl Session {
                     let (mut r, damaged) = *imported;
                     crate::file_cmds::tag_exr_colorspace(s, &name_a, &mut r.document);
                     crate::file_cmds::raw_defaults(s, &r.warnings, &mut r.document);
+                    // File › Open: an animated GIF or WebP has been read as its answer says, or is
+                    // held back to ask how.
+                    let animated = if asks { crate::animated_open::question(&name_a, &r.warnings) } else { None };
                     let raw = r.warnings.iter().any(|w| w.contains(photocraft_io::raw::DEVELOPED_NOTE));
-                    let damaged = confirm_damage && damaged;
+                    let damaged = for_user && damaged;
                     let question = s.color.open_question(&r.document).filter(|_| !raw);
-                    if damaged || question.is_some() {
-                        let held = s.hold_open(r.document, r.source_read_only);
-                        return Ok(json!({"held": held, "name": name_a, "warnings": r.warnings, "color": question, "damaged": damaged}));
+                    if damaged || question.is_some() || animated.is_some() {
+                        let bytes = if animated.is_some() { held_bytes } else { None };
+                        let held = s.hold_open(r.document, r.source_read_only, bytes);
+                        return Ok(json!({"held": held, "name": name_a, "warnings": r.warnings, "color": question, "damaged": damaged, "animated": animated}));
                     }
                     let (index, color) = s.open_document(r.document, None);
                     let id = s.documents().get(index).ok_or(EngineError::NoDocument)?.doc.id;
@@ -1713,6 +1759,11 @@ impl Session {
         crate::automate_cmds::after_command(self, id);
         self.sync_preset_store();
         if !journal {
+            // Moving between frames is no step of its own, but an action that edits one frame has to
+            // go back to it when played, so recording keeps where the selection landed.
+            if self.actions.recording.is_some() {
+                crate::animation_cmds::record_navigation(self, id);
+            }
             return;
         }
         if let Some(from) = nested_from.filter(|_| crate::actions_cmds::replayable(id)) {

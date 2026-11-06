@@ -1,0 +1,222 @@
+//! File › Open on an animated GIF or WebP: with File Handling's preference at Ask (the default)
+//! a prompt asks whether it opens as a frame animation, a video layer or its first frame, and
+//! can remember the answer for that format.
+
+use crate::{PhotocraftApp, Services};
+use egui::{Modifiers, PointerButton, Pos2, vec2};
+use egui_kittest::{
+    Harness,
+    kittest::{NodeT, Queryable},
+};
+use photocraft_codecs::web::{GifFrame, WebpFrame, encode_gif_animated, encode_webp_animated};
+use photocraft_engine::Session;
+use photocraft_engine::prefs::AnimatedOpen;
+use serde_json::Value;
+
+/// An animated GIF of `n` solid 3×2 frames, 50 ms each.
+fn gif(n: usize) -> Vec<u8> {
+    let frames: Vec<GifFrame> =
+        (0..n).map(|i| GifFrame { indices: vec![0; 6], palette: vec![[(i * 40) as u8, 0, 0]], transparent: None, delay_cs: 5 }).collect();
+    encode_gif_animated(3, 2, &frames, true).unwrap()
+}
+
+fn webp() -> Vec<u8> {
+    let frames: Vec<WebpFrame> = (0..2).map(|i| WebpFrame { rgba: [i * 100, 0, 0, 255].repeat(6), delay_ms: 100 }).collect();
+    encode_webp_animated(3, 2, &frames, 0).unwrap()
+}
+
+fn harness(background: bool) -> Harness<'static, PhotocraftApp> {
+    let mut h = Harness::builder().with_size(vec2(1400.0, 900.0)).with_max_steps(64).build_eframe(|cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        PhotocraftApp::new(
+            Session::new(),
+            Services {
+                import: Some(Box::new(|name, bytes, opts| {
+                    photocraft_io::import_with_options(name, bytes, opts).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
+                })),
+                ..Default::default()
+            },
+        )
+    });
+    h.state_mut().background_jobs = background;
+    h.run_steps(3);
+    h
+}
+
+/// Run frames until no open is still reading.
+fn settle(h: &mut Harness<'static, PhotocraftApp>) {
+    for _ in 0..200 {
+        h.run_steps(2);
+        if h.state().jobs.opens.is_empty() && h.state().session.jobs().is_empty() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    h.run_steps(6);
+}
+
+fn open(h: &mut Harness<'static, PhotocraftApp>, name: &str, bytes: &[u8]) {
+    h.state_mut().open_file(&format!("/pics/{name}"), bytes).unwrap();
+    settle(h);
+}
+
+/// The one prompt up: its message.
+fn prompt(h: &Harness<'static, PhotocraftApp>) -> Option<String> {
+    let d = &h.state().ui.dialogs;
+    assert!(d.len() <= 1, "one prompt at a time");
+    d.first().map(|d| d.fields.get("message").and_then(Value::as_str).unwrap_or_default().to_string())
+}
+
+/// A real click (pointer events, hit-tested like a mouse).
+fn click(h: &mut Harness<'static, PhotocraftApp>, label: &str) {
+    let at: Pos2 = h.query_all_by_label(label).find(|n| !n.accesskit_node().is_disabled()).map(|n| n.rect().center()).unwrap_or_else(|| panic!("no `{label}`"));
+    h.event(egui::Event::PointerMoved(at));
+    h.run_steps(1);
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+        h.run_steps(1);
+    }
+    settle(h);
+}
+
+/// What the active document opened as: (layers, frame-animation frames, video frames).
+fn shape(h: &Harness<'static, PhotocraftApp>) -> (usize, Option<usize>, Option<usize>) {
+    let doc = &h.state().session.active().unwrap().doc;
+    (doc.layers.len(), doc.frame_animation.as_ref().map(|a| a.frames.len()), doc.layers.first().and_then(|l| l.video.as_ref()).map(|v| v.frames.len()))
+}
+
+#[test]
+fn an_animated_gif_asks_how_to_open_and_each_answer_shapes_it() {
+    for background in [false, true] {
+        for (choice, want) in [("Frame animation", (3, Some(3), None)), ("Video layer", (1, None, Some(3))), ("First frame only", (1, None, None))] {
+            let mut h = harness(background);
+            open(&mut h, "a.gif", &gif(3));
+            assert_eq!(prompt(&h).as_deref(), Some("“a.gif” is an animated GIF with 3 frames. Open it as:"));
+            assert!(h.state().session.documents().is_empty(), "nothing opens before the answer");
+            click(&mut h, choice);
+            click(&mut h, "OK");
+            assert_eq!(prompt(&h), None);
+            assert_eq!(shape(&h), want, "{choice}, background {background}");
+            assert_eq!(h.state().session.active().unwrap().path.as_deref(), Some("/pics/a.gif"));
+        }
+    }
+}
+
+/// #6898 review: First frame only from the prompt opens what the remembered preference opens: a
+/// normal read of the first frame, Indexed for a GIF.
+#[test]
+fn first_frame_from_the_prompt_opens_as_the_remembered_preference_does() {
+    let opened = |remembered: bool| {
+        let mut h = harness(true);
+        if remembered {
+            h.state_mut().session.execute("prefs.set", serde_json::json!({"path": "fileHandling.animatedGif", "value": "firstFrame"})).unwrap();
+        }
+        open(&mut h, "a.gif", &gif(3));
+        if !remembered {
+            click(&mut h, "First frame only");
+            click(&mut h, "OK");
+        }
+        let doc = &h.state().session.active().unwrap().doc;
+        (doc.mode, doc.layers.len(), doc.color_table.is_some(), doc.file_encoding)
+    };
+    assert_eq!(opened(false), opened(true));
+    assert_eq!(opened(false).0, photocraft_doc::ColorMode::Indexed);
+}
+
+/// A file opened from disk is read again from its path for Frames or Video, into the place it held.
+#[test]
+fn an_answer_reads_the_file_again_from_its_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("a.gif");
+    std::fs::write(&path, gif(3)).unwrap();
+    for background in [false, true] {
+        for (choice, want) in [("Frame animation", (3, Some(3), None)), ("Video layer", (1, None, Some(3)))] {
+            let mut h = harness(background);
+            h.state_mut().open_paths(&[path.to_string_lossy().into_owned()]);
+            settle(&mut h);
+            click(&mut h, choice);
+            click(&mut h, "OK");
+            assert_eq!(prompt(&h), None, "not asked twice");
+            assert_eq!(shape(&h), want, "{choice}, background {background}");
+            assert!(h.state().jobs.batches.is_empty(), "the set ends with the read");
+        }
+    }
+}
+
+#[test]
+fn remembering_answers_later_files_of_that_format_only() {
+    let mut h = harness(true);
+    open(&mut h, "a.gif", &gif(2));
+    click(&mut h, "Video layer");
+    click(&mut h, "Remember this choice for GIF files");
+    click(&mut h, "OK");
+    assert_eq!(h.state().session.prefs().file_handling.animated_gif, AnimatedOpen::Video);
+    open(&mut h, "b.gif", &gif(4));
+    assert_eq!(prompt(&h), None, "a remembered choice doesn't ask");
+    assert_eq!(shape(&h), (1, None, Some(4)));
+    open(&mut h, "c.webp", &webp());
+    assert_eq!(prompt(&h).as_deref(), Some("“c.webp” is an animated WebP with 2 frames. Open it as:"));
+}
+
+#[test]
+fn a_remembered_answer_covers_the_files_already_waiting() {
+    let mut h = harness(false);
+    for name in ["a.gif", "b.gif"] {
+        h.state_mut().open_file(&format!("/pics/{name}"), &gif(2)).unwrap();
+    }
+    settle(&mut h);
+    click(&mut h, "First frame only");
+    click(&mut h, "Remember this choice for GIF files");
+    click(&mut h, "OK");
+    assert_eq!(prompt(&h), None, "b.gif was waiting with the same question");
+    let docs = h.state().session.documents();
+    assert_eq!(docs.iter().map(|d| (d.doc.name.as_str(), d.doc.layers.len())).collect::<Vec<_>>(), [("a.gif", 1), ("b.gif", 1)]);
+}
+
+#[test]
+fn a_remembered_frames_answer_reads_the_files_already_waiting_again() {
+    for background in [false, true] {
+        let mut h = harness(background);
+        for name in ["a.gif", "b.gif"] {
+            h.state_mut().open_file(&format!("/pics/{name}"), &gif(2)).unwrap();
+        }
+        settle(&mut h);
+        click(&mut h, "Frame animation");
+        click(&mut h, "Remember this choice for GIF files");
+        click(&mut h, "OK");
+        assert_eq!(prompt(&h), None, "b.gif was waiting with the same question");
+        let docs = h.state().session.documents();
+        assert_eq!(docs.iter().map(|d| (d.doc.name.as_str(), d.doc.layers.len())).collect::<Vec<_>>(), [("a.gif", 2), ("b.gif", 2)], "background {background}");
+    }
+}
+
+/// A set is forgotten once its last file has answered the prompt and opened, as it is after the
+/// profile prompt's answer.
+#[test]
+fn answering_the_prompt_forgets_the_finished_set() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("a.gif");
+    std::fs::write(&path, gif(2)).unwrap();
+    for background in [false, true] {
+        let mut h = harness(background);
+        h.state_mut().open_paths(&[path.to_string_lossy().into_owned()]);
+        settle(&mut h);
+        assert!(prompt(&h).is_some(), "the file waits on its prompt");
+        assert_eq!(h.state().jobs.batches.len(), 1, "the set is kept while its file waits");
+        click(&mut h, "First frame only");
+        click(&mut h, "OK");
+        assert_eq!(shape(&h), (1, None, None));
+        assert!(h.state().jobs.batches.is_empty(), "background {background}");
+    }
+}
+
+#[test]
+fn cancel_opens_nothing_and_still_images_never_ask() {
+    let mut h = harness(true);
+    open(&mut h, "a.gif", &gif(2));
+    click(&mut h, "Cancel");
+    assert!(h.state().session.documents().is_empty());
+    open(&mut h, "still.gif", &gif(1));
+    assert_eq!(prompt(&h), None);
+    assert_eq!(shape(&h), (1, None, None));
+}
