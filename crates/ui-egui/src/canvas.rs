@@ -1371,7 +1371,16 @@ fn paint_primary_overlays(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut
     // The Crop tool's contextual task bar under its frame (#10890), on the frame's own tile only:
     // the other tiles would map the active document's frame with their own transform.
     if app.session.active_index() == Some(idx) {
+        // Done asks for a fit of the cropped document (`commit_crop`): like a view menu row
+        // above, the stored camera wins over this frame's copy, or the write-back drops it.
+        let before = app.ui.views.get(idx).cloned();
         crate::crop_task_bar::draw(app, ui, xf);
+        if let Some(now) = app.ui.views.get(idx)
+            && Some(now) != before.as_ref()
+        {
+            *view = now.clone();
+            ctx.request_repaint();
+        }
     }
     crate::artboard_tool::draw_overlay(app, painter, xf);
     // Snap lines last: over the transform preview's pixels and the other overlays, which would

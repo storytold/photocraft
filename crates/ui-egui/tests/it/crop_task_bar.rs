@@ -341,6 +341,30 @@ fn cancel_and_done_only_while_a_crop_is_pending() {
     assert_eq!(h.state().session.active().map(|s| (s.doc.size.width, s.doc.size.height)), Some((220, 170)), "Done crops");
 }
 
+/// The active document's stored zoom.
+fn zoom(h: &Harness) -> f32 {
+    let app = h.state();
+    app.session.active_index().and_then(|i| app.ui.views.get(i)).map(|v| v.zoom).expect("a view")
+}
+
+/// Done, like the options bar's commit, fits the cropped document on screen. Fit never zooms past
+/// 100 %, so the crop starts at 50 %: the 220 × 170 result fits at 100 %. The bar draws inside the
+/// canvas pass, whose write-back of its own camera used to drop that fit.
+#[test]
+fn done_fits_the_cropped_document() {
+    let mut h = harness();
+    control(&mut h, "ui.set", json!({"zoom": 0.5, "center": [200.0, 150.0]}));
+    assert!((zoom(&h) - 0.5).abs() < 1e-4);
+    draw_frame(&mut h, [40.0, 30.0], [260.0, 200.0]);
+    let at = widget(&h, "Done");
+    click_at(&mut h, at);
+    assert_eq!(h.state().session.active().map(|s| (s.doc.size.width, s.doc.size.height)), Some((220, 170)), "Done crops");
+    assert!((zoom(&h) - 1.0).abs() < 1e-4, "Done fits the cropped document: zoom {}", zoom(&h));
+    let app = h.state();
+    let v = app.session.active_index().and_then(|i| app.ui.views.get(i)).expect("a view");
+    assert!(!v.fit_pending && (v.center[0] - 110.0).abs() < 0.5 && (v.center[1] - 85.0).abs() < 0.5, "fitted and centred: {:?}", v.center);
+}
+
 #[test]
 fn the_bar_grows_for_cancel_and_done() {
     let mut h = harness();
