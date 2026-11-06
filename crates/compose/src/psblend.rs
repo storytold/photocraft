@@ -391,7 +391,7 @@ pub fn composite_gamma(mode: BlendMode, backdrop: [f32; 4], source: [f32; 4], op
 mod tests {
 
     #[test]
-    fn common_blends_preserve_generic_bits_in_both_scopes() {
+    fn common_blends_match_generic_in_both_scopes() {
         let values = [
             0.0,
             -0.0,
@@ -412,12 +412,14 @@ mod tests {
                 with_hdr(hdr, || {
                     with_lab_mix(lab, || {
                         for mode in [BlendMode::Normal, BlendMode::Multiply, BlendMode::Screen] {
+                            // Normal copies bits; arithmetic may select another NaN payload.
+                            let bits = |v: f32| if mode != BlendMode::Normal && v.is_nan() { f32::NAN.to_bits() } else { v.to_bits() };
                             for b in values {
                                 for s in values {
                                     let cb = [b, s, b];
                                     let cs = [s, b, s];
                                     let expected = if hdr { generic::blend_rgb_hdr(mode, cb, cs) } else { generic::blend_rgb(mode, cb, cs) };
-                                    assert_eq!(blend_rgb(mode, cb, cs).map(f32::to_bits), expected.map(f32::to_bits), "{mode:?} {b} {s}");
+                                    assert_eq!(blend_rgb(mode, cb, cs).map(bits), expected.map(bits), "{mode:?} {b} {s}");
                                 }
                             }
                         }
