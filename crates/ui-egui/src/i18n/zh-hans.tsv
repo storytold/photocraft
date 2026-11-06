@@ -3256,3 +3256,18 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Frame	框架
 	X	X
 	Y	Y
+
+# Channels panel menu (#11451)
+	New Channel…	新建通道…
+	Duplicate Channel	复制通道
+	Delete Channel	删除通道
+	New Spot Channel…	新建专色通道…
+	Merge Spot Channel	合并专色通道
+	Channel Options…	通道选项…
+	Split Channels	分离通道
+	Merge Channels…	合并通道…
+	Specify Channels:	指定通道:
+	Not enough grayscale documents for this mode.	灰度文档不足，无法使用此模式。
+	Pick a different document for each channel.	请为每个通道选择不同的文档。
+	A picked document is no longer open.	所选的一个文档已不再打开。
+	A picked document is no longer a grayscale document of the same size.	所选的一个文档已不再是同样大小的灰度文档。
