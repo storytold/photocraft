@@ -42,7 +42,7 @@ pub struct LangInfo {
     /// [`LangInfo::text`].
     pub source: &'static [u8],
     /// Plural form index for a count (English: 0 = one, 1 = other; Japanese, Chinese and Hungarian: always 0;
-    /// Czech: 0 = one, 1 = few (2–4), 2 = other; Russian, Ukrainian and Bosnian: 0 = one (1, 21 …), 1 = few (2–4, 22–24 …), 2 = other; French: 0 = one (0 and 1), 1 = other). A catalog's `@plural` entries list one form per
+    /// Czech: 0 = one, 1 = few (2–4), 2 = other; Russian, Ukrainian and Bosnian: 0 = one (1, 21 …), 1 = few (2–4, 22–24 …), 2 = other; French and Hindi: 0 = one (0 and 1), 1 = other). A catalog's `@plural` entries list one form per
     /// index.
     pub plural: fn(u64) -> usize,
     /// Does the catalog cover every menu string? (`cargo xtask i18n-coverage` lists what it lacks)
@@ -94,7 +94,7 @@ fn plural_cs(n: u64) -> usize {
     }
 }
 
-/// French: 0 and 1 take the singular, everything else the plural.
+/// French and Hindi: 0 and 1 take the singular, everything else the plural.
 fn plural_fr(n: u64) -> usize {
     usize::from(n > 1)
 }
@@ -239,7 +239,7 @@ pub static LANGUAGES: [LangInfo; 28] = [
     // Vietnamese; `vi-VN` resolves here.
     LangInfo { code: "vi", name: "Tiếng Việt", source: catalog!("vi"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
     // Hindi; `hi`, `hi-IN` locales resolve here.
-    LangInfo { code: "hi", name: "हिन्दी", source: catalog!("hi"), plural: plural_one_other, complete_menus: false, catalog: OnceLock::new() },
+    LangInfo { code: "hi", name: "हिन्दी", source: catalog!("hi"), plural: plural_fr, complete_menus: true, catalog: OnceLock::new() },
     // Arabic (Modern Standard); `ar-SA`, `ar-EG` and the other regional locales resolve here. The
     // chrome mirrors right to left (`dir_for_code`), and egui lays each label out right to left.
     LangInfo { code: "ar", name: "العربية", source: catalog!("ar"), plural: plural_arabic, complete_menus: true, catalog: OnceLock::new() },

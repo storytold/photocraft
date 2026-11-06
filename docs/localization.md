@@ -29,7 +29,7 @@ contextual, command-ID and plural translations; missing entries fall back to Eng
 | Tiếng Việt | `vi` | one form |
 | Srpski | `sr` | one / few / many (teens use many) |
 | Bosanski | `bs` | one / few / other (teens use other) |
-| हिन्दी | `hi` | one / other |
+| हिन्दी | `hi` | singular for 0 and 1 / plural for 2+ ([notes](localization-hi.md)) |
 | Svenska | `sv` | one / other |
 | Suomi | `fi` | one / other (partitive after every count but 1) |
 | Dansk | `da` | one / other |

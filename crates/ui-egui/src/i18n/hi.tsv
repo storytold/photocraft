@@ -13,8 +13,8 @@
 # Hindi computing and image-editing vocabulary. No proprietary localisation resource, string
 # table or product UI was consulted or copied; add entries the same way. Product and technology
 # names (PhotoCraft, ArtCraft, OpenType, RGB, CMYK, Lab, PSD, PNG, JPEG, WebP, OpenEXR, AVIF …)
-# stay as they are; the trailing "…" of dialog commands is kept. Plural rule: one / other
-# (`plural_one_other` in i18n/mod.rs).
+# stay as they are; the trailing "…" of dialog commands is kept. Plural rule: 0 and 1 take the
+# singular, 2+ the plural (`plural_fr` in i18n.rs); @plural rows list one|other.
 
 # Top-level Menus
 
@@ -68,7 +68,7 @@
 	Save	सहेजें
 	Save As…	इस रूप में सहेजें…
 	Save a Copy…	एक प्रति सहेजें…
-	Revert	मूल स्थिति में लाएं
+	Revert	मूल स्थिति में लाएँ
 	Export	एक्सपोर्ट करें
 	Export As…	इस रूप में एक्सपोर्ट करें…
 	Quick Export as PNG	PNG के रूप में त्वरित एक्सपोर्ट
@@ -100,7 +100,7 @@
 	Warp	मोड़ें
 	Flip Horizontal	क्षैतिज पलटें
 	Flip Vertical	लंबवत पलटें
-	Preferences	प्राथमिकताएं
+	Preferences	प्राथमिकताएँ
 	General…	सामान्य…
 	Interface…	इंटरफ़ेस…
 	Workspace…	कार्यस्थान…
@@ -202,10 +202,10 @@
 	Snap To	पर स्नैप करें
 	Guides	गाइड्स
 	Lock Guides	गाइड्स लॉक करें
-	Clear Guides	गाइड्स हटाएं
+	Clear Guides	गाइड्स हटाएँ
 	New Guide…	नई गाइड…
 	Lock Slices	स्लाइस लॉक करें
-	Clear Slices	स्लाइस हटाएं
+	Clear Slices	स्लाइस हटाएँ
 	Arrange	व्यवस्थित करें
 	Tile Horizontally	क्षैतिज टाइल
 	Tile Vertically	लंबवत टाइल
@@ -324,8 +324,8 @@
 	Angle:	एंगल:
 	Roundness:	राउंडनेस:
 	Spacing:	स्पेसिंग:
-	Color:	कलर:
-	Name:	नेम:
+	Color:	रंग:
+	Name:	नाम:
 	Presets:	प्रीसेट्स:
 	Language	भाषा
 	Auto	स्वचालित
@@ -466,8 +466,8 @@ cameraRaw	Save these settings as a Camera Raw .xmp file	इन सेटिं�
 	Save these settings as a Camera Raw .xmp file	इन सेटिंग्स को Camera Raw .xmp फ़ाइल के रूप में सहेजें
 cameraRaw	Shadow Clipping Warning (U)	शैडो क्लिपिंग चेतावनी (U)
 	Shadow Clipping Warning (U)	शैडो क्लिपिंग चेतावनी (U)
-cameraRaw	Shadows	शेडोज़
-	Shadows	शेडोज़
+cameraRaw	Shadows	शैडो
+	Shadows	शैडो
 cameraRaw	Sharpening	शार्पनिंग
 	Sharpening	शार्पनिंग
 cameraRaw	Show Lab Color Readouts	Lab रंग रीडआउट दिखाएँ
@@ -500,31 +500,31 @@ cameraRaw	Whites	व्हाइट्स
 	Whites	व्हाइट्स
 cameraRaw	Yellow	पीला
 	Yellow	पीला
-	Black Point Compensation	Black Point Compensation
-	Apply At Canvas Bounds	Apply At Canvas Bounds
-	Convert to Shape…	Convert to Shape…
-	Decontaminate	Decontaminate
-	New Document	New Document
-	New Document With Mask	New Document With Mask
-	New Layer	New Layer
-	New Layer With Mask	New Layer With Mask
-	Output	Output
-	Refine Edge…	Refine Edge…
-	Refine Strokes	Refine Strokes
+	Black Point Compensation	ब्लैक पॉइंट कम्पेंसेशन
+	Apply At Canvas Bounds	कैनवास सीमाओं पर लागू करें
+	Convert to Shape…	शेप में बदलें…
+	Decontaminate	शुद्ध करें
+	New Document	नया दस्तावेज़
+	New Document With Mask	मास्क के साथ नया दस्तावेज़
+	New Layer	नई लेयर
+	New Layer With Mask	मास्क के साथ नई लेयर
+	Output	आउटपुट
+	Refine Edge…	किनारा परिष्कृत करें…
+	Refine Strokes	स्ट्रोक्स परिष्कृत करें
 	Edits	संपादन
-	Selection	Selection
-	Shift Edge	Shift Edge
-	Smart Radius	Smart Radius
-	Smooth	Smooth
-	Tolerance	Tolerance
-	Decrease Brush Size	Decrease Brush Size
-	Increase Brush Size	Increase Brush Size
-	Decrease Brush Hardness	Decrease Brush Hardness
-	Increase Brush Hardness	Increase Brush Hardness
-	Previous Brush	Previous Brush
-	Next Brush	Next Brush
-	First Brush	First Brush
-	Last Brush	Last Brush
+	Selection	चयन
+	Shift Edge	किनारा खिसकाएँ
+	Smart Radius	स्मार्ट त्रिज्या
+	Smooth	स्मूथ
+	Tolerance	टॉलरेंस
+	Decrease Brush Size	ब्रश साइज़ घटाएँ
+	Increase Brush Size	ब्रश साइज़ बढ़ाएँ
+	Decrease Brush Hardness	ब्रश हार्डनेस घटाएँ
+	Increase Brush Hardness	ब्रश हार्डनेस बढ़ाएँ
+	Previous Brush	पिछला ब्रश
+	Next Brush	अगला ब्रश
+	First Brush	पहला ब्रश
+	Last Brush	अंतिम ब्रश
 	Current Brush Load	वर्तमान ब्रश लोड
 	Load Brush	ब्रश लोड करें
 	Clean Brush	ब्रश साफ़ करें
@@ -630,6 +630,4084 @@ cameraRaw	Yellow	पीला
 @plural	{n} action file loaded|{n} action files loaded	{n} एक्शन फ़ाइल लोड हुई|{n} एक्शन फ़ाइलें लोड हुईं
 	{set} from {file} replaced the one from {earlier}	{file} के सेट {set} ने {earlier} वाले सेट की जगह ले ली
 @plural	{n} file could not be loaded: {errors}|{n} files could not be loaded: {errors}	{n} फ़ाइल लोड नहीं हो सकी: {errors}|{n} फ़ाइलें लोड नहीं हो सकीं: {errors}
+
+# Complete interface (2026-11): panels, dialogs, tooltips, status and error messages, filter and
+# adjustment parameters. Terminology and style: docs/localization-hi.md.
+	% of all commits	सभी कमिट्स का %
+	(coming soon)	(जल्द आ रहा है)
+	(No neutral color exists for {mode} mode.)	({mode} मोड के लिए कोई न्यूट्रल रंग मौजूद नहीं है।)
+	(none)	(कोई नहीं)
+	(print to the printer)	(प्रिंटर पर प्रिंट करें)
+	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{binAdded} / −{binDeleted} binary assets, {first} – {last}	@{login}: {prs} PR, {commits} कमिट्स, +{added} / −{deleted} पंक्तियाँ (Δ {delta}), +{binAdded} / −{binDeleted} बाइनरी एसेट्स, {first} – {last}
+	{added}, {removed} subtracted	{added}, {removed} घटाए गए
+	{file} is not a style library (.asl)	{file} स्टाइल लाइब्रेरी (.asl) नहीं है
+	{index} of {total}	{total} में से {index}
+	{key} to subtract	घटाने के लिए {key}
+	{key}-click to set the source	स्रोत सेट करने के लिए {key}-क्लिक करें
+	{label} is not available: {reason}	{label} उपलब्ध नहीं है: {reason}
+	{label} is writing the file and can no longer be cancelled	{label} फ़ाइल लिख रहा है और अब इसे रद्द नहीं किया जा सकता
+	{message} (notes: {n}; {warning})	{message} (नोट्स: {n}; {warning})
+	{message} into “{group}”	“{group}” में {message}
+	{mode} Color · {bits} bit	{mode} रंग · {bits} बिट
+	{n} commands are not in PhotoCraft.	{n} कमांड PhotoCraft में नहीं हैं।
+	{n} of {max} sample points	{max} में से {n} नमूना बिंदु
+	{name} (Photoshop)	{name} (Photoshop)
+	{name} can't keep everything in this document	{name} इस दस्तावेज़ की सारी सामग्री नहीं रख सकता
+	{name} options	{name} विकल्प
+	{name} Properties	{name} गुण
+	{name} was changed by another app after it was opened or saved here.	{name} को यहाँ खोलने या सहेजने के बाद किसी दूसरे ऐप ने बदल दिया है।
+	{ok} written to {dir}	{ok} को {dir} में लिखा गया
+	{path}: the path is not valid Unicode; rename the file and open it again.	{path}: पथ मान्य Unicode नहीं है; फ़ाइल का नाम बदलें और उसे फिर से खोलें।
+	{path}: the path is not valid Unicode; save under another name.	{path}: पथ मान्य Unicode नहीं है; किसी दूसरे नाम से सहेजें।
+	{set} (modified)	{set} (संशोधित)
+	{shortcut} assigned.	{shortcut} असाइन किया गया।
+	{shortcut} is already in use by {commands} and will be removed from it when you click OK.	{shortcut} पहले से {commands} द्वारा उपयोग में है; ठीक है पर क्लिक करने पर इसे वहाँ से हटा दिया जाएगा।
+	{shortcut} is reserved by the system and can't be assigned.	{shortcut} सिस्टम के लिए आरक्षित है और असाइन नहीं किया जा सकता।
+	{size} (was {old})	{size} (पहले {old})
+	{verb} {mask} {layer}	{verb} {mask} {layer}
+	{w} {unit} x {h} {unit} ({ppi} ppi)	{w} {unit} x {h} {unit} ({ppi} ppi)
+	{w} px x {h} px ({ppi} ppi)	{w} px x {h} px ({ppi} ppi)
+	{zoom}%	{zoom}%
+	“{name}” already exists. Replace it?	“{name}” पहले से मौजूद है। क्या आप इसे बदलना चाहते हैं?
+	+ Add variable	+ वेरिएबल जोड़ें
+	↑↓ navigate   {key} run   esc close	↑↓ नेविगेट करें   {key} चलाएँ   esc बंद करें
+	↑↓ navigate   ↵ run   esc close	↑↓ नेविगेट करें   ↵ चलाएँ   esc बंद करें
+	…and {n} more	…और {n} अन्य
+	✓ Color Indicates Masked Areas	✓ रंग मास्क किए गए क्षेत्र दर्शाता है
+	✓ Color Indicates Selected Areas	✓ रंग चयनित क्षेत्र दर्शाता है
+	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	0 इस थ्रेशहोल्ड को बंद करता है; 100 से अधिक स्तरों तक नेस्टेड SVG समूह हमेशा रास्टराइज़ किए जाते हैं।
+	10 fps	10 fps
+	101 by 101 Average	101 गुणा 101 औसत
+	11 by 11 Average	11 गुणा 11 औसत
+	12 Columns	12 कॉलम
+	125%	125%
+	15 fps	15 fps
+	150%	150%
+	175%	175%
+	24 bits/pixel	24 बिट्स/पिक्सेल
+	24 fps	24 fps
+	25 fps	25 fps
+	250%	250%
+	2-up Horizontal	2-अप क्षैतिज
+	2-up Vertical	2-अप लंबवत
+	3 by 3 Average	3 गुणा 3 औसत
+	3 x 3	3 x 3
+	30 fps	30 fps
+	30 frames @ 30 fps	30 फ़्रेम @ 30 fps
+	300%	300%
+	31 by 31 Average	31 गुणा 31 औसत
+	32 bits/pixel	32 बिट्स/पिक्सेल
+	32-bit Preview Options	32-बिट पूर्वावलोकन विकल्प
+	32-bit Preview Options…	32-बिट पूर्वावलोकन विकल्प…
+	3D LUT File	3D LUT फ़ाइल
+	3D…	3D…
+	3-up Horizontal	3-अप क्षैतिज
+	3-up Stacked	3-अप स्टैक्ड
+	3-up Vertical	3-अप लंबवत
+	4 x 4	4 x 4
+	4-up	4-अप
+	5 by 5 Average	5 गुणा 5 औसत
+	5 Columns, 3 Rows	5 कॉलम, 3 पंक्तियाँ
+	5 x 5	5 x 5
+	50% Gray	50% ग्रे
+	50% Threshold	50% थ्रेशहोल्ड
+	51 by 51 Average	51 गुणा 51 औसत
+	6-up	6-अप
+	75%	75%
+	8 Columns	8 कॉलम
+	80%	80%
+	85%	85%
+	90%	90%
+	95%	95%
+	A brush preset with this name already exists	इस नाम का ब्रश प्रीसेट पहले से मौजूद है
+	A command was cancelled or stopped during batch processing. Continue with the next file or stop?	बैच प्रोसेसिंग के दौरान एक कमांड रद्द या बंद कर दिया गया। अगली फ़ाइल के साथ जारी रखें या रोकें?
+	A save to {name} is still running; try again when it finishes	{name} में सहेजना अभी जारी है; इसके पूरा होने पर फिर से प्रयास करें
+	A:	A:
+	About	परिचय
+	About {app}	{app} के बारे में
+	About PhotoCraft	PhotoCraft के बारे में
+	Absolute	निरपेक्ष
+	Absolute Colorimetric	निरपेक्ष कलरिमेट्रिक
+	Accented Edges	उभारे गए किनारे
+	Accept and Go to Conflict	स्वीकार करें और विरोध पर जाएँ
+	Accurate	सटीक
+	ACES	ACES
+	Action	एक्शन
+	Action playback failed: {error}	एक्शन प्लेबैक विफल: {error}
+	Action playback stopped	एक्शन प्लेबैक रोका गया
+	Activate Panel	पैनल सक्रिय करें
+	Active	सक्रिय
+	Actual Color	वास्तविक रंग
+	Adaptive	अनुकूली
+	Adaptive Wide Angle	अनुकूली वाइड एंगल
+	Adaptive Wide Angle isn't open	अनुकूली वाइड एंगल खुला नहीं है
+	Adaptive Wide Angle…	अनुकूली वाइड एंगल…
+	Add	जोड़ें
+	Add “copy” to Copied Layers and Groups	कॉपी की गई लेयर्स और समूहों में “कॉपी” जोड़ें
+	Add a layer style	लेयर स्टाइल जोड़ें
+	Add a mask  (from the selection; {key} inverts)	मास्क जोड़ें  (चयन से; {key} उलटता है)
+	Add a mask  (from the selection; ⌥ inverts)	मास्क जोड़ें  (चयन से; ⌥ उलटता है)
+	Add an adjustment	समायोजन जोड़ें
+	Add beauty precomp from the AOVs	AOVs से ब्यूटी प्रीकॉम्प जोड़ें
+	Add disk	डिस्क जोड़ें
+	Add Layer Above to Selection	ऊपर वाली लेयर को चयन में जोड़ें
+	Add Layer Below to Selection	नीचे वाली लेयर को चयन में जोड़ें
+	Add Layer Mask	लेयर मास्क जोड़ें
+	Add Mask	मास्क जोड़ें
+	Add Mask to Selection	मास्क को चयन में जोड़ें
+	Add New Artboard	नया आर्टबोर्ड जोड़ें
+	Add Noise	नॉइज़ जोड़ें
+	Add Noise…	नॉइज़ जोड़ें…
+	Add Open Files	खुली फ़ाइलें जोड़ें
+	Add pair	जोड़ी जोड़ें
+	Add Pins	पिन जोड़ें
+	Add Shortcut	शॉर्टकट जोड़ें
+	Add space after paragraph	पैराग्राफ़ के बाद स्पेस जोड़ें
+	Add space before paragraph	पैराग्राफ़ से पहले स्पेस जोड़ें
+	Add Stop	स्टॉप जोड़ें
+	Add to	इसमें जोड़ें
+	Add to Dictionary	शब्दकोश में जोड़ें
+	Add to Favorites	पसंदीदा में जोड़ें
+	Add to favorites	पसंदीदा में जोड़ें
+	Add to Sample	नमूने में जोड़ें
+	Add to selection  ({key})	चयन में जोड़ें  ({key})
+	Add to selection  (⇧)	चयन में जोड़ें  (⇧)
+	Add to Swatches	स्वॉचेस में जोड़ें
+	Add vector mask	वेक्टर मास्क जोड़ें
+	Add Vector Mask	वेक्टर मास्क जोड़ें
+	Added swatch {name}	स्वॉच {name} जोड़ा गया
+	Additional plugins folder	अतिरिक्त प्लग-इन फ़ोल्डर
+	Adds grain to the soft edges of the brush tip.	ब्रश टिप के नरम किनारों में ग्रेन जोड़ता है।
+	Adds the current gradient to the Gradients panel	वर्तमान ग्रेडिएंट को ग्रेडिएंट्स पैनल में जोड़ता है
+	Adjust for Zoom	ज़ूम के अनुसार समायोजित करें
+	Adjust Interval For Loops	लूप के लिए अंतराल समायोजित करें
+	Adjustment	समायोजन
+	Adjustment Layer	एडजस्टमेंट लेयर
+	Adjustment Layers	एडजस्टमेंट लेयर्स
+	Adjustment layers have nothing to transform	एडजस्टमेंट लेयर्स में रूपांतरित करने के लिए कुछ नहीं है
+	Adjustment Preview	समायोजन पूर्वावलोकन
+	Adjustment Properties	समायोजन गुण
+	Adjustment visible	समायोजन दृश्यमान
+	Adobe	Adobe
+	Adobe Every-line Composer	Adobe हर-पंक्ति कम्पोज़र
+	Adobe PDF Presets…	Adobe PDF प्रीसेट्स…
+	Adobe rgb	Adobe RGB
+	Adobe RGB (1998)	Adobe RGB (1998)
+	Adobe RGB (1998) compatible	Adobe RGB (1998) संगत
+	Adobe Single-line Composer	Adobe एकल-पंक्ति कम्पोज़र
+	Adobe-rgb-compat	Adobe RGB (संगत)
+	Advanced	उन्नत
+	Advanced Blending	उन्नत ब्लेंडिंग
+	Advanced Controls	उन्नत नियंत्रण
+	Adwaita	Adwaita
+	Adwaita (Dark)	Adwaita (डार्क)
+	Adwaita (Light)	Adwaita (लाइट)
+	Adwaita dark	Adwaita डार्क
+	Adwaita Dark Theme	Adwaita डार्क थीम
+	Adwaita Light Theme	Adwaita लाइट थीम
+	After	बाद में
+	After (X)	बाद में (X)
+	Again	फिर से
+	AHD (adaptive homogeneity)	AHD (अनुकूली समरूपता)
+	AI Integrations	AI इंटीग्रेशन
+	AI Integrations…	AI इंटीग्रेशन…
+	Airbrush: keeps depositing paint while the pointer rests.	एयरब्रश: पॉइंटर रुके रहने पर भी पेंट जमा करता रहता है।
+	Airbrush: keeps painting while the pointer rests.	एयरब्रश: पॉइंटर रुके रहने पर भी पेंट करता रहता है।
+	Align	संरेखित करें
+	Align {what}	{what} संरेखित करें
+	Align and Distribute	संरेखित और वितरित करें
+	Align and distribute	संरेखित और वितरित करें
+	Align horizontal centers	क्षैतिज केंद्र संरेखित करें
+	Align left edges	बाएँ किनारे संरेखित करें
+	Align right edges	दाएँ किनारे संरेखित करें
+	Align with layer	लेयर के साथ संरेखित करें
+	Alignment	संरेखण
+	All Caps	सभी कैपिटल
+	All Classes	सभी क्लासेस
+	All Layers No Adjustments	सभी लेयर्स, समायोजन के बिना
+	All shortcuts reset to PhotoCraft defaults.	सभी शॉर्टकट PhotoCraft डिफ़ॉल्ट पर रीसेट किए गए।
+	All shortcuts reset to Photoshop defaults.	सभी शॉर्टकट Photoshop डिफ़ॉल्ट पर रीसेट किए गए।
+	All Slices	सभी स्लाइस
+	All User Slices	सभी यूज़र स्लाइस
+	Allow agent control	एजेंट नियंत्रण की अनुमति दें
+	Allow Continue	जारी रखने की अनुमति दें
+	Allow Non-Linear History	नॉन-लीनियर हिस्ट्री की अनुमति दें
+	Allow scripts to connect	स्क्रिप्ट्स को कनेक्ट करने की अनुमति दें
+	Alpha	अल्फ़ा
+	Alt	Alt
+	Alt-click a plane to set the clone source	क्लोन स्रोत सेट करने के लिए किसी प्लेन पर Alt-क्लिक करें
+	Alt-click to define a source point to clone from	क्लोन करने के लिए स्रोत बिंदु तय करने हेतु Alt-क्लिक करें
+	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	Alt-क्लिक डेस्कटॉप को मिला, जो Alt-ड्रैग से विंडो खिसकाता है। उसकी विंडो-मूव कुंजी को Super पर सेट करें, या विंडो › मॉडिफ़ायर कुंजियाँ में Alt को लैच करें।
+	Alternates for Current Selection	वर्तमान चयन के लिए विकल्प
+	Alternative	वैकल्पिक
+	Altitude	एल्टीट्यूड
+	Always	हमेशा
+	Always create smart objects when placing	प्लेस करते समय हमेशा स्मार्ट ऑब्जेक्ट बनाएँ
+	Always Show Overlay	ओवरले हमेशा दिखाएँ
+	Always use pressure for opacity	ओपेसिटी के लिए हमेशा दबाव का उपयोग करें
+	Always use pressure for size	साइज़ के लिए हमेशा दबाव का उपयोग करें
+	Ambience	परिवेश
+	Ambient	परिवेशी
+	Amount:	मात्रा:
+	Amplitude Max	अधिकतम आयाम
+	Amplitude Min	न्यूनतम आयाम
+	Analysis	विश्लेषण
+	Anamorphic 2:1 (2)	एनामॉर्फ़िक 2:1 (2)
+	Anchor:	एंकर:
+	Android 1080p	Android 1080p
+	Angle	कोण
+	Angle Gradient	कोणीय ग्रेडिएंट
+	Angle Jitter	कोण जिटर
+	Angled Strokes	तिरछे स्ट्रोक
+	Animated zoom	एनिमेटेड ज़ूम
+	Animation Options	एनिमेशन विकल्प
+	Anisotropic	एनिसोट्रोपिक
+	Answer the open import question first, then import this file again.	पहले खुले इम्पोर्ट प्रश्न का उत्तर दें, फिर इस फ़ाइल को दोबारा इम्पोर्ट करें।
+	Answer the unsaved-changes prompt first	पहले बिना सहेजे परिवर्तनों वाले संकेत का उत्तर दें
+	Anti-alias	एंटी-एलियास
+	Anti-Alias	एंटी-एलियास
+	Anti-aliased	एंटी-एलियास्ड
+	Anti-aliasing method	एंटी-एलियासिंग विधि
+	Any	कोई भी
+	Aperture	अपर्चर
+	Appearance	रूप
+	Appearance (Layer Style)	रूप (लेयर स्टाइल)
+	Appearance Mode	रूप मोड
+	Appearance Settings…	रूप सेटिंग्स…
+	Apple RGB	Apple RGB
+	Apple Watch 45mm	Apple Watch 45mm
+	Applies at next launch.	अगली बार शुरू करने पर लागू होगा।
+	Applies immediately when saved. Memory is not reserved in advance.	सहेजते ही तुरंत लागू होता है। मेमोरी पहले से आरक्षित नहीं की जाती।
+	Apply {option}: {state}	{option} लागू करें: {state}
+	Apply auto tone	ऑटो टोन लागू करें
+	Apply Data Set	डेटा सेट लागू करें
+	Apply Data Set…	डेटा सेट लागू करें…
+	Apply Image	इमेज लागू करें
+	Apply Image…	इमेज लागू करें…
+	Apply Layer Comp	लेयर कॉम्प लागू करें
+	Apply Layer Mask	लेयर मास्क लागू करें
+	Apply Mask	मास्क लागू करें
+	Apply mask to layer before removing?	हटाने से पहले मास्क को लेयर पर लागू करें?
+	Apply next selected layer comp	अगला चयनित लेयर कॉम्प लागू करें
+	Apply Per Tip	प्रति टिप लागू करें
+	Apply previous selected layer comp	पिछला चयनित लेयर कॉम्प लागू करें
+	Apply the pen's tilt and rotation to the tip shape	पेन का झुकाव और रोटेशन टिप के आकार पर लागू करें
+	Apply the removal ({key})	हटाना लागू करें ({key})
+	Apply to All	सभी पर लागू करें
+	Apply Vanishing Point ({key})	वैनिशिंग पॉइंट लागू करें ({key})
+	Arbitrary	इच्छानुसार
+	Arc	आर्क
+	Arc Lower	निचला आर्क
+	Arc Upper	ऊपरी आर्क
+	Arch	मेहराब
+	Are you sure you want to quit?	क्या आप वाकई बाहर निकलना चाहते हैं?
+	Are you sure?	क्या आप निश्चित हैं?
+	Around Center	केंद्र के चारों ओर
+	Arrangement	व्यवस्था
+	Arrowhead options	एरोहेड विकल्प
+	Arrowheads	एरोहेड्स
+	Arrows	तीर
+	Art & Illustration	कला और चित्रण
+	Artboard	आर्टबोर्ड
+	Artboard Background Color	आर्टबोर्ड बैकग्राउंड रंग
+	Artboard from Group	समूह से आर्टबोर्ड
+	Artboard from Group…	समूह से आर्टबोर्ड…
+	Artboard from Layers	लेयर्स से आर्टबोर्ड
+	Artboard from Layers…	लेयर्स से आर्टबोर्ड…
+	Artboard Guides	आर्टबोर्ड गाइड्स
+	Artboards	आर्टबोर्ड्स
+	Artboards to Files	आर्टबोर्ड्स से फ़ाइलें
+	Artboards to Files…	आर्टबोर्ड्स से फ़ाइलें…
+	Artboards to PDF	आर्टबोर्ड्स से PDF
+	Artboards to PDF…	आर्टबोर्ड्स से PDF…
+	ArtCraft	ArtCraft
+	ArtCraft Website	ArtCraft वेबसाइट
+	Artist	कलाकार
+	Artistic	कलात्मक
+	Ask	पूछें
+	Ask before saving layered tiff	लेयर्ड TIFF सहेजने से पहले पूछें
+	Ask Before Saving Saved Embedded	एम्बेडेड प्रोफ़ाइल सहेजने से पहले पूछें
+	Ask On Mismatch	मेल न खाने पर पूछें
+	Ask On Missing	अनुपस्थित होने पर पूछें
+	Ask On Paste	पेस्ट करने पर पूछें
+	Ask When Pasting	पेस्ट करते समय पूछें
+	Assign Profile	प्रोफ़ाइल असाइन करें
+	Assign Profile…	प्रोफ़ाइल असाइन करें…
+	Assign working space	वर्किंग स्पेस असाइन करें
+	At	पर
+	Attempt to Automatically Align Source Images	स्रोत इमेज को स्वचालित रूप से संरेखित करने का प्रयास करें
+	Attribute	विशेषता
+	Audio	ऑडियो
+	Author	लेखक
+	Author Title	लेखक का पद
+	Author:	लेखक:
+	auto	स्वचालित
+	Auto Add/Delete	स्वतः जोड़ें/हटाएँ
+	Auto Adjust Opacity	ओपेसिटी स्वतः समायोजित करें
+	Auto Center Preview	पूर्वावलोकन स्वतः केंद्रित करें
+	Auto Clean Brush	ब्रश स्वतः साफ़ करें
+	Auto collapse icon panels	आइकन पैनल स्वतः संकुचित करें
+	Auto Color	ऑटो कलर
+	Auto Contrast	ऑटो कंट्रास्ट
+	Auto Erase	स्वतः मिटाएँ
+	Auto Hide	स्वतः छिपाएँ
+	Auto Hide Notifications	सूचनाएँ स्वतः छिपाएँ
+	Auto Scale	स्वतः स्केल
+	Auto show hidden panels	छिपे पैनल स्वतः दिखाएँ
+	Auto show home screen	होम स्क्रीन स्वतः दिखाएँ
+	Auto Show Overlay	ओवरले स्वतः दिखाएँ
+	Auto Tone	ऑटो टोन
+	Auto-Align Layers	लेयर्स ऑटो-संरेखित करें
+	Auto-Align Layers…	लेयर्स ऑटो-संरेखित करें…
+	Auto-Blend Layers	लेयर्स ऑटो-ब्लेंड करें
+	Auto-Blend Layers…	लेयर्स ऑटो-ब्लेंड करें…
+	Auto-Hide	स्वतः छिपाएँ
+	Auto-Leading	ऑटो-लीडिंग
+	Auto-leading %	ऑटो-लीडिंग %
+	Automate	स्वचालित करें
+	Automatic	स्वचालित
+	Automatic (recommended)	स्वचालित (अनुशंसित)
+	Automatic paragraph direction	स्वचालित पैराग्राफ़ दिशा
+	Automatic uses GPU acceleration when available and falls back to CPU rendering on errors.	स्वचालित मोड उपलब्ध होने पर GPU त्वरण का उपयोग करता है और त्रुटि होने पर CPU रेंडरिंग पर लौट आता है।
+	Automatically Check for Updates	अपडेट के लिए स्वचालित रूप से जाँचें
+	Automatically Create First Snapshot	पहला स्नैपशॉट स्वचालित रूप से बनाएँ
+	Automatically Create New Snapshot When Saving	सहेजते समय नया स्नैपशॉट स्वचालित रूप से बनाएँ
+	Automatically level near-horizontal line segments	लगभग क्षैतिज रेखा खंडों को स्वचालित रूप से समतल करें
+	Automatically straighten and level	स्वचालित रूप से सीधा और समतल करें
+	Automatically straighten near-vertical line segments	लगभग लंबवत रेखा खंडों को स्वचालित रूप से सीधा करें
+	Autosave	ऑटोसेव
+	Autosave failed: {error}	ऑटोसेव विफल: {error}
+	Autosave minutes	ऑटोसेव अंतराल (मिनट)
+	Auto-Select:	ऑटो-चयन:
+	Average	औसत
+	Avoid Widows/Orphans	विडो/ऑर्फ़न पंक्तियों से बचें
+	Back	वापस
+	Backend: {backend} ({type})	बैकएंड: {backend} ({type})
+	Background	बैकग्राउंड
+	Background (Default)	बैकग्राउंड (डिफ़ॉल्ट)
+	Background Color	बैकग्राउंड रंग
+	Background Contents	बैकग्राउंड सामग्री
+	Background Eraser	बैकग्राउंड इरेज़र
+	Background From Layer	लेयर से बैकग्राउंड
+	Background from Layer	लेयर से बैकग्राउंड
+	Background Level	बैकग्राउंड स्तर
+	Bamboo	बाँस
+	Bas Relief	बास रिलीफ़
+	Base Tree Type	मूल पेड़ का प्रकार
+	Based On	आधारित
+	Baseline	बेसलाइन
+	Baseline ("Standard")	बेसलाइन ("मानक")
+	Baseline Optimized	बेसलाइन ऑप्टिमाइज़्ड
+	Baseline shift	बेसलाइन शिफ़्ट
+	Baseline Shift	बेसलाइन शिफ़्ट
+	Basic	बुनियादी
+	Basic Latin	बेसिक लैटिन
+	Batch	बैच
+	Batch preview	बैच पूर्वावलोकन
+	Batch…	बैच…
+	Beep when done	पूरा होने पर बीप करें
+	Before	पहले
+	Begin recording	रिकॉर्डिंग शुरू करें
+	Behind	पीछे
+	Bend	मोड़
+	Bend:	मोड़:
+	Berries	बेरीज़
+	Best	सर्वोत्तम
+	Bevel	बेवल
+	Bevel & Emboss	बेवल और एम्बॉस
+	Bevel & Emboss…	बेवल और एम्बॉस…
+	Bicubic	बाइक्यूबिक
+	Bicubic (smooth gradients)	बाइक्यूबिक (स्मूथ ग्रेडिएंट)
+	Bicubic automatic	बाइक्यूबिक स्वचालित
+	Bicubic Automatic	बाइक्यूबिक स्वचालित
+	Bicubic Sharper	बाइक्यूबिक शार्पर
+	Bicubic sharper	बाइक्यूबिक शार्पर
+	Bicubic Sharper (reduction)	बाइक्यूबिक शार्पर (छोटा करने के लिए)
+	Bicubic Smoother	बाइक्यूबिक स्मूदर
+	Bicubic smoother	बाइक्यूबिक स्मूदर
+	Bicubic Smoother (enlargement)	बाइक्यूबिक स्मूदर (बड़ा करने के लिए)
+	Bilinear	बाइलीनियर
+	Binary assets added	बाइनरी एसेट्स जोड़े गए
+	Binary assets removed	बाइनरी एसेट्स हटाए गए
+	Bit depth	बिट डेप्थ
+	Bitmap	बिटमैप
+	Bitmap…	बिटमैप…
+	Black	काला
+	Black & White	ब्लैक एंड व्हाइट
+	Black Clip	ब्लैक क्लिप
+	Black Intensity	काले की तीव्रता
+	Black Matte	काला मैट
+	Black, White	काला, सफ़ेद
+	Blackletter	ब्लैकलेटर
+	Blade Curvature	ब्लेड वक्रता
+	BLANK DOCUMENT PRESETS ({n})	रिक्त दस्तावेज़ प्रीसेट्स ({n})
+	Blast	धमाका
+	Bleach Bypass	ब्लीच बायपास
+	Blend	ब्लेंड
+	Blend Clipped Layers as Group	क्लिप की गई लेयर्स को समूह के रूप में ब्लेंड करें
+	Blend If	ब्लेंड करें यदि
+	Blend If:	ब्लेंड करें यदि:
+	Blend Interior Effects as Group	आंतरिक इफ़ेक्ट्स को समूह के रूप में ब्लेंड करें
+	Blend Mode	ब्लेंड मोड
+	Blend RGB Colors Using Gamma 1.0	गामा 1.0 का उपयोग करके RGB रंग ब्लेंड करें
+	Blend Text Gamma	टेक्स्ट ब्लेंड गामा
+	Blending Mode	ब्लेंडिंग मोड
+	Blending Options	ब्लेंडिंग विकल्प
+	Blending Options ({filter})	ब्लेंडिंग विकल्प ({filter})
+	Bloat	फुलाएँ
+	Block	ब्लॉक
+	Blocks	ब्लॉक्स
+	blue	नीला
+	Blue Primary	नीला प्राइमरी
+	Blue Yellow	नीला पीला
+	Blue, Red, Yellow	नीला, लाल, पीला
+	Blues	नीले
+	Blur	ब्लर
+	Blur Angle	ब्लर कोण
+	Blur Gallery	ब्लर गैलरी
+	Blur More	अधिक ब्लर
+	Bold	बोल्ड
+	Bold Italic	बोल्ड इटैलिक
+	Border	बॉर्डर
+	Border Thickness	बॉर्डर की मोटाई
+	Both Axes	दोनों अक्ष
+	Bottom	नीचे
+	Bottom Edges	निचले किनारे
+	Bottom Left	नीचे बाएँ
+	Bottom Right	नीचे दाएँ
+	Bottom:	नीचे:
+	Box Blur	बॉक्स ब्लर
+	Box Blur…	बॉक्स ब्लर…
+	Bpc	ब्लैक पॉइंट कम्पेनसेशन
+	Branches Color	शाखाओं का रंग
+	Branches Height	शाखाओं की ऊँचाई
+	Branches Thickness	शाखाओं की मोटाई
+	Breeze	Breeze
+	Breeze Dark	Breeze डार्क
+	Breeze dark	Breeze डार्क
+	Breeze Dark Theme	Breeze डार्क थीम
+	Breeze light	Breeze लाइट
+	Breeze Light	Breeze लाइट
+	Breeze Light Theme	Breeze लाइट थीम
+	Brick	ईंट
+	Brightness	ब्राइटनेस
+	Brightness Cube	ब्राइटनेस क्यूब
+	Brightness Jitter	ब्राइटनेस जिटर
+	Brightness/Contrast	चमक/कंट्रास्ट
+	Bring Forward	आगे लाएँ
+	Bring the selected pin forward	चयनित पिन को आगे लाएँ
+	Bring to Front	सबसे आगे लाएँ
+	Bristle Detail	ब्रिसल डिटेल
+	Browse	ब्राउज़ करें
+	Browse…	ब्राउज़ करें…
+	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	ब्राउज़र स्टोरेज उपलब्ध नहीं है; ब्रश केवल इस सत्र तक रहेंगे। उन्हें बनाए रखने के लिए यह टैब खुला रखें।
+	Brush	ब्रश
+	Brush Detail	ब्रश डिटेल
+	Brush name	ब्रश का नाम
+	Brush Name	ब्रश का नाम
+	Brush picker	ब्रश पिकर
+	Brush Pose	ब्रश मुद्रा
+	Brush preset changes are not saved: {error}	ब्रश प्रीसेट परिवर्तन सहेजे नहीं गए: {error}
+	Brush Preset Options	ब्रश प्रीसेट विकल्प
+	Brush Preset picker	ब्रश प्रीसेट पिकर
+	Brush Preview	ब्रश पूर्वावलोकन
+	Brush preview color	ब्रश पूर्वावलोकन रंग
+	Brush Projection	ब्रश प्रोजेक्शन
+	Brush Reconstruct Options	ब्रश पुनर्निर्माण विकल्प
+	Brush Settings…  (F5): every option of this brush	ब्रश सेटिंग्स…  (F5): इस ब्रश के सभी विकल्प
+	Brush Size	ब्रश साइज़
+	Brush Stroke	ब्रश स्ट्रोक
+	Brush Strokes	ब्रश स्ट्रोक्स
+	Brush Tip	ब्रश टिप
+	Brush Tip Shape	ब्रश टिप आकार
+	Brush Tool Options	ब्रश टूल विकल्प
+	Brush Type	ब्रश प्रकार
+	brushes	ब्रश
+	Build-up	बिल्ड-अप
+	Bulge	उभार
+	Bundle Arrow-Key Nudges	एरो-कुंजी नज को एक चरण में समूहित करें
+	Burlap	टाट
+	Burn	बर्न
+	Butt / Flat	बट / फ़्लैट
+	Button Mode	बटन मोड
+	Button Mode On	बटन मोड चालू
+	Byline	बायलाइन
+	Byline Title	बायलाइन पद
+	Cache Level:	कैश स्तर:
+	Cache levels	कैश स्तर
+	Cache tile size	कैश टाइल साइज़
+	Calculating…	गणना हो रही है…
+	Calculations	गणनाएँ
+	Calculations…	गणनाएँ…
+	Calibration	कैलिब्रेशन
+	Camera Calibration	कैमरा कैलिब्रेशन
+	Camera Data	कैमरा डेटा
+	Camera Make	कैमरा निर्माता
+	Camera Model	कैमरा मॉडल
+	Camera Raw ({name})	Camera Raw ({name})
+	Camera Raw Defaults	Camera Raw डिफ़ॉल्ट
+	Camera Raw Filter	Camera Raw फ़िल्टर
+	Camera Raw Filter…	Camera Raw फ़िल्टर…
+	Camera Raw…	Camera Raw…
+	Cancel (Esc)	रद्द करें (Esc)
+	Cancel any current edits (Esc)	सभी मौजूदा संपादन रद्द करें (Esc)
+	Cancel current crop operation  (Esc)	मौजूदा क्रॉप रद्द करें  (Esc)
+	Cancel opening	खोलना रद्द करें
+	Cancel transform	रूपांतरण रद्द करें
+	Cancel transform (Esc)	रूपांतरण रद्द करें (Esc)
+	Cancel warp (Esc)	वार्प रद्द करें (Esc)
+	Candle Light	मोमबत्ती की रोशनी
+	Canvas	कैनवास
+	Canvas border	कैनवास बॉर्डर
+	Canvas color	कैनवास का रंग
+	Canvas custom color	कैनवास का कस्टम रंग
+	Canvas extension color:	कैनवास विस्तार का रंग:
+	Canvas Guides	कैनवास गाइड्स
+	Canvas rotation	कैनवास रोटेशन
+	Canvas Size	कैनवास साइज़
+	Caps	कैप्स
+	Caption	कैप्शन
+	Caption Credits	कैप्शन क्रेडिट्स
+	Capture	कैप्चर करें
+	Capture Brush Size in Preset	प्रीसेट में ब्रश साइज़ कैप्चर करें
+	Capture Comp	कंप कैप्चर करें
+	Capture the visibility, position and style of every layer with + below, then switch between versions.	नीचे दिए + से हर लेयर की दृश्यता, स्थिति और स्टाइल कैप्चर करें, फिर संस्करणों के बीच स्विच करें।
+	Cascade	कैस्केड
+	Case Sensitive	केस-संवेदी
+	Catch-up on Stroke End	स्ट्रोक के अंत में कैच-अप
+	Ccw	वामावर्त
+	Cell Size	सेल साइज़
+	Center Columns	कॉलम केंद्र में करें
+	Center Crop Marks	केंद्र क्रॉप मार्क्स
+	Center text	टेक्स्ट केंद्र में करें
+	Center X	केंद्र X
+	Center Y	केंद्र Y
+	Centre the gradient (offset 0, 0)	ग्रेडिएंट केंद्र में करें (ऑफ़सेट 0, 0)
+	Chalk & Charcoal	चॉक और चारकोल
+	Chalk Area	चॉक क्षेत्र
+	Change	बदलें
+	Change All	सभी बदलें
+	Change Find	बदलें और खोजें
+	Change Panel Group	पैनल समूह बदलें
+	Change Panel Layout	पैनल लेआउट बदलें
+	Change Screen Mode  (F)	स्क्रीन मोड बदलें  (F)
+	Change To:	इसमें बदलें:
+	Change…	बदलें…
+	Changes have not been saved.	परिवर्तन सहेजे नहीं गए हैं।
+	Changes Saved	परिवर्तन सहेजे गए
+	Changes undone.	परिवर्तन पूर्ववत किए गए।
+	Channel	चैनल
+	Channel Color	चैनल का रंग
+	Channel Mixer	चैनल मिक्सर
+	Channel Mixer…	चैनल मिक्सर…
+	Channel:	चैनल:
+	Channel1	चैनल 1
+	Channel2	चैनल 2
+	Channel3	चैनल 3
+	Channel4	चैनल 4
+	Channels:	चैनल्स:
+	Character	कैरेक्टर
+	Character Panel	कैरेक्टर पैनल
+	Character Styles	कैरेक्टर स्टाइल्स
+	Character Styles Panel	कैरेक्टर स्टाइल्स पैनल
+	Charcoal	चारकोल
+	Charcoal Area	चारकोल क्षेत्र
+	Charcoal Thickness	चारकोल मोटाई
+	Check All Layers	सभी लेयर्स जाँचें
+	Check for Updates	अपडेट जाँचें
+	Check for Updates…	अपडेट जाँचें…
+	Check Spelling	वर्तनी जाँचें
+	Check Spelling…	वर्तनी जाँचें…
+	Checkerboard	चेकरबोर्ड
+	Chisel Hard	चिज़ल हार्ड
+	Chisel Soft	चिज़ल सॉफ़्ट
+	Choke	चोक
+	Choose a format that keeps it, such as Photoshop (PSD), or save a copy.	ऐसा फ़ॉर्मेट चुनें जो इसे बनाए रखे, जैसे Photoshop (PSD), या एक प्रति सहेजें।
+	Choose a gradient file (.grd).	एक ग्रेडिएंट फ़ाइल (.grd) चुनें।
+	Choose a new shortcut for this command, or leave it without one.	इस कमांड के लिए नया शॉर्टकट चुनें, या इसे बिना शॉर्टकट के छोड़ दें।
+	Choose Folder	फ़ोल्डर चुनें
+	Choose Stack Mode:	स्टैक मोड चुनें:
+	Choose…	चुनें…
+	Chrome	क्रोम
+	CIE RGB	CIE RGB
+	Circle	वृत्त
+	Circularity	वृत्ताकारता
+	City	शहर
+	Classic	क्लासिक
+	Classic Theme	क्लासिक थीम
+	Cleanliness	स्वच्छता
+	Clear All	सभी साफ़ करें
+	Clear Amount	पारदर्शिता मात्रा
+	Clear Brush Controls	ब्रश कंट्रोल्स साफ़ करें
+	Clear Brush Strokes	ब्रश स्ट्रोक्स साफ़ करें
+	Clear Canvas Guides	कैनवास गाइड्स साफ़ करें
+	Clear Existing Guides	मौजूदा गाइड्स साफ़ करें
+	Clear History	हिस्ट्री साफ़ करें
+	Clear Layer Style	लेयर स्टाइल साफ़ करें
+	Clear Override	ओवरराइड साफ़ करें
+	Clear Recent Files	हाल की फ़ाइलें साफ़ करें
+	Clear Samples	नमूने साफ़ करें
+	Clear Selected Artboard Guides	चयनित आर्टबोर्ड गाइड्स साफ़ करें
+	Clear Selected Guides	चयनित गाइड्स साफ़ करें
+	Clear Smart Filters	स्मार्ट फ़िल्टर्स साफ़ करें
+	Click a red pupil to neutralize it	लाल पुतली को ठीक करने के लिए उस पर क्लिक करें
+	Click a segment to add an anchor point · {alt}-click an anchor to delete it	एंकर पॉइंट जोड़ने के लिए सेगमेंट पर क्लिक करें · एंकर हटाने के लिए उस पर {alt}-क्लिक करें
+	Click an anchor point to delete it · {alt}-click a segment to add one	एंकर पॉइंट हटाने के लिए उस पर क्लिक करें · पॉइंट जोड़ने के लिए सेगमेंट पर {alt}-क्लिक करें
+	Click sets foreground · right-click sets background	क्लिक से फ़ोरग्राउंड रंग सेट होता है · राइट-क्लिक से बैकग्राउंड रंग
+	Click the first point or press {key} to close · {del} removes a point · Esc cancels	बंद करने के लिए पहले पॉइंट पर क्लिक करें या {key} दबाएँ · {del} से पॉइंट हटता है · Esc से रद्द होता है
+	Click the first point or press {key} to close · Esc cancels	बंद करने के लिए पहले पॉइंट पर क्लिक करें या {key} दबाएँ · Esc से रद्द होता है
+	Click the first point or press ↵ to close · Esc cancels	बंद करने के लिए पहले पॉइंट पर क्लिक करें या ↵ दबाएँ · Esc से रद्द होता है
+	Click the image to add a pin; drag a pin to move it, or its ring to change its blur. Delete removes the selected pin.	पिन जोड़ने के लिए इमेज पर क्लिक करें; पिन खिसकाने के लिए उसे ड्रैग करें, या ब्लर बदलने के लिए उसकी रिंग ड्रैग करें। Delete चयनित पिन हटाता है।
+	Click to add a point · drag off or {key}-click or Delete to remove	पॉइंट जोड़ने के लिए क्लिक करें · हटाने के लिए बाहर ड्रैग करें, {key}-क्लिक करें या Delete दबाएँ
+	Click to add a point · drag off or ⌘/Ctrl-click or Delete to remove	पॉइंट जोड़ने के लिए क्लिक करें · हटाने के लिए बाहर ड्रैग करें, ⌘/Ctrl-क्लिक करें या Delete दबाएँ
+	Click to add a point, right-click to remove	पॉइंट जोड़ने के लिए क्लिक करें, हटाने के लिए राइट-क्लिक करें
+	Click to add text	टेक्स्ट जोड़ने के लिए क्लिक करें
+	Click to apply, {key}-click to clear overrides, double-click for Style Options	लागू करने के लिए क्लिक करें, ओवरराइड साफ़ करने के लिए {key}-क्लिक, स्टाइल विकल्पों के लिए डबल-क्लिक करें
+	Click to apply, ⌥-click to clear overrides, double-click for Style Options	लागू करने के लिए क्लिक करें, ओवरराइड साफ़ करने के लिए ⌥-क्लिक, स्टाइल विकल्पों के लिए डबल-क्लिक करें
+	Click to edit the gradient	ग्रेडिएंट संपादित करने के लिए क्लिक करें
+	Click to fill similar colours	समान रंग भरने के लिए क्लिक करें
+	Click to pick · Esc to cancel	चुनने के लिए क्लिक करें · रद्द करने के लिए Esc
+	Click to place · Alt-click or drag off-canvas to remove	रखने के लिए क्लिक करें · हटाने के लिए Alt-क्लिक करें या कैनवास से बाहर ड्रैग करें
+	Click to refresh histogram with uncached data	बिना कैश किए डेटा से हिस्टोग्राम रीफ़्रेश करने के लिए क्लिक करें
+	Click to restore the current colour	वर्तमान रंग पुनर्स्थापित करने के लिए क्लिक करें
+	Click to sample the foreground colour  ·  {key}-click for background	फ़ोरग्राउंड रंग का नमूना लेने के लिए क्लिक करें  ·  बैकग्राउंड के लिए {key}-क्लिक
+	Click to zoom in  ·  {key}-click to zoom out  ·  drag right/left to zoom in/out	ज़ूम इन करने के लिए क्लिक करें  ·  ज़ूम आउट के लिए {key}-क्लिक  ·  ज़ूम इन/आउट के लिए दाएँ/बाएँ ड्रैग करें
+	Click to zoom in  ·  ⌥-click to zoom out	ज़ूम इन करने के लिए क्लिक करें  ·  ज़ूम आउट के लिए ⌥-क्लिक
+	Click with the Note tool to add a note.	नोट जोड़ने के लिए नोट टूल से क्लिक करें।
+	Click, then move along an edge · click to fasten a point · {alt}-click for a straight segment · double-click to close	क्लिक करें, फिर किनारे के साथ चलें · पॉइंट स्थिर करने के लिए क्लिक करें · सीधे सेगमेंट के लिए {alt}-क्लिक · बंद करने के लिए डबल-क्लिक
+	Click: corner · Drag: smooth · {alt}-drag: break handle · Click or drag first point: close · {key} finish · Esc cancel	क्लिक: कोना · ड्रैग: स्मूथ · {alt}-ड्रैग: हैंडल तोड़ें · पहले पॉइंट पर क्लिक या ड्रैग: बंद करें · {key} समाप्त · Esc रद्द
+	Click: corner · Drag: smooth · Click first point: close · {key} finish · Esc cancel	क्लिक: कोना · ड्रैग: स्मूथ · पहले पॉइंट पर क्लिक: बंद करें · {key} समाप्त · Esc रद्द
+	Click: corner · Drag: smooth · Click first point: close · ↩ finish · Esc cancel	क्लिक: कोना · ड्रैग: स्मूथ · पहले पॉइंट पर क्लिक: बंद करें · ↩ समाप्त · Esc रद्द
+	Click: select anchor · Drag: move anchor, handle or segment · {shift}-click: add · {alt}-click: whole subpath	क्लिक: एंकर चुनें · ड्रैग: एंकर, हैंडल या सेगमेंट खिसकाएँ · {shift}-क्लिक: जोड़ें · {alt}-क्लिक: पूरा सबपाथ
+	Click: smooth point · Double-click: corner · Drag a point: move · Click first point: close · {key} finish	क्लिक: स्मूथ पॉइंट · डबल-क्लिक: कोना · पॉइंट ड्रैग करें: खिसकाएँ · पहले पॉइंट पर क्लिक: बंद करें · {key} समाप्त
+	Clip Thumbnails to Layer Bounds	थंबनेल को लेयर सीमाओं तक क्लिप करें
+	Clip thumbnails to layer bounds	थंबनेल को लेयर सीमाओं तक क्लिप करें
+	Clip to layer below	नीचे की लेयर पर क्लिप करें
+	Clipboard	क्लिपबोर्ड
+	Clipped	क्लिप्ड
+	Clipping Mask	क्लिपिंग मास्क
+	Clipping Path	क्लिपिंग पाथ
+	Clipping Path…	क्लिपिंग पाथ…
+	Clone	क्लोन
+	Clone Source	क्लोन सोर्स
+	Clone source {n} ({key}-click with Clone Stamp to set)	क्लोन सोर्स {n} (सेट करने के लिए क्लोन स्टैम्प से {key}-क्लिक करें)
+	Clone source set at {x}, {y}	क्लोन सोर्स {x}, {y} पर सेट किया गया
+	Clone Stamp	क्लोन स्टैम्प
+	Close Panel	पैनल बंद करें
+	Close Style Options	स्टाइल विकल्प बंद करें
+	Close Tab Group	टैब समूह बंद करें
+	Close Window	विंडो बंद करें
+	Clouds	बादल
+	Clumped	गुच्छेदार
+	Cmd	Cmd
+	Cmyk	CMYK
+	CMYK Sliders	CMYK स्लाइडर्स
+	CMYK Spectrum	CMYK स्पेक्ट्रम
+	CMYK:	CMYK:
+	Coarse Dots	मोटे बिंदु
+	Coated CMYK	कोटेड CMYK
+	Coated-cmyk	कोटेड CMYK
+	Coerce to sRGB	ज़बरन sRGB में बदलें
+	Collapse	संक्षिप्त करें
+	Collapse All Groups	सभी समूह संक्षिप्त करें
+	Collapse group  ({key}-click: all groups)	समूह संक्षिप्त करें  ({key}-क्लिक: सभी समूह)
+	Collapse group  (⌥-click: all groups)	समूह संक्षिप्त करें  (⌥-क्लिक: सभी समूह)
+	Collapse Panel Group	पैनल समूह संक्षिप्त करें
+	Color & Swatches	रंग और स्वॉचेस
+	Color Adaptation	रंग अनुकूलन
+	Color Balance	कलर बैलेंस
+	Color Blindness — Deuteranopia-type	वर्णांधता — ड्यूटेरानोपिया प्रकार
+	Color Blindness — Protanopia-type	वर्णांधता — प्रोटानोपिया प्रकार
+	Color Burn	कलर बर्न
+	Color Burn (Paint.NET)	कलर बर्न (Paint.NET)
+	Color Decontaminate	रंग शुद्ध करें
+	Color Decontaminate…	रंग शुद्ध करें…
+	Color Dodge	कलर डॉज
+	Color Dodge (Paint.NET)	कलर डॉज (Paint.NET)
+	Color Dynamics	कलर डायनेमिक्स
+	Color Halftone	कलर हाफ़टोन
+	Color Halftone…	कलर हाफ़टोन…
+	Color indicates	रंग दर्शाता है
+	Color Indicates Masked Areas	रंग मास्क किए गए क्षेत्र दर्शाता है
+	Color Indicates Selected Areas	रंग चयनित क्षेत्र दर्शाता है
+	Color Indicates:	रंग दर्शाता है:
+	Color Lookup	कलर लुकअप
+	Color Lookup Tables	कलर लुकअप तालिकाएँ
+	Color Lookup Tables…	कलर लुकअप तालिकाएँ…
+	Color Lookup…	कलर लुकअप…
+	Color Management	रंग प्रबंधन
+	Color Management Policies	रंग प्रबंधन नीतियाँ
+	Color management: {error}	रंग प्रबंधन: {error}
+	Color Mode	रंग मोड
+	Color Noise Reduction	रंग नॉइज़ रिडक्शन
+	Color Overlay	कलर ओवरले
+	Color Overlay…	कलर ओवरले…
+	Color Picker	कलर पिकर
+	Color picker	कलर पिकर
+	Color Picker ({name})	कलर पिकर ({name})
+	Color Picker (Background Color)	कलर पिकर (बैकग्राउंड रंग)
+	Color Picker (Crop Shield Color)	कलर पिकर (क्रॉप शील्ड रंग)
+	Color Picker (Custom Canvas Color)	कलर पिकर (कस्टम कैनवास रंग)
+	Color Picker (Fill Color)	कलर पिकर (फ़िल रंग)
+	Color Picker (Foreground Color)	कलर पिकर (फ़ोरग्राउंड रंग)
+	Color Picker (Layer Style Color)	कलर पिकर (लेयर स्टाइल रंग)
+	Color Picker (Solid Color)	कलर पिकर (ठोस रंग)
+	Color Picker (Stroke Color)	कलर पिकर (स्ट्रोक रंग)
+	Color Picker (Text Color)	कलर पिकर (टेक्स्ट रंग)
+	Color Profile	कलर प्रोफ़ाइल
+	Color Range	रंग सीमा
+	Color Range preview	रंग सीमा पूर्वावलोकन
+	Color Replacement	कलर रिप्लेसमेंट
+	Color Settings	रंग सेटिंग्स
+	Color Settings…	रंग सेटिंग्स…
+	Color space	कलर स्पेस
+	Color Swatches	रंग स्वॉचेस
+	Color Table…	रंग तालिका…
+	Color to Alpha…	रंग से अल्फ़ा…
+	Color Wheel	कलर व्हील
+	Color…	रंग…
+	Colored Pencil	रंगीन पेंसिल
+	Colorize	रंगीन करें
+	ColorMatch RGB	ColorMatch RGB
+	Colors	रंग
+	ColorSync	ColorSync
+	Column width	कॉलम चौड़ाई
+	Columns	कॉलम
+	Combine Shapes	शेप्स संयोजित करें
+	Comic Book	कॉमिक बुक
+	Command	कमांड
+	command or shortcut	कमांड या शॉर्टकट
+	Commit any current edits ({key})	सभी मौजूदा संपादन लागू करें ({key})
+	Commit any current edits (⌘↩)	सभी मौजूदा संपादन लागू करें (⌘↩)
+	Commit current crop operation  ({key})	मौजूदा क्रॉप लागू करें  ({key})
+	Commit current crop operation  (↵)	मौजूदा क्रॉप लागू करें  (↵)
+	Commit Perspective Warp ({key})	परस्पेक्टिव वार्प लागू करें ({key})
+	Commit Perspective Warp (↩)	परस्पेक्टिव वार्प लागू करें (↩)
+	Commit Puppet Warp ({key})	पपेट वार्प लागू करें ({key})
+	Commit Puppet Warp (↩)	पपेट वार्प लागू करें (↩)
+	Commit transform	रूपांतरण लागू करें
+	Commit transform ({key})	रूपांतरण लागू करें ({key})
+	Commit transform (↩)	रूपांतरण लागू करें (↩)
+	Commit warp ({key})	वार्प लागू करें ({key})
+	Commit warp (↩)	वार्प लागू करें (↩)
+	Commits	कमिट्स
+	Company	कंपनी
+	Compare	तुलना करें
+	Compatibility	संगतता
+	Compose	कंपोज़ करें
+	Compression	संपीड़न
+	Concavity	अवतलता
+	Concise	संक्षिप्त
+	Condensed	कंडेंस्ड
+	Conditional Mode Change	सशर्त मोड परिवर्तन
+	Conditional Mode Change…	सशर्त मोड परिवर्तन…
+	Cone	शंकु
+	Cone - Inverted	शंकु - उल्टा
+	Cone (Inverted)	शंकु (उल्टा)
+	Confirm	पुष्टि करें
+	Confirm or cancel the open action step dialog first	पहले खुले एक्शन चरण डायलॉग की पुष्टि करें या उसे रद्द करें
+	Conform	अनुरूप करें
+	Constant	स्थिर
+	Constrain proportions	अनुपात बनाए रखें
+	Constraints	प्रतिबंध
+	Constraints ({n})	प्रतिबंध ({n})
+	Contact Sheet II	कॉन्टैक्ट शीट II
+	Contact Sheet II…	कॉन्टैक्ट शीट II…
+	Conté Crayon	कॉन्टे क्रेयॉन
+	Content-Aware	कंटेंट-अवेयर
+	Content-Aware Fill	कंटेंट-अवेयर फ़िल
+	Content-Aware Fill needs a selection on a pixel layer	कंटेंट-अवेयर फ़िल के लिए पिक्सेल लेयर पर चयन आवश्यक है
+	Content-Aware Fill…	कंटेंट-अवेयर फ़िल…
+	Content-Aware Move	कंटेंट-अवेयर मूव
+	Content-Aware Scale	कंटेंट-अवेयर स्केल
+	Contents:	सामग्री:
+	Contextual Alternates	प्रासंगिक विकल्प
+	Contiguous	सन्निहित
+	Contour	कंटूर
+	Contour Editor	कंटूर एडिटर
+	Contract	संकुचित करें
+	Contrasty	अधिक कंट्रास्ट
+	Contributors	योगदानकर्ता
+	Contributors: {contributors} · Commits: {commits}	योगदानकर्ता: {contributors} · कमिट्स: {commits}
+	Control port	कंट्रोल पोर्ट
+	Control:	नियंत्रण:
+	Convert	बदलें
+	Convert for Smart Filters	स्मार्ट फ़िल्टर्स के लिए बदलें
+	Convert Frames > Video Layers	फ़्रेम्स बदलें > वीडियो लेयर्स
+	Convert to Alpha Channel	अल्फ़ा चैनल में बदलें
+	Convert to Embedded	एम्बेडेड में बदलें
+	Convert to Grayscale	ग्रेस्केल में बदलें
+	Convert to Layers	लेयर्स में बदलें
+	Convert to Linked	लिंक्ड में बदलें
+	Convert to Linked…	लिंक्ड में बदलें…
+	Convert to Paragraph Text	पैराग्राफ़ टेक्स्ट में बदलें
+	Convert to Point Text	पॉइंट टेक्स्ट में बदलें
+	Convert to Profile	प्रोफ़ाइल में बदलें
+	Convert to Profile…	प्रोफ़ाइल में बदलें…
+	Convert to Shape	शेप में बदलें
+	Convert to sRGB	sRGB में बदलें
+	Convert to srgb	sRGB में बदलें
+	Convert to the working space ({profile})	वर्किंग स्पेस ({profile}) में बदलें
+	Cool	ठंडा
+	Cooling L B B	कूलिंग LBB
+	Cooling80	कूलिंग 80
+	Cooling82	कूलिंग 82
+	Copies	प्रतियाँ
+	Copper	तांबा
+	Copy Color as HTML	रंग को HTML के रूप में कॉपी करें
+	Copy Color's Hex Code	रंग का हेक्स कोड कॉपी करें
+	Copy Complete Stroke	पूरा स्ट्रोक कॉपी करें
+	Copy Fill	फ़िल कॉपी करें
+	Copy Layer Style	लेयर स्टाइल कॉपी करें
+	Copy Texture to Other Tools	टेक्सचर को अन्य टूल्स में कॉपी करें
+	Copyright	कॉपीराइट
+	Copyright and Contact Info	कॉपीराइट और संपर्क जानकारी
+	Copyright Info URL	कॉपीराइट जानकारी URL
+	Copyright Notice	कॉपीराइट सूचना
+	Copyright Status	कॉपीराइट स्थिति
+	Copyright Url	कॉपीराइट URL
+	Copyrighted	कॉपीराइट युक्त
+	Corner	कोना
+	Corner Crop Marks	कोने के क्रॉप मार्क्स
+	Corner radius	कोने की त्रिज्या
+	Corners	कोने
+	Correct C A	CA सुधारें
+	Correct Distortion	विरूपण सुधारें
+	Correct Vignette	विगनेट सुधारें
+	Correction	सुधार
+	Could not complete the Free Transform command because the layer is locked.	मुक्त रूपांतरण कमांड पूरा नहीं हो सका क्योंकि लेयर लॉक है।
+	Could not open	खोला नहीं जा सका
+	Could not rename the action: {error}	एक्शन का नाम नहीं बदला जा सका: {error}
+	Could not transform: the layer is empty	रूपांतरण नहीं हो सका: लेयर खाली है
+	Could not use Perspective Warp: the layer is empty	परस्पेक्टिव वार्प का उपयोग नहीं हो सका: लेयर खाली है
+	Could not use Puppet Warp: no opaque pixels	पपेट वार्प का उपयोग नहीं हो सका: कोई अपारदर्शी पिक्सेल नहीं है
+	Could not use Puppet Warp: the layer is empty	पपेट वार्प का उपयोग नहीं हो सका: लेयर खाली है
+	Could not use the move tool because the layer is locked.	मूव टूल का उपयोग नहीं हो सका क्योंकि लेयर लॉक है।
+	Could not write {name}: {error}	{name} को लिखा नहीं जा सका: {error}
+	Couldn't open {name}: {error}	{name} को खोला नहीं जा सका: {error}
+	Couldn't place {name}: {error}	{name} को प्लेस नहीं किया जा सका: {error}
+	Couldn't save preferences: {error}. Retrying…	प्राथमिकताएँ सहेजी नहीं जा सकीं: {error}। फिर से प्रयास किया जा रहा है…
+	Count	गिनती
+	Count Jitter	गिनती जिटर
+	Count:	गिनती:
+	Count: {n}	गिनती: {n}
+	Country	देश
+	Cove - Deep	कोव - गहरा
+	Cove - Shallow	कोव - उथला
+	CPU (no GPU acceleration)	CPU (GPU एक्सेलेरेशन के बिना)
+	CPU / Compatibility	CPU / संगतता
+	CPU Rendering	CPU रेंडरिंग
+	Crack Brightness	दरार ब्राइटनेस
+	Crack Depth	दरार गहराई
+	Crack Spacing	दरार स्पेसिंग
+	Craquelure	क्रैक्लूर
+	Create	बनाएँ
+	Create a new count group	नया गिनती समूह बनाएँ
+	Create a new document or open an existing file.	नया दस्तावेज़ बनाएँ या कोई मौजूदा फ़ाइल खोलें।
+	Create a new group	नया समूह बनाएँ
+	Create a new layer	नई लेयर बनाएँ
+	Create a new layer  (⇧⌘N)	नई लेयर बनाएँ  (⇧⌘N)
+	Create By	इसके द्वारा बनाएँ
+	Create Clipping Mask	क्लिपिंग मास्क बनाएँ
+	Create Date	निर्माण तिथि
+	Create Droplet	ड्रॉपलेट बनाएँ
+	Create Droplet…	ड्रॉपलेट बनाएँ…
+	Create Ellipse	एलिप्स बनाएँ
+	Create Layer	लेयर बनाएँ
+	Create Multiple Picture Packages	कई पिक्चर पैकेज बनाएँ
+	Create new action	नया एक्शन बनाएँ
+	Create new brush from the current settings	वर्तमान सेटिंग्स से नया ब्रश बनाएँ
+	Create new brush from these settings	इन सेटिंग्स से नया ब्रश बनाएँ
+	Create new brush preset from the current settings	वर्तमान सेटिंग्स से नया ब्रश प्रीसेट बनाएँ
+	Create new channel	नया चैनल बनाएँ
+	Create new count group	नया गिनती समूह बनाएँ
+	Create new document from current state	वर्तमान स्थिति से नया दस्तावेज़ बनाएँ
+	Create new fill or adjustment layer	नई फ़िल या एडजस्टमेंट लेयर बनाएँ
+	Create new gradient	नया ग्रेडिएंट बनाएँ
+	Create new group	नया समूह बनाएँ
+	Create new layer	नई लेयर बनाएँ
+	Create new layer comp	नया लेयर कंप बनाएँ
+	Create new path	नया पाथ बनाएँ
+	Create new pattern from the selection	चयन से नया पैटर्न बनाएँ
+	Create new set	नया सेट बनाएँ
+	Create new shape from the current path	वर्तमान पाथ से नया शेप बनाएँ
+	Create new snapshot	नया स्नैपशॉट बनाएँ
+	Create new style (from the selected type)	नई स्टाइल बनाएँ (चयनित टाइप से)
+	Create new style from the selected layer	चयनित लेयर से नई स्टाइल बनाएँ
+	Create new swatch	नया स्वॉच बनाएँ
+	Create new tool preset	नया टूल प्रीसेट बनाएँ
+	Create Plane	प्लेन बनाएँ
+	Create Polygon	पॉलीगोन बनाएँ
+	Create Rectangle	रेक्टेंगल बनाएँ
+	Create Smart Object after Loading Layers	लेयर्स लोड करने के बाद स्मार्ट ऑब्जेक्ट बनाएँ
+	Create Snapshot	स्नैपशॉट बनाएँ
+	Create Texture	टेक्सचर बनाएँ
+	Create Triangle	ट्रायंगल बनाएँ
+	Create Vector Mask	वेक्टर मास्क बनाएँ
+	Create Video Timeline	वीडियो टाइमलाइन बनाएँ
+	Create Warped Text	वार्प्ड टेक्स्ट बनाएँ
+	Create warped text	वार्प्ड टेक्स्ट बनाएँ
+	Create Work Path	वर्क पाथ बनाएँ
+	Create…	बनाएँ…
+	Credit	क्रेडिट
+	Crisp	क्रिस्प
+	Crop and Straighten Photos	फ़ोटो क्रॉप करें और सीधा करें
+	Crop Factor	क्रॉप फ़ैक्टर
+	Crop Shield color	क्रॉप शील्ड रंग
+	Cross	क्रॉस
+	Cross Process	क्रॉस प्रोसेस
+	Crosshatch	क्रॉसहैच
+	Crosswise	आड़ा
+	Crystallize	क्रिस्टलाइज़ करें
+	Crystallize…	क्रिस्टलाइज़ करें…
+	Ctrl	Ctrl
+	Currency	मुद्रा
+	current	वर्तमान
+	Current	वर्तमान
+	Current & Below	वर्तमान और नीचे की
+	Current & Below No Adjustments	वर्तमान और नीचे की, समायोजन के बिना
+	Current Colors	वर्तमान रंग
+	Current Layer	वर्तमान लेयर
+	Current Layer:	वर्तमान लेयर:
+	Current Path	वर्तमान पाथ
+	Current Size	वर्तमान साइज़
+	Current Time	वर्तमान समय
+	Current Tool	वर्तमान टूल
+	Current Tool Only	केवल वर्तमान टूल
+	Cursors	कर्सर
+	Cursors…	कर्सर…
+	Curve Darks	कर्व डार्क्स
+	Curve Fit:	कर्व फ़िट:
+	Curve Highlights	कर्व हाइलाइट्स
+	Curve Lights	कर्व लाइट्स
+	Curve Shadows	कर्व शैडो
+	Curve Splits	कर्व स्प्लिट्स
+	Curves	कर्व्स
+	Custom	कस्टम
+	Custom background color	कस्टम बैकग्राउंड रंग
+	Custom Branch Color	कस्टम ब्रांच रंग
+	Custom dark	कस्टम (डार्क)
+	Custom light	कस्टम (लाइट)
+	Custom pattern	कस्टम पैटर्न
+	Custom Pattern	कस्टम पैटर्न
+	Custom Pattern:	कस्टम पैटर्न:
+	Custom Pixel Aspect Ratio	कस्टम पिक्सेल पहलू अनुपात
+	Custom Pixel Aspect Ratio…	कस्टम पिक्सेल पहलू अनुपात…
+	Custom Shapes	कस्टम शेप्स
+	Custom…	कस्टम…
+	Cutout	कटआउट
+	Cw	दक्षिणावर्त
+	Cyan	सियान
+	Cyan  ·  Red	सियान  ·  लाल
+	Cyans	सियान
+	Cycle Orientation	ओरिएंटेशन क्रम से बदलें
+	Cycle Overlay	ओवरले क्रम से बदलें
+	Cycle Screen Mode	स्क्रीन मोड क्रम से बदलें
+	Cyrillic	सिरिलिक
+	D1/DV NTSC (0.91)	D1/DV NTSC (0.91)
+	D1/DV NTSC Widescreen (1.21)	D1/DV NTSC वाइडस्क्रीन (1.21)
+	D1/DV PAL (1.09)	D1/DV PAL (1.09)
+	D1/DV PAL Widescreen (1.46)	D1/DV PAL वाइडस्क्रीन (1.46)
+	Daisies	डेज़ी फूल
+	Damaged Photoshop document	क्षतिग्रस्त Photoshop दस्तावेज़
+	Dark	डार्क
+	Dark gray	गहरा ग्रे
+	Dark Gray	गहरा ग्रे
+	Dark Intensity	डार्क तीव्रता
+	Dark Rough	डार्क रफ़
+	Dark Strokes	डार्क स्ट्रोक्स
+	Dark Theme	डार्क थीम
+	Darken	डार्कन
+	Darken Amount	डार्कन मात्रा
+	Darken Interface	इंटरफ़ेस गहरा करें
+	Darken Only	केवल डार्कन
+	Darker Color	डार्कर कलर
+	Darkness	गहरापन
+	Dash	डैश
+	Dash / gap lengths × stroke width	डैश / गैप लंबाई × स्ट्रोक चौड़ाई
+	Dash offset	डैश ऑफ़सेट
+	Dashed	डैश्ड
+	Dashed line	डैश्ड लाइन
+	Dashed lines	डैश्ड लाइनें
+	Data	डेटा
+	Data Set: {name}  ({index}/{total})	डेटा सेट: {name}  ({index}/{total})
+	Data Sets	डेटा सेट्स
+	Data Sets as Files	डेटा सेट्स फ़ाइलों के रूप में
+	Data Sets as Files is unavailable on the web	डेटा सेट्स फ़ाइलों के रूप में वेब पर उपलब्ध नहीं है
+	Data Sets as Files…	डेटा सेट्स फ़ाइलों के रूप में…
+	Data Sets…	डेटा सेट्स…
+	Date	तिथि
+	Date and Time	तिथि और समय
+	Date Created	निर्माण तिथि
+	DateTime Original	मूल तिथि और समय
+	Day For Night	डे फ़ॉर नाइट
+	DDS Options	DDS विकल्प
+	Decorative	सजावटी
+	Decrease Type Size	टाइप साइज़ घटाएँ
+	Decrease Type Size by 10	टाइप साइज़ 10 घटाएँ
+	Deep	गहरा
+	Deep Blue	गहरा नीला
+	Deep Emerald	गहरा पन्ना
+	Deep Red	गहरा लाल
+	Deep Yellow	गहरा पीला
+	Default	डिफ़ॉल्ट
+	Default colours (D)	डिफ़ॉल्ट रंग (D)
+	Default Features	डिफ़ॉल्ट सुविधाएँ
+	Default Foreground and Background Colors	डिफ़ॉल्ट फ़ोरग्राउंड और बैकग्राउंड रंग
+	Default Leaves	डिफ़ॉल्ट पत्तियाँ
+	Default PhotoCraft Size	डिफ़ॉल्ट PhotoCraft साइज़
+	Default Photoshop Size	डिफ़ॉल्ट Photoshop साइज़
+	Default printer	डिफ़ॉल्ट प्रिंटर
+	Default restored.	डिफ़ॉल्ट पुनर्स्थापित किया गया।
+	Defaults	डिफ़ॉल्ट
+	Defaults restored.	डिफ़ॉल्ट पुनर्स्थापित किए गए।
+	Define	परिभाषित करें
+	Define at least one variable first.	पहले कम से कम एक वेरिएबल परिभाषित करें।
+	Define Brush Preset	ब्रश प्रीसेट परिभाषित करें
+	Define Brush Preset…	ब्रश प्रीसेट परिभाषित करें…
+	Define Custom Shape	कस्टम शेप परिभाषित करें
+	Define Custom Shape…	कस्टम शेप परिभाषित करें…
+	Define Pattern	पैटर्न परिभाषित करें
+	Define Pattern…	पैटर्न परिभाषित करें…
+	Define…	परिभाषित करें…
+	Definition	परिभाषा
+	Defringe	डीफ़्रिंज
+	Defringe…	डीफ़्रिंज…
+	Degrees	डिग्री
+	De-Interlace	डी-इंटरलेस
+	De-Interlace…	डी-इंटरलेस…
+	Delete All Empty Layers	सभी खाली लेयर्स हटाएँ
+	Delete and Fill Selection	हटाएँ और चयन भरें
+	Delete brush	ब्रश हटाएँ
+	Delete Brush	ब्रश हटाएँ
+	Delete Contour	कंटूर हटाएँ
+	Delete count group	काउंट समूह हटाएँ
+	Delete Crop Preset…	क्रॉप प्रीसेट हटाएँ…
+	Delete Cropped Pixels	क्रॉप किए गए पिक्सेल हटाएँ
+	Delete current channel	वर्तमान चैनल हटाएँ
+	Delete current state	वर्तमान स्थिति हटाएँ
+	Delete effect	इफ़ेक्ट हटाएँ
+	Delete effect layer	इफ़ेक्ट लेयर हटाएँ
+	Delete Filter Mask	फ़िल्टर मास्क हटाएँ
+	Delete Frame	फ़्रेम हटाएँ
+	Delete Group	समूह हटाएँ
+	Delete layer	लेयर हटाएँ
+	Delete layer comp	लेयर कॉम्प हटाएँ
+	Delete Layer Mask	लेयर मास्क हटाएँ
+	Delete Layer…	लेयर हटाएँ…
+	Delete Layers	लेयर्स हटाएँ
+	Delete Mask	मास्क हटाएँ
+	Delete note	नोट हटाएँ
+	Delete path	पाथ हटाएँ
+	Delete Path	पाथ हटाएँ
+	Delete Pins	पिन हटाएँ
+	Delete Preset…	प्रीसेट हटाएँ…
+	Delete selected measurements	चयनित माप हटाएँ
+	Delete Shortcut	शॉर्टकट हटाएँ
+	Delete Smart Filters	स्मार्ट फ़िल्टर्स हटाएँ
+	Delete Snapshot	स्नैपशॉट हटाएँ
+	Delete style	स्टाइल हटाएँ
+	Delete the vector mask?	वेक्टर मास्क हटाएँ?
+	Delete this set	यह सेट हटाएँ
+	Delete Timeline	टाइमलाइन हटाएँ
+	Delete tool preset	टूल प्रीसेट हटाएँ
+	Delete Tool Preset	टूल प्रीसेट हटाएँ
+	Delete vector mask	वेक्टर मास्क हटाएँ
+	Delete Vector Mask	वेक्टर मास्क हटाएँ
+	Delete Workspace	कार्यस्थान हटाएँ
+	Delete…	हटाएँ…
+	Density	घनत्व
+	Density:	घनत्व:
+	Depth	गहराई
+	Depth Jitter	गहराई जिटर
+	Depth Map	गहराई मैप
+	Depth Mode	गहराई मोड
+	Desaturate	डीसैचुरेट करें
+	Desaturate Monitor Colors By	मॉनिटर रंगों को इतना डीसैचुरेट करें
+	Description	विवरण
+	Deselect All	सभी अचयनित करें
+	Despeckle	डीस्पेकल
+	Destination	गंतव्य
+	Detailed	विस्तृत
+	Details	ब्योरा
+	Detect Faces	चेहरे पहचानें
+	Diagonal	विकर्ण
+	Diagonal (Descending)	विकर्ण (अवरोही)
+	Diameter	व्यास
+	Diameter:	व्यास:
+	Diamond	डायमंड
+	Diamond Gradient	डायमंड ग्रेडिएंट
+	Difference	डिफ़रेंस
+	Difference Clouds	डिफ़रेंस क्लाउड्स
+	Diffuse	डिफ़्यूज़
+	Diffuse Glow	डिफ़्यूज़ ग्लो
+	Diffuse…	डिफ़्यूज़…
+	Diffusion	डिफ़्यूज़न
+	Diffusion Dither	डिफ़्यूज़न डिथर
+	Digits	अंक
+	Dimensions:	आयाम:
+	Direction	दिशा
+	Direction Balance	दिशा संतुलन
+	Direction of Stroke	स्ट्रोक की दिशा
+	DirectX 12	DirectX 12
+	Disable Filter Mask	फ़िल्टर मास्क अक्षम करें
+	Disable Layer Mask	लेयर मास्क अक्षम करें
+	Disable Mask	मास्क अक्षम करें
+	Disable Smart Filters	स्मार्ट फ़िल्टर्स अक्षम करें
+	Disable Symmetry Path	सिमेट्री पाथ अक्षम करें
+	Disabled	अक्षम
+	Discard Changes	परिवर्तन छोड़ें
+	Discard Layers and Save a Copy	लेयर्स छोड़ें और एक प्रति सहेजें
+	Discard the embedded profile (don't color manage)	एम्बेडेड प्रोफ़ाइल छोड़ें (रंग प्रबंधन न करें)
+	Discontiguous	असन्निहित
+	Discord	Discord
+	Discretionary Ligatures	वैकल्पिक लिगेचर
+	Disks	डिस्क
+	Dismiss	ख़ारिज करें
+	Displace	डिस्प्लेस
+	Displace…	डिस्प्लेस…
+	Display	डिस्प्ले
+	Display name	प्रदर्शित नाम
+	Display P3	Display P3
+	Display p3	Display P3
+	Display profile not used	डिस्प्ले प्रोफ़ाइल उपयोग नहीं की गई
+	Display profiles: {reason}	डिस्प्ले प्रोफ़ाइल्स: {reason}
+	Display Text	प्रदर्शित टेक्स्ट
+	Display-p3	Display-p3
+	Dissolve	डिज़ॉल्व
+	Dissolve is approximated: it blends without Photoshop's dither.	डिज़ॉल्व अनुमानित है: यह Photoshop के डिथर के बिना ब्लेंड करता है।
+	Distance	दूरी
+	Distortion	विरूपण
+	Distribute	वितरित करें
+	Distribution	वितरण
+	Dither	डिथर
+	Divide	डिवाइड
+	Divide…	विभाजित करें…
+	Do not append "copy" to filename when saving a copy	प्रति सहेजते समय फ़ाइल नाम में "copy" न जोड़ें
+	Do you want to save the changes you made to “{name}” before closing?	क्या आप बंद करने से पहले “{name}” में किए गए परिवर्तन सहेजना चाहते हैं?
+	Do you want to save the changes you made to “{name}” before quitting?	क्या आप बाहर निकलने से पहले “{name}” में किए गए परिवर्तन सहेजना चाहते हैं?
+	Do you want to save you made to “{name}” before quitting?	क्या आप बाहर निकलने से पहले “{name}” में किए गए परिवर्तन सहेजना चाहते हैं?
+	Doc: {flat}/{layered}	दस्तावेज़: {flat}/{layered}
+	Doc: {w} × {h} px	दस्तावेज़: {w} × {h} px
+	Dock Panel	पैनल डॉक करें
+	Document	दस्तावेज़
+	Document Bounds	दस्तावेज़ की सीमाएँ
+	Document Dimensions	दस्तावेज़ के आयाम
+	Document Profile	दस्तावेज़ प्रोफ़ाइल
+	Document Size	दस्तावेज़ साइज़
+	Document Sizes	दस्तावेज़ साइज़
+	Document Title	दस्तावेज़ शीर्षक
+	Documentation	दस्तावेज़ीकरण
+	Documents	दस्तावेज़
+	Dodge	डॉज
+	Dodge/Burn	डॉज/बर्न
+	Domed	गुंबदाकार
+	Domed (Inverted)	गुंबदाकार (उल्टा)
+	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	प्रिंट सेटिंग्स… में मिरर इमेज को भी न चुनें: दोनों फ़्लिप एक-दूसरे को रद्द कर देते हैं।
+	Dont Enlarge	बड़ा न करें
+	Don't Import	इम्पोर्ट न करें
+	Dot	बिंदु
+	Dots	बिंदु
+	Dotted	बिंदुदार
+	Double click layer mask launches select and mask	लेयर मास्क पर डबल-क्लिक करने से चयन और मास्क खुलता है
+	Double Line	दोहरी रेखा
+	Down	नीचे
+	Draft	ड्राफ़्ट
+	Drag (lasso) or click points (polygonal) · {add} add · {sub} subtract	खींचें (लैस्सो) या पॉइंट्स पर क्लिक करें (बहुभुज) · {add} जोड़ें · {sub} घटाएँ
+	Drag a box or click four corners · drag the corners onto the edges of a skewed shape · {commit} commits · Esc cancels	बॉक्स खींचें या चार कोनों पर क्लिक करें · कोनों को तिरछी आकृति के किनारों पर खींचें · {commit} लागू करता है · Esc रद्द करता है
+	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · {commit} commits · Esc cancels	क्रॉप बॉक्स खींचें · खिसकाने के लिए अंदर खींचें · किनारे साइज़ बदलते हैं ({ratio} अनुपात, {centre} केंद्र) · बनाते समय Space खिसकाता है · {commit} लागू करता है · Esc रद्द करता है
+	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	क्रॉप बॉक्स खींचें · खिसकाने के लिए अंदर खींचें · किनारे साइज़ बदलते हैं ({ratio} अनुपात, {centre} केंद्र) · बनाते समय Space खिसकाता है · ऐरो कुंजियाँ थोड़ा खिसकाती हैं · X ओरिएंटेशन बदलता है · {commit} लागू करता है · Esc रद्द करता है
+	Drag a rectangle around the object	ऑब्जेक्ट के चारों ओर आयत खींचें
+	Drag around the centre to rotate the view  ·  Shift constrains to 15°	दृश्य घुमाने के लिए केंद्र के चारों ओर खींचें  ·  Shift 15° के चरणों तक सीमित करता है
+	Drag on the image to add a constraint; Shift for horizontal/vertical; right-click a constraint to change or delete it.	कंस्ट्रेंट जोड़ने के लिए इमेज पर खींचें; क्षैतिज/लंबवत के लिए Shift; किसी कंस्ट्रेंट को बदलने या हटाने के लिए उस पर राइट-क्लिक करें।
+	Drag or click polygon points · hold Alt during lasso for straight segments · {add} add · {sub} before drawing subtracts	खींचें या बहुभुज के पॉइंट्स पर क्लिक करें · सीधे खंडों के लिए लैस्सो के दौरान Alt दबाए रखें · {add} जोड़ें · बनाने से पहले {sub} घटाता है
+	Drag the arrow to set the angle, the dots to set the roundness	कोण सेट करने के लिए तीर को और राउंडनेस सेट करने के लिए बिंदुओं को खींचें
+	Drag the handles on the outline to resize and turn it, the square to round its corners, and the dots inside to set where the blur starts.	साइज़ बदलने और घुमाने के लिए आउटलाइन के हैंडल, कोने गोल करने के लिए वर्ग, और ब्लर कहाँ से शुरू हो यह सेट करने के लिए अंदर के बिंदु खींचें।
+	Drag the handles on the outline to resize and turn it; the ring sets the blur angle.	साइज़ बदलने और घुमाने के लिए आउटलाइन के हैंडल खींचें; रिंग ब्लर का कोण सेट करती है।
+	Drag the pin to move the band, or its ring to change its blur. Drag the solid lines to widen the sharp band, the dashed lines to set the transition, and the dots to turn it.	बैंड खिसकाने के लिए पिन को, या उसका ब्लर बदलने के लिए उसकी रिंग को खींचें। शार्प बैंड चौड़ा करने के लिए ठोस रेखाओं को, ट्रांज़िशन सेट करने के लिए डैश वाली रेखाओं को, और उसे घुमाने के लिए बिंदुओं को खींचें।
+	Drag to draw a gradient	ग्रेडिएंट बनाने के लिए खींचें
+	Drag to draw the curve · {key}-click draws a straight line	कर्व बनाने के लिए खींचें · {key}-क्लिक सीधी रेखा बनाता है
+	Drag to move the active layer	सक्रिय लेयर खिसकाने के लिए खींचें
+	Drag to move the active shape's path or the Work Path	सक्रिय शेप का पाथ या वर्क पाथ खिसकाने के लिए खींचें
+	Drag to move the layer	लेयर खिसकाने के लिए खींचें
+	Drag to move the selected path	चयनित पाथ खिसकाने के लिए खींचें
+	Drag to pan  ·  hold Space with any tool	पैन करने के लिए खींचें  ·  किसी भी टूल के साथ Space दबाए रखें
+	Drag to pan · Scroll to zoom · Double-click to fit	पैन करने के लिए खींचें · ज़ूम करने के लिए स्क्रॉल करें · फ़िट करने के लिए डबल-क्लिक करें
+	Drag: draw freehand · {alt}-click: straight segment · Release on the start point: close	खींचें: फ़्रीहैंड बनाएँ · {alt}-क्लिक: सीधा खंड · शुरुआती पॉइंट पर छोड़ें: बंद करें
+	Drag: draw freehand · Release on the start point: close	खींचें: फ़्रीहैंड बनाएँ · शुरुआती पॉइंट पर छोड़ें: बंद करें
+	Draw to modify the curve	कर्व बदलने के लिए बनाएँ
+	Draw with the Pen tool (P) or make a work path from a selection.	पेन टूल (P) से बनाएँ या किसी चयन से वर्क पाथ बनाएँ।
+	Drawn on the CPU: {reason}. Click for System Info.	CPU पर बनाया गया: {reason}। सिस्टम जानकारी के लिए क्लिक करें।
+	Driver: {driver}	ड्राइवर: {driver}
+	Drop an image or PSD anywhere to open it.	खोलने के लिए कोई इमेज या PSD कहीं भी छोड़ें।
+	Drop Shadow	ड्रॉप शैडो
+	Drop shadow	ड्रॉप शैडो
+	Drop Shadow…	ड्रॉप शैडो…
+	Dry Brush	ड्राई ब्रश
+	Dual Axis	दोहरा अक्ष
+	Dual Brush	डुअल ब्रश
+	Duotone	डुओटोन
+	Duotone…	डुओटोन…
+	Duplicate	डुप्लीकेट करें
+	Duplicate Frame	फ़्रेम डुप्लीकेट करें
+	Duplicate Layer	लेयर डुप्लीकेट करें
+	Duplicate Layer Comp	लेयर कॉम्प डुप्लीकेट करें
+	Duplicate Layers	लेयर्स डुप्लीकेट करें
+	Duplicate Layers…	लेयर्स डुप्लीकेट करें…
+	Duplicate Path	पाथ डुप्लीकेट करें
+	Duplicate style	स्टाइल डुप्लीकेट करें
+	Duplicated selection name	डुप्लीकेट चयन नाम
+	Duplication	डुप्लीकेशन
+	Duration	अवधि
+	Dust & Scratches	धूल और खरोंचें
+	Dust & Scratches…	धूल और खरोंचें…
+	DVCPRO HD 1080/HDV 1080 (1.5)	DVCPRO HD 1080/HDV 1080 (1.5)
+	Dynamic color sliders	डायनेमिक रंग स्लाइडर
+	Dynamics	डायनेमिक्स
+	East asian	पूर्वी एशियाई
+	East Asian Features	पूर्वी एशियाई सुविधाएँ
+	Edge	किनारा
+	Edge Brightness	किनारे की ब्राइटनेस
+	Edge Extension	किनारा विस्तार
+	Edge Fidelity	किनारे की सटीकता
+	Edge Intensity	किनारे की तीव्रता
+	Edge Only	केवल किनारा
+	Edge Simplicity	किनारे की सरलता
+	Edge Thickness	किनारे की मोटाई
+	Edge Width	किनारे की चौड़ाई
+	Edit › Keyboard Shortcuts › Reset All to Defaults undoes an import.	एडिट › कीबोर्ड शॉर्टकट › सभी को डिफ़ॉल्ट पर रीसेट करें से इम्पोर्ट पूर्ववत हो जाता है।
+	Edit › Paste	एडिट › पेस्ट करें
+	Edit Contents	सामग्री संपादित करें
+	Edit in Quick Mask Mode	क्विक मास्क मोड में संपादित करें
+	Edit in Quick Mask Mode  (Q)	क्विक मास्क मोड में संपादित करें  (Q)
+	Edit in Standard Mode  (Q)	स्टैंडर्ड मोड में संपादित करें  (Q)
+	Edit Pins	पिन संपादित करें
+	Edit Plane	प्लेन संपादित करें
+	Edit points to modify the curve	कर्व बदलने के लिए पॉइंट्स संपादित करें
+	Edit Selected Guides	चयनित गाइड्स संपादित करें
+	Edit Toolbar	टूलबार संपादित करें
+	Edit Toolbar…	टूलबार संपादित करें…
+	Edit Type	टाइप संपादित करें
+	Edit…	संपादित करें…
+	Edits that change the whole document, such as a layer's blend mode, opacity or visibility, redraw all of it.	पूरे दस्तावेज़ को बदलने वाले संपादन, जैसे किसी लेयर का ब्लेंड मोड, ओपेसिटी या दृश्यता, उसे पूरा फिर से बनाते हैं।
+	Effect	इफ़ेक्ट
+	Effect cache mb	इफ़ेक्ट कैश (MB)
+	Efficiency	दक्षता
+	Efficiency: 100%	दक्षता: 100%
+	Elevation	उन्नयन
+	Eliminate	हटाएँ
+	Ellipse	एलिप्स
+	Email	ईमेल
+	Embed Color Profile	रंग प्रोफ़ाइल एम्बेड करें
+	Embed profiles	प्रोफ़ाइल्स एम्बेड करें
+	Embedded Profile Mismatch	एम्बेडेड प्रोफ़ाइल मेल नहीं खाती
+	Emboss	एम्बॉस
+	Emboss…	एम्बॉस…
+	Empty	खाली
+	Emulsion Down	इमल्शन नीचे
+	Enable {name}	{name} सक्षम करें
+	Enable airbrush-style build-up effects	एयरब्रश-शैली बिल्ड-अप इफ़ेक्ट्स सक्षम करें
+	Enable animations	एनिमेशन सक्षम करें
+	Enable Crop Shield	क्रॉप शील्ड सक्षम करें
+	Enable flick panning	फ़्लिक पैनिंग सक्षम करें
+	Enable floating document window docking	फ़्लोटिंग दस्तावेज़ विंडो डॉकिंग सक्षम करें
+	Enable Generator	जनरेटर सक्षम करें
+	Enable Layer Mask	लेयर मास्क सक्षम करें
+	Enable Mask	मास्क सक्षम करें
+	Enable narrow options bar	संकीर्ण विकल्प बार सक्षम करें
+	Enable Smart Filters	स्मार्ट फ़िल्टर्स सक्षम करें
+	Enable Timeline Quick Config	टाइमलाइन क्विक कॉन्फ़िग सक्षम करें
+	Enable Vector Mask	वेक्टर मास्क सक्षम करें
+	Enabled	सक्षम
+	End	अंत
+	End X	अंत X
+	End Y	अंत Y
+	Enhance Edge	किनारा बेहतर करें
+	Enhanced Controls	उन्नत नियंत्रण
+	Enhanced Controls…	उन्नत नियंत्रण…
+	Enlarged	बड़ा किया गया
+	Enter a name for the brush preset	ब्रश प्रीसेट के लिए नाम दर्ज करें
+	Enter a name for the crop preset	क्रॉप प्रीसेट के लिए नाम दर्ज करें
+	Enter description…	विवरण दर्ज करें…
+	Entire Document	पूरा दस्तावेज़
+	Entire Font	पूरा फ़ॉन्ट
+	Entropy	एंट्रॉपी
+	Equalize	इक्वलाइज़ करें
+	Erase	मिटाएँ
+	Erase with Brush or Pencil (hold)	ब्रश या पेंसिल से मिटाएँ (दबाए रखें)
+	Eraser	इरेज़र
+	Error	त्रुटि
+	Error File	त्रुटि फ़ाइल
+	Errors	त्रुटियाँ
+	Esc to cancel	रद्द करने के लिए Esc
+	Essentials	एसेंशियल्स
+	Even Fields	सम फ़ील्ड्स
+	Exact	सटीक
+	Exclude Overlapping Shapes	ओवरलैप होने वाली शेप्स बाहर रखें
+	Excluded Area	बाहर रखा गया क्षेत्र
+	Exclusion	एक्सक्लूज़न
+	EXIF	EXIF
+	EXIF Version	EXIF संस्करण
+	Exit Quick Mask	क्विक मास्क से बाहर निकलें
+	Expand	विस्तार करें
+	Expand All Groups	सभी समूहों का विस्तार करें
+	Expand Detection Area	पहचान क्षेत्र का विस्तार करें
+	Expand group  ({key}-click: all groups)	समूह का विस्तार करें  ({key}-क्लिक: सभी समूह)
+	Expand group  (⌥-click: all groups)	समूह का विस्तार करें  (⌥-क्लिक: सभी समूह)
+	Expand New Effects	नए इफ़ेक्ट्स का विस्तार करें
+	Expand Panel Group	पैनल समूह का विस्तार करें
+	Expansion:	विस्तार:
+	Export As	इस रूप में एक्सपोर्ट करें
+	Export As: {name}	इस रूप में एक्सपोर्ट करें: {name}
+	Export clipboard	क्लिपबोर्ड एक्सपोर्ट करें
+	Export Contents	सामग्री एक्सपोर्ट करें
+	Export Contents…	सामग्री एक्सपोर्ट करें…
+	Export Image	इमेज एक्सपोर्ट करें
+	Export Options	एक्सपोर्ट विकल्प
+	Export Preferences	प्राथमिकताएँ एक्सपोर्ट करें
+	Export Preferences…	प्राथमिकताएँ एक्सपोर्ट करें…
+	Export Presets	प्रीसेट्स एक्सपोर्ट करें
+	Export selected measurements (CSV)	चयनित माप एक्सपोर्ट करें (CSV)
+	Export Selected Styles…	चयनित स्टाइल्स एक्सपोर्ट करें…
+	Export Settings	सेटिंग्स एक्सपोर्ट करें
+	Export Styles…	स्टाइल्स एक्सपोर्ट करें…
+	Export Swatches for Exchange…	विनिमय के लिए स्वॉचेस एक्सपोर्ट करें…
+	Export Swatches…	स्वॉचेस एक्सपोर्ट करें…
+	Export to	इसमें एक्सपोर्ट करें
+	Export/Import Presets	प्रीसेट्स एक्सपोर्ट/इम्पोर्ट करें
+	Export/Import Presets…	प्रीसेट्स एक्सपोर्ट/इम्पोर्ट करें…
+	Export…	एक्सपोर्ट करें…
+	Exported {path}	{path} एक्सपोर्ट किया गया
+	Exported {path} ({size})	{path} एक्सपोर्ट किया गया ({size})
+	Exported contents to {path}	सामग्री {path} में एक्सपोर्ट की गई
+	Exported presets to {path}	प्रीसेट्स {path} में एक्सपोर्ट किए गए
+	Exporting…	एक्सपोर्ट हो रहा है…
+	Exposure and Gamma	एक्सपोज़र और गामा
+	Exposure Program	एक्सपोज़र प्रोग्राम
+	Exposure:	एक्सपोज़र:
+	EXR	EXR
+	Extend	विस्तारित करें
+	Extensions	एक्सटेंशन्स
+	Extra Bold	एक्स्ट्रा बोल्ड
+	Extra Large	बहुत बड़ा
+	Extra large	बहुत बड़ा
+	Extra Light	एक्स्ट्रा लाइट
+	ExtraBold	एक्स्ट्रा बोल्ड
+	ExtraLight	एक्स्ट्रा लाइट
+	Extras	एक्स्ट्राज़
+	Extrude	एक्सट्रूड
+	Extrude…	एक्सट्रूड…
+	Eyedropper	आईड्रॉपर
+	Eyedroppers:	आईड्रॉपर्स:
+	F	f-नंबर
+	F cycles the views; hold X to see the image	F से दृश्य बदलते हैं; इमेज देखने के लिए X दबाए रखें
+	Facet	फ़ैसेट
+	Factor:	फ़ैक्टर:
+	Fade	फ़ेड
+	Fade steps	फ़ेड चरण
+	Fade…	फ़ेड…
+	Faded Film	फ़ेडेड फ़िल्म
+	Failed	विफल
+	Failed to open file	फ़ाइल नहीं खुल सकी
+	Failed to save file	फ़ाइल सहेजी नहीं जा सकी
+	fallback	फ़ॉलबैक
+	Fallback: {reason}	फ़ॉलबैक: {reason}
+	Fast	तेज़
+	Faux Bold	कृत्रिम बोल्ड
+	Faux Italic	कृत्रिम इटैलिक
+	Favorite fonts	पसंदीदा फ़ॉन्ट
+	Feather Radius	फ़ेदर त्रिज्या
+	Fewer Points	कम पॉइंट्स
+	Fiber Length	फ़ाइबर लंबाई
+	Fibers	फ़ाइबर्स
+	Fibers…	फ़ाइबर्स…
+	Field Blur	फ़ील्ड ब्लर
+	Field Blur…	फ़ील्ड ब्लर…
+	File Format	फ़ाइल फ़ॉर्मेट
+	File Handling	फ़ाइल हैंडलिंग
+	File Handling…	फ़ाइल हैंडलिंग…
+	File Info	फ़ाइल जानकारी
+	File Name	फ़ाइल नाम
+	File Naming	फ़ाइल नामकरण
+	File not found	फ़ाइल नहीं मिली
+	File path	फ़ाइल पथ
+	File Settings	फ़ाइल सेटिंग्स
+	File Size	फ़ाइल साइज़
+	Filename	फ़ाइल नाम
+	Files	फ़ाइलें
+	Fill	फ़िल
+	Fill color	फ़िल रंग
+	Fill Color	फ़िल रंग
+	Fill Content	फ़िल सामग्री
+	Fill Layer	फ़िल लेयर
+	Fill Light	फ़िल लाइट
+	Fill new type layers with placeholder	नई टाइप लेयर्स को प्लेसहोल्डर टेक्स्ट से भरें
+	Fill Opacity	फ़िल ओपेसिटी
+	Fill Path	पाथ भरें
+	Fill path with foreground color	पाथ को फ़ोरग्राउंड रंग से भरें
+	Fill Path…	पाथ भरें…
+	Fill Screen	स्क्रीन भरें
+	Fill Settings	फ़िल सेटिंग्स
+	Fill with {mode}-neutral color (50% gray)	{mode}-न्यूट्रल रंग से भरें (50% ग्रे)
+	Fill with {mode}-neutral color (black)	{mode}-न्यूट्रल रंग से भरें (काला)
+	Fill with {mode}-neutral color (white)	{mode}-न्यूट्रल रंग से भरें (सफ़ेद)
+	Fill with Background Color	बैकग्राउंड रंग से भरें
+	Fill with Background Color, Preserve Transparency	बैकग्राउंड रंग से भरें, पारदर्शिता सुरक्षित रखें
+	Fill with Foreground Color	फ़ोरग्राउंड रंग से भरें
+	Fill with Foreground Color, Preserve Transparency	फ़ोरग्राउंड रंग से भरें, पारदर्शिता सुरक्षित रखें
+	Fill:	फ़िल:
+	Film & Video	फ़िल्म और वीडियो
+	Film Grain	फ़िल्म ग्रेन
+	Filter for adjustment layers	एडजस्टमेंट लेयर्स के लिए फ़िल्टर करें
+	Filter for embedded smart objects	एम्बेडेड स्मार्ट ऑब्जेक्ट्स के लिए फ़िल्टर करें
+	Filter for linked smart objects that are missing	उन लिंक्ड स्मार्ट ऑब्जेक्ट्स के लिए फ़िल्टर करें जो मौजूद नहीं हैं
+	Filter for pixel layers	पिक्सेल लेयर्स के लिए फ़िल्टर करें
+	Filter for shape layers	शेप लेयर्स के लिए फ़िल्टर करें
+	Filter for smart objects	स्मार्ट ऑब्जेक्ट्स के लिए फ़िल्टर करें
+	Filter for smart objects linked locally	स्थानीय रूप से लिंक्ड स्मार्ट ऑब्जेक्ट्स के लिए फ़िल्टर करें
+	Filter for type layers	टाइप लेयर्स के लिए फ़िल्टर करें
+	Filter Gallery	फ़िल्टर गैलरी
+	Filter Gallery…	फ़िल्टर गैलरी…
+	Filter Options	फ़िल्टर विकल्प
+	Filter:	फ़िल्टर:
+	Find	खोजें
+	Find and Replace Text	टेक्स्ट खोजें और बदलें
+	Find and Replace Text…	टेक्स्ट खोजें और बदलें…
+	Find Edges	किनारे खोजें
+	Fine	बारीक
+	Fine Dots	बारीक बिंदु
+	Finger Painting	फ़िंगर पेंटिंग
+	Finish	समाप्त करें
+	First	पहला
+	First Color Readout	पहला रंग रीडआउट
+	First commit	पहला कमिट
+	First Line Indent	पहली पंक्ति का इंडेंट
+	Fish	मछली
+	Fisheye	फ़िशआई
+	Fit	फ़िट करें
+	Fit Artboard on Screen	आर्टबोर्ड को स्क्रीन पर फ़िट करें
+	Fit Image	इमेज फ़िट करें
+	Fit Image…	इमेज फ़िट करें…
+	Fit Layer(s) on Screen	लेयर/लेयर्स को स्क्रीन पर फ़िट करें
+	Fit Screen	स्क्रीन पर फ़िट करें
+	Fit to Window	विंडो में फ़िट करें
+	Fix the red plane first: its corners must form a convex quad	पहले लाल प्लेन ठीक करें: उसके कोनों से एक उत्तल चतुर्भुज बनना चाहिए
+	Fixed	निश्चित
+	Fixed Ratio	निश्चित अनुपात
+	Fixed Size	निश्चित साइज़
+	Flag	झंडा
+	Flame	फ़्लेम
+	Flame Bottom Alignment	फ़्लेम का निचला संरेखण
+	Flame Lines	फ़्लेम रेखाएँ
+	Flame Shape	फ़्लेम का आकार
+	Flame Style	फ़्लेम शैली
+	Flame Type	फ़्लेम प्रकार
+	Flame…	फ़्लेम…
+	Flash	फ़्लैश
+	Flat	सपाट
+	Flat Shading	सपाट शेडिंग
+	Flatten All Layer Effects	सभी लेयर इफ़ेक्ट्स फ़्लैट करें
+	Flatten All Masks	सभी मास्क फ़्लैट करें
+	Flatten Frames Into Clips	फ़्रेम्स को क्लिप्स में फ़्लैट करें
+	Flatten Frames Into Layers	फ़्रेम्स को लेयर्स में फ़्लैट करें
+	Flip	पलटें
+	Flip Canvas Horizontal	कैनवास क्षैतिज पलटें
+	Flip Canvas Vertical	कैनवास लंबवत पलटें
+	Flip X	X पलटें
+	Flip X Jitter	X पलटने का जिटर
+	Flip Y	Y पलटें
+	Flip Y Jitter	Y पलटने का जिटर
+	Float All in Windows	सभी को विंडो में फ़्लोट करें
+	Float in Window	विंडो में फ़्लोट करें
+	Float Panel	पैनल फ़्लोट करें
+	Flow Jitter	फ़्लो जिटर
+	Flower Color	फूल का रंग
+	Focal Distance	फ़ोकल दूरी
+	Focal Length	फ़ोकल लंबाई
+	Focal Length35mm	फ़ोकल लंबाई (35 mm समतुल्य)
+	Focus	फ़ोकस
+	Focus Area	फ़ोकस क्षेत्र
+	Focus Area…	फ़ोकस क्षेत्र…
+	Folder	फ़ोल्डर
+	Follows only edges this close to the pointer ([ and ] change it)	केवल पॉइंटर के इतने पास के किनारों का अनुसरण करता है ([ और ] इसे बदलते हैं)
+	Font	फ़ॉन्ट
+	Font preview	फ़ॉन्ट पूर्वावलोकन
+	Font Preview Size	फ़ॉन्ट पूर्वावलोकन साइज़
+	Font preview:	फ़ॉन्ट पूर्वावलोकन:
+	Font size	फ़ॉन्ट साइज़
+	Font size presets	फ़ॉन्ट साइज़ प्रीसेट्स
+	Font Size:	फ़ॉन्ट साइज़:
+	Foreground	फ़ोरग्राउंड
+	Foreground Color	फ़ोरग्राउंड रंग
+	Foreground Level	फ़ोरग्राउंड स्तर
+	Foreground to Background	फ़ोरग्राउंड से बैकग्राउंड
+	Foreground/Background Jitter	फ़ोरग्राउंड/बैकग्राउंड जिटर
+	Format	फ़ॉर्मेट
+	Format Options	फ़ॉर्मेट विकल्प
+	Forward	आगे
+	Forward Warp	फ़ॉरवर्ड वार्प
+	Fractions	भिन्न
+	Fragment	फ़्रैगमेंट
+	Frame {current} / {total}	फ़्रेम {current} / {total}
+	Frame Duration	फ़्रेम अवधि
+	Frame from Layers	लेयर्स से फ़्रेम
+	Frame from Layers…	लेयर्स से फ़्रेम…
+	Frame Sync	फ़्रेम सिंक
+	Free	मुक्त
+	Free Transform a Copy	एक प्रति का मुक्त रूपांतरण
+	Free Transform is still being applied; try again when it has finished.	मुक्त रूपांतरण अभी लागू हो रहा है; पूरा होने पर फिर से प्रयास करें।
+	Free Transform Path	पाथ का मुक्त रूपांतरण
+	Freeze Lasso	फ़्रीज़ लैस्सो
+	Freeze Lasso: drag to freeze an area, Alt-drag to thaw it (L)	फ़्रीज़ लैस्सो: किसी क्षेत्र को फ़्रीज़ करने के लिए खींचें, अनफ़्रीज़ करने के लिए Alt के साथ खींचें (L)
+	Freeze Mask	फ़्रीज़ मास्क
+	Frequency	आवृत्ति
+	Frequency:	आवृत्ति:
+	Fresco	फ़्रेस्को
+	From	से
+	From Center	केंद्र से
+	From Left	बाएँ से
+	From Right	दाएँ से
+	From:	से:
+	Front Image	सामने की इमेज
+	Frosted	फ़्रॉस्टेड
+	Fuchsia	फ़्यूशिया
+	Full	पूर्ण
+	Full Document	पूरा दस्तावेज़
+	Full Screen	फ़ुल स्क्रीन
+	Full Screen Mode	फ़ुल स्क्रीन मोड
+	Full Screen Mode With Menu Bar	मेनू बार के साथ फ़ुल स्क्रीन मोड
+	Full size tip	पूरे साइज़ की टिप
+	Full Spherical	पूर्ण गोलाकार
+	Fullscreen	फ़ुल स्क्रीन
+	Functions	फ़ंक्शन्स
+	Fuzziness	फ़ज़ीनेस
+	Fuzziness:	फ़ज़ीनेस:
+	Gamma Correction	गामा सुधार
+	Gamma:	गामा:
+	Gamut Warning	गैमट चेतावनी
+	Gamut warning color	गैमट चेतावनी रंग
+	Gamut warning opacity	गैमट चेतावनी ओपेसिटी
+	Gap	गैप
+	Gaussian	गॉसियन
+	Gaussian Blur	गॉसियन ब्लर
+	Gaussian Blur…	गॉसियन ब्लर…
+	General	सामान्य
+	General Blend	सामान्य ब्लेंड
+	General Blending	सामान्य ब्लेंडिंग
+	General Brushes	सामान्य ब्रश
+	Generate	जनरेट करें
+	Generate Mipmaps	मिपमैप्स जनरेट करें
+	Generators	जनरेटर्स
+	Generic	जेनेरिक
+	Gif	GIF
+	GitHub	GitHub
+	Glass	ग्लास
+	Global Light	ग्लोबल लाइट
+	Global Light…	ग्लोबल लाइट…
+	Gloss	ग्लॉस
+	Gloss Contour	ग्लॉस कंटूर
+	Glossy	चमकदार
+	Glow	ग्लो
+	Glow Amount	ग्लो मात्रा
+	Glow Brightness	ग्लो ब्राइटनेस
+	Glow Color	ग्लो रंग
+	Glow Size	ग्लो साइज़
+	Glowing Edges	चमकते किनारे
+	Glyph	ग्लिफ़
+	Glyph Scaling	ग्लिफ़ स्केलिंग
+	Glyphs	ग्लिफ़्स
+	Glyphs Panel	ग्लिफ़्स पैनल
+	Go to Layer	लेयर पर जाएँ
+	Golden Ratio	स्वर्णिम अनुपात
+	Golden Spiral	स्वर्णिम सर्पिल
+	Good	अच्छा
+	GPS	GPS
+	GPU	GPU
+	GPU acceleration could not continue. Your documents are unchanged.	GPU एक्सेलेरेशन जारी नहीं रह सका। आपके दस्तावेज़ अपरिवर्तित हैं।
+	GPU acceleration resumed.	GPU एक्सेलेरेशन फिर से शुरू हो गया।
+	GPU adapter	GPU एडेप्टर
+	GPU Backend	GPU बैकएंड
+	GPU backend	GPU बैकएंड
+	GPU backend preference: {backend}	GPU बैकएंड प्राथमिकता: {backend}
+	GPU device was lost; using the CPU renderer.	GPU डिवाइस खो गया; CPU रेंडरर का उपयोग किया जा रहा है।
+	GPU error; using the CPU renderer.	GPU त्रुटि; CPU रेंडरर का उपयोग किया जा रहा है।
+	GPU Memory (MB, 0 = Automatic)	GPU मेमोरी (MB, 0 = स्वचालित)
+	GPU memory budget: {budget}	GPU मेमोरी बजट: {budget}
+	GPU Memory Full	GPU मेमोरी भर गई
+	GPU retry scheduled	GPU पुनः प्रयास निर्धारित
+	Grab bag	विविध
+	Grade Balance	ग्रेड संतुलन
+	Grade Blending	ग्रेड ब्लेंडिंग
+	Grade Global	ग्रेड ग्लोबल
+	Grade Highlights	ग्रेड हाइलाइट्स
+	Grade Midtones	ग्रेड मिडटोन्स
+	Grade Shadows	ग्रेड शैडो
+	Gradient	ग्रेडिएंट
+	Gradient Editor	ग्रेडिएंट एडिटर
+	Gradient Map	ग्रेडिएंट मैप
+	Gradient Map…	ग्रेडिएंट मैप…
+	Gradient Options	ग्रेडिएंट विकल्प
+	Gradient Overlay	ग्रेडिएंट ओवरले
+	Gradient Overlay…	ग्रेडिएंट ओवरले…
+	Gradient picker	ग्रेडिएंट पिकर
+	Gradient Preset Options	ग्रेडिएंट प्रीसेट विकल्प
+	Gradient stops	ग्रेडिएंट स्टॉप्स
+	Gradient…	ग्रेडिएंट…
+	Gradient-corrected interpolation: sharp and fast, with some colour fringing on fine detail.	ग्रेडिएंट-सुधारित इंटरपोलेशन: शार्प और तेज़, बारीक विवरण पर कुछ रंग फ़्रिंजिंग के साथ।
+	gradients	ग्रेडिएंट्स
+	Grain Amount	ग्रेन मात्रा
+	Grain Roughness	ग्रेन रफनेस
+	Grain Size	ग्रेन साइज़
+	Grain Type	ग्रेन प्रकार
+	Graininess	ग्रेनीनेस
+	Grainy Dots	दानेदार बिंदु
+	Graphic and web	ग्राफ़िक और वेब
+	Graphic and Web	ग्राफ़िक और वेब
+	Graphic Pen	ग्राफ़िक पेन
+	Graphics	ग्राफ़िक्स
+	Graphics adapter	ग्राफ़िक्स एडेप्टर
+	Graphics adapter: {adapter}	ग्राफ़िक्स एडेप्टर: {adapter}
+	Graphics memory: {size}	ग्राफ़िक्स मेमोरी: {size}
+	gray	ग्रे
+	Gray	ग्रे
+	Gray Gamma 2.2	ग्रे गामा 2.2
+	Gray Value (Maximum)	ग्रे मान (अधिकतम)
+	Gray Value (Mean)	ग्रे मान (औसत)
+	Gray Value (Median)	ग्रे मान (माध्यिका)
+	Gray Value (Minimum)	ग्रे मान (न्यूनतम)
+	Gray:	ग्रे:
+	Gray-gamma-2.2	ग्रे-गामा-2.2
+	Grayscale Ramp	ग्रेस्केल रैंप
+	Grayscale Slider	ग्रेस्केल स्लाइडर
+	Greek	ग्रीक
+	green	हरा
+	Green Primary	हरा प्राइमरी
+	Greens	हरे
+	Grid	ग्रिड
+	Grid  (⌘')	ग्रिड  (⌘')
+	Grid color	ग्रिड रंग
+	Grid colors	ग्रिड रंग
+	Grid size	ग्रिड साइज़
+	Grid Size:	ग्रिड साइज़:
+	Grid style	ग्रिड शैली
+	Grid unit	ग्रिड इकाई
+	Grid view	ग्रिड व्यू
+	Grid:	ग्रिड:
+	Gridline every	ग्रिडलाइन हर
+	Group	समूह
+	Group · {n} layer	समूह · {n} लेयर
+	Group from Layers	लेयर्स से समूह
+	Group Layer	समूह लेयर
+	Group Layers	लेयर्स का समूह बनाएँ
+	Group name	समूह का नाम
+	Group with	इसके साथ समूह बनाएँ
+	Groups	समूह
+	Grout Width	ग्राउट चौड़ाई
+	Guide color	गाइड रंग
+	Guide Layout…	गाइड लेआउट…
+	Guide style	गाइड शैली
+	Guides, Grid & Slices	गाइड्स, ग्रिड और स्लाइस
+	Guides, Grid & Slices…	गाइड्स, ग्रिड और स्लाइस…
+	Gutter	गटर
+	Half Round	अर्ध गोल
+	Halftone Pattern	हाफ़टोन पैटर्न
+	Halftone Screen	हाफ़टोन स्क्रीन
+	Hand	हैंड
+	Hand Tool (hold)	हैंड टूल (दबाए रखें)
+	Handwritten	हस्तलिखित
+	Hanging Punctuation	हैंगिंग विराम चिह्न
+	Hard	कठोर
+	Hard Light	हार्ड लाइट
+	Hard Mix	हार्ड मिक्स
+	Hardness	हार्डनेस
+	HDR Toning	HDR टोनिंग
+	HDR Toning…	HDR टोनिंग…
+	HDTV (Rec. 709)	HDTV (Rec. 709)
+	HDV 1080/DVCPRO HD 720 (1.33)	HDV 1080/DVCPRO HD 720 (1.33)
+	Heal	हील करें
+	Heal Auto	हील स्वचालित
+	Heal Color	हील रंग
+	Heal Off	हील बंद
+	Heal On	हील चालू
+	Healing	हीलिंग
+	Healing Brush	हीलिंग ब्रश
+	Heart	दिल
+	Hearts	दिल
+	Height	ऊँचाई
+	Heptagon	सप्तभुज
+	Hexagon	षट्भुज
+	Hidden	छिपा हुआ
+	Hidden Layers	छिपी हुई लेयर्स
+	Hide	छिपाएँ
+	Hide {app}	{app} छिपाएँ
+	Hide All Effects	सभी इफ़ेक्ट्स छिपाएँ
+	Hide Auto Slices	ऑटो स्लाइस छिपाएँ
+	Hide Font Classes	फ़ॉन्ट वर्ग छिपाएँ
+	Hide Grid	ग्रिड छिपाएँ
+	Hide Layers	लेयर्स छिपाएँ
+	Hide Others	अन्य छिपाएँ
+	Hide Properties	गुण छिपाएँ
+	Hide Styles	स्टाइल्स छिपाएँ
+	Hide the layer's effects  ({key}-click: all layers)	लेयर के इफ़ेक्ट्स छिपाएँ  ({key}-क्लिक: सभी लेयर्स)
+	Hide the layer's effects  (⌥-click: all layers)	लेयर के इफ़ेक्ट्स छिपाएँ  (⌥-क्लिक: सभी लेयर्स)
+	Hide the layer's effects and Smart Filters  ({key}-click: all layers)	लेयर के इफ़ेक्ट्स और स्मार्ट फ़िल्टर्स छिपाएँ  ({key}-क्लिक: सभी लेयर्स)
+	High	उच्च
+	High Memory Photoshop Document	उच्च मेमोरी Photoshop दस्तावेज़
+	High Pass	हाई पास
+	High Pass…	हाई पास…
+	Higher values follow only edges that contrast sharply with their surroundings	ऊँचे मान केवल उन किनारों का अनुसरण करते हैं जिनका अपने आस-पास से तीव्र कंट्रास्ट हो
+	Highlight	हाइलाइट
+	Highlight Amount	हाइलाइट मात्रा
+	Highlight Area	हाइलाइट क्षेत्र
+	Highlight Color	हाइलाइट रंग
+	Highlight Compression	हाइलाइट कम्प्रेशन
+	Highlight Mode	हाइलाइट मोड
+	Highlight Opacity	हाइलाइट ओपेसिटी
+	Highlight Radius	हाइलाइट त्रिज्या
+	Highlight Strength	हाइलाइट तीव्रता
+	Highlight Tone	हाइलाइट टोन
+	Highlights from:	हाइलाइट्स का स्रोत:
+	Hirakawa–Parks: the cleanest edges and the least colour fringing, the slowest.	Hirakawa–Parks: सबसे साफ़ किनारे और सबसे कम रंग फ़्रिंजिंग, पर सबसे धीमा।
+	Histogram	हिस्टोग्राम
+	Histories	हिस्ट्री
+	History Brush	हिस्ट्री ब्रश
+	History Log	हिस्ट्री लॉग
+	History Log…	हिस्ट्री लॉग…
+	History Options…	हिस्ट्री विकल्प…
+	History states	हिस्ट्री स्थितियाँ
+	Hold Alt while drawing for straight segments	सीधे सेगमेंट के लिए ड्रॉ करते समय Alt दबाए रखें
+	Home	होम
+	Horizontal	क्षैतिज
+	Horizontal Centers	क्षैतिज केंद्र
+	Horizontal Distortion	क्षैतिज विरूपण
+	Horizontal Only	केवल क्षैतिज
+	Horizontal scale	क्षैतिज स्केल
+	Horizontal type	क्षैतिज टाइप
+	Horizontally	क्षैतिज रूप से
+	Hotspot	हॉटस्पॉट
+	How often fastening points are placed by themselves	फ़ास्टनिंग पॉइंट कितनी बार अपने-आप लगाए जाते हैं
+	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	कैमरे का कलर फ़िल्टर मोज़ेक कैसे भरा जाता है। यह फ़ाइल खुलते समय लागू होता है; पूर्वावलोकन वही विधि दिखाता है जिससे फ़ाइल खोली गई थी।
+	Hsb	HSB
+	HSB Color	HSB रंग
+	HSB Sliders	HSB स्लाइडर्स
+	HSB/HSL	HSB/HSL
+	Hsl	HSL
+	Hsl Hue	HSL ह्यू
+	Hsl Lum	HSL लुमिनेंस
+	Hsl Sat	HSL सैचुरेशन
+	HSL/Grayscale	HSL/ग्रेस्केल
+	Hue Cube	ह्यू क्यूब
+	Hue Jitter	ह्यू जिटर
+	Hue/Saturation	ह्यू/सैचुरेशन
+	Huge	बहुत बड़ा
+	Humidity	नमी
+	Hyphenate	हाइफ़नेशन
+	ICO is limited to 256 × 256 pixels	ICO की सीमा 256 × 256 पिक्सेल है
+	If you continue, saving over the original may permanently discard unreadable data. Save a copy to keep the original.	यदि आप जारी रखते हैं, तो मूल फ़ाइल पर सहेजने से अपठनीय डेटा स्थायी रूप से हट सकता है। मूल फ़ाइल रखने के लिए एक प्रति सहेजें।
+	Ignore	अनदेखा करें
+	Ignore All	सभी अनदेखा करें
+	Ignore exif profile tag	EXIF प्रोफ़ाइल टैग अनदेखा करें
+	Image Assets	इमेज एसेट्स
+	Image Balance	इमेज संतुलन
+	Image compositor: {processor}	इमेज कंपोज़िटर: {processor}
+	Image Compression	इमेज कम्प्रेशन
+	image file path	इमेज फ़ाइल पथ
+	Image interpolation	इमेज इंटरपोलेशन
+	Image Options	इमेज विकल्प
+	Image previews	इमेज पूर्वावलोकन
+	Image Processor	इमेज प्रोसेसर
+	Image Processor…	इमेज प्रोसेसर…
+	Image Size	इमेज साइज़
+	Image Size:	इमेज साइज़:
+	Import .GRD	.GRD इम्पोर्ट करें
+	Import as New Group	नए समूह के रूप में इम्पोर्ट करें
+	Import as New Group keeps “{group}” and adds the file as a new group beside it.	नए समूह के रूप में इम्पोर्ट करने पर “{group}” बना रहता है और फ़ाइल उसके बगल में नए समूह के रूप में जुड़ जाती है।
+	Import Brush from Image…	इमेज से ब्रश इम्पोर्ट करें…
+	Import Brushes	ब्रश इम्पोर्ट करें
+	Import brushes (.abr)	ब्रश इम्पोर्ट करें (.abr)
+	Import Brushes…	ब्रश इम्पोर्ट करें…
+	Import Brushes… (.abr or image)	ब्रश इम्पोर्ट करें… (.abr या इमेज)
+	Import Brushes… (.abr)	ब्रश इम्पोर्ट करें… (.abr)
+	Import Image	इमेज इम्पोर्ट करें
+	Import keyboard shortcuts?	कीबोर्ड शॉर्टकट इम्पोर्ट करें?
+	Import Options	इम्पोर्ट विकल्प
+	Import Photoshop brushes (.abr)	Photoshop ब्रश इम्पोर्ट करें (.abr)
+	Import Presets	प्रीसेट्स इम्पोर्ट करें
+	Import Settings	सेटिंग्स इम्पोर्ट करें
+	Import Shortcuts…	शॉर्टकट इम्पोर्ट करें…
+	Import Styles…	स्टाइल्स इम्पोर्ट करें…
+	Import Swatches…	स्वॉचेस इम्पोर्ट करें…
+	Import…	इम्पोर्ट करें…
+	Imported	इम्पोर्ट किया गया
+	Imported {n} shortcuts from {file}. Click OK to keep them.	{file} से {n} शॉर्टकट इम्पोर्ट किए गए। उन्हें रखने के लिए ‘ठीक है’ पर क्लिक करें।
+	Importing {what} from {file}…	{file} से {what} इम्पोर्ट किया जा रहा है…
+	Importing…	इम्पोर्ट किया जा रहा है…
+	In	इनपुट
+	In Black	इनपुट ब्लैक
+	In Front	सामने
+	In White	इनपुट व्हाइट
+	Include All Subfolders	सभी सबफ़ोल्डर शामिल करें
+	Include Color	रंग शामिल करें
+	Include ICC Profile	ICC प्रोफ़ाइल शामिल करें
+	Include in playback	प्लेबैक में शामिल करें
+	Include Tool Settings	टूल सेटिंग्स शामिल करें
+	Including layers will increase file size.	लेयर्स शामिल करने से फ़ाइल साइज़ बढ़ जाएगा।
+	Increase Type Size	टाइप साइज़ बढ़ाएँ
+	Increase Type Size by 10	टाइप साइज़ 10 से बढ़ाएँ
+	Indent First	पहली पंक्ति इंडेंट
+	Indent first line	पहली पंक्ति इंडेंट करें
+	Indent Left	बायाँ इंडेंट
+	Indent left margin	बायाँ मार्जिन इंडेंट करें
+	Indent Right	दायाँ इंडेंट
+	Indent right margin	दायाँ मार्जिन इंडेंट करें
+	Indexed	इंडेक्स्ड
+	Indexed Color	इंडेक्स्ड रंग
+	Indexed Color…	इंडेक्स्ड रंग…
+	Indicates	दर्शाता है
+	Indigo	नील
+	Industry Standard	उद्योग मानक
+	Infinite	अनंत
+	Inflate	फुलाएँ
+	Info Options…	जानकारी विकल्प…
+	Information	जानकारी
+	Initial Direction	प्रारंभिक दिशा
+	Initial Direction of Stroke	स्ट्रोक की प्रारंभिक दिशा
+	Ink Characteristics	स्याही की विशेषताएँ
+	Ink Outlines	इंक आउटलाइन्स
+	Inner Bevel	इनर बेवल
+	Inner Glow	इनर ग्लो
+	Inner Glow…	इनर ग्लो…
+	Inner Shadow	इनर शैडो
+	Inner Shadow…	इनर शैडो…
+	Input	इनपुट
+	Input Levels	इनपुट स्तर
+	Input Mode	इनपुट मोड
+	Input:	इनपुट:
+	Insert Blank Frame	खाली फ़्रेम डालें
+	Insert Stop…	स्टॉप डालें…
+	Install Plug-in	प्लग-इन इंस्टॉल करें
+	Install Plug-in…	प्लग-इन इंस्टॉल करें…
+	Installed RAM: {ram} MB; this limit: {percent}%	इंस्टॉल की गई RAM: {ram} MB; यह सीमा: {percent}%
+	Integrated Density	एकीकृत घनत्व
+	Integrations	इंटीग्रेशन्स
+	Integrations…	इंटीग्रेशन्स…
+	Intensity	तीव्रता
+	Intent	इंटेंट
+	Interface	इंटरफ़ेस
+	Interlaced	इंटरलेस्ड
+	Internet Standard RGB	इंटरनेट मानक RGB
+	Interpolation:	इंटरपोलेशन:
+	Interpret Footage	फ़ुटेज की व्याख्या करें
+	Interpret Footage…	फ़ुटेज की व्याख्या करें…
+	Intersect Mask with Selection	मास्क को चयन से इंटरसेक्ट करें
+	Intersect Shape Areas	शेप क्षेत्रों को इंटरसेक्ट करें
+	Intersect with	इसके साथ इंटरसेक्ट करें
+	Intersect with selection  ({key})	चयन के साथ इंटरसेक्ट करें  ({key})
+	Intersect with selection  (⇧⌥)	चयन के साथ इंटरसेक्ट करें  (⇧⌥)
+	Interval	अंतराल
+	Invalid {mode} profile	अमान्य {mode} प्रोफ़ाइल
+	Invalid guide layout	अमान्य गाइड लेआउट
+	Invalid panel layout; restored the default dock	अमान्य पैनल लेआउट; डिफ़ॉल्ट डॉक पुनर्स्थापित किया गया
+	Inverse Selection	चयन उल्टा करें
+	Invert All	सभी इन्वर्ट करें
+	Invert has no settings.	इन्वर्ट की कोई सेटिंग्स नहीं हैं।
+	Invert Mask	मास्क इन्वर्ट करें
+	Invert Selection	चयन इन्वर्ट करें
+	Invert…	इन्वर्ट…
+	Iris Blur	आइरिस ब्लर
+	Iris Blur…	आइरिस ब्लर…
+	ISO	ISO
+	ISO Speed	ISO स्पीड
+	Isolate Layers	लेयर्स अलग करें
+	Italic	इटैलिक
+	Its layers need {needed} of GPU memory; the budget leaves them {budget}.	इसकी लेयर्स को {needed} GPU मेमोरी चाहिए; बजट उन्हें केवल {budget} देता है।
+	Ivy	आइवी
+	Jag	दांतेदार
+	Join the ArtCraft Discord	ArtCraft Discord से जुड़ें
+	Join the ArtCraft Discord ({url})	ArtCraft Discord से जुड़ें ({url})
+	Join the ArtCraft Discord…	ArtCraft Discord से जुड़ें…
+	Join us on Discord	Discord पर हमसे जुड़ें
+	JPEG Options	JPEG विकल्प
+	Jpeg quality	JPEG गुणवत्ता
+	Jpg	JPG
+	Justification	जस्टिफ़िकेशन
+	Justify	जस्टिफ़ाई करें
+	Justify all	सभी जस्टिफ़ाई करें
+	Justify last centered	अंतिम पंक्ति केंद्र में रखकर जस्टिफ़ाई करें
+	Justify last left	अंतिम पंक्ति बाएँ रखकर जस्टिफ़ाई करें
+	Justify last right	अंतिम पंक्ति दाएँ रखकर जस्टिफ़ाई करें
+	Keep proportions	अनुपात बनाए रखें
+	Keep this tab open to retain your brushes.	अपने ब्रश बनाए रखने के लिए यह टैब खुला रखें।
+	Keep Using CPU	CPU का उपयोग जारी रखें
+	Keep view in sync	व्यू सिंक में रखें
+	Keeps the current texture when switching presets.	प्रीसेट बदलते समय वर्तमान टेक्सचर बनाए रखता है।
+	Kept {name}: written by another application	{name} रखा गया: इसे किसी अन्य ऐप्लिकेशन ने लिखा था
+	Kernel	कर्नेल
+	Kerning	कर्निंग
+	Kerning: Metrics, Optical or a value in 1/1000 em (Alt+←/→ at the caret)	कर्निंग: मेट्रिक्स, ऑप्टिकल या 1/1000 em में कोई मान (कैरेट पर Alt+←/→)
+	Keyboard	कीबोर्ड
+	Keyboard Shortcuts	कीबोर्ड शॉर्टकट
+	Keyboard Shortcuts and Menus	कीबोर्ड शॉर्टकट और मेनू
+	Keyboard shortcuts imported	कीबोर्ड शॉर्टकट इम्पोर्ट किए गए
+	Keyboard Shortcuts…	कीबोर्ड शॉर्टकट…
+	Keywords	कीवर्ड
+	Kind	प्रकार
+	Knockout	नॉकआउट
+	Kurtosis	कर्टोसिस
+	Lab	Lab
+	Lab Sliders	Lab स्लाइडर्स
+	Label	लेबल
+	Label Size	लेबल साइज़
+	Labels	लेबल
+	Lanczos (sharp)	Lanczos (शार्प)
+	Landscape	लैंडस्केप
+	Landscape, 10 x 8	लैंडस्केप, 10 x 8
+	Landscape, 6 x 4	लैंडस्केप, 6 x 4
+	Landscape, 7 x 5	लैंडस्केप, 7 x 5
+	Language Options	भाषा विकल्प
+	Large	बड़ा
+	Large document: redrawing on the CPU	बड़ा दस्तावेज़: CPU पर फिर से ड्रॉ किया जा रहा है
+	Large tabs	बड़े टैब
+	Lasso	लैस्सो
+	Lasso around an area, then drag the selection	किसी क्षेत्र के चारों ओर लैस्सो बनाएँ, फिर चयन को ड्रैग करें
+	Last	अंतिम
+	Last commit	अंतिम कमिट
+	Last Document State	दस्तावेज़ की अंतिम स्थिति
+	Last Filter	अंतिम फ़िल्टर
+	Last Modified	अंतिम संशोधन
+	Latin 1	लैटिन 1
+	Latin Extended-A	लैटिन विस्तारित-A
+	Latin Extended-B	लैटिन विस्तारित-B
+	Layer Bounds	लेयर सीमाएँ
+	Layer Comp	लेयर कॉम्प
+	Layer Comps	लेयर कॉम्प्स
+	Layer Comps to Files	लेयर कॉम्प्स से फ़ाइलें
+	Layer Comps to Files…	लेयर कॉम्प्स से फ़ाइलें…
+	Layer Content Options	लेयर कंटेंट विकल्प
+	Layer Content Options…	लेयर कंटेंट विकल्प…
+	Layer Count	लेयर संख्या
+	Layer Edges	लेयर किनारे
+	Layer Effects	लेयर इफ़ेक्ट्स
+	Layer From Background	बैकग्राउंड से लेयर
+	Layer From Background…	बैकग्राउंड से लेयर…
+	Layer from Background…	बैकग्राउंड से लेयर…
+	Layer Knocks Out Drop Shadow	लेयर ड्रॉप शैडो को नॉकआउट करती है
+	layer mask	लेयर मास्क
+	Layer Mask Display Options…	लेयर मास्क प्रदर्शन विकल्प…
+	Layer Mask Hides Effects	लेयर मास्क इफ़ेक्ट्स छिपाता है
+	Layer Properties	लेयर गुण
+	Layer Styles	लेयर स्टाइल्स
+	Layer via Copy	कॉपी द्वारा लेयर
+	Layer via Cut	कट द्वारा लेयर
+	Layers Panel Options	लेयर्स पैनल विकल्प
+	Layers to Files	लेयर्स से फ़ाइलें
+	Layers to Files…	लेयर्स से फ़ाइलें…
+	Layout	लेआउट
+	Leading	लीडिंग
+	Leading (set to the font size × auto-leading when Auto)	लीडिंग (स्वचालित होने पर फ़ॉन्ट साइज़ × ऑटो-लीडिंग पर सेट)
+	Leading presets	लीडिंग प्रीसेट्स
+	Leaf Color	पत्ती का रंग
+	Learn More	और जानें
+	Leave as is (don't color manage)	जैसा है वैसा छोड़ें (कलर मैनेज न करें)
+	Leave empty for automatic size	स्वचालित साइज़ के लिए खाली छोड़ें
+	Leaves Amount	पत्तियों की मात्रा
+	Leaves Color	पत्तियों का रंग
+	Leaves Size	पत्तियों का साइज़
+	Left	बाएँ
+	Left align text	टेक्स्ट बाएँ संरेखित करें
+	Left Diagonal	बायाँ विकर्ण
+	Left Edges	बाएँ किनारे
+	Left:	बाएँ:
+	Left-to-right paragraph direction	बाएँ-से-दाएँ पैराग्राफ़ दिशा
+	Legacy	लेगेसी
+	Legacy compositing	लेगेसी कंपोज़िटिंग
+	Legacy Macintosh RGB	लेगेसी Macintosh RGB
+	Legal	लीगल
+	Length	लंबाई
+	Length:	लंबाई:
+	Lens	लेंस
+	Lens Blur	लेंस ब्लर
+	Lens Blur…	लेंस ब्लर…
+	Lens Correction	लेंस सुधार
+	Lens Correction…	लेंस सुधार…
+	Lens Corrections	लेंस सुधार
+	Lens Flare	लेंस फ़्लेयर
+	Lens Flare…	लेंस फ़्लेयर…
+	Lens Info	लेंस जानकारी
+	Less	कम
+	Letter	लेटर
+	Letter Spacing	अक्षर अंतराल
+	Level	स्तर
+	Level Based	स्तर-आधारित
+	Level:	स्तर:
+	Levels	स्तर
+	Libraries	लाइब्रेरीज़
+	Library	लाइब्रेरी
+	Ligature	लिगेचर
+	Light Blue	हल्का नीला
+	Light Dark Balance	लाइट-डार्क संतुलन
+	Light Direction	लाइट की दिशा
+	Light gray	हल्का ग्रे
+	Light Gray	हल्का ग्रे
+	Light Intensity	लाइट तीव्रता
+	Light Red	हल्का लाल
+	Light Rough	हल्का खुरदरा
+	Light Source	प्रकाश स्रोत
+	Light Theme	लाइट थीम
+	Light Type	लाइट प्रकार
+	Light X	लाइट X
+	Light Y	लाइट Y
+	Light Z	लाइट Z
+	Lighten	लाइटन
+	Lighten Grout	ग्राउट हल्का करें
+	Lighten Interface	इंटरफ़ेस हल्का करें
+	Lighten Only	केवल हल्का करें
+	Lighter Color	लाइटर कलर
+	Lighting	लाइटिंग
+	Lighting Effects	लाइटिंग इफ़ेक्ट्स
+	Lighting Effects…	लाइटिंग इफ़ेक्ट्स…
+	Lightness	लाइटनेस
+	Limit Playback	प्लेबैक सीमित करें
+	Limits each open document's pixels plus History. Oldest undo states are discarded when the limit is exceeded.	हर खुले दस्तावेज़ के पिक्सेल और हिस्ट्री को सीमित करता है। सीमा पार होने पर सबसे पुरानी पूर्ववत स्थितियाँ हटा दी जाती हैं।
+	Limits:	सीमाएँ:
+	Line	लाइन
+	Line delta	पंक्तियों का अंतर
+	Linear	लीनियर
+	Linear Burn	लीनियर बर्न
+	Linear Dodge	लीनियर डॉज
+	Linear Dodge (Add)	लीनियर डॉज (ऐड)
+	Linear Gradient	लीनियर ग्रेडिएंट
+	Linear Height	लीनियर ऊँचाई
+	Linear Light	लीनियर लाइट
+	Linear-srgb	लीनियर-sRGB
+	Lines	रेखाएँ
+	Lines +/−	पंक्तियाँ +/−
+	Lines added	जोड़ी गई पंक्तियाँ
+	Lines deleted	हटाई गई पंक्तियाँ
+	Lines/Centimeter	रेखाएँ/सेंटीमीटर
+	Lines/Inch	रेखाएँ/इंच
+	Lining	लाइनिंग
+	Link	लिंक करें
+	Link Layer Mask	लेयर मास्क लिंक करें
+	Link Layers	लेयर्स लिंक करें
+	Link layers	लेयर्स लिंक करें
+	Link radii	त्रिज्याएँ लिंक करें
+	Link the mask to the layer	मास्क को लेयर से लिंक करें
+	Link Vector Mask	वेक्टर मास्क लिंक करें
+	Link width and height	चौड़ाई और ऊँचाई लिंक करें
+	Link with Layer	लेयर के साथ लिंक करें
+	Linked	लिंक्ड
+	Linux display server	Linux डिस्प्ले सर्वर
+	Liquify	लिक्विफ़ाई
+	Liquify is not open	लिक्विफ़ाई खुला नहीं है
+	Liquify…	लिक्विफ़ाई…
+	List	सूची
+	List view	सूची दृश्य
+	Live Preview	लाइव पूर्वावलोकन
+	Load 3D LUT	3D LUT लोड करें
+	Load 3D LUT…	3D LUT लोड करें…
+	Load a keyboard shortcut set saved as .kys	.kys के रूप में सहेजा गया कीबोर्ड शॉर्टकट सेट लोड करें
+	Load Actions…	एक्शन्स लोड करें…
+	Load channel as selection	चैनल को चयन के रूप में लोड करें
+	Load Contours…	कंटूर लोड करें…
+	Load Default Type Styles	डिफ़ॉल्ट टाइप स्टाइल्स लोड करें
+	Load Files into Stack	फ़ाइलें स्टैक में लोड करें
+	Load Files into Stack…	फ़ाइलें स्टैक में लोड करें…
+	Load path as a selection	पाथ को चयन के रूप में लोड करें
+	Load Selection	चयन लोड करें
+	Load…	लोड करें…
+	Loaded Camera Raw settings from {file} ({n} not supported)	{file} से Camera Raw सेटिंग्स लोड की गईं ({n} समर्थित नहीं)
+	Loaded contours from {file}	{file} से कंटूर लोड किए गए
+	Loading fonts…	फ़ॉन्ट लोड हो रहे हैं…
+	Loading…	लोड हो रहा है…
+	Localize Color Clusters	रंग क्लस्टर स्थानीयकृत करें
+	Localized Color Clusters	स्थानीयकृत रंग क्लस्टर
+	Location	स्थान
+	Location:	स्थान:
+	Lock	लॉक करें
+	Lock all	सभी लॉक करें
+	Lock All	सभी लॉक करें
+	Lock Image Pixels	इमेज पिक्सेल लॉक करें
+	Lock image pixels	इमेज पिक्सेल लॉक करें
+	Lock layer	लेयर लॉक करें
+	Lock Layers	लेयर्स लॉक करें
+	Lock Layers…	लेयर्स लॉक करें…
+	Lock position	स्थिति लॉक करें
+	Lock Position	स्थिति लॉक करें
+	Lock Transparent Pixels	पारदर्शी पिक्सेल लॉक करें
+	Lock transparent pixels	पारदर्शी पिक्सेल लॉक करें
+	Lock:	लॉक:
+	Lock: keep these settings when picking another preset	लॉक: दूसरा प्रीसेट चुनने पर ये सेटिंग्स बनाए रखें
+	Locked	लॉक्ड
+	Log Errors To File	त्रुटियाँ फ़ाइल में लॉग करें
+	Logical Length:	तार्किक लंबाई:
+	Logical Units:	तार्किक इकाइयाँ:
+	Long Lines	लंबी रेखाएँ
+	Long Strokes	लंबे स्ट्रोक
+	Loop	लूप
+	Lorem Ipsum	Lorem Ipsum
+	Lossless	लॉसलेस
+	Low	निम्न
+	Low resolution previews	कम रिज़ॉल्यूशन वाले पूर्वावलोकन
+	Lower	निचला
+	Lowercase extension	लोअरकेस एक्सटेंशन
+	Low-Latency Drawing (vsync off, applies at next launch)	लो-लेटेंसी ड्रॉइंग (vsync बंद, अगली बार शुरू करने पर लागू)
+	Lum	लुमि.
+	Luminance Smoothness	लुमिनेंस स्मूदनेस
+	Luminosity	ल्यूमिनोसिटी
+	Lut	LUT
+	LUT folder	LUT फ़ोल्डर
+	LZW	LZW
+	Mac Crisp	Mac क्रिस्प
+	Mac LCD	Mac LCD
+	Mac OS	Mac OS
+	Mac Sharp	Mac शार्प
+	Mac Smooth	Mac स्मूद
+	Mac Strong	Mac स्ट्रॉन्ग
+	Magenta  ·  Green	मैजेंटा  ·  हरा
+	Magentas	मैजेंटा
+	Magnetic Lasso	मैग्नेटिक लैस्सो
+	Maintain aspect ratio	आस्पेक्ट रेशियो बनाए रखें
+	Make	निर्माता
+	Make Default	डिफ़ॉल्ट बनाएँ
+	Make Landscape	लैंडस्केप बनाएँ
+	Make Layer Visibility Changes Undoable	लेयर दृश्यता के परिवर्तनों को पूर्ववत योग्य बनाएँ
+	Make Portrait	पोर्ट्रेट बनाएँ
+	Make Ramp Web Safe	रैंप को वेब-सुरक्षित बनाएँ
+	Make Selection	चयन बनाएँ
+	Make Selection from Path	पाथ से चयन बनाएँ
+	Make Selection…	चयन बनाएँ…
+	Make Symmetry Path	सिमेट्री पाथ बनाएँ
+	Make Work Path	वर्क पाथ बनाएँ
+	Make work path from selection	चयन से वर्क पाथ बनाएँ
+	Make Work Path…	वर्क पाथ बनाएँ…
+	Malvar–He–Cutler	Malvar–He–Cutler
+	Manage submitted jobs in the system print queue	सिस्टम प्रिंट कतार में भेजे गए जॉब प्रबंधित करें
+	manual	मैनुअल
+	Manual	मैनुअल
+	Map Document	दस्तावेज़ मैप
+	Map Layer	लेयर मैप
+	Map Path	पाथ मैप
+	Marching Ants	मार्चिंग एंट्स
+	Margin	मार्जिन
+	Marker Size	मार्कर साइज़
+	Marquee	मार्की
+	Mask	मास्क
+	Mask All	सभी मास्क करें
+	Mask All Objects	सभी ऑब्जेक्ट्स मास्क करें
+	Mask Channel	मास्क चैनल
+	Mask Incomplete Blocks	अधूरे ब्लॉक मास्क करें
+	Mask None	कुछ भी मास्क न करें
+	Mask Options	मास्क विकल्प
+	Mask Options…	मास्क विकल्प…
+	Masked Areas	मास्क किए गए क्षेत्र
+	Masks	मास्क
+	Master	मास्टर
+	Match All	सभी मिलाएँ
+	Match Canvas	कैनवास मिलाएँ
+	Match Color	रंग मिलाएँ
+	Match Color…	रंग मिलाएँ…
+	Match Location	स्थान मिलाएँ
+	Match Rotation	रोटेशन मिलाएँ
+	Match Zoom	ज़ूम मिलाएँ
+	Math Symbols	गणितीय चिह्न
+	Matte	मैट
+	Matting	मैटिंग
+	Max Offset	अधिकतम ऑफ़सेट
+	Max Radius	अधिकतम त्रिज्या
+	Maximize	अधिकतम करें
+	Maximize psd compatibility	PSD संगतता अधिकतम करें
+	Maximum	अधिकतम
+	Maximum…	अधिकतम…
+	Mean	माध्य
+	Mean:	माध्य:
+	Measure	मापें
+	Measurement Log	माप लॉग
+	Measurement Scale	माप स्केल
+	Measurement Scale Marker	माप स्केल मार्कर
+	Median	माध्यिका
+	Median:	माध्यिका:
+	Median…	माध्यिका…
+	Medium	मध्यम
+	Medium Blue	मध्यम नीला
+	Medium Dots	मध्यम बिंदु
+	Medium gray	मध्यम ग्रे
+	Medium Gray	मध्यम ग्रे
+	Medium Lines	मध्यम रेखाएँ
+	Medium Strokes	मध्यम स्ट्रोक
+	Memory Usage	मेमोरी उपयोग
+	Memory usage mb	मेमोरी उपयोग (MB)
+	Memory usage percent	मेमोरी उपयोग (%)
+	Menus	मेनू
+	Menus…	मेनू…
+	Merge Group	समूह मर्ज करें
+	Merge Layers	लेयर्स मर्ज करें
+	Merge Shape Components	शेप के घटक मर्ज करें
+	Merge to HDR Pro	HDR Pro में मर्ज करें
+	Merge to HDR Pro…	HDR Pro में मर्ज करें…
+	Merged Layers	मर्ज की गई लेयर्स
+	Merged PRs	मर्ज किए गए PR
+	Mesh	मेश
+	Mesh Size	मेश साइज़
+	Message:	संदेश:
+	Metadata	मेटाडेटा
+	Metal	मेटल
+	Metallic	मेटैलिक
+	Metering Mode	मीटरिंग मोड
+	Method	विधि
+	Metrics	मेट्रिक्स
+	Mezzotint	मेज़ोटिंट
+	Mezzotint…	मेज़ोटिंट…
+	Middle	मध्य
+	Middle Eastern & South Asian Composer	मध्य-पूर्वी और दक्षिण एशियाई कंपोज़र
+	Middle Eastern Features	मध्य-पूर्वी सुविधाएँ
+	Midtone	मिडटोन
+	Midtones from:	मिडटोन्स से:
+	Midtones to:	मिडटोन्स तक:
+	Migrate Presets	प्रीसेट्स माइग्रेट करें
+	Minimalistic	मिनिमलिस्टिक
+	Minimize	छोटा करें
+	Minimum	न्यूनतम
+	Minimum Depth	न्यूनतम गहराई
+	Minimum Diameter	न्यूनतम व्यास
+	Minimum Roundness	न्यूनतम गोलाई
+	Minimum…	न्यूनतम…
+	Mirror	मिरर
+	Missing glyph protection	अनुपलब्ध ग्लिफ़ सुरक्षा
+	Missing Profiles: Ask When Opening	अनुपलब्ध प्रोफ़ाइल: खोलते समय पूछें
+	Miter	माइटर
+	Miter limit	माइटर सीमा
+	Mix Jitter	मिक्स जिटर
+	Mobile	मोबाइल
+	Mode:	मोड:
+	Model	मॉडल
+	Models	मॉडल्स
+	Modern	आधुनिक
+	modified	संशोधित
+	Modifier Keys	मॉडिफ़ायर कुंजियाँ
+	Modify Date	संशोधन तिथि
+	Monitor Profile	मॉनिटर प्रोफ़ाइल
+	Monitor profile in use on {display}: {profile}	{display} पर उपयोग में मॉनिटर प्रोफ़ाइल: {profile}
+	Monitor profile in use: {profile}	उपयोग में मॉनिटर प्रोफ़ाइल: {profile}
+	Monitor profile on {display} (main window): {profile}	{display} पर मॉनिटर प्रोफ़ाइल (मुख्य विंडो): {profile}
+	Monitor profile on {display}: {profile}	{display} पर मॉनिटर प्रोफ़ाइल: {profile}
+	Monitor profile: {profile}	मॉनिटर प्रोफ़ाइल: {profile}
+	Monitor RGB	मॉनिटर RGB
+	Mono Contrast	मोनो कंट्रास्ट
+	Monochromatic	मोनोक्रोमैटिक
+	Monochrome	मोनोक्रोम
+	Monospace	मोनोस्पेस
+	More	और
+	More documents	और दस्तावेज़
+	More panels	और पैनल
+	More Points	और पॉइंट
+	Mosaic	मोज़ेक
+	Mosaic Tiles	मोज़ेक टाइल्स
+	Mosaic…	मोज़ेक…
+	Motion	मोशन
+	Motion Blur	मोशन ब्लर
+	Motion Blur…	मोशन ब्लर…
+	Mouse	माउस
+	Mouse Controls	माउस नियंत्रण
+	Mouse Coordinates	माउस निर्देशांक
+	Move	ले जाएँ
+	Move Down	नीचे ले जाएँ
+	Move effect down	इफ़ेक्ट नीचे ले जाएँ
+	Move effect layer down	इफ़ेक्ट लेयर नीचे ले जाएँ
+	Move effect layer up	इफ़ेक्ट लेयर ऊपर ले जाएँ
+	Move effect up	इफ़ेक्ट ऊपर ले जाएँ
+	Move Group Down	समूह नीचे ले जाएँ
+	Move Group Up	समूह ऊपर ले जाएँ
+	Move Layer	लेयर ले जाएँ
+	Move Panel	पैनल ले जाएँ
+	Move to	इसमें ले जाएँ
+	Move Up	ऊपर ले जाएँ
+	Movie Prime	मूवी प्राइम
+	Multichannel	मल्टीचैनल
+	Multiple Flames Along Path	पाथ के साथ अनेक लपटें
+	Multiple Flames One Direction	एक दिशा में अनेक लपटें
+	Multiple Flames Path Directions	पाथ की दिशाओं में अनेक लपटें
+	Multiple Flames Various Length	अलग-अलग लंबाई की अनेक लपटें
+	Multiply	मल्टिप्लाई
+	My Brushes	मेरे ब्रश
+	name	नाम
+	Name	नाम
+	Name (A–Z)	नाम (A–Z)
+	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or copy the image in your file manager and paste it with {paste}.	Wayland पर नेटिव फ़ाइल ड्रैग-एंड-ड्रॉप अभी समर्थित नहीं है। फ़ाइल › खोलें का उपयोग करें, या अपने फ़ाइल मैनेजर में इमेज कॉपी करें और उसे {paste} से पेस्ट करें।
+	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or run PhotoCraft under XWayland with `WAYLAND_DISPLAY= photocraft`.	Wayland पर नेटिव फ़ाइल ड्रैग-एंड-ड्रॉप अभी समर्थित नहीं है। फ़ाइल › खोलें का उपयोग करें, या `WAYLAND_DISPLAY= photocraft` के साथ PhotoCraft को XWayland में चलाएँ।
+	Native file drag-and-drop is unavailable	नेटिव फ़ाइल ड्रैग-एंड-ड्रॉप उपलब्ध नहीं है
+	Nearest	निकटतम
+	Nearest neighbor	निकटतम पड़ोसी
+	Nearest Neighbor	निकटतम पड़ोसी
+	Nearest Neighbor (hard edges)	निकटतम पड़ोसी (कठोर किनारे)
+	Negation	नेगेशन
+	Neon Glow	नियॉन ग्लो
+	Neutralize	न्यूट्रलाइज़ करें
+	Neutrals	न्यूट्रल
+	Never	कभी नहीं
+	Never Show Overlay	ओवरले कभी न दिखाएँ
+	new	नया
+	New Action…	नया एक्शन…
+	New Adjustment Layer	नई एडजस्टमेंट लेयर
+	New Artboard…	नया आर्टबोर्ड…
+	New Blank Video Layer	नई खाली वीडियो लेयर
+	New Brush	नया ब्रश
+	New Brush Preset	नया ब्रश प्रीसेट
+	New Brush Preset…	नया ब्रश प्रीसेट…
+	New Channel	नया चैनल
+	New channel only	केवल नया चैनल
+	New Crop Preset…	नया क्रॉप प्रीसेट…
+	New document	नया दस्तावेज़
+	New document…	नया दस्तावेज़…
+	New document…     ⌘N	नया दस्तावेज़…     ⌘N
+	New effect layer	नई इफ़ेक्ट लेयर
+	New Fill Layer	नई फ़िल लेयर
+	New from Clipboard	क्लिपबोर्ड से नया
+	New Group	नया समूह
+	New Group from Layers…	लेयर्स से नया समूह…
+	New Group…	नया समूह…
+	New Guide	नई गाइड
+	New Guide Layout	नया गाइड लेआउट
+	New Guide Layout…	नया गाइड लेआउट…
+	New Guides From Shape	शेप से नई गाइड्स
+	New Layer Based Slice	नई लेयर-आधारित स्लाइस
+	New Layer Comp	नया लेयर कंप
+	New Layer from Brush	ब्रश से नई लेयर
+	New Layer…	नई लेयर…
+	New Path	नया पाथ
+	New Selection	नया चयन
+	New selection	नया चयन
+	New Set…	नया सेट…
+	New Shape Layer	नई शेप लेयर
+	New Size	नया साइज़
+	New Smart Object via Copy	कॉपी द्वारा नया स्मार्ट ऑब्जेक्ट
+	New Snapshot	नया स्नैपशॉट
+	New Snapshot…	नया स्नैपशॉट…
+	New Style…	नई स्टाइल…
+	New Swatch Group…	नया स्वॉच समूह…
+	New Swatch…	नया स्वॉच…
+	New Tool Preset	नया टूल प्रीसेट
+	New Type Layer	नई टाइप लेयर
+	New Video Group	नया वीडियो समूह
+	New Video Layer	नई वीडियो लेयर
+	New Video Layer from File	फ़ाइल से नई वीडियो लेयर
+	New Video Layer from File…	फ़ाइल से नई वीडियो लेयर…
+	New Window	नई विंडो
+	New Window for Document	दस्तावेज़ के लिए नई विंडो
+	New Workspace	नया कार्यस्थान
+	Newspaper	अख़बार
+	Next	अगला
+	Next Appearance Mode	अगला रूप-रंग मोड
+	Next Document	अगला दस्तावेज़
+	Next frame	अगला फ़्रेम
+	Next note	अगला नोट
+	Next Theme	अगली थीम
+	No Adv. Blending	उन्नत ब्लेंडिंग नहीं
+	No author	कोई लेखक नहीं
+	No brush presets	कोई ब्रश प्रीसेट नहीं
+	No character style	कोई कैरेक्टर स्टाइल नहीं
+	No Color	कोई रंग नहीं
+	No Color Management	कोई रंग प्रबंधन नहीं
+	No contributor data was built into this copy.	इस प्रति में योगदानकर्ता डेटा शामिल नहीं है।
+	No custom shape "{name}": pick one in the options bar or Window › Shapes	कोई कस्टम शेप "{name}" नहीं है: विकल्प बार या विंडो › शेप्स में से एक चुनें
+	No Dither	कोई डिथर नहीं
+	No Document	कोई दस्तावेज़ नहीं
+	No document	कोई दस्तावेज़ नहीं
+	No document open	कोई दस्तावेज़ खुला नहीं है
+	No favorite fonts yet: click the star beside a font to add it.	अभी कोई पसंदीदा फ़ॉन्ट नहीं: जोड़ने के लिए किसी फ़ॉन्ट के पास वाले तारे पर क्लिक करें।
+	No fonts match these filters.	इन फ़िल्टरों से कोई फ़ॉन्ट मेल नहीं खाता।
+	No Image	कोई इमेज नहीं
+	No import is waiting. Import the file again.	कोई इम्पोर्ट प्रतीक्षा में नहीं है। फ़ाइल फिर से इम्पोर्ट करें।
+	No Layer Comps	कोई लेयर कंप नहीं
+	No Layer Effects	कोई लेयर इफ़ेक्ट्स नहीं
+	No Layer Mask	कोई लेयर मास्क नहीं
+	No Layers	कोई लेयर नहीं
+	No layers	कोई लेयर नहीं
+	No matching commands	कोई मेल खाता कमांड नहीं
+	No matching fonts	कोई मेल खाता फ़ॉन्ट नहीं
+	No matching settings	कोई मेल खाती सेटिंग नहीं
+	No model credits were built into this copy.	इस प्रति में मॉडल क्रेडिट शामिल नहीं हैं।
+	No object found there — drag a rectangle around it	वहाँ कोई ऑब्जेक्ट नहीं मिला — उसके चारों ओर एक आयत खींचें
+	No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.	चयन बनाने के लिए कोई पाथ नहीं है: पेन टूल से एक पाथ बनाएँ या पाथ्स पैनल में एक चुनें।
+	No patterns	कोई पैटर्न नहीं
+	No pin selected	कोई पिन चयनित नहीं
+	No presets for the current tool.	वर्तमान टूल के लिए कोई प्रीसेट नहीं।
+	No presets of this type.	इस प्रकार का कोई प्रीसेट नहीं।
+	No properties	कोई गुण नहीं
+	No recent files	कोई हाल की फ़ाइल नहीं
+	No Results	कोई परिणाम नहीं
+	No Results Found	कोई परिणाम नहीं मिला
+	No saved presets yet.	अभी तक कोई सहेजा गया प्रीसेट नहीं।
+	No selection	कोई चयन नहीं
+	No Selection	कोई चयन नहीं
+	No similar fonts: the current font doesn't say what it looks like.	कोई मिलते-जुलते फ़ॉन्ट नहीं: वर्तमान फ़ॉन्ट यह नहीं बताता कि वह कैसा दिखता है।
+	No Spelling Suggestions	वर्तनी के कोई सुझाव नहीं
+	No subject found — try a rectangle around the object	कोई सब्जेक्ट नहीं मिला — ऑब्जेक्ट के चारों ओर एक आयत आज़माएँ
+	No subject found — try Object Selection or the Lasso	कोई सब्जेक्ट नहीं मिला — ऑब्जेक्ट चयन या लैस्सो आज़माएँ
+	No tool presets.	कोई टूल प्रीसेट नहीं।
+	No Vector Mask	कोई वेक्टर मास्क नहीं
+	Noise	नॉइज़
+	Noise Color	नॉइज़ रंग
+	Noise Color Detail	नॉइज़ रंग विवरण
+	Noise Luminance	नॉइज़ लुमिनेंस
+	Noise Luminance Detail	नॉइज़ लुमिनेंस विवरण
+	none	कोई नहीं
+	None	कोई नहीं
+	Nonlinear History	नॉन-लीनियर हिस्ट्री
+	Normal	सामान्य
+	Normal tip	सामान्य टिप
+	Not a web colour: click for the nearest web colour	वेब रंग नहीं: निकटतम वेब रंग के लिए क्लिक करें
+	Not Clipped	क्लिप्ड नहीं
+	Not Empty	खाली नहीं
+	Not in Dictionary:	शब्दकोश में नहीं:
+	Not Linked	लिंक्ड नहीं
+	Not Locked	लॉक्ड नहीं
+	Not rendered: this adjustment ({key}) is kept as imported.	रेंडर नहीं किया गया: यह समायोजन ({key}) इम्पोर्ट किए गए रूप में रखा गया है।
+	Not Visible	दृश्यमान नहीं
+	Note Paper	नोट पेपर
+	Note tool	नोट टूल
+	Notes	नोट्स
+	Notes…	नोट्स…
+	Nothing to paste: PhotoCraft can't read the system clipboard here	पेस्ट करने के लिए कुछ नहीं: PhotoCraft यहाँ सिस्टम क्लिपबोर्ड नहीं पढ़ सकता
+	Nothing to paste: the clipboard holds no image	पेस्ट करने के लिए कुछ नहीं: क्लिपबोर्ड में कोई इमेज नहीं है
+	Nothing to Redo	फिर से करने के लिए कुछ नहीं
+	Nothing to Undo	पूर्ववत करने के लिए कुछ नहीं
+	Notification Duration (seconds)	सूचना अवधि (सेकंड)
+	Now drag the selection onto another area	अब चयन को किसी दूसरे क्षेत्र पर खींचें
+	NTSC (1953)	NTSC (1953)
+	NTSC Colors	NTSC रंग
+	Nudge Bundle Pause (ms)	नज समूहन विराम (ms)
+	Number	संख्या
+	Number Of Levels	स्तरों की संख्या
+	Numbers	संख्याएँ
+	Numerals	अंक
+	Object Finder	ऑब्जेक्ट फ़ाइंडर
+	Object Name / Title	ऑब्जेक्ट नाम / शीर्षक
+	Object Selection found nothing there — try a tighter rectangle	ऑब्जेक्ट चयन को वहाँ कुछ नहीं मिला — एक छोटा आयत आज़माएँ
+	Ocean Ripple	ओशन रिपल
+	Octagon	अष्टभुज
+	Odd Fields	विषम फ़ील्ड्स
+	off	बंद
+	Off	बंद
+	Off: the speed of the pointer sets the spacing	बंद: पॉइंटर की गति स्पेसिंग तय करती है
+	Offset	ऑफ़सेट
+	Offset…	ऑफ़सेट…
+	Oil Paint	ऑयल पेंट
+	Oil Paint…	ऑयल पेंट…
+	Oldstyle	ओल्डस्टाइल
+	On	चालू
+	on	चालू
+	On Black	काले पर
+	On Layers	लेयर्स पर
+	On White	सफ़ेद पर
+	One Flame Along Path	पाथ के साथ एक लपट
+	Onion Skin	अनियन स्किन
+	Only Web Colors	केवल वेब रंग
+	Opacity	ओपेसिटी
+	Opacity Jitter	ओपेसिटी जिटर
+	Opacity Mask	ओपेसिटी मास्क
+	Opacity must be between 0% and 100%.	ओपेसिटी 0% और 100% के बीच होनी चाहिए।
+	Opacity Threshold	ओपेसिटी थ्रेशहोल्ड
+	Open a document to define variables.	वेरिएबल परिभाषित करने के लिए कोई दस्तावेज़ खोलें।
+	Open a document to select a colour range.	रंग श्रेणी का चयन करने के लिए कोई दस्तावेज़ खोलें।
+	Open a document to use the timeline.	टाइमलाइन का उपयोग करने के लिए कोई दस्तावेज़ खोलें।
+	Open anyway	फिर भी खोलें
+	Open As	इस रूप में खोलें
+	Open as smart object	स्मार्ट ऑब्जेक्ट के रूप में खोलें
+	Open As…	इस रूप में खोलें…
+	Open color-less EXR as ACEScg	बिना कलर स्पेस वाली EXR को ACEScg के रूप में खोलें
+	Open documents as tabs	दस्तावेज़ टैब के रूप में खोलें
+	Open EXR Parts…	EXR भाग खोलें…
+	Open File	फ़ाइल खोलें
+	Open Folder	फ़ोल्डर खोलें
+	Open Image	इमेज खोलें
+	Open in camera raw	Camera Raw में खोलें
+	Open paths use centered strokes	खुले पाथ केंद्रित स्ट्रोक का उपयोग करते हैं
+	Open Recent is unavailable on the web	“हाल ही में खोले गए” वेब पर उपलब्ध नहीं है
+	open source	ओपन सोर्स
+	Open the release page to choose an installer for your system.	अपने सिस्टम के लिए इंस्टॉलर चुनने हेतु रिलीज़ पेज खोलें।
+	Open…     ⌘O	खोलें…     ⌘O
+	Opened {url}	{url} खोला गया
+	OpenGL	OpenGL
+	Opening	खुल रहा है
+	Opening {name}	{name} खुल रहा है
+	Opening {name}…	{name} खुल रहा है…
+	Opening “{name}” requires an estimated {est} GiB of memory ({avail} GiB available).	“{name}” खोलने के लिए अनुमानित {est} GiB मेमोरी चाहिए ({avail} GiB उपलब्ध)।
+	Opening “{name}” requires an estimated {est} GiB of memory. The available memory could not be measured.	“{name}” खोलने के लिए अनुमानित {est} GiB मेमोरी चाहिए। उपलब्ध मेमोरी मापी नहीं जा सकी।
+	Opening this document uses more memory and may slow down your computer or other running applications.	इस दस्तावेज़ को खोलने में अधिक मेमोरी लगती है और इससे आपका कंप्यूटर या चल रहे अन्य ऐप्लिकेशन धीमे हो सकते हैं।
+	Opening…	खुल रहा है…
+	OpenType	OpenType
+	OpenType font	OpenType फ़ॉन्ट
+	Operation	ऑपरेशन
+	Operation canceled	ऑपरेशन रद्द किया गया
+	Operation cancelled	ऑपरेशन रद्द किया गया
+	Operation completed	ऑपरेशन पूरा हुआ
+	Operation failed	ऑपरेशन विफल रहा
+	Optical	ऑप्टिकल
+	Optimized	ऑप्टिमाइज़्ड
+	Option-click to define a source point to clone from	क्लोन करने के लिए स्रोत बिंदु तय करने हेतु Option-क्लिक करें
+	Or set Preferences › Performance › Linux display server to X11: PhotoCraft then always starts under XWayland.	या प्राथमिकताएँ › प्रदर्शन › Linux डिस्प्ले सर्वर को X11 पर सेट करें: तब PhotoCraft हमेशा XWayland में शुरू होगा।
+	orange	नारंगी
+	Ordinals	क्रमसूचक
+	Orientation	ओरिएंटेशन
+	Original	मूल
+	Original Ratio	मूल अनुपात
+	Ornaments	अलंकरण
+	Other	अन्य
+	Other…	अन्य…
+	Out	आउटपुट
+	Out Black	आउटपुट काला
+	Out From Center	केंद्र से बाहर
+	Out Of Gamut	गैमट से बाहर
+	Out of gamut for printing: click for the nearest printable colour	प्रिंटिंग गैमट से बाहर: निकटतम प्रिंट करने योग्य रंग के लिए क्लिक करें
+	Out of memory	मेमोरी समाप्त
+	Out White	आउटपुट सफ़ेद
+	Outer Bevel	बाहरी बेवल
+	Outer Glow	बाहरी ग्लो
+	Outer Glow…	बाहरी ग्लो…
+	Output Channel:	आउटपुट चैनल:
+	Output Levels	आउटपुट स्तर
+	Output Levels:	आउटपुट स्तर:
+	Output Settings	आउटपुट सेटिंग्स
+	Output To	आउटपुट यहाँ
+	Output:	आउटपुट:
+	Oval	अंडाकार
+	Overlay	ओवरले
+	Overlay Color	ओवरले रंग
+	Overlay Edge	ओवरले किनारा
+	Overlay Opacity	ओवरले ओपेसिटी
+	Overlay: Rule of Thirds	ओवरले: रूल ऑफ़ थर्ड्स
+	Overprint	ओवरप्रिंट
+	Override Action "Save" Commands	एक्शन के "सहेजें" कमांड ओवरराइड करें
+	Override Pressure	दबाव ओवरराइड
+	Override Rotation	घुमाव ओवरराइड
+	Override Tilt	झुकाव ओवरराइड
+	Override Tilt X	झुकाव X ओवरराइड
+	Override Tilt Y	झुकाव Y ओवरराइड
+	Overscroll	ओवरस्क्रॉल
+	Package	पैकेज करें
+	Package…	पैकेज करें…
+	Page Setup…	पेज सेटअप…
+	Paint Daubs	पेंट डॉब्स
+	Paint over hair or fur on the image; Alt paints the other mode	इमेज पर बालों या फ़र के ऊपर पेंट करें; Alt दूसरे मोड में पेंट करता है
+	Painting	पेंटिंग
+	Paints from the document's opening state	दस्तावेज़ के खुलने के समय की स्थिति से पेंट करता है
+	Paints from the History panel's source state	हिस्ट्री पैनल की स्रोत स्थिति से पेंट करता है
+	PAL/SECAM	PAL/SECAM
+	Palette Knife	पैलेट नाइफ़
+	Panel	पैनल
+	Panel locations are saved in the workspace. Keyboard shortcuts, menus and toolbar are optional.	पैनलों की जगहें कार्यस्थान में सहेजी जाती हैं। कीबोर्ड शॉर्टकट्स, मेनू और टूलबार वैकल्पिक हैं।
+	Panel menu	पैनल मेनू
+	Panel Options…	पैनल विकल्प…
+	Panels	पैनल्स
+	Paper	कागज़
+	Paper Brightness	कागज़ की ब्राइटनेस
+	Paper Height	कागज़ की ऊँचाई
+	Paper Width	कागज़ की चौड़ाई
+	Paragraph	पैराग्राफ़
+	Paragraph Panel	पैराग्राफ़ पैनल
+	Paragraph Styles	पैराग्राफ़ स्टाइल्स
+	Paragraph Styles Panel	पैराग्राफ़ स्टाइल्स पैनल
+	Parallel	समानांतर
+	Pass Through	पास थ्रू
+	Paste Complete Stroke	पूरा स्ट्रोक पेस्ट करें
+	Paste Fill	फ़िल पेस्ट करें
+	Paste Layer Style	लेयर स्टाइल पेस्ट करें
+	Paste Lorem Ipsum	Lorem Ipsum पेस्ट करें
+	Pasting from other apps is unavailable	अन्य ऐप्स से पेस्ट करना उपलब्ध नहीं है
+	Patch	पैच
+	Patch:	पैच:
+	Patchwork	पैचवर्क
+	Path	पाथ
+	Path Blur	पाथ ब्लर
+	Path Blur…	पाथ ब्लर…
+	Path operations	पाथ ऑपरेशन्स
+	Path to Illustrator…	Illustrator में पाथ…
+	Path:	पाथ:
+	Paths to Illustrator	Illustrator में पाथ्स
+	Paths to Illustrator…	Illustrator में पाथ्स…
+	Pattern	पैटर्न
+	Pattern Dither	पैटर्न डिदर
+	Pattern Fill…	पैटर्न फ़िल…
+	Pattern Overlay	पैटर्न ओवरले
+	Pattern Overlay…	पैटर्न ओवरले…
+	Pattern Preview	पैटर्न पूर्वावलोकन
+	Pattern Size	पैटर्न साइज़
+	Pattern Type	पैटर्न प्रकार
+	Pattern…	पैटर्न…
+	Pause	रोकें
+	PDF Presentation…	PDF प्रेज़ेंटेशन…
+	Pen	पेन
+	Pen Pressure	पेन दबाव
+	Pen Tilt	पेन झुकाव
+	Pencil	पेंसिल
+	Pencil Width	पेंसिल चौड़ाई
+	Pentagon	पंचभुज
+	Percentage	प्रतिशत
+	Percentile:	प्रतिशतक:
+	Perceptual	परसेप्चुअल
+	Per-document RAM limit (MB)	प्रति-दस्तावेज़ RAM सीमा (MB)
+	Performance	प्रदर्शन
+	Perimeter	परिधि
+	Permission denied	अनुमति अस्वीकृत
+	Perspective Crop	परस्पेक्टिव क्रॉप
+	Perspective Warp	परस्पेक्टिव वार्प
+	Perspective Warp is not active	परस्पेक्टिव वार्प सक्रिय नहीं है
+	Perspective Warp: draw planes along the image's perspective, then switch to Warp	परस्पेक्टिव वार्प: इमेज के परिप्रेक्ष्य के अनुसार प्लेन बनाएँ, फिर वार्प पर जाएँ
+	Phone	फ़ोन
+	Photo	फ़ोटो
+	Photo (2 × 3 in)	फ़ोटो (2 × 3 in)
+	Photo (4 × 6 in)	फ़ोटो (4 × 6 in)
+	Photo (5 × 7 in)	फ़ोटो (5 × 7 in)
+	Photo (8 × 10 in)	फ़ोटो (8 × 10 in)
+	Photo Filter	फ़ोटो फ़िल्टर
+	Photocopy	फ़ोटोकॉपी
+	PhotoCraft	PhotoCraft
+	PhotoCraft — an open-source, native image editor written in Rust.	PhotoCraft — Rust में लिखा गया एक ओपन-सोर्स, नेटिव इमेज एडिटर।
+	PhotoCraft — Screen Color Picker	PhotoCraft — स्क्रीन कलर पिकर
+	PhotoCraft can't reach the system clipboard in this session. On Wayland, a Flatpak sandbox hides the protocol that images from other apps are read through.	PhotoCraft इस सत्र में सिस्टम क्लिपबोर्ड तक नहीं पहुँच सकता। Wayland पर, Flatpak सैंडबॉक्स वह प्रोटोकॉल छिपा देता है जिसके ज़रिए अन्य ऐप्स की इमेजेज़ पढ़ी जाती हैं।
+	PhotoCraft Defaults	PhotoCraft डिफ़ॉल्ट्स
+	PhotoCraft found your keyboard shortcut set {set} from another image editor on this computer: {n} of its shortcuts differ from PhotoCraft's. Import it?	PhotoCraft को इस कंप्यूटर पर किसी अन्य इमेज एडिटर का आपका कीबोर्ड शॉर्टकट सेट {set} मिला: इसके {n} शॉर्टकट्स PhotoCraft के शॉर्टकट्स से अलग हैं। क्या इसे इम्पोर्ट करें?
+	PhotoCraft is using the CPU image compositor. The window may still use your graphics adapter.	PhotoCraft CPU इमेज कंपोज़िटर का उपयोग कर रहा है। विंडो फिर भी आपके ग्राफ़िक्स एडेप्टर का उपयोग कर सकती है।
+	PhotoCraft keeps retrying; until a save succeeds, preference changes are lost when it closes.	PhotoCraft बार-बार प्रयास करता रहता है; जब तक सहेजना सफल नहीं होता, बंद होने पर प्राथमिकताओं में किए गए बदलाव खो जाते हैं।
+	PhotoCraft Manages Colors	PhotoCraft रंग प्रबंधित करता है
+	PhotoCraft on GitHub	GitHub पर PhotoCraft
+	PhotoCraft Website	PhotoCraft वेबसाइट
+	PhotoCraft website	PhotoCraft वेबसाइट
+	Photography	फ़ोटोग्राफ़ी
+	Photomerge	Photomerge
+	Photomerge…	Photomerge…
+	Picas	पाइका
+	Pick a screen pixel or press Esc to cancel	स्क्रीन का कोई पिक्सेल चुनें या रद्द करने के लिए Esc दबाएँ
+	Pick Color From Image	इमेज से रंग चुनें
+	Pick screen color	स्क्रीन से रंग चुनें
+	Picture Frame	पिक्चर फ़्रेम
+	Picture Frame…	पिक्चर फ़्रेम…
+	Picture Package…	पिक्चर पैकेज…
+	Pillow Emboss	पिलो एम्बॉस
+	Pin Depth:	पिन गहराई:
+	Pin Light	पिन लाइट
+	Pinch	पिंच
+	Pinch…	पिंच…
+	Pins	पिन्स
+	Pixel	पिक्सेल
+	Pixel Art	पिक्सेल आर्ट
+	Pixel Art Preview	पिक्सेल आर्ट पूर्वावलोकन
+	Pixel Aspect Ratio	पिक्सेल आस्पेक्ट रेशियो
+	Pixel Aspect Ratio Correction	पिक्सेल आस्पेक्ट रेशियो सुधार
+	Pixel Grid	पिक्सेल ग्रिड
+	Pixel Layer	पिक्सेल लेयर
+	Pixel Length:	पिक्सेल लंबाई:
+	Pixel Replacement	पिक्सेल प्रतिस्थापन
+	Pixelate	पिक्सेलेट
+	Pixels/Centimeter	पिक्सेल/सेंटीमीटर
+	Pixels/Inch	पिक्सेल/इंच
+	Pixels:	पिक्सेल:
+	Place Embedded	एम्बेडेड रखें
+	Place Embedded…	एम्बेडेड रखें…
+	Place Linked	लिंक्ड रखें
+	Place Linked…	लिंक्ड रखें…
+	Place Scale Marker	स्केल मार्कर रखें
+	Place Scale Marker…	स्केल मार्कर रखें…
+	Plane	प्लेन
+	Planes	प्लेन्स
+	Plaster	प्लास्टर
+	Plastic Wrap	प्लास्टिक रैप
+	Platform: {os} {arch}	प्लेटफ़ॉर्म: {os} {arch}
+	Play	चलाएँ
+	Play Once	एक बार चलाएँ
+	Play selection	चयन चलाएँ
+	Please wait…	कृपया प्रतीक्षा करें…
+	Plug-ins	प्लग-इन्स
+	Plug-ins…	प्लग-इन्स…
+	Png	PNG
+	Point	पॉइंट
+	Point Curve	पॉइंट कर्व
+	Point Curve Blue	पॉइंट कर्व नीला
+	Point Curve Green	पॉइंट कर्व हरा
+	Point Curve Red	पॉइंट कर्व लाल
+	Point Sample	पॉइंट सैंपल
+	Point size	पॉइंट साइज़
+	Pointed	नुकीला
+	Pointillize	पॉइंटिलाइज़
+	Pointillize…	पॉइंटिलाइज़…
+	Polar Coordinates	ध्रुवीय निर्देशांक
+	Polar Coordinates…	ध्रुवीय निर्देशांक…
+	Polar To Rectangular	ध्रुवीय से आयताकार
+	Policy Cmyk	CMYK नीति
+	Policy Gray	ग्रे नीति
+	Policy Rgb	RGB नीति
+	Pond Ripples	तालाब की लहरें
+	Portrait	पोर्ट्रेट
+	Portrait, 4 x 6	पोर्ट्रेट, 4 x 6
+	Portrait, 5 x 7	पोर्ट्रेट, 5 x 7
+	Position	स्थिति
+	Position and Size	स्थिति और साइज़
+	Postcard	पोस्टकार्ड
+	Poster	पोस्टर
+	Poster Edges	पोस्टर एजेस
+	Posterization	पोस्टराइज़ेशन
+	Posterize	पोस्टराइज़ करें
+	PostScript (72 points/inch)	PostScript (72 पॉइंट्स/इंच)
+	Precise	सटीक
+	Preferences can't be saved	प्राथमिकताएँ सहेजी नहीं जा सकतीं
+	Preferences saved	प्राथमिकताएँ सहेजी गईं
+	Preferences were reset: {error}	प्राथमिकताएँ रीसेट कर दी गईं: {error}
+	Preferences…	प्राथमिकताएँ…
+	Presentation	प्रेज़ेंटेशन
+	Preserve	बनाए रखें
+	Preserve Details	विवरण बनाए रखें
+	Preserve details	विवरण बनाए रखें
+	Preserve Luminosity	ल्यूमिनोसिटी बनाए रखें
+	Preserve Transparency	पारदर्शिता बनाए रखें
+	Preset	प्रीसेट
+	PRESET DETAILS	प्रीसेट विवरण
+	Preset Manager	प्रीसेट मैनेजर
+	Preset Manager…	प्रीसेट मैनेजर…
+	Preset Name	प्रीसेट का नाम
+	Preset Name:	प्रीसेट का नाम:
+	Preset Type	प्रीसेट प्रकार
+	Preset:	प्रीसेट:
+	Presets	प्रीसेट्स
+	Press keys	कुंजियाँ दबाएँ
+	Press keys…	कुंजियाँ दबाएँ…
+	Pressure	दबाव
+	Pressure curve	दबाव कर्व
+	Pressure for Opacity	ओपेसिटी के लिए दबाव
+	Pressure for Size	साइज़ के लिए दबाव
+	Prevent Auto-Nesting	ऑटो-नेस्टिंग रोकें
+	Prevent auto-nesting in and out of Artboards and Frames	आर्टबोर्ड्स और फ़्रेम्स के अंदर और बाहर ऑटो-नेस्टिंग रोकें
+	Preview	पूर्वावलोकन
+	Preview Image	इमेज का पूर्वावलोकन
+	Preview on canvas when reordering layers	लेयर्स का क्रम बदलते समय कैनवास पर पूर्वावलोकन
+	Preview size	पूर्वावलोकन साइज़
+	Previous	पिछला
+	Previous Document	पिछला दस्तावेज़
+	Previous frame	पिछला फ़्रेम
+	Previous note	पिछला नोट
+	previous reading kept; the last re-read failed: {reason}	पिछली रीडिंग रखी गई; अंतिम बार दोबारा पढ़ना विफल रहा: {reason}
+	Prime105	105 mm प्राइम लेंस
+	Prime35	35 mm प्राइम लेंस
+	Print	प्रिंट करें
+	Print preview image	प्रिंट पूर्वावलोकन इमेज
+	Print resolution	प्रिंट रिज़ॉल्यूशन
+	Print Resolution:	प्रिंट रिज़ॉल्यूशन:
+	Print Settings…	प्रिंट सेटिंग्स…
+	Print Size	प्रिंट साइज़
+	Printed to {path}	{path} पर प्रिंट किया गया
+	Printer	प्रिंटर
+	Printer Manages Colors	प्रिंटर रंग प्रबंधित करता है
+	Printer Setup	प्रिंटर सेटअप
+	Printing Marks	प्रिंटिंग मार्क्स
+	Pro	Pro
+	Pro (Dark)	Pro (डार्क)
+	Pro (Light Gray)	Pro (लाइट ग्रे)
+	Pro (Light)	Pro (लाइट)
+	Pro (Medium Gray)	Pro (मीडियम ग्रे)
+	Pro Light	Pro (लाइट)
+	Pro light	Pro (लाइट)
+	Pro Light Gray	Pro (लाइट ग्रे)
+	Pro light gray	Pro (लाइट ग्रे)
+	Pro Light Gray Theme	Pro (लाइट ग्रे) थीम
+	Pro Light Theme	Pro (लाइट) थीम
+	Pro medium	Pro (मीडियम)
+	Pro Medium	Pro (मीडियम ग्रे)
+	Pro Medium Gray	Pro (मीडियम ग्रे)
+	Pro Medium Gray Theme	Pro (मीडियम ग्रे) थीम
+	Pro photo	ProPhoto
+	Pro Theme	Pro थीम
+	Processing…	प्रोसेस हो रहा है…
+	Profile Mismatches: Ask When Opening	प्रोफ़ाइल बेमेल: खोलते समय पूछें
+	Progressive	प्रोग्रेसिव
+	Promote	प्रमोट करें
+	Proof Setup…	प्रूफ़ सेटअप…
+	ProPhoto	ProPhoto
+	ProPhoto RGB	ProPhoto RGB
+	Prophoto-compat	ProPhoto (संगत)
+	Proportional	आनुपातिक
+	Proportional Lining	आनुपातिक लाइनिंग
+	Proportional Oldstyle	आनुपातिक ओल्डस्टाइल
+	Protect Detail	विवरण सुरक्षित करें
+	Protect Foreground Color	फ़ोरग्राउंड रंग सुरक्षित करें
+	Protect skin tones	त्वचा के टोन सुरक्षित करें
+	Protect Texture	टेक्सचर सुरक्षित करें
+	Protect Tones	टोन सुरक्षित करें
+	Protect:	सुरक्षित करें:
+	Province / State	प्रांत / राज्य
+	Proximity Match	प्रॉक्सिमिटी मैच
+	PSD	PSD
+	Public Domain	पब्लिक डोमेन
+	Pucker	सिकोड़ें
+	Pulled String Mode	खिंची डोरी मोड
+	Punctuation	विराम चिह्न
+	Pupil Size	पुतली का साइज़
+	Puppet Warp	पपेट वार्प
+	Puppet Warp is not active	पपेट वार्प सक्रिय नहीं है
+	Purge	पर्ज करें
+	Purity	शुद्धता
+	Push Left	बाईं ओर पुश करें
+	Put this command's shortcuts back as they were	इस कमांड के शॉर्टकट्स पहले जैसे कर दें
+	Pyramids	पिरामिड्स
+	Quality	गुणवत्ता
+	Quick Actions	क्विक एक्शन्स
+	Quick Export As PNG	PNG के रूप में त्वरित एक्सपोर्ट
+	Quick export format	त्वरित एक्सपोर्ट फ़ॉर्मेट
+	Quick export location	त्वरित एक्सपोर्ट स्थान
+	Quick Mask	क्विक मास्क
+	Quick Selection	क्विक चयन
+	Quick Selection found nothing there	क्विक चयन को वहाँ कुछ नहीं मिला
+	Quick Sync	क्विक सिंक
+	Quit	बाहर निकलें
+	Quit {app}	{app} से बाहर निकलें
+	Quit PhotoCraft	PhotoCraft से बाहर निकलें
+	R G B	R G B
+	R g b	RGB
+	Radial	रेडियल
+	Radial Blur	रेडियल ब्लर
+	Radial Blur…	रेडियल ब्लर…
+	Radial Gradient	रेडियल ग्रेडिएंट
+	Radius X	त्रिज्या X
+	Radius Y	त्रिज्या Y
+	Radius:	त्रिज्या:
+	Ran script {name}	स्क्रिप्ट {name} चलाई गई
+	Random	यादृच्छिक
+	Randomize Length	लंबाई यादृच्छिक करें
+	Randomize Shapes	आकार यादृच्छिक करें
+	Range	रेंज
+	Range:	रेंज:
+	Rasterize	रास्टराइज़ करें
+	Rasterize Fill Content	फ़िल सामग्री रास्टराइज़ करें
+	Rasterize Layer	लेयर रास्टराइज़ करें
+	Rasterize Layer Style	लेयर स्टाइल रास्टराइज़ करें
+	Rasterize Layers	लेयर्स रास्टराइज़ करें
+	Rasterize Shape	शेप रास्टराइज़ करें
+	Rasterize Smart Object	स्मार्ट ऑब्जेक्ट रास्टराइज़ करें
+	Rasterize svg groups deeper than	इससे गहरे SVG समूह रास्टराइज़ करें
+	Rasterize Type	टाइप रास्टराइज़ करें
+	Rasterize Type Layer	टाइप लेयर रास्टराइज़ करें
+	Rate	दर
+	Ratio	अनुपात
+	Raw Data	रॉ डेटा
+	Raw Defaults	Raw डिफ़ॉल्ट्स
+	Raw Defaults…	Raw डिफ़ॉल्ट्स…
+	Reading	पढ़ा जा रहा है
+	Reading…	पढ़ा जा रहा है…
+	Ready	तैयार
+	Real name	वास्तविक नाम
+	Rec2020	Rec2020
+	Recent	हाल के
+	Recent file count	हाल की फ़ाइलों की संख्या
+	Recent files	हाल की फ़ाइलें
+	Recent Files	हाल की फ़ाइलें
+	Recent fonts	हाल के फ़ॉन्ट्स
+	Recent Items	हाल के आइटम्स
+	Recently Used	हाल ही में उपयोग किए गए
+	Recently Used Colors	हाल ही में उपयोग किए गए रंग
+	Reconstruct	पुनर्निर्माण करें
+	Reconstruct All	सभी का पुनर्निर्माण करें
+	Record ● a sequence of edits, then play ▶ it on any document.	संपादनों का क्रम रिकॉर्ड ● करें, फिर उसे किसी भी दस्तावेज़ पर चलाएँ ▶।
+	Record Measurements	माप रिकॉर्ड करें
+	Recover on launch	लॉन्च पर पुनर्प्राप्त करें
+	Recovered {name}	{name} पुनर्प्राप्त किया गया
+	Recovery	पुनर्प्राप्ति
+	Rectangle	आयत
+	Rectangular	आयताकार
+	Rectangular Selection	आयताकार चयन
+	Rectangular To Polar	आयताकार से ध्रुवीय
+	red	लाल
+	Red Cyan	लाल/सियान
+	Red Eye	रेड आई
+	Red Primary	लाल प्राइमरी
+	Redefine style by current selection	वर्तमान चयन से स्टाइल पुनर्परिभाषित करें
+	Redrawing	फिर से बनाया जा रहा है
+	Reds	लाल
+	Reduce Color Noise	रंग नॉइज़ कम करें
+	Reduce Noise	नॉइज़ कम करें
+	Reduce Noise…	नॉइज़ कम करें…
+	Reference point location	संदर्भ बिंदु का स्थान
+	Refine	परिशोधित करें
+	Refine Edge	किनारा परिशोधित करें
+	Refine Edge Brush (R)	किनारा परिशोधन ब्रश (R)
+	Reflect	परावर्तित करें
+	Reflected	परावर्तित
+	Reflected Gradient	परावर्तित ग्रेडिएंट
+	Registration Marks	रजिस्ट्रेशन मार्क्स
+	Regular	सामान्य
+	Relative	सापेक्ष
+	Relative Colorimetric	सापेक्ष कलरिमेट्रिक
+	Release Clipping Mask	क्लिपिंग मास्क रिलीज़ करें
+	Relief	रिलीफ़
+	Relight…	रीलाइट…
+	Relink to File	फ़ाइल से फिर से लिंक करें
+	Relink to File…	फ़ाइल से फिर से लिंक करें…
+	Reload Frame	फ़्रेम फिर से लोड करें
+	Remember this choice for future images	भविष्य की इमेजेज़ के लिए यह विकल्प याद रखें
+	Remember to turn off the printer's own colour management in Print Settings…	प्रिंटर का अपना रंग प्रबंधन बंद करना याद रखें: प्रिंट सेटिंग्स…
+	Remember workspace changes	कार्यस्थान के बदलाव याद रखें
+	Remove	हटाएँ
+	Remove {name} from Recent	{name} को हाल की सूची से हटाएँ
+	Remove after each stroke	हर स्ट्रोक के बाद हटाएँ
+	Remove All	सभी हटाएँ
+	Remove All Pins	सभी पिन्स हटाएँ
+	Remove Background	बैकग्राउंड हटाएँ
+	Remove Black Matte	काला मैट हटाएँ
+	Remove from Favorites	पसंदीदा से हटाएँ
+	Remove from favorites	पसंदीदा से हटाएँ
+	Remove from Recent	हाल की सूची से हटाएँ
+	Remove Jpeg Artifact	JPEG आर्टिफ़ैक्ट हटाएँ
+	Remove pair	जोड़ी हटाएँ
+	Remove Planes	प्लेन्स हटाएँ
+	Remove stop	स्टॉप हटाएँ
+	Remove Tool	रिमूव टूल
+	Remove variable	वेरिएबल हटाएँ
+	Remove Warp Split	वार्प स्प्लिट हटाएँ
+	Remove White Matte	सफ़ेद मैट हटाएँ
+	Rename	नाम बदलें
+	Rename Brush	ब्रश का नाम बदलें
+	Rename Brush…	ब्रश का नाम बदलें…
+	Rename Channel…	चैनल का नाम बदलें…
+	Rename Group	समूह का नाम बदलें
+	Rename Group…	समूह का नाम बदलें…
+	Rename Layer	लेयर का नाम बदलें
+	Rename Layer Comp	लेयर कॉम्प का नाम बदलें
+	Rename Path…	पाथ का नाम बदलें…
+	Rename Tool Preset	टूल प्रीसेट का नाम बदलें
+	Rename Tool Preset…	टूल प्रीसेट का नाम बदलें…
+	Rename…	नाम बदलें…
+	Render	रेंडर
+	Render Video	वीडियो रेंडर करें
+	Render Video…	वीडियो रेंडर करें…
+	Rendering Mode	रेंडरिंग मोड
+	Rendering mode	रेंडरिंग मोड
+	Rendering…	रेंडर हो रहा है…
+	Reorder Layer	लेयर का क्रम बदलें
+	Repeat	दोहराएँ
+	Replace	बदलें
+	Replace All Missing Fonts	सभी अनुपलब्ध फ़ॉन्ट्स बदलें
+	Replace Color	रंग बदलें
+	Replace Color…	रंग बदलें…
+	Replace Contents	सामग्री बदलें
+	Replace Contents…	सामग्री बदलें…
+	Replace Contours…	कंटूर्स बदलें…
+	Replace deletes everything in “{group}” first, including presets you edited or moved there. This can't be undone.	बदलें पहले “{group}” की सारी सामग्री हटा देता है, जिसमें वहाँ संपादित किए गए या ले जाए गए प्रीसेट्स भी शामिल हैं। इसे पूर्ववत नहीं किया जा सकता।
+	Replace Footage	फ़ुटेज बदलें
+	Replace Footage…	फ़ुटेज बदलें…
+	Replace it with this document, or cancel and use File › Save As to keep both.	इसे इस दस्तावेज़ से बदलें, या रद्द करें और दोनों को रखने के लिए फ़ाइल › इस रूप में सहेजें का उपयोग करें।
+	Replace Swatches…	स्वॉचेस बदलें…
+	Report a Bug	बग रिपोर्ट करें
+	Report an Issue	समस्या रिपोर्ट करें
+	Report an Issue…	समस्या रिपोर्ट करें…
+	Resample	रीसैंपल
+	Reset Alignment	संरेखण रीसेट करें
+	Reset All	सभी रीसेट करें
+	Reset All Locked Settings	सभी लॉक की गई सेटिंग्स रीसेट करें
+	Reset All to Defaults	सभी को डिफ़ॉल्ट पर रीसेट करें
+	Reset All Tools	सभी टूल्स रीसेट करें
+	Reset all tools to their default settings?	सभी टूल्स को उनकी डिफ़ॉल्ट सेटिंग्स पर रीसेट करें?
+	Reset GPU Backend	GPU बैकएंड रीसेट करें
+	Reset Preferences	प्राथमिकताएँ रीसेट करें
+	Reset Section	अनुभाग रीसेट करें
+	Reset Swatches	स्वॉचेस रीसेट करें
+	Reset the brush to the defaults	ब्रश को डिफ़ॉल्ट पर रीसेट करें
+	Reset to Default	डिफ़ॉल्ट पर रीसेट करें
+	Reset to defaults	डिफ़ॉल्ट पर रीसेट करें
+	Reset Tool	टूल रीसेट करें
+	Reset Transform	रूपांतरण रीसेट करें
+	Reset View	व्यू रीसेट करें
+	Reset Workspace	कार्यस्थान रीसेट करें
+	Resize image during place	रखते समय इमेज का साइज़ बदलें
+	Resize panel window	पैनल विंडो का साइज़ बदलें
+	Resize panels	पैनलों का साइज़ बदलें
+	Resize Windows to Fit	विंडोज़ को फ़िट करने के लिए साइज़ बदलें
+	Resolution	रिज़ॉल्यूशन
+	Resolution: {dpi} pixels/inch	रिज़ॉल्यूशन: {dpi} पिक्सेल/इंच
+	Resolve Missing Fonts	अनुपलब्ध फ़ॉन्ट्स हल करें
+	Resolve Missing Fonts…	अनुपलब्ध फ़ॉन्ट्स हल करें…
+	Response curve	रिस्पॉन्स कर्व
+	Restart	रीस्टार्ट करें
+	Restart Required	रीस्टार्ट आवश्यक है
+	Restore	पुनर्स्थापित करें
+	Restore All	सभी पुनर्स्थापित करें
+	Restore All Frames	सभी फ़्रेम्स पुनर्स्थापित करें
+	Restore Defaults	डिफ़ॉल्ट्स पुनर्स्थापित करें
+	Restore Frame	फ़्रेम पुनर्स्थापित करें
+	Restore last viewed comp	अंतिम बार देखा गया कॉम्प पुनर्स्थापित करें
+	Restore Original Edge	मूल किनारा पुनर्स्थापित करें
+	Restore original size	मूल साइज़ पुनर्स्थापित करें
+	Restrictive (Web)	प्रतिबंधात्मक (वेब)
+	Result	परिणाम
+	Resume	फिर से शुरू करें
+	Reticulation	रेटिकुलेशन
+	Retry	फिर से प्रयास करें
+	Retry GPU	GPU फिर से आज़माएँ
+	Retry GPU requires a restart. Save your work first.	GPU फिर से आज़माने के लिए रीस्टार्ट आवश्यक है। पहले अपना काम सहेजें।
+	Retry GPU tries the graphics processor again now.	GPU फिर से आज़माएँ विकल्प अभी ग्राफ़िक्स प्रोसेसर को दोबारा आज़माता है।
+	Retry saving presets	प्रीसेट्स को फिर से सहेजने का प्रयास करें
+	Reveal in Finder	Finder में दिखाएँ
+	Reverse	उलटें
+	Reverse the order	क्रम उलटें
+	Revert “{name}” to the last saved version? Your changes will be lost.	“{name}” को अंतिम सहेजे गए संस्करण पर वापस लाएँ? आपके बदलाव खो जाएँगे।
+	RGB	RGB
+	Rgb	RGB
+	RGB Sliders	RGB स्लाइडर्स
+	RGB Spectrum	RGB स्पेक्ट्रम
+	RGB:	RGB:
+	Ridges	रिजेस
+	Right	दाएँ
+	Right align text	टेक्स्ट दाएँ संरेखित करें
+	Right click with painting tools	पेंटिंग टूल्स के साथ राइट क्लिक
+	Right Diagonal	दायाँ विकर्ण
+	Right Edges	दाएँ किनारे
+	Right:	दाएँ:
+	Right-to-left paragraph direction	दाएँ से बाएँ पैराग्राफ़ दिशा
+	Rigid	कठोर
+	Ring	रिंग
+	Ring - Double	रिंग - डबल
+	Ripple	रिपल
+	Ripple Magnitude	रिपल परिमाण
+	Ripple Size	रिपल साइज़
+	Ripple…	रिपल…
+	Rise	उठान
+	Rolling Slope - Descending	रोलिंग स्लोप - अवरोही
+	Roman	रोमन
+	Roman Hanging Punctuation	रोमन हैंगिंग विराम चिह्न
+	Rope	रस्सी
+	Roses	गुलाब
+	Rotate 180°	180° घुमाएँ
+	Rotate 90° Clockwise	90° दक्षिणावर्त घुमाएँ
+	Rotate 90° Counter Clockwise	90° वामावर्त घुमाएँ
+	Rotate Auto	स्वचालित घुमाव
+	Rotate Fixed	स्थिर घुमाव
+	Rotate View	व्यू घुमाएँ
+	Rotate view with trackpad	ट्रैकपैड से व्यू घुमाएँ
+	Rotate:	घुमाव:
+	Rotation	घुमाव
+	Rotation Adaptation	घुमाव अनुकूलन
+	Rough Pastels	रफ़ पेस्टल्स
+	Round	गोल
+	Rounded Steps	गोल स्टेप्स
+	Roundness Jitter	राउंडनेस जिटर
+	Row Order	पंक्ति क्रम
+	Rows	पंक्तियाँ
+	Rule of Thirds	तिहाई का नियम
+	Ruler	रूलर
+	Ruler Units	रूलर इकाइयाँ
+	Rulers  (⌘R)	रूलर्स  (⌘R)
+	Rulers & Grids	रूलर्स और ग्रिड
+	Same folder	वही फ़ोल्डर
+	Sample a pixel anywhere on the screen	स्क्रीन पर कहीं से भी पिक्सेल का नमूना लें
+	Sample Size	नमूना साइज़
+	Sample Size:	नमूना साइज़:
+	Sample:	नमूना:
+	Sample: foreground colour	नमूना: फ़ोरग्राउंड रंग
+	Sampled Colors	नमूना लिए गए रंग
+	Sampler	सैंपलर
+	Sampling Area	सैंपलिंग क्षेत्र
+	Sampling Area Options	सैंपलिंग क्षेत्र विकल्प
+	Sampling Area Overlay	सैंपलिंग क्षेत्र ओवरले
+	Sampling Brush Tool	सैंपलिंग ब्रश टूल
+	Sampling: Background Swatch	सैंपलिंग: बैकग्राउंड स्वॉच
+	Sampling: Continuous	सैंपलिंग: निरंतर
+	Sampling: Once	सैंपलिंग: एक बार
+	Sandstone	बलुआ पत्थर
+	Sans Serif	सैन्स सेरिफ़
+	Sat	सैचु.
+	Satin	साटन
+	Satin…	साटन…
+	Saturate	सैचुरेट करें
+	Saturation Jitter	सैचुरेशन जिटर
+	Save a Copy	एक प्रति सहेजें
+	Save a list of these shortcuts as a web page	इन शॉर्टकट्स की सूची वेब पेज के रूप में सहेजें
+	Save Actions…	एक्शन्स सहेजें…
+	Save As	इस रूप में सहेजें
+	Save as PDF	PDF के रूप में सहेजें
+	Save As Preset	प्रीसेट के रूप में सहेजें
+	Save before closing?	बंद करने से पहले सहेजें?
+	Save cancelled	सहेजना रद्द किया गया
+	Save Changes	बदलाव सहेजें
+	Save Contours…	कंटूर सहेजें…
+	Save Default Type Styles	डिफ़ॉल्ट टाइप स्टाइल सहेजें
+	Save failed: {error}	सहेजना विफल: {error}
+	Save File	फ़ाइल सहेजें
+	Save for Web (Legacy)	वेब के लिए सहेजें (लेगेसी)
+	Save for Web (Legacy)…	वेब के लिए सहेजें (लेगेसी)…
+	Save Full-Size Composite in .pcraft Files	.pcraft फ़ाइलों में पूर्ण-साइज़ कंपोज़िट सहेजें
+	Save HTML and Images	HTML और इमेज सहेजें
+	Save Image	इमेज सहेजें
+	Save Image Pyramid	इमेज पिरामिड सहेजें
+	Save in background	बैकग्राउंड में सहेजें
+	Save Path	पाथ सहेजें
+	Save Pixel Aspect Ratio	पिक्सेल पहलू अनुपात सहेजें
+	Save Preset…	प्रीसेट सहेजें…
+	Save Selection	चयन सहेजें
+	Save selection as channel	चयन को चैनल के रूप में सहेजें
+	Save Set…	सेट सहेजें…
+	Save the changes to this set	इस सेट में किए गए बदलाव सहेजें
+	Save these shortcuts as a .kys file	इन शॉर्टकट्स को .kys फ़ाइल के रूप में सहेजें
+	Save these shortcuts as a new set	इन शॉर्टकट्स को नए सेट के रूप में सहेजें
+	Save Transparency	पारदर्शिता सहेजें
+	Save your work and restart PhotoCraft to retry GPU acceleration. CPU rendering remains active for this session.	अपना काम सहेजें और GPU एक्सेलरेशन फिर से आज़माने के लिए PhotoCraft को रीस्टार्ट करें। इस सत्र में CPU रेंडरिंग सक्रिय रहेगी।
+	Save…	सहेजें…
+	Saved	सहेजा गया
+	Saved {name}	{name} सहेजा गया
+	Saved {path}; image assets: {n} in {dir}	{path} सहेजा गया; इमेज एसेट्स: {dir} में {n}
+	Saved a copy as {path}	प्रति {path} के रूप में सहेजी गई
+	Saved contours to {file}	कंटूर {file} में सहेजे गए
+	Saved Multichannel	सहेजा गया मल्टीचैनल
+	Saving {name}	{name} सहेजा जा रहा है
+	Saving {percent}	सहेजा जा रहा है {percent}
+	Saving brush presets… Keep this tab open until saving finishes.	ब्रश प्रीसेट्स सहेजे जा रहे हैं… सहेजना पूरा होने तक यह टैब खुला रखें।
+	Saving…	सहेजा जा रहा है…
+	Sawtooth 1	आरीदार 1
+	Scale Effects	इफ़ेक्ट्स स्केल करें
+	Scale Effects…	इफ़ेक्ट्स स्केल करें…
+	Scale Factor	स्केल फ़ैक्टर
+	Scale Horizontally	क्षैतिज स्केल
+	Scale or rotate the moved area, then press {key}	खिसकाए गए क्षेत्र को स्केल करें या घुमाएँ, फिर {key} दबाएँ
+	Scale to Fit Media	मीडिया में फ़िट करने के लिए स्केल करें
+	Scale Units	स्केल इकाइयाँ
+	Scale Vertically	लंबवत स्केल
+	Scale:	स्केल:
+	Scaling	स्केलिंग
+	Scallops	स्कैलप्स
+	Scatter	स्कैटर
+	Scattering	स्कैटरिंग
+	Scratch disks	स्क्रैच डिस्क
+	Scratch Disks	स्क्रैच डिस्क
+	Scratch Disks…	स्क्रैच डिस्क…
+	Scratch Size Limit (MB, 0 = No Limit)	स्क्रैच साइज़ सीमा (MB, 0 = कोई सीमा नहीं)
+	Scratch Sizes	स्क्रैच साइज़
+	Scratch: {size}	स्क्रैच: {size}
+	Screen	स्क्रीन
+	Screen Mode	स्क्रीन मोड
+	Screen resolution	स्क्रीन रिज़ॉल्यूशन
+	Script	स्क्रिप्ट
+	Script Events Manager	स्क्रिप्ट इवेंट्स मैनेजर
+	Script Events Manager…	स्क्रिप्ट इवेंट्स मैनेजर…
+	Scripts	स्क्रिप्ट्स
+	Scroll menu down	मेनू नीचे स्क्रॉल करें
+	Scroll menu up	मेनू ऊपर स्क्रॉल करें
+	Scroll to zoom	ज़ूम करने के लिए स्क्रॉल करें
+	Scrubby slider acceleration	स्क्रबी स्लाइडर एक्सेलरेशन
+	Scrubby Zoom	स्क्रबी ज़ूम
+	Seafoam	समुद्री झाग
+	Search	खोजें
+	Search Brushes	ब्रश खोजें
+	Search commands	कमांड खोजें
+	Search commands (⌘K)	कमांड खोजें (⌘K)
+	Search commands, tools and panels	कमांड, टूल्स और पैनल खोजें
+	Search commands, tools and panels…	कमांड, टूल्स और पैनल खोजें…
+	Search fonts	फ़ॉन्ट खोजें
+	Search menus	मेनू खोजें
+	Search settings…	सेटिंग्स खोजें…
+	Search…	खोजें…
+	Second Color Readout	दूसरा रंग रीडआउट
+	Seed	सीड
+	Select a type layer or click into text to insert glyphs	ग्लिफ़ डालने के लिए टाइप लेयर चुनें या टेक्स्ट में क्लिक करें
+	Select a type layer to edit its character and paragraph settings.	कैरेक्टर और पैराग्राफ़ सेटिंग्स संपादित करने के लिए टाइप लेयर चुनें।
+	Select All	सभी का चयन करें
+	Select All Layers	सभी लेयर्स का चयन करें
+	Select an action first	पहले एक एक्शन चुनें
+	Select and Mask	चयन और मास्क
+	Select Bottom Layer	सबसे नीचे की लेयर का चयन करें
+	Select Custom Color…	कस्टम रंग चुनें…
+	Select Data Points	डेटा पॉइंट्स चुनें
+	Select Data Points…	डेटा पॉइंट्स चुनें…
+	Select Folder…	फ़ोल्डर चुनें…
+	Select Inverse	चयन उल्टा करें
+	Select Layer	लेयर का चयन करें
+	Select Layer Above	ऊपर की लेयर का चयन करें
+	Select Layer Below	नीचे की लेयर का चयन करें
+	Select Layer Under Cursor	कर्सर के नीचे की लेयर का चयन करें
+	Select Linked Layers	लिंक्ड लेयर्स का चयन करें
+	Select Plane	प्लेन का चयन करें
+	Select Similar Colors	समान रंगों का चयन करें
+	Select Subject	सब्जेक्ट का चयन करें
+	Select text to apply a character style	कैरेक्टर स्टाइल लागू करने के लिए टेक्स्ट चुनें
+	Select the crop presets to delete	हटाने के लिए क्रॉप प्रीसेट्स चुनें
+	Select the crop presets to delete:	हटाने के लिए क्रॉप प्रीसेट्स चुनें:
+	Select Top Layer	सबसे ऊपर की लेयर का चयन करें
+	Select:	चयन:
+	Selected Areas	चयनित क्षेत्र
+	Selected Artboards	चयनित आर्टबोर्ड
+	Selected at launch: {backend}	लॉन्च के समय चयनित: {backend}
+	Selection Edges	चयन के किनारे
+	Selection Preview:	चयन पूर्वावलोकन:
+	Selections	चयन
+	Selective	चयनात्मक
+	Selective Color	सेलेक्टिव कलर
+	Selective Color…	सेलेक्टिव कलर…
+	Semi Bold	सेमी बोल्ड
+	SemiBold	सेमीबोल्ड
+	Send Backward	पीछे भेजें
+	Send the selected pin backward	चयनित पिन को पीछे भेजें
+	Send to Back	सबसे पीछे भेजें
+	Sensitivity	संवेदनशीलता
+	Sent to {printer}	{printer} को भेजा गया
+	Sent to the printer ({spooler})	प्रिंटर को भेजा गया ({spooler})
+	Sepia	सेपिया
+	Serif	सेरिफ़
+	Services	सेवाएँ
+	Sessions only	केवल सत्र
+	Set additional Crop options	अतिरिक्त क्रॉप विकल्प सेट करें
+	Set additional smoothing options	अतिरिक्त स्मूदिंग विकल्प सेट करें
+	Set as default	डिफ़ॉल्ट के रूप में सेट करें
+	Set background color	बैकग्राउंड रंग सेट करें
+	Set Black Point	ब्लैक पॉइंट सेट करें
+	Set Colors	रंग सेट करें
+	Set deleted.	सेट हटा दिया गया।
+	Set foreground color	फ़ोरग्राउंड रंग सेट करें
+	Set GPU Memory in Preferences › Performance to what your graphics card can hold, at most 3/8 of its memory. Automatic follows Memory Usage, within a quarter of this computer's memory and 3/8 of the card's, and doesn't count the document against a card whose memory is known. The status bar shows GPU Memory Full while they don't fit.	प्राथमिकताएँ › परफ़ॉर्मेंस में GPU मेमोरी को उतना सेट करें जितना आपका ग्राफ़िक्स कार्ड संभाल सके, अधिकतम उसकी मेमोरी का 3/8। स्वचालित, मेमोरी उपयोग का पालन करता है, इस कंप्यूटर की मेमोरी के एक-चौथाई और कार्ड की मेमोरी के 3/8 के भीतर, और जिस कार्ड की मेमोरी ज्ञात है उस पर दस्तावेज़ को नहीं गिनता। जब तक ये फ़िट नहीं होते, स्टेटस बार में GPU मेमोरी भरी दिखती है।
+	Set horizontal skew	क्षैतिज तिरछापन सेट करें
+	set in Print Settings…	प्रिंट सेटिंग्स में सेट होता है…
+	Set Measurement Scale	माप स्केल सेट करें
+	Set Measurement Scale…	माप स्केल सेट करें…
+	set name	सेट का नाम
+	Set Neutral Gray Point	न्यूट्रल ग्रे पॉइंट सेट करें
+	Set New Snapshot as Default	नए स्नैपशॉट को डिफ़ॉल्ट के रूप में सेट करें
+	Set painting symmetry options	पेंटिंग सिमेट्री विकल्प सेट करें
+	Set saved.	सेट सहेजा गया।
+	Set shape fill type	आकार का फ़िल प्रकार सेट करें
+	Set shape stroke type	आकार का स्ट्रोक प्रकार सेट करें
+	Set Start Timecode…	प्रारंभ टाइमकोड सेट करें…
+	Set the overlay options for the Crop tool	क्रॉप टूल के ओवरले विकल्प सेट करें
+	Set the text color	टेक्स्ट का रंग सेट करें
+	Set the tone sliders from the image	इमेज से टोन स्लाइडर सेट करें
+	Set vertical skew	लंबवत तिरछापन सेट करें
+	Set White Point	व्हाइट पॉइंट सेट करें
+	Set:	सेट:
+	Sets the source for the history brush	हिस्ट्री ब्रश का स्रोत सेट करता है
+	Settings	सेटिंग्स
+	Settings from {name}	{name} से सेटिंग्स
+	Settings from {name}; {count} not supported: {names}	{name} से सेटिंग्स; {count} समर्थित नहीं: {names}
+	Settings:	सेटिंग्स:
+	Settings…	सेटिंग्स…
+	Sgray	sGray
+	Shadow	शैडो
+	Shadow Amount	शैडो मात्रा
+	Shadow Color	शैडो रंग
+	Shadow Intensity	शैडो तीव्रता
+	Shadow Mode	शैडो मोड
+	Shadow Opacity	शैडो ओपेसिटी
+	Shadow Radius	शैडो त्रिज्या
+	Shadow Tint	शैडो टिंट
+	Shadow Tone	शैडो टोन
+	Shadows up to:	शैडो की सीमा:
+	Shadows/Highlights	शैडो/हाइलाइट्स
+	Shadows/Highlights…	शैडो/हाइलाइट्स…
+	Shallow	उथला
+	Shape	शेप
+	Shape Blur	आकार ब्लर
+	Shape Blur…	आकार ब्लर…
+	Shape Dynamics	आकार डायनेमिक्स
+	Shape Layer	शेप लेयर
+	Shape:	शेप:
+	Shapes	शेप्स
+	Shapes can't use patterns yet	शेप्स अभी पैटर्न का उपयोग नहीं कर सकतीं
+	Sharp	तीक्ष्ण
+	Sharpen	शार्पन
+	Sharpen Amount	शार्पन मात्रा
+	Sharpen Detail	शार्पन डिटेल
+	Sharpen Details	डिटेल्स शार्पन करें
+	Sharpen Edges	किनारे शार्पन करें
+	Sharpen for	इसके लिए शार्पन करें
+	Sharpen Masking	शार्पन मास्किंग
+	Sharpen More	और शार्पन करें
+	Sharpen Radius	शार्पन त्रिज्या
+	Sharpness	शार्पनेस
+	Shear	शियर
+	Shear…	शियर…
+	Shell Lower	निचला शेल
+	Shell Upper	ऊपरी शेल
+	Shift	Shift
+	Shine	चमक
+	Short Lines	छोटी रेखाएँ
+	Short Strokes	छोटे स्ट्रोक
+	Shortcut	शॉर्टकट
+	shortcut	शॉर्टकट
+	Shortcut removed.	शॉर्टकट हटा दिया गया।
+	Shortcuts	शॉर्टकट्स
+	Show	दिखाएँ
+	Show All	सभी दिखाएँ
+	Show All Fonts	सभी फ़ॉन्ट दिखाएँ
+	Show All Menu Items	सभी मेनू आइटम दिखाएँ
+	Show Altered Video	बदला हुआ वीडियो दिखाएँ
+	Show Backdrop	बैकड्रॉप दिखाएँ
+	Show bounding box when dragging layer	लेयर खींचते समय बाउंडिंग बॉक्स दिखाएँ
+	Show canvas dots	कैनवास बिंदु दिखाएँ
+	Show Channels in Color	चैनल्स को रंग में दिखाएँ
+	Show channels in color	चैनल्स को रंग में दिखाएँ
+	Show Cropped Area	क्रॉप किया गया क्षेत्र दिखाएँ
+	Show crosshair in brush tip	ब्रश टिप में क्रॉसहेयर दिखाएँ
+	Show dialog during playback	प्लेबैक के दौरान डायलॉग दिखाएँ
+	Show Edge	किनारा दिखाएँ
+	Show extension panels	एक्सटेंशन पैनल दिखाएँ
+	Show Extras Options	एक्स्ट्राज़ विकल्प दिखाएँ
+	Show Extras Options…	एक्स्ट्राज़ विकल्प दिखाएँ…
+	Show Favorite Fonts	पसंदीदा फ़ॉन्ट दिखाएँ
+	Show file name in title	शीर्षक में फ़ाइल का नाम दिखाएँ
+	Show Font Classes	फ़ॉन्ट वर्ग दिखाएँ
+	Show font names in english	फ़ॉन्ट के नाम अंग्रेज़ी में दिखाएँ
+	Show Grid	ग्रिड दिखाएँ
+	Show Guides	गाइड्स दिखाएँ
+	Show Guides  (⌘;)	गाइड्स दिखाएँ  (⌘;)
+	Show highlight on rollover	रोलओवर पर हाइलाइट दिखाएँ
+	Show home recent files	होम पर हाल की फ़ाइलें दिखाएँ
+	Show in Explorer	Explorer में दिखाएँ
+	Show in Folder	फ़ोल्डर में दिखाएँ
+	Show layer mask badges	लेयर मास्क बैज दिखाएँ
+	Show Layers	लेयर्स दिखाएँ
+	Show Mask	मास्क दिखाएँ
+	Show menu colors	मेनू रंग दिखाएँ
+	Show Mesh	मेश दिखाएँ
+	Show New Snapshot Dialog by Default	डिफ़ॉल्ट रूप से नया स्नैपशॉट डायलॉग दिखाएँ
+	Show only crosshair while painting	पेंट करते समय केवल क्रॉसहेयर दिखाएँ
+	Show or hide the Notes panel	नोट्स पैनल दिखाएँ या छिपाएँ
+	Show Original	मूल दिखाएँ
+	Show Overlay	ओवरले दिखाएँ
+	Show rulers	रूलर्स दिखाएँ
+	Show Rulers	रूलर्स दिखाएँ
+	Show Sampling Area	सैंपलिंग क्षेत्र दिखाएँ
+	Show Sampling Ring	सैंपलिंग रिंग दिखाएँ
+	Show Similar Fonts	समान फ़ॉन्ट दिखाएँ
+	Show slice numbers	स्लाइस नंबर दिखाएँ
+	Show Statistics	आँकड़े दिखाएँ
+	Show Styles	स्टाइल्स दिखाएँ
+	Show the layer mask as an overlay	लेयर मास्क को ओवरले के रूप में दिखाएँ
+	Show the layer's effects  ({key}-click: all layers)	लेयर के इफ़ेक्ट्स दिखाएँ  ({key}-क्लिक: सभी लेयर्स)
+	Show the layer's effects  (⌥-click: all layers)	लेयर के इफ़ेक्ट्स दिखाएँ  (⌥-क्लिक: सभी लेयर्स)
+	Show the layer's effects and Smart Filters  ({key}-click: all layers)	लेयर के इफ़ेक्ट्स और स्मार्ट फ़िल्टर्स दिखाएँ  ({key}-क्लिक: सभी लेयर्स)
+	Show tooltips	टूलटिप दिखाएँ
+	Show Transform Controls	रूपांतरण नियंत्रण दिखाएँ
+	Show transformation values	रूपांतरण मान दिखाएँ
+	Show Variable Fonts	वेरिएबल फ़ॉन्ट दिखाएँ
+	Show/Hide All Panels	सभी पैनल दिखाएँ/छिपाएँ
+	Show/Hide Panels	पैनल दिखाएँ/छिपाएँ
+	Show:	दिखाएँ:
+	Shutter Speed	शटर स्पीड
+	Sides	भुजाएँ
+	Simple	सरल
+	Simulate Paper	पेपर सिम्युलेट करें
+	Simulate Pressure	प्रेशर सिम्युलेट करें
+	Sine	साइन
+	Single Word Justification	एकल शब्द जस्टिफ़िकेशन
+	Size Jitter	साइज़ जिटर
+	Sketch	स्केच
+	Skewness	विषमता
+	Skip	छोड़ें
+	Sky	आकाश
+	Slab Serif	स्लैब सेरिफ़
+	Slant	झुकाव
+	Slice color	स्लाइस रंग
+	Slice Options	स्लाइस विकल्प
+	Slice Options…	स्लाइस विकल्प…
+	Slices	स्लाइस
+	Slices are locked (View › Lock Slices)	स्लाइस लॉक हैं (व्यू › स्लाइस लॉक करें)
+	Slices From Guides	गाइड्स से स्लाइस
+	Small	छोटा
+	Small Caps	स्मॉल कैप्स
+	Smart Blur	स्मार्ट ब्लर
+	Smart Blur…	स्मार्ट ब्लर…
+	Smart Filter	स्मार्ट फ़िल्टर
+	Smart Filters	स्मार्ट फ़िल्टर्स
+	Smart guide color	स्मार्ट गाइड रंग
+	Smart Guides	स्मार्ट गाइड्स
+	Smart Object	स्मार्ट ऑब्जेक्ट
+	Smart Object Layer	स्मार्ट ऑब्जेक्ट लेयर
+	Smart quotes	स्मार्ट उद्धरण चिह्न
+	Smart Sharpen	स्मार्ट शार्पन
+	Smart Sharpen…	स्मार्ट शार्पन…
+	Smooth the curve values	कर्व के मान चिकने करें
+	Smoothing	स्मूदिंग
+	Smoothness	चिकनापन
+	SMPTE C	SMPTE C
+	Smudge	स्मज
+	Smudge Stick	स्मज स्टिक
+	Snap to Grid	ग्रिड पर स्नैप करें
+	Snap to Origin	मूल बिंदु पर स्नैप करें
+	Snap vector tools and transforms to pixel grid	वेक्टर टूल्स और रूपांतरणों को पिक्सेल ग्रिड पर स्नैप करें
+	Snapshot 1	स्नैपशॉट 1
+	Snapshots	स्नैपशॉट्स
+	Snowflakes	हिमकण
+	Soft	सॉफ़्ट
+	Soft dark	सॉफ़्ट डार्क
+	Soft Dark Theme	सॉफ़्ट डार्क थीम
+	Soft light	सॉफ़्ट लाइट
+	Soft Light	सॉफ़्ट लाइट
+	Soft Light Theme	सॉफ़्ट लाइट थीम
+	Soften	नरम करें
+	Softness	कोमलता
+	Software	सॉफ़्टवेयर
+	Software adapter	सॉफ़्टवेयर एडैप्टर
+	Solarize	सोलराइज़ करें
+	Solarized	Solarized
+	Solarized dark	Solarized डार्क
+	Solarized Dark	Solarized डार्क
+	Solarized Dark Theme	Solarized डार्क थीम
+	Solid	ठोस
+	Solid Color	ठोस रंग
+	Solid Color…	ठोस रंग…
+	Solid Front Faces	ठोस सामने के फ़ेस
+	Solidity:	ठोसपन:
+	Some brush presets could not be loaded	कुछ ब्रश प्रीसेट्स लोड नहीं हो सके
+	Some layers, pixels or masks could not be read. Do you want to continue opening it?	कुछ लेयर्स, पिक्सेल या मास्क पढ़े नहीं जा सके। क्या आप इसे खोलना जारी रखना चाहते हैं?
+	Sort	क्रमबद्ध करें
+	Sort By Name	नाम से क्रमबद्ध करें
+	Source	स्रोत
+	Source Channel	स्रोत चैनल
+	Source Files	स्रोत फ़ाइलें
+	Source Invert	स्रोत इन्वर्ट
+	Source Layer	स्रोत लेयर
+	Source:	स्रोत:
+	Source: not set ({key}-click with Clone Stamp)	स्रोत: सेट नहीं (क्लोन स्टैम्प से {key}-क्लिक करें)
+	Source: set	स्रोत: सेट
+	Source1 Channel	स्रोत 1 चैनल
+	Source1 Invert	स्रोत 1 इन्वर्ट
+	Source2 Channel	स्रोत 2 चैनल
+	Source2 Invert	स्रोत 2 इन्वर्ट
+	Space	स्पेस
+	Space After	बाद में स्पेस
+	Space Before	पहले स्पेस
+	Spacing	स्पेसिंग
+	Sparkle	झिलमिल
+	Spatter	छींटे
+	Speckle	धब्बेदार
+	Speed	गति
+	Spell check complete.	वर्तनी जाँच पूरी हुई।
+	Spherize	स्फ़ेराइज़
+	Spherize…	स्फ़ेराइज़…
+	Spin	स्पिन
+	Spin Blur	स्पिन ब्लर
+	Spin Blur…	स्पिन ब्लर…
+	Split at Playhead	प्लेहेड पर विभाजित करें
+	Split Toning	स्प्लिट टोनिंग
+	Split Warp Crosswise	वार्प को दोनों दिशाओं में विभाजित करें
+	Split Warp Horizontally	वार्प को क्षैतिज रूप से विभाजित करें
+	Split Warp Vertically	वार्प को लंबवत रूप से विभाजित करें
+	Split:	विभाजन:
+	Sponge	स्पंज
+	Spot	स्पॉट
+	Spot Channel	स्पॉट चैनल
+	Spot Color	स्पॉट रंग
+	Spot Healing	स्पॉट हीलिंग
+	Spot Healing Brush	स्पॉट हीलिंग ब्रश
+	Spot:	स्पॉट:
+	Spray Radius	स्प्रे त्रिज्या
+	Sprayed Strokes	स्प्रे किए गए स्ट्रोक
+	Spread	फैलाव
+	Sprinkles	छिड़काव
+	Square	वर्ग
+	Square Size	वर्ग साइज़
+	Square, 12 x 12	वर्ग, 12 x 12
+	Square, 5 x 5	वर्ग, 5 x 5
+	Squareness	वर्गाकारता
+	Squeeze	सिकोड़न
+	Srgb	sRGB
+	sRGB	sRGB
+	sRGB IEC61966-2.1	sRGB IEC61966-2.1
+	Stack Mode	स्टैक मोड
+	Stagger	सीढ़ीदार
+	Stained Glass	रंगीन कांच
+	Stamp	स्टैम्प
+	Stamp Down	नीचे स्टैम्प करें
+	Stamp Visible	दृश्यमान स्टैम्प करें
+	Standard	मानक
+	Standard Deviation	मानक विचलन
+	Standard Ligatures	मानक लिगेचर
+	Standard Screen Mode	मानक स्क्रीन मोड
+	Star	तारा
+	Star ratio	तारा अनुपात
+	Star Ratio:	तारा अनुपात:
+	Stars	तारे
+	Start	प्रारंभ
+	Start Recording	रिकॉर्डिंग शुरू करें
+	Start X	प्रारंभ X
+	Start Y	प्रारंभ Y
+	Starting serial	प्रारंभिक क्रमांक
+	Statistics	आँकड़े
+	Statistics…	आँकड़े…
+	Status Information	स्थिति जानकारी
+	Std Dev:	मानक विचलन:
+	Step {step} ({id}) failed: {error}	चरण {step} ({id}) विफल: {error}
+	Step {step} is waiting for its dialog	चरण {step} अपने डायलॉग की प्रतीक्षा कर रहा है
+	Step Backward	एक चरण पीछे
+	Step Forward	एक चरण आगे
+	Stippled	बिंदुकित
+	Stop Color	स्टॉप रंग
+	Stop For Errors	त्रुटियों पर रोकें
+	Stop playing/recording	प्लेबैक/रिकॉर्डिंग रोकें
+	Stop Recording	रिकॉर्डिंग रोकें
+	Stops	स्टॉप्स
+	Straighten	सीधा करें
+	Straighten Layer	लेयर सीधी करें
+	Straighten the image by drawing a line on it	इमेज पर रेखा खींचकर उसे सीधा करें
+	Strength	शक्ति
+	Strength:	शक्ति:
+	Stretch	खींचें
+	Strikethrough	स्ट्राइकथ्रू
+	Stroke Catch-up	स्ट्रोक कैच-अप
+	Stroke color	स्ट्रोक रंग
+	Stroke Color	स्ट्रोक रंग
+	Stroke Detail	स्ट्रोक डिटेल
+	Stroke Direction	स्ट्रोक दिशा
+	Stroke Length	स्ट्रोक लंबाई
+	Stroke Options	स्ट्रोक विकल्प
+	Stroke Path	पाथ स्ट्रोक करें
+	Stroke path with brush	ब्रश से पाथ स्ट्रोक करें
+	Stroke Path…	पाथ स्ट्रोक करें…
+	Stroke Pressure	स्ट्रोक प्रेशर
+	Stroke Size	स्ट्रोक साइज़
+	Stroke Width	स्ट्रोक चौड़ाई
+	Stroke:	स्ट्रोक:
+	Strokes	स्ट्रोक्स
+	Strokes to remove: {n} (Enter applies, Esc cancels)	हटाने के लिए स्ट्रोक: {n} (Enter लागू करता है, Esc रद्द करता है)
+	Strong	प्रबल
+	Structure:	संरचना:
+	Studio	स्टूडियो
+	Studio (Dark)	स्टूडियो (डार्क)
+	Studio (Light)	स्टूडियो (लाइट)
+	Studio Light	स्टूडियो लाइट
+	Studio light	स्टूडियो लाइट
+	Studio Light Theme	स्टूडियो लाइट थीम
+	Studio Theme	स्टूडियो थीम
+	Style {name} saved	स्टाइल {name} सहेजा गया
+	Style Options	स्टाइल विकल्प
+	Style Options…	स्टाइल विकल्प…
+	Style: Normal	स्टाइल: सामान्य
+	Styles	स्टाइल्स
+	Stylistic Alternates	शैलीगत विकल्प
+	Stylization	शैलीकरण
+	Stylize	शैलीबद्ध करें
+	Stylus Wheel	स्टाइलस व्हील
+	Subdivisions	उप-विभाजन
+	Subject	सब्जेक्ट
+	Subject Distance	सब्जेक्ट दूरी
+	Subscript	सबस्क्रिप्ट
+	Subtract	घटाएँ
+	Subtract from	इससे घटाएँ
+	Subtract from Sample	नमूने से घटाएँ
+	Subtract from selection  ({key})	चयन से घटाएँ  ({key})
+	Subtract from selection  (⌥)	चयन से घटाएँ  (⌥)
+	Subtract Front Shape	सामने की शेप घटाएँ
+	Subtract Mask from Selection	चयन से मास्क घटाएँ
+	Subtract Shapes at Overlap	ओवरलैप पर शेप्स घटाएँ
+	Suggestions:	सुझाव:
+	Sumi-e	सुमी-ए
+	Summarize…	सारांश बनाएँ…
+	Summation	योग
+	Superscript	सुपरस्क्रिप्ट
+	Supplemental Categories	पूरक श्रेणियाँ
+	Surface Blur	सरफ़ेस ब्लर
+	Surface Blur…	सरफ़ेस ब्लर…
+	Swap colours (X)	रंग अदला-बदली करें (X)
+	Swaps height and width	ऊँचाई और चौड़ाई की अदला-बदली करता है
+	Swash	स्वॉश
+	Switch between free transform and warp modes	मुक्त रूपांतरण और वार्प मोड के बीच स्विच करें
+	Switch Foreground and Background Colors	फ़ोरग्राउंड और बैकग्राउंड रंग अदला-बदली करें
+	Switch theme	थीम बदलें
+	Switched to CPU rendering	CPU रेंडरिंग पर स्विच किया गया
+	Symbols	प्रतीक
+	Symmetry Off	सिमेट्री बंद
+	Sync with system	सिस्टम के साथ सिंक करें
+	System	सिस्टम
+	System Info	सिस्टम जानकारी
+	System Info…	सिस्टम जानकारी…
+	System title bar	सिस्टम टाइटल बार
+	Table	तालिका
+	Tablet	टैबलेट
+	Tabloid	टैबलॉयड
+	Tabular	टैबुलर
+	Tabular Lining	टैबुलर लाइनिंग
+	Tabular Oldstyle	टैबुलर ओल्डस्टाइल
+	Take the shortcut from the other command and select it	दूसरे कमांड से शॉर्टकट लें और इसे चुनें
+	Taper	टेपर
+	Targa Options	Targa विकल्प
+	Target Channel 3	लक्ष्य चैनल 3
+	Target Channel 4	लक्ष्य चैनल 4
+	Target Channel 5	लक्ष्य चैनल 5
+	Target Channel 6	लक्ष्य चैनल 6
+	Target Channel 7	लक्ष्य चैनल 7
+	Target Channel 8	लक्ष्य चैनल 8
+	Target Channel 9	लक्ष्य चैनल 9
+	Target Composite Channel	लक्ष्य कंपोज़िट चैनल
+	Target Path	लक्ष्य पाथ
+	Target X	लक्ष्य X
+	Target Y	लक्ष्य Y
+	Target:	लक्ष्य:
+	Teal Orange	टील ऑरेंज
+	Technique	तकनीक
+	Technology Previews	टेक्नोलॉजी पूर्वावलोकन
+	Technology Previews…	टेक्नोलॉजी पूर्वावलोकन…
+	Temporary	अस्थायी
+	Tetrahedral	टेट्राहेड्रल
+	Text color	टेक्स्ट रंग
+	Text engine	टेक्स्ट इंजन
+	Text file	टेक्स्ट फ़ाइल
+	Text Layer	टेक्स्ट लेयर
+	Text Position:	टेक्स्ट स्थिति:
+	Text Replacement	टेक्स्ट प्रतिस्थापन
+	Texture Coverage	टेक्सचर कवरेज
+	Texture Each Tip	हर टिप पर टेक्सचर
+	Texturizer	टेक्सचराइज़र
+	Thaw Mask	थॉ मास्क
+	The active layer has no pixels here — turn on Sample All Layers or select a layer with pixels	सक्रिय लेयर में यहाँ कोई पिक्सेल नहीं है — सभी लेयर्स का नमूना लें चालू करें या पिक्सेल वाली लेयर चुनें
+	The canvas is shown as sRGB. Choose a monitor profile in Edit › Color Settings.	कैनवास sRGB के रूप में दिखाया जा रहा है। एडिट › रंग सेटिंग्स में मॉनिटर प्रोफ़ाइल चुनें।
+	The canvas on {display} is shown as sRGB. Choose a monitor profile in Edit › Color Settings.	{display} पर कैनवास sRGB के रूप में दिखाया जा रहा है। एडिट › रंग सेटिंग्स में मॉनिटर प्रोफ़ाइल चुनें।
+	The current gradient (pick one in Window › Gradients)	मौजूदा ग्रेडिएंट (विंडो › ग्रेडिएंट्स में एक चुनें)
+	The document “{name}” does not have an embedded {mode} profile.	दस्तावेज़ “{name}” में एम्बेडेड {mode} प्रोफ़ाइल नहीं है।
+	The document “{name}” has an embedded color profile that does not match the current {mode} working space.	दस्तावेज़ “{name}” में एम्बेडेड रंग प्रोफ़ाइल है जो मौजूदा {mode} वर्किंग स्पेस से मेल नहीं खाती।
+	The document “{name}” may be damaged.	दस्तावेज़ “{name}” क्षतिग्रस्त हो सकता है।
+	The document does not have an embedded colour profile. Working space: {working}.	दस्तावेज़ में एम्बेडेड रंग प्रोफ़ाइल नहीं है। वर्किंग स्पेस: {working}।
+	The document has an embedded colour profile that does not match the working space.\nEmbedded: {embedded}\nWorking: {working}	दस्तावेज़ में एम्बेडेड रंग प्रोफ़ाइल है जो वर्किंग स्पेस से मेल नहीं खाती।\nएम्बेडेड: {embedded}\nवर्किंग: {working}
+	The document or Smart Filter changed. Reopen its dialog.	दस्तावेज़ या स्मार्ट फ़िल्टर बदल गया है। उसका डायलॉग फिर से खोलें।
+	The fastest and the softest, with colour fringing on fine detail.	सबसे तेज़ और सबसे सॉफ़्ट, बारीक विवरण पर रंग फ़्रिंजिंग के साथ।
+	The file could not be opened.	फ़ाइल खोली नहीं जा सकी।
+	The file could not be saved.	फ़ाइल सहेजी नहीं जा सकी।
+	The GPU compositor wasn't used: {reason}	GPU कंपोज़िटर का उपयोग नहीं हुआ: {reason}
+	The gradient the Gradient tool paints with	वह ग्रेडिएंट जिससे ग्रेडिएंट टूल पेंट करता है
+	The keyboard shortcut set was not imported: {error}	कीबोर्ड शॉर्टकट सेट इम्पोर्ट नहीं हुआ: {error}
+	The layer or its mask changed. Drag the mask onto the Trash again.	लेयर या उसका मास्क बदल गया है। मास्क को फिर से ट्रैश पर खींचें।
+	The layers need {needed} of GPU memory and may hold {budget}, so edits that redraw the whole document do it on the CPU. Click to set GPU Memory.	लेयर्स को {needed} GPU मेमोरी चाहिए और वे {budget} तक रख सकती हैं, इसलिए पूरे दस्तावेज़ को फिर से बनाने वाले संपादन CPU पर होते हैं। GPU मेमोरी सेट करने के लिए क्लिक करें।
+	The name in the save dialog was “{name}”.	सहेजें डायलॉग में नाम “{name}” था।
+	The transform couldn't be applied.	रूपांतरण लागू नहीं किया जा सका।
+	Theme	थीम
+	There are too many sets: delete one first.	बहुत अधिक सेट हैं: पहले एक हटाएँ।
+	There is no color table to save.	सहेजने के लिए कोई रंग तालिका नहीं है।
+	There is no crop size or ratio to save	सहेजने के लिए कोई क्रॉप साइज़ या अनुपात नहीं है
+	These settings aren't available in PhotoCraft yet.	ये सेटिंग्स अभी PhotoCraft में उपलब्ध नहीं हैं।
+	Thickness	मोटाई
+	Thin	पतला
+	This adjustment ({key}) is kept as imported and can't be edited yet.	यह समायोजन ({key}) इम्पोर्ट किए गए रूप में रखा गया है और अभी संपादित नहीं किया जा सकता।
+	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	इस दस्तावेज़ की लेयर्स को {needed} चाहिए, लेकिन वे {budget} तक रख सकती हैं: पूरे दस्तावेज़ का रीड्रॉ CPU पर होता है
+	This document's layers: {needed} of {budget} for layers	इस दस्तावेज़ की लेयर्स: लेयर्स के लिए {budget} में से {needed}
+	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	आगे बढ़ने से पहले इस फ़िल लेयर को रास्टराइज़ करना होगा। इसकी फ़िल सामग्री फिर संपादन योग्य नहीं रहेगी। लेयर रास्टराइज़ करें?
+	This layer must be rasterized before proceeding.	आगे बढ़ने से पहले इस लेयर को रास्टराइज़ करना होगा।
+	This Layer:	यह लेयर:
+	This redraw took {seconds} s on the CPU.	इस रीड्रॉ में CPU पर {seconds} s लगे।
+	This session: {reason}	यह सत्र: {reason}
+	This shape layer must be rasterized before proceeding. It will no longer be editable as a shape. Rasterize the shape?	आगे बढ़ने से पहले इस आकार लेयर को रास्टराइज़ करना होगा। यह फिर आकार के रूप में संपादन योग्य नहीं रहेगी। आकार रास्टराइज़ करें?
+	This Smart Object must be rasterized before proceeding. Its contents will no longer be editable. Rasterize the Smart Object?	आगे बढ़ने से पहले इस स्मार्ट ऑब्जेक्ट को रास्टराइज़ करना होगा। इसकी सामग्री फिर संपादन योग्य नहीं रहेगी। स्मार्ट ऑब्जेक्ट रास्टराइज़ करें?
+	This type layer must be rasterized before proceeding. Its text will no longer be editable. Rasterize the type?	आगे बढ़ने से पहले इस टाइप लेयर को रास्टराइज़ करना होगा। इसका टेक्स्ट फिर संपादन योग्य नहीं रहेगा। टाइप रास्टराइज़ करें?
+	Threshold	थ्रेशहोल्ड
+	Threshold Level	थ्रेशहोल्ड लेवल
+	Thumbnail Contents	थंबनेल सामग्री
+	Thumbnail Size	थंबनेल साइज़
+	Thumbnail size (smallest: list)	थंबनेल साइज़ (सबसे छोटा: सूची)
+	TIFF Options	TIFF विकल्प
+	Tile	टाइल
+	Tile All Horizontally	सभी को क्षैतिज टाइल करें
+	Tile All Vertically	सभी को लंबवत टाइल करें
+	Tile Size	टाइल साइज़
+	Tiles	टाइल्स
+	Tiles…	टाइल्स…
+	Tilt	झुकाव
+	Tilt Scale	झुकाव स्केल
+	Tilt X	झुकाव X
+	Tilt Y	झुकाव Y
+	Tilt-Shift	टिल्ट-शिफ़्ट
+	Tilt-Shift…	टिल्ट-शिफ़्ट…
+	Time	समय
+	Timecode	टाइमकोड
+	Timing	टाइमिंग
+	Tint Color	टिंट रंग
+	Tiny	बहुत छोटा
+	Tiny Lens	छोटा लेंस
+	Title	शीर्षक
+	Titling Alternates	टाइटलिंग विकल्प
+	To	तक
+	To Center	केंद्र की ओर
+	To drop files, start PhotoCraft under XWayland: `{command}`	फ़ाइलें ड्रॉप करने के लिए PhotoCraft को XWayland के अंतर्गत शुरू करें: `{command}`
+	To paste from other apps, start PhotoCraft under XWayland: `{command}`	दूसरे ऐप्स से पेस्ट करने के लिए PhotoCraft को XWayland के अंतर्गत शुरू करें: `{command}`
+	Toggle count group visibility	काउंट समूह की दृश्यता टॉगल करें
+	Toggle Last State	अंतिम स्थिति टॉगल करें
+	Toggle Layer Mask Overlay	लेयर मास्क ओवरले टॉगल करें
+	Toggle text orientation	टेक्स्ट ओरिएंटेशन टॉगल करें
+	Toggle the Brush Settings panel	ब्रश सेटिंग्स पैनल टॉगल करें
+	Toggle the Brush Settings panel  (F5)	ब्रश सेटिंग्स पैनल टॉगल करें  (F5)
+	Toggle visibility	दृश्यता टॉगल करें
+	Tolerance:	टॉलरेंस:
+	Tone Curve	टोन कर्व
+	Tone:	टोन:
+	Too many clone strokes: apply Vanishing Point first	बहुत अधिक क्लोन स्ट्रोक: पहले वैनिशिंग पॉइंट लागू करें
+	Tool	टूल
+	Tool Options	टूल विकल्प
+	Tool Presets	टूल प्रीसेट्स
+	Toolbar	टूलबार
+	Toolbar…	टूलबार…
+	Toolbars	टूलबार्स
+	Top	ऊपर
+	Top Edges	ऊपरी किनारे
+	Top Left	ऊपर बाएँ
+	Top Right	ऊपर दाएँ
+	Top:	ऊपर:
+	Torn Edges	फटे किनारे
+	Total Ink	कुल इंक
+	Total:	कुल:
+	Touch gestures	टच जेस्चर
+	Trace Contour	कंटूर ट्रेस करें
+	Trace Contour…	कंटूर ट्रेस करें…
+	Tracking	ट्रैकिंग
+	Tracking (1/1000 em)	ट्रैकिंग (1/1000 em)
+	Tracking presets	ट्रैकिंग प्रीसेट्स
+	Traditional (72.27 points/inch)	पारंपरिक (72.27 पॉइंट/इंच)
+	Transfer	ट्रांसफ़र
+	Transform Again on a Copy	कॉपी पर फिर से रूपांतरण करें
+	Transform On Drop	ड्रॉप करने पर रूपांतरण
+	Transform Symmetry	सिमेट्री का रूपांतरण
+	Transformation	रूपांतरण
+	Transition	ट्रांज़िशन
+	Transmission Reference	ट्रांसमिशन रेफ़रेंस
+	Transparency	पारदर्शिता
+	Transparency & Gamut	पारदर्शिता और गैमट
+	Transparency & Gamut…	पारदर्शिता और गैमट…
+	Transparency Shapes Layer	पारदर्शिता आकार लेयर
+	Transparency Threshold	पारदर्शिता थ्रेशहोल्ड
+	Transparent	पारदर्शी
+	Trap	ट्रैप
+	Trap…	ट्रैप…
+	Tree	पेड़
+	Tree…	पेड़…
+	Triangle	त्रिभुज
+	Trilinear	ट्राइलीनियर
+	Trim	ट्रिम करें
+	TrueType font	TrueType फ़ॉन्ट
+	Turbulent	अशांत
+	Turn the prompt back on with Ask On Mismatch in Edit › Color Settings.	एडिट › रंग सेटिंग्स में “मेल न खाने पर पूछें” से यह संकेत फिर से चालू करें।
+	Twirl	ट्वर्ल
+	Twirl Clockwise	दक्षिणावर्त ट्वर्ल
+	Twirl Counterclockwise	वामावर्त ट्वर्ल
+	Twirl…	ट्वर्ल…
+	Twist	मरोड़
+	Type Layer	टाइप लेयर
+	Type Options	टाइप विकल्प
+	Type Styles	टाइप स्टाइल्स
+	Type units	टाइप इकाइयाँ
+	Type:	प्रकार:
+	Type…	टाइप…
+	UI font size	UI फ़ॉन्ट साइज़
+	UI scale	UI स्केल
+	Ultra Bold	अल्ट्रा बोल्ड
+	Ultra Light	अल्ट्रा लाइट
+	Unaltered	अपरिवर्तित
+	Unavailable in this color mode	इस रंग मोड में उपलब्ध नहीं
+	Uncached Refresh	बिना कैश के रीफ़्रेश
+	Uncoated CMYK	अनकोटेड CMYK
+	Undefined Areas	अपरिभाषित क्षेत्र
+	Underline	अंडरलाइन
+	Underlying Layer:	नीचे वाली लेयर:
+	Underpainting	अंडरपेंटिंग
+	Underwater	पानी के नीचे
+	Undo Changes	बदलाव पूर्ववत करें
+	Ungroup	समूह तोड़ें
+	Ungroup Layers	लेयर्स का समूह तोड़ें
+	Uniform	एकसमान
+	Unite Shapes	शेप्स मिलाएँ
+	Unite Shapes at Overlap	ओवरलैप पर शेप्स मिलाएँ
+	Units & Rulers	इकाइयाँ और रूलर्स
+	Units & Rulers…	इकाइयाँ और रूलर्स…
+	Unix	Unix
+	Unknown	अज्ञात
+	unknown	अज्ञात
+	unknown type	अज्ञात प्रकार
+	Unlink	अनलिंक करें
+	Unlink Layer Mask	लेयर मास्क अनलिंक करें
+	Unlink the mask from the layer	मास्क को लेयर से अनलिंक करें
+	Unlock	अनलॉक करें
+	Unlock: picking a preset replaces these settings	अनलॉक करें: प्रीसेट चुनने पर ये सेटिंग्स बदल जाती हैं
+	Unlocked	अनलॉक्ड
+	Unnamed {mode} profile	बेनाम {mode} प्रोफ़ाइल
+	Unsaved changes	बिना सहेजे बदलाव
+	Unsaved Changes	बिना सहेजे बदलाव
+	Unsharp Mask	अनशार्प मास्क
+	Unsharp Mask…	अनशार्प मास्क…
+	Unsupported file format	असमर्थित फ़ाइल फ़ॉर्मेट
+	Unsupported format	असमर्थित फ़ॉर्मेट
+	Untagged {mode}	अनटैग्ड {mode}
+	Untitled	शीर्षकहीन
+	Untitled-1	शीर्षकहीन-1
+	Up	ऊपर
+	Update	अपडेट करें
+	Update All Modified Content	सभी संशोधित सामग्री अपडेट करें
+	Update All Text Layers	सभी टेक्स्ट लेयर्स अपडेट करें
+	Update Layer Comp	लेयर कॉम्प अपडेट करें
+	Update layer comp (visibility, position and appearance)	लेयर कॉम्प अपडेट करें (दृश्यता, स्थिति और रूप)
+	Update Modified Content	संशोधित सामग्री अपडेट करें
+	Update the current brush with these settings	इन सेटिंग्स से मौजूदा ब्रश अपडेट करें
+	Updates	अपडेट्स
+	Upper	ऊपरी
+	Urgency	तात्कालिकता
+	URLs	URL
+	Use	उपयोग करें
+	Use additional plugins folder	अतिरिक्त प्लग-इन फ़ोल्डर का उपयोग करें
+	Use Classic Mode	क्लासिक मोड का उपयोग करें
+	Use Custom Color	कस्टम रंग का उपयोग करें
+	Use Default	डिफ़ॉल्ट का उपयोग करें
+	Use Default Masks on Fill Layers	फ़िल लेयर्स पर डिफ़ॉल्ट मास्क का उपयोग करें
+	Use esc to commit	कमिट करने के लिए Esc का उपयोग करें
+	Use File › Open to open an image.	इमेज खोलने के लिए फ़ाइल › खोलें का उपयोग करें।
+	Use File › Open, or paste a copied image with {paste}.	फ़ाइल › खोलें का उपयोग करें, या {paste} से कॉपी की गई इमेज पेस्ट करें।
+	Use finite lengths and a positive pattern total	सीमित लंबाइयों और धनात्मक पैटर्न योग का उपयोग करें
+	Use Global Light	ग्लोबल लाइट का उपयोग करें
+	Use gpu	GPU का उपयोग करें
+	Use Legacy	लेगेसी का उपयोग करें
+	Use legacy free transform	लेगेसी मुक्त रूपांतरण का उपयोग करें
+	Use Measurement Scale	माप स्केल का उपयोग करें
+	Use Previous Layer to Create Clipping Mask	क्लिपिंग मास्क बनाने के लिए पिछली लेयर का उपयोग करें
+	Use Selection In Source	स्रोत में चयन का उपयोग करें
+	Use Selection In Target	लक्ष्य में चयन का उपयोग करें
+	Use shift key for tool switch	टूल बदलने के लिए Shift कुंजी का उपयोग करें
+	Use tablet pressure	टैबलेट प्रेशर का उपयोग करें
+	Use tablet pressure to change pen width	पेन की चौड़ाई बदलने के लिए टैबलेट प्रेशर का उपयोग करें
+	Use the embedded profile ({profile})	एम्बेडेड प्रोफ़ाइल ({profile}) का उपयोग करें
+	Use these settings for new arrows	नए तीरों के लिए इन सेटिंग्स का उपयोग करें
+	Use:	उपयोग:
+	Username	यूज़रनेम
+	Uses the foreground and background colors.	फ़ोरग्राउंड और बैकग्राउंड रंगों का उपयोग करता है।
+	Uses the foreground and background colours.	फ़ोरग्राउंड और बैकग्राउंड रंगों का उपयोग करता है।
+	Vanishing Point	वैनिशिंग पॉइंट
+	Vanishing Point is not active	वैनिशिंग पॉइंट सक्रिय नहीं है
+	Vanishing Point: click four corners to create a plane	वैनिशिंग पॉइंट: प्लेन बनाने के लिए चार कोनों पर क्लिक करें
+	Vanishing Point…	वैनिशिंग पॉइंट…
+	Variable Data Sets	वेरिएबल डेटा सेट्स
+	Variable Data Sets…	वेरिएबल डेटा सेट्स…
+	Variable font	वेरिएबल फ़ॉन्ट
+	Variables	वेरिएबल्स
+	Variables bind a layer's visibility, text or pixels to a named data slot.	वेरिएबल्स किसी लेयर की दृश्यता, टेक्स्ट या पिक्सेल को नामित डेटा स्लॉट से जोड़ते हैं।
+	Variance	वेरिएंस
+	Vary round brush hardness on hud	HUD पर गोल ब्रश की हार्डनेस बदलें
+	Vector Mask	वेक्टर मास्क
+	vector mask	वेक्टर मास्क
+	Vector Mask from Current Path	मौजूदा पाथ से वेक्टर मास्क
+	Vector Mask Hides Effects	वेक्टर मास्क इफ़ेक्ट्स छिपाता है
+	Version	संस्करण
+	Version {version}	संस्करण {version}
+	Vertical	लंबवत
+	Vertical Centers	लंबवत केंद्र
+	Vertical Distortion	लंबवत विरूपण
+	Vertical Only	केवल लंबवत
+	Vertical scale	लंबवत स्केल
+	Vertical type	लंबवत टाइप
+	Vertically	लंबवत रूप से
+	Very High	बहुत अधिक
+	Video	वीडियो
+	Video Cache	वीडियो कैश
+	Video Frames to Layers	वीडियो फ़्रेम्स से लेयर्स
+	Video Frames to Layers…	वीडियो फ़्रेम्स से लेयर्स…
+	Video Layers	वीडियो लेयर्स
+	View menu	व्यू मेनू
+	View Options	व्यू विकल्प
+	Vignette Amount	विनेट मात्रा
+	Vignette Feather	विनेट फ़ेदर
+	Vignette Highlights	विनेट हाइलाइट्स
+	Vignette Midpoint	विनेट मिडपॉइंट
+	Vignette Roundness	विनेट राउंडनेस
+	Vignette Style	विनेट स्टाइल
+	Vine Color	बेल का रंग
+	Vine With Flowers	फूलों वाली बेल
+	Vine With Leaves	पत्तियों वाली बेल
+	Violent	उग्र
+	Violet	बैंगनी
+	violet	बैंगनी
+	Violet, Orange	बैंगनी, नारंगी
+	Visibility	दृश्यता
+	Visible	दृश्यमान
+	Vivid Light	विविड लाइट
+	Vulkan	Vulkan
+	W x H x Resolution	W x H x रिज़ॉल्यूशन
+	W:	W:
+	Wait for the current job to finish.	मौजूदा कार्य पूरा होने तक प्रतीक्षा करें।
+	Wand	वैंड
+	Warm	गर्म
+	Warming Filter (85)	वार्मिंग फ़िल्टर (85)
+	Warming L B A	वार्मिंग L B A
+	Warming81	वार्मिंग 81
+	Warming85	वार्मिंग 85
+	Warmth	गर्माहट
+	Warning	चेतावनी
+	Warp Text	टेक्स्ट वार्प करें
+	Warp Text…	टेक्स्ट वार्प करें…
+	Warp:	वार्प:
+	Water Paper	वॉटर पेपर
+	Watercolor	वॉटरकलर
+	Watercolour look: lighter interior, darker rims.	वॉटरकलर रूप: हल्का भीतरी भाग, गहरे किनारे।
+	Wave	वेव
+	Wave…	वेव…
+	Wavelength Max	अधिकतम तरंगदैर्ध्य
+	Wavelength Min	न्यूनतम तरंगदैर्ध्य
+	Waves	वेव्स
+	Web	वेब
+	Web Color	वेब रंग
+	Web Color Sliders	वेब रंग स्लाइडर्स
+	Web Large	वेब (बड़ा)
+	Web Minimum	वेब (न्यूनतम)
+	Web Most Common	वेब (सबसे आम)
+	Web Photo Gallery…	वेब फ़ोटो गैलरी…
+	Web Snap	वेब स्नैप
+	Webp	WebP
+	WebP (lossless)	WebP (लॉसलेस)
+	Weight	वज़न
+	Weight:	वज़न:
+	Wet Edges	गीले किनारे
+	Wetness	गीलापन
+	Wetness Jitter	गीलापन जिटर
+	White	सफ़ेद
+	White Clip	व्हाइट क्लिप
+	White Intensity	सफ़ेद की तीव्रता
+	White Is High	सफ़ेद ऊँचा है
+	White Matte	सफ़ेद मैट
+	Whole Word	पूरा शब्द
+	WIA Support	WIA समर्थन
+	WIA Support…	WIA समर्थन…
+	Wide Blurry	चौड़ा धुंधला
+	Wide Gamut RGB	वाइड गैमट RGB
+	Wide Sharp	चौड़ा तीक्ष्ण
+	Width	चौड़ाई
+	Width and Height	चौड़ाई और ऊँचाई
+	Wind	हवा
+	Wind…	हवा…
+	Window renderer: {renderer}	विंडो रेंडरर: {renderer}
+	Windows	Windows
+	Windows LCD	Windows LCD
+	With GPU Memory set to Automatic, this also limits the GPU layer budget. That budget is capped at one quarter of installed RAM and, when known, three eighths of the graphics card's memory, with a 512 MB minimum. Raising this limit beyond those caps does not increase the GPU budget.	GPU मेमोरी स्वचालित पर सेट होने पर यह GPU लेयर बजट को भी सीमित करता है। वह बजट इंस्टॉल की गई RAM के एक-चौथाई और, ज्ञात होने पर, ग्राफ़िक्स कार्ड की मेमोरी के तीन-आठवें हिस्से तक सीमित है, न्यूनतम 512 MB के साथ। इस सीमा को उन सीमाओं से ऊपर बढ़ाने से GPU बजट नहीं बढ़ता।
+	Word Spacing	शब्द स्पेसिंग
+	Work Path	वर्क पाथ
+	Working	प्रोसेस हो रहा है
+	Working Black Plate	वर्किंग ब्लैक प्लेट
+	Working CMY Plate	वर्किंग CMY प्लेट
+	Working CMYK	वर्किंग CMYK
+	Working Cmyk	वर्किंग CMYK
+	Working Cyan Plate	वर्किंग सियान प्लेट
+	Working Gray	वर्किंग ग्रे
+	Working Gray Plate	वर्किंग ग्रे प्लेट
+	Working Magenta Plate	वर्किंग मैजेंटा प्लेट
+	Working Rgb	वर्किंग RGB
+	Working Space	वर्किंग स्पेस
+	Working Spaces	वर्किंग स्पेस
+	Working Yellow Plate	वर्किंग येलो प्लेट
+	Working: {working}	वर्किंग स्पेस: {working}
+	Working…	प्रोसेस हो रहा है…
+	Working-cmyk	वर्किंग CMYK
+	Workspaces	कार्यस्थान
+	World ready	वर्ल्ड-रेडी
+	Wrap	रैप
+	Write xmp sidecars	XMP साइडकार फ़ाइलें लिखें
+	X11	X11
+	XOR	XOR
+	yellow	पीला
+	Yellow  ·  Blue	पीला  ·  नीला
+	Yellows	पीले
+	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	आपका कीबोर्ड शॉर्टकट सेट {set} यहाँ उपयोग में है: {n} शॉर्टकट डिफ़ॉल्ट से अलग हैं। एडिट › कीबोर्ड शॉर्टकट्स उन्हें दिखाता है; सभी डिफ़ॉल्ट पर रीसेट करें इसे पूर्ववत करता है।
+	Zigzag	ज़िगज़ैग
+	ZigZag	ज़िगज़ैग
+	ZigZag…	ज़िगज़ैग…
+	ZIP	ZIP
+	Zoom	ज़ूम
+	Zoom clicked point to center	क्लिक किए गए पॉइंट को केंद्र में ज़ूम करें
+	Zoom in	ज़ूम इन करें
+	Zoom In (hold, drag to scrub)	ज़ूम इन (दबाए रखें, स्क्रब करने के लिए खींचें)
+	Zoom out	ज़ूम आउट करें
+	Zoom Out (hold)	ज़ूम आउट (दबाए रखें)
+	Zoom resizes windows	ज़ूम से विंडो का साइज़ बदलता है
+	Zoom with scroll wheel	स्क्रॉल व्हील से ज़ूम करें
+	Zoom with trackpad pinch	ट्रैकपैड पिंच से ज़ूम करें
+@id	edit.clear	साफ़ करें
+@id	edit.purge.undo	पूर्ववत हिस्ट्री
+@id	edit.stroke	स्ट्रोक…
+@id	edit.transform.scale	आकार बदलें
+@id	file.close	बंद करें
+@id	filter.sharpen.sharpen	शार्पन
+@id	layer.layerMask.apply	लेयर मास्क लागू करें
+@id	select.all	सभी का चयन करें
+@plural	{n} layer recorded by this comp was deleted. Update the comp, or clear the warning.|{n} layers recorded by this comp were deleted. Update the comp, or clear the warning.	इस कॉम्प में दर्ज {n} लेयर हटा दी गई। कॉम्प अपडेट करें या चेतावनी साफ़ करें।|इस कॉम्प में दर्ज {n} लेयर्स हटा दी गईं। कॉम्प अपडेट करें या चेतावनी साफ़ करें।
+@plural	{n} Layer|{n} Layers	{n} लेयर|{n} लेयर्स
+@plural	{n} plane|{n} planes	{n} प्लेन|{n} प्लेन
+@plural	{n} preset|{n} presets	{n} प्रीसेट|{n} प्रीसेट्स
+@plural	{n} sample point removed|{n} sample points removed	{n} सैंपल पॉइंट हटाया गया|{n} सैंपल पॉइंट हटाए गए
+@plural	{n} sample|{n} samples	{n} नमूना|{n} नमूने
+@plural	{n} slice|{n} slices	{n} स्लाइस|{n} स्लाइस
+@plural	{n} step with no Photoshop equivalent left out|{n} steps with no Photoshop equivalent left out	Photoshop में समकक्ष न होने वाला {n} चरण छोड़ा गया|Photoshop में समकक्ष न होने वाले {n} चरण छोड़े गए
+@plural	{n} step|{n} steps	{n} चरण|{n} चरण
+@plural	{warning} (+{n} more brush preset warning)|{warning} (+{n} more brush preset warnings)	{warning} (+{n} और ब्रश प्रीसेट चेतावनी)|{warning} (+{n} और ब्रश प्रीसेट चेतावनियाँ)
+@plural	{what} with {n} warning|{what} with {n} warnings	{n} चेतावनी के साथ {what}|{n} चेतावनियों के साथ {what}
+@plural	{what}: {n} Image Assets output failed|{what}: {n} Image Assets outputs failed	{what}: {n} इमेज एसेट्स आउटपुट विफल रहा|{what}: {n} इमेज एसेट्स आउटपुट विफल रहे
+@plural	Exported {n} style to {file}|Exported {n} styles to {file}	{file} में {n} स्टाइल एक्सपोर्ट किया गया|{file} में {n} स्टाइल्स एक्सपोर्ट किए गए
+@plural	Exported {n} swatch to {file}|Exported {n} swatches to {file}	{file} में {n} स्वॉच एक्सपोर्ट किया गया|{file} में {n} स्वॉचेस एक्सपोर्ट किए गए
+@plural	Group · {n} layer|Group · {n} layers	समूह · {n} लेयर|समूह · {n} लेयर्स
+@plural	Imported {n} brush from {file}|Imported {n} brushes from {file}	{file} से {n} ब्रश इम्पोर्ट किया गया|{file} से {n} ब्रश इम्पोर्ट किए गए
+@plural	Imported {n} brush from {group}|Imported {n} brushes from {group}	{group} से {n} ब्रश इम्पोर्ट किया गया|{group} से {n} ब्रश इम्पोर्ट किए गए
+@plural	Imported {n} gradient from {file}|Imported {n} gradients from {file}	{file} से {n} ग्रेडिएंट इम्पोर्ट किया गया|{file} से {n} ग्रेडिएंट्स इम्पोर्ट किए गए
+@plural	Imported {n} pattern from {file}|Imported {n} patterns from {file}	{file} से {n} पैटर्न इम्पोर्ट किया गया|{file} से {n} पैटर्न्स इम्पोर्ट किए गए
+@plural	Imported {n} style from {file}|Imported {n} styles from {file}	{file} से {n} स्टाइल इम्पोर्ट किया गया|{file} से {n} स्टाइल्स इम्पोर्ट किए गए
+@plural	Imported {n} swatch from {file}|Imported {n} swatches from {file}	{file} से {n} स्वॉच इम्पोर्ट किया गया|{file} से {n} स्वॉचेस इम्पोर्ट किए गए
+@plural	Loaded {n} action from {file}|Loaded {n} actions from {file}	{file} से {n} एक्शन लोड किया गया|{file} से {n} एक्शन्स लोड किए गए
+@plural	Played {n} step|Played {n} steps	{n} चरण चलाया गया|{n} चरण चलाए गए
+@plural	Saved {n} action to {file}|Saved {n} actions to {file}	{file} में {n} एक्शन सहेजा गया|{file} में {n} एक्शन्स सहेजे गए
+@plural	Saved {n} color to {file}|Saved {n} colors to {file}	{file} में {n} रंग सहेजा गया|{file} में {n} रंग सहेजे गए
+@plural	Saved for Web: {n} file|Saved for Web: {n} files	वेब के लिए सहेजा गया: {n} फ़ाइल|वेब के लिए सहेजा गया: {n} फ़ाइलें
+@plural	The brush group “{group}” already has {n} brush of yours.|The brush group “{group}” already has {n} brushes of yours.	ब्रश समूह “{group}” में पहले से आपका {n} ब्रश है।|ब्रश समूह “{group}” में पहले से आपके {n} ब्रश हैं।
+@plural	The gradient group “{group}” already exists ({n} gradient).|The gradient group “{group}” already exists ({n} gradients).	ग्रेडिएंट समूह “{group}” पहले से मौजूद है ({n} ग्रेडिएंट)।|ग्रेडिएंट समूह “{group}” पहले से मौजूद है ({n} ग्रेडिएंट्स)।
+@plural	Updated {n} linked smart object changed on disk|Updated {n} linked smart objects changed on disk	डिस्क पर बदला गया {n} लिंक्ड स्मार्ट ऑब्जेक्ट अपडेट किया गया|डिस्क पर बदले गए {n} लिंक्ड स्मार्ट ऑब्जेक्ट्स अपडेट किए गए
+cameraData	Date Taken	लेने की तारीख
+cameraData	Exposure	एक्सपोज़र
+cameraData	Focal Length	फ़ोकल लंबाई
+cameraData	Focal Length (35 mm)	फ़ोकल लंबाई (35 mm)
+cameraData	F-Stop	F-स्टॉप
+cameraData	ISO Speed	ISO स्पीड
+cameraData	Lens	लेंस
+cameraData	Make	निर्माता
+cameraData	Model	मॉडल
+colorRange	Invert	इन्वर्ट
+curves	Smooth	स्मूथ करें
+document	Orientation	ओरिएंटेशन
+fontWeight	Black	ब्लैक
+fontWeight	Bold	बोल्ड
+fontWeight	ExtraBold	एक्स्ट्रा बोल्ड
+fontWeight	ExtraLight	एक्स्ट्रा लाइट
+fontWeight	Italic	इटैलिक
+fontWeight	Light	लाइट
+fontWeight	Medium	मीडियम
+fontWeight	Regular	रेगुलर
+fontWeight	SemiBold	सेमीबोल्ड
+fontWeight	Thin	थिन
+layerLabel	Magenta	मैजेंटा
+layerLabel	No Color	कोई रंग नहीं
+layerLabel	Red	लाल
+layers	Fill	फ़िल
+layers	Fill:	फ़िल:
+navigator	Zoom	ज़ूम
+shape	Appearance	रूप
+smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded source; format-specific features may change.	AI/PDF/EPS सामग्री SVG के रूप में संपादित की जाएगी। सहेजने पर एम्बेडेड स्रोत बदल जाता है; फ़ॉर्मेट-विशिष्ट सुविधाएँ बदल सकती हैं।
+
+# Merged from main (2026-11-05): start screen, History Brush source, Type › OpenType › Stylistic Sets.
+	Learn	सीखें
+	New file	नई फ़ाइल
+	On your computer	आपके कंप्यूटर पर
+	Website	वेबसाइट
+	Source: {name}	स्रोत: {name}
+	The History Brush source was deleted: set a new source in the History panel	हिस्ट्री ब्रश का स्रोत हटा दिया गया: हिस्ट्री पैनल में नया स्रोत सेट करें
+	Stylistic Sets	स्टाइलिस्टिक सेट्स
+	Set 	सेट 
+	Set 1	सेट 1
+	Set 2	सेट 2
+	Set 3	सेट 3
+	Set 4	सेट 4
+	Set 5	सेट 5
+	Set 6	सेट 6
+	Set 7	सेट 7
+	Set 8	सेट 8
+	Set 9	सेट 9
+	Set 10	सेट 10
+	Set 11	सेट 11
+	Set 12	सेट 12
+	Set 13	सेट 13
+	Set 14	सेट 14
+	Set 15	सेट 15
+	Set 16	सेट 16
+	Set 17	सेट 17
+	Set 18	सेट 18
+	Set 19	सेट 19
+	Set 20	सेट 20
+
 	Toggle reference point	संदर्भ बिंदु दिखाएँ/छिपाएँ
 
 # Action Stop message (#8386)
@@ -645,6 +4723,16 @@ cameraRaw	Yellow	पीला
 	Pause For	इतने समय रुकें
 	seconds	सेकंड
 	Create a single history state	एक ही इतिहास स्थिति बनाएँ
+
+# Merged from main (2026-11-05): canvas background choices.
+	Background (default)	बैकग्राउंड (डिफ़ॉल्ट)
+	Transparent (default)	पारदर्शी (डिफ़ॉल्ट)
+
+# Merged from main (2026-11-06): placing dropped files in the background (#10147).
+	Dropped files weren't placed: too many are waiting for their document.	छोड़ी गई फ़ाइलें नहीं रखी गईं: बहुत सी फ़ाइलें अपने दस्तावेज़ की प्रतीक्षा कर रही हैं।
+	Dropped files weren't placed: their document was closed.	छोड़ी गई फ़ाइलें नहीं रखी गईं: उनका दस्तावेज़ बंद कर दिया गया।
+	A file is still being placed; try again when it has finished.	एक फ़ाइल अभी रखी जा रही है; उसके पूरा होने पर फिर से प्रयास करें।
+	Cancelled placing {name}	{name} रखना रद्द किया गया
 
 # Channels panel menu (#11451)
 	New Channel…	नया चैनल…

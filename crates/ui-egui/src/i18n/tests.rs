@@ -18,6 +18,16 @@ fn hindi_tags_resolve() {
     assert_eq!(Lang::from_pref("HI"), HI());
 }
 
+/// Hindi takes the singular for 0 and 1 (CLDR `one`: i = 0 or n = 1).
+#[test]
+fn hindi_pluralises_zero_and_one_as_singular() {
+    let forms: Vec<usize> = [0, 1, 2, 5, 100, u64::MAX].into_iter().map(HI().0.plural).collect();
+    assert_eq!(forms, [0, 0, 1, 1, 1, 1]);
+    assert_eq!(trn(HI(), 0, "{n} layer", "{n} layers"), "0 लेयर");
+    assert_eq!(trn(HI(), 1, "{n} layer", "{n} layers"), "1 लेयर");
+    assert_eq!(trn(HI(), 3, "{n} layer", "{n} layers"), "3 लेयर्स");
+}
+
 #[test]
 fn indonesian_tags_resolve() {
     for tag in ["id", "id-ID", "id_ID", "id_ID.UTF-8"] {
