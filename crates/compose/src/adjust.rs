@@ -438,6 +438,16 @@ mod lookup_tests {
         for v in o {
             assert!((v - 32.0).abs() <= 1.5, "{o:?}");
         }
+        // The Blacks range on its own, isolated: the grey sweep above sets Whites, Neutrals
+        // and Blacks together and checks only that the channels stay equal, so it would pass
+        // even if adj[8][3] were ignored. Grey 64 sits about half in Blacks (weight 0.498),
+        // and Black +50 there darkens it to 32 on every channel, like the Neutrals case.
+        let mut b = [[0.0f32; 4]; 9];
+        b[8][3] = 50.0;
+        let o = selective_color([64.0 / 255.0; 3], false, &b).map(|v| v * 255.0);
+        for v in o {
+            assert!((v - 32.0).abs() <= 1.5, "{o:?}");
+        }
     }
 
     /// Issue #11409, the report's exact chromatic cases: each pure primary and secondary through
@@ -462,9 +472,24 @@ mod lookup_tests {
         }
     }
 
+    /// Relative Black on a nonbinary colour: the pure primaries above are unchanged in
+    /// Relative mode, and would stay unchanged even if Relative Black stopped affecting
+    /// chromatic ranges at all. A nonbinary red (ink on every channel) does move: Reds
+    /// Black +100 shifts each channel by its own ink, so 0.9 -> 0.82 and the 0.1 channels
+    /// are driven to 0.
+    #[test]
+    fn selective_color_relative_black_on_nonbinary_red() {
+        let mut adj = [[0.0f32; 4]; 9];
+        adj[0][3] = 100.0;
+        let got = selective_color([0.9, 0.1, 0.1], true, &adj);
+        for (actual, expected) in got.iter().zip([0.82f32, 0.0, 0.0]) {
+            assert!((*actual - expected).abs() < 1e-6, "{got:?}");
+        }
+    }
+
     /// The retouchers' saturation map built from Selective Color (Absolute; Black +100 on the six
-    /// colour ranges, -100 on Whites, Neutrals and Blacks) pushes saturated colour to black and
-    /// neutrals to white, a black-and-white mask rather than a luminance-preserving desaturation.
+    /// colour ranges, -100 on Whites, Neutrals and Blacks) maps pure red and blue to black and
+    /// mid-grey to white. Mixed colours can remain coloured.
     #[test]
     fn selective_color_saturation_map_recipe() {
         let mut adj = [[0.0f32; 4]; 9];
@@ -474,6 +499,42 @@ mod lookup_tests {
         assert_eq!(selective_color([1.0, 0.0, 0.0], false, &adj), [0.0; 3]);
         assert_eq!(selective_color([0.0, 0.0, 1.0], false, &adj), [0.0; 3]);
         assert_eq!(selective_color([128.0 / 255.0; 3], false, &adj), [1.0; 3]);
+        // A mixed colour stays coloured under the recipe, not monochrome: this pins that
+        // the recipe is not a grayscale conversion, which the three assertions above
+        // alone would also satisfy.
+        let mixed = selective_color([0.9, 0.8, 0.7], false, &adj);
+        let expected = [0.86, 0.92, 0.98];
+        for i in 0..3 {
+            assert!((mixed[i] - expected[i]).abs() < 1e-5, "{mixed:?}");
+        }
+    }
+
+    /// The #11409 reporter's exact recipe, pinned separately from the characterizations
+    /// above (raised in review on PR #11644): Absolute mode, Black -100 on all six
+    /// chromatic ranges and +100 on Whites, Neutrals and Blacks, applied together.
+    /// This pins THIS engine's outputs for that matrix — near-neutral results with
+    /// small residual chroma on some inputs. Photoshop's outputs for the same matrix
+    /// are unmeasured, so this is a characterization, not a parity claim.
+    #[test]
+    fn selective_color_reporter_matrix_from_11409() {
+        let mut adj = [[0.0f32; 4]; 9];
+        for (r, row) in adj.iter_mut().enumerate() {
+            row[3] = if r < 6 { -100.0 } else { 100.0 };
+        }
+        let approx = |c: [f32; 3], expected: [f32; 3]| {
+            let got = selective_color(c, false, &adj);
+            for i in 0..3 {
+                assert!((got[i] - expected[i]).abs() < 1e-5, "{c:?} -> {got:?}");
+            }
+        };
+        // Exact neutral landings.
+        assert_eq!(selective_color([1.0, 0.0, 0.0], false, &adj), [1.0; 3]);
+        assert_eq!(selective_color([0.25, 0.5, 0.75], false, &adj), [0.5; 3]);
+        assert_eq!(selective_color([128.0 / 255.0; 3], false, &adj), [0.0; 3]);
+        approx([0.9, 0.1, 0.1], [0.86; 3]);
+        // Residual chroma remains: the channels converge but do not meet.
+        approx([0.9, 0.8, 0.7], [0.14, 0.08, 0.02]);
+        approx([0.2, 0.6, 0.3], [0.36, 0.32, 0.34]);
     }
 
     #[test]
