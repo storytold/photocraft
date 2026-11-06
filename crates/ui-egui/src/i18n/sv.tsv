@@ -84,6 +84,7 @@
 	Right	Höger
 	Open Recent	Öppna senaste
 	Clear Recent Files	Rensa senaste filer
+	Clear Recent File List	Rensa senaste filer
 	Remove from Recent	Ta bort från senaste
 	Remove {name} from Recent	Ta bort {name} från senaste
 	Close	Stäng
@@ -92,6 +93,10 @@
 	Restore	Återställ
 	Close All	Stäng alla
 	Close Others	Stäng övriga
+	New Document…	Nytt dokument…
+	Open Document…	Öppna…
+	Consolidate All to Here	Samla alla här
+	Move to New Window	Flytta till nytt fönster
 	Save	Spara
 	Save As…	Spara som…
 	Save a Copy…	Spara en kopia…
@@ -506,7 +511,6 @@
 	Match Location	Matcha plats
 	Match Rotation	Matcha rotation
 	Match All	Matcha alla
-	New Window for Document	Nytt fönster för dokument
 	Workspace	Arbetsyta
 	Extensions	Tillägg
 	Panels	Paneler
@@ -684,6 +688,7 @@
 	Units & Rulers…	Enheter och linjaler…
 	Guides, Grid & Slices…	Stödlinjer, rutnät och skivor…
 	Plug-ins…	Plugin-program…
+	Plugins…	Plugin-program…
 	Technology Previews	Teknikförhandsgranskningar
 	Scratch Disks…	Arbetsdiskar…
 	Export Preferences…	Exportinställningar…
@@ -918,8 +923,8 @@
 	ACES	ACES
 	Industry Standard	Branschstandard
 	Web	Webb
-	Internet Standard RGB	Internetstandard-RGB
-	Legacy Macintosh RGB	Äldre Macintosh RGB
+	Internet Standard RGB (sRGB)	Internetstandard-RGB (sRGB)
+	Legacy Macintosh RGB (Gamma 1.8)	Äldre Macintosh RGB (Gamma 1.8)
 	Monitor RGB	Bildskärms-RGB
 	Windows LCD	Windows LCD
 	Coated CMYK	Bestruket CMYK
@@ -1740,6 +1745,7 @@
 	Saved	Sparat
 	Reveal in Finder	Visa i Finder
 	Show in Explorer	Visa i Utforskaren
+	Reveal in Explorer	Visa i Utforskaren
 	Show in Folder	Visa i mapp
 	Before (Y)	Före (Y)
 	Save Settings…	Spara inställningar…
@@ -1919,6 +1925,8 @@
 	Combine Shapes	Kombinera former
 	Contract…	Dra ihop…
 	Convert to Embedded	Konvertera till inbäddat
+	Embed Linked	Bädda in länkat
+	Embed All Linked	Bädda in alla länkade
 	Convert to Layers	Konvertera till lager
 	Convert to Linked…	Konvertera till länkat…
 	Count	Antal
@@ -2006,6 +2014,7 @@
 	Pixelate	Pixla
 	Place Scale Marker…	Placera skalmarkör…
 	Plug-ins	Plugin-program
+	Plugins	Plugin-program
 	Print One Copy	Skriv ut en kopia
 	Print…	Skriv ut…
 	Range	Intervall
@@ -2050,7 +2059,7 @@
 	Vertical Centers	Lodräta mittpunkter
 	Video Frames to Layers…	Videobildrutor till lager…
 	WIA Support…	WIA-stöd…
-	Working CMY Plate	CMY-arbetsplåt
+	Working CMY Plates	CMY-arbetsplåt
 
 # tl! literals (third pass)
 	Absolute	Absolut
@@ -2336,6 +2345,11 @@
 	Show canvas dots	Visa punkter på arbetsytan
 	Clip thumbnails to layer bounds	Begränsa miniatyrer till lagergränser
 	Clip Thumbnails to Layer Bounds	Begränsa miniatyrer till lagergränser
+	No Thumbnails	Inga miniatyrer
+	Small Thumbnails	Små miniatyrer
+	Medium Thumbnails	Medelstora miniatyrer
+	Large Thumbnails	Stora miniatyrer
+	Clip Thumbnails to Document Bounds	Begränsa miniatyrer till dokumentgränser
 	Canvas color	Arbetsytans färg
 	Canvas custom color	Anpassad färg för arbetsytan
 	Classic	Klassisk

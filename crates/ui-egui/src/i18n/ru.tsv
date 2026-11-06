@@ -272,6 +272,7 @@
 	Right	Правый
 	Open Recent	Открыть недавние
 	Clear Recent Files	Очистить список недавних файлов
+	Clear Recent File List	Очистить список недавних файлов
 	Remove from Recent	Удалить из недавних
 	Remove {name} from Recent	Удалить {name} из недавних
 	Close	Закрыть
@@ -280,6 +281,10 @@
 	Restore	Свернуть в окно
 	Close All	Закрыть все
 	Close Others	Закрыть остальные
+	New Document…	Новый документ…
+	Open Document…	Открыть…
+	Consolidate All to Here	Объединить всё здесь
+	Move to New Window	Переместить в новое окно
 	Save	Сохранить
 	Save As…	Сохранить как…
 	Save a Copy…	Сохранить копию…
@@ -676,7 +681,6 @@
 	Match Location	Согласовать положение
 	Match Rotation	Согласовать поворот
 	Match All	Согласовать всё
-	New Window for Document	Новое окно документа
 	Workspace	Рабочая среда
 	Extensions	Расширения
 	Panels	Панели
@@ -846,6 +850,7 @@
 	Units & Rulers…	Единицы и линейки…
 	Guides, Grid & Slices…	Направляющие, сетка и фрагменты…
 	Plug-ins…	Плагины…
+	Plugins…	Плагины…
 	Technology Previews	Предпросмотр технологий
 	Scratch Disks…	Рабочие диски…
 	Export Preferences…	Экспорт настроек…
@@ -1068,8 +1073,8 @@
 	ACES	ACES
 	Industry Standard	Отраслевой стандарт
 	Web	Web
-	Internet Standard RGB	Стандартный RGB для Интернета
-	Legacy Macintosh RGB	Устаревший RGB Macintosh
+	Internet Standard RGB (sRGB)	Стандартный RGB для Интернета (sRGB)
+	Legacy Macintosh RGB (Gamma 1.8)	Устаревший RGB Macintosh (Gamma 1.8)
 	Monitor RGB	Монитор RGB
 	Windows LCD	Windows LCD
 	Coated CMYK	Мелованная бумага CMYK
@@ -1853,6 +1858,7 @@
 	Saved	Сохранено
 	Reveal in Finder	Показать в Finder
 	Show in Explorer	Показать в Проводнике
+	Reveal in Explorer	Показать в Проводнике
 	Show in Folder	Показать в папке
 	Before (Y)	До (Y)
 	Save Settings…	Сохранить настройки…
@@ -2018,6 +2024,8 @@
 	Combine Shapes	Комбинировать фигуры
 	Contract…	Сжать…
 	Convert to Embedded	Преобразовать во встроенный
+	Embed Linked	Встроить связанный
+	Embed All Linked	Встроить все связанные
 	Convert to Layers	Преобразовать в слои
 	Convert to Linked…	Преобразовать в связанный…
 	Count	Счёт
@@ -2106,6 +2114,7 @@
 	Pixelate	Оформление пикселями
 	Place Scale Marker…	Шкала масштаба…
 	Plug-ins	Плагины
+	Plugins	Плагины
 	Print One Copy	Печать одной копии
 	Print…	Печать…
 	Range	Диапазон
@@ -2150,7 +2159,7 @@
 	Vertical Centers	Центры по вертикали
 	Video Frames to Layers…	Видеокадры в слои…
 	WIA Support…	Поддержка WIA…
-	Working CMY Plate	Рабочая голубая форма
+	Working CMY Plates	Рабочая голубая форма
 	Absolute	Абсолютный
 	Action	Операция
 	Adaptive	Адаптивный
@@ -2431,6 +2440,11 @@
 	Show canvas dots	Показывать точки холста
 	Clip thumbnails to layer bounds	Обрезать миниатюры по границам слоя
 	Clip Thumbnails to Layer Bounds	Обрезать миниатюры по границам слоя
+	No Thumbnails	Без миниатюр
+	Small Thumbnails	Мелкие миниатюры
+	Medium Thumbnails	Средние миниатюры
+	Large Thumbnails	Крупные миниатюры
+	Clip Thumbnails to Document Bounds	Обрезать миниатюры по границам документа
 	Canvas color	Цвет холста
 	Canvas custom color	Свой цвет холста
 	Classic	Классическая
