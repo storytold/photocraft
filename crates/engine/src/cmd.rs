@@ -199,7 +199,12 @@ pub fn list_entry(s: &Session, c: &CommandSpec, reason: Option<String>) -> Value
 /// options it stands for (#5060). `select.rect` is also the Elliptical and Single Row/Column
 /// Marquee, which an agent searches for as "ellipse" or "marquee".
 pub(crate) const SEARCH_KEYWORDS: &[(&str, &str)] =
-    &[("select.rect", "Rectangular Marquee, Elliptical Marquee (\"ellipse\":true), ellipse, oval, circle, Single Row/Column Marquee (\"line\")")];
+    &[
+        ("select.rect", "Rectangular Marquee, Elliptical Marquee (\"ellipse\":true), ellipse, oval, circle, Single Row/Column Marquee (\"line\")"),
+        // The label was "Reorder Layer" until it became "Move Layer to Target" (#11424);
+        // the command-list filter must still find the command as "reorder".
+        ("layer.moveTo", "reorder"),
+    ];
 
 /// [`SEARCH_KEYWORDS`] of command `id`, if it has any.
 pub fn search_keywords(id: &str) -> Option<&'static str> {
