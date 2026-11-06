@@ -37,6 +37,29 @@ fn fill_channels_match_allocating_pixel_conversion() {
 }
 
 #[test]
+fn failed_mask_channels_preserve_original_errors() {
+    use photocraft_psd::PsdError;
+    for sample in SampleType::ALL {
+        let mut doc = document(1, 1);
+        doc.depth = sample;
+        let mut layer = Layer::raster("masked", doc.pixel_format());
+        let mut mask = LayerMask::hide_all();
+        mask.surface.fill_rect(doc.bounds(), &[1.0]);
+        layer.mask = Some(mask);
+        doc.layers.push(layer);
+        for force_psb in [false, true] {
+            for error in [PsdError::LimitExceeded("mask size"), PsdError::OutOfMemory("mask bytes"), PsdError::Invalid("mask data".into())] {
+                let (mut file, _) = document_to_psd_with(&doc, &PsdExportOptions { force_psb, ..Default::default() });
+                *file.layers_mut()[0].channels.iter_mut().find(|c| c.id == -2).unwrap() = failed_mask_channel(error.clone());
+                assert_eq!(file.to_bytes(), Err(error.clone()), "{sample:?} PSB {force_psb}");
+                let streamed = file.write_to(&mut std::io::Cursor::new(Vec::new())).unwrap_err();
+                assert_eq!(streamed.get_ref().and_then(|e| e.downcast_ref::<PsdError>()), Some(&error));
+            }
+        }
+    }
+}
+
+#[test]
 fn oversized_sparse_mask_fails_export_without_allocating_its_dense_rectangle() {
     let mut doc = document(1, 1);
     let mut layer = Layer::raster("masked", doc.pixel_format());
@@ -47,7 +70,7 @@ fn oversized_sparse_mask_fails_export_without_allocating_its_dense_rectangle() {
     }
     layer.mask = Some(mask);
     doc.layers.push(layer);
-    assert!(document_to_psd(&doc).to_bytes().is_err());
+    assert!(matches!(document_to_psd(&doc).to_bytes(), Err(photocraft_psd::PsdError::LimitExceeded(_))));
     assert!(crate::export(&doc, "psd", &Default::default()).is_err());
 }
 
