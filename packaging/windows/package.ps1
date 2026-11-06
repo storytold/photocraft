@@ -55,6 +55,23 @@ New-Item -ItemType Directory -Force -Path $Dist | Out-Null
 if (-not $env:PHOTOCRAFT_BUILD_SHA) { $env:PHOTOCRAFT_BUILD_SHA = (git -C $Root rev-parse HEAD 2>$null) }
 if (-not $env:PHOTOCRAFT_BUILD_DATE) { $env:PHOTOCRAFT_BUILD_DATE = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd') }
 
+# PDF import loads PDFium at runtime. Stage the Windows build's DLL before cargo, so the app's
+# build script copies it beside the exe and both the MSI and the portable ZIP ship it.
+$PdfiumDir = Join-Path $Root "target\pdfium\$Arch"
+$PdfiumDll = Join-Path $PdfiumDir 'pdfium.dll'
+if (-not (Test-Path -LiteralPath $PdfiumDll)) {
+  $tgz = Join-Path $env:TEMP "pdfium-win-$Arch.tgz"
+  Invoke-Native "download PDFium ($Arch)" {
+    Invoke-WebRequest -Uri "https://github.com/bblanchon/pdfium-binaries/releases/latest/download/pdfium-win-$Arch.tgz" -OutFile $tgz
+    New-Item -ItemType Directory -Force -Path $PdfiumDir | Out-Null
+    tar -xzf $tgz -C $PdfiumDir
+    $extracted = Join-Path $PdfiumDir 'bin\pdfium.dll'
+    if (-not (Test-Path -LiteralPath $extracted)) { throw 'PDFium archive had no bin/pdfium.dll' }
+    Move-Item -Force $extracted $PdfiumDll
+  }
+}
+$env:PDFIUM_DLL = $PdfiumDll
+
 Write-Output "PhotoCraft $Version for Windows $Arch ($Target)"
 
 if (-not $SkipBuild) {
@@ -89,6 +106,7 @@ $Stage = Join-Path $TargetDir "windows-package\$Arch"
 Remove-Item -Recurse -Force $Stage -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $Stage | Out-Null
 Copy-Item (Join-Path $Bin 'photocraft.exe'), (Join-Path $Bin 'photocraft-cli.exe') $Stage
+Copy-Item -LiteralPath $PdfiumDll -Destination $Stage
 
 & (Join-Path $PSScriptRoot 'sign.ps1') (Join-Path $Stage 'photocraft.exe') (Join-Path $Stage 'photocraft-cli.exe')
 
@@ -171,6 +189,7 @@ $Portable = Join-Path $TargetDir "windows-package\photocraft-$Version-windows-$A
 Remove-Item -Recurse -Force $Portable -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $Portable | Out-Null
 Copy-Item (Join-Path $Stage '*.exe') $Portable
+Copy-Item -LiteralPath $PdfiumDll -Destination $Portable
 foreach ($f in 'README.md', 'LICENSE', 'LICENSE-MIT', 'LICENSE-APACHE', 'NOTICE', 'ATTRIBUTION.md') {
   $p = Join-Path $Root $f
   if (Test-Path $p) { Copy-Item $p $Portable }
