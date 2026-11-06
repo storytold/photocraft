@@ -43,7 +43,9 @@ impl Session {
         self.active_generation
     }
 
-    /// Count of [`Self::execute`] calls that changed the active document or layer; see the field.
+    /// Change marker: advances at least once whenever the active document or layer changes, by any
+    /// path. Compare two readings for equality to know whether anything changed in between; it is
+    /// not an exact count of operations.
     pub fn active_layer_changes(&self) -> u64 {
         self.active_layer_changes
     }

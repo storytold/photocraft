@@ -216,11 +216,12 @@ pub struct Session {
     active_generation: u64,
     /// The document id [`Self::active_generation`] was last bumped for.
     active_doc_for_generation: Option<photocraft_doc::DocId>,
-    /// Counts the changes of the active document or layer made through the `Session` API: commands
-    /// (`execute`, `start`, finished jobs), `select_layer`, `restore_layer_selection`,
-    /// `layer_multi_cmds::set_selection`, `set_active_layer`, undo / redo / rollback, and document
-    /// switches. A caller that remembers how a change came about compares it to see that nothing
-    /// changed the active layer since. (Writing `DocState::active_layer` directly bypasses it.)
+    /// Change marker: advances at least once whenever the active document or layer changes through
+    /// the `Session` API (commands via `execute`, `start` and finished jobs, `select_layer`,
+    /// `restore_layer_selection`, `layer_multi_cmds::set_selection`, `set_active_layer`, undo / redo /
+    /// rollback, document switches). Compare two readings for equality to know whether anything
+    /// changed in between; it is not an exact count of operations (one operation may advance it
+    /// more than once). Writing `DocState::active_layer` directly bypasses it.
     active_layer_changes: u64,
     pub tools: ToolState,
     /// Log of executed commands (for action recording and debugging).

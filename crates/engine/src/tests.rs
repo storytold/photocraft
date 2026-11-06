@@ -2031,3 +2031,14 @@ fn direct_selection_calls_count_active_layer_changes_only_when_the_layer_changes
     s.set_active_layer(Some(b));
     assert_eq!(count(&s), n + 4, "set_active_layer of another layer");
 }
+
+#[test]
+fn the_active_layer_marker_advances_for_a_new_document_and_not_for_a_same_layer_select() {
+    let mut s = session_with_doc();
+    let before = s.active_layer_changes();
+    let id = s.active().unwrap().active_layer.unwrap();
+    s.select_layer(id).unwrap();
+    assert_eq!(s.active_layer_changes(), before, "re-selecting the active layer leaves the marker alone");
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    assert!(s.active_layer_changes() > before, "a new active document advances the marker");
+}
