@@ -280,11 +280,17 @@ pub struct Surface {
     default_pixel: Box<[u8]>,
     /// The tiles, unless `lazy` holds them.
     ready: BTreeMap<TileCoord, Arc<Tile>>,
-    /// Tiles decoded on first use (see [`Surface::lazy`]); shared by clones, so they decode once.
-    lazy: Option<Arc<LazyTiles>>,
-    /// Why a lazy decode failed, kept once the surface holds its own (empty) tiles, and carried
-    /// to surfaces made from it (moved, converted): a save must still refuse it.
-    decode_error: Option<Arc<str>>,
+    /// Tiles decoded on first use (see [`Surface::lazy`]), shared by clones so they decode once;
+    /// or why such a decode failed, kept once the surface holds its own (empty) tiles and carried
+    /// to surfaces made from it (moved, converted): a save must still refuse it. One pointer, so
+    /// every surface (and layer) stays as small as it was.
+    lazy: Option<Arc<LazyState>>,
+}
+
+/// What [`Surface::lazy`] holds.
+enum LazyState {
+    Tiles(LazyTiles),
+    Failed(String),
 }
 
 /// Use stack storage when it fits, otherwise reuse a dynamically sized sample buffer.
@@ -678,16 +684,32 @@ impl Surface {
             format,
             default_pixel: vec![0u8; format.bytes_per_pixel()].into_boxed_slice(),
             ready: BTreeMap::new(),
-            lazy: Some(Arc::new(lazy)),
-            decode_error: None,
+            lazy: Some(Arc::new(LazyState::Tiles(lazy))),
+        }
+    }
+
+    /// The lazy tiles this surface reads and their shared identity, if any.
+    #[inline]
+    fn lazy_tiles(&self) -> Option<(&Arc<LazyState>, &LazyTiles)> {
+        let state = self.lazy.as_ref()?;
+        match &**state {
+            LazyState::Tiles(l) => Some((state, l)),
+            LazyState::Failed(_) => None,
+        }
+    }
+
+    /// Records that a lazy decode this surface was made from failed (see [`Self::lazy_error`]).
+    fn set_failed(&mut self, error: Option<&str>) {
+        if let Some(e) = error {
+            self.lazy = Some(Arc::new(LazyState::Failed(e.to_string())));
         }
     }
 
     /// The tiles, decoding a lazy surface's first.
     #[inline]
     fn map(&self) -> &BTreeMap<TileCoord, Arc<Tile>> {
-        match &self.lazy {
-            Some(l) => l.force(),
+        match self.lazy_tiles() {
+            Some((_, l)) => l.force(),
             None => &self.ready,
         }
     }
@@ -695,29 +717,32 @@ impl Surface {
     /// The tiles to change, decoding a lazy surface's first (this surface then holds its own).
     #[inline]
     fn map_mut(&mut self) -> &mut BTreeMap<TileCoord, Arc<Tile>> {
-        if let Some(l) = self.lazy.take() {
-            self.ready = l.force().clone();
-            if let Some(Err(e)) = l.tiles.get() {
-                self.decode_error = Some(Arc::from(e.as_str()));
-            }
+        if let Some((_, l)) = self.lazy_tiles() {
+            let tiles = l.force().clone();
+            let failed = match l.tiles.get() {
+                Some(Err(e)) => Some(e.clone()),
+                _ => None,
+            };
+            self.ready = tiles;
+            self.lazy = failed.map(|e| Arc::new(LazyState::Failed(e)));
         }
         &mut self.ready
     }
 
     /// `true` while a [`Self::lazy`] surface has not been decoded.
     pub fn is_pending(&self) -> bool {
-        self.lazy.as_ref().is_some_and(|l| l.tiles.get().is_none())
+        self.lazy_tiles().is_some_and(|(_, l)| l.tiles.get().is_none())
     }
 
     /// Where a pending surface's pixels will be.
     pub fn pending_bounds(&self) -> Option<Rect> {
-        self.lazy.as_ref().filter(|l| l.tiles.get().is_none()).map(|l| l.bounds)
+        self.lazy_tiles().filter(|(_, l)| l.tiles.get().is_none()).map(|(_, l)| l.bounds)
     }
 
     /// Reads pixel `(x, y)` of a pending surface from its reduced preview, without decoding it.
     /// `false` when the surface is not pending or has no preview (`out` is then unchanged).
     pub fn read_preview_pixel(&self, x: i32, y: i32, out: &mut [f32]) -> bool {
-        let Some(l) = self.lazy.as_ref().filter(|l| l.tiles.get().is_none()) else { return false };
+        let Some((_, l)) = self.lazy_tiles().filter(|(_, l)| l.tiles.get().is_none()) else { return false };
         let Some((k, p)) = &l.preview else { return false };
         let k = (*k).max(1) as i32;
         p.read_pixel((x - l.bounds.x0).div_euclid(k), (y - l.bounds.y0).div_euclid(k), out);
@@ -726,20 +751,20 @@ impl Surface {
 
     /// Why a lazy surface's decode failed, once it ran.
     pub fn lazy_error(&self) -> Option<&str> {
-        if let Some(e) = &self.decode_error {
-            return Some(e);
-        }
-        match self.lazy.as_ref()?.tiles.get()? {
-            Err(e) => Some(e),
-            Ok(_) => None,
+        match &**self.lazy.as_ref()? {
+            LazyState::Failed(e) => Some(e),
+            LazyState::Tiles(l) => match l.tiles.get()? {
+                Err(e) => Some(e),
+                Ok(_) => None,
+            },
         }
     }
 
     /// The tiles held now, without decoding a pending surface (which holds none): for memory
     /// accounting.
     pub fn loaded_tiles(&self) -> impl Iterator<Item = (&TileCoord, &Arc<Tile>)> {
-        let map = match &self.lazy {
-            Some(l) => match l.tiles.get() {
+        let map = match self.lazy_tiles() {
+            Some((_, l)) => match l.tiles.get() {
                 Some(Ok(t)) => t,
                 _ => &NO_TILES,
             },
@@ -752,7 +777,7 @@ impl Surface {
     /// or not), which [`Self::lazy_decoded`] counts. A surface's own tiles never change while it
     /// is shared, so counting them is symmetric across History states.
     pub fn owned_tiles(&self) -> impl Iterator<Item = (&TileCoord, &Arc<Tile>)> {
-        match &self.lazy {
+        match self.lazy_tiles() {
             Some(_) => NO_TILES.iter(),
             None => self.ready.iter(),
         }
@@ -761,9 +786,9 @@ impl Surface {
     /// The decoded tiles of a lazy surface (shared by its clones), with an identity for them:
     /// `None` for a surface with tiles of its own or still pending.
     pub fn lazy_decoded(&self) -> Option<(usize, impl Iterator<Item = (&TileCoord, &Arc<Tile>)>)> {
-        let l = self.lazy.as_ref()?;
+        let (state, l) = self.lazy_tiles()?;
         match l.tiles.get()? {
-            Ok(t) => Some((Arc::as_ptr(l) as usize, t.iter())),
+            Ok(t) => Some((Arc::as_ptr(state) as usize, t.iter())),
             Err(_) => None,
         }
     }
@@ -771,18 +796,18 @@ impl Surface {
     /// An identity for the lazy tiles this surface reads (decoded or not; the same for its
     /// clones): `None` once it holds tiles of its own.
     pub fn lazy_identity(&self) -> Option<usize> {
-        self.lazy.as_ref().map(|l| Arc::as_ptr(l) as usize)
+        self.lazy_tiles().map(|(state, _)| Arc::as_ptr(state) as usize)
     }
 
     /// An identity for a pending surface's tiles (the same for its clones), for caches keyed by
     /// content that must not decode it.
     pub fn pending_id(&self) -> Option<usize> {
-        self.lazy.as_ref().filter(|l| l.tiles.get().is_none()).map(|l| Arc::as_ptr(l) as usize)
+        self.lazy_tiles().filter(|(_, l)| l.tiles.get().is_none()).map(|(state, _)| Arc::as_ptr(state) as usize)
     }
 
     /// Transparent/zero surface.
     pub fn new(format: PixelFormat) -> Self {
-        Self { format, default_pixel: vec![0u8; format.bytes_per_pixel()].into_boxed_slice(), ready: BTreeMap::new(), lazy: None, decode_error: None }
+        Self { format, default_pixel: vec![0u8; format.bytes_per_pixel()].into_boxed_slice(), ready: BTreeMap::new(), lazy: None }
     }
 
     /// Surface whose untouched pixels read as `pixel` (normalised channel values).
@@ -1453,12 +1478,12 @@ impl Surface {
     /// `content` must hold every pixel that isn't the default one (`content_bounds`, say): only
     /// tiles it reaches are kept.
     pub fn translated(&self, dx: i32, dy: i32, content: Rect) -> Surface {
-        let mut out = Surface { format: self.format, default_pixel: self.default_pixel.clone(), ready: BTreeMap::new(), lazy: None, decode_error: None };
+        let mut out = Surface { format: self.format, default_pixel: self.default_pixel.clone(), ready: BTreeMap::new(), lazy: None };
         let sources = || self.map().iter().filter(move |(c, _)| !c.rect().intersect(&content).is_empty());
         if dx % TILE_SIZE == 0 && dy % TILE_SIZE == 0 {
             let (tx, ty) = (dx / TILE_SIZE, dy / TILE_SIZE);
             out.ready = sources().map(|(c, t)| (TileCoord::new(c.tx.saturating_add(tx), c.ty.saturating_add(ty)), t.clone())).collect();
-            out.decode_error = self.lazy_error().map(Arc::from);
+            out.set_failed(self.lazy_error());
             return out;
         }
         let bpp = self.format.bytes_per_pixel();
@@ -1608,7 +1633,7 @@ impl Surface {
         {
             out.ready = targets.into_iter().filter_map(build_target).collect();
         }
-        out.decode_error = self.lazy_error().map(Arc::from);
+        out.set_failed(self.lazy_error());
         out
     }
 
@@ -1680,7 +1705,7 @@ impl Surface {
                 done.insert(Arc::as_ptr(t), converted.clone());
             }
         }
-        out.decode_error = self.lazy_error().map(Arc::from);
+        out.set_failed(self.lazy_error());
         out
     }
 
@@ -1715,7 +1740,7 @@ impl Surface {
                 done.insert(Arc::as_ptr(t), converted.clone());
             }
         }
-        out.decode_error = self.lazy_error().map(Arc::from);
+        out.set_failed(self.lazy_error());
         Ok(out)
     }
 
