@@ -7,10 +7,7 @@
 //! eframe's own (`raw_input_hook`, then `logic` and `ui` inside one `run_ui` pass), so the app
 //! can't tell the difference.
 
-#![cfg_attr(
-    not(any(target_os = "ios", target_os = "android")),
-    expect(dead_code, reason = "on the desktop only the unit tests build the host; the native shells call it")
-)]
+#![cfg_attr(not(target_os = "ios"), expect(dead_code, reason = "outside iOS only the unit tests build the host; the Swift shell calls it"))]
 
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};

@@ -11,7 +11,8 @@
 //! Prototype scope: documents are made with File › New. No file pickers yet (the platform
 //! document pickers replace `rfd`), no preference persistence, no control server.
 
-#[cfg(any(target_os = "ios", target_os = "android", test))]
+// Android joins the host when it moves to Compose; until then eframe runs it.
+#[cfg(any(target_os = "ios", test))]
 mod host;
 #[cfg(target_os = "ios")]
 mod ios;
