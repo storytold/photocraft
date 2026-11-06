@@ -1533,12 +1533,12 @@ fn a_missed_undo_release_cant_keep_undoing() {
     h.run_steps(3);
     assert_eq!(past(&h), n, "a fresh ⇧⌘Z still redoes");
     // Other bindings still repeat while held: ⌘= zooms on each repeat.
-    let z0 = zoom(&h);
     for _ in 0..2 {
+        let z0 = zoom(&h);
         h.event(egui::Event::Key { key: Key::Equals, physical_key: None, pressed: true, repeat: true, modifiers: mods });
         h.run_steps(1);
+        assert!(zoom(&h) > z0, "an unrelated repeat still runs");
     }
-    assert!(zoom(&h) > z0, "an unrelated repeat still runs");
     h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
     // A user's configured alternate repeats the same way: ⌥⇧Z on edit.undo undoes once and its
     // stuck-key repeats are dropped like the default binding's.
