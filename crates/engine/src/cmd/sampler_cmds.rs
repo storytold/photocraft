@@ -5,7 +5,8 @@
 //! document, are discarded when it closes, and are not saved to `.pcraft` or PSD. Placing, moving
 //! and removing them changes no pixels and adds no History step, so they are not journaled. Each
 //! point reads one composite pixel (no averaging); its values match the Info panel's pointer
-//! readout (RGB 0–255 and colour-managed CMYK percentages, as in the Color Picker).
+//! readout (RGB 0–255 and CMYK percentages: the document's own inks for a CMYK document, else the
+//! colour-managed conversion of its RGB, as in the Color Picker).
 
 use photocraft_doc::Document;
 use serde_json::{Value, json};
@@ -28,19 +29,59 @@ fn has_doc(s: &Session) -> std::result::Result<(), String> {
 /// Picker uses (`photocraft_color::convert::rgb_to_cmyk`: the CMYK profile active on this thread,
 /// else the built-in coated CMYK), so both panels agree (#8101). 32-bit samples can lie outside
 /// 0..1, so each channel is clamped first (NaN reads as 0), like the RGB readout.
+///
+/// This is the readout for a document whose pixels are *not* CMYK: a CMYK document reports its
+/// own inks through [`cmyk_readout`] instead.
 pub fn device_cmyk(r: f32, g: f32, b: f32) -> [i32; 4] {
     let unit = |v: f32| if v.is_nan() { 0.0 } else { v.clamp(0.0, 1.0) };
     photocraft_color::convert::rgb_to_cmyk([unit(r), unit(g), unit(b)]).map(|v| (unit(v) * 100.0).round() as i32)
 }
 
+/// The CMYK percentages of the sample of `size` (see [`crate::sample_cmds::SAMPLE_SIZES`]) at
+/// document point `pos`, read on the document's own **ink values**: its channels are inks, so a
+/// pure ink reads 100 % of that ink and 0 % of the rest, as Photoshop's Device CMYK readout and
+/// other editors show a CMYK file's pixel.
+///
+/// The reading must not come back from the RGB composite: the profile's CMYK → sRGB → CMYK round
+/// trip is lossy, and reports a pure cyan ink (100/0/0/0) as 73/15/0/0, a pure black as
+/// 18/11/12/91 (#11640).
+///
+/// `None` when `doc` is not a CMYK document, when its layers do not composite on inks
+/// ([`photocraft_compose::cmyk::render_cmyk`]), or when the sampled pixels hold no coverage.
+pub fn ink_cmyk(doc: &Document, pos: [f64; 2], size: u32) -> Option<[i32; 4]> {
+    let rect = crate::sample_cmds::sample_rect(pos[0], pos[1], size, doc.bounds())?;
+    let inks = photocraft_compose::cmyk::render_cmyk(doc, rect)?;
+    // The same alpha-weighted mean over the square as the RGB readout, on ink values.
+    let mut sum = [0.0f64; 4];
+    let mut cover = 0.0f64;
+    for pixel in &inks.px {
+        let a = if pixel[4].is_finite() { pixel[4].clamp(0.0, 1.0) } else { 0.0 };
+        if a <= 0.0 {
+            continue;
+        }
+        for (s, ink) in sum.iter_mut().zip(pixel.iter()) {
+            *s += f64::from(ink.clamp(0.0, 1.0)) * f64::from(a);
+        }
+        cover += f64::from(a);
+    }
+    (cover > 0.0).then(|| sum.map(|s| ((s / cover * 100.0).round().clamp(0.0, 100.0)) as i32))
+}
+
+/// The CMYK percentages to show for a sampled pixel: the document's own inks when it is a CMYK
+/// document (#11640), else the colour-managed conversion of its RGB composite ([`device_cmyk`],
+/// the conversion the Color Picker and the CMYK readouts of other documents use).
+pub fn cmyk_readout(doc: &Document, pos: [f64; 2], size: u32, rgba: [f32; 4]) -> [i32; 4] {
+    ink_cmyk(doc, pos, size)
+        .unwrap_or_else(|| photocraft_color::convert::with_cmyk_space(photocraft_compose::cmyk_space(doc).as_ref(), || device_cmyk(rgba[0], rgba[1], rgba[2])))
+}
+
 /// The Info-panel values for a sample point at document pixel `pos`: composite RGB 0–255 and
-/// colour-managed CMYK percentages (the document's CMYK profile when it has one). One composite
-/// pixel, no averaging.
+/// CMYK percentages (the document's own inks for a CMYK document, its colour-managed CMYK
+/// otherwise). One composite pixel, no averaging.
 pub fn readout(doc: &Document, pos: [f64; 2]) -> ([i32; 3], [i32; 4]) {
     let rgba = crate::sample_cmds::sample_color(doc, None, pos[0], pos[1], 1, crate::sample_cmds::SampleLayers::All);
     let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as i32;
-    let cmyk = photocraft_color::convert::with_cmyk_space(photocraft_compose::cmyk_space(doc).as_ref(), || device_cmyk(rgba[0], rgba[1], rgba[2]));
-    ([q(rgba[0]), q(rgba[1]), q(rgba[2])], cmyk)
+    ([q(rgba[0]), q(rgba[1]), q(rgba[2])], cmyk_readout(doc, pos, 1, rgba))
 }
 
 /// One point as the list command reports it.

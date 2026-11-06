@@ -351,3 +351,81 @@ fn document_helpers_are_not_disturbed() {
     assert_eq!(pixel(&d, 3.9, 3.9), Some([3.0, 3.0]));
     assert_eq!(pixel(&d, 4.0, 0.0), None);
 }
+
+/// The four pure inks, as a CMYK document stores them (ink fractions, 1.0 = 100 %).
+const PURE_INKS: [[f32; 4]; 4] = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
+
+/// A CMYK document of `depth` with one 20×20 square of each pure ink, like the CMYK test chart a
+/// reporter opened in #11640.
+fn ink_chart(depth: u32) -> Session {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 80, "height": 20, "mode": "cmyk", "depth": depth, "background": "white"})).unwrap();
+    s.edit("paint", |doc, _| {
+        let surf = doc.layers[0].surface_mut().unwrap();
+        for (i, ink) in PURE_INKS.iter().enumerate() {
+            surf.fill_rect(Rect::new(i as i32 * 20, 0, (i as i32 + 1) * 20, 20), &[ink[0], ink[1], ink[2], ink[3], 1.0]);
+        }
+        Ok(())
+    })
+    .unwrap();
+    s
+}
+
+/// #11640: a CMYK document's sampled colour is its own ink values, not its RGB composite
+/// re-separated through the profile. Opening a CMYK file of pure C, M, Y and K squares and reading
+/// them back showed 73/15/0/0, 2/99/3/0, 5/1/92/0 and 18/11/12/91 (the lossy sRGB round trip)
+/// where Photoshop and Krita report the pure inks.
+#[test]
+fn a_cmyk_document_reads_its_own_inks() {
+    for depth in [8, 16] {
+        let mut s = ink_chart(depth);
+        for (i, ink) in PURE_INKS.iter().enumerate() {
+            let x = i as i64 * 20 + 10;
+            let r = s.execute("view.colorSamplers.add", json!({"x": x, "y": 10})).unwrap();
+            let want: Vec<i64> = ink.iter().map(|v| (v * 100.0).round() as i64).collect();
+            assert_eq!(r["point"]["cmyk"], json!(want), "depth {depth}, square {i}");
+        }
+    }
+}
+
+/// The ink readout averages on ink values, so a flat area reads the same at every Sample Size
+/// that stays inside the square (larger ones are clipped to the canvas and mix neighbours).
+#[test]
+fn a_cmyk_ink_readout_averages_on_inks() {
+    let s = ink_chart(8);
+    let doc = &s.active().unwrap().doc;
+    for size in [1, 3, 5, 11] {
+        assert_eq!(ink_cmyk(doc, [10.5, 10.5], size), Some([100, 0, 0, 0]), "size {size}");
+    }
+    // Off the canvas and an unknown size read no ink.
+    assert_eq!(ink_cmyk(doc, [900.0, 10.0], 1), None);
+    assert_eq!(ink_cmyk(doc, [10.0, 10.0], 7), None);
+}
+
+/// Only a CMYK document has inks to read: an RGB document keeps the colour-managed conversion of
+/// its composite (#8101), so the readout of its CMYK row is unchanged.
+#[test]
+fn an_rgb_document_keeps_the_converted_cmyk_readout() {
+    let mut s = session();
+    assert_eq!(ink_cmyk(&s.active().unwrap().doc, [50.0, 40.0], 1), None, "an RGB document has no ink composite");
+    let r = s.execute("view.colorSamplers.add", json!({"x": 50, "y": 40})).unwrap();
+    assert_eq!(r["point"]["cmyk"], json!(device_cmyk(1.0, 1.0, 1.0)));
+}
+
+/// A CMYK document the ink compositor declines (a non-separable blend mode) still reads in range
+/// through the RGB conversion, with no crash.
+#[test]
+fn a_cmyk_document_without_an_ink_composite_falls_back() {
+    let mut s = ink_chart(8);
+    s.edit("paint", |doc, _| {
+        doc.layers[0].blend = photocraft_color::BlendMode::Hue;
+        Ok(())
+    })
+    .unwrap();
+    let doc = &s.active().unwrap().doc;
+    assert_eq!(ink_cmyk(doc, [10.5, 10.5], 1), None, "the ink path is declined");
+    let c = cmyk_readout(doc, [10.5, 10.5], 1, [0.0, 0.62, 0.89, 1.0]);
+    assert!(c.iter().all(|v| (0..=100).contains(v)), "{c:?}");
+    // A sample with no coverage keeps the reading it had before.
+    assert_eq!(cmyk_readout(doc, [10.5, 10.5], 1, [0.0, 0.0, 0.0, 0.0]), device_cmyk(0.0, 0.0, 0.0));
+}
