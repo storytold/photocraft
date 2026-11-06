@@ -215,7 +215,6 @@ fn packed_orfs_develop_and_survive_native_save_and_16_bit_export() {
             current = back;
         }
     }
-
 }
 
 /// A NEF-like file with Nikon's (undocumented) compression and a full-size

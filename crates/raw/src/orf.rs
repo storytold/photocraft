@@ -6,8 +6,12 @@
 //! significant, ten little-endian 12-bit samples followed by one zero byte
 //! per 16-byte block, 12-bit samples in little-endian 32-bit words (XZ-2),
 //! or two fields of MSB-first 12-bit samples separated by a gap.
-//! The packed layouts are described in LightCraft PRs #651 / #600 and
-//! independently checked here against CC0 camera files. The CFA
+//! The packed-layout descriptions are attributed to
+//! [LightCraft #651](https://github.com/storytold/lightcraft/pull/651) and
+//! [LightCraft #600](https://github.com/storytold/lightcraft/pull/600).
+//! Their provenance claims and unresolved evidence are documented in this
+//! crate's README ("Packed ORF provenance review"). Correctness checks against
+//! CC0 camera files do not establish historical source independence. The CFA
 //! comes from the EXIF CFAPattern. Levels come from the publicly documented
 //! Olympus maker-note ImageProcessing tags (ExifTool's Olympus table):
 //! WB_RBLevels (0x0100), WB_GLevel (0x011F), BlackLevel2 (0x0600), ValidBits
@@ -210,7 +214,7 @@ fn read_padded12(t: &Tiff, raw: &Ifd, limits: &Limits, width: u64, height: u64, 
             data.push(u16::from(b >> 4) | (u16::from(c) << 4));
         }
     }
-    Ok(Plane { width: width as usize, height: height as usize, samples: 1, bits: 12, data })
+    Ok(Plane { width: width as usize, height: height as usize, samples: 1, bits: 12, data, float_scale: None })
 }
 
 /// The two-field layout observed in old Olympus compacts and described in
@@ -282,7 +286,7 @@ fn read_two_field12(t: &Tiff, raw: &Ifd, limits: &Limits, width: u64, height: u6
             stored_row += 1;
         }
     }
-    Ok(Plane { width, height, samples: 1, bits: 12, data })
+    Ok(Plane { width, height, samples: 1, bits: 12, data, float_scale: None })
 }
 
 /// XZ-2: one exact 12-bit strip, MSB-first samples in little-endian 32-bit words.
@@ -313,5 +317,5 @@ fn read_word_packed12(t: &Tiff, raw: &Ifd, limits: &Limits, width: u64, height: 
         }
         buffer &= (1u64 << bits) - 1;
     }
-    Ok(Plane { width: width as usize, height: height as usize, samples: 1, bits: 12, data })
+    Ok(Plane { width: width as usize, height: height as usize, samples: 1, bits: 12, data, float_scale: None })
 }

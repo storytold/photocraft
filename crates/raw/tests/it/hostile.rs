@@ -2,7 +2,8 @@
 //! never allocate beyond the limits.
 
 use photocraft_raw::testgen::{
-    Cr2Spec, DngSpec, DngStorage, RafPacking, RafSpec, Val, XTRANS, mosaic, mosaic_cfa, nef_compressed, orf, orf_padded12, orf_two_field12, orf_word_packed12, rw2, scene, sony_craw, tiff_ep,
+    Cr2Spec, DngSpec, DngStorage, RafPacking, RafSpec, Val, XTRANS, mosaic, mosaic_cfa, nef_compressed, orf, orf_padded12, orf_two_field12, orf_word_packed12,
+    rw2, scene, sony_craw, tiff_ep,
 };
 use photocraft_raw::*;
 
