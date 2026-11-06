@@ -1051,19 +1051,19 @@ fn a_wrongly_typed_section_or_colour_setting_resets_only_that_part() {
 }
 
 /// A saved Memory Usage is kept as stored, and means the same on desktop; only the web build
-/// caps what it honours.
+/// caps what it honours (and History, the machine's memory: `history_budget_stays_within_the_machine`).
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn the_history_budget_is_the_stored_memory_usage_on_native() {
     for mb in [0u32, 1, 1536, 8192, 65536, u32::MAX] {
         let p = Performance { memory_usage_mb: mb, ..Performance::default() };
         assert_eq!(p.effective_memory_usage_mb(), mb);
-        assert_eq!(p.history_budget_bytes(), (mb as usize) << 20, "{mb} MB");
+        assert_eq!(p.history_budget_for(None), (mb as usize) << 20, "{mb} MB");
     }
     let mut s = Session::new();
     s.load_prefs_json(r#"{"performance": {"memoryUsageMb": 8192}}"#).unwrap();
     assert_eq!(s.prefs().performance.memory_usage_mb, 8192);
-    assert_eq!(s.prefs().performance.history_budget_bytes(), 8192 << 20);
+    assert_eq!(s.prefs().performance.history_budget_for(None), 8192 << 20);
 }
 
 /// The web build honours Memory Usage up to its cap: below and at it as stored, above it the cap.
@@ -1151,4 +1151,19 @@ fn an_effect_cache_above_the_cap_loads_clamped_and_does_not_block_apply() {
         s.execute("prefs.set", json!({"path": "", "value": values})).unwrap();
         assert_eq!(s.execute("prefs.get", json!({"path": "fileHandling.recentFileCount"})).unwrap(), json!(7), "{saved} MB");
     }
+}
+
+/// History is capped at 70 % of the machine's memory: the 8 GB default holds on a 16 GB
+/// machine, an 8 GB one gets 5.6 GB, and an unknown machine the preference as set.
+#[test]
+fn history_budget_stays_within_the_machine() {
+    let p = Performance::default();
+    let gib = 1u64 << 30;
+    let pref = (p.effective_memory_usage_mb() as usize) << 20;
+    assert_eq!(p.history_budget_for(None), pref);
+    assert_eq!(p.history_budget_for(Some(0)), pref);
+    assert_eq!(p.history_budget_for(Some(64 * gib)), pref);
+    assert_eq!(p.history_budget_for(Some(8 * gib)), pref.min((8 * gib / 10 * 7) as usize));
+    let small = Performance { memory_usage_mb: 1024, ..Performance::default() };
+    assert_eq!(small.history_budget_for(Some(8 * gib)), 1024 << 20);
 }
