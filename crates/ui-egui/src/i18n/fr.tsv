@@ -736,7 +736,7 @@
 	Working Magenta Plate	Plaque magenta de travail
 	Working Yellow Plate	Plaque jaune de travail
 	Working Black Plate	Plaque noire de travail
-	Working CMY Plates	Plaque CMJ de travail
+	Working CMY Plates	Plaques CMJ de travail
 	Legacy Macintosh RGB (Gamma 1.8)	RVB Macintosh (ancien) (Gamma 1.8)
 	Internet Standard RGB (sRGB)	RVB standard d'Internet (sRGB)
 	Monitor RGB	RVB du moniteur
@@ -891,6 +891,12 @@
 	Timeline	Montage
 	Tool Presets	Préréglages d'outils
 	Tools	Outils
+	Contextual Task Bar	Barre des tâches contextuelle
+	Hide bar	Masquer la barre
+	Reset bar position	Réinitialiser la position de la barre
+	Pin bar position	Épingler la position de la barre
+	Move bar	Déplacer la barre
+	More options	Plus d'options
 	About PhotoCraft	À propos de PhotoCraft
 	PhotoCraft Website	Site web de PhotoCraft
 	PhotoCraft on GitHub	PhotoCraft sur GitHub
@@ -2110,7 +2116,6 @@
 	Show only crosshair while painting	N'afficher que le réticule pendant la peinture
 	Show slice numbers	Afficher les numéros de tranche
 	Show tooltips	Afficher les info-bulles
-	Enable animations	Activer les animations
 	Show highlight on rollover	Afficher la mise en surbrillance au survol
 	Show transformation values	Afficher les valeurs de transformation
 	Slice color	Couleur des tranches
@@ -2494,6 +2499,7 @@
 	Path to Illustrator…	Tracé vers Illustrator…
 	Make Work Path	Créer un tracé de travail
 	Make Selection	Créer une sélection
+	Make Shape	Créer une forme
 	Fill Path	Remplir le tracé
 	Stroke Path	Contourner le tracé
 	Clipping Path	Tracé de détourage

@@ -261,7 +261,7 @@ pub use services::{
     CaptionStyleFn, ClipboardGetFn, ClipboardGetSvgFn, ClipboardSetFn, ClipboardUnreadableFn, CursorPosFn, DiscardAutosaveFn, EncodePngFn, ExportFn,
     ExportSettings, ExternalSvgEditor, ExternalSvgSession, ExternalVectorSave, ExternalVectorSource, FileStamp, FileStampFn, FormatChoices, ImportFn, Inbox,
     LoadTextFn, OpenExternalSvgFn, OpenUrlFn, OsEventsFn, PhotoshopShortcutsFn, PlaceInbox, QuitFn, RecoverFn, Recoverable, RightButtonDownFn, SameFileFn,
-    SaveFileFn, SaveTextFn, Services, SystemThemeFn, WindowFrameFn, WriteFn,
+    SaveFileFn, SaveTextFn, Services, SystemThemeFn, TabletPollFn, WindowFrameFn, WriteFn,
 };
 pub use text::bidi_text;
 pub use text::cjk_fonts;
@@ -286,6 +286,7 @@ pub use tools::crop_presets;
 pub use tools::crop_shield;
 pub use tools::crop_size;
 pub use tools::crop_straighten;
+pub use tools::crop_task_bar;
 pub use tools::crop_ui;
 pub use tools::direct_select;
 pub use tools::eraser_ui;
@@ -812,6 +813,8 @@ mod tool_shift_cycle_order_tests;
 mod tool_shortcut_tests;
 #[cfg(test)]
 mod toolbar_group_order_tests;
+#[cfg(test)]
+mod toolbar_more_slot_flyout_tests;
 
 #[cfg(test)]
 mod pixel_aspect_tests;

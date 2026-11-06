@@ -680,7 +680,7 @@
 	Working Magenta Plate	لوح الأرجواني العامل
 	Working Yellow Plate	لوح الأصفر العامل
 	Working Black Plate	لوح الأسود العامل
-	Working CMY Plates	لوح CMY العامل
+	Working CMY Plates	ألواح CMY العاملة
 	Legacy Macintosh RGB (Gamma 1.8)	RGB القديم لنظام Macintosh (Gamma 1.8)
 	Internet Standard RGB (sRGB)	RGB القياسي للإنترنت (sRGB)
 	Monitor RGB	RGB الشاشة
@@ -764,7 +764,7 @@
 	Consolidate All to Tabs	توحيد الكل في علامات تبويب
 	Float in Window	تعويم في نافذة
 	Float All in Windows	تعويم الكل في نوافذ
-	New Window	نافذة جديدة للمستند
+	New Window	نافذة جديدة
 	Workspace	مساحة العمل
 	Essentials	الأساسيات
 	Graphic and Web	الرسومات والويب
@@ -826,6 +826,12 @@
 	Timeline	المخطط الزمني
 	Tool Presets	الإعدادات المسبقة للأدوات
 	Tools	الأدوات
+	Contextual Task Bar	شريط المهام السياقي
+	Hide bar	إخفاء الشريط
+	Reset bar position	إعادة تعيين موضع الشريط
+	Pin bar position	تثبيت موضع الشريط
+	Move bar	نقل الشريط
+	More options	مزيد من الخيارات
 	About PhotoCraft	حول PhotoCraft
 	PhotoCraft Website	موقع PhotoCraft
 	PhotoCraft on GitHub	PhotoCraft على GitHub
@@ -2058,7 +2064,6 @@
 	Show only crosshair while painting	إظهار نقطة التصويب فقط أثناء الرسم
 	Show slice numbers	إظهار أرقام الشرائح
 	Show tooltips	إظهار تلميحات الأدوات
-	Enable animations	تمكين الحركات
 	Show highlight on rollover	إظهار التمييز عند التمرير
 	Show bounding box when dragging layer	إظهار مربع الإحاطة عند سحب الطبقة
 	System title bar	شريط عنوان النظام
@@ -2307,6 +2312,7 @@
 	Punctuation	علامات الترقيم
 	Make Work Path	إنشاء مسار عمل
 	Make Selection	إنشاء تحديد
+	Make Shape	إنشاء شكل
 	Fill Path	تعبئة المسار
 	Stroke Path	رسم حدود للمسار
 	Delete Path	حذف المسار

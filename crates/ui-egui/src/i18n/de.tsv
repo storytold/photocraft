@@ -755,7 +755,7 @@
 	Working Magenta Plate	Arbeits-Magenta-Druckplatte
 	Working Yellow Plate	Arbeits-Gelb-Druckplatte
 	Working Black Plate	Arbeits-Schwarz-Druckplatte
-	Working CMY Plates	Arbeits-CMY-Druckplatte
+	Working CMY Plates	Arbeits-CMY-Druckplatten
 	Legacy Macintosh RGB (Gamma 1.8)	Legacy-Macintosh-RGB (Gamma 1.8)
 	Internet Standard RGB (sRGB)	Internet-Standard-RGB (sRGB)
 	Monitor RGB	Monitor-RGB
@@ -839,7 +839,7 @@
 	Consolidate All to Tabs	Alle in Registerkarten zusammenfassen
 	Float in Window	In Fenster schweben lassen
 	Float All in Windows	Alle in Fenstern schweben lassen
-	New Window	Neues Fenster für Dokument
+	New Window	Neues Fenster
 	Workspace	Arbeitsbereich
 	Essentials	Essentials
 	Graphic and Web	Grafik und Web
@@ -901,6 +901,12 @@
 	Timeline	Zeitleiste
 	Tool Presets	Werkzeugvorgaben
 	Tools	Werkzeuge
+	Contextual Task Bar	Kontextbezogene Taskleiste
+	Hide bar	Leiste ausblenden
+	Reset bar position	Leistenposition zurücksetzen
+	Pin bar position	Leistenposition fixieren
+	Move bar	Leiste verschieben
+	More options	Weitere Optionen
 	About PhotoCraft	Über PhotoCraft
 	PhotoCraft Website	PhotoCraft-Website
 	PhotoCraft on GitHub	PhotoCraft auf GitHub
@@ -2134,7 +2140,6 @@
 	Show only crosshair while painting	Beim Malen nur Fadenkreuz zeigen
 	Show slice numbers	Slice-Nummern anzeigen
 	Show tooltips	Tooltips anzeigen
-	Enable animations	Animationen aktivieren
 	Show highlight on rollover	Hervorhebung bei Rollover anzeigen
 	Show bounding box when dragging layer	Begrenzungsrahmen beim Ziehen einer Ebene anzeigen
 	System title bar	System-Titelleiste
@@ -2382,6 +2387,7 @@
 	Punctuation	Zeichensetzung
 	Make Work Path	Arbeitspfad erzeugen
 	Make Selection	Auswahl erzeugen
+	Make Shape	Form erzeugen
 	Fill Path	Pfad füllen
 	Stroke Path	Pfad nachziehen
 	Delete Path	Pfad löschen

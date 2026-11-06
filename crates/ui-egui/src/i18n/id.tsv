@@ -825,7 +825,7 @@
 	Consolidate All to Tabs	Gabungkan Semua ke Tab
 	Float in Window	Mengambang di Jendela
 	Float All in Windows	Mengambangkan Semua di Jendela
-	New Window	Jendela Baru untuk Dokumen
+	New Window	Jendela Baru
 	Workspace	Ruang Kerja
 	Essentials	Esensial
 	Graphic and Web	Grafis dan Web
@@ -887,6 +887,12 @@
 	Timeline	Timeline
 	Tool Presets	Preset Alat
 	Tools	Alat
+	Contextual Task Bar	Bilah Tugas Kontekstual
+	Hide bar	Sembunyikan bilah
+	Reset bar position	Atur ulang posisi bilah
+	Pin bar position	Sematkan posisi bilah
+	Move bar	Pindahkan bilah
+	More options	Opsi lainnya
 	About PhotoCraft	Tentang PhotoCraft
 	PhotoCraft Website	Situs Web PhotoCraft
 	PhotoCraft on GitHub	PhotoCraft di GitHub
@@ -2121,7 +2127,6 @@
 	Show only crosshair while painting	Tampilkan crosshair saja saat melukis
 	Show slice numbers	Tampilkan nomor slice
 	Show tooltips	Tampilkan tooltip
-	Enable animations	Aktifkan animasi
 	Show highlight on rollover	Tampilkan sorotan saat kursor melintas
 	Show transformation values	Tampilkan nilai transformasi
 	Slice color	Warna slice
@@ -2502,6 +2507,7 @@
 	Path to Illustrator…	Path ke Illustrator…
 	Make Work Path	Buat Work Path
 	Make Selection	Buat Seleksi
+	Make Shape	Buat Bentuk
 	Fill Path	Isi Path
 	Stroke Path	Stroke Path
 	Clipping Path	Clipping Path

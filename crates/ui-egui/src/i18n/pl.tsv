@@ -752,7 +752,7 @@
 	Working Magenta Plate	Robocza płyta magenty
 	Working Yellow Plate	Robocza płyta żółci
 	Working Black Plate	Robocza płyta czerni
-	Working CMY Plates	Robocza płyta CMY
+	Working CMY Plates	Robocze płyty CMY
 	Legacy Macintosh RGB (Gamma 1.8)	Starszy Macintosh RGB (Gamma 1.8)
 	Internet Standard RGB (sRGB)	Standardowy RGB dla Internetu (sRGB)
 	Monitor RGB	RGB monitora
@@ -846,7 +846,7 @@
 	Consolidate All to Tabs	Połącz wszystko w karty
 	Float in Window	Odłącz do okna
 	Float All in Windows	Odłącz wszystko do okien
-	New Window	Nowe okno dla dokumentu
+	New Window	Nowe okno
 	Workspace	Obszar roboczy
 	Essentials	Podstawowe
 	Graphic and Web	Grafika i Internet
@@ -908,6 +908,12 @@
 	Timeline	Oś czasu
 	Tool Presets	Ustawienia wstępne narzędzi
 	Tools	Narzędzia
+	Contextual Task Bar	Kontekstowy pasek zadań
+	Hide bar	Ukryj pasek
+	Reset bar position	Resetuj położenie paska
+	Pin bar position	Przypnij położenie paska
+	Move bar	Przesuń pasek
+	More options	Więcej opcji
 	About PhotoCraft	O programie PhotoCraft
 	PhotoCraft Website	Strona internetowa PhotoCraft
 	PhotoCraft on GitHub	PhotoCraft na GitHubie
@@ -2145,7 +2151,6 @@
 	Show only crosshair while painting	Podczas malowania pokaż tylko celownik
 	Show slice numbers	Pokaż numery plasterków
 	Show tooltips	Pokaż podpowiedzi
-	Enable animations	Włącz animacje
 	Show highlight on rollover	Pokaż podświetlenie po najechaniu
 	Show bounding box when dragging layer	Pokaż ramkę ograniczającą podczas przeciągania warstwy
 	Show transformation values	Pokaż wartości przekształcenia
@@ -2526,6 +2531,7 @@
 	Path to Illustrator…	Ścieżka do Illustratora…
 	Make Work Path	Utwórz ścieżkę roboczą
 	Make Selection	Utwórz zaznaczenie
+	Make Shape	Utwórz kształt
 	Fill Path	Wypełnij ścieżkę
 	Stroke Path	Obrysuj ścieżkę
 	Clipping Path	Ścieżka przycinająca

@@ -710,6 +710,12 @@
 	Timeline	Шкала времени
 	Tool Presets	Наборы инструментов
 	Tools	Инструменты
+	Contextual Task Bar	Контекстная панель задач
+	Hide bar	Скрыть панель
+	Reset bar position	Сбросить положение панели
+	Pin bar position	Закрепить положение панели
+	Move bar	Переместить панель
+	More options	Другие параметры
 	Libraries	Библиотеки
 	3D	3D
 	Toolbars	Панели инструментов
@@ -1346,6 +1352,7 @@
 	Path to Illustrator…	Контур в Illustrator…
 	Make Work Path	Создать рабочий контур
 	Make Selection	Создать выделение
+	Make Shape	Создать фигуру
 	Fill Path	Залить контур
 	Stroke Path	Обвести контур
 	Clipping Path	Обтравочный контур
@@ -2159,7 +2166,7 @@
 	Vertical Centers	Центры по вертикали
 	Video Frames to Layers…	Видеокадры в слои…
 	WIA Support…	Поддержка WIA…
-	Working CMY Plates	Рабочая голубая форма
+	Working CMY Plates	Рабочие формы CMY
 	Absolute	Абсолютный
 	Action	Операция
 	Adaptive	Адаптивный
@@ -2571,7 +2578,6 @@
 	Show only crosshair while painting	Только перекрестье при рисовании
 	Show slice numbers	Показывать номера фрагментов
 	Show tooltips	Показывать подсказки
-	Enable animations	Включить анимацию
 	Show highlight on rollover	Показывать подсветку при наведении
 	Show bounding box when dragging layer	Показывать рамку при перетаскивании слоя
 	System title bar	Системная строка заголовка

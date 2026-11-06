@@ -266,6 +266,12 @@
 	Info	Πληροφορίες
 	Actions	Ενέργειες
 	Tools	Εργαλεία
+	Contextual Task Bar	Γραμμή εργασιών περιβάλλοντος
+	Hide bar	Απόκρυψη γραμμής
+	Reset bar position	Επαναφορά θέσης γραμμής
+	Pin bar position	Καρφίτσωμα θέσης γραμμής
+	Move bar	Μετακίνηση γραμμής
+	More options	Περισσότερες επιλογές
 	Zoom In	Μεγέθυνση
 	Zoom Out	Σμίκρυνση
 	Fit on Screen	Προσαρμογή στην οθόνη
@@ -1612,7 +1618,6 @@
 	Show only crosshair while painting	Εμφάνιση μόνο σταυρονήματος κατά τη ζωγραφική
 	Show slice numbers	Εμφάνιση αριθμών τομών
 	Show tooltips	Εμφάνιση επεξηγήσεων
-	Enable animations	Ενεργοποίηση κινούμενων εφέ
 	Show highlight on rollover	Εμφάνιση επισήμανσης κατά την κατάδειξη
 	Show bounding box when dragging layer	Εμφάνιση πλαισίου οριοθέτησης κατά τη μετακίνηση επιπέδου
 	Show transformation values	Εμφάνιση τιμών μετασχηματισμού
@@ -2798,6 +2803,7 @@
 	Make	Κατασκευαστής
 	Make Default	Ορισμός ως προεπιλογής
 	Make Selection	Δημιουργία επιλογής
+	Make Shape	Δημιουργία σχήματος
 	Make Work Path	Δημιουργία διαδρομής εργασίας
 	Marker Size	Μέγεθος δείκτη
 	Master	Κύριο

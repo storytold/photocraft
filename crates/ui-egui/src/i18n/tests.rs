@@ -9,6 +9,16 @@ const VI: fn() -> Lang = || Lang::from_code("vi").expect("vi registered");
 const HI: fn() -> Lang = || Lang::from_code("hi").expect("hi registered");
 
 #[test]
+fn hindi_has_the_reveal_and_camera_raw_rows() {
+    assert_eq!(tr(HI(), "Reveal in Explorer"), "Explorer में दिखाएँ");
+    assert_eq!(tr(HI(), "Reveal in Finder"), "Finder में दिखाएँ");
+    assert_eq!(tr(HI(), "Camera Raw…"), "Camera Raw…");
+    let (rows, errors) = parse_entries(include_str!("hi.tsv"));
+    assert!(errors.is_empty(), "{errors:?}");
+    assert!(rows.iter().any(|(ctx, src, _)| ctx.is_empty() && src == "Camera Raw…"), "Camera Raw… is a catalog row, not a fallback");
+}
+
+#[test]
 fn hindi_tags_resolve() {
     for tag in ["hi", "hi-IN", "hi_IN", "hi_IN.UTF-8"] {
         assert_eq!(lang_from_tag(tag), Some(HI()), "{tag}");
@@ -34,6 +44,34 @@ fn vietnamese_tags_resolve() {
     assert_eq!(VI().name(), "Tiếng Việt");
     assert_eq!(Lang::from_pref("vi"), VI());
     assert_eq!(Lang::from_pref("VI"), VI());
+}
+
+#[test]
+fn thai_tags_resolve() {
+    let th = Lang::from_code("th").expect("th registered");
+    for tag in ["th", "TH", "th-TH", "th_TH", "th_TH.UTF-8"] {
+        assert_eq!(lang_from_tag(tag), Some(th), "{tag}");
+        assert_eq!(Lang::from_pref(tag), th, "{tag}");
+    }
+    assert_eq!(th.name(), "ไทย");
+    assert_eq!((th.0.plural)(5), 0, "Thai has one plural form");
+    assert_eq!(tr(th, "File"), "ไฟล์");
+    assert_eq!(tr(th, "Layer"), "เลเยอร์");
+}
+
+/// Tamil: regional tags resolve, counts take one|other, and placeholders stay untranslated.
+#[test]
+fn tamil_tags_plurals_and_placeholders() {
+    let ta = Lang::from_code("ta").expect("ta registered");
+    for tag in ["ta", "ta-IN", "ta_LK", "ta_IN.UTF-8"] {
+        assert_eq!(Lang::from_pref(tag), ta, "{tag}");
+    }
+    let forms: Vec<usize> = [0, 1, 2, 21].into_iter().map(ta.0.plural).collect();
+    assert_eq!(forms, [1, 0, 1, 1]);
+    assert_eq!(trn(ta, 1, "{n} layer", "{n} layers"), "1 அடுக்கு");
+    assert_eq!(trn(ta, 3, "{n} layer", "{n} layers"), "3 அடுக்குகள்");
+    assert!(tr(ta, "Scratch: {size}").contains("{size}"));
+    assert_ne!(tr(ta, "Zoom In (hold, drag to scrub)"), "Zoom In (hold, drag to scrub)");
 }
 
 #[test]
@@ -229,6 +267,16 @@ fn lookups_fall_back_to_english() {
     assert_eq!(trn(JA(), 3, "{n} no such message", "{n} no such messages"), "3 no such messages");
 }
 
+/// Romanian: 1 is one; 0 and counts ending in 01–19 are few ("2 straturi", "119 straturi");
+/// the rest take "de" ("20 de straturi", "121 de straturi").
+#[test]
+fn romanian_plural_rule() {
+    let ro = Lang::from_code("ro").expect("ro registered");
+    let counts = [0, 1, 2, 19, 20, 21, 100, 101, 119, 120, 121, 1001];
+    let forms: Vec<usize> = counts.into_iter().map(ro.0.plural).collect();
+    assert_eq!(forms, [1, 0, 1, 1, 2, 2, 2, 1, 1, 2, 2, 1]);
+}
+
 #[test]
 fn russian_plural_rule() {
     let ru = Lang::from_code("ru").expect("ru registered");
@@ -290,6 +338,63 @@ fn serbian_plural_rule_handles_teens_and_compound_counts() {
     let counts = [0, 1, 2, 4, 5, 11, 12, 14, 21, 22, 25, 101, 111, 112, 122];
     let forms: Vec<usize> = counts.into_iter().map(sr.0.plural).collect();
     assert_eq!(forms, [2, 0, 1, 1, 2, 2, 2, 2, 0, 1, 2, 0, 2, 2, 1]);
+}
+
+/// The catalog resolves regional tags, exposes its native name and falls back to English.
+#[test]
+fn azerbaijani_resolves_locales_and_preferences() {
+    let lang = Lang::from_code("az").expect("az registered");
+    assert_eq!(lang.name(), "Azərbaycanca");
+    assert_eq!(lang.dir(), Dir::Ltr);
+    assert!(lang.complete_menus());
+    for tag in ["az", "AZ", "az-AZ", "az_AZ.UTF-8", "az-Latn", "AZ-LATN-AZ"] {
+        assert_eq!(lang_from_tag(tag), Some(lang), "{tag}");
+        assert_eq!(Lang::from_pref(tag), lang, "{tag}");
+    }
+    assert_eq!(tr(lang, "unknown translation"), "unknown translation");
+}
+
+/// Integer plural boundaries select one only at 1, including large counts without overflow.
+#[test]
+fn azerbaijani_plural_counts_include_hundreds_and_large_values() {
+    let az = Lang::from_code("az").expect("az registered");
+    let counts = [0, 1, 2, 11, 19, 20, 21, 99, 100, 101, 102, 119, 120, 1000, 1001, u64::MAX];
+    assert_eq!(counts.map(az.0.plural), [1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
+    for n in counts {
+        assert_eq!(trn(az, n, "{n} layer", "{n} layers"), format!("{n} qat"));
+    }
+}
+
+/// Exact lookups retain contextual meanings, dotted/dotless letters and product placeholders.
+#[test]
+fn azerbaijani_keeps_context_placeholders_and_command_names() {
+    let lang = Lang::from_code("az").expect("az registered");
+    for (source, translated) in [("File", "Fayl"), ("Layer", "Qat"), ("Kind", "Növ"), ("Type Layer", "Mətn qatı"), ("Light Theme", "Açıq mövzu")] {
+        assert_eq!(tr(lang, source), translated);
+    }
+    assert_eq!(tr_ctx(lang, "cameraRaw", "Light"), "İşıq");
+    assert_eq!(tr_ctx(lang, "fontWeight", "Light"), "İncə");
+    assert_ne!(tr_id(lang, "edit.clear", "Clear"), "Clear");
+    assert!(fmt(tr(lang, "About {app}"), &[("app", "PhotoCraft")]).contains("PhotoCraft"));
+}
+
+/// Every menu label, submenu segment and intentional command-ID override has a catalog entry.
+#[test]
+fn azerbaijani_covers_every_menu_label_and_path() {
+    let lang = Lang::from_code("az").expect("az registered");
+    for &(path, label, _, _) in crate::menu_catalog::CATALOG {
+        for source in path.iter().copied().chain(std::iter::once(label)).filter(|source| *source != "---") {
+            assert!(lang.catalog().plain(source).is_some(), "az: missing menu translation for {source:?}");
+        }
+    }
+    for source in ["Convert to Frame…", "Replace Image…", "Import Image…", "Fit Content to Frame", "Fit Frame to Content"] {
+        assert!(lang.catalog().plain(source).is_some(), "az: missing frame translation for {source:?}");
+    }
+    for id in
+        ["edit.clear", "edit.purge.undo", "edit.stroke", "edit.transform.scale", "file.close", "filter.sharpen.sharpen", "layer.layerMask.apply", "select.all"]
+    {
+        assert!(lang.catalog().id(id).is_some(), "az: missing @id translation for {id:?}");
+    }
 }
 
 /// Bosnian locales, with or without region, script or encoding, select the Latin catalog.
