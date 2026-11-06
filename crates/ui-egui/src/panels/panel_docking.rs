@@ -585,11 +585,11 @@ fn without_canvas(layout: Layout<String>) -> Layout<String> {
 /// while the canvas is alone there: a panel docked beside the canvas keeps the standard layout,
 /// where craft-ui draws it and accepts drops beside it.
 pub(crate) fn canvas_alone(app: &PhotocraftApp) -> bool {
-    let layout = match &app.ui.docking {
-        Some(workspace) => workspace.layout.clone(),
-        None => legacy(app),
-    };
-    canvas_alone_layout(&layout)
+    match &app.ui.docking {
+        Some(workspace) => canvas_alone_layout(&workspace.layout),
+        // The layout built from the native dock always has the canvas alone on its side.
+        None => true,
+    }
 }
 
 fn canvas_alone_layout(layout: &Layout<String>) -> bool {

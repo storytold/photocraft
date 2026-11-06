@@ -106,7 +106,7 @@ pub(crate) fn more_flyout_open(ctx: &egui::Context) -> bool {
 /// Right-click on the "…" button opens a flyout with one row, "Edit Toolbar…", drawn like a tool
 /// flyout. The row runs `edit.toolbar` and closes the flyout; Escape or a press outside closes it
 /// without running anything.
-fn more_slot_flyout(app: &mut PhotocraftApp, ui: &mut egui::Ui, button: &egui::Response, t: &Tokens) {
+fn more_slot_flyout(app: &mut PhotocraftApp, ui: &mut egui::Ui, button: &egui::Response, t: &Tokens, side: ToolbarSide) {
     let open_id = more_flyout_id();
     let open = ui.data(|d| d.get_temp::<bool>(open_id)).unwrap_or(false);
     if button.secondary_clicked() {
@@ -117,7 +117,7 @@ fn more_slot_flyout(app: &mut PhotocraftApp, ui: &mut egui::Ui, button: &egui::R
     if !open {
         return;
     }
-    let (pivot, pos) = if crate::direction::is_rtl() {
+    let (pivot, pos) = if side == ToolbarSide::Right {
         (egui::Align2::RIGHT_BOTTOM, button.rect.left_bottom() - vec2(6.0, 0.0))
     } else {
         (egui::Align2::LEFT_BOTTOM, button.rect.right_bottom() + vec2(6.0, 0.0))
@@ -427,7 +427,7 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     app.ui.status = e;
                     app.ui.status_error = true;
                 }
-                more_slot_flyout(app, ui, &more, &t);
+                more_slot_flyout(app, ui, &more, &t, side);
                 reveal_focused_control(ui);
             });
         ui.add_space(if t.pro { 8.0 } else { 14.0 });
