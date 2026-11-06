@@ -23,7 +23,7 @@ pub enum EngineError {
     PsdApprovalRequired { name: String, required: u64, soft_limit: u64, hard_limit: u64, available_ram: Option<u64> },
     /// The file's estimated memory cannot be admitted within the hard ceiling, which no approval
     /// can raise. The requirement may equal the ceiling when the estimate saturated.
-    #[error("cannot open “{name}”: its estimated memory requirement of {required} bytes cannot be admitted within the {limit} byte hard limit on this machine")]
+    #[error("cannot open “{name}”: its estimated memory requirement of {required_text} ({required} bytes) cannot be admitted within the {limit_text} ({limit} byte) hard limit{scope}", required_text = bytes_text(.required), limit_text = bytes_text(.limit), scope = build_limit_scope(build_memory_limit()))]
     PsdHardBudget { name: String, required: u64, limit: u64 },
     /// The file behind an opened handle is not the one whose memory estimate was approved.
     /// The document is discarded and is not opened.
@@ -34,6 +34,59 @@ pub enum EngineError {
     /// A background job was cancelled (see [`jobs`]); nothing changed.
     #[error("cancelled")]
     Cancelled,
+}
+
+/// Where this build's hard memory limit comes from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BuildMemoryLimit {
+    /// Measured from the computer's memory (64-bit desktop).
+    Measured,
+    /// The 32-bit desktop build: its cap, or the computer's memory if lower.
+    Desktop32Bit,
+    /// Fixed by the browser build.
+    FixedWeb,
+}
+
+/// This build's memory-limit source, from its target.
+fn build_memory_limit() -> BuildMemoryLimit {
+    memory_limit_for(cfg!(target_arch = "wasm32"), cfg!(target_pointer_width = "32"))
+}
+
+/// The limit source for a target. The wasm32 check comes first: wasm32 is also 32-bit.
+fn memory_limit_for(is_wasm32: bool, is_32_bit: bool) -> BuildMemoryLimit {
+    if is_wasm32 {
+        BuildMemoryLimit::FixedWeb
+    } else if is_32_bit {
+        BuildMemoryLimit::Desktop32Bit
+    } else {
+        BuildMemoryLimit::Measured
+    }
+}
+
+/// The text after "hard limit": where the limit comes from and, where another build could open
+/// the file, where to get it. Its sentences stand apart so the action isn't lost in the cause.
+fn build_limit_scope(limit: BuildMemoryLimit) -> String {
+    let releases = crate::updates_cmds::RELEASES;
+    match limit {
+        BuildMemoryLimit::Measured => " on this machine".to_owned(),
+        BuildMemoryLimit::Desktop32Bit => format!(
+            " on this machine. This 32-bit build of PhotoCraft can use at most 2 GiB of memory for a file, or less if the computer has less memory free. The 64-bit build may be able to open it: download it from {releases}"
+        ),
+        BuildMemoryLimit::FixedWeb => format!(" of the browser version of PhotoCraft. To open it, download the desktop app from {releases}"),
+    }
+}
+
+/// A size for people, next to the exact byte count: "21.5 GiB", "900 MiB", "17 B".
+fn bytes_text(bytes: &u64) -> String {
+    const GIB: u64 = 1 << 30;
+    const MIB: u64 = 1 << 20;
+    if *bytes >= GIB {
+        format!("{:.1} GiB", *bytes as f64 / GIB as f64)
+    } else if *bytes >= MIB {
+        format!("{} MiB", bytes / MIB)
+    } else {
+        format!("{bytes} B")
+    }
 }
 
 pub type Result<T> = std::result::Result<T, EngineError>;
@@ -68,5 +121,57 @@ pub(crate) fn io_open_error(name: &str, error: photocraft_io::IoError) -> Engine
 impl From<photocraft_raster::AllocationError> for EngineError {
     fn from(error: photocraft_raster::AllocationError) -> Self {
         Self::Other(format!("not enough memory for this operation ({error}); the document was not changed"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hard_budget_scope_text_per_build() {
+        assert_eq!(build_limit_scope(BuildMemoryLimit::Measured), " on this machine");
+        let releases = crate::updates_cmds::RELEASES;
+        assert_eq!(
+            build_limit_scope(BuildMemoryLimit::Desktop32Bit),
+            format!(
+                " on this machine. This 32-bit build of PhotoCraft can use at most 2 GiB of memory for a file, or less if the computer has less memory free. The 64-bit build may be able to open it: download it from {releases}"
+            )
+        );
+        assert_eq!(
+            build_limit_scope(BuildMemoryLimit::FixedWeb),
+            format!(" of the browser version of PhotoCraft. To open it, download the desktop app from {releases}")
+        );
+    }
+
+    #[test]
+    fn hard_budget_message_names_file_numbers_and_scope() {
+        let text = EngineError::PsdHardBudget { name: "big.psd".into(), required: 23_049_071_616, limit: 2_147_483_648 }.to_string();
+        for part in ["big.psd", "21.5 GiB", "23049071616 bytes", "2.0 GiB", "2147483648 byte", "hard limit"] {
+            assert!(text.contains(part), "{text}");
+        }
+        assert!(text.ends_with(&build_limit_scope(build_memory_limit())), "{text}");
+    }
+
+    #[test]
+    fn bytes_text_picks_a_readable_unit() {
+        assert_eq!(bytes_text(&17), "17 B");
+        assert_eq!(bytes_text(&(900 << 20)), "900 MiB");
+        assert_eq!(bytes_text(&(2 << 30)), "2.0 GiB");
+        assert_eq!(bytes_text(&23_049_071_616), "21.5 GiB");
+        assert!(bytes_text(&u64::MAX).ends_with(" GiB"));
+    }
+
+    #[test]
+    fn memory_limit_follows_the_target() {
+        assert_eq!(memory_limit_for(true, true), BuildMemoryLimit::FixedWeb);
+        assert_eq!(memory_limit_for(true, false), BuildMemoryLimit::FixedWeb);
+        assert_eq!(memory_limit_for(false, true), BuildMemoryLimit::Desktop32Bit);
+        assert_eq!(memory_limit_for(false, false), BuildMemoryLimit::Measured);
+    }
+
+    #[test]
+    fn two_gib_in_the_text_matches_the_cap() {
+        assert_eq!(photocraft_io::memory::NATIVE_32BIT_PEAK_CAP, 2 << 30);
     }
 }

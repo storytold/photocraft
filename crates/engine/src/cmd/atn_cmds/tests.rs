@@ -659,6 +659,11 @@ fn settings_at_the_value_the_event_plays_still_export() {
 fn every_mapped_command_exports_and_imports_back() {
     let cases: Vec<(&str, Value)> = vec![
         (
+            "edit.perspectiveWarp",
+            json!({"planes":[{"src":[[4,4],[16,4],[16,20],[4,20]],"dst":[[5,5],[17,4],[18,20],[4,19]]}],
+                "target":"pixels","__atnPerspectiveWarpRect":[0,0,32,24]}),
+        ),
+        (
             "paint.gradient",
             json!({"from":[1,1],"to":[6,2],"style":"linear","method":"classic","smoothness":100,
             "stops":[[0,"#0020ff"],[1,"#ffe000"]],"transparency":[],"opacity":100,"mode":"Normal","reverse":false,"dither":false}),
@@ -680,6 +685,18 @@ fn every_mapped_command_exports_and_imports_back() {
         ),
         ("edit.fade", json!({"opacity":50,"mode":"Multiply"})),
         ("layer.linkLayers", json!({})),
+        ("layer.smartObjects.stackMode.range", json!({})),
+        ("layer.smartObjects.stackMode.entropy", json!({})),
+        ("layer.smartObjects.stackMode.kurtosis", json!({})),
+        ("layer.smartObjects.stackMode.maximum", json!({})),
+        ("layer.smartObjects.stackMode.median", json!({})),
+        ("layer.smartObjects.stackMode.minimum", json!({})),
+        ("layer.smartObjects.stackMode.mean", json!({})),
+        ("layer.smartObjects.stackMode.skewness", json!({})),
+        ("layer.smartObjects.stackMode.standardDeviation", json!({})),
+        ("layer.smartObjects.stackMode.summation", json!({})),
+        ("layer.smartObjects.stackMode.variance", json!({})),
+        ("layer.smartObjects.stackMode.none", json!({})),
         ("layer.distribute.leftEdges", json!({})),
         ("layer.distribute.horizontalCenters", json!({})),
         ("layer.distribute.rightEdges", json!({})),
@@ -826,6 +843,9 @@ fn every_mapped_command_exports_and_imports_back() {
         ("type.loadDefaultTypeStyles", json!({})),
         ("type.saveDefaultTypeStyles", json!({})),
         ("image.analysis.recordMeasurements", json!({})),
+        ("layer.videoLayers.insertBlankFrame", json!({})),
+        ("layer.videoLayers.duplicateFrame", json!({})),
+        ("layer.videoLayers.deleteFrame", json!({})),
         ("file.automate.cropAndStraightenPhotos", json!({})),
         ("file.automate.cropAndStraightenPhotos", json!({"_atnNoTarget": true})),
         ("layer.new.artboardFromGroup", json!({})),
@@ -1054,7 +1074,9 @@ fn every_mapped_command_exports_and_imports_back() {
             continue;
         }
         let e = event_for(&item.event).unwrap_or_else(|| panic!("{id} exported as an unknown event {}", item.event.id()));
-        match (e.from)(item.descriptor.as_ref().unwrap()) {
+        assert_eq!(item.descriptor.is_none(), *id == super::steps_stack::NONE, "{id}: unexpected descriptor presence");
+        let descriptor = item.descriptor.unwrap_or_default();
+        match (e.from)(&descriptor) {
             Mapped::Steps(steps) => {
                 assert_eq!(steps.len(), 1, "{id}: {steps:?}");
                 let navigation = match *id {
@@ -1079,6 +1101,9 @@ fn every_mapped_command_exports_and_imports_back() {
                 if *id == "paint.gradient" {
                     // Executable values match; independent public tests verify the source carrier.
                     back.as_object_mut().unwrap().remove("__atnClassicGradient");
+                }
+                if *id == "edit.perspectiveWarp" {
+                    back.as_object_mut().unwrap().remove("__atnPerspectiveWarp");
                 }
                 normalise(&mut back);
                 if *id == "actions.play" || *id == "actions.conditional" {
