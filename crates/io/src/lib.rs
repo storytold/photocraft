@@ -45,6 +45,7 @@ mod channel_map;
 pub mod comps_map;
 pub mod doc_path;
 pub mod effects_map;
+pub mod export_estimate;
 #[cfg(any(unix, windows))]
 mod exr_native;
 pub mod exr_parts;
@@ -86,6 +87,7 @@ pub mod vector_preview;
 mod xcf;
 pub mod xml;
 
+pub use export_estimate::estimate_export_bytes;
 use photocraft_codecs::{CodecError, EncodeOptions};
 pub use photocraft_codecs::{DdsCompression, DdsOptions, DpxBits};
 use photocraft_doc::{Adjustment, Document, Layer, LayerContent};
@@ -396,6 +398,9 @@ pub struct ExportOptions {
     /// transparency. `None`, the default, keeps it unless the document has alpha or spot
     /// channels, which are then written as with it off.
     pub tiff_transparency: Option<bool>,
+    /// Protect RGB 24-bit Targa alpha and flat TIFF composite transparency during in-place
+    /// Batch saves. Other encoder losses retain their existing policies and warnings.
+    pub preserve_alpha: bool,
     /// Which part of the document's XMP packet and free-form text a flat export embeds.
     /// PSD/PSB always keep XMP; `.pcraft` keeps both. Everything by default, as Save As does;
     /// Export As offers None.
@@ -432,6 +437,7 @@ impl Default for ExportOptions {
             force_psb: false,
             tiff_layers: false,
             tiff_transparency: None,
+            preserve_alpha: false,
             xmp: XmpEmbed::All,
             tga_bits: None,
             image_previews: true,
@@ -946,7 +952,7 @@ fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, o
 /// Extension names can be wrong (for example, an image downloaded as WebP and renamed `.svg`).
 /// Valid plain SVG is recognized by its XML content; an otherwise unknown `.svg` is passed to the
 /// SVG parser for a useful malformed-file error, and `.svgz` disambiguates gzip streams.
-fn is_svg_input(name: &str, bytes: &[u8]) -> bool {
+pub fn is_svg_input(name: &str, bytes: &[u8]) -> bool {
     // Keep the SVG extension as a fallback for malformed files so the SVG parser can return an
     // actionable SVG error. A recognized raster signature still wins over a misleading `.svg`
     // suffix (for example, a WebP downloaded as Firefox_logo.svg).

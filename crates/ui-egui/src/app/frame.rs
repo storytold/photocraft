@@ -1,9 +1,9 @@
 use super::{
-    PhotocraftApp, analysis_ui, brush_panel, brush_picker, camera_raw_ui, canvas, dds_options_ui, dialogs, discard_ui, distort_ui, field_wheel, file_open,
-    gpu_canvas, gpu_status, gradient_ui, i18n, jobs_ui, jpeg_options_ui, kys_import, last_brush, layers_panel_ui, monitor_status, native_menu, notices,
-    paint_mouse, palette, panels, prefs_ui, preset_panels, rasterize_prompt, screen_picker, shape_stroke_ui, shortcuts, smart_svg_ui, targa_options_ui,
-    text_field_menu, theme, tiff_options_ui, timeline_ui, titlebar, tool_cursor, tool_memory, transform_tool, type_panels_ui, type_tool, updates_ui, vector_ui,
-    view_cmds, wide_angle_ui, work_area, workspace_ui,
+    PhotocraftApp, analysis_ui, brush_panel, brush_picker, camera_raw_ui, canvas, dds_options_ui, dialogs, discard_ui, distort_ui, field_wheel, gpu_canvas,
+    gpu_status, gradient_ui, i18n, jobs_ui, jpeg_options_ui, kys_import, last_brush, layers_panel_ui, monitor_status, native_menu, notices, paint_mouse,
+    palette, panels, prefs_ui, preset_panels, rasterize_prompt, screen_picker, shape_stroke_ui, shortcuts, smart_svg_ui, targa_options_ui, text_field_menu,
+    theme, tiff_options_ui, timeline_ui, titlebar, tool_cursor, tool_memory, transform_tool, type_panels_ui, type_tool, updates_ui, vector_ui, view_cmds,
+    wide_angle_ui, work_area, workspace_ui,
 };
 
 impl PhotocraftApp {
@@ -53,6 +53,7 @@ impl PhotocraftApp {
         }
         self.last_frame_time = now;
         self.sync_views();
+        crate::memory_warning::tick(self, now);
         crate::type_font_preview::follow_hover(self, ctx);
         self.check_gpu(ctx);
         #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
@@ -110,9 +111,7 @@ impl PhotocraftApp {
             }
         }
         // Web drops onto the canvas, read since the last frame: placed below, one at a time.
-        let to_place: Vec<(String, Vec<u8>)> =
-            self.services.place_inbox.as_ref().map(|q| std::mem::take(&mut *q.lock().unwrap_or_else(|e| e.into_inner()))).unwrap_or_default();
-        self.drop_places.extend(to_place.into_iter().map(|(name, bytes)| file_open::DropPlace::Bytes(name, bytes)));
+        self.queue_web_places();
         // Finder double-click / Open With / Dock drops (macOS open-documents events).
         self.drain_os_events(ctx);
         // While files are dragged over the window it gets no pointer events: keep frames coming so
@@ -251,6 +250,8 @@ impl PhotocraftApp {
         // once, not only after the next pick.
         self.sync_recent_fonts();
         paint_mouse::sync_tool_brush(self);
+        // Step by Step and Pause For: play an action's next step once its wait is over (Esc ends it).
+        crate::actions::playback::tick(self, &ctx);
         // A unit typed into a value field (`1in` in a px field) converts at the active document's
         // resolution, as in Photoshop.
         let ppi = self.session.prefs().units_and_rulers.point_size.per_inch();
