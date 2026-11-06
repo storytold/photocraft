@@ -19,8 +19,8 @@ pub(crate) enum Hit {
 /// Screen-sized corner and outward edge bands, shared with Move's unopened controls.
 impl TransformSession {
     /// Classify a document point with screen-sized corner and outward edge zones.
-    /// Corners outrank free edge bands; overlapping painted handles keep nearest-handle priority.
-    /// Only projection-scale rounding is treated as an edge on the interior side.
+    /// On and outward from an edge, the nearest corner or midpoint wins, with the corner
+    /// reach capped along the edge. Inside and beyond the edge ends use the corner radius.
     pub(crate) fn box_hit(quad: &[[f64; 2]; 4], p: [f64; 2], tol: f64) -> Hit {
         // `tol` is the existing 12 pt handle tolerance, divided by the view zoom.
         let corner_radius = tol * (8.0 / HANDLE_PX);
@@ -30,32 +30,40 @@ impl TransformSession {
         let line_epsilon = tol.abs() * (1e-3 / HANDLE_PX);
         let distance = |q: [f64; 2]| (p[0] - q[0]).hypot(p[1] - q[1]);
         let interior = inside(quad, p);
-        let edge_distance = |i| {
-            let (_, q) = edge_projection(quad, i, p)?;
-            let d = distance(q);
-            (d <= edge_width && (!interior || d <= line_epsilon)).then_some(d)
-        };
-        if let Some((i, corner_distance)) =
+        let edge = (0..4)
+            .filter_map(|i| {
+                let (u, q) = edge_projection(quad, i, p)?;
+                let d = distance(q);
+                (d <= edge_width && (!interior || d <= line_epsilon)).then_some((i, u, d))
+            })
+            .min_by(|a, b| a.2.total_cmp(&b.2));
+        if let Some((i, u, _)) = edge
+            && (0.0..=1.0).contains(&u)
+        {
+            let next = (i + 1) % 4;
+            let (a, b) = (quad[i], quad[next]);
+            let length = (b[0] - a[0]).hypot(b[1] - a[1]);
+            let quarter = length * 0.25;
+            let tie_epsilon = line_epsilon.min(quarter * 0.5);
+            // Projected distances rank the handles along this edge. At the measured
+            // quarter-point ties, prefer the earlier handle in edge order.
+            let from_start = u * length;
+            let from_end = (1.0 - u) * length;
+            if from_start <= quarter + tie_epsilon && from_start <= edge_width + line_epsilon {
+                return Hit::Corner(i);
+            }
+            if from_end < quarter - tie_epsilon && from_end <= edge_width + line_epsilon {
+                return Hit::Corner(next);
+            }
+            return Hit::Edge(i);
+        }
+        if let Some((i, _)) =
             quad.iter().enumerate().map(|(i, &q)| (i, distance(q))).filter(|(_, d)| *d <= corner_radius).min_by(|a, b| a.1.total_cmp(&b.1))
         {
-            // Preserve nearest-handle priority only when the midpoint itself falls in the
-            // corner zone. A separate midpoint must not take over a nearby corner press.
-            let painted_edge = (0..4)
-                .filter_map(|k| {
-                    edge_distance(k)?;
-                    let (a, b) = (quad[k], quad[(k + 1) % 4]);
-                    let midpoint = [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0];
-                    let corner = quad[i];
-                    let d = distance(midpoint);
-                    let overlaps_corner = (midpoint[0] - corner[0]).hypot(midpoint[1] - corner[1]) <= corner_radius;
-                    (overlaps_corner && d < corner_distance).then_some((k, d))
-                })
-                .min_by(|a, b| a.1.total_cmp(&b.1));
-            return painted_edge.map_or(Hit::Corner(i), |(k, _)| Hit::Edge(k));
+            return Hit::Corner(i);
         }
-        let edge = (0..4).filter_map(|i| edge_distance(i).map(|d| (i, d))).min_by(|a, b| a.1.total_cmp(&b.1));
         match edge {
-            Some((i, _)) => Hit::Edge(i),
+            Some((i, _, _)) => Hit::Edge(i),
             None if interior => Hit::Inside,
             None => Hit::Outside,
         }
@@ -95,8 +103,8 @@ impl TransformSession {
     }
 }
 
-/// The nearest point on an edge segment and its clamped parameter. Degenerate edges have no
-/// band or normal; the other edges and corner handles remain usable.
+/// The unclamped projection parameter and the nearest point on the segment. Degenerate
+/// edges have no band or normal; the other edges and corner handles remain usable.
 fn edge_projection(quad: &[[f64; 2]; 4], i: usize, p: [f64; 2]) -> Option<(f64, [f64; 2])> {
     let (a, b) = (quad[i], quad[(i + 1) % 4]);
     let d = [b[0] - a[0], b[1] - a[1]];
@@ -104,8 +112,9 @@ fn edge_projection(quad: &[[f64; 2]; 4], i: usize, p: [f64; 2]) -> Option<(f64, 
     if !len2.is_finite() || len2 <= 1e-18 {
         return None;
     }
-    let u = (((p[0] - a[0]) * d[0] + (p[1] - a[1]) * d[1]) / len2).clamp(0.0, 1.0);
-    Some((u, [a[0] + u * d[0], a[1] + u * d[1]]))
+    let u = ((p[0] - a[0]) * d[0] + (p[1] - a[1]) * d[1]) / len2;
+    let on_segment = u.clamp(0.0, 1.0);
+    Some((u, [a[0] + on_segment * d[0], a[1] + on_segment * d[1]]))
 }
 
 /// The shared box zones, retaining the nearest pivot's existing grab priority on small boxes.

@@ -94,13 +94,39 @@ fn small_boxes_keep_their_painted_mid_edge_handles() {
     }
 }
 
+/// Match the measured #11097 boundaries and ties on the top edge and one point outside it.
 #[test]
-fn a_midpoint_outside_the_corner_zone_cannot_steal_its_press() {
-    for zoom in [1.0, 2.0] {
-        let quad = [[0.0, 0.0], [20.0, 0.0], [20.0, 20.0], [0.0, 20.0]].map(|p| p.map(|v| v / zoom));
-        let tol = 12.0 / zoom;
-        assert_eq!(TransformSession::box_hit(&quad, [7.0 / zoom, -1.0 / zoom], tol), Hit::Corner(0));
-        assert_eq!(TransformSession::box_hit(&quad, [9.0 / zoom, 0.0], tol), Hit::Edge(0));
+fn measured_edge_corner_and_midpoint_zones_at_100_and_200_percent() {
+    use Hit::{Corner, Edge};
+    let matrix: &[(f64, &[(f64, Hit)])] = &[
+        (12.0, &[(3.0, Corner(0)), (4.0, Edge(0)), (5.0, Edge(0)), (6.0, Edge(0)), (9.0, Edge(0)), (10.0, Corner(1))]),
+        (24.0, &[(6.0, Corner(0)), (7.0, Edge(0)), (18.0, Edge(0)), (19.0, Corner(1))]),
+        (40.0, &[(10.0, Corner(0)), (11.0, Edge(0)), (30.0, Edge(0)), (31.0, Corner(1))]),
+        (100.0, &[(11.0, Corner(0)), (12.0, Edge(0))]),
+    ];
+    for zoom in [1.0_f32, 2.0] {
+        let scale = |p: [f64; 2]| p.map(|v| v / f64::from(zoom));
+        let xf = view(zoom);
+        for &(side, samples) in matrix {
+            let quad = [[0.0, 0.0], [side, 0.0], [side, side], [0.0, side]].map(scale);
+            let mut app = app(quad, zoom);
+            app.ui.tool_options.transform_reference_point = false;
+            let t = app.ui.transform.as_ref().unwrap();
+            let rect = Rect::from_min_size(Pos2::ZERO, vec2(side as f32, side as f32));
+            for y in [0.0, -1.0] {
+                for &(x, expected) in samples {
+                    let p = scale([x, y]);
+                    let icon = match expected {
+                        Corner(0) => CursorIcon::ResizeNwSe,
+                        Corner(1) => CursorIcon::ResizeNeSw,
+                        _ => CursorIcon::ResizeVertical,
+                    };
+                    assert_eq!(crate::transform_tool::box_hit(&app, t, p, 12.0 / f64::from(zoom)), expected, "{side}, {zoom}, {x}, {y}");
+                    assert_eq!(cursor(&app, &xf, p, Modifiers::NONE), Some(icon));
+                    assert_eq!(transform_controls_cursor(rect, pos2(x as f32, y as f32)), Some(icon));
+                }
+            }
+        }
     }
 }
 
@@ -169,6 +195,8 @@ fn turned_box_zones_and_resize_cursors_follow_the_quad() {
         let t = app.ui.transform.as_ref().unwrap();
         for (p, expected, icon) in [
             ([500.0, 100.0], Hit::Corner(1), CursorIcon::ResizeHorizontal),
+            ([111.0, 99.0], Hit::Corner(0), CursorIcon::ResizeVertical),
+            ([112.0, 99.0], Hit::Edge(0), CursorIcon::ResizeNeSw),
             ([180.0, 95.0], Hit::Edge(0), CursorIcon::ResizeNeSw),
             ([505.0, 150.0], Hit::Edge(1), CursorIcon::ResizeNwSe),
             ([180.0, 101.0], Hit::Inside, CursorIcon::Default),
@@ -268,8 +296,11 @@ fn unopened_move_controls_share_hover_but_keep_the_move_press_band() {
     for (p, starts_transform) in [
         (pos2(100.0, 100.0), true),
         (pos2(180.0, 95.0), true),
+        (pos2(180.0, 89.0), true),
         (pos2(505.0, 150.0), true),
         (pos2(518.0, 150.0), true),
+        (pos2(519.0, 150.0), false),
+        (pos2(300.0, 70.0), false),
         (pos2(180.0, 101.0), false),
         (pos2(620.0, 200.0), false),
         (pos2(-20.0, -20.0), false),

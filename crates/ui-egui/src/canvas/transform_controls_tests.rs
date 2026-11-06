@@ -323,18 +323,14 @@ fn move_transform_controls_show_resize_and_rotate_cursors_before_first_interacti
         (r.center_bottom(), egui::CursorIcon::ResizeVertical),
         (r.right_center(), egui::CursorIcon::ResizeHorizontal),
         (r.left_center(), egui::CursorIcon::ResizeHorizontal),
-        // An outward edge band resizes between handles. Beyond it the curved rotate arrow
-        // replaces the pointer (#4658).
-        (pos2(r.left() + r.width() * 0.25, r.top() - 11.0), egui::CursorIcon::ResizeVertical),
+        // Just beyond the outward edge band, the curved rotate arrow replaces the pointer (#4658).
         (pos2(r.left() + r.width() * 0.25, r.top() - 12.0), egui::CursorIcon::None),
     ] {
         assert_eq!(transform_controls_cursor(r, p), Some(expected), "hover at {p:?}");
         assert!(transform_controls_hit(r, p), "same region must start a transform");
     }
     assert_eq!(transform_controls_cursor(r, r.center()), Some(egui::CursorIcon::Default), "interior stays Move");
-    let far = pos2(r.center().x, r.top() - 30.0);
-    assert_eq!(transform_controls_cursor(r, far), Some(egui::CursorIcon::None));
-    assert!(!transform_controls_hit(r, far), "far hover must not consume a Move press");
+    assert_eq!(transform_controls_cursor(r, pos2(r.center().x, r.top() - 30.0)), Some(egui::CursorIcon::None));
     // The rotate arrow points into the nearest edge or corner. Handles and the interior have none.
     let into = |p: Pos2| transform_controls_turn(r, p);
     assert_eq!(into(pos2(r.left() + r.width() * 0.25, r.top() - 12.0)), Some(vec2(0.0, 16.0)), "top edge");
@@ -353,11 +349,10 @@ fn move_transform_controls_show_resize_and_rotate_cursors_before_first_interacti
 }
 
 #[test]
-fn transform_control_hit_resizes_or_rotates_within_the_press_zones() {
+fn transform_control_hit_keeps_move_interior_free_and_has_rotation_band() {
     let r = Rect::from_min_max(pos2(20.0, 30.0), pos2(100.0, 70.0));
     assert!(transform_controls_hit(r, r.left_top()));
     assert!(transform_controls_hit(r, pos2(60.0, 18.0)));
     assert!(!transform_controls_hit(r, r.center()));
-    assert!(transform_controls_hit(r, pos2(60.0, 12.0)), "the 18-point rotation band still starts a transform");
-    assert!(!transform_controls_hit(r, pos2(60.0, 11.0)), "beyond the band a press stays with Move");
+    assert!(!transform_controls_hit(r, pos2(60.0, 4.0)));
 }
