@@ -425,3 +425,14 @@ fn a_pick_marker_is_read_once_and_governs_the_next_change_only() {
     assert_eq!(crate::layer_reveal::track(&mut app, &ctx), Some(inner));
     assert!(expanded(&app, group), "a later command change opens the group");
 }
+
+#[test]
+fn direct_selection_calls_after_a_pick_make_it_a_command_change() {
+    let (mut app, inner, group, ctx) = closed_group_doc(Tool::Brush, false);
+    app.ui.tool_options.move_auto_select = false;
+    ctrl_click(&mut app);
+    app.session.select_layer(group).unwrap();
+    app.session.select_layer(inner).unwrap();
+    assert_eq!(crate::layer_reveal::track(&mut app, &ctx), Some(inner));
+    assert!(expanded(&app, group), "a direct selection away and back is not a pick");
+}

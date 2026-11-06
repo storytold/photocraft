@@ -2004,3 +2004,30 @@ fn the_active_layer_change_count_moves_only_when_a_command_changes_the_active_la
     s.execute("layer.select", json!({"layer": a.0})).unwrap();
     assert!(s.active_layer_changes() >= m + 2, "a round trip back to the same layer still counts");
 }
+
+#[test]
+fn direct_selection_calls_count_active_layer_changes_only_when_the_layer_changes() {
+    let mut s = session_with_doc();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let a = s.active().unwrap().active_layer.unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let b = s.active().unwrap().active_layer.unwrap();
+    let count = |s: &Session| s.active_layer_changes();
+    let n = count(&s);
+    s.select_layer(b).unwrap();
+    assert_eq!(count(&s), n, "select_layer of the active layer");
+    s.select_layer(a).unwrap();
+    assert_eq!(count(&s), n + 1, "select_layer of another layer");
+    s.restore_layer_selection(Some(a), &[a], Some(a)).unwrap();
+    assert_eq!(count(&s), n + 1, "restore_layer_selection of the same active layer");
+    s.restore_layer_selection(Some(b), &[b], Some(b)).unwrap();
+    assert_eq!(count(&s), n + 2, "restore_layer_selection of another layer");
+    layer_multi_cmds::set_selection(&mut s, vec![b], Some(b), Some(b)).unwrap();
+    assert_eq!(count(&s), n + 2, "set_selection of the same active layer");
+    layer_multi_cmds::set_selection(&mut s, vec![a], Some(a), Some(a)).unwrap();
+    assert_eq!(count(&s), n + 3, "set_selection of another layer");
+    s.set_active_layer(Some(a));
+    assert_eq!(count(&s), n + 3, "set_active_layer of the same layer");
+    s.set_active_layer(Some(b));
+    assert_eq!(count(&s), n + 4, "set_active_layer of another layer");
+}

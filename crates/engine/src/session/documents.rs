@@ -1,7 +1,7 @@
 use crate::{EngineError, Result};
 
 use super::history::fix_selection;
-use super::{DocState, Document, Session, channel_cmds, smart_cmds};
+use super::{DocState, Document, LayerId, Session, channel_cmds, smart_cmds};
 
 /// Move item `i` of `v` to position `to`, clamped to the end. Returns where it went; `None` when
 /// `i` is out of range.
@@ -53,9 +53,33 @@ impl Session {
     pub(crate) fn note_active_change(&mut self) {
         let id = self.active().map(|st| st.doc.id);
         if id != self.active_doc_for_generation {
+            self.active_layer_changes = self.active_layer_changes.wrapping_add(1);
             self.active_doc_for_generation = id;
             self.active_generation = self.active_generation.wrapping_add(1);
         }
+    }
+
+    /// The active document and its active layer, for [`Self::note_layer_change`].
+    pub(crate) fn active_layer_stamp(&self) -> Option<(photocraft_doc::DocId, Option<LayerId>)> {
+        self.active().map(|st| (st.doc.id, st.active_layer))
+    }
+
+    /// Count a change of the active document or layer since `before` (from
+    /// [`Self::active_layer_stamp`]). Every path that can change either calls this after it.
+    pub(crate) fn note_layer_change(&mut self, before: Option<(photocraft_doc::DocId, Option<LayerId>)>) {
+        if self.active_layer_stamp() != before {
+            self.active_layer_changes = self.active_layer_changes.wrapping_add(1);
+        }
+    }
+
+    /// Make `layer` the active document's active layer and nothing else (the selection list and
+    /// anchor are left as they are), counted in [`Self::active_layer_changes`].
+    pub fn set_active_layer(&mut self, layer: Option<LayerId>) {
+        let before = self.active_layer_stamp();
+        if let Some(st) = self.active_mut() {
+            st.active_layer = layer;
+        }
+        self.note_layer_change(before);
     }
 
     pub fn set_active(&mut self, index: usize) -> bool {
