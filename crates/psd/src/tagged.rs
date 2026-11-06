@@ -414,15 +414,16 @@ impl TaggedBlock {
 
     /// Serialized size in bytes as a layer block (two-byte alignment).
     pub fn encoded_len(&self, version: Version) -> usize {
-        self.encoded_len_aligned(version, 2)
+        usize::try_from(self.encoded_len_aligned(version, 2)).unwrap_or(usize::MAX)
     }
 
-    /// Serialized size in bytes as [`Self::write`] writes it with `alignment`.
-    pub(crate) fn encoded_len_aligned(&self, version: Version, alignment: usize) -> usize {
-        let l = if uses_long_length(version, &self.key) { 8 } else { 4 };
-        let n = usize::try_from(self.encoded_data_len()).unwrap_or(usize::MAX);
-        let p = self.padding.as_ref().map_or(Self::default_padding((self.encoded_data_len() % alignment as u64) as usize, alignment), Vec::len);
-        (8 + l + p).saturating_add(n)
+    /// Serialized size in bytes as [`Self::write`] writes it with `alignment`. In `u64`: a
+    /// deferred PSB block can be longer than a 32-bit `usize`.
+    pub(crate) fn encoded_len_aligned(&self, version: Version, alignment: usize) -> u64 {
+        let l: u64 = if uses_long_length(version, &self.key) { 8 } else { 4 };
+        let n = self.encoded_data_len();
+        let p = self.padding.as_ref().map_or(Self::default_padding((n % alignment as u64) as usize, alignment), Vec::len);
+        (8 + l + p as u64).saturating_add(n)
     }
 }
 
