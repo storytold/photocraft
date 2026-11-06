@@ -445,10 +445,7 @@ fn commit_path_current(app: &mut PhotocraftApp, pen: &PenPath, closed: bool) -> 
         // path selected, a new Work Path replaces the old one. The drawn path ends up selected.
         // A resumed draft whose subpath changed meanwhile joins the path it came from, as a new
         // subpath, even with nothing selected in the Paths panel.
-        let exists = |n: &String| app.session.active().is_some_and(|st| path_exists(&st.doc, n));
-        let resumed_from =
-            pen.resumes.as_ref().filter(|r| r.layer.is_none() && app.session.active().is_some_and(|st| st.doc.id.0 == r.doc)).map(|r| r.path.clone());
-        let target = resumed_from.filter(exists).or_else(|| app.ui.selected_path.clone().filter(exists));
+        let target = draft_target(app, pen);
         let name = target.clone().unwrap_or_else(|| "work".into());
         let mut params = json!({"name": name, "path": path});
         if target.is_some() {
@@ -462,6 +459,44 @@ fn commit_path_current(app: &mut PhotocraftApp, pen: &PenPath, closed: bool) -> 
         return false;
     }
     true
+}
+
+/// The document path a Path-mode draft joins when committed (not into a vector mask): the path it
+/// resumed, else the path selected in the Paths panel. `None`: it becomes a new Work Path.
+fn draft_target(app: &PhotocraftApp, pen: &PenPath) -> Option<String> {
+    let exists = |n: &String| app.session.active().is_some_and(|st| path_exists(&st.doc, n));
+    let resumed_from =
+        pen.resumes.as_ref().filter(|r| r.layer.is_none() && app.session.active().is_some_and(|st| st.doc.id.0 == r.doc)).map(|r| r.path.clone());
+    resumed_from.filter(exists).or_else(|| app.ui.selected_path.clone().filter(exists))
+}
+
+/// What Make Shape turns a Path-mode draft into, without committing it: the path the commit would
+/// leave (the draft joined to the path it goes into, with the Path Operation, or alone as a new
+/// Work Path), and whether that is the Work Path, which the shape then takes. With a vector mask
+/// targeted, the draft alone: the mask stays as it was. `None` with no document.
+pub(super) fn draft_shape_path(app: &PhotocraftApp, pen: &PenPath) -> Option<(Value, bool)> {
+    let drawn = pen_to_json(pen, false);
+    let doc = &app.session.active()?.doc;
+    if pen.resumes.as_ref().is_some_and(|r| r.layer.is_some()) || targeted_vector_mask(app).is_some() {
+        return Some((drawn, false));
+    }
+    if let Some(r) = pen.resumes.as_ref().filter(|r| r.doc == doc.id.0)
+        && let Some(p) = with_resumed_subpath(doc, r, &drawn)
+    {
+        return Some((p, r.path == "work"));
+    }
+    // With nothing to join, the commit's new Work Path would replace the old one.
+    let Some(name) = draft_target(app, pen) else { return Some((drawn, true)) };
+    let existing = doc_path(doc, &name)?;
+    let mut p = photocraft_engine::vector_cmds::path_json(existing);
+    let op = pen_path_op(&app.ui.tool_options).unwrap_or("combine");
+    if let (Some(subs), Some(new)) = (p.get_mut("subpaths").and_then(Value::as_array_mut), drawn.get("subpaths").and_then(Value::as_array)) {
+        subs.extend(new.iter().cloned().map(|mut sp| {
+            sp["op"] = json!(op);
+            sp
+        }));
+    }
+    Some((p, name == "work"))
 }
 
 /// Does `doc` have the path the Paths panel calls `name`: "work", or a saved path's name?
@@ -780,7 +815,21 @@ fn fit_with_straight_segments(trace: &[[f64; 2]], straight: &[usize], fit: f64, 
 use super::{PenOwner, cancel_stale_pen, capture_pen_owner};
 
 fn commit_path(app: &mut PhotocraftApp, pen: &PenPath, closed: bool) -> Result<(), String> {
-    let Some(owner) = pen.owner.as_ref().filter(|o| o.valid(app)) else { return Err("Pen draft target is stale; no path was changed".into()) };
+    let Some(owner) = pen.owner.clone().filter(|o| o.valid(app)) else { return Err("Pen draft target is stale; no path was changed".into()) };
+    let result = as_owner(app, &owner, |app| {
+        let result = commit_path_current(app, pen, closed);
+        if result && matches!(owner.target, super::PenTarget::Shape { .. } | super::PenTarget::VectorMask(_)) {
+            app.ui.selected_path = Some("layer".into());
+        }
+        result
+    });
+    if result { Ok(()) } else { Err(app.ui.status.clone()) }
+}
+
+/// Run `f` with the options, colours, active layer, Paths panel selection and vector mask target
+/// the draft's `owner` captured when drawing began, then put the current ones back (the Paths
+/// panel selection stays as `f` left it).
+fn as_owner<R>(app: &mut PhotocraftApp, owner: &PenOwner, f: impl FnOnce(&mut PhotocraftApp) -> R) -> R {
     let options = std::mem::replace(&mut app.ui.tool_options, owner.options.clone());
     let vector_mask = std::mem::replace(&mut app.ui.vector_mask_target, owner.vector_mask);
     app.ui.selected_path = match &owner.target {
@@ -800,10 +849,7 @@ fn commit_path(app: &mut PhotocraftApp, pen: &PenPath, closed: bool) -> Result<(
             photocraft_engine::channel_cmds::ChannelTarget::Composite
         };
     }
-    let result = commit_path_current(app, pen, closed);
-    if result && matches!(owner.target, super::PenTarget::Shape { .. } | super::PenTarget::VectorMask(_)) {
-        app.ui.selected_path = Some("layer".into());
-    }
+    let result = f(app);
     if let (Some(st), Some(channel)) = (app.session.active_mut(), channel) {
         st.channel_view.target = channel;
     }
@@ -811,5 +857,36 @@ fn commit_path(app: &mut PhotocraftApp, pen: &PenPath, closed: bool) -> Result<(
     app.session.tools.background = background;
     app.ui.tool_options = options;
     app.ui.vector_mask_target = vector_mask;
-    if result { Ok(()) } else { Err(app.ui.status.clone()) }
+    result
+}
+
+/// Make Shape on a Pen draft (#10934), as one History step: a draft begun in Shape mode is
+/// committed (it is a shape already, and a resumed subpath keeps its layer's other subpaths);
+/// otherwise a new shape layer, with the shape tools' fill and stroke, of what the commit would
+/// have made, worked out as the commit does, with the settings drawing began with.
+pub(super) fn make_shape_from_draft(app: &mut PhotocraftApp, pen: &PenPath) -> Result<Value, String> {
+    let owner = pen.owner.clone();
+    if owner.as_ref().is_some_and(|o| !o.valid(app)) {
+        return Err("Pen draft target is stale; no path was changed".into());
+    }
+    if owner.as_ref().is_some_and(|o| matches!(o.target, super::PenTarget::Shape { .. })) {
+        return try_pen_commit(app, false).map(|()| Value::Null);
+    }
+    let selected = app.ui.selected_path.clone();
+    let params = |app: &mut PhotocraftApp| {
+        let (path, consume) = draft_shape_path(app, pen).ok_or_else(|| tl!("No document").to_string())?;
+        let params = json!({"path": path, "consumeWorkPath": consume, "fill": fill_param(app), "stroke": stroke_param(app)});
+        Ok::<_, String>((params, consume))
+    };
+    let made = match &owner {
+        Some(o) => as_owner(app, o, params),
+        None => params(app),
+    };
+    app.ui.selected_path = selected;
+    let (params, consume) = made?;
+    let r = app.run("path.toShape", params);
+    if r.is_ok() && consume && app.ui.selected_path.as_deref() == Some("work") {
+        app.ui.selected_path = None;
+    }
+    r
 }

@@ -279,7 +279,11 @@ pub fn panel_menu(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui) {
     ui.separator();
     run_menu_command(app, ui, tl!("Flatten Image"), "layer.flattenImage", Some(json!({})));
     ui.separator();
-    if ui.add_enabled(app.session.is_enabled("layer.lockLayers"), egui::Button::new(tl!("Lock Layers…"))).clicked() {
+    let mut lock_layers = egui::Button::new(tl!("Lock Layers…"));
+    if let Some(key) = crate::shortcuts::shortcut_label(app, "layer.lockLayers") {
+        lock_layers = lock_layers.shortcut_text(key);
+    }
+    if ui.add_enabled(app.session.is_enabled("layer.lockLayers"), lock_layers).clicked() {
         app.ui.layers_panel_dialog = Some(LayersPanelDialog::LockLayers { transparency: false, pixels: false, position: false, artboard: false, all: true });
         ui.close();
     }
