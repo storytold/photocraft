@@ -23,6 +23,9 @@ cognitive_complexity = "deny"
 wildcard_imports = "deny"
 
 [dependencies]
+# The shared native-shell host (local checkout beside the Craft repos; upstream: craft-libs).
+craft-mobile = { path = "../../../../craft-mobile" }
+serde_json = { workspace = true }
 photocraft-engine = { workspace = true }
 photocraft-io = { workspace = true }
 photocraft-codecs = { workspace = true }
@@ -31,11 +34,9 @@ photocraft-ui-egui = { workspace = true }
 egui = { workspace = true }
 eframe = { workspace = true, features = ["wgpu", "accesskit"] }
 log = { workspace = true }
-thiserror = { workspace = true }
-# Blocks on wgpu's async adapter/device setup once at start (already in Cargo.lock).
-pollster = "1"
 
 [target.'cfg(target_os = "android")'.dependencies]
 # eframe doesn't choose an activity backend; the Kotlin shell subclasses NativeActivity.
 winit = { version = "=0.30.13", default-features = false, features = ["android-native-activity"] }
 android_logger = "0.15"
+
