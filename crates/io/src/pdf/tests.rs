@@ -393,3 +393,29 @@ fn leading_newline_stays_in_the_first_selection_span() {
     let content = String::from_utf8(stream_after(&pdf, "/Contents 4 0 R")).unwrap();
     assert!(content.contains("/ActualText <FEFF000A0041>"), "the first span retains the leading newline:\n{content}");
 }
+
+#[test]
+fn artboards_export_as_one_page_each() {
+    use photocraft_doc::{Artboard, Group};
+    let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::F32, true);
+    let mut d = Document::new("pages.pdf", Size { width: 40, height: 30 }, ColorMode::Rgb, SampleType::F32);
+    d.resolution_dpi = 72.0;
+    for (rect, px) in [(Rect::new(0, 0, 20, 30), [1.0, 0.0, 0.0, 1.0]), (Rect::new(20, 0, 40, 30), [0.0, 0.0, 1.0, 1.0])] {
+        let layer = Layer::new("Pixels", LayerContent::Raster(solid(fmt, rect.x0, rect.y0, rect.x1, rect.y1, &px)));
+        let group = Group { children: vec![layer], expanded: true, artboard: Some(Artboard::new(rect)), frame_stroke: None };
+        d.layers.push(Layer::new("Page", LayerContent::Group(group)));
+    }
+    let out = export(&d).unwrap();
+    check_structure(&out.bytes);
+    let parsed = lopdf::Document::load_mem(&out.bytes).unwrap();
+    let pages = parsed.get_pages();
+    assert_eq!(pages.len(), 2);
+    for id in pages.values() {
+        let page = parsed.get_dictionary(*id).unwrap();
+        let media = page.get(b"MediaBox").unwrap().as_array().unwrap();
+        let w = media[2].as_float().or_else(|_| media[2].as_i64().map(|v| v as f32)).unwrap();
+        let h = media[3].as_float().or_else(|_| media[3].as_i64().map(|v| v as f32)).unwrap();
+        assert!((w - 20.0).abs() < 0.01 && (h - 30.0).abs() < 0.01, "page {w}x{h}");
+    }
+    assert_eq!(out.bytes.windows(15).filter(|w| *w == b"/Subtype /Image").count(), 2);
+}
