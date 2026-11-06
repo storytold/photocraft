@@ -4627,3 +4627,35 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	Odaberite drugi dokument za svaki kanal.
 	A picked document is no longer open.	Jedan odabrani dokument više nije otvoren.
 	A picked document is no longer a grayscale document of the same size.	Jedan odabrani dokument više nije dokument u nijansama sive iste veličine.
+
+# Native XCF import report
+	Import Conversion Report	Izvještaj o konverziji pri uvozu
+	Import-time outcomes. Editing uses native PhotoCraft rules.	Rezultati pri uvozu. Uređivanje koristi izvorna pravila programa PhotoCraft.
+	A newer report format is retained. Its details cannot be displayed.	Sačuvan je noviji format izvještaja. Njegovi detalji se ne mogu prikazati.
+	No conversion report was recorded.	Nije zabilježen izvještaj o konverziji.
+	No entries on this page.	Nema stavki na ovoj stranici.
+	Layer mask	Maska sloja
+	Source item	Izvorna stavka
+	{first}–{last} of {total}	{first}–{last} od {total}
+	Native equivalent	Izvorni ekvivalent
+	Native approximation	Izvorna aproksimacija
+	Retained, not applied	Sačuvano, nije primijenjeno
+	Nonessential data skipped	Preskočeni nebitni podaci
+	Unknown outcome	Nepoznat ishod
+	Native rules	Izvorna pravila
+	Native capability limit	Ograničenje izvornih mogućnosti
+	Conversion not implemented	Konverzija nije implementirana
+	Resource unavailable	Resurs nije dostupan
+	Invalid optional data	Neispravni opcionalni podaci
+	Retention limit	Ograničenje čuvanja
+	Precision conversion	Konverzija preciznosti
+	Unknown reason	Nepoznat razlog
+	Native layer {id} (removed; historical reference)	Izvorni sloj {id} (uklonjen; historijska referenca)
+	Native layer: {name}	Izvorni sloj: {name}
+	Alpha Percentile	Alfa percentil
+	Alpha Weighted	Ponderisano alfom
+	Color Percentile	Percentil boje
+	Connectivity	Povezanost
+	Disc	Kružno susjedstvo
+	Each	Svaki kanal
+	Value	Vrijednost
