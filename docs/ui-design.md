@@ -132,13 +132,17 @@ Hand's Fit on Screen and Zoom's Actual Pixels actions require two consecutive or
 primary clicks on the same toolbar slot, using egui's configured time and distance limits.
 Modified clicks do not join that pair, including when a modifier is released before the
 button. An ordinary pair immediately after Alt/Option-click remains usable; a third rapid
-ordinary click does not repeat the action. Keyboard activation only selects the tool.
+ordinary click does not repeat the action. Keyboard and accessibility activation only select
+the tool. Completed gestures run in input order, including when several arrive in one frame.
+Replayed pointer releases respect enabled controls, clipping, foreground areas and modals in
+both the previous and current layouts.
 
 A completed touch release retains its position and flyout ownership through the immediate
 pointer disappearance emitted by the native and web integrations. Standalone disappearance,
 focus loss, touch cancellation and releases elsewhere break future click history without
 undoing an earlier completed release in the same frame. Cancelled contacts cannot become
-later held flyouts. These rules leave release-time Alt/Option tool cycling unchanged.
+later held flyouts. Additional touch contacts cannot restart the original contact's 0.35-second
+hold deadline. These rules leave release-time Alt/Option tool cycling unchanged.
 
 ## Menus
 

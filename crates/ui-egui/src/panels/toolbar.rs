@@ -186,18 +186,11 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                     if slot.len() > 1 {
                                         paint_toolbar_flyout_indicator(ui, &t, &resp);
                                     }
-                                    let primary = resp.clicked_by(egui::PointerButton::Primary);
                                     let held = ui.data(|d| d.get_temp::<egui::Id>(held_id)) == Some(key);
-                                    if resp.clicked() && !primary && !held {
-                                        pointer.clear_clicks(ui);
-                                        crate::tool_memory::select(app, tool);
-                                    }
-                                    if primary {
-                                        controls.push(gestures::Control::Slot { rect: resp.rect, tools: slot, key, displayed: tool, held });
-                                    }
-                                    // Right-click, long-press, or press-drag away opens the flyout (Photoshop).
+                                    controls.push(gestures::Control::Slot { target: gestures::Target::new(&resp), tools: slot, key, displayed: tool, held });
+                                    // Retained contact ownership also preserves its original long-press deadline.
                                     let held_for = (pointer.active_press && resp.is_pointer_button_down_on())
-                                        .then(|| ui.input(|i| i.pointer.press_start_time().map(|t0| i.time - t0)))
+                                        .then(|| pointer.press_started_at.map(|t0| ui.input(|i| i.time) - t0))
                                         .flatten();
                                     if slot.len() > 1
                                         && let Some(seconds) = held_for
@@ -288,16 +281,14 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                                                 t.text_dim,
                                                             );
                                                         }
-                                                        let primary = ir.clicked_by(egui::PointerButton::Primary);
                                                         let held = released && ui.data(|d| d.get_temp::<egui::Id>(held_id)) == Some(key);
-                                                        if held || primary {
-                                                            controls.push(gestures::Control::Row { rect: r, key, displayed: tool, tool: item, primary, held });
-                                                        }
-                                                        if ir.clicked() && !primary {
-                                                            pointer.clear_clicks(ui);
-                                                            crate::tool_memory::select(app, item);
-                                                            ui.data_mut(|d| d.remove::<(egui::Id, Rect)>(flyout_id));
-                                                        }
+                                                        controls.push(gestures::Control::Row {
+                                                            target: gestures::Target::new(&ir),
+                                                            key,
+                                                            displayed: tool,
+                                                            tool: item,
+                                                            held,
+                                                        });
                                                     }
                                                 });
                                             },

@@ -837,3 +837,371 @@ fn web_secondary_start_preserves_an_open_held_flyout_release() {
     assert_eq!(h.state().ui.tool, Tool::Pencil, "the original contact still owns the held row release");
     assert!(!flyout_open(&h));
 }
+
+/// A focused slot still supports keyboard selection while its drag-open flyout owns a pointer.
+#[test]
+fn review_keyboard_activation_while_drag_held_selects_the_slot() {
+    let mut h = harness();
+    crate::tool_memory::select(h.state_mut(), Tool::Move);
+    h.run_steps(1);
+    let at = h.get_by_label("Brush Tool  (B)").rect().center();
+    pointer(&mut h, at, true, egui::Modifiers::NONE);
+    h.event(egui::Event::PointerMoved(at + vec2(40.0, 0.0)));
+    h.run_steps(1);
+    assert!(flyout_open(&h));
+    assert_eq!(h.state().ui.tool, Tool::Move, "drag opening alone does not select");
+    h.get_by_label("Brush Tool  (B)").focus();
+    h.key_press(egui::Key::Space);
+    h.run_steps(1);
+    assert_eq!(h.state().ui.tool, Tool::Brush);
+}
+
+/// Earlier completed view pairs cannot disappear when a different slot owns the final click.
+#[test]
+fn review_view_pair_before_another_slot_keeps_both_results() {
+    for tool in [Tool::Hand, Tool::Zoom] {
+        let mut h = harness();
+        h.state_mut().run("file.new", json!({"width": 8, "height": 8})).unwrap();
+        crate::tool_memory::select(h.state_mut(), tool);
+        h.state_mut().ui.views[0].fit_pending = false;
+        h.state_mut().ui.views[0].zoom = 0.5;
+        h.run_steps(1);
+        let at = h.get_by_label(if tool == Tool::Hand { "Hand Tool  (H)" } else { "Zoom Tool  (Z)" }).rect().center();
+        let brush = h.get_by_label("Brush Tool  (B)").rect().center();
+        for pos in [at, at, brush] {
+            h.input_mut().events.extend([
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE },
+                egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE },
+            ]);
+        }
+        h.run_steps(1);
+        assert_eq!(h.state().ui.tool, Tool::Brush);
+        assert_eq!(h.state().ui.views[0].fit_pending, tool == Tool::Hand);
+        assert_eq!(h.state().ui.views[0].zoom, if tool == Tool::Zoom { 1.0 } else { 0.5 });
+    }
+}
+
+/// A secondary web contact cannot restart the original contact's 0.35-second hold interval.
+#[test]
+fn review_web_secondary_down_preserves_the_hold_deadline() {
+    let mut h = harness();
+    let at = h.get_by_label("Brush Tool  (B)").rect().center();
+    touch(&mut h, at, egui::TouchPhase::Start, true);
+    h.run_steps(17);
+    assert!(!flyout_open(&h));
+    h.input_mut().events.extend([
+        egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE },
+        egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(2), phase: egui::TouchPhase::Start, pos: at + vec2(100.0, 0.0), force: None },
+    ]);
+    h.run_steps(1);
+    h.run_steps(5);
+    assert!(flyout_open(&h), "the owner has been held beyond 0.35 seconds, the duplicate down has not");
+    assert_eq!(h.state().ui.tool, Tool::Brush);
+}
+
+/// Keyboard and held-row selection follow event order rather than their row drawing order.
+#[test]
+fn review_keyboard_row_activation_keeps_its_event_order() {
+    for key_after_release in [true, false] {
+        let mut h = harness();
+        let at = h.get_by_label("Brush Tool  (B)").rect().center();
+        pointer(&mut h, at, true, egui::Modifiers::NONE);
+        h.run_steps(24);
+        let (key, _) = h.ctx.data(|d| d.get_temp::<(egui::Id, Rect)>(egui::Id::unique("tool-flyout"))).unwrap();
+        let area = h.ctx.memory(|m| m.area_rect(key.with("flyout"))).unwrap();
+        let margin = egui::Frame::popup(&h.ctx.global_style()).total_margin();
+        let gap = (area.height() - margin.top - margin.bottom - 4.0 * 26.0) / 3.0;
+        let pencil = pos2(area.center().x, area.top() + margin.top + 26.0 + gap + 13.0);
+        let brush = pos2(area.center().x, area.top() + margin.top + 13.0);
+        let row_id = h.ctx.viewport(|v| {
+            v.prev_pass
+                .widgets
+                .get_layer(egui::LayerId::new(egui::Order::Foreground, key.with("flyout")))
+                .filter(|w| w.sense.senses_click() && w.interact_rect.contains(brush))
+                .last()
+                .map(|w| w.id)
+                .unwrap()
+        });
+        h.ctx.memory_mut(|m| m.request_focus(row_id));
+        let keys = [true, false].map(|pressed| egui::Event::Key {
+            key: egui::Key::Space,
+            physical_key: None,
+            pressed,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        let release = [
+            egui::Event::PointerMoved(pencil),
+            egui::Event::PointerButton { pos: pencil, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE },
+        ];
+        if key_after_release {
+            h.input_mut().events.extend(release);
+            h.input_mut().events.extend(keys);
+        } else {
+            h.input_mut().events.extend(keys);
+            h.input_mut().events.extend(release);
+        }
+        h.run_steps(1);
+        assert_eq!(h.state().ui.tool, if key_after_release { Tool::Brush } else { Tool::Pencil });
+        assert!(!flyout_open(&h));
+    }
+}
+
+/// A secondary row click is not a supported tool-selection gesture and cannot replace a held choice.
+#[test]
+fn review_secondary_row_click_does_not_select_a_tool() {
+    let mut h = harness();
+    let at = h.get_by_label("Brush Tool  (B)").rect().center();
+    pointer(&mut h, at, true, egui::Modifiers::NONE);
+    h.run_steps(24);
+    let (key, _) = h.ctx.data(|d| d.get_temp::<(egui::Id, Rect)>(egui::Id::unique("tool-flyout"))).unwrap();
+    let area = h.ctx.memory(|m| m.area_rect(key.with("flyout"))).unwrap();
+    let margin = egui::Frame::popup(&h.ctx.global_style()).total_margin();
+    let gap = (area.height() - margin.top - margin.bottom - 4.0 * 26.0) / 3.0;
+    let pencil = pos2(area.center().x, area.top() + margin.top + 26.0 + gap + 13.0);
+    let brush = pos2(area.center().x, area.top() + margin.top + 13.0);
+    h.input_mut().events.extend([
+        egui::Event::PointerMoved(pencil),
+        egui::Event::PointerButton { pos: pencil, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE },
+        egui::Event::PointerMoved(brush),
+        egui::Event::PointerButton { pos: brush, button: egui::PointerButton::Secondary, pressed: true, modifiers: egui::Modifiers::NONE },
+        egui::Event::PointerButton { pos: brush, button: egui::PointerButton::Secondary, pressed: false, modifiers: egui::Modifiers::NONE },
+    ]);
+    h.run_steps(1);
+    assert_eq!(h.state().ui.tool, Tool::Pencil);
+    assert!(!flyout_open(&h));
+}
+
+/// Endpoint displacement still disqualifies a click when integrations omit an intermediate move.
+#[test]
+fn review_displaced_releases_without_move_events_cannot_form_a_pair() {
+    for web in [false, true] {
+        let mut h = harness();
+        h.state_mut().run("file.new", json!({"width": 8, "height": 8})).unwrap();
+        crate::tool_memory::select(h.state_mut(), Tool::Zoom);
+        h.state_mut().ui.views[0].fit_pending = false;
+        h.state_mut().ui.views[0].zoom = 0.5;
+        h.run_steps(1);
+        let rect = h.get_by_label("Zoom Tool  (Z)").rect();
+        let delta = h.ctx.options(|o| o.input_options.max_click_dist) * 0.75;
+        let start = rect.center() - vec2(delta, 0.0);
+        let end = rect.center() + vec2(delta, 0.0);
+        assert!(rect.contains(start) && rect.contains(end));
+        for _ in 0..2 {
+            h.input_mut().events.extend([
+                egui::Event::PointerMoved(start),
+                egui::Event::PointerButton { pos: start, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE },
+            ]);
+            if web {
+                h.input_mut().events.push(egui::Event::Touch {
+                    device_id: egui::TouchDeviceId(1),
+                    id: egui::TouchId(1),
+                    phase: egui::TouchPhase::Start,
+                    pos: start,
+                    force: None,
+                });
+            }
+            h.input_mut().events.push(egui::Event::PointerButton {
+                pos: end,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            });
+            if web {
+                h.input_mut().events.extend([
+                    egui::Event::PointerGone,
+                    egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(1), phase: egui::TouchPhase::End, pos: end, force: None },
+                ]);
+            }
+            h.run_steps(1);
+            assert_eq!(h.state().ui.tool, Tool::Zoom);
+            assert_eq!(h.state().ui.views[0].zoom, 0.5, "web={web}");
+        }
+    }
+}
+
+/// Batched replay cannot click through foreground windows, modals, or later same-layer controls.
+#[test]
+fn review_replay_respects_widget_ownership() {
+    let reference = harness();
+    let rect = reference.get_by_label("Zoom Tool  (Z)").rect();
+    for mode in 0..5 {
+        let mut ready = false;
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width":8,"height":8})).unwrap();
+        app.ui.views[0].fit_pending = false;
+        app.ui.views[0].zoom = 0.5;
+        let mut h = Harness::builder().with_size(vec2(1200.0, 1500.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+            move |ui, app: &mut PhotocraftApp| {
+                if !ready {
+                    PhotocraftApp::setup_context(ui.ctx(), theme::ThemeKind::Studio);
+                    ready = true;
+                    return;
+                }
+                if mode == 4 {
+                    ui.disable();
+                }
+                toolbar(app, ui);
+                match mode {
+                    0 => {
+                        egui::Area::new(egui::Id::unique("ownership-overlay")).order(egui::Order::Foreground).fixed_pos(rect.min).show(ui.ctx(), |ui| {
+                            ui.allocate_exact_size(rect.size(), Sense::click());
+                        });
+                    }
+                    1 => {
+                        egui::Modal::new(egui::Id::unique("ownership-modal")).show(ui.ctx(), |ui| {
+                            ui.label("Modal outside toolbar");
+                        });
+                    }
+                    2 | 3 => {
+                        ui.interact(rect, egui::Id::unique("same-layer-overlay"), if mode == 2 { Sense::click() } else { Sense::drag() });
+                    }
+                    _ => {}
+                }
+            },
+            app,
+        );
+        h.run_steps(4);
+        let at = rect.center();
+        for _ in 0..2 {
+            h.input_mut().events.extend([
+                egui::Event::PointerMoved(at),
+                egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE },
+                egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE },
+            ]);
+        }
+        h.run_steps(1);
+        assert_eq!(h.state().ui.tool, Tool::Move, "mode={mode}");
+        assert_eq!(h.state().ui.views[0].zoom, 0.5, "mode={mode}");
+    }
+}
+
+/// Scrolled-out tool geometry never receives raw release replay beyond its clipped hit rectangle.
+#[test]
+fn review_replay_respects_scroll_clipping() {
+    let reference = harness();
+    let at = reference.get_by_label("Zoom Tool  (Z)").rect().center();
+    let mut ready = false;
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.run("file.new", json!({"width":8,"height":8})).unwrap();
+    app.ui.views[0].fit_pending = false;
+    app.ui.views[0].zoom = 0.5;
+    let mut h = Harness::builder().with_size(vec2(1200.0, 400.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        move |ui, app: &mut PhotocraftApp| {
+            if !ready {
+                PhotocraftApp::setup_context(ui.ctx(), theme::ThemeKind::Studio);
+                ready = true;
+                return;
+            }
+            toolbar(app, ui);
+        },
+        app,
+    );
+    h.run_steps(4);
+    for _ in 0..2 {
+        h.input_mut().events.extend([
+            egui::Event::PointerMoved(at),
+            egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE },
+            egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE },
+        ]);
+    }
+    h.run_steps(1);
+    assert_eq!(h.state().ui.tool, Tool::Move);
+    assert_eq!(h.state().ui.views[0].zoom, 0.5);
+}
+
+/// An enabling/unclipping frame must not replay input rejected by the toolkit's previous layout.
+#[test]
+fn review_replay_respects_previous_pass_eligibility() {
+    let reference = harness();
+    let at = reference.get_by_label("Zoom Tool  (Z)").rect().center();
+    let blocked_id = egui::Id::unique("toolbar-test-blocked");
+    for clip in [false, true] {
+        let mut ready = false;
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width":8,"height":8})).unwrap();
+        app.ui.views[0].fit_pending = false;
+        app.ui.views[0].zoom = 0.5;
+        let mut h = Harness::builder().with_size(vec2(1200.0, 1500.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+            move |ui, app: &mut PhotocraftApp| {
+                if !ready {
+                    PhotocraftApp::setup_context(ui.ctx(), theme::ThemeKind::Studio);
+                    ready = true;
+                    return;
+                }
+                if ui.data(|d| d.get_temp::<bool>(blocked_id)).unwrap_or(true) {
+                    if clip {
+                        ui.set_clip_rect(Rect::from_min_max(Pos2::ZERO, pos2(1200.0, 400.0)));
+                    } else {
+                        ui.disable();
+                    }
+                }
+                toolbar(app, ui);
+            },
+            app,
+        );
+        h.run_steps(4);
+        h.ctx.data_mut(|d| d.insert_temp(blocked_id, false));
+        for _ in 0..2 {
+            h.input_mut().events.extend([
+                egui::Event::PointerMoved(at),
+                egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE },
+                egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE },
+            ]);
+        }
+        h.run_steps(1);
+        assert_eq!(h.state().ui.tool, Tool::Move, "clip={clip}");
+        assert_eq!(h.state().ui.views[0].zoom, 0.5, "clip={clip}");
+        // Once both layouts are eligible, existing ordinary clicks must still work.
+        for pair in 0..2 {
+            pointer(&mut h, at, true, egui::Modifiers::NONE);
+            pointer(&mut h, at, false, egui::Modifiers::NONE);
+            assert_eq!(h.state().ui.tool, Tool::Zoom);
+            assert_eq!(h.state().ui.views[0].zoom, if pair == 1 { 1.0 } else { 0.5 });
+        }
+    }
+}
+
+/// Accessibility names the activated widget, preserves event order and ignores foreign trees.
+#[test]
+fn review_accessibility_activation_obeys_event_order_and_tree() {
+    for after_release in [false, true] {
+        let mut h = harness();
+        let at = h.get_by_label("Zoom Tool  (Z)").rect().center();
+        let move_rect = h.get_by_label("Move Tool  (V)").rect();
+        let id = h.ctx.viewport(|v| {
+            v.prev_pass.widgets.layers().flat_map(|(_, widgets)| widgets.iter()).find(|w| w.sense.senses_click() && w.rect == move_rect).map(|w| w.id).unwrap()
+        });
+        let activation = egui::Event::AccessKitActionRequest(egui::accesskit::ActionRequest {
+            action: egui::accesskit::Action::Click,
+            target_tree: egui::accesskit::TreeId::ROOT,
+            target_node: id.accesskit_id(),
+            data: None,
+        });
+        let click = [
+            egui::Event::PointerMoved(at),
+            egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE },
+            egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE },
+        ];
+        if after_release {
+            h.input_mut().events.extend(click);
+            h.input_mut().events.push(activation);
+        } else {
+            h.input_mut().events.push(activation);
+            h.input_mut().events.extend(click);
+        }
+        h.run_steps(1);
+        assert_eq!(h.state().ui.tool, if after_release { Tool::Move } else { Tool::Zoom });
+        // A request into another tree must not select this tree's coincident node id.
+        crate::tool_memory::select(h.state_mut(), Tool::Zoom);
+        h.event(egui::Event::AccessKitActionRequest(egui::accesskit::ActionRequest {
+            action: egui::accesskit::Action::Click,
+            target_tree: egui::accesskit::TreeId("00000000-0000-0000-0000-000000000001".parse().unwrap()),
+            target_node: id.accesskit_id(),
+            data: None,
+        }));
+        h.run_steps(1);
+        assert_eq!(h.state().ui.tool, Tool::Zoom);
+    }
+}
