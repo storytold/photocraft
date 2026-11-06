@@ -312,3 +312,7 @@ sync_github_name = false
 [people.davidvhk]
 real_name = "David Vanhoucke"
 sync_github_name = true
+
+[people.CGnomazoid]
+real_name = "Colin Ulmer"
+sync_github_name = false
