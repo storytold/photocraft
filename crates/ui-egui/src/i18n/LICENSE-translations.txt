@@ -1,5 +1,5 @@
 PhotoCraft's Korean, German, Spanish, Brazilian Portuguese, Italian, Ukrainian, Dutch, Czech,
-Turkish, Hungarian, Serbian, Russian, Swedish, Finnish, Danish, Norwegian Bokmål and Bosnian UI
+Turkish, Hungarian, Serbian, Russian, Swedish, Finnish, Danish, Norwegian Bokmål, Bosnian and Hebrew UI
 translation catalogs are licensed under MIT OR Apache-2.0, at your option.
 The full license texts are in ../../../../LICENSE-MIT and ../../../../LICENSE-APACHE.
 
@@ -61,3 +61,6 @@ translations of PhotoCraft's English labels, and no proprietary translation reso
 Bosnian translations: Nine (@nine-codes) with Claude Code (AI-assisted), original translations of
 PhotoCraft's English labels, shared with storytold/craft-i18n (locales/bs/); no proprietary
 translation resources were used. Not yet reviewed by a native speaker.
+Hebrew translations: machine-translated for @tronicum with Claude (Anthropic) as an AI
+contributor and not yet reviewed by a native speaker; original translations of PhotoCraft's
+English labels, and no proprietary translation resources were used.

@@ -6,7 +6,7 @@
 #            @plural              `source` is "one|other" (English forms); the translation lists the
 #                                 language's forms separated by "|" (see `plural` in i18n/mod.rs)
 #            anything else        a disambiguating context passed to `tr_ctx`
-#   escapes  \n  \t  \  inside a column. `{name}` placeholders must appear in both columns.
+#   escapes  \n  \t  \\  inside a column. `{name}` placeholders must appear in both columns.
 #   lines starting with # and blank lines are ignored.
 #
 # Clean-room: every entry was written from the plain meaning of the English label using ordinary
@@ -18,6 +18,7 @@
 # singular/plural (one|other, `plural_one_other`), the same simplification Farsi and English use
 # here. Reviewed for consistency by an AI model; native-speaker review of the specialist terms is
 # welcome.
+# Machine-translated with Claude (Anthropic) for @tronicum; not yet reviewed by a native speaker.
 	Mask Options…	אפשרויות מסכה…
 	Layer Mask Display Options…	אפשרויות תצוגת מסכת שכבה…
 	Channel Color	צבע ערוץ
@@ -4451,3 +4452,123 @@ navigator	Zoom	תקריב
 	Recently Used Colors	צבעים שנעשה בהם שימוש לאחרונה
 	Shapes can't use patterns yet	צורות עדיין לא יכולות להשתמש בתבניות
 	Stop Color	צבע נקודת עצירה
+
+# Strings added on main after the catalog was completed (2026-11-06)
+	A command was cancelled or stopped during batch processing. Continue with the next file or stop?	פקודה בוטלה או נעצרה במהלך עיבוד האצווה. להמשיך לקובץ הבא או לעצור?
+	A file is still being placed; try again when it has finished.	קובץ עדיין נמצא בתהליך הצבה; נסה שוב כשההצבה תסתיים.
+	A frame supports affine transforms; select its image for perspective transforms	מסגרת תומכת בהתמרות אפיניות; בחר את התמונה שלה להתמרות פרספקטיבה
+	A frame supports affine transforms; select its image to warp it	מסגרת תומכת בהתמרות אפיניות; בחר את התמונה שלה כדי לעוות אותה
+	Accelerated	מואץ
+	Answer the open import question first, then import this file again.	ענה תחילה על שאלת הייבוא הפתוחה, ואז ייבא את הקובץ הזה שוב.
+	Arrowhead options	אפשרויות ראש חץ
+	Arrowheads	ראשי חץ
+	Attribute	מאפיין
+	Background (default)	רקע (ברירת מחדל)
+	Batch preview	תצוגה מקדימה של אצווה
+	Cancelled placing {name}	ההצבה של {name} בוטלה
+	Channel Options…	אפשרויות ערוץ…
+	Concavity	קעירות
+	Convert to Frame…	המר למסגרת…
+	Create a new custom frame	צור מסגרת מותאמת אישית חדשה
+	Create a new polygonal frame	צור מסגרת מצולעת חדשה
+	Create a new triangular frame	צור מסגרת משולשת חדשה
+	Create a single history state	צור מצב היסטוריה יחיד
+	Data Sets as Files is unavailable on the web	ערכות נתונים כקבצים אינן זמינות בגרסת האינטרנט
+	Dropped files weren't placed: their document was closed.	הקבצים שנגררו לא הוצבו: המסמך שלהם נסגר.
+	Dropped files weren't placed: too many are waiting for their document.	הקבצים שנגררו לא הוצבו: יותר מדי קבצים ממתינים למסמך שלהם.
+	Effect	אפקט
+	Empty	ריק
+	End	סוף
+	Filter for embedded smart objects	סנן אובייקטים חכמים מוטבעים
+	Filter for linked smart objects that are missing	סנן אובייקטים חכמים מקושרים שחסרים
+	Filter for smart objects linked locally	סנן אובייקטים חכמים המקושרים מקומית
+	Fit Content to Frame	התאם תוכן למסגרת
+	Fit Frame to Content	התאם מסגרת לתוכן
+	Frame coordinates must be finite and within 600000 pixels	קואורדינטות המסגרת חייבות להיות סופיות ובטווח של 600000 פיקסלים
+	High Memory Photoshop Document	מסמך Photoshop עתיר זיכרון
+	Image Compression	דחיסת תמונה
+	Import Image…	ייבוא תמונה…
+	Import as New Group	ייבא כקבוצה חדשה
+	Import as New Group keeps “{group}” and adds the file as a new group beside it.	ייבוא כקבוצה חדשה שומר את "{group}" ומוסיף את הקובץ כקבוצה חדשה לצידה.
+	Invalid frame transform	התמרת מסגרת לא חוקית
+	Invalid nested file drop	גרירת קובץ מקונן לא חוקית
+	LZW	LZW
+	Layer Effects	אפקטי שכבה
+	Learn	למידה
+	Lining	ספרות בגובה אחיד
+	Linked	מקושר
+	New Frame	מסגרת חדשה
+	New file	קובץ חדש
+	No Adv. Blending	ללא מיזוג מתקדם
+	No Layer Effects	ללא אפקטי שכבה
+	No Layer Mask	ללא מסכת שכבה
+	No Vector Mask	ללא מסכת וקטור
+	No import is waiting. Import the file again.	אין ייבוא ממתין. ייבא את הקובץ שוב.
+	Not Clipped	לא גזור
+	Not Empty	לא ריק
+	Not Linked	לא מקושר
+	Not Locked	לא נעול
+	Not Visible	לא גלוי
+	Numerals	ספרות
+	On your computer	במחשב שלך
+	Open anyway	פתח בכל זאת
+	Opening this document uses more memory and may slow down your computer or other running applications.	פתיחת המסמך הזה צורכת יותר זיכרון ועלולה להאט את המחשב שלך או יישומים אחרים הפועלים בו.
+	Opening “{name}” requires an estimated {est} GiB of memory ({avail} GiB available).	פתיחת "{name}" דורשת כ-{est} GiB זיכרון ({avail} GiB זמינים).
+	Opening “{name}” requires an estimated {est} GiB of memory. The available memory could not be measured.	פתיחת "{name}" דורשת כ-{est} GiB זיכרון. לא ניתן היה למדוד את הזיכרון הזמין.
+	Pause For	השהה למשך
+	Pause For:	השהה למשך:
+	Playback Options…	אפשרויות הפעלה…
+	Proportional	יחסי
+	Proportional Lining	יחסי בגובה אחיד
+	Proportional Oldstyle	יחסי עתיק
+	Replace Image…	החלף תמונה…
+	Replace deletes everything in “{group}” first, including presets you edited or moved there. This can't be undone.	החלפה מוחקת תחילה את כל התוכן של "{group}", כולל ערכות קבועות מראש שערכת או העברת לשם. לא ניתן לבטל פעולה זו.
+	Save Image Pyramid	שמור פירמידת תמונה
+	Save Transparency	שמור שקיפות
+	Set 	ערכה 
+	Set 1	ערכה 1
+	Set 10	ערכה 10
+	Set 11	ערכה 11
+	Set 12	ערכה 12
+	Set 13	ערכה 13
+	Set 14	ערכה 14
+	Set 15	ערכה 15
+	Set 16	ערכה 16
+	Set 17	ערכה 17
+	Set 18	ערכה 18
+	Set 19	ערכה 19
+	Set 2	ערכה 2
+	Set 20	ערכה 20
+	Set 3	ערכה 3
+	Set 4	ערכה 4
+	Set 5	ערכה 5
+	Set 6	ערכה 6
+	Set 7	ערכה 7
+	Set 8	ערכה 8
+	Set 9	ערכה 9
+	Set as default	הגדר כברירת מחדל
+	Source: {name}	מקור: {name}
+	Specify Channels:	ציין ערוצים:
+	Start	התחלה
+	Step by Step	צעד אחר צעד
+	Stylistic Sets	ערכות סגנוניות
+	Tabular	טבלאי
+	Tabular Lining	טבלאי בגובה אחיד
+	Tabular Oldstyle	טבלאי עתיק
+	The GPU compositor is still being prepared	מרכיב ה-GPU עדיין בהכנה
+	The History Brush source was deleted: set a new source in the History panel	מקור מברשת ההיסטוריה נמחק: הגדר מקור חדש בחלונית ההיסטוריה
+	The frame is locked	המסגרת נעולה
+	The frame is unavailable	המסגרת אינה זמינה
+	Transparent (default)	שקוף (ברירת מחדל)
+	Use these settings for new arrows	השתמש בהגדרות אלה עבור חצים חדשים
+	Website	אתר אינטרנט
+	ZIP	ZIP
+	seconds	שניות
+	{message} into “{group}”	{message} אל "{group}"
+	{ok} written to {dir}	{ok} נכתבו אל {dir}
+	{set} from {file} replaced the one from {earlier}	{set} מתוך {file} החליף את זה מתוך {earlier}
+@plural	The brush group “{group}” already has {n} brush of yours.|The brush group “{group}” already has {n} brushes of yours.	לקבוצת המברשות "{group}" כבר יש {n} מברשת שלך.|לקבוצת המברשות "{group}" כבר יש {n} מברשות שלך.
+@plural	The gradient group “{group}” already exists ({n} gradient).|The gradient group “{group}” already exists ({n} gradients).	קבוצת מעברי הצבעים "{group}" כבר קיימת ({n} מעבר צבעים).|קבוצת מעברי הצבעים "{group}" כבר קיימת ({n} מעברי צבעים).
+@plural	{n} action file loaded|{n} action files loaded	נטען {n} קובץ פעולות|נטענו {n} קובצי פעולות
+@plural	{n} file could not be loaded: {errors}|{n} files could not be loaded: {errors}	לא ניתן היה לטעון {n} קובץ: {errors}|לא ניתן היה לטעון {n} קבצים: {errors}
+@plural	{what}: {n} Image Assets output failed|{what}: {n} Image Assets outputs failed	{what}: {n} פלט נכסי תמונה נכשל|{what}: {n} פלטי נכסי תמונה נכשלו
