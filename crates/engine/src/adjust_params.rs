@@ -574,6 +574,56 @@ pub enum CurvesEyedropper {
     White,
 }
 
+impl CurvesEyedropper {
+    /// The `targetColors` preference key of this picker's target colour.
+    pub fn target_key(self) -> &'static str {
+        match self {
+            Self::Black => "shadows",
+            Self::NeutralGray => "midtones",
+            Self::White => "highlights",
+        }
+    }
+
+    /// Photoshop's default target (black, 128 gray, white) as 0..1 levels.
+    pub fn default_target(self) -> [f32; 3] {
+        match self {
+            Self::Black => [0.0; 3],
+            Self::NeutralGray => [128.0 / 255.0; 3],
+            Self::White => [1.0; 3],
+        }
+    }
+
+    /// This picker's target in the session's `targetColors` preference.
+    pub fn target_in(self, s: &crate::Session) -> [f32; 3] {
+        s.prefs().target_colors.rgb(self.target_key()).unwrap_or_else(|| self.default_target())
+    }
+}
+
+/// A target colour as 0..1 levels: finite, clamped.
+fn check_target(cmd: &str, target: [f32; 3]) -> Result<[f32; 3]> {
+    if target.iter().any(|v| !v.is_finite()) {
+        return Err(bad(cmd, "target components must be finite"));
+    }
+    Ok(target.map(|v| v.clamp(0.0, 1.0)))
+}
+
+/// The gray level of a target in a Grayscale document: the mean of its levels, as the pickers read
+/// a Grayscale sample.
+fn gray_of(c: [f32; 3]) -> f32 {
+    (c[0] + c[1] + c[2]) / 3.0
+}
+
+/// What each channel's Set Gray Point output is offset by from the sample's luma: the target's
+/// colour relative to its own luma (so the sample takes on the target's cast and keeps its
+/// brightness). A neutral target (all levels equal, the default 128 gray) offsets nothing.
+fn midtone_offsets(target: [f32; 3]) -> [f32; 3] {
+    if target[0] == target[1] && target[1] == target[2] {
+        return [0.0; 3];
+    }
+    let luma = rgb_luma(target);
+    target.map(|v| v - luma)
+}
+
 /// Verify that serializing and parsing `points` keeps every point and the requested anchor.
 fn curve_round_trip_keeps_anchor(points: &[CurvePoint], input: f32, output: f32) -> bool {
     let Ok(parsed) = parse_curve("curves eyedropper", "curve", &curve_arr(points)) else { return false };
@@ -585,8 +635,11 @@ fn curve_round_trip_keeps_anchor(points: &[CurvePoint], input: f32, output: f32)
     parsed.iter().any(|point| (point.input - input).abs() < 1e-6 && (point.output - output).abs() < 1e-6)
 }
 
-fn move_curve_endpoint(points: &mut [CurvePoint], sample: f32, black: bool) {
+/// Moves the black (or white) endpoint of `points` to input `sample` with output `target` (0 or 1
+/// for the default targets), scaling the other points' inputs along.
+fn move_curve_endpoint(points: &mut [CurvePoint], sample: f32, black: bool, target: f32) {
     let sample = sample.clamp(0.0, 1.0);
+    let target = target.clamp(0.0, 1.0);
     let mut candidate = points.to_vec();
     if black {
         for p in &mut candidate {
@@ -594,7 +647,7 @@ fn move_curve_endpoint(points: &mut [CurvePoint], sample: f32, black: bool) {
         }
         if let Some(first) = candidate.first_mut() {
             first.input = sample;
-            first.output = 0.0;
+            first.output = target;
         }
     } else {
         for p in &mut candidate {
@@ -602,7 +655,7 @@ fn move_curve_endpoint(points: &mut [CurvePoint], sample: f32, black: bool) {
         }
         if let Some(last) = candidate.last_mut() {
             last.input = sample;
-            last.output = 1.0;
+            last.output = target;
         }
     }
 
@@ -610,7 +663,6 @@ fn move_curve_endpoint(points: &mut [CurvePoint], sample: f32, black: bool) {
     // separated by less than half a level. Scaling an endpoint toward the sample can collapse
     // several edited points together even when the target endpoint itself survives. Check that
     // the full curve survives the actual serializer and parser.
-    let target = if black { 0.0 } else { 1.0 };
     if curve_round_trip_keeps_anchor(&candidate, sample, target) {
         points.clone_from_slice(&candidate);
         return;
@@ -622,11 +674,11 @@ fn move_curve_endpoint(points: &mut [CurvePoint], sample: f32, black: bool) {
     // curve intact.
     if black {
         for point in points.iter_mut().rev().take(2) {
-            point.output = 0.0;
+            point.output = target;
         }
     } else {
         for point in points.iter_mut().take(2) {
-            point.output = 1.0;
+            point.output = target;
         }
     }
 }
@@ -768,8 +820,31 @@ fn set_levels_gamma(c: &mut LevelsChannel, sample: f32, target: f32) {
 /// the sample's luma, removing the cast while keeping its brightness. The composite record is
 /// kept. Grayscale: Black/White move the composite input; there is no gray picker.
 pub fn levels_eyedropper(base: &Value, picker: CurvesEyedropper, sample: [f32; 3], mode: ColorMode) -> Result<Adjustment> {
+    levels_eyedropper_to(base, picker, sample, picker.default_target(), mode)
+}
+
+/// Sets the output black (or white) of `c` to `target` when it isn't the picker's default (0 or
+/// 1), so the sample at the input end maps to the target. With the default target the output
+/// levels are left as they were.
+fn set_levels_output(c: &mut LevelsChannel, target: f32, black: bool) {
+    let default = if black { 0.0 } else { 1.0 };
+    if target != default {
+        if black {
+            c.out_black = target;
+        } else {
+            c.out_white = target;
+        }
+    }
+}
+
+/// [`levels_eyedropper`] mapping the sample to `target` (0..1 levels; the picker's target colour)
+/// instead of Photoshop's default black, 128 gray or white. Set Black/White Point also set
+/// each channel's output black/white to the target's level in that channel; Set Gray Point keeps
+/// the sample's luma and gives it the target's cast (a neutral target removes the cast).
+pub fn levels_eyedropper_to(base: &Value, picker: CurvesEyedropper, sample: [f32; 3], target: [f32; 3], mode: ColorMode) -> Result<Adjustment> {
     const CMD: &str = "levels eyedropper";
     check_eyedropper(CMD, picker, sample, mode)?;
+    let target = check_target(CMD, target)?;
     let mut adjustment = from_params("levels", base, None, mode)?;
     let Adjustment::Levels { master, per_channel, space, .. } = &mut adjustment else {
         return Err(bad(CMD, "expected a Levels adjustment"));
@@ -778,20 +853,23 @@ pub fn levels_eyedropper(base: &Value, picker: CurvesEyedropper, sample: [f32; 3
         return Err(bad(CMD, "only RGB channel Levels are supported"));
     }
     let sample = sample.map(|v| v.clamp(0.0, 1.0));
+    let black = picker == CurvesEyedropper::Black;
     if mode == ColorMode::Grayscale {
-        set_levels_input(master, (sample[0] + sample[1] + sample[2]) / 3.0, picker == CurvesEyedropper::Black);
+        set_levels_input(master, gray_of(sample), black);
+        set_levels_output(master, gray_of(target), black);
         return Ok(adjustment);
     }
     match picker {
         CurvesEyedropper::Black | CurvesEyedropper::White => {
-            for (c, v) in per_channel.iter_mut().zip(sample) {
-                set_levels_input(c, v, picker == CurvesEyedropper::Black);
+            for ((c, v), t) in per_channel.iter_mut().zip(sample).zip(target) {
+                set_levels_input(c, v, black);
+                set_levels_output(c, t, black);
             }
         }
         CurvesEyedropper::NeutralGray => {
-            let target = rgb_luma(sample);
-            for (c, v) in per_channel.iter_mut().zip(sample) {
-                set_levels_gamma(c, v, target);
+            let luma = rgb_luma(sample);
+            for ((c, v), offset) in per_channel.iter_mut().zip(sample).zip(midtone_offsets(target)) {
+                set_levels_gamma(c, v, (luma + offset).clamp(0.0, 1.0));
             }
         }
     }
@@ -801,9 +879,15 @@ pub fn levels_eyedropper(base: &Value, picker: CurvesEyedropper, sample: [f32; 3
 /// The eyedropper of adjustment `kind` ("levels" or "curves"): [`levels_eyedropper`] or
 /// [`curves_eyedropper`].
 pub fn adjustment_eyedropper(kind: &str, base: &Value, picker: CurvesEyedropper, sample: [f32; 3], mode: ColorMode) -> Result<Adjustment> {
+    adjustment_eyedropper_to(kind, base, picker, sample, picker.default_target(), mode)
+}
+
+/// [`adjustment_eyedropper`] mapping the sample to `target` (the picker's target colour):
+/// [`levels_eyedropper_to`] or [`curves_eyedropper_to`].
+pub fn adjustment_eyedropper_to(kind: &str, base: &Value, picker: CurvesEyedropper, sample: [f32; 3], target: [f32; 3], mode: ColorMode) -> Result<Adjustment> {
     match kind {
-        "levels" => levels_eyedropper(base, picker, sample, mode),
-        "curves" => curves_eyedropper(base, picker, sample, mode),
+        "levels" => levels_eyedropper_to(base, picker, sample, target, mode),
+        "curves" => curves_eyedropper_to(base, picker, sample, target, mode),
         _ => Err(bad(EYEDROPPER, "`eyedropper` applies to Levels and Curves only")),
     }
 }
@@ -812,7 +896,16 @@ pub fn adjustment_eyedropper(kind: &str, base: &Value, picker: CurvesEyedropper,
 /// RGB uses the three channel curves. Grayscale uses the composite curve and has no gray picker.
 /// Other colour models stay unsupported until their native channel semantics can be sampled.
 pub fn curves_eyedropper(base: &Value, picker: CurvesEyedropper, sample: [f32; 3], mode: ColorMode) -> Result<Adjustment> {
+    curves_eyedropper_to(base, picker, sample, picker.default_target(), mode)
+}
+
+/// [`curves_eyedropper`] mapping the sample to `target` (0..1 levels; the picker's target colour)
+/// instead of Photoshop's default black, 128 gray or white: Set Black/White Point end each
+/// channel curve at the target's level in that channel; Set Gray Point keeps the sample's luma and
+/// gives it the target's cast (a neutral target removes the cast).
+pub fn curves_eyedropper_to(base: &Value, picker: CurvesEyedropper, sample: [f32; 3], target: [f32; 3], mode: ColorMode) -> Result<Adjustment> {
     check_eyedropper("curves eyedropper", picker, sample, mode)?;
+    let target = check_target("curves eyedropper", target)?;
     // The pickers place points: a pencil-drawn curve is first fitted with points, as when
     // Photoshop leaves the pencil for point editing.
     let mut base = base.clone();
@@ -828,15 +921,14 @@ pub fn curves_eyedropper(base: &Value, picker: CurvesEyedropper, sample: [f32; 3
     };
     let sample = sample.map(|v| v.clamp(0.0, 1.0));
     if mode == ColorMode::Grayscale {
-        let tone = (sample[0] + sample[1] + sample[2]) / 3.0;
-        move_curve_endpoint(master, tone, picker == CurvesEyedropper::Black);
+        move_curve_endpoint(master, gray_of(sample), picker == CurvesEyedropper::Black, gray_of(target));
         return Ok(adjustment);
     }
     match picker {
         CurvesEyedropper::Black | CurvesEyedropper::White => {
             let black = picker == CurvesEyedropper::Black;
-            for (curve, value) in per_channel.iter_mut().zip(sample) {
-                move_curve_endpoint(curve, value, black);
+            for ((curve, value), level) in per_channel.iter_mut().zip(sample).zip(target) {
+                move_curve_endpoint(curve, value, black, level);
             }
             if let Some(endpoint) = if black { master.first_mut() } else { master.last_mut() } {
                 endpoint.output = if black { 0.0 } else { 1.0 };
@@ -844,11 +936,11 @@ pub fn curves_eyedropper(base: &Value, picker: CurvesEyedropper, sample: [f32; 3
         }
         CurvesEyedropper::NeutralGray => {
             // Use sampled luma instead of a fixed mid-gray so removing a cast keeps the sample's
-            // brightness. The per-channel curves precede the composite curve, so invert the
-            // existing master curve while preserving it.
-            let target = inverse_master_target(master, rgb_luma(sample));
-            for (curve, value) in per_channel.iter_mut().zip(sample) {
-                anchor_curve(curve, value, target);
+            // brightness; a coloured target adds its cast on top. The per-channel curves precede
+            // the composite curve, so invert the existing master curve while preserving it.
+            let luma = rgb_luma(sample);
+            for ((curve, value), offset) in per_channel.iter_mut().zip(sample).zip(midtone_offsets(target)) {
+                anchor_curve(curve, value, inverse_master_target(master, (luma + offset).clamp(0.0, 1.0)));
             }
         }
     }
@@ -865,11 +957,22 @@ pub fn eyedropper_from_params(s: &crate::Session, kind: &str, p: &Value) -> Resu
     let Some(e) = p.get("eyedropper") else { return Ok(None) };
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let (picker, sample) = eyedropper_sample(&d.doc, None, e)?;
+    let target = eyedropper_target(s, picker, e)?;
     let mut base = p.clone();
     if let Some(o) = base.as_object_mut() {
         o.remove("eyedropper");
     }
-    adjustment_eyedropper(kind, &base, picker, sample, d.doc.mode).map(Some)
+    adjustment_eyedropper_to(kind, &base, picker, sample, target, d.doc.mode).map(Some)
+}
+
+/// The colour an `eyedropper` param maps its sample to: `eyedropper.target` (`"#rrggbb"` or
+/// `[r, g, b]` in 0..1) when given, else the picker's target in the `targetColors` preference
+/// (black, 128 gray and white by default).
+fn eyedropper_target(s: &crate::Session, picker: CurvesEyedropper, e: &Value) -> Result<[f32; 3]> {
+    match e.get("target") {
+        None | Some(Value::Null) => Ok(picker.target_in(s)),
+        Some(v) => color_of(EYEDROPPER, "eyedropper.target", v),
+    }
 }
 
 /// The `eyedropper` param of `layer.setAdjustment` on Levels or Curves adjustment layer `layer`:
@@ -892,7 +995,8 @@ pub fn layer_eyedropper(s: &crate::Session, layer: photocraft_doc::LayerId, p: &
     }
     let current = if user_keys(&rest).is_empty() { adj.clone() } else { from_params(kind, &rest, Some(adj), d.doc.mode)? };
     let (picker, sample) = eyedropper_sample(&d.doc, Some(layer), e)?;
-    adjustment_eyedropper(kind, &to_params(&current), picker, sample, d.doc.mode).map(Some)
+    let target = eyedropper_target(s, picker, e)?;
+    adjustment_eyedropper_to(kind, &to_params(&current), picker, sample, target, d.doc.mode).map(Some)
 }
 
 const EYEDROPPER: &str = "eyedropper";
@@ -1082,3 +1186,6 @@ pub fn user_keys(p: &Value) -> Map<String, Value> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod target_tests;
