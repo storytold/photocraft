@@ -342,3 +342,272 @@ mod issue_11560 {
         checkbox_hold_release("filter.sharpen.smartSharpen");
     }
 }
+
+// Supplemental #11560 R1: absolute engine -> monitor texture -> offscreen mini pixels.
+// Keep this separate from the frozen relational, target-policy and worker-lifecycle modules.
+mod issue_11560_absolute {
+    use super::*;
+    use egui_kittest::kittest::Queryable;
+
+    const WIDTH: usize = 64;
+    const HEIGHT: usize = 48;
+    // Only final framebuffer quantization/float interpolation may differ by one code. This
+    // is not a tolerance on the engine result, a percentage match, or an adaptive threshold.
+    const SCREEN_TOLERANCE: u8 = 1;
+
+    fn parameters(command: &str, amount: u32) -> Value {
+        match command {
+            "filter.sharpen.unsharpMask" => json!({"amount":amount,"radius":2,"threshold":0}),
+            "filter.sharpen.smartSharpen" => json!({"amount":amount,"radius":2,"reduceNoise":0}),
+            _ => panic!("unexpected absolute-oracle command"),
+        }
+    }
+
+    fn fixture(command: &str, depth: u32) -> (Harness, u64) {
+        let mut h = harness().expect("R1 needs the actual offscreen wgpu renderer; absence is not a pass");
+        // Disable only kittest's synthetic cursor paint, never production pointer events.
+        h.set_render_cursor(false);
+        let app = h.state_mut();
+        app.background_jobs = false; // Inline route only; no claim about native worker lifetime.
+        app.session.color.settings.monitor_profile = "srgb".into();
+        app.session.color.settings.working_rgb = "srgb".into();
+        app.run("file.new", json!({"width":WIDTH,"height":HEIGHT,"depth":depth})).unwrap();
+        app.run("edit.assignProfile", json!({"profile":"srgb"})).unwrap();
+        app.session
+            .edit("R1 opaque two-dimensional RGB fixture", |doc, active| {
+                let surface = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+                for y in 0..HEIGHT as i32 {
+                    for x in 0..WIDTH as i32 {
+                        let r = 0.20 + x as f32 / 256.0 + if x >= 32 { 0.13 } else { 0.0 };
+                        let g = 0.24 + y as f32 / 192.0 + if y % 7 < 3 { 0.09 } else { 0.0 };
+                        let b = 0.62 - x as f32 / 384.0 + if (x + 2 * y) % 9 < 4 { 0.08 } else { 0.0 };
+                        surface.fill_rect(Rect::new(x, y, x + 1, y + 1), &[r, g, b, 1.0]);
+                    }
+                }
+                Ok(())
+            })
+            .unwrap();
+        app.sync_views();
+        let id = photocraft_ui_egui::filter_dialog::open(app, command).unwrap();
+        let fields = &mut app.ui.dialog_mut(id).unwrap().fields;
+        // Off before the first producer pass: no warmed filtered frame can satisfy this cell.
+        fields.insert("__preview".into(), json!(false));
+        for (key, value) in parameters(command, 180).as_object().unwrap() {
+            fields.insert(key.clone(), value.clone());
+        }
+        h.run_steps(12);
+        (h, id)
+    }
+
+    fn expected_texture(h: &Harness, source: &Document, command: &str, amount: Option<u32>) -> Vec<[u8; 4]> {
+        // Independent real command dispatch on the original source, never filter_preview.result
+        // or a cached painted frame. The engine CPU compositor is the project pixel oracle.
+        let mut engine = photocraft_engine::Session::new();
+        engine.color.settings = h.state().session.color.settings.clone();
+        engine.add_document(source.clone(), None);
+        engine.select_layer(h.state().session.active().unwrap().active_layer.unwrap()).unwrap();
+        if let Some(amount) = amount {
+            engine.execute(command, parameters(command, amount)).unwrap();
+        }
+        let doc = &engine.active().unwrap().doc;
+        let composite = photocraft_compose::flatten(doc);
+        assert_eq!(composite.px.len(), WIDTH * HEIGHT);
+        assert!(composite.px.iter().all(|p| p[3] == 1.0), "opaque fixture excludes checker/alpha blending ambiguity");
+        // The public engine display contract includes linear encoding and ICC conversion.
+        // Do not assume that document floats are screenshot bytes (especially at F32).
+        let display = engine.color.canvas_display_for(doc, engine.color.main_display).unwrap();
+        let rgba = display.to_rgba8(&composite);
+        assert_eq!((rgba.width, rgba.height), (WIDTH as u32, HEIGHT as u32));
+        rgba.pixels.chunks_exact(4).map(|p| [p[0], p[1], p[2], p[3]]).collect()
+    }
+
+    fn collect_meshes(shape: &egui::Shape, clip: egui::Rect, out: &mut Vec<egui::epaint::Mesh>) {
+        match shape {
+            egui::Shape::Mesh(mesh) => {
+                let bounds = mesh.vertices.iter().fold(egui::Rect::NOTHING, |r, v| r.union(egui::Rect::from_min_max(v.pos, v.pos)));
+                if (bounds.width() - WIDTH as f32).abs() < 0.01 && (bounds.height() - HEIGHT as f32).abs() < 0.01 && clip.contains_rect(bounds) {
+                    out.push(mesh.as_ref().clone());
+                }
+            }
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| collect_meshes(shape, clip, out)),
+            _ => {}
+        }
+    }
+
+    fn mini_geometry(h: &Harness) -> egui::Rect {
+        assert_eq!(h.ctx.pixels_per_point(), 1.0, "explicit physical screenshot scale");
+        let checkbox = h.get_by_label("Preview").rect();
+        let mut meshes = Vec::new();
+        for shape in &h.output().shapes {
+            collect_meshes(&shape.shape, shape.clip_rect, &mut meshes);
+        }
+        meshes.retain(|m| m.vertices.iter().all(|v| v.pos.y > checkbox.bottom() && v.pos.y < checkbox.bottom() + 180.0));
+        assert_eq!(meshes.len(), 1, "unique fully clipped-in mini, not a canvas/icon/checkbox");
+        let mesh = &meshes[0];
+        assert_eq!((mesh.vertices.len(), mesh.indices.len()), (4, 6));
+        let rect = mesh.vertices.iter().fold(egui::Rect::NOTHING, |r, v| r.union(egui::Rect::from_min_max(v.pos, v.pos)));
+        // Assert the default geometry independently instead of deriving an oracle from an
+        // arbitrary (possibly wrong) production UV mapping. Fractional placement is allowed.
+        for vertex in &mesh.vertices {
+            assert_eq!(vertex.color, egui::Color32::WHITE, "no tint or transient window opacity");
+            let expected_uv = egui::vec2((vertex.pos.x - rect.left()) / rect.width(), (vertex.pos.y - rect.top()) / rect.height());
+            assert!((vertex.uv.x - expected_uv.x).abs() < 1e-6 && (vertex.uv.y - expected_uv.y).abs() < 1e-6, "100% full-image UV contract");
+        }
+        rect
+    }
+
+    fn sample(texture: &[[u8; 4]], rect: egui::Rect, x: u32, y: u32) -> [u8; 4] {
+        // PREDICTABLE kittest uses gamma-space Rgba8Unorm four-tap bilinear sampling,
+        // no dither/MSAA. UVs map texel centres, not integer screen corners:
+        // texel = ((physical_pixel + .5) / pixels_per_point - dest.min) - .5.
+        let sx = x as f32 + 0.5 - rect.left() - 0.5;
+        let sy = y as f32 + 0.5 - rect.top() - 0.5;
+        let (ix, iy) = (sx.floor() as i32, sy.floor() as i32);
+        let (fx, fy) = (sx - sx.floor(), sy - sy.floor());
+        let at = |dx: i32, dy: i32, c: usize| {
+            let tx = (ix + dx).clamp(0, WIDTH as i32 - 1) as usize;
+            let ty = (iy + dy).clamp(0, HEIGHT as i32 - 1) as usize;
+            f32::from(texture[ty * WIDTH + tx][c])
+        };
+        std::array::from_fn(|c| {
+            let top = at(0, 0, c) * (1.0 - fx) + at(1, 0, c) * fx;
+            let bottom = at(0, 1, c) * (1.0 - fx) + at(1, 1, c) * fx;
+            (top * (1.0 - fy) + bottom * fy).round().clamp(0.0, 255.0) as u8
+        })
+    }
+
+    fn assert_pixels(h: &mut Harness, expected: &[[u8; 4]], rejected: &[[u8; 4]], root: &std::path::Path, phase: &str) {
+        let rect = mini_geometry(h);
+        let image = h.render().expect("real app offscreen screenshot, not a cached preview-document probe");
+        // Save evidence before the pixel assertions, including a mismatching screenshot.
+        std::fs::create_dir_all(root).unwrap();
+        image.save(root.join(format!("{phase}.png"))).unwrap();
+        std::fs::write(root.join(format!("{phase}-expected-texture.rgba")), expected.as_flattened()).unwrap();
+        let (x0, x1) = ((rect.left() + 2.0).ceil() as u32, (rect.right() - 2.0).floor() as u32);
+        let (y0, y1) = ((rect.top() + 2.0).ceil() as u32, (rect.bottom() - 2.0).floor() as u32);
+        assert!(x1 > x0 && y1 > y0 && x1 <= image.width() && y1 <= image.height());
+        let mut actual = Vec::new();
+        let mut wanted = Vec::new();
+        let mut max_error = 0;
+        let mut discriminating = 0;
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let p = image.get_pixel(x, y).0;
+                let q = sample(expected, rect, x, y);
+                let wrong = sample(rejected, rect, x, y);
+                if (0..3).any(|c| q[c].abs_diff(wrong[c]) >= 8) {
+                    discriminating += 1;
+                }
+                for c in 0..4 {
+                    max_error = max_error.max(p[c].abs_diff(q[c]));
+                }
+                actual.push(p);
+                wanted.push(q);
+            }
+        }
+        std::fs::write(root.join(format!("{phase}-actual-samples.rgba")), actual.as_flattened()).unwrap();
+        std::fs::write(root.join(format!("{phase}-expected-samples.rgba")), wanted.as_flattened()).unwrap();
+        let geometry = json!({"phase":phase,"texture":[WIDTH,HEIGHT],"dest":[rect.left(),rect.top(),rect.right(),rect.bottom()],"uv":[0,0,1,1],"pixels_per_point":1,"sample_bounds":[x0,y0,x1,y1],"samples":actual.len(),"max_error":max_error,"tolerance":SCREEN_TOLERANCE,"discriminating_pixels":discriminating});
+        std::fs::write(root.join(format!("{phase}.json")), serde_json::to_vec_pretty(&geometry).unwrap()).unwrap();
+        assert!(discriminating >= 16, "{phase}: oracle must reject the other original/filtered state by at least eight codes at sixteen pixels");
+        assert!(actual.iter().all(|p| p[3] == 255), "{phase}: screenshot must be opaque");
+        assert!(
+            max_error <= SCREEN_TOLERANCE,
+            "{phase}: absolute engine/monitor/bilinear screenshot mismatch: max error {max_error}; captures {}",
+            root.display()
+        );
+    }
+
+    fn absolute_route(command: &str, depth: u32) {
+        let _gpu = photocraft_testkit::gpu_lock();
+        let (mut h, id) = fixture(command, depth);
+        let before = h.state().session.active().unwrap().doc.clone();
+        let original_pixels = photocraft_compose::flatten(&before).px.clone();
+        let revision = h.state().session.active().unwrap().revision;
+        let history = h.state().session.active().unwrap().history.past_len();
+        let original = expected_texture(&h, &before, command, None);
+        // A caller can collect these without changing CI or the production renderer. Default
+        // outputs remain in the test process's temp area, separated by process/command/depth.
+        let root =
+            std::env::var_os("PHOTOCRAFT_11560_ARTIFACT_DIR").map(std::path::PathBuf::from).unwrap_or_else(|| std::env::temp_dir().join("photocraft-11560-r1"));
+        let root = root.join(format!("{}-{command}-{depth}", std::process::id()));
+        eprintln!("#11560 R1 captures: {}", root.display());
+        let mut previous: Option<(u32, Vec<[u8; 4]>)> = None;
+        for (amount, on) in [(180, false), (180, true), (60, false), (60, true)] {
+            if h.state().ui.dialogs.iter().find(|d| d.id == id).unwrap().fields["__preview"] != json!(on) {
+                h.get_by_label("Preview").click();
+                h.run_steps(3);
+            }
+            // Change the real dialog's schema fields while unchecked; let the normal app
+            // frame/producer/presenter run. No injected FilterPreview or worker result.
+            for (key, value) in parameters(command, amount).as_object().unwrap() {
+                h.state_mut().ui.dialog_mut(id).unwrap().fields.insert(key.clone(), value.clone());
+            }
+            h.run_steps(12);
+            let filtered = expected_texture(&h, &before, command, Some(amount));
+            let phase = format!("amount-{amount}-preview-{on}");
+            if let Some((prior_amount, prior)) = &previous
+                && *prior_amount != amount
+            {
+                // This second absolute check must also distinguish a stale prior result,
+                // not merely distinguish any sharpened frame from the original.
+                assert_pixels(&mut h, &filtered, prior, &root, &format!("{phase}-parameter-refresh"));
+            }
+            assert_pixels(&mut h, &filtered, &original, &root, &format!("{phase}-filtered"));
+            previous = Some((amount, filtered.clone()));
+            let at = mini_geometry(&h).center();
+            h.hover_at(at);
+            h.run_steps(1);
+            let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+            h.event(button(true));
+            h.run_steps(2);
+            assert_pixels(&mut h, &original, &filtered, &root, &format!("{phase}-pressed"));
+            h.run_steps(3);
+            assert_pixels(&mut h, &original, &filtered, &root, &format!("{phase}-held"));
+            h.event(button(false));
+            h.run_steps(2);
+            assert_pixels(&mut h, &filtered, &original, &root, &format!("{phase}-released"));
+            let st = h.state().session.active().unwrap();
+            assert!(std::sync::Arc::ptr_eq(&before, &st.doc));
+            assert_eq!(photocraft_compose::flatten(&st.doc).px, original_pixels);
+            assert_eq!(st.revision, revision);
+            assert_eq!(st.history.past_len(), history);
+            assert_eq!(
+                h.state().ui.dialogs.iter().find(|d| d.id == id).unwrap().fields["__preview"],
+                json!(on),
+                "real pointer comparison preserves checkbox state"
+            );
+        }
+        photocraft_ui_egui::dialogs::cancel(h.state_mut(), id).unwrap();
+        h.run_steps(3);
+        let st = h.state().session.active().unwrap();
+        assert!(std::sync::Arc::ptr_eq(&before, &st.doc));
+        assert_eq!(photocraft_compose::flatten(&st.doc).px, original_pixels);
+        assert_eq!((st.revision, st.history.past_len()), (revision, history));
+    }
+
+    #[test]
+    fn unsharp_u8_absolute_engine_mini_pixels() {
+        absolute_route("filter.sharpen.unsharpMask", 8);
+    }
+    #[test]
+    fn unsharp_u16_absolute_engine_mini_pixels() {
+        absolute_route("filter.sharpen.unsharpMask", 16);
+    }
+    #[test]
+    fn unsharp_f32_absolute_engine_mini_pixels() {
+        absolute_route("filter.sharpen.unsharpMask", 32);
+    }
+    #[test]
+    fn smart_sharpen_u8_absolute_engine_mini_pixels() {
+        absolute_route("filter.sharpen.smartSharpen", 8);
+    }
+    #[test]
+    fn smart_sharpen_u16_absolute_engine_mini_pixels() {
+        absolute_route("filter.sharpen.smartSharpen", 16);
+    }
+    #[test]
+    fn smart_sharpen_f32_absolute_engine_mini_pixels() {
+        absolute_route("filter.sharpen.smartSharpen", 32);
+    }
+}
