@@ -33,8 +33,9 @@ class PhotoCraftActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        // Only when leaving for good: a recreated activity finds the app still running.
-        if (isFinishing) host.close()
+        // Leaving for good stops the app; a recreation only lets go of this activity's listeners,
+        // and the new activity finds the app still running.
+        if (isFinishing) host.close() else host.release()
         super.onDestroy()
     }
 }

@@ -45,7 +45,7 @@ craft-jpeg = { git = "https://github.com/storytold/craft-libs", rev = "c5a1cbfb5
 craft-pcraft-format = { git = "https://github.com/storytold/craft-libs", rev = "b8f7d93b00dfb8f172938f3d2d796ae62dcfe123" }
 # craft-mobile: the native iPadOS/Android host (apps/photocraft-mobile). From the craft-libs pull
 # request that adds it until that merges; then storytold/craft-libs like the others.
-craft-mobile = { git = "https://github.com/simonhull/craft-libs", rev = "af13bb4a92f6bebf64ed5c6aa9b6a99e434f23c5" }
+craft-mobile = { git = "https://github.com/simonhull/craft-libs", rev = "0c1acfbea9da7e0e4f2d3ed089859f3fa8b1337f" }
 # craft-update: app-specific pretend versions apply to startup and manual checks.
 craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "c5a1cbfb5f9049f9270955caffb5bee5997aebf7", features = ["egui"] }
 thiserror = "2"
