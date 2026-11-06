@@ -2709,14 +2709,14 @@ mod streamed_png_tests {
 
         let lowered = crate::ImportOptions { psd_max_pixel_bytes: 99, ..Default::default() };
         match tiff_admission(100, 0, &lowered, &ctl) {
-            Err(IoError::PsdImportBudget { required, limit }) => assert_eq!((required, limit), (100, 99)),
+            Err(IoError::PsdImportBudget { required, limit, .. }) => assert_eq!((required, limit), (100, 99)),
             other => panic!("expected the caller's limit to refuse, got {:?}", other.map(|_| ())),
         }
         assert_eq!(crate::psd_gate::active_attempt_remaining(), Some(ample), "a refused nested import leaves the parent's allowance untouched");
 
         let stale = crate::ImportOptions { psd_high_memory_approved: true, psd_approved_estimate: Some(99), ..Default::default() };
         match tiff_admission(100, 0, &stale, &ctl) {
-            Err(IoError::PsdImportBudget { required, limit }) => assert_eq!((required, limit), (100, 99)),
+            Err(IoError::PsdImportBudget { required, limit, .. }) => assert_eq!((required, limit), (100, 99)),
             other => panic!("expected the approved estimate bound to refuse, got {:?}", other.map(|_| ())),
         }
         assert_eq!(crate::psd_gate::active_attempt_remaining(), Some(ample), "a refused nested import leaves the parent's allowance untouched");
@@ -2743,7 +2743,7 @@ mod streamed_png_tests {
                 crate::ImportOptions { psd_high_memory_approved: true, psd_approved_estimate: Some(u64::MAX), ..Default::default() },
             ] {
                 match tiff_admission(u64::MAX, 0, &opts, &Interrupt::NONE) {
-                    Err(IoError::PsdImportBudget { required, limit }) => assert_eq!((required, limit), (u64::MAX, u64::MAX)),
+                    Err(IoError::PsdImportBudget { required, limit, .. }) => assert_eq!((required, limit), (u64::MAX, u64::MAX)),
                     other => panic!("expected a hard refusal for {opts:?}, got {:?}", other.map(|_| ())),
                 }
             }

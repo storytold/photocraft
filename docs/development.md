@@ -778,8 +778,20 @@ clipped.
 
 Native desktop platforms use an adaptive memory policy evaluated against currently available
 physical RAM (excluding swap) and, where measurable, system commit headroom:
-- **Hard budget (H)** for known RAM: $\min(75\% \text{ RAM}, \text{RAM} - 1 \text{ GiB}, \text{commit headroom} - 512 \text{ MiB}, \text{aggregate address-space cap})$.
-- **Soft budget (S)**: $\min(50\% \text{ RAM}, 8 \text{ GiB}, H)$.
+- **Hard budget (H)** for known memory, with A the available RAM and C the commit headroom:
+  $\min(\lfloor 3A/4 \rfloor, A - 256 \text{ MiB}, C - r(C), \text{aggregate address-space cap})$, where the
+  commit reserve $r(C) = \min(\max(C/4, 256 \text{ MiB}), 512 \text{ MiB})$. An approved import therefore
+  always leaves at least `LOW_MEMORY_RESERVE` (256 MiB) free.
+- **Soft budget (S)**: $\min(A/2, 8 \text{ GiB}, \max(A - 1 \text{ GiB}, A/4), \max(C - 512 \text{ MiB}, C/4), H)$
+  (the commit term only where C is known).
+- The low-memory band: with more than 4/3 GiB free, automatic opening is unchanged (it leaves
+  1 GiB free). Below that, up to a quarter of the free RAM opens automatically and the rest goes
+  to approval, up to $\min(3A/4, A - 256 \text{ MiB})$. The commit reserve shrinks from a flat
+  512 MiB to a quarter of the headroom with a 256 MiB floor. At or below 256 MiB of either
+  measurement there is no room and every file is refused. For example 1 GiB free gives S = 256 MiB
+  and H = 768 MiB; 512 MiB free gives S = 128 MiB and H = 256 MiB.
+- Scratch-disk credit (see `docs/scratch-disks.md`) is added on top of these limits before a
+  caller's limit applies; non-spillable memory stays against RAM alone.
 - Files requiring $\le S$ are admitted automatically.
 - Files requiring $S < E \le H$ prompt for explicit one-shot user confirmation ("Open anyway") in the UI. Headless callers default to no interactive dialog and require explicit per-invocation opt-in:
   - Engine commands: `file.openAs` and `file.placeEmbedded` take `approveHighMemory: bool` (default `false`); `file.approveMemory` takes `{"id": u64, "approve": bool = true}`.
@@ -790,8 +802,8 @@ physical RAM (excluding swap) and, where measurable, system commit headroom:
 - Files requiring $> H$ are refused and cannot be overridden.
 - When available RAM is unknown (an unsupported platform or a failed provider), native
   automatic admission is 2 GiB, not 8 GiB:
-  $S = \min(2 \text{ GiB}, H)$, where $H$ is the aggregate address-space cap
-  (`native_platform_cap`), reduced by known commit headroom. Estimates above $S$ need the same
+  $S = \min(2 \text{ GiB}, \max(C - 512 \text{ MiB}, C/4), H)$, where $H$ is the aggregate
+  address-space cap (`native_platform_cap`), reduced by known commit headroom as above. Estimates above $S$ need the same
   explicit, per-invocation approval as known-memory estimates above $S$, and approval is possible
   up to $H$. Estimates above 8 GiB remain approvable; `MemoryBudget::warning_threshold` and
   `MemoryBudget::requires_uncertainty_warning` let callers show the uncertain-capacity warning.
@@ -838,7 +850,9 @@ physical RAM (excluding swap) and, where measurable, system commit headroom:
   is `memsw limit - memory limit - swap already used`, and those allowances are combined
   separately from RAM headroom. A memory cgroup whose mount, path, membership, limit or usage
   cannot be read, or whose membership file is malformed or empty, fails closed (available memory
-  is treated as zero) rather than falling back to unrestricted host RAM.
+  is treated as zero, `Some(0)`) rather than falling back to unrestricted host RAM. That reading
+  gives H = 0 from the formula, so it stays refused (only a credited tile share can pass), and
+  the refusal says PhotoCraft measured no free memory or could not read the system's memory limit.
 - Applications can lower the admission threshold with `ImportOptions::psd_max_pixel_bytes`; explicit caller limits may lower admission, never bypass the hard boundary.
 - Concurrent PSD decodes are serialized using a process-wide, cancellation-aware admission gate, with nested decodes sharing the enclosing allowance.
 - A pending high-memory approval is bound to one source and one estimate. The engine keeps at
@@ -855,11 +869,13 @@ physical RAM (excluding swap) and, where measurable, system commit headroom:
   for approval. Windows has no stable file-index API in `std`, so its identity is the length and
   modification time (a different file with both preserved is not distinguished there). The
   `file.approveMemory` permission is one-shot and is not journaled or recorded in an action. A
-  refusal above the hard ceiling is the typed `PsdHardBudget` error (name, required, limit), not
-  a string, and it releases the queued source. Its message says where the limit comes from:
-  the computer's memory on 64-bit desktop; the web build names its fixed cap; on 32-bit desktop the
-  limit may be either, so the message mentions the 2 GiB cap and that the 64-bit build may open the file.
-  Those two also link the releases page. Sizes appear in GiB or MiB next to the exact bytes.
+  refusal above the hard ceiling is the typed `PsdHardBudget` error (name, required, limit,
+  `free_memory`), not a string, and it releases the queued source. Its message says where the
+  limit comes from: the computer's memory on 64-bit desktop; the web build names its fixed cap;
+  on 32-bit desktop the limit may be either, so the message mentions the 2 GiB cap and that the
+  64-bit build may open the file. Those two also link the releases page. Sizes appear in GiB
+  or MiB next to the exact bytes. When measured memory set the limit, the message also gives
+  the free-memory reading and advises closing other apps.
 - A layered TIFF (Photoshop layer data in tags 37724/34377) is admitted by the same policy
   before its composite is decoded. The page's tags are read into the PSD model first, without
   pixels; then that model's layer/workspace estimate, the decoded composite and its
@@ -884,15 +900,26 @@ physical RAM (excluding swap) and, where measurable, system commit headroom:
   opened without Photoshop layers.
 
 Headless RPC and MCP report approval-required memory errors with byte counts (`required`,
-`softLimit`, `hardLimit`, and `availableRam` when known). A hard-budget refusal reports only
-`required` and `hardLimit`: no approval can raise that ceiling, so there is no soft limit or
-capacity to act on. This holds for `doc.open` and `doc.place` and for the MCP `doc_open` and
+`softLimit`, `hardLimit`, and `availableRam` when known); here `availableRam` means available
+physical RAM. A hard-budget refusal reports
+`required` and `hardLimit`, plus `available` and `availableRam` when measured free memory set the
+limit (the typed `free_memory` field). Both fields then contain the smaller of available RAM and
+commit headroom (or the one measurement available), so `availableRam` can represent commit
+headroom rather than physical RAM. There is never a soft limit, because no approval can raise
+that ceiling. A limit set by the caller, the platform cap, or an unknown capacity carries no
+free-memory figure. This holds for `doc.open` and `doc.place` and for the MCP `doc_open` and
 `doc_place` tools, including a refusal from `file.openAs`/`file.placeEmbedded` reached through a
 command. GUI automation imports currently cross a service boundary that returns string errors.
 
+When measured free memory set the limit, the refusal message gives the free amount and ends with
+"Close other apps and try again"; a reading of zero says PhotoCraft measured no free memory or
+could not read the system's memory limit. The approval prompt warns that PhotoCraft may run out of
+memory when opening the file would leave less than 1 GiB of the measured free RAM
+(`LOW_MEMORY_WARNING_MARGIN`).
+
 An import exceeding the hard budget returns `IoError::PsdImportBudget` with the estimated
-and allowed byte counts; imports requiring confirmation return `IoError::PsdApprovalRequired`
-when unapproved. Damaged-file recovery never bypasses these memory guards. The legacy
+and allowed byte counts (and `free_memory` when measured memory set the limit); imports requiring
+confirmation return `IoError::PsdApprovalRequired` when unapproved. Damaged-file recovery never bypasses these memory guards. The legacy
 `psd_to_document` conversion APIs cannot return an error, so they return an empty document and
 an explicit warning on preflight refusal. Layer and mask pixel allocation failures also fail
 ordinary imports instead of opening partial content.
