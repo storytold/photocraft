@@ -2,7 +2,7 @@
 title: Can PhotoCraft open my Photoshop files?
 description: PhotoCraft opens and saves layered PSD and PSB files and keeps what it does not understand yet.
 order: 20
-verified: 0.8.2
+verified: 0.20.2
 ---
 
 Yes. PhotoCraft opens, edits and saves layered PSD and PSB files, including 16-bit, 32-bit, CMYK and Lab documents.

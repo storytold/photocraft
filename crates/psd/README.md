@@ -123,7 +123,7 @@ testgen::{all_cases, merged_only, layered, small, sample_descriptor, pattern_pla
 | RGBA8 extraction | ✓ | – | – | RGB / gray / CMYK layers; merged image also supports indexed / bitmap / duotone |
 | Builder | – | ✓ | – | RGB / gray / CMYK at 8/16 bit, masks, groups, blend modes, opacity, fill, visibility, clipping |
 | Patterns | ✓ | ✓ | ✓ | `Patt` / `Pat2` / `Pat3`, `.pat`, and `.abr` embedded patterns; non-empty tiles allow in-bounds channel subrectangles, decoded size is capped and PackBits expansion is input-bounded |
-| Actions (`.atn`) | ✓ | ✓ | ✓ | `atn::parse` / `atn::write`: version-16 sets (Photoshop 6+): actions with function key, modifiers and colour; steps with event code or string name, panel name, enabled/dialog flags and their descriptor. Exact round trip for version-16 files; version-12 (Photoshop 5) files are read too and written back as version 16 |
+| Actions (`.atn`) | ✓ | ✓ | ✓ | `atn::parse` / `atn::write`: version-16 sets (Photoshop 6+): actions with function key, modifiers and colour; steps with event code or string name, panel name, enabled/dialog flags and their descriptor. Exact round trip for version-16 files, except that flag and Boolean bytes other than 0 or 1 are written back as 1; version-12 (Photoshop 5) files are read too and written back as version 16 |
 
 Pattern channel subrectangles are padded with zeroes to the tile rectangle. All channel
 metadata is checked before any plane is decoded, against one `PatternBudget` shared by every
@@ -156,7 +156,7 @@ allocations for padded channels return an error on failure.
 * Builder → `rgba8` correctness.
 * Unknown blend modes and unknown blocks pass through unchanged.
 
-`tests/it/corpus.rs` (feature `corpus`, run with `cargo xtask test-corpus`) walks `corpus/psd/**/*.{psd,psb}` and `corpus/psd-tools/**/*.{psd,psb}` at the workspace root. For each file it asserts that parsing succeeds and the file round-trips byte for byte, and it prints a result per file. A missing corpus directory fails the test.
+`tests/it/corpus.rs` (feature `corpus`, run with `cargo xtask test-corpus`) walks `corpus/psd/**/*.{psd,psb}` and `corpus/psd-tools/**/*.{psd,psb}` at the workspace root. For each file it asserts that parsing succeeds and the file round-trips byte for byte, and it prints a result per file. The one known-bad upstream file, `group-divider-blend-mode.psd`, is reported but does not fail the test (`KNOWN_BAD`). A missing corpus directory fails the test.
 
 A `cargo-fuzz` skeleton lives in `fuzz/`. It is its own workspace and is excluded from photocraft's. Run it with `cargo +nightly fuzz run parse` (or `descriptor`) from `crates/psd`.
 

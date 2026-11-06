@@ -1104,8 +1104,10 @@ points with `Anch` in pixels).
 What the reference application records when a user works normally, measured on 2026-11-01 by recording
 an action through the panel, mouse and keyboard on a document with layers A, B and C and a second open
 document, then reading the steps back. This is the form PhotoCraft's recorder should write (AUTO-219-1);
-today it drops the active layer's id and names other layers by name when the name is unique
-(`crates/engine/src/actions_record.rs`).
+today it drops the active layer's id when that layer is the only one selected and the command does not
+name a source layer (`layer.new.frame`, `select.loadSelection`, `type.createSelection` and
+`edit.checkSpelling` keep it), and names every other layer it keeps by name when the name is unique, so
+playback acts on that named layer and fails if it is absent (`crates/engine/src/actions_record.rs`).
 
 | User action | Recorded step |
 |---|---|

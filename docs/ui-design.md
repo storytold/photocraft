@@ -104,7 +104,7 @@ missing-glyph boxes. Check every new panel with the offscreen snapshot tool (`do
 
 The app's top bar (`panels::title_bar`) starts with the brand mark (the app icon, `brand.rs`), then the menus, the document title and the workspace controls, like Photoshop's Ps tile and menu row.
 
-- **Windows and Linux:** the window has no OS decorations, so there is one bar, not two stacked. The top bar is the title bar (`titlebar.rs`): Minimize, Maximize/Restore and Close (red on hover, `caption_close` tokens) sit flush in the window's top-right corner, the free gap between the menus and the controls drags the window and a double-click there maximizes it, and invisible 8 pt edges (12 pt corners) resize it. Close runs File › Exit, so unsaved documents are asked about first.
+- **Windows and Linux:** by default the window has no OS decorations, so there is one bar, not two stacked. The top bar is the title bar (`titlebar.rs`): Minimize, Maximize/Restore and Close (red on hover, `caption_close` tokens) sit flush in the window's top-right corner, the free gap between the menus and the controls drags the window and a double-click there maximizes it, and invisible 8 pt edges (12 pt corners) resize it. Close runs File › Exit, so unsaved documents are asked about first. With Preferences › Interface › System Title Bar on, the next launch keeps the OS decorations instead, without the app's caption buttons or resize edges.
 - **macOS:** the traffic lights sit over the integrated title strip (`integrated_titlebar`).
 - **Narrow windows** drop controls that are also in a menu before anything overlaps: the theme toggle (Preferences), then search (Edit › Search), then the workspace switcher narrows (Window › Workspace).
 
@@ -205,8 +205,10 @@ to display text at render time from one catalog per language (`i18n/<code>.tsv`;
 documented in the header of `ja.tsv`). Command ids, menu paths used for logic, the control channel,
 the CLI and MCP always use the English ids and labels.
 
-Languages shipped (`complete_menus` marks a catalog that covers every menu string and `tl!` literal;
-`cargo xtask i18n-coverage` lists what each catalog lacks):
+Languages shipped ("complete" means the catalog sets `complete_menus`: it covers every menu string. No
+catalog covers every `tl!` literal yet; `cargo xtask i18n-coverage` lists what each catalog lacks. For
+example, Arabic, Bosnian, Danish, Finnish, Norwegian Bokmål and Swedish lack 13 of the Frame tool's 28,
+including Fit Content to Frame):
 
 - English (`en`), the source language.
 - Japanese (`ja`), complete.

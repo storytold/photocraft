@@ -361,7 +361,7 @@ it the Linux packages and `SHA256SUMS.txt` are published unsigned and the run sh
 |---|---|
 | `APPLE_CERTIFICATE` | base64 `.p12` with "Developer ID Application: Learning Machines LLC (DJ6XS33FX8)" |
 | `APPLE_CERTIFICATE_PASSWORD` | password for that `.p12` |
-| `KEYCHAIN_PASSWORD` | password for the temporary CI keychain (random if unset) |
+| `KEYCHAIN_PASSWORD` | password for the temporary CI keychain (required on the `release` branch; elsewhere `import-cert.sh` makes a random one if unset) |
 | `APPLE_ID` | Apple ID used by `notarytool` |
 | `APPLE_PASSWORD` | app-specific password for that Apple ID |
 | `APPLE_TEAM_ID` | `DJ6XS33FX8` |
