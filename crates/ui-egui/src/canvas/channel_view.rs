@@ -313,8 +313,8 @@ fn prints_inks(doc: &Document, v: &ChannelView) -> bool {
 /// Whether a proxy composite picks the full composite's pixels: no layer effects or vector masks
 /// ([`proxy_faithful`](photocraft_compose::proxy::proxy_faithful)), no feathered masks, whose
 /// radius is in document pixels, and no pattern fills, whose tiles keep their size on a proxy
-/// unless a cache of the same fill is shrunk with it.
-fn proxy_matches(doc: &Document) -> bool {
+/// unless a cache of the same fill is shrunk with it. The ink thumbnails use it too.
+pub(crate) fn proxy_matches(doc: &Document) -> bool {
     use photocraft_doc::{Fill, LayerContent};
     // A stack, not recursion: groups can nest deeply. Hidden layers (and what they hold) are not
     // composited, so they don't count.

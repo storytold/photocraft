@@ -355,11 +355,12 @@ fn ink_thumbnail(src: &Document, w: usize, h: usize) -> Vec<[f32; 4]> {
 /// `PROXY_THUMBNAIL_PIXELS` the composite reduces the document itself, which its one-colour
 /// areas keep cheap, but compositing the inks of the whole document in bands costs ~170 ms at
 /// 16 MP on every refresh. `None` when the proxy wouldn't composite the same (layer effects,
-/// vector masks) or the document is too small to need one.
+/// vector or feathered masks, uncached pattern fills: [`crate::canvas::channel_view::proxy_matches`])
+/// or the document is too small to need one.
 fn ink_proxy(doc: &Document, max_side: u32) -> Option<Document> {
     let b = doc.bounds();
     let k = b.width().max(b.height()).max(1) / max_side.max(1).saturating_mul(2);
-    (k >= 2 && photocraft_compose::proxy::proxy_faithful(doc)).then(|| photocraft_compose::proxy::proxy_document(doc, k))
+    (k >= 2 && crate::canvas::channel_view::proxy_matches(doc)).then(|| photocraft_compose::proxy::proxy_document(doc, k))
 }
 
 /// Whether `new` differs from `old` at most in its selection, so every composite and channel
@@ -434,7 +435,8 @@ mod ink_thumbnail_tests {
     }
 
     /// Below `PROXY_THUMBNAIL_PIXELS` the inks still come from a proxy when it composites the
-    /// same, and give the same inks as the full document; with a layer effect they don't.
+    /// same, and give the same inks as the full document; with a feathered mask or a layer
+    /// effect they don't.
     #[test]
     fn mid_size_cmyk_ink_thumbnails_use_a_proxy_only_when_faithful() {
         let mut s = Session::new();
@@ -450,6 +452,12 @@ mod ink_thumbnail_tests {
         let (w, h) = photocraft_compose::thumbnail_size(&doc, 56);
         let (w, h) = (w as usize, h as usize);
         assert_eq!(ink_thumbnail(&proxy, w, h), ink_thumbnail(&doc, w, h));
+        // A feather is in document pixels, which the proxy doesn't scale.
+        s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+        s.execute("layer.layerMask.edit", json!({"feather": 4})).unwrap();
+        assert!(super::ink_proxy(&s.active().unwrap().doc, 56).is_none(), "a feathered mask: no proxy");
+        s.execute("layer.layerMask.edit", json!({"feather": 0})).unwrap();
+        assert!(super::ink_proxy(&s.active().unwrap().doc, 56).is_some(), "the feather gone: the proxy again");
         s.execute("layer.layerStyle.dropShadow", json!({})).unwrap();
         assert!(super::ink_proxy(&s.active().unwrap().doc, 56).is_none(), "a layer effect: no proxy");
     }
