@@ -121,12 +121,20 @@ fn marks_ops(m: Marks, (x, y, w, h): (f64, f64, f64, f64)) -> String {
 
 /// A one-page PDF.
 pub fn print_pdf(page: &PrintPage) -> Vec<u8> {
-    print_pdf_pages(std::slice::from_ref(page), &[String::new()], &selection::SelectionFont::default())
+    print_pdf_pages(std::slice::from_ref(page), &[String::new()], &selection::SelectionFont::default(), &photocraft_raster::Interrupt::NONE).unwrap_or_default()
 }
 
 /// A PDF with one page per entry; `vectors[i]` (when present) is drawn over page `i`.
-fn print_pdf_pages(pages: &[PrintPage], vectors: &[String], selection_font: &selection::SelectionFont) -> Vec<u8> {
-    let Some(first) = pages.first() else { return Vec::new() };
+fn print_pdf_pages(
+    pages: &[PrintPage],
+    vectors: &[String],
+    selection_font: &selection::SelectionFont,
+    ctl: &photocraft_raster::Interrupt,
+) -> std::result::Result<Vec<u8>, IoError> {
+    if ctl.check().is_err() {
+        return Err(IoError::Cancelled);
+    }
+    let Some(first) = pages.first() else { return Ok(Vec::new()) };
     let mut out: Vec<u8> = b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n".to_vec();
     let mut offsets: Vec<usize> = Vec::new();
     let mut obj = |out: &mut Vec<u8>, body: &[u8]| {
@@ -232,7 +240,7 @@ fn print_pdf_pages(pages: &[PrintPage], vectors: &[String], selection_font: &sel
         out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
     }
     out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", offsets.len() + 1).as_bytes());
-    out
+    Ok(out)
 }
 
 /// The vector operators for the contiguous visible top prefix of `doc`, top to bottom, with the
@@ -331,14 +339,38 @@ pub fn export(doc: &Document, ctl: &photocraft_raster::Interrupt) -> std::result
     let icc = doc.icc_profile.as_ref().map(|p| p.to_vec());
     let artboards = doc.artboards();
     if !artboards.is_empty() {
+        // Every page's encoded pixels are kept until the PDF is assembled; bound that peak.
+        const MAX_PDF_EXPORT_BYTES: u64 = 1 << 30;
+        let pixels: u64 = artboards.iter().map(|(_, _, a)| u64::from(a.rect.width()) * u64::from(a.rect.height())).sum();
+        let estimate = pixels.saturating_mul(device as u64) + w as u64 * h as u64 * n as u64 * 4;
+        if estimate > MAX_PDF_EXPORT_BYTES {
+            return Err(IoError::Unsupported(format!(
+                "PDF export would need about {} MB for {} artboards; export them in smaller batches",
+                estimate >> 20,
+                artboards.len()
+            )));
+        }
         let mut pages = Vec::with_capacity(artboards.len());
-        for (_, name, artboard) in &artboards {
+        for (id, name, artboard) in &artboards {
             ctl.check().map_err(|_| IoError::Cancelled)?;
             let rect = artboard.rect;
             let (aw, ah) = (rect.width(), rect.height());
             if aw == 0 || ah == 0 {
                 continue;
             }
+            // A hidden artboard still gets its page, rendered from its own content rather than
+            // left blank by the group's visibility.
+            let shown;
+            let doc = if doc.layer(*id).is_some_and(|l| !l.visible) {
+                let mut copy = doc.clone();
+                if let Some(layer) = copy.layer_mut(*id) {
+                    layer.visible = true;
+                }
+                shown = copy;
+                &shown
+            } else {
+                doc
+            };
             // Render only this artboard's rect; the surface never holds the whole document.
             let surface = photocraft_compose::composite_to_surface(doc, rect, PixelFormat::new(fmt.mode, fmt.sample, true), None);
             let values = surface.read_region(rect);
@@ -370,7 +402,7 @@ pub fn export(doc: &Document, ctl: &photocraft_raster::Interrupt) -> std::result
             warnings.push("free-form text metadata is not supported by PDF; it will be dropped".into());
         }
         let vectors = vec![String::new(); pages.len()];
-        return Ok(ExportResult { bytes: print_pdf_pages(&pages, &vectors, &selection::SelectionFont::default()), warnings });
+        return Ok(ExportResult { bytes: print_pdf_pages(&pages, &vectors, &selection::SelectionFont::default(), ctl)?, warnings });
     }
     let canvas = photocraft_geom::Rect::new(0, 0, w as i32, h as i32);
     // Simple topmost shapes and text layers can be drawn over the flattened backdrop without changing
@@ -407,7 +439,7 @@ pub fn export(doc: &Document, ctl: &photocraft_raster::Interrupt) -> std::result
         vectors.push_str(ops);
     }
     vectors.push_str("Q\n");
-    Ok(ExportResult { bytes: print_pdf_pages(&[page], &[vectors], &selection_font), warnings })
+    Ok(ExportResult { bytes: print_pdf_pages(&[page], &[vectors], &selection_font, ctl)?, warnings })
 }
 
 #[cfg(test)]
