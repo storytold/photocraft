@@ -388,6 +388,94 @@ mod lookup_tests {
         assert!(selective_color([1.0; 3], false, &w)[2] < 0.6);
     }
 
+    /// Issue #11409: the Black slider adds the same black percentage to every ink, so on a neutral
+    /// it can only darken, never tint. Every grey through Whites + Neutrals + Blacks at any Black
+    /// value, in both methods, keeps R = G = B. (Every per-range shift depends only on the channel's
+    /// own value and the range's Black, which are the same on all three channels of a grey.)
+    #[test]
+    fn selective_color_black_slider_keeps_greys_neutral() {
+        for k in [-100.0f32, -50.0, 50.0, 100.0] {
+            let mut adj = [[0.0f32; 4]; 9];
+            for row in &mut adj[6..] {
+                row[3] = k;
+            }
+            for relative in [false, true] {
+                for g in 0..=255u8 {
+                    let v = f32::from(g) / 255.0;
+                    let o = selective_color([v; 3], relative, &adj);
+                    assert!(o[0] == o[1] && o[1] == o[2], "k {k} relative {relative} grey {g}: {o:?}");
+                }
+            }
+        }
+    }
+
+    /// Issue #11409, the report's exact neutral cases: mid grey 128 with Black +100 on Whites,
+    /// Neutrals and Blacks. Absolute: shift = 1 × min(1, 2 × 128/255) = 1 on every channel, and the
+    /// achromatic weights sum to 1 (whites 0.0039 + neutrals 0.9961), so 128 → 0, a neutral black.
+    /// Relative: shift = 1 × ink = 127/255 on every channel, so 128 → 1. No cast either way.
+    #[test]
+    fn selective_color_black_plus_100_on_mid_grey() {
+        let mut adj = [[0.0f32; 4]; 9];
+        for row in &mut adj[6..] {
+            row[3] = 100.0;
+        }
+        let g = 128.0 / 255.0;
+        let w = selective_color_weights([g; 3]);
+        assert!(w[..6].iter().all(|x| x.abs() < 1e-6), "{w:?}");
+        assert!((w[6] + w[7] + w[8] - 1.0).abs() < 1e-6, "{w:?}");
+        let abs = selective_color([g; 3], false, &adj).map(|v| v * 255.0);
+        assert_eq!(abs, [0.0; 3]);
+        let rel = selective_color([g; 3], true, &adj).map(|v| v * 255.0);
+        for v in rel {
+            assert!((v - 1.0).abs() < 1e-3, "{rel:?}");
+        }
+        // Black alone is, on a grey, the same as equal cyan, magenta and yellow: Black +50 on
+        // Neutrals darkens grey 64 to 32 on every channel, exactly the measured Neutrals Cyan +50
+        // case of `absolute_selective_color_matches_photoshop` (64 → 32, now on all three).
+        let mut n = [[0.0f32; 4]; 9];
+        n[7][3] = 50.0;
+        let o = selective_color([64.0 / 255.0; 3], false, &n).map(|v| v * 255.0);
+        for v in o {
+            assert!((v - 32.0).abs() <= 1.5, "{o:?}");
+        }
+    }
+
+    /// Issue #11409, the report's exact chromatic cases: each pure primary and secondary through
+    /// its own range at Black +100. Its weight in that range is 1 and in every other range 0.
+    /// Absolute: the shift on a channel at 1 is 1 × min(1, 2 × 1) = 1 and on a channel at 0 is
+    /// 1 × min(1, 0) = 0, so every one goes to black (0, 0, 0), not to a grey at its luminance.
+    /// Relative: the shift is 1 × ink, which is 0 on the channels at 1 and lands on channels already
+    /// at 0, so nothing changes (what the report saw as "does nothing").
+    #[test]
+    fn selective_color_black_plus_100_on_primaries() {
+        let cases: [(usize, [f32; 3]); 6] =
+            [(0, [1.0, 0.0, 0.0]), (1, [1.0, 1.0, 0.0]), (2, [0.0, 1.0, 0.0]), (3, [0.0, 1.0, 1.0]), (4, [0.0, 0.0, 1.0]), (5, [1.0, 0.0, 1.0])];
+        for (range, c) in cases {
+            let w = selective_color_weights(c);
+            for (r, x) in w.iter().enumerate() {
+                assert_eq!(*x, if r == range { 1.0 } else { 0.0 }, "range {range} {c:?}: {w:?}");
+            }
+            let mut adj = [[0.0f32; 4]; 9];
+            adj[range][3] = 100.0;
+            assert_eq!(selective_color(c, false, &adj), [0.0; 3], "absolute, range {range}");
+            assert_eq!(selective_color(c, true, &adj), c, "relative, range {range}");
+        }
+    }
+
+    /// The retouchers' saturation map built from Selective Color (Absolute; Black +100 on the six
+    /// colour ranges, -100 on Whites, Neutrals and Blacks) pushes saturated colour to black and
+    /// neutrals to white, a black-and-white mask rather than a luminance-preserving desaturation.
+    #[test]
+    fn selective_color_saturation_map_recipe() {
+        let mut adj = [[0.0f32; 4]; 9];
+        for (r, row) in adj.iter_mut().enumerate() {
+            row[3] = if r < 6 { 100.0 } else { -100.0 };
+        }
+        assert_eq!(selective_color([1.0, 0.0, 0.0], false, &adj), [0.0; 3]);
+        assert_eq!(selective_color([0.0, 0.0, 1.0], false, &adj), [0.0; 3]);
+        assert_eq!(selective_color([128.0 / 255.0; 3], false, &adj), [1.0; 3]);
+    }
+
     #[test]
     fn dither_offsets_are_balanced() {
         let sum: f32 = (0..4).flat_map(|y| (0..4).map(move |x| bayer4(x, y))).sum();
