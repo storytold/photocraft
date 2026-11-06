@@ -545,7 +545,7 @@ fn a_fatal_layer_error_skips_the_extra_channel_conversion() {
     let bytes = crate::psd_export::document_to_psd(&channels_document(SampleType::U8)).unwrap().to_bytes().unwrap();
     let whole = PsdFile::from_bytes(&bytes).unwrap();
     assert!(merged_needed(&whole), "the extra channels come from the merged image");
-    let converted = psd_to_document_global(&whole, &photocraft_raster::Interrupt::NONE, None, Vec::new(), false).unwrap();
+    let converted = psd_to_document_global(&whole, &photocraft_raster::Interrupt::NONE, None, Vec::new(), false, false).unwrap();
     assert!(converted.3.is_none() && converted.0.channels.len() == 3, "the control file converts its channels");
 
     let lazy = PsdFile::from_source(photocraft_psd::Source::new(bytes.clone())).unwrap();
@@ -556,7 +556,7 @@ fn a_fatal_layer_error_skips_the_extra_channel_conversion() {
     let armed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let file = PsdFile::from_source(photocraft_psd::Source::new(Failing { bytes, data, armed: armed.clone() })).unwrap();
     armed.store(true, std::sync::atomic::Ordering::SeqCst);
-    let (doc, _, _, fatal) = psd_to_document_global(&file, &photocraft_raster::Interrupt::NONE, None, Vec::new(), false).unwrap();
+    let (doc, _, _, fatal) = psd_to_document_global(&file, &photocraft_raster::Interrupt::NONE, None, Vec::new(), false, false).unwrap();
     assert!(matches!(fatal, Some(crate::IoError::Read(_))), "{fatal:?}");
     assert!(doc.channels.is_empty(), "no extra channel was converted after the failure");
 }
@@ -590,6 +590,7 @@ fn only_allocation_failures_are_fatal_to_a_layer_channel() {
         ctl: photocraft_raster::Interrupt::NONE,
         done: 0,
         uniform: Default::default(),
+        lazy_hidden: false,
         total: 0,
     };
     assert!(!cx.channel_failed("Layer 1", 0, &PsdError::LimitExceeded("decoded channel data exceeds MAX_DECODED_BYTES")));

@@ -59,6 +59,8 @@ fn import_file_opens_what_importing_the_bytes_opens_part(part: usize) {
         let from_file = open(&name, &path);
         match (from_bytes, from_file) {
             (Ok(a), Ok(b)) => {
+                // Hidden layers opened from the file decode when first used.
+                b.document.decode_lazy_layers().unwrap();
                 // Ids come from a process-wide counter, so the two opens differ only there.
                 assert!(without_ids(&b.document) == without_ids(&a.document), "{}", case.name);
                 assert_eq!(b.warnings, a.warnings, "{}", case.name);
@@ -175,5 +177,70 @@ fn a_read_failing_while_layers_decode_fails_the_open() {
             Err(photocraft_io::IoError::Read(msg)) => assert!(msg.contains("the drive went away"), "{c:?}: {msg}"),
             r => panic!("{c:?}: the open didn't fail: {:?}", r.map(|(r, damaged)| (r.warnings, damaged))),
         }
+    }
+}
+
+/// A hidden layer opened from a file stays undecoded (compositing skips it), shows a preview
+/// for its thumbnail, decodes to the pixels a full import has, and a save fails rather than
+/// writing it empty when the file can no longer be read.
+#[cfg(unix)]
+#[test]
+fn hidden_layers_decode_when_first_used() {
+    let dir = TempDir::new("lazy");
+    for c in [photocraft_psd::Compression::Rle, photocraft_psd::Compression::Raw, photocraft_psd::Compression::Zip] {
+        // A ZIP channel is inflated whole when opened anyway, so its layer opens decoded.
+        let zip = c == photocraft_psd::Compression::Zip;
+        let mut file = testgen::layered(photocraft_psd::Version::Psd, photocraft_psd::ColorMode::Rgb, 8, c);
+        // The generator stores transparency as ZIP whatever `c` is: store every channel as `c`.
+        for l in file.layers_mut() {
+            let rect = l.rect;
+            for ch in &mut l.channels {
+                if ch.id == -1
+                    && ch.compression != Some(c)
+                    && let Ok((w, h)) = rect.size()
+                {
+                    let plane = ch.decode(w, h, 8, photocraft_psd::Version::Psd).unwrap();
+                    ch.set_decoded(c, &plane, w, h, 8, photocraft_psd::Version::Psd).unwrap();
+                }
+            }
+        }
+        let hidden = file.layers().iter().position(|l| l.channels.iter().any(|ch| ch.id == 0) && !l.rect.is_empty()).unwrap();
+        file.layers_mut()[hidden].flags.0 |= 2;
+        let bytes = file.to_bytes().unwrap();
+        let path = dir.write("lazy.psd", &bytes);
+        let eager = import("lazy.psd", &bytes).unwrap().document;
+        let lazy = open("lazy.psd", &path).unwrap().document;
+        let pending: Vec<_> = lazy.walk().into_iter().filter(|(_, _, l)| l.surface().is_some_and(|s| s.is_pending())).map(|(_, _, l)| l.name.clone()).collect();
+        if zip {
+            assert!(pending.is_empty(), "{pending:?}");
+            continue;
+        }
+        let name = file.layers()[hidden].name();
+        assert!(pending.contains(&name), "{c:?}: {name} not among {pending:?}");
+        let hidden_count = file.layers().iter().filter(|l| !l.is_visible() && !l.rect.is_empty() && l.channels.iter().any(|ch| ch.id == 0)).count();
+        assert_eq!(pending.len(), hidden_count, "{c:?}: {pending:?}");
+        let layer = lazy.walk().into_iter().map(|(_, _, l)| l).find(|l| l.surface().is_some_and(|s| s.is_pending())).unwrap();
+        let s = layer.surface().unwrap();
+        let mut px = vec![0.0; s.channels()];
+        let b = s.pending_bounds().unwrap();
+        assert!(s.read_preview_pixel(b.x0, b.y0, &mut px));
+        // The composite of a hidden layer's document doesn't need it.
+        assert_eq!(photocraft_compose::flatten(&lazy).px, photocraft_compose::flatten(&eager).px, "{c:?}");
+        assert!(s.is_pending(), "{c:?}: compositing decoded the hidden layer");
+        lazy.decode_lazy_layers().unwrap();
+        assert!(!s.is_pending());
+        assert!(without_ids(&lazy) == without_ids(&eager), "{c:?}");
+        // The file changed after opening: the hidden layer can't be read, the save says so.
+        let again = open("lazy.psd", &path).unwrap().document;
+        std::fs::write(&path, b"replaced in place").unwrap();
+        assert!(again.decode_lazy_layers().is_err(), "{c:?}");
+        assert!(photocraft_io::export(&again, "x.psd", &Default::default()).is_err(), "{c:?}");
+        assert!(photocraft_io::export(&again, "x.ora", &Default::default()).is_err(), "{c:?}");
+        // A flat export is the composite, which skips hidden layers: it neither needs nor
+        // decodes them.
+        assert!(photocraft_io::export(&again, "x.png", &Default::default()).is_ok(), "{c:?}");
+        let fresh = open("lazy.psd", &dir.write("lazy.psd", &bytes)).unwrap().document;
+        photocraft_io::export(&fresh, "x.png", &Default::default()).unwrap();
+        assert!(fresh.walk().iter().any(|(_, _, l)| l.surface().is_some_and(|s| s.is_pending())), "{c:?}: a flat export decoded the hidden layers");
     }
 }

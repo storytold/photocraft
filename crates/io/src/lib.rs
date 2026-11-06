@@ -659,6 +659,7 @@ fn import_psd(
     ctl: &photocraft_raster::Interrupt,
     damaged: &mut bool,
     opts: &ImportOptions,
+    lazy_hidden: bool,
     parse: impl FnOnce(
         &dyn Fn(&PsdFile) -> photocraft_psd::Result<bool>,
         &dyn Fn(&PsdFile) -> bool,
@@ -748,7 +749,7 @@ fn import_psd(
 
     // Read before the conversion, which moves the global blocks into the document.
     let txt2 = file.global_blocks.iter().find(|b| &b.key == b"Txt2").and_then(|b| photocraft_text::psd::parse_txt2(&b.data));
-    let (mut document, warnings, psd_damaged, fatal_error) = psd_import::psd_to_document_owned(file, ctl, merged).ok_or(IoError::Cancelled)?;
+    let (mut document, warnings, psd_damaged, fatal_error) = psd_import::psd_to_document_owned(file, ctl, merged, lazy_hidden).ok_or(IoError::Cancelled)?;
     // Source reads and allocation failures fail the entire open; partial layers are discarded.
     if let Some(e) = fatal_error {
         return Err(e);
@@ -824,7 +825,8 @@ pub fn import_file_for_open_verified(
     let mut magic = [0u8; 4];
     let psd = !has_extension(name, photocraft_format::EXTENSION) && photocraft_psd::ReadAt::read_at(&source, 0, &mut magic).is_ok() && is_psd(&magic);
     let result = if psd {
-        import_source_deferring(name, photocraft_psd::Source::new(source), ctl, opts, defer_block)
+        // Hidden layers are decoded when first used, from the open file (Unix: see `defer_block`).
+        import_source_deferring(name, photocraft_psd::Source::new(source), ctl, opts, defer_block, cfg!(unix))
     } else {
         // Read from the handle that was just identified, not by opening the path again.
         let mut file = source.file();
@@ -881,7 +883,7 @@ pub fn import_source_with_options(
     ctl: &photocraft_raster::Interrupt,
     opts: &ImportOptions,
 ) -> Result<(ImportResult, bool), IoError> {
-    import_source_deferring(name, source, ctl, opts, |_, _| false)
+    import_source_deferring(name, source, ctl, opts, |_, _| false, false)
 }
 
 /// [`import_source_with_options`] leaving the global blocks `defer` accepts in the source.
@@ -891,10 +893,11 @@ fn import_source_deferring(
     ctl: &photocraft_raster::Interrupt,
     opts: &ImportOptions,
     defer: fn(&[u8; 4], u64) -> bool,
+    lazy_hidden: bool,
 ) -> Result<(ImportResult, bool), IoError> {
     ctl.check().map_err(|_| IoError::Cancelled)?;
     let mut damaged = false;
-    let r = import_psd(name, ctl, &mut damaged, opts, |want, recover| PsdFile::from_source_deferring(source, defer, want, recover))?;
+    let r = import_psd(name, ctl, &mut damaged, opts, lazy_hidden, |want, recover| PsdFile::from_source_deferring(source, defer, want, recover))?;
     ctl.check().map_err(|_| IoError::Cancelled)?;
     ctl.progress(1.0);
     Ok((r, damaged))
@@ -930,7 +933,7 @@ fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, o
     // Magic first: an Affinity file renamed .psd is still Affinity (#5258 corpus
     // preview_never_saves_back_to_its_native_or_renamed_source).
     if is_psd(bytes) {
-        return import_psd(name, ctl, damaged, opts, |want, recover| PsdFile::from_bytes_and_merged_preflight(bytes, want, recover));
+        return import_psd(name, ctl, damaged, opts, false, |want, recover| PsdFile::from_bytes_and_merged_preflight(bytes, want, recover));
     }
     if affinity::is_affinity(bytes) || affinity::has_extension(name) {
         return affinity::import(name, bytes);
@@ -963,7 +966,7 @@ fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, o
     // A `.psd`/`.psb`/`.psdt` with no raster signature keeps the PSD error instead of
     // `codec: unrecognized image format` (#5258). Magic already returned above.
     if is_psd_input(name, bytes) {
-        return import_psd(name, ctl, damaged, opts, |want, recover| PsdFile::from_bytes_and_merged_preflight(bytes, want, recover));
+        return import_psd(name, ctl, damaged, opts, false, |want, recover| PsdFile::from_bytes_and_merged_preflight(bytes, want, recover));
     }
     flat::import_flat_with_options(name, bytes, opts, ctl)
 }
@@ -1081,7 +1084,11 @@ fn checked_stages(
 
 /// `doc` with its global blocks in memory: a copy with those left in the opened file read
 /// (`Blob::Deferred`), or `doc` itself when none is. A block that can't be read is an error.
+///
+/// Hidden layers still in the opened file (lazy surfaces) are decoded too: one that can't be read
+/// is an error, not an empty layer in the file written.
 pub(crate) fn with_blocks_loaded(doc: &Document) -> Result<std::borrow::Cow<'_, Document>, IoError> {
+    doc.decode_lazy_layers().map_err(IoError::Read)?;
     if !doc.metadata.has_deferred_blocks() {
         return Ok(std::borrow::Cow::Borrowed(doc));
     }
@@ -1132,6 +1139,9 @@ fn export_stages_with_renderer(
         ));
     }
     if ext == "ora" {
+        // ORA writes every layer: hidden ones still in the opened file are read first (one that
+        // can't be is an error, not an empty layer).
+        doc.decode_lazy_layers().map_err(IoError::Read)?;
         let mut res = ora::export(doc)?;
         if let Some(r) = renderer {
             res.warnings.push("OpenRaster export uses CPU compositor; GPU rendering applies to flat formats".into());

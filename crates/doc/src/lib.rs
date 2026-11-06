@@ -1142,6 +1142,21 @@ impl Document {
         health
     }
 
+    /// Decodes every layer whose pixels are still in the file it was opened from (a lazy
+    /// surface, see `Surface::lazy`), so the document can be written. `Err` names a layer whose
+    /// pixels could not be read: saving it would write the layer empty.
+    pub fn decode_lazy_layers(&self) -> Result<(), String> {
+        for (_, _, layer) in self.walk() {
+            for s in [layer.surface(), layer.fill_cache.as_ref().map(|c| &c.surface)].into_iter().flatten() {
+                s.tile_count();
+                if let Some(e) = s.lazy_error() {
+                    return Err(format!("the pixels of layer \"{}\" could not be read from the opened file: {e}", layer.name));
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Depth-first walk yielding `(path, depth, layer)` bottom-to-top.
     pub fn walk(&self) -> Vec<(LayerPath, usize, &Layer)> {
         fn rec<'a>(layers: &'a [Layer], prefix: &mut LayerPath, out: &mut Vec<(LayerPath, usize, &'a Layer)>) {

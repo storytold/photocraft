@@ -814,7 +814,8 @@ pub fn warm_layer_bounds(doc: &Document, mut check: impl FnMut() -> Result<()>) 
         if let Some(children) = layer.children() {
             pending.extend(children);
         }
-        if let Some(surface) = layer.surface() {
+        // A lazy (hidden) layer is left alone: measuring it would decode it.
+        if let Some(surface) = layer.surface().filter(|s| !s.is_pending()) {
             photocraft_compose::bounds::content_bounds(surface);
         }
     }

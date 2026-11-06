@@ -1083,6 +1083,7 @@ impl PcraftWriter {
         self.hash_cache.retain(|_, (w, _)| w.strong_count() > 0);
         self.blob_hash_cache.retain(|_, (w, _)| w.strong_count() > 0);
         convert::check_nesting(&doc.layers)?;
+        doc.decode_lazy_layers().map_err(|e| FormatError::Io(std::io::Error::other(e)))?;
         // Global blocks left in the file the document was opened from are read for the save
         // (a failed read fails it rather than writing them empty).
         let loaded;

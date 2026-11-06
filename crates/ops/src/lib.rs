@@ -804,7 +804,8 @@ fn merge_ids(into: &mut Vec<LayerId>, from: &[LayerId]) {
 /// embedded contents of its smart objects not already in `seen`.
 fn tile_bytes(doc: &Document, seen: &mut HashSet<usize>) -> usize {
     let mut n = 0usize;
-    tiles::blocks(doc, |ptr, len| {
+    // A lazy surface still pending holds no tiles: they are not decoded here.
+    tiles::blocks(doc, true, |ptr, len| {
         if seen.insert(ptr) {
             n = n.saturating_add(len);
         }
