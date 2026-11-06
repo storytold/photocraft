@@ -758,6 +758,27 @@ fn memory_prompt_states_unknown_capacity_and_the_eight_gib_warning() {
     assert!(app.ui.dialogs.is_empty());
 }
 
+/// The prompt warns when opening the file would leave less than 1 GiB of the measured free
+/// memory, and stays quiet when there is room to spare.
+#[test]
+fn memory_prompt_warns_when_little_memory_would_be_left() {
+    let gb = 1u64 << 30;
+    let mut app = app();
+    let available = 3 * gb + gb / 2;
+    let id = store_preflight(&mut app, "tight.psd", 3 * gb, Some(available));
+    let tab = crate::jobs_ui::OpenTab { job: photocraft_engine::jobs::JobId(3), name: "tight.psd".into(), path: None, slot: None, order: None };
+    crate::jobs_ui::finish_open_tab(
+        &mut app,
+        &tab,
+        &json!({"pendingPreflight": id, "estimated": 3 * gb, "availableRam": available, "capacityUnknown": false, "uncertainCapacityWarning": false}),
+    )
+    .unwrap();
+    let message = app.ui.dialogs[0].fields["message"].as_str().unwrap();
+    assert!(message.contains("Little memory would be left") && message.contains("may run out of memory"), "{message}");
+    let dialog = app.ui.dialogs[0].id;
+    assert_eq!(call(&mut app, "ui.dialog.cancel", json!({"dialog": dialog}))["ok"], true);
+}
+
 /// #10897: reopening an ordinary file whose high-memory prompt is already waiting shows that
 /// prompt instead of queueing a second one and a second open; a template still opens again as
 /// another Untitled, like one that is still loading.
