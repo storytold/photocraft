@@ -1159,3 +1159,30 @@ fn restore_notice_renders_in_russian_without_status_chrome() {
         image.save(path).unwrap();
     }
 }
+
+#[test]
+fn restore_status_uses_startup_language_and_follows_switches_only_while_owned() {
+    let _gpu = photocraft_testkit::gpu_lock();
+    let mut h = Harness::builder().with_size(vec2(1440.0, 900.0)).build_eframe(|cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, ThemeKind::Pro);
+        let (mut app, _, _) = app_with_layers();
+        app.session.prefs.edit(|p| p.interface.language = "ru".into());
+        crate::i18n::with_language(crate::i18n::Lang::from_code("en").unwrap(), || retained_fallback(&mut app));
+        app
+    });
+    h.run_steps(8);
+    for language in ["ru", "de"] {
+        h.state_mut().session.prefs.edit(|p| p.interface.language = language.into());
+        h.run_steps(3);
+        assert_eq!(h.state().ui.status, crate::i18n::tr(crate::i18n::Lang::from_code(language).unwrap(), RESTORE_NOTICE_MESSAGE));
+    }
+    h.state_mut().ui.status = "Unrelated error".into();
+    h.state_mut().ui.status_error = true;
+    h.state_mut().session.prefs.edit(|p| p.interface.language = "ru".into());
+    h.run_steps(3);
+    assert_eq!(h.state().ui.status, "Unrelated error");
+    assert!(h.state().ui.status_error);
+    crate::menus::apply_workspace(h.state_mut());
+    assert_eq!(h.state().ui.status, "Unrelated error");
+    assert!(h.state().ui.status_error);
+}
