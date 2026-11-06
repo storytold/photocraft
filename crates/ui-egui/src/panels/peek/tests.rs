@@ -324,6 +324,14 @@ fn text_field_in(h: &Harness<'static, PhotocraftApp>, strip: Rect) -> Rect {
     h.query_all_by_role(egui::accesskit::Role::TextInput).map(|n| n.rect()).find(|r| strip.contains(r.center())).expect("a text field in the peeked dock")
 }
 
+/// The dock peeked again from its edge (it is already hidden).
+fn peek_dock_again(h: &mut Harness<'static, PhotocraftApp>) {
+    let canvas = canvas_rect(h);
+    hover(h, canvas.center());
+    hover(h, pos2(canvas.right() - 2.0, canvas.center().y));
+    h.run_steps(3);
+}
+
 #[test]
 fn a_popup_opened_from_the_peek_holds_it_until_it_closes() {
     let mut h = harness(400.0, 300.0);
@@ -335,6 +343,8 @@ fn a_popup_opened_from_the_peek_holds_it_until_it_closes() {
     click(&mut h, combo.center());
     h.run_steps(1);
     assert!(egui::Popup::is_any_open(&h.ctx), "the dropdown opened");
+    // The click focused the dropdown too; without that focus only the popup holds the peek.
+    h.ctx.memory_mut(|m| m.stop_text_input());
 
     // Away from the strip and the list: the popup the peek opened keeps it.
     let away = pos2(canvas.left() + 40.0, canvas.center().y);
@@ -454,15 +464,22 @@ fn a_tab_dragged_in_the_peek_does_not_rearrange_the_layout() {
     let before = h.state().ui.docking.clone().map(|w| w.layout);
     // The column alone cannot say where a drop would land in the full layout, so a tab
     // dragged out of the peek neither floats nor moves.
-    let tab = craft_ui::docking::DockArea::<String>::hit_rects(&h.ctx, peek_area_id())
-        .into_iter()
-        .find_map(|(hit, rect)| matches!(hit, craft_ui::docking::Hit::Tab(ref p) if p == "layers").then_some(rect))
-        .expect("the peeked Layers tab");
-    press(&mut h, tab.center());
-    for k in 1..=8 {
-        hover(&mut h, tab.center() - vec2(30.0 * k as f32, 0.0));
+    let tab = |h: &Harness<'static, PhotocraftApp>, panel: &str| {
+        craft_ui::docking::DockArea::<String>::hit_rects(&h.ctx, peek_area_id())
+            .into_iter()
+            .find_map(|(hit, rect)| matches!(hit, craft_ui::docking::Hit::Tab(ref p) if p == panel).then_some(rect))
+            .unwrap_or_else(|| panic!("the peeked {panel} tab"))
+    };
+    // Layers dragged onto the Color group's tabs, then out over the canvas.
+    let (from, onto) = (tab(&h, "layers").center(), tab(&h, "color").center());
+    for target in [onto, pos2(from.x - 300.0, from.y)] {
+        press(&mut h, from);
+        for k in 1..=10 {
+            hover(&mut h, from + (target - from) * (k as f32 / 10.0));
+        }
+        release(&mut h, target);
+        h.run_steps(2);
+        assert_eq!(h.state().ui.docking.clone().map(|w| w.layout), before, "the layout is unchanged after a drop at {target:?}");
+        peek_dock_again(&mut h);
     }
-    release(&mut h, tab.center() - vec2(240.0, 0.0));
-    h.run_steps(2);
-    assert_eq!(h.state().ui.docking.clone().map(|w| w.layout), before, "the layout is unchanged");
 }
