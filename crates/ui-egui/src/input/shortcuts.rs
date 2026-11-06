@@ -568,7 +568,7 @@ fn handle_modal_canvas_keys(app: &mut PhotocraftApp, ctx: &egui::Context, focus:
     // Dialogs (and Liquify's panel while one of its controls has focus) keep canvas zoom; a
     // focused text field keeps its keys.
     let liquify_focus = (app.distort.liquify.is_some() || app.distort.caf.is_some() || app.distort.select_mask.is_some()) && focus != Focus::None;
-    if liquify_focus || !app.ui.dialogs.is_empty() || app.discard.is_some() {
+    if liquify_focus || !app.ui.dialogs.is_empty() || app.discard.is_some() || app.smart_svg.modal_open() || app.save_options_open() {
         if focus != Focus::Text {
             nav_keys(app, ctx);
         }
@@ -618,6 +618,9 @@ fn handle_modal_canvas_keys(app: &mut PhotocraftApp, ctx: &egui::Context, focus:
     }
     // Perspective Crop with a pending quad: ↵ commits, Esc cancels.
     if focus == Focus::None && crate::perspective_crop_ui::keys(app, ctx) {
+        return true;
+    }
+    if focus == Focus::None && crate::frame_tool::keys(app, ctx) {
         return true;
     }
     // Move tool / Free Transform: arrows nudge (⇧ ×10, ⌥ duplicates first).
@@ -788,6 +791,10 @@ fn handle_registry_and_tool_keys(app: &mut PhotocraftApp, ctx: &egui::Context, f
             return true;
         }
     }
+    if app.ui.frame_tool.drag.is_some() && pressed(Key::Escape) {
+        crate::frame_tool::cancel(app);
+        return true;
+    }
     // Enter / Escape commit or cancel in-progress tool state (polygonal lasso, crop).
     if crate::lasso_ui::active(app) {
         let mods = ctx.input(|i| i.modifiers);
@@ -813,13 +820,17 @@ fn handle_registry_and_tool_keys(app: &mut PhotocraftApp, ctx: &egui::Context, f
             return true;
         }
         // In a full screen mode, the Crop tool's untouched default frame (Straighten off) has nothing to cancel: cancelling only
-        // makes the next one, so Esc goes on to leave full screen (#7315).
-        let untouched = app.ui.view.screen_mode != "standard" && app.ui.polygon.is_empty() && app.crop.default_frame && !crate::crop_straighten::mode(app);
+        // makes the next one, so Esc goes on to leave full screen (#7315). A gesture on it is still cancelled (#9275).
+        let untouched = app.ui.view.screen_mode != "standard"
+            && app.ui.polygon.is_empty()
+            && app.crop.default_frame
+            && app.crop.drag.is_none()
+            && !crate::crop_straighten::mode(app);
         if !untouched && pressed(Key::Escape) {
             app.ui.polygon.clear();
             app.ui.polygon_mode.clear();
             app.ui.polygon_doc = None;
-            crate::crop_ui::cancel(app);
+            crate::crop_ui::dismiss(app);
             return true;
         }
     }
@@ -844,6 +855,7 @@ fn handle_escape_and_view_keys(app: &mut PhotocraftApp, ctx: &egui::Context) {
         || app.ui.tool == Tool::RotateView
         || app.wide_angle.is_some()
         || app.save_options_open()
+        || app.smart_svg.modal_open()
         || app.distort.gallery.is_some()
         || ctx.any_popup_open()
         || ctx.data(|d| d.get_temp::<(egui::Id, egui::Rect)>(egui::Id::unique("tool-flyout")).is_some());
