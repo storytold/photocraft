@@ -507,6 +507,7 @@ pub fn open_editor(app: &mut PhotocraftApp, ctx: &egui::Context, layer: u64, sm:
     }) else {
         return;
     };
+    let mode = app.session.active().map(|st| st.doc.mode);
     if let Some(d) = app.ui.dialog_mut(id) {
         d.fields.insert("__smartFilter".into(), target);
         if let Value::Object(p) = &f.params {
@@ -515,6 +516,9 @@ pub fn open_editor(app: &mut PhotocraftApp, ctx: &egui::Context, layer: u64, sm:
                     d.fields.insert(k.clone(), v.clone());
                 }
             }
+        }
+        if let Some(mode) = mode {
+            crate::adjust_dialog::seed_from_recorded(&mut d.fields, &f.params, mode);
         }
     }
 }
@@ -779,7 +783,7 @@ mod tests {
     }
 
     /// #11463: a Selective Color smart filter recorded in the single-colour form, re-edited. Its
-    /// old `cyan` and `relative` must not survive the merge and override the edit when the filter
+    /// old `cyan` and `relative` must not survive replacement and override the edit when the filter
     /// renders and reopens.
     #[test]
     fn a_selective_color_smart_filter_in_the_old_form_keeps_its_edit() {
@@ -805,6 +809,7 @@ mod tests {
         h.run_steps(3);
         let fields = &h.state_mut().ui.dialog_mut(dialog).unwrap().fields;
         assert!(!fields.contains_key("cyan") && !fields.contains_key("relative"), "folded: {fields:?}");
+        assert_eq!(fields["colors"], json!("blues"), "normalization keeps the selected colour");
         assert_eq!(fields["blues"][0].as_f64(), Some(30.0));
         assert_eq!(fields["method"], json!("absolute"));
         // Edit the row and the Method, then OK.
@@ -827,6 +832,7 @@ mod tests {
         let dialog = h.state().ui.dialogs.last().unwrap().id;
         h.run_steps(3);
         let fields = &h.state_mut().ui.dialog_mut(dialog).unwrap().fields;
+        assert_eq!(fields["colors"], json!("blues"), "reopening keeps the selected colour");
         assert_eq!(fields["blues"][0].as_f64(), Some(10.0));
         assert_eq!(fields["method"], json!("relative"));
     }
