@@ -872,9 +872,13 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn free_space_finds_the_temp_volume_on_windows() {
-        let (available, total) = free_space(&std::env::temp_dir()).unwrap();
+        let temp = std::env::temp_dir();
+        let (available, total) = free_space(&temp).unwrap();
         assert!(total > 0);
         assert!(available <= total);
+        let mut temp_volume_total = 0;
+        winsafe::GetDiskFreeSpaceEx(Some(temp.to_str().unwrap()), None, Some(&mut temp_volume_total), None).unwrap();
+        assert_eq!(total, temp_volume_total);
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -892,7 +896,10 @@ mod tests {
         let temp = std::fs::canonicalize(std::env::temp_dir()).unwrap();
         let temp = without_verbatim_disk_prefix(&temp).unwrap_or(temp);
         let root = temp.ancestors().last().unwrap();
-        assert!(available_to_caller(root).is_some());
+        let mut temp_volume_total = 0;
+        winsafe::GetDiskFreeSpaceEx(Some(temp.to_str().unwrap()), None, Some(&mut temp_volume_total), None).unwrap();
+        assert!(temp_volume_total > 0);
+        assert!(available_to_caller(root).unwrap() <= temp_volume_total);
     }
 
     #[test]

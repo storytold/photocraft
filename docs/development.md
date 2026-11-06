@@ -825,6 +825,7 @@ physical RAM (excluding swap) and, where measurable, system commit headroom:
   a string, and it releases the queued source. Its message says where the limit comes from:
   the computer's memory on 64-bit desktop; the web build names its fixed cap; on 32-bit desktop the
   limit may be either, so the message mentions the 2 GiB cap and that the 64-bit build may open the file.
+  Those two also link the releases page. Sizes appear in GiB or MiB next to the exact bytes.
 - A layered TIFF (Photoshop layer data in tags 37724/34377) is admitted by the same policy
   before its composite is decoded. The page's tags are read into the PSD model first, without
   pixels; then that model's layer/workspace estimate, the decoded composite and its
