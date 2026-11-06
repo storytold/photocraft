@@ -503,10 +503,70 @@ fn map_chunks<T: Send, R: Send>(threads: usize, items: Vec<T>, f: impl Fn(T) -> 
 
 /// zlib-compresses `data` at the default level.
 pub fn zip_compress(data: &[u8]) -> Vec<u8> {
-    let mut e = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
-    // Writing into a Vec cannot fail.
+    #[cfg(not(target_arch = "wasm32"))]
+    let output = ZipOutput::default();
+    #[cfg(target_arch = "wasm32")]
+    let output = Vec::new();
+    let mut e = flate2::write::ZlibEncoder::new(output, flate2::Compression::default());
+    // The in-memory output always accepts the complete write.
     let _ = e.write_all(data);
-    e.finish().unwrap_or_default()
+    let output = e.finish().unwrap_or_default();
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        output.into_vec()
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        output
+    }
+}
+
+/// Bounded native output blocks avoid reallocating large ZIP buffers as they grow.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Default)]
+struct ZipOutput {
+    blocks: Vec<Vec<u8>>,
+    current: Vec<u8>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl std::io::Write for ZipOutput {
+    fn write(&mut self, mut bytes: &[u8]) -> std::io::Result<usize> {
+        let len = bytes.len();
+        while !bytes.is_empty() {
+            if self.current.len() == self.current.capacity() {
+                if !self.current.is_empty() {
+                    self.blocks.push(std::mem::take(&mut self.current));
+                }
+                self.current = Vec::with_capacity(if self.blocks.is_empty() { 8192 } else { 256 << 10 });
+            }
+            let part = &mut self.current;
+            let (head, rest) = bytes.split_at((part.capacity() - part.len()).min(bytes.len()));
+            part.extend_from_slice(head);
+            bytes = rest;
+        }
+        Ok(len)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl ZipOutput {
+    fn into_vec(mut self) -> Vec<u8> {
+        self.blocks.push(self.current);
+        if self.blocks.len() == 1 {
+            return self.blocks.pop().unwrap_or_default().into_boxed_slice().into_vec();
+        }
+        let len = self.blocks.iter().fold(0usize, |n, c| n.saturating_add(c.len()));
+        let mut out = Vec::with_capacity(len);
+        for part in self.blocks {
+            out.extend_from_slice(&part);
+        }
+        out
+    }
 }
 
 /// Decompresses a zlib stream, requiring at least `expected` output bytes and
