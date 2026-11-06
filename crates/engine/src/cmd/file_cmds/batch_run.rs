@@ -294,6 +294,7 @@ type PrepareInput<'a> = &'a dyn Fn(&mut Session, &str) -> Result<()>;
 struct InputPolicy<'a> {
     prepare: PrepareInput<'a>,
     notices: &'a std::cell::RefCell<Vec<Value>>,
+    save_and_close: bool,
 }
 
 struct ProcessOptions<'a> {
@@ -333,6 +334,11 @@ fn process_one(
             ctx.publish_batch_preview(path, scratch.active().map(|state| state.doc.clone()));
         }
         if let Some(state) = scratch.active() {
+            // The source guard runs before actions can close or switch documents. Keep
+            // Save and Close's specific refusal instead of hiding it behind the generic gate.
+            if state.source_read_only && options.input.is_some_and(|input| input.save_and_close) {
+                return Err(EngineError::Other(format!("Save and Close cannot replace this source; save it to a separate output folder: {out}")).into());
+            }
             check_import_destination(state, out)?;
         }
         let saved_by_action = f(&mut scratch, out)?;
@@ -942,7 +948,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
                 }
                 Ok(())
             };
-            let input = InputPolicy { prepare: &prepare, notices: &notices };
+            let input = InputPolicy { prepare: &prepare, notices: &notices, save_and_close };
             let run = |scratch: &mut Session, out: &str| -> std::result::Result<bool, FileFailure> {
                 let source_id = scratch.active().map(|state| state.doc.id);
                 let source_path = scratch
