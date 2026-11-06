@@ -1,11 +1,13 @@
-use super::{Align2, BlendMode, Color32, PhotocraftApp, Rect, Sense, Stroke, StrokeKind, Tokens, c32, icons, json, pos2, vec2, widgets};
+use super::{Align2, BlendMode, Color32, PhotocraftApp, Rect, Sense, Stroke, StrokeKind, Tokens, c32, icons, json, pos2, starts_blend_group, vec2, widgets};
 
 /// A painting tool's Mode dropdown over `modes` (`None` is Clear); the wheel over it steps the
-/// mode. Returns the mode picked this frame.
+/// mode. Returns the mode picked this frame. A list of every blend mode draws the Layers panel's
+/// group lines (#5532; Clear starts none); a short one (the Healing Brush's) draws none.
 pub(super) fn tool_mode_dropdown(ui: &mut egui::Ui, id: &str, modes: &[Option<BlendMode>], current: Option<BlendMode>) -> Option<Option<BlendMode>> {
     let opts: Vec<(Option<BlendMode>, &str)> = modes.iter().map(|m| (*m, m.map_or("Clear", BlendMode::label))).collect();
+    let grouped = BlendMode::LAYER_MODES.iter().all(|m| modes.contains(&Some(*m)));
     let mut mode = current;
-    let chosen = widgets::dropdown_wheel_hovered(ui, id, tl!("Mode"), &mut mode, &opts, 96.0).0;
+    let chosen = widgets::dropdown_wheel_grouped(ui, id, tl!("Mode"), &mut mode, &opts, 96.0, |m| grouped && m.is_some_and(starts_blend_group)).0;
     chosen.last().copied()
 }
 
@@ -21,7 +23,7 @@ pub(super) fn paint_mode_dropdown(ui: &mut egui::Ui, id: &str, b: &mut photocraf
     } else {
         (Some(b.mode), false)
     };
-    if !widgets::dropdown_wheel_hovered(ui, id, tl!("Mode"), &mut mode, &opts, 96.0).0.is_empty() {
+    if !widgets::dropdown_wheel_grouped(ui, id, tl!("Mode"), &mut mode, &opts, 96.0, |m| m.0.is_some_and(starts_blend_group)).0.is_empty() {
         *clear = mode == (None, false);
         b.behind = mode.1;
         if mode.1 {
