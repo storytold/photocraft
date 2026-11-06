@@ -469,6 +469,22 @@ fn saves_run_in_the_background_and_are_recorded_when_they_end() {
     assert!(h.state_mut().run("layer.new.layer", json!({})).is_ok(), "unlocked again");
 }
 
+/// A writer that can't confirm the bytes were stored (a mobile exporter the user may cancel)
+/// leaves the document unsaved after a background save, as after an inline one (#4962).
+#[test]
+fn an_unconfirmed_background_save_leaves_the_document_unsaved() {
+    let mut h = app_harness();
+    let gates = Gates { encode: Arc::new(AtomicBool::new(true)), write: Arc::new(AtomicBool::new(true)), ..Gates::default() };
+    h.state_mut().services.save_file = Some(gates.save(None));
+    h.state_mut().services.write_unconfirmed = true;
+    h.state_mut().save_as(Some("/tmp/photocraft-test/unconfirmed.psd".into())).unwrap();
+    step_until(&mut h, |a| !a.saving());
+    assert_eq!(gates.written(), ["/tmp/photocraft-test/unconfirmed.psd"]);
+    let st = h.state().session.active().unwrap();
+    assert!(st.is_dirty(), "not saved until the writer confirms");
+    assert_eq!(st.path.as_deref(), Some("/tmp/photocraft-test/unconfirmed.psd"), "but it is the document's file now");
+}
+
 /// Save in Background off (#6207): the same worker writes the file, but the app waits for it
 /// like Photoshop's foreground save. The progress dialog shows at once, shortcuts don't reach the
 /// app, and a close asked for meanwhile happens only once the file is complete.
