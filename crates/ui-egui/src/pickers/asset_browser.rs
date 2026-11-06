@@ -26,7 +26,7 @@ use crate::pickers::picker_browser_hierarchy::commit_hierarchy_move;
 use crate::pickers::picker_browser_identity::PickerIdentityKey;
 use crate::pickers::picker_browser_identity::{PickerNodeIdentity, PickerNodeRole, PickerProjectionKeys, ProjectionNodeRef};
 use crate::pickers::picker_browser_model::{ContainerId, DropPosition, HierarchyNode, PickerBrowserHierarchy, PickerId, PickerIdRegistry};
-use crate::pickers::picker_browser_projection::build_hierarchy_projection;
+use crate::pickers::picker_browser_projection::{GroupRenderSegment, build_hierarchy_projection};
 pub(crate) use crate::pickers::picker_browser_projection::{GroupView, ItemView};
 use crate::pickers::picker_state::escape_hierarchy_key_part;
 use crate::pickers::picker_state::{HierarchyOrderEntry, ItemRenameState, PresetUi};
@@ -689,6 +689,264 @@ fn group_is_descendant(parents: &std::collections::BTreeMap<String, String>, sou
     is_group_descendant(parents, source, target)
 }
 
+fn hierarchy_drop_accepts(
+    drag: &AssetDrag,
+    panel: &str,
+    item_group: &str,
+    item_path: &[String],
+    parents: &std::collections::BTreeMap<String, String>,
+    domain_hierarchy_actions: bool,
+) -> bool {
+    let AssetDrag::Group { scope, name, path } = drag else { return false };
+    if scope != panel {
+        return false;
+    }
+    if path.is_empty() {
+        !domain_hierarchy_actions || (!group_is_descendant(parents, name, item_group) && name != item_group)
+    } else {
+        domain_hierarchy_actions && !(name == item_group && item_path.starts_with(path))
+    }
+}
+
+/// All derived model state needed by one browser frame. Keeping projection, filtering and visible
+/// selection order together prevents the rendering pass from rebuilding subtly different views of
+/// the same hierarchy.
+struct BrowserProjection {
+    display: Vec<(usize, usize)>,
+    group_names: Vec<String>,
+    parents: std::collections::BTreeMap<String, String>,
+    hierarchy_orders: std::collections::BTreeMap<String, Vec<HierarchyOrderEntry>>,
+    render_segments: Vec<GroupRenderSegment>,
+    hierarchy: PickerBrowserHierarchy,
+    hierarchy_identities: std::collections::BTreeMap<PickerId, PickerNodeIdentity>,
+    selected_items: Vec<(String, ItemView)>,
+    visible_selection_order: Vec<PickerId>,
+}
+
+impl BrowserProjection {
+    #[allow(clippy::too_many_arguments)]
+    fn build(
+        groups: &[GroupView],
+        state: &PresetUi,
+        panel: &str,
+        query: &str,
+        all_groups_open: bool,
+        domain_hierarchy_actions: bool,
+        domain_root_sequence: Option<&[HierarchyOrderEntry]>,
+        projection_keys: &PickerProjectionKeys,
+        picker_ids: &mut PickerIdRegistry,
+    ) -> Option<Self> {
+        let visible_group_indices: Vec<usize> = groups.iter().enumerate().filter_map(|(index, group)| (!group.root_only).then_some(index)).collect();
+        let group_names: Vec<String> = visible_group_indices.iter().filter_map(|index| groups.get(*index).map(|group| group.name.clone())).collect();
+        let display: Vec<(usize, usize)> = if domain_hierarchy_actions {
+            visible_group_indices.iter().map(|index| (*index, 0)).collect()
+        } else {
+            state
+                .nested_display_order(panel, &group_names)
+                .into_iter()
+                .filter_map(|(visible_index, depth)| visible_group_indices.get(visible_index).map(|index| (*index, depth)))
+                .collect()
+        };
+        let parents = if domain_hierarchy_actions { std::collections::BTreeMap::new() } else { state.group_parents(panel) };
+        let mut hierarchy_orders = std::collections::BTreeMap::new();
+        let root_entries = if domain_hierarchy_actions {
+            domain_root_sequence.map(<[HierarchyOrderEntry]>::to_vec).unwrap_or_default()
+        } else {
+            state.hierarchy_order.get(panel).and_then(|orders| orders.get("")).cloned().unwrap_or_default()
+        };
+        let lifted_items: BTreeSet<(String, String)> = root_entries
+            .iter()
+            .filter_map(|entry| match entry {
+                HierarchyOrderEntry::RootItem { group, key } => Some((group.clone(), key.clone())),
+                _ => None,
+            })
+            .collect();
+        for group in groups {
+            let child_groups: Vec<String> = display
+                .iter()
+                .filter_map(|(child_index, _)| {
+                    let child = groups.get(*child_index)?;
+                    (parents.get(&child.name).is_some_and(|parent| parent == &group.name)).then(|| child.name.clone())
+                })
+                .collect();
+            let item_keys: Vec<String> =
+                group.items.iter().map(|item| item.key.clone()).filter(|key| !lifted_items.contains(&(group.name.clone(), key.clone()))).collect();
+            let entries = if domain_hierarchy_actions {
+                group.items.iter().map(|item| HierarchyOrderEntry::Item(item.key.clone())).collect()
+            } else {
+                state.ordered_hierarchy_entries(panel, &group.name, &item_keys, &child_groups)
+            };
+            hierarchy_orders.insert(group.name.clone(), entries);
+        }
+        hierarchy_orders.insert(String::new(), root_entries);
+        let (render_segments, hierarchy, hierarchy_identities) =
+            build_hierarchy_projection(groups, &display, &parents, &hierarchy_orders, projection_keys, picker_ids)?;
+
+        let mut selected_items = Vec::new();
+        if let Some(selection) = state.browser_selection.get(panel) {
+            for group in groups {
+                for item in &group.items {
+                    if item_node_for_identity(&group.name, &item.group_path, &item.key, &hierarchy_identities).is_some_and(|id| selection.contains(&id)) {
+                        selected_items.push((group.name.clone(), item.clone()));
+                    }
+                }
+            }
+        }
+
+        let mut visible_selection_order = Vec::new();
+        let mut hidden_groups = BTreeSet::new();
+        let mut hidden_folders = BTreeSet::<(String, Vec<String>)>::new();
+        for segment in &render_segments {
+            let Some(group) = groups.get(segment.group_index) else { continue };
+            let group_matches = group_matches_query(group, query);
+            let has_matching_items = group.items.iter().any(|item| item_matches_query(item, query));
+            if segment.root_items {
+                for (group_index, item_index) in &segment.item_indices {
+                    let Some(source_group) = groups.get(*group_index) else { continue };
+                    let Some(item) = source_group.items.get(*item_index) else { continue };
+                    if item_visible_for_query(item, query, group_matches_query(source_group, query))
+                        && let Some(id) = item_node_for_identity(&source_group.name, &item.group_path, &item.key, &hierarchy_identities)
+                    {
+                        visible_selection_order.push(id);
+                    }
+                }
+                continue;
+            }
+            if !group_visible_for_query(query, group_matches, has_matching_items) {
+                continue;
+            }
+            if segment.show_header {
+                if parents.get(&group.name).is_some_and(|parent| hidden_groups.contains(parent)) {
+                    hidden_groups.insert(group.name.clone());
+                    continue;
+                }
+                let open = !query.is_empty() || group_open(state, panel, segment.group_index, &group.name, all_groups_open);
+                visible_selection_order.push(picker_group_id(picker_ids, segment.group_index, projection_keys));
+                if !open {
+                    hidden_groups.insert(group.name.clone());
+                }
+            } else if hidden_groups.contains(&group.name) {
+                continue;
+            }
+            if !segment.folder_path.is_empty()
+                && (1..=segment.folder_path.len()).any(|length| hidden_folders.contains(&(group.name.clone(), segment.folder_path[..length].to_vec())))
+            {
+                continue;
+            }
+            let folder_open = segment.folder_path.is_empty() || {
+                let path = segment.folder_path.iter().map(|part| escape_hierarchy_key_part(part)).collect::<Vec<_>>().join("/");
+                !state.toggled.contains(&format!("{panel}/{}/{}", escape_hierarchy_key_part(&group.name), path))
+            };
+            if segment.show_folder_header {
+                visible_selection_order.push(picker_folder_id(picker_ids, segment.group_index, projection_keys, &segment.folder_path));
+                if !folder_open {
+                    hidden_folders.insert((group.name.clone(), segment.folder_path.clone()));
+                }
+            }
+            if folder_open {
+                for (group_index, item_index) in &segment.item_indices {
+                    if let Some(source_group) = groups.get(*group_index)
+                        && let Some(item) =
+                            source_group.items.get(*item_index).filter(|item| item_visible_for_query(item, query, group_matches_query(source_group, query)))
+                        && let Some(id) = item_node_for_identity(&source_group.name, &item.group_path, &item.key, &hierarchy_identities)
+                    {
+                        visible_selection_order.push(id);
+                    }
+                }
+            }
+        }
+
+        Some(Self {
+            display,
+            group_names,
+            parents,
+            hierarchy_orders,
+            render_segments,
+            hierarchy,
+            hierarchy_identities,
+            selected_items,
+            visible_selection_order,
+        })
+    }
+}
+
+fn draw_rename_row(ui: &mut egui::Ui, state: &mut PresetUi, panel: &str, tokens: &Tokens) -> (f32, Vec<BrowserAction>) {
+    let row_top = ui.cursor().top();
+    advance_item_rename(state, panel);
+    let item_rename = state.item_renaming.clone().filter(|rename| rename.panel == panel);
+    let nested_group_rename = state.group_renaming.clone().filter(|rename| rename.panel == panel);
+    let has_rename_row = item_rename.is_some() || nested_group_rename.is_some() || state.renaming.as_ref().is_some_and(|r| r.0 == panel);
+    let mut actions = Vec::new();
+
+    if let Some(mut rename) = item_rename {
+        if state.renaming.as_ref().is_some_and(|r| r.0 == panel) {
+            state.renaming = None;
+        }
+        let mut text = rename.text.clone();
+        let done = inline_name_editor(ui, &mut text, tokens);
+        rename.text = text.clone();
+        state.item_renaming = Some(rename.clone());
+        if let Some(confirm) = done {
+            state.item_renaming = None;
+            if confirm && !text.trim().is_empty() {
+                actions.push(BrowserAction::RenameItem { group: rename.group, group_path: rename.group_path, key: rename.key, text: text.trim().to_owned() });
+            }
+        }
+    } else if let Some(mut rename) = nested_group_rename {
+        // The typed nested-group target is authoritative while this editor is active. Remove any stale
+        // legacy target for the same panel so it cannot reappear after commit or cancellation.
+        if state.renaming.as_ref().is_some_and(|r| r.0 == panel) {
+            state.renaming = None;
+        }
+        let mut text = rename.text.clone();
+        let done = inline_name_editor(ui, &mut text, tokens);
+        rename.text = text.clone();
+        state.group_renaming = Some(rename.clone());
+        if let Some(confirm) = done {
+            state.group_renaming = None;
+            if confirm && !text.trim().is_empty() {
+                actions.push(BrowserAction::RenameNestedGroup { group: rename.group, group_path: rename.group_path, text: text.trim().to_owned() });
+            }
+        }
+    } else if let Some((panel_name, key, mut text)) = state.renaming.clone().filter(|rename| rename.0 == panel) {
+        // Starting a regular item/group rename supersedes any pending nested-group target for this panel.
+        if state.group_renaming.as_ref().is_some_and(|rename| rename.panel == panel) {
+            state.group_renaming = None;
+        }
+        let done = inline_name_editor(ui, &mut text, tokens);
+        state.renaming = Some((panel_name, key.clone(), text.clone()));
+        if let Some(confirm) = done {
+            state.renaming = None;
+            if confirm && !text.trim().is_empty() {
+                let text = text.trim().to_owned();
+                match key.strip_prefix("group:") {
+                    Some(group) => actions.push(BrowserAction::RenameGroup(group.to_owned(), text)),
+                    None => actions.push(BrowserAction::Rename(key, text)),
+                }
+            }
+        }
+    }
+
+    let height = if has_rename_row { (ui.cursor().top() - row_top).max(0.0) } else { 0.0 };
+    (height, actions)
+}
+
+/// Shared focus and confirmation behavior for all inline rename targets.
+fn inline_name_editor(ui: &mut egui::Ui, text: &mut String, tokens: &Tokens) -> Option<bool> {
+    let mut done = None;
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(tl!("Name:")).color(tokens.text_dim).size(11.5));
+        let response = ui.add(egui::TextEdit::singleline(text).desired_width(ui.available_width() - 4.0));
+        if !response.has_focus() && !response.lost_focus() {
+            response.request_focus();
+        }
+        if response.lost_focus() {
+            done = Some(ui.input(|input| input.key_pressed(egui::Key::Enter)));
+        }
+    });
+    done
+}
+
 fn is_group_descendant(parents: &std::collections::BTreeMap<String, String>, source: &str, target: &str) -> bool {
     let mut current = target;
     let mut seen = BTreeSet::new();
@@ -704,7 +962,7 @@ fn is_group_descendant(parents: &std::collections::BTreeMap<String, String>, sou
 
 #[cfg(test)]
 mod group_drop_tests {
-    use super::is_group_descendant;
+    use super::{AssetDrag, hierarchy_drop_accepts, is_group_descendant};
     use std::collections::BTreeMap;
 
     #[test]
@@ -719,6 +977,20 @@ mod group_drop_tests {
         assert!(is_group_descendant(&parents, "Parent", "Grandchild"));
         assert!(!is_group_descendant(&parents, "Parent", "Other"));
         assert!(!is_group_descendant(&parents, "Parent", "Parent"));
+    }
+
+    #[test]
+    fn hierarchy_card_targets_keep_root_and_nested_group_rules_consistent() {
+        let parents = BTreeMap::from([("Child".to_string(), "Parent".to_string()), ("Grandchild".to_string(), "Child".to_string())]);
+        let root_drag = AssetDrag::Group { scope: "panel".into(), name: "Parent".into(), path: Vec::new() };
+        let nested_drag = AssetDrag::Group { scope: "panel".into(), name: "Parent".into(), path: vec!["Folder".into()] };
+
+        assert!(!hierarchy_drop_accepts(&root_drag, "panel", "Parent", &[], &parents, true));
+        assert!(!hierarchy_drop_accepts(&root_drag, "panel", "Child", &[], &parents, true));
+        assert!(hierarchy_drop_accepts(&root_drag, "panel", "Grandchild", &[], &parents, false));
+        assert!(!hierarchy_drop_accepts(&nested_drag, "panel", "Parent", &["Folder".into(), "Inner".into()], &parents, true));
+        assert!(hierarchy_drop_accepts(&nested_drag, "panel", "Parent", &["Other".into()], &parents, true));
+        assert!(!hierarchy_drop_accepts(&nested_drag, "other-panel", "Parent", &["Other".into()], &parents, true));
     }
 }
 
@@ -1263,6 +1535,283 @@ mod display_layout_tests {
     }
 }
 type GroupRelease = (AssetDrag, String, Vec<String>, bool);
+type GroupDragGhost = (Rect, usize, bool, usize);
+type NestedGroupDragGhost = (Rect, bool, String, usize, usize);
+type ItemDragGhost = (Rect, usize, usize, crate::pickers::picker_state::PickerDisplayMode, bool);
+
+#[allow(clippy::too_many_arguments)]
+fn paint_drag_ghosts(
+    ui: &egui::Ui,
+    panel: &str,
+    groups: &[GroupView],
+    app_window_clip: Rect,
+    group_ghosts: Vec<GroupDragGhost>,
+    nested_group_ghosts: Vec<NestedGroupDragGhost>,
+    item_ghosts: Vec<ItemDragGhost>,
+    paint_group: &mut Option<&mut PaintGroup>,
+    paint_item: &mut PaintItem<'_>,
+    paint_list_item: &mut Option<&mut PaintListItem<'_>>,
+    tokens: &Tokens,
+) {
+    for (ghost_rect, group_index, open, depth) in group_ghosts {
+        let Some(group) = groups.get(group_index) else { continue };
+        let layer = egui::LayerId::new(egui::Order::Foreground, egui::Id::new(("preset-group-drag", panel)));
+        let mut ghost_ui = egui::Ui::new(
+            ui.ctx().clone(),
+            egui::Id::new(("preset-group-drag-ui", panel)),
+            egui::UiBuilder::new().layer_id(layer).max_rect(ghost_rect.expand(1.0)),
+        );
+        ghost_ui.set_clip_rect(app_window_clip);
+        if let Some(paint) = paint_group.as_deref_mut() {
+            paint(&ghost_ui, ghost_rect, group, open, false, GROUP_DRAG_GHOST_OPACITY);
+        } else {
+            crate::pickers::asset_browser_groups::paint_with_opacity(&ghost_ui, ghost_rect, open, &group.name, depth, None, GROUP_DRAG_GHOST_OPACITY);
+        }
+    }
+    for (ghost_rect, open, name, depth, count) in nested_group_ghosts {
+        let layer = egui::LayerId::new(egui::Order::Foreground, egui::Id::new(("preset-group-drag", panel)));
+        let mut ghost_ui = egui::Ui::new(
+            ui.ctx().clone(),
+            egui::Id::new(("preset-group-drag-ui", panel)),
+            egui::UiBuilder::new().layer_id(layer).max_rect(ghost_rect.expand(1.0)),
+        );
+        ghost_ui.set_clip_rect(app_window_clip);
+        crate::pickers::asset_browser_groups::paint_with_opacity(&ghost_ui, ghost_rect, open, &name, depth, Some(count), GROUP_DRAG_GHOST_OPACITY);
+    }
+    for (ghost_rect, group_index, item_index, ghost_mode, selected) in item_ghosts {
+        let layer = egui::LayerId::new(egui::Order::Foreground, egui::Id::new(("preset-drag", panel)));
+        let mut ghost_ui =
+            egui::Ui::new(ui.ctx().clone(), egui::Id::new(("preset-drag-ui", panel)), egui::UiBuilder::new().layer_id(layer).max_rect(ghost_rect.expand(1.0)));
+        ghost_ui.set_clip_rect(app_window_clip);
+        ghost_ui.set_opacity(0.4);
+        if ghost_mode == crate::pickers::picker_state::PickerDisplayMode::TextOnly {
+            if let Some(item) = groups.get(group_index).and_then(|group| group.items.get(item_index)) {
+                if selected {
+                    ghost_ui.painter().rect_filled(ghost_rect, CornerRadius::ZERO, tokens.row_selected);
+                }
+                let label_rect = Rect::from_min_max(pos2(ghost_rect.left() + 8.0, ghost_rect.top()), ghost_rect.right_bottom());
+                let mut label_ui = ghost_ui.new_child(egui::UiBuilder::new().max_rect(label_rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
+                label_ui.set_clip_rect(label_rect.intersect(app_window_clip));
+                crate::widgets::elided_label(&mut label_ui, &item.name, label_rect.width());
+            }
+        } else if ghost_mode.uses_list_layout() {
+            if let Some(paint) = paint_list_item.as_deref_mut() {
+                paint(&ghost_ui, ghost_rect, group_index, item_index, selected);
+            } else if let Some(item) = groups.get(group_index).and_then(|group| group.items.get(item_index)) {
+                let thumb_size = (ghost_rect.height() - 2.0).max(0.0);
+                let thumb_rect = Rect::from_min_size(ghost_rect.min + vec2(1.0, 1.0), vec2(thumb_size, thumb_size));
+                paint_item(&ghost_ui, thumb_rect, group_index, item_index, ItemPaintState::DragGhost);
+                ghost_ui.painter().text(
+                    pos2(thumb_rect.right() + 8.0, ghost_rect.center().y),
+                    Align2::LEFT_CENTER,
+                    &item.name,
+                    FontId::proportional(11.5),
+                    tokens.text,
+                );
+            }
+        } else {
+            paint_item(&ghost_ui, ghost_rect, group_index, item_index, ItemPaintState::DragGhost);
+        }
+        ghost_ui.painter().rect_stroke(ghost_rect, CornerRadius::ZERO, Stroke::new(2.0, tokens.accent), egui::StrokeKind::Middle);
+    }
+}
+
+/// Resolve the canonical hierarchy target and commit a validated release. The returned `None`
+/// means no release was consumed; `Some(Ok(()))` clears old feedback and `Some(Err(_))` reports a
+/// rejected or failed move. Keeping the one-shot payload handling here makes target arbitration,
+/// source verification and domain persistence one ordered operation.
+#[allow(clippy::too_many_arguments)]
+fn resolve_canonical_drop(
+    ui: &egui::Ui,
+    panel: &str,
+    browser_parent_clip: Rect,
+    browser_view_clip: Rect,
+    drop_hits: &[(DropHitRegion, egui::Response)],
+    state: &mut PresetUi,
+    picker_ids: &mut PickerIdRegistry,
+    hierarchy: &mut PickerBrowserHierarchy,
+    identities: &std::collections::BTreeMap<PickerId, PickerNodeIdentity>,
+    root_item_group: Option<&str>,
+    canonical_hierarchy_move: &mut Option<&mut CanonicalHierarchyMove<'_>>,
+    rekey_hierarchy_after_move: &mut Option<&mut RekeyHierarchyAfterMove<'_>>,
+    hierarchy_item_move: &mut Option<&mut HierarchyItemMove<'_>>,
+    accent: egui::Color32,
+) -> Option<Result<(), String>> {
+    let pointer = ui.ctx().pointer_interact_pos()?;
+    let hits: Vec<DropHitRegion> = drop_hits
+        .iter()
+        .filter_map(|(hit, _)| {
+            let mut visible = hit.clone();
+            // Header visuals extend into the ScrollArea's left margin. Use the parent's horizontal
+            // clip for the root-leading target, and the scroll viewport for every other region.
+            let clip = if visible.depth == usize::MAX && visible.order == usize::MAX && visible.region == PointerRegion::LeadingEdge {
+                browser_parent_clip
+            } else {
+                browser_view_clip
+            };
+            visible.hit_rect = visible.hit_rect.intersect(clip);
+            visible.hit_rect.is_positive().then_some(visible)
+        })
+        .collect();
+    let index = arbitrate_hit_index(pointer, &hits)?;
+    drop_hits.get(index)?;
+
+    let dragged = egui::DragAndDrop::payload::<AssetDrag>(ui.ctx()).map(|payload| payload.as_ref().clone())?;
+    let source = source_node_for_drag(&dragged, panel, identities)?;
+    let selection = match &dragged {
+        AssetDrag::Preset { selection, .. } | AssetDrag::CanonicalGroup { selection, .. } => selection.clone(),
+        AssetDrag::Group { .. } => Vec::new(),
+    };
+    let mut session = DragSession::new(source.clone(), selection.clone());
+    let candidate = session.resolve(pointer, &hits[index], hierarchy).cloned()?;
+    let ghost_layer_id = match dragged {
+        AssetDrag::Preset { .. } => ("preset-drag", panel),
+        AssetDrag::Group { .. } | AssetDrag::CanonicalGroup { .. } => ("preset-group-drag", panel),
+    };
+    let drop_feedback_layer = egui::LayerId::new(egui::Order::Foreground, egui::Id::new(ghost_layer_id));
+    paint_candidate(ui, &candidate, accent, browser_view_clip, drop_feedback_layer);
+
+    // Resolve and validate the exact candidate before taking egui's global one-shot payload.
+    let released = asset_browser_take_release(ui.ctx())?;
+    if source_node_for_drag(&released, panel, identities).as_ref() != Some(&source) {
+        return Some(Err("Move rejected: the dragged source changed before release.".to_owned()));
+    }
+
+    let moved_sources = {
+        let sources = if selection.is_empty() { vec![source.clone()] } else { selection.clone() };
+        hierarchy_move_sources(&sources, &candidate.position)
+    };
+    let result = session.commit_with(|intent| {
+        if let Some(commit) = canonical_hierarchy_move.as_deref_mut() {
+            let mut moved = hierarchy.clone();
+            let moved_ok = moved.resolve_move(&intent.source, &intent.position).and_then(|resolved| moved.apply_resolved_move(resolved)).is_ok();
+            let result = commit(intent, identities);
+            if result.is_ok()
+                && moved_ok
+                && let Some(rekey) = rekey_hierarchy_after_move.as_deref_mut()
+            {
+                rekey(&moved, identities, picker_ids);
+            }
+            return result;
+        }
+        let sources = if intent.selection.is_empty() { vec![intent.source.clone()] } else { intent.selection.clone() };
+        let hierarchy_sources = hierarchy_move_sources(&sources, &intent.position);
+        let legacy_persistable = identities.values().all(|identity| matches!(identity.role(), PickerNodeRole::Card | PickerNodeRole::AssetGroup));
+        if !legacy_persistable {
+            return Err("This asset adapter does not support path-aware hierarchy moves.".to_owned());
+        }
+        let item_moves = plan_hierarchy_item_moves(hierarchy, &sources, &intent.position, identities, root_item_group)?;
+        for (group, key, destination_group, index) in item_moves {
+            let Some(commit) = hierarchy_item_move.as_deref_mut() else {
+                return Err("This asset adapter does not support authoritative item moves.".to_owned());
+            };
+            commit(&group, &key, &destination_group, index)?;
+        }
+        for source in &hierarchy_sources {
+            commit_hierarchy_move(state, panel, hierarchy, source, &intent.position, identities)
+                .map_err(|error| format!("Could not persist hierarchy move: {error:?}"))?;
+        }
+        Ok(())
+    });
+
+    if matches!(result, DropCommitResult::Committed) {
+        if moved_sources.contains(&source)
+            && let Some(PickerNodeIdentity::Item { key, .. } | PickerNodeIdentity::FolderItem { key, .. }) = identities.get(&source)
+            && let Some((group, path)) = hierarchy_drop_item_destination(&source, &candidate.position, hierarchy, identities)
+        {
+            select_dropped_item(state, panel, &group, &path, key);
+        }
+        if selection.is_empty()
+            && identities.get(&source).is_some_and(|identity| matches!(identity.role(), PickerNodeRole::AssetGroup | PickerNodeRole::StructuralFolder))
+        {
+            state.select_browser_node(panel, source, false);
+        }
+    }
+
+    Some(match result {
+        DropCommitResult::Committed | DropCommitResult::NoCandidate => Ok(()),
+        DropCommitResult::Rejected(reason) => Err(format!("Move rejected: {reason:?}")),
+        DropCommitResult::Failed(error) => Err(format!("Move rejected: {error:?}")),
+    })
+}
+
+/// Apply the legacy group-header release after all visible headers and indentation columns have
+/// been collected. Canonical mode deliberately never enters this path.
+#[allow(clippy::too_many_arguments)]
+fn apply_legacy_group_release(
+    state: &mut PresetUi,
+    panel: &str,
+    groups: &[GroupView],
+    headers: &[(usize, Rect, String)],
+    parents: &std::collections::BTreeMap<String, String>,
+    group_names: &[String],
+    hierarchy_orders: &std::collections::BTreeMap<String, Vec<HierarchyOrderEntry>>,
+    indent_release: Option<(String, String)>,
+    released: Option<(usize, Pos2)>,
+    domain_hierarchy_actions: bool,
+) -> Vec<BrowserAction> {
+    let mut actions = Vec::new();
+    if let Some((from_name, parent)) = indent_release {
+        if !group_is_descendant(parents, &from_name, &parent) {
+            if let Some(old_parent) = parents.get(&from_name).filter(|old_parent| *old_parent != &parent) {
+                state.remove_hierarchy_entry(panel, old_parent, &HierarchyOrderEntry::Group(from_name.clone()));
+            }
+            state.nest_group(panel, group_names, &from_name, Some(&parent));
+            let entries = hierarchy_orders.get(&parent).cloned().unwrap_or_default();
+            state.move_hierarchy_entry(panel, &parent, entries, HierarchyOrderEntry::Group(from_name), None);
+        }
+    } else if let Some((from, pointer)) = released {
+        let Some(from_name) = groups.get(from).map(|group| group.name.clone()) else { return actions };
+        if let Some((_, rect, target)) = headers.iter().find(|(index, rect, _)| *index != from && rect.contains(pointer)) {
+            let edge = header_drop_before(*rect, pointer);
+            if domain_hierarchy_actions && !group_is_descendant(parents, &from_name, target) {
+                if let Some(action) = hierarchy_group_drop(&from_name, &[], target, &[], edge) {
+                    actions.push(hierarchy_action(action));
+                }
+            } else if !domain_hierarchy_actions {
+                let destination_parent = if edge { parents.get(target).cloned() } else { Some(target.clone()) };
+                let creates_cycle = destination_parent.as_deref().is_some_and(|parent| parent == from_name || group_is_descendant(parents, &from_name, parent));
+                if !creates_cycle {
+                    if let Some(old_parent) = parents.get(&from_name).filter(|old_parent| Some(*old_parent) != destination_parent.as_ref()) {
+                        state.remove_hierarchy_entry(panel, old_parent, &HierarchyOrderEntry::Group(from_name.clone()));
+                    }
+                    state.nest_group(panel, group_names, &from_name, destination_parent.as_deref());
+                    if let Some(parent) = destination_parent {
+                        let entries = hierarchy_orders.get(&parent).cloned().unwrap_or_default();
+                        let before = edge.then(|| HierarchyOrderEntry::Group(target.clone()));
+                        state.move_hierarchy_entry(panel, &parent, entries, HierarchyOrderEntry::Group(from_name), before.as_ref());
+                    } else {
+                        state.move_group(panel, group_names, &from_name, Some(target));
+                    }
+                }
+            }
+        } else {
+            let before = group_drop_before(headers, from, &from_name, pointer, parents);
+            if before != Some(from) {
+                let before_name = before.and_then(|index| groups.get(index).map(|group| group.name.clone()));
+                if domain_hierarchy_actions {
+                    actions.push(BrowserAction::MoveGroup { group: from_name, group_path: Vec::new(), before: before_name });
+                } else {
+                    let source_parent = parents.get(&from_name).cloned();
+                    let source_rect = headers.iter().find(|(index, _, _)| *index == from).map(|(_, rect, _)| *rect);
+                    let promote_to_root = source_parent.is_some() && source_rect.is_some_and(|rect| pointer.x < rect.left() + ROW_INDENT * 0.5);
+                    if let Some(parent) = source_parent.clone().filter(|_| !promote_to_root) {
+                        let entries = hierarchy_orders.get(&parent).cloned().unwrap_or_default();
+                        let before = before_name.as_ref().map(|name| HierarchyOrderEntry::Group(name.clone()));
+                        state.move_hierarchy_entry(panel, &parent, entries, HierarchyOrderEntry::Group(from_name), before.as_ref());
+                    } else {
+                        if let Some(old_parent) = source_parent.as_deref() {
+                            state.remove_hierarchy_entry(panel, old_parent, &HierarchyOrderEntry::Group(from_name.clone()));
+                        }
+                        state.nest_group(panel, group_names, &from_name, None);
+                        state.move_group(panel, group_names, &from_name, before_name.as_deref());
+                    }
+                }
+            }
+        }
+    }
+    actions
+}
 
 /// Draw only the reusable library region. It owns groups/items, selection, drag/drop and item/group
 /// context targets, but not the containing panel's optional controls or footer.
@@ -1319,99 +1868,13 @@ pub(crate) fn browser_with_root_sequence(
     let paint_item = &mut adapter.paint_item;
     let paint_list_item = &mut adapter.paint_list_item;
     let max_h = allocated_height;
-    let mut ev = Vec::new();
     let display_mode = st.display_mode(panel);
     let size = display_mode.item_height();
     let list = display_mode.uses_list_layout();
     let wrap_list = st.wrap_list_enabled(panel) && display_mode != crate::pickers::picker_state::PickerDisplayMode::TextOnly;
-    let rename_row_top = ui.cursor().top();
-    advance_item_rename(st, panel);
-    let item_rename = st.item_renaming.clone().filter(|rename| rename.panel == panel);
-    let nested_group_rename = st.group_renaming.clone().filter(|rename| rename.panel == panel);
-    let has_rename_row = item_rename.is_some() || nested_group_rename.is_some() || st.renaming.as_ref().is_some_and(|r| r.0 == panel);
-    // Rename field (Photoshop opens a small dialog; inline keeps the panel modeless).
-    if let Some(mut rename) = item_rename {
-        if st.renaming.as_ref().is_some_and(|r| r.0 == panel) {
-            st.renaming = None;
-        }
-        let mut text = rename.text.clone();
-        let mut done = None;
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(tl!("Name:")).color(t.text_dim).size(11.5));
-            let r = ui.add(egui::TextEdit::singleline(&mut text).desired_width(ui.available_width() - 4.0));
-            if !r.has_focus() && !r.lost_focus() {
-                r.request_focus();
-            }
-            if r.lost_focus() {
-                done = Some(ui.input(|i| i.key_pressed(egui::Key::Enter)));
-            }
-        });
-        rename.text = text.clone();
-        st.item_renaming = Some(rename.clone());
-        if let Some(ok) = done {
-            st.item_renaming = None;
-            if ok && !text.trim().is_empty() {
-                ev.push(BrowserAction::RenameItem { group: rename.group, group_path: rename.group_path, key: rename.key, text: text.trim().to_string() });
-            }
-        }
-    } else if let Some(mut rename) = nested_group_rename {
-        // The typed nested-group target is authoritative while this editor is active. Remove any stale
-        // legacy target for the same panel so it cannot reappear after commit or cancellation.
-        if st.renaming.as_ref().is_some_and(|r| r.0 == panel) {
-            st.renaming = None;
-        }
-        let mut text = rename.text.clone();
-        let mut done = None;
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(tl!("Name:")).color(t.text_dim).size(11.5));
-            let r = ui.add(egui::TextEdit::singleline(&mut text).desired_width(ui.available_width() - 4.0));
-            if !r.has_focus() && !r.lost_focus() {
-                r.request_focus();
-            }
-            if r.lost_focus() {
-                done = Some(ui.input(|i| i.key_pressed(egui::Key::Enter)));
-            }
-        });
-        rename.text = text.clone();
-        st.group_renaming = Some(rename.clone());
-        if let Some(ok) = done {
-            st.group_renaming = None;
-            if ok && !text.trim().is_empty() {
-                ev.push(BrowserAction::RenameNestedGroup { group: rename.group, group_path: rename.group_path, text: text.trim().to_string() });
-            }
-        }
-    } else if let Some((p, key, mut text)) = st.renaming.clone().filter(|r| r.0 == panel) {
-        // Starting a regular item/group rename supersedes any pending nested-group target for this panel.
-        if st.group_renaming.as_ref().is_some_and(|rename| rename.panel == panel) {
-            st.group_renaming = None;
-        }
-        let mut done = None;
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(tl!("Name:")).color(t.text_dim).size(11.5));
-            let r = ui.add(egui::TextEdit::singleline(&mut text).desired_width(ui.available_width() - 4.0));
-            if !r.has_focus() && !r.lost_focus() {
-                r.request_focus();
-            }
-            if r.lost_focus() {
-                done = Some(ui.input(|i| i.key_pressed(egui::Key::Enter)));
-            }
-        });
-        st.renaming = Some((p, key.clone(), text.clone()));
-        if let Some(ok) = done {
-            st.renaming = None;
-            if ok && !text.trim().is_empty() {
-                let text = text.trim().to_string();
-                match key.strip_prefix("group:") {
-                    Some(g) => ev.push(BrowserAction::RenameGroup(g.to_string(), text)),
-                    None => ev.push(BrowserAction::Rename(key, text)),
-                }
-            }
-        }
-    }
-    // The rename row is part of the browser's allocated height, not extra height above it. The
-    // scroll area's minimum must exclude the row (and its layout spacing), or a short dock can
-    // push the shell-owned footer below the panel.
-    let rename_row_height = if has_rename_row { (ui.cursor().top() - rename_row_top).max(0.0) } else { 0.0 };
+    // The rename row is included in the browser allocation, not added above it. Keep its
+    // measured height out of the scroll area's minimum so the shell-owned footer stays in place.
+    let (rename_row_height, mut ev) = draw_rename_row(ui, st, panel, &t);
     let scroll_height = (max_h - rename_row_height).max(0.0);
     let mut headers: Vec<(usize, Rect, String)> = Vec::new();
     let mut indent_drop_targets: Vec<(String, egui::Response)> = Vec::new();
@@ -1429,131 +1892,23 @@ pub(crate) fn browser_with_root_sequence(
     let mut group_releases: Vec<GroupRelease> = Vec::new();
     let canonical_drop_hits = std::cell::RefCell::new(Vec::<(DropHitRegion, egui::Response)>::new());
     let non_root_hierarchy_target_hovered = std::cell::Cell::new(false);
-    let visible_group_indices: Vec<usize> = groups.iter().enumerate().filter_map(|(index, group)| (!group.root_only).then_some(index)).collect();
-    let group_names: Vec<String> = visible_group_indices.iter().filter_map(|index| groups.get(*index).map(|group| group.name.clone())).collect();
-    // Project the canonical mixed sibling sequences into the transient validated browser tree.
-    let display: Vec<(usize, usize)> = if domain_hierarchy_actions {
-        visible_group_indices.iter().map(|index| (*index, 0)).collect()
-    } else {
-        st.nested_display_order(panel, &group_names)
-            .into_iter()
-            .filter_map(|(visible_index, depth)| visible_group_indices.get(visible_index).map(|index| (*index, depth)))
-            .collect()
-    };
-    let parents = if domain_hierarchy_actions { std::collections::BTreeMap::new() } else { st.group_parents(panel) };
-    let mut hierarchy_orders = std::collections::BTreeMap::new();
-    let root_entries = if domain_hierarchy_actions {
-        domain_root_sequence.map(<[HierarchyOrderEntry]>::to_vec).unwrap_or_default()
-    } else {
-        st.hierarchy_order.get(panel).and_then(|orders| orders.get("")).cloned().unwrap_or_default()
-    };
-    let lifted_items: BTreeSet<(String, String)> = root_entries
-        .iter()
-        .filter_map(|entry| match entry {
-            HierarchyOrderEntry::RootItem { group, key } => Some((group.clone(), key.clone())),
-            _ => None,
-        })
-        .collect();
-    for group in groups {
-        let child_groups: Vec<String> = display
-            .iter()
-            .filter_map(|(child_index, _)| {
-                let child = groups.get(*child_index)?;
-                (parents.get(&child.name).is_some_and(|parent| parent == &group.name)).then(|| child.name.clone())
-            })
-            .collect();
-        let item_keys: Vec<String> =
-            group.items.iter().map(|item| item.key.clone()).filter(|key| !lifted_items.contains(&(group.name.clone(), key.clone()))).collect();
-        let entries = if domain_hierarchy_actions {
-            group.items.iter().map(|item| HierarchyOrderEntry::Item(item.key.clone())).collect()
-        } else {
-            st.ordered_hierarchy_entries(panel, &group.name, &item_keys, &child_groups)
-        };
-        hierarchy_orders.insert(group.name.clone(), entries);
-    }
-    hierarchy_orders.insert("".into(), root_entries);
-    let Some((render_segments, mut hierarchy, hierarchy_identities)) =
-        build_hierarchy_projection(groups, &display, &parents, &hierarchy_orders, projection_keys, &mut picker_ids)
+    let Some(BrowserProjection {
+        display,
+        group_names,
+        parents,
+        hierarchy_orders,
+        render_segments,
+        mut hierarchy,
+        hierarchy_identities,
+        selected_items,
+        visible_selection_order,
+    }) = BrowserProjection::build(groups, st, panel, &query, all_groups_open, domain_hierarchy_actions, domain_root_sequence, projection_keys, &mut picker_ids)
     else {
         return ev;
     };
-    let mut selected_items = Vec::new();
-    if let Some(selection) = st.browser_selection.get(panel) {
-        for group in groups {
-            for item in &group.items {
-                if item_node_for_identity(&group.name, &item.group_path, &item.key, &hierarchy_identities).is_some_and(|id| selection.contains(&id)) {
-                    selected_items.push((group.name.clone(), item.clone()));
-                }
-            }
-        }
-    }
     // Retain the shell's horizontal clip for hierarchy hit arbitration; drag-ghost movement uses
     // the narrower ScrollArea viewport captured inside the closure below.
     let browser_parent_clip = ui.clip_rect();
-    // Selection ranges follow the same depth-first sequence the browser actually exposes. A
-    // collapsed group contributes its header only; descendants behind it never enter this list.
-    let mut visible_selection_order = Vec::new();
-    let mut selection_hidden_groups = BTreeSet::new();
-    let mut selection_hidden_folders = BTreeSet::<(String, Vec<String>)>::new();
-    for segment in &render_segments {
-        let Some(group) = groups.get(segment.group_index) else { continue };
-        let group_matches = group_matches_query(group, &query);
-        let has_matching_items = group.items.iter().any(|item| item_matches_query(item, &query));
-        if segment.root_items {
-            for (group_index, item_index) in &segment.item_indices {
-                let Some(source_group) = groups.get(*group_index) else { continue };
-                let Some(item) = source_group.items.get(*item_index) else { continue };
-                if item_visible_for_query(item, &query, group_matches_query(source_group, &query))
-                    && let Some(id) = item_node_for_identity(&source_group.name, &item.group_path, &item.key, &hierarchy_identities)
-                {
-                    visible_selection_order.push(id);
-                }
-            }
-            continue;
-        }
-        if !group_visible_for_query(&query, group_matches, has_matching_items) {
-            continue;
-        }
-        if segment.show_header {
-            if parents.get(&group.name).is_some_and(|parent| selection_hidden_groups.contains(parent)) {
-                selection_hidden_groups.insert(group.name.clone());
-                continue;
-            }
-            let open = !query.is_empty() || group_open(st, panel, segment.group_index, &group.name, all_groups_open);
-            visible_selection_order.push(picker_group_id(&mut picker_ids, segment.group_index, projection_keys));
-            if !open {
-                selection_hidden_groups.insert(group.name.clone());
-            }
-        } else if selection_hidden_groups.contains(&group.name) {
-            continue;
-        }
-        if !segment.folder_path.is_empty()
-            && (1..=segment.folder_path.len()).any(|length| selection_hidden_folders.contains(&(group.name.clone(), segment.folder_path[..length].to_vec())))
-        {
-            continue;
-        }
-        let folder_open = segment.folder_path.is_empty() || {
-            let path = segment.folder_path.iter().map(|part| escape_hierarchy_key_part(part)).collect::<Vec<_>>().join("/");
-            !st.toggled.contains(&format!("{panel}/{}/{}", escape_hierarchy_key_part(&group.name), path))
-        };
-        if segment.show_folder_header {
-            visible_selection_order.push(picker_folder_id(&mut picker_ids, segment.group_index, projection_keys, &segment.folder_path));
-            if !folder_open {
-                selection_hidden_folders.insert((group.name.clone(), segment.folder_path.clone()));
-            }
-        }
-        if folder_open {
-            for (group_index, item_index) in &segment.item_indices {
-                if let Some(source_group) = groups.get(*group_index)
-                    && let Some(item) =
-                        source_group.items.get(*item_index).filter(|item| item_visible_for_query(item, &query, group_matches_query(source_group, &query)))
-                    && let Some(id) = item_node_for_identity(&source_group.name, &item.group_path, &item.key, &hierarchy_identities)
-                {
-                    visible_selection_order.push(id);
-                }
-            }
-        }
-    }
     // The browser is the flexible middle region of a picker panel. Keep it at the allocated
     // height even when the library is short; otherwise the footer floats up and each consumer's
     // panel geometry depends on how many presets happen to be installed.
@@ -1563,9 +1918,9 @@ pub(crate) fn browser_with_root_sequence(
     // Drag previews are collected while rows are laid out, then painted from the parent UI.
     // A child created inside ScrollArea inherits its painter's viewport clip, which cannot be
     // expanded to show the preview elsewhere in the picker window.
-    let mut group_drag_ghosts = Vec::<(Rect, usize, bool, usize)>::new();
-    let mut nested_group_drag_ghosts = Vec::<(Rect, bool, String, usize, usize)>::new();
-    let mut item_drag_ghosts = Vec::<(Rect, usize, usize, crate::pickers::picker_state::PickerDisplayMode, bool)>::new();
+    let mut group_drag_ghosts = Vec::<GroupDragGhost>::new();
+    let mut nested_group_drag_ghosts = Vec::<NestedGroupDragGhost>::new();
+    let mut item_drag_ghosts = Vec::<ItemDragGhost>::new();
     let empty_area_clicked = std::cell::Cell::new(false);
     let scroll = egui::ScrollArea::vertical()
         .id_salt(("preset-scroll", panel))
@@ -2049,15 +2404,8 @@ pub(crate) fn browser_with_root_sequence(
                                         egui::StrokeKind::Inside,
                                     );
                                 }
-                                let hierarchy_accepts = resp.dnd_hover_payload::<AssetDrag>().is_some_and(|payload| match payload.as_ref() {
-                                    AssetDrag::Group { scope, name, path } if scope == panel => {
-                                        if path.is_empty() {
-                                            if domain_hierarchy_actions { !group_is_descendant(&parents, name, &item_group.name) && name != &item_group.name } else { true }
-                                        } else {
-                                            domain_hierarchy_actions && !(name == &item_group.name && it.group_path.starts_with(path))
-                                        }
-                                    }
-                                    _ => false,
+                                let hierarchy_accepts = resp.dnd_hover_payload::<AssetDrag>().is_some_and(|payload| {
+                                    hierarchy_drop_accepts(payload.as_ref(), panel, &item_group.name, &it.group_path, &parents, domain_hierarchy_actions)
                                 });
                                 let hierarchy_drag = resp.dnd_hover_payload::<AssetDrag>().is_some_and(|payload| {
                                     matches!(payload.as_ref(), AssetDrag::Group { scope, .. } if scope == panel)
@@ -2117,15 +2465,8 @@ pub(crate) fn browser_with_root_sequence(
                                     let edge_target = right_edge.filter(|rect| pointer.is_some_and(|pointer| rect.contains(pointer))).map(|rect| ("right", rect));
                                     if let Some((side, edge_rect)) = edge_target {
                                         let edge_response = ui.interact(edge_rect, ui.id().with((panel, item_group_index, ii, side)), Sense::hover());
-                                        let edge_hierarchy_accepts = edge_response.dnd_hover_payload::<AssetDrag>().is_some_and(|payload| match payload.as_ref() {
-                                            AssetDrag::Group { scope, name, path } if scope == panel => {
-                                                if path.is_empty() {
-                                                    if domain_hierarchy_actions { !group_is_descendant(&parents, name, &item_group.name) && name != &item_group.name } else { true }
-                                                } else {
-                                                    domain_hierarchy_actions && !(name == &item_group.name && it.group_path.starts_with(path))
-                                                }
-                                            }
-                                            _ => false,
+                                        let edge_hierarchy_accepts = edge_response.dnd_hover_payload::<AssetDrag>().is_some_and(|payload| {
+                                            hierarchy_drop_accepts(payload.as_ref(), panel, &item_group.name, &it.group_path, &parents, domain_hierarchy_actions)
                                         });
                                         let edge_hierarchy_drag = edge_response.dnd_hover_payload::<AssetDrag>().is_some_and(|payload| {
                                             matches!(payload.as_ref(), AssetDrag::Group { scope, .. } if scope == panel)
@@ -2826,71 +3167,19 @@ pub(crate) fn browser_with_root_sequence(
         st.browser_selection.entry(panel.to_owned()).or_default().clear();
         st.browser_selection_anchor.remove(panel);
     }
-    for (ghost_rect, gi, open, depth) in group_drag_ghosts {
-        let Some(group) = groups.get(gi) else { continue };
-        let layer = egui::LayerId::new(egui::Order::Foreground, egui::Id::new(("preset-group-drag", panel)));
-        let mut ghost_ui = egui::Ui::new(
-            ui.ctx().clone(),
-            egui::Id::new(("preset-group-drag-ui", panel)),
-            egui::UiBuilder::new().layer_id(layer).max_rect(ghost_rect.expand(1.0)),
-        );
-        ghost_ui.set_clip_rect(app_window_clip);
-        if let Some(paint) = paint_group.as_deref_mut() {
-            paint(&ghost_ui, ghost_rect, group, open, false, GROUP_DRAG_GHOST_OPACITY);
-        } else {
-            crate::pickers::asset_browser_groups::paint_with_opacity(&ghost_ui, ghost_rect, open, &group.name, depth, None, GROUP_DRAG_GHOST_OPACITY);
-        }
-    }
-    for (ghost_rect, open, name, depth, count) in nested_group_drag_ghosts {
-        let layer = egui::LayerId::new(egui::Order::Foreground, egui::Id::new(("preset-group-drag", panel)));
-        let mut ghost_ui = egui::Ui::new(
-            ui.ctx().clone(),
-            egui::Id::new(("preset-group-drag-ui", panel)),
-            egui::UiBuilder::new().layer_id(layer).max_rect(ghost_rect.expand(1.0)),
-        );
-        ghost_ui.set_clip_rect(app_window_clip);
-        crate::pickers::asset_browser_groups::paint_with_opacity(&ghost_ui, ghost_rect, open, &name, depth, Some(count), GROUP_DRAG_GHOST_OPACITY);
-    }
-    for (ghost_rect, gi, ii, display_mode, selected) in item_drag_ghosts {
-        let layer = egui::LayerId::new(egui::Order::Foreground, egui::Id::new(("preset-drag", panel)));
-        let mut ghost_ui =
-            egui::Ui::new(ui.ctx().clone(), egui::Id::new(("preset-drag-ui", panel)), egui::UiBuilder::new().layer_id(layer).max_rect(ghost_rect.expand(1.0)));
-        ghost_ui.set_clip_rect(app_window_clip);
-        ghost_ui.set_opacity(0.4);
-        if display_mode == crate::pickers::picker_state::PickerDisplayMode::TextOnly {
-            if let Some(group) = groups.get(gi)
-                && let Some(item) = group.items.get(ii)
-            {
-                if selected {
-                    ghost_ui.painter().rect_filled(ghost_rect, CornerRadius::ZERO, t.row_selected);
-                }
-                let label_rect = Rect::from_min_max(pos2(ghost_rect.left() + 8.0, ghost_rect.top()), ghost_rect.right_bottom());
-                let mut label_ui = ghost_ui.new_child(egui::UiBuilder::new().max_rect(label_rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
-                label_ui.set_clip_rect(label_rect.intersect(app_window_clip));
-                crate::widgets::elided_label(&mut label_ui, &item.name, label_rect.width());
-            }
-        } else if display_mode.uses_list_layout() {
-            if let Some(paint) = paint_list_item.as_deref_mut() {
-                paint(&ghost_ui, ghost_rect, gi, ii, selected);
-            } else if let Some(group) = groups.get(gi)
-                && let Some(item) = group.items.get(ii)
-            {
-                let thumb_size = (ghost_rect.height() - 2.0).max(0.0);
-                let thumb_rect = Rect::from_min_size(ghost_rect.min + vec2(1.0, 1.0), vec2(thumb_size, thumb_size));
-                paint_item(&ghost_ui, thumb_rect, gi, ii, ItemPaintState::DragGhost);
-                ghost_ui.painter().text(
-                    pos2(thumb_rect.right() + 8.0, ghost_rect.center().y),
-                    Align2::LEFT_CENTER,
-                    &item.name,
-                    FontId::proportional(11.5),
-                    t.text,
-                );
-            }
-        } else {
-            paint_item(&ghost_ui, ghost_rect, gi, ii, ItemPaintState::DragGhost);
-        }
-        ghost_ui.painter().rect_stroke(ghost_rect, CornerRadius::ZERO, Stroke::new(2.0, t.accent), egui::StrokeKind::Middle);
-    }
+    paint_drag_ghosts(
+        ui,
+        panel,
+        groups,
+        app_window_clip,
+        group_drag_ghosts,
+        nested_group_drag_ghosts,
+        item_drag_ghosts,
+        paint_group,
+        paint_item,
+        paint_list_item,
+        &t,
+    );
     let browser_view_clip =
         Rect::from_min_max(pos2(browser_parent_clip.left(), browser_parent_clip.top()), pos2(browser_parent_clip.right(), scroll.inner_rect.bottom()))
             .intersect(browser_parent_clip);
@@ -2915,124 +3204,25 @@ pub(crate) fn browser_with_root_sequence(
         }
     }
     let mut hierarchy_drop_feedback = st.browser_feedback.get(panel).cloned();
-    if canonical_hierarchy_drag && let Some(pointer) = ui.ctx().pointer_interact_pos() {
-        // Geometric arbitration must respect the ScrollArea viewport. Otherwise a hit region
-        // clipped out of view can still win when its un-clipped rectangle overlaps another
-        // visible region near the viewport edge.
-        let hits: Vec<DropHitRegion> = canonical_drop_hits
-            .borrow()
-            .iter()
-            .filter_map(|(hit, _)| {
-                let mut visible = hit.clone();
-                // Header visuals deliberately extend into the ScrollArea's left margin. The
-                // inner rect excludes that margin, so use the parent's horizontal clip with
-                // the scroll viewport's vertical bounds instead of trimming the row's left.
-                let clip = if visible.depth == usize::MAX && visible.order == usize::MAX && visible.region == PointerRegion::LeadingEdge {
-                    browser_parent_clip
-                } else {
-                    browser_view_clip
-                };
-                visible.hit_rect = visible.hit_rect.intersect(clip);
-                visible.hit_rect.is_positive().then_some(visible)
-            })
-            .collect();
-        if let Some(index) = arbitrate_hit_index(pointer, &hits)
-            && canonical_drop_hits.borrow().get(index).is_some()
-        {
-            // The canonical hit rectangles are arbitrated independently of egui's topmost
-            // hovered response. A valid geometric hit can therefore belong to a response
-            // that egui does not consider hovered (notably later root-group headers).
-            // Read the active drag from the global payload and use the winning hit above as
-            // the sole authority for the destination.
-            let hovered = egui::DragAndDrop::payload::<AssetDrag>(ui.ctx()).map(|payload| payload.as_ref().clone());
-            if let Some(dragged) = hovered.as_ref()
-                && let Some(source) = source_node_for_drag(dragged, panel, &hierarchy_identities)
-            {
-                let selection = match dragged {
-                    AssetDrag::Preset { selection, .. } | AssetDrag::CanonicalGroup { selection, .. } => selection.clone(),
-                    _ => Vec::new(),
-                };
-                let mut session = DragSession::new(source.clone(), selection.clone());
-                let resolved = session.resolve(pointer, &hits[index], &hierarchy).cloned();
-                if let Some(candidate) = resolved {
-                    let ghost_layer_id = match dragged {
-                        AssetDrag::Preset { .. } => ("preset-drag", panel),
-                        AssetDrag::Group { .. } | AssetDrag::CanonicalGroup { .. } => ("preset-group-drag", panel),
-                    };
-                    let drop_feedback_layer = egui::LayerId::new(egui::Order::Foreground, egui::Id::new(ghost_layer_id));
-                    paint_candidate(ui, &candidate, t.accent, browser_view_clip, drop_feedback_layer);
-                    // Resolve and validate the exact candidate before taking egui's global
-                    // one-shot payload. The taken source must still identify this same node.
-                    if let Some(released) = asset_browser_take_release(ui.ctx()) {
-                        if source_node_for_drag(&released, panel, &hierarchy_identities).as_ref() == Some(&source) {
-                            let moved_sources = {
-                                let sources = if selection.is_empty() { vec![source.clone()] } else { selection.clone() };
-                                hierarchy_move_sources(&sources, &candidate.position)
-                            };
-                            let result = session.commit_with(|intent| {
-                                if let Some(commit) = canonical_hierarchy_move.as_deref_mut() {
-                                    let mut moved = hierarchy.clone();
-                                    let moved_ok =
-                                        moved.resolve_move(&intent.source, &intent.position).and_then(|resolved| moved.apply_resolved_move(resolved)).is_ok();
-                                    let result = commit(intent, &hierarchy_identities);
-                                    if result.is_ok()
-                                        && moved_ok
-                                        && let Some(rekey) = rekey_hierarchy_after_move.as_deref_mut()
-                                    {
-                                        rekey(&moved, &hierarchy_identities, &mut picker_ids);
-                                    }
-                                    return result;
-                                }
-                                let sources = if intent.selection.is_empty() { vec![intent.source.clone()] } else { intent.selection.clone() };
-                                let hierarchy_sources = hierarchy_move_sources(&sources, &intent.position);
-                                let legacy_persistable =
-                                    hierarchy_identities.values().all(|identity| matches!(identity.role(), PickerNodeRole::Card | PickerNodeRole::AssetGroup));
-                                if !legacy_persistable {
-                                    return Err("This asset adapter does not support path-aware hierarchy moves.".to_owned());
-                                }
-                                let item_moves = plan_hierarchy_item_moves(&hierarchy, &sources, &intent.position, &hierarchy_identities, root_item_group)?;
-                                for (group, key, destination_group, index) in item_moves {
-                                    let Some(commit) = hierarchy_item_move.as_deref_mut() else {
-                                        return Err("This asset adapter does not support authoritative item moves.".to_owned());
-                                    };
-                                    commit(&group, &key, &destination_group, index)?;
-                                }
-                                for source in &hierarchy_sources {
-                                    commit_hierarchy_move(st, panel, &mut hierarchy, source, &intent.position, &hierarchy_identities)
-                                        .map_err(|error| format!("Could not persist hierarchy move: {error:?}"))?;
-                                }
-                                Ok(())
-                            });
-                            if matches!(result, DropCommitResult::Committed) {
-                                if moved_sources.contains(&source) {
-                                    if let Some(PickerNodeIdentity::Item { key, .. } | PickerNodeIdentity::FolderItem { key, .. }) =
-                                        hierarchy_identities.get(&source)
-                                        && let Some((group, path)) =
-                                            hierarchy_drop_item_destination(&source, &candidate.position, &hierarchy, &hierarchy_identities)
-                                    {
-                                        select_dropped_item(st, panel, &group, &path, key);
-                                    }
-                                }
-                                if selection.is_empty()
-                                    && hierarchy_identities
-                                        .get(&source)
-                                        .is_some_and(|identity| matches!(identity.role(), PickerNodeRole::AssetGroup | PickerNodeRole::StructuralFolder))
-                                {
-                                    st.select_browser_node(panel, source.clone(), false);
-                                }
-                            }
-                            hierarchy_drop_feedback = match result {
-                                DropCommitResult::Committed | DropCommitResult::NoCandidate => None,
-                                DropCommitResult::Rejected(reason) => Some(format!("Move rejected: {reason:?}")),
-                                DropCommitResult::Failed(error) => Some(format!("Move rejected: {error:?}")),
-                            };
-                        } else {
-                            hierarchy_drop_feedback = Some("Move rejected: the dragged source changed before release.".to_owned());
-                        }
-                    }
-                }
-            }
-        }
+    if canonical_hierarchy_drag
+        && let Some(result) = resolve_canonical_drop(
+            ui,
+            panel,
+            browser_parent_clip,
+            browser_view_clip,
+            &canonical_drop_hits.borrow(),
+            st,
+            &mut picker_ids,
+            &mut hierarchy,
+            &hierarchy_identities,
+            root_item_group,
+            canonical_hierarchy_move,
+            rekey_hierarchy_after_move,
+            hierarchy_item_move,
+            t.accent,
+        )
+    {
+        hierarchy_drop_feedback = result.err();
     }
     if let Some(message) = hierarchy_drop_feedback.as_ref() {
         st.browser_feedback.insert(panel.to_owned(), message.clone());
@@ -3047,67 +3237,19 @@ pub(crate) fn browser_with_root_sequence(
     }
     ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(("preset-browser-rect", panel)), scroll.inner_rect));
     // Apply the drop now every header rect is known; the next frame draws the new order.
-    if !canonical_hierarchy_drag && let Some((from_name, parent)) = indent_release {
-        if !group_is_descendant(&parents, &from_name, &parent) {
-            if let Some(old_parent) = parents.get(&from_name).filter(|old_parent| *old_parent != &parent) {
-                st.remove_hierarchy_entry(panel, old_parent, &HierarchyOrderEntry::Group(from_name.clone()));
-            }
-            st.nest_group(panel, &group_names, &from_name, Some(&parent));
-            let entries = hierarchy_orders.get(&parent).cloned().unwrap_or_default();
-            st.move_hierarchy_entry(panel, &parent, entries, HierarchyOrderEntry::Group(from_name), None);
-        }
-    } else if !canonical_hierarchy_drag && let Some((from, p)) = released {
-        let from_name = groups.get(from).map(|g| g.name.clone());
-        if let Some(from_name) = from_name {
-            if let Some((_, rect, target)) = headers.iter().find(|(i, rect, _)| *i != from && rect.contains(p)) {
-                let edge = header_drop_before(*rect, p);
-                if domain_hierarchy_actions && !group_is_descendant(&parents, &from_name, target) {
-                    if let Some(action) = hierarchy_group_drop(&from_name, &[], target, &[], edge) {
-                        ev.push(hierarchy_action(action));
-                    }
-                } else if !domain_hierarchy_actions {
-                    let destination_parent = if edge { parents.get(target).cloned() } else { Some(target.clone()) };
-                    let creates_cycle =
-                        destination_parent.as_deref().is_some_and(|parent| parent == from_name || group_is_descendant(&parents, &from_name, parent));
-                    if !creates_cycle {
-                        if let Some(old_parent) = parents.get(&from_name).filter(|old_parent| Some(*old_parent) != destination_parent.as_ref()) {
-                            st.remove_hierarchy_entry(panel, old_parent, &HierarchyOrderEntry::Group(from_name.clone()));
-                        }
-                        st.nest_group(panel, &group_names, &from_name, destination_parent.as_deref());
-                        if let Some(parent) = destination_parent {
-                            let entries = hierarchy_orders.get(&parent).cloned().unwrap_or_default();
-                            let before = edge.then(|| HierarchyOrderEntry::Group(target.clone()));
-                            st.move_hierarchy_entry(panel, &parent, entries, HierarchyOrderEntry::Group(from_name), before.as_ref());
-                        } else {
-                            st.move_group(panel, &group_names, &from_name, Some(target));
-                        }
-                    }
-                }
-            } else {
-                let before = group_drop_before(&headers, from, &from_name, p, &parents);
-                if before != Some(from) {
-                    let before_name = before.and_then(|i| groups.get(i).map(|g| g.name.clone()));
-                    if domain_hierarchy_actions {
-                        ev.push(BrowserAction::MoveGroup { group: from_name, group_path: Vec::new(), before: before_name });
-                    } else {
-                        let source_parent = parents.get(&from_name).cloned();
-                        let source_rect = headers.iter().find(|(index, _, _)| *index == from).map(|(_, rect, _)| *rect);
-                        let promote_to_root = source_parent.is_some() && source_rect.is_some_and(|rect| p.x < rect.left() + ROW_INDENT * 0.5);
-                        if let Some(parent) = source_parent.clone().filter(|_| !promote_to_root) {
-                            let entries = hierarchy_orders.get(&parent).cloned().unwrap_or_default();
-                            let before = before_name.as_ref().map(|name| HierarchyOrderEntry::Group(name.clone()));
-                            st.move_hierarchy_entry(panel, &parent, entries, HierarchyOrderEntry::Group(from_name), before.as_ref());
-                        } else {
-                            if let Some(old_parent) = source_parent.as_deref() {
-                                st.remove_hierarchy_entry(panel, old_parent, &HierarchyOrderEntry::Group(from_name.clone()));
-                            }
-                            st.nest_group(panel, &group_names, &from_name, None);
-                            st.move_group(panel, &group_names, &from_name, before_name.as_deref());
-                        }
-                    }
-                }
-            }
-        }
+    if !canonical_hierarchy_drag {
+        ev.extend(apply_legacy_group_release(
+            st,
+            panel,
+            groups,
+            &headers,
+            &parents,
+            &group_names,
+            &hierarchy_orders,
+            indent_release,
+            released,
+            domain_hierarchy_actions,
+        ));
     }
     let recorded: Vec<(String, Rect)> = headers.iter().map(|(_, r, n)| (n.clone(), *r)).collect();
     ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(("preset-group-headers", panel)), recorded));
