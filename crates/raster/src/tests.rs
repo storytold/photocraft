@@ -697,6 +697,66 @@ fn translated_matches_reading_the_moved_pixels() {
     let _ = s.translated(i32::MIN + 1, 3, all);
 }
 
+/// Runs `steps` to the end with `more` always false, counting the calls it took.
+fn run_steps(mut steps: TranslateSteps) -> (Surface, usize) {
+    for calls in 1..=1_000_000 {
+        if let Some(out) = steps.step(&mut || false) {
+            return (out, calls);
+        }
+    }
+    panic!("the shift never finished")
+}
+
+/// A shift in pieces gives the surface of the one-shot shift, bit for bit, at every depth and
+/// offset (whole tiles, off the grid, negative), over a non-zero default pixel, solid fills and
+/// sparse tiles.
+#[test]
+fn translate_steps_equal_translated() {
+    for fmt in [PixelFormat::RGBA8, PixelFormat::RGBA16, PixelFormat::RGBA32F, PixelFormat::GRAY8] {
+        let mut s = Surface::with_default(fmt, &vec![0.25; fmt.channels()]);
+        let r = Rect::new(-37, 200, 530, 300);
+        let v: Vec<f32> = (0..r.width() * r.height() * fmt.channels() as u32).map(|i| (i % 251) as f32 / 250.0).collect();
+        s.write_region(r, &v);
+        s.fill_rect(Rect::new(600, -300, 1700, 900), &vec![0.75; fmt.channels()]);
+        s.write_pixel(3000, 5, &vec![0.5; fmt.channels()]);
+        for (dx, dy) in [(0, 0), (256, -512), (1, 0), (-3, 7), (300, -257), (-1000, 999), (10, 7)] {
+            let content = s.content_bounds();
+            let (got, _) = run_steps(TranslateSteps::new(s.clone(), dx, dy, content));
+            assert!(got == s.translated(dx, dy, content), "{fmt:?} by ({dx}, {dy})");
+        }
+    }
+}
+
+/// Each call of a shift in pieces builds at most one tile, so a large shift takes as many calls
+/// as it has source and target tiles, and none of them rebuilds everything.
+#[test]
+fn translate_steps_do_one_tile_per_call() {
+    let mut s = Surface::new(PixelFormat::RGBA8);
+    s.fill_rect(Rect::new(0, 0, 3 * TILE_SIZE, 2 * TILE_SIZE), &[0.1, 0.2, 0.3, 1.0]);
+    s.write_pixel(5, 5, &[1.0, 0.0, 0.0, 1.0]);
+    let content = s.content_bounds();
+    let sources = s.tiles().count();
+    let targets = s.translated(7, 3, content).tiles().count();
+    let (got, calls) = run_steps(TranslateSteps::new(s.clone(), 7, 3, content));
+    assert!(got == s.translated(7, 3, content));
+    // One call per source tile scanned, one to start building, one per target tile built (a few
+    // of them hold only the default pixel and are not kept) and one that hands the result over.
+    assert!(calls >= sources + targets + 2, "{calls} calls for {sources} sources and {targets} targets");
+    assert!(calls <= sources + targets + 2 + 8, "{calls} calls for {sources} sources and {targets} targets");
+    // Asked to go on, a call does more than one unit.
+    let mut steps = TranslateSteps::new(s.clone(), 7, 3, content);
+    let mut left = 4;
+    assert!(
+        steps
+            .step(&mut || {
+                left -= 1;
+                left > 0
+            })
+            .is_none()
+    );
+    assert!(steps.progress() > 0.0 && steps.progress() < 1.0);
+}
+
 /// Many references to one payload, moved off the tile grid: the rebuilt tiles that read the
 /// same source tiles at the same offset are one tile, not a copy each.
 #[test]

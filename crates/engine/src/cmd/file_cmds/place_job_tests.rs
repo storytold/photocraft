@@ -249,7 +249,7 @@ fn a_canvas_too_large_to_flatten_is_refused_as_before() {
     let before = steps(&s);
     match place_bytes(&mut s, "huge.pcraft", bytes.clone(), None, &json!({})) {
         Err(EngineError::BadParams { cmd, msg }) => {
-            assert_eq!(cmd, "file.place");
+            assert_eq!(cmd, "file.placeEmbedded");
             assert_eq!(msg, "the document's 40000×30000 canvas is too large to flatten");
         }
         other => panic!("{other:?}"),
@@ -379,6 +379,30 @@ fn a_cooperative_place_with_the_default_budget_and_from_bytes() {
     assert_eq!(d.history.undo_label(), Some("Place Linked"));
 }
 
+/// An offset off the tile grid rebuilds the tiles the image touches, and a cooperative place does
+/// that a few tiles per poll rather than all of them in one: it takes at least a poll per source
+/// tile more than the same place on the grid, and ends with the same pixels as the inline place.
+#[test]
+fn a_cooperative_place_moves_its_pixels_a_few_tiles_per_poll() {
+    let bytes = gradient_png(600, 520);
+    let tiles = 3 * 3;
+    let polls_at = |center: [i32; 2]| {
+        let params = json!({"center": center, "smartObject": false});
+        let mut inline = session(2000, 2000, 8);
+        place_bytes(&mut inline, "drop.png", bytes.clone(), None, &params).unwrap();
+        let mut s = stepping(2000, 2000, 8);
+        let id = job(s.start_place_bytes("drop.png", bytes.clone(), None, params).unwrap());
+        let (e, polls) = poll_to_end(&mut s, id);
+        assert!(matches!(e.outcome, JobOutcome::Done(_)), "{e:?}");
+        assert_eq!(layer_pixels(&s), layer_pixels(&inline), "at {center:?}");
+        polls
+    };
+    // The image lands at (256, 256), a whole number of tiles, or at (257, 3).
+    let on_grid = polls_at([300 + 256, 260 + 256]);
+    let off_grid = polls_at([300 + 257, 260 + 3]);
+    assert!(off_grid >= on_grid + tiles, "{off_grid} polls off the grid, {on_grid} on it");
+}
+
 /// `wait_job` runs a cooperative place to the end.
 #[test]
 fn wait_job_finishes_a_cooperative_place() {
@@ -411,7 +435,7 @@ fn a_cooperative_place_reports_its_progress() {
         }
     }
     assert!(last > 0.5, "{last}");
-    assert_eq!(messages, ["Decoding", "Flattening", "Resizing"]);
+    assert_eq!(messages, ["Decoding", "Flattening", "Resizing", "Placing"]);
 }
 
 /// Cancelling between polls leaves the document the very same one and unlocks it.
@@ -490,8 +514,8 @@ fn a_banded_flatten_equals_flattened_checked() {
     for bytes in &sources {
         let doc = photocraft_io::import("src.png", bytes).unwrap().document;
         for fmt in formats {
-            let expected = flattened_checked(&doc, fmt, "file.place").unwrap();
-            let mut flatten = Flatten::new(doc.clone(), true, fmt).unwrap();
+            let expected = flattened_checked(&doc, fmt, "file.placeEmbedded").unwrap();
+            let mut flatten = Flatten::new(doc.clone(), true, fmt, "file.placeEmbedded").unwrap();
             let mut bands = 0;
             let got = loop {
                 bands += 1;
@@ -502,7 +526,7 @@ fn a_banded_flatten_equals_flattened_checked() {
             assert!(bands > 1, "{}x{}: {bands} bands", doc.size.width, doc.size.height);
             assert!(got == expected, "{}x{} {:?} {:?}: banded != whole", doc.size.width, doc.size.height, doc.mode, fmt);
             // Not banded is the plain flatten.
-            let whole = Flatten::new(doc.clone(), false, fmt).unwrap().advance().unwrap().unwrap();
+            let whole = Flatten::new(doc.clone(), false, fmt, "file.placeEmbedded").unwrap().advance().unwrap().unwrap();
             assert!(whole == expected);
         }
     }
@@ -518,8 +542,8 @@ fn a_banded_flatten_of_a_palette_image_equals_flattened_checked() {
     let doc = photocraft_io::import("p.png", &png).unwrap().document;
     assert!(doc.color_table.is_some());
     let fmt = doc.pixel_format();
-    let expected = flattened_checked(&doc, fmt, "file.place").unwrap();
-    let mut flatten = Flatten::new(doc, true, fmt).unwrap();
+    let expected = flattened_checked(&doc, fmt, "file.placeEmbedded").unwrap();
+    let mut flatten = Flatten::new(doc, true, fmt, "file.placeEmbedded").unwrap();
     let got = loop {
         if let Some(px) = flatten.advance().unwrap() {
             break px;
@@ -534,5 +558,28 @@ fn a_banded_flatten_keeps_the_size_limit() {
     use super::place_steps::Flatten;
     let doc = Document::new("huge", photocraft_geom::Size::new(40_000, 40_000), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
     let fmt = doc.pixel_format();
-    assert!(Flatten::new(doc, true, fmt).is_err());
+    assert!(Flatten::new(doc, true, fmt, "file.placeEmbedded").is_err());
+}
+
+/// The size refusal names the command that was run, embedded or linked, not a made-up id.
+#[test]
+fn the_flatten_size_error_names_the_place_command() {
+    use super::place_steps::Flatten;
+    let huge = || Document::new("huge", photocraft_geom::Size::new(40_000, 40_000), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
+    let fmt = huge().pixel_format();
+    for command in ["file.placeEmbedded", "file.placeLinked"] {
+        match Flatten::new(huge(), true, fmt, command) {
+            Err(EngineError::BadParams { cmd, .. }) => assert_eq!(cmd, command),
+            other => panic!("{:?}", other.map(|_| ())),
+        }
+    }
+    // Through a whole place: a linked one reports file.placeLinked.
+    let bytes = photocraft_format::save_to_bytes(&huge(), &Default::default()).unwrap();
+    let mut s = session(100, 100, 8);
+    s.set_cooperative_jobs(true);
+    s.set_job_step_budget(Duration::ZERO);
+    let id = job(s.start_place_bytes("huge.pcraft", bytes, Some("huge.pcraft".into()), json!({})).unwrap());
+    let (e, _) = poll_to_end(&mut s, id);
+    let JobOutcome::Failed(err) = &e.outcome else { panic!("{e:?}") };
+    assert!(err.contains("file.placeLinked"), "{err}");
 }

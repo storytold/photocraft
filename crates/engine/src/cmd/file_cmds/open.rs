@@ -357,10 +357,13 @@ pub(crate) struct PlaceInput {
 }
 
 impl PlaceInput {
+    /// The input of a place of `bytes` already read (named `name`; `linked`: Place Linked to that path).
     pub(crate) fn new(s: &Session, name: &str, bytes: Vec<u8>, linked: Option<String>, p: &Value) -> Result<Self> {
         Self::with_file(s, name, PlaceFile::Bytes(Arc::new(bytes)), linked, p)
     }
 
+    /// The input of a place of `file`, with the destination (canvas or frame), preferences and
+    /// import settings taken from the session up front.
     fn with_file(s: &Session, name: &str, file: PlaceFile, linked: Option<String>, p: &Value) -> Result<Self> {
         let d = s.active().ok_or(EngineError::NoDocument)?;
         let prefs = s.prefs();

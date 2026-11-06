@@ -9,7 +9,7 @@
 use photocraft_algo::resample::ResizeSteps;
 use photocraft_geom::{Rect, TILE_SIZE};
 use photocraft_io::PngImport;
-use photocraft_raster::Surface;
+use photocraft_raster::{Surface, TranslateSteps};
 use web_time::Instant;
 
 use super::open::{PLACE_EMBEDDED, PlaceFile, PlaceInput, Prepared};
@@ -51,8 +51,10 @@ enum Stage {
     DecodePng(Box<PngImport>),
     Flatten(Box<Flatten>),
     Resize(Box<ResizeSteps>),
-    /// The fitted pixels (none for a frame's image, which renders from its source), to move into
-    /// place and wrap in a layer.
+    /// The fitted pixels being moved to where they land, a few tiles at a time.
+    Translate(Box<TranslateSteps>),
+    /// The pixels in place (none for a frame's image, which renders from its source), to wrap in
+    /// a layer.
     Finish(Option<Surface>),
     Spent,
 }
@@ -64,6 +66,8 @@ impl PlaceSteps {
         Self { input, bytes: Arc::new(Vec::new()), fine, stage: Stage::Decode, plan: Plan::default() }
     }
 
+    /// An import error as the engine reports it: a cancel stays one and a refused memory budget
+    /// keeps its typed fields.
     fn io_error(&self, e: photocraft_io::IoError) -> EngineError {
         match e {
             photocraft_io::IoError::Cancelled => EngineError::Cancelled,
@@ -106,9 +110,16 @@ impl PlaceSteps {
             }
             Stage::Resize(mut resize) => {
                 ctx.progress(0.7 + 0.2 * resize.progress(), "Resizing");
-                self.stage = match resize.step(&mut || Instant::now() < deadline) {
+                match resize.step(&mut || Instant::now() < deadline) {
+                    Some(px) => self.fitted(px),
+                    None => self.stage = Stage::Resize(resize),
+                }
+            }
+            Stage::Translate(mut shift) => {
+                ctx.progress(0.9 + 0.05 * shift.progress(), "Placing");
+                self.stage = match shift.step(&mut || Instant::now() < deadline) {
                     Some(px) => Stage::Finish(Some(px)),
-                    None => Stage::Resize(resize),
+                    None => Stage::Translate(shift),
                 };
             }
             Stage::Finish(px) => return self.finish(px, ctx).map(Some),
@@ -169,29 +180,41 @@ impl PlaceSteps {
             return Ok(());
         }
         ctx.progress(0.6, "Flattening");
-        self.stage = Stage::Flatten(Box::new(Flatten::new(src, banded && self.fine, self.input.fmt)?));
+        self.stage = Stage::Flatten(Box::new(Flatten::new(src, banded && self.fine, self.input.fmt, self.input.command())?));
         Ok(())
     }
 
     /// The image is flattened: on to resizing it to fit, if it needs that.
     fn flattened(&mut self, px: Surface, ctx: &JobCtx) {
         let scale = self.plan.scale;
-        self.stage = if (scale - 1.0).abs() <= 1e-9 {
-            Stage::Finish(Some(px))
+        if (scale - 1.0).abs() <= 1e-9 {
+            self.fitted(px);
         } else if self.fine {
-            Stage::Resize(Box::new(ResizeSteps::new(px, scale, scale, Resample::Bicubic, None)))
+            self.stage = Stage::Resize(Box::new(ResizeSteps::new(px, scale, scale, Resample::Bicubic, None)));
         } else {
             ctx.progress(0.7, "Resizing");
-            Stage::Finish(Some(resize_surface(&px, scale, scale, Resample::Bicubic)))
+            self.fitted(resize_surface(&px, scale, scale, Resample::Bicubic));
+        }
+    }
+
+    /// The pixels are fitted: on to moving them to where they land. A cooperative session does
+    /// that a few target tiles at a time (an offset off the tile grid rebuilds nearly every tile
+    /// the image touches); otherwise it is one [`translate_surface`].
+    fn fitted(&mut self, px: Surface) {
+        let (dx, dy) = (self.plan.dx as i32, self.plan.dy as i32);
+        self.stage = if self.fine {
+            let content = px.content_bounds();
+            Stage::Translate(Box::new(TranslateSteps::new(px, dx, dy, content)))
+        } else {
+            Stage::Finish(Some(translate_surface(&px, dx, dy)))
         };
     }
 
-    /// Moves the pixels into place and wraps them in the layer's content.
+    /// Wraps the pixels, already in place, in the layer's content.
     fn finish(&mut self, px: Option<Surface>, ctx: &JobCtx) -> Result<Prepared> {
         let Plan { w, h, scale, dx, dy } = self.plan;
         let input = &self.input;
         let (cw, ch) = input.canvas;
-        let px = px.map(|px| translate_surface(&px, dx as i32, dy as i32));
         let placement = input.frame.as_ref().map_or(Affine { m: [scale, 0.0, 0.0, scale, dx, dy] }, |(_, f)| {
             f.transform.mul(&Affine { m: [scale / cw, 0.0, 0.0, scale / ch, dx / cw, dy / ch] })
         });
@@ -233,6 +256,7 @@ impl PlaceSteps {
 }
 
 impl StepWork<Prepared> for PlaceSteps {
+    /// Runs units of work until `deadline` (at least one), checking for a cancel between them.
     fn step(&mut self, ctx: &JobCtx, deadline: Instant) -> Result<Option<Prepared>> {
         loop {
             ctx.check()?;
@@ -250,6 +274,8 @@ impl StepWork<Prepared> for PlaceSteps {
 pub(super) struct Flatten {
     doc: Document,
     fmt: photocraft_color::PixelFormat,
+    /// The place command, for the size error.
+    command: &'static str,
     /// Flatten band by band; otherwise in one go.
     banded: bool,
     bounds: Rect,
@@ -261,14 +287,16 @@ pub(super) struct Flatten {
 }
 
 impl Flatten {
-    pub(super) fn new(doc: Document, banded: bool, fmt: photocraft_color::PixelFormat) -> Result<Self> {
-        check_flattenable(&doc, "file.place")?;
+    /// `command` is the place command (`file.placeEmbedded` or `file.placeLinked`), named in the
+    /// error a canvas past the compositor's limit gives.
+    pub(super) fn new(doc: Document, banded: bool, fmt: photocraft_color::PixelFormat, command: &'static str) -> Result<Self> {
+        check_flattenable(&doc, command)?;
         let bounds = doc.bounds();
         // Bands hold whole tiles, so each tile is written by one band and can move as it is. A
         // document that does not start on the tile grid (none does) flattens in one go.
         let banded = banded && bounds.x0.rem_euclid(TILE_SIZE) == 0 && bounds.y0.rem_euclid(TILE_SIZE) == 0;
         let cols = i32::try_from(BAND_PIXELS / i64::from(TILE_SIZE) / i64::from(TILE_SIZE)).unwrap_or(1).max(1) * TILE_SIZE;
-        Ok(Self { doc, fmt, banded, bounds, at: (bounds.x0, bounds.y0), cols, out: None })
+        Ok(Self { doc, fmt, command, banded, bounds, at: (bounds.x0, bounds.y0), cols, out: None })
     }
 
     /// How much of the flatten is done, `0.0..=1.0`.
@@ -281,7 +309,7 @@ impl Flatten {
     /// the last one is in.
     pub(super) fn advance(&mut self) -> Result<Option<Surface>> {
         if !self.banded {
-            return flattened_checked(&self.doc, self.fmt, "file.place").map(Some);
+            return flattened_checked(&self.doc, self.fmt, self.command).map(Some);
         }
         let (x, y) = self.at;
         // A band is part of one tile row, at most `cols` wide.
