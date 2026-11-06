@@ -4785,3 +4785,11 @@ cameraRaw	White Balance: As Shot	Vitbalans: som tagen
 	Pause For	Paus i
 	seconds	sekunder
 	Create a single history state	Skapa ett enda historikläge
+
+# Channels panel menu (#11451)
+	Channel Options…	Kanalalternativ…
+	Specify Channels:	Ange kanaler:
+	Not enough grayscale documents for this mode.	Det finns inte tillräckligt många gråskaledokument för det här läget.
+	Pick a different document for each channel.	Välj ett annat dokument för varje kanal.
+	A picked document is no longer open.	Ett av de valda dokumenten är inte längre öppet.
+	A picked document is no longer a grayscale document of the same size.	Ett av de valda dokumenten är inte längre ett gråskaledokument i samma storlek.

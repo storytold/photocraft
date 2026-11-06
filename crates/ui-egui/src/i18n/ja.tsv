@@ -4245,3 +4245,11 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Replace Image…	画像を置き換え…
 	The frame is locked	フレームはロックされています
 	The frame is unavailable	フレームを利用できません
+
+# Channels panel menu (#11451)
+	Channel Options…	チャンネルオプション…
+	Specify Channels:	チャンネルを指定:
+	Not enough grayscale documents for this mode.	このモードに必要なグレースケールのドキュメントが足りません。
+	Pick a different document for each channel.	チャンネルごとに別のドキュメントを選択してください。
+	A picked document is no longer open.	選択したドキュメントの一つが開かれていません。
+	A picked document is no longer a grayscale document of the same size.	選択したドキュメントの一つが、同じサイズのグレースケールのドキュメントではなくなりました。
