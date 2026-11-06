@@ -87,6 +87,7 @@
 	Right	Oikea
 	Open Recent	Viimeksi avatut
 	Clear Recent Files	Tyhjennä viimeisimmät tiedostot
+	Clear Recent File List	Tyhjennä viimeisimmät tiedostot
 	Remove from Recent	Poista viimeisimmistä
 	Remove {name} from Recent	Poista {name} viimeisimmistä
 	Close	Sulje
@@ -95,6 +96,10 @@
 	Restore	Palauta
 	Close All	Sulje kaikki
 	Close Others	Sulje muut
+	New Document…	Uusi asiakirja…
+	Open Document…	Avaa…
+	Consolidate All to Here	Kokoa kaikki tähän
+	Move to New Window	Siirrä uuteen ikkunaan
 	Save	Tallenna
 	Save As…	Tallenna nimellä…
 	Save a Copy…	Tallenna kopio…
@@ -509,7 +514,6 @@
 	Match Location	Täsmäytä sijainti
 	Match Rotation	Täsmäytä kierto
 	Match All	Täsmäytä kaikki
-	New Window for Document	Uusi ikkuna asiakirjalle
 	Workspace	Työtila
 	Extensions	Laajennukset
 	Panels	Paneelit
@@ -687,6 +691,7 @@
 	Units & Rulers…	Yksiköt ja viivaimet…
 	Guides, Grid & Slices…	Apuviivat, ruudukko ja viipaleet…
 	Plug-ins…	Laajennukset…
+	Plugins…	Laajennukset…
 	Technology Previews	Teknologian esikatselut
 	Scratch Disks…	Työlevyt…
 	Export Preferences…	Vientiasetukset…
@@ -921,8 +926,8 @@
 	ACES	ACES
 	Industry Standard	Alan standardi
 	Web	Verkko
-	Internet Standard RGB	Internetin standardi-RGB
-	Legacy Macintosh RGB	Vanha Macintosh RGB
+	Internet Standard RGB (sRGB)	Internetin standardi-RGB (sRGB)
+	Legacy Macintosh RGB (Gamma 1.8)	Vanha Macintosh RGB (Gamma 1.8)
 	Monitor RGB	Näytön RGB
 	Windows LCD	Windows LCD
 	Coated CMYK	CMYK, päällystetty paperi
@@ -1743,6 +1748,7 @@
 	Saved	Tallennettu
 	Reveal in Finder	Näytä Finderissa
 	Show in Explorer	Näytä Resurssienhallinnassa
+	Reveal in Explorer	Näytä Resurssienhallinnassa
 	Show in Folder	Näytä kansiossa
 	Before (Y)	Ennen (Y)
 	Save Settings…	Tallenna asetukset…
@@ -1922,6 +1928,8 @@
 	Combine Shapes	Yhdistä muodot
 	Contract…	Supista…
 	Convert to Embedded	Muunna upotetuksi
+	Embed Linked	Upota linkitetty
+	Embed All Linked	Upota kaikki linkitetyt
 	Convert to Layers	Muunna tasoiksi
 	Convert to Linked…	Muunna linkitetyksi…
 	Count	Laskuri
@@ -2009,6 +2017,7 @@
 	Pixelate	Pikselöinti
 	Place Scale Marker…	Sijoita mittakaavamerkki…
 	Plug-ins	Laajennukset
+	Plugins	Laajennukset
 	Print One Copy	Tulosta yksi kopio
 	Print…	Tulosta…
 	Range	Alue
@@ -2053,7 +2062,7 @@
 	Vertical Centers	Pystykeskikohdat
 	Video Frames to Layers…	Videoruudut tasoiksi…
 	WIA Support…	WIA-tuki…
-	Working CMY Plate	Työ-CMY-levy
+	Working CMY Plates	Työ-CMY-levy
 
 # tl! literals (third pass)
 	Absolute	Absoluuttinen
@@ -2339,6 +2348,11 @@
 	Show canvas dots	Näytä kankaan pisteet
 	Clip thumbnails to layer bounds	Rajaa pikkukuvat tason rajoihin
 	Clip Thumbnails to Layer Bounds	Rajaa pikkukuvat tason rajoihin
+	No Thumbnails	Ei pikkukuvia
+	Small Thumbnails	Pienet pikkukuvat
+	Medium Thumbnails	Keskikokoiset pikkukuvat
+	Large Thumbnails	Suuret pikkukuvat
+	Clip Thumbnails to Document Bounds	Rajaa pikkukuvat asiakirjan rajoihin
 	Canvas color	Kankaan väri
 	Canvas custom color	Kankaan mukautettu väri
 	Classic	Klassinen
@@ -2465,7 +2479,6 @@
 	Show only crosshair while painting	Näytä vain hiusristikko maalattaessa
 	Show slice numbers	Näytä viipaleiden numerot
 	Show tooltips	Näytä työkaluvihjeet
-	Enable animations	Ota animaatiot käyttöön
 	Show highlight on rollover	Korosta kohde osoittimen alla
 	Show bounding box when dragging layer	Näytä rajauslaatikko tasoa vedettäessä
 	System title bar	Järjestelmän otsikkorivi
@@ -3183,6 +3196,9 @@ curves	Smooth	Tasoita
 @plural	{n} step has no PhotoCraft equivalent yet|{n} steps have no PhotoCraft equivalent yet	{n} vaiheella ei ole vielä vastaavuutta PhotoCraftissa|{n} vaiheella ei ole vielä vastaavuutta PhotoCraftissa
 @plural	Saved {n} action to {file}|Saved {n} actions to {file}	Tallennettu {n} toiminto tiedostoon {file}|Tallennettu {n} toimintoa tiedostoon {file}
 @plural	{n} step with no Photoshop equivalent left out|{n} steps with no Photoshop equivalent left out	{n} vaihe jätettiin pois, koska sillä ei ole Photoshop-vastinetta|{n} vaihetta jätettiin pois, koska niillä ei ole Photoshop-vastinetta
+@plural	{n} action file loaded|{n} action files loaded	Ladattu {n} toimintotiedosto|Ladattu {n} toimintotiedostoa
+	{set} from {file} replaced the one from {earlier}	Sarja {set} tiedostosta {file} korvasi sarjan tiedostosta {earlier}
+@plural	{n} file could not be loaded: {errors}|{n} files could not be loaded: {errors}	{n} tiedoston lataaminen epäonnistui: {errors}|{n} tiedoston lataaminen epäonnistui: {errors}
 
 	File Naming	Tiedostojen nimeäminen
 	Starting serial	Aloitusnumero
@@ -3197,6 +3213,8 @@ curves	Smooth	Tasoita
 	Step {step} is waiting for its dialog	Vaihe {step} odottaa valintaikkunaansa
 @plural	{n} action|{n} actions	{n} toiminto|{n} toimintoa
 	Background (Default)	Tausta (oletus)
+	Background (default)	Tausta (oletus)
+	Transparent (default)	Läpinäkyvä (oletus)
 	Content-Aware Fill	Sisältötietoinen täyttö
 # Batch / Image Processor
 	Include All Subfolders	Sisällytä kaikki alikansiot
@@ -3359,6 +3377,7 @@ curves	Smooth	Tasoita
 	This document's layers: {needed} of {budget} for layers	Tämän asiakirjan tasot: {needed} / {budget} tasoille
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Tämän asiakirjan tasot tarvitsevat {needed}, mutta saavat käyttää {budget}: koko asiakirjan uudelleenpiirrot käyttävät suoritinta
 	GPU Memory (MB, 0 = Automatic)	GPU-muisti (Mt, 0 = automaattinen)
+	Scratch Size Limit (MB, 0 = No Limit)	Työlevyn kokoraja (Mt, 0 = ei rajaa)
 	{path}: the path is not valid Unicode; save under another name.	{path}: polku ei ole kelvollista Unicodea; tallenna toisella nimellä.
 	Replace	Korvaa
 	{name} was changed by another app after it was opened or saved here.	Toinen ohjelma on muuttanut tiedostoa {name} sen jälkeen, kun se avattiin tai tallennettiin täällä.
@@ -4770,3 +4789,23 @@ cameraRaw	White Balance: As Shot	Valkotasapaino: kuvauksen mukainen
 	The path was discarded	Polku hylättiin
 	The path was kept as the Work Path	Polku säilytettiin työpolkuna
 	Edit Brush…	Muokkaa sivellintä…
+
+# Action Stop message (#8386)
+	Message	Viesti
+# Playback Options (#5212)
+	Playback Options…	Toistoasetukset…
+	Playback Options	Toistoasetukset
+	Accelerated	Kiihdytetty
+	Step by Step	Vaihe kerrallaan
+	Pause For:	Tauko:
+	Pause For	Tauko
+	seconds	sekuntia
+	Create a single history state	Luo yksi historiatila
+
+# Channels panel menu (#11451)
+	Channel Options…	Kanavan asetukset…
+	Specify Channels:	Määritä kanavat:
+	Not enough grayscale documents for this mode.	Harmaasävyasiakirjoja ei ole tarpeeksi tähän tilaan.
+	Pick a different document for each channel.	Valitse jokaiselle kanavalle eri asiakirja.
+	A picked document is no longer open.	Yksi valituista asiakirjoista ei ole enää auki.
+	A picked document is no longer a grayscale document of the same size.	Yksi valituista asiakirjoista ei ole enää samankokoinen harmaasävyasiakirja.

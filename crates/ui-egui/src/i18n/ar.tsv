@@ -81,6 +81,7 @@
 	Right	يمين
 	Open Recent	فتح الملفات الأخيرة
 	Clear Recent Files	مسح الملفات الأخيرة
+	Clear Recent File List	مسح الملفات الأخيرة
 	Remove from Recent	إزالة من الملفات الأخيرة
 	Remove {name} from Recent	إزالة {name} من الملفات الأخيرة
 	Close	إغلاق
@@ -89,6 +90,10 @@
 	Restore	استعادة
 	Close All	إغلاق الكل
 	Close Others	إغلاق المستندات الأخرى
+	New Document…	مستند جديد…
+	Open Document…	فتح…
+	Consolidate All to Here	توحيد الكل هنا
+	Move to New Window	نقل إلى نافذة جديدة
 	Save	حفظ
 	Save As…	حفظ باسم…
 	Save a Copy…	حفظ نسخة…
@@ -141,6 +146,7 @@
 	Create Smart Object after Loading Layers	إنشاء كائن ذكي بعد تحميل الطبقات
 	Reveal in Finder	إظهار في Finder
 	Show in Explorer	إظهار في Explorer
+	Reveal in Explorer	إظهار في Explorer
 	Show in Folder	إظهار في المجلد
 	File Info…	معلومات الملف…
 	Print…	طباعة…
@@ -229,6 +235,7 @@
 	Units & Rulers…	الوحدات والمساطر…
 	Guides, Grid & Slices…	خطوط التوجيه والشبكة والشرائح…
 	Plug-ins…	المكونات الإضافية…
+	Plugins…	المكونات الإضافية…
 	Type…	النص…
 	Enhanced Controls…	عناصر التحكم المحسنة…
 	Camera Raw…	Camera Raw…
@@ -386,6 +393,8 @@
 	Smart Object	كائن ذكي
 	Convert to Smart Object	تحويل إلى كائن ذكي
 	Convert to Embedded	تحويل إلى مضمّن
+	Embed Linked	تضمين المرتبط
+	Embed All Linked	تضمين كل المرتبط
 	Convert to Layers	تحويل إلى طبقات
 	Convert to Linked…	تحويل إلى مرتبط…
 	Edit Contents	تحرير المحتويات
@@ -459,7 +468,9 @@
 	Unite Shapes	توحيد الأشكال
 	Subtract Front Shape	طرح الشكل الأمامي
 	Intersect Shape Areas	تقاطع مناطق الأشكال
+	Unite Shapes at Overlap	تقاطع مناطق الأشكال
 	Exclude Overlapping Shapes	استبعاد الأشكال المتداخلة
+	Subtract Shapes at Overlap	استبعاد الأشكال المتداخلة
 	Merge Shape Components	دمج مكونات الشكل
 	Align	محاذاة
 	Top Edges	الحواف العلوية
@@ -660,6 +671,7 @@
 	Minimum…	الحد الأدنى…
 	Offset…	إزاحة…
 	Plug-ins	المكونات الإضافية
+	Plugins	المكونات الإضافية
 	Proof Setup	إعداد المعاينة الطباعية
 	Proof Colors	ألوان المعاينة الطباعية
 	Gamut Warning	تحذير النطاق اللوني
@@ -668,9 +680,9 @@
 	Working Magenta Plate	لوح الأرجواني العامل
 	Working Yellow Plate	لوح الأصفر العامل
 	Working Black Plate	لوح الأسود العامل
-	Working CMY Plate	لوح CMY العامل
-	Legacy Macintosh RGB	RGB القديم لنظام Macintosh
-	Internet Standard RGB	RGB القياسي للإنترنت
+	Working CMY Plates	لوح CMY العامل
+	Legacy Macintosh RGB (Gamma 1.8)	RGB القديم لنظام Macintosh (Gamma 1.8)
+	Internet Standard RGB (sRGB)	RGB القياسي للإنترنت (sRGB)
 	Monitor RGB	RGB الشاشة
 	Color Blindness — Protanopia-type	عمى الألوان — نوع بروتانوبيا
 	Color Blindness — Deuteranopia-type	عمى الألوان — نوع ديوتيرانوبيا
@@ -752,7 +764,7 @@
 	Consolidate All to Tabs	توحيد الكل في علامات تبويب
 	Float in Window	تعويم في نافذة
 	Float All in Windows	تعويم الكل في نوافذ
-	New Window for Document	نافذة جديدة للمستند
+	New Window	نافذة جديدة للمستند
 	Workspace	مساحة العمل
 	Essentials	الأساسيات
 	Graphic and Web	الرسومات والويب
@@ -1924,6 +1936,11 @@
 	Show canvas dots	إظهار نقاط مساحة الرسم
 	Clip thumbnails to layer bounds	قصر الصور المصغرة على حدود الطبقة
 	Clip Thumbnails to Layer Bounds	قصر الصور المصغرة على حدود الطبقة
+	No Thumbnails	بلا صور مصغرة
+	Small Thumbnails	صور مصغرة صغيرة
+	Medium Thumbnails	صور مصغرة متوسطة
+	Large Thumbnails	صور مصغرة كبيرة
+	Clip Thumbnails to Document Bounds	قصر الصور المصغرة على حدود المستند
 	Canvas color	لون مساحة الرسم
 	Canvas custom color	لون مخصص لمساحة الرسم
 	Color picker	منتقي الألوان
@@ -2041,7 +2058,6 @@
 	Show only crosshair while painting	إظهار نقطة التصويب فقط أثناء الرسم
 	Show slice numbers	إظهار أرقام الشرائح
 	Show tooltips	إظهار تلميحات الأدوات
-	Enable animations	تمكين الحركات
 	Show highlight on rollover	إظهار التمييز عند التمرير
 	Show bounding box when dragging layer	إظهار مربع الإحاطة عند سحب الطبقة
 	System title bar	شريط عنوان النظام
@@ -3264,6 +3280,9 @@ curves	Smooth	تنعيم
 @plural	{n} step has no PhotoCraft equivalent yet|{n} steps have no PhotoCraft equivalent yet	{n} خطوة ليس لها مكافئ في PhotoCraft بعد|{n} خطوة ليس لها مكافئ في PhotoCraft بعد|{n} خطوتان ليس لهما مكافئ في PhotoCraft بعد|{n} خطوات ليس لها مكافئ في PhotoCraft بعد|{n} خطوةً ليس لها مكافئ في PhotoCraft بعد|{n} خطوة ليس لها مكافئ في PhotoCraft بعد
 @plural	Saved {n} action to {file}|Saved {n} actions to {file}	تم حفظ {n} إجراء في {file}|تم حفظ {n} إجراء في {file}|تم حفظ {n} إجراءين في {file}|تم حفظ {n} إجراءات في {file}|تم حفظ {n} إجراءً في {file}|تم حفظ {n} إجراء في {file}
 @plural	{n} step with no Photoshop equivalent left out|{n} steps with no Photoshop equivalent left out	تم استبعاد {n} خطوة ليس لها مكافئ في Photoshop|تم استبعاد {n} خطوة ليس لها مكافئ في Photoshop|تم استبعاد {n} خطوتين ليس لهما مكافئ في Photoshop|تم استبعاد {n} خطوات ليس لها مكافئ في Photoshop|تم استبعاد {n} خطوةً ليس لها مكافئ في Photoshop|تم استبعاد {n} خطوة ليس لها مكافئ في Photoshop
+@plural	{n} action file loaded|{n} action files loaded	تم تحميل {n} ملف إجراءات|تم تحميل {n} ملف إجراءات|تم تحميل {n} ملفي إجراءات|تم تحميل {n} ملفات إجراءات|تم تحميل {n} ملفًا للإجراءات|تم تحميل {n} ملف إجراءات
+	{set} from {file} replaced the one from {earlier}	حلّت المجموعة {set} من {file} محل المجموعة من {earlier}
+@plural	{n} file could not be loaded: {errors}|{n} files could not be loaded: {errors}	تعذّر تحميل {n} ملف: {errors}|تعذّر تحميل {n} ملف: {errors}|تعذّر تحميل {n} ملفين: {errors}|تعذّر تحميل {n} ملفات: {errors}|تعذّر تحميل {n} ملفًا: {errors}|تعذّر تحميل {n} ملف: {errors}
 
 	File Naming	تسمية الملفات
 	Starting serial	الرقم التسلسلي الأولي
@@ -3278,6 +3297,8 @@ curves	Smooth	تنعيم
 	Step {step} is waiting for its dialog	الخطوة {step} بانتظار مربع الحوار الخاص بها
 @plural	{n} action|{n} actions	{n} إجراء|{n} إجراء|{n} إجراءان|{n} إجراءات|{n} إجراءً|{n} إجراء
 	Background (Default)	الخلفية (الافتراضية)
+	Background (default)	الخلفية (الافتراضية)
+	Transparent (default)	شفاف (افتراضي)
 	Content-Aware Fill	تعبئة مراعية للمحتوى
 # Batch / Image Processor
 	Include All Subfolders	تضمين كل المجلدات الفرعية
@@ -3409,6 +3430,7 @@ curves	Smooth	تنعيم
 	Low-Latency Drawing (vsync off, applies at next launch)	رسم بزمن استجابة منخفض (إيقاف vsync، يسري عند التشغيل التالي)
 # Free Transform: a new layer while the box is open (#5859)
 	Reference point location	موقع النقطة المرجعية
+	Toggle reference point	إظهار/إخفاء النقطة المرجعية
 	Free Transform is still being applied; try again when it has finished.	لا يزال التحويل الحر قيد التطبيق؛ حاول مرة أخرى عند انتهائه.
 	The transform couldn't be applied.	تعذر تطبيق التحويل.
 # Preferences › Performance › GPU Memory; the status bar and slow-redraw notice
@@ -3421,6 +3443,7 @@ curves	Smooth	تنعيم
 	This document's layers: {needed} of {budget} for layers	طبقات هذا المستند: {needed} من {budget} للطبقات
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	تحتاج طبقات هذا المستند إلى {needed} لكنها تستوعب {budget}: تستخدم إعادة رسم المستند بالكامل وحدة المعالجة المركزية
 	GPU Memory (MB, 0 = Automatic)	ذاكرة GPU (ميغابايت، 0 = تلقائي)
+	Scratch Size Limit (MB, 0 = No Limit)	حد حجم ملف التسويد (ميغابايت، 0 = بلا حد)
 	{path}: the path is not valid Unicode; save under another name.	{path}: المسار ليس Unicode صالحًا؛ احفظ باسم آخر.
 	{name} was changed by another app after it was opened or saved here.	تم تغيير {name} بواسطة تطبيق آخر بعد فتحه أو حفظه هنا.
 	Replace it with this document, or cancel and use File › Save As to keep both.	استبدله بهذا المستند، أو ألغِ واستخدم ملف › حفظ باسم للاحتفاظ بكليهما.
@@ -3545,3 +3568,30 @@ curves	Smooth	تنعيم
 	The path was kept as the Work Path	تم الاحتفاظ بالمسار كمسار عمل
 	The path was discarded	تم تجاهل المسار
 	Edit Brush…	تحرير الفرشاة…
+
+# Action Stop message (#8386)
+	Message	رسالة
+# Playback Options (#5212)
+	Playback Options…	خيارات التشغيل…
+	Playback Options	خيارات التشغيل
+	Accelerated	مُسرَّع
+	Step by Step	خطوة بخطوة
+	Pause For:	إيقاف مؤقت لمدة:
+	Pause For	إيقاف مؤقت لمدة
+	seconds	ثانية
+	Create a single history state	إنشاء حالة سجل واحدة
+
+# Channels panel menu (#11451)
+	New Channel…	قناة جديدة…
+	Duplicate Channel	تكرار القناة
+	Delete Channel	حذف القناة
+	New Spot Channel…	قناة لون موضعي جديدة…
+	Merge Spot Channel	دمج قناة اللون الموضعي
+	Channel Options…	خيارات القناة…
+	Split Channels	تقسيم القنوات
+	Merge Channels…	دمج القنوات…
+	Specify Channels:	تحديد القنوات:
+	Not enough grayscale documents for this mode.	لا توجد مستندات كافية بتدرج الرمادي لهذا الوضع.
+	Pick a different document for each channel.	اختر مستندًا مختلفًا لكل قناة.
+	A picked document is no longer open.	أحد المستندات المختارة لم يعد مفتوحًا.
+	A picked document is no longer a grayscale document of the same size.	أحد المستندات المختارة لم يعد مستندًا بتدرج الرمادي بالحجم نفسه.

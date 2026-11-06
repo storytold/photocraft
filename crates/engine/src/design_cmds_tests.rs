@@ -499,6 +499,23 @@ fn a_file_placed_from_a_picker_is_a_baked_step() {
     assert_eq!(state(&mut s, 2), "ok", "a placed file doesn't depend on earlier steps");
 }
 
+/// The window's picker and drops start a place job (`start_place_bytes`): its step is recorded,
+/// baked, when the job applies.
+#[test]
+fn a_file_placed_as_a_job_is_a_baked_step() {
+    let mut s = started();
+    let src = photocraft_doc::Document::new("p", photocraft_doc::Size::new(8, 8), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8);
+    let bytes = photocraft_io::export(&src, "p.png", &Default::default()).unwrap().bytes;
+    let crate::jobs::Started::Job(id) = s.start_place_bytes("p.png", bytes, None, json!({})).unwrap() else { panic!("expected a job") };
+    s.wait_job(id).unwrap();
+    let st = steps(&mut s);
+    let place = st.last().unwrap();
+    assert_eq!((&place["command"], &place["baked"], &place["label"]), (&json!("file.placeEmbedded"), &json!(true), &json!("Place Embedded p.png")), "{st:?}");
+    let before = doc(&s);
+    s.execute("design.replay", json!({})).unwrap();
+    assert_eq!(doc(&s), before);
+}
+
 /// The layer named "A".
 fn layer_a(s: &Session) -> photocraft_doc::Layer {
     let doc = &s.active().unwrap().doc;
