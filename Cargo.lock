@@ -1459,7 +1459,7 @@ dependencies = [
 [[package]]
 name = "craft-mobile"
 version = "0.1.0"
-source = "git+https://github.com/simonhull/craft-libs?rev=0c1acfbea9da7e0e4f2d3ed089859f3fa8b1337f#0c1acfbea9da7e0e4f2d3ed089859f3fa8b1337f"
+source = "git+https://github.com/simonhull/craft-libs?rev=15c46dba1d3156cb150ac40282f524734e38712d#15c46dba1d3156cb150ac40282f524734e38712d"
 dependencies = [
  "android_logger",
  "eframe",
