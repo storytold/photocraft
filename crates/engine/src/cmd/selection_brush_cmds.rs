@@ -83,7 +83,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
             "subtract" => selection::combine_sparse(old, &mask, canvas, |a, b| (a - b).max(0.0)),
             _ => selection::combine_sparse(old, &mask, canvas, f32::max),
         };
-        doc.selection = (!result.content_bounds().is_empty()).then_some(result);
+        doc.selection = super::selection_has_canvas_pixels(&result, canvas).then_some(result);
         Ok(doc.selection.is_some())
     })?;
     Ok(json!({"changed":true,"selected":selected}))
@@ -106,6 +106,23 @@ pub fn specs() -> Vec<CommandSpec> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// Removing the last visible pixel clears selection even when cropped coverage remains.
+    #[test]
+    fn selection_brush_clears_off_canvas_remainder() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width":100,"height":100})).unwrap();
+        s.edit("Seed selection", |doc, _| {
+            let mut mask = photocraft_raster::Surface::new(photocraft_color::PixelFormat::GRAY8);
+            mask.write_region(Rect::new(50, 50, 51, 51), &[1.0]);
+            mask.write_region(Rect::new(101, 50, 102, 51), &[1.0]);
+            doc.selection = Some(mask);
+            Ok(())
+        })
+        .unwrap();
+        s.execute("select.brush", json!({"points":[[50,50]],"size":10,"hardness":100,"mode":"subtract"})).unwrap();
+        assert!(s.active().unwrap().doc.selection.is_none());
+    }
+
     #[test]
     /// Verify no-op strength and invalid parameters cannot add history entries.
     fn selection_brush_zero_opacity_and_rejected_options_preserve_history() {

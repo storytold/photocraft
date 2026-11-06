@@ -156,7 +156,7 @@ impl StrokeMask {
             if self.mask.tile_count() >= MAX_PAINTED_TILES && self.mask.tile(tc).is_none() {
                 return Err("stroke exceeds the painted tile budget");
             }
-            let data = self.mask.try_tile_mut(tc).map_err(|_| "not enough memory for selection coverage")?.bytes_mut();
+            let mut data = self.mask.try_tile_mut(tc).map_err(|_| "not enough memory for selection coverage")?.bytes_mut();
             for y in r.y0..r.y1 {
                 for x in r.x0..r.x1 {
                     let d = distance(f64::from(x) + 0.5, f64::from(y) + 0.5);

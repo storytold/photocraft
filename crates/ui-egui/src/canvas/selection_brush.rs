@@ -51,7 +51,7 @@ pub(super) fn paint(app: &PhotocraftApp, ctx: &egui::Context, painter: &egui::Pa
     let Some(st) = app.session.documents().get(idx) else { return };
     let settings = &app.ui.tool_options.selection_brush;
     let fallback = crate::state::SelectionBrushOptions::default();
-    let settings = if settings.valid() { settings } else { &fallback };
+    let display = if settings.valid() { settings } else { &fallback };
     let drag = app.drag.as_ref().filter(|d| d.tool == Tool::SelectionBrush && d.selection_brush_valid(app) && app.session.active_index() == Some(idx));
     let max_side = ctx.input(|i| i.max_texture_side).clamp(1, 1024) as u32;
     let factor = st.doc.size.width.max(st.doc.size.height).div_ceil(max_side).max(1);
@@ -64,7 +64,7 @@ pub(super) fn paint(app: &PhotocraftApp, ctx: &egui::Context, painter: &egui::Pa
         factor,
         // Rasterize in document coordinates, exactly like the command. Scaling the geometry
         // first also scales antialiasing and pixel centres, changing the outline on release.
-        options: Options { size: brush.size, hardness: brush.hardness, opacity: brush.opacity, fill_closed: false },
+        options: Options { size: brush.size.clamp(1.0, 5000.0), hardness: brush.hardness, opacity: brush.opacity, fill_closed: false },
         subtract: settings.subtracts(drag.is_some_and(|d| d.modifiers.alt)),
         start: drag.map(|d| [d.start[0].to_bits(), d.start[1].to_bits()]),
     };
@@ -145,7 +145,7 @@ pub(super) fn paint(app: &PhotocraftApp, ctx: &egui::Context, painter: &egui::Pa
         egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
         [0.0, 0.0],
         [st.doc.size.width as f32, st.doc.size.height as f32],
-        crate::theme::Tokens::get(ctx).selection_brush_overlay(settings.overlay_color, settings.overlay_opacity),
+        crate::theme::Tokens::get(ctx).selection_brush_overlay(display.overlay_color, display.overlay_opacity),
     );
 }
 
@@ -214,6 +214,11 @@ mod tests {
                     crate::paint_mouse::sync_tool_brush(&mut app);
                     app.run("tools.setBrush", json!({"brush":{"size":41,"hardness":0.4,"opacity":0.65}})).unwrap();
                     app.ui.tool_options.selection_brush.subtract = subtract;
+                    // An invalid saved display opacity must not turn subtraction into addition.
+                    if subtract && width == 800 {
+                        app.ui.tool_options.selection_brush.overlay_opacity = -1.0;
+                    }
+
                     let ctx = egui::Context::default();
                     let xf = ViewXform {
                         rect: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1024.0, 600.0)),
