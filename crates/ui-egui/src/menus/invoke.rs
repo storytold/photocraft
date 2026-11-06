@@ -435,10 +435,30 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
         "select.transformSelection" if params.as_object().is_none_or(|o| o.is_empty()) => {
             crate::transform_tool::begin_selection(app, ctx).map(|_| json!({"transform": app.ui.transform}))
         }
-        "edit.paste" if params.as_object().is_none_or(|o| o.is_empty()) => {
+        "edit.paste" | "edit.pasteSpecial.pasteInPlace" | "file.newFromClipboard" if params.as_object().is_none_or(|o| o.is_empty()) => {
+            let from_key = ctx.input(|i| {
+                i.events
+                    .iter()
+                    .any(|e| matches!(e, egui::Event::Key { key: egui::Key::V | egui::Key::Insert, .. } | egui::Event::Paste(_) | egui::Event::PasteImage(_)))
+            });
+            let had_paste_image = app.pending_paste_image.is_some();
+            app.import_os_clipboard()?;
+            if !from_key
+                && !had_paste_image
+                && app.session.clipboard.is_none()
+                && app.services.is_wayland
+                && app.services.clipboard_unreadable.as_ref().is_some_and(|unreadable| unreadable())
+            {
+                app.pending_paste_cmd = Some(id.to_string());
+                ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+                return Ok(json!({"pasted": false}));
+            }
+            if id != "edit.paste" {
+                app.clip_read_for_paste = true;
+                return app.run(id, params);
+            }
             // Photoshop: paste in place when the copied area is visible, else centred in the view;
             // images from other apps are always centred.
-            app.import_os_clipboard()?;
             app.clip_read_for_paste = true;
             let external = app.clip_external;
             let visible = !external

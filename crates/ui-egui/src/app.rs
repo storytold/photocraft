@@ -172,6 +172,9 @@ impl PhotocraftApp {
             hist_uncached: None,
             gpu: None,
             window_device: None,
+            pending_paste_image: None,
+            pending_paste_cmd: None,
+            pending_copy_image: None,
             window_lost: false,
             window_recovery_retry: None,
             gpu_render_state: None,
@@ -233,6 +236,7 @@ impl eframe::App for PhotocraftApp {
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         self.logic_frame(ctx, frame);
         self.finish_type_reset_logic(ctx);
+        self.flush_pending_copy_image(ctx);
     }
 
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
@@ -246,10 +250,36 @@ impl eframe::App for PhotocraftApp {
         if let Some(menu) = self.services.native_menu.as_mut() {
             menu.raw_input(raw_input);
         }
+        let mut async_wayland_paste = false;
+        let mut got_paste_image = false;
+        for event in &raw_input.events {
+            if let egui::Event::PasteImage(image) = event {
+                self.pending_paste_image = Some(std::sync::Arc::clone(image));
+                got_paste_image = true;
+                async_wayland_paste |= self.services.is_wayland;
+            } else if matches!(event, egui::Event::Paste(_)) && self.services.is_wayland {
+                async_wayland_paste = true;
+            }
+        }
+        if got_paste_image
+            && let Some(cmd) = self.pending_paste_cmd.take()
+            && cmd != "edit.paste"
+        {
+            raw_input.events.retain(|e| !matches!(e, egui::Event::PasteImage(_)));
+            let _ = self.run(&cmd, serde_json::json!({}));
+        } else if got_paste_image {
+            self.pending_paste_cmd = None;
+        }
         // While a text field of a floating panel's own window has the keyboard, the dock area
         // hands that window the text keys in this input and converts them there.
         if craft_ui::docking::typing_window(ctx).is_none() {
             shortcuts::clipboard_keys(ctx, ctx.text_edit_focused() || self.ui.text_edit.is_some(), raw_input);
+            if async_wayland_paste {
+                ctx.data_mut(|d| {
+                    d.remove_temp::<bool>(egui::Id::unique("pc-paste-key-seen"));
+                    d.remove_temp::<bool>(egui::Id::unique("pc-paste-command-lately"));
+                });
+            }
         }
         // Windows precision touchpads and some Linux Wayland compositors send pinches
         // as fractional Ctrl + wheel rather than a native Zoom event (#4566).
