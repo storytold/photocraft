@@ -416,6 +416,9 @@ fn zeroed_pattern_plane(len: usize) -> Result<Vec<u8>> {
 }
 
 fn write_pattern(p: &PsdPattern, out: &mut Vec<u8>) -> Result<()> {
+    if !matches!(p.depth, 1 | 8 | 16 | 32) {
+        return Err(PsdError::Unsupported(format!("pattern depth {}", p.depth)));
+    }
     if p.width > MAX_EDGE || p.height > MAX_EDGE || p.width > i16::MAX as u32 || p.height > i16::MAX as u32 {
         return Err(PsdError::LimitExceeded("pattern size"));
     }

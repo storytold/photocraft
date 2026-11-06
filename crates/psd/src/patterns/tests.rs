@@ -57,6 +57,13 @@ fn raw_pattern_writes_still_validate_layout_and_plane_length() {
     }
 }
 
+#[test]
+fn writers_reject_unsupported_depth_with_matching_plane_lengths() {
+    let p = PsdPattern { depth: 7, channels: vec![vec![0; 15]; 3], alpha: Some(vec![0; 15]), ..pat(8, false) };
+    assert!(write_pattern_block(std::slice::from_ref(&p)).is_err());
+    assert!(write_pat_file(&[p]).is_err());
+}
+
 /// #9318 review: a name the reader refuses (more than 65,536 UTF-16 units with its NUL) is
 /// refused on write, so a saved library can't become a file that loads nothing.
 #[test]
