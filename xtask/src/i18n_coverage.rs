@@ -44,7 +44,63 @@ pub fn run(root: &Path) -> Result<(), String> {
         return Err("no source-derived English UI translation keys were found".into());
     }
     print!("{}", format_report(&languages, &english_keys, &translations));
-    Ok(())
+    check_language_table(root)
+}
+
+/// Checks the language table on its own, so `cargo xtask ci` can fail on it while a coverage report
+/// failure stays a warning.
+pub fn check_language_table(root: &Path) -> Result<(), String> {
+    let registry_path = root.join("crates/ui-egui/src/i18n.rs");
+    let registry = fs::read_to_string(&registry_path).map_err(|e| format!("{}: {e}", registry_path.display()))?;
+    let doc_path = root.join("docs/localization.md");
+    let doc = fs::read_to_string(&doc_path).map_err(|e| format!("{}: {e}", doc_path.display()))?;
+    check_documented_languages(&registered_languages(&registry)?, &doc)
+}
+
+/// The "Supported languages" table in `docs/localization.md` lists every registered language and
+/// nothing else. A language shipped without its row (Turkish, #1373) is otherwise invisible there.
+fn check_documented_languages(languages: &[Language], doc: &str) -> Result<(), String> {
+    let mut section = doc.lines().skip_while(|line| line.trim_end() != "## Supported languages");
+    if section.next().is_none() {
+        return Err("docs/localization.md has no `## Supported languages` section".to_string());
+    }
+    let mut rows = section.take_while(|line| !line.starts_with('#')).skip_while(|line| !line.contains('|')).take_while(|line| line.contains('|'));
+    let header = rows.next().map(table_cells).unwrap_or_default();
+    let delimiter = rows.next().map(table_cells).unwrap_or_default();
+    let delimiter_matches = delimiter.len() == header.len() && delimiter.iter().all(|cell| cell.contains('-') && cell.chars().all(|c| matches!(c, '-' | ':')));
+    if header.get(1) != Some(&"Preference code") || !delimiter_matches {
+        return Err("docs/localization.md's Supported languages table must start with a `Preference code` header and a matching delimiter row".into());
+    }
+    let mut documented = BTreeSet::new();
+    for line in rows {
+        let code = table_cells(line).get(1).map_or("", |cell| cell.trim_matches('`').trim());
+        if code.is_empty() {
+            return Err(format!("docs/localization.md's Supported languages table has a row with no preference code: {}", line.trim()));
+        }
+        if !documented.insert(code.to_string()) {
+            return Err(format!("docs/localization.md's Supported languages table lists `{code}` more than once"));
+        }
+    }
+    let registered: BTreeSet<String> = languages.iter().map(|language| language.code.clone()).collect();
+    let missing: Vec<&str> = registered.difference(&documented).map(String::as_str).collect();
+    let extra: Vec<&str> = documented.difference(&registered).map(String::as_str).collect();
+    if missing.is_empty() && extra.is_empty() {
+        return Ok(());
+    }
+    let mut message = String::from("docs/localization.md's Supported languages table is out of date:");
+    if !missing.is_empty() {
+        message.push_str(&format!("\n  registered but not listed: {}", missing.join(", ")));
+    }
+    if !extra.is_empty() {
+        message.push_str(&format!("\n  listed but not registered: {}", extra.join(", ")));
+    }
+    Err(message)
+}
+
+fn table_cells(line: &str) -> Vec<&str> {
+    let row = line.trim();
+    let row = row.strip_prefix('|').unwrap_or(row);
+    row.strip_suffix('|').unwrap_or(row).split('|').map(str::trim).collect()
 }
 
 fn source_keys(root: &Path) -> Result<BTreeSet<Key>, String> {
@@ -522,6 +578,155 @@ fn unescape_tsv(source: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const LANGUAGE_DOC: &str = "# Localisation
+
+## Supported languages
+
+| Language | Preference code | Integer plural forms |
+|---|---|---|
+| English | `en` | one / other |
+| Türkçe | `tr` | one form |
+
+## Catalogs
+| Example | `not-a-language` | ignored outside the section |
+";
+
+    fn with_row(row: &str) -> String {
+        LANGUAGE_DOC.replace("| Türkçe | `tr` | one form |\n", &format!("| Türkçe | `tr` | one form |\n{row}\n"))
+    }
+
+    fn documentation_languages() -> [Language; 2] {
+        [Language { code: "en".into(), catalog: None }, Language { code: "tr".into(), catalog: Some("tr.tsv".into()) }]
+    }
+
+    #[test]
+    fn documented_languages_match_the_registry() {
+        assert_eq!(check_documented_languages(&documentation_languages(), LANGUAGE_DOC), Ok(()));
+    }
+
+    #[test]
+    fn documented_languages_reject_a_missing_registered_code() {
+        let doc = LANGUAGE_DOC.replace("| Türkçe | `tr` | one form |\n", "");
+        assert_eq!(
+            check_documented_languages(&documentation_languages(), &doc),
+            Err("docs/localization.md's Supported languages table is out of date:\n  registered but not listed: tr".into())
+        );
+    }
+
+    #[test]
+    fn documented_languages_reject_an_unregistered_code() {
+        let doc = with_row("| Klingon | `tlh` | one / other |");
+        assert_eq!(
+            check_documented_languages(&documentation_languages(), &doc),
+            Err("docs/localization.md's Supported languages table is out of date:\n  listed but not registered: tlh".into())
+        );
+    }
+
+    #[test]
+    fn documented_languages_read_codes_without_backticks() {
+        let doc = with_row("| Klingon | tlh | one / other |");
+        assert_eq!(
+            check_documented_languages(&documentation_languages(), &doc),
+            Err("docs/localization.md's Supported languages table is out of date:\n  listed but not registered: tlh".into())
+        );
+        let doc = LANGUAGE_DOC.replace("`tr`", "tr");
+        assert_eq!(check_documented_languages(&documentation_languages(), &doc), Ok(()));
+    }
+
+    #[test]
+    fn documented_languages_reject_a_row_without_a_code() {
+        for row in ["| Klingon |  | one form |", "| Klingon | `` | one form |", "| Klingon", "|---||---|", "|---||"] {
+            let doc = with_row(row);
+            assert_eq!(
+                check_documented_languages(&documentation_languages(), &doc),
+                Err(format!("docs/localization.md's Supported languages table has a row with no preference code: {row}"))
+            );
+        }
+    }
+
+    #[test]
+    fn documented_languages_report_a_dash_code_as_unregistered() {
+        for code in ["-", ":", "---"] {
+            let doc = with_row(&format!("| Klingon | {code} | one form |"));
+            assert_eq!(
+                check_documented_languages(&documentation_languages(), &doc),
+                Err(format!("docs/localization.md's Supported languages table is out of date:\n  listed but not registered: {code}"))
+            );
+        }
+    }
+
+    #[test]
+    fn documented_languages_reject_a_malformed_table_head() {
+        let head = "| Language | Preference code | Integer plural forms |\n|---|---|---|\n";
+        for replacement in [
+            "| Language | Preference code | Integer plural forms |\n|---|---|\n",
+            "| Language | Preference code | Integer plural forms |\n|---||---|\n",
+            "| Language | Preference code | Integer plural forms |\n|:|:|:|\n",
+            "| Language | Code | Integer plural forms |\n|---|---|---|\n",
+            "| Language | Preference code | Integer plural forms |\n",
+        ] {
+            assert_eq!(
+                check_documented_languages(&documentation_languages(), &LANGUAGE_DOC.replace(head, replacement)),
+                Err("docs/localization.md's Supported languages table must start with a `Preference code` header and a matching delimiter row".into()),
+                "{replacement}"
+            );
+        }
+    }
+
+    #[test]
+    fn documented_languages_reject_a_delimiter_row_among_the_languages() {
+        let doc = with_row("|---|---|---|");
+        assert_eq!(
+            check_documented_languages(&documentation_languages(), &doc),
+            Err("docs/localization.md's Supported languages table is out of date:\n  listed but not registered: ---".into())
+        );
+    }
+
+    #[test]
+    fn documented_languages_reject_a_repeated_code() {
+        assert_eq!(
+            check_documented_languages(&documentation_languages(), &with_row("| Türkçe again | tr | one / other |")),
+            Err("docs/localization.md's Supported languages table lists `tr` more than once".into())
+        );
+    }
+
+    #[test]
+    fn documented_languages_read_only_the_first_table() {
+        let separated = LANGUAGE_DOC.replace("| Türkçe | `tr` | one form |\n", "\n| Türkçe | `tr` | one form |\n");
+        assert_eq!(
+            check_documented_languages(&documentation_languages(), &separated),
+            Err("docs/localization.md's Supported languages table is out of date:\n  registered but not listed: tr".into())
+        );
+        let second_table = LANGUAGE_DOC.replace("## Catalogs", "| Form | Meaning |\n|---|---|\n| one | 1 |\n\n## Catalogs");
+        assert_eq!(check_documented_languages(&documentation_languages(), &second_table), Ok(()));
+    }
+
+    #[test]
+    fn documented_languages_read_rows_without_a_leading_pipe() {
+        for row in [" | Klingon | tlh | one form |", "\t| Klingon | tlh | one form |", "Klingon | tlh | one form"] {
+            assert_eq!(
+                check_documented_languages(&documentation_languages(), &with_row(row)),
+                Err("docs/localization.md's Supported languages table is out of date:\n  listed but not registered: tlh".into()),
+                "{row}"
+            );
+        }
+    }
+
+    #[test]
+    fn documented_languages_find_the_section_by_its_own_line() {
+        let mentioned = format!("See ## Supported languages below.\n{LANGUAGE_DOC}");
+        assert_eq!(check_documented_languages(&documentation_languages(), &mentioned), Ok(()));
+        assert_eq!(check_documented_languages(&documentation_languages(), &LANGUAGE_DOC.replace('\n', "\r\n")), Ok(()));
+    }
+
+    #[test]
+    fn documented_languages_require_the_supported_languages_section() {
+        assert_eq!(
+            check_documented_languages(&documentation_languages(), "# Localisation\n\n## Catalogs\n"),
+            Err("docs/localization.md has no `## Supported languages` section".into())
+        );
+    }
 
     fn known_keys(values: &[&str]) -> BTreeSet<Key> {
         values.iter().map(|value| Key { context: String::new(), source: (*value).to_string() }).collect()

@@ -27,6 +27,7 @@ contextual, command-ID and plural translations; missing entries fall back to Eng
 | Nederlands | `nl` | one / other |
 | Magyar | `hu` | one form |
 | Tiếng Việt | `vi` | one form |
+| Türkçe | `tr` | one form |
 | Srpski | `sr` | one / few / many (teens use many) |
 | Bosanski | `bs` | one / few / other (teens use other) |
 | हिन्दी | `hi` | one / other |
@@ -34,6 +35,7 @@ contextual, command-ID and plural translations; missing entries fall back to Eng
 | Suomi | `fi` | one / other (partitive after every count but 1) |
 | Dansk | `da` | one / other |
 | Norsk bokmål | `nb` | one / other |
+| العربية | `ar` | zero / one / two / few / many / other |
 
 Languages registered with `complete_menus` cover the current menu labels, `tl!` literals, blend
 mode names, and generated preference labels. A string a catalog lacks shows in English:
