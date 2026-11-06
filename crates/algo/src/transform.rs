@@ -167,6 +167,32 @@ pub(crate) fn bicubic(t: f64) -> [f64; 4] {
 /// Warp `src` (its content inside `src_rect`) by `h` (source → destination document space).
 /// The result has the same format as `src`, with alpha added if `src` had none; pixels outside
 /// the warped quad are transparent.
+/// How much of a destination pixel lies inside a straight edge: the exact area of the unit pixel
+/// square on the inner side, for the edge at signed distance `d` from the pixel's centre (in
+/// pixels, positive inside) with unit normal `(nx, ny)`. Linear across the middle, quadratic where
+/// the edge cuts a corner; 0.5 + d for an edge along the pixel grid. Shared with Free Transform's
+/// live preview, so its outline matches what the commit draws.
+pub fn edge_coverage(d: f64, nx: f64, ny: f64) -> f64 {
+    let (a, b) = if nx.abs() >= ny.abs() { (nx.abs(), ny.abs()) } else { (ny.abs(), nx.abs()) };
+    let half = (a + b) / 2.0;
+    if d.is_nan() {
+        return 0.0;
+    }
+    if d >= half {
+        return 1.0;
+    }
+    if d <= -half {
+        return 0.0;
+    }
+    if d.abs() <= (a - b) / 2.0 || b < 1e-12 {
+        return (0.5 + d / a).clamp(0.0, 1.0);
+    }
+    // The part past the edge is a right triangle cut off a corner.
+    let t = half - d.abs();
+    let corner = (t * t / (2.0 * a * b)).clamp(0.0, 0.5);
+    if d > 0.0 { 1.0 - corner } else { corner }
+}
+
 pub fn warp_surface(src: &Surface, src_rect: Rect, h: &Homography, interp: Interp) -> Result<Surface, photocraft_raster::AllocationError> {
     warp(src, src_rect, h, interp, None, &Interrupt::NONE)
 }
@@ -441,11 +467,7 @@ fn warp(
         // colour and opacity (the "pixel stretch", #3773); the outline is antialiased by coverage
         // instead. `foot_u`/`foot_v` are a destination pixel's extent in source pixels.
         let clamped = |x: i32, y: i32, c: usize| at(x.clamp(src_rect.x0, src_rect.x1 - 1), y.clamp(src_rect.y0, src_rect.y1 - 1), c);
-        let (mx, my) = ((t.x0 + t.x1) as f64 / 2.0, (t.y0 + t.y1) as f64 / 2.0);
-        let (o, dx, dy) = (inv.apply(mx, my), inv.apply(mx + 1.0, my), inv.apply(mx, my + 1.0));
-        let extent = |e: f64| if e.is_finite() && e > 1e-12 { e } else { 1.0 };
-        let foot_u = extent((dx.0 - o.0).abs() + (dy.0 - o.0).abs());
-        let foot_v = extent((dx.1 - o.1).abs() + (dy.1 - o.1).abs());
+        let m = inv.0;
         let w = t.width() as usize;
         let len = w.checked_mul(t.height() as usize).and_then(|v| v.checked_mul(n)).ok_or(photocraft_raster::AllocationError::SizeOverflow)?;
         let bytes = len.checked_mul(std::mem::size_of::<f32>()).ok_or(photocraft_raster::AllocationError::SizeOverflow)?;
@@ -497,10 +519,23 @@ fn warp(
                     }
                 }
                 if interp != Interp::Nearest {
-                    // How much of this pixel the warped source rect covers, per axis.
+                    // How much of this pixel the warped source rect covers, per axis: the area of
+                    // the pixel inside the nearer edge of each pair, from its distance in
+                    // destination pixels along the edge's normal at this pixel (the inverse map's
+                    // gradient), so an edge on the pixel grid stays crisp in a perspective too.
                     let (uc, vc) = (u + 0.5, v + 0.5);
-                    let cu = ((uc - src_rect.x0 as f64).min(src_rect.x1 as f64 - uc) / foot_u + 0.5).clamp(0.0, 1.0);
-                    let cv = ((vc - src_rect.y0 as f64).min(src_rect.y1 as f64 - vc) / foot_v + 0.5).clamp(0.0, 1.0);
+                    let (px, py) = (x as f64 + 0.5, y as f64 + 0.5);
+                    let wh = inv.w(px, py);
+                    let grad = |a: f64, b: f64, c: f64| ((a - c * m[6]) / wh, (b - c * m[7]) / wh);
+                    let side = |c: f64, lo: f64, hi: f64, (gx, gy): (f64, f64)| -> f64 {
+                        let len = gx.hypot(gy);
+                        if !(len.is_finite() && len > 1e-12) {
+                            return if c >= lo && c <= hi { 1.0 } else { 0.0 };
+                        }
+                        edge_coverage((c - lo).min(hi - c) / len, gx / len, gy / len)
+                    };
+                    let cu = side(uc, src_rect.x0 as f64, src_rect.x1 as f64, grad(m[0], m[1], uc));
+                    let cv = side(vc, src_rect.y0 as f64, src_rect.y1 as f64, grad(m[3], m[4], vc));
                     for s in acc.iter_mut().take(n) {
                         *s *= cu * cv;
                     }
