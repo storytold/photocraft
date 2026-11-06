@@ -58,6 +58,9 @@ fn framed_by_selection(doc: &Document, bounds: Rect) -> Rect {
 
 /// A group moves all its descendants, so its frame must not clip raster children to the selection.
 pub(crate) fn whole_layer_bounds(doc: &Document, layer: &Layer) -> Rect {
+    if let Some(f) = &layer.frame {
+        return f.bounds();
+    }
     let content = match &layer.content {
         LayerContent::Group(g) => g.children.iter().map(|c| whole_layer_bounds(doc, c)).fold(Rect::EMPTY, |a, b| a.union(&b)),
         // A soft shape (Density below 100 % or a Feather) renders past its path, over the whole
@@ -485,6 +488,13 @@ fn apply_transform(
     // The masks (and so a fill's frame) move, but a fill layer's cached render isn't warped:
     // drop it, the fill re-renders from its model (as `transform_layer_geometry` does).
     l.fill_cache = None;
+    if let Some(f) = &mut l.frame {
+        let a = affine.ok_or_else(|| bad("a frame supports affine transforms; select its image for perspective transforms"))?;
+        f.transform = a.mul(&f.transform);
+        if !f.valid() {
+            return Err(bad("invalid frame transform"));
+        }
+    }
     match &mut l.content {
         LayerContent::Group(g) => {
             for c in g.children.iter_mut() {
@@ -586,10 +596,13 @@ pub fn split_selected(surf: &Surface, sel: &Surface) -> Result<(Surface, Surface
         let k = sel.sample_channel(x, y, 0);
         // The selection lifts its share of a pixel's coverage, up to all of it, as Move does
         // (`float_cmds::cut_piece`, #7655): a layer's own transparency loaded as the selection
-        // lifts it whole and leaves no ghost behind (#5595). An opaque pixel splits as k and 1 − k.
+        // lifts it whole and leaves no ghost behind (#5595), and so does the selection a move
+        // leaves, the moved pixels' alpha, with no a × (1 − a) of a soft edge behind (#10461).
+        // An opaque pixel splits as k and 1 − k.
         let a = l[n - 1];
-        l[n - 1] = a.min(k);
-        r[n - 1] = (a - k).max(0.0);
+        let lifted = a.min(k.max(0.0));
+        l[n - 1] = lifted;
+        r[n - 1] = (a - lifted).max(0.0);
         // Likewise an unselected pixel leaves nothing in the lifted surface, so its bounds are the
         // selected pixels' (what a stretch repeats at the edge, #3773).
         if l[n - 1] <= 0.0 {
@@ -603,6 +616,25 @@ pub fn split_selected(surf: &Surface, sel: &Surface) -> Result<(Surface, Surface
     lifted.prune();
     rest.try_write_region(src, &rp)?;
     Ok((lifted, rest))
+}
+
+/// Moves layer `id` by `affine` (document → document) as `edit.transform` does: its content, linked
+/// masks and Smart Filter mask follow, and type, shapes and smart objects re-render. The document
+/// selection is left alone.
+pub(crate) fn transform_by(doc: &mut Document, id: LayerId, affine: Affine, interp: Interp) -> Result<()> {
+    let h = crate::smart_cmds::affine_homography(&affine);
+    let group = group_locks(doc, id);
+    let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
+    // Price the smart object caches before they are taken: the fallback warp below isn't budgeted.
+    check_layer_budget(None, l, &h)?;
+    let taken = crate::smart_cmds::take_caches(std::slice::from_mut(l));
+    apply_transform(None, group, l, &h, Some(affine), interp, &Interrupt::NONE)?;
+    let snapshot = doc.clone();
+    if let Some(l) = doc.layer_mut(id) {
+        refresh_text(&snapshot, l);
+    }
+    crate::smart_cmds::restore_unrendered(doc, taken, |c| warp_surface(c, c.content_bounds(), &h, interp))?;
+    Ok(())
 }
 
 pub(crate) fn refresh_text(doc: &Document, l: &mut Layer) {

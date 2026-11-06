@@ -3281,6 +3281,8 @@ curves	Smooth	تنعيم
 	Step {step} is waiting for its dialog	الخطوة {step} بانتظار مربع الحوار الخاص بها
 @plural	{n} action|{n} actions	{n} إجراء|{n} إجراء|{n} إجراءان|{n} إجراءات|{n} إجراءً|{n} إجراء
 	Background (Default)	الخلفية (الافتراضية)
+	Background (default)	الخلفية (الافتراضية)
+	Transparent (default)	شفاف (افتراضي)
 	Content-Aware Fill	تعبئة مراعية للمحتوى
 # Batch / Image Processor
 	Include All Subfolders	تضمين كل المجلدات الفرعية
@@ -3412,6 +3414,7 @@ curves	Smooth	تنعيم
 	Low-Latency Drawing (vsync off, applies at next launch)	رسم بزمن استجابة منخفض (إيقاف vsync، يسري عند التشغيل التالي)
 # Free Transform: a new layer while the box is open (#5859)
 	Reference point location	موقع النقطة المرجعية
+	Toggle reference point	إظهار/إخفاء النقطة المرجعية
 	Free Transform is still being applied; try again when it has finished.	لا يزال التحويل الحر قيد التطبيق؛ حاول مرة أخرى عند انتهائه.
 	The transform couldn't be applied.	تعذر تطبيق التحويل.
 # Preferences › Performance › GPU Memory; the status bar and slow-redraw notice
@@ -3549,3 +3552,30 @@ curves	Smooth	تنعيم
 	The path was kept as the Work Path	تم الاحتفاظ بالمسار كمسار عمل
 	The path was discarded	تم تجاهل المسار
 	Edit Brush…	تحرير الفرشاة…
+
+# Action Stop message (#8386)
+	Message	رسالة
+# Playback Options (#5212)
+	Playback Options…	خيارات التشغيل…
+	Playback Options	خيارات التشغيل
+	Accelerated	مُسرَّع
+	Step by Step	خطوة بخطوة
+	Pause For:	إيقاف مؤقت لمدة:
+	Pause For	إيقاف مؤقت لمدة
+	seconds	ثانية
+	Create a single history state	إنشاء حالة سجل واحدة
+
+# Channels panel menu (#11451)
+	New Channel…	قناة جديدة…
+	Duplicate Channel	تكرار القناة
+	Delete Channel	حذف القناة
+	New Spot Channel…	قناة لون موضعي جديدة…
+	Merge Spot Channel	دمج قناة اللون الموضعي
+	Channel Options…	خيارات القناة…
+	Split Channels	تقسيم القنوات
+	Merge Channels…	دمج القنوات…
+	Specify Channels:	تحديد القنوات:
+	Not enough grayscale documents for this mode.	لا توجد مستندات كافية بتدرج الرمادي لهذا الوضع.
+	Pick a different document for each channel.	اختر مستندًا مختلفًا لكل قناة.
+	A picked document is no longer open.	أحد المستندات المختارة لم يعد مفتوحًا.
+	A picked document is no longer a grayscale document of the same size.	أحد المستندات المختارة لم يعد مستندًا بتدرج الرمادي بالحجم نفسه.
