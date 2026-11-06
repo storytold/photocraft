@@ -458,10 +458,17 @@ pub fn render(tile: &Tile, place: &Placement, rect: Rect) -> Vec<[f32; 4]> {
     {
         let (ox, oy) = (place.origin.0 as i64, place.origin.1 as i64);
         let first = (i64::from(rect.x0) - ox).rem_euclid(tile.w as i64) as usize;
-        for y in rect.y0..rect.y1 {
+        let width = rect.width() as usize;
+        for (n, y) in (rect.y0..rect.y1).enumerate() {
+            if n >= tile.h {
+                let start = (n % tile.h) * width;
+                out.extend_from_within(start..start + width);
+                continue;
+            }
+            let start = out.len();
             let row = (i64::from(y) - oy).rem_euclid(tile.h as i64) as usize * tile.w;
             let mut x = first;
-            for _ in rect.x0..rect.x1 {
+            for _ in 0..width.min(tile.w) {
                 // Keep the bilinear accumulator's zero addition, including its signed-zero result.
                 let p = tile.at_index(row + x).map(|c| 0.0 + c * 1.0);
                 out.push(if p[3] == 1.0 { p } else { unpremultiply(p) });
@@ -469,6 +476,11 @@ pub fn render(tile: &Tile, place: &Placement, rect: Rect) -> Vec<[f32; 4]> {
                 if x == tile.w {
                     x = 0;
                 }
+            }
+            // A translated tile repeats these exact straight-RGBA bits in both axes.
+            while out.len() - start < width {
+                let copied = out.len() - start;
+                out.extend_from_within(start..start + copied.min(width - copied));
             }
         }
         return out;
@@ -556,7 +568,13 @@ mod tests {
                 for phase in [(0.0, 0.0), (-7.0, 3.0), (0.25, -0.75), (i32::MAX as f32, -3.0), (f32::NAN, 0.0)] {
                     for (scale, angle) in [(1.0, 0.0), (1.0, -0.0), (0.4, 17.0), (2.0, 0.0), (1.0, 90.0)] {
                         let place = Placement::new(Rect::new(-3, 5, 17, 19), true, phase, scale, angle);
-                        for rect in [Rect::new(-7, -3, 11, 6), Rect::new(i32::MAX - 3, -2, i32::MAX, 1), Rect::new(i32::MIN, -2, i32::MIN + 3, 1)] {
+                        for rect in [
+                            Rect::new(-7, -3, 11, 6),
+                            Rect::new(-7, -3, -7, 14),
+                            Rect::new(2, -3, 3, 14),
+                            Rect::new(i32::MAX - 3, -2, i32::MAX, 1),
+                            Rect::new(i32::MIN, -2, i32::MIN + 3, 1),
+                        ] {
                             let actual = render(&tile, &place, rect);
                             let mut expected = Vec::new();
                             let n = pixel_taps(place.inv_scale);
