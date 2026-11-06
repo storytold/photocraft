@@ -130,6 +130,7 @@ impl PhotocraftApp {
             synthetic_snapshot: None,
             automation_input: false,
             automation_dialogs: Vec::new(),
+            automation_pass_dialogs: None,
             run_depth: 0,
             paused_playbacks: Default::default(),
             channel_thumbs: None,

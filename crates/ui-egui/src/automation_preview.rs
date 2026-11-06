@@ -7,9 +7,9 @@
 //! on the canvas, where the client can screenshot it.
 //!
 //! The app remembers which dialogs automation opened or changed (a control request or a
-//! synthetic input pass that added or edited one). Their previews, and every
-//! preview computed while automation input is being handled, pass the policy first. Dialogs
-//! only the user touched preview as before.
+//! synthetic input pass that added or edited one). Their previews, and the previews of dialogs
+//! the synthetic input being handled opened or edited, pass the policy first. Dialogs only the
+//! user touched preview as before.
 
 use crate::PhotocraftApp;
 use serde_json::{Map, Value};
@@ -49,11 +49,19 @@ fn mark(app: &mut PhotocraftApp, ids: Vec<u64>) {
     app.automation_dialogs.retain(|id| open.iter().any(|d| d.id == *id));
 }
 
+/// Whether synthetic input being handled now could have opened or edited dialog `dialog` (its
+/// `fields`): it is not in the pass's starting snapshot with these fields, or the input began
+/// mid-pass with no snapshot. A user's dialog the pass left alone is not, so its preview is
+/// neither blanked nor cached blank for the frames after the pass.
+fn synthetic_reached(app: &PhotocraftApp, dialog: u64, fields: &Map<String, Value>) -> bool {
+    app.automation_input && !app.automation_pass_dialogs.as_ref().is_some_and(|before| before.iter().any(|(id, f)| *id == dialog && f == fields))
+}
+
 /// Why the automation policy refuses to preview dialog `dialog` (its `fields`) as `command` with
-/// `params`, or None when the preview may run. Only automation-driven dialogs, or previews
-/// computed while automation input is handled, are judged; the user's own dialogs never are.
+/// `params`, or None when the preview may run. Only automation-driven dialogs, including those
+/// the synthetic input being handled opened or edited, are judged; the user's own dialogs never are.
 pub(crate) fn refusal(app: &PhotocraftApp, dialog: u64, fields: &Map<String, Value>, command: &str, params: &Value) -> Option<String> {
-    if !(app.automation_input || app.session.authorize.is_some() || app.automation_dialogs.contains(&dialog)) {
+    if !(app.session.authorize.is_some() || app.automation_dialogs.contains(&dialog) || synthetic_reached(app, dialog, fields)) {
         return None;
     }
     // What confirming would be judged as (the dialog's command and fields), then what the
@@ -199,6 +207,40 @@ mod tests {
         app.ui.dialog_mut(mine).unwrap().fields.insert("mapPath".into(), json!("elsewhere.png"));
         super::note_changes(&mut app, &before);
         assert!(app.automation_dialogs.contains(&mine), "a dialog the pass edited is automation-driven");
+    }
+
+    /// A preview drawn during a synthetic input pass is judged only for the dialogs that input
+    /// opened or edited: the user's dialog it left alone keeps its preview, during the pass and
+    /// after it, instead of a blank one cached under the same key.
+    #[test]
+    fn synthetic_pass_does_not_blank_the_users_untouched_preview() {
+        let dir = temp_dir("pass");
+        let map = dir.join("map.png");
+        std::fs::write(&map, displace_map()).unwrap();
+        let (mut app, ctx) = confined_app();
+        app.session.execute("file.new", json!({"width": 64, "height": 64})).unwrap();
+        app.session.execute("filter.render.clouds", json!({"seed": 4})).unwrap();
+        let mine = crate::dialogs::open_command_dialog(&mut app, "filter.distort.displace", "Displace");
+        for (field, value) in [("mapPath", json!(map.to_string_lossy())), ("horizontal", json!(50)), ("vertical", json!(50))] {
+            app.ui.dialog_mut(mine).unwrap().fields.insert(field.into(), value);
+        }
+
+        // A synthetic pass that leaves the dialog as it was: the preview runs, and still runs after.
+        app.automation_input = true;
+        app.automation_pass_dialogs = Some(super::snapshot(&app));
+        assert!(preview_pixels(&mut app, &ctx).is_some(), "the untouched user dialog still previews during the pass");
+        app.automation_input = false;
+        app.automation_pass_dialogs = None;
+        assert!(preview_pixels(&mut app, &ctx).is_some(), "and after it");
+
+        // The same pass editing the dialog: its preview is judged and refused.
+        app.automation_input = true;
+        app.automation_pass_dialogs = Some(super::snapshot(&app));
+        app.ui.dialog_mut(mine).unwrap().fields.insert("horizontal".into(), json!(40));
+        assert_eq!(preview_pixels(&mut app, &ctx), None, "a dialog the pass edited is judged");
+        app.automation_input = false;
+        app.automation_pass_dialogs = None;
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A Color Lookup dialog a client pointed at a refused LUT previews nothing, while the
