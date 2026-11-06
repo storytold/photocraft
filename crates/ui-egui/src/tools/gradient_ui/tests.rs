@@ -773,3 +773,38 @@ fn a_paste_with_an_empty_clipboard_leaves_the_pending_mask_gradient_alone() {
     assert!(app.run("edit.paste", json!({})).is_err(), "paste is refused");
     assert_eq!((mask::pending(&app), app.session.active().unwrap().revision), (pending, revision), "nothing was painted");
 }
+
+/// CodeRabbit on #10722: the preview and the paint take one line length, handle drags included.
+/// A handle dragged until the line is shorter than the preview shows keeps the line the gradient
+/// already has, rather than leaving one waiting that nothing on screen draws.
+#[test]
+fn a_handle_dragged_shorter_than_the_preview_keeps_the_line_it_had() {
+    let (mut app, _) = app_on_mask();
+    app.ui.views[0].zoom = 8.0;
+    assert!(app.point_zoom() >= 7.9);
+    drag(&mut app, [20.0, 60.0], [120.0, 60.0]);
+    let line = mask::pending(&app).expect("a gradient is pending");
+    // Grab the end handle and pull it onto the start: half a document pixel apart, which the
+    // preview does not show.
+    drag(&mut app, [120.0, 60.0], [20.5, 60.0]);
+    assert_eq!(mask::pending(&app), Some(line), "the line it had, not an invisible one");
+    // A handle drag that keeps the line long enough does move it.
+    drag(&mut app, [120.0, 60.0], [80.0, 60.0]);
+    assert_eq!(mask::pending(&app), Some(([20.0, 60.0], [80.0, 60.0])), "a visible line moves the end");
+}
+
+/// CodeRabbit on #10722: a drag ends with the tool it started on. Switching to another tool while
+/// the button is down leaves nothing for the release to store.
+#[test]
+fn a_mask_drag_ends_when_the_tool_changes_under_it() {
+    let (mut app, _) = app_on_mask();
+    crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 20.0, y: 60.0, pressure: 1.0 }, mods());
+    crate::canvas::tool_event(&mut app, ToolEvent::Move { x: 120.0, y: 60.0, pressure: 1.0 }, mods());
+    assert!(app.gradient.mask.dragging(), "a drag is under way");
+    app.ui.tool = Tool::Brush;
+    mask::tick(&mut app);
+    assert!(!app.gradient.mask.dragging(), "the drag ended with the tool");
+    app.ui.tool = Tool::Gradient;
+    crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 120.0, y: 60.0 }, mods());
+    assert_eq!(mask::pending(&app), None, "the release stores nothing for a drag that ended");
+}

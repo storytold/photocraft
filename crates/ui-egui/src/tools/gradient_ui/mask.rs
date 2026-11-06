@@ -174,13 +174,15 @@ fn release(app: &mut PhotocraftApp) {
     if (doc, layer) != (d.doc, d.layer) {
         return;
     }
-    let zoom = app.point_zoom().max(0.01);
-    // A click draws nothing and leaves a pending gradient as it is. A new line is as long as the
-    // preview needs to show it ([`display_doc`]), so nothing is painted that was never shown.
-    let moved = match d.grab {
-        None => dist(d.from, d.to) * zoom >= 2.0 && dist(d.from, d.to) >= MIN_SPAN,
-        Some(_) => d.from != d.start.0 || d.to != d.start.1,
-    };
+    // A click draws nothing and leaves a pending gradient as it is. A line is taken only when it
+    // is long enough to be previewed, handle drags included: a handle dragged until the line is
+    // shorter than that would otherwise leave a gradient waiting that nothing on screen shows
+    // (CodeRabbit on #10722). Such a drag keeps the line the pending gradient already has.
+    let moved = long_enough(app, d.from, d.to)
+        && match d.grab {
+            None => true,
+            Some(_) => d.from != d.start.0 || d.to != d.start.1,
+        };
     if moved {
         let q = Pending { doc, layer, revision, from: d.from, to: d.to };
         let list = &mut app.gradient.mask.pending;
@@ -193,6 +195,14 @@ fn release(app: &mut PhotocraftApp) {
 
 /// The shortest line, in document pixels, a mask gradient is previewed and painted for.
 const MIN_SPAN: f32 = 1.0;
+
+/// Whether the line `from`→`to` is long enough to show: at least [`MIN_SPAN`] document pixels and
+/// two points on screen. The one test for it, so that what is painted is what was previewed —
+/// [`release`] takes no shorter line and [`display_doc`] previews every line it takes.
+fn long_enough(app: &PhotocraftApp, from: [f32; 2], to: [f32; 2]) -> bool {
+    let d = dist(from, to);
+    d >= MIN_SPAN && d * app.point_zoom().max(0.01) >= 2.0
+}
 
 /// `paint.gradient`'s params for line `from`→`to` on the mask of `layer`.
 fn params(app: &PhotocraftApp, layer: LayerId, from: [f32; 2], to: [f32; 2]) -> Value {
@@ -250,6 +260,14 @@ pub(crate) fn tick(app: &mut PhotocraftApp) {
         let open: Vec<DocId> = app.session.documents().iter().map(|st| st.doc.id).collect();
         app.gradient.mask.pending.retain(|q| open.contains(&q.doc));
     }
+    // A drag ends with the tool or the target it started on: the gesture has nothing left to draw
+    // on, so the release must not store a line for it (CodeRabbit on #10722).
+    if let Some(d) = app.gradient.mask.drag
+        && (!active(app) || target(app).is_none_or(|(doc, layer, _)| (doc, layer) != (d.doc, d.layer)))
+    {
+        app.gradient.mask.drag = None;
+        app.gradient.mask.preview = None;
+    }
     let Some(q) = pending_in_active(app) else { return };
     let Some((_, layer, revision)) = target(app) else { return };
     if revision != q.revision {
@@ -292,17 +310,19 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
         app.gradient.mask.preview = None;
         return None;
     }
-    let Some((from, to)) = shown(app).filter(|(f, t)| dist(*f, *t) >= MIN_SPAN) else {
+    let Some((from, to)) = shown(app).filter(|(f, t)| long_enough(app, *f, *t)) else {
         app.gradient.mask.preview = None;
         return None;
     };
-    let (_, layer, revision) = target(app)?;
+    let (doc, layer, revision) = target(app)?;
     let p = params(app, layer, from, to);
     // The colours the gradient takes from outside its params: the foreground and background, and
     // the current gradient (Gradients panel), so a change to either shows at once.
     let (tools, presets) = (&app.session.tools, &app.session.presets);
     let colours = format!("{:?}{:?}{:?}", tools.foreground, tools.background, presets.gradient);
-    let key = super::preview_key(revision, &format!("mask{p}{colours}"));
+    // The document's id as well: two documents can stand at the same revision, and the key is
+    // what tells one preview from another (CodeRabbit on #10722).
+    let key = super::preview_key(revision, &format!("mask{}{p}{colours}", doc.0));
     if let Some((k, d)) = &app.gradient.mask.preview
         && *k == key
     {
