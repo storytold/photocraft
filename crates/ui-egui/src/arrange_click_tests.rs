@@ -160,3 +160,23 @@ fn a_press_counts_where_it_began() {
     let seen = frame(vec![press, egui::Event::PointerMoved(b.center())]);
     assert_eq!(seen, (true, false), "the press began on a");
 }
+
+/// A quick click, its press and release in one frame (a tap, or a slow frame), still counts for
+/// the rectangle it was made on: egui has already dropped the press origin by then.
+#[test]
+fn a_click_within_one_frame_counts() {
+    let ctx = egui::Context::default();
+    let (a, b) = (egui::Rect::from_min_size(egui::pos2(0.0, 0.0), vec2(100.0, 100.0)), egui::Rect::from_min_size(egui::pos2(100.0, 0.0), vec2(100.0, 100.0)));
+    let frame = |events: Vec<egui::Event>| {
+        let input = egui::RawInput { events, screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(200.0, 100.0))), ..Default::default() };
+        let mut seen = (false, false, false);
+        let mut out = ctx.run_ui(input, |ui| {
+            seen = (crate::canvas::pressed_on(ui, a, true), crate::canvas::pressed_on(ui, b, true), crate::canvas::pressed_on(ui, a, false));
+        });
+        out.textures_delta.clear();
+        seen
+    };
+    frame(vec![egui::Event::PointerMoved(a.center())]);
+    let button = |pressed| egui::Event::PointerButton { pos: a.center(), button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    assert_eq!(frame(vec![button(true), button(false)]), (true, false, true), "the click was on a");
+}
