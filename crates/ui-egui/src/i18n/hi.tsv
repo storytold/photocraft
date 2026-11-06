@@ -65,6 +65,10 @@
 	Close	बंद करें
 	Close All	सभी बंद करें
 	Close Others	अन्य सभी बंद करें
+	New Document…	New Document…
+	Open Document…	खोलें…
+	Consolidate All to Here	सभी को यहाँ समेकित करें
+	Move to New Window	नई विंडो में ले जाएँ
 	Save	सहेजें
 	Save As…	इस रूप में सहेजें…
 	Save a Copy…	एक प्रति सहेजें…
@@ -630,6 +634,8 @@ cameraRaw	Yellow	पीला
 @plural	{n} action file loaded|{n} action files loaded	{n} एक्शन फ़ाइल लोड हुई|{n} एक्शन फ़ाइलें लोड हुईं
 	{set} from {file} replaced the one from {earlier}	{file} के सेट {set} ने {earlier} वाले सेट की जगह ले ली
 @plural	{n} file could not be loaded: {errors}|{n} files could not be loaded: {errors}	{n} फ़ाइल लोड नहीं हो सकी: {errors}|{n} फ़ाइलें लोड नहीं हो सकीं: {errors}
+	Embed Linked	लिंक किए गए को एम्बेड करें
+	Embed All Linked	सभी लिंक किए गए को एम्बेड करें
 	Toggle reference point	संदर्भ बिंदु दिखाएँ/छिपाएँ
 
 # Action Stop message (#8386)

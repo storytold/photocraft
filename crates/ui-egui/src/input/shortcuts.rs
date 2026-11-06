@@ -708,6 +708,11 @@ fn handle_pen_and_work_path_keys(app: &mut PhotocraftApp, ctx: &egui::Context, f
         crate::vector_ui::pen_end(app);
         return true;
     }
+    // A shape box handle drag: Esc drops it, the shapes keep their size (#11107).
+    if app.ui.shape_box.is_some() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+        crate::shape_bounds_box::cancel(app);
+        return true;
+    }
     // A finished work path shown by the Pen or Path Selection: ⌫/Delete deletes it, as in
     // Photoshop (#5702), never Edit › Clear on the pixels under it.
     if focus != crate::shortcut_dispatch::Focus::DeletingWidget && crate::vector_ui::delete_key_deletes_work_path(app) {
@@ -909,12 +914,18 @@ fn select_tool_by_key(app: &mut PhotocraftApp, ctx: &egui::Context, pressed: &im
         let cycle_shift = shift_switch && ctx.input_mut(|i| i.consume_key(Modifiers::SHIFT, k));
         if cycle_shift || pressed(k) {
             let before = app.ui.tool;
-            let group: Vec<Tool> = Tool::ALL.iter().copied().filter(|x| x.key() == t.key() && crate::tool_shortcuts::uses_default(app, *x)).collect();
+            let mut group: Vec<Tool> = Tool::ALL.iter().copied().filter(|x| x.key() == t.key() && crate::tool_shortcuts::uses_default(app, *x)).collect();
+            // Shift+key (the cycle and the fallback to the group's first tool) uses the toolbar
+            // flyout's order; plain keys keep the `Tool::ALL` order.
+            if cycle_shift {
+                group.sort_by_key(|x| crate::panels::toolbar::toolbar_position(*x));
+            }
             app.ui.tool = match group.iter().position(|x| *x == app.ui.tool) {
                 Some(i) if shift_switch && !cycle_shift => group[i],
                 Some(i) => group[(i + 1) % group.len()],
                 None => app.ui.group_tool(t.key()).filter(|last| group.contains(last)).unwrap_or(group[0]),
             };
+            crate::tool_memory::ended_by_tool(app);
             // `consume_key` ignores extra ⇧ and ⌥: a ⇧/⌥ switch is never spring-loaded.
             let (plain, now) = ctx.input(|i| (!cycle_shift && !i.modifiers.shift && !i.modifiers.alt, i.time));
             crate::spring_tools::pressed(app, t.key(), before, plain, now);
