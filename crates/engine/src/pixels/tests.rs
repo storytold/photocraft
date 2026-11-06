@@ -407,7 +407,7 @@ fn hue_saturation_and_color_balance_keep_a_cmyk_layers_black() {
 
 /// Layer › New Adjustment Layer › Channel Mixer in a CMYK document makes a mixer with cyan,
 /// magenta, yellow and black outputs (#8047); its identity leaves the inks alone, the destructive
-/// command mixes the stored inks, and a mix changes only the ink it targets.
+/// command mixes the ink amounts as Photoshop does, and a mix changes only the ink it targets.
 #[test]
 fn channel_mixer_in_a_cmyk_document_mixes_the_inks() {
     let mut s = crate::Session::new();
@@ -433,12 +433,12 @@ fn channel_mixer_in_a_cmyk_document_mixes_the_inks() {
     let ink = [0.2, 0.4, 0.6, 0.1, 1.0];
     let same = adjusted_pixel(cmyk, &ink, &adj, None);
     assert!(same.iter().zip(&ink).all(|(g, w)| (g - w).abs() < 1e-4), "identity: {same:?}");
-    // Magenta's stored value (1 - ink) less 20 %: 20 % more magenta ink, the rest untouched.
-    let more_magenta = crate::adjust_params::from_params("channelMixer", &json!({"magenta": [0, 100, 0, 0, -20]}), None, ColorMode::Cmyk).unwrap();
+    // Magenta from itself plus a 20 % constant: 20 % more magenta ink, the rest untouched.
+    let more_magenta = crate::adjust_params::from_params("channelMixer", &json!({"magenta": [0, 100, 0, 0, 20]}), None, ColorMode::Cmyk).unwrap();
     let got = adjusted_pixel(cmyk, &ink, &more_magenta, None);
     let want = [0.2, 0.6, 0.6, 0.1, 1.0];
     assert!(got.iter().zip(&want).all(|(g, w)| (g - w).abs() < 1e-4), "magenta: {got:?}");
-    // Black from cyan: black's stored value is cyan's (0.8), so 20 % black ink.
+    // Black from cyan: the black ink becomes cyan's 20 %.
     let black_from_cyan = crate::adjust_params::from_params("channelMixer", &json!({"black": [100, 0, 0, 0, 0]}), None, ColorMode::Cmyk).unwrap();
     let got = adjusted_pixel(cmyk, &ink, &black_from_cyan, None);
     let want = [0.2, 0.4, 0.6, 0.2, 1.0];

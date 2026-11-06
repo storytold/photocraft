@@ -653,8 +653,12 @@ fn parse_channel_mixer(d: &[u8]) -> Option<Adjustment> {
 }
 
 /// `mixr` in a CMYK document: the same layout with four output records (cyan, magenta,
-/// yellow, black), each using all four sources (cyan, magenta, yellow, black) and the constant.
-/// A monochrome block may carry only its first record (the mix the black ink gets).
+/// yellow, black), each using all four sources (cyan, magenta, yellow, black) and the constant,
+/// on ink amounts. Photoshop writes exactly these four records (photoshop corpus cmyk8 and
+/// cmyk16 channel-mixer.psd: a 44-byte block whose black record is all zeros, and whose merged
+/// image has no black ink). A monochrome block may carry only its first record (the mix the
+/// black ink gets); no Photoshop sample of one exists yet, and an unedited one is saved back as
+/// it was read.
 fn parse_cmyk_mixer(d: &[u8]) -> Option<Adjustment> {
     if be16(d, 0)? != 1 {
         return None;
@@ -700,27 +704,38 @@ fn levels_write(v: &mut Vec<u8>, c: &LevelsChannel) {
 /// when it already has that shape (or is not a mixer). A PSD stores no output shape: a CMYK
 /// document reads four ink records and every other mode three RGB records, so a mixer of the
 /// other shape could not be read back as it is. An RGB mixer in a CMYK document becomes ink
-/// outputs on the stored channel values (cyan from the red row, magenta from green, yellow
-/// from blue, sources red, green, blue as cyan, magenta, yellow) with black passed through; a
-/// CMYK mixer elsewhere keeps its cyan, magenta and yellow rows as red, green and blue without
-/// the black source. Either is an approximation, so the caller warns.
+/// outputs (cyan from the red row, magenta from green, yellow from blue, sources red, green,
+/// blue as cyan, magenta, yellow) with black passed through; a CMYK mixer elsewhere keeps its
+/// cyan, magenta and yellow rows as red, green and blue without the black source. A CMYK mixer
+/// mixes ink amounts and an RGB one light (ink = 1 - light, ignoring black), so each row keeps
+/// its sources and its constant becomes `complement_constant`. Either is an approximation, so
+/// the caller warns.
 pub fn mixer_for(adj: &Adjustment, channels: Channels) -> Option<Adjustment> {
     let Adjustment::ChannelMixer { matrix, monochrome, cmyk } = adj else { return None };
     match (cmyk, channels == Channels::Cmyk) {
         (None, true) => {
             let mut rows = photocraft_doc::adjust::CMYK_MIXER_IDENTITY;
             for (row, m) in rows.iter_mut().zip(matrix) {
-                *row = [m[0], m[1], m[2], 0.0, m[3]];
+                *row = [m[0], m[1], m[2], 0.0, complement_constant(m[0], m[1], m[2], m[3])];
             }
             let matrix = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]];
             Some(Adjustment::ChannelMixer { matrix, monochrome: *monochrome, cmyk: Some(rows) })
         }
         (Some(rows), false) => {
-            let matrix = std::array::from_fn(|i| rows.get(i).map_or([0.0; 4], |r| [r[0], r[1], r[2], r[4]]));
+            let matrix = std::array::from_fn(|i| rows.get(i).map_or([0.0; 4], |r| [r[0], r[1], r[2], complement_constant(r[0], r[1], r[2], r[4])]));
             Some(Adjustment::ChannelMixer { matrix, monochrome: *monochrome, cmyk: None })
         }
         _ => None,
     }
+}
+
+/// The constant of a mixer row with sources `a`, `b`, `c` and constant `k` once it mixes the
+/// complements of its inputs and output (ink for light, or light for ink): 1 - a - b - c - k,
+/// since 1 - (a(1 - x) + b(1 - y) + c(1 - z) + k) = ax + by + cz + (1 - a - b - c - k). It is
+/// rounded to the whole percent a `mixr` record stores and kept to its -200..200 %, so the saved
+/// block reads back the same.
+fn complement_constant(a: f32, b: f32, c: f32, k: f32) -> f32 {
+    ((1.0 - a - b - c - k) * 100.0).round().clamp(-200.0, 200.0) / 100.0
 }
 
 /// Serializes an adjustment into its PSD blocks: `(key, data)` pairs

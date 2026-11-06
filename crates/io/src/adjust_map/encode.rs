@@ -236,10 +236,11 @@ pub(super) fn channel_mixer(matrix: &[[f32; 4]; 3], monochrome: bool) -> Vec<u8>
 }
 
 /// CMYK Channel Mixer payload: the cyan, magenta, yellow and black records (each C, M, Y, K and
-/// constant), then the monochrome record (the first row).
+/// constant), 44 bytes as Photoshop writes them (photoshop corpus cmyk8 and cmyk16
+/// channel-mixer.psd). With `monochrome` the first record is the black ink's mix.
 pub(super) fn channel_mixer_cmyk(rows: &[[f32; 5]; 4], monochrome: bool) -> Vec<u8> {
     let mut v = words(&[1, u16::from(monochrome)]);
-    for row in rows.iter().chain(rows.first()) {
+    for row in rows {
         for x in row {
             v.extend_from_slice(&clamp_i16((x * 100.0).clamp(-200.0, 200.0)).to_be_bytes());
         }

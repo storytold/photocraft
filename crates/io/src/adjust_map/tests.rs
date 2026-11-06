@@ -624,6 +624,9 @@ fn channel_mixer_golden_blocks() {
     assert_eq!(matrix[0], [0.3, 0.59, 0.11, 0.0]);
 }
 
+/// CMYK `mixr` blocks hold four ink records (cyan, magenta, yellow, black), each C, M, Y, K and
+/// constant, and are written back in Photoshop's own 44-byte layout (photoshop corpus cmyk8 and
+/// cmyk16 channel-mixer.psd), monochrome or not.
 #[test]
 fn cmyk_channel_mixer_blocks_round_trip_with_four_ink_outputs() {
     // Cyan = 100 % C + 20 % K - 10 % const; magenta = 50 % M + 50 % Y; yellow = 100 % Y;
@@ -634,12 +637,21 @@ fn cmyk_channel_mixer_blocks_round_trip_with_four_ink_outputs() {
     let a = parse(b"mixr", &d, None, Channels::Cmyk);
     let Adjustment::ChannelMixer { cmyk: Some(got), monochrome: false, .. } = &a else { panic!("{a:?}") };
     assert_eq!(*got, rows);
-    // Written as the four ink records plus the monochrome record (the first row), and read back.
+    // Written as the same four ink records, and read back.
     let w = write(&a);
     assert_eq!(w[0].0, *b"mixr");
-    assert_eq!(w[0].1[..d.len()], d[..]);
-    assert_eq!(w[0].1[d.len()..], i16s(&[100, 0, 0, 20, -10])[..]);
+    assert_eq!(w[0].1, d);
     assert_eq!(parse(b"mixr", &w[0].1, None, Channels::Cmyk), a);
+    // Photoshop's block (photoshop corpus cmyk8 channel-mixer.psd, set to cyan 80/30/-10,
+    // magenta 10/90/0 +5, yellow 0/20/70 and no black record): read as four ink rows, the black
+    // one empty (the file's merged image has no black ink), and written back byte for byte.
+    let mut ps = i16s(&[1, 0]);
+    ps.extend(i16s(&[80, 30, -10, 0, 0, 10, 90, 0, 0, 5, 0, 20, 70, 0, 0, 0, 0, 0, 0, 0]));
+    assert_eq!(ps.len(), 44);
+    let a = parse(b"mixr", &ps, None, Channels::Cmyk);
+    let Adjustment::ChannelMixer { cmyk: Some(got), monochrome: false, .. } = &a else { panic!("{a:?}") };
+    assert_eq!(*got, [[0.8, 0.3, -0.1, 0.0, 0.0], [0.1, 0.9, 0.0, 0.0, 0.05], [0.0, 0.2, 0.7, 0.0, 0.0], [0.0; 5]]);
+    assert_eq!(write(&a)[0].1, ps);
     for mono in [false, true] {
         let m = Adjustment::ChannelMixer {
             matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]],
@@ -659,16 +671,17 @@ fn channel_mixers_are_reshaped_to_the_document_mode() {
     let rgb = Adjustment::ChannelMixer { matrix: [[0.0, 1.0, 0.0, 0.1], [1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 1.0, -0.2]], monochrome: false, cmyk: None };
     let Some(ink) = mixer_for(&rgb, Channels::Cmyk) else { panic!("an RGB mixer in CMYK is reshaped") };
     let Adjustment::ChannelMixer { cmyk: Some(rows), .. } = &ink else { panic!("{ink:?}") };
-    assert_eq!(*rows, [[0.0, 1.0, 0.0, 0.0, 0.1], [1.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0, -0.2], [0.0, 0.0, 0.0, 1.0, 0.0]]);
+    // Ink = 1 - light, so each constant becomes 1 - sources - constant.
+    assert_eq!(*rows, [[0.0, 1.0, 0.0, 0.0, -0.1], [1.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0, 0.2], [0.0, 0.0, 0.0, 1.0, 0.0]]);
     let b = write(&ink);
     assert_eq!(parse(&b[0].0, &b[0].1, None, Channels::Cmyk), ink);
     let cmyk = Adjustment::ChannelMixer {
         matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]],
         monochrome: true,
-        cmyk: Some([[0.3, 0.3, 0.3, 1.0, 0.05], [0.0, 1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0, 0.0]]),
+        cmyk: Some([[0.3, 0.3, 0.2, 1.0, 0.05], [0.0, 1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0, 0.0]]),
     };
     let Some(screen) = mixer_for(&cmyk, Channels::Rgb) else { panic!("a CMYK mixer in RGB is reshaped") };
-    assert_eq!(screen, Adjustment::ChannelMixer { matrix: [[0.3, 0.3, 0.3, 0.05], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]], monochrome: true, cmyk: None });
+    assert_eq!(screen, Adjustment::ChannelMixer { matrix: [[0.3, 0.3, 0.2, 0.15], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]], monochrome: true, cmyk: None });
     let b = write(&screen);
     assert_eq!(parse(&b[0].0, &b[0].1, None, Channels::Rgb), screen);
     // Matching shapes and other adjustments are left alone.

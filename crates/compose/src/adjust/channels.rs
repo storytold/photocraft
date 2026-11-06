@@ -85,20 +85,23 @@ pub fn cmyk_mixer(adj: &Adjustment) -> bool {
     matches!(adj, Adjustment::ChannelMixer { cmyk: Some(_), .. })
 }
 
-/// A CMYK Channel Mixer on one pixel's inks (C, M, Y, K; 0 none): each output's stored value
-/// (1 - ink) is its row's mix of the four stored values plus the constant, clipped to 0..1, so
-/// a positive constant takes ink away as Photoshop's Constant adds white. With `monochrome` the
-/// first row's mix goes to the black ink alone and cyan, magenta and yellow are cleared.
+/// A CMYK Channel Mixer on one pixel's inks (C, M, Y, K; 0 none): each output ink is its row's
+/// mix of the four ink amounts plus the constant, clipped to 0..1, so a positive constant adds
+/// ink. Photoshop corpus cmyk8 and cmyk16 channel-mixer.psd follow this on every pixel (within
+/// 0.8 and 0.4 of a level of 255), black output included: its all-zero record leaves no black
+/// ink. Mixing the stored values (1 - ink) instead misses by up to 255 levels there. With
+/// `monochrome` the first row's mix goes to the black ink alone and cyan, magenta and yellow are
+/// cleared (no Photoshop sample of a monochrome CMYK mixer yet).
 pub fn mix_inks(rows: &[[f32; 5]; 4], monochrome: bool, ink: &mut [f32]) {
-    let stored: [f32; 4] = std::array::from_fn(|i| {
+    let inks: [f32; 4] = std::array::from_fn(|i| {
         let v = ink.get(i).copied().unwrap_or(0.0);
-        if v.is_finite() { 1.0 - v.clamp(0.0, 1.0) } else { 1.0 }
+        if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 }
     });
     let mix = |r: &[f32; 5]| {
-        let v = r[0] * stored[0] + r[1] * stored[1] + r[2] * stored[2] + r[3] * stored[3] + r[4];
-        if v.is_finite() { v.clamp(0.0, 1.0) } else { 1.0 }
+        let v = r[0] * inks[0] + r[1] * inks[1] + r[2] * inks[2] + r[3] * inks[3] + r[4];
+        if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 }
     };
-    let out: [f32; 4] = if monochrome { [0.0, 0.0, 0.0, 1.0 - mix(&rows[0])] } else { std::array::from_fn(|j| 1.0 - mix(&rows[j])) };
+    let out: [f32; 4] = if monochrome { [0.0, 0.0, 0.0, mix(&rows[0])] } else { std::array::from_fn(|j| mix(&rows[j])) };
     for (v, o) in ink.iter_mut().zip(out) {
         *v = o;
     }

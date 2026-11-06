@@ -268,10 +268,12 @@ pub enum Adjustment {
         matrix: [[f32; 4]; 3],
         monochrome: bool,
         /// A CMYK document's mixer (Photoshop's Cyan, Magenta, Yellow and Black outputs): one row
-        /// per output, each `[cyan, magenta, yellow, black, constant]`, evaluated on the stored
-        /// channel values (1 - ink) as Photoshop's CMYK channels hold them. When set, `matrix` is
-        /// unused; with `monochrome` the first row is the mix the black ink gets, and cyan,
-        /// magenta and yellow are cleared.
+        /// per output, each `[cyan, magenta, yellow, black, constant]`, evaluated on the ink
+        /// amounts (0 none, 1 full; a positive constant adds ink). When set, `matrix` is unused;
+        /// with `monochrome` the first row is the mix the black ink gets, and cyan, magenta and
+        /// yellow are cleared. `.pcraft` files from builds before #8047 have no such field and
+        /// load as `None`; those builds ignore it, so they reopen a CMYK mixer as `matrix`
+        /// (identity) and drop the ink rows on their next save.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cmyk: Option<[[f32; 5]; 4]>,
     },
