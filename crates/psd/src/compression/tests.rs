@@ -439,11 +439,38 @@ fn zip_garbage_errors() {
 
 #[test]
 fn zip_output_matches_the_growing_writer() {
-    for bytes in [Vec::new(), vec![0; 131072], (0..131072).map(|i| (i * 31 + i / 173) as u8).collect()] {
+    let mut seed = 0x12345678u32;
+    let noise = (0..1_048_577)
+        .map(|_| {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            seed as u8
+        })
+        .collect();
+    for bytes in [Vec::new(), vec![0; 131072], (0..131072).map(|i| (i * 31 + i / 173) as u8).collect(), noise] {
         let mut old = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
         old.write_all(&bytes).unwrap();
-        assert_eq!(zip_compress(&bytes), old.finish().unwrap());
+        let packed = zip_compress(&bytes);
+        assert_eq!(packed, old.finish().unwrap());
+        #[cfg(not(target_arch = "wasm32"))]
+        assert_eq!(packed.capacity(), packed.len());
     }
+}
+
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn zip_output_blocks_stay_bounded_across_writes() {
+    let bytes = vec![42; (1 << 20) + 1];
+    let mut output = ZipOutput::default();
+    output.write_all(&[]).unwrap();
+    for part in bytes.chunks(32767) {
+        output.write_all(part).unwrap();
+    }
+    assert!(output.blocks.iter().chain([&output.current]).all(|b| b.capacity() <= 256 << 10));
+    let packed = output.into_vec();
+    assert_eq!(packed, bytes);
+    assert_eq!(packed.capacity(), packed.len());
 }
 
 #[test]
