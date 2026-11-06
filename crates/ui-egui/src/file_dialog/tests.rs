@@ -1578,3 +1578,31 @@ fn save_flat_in_place_asks_when_the_format_would_lose_transparency_or_depth() {
         }
     }
 }
+
+/// A flat file written back in place (`Services::save_flat_in_place`) that another app changed
+/// keeps a script's JPEG Options answer through the changed-on-disk prompt: Replace writes with
+/// it, not with the defaults.
+#[test]
+fn save_flat_in_place_keeps_a_scripted_quality_through_the_changed_on_disk_prompt() {
+    let ctx = egui::Context::default();
+    let path = "/pics/photo.jpg";
+    let (mut app, _open, written) = jpeg_app(Some(path), false);
+    app.services.save_flat_in_place = true;
+    let qualities: Rc<RefCell<Vec<Option<u8>>>> = Rc::default();
+    let q = qualities.clone();
+    app.services.export = Some(Box::new(move |_: &photocraft_doc::Document, _: &str, s: &crate::ExportSettings| {
+        q.borrow_mut().push(s.jpeg_quality);
+        Ok((b"out".to_vec(), Vec::new()))
+    }));
+    let disk = on_disk(&mut app);
+    changed_by_another_app(&disk, path);
+    app.opened_from(path);
+    app.run("image.adjustments.invert", json!({})).unwrap();
+    changed_by_another_app(&disk, path);
+    menus::invoke(&mut app, &ctx, "file.save", json!({"quality": 5})).unwrap();
+    assert!(written.borrow().is_empty(), "the changed file is not replaced before the answer");
+    let id = disk_prompt(&app).expect("Save asks first").id;
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    assert_eq!(*written.borrow(), [path]);
+    assert_eq!(qualities.borrow().last().copied().flatten(), Some(photocraft_engine::file_cmds::jpeg_quality(5.0)));
+}

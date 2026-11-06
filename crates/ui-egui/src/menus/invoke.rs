@@ -285,8 +285,7 @@ fn invoke_file_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, 
                                 crate::notices::post(app, title, vec![line.to_string()], false, None);
                                 app.save_as_with(None, choices)
                             } else {
-                                crate::disk_change_prompt::intercept(app, doc, &path, false, crate::FormatChoices::default())
-                                    .unwrap_or_else(|| app.save_in_place(path, choices))
+                                crate::disk_change_prompt::intercept(app, doc, &path, false, choices).unwrap_or_else(|| app.save_in_place(path, choices))
                             }
                         }
                         Some((false, path, d)) if photocraft_engine::file_cmds::saves_in_place(&path) => {
