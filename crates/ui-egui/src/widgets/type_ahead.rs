@@ -26,7 +26,8 @@ pub fn list_open(ctx: &egui::Context) -> bool {
 pub fn keys(ui: &mut Ui, id: Id, current: Option<usize>, labels: &[&str]) -> Option<usize> {
     let pass = ui.ctx().cumulative_pass_nr();
     ui.data_mut(|d| d.insert_temp(open_id(), pass));
-    let key = id.with("type-ahead");
+    let lang = crate::i18n::current();
+    let key = id.with("type-ahead").with(lang.code());
     // A list opened anew starts with no letters typed.
     let shown_id = key.with("pass");
     ui.data_mut(|d| {
@@ -57,22 +58,22 @@ pub fn keys(ui: &mut Ui, id: Id, current: Option<usize>, labels: &[&str]) -> Opt
     if !(now >= last && now - last <= PAUSE) {
         prefix.clear();
     }
-    let lower: Vec<String> = labels.iter().map(|l| l.to_lowercase()).collect();
+    let lower: Vec<String> = labels.iter().map(|l| lang.lowercase(l)).collect();
     let mut pick = None;
     for c in typed.chars().filter(|c| !c.is_control()) {
         // A space only counts inside a prefix ("linear b"), never to start one.
         if c.is_whitespace() && prefix.is_empty() {
             continue;
         }
-        prefix.extend(c.to_lowercase());
+        prefix.push(c);
         let from = pick.or(current);
-        let mut found = find(&lower, &prefix, from);
+        let mut found = find(&lower, &lang.lowercase(&prefix), from);
         // A letter that leads nowhere after the others starts a new prefix ("m" then "d" is D).
         if found.is_none() {
             prefix.clear();
             if !c.is_whitespace() {
-                prefix.extend(c.to_lowercase());
-                found = find(&lower, &prefix, from);
+                prefix.push(c);
+                found = find(&lower, &lang.lowercase(&prefix), from);
             }
         }
         pick = found.or(pick);
@@ -100,6 +101,33 @@ fn find(lower: &[String], prefix: &str, from: Option<usize>) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::find;
+
+    /// Actual dropdown text input keeps dotted/dotless prefixes and decomposed I+dot distinct.
+    #[test]
+    fn azerbaijani_dropdown_type_ahead_handles_both_i_pairs() {
+        use egui::accesskit::Role;
+        use egui_kittest::{Harness, kittest::Queryable};
+        let az = crate::i18n::Lang::from_code("az").unwrap();
+        crate::i18n::with_language(az, || {
+            let mut h = Harness::builder().with_size(egui::vec2(300.0, 400.0)).build_ui_state(
+                |ui, selected: &mut usize| {
+                    crate::widgets::dropdown(ui, "az-i-pairs", "Mode", selected, &[(0, "Normal"), (1, "İşıq"), (2, "ıraq")], 120.0);
+                },
+                0,
+            );
+            h.get_by_role(Role::ComboBox).click();
+            h.run();
+            h.event(egui::Event::Text("İ".into()));
+            h.run();
+            assert_eq!(*h.state(), 1);
+            h.event(egui::Event::Text("I".into()));
+            h.run();
+            assert_eq!(*h.state(), 2);
+            h.event(egui::Event::Text("\u{307}".into()));
+            h.run();
+            assert_eq!(*h.state(), 1, "the combining dot completes the original I prefix");
+        });
+    }
 
     fn labels(l: &[&str]) -> Vec<String> {
         l.iter().map(|s| s.to_lowercase()).collect()

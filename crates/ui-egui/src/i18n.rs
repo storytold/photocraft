@@ -20,6 +20,7 @@
 //! - [`trn`]: plural-aware (`{n}` is filled in). [`fmt`]: fill `{name}` placeholders after [`tr`];
 //!   translators may reorder placeholders freely.
 
+mod casing;
 mod catalog;
 mod system;
 
@@ -251,6 +252,8 @@ pub static LANGUAGES: [LangInfo; 29] = [
     LangInfo { code: "hu", name: "Magyar", source: catalog!("hu"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
     // Turkish; `tr`, `tr-TR` and `tr_TR` locales resolve here.
     LangInfo { code: "tr", name: "Türkçe", source: catalog!("tr"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
+    // Azerbaijani (Latin script); regional and explicit Latin-script tags resolve here.
+    LangInfo { code: "az", name: "Azərbaycanca", source: catalog!("az"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
     // Vietnamese; `vi-VN` resolves here.
     LangInfo { code: "vi", name: "Tiếng Việt", source: catalog!("vi"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
     // Hindi; `hi`, `hi-IN` locales resolve here.
