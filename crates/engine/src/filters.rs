@@ -397,8 +397,9 @@ pub(crate) fn run_filter(s: &mut Session, id: &str, p: &Value) -> Result<Value> 
             let content = surf.content_bounds();
             let area = algo::output_area(&fp, content, bounds, sel_bounds);
             let frame = distort_frame(&id, bounds, content, sel_bounds.is_some_and(|b| !b.is_empty()));
-            // `filter` admits `working_bytes` for this same frame, so a Displace frame past the
-            // canvas is priced before it is read.
+            // `filter` admits `working_bytes` with this same frame. Displace reads the area grown
+            // by its map's reach, past the canvas into the frame, and is priced for that; a layer
+            // pixel far off the canvas widens the frame but not what it reads.
             *surf = filter(surf, &fp, area, frame, selection.as_ref(), algo::separable::edge_extent(doc_bounds, content))?;
             if let Some(before) = &before {
                 keep_alpha(before, surf, &|| ctx.cancelled())?;

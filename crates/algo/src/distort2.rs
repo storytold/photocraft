@@ -45,15 +45,39 @@ fn shift(m: f32, levels: bool) -> f32 {
     if levels { (m * 255.0 - 128.0) / 128.0 } else { (m - 0.5) * 2.0 }
 }
 
+/// Source rows [`displace_source`] reads at a time.
+const SOURCE_BAND: i32 = 64;
+
+/// The rect [`displace_source`] fills for output `area`: grown by the full shift and the bilinear
+/// neighbours, whatever the frame.
+fn displace_source_rect(area: Rect, scale: (f32, f32)) -> Rect {
+    let (sx, sy) = (displace_scale(scale.0), displace_scale(scale.1));
+    let reach = (sx.abs().max(sy.abs()) / 100.0 * DISPLACE_PX).ceil() as i32 + 2;
+    area.inflate(reach)
+}
+
+/// What [`displace_source`] allocates for output `area`, for filter admission: the source, one
+/// band of source rows (its runs hold at most the source's width of distinct columns) and its
+/// per-coordinate indices. The frame isn't in it: a layer pixel far past the canvas widens the
+/// frame, not what Displace reads.
+pub(crate) fn displace_source_bytes(area: Rect, scale: (f32, f32), channels: usize) -> u64 {
+    let rect = displace_source_rect(area, scale);
+    let (w, h) = (u64::from(rect.width()), u64::from(rect.height()));
+    let floats = (channels as u64).saturating_mul(4);
+    let source = w.saturating_mul(h).saturating_mul(floats);
+    let band = w.saturating_mul(h.min(SOURCE_BAND as u64)).saturating_mul(floats);
+    // Per column its frame coordinate, sorted copy, run and span; per row the first three.
+    let index = w.saturating_mul(8 + 4 + 8 + 24).saturating_add(h.saturating_mul(8 + 4 + 8));
+    source.saturating_add(band).saturating_add(index)
+}
+
 /// The pixels Displace samples for output `area` in the frame `bounds`, with the frame's undefined
 /// areas filled in: the map moves a pixel by at most the full shift, so `area` grown by it (and by
 /// the bilinear neighbours) is all it reads. The frame takes in a layer's pixels past the canvas,
 /// and reading all of it allocated the gap to one far off-canvas pixel. Wrapping reads the
 /// frame's far side, so each axis reads its runs of source pixels separately.
 pub(crate) fn displace_source(surface: &Surface, area: Rect, bounds: Rect, scale: (f32, f32), undefined: UndefinedAreas) -> Image {
-    let (sx, sy) = (displace_scale(scale.0), displace_scale(scale.1));
-    let reach = (sx.abs().max(sy.abs()) / 100.0 * DISPLACE_PX).ceil() as i32 + 2;
-    let rect = area.inflate(reach);
+    let rect = displace_source_rect(area, scale);
     let mut img = Image::new(rect, surface.channels());
     if bounds.is_empty() {
         return img;
@@ -98,11 +122,10 @@ pub(crate) fn displace_source(surface: &Surface, area: Rect, bounds: Rect, scale
         }
     }
     // Source rows are read a band at a time, so the copy holds little more than the result.
-    const BAND: i32 = 64;
     let (w, ch) = (rect.width() as usize, img.ch);
     for &(y0, y1) in &yr {
-        for b0 in (y0..y1).step_by(BAND as usize) {
-            let b1 = (b0 + BAND).min(y1);
+        for b0 in (y0..y1).step_by(SOURCE_BAND as usize) {
+            let b1 = (b0 + SOURCE_BAND).min(y1);
             let band: Vec<Image> = xr.iter().map(|&(x0, x1)| Image::read(surface, Rect::new(x0, b0, x1, b1))).collect();
             for (j, sy) in ys.iter().enumerate() {
                 let Some(sy) = sy.filter(|sy| (b0..b1).contains(sy)) else { continue };

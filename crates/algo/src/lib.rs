@@ -1059,7 +1059,7 @@ pub fn working_bytes(params: &FilterParams, area: Rect, bounds: Rect, channels: 
     // Result groups hold at most RESULT_BUDGET bytes of floats, and never more than the area.
     let base = area.size().area().saturating_mul(floats).min(RESULT_BUDGET as u64).saturating_mul(3);
     let windows = match params.halo_for(bounds) {
-        Halo::Bounds => base.saturating_add(bounds.union(&area).size().area().saturating_mul(floats)),
+        Halo::Bounds => base.saturating_add(global_source_bytes(params, area, bounds, channels)),
         Halo::Radius(r) => {
             let side = tile.saturating_add((r.max(0) as u64).saturating_mul(2));
             base.saturating_add(
@@ -1082,6 +1082,16 @@ fn shape_blur_bytes(params: &FilterParams, bounds: Rect, tile: u64, channels: u6
     let size = (mask.rect.width() as usize).max(mask.rect.height() as usize);
     let spans = (shape_blur::max_spans(size) as u64).saturating_mul(20);
     prefix.saturating_add((mask.data.len() as u64).saturating_mul(4)).saturating_add(spans)
+}
+
+/// What [`global_source`] allocates for `area`: the bounds and the area as floats, or for
+/// Displace the area grown by its map's reach (past the canvas, into a frame that takes in a
+/// layer's pixels there), however far that frame extends.
+fn global_source_bytes(params: &FilterParams, area: Rect, bounds: Rect, channels: usize) -> u64 {
+    match *params {
+        FilterParams::Displace { horizontal, vertical, .. } => distort2::displace_source_bytes(area, (horizontal, vertical), channels),
+        _ => bounds.union(&area).size().area().saturating_mul((channels as u64).saturating_mul(4)),
+    }
 }
 
 /// The pixels a global filter reads for `area`: the bounds and the area, or for Displace the
