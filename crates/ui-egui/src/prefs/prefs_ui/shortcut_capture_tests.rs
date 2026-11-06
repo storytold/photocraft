@@ -4,7 +4,7 @@
 
 use egui::{Event, Key, Modifiers};
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
@@ -134,6 +134,70 @@ fn toolbar_shortcuts_participate_in_conflict_resolution() {
     assert!(h.state().ui.palette_open, "B now runs Search");
     assert_eq!(h.state().ui.tool, crate::state::Tool::Move);
     assert_eq!(crate::shortcut_dispatch::take_log(&ctx).last().map(|i| i.0.as_str()), Some("edit.search"));
+}
+
+#[test]
+fn shortcut_category_navigation_is_kept_between_frames() {
+    let (mut h, id) = dialog(1.0, "edit.search", "");
+    let f = &mut h.state_mut().ui.dialog_mut(id).unwrap().fields;
+    f.insert("shortcutPath".into(), json!(["Edit"]));
+    f.insert("shortcutShowAll".into(), json!(false));
+    h.run_steps(2);
+    assert_eq!(field(&h, id, "shortcutPath"), json!(["Edit"]));
+    assert_eq!(field(&h, id, "shortcutShowAll"), json!(false));
+
+    h.get_by_label("‹ Back").click();
+    h.run_steps(2);
+    assert_eq!(field(&h, id, "shortcutPath"), json!([]), "Back returns to the parent menu");
+    assert_eq!(field(&h, id, "shortcutShowAll"), json!(true));
+}
+
+/// Click a category button in the left column, which reads "Name  count ›".
+fn click_category(h: &mut Harness<'_, PhotocraftApp>, name: &str) {
+    let prefix = format!("{name}  ");
+    h.get_all_by_label_contains(&prefix)
+        .find(|n| n.accesskit_node().label().is_some_and(|l| l.starts_with(&prefix) && l.ends_with(" ›")))
+        .unwrap_or_else(|| panic!("no category button for {name}"))
+        .click();
+    h.run_steps(2);
+}
+
+#[test]
+fn shortcut_category_child_is_opened_from_the_list() {
+    let (mut h, id) = dialog(1.0, "edit.search", "");
+    let child = crate::prefs_ui::shortcut_items(h.state())
+        .into_iter()
+        .find_map(|(_, _, path, _)| (path.len() > 1 && path[0] == "Edit").then(|| path[1].clone()))
+        .expect("Edit has a submenu");
+    click_category(&mut h, "Edit");
+    assert_eq!(field(&h, id, "shortcutPath"), json!(["Edit"]));
+    assert_eq!(field(&h, id, "shortcutShowAll"), json!(false));
+
+    click_category(&mut h, &child);
+    assert_eq!(field(&h, id, "shortcutPath"), json!(["Edit", child]));
+}
+
+#[test]
+fn shortcut_category_with_missing_menu_resets_to_all() {
+    let (mut h, id) = dialog(1.0, "edit.search", "");
+    let f = &mut h.state_mut().ui.dialog_mut(id).unwrap().fields;
+    f.insert("shortcutPath".into(), json!(["Nonexistent"]));
+    f.insert("shortcutShowAll".into(), json!(false));
+    h.run_steps(2);
+    assert_eq!(field(&h, id, "shortcutPath"), json!([]));
+    assert_eq!(field(&h, id, "shortcutShowAll"), json!(true));
+}
+
+#[test]
+fn commands_without_a_menu_are_listed_under_other() {
+    let (mut h, id) = dialog(1.0, "edit.search", "");
+    let (_, label, _, _) = crate::prefs_ui::shortcut_items(h.state())
+        .into_iter()
+        .find(|(_, _, path, def)| path.is_empty() && def.is_some())
+        .expect("a command with a key and no menu item");
+    click_category(&mut h, "Other");
+    assert_eq!(field(&h, id, "shortcutPath"), json!(["Other"]));
+    assert!(h.query_all_by_label(&label).next().is_some(), "{label} is listed under Other");
 }
 
 /// Click the selected command's shortcut button, then press `modifier` and `k` like a keyboard:
