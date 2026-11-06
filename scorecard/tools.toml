@@ -70,10 +70,10 @@ note = "eyedropper_ring (canvas.rs): the sampled colour on the upper arc, the fo
 
 [[item]]
 id = "TOOL-213-10"
-target = "Ctrl+Alt drag resizes brush size/hardness with an on-canvas readout"
+target = "Alt+right drag resizes brush size/hardness with an on-canvas readout"
 status = "done"
 issue = 213
-note = "brush_resize.rs (#297, #370): Alt+right-drag, or Control+Option-drag on macOS (Control+Alt everywhere), sets diameter horizontally and hardness vertically, circle plus Diameter/Hardness readout, one coalesced tools.setBrush, no paint or history; 9 tests there"
+note = "brush_resize.rs (#297, #370): Alt+right-drag everywhere (the barrel counts as the right button) or Control+Option-drag on macOS sets diameter horizontally and hardness vertically, circle plus Diameter/Hardness readout, one coalesced tools.setBrush, no paint or history; off the Mac a Control+Alt left-drag is Photoshop's duplicate move instead, never this gesture; 10 tests there"
 
 [[item]]
 id = "TOOL-213-11"
