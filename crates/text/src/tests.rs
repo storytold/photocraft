@@ -405,6 +405,35 @@ fn vertical_soft_wrap_carried_spaces_move_caret_and_hit_testing() {
 }
 
 #[test]
+fn vertical_soft_wrap_negative_space_advance_still_carries() {
+    let (mut t, boundary) = vertical_soft_wrap_with_spaces(2, "鈴木\t田中花子");
+    let style = CharStyle { font_family: "Shippori Mincho".into(), size_pt: 36.0, ..Default::default() };
+    t.runs = vec![
+        TextRun { len: boundary, style: style.clone() },
+        TextRun { len: 2, style: CharStyle { tracking: -300.0, ..style.clone() } },
+        TextRun { len: t.text.len() - boundary - 2, style },
+    ];
+    let mut e = TextEngine::new();
+    let l = e.layout(&t, 72.0);
+    assert_eq!(l.lines.len(), 2, "{:?}", l.lines);
+    assert_eq!(l.lines[0].range.end, boundary, "{:?}", l.lines);
+    assert_eq!(l.lines[1].range.start, boundary, "{:?}", l.lines);
+    let spaces: Vec<_> = l.clusters.iter().filter(|c| (boundary..boundary + 2).contains(&c.range.start)).collect();
+    assert_eq!(spaces.len(), 2);
+    assert!(spaces.iter().all(|c| c.advance < 0.0 && c.line == 1), "{spaces:?}");
+    assert!((spaces[0].x - l.lines[1].x0).abs() < 1e-3, "{spaces:?}");
+    assert!((spaces[1].x - spaces[0].x - spaces[0].advance).abs() < 1e-3, "{spaces:?}");
+    assert_eq!(l.caret(boundary).0, spaces[0].x);
+    assert_eq!(l.caret(boundary + 1).0, spaces[1].x);
+    for c in spaces {
+        assert_eq!(l.hit_test_line(c.x + c.advance * 0.25, l.lines[1].baseline), c.range.end);
+    }
+    let after_tab = boundary + 2 + "鈴木\t".len();
+    let x = cluster_x(&l, after_tab);
+    assert!((x - 72.0).abs() < 0.05, "after tab at {x}, expected the 72 px stop: {:?}", l.clusters);
+}
+
+#[test]
 fn vertical_soft_wrap_carried_spaces_reach_tab_stops() {
     let (t, boundary) = vertical_soft_wrap_with_spaces(2, "鈴木\t田中花子");
     let mut e = TextEngine::new();

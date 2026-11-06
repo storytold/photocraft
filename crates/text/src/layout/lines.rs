@@ -109,6 +109,7 @@ struct LineCtx<'a> {
 /// ASCII spaces moving from one vertical soft-wrapped column to the next.
 #[derive(Default)]
 pub(super) struct CarriedSpaces {
+    present: bool,
     advance: f32,
     start: usize,
     previous_line: usize,
@@ -467,7 +468,7 @@ impl Para<'_> {
         let dx = self.line_start(f, m.offset, adv, line_kern) + if final_justified { carried.advance } else { carried.advance * (1.0 - align) };
         let x0 = dx + m.offset - carried.advance;
         let line_index = out.lines.len();
-        if carried.advance > 0.0 {
+        if carried.present {
             let mut x = x0;
             if let Some(clusters) = out.clusters.get_mut(carried.clusters.clone()) {
                 for c in clusters.iter_mut().filter(|c| c.line == carried.previous_line && c.range.start >= carried.start) {
@@ -500,7 +501,7 @@ impl Para<'_> {
         }
         let lr = line.text_range();
         let mut range = self.map_offset(lr.start)..self.map_offset(lr.end).min(self.content_end);
-        if carried.advance > 0.0 {
+        if carried.present {
             range.start = carried.start;
         }
         out.lines.push(LineInfo {
@@ -518,10 +519,7 @@ impl Para<'_> {
         #[cfg(test)]
         CARRY_SCANNED.with(|scanned| scanned.set(scanned.get() + current.len()));
         let advance = current.iter().filter(|c| c.line == line_index && c.range.start >= start).map(|c| c.advance).sum();
-        if advance == 0.0 {
-            return CarriedSpaces::default();
-        }
-        CarriedSpaces { advance, start, previous_line: line_index, clusters: c0..out.clusters.len() }
+        CarriedSpaces { present: true, advance, start, previous_line: line_index, clusters: c0..out.clusters.len() }
     }
 
     /// Emits one glyph run of the line: its face, clusters (once per shaping run), glyphs and
