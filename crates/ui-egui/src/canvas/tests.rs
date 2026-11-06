@@ -2266,6 +2266,23 @@ fn brush_strokes_started_on_one_spot_get_their_own_seeds() {
 }
 
 #[test]
+fn a_brush_stroke_whose_preview_failed_commits_the_seed_it_began_with() {
+    // A failed live preview is dropped (`feed_live_stroke`); the commit still takes the drag's seed
+    // rather than one hashed from the points, so the dither stays per stroke (#9156).
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.run("file.new", json!({"width": 200, "height": 80, "background": "white"})).unwrap();
+    app.ui.tool = Tool::Brush;
+    let m = egui::Modifiers::NONE;
+    tool_event(&mut app, ToolEvent::Down { x: 50.0, y: 40.0, pressure: 1.0 }, m);
+    tool_event(&mut app, ToolEvent::Move { x: 80.0, y: 40.0, pressure: 1.0 }, m);
+    let want = super::strokes::brush_seed(&app, app.drag.as_ref().unwrap()).unwrap();
+    app.live_stroke = None;
+    tool_event(&mut app, ToolEvent::Up { x: 80.0, y: 40.0 }, m);
+    let got = app.session.journal.iter().rev().find(|(id, _)| id == "paint.stroke").and_then(|(_, p)| p.get("seed").cloned()).unwrap();
+    assert_eq!(got, json!(want));
+}
+
+#[test]
 fn smoothed_stroke_shows_its_catch_up_tail_while_drawing() {
     // #73: with smoothing the brush lags behind the pointer and catches up at the end; the
     // preview draws that tail live, so no frame after release is missing the end.
