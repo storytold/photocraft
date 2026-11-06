@@ -5,7 +5,7 @@
 
 use std::fmt;
 
-use photocraft_color::{BlendMode, SampleType};
+use photocraft_color::{BlendMode, ColorMode, SampleType};
 use photocraft_geom::Rect;
 use photocraft_raster::{AllocationError, Interrupt, Surface};
 
@@ -43,6 +43,33 @@ impl From<AllocationError> for Error {
 /// Convert cancellation into the shared mix error before another tile is processed.
 fn check(ctl: &Interrupt<'_>) -> Result<(), Error> {
     ctl.check().map_err(|_| Error::Cancelled)
+}
+
+/// Normal strength interpolates stored channel planes with premultiplied coverage.
+/// It needs no RGB working space and must retain identical inks and out-of-gamut Lab.
+fn normal_native(base: &[f32], filtered: &[f32], out: &mut [f32], alpha: bool, opacity: f32) {
+    if opacity == 1. {
+        out.copy_from_slice(filtered);
+        return;
+    }
+    let before_alpha = if alpha { base.last().copied().unwrap_or(0.) } else { 1. };
+    let after_alpha = if alpha { filtered.last().copied().unwrap_or(0.) } else { 1. };
+    let before = f64::from(before_alpha) * (1. - f64::from(opacity));
+    let after = f64::from(after_alpha) * f64::from(opacity);
+    let coverage = before + after;
+    let colors = out.len().saturating_sub(usize::from(alpha));
+    for ((b, t), o) in base.iter().zip(filtered).zip(out.iter_mut()).take(colors) {
+        *o = if b == t {
+            *b
+        } else if coverage > 0. {
+            ((f64::from(*b) * before + f64::from(*t) * after) / coverage).clamp(-f64::from(f32::MAX), f64::from(f32::MAX)) as f32
+        } else {
+            0.
+        };
+    }
+    if alpha && let Some(value) = out.last_mut() {
+        *value = coverage as f32;
+    }
 }
 
 /// Mix an ordinary filter result with its input over `area`, preserving base data outside it.
@@ -83,6 +110,10 @@ pub fn mix(base: &Surface, filtered: &Surface, area: Rect, mode: BlendMode, opac
                 // An unchanged native pixel must retain its separations (and hidden
                 // transparent colors), rather than regenerating them through RGB.
                 op.copy_from_slice(bp);
+                continue;
+            }
+            if mode == BlendMode::Normal && matches!(fmt.mode, ColorMode::Cmyk | ColorMode::Lab | ColorMode::Multichannel) {
+                normal_native(bp, tp, op, fmt.alpha, opacity);
                 continue;
             }
             let b = photocraft_raster::to_rgba(&fmt, bp);
@@ -164,6 +195,58 @@ mod tests {
     use super::*;
     use photocraft_color::{ColorMode, PixelFormat};
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn normal_native_partial_strength_preserves_inks_and_lab_when_only_alpha_changes() {
+        let area = Rect::new(-1, 0, 257, 1);
+        for mode in [ColorMode::Cmyk, ColorMode::Lab, ColorMode::Multichannel] {
+            for sample in SampleType::ALL {
+                let format = PixelFormat::new(mode, sample, true);
+                let mut bp = vec![0.75; format.channels()];
+                *bp.last_mut().unwrap() = 0.25;
+                let mut tp = bp.clone();
+                *tp.last_mut().unwrap() = 0.75;
+                let mut base = Surface::new(format);
+                base.fill_rect(area, &bp);
+                let mut filtered = Surface::new(format);
+                filtered.fill_rect(area, &tp);
+                let original = base.pixel(0, 0);
+                for opacity in [0.01, 0.5, 1.] {
+                    let result = mix(&base, &filtered, area, BlendMode::Normal, opacity, &Interrupt::NONE).unwrap();
+                    for x in [-1, 256] {
+                        let got = result.pixel(x, 0);
+                        assert_eq!(&got[..got.len() - 1], &original[..original.len() - 1], "{format:?} {opacity}");
+                        let expected = original.last().unwrap() * (1. - opacity) + filtered.pixel(x, 0).last().unwrap() * opacity;
+                        assert!((got.last().unwrap() - expected).abs() <= tolerance(sample));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn normal_native_changed_channels_use_premultiplied_native_weights() {
+        let area = Rect::new(0, 0, 1, 1);
+        for mode in [ColorMode::Cmyk, ColorMode::Lab] {
+            for alpha in [false, true] {
+                let fmt = PixelFormat::new(mode, SampleType::F32, alpha);
+                let mut b = vec![0.2; fmt.channels()];
+                let mut t = vec![0.8; fmt.channels()];
+                if alpha {
+                    *b.last_mut().unwrap() = 0.25;
+                    *t.last_mut().unwrap() = 0.75;
+                }
+                let mut base = Surface::new(fmt);
+                let mut filtered = Surface::new(fmt);
+                base.write_pixel(0, 0, &b);
+                filtered.write_pixel(0, 0, &t);
+                let result = mix(&base, &filtered, area, BlendMode::Normal, 0.5, &Interrupt::NONE).unwrap();
+                let got = result.pixel(0, 0);
+                let expected = if alpha { 0.65 } else { 0.5 };
+                assert!(got.iter().take(mode.color_channels()).all(|v| (*v - expected).abs() < 1e-6), "{fmt:?}: {got:?}");
+            }
+        }
+    }
 
     /// Create original native-format samples for direct premultiplied-mixing expectations.
     fn surface(format: PixelFormat, rgba: [f32; 4], rect: Rect) -> Surface {

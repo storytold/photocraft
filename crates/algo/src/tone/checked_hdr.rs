@@ -310,8 +310,8 @@ pub fn apply_with(surface: &Surface, p: &HdrToning, area: Rect, domain: Rect, se
     let mut output = surface.clone();
     tiles(area, |tile| {
         check(ctl)?;
-        let original = surface.try_read_region(tile).map_err(|_| Error::Allocation)?;
-        let mut raw = zeroes(original.len(), 0f32, ctl)?;
+        let original = crate::image::Image { rect: tile, ch: channels, data: surface.try_read_region(tile).map_err(|_| Error::Allocation)? };
+        let mut raw = zeroes(original.data.len(), 0f32, ctl)?;
         let tw = tile.width() as usize;
         for (i, q) in raw.chunks_exact_mut(channels).enumerate() {
             let x = (i64::from(tile.x0) - i64::from(domain.x0)) as usize + i % tw;
@@ -323,7 +323,16 @@ pub fn apply_with(surface: &Surface, p: &HdrToning, area: Rect, domain: Rect, se
             if selected.iter().any(|v| !v.is_finite()) {
                 return Err(Error::NonFiniteSample);
             }
-            crate::mix_selection(&mut raw, tile, mask, &crate::image::Image { rect: tile, ch: channels, data: original }, fmt.alpha);
+            crate::mix_selection(&mut raw, tile, mask, &original, fmt.alpha);
+        }
+        if fmt.alpha {
+            // Toning skips these pixels. RGB conversion must not regenerate their
+            // hidden native separations, including after selection publication.
+            for (q, before) in raw.chunks_exact_mut(channels).zip(original.data.chunks_exact(channels)) {
+                if before.last().is_some_and(|alpha| *alpha <= 0.) {
+                    q.copy_from_slice(before);
+                }
+            }
         }
         output.try_write_region(tile, &raw).map_err(|_| Error::Allocation)
     })?;
@@ -356,6 +365,32 @@ pub(crate) fn run_image(src: &crate::Image, out: Rect, ctx: &crate::Ctx, p: &Hdr
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn skipped_transparent_native_samples_survive_toning_and_selection_bit_for_bit() {
+        use photocraft_color::{ColorMode, PixelFormat, SampleType};
+        let area = Rect::new(-1, 0, 1, 1);
+        for mode in [ColorMode::Cmyk, ColorMode::Lab] {
+            for depth in SampleType::ALL {
+                let fmt = PixelFormat::new(mode, depth, true);
+                let mut source = Surface::new(fmt);
+                let mut pixel = vec![0.75; fmt.channels()];
+                *pixel.last_mut().unwrap() = 0.;
+                source.write_pixel(-1, 0, &pixel);
+                *pixel.last_mut().unwrap() = if depth == SampleType::F32 { -0.5 } else { 0. };
+                source.write_pixel(0, 0, &pixel);
+                let mut mask = Surface::new(PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false));
+                mask.fill_rect(area, &[0.5]);
+                for selection in [None, Some(&mask)] {
+                    let result = apply_with(&source, &HdrToning::default(), area, area, selection, &Interrupt::NONE).unwrap();
+                    assert_eq!(
+                        result.read_region(area).iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                        source.read_region(area).iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                        "{fmt:?}"
+                    );
+                }
+            }
+        }
+    }
     #[test]
     /// Compare checked HDR output to the existing native tone arithmetic, including unchanged alpha samples.
     fn matches_existing_native_arithmetic_and_alpha() {
@@ -424,7 +459,11 @@ mod tests {
                 let mut expected: Vec<_> = before.chunks_exact(format.channels()).map(|q| to_rgba(&format, q)).collect();
                 let p = HdrToning { radius: 3., detail: 12., saturation: 0., ..Default::default() };
                 super::super::hdr_toning(&mut expected, 5, 3, &p);
-                let expected: Vec<_> = expected.iter().flat_map(|q| photocraft_raster::from_rgba(&format, *q)).collect();
+                let expected: Vec<_> = expected
+                    .iter()
+                    .zip(before.chunks_exact(format.channels()))
+                    .flat_map(|(q, original)| if q[3] <= 0. { original.to_vec() } else { photocraft_raster::from_rgba(&format, *q) })
+                    .collect();
                 let mut oracle = Surface::new(format);
                 oracle.write_region(bounds, &expected);
                 let got = apply_with(&source, &p, bounds, bounds, None, &Interrupt::NONE).unwrap();

@@ -194,7 +194,10 @@ fn convolve(data: &[f32], w: usize, h: usize, format: PixelFormat, p: &Params, c
 /// Selection changes publication only; the complete owner supplies the stencil.
 pub fn apply_with(s: &Surface, p: &Params, area: Rect, domain: Rect, selection: Option<&Surface>, ctl: &Interrupt<'_>) -> Result<Surface, Error> {
     validate(p, s.channels())?;
-    dimensions(domain)?;
+    // Edge sampling does not allocate the domain; preflight bounds the output area.
+    if domain.is_empty() {
+        return Err(Error::InvalidGeometry);
+    }
     if ctl.cancelled() {
         return Err(Error::Cancelled);
     }
@@ -302,6 +305,25 @@ pub(crate) fn run_image(src: &Image, out: Rect, ctx: &Ctx, p: &Params) -> Vec<f3
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn small_convolution_area_in_large_domain_keeps_edge_sampling_and_work_bounds() {
+        let area = Rect::new(0, 0, 1, 1);
+        let mut s = Surface::new(PixelFormat::RGBA32F);
+        s.fill_rect(area, &[0.2, 0.4, 0.6, 1.]);
+        let domain = Rect::new(0, 0, 9_000, 9_000);
+        let mut p = params(4);
+        p.kernel[12] = 0.;
+        p.kernel[11] = 1.;
+        for edge in [Edge::Repeat, Edge::Wrap, Edge::Transparent, Edge::Black, Edge::White] {
+            p.edge = edge;
+            let got = apply_with(&s, &p, area, domain, None, &Interrupt::NONE).unwrap();
+            let mut expected = [0.; 4];
+            sample(&s, -1, 0, domain, edge, &mut expected).unwrap();
+            assert_eq!(got.pixel(0, 0), expected, "{edge:?}");
+        }
+        assert_eq!(apply_with(&s, &p, domain, domain, None, &Interrupt::NONE), Err(Error::InvalidGeometry));
+        assert_eq!(apply_with(&s, &p, area, Rect::new(0, 0, 0, 1), None, &Interrupt::NONE), Err(Error::InvalidGeometry));
+    }
     /// Define the native custom-filter fixture kernel independently of imported source configuration.
     fn params(ch: usize) -> Params {
         let mut k = vec![0.; 25];

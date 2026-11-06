@@ -71,7 +71,12 @@ fn shape(rect: Rect, channels: usize, operation: Operation<'_>) -> Result<Shape,
     }
     let width = usize::try_from(width).map_err(|_| Error::InvalidGeometry)?;
     let height = usize::try_from(height).map_err(|_| Error::InvalidGeometry)?;
-    let pixels = width.checked_mul(height).filter(|n| *n <= MAX_PIXELS).ok_or(Error::WorkspaceLimit)?;
+    let pixels = width.checked_mul(height).ok_or(Error::WorkspaceLimit)?;
+    // Only reconstruction visits/allocates the whole domain. Point operations admit
+    // their clipped output tiles in preflight, even on a larger sparse owner.
+    if matches!(operation, Operation::FillHoles { .. }) && pixels > MAX_PIXELS {
+        return Err(Error::WorkspaceLimit);
+    }
     // Plane/queue workspace is checked separately from padded native output tiles.
     let per_pixel = if matches!(operation, Operation::FillHoles { .. }) { std::mem::size_of::<Node>() + 5 } else { 0 };
     if pixels.checked_mul(per_pixel).is_none_or(|bytes| bytes > MAX_WORKSPACE_BYTES) {
@@ -523,6 +528,26 @@ fn identity_region(source: &Image, out: Rect) -> Result<Vec<f32>, Error> {
 mod tests {
     use super::*;
     use photocraft_color::ColorMode;
+    #[test]
+    fn small_point_operations_in_large_domain_keep_reconstruction_and_output_limits() {
+        let area = Rect::new(11, 13, 12, 14);
+        let s = surface(ColorMode::Rgb, SampleType::F32, true, area, &[0.2, 0.4, 0.6, 0.5]);
+        let domain = Rect::new(0, 0, 12_000, 8_000);
+        let curve: Vec<_> = (0..256).map(|i| i as f32 / 255.).collect();
+        for op in [
+            Operation::SetAlpha(0.25),
+            Operation::AlphaCurve(&curve),
+            Operation::AlphaToColor,
+            Operation::ClampAlpha { low: 0., high: 0.3 },
+            Operation::ThresholdAlpha(0.4),
+        ] {
+            assert_eq!(apply_with(&s, op, area, domain, None, &Interrupt::NONE).unwrap(), apply(&s, op, area));
+            assert_eq!(apply_with(&s, op, domain, domain, None, &Interrupt::NONE), Err(Error::WorkspaceLimit));
+        }
+        let fill = Operation::FillHoles { connectivity: 4, alpha_only: true };
+        assert_eq!(apply_with(&s, fill, area, domain, None, &Interrupt::NONE), Err(Error::WorkspaceLimit));
+        assert_eq!(apply_with(&s, Operation::SetAlpha(0.5), area, Rect::new(0, 0, 0, 1), None, &Interrupt::NONE), Err(Error::InvalidGeometry));
+    }
     /// Encode explicit test samples at the requested native mode, depth and alpha layout.
     fn surface(mode: ColorMode, depth: SampleType, alpha: bool, rect: Rect, data: &[f32]) -> Surface {
         let mut s = Surface::new(PixelFormat::new(mode, depth, alpha));

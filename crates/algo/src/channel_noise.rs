@@ -91,7 +91,10 @@ fn pixels(data: &mut [f32], rect: Rect, channels: usize, alpha: bool, p: &Params
 /// on failure.
 pub fn apply_with(s: &Surface, p: &Params, area: Rect, domain: Rect, selection: Option<&Surface>, ctl: &Interrupt<'_>) -> Result<Surface, Error> {
     validate(p, s.channels())?;
-    dimensions(domain)?;
+    // The domain clips work; only the clipped publication area needs dense admission.
+    if domain.is_empty() {
+        return Err(Error::InvalidGeometry);
+    }
     if ctl.cancelled() {
         return Err(Error::Cancelled);
     }
@@ -184,6 +187,18 @@ pub(crate) fn run_image(src: &Image, out: Rect, ctx: &Ctx, p: &Params) -> Vec<f3
 mod tests {
     use super::*;
     use photocraft_color::ColorMode;
+    #[test]
+    fn small_noise_area_in_large_domain_keeps_work_bounds() {
+        let area = Rect::new(11, 13, 13, 15);
+        let s = surface(ColorMode::Rgb, SampleType::F32, area);
+        let params = p(vec![40., 80., 0., 0.]);
+        let domain = Rect::new(0, 0, 12_000, 8_000);
+        let got = apply_with(&s, &params, area, domain, None, &Interrupt::NONE).unwrap();
+        let expected = apply_with(&s, &params, area, area, None, &Interrupt::NONE).unwrap();
+        assert_eq!(got, expected);
+        assert_eq!(apply_with(&s, &params, domain, domain, None, &Interrupt::NONE), Err(Error::InvalidGeometry));
+        assert_eq!(apply_with(&s, &params, area, Rect::new(1, 1, 0, 0), None, &Interrupt::NONE), Err(Error::InvalidGeometry));
+    }
     /// Supply a reproducible uniform-noise configuration with independent channels and a fixed seed.
     fn p(amounts: Vec<f32>) -> Params {
         Params { amounts, distribution: Distribution::Uniform, monochromatic: false, relative: false, seed: 71 }
