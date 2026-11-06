@@ -29,7 +29,7 @@ pub(crate) use history::ActionHistory;
 pub use history::{ActionHistoryContinuation, finish_pending_history, suspend_history};
 pub(crate) use history::{before_edit as before_action_edit, begin_document_history, finish_document_history, history_rows, reconcile_history_removal};
 pub use identity::{action_shortcut, commit_action_id, is_action_key, occurrence_key, playback_row, prepare_action_id, shortcut_row};
-pub(crate) use identity::{invalidate_duplicate_ids, pin_shortcut, remove_shortcuts, resolve_action_id, valid_action_id};
+pub(crate) use identity::{has_legacy_shortcut, invalidate_duplicate_ids, remove_shortcuts, resolve_action_id, valid_action_id};
 
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: cmd.into(), msg: msg.into() }
@@ -43,6 +43,9 @@ pub struct Action {
     /// Stable identity for occurrence shortcuts and stored calls. Legacy rows have no ID.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub action_id: Option<String>,
+    /// Resolves a legacy shortcut to its original row even after a same-name row comes first.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub legacy_shortcut_owner: bool,
     #[serde(default)]
     pub steps: Vec<(String, Value)>,
     /// Indices of steps excluded from playback (unchecked in the Actions panel).
@@ -70,7 +73,17 @@ pub const BUTTON_COLORS: [&str; 8] = ["", "red", "orange", "yellow", "green", "b
 
 impl Action {
     pub fn new(name: impl Into<String>, steps: Vec<(String, Value)>) -> Self {
-        Self { name: name.into(), action_id: None, steps, disabled: BTreeSet::new(), dialogs: BTreeSet::new(), set: None, set_slot: None, color: String::new() }
+        Self {
+            name: name.into(),
+            action_id: None,
+            legacy_shortcut_owner: false,
+            steps,
+            disabled: BTreeSet::new(),
+            dialogs: BTreeSet::new(),
+            set: None,
+            set_slot: None,
+            color: String::new(),
+        }
     }
 
     /// Apply `f` to every per-step index set (`disabled`, `dialogs`) after steps moved.
@@ -460,8 +473,12 @@ pub fn called_actions(list: &[Action], steps: &mut [(String, Value)]) -> Vec<Act
                 }
                 _ => params["action"] = json!(name),
             }
-            if let Some(object) = params.as_object_mut() {
-                object.remove("actionId");
+            if let Some(object) = params.as_object_mut()
+                && object.remove("actionId").is_some()
+                && id == "file.automate.batch"
+            {
+                // The source ID superseded this legacy qualifier.
+                object.remove("set");
             }
             return;
         }
@@ -926,15 +943,10 @@ fn move_item(s: &mut Session, p: &Value) -> Result<Value> {
         let name = &s.actions.list[idx].name;
         let first = s.actions.list.iter().position(|action| &action.name == name).unwrap_or(idx);
         let changes_owner = if first == idx { to > idx && s.actions.list[idx + 1..=to].iter().any(|action| &action.name == name) } else { to <= first };
-        if changes_owner {
-            let mut shortcuts = s.prefs().shortcuts.clone();
-            let mut alternates = s.prefs().alternate_shortcuts.clone();
-            pin_shortcut(&mut s.actions.list, first, &mut shortcuts, &mut alternates)?;
-            if shortcuts != s.prefs().shortcuts || alternates != s.prefs().alternate_shortcuts {
-                s.edit_prefs(|prefs| {
-                    prefs.shortcuts = shortcuts;
-                    prefs.alternate_shortcuts = alternates;
-                });
+        if changes_owner && has_legacy_shortcut(s, name) {
+            let key = format!("{PLAY_SHORTCUT_PREFIX}{name}");
+            if let Some(owner) = shortcut_row(&s.actions.list, &key) {
+                s.actions.list[owner].legacy_shortcut_owner = true;
             }
         }
         let moved = s.actions.list.remove(idx);
@@ -1064,18 +1076,23 @@ fn rename(s: &mut Session, p: &Value) -> Result<Value> {
     // A loaded library can hold two actions of one name (in different sets): a call follows the
     // rename only if it resolved to this action before it, so one reaching the other stays put.
     let before = s.actions.list.clone();
-    let by_name = resolve(&before, &json!({"action": old}), "actions.rename").ok() == Some(idx);
+    let owned_shortcut = shortcut_row(&before, &format!("{PLAY_SHORTCUT_PREFIX}{old}")) == Some(idx);
     let calls = s.actions.list.iter_mut().flat_map(|a| a.steps.iter_mut()).chain(s.journal.iter_mut().skip(pending));
     for (id, params) in calls {
         let keys: &[&str] = match id.as_str() {
-            "actions.play" if by_name => &["action"],
-            "actions.conditional" if by_name => &["then", "else"],
+            "actions.play" if resolve_play_target(&before, params, id).ok() == Some(idx) => &["action"],
+            "actions.conditional" => &["then", "else"],
             // A named Batch selects from the caller's list, by name alone or within its set;
             // explicit `steps` run instead of any named action, so those are left alone.
             "file.automate.batch" if params.get("steps").is_none() && crate::file_cmds::batch_action(&before, params).ok() == Some(idx) => &["action"],
             _ => &[],
         };
         for key in keys {
+            if id == "actions.conditional"
+                && conditional_branch(params, key).ok().flatten().and_then(|target| resolve_play_target(&before, &target, id).ok()) != Some(idx)
+            {
+                continue;
+            }
             if params.get(*key).and_then(Value::as_str) == Some(old.as_str()) {
                 params[*key] = json!(name);
             }
@@ -1086,7 +1103,7 @@ fn rename(s: &mut Session, p: &Value) -> Result<Value> {
     }
     s.actions.touch();
     let (from, to) = (format!("{PLAY_SHORTCUT_PREFIX}{old}"), format!("{PLAY_SHORTCUT_PREFIX}{name}"));
-    if by_name && (s.prefs().shortcuts.contains_key(&from) || s.prefs().alternate_shortcuts.contains_key(&from)) {
+    if owned_shortcut && (s.prefs().shortcuts.contains_key(&from) || s.prefs().alternate_shortcuts.contains_key(&from)) {
         s.edit_prefs(|prefs| {
             if let Some(key) = prefs.shortcuts.remove(&from) {
                 prefs.shortcuts.insert(to.clone(), key);

@@ -141,19 +141,16 @@ fn repeated_reset_pins_existing_shortcuts_and_undo_restores_legacy_keys() {
     assert_eq!(s.prefs().alternate_shortcuts, prefs.alternate_shortcuts);
 
     s.execute("actions.reset", json!({"confirm":true,"mode":"append"})).unwrap();
-    let key = crate::actions_cmds::occurrence_key(s.actions.list[0].action_id.as_deref().unwrap());
-    assert_eq!(crate::actions_cmds::shortcut_row(&s.actions.list, &key), Some(0));
-    assert_eq!(s.prefs().shortcuts[&key], "F2");
-    assert_eq!(s.prefs().alternate_shortcuts[&key], ["F3"]);
-    assert!(!s.prefs().shortcuts.contains_key(&shortcut));
-    assert!(!s.prefs().alternate_shortcuts.contains_key(&shortcut));
+    assert!(s.actions.list[0].legacy_shortcut_owner);
+    assert_eq!(crate::actions_cmds::shortcut_row(&s.actions.list, &shortcut), Some(0));
+    assert_eq!(s.prefs().shortcuts[&shortcut], "F2");
+    assert_eq!(s.prefs().alternate_shortcuts[&shortcut], ["F3"]);
     assert_eq!(s.actions.list.iter().filter(|action| action.name == "Invert Colors").count(), 2);
 
     s.execute("actions.undoLibrary", json!({})).unwrap();
     assert_eq!(s.actions.list, before);
     assert_eq!(s.prefs().shortcuts[&shortcut], "F2");
     assert_eq!(s.prefs().alternate_shortcuts[&shortcut], ["F3"]);
-    assert!(!s.prefs().shortcuts.contains_key(&key));
 }
 
 #[test]
@@ -184,7 +181,7 @@ fn atn_export_and_load_keep_function_keys_of_duplicate_rows_separate() {
     for (row, key) in [(0, "F2"), (2, "F3")] {
         let id = crate::actions_cmds::prepare_action_id(&s.actions.list, row).unwrap();
         s.edit_prefs(|prefs| prefs.shortcuts.insert(crate::actions_cmds::occurrence_key(&id), key.into()));
-        crate::actions_cmds::commit_action_id(&mut s, row, id);
+        crate::actions_cmds::commit_action_id(&mut s, row, id).unwrap();
     }
     let archive = s.execute("actions.save", json!({"set":"PhotoCraft Basics","skipUnsupported":true})).unwrap();
     let mut loaded = Session::new();
@@ -218,6 +215,36 @@ fn attachment_keeps_disk_batch_targets_and_does_not_resolve_foreign_ids() {
     assert_eq!(crate::actions_cmds::resolve_play_target(list, &calls[1].1, "actions.play").unwrap(), 1);
     assert!(crate::actions_cmds::resolve_play_target(list, &calls[2].1, "actions.play").is_err());
     assert_eq!(crate::actions_cmds::resolve(list, &json!({"action":"Target"}), "actions.play").unwrap(), 0);
+}
+
+#[test]
+fn attachment_keeps_unresolved_disk_calls_from_binding_to_early_actions() {
+    use crate::actions_cmds::{conditional_branch, resolve_play_target};
+    use crate::preset_store::{ACTIONS_FILE, PresetBackend};
+
+    let store = MemBackend::default();
+    let file = json!({"version":1,"actions":[{"name":"Disk caller","steps":[
+        ["actions.play",{"action":"Early"}],
+        ["actions.conditional",{"if":"always","then":"Early"}],
+        ["file.automate.batch",{"action":"Early","set":"Session"}],
+        ["actions.play",{"action":1}]
+    ]}]});
+    store.write(ACTIONS_FILE, file.to_string().as_bytes()).unwrap();
+    let mut s = Session::new();
+    s.actions.list.push(Action { set: Some("Session".into()), ..Action::new("Early", Vec::new()) });
+    assert!(s.attach_preset_store(open(Box::new(store.clone()))).is_empty());
+    s.sync_preset_store();
+
+    let mut s = Session::new();
+    assert!(s.attach_preset_store(open(Box::new(store))).is_empty());
+    let list = &s.actions.list;
+    let steps = &list[1].steps;
+    assert!(resolve_play_target(list, &steps[0].1, "actions.play").is_err());
+    let branch = conditional_branch(&steps[1].1, "then").unwrap().unwrap();
+    assert!(resolve_play_target(list, &branch, "actions.conditional").is_err());
+    assert!(crate::file_cmds::batch_action(list, &steps[2].1).is_err());
+    assert!(resolve_play_target(list, &steps[3].1, "actions.play").is_err());
+    assert_eq!(s.execute("actions.play", json!({"action":"Early"})).unwrap()["action"], "Early");
 }
 
 /// Imported calls follow a local physical folder before falling back to the first archive name.

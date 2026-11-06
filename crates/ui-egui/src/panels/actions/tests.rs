@@ -2147,6 +2147,25 @@ fn pause_child(app: &mut PhotocraftApp) -> u64 {
 }
 
 #[test]
+fn a_bound_same_name_call_resumes_the_selected_occurrence() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 8, "height": 6, "background": "#203040"})).unwrap();
+    let id = "a".repeat(32);
+    let mut second =
+        Action::new("Same", vec![("filter.blur.gaussianBlur".into(), json!({"radius": 1.5})), ("layer.new.layer".into(), json!({"name":"Suffix"}))]);
+    second.action_id = Some(id.clone());
+    second.dialogs.insert(0);
+    let first =
+        Action::new("Same", vec![("actions.play".into(), json!({"action":"Same","actionId":id})), ("layer.new.layer".into(), json!({"name":"caller tail"}))]);
+    app.session.actions.list.extend([first, second]);
+
+    let playback = play(&mut app, &json!({"action":"Same"})).unwrap();
+    let dialog = playback["paused"]["dialog"].as_u64().expect("the selected occurrence's blur dialog");
+    crate::dialogs::confirm(&mut app, dialog).unwrap();
+    assert_eq!(layer_names(&app), ["Suffix", "caller tail"]);
+}
+
+#[test]
 fn a_recorded_call_paused_by_a_dialog_records_one_call_and_replays_once() {
     let mut app = recording_with_dialog_child();
     let refusal = crate::i18n::t("Confirm or cancel the open action step dialog first").to_string();

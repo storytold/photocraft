@@ -231,28 +231,36 @@ pub(crate) fn assign_shortcut(app: &mut PhotocraftApp, index: usize, shortcut: &
     let id = actions_cmds::occurrence_key(&action_id);
     let legacy = format!("{}{}", actions_cmds::PLAY_SHORTCUT_PREFIX, list[index].name);
     let prefs = app.session.prefs();
+    let previous = list[index].action_id.is_none().then(|| (prefs.shortcuts.clone(), prefs.alternate_shortcuts.clone()));
+    let pending = app.services.preset_store.is_some() && app.session.preset_store.is_none();
+    let legacy_owner = !pending && actions_cmds::shortcut_row(list, &legacy) == Some(index);
     let mut set = serde_json::Map::new();
-    let mut alternates = serde_json::Map::new();
-    // A function key belongs to only one action. Ordinary menu bindings remain intact.
+    // Retain the old key as a fallback if an asynchronous store never commits the ID.
+    // A live ID-based override shadows it, including an explicit "None" assignment.
     for (other, assigned) in &prefs.shortcuts {
-        if actions_cmds::is_action_key(other) && other != &id && assigned == shortcut && !shortcut.is_empty() {
+        if actions_cmds::is_action_key(other)
+            && other != &id
+            && assigned == shortcut
+            && !shortcut.is_empty()
+            && !(other.starts_with(actions_cmds::PLAY_SHORTCUT_PREFIX) && (pending || (legacy_owner && other == &legacy)))
+        {
             set.insert(other.clone(), json!(""));
         }
     }
-    if actions_cmds::shortcut_row(list, &legacy) == Some(index) {
-        if prefs.shortcuts.contains_key(&legacy) {
-            set.insert(legacy.clone(), Value::Null);
-        }
-        if let Some(keys) = prefs.alternate_shortcuts.get(&legacy) {
-            if !prefs.alternate_shortcuts.contains_key(&id) {
-                alternates.insert(id.clone(), json!(keys));
-            }
-            alternates.insert(legacy, Value::Null);
-        }
-    }
     set.insert(id, json!(shortcut));
-    let result = app.run("edit.keyboardShortcuts", json!({"set": set, "alternates": alternates, "allowUnknown": true, "removeConflicts": false}))?;
-    actions_cmds::commit_action_id(&mut app.session, index, action_id);
+    let result = app.run("edit.keyboardShortcuts", json!({"set": set, "allowUnknown": true, "removeConflicts": false}))?;
+    if let Err(error) = actions_cmds::commit_action_id(&mut app.session, index, action_id) {
+        if let Some((shortcuts, alternate_shortcuts)) = previous {
+            app.session.edit_prefs(|prefs| {
+                prefs.shortcuts = shortcuts;
+                prefs.alternate_shortcuts = alternate_shortcuts;
+            });
+        }
+        let error = error.to_string();
+        app.ui.status = error.clone();
+        app.ui.status_error = true;
+        return Err(error);
+    }
     Ok(result)
 }
 

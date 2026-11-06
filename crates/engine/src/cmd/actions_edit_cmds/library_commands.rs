@@ -5,7 +5,7 @@ use std::io::{self, Write};
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use crate::actions_cmds::{Action, is_action_key, not_playing, pin_shortcut};
+use crate::actions_cmds::{Action, PLAY_SHORTCUT_PREFIX, has_legacy_shortcut, is_action_key, not_playing, shortcut_row};
 use crate::{Result, Session};
 
 use super::bad;
@@ -104,13 +104,16 @@ pub(crate) fn publish_library(
     let (after_shortcuts, after_alternates) = match new_shortcuts {
         Some(keys) => (keys, Alternates::new()),
         None => {
-            let (mut keys, mut alternate_keys) = (shortcuts.clone(), alternates.clone());
             let count = s.actions.list.len();
-            let owners: Vec<_> = list[count..].iter().filter_map(|action| list[..count].iter().position(|prior| prior.name == action.name)).collect();
+            let owners: Vec<_> = list[count..]
+                .iter()
+                .filter(|action| has_legacy_shortcut(s, &action.name))
+                .filter_map(|action| shortcut_row(&list[..count], &format!("{PLAY_SHORTCUT_PREFIX}{}", action.name)))
+                .collect();
             for owner in owners {
-                pin_shortcut(&mut list, owner, &mut keys, &mut alternate_keys)?;
+                list[owner].legacy_shortcut_owner = true;
             }
-            (keys, alternate_keys)
+            (shortcuts.clone(), alternates.clone())
         }
     };
     check_library_size(&list, &sets, &rows, cmd)?;

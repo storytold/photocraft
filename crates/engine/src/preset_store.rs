@@ -1108,29 +1108,37 @@ impl PresetStore {
         if self.actions_rev == rev {
             return;
         }
-        if self.actions_skipped {
-            self.warnings.push(format!("Couldn't save actions: {ACTIONS_FILE} could not be read, so it was left unchanged"));
-            self.actions_rev = rev;
-            return;
-        }
-        let file = crate::actions_cmds::ActionsFile { version: 1, actions: state.list.clone(), sets: state.sets.clone(), set_rows: state.set_rows.clone() };
-        let bytes = match serde_json::to_vec_pretty(&file) {
-            Ok(b) => b,
-            Err(e) => {
-                self.warnings.push(format!("Couldn't save actions: {e}"));
+        let bytes = match self.action_bytes(state) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                self.warnings.push(error);
                 self.actions_rev = rev;
                 return;
             }
         };
-        if bytes.len() as u64 > MAX_ACTIONS_BYTES {
-            self.warnings.push(format!("actions: the action list is too large to save ({} MB limit)", MAX_ACTIONS_BYTES >> 20));
-            self.actions_rev = rev;
-            return;
-        }
         match self.backend.write(ACTIONS_FILE, &bytes) {
             Ok(()) => self.actions_rev = rev,
             Err(e) => self.warnings.push(format!("Couldn't save actions: {e}")),
         }
+    }
+
+    pub(crate) fn commit_action_definitions(&mut self, state: &crate::actions_cmds::ActionState, rev: u64) -> Result<(), String> {
+        let bytes = self.action_bytes(state)?;
+        self.backend.write(ACTIONS_FILE, &bytes).map_err(|error| format!("Couldn't save actions: {error}"))?;
+        self.actions_rev = rev;
+        Ok(())
+    }
+
+    fn action_bytes(&self, state: &crate::actions_cmds::ActionState) -> Result<Vec<u8>, String> {
+        if self.actions_skipped {
+            return Err(format!("Couldn't save actions: {ACTIONS_FILE} could not be read, so it was left unchanged"));
+        }
+        let file = crate::actions_cmds::ActionsFile { version: 1, actions: state.list.clone(), sets: state.sets.clone(), set_rows: state.set_rows.clone() };
+        let bytes = serde_json::to_vec_pretty(&file).map_err(|error| format!("Couldn't save actions: {error}"))?;
+        if bytes.len() as u64 > MAX_ACTIONS_BYTES {
+            return Err(format!("actions: the action list is too large to save ({} MB limit)", MAX_ACTIONS_BYTES >> 20));
+        }
+        Ok(bytes)
     }
 }
 
@@ -1210,7 +1218,11 @@ impl Session {
                 }
             }
             for mut action in disk {
-                if action.set_slot.is_some() || action.action_id.is_some() || !self.actions.list.iter().any(|have| have.name == action.name) {
+                if action.set_slot.is_some()
+                    || action.action_id.is_some()
+                    || action.legacy_shortcut_owner
+                    || !self.actions.list.iter().any(|have| have.name == action.name)
+                {
                     action.set_slot = action.set_slot.and_then(|slot| slot.checked_add(offset));
                     self.actions.list.push(action);
                 }

@@ -5,8 +5,7 @@ use serde_json::{Value, json};
 
 use crate::Session;
 use crate::actions_cmds::{
-    Action, PLAY_SHORTCUT_PREFIX, branch_id_field, conditional_branch, pin_shortcut, prepare_action_id, resolve_play_target, shortcut_row, valid_action_id,
-    visit_calls,
+    Action, PLAY_SHORTCUT_PREFIX, branch_id_field, conditional_branch, prepare_action_id, resolve_play_target, shortcut_row, valid_action_id, visit_calls,
 };
 
 /// Explicit IDs that failed in their source list must also fail after the lists are joined.
@@ -38,23 +37,16 @@ pub(super) fn pin_disk_targets(s: &mut Session, disk: &mut [Action], warnings: &
     block_unknown_ids(disk);
     let memory = &s.actions.list;
 
-    // A legacy shortcut read with the saved preferences belongs to the first disk match.
-    // The current Action Options path already gives a newly assigned in-memory binding an ID.
-    let (mut keys, mut alternates) = (s.prefs().shortcuts.clone(), s.prefs().alternate_shortcuts.clone());
-    let owners: Vec<_> = keys
-        .keys()
-        .chain(alternates.keys())
-        .filter_map(|key| {
-            let name = key.strip_prefix(PLAY_SHORTCUT_PREFIX)?;
-            memory.iter().any(|action| action.name == name).then(|| shortcut_row(disk, key)).flatten().map(|row| (key.clone(), row))
-        })
-        .collect();
-    for (key, row) in owners {
-        if let Err(error) = pin_shortcut(disk, row, &mut keys, &mut alternates) {
-            // The original target cannot be identified. The legacy key must not play a memory row.
-            keys.remove(&key);
-            alternates.remove(&key);
-            warnings.push(format!("actions: {error}"));
+    // Saved preferences predate the asynchronous attachment. Keep their legacy key, and
+    // persist the disk owner with the library so a failed store write cannot orphan the key.
+    let keys = s.prefs().shortcuts.keys().chain(s.prefs().alternate_shortcuts.keys());
+    for key in keys {
+        let Some(name) = key.strip_prefix(PLAY_SHORTCUT_PREFIX) else { continue };
+        if memory.iter().any(|action| action.name == name)
+            && !memory.iter().any(|action| action.name == name && action.legacy_shortcut_owner)
+            && let Some(row) = shortcut_row(disk, key)
+        {
+            disk[row].legacy_shortcut_owner = true;
         }
     }
 
@@ -65,10 +57,10 @@ pub(super) fn pin_disk_targets(s: &mut Session, disk: &mut [Action], warnings: &
                 let resolve = |list: &[Action]| {
                     if command == "actions.play" { resolve_play_target(list, params, command) } else { crate::file_cmds::batch_action(list, params) }
                 };
-                if (params.get("action").is_some_and(Value::is_number) || resolve(memory).is_ok())
-                    && let Ok(target) = resolve(disk)
-                {
-                    params["actionId"] = pin_target(disk, target, warnings);
+                if params.get("action").is_some_and(Value::is_number) || resolve(memory).is_ok() {
+                    let original = resolve(disk);
+                    // A name or index that failed on disk must not acquire a target from the merge.
+                    params["actionId"] = original.map_or(Value::Null, |row| pin_target(disk, row, warnings));
                 }
             }
             "actions.conditional" => {
@@ -79,21 +71,15 @@ pub(super) fn pin_disk_targets(s: &mut Session, disk: &mut [Action], warnings: &
                     }
                     if let Ok(Some(target)) = conditional_branch(params, branch)
                         && resolve_play_target(memory, &target, command).is_ok()
-                        && let Ok(target) = resolve_play_target(disk, &target, command)
                     {
-                        params[field] = pin_target(disk, target, warnings);
+                        let original = resolve_play_target(disk, &target, command);
+                        params[field] = original.map_or(Value::Null, |row| pin_target(disk, row, warnings));
                     }
                 }
             }
             _ => {}
         });
         disk[row].steps = steps;
-    }
-    if keys != s.prefs().shortcuts || alternates != s.prefs().alternate_shortcuts {
-        s.edit_prefs(|prefs| {
-            prefs.shortcuts = keys;
-            prefs.alternate_shortcuts = alternates;
-        });
     }
 }
 

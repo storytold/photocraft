@@ -1,5 +1,5 @@
 //! Persisted action occurrences are independent of name, list order, and folder position.
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 
 use super::{Action, PLAY_SHORTCUT_PREFIX, bad};
 use crate::{Result, Session};
@@ -57,6 +57,10 @@ pub fn shortcut_row(list: &[Action], key: &str) -> Option<usize> {
         return resolve_action_id(list, id);
     }
     let name = key.strip_prefix(PLAY_SHORTCUT_PREFIX)?;
+    let mut pinned = list.iter().enumerate().filter(|(_, action)| action.name == name && action.legacy_shortcut_owner);
+    if let Some((index, _)) = pinned.next() {
+        return pinned.next().is_none().then_some(index);
+    }
     list.iter().position(|action| action.name == name)
 }
 
@@ -75,13 +79,21 @@ pub fn prepare_action_id(list: &[Action], index: usize) -> Result<String> {
     Ok(id)
 }
 
-/// Complete a successful shortcut edit. The shortcut command only edits preferences.
-pub fn commit_action_id(s: &mut Session, index: usize, id: String) {
-    if s.actions.list[index].action_id.is_none() {
-        s.actions.list[index].action_id = Some(id);
-        s.actions.touch();
-        s.sync_preset_store();
+/// Save a new identity before the shortcut edit can reach the separate preferences file.
+pub fn commit_action_id(s: &mut Session, index: usize, id: String) -> Result<()> {
+    if s.actions.list[index].action_id.is_some() {
+        return Ok(());
     }
+    s.actions.list[index].action_id = Some(id);
+    let rev = s.actions.rev.saturating_add(1);
+    if let Some(store) = s.preset_store.as_mut()
+        && let Err(error) = store.commit_action_definitions(&s.actions, rev)
+    {
+        s.actions.list[index].action_id = None;
+        return Err(bad(COMMAND, error));
+    }
+    s.actions.touch();
+    Ok(())
 }
 
 /// A valid explicit key takes precedence over a legacy key for the same row.
@@ -98,27 +110,9 @@ pub fn action_shortcut(s: &Session, index: usize) -> Option<&str> {
     (shortcut_row(list, &legacy) == Some(index)).then(|| keys.get(&legacy)).flatten().map(String::as_str)
 }
 
-/// Move a legacy binding to its already resolved row before an edit changes name lookup.
-pub(crate) fn pin_shortcut(
-    list: &mut [Action],
-    index: usize,
-    shortcuts: &mut BTreeMap<String, String>,
-    alternates: &mut BTreeMap<String, Vec<String>>,
-) -> Result<()> {
-    let legacy = format!("{PLAY_SHORTCUT_PREFIX}{}", list[index].name);
-    if shortcut_row(list, &legacy) != Some(index) || !(shortcuts.contains_key(&legacy) || alternates.contains_key(&legacy)) {
-        return Ok(());
-    }
-    let id = prepare_action_id(list, index)?;
-    let key = occurrence_key(&id);
-    list[index].action_id = Some(id);
-    if let Some(binding) = shortcuts.remove(&legacy) {
-        shortcuts.entry(key.clone()).or_insert(binding);
-    }
-    if let Some(bindings) = alternates.remove(&legacy) {
-        alternates.entry(key).or_insert(bindings);
-    }
-    Ok(())
+pub(crate) fn has_legacy_shortcut(s: &Session, name: &str) -> bool {
+    let key = format!("{PLAY_SHORTCUT_PREFIX}{name}");
+    s.prefs().shortcuts.contains_key(&key) || s.prefs().alternate_shortcuts.contains_key(&key)
 }
 
 /// Remove only the bindings owned by the deleted rows, before the indices or first match change.

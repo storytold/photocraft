@@ -814,10 +814,15 @@ fn f3_dispatches_only_the_second_same_named_action_after_reorder_and_reopen() {
     let mut h = harness();
     let store = MemBackend::default();
     h.state_mut().session.attach_preset_store(open(Box::new(store.clone())));
+    h.state_mut().session.actions.set_rows.push("Before".into());
     repeated_reset_shortcuts(&mut h);
     let first_key = action_key(&h, 0);
     let second_key = action_key(&h, 2);
     h.state_mut().run("actions.move", json!({"action":2,"to":0})).unwrap();
+    let (empty, _) = photocraft_engine::atn_cmds::export("Before", &[], &[], false).unwrap();
+    let data = photocraft_paint::tile::b64_encode(&empty);
+    h.state_mut().run("actions.load", json!({"data":data})).unwrap();
+    assert_eq!(h.state().session.actions.list[0].set_slot, Some(1));
     h.state_mut().session.sync_preset_store();
     let prefs = h.state().session.prefs_to_json();
 
@@ -852,9 +857,10 @@ fn attachment_preserves_disk_keys_and_calls_without_changing_name_lookup() {
     h.state_mut().session.load_prefs_json(r#"{"shortcuts":{"actions.play:Target":"F2"},"alternateShortcuts":{"actions.play:Target":["F3"]}}"#).unwrap();
     h.state_mut().session.actions.list.push(actions_cmds::Action::new("Target", vec![("layer.new.layer".into(), json!({"name":"memory target"}))]));
     assert!(h.state_mut().session.attach_preset_store(open(Box::new(store.clone()))).is_empty());
-    let disk_key = action_key(&h, 1);
-    assert_eq!(h.state().session.prefs().shortcuts[&disk_key], "F2");
-    assert_eq!(h.state().session.prefs().alternate_shortcuts[&disk_key], ["F3"]);
+    let disk_key = "actions.play:Target";
+    assert!(h.state().session.actions.list[1].legacy_shortcut_owner);
+    assert_eq!(h.state().session.prefs().shortcuts[disk_key], "F2");
+    assert_eq!(h.state().session.prefs().alternate_shortcuts[disk_key], ["F3"]);
 
     h.state_mut().run("actions.play", json!({"action":"Target"})).unwrap();
     assert_eq!(active_name(&h), "memory target");
@@ -874,6 +880,70 @@ fn attachment_preserves_disk_keys_and_calls_without_changing_name_lookup() {
         assert!(result.get("failed").is_none(), "{result}");
         assert_eq!(active_name(&h), "disk target");
     }
+}
+
+#[test]
+fn new_occurrence_key_shadows_legacy_primary_until_the_identity_is_missing() {
+    let mut h = harness();
+    h.state_mut().session.actions.list.push(actions_cmds::Action::new("Target", Vec::new()));
+    h.state_mut().session.edit_prefs(|p| {
+        p.shortcuts.insert("actions.play:Target".into(), "F2".into());
+    });
+    crate::actions::assign_shortcut(h.state_mut(), 0, "F4").unwrap();
+    let key = action_key(&h, 0);
+    assert!(bindings(h.state()).iter().any(|(id, _)| id == &key));
+    assert!(!bindings(h.state()).iter().any(|(id, _)| id == "actions.play:Target"));
+    // An async backend may have saved the preferences but still have the old Actions file.
+    h.state_mut().session.actions.list[0].action_id = None;
+    assert!(!bindings(h.state()).iter().any(|(id, _)| id == &key));
+    assert!(bindings(h.state()).iter().any(|(id, _)| id == "actions.play:Target"));
+}
+
+#[test]
+fn failed_action_id_write_keeps_the_legacy_shortcut_after_reopen() {
+    use photocraft_engine::preset_store::{ACTIONS_FILE, MemBackend, PresetBackend, open};
+
+    struct RejectActionsWrite(MemBackend);
+    impl PresetBackend for RejectActionsWrite {
+        fn list(&self) -> Result<Vec<(String, u64)>, String> {
+            self.0.list()
+        }
+        fn read(&self, name: &str, max: u64) -> Result<Vec<u8>, String> {
+            self.0.read(name, max)
+        }
+        fn write(&self, name: &str, bytes: &[u8]) -> Result<(), String> {
+            if name == ACTIONS_FILE {
+                return Err("injected Actions write failure".into());
+            }
+            self.0.write(name, bytes)
+        }
+        fn remove(&self, name: &str) -> Result<(), String> {
+            self.0.remove(name)
+        }
+    }
+
+    let store = MemBackend::default();
+    let file = json!({"version":1,"actions":[{"name":"Target","steps":[["layer.new.layer",{"name":"legacy target"}]]}]});
+    let original = file.to_string().into_bytes();
+    store.write(ACTIONS_FILE, &original).unwrap();
+
+    let mut h = harness();
+    h.state_mut().session.load_prefs_json(r#"{"shortcuts":{"actions.play:Target":"F2"},"alternateShortcuts":{"actions.play:Target":["F3"]}}"#).unwrap();
+    h.state_mut().session.attach_preset_store(open(Box::new(RejectActionsWrite(store.clone()))));
+    let failure = crate::actions::assign_shortcut(h.state_mut(), 0, "F4").unwrap_err();
+    assert!(failure.contains("injected Actions write failure"));
+    assert!(h.state().session.actions.list[0].action_id.is_none());
+    assert_eq!(store.read(ACTIONS_FILE, 4096).unwrap(), original);
+    let saved_prefs = h.state().session.prefs_to_json();
+
+    let mut h = harness();
+    h.state_mut().session.load_prefs_json(&saved_prefs).unwrap();
+    h.state_mut().session.attach_preset_store(open(Box::new(store)));
+    assert_eq!(h.state().session.prefs().shortcuts["actions.play:Target"], "F2");
+    assert_eq!(h.state().session.prefs().alternate_shortcuts["actions.play:Target"], ["F3"]);
+    assert!(!h.state().session.prefs().shortcuts.values().any(|key| key == "F4"));
+    press(&mut h, "F2");
+    assert_eq!(active_name(&h), "legacy target");
 }
 
 #[test]
