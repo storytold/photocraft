@@ -676,6 +676,9 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> Option<bool> {
 /// Intercept Undo/Redo/Toggle Last State while the Crop tool owns box history, for every caller
 /// (menus, shortcuts, the control channel, MCP) — as `transform_tool::intercept` does.
 pub fn intercept(app: &mut PhotocraftApp, id: &str) -> Option<Result<serde_json::Value, String>> {
+    if holds_history(app, id) {
+        return Some(Err("Commit or cancel the crop first".into()));
+    }
     if app.ui.tool != Tool::Crop || (app.crop.undo.is_empty() && app.crop.redo.is_empty()) {
         return None;
     }
@@ -685,6 +688,13 @@ pub fn intercept(app: &mut PhotocraftApp, id: &str) -> Option<Result<serde_json:
         "edit.toggleLastState" => Some(Err("Commit or cancel the crop first".into())),
         _ => None,
     }
+}
+
+/// A History jump waits for a drawn frame (#9285): it would resize the document under the frame,
+/// which keeps its coordinates. Menus and shortcuts ask [`blocks`]; the History panel, its menu and
+/// the control channel come through `app.run`.
+pub fn holds_history(app: &PhotocraftApp, id: &str) -> bool {
+    pending(app) && matches!(id, "history.selectState" | "history.selectSnapshot" | "history.stepBackward" | "history.stepForward" | "history.deleteState")
 }
 
 /// Undo (or redo) one box step.
@@ -773,6 +783,16 @@ pub fn cancel_stale(app: &mut PhotocraftApp) {
     let pending = app.ui.crop_rect.is_some() || app.crop.drag.is_some();
     // A frame made before any document was claimed (control channel, tests) is the active one's.
     if pending && app.crop.doc.is_some() && app.crop.doc != active {
+        // Default mode turned the frame's own view, which `cancel` doesn't reach: it turns the
+        // active one upright, and `ui.views` is still in the order of `view_docs` here (#9202).
+        if !crate::crop_mode::classic(app) {
+            let doc = app.crop.doc;
+            let synced = app.view_docs.iter().position(|d| Some(*d) == doc);
+            let i = synced.or_else(|| app.session.documents().iter().position(|st| Some(st.doc.id) == doc));
+            if let Some(v) = i.and_then(|i| app.ui.views.get_mut(i)) {
+                v.rotation = 0.0;
+            }
+        }
         cancel(app);
     }
     app.crop.doc = active;

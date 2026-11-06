@@ -496,6 +496,27 @@ fn moving_the_frame_snaps_its_edges() {
     assert_eq!(app.ui.crop_rect, Some([0.0, 10.0, 40.0, 40.0]), "left edge snaps to the document edge");
 }
 
+/// A click on the frame (released where it was pressed) changes nothing, as a Move-tool click
+/// doesn't move the layer: snapping the release would pull an edge within reach onto the
+/// document's, so a double-click to commit cropped another rect.
+#[test]
+fn a_click_on_the_frame_or_a_handle_never_snaps_it() {
+    let frame = [5.0, 10.0, 105.0, 60.0];
+    for classic in [true, false] {
+        // Inside (Classic: moves the frame; default: moves the image), the left edge's handle, the top-left corner's.
+        for p in [[50.0, 30.0], [5.0, 35.0], [5.0, 10.0]] {
+            let mut app = app(SampleType::U8);
+            app.ui.tool_options.crop_shield.classic_mode = classic;
+            app.ui.extras.snap = true;
+            app.ui.crop_rect = Some(frame);
+            app.crop.default_frame = false;
+            drag(&mut app, &[p], NONE);
+            assert_eq!(app.ui.crop_rect, Some(frame), "classic {classic}, click at {p:?}");
+            assert!(!crate::menus::is_enabled(&app, "edit.undo"), "classic {classic}, click at {p:?}: no box step");
+        }
+    }
+}
+
 /// #3145: Edit › Undo while a crop is pending steps the *box*, not the document (Photoshop keeps
 /// Undo live during a crop), so a moved frame comes back.
 #[test]
@@ -530,6 +551,41 @@ fn box_undo_and_redo_grey_out_when_their_stack_is_empty() {
     app.run("edit.undo", json!({})).unwrap();
     assert!(!crate::menus::is_enabled(&app, "edit.undo"), "no box step left to undo");
     assert!(crate::menus::is_enabled(&app, "edit.redo"));
+}
+
+/// A History jump under a drawn frame would resize the document while the frame keeps its
+/// coordinates, so Enter cropped the old ones (#9285): the panel's rows, snapshots and menu
+/// wait for the crop, as they do for Free Transform.
+#[test]
+fn history_jumps_wait_for_a_pending_crop() {
+    let size = |app: &PhotocraftApp| app.session.active().map(|st| (st.doc.size.width, st.doc.size.height));
+    let mut app = app(SampleType::U8);
+    app.run("history.newSnapshot", json!({})).unwrap();
+    app.run("image.canvasSize", json!({"width": 300, "height": 200})).unwrap();
+    let snapshot = app.session.active().unwrap().snapshots[0].id;
+    app.ui.crop_rect = Some([220.0, 120.0, 290.0, 190.0]);
+    app.crop.default_frame = false;
+    for (cmd, p) in [
+        ("history.selectState", json!({"state": 0})),
+        ("history.selectSnapshot", json!({"snapshot": snapshot})),
+        ("history.stepBackward", json!({})),
+        ("history.deleteState", json!({})),
+    ] {
+        assert!(app.run(cmd, p).is_err(), "{cmd} waits for the crop");
+        assert_eq!(size(&app), Some((300, 200)), "{cmd} left the document as it was");
+    }
+    assert_eq!(app.ui.crop_rect, Some([220.0, 120.0, 290.0, 190.0]), "the frame stays");
+    // Without a drawn frame (the tool's own frame around the canvas) History works as before.
+    app.crop.default_frame = true;
+    app.run("history.selectState", json!({"state": 0})).unwrap();
+    assert_eq!(size(&app), Some((200, 100)));
+    // Step Forward has a state to redo now; a drawn frame holds it back too.
+    app.crop.default_frame = false;
+    assert!(app.run("history.stepForward", json!({})).is_err(), "history.stepForward waits for the crop");
+    assert_eq!(size(&app), Some((200, 100)));
+    app.crop.default_frame = true;
+    app.run("history.stepForward", json!({})).unwrap();
+    assert_eq!(size(&app), Some((300, 200)));
 }
 
 #[test]
