@@ -4643,3 +4643,11 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Replace Image…	Замени слику…
 	The frame is locked	Оквир је закључан
 	The frame is unavailable	Оквир није доступан
+
+# Channels panel menu (#11451)
+	Channel Options…	Opcije kanala…
+	Specify Channels:	Odredi kanale:
+	Not enough grayscale documents for this mode.	Nema dovoljno dokumenata u nijansama sive za ovaj režim.
+	Pick a different document for each channel.	Izaberite drugi dokument za svaki kanal.
+	A picked document is no longer open.	Jedan izabrani dokument više nije otvoren.
+	A picked document is no longer a grayscale document of the same size.	Jedan izabrani dokument više nije dokument u nijansama sive iste veličine.

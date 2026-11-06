@@ -499,6 +499,29 @@ pub fn active(app: &PhotocraftApp) -> bool {
     app.ui.tool == Tool::Crop && app.crop.drag.is_some()
 }
 
+/// A drag that sizes or moves the frame over the image, which scrolls the view when held past the
+/// canvas edge (#4183). Not the turns, nor the default mode's image moves and live-centred resizes:
+/// those drive the camera themselves. A new frame's drag that hasn't left the size of a click (a
+/// long press that slipped past the edge) doesn't either: scrolling would draw a frame under the
+/// still pointer.
+pub fn autoscrolls(app: &PhotocraftApp) -> bool {
+    app.ui.tool == Tool::Crop
+        && match app.crop.drag {
+            Some(CropDrag::Draw { anchor, cur, .. }) => !is_click(app, anchor, cur),
+            Some(CropDrag::Move { .. } | CropDrag::Resize { view: None, .. }) => true,
+            _ => false,
+        }
+}
+
+/// A new-frame drag shorter than this (screen points) on both axes is still a click.
+const CLICK_PX: f64 = 3.0;
+
+/// Document points `a` and `b` lie within [`CLICK_PX`] screen points of each other on both axes.
+fn is_click(app: &PhotocraftApp, a: [f64; 2], b: [f64; 2]) -> bool {
+    let click = CLICK_PX / (app.point_zoom() as f64).max(0.01);
+    (b[0] - a[0]).abs() <= click && (b[1] - a[1]).abs() <= click
+}
+
 /// Cancel the pending crop: the frame, any gesture on it and the default-frame state. With the
 /// Crop tool still picked, [`ensure_frame`] then makes the active document a new default frame.
 pub fn cancel(app: &mut PhotocraftApp) {
@@ -952,7 +975,7 @@ pub fn keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
 /// Pointer input for the Crop tool. Returns true when the event was its.
 pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool {
     if app.ui.tool != Tool::Crop {
-        app.crop.drag = None;
+        end_drag(app);
         return false;
     }
     let p = match ev {
@@ -1060,7 +1083,9 @@ fn release(app: &mut PhotocraftApp, drag: CropDrag) {
     let ok = app.ui.crop_rect.is_some_and(size_ok);
     // A click outside the untouched default frame (no turn) leaves it the default.
     let changed = !matches!(drag, CropDrag::Rotate { from, .. } | CropDrag::TurnImage { from, .. } if from == angle(app))
-        && !matches!(drag, CropDrag::MoveImage { rect, .. } if app.ui.crop_rect == Some(rect));
+        && !matches!(drag, CropDrag::MoveImage { rect, .. } if app.ui.crop_rect == Some(rect))
+        // A press that never moved draws nothing: the frame shown is still the previous one.
+        && !matches!(drag, CropDrag::Draw { anchor, cur, .. } if anchor == cur);
     if ok && changed {
         app.crop.default_frame = false;
     }
@@ -1070,6 +1095,25 @@ fn release(app: &mut PhotocraftApp, drag: CropDrag) {
         restore_frame(app, drag);
     }
     push_press_step(app);
+}
+
+/// Another tool was picked while a drag on the frame is held (a tool key, #9223): the gesture ends
+/// where the pointer last moved it, as a release there would, so a box drawn over the untouched
+/// default frame counts as drawn and leaving the tool commits it.
+pub fn end_drag(app: &mut PhotocraftApp) {
+    let Some(drag) = app.crop.drag.take() else { return };
+    let tool = std::mem::replace(&mut app.ui.tool, Tool::Crop);
+    release(app, drag);
+    crate::crop_mode::sync_frame(app);
+    app.ui.tool = tool;
+}
+
+/// [`end_drag`] once another tool is current, except while the pen's eraser end stands in for the
+/// Crop tool (`stylus`): the gesture goes on when the tip comes back.
+pub fn end_drag_on_leave(app: &mut PhotocraftApp) {
+    if app.ui.tool != Tool::Crop && app.stylus.tool_before_eraser != Some(Tool::Crop) {
+        end_drag(app);
+    }
 }
 
 /// On release: the frame state at the press becomes a box Undo step when the gesture changed it.

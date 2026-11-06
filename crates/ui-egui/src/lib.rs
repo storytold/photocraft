@@ -882,6 +882,9 @@ mod blend_dropdown_wheel_tests;
 mod paths_scroll_tests;
 
 #[cfg(test)]
+mod blend_dropdown_groups_tests;
+
+#[cfg(test)]
 mod options_bar_mode_wheel_tests;
 
 #[cfg(test)]
@@ -926,6 +929,8 @@ mod window_frame_tests;
 
 #[cfg(test)]
 mod browse_field_tests;
+#[cfg(test)]
+mod export_quality_tests;
 #[cfg(test)]
 mod options_hit_area_tests;
 #[cfg(test)]
