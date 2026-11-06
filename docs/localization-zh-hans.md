@@ -16,7 +16,7 @@ use the repository's MIT OR Apache-2.0 license.
 Select **Preferences > Interface > Language > 简体中文**, or set
 `interface.language` to `zh-hans` through the existing `prefs.set` command.
 The native build's **Auto** setting reads `LANG`/`LC_*`, the macOS preferred
-languages and the Windows user locale. `zh`, `zh-CN`, `zh-SG` and `zh-Hans`
+languages and the Windows preferred UI languages. `zh`, `zh-CN`, `zh-SG` and `zh-Hans`
 variants resolve to this catalog. Traditional Chinese locales (`zh-TW`, `zh-HK`,
 `zh-MO`, `zh-Hant`) resolve to the separate `zh-hant` catalog.
 

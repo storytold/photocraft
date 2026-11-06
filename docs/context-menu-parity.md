@@ -1,6 +1,6 @@
 # Context-menu parity contract
 
-> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-10-21 · **Change:** minor (Crop tool menu on a pending crop, #6561; Zoom tool menu order, #6005; Type tool menu over committed type, #7324; earlier: Path Selection canvas menu, #1056; pasteboard row: the menu exists, #2462) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-11-05 · **Change:** minor (accuracy pass against the code at a25999311; Crop tool menu on a pending crop, #6561; Zoom tool menu order, #6005; Type tool menu over committed type, #7324; earlier: Path Selection canvas menu, #1056; pasteboard row: the menu exists, #2462) · **Target:** Adobe Photoshop 2026
 
 Status: implementation contract, updated 2026-10-09. Scope: canvas, document tabs, and panels. “Right-click” means a secondary pointer click; macOS Control-click should also open the same menu where the platform sends a context-menu gesture. Photoshop changes a context menu with the active tool, selection, and panel item. Adobe documents that principle but does not publish a complete current menu catalog. **Documented** means an Adobe source explicitly names the gesture or action. **Inferred** means a PhotoCraft design target or an item known from a main menu whose presence in a Photoshop context menu still needs a current-product capture. Do not present inferred rows as exact Photoshop menus. [Adobe: panels and menus](https://helpx.adobe.com/photoshop/using/panels-menus.html), [Adobe: shortcuts and context menus](https://helpx.adobe.com/sa_en/photoshop/using/customizing-keyboard-shortcuts.html).
 
@@ -21,7 +21,7 @@ The “PhotoCraft at branch point” column records behavior before this PR. Pic
 | Tool(s) in PhotoCraft | Photoshop / desired contextual action | PhotoCraft at branch point | Priority, evidence |
 |---|---|---|---|
 | Move | Choose a layer at the point; an auto-select choice also exists in the options bar | Layers | P0; [Adobe layer movement](https://helpx.adobe.com/photoshop/using/moving-stacking-locking-layers.html); exact pop-up layout requires capture |
-| Rectangular/Elliptical Marquee, Lasso, Polygonal Lasso, Magnetic Lasso, Magic Wand, Quick Selection, Object Selection | Active selection: the 2026 selection menu (see *Selection canvas reference* below); no selection: making a selection | Quick Selection: Picker (a brush tool, as in Photoshop); the other six: the selection menu below (#614, #738) | P1; no-selection variant still needs a dated capture |
+| Rectangular/Elliptical Marquee, Lasso, Polygonal Lasso, Magnetic Lasso, Magic Wand, Quick Selection, Object Selection | Active selection: the 2026 selection menu (see *Selection canvas reference* below); no selection: making a selection | The selection menu below (#614, #738), Quick Selection included (#7268) | P1; no-selection variant still needs a dated capture |
 | Crop | During crop: ratio/preset, overlay, clear/reset, commit/cancel **(inferred context placement)** | On a pending crop (canvas_tool_menu.rs `crop_rows`, #6561): the options bar's preset dropdown in its order (Ratio, W x H x Resolution, the ratios, the size presets, saved crop presets, Front Image), Clear, New/Delete Crop Preset…, the six overlays and Auto/Always/Never Show Overlay (checked as in the bar), Cancel and Crop; also outside the image while a crop is pending. The untouched default frame has no menu. Esc closes only the menu. Reset remains open (no reset of frame, rotation and ratio yet, nor the options bar's ↺). Photoshop's menu also lists Reset Crop and Rotate Crop Box ([Kost](https://jkost.com/blog/2017/05/essential-tips-for-cropping-in-photoshop-cc.html)); both missing | P1; pending crop target; item list still needs a dated Photoshop capture |
 | Eyedropper | Sample-size/source choices **(inferred)** | No tool menu | P2; [Adobe illustration uses Eyedropper](https://helpx.adobe.com/photoshop/using/panels-menus.html), but does not publish item text |
 | Ruler, Note, Count | Unit / measurement, note edit/delete, count-group operations **(inferred)** | No tool menu | P2 |
@@ -32,7 +32,7 @@ The “PhotoCraft at branch point” column records behavior before this PR. Pic
 | Pen, Path Selection | Path/point actions, Make Selection, Fill/Stroke Path, Free Transform Path **(inferred context placement)** | Pen canvas right-click follows the user-provided 20-row Photoshop capture below. Paths rows offer Make Selection, Fill and Stroke. The Path Selection and Direct Selection tools open the same path menu for the selected path (#1056, 2026-10-15); node- and segment-specific rows remain open. | P1; distinguish node, segment, path, and blank canvas |
 | Rectangle, Ellipse Shape, Triangle, Polygon, Line, Custom Shape | Shape/path operations, fill/stroke settings, transform **(inferred context placement)** | No tool menu | P2 |
 | Slice, Slice Select | Slice properties, duplicate/delete, divide, guides **(inferred context placement)** | No tool menu | P2 |
-| Any tool while Free Transform is active | Scale, Rotate, Skew, Distort, Perspective, Warp, rotate/flip variants, commit/cancel **(inferred exact context placement)** | Missing per docs/scorecard.md TOOL-214-5 | P0; transform operations [documented by Adobe](https://helpx.adobe.com/photoshop/desktop/crop-resize-transform/transform-manipulate-reshape/adjust-scale-rotation-and-perspective.html); type restrictions [documented here](https://helpx.adobe.com/photoshop/using/creating-type.html) |
+| Any tool while Free Transform is active | Scale, Rotate, Skew, Distort, Perspective, Warp, rotate/flip variants, commit/cancel **(inferred exact context placement)** | canvas_tool_menu.rs `TRANSFORM_MENU` (TOOL-214-5): Free Transform, Scale, Rotate, Skew, Distort, Perspective, Warp; Content-Aware Scale and Puppet Warp (greyed while a box is open); Rotate 180°, Rotate 90° Clockwise/Counter Clockwise, Flip Horizontal/Vertical, which turn the open box. No commit/cancel rows | P0; transform operations [documented by Adobe](https://helpx.adobe.com/photoshop/desktop/crop-resize-transform/transform-manipulate-reshape/adjust-scale-rotation-and-perspective.html); type restrictions [documented here](https://helpx.adobe.com/photoshop/using/creating-type.html) |
 | Any tool with Command/Ctrl + secondary click | List visible layers with pixels under pointer | Layers | P0; preserve existing route |
 
 The layer-list menu on an empty pixel or all-hidden hit should be empty/closed; it must not select a transparent or hidden layer. The right-erase preference is an alternate PhotoCraft behavior, and its selected state takes precedence over the Brush picker only for Brush/Eraser.
@@ -58,7 +58,7 @@ The reference does not establish Photoshop's behavior for right-clicks on a sing
 
 ## Selection canvas reference (2026-10-08)
 
-Right-click with a Marquee, Lasso, Polygonal Lasso, Magic Wand or Object Selection tool. Rows keep the command id, dialog and enablement of their menu-bar twins (`canvas_tool_menu::SELECTION_MENU`); a greyed row never runs.
+Right-click with a Marquee, Lasso, Polygonal Lasso, Magnetic Lasso, Magic Wand, Quick Selection or Object Selection tool. Rows keep the command id, dialog and enablement of their menu-bar twins (`canvas_tool_menu::SELECTION_MENU`); a greyed row never runs.
 
 | Group | Rows with an active selection (Photoshop 2026 order) | PhotoCraft command |
 |---|---|---|
@@ -66,18 +66,18 @@ Right-click with a Marquee, Lasso, Polygonal Lasso, Magic Wand or Object Selecti
 | Store | Save Selection…; Make Work Path… | `select.saveSelection`; `select.toWorkPath` after a Tolerance dialog |
 | Layer | Layer via Copy; Layer via Cut; New Layer… | `layer.new.layerViaCopy`, `layer.new.layerViaCut`, `layer.new.layer` |
 | Transform | Free Transform; Transform Selection; Distort; Perspective | `edit.freeTransform`, `select.transformSelection`, `edit.transform.distort`, `edit.transform.perspective` |
-| Fill | Fill…; Stroke…; Content-Aware Fill… | `edit.fill`, `edit.stroke`, `edit.contentAwareFill` |
+| Fill | Delete and Fill Selection; Fill…; Stroke…; Content-Aware Fill… | `edit.deleteAndFillSelection`, `edit.fill`, `edit.stroke`, `edit.contentAwareFill` |
 | Filter | Last Filter | `filter.lastFilter` |
 | Fade | Fade… | `edit.fade` |
 
-Photoshop's Generative Fill and Delete and Fill Selection rows are left out: PhotoCraft has no such commands. With nothing selected the menu offers Select All, Reselect, Color Range… and Load Selection… (`NO_SELECTION_MENU`). Adobe-adjacent sources document Color Range there; the other rows are **inferred** until a dated capture confirms them.
+Photoshop's Generative Fill row is left out: PhotoCraft has no such command. With nothing selected the menu offers Select All, Reselect, Color Range… and Load Selection… (`NO_SELECTION_MENU`). Adobe-adjacent sources document Color Range there; the other rows are **inferred** until a dated capture confirms them.
 
 ## Panel and workspace matrix
 
 | Surface / target | Desired options and state | PhotoCraft now | Source and confidence |
 |---|---|---|---|
 | Layers panel row | Blending Options, Duplicate/Delete, Group, export, convert/rasterize, mask, clipping, link, style copy/paste/clear, merge/flatten, Rename; filter by layer kind and selection | Implemented in layer_menu_ui.rs; item enablement uses menu commands | PhotoCraft inventory. Adobe documents layer rename/delete, color tagging, rasterization, and flattening [here](https://helpx.adobe.com/photoshop/using/layers.html); exact combined ordering **inferred** without a live capture |
-| Layers panel color label / thumbnail / mask thumbnail / effect row | Color label; context actions specific to hit icon | Layer-mask thumbnail: Disable/Delete/Apply Layer Mask, Add/Subtract/Intersect Mask with Selection, Select and Mask… (layer_menu_ui.rs `show_mask`, #4575; Mask Options… missing). Generic row on the other targets; inspect before extending | Adobe explicitly documents right-click on layer/group to assign a color ([layers](https://helpx.adobe.com/photoshop/using/layers.html)); other icon menus need capture |
+| Layers panel color label / thumbnail / mask thumbnail / effect row | Color label; context actions specific to hit icon | Layer-mask thumbnail: Disable/Delete/Apply Layer Mask, Add/Subtract/Intersect Mask with Selection, Select and Mask…, Mask Options… (layer_menu_ui.rs `show_mask`, #4575). Generic row on the other targets; inspect before extending | Adobe explicitly documents right-click on layer/group to assign a color ([layers](https://helpx.adobe.com/photoshop/using/layers.html)); other icon menus need capture |
 | Channels panel row | Duplicate/Delete/Rename, channel display and overlay color, spot conversion; new/split/merge | Implemented in channels_panel.rs | PhotoCraft inventory; exact Photoshop order **inferred** |
 | Brushes and preset panels | Rename/Delete brush or group, export selected brushes, view/reset preset choices | Rename/Delete, and preset group/item menus exist | Adobe explicitly documents Export Selected Brushes from brush/group right-click ([brushes](https://helpx.adobe.com/photoshop/desktop/apply-painting-techniques/brushes-presets/create-brush-set-painting-options.html)); Photoshop pop-up-panel rename/delete/reset/view options are [documented](https://helpx.adobe.com/photoshop/using/panels-menus.html), though some are panel-button menus |
 | Paths, History, Actions, Swatches, Gradients, Patterns, Styles, Libraries, Properties | Target-specific duplicate/delete/rename and panel operations where a panel exists | Paths row menu added in this PR; other panels need audit | **Inferred** catalog; record a Photoshop capture before claiming parity |
@@ -100,6 +100,7 @@ Each slice needs pure model tests (including every item dispatching a known comm
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-05 | minor | Accuracy pass against the code at a25999311: Free Transform menu exists (`TRANSFORM_MENU`, TOOL-214-5); Quick Selection and Magnetic Lasso open the selection menu; Delete and Fill Selection row; layer-mask Mask Options… |
 | 2026-10-21 | minor | Crop tool menu on a pending crop (#6561) |
 | 2026-10-20 | trivial | Zoom tool menu order (#6005) |
 | 2026-10-18 | minor | Type tool menu over committed type (#7324) |
