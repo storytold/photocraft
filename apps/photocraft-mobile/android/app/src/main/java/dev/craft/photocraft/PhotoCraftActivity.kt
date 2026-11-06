@@ -1,16 +1,43 @@
 package dev.craft.photocraft
 
-import android.app.NativeActivity
+import android.content.Intent
 import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import dev.craft.kit.CraftAction
+import dev.craft.kit.CraftHost
+import dev.craft.kit.CraftScaffold
+import dev.craft.kit.CraftTheme
+import dev.craft.kit.ToolbarButton
 
-/**
- * The whole Android shell. NativeActivity loads libphotocraft_mobile.so (named in the manifest)
- * and android-activity's glue calls its `android_main` on a thread of its own. Native features
- * (the Storage Access Framework picker, stylus details) attach here later.
- */
-class PhotoCraftActivity : NativeActivity() {
+/** PhotoCraft on Android: craftkit's shell around the Rust app, plus a New button. */
+class PhotoCraftActivity : ComponentActivity() {
+    private lateinit var host: CraftHost
+
     override fun onCreate(savedInstanceState: Bundle?) {
-        System.loadLibrary("photocraft_mobile")
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
+        host = CraftHost(this, library = "photocraft_mobile")
+        // "Open with" / Share launched us; a recreated activity's intent was handled before.
+        if (savedInstanceState == null) host.openIntent(intent)
+        setContent {
+            CraftTheme {
+                CraftScaffold(host, appName = "PhotoCraft") {
+                    ToolbarButton(dev.craft.kit.R.drawable.craft_ic_new, "New") { host.perform(CraftAction.Command("file.new")) }
+                }
+            }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        host.openIntent(intent)
+    }
+
+    override fun onDestroy() {
+        // Only when leaving for good: a recreated activity finds the app still running.
+        if (isFinishing) host.close()
+        super.onDestroy()
     }
 }

@@ -187,30 +187,6 @@ fn file_name(path: &str) -> String {
     std::path::Path::new(path).file_name().map_or_else(|| path.to_string(), |n| n.to_string_lossy().into_owned())
 }
 
-/// The Android entry point, called by `NativeActivity` (through android-activity's glue) on its
-/// own thread. Until Android moves to craft-mobile's host under Compose, eframe runs it, without
-/// a shell to pick or export files.
-#[cfg(target_os = "android")]
-#[expect(unsafe_code, reason = "the symbol android-activity's glue looks up; Rust owns the AndroidApp it is handed")]
-#[unsafe(no_mangle)]
-pub fn android_main(app: winit::platform::android::activity::AndroidApp) {
-    android_logger::init_once(android_logger::Config::default().with_max_level(log::LevelFilter::Info).with_tag("photocraft"));
-    let options = eframe::NativeOptions {
-        system_font_fallback: false,
-        android_app: Some(app),
-        wgpu_options: PhotoCraftMobile::wgpu_configuration(),
-        ..Default::default()
-    };
-    let result = eframe::run_native(
-        "PhotoCraft",
-        options,
-        Box::new(|cc| Ok(Box::new(PhotoCraftMobile::create(&cc.egui_ctx, cc.wgpu_render_state.clone(), Platform::default())))),
-    );
-    if let Err(e) = result {
-        log::error!("photocraft-mobile: {e}");
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
