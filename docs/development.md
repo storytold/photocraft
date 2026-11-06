@@ -979,7 +979,8 @@ Recipes are versioned JSON (`version` must be `1`; any other value is rejected).
 its `base_sha256`, a `target` with layer `kind` and optional `name`, and `checks`.
 An optional list of `commands` contains a `command` id and `params`; the runner
 supplies the resolved `layer` id. Targets that match zero or multiple layers fail.
-Only `type.*` and `layer.layerStyle.*` commands are accepted. Checks use JSON pointers
+Only `type.*` and `layer.layerStyle.*` commands are accepted, except `layer.layerStyle.contours.*`,
+which edit the contour library rather than the document and can read or write any file. Checks use JSON pointers
 relative to the inspected layer: `unchanged` requires a present, equal value before
 and after; `equals` checks the exported value; `changed_to` requires the exported
 value to match and differ from the base. Numbers compare by exact value, so `17` equals `17.0`. Every edited case needs a `changed_to` check.

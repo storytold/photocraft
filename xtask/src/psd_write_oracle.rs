@@ -109,7 +109,9 @@ fn validate(recipes: &Recipes) -> Result<(), String> {
             return Err(format!("{}: an edit needs a changed_to assertion", case.id));
         }
         for step in &case.commands {
+            // The contour library commands edit no document, and their `path` param reaches any file.
             if !(step.command.starts_with("type.") || step.command.starts_with("layer.layerStyle."))
+                || step.command.starts_with("layer.layerStyle.contours.")
                 || !step.params.is_object()
                 || step.params.get("layer").is_some()
                 || step.params.get("layers").is_some()
@@ -458,6 +460,14 @@ mod tests {
         assert!(validate(&serde_json::from_value(duplicate).unwrap()).is_err());
         let case_only = json!({"version":1,"corpus_revision":"pin","cases":[{"id":"A","base":"x.psd","base_sha256":"a".repeat(64),"target":{"kind":"Text"},"checks":[{"op":"unchanged","path":"/name"}]},{"id":"a","base":"x.psd","base_sha256":"a".repeat(64),"target":{"kind":"Text"},"checks":[{"op":"unchanged","path":"/name"}]}]});
         assert!(validate(&serde_json::from_value(case_only).unwrap()).unwrap_err().contains("duplicate"));
+        let contour = |command: &str| {
+            json!({"version":1,"corpus_revision":"pin","cases":[{"id":"x","base":"x.psd","base_sha256":"a".repeat(64),"target":{"kind":"Text"},
+                "commands":[{"command":command,"params":{"path":"base.psd"}}],"checks":[{"op":"changed_to","path":"/name","value":"y"}]}]})
+        };
+        for command in ["layer.layerStyle.contours.save", "layer.layerStyle.contours.load"] {
+            assert!(validate(&serde_json::from_value(contour(command)).unwrap()).unwrap_err().contains("invalid command"));
+        }
+        assert!(validate(&serde_json::from_value(contour("layer.layerStyle.dropShadow")).unwrap()).is_ok());
         let edit = json!({"version":1,"corpus_revision":"pin","cases":[{"id":"x","base":"x.psd","base_sha256":"a".repeat(64),"target":{"kind":"Text"},"commands":[{"command":"type.setStyle"}],"checks":[{"op":"unchanged","path":"/name"}]}]});
         assert!(validate(&serde_json::from_value(edit).unwrap()).is_err());
     }
