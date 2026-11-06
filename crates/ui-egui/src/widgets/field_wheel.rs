@@ -175,6 +175,10 @@ pub fn set_focused(ctx: &Context, id: Id, field: Id) {
 pub fn notches(ui: &Ui, field: Id, focused: bool, rect: Rect) -> f32 {
     if focused {
         let events = ui.data_mut(|d| d.remove_temp::<Vec<Event>>(taken_id())).unwrap_or_default();
+        // A field disabled in the frame the wheel came in keeps its value; the wheel is spent.
+        if !ui.is_enabled() {
+            return 0.0;
+        }
         return count(ui, field, &events, 10.0);
     }
     hover_notches(ui, field, ui.rect_contains_pointer(rect), 10.0)
@@ -471,6 +475,26 @@ mod tests {
         h.run();
         let at = field(&h).center();
         wheel(&mut h, at, 1.0, Modifiers::NONE);
+        assert_eq!(h.state().0, 100.0);
+    }
+
+    /// A focused field disabled in the very frame the wheel comes in (before egui drops its
+    /// focus) keeps its value.
+    #[test]
+    fn a_focused_field_disabled_in_the_wheels_frame_is_not_stepped() {
+        let mut h = harness(100.0);
+        h.get_by_role(Role::SpinButton).click();
+        h.run();
+        assert!(h.get_by_role(Role::SpinButton).is_focused());
+        h.state_mut().2 = false;
+        h.event(egui::Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
+            unit: egui::MouseWheelUnit::Line,
+            delta: vec2(0.0, 2.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: Modifiers::NONE,
+        });
+        h.run_steps(4);
         assert_eq!(h.state().0, 100.0);
     }
 

@@ -28,13 +28,13 @@ struct State {
 
 const START: State = State { value: 500.0, choice: 2, offset: 0.0 };
 
-/// A 100 pt tall panel with `control` 80 pt down, above a large filler; frames 1/30 s apart.
+/// A 100 pt tall panel with `control` 40 pt down (all of it in view), above a large filler; frames 1/30 s apart.
 fn harness(control: Control) -> Harness<'static, State> {
     let mut h = Harness::builder().with_size(vec2(320.0, 240.0)).with_step_dt(1.0 / 30.0).build_ui_state(
         move |ui, s: &mut State| {
             super::begin_frame(ui.ctx());
             let out = egui::ScrollArea::vertical().max_height(100.0).show(ui, |ui| {
-                ui.allocate_space(vec2(200.0, 80.0));
+                ui.allocate_space(vec2(200.0, 40.0));
                 match control {
                     Control::Field => {
                         crate::widgets::value_field(ui, &mut s.value, 0.0..=1000.0, "px", 90.0).accessible_name("Size");
@@ -143,18 +143,27 @@ fn a_long_pause_ends_the_panel_scroll() {
 /// the middle of a panel scroll.
 #[test]
 fn a_swipe_that_starts_over_the_panel_does_not_step_a_dropdown_or_slider_it_reaches() {
-    for control in ALL {
+    // A short swipe over the panel, then (with `second`) a whole notch more once the pointer has
+    // reached the control, in the same gesture.
+    let run = |control: Control, second: bool| {
         let mut h = harness(control);
         let at = rect(&h, control).center() - vec2(0.0, 40.0);
         h.hover_at(at);
         h.run_steps(1);
         swipe(&mut h, -10.0);
         h.run_steps(1);
-        // Still the same gesture as the pointer reaches the control: a whole notch over it.
         h.hover_at(rect(&h, control).center());
-        swipe(&mut h, -40.0);
+        if second {
+            swipe(&mut h, -40.0);
+        }
         h.run_steps(18);
-        assert!(untouched(h.state()), "{control:?}: {:?}", h.state());
-        assert!(h.state().offset > 0.0, "{control:?}: the panel scrolled");
+        *h.state()
+    };
+    for control in ALL {
+        let without = run(control, false);
+        let with = run(control, true);
+        assert!(untouched(&with), "{control:?}: {with:?}");
+        // Against the first swipe alone, so its own scroll can't pass for the second's.
+        assert!(with.offset > without.offset, "{control:?}: the panel kept scrolling: {} after {}", with.offset, without.offset);
     }
 }
