@@ -946,6 +946,9 @@ fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, o
     if is_psd_input(name, bytes) {
         return import_psd(name, ctl, damaged, opts, |want, recover| PsdFile::from_bytes_and_merged_preflight(bytes, want, recover));
     }
+    if is_tx_texture(name, bytes) {
+        return flat::import_tx(name, bytes, opts, ctl);
+    }
     flat::import_flat_with_options(name, bytes, opts, ctl)
 }
 
@@ -963,6 +966,13 @@ pub fn is_svg_input(name: &str, bytes: &[u8]) -> bool {
 
 fn extension(name_or_ext: &str) -> String {
     name_or_ext.rsplit(['.', '/', '\\']).next().unwrap_or(name_or_ext).to_ascii_lowercase()
+}
+
+/// Whether `name` and `bytes` are a `.tx` render texture (a TIFF named `.tx`), which opens
+/// read-only (see [`import`]). For open paths that don't get the importer's
+/// [`ImportResult::source_read_only`], such as the app's inline and automation opens.
+pub fn is_tx_texture(name: &str, bytes: &[u8]) -> bool {
+    has_extension(name, "tx") && photocraft_codecs::detect(bytes) == Some(photocraft_codecs::Format::Tiff)
 }
 
 fn has_extension(name: &str, expected: &str) -> bool {

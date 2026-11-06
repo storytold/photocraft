@@ -21,7 +21,8 @@ fn same_dir(a: &Path, b: &Path) -> bool {
 
 pub(crate) fn is_input(p: &Path) -> bool {
     let known = |e: &str| {
-        matches!(e, "pcraft" | "psd" | "psb" | "pdn" | "ora" | "kra" | "krz" | "af" | "afdesign" | "afphoto" | "afpub")
+        // `.tx` textures are TIFFs the codecs read but deliberately don't list (they can't write one).
+        matches!(e, "pcraft" | "psd" | "psb" | "pdn" | "ora" | "kra" | "krz" | "af" | "afdesign" | "afphoto" | "afpub" | "tx")
             || photocraft_codecs::from_extension(e).is_some_and(|f| photocraft_codecs::caps(f).read)
     };
     p.is_file() && p.extension().is_some_and(|e| known(&e.to_string_lossy().to_ascii_lowercase()))
@@ -213,6 +214,29 @@ mod batch_action_set_tests {
     use super::*;
     use crate::test_support::{Invoke, invoke};
     use serde_json::Value;
+
+    /// A folder of `.tx` textures (tiled MIP-mapped TIFFs the codecs read but can't write) is picked
+    /// up by `batch`, and each one is written in the format asked for.
+    #[test]
+    fn batch_picks_up_tx_textures_and_writes_the_chosen_format() {
+        let dir = std::env::temp_dir().join(format!("photocraft-cli-tx-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = |name: &str| dir.join(name).to_string_lossy().to_string();
+        std::fs::create_dir_all(dir.join("in")).unwrap();
+        let Invoke { code, stderr, .. } = invoke(&["run", "--new", r#"{"width":8,"height":6}"#, "--out", &path("in/wall.tif")]);
+        assert_eq!(code, 0, "{stderr}");
+        std::fs::rename(dir.join("in/wall.tif"), dir.join("in/wall.tx")).unwrap();
+        std::fs::write(dir.join("steps.json"), r#"["image.adjustments.invert"]"#).unwrap();
+        let Invoke { code, stdout, stderr } =
+            invoke(&["batch", "--actions", &path("steps.json"), "--in", &path("in"), "--out", &path("out"), "--format", "png"]);
+        assert_eq!(code, 0, "{stdout}{stderr}");
+        assert!(dir.join("out/wall.png").is_file(), "{stdout}{stderr}");
+        // Without `--format` a texture is saved as PSD, as other formats PhotoCraft only reads.
+        let Invoke { code, stdout, stderr } = invoke(&["batch", "--actions", &path("steps.json"), "--in", &path("in"), "--out", &path("same")]);
+        assert_eq!(code, 0, "{stdout}{stderr}");
+        assert!(dir.join("same/wall.psd").is_file(), "{stdout}{stderr}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// A batched action that plays another action of its set finds it in every file's session; a
     /// failure inside the called action fails the file, and a self-call stops instead of looping.

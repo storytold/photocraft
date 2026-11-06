@@ -127,7 +127,7 @@ impl PhotocraftApp {
             self,
             open_prompt::Held {
                 doc,
-                read_only: photocraft_io::affinity::is_affinity(bytes),
+                read_only: photocraft_io::affinity::is_affinity(bytes) || photocraft_io::is_tx_texture(name, bytes),
                 damage_pending: damaged,
                 name: name.to_string(),
                 path: path.map(str::to_string),
@@ -177,7 +177,7 @@ impl PhotocraftApp {
         // The caller records the path it read from.
         self.session.add_document(doc, None);
         if let Some(st) = self.session.active_mut() {
-            st.source_read_only = photocraft_io::affinity::is_affinity(bytes);
+            st.source_read_only = photocraft_io::affinity::is_affinity(bytes) || photocraft_io::is_tx_texture(name, bytes);
         }
         self.sync_views();
         self.ui.status = crate::i18n::fmt(tl!("Opened {name}"), &[("name", name)]);

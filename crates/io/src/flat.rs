@@ -467,6 +467,53 @@ fn import_tiff_with_extras(
     image_to_document(name, &img.oriented(orientation)?)
 }
 
+/// A `.tx` texture (written by OpenImageIO's `maketx` for V-Ray, Arnold, RenderMan and others): a
+/// tiled TIFF with one directory per MIP level, full resolution first. It opens as that level,
+/// read-only: Save can't write the MIP chain and tiling back, so it asks for a new name instead of
+/// replacing the texture with a plain TIFF. The smaller levels are derived from the first one, so
+/// leaving them out loses nothing and the "more pages" warning is dropped for a MIP chain.
+pub(crate) fn import_tx(name: &str, bytes: &[u8], opts: &crate::ImportOptions, ctl: &photocraft_raster::Interrupt) -> Result<ImportResult, IoError> {
+    let mut r = import_tiff_page_with_options(name, bytes, None, opts, ctl)?;
+    if let Some(info) = codecs::tiff_info(bytes).ok().filter(is_mip_chain) {
+        // The warning as the decoder words it, with or without the page count.
+        let more = |total| codecs::DecodeWarning::MorePages { total }.to_string();
+        let (counted, unknown) = (more(u32::try_from(info.page_count()).ok()), more(None));
+        r.warnings.retain(|w| *w != counted && *w != unknown);
+    }
+    r.source_read_only = true;
+    Ok(r)
+}
+
+/// Whether the page that opens starts a MIP pyramid as `maketx` writes it. From that page (the one
+/// [`codecs::TiffInfo::default_page`] picks, so a leading thumbnail is skipped) over the full-resolution
+/// main-chain pages the "more pages" warning counts: every level is tiled, each one shrinks the one
+/// before by half (rounded down or up, never below 1), and the chain ends at 1×1. Every page the
+/// warning counts ([`codecs::TiffInfo::page_count`]) must be one of those levels: none before the
+/// page that opens, none without a size. Anything less conclusive keeps the warning, so real extra
+/// pages are never left out silently.
+fn is_mip_chain(info: &codecs::TiffInfo) -> bool {
+    // A walk that stopped early (a loop or a damaged directory) hides what came after it.
+    if !info.complete {
+        return false;
+    }
+    let Some(start) = info.default_page() else { return false };
+    let counted = |p: &codecs::TiffPage| p.parent.is_none() && p.kind == codecs::TiffPageKind::Page;
+    if info.pages.iter().take(start).any(counted) {
+        return false;
+    }
+    let levels: Vec<_> = info.pages.iter().skip(start).filter(|p| counted(p)).collect();
+    if levels.len() != info.page_count() || levels.iter().any(|p| p.width == 0 || p.height == 0) {
+        return false;
+    }
+    let halves = |big: u32, small: u32| small == (big / 2).max(1) || small == big.div_ceil(2).max(1);
+    let next_level =
+        |a: &codecs::TiffPage, b: &codecs::TiffPage| (a.width, a.height) != (b.width, b.height) && halves(a.width, b.width) && halves(a.height, b.height);
+    levels.len() > 1
+        && levels.iter().all(|p| p.tiled)
+        && levels.last().is_some_and(|p| p.width == 1 && p.height == 1)
+        && levels.windows(2).all(|l| next_level(l[0], l[1]))
+}
+
 /// A flat TIFF page as a single-layer document, decoded a group of rows at a time into the
 /// layer's tiles: only one group exists beside the document. `available`: the memory this
 /// process can still use (see [`crate::memory::available`]); `budget`: the source bytes per core

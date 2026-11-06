@@ -96,11 +96,12 @@ pub(super) fn openable_name(path: &str) -> bool {
 /// raws whose usual files `photocraft_raw::decode` develops. Not CR3, ORF, RAF, RW2, SRF or SR2:
 /// CR3, compressed ORF and RAF and RW2 raw formats other than 3, 4 and 5 aren't decoded yet, and
 /// import falls back to the embedded JPEG preview with only a warning, which a batch must not
-/// process silently.
+/// process silently. Also `.tx` render textures: they open as the TIFF they are, but `tx` isn't a
+/// TIFF extension, so a save under that name isn't a plain TIFF without its MIP levels.
 #[cfg(not(target_arch = "wasm32"))]
 const OPENABLE: &[&str] = &[
     "pdn", "ora", "xcf", "xcfgz", "kra", "krz", "psd", "psb", "psdt", "pcraft", "svg", "svgz", "af", "afdesign", "afphoto", "afpub", "dng", "cr2", "nef",
-    "nrw", "arw", "pef",
+    "nrw", "arw", "pef", "tx",
 ];
 
 pub(crate) fn file_name(path: &str) -> String {

@@ -85,6 +85,7 @@ mod tiff_layers;
 mod tiff_pages;
 mod tiff_save_options;
 mod tiff_type_geometry;
+mod tx_texture;
 mod vector;
 mod xcf;
 mod xmp_export;
