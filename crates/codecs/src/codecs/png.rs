@@ -43,6 +43,8 @@ fn open<'a, 'b>(input: &'a mut Cursor<&'b [u8]>, limits: &Limits) -> Result<Open
     // png's lazy text get_text() inflates without consulting its allocation limit.
     // Read text separately below, without retaining compressed copies in the decoder.
     decoder.set_ignore_text_chunk(true);
+    // png inflates iCCP up to the whole allocation limit; read the profile below with a cap.
+    decoder.set_ignore_iccp_chunk(true);
     {
         let info = decoder.read_header_info().map_err(map_png_err)?;
         let (w, h) = info.size();
@@ -106,6 +108,11 @@ fn finish_reader(mut reader: png::Reader<&mut Cursor<&[u8]>>) -> Result<(Option<
 /// The text chunks (read from `consumed`, the file up to where the reader stopped) and the
 /// warnings, completing what [`finish_reader`] collected.
 fn extras(icc: Option<Vec<u8>>, mut meta: Metadata, input: &Cursor<&[u8]>, images: u64, limits: &Limits) -> Result<PngExtras, CodecError> {
+    // The decoder is told to skip `iCCP` (it inflates the chunk up to the whole allocation limit),
+    // so the profile is read here instead, capped at `max_alloc`: past it the image opens without
+    // one. `info.icc_profile` is None while that stands; the `or_else` keeps this correct if the
+    // decoder is ever left to read the chunk itself.
+    let icc = icc.or_else(|| read_iccp(input.get_ref(), limits.max_alloc));
     let end = usize::try_from(input.position()).map_err(|_| err("invalid PNG reader position"))?;
     let consumed = input.get_ref().get(..end).ok_or_else(|| err("invalid PNG reader position"))?;
     read_text_metadata(consumed, limits.alloc_usize(), &mut meta)?;
@@ -305,6 +312,52 @@ fn split_nul(bytes: &[u8]) -> Option<(&[u8], &[u8])> {
 
 fn latin1_len(bytes: &[u8]) -> Option<usize> {
     bytes.len().checked_add(bytes.iter().filter(|&&b| b >= 128).count())
+}
+
+/// Largest ICC profile a PNG's `iCCP` may inflate to: what a JPEG can carry at most (255 APP2
+/// segments of 65 519 bytes), far past any real profile. png itself inflates up to the whole
+/// allocation limit, so a few kilobytes of zlib could ask for gigabytes (#8599).
+const MAX_ICC_BYTES: u64 = 255 * 65_519;
+
+/// The ICC profile of the `iCCP` chunk before the image data, inflated to at most
+/// [`MAX_ICC_BYTES`] or `max_alloc`, whichever is smaller (png kept profiles within the
+/// allocation limit too). `None` when there is none, or the one there has a broken CRC, name or
+/// zlib stream, or inflates past the cap: the image then opens untagged, as png left a broken
+/// profile out. A PNG carries at most one `iCCP` (spec 11.3.3.3), so the first one decides and
+/// no later chunk is looked for.
+fn read_iccp(bytes: &[u8], max_alloc: u64) -> Option<Vec<u8>> {
+    let cap = MAX_ICC_BYTES.min(max_alloc);
+    use std::io::Read;
+    let mut rest = bytes.get(8..)?;
+    while let Some((length, tail)) = rest.split_first_chunk::<4>() {
+        let (kind, tail) = tail.split_first_chunk::<4>()?;
+        let length = usize::try_from(u32::from_be_bytes(*length)).ok().filter(|l| *l <= i32::MAX as usize)?;
+        let data = tail.get(..length)?;
+        let (checksum, next) = tail.get(length..).and_then(<[u8]>::split_first_chunk::<4>)?;
+        rest = next;
+        // The profile comes before the image data (PNG spec, 5.6 chunk ordering).
+        if matches!(kind, b"IDAT" | b"IEND") {
+            return None;
+        }
+        if kind != b"iCCP" {
+            continue;
+        }
+        let mut crc = flate2::Crc::new();
+        crc.update(kind);
+        crc.update(data);
+        if crc.sum() != u32::from_be_bytes(*checksum) {
+            return None;
+        }
+        let (name, value) = split_nul(data)?;
+        let (&0, deflated) = value.split_first()? else { return None };
+        if name.is_empty() || name.len() > 79 {
+            return None;
+        }
+        let mut profile = Vec::new();
+        flate2::read::ZlibDecoder::new(deflated).take(cap.saturating_add(1)).read_to_end(&mut profile).ok()?;
+        return (profile.len() as u64 <= cap).then_some(profile);
+    }
+    None
 }
 
 /// Read only CRC-valid text chunks, including those after IDAT, with one shared
@@ -1448,6 +1501,59 @@ mod streamed_tests {
         assert!(rows.push(&narrow).is_err());
         // Two of three rows.
         assert!(rows.finish().is_err());
+    }
+
+    /// #8599: an `iCCP` profile is read up to [`MAX_ICC_BYTES`]; one that inflates past it (a
+    /// few kilobytes of zlib) is left out and the image still opens, untagged. A profile at the
+    /// cap still comes through whole.
+    #[test]
+    fn an_iccp_profile_past_the_cap_is_left_out_and_the_image_opens() {
+        let img = |icc: Vec<u8>| Image::from_raw(2, 2, ChannelLayout::Rgb, SampleType::U8, vec![9; 12]).unwrap().with_icc(Some(icc));
+        let cap = usize::try_from(MAX_ICC_BYTES).unwrap();
+        let png = crate::encode(&img(vec![0; cap + 1]), Format::Png, &EncodeOptions::default()).unwrap();
+        assert!(png.len() < 100_000, "the oversized profile compresses to a small chunk: {}", png.len());
+        let decoded = decode(&png, &Limits::default()).unwrap();
+        assert_eq!((decoded.icc.is_none(), decoded.data()), (true, &[9u8; 12][..]));
+        let png = crate::encode(&img(vec![7; cap]), Format::Png, &EncodeOptions::default()).unwrap();
+        assert_eq!(decode(&png, &Limits::default()).unwrap().icc.map(|p| p.len()), Some(cap));
+        // A smaller allocation limit bounds the profile too, as it did inside png.
+        let png = crate::encode(&img(vec![7; 2000]), Format::Png, &EncodeOptions::default()).unwrap();
+        assert_eq!(read_iccp(&png, 1999), None);
+        assert_eq!(read_iccp(&png, 2000).map(|p| p.len()), Some(2000));
+        // CodeRabbit on #10300: through `decode`, which passes its own limit on: the profile is
+        // left out and the 12 bytes of pixels still decode.
+        let limits = |max_alloc| Limits { max_alloc, ..Limits::default() };
+        let decoded = decode(&png, &limits(1999)).unwrap();
+        assert_eq!((decoded.icc.as_deref(), decoded.data()), (None, &[9u8; 12][..]));
+        assert_eq!(decode(&png, &limits(2000)).unwrap().icc.map(|p| p.len()), Some(2000));
+        // And one byte under the cap comes through whole.
+        let png = crate::encode(&img(vec![3; cap - 1]), Format::Png, &EncodeOptions::default()).unwrap();
+        assert_eq!(decode(&png, &Limits::default()).unwrap().icc.map(|p| p.len()), Some(cap - 1));
+    }
+
+    /// #8599 review: a profile of the size a real one has survives the round trip byte for byte,
+    /// and a file cut off inside its `iCCP` opens untagged instead of reading past the chunk.
+    #[test]
+    fn a_real_sized_profile_round_trips_and_a_truncated_chunk_is_left_out() {
+        // 3 KB of varied bytes, the order of magnitude of an sRGB profile, so it neither
+        // compresses to nothing nor hits any cap.
+        let profile: Vec<u8> = (0..3072u32).map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8).collect();
+        let img = Image::from_raw(2, 2, ChannelLayout::Rgb, SampleType::U8, vec![9; 12]).unwrap().with_icc(Some(profile.clone()));
+        let png = crate::encode(&img, Format::Png, &EncodeOptions::default()).unwrap();
+        let decoded = decode(&png, &Limits::default()).unwrap();
+        assert_eq!(decoded.icc.as_deref(), Some(&profile[..]), "the profile comes back byte for byte");
+        assert_eq!(decoded.data(), &[9u8; 12][..]);
+        // Cut the file inside the iCCP chunk: the walk runs out of bytes and reads no profile.
+        // (A cut after the chunk still reads it, which is why these all land inside it.)
+        let iccp = png.windows(4).position(|w| w == b"iCCP").expect("the file carries an iCCP chunk");
+        let len = u32::from_be_bytes(png[iccp - 4..iccp].try_into().expect("four length bytes")) as usize;
+        for cut in [iccp + 4, iccp + 20, iccp + 4 + len / 2, iccp + 4 + len - 1] {
+            assert_eq!(read_iccp(&png[..cut], u64::from(u32::MAX)), None, "cut at {cut} of {}", png.len());
+        }
+        // A length field claiming more than the file holds is refused the same way.
+        let mut lying = png.clone();
+        lying[iccp - 4..iccp].copy_from_slice(&u32::to_be_bytes(0x7fff_ffff));
+        assert_eq!(read_iccp(&lying, u64::from(u32::MAX)), None, "a length past the end of the file");
     }
 }
 
