@@ -5,6 +5,11 @@
 //! `ImageSourceData` tagged blocks, rather than a complete PSD file, so this
 //! module supplies the header, image resources and composite metadata that
 //! PSD's importer normally reads from the surrounding file.
+//!
+//! Auto and Layers modes limit the source PDF to 512 MiB before loading it.
+//! Explicit Render mode uses the renderer's own resource guards instead.
+//! A valid AdobePhotoshop dictionary without the optional Private entry has
+//! no preserved layers; a present but malformed Private entry is corruption.
 
 use std::io::Read as _;
 
@@ -80,7 +85,7 @@ pub(crate) fn import_page(name: &str, page: &Page<'_>, options: &crate::ImportOp
 #[cfg(test)]
 fn layered_result(name: &str, bytes: &[u8], page: usize, password: Option<&str>, ctl: &Interrupt) -> Result<ImportResult, LayeredPdfError> {
     ctl.check().map_err(|_| LayeredPdfError::Cancelled)?;
-    validate_pdf_size_len(bytes.len())?;
+    validate_pdf_size_len(bytes.len(), photocraft_doc::PdfImportMode::Layers)?;
     let pdf = crate::pdf_import::load(bytes, password).map_err(|error| LayeredPdfError::pdf(error.to_string()))?;
     let page = pdf
         .pages()
@@ -143,6 +148,9 @@ fn photoshop_private_hayro<'a>(page: &Page<'a>) -> Result<HayroDict<'a>, Layered
         return Err(LayeredPdfError::Absent);
     }
     let adobe = piece.get::<HayroDict<'_>>(b"AdobePhotoshop").ok_or_else(|| LayeredPdfError::corrupt("invalid AdobePhotoshop dictionary"))?;
+    if !adobe.contains_key(b"Private") {
+        return Err(LayeredPdfError::Absent);
+    }
     adobe.get::<HayroDict<'_>>(b"Private").ok_or_else(|| LayeredPdfError::corrupt("invalid Photoshop Private dictionary"))
 }
 
@@ -213,10 +221,11 @@ fn composite_icc_profile(composite: &HayroStream<'_>) -> Result<Option<Vec<u8>>,
     decode_hayro_stream(profile, "CompositeImage ICC profile").map(Some)
 }
 
-/// Validates the input size without inspecting the bytes, keeping the hard
-/// allocation boundary testable without constructing a huge PDF.
-pub(crate) fn validate_pdf_size_len(len: usize) -> Result<(), LayeredPdfError> {
-    if len > MAX_PDF_BYTES {
+/// Validates the preservation-path input size without inspecting the bytes,
+/// keeping the allocation boundary and Render exemption testable without a
+/// huge PDF. Call before loading; Render retains its own resource guards.
+pub(crate) fn validate_pdf_size_len(len: usize, mode: photocraft_doc::PdfImportMode) -> Result<(), LayeredPdfError> {
+    if mode != photocraft_doc::PdfImportMode::Render && len > MAX_PDF_BYTES {
         return Err(LayeredPdfError::pdf(format!("PDF is larger than the {} MiB import limit", MAX_PDF_BYTES >> 20)));
     }
     Ok(())

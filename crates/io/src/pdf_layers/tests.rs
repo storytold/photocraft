@@ -47,10 +47,14 @@ fn preserved(blocks: &[u8], depth: u16, profile: Option<&[u8]>, resources: &str,
 }
 
 fn ordinary() -> Vec<u8> {
+    ordinary_with_page_metadata("")
+}
+
+fn ordinary_with_page_metadata(metadata: &str) -> Vec<u8> {
     pdf(&[
         b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
-        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 1 1] /Resources << >> /Contents 4 0 R >>".to_vec(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 1 1] /Resources << >> /Contents 4 0 R {metadata} >>").into_bytes(),
         stream(b"0 1 0 rg 0 0 1 1 re f", ""),
     ])
 }
@@ -124,6 +128,34 @@ fn absent_layers_fall_back_only_in_auto_mode() {
 }
 
 #[test]
+fn absent_optional_private_entry_falls_back_only_in_auto_mode() {
+    for adobe in ["<< >>", "<< /LastModified (D:20261105000000Z) >>"] {
+        let bytes = ordinary_with_page_metadata(&format!("/PieceInfo << /AdobePhotoshop {adobe} >>"));
+        assert!(matches!(layered_result("metadata.pdf", &bytes, 1, None, &Interrupt::NONE), Err(LayeredPdfError::Absent)));
+        let imported = crate::import_with_options("metadata.pdf", &bytes, &options(PdfImportMode::Auto)).unwrap();
+        assert_eq!(imported.document.size, Size::new(1, 1));
+        assert_eq!(imported.document.layers[0].surface().unwrap().pixel(0, 0), [0.0, 1.0, 0.0, 1.0]);
+        assert!(imported.source_read_only);
+        assert!(matches!(crate::import_with_options("metadata.pdf", &bytes, &options(PdfImportMode::Layers)), Err(IoError::Pdf(message))
+                if message.contains("no Photoshop editable layer data")));
+    }
+}
+
+#[test]
+fn present_malformed_private_entry_is_terminal_in_auto_and_layers_modes() {
+    for private in ["null", "42", "[]", "<< >>"] {
+        let bytes = ordinary_with_page_metadata(&format!("/PieceInfo << /AdobePhotoshop << /Private {private} >> >>"));
+        assert!(matches!(layered_result("malformed.pdf", &bytes, 1, None, &Interrupt::NONE), Err(LayeredPdfError::Corrupt(_))));
+        for mode in [PdfImportMode::Auto, PdfImportMode::Layers] {
+            assert!(matches!(crate::import_with_options("malformed.pdf", &bytes, &options(mode)), Err(IoError::Pdf(message))
+                    if message.contains("corrupt or unsupported")));
+        }
+        let rendered = crate::import_with_options("malformed.pdf", &bytes, &options(PdfImportMode::Render)).unwrap();
+        assert_eq!(rendered.document.layers[0].surface().unwrap().pixel(0, 0), [0.0, 1.0, 0.0, 1.0]);
+    }
+}
+
+#[test]
 fn damaged_channels_are_terminal_but_explicit_render_still_opens_the_page() {
     let mut psd = crate::document_to_psd(&source(SampleType::U8));
     psd.layers_mut()[0].channels[0].data.clear();
@@ -194,8 +226,19 @@ fn input_page_and_size_errors_are_not_preservation_corruption() {
     for page in [0, 2] {
         assert!(matches!(layered_result("page.pdf", &bytes, page, None, &Interrupt::NONE), Err(LayeredPdfError::Pdf(_))));
     }
-    assert!(matches!(validate_pdf_size_len(MAX_PDF_BYTES + 1), Err(LayeredPdfError::Pdf(_))));
+    assert!(matches!(validate_pdf_size_len(MAX_PDF_BYTES + 1, PdfImportMode::Layers), Err(LayeredPdfError::Pdf(_))));
     assert!(matches!(layered_result("cancelled.pdf", &bytes, 1, None, &Interrupt::new(&|| true, &|_| {})), Err(LayeredPdfError::Cancelled)));
+}
+
+#[test]
+fn source_pdf_size_limit_applies_only_to_preservation_modes() {
+    for mode in [PdfImportMode::Auto, PdfImportMode::Layers] {
+        assert!(validate_pdf_size_len(MAX_PDF_BYTES, mode).is_ok());
+        assert!(matches!(validate_pdf_size_len(MAX_PDF_BYTES + 1, mode), Err(LayeredPdfError::Pdf(_))));
+    }
+    for len in [MAX_PDF_BYTES, MAX_PDF_BYTES + 1, usize::MAX] {
+        assert!(validate_pdf_size_len(len, PdfImportMode::Render).is_ok());
+    }
 }
 
 #[test]

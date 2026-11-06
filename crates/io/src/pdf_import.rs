@@ -415,7 +415,7 @@ fn import_pdf_inner(name: &str, bytes: &[u8], opts: &PdfOpenOptions, import_opti
         return import_image(name, bytes, index, opts.name.as_deref(), opts.password.as_deref(), ctl);
     }
     ctl.check().map_err(|_| IoError::Cancelled)?;
-    crate::pdf_layers::validate_pdf_size_len(bytes.len()).map_err(crate::pdf_layers::LayeredPdfError::into_io)?;
+    crate::pdf_layers::validate_pdf_size_len(bytes.len(), opts.layer_mode).map_err(crate::pdf_layers::LayeredPdfError::into_io)?;
     let pdf = load(bytes, opts.password.as_deref())?;
     let count = pdf.pages().len();
     let page = page_of(&pdf, opts.page)?;

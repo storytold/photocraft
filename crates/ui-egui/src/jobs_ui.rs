@@ -1043,7 +1043,7 @@ pub fn inspect(app: &PhotocraftApp) -> Value {
     })
 }
 
-/// Bytes shared with a background open without copying them again.
+/// Copy a borrowed byte slice into an owned source for a background open.
 pub fn bytes(b: &[u8]) -> OpenSource {
     OpenSource::Bytes(Arc::new(b.to_vec()))
 }

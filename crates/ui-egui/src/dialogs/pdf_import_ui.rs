@@ -774,7 +774,8 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
     let mut opened = 0;
     let mut failed = Vec::new();
     // One set: the tabs keep the chosen order (Open In Reverse Order included) however the
-    // background opens finish, starting where the PDF was dropped.
+    // background opens finish, starting where the PDF was dropped. Each job retains the same
+    // source allocation, including while waiting for memory approval.
     let batch = crate::jobs_ui::begin_batch_at(app, st.slot);
     for (seq, n) in selected.into_iter().enumerate() {
         let order = Some(crate::jobs_ui::OpenOrder { batch, seq });

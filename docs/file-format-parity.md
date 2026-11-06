@@ -1,6 +1,6 @@
 # File-format parity
 
-> **Last reviewed:** 2026-11-05 · **Last updated:** 2026-11-05 · **Change:** minor (Photoshop-preserved PDF layers rebased onto the maintained Import PDF implementation, #11414; full smart-object projections and read-only PDF sources retained; other format progress recorded below; no parity floor changed) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-11-05 · **Last updated:** 2026-11-05 · **Change:** patch (PDF review follow-ups: shared page-job buffers, loaded projection isolation, Render source-limit policy and optional Private metadata fallback; maintained importer #11414 remains the dependency; no parity floor changed) · **Target:** Adobe Photoshop 2026
 
 **PSD Filter Gallery (#8940, 2026-10-23):** Halftone Pattern maps its size, contrast and dot/circle/line pattern as editable settings on import and export, with the reference application's descriptor keys (`HlSz`, `Cntr`, `ScrT`: `ScrD`/`ScrC`/`ScrL`). PSD/PSB round trips pass at 8/16/32 bits. This does not claim pixel equivalence for the existing renderer. Unknown or malformed settings remain verbatim on import.
 
@@ -152,15 +152,24 @@ resources to the PSD reader, including an ICC profile stored only on CompositeIm
 The same Hayro parser serves both preservation and rendering; bounded raw/Flate decoding handles
 private streams. A typed channel-decoding failure rejects the editable import instead of
 silently publishing incomplete layers. Auto falls back only when editing data is absent.
+The optional `Private` entry may be absent even when the application dictionary exists:
+Auto renders that page, while Layers requires actual editing data. A present malformed
+entry still errors. The 512 MiB source-file cap applies to Auto/Layers preservation, not
+explicit Render; the renderer retains its own decoded-resource limits.
 
 Recovered layers use the PSD memory-admission policy, including decoded pattern charges,
 caller limits, high-memory approval and a capacity recheck after acquiring the decoder gate.
 Approving a queued import retains its selected PDF page and layer options. These checks do
 not remove the ordinary PDF raster import limitations tracked by #11466 and #11467.
+Selected background pages and their approval retries share the dialog's immutable source
+allocation rather than retaining one whole PDF copy per page.
 
 Smart objects retain their page/image, layer choice, crop, resolution, colour mode, depth,
 anti-aliasing and explicit pixel size across native saves, cache regeneration, source updates
 and PSD export. Different projections of shared PDF bytes use separate Edit Contents documents.
+An absent projection in a loaded shared PDF family means the default import, not every page.
+Committing a nondefault selection gives its native contents a distinct family identity so
+repeat saves and parent undo/redo cannot claim an unprojected sibling.
 Passwords remain transient; password-supplied embedded placement stores selected native contents,
 and linked placement is refused rather than saving a credential-dependent source.
 
@@ -175,6 +184,7 @@ The original reference entry retains its source date and historical totals; curr
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-05 | patch | PDF review follow-ups: shared page-job source allocation, mixed loaded projection isolation with native-editor history preserved, Render source-cap exemption and absent optional Private fallback. |
 | 2026-11-05 | minor | Photoshop layer recovery rebased onto #11414, the maintained successor to #6990; accessible fields, terminal thumbnail failures, ordered page opens and renderer safeguards retained. |
 | 2026-11-02 | minor | Actions Shear (`Shr `) loads, plays and saves the measured curve points and edge mode; unsafe subranges and unrepresentable forms remain kept steps (#10605). |
 | 2026-11-01 | minor | `.atn`: 23 newer measured forms mapped, including explicit Link/Unlink, Smart Object file operations, Make Type to Shape, radius-only Shape Blur, Artboard from Group and the Crop Photos parent; supported in batch 13; Link Layers keeps the measured toggle. Artboard forms with unmeasured settings and generated Crop helper steps remain kept. |

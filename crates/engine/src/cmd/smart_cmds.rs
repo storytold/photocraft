@@ -47,18 +47,22 @@ pub struct SmartLink {
     pub parent: DocId,
     pub layer: LayerId,
     pub contents_id: SmartContentsId,
-    /// The family restored when parent history undoes the first projection commit.
+    /// The source family restored when parent history undoes the first projection commit.
     pub original_contents_id: SmartContentsId,
     /// The projection currently edited by this child.
     pub pdf_import: PdfImportOptions,
 }
 
 impl SmartLink {
-    /// Whether this editor owns the instance's current family or its restored PDF projection.
+    /// Whether this editor owns the source projection or its materialized native family.
     pub fn matches(&self, parent: DocId, smart: &SmartObject) -> bool {
+        let matches_projection = smart.pdf_import.unwrap_or_default() == self.pdf_import;
+        // A cleared projection identifies this editor's native contents only after detachment.
+        // In the original family it instead means the PDF's default import projection.
+        let matches_native = self.contents_id != self.original_contents_id && smart.pdf_import.is_none();
         self.parent == parent
-            && ((self.contents_id == smart.contents_id && smart.pdf_import.is_none_or(|projection| projection == self.pdf_import))
-                || (self.original_contents_id == smart.contents_id && smart.pdf_import.is_some_and(|projection| projection == self.pdf_import)))
+            && ((self.contents_id == smart.contents_id && (matches_projection || matches_native))
+                || (self.original_contents_id == smart.contents_id && matches_projection))
     }
 }
 

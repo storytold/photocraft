@@ -181,11 +181,7 @@ pub fn commit_child(s: &mut Session, index: usize) -> Result<bool> {
             .walk()
             .into_iter()
             .filter_map(|(_, _, layer)| match &layer.content {
-                LayerContent::Smart(sm)
-                    if sm.contents_id == contents_id && (sm.pdf_import.is_none() || sm.pdf_import.unwrap_or_default() == link.pdf_import) =>
-                {
-                    Some(layer.id)
-                }
+                LayerContent::Smart(sm) if sm.contents_id == contents_id && link.matches(doc.id, sm) => Some(layer.id),
                 LayerContent::Smart(sm) if sm.contents_id == contents_id => {
                     has_other_projection = true;
                     None
@@ -196,7 +192,11 @@ pub fn commit_child(s: &mut Session, index: usize) -> Result<bool> {
         if ids.is_empty() {
             return Err(other("the smart object's instances were removed"));
         }
-        let detached_contents_id = has_other_projection.then(SmartContentsId::fresh);
+        // Native contents have no PDF options. Give a nondefault projection its own identity
+        // even without siblings, so repeat saves and parent undo/redo can distinguish it from
+        // an unprojected PDF in the original family.
+        let materializes_projection = contents_id == link.original_contents_id && link.pdf_import != Default::default();
+        let detached_contents_id = (has_other_projection || materializes_projection).then(SmartContentsId::fresh);
         for id in ids {
             let sm = smart_mut(doc, id)?;
             let name = match &sm.source {

@@ -71,6 +71,32 @@ fn three_pages() -> Vec<u8> {
     pdf(&[(612.0, 792.0, "1 0 0 rg 72 72 468 648 re f"), (595.0, 420.0, "0 1 0 rg 30 30 535 360 re f"), (300.0, 300.0, "0 0 1 rg 20 20 260 260 re f")])
 }
 
+/// Two pages sharing a tiny Photoshop layer stream; its estimate can be charged without
+/// allocating a large raster, so the real opens stop at memory approval.
+#[cfg(all(not(target_arch = "wasm32"), target_pointer_width = "64"))]
+fn layered_pages() -> Vec<u8> {
+    use photocraft_psd::tiff::{ByteOrder, ImageSourceData, SIGNATURE};
+
+    let mut doc = photocraft_doc::Document::new("source", photocraft_geom::Size::new(3, 2), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
+    let mut layer = photocraft_doc::Layer::raster("Authored layer", doc.pixel_format());
+    layer.surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(0, 0, 3, 2), &[0.125, 0.5, 0.875, 0.5]);
+    doc.layers.push(layer);
+    let (source, _) = ImageSourceData::from_psd(&photocraft_io::document_to_psd(&doc)).to_bytes(ByteOrder::Big).unwrap();
+    let mut stream = format!("<< /Length {} >>\nstream\n", source.len() - SIGNATURE.len()).into_bytes();
+    stream.extend_from_slice(&source[SIGNATURE.len()..]);
+    stream.extend_from_slice(b"\nendstream");
+    let page = b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 3 2] /Resources << >> /PieceInfo << /AdobePhotoshop << /Private 5 0 R >> >> >>".to_vec();
+    write(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>".to_vec(),
+        page.clone(),
+        page,
+        b"<< /StandardImageFileData 6 0 R /CompositeImage 7 0 R >>".to_vec(),
+        stream,
+        b"<< /Length 0 /Type /XObject /Subtype /Image /Width 3 /Height 2 /BitsPerComponent 8 /ColorSpace /DeviceRGB >>\nstream\n\nendstream".to_vec(),
+    ])
+}
+
 fn dialog(app: &PhotocraftApp) -> Option<&crate::state::Dialog> {
     app.ui.dialogs.iter().find(|d| owns(&d.fields))
 }
@@ -513,6 +539,60 @@ fn background_pages_keep_their_order_and_the_drop_slot() {
     // seq 0 is page 3 (Open In Reverse Order), so page 1 ends up last, as in the inline open.
     assert_eq!(docs, ["a.psd", "seq0", "seq1", "seq2", "b.psd"], "the set's order, at the drop slot");
     assert!(app.jobs.batches.is_empty(), "the set is forgotten once every page opened");
+}
+
+#[cfg(all(not(target_arch = "wasm32"), target_pointer_width = "64"))]
+#[test]
+fn selected_page_jobs_retain_the_dialog_allocation_through_memory_approval() {
+    let gb = 1u64 << 30;
+    let snapshot = photocraft_io::memory::MemorySnapshot { available_ram: Some(8 * gb), swap_free: None, commit_headroom: None };
+    photocraft_io::memory::with_mock_memory(snapshot, || {
+        photocraft_io::psd_budget::with_test_estimate_charge(4 * gb + 1, || {
+            for background in [false, true] {
+                let mut app = app();
+                app.background_jobs = background;
+                app.open_file("/tmp/pc-test/shared.pdf", &layered_pages()).expect("dialog");
+                let id = dialog(&app).unwrap().id;
+                let source = Arc::clone(&app.pdf_import[0].bytes);
+                set(&mut app, "pages", json!([1, 2]));
+                set(&mut app, "layers", json!("layers"));
+                let result = crate::dialogs::confirm(&mut app, id).expect("selected page opens");
+                assert_eq!(result["opened"], 2);
+
+                let finish_jobs = |app: &mut PhotocraftApp| {
+                    let jobs: Vec<_> = app.session.jobs().iter().map(|job| job.id).collect();
+                    for job in jobs {
+                        app.session.wait_job(job).expect("page job");
+                    }
+                    crate::jobs_ui::tick(app, &egui::Context::default());
+                };
+                finish_jobs(&mut app);
+                assert!(app.pdf_import.is_empty(), "the dialog has released its ownership");
+                assert!(app.session.documents().is_empty(), "both real imports wait for approval");
+                assert_eq!(app.held_memory_prompts.len(), 2);
+                assert_eq!(Arc::strong_count(&source), 3, "each selected job must retain the original allocation, plus this test's reference");
+                assert_eq!(
+                    app.session.pending_preflight_bytes().unwrap(),
+                    source.capacity() as u64,
+                    "both pending page jobs must charge the shared PDF allocation only once"
+                );
+
+                for remaining in [1, 0] {
+                    let id = app.ui.dialogs.iter().find(|d| crate::open_prompt::owns_memory(&d.fields)).expect("memory dialog").id;
+                    crate::dialogs::confirm(&mut app, id).expect("approve page");
+                    finish_jobs(&mut app);
+                    assert_eq!(app.held_memory_prompts.len(), remaining);
+                    assert_eq!(Arc::strong_count(&source), remaining + 1, "approval releases only that page's source reference");
+                    assert_eq!(app.session.pending_preflight_bytes().unwrap(), if remaining == 0 { 0 } else { source.capacity() as u64 });
+                }
+                let docs = app.session.documents();
+                assert_eq!(docs.iter().map(|state| state.doc.name.as_str()).collect::<Vec<_>>(), ["shared-2.pdf", "shared-1.pdf"]);
+                assert!(docs.iter().all(|state| state.source_read_only && state.path.is_none()));
+                assert!(docs.iter().all(|state| state.doc.layers[0].name == "Authored layer"));
+                assert!(app.jobs.opens.is_empty() && app.jobs.batches.is_empty());
+            }
+        });
+    });
 }
 
 /// A harness drawing the dialogs over `app`.

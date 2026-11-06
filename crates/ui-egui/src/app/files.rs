@@ -3,6 +3,28 @@ use super::{
     jpeg_options_ui, json, notices, open_prompt, plain_raster, preset_files_ui, saved_revision_after_write, targa_options_ui, tiff_options_ui,
 };
 
+/// Ordinary opens borrow their input; Import PDF already owns one buffer shared by all pages.
+enum DecodeBytes<'a> {
+    Borrowed(&'a [u8]),
+    Shared(&'a std::sync::Arc<Vec<u8>>),
+}
+
+impl DecodeBytes<'_> {
+    fn as_slice(&self) -> &[u8] {
+        match self {
+            Self::Borrowed(bytes) => bytes,
+            Self::Shared(bytes) => bytes.as_slice(),
+        }
+    }
+
+    fn job_source(&self) -> photocraft_engine::jobs::OpenSource {
+        match self {
+            Self::Borrowed(bytes) => jobs_ui::bytes(bytes),
+            Self::Shared(bytes) => photocraft_engine::jobs::OpenSource::Bytes(std::sync::Arc::clone(bytes)),
+        }
+    }
+}
+
 impl PhotocraftApp {
     /// Record `path` as the most-recently-opened file (File › Open Recent): de-duplicated, newest
     /// first, capped at Preferences › File Handling › Recent File List Contains. The list lives in
@@ -86,20 +108,21 @@ impl PhotocraftApp {
         if crate::pdf_import_ui::wants_dialog(name, bytes) {
             return crate::pdf_import_ui::open_placed(self, name, path, bytes, slot).map(|_| Vec::new());
         }
-        self.open_decoded(name, bytes, path, slot, order, None)
+        self.open_decoded(name, DecodeBytes::Borrowed(bytes), path, slot, order, None)
     }
 
     /// Opens a PDF page or embedded image chosen in Import PDF (`pdf` holds the dialog's
-    /// answers). The document is untitled: Save goes to Save As, never into the PDF.
+    /// answers), retaining its shared source for background work and memory approval retries.
+    /// The document is untitled: Save goes to Save As, never into the PDF.
     pub(crate) fn open_pdf_choice(
         &mut self,
         name: &str,
-        bytes: &[u8],
+        bytes: &std::sync::Arc<Vec<u8>>,
         path: Option<&str>,
         pdf: photocraft_io::pdf_import::PdfOpenOptions,
         order: Option<crate::jobs_ui::OpenOrder>,
     ) -> Result<Vec<String>, String> {
-        self.open_decoded(name, bytes, path, None, order, Some(pdf))
+        self.open_decoded(name, DecodeBytes::Shared(bytes), path, None, order, Some(pdf))
     }
 
     /// The decode half of [`Self::open_bytes_placed`], after preset files and the Import PDF
@@ -107,19 +130,20 @@ impl PhotocraftApp {
     fn open_decoded(
         &mut self,
         name: &str,
-        bytes: &[u8],
+        source: DecodeBytes<'_>,
         path: Option<&str>,
         slot: Option<usize>,
         order: Option<crate::jobs_ui::OpenOrder>,
         pdf: Option<photocraft_io::pdf_import::PdfOpenOptions>,
     ) -> Result<Vec<String>, String> {
+        let bytes = source.as_slice();
         let name = &self.open_name(name);
         // Decoded on a worker: a tab with progress appears now, the document when it's ready
         // (warnings are shown then).
         if self.background_jobs {
             match pdf {
-                Some(pdf) => jobs_ui::start_open_pdf(self, name, path.map(str::to_string), jobs_ui::bytes(bytes), pdf, order)?,
-                None => jobs_ui::start_open(self, name, path.map(str::to_string), jobs_ui::bytes(bytes), slot, order)?,
+                Some(pdf) => jobs_ui::start_open_pdf(self, name, path.map(str::to_string), source.job_source(), pdf, order)?,
+                None => jobs_ui::start_open(self, name, path.map(str::to_string), source.job_source(), slot, order)?,
             }
             return Ok(Vec::new());
         }
@@ -138,8 +162,8 @@ impl PhotocraftApp {
                 Ok(result) => result,
                 Err(photocraft_io::IoError::PsdApprovalRequired { .. }) => {
                     match opts.pdf.clone() {
-                        Some(pdf) => jobs_ui::start_open_pdf(self, name, path.map(str::to_string), jobs_ui::bytes(bytes), pdf, order)?,
-                        None => jobs_ui::start_open(self, name, path.map(str::to_string), jobs_ui::bytes(bytes), slot, order)?,
+                        Some(pdf) => jobs_ui::start_open_pdf(self, name, path.map(str::to_string), source.job_source(), pdf, order)?,
+                        None => jobs_ui::start_open(self, name, path.map(str::to_string), source.job_source(), slot, order)?,
                     }
                     return Ok(Vec::new());
                 }

@@ -3378,3 +3378,92 @@ fn saved_pdf_projection_editors_stay_distinct_and_undo_blocks_external_edits() {
     let reopened = s.execute("layer.smartObjects.editContents", json!({"layer": second_page.0})).unwrap()["document"].as_u64().unwrap() as usize;
     assert_eq!(reopened, second_editor);
 }
+
+#[test]
+fn loaded_mixed_pdf_family_keeps_unprojected_source_out_of_page_editor() {
+    let mut original = session(40, 24, 8);
+    let selected = place_smart_pdf(&mut original);
+    let unprojected = LayerId(original.execute("layer.duplicate", json!({"layer": selected.0})).unwrap()["layer"].as_u64().unwrap());
+    original
+        .edit("restore legacy default PDF projection", |document, _| {
+            let LayerContent::Smart(smart) = &mut document.layer_mut(unprojected).unwrap().content else { return Err(EngineError::NoLayer(unprojected)) };
+            smart.pdf_import = None;
+            Ok(())
+        })
+        .unwrap();
+    let bytes = crate::smart_cmds::encode_source(doc(&original)).unwrap();
+    let mut s = Session::new();
+    open_bytes_as(&mut s, "mixed.pcraft", &bytes, None, None).unwrap();
+    let source = pdf_smart(&s, unprojected).source.clone();
+    let family = pdf_smart(&s, unprojected).contents_id;
+    assert_eq!(pdf_smart(&s, selected).contents_id, family);
+
+    let editor = s.execute("layer.smartObjects.editContents", json!({"layer": selected.0})).unwrap()["document"].as_u64().unwrap() as usize;
+    s.set_active(0);
+    let default_editor = s.execute("layer.smartObjects.editContents", json!({"layer": unprojected.0})).unwrap()["document"].as_u64().unwrap() as usize;
+    assert_ne!(editor, default_editor, "a loaded PDF without options uses the default projection, not the selected page");
+    assert_eq!(photocraft_compose::flatten(&s.documents()[default_editor].doc).px[0], [1.0, 0.0, 0.0, 1.0]);
+    assert_eq!(photocraft_compose::flatten(&s.documents()[editor].doc).px[0], [0.0, 1.0, 0.0, 1.0]);
+
+    // Both the initial PDF and its committed native contents belong to the same open editor.
+    // Repeated saves must not pull the unprojected sibling into the materialized family.
+    for _ in 0..2 {
+        s.set_active(editor);
+        s.execute("image.imageRotation.90cw", json!({})).unwrap();
+        assert!(crate::smart_cmds::commit_child(&mut s, editor).unwrap());
+        s.set_active(0);
+        assert!(pdf_smart(&s, selected).pdf_import.is_none());
+        assert_ne!(pdf_smart(&s, selected).contents_id, family);
+        assert_eq!(pdf_smart(&s, unprojected).contents_id, family);
+        assert_eq!(pdf_smart(&s, unprojected).source, source);
+        let reopened = s.execute("layer.smartObjects.editContents", json!({"layer": selected.0})).unwrap()["document"].as_u64().unwrap() as usize;
+        assert_eq!(reopened, editor);
+    }
+    s.set_active(0);
+    assert!(s.undo());
+    assert!(s.undo());
+    assert_eq!(pdf_smart(&s, selected).pdf_import.unwrap().page, 2);
+    let reopened = s.execute("layer.smartObjects.editContents", json!({"layer": selected.0})).unwrap()["document"].as_u64().unwrap() as usize;
+    assert_eq!(reopened, editor, "undo restores the editor's original projection");
+    s.set_active(0);
+    assert!(s.redo());
+    assert!(s.redo());
+    let reopened = s.execute("layer.smartObjects.editContents", json!({"layer": selected.0})).unwrap()["document"].as_u64().unwrap() as usize;
+    assert_eq!(reopened, editor, "redo restores the editor's own native family");
+    s.execute("image.imageRotation.90cw", json!({})).unwrap();
+    assert!(crate::smart_cmds::commit_child(&mut s, editor).unwrap());
+    s.set_active(0);
+    assert_eq!(pdf_smart(&s, unprojected).source, source);
+    assert_eq!(pdf_smart(&s, unprojected).contents_id, family);
+    assert!(pdf_smart(&s, unprojected).pdf_import.is_none());
+    let reopened = s.execute("layer.smartObjects.editContents", json!({"layer": unprojected.0})).unwrap()["document"].as_u64().unwrap() as usize;
+    assert_eq!(reopened, default_editor);
+}
+
+#[test]
+fn isolated_pdf_projection_keeps_its_editor_after_native_commit_and_parent_history() {
+    let mut s = session(40, 24, 8);
+    let selected = place_smart_pdf(&mut s);
+    let family = pdf_smart(&s, selected).contents_id;
+    let editor = s.execute("layer.smartObjects.editContents", json!({"layer": selected.0})).unwrap()["document"].as_u64().unwrap() as usize;
+    assert!(crate::smart_cmds::commit_child(&mut s, editor).unwrap());
+    s.set_active(0);
+    assert!(pdf_smart(&s, selected).pdf_import.is_none());
+    assert_ne!(pdf_smart(&s, selected).contents_id, family);
+    let reopened = s.execute("layer.smartObjects.editContents", json!({"layer": selected.0})).unwrap()["document"].as_u64().unwrap() as usize;
+    assert_eq!(reopened, editor, "native contents must remain owned even without other projections");
+    s.execute("image.imageRotation.90cw", json!({})).unwrap();
+    assert!(crate::smart_cmds::commit_child(&mut s, editor).unwrap());
+    s.set_active(0);
+    assert!(s.undo());
+    assert!(s.undo());
+    let reopened = s.execute("layer.smartObjects.editContents", json!({"layer": selected.0})).unwrap()["document"].as_u64().unwrap() as usize;
+    assert_eq!(reopened, editor);
+    s.set_active(0);
+    assert!(s.redo());
+    assert!(s.redo());
+    let reopened = s.execute("layer.smartObjects.editContents", json!({"layer": selected.0})).unwrap()["document"].as_u64().unwrap() as usize;
+    assert_eq!(reopened, editor);
+    s.execute("image.imageRotation.90cw", json!({})).unwrap();
+    assert!(crate::smart_cmds::commit_child(&mut s, editor).unwrap());
+}
