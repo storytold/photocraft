@@ -1,10 +1,10 @@
 use super::filters::{smart, smart_mut};
-use super::placing::detach_psd;
-use super::rendering::{refresh, refresh_or_fail, unapplied_filters};
+use super::placing::{detach_psd, snap_affine};
+use super::rendering::{refresh, refresh_or_fail, source_box, unapplied_filters};
 use super::source::{authorized_source_bytes, source_bytes};
 use super::{
-    Arc, DocId, Document, EngineError, LayerContent, LayerId, Metadata, Result, Session, SmartContentsId, SmartLink, SmartSource, Value, bad, base_name,
-    decode_source, encode_source, json, layer_param, other,
+    Affine, Arc, DocId, Document, EngineError, LayerContent, LayerId, Metadata, Result, Session, SmartContentsId, SmartLink, SmartObject, SmartSource, Value,
+    affine_homography, bad, base_name, decode_source, encode_source, json, layer_param, other, placement, set_placement,
 };
 
 pub(super) fn path_param<'a>(cmd: &str, p: &'a Value) -> Result<&'a str> {
@@ -17,6 +17,8 @@ fn instances(doc: &Document, contents_id: SmartContentsId) -> Vec<LayerId> {
 }
 
 /// Swaps shared contents, keeping each instance's transform and filters, and re-renders.
+/// `fit` scales the new contents into the frame they replace (as Photoshop's Replace Contents
+/// does); the commands that only re-point at the *same* artwork pass `false`.
 pub(super) fn set_source(
     s: &mut Session,
     p: &Value,
@@ -27,19 +29,24 @@ pub(super) fn set_source(
     let id = layer_param(s, p)?;
     let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
     let new = make(&doc.metadata, &smart(doc, id)?.source)?;
-    set_shared_source(s, id, label, keep_psd, new)
+    set_shared_source(s, id, label, keep_psd, new, false)
 }
 
 // Keep the shared-instance transaction out of the per-command source-builder instantiations.
-fn set_shared_source(s: &mut Session, id: LayerId, label: &str, keep_psd: bool, new: SmartSource) -> Result<Value> {
+fn set_shared_source(s: &mut Session, id: LayerId, label: &str, keep_psd: bool, new: SmartSource, fit: bool) -> Result<Value> {
     let (parent, contents_id, changed, warnings) = s.edit(label, |doc, _| {
         let contents_id = smart(doc, id)?.contents_id;
         let changed = instances(doc, contents_id);
         let mut warnings = std::collections::BTreeSet::new();
         for &instance in &changed {
+            // The frame the replaced contents filled, measured while they are still the source.
+            let frame = if fit { contents_frame(doc, smart(doc, instance)?) } else { None };
             smart_mut(doc, instance)?.source = new.clone();
             if !keep_psd {
                 detach_psd(doc.layer_mut(instance).ok_or(EngineError::NoLayer(instance))?);
+            }
+            if fit {
+                warnings.extend(fit_replaced_contents(doc, instance, frame)?);
             }
             warnings
                 .extend(unapplied_filters(smart(doc, instance)?).into_iter().map(|n| format!("the {n} smart filter is not supported, so it was not applied")));
@@ -53,6 +60,91 @@ fn set_shared_source(s: &mut Session, id: LayerId, label: &str, keep_psd: bool, 
     // Every instance changed, not only `layer`: list them, so a caller doesn't repeat the
     // command once per copy (#4075).
     Ok(json!({"layer": id.0, "instances": changed.iter().map(|l| l.0).collect::<Vec<_>>(), "warnings": warnings}))
+}
+
+/// How much of the frame a fitted replacement leaves empty before the caller is told about it:
+/// a tenth of a percent of the frame's own width or height.
+const FRAME_SLACK: f64 = 1e-3;
+
+/// The contents' box in source pixels: what the placement maps into the document, so the box of
+/// the art as it stands. Contents PhotoCraft can't decode itself (a native AI, PDF or EPS vector
+/// with no display preview, #11529) keep the frame their PSD placed layer recorded.
+fn contents_frame(doc: &Document, sm: &SmartObject) -> Option<[f64; 4]> {
+    source_box(doc, sm).or_else(|| placed_frame(sm))
+}
+
+/// The source-pixel frame a PSD placed layer records for its embedded file.
+fn placed_frame(sm: &SmartObject) -> Option<[f64; 4]> {
+    let placed = photocraft_io::smart_map::parse_sold(sm.psd_raw.as_ref()?.as_slice())?;
+    let (w, h) = photocraft_io::smart_map::stored_size(&placed.descriptor)?;
+    (w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0).then_some([0.0, 0.0, w, h])
+}
+
+/// The map in source pixels that fits `new`'s box into `old`'s: uniform, so the art is never
+/// distorted (a different shape is reported instead), and centred, so the frame keeps its middle.
+/// `None` when a box is degenerate, so the caller keeps the placement and says so.
+fn fit_map(old: [f64; 4], new: [f64; 4]) -> Option<Affine> {
+    let [x0, y0, x1, y1] = old;
+    let [u0, v0, u1, v1] = new;
+    let (ow, oh, nw, nh) = (x1 - x0, y1 - y0, u1 - u0, v1 - v0);
+    if [ow, oh, nw, nh].iter().any(|v| !v.is_finite() || *v <= 0.0) {
+        return None;
+    }
+    let k = (ow / nw).min(oh / nh);
+    if !k.is_finite() || k <= 0.0 {
+        return None;
+    }
+    Some(Affine { m: [k, 0.0, 0.0, k, (x0 + x1) / 2.0 - k * (u0 + u1) / 2.0, (y0 + y1) / 2.0 - k * (v0 + v1) / 2.0] })
+}
+
+/// Whether the fit changes the placement at all: the new contents already sit in the frame, so
+/// Replace Contents stays silent (and the transform stays exactly as it was, lossless).
+fn already_fitted(m: &Affine) -> bool {
+    let [a, b, c, d, e, f] = m.m;
+    [(a - 1.0), b, c, (d - 1.0), e, f].iter().all(|v| v.abs() < 1e-9)
+}
+
+/// Scales smart object `id`'s new contents into the frame its old contents filled, keeping the
+/// frame's position, rotation and size ([`fit_map`]): Photoshop's Replace Contents puts the new
+/// art where the old art stood (#11529). `frame` is the old box, measured before the source was
+/// swapped. Every instance gets its own fit, since copies of one contents differ in placement.
+/// Returns what the caller must be told: a placement that had to be kept because a box couldn't be
+/// measured, new contents whose shape leaves part of the frame empty, and a warp that still spans
+/// the replaced contents' source pixels. A replacement that simply fills the frame says nothing.
+fn fit_replaced_contents(doc: &mut Document, id: LayerId, frame: Option<[f64; 4]>) -> Result<Vec<String>> {
+    let name = doc.layer(id).map(|l| l.name.clone()).unwrap_or_default();
+    let kept =
+        format!("layer \"{name}\": the frame of the replaced contents could not be measured, so its transform was kept: the new contents may not fit it");
+    let (Some(old), Some(new)) = (frame, contents_frame(doc, smart(doc, id)?)) else { return Ok(vec![kept]) };
+    let [x0, y0, x1, y1] = old;
+    let [u0, v0, u1, v1] = new;
+    let Some(m) = fit_map(old, new) else { return Ok(vec![kept]) };
+    if already_fitted(&m) {
+        return Ok(Vec::new());
+    }
+    let (ow, oh, nw, nh, k) = (x1 - x0, y1 - y0, u1 - u0, v1 - v0, m.m[0]);
+    // The frame's empty margin after the fit: reported when the shape left a real gap, since
+    // Photoshop's user would otherwise find the art smaller than the space it replaced.
+    let slack = ((ow / (k * nw)) - 1.0).max((oh / (k * nh)) - 1.0);
+    let warped = smart(doc, id)?.warp.is_some();
+    let sm = smart_mut(doc, id)?;
+    match sm.perspective {
+        None => sm.transform = snap_affine(sm.transform.mul(&m)),
+        Some(_) => {
+            let h = placement(sm).mul(&affine_homography(&m));
+            set_placement(sm, h);
+        }
+    }
+    let mut notes = Vec::new();
+    if slack > FRAME_SLACK {
+        notes.push(format!(
+            "layer \"{name}\": the new contents are {nw:.0} × {nh:.0} px and the frame was made for {ow:.0} × {oh:.0} px, so they are fitted inside it and don't fill it"
+        ));
+    }
+    if warped {
+        notes.push(format!("layer \"{name}\": its warp still spans the replaced contents' source pixels, so check Edit ▸ Transform ▸ Warp"));
+    }
+    Ok(notes)
 }
 
 pub(super) fn replace_contents(s: &mut Session, p: &Value) -> Result<Value> {
@@ -72,7 +164,7 @@ pub fn replace_contents_from_bytes(s: &mut Session, p: &Value, file_name: &str, 
 /// Replace Contents from a file's name and bytes: what the desktop and web file pickers hand over.
 pub fn replace_contents_bytes(s: &mut Session, id: LayerId, file_name: &str, bytes: Vec<u8>) -> Result<Value> {
     decode_source(file_name, &bytes)?; // fail before touching the document
-    set_shared_source(s, id, "Replace Contents", false, SmartSource::Embedded { file_name: file_name.to_string(), bytes: Arc::new(bytes) })
+    set_shared_source(s, id, "Replace Contents", false, SmartSource::Embedded { file_name: file_name.to_string(), bytes: Arc::new(bytes) }, true)
 }
 
 /// The file name and bytes of smart object `id`'s contents.

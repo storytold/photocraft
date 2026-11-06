@@ -24,6 +24,8 @@ Native Adobe Photoshop/Illustrator Edit Contents acceptance remains unverified. 
 keeps that warning explicit. `updateSvg` only replaces SVG contents: it refuses an AI, PDF or
 EPS source, which only `updateVectorSource` saves back, in its own format.
 
+Replace Contents takes a raster or SVG replacement and fits it into the smart object’s existing frame, keeping that frame’s position, rotation and size; a frame it cannot measure keeps the placement and says so in its warnings. It refuses an AI, PDF or EPS replacement file with a message naming the update commands above, because PhotoCraft has no standalone AI, PDF or EPS importer (#11529).
+
 Native editing requires VectorCraft and its adjacent vectorcraft-cli for bounded previews,
 even when another interactive editor is selected. The CLI runs headless in the background,
 restricted to a fresh private temporary read/write root per snapshot, separate from the

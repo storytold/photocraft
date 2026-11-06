@@ -75,7 +75,22 @@ pub fn decode_source(file_name: &str, bytes: &[u8]) -> Result<Document> {
             .map(|imported| imported.document)
             .map_err(|e| other(format!("can't read SVG smart object contents: {e}")));
     }
-    crate::file_cmds::import(file_name, bytes).map_err(|e| other(format!("can't read smart object contents \"{file_name}\": {e}")))
+    // AI, PDF and EPS artwork has no PhotoCraft importer: PSD import keeps those bytes only for
+    // external editing, and the object's pixels for display. When such a file can't be read, say
+    // so and name the way out, instead of the codec's `unrecognized image format`, which told a
+    // user nothing about their edited `.ai` file (#11529). A file that reads anyway (a raster
+    // mislabeled `.ai`) still reads, as any other extension does.
+    let vector = photocraft_io::vector_preview::is_native_source(bytes)
+        || matches!(file_name.rsplit('.').next().unwrap_or("").to_ascii_lowercase().as_str(), "ai" | "pdf" | "eps");
+    crate::file_cmds::import(file_name, bytes).map_err(|e| {
+        other(if vector {
+            format!(
+                "can't read smart object contents \"{file_name}\": PhotoCraft doesn't open AI, PDF or EPS artwork; update the vector with layer.smartObjects.updateVectorSource, or replace the contents with an SVG, PNG, PSD or .pcraft file"
+            )
+        } else {
+            format!("can't read smart object contents \"{file_name}\": {e}")
+        })
+    })
 }
 
 fn base_name(path: &str) -> String {
@@ -202,7 +217,14 @@ pub fn specs() -> Vec<CommandSpec> {
             let i = s.active_index().ok_or(EngineError::NoDocument)?;
             Ok(json!({"updated": commit_child(s, i)?}))
         }),
-        spec!("layer.smartObjects.replaceContents", "Replace Contents…", SO, r##"{"layer":id?,"path":str}"##, has_smart, replace_contents),
+        spec!(
+            "layer.smartObjects.replaceContents",
+            "Replace Contents…",
+            SO,
+            r##"{"layer":id?,"path":str} → {layer,instances,warnings} — the new contents are fitted into every instance's existing frame, whose position, rotation and size are kept (as Photoshop's Replace Contents): a file of another pixel size doesn't change the object's box. warnings report an instance whose frame couldn't be measured (its transform was kept), art whose shape leaves part of the frame empty, and a smart filter that isn't applied"##,
+            has_smart,
+            replace_contents
+        ),
         spec!(
             "layer.smartObjects.exportContents",
             "Export Contents…",
