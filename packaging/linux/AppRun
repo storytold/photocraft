@@ -14,6 +14,17 @@ set -u
 APPDIR="$(dirname "$(readlink -f "$0")")"
 DESK_ID=ai.storyteller.photocraft
 
+# Select the bundled headless binary before desktop integration. In particular,
+# an MCP launch must leave stdio untouched and must not install a GUI launcher.
+if [ "${1:-}" = --cli ]; then
+  shift
+  exec "$APPDIR/usr/bin/photocraft-cli" "$@"
+fi
+# Type 2 runtimes preserve a symlink's original name in ARGV0.
+case "${ARGV0:-}" in
+  photocraft-cli | */photocraft-cli) exec "$APPDIR/usr/bin/photocraft-cli" "$@" ;;
+esac
+
 integrate() {
   case "${PHOTOCRAFT_NO_DESKTOP_INTEGRATION:-}" in
     1 | true | yes) return 0 ;;
@@ -49,6 +60,16 @@ integrate() {
       continue
     fi
     if grep '^Exec=' "$f" 2>/dev/null | grep -Fq "$appimage"; then
+      external=1
+      break
+    fi
+  done
+  # AM / AppMan (#6392) install their own launcher, whose Exec runs a command on
+  # PATH rather than this AppImage, so the check above misses it. AM's author
+  # names the only two places it writes one: system-wide for AM, per user for
+  # AppMan and rootless installs.
+  for f in /usr/local/share/applications/photocraft-AM.desktop "$apps/photocraft-AM.desktop"; do
+    if [ -f "$f" ]; then
       external=1
       break
     fi

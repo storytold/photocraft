@@ -181,7 +181,8 @@ fn layer_surface(img: &Image, max: &mut (u32, u32)) -> Result<(Surface, ColorMod
 }
 
 /// Imports the chosen entries as the layers of one document: parts whole, groups from their
-/// own channels, F16 kept losslessly as F32, the linear-light EXR values tagged linear sRGB.
+/// own channels, F16 kept losslessly as F32, the linear-light EXR values tagged linear sRGB
+/// or linear gray.
 /// `precomp` adds the additive sum of the file's AOV groups as a top layer and fails,
 /// naming the missing AOVs, when the light-path set is incomplete.
 pub fn import(name: &str, bytes: &[u8], sel: &Selection) -> Result<ImportResult, IoError> {
@@ -270,10 +271,9 @@ pub fn import(name: &str, bytes: &[u8], sel: &Selection) -> Result<ImportResult,
     let mode = if gray_only { ColorMode::Grayscale } else { ColorMode::Rgb };
     let mut doc = Document::new(name, Size::new(max.0, max.1), mode, DocSample::F32);
     doc.layers = layers;
-    if mode == ColorMode::Rgb {
-        // OpenEXR holds linear, scene-referred values: tag them linear sRGB, as File › Open does.
-        doc.icc_profile = Some(Builtin::LinearSrgb.profile().to_bytes());
-    }
+    // OpenEXR holds linear, scene-referred values (Y is linear luminance): use the profile
+    // matching the selected parts' mode, as File › Open does.
+    doc.icc_profile = Some(if gray_only { photocraft_cms::builtin::linear_gray().to_bytes() } else { Builtin::LinearSrgb.profile().to_bytes() });
     Ok(ImportResult { document: doc, warnings, source_read_only: false, preview_only: false })
 }
 

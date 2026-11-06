@@ -570,3 +570,111 @@ fn thin_antialiased_edges_still_count_toward_bounds() {
     let c = r.render(Rect::new(0, 0, 102, 10));
     assert!(c[100] > 5e-5 && c[101] == 0.0, "{} {}", c[100], c[101]);
 }
+
+#[test]
+fn tile_bands_and_band_tiles_near_i32_max_do_not_overflow() {
+    let r = Rect::new(0, i32::MAX - 10, 10, i32::MAX);
+    let bands = tile_bands(r);
+    assert_eq!(bands, vec![r]);
+
+    let band = Rect::new(i32::MAX - 10, 0, i32::MAX, 2);
+    let data = vec![1.0f32; (band.width() * band.height()) as usize];
+    let tiles = band_tiles(band, &data, 1, |p| p[0] > 0.0);
+    assert_eq!(tiles.len(), 1);
+    assert_eq!(tiles[0].0, band);
+}
+
+#[test]
+fn gradient_stops_are_found_by_bisection_and_agree_with_a_scan() {
+    let stops: Vec<(f32, [f32; 4])> = (0..=8).map(|i| (i as f32 / 8.0, [i as f32 / 8.0, 0.0, 1.0 - i as f32 / 8.0, 1.0])).collect();
+    let scan = |t: f32| {
+        let (first, last) = (stops[0], stops[stops.len() - 1]);
+        if t <= first.0 {
+            return first.1;
+        }
+        for w in stops.windows(2) {
+            if t <= w[1].0 {
+                let u = if w[1].0 > w[0].0 { (t - w[0].0) / (w[1].0 - w[0].0) } else { 0.0 };
+                return std::array::from_fn(|ch| w[0].1[ch] + (w[1].1[ch] - w[0].1[ch]) * u);
+            }
+        }
+        last.1
+    };
+    for i in -10..=110 {
+        let t = i as f32 / 100.0;
+        assert_eq!(sample_color(&stops, &[], t), scan(t), "t = {t}");
+    }
+    assert_eq!(sample_color(&stops, &[], f32::NAN), stops[8].1, "a NaN position takes the last stop, as before");
+    assert_eq!(sample_opacity(&[(0.0, 0.0), (1.0, 1.0)], 0.25), 0.25);
+    // A million stops are bisected: this is a per-pixel call.
+    let many: Vec<(f32, [f32; 4])> = (0..1_000_000).map(|i| (i as f32 / 1_000_000.0, [0.0; 4])).collect();
+    let started = std::time::Instant::now();
+    for i in 0..100_000 {
+        sample_color(&many, &[], 0.9 + i as f32 * 1e-7);
+    }
+    assert!(started.elapsed().as_secs() < 5, "{:?}", started.elapsed());
+}
+
+/// Cancellable coverage preserves curved boolean geometry, and discards partial scanlines.
+#[test]
+fn coverage_interrupt_preserves_geometry_and_stops_during_render() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let mut path = shapes::ellipse(2.3, 3.7, 41.5, 39.2);
+    let mut hole = shapes::rect(12.2, 13.1, 8.4, 9.6);
+    hole.subpaths[0].op = PathOp::Subtract;
+    path.subpaths.extend(hole.subpaths);
+    let rect = Rect::new(0, 0, 64, 64);
+    for rule in [FillRule::NonZero, FillRule::EvenOdd] {
+        path.fill_rule = rule;
+        let expected = path_coverage(&path, rect);
+        let analytic = std::f64::consts::PI * 20.75 * 19.6 - 8.4 * 9.6;
+        assert!((area(&expected) - analytic).abs() / analytic < 0.002);
+        assert_eq!(expected[16 * 64 + 16], 0.0, "the subtracted hole remains empty");
+        assert_eq!(path_coverage_with(&path, rect, &Interrupt::NONE), Some(expected));
+    }
+    let cancelled = AtomicBool::new(false);
+    let cancel = || cancelled.load(Ordering::Relaxed);
+    let progress = |p: f32| {
+        if p >= 0.25 {
+            cancelled.store(true, Ordering::Relaxed);
+        }
+    };
+    assert!(path_coverage_with(&path, rect, &Interrupt::new(&cancel, &progress)).is_none());
+    assert!(cancelled.load(Ordering::Relaxed), "cancellation happened during scanline rendering");
+    assert!(path_coverage_with(&path, rect, &Interrupt::cancel_only(&|| true)).is_none());
+}
+
+/// Native targets render a large rect in parallel strips; cancellation inside one strip stops
+/// them all and discards the partial coverage.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn coverage_interrupt_stops_parallel_strips() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let path = shapes::ellipse(10.0, 10.0, 280.0, 280.0);
+    // 300 x 300 is past the parallel threshold (more than 32 rows and 64k pixels).
+    let rect = Rect::new(0, 0, 300, 300);
+    assert!(path_coverage_with(&path, rect, &Interrupt::NONE).is_some());
+    let cancelled = AtomicBool::new(false);
+    let cancel = || cancelled.load(Ordering::Relaxed);
+    let progress = |p: f32| {
+        if p >= 0.25 {
+            cancelled.store(true, Ordering::Relaxed);
+        }
+    };
+    assert!(path_coverage_with(&path, rect, &Interrupt::new(&cancel, &progress)).is_none());
+    assert!(cancelled.load(Ordering::Relaxed), "cancellation happened during parallel rendering");
+}
+
+/// Curve budgeting and tessellation also honor cancellation before rasterization starts.
+#[test]
+fn flatten_interrupt_stops_during_preparation() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let path = shapes::ellipse(0.0, 0.0, 500.0, 500.0);
+    let polls = AtomicUsize::new(0);
+    // Budgeting polls once for the subpath and once per segment (5 for an ellipse's 4 curves);
+    // the 6th poll is tessellation's first, so this cancels inside `flatten_scaled`.
+    let cancel = || polls.fetch_add(1, Ordering::Relaxed) >= 5;
+    assert!(flatten::flatten_path_with(&path, DEFAULT_TOLERANCE, &Interrupt::cancel_only(&cancel)).is_none());
+    assert_eq!(polls.load(Ordering::Relaxed), 6);
+    assert_eq!(flatten::flatten_path_with(&path, DEFAULT_TOLERANCE, &Interrupt::NONE), Some(flatten_path(&path, DEFAULT_TOLERANCE)));
+}
