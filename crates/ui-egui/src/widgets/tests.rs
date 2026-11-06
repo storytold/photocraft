@@ -262,6 +262,41 @@ fn text_field_is_a_boxed_input_whose_selection_colour_stays_local() {
     assert_eq!(h.state().0, "abc", "typing reaches the bound string");
 }
 
+/// #2084: a plain text field's text is centred in its box, like a value field's digits, in the
+/// monospaced (hex) and proportional faces alike: neither low nor overshooting the middle.
+#[test]
+fn text_field_text_ink_is_centred_in_its_box() {
+    let _gpu = photocraft_testkit::gpu_lock();
+    let scale = 4.0;
+    for kind in [crate::theme::ThemeKind::Pro, crate::theme::ThemeKind::Studio] {
+        // Digits and capitals: no descenders, so their ink should straddle the box's middle.
+        for (text, mono) in [("A0F3C2", true), ("100", true), ("HEX", false)] {
+            let mut h = Harness::builder().with_size(egui::vec2(160.0, 40.0)).with_pixels_per_point(scale).wgpu().build_ui_state(
+                move |ui, s: &mut (String, egui::Rect)| {
+                    let before = ui.cursor().min;
+                    super::text_field(ui, egui::Id::unique("tf"), &mut s.0, "", 140.0, mono).accessible_name("Value");
+                    s.1 = egui::Rect::from_min_size(before, egui::vec2(140.0, super::TEXT_FIELD_H));
+                },
+                (text.to_owned(), egui::Rect::NOTHING),
+            );
+            crate::PhotocraftApp::setup_context(&h.ctx, kind);
+            h.run_steps(3);
+            let image = h.render().expect("render text field");
+            let field = h.state().1;
+            let px = |v: f32| (v * scale) as u32;
+            let bg = image.get_pixel(px(field.right() - 3.0), px(field.center().y)).0;
+            let lum = |p: [u8; 4]| u32::from(p[0]) + u32::from(p[1]) + u32::from(p[2]);
+            let rows: Vec<u32> = (px(field.top() + 2.0)..px(field.bottom() - 2.0))
+                .filter(|&y| (px(field.left() + 3.0)..px(field.right() - 6.0)).any(|x| lum(image.get_pixel(x, y).0) > lum(bg) + 150))
+                .collect();
+            let (top, bottom) = (rows.first().copied().unwrap_or(0) as f32 / scale, (rows.last().copied().unwrap_or(0) + 1) as f32 / scale);
+            let what = format!("{kind:?} {text:?} mono={mono}: field {field:?}, ink {top}..{bottom}, off {}", (top + bottom) / 2.0 - field.center().y);
+            assert!(!rows.is_empty(), "{what}");
+            assert!(((top + bottom) / 2.0 - field.center().y).abs() <= 0.25, "{what}");
+        }
+    }
+}
+
 /// #2150: a huge paste into a plain text field stops at its limit instead of growing the
 /// string (and its laid-out text) without bound.
 #[test]
