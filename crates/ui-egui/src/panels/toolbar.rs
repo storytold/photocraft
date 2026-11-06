@@ -93,6 +93,63 @@ pub(super) fn tool_flyout_release(row: Rect, pointer: Option<Pos2>, released: bo
     released && from_button && pointer.is_some_and(|p| row.contains(p))
 }
 
+fn more_flyout_id() -> egui::Id {
+    egui::Id::unique("toolbar-more-flyout-open")
+}
+
+/// Whether the "…" button's flyout is open: it owns Escape then (`shortcuts::handle`).
+pub(crate) fn more_flyout_open(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<bool>(more_flyout_id())).unwrap_or(false)
+}
+
+/// Right-click on the "…" button opens a flyout with one row, "Edit Toolbar…", drawn like a tool
+/// flyout. The row runs `edit.toolbar` and closes the flyout; Escape or a press outside closes it
+/// without running anything.
+fn more_slot_flyout(app: &mut PhotocraftApp, ui: &mut egui::Ui, button: &egui::Response, t: &Tokens) {
+    let open_id = more_flyout_id();
+    let open = ui.data(|d| d.get_temp::<bool>(open_id)).unwrap_or(false);
+    if button.secondary_clicked() {
+        ui.data_mut(|d| d.insert_temp(open_id, !open));
+        ui.ctx().request_repaint();
+        return;
+    }
+    if !open {
+        return;
+    }
+    let (pivot, pos) = if crate::direction::is_rtl() {
+        (egui::Align2::RIGHT_BOTTOM, button.rect.left_bottom() - vec2(6.0, 0.0))
+    } else {
+        (egui::Align2::LEFT_BOTTOM, button.rect.right_bottom() + vec2(6.0, 0.0))
+    };
+    let area = egui::Area::new(egui::Id::unique("toolbar-more-flyout")).order(egui::Order::Foreground).pivot(pivot).fixed_pos(pos).show(ui.ctx(), |ui| {
+        egui::Frame::popup(ui.style()).show(ui, |ui| {
+            let label = tl!("Edit Toolbar…");
+            let label_w = ui.painter().layout_no_wrap(label.to_string(), egui::FontId::proportional(12.5), t.text).size().x;
+            let (r, row) = ui.allocate_exact_size(vec2((label_w + 24.0).max(180.0), 26.0), Sense::click());
+            row.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
+            if row.hovered() {
+                ui.painter().rect_filled(r, 3.0, t.hover);
+            }
+            ui.painter().text(pos2(r.left() + 12.0, r.center().y), Align2::LEFT_CENTER, label, egui::FontId::proportional(12.5), t.text);
+            row.clicked()
+        })
+    });
+    if area.inner.inner {
+        ui.data_mut(|d| d.remove::<bool>(open_id));
+        let ctx = ui.ctx().clone();
+        if let Err(e) = crate::menus::invoke(app, &ctx, "edit.toolbar", json!({})) {
+            app.ui.status = e;
+            app.ui.status_error = true;
+        }
+        return;
+    }
+    let pressed_outside =
+        ui.input(|i| i.pointer.any_pressed() && i.pointer.press_origin().is_some_and(|p| !area.response.rect.contains(p) && !button.rect.contains(p)));
+    if pressed_outside || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        ui.data_mut(|d| d.remove::<bool>(open_id));
+    }
+}
+
 pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let (w1, bx, m) = if t.pro { (40.0, 30.0, 5i8) } else { (50.0, 36.0, 7i8) };
@@ -351,9 +408,14 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                             });
                         }
                     }
-                    if icons::button(ui, "ellipsis", bx, false, tl!("Edit Toolbar…")).clicked() {
-                        let _ = crate::menus::invoke(app, &ctx, "edit.toolbar", json!({}));
+                    let more = icons::button(ui, "ellipsis", bx, false, tl!("Edit Toolbar…"));
+                    if more.clicked()
+                        && let Err(e) = crate::menus::invoke(app, &ctx, "edit.toolbar", json!({}))
+                    {
+                        app.ui.status = e;
+                        app.ui.status_error = true;
                     }
+                    more_slot_flyout(app, ui, &more, &t);
                     reveal_focused_control(ui);
                 });
             ui.add_space(if t.pro { 8.0 } else { 14.0 });
