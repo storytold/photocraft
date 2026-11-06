@@ -244,6 +244,33 @@ fn color_lookup_mesh_3dl_honours_the_header() {
     }
 }
 
+/// #11452 through the Color Lookup command: a `.3dl` shaper is its own 1-D step ahead of the
+/// table, so a bent shaper over a table that isn't the identity renders the composition.
+#[test]
+fn color_lookup_applies_its_shaper_before_a_non_identity_table() {
+    // The issue's worked example: a 3-node table whose red output is [0, 0, 1] and a 10-bit
+    // shaper [0, 256, 1023]. Red 0.75 shapes to (256 + 1023)/2 = 0.62512, which the table reads
+    // a quarter of the way up its last segment: 256/1023 = 0.2502, where baking the curve into
+    // the 3-node table gave 0.5. The tolerance is three 8-bit codes: an 8-bit document reads 0.75
+    // as 191/255 and quantises the answer again on the way out, which on its own moves it by
+    // about one code; 16-bit and float sit closer to the analytic value.
+    let mut text = String::from("3DMESH\nMesh 1 12\n0 256 1023\n");
+    for r in 0..3 {
+        for _ in 0..9 {
+            text += &format!("{} 0 0\n", if r == 2 { 4095 } else { 0 });
+        }
+    }
+    for depth in DEPTHS {
+        let mut s = session(depth, "rgb");
+        paint(&mut s, |_, _| [0.75, 0.75, 0.75, 1.0]);
+        s.execute("image.adjustments.colorLookup", json!({"data": text, "fileName": "bent.3dl", "dither": false})).unwrap();
+        let after = rgba(&s, 5, 5);
+        assert!((after[0] - 256.0 / 1023.0).abs() < 3.0 / 255.0, "{depth}-bit: {after:?}");
+        assert!(after[0] < 0.4, "{depth}-bit rendered the baked table: {after:?}");
+        assert!(after[1..3].iter().all(|c| c.abs() < 3.0 / 255.0), "{depth}-bit: {after:?}");
+    }
+}
+
 /// The kind's parameters, read back from the model (Color Lookup with its table name and size).
 #[test]
 fn color_lookup_file_round_trips_psd_in_its_own_format() {

@@ -311,7 +311,9 @@ pub fn adjustment_program(adj: &Adjustment, transfer: Transfer, depth: photocraf
             }
             (15, p, Some(vec![row]))
         }
-        Adjustment::ColorLookup { lut: Some(table), size, tetrahedral, dither, .. } if lut3d_len(*size).is_some_and(|len| table.len() >= len) => {
+        // A shaper is a 1-D step ahead of the table that the kernel can't sample (#11452); the
+        // planner sends such a layer to the CPU, so only a table on its own lowers here.
+        Adjustment::ColorLookup { lut: Some(table), size, tetrahedral, dither, shaper: None, .. } if lut3d_len(*size).is_some_and(|len| table.len() >= len) => {
             // The flattened table (n³ RGB triplets) spans as many 4096-wide rows as it needs.
             let n = *size as usize;
             let rows = lut3d_len(*size)

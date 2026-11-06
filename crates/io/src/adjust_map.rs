@@ -478,6 +478,8 @@ fn read_lookup(d: &[u8]) -> Result<Adjustment, String> {
         name,
         size: lut.size as u32,
         lut: Some(std::sync::Arc::new(lut.data)),
+        // The .3dl shaper is its own step, kept beside the table (#11452).
+        shaper: lut.shaper,
         tetrahedral: false,
         dither: desc_bool(&desc, "Dthr").unwrap_or(false),
         // Kept so a save embeds the file as loaded (Photoshop never converts it).
@@ -505,11 +507,12 @@ fn psd_lut_format(format: LutFormat) -> &'static str {
 }
 
 /// The source file of a Color Lookup to embed as is: only while it still parses to the
-/// layer's table, so an edited table is never saved with stale bytes.
-fn lut_source_for<'a>(source: Option<&'a LutSource>, table: &[f32], size: usize) -> Option<&'a LutSource> {
+/// layer's table *and* shaper, so an edited lookup is never saved with stale bytes. The
+/// shaper counts because a `.3dl` is its curve plus its table, not just the table (#11452).
+fn lut_source_for<'a>(source: Option<&'a LutSource>, table: &[f32], size: usize, shaper: Option<&[f32]>) -> Option<&'a LutSource> {
     let source = source?;
     let file = parse_lut_source(source.format, &source.bytes).ok()?;
-    (file.size == size && file.data == table).then_some(source)
+    (file.size == size && file.data == table && file.shaper.as_deref().map(Vec::as_slice) == shaper).then_some(source)
 }
 
 /// `name` with a `.3dl` / `.look` extension swapped for `.cube`, for a table saved as `.cube`.
@@ -685,8 +688,11 @@ pub fn write(adj: &Adjustment) -> Vec<([u8; 4], Vec<u8>)> {
             return block(b"curv", encode::curves(master, per_channel, *space, black, *pencil));
         }
         Adjustment::SelectiveColor { relative, adjustments } => return block(b"selc", encode::selective_color(*relative, adjustments)),
-        Adjustment::ColorLookup { name, lut, size, dither, source, .. } => {
-            return block(b"clrL", encode::color_lookup(name, lut.as_deref().map(Vec::as_slice), *size, *dither, source.as_ref()));
+        Adjustment::ColorLookup { name, lut, size, dither, shaper, source, .. } => {
+            return block(
+                b"clrL",
+                encode::color_lookup(name, lut.as_deref().map(Vec::as_slice), *size, *dither, shaper.as_deref().map(Vec::as_slice), source.as_ref()),
+            );
         }
         Adjustment::GradientMap { stops, reverse, dither } => {
             return block(b"grdm", write_gradient_map(&encode::gradient_stops(stops), *reverse, *dither));

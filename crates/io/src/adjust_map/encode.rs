@@ -122,7 +122,7 @@ pub(super) fn selective_color(relative: bool, adjustments: &[[f32; 4]; 9]) -> Ve
 }
 
 /// Color Lookup payload, written as an identity cube when there is no usable table.
-pub(super) fn color_lookup(name: &str, lut: Option<&[f32]>, size: u32, dither: bool, source: Option<&LutSource>) -> Vec<u8> {
+pub(super) fn color_lookup(name: &str, lut: Option<&[f32]>, size: u32, dither: bool, shaper: Option<&[f32]>, source: Option<&LutSource>) -> Vec<u8> {
     // A lookup without a usable table (none chosen yet, or a bad size) renders as the
     // identity, so it is written as a 2³ identity cube rather than dropped.
     let n = size as usize;
@@ -130,10 +130,19 @@ pub(super) fn color_lookup(name: &str, lut: Option<&[f32]>, size: u32, dither: b
     // Like Photoshop, embed the LUT file as loaded, in its own format; a table made or
     // changed in PhotoCraft is written as `.cube`, named to match.
     let (format, data, name, dither) = match cube {
-        Some(cube) => match lut_source_for(source, cube, n) {
+        Some(cube) => match lut_source_for(source, cube, n, shaper) {
             Some(src) => (src.format, src.bytes.to_vec(), name.to_string(), dither),
             None => {
-                let file = photocraft_cms::lutfile::LutFile { title: String::new(), size: n, data: cube.to_vec(), domain_min: [0.0; 3], domain_max: [1.0; 3] };
+                let file = photocraft_cms::lutfile::LutFile {
+                    title: String::new(),
+                    size: n,
+                    data: cube.to_vec(),
+                    shaper: None,
+                    domain_min: [0.0; 3],
+                    domain_max: [1.0; 3],
+                };
+                // A shaper the layer no longer matches its file with can't be written: `.cube`
+                // carries a table only, so the edited table goes out on its own (#11452).
                 (LutFormat::Cube, photocraft_cms::lutfile::write_cube(&file).into_bytes(), cube_file_name(name), dither)
             }
         },

@@ -221,7 +221,15 @@ fn roundtrips() {
     let id = photocraft_cms::lutfile::LutFile::identity(5);
     let cube = photocraft_cms::lutfile::write_cube(&id).into_bytes();
     let source = Some(LutSource { format: LutFormat::Cube, bytes: std::sync::Arc::new(cube) });
-    rt(Adjustment::ColorLookup { name: "Look.cube".into(), lut: Some(std::sync::Arc::new(id.data)), size: 5, tetrahedral: false, dither: true, source });
+    rt(Adjustment::ColorLookup {
+        name: "Look.cube".into(),
+        lut: Some(std::sync::Arc::new(id.data)),
+        size: 5,
+        shaper: None,
+        tetrahedral: false,
+        dither: true,
+        source,
+    });
 }
 
 #[test]
@@ -320,14 +328,21 @@ fn color_lookup_table_without_matching_file_is_saved_as_cube_named_to_match() {
     let Adjustment::ColorLookup { name, size, tetrahedral, dither, source, .. } = a else { panic!("{a:?}") };
     // The table no longer matches the stored file (changed in PhotoCraft): the bytes are stale.
     let id = photocraft_cms::lutfile::LutFile::identity(2).data;
-    let edited = Adjustment::ColorLookup { name, lut: Some(std::sync::Arc::new(id.clone())), size, tetrahedral, dither, source };
+    let edited = Adjustment::ColorLookup { name, lut: Some(std::sync::Arc::new(id.clone())), size, shaper: None, tetrahedral, dither, source };
     let d = written_clrl(&edited);
     assert_eq!(desc_enum(&d, "LUTFormat"), Some(&b"LUTFormatCUBE"[..]));
     assert_eq!(desc_text(&d, "LUT3DFileName").as_deref(), Some("Invert.cube"));
     assert_eq!(photocraft_cms::lutfile::parse("x.cube", raw(&d, "LUT3DFileData")).unwrap().data, id);
     // A table made in PhotoCraft (no file) named like another format is also renamed.
-    let made =
-        Adjustment::ColorLookup { name: "Grade.look".into(), lut: Some(std::sync::Arc::new(id)), size: 2, tetrahedral: false, dither: false, source: None };
+    let made = Adjustment::ColorLookup {
+        name: "Grade.look".into(),
+        lut: Some(std::sync::Arc::new(id)),
+        size: 2,
+        shaper: None,
+        tetrahedral: false,
+        dither: false,
+        source: None,
+    };
     let d = written_clrl(&made);
     assert_eq!(desc_enum(&d, "LUTFormat"), Some(&b"LUTFormatCUBE"[..]));
     assert_eq!(desc_text(&d, "LUT3DFileName").as_deref(), Some("Grade.cube"));
@@ -337,6 +352,7 @@ fn color_lookup_table_without_matching_file_is_saved_as_cube_named_to_match() {
         name: "Junk.3dl".into(),
         lut: Some(std::sync::Arc::new(photocraft_cms::lutfile::LutFile::identity(2).data)),
         size: 2,
+        shaper: None,
         tetrahedral: false,
         dither: false,
         source: Some(LutSource { format: LutFormat::ThreeDl, bytes: std::sync::Arc::new(b"\xFF not a lut".to_vec()) }),
@@ -668,7 +684,7 @@ fn degenerate_adjustments_still_get_an_encoding() {
     }
     // A colour lookup without a (usable) table becomes an identity cube, without dither.
     for lut in [None, Some(std::sync::Arc::new(vec![0.5; 7]))] {
-        let b = write(&Adjustment::ColorLookup { name: "L".into(), lut, size: 3, tetrahedral: false, dither: true, source: None });
+        let b = write(&Adjustment::ColorLookup { name: "L".into(), lut, size: 3, shaper: None, tetrahedral: false, dither: true, source: None });
         let back = parse(&b[0].0, &b[0].1, None, Channels::Rgb);
         let Adjustment::ColorLookup { lut: Some(t), size: 2, dither: false, name, .. } = back else { panic!("{back:?}") };
         assert_eq!(name, "L");

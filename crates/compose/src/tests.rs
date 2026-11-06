@@ -430,6 +430,7 @@ fn full_coverage_adjustment_keeps_its_result_over_huge_hdr_values() {
             name: "half".into(),
             lut: Some(std::sync::Arc::new(vec![0.5; 24])),
             size: 2,
+            shaper: None,
             tetrahedral: false,
             dither: false,
             source: None,
@@ -440,6 +441,52 @@ fn full_coverage_adjustment_keeps_its_result_over_huge_hdr_values() {
             assert!((c - 0.5).abs() < 1e-6, "{v}: {got:?}");
         }
     }
+}
+
+/// #11452 through the compositor: a `.3dl` shaper is a 1-D step ahead of the table, so a bent
+/// shaper over a table that isn't the identity renders the composition, not an interpolation of a
+/// table the curve was baked into.
+#[test]
+fn color_lookup_applies_its_shaper_before_the_table() {
+    // The issue's worked example: a 3-node table whose red output is [0, 0, 1] and a 10-bit
+    // shaper [0, 256, 1023], i.e. the knots cms keeps, scaled to 0..=1. Shaper-then-table reads
+    // red 0.75 as (256 + 1023)/2 = 0.62512, which the table takes ¼ of the way from its middle
+    // node to its top: 256/1023 = 0.2502. The bake put 0 at the middle node, so trilinear gave
+    // 0.5 there — half the range out at three quarters in, which is 127 codes at 8 bits, hence
+    // the 1e-4 tolerance: it only has to clear the f32 rounding of the knots.
+    let n = 3;
+    let mut table = vec![0.0f32; n * n * n * 3];
+    for b in 0..n {
+        for g in 0..n {
+            for r in 0..n {
+                table[((b * n + g) * n + r) * 3] = f32::from(r == n - 1);
+            }
+        }
+    }
+    let look = |shaper: Option<std::sync::Arc<Vec<f32>>>| Adjustment::ColorLookup {
+        name: "bent.3dl".into(),
+        lut: Some(std::sync::Arc::new(table.clone())),
+        size: n as u32,
+        shaper,
+        tetrahedral: false,
+        dither: false,
+        source: None,
+    };
+    let render = |adj: Adjustment| {
+        let mut d = Document::new("3dl", Size::new(2, 2), ColorMode::Rgb, SampleType::F32);
+        let mut base = Layer::raster("b", PixelFormat::RGBA32F);
+        base.surface_mut().unwrap().fill_rect(Rect::new(0, 0, 2, 2), &[0.75, 0.75, 0.75, 1.0]);
+        d.layers = vec![base, Layer::new("look", LayerContent::Adjustment(adj))];
+        px(&d, 0, 0)
+    };
+    let bent = std::sync::Arc::new(vec![0.0, 256.0 / 1023.0, 1.0]);
+    let got = render(look(Some(bent)));
+    assert!((got[0] - 256.0 / 1023.0).abs() < 1e-4, "shaper, then table: {got:?}");
+    assert!(got[0] < 0.3, "the baked table rendered 0.5: {got:?}");
+    // Green and blue read the same curve over the same table, so they stay black.
+    assert!(got[1..3].iter().all(|c| c.abs() < 1e-6), "{got:?}");
+    // The table on its own still interpolates to 0.5, which is what the bake used to render.
+    assert!((render(look(None))[0] - 0.5).abs() < 1e-6);
 }
 
 /// #9501: an adjustment layer at 40% Fill in Color Dodge or Linear Burn blends a result pulled
@@ -455,6 +502,7 @@ fn adjustment_fill_changes_the_special_blend_modes() {
             name: "half".into(),
             lut: Some(std::sync::Arc::new(vec![0.5; 24])),
             size: 2,
+            shaper: None,
             tetrahedral: false,
             dither: false,
             source: None,
