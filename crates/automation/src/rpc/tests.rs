@@ -304,6 +304,39 @@ fn doc_save_rejects_a_bad_quality_instead_of_ignoring_or_clamping_it() {
 }
 
 #[test]
+fn doc_save_png_compression_reaches_the_encoder() {
+    let base = std::env::temp_dir().join(format!("pc-doc-save-png-{}", std::process::id()));
+    std::fs::create_dir_all(&base).unwrap();
+    let mut seed = 1u32;
+    let noise: Vec<u8> = (0..128 * 96 * 3)
+        .map(|i| {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            // Smooth enough for deflate to find something, noisy enough to differ by level.
+            ((i / 3 % 128) as u32 + (seed >> 29)) as u8
+        })
+        .collect();
+    let img = photocraft_codecs::Image::from_u8(128, 96, photocraft_codecs::ChannelLayout::Rgb, noise).unwrap();
+    std::fs::write(base.join("in.png"), photocraft_codecs::encode(&img, photocraft_codecs::Format::Png, &Default::default()).unwrap()).unwrap();
+    let mut h = Headless::with_workspace(crate::AuthorizedWorkspace::new(Some(&base), Some(&base)).unwrap());
+    h.handle("doc.open", json!({"path": "in.png"})).unwrap();
+    let size = |h: &mut Headless, name: &str, level: &str| {
+        h.handle("doc.save", json!({"path": name, "pngCompression": level})).unwrap();
+        std::fs::metadata(base.join(name)).unwrap().len()
+    };
+    let (none, fast, best) = (size(&mut h, "none.png", "none"), size(&mut h, "fast.png", "fast"), size(&mut h, "best.png", "best"));
+    // Stored deflate is far larger than either compressed level (which of fast or best is
+    // smaller depends on the image).
+    assert!(none > fast && none > best, "none {none}, fast {fast}, best {best}");
+    for level in [json!("turbo"), json!(9), json!(true)] {
+        let refused = h.handle("doc.save", json!({"path": "x.png", "pngCompression": level})).unwrap_err().to_string();
+        assert!(refused.contains("pngCompression"), "{level}: {refused}");
+        assert!(!base.join("x.png").exists(), "{level} wrote a file");
+    }
+    drop(h);
+    std::fs::remove_dir_all(base).unwrap();
+}
+
+#[test]
 fn automation_preview_rejects_oversized_full_size_and_numeric_wraparound() {
     let mut h = Headless::new();
     h.handle("doc.new", json!({"width": 2049, "height": 1})).unwrap();

@@ -146,6 +146,23 @@ pub fn tiff_compression_param(p: &Value, cmd: &str) -> Result<Option<photocraft_
     }
 }
 
+/// The PNG deflate effort in `p` (`"pngCompression": "none" | "fast" | "default" | "best"`;
+/// absent or null: unset, the encoder's default). Anything else is a bad parameter of command
+/// `cmd`.
+pub fn png_compression_param(p: &Value, cmd: &str) -> Result<Option<photocraft_codecs::PngCompression>> {
+    use photocraft_codecs::PngCompression;
+    match p.get("pngCompression") {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => match v.as_str() {
+            Some("none") => Ok(Some(PngCompression::None)),
+            Some("fast") => Ok(Some(PngCompression::Fast)),
+            Some("default") => Ok(Some(PngCompression::Default)),
+            Some("best") => Ok(Some(PngCompression::Best)),
+            _ => Err(EngineError::BadParams { cmd: cmd.into(), msg: format!("`pngCompression` must be \"none\", \"fast\", \"default\" or \"best\", got {v}") }),
+        },
+    }
+}
+
 /// A TIFF Options checkbox in `p`: `"tiffTransparency"` (Save Transparency) or `"tiffPyramid"`
 /// (Save Image Pyramid), `true` or `false`; absent or null: unset. Anything else is a bad
 /// parameter of command `cmd` (#8827).
