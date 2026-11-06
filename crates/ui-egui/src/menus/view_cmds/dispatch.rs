@@ -428,7 +428,7 @@ fn run(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Res
             app.ui.views[i].zoom_anchor = None;
             Ok(json!({"zoom": app.ui.views[i].zoom}))
         }
-        "view.fitLayersOnScreen" => fit_layers(app),
+        "view.fitLayersOnScreen" => fit_layers(app, ctx),
         "view.fitArtboardOnScreen" => crate::artboard_ui::fit_artboard(app),
         _ => Err(format!("unhandled {id}")),
     }

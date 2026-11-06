@@ -1040,9 +1040,14 @@ fn view_commands_zoom_a_document_floating_in_its_own_window() {
     let (mut app, ctx) = app_with(1);
     menu(&mut app, &ctx, "window.arrange.floatInWindow", json!({"document": 0})).unwrap();
     draw_windows(&mut app, &ctx);
+    let window_zoom = |app: &PhotocraftApp| app.ui.windows.iter().find(|w| w.document == 0).unwrap().view.zoom;
+    // From 50%, so Actual Pixels has something to change.
+    app.ui.views[0].zoom = 0.5;
+    draw_windows(&mut app, &ctx);
+    assert_eq!(window_zoom(&app), 0.5);
     menu(&mut app, &ctx, "view.actualPixels", json!({})).unwrap();
     draw_windows(&mut app, &ctx);
-    let window_zoom = |app: &PhotocraftApp| app.ui.windows.iter().find(|w| w.document == 0).unwrap().view.zoom;
+    assert_eq!(window_zoom(&app), 1.0, "View › Actual Pixels shows the floating window at 100%");
     assert_eq!(window_zoom(&app), app.ui.views[0].zoom, "the window shows the document's view");
     let before = window_zoom(&app);
     menu(&mut app, &ctx, "view.zoomIn", json!({})).unwrap();
@@ -1052,4 +1057,22 @@ fn view_commands_zoom_a_document_floating_in_its_own_window() {
     menu(&mut app, &ctx, "view.zoomOut", json!({})).unwrap();
     draw_windows(&mut app, &ctx);
     assert!(window_zoom(&app) < zoomed, "and View › Zoom Out zooms it out");
+}
+
+/// View › Fit Layer(s) on Screen on a document floating in its own window fits that window's
+/// canvas, not the main window's (CodeRabbit on #11664).
+#[test]
+fn fit_layers_on_screen_fits_the_floating_window() {
+    let (mut app, ctx) = app_with(1);
+    menu(&mut app, &ctx, "window.arrange.floatInWindow", json!({"document": 0})).unwrap();
+    draw_windows(&mut app, &ctx);
+    let (area, ppp) = crate::canvas::tabs::floating_canvas(&app, &ctx, 0).expect("the window recorded its canvas");
+    // A main canvas of another size, so the two fits differ.
+    app.last_canvas_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(3000.0, 2000.0));
+    menu(&mut app, &ctx, "view.fitLayersOnScreen", json!({})).unwrap();
+    // The layer is the whole 100×80 document.
+    let fit = |area: egui::Vec2, ppp: f32| crate::zoom_levels::clamp(((area.x - 40.0) / 100.0).min((area.y - 40.0) / 80.0) * ppp, [100, 80]);
+    let zoom = app.ui.views[0].zoom;
+    assert_ne!(fit(area, ppp), fit(egui::vec2(3000.0, 2000.0), app.canvas_ppp()), "the test needs two different fits");
+    assert!((zoom - fit(area, ppp)).abs() < 1e-4, "fits the window's canvas {area:?}: {zoom} vs {}", fit(area, ppp));
 }
