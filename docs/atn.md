@@ -756,12 +756,17 @@ differences that do not change what a step does.
   it is edited. Otherwise it is written from the params: `#rrggbb` stops on 1/4096 locations and
   whole-percent midpoints; a Set also needs its transparency stops, as the event replaces the whole
   gradient. Midpoint k is the `Mdpn` of stop k + 1 (the first stop's is 50). A Noise gradient,
-  smoothness below 100 %, a non-classic interpolation or a transparency midpoint stay Photoshop steps.
+  smoothness below 100 %, a non-classic interpolation, a transparency midpoint, a midpoint outside
+  5..95 %, transparency stops out of range or out of order, and a Set without transparency stops stay
+  Photoshop steps.
 - Blend If (`Blnd` in a layer Set) loads as `layer.layerStyle.blendingOptions`. With only the
-  Blending Options dialog's keys (`Opct`, `fillOpacity`, `Md  `, `Blnd`, the Advanced checkboxes) the
-  Set is one step and saves back as one Set; with any other key, those go through `layer.setProps`.
-  Slider values are whole levels 0..255, `SrcB`/`Srcl`/`SrcW`/`Srcm` for This Layer and
-  `DstB`/`Dstl`/`DstW`/`Dstt` for Underlying Layer (black low, black high, white low, white high).
+  Blending Options dialog's keys (`Opct`, `fillOpacity`, `Md  `, `Blnd`, the Advanced checkboxes, and
+  the `Lefx` = {`Scl `} its OK records on a layer without effects) the Set is one step and saves back
+  as one Set; with any other key, those go through `layer.setProps`. Slider values are whole levels
+  0..255 in order, `SrcB`/`Srcl`/`SrcW`/`Srcm` for This Layer and `DstB`/`Dstl`/`DstW`/`Dstt` for
+  Underlying Layer (black low, black high, white low, white high; measured in the dialog). The gray
+  channel saves as `Chnl.Gry`; a `Chnl.Cmps` entry loads as gray and saves as `Gry`, as the
+  application's own dialog writes it back.
 - Levels and Curves write the composite as `Chnl.Cmps` (the application skips `Ordn.Trgt`, #8543).
 
 ### Classic Gradient recordings

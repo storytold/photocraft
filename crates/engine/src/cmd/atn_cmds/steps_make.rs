@@ -93,7 +93,7 @@ const GRADIENT_DESCRIPTOR: &str = "__atnDescriptor";
 /// `gradient.fill.set`. Midpoint k belongs to the segment that ends at stop k + 1, as the PSD
 /// reader reads it; all-default midpoints give `[]`, which clears custom ones on a Set. None for
 /// what the fill does not play: a Noise gradient, a smoothness below 100 %, a non-classic
-/// interpolation, a transparency midpoint or stops out of order.
+/// interpolation, a transparency midpoint, stops out of order or values out of range.
 fn gradient_params(t: &Descriptor) -> Option<Map<String, Value>> {
     if t.items.iter().any(|(k, _)| !GRADIENT_LAYER_KEYS.iter().any(|g| k.is(g))) {
         return None;
@@ -140,18 +140,29 @@ fn gradient_params(t: &Descriptor) -> Option<Map<String, Value>> {
         previous = at;
         stops.push(json!([at / 4096.0, color]));
         if i > 0 {
-            mids.push(get_num(s, "Mdpn").unwrap_or(50.0) / 100.0);
+            // The dialog's midpoints are 5..95 %; playback would clamp anything else.
+            let mid = get_num(s, "Mdpn").unwrap_or(50.0);
+            if !(5.0..=95.0).contains(&mid) {
+                return None;
+            }
+            mids.push(mid / 100.0);
         }
     }
     p.insert("stops".into(), Value::Array(stops));
     if let Some(trns) = get_list(g, "Trns") {
-        let mut out = Vec::new();
+        let (mut out, mut previous) = (Vec::new(), 0.0);
         for s in trns {
             let D::Descriptor(s) = s else { return None };
             if get_num(s, "Mdpn").is_some_and(|m| m != 50.0) {
                 return None;
             }
-            out.push(json!([get_num(s, "Lctn")? / 4096.0, get_num(s, "Opct")?]));
+            // Playback would clamp and sort what is out of range or out of order.
+            let (at, opacity) = (get_num(s, "Lctn")?, get_num(s, "Opct")?);
+            if !(previous..=4096.0).contains(&at) || !(0.0..=100.0).contains(&opacity) {
+                return None;
+            }
+            previous = at;
+            out.push(json!([at / 4096.0, opacity]));
         }
         p.insert("transparency".into(), Value::Array(out));
     }
@@ -300,6 +311,13 @@ fn blending_options_to(p: &Value) -> Option<Descriptor> {
     }
     if let Some(b) = blend_if {
         t = t.with("Blnd", blend_if_to(b)?);
+        if let Some(fx) = jstr(p, EFFECTS_SCALE) {
+            let fx = photocraft_paint::tile::b64_decode(fx).and_then(|b| Descriptor::from_bytes(&b).ok())?;
+            if !scale_only(&fx) {
+                return None;
+            }
+            t = t.with("Lefx", D::Descriptor(fx));
+        }
     }
     // Only these export: Photoshop records the dialog's other options differently.
     if t.items.is_empty() || t.items.len() != o.len() {
@@ -342,7 +360,11 @@ fn blend_if_from(list: &[D]) -> Option<Value> {
                 .collect();
             match v.iter().flatten().count() {
                 0 if keys.iter().all(|k| e.get(k).is_none()) => Some(None),
-                4 => Some(Some(json!(v.into_iter().flatten().collect::<Vec<_>>()))),
+                // In order, as the command takes them; an inverted range stays a Photoshop step.
+                4 => {
+                    let q: Vec<i32> = v.into_iter().flatten().collect();
+                    q.windows(2).all(|w| w[0] <= w[1]).then(|| Some(json!(q)))
+                }
                 _ => None,
             }
         };
@@ -991,6 +1013,21 @@ const LOCKS: &[(&str, &str)] = &[
 /// takes from a `set` of the layer: opacity, fill opacity, mode and Blend If.
 const BLENDING_DIALOG: &[&str] = &["Opct", "fillOpacity", "Md  ", "Blnd"];
 
+/// The hidden `layer.layerStyle.blendingOptions` param that keeps the `Lefx` = {Scl} the Layer
+/// Style dialog's OK records beside Blend If, so Save Actions writes the Set back unchanged.
+const EFFECTS_SCALE: &str = "__atnEffectsScale";
+
+/// A `Lefx` holding only the effects' scale: what the dialog's OK records on a layer without
+/// effects. It changes nothing.
+fn scale_only(fx: &Descriptor) -> bool {
+    fx.items.iter().all(|(k, _)| k.is("Scl "))
+}
+
+/// A `T` key that is such a `Lefx`.
+fn is_scale_only(k: &Id, v: &D) -> bool {
+    matches!(v, D::Descriptor(fx) if k.is("Lefx") && scale_only(fx))
+}
+
 /// Blending Options' Advanced checkboxes ↔ `layer.layerStyle.blendingOptions` params.
 const ADVANCED_BLENDING: &[(&str, &str)] = &[("blendClipped", "blendClippedLayersAsGroup"), ("transparencyShapesLayer", "transparencyShapesLayer")];
 
@@ -1077,7 +1114,10 @@ fn layer_set_from(d: &Descriptor, r: &[ReferenceItem]) -> Mapped {
         advanced.insert("blendIf".into(), b);
         // The Blending Options dialog's OK: with nothing but its own options, the opacities and
         // the mode go with Blend If into one step, saved back as the one `set`.
-        if t.items.iter().all(|(k, _)| BLENDING_DIALOG.iter().any(|b| k.is(b)) || ADVANCED_BLENDING.iter().any(|(a, _)| k.is(a))) {
+        if t.items.iter().all(|(k, v)| BLENDING_DIALOG.iter().any(|b| k.is(b)) || ADVANCED_BLENDING.iter().any(|(a, _)| k.is(a)) || is_scale_only(k, v)) {
+            if let Some(D::Descriptor(fx)) = t.get("Lefx") {
+                advanced.insert(EFFECTS_SCALE.into(), photocraft_paint::tile::b64_encode(&fx.to_bytes()).into());
+            }
             for (key, param) in [("Opct", "opacity"), ("fillOpacity", "fillOpacity")] {
                 if let Some(v) = get_num(t, key) {
                     advanced.insert(param.into(), v.into());
@@ -1102,10 +1142,7 @@ fn layer_set_from(d: &Descriptor, r: &[ReferenceItem]) -> Mapped {
     // The Layer Style dialog's OK on a layer without effects records only the effects'
     // scale (`Lefx` = {Scl}); an empty `T` is an OK that changed nothing. Neither changes
     // the document.
-    let no_effect = t.items.iter().all(|(k, val)| match val {
-        D::Descriptor(fx) if k.is("Lefx") => fx.items.iter().all(|(fk, _)| fk.is("Scl ")),
-        _ => false,
-    });
+    let no_effect = t.items.iter().all(|(k, val)| is_scale_only(k, val));
     if !v.is_empty() {
         steps(v)
     } else if no_effect {
@@ -1159,7 +1196,9 @@ pub(super) fn set_from(d: &Descriptor) -> Mapped {
                 Some(p) if !p.is_empty() => step("layer.fill.pattern.set", Value::Object(p)),
                 _ => unsupported,
             },
-            Some(t) if t.class_id.is("gradientLayer") => match gradient_step(t) {
+            // Photoshop's Set replaces the whole gradient; one without transparency stops would
+            // keep the layer's own on play, and could not be written back once edited.
+            Some(t) if t.class_id.is("gradientLayer") => match gradient_step(t).filter(|p| p.get("transparency").is_some()) {
                 Some(p) => step("gradient.fill.set", p),
                 None => unsupported,
             },

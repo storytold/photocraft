@@ -6476,7 +6476,20 @@ fn gradient_fills_the_command_cannot_play_stay_photoshop_steps() {
     };
     let trns_mid = desc("TrnS").with("Opct", pct(100.0)).with("Lctn", D::Integer(0)).with("Mdpn", D::Integer(30));
     let trns_end = desc("TrnS").with("Opct", pct(100.0)).with("Lctn", D::Integer(4096)).with("Mdpn", D::Integer(50));
+    let trns = |at: i32, o: f64| D::Descriptor(desc("TrnS").with("Opct", pct(o)).with("Lctn", D::Integer(at)).with("Mdpn", D::Integer(50)));
     for t in [
+        // A midpoint outside the dialog's 5..95 % would play clamped.
+        recorded_gradient([50, 2, 50]),
+        recorded_gradient([50, 50, 97]),
+        // Transparency stops out of range or out of order would play clamped and sorted.
+        with_grad(&|g| replaced(g, "Trns", D::List(vec![trns(0, 100.0), trns(5000, 40.0)]))),
+        with_grad(&|g| replaced(g, "Trns", D::List(vec![trns(0, 150.0), trns(4096, 40.0)]))),
+        with_grad(&|g| replaced(g, "Trns", D::List(vec![trns(4096, 100.0), trns(0, 40.0)]))),
+        // A Set without transparency stops would keep the layer's own.
+        with_grad(&|mut g| {
+            g.items.retain(|(k, _)| !k.is("Trns"));
+            g
+        }),
         with_grad(&|g| replaced(g, "GrdF", enm("GrdF", "ClNs"))),
         with_grad(&|g| replaced(g, "Intr", D::Double(2048.0))),
         with_grad(&|g| replaced(g, "Trns", D::List(vec![D::Descriptor(trns_mid.clone()), D::Descriptor(trns_end.clone())]))),
@@ -6575,6 +6588,30 @@ fn blend_if_with_the_dialog_options_is_one_step_and_a_rename_splits() {
     assert_eq!(info["blendIf"][0]["thisLayer"], json!([0, 0, 128, 255]), "{info}");
 }
 
+/// #10771: the Layer Style dialog's OK on a layer without effects also records the effects'
+/// scale (`Lefx` = {Scl}). With Blend If it is still the dialog's one step and saves back with it.
+#[test]
+fn blend_if_with_the_recorded_effects_scale_saves_back_unchanged() {
+    let blnd = D::List(vec![blend_if_entry("gray", [10, 20, 200, 230], Some([0, 0, 255, 255]))]);
+    let dialog = desc("Lyr ").with("Opct", pct(80.0)).with("Blnd", blnd.clone()).with("Lefx", D::Descriptor(desc("Lefx").with("Scl ", pct(100.0))));
+    let mut s = blend_layers(8);
+    s.execute("actions.load", json!({"data": b64(&atn::write(&one_action(vec![layer_set(dialog.clone())])).unwrap())})).unwrap();
+    let steps = &s.actions.list[0].steps;
+    assert_eq!(steps.len(), 1, "{steps:?}");
+    assert_eq!(steps[0].0, "layer.layerStyle.blendingOptions");
+    let played = s.execute("actions.play", json!({"action": "A"})).unwrap();
+    assert!(played.get("failed").is_none(), "{played}");
+    let info = active_info(&s);
+    assert!((info["opacity"].as_f64().unwrap() - 0.8).abs() < 1e-3, "{info}");
+    assert_eq!(info["blendIf"][0]["thisLayer"], json!([10, 20, 200, 230]), "{info}");
+    let (_, d) = saved_first(&mut s);
+    assert_eq!(get_obj(d.as_ref().unwrap(), "T   "), Some(&dialog));
+    // A `Lefx` with an effect in it is not the scale alone: the step is not the dialog's.
+    let with_fx = desc("Lyr ").with("Blnd", blnd).with("Lefx", D::Descriptor(desc("Lefx").with("Scl ", pct(100.0)).with("DrSh", D::Descriptor(desc("DrSh")))));
+    let imp = import(&atn::write(&one_action(vec![layer_set(with_fx)])).unwrap()).unwrap();
+    assert!(imp.actions[0].steps.iter().all(|(_, p)| p.get("__atnEffectsScale").is_none()), "{:?}", imp.actions[0].steps);
+}
+
 /// #10771: Blend If entries that are not whole levels, out of order, with half the Underlying
 /// sliders or an unknown key stay Photoshop steps.
 #[test]
@@ -6584,7 +6621,8 @@ fn blend_if_the_command_cannot_play_stays_a_photoshop_step() {
         e => e,
     };
     let (half, unknown) = (with("DstB"), with("Zzzz"));
-    for e in [blend_if_entry("gray", [0, 0, 300, 255], None), half, unknown] {
+    let inverted = blend_if_entry("gray", [0, 200, 100, 255], None);
+    for e in [blend_if_entry("gray", [0, 0, 300, 255], None), inverted, half, unknown] {
         let imp = import(&atn::write(&one_action(vec![layer_set(desc("Lyr ").with("Blnd", D::List(vec![e])))])).unwrap()).unwrap();
         assert_eq!(imp.actions[0].steps[0].0, PHOTOSHOP_STEP);
     }
