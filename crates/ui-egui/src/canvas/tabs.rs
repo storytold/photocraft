@@ -775,6 +775,8 @@ pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
         let mut view = w.view.clone();
         let mut close = false;
         let mut focused = false;
+        let mut keys = Vec::new();
+        let mut modifiers = egui::Modifiers::default();
         ctx.show_viewport_immediate(vid, builder, |ui, class| {
             if ui.ctx().input(|i| i.viewport().close_requested()) {
                 close = true;
@@ -789,7 +791,23 @@ pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 // Preferences › Zoom Resizes Windows: a zoom wraps the window around the image.
                 crate::zoom_window_fit::follow(app, ui.ctx(), class, vid, &w, &mut view, rect);
             });
+            // An embedded window reads the main window's input, which runs the shortcuts itself.
+            if focused && class == egui::ViewportClass::Immediate {
+                (keys, modifiers) = leftover_keys(ui.ctx());
+            }
         });
+        if !keys.is_empty() {
+            // Keys pressed in this window run the main window's shortcuts (tool keys, undo, Free
+            // Transform, Enter/Escape), as floating panels' windows do. The shortcuts act on the
+            // active document's stored view, which this focused window wrote back in its pass:
+            // a zoom or fit they made there is this window's (Zoom Resizes Windows follows it).
+            let before = app.ui.views.get(w.document).cloned();
+            crate::shortcuts::handle_forwarded(app, ctx, keys, modifiers);
+            if let Some(after) = app.ui.views.get(w.document).filter(|after| before.as_ref() != Some(*after)) {
+                view = after.clone();
+                ctx.request_repaint_of(vid);
+            }
+        }
         if let Some(win) = app.ui.windows.iter_mut().find(|x| x.id == w.id) {
             win.view = view;
             win.focused = focused;
@@ -799,6 +817,27 @@ pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
         }
     }
     app.ui.windows.retain(|w| w.open);
+}
+
+#[cfg(test)]
+mod doc_window_tests;
+
+/// The keys, text and clipboard events a document window's pass left over for the shortcuts,
+/// with the modifiers held there. Nothing while one of its widgets has keyboard focus: its keys
+/// are its own.
+fn leftover_keys(ctx: &egui::Context) -> (Vec<egui::Event>, egui::Modifiers) {
+    if ctx.memory(|m| m.focused().is_some()) {
+        return (Vec::new(), egui::Modifiers::default());
+    }
+    ctx.input(|i| {
+        let keys = i
+            .events
+            .iter()
+            .filter(|e| matches!(e, egui::Event::Key { .. } | egui::Event::Text(_) | egui::Event::Copy | egui::Event::Cut | egui::Event::Paste(_)))
+            .cloned()
+            .collect();
+        (keys, i.modifiers)
+    })
 }
 
 /// Window › Arrange tiles: each document shown with its tile in `rect`, or `None` when the
