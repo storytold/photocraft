@@ -320,13 +320,13 @@ pub const PLACE_EMBEDDED: &str = "Place Embedded";
 /// step on the calling thread, as one undo step.
 pub fn place_bytes(s: &mut Session, name: &str, bytes: Vec<u8>, linked: Option<String>, p: &Value) -> Result<Value> {
     let input = PlaceInput::new(s, name, bytes, linked, p)?;
-    place_input(s, input)
+    place_input(s, input, "file.placeEmbedded".to_string())
 }
 
 /// Run a place: in the background when the command was started with [`Session::start`].
-fn place_input(s: &mut Session, input: PlaceInput) -> Result<Value> {
+fn place_input(s: &mut Session, input: PlaceInput, cmd: String) -> Result<Value> {
     let label = input.job_label();
-    crate::jobs::run(s, &label, true, move |ctx| prepare_place(input, ctx), apply_place)
+    crate::jobs::run(s, &label, true, move |ctx| prepare_place(input, ctx, &cmd), apply_place)
 }
 
 /// The file a place reads.
@@ -445,7 +445,7 @@ pub(crate) struct Prepared {
 /// The heavy part of a place: read (a path), decode, flatten, resize and translate (and render a
 /// vector source at its placement scale). Touches no [`Session`], so it can run on a worker; `ctx`
 /// reports progress and stops it between stages when cancelled.
-pub(crate) fn prepare_place(input: PlaceInput, ctx: &JobCtx) -> Result<Prepared> {
+pub(crate) fn prepare_place(input: PlaceInput, ctx: &JobCtx, cmd: &str) -> Result<Prepared> {
     let PlaceInput { name, file, linked, params: p, canvas: (cw, ch), fmt, opts, fit, smart, doc, frame } = input;
     let bytes = match file {
         PlaceFile::Bytes(bytes) => bytes,
@@ -582,5 +582,5 @@ pub(super) fn place(s: &mut Session, p: &Value, linked: bool) -> Result<Value> {
     });
     // The file is read by the place itself, on the job's worker when it runs in the background.
     let input = PlaceInput::with_file(s, &path, PlaceFile::Path(path.clone()), link, p)?;
-    place_input(s, input)
+    place_input(s, input, cmd.to_string())
 }
