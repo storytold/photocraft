@@ -522,6 +522,9 @@ fn field_rows(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>, ke
                     if ui.small_button(tl!("Add disk")).clicked() {
                         items.push(json!({"enabled": true, "path": ""}));
                     }
+                    if photocraft_raster::spill::free_space_unmeasured() {
+                        ui.add(egui::Label::new(RichText::new(tl!("This scratch disk doesn't report its free space, so PhotoCraft can't stop before it fills up, and large files get no extra room from it without a Scratch Size Limit. Set a limit or use a local disk.")).color(t.warning)).wrap());
+                    }
                 });
                 obj.insert(k, Value::Array(items));
             }

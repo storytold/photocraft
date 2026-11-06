@@ -235,6 +235,8 @@ struct Manager {
     next_space_check: AtomicU64,
     /// A sweep wrote successfully since the last resume: reset the retry backoff.
     recovering: AtomicBool,
+    /// The last free-space query for the scratch directory got no answer.
+    space_unmeasured: AtomicBool,
     registry: Mutex<Registry>,
     config: Mutex<Config>,
     evictions: AtomicU64,
@@ -284,6 +286,7 @@ static M: Manager = Manager {
     space_limit: AtomicU64::new(u64::MAX),
     next_space_check: AtomicU64::new(0),
     recovering: AtomicBool::new(false),
+    space_unmeasured: AtomicBool::new(false),
     registry: Mutex::new(Registry { cells: Vec::new(), hand: 0 }),
     config: Mutex::new(Config { dir: None, file: None, last_error: None, budget: 0, paused: None, backoff: RETRY_FIRST, size_cap: None }),
     evictions: AtomicU64::new(0),
@@ -489,8 +492,12 @@ impl Manager {
 }
 
 /// Free space on the volume holding `dir`, minus the reserve, sets how far the file may grow.
+/// The caller holds the config lock, so this is the current directory; it also records whether the
+/// volume answered, for [`free_space_unmeasured`].
 fn refresh_space(c: &Config, dir: &Path, used: u64) {
-    let room = free_space(dir).map_or(u64::MAX, |(available, total)| used.saturating_add(available.saturating_sub(RESERVE_MIN.max(total / 20))));
+    let space = free_space(dir);
+    M.space_unmeasured.store(space.is_none(), Ordering::Relaxed);
+    let room = space.map_or(u64::MAX, |(available, total)| used.saturating_add(available.saturating_sub(RESERVE_MIN.max(total / 20))));
     let limit = c.size_cap.map_or(room, |cap| cap.min(room));
     M.space_limit.store(limit, Ordering::Relaxed);
     M.next_space_check.store(used.saturating_add(SPACE_CHECK_EVERY), Ordering::Relaxed);
@@ -503,16 +510,78 @@ fn no_room(dir: &Path, cap: Option<u64>) -> String {
     }
 }
 
-/// (available, total) bytes of the volume holding `dir`: the mount point that is its longest
-/// prefix. `None` if unknown, which disables only the free-space check, not spilling.
-#[cfg(not(target_arch = "wasm32"))]
+/// (available, total) bytes of the volume holding `dir`, asked of the directory itself so that a
+/// network folder or any other mount reports its own numbers: `GetDiskFreeSpaceEx` on Windows,
+/// `statvfs` on Unix. Available is what the current user can write (per-user quotas on Windows, the
+/// root reserve on Unix). `None` if the system can't say (the query failed, or it reports a total
+/// of zero, as some FUSE and WebDAV mounts do), which disables only the free-space check, not
+/// spilling; [`free_space_unmeasured`] tells the user.
+#[cfg(any(unix, windows))]
 fn free_space(dir: &Path) -> Option<(u64, u64)> {
     let dir = std::fs::canonicalize(dir).ok()?;
-    let disks = sysinfo::Disks::new_with_refreshed_list_specifics(sysinfo::DiskRefreshKind::nothing().with_storage()).ok()?;
-    disks.iter().filter(|d| dir.starts_with(d.mount_point())).max_by_key(|d| d.mount_point().as_os_str().len()).map(|d| (d.available_space(), d.total_space()))
+    let (available, total) = volume_space(&dir)?;
+    known_space(with_purgeable_space(&dir, available, total), total)
 }
 
-#[cfg(target_arch = "wasm32")]
+/// A zero total means the system could not say (a failed query, or a mount that reports no
+/// capacity); treating that as an empty disk would pause spilling, so it counts as unknown.
+#[cfg(any(unix, windows))]
+fn known_space(available: u64, total: u64) -> Option<(u64, u64)> {
+    (total != 0).then_some((available, total))
+}
+
+/// (available, total) bytes of the volume holding `dir`, from `statvfs`.
+#[cfg(unix)]
+fn volume_space(dir: &Path) -> Option<(u64, u64)> {
+    let vfs = rustix::io::retry_on_intr(|| rustix::fs::statvfs(dir)).ok()?;
+    Some((vfs.f_bavail.saturating_mul(vfs.f_frsize), vfs.f_blocks.saturating_mul(vfs.f_frsize)))
+}
+
+/// (available, total) bytes of the volume holding `dir`, from `GetDiskFreeSpaceEx`. `dir` is
+/// canonical, so verbatim (`\\?\C:\x`, `\\?\UNC\server\share\x`), which also reaches paths past
+/// MAX_PATH and keeps trailing dots significant; winsafe takes `&str`, so a non-UTF-8 folder name
+/// uses its nearest UTF-8 ancestor (the same volume unless a mount point has such a name).
+#[cfg(windows)]
+fn volume_space(dir: &Path) -> Option<(u64, u64)> {
+    disk_free_space(dir.ancestors().find_map(Path::to_str)?)
+}
+
+#[cfg(windows)]
+fn disk_free_space(dir: &str) -> Option<(u64, u64)> {
+    // GetDiskFreeSpaceEx requires the trailing backslash on UNC paths.
+    let arg = if dir.ends_with('\\') { dir.to_string() } else { format!("{dir}\\") };
+    let (mut available, mut total) = (0, 0);
+    winsafe::GetDiskFreeSpaceEx(Some(&arg), Some(&mut available), Some(&mut total), None).ok()?;
+    Some((available, total))
+}
+
+/// `statvfs` doesn't count purgeable space (local snapshots and caches macOS frees on demand) but
+/// sysinfo does: when the listed disk with the longest mount point holding `dir` is this volume,
+/// use its available figure. A listed disk counts as this volume when the mount point's own
+/// `statvfs` gives the same numbers (APFS volumes in one container share them, and firmlinks give
+/// `/Users` and `/` different device ids, so ids can't be compared); a change between the two
+/// readings just keeps the `statvfs` figure. Never fails.
+#[cfg(target_os = "macos")]
+fn with_purgeable_space(dir: &Path, available: u64, total: u64) -> u64 {
+    sysinfo::Disks::new_with_refreshed_list_specifics(sysinfo::DiskRefreshKind::nothing().with_storage())
+        .ok()
+        .and_then(|disks| {
+            disks
+                .iter()
+                .filter(|d| dir.starts_with(d.mount_point()))
+                .max_by_key(|d| d.mount_point().as_os_str().len())
+                .filter(|d| volume_space(d.mount_point()) == Some((available, total)))
+                .map(|d| d.available_space())
+        })
+        .unwrap_or(available)
+}
+
+#[cfg(all(any(unix, windows), not(target_os = "macos")))]
+fn with_purgeable_space(_dir: &Path, available: u64, _total: u64) -> u64 {
+    available
+}
+
+#[cfg(not(any(unix, windows)))]
 fn free_space(_dir: &Path) -> Option<(u64, u64)> {
     None
 }
@@ -666,6 +735,8 @@ pub struct SpillStats {
     pub paused: bool,
     /// Scratch file size limit ([`set_size_cap`]); `None` = only the free-space reserve.
     pub size_cap_bytes: Option<u64>,
+    /// Spilling is on but the scratch directory's volume won't report its free space ([`free_space_unmeasured`]).
+    pub free_space_unmeasured: bool,
 }
 
 pub fn stats() -> SpillStats {
@@ -682,6 +753,7 @@ pub fn stats() -> SpillStats {
         last_error: c.last_error.clone(),
         paused: c.paused.is_some(),
         size_cap_bytes: c.size_cap,
+        free_space_unmeasured: free_space_unmeasured(),
     }
 }
 
@@ -703,7 +775,12 @@ pub fn scratch_capacity() -> Option<u64> {
         let c = M.config();
         (c.dir.clone()?, c.file.as_ref().map_or(0, |f| f.used()), c.size_cap)
     };
-    let room = free_space(&dir).map(|(available, total)| available.saturating_sub(RESERVE_MIN.max(total / 20)));
+    let space = free_space(&dir);
+    // A slow query must not overwrite the status of a directory configured meanwhile.
+    if M.config().dir.as_deref() == Some(dir.as_path()) {
+        M.space_unmeasured.store(space.is_none(), Ordering::Relaxed);
+    }
+    let room = space.map(|(available, total)| available.saturating_sub(RESERVE_MIN.max(total / 20)));
     let room = match (room, cap) {
         (Some(room), Some(cap)) => room.min(cap.saturating_sub(used)),
         (Some(room), None) => room,
@@ -711,6 +788,13 @@ pub fn scratch_capacity() -> Option<u64> {
         (None, None) => return None,
     };
     Some(room - room / 64)
+}
+
+/// Whether spilling is on but the scratch directory's volume won't report its free space, so the
+/// reserve doesn't apply and imports earn scratch room only up to a size limit. A plain atomic
+/// read, safe to call every frame.
+pub fn free_space_unmeasured() -> bool {
+    enabled() && M.space_unmeasured.load(Ordering::Relaxed)
 }
 
 /// Whether spilling is on (tiles beyond the budget go to disk).
@@ -783,6 +867,137 @@ fn log_error(msg: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn free_space_keeps_a_trailing_dot_folder() {
+        let base = std::fs::canonicalize(std::env::temp_dir()).unwrap().join(format!("photocraft-dot-{}", std::process::id()));
+        let dir = base.join("x.");
+        if std::fs::create_dir_all(&dir).is_err() {
+            let _ = std::fs::remove_dir_all(&base);
+            return;
+        }
+        let space = free_space(&dir);
+        let _ = std::fs::remove_dir_all(&base);
+        assert!(space.is_some());
+    }
+
+    // `free_space` returned `None` on Windows before: `canonicalize` gives `\\?\C:\..`, which never
+    // started with the mount point `C:\`.
+    #[cfg(windows)]
+    #[test]
+    fn free_space_finds_the_temp_volume_on_windows() {
+        let temp = std::env::temp_dir();
+        let (available, total) = free_space(&temp).unwrap();
+        assert!(total > 0);
+        assert!(available <= total);
+        let mut temp_volume_total = 0;
+        winsafe::GetDiskFreeSpaceEx(Some(temp.to_str().unwrap()), None, Some(&mut temp_volume_total), None).unwrap();
+        assert_eq!(total, temp_volume_total);
+    }
+
+    // The real redirector path: the administrative share of this machine's system drive.
+    #[cfg(windows)]
+    #[test]
+    fn free_space_reads_a_unc_path() {
+        let unc = Path::new(r"\\localhost\C$\Windows");
+        if std::fs::canonicalize(unc).is_err() {
+            eprintln!("the administrative share {} isn't reachable; skipping", unc.display());
+            return;
+        }
+        let (_, unc_total) = free_space(unc).unwrap();
+        let (_, local_total) = free_space(Path::new(r"C:\")).unwrap();
+        assert_eq!(unc_total, local_total);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn free_space_reads_a_folder_past_max_path() {
+        let base = std::fs::canonicalize(std::env::temp_dir()).unwrap().join(format!("photocraft-long-{}", std::process::id()));
+        let mut deep = base.clone();
+        while deep.as_os_str().len() <= 300 {
+            deep.push("a".repeat(40));
+        }
+        if std::fs::create_dir_all(&deep).is_err() {
+            let _ = std::fs::remove_dir_all(&base);
+            return;
+        }
+        let space = free_space(&deep);
+        let _ = std::fs::remove_dir_all(&base);
+        assert!(space.is_some());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn free_space_reads_a_non_utf8_folder() {
+        use std::os::windows::ffi::OsStringExt;
+        let mut wide: Vec<u16> = format!("photocraft-nonutf8-{}-", std::process::id()).encode_utf16().collect();
+        wide.push(0xD800);
+        let dir = std::env::temp_dir().join(std::ffi::OsString::from_wide(&wide));
+        if std::fs::create_dir_all(&dir).is_err() {
+            return;
+        }
+        let space = free_space(&dir);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(space.is_some());
+    }
+
+    // `/dev/shm` is tmpfs, which sysinfo never lists: the same situation as an unlisted NFS mount.
+    // Before the directory itself was asked, it reported the numbers of `/`.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn free_space_reads_an_unlisted_mount() {
+        let shm = Path::new("/dev/shm");
+        if !shm.is_dir() {
+            return;
+        }
+        let (available, total) = free_space(shm).unwrap();
+        assert!(available <= total);
+        // An independent oracle: `df` asks the same mount for its size.
+        let Ok(out) = std::process::Command::new("df").args(["-B1", "--output=size"]).arg(shm).output() else {
+            eprintln!("df couldn't be run; skipping the comparison");
+            return;
+        };
+        let text = String::from_utf8_lossy(&out.stdout);
+        let parsed = text.lines().rev().map(str::trim).find(|l| !l.is_empty()).and_then(|l| l.parse::<u64>().ok());
+        let Some(parsed) = parsed.filter(|_| out.status.success()) else {
+            eprintln!("df gave no size for {}; skipping the comparison", shm.display());
+            return;
+        };
+        assert_eq!(total, parsed);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn free_space_reads_the_temp_volume_on_macos() {
+        let temp = std::fs::canonicalize(std::env::temp_dir()).unwrap();
+        assert_eq!(free_space(&temp).unwrap().1, volume_space(&temp).unwrap().1);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn free_space_reads_an_unlisted_mount_on_macos() {
+        // `/dev` is devfs; a zero total counts as unknown, so compare only when it is known.
+        if let Some((_, total)) = free_space(Path::new("/dev")) {
+            assert_ne!(total, free_space(Path::new("/")).unwrap().1);
+        }
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn free_space_of_a_missing_directory_is_unknown() {
+        let missing = std::env::temp_dir().join(format!("photocraft-missing-{}", std::process::id()));
+        assert_eq!(free_space(&missing), None);
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn a_volume_with_no_total_is_unknown() {
+        assert_eq!(known_space(0, 0), None);
+        assert_eq!(known_space(5, 0), None);
+        assert_eq!(known_space(0, 10), Some((0, 10)));
+        assert_eq!(known_space(5, 10), Some((5, 10)));
+    }
 
     #[test]
     fn failed_read_retains_backing_and_blocks_commit_until_repaired() {

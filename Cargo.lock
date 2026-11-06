@@ -5504,6 +5504,7 @@ dependencies = [
  "photocraft-geom",
  "proptest",
  "rayon",
+ "rustix 1.1.5",
  "serde",
  "sysinfo",
  "winsafe",
