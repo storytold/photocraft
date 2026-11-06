@@ -217,6 +217,9 @@ pub(crate) const SEARCH_KEYWORDS: &[(&str, &str)] = &[
     ("select.rect", "Rectangular Marquee, Elliptical Marquee (\"ellipse\":true), ellipse, oval, circle, Single Row/Column Marquee (\"line\")"),
     ("filter.cameraRaw", "Camera Raw Filter"),
     ("edit.preferences.rawDefaults", "Camera Raw Defaults"),
+    // The label was "Reorder Layer" until it became "Move Layer to Target" (#11424);
+    // the command-list filter must still find the command as "reorder".
+    ("layer.moveTo", "reorder"),
 ];
 
 /// [`SEARCH_KEYWORDS`] of command `id`, if it has any.
