@@ -1,7 +1,7 @@
 use super::cancel_stale_vector_drag;
 use super::cursors::{alt_eyedropper, sample_eyedropper};
 use super::drag::Drag;
-use super::gesture::{finish_gesture, polygon_click, selection_mode};
+use super::gesture::{finish_release, polygon_click, selection_mode};
 use super::selection::finish_selection_drag;
 use super::strokes::{HOLD_REPEAT_MS, begin_live_stroke, feed_live_stroke, paint_target, snap_aliased_tip, stroke_params, strokes_live};
 use super::{PhotocraftApp, Tool, json, multiple_color_target};
@@ -166,6 +166,11 @@ fn filter_event_before_tool(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::
     if crate::corner_radius::pointer(app, raw, mods) {
         return None;
     }
+    // The box round several selected shape layers: its handles scale them (Path Selection and the
+    // shape tools).
+    if crate::shape_bounds_box::pointer(app, raw, mods) {
+        return None;
+    }
     // Direct Selection, and the Pen's ⌘ (Direct Selection) and ⌥ (Convert Point) modes (#790).
     if crate::direct_select::pointer(app, ev, mods) {
         return None;
@@ -282,7 +287,7 @@ fn handle_move_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tool: Tool, mods:
             // With a selection: cut the selected pixels (⌥ copies them) and drag them as a floating
             // piece, from anywhere, as a marquee ⌘-drag does.
             if crate::move_ui::moves_selected_pixels_with(app, tool) {
-                if crate::move_ui::float_selected(app, mods.alt, 0.0, 0.0) {
+                if crate::move_ui::float_selected_for_drag(app, mods.alt) {
                     let mut d = Drag::new(tool, [x, y], vec![[x, y, pressure as f64]], mods, false);
                     d.sel_move = Some(true);
                     app.drag = Some(d);
@@ -398,8 +403,10 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
                 return;
             }
             // Marquee / lasso inside the selection: drag the outline, or ⌘-drag to cut the selected
-            // pixels into a floating piece (`select.float`) and drag that.
-            if let Some(cut) = selection_drag_kind(app, tool, [x, y], mods) {
+            // pixels into a floating piece (`select.float`) and drag that. Inside is judged where the
+            // press was before snapping, as `snap_ui::begin` judges it: snapped, a press just outside
+            // can land on the selection's edge (#11392).
+            if let Some(cut) = selection_drag_kind(app, tool, unsnapped(raw), mods) {
                 // ⌘⌥ on a floating piece leaves it where it is and drags a copy of it.
                 if cut
                     && mods.alt
@@ -519,6 +526,7 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
             let tool = crate::retouch_ui::alt_flipped(tool, mods.alt);
             let mut drag = Drag { clear, ..Drag::new(tool, from.map_or([x, y], |p| [p[0], p[1]]), points, mods, erase) };
             drag.capture_vector_owners(app);
+            drag.capture_selection_at_press(app);
             app.drag = Some(drag);
             app.trail = None;
             app.stylus.begin_stroke();
@@ -553,6 +561,7 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
                 }
                 return;
             }
+            note_left_press(app, raw);
             tool_move(app, x, y, pressure, mods);
             feed_live_stroke(app);
         }
@@ -578,9 +587,12 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
             let last = d.points.last().map_or(d.start, |p| [p[0], p[1]]);
             let [x, y] = crate::stroke_constraint::constrain(d.tool, &mut d.constrain, d.start, last, [x, y], mods.shift, zoom);
             let [x, y] = crate::move_mods::selection_drag_to(&mut d, [x, y], mods.shift && app.active_tool() != Tool::Move);
+            let (click, [x, y]) = selection_release(&d, raw, [x, y]);
             // A Move-tool click (released where it was pressed) selects, it never moves: snapping
-            // the release point would otherwise nudge the layer onto a nearby edge.
-            if d.tool == Tool::Move && d.points.len() < 2 && matches!(raw, ToolEvent::Up { x, y } if [x, y] == d.start) {
+            // the release point would otherwise nudge the layer onto a nearby edge. A drag that
+            // snapping held at the press point (no points recorded) and that came back there is
+            // not a click: it keeps a floating piece floating (#11392).
+            if d.tool == Tool::Move && !d.left_press && d.points.len() < 2 && matches!(raw, ToolEvent::Up { x, y } if [x, y] == d.start) {
                 app.move_preview = None;
                 crate::move_mods::finish(app);
                 if d.sel_move.is_some() {
@@ -592,9 +604,44 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
                 d.points.push([x, y, d.points.last().map_or(1.0, |p| p[2])]);
                 app.stylus.record_point();
             }
-            finish_gesture(app, d);
+            finish_release(app, d, click);
             crate::move_mods::finish(app);
         }
+    }
+}
+
+/// Where pointer event `raw` (before snapping) was.
+fn unsnapped(raw: ToolEvent) -> [f64; 2] {
+    match raw {
+        ToolEvent::Down { x, y, .. } | ToolEvent::Move { x, y, .. } | ToolEvent::Up { x, y } => [x, y],
+    }
+}
+
+/// Is `p` within half a pixel of the press of `d` (a click's reach, a zoomed-in hand's jitter
+/// included)?
+fn at_press(d: &Drag, p: [f64; 2]) -> bool {
+    (p[0] - d.start[0]).round() == 0.0 && (p[1] - d.start[1]).round() == 0.0
+}
+
+/// Records on the drag that pointer move `raw` (before snapping) left the press (`Drag::left_press`).
+fn note_left_press(app: &mut PhotocraftApp, raw: ToolEvent) {
+    if let ToolEvent::Move { x, y, .. } = raw
+        && let Some(d) = app.drag.as_mut()
+    {
+        d.left_press |= !at_press(d, [x, y]);
+    }
+}
+
+/// Whether the release `raw` of selection drag `d` is a click, and where it ends (`p`: snapped). A
+/// click never leaves the press (`at_press`) before snapping, and ends where it was pressed, as
+/// with snapping off: snapping the release would nudge the selection's edges onto a nearby guide or
+/// the canvas edge, moving it instead of deselecting (a Single Row / Column Marquee: selecting the
+/// line). A drag that snapping pulls back onto the press point, or that comes back to it, is not a
+/// click (#11392).
+fn selection_release(d: &Drag, raw: ToolEvent, p: [f64; 2]) -> (bool, [f64; 2]) {
+    match raw {
+        ToolEvent::Up { x, y } if d.sel_move.is_some() && !d.left_press && at_press(d, [x, y]) => (true, d.start),
+        _ => (false, p),
     }
 }
 
@@ -629,12 +676,15 @@ fn covers(sel: &photocraft_raster::Surface, p: [f64; 2]) -> bool {
 /// moves the floating piece (⌘ cuts one first, ⌘⌥ copies; a floating piece moves with a plain
 /// drag; the Polygonal Lasso and Magic Wand need ⌘, as a plain press there places or samples),
 /// `Some(false)` just the outline (no ⇧ / ⌥ and the options bar on New Selection, so a combining
-/// drag still draws).
+/// drag still draws). The Single Row / Single Column Marquee drag the outline too (#11392); a click
+/// without moving, inside the selection or on a floating piece (dropped first), still selects the
+/// line under the pointer (`finish_gesture`).
 pub fn selection_drag_kind(app: &PhotocraftApp, tool: Tool, p: [f64; 2], mods: egui::Modifiers) -> Option<bool> {
     // Click-driven selection tools (a press places a point or samples): only ⌘ drags the
     // selection, and not while a polygon is being drawn.
     let clicky = matches!(tool, Tool::PolygonLasso | Tool::MagicWand);
-    if !(clicky || matches!(tool, Tool::RectMarquee | Tool::EllipseMarquee | Tool::Lasso)) || (clicky && !app.ui.polygon.is_empty()) {
+    let marquee = matches!(tool, Tool::RectMarquee | Tool::EllipseMarquee | Tool::SingleRowMarquee | Tool::SingleColumnMarquee);
+    if !(clicky || marquee || tool == Tool::Lasso) || (clicky && !app.ui.polygon.is_empty()) {
         return None;
     }
     // ⌘ cuts, ⌘⌥ copies (`select.float`'s `copy`).
