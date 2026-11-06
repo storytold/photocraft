@@ -110,6 +110,15 @@ fn blank_of(fmt: photocraft_color::PixelFormat) -> Surface {
     Surface::new(fmt)
 }
 
+/// Both the altered and original footage stacks must have room for an added frame.
+fn check_frame_growth(frames: usize, original_frames: Option<usize>) -> Result<()> {
+    let limit = crate::timeline_cmds::MAX_DURATION;
+    if frames.max(original_frames.unwrap_or(0)) >= limit {
+        return Err(EngineError::Other(format!("a video layer is limited to {limit} frames")));
+    }
+    Ok(())
+}
+
 fn new_blank(s: &mut Session, _p: &Value) -> Result<Value> {
     let id = s.edit("New Blank Video Layer", |doc, active| {
         store(doc);
@@ -138,7 +147,8 @@ fn new_blank(s: &mut Session, _p: &Value) -> Result<Value> {
 fn insert_blank(s: &mut Session, _p: &Value) -> Result<Value> {
     let fmt = s.active().ok_or(EngineError::NoDocument)?.doc.pixel_format();
     edit_video(s, "Insert Blank Frame", move |v, cur| {
-        let at = (cur + 1).min(v.frames.len());
+        check_frame_growth(v.frames.len(), v.original_frames.as_ref().map(Vec::len))?;
+        let at = cur.saturating_add(1).min(v.frames.len());
         v.frames.insert(at, blank_of(fmt));
         if let Some(original) = &mut v.original_frames {
             // The stacks stay aligned, but never index past a shorter one.
@@ -150,7 +160,9 @@ fn insert_blank(s: &mut Session, _p: &Value) -> Result<Value> {
 
 fn duplicate_frame(s: &mut Session, _p: &Value) -> Result<Value> {
     edit_video(s, "Duplicate Frame", |v, cur| {
-        if let Some(f) = v.frames.get(cur).cloned() {
+        if let Some(f) = v.frames.get(cur) {
+            check_frame_growth(v.frames.len(), v.original_frames.as_ref().map(Vec::len))?;
+            let f = f.clone();
             if let Some(original) = &mut v.original_frames {
                 let orig = original.get(cur).cloned().unwrap_or_else(|| blank_of(f.format()));
                 original.insert((cur + 1).min(original.len()), orig);
