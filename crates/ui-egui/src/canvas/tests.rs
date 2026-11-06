@@ -75,11 +75,11 @@ mod issue_11560 {
             let before = app.session.active().unwrap().doc.clone();
             let revision = app.session.active().unwrap().revision;
             let history = app.session.active().unwrap().history.past_len();
-            let plain = photocraft_compose::flatten(&before).px;
+            let plain = photocraft_compose::flatten(&before).into_px();
             let mut last = plain.clone();
             for amount in [60, 180] {
                 parameters(&mut app, id, amount, false);
-                let expected = photocraft_compose::flatten(&oracle(&app, id)).px;
+                let expected = photocraft_compose::flatten(&oracle(&app, id)).into_px();
                 assert_ne!(expected, plain, "{command}/{depth}: a nonzero sharpening oracle");
                 assert_ne!(expected, last, "{command}/{depth}: parameter edits must be observable");
                 assert!(ensure_filter_preview(&mut app, 0, &ctx).is_none(), "off still means no canvas frame");
@@ -177,7 +177,7 @@ mod issue_11560 {
         let ctx = egui::Context::default();
         for amount in [60, 180] {
             parameters(&mut app, id, amount, false);
-            let expected = photocraft_compose::flatten(&oracle(&app, id)).px;
+            let expected = photocraft_compose::flatten(&oracle(&app, id)).into_px();
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
             loop {
                 // The real logic-frame lifetime gate must not cancel unchecked mini demand.
