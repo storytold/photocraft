@@ -62,17 +62,37 @@ fn closing_a_second_view_only_closes_that_window() {
     assert!(closes_document(&app, &floating));
 }
 
+/// One frame of the documents' windows in which every window is asked to close. Without a window
+/// system egui embeds them in the main window, so they read its close request.
+fn frame_closing_every_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    let info = egui::ViewportInfo { events: vec![egui::ViewportEvent::Close], ..Default::default() };
+    let raw = egui::RawInput { viewports: std::iter::once((egui::ViewportId::ROOT, info)).collect(), ..Default::default() };
+    ctx.run_ui(raw, |ui| super::extra_windows(app, ui.ctx())).textures_delta.clear();
+}
+
 /// Two windows closed in the same frame (the taskbar's Close all windows): both documents close,
 /// each found by id although closing the first renumbers the second (CodeRabbit on #11665).
 #[test]
 fn every_window_closed_in_one_frame_closes_its_document() {
-    let (mut app, first) = app_with_floating();
-    let second = crate::view_cmds::float_window(&mut app, 1, 0, true);
-    assert!(app.ui.windows.iter().any(|w| w.id == second));
-    let ids: Vec<_> = app.session.documents().iter().map(|d| d.doc.id).collect();
-    assert_eq!(first.document, 0);
-    close_documents(&mut app, &egui::Context::default(), ids);
+    let (mut app, _) = app_with_floating();
+    crate::view_cmds::float_window(&mut app, 1, 0, true);
+    assert_eq!(app.ui.windows.iter().filter(|w| w.floating).count(), 2);
+    frame_closing_every_window(&mut app, &egui::Context::default());
     assert!(app.session.documents().is_empty(), "both documents are closed, not only the last request's");
+    app.sync_views();
+    assert!(app.ui.windows.is_empty());
+}
+
+/// A close that fails leaves the document open and says why in a notice, which stays on screen
+/// in the main window (CodeRabbit on #11665).
+#[test]
+fn a_failed_close_is_reported_in_a_notice() {
+    let (mut app, _) = app_with_floating();
+    let notices = app.ui.notices.len();
+    close_document(&mut app, &egui::Context::default(), 99);
+    assert_eq!(app.session.documents().len(), 2, "nothing is closed");
+    assert_eq!(app.ui.notices.len(), notices + 1, "a notice says why");
+    assert!(app.ui.status_error);
 }
 
 /// When one of them asks about unsaved changes, the others wait with their windows open.

@@ -844,8 +844,10 @@ fn close_document(app: &mut PhotocraftApp, ctx: &egui::Context, index: usize) {
         return;
     }
     if let Err(e) = crate::menus::invoke(app, ctx, "file.close", json!({"document": index})) {
-        app.ui.status = e;
-        app.ui.status_error = true;
+        // The document stays open. The user is in its window, away from the status bar: a notice
+        // keeps the reason on screen, and the main window, where it shows, comes forward.
+        crate::notices::error(app, e);
+        ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Focus);
     }
     if app.discard.is_some() {
         ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Focus);
