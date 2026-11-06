@@ -32,7 +32,7 @@ pub enum Fold<'a> {
     /// Cells in row order, the last one drawn wins (lens corrections, distortions).
     Rows,
     /// A warp of the picture in place (Edit › Transform › Warp, a smart object's warp): cells in
-    /// [`cell_order`], the part dragged furthest on top, and a fold's layers composite, so transparent
+    /// [`cell_order`] (a part the fold turns over on top, else the part dragged furthest), and a fold's layers composite, so transparent
     /// parts show what is under them, as Warp mode's preview draws them. The map is where a
     /// source point lands without the warp: the identity for a layer, a smart object's placement.
     Stack(&'a (dyn Fn(f64, f64) -> (f64, f64) + Sync)),
@@ -114,28 +114,40 @@ pub fn warp_mesh_surface_with(
     (!ctl.cancelled()).then_some(out)
 }
 
-/// The order Warp draws the cells of a vertex grid in (`row` vertices a row, `moved` how far the
-/// warp moved each vertex from where it would be without it): least moved first, so where a warp
-/// folds the picture over itself the part dragged furthest is on top, as dragging it over the
-/// rest looks. Each cell is named by its top-left vertex. Shared by the render and Warp mode's
-/// preview, so they stack folds alike.
-pub fn cell_order(moved: &[f64], row: usize) -> Vec<usize> {
-    if row < 2 {
+/// The order Warp draws the cells of a vertex grid in (`row` vertices a row; `pos` where the warp
+/// put each vertex, `rest` where it would be without it). Where a warp folds the picture over
+/// itself, the part turned over lies on top, like a folded-back flap: a corner or edge dragged
+/// across the picture, and also the edge row that folds back when the middle is pulled out past
+/// it, which leaves the pulled part under that row. Within each, the cells moved least come first,
+/// so the part dragged furthest is on top. Each cell is named by its top-left vertex. Shared by
+/// the render and Warp mode's preview, so they stack folds alike.
+pub fn cell_order(pos: &[[f64; 2]], rest: &[[f64; 2]], row: usize) -> Vec<usize> {
+    if row < 2 || pos.len() != rest.len() {
         return Vec::new();
     }
-    let rows = moved.len() / row;
+    let rows = pos.len() / row;
     // A vertex with no finite movement (sent to infinity, as near a Distort's horizon) goes under,
     // not on top.
-    let at = |k: usize| moved.get(k).copied().filter(|m| m.is_finite()).unwrap_or(f64::NEG_INFINITY);
-    let mut cells: Vec<(f64, usize)> = Vec::with_capacity(rows.saturating_sub(1) * (row - 1));
+    let moved = |k: usize| match (pos.get(k), rest.get(k)) {
+        (Some(p), Some(r)) => Some((p[0] - r[0]).hypot(p[1] - r[1])).filter(|m| m.is_finite()).unwrap_or(f64::NEG_INFINITY),
+        _ => f64::NEG_INFINITY,
+    };
+    // Twice the signed area of a cell's quad: its sign is the cell's orientation (NaN when a corner
+    // isn't finite, which counts as not turned over).
+    let area = |pts: &[[f64; 2]], a: usize| {
+        let q = [a, a + 1, a + row + 1, a + row].map(|k| pts.get(k).copied().unwrap_or([f64::NAN; 2]));
+        (0..4).map(|i| q[i][0] * q[(i + 1) % 4][1] - q[(i + 1) % 4][0] * q[i][1]).sum::<f64>()
+    };
+    let mut cells: Vec<(bool, f64, usize)> = Vec::with_capacity(rows.saturating_sub(1) * (row - 1));
     for j in 0..rows.saturating_sub(1) {
         for i in 0..row - 1 {
             let a = j * row + i;
-            cells.push((at(a) + at(a + 1) + at(a + row) + at(a + row + 1), a));
+            let turned = area(pos, a) * area(rest, a) < 0.0;
+            cells.push((turned, moved(a) + moved(a + 1) + moved(a + row) + moved(a + row + 1), a));
         }
     }
-    cells.sort_by(|x, y| x.0.total_cmp(&y.0));
-    cells.into_iter().map(|(_, a)| a).collect()
+    cells.sort_by(|x, y| x.0.cmp(&y.0).then(x.1.total_cmp(&y.1)));
+    cells.into_iter().map(|(_, _, a)| a).collect()
 }
 
 /// Folds stack as `fold` says.
@@ -163,14 +175,15 @@ fn mesh(src: &Surface, src_rect: Rect, f: &(dyn Fn(f64, f64) -> (f64, f64) + Syn
     let w1 = nx + 1;
     let order: Vec<usize> = match fold {
         Fold::Stack(rest) => {
-            let moved: Vec<f64> = verts
+            let pos: Vec<[f64; 2]> = verts.iter().map(|(d, _)| *d).collect();
+            let at_rest: Vec<[f64; 2]> = verts
                 .iter()
-                .map(|(d, s)| {
+                .map(|(_, s)| {
                     let r = rest(s[0], s[1]);
-                    (d[0] - r.0).hypot(d[1] - r.1)
+                    [r.0, r.1]
                 })
                 .collect();
-            cell_order(&moved, w1)
+            cell_order(&pos, &at_rest, w1)
         }
         Fold::Rows => (0..ny).flat_map(|j| (0..nx).map(move |i| j * w1 + i)).collect(),
     };
@@ -749,8 +762,51 @@ mod tests {
     #[test]
     fn cells_moved_without_bound_go_first() {
         // Two cells in a row: the second's right vertices moved to infinity.
-        let moved = [1.0, 1.0, f64::INFINITY, 1.0, 1.0, f64::NAN];
-        assert_eq!(cell_order(&moved, 3), vec![1, 0]);
+        let rest = [[0.0, 0.0], [1.0, 0.0], [2.0, 0.0], [0.0, 1.0], [1.0, 1.0], [2.0, 1.0]];
+        let mut pos = rest.map(|[x, y]| [x + 1.0, y]);
+        pos[2] = [f64::INFINITY, 0.0];
+        pos[5] = [f64::NAN, 1.0];
+        assert_eq!(cell_order(&pos, &rest, 3), vec![1, 0]);
+    }
+
+    /// A cell the warp turns over (mirrored, as a flap folded back) goes on top, even when it moved
+    /// less than the cells around it; within each kind, the cell moved least goes first.
+    #[test]
+    fn a_turned_over_cell_goes_on_top() {
+        let rest = [[0.0, 0.0], [1.0, 0.0], [2.0, 0.0], [3.0, 0.0], [0.0, 1.0], [1.0, 1.0], [2.0, 1.0], [3.0, 1.0]];
+        // Cell 0 moved far and cell 1 a little, both facing as before; cell 2 is mirrored in x and
+        // moved less than cell 0.
+        let pos = [[-9.0, 0.0], [1.0, 0.0], [2.2, 0.0], [1.6, 0.0], [-9.0, 1.0], [1.0, 1.0], [2.2, 1.0], [1.6, 1.0]];
+        assert_eq!(cell_order(&pos, &rest, 4), vec![1, 0, 2]);
+        // A mirrored placement turns nothing over: only a change of facing counts.
+        let mirrored = rest.map(|[x, y]| [-x, y]);
+        assert_eq!(cell_order(&mirrored, &mirrored, 4), vec![0, 1, 2]);
+    }
+
+    /// The middle of the picture pulled out past its right edge: the edge strip folds back over it
+    /// and lies on top, so the pulled middle is under that strip (by distance moved alone, the middle
+    /// would cover it).
+    #[test]
+    fn the_middle_pulled_past_an_edge_goes_under_the_folded_edge() {
+        let fmt = PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false);
+        let mut m = Surface::with_default(fmt, &[0.0]);
+        m.fill_rect(Rect::new(0, 0, 75, 10), &[0.25]);
+        m.fill_rect(Rect::new(75, 0, 100, 10), &[1.0]);
+        // 0..75 stretches to 0..90; the edge strip 75..100 folds back onto 90..80; beyond, unchanged.
+        let pull = |x: f64, y: f64| {
+            (
+                if x <= 75.0 {
+                    x * 1.2
+                } else if x <= 100.0 {
+                    90.0 - (x - 75.0) * 0.4
+                } else {
+                    x - 20.0
+                },
+                y,
+            )
+        };
+        let at = warp_mesh_gray_with(&m, &pull, Fold::IN_PLACE, Interp::Bilinear).read_region(Rect::new(85, 5, 86, 6))[0];
+        assert!((at - 1.0).abs() < 1e-3, "the folded-back edge strip is on top: {at}");
     }
 
     use photocraft_color::{ColorMode, SampleType};
