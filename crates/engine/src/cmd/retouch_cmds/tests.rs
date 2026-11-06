@@ -708,6 +708,18 @@ fn erase_to_history_paints_a_new_layer_from_a_single_layer_state_background_or_n
 }
 
 #[test]
+fn erase_to_history_paints_a_new_layer_with_the_single_layers_own_pixels_not_its_opacity() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 40, "height": 20, "background": "transparent"})).unwrap();
+    s.execute("paint.stroke", json!({"points": [[0, 10], [40, 10]], "size": 12, "hardness": 1.0, "color": "#ff0000"})).unwrap();
+    let red = rgba(&s, 20, 10);
+    s.execute("layer.setProps", json!({"opacity": 0.5})).unwrap(); // State 2.
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("paint.historyBrush", json!({"points": [[15, 10], [25, 10]], "size": 6, "hardness": 100, "state": 2, "eraseToHistory": true})).unwrap();
+    assert_eq!(rgba(&s, 20, 10), red);
+}
+
+#[test]
 fn erase_to_history_refuses_a_new_layer_from_a_state_holding_two_layers() {
     let mut s = session(40, 20, 8, "rgb");
     let picture = rgba(&s, 20, 10);
