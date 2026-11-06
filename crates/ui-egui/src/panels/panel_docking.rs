@@ -586,6 +586,11 @@ fn canvas_alone_layout(layout: &Layout<String>) -> bool {
     }
 }
 
+/// True while a panel is being dragged over the dock area.
+pub(crate) fn drag_active(ctx: &egui::Context) -> bool {
+    craft_ui::docking::is_dragging::<String>(ctx, area_id())
+}
+
 /// Draw the layout, the canvas included, in the space `ui` has left: the customized workspace,
 /// else the native dock's arrangement.
 pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
