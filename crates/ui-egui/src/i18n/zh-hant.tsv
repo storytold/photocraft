@@ -2928,6 +2928,9 @@ curves	Smooth	平滑
 	Sent to {printer}	已傳送至 {printer}
 	set in Print Settings…	在列印設定中設定…
 	ICO is limited to 256 × 256 pixels	ICO 最大為 256 × 256 像素
+	Automatically Create First Snapshot	自動建立第一個快照
+	Automatically Create New Snapshot When Saving	儲存時自動建立新快照
+	Show New Snapshot Dialog by Default	預設顯示新增快照對話框
 	Memory usage percent	記憶體使用比例 (%)
 	Show Favorite Fonts	顯示我的最愛字體
 	No favorite fonts yet: click the star beside a font to add it.	尚無我的最愛字體：按一下字體旁的星號即可加入。
@@ -3229,3 +3232,18 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Frame	框架
 	X	X
 	Y	Y
+
+# Channels panel menu (#11451)
+	New Channel…	新增色版…
+	Duplicate Channel	複製色版
+	Delete Channel	刪除色版
+	New Spot Channel…	新增特別色色版…
+	Merge Spot Channel	合併特別色色版
+	Channel Options…	色版選項…
+	Split Channels	分離色版
+	Merge Channels…	合併色版…
+	Specify Channels:	指定色版:
+	Not enough grayscale documents for this mode.	灰階文件不足，無法使用此模式。
+	Pick a different document for each channel.	請為每個色版選擇不同的文件。
+	A picked document is no longer open.	所選的一個文件已不再開啟。
+	A picked document is no longer a grayscale document of the same size.	所選的一個文件已不再是相同大小的灰階文件。
