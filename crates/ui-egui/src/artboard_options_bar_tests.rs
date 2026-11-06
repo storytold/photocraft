@@ -179,6 +179,31 @@ fn a_drawn_board_gets_the_bars_background() {
     }
 }
 
+/// A board placed by the Add New Artboard click takes the bar's background too.
+#[test]
+fn a_placed_board_gets_the_bars_background() {
+    let place = |app: &mut PhotocraftApp| {
+        app.ui.artboard_tool.adding = true;
+        let m = Modifiers::NONE;
+        tool_event(app, ToolEvent::Down { x: 20.0, y: 30.0, pressure: 1.0 }, m);
+        tool_event(app, ToolEvent::Up { x: 20.0, y: 30.0 }, m);
+        assert!(!app.ui.status_error, "{}", app.ui.status);
+    };
+    let mut app = self::app();
+    place(&mut app);
+    assert_eq!(boards(&app).len(), 1);
+    assert_eq!(boards(&app)[0].2, ArtboardBackground::White, "the default setting keeps white");
+    let mut app = self::app();
+    app.ui.artboard_tool.background = "transparent".to_string();
+    place(&mut app);
+    assert_eq!(boards(&app)[0].2, ArtboardBackground::Transparent);
+    let mut app = self::app();
+    bar::set_custom_background(&mut app, "#00ff00").unwrap();
+    place(&mut app);
+    let ArtboardBackground::Custom(c) = boards(&app)[0].2 else { panic!("a custom background") };
+    assert_eq!(c.to_rgba8(), [0, 255, 0, 255]);
+}
+
 #[test]
 fn the_background_param_carries_color_only_for_other() {
     let mut app = app();

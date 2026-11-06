@@ -42,5 +42,5 @@ pub(super) fn click(app: &mut PhotocraftApp, p: [f64; 2]) -> Option<Result<Value
     }
     let [w, h] = bar_size(app)?;
     let rect = [p[0].round() as i64, p[1].round() as i64, w, h];
-    Some(app.run("layer.new.artboard", json!({"rect": rect})))
+    Some(app.run("layer.new.artboard", super::bar::with_background(app, json!({"rect": rect}))))
 }
