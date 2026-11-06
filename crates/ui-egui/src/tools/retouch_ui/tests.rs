@@ -455,6 +455,55 @@ fn a_new_patch_lasso_paints_no_ants_on_the_old_selection() {
     }
 }
 
+/// The ⌥ badge asks every frame whether anything is selected: the canvas caches the selection's
+/// bounds even while its ants are hidden (Selection Edges off, a new Patch lasso), so that is
+/// never a scan per frame (#11024).
+#[test]
+fn hidden_ants_still_cache_the_selection_bounds() {
+    let cached = |app: &PhotocraftApp| {
+        let st = app.session.active().unwrap();
+        let fingerprint = crate::surface_fingerprint(st.doc.selection.as_ref().unwrap());
+        app.bounds_cache.get(&(u64::MAX - st.doc.id.0)).is_some_and(|(f, b)| *f == fingerprint && !b.is_empty())
+    };
+    let mut app = app();
+    app.run("select.rect", json!({"x": 10, "y": 20, "width": 16, "height": 20})).unwrap();
+    app.sync_views();
+    app.ui.view.show.selection_edges = false;
+    assert!(painted_ants(&mut app).is_empty(), "Selection Edges off");
+    assert!(cached(&app), "cached with Selection Edges off");
+
+    app.ui.view.show.selection_edges = true;
+    app.ui.tool = Tool::Patch;
+    tool_event(&mut app, ToolEvent::Down { x: 60.0, y: 20.0, pressure: 1.0 }, egui::Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Move { x: 76.0, y: 30.0, pressure: 1.0 }, egui::Modifiers::NONE);
+    app.bounds_cache.clear();
+    painted_ants(&mut app);
+    assert!(patch_replaces_selection(&app) && cached(&app), "cached while a new Patch lasso hides the ants");
+}
+
+/// A Patch or Content-Aware Move drag belongs to the document it was pressed on: switching to
+/// another drops it, so it doesn't hide that document's ants or land on it (#11024).
+#[test]
+fn a_patch_drag_is_dropped_when_another_document_is_active() {
+    for tool in [Tool::Patch, Tool::ContentAwareMove] {
+        let mut app = app();
+        app.run("select.rect", json!({"x": 10, "y": 20, "width": 16, "height": 20})).unwrap();
+        app.ui.tool = tool;
+        tool_event(&mut app, ToolEvent::Down { x: 60.0, y: 20.0, pressure: 1.0 }, egui::Modifiers::NONE);
+        tool_event(&mut app, ToolEvent::Move { x: 76.0, y: 30.0, pressure: 1.0 }, egui::Modifiers::NONE);
+        app.sync_views();
+        assert!(patch_replaces_selection(&app), "{tool:?}: the drag is still on its own document");
+
+        app.run("file.new", json!({"width": 100, "height": 60})).unwrap();
+        app.run("select.rect", json!({"x": 50, "y": 10, "width": 30, "height": 30})).unwrap();
+        app.sync_views();
+        assert!(app.drag.is_none() && !patch_replaces_selection(&app), "{tool:?}: dropped on the switch");
+        tool_event(&mut app, ToolEvent::Up { x: 60.0, y: 40.0 }, egui::Modifiers::NONE);
+        let sel = app.session.active().unwrap().doc.selection.clone().unwrap();
+        assert_eq!(sel.content_bounds(), photocraft_geom::Rect::new(50, 10, 80, 40), "{tool:?}: the other document's selection is untouched");
+    }
+}
+
 /// #11024: the Patch and Content-Aware Move cursors show + with ⇧ and − with ⌥, like the Lasso's,
 /// but nothing over the selection without them, where a press drags the patch.
 #[test]

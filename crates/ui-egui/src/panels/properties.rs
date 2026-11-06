@@ -259,8 +259,9 @@ pub(super) fn select_and_mask_button(app: &mut PhotocraftApp, ui: &mut egui::Ui)
     }
 }
 
-/// New / add / subtract / intersect selection buttons (shared by selection tools).
-pub(super) fn selection_mode_buttons(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+/// New / add / subtract / intersect selection buttons (shared by selection tools, and the Patch
+/// and Content-Aware Move tools, which lasso their area).
+pub(crate) fn selection_mode_buttons(mode: &mut u8, ui: &mut egui::Ui) {
     ui.spacing_mut().item_spacing.x = 2.0;
     for (i, (icon, tip)) in [
         ("square", tl!("New selection").to_string()),
@@ -271,8 +272,8 @@ pub(super) fn selection_mode_buttons(app: &mut PhotocraftApp, ui: &mut egui::Ui)
     .iter()
     .enumerate()
     {
-        if icons::button(ui, icon, 24.0, app.ui.selection_mode == i as u8, tip).clicked() {
-            app.ui.selection_mode = i as u8;
+        if icons::button(ui, icon, 24.0, *mode == i as u8, tip).clicked() {
+            *mode = i as u8;
         }
     }
     ui.spacing_mut().item_spacing.x = 8.0;

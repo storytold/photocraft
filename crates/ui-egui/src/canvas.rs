@@ -246,6 +246,14 @@ fn paint_selection_outline(app: &mut PhotocraftApp, input: SelectionPaintInput<'
         Some(None) => (None, 1),
         Some(Some((proxy, k))) => (proxy.selection.as_ref(), (*k).max(1)),
     };
+    // ⌥'s "is anything selected" (`tool_feedback::document_selection_mode`) reads the active
+    // document's selection bounds every frame: cache them here even while the ants are hidden
+    // (Selection Edges off, a lasso replacing them), or each frame would scan the selection.
+    if app.session.active_index() == Some(input.idx)
+        && let Some(sel) = input.doc.selection.as_ref()
+    {
+        app.cached_bounds(u64::MAX - input.doc.id.0, sel);
+    }
     // Selection outline: true boundary, animated marching ants (cached per revision).
     // A Patch lasso drag replaces the active document's selection, not a floating piece or Select
     // and Mask's refined preview; other documents keep their ants.

@@ -321,6 +321,7 @@ impl PhotocraftApp {
         type_transform::cancel_stale(self);
         crate::cam_transform::cancel_stale(self);
         crate::lasso_ui::cancel_stale(self);
+        crate::retouch_ui::cancel_stale(self);
         // A polygon under construction belongs to the Polygonal Lasso tool, not the next tool.
         if self.ui.tool != Tool::PolygonLasso {
             self.ui.polygon.clear();

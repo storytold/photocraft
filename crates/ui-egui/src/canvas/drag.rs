@@ -41,6 +41,8 @@ pub struct Drag {
     /// at the press picks the selection mode only then; without one it constrains the shape from
     /// the first move (#11389). `true` until recorded, which keeps that rule for drags that don't.
     pub selection_at_press: bool,
+    /// The document a press on the canvas started the drag on (`retouch_ui::cancel_stale`).
+    pub document: Option<photocraft_doc::DocId>,
 }
 
 impl Drag {
@@ -63,6 +65,7 @@ impl Drag {
             vector_owner: None,
             pen_owner: None,
             selection_at_press: true,
+            document: None,
         }
     }
 
