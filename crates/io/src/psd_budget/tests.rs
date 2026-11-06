@@ -268,8 +268,11 @@ fn explicit_approval_allows_confirmation_range_but_never_bypasses_hard_boundary(
     assert_eq!(budget.decide(over), crate::memory::BudgetDecision::Refused);
 }
 
+/// #11544: a machine whose memory reading came out as 0 refused every open. The reading is still
+/// reported as zero, but admission falls back to the usable ceiling: an ordinary file opens, and
+/// an estimate genuinely above that ceiling is still refused.
 #[test]
-fn zero_available_ram_refuses_admission() {
+fn zero_available_ram_opens_an_ordinary_file_and_still_refuses_a_larger_one() {
     if cfg!(target_arch = "wasm32") {
         return; // the web policy ignores a host snapshot; it has its own tests
     }
@@ -277,10 +280,14 @@ fn zero_available_ram_refuses_admission() {
     let bytes = file.to_bytes().unwrap();
 
     let snap = crate::memory::MemorySnapshot { available_ram: Some(0), swap_free: None, commit_headroom: None };
+    let floor = crate::memory::MIN_ADMISSION_CEILING;
     crate::memory::with_mock_memory(snap, || {
         let opts = crate::ImportOptions::default();
         let res = crate::import_with_options("small.psd", &bytes, &opts);
-        assert!(matches!(res, Err(IoError::PsdImportBudget { .. })));
+        assert!(res.is_ok(), "a zero reading must not make every open fail: {res:?}");
+        // The fixture is tiny, so the charge is what puts the estimate above the fallback ceiling.
+        let large = crate::psd_budget::with_test_estimate_charge(floor + 1, || crate::import_with_options("large.psd", &bytes, &opts));
+        assert!(matches!(large, Err(IoError::PsdImportBudget { limit, .. }) if limit == floor), "a too-large estimate is still refused: {large:?}");
     });
 }
 
@@ -509,8 +516,13 @@ fn memory_drop_while_waiting_for_the_gate_refuses_before_decoding() {
                 prechecked.store(true, Ordering::SeqCst);
                 crate::memory::MemorySnapshot { available_ram: Some(available.load(Ordering::SeqCst)), swap_free: None, commit_headroom: None }
             });
-            let result =
-                crate::memory::with_mock_memory_provider(provider, || crate::import_with_options("drop.psd", &bytes, &crate::ImportOptions::default()));
+            let result = crate::memory::with_mock_memory_provider(provider, || {
+                // The fixture is tiny, so the charge is what makes the drop below its estimate
+                // bite: the estimate sits just over the ceiling a zero reading falls back to.
+                crate::psd_budget::with_test_estimate_charge(crate::memory::MIN_ADMISSION_CEILING + 1, || {
+                    crate::import_with_options("drop.psd", &bytes, &crate::ImportOptions::default())
+                })
+            });
             tx.send(result.map(|r| r.document.layers.len())).ok();
         })
     };
@@ -527,8 +539,11 @@ fn memory_drop_while_waiting_for_the_gate_refuses_before_decoding() {
 
     let result = rx.recv_timeout(Duration::from_secs(10)).expect("the post-gate recheck must refuse instead of decoding");
     match result {
-        Err(IoError::PsdImportBudget { required, limit: 0 }) => assert!(required > 0),
-        other => panic!("expected the post-gate recheck to refuse with a zero budget, got {other:?}"),
+        Err(IoError::PsdImportBudget { required, limit }) => {
+            assert_eq!(limit, crate::memory::MIN_ADMISSION_CEILING, "the zero reading admits at the fallback ceiling, which the estimate now exceeds");
+            assert!(required > limit);
+        }
+        other => panic!("expected the post-gate recheck to refuse at the fallback ceiling, got {other:?}"),
     }
     handle.join().expect("worker thread");
 }

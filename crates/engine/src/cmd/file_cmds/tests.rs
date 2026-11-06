@@ -4120,6 +4120,18 @@ fn open_as_and_place_keep_the_typed_hard_budget_fields() {
     });
 }
 
+/// #11544: a machine whose memory reading came out as 0 refused every open, and the message read
+/// as "this machine has no memory". It names the setting the ceiling is derived from and says a
+/// tiny figure may be a failed reading instead.
+#[test]
+fn hard_budget_refusal_message_names_the_setting_and_the_reading() {
+    let msg = EngineError::PsdHardBudget { name: "5.psb".into(), required: 255_959_712, limit: 0 }.to_string();
+    assert!(msg.contains("Preferences › Performance"), "the message must name where the limit is set: {msg}");
+    assert!(msg.contains("system memory reading"), "the message must say the figure is a reading: {msg}");
+    assert!(msg.contains("cannot open “5.psb”"), "{msg}");
+    assert!(msg.contains("255959712") && msg.contains("0 byte"), "the estimate and the limit stay in the message: {msg}");
+}
+
 thread_local! { static REVIEW_CANCEL: std::cell::RefCell<Option<crate::jobs::JobCtx>> = const { std::cell::RefCell::new(None) }; }
 
 fn cancel_at_marker(id: &str, params: &Value) -> Result<()> {

@@ -34,6 +34,23 @@ pub const UNKNOWN_MEMORY_WARNING_THRESHOLD: u64 = 8 << 30;
 /// Reserve subtracted from commit headroom when known.
 pub const COMMIT_RESERVE: u64 = 512 << 20;
 
+/// Reserve subtracted from available RAM when known (for the app, its display and the system).
+pub const RAM_RESERVE: u64 = 1 << 30;
+
+/// Smallest hard ceiling admission derives from system readings, and the automatic allowance that
+/// goes with it.
+///
+/// A ceiling below it cannot describe a working machine: it is what the arithmetic produces when a
+/// reading reports no usable memory at all (zero available RAM, or a commit headroom smaller than
+/// its reserve), which is a memory reading that failed, not a limit the app should obey. Such a
+/// reading used to refuse *every* document, so nothing could be opened at all (#11544: "its
+/// estimated memory requirement of 255959712 bytes cannot be admitted within the 0 byte hard limit
+/// on this machine"). Both limits then become this floor: ordinary documents keep opening without
+/// a prompt, while an estimate genuinely above it is still refused. It is chosen just above the
+/// estimate of the document in that report. An explicit caller limit is never raised by the floor:
+/// that number is the user's own setting (Preferences ▸ Performance), and it is honored as given.
+pub const MIN_ADMISSION_CEILING: u64 = 256 << 20;
+
 /// Bytes Rust's layout rules allow for one contiguous allocation on this target
 /// (`isize::MAX`), not a bound on an import's aggregate peak.
 ///
@@ -253,17 +270,19 @@ pub fn native_platform_cap() -> u64 {
 /// many buffers, each of which is separately bounded where the decoder allocates it.
 ///
 /// Policy:
-/// - Known RAM: H = min(floor(3*A/4), A - 1 GiB, C - reserve if known, [`native_platform_cap`]);
-///   S = min(A/2, 8 GiB, H).
+/// - Known RAM: H = min(floor(3*A/4), A - min(1 GiB, A/2), C - min(512 MiB, C/2) if known,
+///   [`native_platform_cap`]); S = min(A/2, 8 GiB, H). A reserve takes at most half of the reading
+///   it is subtracted from, so a small reading yields a small ceiling instead of zero.
 /// - Unknown native RAM: S = min(2 GiB, H) where H is [`native_platform_cap`], reduced by known
 ///   commit headroom; approval above S is possible up to H. 8 GiB is a warning threshold, not H.
 /// - Web (wasm32): S = 1 GiB; H = min([`WASM_MAX_PEAK_BUDGET`], caller limit).
 /// - <= S: automatic; S < E <= H: explicit approval; > H: refuse, no unlimited override.
 /// - The saturated `u64::MAX` overflow sentinel is always refused, even when H is `u64::MAX`
 ///   (see [`MemoryBudget::decide`]).
-/// - Known zero available RAM stays zero (it never becomes unknown/free).
+/// - Known zero available RAM stays zero in the reported reading (it never becomes unknown/free),
+///   but it no longer zeroes the ceiling: H and S fall back to [`MIN_ADMISSION_CEILING`] (#11544).
 /// - swap is never part of the adaptive budget.
-/// - Explicit caller limits may lower admission, never bypass the hard boundary.
+/// - Explicit caller limits may lower admission below the floor, never bypass the hard boundary.
 pub fn resolve_budget(snapshot: MemorySnapshot, caller_limit: Option<u64>) -> MemoryBudget {
     resolve_budget_for(active_platform(), snapshot, caller_limit)
 }
@@ -287,6 +306,18 @@ fn resolve_budget_for(platform: Platform, snapshot: MemorySnapshot, caller_limit
     resolve_budget_credited(platform, snapshot, caller_limit, 0)
 }
 
+/// `reading` minus `reserve`, clamped so a reserve can never eat the measurement it is taken from.
+///
+/// At most half of a reading goes to its reserve. Subtracting the full reserve instead drove the
+/// whole ceiling to zero on a machine that merely had little memory free or a nearly-full page
+/// file: `available - 1 GiB` is 0 at 1 GiB free, and `commit - 512 MiB` is 0 for any page file with
+/// less than 512 MiB left, and a zero in that `min` chain decides the ceiling (#11544). A positive
+/// reading now always yields a positive ceiling, and a reading large enough to carry its full
+/// reserve is unaffected.
+fn minus_reserve(reading: u64, reserve: u64) -> u64 {
+    reading - reserve.min(reading / 2)
+}
+
 /// The policy with `credit` bytes of scratch room added to S and H before the caller's limit.
 fn resolve_budget_credited(platform: Platform, snapshot: MemorySnapshot, caller_limit: Option<u64>, credit: u64) -> MemoryBudget {
     if platform == Platform::Web {
@@ -298,33 +329,36 @@ fn resolve_budget_credited(platform: Platform, snapshot: MemorySnapshot, caller_
     }
 
     let platform_cap = native_platform_cap();
-    let (mut hard, mut soft, warning_threshold) = match snapshot.available_ram {
+    let mut hard = match snapshot.available_ram {
         Some(a) => {
-            let h_pct = ((a as u128 * 3) / 4) as u64;
-            let h_reserve = a.saturating_sub(1 << 30);
-            let mut h = h_pct.min(h_reserve);
-
+            let mut h = (((a as u128 * 3) / 4) as u64).min(minus_reserve(a, RAM_RESERVE));
             if let Some(c) = snapshot.commit_headroom {
-                let c_room = c.saturating_sub(COMMIT_RESERVE);
-                h = h.min(c_room);
+                h = h.min(minus_reserve(c, COMMIT_RESERVE));
             }
-
-            h = h.min(platform_cap);
-
-            let s_pct = a / 2;
-            let s = s_pct.min(MAX_SOFT_BUDGET).min(h);
-            (h, s, None)
+            h.min(platform_cap)
         }
         None => {
             let mut h = platform_cap;
             if let Some(c) = snapshot.commit_headroom {
-                let c_room = c.saturating_sub(COMMIT_RESERVE);
-                h = h.min(c_room);
+                h = h.min(minus_reserve(c, COMMIT_RESERVE));
             }
-            let s = NATIVE_FALLBACK_BUDGET.min(h);
-            (h, s, Some(UNKNOWN_MEMORY_WARNING_THRESHOLD))
+            h
         }
     };
+    let mut soft = match snapshot.available_ram {
+        Some(a) => (a / 2).min(MAX_SOFT_BUDGET).min(hard),
+        None => NATIVE_FALLBACK_BUDGET.min(hard),
+    };
+    // A ceiling the readings drive under the usable floor is a broken reading, not a machine
+    // without memory: admit at the floor instead of refusing every file (#11544). The reading
+    // itself stays reported as it was measured, so the refusal can say the figure looks wrong.
+    if hard < MIN_ADMISSION_CEILING {
+        hard = MIN_ADMISSION_CEILING.min(platform_cap);
+        soft = hard;
+    }
+    // Only an unavailable RAM figure carries the uncertain-capacity warning; a measured one is
+    // reported as measured, however implausible.
+    let warning_threshold = snapshot.available_ram.map_or(Some(UNKNOWN_MEMORY_WARNING_THRESHOLD), |_| None);
     // Tile pixels the scratch disk takes need no RAM (see [`resolve_budget_with_scratch`]).
     hard = hard.saturating_add(credit);
     soft = soft.saturating_add(credit);
@@ -731,10 +765,14 @@ mod tests {
         }
         let snap_zero = MemorySnapshot { available_ram: Some(0), swap_free: None, commit_headroom: None };
         let b_zero = resolve_budget(snap_zero, None);
-        assert_eq!(b_zero.soft_limit, 0);
-        assert_eq!(b_zero.hard_limit, 0);
+        // A zero reading is still a reading, not the unknown case: it is reported as measured and
+        // carries no uncertain-capacity warning. But it can no longer be the ceiling (#11544).
+        let floor = MIN_ADMISSION_CEILING.min(native_platform_cap());
+        assert_eq!((b_zero.soft_limit, b_zero.hard_limit), (floor, floor), "a zero reading falls back to the usable floor");
+        assert_eq!(b_zero.available_ram, Some(0), "the reading itself is not promoted to unknown");
         assert_eq!(b_zero.warning_threshold, None);
-        assert_eq!(b_zero.decide(1), BudgetDecision::Refused);
+        assert_eq!(b_zero.decide(1), BudgetDecision::Automatic);
+        assert_eq!(b_zero.decide(u64::MAX), BudgetDecision::Refused);
 
         let snap_unknown = MemorySnapshot::UNKNOWN;
         let b_unknown = resolve_budget(snap_unknown, None);
@@ -749,6 +787,99 @@ mod tests {
         if b_unknown.hard_limit < u64::MAX {
             assert_eq!(b_unknown.decide(b_unknown.hard_limit + 1), BudgetDecision::Refused);
         }
+    }
+
+    /// #11544: on a Windows 11 machine *every* open failed with "cannot be admitted within the 0
+    /// byte hard limit on this machine" for a modest 255959712-byte (244 MiB) estimate. Injected
+    /// readings, so the outcome never depends on the test host's free memory.
+    #[test]
+    fn an_impossible_memory_reading_admits_an_ordinary_document() {
+        if cfg!(any(target_arch = "wasm32", target_pointer_width = "32")) {
+            return; // the web policy ignores host readings; 32-bit caps are below these estimates
+        }
+        let reported_estimate = 255_959_712; // the figure in the report
+        let mb = 1u64 << 20;
+        for snap in [
+            MemorySnapshot { available_ram: Some(0), swap_free: None, commit_headroom: None },
+            MemorySnapshot { available_ram: Some(0), swap_free: Some(0), commit_headroom: Some(0) },
+            // A reading so small both reserves swallow it: the combination that used to land on 0.
+            MemorySnapshot { available_ram: Some(mb), swap_free: None, commit_headroom: Some(mb) },
+        ] {
+            let b = resolve_budget_for(Platform::Native, snap, None);
+            assert!(b.hard_limit >= MIN_ADMISSION_CEILING, "a broken reading must not zero the ceiling: {b:?}");
+            assert!(b.soft_limit > 0, "{snap:?}: nothing may be refused at a zero allowance: {b:?}");
+            assert_eq!(b.decide(reported_estimate), BudgetDecision::Automatic, "{snap:?}: the reported document must open: {b:?}");
+            assert!(
+                evaluate_psd_admission_for(Platform::Native, reported_estimate, 0, 0, false, None, snap).is_ok(),
+                "{snap:?}: the real import path admits it"
+            );
+            // A genuinely too-large document is still refused, and stays refused with approval.
+            assert_eq!(b.decide(MIN_ADMISSION_CEILING + 1), BudgetDecision::Refused, "{snap:?}: {b:?}");
+            let err = evaluate_psd_admission_for(Platform::Native, MIN_ADMISSION_CEILING + 1, 0, 0, true, None, snap).unwrap_err();
+            assert!(matches!(err, IoError::PsdImportBudget { limit, .. } if limit == MIN_ADMISSION_CEILING), "{snap:?}: refusal still fires: {err:?}");
+        }
+        // The user's own limit is still honored as given, below the floor: it is a setting, not a
+        // reading (Preferences ▸ Performance).
+        let capped = resolve_budget_for(Platform::Native, MemorySnapshot { available_ram: Some(0), swap_free: None, commit_headroom: None }, Some(64 * mb));
+        assert_eq!((capped.soft_limit, capped.hard_limit), (64 * mb, 64 * mb));
+    }
+
+    /// The reading the reporter's machine can plausibly have produced: plenty of free RAM, but a
+    /// page file with less than its reserve left. `commit - 512 MiB` clamped the whole ceiling to
+    /// zero through the `min` chain.
+    #[test]
+    fn a_nearly_full_page_file_does_not_zero_the_ceiling() {
+        if cfg!(any(target_arch = "wasm32", target_pointer_width = "32")) {
+            return;
+        }
+        let gb = 1u64 << 30;
+        let mb = 1u64 << 20;
+        let snap = MemorySnapshot { available_ram: Some(8 * gb), swap_free: None, commit_headroom: Some(400 * mb) };
+        let b = resolve_budget_for(Platform::Native, snap, None);
+        assert_eq!(b.hard_limit, MIN_ADMISSION_CEILING, "200 MiB of commit room is below the usable floor, so the floor decides");
+        assert_eq!(b.decide(255_959_712), BudgetDecision::Automatic, "the reported 244 MiB document opens");
+        assert_eq!(b.decide(2 * gb), BudgetDecision::Refused, "a commit-starved machine still refuses a big import");
+        // A headroom that can carry its full reserve is untouched by the clamp.
+        let roomy = MemorySnapshot { available_ram: Some(12 * gb), swap_free: None, commit_headroom: Some(5 * gb) };
+        assert_eq!(resolve_budget_for(Platform::Native, roomy, None).hard_limit, 5 * gb - COMMIT_RESERVE);
+    }
+
+    /// Little memory but a real measurement: the ceiling follows the reading (it was 0 before)
+    /// instead of falling to the floor, so a big import is refused at the reading.
+    #[test]
+    fn a_small_but_plausible_reading_bounds_admission_instead_of_refusing_everything() {
+        if cfg!(any(target_arch = "wasm32", target_pointer_width = "32")) {
+            return;
+        }
+        let gb = 1u64 << 30;
+        let mb = 1u64 << 20;
+        let snap = MemorySnapshot { available_ram: Some(gb), swap_free: None, commit_headroom: None };
+        let b = resolve_budget_for(Platform::Native, snap, None);
+        assert_eq!((b.soft_limit, b.hard_limit), (512 * mb, 512 * mb), "half of 1 GiB free, not zero");
+        assert_eq!(b.decide(255_959_712), BudgetDecision::Automatic);
+        assert_eq!(b.decide(gb), BudgetDecision::Refused);
+    }
+
+    /// The sane side of the same arithmetic, unchanged: big readings keep their exact ceilings and
+    /// oversized documents keep being refused (#11493's behaviour).
+    #[test]
+    fn a_sane_reading_keeps_its_ceiling_and_its_refusals() {
+        if cfg!(any(target_arch = "wasm32", target_pointer_width = "32")) {
+            return;
+        }
+        let gb = 1u64 << 30;
+        let snap = MemorySnapshot { available_ram: Some(12 * gb), swap_free: None, commit_headroom: None };
+        let b = resolve_budget_for(Platform::Native, snap, None);
+        assert_eq!((b.soft_limit, b.hard_limit), (6 * gb, 9 * gb));
+        assert_eq!(b.decide(255_959_712), BudgetDecision::Automatic);
+        assert_eq!(b.decide(10 * gb), BudgetDecision::Refused, "a genuinely too-large document is still refused");
+        let err = evaluate_psd_admission_for(Platform::Native, 10 * gb, 0, 0, true, Some(10 * gb), snap).unwrap_err();
+        assert!(matches!(err, IoError::PsdImportBudget { required, limit } if required == 10 * gb && limit == 9 * gb), "{err:?}");
+
+        let huge = MemorySnapshot { available_ram: Some(512 * gb), swap_free: None, commit_headroom: None };
+        let bh = resolve_budget_for(Platform::Native, huge, None);
+        assert_eq!((bh.soft_limit, bh.hard_limit), (MAX_SOFT_BUDGET, 384 * gb), "a huge reading is still capped by the 8 GiB soft limit");
+        assert_eq!(bh.warning_threshold, None, "a measured figure carries no unknown-capacity warning");
     }
 
     /// A format estimate that overflows `u64` saturates at `u64::MAX`. Unknown native memory has
@@ -810,9 +941,11 @@ mod tests {
 
         let snap_zero = MemorySnapshot { available_ram: None, swap_free: None, commit_headroom: Some(0) };
         let b_zero = resolve_budget(snap_zero, None);
-        assert_eq!(b_zero.hard_limit, 0);
-        assert_eq!(b_zero.soft_limit, 0);
-        assert_eq!(b_zero.decide(1), BudgetDecision::Refused);
+        // A zero commit figure is not a ceiling either (#11544); the RAM figure stays unknown.
+        assert_eq!(b_zero.hard_limit, MIN_ADMISSION_CEILING.min(native_platform_cap()));
+        assert_eq!(b_zero.soft_limit, b_zero.hard_limit);
+        assert_eq!(b_zero.available_ram, None);
+        assert_eq!(b_zero.decide(1), BudgetDecision::Automatic);
 
         let snap_tight = MemorySnapshot { available_ram: None, swap_free: None, commit_headroom: Some(gb) };
         let b_tight = resolve_budget(snap_tight, None);

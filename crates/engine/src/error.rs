@@ -22,8 +22,12 @@ pub enum EngineError {
     #[error("opening “{name}” requires explicit memory approval: {required} bytes required (soft limit {soft_limit}, hard limit {hard_limit})")]
     PsdApprovalRequired { name: String, required: u64, soft_limit: u64, hard_limit: u64, available_ram: Option<u64> },
     /// The file's estimated memory cannot be admitted within the hard ceiling, which no approval
-    /// can raise. The requirement may equal the ceiling when the estimate saturated.
-    #[error("cannot open “{name}”: its estimated memory requirement of {required} bytes cannot be admitted within the {limit} byte hard limit on this machine")]
+    /// can raise. The requirement may equal the ceiling when the estimate saturated. The limit is
+    /// derived from a live system-memory reading, so the message names where it is set and says a
+    /// tiny figure may be a bad reading rather than a machine without memory (#11544).
+    #[error(
+        "cannot open “{name}”: its estimated memory requirement of {required} bytes exceeds the {limit} byte memory limit on this machine (Preferences › Performance; a limit this small means the system memory reading failed, not that this machine has no memory)"
+    )]
     PsdHardBudget { name: String, required: u64, limit: u64 },
     /// The file behind an opened handle is not the one whose memory estimate was approved.
     /// The document is discarded and is not opened.

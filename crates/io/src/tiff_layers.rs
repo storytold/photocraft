@@ -1263,16 +1263,26 @@ mod tests {
         assert!(layers.unwrap().starts_with(photocraft_psd::tiff::SIGNATURE_PSB));
     }
 
-    /// The adaptive budget, not only the caller's pixel limit, decides a layered TIFF: a known
-    /// zero reading refuses the import before the planar composite is allocated, while a normal
-    /// machine opens the same file. Before this route the fixed 2 GiB default admitted it.
+    /// The adaptive budget, not only the caller's pixel limit, decides a layered TIFF. A reading
+    /// that reports no memory at all admits at [`crate::memory::MIN_ADMISSION_CEILING`] rather than
+    /// refusing every file (#11544), and an estimate above that fallback ceiling is still refused
+    /// before the planar composite is allocated; a normal machine opens the same file.
     #[test]
-    fn layered_tiff_import_honours_a_known_zero_adaptive_budget() {
+    fn layered_tiff_import_honours_the_floor_of_a_zero_adaptive_budget() {
         let bytes = layered_tiff(8, 6);
         let zero = crate::memory::MemorySnapshot { available_ram: Some(0), swap_free: None, commit_headroom: None };
-        crate::memory::with_mock_memory(zero, || match crate::import_with_options("zero.tif", &bytes, &ImportOptions::default()) {
-            Err(IoError::PsdImportBudget { limit: 0, .. }) => {}
-            other => panic!("expected an import-budget refusal, got {other:?}"),
+        let floor = crate::memory::MIN_ADMISSION_CEILING;
+        crate::memory::with_mock_memory(zero, || {
+            // The fixture is tiny, so the estimate charge is what puts it above the fallback
+            // ceiling; nothing near a gigabyte is allocated.
+            crate::psd_budget::with_test_estimate_charge(floor + 1, || match crate::import_with_options("zero.tif", &bytes, &ImportOptions::default()) {
+                Err(IoError::PsdImportBudget { limit, .. }) if limit == floor => {}
+                other => panic!("expected a refusal at the fallback ceiling, got {other:?}"),
+            });
+            assert!(
+                crate::import_with_options("ordinary.tif", &bytes, &ImportOptions::default()).is_ok(),
+                "an ordinary document opens on a machine reporting no free memory at all"
+            );
         });
 
         let plenty = crate::memory::MemorySnapshot { available_ram: Some(16 << 30), swap_free: None, commit_headroom: None };
@@ -1458,11 +1468,14 @@ mod tests {
             Rc::new(move || decoded.set(decoded.get() + 1))
         };
 
+        // #11544: a reading of zero free memory admits at the fallback ceiling instead of refusing
+        // the open, so the bound that keeps this file from being decoded is the caller's own limit.
         let zero = crate::memory::MemorySnapshot { available_ram: Some(0), swap_free: None, commit_headroom: None };
+        let tight = ImportOptions { psd_max_pixel_bytes: 1, ..Default::default() };
         crate::memory::with_mock_memory(zero, || {
             crate::flat::with_before_composite_decode(hook(&decoded), || {
-                match crate::import_with_options("bogus.tif", &bytes, &ImportOptions::default()) {
-                    Err(IoError::PsdImportBudget { limit: 0, required }) => assert!(required > 0),
+                match crate::import_with_options("bogus.tif", &bytes, &tight) {
+                    Err(IoError::PsdImportBudget { limit: 1, required }) => assert!(required > 1),
                     other => panic!("expected an import-budget refusal, got {other:?}"),
                 }
                 assert_eq!(decoded.get(), 0, "a refused file must not decode its composite");
@@ -1480,10 +1493,11 @@ mod tests {
         });
     }
 
-    /// Admission happens before a layered TIFF's composite is decoded: a known-zero budget and
-    /// an approval-needed estimate both refuse the file without reaching the decode, and an
-    /// approved import does reach it. The fixture is the real tiny layered TIFF; the estimate
-    /// threshold is the scoped test seam, so nothing near a gigabyte is allocated.
+    /// Admission happens before a layered TIFF's composite is decoded: an estimate above a
+    /// zero-reading budget's fallback ceiling and an approval-needed estimate both refuse the file
+    /// without reaching the decode, and an approved import does reach it. The fixture is the real
+    /// tiny layered TIFF; the estimate threshold is the scoped test seam, so nothing near a
+    /// gigabyte is allocated.
     #[test]
     fn layered_tiff_is_refused_before_its_composite_is_decoded() {
         use std::cell::Cell;
@@ -1500,13 +1514,19 @@ mod tests {
             Rc::new(move || decoded.set(decoded.get() + 1))
         };
 
+        // A reading of no free memory admits at the fallback ceiling (#11544); an estimate above it
+        // is still refused before any decode.
         let zero = crate::memory::MemorySnapshot { available_ram: Some(0), swap_free: None, commit_headroom: None };
+        let floor = crate::memory::MIN_ADMISSION_CEILING;
         crate::memory::with_mock_memory(zero, || {
             crate::flat::with_before_composite_decode(hook(&decoded), || {
-                match crate::import_with_options("zero.tif", &bytes, &ImportOptions::default()) {
-                    Err(IoError::PsdImportBudget { limit: 0, required }) => assert!(required > 0),
+                crate::psd_budget::with_test_estimate_charge(floor + 1, || match crate::import_with_options("zero.tif", &bytes, &ImportOptions::default()) {
+                    Err(IoError::PsdImportBudget { limit, required }) => {
+                        assert_eq!(limit, floor, "the refusal reports the fallback ceiling");
+                        assert!(required > floor);
+                    }
                     other => panic!("expected an import-budget refusal, got {other:?}"),
-                }
+                });
                 assert_eq!(decoded.get(), 0, "a refused file must not decode its composite");
             });
         });
@@ -1571,7 +1591,11 @@ mod tests {
                 });
                 let hook: Rc<dyn Fn()> = Rc::new(move || decoded.store(true, Ordering::SeqCst));
                 let result = crate::memory::with_mock_memory_provider(provider, || {
-                    crate::flat::with_before_composite_decode(hook, || crate::import_with_options("drop.tif", &bytes, &ImportOptions::default()))
+                    // The fixture is tiny, so the charge is what makes the drop below its estimate
+                    // bite: the estimate sits just over the ceiling a zero reading falls back to.
+                    crate::psd_budget::with_test_estimate_charge(crate::memory::MIN_ADMISSION_CEILING + 1, || {
+                        crate::flat::with_before_composite_decode(hook, || crate::import_with_options("drop.tif", &bytes, &ImportOptions::default()))
+                    })
                 });
                 tx.send(result.map(|r| r.document.layers.len())).ok();
             })
@@ -1589,8 +1613,11 @@ mod tests {
 
         let result = rx.recv_timeout(Duration::from_secs(10)).expect("the post-gate recheck must refuse instead of decoding");
         match result {
-            Err(IoError::PsdImportBudget { limit: 0, required }) => assert!(required > 0),
-            other => panic!("expected the post-gate recheck to refuse with a zero budget, got {other:?}"),
+            Err(IoError::PsdImportBudget { required, limit }) => {
+                assert_eq!(limit, crate::memory::MIN_ADMISSION_CEILING, "a zero reading admits at the fallback ceiling, which the estimate now exceeds");
+                assert!(required > limit);
+            }
+            other => panic!("expected the post-gate recheck to refuse at the fallback ceiling, got {other:?}"),
         }
         assert!(!decoded.load(Ordering::SeqCst), "the composite must not be decoded after the post-gate refusal");
         handle.join().expect("worker thread");
