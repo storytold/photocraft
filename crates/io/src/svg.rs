@@ -627,7 +627,7 @@ fn parse_image_bounded_with(
     if left.is_none() {
         return Err(overrun(IoError::Svg("embedded SVG XML exceeds the decoded byte budget".into())));
     }
-    let nesting = nesting_depth(&xml, xml_left);
+    let nesting = nesting_depth(&xml, xml_left)?;
     if nesting > xml_left {
         return Err(IoError::Svg(format!("elements are nested more than {xml_left} levels deep")));
     }
