@@ -314,7 +314,12 @@ pub fn open(app: &mut PhotocraftApp, command: &str) -> Option<u64> {
 pub(crate) fn seed_from_recorded(fields: &mut Map<String, Value>, recorded: &Value, mode: photocraft_doc::ColorMode) {
     let Some(kind) = fields.get("__adjust").and_then(Value::as_str) else { return };
     let Ok(adjustment) = photocraft_engine::adjust_params::from_params(kind, recorded, None, mode) else { return };
-    if let Value::Object(values) = photocraft_engine::adjust_params::to_params(&adjustment) {
+    if let Value::Object(mut values) = photocraft_engine::adjust_params::to_params(&adjustment) {
+        // The curves already hold Curves' Smooth passes: OK must overwrite a stored count, or
+        // each render would apply them again.
+        if recorded.get("smooth").is_some() {
+            values.insert("smooth".into(), json!(0));
+        }
         fields.retain(|k, _| k.starts_with("__") || k == "target");
         fields.extend(values);
     }

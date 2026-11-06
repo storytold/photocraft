@@ -152,7 +152,10 @@ fn confirming_an_unedited_adjustment_smart_filter_keeps_what_it_renders() {
     let dim = json!([[0, 0], [128, 64], [255, 255]]);
     let lift = json!([[0, 40], [255, 255]]);
     let drawn: Vec<f64> = (0..photocraft_doc::adjust::CURVE_MAP_LEN).map(|level| level as f64 * 0.5).collect();
+    let jagged: Vec<f64> = (0..photocraft_doc::adjust::CURVE_MAP_LEN).map(|level| if level % 2 == 0 { 40.0 } else { 200.0 }).collect();
     let cases = [
+        ("lab", Lab, "curves", json!({"pencil": true, "smooth": 2, "points": jagged})),
+        ("rgb", Rgb, "curves", json!({"pencil": true, "smooth": 2, "points": jagged})),
         ("lab", Lab, "curves", json!({"points": dim})),
         ("lab", Lab, "curves", json!({"points": dim, "a": lift})),
         ("lab", Lab, "curves", json!({"lightness": dim})),
