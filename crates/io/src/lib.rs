@@ -551,7 +551,9 @@ pub fn import_preflight(name: &str, bytes: &[u8]) -> ImportPreflight {
     if xcf::is_xcf(bytes) || (has_extension(name, "xcf") && photocraft_codecs::detect(bytes).is_none()) {
         return ImportPreflight::Unbounded;
     }
-    if xcf::is_gzipped_xcf(name, bytes) {
+    // Transport verifies the decoded XCF signature during import. These wrappers can
+    // reach it under any suffix and have no flat-raster pixel estimate at this stage.
+    if bytes.starts_with(&[0x1f, 0x8b]) || bytes.starts_with(b"BZh") || bytes.starts_with(b"\xfd7zXZ\0") {
         return ImportPreflight::Unbounded;
     }
     if has_extension(name, "pdn") || bytes.starts_with(b"PDN3") {
@@ -1427,6 +1429,12 @@ mod tests {
         assert_eq!(import_preflight("x.afphoto", b"Affinity"), ImportPreflight::Unbounded);
         // A Photoshop extension whose bytes are a readable flat image follows the image.
         assert_eq!(import_preflight("misnamed.psd", png), ImportPreflight::Flat);
+        // Wrapper probing happens before suffix dispatch, without inflating data here.
+        for prefix in [&b"\x1f\x8b"[..], &b"BZh"[..], &b"\xfd7zXZ\0"[..]] {
+            for name in ["x.data", "misnamed.psd", "x.xcf.gz", "x.xcf.bz2", "x.xcf.xz"] {
+                assert_eq!(import_preflight(name, prefix), ImportPreflight::Unbounded);
+            }
+        }
     }
 
     /// Verifies a valid PSD remains editable after import.

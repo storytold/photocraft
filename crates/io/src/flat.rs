@@ -730,7 +730,7 @@ fn flat_document(
     if let Some(g) = guides.as_ref().and_then(|(res, _)| res.iter().find(|r| r.id == 1032)) {
         crate::psd_import::parse_guides(&g.data, &mut doc);
     }
-    Ok(ImportResult { document: doc, warnings, source_read_only: false, preview_only: false })
+    Ok(ImportResult { document: doc, warnings, source_read_only: false, preview_only: false, initial_view: None })
 }
 
 /// A PNG opened straight into the tiles of its layer, a group of rows at a time, so the whole
