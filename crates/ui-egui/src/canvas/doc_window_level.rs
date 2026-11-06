@@ -55,18 +55,38 @@ pub(crate) fn app_active(ctx: &Context) -> bool {
 /// pass after. Toggling its level raises it without taking focus (craft-ui's `raise_next`).
 pub(crate) fn frame_level(app: &PhotocraftApp, ctx: &Context, any: bool) -> WindowLevel {
     let blocked = crate::panel_docking::modal_open(app, ctx);
-    let (blocked_key, raise_key) = (Id::unique("pc-docwin-blocked"), Id::unique("pc-docwin-raise-main"));
-    let was_blocked = ctx.data(|d| d.get_temp::<bool>(blocked_key)).unwrap_or(false);
-    ctx.data_mut(|d| d.insert_temp(blocked_key, blocked));
-    if ctx.data_mut(|d| d.remove_temp::<bool>(raise_key)).unwrap_or(false) && blocked {
+    let active = app_active(ctx);
+    if raise_main(ctx, any, blocked, active) {
         ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::WindowLevel(WindowLevel::AlwaysOnTop));
         ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::WindowLevel(WindowLevel::Normal));
     }
-    if any && blocked && !was_blocked {
-        ctx.data_mut(|d| d.insert_temp(raise_key, true));
+    level(active, blocked)
+}
+
+/// Whether to raise the main window this pass: the pass after a modal opened in it while there
+/// were document windows (`any`), and only once the application is `active`. While it is
+/// inactive (a file handed over by another launch can open a dialog in the background) the raise
+/// waits, so PhotoCraft never comes in front of the application the user is in; it is dropped
+/// once the modal closes.
+fn raise_main(ctx: &Context, any: bool, blocked: bool, active: bool) -> bool {
+    let (blocked_key, raise_key) = (Id::unique("pc-docwin-blocked"), Id::unique("pc-docwin-raise-main"));
+    let was_blocked = ctx.data(|d| d.get_temp::<bool>(blocked_key)).unwrap_or(false);
+    let pending = ctx.data(|d| d.get_temp::<bool>(raise_key)).unwrap_or(false);
+    let raise = pending && blocked && active;
+    let queued = any && blocked && !was_blocked;
+    let wait = (pending && blocked && !active) || queued;
+    ctx.data_mut(|d| {
+        d.insert_temp(blocked_key, blocked);
+        if wait {
+            d.insert_temp(raise_key, true);
+        } else {
+            d.remove_temp::<bool>(raise_key);
+        }
+    });
+    if queued {
         ctx.request_repaint();
     }
-    level(app_active(ctx), blocked)
+    raise
 }
 
 #[cfg(test)]
@@ -96,6 +116,41 @@ mod tests {
         let mut active = false;
         ctx.run_ui(raw, |ui| active = app_active(ui.ctx())).textures_delta.clear();
         active
+    }
+
+    /// A modal opening over document windows raises the main window once, the pass after, while
+    /// the application is active (CodeRabbit on #11666).
+    #[test]
+    fn a_modal_raises_the_main_window_once_the_pass_after_it_opens() {
+        let ctx = Context::default();
+        assert!(!raise_main(&ctx, true, false, true), "no modal: nothing to raise");
+        assert!(!raise_main(&ctx, true, true, true), "the modal opens: the raise waits for the windows to drop");
+        assert!(raise_main(&ctx, true, true, true), "the pass after: the main window is raised");
+        assert!(!raise_main(&ctx, true, true, true), "once");
+        assert!(!raise_main(&ctx, true, false, true));
+        // Without document windows there is nothing for the main window to come in front of.
+        assert!(!raise_main(&ctx, false, true, true));
+        assert!(!raise_main(&ctx, false, true, true));
+    }
+
+    /// A modal that opens while the application is inactive does not raise it over the
+    /// application the user is in; the raise waits until it is active, and is dropped once the
+    /// modal closes (CodeRabbit on #11666).
+    #[test]
+    fn the_raise_waits_while_the_application_is_inactive() {
+        let ctx = Context::default();
+        assert!(!raise_main(&ctx, true, false, false));
+        assert!(!raise_main(&ctx, true, true, false), "the modal opens in the background");
+        assert!(!raise_main(&ctx, true, true, false), "still in the background: no raise");
+        assert!(!raise_main(&ctx, true, true, false));
+        assert!(raise_main(&ctx, true, true, true), "the user comes back: now it is raised");
+        assert!(!raise_main(&ctx, true, true, true), "once");
+
+        let ctx = Context::default();
+        assert!(!raise_main(&ctx, true, false, false));
+        assert!(!raise_main(&ctx, true, true, false), "the modal opens in the background");
+        assert!(!raise_main(&ctx, true, false, false), "and closes before the user comes back");
+        assert!(!raise_main(&ctx, true, false, true), "nothing is raised later");
     }
 
     #[test]
