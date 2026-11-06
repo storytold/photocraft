@@ -276,9 +276,11 @@ fn gradient_make_to(p: &Value) -> Option<Descriptor> {
     if o.remove("path").is_some_and(|v| !v.is_null()) {
         return None;
     }
+    // Stops replace `from` and `to` when the step plays, so those two are left out beside them.
     match (o.remove("from").filter(|v| !v.is_null()), o.remove("to").filter(|v| !v.is_null())) {
+        _ if o.contains_key("stops") => {}
         (None, None) => {}
-        (Some(a), Some(b)) if !o.contains_key("stops") => {
+        (Some(a), Some(b)) => {
             o.insert("stops".into(), json!([[0, a], [1, b]]));
         }
         _ => return None,
@@ -649,9 +651,10 @@ pub(super) fn make_from(d: &Descriptor) -> Mapped {
                 Some(p) => step("layer.newFillLayer.pattern", Value::Object(p)),
                 None => Mapped::Unsupported { harmless: false },
             },
+            // A name, opacity, mode or clipping beside `Type` would neither play nor save back.
             Some(t) if t.class_id.is("gradientLayer") => match gradient_step(t) {
-                Some(p) => step("layer.newFillLayer.gradient", p),
-                None => Mapped::Unsupported { harmless: false },
+                Some(p) if using.is_some_and(|u| u.items.iter().all(|(k, _)| k.is("Type"))) => step("layer.newFillLayer.gradient", p),
+                _ => Mapped::Unsupported { harmless: false },
             },
             _ => Mapped::Unsupported { harmless: false },
         },
