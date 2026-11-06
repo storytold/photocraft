@@ -138,6 +138,26 @@ pub(crate) fn retarget_type_resolution(doc: &mut Document, dpi: f32) {
         }
         retag_text(dpi, t);
     });
+    // The styles travelling with the copies scale the same way: a style a copy brings to a
+    // document that lacks it defines the rewritten size, so the copy has no local override.
+    let st = &mut doc.text_styles;
+    let sets = st
+        .character
+        .iter_mut()
+        .map(|c| &mut c.attrs)
+        .chain(st.paragraph.iter_mut().chain([&mut st.basic]).flat_map(|p| [&mut p.para_attrs, &mut p.char_attrs]));
+    for attrs in sets {
+        for (key, v) in attrs.iter_mut() {
+            let Some(n) = v.as_f64().filter(|n| n.is_finite()) else { continue };
+            let n = n as f32;
+            let scaled = match key.as_str() {
+                "size_pt" | "leading_pt" => point_size(n, k),
+                "baseline_shift_pt" | "first_line_indent_pt" | "start_indent_pt" | "end_indent_pt" | "space_before_pt" | "space_after_pt" => grown(n, k),
+                _ => continue,
+            };
+            *v = serde_json::json!(scaled);
+        }
+    }
 }
 
 /// A positive size in points times `k`, kept finite and above zero (a tiny ratio must not make
