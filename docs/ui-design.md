@@ -126,6 +126,20 @@ then send normal Tab and Space events through the app's shortcut dispatcher. The
 focus traversal and activation with that nondefault binding; default canvas Tab still toggles
 panels. These offscreen checks do not establish native window or platform input acceptance.
 
+## Toolbar view-action gestures
+
+Hand's Fit on Screen and Zoom's Actual Pixels actions require two consecutive ordinary
+primary clicks on the same toolbar slot, using egui's configured time and distance limits.
+Modified clicks do not join that pair, including when a modifier is released before the
+button. An ordinary pair immediately after Alt/Option-click remains usable; a third rapid
+ordinary click does not repeat the action. Keyboard activation only selects the tool.
+
+A completed touch release retains its position and flyout ownership through the immediate
+pointer disappearance emitted by the native and web integrations. Standalone disappearance,
+focus loss, touch cancellation and releases elsewhere break future click history without
+undoing an earlier completed release in the same frame. Cancelled contacts cannot become
+later held flyouts. These rules leave release-time Alt/Option tool cycling unchanged.
+
 ## Menus
 
 Horizontal and vertical ruler ticks, labels and pointer markers are clipped to their respective
