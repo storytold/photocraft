@@ -12,7 +12,7 @@ labels; no proprietary translation resources, fonts, screenshots or user documen
 
 ## Register and style
 
-Commands are imperatives in the second person plural (*Сохранить*, *Удалить*, *Повторить*);
+Commands are infinitives (*Сохранить*, *Удалить*, *Повторить*);
 where the catalog already uses a noun it is kept (*Уровни…*, *Кривые…*). Sentence case after the
 first word, as in the rest of the catalog. Ellipses on dialog commands are preserved (`Ветер…`
 → `Ветер…`). Decimals use a comma (the file format's own labels keep their dots, e.g.

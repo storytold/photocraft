@@ -168,8 +168,8 @@ what an agent can't finish alone.
   (`file.saveAs`, or `file.saveACopy` for As a Copy) instead of as a plain Save, which wrote
   over the file the action was played on (#7102). A folder destination, an unmapped format or a
   mismatched extension stays a kept Photoshop step, so playback stops before writing; folder
-  saves waited for #5430 (merged 2026-11-03: a "Save in directory" destination now imports as a
-  folder step).
+  saves waited for #5430 (merged 2026-11-03: a "Save in directory" Save As of a mapped format
+  now imports as a folder step; Save a Copy into a folder stays kept).
 - **Done 2026-10-12:** Load/Save Actions `.atn` in the panel menu, `batch --actions set.atn`
   and `actions.load`/`actions.save`; 112 Photoshop events map to commands both ways (Transform,
   Apply Image, Save for Web, smart-object edits, Gradient Map, Quick Mask, polygon selections,
@@ -302,10 +302,10 @@ what an agent can't finish alone.
 - **Estimate:** 100–180 h. **Human:** checking feel on real tablets.
 
 ### G5. Transform, handles and modifiers
-- **Missing:** the full interpolation list; blend mode/opacity edits during
-  a transform (#1384); wheel and pinch behaviour (#2463, #1989). Path-point nudge (#4500),
-  autoscroll at the edge while dragging (#2231, #4257) and toolbar press-and-hold flyouts (#2301)
-  are done.
+- **Missing:** the full interpolation list; the moving layer's blend mode in the preview during
+  a transform (#1384; opacity edits show, #2099); wheel and pinch behaviour (#2463, #1989).
+  Path-point nudge (#4500), autoscroll at the edge while dragging (#2231, #4257) and toolbar
+  press-and-hold flyouts (#2301) are done.
 - **Done since the re-measure (2026-10-10 to 12):** right-click menu during Free Transform
   (TOOL-214-5); commit/cancel buttons in the options bar (#2442); transform keeps the layer's
   place in the stack (#2439, #2480); Hand tool no longer interrupts a transform (#2302, #2327);

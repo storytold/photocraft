@@ -9,9 +9,9 @@ strings, Touch Bar resources, pen pressure/tilt strings) and Adobe's GPU FAQ. Ph
 `engine/src/display_color.rs`, `apps/photocraft/src/monitor_profile.rs`.
 
 **Summary (estimated):** ~50% ready. GPU compositing and colour-managed display are solid; pen
-input is uneven by platform (Windows lacks tilt/rotation, Wayland is broken) and there is no HDR
-output. Remaining: 80–150 h (gap G12). Human: tablets (Wacom, XP-Pen, Huion) on each OS and an
-HDR display to verify.
+input is uneven by platform (Windows lacks tilt/rotation, native Wayland has no pen input, so a
+pen runs through Xwayland) and there is no HDR output. Remaining: 80–150 h (gap G12). Human:
+tablets (Wacom, XP-Pen, Huion) on each OS and an HDR display to verify.
 
 ## GPU
 
@@ -21,7 +21,7 @@ HDR display to verify.
 | GPU compositing of layers, blend modes, effects | partial (Photoshop composites mostly on CPU) | wgpu compositor, ≤ 1/255 vs CPU oracle; Multichannel documents and patterns larger than the texture limit fall back to CPU | done (ahead in places) |
 | GPU compositor startup | available | Pipeline preparation runs in the background on native hardware; the CPU composites until ready. Windows WARP probe: 0.329 ms p95, 6.860 ms maximum device-work stall during two FXC builds; hardware measurements remain pending (#9157, #9364, #6419) | partial |
 | GPU filters (Blur Gallery, Liquify, Smart Sharpen, Camera Raw) | yes | CPU (rayon) for filters; GPU for compose and effects. Camera Raw's preview runs its per-pixel stages (white balance to grain) in one wgpu pass, about 2-3 ms vs 11-28 ms on the CPU for the 858×572 proxy, depending on the machine; spatial stages, Calibration and OK still develop on the CPU (#6916) | partial |
-| Documents larger than the GPU texture limit | yes (tiled) | composited on the GPU in pages no larger than the texture limit (`crates/gpu/src/paging.rs`, #49) | done |
+| Documents larger than the GPU texture limit | yes (tiled) | composited on the GPU in pages no larger than the texture limit (`crates/gpu/src/paging.rs`, #49); Multichannel documents composite on the CPU (`crates/gpu/src/plan.rs`) | done |
 | CPU-only fallback when no GPU | yes, reduced | `cpu` canvas preference; fails to start without an adapter on some Linux systems (#2519, #2412) | partial |
 | Choosing the GPU on a multi-GPU machine | Preferences › Performance › Use Graphics Processor | Linux only: Preferences › Performance › Advanced › GPU adapter and `PHOTOCRAFT_GPU_ADAPTER` (#1885); ignored on Windows and macOS | partial |
 | Old / integrated GPUs | yes | black line on Intel HD (#2426), OpenCore Macs fail (#4011); the Rgba32Float panic is fixed (Rgba16Float when the adapter can't render Rgba32Float, #2020) | partial |
@@ -46,7 +46,7 @@ HDR display to verify.
 | HDR / EDR output for 32-bit and HDR images | yes ("Precise Color Management for HDR Display") | no; 8-bit sRGB-encoded canvas texture | missing |
 | High-DPI, physical 100% | yes | yes (#1943) | done |
 | Multiple monitors: documents in separate OS windows | yes | yes (`extra_windows`) | done |
-| Panels in separate OS windows | yes | in-app floating only (UI-217-5) | missing |
+| Panels in separate OS windows | yes | yes, floating panels open in their own OS windows (09c395469, `window.panel.float`) | done |
 
 ## Input devices
 

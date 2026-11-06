@@ -35,7 +35,7 @@ speakers, ~55% ready. Remaining: 80–140 h, plus native-speaker review (recorde
 | English | `en` | 2,345 / 2,345 (100%) | source | all | Latin | – | full | 0 h |
 | Simplified Chinese | `zh-hans` | 2,246 / 2,345 (95.78%) | 3,141 | dialogs, tooltips yes; engine messages English | CJK fonts (lazy loader), IME preedit/commit, vertical type | no | partial | 8–12 h |
 | Spanish | `es` | 2,252 / 2,345 (96.03%) | 4,389 | as above | Latin | no | partial | 6–10 h |
-| Hindi | `hi` | 377 / 2,345 (16.08%) | 599 | Top menus, toolbox tools, camera raw, dialogs, plurals | Devanagari shaping in the text engine (parley/HarfRust); no Devanagari fallback font (TYPE-218-3) | no | partial | 15–20 h |
+| Hindi | `hi` | 377 / 2,345 (16.08%) | 599 | Top menus, toolbox tools, camera raw, dialogs, plurals | Devanagari shaping in the text engine (parley/HarfRust) with Devanagari fallback fonts (`DEVANAGARI_FAMILIES` in `crates/text/src/fonts.rs`, #4386); golden shaping tests still open (TYPE-218-3) | no | partial | 15–20 h |
 | Arabic | `ar` | 2,225 / 2,345 (94.88%) | 3,450 | as above; combined from the community catalogs with one term per concept | Arabic shaping and bidi in the UI (egui 0.37) and the text engine, Arabic fallback font; RTL shell layout but not inside panels (DIST-220-4), paragraph direction buttons but no visual RTL caret (TYPE-218-2 partial) | no | partial | 15–25 h |
 | French | `fr` | 2,251 / 2,345 (95.99%) | 4,476 | as above | Latin | no | partial | 6–10 h |
 | Portuguese (Brazil) | `pt-br` | 2,252 / 2,345 (96.03%) | 4,370 | as above | Latin; every `pt` locale uses it | no | partial | 6–10 h |
