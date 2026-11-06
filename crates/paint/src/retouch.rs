@@ -682,11 +682,11 @@ mod tests {
     /// format combination — including pixels the stroke leaves exact.
     #[test]
     fn banded_mix_back_is_bit_identical_to_the_plane_version() {
-        let full = Rect::new(0, 0, 40, 36);
+        let full = Rect::new(0, 0, 40, 160);
         for fmt in [PixelFormat::RGBA8, PixelFormat::RGBA16, PixelFormat::RGBA32F, PixelFormat::GRAYA8, PixelFormat::CMYKA8] {
             let n = fmt.channels();
             let mut base = Surface::new(fmt);
-            for y in 0..36i32 {
+            for y in 0..160i32 {
                 for x in 0..40i32 {
                     // Include `-0.0` samples: `f32` equality cannot tell them from `+0.0`, and
                     // the "keep the pixel exactly" rule must not flip the sign bit.
@@ -700,8 +700,8 @@ mod tests {
                 }
             }
             // The working rectangle is grown by the halo; only the stroke bounds mix back.
-            let outer = Rect::new(4, 3, 34, 31);
-            let bounds = Rect::new(8, 6, 30, 27);
+            let outer = Rect::new(4, 3, 34, 151);
+            let bounds = Rect::new(8, 6, 30, 147);
             let orig = Region::read(&base, outer);
             let mut work = orig.clone();
             for (i, v) in work.data.iter_mut().enumerate() {
@@ -710,7 +710,7 @@ mod tests {
                 }
             }
             let mut sel = Surface::new(PixelFormat::GRAYA8);
-            sel.fill_rect(Rect::new(12, 9, 26, 24), &[1.0, 1.0]);
+            sel.fill_rect(Rect::new(12, 9, 26, 140), &[1.0, 1.0]);
             for (opacity, sel_use, lock) in [(1.0, false, false), (0.6, true, false), (0.6, true, true), (0.0, true, false), (0.6, false, true)] {
                 let selection = if sel_use { Some(&sel) } else { None };
                 let mut plane = base.clone();
