@@ -10,7 +10,7 @@ use crate::menus::MenuItem;
 const PREFIX: &str = "plugin.filter.";
 
 /// Why installing a plug-in is refused under [`crate::Services::bundled_plugins_only`].
-pub const BUNDLED_ONLY: &str = "Plug-ins come with the app in this build; others can't be installed";
+pub const BUNDLED_ONLY: &str = photocraft_engine::plugin_cmds::BUNDLED_ONLY;
 
 /// Commands that install plug-ins from a file, a folder or data.
 fn installs(id: &str) -> bool {

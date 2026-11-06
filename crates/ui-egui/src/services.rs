@@ -487,7 +487,8 @@ pub struct Services {
     /// Plug-ins come only with the app: Install Plug-in… and the Plug-ins preference folder are
     /// left out, and installing or loading one is refused. For stores that don't allow
     /// installing code (App Store guideline 2.5.2); the sandboxed plug-ins already loaded run as
-    /// before.
+    /// before. Read when the app is made, which also holds the engine to it
+    /// (`plugin_cmds::set_bundled_only`, process-wide), so no script or action step gets round it.
     pub bundled_plugins_only: bool,
     /// Encode and write in one step on a worker thread, so a large save doesn't freeze the
     /// window (#2017). With background jobs on, saves use it instead of `export` and `write`.

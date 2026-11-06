@@ -218,6 +218,11 @@ impl PhotocraftApp {
             #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
             live_tokens: theme::live::LiveTokens::from_env(),
         };
+        // Plug-ins only from the app: held by the engine too, below every menu (a script's or an
+        // action's steps), and before the saved preferences could load a plug-ins folder.
+        if app.services.bundled_plugins_only {
+            photocraft_engine::plugin_cmds::set_bundled_only(true);
+        }
         // Saved preferences are in place before the first frame; recovery starts in upkeep.
         prefs_ui::load(&mut app);
         layers_panel_ui::restore_options(&mut app);
