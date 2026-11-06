@@ -494,6 +494,7 @@ pub(super) fn draw_tool_state(app: &PhotocraftApp, painter: &egui::Painter, xf: 
     }
 }
 
+/// Draw the transient geometry of a canvas drag, including the offset outline for classic Patch.
 pub(super) fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &ViewXform) {
     draw_tool_state(app, painter, xf, painter.ctx().input(|i| i.pointer.hover_pos()));
     // Remove strokes waiting for ↩ stay tinted between drags.

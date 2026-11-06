@@ -392,6 +392,7 @@ pub(crate) fn damage(app: &PhotocraftApp, doc: DocId, revision: u64, before: u64
     Some(area(before)?.union(&area(after)?))
 }
 
+/// Draw the transform box when the current text layer exposes a visible frame.
 pub(crate) fn draw(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &ViewXform, mods: Modifiers) -> bool {
     if !visible(app, mods) {
         return false;

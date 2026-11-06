@@ -160,11 +160,13 @@ struct Plan {
     transform: Option<Homography>,
 }
 
+/// Resolve the active document and target layer before validating the Patch parameters.
 fn plan(s: &Session, p: &Value) -> Result<Plan> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     plan_for(&d.doc, target_layer(s, p)?, p)
 }
 
+/// Validate Patch geometry against a document snapshot so preview and commit share the same rules.
 fn plan_for(doc: &Document, id: Option<LayerId>, p: &Value) -> Result<Plan> {
     let mode = match string(p, "mode", "source") {
         "source" => PatchMode::Source,
@@ -281,6 +283,7 @@ fn transformed_patch(surf: &mut Surface, sel: &Surface, plan: &Plan, map: &Homog
     Ok(apply_coverage(surf, g, &cov, 1.0, None, lock, &healed, BlendMode::Normal))
 }
 
+/// Apply a Patch to the requested paint target in one undoable edit.
 pub(super) fn patch(s: &mut Session, p: &Value) -> Result<Value> {
     if flag(p, "contentAware", false) {
         return patch_content_aware(s, p);

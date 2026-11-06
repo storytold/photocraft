@@ -203,6 +203,7 @@ fn landed_mask(cov: &[f32], area: Rect, inv: &Homography, rect: Rect) -> Vec<boo
         .collect()
 }
 
+/// Resolve the selection, placement, and solve bounds for a Content-Aware Move.
 fn plan(s: &Session, p: &Value, margin: i32) -> Result<Plan> {
     let mode = match string(p, "mode", "move") {
         "move" => Mode::Move,

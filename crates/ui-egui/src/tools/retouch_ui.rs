@@ -313,11 +313,13 @@ pub fn patch_drags_selection(app: &PhotocraftApp, at: [f64; 2], mods: egui::Modi
     sel.sample_channel(at[0].floor() as i32, at[1].floor() as i32, 0) > 0.0
 }
 
+/// Return whether the active tool uses Affinity placement for a Normal Patch.
 pub(crate) fn affinity_patch(app: &PhotocraftApp) -> bool {
     let o = &app.ui.tool_options;
     app.ui.tool == Tool::Patch && o.patch_affinity && !o.patch_content_aware
 }
 
+/// Capture the Patch direction, layer, and paint target for a placed box.
 pub(crate) fn patch_target(app: &PhotocraftApp) -> crate::state::PatchTarget {
     crate::state::PatchTarget {
         mode: app.ui.tool_options.patch_mode.clone(),
@@ -326,6 +328,7 @@ pub(crate) fn patch_target(app: &PhotocraftApp) -> crate::state::PatchTarget {
     }
 }
 
+/// Build the shared preview and commit parameters, opting into clipping for Affinity destination patches.
 pub(crate) fn patch_params(app: &PhotocraftApp, offset: [i64; 2]) -> Value {
     let mut params = json!({"offset": offset, "mode": app.ui.tool_options.patch_mode, "target": crate::canvas::paint_target(app)});
     if affinity_patch(app) && app.ui.tool_options.patch_mode == "destination" {
@@ -334,6 +337,7 @@ pub(crate) fn patch_params(app: &PhotocraftApp, offset: [i64; 2]) -> Value {
     params
 }
 
+/// Return the nonempty selection bounds clipped to the active canvas.
 pub(crate) fn patch_bounds(app: &mut PhotocraftApp) -> Option<photocraft_geom::Rect> {
     let st = app.session.active()?;
     let sel = st.doc.selection.clone()?;
@@ -343,6 +347,7 @@ pub(crate) fn patch_bounds(app: &mut PhotocraftApp) -> Option<photocraft_geom::R
     (!bounds.is_empty()).then_some(bounds)
 }
 
+/// Centre the Patch box on the cursor, limiting sample placement to where its transformed bounds fit.
 pub(crate) fn affinity_offset(app: &mut PhotocraftApp, at: [f64; 2]) -> Option<[i32; 2]> {
     let b = patch_bounds(app)?;
     let center = [(f64::from(b.x0) + f64::from(b.x1)) / 2.0, (f64::from(b.y0) + f64::from(b.y1)) / 2.0];
@@ -365,6 +370,7 @@ pub(crate) fn affinity_offset(app: &mut PhotocraftApp, at: [f64; 2]) -> Option<[
     }))
 }
 
+/// Convert a pointer displacement to a bounded whole-pixel offset.
 fn rounded_patch_offset(start: [f64; 2], end: [f64; 2]) -> [i32; 2] {
     let delta = [(end[0] - start[0]).round(), (end[1] - start[1]).round()];
     if delta.iter().all(|d| d.is_finite()) { delta.map(|d| d.clamp(-9_999_999.0, 9_999_999.0) as i32) } else { [0, 0] }
@@ -552,6 +558,7 @@ fn pct(ui: &mut egui::Ui, label: &str, v: &mut f32) {
     crate::widgets::value_field(ui, v, 1.0..=100.0, "%", 58.0);
 }
 
+/// Edit rotation and scale for the current or next Patch, preserving the ratio between scale axes.
 fn patch_transform_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let place = app
         .ui

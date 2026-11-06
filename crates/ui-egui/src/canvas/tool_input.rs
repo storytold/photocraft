@@ -56,6 +56,8 @@ fn tool_move(app: &mut PhotocraftApp, x: f64, y: f64, pressure: f32, mods: egui:
     }
 }
 
+/// Let modal tools and gestures consume the event before normal canvas dispatch.
+/// Return the armed brush-resize flag and effective modifiers if dispatch should continue.
 fn preflight_tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) -> Option<(bool, egui::Modifiers)> {
     // A press anywhere but on a guide deselects the selected guide (`guide_select`).
     if let ToolEvent::Down { x, y, .. } = ev

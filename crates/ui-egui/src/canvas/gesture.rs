@@ -6,6 +6,7 @@ use super::strokes::{
 use super::textures::shown_as_document;
 use super::{PhotocraftApp, Tool, json};
 
+/// Treat a Patch gesture as a click only if every point stays within three zoom-scaled points of the press.
 fn pts_are_click(app: &PhotocraftApp, drag: &Drag, end: [f64; 2]) -> bool {
     let near_start = |p: [f64; 2]| (p[0] - drag.start[0]).hypot(p[1] - drag.start[1]) * f64::from(app.point_zoom()) < 3.0;
     near_start(end) && drag.points.iter().all(|p| near_start([p[0], p[1]]))

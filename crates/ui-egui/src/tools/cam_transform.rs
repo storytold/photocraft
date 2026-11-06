@@ -27,6 +27,7 @@ impl Placement {
         self.scale == [100.0, 100.0] && self.rotate == 0.0
     }
 
+    /// Map the selection rectangle to a quad by scaling and rotating about its centre, then translating it.
     pub(crate) fn quad(&self, [x0, y0, x1, y1]: [f64; 4]) -> [[f64; 2]; 4] {
         let [cx, cy] = [(x0 + x1) / 2.0, (y0 + y1) / 2.0];
         let [sx, sy] = self.scale.map(|s| s / 100.0);
@@ -51,6 +52,7 @@ pub(crate) fn move_active(app: &PhotocraftApp) -> bool {
     app.ui.cam_transform.as_ref().is_some_and(|t| t.patch.is_none())
 }
 
+/// Build a placement from the saved Patch controls and the current offset.
 pub(crate) fn patch_placement(app: &PhotocraftApp, offset: [i32; 2]) -> Placement {
     let o = &app.ui.tool_options;
     let scale = o.patch_scale.map(|s| if (1.0..=10_000.0).contains(&s.abs()) { s } else { 100.0 });
@@ -73,6 +75,7 @@ pub(crate) fn set_patch_transform(app: &mut PhotocraftApp, scale: [f64; 2], rota
     t.gesture = None;
 }
 
+/// Place the Patch box and restore the scale and rotation saved in the tool options.
 pub(crate) fn begin_patch(app: &mut PhotocraftApp, offset: [i32; 2]) {
     let target = crate::retouch_ui::patch_target(app);
     let place = patch_placement(app, offset);
@@ -81,6 +84,7 @@ pub(crate) fn begin_patch(app: &mut PhotocraftApp, offset: [i32; 2]) {
     }
 }
 
+/// Create an editable placement box over the offset selection without changing the document.
 fn begin_box(app: &mut PhotocraftApp, offset: [i32; 2], patch: Option<PatchTarget>) -> bool {
     let Some((document, revision)) = app.session.active().map(|st| (st.doc.id.0, st.revision)) else { return false };
     let Some(b) = crate::retouch_ui::patch_bounds(app) else { return false };
@@ -168,6 +172,7 @@ pub(crate) fn params(app: &PhotocraftApp, place: &Placement) -> serde_json::Valu
     p
 }
 
+/// Add scale and rotation to the command only when the placement transforms the selection.
 pub(crate) fn transform_params(p: &mut serde_json::Value, place: &Placement) {
     if !place.is_plain_move() {
         p["scaleX"] = place.scale[0].into();
@@ -293,6 +298,7 @@ pub(crate) fn draw(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform)
     crate::type_transform::draw_box(painter, xf, &t.frame, t.patch.is_none() || app.ui.tool_options.transform_reference_point);
 }
 
+/// Test placement handles, including the reference point when enabled for Patch.
 fn frame_hit(reference_point: bool, t: &CamTransform, p: [f64; 2], tol: f64) -> Hit {
     if t.patch.is_some() { crate::transform_tool::hit_with(&t.frame, p, tol, reference_point) } else { crate::transform_tool::hit(&t.frame, p, tol) }
 }

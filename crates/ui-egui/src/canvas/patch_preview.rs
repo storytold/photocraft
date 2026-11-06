@@ -50,6 +50,7 @@ pub(crate) struct PatchMotion {
     moving: bool,
 }
 
+/// Return the placed Patch box, or the quad at the current hover position before placement.
 fn motion_quad(app: &mut PhotocraftApp, bounds: Rect) -> Option<[[f64; 2]; 4]> {
     if let Some(t) = &app.ui.cam_transform {
         return t.patch.as_ref().map(|_| t.frame.quad);
@@ -59,6 +60,7 @@ fn motion_quad(app: &mut PhotocraftApp, bounds: Rect) -> Option<[[f64; 2]; 4]> {
     Some(place.quad([bounds.x0, bounds.y0, bounds.x1, bounds.y1].map(f64::from)))
 }
 
+/// Sample the layer through the selection mask into a bounded-size preview texture.
 fn motion_texture(layer: &photocraft_raster::Surface, sel: &photocraft_raster::Surface, bounds: Rect) -> photocraft_compose::Buffer {
     let step = bounds.width().max(bounds.height()).div_ceil(MOTION_TEXTURE_SIDE).max(1);
     let (w, h) = (bounds.width().div_ceil(step), bounds.height().div_ceil(step));
@@ -115,6 +117,7 @@ fn motion_edges(sample: &photocraft_compose::Buffer, surface: &photocraft_raster
         .collect()
 }
 
+/// Estimate four corner colour offsets from paired source and destination samples along the mask boundary.
 fn motion_tone(edges: &[EdgeSample], quad: [[f64; 2]; 4], surface: &photocraft_raster::Surface, canvas: Rect) -> Tone {
     let mut sums = [[0.0_f32; 3]; 4];
     let mut weights = [0.0_f32; 4];
@@ -141,6 +144,7 @@ fn motion_tone(edges: &[EdgeSample], quad: [[f64; 2]; 4], surface: &photocraft_r
     std::array::from_fn(|i| sums[i].map(|c| (c * 255.0 / weights[i].max(0.001)).round() as i16))
 }
 
+/// Interpolate the corner offsets across the texture, then convert it to display colours.
 fn motion_image(sample: &photocraft_compose::Buffer, tone: Tone, display: Option<&photocraft_engine::display_color::CanvasDisplay>) -> egui::ColorImage {
     if tone == [[0; 3]; 4] {
         return super::display::display_image(display, sample);
@@ -161,6 +165,8 @@ fn motion_image(sample: &photocraft_compose::Buffer, tone: Tone, display: Option
     super::display::display_image(display, &toned)
 }
 
+/// Build or update the moving preview for an eligible raster target.
+/// Reuse the sampled pixels while the document, layer, and display transform stay the same.
 fn motion_state(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, output: Option<u32>) -> Option<PatchMotion> {
     if app.session.active_index() != Some(idx)
         || !crate::retouch_ui::affinity_patch(app)
@@ -235,6 +241,7 @@ fn motion_state(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, output
     Some(PatchMotion { key, texture, sample, edges, tone, params, quad, last_move: time, moving: true })
 }
 
+/// Refresh the motion overlay and schedule the frame that starts healing after the pointer settles.
 pub(super) fn update_motion(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, output: Option<u32>) {
     let start = crate::gpu_canvas::now_ms();
     app.patch_motion = motion_state(app, ctx, idx, output);
@@ -248,6 +255,7 @@ pub(super) fn update_motion(app: &mut PhotocraftApp, ctx: &egui::Context, idx: u
     }
 }
 
+/// Draw the textured quad clipped to the canvas until the matching healed preview can replace it.
 pub(super) fn draw_motion(app: &PhotocraftApp, painter: &egui::Painter, xf: &super::ViewXform, doc: DocId) {
     let Some(m) = app.patch_motion.as_ref().filter(|m| m.key.0 == doc) else { return };
     let healed = app
@@ -290,6 +298,7 @@ pub(crate) struct PatchPreview {
 }
 
 impl PatchPreview {
+    /// Store the rendered document and retain recent damage bounds for incremental canvas refreshes.
     fn publish(&mut self, params: Value, layer: Option<LayerId>, result: Rendered) {
         self.params = Some(params);
         self.layer = layer;
@@ -304,10 +313,12 @@ impl PatchPreview {
     }
 }
 
+/// Convert a rendered preview to the display document while preserving its damage rectangle.
 fn display_result(doc: Document, damage: Rect) -> (Arc<Document>, Rect) {
     (Arc::new(photocraft_engine::mode_cmds::display_document(&doc).unwrap_or(doc)), damage)
 }
 
+/// Compare Patch direction and paint target independently of placement.
 fn same_target(a: &Value, b: &Value) -> bool {
     a["mode"] == b["mode"] && a["target"] == b["target"]
 }
@@ -381,6 +392,7 @@ fn drag_offset(app: &mut PhotocraftApp) -> Option<[i32; 2]> {
     Some(crate::retouch_ui::patch_offset(app, start, end))
 }
 
+/// Return the cursor-following offset while Affinity Patch has no active drag or placed box.
 pub(crate) fn hover_offset(app: &mut PhotocraftApp) -> Option<[i32; 2]> {
     if !crate::retouch_ui::affinity_patch(app) || app.drag.is_some() || crate::cam_transform::active(app) {
         return None;
@@ -389,6 +401,7 @@ pub(crate) fn hover_offset(app: &mut PhotocraftApp) -> Option<[i32; 2]> {
     crate::retouch_ui::affinity_offset(app, at)
 }
 
+/// Build preview parameters from the current Patch box, hover position, or classic drag.
 fn wanted(app: &mut PhotocraftApp) -> Option<Value> {
     if crate::retouch_ui::affinity_patch(app) {
         let place = if let Some(t) = app.ui.cam_transform.as_ref().filter(|t| t.patch.is_some()) {
@@ -409,6 +422,7 @@ fn wanted(app: &mut PhotocraftApp) -> Option<Value> {
     }
 }
 
+/// Map the original selection outline to the cursor-following Patch quad.
 pub(super) fn hover_map(app: &mut PhotocraftApp) -> Option<photocraft_algo::transform::Homography> {
     let offset = hover_offset(app)?;
     let place = crate::cam_transform::patch_placement(app, offset);
@@ -528,6 +542,7 @@ mod tests {
         d.layers[0].surface().unwrap().rgba(x, y)[1] < 0.5
     }
 
+    /// Drive the preview until the native worker publishes a result, with a bounded wait.
     fn wait_for_preview(app: &mut PhotocraftApp) -> Arc<Document> {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         loop {
@@ -540,6 +555,7 @@ mod tests {
         }
     }
 
+    /// Exercise the full Affinity placement lifecycle, including repeated placement and Undo.
     #[test]
     fn affinity_patch_previews_places_transforms_and_applies_on_outside_click() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
@@ -615,6 +631,7 @@ mod tests {
         assert!(doc(&app).selection.is_some() && red_at(&doc(&app), 96, 34) && !red_at(&doc(&app), 62, 65));
     }
 
+    /// Check that the transformed sample can follow the cursor closer to the canvas edge.
     #[test]
     fn affinity_source_clamps_the_transformed_sample_at_the_canvas_edge() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
@@ -628,6 +645,7 @@ mod tests {
         assert_eq!(crate::retouch_ui::affinity_offset(&mut app, [0.0, 32.0]), Some([-27, 0]));
     }
 
+    /// Check that pointer motion reuses the sample texture and delays the solve until it settles.
     #[test]
     fn moving_destination_patch_reuses_one_texture_and_defers_healing_until_rest() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
@@ -664,6 +682,7 @@ mod tests {
         wait_for_preview(&mut app);
     }
 
+    /// Check that classic drag shows a temporary heal and only commits it on release.
     #[test]
     fn dragging_the_patch_previews_the_heal_and_release_commits_it() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());

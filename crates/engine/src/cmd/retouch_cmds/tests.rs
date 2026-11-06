@@ -1073,6 +1073,7 @@ fn patch_follows_a_feathered_selection_and_a_mask_target() {
     s.execute("paint.patch", json!({"offset": [-30, 0], "target": "mask"})).unwrap();
 }
 
+/// Check that invalid offsets, transforms, and paint targets return errors.
 #[test]
 fn patch_fails_gracefully() {
     let mut s = session(64, 48, 8, "rgb");
@@ -1131,6 +1132,7 @@ fn patch_preview_matches_the_command_and_its_coarse_solve_is_close() {
     assert!(patch_preview(&s, &json!({"offset": [500, 0]}), 64, 1).is_err());
 }
 
+/// Check that both selection directions rotate the sample and that preview, commit, and Undo agree.
 #[test]
 fn transformed_patch_rotates_the_texture_in_both_directions() {
     for (mode, selection_x, offset) in [("destination", 8, 56), ("source", 64, -56)] {
@@ -1159,6 +1161,7 @@ fn transformed_patch_rotates_the_texture_in_both_directions() {
     }
 }
 
+/// Check that preview and commit enforce the same opt-in for clipping a transformed destination.
 #[test]
 fn transformed_patch_requires_opt_in_to_clip_the_destination() {
     let mut s = session(112, 64, 16, "rgb");
