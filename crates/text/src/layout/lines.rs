@@ -241,6 +241,7 @@ fn justify_line(out: &mut TextLayout, c0: usize, g0: usize, slack: f32) -> f32 {
 fn rotate_to_text_space(glyphs: &mut [PlacedGlyph], vinfo: &[VGlyph], baseline: f32) {
     for (g, v) in glyphs.iter_mut().zip(vinfo) {
         let (u, cross) = (g.x, g.y);
+        g.line_center = Some(u + v.advance / 2.0);
         if v.upright {
             g.x = -baseline - v.advance * 0.5;
             g.y = u + v.origin;
@@ -520,6 +521,7 @@ impl Para<'_> {
                 y: lc.baseline + g.y,
                 style: gr.style().brush.0,
                 orient: GlyphOrient::Horizontal,
+                line_center: None,
             });
             out.glyph_ranges.push(self.map_offset(source_range.start)..self.map_offset(source_range.end));
             if let Some(v) = &vm {

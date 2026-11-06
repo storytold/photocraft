@@ -89,12 +89,18 @@ impl Warp {
     /// one lap of capacity from this edge, including centred and right-aligned text whose
     /// coordinates start below zero. Open paths keep their existing endpoint clipping.
     pub fn on_path_with_text_start(shape: &TextShape, text_start: f64) -> Option<Warp> {
+        Self::on_path_oriented(shape, text_start, false)
+    }
+
+    /// Path text with its logical line start and orientation.
+    pub fn on_path_oriented(shape: &TextShape, text_start: f64, vertical: bool) -> Option<Warp> {
         if !text_start.is_finite() {
             return None;
         }
         let mut warp = Self::on_path(shape)?;
         if let Kind::Path(frame) = &mut warp.0 {
             frame.text_start = text_start;
+            frame.vertical = vertical;
         }
         Some(warp)
     }
@@ -221,6 +227,18 @@ impl PathGeometry {
         (p.0.is_finite() && p.1.is_finite() && t.0.is_finite() && t.1.is_finite()).then_some((p, t))
     }
 
+    /// Project to the nearest branch, breaking distance ties within 0.01 text-space pixels
+    /// by proximity to `previous`. Closed paths compare circular arc distance across the seam.
+    pub fn project_near(&self, x: f64, y: f64, previous: f64) -> Option<(f64, f64)> {
+        if !x.is_finite() || !y.is_finite() || !previous.is_finite() {
+            return None;
+        }
+        let arc = self.frame.project_near(x, y, previous);
+        let (p, t) = self.sample(arc)?;
+        let distance = (x - p.0) * -t.1 + (y - p.1) * t.0;
+        distance.is_finite().then_some((arc, distance))
+    }
+
     /// Project a point to arc length and signed distance on the left normal.
     pub fn project(&self, x: f64, y: f64) -> Option<(f64, f64)> {
         if !x.is_finite() || !y.is_finite() {
@@ -244,6 +262,7 @@ struct PathFrame {
     closed: bool,
     text_start: f64,
     range_length: Option<f64>,
+    vertical: bool,
 }
 
 impl PathFrame {
@@ -287,6 +306,7 @@ impl PathFrame {
             closed: path.closed,
             text_start: 0.0,
             range_length: end.map(|end| if end.is_finite() && end >= start { f64::from(end) - f64::from(start) } else { 0.0 }),
+            vertical: false,
         })
     }
 
@@ -294,8 +314,8 @@ impl PathFrame {
         self.cum.last().copied().unwrap_or(0.0)
     }
 
-    /// Arc length of the point on the flattened path nearest (`x`, `y`).
-    fn project(&self, x: f64, y: f64) -> f64 {
+    /// Distance and arc length of the point on the flattened path nearest (`x`, `y`).
+    fn project_with_dist(&self, x: f64, y: f64) -> (f64, f64) {
         let mut best = (f64::INFINITY, 0.0);
         for (i, w) in self.pts.windows(2).enumerate() {
             let [a, b] = [w[0], w[1]];
@@ -305,6 +325,39 @@ impl PathFrame {
             let d = (a.0 + dx * t - x).hypot(a.1 + dy * t - y);
             if d < best.0 {
                 best = (d, self.cum.get(i).copied().unwrap_or(0.0) + len2.sqrt() * t);
+            }
+        }
+        best
+    }
+
+    /// Arc length of the point on the flattened path nearest (`x`, `y`).
+    fn project(&self, x: f64, y: f64) -> f64 {
+        self.project_with_dist(x, y).1
+    }
+
+    fn project_near(&self, x: f64, y: f64, previous: f64) -> f64 {
+        let (min_d, nearest) = self.project_with_dist(x, y);
+        let limit = min_d + 0.01;
+        let length = self.length();
+        let mut best = (f64::INFINITY, nearest);
+        for (i, w) in self.pts.windows(2).enumerate() {
+            let [a, b] = [w[0], w[1]];
+            let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+            let len2 = dx * dx + dy * dy;
+            let t = if len2 > 0.0 { (((x - a.0) * dx + (y - a.1) * dy) / len2).clamp(0.0, 1.0) } else { 0.0 };
+            let d = (a.0 + dx * t - x).hypot(a.1 + dy * t - y);
+            if d <= limit {
+                let arc = self.cum.get(i).copied().unwrap_or(0.0) + len2.sqrt() * t;
+                let diff = (arc - previous).abs();
+                let continuity = if self.closed {
+                    let d = diff.rem_euclid(length);
+                    d.min(length - d)
+                } else {
+                    diff
+                };
+                if continuity < best.0 {
+                    best = (continuity, arc);
+                }
             }
         }
         best.1
@@ -323,8 +376,13 @@ impl PathFrame {
     }
 
     fn apply(&self, x: f64, y: f64) -> (f64, f64) {
-        let (p, t) = self.at(self.start + x);
-        (p.0 - t.1 * y, p.1 + t.0 * y)
+        if self.vertical {
+            let (p, t) = self.at(self.start + y);
+            (p.0 + t.1 * x, p.1 - t.0 * x)
+        } else {
+            let (p, t) = self.at(self.start + x);
+            (p.0 - t.1 * y, p.1 + t.0 * y)
+        }
     }
 
     /// The rigid map for a glyph centred at text-space `cx`; `None` outside the path.
@@ -345,7 +403,14 @@ impl PathFrame {
             return None;
         }
         let (p, t) = self.at(s);
-        Some([t.0, t.1, -t.1, t.0, p.0 - t.0 * cx, p.1 - t.1 * cx])
+        let m = [t.0, t.1, -t.1, t.0, p.0 - t.0 * cx, p.1 - t.1 * cx];
+        if self.vertical {
+            // Compose the rigid placement frame with the inverse rotation
+            // mapping text space (x, y) to canonical line space (y, -x).
+            Some([t.1, -t.0, t.0, t.1, m[4], m[5]])
+        } else {
+            Some(m)
+        }
     }
 }
 
@@ -370,6 +435,62 @@ mod tests {
             assert!(geometry.project(0.0, value).is_none());
         }
         assert!(PathGeometry::new(&Subpath::polyline(&[(1.0, 1.0), (1.0, 1.0)]), false).is_none());
+    }
+
+    #[test]
+    fn path_geometry_project_near_crossings_stay_on_branch() {
+        // Hourglass / bowtie shape with diagonal crossing at (50.0, 50.0).
+        let path = Subpath::polygon(&[(0.0, 0.0), (100.0, 100.0), (0.0, 100.0), (100.0, 0.0)]);
+        let geometry = PathGeometry::new(&path, false).unwrap();
+        // Diagonal 1 from (0, 0) to (100, 100) has arc ~70.71 at (50, 50).
+        // Diagonal 2 from (0, 100) to (100, 0) has arc ~312.13 at (50, 50).
+        let d1 = 50.0 * 2.0_f64.sqrt();
+        let d2 = 100.0 * 2.0_f64.sqrt() + 100.0 + 50.0 * 2.0_f64.sqrt();
+
+        // Approaching crossing along branch 1: stays on branch 1 even if perturbed slightly toward branch 2.
+        let near_b1 = geometry.project_near(50.005, 49.995, d1 - 1.0).unwrap();
+        assert!((near_b1.0 - d1).abs() < 0.1, "should stay on branch 1: {}", near_b1.0);
+
+        // Approaching crossing along branch 2: stays on branch 2 even if perturbed slightly toward branch 1.
+        let near_b2 = geometry.project_near(50.005, 50.005, d2 - 1.0).unwrap();
+        assert!((near_b2.0 - d2).abs() < 0.1, "should stay on branch 2: {}", near_b2.0);
+    }
+
+    #[test]
+    fn path_geometry_project_near_corners_seams_and_flips() {
+        // Rectangle: (0, 0) -> (100, 0) -> (100, 100) -> (0, 100) -> (0, 0). Length = 400.
+        let path = Subpath::polygon(&[(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)]);
+        let geometry = PathGeometry::new(&path, false).unwrap();
+
+        // Corner at (100.0, 0.0), arc = 100.0.
+        // Dragging around corner from top edge onto right edge.
+        let (arc, dist) = geometry.project_near(100.0, 5.0, 99.0).unwrap();
+        assert!((arc - 105.0).abs() < 1e-6);
+        assert!(dist.abs() < 1e-6);
+
+        // Dragging backwards around corner onto top edge.
+        let (arc, dist) = geometry.project_near(95.0, 0.0, 101.0).unwrap();
+        assert!((arc - 95.0).abs() < 1e-6);
+        assert!(dist.abs() < 1e-6);
+
+        // Closed seam at (0.0, 0.0): dragging forward past the seam.
+        let (arc, dist) = geometry.project_near(2.0, 0.0, 399.0).unwrap();
+        assert!((arc - 2.0).abs() < 1e-6);
+        assert!(dist.abs() < 1e-6);
+
+        // Closed seam: dragging backward before the seam.
+        let (arc, dist) = geometry.project_near(0.0, 2.0, 1.0).unwrap();
+        assert!((arc - 398.0).abs() < 1e-6);
+        assert!(dist.abs() < 1e-6);
+
+        // Flips: dragging perpendicular to curve (off-path) preserves arc length.
+        let (arc_above, dist_above) = geometry.project_near(50.0, -10.0, 50.0).unwrap();
+        assert!((arc_above - 50.0).abs() < 1e-6);
+        assert!((dist_above - -10.0).abs() < 1e-6);
+
+        let (arc_below, dist_below) = geometry.project_near(50.0, 10.0, 50.0).unwrap();
+        assert!((arc_below - 50.0).abs() < 1e-6);
+        assert!((dist_below - 10.0).abs() < 1e-6);
     }
 
     #[test]

@@ -119,8 +119,8 @@ fn is_bold(layout: &TextLayout, g: &PlacedGlyph) -> bool {
 /// Whether a path boundary hides any glyph with a drawable outline.
 /// Uses the same glyph centers and placement rules as rasterization.
 pub fn path_overflows(layout: &TextLayout, shape: &photocraft_doc::text::TextShape) -> bool {
-    let left = layout.bounds().map_or(0.0, |bounds| f64::from(bounds[0]));
-    let Some(warp) = Warp::on_path_with_text_start(shape, left) else { return false };
+    let left = layout.line_bounds().map_or(0.0, |bounds| f64::from(bounds[0]));
+    let Some(warp) = Warp::on_path_oriented(shape, left, layout.vertical) else { return false };
     layout.glyphs.iter().any(|glyph| glyph_is_placed(layout, glyph, None) && !glyph_is_placed(layout, glyph, Some(&warp)))
 }
 
@@ -251,9 +251,15 @@ fn draw(layout: &TextLayout, transform: &Xform, sink: &mut impl LineSink, only: 
     for d in decorations {
         match warp {
             Some(w) => {
-                let Some((x0, x1)) = w.clip_decoration(d.x0 as f64, d.x1 as f64) else { continue };
+                let (x0, y0, x1, y1) = if layout.vertical {
+                    let Some((y0, y1)) = w.clip_decoration(d.y0 as f64, d.y1 as f64) else { continue };
+                    (d.x0 as f64, y0, d.x1 as f64, y1)
+                } else {
+                    let Some((x0, x1)) = w.clip_decoration(d.x0 as f64, d.x1 as f64) else { continue };
+                    (x0, d.y0 as f64, x1, d.y1 as f64)
+                };
                 let mut ws = WarpSink { inner: &mut *sink, warp: w, post: *transform };
-                rect_to(&mut ws, &Xform::IDENTITY, x0, d.y0 as f64, x1, d.y1 as f64);
+                rect_to(&mut ws, &Xform::IDENTITY, x0, y0, x1, y1);
             }
             None => rect_to(sink, transform, d.x0 as f64, d.y0 as f64, d.x1 as f64, d.y1 as f64),
         }
@@ -298,6 +304,9 @@ fn glyph_xform(layout: &TextLayout, g: &PlacedGlyph, face_skew_deg: f32) -> Xfor
 
 /// The horizontal centre (text space) of a placed glyph: the pen position plus half its advance.
 fn glyph_center(layout: &TextLayout, g: &PlacedGlyph, font: &skrifa::FontRef, size_px: f32, coords: &[NormalizedCoord]) -> f64 {
+    if let Some(lc) = g.line_center {
+        return f64::from(lc);
+    }
     let hs = layout.styles.get(g.style as usize).map_or(1.0, |st| if st.horizontal_scale > 0.0 { st.horizontal_scale } else { 1.0 });
     let advance = match g.orient {
         GlyphOrient::Horizontal => font.glyph_metrics(Size::new(size_px), LocationRef::new(coords)).advance_width(GlyphId::new(g.id)).unwrap_or(0.0),
@@ -309,8 +318,8 @@ fn glyph_center(layout: &TextLayout, g: &PlacedGlyph, font: &skrifa::FontRef, si
 /// The deformation of a type layer: the path it runs along, or its Warp Text settings (None
 /// when neither applies).
 pub fn layout_deform(layout: &TextLayout, layer: &photocraft_doc::TextLayer) -> Option<Warp> {
-    let text_start = layout.bounds().map_or(0.0, |bounds| f64::from(bounds[0]));
-    Warp::on_path_with_text_start(&layer.shape, text_start).or_else(|| layout_warp(layout, layer.warp.as_ref()))
+    let text_start = layout.line_bounds().map_or(0.0, |bounds| f64::from(bounds[0]));
+    Warp::on_path_oriented(&layer.shape, text_start, layout.vertical).or_else(|| layout_warp(layout, layer.warp.as_ref()))
 }
 
 /// The warp to apply to `layout` (None when `warp` is absent, `warpNone` or flat).

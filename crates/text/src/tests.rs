@@ -3749,3 +3749,106 @@ fn path_decoration_draw_bounds_respect_explicit_ranges() {
         }
     }
 }
+
+#[test]
+fn vertical_path_range_alignment_renders_and_shifts_properly() {
+    use photocraft_doc::text::{Orientation, ParagraphStyle, TextAlign};
+    use photocraft_doc::vector::Subpath;
+    use photocraft_geom::Affine;
+
+    let mut engine = TextEngine::new();
+    let path = Subpath::polyline(&[(0.0, 0.0), (0.0, 500.0)]);
+    let span = 300.0_f32;
+    let start = 50.0_f32;
+
+    let mut rects = Vec::new();
+    for align in [TextAlign::Left, TextAlign::Center, TextAlign::Right] {
+        let mut text = point("TEST", 20.0);
+        text.orientation = Orientation::Vertical;
+        text.shape = TextShape::Path { path: path.clone(), start, end: Some(start + span), flip: false };
+        text = with_para(text, ParagraphStyle { align, ..Default::default() });
+        let layout = engine.layout(&text, 72.0);
+        let warp = crate::render::layout_deform(&layout, &text);
+        assert!(warp.is_some(), "warp should be constructed");
+        let rect = crate::render::ink_rect_warped(&layout, &Affine::IDENTITY, warp.as_ref());
+        assert!(!rect.is_empty(), "vertical text must render for alignment {align:?}");
+        rects.push((align, rect));
+    }
+
+    let left_rect = rects[0].1;
+    let center_rect = rects[1].1;
+    let right_rect = rects[2].1;
+    assert!(left_rect.y0 < center_rect.y0, "center text should be further along the path than left");
+    assert!(center_rect.y0 < right_rect.y0, "right text should be further along the path than center");
+}
+
+#[test]
+fn vertical_path_flip_reverses_placement() {
+    use photocraft_doc::text::Orientation;
+    use photocraft_doc::vector::Subpath;
+    use photocraft_geom::Affine;
+
+    let mut engine = TextEngine::new();
+    let path = Subpath::polyline(&[(0.0, 0.0), (0.0, 500.0)]);
+
+    let mut text_normal = point("FLIP", 20.0);
+    text_normal.orientation = Orientation::Vertical;
+    text_normal.shape = TextShape::Path { path: path.clone(), start: 50.0, end: Some(350.0), flip: false };
+    let l_normal = engine.layout(&text_normal, 72.0);
+    let warp_normal = crate::render::layout_deform(&l_normal, &text_normal);
+    let rect_normal = crate::render::ink_rect_warped(&l_normal, &Affine::IDENTITY, warp_normal.as_ref());
+    assert!(!rect_normal.is_empty());
+
+    let mut text_flipped = point("FLIP", 20.0);
+    text_flipped.orientation = Orientation::Vertical;
+    text_flipped.shape = TextShape::Path { path: path.clone(), start: 50.0, end: Some(350.0), flip: true };
+    let l_flipped = engine.layout(&text_flipped, 72.0);
+    let warp_flipped = crate::render::layout_deform(&l_flipped, &text_flipped);
+    let rect_flipped = crate::render::ink_rect_warped(&l_flipped, &Affine::IDENTITY, warp_flipped.as_ref());
+    assert!(!rect_flipped.is_empty());
+
+    assert!(rect_flipped.y0 > rect_normal.y0, "flipped text must start from opposite path end");
+}
+
+#[test]
+fn vertical_path_seam_and_caret_projection() {
+    use photocraft_doc::text::Orientation;
+    use photocraft_doc::vector::Subpath;
+    use photocraft_geom::Affine;
+
+    let mut engine = TextEngine::new();
+    let path = Subpath::polygon(&[(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)]);
+    let start = 390.0_f32;
+    let mut text = point("SEAM", 12.0);
+    text.orientation = Orientation::Vertical;
+    text.shape = TextShape::Path { path: path.clone(), start, end: Some(start + 80.0), flip: false };
+    let layout = engine.layout(&text, 72.0);
+    let warp = crate::render::layout_deform(&layout, &text).unwrap();
+    let rect = crate::render::ink_rect_warped(&layout, &Affine::IDENTITY, Some(&warp));
+    assert!(!rect.is_empty(), "vertical text across seam must render");
+
+    let text_end = layout.line_bounds().map_or(0.0, |b| f64::from(b[2]));
+    let px = 10.0;
+    let py = 0.0;
+    let projected_x = warp.path_text_x_near_text(px, py, text_end).unwrap();
+    assert!(projected_x.is_finite());
+    let (tx, ty) = layout.to_text(projected_x as f32, -1.0);
+    let (char_idx, _) = crate::hit_char(&layout, &text.text, tx, ty);
+    assert!(char_idx <= text.text.len());
+}
+
+#[test]
+fn vertical_path_decoration_clipping_and_warp() {
+    use crate::layout::DecorationRect;
+    use photocraft_doc::vector::Subpath;
+    use photocraft_geom::Affine;
+
+    let path = Subpath::polyline(&[(0.0, 0.0), (0.0, 200.0)]);
+    let shape = TextShape::Path { path, start: 20.0, end: Some(60.0), flip: false };
+    let warp = crate::warp::Warp::on_path_oriented(&shape, 0.0, true).unwrap();
+    let layout =
+        crate::TextLayout { vertical: true, decorations: vec![DecorationRect { x0: -5.0, x1: -3.0, y0: -10.0, y1: 50.0, style: 0 }], ..Default::default() };
+    let rect = crate::render::ink_rect_warped(&layout, &Affine::IDENTITY, Some(&warp));
+    assert!(!rect.is_empty(), "clipped vertical decoration must draw");
+    assert!(rect.y0 >= 19 && rect.y1 <= 61, "decoration bounds should be within clipped range: {rect:?}");
+}

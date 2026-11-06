@@ -323,7 +323,7 @@ fn punctuation_squeeze_removes_half_em_between_marks() {
     let mut x = 0.0;
     for (i, (b, c)) in text.char_indices().enumerate() {
         clusters.push(ClusterInfo { range: b..b + c.len_utf8(), x, advance: 40.0, line: 0, rtl: false });
-        glyphs.push(crate::PlacedGlyph { face: 0, id: i as u32 + 1, x, y: 0.0, style: 0, orient: GlyphOrient::Horizontal });
+        glyphs.push(crate::PlacedGlyph { face: 0, id: i as u32 + 1, x, y: 0.0, style: 0, orient: GlyphOrient::Horizontal, line_center: None });
         x += 40.0;
     }
     let cut = squeeze_punctuation(text, &mut clusters, &mut glyphs);

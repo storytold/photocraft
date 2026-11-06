@@ -339,7 +339,7 @@ impl Drag {
 
     fn update(&mut self, x: f64, y: f64) {
         let point = self.inverse.apply(Point::new(x, y));
-        let Some((arc, distance)) = self.geometry.project(point.x, point.y) else { return };
+        let Some((arc, distance)) = self.geometry.project_near(point.x, point.y, self.previous) else { return };
         let length = self.geometry.length();
         if let Some(((px, py), (tx, ty))) = self.geometry.sample(arc) {
             let a = self.transform.apply(Point::new(px, py));
@@ -964,10 +964,40 @@ mod tests {
         let ends = markers(active_text(&app).unwrap(), &xf).unwrap();
         let tip = marker_tip(ends[1].0, ends[1].1, 1);
         let point = xf.to_doc(tip);
-        down(&mut app, f64::from(point[0]), f64::from(point[1]));
+        down(&mut app, point[0], point[1]);
         assert_eq!(app.ui.type_path_drag.as_ref().unwrap().endpoint, Some(1));
-        up(&mut app, f64::from(point[0]), f64::from(point[1]));
+        up(&mut app, point[0], point[1]);
         assert_eq!(shape(&app), before);
         assert_eq!(steps(&app), count);
+    }
+
+    #[test]
+    fn pointer_crossing_gesture_stays_on_branch() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.session.execute("file.new", json!({"width": 200, "height": 200})).unwrap();
+        app.sync_views();
+        app.ui.tool = Tool::PathSelection;
+        app.run("path.set", json!({"name":"work", "path":{"subpaths":[{"closed":true,"knots":[[20,20],[180,180],[20,180],[180,20]]}]}})).unwrap();
+        app.ui.selected_path = Some("work".into());
+        app.run("type.create", json!({"text":"ABC", "x":20, "y":20})).unwrap();
+        app.run("type.attachToPath", json!({"start":20})).unwrap();
+        app.run("type.setPathPlacement", json!({"end":80})).unwrap();
+        app.ui.views[0].zoom = 1.0;
+
+        let xf = ViewXform::active(&app).unwrap();
+        let ends = markers(active_text(&app).unwrap(), &xf).unwrap();
+        let tip = marker_tip(ends[1].0, ends[1].1, 1);
+        let from = xf.to_doc(tip);
+        assert!(pointer_with_view(&mut app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 }, Some(&xf)));
+        assert_eq!(app.ui.type_path_drag.as_ref().unwrap().endpoint, Some(1));
+        assert!(pointer_with_view(&mut app, ToolEvent::Move { x: 100.0, y: 100.0, pressure: 1.0 }, Some(&xf)));
+        assert!(pointer_with_view(&mut app, ToolEvent::Move { x: 140.0, y: 140.0, pressure: 1.0 }, Some(&xf)));
+        assert!(pointer_with_view(&mut app, ToolEvent::Up { x: 140.0, y: 140.0 }, Some(&xf)));
+
+        let (start, end, flip) = placement(&app);
+        assert_eq!(start, 20.0);
+        let end = end.expect("explicit end");
+        assert!((end - 169.71).abs() < 1.0, "end should stay on branch: {end}");
+        assert!(!flip);
     }
 }

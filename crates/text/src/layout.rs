@@ -94,6 +94,8 @@ pub struct PlacedGlyph {
     pub style: u32,
     /// Orientation of the outline (vertical type).
     pub orient: GlyphOrient,
+    /// Optional line-space glyph center before rotation into text space.
+    pub line_center: Option<f32>,
 }
 
 /// Underline/strikethrough rectangle (text space px).
