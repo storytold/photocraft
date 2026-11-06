@@ -350,7 +350,7 @@ fn a_run_of_arrow_nudges_is_one_history_step_zoomed_out() {
     assert!(press_at(&mut app, egui::Key::ArrowDown, egui::Modifiers::SHIFT, 7.6));
     assert_eq!(bounds(&app, id), photocraft_geom::Rect::new(32, 18, 48, 34));
     assert_eq!(history(&app), h0 + 1, "thirteen presses, one state");
-    assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Move"));
+    assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Nudge"));
     assert!(app.session.undo());
     assert_eq!(bounds(&app, id), photocraft_geom::Rect::new(8, 8, 24, 24), "one Undo takes back the run");
     assert!(app.session.redo());
