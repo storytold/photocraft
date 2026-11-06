@@ -112,6 +112,34 @@ fn shape_blur_admission_counts_what_each_worker_holds() {
     assert!(pool.install(|| working_bytes(&wide, big, big, 4)) > 8 << 30);
 }
 
+/// Issue #11493 on a many-core host: the engine admits the halo-inflated output area (7002 x 5002
+/// for radius 500 on 6000 x 4000, 35 tiles), but the run clips it to the canvas first and only
+/// processes 24 tiles. With 64 threads the admission must count those 24 workers, so the
+/// repro's estimate fits the default 8 GiB ceiling with the CLI's ~416 MB resident set taken off,
+/// whatever the CI host's core count. Runs that really are too big are still refused.
+#[test]
+fn shape_blur_admission_counts_the_tiles_the_run_processes() {
+    let pool = rayon::ThreadPoolBuilder::new().num_threads(64).build().expect("thread pool");
+    let canvas = Rect::new(0, 0, 6000, 4000);
+    let plain = FilterParams::ShapeBlur { radius: 500.0, shape: BlurShape::Heart };
+    let area = output_area(&plain, canvas, canvas, None);
+    assert_eq!((area.width(), area.height()), (7002, 5002));
+    let Halo::Radius(reach) = plain.halo_for(canvas) else { panic!("Shape Blur has a radius halo") };
+    let tile = auto_tile(&plain, canvas) as u64;
+    let window = tile + 2 * reach as u64;
+    let per_worker = (window * window + tile * tile) * 16 + ((window + 1) * (window + 1) + tile) * 4 * 8;
+    let results = (RESULT_BUDGET as u64) * 3;
+    let estimate = pool.install(|| working_bytes_in(&plain, area, canvas, 4, canvas));
+    assert_eq!(estimate, results + per_worker * 24);
+    assert!(estimate < (8u64 << 30) - 416_000_000, "{estimate}");
+    // Unclipped, the same run would be charged 35 workers and refused.
+    assert_eq!(pool.install(|| working_bytes(&plain, area, canvas, 4)), results + per_worker * 35);
+    // Radius 1000 at 8 channels is still far over a 1 GiB policy.
+    let wide = FilterParams::ShapeBlur { radius: 1000.0, shape: BlurShape::Circle };
+    let wide_area = output_area(&wide, canvas, canvas, None);
+    assert!(pool.install(|| working_bytes_in(&wide, wide_area, canvas, 8, canvas)) > 1 << 30);
+}
+
 fn fmt(s: SampleType) -> PixelFormat {
     PixelFormat::new(ColorMode::Rgb, s, true)
 }

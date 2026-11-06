@@ -1035,6 +1035,13 @@ fn auto_tile(params: &FilterParams, bounds: Rect) -> i32 {
     }
 }
 
+/// [`working_bytes`] for a run through [`apply_in`] / [`apply_in_with`]: they clip `area` to
+/// `extent` before tiling, so admission counts only the tiles (and workers) the run really
+/// processes, not the halo-inflated [`output_area`] around the canvas (#11493).
+pub fn working_bytes_in(params: &FilterParams, area: Rect, bounds: Rect, channels: usize, extent: Rect) -> u64 {
+    working_bytes(params, area.intersect(&extent), bounds, channels)
+}
+
 /// Conservative transient allocation estimate for filter admission. Output tiles remain in
 /// the paged store; whole-image kernels must admit their float input before reading it.
 pub fn working_bytes(params: &FilterParams, area: Rect, bounds: Rect, channels: usize) -> u64 {
