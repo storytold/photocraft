@@ -114,6 +114,31 @@ fn the_shell_mirrors_in_a_right_to_left_ui() {
     }
 }
 
+/// Choosing a right-to-left catalog (not just forcing the direction) mirrors the shell, and the
+/// shell's fonts draw its letters; English mirrors back. Panel interiors and dialogs stay
+/// left-to-right for now (module docs), so only the dock side is checked.
+#[test]
+fn hebrew_and_urdu_mirror_the_shell_and_draw_their_letters() {
+    let _lang = i18n::language_scope(Lang::EN);
+    for code in ["he", "ur"] {
+        let lang = Lang::from_code(code).expect("registered language");
+        let mut h = harness();
+        h.state_mut().run("prefs.set", json!({"path": "interface.language", "value": code})).expect("choose language");
+        h.run_steps(4);
+        assert_eq!(i18n::current(), lang);
+        assert!(is_rtl(), "{code} draws right-to-left");
+        assert!(dock_x(&h) < 600.0, "{code}: the dock moves to the left");
+        for label in ["File", "Help", "Layers"] {
+            let text = i18n::tr(lang, label);
+            assert!(text.chars().any(|c| !c.is_ascii()), "{code}: {label} is translated");
+            assert!(h.ctx.fonts_mut(|f| f.has_glyphs(&egui::FontId::proportional(12.0), text)), "{code}: {text} has glyphs");
+        }
+        h.state_mut().run("prefs.set", json!({"path": "interface.language", "value": "en"})).expect("back to English");
+        h.run_steps(4);
+        assert!(!is_rtl() && dock_x(&h) > 600.0, "{code} -> en: the shell mirrors back");
+    }
+}
+
 #[test]
 fn arrow_keys_step_through_the_menu_bar_in_screen_order() {
     let _lang = i18n::language_scope(Lang::EN);

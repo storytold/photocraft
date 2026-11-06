@@ -27,12 +27,15 @@ pub fn keys(ui: &mut Ui, id: Id, current: Option<usize>, labels: &[&str]) -> Opt
     let pass = ui.ctx().cumulative_pass_nr();
     ui.data_mut(|d| d.insert_temp(open_id(), pass));
     let lang = crate::i18n::current();
-    let key = id.with("type-ahead").with(lang.code());
-    // A list opened anew starts with no letters typed.
+    // One entry per list, tagged with the language its letters were typed in: a prefix typed in
+    // another language never carries over, however quickly the language comes back.
+    let key = id.with("type-ahead");
+    // A list opened anew starts with no letters typed, and so does a frame in another language.
     let shown_id = key.with("pass");
     ui.data_mut(|d| {
-        if d.get_temp::<u64>(shown_id).is_none_or(|seen| seen.saturating_add(2) < pass) {
-            d.remove::<(String, f64)>(key);
+        let other_language = d.get_temp::<(String, f64, String)>(key).is_some_and(|(_, _, typed_in)| typed_in != lang.code());
+        if other_language || d.get_temp::<u64>(shown_id).is_none_or(|seen| seen.saturating_add(2) < pass) {
+            d.remove::<(String, f64, String)>(key);
         }
         d.insert_temp(shown_id, pass);
     });
@@ -53,7 +56,7 @@ pub fn keys(ui: &mut Ui, id: Id, current: Option<usize>, labels: &[&str]) -> Opt
     if typed.is_empty() {
         return None;
     }
-    let (mut prefix, last) = ui.data(|d| d.get_temp::<(String, f64)>(key)).unwrap_or_default();
+    let (mut prefix, last, _) = ui.data(|d| d.get_temp::<(String, f64, String)>(key)).unwrap_or_default();
     // A pause (or a clock that went backwards) starts over.
     if !(now >= last && now - last <= PAUSE) {
         prefix.clear();
@@ -78,7 +81,7 @@ pub fn keys(ui: &mut Ui, id: Id, current: Option<usize>, labels: &[&str]) -> Opt
         }
         pick = found.or(pick);
     }
-    ui.data_mut(|d| d.insert_temp(key, (prefix, now)));
+    ui.data_mut(|d| d.insert_temp(key, (prefix, now, lang.code().to_owned())));
     pick
 }
 
@@ -193,6 +196,37 @@ mod tests {
         type_key(&h, egui::Key::M, "m");
         h.run();
         assert_eq!(*h.state(), 3);
+    }
+
+    /// Letters typed before the language changed never extend a prefix typed after it, even when
+    /// the language comes back within the pause.
+    #[test]
+    fn a_language_change_forgets_the_letters_typed_before() {
+        use egui::accesskit::Role;
+        use egui_kittest::{Harness, kittest::Queryable};
+        let en = crate::i18n::Lang::EN;
+        let de = crate::i18n::Lang::from_code("de").unwrap();
+        let mut h = Harness::builder().with_size(egui::vec2(300.0, 400.0)).build_ui_state(
+            |ui, (selected, lang): &mut (usize, crate::i18n::Lang)| {
+                crate::i18n::with_language(*lang, || {
+                    let options = [(0, "Normal"), (1, "Dissolve"), (2, "Darken")];
+                    crate::widgets::dropdown(ui, "lang-switch", "Mode", selected, &options, 120.0);
+                });
+            },
+            (0, en),
+        );
+        h.get_by_role(Role::ComboBox).click();
+        h.run();
+        type_key(&h, egui::Key::D, "d");
+        h.run();
+        assert_eq!(h.state().0, 1);
+        h.state_mut().1 = de;
+        h.step();
+        h.state_mut().1 = en;
+        h.step();
+        type_key(&h, egui::Key::A, "a");
+        h.run();
+        assert_eq!(h.state().0, 1, "a alone picks nothing; the d typed before the change is gone (da would be Darken)");
     }
 
     #[test]

@@ -81,6 +81,8 @@ fn azerbaijani_draw_after_switching_and_restore_after_restart() {
             code
         );
         drop(h);
+        // The restarted shell, not the old one's drawing language, must bring Azerbaijani back.
+        set_current(Lang::EN);
         let services = Services { load_prefs: Some(Box::new(move || saved.borrow().clone())), ..Default::default() };
         let restarted = harness_with_services(services);
         assert_eq!(restarted.state().session.prefs().interface.language, code);
