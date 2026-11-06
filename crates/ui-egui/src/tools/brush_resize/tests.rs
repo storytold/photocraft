@@ -182,6 +182,30 @@ fn alt_right_drag_resizes_with_the_readout_and_never_paints() {
     }
 }
 
+/// #11702: the Diameter/Hardness readout stays beside the circle's centre while the drag resizes
+/// the brush, as in Photoshop, instead of running off with the pointer.
+#[test]
+fn the_readout_stays_beside_the_anchor_while_the_pointer_moves() {
+    let mut a = app(Tool::Brush);
+    a.sync_views();
+    let mut h = canvas(a);
+    let c = h.state().last_canvas_rect.center();
+    h.event(egui::Event::ModifiersChanged(Modifiers::ALT));
+    h.event(egui::Event::PointerMoved(c));
+    h.run_steps(1);
+    button(&mut h, c, PointerButton::Secondary, true, Modifiers::ALT);
+    for step in 1..=6 {
+        h.event(egui::Event::PointerMoved(c + vec2(12.0, 7.0) * step as f32));
+        h.run_steps(1);
+        let rect = h.ctx.memory(|m| m.area_rect(egui::Id::unique("brush-resize-readout"))).expect("the readout shows");
+        // egui lays a new area out unseen in its first frame; it is placed from the next one.
+        if step > 1 {
+            assert_eq!(rect.min, c + vec2(16.0, 18.0), "step {step}: beside the anchor, not the pointer");
+        }
+    }
+    button(&mut h, c + vec2(72.0, 42.0), PointerButton::Secondary, false, Modifiers::ALT);
+}
+
 /// Alt-right dragging changes tip size without loading paint or touching document history.
 #[test]
 fn mixer_alt_right_drag_resizes_without_sampling_or_painting() {
