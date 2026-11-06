@@ -61,6 +61,9 @@ fn tool_keys_skip_tools_hidden_from_the_toolbar() {
     press_key(&mut app, &ctx, Key::G, Modifiers::SHIFT);
     assert_eq!(app.ui.tool, Tool::PaintBucket);
     // A tool remembered from before it was hidden does not come back.
+    app.ui.tool = Tool::PolygonLasso;
+    press_key(&mut app, &ctx, Key::L, Modifiers::NONE);
+    assert_eq!(app.ui.group_tool('L'), Some(Tool::PolygonLasso));
     app.session.edit_prefs(|p| p.toolbar.hidden.push("PolygonLasso".to_string()));
     app.ui.tool = Tool::Move;
     press_key(&mut app, &ctx, Key::L, Modifiers::NONE);
