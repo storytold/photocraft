@@ -2678,6 +2678,22 @@ fn live_clone_from_another_document_matches_the_commit() {
 }
 
 #[test]
+fn live_clone_rejects_a_source_document_changed_during_the_stroke() {
+    let mut s = two_documents(8, texture, |_, _| [0.1, 0.2, 0.3, 1.0], [12, 12]);
+    let params = json!({"points": [[30, 22], [38, 26]], "size": 10, "hardness": 60, "opacity": 80});
+    let live = LiveRetouch::begin(&s, "paint.cloneStamp", &params).unwrap();
+
+    assert!(s.set_active(0));
+    s.execute("paint.pencil", json!({"points": [[12, 12]], "size": 4, "color": "#ff0000"})).unwrap();
+    assert!(s.set_active(1));
+
+    let error = s.offer_live_retouch(live).unwrap_err();
+    assert!(error.to_string().contains("source document changed"), "{error}");
+    let result = s.execute("paint.cloneStamp", params).unwrap();
+    assert!(result.get("fromLive").is_none(), "the stale live pixels must not be committed");
+}
+
+#[test]
 fn clone_preview_reads_another_document() {
     use crate::presets::clone_source::{Mapping, SourceDoc};
     let s = two_documents(8, ramp, |_, _| [0.0, 0.0, 1.0, 1.0], [10, 12]);

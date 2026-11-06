@@ -16,6 +16,7 @@ pub(super) enum CloneFrom {
     Other {
         doc: std::sync::Arc<Document>,
         layer: Option<LayerId>,
+        revision: u64,
     },
 }
 
@@ -31,7 +32,7 @@ pub(super) fn clone_from(s: &Session, map: &crate::presets::clone_source::Mappin
         .find(|st| st.doc.id == src.id)
         .ok_or_else(|| bad(cmd, "the clone source's document was closed: set a new source (Alt-click, or cloneSource.set)"))?;
     let layer = src.layer.filter(|l| st.doc.layer(*l).is_some()).or(st.active_layer);
-    Ok(CloneFrom::Other { doc: st.doc.clone(), layer })
+    Ok(CloneFrom::Other { doc: st.doc.clone(), layer, revision: st.revision })
 }
 
 /// Pixels of `rect` in another document, in the painted surface's format `fmt`.
@@ -94,10 +95,10 @@ pub(super) fn clone_sample(
     let read = |rect| match from {
         CloneFrom::Here if wrap => periodic::sample(pre, id, surf, which, rect, cmd),
         CloneFrom::Here => Ok(sample(pre, id, surf, which, rect)),
-        CloneFrom::Other { doc, layer } if wrap => {
+        CloneFrom::Other { doc, layer, .. } if wrap => {
             periodic::sample_with(doc.bounds(), fmt.channels(), rect, cmd, |r| sample_other(doc, *layer, which, r, fmt, cmd))
         }
-        CloneFrom::Other { doc, layer } => sample_other(doc, *layer, which, rect, fmt, cmd),
+        CloneFrom::Other { doc, layer, .. } => sample_other(doc, *layer, which, rect, fmt, cmd),
     };
     if map.is_translation() {
         let off = map.offset();
@@ -359,10 +360,19 @@ impl LiveRetouch {
 
     /// The finished stroke as its commit would take it over ([`Session::offer_live_retouch`]).
     /// Only the Clone Stamp and History Brush draw what they commit (the Healing Brush blends on
-    /// release), and only while the brush, layer and clone source are still the ones the stroke
-    /// started with: the document revision doesn't cover those.
+    /// release), and only while the brush, layer, clone mapping and source document revision are
+    /// still the ones the stroke started with.
     pub(crate) fn into_commit(mut self, s: &Session) -> Result<crate::brush_cmds::LiveCommit> {
         let (stroke, id) = parse_brush(s, &self.params, &self.cmd)?;
+        let source_revision_unchanged = match &self.paint {
+            LivePaint::Clone { from: CloneFrom::Other { doc, revision, .. }, .. } => {
+                s.documents().iter().any(|st| st.doc.id == doc.id && st.revision == *revision)
+            }
+            _ => true,
+        };
+        if !source_revision_unchanged {
+            return Err(bad(&self.cmd, "the clone source document changed during the stroke"));
+        }
         let source_unchanged = match &self.paint {
             LivePaint::Clone { map, .. } if self.cmd == "paint.cloneStamp" => {
                 let f = stroke.points.first().ok_or_else(|| bad(&self.cmd, "`points` is empty"))?;
