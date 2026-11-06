@@ -38,16 +38,21 @@ pub(crate) fn window(app: &PhotocraftApp, dialog: u64, ui: &mut egui::Ui, f: &mu
     let Some(st) = app.session.documents().get(idx) else { return };
     let (doc_id, revision) = (st.doc.id, st.revision);
 
-    // The filtered proxy the canvas already computed for this dialog, when there is one. Matching
-    // the dialog keeps a stacked dialog from showing another's preview; the Preview checkbox still
-    // decides whether the filtered result (rather than the original) is shown.
-    let preview_on = f.get("__preview").and_then(Value::as_bool) == Some(true);
+    // Share the computed result, not the canvas checkbox. A drag may keep old parameters and
+    // factor, but never a retired/committing frame or one for another source or target.
     let filtered: Option<(FilterPreviewKey, std::sync::Arc<Document>)> = app.filter_preview.as_ref().and_then(|p| {
         // An edited smart filter previews as `layer.smartFilter.setParams` (#6324).
         let previewed = crate::smart_ui::preview_command(f, &cmd);
-        (preview_on && p.key.dialog == dialog && p.key.doc == doc_id && p.key.command == previewed)
-            .then(|| p.result.clone().map(|r| (p.key.clone(), r)))
-            .flatten()
+        (!p.committing
+            && p.key.dialog == dialog
+            && p.key.doc == doc_id
+            && p.key.revision == revision
+            && p.key.active == st.active_layer
+            && p.key.target == st.channel_view.target
+            && p.key.command == previewed
+            && f.get("__smartFilter").is_none_or(|target| crate::smart_filter_dialog::validate_target(app, target).is_ok()))
+        .then(|| p.result.clone().map(|r| (p.key.clone(), r)))
+        .flatten()
     });
     // The proxy factor the preview runs at (the filtered key's when it exists, else the request's).
     // The fallback must be the factor the canvas will ask for, not the document's own: since #6326
@@ -158,6 +163,12 @@ const ZOOM_STEPS: [f32; 7] = [0.125, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0];
 /// their spacing. `0` when the dialog has no preview (so the caller reserves nothing).
 pub(crate) fn reserved_height(f: &Map<String, Value>) -> f32 {
     if shows(f) { PREVIEW_H + 32.0 } else { 0.0 }
+}
+
+/// Whether this dialog needs the shared preview result, independently of canvas presentation.
+/// Keep the producer and logic-phase worker cleanup on the same demand policy.
+pub(crate) fn demanded(f: &Map<String, Value>) -> bool {
+    f.get("__preview").and_then(Value::as_bool) == Some(true) || shows(f)
 }
 
 /// Whether the dialog with fields `f` gets the preview window: Filter menu dialogs with a Preview

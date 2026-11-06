@@ -41,9 +41,12 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
         return None;
     }
     let d = app.ui.dialogs.iter().find(|d| d.fields.contains_key("__filter"))?;
-    if d.fields.get("__preview").and_then(serde_json::Value::as_bool) != Some(true) {
+    // Computing the shared result is independent of showing it on the canvas (#11560).
+    // Only dialogs which actually own a mini keep demanding work while Preview is off.
+    if !crate::filter_preview_ui::demanded(&d.fields) {
         return None;
     }
+    let preview_on = d.fields.get("__preview").and_then(serde_json::Value::as_bool) == Some(true);
     let cmd = d.fields.get("__command")?.as_str()?.to_string();
     // Previews edit what the command will: a targeted layer mask included (#780).
     let (cmd, mut params) = if d.fields.contains_key("__smartFilter") {
@@ -137,6 +140,10 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
         if app.filter_preview_worker.busy() {
             ctx.request_repaint_after(std::time::Duration::from_millis(16));
         }
+        // Poll, publish and schedule for the mini even when the canvas must stay original.
+        if !preview_on {
+            return None;
+        }
         let preview = app.filter_preview.as_ref()?;
         // Keep the last preview during a drag, but never one from another source or dialog. It is
         // drawn at its own factor, so a drag that changes the factor keeps it too (#10474).
@@ -170,6 +177,10 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
             (std::sync::Arc::new(doc), buffer)
         });
         publish_filter_preview(app, idx, request, computed, crate::gpu_canvas::now_ms() - t0);
+    }
+    // The return value controls GPU, CPU and channel canvas substitution, not mini demand.
+    if !preview_on {
+        return None;
     }
     let preview = app.filter_preview.as_ref()?;
     let result = preview.result.as_ref()?;
