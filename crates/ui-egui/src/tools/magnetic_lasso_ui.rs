@@ -55,6 +55,8 @@ pub struct Runtime {
     source: Option<EdgeSource>,
     /// Pointer moves were batched (`PhotocraftApp::defer_live_stroke`): trace once at the end.
     pending: bool,
+    /// The mouse button is down (pressed in this tool, not yet released): points fasten closer.
+    held: bool,
 }
 
 /// Detection settings from the options bar, for an event with pen `pressure`.
@@ -68,12 +70,16 @@ fn settings(app: &PhotocraftApp, pressure: f32) -> Settings {
     Settings::new(width, o.magnetic_contrast / 100.0)
 }
 
-/// How far the border runs before a point fastens by itself (document px): 8 screen points at
-/// Frequency 100, 98 at 0, 47 at the default 57.
-fn spacing(app: &PhotocraftApp) -> f64 {
+/// How far the border runs before a point fastens by itself (document px), as the reference
+/// application measures it (#11687). With the button held that is `floor(40 - 0.35 x Frequency)`
+/// screen points: 40 at Frequency 0, 20 at the default 57, 5 at 100. With the button up it is four
+/// times that plus 4: 164, 84 and 24. It stays in screen points at any zoom.
+fn spacing(app: &PhotocraftApp, held: bool) -> f64 {
     let f = app.ui.tool_options.magnetic_frequency;
     let f = if f.is_finite() { f64::from(f.clamp(0.0, 100.0)) } else { 57.0 };
-    (8.0 + (100.0 - f) * 0.9) / f64::from(app.point_zoom().max(0.01))
+    let stored = (40.0 - 0.35 * f).floor();
+    let screen = if held { stored } else { 4.0 * stored + 4.0 };
+    screen / f64::from(app.point_zoom().max(0.01))
 }
 
 /// Within this distance of the first point (document px), a click closes the border.
@@ -109,9 +115,15 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool 
         return false;
     }
     match ev {
-        ToolEvent::Down { x, y, pressure } if x.is_finite() && y.is_finite() => down(app, [x, y], pressure, mods),
+        ToolEvent::Down { x, y, pressure } if x.is_finite() && y.is_finite() => {
+            down(app, [x, y], pressure, mods);
+            app.magnetic.held = true;
+        }
         ToolEvent::Move { x, y, pressure } if x.is_finite() && y.is_finite() => moved(app, [x, y], pressure),
-        ToolEvent::Up { .. } => end_freehand(app),
+        ToolEvent::Up { .. } => {
+            app.magnetic.held = false;
+            end_freehand(app);
+        }
         _ => {}
     }
     true
@@ -175,7 +187,7 @@ fn moved(app: &mut PhotocraftApp, p: [f64; 2], pressure: f32) {
         return;
     }
     let s = settings(app, pressure);
-    let step = (spacing(app) / 2.0).max(1.0);
+    let step = (spacing(app, app.magnetic.held) / 2.0).max(1.0);
     let last = app.ui.magnetic.trail.last().copied().unwrap_or(p);
     // A long jump (a fast flick, automation) is walked in steps, so points keep fastening along it.
     let n = ((dist(last, p) / step).ceil() as usize).clamp(1, 256);
@@ -217,7 +229,7 @@ fn extend_trail(app: &mut PhotocraftApp, q: [f64; 2], s: Settings) {
 fn follow(app: &mut PhotocraftApp, q: [f64; 2], s: Settings, fasten: bool) {
     extend_trail(app, q, s);
     let target = snap(app, q, s);
-    let every = spacing(app);
+    let every = spacing(app, app.magnetic.held);
     for _ in 0..64 {
         let Some(&from) = app.ui.magnetic.path.last() else { return };
         let guide = app.ui.magnetic.trail.clone();

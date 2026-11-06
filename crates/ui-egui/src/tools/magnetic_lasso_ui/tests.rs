@@ -25,6 +25,8 @@ fn app() -> PhotocraftApp {
         })
         .unwrap();
     app.ui.tool = Tool::MagneticLasso;
+    // Frequency 100 (a point about every 24 px with the button up, #11687): the 80 x 70 square is small.
+    app.ui.tool_options.magnetic_frequency = 100.0;
     app
 }
 
@@ -77,7 +79,7 @@ fn tracing_around_a_shape_selects_it() {
     assert!(on_square(m.path[0], 0.01), "the first point snaps onto the edge: {:?}", m.path[0]);
     hover_along(&mut app, &AROUND[..5]);
     let m = &app.ui.magnetic;
-    // Points fastened by themselves on the way (about every 47 px at Frequency 57).
+    // Points fastened by themselves on the way (about every 24 px at Frequency 100).
     assert!(m.anchors.len() >= 5, "{:?}", m.anchors);
     for p in m.path.iter().chain(&m.live) {
         assert!(on_square(*p, 1.0), "{p:?} is off the square's edge");
