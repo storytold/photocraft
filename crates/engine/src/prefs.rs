@@ -567,8 +567,8 @@ impl Default for Export {
 /// [`Performance::memory_usage_mb`]'s default.
 pub const DEFAULT_MEMORY_USAGE_MB: u32 = 8192;
 
-/// Share of the machine's memory History is capped at, in tenths: 70 %, Photoshop's default
-/// Memory Usage.
+/// Share of the machine's memory History is capped at, in tenths: 7 means 7/10 (70 %),
+/// Photoshop's default Memory Usage.
 pub const MEMORY_USAGE_SHARE_TENTHS: u64 = 7;
 
 /// The most Memory Usage the web build honours, in MB: a wasm module's linear memory tops out at
@@ -676,12 +676,15 @@ impl Performance {
     /// Pixel memory a document and its History may hold (Memory Usage), in bytes: beyond it
     /// the oldest history states are dropped. Never more than [`MEMORY_USAGE_SHARE_TENTHS`] of
     /// this machine's memory when it is known ([`crate::memory::physical_memory`]): the 8 GB
-    /// default would otherwise let History fill an 8 GB machine.
+    /// default would otherwise let History fill an 8 GB machine. When the machine's memory is
+    /// unknown or reported as 0, the stored preference is used unchanged.
     pub fn history_budget_bytes(&self) -> usize {
         self.history_budget_for(crate::memory::physical_memory())
     }
 
-    /// [`Self::history_budget_bytes`] on a machine with `ram` bytes (`None`: unknown).
+    /// [`Self::history_budget_bytes`] on a machine with `ram` bytes: the smaller of the
+    /// preference and `ram / 10 * 7` (integer division, so it rounds down). `None` and `Some(0)`
+    /// mean unknown and give the preference. Saturates at `usize::MAX` on 32-bit targets.
     pub fn history_budget_for(&self, ram: Option<u64>) -> usize {
         let pref = (self.effective_memory_usage_mb() as usize).saturating_mul(1 << 20);
         match ram.filter(|&r| r > 0) {

@@ -1154,16 +1154,43 @@ fn an_effect_cache_above_the_cap_loads_clamped_and_does_not_block_apply() {
 }
 
 /// History is capped at 70 % of the machine's memory: the 8 GB default holds on a 16 GB
-/// machine, an 8 GB one gets 5.6 GB, and an unknown machine the preference as set.
+/// machine, an 8 GB one gets 5.6 GB, and an unknown machine the preference as set. Expected
+/// values are literal byte counts in `u64`, fitted to `usize` so 32-bit targets saturate.
 #[test]
 fn history_budget_stays_within_the_machine() {
-    let p = Performance::default();
+    fn fit(bytes: u64) -> usize {
+        usize::try_from(bytes).unwrap_or(usize::MAX)
+    }
     let gib = 1u64 << 30;
-    let pref = (p.effective_memory_usage_mb() as usize).saturating_mul(1 << 20);
-    assert_eq!(p.history_budget_for(None), pref);
-    assert_eq!(p.history_budget_for(Some(0)), pref);
-    assert_eq!(p.history_budget_for(Some(64 * gib)), pref);
-    assert_eq!(p.history_budget_for(Some(8 * gib)), pref.min(usize::try_from(8 * gib / 10 * 7).unwrap_or(usize::MAX)));
+    let p = Performance::default();
+    assert_eq!(p.memory_usage_mb, 8192);
+    let default = 8_589_934_592; // 8192 MB
+    for (ram, expected) in [
+        (None, default),
+        (Some(0), default),
+        (Some(64 * gib), default),
+        (Some(16 * gib), default),          // 70 % is 12_025_908_426
+        (Some(8 * gib), 6_012_954_213),     // 8_589_934_592 / 10 * 7, rounded down first
+        (Some(1_000_000_007), 700_000_000), // not divisible by 10
+        (Some(1000), 700),                  // very small
+        (Some(u64::MAX), default),          // 70 % is past a 32-bit usize
+    ] {
+        assert_eq!(p.history_budget_for(ram), fit(expected), "{ram:?}");
+    }
     let small = Performance { memory_usage_mb: 1024, ..Performance::default() };
-    assert_eq!(small.history_budget_for(Some(8 * gib)), 1024 << 20);
+    assert_eq!(small.history_budget_for(Some(8 * gib)), 1_073_741_824);
+    let huge = Performance { memory_usage_mb: u32::MAX, ..Performance::default() };
+    assert_eq!(huge.history_budget_for(Some(u64::MAX)), fit(4_503_599_626_321_920));
+    assert_eq!(huge.history_budget_for(Some(8 * gib)), fit(6_012_954_213));
+}
+
+/// The public budget is the testable one on this machine, and never past 70 % of its memory.
+#[test]
+fn history_budget_bytes_uses_this_machine() {
+    let p = Performance::default();
+    let ram = crate::memory::physical_memory();
+    assert_eq!(p.history_budget_bytes(), p.history_budget_for(ram));
+    if let Some(ram) = ram.filter(|&r| r > 0) {
+        assert!(p.history_budget_bytes() as u64 <= ram / 10 * 7);
+    }
 }
