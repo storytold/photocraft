@@ -156,7 +156,9 @@ pub fn dropdown(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let current_user = current_user(app);
     let can_new = savable(o).is_some();
     let mut chosen: Option<Choice> = None;
+    let parent_layer = ui.layer_id();
     let combo = crate::widgets::combo_list(ui, "crop-ratio", label, 140.0, egui::PopupCloseBehavior::CloseOnClick, |ui| {
+        crate::press_menu::above_parent_ui(parent_layer, ui);
         if selection_entry && ui.selectable_label(true, tl!("Selection")).clicked() {
             chosen = Some(Choice::Selection);
         }
