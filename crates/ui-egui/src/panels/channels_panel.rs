@@ -342,9 +342,9 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let shown_colors = if colors > 1 { colors } else { 0 };
     let mut actions: Vec<(String, Value)> = Vec::new();
     // The buttons sit in a footer at the panel's bottom, like Photoshop's.
+    let panel = ui.available_rect_before_wrap().intersect(ui.clip_rect() - widgets::body_margin(t.pro));
     let footer = widgets::footer_height(ui) + ui.spacing().item_spacing.y;
-    let fill = ui.available_height() > footer + 60.0;
-    let rows_h = if fill { ui.available_height() - footer } else { f32::INFINITY };
+    let rows_h = (panel.bottom() - ui.cursor().top() - footer).max(0.0);
     let mut mask_click = None;
     let mut drawn = Vec::new();
     // An alpha or spot channel dragged over the rows reorders like Photoshop's (#9163): a line marks
@@ -360,7 +360,7 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // The slot the dragged channel would take (0 = first alpha) and where its line goes.
     let mut insertion: Option<(usize, f32)> = None;
     let mut alphas_top: Option<f32> = None;
-    egui::ScrollArea::vertical().max_height(rows_h).min_scrolled_height(if fill { rows_h } else { 0.0 }).auto_shrink([false, !fill]).show(ui, |ui| {
+    egui::ScrollArea::vertical().max_height(rows_h).min_scrolled_height(0.0).auto_shrink([false, false]).show(ui, |ui| {
         for row in rows {
             let RowPresentation { name, thumb_idx, slot, visible, selected } = row_presentation(row, &row_context, mask_view.is_some());
             let row_h = if t.pro { 36.0 } else { 40.0 };
@@ -473,7 +473,7 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         crate::panels::dropped_on(ui, button).then_some(action)
     };
     // Photoshop's order from the left: Load as selection, Save selection, New, Delete.
-    widgets::panel_footer(ui, |ui| {
+    widgets::panel_footer_in(ui, panel, |ui| {
         let target_ref = target_reference(view.target);
         let trash = icons::button(ui, "trash", 26.0, false, tl!("Delete current channel"));
         if trash.clicked() {
