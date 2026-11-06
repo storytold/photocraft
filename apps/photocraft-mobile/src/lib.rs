@@ -8,7 +8,9 @@
 //!   does, so File › Save writes it back without a sheet; the shell confirms the write, and only
 //!   then is the document saved. A flat file (PNG, JPEG…) is written back too while it keeps the
 //!   whole document (one plain layer). Everything else (Save As, a copy from Share or Photos, a
-//!   format the file can't keep) goes to the shell's exporter, as on the web.
+//!   format the file can't keep) goes to the shell's exporter, as on the web. Saved as it closes,
+//!   a document closes once its write is confirmed; nothing confirms the exporter (the user may
+//!   cancel it), so after one the unsaved-changes prompt asks again.
 //!   Saves, Save a Copy and Export As encode on a worker (PhotoCraft's background save job), so a
 //!   large document never holds up the main thread; the bytes go to the shell on the next frame,
 //!   and the shells keep the app running in the background until they have them
@@ -61,7 +63,7 @@ pub struct PhotoCraftMobile {
     /// Document paths the app wrote in place during this frame.
     issued: Issued,
     /// Writes in place the shell hasn't confirmed yet, oldest first.
-    writing: Vec<PendingWrite>,
+    writing: Shared<Vec<PendingWrite>>,
     /// Saves a worker encoded, waiting for the next frame to go to the shell.
     encoded: Encoded,
     /// The user's Low Resolution Previews while the power state overrides it.
@@ -240,23 +242,11 @@ impl CraftApp for PhotoCraftMobile {
     fn create(ctx: &egui::Context, wgpu: Option<eframe::egui_wgpu::RenderState>, platform: Platform) -> Self {
         let (inbox, located, issued, encoded) = (Inbox::default(), Located::default(), Issued::default(), Encoded::default());
         let (suspended, pastes, own_copy) = (Shared::<Suspended>::default(), Shared::<Pastes>::default(), OwnCopy::default());
-        let mut services = services(&platform, inbox.clone(), located.clone(), issued.clone(), encoded.clone(), suspended.clone());
+        let writing = Shared::<Vec<PendingWrite>>::default();
+        let mut services = services(&platform, inbox.clone(), located.clone(), issued.clone(), writing.clone(), encoded.clone(), suspended.clone());
         tablet_menus(&mut services, &platform, pastes.clone(), own_copy.clone());
         let app = create_app(ctx, wgpu, services);
-        Self {
-            app,
-            inbox,
-            located,
-            issued,
-            writing: Vec::new(),
-            encoded,
-            previews: PreviewOverride::default(),
-            suspended,
-            platform,
-            pastes,
-            answered: None,
-            own_copy,
-        }
+        Self { app, inbox, located, issued, writing, encoded, previews: PreviewOverride::default(), suspended, platform, pastes, answered: None, own_copy }
     }
 
     fn wgpu_configuration() -> eframe::egui_wgpu::WgpuConfiguration {
@@ -277,7 +267,7 @@ impl CraftApp for PhotoCraftMobile {
     /// The document is saved now, at the revision that was written, if it still lives in that
     /// file; a failure is reported (the shell offers the exporter for the same bytes).
     fn written(&mut self, ctx: &egui::Context, outcome: &WriteOutcome) {
-        let pending = self.writing.iter().position(|w| w.path == outcome.path).map(|i| self.writing.remove(i));
+        let pending = update(&self.writing, |writing| writing.iter().position(|w| w.path == outcome.path).map(|i| writing.remove(i)));
         let name = photocraft_ui_egui::file_open::display_name(&outcome.path);
         match (&outcome.result, pending) {
             (Ok(()), Some(write)) => {
@@ -516,7 +506,8 @@ impl PhotoCraftMobile {
         for path in self.issued.take() {
             // None: a copy (the document lives elsewhere), which never marks it saved.
             if let Some(st) = self.app.session.documents().iter().find(|st| st.path.as_deref() == Some(path.as_str())) {
-                self.writing.push(PendingWrite { path, doc: st.doc.id, revision: st.revision });
+                let write = PendingWrite { path, doc: st.doc.id, revision: st.revision };
+                update(&self.writing, |writing| writing.push(write));
             }
         }
     }
@@ -658,7 +649,15 @@ fn create_app(ctx: &egui::Context, wgpu: Option<eframe::egui_wgpu::RenderState>,
 
 /// The in-process codecs (as on the web), and files through the shell's picker, its writes in
 /// place and its exporter.
-fn services(platform: &Platform, inbox: Inbox, located: Located, issued: Issued, encoded: Encoded, suspended: Shared<Suspended>) -> Services {
+fn services(
+    platform: &Platform,
+    inbox: Inbox,
+    located: Located,
+    issued: Issued,
+    writing: Shared<Vec<PendingWrite>>,
+    encoded: Encoded,
+    suspended: Shared<Suspended>,
+) -> Services {
     let picker = platform.clone();
     let exporter = platform.clone();
     let clipboard = platform.clone();
@@ -719,6 +718,9 @@ fn services(platform: &Platform, inbox: Inbox, located: Located, issued: Issued,
         // The user may cancel the exporter, and nothing reports back: never mark the document
         // saved here. A write in place is confirmed later (`PhotoCraftMobile::written`).
         write_unconfirmed: true,
+        // Saving a document as it closes: it closes once its write in place is confirmed. A
+        // save that went to the exporter, or failed, asks again; closing then takes Don't Save.
+        write_pending: Some(Box::new(move |doc| update(&writing, |writing| writing.iter().any(|w| w.doc == doc)))),
         // File › Save writes a flat file (a PNG, a JPEG) back while it keeps the document: the
         // desktop's save dialog would suggest that very file, but the exporter can only make a
         // new one.
