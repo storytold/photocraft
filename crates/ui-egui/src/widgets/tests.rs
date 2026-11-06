@@ -1541,3 +1541,42 @@ fn menu_scroll_arrows_do_not_widen_the_menu() {
     assert!(h.state().0, "the menu overflows");
     assert!(h.state().1 < 200.0, "the arrows follow the rows' width, not the 600 pt window: {}", h.state().1);
 }
+
+/// #2091: in a short window, between the shortest menu and that plus its arrows, an overflowing
+/// menu's arrows come out of the room rather than being added under it, so the lower arrow stays
+/// on screen. A window shorter than a menu's minimum gets a menu of the minimum height, arrows
+/// included.
+#[test]
+fn menu_scroll_arrows_stay_inside_a_short_window() {
+    // (overflowing, the menu's rect)
+    type S = (bool, egui::Rect);
+    let run = |height: f32| {
+        let mut h = Harness::builder().with_size(egui::vec2(220.0, height)).build_ui_state(
+            |ui, s: &mut S| {
+                let id = ui.scope_id().with("menu_scroll");
+                super::menu_scroll(ui, |ui| {
+                    for i in 0..80 {
+                        ui.label(format!("Item {i}"));
+                    }
+                });
+                s.0 = ui.data(|d| d.get_temp::<bool>(id)).unwrap_or(false);
+                s.1 = ui.min_rect();
+            },
+            (false, egui::Rect::NOTHING),
+        );
+        h.run_steps(4);
+        let screen = h.ctx.content_rect();
+        (h.state().0, h.state().1, screen)
+    };
+    // The room is 150 - 22 (the popup frame and edge gaps) = 128 pt: more than the shortest menu,
+    // less than it plus both 14 pt arrows.
+    let (overflow, menu, screen) = run(150.0);
+    assert!(overflow, "the menu overflows and shows its arrows");
+    assert!(menu.top() >= screen.top(), "the upper arrow is on screen: {menu:?} in {screen:?}");
+    assert!(menu.bottom() <= screen.bottom(), "the lower arrow is on screen: {menu:?} in {screen:?}");
+    assert!(menu.height() <= 128.5, "the menu, arrows included, fits the room: {}", menu.height());
+    let (overflow, menu, _) = run(60.0);
+    assert!(overflow, "a tiny window's menu overflows too");
+    let min = super::dropdown::MENU_MIN_HEIGHT;
+    assert!((menu.height() - min).abs() < 0.5, "a tiny window's menu is the minimum height, arrows included: {}", menu.height());
+}

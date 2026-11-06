@@ -217,7 +217,8 @@ fn combo_box_arrow_keys<T: PartialEq + Clone>(ui: &mut Ui, response: &Response, 
 /// seen (clear of a taskbar a too-tall window runs under, #315), scrolling past that, so long
 /// context menus (a layer's, the canvas tools') stay reachable on small windows instead of running
 /// off the bottom. egui moves a popup up to keep it in the window, so a menu opened low on the
-/// screen first shifts up and only scrolls when it is taller than the window.
+/// screen first shifts up and only scrolls when it is taller than the window. An overflowing
+/// menu's ▲/▼ scroll arrows (#2091) count toward that height, so both stay on screen.
 pub fn menu_scroll<R>(ui: &mut Ui, add_contents: impl FnOnce(&mut Ui) -> R) -> R {
     // The popup frame's margin and stroke, and a small gap to the window's edges.
     let frame = ui.spacing().menu_margin.sum().y + 2.0 + 2.0 * MENU_EDGE;
@@ -232,8 +233,12 @@ pub fn menu_scroll<R>(ui: &mut Ui, add_contents: impl FnOnce(&mut Ui) -> R) -> R
     // that widened an overflowing menu on every later open (a layer menu went from ~230 to ~600
     // pt). The output's `inner_rect` is the width asked for, before auto-shrink fits the rows.
     let width = ui.data(|d| d.get_temp::<f32>(id.with("width"))).unwrap_or(0.0);
+    // The arrows come out of the room, so both stay on screen: the minimum is the whole menu's
+    // height, arrows included. `room` is at least `MENU_MIN_HEIGHT`, which is taller than the two
+    // arrows, so the rows always keep a positive height; a window shorter than that minimum still
+    // gets a menu of that height, as one without arrows does.
     let arrows = if overflow { 2.0 * MENU_ARROW_HEIGHT } else { 0.0 };
-    let room = (room - arrows).max(MENU_MIN_HEIGHT);
+    let room = (room - arrows).max(MENU_MIN_HEIGHT - arrows);
     // The arrows sit flush against the rows, so no item spacing is added around them that `room`
     // doesn't count; the rows keep the menu's own spacing.
     let spacing = ui.spacing().item_spacing.y;
@@ -298,10 +303,10 @@ fn menu_scroll_arrow(ui: &mut Ui, up: bool, enabled: bool, width: f32) -> f32 {
     sign * MENU_ARROW_SPEED * ui.input(|i| i.stable_dt).clamp(0.0, 0.1)
 }
 
-/// Gap kept between a context menu and the window's edges, and the shortest it gets.
+/// Gap kept between a context menu and the window's edges.
 const MENU_EDGE: f32 = 4.0;
-
-const MENU_MIN_HEIGHT: f32 = 120.0;
+/// The shortest a context menu gets, scroll arrows included.
+pub(super) const MENU_MIN_HEIGHT: f32 = 120.0;
 /// Height of an overflowing menu's scroll arrows, and how fast hovering one scrolls (points per
 /// second).
 pub(super) const MENU_ARROW_HEIGHT: f32 = 14.0;
