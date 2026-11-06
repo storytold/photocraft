@@ -21,6 +21,9 @@
 //! - **Network shares (macOS):** `sync_all` asks for a full flush to the disk's platters
 //!   (`F_FULLFSYNC`), which SMB shares and some virtual file systems refuse while a plain `fsync`
 //!   works. [`sync_file`] falls back to the plain one there (#1336).
+//! - **Hidden flags (network shares):** the temporary file's name never starts with a dot. An SMB
+//!   server that hides dot files marks one hidden when it is created, the mark survives the
+//!   rename, and the saved document then doesn't show in Finder (#11624). See [`temp_name`].
 //!
 //! On the web there is no file system: writes go through the platform services (downloads), so
 //! this module is never reached there; on `wasm32` every call returns the `std` "unsupported"
@@ -479,13 +482,41 @@ fn resolve_symlink(path: &Path) -> io::Result<PathBuf> {
     Err(io::Error::new(io::ErrorKind::InvalidInput, format!("{}: too many levels of symbolic links", path.display())))
 }
 
-/// A unique hidden temporary file name to write beside `file` before renaming over it.
+/// What every [`temp_name`] ends with.
+const TEMP_SUFFIX: &str = ".pcsave.tmp";
+
+/// A unique temporary file name to write beside `file` before renaming over it:
+/// `{file}.{pid}-{n}.pcsave.tmp`.
+///
+/// It does not start with a dot of its own, so it is not hidden: an SMB server that hides dot
+/// files sets the hidden flag on such a file when it is created, the flag survives the rename,
+/// and the saved document would be invisible in Finder (#11624). The cost is that the file shows
+/// in a folder listing while a save writes it, and one an interrupted save leaves beside the
+/// document stays visible until it is removed (#6604). The
+/// process id, counter and suffix keep it apart from the files people name, and it is created
+/// with `create_new`, so it can never replace one. Older versions wrote
+/// `.{file}.{pid}-{n}.pcsave.tmp`; [`temp_owner`] recognizes both.
 pub fn temp_name(file: &str) -> String {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
     // Keep the name short: a long file name plus the suffix must stay under NAME_MAX.
     let stem: String = file.chars().take(64).collect();
-    format!(".{stem}.{}-{n}.pcsave.tmp", std::process::id())
+    format!("{stem}.{}-{n}{TEMP_SUFFIX}", std::process::id())
+}
+
+/// The id of the process that wrote `name`, if it is a [`temp_name`]: today's
+/// `{file}.{pid}-{n}.pcsave.tmp` or the `.{file}.{pid}-{n}.pcsave.tmp` older versions wrote, so
+/// their leftovers are still cleaned up.
+pub fn temp_owner(name: &str) -> Option<u32> {
+    let rest = name.strip_suffix(TEMP_SUFFIX)?;
+    let (stem, ids) = rest.rsplit_once('.')?;
+    let (pid, n) = ids.split_once('-')?;
+    let stem = stem.strip_prefix('.').unwrap_or(stem);
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    if stem.is_empty() || !digits(pid) || !digits(n) {
+        return None;
+    }
+    pid.parse().ok()
 }
 
 fn context(e: io::Error, msg: String) -> io::Error {

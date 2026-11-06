@@ -663,3 +663,72 @@ fn keeps_the_creation_time_under_a_deny_write_acl() {
     let _ = exacl::setfacl(&[&p], &[], None);
     assert_no_temp(&d.0);
 }
+
+/// A real file system that records the name of every temporary file a save writes.
+#[derive(Default)]
+struct TempNames(std::cell::RefCell<Vec<String>>);
+
+impl AtomicFs for TempNames {
+    fn write_new(&self, tmp: &Path, bytes: &[u8]) -> io::Result<()> {
+        self.0.borrow_mut().push(tmp.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default());
+        RealFs.write_new(tmp, bytes)
+    }
+    fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+        RealFs.rename(from, to)
+    }
+    fn remove(&self, path: &Path) -> io::Result<()> {
+        RealFs.remove(path)
+    }
+    fn sync_dir(&self, dir: &Path) -> io::Result<()> {
+        RealFs.sync_dir(dir)
+    }
+    fn copy_metadata(&self, from: &Path, to: &Path) -> io::Result<()> {
+        RealFs.copy_metadata(from, to)
+    }
+}
+
+/// #11624: the temporary file a save renames over the document has no leading dot. An SMB share
+/// that hides dot files marks such a file hidden when it is created, and the mark stayed on the
+/// saved document, so it didn't show in Finder.
+#[test]
+fn the_temporary_file_is_not_a_dot_file() {
+    let d = TempDir::new("visible");
+    let p = d.0.join("report.psd");
+    let fs = TempNames::default();
+    atomic_write_with(&fs, NO_RETRY, &p, b"first").unwrap();
+    atomic_write_with(&fs, NO_RETRY, &p, b"second").unwrap();
+    let names = fs.0.take();
+    assert_eq!(names.len(), 2, "{names:?}");
+    for name in &names {
+        assert!(!name.starts_with('.'), "a dot file is hidden on some shares: {name}");
+        assert!(name.starts_with("report.psd.") && name.ends_with(".pcsave.tmp"), "{name}");
+        assert_eq!(temp_owner(name), Some(std::process::id()), "{name}");
+    }
+    assert_ne!(names[0], names[1]);
+    assert_eq!(std::fs::read(&p).unwrap(), b"second");
+    assert_no_temp(&d.0);
+}
+
+/// #11624: both temp name forms are recognized, so the leftovers of versions that wrote
+/// `.{file}.{pid}-{n}.pcsave.tmp` are still cleaned up; nothing else is.
+#[test]
+fn temp_owner_reads_both_name_forms_and_nothing_else() {
+    assert_eq!(temp_owner(&temp_name("doc.pcraft")), Some(std::process::id()));
+    assert_eq!(temp_owner("doc.pcraft.42-7.pcsave.tmp"), Some(42));
+    assert_eq!(temp_owner(".doc.pcraft.42-7.pcsave.tmp"), Some(42), "the dot-prefixed form older versions wrote");
+    assert_eq!(temp_owner(".hidden.psd.42-0.pcsave.tmp"), Some(42), "a dot file's own temp file");
+    for other in [
+        "doc.pcraft",
+        "doc.pcraft.42-7.tmp",
+        "doc.42-7.pcsave",
+        ".42-7.pcsave.tmp",
+        "doc.x-7.pcsave.tmp",
+        "doc.+42-7.pcsave.tmp",
+        "doc.42-.pcsave.tmp",
+        "doc.42-x.pcsave.tmp",
+        "doc.42.pcsave.tmp",
+        "42-7.pcsave.tmp",
+    ] {
+        assert_eq!(temp_owner(other), None, "{other}");
+    }
+}
