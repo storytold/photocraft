@@ -480,7 +480,9 @@ pub struct Services {
     /// File › Save writes a flat file (PNG, JPEG…) back without asking while it keeps the whole
     /// document: a single plain layer in a format PhotoCraft writes. The desktop asks for the
     /// name first, its own file suggested; where there is no such dialog to confirm (iPadOS and
-    /// Android, whose exporter can only make a new file), it goes back where it came from.
+    /// Android, whose exporter can only make a new file), it goes back where it came from, as
+    /// long as its format stores the document as it is (a JPEG has no transparency); otherwise
+    /// Save asks for a name, suggesting a PSD.
     pub save_flat_in_place: bool,
     /// Plug-ins come only with the app: Install Plug-in… and the Plug-ins preference folder are
     /// left out, and installing or loading one is refused. For stores that don't allow

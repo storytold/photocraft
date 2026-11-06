@@ -1548,3 +1548,33 @@ fn save_flat_in_place_writes_a_plain_png_back_until_it_needs_layers() {
     assert_eq!(open.borrow().len(), 1, "two layers: a PNG can't keep them");
     assert_eq!(*written.borrow(), ["/pics/photo.png"]);
 }
+
+/// A flat file is written back in place only while its format stores the document as it is: a
+/// JPEG keeps an opaque Background, but not a layer with transparency (it would be matted over
+/// white) or 16 bits per channel. Those ask for a name, suggesting a format that keeps them.
+#[test]
+fn save_flat_in_place_asks_when_the_format_would_lose_transparency_or_depth() {
+    let ctx = egui::Context::default();
+    for (new, kept) in [
+        (json!({"width": 4, "height": 4}), true),
+        (json!({"width": 4, "height": 4, "background": "transparent"}), false),
+        (json!({"width": 4, "height": 4, "depth": 16}), false),
+    ] {
+        let (mut app, open, written) = app();
+        app.services.save_flat_in_place = true;
+        app.run("file.new", new.clone()).unwrap();
+        app.session.active_mut().unwrap().path = Some("/pics/photo.jpg".into());
+        menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap();
+        app.poll_file_dialog(&ctx, None);
+        if kept {
+            assert_eq!(*written.borrow(), ["/pics/photo.jpg"], "{new}: written back");
+        } else {
+            assert!(written.borrow().is_empty(), "{new}: the JPEG is not overwritten");
+            assert!(
+                matches!(open.borrow().as_slice(), [(FileDialogRequest::Save { suggested }, _)] if !suggested.ends_with(".jpg")),
+                "{new}: asks for a name in a format that keeps it: {:?}",
+                open.borrow().iter().map(|(r, _)| r.clone()).collect::<Vec<_>>()
+            );
+        }
+    }
+}

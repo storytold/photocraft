@@ -274,8 +274,20 @@ fn invoke_file_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, 
                         // confirm it (`Services::save_flat_in_place`): written back as is.
                         Some((false, path, d)) if app.services.save_flat_in_place && crate::app::flat_file_keeps(&d.doc, &path) => {
                             let doc = d.doc.id;
-                            crate::disk_change_prompt::intercept(app, doc, &path, false, crate::FormatChoices::default())
-                                .unwrap_or_else(|| app.save_in_place(path, choices))
+                            if !crate::app::flat_format_keeps(&d.doc, &path) {
+                                // Its format would lose some of it (a JPEG, transparency): never
+                                // written over without asking.
+                                let name = crate::file_open::display_name(&path);
+                                let title = crate::i18n::fmt(tl!("{name} can't keep everything in this document"), &[("name", name.as_str())]);
+                                let line = tl!(
+                                    "Its format can't store this document's transparency, bit depth or colour mode. Choose a format that keeps it, such as Photoshop (PSD), or save a copy."
+                                );
+                                crate::notices::post(app, title, vec![line.to_string()], false, None);
+                                app.save_as_with(None, choices)
+                            } else {
+                                crate::disk_change_prompt::intercept(app, doc, &path, false, crate::FormatChoices::default())
+                                    .unwrap_or_else(|| app.save_in_place(path, choices))
+                            }
                         }
                         Some((false, path, d)) if photocraft_engine::file_cmds::saves_in_place(&path) => {
                             // Its own file is layered but can't hold what the document has now.

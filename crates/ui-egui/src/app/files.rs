@@ -224,7 +224,9 @@ impl PhotocraftApp {
         // Other files keep their format only when it can retain their layers. A plain raster
         // (including an unlocked transparent PNG) can keep its flat format; editable contents,
         // masks and layer appearance settings need a layered format even with just one layer.
-        let flat = plain_raster(&st.doc).is_some();
+        // Where a flat file is written back without asking (`Services::save_flat_in_place`), the
+        // dialog can't change the format: only one that stores the document as it is is offered.
+        let flat = plain_raster(&st.doc).is_some() && (!self.services.save_flat_in_place || st.path.as_deref().is_some_and(|p| flat_format_keeps(&st.doc, p)));
         let ext = st.path.as_deref().and_then(|p| std::path::Path::new(p).extension()).map(|e| e.to_string_lossy().to_ascii_lowercase());
         // An OpenRaster file only when it holds the whole document (#3806): else PSD is offered.
         let holds_ora = st.path.as_deref().is_some_and(|p| photocraft_engine::file_cmds::holds_at(&st.doc, p));
@@ -808,6 +810,33 @@ pub fn flat_file_keeps(doc: &photocraft_doc::Document, path: &str) -> bool {
     !photocraft_engine::file_cmds::saves_in_place(path)
         && plain_raster(doc).is_some()
         && photocraft_engine::file_cmds::extension(path).is_some_and(|e| photocraft_codecs::from_extension(&e).is_some_and(|f| f.caps().write))
+}
+
+/// Whether the flat format at `path` stores `doc`'s pixels as they are: its colour model, its bit
+/// depth and its transparency (a Background has none). A JPEG keeps an opaque 8-bit RGB photo,
+/// but not the transparency a layer gained (it would be matted over white) or 16 bits per
+/// channel. Anything else than RGB, gray, CMYK or Lab counts as not kept.
+pub(crate) fn flat_format_keeps(doc: &photocraft_doc::Document, path: &str) -> bool {
+    use photocraft_codecs::{ChannelLayout, SampleType as Stored};
+    use photocraft_doc::{ColorMode, SampleType};
+    let Some(caps) = photocraft_engine::file_cmds::extension(path).and_then(|e| photocraft_codecs::from_extension(&e)).map(photocraft_codecs::Format::caps)
+    else {
+        return false;
+    };
+    let depth = match doc.depth {
+        SampleType::U8 => Stored::U8,
+        SampleType::U16 => Stored::U16,
+        SampleType::F32 => Stored::F32,
+    };
+    let model = |layout: &ChannelLayout| match doc.mode {
+        ColorMode::Rgb => layout.is_rgb(),
+        ColorMode::Grayscale => layout.is_gray(),
+        ColorMode::Cmyk => layout.is_cmyk(),
+        ColorMode::Lab => layout.is_lab(),
+        ColorMode::Bitmap | ColorMode::Indexed | ColorMode::Multichannel | ColorMode::Duotone => false,
+    };
+    let opaque = plain_raster(doc).is_some_and(|layer| doc.is_background(layer.id));
+    caps.depths.contains(&depth) && caps.layouts.iter().any(model) && (caps.alpha || opaque)
 }
 
 /// The New Document dialog's key in the preferences' `dialogs` map.

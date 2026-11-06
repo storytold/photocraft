@@ -7,10 +7,11 @@
 //!   (picked, or opened in place from Files) opens with its document path, as a file from disk
 //!   does, so File › Save writes it back without a sheet; the shell confirms the write, and only
 //!   then is the document saved. A flat file (PNG, JPEG…) is written back too while it keeps the
-//!   whole document (one plain layer). Everything else (Save As, a copy from Share or Photos, a
-//!   format the file can't keep) goes to the shell's exporter, as on the web. Saved as it closes,
-//!   a document closes once its write is confirmed; nothing confirms the exporter (the user may
-//!   cancel it), so after one the unsaved-changes prompt asks again.
+//!   whole document (one plain layer its format stores as it is: a JPEG has no transparency).
+//!   Everything else (Save As, a copy from Share or Photos, a format the file can't keep) goes to
+//!   the shell's exporter, as on the web. Saved as it closes, a document closes once its write is
+//!   confirmed; nothing confirms the exporter (the user may cancel it), so after one the
+//!   unsaved-changes prompt asks again.
 //!   Saves, Save a Copy and Export As encode on a worker (PhotoCraft's background save job), so a
 //!   large document never holds up the main thread; the bytes go to the shell on the next frame,
 //!   and the shells keep the app running in the background until they have them
