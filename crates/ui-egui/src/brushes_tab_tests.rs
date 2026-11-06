@@ -6,7 +6,7 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 
 use crate::brush_panel::grouped_presets;
-use crate::pickers::brush_browser::BrushDrag;
+use crate::pickers::adapters::brushes::BrushDrag;
 
 use super::*;
 
@@ -46,7 +46,7 @@ fn shared_hierarchy_drop_contract_preserves_brush_folder_moves() {
 
 #[test]
 fn brush_folder_item_and_folder_moves_commit_to_the_authoritative_library() {
-    use crate::pickers::picker_state::HierarchyOrderEntry;
+    use crate::pickers::state::HierarchyOrderEntry;
     use photocraft_engine::paint::BrushPreset;
 
     let folder = |parts: &[&str]| parts.iter().map(|part| (*part).to_string()).collect::<Vec<_>>();
@@ -117,16 +117,16 @@ fn drag_in_brush_picker(
     presets: Vec<photocraft_engine::paint::BrushPreset>,
     source: &str,
     target: &str,
-) -> Harness<'static, (crate::pickers::picker_state::PresetUi, Vec<Action>)> {
+) -> Harness<'static, (crate::pickers::state::PresetUi, Vec<Action>)> {
     use egui::{Event, Modifiers, PointerButton, vec2};
 
     let mut h = Harness::builder().with_size(vec2(520.0, 620.0)).build_ui_state(
-        move |ui, state: &mut (crate::pickers::picker_state::PresetUi, Vec<Action>)| {
+        move |ui, state: &mut (crate::pickers::state::PresetUi, Vec<Action>)| {
             if ui.ctx().fonts(|fonts| fonts.definitions().families.contains_key(&egui::FontFamily::Name("semibold".into()))) {
-                state.1.extend(crate::pickers::brush_browser::picker_browser(ui, &presets, None, &mut state.0, 600.0));
+                state.1.extend(crate::pickers::adapters::brushes::picker_browser(ui, &presets, None, &mut state.0, 600.0));
             }
         },
-        (crate::pickers::picker_state::PresetUi::default(), Vec::new()),
+        (crate::pickers::state::PresetUi::default(), Vec::new()),
     );
     PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
     h.run_steps(3);
@@ -271,7 +271,7 @@ fn shared_browser_projection_keeps_brush_folder_paths_and_identity() {
     let (name, identity) = {
         let preset = presets.first_mut().expect("built-in brush preset");
         preset.folder = vec!["Imported".into(), "Soft".into()];
-        (preset.name.clone(), crate::pickers::brush_browser::preview_identity(preset))
+        (preset.name.clone(), crate::pickers::adapters::brushes::preview_identity(preset))
     };
 
     let groups = browser_group_views(&presets);
@@ -294,7 +294,7 @@ fn dragging_a_brush_shows_its_tip_preview() {
                 app.ui.brush_picker = Some([300.0, 120.0]);
             }
             let (name, identity) =
-                app.session.tools.presets.first().map(|preset| (preset.name.clone(), crate::pickers::brush_browser::preview_identity(preset))).unwrap();
+                app.session.tools.presets.first().map(|preset| (preset.name.clone(), crate::pickers::adapters::brushes::preview_identity(preset))).unwrap();
             let brush = app.session.tools.brush.clone();
             let presets = app.session.tools.presets.clone();
             let mut h = Harness::builder().with_size(vec2(1200.0, 900.0)).build_eframe(move |cc| {
@@ -311,7 +311,7 @@ fn dragging_a_brush_shows_its_tip_preview() {
             h.event(egui::Event::PointerMoved(end));
             h.run_steps(4);
             let current_identity =
-                h.state().session.tools.presets.iter().find(|preset| preset.name == name).map(crate::pickers::brush_browser::preview_identity).unwrap();
+                h.state().session.tools.presets.iter().find(|preset| preset.name == name).map(crate::pickers::adapters::brushes::preview_identity).unwrap();
             let payload = egui::DragAndDrop::payload::<BrushDrag>(&h.ctx);
             let expected_scope = if mode == 2 { "brush-picker" } else { "brushes" };
             assert!(
@@ -541,7 +541,7 @@ fn brush_picker_area_stays_at_its_requested_height() {
         h.state_mut().ui.brush_picker = Some([300.0, 120.0]);
         h.run_steps(12);
 
-        let rect = h.ctx.memory(|memory| memory.area_rect(crate::pickers::brush_picker::picker_id())).expect("the picker is shown");
+        let rect = h.ctx.memory(|memory| memory.area_rect(crate::pickers::adapters::brush_picker::picker_id())).expect("the picker is shown");
         assert!(
             rect.height() <= 460.0,
             "the 420 pt picker must stay near its requested height at {viewport_height} pt, not expand to the available screen height: {rect:?}"
@@ -622,7 +622,7 @@ fn brush_picker_menu_closes_when_a_slider_or_the_grip_is_grabbed() {
     h.run_steps(2);
 }
 
-/// The upper controls (Size, Hardness) share a block at most [`crate::pickers::brush_picker::HEAD_MAX_W`]
+/// The upper controls (Size, Hardness) share a block at most [`crate::pickers::adapters::brush_picker::HEAD_MAX_W`]
 /// wide, flush with the picker's left edge: on a picker dragged wider, a click on the Size slider
 /// just inside the block jumps the size, and the same click just past the block lands on nothing.
 /// A click on a slider sets it to the spot clicked, so a size that doesn't move is a click that
@@ -652,10 +652,10 @@ fn brush_picker_upper_controls_stop_at_their_max_width() {
     // at the 6 pt spacing.
     let y = size_label.center().y + 27.0;
     let before = h.state().session.tools.brush.size;
-    click(&mut h, egui::pos2(size_label.left() + crate::pickers::brush_picker::HEAD_MAX_W - 10.0, y));
+    click(&mut h, egui::pos2(size_label.left() + crate::pickers::adapters::brush_picker::HEAD_MAX_W - 10.0, y));
     let inside = h.state().session.tools.brush.size;
     assert_ne!(inside, before, "the slider takes a click just inside the block");
-    click(&mut h, egui::pos2(size_label.left() + crate::pickers::brush_picker::HEAD_MAX_W + 10.0, y));
+    click(&mut h, egui::pos2(size_label.left() + crate::pickers::adapters::brush_picker::HEAD_MAX_W + 10.0, y));
     assert_eq!(h.state().session.tools.brush.size, inside, "just past the block the click lands on nothing");
 }
 
@@ -677,7 +677,7 @@ fn the_brushes_tab_grid_is_centred_past_its_indent() {
     );
     PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
     h.run_steps(6);
-    rows_are_centred(&h, crate::pickers::asset_browser_groups::row_indent(1), 2);
+    rows_are_centred(&h, crate::pickers::browser::groups::row_indent(1), 2);
 }
 
 /// #4454: a card's size number sat under the tip thumbnail of any medium or large brush (the
@@ -698,7 +698,7 @@ fn card_tips_never_cover_their_size_number() {
     let number_h = number_h.get();
     assert!(number_h > 8.0, "the number has a real height: {number_h}");
     let mut scale = CARD_COMPACT_SCALE + 0.01;
-    while scale <= *crate::pickers::brush_picker::SCALE_RANGE.end() + 1e-3 {
+    while scale <= *crate::pickers::adapters::brush_picker::SCALE_RANGE.end() + 1e-3 {
         let scale_h = scale.max(CARD_MIN_H_SCALE);
         // The tip cell of a full card (name row under it), a tip-and-name card and a tip-only one,
         // as [`preset_card`] sizes them in a wide column.

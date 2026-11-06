@@ -6,9 +6,9 @@
 
 use std::collections::BTreeSet;
 
-use super::picker_browser_identity::{PickerNodeIdentity, PickerNodeRole, PickerProjectionKeys, ProjectionNodeRef};
-use super::picker_browser_model::{HierarchyNode, PickerBrowserHierarchy, PickerId, PickerIdRegistry};
-use super::picker_state::HierarchyOrderEntry;
+use super::super::state::HierarchyOrderEntry;
+use super::identity::{PickerNodeIdentity, PickerNodeRole, PickerProjectionKeys, ProjectionNodeRef};
+use super::path_identity_model::{HierarchyNode, PickerBrowserHierarchy, PickerId, PickerIdRegistry};
 
 /// Asset-neutral item projection supplied by a picker adapter.
 #[derive(Clone)]
@@ -156,7 +156,7 @@ pub(crate) fn build_hierarchy_projection(
                 HierarchyOrderEntry::Item(key) => {
                     if let Some(&index) = item_by_key.get(&key) {
                         let item = &group_items[index];
-                        let folder_path = &item.group_path[..item.group_path.len().min(crate::pickers::asset_browser_hierarchy::MAX_HIERARCHY_DEPTH)];
+                        let folder_path = &item.group_path[..item.group_path.len().min(crate::pickers::browser::hierarchy::MAX_HIERARCHY_DEPTH)];
                         let id = projection_id(context.registry, context.projection_keys, ProjectionNodeRef::Item { group_index, item_index: index })?;
                         context.item_indices.insert(id.clone(), (group_index, index));
                         if folder_path.is_empty() {

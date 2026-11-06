@@ -2,7 +2,7 @@
 //!
 //! `asset_browser` remains the frame authority: it lays out rows, supplies the current browser
 //! projection, and calls these operations at the appropriate points in the frame. Pointer/gesture
-//! primitives and drag-ghost presentation live in `asset_browser_interaction`.
+//! primitives and drag-ghost presentation live in `browser_interaction`.
 // dragging behaviour the picker should have
 // in the browser:
 // 1. groups and cards are the only elements
@@ -25,29 +25,29 @@
 
 use egui::{Pos2, Rect, Sense, pos2};
 
-use crate::pickers::asset_browser::{
+use crate::pickers::browser::asset_browser::{
     BrowserAction, BrowserCapabilities, BrowserCtx, BrowserHierarchyView, BrowserProjection, BrowserSink, HierarchyCommit, ItemDropRegistrationGeometry,
     ItemGrid, ItemHierarchyDropPolicy, ItemHierarchyDropResolution, ItemRef, PaintedCell, group_is_descendant, hierarchy_action, hierarchy_drop_accepts,
     item_node_for_identity, picker_group_id, select_dropped_item, selected_drag_nodes,
 };
-use crate::pickers::asset_browser_groups::ROW_INDENT;
-use crate::pickers::asset_browser_interaction::{AssetDrag, BrowserDragGhosts, asset_browser_take_release};
-use crate::pickers::asset_browser_interaction::{GroupGapDropSpec, group_gap_drop_hits, group_gap_upper_anchor, header_drop_before, hierarchy_group_drop};
-use crate::pickers::picker_browser_hierarchy::commit_hierarchy_move;
+use crate::pickers::browser::browser_interaction::{AssetDrag, BrowserDragGhosts, asset_browser_take_release};
+use crate::pickers::browser::browser_interaction::{GroupGapDropSpec, group_gap_drop_hits, group_gap_upper_anchor, header_drop_before, hierarchy_group_drop};
+use crate::pickers::browser::groups::ROW_INDENT;
+use crate::pickers::browser::hierarchy_model::commit_hierarchy_move;
 
-use crate::pickers::asset_browser_interaction::{
+use crate::pickers::browser::browser_interaction::{
     ItemDropTarget, asset_browser_item_drag_source_with_id, asset_browser_item_gesture, asset_browser_item_hierarchy_target, asset_browser_item_target,
     card_drop_hit, card_drop_hits, card_leading_marker_rect, card_trailing_marker_rect, group_append_hit, item_row_edge_targets, paint_group_insertion_line,
     root_append_hit, root_prepend_hit,
 };
-use crate::pickers::picker_browser_dragging::{
+use crate::pickers::browser::dragging_model::{
     DragSession, DropCommitResult, DropHitRegion, PointerRegion, arbitrate_hit_index, hierarchy_move_sources, paint_candidate,
 };
-use crate::pickers::picker_browser_identity::{PickerNodeIdentity, PickerNodeRole};
-use crate::pickers::picker_browser_model::PickerBrowserHierarchy;
-use crate::pickers::picker_browser_model::{ContainerId, DropPosition, HierarchyNode, PickerId};
-use crate::pickers::picker_browser_projection::ItemView;
-use crate::pickers::picker_state::{HierarchyOrderEntry, PresetUi};
+use crate::pickers::browser::identity::{PickerNodeIdentity, PickerNodeRole};
+use crate::pickers::browser::path_identity_model::PickerBrowserHierarchy;
+use crate::pickers::browser::path_identity_model::{ContainerId, DropPosition, HierarchyNode, PickerId};
+use crate::pickers::browser::projection::ItemView;
+use crate::pickers::state::{HierarchyOrderEntry, PresetUi};
 
 pub(super) struct ItemDropSource<'a> {
     pub(super) key: &'a str,
@@ -64,7 +64,7 @@ pub(super) struct ItemDropCommit<'a, 'ctx> {
 }
 
 pub(super) struct RootHeaderReleaseEvent<'a> {
-    pub(super) group: &'a crate::pickers::picker_browser_projection::GroupView,
+    pub(super) group: &'a crate::pickers::browser::projection::GroupView,
     pub(super) header_rect: Rect,
     pub(super) dragged: AssetDrag,
     pub(super) browser_item_drop: &'a mut bool,
@@ -75,7 +75,7 @@ pub(super) struct GroupReleaseBatch {
     pub(super) group_toggles: Vec<String>,
 }
 
-pub(crate) fn item_occurrence_position(groups: &[crate::pickers::picker_browser_projection::GroupView], key: &str) -> Option<(usize, usize)> {
+pub(crate) fn item_occurrence_position(groups: &[crate::pickers::browser::projection::GroupView], key: &str) -> Option<(usize, usize)> {
     groups
         .iter()
         .enumerate()
@@ -510,7 +510,7 @@ pub(super) fn register_group_indent_drop_targets(
     projection: &BrowserProjection,
     drag_state: &mut BrowserDragState,
     expanded_groups: &std::collections::BTreeSet<String>,
-    picker_ids: &mut crate::pickers::picker_browser_model::PickerIdRegistry,
+    picker_ids: &mut crate::pickers::browser::path_identity_model::PickerIdRegistry,
 ) {
     if ctx.capabilities.group_drag {
         for (group_index, header, group_name) in &drag_state.headers {

@@ -4,17 +4,17 @@ use egui::{Rect, pos2};
 use serde_json::json;
 
 use crate::PhotocraftApp;
-use crate::pickers::asset_browser::{
+use crate::pickers::browser::asset_browser::{
     BrowserAction, BrowserAdapter, BrowserCapabilities, BrowserOptions, GroupView, ItemPaintState, ItemView, standard_group_context_menu,
     standard_item_context_menu,
 };
-use crate::pickers::asset_browser_interaction::canvas_drop_rect;
-use crate::pickers::picker_browser_identity::{PickerIdentityKey, PickerNodeIdentity, PickerProjectionKeys, ProjectionNodeRef};
-use crate::pickers::picker_footer::FooterOptions;
-use crate::pickers::picker_shell::{ShellOptions, picker_shell};
-use crate::pickers::picker_state::{HierarchyOrderEntry, ItemRenameState};
-use crate::pickers::preset_commands::{generic, run};
-use crate::pickers::preset_preview::c32;
+use crate::pickers::browser::browser_interaction::canvas_drop_rect;
+use crate::pickers::browser::identity::{PickerIdentityKey, PickerNodeIdentity, PickerProjectionKeys, ProjectionNodeRef};
+use crate::pickers::commands::{generic, run};
+use crate::pickers::footer::FooterOptions;
+use crate::pickers::preset_previews::c32;
+use crate::pickers::shell::{ShellOptions, picker_shell};
+use crate::pickers::state::{HierarchyOrderEntry, ItemRenameState};
 
 /// The engine's fallback owner for gradients created when the library has no groups. The shared
 /// hierarchy treats it as an invisible backing group while its cards live at the root.
@@ -241,8 +241,8 @@ mod tests {
 
     use super::{ROOT_ITEMS_GROUP, gradients_panel};
     use crate::PhotocraftApp;
-    use crate::pickers::asset_browser::last_group_headers;
-    use crate::pickers::picker_state::HierarchyOrderEntry;
+    use crate::pickers::browser::asset_browser::last_group_headers;
+    use crate::pickers::state::HierarchyOrderEntry;
 
     #[test]
     fn creating_a_gradient_with_no_groups_places_the_card_at_root_without_a_visible_backing_group() {
@@ -484,7 +484,7 @@ mod tests {
         h.run_steps(3);
 
         let scroll_to_bottom = |h: &mut Harness<'static, PhotocraftApp>| {
-            let viewport = crate::pickers::asset_browser::last_browser_rect(&h.ctx, "gradients").unwrap();
+            let viewport = crate::pickers::browser::asset_browser::last_browser_rect(&h.ctx, "gradients").unwrap();
             h.event(Event::PointerMoved(viewport.center()));
             h.event(Event::MouseWheel {
                 unit: egui::MouseWheelUnit::Point,
@@ -509,7 +509,7 @@ mod tests {
             scroll_to_bottom(&mut h);
         }
         let source = h.get_by_label(&last_key).rect().center();
-        let viewport = crate::pickers::asset_browser::last_browser_rect(&h.ctx, "gradients").unwrap();
+        let viewport = crate::pickers::browser::asset_browser::last_browser_rect(&h.ctx, "gradients").unwrap();
         let target = egui::pos2(viewport.center().x, viewport.bottom() - 8.0);
         assert!(viewport.contains(target));
         h.event(Event::PointerMoved(source));

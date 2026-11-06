@@ -800,7 +800,7 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 }
                 if let Some(at) = brush_picker {
                     if at.is_none() {
-                        crate::pickers::brush_picker::close(&mut app.ui);
+                        crate::pickers::adapters::brush_picker::close(&mut app.ui);
                     } else {
                         app.ui.brush_picker = at;
                     }
@@ -1330,7 +1330,7 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
                 "filter": app.ui.presets_ui.search.get("brush-picker").cloned().unwrap_or_default(),
                 "renaming": app.ui.presets_ui.renaming.as_ref().filter(|(panel, _, _)| panel == "brush-picker").map(|(_, key, text)| {
                     let group_name = key.strip_prefix("group:");
-                    let name = crate::pickers::brush_browser::preset_by_identity(&app.session.tools.presets, key)
+                    let name = crate::pickers::adapters::brushes::preset_by_identity(&app.session.tools.presets, key)
                         .map(|preset| preset.name.clone())
                         .or_else(|| group_name.map(str::to_owned))
                         .unwrap_or_else(|| key.clone());
@@ -2249,7 +2249,7 @@ mod tests {
             .tools
             .presets
             .first()
-            .map(|preset| (crate::pickers::brush_browser::preview_identity(preset), preset.name.clone()))
+            .map(|preset| (crate::pickers::adapters::brushes::preview_identity(preset), preset.name.clone()))
             .expect("session has brush presets");
         app.ui.brush_picker = Some([20.0, 30.0]);
         app.ui.presets_ui.renaming = Some(("patterns".into(), "Pattern A".into(), "Pattern B".into()));

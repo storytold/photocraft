@@ -5,10 +5,10 @@
 //! arbitration, hierarchy resolver, and transient persistence are the system under test.
 
 use super::*;
-use crate::pickers::picker_browser_dragging::DropMoveIntent;
-use crate::pickers::picker_browser_identity::PickerIdentityKey;
-use crate::pickers::picker_browser_model::PickerId;
-use crate::pickers::picker_state::{HierarchyOrderEntry, PresetUi};
+use crate::pickers::browser::dragging_model::DropMoveIntent;
+use crate::pickers::browser::identity::PickerIdentityKey;
+use crate::pickers::browser::path_identity_model::PickerId;
+use crate::pickers::state::{HierarchyOrderEntry, PresetUi};
 use egui::{Event, Modifiers, PointerButton, Pos2, Rect, Vec2, vec2};
 use egui_kittest::{Harness, kittest::Queryable};
 
@@ -98,7 +98,7 @@ fn harness_with_intent_capture(
             }
             let (preset_ui, intents) = state;
             let mut capture_intent =
-                |intent: &DropMoveIntent, _identities: &std::collections::BTreeMap<PickerId, crate::pickers::picker_browser_identity::PickerNodeIdentity>| {
+                |intent: &DropMoveIntent, _identities: &std::collections::BTreeMap<PickerId, crate::pickers::browser::identity::PickerNodeIdentity>| {
                     intents.push(intent.clone());
                     Ok(())
                 };
@@ -145,7 +145,7 @@ fn harness_with_intent_capture(
 
 #[test]
 fn all_display_modes_allocate_the_exact_requested_card_height() {
-    use crate::pickers::picker_state::PickerDisplayMode as Mode;
+    use crate::pickers::state::PickerDisplayMode as Mode;
 
     let groups = vec![group("A", vec![item("one", "One card", &[])])];
     for (mode, expected_height) in
@@ -161,7 +161,7 @@ fn all_display_modes_allocate_the_exact_requested_card_height() {
 
 #[test]
 fn wrapped_list_uses_fixed_width_column_major_flow_and_shift_selection_order() {
-    use crate::pickers::picker_state::PickerDisplayMode as Mode;
+    use crate::pickers::state::PickerDisplayMode as Mode;
 
     let groups = vec![group("A", vec![item("a1", "Card 1", &[]), item("a2", "Card 2", &[]), item("a3", "Card 3", &[]), item("a4", "Card 4", &[])])];
     let mut state = PresetUi::default();
@@ -201,7 +201,7 @@ fn wrapped_list_uses_fixed_width_column_major_flow_and_shift_selection_order() {
 
 #[test]
 fn large_wrapped_list_uses_245px_content_width_plus_its_two_pixel_border() {
-    use crate::pickers::picker_state::PickerDisplayMode as Mode;
+    use crate::pickers::state::PickerDisplayMode as Mode;
 
     let groups = vec![group("A", vec![item("a1", "Large card 1", &[]), item("a2", "Large card 2", &[]), item("a3", "Large card 3", &[])])];
     let mut state = PresetUi::default();
@@ -223,7 +223,7 @@ fn large_wrapped_list_uses_245px_content_width_plus_its_two_pixel_border() {
 
 #[test]
 fn unwrapped_list_modes_use_full_width_and_keep_one_item_per_row() {
-    use crate::pickers::picker_state::PickerDisplayMode as Mode;
+    use crate::pickers::state::PickerDisplayMode as Mode;
 
     let groups = vec![group("A", vec![item("a1", "Unwrapped card 1", &[]), item("a2", "Unwrapped card 2", &[])])];
     for mode in [Mode::SmallList, Mode::LargeList] {
@@ -247,7 +247,7 @@ fn unwrapped_list_modes_use_full_width_and_keep_one_item_per_row() {
 
 #[test]
 fn text_only_is_a_list_mode_but_keeps_full_width_rows() {
-    use crate::pickers::picker_state::PickerDisplayMode as Mode;
+    use crate::pickers::state::PickerDisplayMode as Mode;
 
     let groups = vec![group("A", vec![item("a1", "Text card 1", &[]), item("a2", "Text card 2", &[])])];
     let mut state = PresetUi::default();
@@ -265,7 +265,7 @@ fn text_only_is_a_list_mode_but_keeps_full_width_rows() {
 
 #[test]
 fn text_only_elides_long_fixed_width_labels_without_losing_the_full_accessible_name() {
-    use crate::pickers::picker_state::PickerDisplayMode as Mode;
+    use crate::pickers::state::PickerDisplayMode as Mode;
 
     let name = "A very long preset name that must be elided rather than painted over adjacent controls";
     let groups = vec![group("A", vec![item("long", name, &[])])];
@@ -469,7 +469,7 @@ fn item_drag_preview_presses_against_asset_browser_viewport_edge() {
     let ghost_rect = std::rc::Rc::new(std::cell::Cell::new(None::<Rect>));
     let ghost_rect_ui = ghost_rect.clone();
     let mut initial_state = PresetUi::default();
-    initial_state.display_modes.insert(PANEL.to_owned(), crate::pickers::picker_state::PickerDisplayMode::SmallList);
+    initial_state.display_modes.insert(PANEL.to_owned(), crate::pickers::state::PickerDisplayMode::SmallList);
     let mut h = Harness::builder().with_size(vec2(420.0, 420.0)).build_ui_state(
         move |ui, state: &mut (PresetUi, Vec<BrowserAction>)| {
             if !ui.ctx().fonts(|fonts| fonts.definitions().families.contains_key(&egui::FontFamily::Name("semibold".into()))) {
@@ -1328,7 +1328,7 @@ fn root_cards_from_different_backing_groups_share_one_grid_and_keep_owner_identi
 
 #[test]
 fn root_cards_from_different_backing_groups_remain_rows_in_list_mode() {
-    use crate::pickers::picker_state::PickerDisplayMode as Mode;
+    use crate::pickers::state::PickerDisplayMode as Mode;
 
     let mut state = with_consecutive_root_cards_from_different_groups();
     state.display_modes.insert(PANEL.to_owned(), Mode::SmallList);
@@ -1686,7 +1686,7 @@ fn actual_shared_picker_passes_the_complete_mixed_selection_to_its_commit_functi
     assert_eq!(h.state().1.len(), 1);
     assert_eq!(h.state().1[0].source, PickerId::group("A"));
     assert_eq!(h.state().1[0].selection, [PickerId::group("A"), PickerId::item("B", "b1")]);
-    assert_eq!(h.state().1[0].position, crate::pickers::picker_browser_model::DropPosition::PrependTo { group: PickerId::group("C") });
+    assert_eq!(h.state().1[0].position, crate::pickers::browser::path_identity_model::DropPosition::PrependTo { group: PickerId::group("C") });
 }
 
 #[test]
@@ -1790,7 +1790,7 @@ fn actual_invalid_member_rejects_the_entire_multi_node_move_before_commit() {
 
 #[test]
 fn actual_multiple_group_drag_uses_before_after_prepend_and_append_targets() {
-    use crate::pickers::picker_browser_model::{ContainerId, DropPosition};
+    use crate::pickers::browser::path_identity_model::{ContainerId, DropPosition};
 
     for list in [false, true] {
         for (region, expected) in [
@@ -1833,7 +1833,7 @@ fn actual_multiple_group_drag_uses_before_after_prepend_and_append_targets() {
 
 #[test]
 fn actual_mixed_group_and_card_selection_uses_every_drop_position_from_either_source_type() {
-    use crate::pickers::picker_browser_model::{ContainerId, DropPosition};
+    use crate::pickers::browser::path_identity_model::{ContainerId, DropPosition};
 
     for list in [false, true] {
         for source_kind in ["group", "card"] {
@@ -2314,7 +2314,7 @@ fn pos2(x: f32, y: f32) -> Pos2 {
 mod filter_tests {
     use super::super::{BrowserAction, BrowserAdapter, BrowserCapabilities, BrowserOptions, ItemPaintState, browser, last_group_headers};
     use super::{group, item};
-    use crate::pickers::picker_state::{HierarchyOrderEntry, PresetUi};
+    use crate::pickers::state::{HierarchyOrderEntry, PresetUi};
     use egui_kittest::kittest::Queryable;
 
     fn nested_group_drop_harness(domain_hierarchy_actions: bool, target_nested_card: bool) -> egui_kittest::Harness<'static, (PresetUi, Vec<BrowserAction>)> {
@@ -2457,7 +2457,7 @@ fn group_render_segments(
     display: &[(usize, usize)],
     parents: &std::collections::BTreeMap<String, String>,
     orders: &std::collections::BTreeMap<String, Vec<HierarchyOrderEntry>>,
-) -> Vec<crate::pickers::picker_browser_projection::GroupRenderSegment> {
+) -> Vec<crate::pickers::browser::projection::GroupRenderSegment> {
     let keys = test_projection_keys(groups);
     build_hierarchy_projection(groups, display, parents, orders, &keys, &mut PickerIdRegistry::default()).map(|(segments, _, _)| segments).unwrap_or_default()
 }
@@ -2470,7 +2470,7 @@ pub(super) fn test_projection_keys(groups: &[GroupView]) -> PickerProjectionKeys
             PickerNodeIdentity::Group(group.name.clone()),
         );
         for (item_index, item) in group.items.iter().enumerate() {
-            let folder_path = &item.group_path[..item.group_path.len().min(crate::pickers::asset_browser_hierarchy::MAX_HIERARCHY_DEPTH)];
+            let folder_path = &item.group_path[..item.group_path.len().min(crate::pickers::browser::hierarchy::MAX_HIERARCHY_DEPTH)];
             keys.insert(
                 ProjectionNodeRef::Item { group_index, item_index },
                 PickerIdentityKey::from_parts("test-item", [group.name.as_str(), item.key.as_str()]),
@@ -2515,7 +2515,7 @@ mod moved_unit_tests {
     #[cfg(test)]
     mod item_batch_tests {
         use super::{BrowserAction, GroupView, ItemView, advance_item_rename, begin_item_rename, delete_item_actions, item_context_targets, move_item_actions};
-        use crate::pickers::picker_state::PresetUi;
+        use crate::pickers::state::PresetUi;
 
         #[test]
         fn item_context_actions_target_the_selected_cards_and_keep_single_card_fallback() {
@@ -2616,9 +2616,9 @@ mod moved_unit_tests {
         use std::collections::BTreeMap;
 
         use super::{plan_hierarchy_item_moves, selected_drag_nodes};
-        use crate::pickers::picker_browser_identity::PickerNodeIdentity;
-        use crate::pickers::picker_browser_model::{DropPosition, HierarchyNode, PickerBrowserHierarchy, PickerId};
-        use crate::pickers::picker_state::PresetUi;
+        use crate::pickers::browser::identity::PickerNodeIdentity;
+        use crate::pickers::browser::path_identity_model::{DropPosition, HierarchyNode, PickerBrowserHierarchy, PickerId};
+        use crate::pickers::state::PresetUi;
 
         #[test]
         fn selected_ancestor_subsumes_descendants_and_keeps_independent_nodes_in_visible_order() {
@@ -2677,7 +2677,7 @@ mod moved_unit_tests {
                 (DropPosition::After { target: PickerId::item("B", "b1") }, vec![("a2", 1), ("a1", 1)]),
                 (DropPosition::PrependTo { group: PickerId::group("B") }, vec![("a2", 0), ("a1", 0)]),
                 (
-                    DropPosition::AppendTo { container: crate::pickers::picker_browser_model::ContainerId::Group(PickerId::group("B")) },
+                    DropPosition::AppendTo { container: crate::pickers::browser::path_identity_model::ContainerId::Group(PickerId::group("B")) },
                     vec![("a1", 2), ("a2", 3)],
                 ),
                 (DropPosition::After { target: PickerId::item("A", "a3") }, vec![("a2", 2), ("a1", 1)]),
@@ -2727,8 +2727,8 @@ mod moved_unit_tests {
         use super::{
             BrowserAction, BrowserDeleteContext, PickerNodeIdentity, full_hierarchy_selection_order, replace_selected_delete_actions, selected_delete_actions,
         };
-        use crate::pickers::picker_browser_model::{HierarchyNode as HNode, PickerBrowserHierarchy, PickerId};
-        use crate::pickers::picker_state::PresetUi;
+        use crate::pickers::browser::path_identity_model::{HierarchyNode as HNode, PickerBrowserHierarchy, PickerId};
+        use crate::pickers::state::PresetUi;
         use std::collections::{BTreeMap, BTreeSet};
 
         fn fixture() -> (PickerBrowserHierarchy, BTreeMap<PickerId, PickerNodeIdentity>, Vec<PickerId>) {
@@ -2894,8 +2894,8 @@ mod moved_unit_tests {
     #[cfg(test)]
     mod display_layout_tests {
         use super::{canvas_drop_target, item_grid_position, list_layout_geometry};
-        use crate::pickers::picker_browser_model::PickerId;
-        use crate::pickers::picker_state::{PickerDisplayMode, PresetUi};
+        use crate::pickers::browser::path_identity_model::PickerId;
+        use crate::pickers::state::{PickerDisplayMode, PresetUi};
 
         #[test]
         fn list_width_is_fixed_only_when_wrap_is_enabled() {
@@ -3129,10 +3129,10 @@ mod moved_unit_tests {
         #[test]
         fn upper_and_lower_gap_debug_labels_do_not_overwrite_each_other() {
             let gap = egui::Rect::from_min_max(egui::pos2(10.0, 100.0), egui::pos2(210.0, 106.0));
-            let hits = crate::pickers::asset_browser_interaction::group_gap_drop_hits(crate::pickers::asset_browser_interaction::GroupGapDropSpec {
+            let hits = crate::pickers::browser::browser_interaction::group_gap_drop_hits(crate::pickers::browser::browser_interaction::GroupGapDropSpec {
                 rect: gap,
-                upper: crate::pickers::picker_browser_model::PickerId::from("upper"),
-                lower: crate::pickers::picker_browser_model::PickerId::from("lower"),
+                upper: crate::pickers::browser::path_identity_model::PickerId::from("upper"),
+                lower: crate::pickers::browser::path_identity_model::PickerId::from("lower"),
                 upper_bounds: egui::Rect::from_min_max(egui::pos2(20.0, 60.0), egui::pos2(120.0, 90.0)),
                 lower_bounds: egui::Rect::from_min_max(egui::pos2(20.0, 106.0), egui::pos2(210.0, 135.0)),
                 upper_depth: 0,
@@ -3161,10 +3161,7 @@ mod moved_unit_tests {
             );
         }
 
-        fn segment_summary(
-            segments: &[crate::pickers::picker_browser_projection::GroupRenderSegment],
-            groups: &[GroupView],
-        ) -> Vec<(String, bool, Vec<String>)> {
+        fn segment_summary(segments: &[crate::pickers::browser::projection::GroupRenderSegment], groups: &[GroupView]) -> Vec<(String, bool, Vec<String>)> {
             segments
                 .iter()
                 .map(|segment| {
@@ -3255,8 +3252,8 @@ mod moved_unit_tests {
         #[test]
         fn typed_root_items_distinguish_duplicate_keys_from_different_groups() {
             use super::build_hierarchy_projection;
-            use crate::pickers::picker_browser_identity::PickerNodeIdentity;
-            use crate::pickers::picker_browser_model::{HierarchyNode, PickerIdRegistry};
+            use crate::pickers::browser::identity::PickerNodeIdentity;
+            use crate::pickers::browser::path_identity_model::{HierarchyNode, PickerIdRegistry};
 
             let groups = vec![group("First", vec![item("same", "Same", &[])]), group("Second", vec![item("same", "Same", &[])])];
             let display = [(0, 0), (1, 0)];
@@ -3285,8 +3282,8 @@ mod moved_unit_tests {
         #[test]
         fn projection_keeps_group_folder_and_card_ids_stable_when_sibling_order_changes() {
             use super::build_hierarchy_projection;
-            use crate::pickers::picker_browser_identity::PickerNodeIdentity;
-            use crate::pickers::picker_browser_model::{PickerId, PickerIdRegistry};
+            use crate::pickers::browser::identity::PickerNodeIdentity;
+            use crate::pickers::browser::path_identity_model::{PickerId, PickerIdRegistry};
 
             let groups = vec![
                 group("A", vec![item("a-root", "A root", &[]), item("a-nested", "A nested", &["Folder", "Inner"])]),

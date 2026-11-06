@@ -745,7 +745,7 @@ fn every_supported_picker_panel_uses_the_shared_docking_composer() {
         assert!(picker.query_all_by_label("Text Only").count() > 0, "{panel} receives the shared display controls");
     }
     for panel in ["color", "layers", "properties", "brushSettings"] {
-        assert!(!crate::pickers::preset_panels::shared_docking(&format!("window.panel.{panel}")), "{panel} keeps its independent menu");
+        assert!(!crate::pickers::panels::shared_docking(&format!("window.panel.{panel}")), "{panel} keeps its independent menu");
     }
 }
 

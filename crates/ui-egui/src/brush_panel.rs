@@ -25,8 +25,8 @@ use crate::{PhotocraftApp, icons, widgets};
 
 pub use crate::brush_preview::{preview_pixels, preview_sig};
 pub use crate::brush_sections::section_body;
-pub use crate::pickers::brush_browser::{BrushesPanelState, BrushesView, Renaming, UNGROUPED, grouped_presets};
-pub(crate) use crate::pickers::brush_browser::{clear_texture_pattern_selection, full_uv, run_or_status};
+pub use crate::pickers::adapters::brushes::{BrushesPanelState, BrushesView, Renaming, UNGROUPED, grouped_presets};
+pub(crate) use crate::pickers::adapters::brushes::{clear_texture_pattern_selection, full_uv, run_or_status};
 pub use photocraft_engine::brush_cmds::brush_patch;
 
 /// Sections in Photoshop's order. The bool says whether the section has an enable box.
@@ -287,7 +287,7 @@ fn settings_tab(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         // Build the group projection only while Texture is visible, borrowing the
                         // library instead of cloning every pattern on each Brush Settings redraw.
                         let patterns = &app.session.patterns.items;
-                        let pattern_groups = crate::pickers::pattern_browser::pattern_group_views(patterns, &app.session.presets.pattern_groups);
+                        let pattern_groups = crate::pickers::adapters::patterns::pattern_group_views(patterns, &app.session.presets.pattern_groups);
                         crate::brush_sections::section_body_with_patterns(
                             ui,
                             &mut b,
@@ -313,10 +313,10 @@ fn settings_tab(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             });
         });
     });
-    crate::pickers::pattern_browser::apply_compact_pattern_actions(
+    crate::pickers::adapters::patterns::apply_compact_pattern_actions(
         app,
         "brush-texture-patterns",
-        crate::pickers::pattern_browser::take_compact_pattern_actions(ui.ctx(), "brush-texture-patterns"),
+        crate::pickers::adapters::patterns::take_compact_pattern_actions(ui.ctx(), "brush-texture-patterns"),
     );
     ui.add_space(6.0);
     widgets::hairline(ui);
@@ -328,7 +328,7 @@ fn settings_tab(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         ui.painter().image(tex.id(), r, full_uv(), Color32::WHITE);
         ui.vertical(|ui| {
             let new = icons::button(ui, "square-plus", 24.0, false, tl!("Create new brush from these settings"));
-            if crate::pickers::brush_picker::named(new, "Create new brush from these settings").clicked() {
+            if crate::pickers::adapters::brush_picker::named(new, "Create new brush from these settings").clicked() {
                 crate::brush_preset_dialog::open(app, Some(&b));
             }
             if icons::button(ui, "undo-2", 24.0, false, tl!("Reset the brush to the defaults")).clicked() {
@@ -414,11 +414,11 @@ pub fn copy_texture_to_other_tools(app: &mut PhotocraftApp) {
 
 /// The Brush Settings panel menu actions (hamburger menu).
 pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    crate::pickers::picker_shell::picker_menu_contents(
+    crate::pickers::shell::picker_menu_contents(
         ui,
         &mut app.ui.presets_ui,
         "brush-picker",
-        crate::pickers::picker_shell::PickerMenuOptions::for_panel("brush-picker"),
+        crate::pickers::shell::PickerMenuOptions::for_panel("brush-picker"),
         None,
     );
     ui.separator();
@@ -428,7 +428,7 @@ pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             && let Some(preset) = app.session.tools.presets.iter().find(|p| p.name == name)
         {
             app.ui.brushes_panel.renaming = Some(Renaming { group: false, name: name.clone(), folder: Vec::new(), text: String::new() });
-            crate::pickers::brush_picker::begin_rename(&mut app.ui.presets_ui, preset);
+            crate::pickers::adapters::brush_picker::begin_rename(&mut app.ui.presets_ui, preset);
         }
         ui.close();
     }
@@ -438,7 +438,7 @@ pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         .tools
         .current_preset
         .as_deref()
-        .filter(|name| !crate::pickers::brush_browser::is_ambiguous_preset_name(&app.session.tools.presets, name))
+        .filter(|name| !crate::pickers::adapters::brushes::is_ambiguous_preset_name(&app.session.tools.presets, name))
         .and_then(|name| app.session.tools.presets.iter().find(|preset| preset.name.eq_ignore_ascii_case(name)))
         .map(|preset| preset.name.clone());
     if ui.add_enabled(current.is_some(), egui::Button::new(tl!("Rename Current Brush…"))).clicked()
@@ -478,19 +478,19 @@ pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         ui.close();
     }
     ui.separator();
-    crate::pickers::picker_shell::picker_menu_contents(
+    crate::pickers::shell::picker_menu_contents(
         ui,
         &mut app.ui.presets_ui,
         "brushes",
-        crate::pickers::picker_shell::PickerMenuOptions { display: true, search_visibility: false },
+        crate::pickers::shell::PickerMenuOptions { display: true, search_visibility: false },
         None,
     );
     ui.separator();
-    crate::pickers::picker_shell::picker_menu_contents(
+    crate::pickers::shell::picker_menu_contents(
         ui,
         &mut app.ui.presets_ui,
         "brush-texture-patterns",
-        crate::pickers::picker_shell::PickerMenuOptions { display: true, search_visibility: false },
+        crate::pickers::shell::PickerMenuOptions { display: true, search_visibility: false },
         None,
     );
     ui.separator();

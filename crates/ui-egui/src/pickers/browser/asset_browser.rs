@@ -7,46 +7,46 @@ use std::collections::BTreeSet;
 
 use egui::{Align2, CornerRadius, FontId, Pos2, Rect, Sense, Stroke, pos2, vec2};
 
-use crate::pickers::asset_browser_dragging::{
+use crate::pickers::browser::browser_interaction::{
+    AssetDrag, BrowserDeleteContext, BrowserDragGhostSource, GroupDragGhost, HeaderDropCapabilities, HierarchyDrop, ItemDragGhost, NestedGroupDragGhost,
+    asset_browser_header_drag_source_with_id, asset_browser_header_target_with_capabilities, browser_drag_ghost_rect, draw_context_menu_target,
+    draw_rename_row, group_header_drop_hits, header_drop_before, item_drop_after, replace_selected_delete_actions,
+};
+pub(crate) use crate::pickers::browser::browser_interaction::{
+    begin_item_rename, delete_item_actions, item_context_targets, move_item_actions, standard_group_context_menu, standard_item_context_menu,
+};
+use crate::pickers::browser::dragging::{
     BrowserDragState, GroupRelease, GroupReleaseBatch, ItemDropCommit, ItemDropSource, RootHeaderReleaseEvent, apply_browser_item_gesture,
     apply_group_releases_and_toggles, apply_legacy_group_release, apply_root_header_release, canvas_drop_target, commit_item_drop,
     paint_group_drop_insertion_markers, register_browser_item_drop_targets, register_canonical_root_end_target, register_canonical_root_leading_target,
     register_canonical_sibling_gap_targets, register_group_indent_drop_targets, resolve_canonical_drop, resolve_group_indent_target,
     resolve_item_hierarchy_drop_target,
 };
-use crate::pickers::asset_browser_groups::{GROUP_HEADER_HEIGHT, group_open, nested_header as draw_nested_folder_header, row_indent};
-use crate::pickers::asset_browser_hierarchy::HierarchyGroup;
-use crate::pickers::asset_browser_interaction::{
-    AssetDrag, BrowserDeleteContext, BrowserDragGhostSource, GroupDragGhost, HeaderDropCapabilities, HierarchyDrop, ItemDragGhost, NestedGroupDragGhost,
-    asset_browser_header_drag_source_with_id, asset_browser_header_target_with_capabilities, browser_drag_ghost_rect, draw_context_menu_target,
-    draw_rename_row, group_header_drop_hits, header_drop_before, item_drop_after, replace_selected_delete_actions,
-};
-pub(crate) use crate::pickers::asset_browser_interaction::{
-    begin_item_rename, delete_item_actions, item_context_targets, move_item_actions, standard_group_context_menu, standard_item_context_menu,
-};
-use crate::pickers::asset_browser_items::{
+use crate::pickers::browser::dragging_model::DropMoveIntent;
+use crate::pickers::browser::groups::{GROUP_HEADER_HEIGHT, group_open, nested_header as draw_nested_folder_header, row_indent};
+use crate::pickers::browser::hierarchy::HierarchyGroup;
+use crate::pickers::browser::identity::{PickerIdentityKey, PickerNodeIdentity, PickerProjectionKeys, ProjectionNodeRef};
+use crate::pickers::browser::items::{
     group_matches_query, group_visible_for_query, item_grid_position, item_info as asset_browser_item_info, item_matches_query, item_visible_for_query,
     list_layout_geometry, list_row as asset_browser_list_row,
 };
-use crate::pickers::picker_browser_dragging::DropMoveIntent;
-use crate::pickers::picker_browser_identity::{PickerIdentityKey, PickerNodeIdentity, PickerProjectionKeys, ProjectionNodeRef};
-use crate::pickers::picker_browser_model::{ContainerId, PickerBrowserHierarchy, PickerId, PickerIdRegistry};
-use crate::pickers::picker_browser_projection::{GroupRenderSegment, build_hierarchy_projection};
-pub(crate) use crate::pickers::picker_browser_projection::{GroupView, ItemView};
-use crate::pickers::picker_state::escape_hierarchy_key_part;
-use crate::pickers::picker_state::{HierarchyOrderEntry, PresetUi};
+use crate::pickers::browser::path_identity_model::{ContainerId, PickerBrowserHierarchy, PickerId, PickerIdRegistry};
+use crate::pickers::browser::projection::{GroupRenderSegment, build_hierarchy_projection};
+pub(crate) use crate::pickers::browser::projection::{GroupView, ItemView};
+use crate::pickers::state::escape_hierarchy_key_part;
+use crate::pickers::state::{HierarchyOrderEntry, PresetUi};
 use crate::theme::Tokens;
 
 pub(crate) const MIN_THUMB: f32 = 20.0;
 
 #[cfg(test)]
-use crate::pickers::asset_browser_dragging::{
+use crate::pickers::browser::browser_interaction::{advance_item_rename, browser_drag_ghost_position, clamp_drag_ghost, selected_delete_actions};
+#[cfg(test)]
+use crate::pickers::browser::dragging::{
     best_drop_target_index, best_indent_drop_target_index, item_hierarchy_insertion_anchor, item_occurrence_position, plan_hierarchy_item_moves,
 };
 #[cfg(test)]
-use crate::pickers::asset_browser_interaction::{advance_item_rename, browser_drag_ghost_position, clamp_drag_ghost, selected_delete_actions};
-#[cfg(test)]
-use crate::pickers::picker_browser_dragging::{DropHitRegion, PointerRegion};
+use crate::pickers::browser::dragging_model::{DropHitRegion, PointerRegion};
 // 27px of header content plus a one-pixel border on each vertical edge.
 const GROUP_LAYOUT_GAP: f32 = 0.0;
 // The six-pixel band immediately before a group is split into two exact three-pixel targets.
@@ -55,7 +55,7 @@ const GROUP_LAYOUT_GAP: f32 = 0.0;
 #[derive(Clone, Copy, Debug)]
 struct ItemGridLayout {
     content_indent: f32,
-    display_mode: crate::pickers::picker_state::PickerDisplayMode,
+    display_mode: crate::pickers::state::PickerDisplayMode,
     wrap_list: bool,
     center_grid: bool,
 }
@@ -594,7 +594,7 @@ fn is_group_descendant(parents: &std::collections::BTreeMap<String, String>, sou
     false
 }
 
-use crate::pickers::asset_browser_groups::{header as asset_browser_header, inset_row_rect};
+use crate::pickers::browser::groups::{header as asset_browser_header, inset_row_rect};
 
 /// Browser-specific layout and presentation, supplied by each asset consumer.
 /// Cards use a consistent border and two-pixel inter-card spacing across picker consumers.
@@ -995,7 +995,7 @@ fn paint_browser_item(
     ui: &mut egui::Ui,
     painted: &PaintedCell<'_>,
     list: bool,
-    display_mode: crate::pickers::picker_state::PickerDisplayMode,
+    display_mode: crate::pickers::state::PickerDisplayMode,
     painters: &mut Painters<'_, '_>,
     tokens: &Tokens,
 ) {
@@ -1007,7 +1007,7 @@ fn paint_browser_item(
     let selected = painted.selected;
     let cell_height = rect.height();
     if list {
-        if display_mode == crate::pickers::picker_state::PickerDisplayMode::TextOnly {
+        if display_mode == crate::pickers::state::PickerDisplayMode::TextOnly {
             asset_browser_list_row(ui, response, rect, name, selected);
             ui.painter().rect_stroke(rect, CornerRadius::ZERO, Stroke::new(1.0, tokens.card_border), egui::StrokeKind::Inside);
             let label_rect = Rect::from_min_max(pos2(rect.left() + 8.0, rect.top()), rect.right_bottom());
@@ -1122,7 +1122,7 @@ pub(crate) fn browser_with_root_sequence(
         Painters { group: adapter.paint_group.as_deref_mut(), item: &mut *adapter.paint_item, list_item: adapter.paint_list_item.as_deref_mut() };
     let display_mode = st.display_mode(panel);
     let list = display_mode.uses_list_layout();
-    let wrap_list = st.wrap_list_enabled(panel) && display_mode != crate::pickers::picker_state::PickerDisplayMode::TextOnly;
+    let wrap_list = st.wrap_list_enabled(panel) && display_mode != crate::pickers::state::PickerDisplayMode::TextOnly;
     // The rename row is included in the browser allocation, not added above it. Keep its
     // measured height out of the scroll area's minimum so the shell-owned footer stays in place.
     let (rename_row_height, ev) = draw_rename_row(ui, st, panel, browser_ctx.tokens);
@@ -1590,7 +1590,7 @@ pub(crate) fn browser_with_root_sequence(
 }
 
 #[cfg(test)]
-#[path = "asset_browser_ui_tests.rs"]
+#[path = "browser_ui_tests.rs"]
 mod ui_tests;
 #[cfg(test)]
 pub(crate) use ui_tests::{test_last_browser_rect as last_browser_rect, test_last_group_headers as last_group_headers};

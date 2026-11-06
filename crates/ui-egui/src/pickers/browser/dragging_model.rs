@@ -6,7 +6,7 @@
 
 use egui::{Pos2, Rect};
 
-use crate::pickers::picker_browser_model::{ContainerId, DropPosition, HierarchyError, PickerBrowserHierarchy, PickerId};
+use crate::pickers::browser::path_identity_model::{ContainerId, DropPosition, HierarchyError, PickerBrowserHierarchy, PickerId};
 
 /// The geometric part of a hit target, independent of its semantic destination.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -275,7 +275,7 @@ mod tests {
         DragSession, DropCommitResult, DropHitRegion, DropIndicator, DropRejection, DropValidity, PointerRegion, arbitrate_hit_index, container_outline_rects,
         hierarchy_move_sources, resolve_drop_candidate, resolve_drop_candidate_with_selection,
     };
-    use crate::pickers::picker_browser_model::{ContainerId, DropPosition, HierarchyNode, PickerBrowserHierarchy, PickerId};
+    use crate::pickers::browser::path_identity_model::{ContainerId, DropPosition, HierarchyNode, PickerBrowserHierarchy, PickerId};
     use egui::{Pos2, Rect};
 
     fn hit(region: PointerRegion, target: Option<&str>, container: Option<ContainerId>) -> DropHitRegion {

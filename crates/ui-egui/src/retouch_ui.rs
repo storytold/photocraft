@@ -427,7 +427,7 @@ pub fn source_marker_point(app: &PhotocraftApp) -> Option<[f64; 2]> {
         return None;
     }
     let at = app.drag.as_ref().filter(|d| matches!(d.tool, Tool::CloneStamp | Tool::Healing)).and_then(|d| d.points.last().map(|p| [p[0], p[1]]))?;
-    match (crate::pickers::preset_panels::clone_sample_point(app, Some(at)), app.ui.clone_offset, app.ui.clone_source) {
+    match (crate::pickers::panels::clone_sample_point(app, Some(at)), app.ui.clone_offset, app.ui.clone_source) {
         (Some(p), ..) => Some(p),
         (None, Some(off), _) => Some([at[0] + off[0], at[1] + off[1]]),
         (None, None, s) => s,
@@ -603,7 +603,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                 ("once", "circle-dot", "Sampling: Once"),
                 ("backgroundSwatch", "square", "Sampling: Background Swatch"),
             ] {
-                if crate::pickers::brush_picker::named(crate::icons::button(ui, icon, 24.0, o.cr_sampling == k, tl!(tip)), tip).clicked() {
+                if crate::pickers::adapters::brush_picker::named(crate::icons::button(ui, icon, 24.0, o.cr_sampling == k, tl!(tip)), tip).clicked() {
                     o.cr_sampling = k.into();
                 }
             }

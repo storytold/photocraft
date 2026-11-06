@@ -9,19 +9,19 @@ use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
 use crate::brush_preview;
-use crate::pickers::asset_browser::{
+use crate::pickers::browser::asset_browser::{
     self, BrowserAction, BrowserAdapter, BrowserCapabilities, BrowserOptions, GroupView, ItemPaintState, ItemView, begin_item_rename, delete_item_actions,
     item_context_targets,
 };
-use crate::pickers::asset_browser_hierarchy::{HierarchyGroup, HierarchyNode, hierarchy_tree};
-pub(crate) use crate::pickers::asset_browser_interaction::AssetDrag as BrushDrag;
-use crate::pickers::asset_browser_interaction::{ContextMenuAction, HierarchyDrop, draw_group_context_menu, draw_item_context_menu, hierarchy_group_drop};
-use crate::pickers::picker_browser_dragging::DropMoveIntent;
-use crate::pickers::picker_browser_identity::{PickerIdentityKey, PickerNodeIdentity, PickerProjectionKeys, ProjectionNodeRef};
-use crate::pickers::picker_browser_model::{
+pub(crate) use crate::pickers::browser::browser_interaction::AssetDrag as BrushDrag;
+use crate::pickers::browser::browser_interaction::{ContextMenuAction, HierarchyDrop, draw_group_context_menu, draw_item_context_menu, hierarchy_group_drop};
+use crate::pickers::browser::dragging_model::DropMoveIntent;
+use crate::pickers::browser::hierarchy::{HierarchyGroup, HierarchyNode, hierarchy_tree};
+use crate::pickers::browser::identity::{PickerIdentityKey, PickerNodeIdentity, PickerProjectionKeys, ProjectionNodeRef};
+use crate::pickers::browser::path_identity_model::{
     ContainerId, DropPosition, HierarchyNode as PickerHierarchyNode, PickerBrowserHierarchy, PickerId, PickerIdRegistry,
 };
-use crate::pickers::picker_state::{HierarchyOrderEntry, NestedGroupRenameState, PresetUi};
+use crate::pickers::state::{HierarchyOrderEntry, NestedGroupRenameState, PresetUi};
 use crate::theme::Tokens;
 
 type BrushDropDestination = (String, Vec<String>, Option<(&'static str, String)>);
@@ -277,7 +277,7 @@ fn brush_projection_keys(groups: &[GroupView]) -> PickerProjectionKeys {
             PickerNodeIdentity::Group(group.name.clone()),
         );
         for (item_index, item) in group.items.iter().enumerate() {
-            let folder_path = &item.group_path[..item.group_path.len().min(crate::pickers::asset_browser_hierarchy::MAX_HIERARCHY_DEPTH)];
+            let folder_path = &item.group_path[..item.group_path.len().min(crate::pickers::browser::hierarchy::MAX_HIERARCHY_DEPTH)];
             let reverse = if folder_path.is_empty() {
                 PickerNodeIdentity::Item { group: group.name.clone(), key: item.key.clone() }
             } else {
@@ -784,10 +784,10 @@ fn browser_actions_to_actions(presets: &[BrushPreset], browser_actions: Vec<Brow
 fn brush_item_context_menu(
     ui: &mut egui::Ui,
     st: &mut PresetUi,
-    args: crate::pickers::asset_browser::ItemContextMenuArgs<'_>,
+    args: crate::pickers::browser::asset_browser::ItemContextMenuArgs<'_>,
     actions: &mut Vec<BrowserAction>,
 ) {
-    let crate::pickers::asset_browser::ItemContextMenuArgs { panel, item, group, selected_items, .. } = args;
+    let crate::pickers::browser::asset_browser::ItemContextMenuArgs { panel, item, group, selected_items, .. } = args;
     let targets = item_context_targets(item, group, selected_items);
     let count = targets.len();
     let delete_label = if count > 1 { format!("{} ({count})", tl!("Delete Brushes")) } else { tl!("Delete Brush").to_string() };
@@ -1035,11 +1035,11 @@ fn resolve_before_item_name(presets: &[BrushPreset], key: &str) -> Result<String
 
 /// The collapse key of a group beneath the root shown as `label` (`label` itself for the root).
 pub fn group_view_key(label: &str, group_path: &[String]) -> String {
-    let label = crate::pickers::picker_state::escape_hierarchy_key_part(label);
+    let label = crate::pickers::state::escape_hierarchy_key_part(label);
     if group_path.is_empty() {
         label
     } else {
-        format!("{label}/{}", group_path.iter().map(|part| crate::pickers::picker_state::escape_hierarchy_key_part(part)).collect::<Vec<_>>().join("/"))
+        format!("{label}/{}", group_path.iter().map(|part| crate::pickers::state::escape_hierarchy_key_part(part)).collect::<Vec<_>>().join("/"))
     }
 }
 
@@ -1320,7 +1320,7 @@ fn picker_stroke_texture(ctx: &egui::Context, identity: &str, brush: &photocraft
 /// The picker's cards in a list `width` points wide, `indent` past its left edge: how wide each
 /// card is and how many sit in a row. A lone card fills the room up to [`CARD_MAX_W`] × `scale`
 /// (wider lists leave the rest empty); from two columns on, the cards share the room, filling it
-/// fully. `scale` is the picker's footer slider ([`crate::pickers::brush_picker::body`]), already floored
+/// fully. `scale` is the picker's footer slider ([`crate::pickers::adapters::brush_picker::body`]), already floored
 /// so the widths never reach zero.
 /// Is the card showing the tip alone (no name, no stroke)? Then it's a small tip cell in a grid.
 fn tip_only(show: (bool, bool, bool)) -> bool {
@@ -1636,11 +1636,11 @@ mod hierarchy_anchor_identity_tests {
         brush_root_sequence, picker_browser, preview_identity, rekey_brush_hierarchy,
     };
     use crate::PhotocraftApp;
-    use crate::pickers::asset_browser::{BrowserAction, GroupView, ItemView};
-    use crate::pickers::picker_browser_dragging::DropMoveIntent;
-    use crate::pickers::picker_browser_model::{ContainerId, DropPosition, PickerId, PickerIdRegistry};
-    use crate::pickers::picker_browser_projection::build_hierarchy_projection;
-    use crate::pickers::picker_state::{HierarchyOrderEntry, PresetUi};
+    use crate::pickers::browser::asset_browser::{BrowserAction, GroupView, ItemView};
+    use crate::pickers::browser::dragging_model::DropMoveIntent;
+    use crate::pickers::browser::path_identity_model::{ContainerId, DropPosition, PickerId, PickerIdRegistry};
+    use crate::pickers::browser::projection::build_hierarchy_projection;
+    use crate::pickers::state::{HierarchyOrderEntry, PresetUi};
     use photocraft_engine::paint::BrushPreset;
     use serde_json::json;
 
@@ -1843,7 +1843,7 @@ mod hierarchy_anchor_identity_tests {
 
     #[test]
     fn brush_root_projection_interleaves_ungrouped_cards_and_groups_without_a_synthetic_folder() {
-        use crate::pickers::picker_state::HierarchyOrderEntry;
+        use crate::pickers::state::HierarchyOrderEntry;
 
         let presets = [preset("Loose A", ""), preset("Kit brush", "Kit"), preset("Loose B", ""), preset("Other brush", "Other"), preset("Kit second", "Kit")];
         let groups = brush_group_views(&presets);
@@ -2054,7 +2054,7 @@ mod hierarchy_anchor_identity_tests {
         PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
         h.run_steps(3);
 
-        let source = crate::pickers::asset_browser::last_group_headers(&h.ctx, "brush-picker")
+        let source = crate::pickers::browser::asset_browser::last_group_headers(&h.ctx, "brush-picker")
             .into_iter()
             .find(|(name, _)| name == "Group B")
             .map(|(_, rect)| rect.center())
@@ -2152,7 +2152,7 @@ mod list_drag_ui_tests {
 #[cfg(test)]
 mod display_mode_compatibility_tests {
     use super::{BrushesPanelState, BrushesView, sync_brush_state_to_browser};
-    use crate::pickers::picker_state::{PickerDisplayMode, PresetUi};
+    use crate::pickers::state::{PickerDisplayMode, PresetUi};
 
     #[test]
     fn legacy_brushes_view_seeds_a_shared_mode_when_no_explicit_mode_exists() {

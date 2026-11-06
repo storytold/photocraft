@@ -240,7 +240,7 @@ pub fn load(app: &mut PhotocraftApp) {
         app.ui.status = crate::i18n::fmt(tl!(template), &[("error", &e)]);
     }
     crate::dock::restore(app);
-    crate::pickers::picker_state::restore(app);
+    crate::pickers::state::restore(app);
     crate::last_brush::restore(app);
     sync_rulers(app);
     crate::tool_memory::restore(app);
@@ -446,7 +446,7 @@ pub fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
     sync_display_scale(app, ctx);
     sync_appearance(app, ctx);
     crate::theme::set_ui_font_size(ctx, app.session.prefs().interface.ui_font_size);
-    crate::pickers::picker_state::persist(app, ctx);
+    crate::pickers::state::persist(app, ctx);
     presets_store(app);
     sync_tooltips(app, ctx);
     sync_animations(app, ctx);
@@ -3284,12 +3284,12 @@ mod tests {
         load(&mut app3);
         assert_eq!(
             app3.ui.presets_ui.brush_picker.scale,
-            *crate::pickers::brush_picker::SCALE_RANGE.end(),
+            *crate::pickers::adapters::brush_picker::SCALE_RANGE.end(),
             "legacy preference after restore: {:?}",
             app3.session.prefs().brush_picker
         );
         tick(&mut app3, &ctx);
-        assert_eq!(app3.ui.presets_ui.brush_picker.scale, *crate::pickers::brush_picker::SCALE_RANGE.end());
+        assert_eq!(app3.ui.presets_ui.brush_picker.scale, *crate::pickers::adapters::brush_picker::SCALE_RANGE.end());
         assert!(!app3.ui.presets_ui.brush_picker.show_name && !app3.ui.presets_ui.brush_picker.show_stroke && app3.ui.presets_ui.brush_picker.show_tip);
         assert!(app3.session.prefs().brush_picker.is_null(), "the legacy preference is consumed by the common picker-state migration");
 

@@ -11,7 +11,7 @@ use std::hash::{Hash, Hasher};
 #[cfg(test)]
 use std::sync::{Mutex, OnceLock};
 
-use super::picker_browser_identity::PickerIdentityKey;
+use super::identity::PickerIdentityKey;
 
 /// Maximum number of nested groups, with the root group at depth zero.
 pub(crate) const MAX_GROUP_DEPTH: usize = 32;

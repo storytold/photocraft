@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use crate::PhotocraftApp;
 
 /// Extensions handled here rather than by the document importer (`.aco`/`.ase` swatches go to
-/// the Swatches panel through [`crate::pickers::swatches_ui::import_bytes`]).
+/// the Swatches panel through [`crate::pickers::adapters::swatches::import_bytes`]).
 /// `.psp` is Photoshop's live `Keyboard Shortcuts.psp` (the same XML as a `.kys`); other `.psp`
 /// settings files are refused with a clear message.
 pub const PRESET_EXTS: &[&str] = &["abr", "grd", "pat", "aco", "ase", "kys", "psp"];
@@ -106,7 +106,7 @@ pub fn open(app: &mut PhotocraftApp, name: &str, bytes: &[u8]) -> Option<Result<
         "abr" => ("brush.presets.importAbr", "brushes"),
         "grd" => ("gradient.presets.importGrd", "gradients"),
         "pat" => ("pattern.import", "patterns"),
-        "aco" | "ase" => return Some(crate::pickers::swatches_ui::import_bytes(app, name, bytes, false).map(|_| ())),
+        "aco" | "ase" => return Some(crate::pickers::adapters::swatches::import_bytes(app, name, bytes, false).map(|_| ())),
         "kys" | "psp" => return Some(crate::kys_import::open_bytes(app, name, bytes).map(|_| ())),
         _ => return None,
     };

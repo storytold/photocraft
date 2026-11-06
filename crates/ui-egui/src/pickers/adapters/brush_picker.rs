@@ -22,8 +22,8 @@ use photocraft_engine::paint::{BrushPreset, MAX_BRUSH_SIZE, TipShape};
 use serde_json::json;
 
 use crate::brushes_tab::{self, Action};
-pub(crate) use crate::pickers::brush_browser::SCALE_RANGE;
-use crate::pickers::picker_state::BrushPickerView;
+pub(crate) use crate::pickers::adapters::brushes::SCALE_RANGE;
+use crate::pickers::state::BrushPickerView;
 use crate::theme::Tokens;
 use crate::{PhotocraftApp, icons, widgets};
 
@@ -101,8 +101,8 @@ pub fn close(ui: &mut crate::state::UiState) {
 
 /// Start the shared browser's in-place rename for this exact preset occurrence. Brush commands
 /// still address names, so the brush picker's context menu only offers this action when that name is unambiguous.
-pub(crate) fn begin_rename(preset_ui: &mut crate::pickers::picker_state::PresetUi, preset: &BrushPreset) {
-    preset_ui.renaming = Some(("brush-picker".to_string(), crate::pickers::brush_browser::preview_identity(preset), preset.name.clone()));
+pub(crate) fn begin_rename(preset_ui: &mut crate::pickers::state::PresetUi, preset: &BrushPreset) {
+    preset_ui.renaming = Some(("brush-picker".to_string(), crate::pickers::adapters::brushes::preview_identity(preset), preset.name.clone()));
 }
 
 /// Run what the picker asked for.
@@ -166,7 +166,7 @@ pub fn body(
     b: &mut BrushSettings,
     presets: &[BrushPreset],
     current: Option<&str>,
-    preset_ui: &mut crate::pickers::picker_state::PresetUi,
+    preset_ui: &mut crate::pickers::state::PresetUi,
     size: egui::Vec2,
 ) -> Vec<Pick> {
     let t = Tokens::get(ui.ctx());
@@ -242,10 +242,10 @@ pub fn body(
     };
     let show_search = { preset_ui.borrow().search_visible.get("brush-picker").copied().unwrap_or(true) };
 
-    let list_picks = crate::pickers::picker_shell::picker_shell_custom(
+    let list_picks = crate::pickers::shell::picker_shell_custom(
         ui,
         (size.y - controls_h).max(0.0),
-        crate::pickers::picker_shell::CustomShellOptions {
+        crate::pickers::shell::CustomShellOptions {
             header: Some(&mut header),
             search: if show_search { Some(&mut search) } else { None },
             footer: Some((&mut footer, FOOTER_H)),
@@ -253,7 +253,8 @@ pub fn body(
             ..Default::default()
         },
         |ui, allocated_h| {
-            let actions = { crate::pickers::brush_browser::picker_browser(ui, presets, current, &mut preset_ui.borrow_mut(), (allocated_h - 4.0).max(0.0)) };
+            let actions =
+                { crate::pickers::adapters::brushes::picker_browser(ui, presets, current, &mut preset_ui.borrow_mut(), (allocated_h - 4.0).max(0.0)) };
             actions.into_iter().map(Pick::List).collect::<Vec<_>>()
         },
     );
@@ -271,7 +272,7 @@ fn scale_slider(ui: &mut egui::Ui, st: &mut BrushPickerView, container_width: f3
     let w = (ui.available_width() - GRIP_ROOM).max(60.0);
     ui.allocate_ui_with_layout(vec2(w, SLIDER_H), egui::Layout::left_to_right(egui::Align::Center), |ui| {
         let show = (st.show_name, st.show_stroke, st.show_tip);
-        let max_scale = crate::pickers::brush_browser::max_picker_card_scale(container_width, show);
+        let max_scale = crate::pickers::adapters::brushes::max_picker_card_scale(container_width, show);
         st.scale = st.scale.clamp(*SCALE_RANGE.start(), max_scale);
         let resp = widgets::slider(ui, &mut st.scale, *SCALE_RANGE.start()..=max_scale, None);
         if resp.changed() {
@@ -344,9 +345,9 @@ mod tests {
     fn picker_rename_uses_shared_panel_and_occurrence_identity() {
         let session = photocraft_engine::Session::new();
         let preset = session.tools.presets.first().expect("session has built-in brush presets");
-        let expected_key = crate::pickers::brush_browser::preview_identity(preset);
+        let expected_key = crate::pickers::adapters::brushes::preview_identity(preset);
         let expected_name = preset.name.clone();
-        let mut state = crate::pickers::picker_state::PresetUi::default();
+        let mut state = crate::pickers::state::PresetUi::default();
 
         begin_rename(&mut state, preset);
 

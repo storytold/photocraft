@@ -162,7 +162,7 @@ pub(crate) fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
         let pat = f.get("pattern").and_then(Value::as_str).unwrap_or_default().to_string();
         if app.session.patterns.items.is_empty() {
             ui.label(egui::RichText::new(tl!("No patterns")).color(Tokens::get(ui.ctx()).text_faint));
-        } else if let Some(id) = crate::pickers::pattern_browser::pattern_picker(app, ui, &pat) {
+        } else if let Some(id) = crate::pickers::adapters::patterns::pattern_picker(app, ui, &pat) {
             f.insert("pattern".into(), json!(id));
         }
         ui.add_space(8.0);

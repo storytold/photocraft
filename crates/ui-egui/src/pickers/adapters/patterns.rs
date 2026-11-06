@@ -6,17 +6,17 @@ use egui::{Color32, ColorImage, Pos2, Rect, Sense, Stroke, TextureHandle, pos2, 
 use serde_json::json;
 
 use crate::PhotocraftApp;
-use crate::pickers::asset_browser::{
+use crate::pickers::browser::asset_browser::{
     BrowserAction, BrowserAdapter, BrowserCapabilities, BrowserOptions, GroupView, ItemPaintState, ItemView, begin_item_rename, browser, delete_item_actions,
     item_context_targets, move_item_actions,
 };
-use crate::pickers::asset_browser_interaction::canvas_drop_rect;
-use crate::pickers::picker_browser_identity::{PickerIdentityKey, PickerNodeIdentity, PickerProjectionKeys, ProjectionNodeRef};
-use crate::pickers::picker_footer::FooterOptions;
-use crate::pickers::picker_shell::{ShellOptions, picker_shell};
-use crate::pickers::picker_state::PresetUi;
-use crate::pickers::preset_commands::{generic, run};
-use crate::pickers::preset_preview::{c32, cached_texture, sample_fingerprint};
+use crate::pickers::browser::browser_interaction::canvas_drop_rect;
+use crate::pickers::browser::identity::{PickerIdentityKey, PickerNodeIdentity, PickerProjectionKeys, ProjectionNodeRef};
+use crate::pickers::commands::{generic, run};
+use crate::pickers::footer::FooterOptions;
+use crate::pickers::preset_previews::{c32, cached_texture, sample_fingerprint};
+use crate::pickers::shell::{ShellOptions, picker_shell};
+use crate::pickers::state::PresetUi;
 use crate::theme::Tokens;
 
 fn pattern_projection_keys(groups: &[GroupView]) -> PickerProjectionKeys {
@@ -164,8 +164,8 @@ pub(crate) fn patterns_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             // Cross-group membership uses the Pattern domain command; sibling/group order is saved
             // in the canonical picker layout state.
             capabilities: BrowserCapabilities { canonical_hierarchy_drag: true, ..BrowserCapabilities::default() },
-            item_context_menu: Some(crate::pickers::asset_browser::standard_item_context_menu),
-            group_context_menu: Some(crate::pickers::asset_browser::standard_group_context_menu),
+            item_context_menu: Some(crate::pickers::browser::asset_browser::standard_item_context_menu),
+            group_context_menu: Some(crate::pickers::browser::asset_browser::standard_group_context_menu),
             nested_group_context_menu: None,
             canonical_hierarchy_move: None,
             rekey_hierarchy_after_move: None,
@@ -253,10 +253,10 @@ fn compact_context_menu_close_later(ui: &egui::Ui, panel: &str) {
 pub(crate) fn compact_item_context_menu(
     ui: &mut egui::Ui,
     st: &mut PresetUi,
-    args: crate::pickers::asset_browser::ItemContextMenuArgs<'_>,
+    args: crate::pickers::browser::asset_browser::ItemContextMenuArgs<'_>,
     ev: &mut Vec<BrowserAction>,
 ) {
-    let crate::pickers::asset_browser::ItemContextMenuArgs { panel, item, group, group_names, selected_items } = args;
+    let crate::pickers::browser::asset_browser::ItemContextMenuArgs { panel, item, group, group_names, selected_items } = args;
     let targets = item_context_targets(item, group, selected_items);
     let count = targets.len();
     if ui.button(tl!("Rename…")).clicked() {
@@ -311,7 +311,7 @@ pub(crate) fn compact_pattern_browser(
     if state.initialized_browsers.insert(panel.to_owned()) {
         // Compact pickers replace the old ungrouped swatch grid. Keep every group's items
         // immediately reachable on first open, while allowing users to collapse groups afterward.
-        state.toggled.extend(groups.iter().skip(1).map(|g| format!("{panel}/{}", crate::pickers::picker_state::escape_hierarchy_key_part(&g.name))));
+        state.toggled.extend(groups.iter().skip(1).map(|g| format!("{panel}/{}", crate::pickers::state::escape_hierarchy_key_part(&g.name))));
     }
     state.set_selected(panel, selected);
     let browser_h = max_h.min(ui.available_height());
@@ -411,9 +411,9 @@ pub(crate) fn apply_compact_pattern_actions(app: &mut PhotocraftApp, panel: &'st
 
 #[cfg(test)]
 mod hierarchy_drop_tests {
-    use crate::pickers::asset_browser_interaction::card_drop_hit;
-    use crate::pickers::picker_browser_dragging::{PointerRegion, resolve_drop_candidate};
-    use crate::pickers::picker_browser_model::{DropPosition, HierarchyNode, PickerBrowserHierarchy, PickerId};
+    use crate::pickers::browser::browser_interaction::card_drop_hit;
+    use crate::pickers::browser::dragging_model::{PointerRegion, resolve_drop_candidate};
+    use crate::pickers::browser::path_identity_model::{DropPosition, HierarchyNode, PickerBrowserHierarchy, PickerId};
     use egui::{Pos2, Rect};
 
     #[test]

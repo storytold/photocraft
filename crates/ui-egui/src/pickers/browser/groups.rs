@@ -5,9 +5,9 @@
 
 use egui::{Align2, Rect, Sense, pos2, vec2};
 
-use crate::pickers::asset_browser_hierarchy::HierarchyGroup;
-use crate::pickers::picker_browser_projection::ItemView;
-use crate::pickers::picker_state::PresetUi;
+use crate::pickers::browser::hierarchy::HierarchyGroup;
+use crate::pickers::browser::projection::ItemView;
+use crate::pickers::state::PresetUi;
 use crate::theme::Tokens;
 
 const DARK_SURFACE_CONTRAST: f32 = 1.13;
@@ -20,7 +20,7 @@ const TREE_LEFT_INSET: f32 = 1.0;
 
 /// Initial expansion policy for a browser group, with explicit user toggles overriding the default.
 pub(crate) fn group_open(st: &PresetUi, panel: &str, index: usize, name: &str, all_groups_open: bool) -> bool {
-    (index == 0 || all_groups_open) != st.toggled.contains(&format!("{panel}/{}", crate::pickers::picker_state::escape_hierarchy_key_part(name)))
+    (index == 0 || all_groups_open) != st.toggled.contains(&format!("{panel}/{}", crate::pickers::state::escape_hierarchy_key_part(name)))
 }
 
 /// Shared collapsible group row. The caller owns toggle state and context actions.
@@ -117,7 +117,7 @@ pub(crate) fn inset_row_rect(rect: Rect, depth: usize) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::{group_open, inset_row_rect, row_indent};
-    use crate::pickers::picker_state::PresetUi;
+    use crate::pickers::state::PresetUi;
     use egui::{Rect, pos2};
 
     #[test]

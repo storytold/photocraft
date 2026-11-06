@@ -772,7 +772,7 @@ fn take_hex_paste(ui: &egui::Ui) -> Option<[f32; 3]> {
 /// Add to Swatches was clicked: add the picked colour to the Swatches panel.
 pub fn take_add_swatch(app: &mut PhotocraftApp, f: &mut Map<String, Value>) {
     if f.remove("__addSwatch").and_then(|v| v.as_bool()) == Some(true) {
-        crate::pickers::swatches_ui::add_from_picker(app, f);
+        crate::pickers::adapters::swatches::add_from_picker(app, f);
     }
 }
 

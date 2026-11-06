@@ -1,7 +1,7 @@
 //! Shared recently-picked strip for every asset picker using the standard shell.
 
-use crate::pickers::asset_browser::{BrowserAction, BrowserAdapter, GroupView, ItemPaintState};
-use crate::pickers::picker_state::{PresetUi, RecentPickerItem};
+use crate::pickers::browser::asset_browser::{BrowserAction, BrowserAdapter, GroupView, ItemPaintState};
+use crate::pickers::state::{PresetUi, RecentPickerItem};
 use egui::{Rect, Sense, Stroke, StrokeKind, Vec2, pos2, vec2};
 
 pub(crate) const HEIGHT: f32 = 18.0;
@@ -82,7 +82,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut PresetUi, adapter: &mut Browse
     let panel = adapter.panel;
     if let Some(recent) = state.recent_items.get_mut(panel) {
         reconcile_recent_items(recent, adapter.groups);
-        recent.truncate(crate::pickers::picker_state::MAX_RECENT_PICKER_ITEMS);
+        recent.truncate(crate::pickers::state::MAX_RECENT_PICKER_ITEMS);
     }
     let recent = state.recent_items.get(panel).cloned().unwrap_or_default();
     let (strip, _) = ui.allocate_exact_size(vec2(ui.available_width(), HEIGHT), Sense::hover());
@@ -216,8 +216,8 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut PresetUi, adapter: &mut Browse
 
 #[cfg(test)]
 mod tests {
-    use crate::pickers::asset_browser::{GroupView, ItemView};
-    use crate::pickers::picker_state::PresetUi;
+    use crate::pickers::browser::asset_browser::{GroupView, ItemView};
+    use crate::pickers::state::PresetUi;
     use egui::{Rect, pos2, vec2};
 
     #[test]

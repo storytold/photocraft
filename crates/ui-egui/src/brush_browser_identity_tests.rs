@@ -5,7 +5,7 @@
 
 use photocraft_engine::paint::{BrushPreset, BrushSettings};
 
-use crate::pickers::brush_browser::{browser_group_views, is_ambiguous_preset_name, preset_by_identity, preview_identity};
+use crate::pickers::adapters::brushes::{browser_group_views, is_ambiguous_preset_name, preset_by_identity, preview_identity};
 
 fn preset(name: &str, group: &str, size: f32) -> BrushPreset {
     let brush = BrushSettings { size, ..BrushSettings::default() };

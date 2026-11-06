@@ -19,18 +19,18 @@ use serde_json::json;
 
 use crate::brush_panel::{BrushesView, commit_gesture, run_or_status};
 use crate::brush_preview;
-use crate::pickers::brush_browser::preview_identity;
-use crate::pickers::picker_shell::{CustomShellOptions, picker_shell_custom};
+use crate::pickers::adapters::brushes::preview_identity;
+use crate::pickers::shell::{CustomShellOptions, picker_shell_custom};
 use crate::theme::Tokens;
 use crate::{PhotocraftApp, icons, widgets};
 
 #[cfg(test)]
-pub(crate) use crate::pickers::brush_browser::browser_group_views;
-pub use crate::pickers::brush_browser::{
+pub(crate) use crate::pickers::adapters::brushes::browser_group_views;
+pub use crate::pickers::adapters::brushes::{
     Action, GroupNode, ListLayout, MAX_VIEW_DEPTH, Node, PANEL_LIST, apply, drop_target, folder_drop, folder_tree, folder_view_key, group_key, preset_list,
 };
 #[cfg(test)]
-pub(crate) use crate::pickers::brush_browser::{
+pub(crate) use crate::pickers::adapters::brushes::{
     CARD_COMPACT_SCALE, CARD_GAP, CARD_MAX_H, CARD_MAX_W, CARD_MIN_H_SCALE, CARD_NAME_H, CARD_NUM_FONT, CARD_PAD, CARD_TIP_NAME_H, CARD_TIP_NAME_W,
     CARD_TIP_ONLY_H, CARD_TIP_ONLY_W, CARD_TIP_W, GRID_GAP, card_tip_rect, grid_columns, remap_collapsed_prefix, remove_collapsed_prefix,
 };
@@ -73,9 +73,10 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         // Migrate the legacy two-state BrushesView only until the shared display-mode preference
         // exists. Thereafter PickerDisplayMode is the single source of truth.
         if !picker_state.display_modes.contains_key("brushes") {
-            picker_state
-                .sizes
-                .insert("brushes".to_owned(), if app.ui.brushes_panel.view == BrushesView::List { crate::pickers::asset_browser::MIN_THUMB } else { 40.0 });
+            picker_state.sizes.insert(
+                "brushes".to_owned(),
+                if app.ui.brushes_panel.view == BrushesView::List { crate::pickers::browser::asset_browser::MIN_THUMB } else { 40.0 },
+            );
         }
     }
     let mut search = |ui: &mut egui::Ui| {
@@ -114,7 +115,7 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 run_or_status(app, "brush.presets.delete", json!({ "name": name }));
             }
             let new = icons::button(ui, "square-plus", 24.0, false, "Create new brush from the current settings");
-            if crate::pickers::brush_picker::named(new, "Create new brush from the current settings").clicked() {
+            if crate::pickers::adapters::brush_picker::named(new, "Create new brush from the current settings").clicked() {
                 crate::brush_preset_dialog::open(app, None);
             }
             if icons::button(ui, "folder-open", 24.0, false, "Import Brushes… (.abr or image)").clicked() {

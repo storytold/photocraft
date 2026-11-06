@@ -7,6 +7,8 @@ use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
 
+pub(crate) use crate::pickers::browser::panel_menu::shared_picker_menu;
+
 const PANELS: &[(&str, &str, Option<Group>)] = &[
     ("color", "Color", Some(Group::Color)),
     ("swatches", "Swatches", Some(Group::Color)),
@@ -210,7 +212,7 @@ pub(crate) fn command(app: &mut PhotocraftApp, id: &str, params: &Value) -> Opti
 pub(crate) fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
     let panel = id.strip_prefix("window.panel.").or_else(|| id.strip_prefix("window.toggle.")).and_then(normalize)?;
     let Some(layout) = app.ui.docking.as_ref() else {
-        return crate::pickers::preset_panels::shared_docking(id).then_some(false);
+        return crate::pickers::panels::shared_docking(id).then_some(false);
     };
     Some(layout.contains(&panel.to_string()))
 }
@@ -560,10 +562,10 @@ pub(crate) fn legacy_tab(app: &mut PhotocraftApp, ui: &mut egui::Ui, panel: &str
 
 fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: &str) {
     match id {
-        "styles" => return crate::pickers::preset_panels::styles_panel(app, ui),
-        "shapes" => return crate::pickers::preset_panels::shapes_panel(app, ui),
-        "toolPresets" => return crate::pickers::preset_panels::tool_presets_panel(app, ui),
-        "cloneSource" => return crate::pickers::preset_panels::clone_source_panel(app, ui),
+        "styles" => return crate::pickers::panels::styles_panel(app, ui),
+        "shapes" => return crate::pickers::panels::shapes_panel(app, ui),
+        "toolPresets" => return crate::pickers::panels::tool_presets_panel(app, ui),
+        "cloneSource" => return crate::pickers::panels::clone_source_panel(app, ui),
         _ => {}
     }
     let Some((_, label, Some(group))) = PANELS.iter().find(|p| p.0 == id) else { return };
@@ -871,25 +873,6 @@ struct PanelContent<'a> {
     targets: &'a mut Vec<craft_ui::docking::DropTarget<String>>,
 }
 
-/// Render the shared picker's menu points and its adapter extension in either docking chrome.
-/// Taking the picker state temporarily keeps its borrow independent from domain actions on app.
-pub(crate) fn shared_picker_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, panel: &str) -> bool {
-    if !crate::pickers::preset_panels::shared_docking(&format!("window.panel.{panel}")) {
-        return false;
-    }
-    let mut state = std::mem::take(&mut app.ui.presets_ui);
-    let mut extension = |ui: &mut egui::Ui, state: &mut crate::pickers::picker_state::PresetUi, _panel: &str| match panel {
-        "gradients" => crate::pickers::gradients_browser::panel_menu(app, ui),
-        "patterns" => crate::pickers::pattern_browser::panel_menu(app, ui),
-        "swatches" => crate::pickers::swatches_ui::panel_menu(app, ui, state),
-        _ => {}
-    };
-    let extension = matches!(panel, "gradients" | "patterns" | "swatches").then_some(&mut extension as crate::pickers::picker_shell::MenuContentsCallback<'_>);
-    crate::pickers::picker_shell::picker_menu_contents(ui, &mut state, panel, crate::pickers::picker_shell::PickerMenuOptions::for_panel(panel), extension);
-    app.ui.presets_ui = state;
-    true
-}
-
 fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, panel: &str) {
     shared_picker_menu(app, ui, panel);
     match panel {
@@ -992,7 +975,7 @@ impl craft_ui::docking::DockContent<String> for PanelContent<'_> {
             ui.set_min_width(180.0);
             panel_menu(self.app, ui, active);
             // Docking actions are a separate section owned by this tab-bar implementation.
-            if crate::pickers::preset_panels::shared_docking(&format!("window.panel.{active}")) {
+            if crate::pickers::panels::shared_docking(&format!("window.panel.{active}")) {
                 ui.separator();
             }
             if ui.add_enabled(!locked, egui::Button::new(if collapsed { tl!("Expand Panel Group") } else { tl!("Collapse Panel Group") })).clicked() {

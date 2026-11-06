@@ -168,7 +168,7 @@ fn mode_button(ui: &mut egui::Ui, mode: SymmetryMode, checked: bool) -> egui::Re
 pub fn menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let current = app.session.active().and_then(|s| s.symmetry.clone());
     let resp = icons::button_with_icon_size(ui, "painting-symmetry", 24.0, 14.0, current.is_some(), tl!("Set painting symmetry options"));
-    let resp = crate::pickers::brush_picker::named(resp, "Set painting symmetry options");
+    let resp = crate::pickers::adapters::brush_picker::named(resp, "Set painting symmetry options");
     egui::Popup::menu(&resp).show(|ui| {
         ui.set_min_width(220.0);
         widgets::menu_scroll(ui, |ui| {

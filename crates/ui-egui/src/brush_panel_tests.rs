@@ -99,16 +99,16 @@ fn brush_settings_texture_browse_keeps_compact_picker_state_in_persistent_ui_pre
     h.get_by_label("Browse…").click();
     h.run_steps(3);
 
-    let groups = crate::pickers::pattern_browser::pattern_group_views(&h.state().session.patterns.items, &h.state().session.presets.pattern_groups);
+    let groups = crate::pickers::adapters::patterns::pattern_group_views(&h.state().session.patterns.items, &h.state().session.presets.pattern_groups);
     assert!(groups.len() > 1, "the fixture needs a second group to verify compact-browser disclosure state");
     let state = &h.state().ui.presets_ui;
     assert!(state.initialized_browsers.contains("brush-texture-patterns"));
-    assert_eq!(state.display_mode("brush-texture-patterns"), crate::pickers::picker_state::PickerDisplayMode::SmallThumbnail);
+    assert_eq!(state.display_mode("brush-texture-patterns"), crate::pickers::state::PickerDisplayMode::SmallThumbnail);
     assert!(
         groups
             .iter()
             .skip(1)
-            .all(|group| state.toggled.contains(&format!("brush-texture-patterns/{}", crate::pickers::picker_state::escape_hierarchy_key_part(&group.name))))
+            .all(|group| state.toggled.contains(&format!("brush-texture-patterns/{}", crate::pickers::state::escape_hierarchy_key_part(&group.name))))
     );
 }
 
@@ -1592,7 +1592,7 @@ fn brush_panel_menu_centralizes_picker_actions_and_display_options() {
     h.run_steps(2);
     h.query_all_by_label("Small List").next().expect("brush picker display menu").click();
     h.run_steps(2);
-    assert_eq!(h.state().ui.presets_ui.display_mode("brush-picker"), crate::pickers::picker_state::PickerDisplayMode::SmallList);
+    assert_eq!(h.state().ui.presets_ui.display_mode("brush-picker"), crate::pickers::state::PickerDisplayMode::SmallList);
 }
 
 #[test]

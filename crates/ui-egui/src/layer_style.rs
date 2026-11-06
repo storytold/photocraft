@@ -901,7 +901,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                         ui.horizontal_wrapped(|ui| {
                             ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
                             for st in &group.items {
-                                let tex = crate::pickers::preset_panels::style_texture(app, &ctx, st);
+                                let tex = crate::pickers::panels::style_texture(app, &ctx, st);
                                 let (rect, resp) = ui.allocate_exact_size(vec2(32.0, 32.0), Sense::click());
                                 ui.painter().image(tex.id(), rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
                                 let (stroke, kind) = if resp.hovered() {

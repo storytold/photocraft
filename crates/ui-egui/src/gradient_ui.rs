@@ -1236,7 +1236,7 @@ mod tests {
         let mut h = Harness::builder().with_size(vec2(420.0, 600.0)).build_ui_state(
             |ui, app| {
                 if named_theme_fonts_installed(ui.ctx()) {
-                    crate::pickers::preset_panels::gradients_panel(app, ui);
+                    crate::pickers::panels::gradients_panel(app, ui);
                 }
             },
             app,

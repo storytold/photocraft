@@ -13,30 +13,30 @@ use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
 #[cfg(test)]
-use crate::pickers::asset_browser::browser;
+use crate::pickers::browser::asset_browser::browser;
 #[cfg(test)]
-use crate::pickers::asset_browser::last_browser_rect;
+use crate::pickers::browser::asset_browser::last_browser_rect;
 #[cfg(test)]
-use crate::pickers::asset_browser::last_group_headers;
-use crate::pickers::asset_browser::{BrowserAction, BrowserAdapter, BrowserCapabilities, BrowserOptions, GroupView, ItemPaintState, ItemView};
-use crate::pickers::asset_browser::{standard_group_context_menu, standard_item_context_menu};
+use crate::pickers::browser::asset_browser::last_group_headers;
+use crate::pickers::browser::asset_browser::{BrowserAction, BrowserAdapter, BrowserCapabilities, BrowserOptions, GroupView, ItemPaintState, ItemView};
+use crate::pickers::browser::asset_browser::{standard_group_context_menu, standard_item_context_menu};
+use crate::pickers::browser::browser_interaction::canvas_drop_rect;
 #[cfg(test)]
-use crate::pickers::asset_browser_hierarchy::hierarchy_tree;
-pub use crate::pickers::asset_browser_hierarchy::{HierarchyGroup, HierarchyNode};
-use crate::pickers::asset_browser_interaction::canvas_drop_rect;
+use crate::pickers::browser::browser_interaction::{AssetDrag, asset_browser_header_payload, header_drop_before};
 #[cfg(test)]
-use crate::pickers::asset_browser_interaction::{AssetDrag, asset_browser_header_payload, header_drop_before};
-use crate::pickers::picker_browser_identity::{PickerIdentityKey, PickerNodeIdentity, PickerProjectionKeys, ProjectionNodeRef};
-use crate::pickers::picker_footer::FooterOptions;
+use crate::pickers::browser::hierarchy::hierarchy_tree;
+pub use crate::pickers::browser::hierarchy::{HierarchyGroup, HierarchyNode};
+use crate::pickers::browser::identity::{PickerIdentityKey, PickerNodeIdentity, PickerProjectionKeys, ProjectionNodeRef};
+use crate::pickers::footer::FooterOptions;
 #[cfg(test)]
-use crate::pickers::picker_shell::{CustomShellOptions, picker_shell_custom};
-use crate::pickers::picker_shell::{ShellOptions, picker_shell};
+use crate::pickers::shell::{CustomShellOptions, picker_shell_custom};
+use crate::pickers::shell::{ShellOptions, picker_shell};
 use crate::state::Tool;
 use crate::theme::Tokens;
 
-pub use crate::pickers::picker_state::PresetUi;
-use crate::pickers::preset_commands::{generic, run};
-use crate::pickers::preset_preview::{cached_texture, content_fingerprint};
+use crate::pickers::commands::{generic, run};
+use crate::pickers::preset_previews::{cached_texture, content_fingerprint};
+pub use crate::pickers::state::PresetUi;
 
 const PANELS: [&str; 7] = [
     "window.panel.gradients",
@@ -57,7 +57,7 @@ pub fn shared_docking(id: &str) -> bool {
 
 /// Draw a gradient swatch.
 pub fn paint_gradient(ui: &egui::Ui, rect: Rect, stops: &[(f32, [f32; 4])]) {
-    crate::pickers::gradients_browser::paint_gradient(ui, rect, stops);
+    crate::pickers::adapters::gradients::paint_gradient(ui, rect, stops);
 }
 
 pub(crate) fn style_texture(app: &PhotocraftApp, ctx: &egui::Context, st: &photocraft_engine::presets::styles::StylePreset) -> TextureHandle {
@@ -112,13 +112,13 @@ fn flat_preset_projection_keys(groups: &[GroupView], domain: &str, custom_source
 
 /// Draw the standard Patterns panel.
 pub fn patterns_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    crate::pickers::pattern_browser::patterns_panel(app, ui);
+    crate::pickers::adapters::patterns::patterns_panel(app, ui);
 }
 
 // ------------------------------------------------------------------ Gradients
 
 pub fn gradients_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    crate::pickers::gradients_browser::gradients_panel(app, ui);
+    crate::pickers::adapters::gradients::gradients_panel(app, ui);
 }
 
 // ------------------------------------------------------------------ floating panels
@@ -658,8 +658,8 @@ pub fn clone_sample_point(app: &PhotocraftApp, at: Option<[f64; 2]>) -> Option<[
 mod tests {
     use super::*;
     use crate::menus::invoke;
-    use crate::pickers::pattern_browser::{compact_pattern_browser, pattern_group_views};
-    use crate::pickers::picker_state::{HierarchyOrderEntry, MAX_GROUP_DEPTH};
+    use crate::pickers::adapters::patterns::{compact_pattern_browser, pattern_group_views};
+    use crate::pickers::state::{HierarchyOrderEntry, MAX_GROUP_DEPTH};
     use crate::state::ToolOptions;
 
     #[test]
@@ -829,25 +829,21 @@ mod tests {
 
         // Slash-containing labels are encoded as one component so they cannot collide with a
         // group path; renaming and deleting them must preserve that distinction.
-        let slash_group = format!("gradients/{}", crate::pickers::picker_state::escape_hierarchy_key_part("A/B"));
+        let slash_group = format!("gradients/{}", crate::pickers::state::escape_hierarchy_key_part("A/B"));
         st.toggled.insert(format!("{slash_group}/Inner"));
         st.toggled.insert("gradients/A/B/Inner".into());
         st.rename_group("gradients", "A/B", "C/D");
-        assert!(st.toggled.contains(&format!("gradients/{}/Inner", crate::pickers::picker_state::escape_hierarchy_key_part("C/D"))));
+        assert!(st.toggled.contains(&format!("gradients/{}/Inner", crate::pickers::state::escape_hierarchy_key_part("C/D"))));
         assert!(st.toggled.contains("gradients/A/B/Inner"), "a nested path with the same legacy spelling is independent");
         st.delete_group("gradients", "C/D");
         assert!(st.toggled.contains("gradients/A/B/Inner"));
         assert_ne!(
-            format!(
-                "brush-picker/{}/{}",
-                crate::pickers::picker_state::escape_hierarchy_key_part("A"),
-                crate::pickers::picker_state::escape_hierarchy_key_part("B/C")
-            ),
+            format!("brush-picker/{}/{}", crate::pickers::state::escape_hierarchy_key_part("A"), crate::pickers::state::escape_hierarchy_key_part("B/C")),
             format!(
                 "brush-picker/{}/{}/{}",
-                crate::pickers::picker_state::escape_hierarchy_key_part("A"),
-                crate::pickers::picker_state::escape_hierarchy_key_part("B"),
-                crate::pickers::picker_state::escape_hierarchy_key_part("C")
+                crate::pickers::state::escape_hierarchy_key_part("A"),
+                crate::pickers::state::escape_hierarchy_key_part("B"),
+                crate::pickers::state::escape_hierarchy_key_part("C")
             ),
             "a slash inside one group component is not a path separator",
         );
@@ -1192,7 +1188,7 @@ mod tests {
         let group = groups[1].name.clone();
         let panel = "compact-disclosure-test";
         let mut initial_state = PresetUi::default();
-        initial_state.display_modes.insert(panel.into(), crate::pickers::picker_state::PickerDisplayMode::LargeList);
+        initial_state.display_modes.insert(panel.into(), crate::pickers::state::PickerDisplayMode::LargeList);
         let mut h = Harness::builder().with_size(vec2(320.0, 240.0)).build_ui_state(
             move |ui, state: &mut (Option<String>, PresetUi)| {
                 if !ui.ctx().fonts(|fonts| fonts.definitions().families.contains_key(&egui::FontFamily::Name("semibold".into()))) {
@@ -1206,7 +1202,7 @@ mod tests {
 
         h.run_steps(3);
         assert!(h.state().1.toggled.contains(&format!("{panel}/{group}")), "later groups start collapsed");
-        assert_eq!(h.state().1.display_mode(panel), crate::pickers::picker_state::PickerDisplayMode::LargeList);
+        assert_eq!(h.state().1.display_mode(panel), crate::pickers::state::PickerDisplayMode::LargeList);
 
         let header = last_group_headers(&h.ctx, panel)
             .iter()
@@ -1290,12 +1286,17 @@ mod tests {
 
         assert_eq!(
             &h.state().ui.presets_ui.hierarchy_order["patterns"][&group_name][0..2],
-            &[crate::pickers::picker_state::HierarchyOrderEntry::Item(second_key), crate::pickers::picker_state::HierarchyOrderEntry::Item(first_key),]
+            &[crate::pickers::state::HierarchyOrderEntry::Item(second_key), crate::pickers::state::HierarchyOrderEntry::Item(first_key),]
         );
     }
 
-    fn consumer_item_menu(ui: &mut egui::Ui, _st: &mut PresetUi, args: crate::pickers::asset_browser::ItemContextMenuArgs<'_>, ev: &mut Vec<BrowserAction>) {
-        let crate::pickers::asset_browser::ItemContextMenuArgs { item, group, .. } = args;
+    fn consumer_item_menu(
+        ui: &mut egui::Ui,
+        _st: &mut PresetUi,
+        args: crate::pickers::browser::asset_browser::ItemContextMenuArgs<'_>,
+        ev: &mut Vec<BrowserAction>,
+    ) {
+        let crate::pickers::browser::asset_browser::ItemContextMenuArgs { item, group, .. } = args;
         if ui.button("Consumer item operation").clicked() {
             ev.push(BrowserAction::DeleteItem { group: group.name.clone(), group_path: item.group_path.clone(), key: item.key.clone() });
             ui.close();

@@ -15,15 +15,15 @@ use egui::{Color32, CornerRadius, Rect};
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
-use crate::pickers::asset_browser::{
+use crate::pickers::browser::asset_browser::{
     BrowserAction, BrowserAdapter, BrowserCapabilities, BrowserOptions, GroupView, ItemPaintState, ItemView, standard_group_context_menu,
     standard_item_context_menu,
 };
-use crate::pickers::picker_browser_identity::{PickerIdentityKey, PickerNodeIdentity, PickerProjectionKeys, ProjectionNodeRef};
-use crate::pickers::picker_footer::FooterOptions;
-use crate::pickers::picker_shell::{ShellOptions, picker_shell};
-use crate::pickers::picker_state::PresetUi;
-use crate::pickers::preset_commands::run;
+use crate::pickers::browser::identity::{PickerIdentityKey, PickerNodeIdentity, PickerProjectionKeys, ProjectionNodeRef};
+use crate::pickers::commands::run;
+use crate::pickers::footer::FooterOptions;
+use crate::pickers::shell::{ShellOptions, picker_shell};
+use crate::pickers::state::PresetUi;
 
 /// The browser's panel key (selection, group state and thumbnail size live under it).
 pub const PANEL: &str = "swatches";
@@ -605,7 +605,7 @@ mod tests {
         let mut h = Harness::builder().with_size(vec2(300.0, 4000.0)).build_ui_state(|ui, app: &mut PhotocraftApp| panel_after_font_setup(ui, app), app);
         PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
         h.run_steps(2);
-        let headers = crate::pickers::asset_browser::last_group_headers(&h.ctx, PANEL);
+        let headers = crate::pickers::browser::asset_browser::last_group_headers(&h.ctx, PANEL);
         assert!(headers.len() >= 2, "the default library has groups: {headers:?}");
         let names: Vec<String> = headers.iter().map(|(n, _)| n.clone()).collect();
         let (first, first_r) = &headers[0];
@@ -617,7 +617,7 @@ mod tests {
         let order = h.state().ui.presets_ui.display_order(PANEL, &names);
         assert_eq!(order.len(), names.len());
         assert_eq!(names.get(*order.last().unwrap()).map(String::as_str), Some(first.as_str()), "the dragged group moved to the end: {order:?}");
-        assert_eq!(h.state().ui.presets_ui.hierarchy_order[PANEL][""].last(), Some(&crate::pickers::picker_state::HierarchyOrderEntry::Group(first.clone())));
+        assert_eq!(h.state().ui.presets_ui.hierarchy_order[PANEL][""].last(), Some(&crate::pickers::state::HierarchyOrderEntry::Group(first.clone())));
         assert!(serde_json::to_value(&h.state().ui.presets_ui).unwrap().get("groupOrder").is_none());
     }
 
@@ -627,7 +627,7 @@ mod tests {
         let mut h = Harness::builder().with_size(vec2(300.0, 4000.0)).build_ui_state(|ui, app: &mut PhotocraftApp| panel_after_font_setup(ui, app), app);
         PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
         h.run_steps(2);
-        let headers = crate::pickers::asset_browser::last_group_headers(&h.ctx, PANEL);
+        let headers = crate::pickers::browser::asset_browser::last_group_headers(&h.ctx, PANEL);
         let (target_group, target_rect) = &headers[0];
         let (moving_group, moving_rect) = headers.last().unwrap();
 
@@ -637,7 +637,7 @@ mod tests {
         assert_eq!(h.state().ui.presets_ui.parent_of(PANEL, moving_group), Some(target_group.as_str()));
         assert_eq!(
             h.state().ui.presets_ui.hierarchy_order[PANEL][target_group].first(),
-            Some(&crate::pickers::picker_state::HierarchyOrderEntry::Group(moving_group.clone()))
+            Some(&crate::pickers::state::HierarchyOrderEntry::Group(moving_group.clone()))
         );
     }
 
@@ -650,8 +650,11 @@ mod tests {
         let mut h = Harness::builder().with_size(vec2(300.0, 4000.0)).build_ui_state(|ui, app: &mut PhotocraftApp| panel_after_font_setup(ui, app), app);
         PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
         h.run_steps(2);
-        let target_rect =
-            crate::pickers::asset_browser::last_group_headers(&h.ctx, PANEL).into_iter().find(|(name, _)| name == &target_group).map(|(_, rect)| rect).unwrap();
+        let target_rect = crate::pickers::browser::asset_browser::last_group_headers(&h.ctx, PANEL)
+            .into_iter()
+            .find(|(name, _)| name == &target_group)
+            .map(|(_, rect)| rect)
+            .unwrap();
         let source_rect = h.get_by_label(&card).rect();
 
         // A card and a group use the same drop-onto-group target semantics.
@@ -668,7 +671,7 @@ mod tests {
         let mut h = Harness::builder().with_size(vec2(300.0, 4000.0)).build_ui_state(|ui, app: &mut PhotocraftApp| panel_after_font_setup(ui, app), app);
         PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
         h.run_steps(2);
-        let headers = crate::pickers::asset_browser::last_group_headers(&h.ctx, PANEL);
+        let headers = crate::pickers::browser::asset_browser::last_group_headers(&h.ctx, PANEL);
         assert!(headers.len() >= 2);
         let (target_group, _) = &headers[0];
         let (moving_group, moving_rect) = headers.last().unwrap();
@@ -682,8 +685,8 @@ mod tests {
 
         let state = &h.state().ui.presets_ui;
         assert_eq!(state.parent_of(PANEL, moving_group), Some(target_group.as_str()));
-        assert_eq!(state.hierarchy_order[PANEL][target_group].first(), Some(&crate::pickers::picker_state::HierarchyOrderEntry::Group(moving_group.clone())));
-        assert_eq!(state.hierarchy_order[PANEL][target_group].get(1), Some(&crate::pickers::picker_state::HierarchyOrderEntry::Item(target_item)));
+        assert_eq!(state.hierarchy_order[PANEL][target_group].first(), Some(&crate::pickers::state::HierarchyOrderEntry::Group(moving_group.clone())));
+        assert_eq!(state.hierarchy_order[PANEL][target_group].get(1), Some(&crate::pickers::state::HierarchyOrderEntry::Item(target_item)));
         let names: Vec<String> = headers.iter().map(|(name, _)| name.clone()).collect();
         assert_eq!(state.display_order(PANEL, &names), root_order_before, "a card-level drop must not also reorder root groups");
     }
@@ -704,7 +707,7 @@ mod tests {
         assert_eq!(h.state().session.presets.swatches[0].items[0].name, second);
         assert_eq!(
             h.state().ui.presets_ui.hierarchy_order[PANEL][&group_name][0..2],
-            [crate::pickers::picker_state::HierarchyOrderEntry::Item(second), crate::pickers::picker_state::HierarchyOrderEntry::Item(first),]
+            [crate::pickers::state::HierarchyOrderEntry::Item(second), crate::pickers::state::HierarchyOrderEntry::Item(first),]
         );
     }
 }

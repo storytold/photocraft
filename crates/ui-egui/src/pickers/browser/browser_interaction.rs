@@ -1,20 +1,23 @@
 //! Shared hit testing and interaction semantics for asset browsers.
 //!
-//! This module owns pointer hit testing, low-level interaction semantics, inline rename, context
-//! menus, and drag-ghost capture/presentation. Hierarchy target arbitration and release resolution
-//! live in `asset_browser_dragging`.
-
-use std::collections::BTreeSet;
+//! This module owns pointer hit testing, low-level interaction semantics, inline rename, and
+//! drag-ghost capture/presentation. Context-menu policy lives in `context_menu`,
+//! while hierarchy target arbitration and release resolution live in `dragging`.
 
 use egui::{Pos2, Rect, pos2};
 
 use crate::PhotocraftApp;
-use crate::pickers::asset_browser::{BrowserAction, GroupView, ItemContextMenuArgs, ItemPaintState, ItemView, Painters};
-use crate::pickers::picker_browser_dragging::{DropHitRegion, PointerRegion};
-use crate::pickers::picker_browser_identity::PickerNodeIdentity;
-use crate::pickers::picker_browser_model::{ContainerId, HierarchyNode, PickerBrowserHierarchy, PickerId};
-use crate::pickers::picker_state::{ItemRenameState, PresetUi};
+use crate::pickers::browser::asset_browser::{BrowserAction, GroupView, ItemPaintState, Painters};
+use crate::pickers::browser::dragging_model::{DropHitRegion, PointerRegion};
+use crate::pickers::browser::path_identity_model::{ContainerId, HierarchyNode, PickerBrowserHierarchy, PickerId};
+use crate::pickers::state::PresetUi;
 use crate::theme::Tokens;
+
+pub(super) use super::context_menu::{BrowserDeleteContext, replace_selected_delete_actions, selected_delete_actions};
+pub(crate) use super::context_menu::{
+    ContextMenuAction, begin_item_rename, delete_item_actions, draw_context_menu_target, draw_group_context_menu, draw_item_context_menu, item_context_targets,
+    move_item_actions, standard_group_context_menu, standard_item_context_menu,
+};
 
 /// Source identity for a floating drag preview.
 #[derive(Clone, Debug, PartialEq)]
@@ -107,7 +110,7 @@ pub(super) struct ItemDragGhost {
     pub(super) rect: Rect,
     pub(super) group_index: usize,
     pub(super) item_index: usize,
-    pub(super) display_mode: crate::pickers::picker_state::PickerDisplayMode,
+    pub(super) display_mode: crate::pickers::state::PickerDisplayMode,
     pub(super) selected: bool,
 }
 
@@ -137,7 +140,7 @@ impl Painters<'_, '_> {
             if self.has_group() {
                 self.group(&ghost_ui, ghost_rect, group, open, false, GROUP_DRAG_GHOST_OPACITY);
             } else {
-                crate::pickers::asset_browser_groups::paint_with_opacity(&ghost_ui, ghost_rect, open, &group.name, depth, None, GROUP_DRAG_GHOST_OPACITY);
+                crate::pickers::browser::groups::paint_with_opacity(&ghost_ui, ghost_rect, open, &group.name, depth, None, GROUP_DRAG_GHOST_OPACITY);
             }
         }
         for ghost in ghosts.nested_groups {
@@ -149,7 +152,7 @@ impl Painters<'_, '_> {
                 egui::UiBuilder::new().layer_id(layer).max_rect(ghost_rect.expand(1.0)),
             );
             ghost_ui.set_clip_rect(app_window_clip);
-            crate::pickers::asset_browser_groups::paint_with_opacity(&ghost_ui, ghost_rect, open, &name, depth, Some(count), GROUP_DRAG_GHOST_OPACITY);
+            crate::pickers::browser::groups::paint_with_opacity(&ghost_ui, ghost_rect, open, &name, depth, Some(count), GROUP_DRAG_GHOST_OPACITY);
         }
         for ghost in ghosts.items {
             let ItemDragGhost { rect: ghost_rect, group_index, item_index, display_mode: ghost_mode, selected } = ghost;
@@ -161,7 +164,7 @@ impl Painters<'_, '_> {
             );
             ghost_ui.set_clip_rect(app_window_clip);
             ghost_ui.set_opacity(GROUP_DRAG_GHOST_OPACITY);
-            if ghost_mode == crate::pickers::picker_state::PickerDisplayMode::TextOnly {
+            if ghost_mode == crate::pickers::state::PickerDisplayMode::TextOnly {
                 if let Some(item) = groups.get(group_index).and_then(|group| group.items.get(item_index)) {
                     if selected {
                         ghost_ui.painter().rect_filled(ghost_rect, egui::CornerRadius::ZERO, tokens.row_selected);
@@ -276,29 +279,6 @@ pub(crate) fn advance_item_rename(st: &mut PresetUi, panel: &str) {
         && let Some(index) = st.item_rename_queue.iter().position(|rename| rename.panel == panel)
     {
         st.item_renaming = Some(st.item_rename_queue.remove(index));
-    }
-}
-
-/// Attach a context menu, using a nested submenu when the browser is inside a compact picker menu.
-pub(crate) fn draw_context_menu_target(ui: &mut egui::Ui, response: egui::Response, compact: bool, draw_menu: impl FnOnce(&mut egui::Ui)) {
-    if compact {
-        compact_context_menu_target(ui, response, draw_menu);
-    } else {
-        context_menu_target(response, draw_menu);
-    }
-}
-
-fn compact_context_menu_target(ui: &mut egui::Ui, response: egui::Response, menu: impl FnOnce(&mut egui::Ui)) {
-    // Compact pickers live inside an egui menu popup. A separate context popup is treated as
-    // outside that parent and dismisses it. Use the same nested-SubMenu mechanism as the gear.
-    let submenu_id = egui::containers::menu::SubMenu::id_from_widget_id(response.id);
-    // Do not set `open_item` before calling `SubMenu::show`: MenuState validates that item
-    // against the previous frame's visible submenu, so a newly requested submenu gets cleared.
-    // Showing it on the right-click frame lets SubMenu register itself normally and persist.
-    let right_clicked = response.secondary_clicked();
-    let open = egui::containers::menu::MenuState::from_ui(ui, |state, _| state.open_item == Some(submenu_id));
-    if right_clicked || open {
-        egui::containers::menu::SubMenu::new().show(ui, &response, menu);
     }
 }
 
@@ -617,8 +597,8 @@ mod insertion_marker_tests {
         GroupGapDropSpec, card_drop_hit, card_drop_hits, card_trailing_marker_rect, group_append_hit, group_drop_outline_rects, group_gap_drop_hits,
         group_gap_upper_anchor, group_header_drop_hits, group_insertion_marker_rect, root_append_hit, root_prepend_hit,
     };
-    use crate::pickers::picker_browser_dragging::{DropIndicator, PointerRegion, resolve_drop_candidate};
-    use crate::pickers::picker_browser_model::{ContainerId, DropPosition, HierarchyNode, PickerBrowserHierarchy, PickerId};
+    use crate::pickers::browser::dragging_model::{DropIndicator, PointerRegion, resolve_drop_candidate};
+    use crate::pickers::browser::path_identity_model::{ContainerId, DropPosition, HierarchyNode, PickerBrowserHierarchy, PickerId};
     use egui::{Pos2, Rect};
 
     #[test]
@@ -833,7 +813,7 @@ mod insertion_marker_tests {
 
     #[test]
     fn group_gap_anchor_uses_the_actual_previous_mixed_sibling() {
-        use crate::pickers::picker_browser_model::{HierarchyNode as Node, PickerBrowserHierarchy};
+        use crate::pickers::browser::path_identity_model::{HierarchyNode as Node, PickerBrowserHierarchy};
         let hierarchy = PickerBrowserHierarchy::new(vec![Node::group(
             "outer",
             vec![
@@ -851,7 +831,7 @@ mod insertion_marker_tests {
 
     #[test]
     fn group_gap_upper_anchor_tracks_the_previous_group_or_card_at_each_nesting_level() {
-        use crate::pickers::picker_browser_model::HierarchyNode as Node;
+        use crate::pickers::browser::path_identity_model::HierarchyNode as Node;
 
         let hierarchy = PickerBrowserHierarchy::new(vec![Node::group(
             "root",
@@ -881,7 +861,7 @@ mod insertion_marker_tests {
 
     #[test]
     fn root_prepend_boundary_wins_the_overlap_with_the_first_node() {
-        use crate::pickers::picker_browser_dragging::arbitrate_hit_index;
+        use crate::pickers::browser::dragging_model::arbitrate_hit_index;
 
         let first = Rect::from_min_max(Pos2::new(10.0, 20.0), Pos2::new(210.0, 50.0));
         let pointer = Pos2::new(80.0, 20.0);
@@ -1124,7 +1104,7 @@ mod tests {
 #[cfg(test)]
 mod canonical_drag_tests {
     use super::AssetDrag;
-    use crate::pickers::picker_browser_model::PickerId;
+    use crate::pickers::browser::path_identity_model::PickerId;
 
     #[test]
     fn canonical_source_identity_is_scope_checked_and_path_qualified() {
@@ -1149,184 +1129,6 @@ mod canonical_drag_tests {
         assert_eq!(item.canonical_node_id("patterns"), None);
         assert_eq!(legacy.canonical_node_id("brushes"), None);
     }
-}
-
-/// Generic actions returned by shared item and group context menus.
-pub(crate) enum ContextMenuAction {
-    Rename,
-    Delete,
-    MoveTo(String),
-}
-
-/// Draw a configurable item menu and return a request for the consumer to handle.
-pub(crate) fn draw_item_context_menu(
-    ui: &mut egui::Ui,
-    rename_label: &str,
-    delete_label: &str,
-    move_to: Option<(&str, &[String], &str)>,
-) -> Option<ContextMenuAction> {
-    if ui.button(rename_label).clicked() {
-        ui.close();
-        return Some(ContextMenuAction::Rename);
-    }
-    if ui.button(delete_label).clicked() {
-        ui.close();
-        return Some(ContextMenuAction::Delete);
-    }
-    if let Some((label, group_names, current_group)) = move_to {
-        let mut action = None;
-        ui.menu_button(label, |ui| {
-            for group in group_names.iter().filter(|name| name.as_str() != current_group) {
-                if ui.button(group).clicked() {
-                    action = Some(ContextMenuAction::MoveTo(group.clone()));
-                    ui.close();
-                }
-            }
-        });
-        return action;
-    }
-    None
-}
-
-/// Draw a group's rename/delete menu.
-pub(crate) fn draw_group_context_menu(ui: &mut egui::Ui, rename_label: &str, delete_label: &str) -> Option<ContextMenuAction> {
-    if ui.button(rename_label).clicked() {
-        ui.close();
-        Some(ContextMenuAction::Rename)
-    } else if ui.button(delete_label).clicked() {
-        ui.close();
-        Some(ContextMenuAction::Delete)
-    } else {
-        None
-    }
-}
-
-/// Resolve the context-menu target set. Right-clicking one of the selected cards acts on the whole
-/// selection; right-clicking an unselected card preserves the conventional single-card operation.
-pub(crate) fn item_context_targets(item: &ItemView, group: &GroupView, selected: &[(String, ItemView)]) -> Vec<(String, ItemView)> {
-    if selected
-        .iter()
-        .any(|(source_group, selected_item)| source_group == &group.name && selected_item.key == item.key && selected_item.group_path == item.group_path)
-    {
-        selected.to_vec()
-    } else {
-        vec![(group.name.clone(), item.clone())]
-    }
-}
-
-pub(crate) fn delete_item_actions(targets: &[(String, ItemView)]) -> Vec<BrowserAction> {
-    targets.iter().map(|(group, item)| BrowserAction::DeleteItem { group: group.clone(), group_path: item.group_path.clone(), key: item.key.clone() }).collect()
-}
-
-/// Projection data needed to expand a context-menu deletion to the active browser selection.
-pub(super) struct BrowserDeleteContext<'a> {
-    pub(super) selection_order: &'a [PickerId],
-    pub(super) hierarchy: &'a PickerBrowserHierarchy,
-    pub(super) identities: &'a std::collections::BTreeMap<PickerId, PickerNodeIdentity>,
-}
-
-/// Resolve selected nodes to independent domain deletions, omitting descendants covered by a selected group.
-pub(super) fn selected_delete_actions(selection: &BTreeSet<PickerId>, clicked: &PickerId, context: &BrowserDeleteContext<'_>) -> Option<Vec<BrowserAction>> {
-    if !selection.contains(clicked) {
-        return None;
-    }
-    let mut actions = Vec::new();
-    for id in context.selection_order.iter().filter(|id| selection.contains(*id)) {
-        let mut parent = context.hierarchy.parent_of(id);
-        let mut covered = false;
-        while let Some(ContainerId::Group(parent_id)) = parent {
-            if selection.contains(&parent_id) {
-                covered = true;
-                break;
-            }
-            parent = context.hierarchy.parent_of(&parent_id);
-        }
-        if covered {
-            continue;
-        }
-        match context.identities.get(id) {
-            Some(PickerNodeIdentity::Group(group)) => actions.push(BrowserAction::DeleteGroup(group.clone())),
-            Some(PickerNodeIdentity::Folder { group, path }) => {
-                actions.push(BrowserAction::DeleteNestedGroup { group: group.clone(), group_path: path.clone() })
-            }
-            Some(PickerNodeIdentity::Item { group, key }) => {
-                actions.push(BrowserAction::DeleteItem { group: group.clone(), group_path: Vec::new(), key: key.clone() })
-            }
-            Some(PickerNodeIdentity::FolderItem { group, path, key }) => {
-                actions.push(BrowserAction::DeleteItem { group: group.clone(), group_path: path.clone(), key: key.clone() });
-            }
-            None => {}
-        }
-    }
-    (!actions.is_empty()).then_some(actions)
-}
-
-pub(super) fn replace_selected_delete_actions(
-    events: &mut Vec<BrowserAction>,
-    start: usize,
-    state: &PresetUi,
-    panel: &str,
-    clicked: &PickerId,
-    context: &BrowserDeleteContext<'_>,
-) {
-    if !events.get(start..).is_some_and(|new_events| {
-        new_events
-            .iter()
-            .any(|action| matches!(action, BrowserAction::DeleteItem { .. } | BrowserAction::DeleteGroup(_) | BrowserAction::DeleteNestedGroup { .. }))
-    }) {
-        return;
-    }
-    let Some(selection) = state.browser_selection.get(panel) else { return };
-    if let Some(actions) = selected_delete_actions(selection, clicked, context) {
-        events.truncate(start);
-        events.extend(actions);
-    }
-}
-
-pub(crate) fn move_item_actions(targets: &[(String, ItemView)], destination: &str) -> Vec<BrowserAction> {
-    targets.iter().filter(|(group, _)| group != destination).map(|(_, item)| BrowserAction::Move(item.key.clone(), destination.to_owned())).collect()
-}
-
-pub(crate) fn begin_item_rename(state: &mut PresetUi, panel: &str, targets: &[(String, ItemView)]) {
-    let mut renames = targets.iter().map(|(group, item)| ItemRenameState {
-        panel: panel.to_owned(),
-        group: group.clone(),
-        group_path: item.group_path.clone(),
-        key: item.key.clone(),
-        text: item.name.clone(),
-    });
-    state.item_renaming = renames.next();
-    state.item_rename_queue = renames.collect();
-}
-
-/// Standard item-menu policy shared by preset panels and specialised adapters.
-pub(crate) fn standard_item_context_menu(ui: &mut egui::Ui, state: &mut PresetUi, args: ItemContextMenuArgs<'_>, events: &mut Vec<BrowserAction>) {
-    let ItemContextMenuArgs { panel, item, group, group_names, selected_items } = args;
-    let targets = item_context_targets(item, group, selected_items);
-    let count = targets.len();
-    let delete_label = if count > 1 { format!("{} ({count})", tl!("Delete")) } else { tl!("Delete").to_string() };
-    let all_in_current_group = targets.iter().all(|(source_group, _)| source_group == &group.name);
-    match draw_item_context_menu(ui, tl!("Rename…"), &delete_label, Some((tl!("Move to"), group_names, if all_in_current_group { &group.name } else { "" })))
-    {
-        Some(ContextMenuAction::Rename) => begin_item_rename(state, panel, &targets),
-        Some(ContextMenuAction::Delete) => events.extend(delete_item_actions(&targets)),
-        Some(ContextMenuAction::MoveTo(destination)) => events.extend(move_item_actions(&targets, &destination)),
-        None => {}
-    }
-}
-
-/// Standard group-menu policy shared by preset panels and specialised adapters.
-pub(crate) fn standard_group_context_menu(ui: &mut egui::Ui, state: &mut PresetUi, panel: &str, group: &GroupView, events: &mut Vec<BrowserAction>) {
-    match draw_group_context_menu(ui, tl!("Rename Group…"), tl!("Delete Group")) {
-        Some(ContextMenuAction::Rename) => state.renaming = Some((panel.to_string(), format!("group:{}", group.name), group.name.clone())),
-        Some(ContextMenuAction::Delete) => events.push(BrowserAction::DeleteGroup(group.name.clone())),
-        _ => {}
-    }
-}
-
-/// Attach a consumer-provided context menu to an egui response.
-pub(crate) fn context_menu_target(resp: egui::Response, menu: impl FnOnce(&mut egui::Ui)) {
-    let _ = resp.context_menu(menu);
 }
 
 #[cfg(test)]

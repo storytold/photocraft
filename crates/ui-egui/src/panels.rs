@@ -962,7 +962,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 // Brush edits here go through `tools.setBrush`, one journal entry per gesture (Rule 1).
                 if (tool.is_brushlike() && !matches!(tool, Tool::Brush | Tool::Pencil | Tool::MixerBrush | Tool::Eraser)) || tool == Tool::QuickSelection {
                     brush_preset_chip(ui, &app.session.tools.brush, &mut app.ui);
-                    crate::pickers::brush_picker::settings_toggle(app, ui);
+                    crate::pickers::adapters::brush_picker::settings_toggle(app, ui);
                     widgets::vline(ui, 22.0);
                 }
                 if tool == Tool::CloneStamp {
@@ -993,7 +993,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         let block = crate::eraser_ui::block_mode(app, app.ui.tool);
                         ui.add_enabled_ui(!block, |ui| {
                             brush_preset_chip(ui, b, &mut app.ui);
-                            crate::pickers::brush_picker::settings_toggle(app, ui);
+                            crate::pickers::adapters::brush_picker::settings_toggle(app, ui);
                         });
                         widgets::vline(ui, 22.0);
                         // The Eraser has no blend mode: its Mode is Brush, Pencil or Block (#2662).
@@ -1014,7 +1014,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         ui.add_enabled_ui(!block && !crate::eraser_ui::pencil_mode(app, app.ui.tool), |ui| {
                             percent_field(ui, tl!("Flow"), &mut b.flow, 1.0..=100.0, 62.0);
                             let airbrush = icons::button(ui, "sparkles", 24.0, b.build_up, tl!("Enable airbrush-style build-up effects"));
-                            if crate::pickers::brush_picker::named(airbrush, "Enable airbrush-style build-up effects").clicked() {
+                            if crate::pickers::adapters::brush_picker::named(airbrush, "Enable airbrush-style build-up effects").clicked() {
                                 b.build_up = !b.build_up;
                             }
                         });
@@ -1029,7 +1029,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     // Pencil: Photoshop's options (no hardness or flow: the pencil is always hard).
                     Tool::Pencil => {
                         brush_preset_chip(ui, b, &mut app.ui);
-                        crate::pickers::brush_picker::settings_toggle(app, ui);
+                        crate::pickers::adapters::brush_picker::settings_toggle(app, ui);
                         widgets::vline(ui, 22.0);
                         if !t.pro {
                             opt_label(ui, tl!("Size"));
@@ -1047,7 +1047,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     }
                     Tool::Brush | Tool::Eraser => {
                         brush_preset_chip(ui, b, &mut app.ui);
-                        crate::pickers::brush_picker::settings_toggle(app, ui);
+                        crate::pickers::adapters::brush_picker::settings_toggle(app, ui);
                         widgets::vline(ui, 22.0);
                         // A Block-mode Eraser has a fixed size, opacity and flow (Photoshop, #2770).
                         let block = crate::eraser_ui::block_mode(app, app.ui.tool);
@@ -1076,7 +1076,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     }
                     Tool::MixerBrush => {
                         brush_preset_chip(ui, b, &mut app.ui);
-                        crate::pickers::brush_picker::settings_toggle(app, ui);
+                        crate::pickers::adapters::brush_picker::settings_toggle(app, ui);
                         widgets::vline(ui, 22.0);
                         for (label, value) in [
                             (tl!("Wet"), &mut b.mixer.wet),
@@ -1763,11 +1763,11 @@ pub(crate) fn dock_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, group: crate
     use crate::dock::Group;
     let pro = Tokens::get(ui.ctx()).pro;
     match (group, tab) {
-        (Group::Color, 2) => crate::pickers::preset_panels::gradients_panel(app, ui),
-        (Group::Color, 3) => crate::pickers::preset_panels::patterns_panel(app, ui),
+        (Group::Color, 2) => crate::pickers::panels::gradients_panel(app, ui),
+        (Group::Color, 3) => crate::pickers::panels::patterns_panel(app, ui),
         (Group::Color, 0) if pro => color_field(app, ui),
-        (Group::Color, _) if pro => crate::pickers::swatches_ui::panel(app, ui),
-        (Group::Color, 0) => crate::pickers::swatches_ui::panel(app, ui),
+        (Group::Color, _) if pro => crate::pickers::adapters::swatches::panel(app, ui),
+        (Group::Color, 0) => crate::pickers::adapters::swatches::panel(app, ui),
         (Group::Color, _) => color_picker(app, ui),
         (Group::Properties, 0) => properties_body(app, ui),
         (Group::Properties, _) => adjustments_grid(app, ui),
@@ -2017,7 +2017,7 @@ fn navigator(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             if field.changed() {
                 set(app, pct / 100.0);
             }
-            let out = crate::pickers::brush_picker::named(icons::button(ui, "minus", NAV_ROW_H, false, tl!("Zoom Out")), "Zoom Out");
+            let out = crate::pickers::adapters::brush_picker::named(icons::button(ui, "minus", NAV_ROW_H, false, tl!("Zoom Out")), "Zoom Out");
             if out.clicked() {
                 set(app, crate::zoom_levels::step(v.zoom, -1, v.doc_size));
             }
@@ -2029,7 +2029,7 @@ fn navigator(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             if slid {
                 set(app, 2f32.powf(lz));
             }
-            let zin = crate::pickers::brush_picker::named(icons::button(ui, "plus", NAV_ROW_H, false, tl!("Zoom In")), "Zoom In");
+            let zin = crate::pickers::adapters::brush_picker::named(icons::button(ui, "plus", NAV_ROW_H, false, tl!("Zoom In")), "Zoom In");
             if zin.clicked() {
                 set(app, crate::zoom_levels::step(v.zoom, 1, v.doc_size));
             }
@@ -4070,7 +4070,7 @@ fn smoothing_field(ui: &mut egui::Ui, b: &mut photocraft_engine::BrushSettings, 
 /// like the Smoothing % (so they stay per tool and reach the live stroke and the commit).
 fn smoothing_options(ui: &mut egui::Ui, b: &mut photocraft_engine::BrushSettings) {
     let resp = icons::button(ui, "settings", 24.0, false, tl!("Set additional smoothing options"));
-    let resp = crate::pickers::brush_picker::named(resp, "Set additional smoothing options");
+    let resp = crate::pickers::adapters::brush_picker::named(resp, "Set additional smoothing options");
     egui::Popup::from_toggle_button_response(&resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
         let s = &mut b.smoothing;
         widgets::checkbox(ui, &mut s.pulled_string, tl!("Pulled String Mode"));
@@ -4085,7 +4085,7 @@ fn smoothing_options(ui: &mut egui::Ui, b: &mut photocraft_engine::BrushSettings
 fn brush_preset_chip(ui: &mut egui::Ui, b: &photocraft_engine::BrushSettings, state: &mut crate::state::UiState) {
     let t = Tokens::get(ui.ctx());
     let (r, _) = ui.allocate_exact_size(vec2(44.0, 30.0), Sense::hover());
-    let resp = ui.interact(r, crate::pickers::brush_picker::chip_id(), Sense::click());
+    let resp = ui.interact(r, crate::pickers::adapters::brush_picker::chip_id(), Sense::click());
     if resp.hovered() || state.brush_picker.is_some() {
         ui.painter().rect_filled(r, t.radius_sm, t.hover);
     }
@@ -4098,9 +4098,9 @@ fn brush_preset_chip(ui: &mut egui::Ui, b: &photocraft_engine::BrushSettings, st
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Brush Preset picker")));
     if resp.on_hover_text(tl!("Brush Preset picker")).clicked() {
         if state.brush_picker.is_some() {
-            crate::pickers::brush_picker::close(state);
+            crate::pickers::adapters::brush_picker::close(state);
         } else {
-            crate::pickers::brush_picker::open(state, ui.ctx(), [r.left(), r.bottom() + 2.0]);
+            crate::pickers::adapters::brush_picker::open(state, ui.ctx(), [r.left(), r.bottom() + 2.0]);
         }
     }
 }

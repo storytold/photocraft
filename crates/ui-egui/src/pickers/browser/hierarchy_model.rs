@@ -1,13 +1,13 @@
 //! Persistence and projection boundary for the picker-browser hierarchy model.
 //!
-//! The canonical, asset-neutral tree and its move invariants live in `picker_browser_model`.
+//! The canonical, asset-neutral tree and its move invariants live in `hierarchy_model`.
 //! This module translates that model to and from the existing picker persistence representation.
 
 use std::collections::BTreeMap;
 
-use super::picker_browser_identity::PickerNodeIdentity;
-use super::picker_browser_model::{DropPosition, HierarchyError, HierarchyNode, PickerBrowserHierarchy, PickerId};
-use super::picker_state::{HierarchyOrderEntry, PresetUi};
+use super::super::state::{HierarchyOrderEntry, PresetUi};
+use super::identity::PickerNodeIdentity;
+use super::path_identity_model::{DropPosition, HierarchyError, HierarchyNode, PickerBrowserHierarchy, PickerId};
 
 /// Apply one resolved browser drop and persist the resulting canonical child sequences.
 ///
@@ -98,9 +98,9 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::commit_hierarchy_move;
-    use crate::pickers::picker_browser_identity::PickerNodeIdentity;
-    use crate::pickers::picker_browser_model::{ContainerId, DropPosition, HierarchyNode, PickerBrowserHierarchy, PickerId};
-    use crate::pickers::picker_state::{HierarchyOrderEntry, PresetUi};
+    use crate::pickers::browser::identity::PickerNodeIdentity;
+    use crate::pickers::browser::path_identity_model::{ContainerId, DropPosition, HierarchyNode, PickerBrowserHierarchy, PickerId};
+    use crate::pickers::state::{HierarchyOrderEntry, PresetUi};
 
     fn identities() -> BTreeMap<PickerId, PickerNodeIdentity> {
         BTreeMap::from([
@@ -271,7 +271,7 @@ mod tests {
                 &DropPosition::PrependTo { group: "A".into() },
                 &incomplete,
             ),
-            Err(crate::pickers::picker_browser_model::HierarchyError::InvalidTree)
+            Err(crate::pickers::browser::path_identity_model::HierarchyError::InvalidTree)
         );
         assert_eq!(hierarchy, original_hierarchy);
         assert_eq!(state, original_state);

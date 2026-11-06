@@ -1,114 +1,15 @@
 //! Shared layout for preset pickers, independent of the asset-specific browser and commands.
 
-use crate::pickers::asset_browser::{BrowserAction, BrowserAdapter, browser};
-use crate::pickers::picker_footer::FooterOptions;
-use crate::pickers::picker_state::{PickerDisplayMode, PresetUi};
+use crate::pickers::browser::asset_browser::{BrowserAction, BrowserAdapter, browser};
+use crate::pickers::footer::FooterOptions;
+use crate::pickers::state::PresetUi;
+
+#[cfg(test)]
+pub(crate) use crate::pickers::picker_panel_menu::picker_menu_popup;
+pub(crate) use crate::pickers::picker_panel_menu::{MenuContentsCallback, PickerMenuOptions, picker_menu_contents};
 
 const FOOTER_GUESS: f32 = 32.0;
 type UiCallback<'a> = &'a mut dyn FnMut(&mut egui::Ui);
-pub(crate) type MenuContentsCallback<'a> = &'a mut dyn FnMut(&mut egui::Ui, &mut PresetUi, &str);
-/// Shared menu points offered by an asset-picker shell. Consumers choose capabilities, never
-/// ordering or separators; domain actions are appended through the final extension point.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct PickerMenuOptions {
-    pub(crate) display: bool,
-    pub(crate) search_visibility: bool,
-}
-
-impl PickerMenuOptions {
-    pub(crate) fn for_panel(panel: &str) -> Self {
-        Self { display: true, search_visibility: matches!(panel, "gradients" | "patterns" | "swatches" | "brush-picker") }
-    }
-}
-
-#[cfg(test)]
-fn picker_menu_popup(ui: &mut egui::Ui, label: &str, anchor_offset: egui::Vec2, contents: impl FnOnce(&mut egui::Ui)) {
-    let button = crate::widgets::panel_menu_button(ui, label);
-    let anchor = match egui::PopupAnchor::from(&button) {
-        egui::PopupAnchor::ParentRect(rect) if anchor_offset != egui::Vec2::ZERO => egui::PopupAnchor::ParentRect(rect.translate(anchor_offset)),
-        other => other,
-    };
-    egui::Popup::menu(&button).anchor(anchor).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
-        crate::widgets::style_spectrum_popup_menu(ui);
-        contents(ui);
-    });
-}
-
-/// Render the shared display controls without owning section boundaries; the composer owns them.
-fn display_mode_items(ui: &mut egui::Ui, st: &mut PresetUi, panel: &str) {
-    let selected = st.display_mode(panel);
-    for mode in PickerDisplayMode::ALL {
-        let label = match mode {
-            PickerDisplayMode::TextOnly => tl!("Text Only"),
-            PickerDisplayMode::SmallThumbnail => tl!("Small Thumbnail"),
-            PickerDisplayMode::LargeThumbnail => tl!("Large Thumbnail"),
-            PickerDisplayMode::SmallList => tl!("Small List"),
-            PickerDisplayMode::LargeList => tl!("Large List"),
-        };
-        if menu_check_item(ui, selected == mode, label, true).clicked() {
-            st.display_modes.insert(panel.to_owned(), mode);
-            ui.close();
-        }
-    }
-}
-
-fn wrap_list_item(ui: &mut egui::Ui, st: &mut PresetUi, panel: &str) {
-    let selected = st.display_mode(panel);
-    let list_mode = selected.is_list();
-    let wrap = st.wrap_list.get(panel).copied().unwrap_or(true);
-    if menu_check_item(ui, wrap, tl!("Wrap List"), list_mode).clicked() && list_mode {
-        st.wrap_list.insert(panel.to_owned(), !wrap);
-        ui.close();
-    }
-}
-
-/// Render a checked menu row with the same fixed checkmark gutter as the application menu bar.
-fn menu_check_item(ui: &mut egui::Ui, checked: bool, label: &str, enabled: bool) -> egui::Response {
-    let text = crate::menu_keys::menu_row_text(ui, checked, label, None);
-    let enabled = enabled && ui.is_enabled();
-    let response = ui.add_enabled(enabled, egui::Button::new(text));
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
-    response
-}
-
-/// Common visibility control for the standard pickers' search row.
-fn search_toggle(ui: &mut egui::Ui, st: &mut PresetUi, panel: &str) {
-    let visible = st.search_visible.entry(panel.to_string()).or_insert(true);
-    if ui.checkbox(visible, tl!("Show Search Bar")).changed() {
-        if !*visible {
-            st.search.remove(panel);
-        }
-        ui.close();
-    }
-}
-
-/// Compose a preset picker's menu. The shell owns shared points, their order, and section boundary;
-/// consumers contribute only their optional domain-specific entries.
-pub(crate) fn picker_menu_contents(ui: &mut egui::Ui, state: &mut PresetUi, panel: &str, options: PickerMenuOptions, extra: Option<MenuContentsCallback<'_>>) {
-    let mut has_shared_points = false;
-    if options.display {
-        display_mode_items(ui, state, panel);
-        ui.separator();
-        wrap_list_item(ui, state, panel);
-        has_shared_points = true;
-    }
-    if options.search_visibility {
-        if has_shared_points {
-            ui.separator();
-        }
-        search_toggle(ui, state, panel);
-        has_shared_points = true;
-    }
-    // One shell-owned boundary separates shared controls from domain extensions. The presence of
-    // an extension is the source of truth; callers never coordinate a second separator flag.
-    if let Some(extra) = extra {
-        if has_shared_points {
-            ui.separator();
-        }
-        extra(ui, state, panel);
-    }
-}
-
 /// Controls for the standard asset-browser shell. The standard footer belongs only to this
 /// contract because this shell owns the browser viewport and translates footer actions.
 #[derive(Default)]
@@ -147,8 +48,8 @@ pub(crate) fn picker_shell(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut B
         ui.add(egui::TextEdit::singleline(query).desired_width(ui.available_width()).hint_text(tl!("Search")));
     }
 
-    let recent_options = crate::pickers::recent_picker::Options::for_panel(&panel);
-    let mut events = crate::pickers::recent_picker::show(ui, st, adapter, recent_options);
+    let recent_options = crate::pickers::recents_bar::Options::for_panel(&panel);
+    let mut events = crate::pickers::recents_bar::show(ui, st, adapter, recent_options);
 
     let footer_id = egui::Id::new(("preset-footer", panel.as_str()));
     let footer_h = if shell.footer.is_some() { ui.data(|d| d.get_temp::<f32>(footer_id)).unwrap_or(FOOTER_GUESS) } else { 0.0 };
@@ -165,11 +66,11 @@ pub(crate) fn picker_shell(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut B
     if let Some(footer) = shell.footer {
         let footer_top = ui.min_rect().bottom();
         ui.add_space(4.0);
-        let footer_actions = crate::pickers::picker_footer::draw(ui, st, &panel, footer);
+        let footer_actions = crate::pickers::footer::draw(ui, st, &panel, footer);
         events.extend(footer_actions.into_iter().map(|action| match action {
-            crate::pickers::picker_footer::FooterAction::DeleteItem { group, group_path, key } => BrowserAction::DeleteItem { group, group_path, key },
-            crate::pickers::picker_footer::FooterAction::New => BrowserAction::New,
-            crate::pickers::picker_footer::FooterAction::NewGroup => BrowserAction::NewGroup,
+            crate::pickers::footer::FooterAction::DeleteItem { group, group_path, key } => BrowserAction::DeleteItem { group, group_path, key },
+            crate::pickers::footer::FooterAction::New => BrowserAction::New,
+            crate::pickers::footer::FooterAction::NewGroup => BrowserAction::NewGroup,
         }));
         let measured = ui.min_rect().bottom() - footer_top;
         if measured.is_finite() && (measured - footer_h).abs() > 0.5 {
@@ -231,7 +132,7 @@ fn shell_controls_custom(ui: &mut egui::Ui, shell: &mut CustomShellOptions<'_>) 
 #[cfg(test)]
 mod display_menu_tests {
     use super::{PickerMenuOptions, picker_menu_contents, picker_menu_popup};
-    use crate::pickers::picker_state::PresetUi;
+    use crate::pickers::state::PresetUi;
     use egui::vec2;
     use egui_kittest::{
         Harness,
@@ -270,7 +171,7 @@ mod display_menu_tests {
 
     #[test]
     fn selecting_any_display_mode_closes_the_panel_menu() {
-        use crate::pickers::picker_state::PickerDisplayMode as Mode;
+        use crate::pickers::state::PickerDisplayMode as Mode;
 
         for mode in Mode::ALL {
             let mut state = PresetUi::default();
@@ -378,7 +279,7 @@ mod display_menu_tests {
 
     #[test]
     fn wrap_list_is_ineffective_and_not_mutated_outside_list_modes() {
-        use crate::pickers::picker_state::PickerDisplayMode as Mode;
+        use crate::pickers::state::PickerDisplayMode as Mode;
 
         for mode in [Mode::SmallThumbnail, Mode::LargeThumbnail] {
             let mut state = PresetUi::default();
@@ -405,7 +306,7 @@ mod display_menu_tests {
 
     #[test]
     fn wrap_list_menu_checkbox_toggles_in_all_three_list_modes() {
-        use crate::pickers::picker_state::PickerDisplayMode as Mode;
+        use crate::pickers::state::PickerDisplayMode as Mode;
 
         for mode in [Mode::TextOnly, Mode::SmallList, Mode::LargeList] {
             let mut state = PresetUi::default();

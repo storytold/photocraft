@@ -124,7 +124,7 @@ pub fn finish_shape(app: &mut PhotocraftApp, tool: Tool, start: [f64; 2], end: [
         // ⇧ keeps the shape's proportions (the rect is already squared).
         if let Ok(rect) = serde_json::from_value(p["rect"].take()) {
             let (fill, stroke) = (fill_param(app), stroke_param(app));
-            crate::pickers::preset_panels::finish_custom_shape(app, rect, mods.shift, fill, stroke);
+            crate::pickers::panels::finish_custom_shape(app, rect, mods.shift, fill, stroke);
         }
         return;
     }
@@ -1244,7 +1244,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         }
         Tool::CustomShape => {
             crate::widgets::vline(ui, 22.0);
-            crate::pickers::preset_panels::shape_picker(app, ui);
+            crate::pickers::panels::shape_picker(app, ui);
         }
         _ if matches!(tool, Tool::PathSelection | Tool::DirectSelection) => {
             if let Some(photocraft_doc::LiveShape::Rect { radii, .. }) = target.as_ref().and_then(|s| s.live.as_ref()) {

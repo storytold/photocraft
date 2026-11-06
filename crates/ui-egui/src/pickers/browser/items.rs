@@ -5,7 +5,7 @@
 
 use egui::{Rect, vec2};
 
-use crate::pickers::picker_browser_projection::{GroupView, ItemView};
+use crate::pickers::browser::projection::{GroupView, ItemView};
 use crate::theme::Tokens;
 
 /// Return the visual grid coordinate for an item in row-major thumbnails or column-major wrapped lists.

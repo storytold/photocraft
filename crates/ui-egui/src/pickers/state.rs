@@ -4,9 +4,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
-pub(crate) use super::picker_browser_data::HierarchyOrderEntry;
-use super::picker_browser_data::PickerBrowserData;
-pub(crate) use super::picker_browser_model::MAX_GROUP_DEPTH;
+pub(crate) use super::browser::data::HierarchyOrderEntry;
+use super::browser::data::PickerBrowserData;
+pub(crate) use super::browser::path_identity_model::MAX_GROUP_DEPTH;
 
 /// Shared asset-picker presentation. Dimensions include the two-pixel card border.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -111,9 +111,9 @@ pub struct PresetUi {
     /// Multi-selection owned by the shared browser. Transient because domain adapters still own
     /// the active preset used by commands; these identities describe only the visible UI selection.
     #[serde(skip)]
-    pub(crate) browser_selection: BTreeMap<String, std::collections::BTreeSet<crate::pickers::picker_browser_model::PickerId>>,
+    pub(crate) browser_selection: BTreeMap<String, std::collections::BTreeSet<crate::pickers::browser::path_identity_model::PickerId>>,
     #[serde(skip)]
-    pub(crate) browser_selection_anchor: BTreeMap<String, crate::pickers::picker_browser_model::PickerId>,
+    pub(crate) browser_selection_anchor: BTreeMap<String, crate::pickers::browser::path_identity_model::PickerId>,
     /// Transient per-picker feedback from rejected hierarchy operations. Never persisted.
     #[serde(skip)]
     pub(crate) browser_feedback: BTreeMap<String, String>,
@@ -283,11 +283,11 @@ impl PresetUi {
         self.display_mode(panel).is_list() && self.wrap_list.get(panel).copied().unwrap_or(true)
     }
 
-    pub(crate) fn browser_node_selected(&self, panel: &str, id: &crate::pickers::picker_browser_model::PickerId) -> bool {
+    pub(crate) fn browser_node_selected(&self, panel: &str, id: &crate::pickers::browser::path_identity_model::PickerId) -> bool {
         self.browser_selection.get(panel).is_some_and(|selection| selection.contains(id))
     }
 
-    pub(crate) fn select_browser_node(&mut self, panel: &str, id: crate::pickers::picker_browser_model::PickerId, additive: bool) {
+    pub(crate) fn select_browser_node(&mut self, panel: &str, id: crate::pickers::browser::path_identity_model::PickerId, additive: bool) {
         let selection = self.browser_selection.entry(panel.to_owned()).or_default();
         if !additive {
             selection.clear();
@@ -305,8 +305,8 @@ impl PresetUi {
     pub(crate) fn select_browser_range(
         &mut self,
         panel: &str,
-        visible: &[crate::pickers::picker_browser_model::PickerId],
-        target: &crate::pickers::picker_browser_model::PickerId,
+        visible: &[crate::pickers::browser::path_identity_model::PickerId],
+        target: &crate::pickers::browser::path_identity_model::PickerId,
     ) {
         let Some(anchor) = self.browser_selection_anchor.get(panel) else {
             self.select_browser_node(panel, target.clone(), false);
@@ -1062,7 +1062,7 @@ mod tests {
     }
     #[test]
     fn browser_multi_selection_toggles_nodes_and_shift_selects_the_visible_interval() {
-        use crate::pickers::picker_browser_model::PickerId;
+        use crate::pickers::browser::path_identity_model::PickerId;
 
         let first = PickerId::group("First");
         let card_a = PickerId::item("First", "a");

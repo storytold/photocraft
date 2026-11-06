@@ -442,10 +442,10 @@ fn texture(
     ui: &mut egui::Ui,
     b: &mut BrushSettings,
     patterns: &[photocraft_doc::Pattern],
-    groups: &[crate::pickers::asset_browser::GroupView],
+    groups: &[crate::pickers::browser::asset_browser::GroupView],
     selected_pattern: &str,
     picked_pattern: &mut Option<String>,
-    preset_ui: &mut crate::pickers::picker_state::PresetUi,
+    preset_ui: &mut crate::pickers::state::PresetUi,
 ) {
     let tx = &mut b.texture;
     ui.horizontal(|ui| {
@@ -465,7 +465,7 @@ fn texture(
                         .max_size(max)
                         .show(ui, |ui| {
                             let browser_h = ui.available_height();
-                            crate::pickers::pattern_browser::compact_pattern_browser(
+                            crate::pickers::adapters::patterns::compact_pattern_browser(
                                 ui,
                                 patterns,
                                 groups,
@@ -620,7 +620,7 @@ fn smoothing(ui: &mut egui::Ui, b: &mut BrushSettings) {
 /// `brush.presets.setCurrent`.
 pub fn section_body(ui: &mut egui::Ui, b: &mut BrushSettings, i: usize, presets: &[BrushPreset], current: Option<&str>) -> Option<String> {
     let mut picked_pattern = None;
-    let mut preset_ui = crate::pickers::picker_state::PresetUi::default();
+    let mut preset_ui = crate::pickers::state::PresetUi::default();
     section_body_with_patterns(
         ui,
         b,
@@ -634,10 +634,10 @@ pub fn section_body(ui: &mut egui::Ui, b: &mut BrushSettings, i: usize, presets:
 /// Pattern-library inputs used only by the Texture section.
 pub(crate) struct PatternSectionPatterns<'a> {
     pub(crate) patterns: &'a [photocraft_doc::Pattern],
-    pub(crate) groups: &'a [crate::pickers::asset_browser::GroupView],
+    pub(crate) groups: &'a [crate::pickers::browser::asset_browser::GroupView],
     pub(crate) selected_pattern: &'a str,
     pub(crate) picked_pattern: &'a mut Option<String>,
-    pub(crate) preset_ui: &'a mut crate::pickers::picker_state::PresetUi,
+    pub(crate) preset_ui: &'a mut crate::pickers::state::PresetUi,
 }
 
 /// Brush Settings variant that exposes the shared Patterns browser for Texture while returning a

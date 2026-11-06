@@ -1418,7 +1418,7 @@ fn gradient_map(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
                             // A map has no transparency: colour stops only, shown opaque.
                             let rgba: Vec<(f32, [f32; 4])> = p.resolve(fg, bg).into_iter().map(|(at, c)| (at, [c[0], c[1], c[2], 1.0])).collect();
                             let (r, swatch) = ui.allocate_exact_size(vec2(48.0, 16.0), Sense::click());
-                            crate::pickers::preset_panels::paint_gradient(ui, r, &rgba);
+                            crate::pickers::panels::paint_gradient(ui, r, &rgba);
                             // Both, not short-circuited: the name is drawn either way.
                             let name = ui.selectable_label(false, &p.name);
                             if press.chosen(ui, &swatch) | press.chosen(ui, &name) {

@@ -198,7 +198,7 @@ fn sync_custom_ratio_fields(app: &mut PhotocraftApp) {
 /// Choose a saved crop preset: its fields fill the options bar (`tool.presets.select`, the same
 /// as clicking it in the Tool Presets panel).
 pub fn select(app: &mut PhotocraftApp, name: &str) {
-    crate::pickers::preset_panels::select_tool_preset(app, name);
+    crate::pickers::panels::select_tool_preset(app, name);
 }
 
 /// Open New Crop Preset with the name made from the current values. `None` (nothing opens) when

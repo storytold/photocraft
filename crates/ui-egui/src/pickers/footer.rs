@@ -2,7 +2,7 @@
 
 use egui::vec2;
 
-use crate::pickers::picker_state::PresetUi;
+use crate::pickers::state::PresetUi;
 
 /// Optional standard-picker footer controls, configured by the shell's consumer.
 pub(crate) struct FooterOptions<'a> {
@@ -36,7 +36,7 @@ pub(crate) fn draw(ui: &mut egui::Ui, st: &mut PresetUi, panel: &str, footer: Fo
         if footer.size_slider {
             let size = *st.sizes.get(panel).unwrap_or(&40.0);
             let mut next = size;
-            ui.add_sized(vec2(90.0, 18.0), egui::Slider::new(&mut next, crate::pickers::asset_browser::MIN_THUMB..=96.0).show_value(false))
+            ui.add_sized(vec2(90.0, 18.0), egui::Slider::new(&mut next, crate::pickers::browser::asset_browser::MIN_THUMB..=96.0).show_value(false))
                 .on_hover_text(tl!("Thumbnail size (smallest: list)"));
             if (next - size).abs() > 0.01 {
                 st.sizes.insert(panel.to_string(), next);
