@@ -108,6 +108,11 @@ pub fn set_size(app: &mut PhotocraftApp, w: f32, h: f32) {
     }
 }
 
+/// The size preset the bar shows for board `id`: the name stored on the board ("" = Custom).
+pub fn board_preset(app: &PhotocraftApp, id: LayerId) -> String {
+    app.session.active().and_then(|st| st.doc.layer(id)).and_then(Layer::artboard).map(|a| a.preset.clone()).unwrap_or_default()
+}
+
 /// The selected boards: each selected layer's artboard, once, in document order.
 fn selected_boards(app: &PhotocraftApp) -> Vec<LayerId> {
     let Some(st) = app.session.active() else { return Vec::new() };
@@ -145,7 +150,20 @@ pub fn set_background(app: &mut PhotocraftApp, name: &str, color: &str) -> Resul
     if custom {
         crate::color_picker_ui::parse_hex(color).ok_or("not a colour")?;
     }
-    let boards = selected_boards(app);
+    let mut boards = selected_boards(app);
+    // A board whose custom colour already has this RGB keeps its own value: the swatch shows it
+    // as 8-bit RGB, so OK in the picker without a change must not flatten its alpha or precision.
+    if custom && let Some(want) = crate::color_picker_ui::parse_hex(color) {
+        let hex = |c: [f32; 3]| c.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
+        let st = app.session.active();
+        boards.retain(|id| match st.and_then(|st| st.doc.layer(*id)?.artboard().map(|a| a.background)) {
+            Some(ArtboardBackground::Custom(c)) => {
+                let [r, g, b, _] = c.to_rgba8();
+                [r, g, b] != hex(want)
+            }
+            _ => true,
+        });
+    }
     let mut out = json!({});
     if !boards.is_empty() {
         let mut params = json!({"layers": boards.iter().map(|b| b.0).collect::<Vec<_>>(), "background": name});
@@ -205,10 +223,7 @@ pub fn size_group(app: &mut PhotocraftApp, ui: &mut egui::Ui, board: Option<(Lay
     let t = Tokens::get(ui.ctx());
     let mut edit: Option<Value> = None;
     let (mut preset, mut w, mut h) = match board {
-        Some((id, r)) => {
-            let preset = app.session.active().and_then(|st| st.doc.layer(id)).and_then(Layer::artboard).map(|a| a.preset.clone()).unwrap_or_default();
-            (preset, (r[2] - r[0]) as f32, (r[3] - r[1]) as f32)
-        }
+        Some((id, r)) => (board_preset(app, id), (r[2] - r[0]) as f32, (r[3] - r[1]) as f32),
         None => (app.ui.artboard_tool.preset.clone(), app.ui.artboard_tool.width as f32, app.ui.artboard_tool.height as f32),
     };
     let id = board.map_or(LayerId(0), |b| b.0);

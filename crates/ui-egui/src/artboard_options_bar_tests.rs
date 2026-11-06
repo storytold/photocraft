@@ -218,6 +218,52 @@ fn a_placed_board_takes_the_bars_size_with_no_board_selected() {
     assert_eq!(boards(&app).first().map(|b| b.1), Some(Rect::new(20, 30, 353, 252)));
 }
 
+/// A placed board keeps the bar's preset name, so selected it shows that preset, not Custom.
+#[test]
+fn a_placed_board_keeps_the_bars_preset_name() {
+    let mut app = app();
+    let place = |app: &mut PhotocraftApp, x: f64| {
+        app.ui.artboard_tool.adding = true;
+        let m = Modifiers::NONE;
+        tool_event(app, ToolEvent::Down { x, y: 30.0, pressure: 1.0 }, m);
+        tool_event(app, ToolEvent::Up { x, y: 30.0 }, m);
+        assert!(!app.ui.status_error, "{}", app.ui.status);
+        let (id, rect, _) = *boards(app).last().unwrap();
+        app.run("layer.select", json!({"layer": id.0})).unwrap();
+        (id, rect)
+    };
+    let (id, rect) = place(&mut app, 20.0);
+    assert_eq!((rect.width(), rect.height()), (750, 1334));
+    assert_eq!(bar::board_preset(&app, id), "iPhone 8/7/6");
+    let stored = app.session.active().unwrap().doc.layer(id).unwrap().artboard().unwrap().preset.clone();
+    assert_eq!(stored, "iPhone 8/7/6");
+    // Deselect, edit the size by hand: the preset is Custom and so is the next placed board.
+    app.session.active_mut().unwrap().active_layer = None;
+    bar::set_size(&mut app, 333.0, 222.0);
+    let (id2, rect2) = place(&mut app, 2000.0);
+    assert_eq!((rect2.width(), rect2.height()), (333, 222));
+    assert_eq!(bar::board_preset(&app, id2), "");
+}
+
+/// OK in the picker with the colour the swatch shows leaves the board's own colour alone.
+#[test]
+fn ok_in_the_picker_without_a_change_leaves_the_boards_alone() {
+    let mut app = app();
+    let a = app.run("layer.new.artboard", json!({"rect": [0, 0, 100, 100]})).unwrap()["layer"].as_u64().unwrap();
+    app.run("layer.artboard.set", json!({"layer": a, "background": "custom", "color": [0.2, 0.4, 0.6, 0.5]})).unwrap();
+    app.run("layer.select", json!({"layer": a})).unwrap();
+    let before = (steps(&app), boards(&app)[0].2);
+    let hex = bar::shown_background(&app).1;
+    let id = crate::color_picker_ui::open_for_target(&mut app, "artboardBackground", "Color Picker (Color)", crate::color_picker_ui::parse_hex(&hex).unwrap());
+    let fields = app.ui.dialog_mut(id).unwrap().fields.clone();
+    crate::color_picker_ui::confirm(&mut app, &fields).unwrap();
+    assert_eq!((steps(&app), boards(&app)[0].2), before, "no history step, colour bit-exact");
+    // A real change still recolours.
+    bar::set_custom_background(&mut app, "#00ff00").unwrap();
+    assert_eq!(steps(&app), before.0 + 1);
+    assert_ne!(boards(&app)[0].2, before.1);
+}
+
 /// Two boards, both selected.
 fn two_boards(app: &mut PhotocraftApp) -> (u64, u64) {
     let a = app.run("layer.new.artboard", json!({"rect": [0, 0, 100, 100]})).unwrap()["layer"].as_u64().unwrap();

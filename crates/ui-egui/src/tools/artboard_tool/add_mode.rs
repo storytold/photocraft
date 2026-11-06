@@ -32,5 +32,12 @@ pub(super) fn click(app: &mut PhotocraftApp, p: [f64; 2]) -> Option<Result<Value
     app.session.active()?;
     let [w, h] = super::bar::bar_size(app);
     let rect = [p[0].round() as i64, p[1].round() as i64, w, h];
-    Some(app.run("layer.new.artboard", super::bar::with_background(app, json!({"rect": rect}))))
+    let mut params = json!({"rect": rect});
+    // With no board selected the size is the tool option's, so the board also keeps its preset
+    // name (the engine stores it and, with an explicit `rect`, the rect still decides the size).
+    let preset = &app.ui.artboard_tool.preset;
+    if !preset.is_empty() && super::active_board(app).is_none() {
+        params["preset"] = json!(preset);
+    }
+    Some(app.run("layer.new.artboard", super::bar::with_background(app, params)))
 }
