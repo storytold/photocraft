@@ -36,6 +36,10 @@ fn screen_position(v: &Value) -> Option<[f32; 2]> {
     Some([n(0)?, n(1)?])
 }
 
+/// Open a window on document `doc` and return its id. `offset` greater than zero means it is one
+/// of several being laid out, so it refits. `floating`: true shows the document in this window
+/// alone (Window > Arrange > Float in Window, and every document with Open Documents as Tabs off,
+/// #9728); false leaves it in the tab strip as well, as Window > New Window does.
 pub(crate) fn float_window(app: &mut PhotocraftApp, doc: usize, offset: usize, floating: bool) -> u64 {
     let wid = app.ui.alloc_id();
     let mut view = app.ui.views.get(doc).cloned().unwrap_or_default();
