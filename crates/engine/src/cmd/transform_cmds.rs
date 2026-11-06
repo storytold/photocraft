@@ -17,6 +17,9 @@ fn has_layer(s: &Session) -> std::result::Result<(), String> {
     s.active().and_then(|d| d.active_layer).map(|_| ()).ok_or_else(|| "no active layer".into())
 }
 
+/// The History step name of a shape-tool bounding box scale (`edit.transform` `stepName`).
+pub const TRANSFORM_PATH: &str = "Transform Path";
+
 fn bad(msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: "edit.transform".into(), msg: msg.into() }
 }
@@ -898,6 +901,13 @@ fn quad_param(p: &Value) -> Option<[[f64; 2]; 4]> {
 
 /// Transform the resolved layer or isolated scalar channel through one geometric map.
 fn transform(s: &mut Session, p: &Value) -> Result<Value> {
+    // The shape tools' bounding box scales live shapes with this command and names the step as
+    // the reference does. Passed in, not renamed after: the edit may land later as a job.
+    let step_name = match p.get("stepName") {
+        None | Some(Value::Null) => "Free Transform",
+        Some(Value::String(n)) if n == TRANSFORM_PATH => TRANSFORM_PATH,
+        Some(_) => return Err(bad("`stepName` must be \"Transform Path\"")),
+    };
     let p = &crate::channel_transform::params(s, p)?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let many = layers_param(&st.doc, p)?;
@@ -988,7 +998,7 @@ fn transform(s: &mut Session, p: &Value) -> Result<Value> {
     // on a worker with progress, and can be cancelled.
     crate::jobs::edit_job(
         s,
-        "Free Transform",
+        step_name,
         move |doc, _, ctx| {
             ctx.stage(0.0, 1.0, "Transforming", |ctl| {
                 check_cancelled(ctl)?;
@@ -1141,7 +1151,7 @@ pub fn specs() -> Vec<CommandSpec> {
         label: "Free Transform",
         menu: &[],
         shortcut: None,
-        params: r##"{"layer":id|name?,"layers":[id,…]? (several whole layers; mutually exclusive with layer or a channel target; default for pixels = selected layers except Background),"rect":[x0,y0,x1,y1]? (source frame; default = raster pixels: layer content intersected with selection; group, text, shape or smart pixels: whole layer; mask or saved channel: selection bounds if present, otherwise target content; colour: native sample area intersected with selection. Relative reference points use this frame),"quad":[[x,y]×4]? (where the frame's corners go, clockwise from top-left),"matrix":[a,b,c,d,e,f]? (affine alternative),"scaleX":%?,"scaleY":%?,"rotate":deg?,"dx":px?,"dy":px?,"reference":"center|topLeft|top|topRight|left|right|bottomLeft|bottom|bottomRight"|[x,y]="center" (relative alternative: scale and rotate about this point, then move),"interpolation":"bicubic|bilinear|nearest|bicubicSharper|bicubicSmoother|bicubicAutomatic"="bicubic" (Photoshop's bicubic variants render as Bicubic),"target":"pixels"|"mask"|"quickMask"|{"channel":i}|{"color":i}|{"colors":[i,…]}=Channels panel target (selected colour components share one geometry and selection outline; a single component, mask including linked masks, alpha/spot channel or Quick Mask transforms alone; an explicit layer without target transforms the layer)}"##,
+        params: r##"{"layer":id|name?,"layers":[id,…]? (several whole layers; mutually exclusive with layer or a channel target; default for pixels = selected layers except Background),"rect":[x0,y0,x1,y1]? (source frame; default = raster pixels: layer content intersected with selection; group, text, shape or smart pixels: whole layer; mask or saved channel: selection bounds if present, otherwise target content; colour: native sample area intersected with selection. Relative reference points use this frame),"quad":[[x,y]×4]? (where the frame's corners go, clockwise from top-left),"matrix":[a,b,c,d,e,f]? (affine alternative),"scaleX":%?,"scaleY":%?,"rotate":deg?,"dx":px?,"dy":px?,"reference":"center|topLeft|top|topRight|left|right|bottomLeft|bottom|bottomRight"|[x,y]="center" (relative alternative: scale and rotate about this point, then move),"interpolation":"bicubic|bilinear|nearest|bicubicSharper|bicubicSmoother|bicubicAutomatic"="bicubic" (Photoshop's bicubic variants render as Bicubic),"stepName":"Transform Path"? (History step name; the shape tools' bounding box sends it; default "Free Transform"; any other value is refused),"target":"pixels"|"mask"|"quickMask"|{"channel":i}|{"color":i}|{"colors":[i,…]}=Channels panel target (selected colour components share one geometry and selection outline; a single component, mask including linked masks, alpha/spot channel or Quick Mask transforms alone; an explicit layer without target transforms the layer)}"##,
         enabled: has_layer,
         journal: true,
         run: transform,

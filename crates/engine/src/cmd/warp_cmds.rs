@@ -860,7 +860,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec {
             id: "layer.smartObjects.warp",
             label: "Warp",
-            menu: &["Layer", "Smart Objects"],
+            menu: &[],
             shortcut: None,
             params: P,
             enabled: active_smart,

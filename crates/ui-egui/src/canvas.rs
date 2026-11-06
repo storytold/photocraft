@@ -47,7 +47,7 @@ mod selection;
 pub mod snap_ui;
 mod start_screen;
 mod strokes;
-mod tabs;
+pub(crate) mod tabs;
 mod textures;
 pub(super) mod tile_overlay;
 pub mod tool_cursor;
@@ -71,7 +71,7 @@ use display::texture_key;
 pub(crate) use display::{cache_key, canvas_display, display_doc, display_image};
 use display::{checker, hdr_preview, sync_display_lut};
 pub use drag::{Drag, fixed_size_px, marquee_corners, marquee_px, marquee_readout, readout_in, size_readout, square_px};
-pub(crate) use drag::{angle_readout, draw_readout, draw_value_readout};
+pub(crate) use drag::{angle_readout, doc_box_corners, draw_readout, draw_value_readout};
 #[cfg(test)]
 pub(crate) use drag::{marquee_drag_ants, marquee_preview_px};
 #[cfg(test)]
@@ -616,7 +616,8 @@ fn update_canvas_navigation(app: &mut PhotocraftApp, view: &mut View, input: Can
     let bars_id = egui::Id::unique(("pc-canvas-bars-hover", input.idx));
     let over_bars = input.ctx.data(|d| d.get_temp::<bool>(bars_id)).unwrap_or(false);
     let nav_hovered = input.response.hovered() || input.free_hover || over_bars;
-    // Interface › Enable Animations off: the wheel moves the canvas without a glide (#5721).
+    // Like Photoshop, a wheel notch moves the canvas the whole step in one frame, without a
+    // glide (`smooth` off; #5721, #9479).
     // General › Animated Zoom: the wheel zoom eases over the frames of a notch, or is one instant step.
     // Enhanced Controls › Enable Gestures off: two fingers on a touch screen neither zoom nor
     // turn the view (#204); the mouse and trackpad are unaffected.
@@ -628,7 +629,7 @@ fn update_canvas_navigation(app: &mut PhotocraftApp, view: &mut View, input: Can
         app.session.prefs().general.animated_zoom,
         input.wheel_owner,
         nav_hovered,
-        app.session.prefs().interface.enable_animations,
+        false,
         touch_gestures,
     );
     if nav_hovered {
@@ -1382,6 +1383,20 @@ fn paint_primary_overlays(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut
     crate::slice_ui::draw_overlay(app, painter, xf);
     crate::frame_tool::draw_overlay(app, painter, xf);
     crate::frame_tool::task_bar(app, ui, xf);
+    // The Crop tool's contextual task bar under its frame (#10890), on the frame's own tile only:
+    // the other tiles would map the active document's frame with their own transform.
+    if app.session.active_index() == Some(idx) {
+        // Done asks for a fit of the cropped document (`commit_crop`): like a view menu row
+        // above, the stored camera wins over this frame's copy, or the write-back drops it.
+        let before = app.ui.views.get(idx).cloned();
+        crate::crop_task_bar::draw(app, ui, xf);
+        if let Some(now) = app.ui.views.get(idx)
+            && Some(now) != before.as_ref()
+        {
+            *view = now.clone();
+            ctx.request_repaint();
+        }
+    }
     crate::artboard_tool::draw_overlay(app, painter, xf);
     // Snap lines last: over the transform preview's pixels and the other overlays, which would
     // otherwise hide where the moving content lines up.
@@ -1437,6 +1452,9 @@ fn draw_canvas_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &C
         // corner badge, as Photoshop's corner radius cursor.
         ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
         crate::icons::cursor_badge(ctx, "scan", p);
+    } else if let Some(c) = response.hover_pos().and_then(|p| crate::shape_bounds_box::cursor(app, xf, xf.to_doc(p))) {
+        // Over a handle of the box round several selected shapes: its scale cursor.
+        ui.ctx().set_cursor_icon(c);
     } else if let Some((r, p, c)) =
         response.hover_pos().and_then(|p| transform_controls_rect(app, xf).and_then(|r| transform_controls_cursor(r, p).map(|c| (r, p, c))))
     {
@@ -1714,9 +1732,14 @@ fn finish_canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut Vie
         painter.set(layer_edges, egui::Shape::rect_stroke(xf.doc_rect(b), 0, Stroke::new(1.0, LAYER_EDGES), egui::StrokeKind::Outside));
     }
     // A tool drag held past the canvas edge scrolls the view toward the pointer (#4183); the
-    // drag's next move then extends into what scrolled in.
+    // drag's next move then extends into what scrolled in. The crop tools keep their own drags:
+    // they scroll only while the press is the canvas's own (not a panel slider or a scrollbar held
+    // while a stale crop drag lingers) and the crop tool has it (not a temporary Zoom, which
+    // freezes the drag).
+    let crop_drag =
+        response.is_pointer_button_down_on() && tool == app.ui.tool && (crate::crop_ui::autoscrolls(app) || crate::perspective_crop_ui::dragging(app));
     if primary
-        && app.drag.is_some()
+        && (app.drag.is_some() || crop_drag)
         && tool != Tool::Hand
         && !middle
         && let Some(p) = ui.input(|i| i.pointer.primary_down().then(|| i.pointer.latest_pos()).flatten())
@@ -1886,7 +1909,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                 app.session.prefs().general.animated_zoom,
                 wheel_owner,
                 hover_here,
-                app.session.prefs().interface.enable_animations,
+                false,
                 app.session.prefs().enhanced_controls.touch_gestures,
             )
             .is_some());
@@ -1977,6 +2000,10 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     crate::crop_straighten::set_held(app, !ctx.text_edit_focused() && ui.input(|i| i.modifiers.command));
     // A tab switched this frame drops the other document's pending crop (#1918).
     crate::crop_ui::cancel_stale(app);
+    // A tool picked mid-drag ends the crop gesture before the frame sees the switch, which would
+    // otherwise drop the untouched default frame under the box being drawn (#9223). The Hand and
+    // Zoom never reach `tool_event`, so this is the one place that sees every tool.
+    crate::crop_ui::end_drag_on_leave(app);
     crate::crop_ui::ensure_frame(app);
     let mut drawing = crate::crop_ui::active(app);
     if let Some(pen) = app.ui.pen.as_mut().filter(|pen| pen.dragging && !pen.curvature) {
