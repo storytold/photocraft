@@ -1,6 +1,6 @@
 use super::{
-    Color32, CurveUi, Edit, EditorCx, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Tokens, ToneSpace, Value, adjust_params, curve_edit, json, label, pos2,
-    space_of, tone, vec2, widgets,
+    Color32, CurveUi, Edit, EditorCx, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Tokens, ToneSpace, Value, adjust_params, curve_edit, curves_space,
+    gray_curves, json, label, pos2, space_of, tone, vec2, widgets,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -218,7 +218,7 @@ fn curve_key(ch: &ToneChannel) -> &'static str {
 }
 
 /// A pencil-drawn channel: its 256 output levels (identity when absent or not a map).
-fn read_map(v: &Value, key: &str) -> Vec<f32> {
+pub(super) fn read_map(v: &Value, key: &str) -> Vec<f32> {
     let map: Option<Vec<f32>> = v
         .get(key)
         .and_then(Value::as_array)
@@ -296,10 +296,39 @@ fn curves_mode_row(ui: &mut egui::Ui, v: &mut Value, key: &str, cx: &EditorCx) -
     e
 }
 
+/// The Curves Preset menu: choosing a preset replaces the curves, as one edit.
+fn curves_preset_row(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
+    let mut e = Edit::default();
+    ui.horizontal(|ui| {
+        label(ui, tl!("Preset:"));
+        let current = crate::curves_presets::matching(v, cx.gray).map_or("custom", |p| p.id);
+        let mut options: Vec<(&str, &str)> = crate::curves_presets::available(cx.gray).map(|p| (p.id, tl!(p.label))).collect();
+        if current == "custom" {
+            options.push(("custom", tl!("Custom")));
+        }
+        let mut picked = current;
+        if widgets::dropdown(ui, "curves-preset", tl!("Preset"), &mut picked, &options, ui.available_width().min(190.0))
+            && picked != current
+            && let Some(preset) = crate::curves_presets::find(picked)
+        {
+            crate::curves_presets::apply(v, preset, cx.gray);
+            e.add(Edit::discrete(true));
+        }
+    });
+    e
+}
+
 pub(super) fn curves(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     let t = Tokens::get(ui.ctx());
-    let space = space_of(v);
+    // A grayscale document edits its one Gray curve, `points`, whatever channel keys of another
+    // mode its settings still hold; an edit drops those keys so the image follows.
+    if cx.gray {
+        gray_curves(v);
+    }
+    let space = curves_space(v, cx.gray);
     let channels = editor_channels(cx, space);
+    // The Preset menu (#9221): PhotoCraft's own curves for common looks, Custom once edited.
+    let mut e = if space == ToneSpace::Rgb && cx.isolated_curve.is_none() { curves_preset_row(ui, v, cx) } else { Edit::default() };
     let state_id = cx.mem.with("curves");
     let mut st: CurveUi = ui.data(|d| d.get_temp(state_id)).unwrap_or_default();
     let isolated = cx.isolated_curve.as_ref();
@@ -311,7 +340,7 @@ pub(super) fn curves(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     let overlay_others = isolated.is_none();
     let tinted = isolated.is_some_and(|c| c.tint) || (isolated.is_none_or(|c| c.components.is_some()) && ch != 0);
     let key = curve_key(&chan);
-    let mut e = curves_mode_row(ui, v, key, cx);
+    e.add(curves_mode_row(ui, v, key, cx));
     let pencil = v.get("pencil").and_then(Value::as_bool).unwrap_or(false);
     let mut pts = read_curve(v, key);
     let mut map = read_map(v, key);

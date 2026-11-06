@@ -995,3 +995,31 @@ fn gradient_map_stop_picker_closed_without_a_colour_changes_nothing() {
         assert!(h.state().live_adjust.is_none());
     }
 }
+
+/// CodeRabbit on #9234: a Curves layer made in a Lab document keeps its Lab records through
+/// Image › Mode › Grayscale. A preset chosen in its Properties panel turns it into the Gray curve
+/// it shows and the image follows (the engine would read the stale `lightness` record instead).
+#[test]
+fn grayscale_curves_layer_with_lab_records_follows_a_preset() {
+    use photocraft_doc::adjust::ToneSpace;
+    let mut h = app_harness("curves", "lab", 8);
+    h.state_mut().run("image.mode.grayscale", json!({})).unwrap();
+    h.run_steps(4);
+    assert!(matches!(layer(&h).1, Adjustment::Curves { space: ToneSpace::Lab, .. }), "{:?}", layer(&h).1);
+    let gray = |h: &mut Harness<'_, PhotocraftApp>| h.state_mut().run("document.pixel", json!({"x": 10, "y": 10})).unwrap()[0].as_f64().unwrap();
+    let before = gray(&mut h);
+    let menu = h.query_all_by_role(egui::accesskit::Role::ComboBox).find(|n| n.accesskit_node().value().as_deref() == Some("Default"));
+    menu.expect("the Preset menu, at Default").click();
+    h.run_steps(2);
+    h.get_by_label("Darker").click();
+    h.run_steps(4);
+    match layer(&h).1 {
+        Adjustment::Curves { space, master, .. } => {
+            assert_eq!(space, ToneSpace::Rgb, "the Gray curve's tone space");
+            assert!((master[1].input * 255.0 - 128.0).abs() < 0.01 && (master[1].output * 255.0 - 104.0).abs() < 0.01, "Darker: {master:?}");
+        }
+        other => panic!("{other:?}"),
+    }
+    let after = gray(&mut h);
+    assert!(after < before - 0.02, "Darker darkened the image: {before} -> {after}");
+}
