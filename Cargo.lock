@@ -5341,6 +5341,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "wat",
+ "web-time",
  "winsafe",
 ]
 
@@ -5504,6 +5505,7 @@ dependencies = [
  "photocraft-geom",
  "proptest",
  "rayon",
+ "rustix 1.1.5",
  "serde",
  "sysinfo",
  "winsafe",
@@ -5529,10 +5531,13 @@ name = "photocraft-tablet"
 version = "0.20.1"
 dependencies = [
  "block2 0.6.2",
+ "log",
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
  "objc2-core-graphics",
  "objc2-foundation 0.3.2",
+ "windows",
+ "wintab",
  "x11rb",
 ]
 
@@ -9205,6 +9210,25 @@ name = "winsafe"
 version = "0.0.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9ef0ffc427f045c0cc9ebffd6f4f91153dcd2a1547b5c3c29ee3f541e16e95c6"
+
+[[package]]
+name = "wintab"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0e05efdae68aa69ef1f4bc0148a5c6cf7f2bc234963a723252fd75f2f9e70d86"
+dependencies = [
+ "windows",
+ "wintab-sys",
+]
+
+[[package]]
+name = "wintab-sys"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d3d0743ba07fe30ca1ccc1471ee50adf32bc70932b86a00c8f1051177950de2"
+dependencies = [
+ "windows",
+]
 
 [[package]]
 name = "winx"
