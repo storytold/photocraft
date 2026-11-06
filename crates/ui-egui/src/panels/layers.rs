@@ -305,6 +305,10 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     crate::smart_ui::filter_rows(app, ui, &doc, l, depth, &mut actions);
                 }
             }
+            // The bottom of everything drawn: the last layer's effect and Smart Filter rows sit
+            // under its own row (#8764). Taken before the no-match text, which sits in the empty space
+            // and keeps its right-click menu.
+            let rows_bottom = ui.min_rect().bottom();
             if filter.active_with(&filter_context) && drawn.is_empty() {
                 // A short panel sizes the list to its rows: one row's height keeps the footer in view.
                 let height = if rows_h.is_finite() { rows_h } else { 24.0 };
@@ -312,9 +316,6 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     ui.label(tl!("No layers match the filter."));
                 });
             }
-            // The bottom of everything drawn: the last layer's effect and Smart Filter rows sit
-            // under its own row (#8764).
-            let rows_bottom = ui.min_rect().bottom();
             // #1721: the list takes drops everywhere, not only on a row (Photoshop): the space
             // between two rows lands above the lower one, the empty space below the bottom-most
             // row below it. Both copy with ⌥ held, move without.

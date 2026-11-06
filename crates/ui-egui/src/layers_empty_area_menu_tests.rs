@@ -175,8 +175,10 @@ fn a_right_click_on_a_layer_row_still_opens_the_layer_menu() {
 #[test]
 fn with_no_row_shown_by_the_filter_the_right_click_still_opens_the_menu() {
     let mut h = panel(true);
-    h.state_mut().ui.layer_filter_by = crate::layer_filter_ui::FilterBy::Name;
-    h.state_mut().ui.layer_filter_name = "no layer has this name".into();
+    let app = h.state_mut();
+    let filter =
+        crate::layer_filter_ui::patched(&crate::layer_filter_ui::Filter::of(app), &serde_json::json!({"by":"name","name":"no layer has this name"})).unwrap();
+    crate::layer_filter_ui::apply(app, filter);
     h.run_steps(4);
     assert!(h.query_by_label("Layer 1").is_none(), "the filter hides every row");
     open_menu(&mut h);
