@@ -33,6 +33,7 @@ pub(crate) mod edit_session;
 pub mod file_dialog;
 pub mod file_open;
 pub mod frame_stages;
+pub mod gpu_memo;
 pub mod gpu_status;
 pub mod home_recent_ui;
 pub mod i18n;
@@ -259,8 +260,8 @@ pub use services::{
     AdoptAutosaveFn, AppendTextFn, AutomationCommandFn, AutomationOpenPcraftFn, AutomationReadFn, AutomationWriteFn, AutosaveFn, AutosaveResultsFn, CapsLockFn,
     CaptionStyleFn, ClipboardGetFn, ClipboardGetSvgFn, ClipboardSetFn, ClipboardUnreadableFn, CursorPosFn, DiscardAutosaveFn, EncodePngFn, ExportFn,
     ExportSettings, ExternalSvgEditor, ExternalSvgSession, ExternalVectorSave, ExternalVectorSource, FileStamp, FileStampFn, FormatChoices, ImportFn, Inbox,
-    LoadTextFn, OpenExternalSvgFn, OpenUrlFn, OsEventsFn, PhotoshopShortcutsFn, QuitFn, RecoverFn, Recoverable, RightButtonDownFn, SameFileFn, SaveFileFn,
-    SaveTextFn, Services, SystemThemeFn, WindowFrameFn, WriteFn,
+    LoadTextFn, OpenExternalSvgFn, OpenUrlFn, OsEventsFn, PhotoshopShortcutsFn, PlaceInbox, QuitFn, RecoverFn, Recoverable, RightButtonDownFn, SameFileFn,
+    SaveFileFn, SaveTextFn, Services, SystemThemeFn, WindowFrameFn, WriteFn,
 };
 pub use text::bidi_text;
 pub use text::cjk_fonts;
@@ -305,6 +306,7 @@ pub use tools::perspective_crop_ui;
 pub use tools::perspective_ui;
 pub use tools::puppet_ui;
 pub use tools::retouch_ui;
+pub use tools::shape_bounds_box;
 use tools::shape_gradient_ui;
 use tools::shape_options;
 use tools::shape_paint_ui;
@@ -485,10 +487,11 @@ pub struct PhotocraftApp {
     pub(crate) drop_canvas_rect: Option<egui::Rect>,
     /// The document tab strip last frame: a drop there opens the file at the slot under it.
     pub(crate) tab_strip: Option<canvas::TabStrip>,
-    /// Files dropped on the canvas still to place, one Free Transform at a time.
     pub(crate) frame_tool_ctx: Option<egui::Context>,
     pub(crate) frame_preview: Option<frame_tool::Preview>,
-    pub(crate) drop_places: std::collections::VecDeque<file_open::DropPlace>,
+    /// Files dropped on the canvas still to place, one Free Transform at a time, each with the
+    /// document it was dropped on.
+    pub(crate) drop_places: std::collections::VecDeque<(DocId, file_open::DropPlace)>,
     /// The document each of `ui.views` belongs to, as of the last [`Self::sync_views`].
     view_docs: Vec<DocId>,
     /// The document `ui.selected_path` belongs to, as of the last [`Self::sync_views`]: a Paths
@@ -500,9 +503,10 @@ pub struct PhotocraftApp {
     /// The document area each layer thumbnail in `thumbs` frames (the canvas, or the layer's
     /// bounds with Clip Thumbnails to Layer Bounds; #4281).
     thumb_frames: HashMap<photocraft_doc::LayerId, photocraft_geom::Rect>,
-    /// History snapshot thumbnails by (document, snapshot id): a snapshot never changes, so each
-    /// is made once (`snapshot_thumb`, #2966).
-    snapshot_thumbs: HashMap<(DocId, u64), egui::TextureHandle>,
+    /// History snapshot thumbnails by (document, snapshot id), each with the snapshot document it
+    /// shows (`snapshot_thumb`, #2966): made once, and again only when that is a different one (a
+    /// preserved-ID reopen, or the first snapshot refreshed for a served font, #6087).
+    snapshot_thumbs: HashMap<(DocId, u64), (std::sync::Weak<Document>, egui::TextureHandle)>,
     /// Snapshots whose live layer/mask keys were last used to prune thumbnail handles.
     thumb_documents: Vec<(DocId, std::sync::Weak<Document>)>,
     /// Content bounds cached per (key, revision): scanning a 36 MP layer every frame cost ~77 ms.
@@ -755,6 +759,11 @@ impl SyntheticTarget {
 }
 
 #[cfg(test)]
+mod artboard_add_mode_tests;
+#[cfg(test)]
+mod shape_bounds_box_tests;
+
+#[cfg(test)]
 mod lifecycle_tests;
 
 #[cfg(test)]
@@ -790,11 +799,19 @@ mod layer_shortcut_tests;
 #[cfg(test)]
 mod live_retouch_tests;
 #[cfg(test)]
+mod lock_layers_shortcut_tests;
+#[cfg(test)]
 mod pencil_tests;
+#[cfg(test)]
+mod smart_objects_menu_tests;
 #[cfg(test)]
 mod tool_options_theme_tests;
 #[cfg(test)]
+mod tool_shift_cycle_order_tests;
+#[cfg(test)]
 mod tool_shortcut_tests;
+#[cfg(test)]
+mod toolbar_group_order_tests;
 
 #[cfg(test)]
 mod pixel_aspect_tests;
@@ -835,6 +852,11 @@ mod save_identity_tests;
 
 #[cfg(test)]
 mod move_auto_select_tests;
+
+#[cfg(test)]
+mod move_history_names_tests;
+#[cfg(test)]
+mod move_shift_diagonal_tests;
 
 #[cfg(test)]
 mod new_group_button_tests;
@@ -879,6 +901,9 @@ mod blend_dropdown_wheel_tests;
 mod paths_scroll_tests;
 
 #[cfg(test)]
+mod blend_dropdown_groups_tests;
+
+#[cfg(test)]
 mod options_bar_mode_wheel_tests;
 
 #[cfg(test)]
@@ -888,7 +913,12 @@ mod field_wheel_app_tests;
 mod dropdown_press_tests;
 
 #[cfg(test)]
+mod marquee_press_mods_tests;
+#[cfg(test)]
 mod marquee_tests;
+
+#[cfg(test)]
+mod single_line_marquee_move_tests;
 
 #[cfg(test)]
 mod guide_cursor_tests;
@@ -911,10 +941,14 @@ mod stamp_tests;
 #[cfg(test)]
 mod alt_click_tests;
 #[cfg(test)]
+mod artboard_first_board_tests;
+#[cfg(test)]
 mod status_bar_tests;
 #[cfg(test)]
 mod stroke_timing_tests;
 
+#[cfg(test)]
+mod polygon_lasso_step_snap_tests;
 #[cfg(test)]
 mod polygon_lasso_tests;
 
@@ -924,6 +958,8 @@ mod window_frame_tests;
 #[cfg(test)]
 mod browse_field_tests;
 #[cfg(test)]
+mod export_quality_tests;
+#[cfg(test)]
 mod options_hit_area_tests;
 #[cfg(test)]
 mod select_and_mask_button_tests;
@@ -932,4 +968,17 @@ mod select_and_mask_button_tests;
 mod saved_path_edit_tests;
 
 #[cfg(test)]
+mod menu_item_labels_tests;
+#[cfg(test)]
 mod pen_path_ownership_tests;
+
+#[cfg(test)]
+mod doc_tab_menu_tests;
+#[cfg(test)]
+mod layers_empty_area_menu_tests;
+#[cfg(test)]
+mod preferences_submenu_tests;
+#[cfg(test)]
+mod selection_move_step_tests;
+#[cfg(test)]
+mod view_guides_submenu_tests;
