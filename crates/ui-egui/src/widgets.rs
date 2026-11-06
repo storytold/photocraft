@@ -42,7 +42,9 @@ pub use color::{
 };
 #[cfg(test)]
 use color::{checker_tile_id, checker_uv};
-pub use dropdown::{dropdown, dropdown_hovered, dropdown_literal, dropdown_wheel_hovered, dropdown_with_tooltips, menu_scroll, swatch_popup};
+pub use dropdown::{
+    dropdown, dropdown_hovered, dropdown_literal, dropdown_wheel_grouped, dropdown_wheel_hovered, dropdown_with_tooltips, menu_scroll, swatch_popup,
+};
 pub(crate) use fields::compact_wrapping_value_field;
 #[cfg(test)]
 use fields::{FieldOpts, NUMERIC_INPUT_LIMIT, value_field_in};
@@ -65,8 +67,8 @@ pub use text_field::{
     INPUT_EVENT_LIMIT, TEXT_FIELD_H, TEXT_FIELD_LIMIT, cap_text_events, focus_first_field, text_field, text_field_ex, text_field_with_trailing,
 };
 pub use units::{
-    FieldUnits, fmt_num, fmt_num_prec, fmt_num2, parse_num, set_field_resolution, unit_decimals, unit_of_key, value_field_extent, value_field_prec,
-    value_field_units,
+    FieldUnits, fmt_num, fmt_num_prec, fmt_num2, parse_num, set_field_resolution, unit_decimals, unit_of_key, value_field_extent, value_field_len,
+    value_field_prec, value_field_units,
 };
 
 #[cfg(test)]

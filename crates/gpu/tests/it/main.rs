@@ -12,6 +12,7 @@ pub(crate) fn instance() -> wgpu::Instance {
     KEPT.get_or_init(|| wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env())).clone()
 }
 
+mod bounded_readback;
 mod camera_raw;
 mod device_loss;
 mod parity;
