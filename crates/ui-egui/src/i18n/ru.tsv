@@ -4711,3 +4711,8 @@ shape	Appearance	Оформление
 	Stop Color	Цвет контрольной точки
 	Shapes can't use patterns yet	Фигуры пока не могут использовать узоры
 	Edit Brush…	Изменить кисть…
+
+# Panel workspace recovery
+	The saved panel layout could not be restored.	Не удалось восстановить сохранённую раскладку панелей.
+	It has been preserved; editing panels or resetting the workspace will replace it.	Она сохранена; изменение панелей или сброс рабочей среды заменит её.
+	The saved panel layout could not be restored. It has been preserved; editing panels or resetting the workspace will replace it.	Не удалось восстановить сохранённую раскладку панелей. Она сохранена; изменение панелей или сброс рабочей среды заменит её.

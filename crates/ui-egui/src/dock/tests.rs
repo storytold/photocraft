@@ -1111,3 +1111,51 @@ fn window_menu_reveals_hides_and_expands_replace_fallback_but_noop_show_keeps_it
         assert!(!app.ui.dock.is_collapsed(group));
     }
 }
+
+#[test]
+fn restore_notice_translates_status_and_live_notice_in_all_catalogs() {
+    let body = "It has been preserved; editing panels or resetting the workspace will replace it.";
+    for lang in crate::i18n::Lang::all().filter(|lang| lang.code() != "en") {
+        for key in [RESTORE_NOTICE_TITLE, RESTORE_NOTICE_MESSAGE, body] {
+            assert!(crate::i18n::has(lang, key), "{}: {key}", lang.code());
+        }
+    }
+    let ru = crate::i18n::Lang::from_code("ru").unwrap();
+    let de = crate::i18n::Lang::from_code("de").unwrap();
+    let (mut app, _, _) = app_with_layers();
+    crate::i18n::with_language(ru, || {
+        retained_fallback(&mut app);
+        assert_eq!(app.ui.status, crate::i18n::tr(ru, RESTORE_NOTICE_MESSAGE));
+        let notice = app.ui.notices.iter().find(|n| n.title == RESTORE_NOTICE_TITLE).unwrap();
+        assert_eq!(notice.text(&notice.title), crate::i18n::tr(ru, RESTORE_NOTICE_TITLE));
+        assert_eq!(notice.text(&notice.lines[0]), crate::i18n::tr(ru, body));
+    });
+    crate::i18n::with_language(de, || {
+        let notice = app.ui.notices.iter().find(|n| n.title == RESTORE_NOTICE_TITLE).unwrap();
+        assert_eq!(notice.text(&notice.title), crate::i18n::tr(de, RESTORE_NOTICE_TITLE));
+        assert_eq!(notice.text(&notice.lines[0]), crate::i18n::tr(de, body));
+    });
+}
+
+#[test]
+fn restore_notice_renders_in_russian_without_status_chrome() {
+    use egui_kittest::kittest::Queryable as _;
+    let _gpu = photocraft_testkit::gpu_lock();
+    let mut h = Harness::builder().with_size(vec2(1440.0, 900.0)).build_eframe(|cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, ThemeKind::Pro);
+        let (mut app, _, _) = app_with_layers();
+        app.session.prefs.edit(|p| p.interface.language = "ru".into());
+        app.ui.panels.status_bar = false;
+        crate::i18n::with_language(crate::i18n::Lang::from_code("ru").unwrap(), || {
+            retained_fallback(&mut app);
+        });
+        app
+    });
+    h.run_steps(8);
+    assert!(h.query_by_label("Не удалось восстановить сохранённую раскладку панелей.").is_some());
+    assert!(h.query_by_label("• Она сохранена; изменение панелей или сброс рабочей среды заменит её.").is_some());
+    let image = h.render().unwrap();
+    if let Some(path) = std::env::var_os("PHOTOCRAFT_RESTORE_I18N_CAPTURE") {
+        image.save(path).unwrap();
+    }
+}

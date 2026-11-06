@@ -4550,3 +4550,8 @@ shape	Appearance	Apparence
 	Stop Color	Couleur du point
 	Shapes can't use patterns yet	Les formes ne peuvent pas encore utiliser de motifs
 	Edit Brush…	Modifier le pinceau…
+
+# Panel workspace recovery
+	The saved panel layout could not be restored.	La disposition enregistrée des panneaux n’a pas pu être restaurée.
+	It has been preserved; editing panels or resetting the workspace will replace it.	Elle a été conservée ; modifier les panneaux ou réinitialiser l’espace de travail la remplacera.
+	The saved panel layout could not be restored. It has been preserved; editing panels or resetting the workspace will replace it.	La disposition enregistrée des panneaux n’a pas pu être restaurée. Elle a été conservée ; modifier les panneaux ou réinitialiser l’espace de travail la remplacera.

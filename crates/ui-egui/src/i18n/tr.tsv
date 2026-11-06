@@ -4248,3 +4248,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Durak Rengi
 	Shapes can't use patterns yet	Şekiller henüz desen kullanamaz
 	Edit Brush…	Fırçayı Düzenle…
+
+# Panel workspace recovery
+	The saved panel layout could not be restored.	Kaydedilmiş panel düzeni geri yüklenemedi.
+	It has been preserved; editing panels or resetting the workspace will replace it.	Düzen korundu; panelleri düzenlemek veya çalışma alanını sıfırlamak bu düzeni değiştirecektir.
+	The saved panel layout could not be restored. It has been preserved; editing panels or resetting the workspace will replace it.	Kaydedilmiş panel düzeni geri yüklenemedi. Düzen korundu; panelleri düzenlemek veya çalışma alanını sıfırlamak bu düzeni değiştirecektir.

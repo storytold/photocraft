@@ -589,3 +589,8 @@ cameraRaw	Yellow	पीला
 # Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
 	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	अमान्य संख्यात्मक प्रविष्टि। {min}% और {max}% के बीच एक पूर्णांक आवश्यक है। पिछला मान डाला गया।
 	Edit Brush…	ब्रश संपादित करें…
+
+# Panel workspace recovery
+	The saved panel layout could not be restored.	सहेजा गया पैनल लेआउट पुनर्स्थापित नहीं किया जा सका।
+	It has been preserved; editing panels or resetting the workspace will replace it.	इसे सुरक्षित रखा गया है; पैनल संपादित करने या कार्यस्थान रीसेट करने पर इसे बदल दिया जाएगा।
+	The saved panel layout could not be restored. It has been preserved; editing panels or resetting the workspace will replace it.	सहेजा गया पैनल लेआउट पुनर्स्थापित नहीं किया जा सका। इसे सुरक्षित रखा गया है; पैनल संपादित करने या कार्यस्थान रीसेट करने पर इसे बदल दिया जाएगा।

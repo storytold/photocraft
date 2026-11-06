@@ -3545,3 +3545,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Solid Color	Volltonfarbe
 	Tint Color	Tönungsfarbe
 	Edit Brush…	Pinsel bearbeiten…
+
+# Panel workspace recovery
+	The saved panel layout could not be restored.	Das gespeicherte Bedienfeldlayout konnte nicht wiederhergestellt werden.
+	It has been preserved; editing panels or resetting the workspace will replace it.	Es wurde beibehalten; durch Bearbeiten der Bedienfelder oder Zurücksetzen des Arbeitsbereichs wird es ersetzt.
+	The saved panel layout could not be restored. It has been preserved; editing panels or resetting the workspace will replace it.	Das gespeicherte Bedienfeldlayout konnte nicht wiederhergestellt werden. Es wurde beibehalten; durch Bearbeiten der Bedienfelder oder Zurücksetzen des Arbeitsbereichs wird es ersetzt.

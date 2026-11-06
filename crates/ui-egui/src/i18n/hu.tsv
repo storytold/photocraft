@@ -4434,3 +4434,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Színpont színe
 	Shapes can't use patterns yet	Az alakzatok még nem használhatnak mintákat
 	Edit Brush…	Ecset szerkesztése…
+
+# Panel workspace recovery
+	The saved panel layout could not be restored.	A mentett panelelrendezést nem sikerült visszaállítani.
+	It has been preserved; editing panels or resetting the workspace will replace it.	Megőriztük; a panelek szerkesztése vagy a munkaterület alaphelyzetbe állítása felülírja.
+	The saved panel layout could not be restored. It has been preserved; editing panels or resetting the workspace will replace it.	A mentett panelelrendezést nem sikerült visszaállítani. Megőriztük; a panelek szerkesztése vagy a munkaterület alaphelyzetbe állítása felülírja.

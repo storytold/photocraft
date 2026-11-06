@@ -4260,3 +4260,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Barva zarážky
 	Shapes can't use patterns yet	Tvary zatím nemohou používat vzorky
 	Edit Brush…	Upravit štětec…
+
+# Panel workspace recovery
+	The saved panel layout could not be restored.	Uložené rozložení panelů se nepodařilo obnovit.
+	It has been preserved; editing panels or resetting the workspace will replace it.	Bylo zachováno; úprava panelů nebo obnovení pracovního prostoru jej nahradí.
+	The saved panel layout could not be restored. It has been preserved; editing panels or resetting the workspace will replace it.	Uložené rozložení panelů se nepodařilo obnovit. Bylo zachováno; úprava panelů nebo obnovení pracovního prostoru jej nahradí.

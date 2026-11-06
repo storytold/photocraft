@@ -4770,3 +4770,8 @@ cameraRaw	White Balance: As Shot	Valkotasapaino: kuvauksen mukainen
 	The path was discarded	Polku hylättiin
 	The path was kept as the Work Path	Polku säilytettiin työpolkuna
 	Edit Brush…	Muokkaa sivellintä…
+
+# Panel workspace recovery
+	The saved panel layout could not be restored.	Tallennettua paneeliasettelua ei voitu palauttaa.
+	It has been preserved; editing panels or resetting the workspace will replace it.	Se on säilytetty; paneelien muokkaaminen tai työtilan palauttaminen korvaa sen.
+	The saved panel layout could not be restored. It has been preserved; editing panels or resetting the workspace will replace it.	Tallennettua paneeliasettelua ei voitu palauttaa. Se on säilytetty; paneelien muokkaaminen tai työtilan palauttaminen korvaa sen.

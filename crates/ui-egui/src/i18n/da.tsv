@@ -4769,3 +4769,8 @@ cameraRaw	White Balance: As Shot	Hvidbalance: Som fotograferet
 	The path was discarded	Stien blev kasseret
 	The path was kept as the Work Path	Stien blev bevaret som arbejdssti
 	Edit Brush…	Rediger pensel…
+
+# Panel workspace recovery
+	The saved panel layout could not be restored.	Det gemte panellayout kunne ikke gendannes.
+	It has been preserved; editing panels or resetting the workspace will replace it.	Det er bevaret; redigering af paneler eller nulstilling af arbejdsområdet erstatter det.
+	The saved panel layout could not be restored. It has been preserved; editing panels or resetting the workspace will replace it.	Det gemte panellayout kunne ikke gendannes. Det er bevaret; redigering af paneler eller nulstilling af arbejdsområdet erstatter det.
