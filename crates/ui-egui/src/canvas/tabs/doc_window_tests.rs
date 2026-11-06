@@ -17,6 +17,8 @@ struct Host {
     /// The window with the keyboard; `None` is the main window.
     focus: Option<ViewportId>,
     time: f64,
+    /// The windows the app asked to take the keyboard (`ViewportCommand::Focus`), in order.
+    focus_requests: Vec<ViewportId>,
 }
 
 impl Host {
@@ -57,6 +59,10 @@ impl Host {
         for command in full.viewport_output.get(&id).map(|output| output.commands.as_slice()).unwrap_or_default() {
             if let (egui::ViewportCommand::InnerSize(size), Some((rect, _))) = (command, host.windows.get_mut(&id)) {
                 *rect = Rect::from_min_size(rect.min, *size);
+            }
+            // A command sent to this window reaches it in its own pass, as with eframe.
+            if *command == egui::ViewportCommand::Focus {
+                host.focus_requests.push(id);
             }
         }
     }
@@ -109,6 +115,9 @@ impl Desktop {
             input.viewports = infos;
             input.focused = main_focused;
             self.h.step();
+            let asked: Vec<ViewportId> =
+                self.h.output().viewport_output.iter().filter(|(_, o)| o.commands.contains(&egui::ViewportCommand::Focus)).map(|(id, _)| *id).collect();
+            self.host.borrow_mut().focus_requests.extend(asked);
         }
     }
 
@@ -174,4 +183,35 @@ fn a_document_window_without_the_keyboard_runs_no_shortcuts() {
     desktop.h.state_mut().ui.tool = Tool::Move;
     desktop.key(viewport, Key::B, Modifiers::NONE);
     assert_eq!(desktop.h.state().ui.tool, Tool::Move, "keys a window without the keyboard gets run nothing");
+}
+
+/// Ctrl+Tab in a document's window makes the next document active and gives that document's
+/// window the keyboard, so the next keys act on it (CodeRabbit on #11663).
+#[test]
+fn ctrl_tab_in_a_document_window_brings_the_next_document_forward() {
+    let (mut desktop, first) = Desktop::new();
+    desktop.h.state_mut().run("file.new", json!({"width": 300, "height": 200})).unwrap();
+    desktop.h.state_mut().sync_views();
+    let window = crate::view_cmds::float_window(desktop.h.state_mut(), 1, 0, true);
+    let second = ViewportId::from_hash_of(("docwin", window));
+    desktop.h.state_mut().session.set_active(0);
+    desktop.steps(4);
+    desktop.host.borrow_mut().focus_requests.clear();
+    desktop.key(first, Key::Tab, Modifiers::CTRL);
+    assert_eq!(desktop.h.state().session.active_index(), Some(1), "Ctrl+Tab makes the next document active");
+    assert_eq!(desktop.host.borrow().focus_requests, [second], "its window takes the keyboard");
+}
+
+/// When the next document has a tab, the main window takes the keyboard.
+#[test]
+fn ctrl_tab_to_a_tabbed_document_gives_the_main_window_the_keyboard() {
+    let (mut desktop, first) = Desktop::new();
+    desktop.h.state_mut().run("file.new", json!({"width": 300, "height": 200})).unwrap();
+    desktop.h.state_mut().sync_views();
+    desktop.h.state_mut().session.set_active(0);
+    desktop.steps(4);
+    desktop.host.borrow_mut().focus_requests.clear();
+    desktop.key(first, Key::Tab, Modifiers::CTRL);
+    assert_eq!(desktop.h.state().session.active_index(), Some(1));
+    assert_eq!(desktop.host.borrow().focus_requests, [ViewportId::ROOT], "the main window, with the tab, takes the keyboard");
 }
