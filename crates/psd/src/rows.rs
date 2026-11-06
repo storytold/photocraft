@@ -179,7 +179,7 @@ impl RowDecoder<'_> {
         out.try_reserve_exact(n).map_err(|_| PsdError::OutOfMemory("not enough memory for the decoded channel data"))?;
         match &self.kind {
             Kind::Empty => {}
-            Kind::Raw(bytes) => out.extend_from_slice(&bytes.get((r0 * self.row_bytes) as u64, n as u64)?),
+            Kind::Raw(bytes) => out.extend_from_slice(&bytes.get(r0 as u64 * self.row_bytes as u64, n as u64)?),
             Kind::Decoded(plane) => {
                 out.extend_from_slice(plane.get(r0 * self.row_bytes..r1 * self.row_bytes).ok_or_else(|| PsdError::invalid("decoded plane too short"))?)
             }

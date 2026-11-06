@@ -47,7 +47,11 @@ impl PsdFile {
         let k = h.width.max(h.height).div_ceil(max_side.max(1)).max(1);
         let (w, ht) = (h.width.div_ceil(k), h.height.div_ceil(k));
         let bps = usize::from(h.depth / 8);
-        let mut rgba = vec![255u8; w as usize * ht as usize * 4];
+        // At most `max_side`² pixels, but `max_side` is the caller's: checked and fallible.
+        let n = (w as usize).checked_mul(ht as usize).and_then(|p| p.checked_mul(4)).ok_or(crate::error::PsdError::LimitExceeded("preview size overflow"))?;
+        let mut rgba = Vec::new();
+        rgba.try_reserve_exact(n).map_err(|_| crate::error::PsdError::LimitExceeded("not enough memory for the preview"))?;
+        rgba.resize(n, 255u8);
         for y in 0..ht {
             let src_y = (y * k) as usize;
             for p in 0..color {
@@ -59,7 +63,8 @@ impl PsdFile {
                     let v = match *s {
                         [a] => a,
                         [a, _] => a,
-                        [a, b, c, d] => (f32::from_be_bytes([a, b, c, d]).clamp(0.0, 1.0) * 255.0).round() as u8,
+                        // 32-bit samples are linear light: encoded for display (sRGB) first.
+                        [a, b, c, d] => (srgb_encode(f32::from_be_bytes([a, b, c, d]).clamp(0.0, 1.0)) * 255.0).round() as u8,
                         _ => 0,
                     };
                     let px = (y as usize * w as usize + x) * 4;
@@ -73,6 +78,11 @@ impl PsdFile {
         }
         Ok(Some(Preview { width: w, height: ht, rgba }))
     }
+}
+
+/// The sRGB transfer of a linear value in `0..=1`.
+fn srgb_encode(v: f32) -> f32 {
+    if v <= 0.003_130_8 { v * 12.92 } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 }
 }
 
 #[cfg(test)]
@@ -107,5 +117,30 @@ mod tests {
             }
         }
         assert!(testgen::small(Version::Psd, Compression::Zip).merged_preview(4).unwrap().is_none());
+    }
+
+    /// Grayscale is replicated to RGB; 16-bit keeps each sample's high byte; 32-bit linear
+    /// samples are sRGB-encoded (0.5 is 188).
+    #[test]
+    fn preview_converts_grayscale_and_deep_samples() {
+        use crate::header::{ColorMode, Header};
+        use crate::image_data::ImageData;
+        let make = |mode: ColorMode, depth: u16, channels: u16, plane: Vec<u8>| {
+            let mut file = testgen::small(Version::Psd, Compression::Raw);
+            file.layer_info = None;
+            file.global_blocks.clear();
+            file.header = Header { channels, width: 2, height: 1, depth, color_mode: mode, ..file.header.clone() };
+            let planes: Vec<u8> = (0..channels).flat_map(|_| plane.clone()).collect();
+            file.image_data = ImageData::encode(Compression::Raw, &planes, &file.header).unwrap();
+            let bytes = file.to_bytes().unwrap();
+            PsdFile::from_source(Source::new(bytes)).unwrap().merged_preview(16).unwrap().unwrap()
+        };
+        let gray = make(ColorMode::Grayscale, 8, 1, vec![10, 200]);
+        assert_eq!(gray.rgba, vec![10, 10, 10, 255, 200, 200, 200, 255]);
+        let deep = make(ColorMode::Rgb, 16, 3, vec![0x12, 0x34, 0xAB, 0xCD]);
+        assert_eq!(deep.rgba, vec![0x12, 0x12, 0x12, 255, 0xAB, 0xAB, 0xAB, 255]);
+        let float: Vec<u8> = [0.5f32, 1.0].iter().flat_map(|v| v.to_be_bytes()).collect();
+        let f = make(ColorMode::Rgb, 32, 3, float);
+        assert_eq!(f.rgba, vec![188, 188, 188, 255, 255, 255, 255, 255]);
     }
 }
