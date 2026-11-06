@@ -109,6 +109,11 @@ fn preflight_tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modi
     Some((armed, mods))
 }
 
+/// The handlers a pointer event meets before the tool: dropping a floating piece the press won't
+/// drag, snapping, and the overlays and modifier gestures (Free Transform, sticky keys, brush
+/// resize, the ⌥ eyedropper, path and shape widgets…) that take the event for themselves. `None`:
+/// one of them handled it; otherwise the event before and after snapping, and the modifiers
+/// with the sticky keys applied.
 fn filter_event_before_tool(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers, armed: bool) -> Option<(ToolEvent, ToolEvent, egui::Modifiers)> {
     // View › Snap / Snap To and smart guides (snap_ui.rs).
     let raw = ev;
