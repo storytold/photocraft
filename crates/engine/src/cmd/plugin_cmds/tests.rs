@@ -367,6 +367,38 @@ fn preference_folder_is_loaded() {
 }
 
 #[test]
+fn large_folder_responsiveness_and_explicit_preference() {
+    let _guard = FOLDER_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = std::env::temp_dir().join(format!("pc-plugin-large-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    for i in 0..1200 {
+        std::fs::write(dir.join(format!("dummy_{i:04}.txt")), b"dummy text").unwrap();
+    }
+    std::fs::write(dir.join("a_first.wasm"), wat_plugin("test.large.first", "{}", GREY)).unwrap();
+    std::fs::write(dir.join("z_last.wasm"), wat_plugin("test.large.last", "{}", GREY)).unwrap();
+
+    let mut s = Session::new();
+    s.execute("prefs.set", json!({"path": "plugIns.additionalPluginsFolder", "value": dir.to_str().unwrap()})).unwrap();
+    // Explicit preference: disabled by default, poll returns None immediately without disk IO
+    assert!(s.poll_plugin_folder().is_none());
+    assert!(registry::get("test.large.first").is_none());
+
+    // When enabled, folder stamp and poll complete quickly (< 500ms) even with 1,200 files
+    s.execute("prefs.set", json!({"path": "plugIns.useAdditionalPluginsFolder", "value": true})).unwrap();
+    let start = std::time::Instant::now();
+    let r = s.poll_plugin_folder();
+    let elapsed = start.elapsed();
+    assert!(elapsed < std::time::Duration::from_millis(500), "poll took {:?}", elapsed);
+    assert!(r.is_none(), "already synchronized on sync_prefs during prefs.set");
+    assert!(registry::get("test.large.first").is_some());
+    assert!(registry::get("test.large.last").is_some());
+
+    registry::remove("test.large.first");
+    registry::remove("test.large.last");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn install_writes_to_folder_and_handles_collisions_and_reports_path() {
     let _guard = FOLDER_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir = std::env::temp_dir().join(format!("pc-plugin-install-{}", std::process::id()));

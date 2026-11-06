@@ -224,9 +224,8 @@ fn install(s: &mut Session, p: &Value) -> Result<Value> {
                 });
                 if !is_already_at_dest {
                     if dest.exists() {
-                        let existing_id = std::fs::read(&dest).ok().and_then(|b| {
-                            Plugin::load(&b, photocraft_plugins::Limits::default()).ok()
-                        }).map(|p| p.id().to_string());
+                        let existing_id =
+                            std::fs::read(&dest).ok().and_then(|b| Plugin::load(&b, photocraft_plugins::Limits::default()).ok()).map(|p| p.id().to_string());
 
                         if existing_id.as_deref() == Some(plugin.id()) {
                             if !replace {
@@ -241,9 +240,10 @@ fn install(s: &mut Session, p: &Value) -> Result<Value> {
                                     dest = candidate;
                                     break;
                                 }
-                                let cand_id = std::fs::read(&candidate).ok().and_then(|b| {
-                                    Plugin::load(&b, photocraft_plugins::Limits::default()).ok()
-                                }).map(|p| p.id().to_string());
+                                let cand_id = std::fs::read(&candidate)
+                                    .ok()
+                                    .and_then(|b| Plugin::load(&b, photocraft_plugins::Limits::default()).ok())
+                                    .map(|p| p.id().to_string());
                                 if cand_id.as_deref() == Some(plugin.id()) {
                                     if !replace {
                                         return Err(bad(CMD, format!("a plug-in with id {:?} is already installed at {}", plugin.id(), candidate.display())));
@@ -282,10 +282,6 @@ fn install(s: &mut Session, p: &Value) -> Result<Value> {
 #[cfg(not(target_arch = "wasm32"))]
 fn load_path_with_bytes(path: &str) -> Result<(Plugin, Option<Vec<u8>>)> {
     let p = std::path::Path::new(path);
-    let ext = p.extension().and_then(|s| s.to_str()).map(str::to_ascii_lowercase).unwrap_or_default();
-    if ext != "wasm" {
-        return Err(bad("plugin.install", "only `.wasm` WebAssembly plug-ins are supported"));
-    }
     let plug = registry::load_file(p, photocraft_plugins::Limits::default()).map_err(err)?;
     let bytes = std::fs::read(p).map_err(|e| err(photocraft_plugins::Error::Io(format!("{}: {e}", p.display()))))?;
     Ok((plug, Some(bytes)))
@@ -308,22 +304,28 @@ static FOLDER_STAMP: Mutex<Option<(String, Vec<FileStamp>)>> = Mutex::new(None);
 #[cfg(not(target_arch = "wasm32"))]
 fn folder_stamp(folder: &str) -> Option<Vec<FileStamp>> {
     let rd = std::fs::read_dir(std::path::Path::new(folder)).ok()?;
-    let mut stamps: Vec<FileStamp> = rd
+    let mut paths: Vec<std::path::PathBuf> = rd
         .filter_map(|e| {
             let e = e.ok()?;
-            let path = e.path();
-            if !path.extension().is_some_and(|x| x.eq_ignore_ascii_case("wasm")) {
+            if e.file_type().ok().is_some_and(|ft| ft.is_dir()) {
                 return None;
             }
-            let meta = e.metadata().ok()?;
+            let path = e.path();
+            if path.extension().is_some_and(|x| x.eq_ignore_ascii_case("wasm")) { Some(path) } else { None }
+        })
+        .collect();
+    paths.sort();
+    paths.truncate(1000);
+    let stamps: Vec<FileStamp> = paths
+        .into_iter()
+        .filter_map(|path| {
+            let meta = std::fs::metadata(&path).ok()?;
             if !meta.is_file() {
                 return None;
             }
             Some((path, meta.len(), meta.modified().ok()))
         })
         .collect();
-    stamps.sort_by(|a, b| a.0.cmp(&b.0));
-    stamps.truncate(1000);
     Some(stamps)
 }
 
