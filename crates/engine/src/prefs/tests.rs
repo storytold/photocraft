@@ -1058,7 +1058,7 @@ fn the_history_budget_is_the_stored_memory_usage_on_native() {
     for mb in [0u32, 1, 1536, 8192, 65536, u32::MAX] {
         let p = Performance { memory_usage_mb: mb, ..Performance::default() };
         assert_eq!(p.effective_memory_usage_mb(), mb);
-        assert_eq!(p.history_budget_for(None), (mb as usize) << 20, "{mb} MB");
+        assert_eq!(p.history_budget_for(None), (mb as usize).saturating_mul(1 << 20), "{mb} MB");
     }
     let mut s = Session::new();
     s.load_prefs_json(r#"{"performance": {"memoryUsageMb": 8192}}"#).unwrap();
@@ -1159,11 +1159,11 @@ fn an_effect_cache_above_the_cap_loads_clamped_and_does_not_block_apply() {
 fn history_budget_stays_within_the_machine() {
     let p = Performance::default();
     let gib = 1u64 << 30;
-    let pref = (p.effective_memory_usage_mb() as usize) << 20;
+    let pref = (p.effective_memory_usage_mb() as usize).saturating_mul(1 << 20);
     assert_eq!(p.history_budget_for(None), pref);
     assert_eq!(p.history_budget_for(Some(0)), pref);
     assert_eq!(p.history_budget_for(Some(64 * gib)), pref);
-    assert_eq!(p.history_budget_for(Some(8 * gib)), pref.min((8 * gib / 10 * 7) as usize));
+    assert_eq!(p.history_budget_for(Some(8 * gib)), pref.min(usize::try_from(8 * gib / 10 * 7).unwrap_or(usize::MAX)));
     let small = Performance { memory_usage_mb: 1024, ..Performance::default() };
     assert_eq!(small.history_budget_for(Some(8 * gib)), 1024 << 20);
 }
