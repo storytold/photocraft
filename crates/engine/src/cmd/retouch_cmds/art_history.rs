@@ -220,7 +220,8 @@ pub fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let mut nothing_written = false;
     let dmg = run_stroke(s, "Art History Brush", id, p, |_, surf, sel, lock| {
         let fmt = surf.format();
-        let src = if src_surface.format() == fmt { src_surface.clone() } else { src_surface.convert(fmt) };
+        // Only the tiles the stamp reads are converted (#11594).
+        let src = super::heal::source_in_format(src_surface.clone(), fmt, outer);
         if src.channels() != surf.channels() {
             return Err(err("source and destination do not match"));
         }

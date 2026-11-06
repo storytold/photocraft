@@ -163,10 +163,37 @@ enum LivePaint {
     /// blends it on release).
     Clone { which: SampleLayers, map: crate::presets::clone_source::Mapping, cmd: &'static str },
     /// The History Brush's history state.
-    History(Surface),
+    History(HistoryPaint),
     /// The Pattern Stamp's pattern, tiled from its aligned placement (Impressionist strokes are
     /// laid dab by dab: `pattern_stamp::live_impressionist`).
     Pattern { tile: std::sync::Arc<photocraft_compose::pattern::Tile>, place: photocraft_compose::pattern::Placement },
+}
+
+/// The History Brush's source while a live stroke is drawn. A source in another format than the
+/// layer (after an Image › Mode change) is converted tile by tile as the stroke reaches new tiles,
+/// never as a whole (#11594); each tile converts once per stroke.
+struct HistoryPaint {
+    src: Surface,
+    /// The tiles of `src` converted so far, when its format isn't the layer's.
+    converted: Option<Surface>,
+}
+
+impl HistoryPaint {
+    fn new(src: Surface, fmt: photocraft_color::PixelFormat) -> Self {
+        let converted = (src.format() != fmt).then(|| super::heal::convert_source(&src, fmt, Rect::EMPTY));
+        Self { src, converted }
+    }
+
+    /// The source over `r`, in the layer's format.
+    fn read(&mut self, r: Rect) -> Region {
+        match &mut self.converted {
+            None => Region::read(&self.src, r),
+            Some(c) => {
+                self.src.convert_region_into(c, r);
+                Region::read(c, r)
+            }
+        }
+    }
 }
 
 /// A retouching stroke shown while it is drawn: the dabs so far composited onto a copy of the
@@ -222,7 +249,7 @@ impl LiveRetouch {
                     cmd: if cmd == "paint.healingBrush" { "paint.healingBrush" } else { "paint.cloneStamp" },
                 }
             }
-            "paint.historyBrush" => LivePaint::History(history_source(s, id, p, cmd)?),
+            "paint.historyBrush" => LivePaint::History(HistoryPaint { src: history_source(s, id, p, cmd)?, converted: None }),
             other => return Err(bad(other, "live retouching strokes are the Clone Stamp, Healing Brush, History Brush and Pattern Stamp")),
         };
         Self::with_paint(s, cmd, p, stroke, id, paint, mode)
@@ -243,7 +270,7 @@ impl LiveRetouch {
         let opacity = stroke.brush.opacity;
         let brush = Box::new(stroke.brush.clone());
         let paint = match paint {
-            LivePaint::History(src) if src.format() != pre_surf.format() => LivePaint::History(src.convert(pre_surf.format())),
+            LivePaint::History(h) => LivePaint::History(HistoryPaint::new(h.src, pre_surf.format())),
             other => other,
         };
         let mut live = Self {
@@ -378,11 +405,11 @@ impl LiveRetouch {
         if r.is_empty() {
             return Ok(r);
         }
-        let paint = match &self.paint {
+        let paint = match &mut self.paint {
             LivePaint::Clone { which, map, cmd } => {
                 clone_sample(&self.pre, self.id, &self.pre_surf, *which, r, map, *cmd == "paint.cloneStamp" && flag(&self.params, "wrap", false), cmd)?
             }
-            LivePaint::History(src) => Region::read(src, r),
+            LivePaint::History(h) => h.read(r),
             LivePaint::Pattern { tile, place } => pattern_stamp::paint_region(tile, place, &self.pre_surf.format(), r),
         };
         let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc), self.id, &self.params)?;

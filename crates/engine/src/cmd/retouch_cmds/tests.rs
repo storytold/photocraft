@@ -2532,3 +2532,130 @@ fn periodic_clone_interior_matches_ordinary_brush_masks_and_transparency() {
         }
     }
 }
+
+/// #11594: the History Brush with its source in another format (bit depth or colour model)
+/// converts only the tiles the stroke reads. The layer it paints must match, bit for bit, what
+/// converting the whole source first paints (the previous behaviour, `with_full_conversion`),
+/// for strokes inside the canvas, across a tile seam, on the canvas edge and partly or wholly
+/// off it.
+fn history_after_mode_change(src_depth: u64, change: &str) -> Session {
+    // 600×300: 3×2 tiles of distinct texture, so a stroke reads only some of them.
+    let mut s = session(600, 300, src_depth, "rgb");
+    paint_layer(&mut s, texture);
+    s.execute(change, json!({})).unwrap();
+    s
+}
+
+/// Run `f` with history sources converted whole, as before #11594 (the oracle).
+fn with_full_conversion<T>(f: impl FnOnce() -> T) -> T {
+    super::heal::FULL_CONVERSION.with(|c| c.set(true));
+    let r = f();
+    super::heal::FULL_CONVERSION.with(|c| c.set(false));
+    r
+}
+
+fn active_pixels(s: &Session) -> Vec<f32> {
+    let st = s.active().unwrap();
+    st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().read_region(st.doc.bounds().inflate(40))
+}
+
+fn first_difference(a: &[f32], b: &[f32]) -> Option<usize> {
+    assert_eq!(a.len(), b.len());
+    a.iter().zip(b).position(|(x, y)| x.to_bits() != y.to_bits())
+}
+
+const HISTORY_STROKES: [&[[f64; 2]]; 5] = [
+    &[[100.0, 100.0], [130.0, 110.0]],                // inside one tile
+    &[[240.0, 250.0], [270.0, 262.0]],                // across a tile seam
+    &[[0.0, 0.0], [0.0, 40.0]],                       // on the canvas edge
+    &[[-12.0, 150.0], [20.0, 150.0], [590.0, 299.0]], // partly off the canvas
+    &[[-200.0, -200.0], [-150.0, -190.0]],            // wholly off it
+];
+
+#[test]
+fn history_brush_converts_only_the_stroke_region_and_paints_as_a_full_conversion() {
+    let mut cases: Vec<(u64, String)> = Vec::new();
+    for src in DEPTHS {
+        for dst in DEPTHS.into_iter().filter(|d| *d != src) {
+            cases.push((src, format!("image.mode.bits{dst}")));
+        }
+    }
+    // A colour-model change: an RGB source painted onto the Grayscale layer.
+    cases.push((8, "image.mode.grayscale".into()));
+    cases.push((16, "image.mode.grayscale".into()));
+    for (src, change) in &cases {
+        for pts in HISTORY_STROKES {
+            let p = json!({"points": pts, "size": 17, "hardness": 60, "opacity": 80, "state": 1});
+            let run = || {
+                let mut s = history_after_mode_change(*src, change);
+                s.execute("paint.historyBrush", p.clone()).unwrap();
+                active_pixels(&s)
+            };
+            let want = with_full_conversion(run);
+            let got = run();
+            assert!(first_difference(&got, &want).is_none(), "{src}-bit source, {change}, stroke {pts:?}: differs from a full conversion");
+        }
+        // No points: an error, not a panic, and nothing painted.
+        let mut s = history_after_mode_change(*src, change);
+        let before = active_pixels(&s);
+        assert!(s.execute("paint.historyBrush", json!({"points": [], "size": 17, "state": 1})).is_err());
+        assert!(first_difference(&active_pixels(&s), &before).is_none());
+    }
+}
+
+/// The same, drawn live: the source converts tile by tile as the stroke grows, the commit takes
+/// the live pixels, and they match a full conversion bit for bit.
+#[test]
+fn a_live_history_stroke_from_another_format_converts_as_it_grows() {
+    let all = [[60.0, 60.0], [200.0, 80.0], [300.0, 200.0], [520.0, 260.0], [590.0, 290.0]];
+    let pts = |v: &[[f64; 2]]| v.iter().map(|q| StrokePoint::new(q[0], q[1], 1.0)).collect::<Vec<_>>();
+    for (src, change) in [(8u64, "image.mode.bits16"), (16, "image.mode.bits32"), (32, "image.mode.bits8"), (8, "image.mode.grayscale")] {
+        let params = |v: &[[f64; 2]]| json!({"points": v, "size": 15, "hardness": 40, "opacity": 70, "state": 1});
+        let run = || {
+            let mut s = history_after_mode_change(src, change);
+            let mut live = LiveRetouch::begin(&s, "paint.historyBrush", &params(&all[..1])).unwrap();
+            live.push(&pts(&all[1..3])).unwrap();
+            live.push(&pts(&all[3..])).unwrap();
+            s.offer_live_retouch(live).unwrap();
+            let r = s.execute("paint.historyBrush", params(&all)).unwrap();
+            s.clear_live_stroke();
+            assert_eq!(r["fromLive"], true, "{src}-bit, {change}");
+            active_pixels(&s)
+        };
+        let want = with_full_conversion(run);
+        let got = run();
+        assert!(first_difference(&got, &want).is_none(), "{src}-bit source, {change}: live stroke differs from a full conversion");
+        // And the committed live stroke is what the command paints without one.
+        let mut fresh = history_after_mode_change(src, change);
+        fresh.execute("paint.historyBrush", params(&all)).unwrap();
+        assert!(first_difference(&got, &active_pixels(&fresh)).is_none(), "{src}-bit source, {change}: live commit differs from a fresh stroke");
+    }
+}
+
+/// The Art History Brush reads its source the same way: only the tiles its dabs read are
+/// converted, and it paints what converting the whole source paints, bit for bit.
+#[test]
+fn art_history_brush_from_another_format_paints_as_a_full_conversion() {
+    let mut cases: Vec<(u64, String)> = Vec::new();
+    for src in DEPTHS {
+        for dst in DEPTHS.into_iter().filter(|d| *d != src) {
+            cases.push((src, format!("image.mode.bits{dst}")));
+        }
+    }
+    cases.push((8, "image.mode.grayscale".into()));
+    for (src, change) in &cases {
+        for pts in [&[[100.0, 100.0], [280.0, 140.0]][..], &[[-6.0, 290.0], [30.0, 299.0]][..]] {
+            let p = json!({"points": pts, "size": 12, "area": 30, "tolerance": 0, "state": 1});
+            let run = || {
+                let mut s = history_after_mode_change(*src, change);
+                s.execute("paint.stroke", json!({"points": [[0, 120], [600, 120]], "size": 60, "hardness": 1.0, "color": "#2040ff"})).unwrap();
+                let r = s.execute("paint.artHistoryBrush", p.clone()).unwrap();
+                (r, active_pixels(&s))
+            };
+            let (want_r, want) = with_full_conversion(run);
+            let (got_r, got) = run();
+            assert_eq!(got_r, want_r, "{src}-bit source, {change}, {pts:?}");
+            assert!(first_difference(&got, &want).is_none(), "{src}-bit source, {change}, {pts:?}: differs from a full conversion");
+        }
+    }
+}
