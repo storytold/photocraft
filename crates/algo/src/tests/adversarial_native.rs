@@ -2,6 +2,7 @@ use super::*;
 use photocraft_raster::{Interrupt, Surface};
 
 #[test]
+/// Pin CMYK convolution offsets to brightness rather than increasing the stored ink amounts.
 fn cmyk_convolution_offset_is_a_brightness_offset() {
     let rect = Rect::new(0, 0, 1, 1);
     let source = Surface::with_default(PixelFormat::new(ColorMode::Cmyk, SampleType::F32, false), &[0.3; 4]);
@@ -13,6 +14,7 @@ fn cmyk_convolution_offset_is_a_brightness_offset() {
 }
 
 #[test]
+/// Require flat RGB and grayscale histograms to produce identity tone, contrast and color corrections.
 fn flat_auto_levels_are_identity_at_every_native_depth() {
     for depth in SampleType::ALL {
         for mode in [ColorMode::Rgb, ColorMode::Grayscale] {
@@ -28,6 +30,7 @@ fn flat_auto_levels_are_identity_at_every_native_depth() {
 }
 
 #[test]
+/// Compare matte removal with native-channel unassociation across models, depths and alpha endpoints.
 fn native_matte_unassociation_keeps_separations_and_hdr() {
     let rect = Rect::new(0, 0, 1, 1);
     for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab, ColorMode::Multichannel] {
@@ -72,6 +75,7 @@ fn native_matte_unassociation_keeps_separations_and_hdr() {
 }
 
 #[test]
+/// Recover CMYK foreground inks and preserve neutral Lab chroma when removing a black matte.
 fn black_matte_keeps_lab_neutral_and_cmyk_native_separations() {
     let rect = Rect::new(0, 0, 1, 1);
     let mut cmyk = Surface::new(PixelFormat::new(ColorMode::Cmyk, SampleType::F32, true));
@@ -91,6 +95,7 @@ fn black_matte_keeps_lab_neutral_and_cmyk_native_separations() {
 }
 
 #[test]
+/// Keep unselected color-channel bits intact when convolution or seeded noise changes selected alpha.
 fn selected_alpha_filters_preserve_every_unselected_channel_bit() {
     let rect = Rect::new(0, 0, 1, 1);
     let mask = Surface::with_default(PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false), &[0.3]);
@@ -119,6 +124,7 @@ fn selected_alpha_filters_preserve_every_unselected_channel_bit() {
 }
 
 #[test]
+/// Exclude hidden source colors from the premultiplied Average result when a selection creates coverage.
 fn average_selection_does_not_mix_hidden_colors_into_new_coverage() {
     let rect = Rect::new(0, 0, 2, 1);
     let mask = Surface::with_default(PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false), &[0.5]);
@@ -134,6 +140,7 @@ fn average_selection_does_not_mix_hidden_colors_into_new_coverage() {
 }
 
 #[test]
+/// Exercise extreme finite HDR colors and controls without allowing nonfinite or out-of-range tone results.
 fn checked_hdr_extreme_finite_inputs_and_controls_stay_finite() {
     for (shadow, highlight) in [(0., 0.), (50., 50.), (50., -50.), (-50., 50.)] {
         for mut pixels in [

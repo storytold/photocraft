@@ -428,6 +428,7 @@ fn add_pattern(s: &mut Session, name: &str, w: u32, h: u32, levels: &[u8]) {
 }
 
 #[test]
+/// Compare cross-band Bitmap thresholds with independent full-pattern ranks, including shared tie ranks.
 fn bitmap_custom_pattern_ranks_across_row_bands() {
     let mut s = session(1, 1, 8, "grayscale");
     let levels: Vec<u8> = (0..2 * 513).map(|i| [220, 40, 120][(i / 257) % 3]).collect();
@@ -443,6 +444,7 @@ fn bitmap_custom_pattern_ranks_across_row_bands() {
 }
 
 #[test]
+/// Accept a paintable compact pattern beyond the dense RGBA cap and retain its global threshold ordering.
 fn bitmap_custom_pattern_accepts_compact_pattern_past_full_rgba_limit() {
     let mut s = session(1, 1, 8, "grayscale");
     let (w, h) = (4097u32, 4096u32);

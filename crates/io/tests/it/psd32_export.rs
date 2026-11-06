@@ -87,6 +87,7 @@ fn export_psd(doc: &Document) -> Vec<u8> {
 }
 
 #[test]
+/// Verify raw unmasked HDR planes and independently authored masked Smart caches across PSD and PSB round trips.
 fn masked_hdr_smart_filter_cache_survives_psd_and_psb_export() {
     use photocraft_color::{BlendMode, PixelFormat};
     use photocraft_doc::{Layer, LayerContent, LayerMask, SmartFilter, SmartObject, SmartSource};

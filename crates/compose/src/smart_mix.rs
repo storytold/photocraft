@@ -197,6 +197,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
+    /// Preserve stored CMYK, Lab and multichannel colors when Normal strength changes only pixel alpha.
     fn normal_native_partial_strength_preserves_inks_and_lab_when_only_alpha_changes() {
         let area = Rect::new(-1, 0, 257, 1);
         for mode in [ColorMode::Cmyk, ColorMode::Lab, ColorMode::Multichannel] {
@@ -225,6 +226,7 @@ mod tests {
     }
 
     #[test]
+    /// Pin changed CMYK and Lab channel values to native premultiplied weights, including opaque formats.
     fn normal_native_changed_channels_use_premultiplied_native_weights() {
         let area = Rect::new(0, 0, 1, 1);
         for mode in [ColorMode::Cmyk, ColorMode::Lab] {
@@ -328,6 +330,7 @@ mod tests {
     }
 
     #[test]
+    /// Apply HDR nonseparable source-over blending when a Smart filter changes the pixel coverage.
     fn changed_coverage_uses_hdr_nonseparable_blending() {
         let area = Rect::new(0, 0, 1, 1);
         let base = surface(PixelFormat::RGBA32F, [4., 4., 4., 0.5], area);
@@ -375,6 +378,7 @@ mod tests {
     }
 
     #[test]
+    /// Keep identical signed F32-limit pixels finite and exact at fractional Normal filter strength.
     fn normal_fractional_strength_preserves_identical_signed_max_pixels() {
         let area = Rect::new(0, 0, 1, 1);
         for value in [-f32::MAX, f32::MAX] {
@@ -387,6 +391,7 @@ mod tests {
     }
 
     #[test]
+    /// Retain identical native samples, including hidden colors, across models, depths and tile boundaries.
     fn normal_identity_preserves_native_separations_at_every_depth() {
         let area = Rect::new(-1, 0, 257, 1);
         for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab, ColorMode::Multichannel] {
@@ -411,6 +416,7 @@ mod tests {
     }
 
     #[test]
+    /// Require checked Smart mixing to publish finite results for extreme separable HDR blend operands.
     fn separable_hdr_extremes_reach_the_checked_mixer_as_finite_pixels() {
         let area = Rect::new(0, 0, 1, 1);
         for (backdrop, top) in [(2e19, 2e19), (2e38, -2e38), (-f32::MAX, f32::MAX)] {
@@ -424,6 +430,7 @@ mod tests {
     }
 
     #[test]
+    /// Preserve representable coverage and color when finite alpha differences overflow narrow arithmetic.
     fn opposite_finite_alpha_extremes_keep_representable_coverage() {
         let area = Rect::new(0, 0, 1, 1);
         for mode in [ColorMode::Rgb, ColorMode::Grayscale] {
@@ -451,6 +458,7 @@ mod tests {
     }
 
     #[test]
+    /// Reject nonfinite native input in any channel or later tile without modifying either source surface.
     fn nonfinite_native_samples_fail_atomically_even_in_later_tiles() {
         let area = Rect::new(0, 0, 257, 1);
         for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab, ColorMode::Multichannel] {

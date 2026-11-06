@@ -450,6 +450,7 @@ mod allocation_tests {
     use super::*;
 
     #[test]
+    /// Preserve oversized native pattern declarations while refusing dense exports or reporting named PSD omissions.
     fn oversized_native_pattern_declarations_are_preserved_but_exported_without_expansion() {
         for depth in SampleType::ALL {
             for mode in [ColorMode::Rgb, ColorMode::Multichannel] {
@@ -484,6 +485,7 @@ mod allocation_tests {
     }
 
     #[test]
+    /// Charge retained pattern planes to one shared budget before expanding any sparse pattern pixels.
     fn pattern_export_plane_budget_is_shared_and_refused_before_sparse_expansion() {
         let p = Pattern {
             id: "float".into(),
@@ -505,6 +507,7 @@ mod allocation_tests {
     }
 
     #[test]
+    /// Keep safe patterns and unchanged raw blocks when an oversized pattern must be omitted from export.
     fn unsafe_pattern_omission_preserves_other_patterns_and_raw_blocks() {
         let mut doc = Document::new("Patterns", photocraft_geom::Size::new(2, 2), ColorMode::Rgb, SampleType::U8);
         let mut surface = Surface::new(PixelFormat::RGBA8);

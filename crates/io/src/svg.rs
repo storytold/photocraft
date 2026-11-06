@@ -402,6 +402,7 @@ enum ParseFailure {
 }
 
 impl From<ParseFailure> for IoError {
+    /// Recover the original public I/O error from either an isolation failure or an ordinary parse failure.
     fn from(error: ParseFailure) -> Self {
         match error {
             ParseFailure::Isolation(error) | ParseFailure::Decode(error) => error,

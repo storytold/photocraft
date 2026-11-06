@@ -306,6 +306,7 @@ pub(crate) fn run_image(src: &Image, out: Rect, ctx: &Ctx, p: &Params) -> Vec<f3
 mod tests {
     use super::*;
     #[test]
+    /// Retain every convolution edge policy on a large owner without admitting oversized output work.
     fn small_convolution_area_in_large_domain_keeps_edge_sampling_and_work_bounds() {
         let area = Rect::new(0, 0, 1, 1);
         let mut s = Surface::new(PixelFormat::RGBA32F);

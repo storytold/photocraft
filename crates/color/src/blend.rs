@@ -196,6 +196,7 @@ pub fn blend_channel_hdr(mode: BlendMode, cb: f32, cs: f32) -> f32 {
 }
 
 #[cold]
+/// Reevaluate an overflowing separable blend in F64 before bounding its signed F32 result.
 fn channel_hdr_wide(mode: BlendMode, cb: f32, cs: f32) -> f32 {
     let (b, s) = (f64::from(cb), f64::from(cs));
     let hard_light = |b: f64, s: f64| {
@@ -522,12 +523,15 @@ pub fn blend_rgb_hdr(mode: BlendMode, cb: [f32; 3], cs: [f32; 3]) -> [f32; 3] {
 /// source's hue; raw F32 inputs and these helpers' products fit safely in F64.
 #[cold]
 fn nonseparable_hdr_wide(mode: BlendMode, cb: [f32; 3], cs: [f32; 3]) -> [f32; 3] {
+    /// Compute the nonseparable blend luminance directly from wide RGB channels.
     fn lum(c: [f64; 3]) -> f64 {
         0.3 * c[0] + 0.59 * c[1] + 0.11 * c[2]
     }
+    /// Measure wide RGB saturation as the distance between its largest and smallest channels.
     fn sat(c: [f64; 3]) -> f64 {
         c[0].max(c[1]).max(c[2]) - c[0].min(c[1]).min(c[2])
     }
+    /// Rescale wide RGB saturation while preserving channel order and placing the minimum channel at zero.
     fn set_sat(c: [f64; 3], s: f64) -> [f64; 3] {
         let mut idx = [0usize, 1, 2];
         idx.sort_by(|&a, &b| c[a].total_cmp(&c[b]));
@@ -539,6 +543,7 @@ fn nonseparable_hdr_wide(mode: BlendMode, cb: [f32; 3], cs: [f32; 3]) -> [f32; 3
         }
         out
     }
+    /// Shift wide RGB to the requested luminance and compress gamut excursions against the F32 white point.
     fn set_lum(c: [f64; 3], target: f64) -> [f64; 3] {
         let d = target - lum(c);
         let c = c.map(|v| v + d);

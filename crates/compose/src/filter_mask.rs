@@ -244,6 +244,7 @@ mod tests {
     }
 
     #[test]
+    /// Compare reused mask-mixing scratch with isolated pixel oracles across formats and sparse tile boundaries.
     fn reused_scratch_matches_isolated_pixels_across_partial_and_missing_tiles() {
         for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab, ColorMode::Multichannel] {
             for sample in SampleType::ALL {
@@ -321,6 +322,7 @@ mod tests {
 
     #[test]
     #[cfg(not(target_arch = "wasm32"))]
+    /// Require parallel native mask recovery to match one worker exactly, including hidden and empty tiles.
     fn native_parallel_unmix_matches_one_worker_bit_for_bit() {
         let serial = rayon::ThreadPoolBuilder::new().num_threads(1).build().unwrap();
         let parallel = rayon::ThreadPoolBuilder::new().num_threads(2).build().unwrap();
@@ -344,6 +346,7 @@ mod tests {
     }
 
     #[test]
+    /// Verify inverse scratch reuse clears skipped outputs and matches fresh pixels across sparse native formats.
     fn reused_unmix_scratch_matches_fresh_pixels_and_clears_early_continue_outputs() {
         use photocraft_geom::Rect;
 
@@ -456,6 +459,7 @@ mod tests {
     }
 
     #[test]
+    /// Compare selected native-channel mixing with wide premultiplied weights at float and integer depths.
     fn selection_mix_preserves_native_float_hdr_and_integer_ranges() {
         for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab] {
             for depth in SampleType::ALL {
@@ -507,6 +511,7 @@ mod tests {
     }
 
     #[test]
+    /// Keep opposite finite F32 extremes representable during selected mixing with and without alpha.
     fn float_selection_mix_of_opposite_finite_extremes_stays_finite() {
         for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab] {
             for alpha in [false, true] {
@@ -589,6 +594,7 @@ mod tests {
     }
 
     #[test]
+    /// Recover signed HDR filter colors on opaque native surfaces while respecting hidden-mask endpoints.
     fn opaque_float_unmix_recovers_native_signed_hdr_colors_and_hidden_endpoints() {
         for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab, ColorMode::Multichannel] {
             let fmt = PixelFormat::new(mode, SampleType::F32, false);
@@ -617,6 +623,7 @@ mod tests {
     }
 
     #[test]
+    /// Recover opaque F32 extremes and full-coverage bits, saturating inverse values outside the native range.
     fn opaque_float_unmix_handles_extremes_full_coverage_and_unrepresentable_inverse() {
         for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab, ColorMode::Multichannel] {
             let fmt = PixelFormat::new(mode, SampleType::F32, false);
@@ -655,6 +662,7 @@ mod tests {
     }
 
     #[test]
+    /// Round-trip alpha-bearing signed HDR colors through mask mixing and recovery at coverage endpoints.
     fn float_alpha_unmix_recovers_signed_hdr_colors_and_mask_endpoints() {
         for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab, ColorMode::Multichannel] {
             let fmt = PixelFormat::new(mode, SampleType::F32, true);
@@ -684,6 +692,7 @@ mod tests {
     }
 
     #[test]
+    /// Recover extreme and subnormal alpha-bearing F32 samples using wide arithmetic and exact full coverage.
     fn float_alpha_unmix_uses_wide_arithmetic_for_extremes_and_full_coverage() {
         let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::F32, true);
         for (b, f, coverage) in [
@@ -705,6 +714,7 @@ mod tests {
     }
 
     #[test]
+    /// Bound impossible inverse colors, normalize recovered alpha and clear nonpositive coverage results.
     fn float_alpha_unmix_bounds_impossible_inverse_and_keeps_unit_alpha() {
         let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::F32, true);
         let mut base = Surface::new(fmt);

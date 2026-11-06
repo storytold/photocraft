@@ -188,6 +188,7 @@ mod tests {
     use super::*;
     use photocraft_color::ColorMode;
     #[test]
+    /// Admit a small noise edit on a large owner while retaining output-size and invalid-domain checks.
     fn small_noise_area_in_large_domain_keeps_work_bounds() {
         let area = Rect::new(11, 13, 13, 15);
         let s = surface(ColorMode::Rgb, SampleType::F32, area);

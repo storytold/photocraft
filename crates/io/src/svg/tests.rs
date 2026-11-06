@@ -2,6 +2,7 @@ use super::*;
 
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
+/// Require shallow, deep and nested private SVG probes to reuse the single native parser worker.
 fn private_svg_parsing_uses_the_same_worker_at_every_depth() {
     for depth in [2, 200] {
         parse_at_depth(depth, false, |isolated| {
@@ -22,7 +23,9 @@ fn private_svg_parsing_uses_the_same_worker_at_every_depth() {
 
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
+/// Keep invalid embedded images optional while recording failed isolation even for non-strict imports.
 fn non_strict_embedded_svg_records_isolation_failure_but_omits_invalid_images() {
+    /// Inject a worker failure before font resolution to exercise isolation-error propagation.
     fn panic_fonts() -> Arc<usvg::fontdb::Database> {
         panic!("injected worker failure")
     }

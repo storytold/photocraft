@@ -366,6 +366,7 @@ pub(crate) fn run_image(src: &crate::Image, out: Rect, ctx: &crate::Ctx, p: &Hdr
 mod tests {
     use super::*;
     #[test]
+    /// Preserve skipped transparent CMYK and Lab samples bit for bit, with and without selection mixing.
     fn skipped_transparent_native_samples_survive_toning_and_selection_bit_for_bit() {
         use photocraft_color::{ColorMode, PixelFormat, SampleType};
         let area = Rect::new(-1, 0, 1, 1);

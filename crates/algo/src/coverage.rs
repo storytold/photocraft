@@ -529,6 +529,7 @@ mod tests {
     use super::*;
     use photocraft_color::ColorMode;
     #[test]
+    /// Allow small point edits on large owners while keeping reconstruction, geometry and output workspace limits.
     fn small_point_operations_in_large_domain_keep_reconstruction_and_output_limits() {
         let area = Rect::new(11, 13, 12, 14);
         let s = surface(ColorMode::Rgb, SampleType::F32, true, area, &[0.2, 0.4, 0.6, 0.5]);

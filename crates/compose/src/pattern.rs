@@ -431,6 +431,7 @@ mod tests {
     use photocraft_doc::{PixelFormat, Surface};
 
     #[test]
+    /// Reject dense paint expansion of a retained oversized pattern without materializing sparse source tiles.
     fn stored_900_megapixel_pattern_is_not_expanded_for_painting() {
         let pattern = Pattern { id: "large".into(), name: "large".into(), width: 30_000, height: 30_000, surface: Surface::new(PixelFormat::RGBA8) };
         assert!(pattern_rgba(&pattern, ColorMode::Rgb).is_empty());

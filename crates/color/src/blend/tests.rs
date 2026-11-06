@@ -3,6 +3,7 @@ use super::*;
 const E: f32 = 1e-5;
 
 #[test]
+/// Bound extreme separable HDR blends while preserving ordinary finite F32 bits and integer-depth behavior.
 fn separable_hdr_extremes_stay_finite_and_keep_ordinary_f32_bits() {
     let max = f32::MAX;
     let values = [-max, -max / 2., -2e19, -4., -1., -0., 0., f32::from_bits(1), 1e-20, 0.25, 0.5, 0.75, 1., 4., 2e19, max / 2., max];
@@ -35,6 +36,7 @@ fn separable_hdr_extremes_stay_finite_and_keep_ordinary_f32_bits() {
 }
 
 #[test]
+/// Pin signed saturation and blend identities when finite HDR operands require a wide retry.
 fn overflowing_hdr_retries_keep_signed_results_and_blend_identities() {
     use BlendMode::*;
     let max = f32::MAX;
@@ -68,6 +70,7 @@ fn overflowing_hdr_retries_keep_signed_results_and_blend_identities() {
 }
 
 #[test]
+/// Retain tiny and subnormal source hue ordering when the backdrop approaches the F32 limit.
 fn overflowing_hdr_hue_keeps_even_subnormal_source_channel_ordering() {
     let max = f32::MAX;
     let cb = [max, -max / 2., 0.];
@@ -83,6 +86,7 @@ fn overflowing_hdr_hue_keeps_even_subnormal_source_channel_ordering() {
 }
 
 #[test]
+/// Retry only overflowing HDR Screen results while retaining ordinary F32 and integer-entry arithmetic.
 fn hdr_screen_replays_only_nonfinite_results_in_wide_arithmetic() {
     let max = f32::MAX;
     assert_eq!(blend_channel_hdr(BlendMode::Screen, 2e19, 2e19), -max);
@@ -108,6 +112,7 @@ fn hdr_screen_replays_only_nonfinite_results_in_wide_arithmetic() {
 }
 
 #[test]
+/// Keep nonseparable blends finite at signed F32 extremes without changing ordinary blend results.
 fn finite_signed_extreme_nonseparable_hdr_does_not_publish_infinity_or_nan() {
     let max = f32::MAX;
     let gray = [max; 3];

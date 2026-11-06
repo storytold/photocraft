@@ -182,6 +182,7 @@ mod tests {
     use super::*;
     use photocraft_color::{ColorMode, PixelFormat, SampleType};
     #[test]
+    /// Keep unselected CMYK separations and out-of-gamut Lab samples unchanged at every native depth.
     fn zero_coverage_preserves_native_cmyk_and_out_of_gamut_lab_samples() {
         for mode in [ColorMode::Cmyk, ColorMode::Lab] {
             for depth in SampleType::ALL {
@@ -315,6 +316,7 @@ mod tests {
     }
 
     #[test]
+    /// Reject selected Average results that overflow native Lab conversion without modifying the input surface.
     fn alpha_changing_lab_selection_rejects_nonfinite_native_conversion_atomically() {
         let format = PixelFormat::new(ColorMode::Lab, SampleType::F32, true);
         let bounds = Rect::new(0, 0, 3, 1);
