@@ -563,6 +563,12 @@ fn doc_replace_smart_object_fits_a_file_of_another_size() {
             assert!(refused.contains("`fit`"), "{refused}");
             assert_eq!(bounds(&mut h, &layer), kept);
         }
+        // `clipToCanvas` reaches the command (an unwarped placement is drawn whole either way); a
+        // value that is not a boolean is refused.
+        let clipped = h.handle("doc.replaceSmartObject", json!({"layer": layer, "path": path("design.png"), "fit": "stretch", "clipToCanvas": true})).unwrap();
+        assert_eq!(clipped["layer"], layer, "{clipped}");
+        let refused = h.handle("doc.replaceSmartObject", json!({"layer": layer, "path": path("tall.png"), "clipToCanvas": "yes"})).unwrap_err().to_string();
+        assert!(refused.contains("clipToCanvas"), "{refused}");
         drop(h);
     }
     std::fs::remove_dir_all(base).unwrap();

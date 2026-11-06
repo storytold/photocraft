@@ -95,6 +95,11 @@ pub struct ReplaceSmartObjectParams {
     /// `"stretch"` fills the old contents' box, `"contain"` fits inside it, keeping its aspect.
     #[serde(default)]
     pub fit: Option<Value>,
+    /// Render warped instances only inside the canvas (and their layer mask's revealed area), and
+    /// hidden instances not at all: the same flattened document for far less work when a
+    /// placement is much larger than the canvas. For a server that saves the flattened result.
+    #[serde(default)]
+    pub clip_to_canvas: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
@@ -755,7 +760,7 @@ impl PhotocraftMcp {
     }
 
     #[tool(
-        description = "Replace a Smart Object's contents with the file at `path` beneath the read root, keeping its transform and filters (the capability-scoped Replace Contents). `layer` is the Smart Object's id or name (default: the active layer). `fit`: \"keep\" (default) keeps the file's pixel size, \"stretch\" fills the old contents' box, \"contain\" fits inside it keeping its aspect, centred."
+        description = "Replace a Smart Object's contents with the file at `path` beneath the read root, keeping its transform and filters (the capability-scoped Replace Contents). `layer` is the Smart Object's id or name (default: the active layer). `fit`: \"keep\" (default) keeps the file's pixel size, \"stretch\" fills the old contents' box, \"contain\" fits inside it keeping its aspect, centred. `clip_to_canvas` renders warped instances only where the canvas shows them."
     )]
     async fn doc_replace_smart_object(&self, Parameters(p): Parameters<ReplaceSmartObjectParams>) -> Result<CallToolResult, McpError> {
         let mut opts = serde_json::Map::new();
@@ -764,6 +769,9 @@ impl PhotocraftMcp {
         }
         if let Some(v) = p.fit {
             opts.insert("fit".into(), v);
+        }
+        if let Some(v) = p.clip_to_canvas {
+            opts.insert("clipToCanvas".into(), Value::Bool(v));
         }
         let opts = Value::Object(opts);
         // Bridge mode runs the app on this machine, which reads the path itself like any command.

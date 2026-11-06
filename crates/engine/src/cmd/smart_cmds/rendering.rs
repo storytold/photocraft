@@ -164,8 +164,9 @@ fn apply_smart_filter(f: &SmartFilter, cur: &Surface, canvas: Rect, extent: Rect
     if f.blend == BlendMode::Normal && f.opacity >= 1.0 { Ok(out) } else { Ok(blend_surfaces(cur, &out, f.blend, f.opacity.clamp(0.0, 1.0))) }
 }
 
-/// The source placed in document pixels, before any smart filter.
-pub(super) fn place(name: &str, bytes: &[u8], doc: &Document, sm: &SmartObject) -> Result<Surface> {
+/// The source placed in document pixels, before any smart filter; a warped raster placement is
+/// rendered only inside `clip` when given.
+pub(super) fn place(name: &str, bytes: &[u8], doc: &Document, sm: &SmartObject, clip: Option<Rect>) -> Result<Surface> {
     let fmt = doc.pixel_format();
     // A vector source is rendered at the placement's scale, and the placement is divided by
     // that scale so the rendered pixels land where the source units would.
@@ -199,8 +200,8 @@ pub(super) fn place(name: &str, bytes: &[u8], doc: &Document, sm: &SmartObject) 
     crate::transform_cmds::check_budget(img.bounds, &h, "smart object", fmt)?;
     // Through the warp (source space) and the transform in one pass; whole-pixel moves are exact.
     Ok(match &sm.perspective {
-        Some(_) => photocraft_algo::warp::place_source_projective(&img.surface, img.bounds, &h, sm.warp.as_ref())?,
-        None => photocraft_algo::warp::place_source(&img.surface, img.bounds, &sm.transform, sm.warp.as_ref())?,
+        Some(_) => photocraft_algo::warp::place_source_projective_clipped(&img.surface, img.bounds, &h, sm.warp.as_ref(), clip)?,
+        None => photocraft_algo::warp::place_source_clipped(&img.surface, img.bounds, &sm.transform, sm.warp.as_ref(), clip)?,
     })
 }
 
@@ -314,6 +315,11 @@ pub fn render(doc: &Document, sm: &SmartObject) -> Result<Option<Surface>> {
 /// is cancelled. Gives the same pixels as [`apply_smart_filters`] on the placed source, but
 /// starts from the deepest stage of the stack already rendered (see [`stack_cache`]).
 pub(super) fn render_in(doc: &Document, sm: &SmartObject, ctx: &JobCtx) -> Result<Option<Surface>> {
+    render_opt(doc, sm, ctx, None)
+}
+
+/// [`render_in`]; with `clip`, a warped placement is rendered only inside that rect.
+fn render_opt(doc: &Document, sm: &SmartObject, ctx: &JobCtx, clip: Option<Rect>) -> Result<Option<Surface>> {
     // Stored filters can come from a file or another layer. Check before looking up cached
     // stages too: a trusted UI render may have populated this process-wide cache earlier.
     for filter in sm.smart_filters.iter().filter(|f| sm.filters_enabled && f.visible) {
@@ -329,11 +335,14 @@ pub(super) fn render_in(doc: &Document, sm: &SmartObject, ctx: &JobCtx) -> Resul
         h.update(&crate::color_cmds::document_profile(doc).to_bytes());
         placed_key = *h.finalize().as_bytes();
     }
+    if let Some(r) = clip {
+        placed_key = stack_cache::clipped_key(&placed_key, r);
+    }
     let placed = || -> Result<Stage> {
         if let Some(stage) = stack_cache::get(&placed_key) {
             return Ok(stage);
         }
-        let surface = place(&name, &bytes, doc, sm)?;
+        let surface = place(&name, &bytes, doc, sm, clip)?;
         // Edge pixels repeat at the canvas ∪ placed-content edge, as for layer filters.
         let stage = Stage { extent: canvas.union(&surface.content_bounds()), surface };
         stack_cache::put(placed_key, &stage);
@@ -415,8 +424,12 @@ pub(super) fn unapplied_filters(sm: &SmartObject) -> Vec<String> {
 }
 
 fn refresh_layer_in(doc: &Document, l: &mut Layer, ctx: &JobCtx) -> Result<bool> {
+    refresh_layer_opt(doc, l, ctx, None)
+}
+
+fn refresh_layer_opt(doc: &Document, l: &mut Layer, ctx: &JobCtx, clip: Option<Rect>) -> Result<bool> {
     let LayerContent::Smart(sm) = &mut l.content else { return Ok(false) };
-    match render_in(doc, sm, ctx)? {
+    match render_opt(doc, sm, ctx, clip)? {
         Some(px) => {
             sm.cache = Some(px);
             Ok(true)
@@ -431,11 +444,15 @@ pub fn refresh(doc: &mut Document, id: LayerId) -> Result<bool> {
 }
 
 fn refresh_in(doc: &mut Document, id: LayerId, ctx: &JobCtx) -> Result<bool> {
+    refresh_opt(doc, id, ctx, None)
+}
+
+fn refresh_opt(doc: &mut Document, id: LayerId, ctx: &JobCtx, clip: Option<Rect>) -> Result<bool> {
     let mut l = doc.layer(id).cloned().ok_or(EngineError::NoLayer(id))?;
     if !matches!(l.content, LayerContent::Smart(_)) {
         return Err(other("the layer is not a smart object"));
     }
-    let ok = refresh_layer_in(doc, &mut l, ctx)?;
+    let ok = refresh_layer_opt(doc, &mut l, ctx, clip)?;
     if ok && let Some(dst) = doc.layer_mut(id) {
         dst.content = l.content;
     }
@@ -447,7 +464,12 @@ pub(super) fn refresh_or_fail(doc: &mut Document, id: LayerId) -> Result<()> {
 }
 
 pub(super) fn refresh_or_fail_in(doc: &mut Document, id: LayerId, ctx: &JobCtx) -> Result<()> {
-    if refresh_in(doc, id, ctx)? {
+    refresh_or_fail_opt(doc, id, ctx, None)
+}
+
+/// [`refresh_or_fail_in`]; with `clip`, a warped placement is rendered only inside that rect.
+pub(super) fn refresh_or_fail_opt(doc: &mut Document, id: LayerId, ctx: &JobCtx, clip: Option<Rect>) -> Result<()> {
+    if refresh_opt(doc, id, ctx, clip)? {
         return Ok(());
     }
     if let SmartSource::Linked { path } = &smart(doc, id)?.source

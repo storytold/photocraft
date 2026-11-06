@@ -337,3 +337,175 @@ fn stretch_reads_a_psd_layers_box_from_its_stored_size_without_decoding_the_old_
     assert_eq!(rendered(&s, id).content_bounds(), Rect::new(20, 10, 40, 26));
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn clip_to_canvas_renders_only_the_canvas_and_the_same_pixels_inside_it() {
+    let dir = tmp_dir("clip");
+    let design = png_file(&dir, "d.png", 30, 20, [0.2, 0.7, 0.4]);
+    // Placed 3× and bent, so the warped contents spill far past the 64 × 48 canvas.
+    let setup = |sm: &mut SmartObject, b: [f64; 4]| {
+        sm.transform = Affine { m: [3.0, 0.0, 0.0, 3.0, -20.0, -10.0] };
+        let mesh = BezierMesh::identity(b, 1, 1).map_points(|p| [p[0] + 0.1 * p[1], p[1] + 3.0 * (p[0] / (b[2] - b[0]) * 3.0).sin()]);
+        sm.warp = Some(Warp::custom(mesh, b));
+    };
+    let (mut full, id) = smart_session();
+    let b = old_box(&full, id);
+    set_placement(&mut full, id, |sm| setup(sm, b));
+    replace_contents_with(&mut full, id, "d.png", std::fs::read(&design).unwrap(), Fit::Stretch, false).unwrap();
+    let (mut clipped, id2) = smart_session();
+    set_placement(&mut clipped, id2, |sm| setup(sm, b));
+    replace_contents_with(&mut clipped, id2, "d.png", std::fs::read(&design).unwrap(), Fit::Stretch, true).unwrap();
+    let canvas = clipped.active().unwrap().doc.bounds();
+    let (a, c) = (rendered(&full, id), rendered(&clipped, id2));
+    assert!(!canvas.contains_rect(&a.content_bounds()), "the full render spills: {:?}", a.content_bounds());
+    assert!(canvas.contains_rect(&c.content_bounds()), "clipped: {:?}", c.content_bounds());
+    let inside = a.content_bounds().intersect(&canvas);
+    assert_eq!(c.read_region(inside), a.read_region(inside));
+    // The flattened documents are the same.
+    assert_eq!(flat(&full), flat(&clipped));
+    // A later unclipped render of the same file is whole again (clipped renders are cached apart).
+    clipped.execute("edit.undo", json!({})).unwrap();
+    replace_contents_with(&mut clipped, id2, "d.png", std::fs::read(&design).unwrap(), Fit::Stretch, false).unwrap();
+    assert_eq!(rendered(&clipped, id2).content_bounds(), a.content_bounds());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// Full and clipped renders of a placement spilling past the canvas, with `extra` applied to the
+/// layer first; returns both flattened documents.
+fn full_and_clipped_flat(tag: &str, extra: impl Fn(&mut Session, LayerId)) -> (Vec<[f32; 4]>, Vec<[f32; 4]>) {
+    let dir = tmp_dir(tag);
+    let design = png_file(&dir, "d.png", 30, 20, [0.2, 0.7, 0.4]);
+    let setup = |sm: &mut SmartObject, b: [f64; 4]| {
+        sm.transform = Affine { m: [3.0, 0.0, 0.0, 3.0, -20.0, -10.0] };
+        let mesh = BezierMesh::identity(b, 1, 1).map_points(|p| [p[0] + 0.1 * p[1], p[1]]);
+        sm.warp = Some(Warp::custom(mesh, b));
+    };
+    let mut out = Vec::new();
+    for clip in [false, true] {
+        let (mut s, id) = smart_session();
+        let b = old_box(&s, id);
+        set_placement(&mut s, id, |sm| setup(sm, b));
+        extra(&mut s, id);
+        replace_contents_with(&mut s, id, "d.png", std::fs::read(&design).unwrap(), Fit::Stretch, clip).unwrap();
+        out.push(flat(&s));
+    }
+    std::fs::remove_dir_all(&dir).ok();
+    let clipped = out.pop().unwrap();
+    (out.pop().unwrap(), clipped)
+}
+
+#[test]
+fn clip_to_canvas_keeps_the_flattened_result_of_a_layer_with_effects() {
+    // A stroke follows the layer's edge: cutting the layer at the canvas would draw it there.
+    let (full, clipped) = full_and_clipped_flat("fx", |s, id| {
+        s.execute("layer.layerStyle.stroke", json!({"layer": id.0, "size": 3, "position": "inside", "color": "#ff0000"})).unwrap();
+    });
+    assert_eq!(full, clipped);
+}
+
+#[test]
+fn clip_to_canvas_keeps_the_flattened_result_inside_a_group_with_effects() {
+    // A group's inside stroke follows the edge of what its children cover: a child cut at the
+    // canvas would draw it there.
+    let (full, clipped) = full_and_clipped_flat("group-fx", |s, id| {
+        s.execute("layer.groupLayers", json!({})).unwrap();
+        let group = s.active().unwrap().active_layer.unwrap();
+        assert_eq!(s.active().unwrap().doc.path_of(id).map(|p| p.len()), Some(2), "the smart object is in the group");
+        s.execute("layer.layerStyle.stroke", json!({"layer": group.0, "size": 3, "position": "inside", "color": "#ff0000"})).unwrap();
+    });
+    assert_eq!(full, clipped);
+}
+
+#[test]
+fn clip_to_canvas_keeps_the_flattened_result_of_a_layer_with_smart_filters() {
+    // A blur reads past the canvas edge; a clipped layer would repeat the edge instead.
+    let (full, clipped) = full_and_clipped_flat("sf", |s, id| {
+        s.execute("filter.blur.gaussianBlur", json!({"layer": id.0, "radius": 4})).unwrap();
+    });
+    assert_eq!(full, clipped);
+}
+
+#[test]
+fn clip_to_canvas_renders_only_what_the_layer_mask_reveals() {
+    // A mask that hides everything but a 10 × 6 strip: the clipped render stays inside the strip
+    // (plus the mask's margin) and the flattened document is the same as a full render.
+    let mask_strip = |s: &mut Session, id: LayerId| {
+        s.edit("mask", |doc, _| {
+            let mut m = photocraft_doc::LayerMask::hide_all();
+            m.surface.fill_rect(Rect::new(20, 12, 30, 18), &[1.0]);
+            doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?.mask = Some(m);
+            Ok(())
+        })
+        .unwrap();
+    };
+    let (full, clipped) = full_and_clipped_flat("mask", mask_strip);
+    assert_eq!(full, clipped);
+
+    let dir = tmp_dir("mask-bounds");
+    let (mut s, id) = smart_session();
+    let b = old_box(&s, id);
+    set_placement(&mut s, id, |sm| {
+        sm.transform = Affine { m: [3.0, 0.0, 0.0, 3.0, -20.0, -10.0] };
+        sm.warp = Some(Warp::custom(BezierMesh::identity(b, 1, 1).map_points(|p| [p[0] + 0.1 * p[1], p[1]]), b));
+    });
+    mask_strip(&mut s, id);
+    replace_contents_with(&mut s, id, "d.png", std::fs::read(png_file(&dir, "d.png", 30, 20, [0.2, 0.7, 0.4])).unwrap(), Fit::Stretch, true).unwrap();
+    let r = rendered(&s, id).content_bounds();
+    assert!(Rect::new(20, 12, 30, 18).inflate(2).contains_rect(&r), "rendered {r:?}");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+fn hide(s: &mut Session, id: LayerId) {
+    s.edit("hide", |doc, _| {
+        doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?.visible = false;
+        Ok(())
+    })
+    .unwrap();
+}
+
+/// Moves `id` into a new hidden group at the top of the document.
+fn hide_in_group(s: &mut Session, id: LayerId) {
+    s.edit("group", |doc, _| {
+        let path = doc.path_of(id).ok_or(EngineError::NoLayer(id))?;
+        let [i] = path[..] else { return Err(other("expected a top-level layer")) };
+        let layer = doc.layers.remove(i);
+        let mut g = Layer::group("G", vec![layer]);
+        g.visible = false;
+        doc.layers.push(g);
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn clip_to_canvas_leaves_hidden_instances_unrendered() {
+    // Mockups keep a hidden "design here" layer whose copies show the design. The hidden one is
+    // not in the flattened document: a clipped replace leaves it unrendered, and the flattened
+    // result is the same as a full render.
+    let (full, clipped) = full_and_clipped_flat("hidden", |s, id| {
+        s.execute("layer.duplicate", json!({"layer": id.0})).unwrap();
+        hide(s, id);
+    });
+    assert_eq!(full, clipped);
+
+    let dir = tmp_dir("hidden-cache");
+    let design = std::fs::read(png_file(&dir, "d.png", 30, 20, [0.2, 0.7, 0.4])).unwrap();
+    for (clip, group) in [(true, false), (true, true), (false, false)] {
+        let (mut s, id) = smart_session();
+        s.execute("layer.duplicate", json!({"layer": id.0})).unwrap();
+        if group {
+            hide_in_group(&mut s, id)
+        } else {
+            hide(&mut s, id)
+        }
+        replace_contents_with(&mut s, id, "d.png", design.clone(), Fit::Stretch, clip).unwrap();
+        let doc = &s.active().unwrap().doc;
+        let copy = doc.walk().into_iter().find(|(_, _, l)| l.id != id && matches!(l.content, LayerContent::Smart(_))).map(|(_, _, l)| l.id).unwrap();
+        assert_eq!(smart(doc, id).unwrap().cache.is_none(), clip, "clip {clip}, group {group}: the hidden instance is left unrendered only with clip");
+        assert!(
+            smart(doc, copy).unwrap().cache.as_ref().is_some_and(|c| !c.content_bounds().is_empty()),
+            "clip {clip}, group {group}: the visible copy is rendered"
+        );
+    }
+    std::fs::remove_dir_all(&dir).ok();
+}

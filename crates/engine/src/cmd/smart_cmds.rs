@@ -144,7 +144,7 @@ mod rendering;
 mod source;
 
 pub(crate) use contents::on_close;
-pub use contents::{Fit, commit_child, contents_of, replace_contents_bytes, replace_contents_fit, replace_contents_from_bytes};
+pub use contents::{Fit, commit_child, contents_of, replace_contents_bytes, replace_contents_fit, replace_contents_from_bytes, replace_contents_with};
 use contents::{edit_contents, export_contents, is_smart_child, path_param, replace_contents, set_source, update_all};
 #[cfg(test)]
 use filters::smart_mut;
@@ -206,7 +206,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "layer.smartObjects.replaceContents",
             "Replace Contents…",
             SO,
-            r##"{"layer":id?,"path":str,"fit":"keep|stretch|contain"="keep"}"##,
+            r##"{"layer":id?,"path":str,"fit":"keep|stretch|contain"="keep","clipToCanvas":bool=false}"##,
             has_smart,
             replace_contents
         ),

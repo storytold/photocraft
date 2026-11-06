@@ -1,10 +1,10 @@
 use super::filters::{smart, smart_mut};
 use super::placing::{contain_box, detach_psd, stretch_placement};
-use super::rendering::{refresh, refresh_or_fail, source_box, unapplied_filters};
+use super::rendering::{refresh, refresh_or_fail, refresh_or_fail_opt, source_box, unapplied_filters};
 use super::source::{authorize_source, authorized_source_bytes, source_bytes, source_image};
 use super::{
-    Arc, DocId, Document, EngineError, LayerContent, LayerId, Metadata, Result, Session, SmartContentsId, SmartLink, SmartSource, Value, bad, base_name,
-    decode_source, encode_source, json, layer_param, other,
+    Arc, DocId, Document, EngineError, JobCtx, Layer, LayerContent, LayerId, Metadata, Rect, Result, Session, SmartContentsId, SmartLink, SmartSource, Value,
+    bad, base_name, decode_source, encode_source, json, layer_param, other,
 };
 
 pub(super) fn path_param<'a>(cmd: &str, p: &'a Value) -> Result<&'a str> {
@@ -32,7 +32,7 @@ pub(super) fn set_source(
 
 // Keep the shared-instance transaction out of the per-command source-builder instantiations.
 fn set_shared_source(s: &mut Session, id: LayerId, label: &str, keep_psd: bool, new: SmartSource) -> Result<Value> {
-    set_shared_source_fit(s, id, label, keep_psd, new, None)
+    set_shared_source_fit(s, id, label, keep_psd, new, None, false)
 }
 
 /// Stretching new contents over the old: the new source's box, and each instance's old box (see
@@ -45,8 +45,8 @@ struct Stretch {
 }
 
 /// [`set_shared_source`]; with `stretch`, re-aiming every instance's placement so the new
-/// source's box lands where its old box did.
-fn set_shared_source_fit(s: &mut Session, id: LayerId, label: &str, keep_psd: bool, new: SmartSource, stretch: Option<Stretch>) -> Result<Value> {
+/// source's box lands where its old box did; with `clip`, see [`replace_contents_with`].
+fn set_shared_source_fit(s: &mut Session, id: LayerId, label: &str, keep_psd: bool, new: SmartSource, stretch: Option<Stretch>, clip: bool) -> Result<Value> {
     let (parent, contents_id, changed, warnings) = s.edit(label, |doc, _| {
         let contents_id = smart(doc, id)?.contents_id;
         let changed = instances(doc, contents_id);
@@ -63,7 +63,18 @@ fn set_shared_source_fit(s: &mut Session, id: LayerId, label: &str, keep_psd: bo
             }
             warnings
                 .extend(unapplied_filters(smart(doc, instance)?).into_iter().map(|n| format!("the {n} smart filter is not supported, so it was not applied")));
-            refresh_or_fail(doc, instance)?;
+            // A hidden instance (or one in a hidden group) is not in the flattened document: with
+            // `clip`, it is left unrendered, like the parts of the others past the canvas.
+            if clip && hidden_in(doc, instance) {
+                smart_mut(doc, instance)?.cache = None;
+                continue;
+            }
+            // Effects (the layer's or a group's) follow the edge and bounds of what they cover,
+            // and smart filters read past the canvas: such an instance is rendered whole, so the
+            // flattened result stays the same.
+            let layer = doc.layer(instance).ok_or(EngineError::NoLayer(instance))?;
+            let clip_this = (clip && !needs_whole_render(doc, instance)).then(|| visible_clip(layer, doc.bounds()));
+            refresh_or_fail_opt(doc, instance, &JobCtx::new(), clip_this)?;
         }
         Ok((doc.id, contents_id, changed, warnings))
     })?;
@@ -77,10 +88,11 @@ fn set_shared_source_fit(s: &mut Session, id: LayerId, label: &str, keep_psd: bo
 
 pub(super) fn replace_contents(s: &mut Session, p: &Value) -> Result<Value> {
     let fit = fit_param(p)?;
+    let clip = clip_param(p)?;
     let path = path_param("layer.smartObjects.replaceContents", p)?.to_string();
     let bytes = photocraft_format::read_file(std::path::Path::new(&path)).map_err(|e| other(format!("can't read {path}: {e}")))?;
     let id = layer_param(s, p)?;
-    replace_contents_fit(s, id, &base_name(&path), bytes, fit)
+    replace_contents_with(s, id, &base_name(&path), bytes, fit, clip)
 }
 
 /// Replace Contents with a file the caller already read, for the smart object `p` names (`layer`,
@@ -88,8 +100,18 @@ pub(super) fn replace_contents(s: &mut Session, p: &Value) -> Result<Value> {
 /// read (#8061).
 pub fn replace_contents_from_bytes(s: &mut Session, p: &Value, file_name: &str, bytes: Vec<u8>) -> Result<Value> {
     let fit = fit_param(p)?;
+    let clip = clip_param(p)?;
     let id = layer_param(s, p)?;
-    replace_contents_fit(s, id, file_name, bytes, fit)
+    replace_contents_with(s, id, file_name, bytes, fit, clip)
+}
+
+/// A request's `clipToCanvas` option: absent or null is off.
+fn clip_param(p: &Value) -> Result<bool> {
+    match p.get("clipToCanvas") {
+        None | Some(Value::Null) => Ok(false),
+        Some(Value::Bool(b)) => Ok(*b),
+        Some(o) => Err(bad("layer.smartObjects.replaceContents", format!("`clipToCanvas` must be true or false, not {o}"))),
+    }
 }
 
 /// How Replace Contents places a file of another size than the old contents.
@@ -131,6 +153,16 @@ pub fn replace_contents_bytes(s: &mut Session, id: LayerId, file_name: &str, byt
 
 /// [`replace_contents_bytes`] with a [`Fit`].
 pub fn replace_contents_fit(s: &mut Session, id: LayerId, file_name: &str, bytes: Vec<u8>, fit: Fit) -> Result<Value> {
+    replace_contents_with(s, id, file_name, bytes, fit, false)
+}
+
+/// [`replace_contents_fit`]; with `clip_to_canvas`, warped instances without layer effects (their
+/// own or a group's around them) or visible smart filters are rendered only inside the canvas (and
+/// their layer mask's revealed area), and hidden instances not at all. What a flattened export of
+/// the document shows is the same, at a fraction of the cost when a placement is much larger than
+/// the canvas; the parts left out are gone from the layer (a hidden instance shows nothing) until
+/// something re-renders it in full (Undo restores the previous contents as before).
+pub fn replace_contents_with(s: &mut Session, id: LayerId, file_name: &str, bytes: Vec<u8>, fit: Fit, clip_to_canvas: bool) -> Result<Value> {
     let stretch = match fit {
         Fit::Keep => {
             decode_source(file_name, &bytes)?; // fail before touching the document
@@ -147,7 +179,43 @@ pub fn replace_contents_fit(s: &mut Session, id: LayerId, file_name: &str, bytes
             Some(Stretch { to, from, contain: fit == Fit::Contain })
         }
     };
-    set_shared_source_fit(s, id, "Replace Contents", false, SmartSource::Embedded { file_name: file_name.to_string(), bytes: Arc::new(bytes) }, stretch)
+    set_shared_source_fit(
+        s,
+        id,
+        "Replace Contents",
+        false,
+        SmartSource::Embedded { file_name: file_name.to_string(), bytes: Arc::new(bytes) },
+        stretch,
+        clip_to_canvas,
+    )
+}
+
+/// Whether smart object layer `id` must be rendered whole for the flattened document to be right:
+/// layer effects, its own or those of a group around it, lay out against the bounds and edges of
+/// what they cover (strokes, inner shadows, aligned gradients and patterns), and smart filters
+/// sample beyond the canvas.
+fn needs_whole_render(doc: &Document, id: LayerId) -> bool {
+    let filtered =
+        doc.layer(id).is_some_and(|l| matches!(&l.content, LayerContent::Smart(sm) if sm.filters_enabled && sm.smart_filters.iter().any(|f| f.visible)));
+    filtered || doc.path_of(id).is_none_or(|p| (1..=p.len()).any(|n| doc.layer_at(&p[..n]).is_some_and(photocraft_compose::effects::has_effects)))
+}
+
+/// Whether `id` or a group around it is hidden, so it shows nowhere in the flattened document.
+fn hidden_in(doc: &Document, id: LayerId) -> bool {
+    doc.path_of(id).is_some_and(|p| (1..=p.len()).any(|n| doc.layer_at(&p[..n]).is_some_and(|l| !l.visible)))
+}
+
+/// The part of `canvas` where `l` can show anything given its own layer mask: inside the mask's
+/// painted area when the mask hides by default at full density (plus its feather), else the
+/// whole canvas. Group masks and clipping can only hide more, so this is never too small.
+fn visible_clip(l: &Layer, canvas: Rect) -> Rect {
+    match &l.mask {
+        Some(m) if m.enabled && m.density >= 1.0 && m.surface.default_pixel().first().copied().unwrap_or(1.0) <= 0.0 => {
+            let pad = (f64::from(m.feather.max(0.0)) * 3.0).ceil() as i32 + 1;
+            m.surface.content_bounds().inflate(pad).intersect(&canvas)
+        }
+        _ => canvas,
+    }
 }
 
 /// The box (source pixels) each instance of `id`'s contents was authored for: its `soLD` stored
