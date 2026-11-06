@@ -69,13 +69,7 @@ pub fn install_wintab(cc: &eframe::CreationContext<'_>, feed: &StylusFeed, enabl
             if let Some(sample) = sample
                 && !logged.replace(true)
             {
-                log::info!(
-                    "WinTab sample: pressure={:.3} tilt=({:.1},{:.1}) eraser={}",
-                    sample.pressure,
-                    sample.tilt_x,
-                    sample.tilt_y,
-                    sample.eraser
-                );
+                log::info!("WinTab sample: pressure={:.3} tilt=({:.1},{:.1}) eraser={}", sample.pressure, sample.tilt_x, sample.tilt_y, sample.eraser);
             }
             sink(sample);
         });

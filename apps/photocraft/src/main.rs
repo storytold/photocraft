@@ -673,7 +673,9 @@ fn main() -> eframe::Result {
             // With Windows Ink disabled for the tablet, WinTab supplies the pen pressure, tilt,
             // rotation and eraser end; the vendor driver still moves the cursor.
             #[cfg(target_os = "windows")]
-            if let Some(poll) = tablet::install_wintab(cc, &app.stylus.feed, app.session.prefs().tools.tablet_input == photocraft_engine::prefs::TabletInput::WinTab) {
+            if let Some(poll) =
+                tablet::install_wintab(cc, &app.stylus.feed, app.session.prefs().tools.tablet_input == photocraft_engine::prefs::TabletInput::WinTab)
+            {
                 app.services.tablet_poll = Some(poll);
             }
             #[cfg(target_os = "linux")]

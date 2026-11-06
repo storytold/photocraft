@@ -233,14 +233,8 @@ fn sample(packet: &PenPacket, pressure: &wintab::Axis, orientation: &[wintab::Ax
 
 /// One packet from a device without orientation axes: pressure and the eraser end, neutral tilt.
 fn sample_pressure(packet: &PressurePacket, pressure: &wintab::Axis) -> Sample {
-    Sample {
-        pressure: pressure.normalize(packet.normal_pressure as i32),
-        tilt_x: 0.0,
-        tilt_y: 0.0,
-        rotation: 0.0,
-        eraser: packet.status.inverted(),
-    }
-    .sanitized()
+    Sample { pressure: pressure.normalize(packet.normal_pressure as i32), tilt_x: 0.0, tilt_y: 0.0, rotation: 0.0, eraser: packet.status.inverted() }
+        .sanitized()
 }
 
 #[cfg(test)]
@@ -261,14 +255,7 @@ mod tests {
     }
 
     fn packet(normal_pressure: u32) -> PenPacket {
-        PenPacket {
-            status: wintab::Status(0),
-            buttons: wintab::Buttons(0),
-            x: 0,
-            y: 0,
-            normal_pressure,
-            orientation: wintab::Orientation::default(),
-        }
+        PenPacket { status: wintab::Status(0), buttons: wintab::Buttons(0), x: 0, y: 0, normal_pressure, orientation: wintab::Orientation::default() }
     }
 
     fn pressure_packet(normal_pressure: u32) -> PressurePacket {
