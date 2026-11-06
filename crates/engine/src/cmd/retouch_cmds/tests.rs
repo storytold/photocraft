@@ -748,6 +748,42 @@ fn erase_to_history_paints_a_single_solid_shapes_colour_past_its_path() {
 }
 
 #[test]
+fn erase_to_history_paints_white_past_the_path_of_a_single_shape_without_a_solid_fill() {
+    let gradient = json!({"kind": "rect", "rect": [1, 1, 5, 5], "fill": {"gradient": {"stops": [[0, "#ff0000"], [1, "#0000ff"]], "angle": 0}}});
+    let outline = json!({"kind": "rect", "rect": [1, 1, 5, 5], "fill": null, "stroke": {"width": 2, "color": "#ff0000"}});
+    for shape in [gradient, outline] {
+        for depth in [8u64, 16, 32] {
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width": 40, "height": 20, "depth": depth, "background": "transparent"})).unwrap();
+            let first = s.active().unwrap().active_layer.unwrap();
+            s.execute("shape.create", shape.clone()).unwrap();
+            s.execute("layer.delete", json!({"layer": first.0})).unwrap(); // State 2: the shape alone.
+            s.execute("layer.new.layer", json!({})).unwrap();
+            s.execute("paint.historyBrush", json!({"points": [[15, 10], [25, 10]], "size": 6, "hardness": 100, "state": 2, "eraseToHistory": true})).unwrap();
+            let got = rgba(&s, 20, 10);
+            assert!(got.iter().all(|v| *v > 0.99), "depth {depth}, {shape}: {got:?}");
+            assert!(rgba(&s, 20, 2)[3] < 0.01, "depth {depth}, {shape}: only under the stroke");
+        }
+    }
+}
+
+#[test]
+fn erase_to_history_paints_white_past_a_shapes_path_in_every_colour_mode() {
+    for mode in ["cmyk", "gray", "lab"] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 40, "height": 20, "mode": mode, "background": "transparent"})).unwrap();
+        let first = s.active().unwrap().active_layer.unwrap();
+        let fill = json!({"gradient": {"stops": [[0, "#ff0000"], [1, "#0000ff"]], "angle": 0}});
+        s.execute("shape.create", json!({"kind": "rect", "rect": [1, 1, 5, 5], "fill": fill})).unwrap();
+        s.execute("layer.delete", json!({"layer": first.0})).unwrap(); // State 2: the shape alone.
+        s.execute("layer.new.layer", json!({})).unwrap();
+        s.execute("paint.historyBrush", json!({"points": [[15, 10], [25, 10]], "size": 6, "hardness": 100, "state": 2, "eraseToHistory": true})).unwrap();
+        let got = rgba(&s, 20, 10);
+        assert!(got.iter().all(|v| *v > 0.99), "{mode}: {got:?}");
+    }
+}
+
+#[test]
 fn erase_to_history_refuses_a_new_layer_from_a_state_holding_two_layers() {
     let mut s = session(40, 20, 8, "rgb");
     let picture = rgba(&s, 20, 10);

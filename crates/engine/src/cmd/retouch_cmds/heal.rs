@@ -73,8 +73,9 @@ pub(super) fn healing_brush(s: &mut Session, p: &Value) -> Result<Value> {
 /// A layer that did not exist in that state has no pixels there, and the History Brush refuses it
 /// as Photoshop's does. `eraseToHistory` (the Eraser's Erase to History option) paints such a layer
 /// with that layer's own pixels (its opacity not applied) from a state holding a single layer,
-/// Background or not, and refuses it from any other state: observed in Photoshop 2026, where a
-/// state with a second layer, even an empty one, gives an error.
+/// Background or not, or past its path with a shape's solid colour, else white, and refuses it
+/// from any other state: observed in Photoshop 2026, where a state with a second layer, even an
+/// empty one, gives an error.
 pub(super) fn history_source(s: &Session, id: Option<LayerId>, p: &Value, cmd: &str) -> Result<Surface> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let source_doc = crate::history_source_cmds::paint_source(st, p, cmd)?;
@@ -86,8 +87,13 @@ pub(super) fn history_source(s: &Session, id: Option<LayerId>, p: &Value, cmd: &
         {
             let fmt = id.and_then(|id| st.doc.layer(id)).and_then(|l| l.surface()).map(Surface::format).ok_or(EngineError::NoDocument)?;
             let only = source_doc.layers.first().ok_or_else(missing)?;
-            // A solid shape is its colour cut by its path: Photoshop paints the colour past the path.
-            if let photocraft_doc::LayerContent::Shape(photocraft_doc::ShapeLayer { fill: Some(photocraft_doc::Fill::Solid(color)), .. }) = &only.content {
+            // A shape paints past its path, as in Photoshop: a solid fill its colour, and a gradient,
+            // a pattern or no fill plain white, whatever its outline.
+            if let photocraft_doc::LayerContent::Shape(shape) = &only.content {
+                let color = match &shape.fill {
+                    Some(photocraft_doc::Fill::Solid(color)) => *color,
+                    _ => photocraft_color::Color::WHITE,
+                };
                 let c = color.in_mode(fmt.mode);
                 let mut pixel = c.c.get(..fmt.mode.color_channels()).unwrap_or_default().to_vec();
                 if fmt.alpha {
