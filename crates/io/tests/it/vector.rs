@@ -9,8 +9,8 @@ use std::sync::Arc;
 
 use photocraft_color::{Color, ColorMode, SampleType};
 use photocraft_doc::{
-    Document, Fill, Knot, Layer, LayerContent, LineCap, LineJoin, LiveShape, NamedPath, Path, PathOp, ShapeLayer, ShapeStroke, Size, StrokeAlign, Subpath,
-    VectorMask,
+    Document, Fill, GradientStyle, Knot, Layer, LayerContent, LineCap, LineJoin, LiveShape, NamedPath, Path, PathOp, Pattern, ShapeLayer, ShapeStroke, Size,
+    StrokeAlign, Subpath, VectorMask,
 };
 use photocraft_geom::{Point, Rect};
 use photocraft_io::*;
@@ -135,40 +135,69 @@ fn shape_layer_typed_roundtrip() {
     }
 }
 
-/// #1281: a shape whose fill lives in `vscg`, as in every shape Photoshop writes, saves that
-/// fill in `vscg` alone (also after the fill is edited), never with an added `SoCo`/`GdFl`/`PtFl`
-/// next to it.
-#[test]
-fn vscg_shape_fill_is_not_doubled_by_a_fill_block() {
+/// Saves `d` with a "Shape" layer whose fill `fill` lives in a kept `vscg` block, as PSD and
+/// as PSB, first unedited and then with the fill changed to `edited` (a fill of the same type).
+/// Each save must keep the fill in `vscg` alone, with no `SoCo`/`GdFl`/`PtFl` next to it, and
+/// reopen as a shape with the fill it was saved with (#1281).
+fn assert_vscg_fill_is_not_doubled(mut d: Document, fill: Fill, edited: Fill) {
     let fill_keys = |bytes: &[u8]| -> Vec<[u8; 4]> {
         let f = photocraft_psd::PsdFile::from_bytes(bytes).unwrap();
         let l = f.layers().iter().find(|l| l.name() == "Shape").expect("shape record");
         l.blocks.iter().map(|b| b.key).filter(|k| matches!(k, b"vscg" | b"SoCo" | b"GdFl" | b"PtFl")).collect()
     };
-    let red = Fill::Solid(Color::rgb(1.0, 0.0, 0.0));
-    let sh = ShapeLayer { path: path(), fill: Some(red.clone()), ..Default::default() };
+    let sh = ShapeLayer { path: path(), fill: Some(fill.clone()), ..Default::default() };
     let mut layer = shape_layer(sh);
-    layer.psd_blocks.push((*b"vscg", std::sync::Arc::new(photocraft_io::vector_map::vscg_bytes(&red))));
-    let mut d = doc();
+    layer.psd_blocks.push((*b"vscg", std::sync::Arc::new(photocraft_io::vector_map::vscg_bytes(&fill))));
+    let at = d.layers.len();
     d.layers.push(layer);
-    for psb in [false, true] {
-        let name = if psb { "x.psb" } else { "x.psd" };
-        let out = export(&d, name, &ExportOptions { force_psb: psb, ..Default::default() }).unwrap();
-        assert_eq!(out.bytes.get(4..6), Some(&[0, u8::from(psb) + 1][..]), "{name}: version");
-        assert_eq!(fill_keys(&out.bytes), vec![*b"vscg"], "{name}: unedited");
-        let back = import(name, &out.bytes).unwrap().document;
-        let LayerContent::Shape(s) = &back.layers[1].content else { panic!("not a shape") };
-        assert_eq!(s.fill, Some(red.clone()), "{name}");
+    for (step, want) in [("unedited", fill), ("edited", edited)] {
+        // The edited step changes the model only: the kept `vscg` still holds the old fill and
+        // must be rewritten.
+        let LayerContent::Shape(s) = &mut d.layers[at].content else { panic!("not a shape") };
+        s.fill = Some(want.clone());
+        for psb in [false, true] {
+            let name = if psb { "x.psb" } else { "x.psd" };
+            let out = export(&d, name, &ExportOptions { force_psb: psb, ..Default::default() }).unwrap();
+            assert_eq!(out.bytes.get(4..6), Some(&[0, u8::from(psb) + 1][..]), "{name}: version");
+            assert_eq!(fill_keys(&out.bytes), vec![*b"vscg"], "{name}: {step}");
+            let back = import(name, &out.bytes).unwrap().document;
+            let LayerContent::Shape(s) = &back.layers[at].content else { panic!("{name}: {step}: not a shape") };
+            assert_eq!(s.fill.as_ref(), Some(&want), "{name}: {step}");
+        }
     }
-    // An edited fill is rewritten in `vscg`, still without a second fill block.
-    let blue = Fill::Solid(Color::rgb(0.0, 0.0, 1.0));
-    let LayerContent::Shape(s) = &mut d.layers[1].content else { panic!("not a shape") };
-    s.fill = Some(blue.clone());
-    let out = export(&d, "x.psd", &ExportOptions::default()).unwrap();
-    assert_eq!(fill_keys(&out.bytes), vec![*b"vscg"], "edited");
-    let back = import("x.psd", &out.bytes).unwrap().document;
-    let LayerContent::Shape(s) = &back.layers[1].content else { panic!("not a shape") };
-    assert_eq!(s.fill, Some(blue));
+}
+
+/// #1281: a solid-colour shape whose fill lives in `vscg`, as in every shape Photoshop writes,
+/// saves that fill in `vscg` alone (also after the fill is edited), never with an added `SoCo`
+/// next to it.
+#[test]
+fn vscg_shape_fill_is_not_doubled_by_a_fill_block() {
+    assert_vscg_fill_is_not_doubled(doc(), Fill::Solid(Color::rgb(1.0, 0.0, 0.0)), Fill::Solid(Color::rgb(0.0, 0.0, 1.0)));
+}
+
+/// #1281: a gradient shape whose fill lives in `vscg` saves it there alone, never with an added
+/// `GdFl`, and reopens with the same gradient, also after the gradient is edited.
+#[test]
+fn vscg_gradient_shape_fill_is_not_doubled_by_a_fill_block() {
+    let (red, blue, green) = (Color::rgb(1.0, 0.0, 0.0), Color::rgb(0.0, 0.0, 1.0), Color::rgb(0.0, 1.0, 0.0));
+    let fill = Fill::gradient(vec![(0.0, red), (1.0, blue)], 45.0, 0.5, GradientStyle::Radial, true);
+    let edited = Fill::gradient(vec![(0.0, green), (0.25, red), (1.0, blue)], 30.0, 1.0, GradientStyle::Linear, false);
+    assert_vscg_fill_is_not_doubled(doc(), fill, edited);
+}
+
+/// #1281: a pattern shape whose fill lives in `vscg` saves it there alone, never with an added
+/// `PtFl`, and reopens with the same pattern reference, scale and placement, also after they
+/// are edited.
+#[test]
+fn vscg_pattern_shape_fill_is_not_doubled_by_a_fill_block() {
+    let mut surface = photocraft_raster::Surface::new(photocraft_color::PixelFormat::RGBA8);
+    surface.fill_rect(Rect::new(0, 0, 4, 4), &[0.2, 0.4, 0.9, 1.0]);
+    let id = "059289fb-0000-4000-8000-000000001281".to_string();
+    let mut d = doc();
+    d.patterns.push(Pattern { id: id.clone(), name: "Blue".into(), width: 4, height: 4, surface });
+    let fill = Fill::Pattern { name: "Blue".into(), scale: 0.5, id: id.clone(), angle: 30.0, link: true, phase: (2.0, 3.0) };
+    let edited = Fill::Pattern { name: "Blue".into(), scale: 2.0, id, angle: 0.0, link: false, phase: (0.0, 0.0) };
+    assert_vscg_fill_is_not_doubled(d, fill, edited);
 }
 
 /// #6180: Appearance fill and stroke alphas survive PSD save/load, and a redraw
