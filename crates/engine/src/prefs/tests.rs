@@ -1063,7 +1063,7 @@ fn the_history_budget_is_the_stored_memory_usage_on_native() {
     let mut s = Session::new();
     s.load_prefs_json(r#"{"performance": {"memoryUsageMb": 8192}}"#).unwrap();
     assert_eq!(s.prefs().performance.memory_usage_mb, 8192);
-    assert_eq!(s.prefs().performance.history_budget_for(None), 8192 << 20);
+    assert_eq!(s.prefs().performance.history_budget_for(None), usize::try_from(8192u64 << 20).unwrap_or(usize::MAX));
 }
 
 /// The web build honours Memory Usage up to its cap: below and at it as stored, above it the cap.
