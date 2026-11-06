@@ -631,6 +631,7 @@ fn type_command_target(app: &PhotocraftApp) -> Option<Value> {
 fn invoke_view_command(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Value) -> Option<Result<Value, String>> {
     match id {
         "view.zoomIn" | "view.zoomOut" | "view.fitOnScreen" | "view.actualPixels" => Some(app.run(id, params.clone())),
+        "view.rulers" | "view.show.grid" | "view.show.guides" | "view.show.safeAreas" | "view.show.responsiveWarnings" | "view.snap" | "view.lockGuides" => {
             let extras = &mut app.ui.extras;
             let slot = match id {
                 "view.rulers" => &mut extras.rulers,
@@ -650,6 +651,10 @@ fn invoke_view_command(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p
                 crate::prefs_ui::remember_rulers(app, enabled);
             }
             Some(Ok(json!(enabled)))
+        }
+        "view.editSelectedGuides" => Some(crate::new_guide_ui::open_edit(app).map(|_| Value::Null)),
+        "view.clearSelectedGuides" => {
+            Some(crate::guide_select::delete_selected(app).and_then(|done| if done { Ok(Value::Null) } else { Err("No guide is selected".to_string()) }))
         }
         "edit.freeTransform"
         | "edit.transform.scale"
@@ -697,7 +702,6 @@ fn invoke_view_command(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p
         _ => None,
     }
 }
-
 fn invoke_window_command(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str) -> Option<Result<Value, String>> {
     match id {
         "window.newWindowForDocument" => Some((|| {
