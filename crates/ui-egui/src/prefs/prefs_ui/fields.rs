@@ -522,6 +522,15 @@ fn field_rows(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>, ke
                     if ui.small_button(tl!("Add disk")).clicked() {
                         items.push(json!({"enabled": true, "path": ""}));
                     }
+                    let scratch = photocraft_raster::spill::stats();
+                    if scratch.free_space_unmeasured {
+                        let dir = scratch.dir.as_deref().map(|p| p.display().to_string()).unwrap_or_else(|| tl!("Unknown").into());
+                        let warning = crate::i18n::fmt(
+                            tl!("The current scratch directory ({path}) doesn't report its free space, so PhotoCraft can't stop before it fills up, and large files get no extra room from it without a Scratch Size Limit. This warning applies to the current configuration; changes above take effect on Apply or OK. Set a limit or use a local disk."),
+                            &[("path", &dir)],
+                        );
+                        ui.add(egui::Label::new(RichText::new(warning).color(t.warning)).wrap());
+                    }
                 });
                 obj.insert(k, Value::Array(items));
             }
