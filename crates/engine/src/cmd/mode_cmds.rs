@@ -497,11 +497,19 @@ fn custom_pattern_map(s: &Session, cmd: &str, p: &Value) -> Result<(Vec<f32>, us
     let pat = crate::pattern_cmds::resolve_param(s, cmd, p)?;
     // A pattern keeps its own colours: its lightness is what it paints in a Grayscale document,
     // over white where it is transparent.
-    let px = photocraft_compose::pattern::pattern_rgba(&pat, ColorMode::Grayscale);
-    if px.is_empty() {
+    if !pat.is_paintable() {
         return Err(bad(cmd, format!("the pattern \"{}\" is empty or too large", pat.display_name())));
     }
-    let lightness: Vec<f32> = px.iter().map(|q| photocraft_color::convert::rgb_to_gray([q[0], q[1], q[2]]) * q[3] + (1.0 - q[3])).collect();
+    let count = usize::try_from(pat.pixel_count()).map_err(|_| bad(cmd, "the pattern is too large"))?;
+    let mut lightness = Vec::new();
+    lightness.try_reserve_exact(count).map_err(|_| bad(cmd, "not enough memory for the pattern's lightness map"))?;
+    let mut band = Vec::new();
+    for top in (0..pat.height).step_by(photocraft_doc::pattern::BAND_ROWS as usize) {
+        photocraft_compose::pattern::pattern_rgba_rows(&pat, ColorMode::Grayscale, top, top + photocraft_doc::pattern::BAND_ROWS, &mut band)
+            .ok_or_else(|| bad(cmd, "not enough memory for the pattern's pixel rows"))?;
+        lightness.extend(band.iter().map(|q| photocraft_color::convert::rgb_to_gray([q[0], q[1], q[2]]) * q[3] + (1.0 - q[3])));
+    }
+    // Rank the complete pattern once: band-local ranks would change its thresholds.
     Ok((quantize::custom_pattern_thresholds(&lightness), pat.width as usize, pat.height as usize))
 }
 
