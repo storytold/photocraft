@@ -454,3 +454,34 @@ fn a_press_on_a_neighbouring_shape_or_past_the_band_stays_the_tools() {
         near(bounds(&app, b), [420.0, 318.0, 723.0, 451.0]);
     }
 }
+
+/// #11473 review: the pick under the side band skips a shape's outline test where the point is
+/// out of reach of it, and still finds every shape it found before: an outline within the pick
+/// tolerance just past the shape's box, and a fill's pixels past the path (an outside stroke).
+#[test]
+fn the_pick_still_finds_shapes_just_past_their_path_bounds() {
+    use crate::vector_ui::pick_shape_at;
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 1000, "height": 700, "background": "white"})).unwrap();
+    // A stroke-only ellipse 200,200–400,300: picked by its outline alone.
+    app.run("shape.create", json!({"kind": "ellipse", "rect": [200, 200, 200, 100], "fill": null, "stroke": {"width": 2}})).unwrap();
+    let e = app.session.active().unwrap().active_layer.unwrap();
+    // A filled rectangle 500,400–600,500 with a 20 px stroke outside its path.
+    app.run("shape.create", json!({"kind": "rect", "rect": [500, 400, 100, 100], "fill": "#20a040", "stroke": {"width": 20, "align": "outside"}})).unwrap();
+    let r = app.session.active().unwrap().active_layer.unwrap();
+    let doc = &app.session.active().unwrap().doc;
+    let pick = |p: [f64; 2], tol: f64| pick_shape_at(doc, p, tol);
+    // Within the tolerance of the ellipse's extreme anchors, outside its box.
+    assert_eq!(pick([405.5, 250.0], 6.0), Some(e));
+    assert_eq!(pick([300.0, 194.5], 6.0), Some(e));
+    assert_eq!(pick([406.5, 250.0], 6.0), None);
+    assert_eq!(pick([300.0, 193.5], 6.0), None);
+    // Within it of a curve, off the anchors: the ellipse's outline at 45°.
+    let (cx, cy) = (300.0 + 100.0 * std::f64::consts::FRAC_1_SQRT_2, 250.0 + 50.0 * std::f64::consts::FRAC_1_SQRT_2);
+    assert_eq!(pick([cx + 4.0, cy], 6.0), Some(e));
+    // The stroke's pixels up to 20 px past the rectangle's path, far past the tolerance.
+    assert_eq!(pick([612.0, 450.0], 1.0), Some(r));
+    assert_eq!(pick([550.0, 381.5], 1.0), Some(r));
+    assert_eq!(pick([625.0, 450.0], 1.0), None);
+    assert_eq!(pick([550.0, 378.5], 1.0), None);
+}
