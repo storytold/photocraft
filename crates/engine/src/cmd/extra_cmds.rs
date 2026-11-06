@@ -423,7 +423,6 @@ pub(crate) fn visible_bounds(s: &photocraft_raster::Surface, canvas: Rect) -> Re
         return s.content_bounds();
     }
     let (n, bpp, side) = (fmt.channels(), fmt.bytes_per_pixel(), photocraft_geom::TILE_SIZE);
-    let tiles: Vec<_> = s.tiles().filter(|(c, _)| !canvas.contains_rect(&c.rect())).collect();
     let tile_bounds = |o: Rect, bytes: &[u8]| {
         let mut out = Rect::EMPTY;
         for (ly, row) in bytes.chunks_exact(bpp * side as usize).enumerate() {
@@ -440,7 +439,32 @@ pub(crate) fn visible_bounds(s: &photocraft_raster::Surface, canvas: Rect) -> Re
         }
         out
     };
-    tiles.par_iter().map(|(c, t)| tile_bounds(c.rect(), &t.bytes())).reduce(|| Rect::EMPTY, |a, b| a.union(&b))
+    let mut rings = tile_rings(s.tiles().filter(|(c, _)| !canvas.contains_rect(&c.rect())).collect());
+    rings.reverse();
+    let mut out = Rect::EMPTY;
+    while let Some(ring) = rings.pop() {
+        out = ring.par_iter().map(|(c, t)| tile_bounds(c.rect(), &t.bytes())).reduce(|| out, |a, b| a.union(&b));
+        // A tile inside the bounds found so far cannot extend them: a fully visible layer scans
+        // only its outer ring, as `Surface::content_bounds` does.
+        for later in &mut rings {
+            later.retain(|(c, _)| !out.contains_rect(&c.rect()));
+        }
+    }
+    out
+}
+
+/// `tiles` grouped into rings by their distance from the edge of the tile grid, outermost first.
+fn tile_rings<T>(tiles: Vec<(&photocraft_geom::TileCoord, T)>) -> Vec<Vec<(&photocraft_geom::TileCoord, T)>> {
+    let (mut gx0, mut gy0, mut gx1, mut gy1) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
+    for (c, _) in &tiles {
+        (gx0, gy0, gx1, gy1) = (gx0.min(c.tx), gy0.min(c.ty), gx1.max(c.tx), gy1.max(c.ty));
+    }
+    let depth = |c: &photocraft_geom::TileCoord| (c.tx - gx0).min(gx1 - c.tx).min(c.ty - gy0).min(gy1 - c.ty);
+    let mut rings: std::collections::BTreeMap<i32, Vec<_>> = std::collections::BTreeMap::new();
+    for tile in tiles {
+        rings.entry(depth(tile.0)).or_default().push(tile);
+    }
+    rings.into_values().collect()
 }
 
 // ---------- layers ----------
