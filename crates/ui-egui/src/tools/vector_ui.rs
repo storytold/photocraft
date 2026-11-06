@@ -30,7 +30,7 @@ pub(crate) use curvature::curvature_anchor_at;
 pub use curvature::{curvature_down, curvature_move, curvature_toggle, curvature_up};
 #[cfg(test)]
 use options::{corner_radii_patch, solid_paint};
-pub(crate) use options::{enabled_stroke_width, paint_gesture};
+pub(crate) use options::{draws_path, enabled_stroke_width, paint_gesture};
 pub use options::{options_bar, shape_properties};
 pub use overlay::draw_overlay;
 pub(crate) use overlay::selected_saved_path_index;
@@ -41,7 +41,9 @@ pub(crate) use overlay::{curve_points, path_lines, selected_saved_path, shows_an
 pub(crate) use overlay::{draw_anchor, draw_handle, draw_outline};
 #[cfg(test)]
 use path_ops::target_path;
-pub use path_ops::{active_path_name, path_selection_finish, path_to_selection, pick_shape_at, selected_document_path, takes_path_mask, with_active_path};
+pub use path_ops::{
+    active_path_name, make_shape, path_selection_finish, path_to_selection, pick_shape_at, selected_document_path, takes_path_mask, with_active_path,
+};
 pub(crate) use path_ops::{
     active_shape_path, active_type_path, delete_key_deletes_work_path, deselect_loaded_path, free_transform_path, targeted_vector_mask, work_path_shown,
 };

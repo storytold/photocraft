@@ -126,8 +126,12 @@ pub enum IoError {
     #[error("PSD: {0}")]
     Psd(#[from] PsdError),
     /// The conservative PSD pixel-storage and workspace estimate exceeded its allowance.
-    #[error("PSD import needs an estimated {required} bytes of pixel memory; limit is {limit} bytes")]
-    PsdImportBudget { required: u64, limit: u64 },
+    ///
+    /// `free_memory` is the free memory measured when it set the limit (see
+    /// [`memory::MemoryBudget::measured_free`]); `None` when a caller or attempt allowance, the
+    /// platform cap or an unknown capacity set it.
+    #[error("PSD import needs an estimated {required} bytes of pixel memory; limit is {limit} bytes{advice}", advice = crate::memory::low_memory_advice(.free_memory))]
+    PsdImportBudget { required: u64, limit: u64, free_memory: Option<u64> },
     /// PSD pixel-storage estimate exceeds the automatic soft limit, but is within the hard limit.
     /// Explicit approval is required to proceed.
     #[error(
@@ -1446,7 +1450,7 @@ mod tests {
             for (opts, what) in cases {
                 super::psd_gate::set_active_attempt_budget(ample);
                 match super::import_with_options_and_interrupt("nested.psd", &bytes, &opts, &ctl) {
-                    Err(super::IoError::PsdImportBudget { required: r, limit }) => {
+                    Err(super::IoError::PsdImportBudget { required: r, limit, .. }) => {
                         assert_eq!((r, limit), (required, required - 1), "{what} must refuse with its exact fields")
                     }
                     other => panic!("expected {what} to refuse, got {:?}", other.map(|_| ())),
