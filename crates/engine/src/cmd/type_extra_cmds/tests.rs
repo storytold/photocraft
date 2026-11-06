@@ -661,7 +661,7 @@ fn an_edited_type_path_keeps_the_knot_cap() {
     let id = text_layer(&mut s, "Hi");
     let knots: Vec<(f64, f64)> = (0..=MAX_TYPE_PATH_KNOTS).map(|i| (i as f64 * 0.001, 50.0)).collect();
     let mut t = text(&s, id).clone();
-    t.shape = TextShape::Path { path: Subpath::polyline(&knots[..2]), start: 0.0, flip: false };
+    t.shape = TextShape::Path { path: Subpath::polyline(&knots[..2]), start: 0.0, end: None, flip: false };
     assert!(set_type_path(&mut t, &Path::new(vec![Subpath::polyline(&knots[..MAX_TYPE_PATH_KNOTS])])).is_ok());
     assert!(set_type_path(&mut t, &Path::new(vec![Subpath::polyline(&knots)])).is_err());
 }
@@ -838,4 +838,55 @@ fn a_document_without_type_never_waits_for_the_text_engine() {
     let mut s = session(8);
     text_layer(&mut s, "type");
     assert!(has_type_layers(&s.active().unwrap().doc));
+}
+
+#[test]
+fn path_placement_updates_and_rejects_invalid_inputs() {
+    let mut empty = Session::new();
+    assert!(empty.execute("type.setPathPlacement", json!({})).is_err());
+    let mut s = session(8);
+    let id = text_layer(&mut s, "Path");
+    assert!(s.execute("type.setPathPlacement", json!({"start": 1})).is_err());
+    s.edit("path", |doc, _| {
+        doc.work_path = Some(Path::new(vec![Subpath::polyline(&[(10.0, 60.0), (200.0, 60.0)])]));
+        Ok(())
+    })
+    .unwrap();
+    s.execute("type.attachToPath", json!({"start": 4})).unwrap();
+    let original = text(&s, id).shape.clone();
+    let path = crate::type_extra_cmds::type_path(text(&s, id)).unwrap();
+    s.edit("remove work path", |doc, _| {
+        doc.work_path = None;
+        Ok(())
+    })
+    .unwrap();
+    s.execute("type.setPathPlacement", json!({"layer": id.0, "start": 20, "flip": true})).unwrap();
+    assert!(matches!(text(&s, id).shape, TextShape::Path { start: 20.0, flip: true, .. }));
+    assert_eq!(crate::type_extra_cmds::type_path(text(&s, id)).unwrap(), path);
+    assert!(s.undo());
+    assert_eq!(text(&s, id).shape, original);
+    assert!(s.redo());
+    s.execute("type.setPathPlacement", json!({"start": 30})).unwrap();
+    assert!(matches!(text(&s, id).shape, TextShape::Path { start: 30.0, flip: true, .. }));
+    s.execute("type.setPathPlacement", json!({"flip": false})).unwrap();
+    assert!(matches!(text(&s, id).shape, TextShape::Path { start: 30.0, flip: false, .. }));
+    for p in [json!({"start": "bad"}), json!({"start": 1e100}), json!({"flip": 1}), json!({"layer": "bad"})] {
+        assert!(s.execute("type.setPathPlacement", p).is_err());
+    }
+    s.execute("type.setPathPlacement", json!({"end": 50})).unwrap();
+    s.execute("type.setPathPlacement", json!({"flip": true})).unwrap();
+    assert!(matches!(text(&s, id).shape, TextShape::Path { start: 30.0, end: Some(50.0), .. }));
+    let before = text(&s, id).shape.clone();
+    for params in [json!({"end": 29}), json!({"start": 51}), json!({"end": 1e100}), json!({"end": "bad"})] {
+        assert!(s.execute("type.setPathPlacement", params).is_err());
+        assert_eq!(text(&s, id).shape, before);
+    }
+    let path = crate::type_extra_cmds::type_path(text(&s, id)).unwrap();
+    let mut layer = text(&s, id).clone();
+    set_type_path(&mut layer, &path).unwrap();
+    assert!(matches!(layer.shape, TextShape::Path { end: Some(50.0), .. }));
+    s.execute("type.setPathPlacement", json!({"end": null})).unwrap();
+    assert!(matches!(text(&s, id).shape, TextShape::Path { end: None, .. }));
+    s.execute("layer.setProps", json!({"layer": id.0, "locked": true})).unwrap();
+    assert!(s.execute("type.setPathPlacement", json!({"layer": id.0, "flip": true})).is_err());
 }

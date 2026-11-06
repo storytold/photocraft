@@ -81,8 +81,8 @@ impl Warp {
 
     /// The deformation of type on a path (`None` for any other shape, or a path without length).
     pub fn on_path(shape: &TextShape) -> Option<Warp> {
-        let TextShape::Path { path, start, flip } = shape else { return None };
-        PathFrame::new(path, *start, *flip).map(|f| Warp(Kind::Path(f)))
+        let TextShape::Path { path, start, end, flip, .. } = shape else { return None };
+        PathFrame::new(path, *start, *end, *flip).map(|f| Warp(Kind::Path(f)))
     }
 
     /// Path text with its logical left edge after paragraph alignment. A closed path has
@@ -107,7 +107,12 @@ impl Warp {
             return None;
         }
         let offset = frame.project(x, y) - frame.start;
-        Some(if frame.closed { (offset - frame.text_start).rem_euclid(frame.length()) + frame.text_start } else { offset })
+        Some(if frame.closed {
+            let origin = if frame.range_length.is_some() { 0.0 } else { frame.text_start };
+            (offset - origin).rem_euclid(frame.length()) + origin
+        } else {
+            offset
+        })
     }
 
     /// Caret hit testing in the occupied text interval. In a closed path's unused gap,
@@ -115,6 +120,17 @@ impl Warp {
     pub fn path_text_x_near_text(&self, x: f64, y: f64, text_end: f64) -> Option<f64> {
         let offset = self.path_text_x(x, y)?;
         let Kind::Path(frame) = &self.0 else { return None };
+        if let Some(span) = frame.range_length {
+            let lower = if frame.closed { 0.0 } else { (-frame.start).max(0.0) };
+            let upper = if frame.closed { span.min(frame.length()) } else { span.min(frame.length() - frame.start) };
+            let lower = lower.max(frame.text_start);
+            let upper = upper.min(text_end).max(lower);
+            let mut nearest = offset;
+            if frame.closed && offset > upper && lower + frame.length() - offset < offset - upper {
+                nearest -= frame.length();
+            }
+            return Some(nearest.clamp(lower, upper));
+        }
         if frame.closed && text_end.is_finite() && offset > text_end {
             let previous = offset - frame.length();
             if frame.text_start - previous < offset - text_end {
@@ -153,11 +169,57 @@ impl Warp {
 /// with `flip`), of the point on the path nearest (`x`, `y`): the `start` that puts the type's
 /// origin where the Type tool clicked on the path. `None` for a path without length.
 pub fn arc_length_at(path: &Subpath, flip: bool, x: f64, y: f64) -> Option<f64> {
-    PathFrame::new(path, 0.0, flip).map(|f| f.project(x, y))
+    PathFrame::new(path, 0.0, None, flip).map(|f| f.project(x, y))
+}
+
+/// Effective explicit range in text-space units, limited by the path capacity.
+pub fn path_range_length(shape: &TextShape) -> Option<f64> {
+    let TextShape::Path { path, start, end: Some(end), flip } = shape else { return None };
+    let frame = PathFrame::new(path, *start, Some(*end), *flip)?;
+    let capacity = if frame.closed { frame.length() } else { (frame.length() - frame.start).max(0.0) };
+    Some(frame.range_length?.min(capacity))
 }
 
 /// Most cubic segments of a type path that are followed (a hostile file cannot make this large).
 const MAX_PATH_SEGMENTS: usize = 4096;
+
+/// Geometry for sampling and projecting points onto a text path.
+#[derive(Clone, Debug)]
+pub struct PathGeometry {
+    frame: PathFrame,
+}
+
+impl PathGeometry {
+    /// Flatten a non-degenerate path, optionally reversing its direction.
+    pub fn new(path: &Subpath, flip: bool) -> Option<Self> {
+        Some(Self { frame: PathFrame::new(path, 0.0, None, flip)? })
+    }
+
+    /// Total path length.
+    pub fn length(&self) -> f64 {
+        self.frame.length()
+    }
+
+    /// Sample a point and unit tangent at an arc length.
+    pub fn sample(&self, arc: f64) -> Option<((f64, f64), (f64, f64))> {
+        if !arc.is_finite() {
+            return None;
+        }
+        let (p, t) = self.frame.at(arc);
+        (p.0.is_finite() && p.1.is_finite() && t.0.is_finite() && t.1.is_finite()).then_some((p, t))
+    }
+
+    /// Project a point to arc length and signed distance on the left normal.
+    pub fn project(&self, x: f64, y: f64) -> Option<(f64, f64)> {
+        if !x.is_finite() || !y.is_finite() {
+            return None;
+        }
+        let arc = self.frame.project(x, y);
+        let (p, t) = self.sample(arc)?;
+        let distance = (x - p.0) * -t.1 + (y - p.1) * t.0;
+        distance.is_finite().then_some((arc, distance))
+    }
+}
 
 /// A flattened path with arc lengths: text-space `x` is arc length from `start`, `y` the
 /// distance to the left of the direction of travel (the side the glyph tops point to).
@@ -169,10 +231,11 @@ struct PathFrame {
     start: f64,
     closed: bool,
     text_start: f64,
+    range_length: Option<f64>,
 }
 
 impl PathFrame {
-    fn new(path: &Subpath, start: f32, flip: bool) -> Option<PathFrame> {
+    fn new(path: &Subpath, start: f32, end: Option<f32>, flip: bool) -> Option<PathFrame> {
         let mut pts: Vec<(f64, f64)> = Vec::new();
         for seg in path.segments().iter().take(MAX_PATH_SEGMENTS) {
             let p = seg.map(|q| (q.x, q.y));
@@ -211,6 +274,7 @@ impl PathFrame {
             start: if path.closed { f64::from(start).rem_euclid(acc) } else { f64::from(start) },
             closed: path.closed,
             text_start: 0.0,
+            range_length: end.map(|end| if end.is_finite() && end >= start { f64::from(end) - f64::from(start) } else { 0.0 }),
         })
     }
 
@@ -254,15 +318,18 @@ impl PathFrame {
     /// The rigid map for a glyph centred at text-space `cx`; `None` outside the path.
     fn frame(&self, cx: f64) -> Option<[f64; 6]> {
         let s = self.start + cx;
-        if !cx.is_finite()
-            || if self.closed {
-                // Stop after one lap of text, not at the arbitrary first knot. A half-open
-                // interval excludes the first duplicate location at the next revolution.
-                !(self.text_start..self.text_start + self.length()).contains(&cx)
-            } else {
-                !(0.0..=self.length()).contains(&s)
+        if !cx.is_finite() {
+            return None;
+        }
+        if let Some(span) = self.range_length {
+            if span <= 0.0 || cx < 0.0 || cx > span || (self.closed && cx >= self.length()) || (!self.closed && !(0.0..=self.length()).contains(&s)) {
+                return None;
             }
-        {
+        } else if self.closed {
+            if !(self.text_start..self.text_start + self.length()).contains(&cx) {
+                return None;
+            }
+        } else if !(0.0..=self.length()).contains(&s) {
             return None;
         }
         let (p, t) = self.at(s);
@@ -274,9 +341,61 @@ impl PathFrame {
 mod tests {
     use super::*;
 
+    #[test]
+    fn path_geometry_samples_and_projects() {
+        let line = Subpath::polyline(&[(0.0, 0.0), (100.0, 0.0)]);
+        let geometry = PathGeometry::new(&line, false).unwrap();
+        assert!((geometry.length() - 100.0).abs() < 1e-9);
+        assert_eq!(geometry.sample(25.0), Some(((25.0, 0.0), (1.0, 0.0))));
+        assert_eq!(geometry.project(25.0, 3.0), Some((25.0, 3.0)));
+        assert_eq!(geometry.project(25.0, -3.0), Some((25.0, -3.0)));
+        let flipped = PathGeometry::new(&line, true).unwrap();
+        assert_eq!(flipped.sample(25.0), Some(((75.0, 0.0), (-1.0, 0.0))));
+        assert_eq!(flipped.project(25.0, 3.0), Some((75.0, -3.0)));
+        for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(geometry.sample(value).is_none());
+            assert!(geometry.project(value, 0.0).is_none());
+            assert!(geometry.project(0.0, value).is_none());
+        }
+        assert!(PathGeometry::new(&Subpath::polyline(&[(1.0, 1.0), (1.0, 1.0)]), false).is_none());
+    }
+
+    #[test]
+    fn path_geometry_closed_wraps() {
+        let path = Subpath::polygon(&[(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]);
+        let geometry = PathGeometry::new(&path, false).unwrap();
+        assert_eq!(geometry.sample(2.0), geometry.sample(geometry.length() + 2.0));
+        assert_eq!(geometry.sample(-2.0), geometry.sample(geometry.length() - 2.0));
+    }
+
     fn warp(style: &str, value: f32) -> Warp {
         let w = TextWarp { style: psd_style(style).unwrap().into(), value, horizontal_distortion: 0.0, vertical_distortion: 0.0, horizontal: true };
         Warp::new(&w, [0.0, -40.0, 200.0, 10.0]).unwrap()
+    }
+
+    #[test]
+    fn explicit_path_ranges_clip_glyphs() {
+        let line = Subpath::polyline(&[(0.0, 0.0), (100.0, 0.0)]);
+        for flip in [false, true] {
+            let frame = PathFrame::new(&line, 20.0, Some(40.0), flip).unwrap();
+            assert!(frame.frame(20.0).is_some());
+            assert!(frame.frame(21.0).is_none());
+            assert!(frame.frame(-1.0).is_none());
+            assert!(PathFrame::new(&line, 20.0, Some(20.0), flip).unwrap().frame(0.0).is_none());
+            assert!(PathFrame::new(&line, 20.0, Some(f32::NAN), flip).unwrap().frame(0.0).is_none());
+            assert!(PathFrame::new(&line, 90.0, Some(120.0), flip).unwrap().frame(11.0).is_none());
+            assert!(PathFrame::new(&line, 20.0, None, flip).unwrap().frame(30.0).is_some());
+        }
+        let mut square = Subpath::polyline(&[(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]);
+        square.closed = true;
+        let frame = PathFrame::new(&square, 45.0, Some(50.0), false).unwrap();
+        assert!(frame.frame(5.0).is_some());
+        assert!(frame.frame(6.0).is_none());
+        let frame = PathFrame::new(&square, 0.0, Some(100.0), false).unwrap();
+        assert!(frame.frame(frame.length()).is_none());
+        let legacy = PathFrame::new(&square, 0.0, None, false).unwrap();
+        assert!(legacy.frame(-1.0).is_none());
+        assert!(legacy.frame(legacy.length()).is_none());
     }
 
     /// #218: the Warp Text dialog shows a layer's PSD style by its short id.

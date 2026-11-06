@@ -413,7 +413,7 @@ fn attach_to_path(s: &mut Session, p: &Value) -> Result<Value> {
                 photocraft_text::warp::arc_length_at(&path, flip, q.x, q.y).ok_or_else(|| bad("the path has no length"))? as f32
             }
         };
-        t.shape = TextShape::Path { path, start, flip };
+        t.shape = TextShape::Path { path, start, end: None, flip };
         Ok(start)
     })?;
     Ok(json!({"layer": id.0, "start": start, "flip": flip}))
@@ -431,8 +431,8 @@ pub fn type_path(t: &TextLayer) -> Option<Path> {
 /// Puts an edited [`type_path`] back into `t` (its text space), keeping where the type starts and
 /// which side it runs on. It must still be one subpath with two or more points.
 pub(crate) fn set_type_path(t: &mut TextLayer, edited: &Path) -> Result<()> {
-    let TextShape::Path { start, flip, .. } = &t.shape else { return Err(EngineError::Other("the type layer is not on a path".into())) };
-    let (start, flip) = (*start, *flip);
+    let TextShape::Path { start, end, flip, .. } = &t.shape else { return Err(EngineError::Other("the type layer is not on a path".into())) };
+    let (start, end, flip) = (*start, *end, *flip);
     let [sub] = edited.subpaths.as_slice() else { return Err(EngineError::Other("type on a path follows one path".into())) };
     if sub.knots.len() < 2 {
         return Err(EngineError::Other("type on a path needs a path of two or more points".into()));
@@ -447,7 +447,7 @@ pub(crate) fn set_type_path(t: &mut TextLayer, edited: &Path) -> Result<()> {
     if !knots.iter().all(|k| [k.anchor, k.in_ctrl, k.out_ctrl].iter().all(|q| q.x.is_finite() && q.y.is_finite())) {
         return Err(EngineError::Other("the path cannot be mapped into the type layer".into()));
     }
-    t.shape = TextShape::Path { path: Subpath { closed: sub.closed, knots, op: sub.op }, start, flip };
+    t.shape = TextShape::Path { path: Subpath { closed: sub.closed, knots, op: sub.op }, start, end, flip };
     Ok(())
 }
 
@@ -456,6 +456,49 @@ fn is_path_text(s: &Session) -> std::result::Result<(), String> {
         TextShape::Path { .. } | TextShape::Area { .. } => Ok(()),
         _ => Err("the type layer is not on a path".into()),
     }
+}
+
+fn set_path_placement(s: &mut Session, p: &Value) -> Result<Value> {
+    let bad = |msg: &str| EngineError::BadParams { cmd: "type.setPathPlacement".into(), msg: msg.into() };
+    if !p.is_object() {
+        return Err(bad("params must be an object"));
+    }
+    let start = p
+        .get("start")
+        .map(|v| {
+            let n = v.as_f64().ok_or_else(|| bad("start must be a finite number representable as f32"))?;
+            let n = n as f32;
+            if n.is_finite() { Ok(n) } else { Err(bad("start must be a finite number representable as f32")) }
+        })
+        .transpose()?;
+    let end = p
+        .get("end")
+        .map(|v| {
+            if v.is_null() {
+                return Ok(None);
+            }
+            let n = v.as_f64().ok_or_else(|| bad("end must be null or a finite number representable as f32"))? as f32;
+            if n.is_finite() { Ok(Some(n)) } else { Err(bad("end must be null or a finite number representable as f32")) }
+        })
+        .transpose()?;
+    let flip = p.get("flip").map(|v| v.as_bool().ok_or_else(|| bad("flip must be a boolean"))).transpose()?;
+    with_text(s, p, "Set Path Placement", |t, _| {
+        let TextShape::Path { start: current_start, end: current_end, flip: current_flip, .. } = &mut t.shape else {
+            return Err(EngineError::Other("the type layer is not path text".into()));
+        };
+        let new_end = end.unwrap_or(*current_end);
+        if new_end.is_some_and(|end| end < start.unwrap_or(*current_start)) {
+            return Err(bad("end must not be before start"));
+        }
+        *current_end = new_end;
+        if let Some(start) = start {
+            *current_start = start;
+        }
+        if let Some(flip) = flip {
+            *current_flip = flip;
+        }
+        Ok(json!({"start": *current_start, "end": *current_end, "flip": *current_flip}))
+    })
 }
 
 fn detach_from_path(s: &mut Session, p: &Value) -> Result<Value> {
@@ -978,6 +1021,14 @@ pub fn specs() -> Vec<CommandSpec> {
             r##"{"layer":id? (default active Type layer),"shape":layerId? (a shape layer; default the work path),"subpath":index=0,"start":px=0 (offset along the path),"at":[x,y]? (instead of "start": begin where the path passes nearest this document point, as a Type tool click does),"flip":bool=false (run along the path the other way, on its other side)}"##,
             has_text,
             attach_to_path
+        ),
+        spec!(
+            "type.setPathPlacement",
+            "Set Path Placement",
+            &[],
+            r##"{"layer":id?,"start":finite f32 pixels?,"end":finite f32 pixels|null?,"flip":bool?}"##,
+            is_path_text,
+            set_path_placement
         ),
         spec!("type.detachFromPath", "Release Type from Path", &[], LP, is_path_text, detach_from_path),
         spec!("type.updateAllTextLayers", "Update All Text Layers", &["Type"], "{}", any_text, |s, _| update_all(s)),

@@ -320,6 +320,7 @@ pub use tools::transform_fx;
 pub use tools::transform_tex;
 pub use tools::transform_tool;
 use tools::type_font_preview;
+use tools::type_path_placement;
 pub use tools::type_tool;
 use tools::type_transform;
 pub use tools::vector_ui;

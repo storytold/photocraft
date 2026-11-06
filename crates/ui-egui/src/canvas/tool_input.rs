@@ -167,6 +167,9 @@ fn filter_event_before_tool(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::
         return None;
     }
     // Direct Selection, and the Pen's ⌘ (Direct Selection) and ⌥ (Convert Point) modes (#790).
+    if crate::type_path_placement::pointer(app, raw) {
+        return None;
+    }
     if crate::direct_select::pointer(app, ev, mods) {
         return None;
     }

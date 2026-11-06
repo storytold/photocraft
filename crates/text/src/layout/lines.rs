@@ -336,9 +336,10 @@ impl Para<'_> {
     /// point lines around the anchor.
     fn line_start(&self, f: &LineFrame, offset: f32, adv: f32, line_kern: f32) -> f32 {
         if !self.env.wraps {
+            let span = self.env.path_range.unwrap_or(0.0);
             let target = match self.ps.align {
-                TextAlign::Center | TextAlign::JustifyCenter => -(adv + line_kern) / 2.0,
-                TextAlign::Right | TextAlign::JustifyRight => -(adv + line_kern),
+                TextAlign::Center | TextAlign::JustifyCenter => (span - adv - line_kern) / 2.0,
+                TextAlign::Right | TextAlign::JustifyRight => span - adv - line_kern,
                 _ => self.indent_start,
             };
             return target - offset;

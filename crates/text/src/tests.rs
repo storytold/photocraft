@@ -2687,7 +2687,7 @@ fn type_on_a_path_follows_the_curve() {
     assert!(flat.width() > flat.height() * 3, "{flat:?}");
 
     let mut down = straight.clone();
-    down.shape = TextShape::Path { path: Subpath::polyline(&[(0.0, 0.0), (0.0, 400.0)]), start: 0.0, flip: false };
+    down.shape = TextShape::Path { path: Subpath::polyline(&[(0.0, 0.0), (0.0, 400.0)]), start: 0.0, end: None, flip: false };
     let r = ink(&mut eng, &down);
     assert!(r.height() > r.width() * 3, "vertical path gives tall ink: {r:?}");
     assert!(r.height() >= flat.width() - 8, "arc length is preserved: {r:?} vs {flat:?}");
@@ -2719,17 +2719,17 @@ fn type_on_a_path_follows_the_curve() {
         ..Default::default()
     };
     let mut curved = straight.clone();
-    curved.shape = TextShape::Path { path: arc.clone(), start: 0.0, flip: false };
+    curved.shape = TextShape::Path { path: arc.clone(), start: 0.0, end: None, flip: false };
     let c = ink(&mut eng, &curved);
     assert!(c.height() > flat.height() * 2, "curved ink is taller: {c:?} vs {flat:?}");
 
     // A path too short for the text hides the glyphs past its end.
     let mut short = straight.clone();
-    short.shape = TextShape::Path { path: Subpath::polyline(&[(0.0, 0.0), (30.0, 0.0)]), start: 0.0, flip: false };
+    short.shape = TextShape::Path { path: Subpath::polyline(&[(0.0, 0.0), (30.0, 0.0)]), start: 0.0, end: None, flip: false };
     assert!(ink(&mut eng, &short).width() < flat.width() / 2);
     // A degenerate path falls back to straight point text instead of failing.
     let mut dot = straight.clone();
-    dot.shape = TextShape::Path { path: Subpath::polyline(&[(5.0, 5.0), (5.0, 5.0)]), start: 0.0, flip: false };
+    dot.shape = TextShape::Path { path: Subpath::polyline(&[(5.0, 5.0), (5.0, 5.0)]), start: 0.0, end: None, flip: false };
     assert_eq!(ink(&mut eng, &dot), flat);
 }
 
@@ -3668,5 +3668,32 @@ fn colour_passes_hold_each_glyph_once() {
     assert_eq!(seen, (0..l.glyphs.len()).collect::<Vec<_>>());
     for (c, _, p) in &passes {
         assert!(p.glyphs.iter().all(|&i| l.styles[l.glyphs[i].style as usize].color == *c));
+    }
+}
+
+#[test]
+fn path_range_alignment_uses_measured_advance() {
+    use photocraft_doc::vector::Subpath;
+    let mut e = TextEngine::new();
+    for closed in [false, true] {
+        for flip in [false, true] {
+            for span in [0.0_f32, 10.0, 180.0] {
+                for (align, factor) in [(TextAlign::Left, 0.0), (TextAlign::Center, 0.5), (TextAlign::Right, 1.0)] {
+                    let path = if closed {
+                        Subpath::polygon(&[(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)])
+                    } else {
+                        Subpath::polyline(&[(0.0, 0.0), (500.0, 0.0)])
+                    };
+                    let start = if closed { 390.0 } else { 20.0 };
+                    let mut t = point("Alignment", 20.0);
+                    t.shape = TextShape::Path { path, start, end: Some(start + span), flip };
+                    let t = with_para(t, ParagraphStyle { align, ..Default::default() });
+                    let l = e.layout(&t, 72.0);
+                    let line = &l.lines[0];
+                    let advance = line.x1 - line.x0;
+                    assert!((line.x0 - (span - advance) * factor).abs() < 0.01, "{line:?}");
+                }
+            }
+        }
     }
 }

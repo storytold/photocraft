@@ -319,6 +319,7 @@ impl Layouter {
             // Box and area text wrap, align within their lines and hide what doesn't fit.
             wraps: is_box || area.is_some(),
             box_rect,
+            path_range: crate::warp::path_range_length(&t.shape).map(|n| n.min(f32::MAX as f64) as f32),
             area,
         };
         let mut flow = Flow::default();
@@ -377,6 +378,7 @@ struct Env<'a> {
     /// Box and area text wrap, align within their lines and hide what doesn't fit.
     wraps: bool,
     box_rect: (f32, f32, f32, f32),
+    path_range: Option<f32>,
     area: Option<crate::area::AreaShape>,
 }
 
