@@ -742,7 +742,8 @@ pub(crate) fn had_input(ctx: &egui::Context) -> bool {
 /// What the menus' rows depend on, cheaply: commands run, the documents (their names, in tab
 /// order, for the Window menu) and the active one's revision,
 /// selection, recent files, panels and view state, the language. `input` forces a change on
-/// frames with a click or key press, which covers state the hash doesn't list.
+/// frames with a click or key press, which covers state the hash doesn't list. Modal ownership
+/// also participates when the dialog changes without a pointer or keyboard event.
 pub(crate) fn state_hash(app: &PhotocraftApp, input: Option<u64>) -> u64 {
     let mut h = DefaultHasher::new();
     input.hash(&mut h);
@@ -760,7 +761,8 @@ pub(crate) fn state_hash(app: &PhotocraftApp, input: Option<u64>) -> u64 {
     }
     let ui = &app.ui;
     (&ui.recent_files, &ui.workspace, ui.palette_open, ui.transform.is_some(), ui.text_edit.is_some(), ui.dialogs.len()).hash(&mut h);
-    (app.discard.is_some(), app.camera_raw.is_some(), ui.info_panel_dialog.is_some(), crate::distort_ui::modal_workspace(app)).hash(&mut h);
+    ui.info_panel_dialog.is_some().hash(&mut h);
+    (app.discard.is_some(), app.camera_raw.is_some(), crate::distort_ui::modal_workspace(app)).hash(&mut h);
     serde_json::to_string(&(&ui.panels, &ui.extras, &ui.view, ui.theme, ui.tool)).unwrap_or_default().hash(&mut h);
     s.prefs().interface.language.hash(&mut h);
     h.finish()
