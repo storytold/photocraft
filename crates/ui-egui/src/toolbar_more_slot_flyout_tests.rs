@@ -105,3 +105,21 @@ fn a_left_click_still_opens_edit_toolbar_directly() {
     assert_eq!(app.ui.dialogs.len(), 1);
     assert!(!open(&ctx), "no flyout for a left click");
 }
+
+#[test]
+fn a_failed_edit_toolbar_from_the_flyout_reports_its_error_in_the_status_bar() {
+    let (mut app, ctx, at) = setup();
+    app.automation_input = true;
+    app.services.automation_command = Some(Box::new(|id, _| if id == "edit.toolbar" { Err("toolbar edits denied".into()) } else { Ok(()) }));
+    right_click(&mut app, &ctx, at, 1.0);
+    let row = flyout(&ctx).unwrap().center();
+    frame(&mut app, &ctx, 1.95, vec![Event::PointerMoved(row)]);
+    frame(&mut app, &ctx, 2.0, vec![button(row, egui::PointerButton::Primary, true)]);
+    frame(&mut app, &ctx, 2.05, vec![]);
+    frame(&mut app, &ctx, 2.1, vec![button(row, egui::PointerButton::Primary, false)]);
+    frame(&mut app, &ctx, 2.15, vec![]);
+    assert!(app.ui.dialogs.is_empty(), "the denied command opened nothing");
+    assert!(!open(&ctx));
+    assert_eq!(app.ui.status, "toolbar edits denied");
+    assert!(app.ui.status_error);
+}

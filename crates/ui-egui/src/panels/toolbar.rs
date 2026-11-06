@@ -128,7 +128,10 @@ fn more_slot_flyout(app: &mut PhotocraftApp, ui: &mut egui::Ui, button: &egui::R
     if area.inner.inner {
         ui.data_mut(|d| d.remove::<bool>(open_id));
         let ctx = ui.ctx().clone();
-        let _ = crate::menus::invoke(app, &ctx, "edit.toolbar", json!({}));
+        if let Err(e) = crate::menus::invoke(app, &ctx, "edit.toolbar", json!({})) {
+            app.ui.status = e;
+            app.ui.status_error = true;
+        }
         return;
     }
     let pressed_outside =
