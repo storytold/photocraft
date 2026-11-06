@@ -1129,7 +1129,6 @@ fn authorize_owned(app: &PhotocraftApp, id: &str, params: &Value, gate: Option<G
     Ok(())
 }
 
-
 /// A function-pointer dispatch gate cannot carry two different policies into nested jobs.
 /// Changed gates and distinct simultaneous Session/service gates both end this continuation;
 /// hosts that need both policies must supply one composed gate at both boundaries.
@@ -1522,9 +1521,8 @@ pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if ui.button(tl!("New Set…")).clicked() {
         act = Some("newSet");
     }
-    let can_duplicate_set = !recording && app.ui.actions.selected_set.as_ref().is_some_and(|set| {
-        photocraft_engine::actions_edit_cmds::set_names(&app.session).contains(set)
-    });
+    let can_duplicate_set =
+        !recording && app.ui.actions.selected_set.as_ref().is_some_and(|set| photocraft_engine::actions_edit_cmds::set_names(&app.session).contains(set));
     if ui.add_enabled(can_delete || can_duplicate_set, egui::Button::new(tl!("Duplicate"))).clicked() {
         act = Some("duplicate");
     }
@@ -1551,9 +1549,8 @@ pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if ui.add_enabled(selected, egui::Button::new(tl!("Insert Stop…"))).clicked() {
         act = Some("stop");
     }
-    let path_selected = app.ui.selected_path.as_deref().is_some_and(|name| {
-        photocraft_engine::actions_edit_cmds::selected_recording_path(&app.session, name).is_ok()
-    });
+    let path_selected =
+        app.ui.selected_path.as_deref().is_some_and(|name| photocraft_engine::actions_edit_cmds::selected_recording_path(&app.session, name).is_ok());
     if ui.add_enabled(selected && path_selected, egui::Button::new(tl!("Insert Path"))).clicked() {
         act = Some("insertPath");
     }

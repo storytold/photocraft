@@ -1,5 +1,8 @@
 //! One editor owns one original step; previews and confirmation retain its authority.
-use photocraft_engine::{actions_edit_cmds, doc::{DocId, LayerId}};
+use photocraft_engine::{
+    actions_edit_cmds,
+    doc::{DocId, LayerId},
+};
 use serde_json::{Map, Value, json};
 
 use crate::PhotocraftApp;

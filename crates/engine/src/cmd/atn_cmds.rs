@@ -61,6 +61,7 @@ mod tables;
 
 #[cfg(test)]
 use adjustments::{levels_from, selective_from};
+pub(crate) use convert::UniqueNames;
 pub use convert::{Imported, Skipped, Unsupported, export, function_key_name, import, import_with_encoding, parse_function_key};
 #[cfg(test)]
 use convert::{MAX_NAME_CHARS, export_item, normalise};
@@ -76,7 +77,6 @@ use events::{EVENTS, event_and_descriptor, event_for};
 use fields::Mapped;
 use files::{load, save};
 pub use menu_item::{MENU_ITEM, menu_item_command, menu_item_commands, menu_item_needs_settings};
-pub(crate) use convert::UniqueNames;
 #[cfg(test)]
 use steps_doc::crop_from;
 pub(crate) use steps_gallery::RECORDED_EVENT;

@@ -181,11 +181,18 @@ fn duplicate_set(s: &mut Session, source: &str) -> Result<Value> {
     let name = crate::atn_cmds::UniqueNames::new(sets).claim(&format!("{source} copy"));
     if let Some(first) = s.actions.list.iter().position(|action| action.set.as_deref() == Some(source)) {
         let mut names = crate::atn_cmds::UniqueNames::new(s.actions.list.iter().map(|action| action.name.clone()));
-        let copies: Vec<_> = s.actions.list.iter().filter(|action| action.set.as_deref() == Some(source)).cloned().map(|mut action| {
-            action.name = names.claim(&format!("{} copy", action.name));
-            action.set = Some(name.clone());
-            action
-        }).collect();
+        let copies: Vec<_> = s
+            .actions
+            .list
+            .iter()
+            .filter(|action| action.set.as_deref() == Some(source))
+            .cloned()
+            .map(|mut action| {
+                action.name = names.claim(&format!("{} copy", action.name));
+                action.set = Some(name.clone());
+                action
+            })
+            .collect();
         // Classic groups rows by name even when a set's actions are interleaved.
         let at = first + s.actions.list[first..].iter().take_while(|action| action.set.as_deref() == Some(source)).count();
         let count = copies.len();
