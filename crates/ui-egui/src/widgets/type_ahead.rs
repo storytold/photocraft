@@ -206,10 +206,11 @@ mod tests {
         use egui_kittest::{Harness, kittest::Queryable};
         let en = crate::i18n::Lang::EN;
         let de = crate::i18n::Lang::from_code("de").unwrap();
-        let mut h = Harness::builder().with_size(egui::vec2(300.0, 400.0)).build_ui_state(
+        // Short frames: the letters arrive well within the pause, so only the language change resets.
+        let mut h = Harness::builder().with_size(egui::vec2(300.0, 400.0)).with_step_dt(1.0 / 60.0).build_ui_state(
             |ui, (selected, lang): &mut (usize, crate::i18n::Lang)| {
                 crate::i18n::with_language(*lang, || {
-                    let options = [(0, "Normal"), (1, "Dissolve"), (2, "Darken")];
+                    let options = [(0, "Normal"), (1, "Dissolve"), (2, "Darken"), (3, "Add")];
                     crate::widgets::dropdown(ui, "lang-switch", "Mode", selected, &options, 120.0);
                 });
             },
@@ -224,9 +225,10 @@ mod tests {
         h.step();
         h.state_mut().1 = en;
         h.step();
+        assert!(super::list_open(&h.ctx), "the list stays open across the language change");
         type_key(&h, egui::Key::A, "a");
         h.run();
-        assert_eq!(h.state().0, 1, "a alone picks nothing; the d typed before the change is gone (da would be Darken)");
+        assert_eq!(h.state().0, 3, "a starts a new prefix (Add); the d typed before the change would make it da (Darken)");
     }
 
     #[test]

@@ -130,7 +130,7 @@ fn hebrew_and_urdu_mirror_the_shell_and_draw_their_letters() {
         assert!(dock_x(&h) < 600.0, "{code}: the dock moves to the left");
         for label in ["File", "Help", "Layers"] {
             let text = i18n::tr(lang, label);
-            assert!(text.chars().any(|c| !c.is_ascii()), "{code}: {label} is translated");
+            assert!(!text.is_ascii(), "{code}: {label} is translated");
             assert!(h.ctx.fonts_mut(|f| f.has_glyphs(&egui::FontId::proportional(12.0), text)), "{code}: {text} has glyphs");
         }
         h.state_mut().run("prefs.set", json!({"path": "interface.language", "value": "en"})).expect("back to English");
