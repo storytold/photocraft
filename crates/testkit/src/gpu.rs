@@ -63,11 +63,16 @@ mod tests {
     use super::*;
 
     /// Without the kept instance, creating and dropping instances on several threads segfaults in
-    /// libvulkan within a second, an abort no test can catch.
+    /// libvulkan within a second, an abort no test can catch. Skipped when `WGPU_BACKEND` leaves
+    /// Vulkan out: nothing is kept then, and that is how a broken driver is kept out of the tests.
     #[cfg(target_os = "linux")]
     #[test]
     fn instances_can_come_and_go_on_several_threads() {
         use wgpu::{Backends, Instance, InstanceDescriptor};
+        if kept_backends(Backends::from_env()).is_none() {
+            eprintln!("skipping: WGPU_BACKEND leaves Vulkan out");
+            return;
+        }
         drop(gpu_lock());
         let threads: Vec<_> = (0..8)
             .map(|_| {
