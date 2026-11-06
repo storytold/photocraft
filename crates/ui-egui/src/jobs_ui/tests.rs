@@ -550,6 +550,23 @@ fn an_unconfirmed_background_save_leaves_the_document_unsaved() {
     assert_eq!(st.path.as_deref(), Some("/tmp/photocraft-test/unconfirmed.psd"), "but it is the document's file now");
 }
 
+/// The same where the save runs inline because the session has no worker threads (cooperative
+/// jobs, as on the web).
+#[test]
+fn an_unconfirmed_inline_save_leaves_the_document_unsaved() {
+    let mut h = app_harness();
+    h.state_mut().session.set_cooperative_jobs(true);
+    let gates = Gates { encode: Arc::new(AtomicBool::new(true)), write: Arc::new(AtomicBool::new(true)), ..Gates::default() };
+    h.state_mut().services.save_file = Some(gates.save(None));
+    h.state_mut().services.write_unconfirmed = true;
+    let r = h.state_mut().save_as(Some("/tmp/photocraft-test/unconfirmed-inline.psd".into())).unwrap();
+    assert!(r.get("pending").is_none(), "ran inline: {r}");
+    assert_eq!(gates.written(), ["/tmp/photocraft-test/unconfirmed-inline.psd"]);
+    let st = h.state().session.active().unwrap();
+    assert!(st.is_dirty(), "not saved until the writer confirms");
+    assert_eq!(st.path.as_deref(), Some("/tmp/photocraft-test/unconfirmed-inline.psd"), "but it is the document's file now");
+}
+
 /// Save in Background off (#6207): the same worker writes the file, but the app waits for it
 /// like Photoshop's foreground save. The progress dialog shows at once, shortcuts don't reach the
 /// app, and a close asked for meanwhile happens only once the file is complete.

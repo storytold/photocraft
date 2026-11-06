@@ -426,6 +426,9 @@ fn start_save_of(
     match started.map_err(|e| e.to_string())? {
         Started::Done(v) => {
             let warnings = warnings_of(&v);
+            // Unconfirmed bytes leave the document unsaved, as when a background save ends.
+            let previous = app.session.documents().iter().find(|st| st.doc.id == doc).map_or(revision, |st| st.saved_revision);
+            let revision = crate::services::saved_revision_after_write(!app.services.write_unconfirmed, revision, previous);
             if automation {
                 app.saved_automation(doc, revision, &path, &warnings, copy);
             } else {
