@@ -148,7 +148,10 @@ fn source_wire_identity_is_retained_only_for_unchanged_geometry() {
 #[test]
 fn unknown_and_unrepresented_settings_are_not_silently_lost() {
     let base = fixture("Sbtr", false, false);
-    for d in [base.clone().with("extra", D::Boolean(true)), base.clone().with("T   ", D::List(Vec::new())), fixture("Intr", false, false)] {
+    let mut empty_components = base.clone();
+    let (_, components) = empty_components.items.iter_mut().find(|(key, _)| key.is("T   ")).unwrap();
+    *components = D::List(Vec::new());
+    for d in [base.clone().with("extra", D::Boolean(true)), empty_components, fixture("Intr", false, false)] {
         assert!(matches!(from(&d), Mapped::Unsupported { harmless: false }));
     }
     let p = params(&base);

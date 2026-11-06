@@ -67,6 +67,32 @@ fn background_stroke_ownership_does_not_suppress_ordinary_filter_jobs() {
     }
 }
 
+/// A Remove job started outside the current take neither blocks its toggle nor joins its steps.
+#[test]
+fn background_strokes_from_outside_the_current_take_do_not_block_the_toggle() {
+    for previous_take in [false, true] {
+        let mut s = session();
+        stroke(&mut s, "#bb3300");
+        if previous_take {
+            s.execute("actions.record", json!({"action":"A"})).unwrap();
+            s.execute("actions.allowToolRecording", json!({"enabled":true})).unwrap();
+        }
+        let Started::Job(job) = s.start("paint.remove", json!({"points":[[20,15],[21,15]],"size":3})).unwrap() else {
+            panic!("expected the real Remove job");
+        };
+        if previous_take {
+            s.execute("actions.stop", json!({})).unwrap();
+            s.execute("actions.allowToolRecording", json!({"enabled":false})).unwrap();
+        }
+        s.execute("actions.record", json!({"action":"A"})).unwrap();
+        assert_eq!(s.execute("actions.allowToolRecording", json!({"enabled":true})).unwrap()["enabled"], true);
+        s.wait_job(job).unwrap();
+        s.execute("actions.stop", json!({})).unwrap();
+        assert!(s.actions.list[0].steps.is_empty());
+        assert_eq!(s.journal.iter().filter(|step| step.0 == "paint.remove").count(), 1);
+    }
+}
+
 /// Interleaved membership and numeric calls expose incorrect folder placement or target rewriting.
 #[test]
 fn set_duplication_preserves_metadata_call_targets_and_empty_folder_order() {
