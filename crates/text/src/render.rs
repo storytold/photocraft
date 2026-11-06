@@ -116,6 +116,14 @@ fn is_bold(layout: &TextLayout, g: &PlacedGlyph) -> bool {
     layout.styles.get(g.style as usize).is_some_and(|s| s.faux_bold) || face_bold
 }
 
+/// Whether a path boundary hides any glyph with a drawable outline.
+/// Uses the same glyph centers and placement rules as rasterization.
+pub fn path_overflows(layout: &TextLayout, shape: &photocraft_doc::text::TextShape) -> bool {
+    let left = layout.bounds().map_or(0.0, |bounds| f64::from(bounds[0]));
+    let Some(warp) = Warp::on_path_with_text_start(shape, left) else { return false };
+    layout.glyphs.iter().any(|glyph| glyph_is_placed(layout, glyph, None) && !glyph_is_placed(layout, glyph, Some(&warp)))
+}
+
 fn glyph_is_placed(layout: &TextLayout, g: &PlacedGlyph, warp: Option<&Warp>) -> bool {
     let Some(face) = layout.faces.get(g.face as usize) else {
         return false;

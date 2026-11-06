@@ -3697,3 +3697,23 @@ fn path_range_alignment_uses_measured_advance() {
         }
     }
 }
+
+#[test]
+fn path_overflow_matches_visible_glyph_clipping() {
+    use photocraft_doc::vector::Subpath;
+    let mut engine = TextEngine::new();
+    for flip in [false, true] {
+        let mut text = point("Overflow", 20.0);
+        text.shape = TextShape::Path { path: Subpath::polyline(&[(0.0, 0.0), (500.0, 0.0)]), start: 0.0, end: Some(500.0), flip };
+        let layout = engine.layout(&text, 72.0);
+        assert!(!crate::render::path_overflows(&layout, &text.shape));
+        if let TextShape::Path { end, .. } = &mut text.shape {
+            *end = Some(1.0);
+        }
+        let layout = engine.layout(&text, 72.0);
+        assert!(crate::render::path_overflows(&layout, &text.shape));
+        text.text.clear();
+        let layout = engine.layout(&text, 72.0);
+        assert!(!crate::render::path_overflows(&layout, &text.shape));
+    }
+}

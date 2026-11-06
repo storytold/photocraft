@@ -26,10 +26,52 @@ pub(crate) fn active_text(app: &PhotocraftApp) -> Option<&TextLayer> {
     }
 }
 
+fn effective_range(text: &TextLayer, geometry: &PathGeometry) -> Option<[f64; 2]> {
+    use photocraft_doc::text::TextAlign;
+    let TextShape::Path { path, start, end, .. } = &text.shape else { return None };
+    let length = geometry.length();
+    let start = f64::from(*start);
+    if !length.is_finite() || length <= 0.0 || !start.is_finite() {
+        return None;
+    }
+    let range = if let Some(end) = end {
+        [start, f64::from(*end)]
+    } else {
+        // Different paragraph alignments cannot share one equivalent interval.
+        let runs = text.paragraph_runs();
+        let factor = |align| match align {
+            TextAlign::Center | TextAlign::JustifyCenter => 0.5,
+            TextAlign::Right | TextAlign::JustifyRight => 1.0,
+            _ => 0.0,
+        };
+        let f = factor(runs.first()?.style.align);
+        if runs.iter().any(|run| factor(run.style.align) != f) {
+            return None;
+        }
+        if path.closed {
+            [start - f * length, start + (1.0 - f) * length]
+        } else if !(0.0..=length).contains(&start) {
+            return None;
+        } else if f == 0.0 {
+            [start, length]
+        } else if f == 1.0 {
+            [0.0, start]
+        } else if start <= length / 2.0 {
+            [0.0, 2.0 * start]
+        } else {
+            [2.0 * start - length, length]
+        }
+    };
+    if range.iter().any(|n| !n.is_finite()) || range[1] < range[0] || (!path.closed && (range[0] < 0.0 || range[1] > length)) {
+        return None;
+    }
+    Some(range)
+}
+
 pub(crate) fn markers(text: &TextLayer, xf: &ViewXform) -> Option<[(Pos2, Vec2); 2]> {
-    let TextShape::Path { path, start, end, flip } = &text.shape else { return None };
+    let TextShape::Path { path, flip, .. } = &text.shape else { return None };
     let geometry = PathGeometry::new(path, *flip)?;
-    let finish = end.map(f64::from).unwrap_or_else(|| if path.closed { f64::from(*start) + geometry.length() } else { geometry.length() });
+    let [start, finish] = effective_range(text, &geometry)?;
     let sample = |arc| {
         let ((x, y), (tx, ty)) = geometry.sample(arc)?;
         let a = text.transform.apply(Point::new(x, y));
@@ -39,7 +81,22 @@ pub(crate) fn markers(text: &TextLayer, xf: &ViewXform) -> Option<[(Pos2, Vec2);
         let direction = q - p;
         (p.is_finite() && direction.is_finite() && direction.length_sq() > 1e-10).then_some((p, direction.normalized()))
     };
-    Some([sample(f64::from(*start))?, sample(finish)?])
+    Some([sample(start)?, sample(finish)?])
+}
+
+fn overflows(app: &PhotocraftApp, ctx: &egui::Context, text: &TextLayer) -> bool {
+    let Some(st) = app.session.active() else { return false };
+    let TextShape::Path { start, end, flip, .. } = &text.shape else { return false };
+    let key = (st.revision, start.to_bits(), end.map(f32::to_bits), *flip);
+    let id = egui::Id::new(("path-text-overflow", st.doc.id.0, st.active_layer));
+    if let Some((_, value)) = ctx.data(|data| data.get_temp::<((u64, u32, Option<u32>, bool), bool)>(id)).filter(|(cached, _)| *cached == key) {
+        return value;
+    }
+    let mut engine = photocraft_text::shared().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let layout = engine.layout(text, st.doc.resolution_dpi);
+    let value = photocraft_text::render::path_overflows(&layout, &text.shape);
+    ctx.data_mut(|data| data.insert_temp(id, (key, value)));
+    value
 }
 
 pub(crate) fn draw(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform) {
@@ -55,12 +112,18 @@ pub(crate) fn draw(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform)
     }
     let Some(markers) = markers(&preview, xf) else { return };
     let stroke = Stroke::new(1.5, crate::theme::Tokens::get(painter.ctx()).accent);
+    let overflow = overflows(app, painter.ctx(), &preview);
     for (index, (point, tangent)) in markers.into_iter().enumerate() {
         let normal = Vec2::new(-tangent.y, tangent.x);
         let side = if index == 0 { -1.0 } else { 1.0 };
         let tip = point + normal * (10.0 * side);
         painter.line_segment([point, tip], stroke);
         painter.line_segment([tip, tip + tangent * (5.0 * -side)], stroke);
+        if index == 1 && overflow {
+            let center = tip + normal * 5.0;
+            painter.line_segment([center - tangent * 3.0, center + tangent * 3.0], stroke);
+            painter.line_segment([center - normal * 3.0, center + normal * 3.0], stroke);
+        }
     }
 }
 
@@ -263,15 +326,10 @@ pub(crate) fn pointer(app: &mut PhotocraftApp, event: crate::canvas::ToolEvent) 
         return false;
     }
     let Some(text) = active_text(app).cloned() else { return false };
-    let TextShape::Path { path, start, end, flip } = &text.shape else { return false };
+    let TextShape::Path { path, flip, .. } = &text.shape else { return false };
     let Some(geometry) = PathGeometry::new(path, *flip) else { return false };
     let Some(inverse) = text.transform.inverse() else { return false };
-    let length = geometry.length();
-    let original = [f64::from(*start), end.map(f64::from).unwrap_or(if path.closed { f64::from(*start) + length } else { length })];
-    // Invalid imported boundaries must never reach f64::clamp.
-    if original.iter().any(|n| !n.is_finite()) || original[1] < original[0] || (!path.closed && (original[0] < 0.0 || original[1] > length)) {
-        return false;
-    }
+    let Some(original) = effective_range(&text, &geometry) else { return false };
     let zoom = f64::from(app.point_zoom().max(0.01));
     let mut best = None;
     for (index, arc) in original.into_iter().enumerate() {
@@ -368,6 +426,56 @@ mod tests {
     }
     fn up(app: &mut PhotocraftApp, x: f64, y: f64) {
         assert!(pointer(app, ToolEvent::Up { x, y }));
+    }
+
+    #[test]
+    fn legacy_alignment_conversion_preserves_glyph_positions() {
+        use photocraft_doc::text::{ParagraphStyle, TextAlign};
+        use photocraft_doc::vector::Subpath;
+        use photocraft_text::warp::Warp;
+        let mut engine = photocraft_text::TextEngine::new();
+        for closed in [false, true] {
+            for flip in [false, true] {
+                for align in [TextAlign::Left, TextAlign::Center, TextAlign::Right] {
+                    let path = if closed {
+                        Subpath::polygon(&[(0.0, 0.0), (200.0, 0.0), (200.0, 200.0), (0.0, 200.0)])
+                    } else {
+                        Subpath::polyline(&[(0.0, 0.0), (500.0, 0.0)])
+                    };
+                    let mut text = TextLayer {
+                        text: "ABC".into(),
+                        paragraphs: vec![photocraft_doc::text::ParagraphRun { len: 3, style: ParagraphStyle { align, ..Default::default() } }],
+                        ..Default::default()
+                    };
+                    text.shape = TextShape::Path { path: path.clone(), start: 200.0, end: None, flip };
+                    let old = engine.layout(&text, 72.0);
+                    let old_warp = Warp::on_path_with_text_start(&text.shape, f64::from(old.lines[0].x0)).unwrap();
+                    let geometry = PathGeometry::new(&path, flip).unwrap();
+                    let range = effective_range(&text, &geometry).unwrap();
+                    text.shape = TextShape::Path { path, start: range[0] as f32, end: Some(range[1] as f32), flip };
+                    let new = engine.layout(&text, 72.0);
+                    let new_warp = Warp::on_path_with_text_start(&text.shape, f64::from(new.lines[0].x0)).unwrap();
+                    assert_eq!(old.glyphs.len(), new.glyphs.len());
+                    for (old, new) in old.glyphs.iter().zip(&new.glyphs) {
+                        let a = old_warp.apply(f64::from(old.x), f64::from(old.y));
+                        let b = new_warp.apply(f64::from(new.x), f64::from(new.y));
+                        assert!((a.0 - b.0).hypot(a.1 - b.1) < 0.02, "{closed} {flip} {align:?}: {a:?} != {b:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn legacy_click_and_release_preserves_model_and_history() {
+        let mut app = app(Tool::PathSelection);
+        app.run("type.setPathPlacement", json!({"end":null})).unwrap();
+        let before = shape(&app);
+        let count = steps(&app);
+        down(&mut app, 40.0, 90.0);
+        up(&mut app, 40.0, 90.0);
+        assert_eq!(shape(&app), before);
+        assert_eq!(steps(&app), count);
     }
 
     #[test]

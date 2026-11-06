@@ -184,6 +184,12 @@ fn q255(v: f32) -> u8 {
     (v.clamp(0.0, 1.0) * 255.0).round() as u8
 }
 
+fn path_range_warning(layer: &Layer) -> Option<String> {
+    let LayerContent::Text(text) = &layer.content else { return None };
+    matches!(text.shape, photocraft_doc::text::TextShape::Path { end: Some(end), .. } if end.is_finite())
+        .then(|| format!("layer \"{}\": the text path end limit is not saved to PSD; text may extend beyond it", layer.name))
+}
+
 impl Ex<'_> {
     fn compression(&self) -> Compression {
         if self.fmt.sample == SampleType::F32 { Compression::ZipPrediction } else { Compression::Rle }
@@ -515,9 +521,7 @@ impl Ex<'_> {
                 crate::vector_map::shape_blocks(sh, &mut raw, w, h, self.dpi);
             }
             LayerContent::Text(t) => {
-                if matches!(t.shape, photocraft_doc::text::TextShape::Path { end: Some(end), .. } if end.is_finite()) {
-                    self.warnings.push(format!("layer \"{}\": the text path end limit is not saved to PSD; text may extend beyond it", l.name));
-                }
+                self.warnings.extend(path_range_warning(l));
                 if matches!(t.shape, photocraft_doc::text::TextShape::Area { .. }) {
                     self.warnings
                         .push(format!("layer \"{}\": area type is saved as paragraph text over its path's bounds (PSD area type is not written yet)", l.name));
