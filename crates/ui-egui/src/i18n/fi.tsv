@@ -543,6 +543,12 @@
 	Timeline	Aikajana
 	Tool Presets	Työkalujen esiasetukset
 	Tools	Työkalut
+	Contextual Task Bar	Kontekstuaalinen tehtäväpalkki
+	Hide bar	Piilota palkki
+	Reset bar position	Palauta palkin sijainti
+	Pin bar position	Kiinnitä palkin sijainti
+	Move bar	Siirrä palkkia
+	More options	Lisää vaihtoehtoja
 	Libraries	Kirjastot
 	3D	3D
 	Toolbars	Työkalurivit
@@ -1215,6 +1221,7 @@
 	Path to Illustrator…	Polku Illustratoriin…
 	Make Work Path	Luo työpolku
 	Make Selection	Luo valinta
+	Make Shape	Luo muoto
 	Fill Path	Täytä polku
 	Stroke Path	Piirrä polun reunaviiva
 	Clipping Path	Leikkauspolku
@@ -2062,7 +2069,7 @@
 	Vertical Centers	Pystykeskikohdat
 	Video Frames to Layers…	Videoruudut tasoiksi…
 	WIA Support…	WIA-tuki…
-	Working CMY Plates	Työ-CMY-levy
+	Working CMY Plates	Työ-CMY-levyt
 
 # tl! literals (third pass)
 	Absolute	Absoluuttinen
@@ -2479,7 +2486,6 @@
 	Show only crosshair while painting	Näytä vain hiusristikko maalattaessa
 	Show slice numbers	Näytä viipaleiden numerot
 	Show tooltips	Näytä työkaluvihjeet
-	Enable animations	Ota animaatiot käyttöön
 	Show highlight on rollover	Korosta kohde osoittimen alla
 	Show bounding box when dragging layer	Näytä rajauslaatikko tasoa vedettäessä
 	System title bar	Järjestelmän otsikkorivi

@@ -854,7 +854,7 @@
 	Consolidate All to Tabs	将所有窗口合并为选项卡
 	Float in Window	在窗口中浮动
 	Float All in Windows	使所有文档在窗口中浮动
-	New Window	为文档新建窗口
+	New Window	新建窗口
 	Workspace	工作区
 	Essentials	基本功能
 	Graphic and Web	图形与 Web
@@ -917,6 +917,12 @@
 	Timeline	时间轴
 	Tool Presets	工具预设
 	Tools	工具
+	Contextual Task Bar	上下文任务栏
+	Hide bar	隐藏栏
+	Reset bar position	重置栏位置
+	Pin bar position	固定栏位置
+	Move bar	移动栏
+	More options	更多选项
 	About PhotoCraft	关于 PhotoCraft
 	PhotoCraft Website	PhotoCraft 网站
 	PhotoCraft on GitHub	PhotoCraft 的 GitHub 页面
@@ -2186,7 +2192,6 @@
 	Show only crosshair while painting	绘画时仅显示十字线
 	Show slice numbers	显示切片编号
 	Show tooltips	显示工具提示
-	Enable animations	启用动画
 	Show highlight on rollover	鼠标悬停时显示高亮
 	Show bounding box when dragging layer	拖动图层时显示边界框
 	System title bar	系统标题栏
@@ -3040,6 +3045,7 @@ curves	Smooth	平滑
 	Edit Selected Guides	编辑所选参考线
 	Clear Selected Guides	清除所选参考线
 	Make Selection	建立选区
+	Make Shape	建立形状
 	Bicubic Automatic	双三次（自动）
 	Bicubic Smoother	双三次（较平滑）
 	Bicubic Sharper	双三次（较锐利）

@@ -221,7 +221,7 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
         Tool::CutOut => reset!(cut_out),
         Tool::Marker => reset!(marker),
         Tool::Line => reset!(
-            vector_mode,
+            shape_mode,
             shape_fill,
             stroke_width,
             shape_stroke,
@@ -237,7 +237,7 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
             arrow_concavity,
         ),
         Tool::Rectangle | Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::CustomShape => {
-            reset!(vector_mode, shape_fill, stroke_width, shape_stroke, shape_fill_gradient, shape_stroke_gradient, corner_radius, polygon_sides, line_weight)
+            reset!(shape_mode, shape_fill, stroke_width, shape_stroke, shape_fill_gradient, shape_stroke_gradient, corner_radius, polygon_sides, line_weight)
         }
         Tool::ColorSampler
         | Tool::Ruler

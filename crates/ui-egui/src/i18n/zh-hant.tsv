@@ -853,7 +853,7 @@
 	Consolidate All to Tabs	全部合併至標籤頁
 	Float in Window	在視窗中浮動
 	Float All in Windows	全部在視窗中浮動
-	New Window	為文件新增視窗
+	New Window	新增視窗
 	Workspace	工作區
 	Essentials	基本功能
 	Graphic and Web	繪圖和網頁
@@ -916,6 +916,12 @@
 	Timeline	時間軸
 	Tool Presets	工具預設集
 	Tools	工具
+	Contextual Task Bar	內容相關工作列
+	Hide bar	隱藏工作列
+	Reset bar position	重設工作列位置
+	Pin bar position	固定工作列位置
+	Move bar	移動工作列
+	More options	更多選項
 	About PhotoCraft	關於 PhotoCraft
 	PhotoCraft Website	PhotoCraft 網站
 	PhotoCraft on GitHub	GitHub 上的 PhotoCraft
@@ -2154,7 +2160,6 @@
 	Show only crosshair while painting	繪圖時僅顯示十字線
 	Show slice numbers	顯示切片編號
 	Show tooltips	顯示工具提示
-	Enable animations	啟用動畫
 	Show highlight on rollover	滑鼠懸停時顯示醒目提示
 	Show bounding box when dragging layer	拖曳圖層時顯示邊界框
 	System title bar	系統標題列
@@ -3001,6 +3006,7 @@ curves	Smooth	平滑
 	Edit Selected Guides	編輯所選參考線
 	Clear Selected Guides	清除所選參考線
 	Make Selection	建立選取範圍
+	Make Shape	建立形狀
 	Bicubic Automatic	雙三次 (自動)
 	Bicubic Smoother	雙三次 (較平滑)
 	Bicubic Sharper	雙三次 (較銳利)
