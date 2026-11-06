@@ -35,6 +35,7 @@ contextual, command-ID and plural translations; missing entries fall back to Eng
 | Dansk | `da` | one / other |
 | Norsk bokmål | `nb` | one / other |
 | עברית | `he` | one / other |
+| اردو | `ur` | one / other |
 
 Languages registered with `complete_menus` cover the current menu labels, `tl!` literals, blend
 mode names, and generated preference labels. A string a catalog lacks shows in English:

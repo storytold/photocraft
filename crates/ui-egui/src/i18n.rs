@@ -258,6 +258,8 @@ pub static LANGUAGES: [LangInfo; 29] = [
     // like Arabic. Modern Hebrew software UI collapses CLDR's one/two/many/other
     // into a plain one|other, so this uses `plural_one_other`.
     LangInfo { code: "he", name: "עברית", source: catalog!("he"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
+    // Urdu; written right to left like Arabic (`dir_for_code`). CLDR plural: one|other.
+    LangInfo { code: "ur", name: "اردو", source: catalog!("ur"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
 ];
 
 impl LangInfo {
