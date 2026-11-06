@@ -3564,3 +3564,18 @@ curves	Smooth	تنعيم
 	Pause For	إيقاف مؤقت لمدة
 	seconds	ثانية
 	Create a single history state	إنشاء حالة سجل واحدة
+
+# Channels panel menu (#11451)
+	New Channel…	قناة جديدة…
+	Duplicate Channel	تكرار القناة
+	Delete Channel	حذف القناة
+	New Spot Channel…	قناة لون موضعي جديدة…
+	Merge Spot Channel	دمج قناة اللون الموضعي
+	Channel Options…	خيارات القناة…
+	Split Channels	تقسيم القنوات
+	Merge Channels…	دمج القنوات…
+	Specify Channels:	تحديد القنوات:
+	Not enough grayscale documents for this mode.	لا توجد مستندات كافية بتدرج الرمادي لهذا الوضع.
+	Pick a different document for each channel.	اختر مستندًا مختلفًا لكل قناة.
+	A picked document is no longer open.	أحد المستندات المختارة لم يعد مفتوحًا.
+	A picked document is no longer a grayscale document of the same size.	أحد المستندات المختارة لم يعد مستندًا بتدرج الرمادي بالحجم نفسه.

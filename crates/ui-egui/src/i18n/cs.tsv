@@ -4313,3 +4313,11 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Replace Image…	Nahradit obrázek…
 	The frame is locked	Rámeček je zamčený
 	The frame is unavailable	Rámeček není dostupný
+
+# Channels panel menu (#11451)
+	Channel Options…	Možnosti kanálu…
+	Specify Channels:	Určit kanály:
+	Not enough grayscale documents for this mode.	Pro tento režim není dost dokumentů ve stupních šedi.
+	Pick a different document for each channel.	Pro každý kanál vyberte jiný dokument.
+	A picked document is no longer open.	Jeden z vybraných dokumentů už není otevřený.
+	A picked document is no longer a grayscale document of the same size.	Jeden z vybraných dokumentů už není dokument ve stupních šedi stejné velikosti.

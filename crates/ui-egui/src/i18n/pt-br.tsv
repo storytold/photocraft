@@ -4491,3 +4491,11 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Replace Image…	Substituir imagem…
 	The frame is locked	A moldura está bloqueada
 	The frame is unavailable	A moldura não está disponível
+
+# Channels panel menu (#11451)
+	Channel Options…	Opções de canal…
+	Specify Channels:	Especificar canais:
+	Not enough grayscale documents for this mode.	Não há documentos em tons de cinza suficientes para este modo.
+	Pick a different document for each channel.	Escolha um documento diferente para cada canal.
+	A picked document is no longer open.	Um dos documentos escolhidos não está mais aberto.
+	A picked document is no longer a grayscale document of the same size.	Um dos documentos escolhidos não é mais um documento em tons de cinza do mesmo tamanho.
