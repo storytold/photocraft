@@ -2034,6 +2034,8 @@
 	Dynamic color sliders	Slider warna dinamis
 	East asian	Asia Timur
 	Effect cache mb	Cache efek MB
+	Smart source cache mb	Cache konten Smart Object MB
+	Smart stage cache mb	Cache render Smart Object MB
 	Enable flick panning	Aktifkan flick panning
 	Enable floating document window docking	Aktifkan docking jendela dokumen mengambang
 	Enable narrow options bar	Aktifkan options bar sempit

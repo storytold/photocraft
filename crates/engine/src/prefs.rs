@@ -659,6 +659,13 @@ pub struct Performance {
     pub gpu_memory_mb: u32,
     /// Memory budget of the layer-effect cache, in MB.
     pub effect_cache_mb: u32,
+    /// Memory budget of decoded smart-object contents, in MB. A decode larger than the budget on
+    /// its own isn't kept, so 0 keeps none between commands (one command still decodes a file
+    /// once for all the instances it re-renders).
+    pub smart_source_cache_mb: u32,
+    /// Memory budget of rendered smart-object placements and smart filter results, in MB; 0
+    /// keeps none between commands (a render server, where each design is placed once).
+    pub smart_stage_cache_mb: u32,
     pub legacy_compositing: bool,
 }
 
@@ -724,6 +731,8 @@ impl Default for Performance {
             linux_display_server: LinuxDisplayServer::Auto,
             gpu_memory_mb: 0,
             effect_cache_mb: 768,
+            smart_source_cache_mb: (crate::smart_cmds::SOURCE_CACHE_BYTES >> 20) as u32,
+            smart_stage_cache_mb: (crate::smart_cmds::STAGE_CACHE_BYTES >> 20) as u32,
             legacy_compositing: false,
         }
     }
@@ -1460,6 +1469,10 @@ impl Session {
             st.trim_history();
         }
         photocraft_compose::set_effect_cache_budget(budget);
+        let perf = &self.prefs().performance;
+        // Saturating: a `usize` is 32 bits on wasm32, where 4096 MB would shift out to 0.
+        crate::smart_cmds::set_source_cache_budget((perf.smart_source_cache_mb as usize).saturating_mul(1 << 20));
+        crate::smart_cmds::set_stage_cache_budget((perf.smart_stage_cache_mb as usize).saturating_mul(1 << 20));
         crate::transform_cmds::set_budget(u64::from(self.prefs().performance.effective_memory_usage_mb()) << 20);
         // Without waiting for the system font scan: this runs on the UI thread at launch.
         photocraft_text::set_shared_missing_glyph_protection(self.prefs().type_.missing_glyph_protection());

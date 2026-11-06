@@ -2386,6 +2386,8 @@
 	Dynamic color sliders	Dynaamiset värisäätimet
 	East asian	Itä-Aasian
 	Effect cache mb	Tehostevälimuisti (Mt)
+	Smart source cache mb	Älykkäiden objektien sisältövälimuisti (Mt)
+	Smart stage cache mb	Älykkäiden objektien hahmonnusvälimuisti (Mt)
 	Enable flick panning	Ota pyyhkäisypanorointi käyttöön
 	Enable floating document window docking	Ota kelluvien asiakirjaikkunoiden telakointi käyttöön
 	Enable narrow options bar	Ota kapea asetuspalkki käyttöön

@@ -70,12 +70,34 @@ pub fn encode_source(doc: &Document) -> Result<Vec<u8>> {
 
 /// Decodes smart-object contents (a `.pcraft` bundle, PSD/PSB, or any flat image format).
 pub fn decode_source(file_name: &str, bytes: &[u8]) -> Result<Document> {
+    #[cfg(test)]
+    DECODES.with(|d| d.set(d.get() + 1));
     if photocraft_io::svg::is_svg(bytes) {
         return photocraft_io::svg::import_svg_bounded_images(file_name, bytes, 24_000_000)
             .map(|imported| imported.document)
             .map_err(|e| other(format!("can't read SVG smart object contents: {e}")));
     }
     crate::file_cmds::import(file_name, bytes).map_err(|e| other(format!("can't read smart object contents \"{file_name}\": {e}")))
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Files decoded by [`decode_source`] on this thread.
+    static DECODES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Sources placed (transformed / warped) by `rendering::place` on this thread.
+    static PLACEMENTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The budget of decoded smart-object contents a session starts with (Preferences › Performance
+/// `smartSourceCacheMb`).
+pub const SOURCE_CACHE_BYTES: usize = source::CACHE_BYTES;
+/// The budget of rendered smart-object stages a session starts with (`smartStageCacheMb`).
+pub const STAGE_CACHE_BYTES: usize = stack_cache::BUDGET;
+
+/// Sets the rendered-stage cache budget (placements and smart filter results); 0 keeps none
+/// between commands.
+pub fn set_stage_cache_budget(bytes: usize) {
+    stack_cache::set_budget(bytes);
 }
 
 fn base_name(path: &str) -> String {
@@ -204,7 +226,9 @@ use rendering::{NativeDigests, blend_surfaces, place, render_in};
 pub use rendering::{apply_smart_filters, purge_stack_cache, refresh, refresh_layer, render, render_below_filter, stack_cache_bytes, stack_image};
 #[cfg(test)]
 use source::svg_source_image_in;
-pub use source::{SourceImage, purge_source_cache, source_bytes, source_cache_bytes, source_decode_count, source_image, svg_source_image};
+pub use source::{
+    SourceImage, purge_source_cache, set_source_cache_budget, source_bytes, source_cache_bytes, source_decode_count, source_image, svg_source_image,
+};
 use source::{authorize_source, authorized_source_bytes};
 pub(crate) use source::{restore_unrendered, take_caches, vector_scale};
 

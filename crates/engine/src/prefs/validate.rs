@@ -126,6 +126,7 @@ pub fn range(path: &str) -> Option<(f64, f64)> {
         "performance.cacheLevels" => (1.0, 8.0),
         "performance.cacheTileSize" => (256.0, 16384.0),
         "performance.effectCacheMb" => (f64::from(super::EFFECT_CACHE_MIN_MB), f64::from(super::effect_cache_max_mb(super::SMALL_ADDRESS_SPACE))),
+        "performance.smartSourceCacheMb" | "performance.smartStageCacheMb" => (0.0, 65536.0),
         "transparencyAndGamut.gamutWarningOpacity" => (1.0, 100.0),
         "unitsAndRulers.columnWidth" | "unitsAndRulers.gutter" => (0.0, 10_000.0),
         "unitsAndRulers.printResolution" | "unitsAndRulers.screenResolution" | "rawDefaults.resolution" => (1.0, 10_000.0),

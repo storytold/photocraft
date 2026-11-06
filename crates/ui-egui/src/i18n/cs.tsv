@@ -2086,6 +2086,8 @@
 	Dynamic color sliders	Dynamické barevné posuvníky
 	East asian	Východoasijský
 	Effect cache mb	Mezipaměť efektů (MB)
+	Smart source cache mb	Mezipaměť obsahu chytrých objektů (MB)
+	Smart stage cache mb	Mezipaměť vykreslení chytrých objektů (MB)
 	Enable flick panning	Zapnout posouvání švihnutím
 	Enable floating document window docking	Zapnout ukotvování plovoucích oken dokumentů
 	Enable narrow options bar	Zapnout úzký panel možností

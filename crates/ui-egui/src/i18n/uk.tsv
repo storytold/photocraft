@@ -2444,6 +2444,8 @@
 	Dynamic color sliders	Динамічні колірні повзунки
 	East asian	Східноазійський
 	Effect cache mb	Кеш ефектів, МБ
+	Smart source cache mb	Кеш вмісту смартоб'єктів, МБ
+	Smart stage cache mb	Кеш відтворення смартоб'єктів, МБ
 	Enable flick panning	Увімкнути інерційне панорамування
 	Enable floating document window docking	Увімкнути прикріплення окремих вікон документів
 	Enable narrow options bar	Увімкнути вузьку панель параметрів

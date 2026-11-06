@@ -2383,6 +2383,8 @@
 	Dynamic color sliders	Dynamiska färgreglage
 	East asian	Östasiatisk
 	Effect cache mb	Effektcache (MB)
+	Smart source cache mb	Cache för smarta objekts innehåll (MB)
+	Smart stage cache mb	Cache för renderade smarta objekt (MB)
 	Enable flick panning	Aktivera snärtpanorering
 	Enable floating document window docking	Aktivera dockning av flytande dokumentfönster
 	Enable narrow options bar	Aktivera smalt alternativfält

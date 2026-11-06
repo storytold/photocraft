@@ -1802,6 +1802,8 @@
 	Drop shadow	Σκιά
 	Dynamic color sliders	Δυναμικά ρυθμιστικά χρώματος
 	Effect cache mb	Προσωρινή μνήμη εφέ σε MB
+	Smart source cache mb	Προσωρινή μνήμη περιεχομένων έξυπνων αντικειμένων σε MB
+	Smart stage cache mb	Προσωρινή μνήμη απόδοσης έξυπνων αντικειμένων σε MB
 	Enable flick panning	Ενεργοποίηση κύλισης με αδράνεια
 	Enable floating document window docking	Ενεργοποίηση προσάρτησης ανεξάρτητων παραθύρων εγγράφων
 	Enable narrow options bar	Ενεργοποίηση στενής γραμμής επιλογών

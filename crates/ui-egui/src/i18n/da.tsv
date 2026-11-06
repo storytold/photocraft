@@ -2385,6 +2385,8 @@
 	Dynamic color sliders	Dynamiske farveskydere
 	East asian	Østasiatisk
 	Effect cache mb	Effektcache mb
+	Smart source cache mb	Smartobjekt-indholdscache mb
+	Smart stage cache mb	Smartobjekt-gengivelsescache mb
 	Enable flick panning	Aktivér panorering med svirp
 	Enable floating document window docking	Aktivér dokning af flydende dokumentvinduer
 	Enable narrow options bar	Aktivér smal indstillingslinje

@@ -1971,6 +1971,8 @@
 	Dynamic color sliders	منزلقات ألوان ديناميكية
 	East asian	شرق آسيوي
 	Effect cache mb	ذاكرة التأثيرات المؤقتة (ميغابايت)
+	Smart source cache mb	ذاكرة محتوى الكائنات الذكية المؤقتة (ميغابايت)
+	Smart stage cache mb	ذاكرة عرض الكائنات الذكية المؤقتة (ميغابايت)
 	Enable flick panning	تمكين التحريك السريع
 	Enable floating document window docking	تمكين إرساء نوافذ المستندات العائمة
 	Enable narrow options bar	تمكين شريط الخيارات الضيق

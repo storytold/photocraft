@@ -2033,6 +2033,8 @@
 	Dynamic color sliders	Dinamički klizači boja
 	East asian	Istočnoazijsko
 	Effect cache mb	Keš efekata (MB)
+	Smart source cache mb	Keš sadržaja pametnih objekata (MB)
+	Smart stage cache mb	Keš prikaza pametnih objekata (MB)
 	Enable flick panning	Omogući pomeranje prikaza zamahom
 	Enable floating document window docking	Omogući usidravanje plutajućih prozora dokumenata
 	Enable narrow options bar	Omogući usku traku opcija

@@ -2099,6 +2099,8 @@
 	Dynamic color sliders	动态颜色滑块
 	East asian	东亚
 	Effect cache mb	效果缓存 (MB)
+	Smart source cache mb	智能对象内容缓存 (MB)
+	Smart stage cache mb	智能对象渲染缓存 (MB)
 	Enable flick panning	启用惯性平移
 	Enable floating document window docking	启用浮动文档窗口停靠
 	Enable narrow options bar	启用窄选项栏

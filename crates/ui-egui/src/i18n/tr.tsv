@@ -1947,6 +1947,8 @@
 	Dynamic color sliders	Dinamik renk kaydırıcıları
 	East asian	Doğu Asya
 	Effect cache mb	Efekt önbelleği (MB)
+	Smart source cache mb	Akıllı nesne içerik önbelleği mb
+	Smart stage cache mb	Akıllı nesne işleme önbelleği mb
 	Enable flick panning	Hızlı kaydırmayı etkinleştir
 	Enable floating document window docking	Kayan belge penceresi yerleştirmeyi etkinleştir
 	Enable narrow options bar	Dar seçenekler çubuğunu etkinleştir
