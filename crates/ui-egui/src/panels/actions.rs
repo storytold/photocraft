@@ -384,6 +384,32 @@ fn open_step_editor(app: &mut PhotocraftApp, command: &str) -> Result<u64, Strin
     }
 }
 
+/// Open the recorded step's editor and retain the receiver for confirmation.
+fn pause_recorded_step(app: &mut PhotocraftApp, action: &Action, i: usize, id: &str, p: &Value) -> Value {
+    let label = label_of(id);
+    let active_layer = app.session.active().and_then(|st| st.active_layer);
+    let dialog = crate::dialogs::open_command_dialog(app, id, &label);
+    let token = app.paused_playbacks.pause(action.name.clone(), i + 1, app.session.authorize);
+    let mut receiver = None;
+    if let Some(d) = app.ui.dialog_mut(dialog) {
+        if let Some(o) = p.as_object() {
+            // `__` keys are the dialog's own markers (`params_of` drops them), not step values.
+            d.fields.extend(o.iter().filter(|(k, _)| !k.starts_with("__")).map(|(k, v)| (k.clone(), v.clone())));
+        }
+        d.fields.insert(RESUME.into(), json!(token));
+        // Kept for every implicit step, also one opened on a document target: the dialog
+        // may switch it to a layer-owned one, and `run_step_dialog` checks the receiver
+        // for the target it confirms.
+        if p.get("layer").is_none_or(Value::is_null) {
+            receiver = Some(active_layer);
+        }
+    }
+    if let Some(paused) = app.paused_playbacks.paused.get_mut(&token) {
+        paused.filter_receiver = receiver;
+    }
+    json!({"step": i, "id": id, "dialog": dialog})
+}
+
 /// `suspended` is the recording a paused part of the same call took ([`PausedPlayback::record`]); it comes
 /// back, with that named call journaled, only when the whole call ends. `inner` are the called
 /// actions a resumed playback replays first, outermost first, each `(action, from)`: the first is
@@ -459,28 +485,7 @@ fn play_owned(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>,
         // The dialog toggle: show the step's dialog with its recorded values and continue
         // from the next step when it is confirmed (`resume`). Agents play headlessly.
         if action.dialogs.contains(&i) && !app.automation_input && (crate::filter_dialog::has_dialog(id) || crate::adjust_dialog::has_dialog(id)) {
-            let label = label_of(id);
-            let active_layer = app.session.active().and_then(|st| st.active_layer);
-            let dialog = crate::dialogs::open_command_dialog(app, id, &label);
-            let token = app.paused_playbacks.pause(action.name.clone(), i + 1, app.session.authorize);
-            let mut receiver = None;
-            if let Some(d) = app.ui.dialog_mut(dialog) {
-                if let Some(o) = p.as_object() {
-                    // `__` keys are the dialog's own markers (`params_of` drops them), not step values.
-                    d.fields.extend(o.iter().filter(|(k, _)| !k.starts_with("__")).map(|(k, v)| (k.clone(), v.clone())));
-                }
-                d.fields.insert(RESUME.into(), json!(token));
-                // Kept for every implicit step, also one opened on a document target: the dialog
-                // may switch it to a layer-owned one, and `run_step_dialog` checks the receiver
-                // for the target it confirms.
-                if p.get("layer").is_none_or(Value::is_null) {
-                    receiver = Some(active_layer);
-                }
-            }
-            if let Some(paused) = app.paused_playbacks.paused.get_mut(&token) {
-                paused.filter_receiver = receiver;
-            }
-            paused = Some(json!({"step": i, "id": id, "dialog": dialog}));
+            paused = Some(pause_recorded_step(app, &action, i, id, p));
             break;
         }
         // Check Spelling's dialog opens with Check All Layers as recorded; Done continues the action.
