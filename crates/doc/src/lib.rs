@@ -12,6 +12,7 @@ pub mod adjust;
 pub mod advanced;
 pub mod analysis;
 pub mod blend_if;
+pub mod blob;
 pub mod comps;
 pub mod effects;
 pub mod frame;
@@ -31,6 +32,7 @@ pub use adjust::Adjustment;
 pub use advanced::{AdvancedBlending, Knockout};
 pub use analysis::{CountGroup, Measurement, MeasurementScale, Note, Ruler};
 pub use blend_if::{BlendIf, BlendRange};
+pub use blob::{Blob, BlobError, DeferredBytes};
 pub use comps::{Artboard, ArtboardBackground, CompAppearance, CompLayerState, LayerComp};
 pub use effects::{
     Bevel, BevelContour, BevelStyle, BevelTechnique, BevelTexture, Contour, Effect, FxCommon, FxPaint, GlobalLight, Glow, GlowSource, GlowTechnique, Gradient,
@@ -862,8 +864,9 @@ impl AlphaChannel {
     }
 }
 
-/// A raw PSD global tagged block: (signature, key, data).
-pub type PsdGlobalBlock = ([u8; 4], [u8; 4], Arc<Vec<u8>>);
+/// A raw PSD global tagged block: (signature, key, data). The data of a large embedded
+/// smart-object block (`lnk2`) may be deferred to the file it was opened from: see [`Blob`].
+pub type PsdGlobalBlock = ([u8; 4], [u8; 4], Blob);
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Metadata {
@@ -879,6 +882,23 @@ pub struct Metadata {
     /// Raw PSD global additional-layer-info blocks: (signature, key, data),
     /// e.g. `lnk2` embedded smart-object files, `Patt` patterns, `Txt2`.
     pub psd_global_blocks: Vec<PsdGlobalBlock>,
+}
+
+impl Metadata {
+    /// `true` when a global block's data is deferred to the file it was opened from.
+    pub fn has_deferred_blocks(&self) -> bool {
+        self.psd_global_blocks.iter().any(|(_, _, b)| !b.is_in_memory())
+    }
+
+    /// Reads every deferred global block into memory (see [`Blob`]).
+    pub fn load_deferred_blocks(&mut self) -> Result<(), BlobError> {
+        for (_, _, b) in &mut self.psd_global_blocks {
+            if !b.is_in_memory() {
+                *b = b.loaded()?;
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]

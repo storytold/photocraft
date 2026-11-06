@@ -962,7 +962,9 @@ mod write_tests {
                         let mut materialized = file.clone();
                         let mut data = Vec::new();
                         materialized.layer_info.take().unwrap().write_body(&mut data, version).unwrap();
-                        materialized.global_blocks.insert(index.min(materialized.global_blocks.len()), TaggedBlock { signature: *b"8B64", key, data, padding });
+                        materialized
+                            .global_blocks
+                            .insert(index.min(materialized.global_blocks.len()), TaggedBlock { signature: *b"8B64", key, data, padding, stored: None });
                         materialized.layer_info_placement = LayerInfoPlacement::Section;
                         assert_eq!(actual, materialized.to_bytes().unwrap(), "{version:?} {key:?} {index}");
                     }

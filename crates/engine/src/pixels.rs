@@ -110,10 +110,31 @@ pub fn adjust_surface(s: &mut Surface, adj: &Adjustment, selection: Option<&Surf
     if over && !transparent {
         return Err(TOO_SPARSE.into());
     }
-    let taken = if over { stored.into_iter().flat_map(|c| s.take_tiles(c.rect())).collect() } else { s.take_tiles(r) };
-    let done: Vec<_> = taken
+    let taken: Vec<_> = if over { stored.into_iter().flat_map(|c| s.take_tiles(c.rect())).collect() } else { s.take_tiles(r) };
+    // Without a selection a whole tile's result depends on its pixels alone, so a tile shared
+    // across coordinates (a filled background) is adjusted once and its result stays shared.
+    let shared_once = selection.is_none();
+    let mut first: std::collections::HashMap<*const photocraft_raster::Tile, usize> = std::collections::HashMap::new();
+    // The work items own their tiles, so a tile held by this surface alone is adjusted in place
+    // (no copy-on-write duplicate kept alive beside it).
+    let mut work = Vec::with_capacity(taken.len());
+    let mut copies = Vec::new();
+    for (i, (tc, tile)) in taken.into_iter().enumerate() {
+        let whole = tc.rect().intersect(&r) == tc.rect();
+        let ptr = std::sync::Arc::as_ptr(&tile);
+        match first.get(&ptr) {
+            Some(&j) if shared_once && whole => copies.push((tc, j)),
+            _ => {
+                if whole {
+                    first.insert(ptr, i);
+                }
+                work.push((i, tc, tile));
+            }
+        }
+    }
+    let done: Vec<(usize, Vec<PlacedTile>)> = work
         .into_par_iter()
-        .flat_map_iter(|(tc, tile)| {
+        .map(|(i, tc, tile)| {
             // A one-tile surface, so `adjusted` reads and writes this tile only.
             let mut one = Surface::new(fmt);
             one.put_tiles([(tc, tile)]);
@@ -121,12 +142,18 @@ pub fn adjust_surface(s: &mut Surface, adj: &Adjustment, selection: Option<&Surf
             let out = adjusted(&one, tr, adj, selection, mode);
             one.write_region(tr, &out);
             photocraft_raster::scratch::give(out);
-            one.take_tiles(tc.rect())
+            (i, one.take_tiles(tc.rect()))
         })
         .collect();
-    s.put_tiles(done);
+    let by_index: std::collections::HashMap<usize, std::sync::Arc<photocraft_raster::Tile>> =
+        done.iter().filter_map(|(i, t)| t.first().map(|(_, t)| (*i, t.clone()))).collect();
+    s.put_tiles(done.into_iter().flat_map(|(_, t)| t));
+    s.put_tiles(copies.into_iter().filter_map(|(tc, j)| by_index.get(&j).map(|t| (tc, t.clone()))));
     Ok(())
 }
+
+/// A tile and where it goes.
+type PlacedTile = (photocraft_geom::TileCoord, std::sync::Arc<photocraft_raster::Tile>);
 
 #[cfg(test)]
 mod flatten_cmyk_tests;

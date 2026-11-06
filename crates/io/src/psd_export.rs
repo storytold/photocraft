@@ -798,7 +798,7 @@ impl Ex<'_> {
         }
         // Placed as the importer places it (the same source size, from the same file, and the
         // same frame: a custom warp's control-point box, #3677).
-        let size = crate::linked::source_size_in_blocks(self.smart.globals.iter().map(|(_, k, d)| (k, d.as_slice())), &id, &photocraft_raster::Interrupt::NONE);
+        let size = crate::linked::source_size_in_globals(&self.smart.globals, &id, &photocraft_raster::Interrupt::NONE);
         blocks::plld_transform(&corners, size, warp.as_ref()) != (sm.transform, sm.perspective)
     }
 
@@ -852,9 +852,9 @@ impl Ex<'_> {
                             .find_map(|(sig, k, data)| {
                                 LINK_KEYS
                                     .contains(&k)
-                                    .then(|| crate::linked::copy_item(data, path, &uuid))
+                                    .then(|| crate::linked::copy_item(data.resident(), path, &uuid))
                                     .flatten()
-                                    .map(|data| (*sig, *k, std::sync::Arc::new(data)))
+                                    .map(|data| (*sig, *k, photocraft_doc::Blob::new(data)))
                             })
                             .ok_or_else(|| format!("the linked source {path} has no readable record to copy independently"))?;
                         self.smart.linked_copies.insert(key, copy);

@@ -442,7 +442,7 @@ fn layerless_psd_never_keeps_psb_only_block_signatures() {
     for mode in [photocraft_color::ColorMode::Indexed, photocraft_color::ColorMode::Bitmap, photocraft_color::ColorMode::Multichannel] {
         let mut d = indexed_doc(photocraft_color::Color::rgba(1.0, 1.0, 1.0, 1.0), vec![[255, 255, 255]], None);
         d.mode = mode;
-        d.metadata.psd_global_blocks.push((*b"8B64", *b"FMsk", std::sync::Arc::new(vec![0; 12])));
+        d.metadata.psd_global_blocks.push((*b"8B64", *b"FMsk", photocraft_doc::Blob::new(vec![0; 12])));
         let f = PsdFile::from_bytes(&export(&d, "x.psd", &ExportOptions::default()).unwrap().bytes).unwrap();
         assert!(f.global_blocks.iter().any(|b| &b.key == b"FMsk"), "{mode:?}");
         assert!(f.global_blocks.iter().all(|b| &b.signature == b"8BIM"), "{mode:?}");
@@ -722,7 +722,7 @@ fn guides_and_alpha_names_roundtrip() {
             )),
         ));
     }
-    let f = document_to_psd(&d);
+    let f = document_to_psd(&d).unwrap();
     // RGB + merged transparency (the empty document is transparent) + 2 alpha channels.
     assert_eq!(f.header.channels, 6);
     let (d2, _) = psd_to_document(&f);
@@ -740,7 +740,7 @@ fn resolution_info_cm_display_unit_stays_pixels_per_inch() {
     f.resources[0] = photocraft_psd::ImageResource::new(1005, ri.to_bytes());
     let (d, _) = psd_to_document(&f);
     assert!((d.resolution_dpi - 300.0).abs() < 1e-3, "{}", d.resolution_dpi);
-    let out = document_to_psd(&d);
+    let out = document_to_psd(&d).unwrap();
     let written = out.resolution().unwrap();
     assert!((written.h_res() - 300.0).abs() < 1e-3, "{}", written.h_res());
     assert!((written.v_res() - 300.0).abs() < 1e-3, "{}", written.v_res());

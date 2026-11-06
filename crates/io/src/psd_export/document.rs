@@ -10,20 +10,25 @@ use super::{
 };
 
 /// Converts a document to a PSD file model (see [`document_to_psd_with`]).
-pub fn document_to_psd(doc: &Document) -> PsdFile {
-    document_to_psd_with(doc, &PsdExportOptions::default()).0
+pub fn document_to_psd(doc: &Document) -> Result<PsdFile, crate::IoError> {
+    document_to_psd_with(doc, &PsdExportOptions::default()).map(|(file, _)| file)
 }
 
 /// Converts a document to a PSD/PSB file model, returning warnings about
 /// anything that could not be represented. The merged composite is rendered
 /// with `photocraft_compose::flatten`.
-pub fn document_to_psd_with(doc: &Document, opts: &PsdExportOptions) -> (PsdFile, Vec<String>) {
-    document_to_psd_sized(doc, opts, 0, &Interrupt::NONE, PSD_MAX_FILE_SIZE)
+///
+/// Smart-object files still in the file the document was opened from are read first; one that
+/// can't be read is an error (writing it empty would lose it).
+pub fn document_to_psd_with(doc: &Document, opts: &PsdExportOptions) -> Result<(PsdFile, Vec<String>), crate::IoError> {
+    let doc = crate::with_blocks_loaded(doc)?;
+    Ok(document_to_psd_sized(&doc, opts, 0, &Interrupt::NONE, PSD_MAX_FILE_SIZE))
 }
 
 /// [`document_to_psd_with`] for a background save (#3389): reports progress through `ctl` after
 /// each layer record and each band of the merged composite. Once `ctl` is cancelled it stops
-/// early and returns an **incomplete** model: callers check `ctl` and discard it.
+/// early and returns an **incomplete** model: callers check `ctl` and discard it. The caller
+/// reads the global blocks left in the opened file first ([`crate::with_blocks_loaded`]).
 pub(crate) fn document_to_psd_interruptible(doc: &Document, opts: &PsdExportOptions, ctl: &Interrupt) -> (PsdFile, Vec<String>) {
     document_to_psd_sized(doc, opts, 0, ctl, PSD_MAX_FILE_SIZE)
 }
@@ -171,7 +176,8 @@ fn export_supported_document(
             _ => None,
         })
         .collect();
-    let previous = (!text_layers.is_empty()).then(|| preserved.iter().find(|(_, key, _)| key == b"Txt2").map(|(_, _, data)| data.to_vec())).flatten();
+    let previous =
+        (!text_layers.is_empty()).then(|| preserved.iter().find(|(_, key, _)| key == b"Txt2").map(|(_, _, data)| data.resident().to_vec())).flatten();
     // A fresh document of ordinary (Metrics) text with no Txt2-only OpenType settings has nothing
     // to put in `Txt2`, and Photoshop never writes its empty `<< /0 << >> >>` stub — readers such
     // as Photopea reject it (#3514). Keep the block when the file had one (round-trip its pen
@@ -191,7 +197,7 @@ fn export_supported_document(
         if !ex.records.is_empty() && matches!(&key, b"Lr16" | b"Lr32" | b"Layr") {
             continue;
         }
-        let block = global_block(sig, key, &data);
+        let block = global_block(sig, key, data.resident());
         // A kept merged-transparency marker describes the opened file's composite. Over an opaque
         // one it would make the first alpha channel read back as the transparency, and vanish.
         if !has_alpha && block.is_merged_transparency_marker() {
@@ -442,8 +448,12 @@ fn index_layer_ids_and_text(doc: &Document, ex: &mut Ex<'_>) {
                 _ => fresh.push(l.id),
             }
         }
-        let objects =
-            doc.metadata.psd_global_blocks.iter().find(|(_, key, _)| key == b"Txt2").map_or(0, |(_, _, d)| photocraft_text::psd::txt2_object_count(d));
+        let objects = doc
+            .metadata
+            .psd_global_blocks
+            .iter()
+            .find(|(_, key, _)| key == b"Txt2")
+            .map_or(0, |(_, _, d)| photocraft_text::psd::txt2_object_count(d.resident()));
         let mut next_txt = used_txt.iter().max().map_or(0, |m| m + 1).max(i32::try_from(objects).unwrap_or(i32::MAX));
         if next_txt.saturating_add(fresh.len() as i32) > photocraft_text::psd::MAX_TEXT_INDEX + 1 {
             next_txt = 0;

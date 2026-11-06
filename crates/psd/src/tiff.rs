@@ -289,7 +289,7 @@ impl ImageSourceData {
 #[cfg(test)]
 fn padded_block(key: [u8; 4], data: Vec<u8>) -> TaggedBlock {
     let pad = (4 - data.len() % 4) % 4;
-    TaggedBlock { signature: *b"8BIM", key, data, padding: Some(vec![0; pad]) }
+    TaggedBlock { signature: *b"8BIM", key, data, padding: Some(vec![0; pad]), stored: None }
 }
 
 /// Parses a 34377 tag (image resources). Little-endian resource blocks (`MIB8`) are converted;

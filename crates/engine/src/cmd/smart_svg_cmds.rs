@@ -45,13 +45,13 @@ fn smart(doc: &Document, id: LayerId) -> Result<&SmartObject> {
 }
 
 /// Borrow embedded bytes from the object or PSD table without following a linked disk path.
-fn embedded<'a>(doc: &'a Document, sm: &'a SmartObject) -> Result<(String, &'a [u8])> {
+fn embedded<'a>(doc: &'a Document, sm: &'a SmartObject) -> Result<(String, std::borrow::Cow<'a, [u8]>)> {
     let (name, bytes) = match &sm.source {
-        SmartSource::Embedded { file_name, bytes } => (file_name.clone(), bytes.as_slice()),
+        SmartSource::Embedded { file_name, bytes } => (file_name.clone(), std::borrow::Cow::Borrowed(bytes.as_slice())),
         SmartSource::Linked { path } => photocraft_io::linked::embedded_payload(&doc.metadata, path)
             .ok_or_else(|| EngineError::Other("external editing requires embedded vector contents".into()))?,
     };
-    validate_source(bytes)?;
+    validate_source(&bytes)?;
     Ok((name, bytes))
 }
 
@@ -159,6 +159,7 @@ fn export(s: &mut Session, p: &Value) -> Result<Value> {
     let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
     let sm = smart(doc, id)?;
     let (name, bytes) = embedded(doc, sm)?;
+    let bytes = &*bytes;
     let mut extension = source_extension(bytes).ok_or_else(|| bad(EXPORT, "unsupported vector source"))?;
     if extension != "svg" && name.to_ascii_lowercase().ends_with(".ai") {
         extension = "ai";
@@ -254,12 +255,14 @@ fn update_contents_with_frame_budget(s: &mut Session, p: &Value, native: bool, f
     let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
     let target = smart(doc, id)?;
     let (name, original) = embedded(doc, target)?;
+    let original = &*original;
     let original_hash = blake3::hash(original);
     if target.contents_id != contents || !original_hash.to_hex().as_str().eq_ignore_ascii_case(expected) {
         return Err(bad(UPDATE, "smart-object contents changed since external editing started"));
     }
     for instance in &ids {
         let (_, bytes) = embedded(doc, smart(doc, *instance)?)?;
+        let bytes = &*bytes;
         // Shared instances normally borrow the same immutable payload. Its fingerprint was
         // checked above; don't re-hash a large source once per layer.
         let matches = (bytes.len() == original.len() && std::ptr::eq(bytes.as_ptr(), original.as_ptr()))
