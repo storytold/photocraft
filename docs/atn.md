@@ -401,6 +401,11 @@ The Vibrance event and adjustment-opacity handling incorporate [@bommerts' contr
 - Image Size preserves `scaleStyles`. Native calls default to true; an absent ATN flag means
   false (the reference application plays both alike), so Save writes the key only when it is true.
   Crop and resolution-only resizing retain their existing behavior.
+- Image Size preserves `keepPrintSize` for a resolution-only step, which its default resampler
+  implies: the descriptor has no flag for it, so Save writes the interpolation the command runs with
+  (`Intr` bicubic) beside `Rslt`, and the step reads back with resampling on instead of changing the
+  resolution alone (#11515). A step that never asked for it is still refused rather than gaining it
+  (#7245), and `resample: "none"` still saves as `Rslt` alone (#7189).
 - Convert to Profile preserves `Dthr`, `Fltt` and `rasterizePlaced`, defaulting to false.
   `sdwM` is written as the reference application records it (-1); other values and malformed
   flags remain kept steps. Absolute intent writes `AClr`, with `AbsC` still accepted on import.
