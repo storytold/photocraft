@@ -2348,3 +2348,12 @@ fn shift_right_menu_choose_rejects_bad_choices_and_sets_the_tool() {
     shift_right(&mut app, &ctx, "magicEraser");
     assert!(inspect(&app, &ctx)["brushModeMenu"].is_null());
 }
+
+#[test]
+fn patch_affinity_can_be_enabled_through_ui_set() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let ctx = egui::Context::default();
+    let result = call(&mut app, &ctx, "ui.set", json!({"patchAffinity": true}));
+    assert_eq!(result["ok"], true, "{result}");
+    assert!(app.ui.tool_options.patch_affinity);
+}
