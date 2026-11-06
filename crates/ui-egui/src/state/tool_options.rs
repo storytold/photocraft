@@ -100,6 +100,9 @@ pub struct ToolOptions {
     /// radius, polygon sides, line weight.
     pub shape_fill: bool,
     pub stroke_width: f32,
+    /// Opt-in pixel alignment for new rectangle strokes.
+    #[serde(default)]
+    pub pixel_align_stroke: bool,
     #[serde(default)]
     pub shape_stroke: crate::shape_stroke_ui::StrokeOptions,
     /// Shape tools: the gradient the next shape's fill / stroke takes (the swatches' Gradient
@@ -436,6 +439,7 @@ impl Default for ToolOptions {
             pen_path_op: default_pen_path_op(),
             shape_fill: true,
             stroke_width: 0.0,
+            pixel_align_stroke: false,
             shape_stroke: Default::default(),
             shape_fill_gradient: None,
             shape_stroke_gradient: None,

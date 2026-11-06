@@ -1481,3 +1481,33 @@ fn path_rows_dragged_onto_the_trash_are_deleted() {
     let doc = &h.state().session.active().unwrap().doc;
     assert_eq!((doc.layers.len(), doc.paths.len()), (layers, 1), "nothing is deleted");
 }
+
+#[test]
+fn pixel_align_checkbox_edits_selected_shape_and_undo_restores_its_value() {
+    use egui_kittest::kittest::Queryable;
+    let mut app = app();
+    finish_shape(&mut app, Tool::Rectangle, [20.0, 20.0], [120.0, 100.0], Default::default());
+    // The selected layer, rather than the next-shape preference, supplies the checkbox.
+    app.ui.tool_options.pixel_align_stroke = true;
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1600.0, 48.0)).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                ui.horizontal_centered(|ui| options_bar(app, ui, Tool::Rectangle));
+            }
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
+    h.run_steps(4);
+
+    h.get_by_label("Pixel Align Stroke").click();
+    h.run_steps(3);
+    let st = h.state().session.active().unwrap();
+    let LayerContent::Shape(shape) = &st.doc.layer(st.active_layer.unwrap()).unwrap().content else { panic!("shape") };
+    assert!(shape.pixel_align_stroke);
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    h.run_steps(3);
+    let st = h.state().session.active().unwrap();
+    let LayerContent::Shape(shape) = &st.doc.layer(st.active_layer.unwrap()).unwrap().content else { panic!("shape") };
+    assert!(!shape.pixel_align_stroke);
+}

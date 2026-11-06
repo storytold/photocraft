@@ -24,6 +24,7 @@ pub mod edit;
 pub mod feather;
 pub mod flatten;
 pub mod map;
+mod pixel_align;
 pub mod raster;
 pub mod shapes;
 pub mod stroke;
@@ -571,10 +572,13 @@ impl FillCoverage {
 
 /// Everything needed to render a shape layer, compiled once.
 pub struct CompiledShape {
+    pixel_stroke: pixel_align::PixelRuns,
+    pixel_dash_caps: pixel_align::PixelRuns,
+    pixel_dash_threshold: f32,
     fill: Option<(FillCoverage, Paint)>,
     stroke: Option<(Rasterizer, Paint, f32)>,
     /// Fill area used to clip inside/outside strokes.
-    align: Option<(Rasterizer, bool)>,
+    align: Option<(Rasterizer, bool, f32)>,
     bounds: Option<Rect>,
 }
 
@@ -594,18 +598,39 @@ impl CompiledShape {
         let area = fill_rasterizer(&shape.path, tol);
         let mut bounds = None;
         let fill = shape.fill.as_ref().map(|f| {
-            let coverage = FillCoverage::new(shape, &area, coverage);
+            let aligned = pixel_align::line_fill_path(shape).map(|p| fill_rasterizer(&p, tol));
+            let coverage = FillCoverage::new(shape, aligned.as_ref().unwrap_or(&area), coverage);
             bounds = coverage.bounds();
             (coverage, Paint::from_fill(f, pb, cb))
         });
         let all_closed = shape.path.subpaths.iter().all(|s| s.closed);
         let mut align = None;
+        let mut pixel_stroke = pixel_align::PixelRuns::stroke(shape, tol);
+        // The stroker's round caps preserve circular area. Their half-circle
+        // outside an integer dash boundary has area pi/8 at width 1. Use that
+        // tie instead of 1/2, retaining the caps' extra pixel of raster length.
+        let pixel_dash_threshold =
+            if shape.stroke.as_ref().is_some_and(|s| s.cap == photocraft_doc::LineCap::Round) { std::f32::consts::PI / 8.0 } else { 0.5 };
+        let pixel_dash_caps = if shape.stroke.as_ref().is_some_and(|s| !s.dashes.is_empty()) {
+            pixel_align::PixelRuns::stroke(shape, tol)
+        } else {
+            pixel_align::PixelRuns::default()
+        };
         let stroke = shape.stroke.as_ref().filter(|s| s.width > 0.0 && s.opacity > 0.0).map(|s| {
             let mut st = stroke_style(s);
+            let pixel_aligned_center =
+                shape.pixel_align_stroke && s.align == StrokeAlign::Center && s.width == 1.0 && pixel_align::integer_rectangle(&shape.path);
+
             if all_closed && s.align != StrokeAlign::Center {
                 // Inside/outside strokes: a centred stroke twice as wide, clipped by the fill area.
                 st.width *= 2.0;
-                align = Some((area.clone(), s.align == StrokeAlign::Inside));
+                align = Some((area.clone(), s.align == StrokeAlign::Inside, 1.0));
+            }
+            if pixel_aligned_center {
+                pixel_stroke = pixel_align::PixelRuns::default();
+                // Preserve dash positions from the original vector path.
+                // Select the interior pixel row for crisp 1px strokes.
+                align = Some((area.clone(), true, 2.0));
             }
             let r = stroke_rasterizer(&shape.path, &st, tol);
             let sb = r.pixel_bounds();
@@ -618,7 +643,7 @@ impl CompiledShape {
         if shape.path.inverted && shape.fill.is_some() {
             bounds = Some(Rect::new(i32::MIN / 4, i32::MIN / 4, i32::MAX / 4, i32::MAX / 4));
         }
-        CompiledShape { fill, stroke, align, bounds }
+        CompiledShape { fill, stroke, align, bounds, pixel_stroke, pixel_dash_caps, pixel_dash_threshold }
     }
 
     /// Pixel bounds of the rendering (`None` = nothing visible).
@@ -644,12 +669,15 @@ impl CompiledShape {
         }
         if let Some((r, paint, opacity)) = &self.stroke {
             let mut cov = r.render(rect);
-            if let Some((area, inside)) = &self.align {
+            self.pixel_stroke.apply(rect, &mut cov, |region| r.render(region));
+            if let Some((area, inside, scale)) = &self.align {
                 let a = area.render(rect);
                 for (c, f) in cov.iter_mut().zip(&a) {
-                    *c *= if *inside { *f } else { 1.0 - *f };
+                    let clip = if *inside { *f } else { 1.0 - *f };
+                    *c = (*c * clip * *scale).min(1.0);
                 }
             }
+            self.pixel_dash_caps.sharpen_dash_caps(rect, &mut cov, self.pixel_dash_threshold, |region| r.render(region));
             for (i, (o, c)) in out.iter_mut().zip(&cov).enumerate() {
                 if *c <= 0.0 {
                     continue;

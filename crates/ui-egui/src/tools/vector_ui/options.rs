@@ -65,6 +65,8 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                 o.shape_stroke = change.options;
                 o.stroke_width = enabled_stroke_width(o.stroke_width);
             }
+            crate::widgets::vline(ui, 22.0);
+            crate::widgets::checkbox(ui, &mut o.pixel_align_stroke, tl!("Pixel Align Stroke"));
         }
         crate::widgets::vline(ui, 22.0);
         path_operations_menu(app, ui);
@@ -259,6 +261,14 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
                 edit = Some(json!({"stroke": {"width": w}, "coalesce": coalesce("stroke-w")}));
             }
         });
+        let mut pixel_align_stroke = sh.pixel_align_stroke;
+        if crate::widgets::checkbox(ui, &mut pixel_align_stroke, tl!("Pixel Align Stroke")).changed() {
+            edit = Some(json!({
+                "pixelAlignStroke": pixel_align_stroke,
+                "coalesce": coalesce("pixel-align-stroke")
+            }));
+        }
+
         let style = sh.stroke.as_ref().map(crate::shape_stroke_ui::StrokeOptions::from).unwrap_or_default();
         let stroke_enabled = sh.stroke.as_ref().is_some_and(|stroke| stroke.width > 0.0);
         if let Some(change) = crate::shape_stroke_ui::button(

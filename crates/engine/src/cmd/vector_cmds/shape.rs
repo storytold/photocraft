@@ -379,6 +379,7 @@ pub(super) fn shape_info(s: &Session, id: LayerId) -> Result<Value> {
         "path": path_json(&sh.path),
         "fill": sh.fill.as_ref().map(fill_json),
         "stroke": sh.stroke.as_ref().map(stroke_json),
+        "pixelAlignStroke": sh.pixel_align_stroke,
         "live": sh.live.as_ref().map(live_json),
         "kind": sh.live.as_ref().map_or("path", live_kind),
         "bounds": bounds,
@@ -443,6 +444,11 @@ pub(super) fn shape_create(s: &mut Session, p: &Value) -> Result<Value> {
         None => None,
     };
     vector::flatten::validate_shape(&path, stroke.as_ref()).map_err(|e| bad(CMD, e))?;
+    let pixel_align_stroke = match p.get("pixelAlignStroke") {
+        None => false,
+        Some(Value::Bool(enabled)) => *enabled,
+        Some(_) => return Err(bad(CMD, "`pixelAlignStroke` must be a boolean")),
+    };
     // Add to an existing shape layer with a path operation (Shape tool in combine/subtract… mode).
     if let Some(target) = p.get("addTo").and_then(Value::as_u64) {
         let op = p.get("op").and_then(Value::as_str).map_or(Some(PathOp::Combine), op_from).ok_or_else(|| bad(CMD, "unknown `op`"))?;
@@ -460,7 +466,7 @@ pub(super) fn shape_create(s: &mut Session, p: &Value) -> Result<Value> {
         return shape_info(s, id);
     }
     let name = p.get("name").and_then(Value::as_str).map(str::to_string);
-    let mut sh = ShapeLayer { path, fill, stroke, live, ..Default::default() };
+    let mut sh = ShapeLayer { path, fill, stroke, live, pixel_align_stroke, ..Default::default() };
     let id = s.edit("New Shape Layer", |doc, active| {
         refresh_shape(doc, &mut sh);
         let name = name.unwrap_or_else(|| doc.next_layer_name(default_name(kind)));
@@ -538,6 +544,9 @@ pub(super) fn shape_edit(s: &mut Session, p: &Value) -> Result<Value> {
         }
         if let Some(v) = p.get("stroke") {
             sh.stroke = parse_stroke(v, sh.stroke.clone(), fgc).map_err(|e| bad(CMD, e))?;
+        }
+        if let Some(value) = p.get("pixelAlignStroke") {
+            sh.pixel_align_stroke = value.as_bool().ok_or_else(|| bad(CMD, "`pixelAlignStroke` must be a boolean"))?;
         }
         if let Some(n) = name {
             layer.name = n;

@@ -21,13 +21,21 @@ struct SelectedShape {
     fill: Option<photocraft_doc::Fill>,
     stroke: Option<photocraft_doc::ShapeStroke>,
     live: Option<photocraft_doc::LiveShape>,
+    pixel_align_stroke: bool,
 }
 
 fn selected_shape(session: &photocraft_engine::Session) -> Option<SelectedShape> {
     let st = session.active()?;
     let layer = st.active_layer?;
     match &st.doc.layer(layer)?.content {
-        LayerContent::Shape(sh) => Some(SelectedShape { doc: st.doc.id, layer, fill: sh.fill.clone(), stroke: sh.stroke.clone(), live: sh.live.clone() }),
+        LayerContent::Shape(sh) => Some(SelectedShape {
+            doc: st.doc.id,
+            layer,
+            fill: sh.fill.clone(),
+            stroke: sh.stroke.clone(),
+            live: sh.live.clone(),
+            pixel_align_stroke: sh.pixel_align_stroke,
+        }),
         _ => None,
     }
 }
@@ -95,6 +103,14 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
         o.shape_stroke = change.options;
         o.stroke_width = enabled_stroke_width(o.stroke_width);
     }
+    crate::widgets::vline(ui, 22.0);
+    let mut pixel_align = target.as_ref().map_or(o.pixel_align_stroke, |s| s.pixel_align_stroke);
+
+    if crate::widgets::checkbox(ui, &mut pixel_align, tl!("Pixel Align Stroke")).changed() {
+        o.pixel_align_stroke = pixel_align;
+        edit = Some(json!({"pixelAlignStroke": pixel_align}));
+    }
+
     match tool {
         Tool::Rectangle => {
             crate::widgets::vline(ui, 22.0);

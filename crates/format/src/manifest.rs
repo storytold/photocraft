@@ -282,6 +282,9 @@ pub enum ContentM {
         path: Path,
         #[serde(default)]
         stroke: Option<ShapeStroke>,
+        /// Optional pixel alignment; absent in legacy files.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        pixel_align_stroke: bool,
         #[serde(default)]
         live: Option<LiveShape>,
         /// Arrow parameters stored separately for backward compatibility.

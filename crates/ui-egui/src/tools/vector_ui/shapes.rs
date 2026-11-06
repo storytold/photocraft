@@ -124,6 +124,7 @@ pub(super) fn fill_param(app: &PhotocraftApp) -> Value {
 pub fn create_shape(app: &mut PhotocraftApp, mut geometry: Value) -> Result<Value, String> {
     geometry["fill"] = fill_param(app);
     geometry["stroke"] = stroke_param(app);
+    geometry["pixelAlignStroke"] = json!(app.ui.tool_options.pixel_align_stroke);
     app.run("shape.create", geometry)
 }
 
@@ -143,6 +144,7 @@ pub(super) fn shape_preview(app: &PhotocraftApp, tool: Tool, start: [f64; 2], en
         path,
         fill: o.shape_fill.then(|| tool_paint(app, false)),
         stroke: (o.stroke_width > 0.0).then(|| o.shape_stroke.stroke(o.stroke_width, tool_paint(app, true))),
+        pixel_align_stroke: o.pixel_align_stroke,
         ..Default::default()
     })
 }

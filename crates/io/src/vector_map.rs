@@ -209,6 +209,7 @@ pub fn vscg_bytes(f: &Fill) -> Vec<u8> {
 pub struct VstkInfo {
     pub stroke: Option<ShapeStroke>,
     pub fill_enabled: bool,
+    pub pixel_align_stroke: bool,
 }
 
 fn content_fill(d: &Descriptor) -> Option<Fill> {
@@ -233,9 +234,10 @@ fn unit_px(v: Option<&Value>, dpi: f32) -> Option<f64> {
 
 pub fn parse_vstk(data: &[u8], dpi: f32) -> Option<VstkInfo> {
     let d = parse_prefix_versioned(data)?;
+    let pixel_align_stroke = bool_of(&d, "strokeStyleStrokeAdjust");
     let fill_enabled = !matches!(d.get("fillEnabled"), Some(Value::Boolean(false)));
     if !bool_of(&d, "strokeEnabled") {
-        return Some(VstkInfo { stroke: None, fill_enabled });
+        return Some(VstkInfo { stroke: None, fill_enabled, pixel_align_stroke });
     }
     let e = |k: &str| enum_of(&d, k).map(<[u8]>::to_vec).unwrap_or_default();
     let cap = match &e("strokeStyleLineCapType")[..] {
@@ -279,7 +281,7 @@ pub fn parse_vstk(data: &[u8], dpi: f32) -> Option<VstkInfo> {
         dashes,
         dash_offset: num(d.get("strokeStyleLineDashOffset")).unwrap_or(0.0) as f32,
     };
-    Some(VstkInfo { stroke: Some(stroke), fill_enabled })
+    Some(VstkInfo { stroke: Some(stroke), fill_enabled, pixel_align_stroke })
 }
 
 fn en(ty: &str, v: &str) -> Value {
@@ -301,6 +303,10 @@ fn fold_stroke_color_alpha(s: &ShapeStroke) -> ShapeStroke {
 }
 
 pub fn vstk_bytes(stroke: Option<&ShapeStroke>, fill_enabled: bool, dpi: f32) -> Vec<u8> {
+    vstk_bytes_aligned(stroke, fill_enabled, dpi, false)
+}
+
+fn vstk_bytes_aligned(stroke: Option<&ShapeStroke>, fill_enabled: bool, dpi: f32, pixel_align_stroke: bool) -> Vec<u8> {
     let default = ShapeStroke::default();
     let folded = stroke.map(fold_stroke_color_alpha);
     let s = folded.as_ref().unwrap_or(&default);
@@ -355,7 +361,7 @@ pub fn vstk_bytes(stroke: Option<&ShapeStroke>, fill_enabled: bool, dpi: f32) ->
             ),
         )
         .with("strokeStyleScaleLock", Value::Boolean(false))
-        .with("strokeStyleStrokeAdjust", Value::Boolean(false))
+        .with("strokeStyleStrokeAdjust", Value::Boolean(pixel_align_stroke))
         .with("strokeStyleLineDashSet", Value::List(s.dashes.iter().map(|v| Value::UnitFloat { unit: *b"#Nne", value: f64::from(*v) }).collect()))
         .with("strokeStyleBlendMode", en("BlnM", "Nrml"))
         .with("strokeStyleOpacity", Value::UnitFloat { unit: *b"#Prc", value: f64::from(s.opacity * 100.0) })
@@ -516,6 +522,7 @@ pub fn shape_from_blocks(sh: &mut ShapeLayer, block: &dyn Fn(&[u8; 4]) -> Option
     }
     if let Some(v) = block(b"vstk").and_then(|d| parse_vstk(&d, dpi)) {
         sh.stroke = v.stroke;
+        sh.pixel_align_stroke = v.pixel_align_stroke;
         if !v.fill_enabled {
             sh.fill = None;
         }
@@ -568,13 +575,22 @@ pub fn shape_blocks(sh: &ShapeLayer, raw: &mut Vec<([u8; 4], Vec<u8>)>, w: u32, 
     }
     // Stroke (+ fill enabled flag). A fill we could not decode counts as unchanged.
     let undecodable_fill = sh.fill.is_none() && present && !has_fill_block(raw);
-    let same = |v: &VstkInfo| v.stroke == sh.stroke && (v.fill_enabled == sh.fill.is_some() || (v.fill_enabled && undecodable_fill));
+    let same_appearance = |v: &VstkInfo| v.stroke == sh.stroke && (v.fill_enabled == sh.fill.is_some() || (v.fill_enabled && undecodable_fill));
     match find(raw, b"vstk") {
-        Some(i) if parse_vstk(&raw[i].1, dpi).as_ref().is_some_and(same) => {}
-        Some(i) => raw[i].1 = vstk_bytes(sh.stroke.as_ref(), sh.fill.is_some(), dpi),
+        Some(i) if parse_vstk(&raw[i].1, dpi).as_ref().is_some_and(same_appearance) => {
+            if let Some(mut d) = parse_prefix_versioned(&raw[i].1)
+                && bool_of(&d, "strokeStyleStrokeAdjust") != sh.pixel_align_stroke
+            {
+                // Toggling alignment must retain unknown stroke descriptor entries.
+                d.items.retain(|(k, _)| !k.is("strokeStyleStrokeAdjust"));
+                d.items.push((Id::new("strokeStyleStrokeAdjust"), Value::Boolean(sh.pixel_align_stroke)));
+                raw[i].1 = VersionedDescriptor::new(d).to_bytes();
+            }
+        }
+        Some(i) => raw[i].1 = vstk_bytes_aligned(sh.stroke.as_ref(), sh.fill.is_some(), dpi, sh.pixel_align_stroke),
         // "No fill" needs a vstk only when a fill block would otherwise paint.
-        None if sh.stroke.is_some() || (sh.fill.is_none() && has_fill_block(raw)) => {
-            raw.push((*b"vstk", vstk_bytes(sh.stroke.as_ref(), sh.fill.is_some(), dpi)));
+        None if sh.pixel_align_stroke || sh.stroke.is_some() || (sh.fill.is_none() && has_fill_block(raw)) => {
+            raw.push((*b"vstk", vstk_bytes_aligned(sh.stroke.as_ref(), sh.fill.is_some(), dpi, sh.pixel_align_stroke)));
         }
         None => {}
     }
@@ -777,5 +793,39 @@ mod tests {
         assert!(!raw.iter().any(|(k, _)| k == b"vogk"));
         let (p, _) = path_from_vmsk(&raw[0].1, 64, 64).unwrap();
         assert_eq!(p, edited.path);
+    }
+}
+
+#[cfg(test)]
+mod pixel_align_tests {
+    use super::*;
+    #[test]
+    fn pixel_alignment_psd_roundtrip_including_disabled_stroke_and_unknown_entries() {
+        for enabled in [false, true] {
+            let mut sh = ShapeLayer { pixel_align_stroke: enabled, ..Default::default() };
+            // Use a locally built path below; the stroke-disabled case matters for Line Tool.
+            sh.path = Path::new(vec![Subpath::polygon(&[(10.0, 10.0), (50.0, 10.0), (50.0, 50.0), (10.0, 50.0)])]);
+            let mut raw = Vec::new();
+            shape_blocks(&sh, &mut raw, 100, 100, 72.0);
+            let mut loaded = ShapeLayer::default();
+            shape_from_blocks(&mut loaded, &|key| raw.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone()), 100, 100, 72.0);
+            assert_eq!(loaded.pixel_align_stroke, enabled);
+            let at = raw.iter().position(|(k, _)| k == b"vstk").expect("stroke settings block");
+            {
+                let d = parse_prefix_versioned(&raw[at].1).unwrap().with("futureStrokeKey", Value::Integer(73));
+                raw[at].1 = VersionedDescriptor::new(d).to_bytes();
+                sh.pixel_align_stroke = !enabled;
+                shape_blocks(&sh, &mut raw, 100, 100, 72.0);
+                let d = parse_prefix_versioned(&raw[at].1).unwrap();
+                assert_eq!(d.get("futureStrokeKey"), Some(&Value::Integer(73)));
+                assert_eq!(bool_of(&d, "strokeStyleStrokeAdjust"), !enabled);
+                let unchanged = raw.clone();
+                shape_blocks(&sh, &mut raw, 100, 100, 72.0);
+                assert_eq!(raw, unchanged);
+            }
+        }
+        let mut d = parse_prefix_versioned(&vstk_bytes(None, true, 72.0)).unwrap();
+        d.items.retain(|(k, _)| !k.is("strokeStyleStrokeAdjust"));
+        assert!(!parse_vstk(&VersionedDescriptor::new(d).to_bytes(), 72.0).unwrap().pixel_align_stroke);
     }
 }
