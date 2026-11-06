@@ -610,6 +610,12 @@ pub struct ImportOptions {
     /// Resolution (dots per inch) PDF pages are rendered at on import; the document keeps it so
     /// the page's print size is preserved. Defaults to 300.
     pub pdf_dpi: f32,
+    /// The 1-based, inclusive page range to import; `None` imports every page (up to the cap).
+    pub pdf_pages: Option<(u32, u32)>,
+    /// Import PDF text objects as editable text layers (default on).
+    pub pdf_text: bool,
+    /// Import PDF vector paths as editable shape layers (default on).
+    pub pdf_vectors: bool,
     /// Explicit one-shot authorization for imports that exceed the soft budget but fit within the hard budget.
     pub psd_high_memory_approved: bool,
     /// Optional estimate limit for high-memory approval. When set, approval only applies if
@@ -625,6 +631,9 @@ impl Default for ImportOptions {
             psd_max_pixel_bytes: 0,
             flat_max_pixel_bytes: 0,
             pdf_dpi: 300.0,
+            pdf_pages: None,
+            pdf_text: true,
+            pdf_vectors: true,
             psd_high_memory_approved: false,
             psd_approved_estimate: None,
         }

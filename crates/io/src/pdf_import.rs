@@ -1,13 +1,16 @@
-//! PDF import: PDFium renders every page and each page becomes an artboard.
+//! PDF import: PDFium renders the selected pages and each page becomes an artboard.
 //!
 //! The document resolution is chosen so the page's physical size is preserved even when the
 //! raster is capped: pixels ÷ resolution × 72 pt is the PDF page's size. Pages are laid out side
 //! by side; page count, per-page pixels, union pixels and the aggregate pixel budget are bounded.
+//!
+//! Text and vector page objects can be imported as editable layers (`ImportOptions::pdf_text` /
+//! `pdf_vectors`); their page-space points are mapped to document pixels through the effective DPI.
 
 use crate::{ImportOptions, ImportResult, IoError};
 use photocraft_color::{ColorMode, PixelFormat, SampleType};
-use photocraft_doc::{Artboard, Document, Group, Layer, LayerContent};
-use photocraft_geom::{Rect, Size};
+use photocraft_doc::{Artboard, Color, Document, Fill, Group, Knot, Layer, LayerContent, Path, PathOp, ShapeLayer, ShapeStroke, Subpath, TextLayer};
+use photocraft_geom::{Affine, Point, Rect, Size};
 use photocraft_raster::{Interrupt, Surface};
 
 /// `%PDF-` magic. `.ai` files are PDFs too, but the dispatch keeps them out of this importer.
@@ -21,7 +24,7 @@ pub fn import(_name: &str, _bytes: &[u8], _opts: &ImportOptions, _ctl: &Interrup
     Err(IoError::Unsupported("PDF import needs the desktop build".into()))
 }
 
-/// Renders every PDF page and opens it as one artboard per page.
+/// Renders the selected PDF pages and opens each as one artboard.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn import(name: &str, bytes: &[u8], opts: &ImportOptions, ctl: &Interrupt) -> Result<ImportResult, IoError> {
     use pdfium_render::prelude::*;
@@ -38,19 +41,29 @@ pub fn import(name: &str, bytes: &[u8], opts: &ImportOptions, ctl: &Interrupt) -
     let pdfium = bind()?;
     let document = pdfium.load_pdf_from_byte_slice(bytes, None).map_err(|e| IoError::Unsupported(format!("PDF: {e}")))?;
     let total = document.pages().len().max(0) as usize;
-    let count = total.min(MAX_PAGES);
-    if count == 0 {
-        return Err(IoError::Unsupported("PDF has no pages".into()));
+    let (first, last) = match opts.pdf_pages {
+        Some((a, b)) => {
+            let a = (a.max(1) as usize).min(total.max(1));
+            let b = (b.max(1) as usize).min(total.max(1));
+            (a.min(b), a.max(b))
+        }
+        None => (1, total),
+    };
+    if total == 0 || first > total {
+        return Err(IoError::Unsupported("PDF has no pages in the requested range".into()));
     }
+    let page_count = last - first + 1;
+    let count = page_count.min(MAX_PAGES);
     // The page sizes in points first: the effective DPI must fit the budgets, and capping the
     // raster must not change the page's physical size.
     let mut sizes = Vec::with_capacity(count);
     for index in 0..count {
         ctl.check().map_err(|_| IoError::Cancelled)?;
-        let page = document.pages().get(index as i32).map_err(|e| IoError::Unsupported(format!("PDF: {e}")))?;
+        let page_index = first - 1 + index;
+        let page = document.pages().get(page_index as i32).map_err(|e| IoError::Unsupported(format!("PDF: {e}")))?;
         let (w, h) = (f64::from(page.width().value), f64::from(page.height().value));
         if w <= 0.0 || h <= 0.0 {
-            return Err(IoError::Unsupported(format!("PDF page {} has no area", index + 1)));
+            return Err(IoError::Unsupported(format!("PDF page {} has no area", page_index + 1)));
         }
         sizes.push((w, h));
     }
@@ -76,6 +89,7 @@ pub fn import(name: &str, bytes: &[u8], opts: &ImportOptions, ctl: &Interrupt) -
     let mut x = 0u32;
     for (index, (w_pt, h_pt)) in sizes.iter().enumerate() {
         ctl.check().map_err(|_| IoError::Cancelled)?;
+        let page_index = first - 1 + index;
         let target_width = (w_pt * dpi / 72.0).round().max(1.0) as i32;
         let target_height = (h_pt * dpi / 72.0).round().max(1.0) as i32;
         // A one-pixel-wide page would otherwise produce an arbitrarily tall bitmap before the
@@ -83,12 +97,12 @@ pub fn import(name: &str, bytes: &[u8], opts: &ImportOptions, ctl: &Interrupt) -
         if f64::from(target_width) * f64::from(target_height) > MAX_PAGE_PIXELS {
             return Err(IoError::Unsupported(format!(
                 "PDF page {} is too large at {dpi} dpi ({} x {} px); lower the import DPI",
-                index + 1,
+                page_index + 1,
                 target_width,
                 target_height
             )));
         }
-        let page = document.pages().get(index as i32).map_err(|e| IoError::Unsupported(format!("PDF: {e}")))?;
+        let page = document.pages().get(page_index as i32).map_err(|e| IoError::Unsupported(format!("PDF: {e}")))?;
         let bitmap =
             page.render_with_config(&PdfRenderConfig::new().set_target_width(target_width)).map_err(|e| IoError::Unsupported(format!("PDF render: {e}")))?;
         let (width, height) = (bitmap.width().max(0) as u32, bitmap.height().max(0) as u32);
@@ -96,7 +110,7 @@ pub fn import(name: &str, bytes: &[u8], opts: &ImportOptions, ctl: &Interrupt) -
         if f64::from(width) * f64::from(height) > MAX_PAGE_PIXELS {
             return Err(IoError::Unsupported(format!(
                 "PDF page {} rendered larger than the {MAX_PAGE_PIXELS} px budget ({} x {}); lower the import DPI",
-                index + 1,
+                page_index + 1,
                 width,
                 height
             )));
@@ -113,19 +127,114 @@ pub fn import(name: &str, bytes: &[u8], opts: &ImportOptions, ctl: &Interrupt) -
             data.push(f32::from(chunk[3]) / 255.0);
         }
         surface.write_region(Rect::from_xywh(x as i32, 0, width, height), &data);
-        let layer = Layer::new(format!("Page {}", index + 1), LayerContent::Raster(surface));
+        let layer = Layer::new(format!("Page {}", page_index + 1), LayerContent::Raster(surface));
         let rect = Rect::new(x as i32, 0, (x + width) as i32, height as i32);
-        let group = Group { children: vec![layer], expanded: true, artboard: Some(Artboard::new(rect)), frame_stroke: None };
-        doc.layers.push(Layer::new(format!("Page {}", index + 1), LayerContent::Group(group)));
+        let mut children = vec![layer];
+        if opts.pdf_text || opts.pdf_vectors {
+            children.extend(object_layers(&page, *h_pt, dpi, x, opts));
+        }
+        let group = Group { children, expanded: true, artboard: Some(Artboard::new(rect)), frame_stroke: None };
+        doc.layers.push(Layer::new(format!("Page {}", page_index + 1), LayerContent::Group(group)));
         x += width + GAP;
         ctl.progress((index + 1) as f32 / count as f32);
     }
     let mut warnings = Vec::new();
-    if total > count {
-        let reason = if count < total.min(MAX_PAGES) { "the rest would make the import canvas too large" } else { "the page limit is 16" };
-        warnings.push(format!("PDF has {total} pages; imported the first {count} ({reason})"));
+    if first > 1 || last < total || count < page_count {
+        let shown_last = first + count - 1;
+        let reason = if count < page_count { " (the page limit is 16)" } else { "" };
+        warnings.push(format!("PDF has {total} pages; imported pages {first}-{shown_last}{reason}"));
     }
     Ok(ImportResult { warnings, document: doc, source_read_only: false, preview_only: false })
+}
+
+/// Editable text and shape layers for one rendered page, in document pixels.
+#[cfg(not(target_arch = "wasm32"))]
+fn object_layers(page: &pdfium_render::prelude::PdfPage, height_pt: f64, dpi: f64, x: u32, opts: &ImportOptions) -> Vec<Layer> {
+    use pdfium_render::prelude::*;
+
+    let to_x = |v: f32| f64::from(v) * dpi / 72.0;
+    let objects = page.objects();
+    let mut layers = Vec::new();
+    for object in objects.iter() {
+        match object {
+            PdfPageObject::Text(text) if opts.pdf_text => {
+                let content = text.text();
+                if content.trim().is_empty() {
+                    continue;
+                }
+                let Ok(bounds) = text.bounds() else { continue };
+                let x_px = to_x(bounds.left().value).round() + f64::from(x);
+                let y_px = (height_pt - to_x(bounds.top().value)).round();
+                // The text layer's size is in points; the transform is in document pixels.
+                let size_pt = f64::from(text.scaled_font_size().value).max(1.0);
+                layers.push(Layer::new(
+                    "Text",
+                    LayerContent::Text(TextLayer {
+                        text: content,
+                        font_family: text.font().family(),
+                        size_pt: size_pt as f32,
+                        color: Color::BLACK,
+                        transform: Affine::translate(x_px, y_px),
+                        ..Default::default()
+                    }),
+                ));
+            }
+            PdfPageObject::Path(path) if opts.pdf_vectors => {
+                let mut subpaths: Vec<Subpath> = Vec::new();
+                let mut knots: Vec<Knot> = Vec::new();
+                let mut closed = false;
+                let mut bezier: Vec<(f64, f64)> = Vec::new();
+                for segment in path.segments().iter() {
+                    let point = || (to_x(segment.x().value).round(), (height_pt - to_x(segment.y().value)).round());
+                    if segment.is_close() {
+                        closed = true;
+                        continue;
+                    }
+                    match segment.segment_type() {
+                        PdfPathSegmentType::MoveTo => {
+                            if !knots.is_empty() {
+                                subpaths.push(Subpath { closed, knots: std::mem::take(&mut knots), op: PathOp::Combine });
+                                closed = false;
+                            }
+                            let (px, py) = point();
+                            knots.push(Knot::corner(px, py));
+                        }
+                        PdfPathSegmentType::LineTo => {
+                            let (px, py) = point();
+                            knots.push(Knot::corner(px, py));
+                        }
+                        PdfPathSegmentType::BezierTo => {
+                            // PDF draws a cubic Bézier as three consecutive BezierTo points: the
+                            // two control points, then the end point.
+                            bezier.push(point());
+                            if bezier.len() == 3 {
+                                let ((c1x, c1y), (c2x, c2y), (ex, ey)) = (bezier[0], bezier[1], bezier[2]);
+                                if let Some(prev) = knots.last_mut() {
+                                    prev.out_ctrl = Point::new(c1x, c1y);
+                                }
+                                knots.push(Knot::smooth(Point::new(ex, ey), Point::new(c2x, c2y), Point::new(ex, ey)));
+                                bezier.clear();
+                            }
+                        }
+                        PdfPathSegmentType::Unknown => {}
+                    }
+                }
+                if !knots.is_empty() {
+                    subpaths.push(Subpath { closed, knots, op: PathOp::Combine });
+                }
+                if subpaths.is_empty() {
+                    continue;
+                }
+                let stroke = path.is_stroked().unwrap_or(false).then(|| ShapeStroke { paint: Fill::Solid(Color::BLACK), width: 1.0, ..Default::default() });
+                layers.push(Layer::new(
+                    "Path",
+                    LayerContent::Shape(ShapeLayer { path: Path::new(subpaths), fill: Some(Fill::Solid(Color::BLACK)), stroke, ..Default::default() }),
+                ));
+            }
+            _ => {}
+        }
+    }
+    layers
 }
 
 /// The highest DPI not above `requested` that keeps every page and the artboard strip within

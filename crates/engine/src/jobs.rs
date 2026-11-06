@@ -956,6 +956,8 @@ pub fn import_options(prefs: &crate::prefs::Preferences) -> photocraft_io::Impor
     photocraft_io::ImportOptions {
         max_group_depth: prefs.file_handling.rasterize_svg_groups_deeper_than as usize,
         demosaic: prefs.raw_defaults.demosaic.method(),
+        pdf_dpi: prefs.file_handling.pdf_dpi,
+        pdf_pages: prefs.file_handling.pdf_pages,
         ..Default::default()
     }
 }

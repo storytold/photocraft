@@ -493,6 +493,10 @@ pub struct FileHandling {
     pub recover_on_launch: bool,
     /// Open a file with no ICC profile as untagged even when its EXIF ColorSpace tag says sRGB.
     pub ignore_exif_profile_tag: bool,
+    /// PDF import resolution in DPI; the document keeps it so the page's print size is preserved.
+    pub pdf_dpi: f32,
+    /// PDF import page range, 1-based and inclusive; `None` imports every page.
+    pub pdf_pages: Option<(u32, u32)>,
     /// Most renderers write ACEScg EXRs without stating the colour space. With this on, an EXR
     /// that would otherwise open as linear sRGB opens as ACEScg (AP1, linear) instead.
     pub exr_aces_cg: bool,
@@ -530,6 +534,8 @@ impl Default for FileHandling {
             autosave_minutes: 10,
             recover_on_launch: true,
             ignore_exif_profile_tag: false,
+            pdf_dpi: 300.0,
+            pdf_pages: None,
             exr_aces_cg: false,
             ask_before_saving_layered_tiff: true,
             maximize_psd_compatibility: Ask::Always,

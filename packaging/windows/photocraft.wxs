@@ -71,6 +71,8 @@
         <File Id="PhotocraftExe" Source="$(var.BinDir)\photocraft.exe" KeyPath="yes">
           <Shortcut Id="StartMenuShortcut" Directory="ProgramMenuFolder" Name="PhotoCraft" Description="PhotoCraft image editor" WorkingDirectory="INSTALLFOLDER" Advertise="yes" Icon="PhotocraftIcon.exe" IconIndex="0" />
         </File>
+        <!-- PDF import's PDFium (BSD-3-Clause), loaded at runtime; see apps/photocraft/build.rs. -->
+        <File Id="PdfiumDll" Source="$(var.BinDir)\pdfium.dll" />
 
         <!-- .pcraft: PhotoCraft's own format; PhotoCraft is its default app. -->
         <ProgId Id="Photocraft.Document" Description="PhotoCraft Document" Icon="PhotocraftExe" IconIndex="0">
