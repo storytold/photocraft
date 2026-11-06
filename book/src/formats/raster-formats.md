@@ -60,3 +60,15 @@ Format adapters pass compatible allocation limits into PNG, TIFF, WebP, and `ima
 `Limits::none()` exists for callers with a deliberate reason to relax policy. It remains bounded by representable memory sizes, but it removes the default resource policy and should not be used for untrusted input.
 
 Animated containers and multi-page TIFFs are represented as a single decoded frame or page by the current codec API; opening one adds an import warning such as "only the first of 3 frames was imported". A JPEG cut off inside its image data opens with a warning that its data ends early (an error when it holds no image data at all). Refer to [`crates/codecs/README.md`](https://github.com/storytold/photocraft/blob/main/crates/codecs/README.md) and source capability declarations for current behavior.
+
+### JPEG XL metadata controls
+
+EXIF/XMP embedding is enabled by default (`EncodeOptions::embed_metadata = true`).
+In **File > Export > Export As**, **Metadata: All** preserves available EXIF/XMP;
+**Metadata: None** disables metadata embedding. Save As uses the default metadata
+settings. The current CLI convert command preserves available metadata by default
+and exposes no separate metadata switch; codec API callers can set
+`embed_metadata = false`. Empty metadata leaves the original bare codestream.
+
+The existing export warnings still report unsupported ICC/DPI and conversion to
+sRGB. Preserving EXIF/XMP does not add support for embedding a source ICC profile.

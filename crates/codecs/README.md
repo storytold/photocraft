@@ -315,3 +315,15 @@ including chunks after IDAT. This budget is separate from pixels, not a total pr
 
 If `corpus/pngsuite/*.png` exists at the repo root, every file in it is compared against the
 `image` crate's decoder. Without it, that test is skipped.
+
+### JPEG XL metadata controls
+
+EXIF/XMP embedding is enabled by default (`EncodeOptions::embed_metadata = true`).
+In **File > Export > Export As**, **Metadata: All** preserves available EXIF/XMP;
+**Metadata: None** disables metadata embedding. Save As uses the default metadata
+settings. The current CLI convert command preserves available metadata by default
+and exposes no separate metadata switch; codec API callers can set
+`embed_metadata = false`. Empty metadata leaves the original bare codestream.
+
+The existing export warnings still report unsupported ICC/DPI and conversion to
+sRGB. Preserving EXIF/XMP does not add support for embedding a source ICC profile.

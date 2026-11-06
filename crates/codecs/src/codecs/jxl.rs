@@ -34,12 +34,10 @@ fn srgb_xmp_metadata(xmp: &str) -> std::borrow::Cow<'_, str> {
         ("<exif:ColorSpace>2</exif:ColorSpace>", "<exif:ColorSpace>1</exif:ColorSpace>"),
         ("exif:InteroperabilityIndex=\"R03\"", "exif:InteroperabilityIndex=\"R98\""),
         ("exif:InteroperabilityIndex='R03'", "exif:InteroperabilityIndex='R98'"),
-        ("<exif:InteroperabilityIndex>R03</exif:InteroperabilityIndex>",
-         "<exif:InteroperabilityIndex>R98</exif:InteroperabilityIndex>"),
+        ("<exif:InteroperabilityIndex>R03</exif:InteroperabilityIndex>", "<exif:InteroperabilityIndex>R98</exif:InteroperabilityIndex>"),
         ("photoshop:ICCProfile=\"Adobe RGB (1998)\"", "photoshop:ICCProfile=\"sRGB\""),
         ("photoshop:ICCProfile='Adobe RGB (1998)'", "photoshop:ICCProfile='sRGB'"),
-        ("<photoshop:ICCProfile>Adobe RGB (1998)</photoshop:ICCProfile>",
-         "<photoshop:ICCProfile>sRGB</photoshop:ICCProfile>"),
+        ("<photoshop:ICCProfile>Adobe RGB (1998)</photoshop:ICCProfile>", "<photoshop:ICCProfile>sRGB</photoshop:ICCProfile>"),
     ] {
         if out.contains(old) {
             out = out.replace(old, new);
@@ -48,22 +46,16 @@ fn srgb_xmp_metadata(xmp: &str) -> std::borrow::Cow<'_, str> {
     if out == xmp { std::borrow::Cow::Borrowed(xmp) } else { std::borrow::Cow::Owned(out) }
 }
 
-
 // Preserve the bare codestream when embedding metadata is not requested.
 // JPEG XL stores EXIF and XMP in ISO 18181-2 container boxes.
+/// Append a checked short or extended JPEG XL container box.
 fn append_jxl_box(out: &mut Vec<u8>, name: &[u8; 4], payload: &[u8]) -> Result<(), CodecError> {
-    let short_len = payload
-        .len()
-        .checked_add(8)
-        .ok_or_else(|| CodecError::encode(F, "JPEG XL box size overflow"))?;
+    let short_len = payload.len().checked_add(8).ok_or_else(|| CodecError::encode(F, "JPEG XL box size overflow"))?;
     if let Ok(len) = u32::try_from(short_len) {
         out.extend_from_slice(&len.to_be_bytes());
         out.extend_from_slice(name);
     } else {
-        let long_len = u64::try_from(payload.len())
-            .ok()
-            .and_then(|n| n.checked_add(16))
-            .ok_or_else(|| CodecError::encode(F, "JPEG XL box size overflow"))?;
+        let long_len = u64::try_from(payload.len()).ok().and_then(|n| n.checked_add(16)).ok_or_else(|| CodecError::encode(F, "JPEG XL box size overflow"))?;
         out.extend_from_slice(&1u32.to_be_bytes());
         out.extend_from_slice(name);
         out.extend_from_slice(&long_len.to_be_bytes());
@@ -72,6 +64,7 @@ fn append_jxl_box(out: &mut Vec<u8>, name: &[u8; 4], payload: &[u8]) -> Result<(
     Ok(())
 }
 
+/// Wrap an unchanged codestream only when nonempty metadata is supplied.
 fn jxl_with_metadata(codestream: Vec<u8>, exif: Option<&[u8]>, xmp: Option<&str>) -> Result<Vec<u8>, CodecError> {
     let exif = exif.filter(|b| !b.is_empty());
     let xmp = xmp.filter(|s| !s.is_empty());
@@ -98,7 +91,6 @@ fn jxl_with_metadata(codestream: Vec<u8>, exif: Option<&[u8]>, xmp: Option<&str>
     append_jxl_box(&mut output, b"jxlc", &codestream)?;
     Ok(output)
 }
-
 
 // zune-jpegxl 0.5.2 emits ExtraChannelInfo(all_default=true) for every alpha
 // channel. In JPEG XL that flag means *8-bit* alpha, even when the modular
@@ -196,6 +188,7 @@ fn correct_16_bit_alpha_header(bytes: &[u8], width: u32, height: u32) -> Result<
     Ok(fixed)
 }
 
+/// Encode lossless samples and optionally embed colour-reconciled EXIF/XMP.
 pub(crate) fn encode(image: &Image, plan: Plan, opts: &crate::EncodeOptions) -> Result<Vec<u8>, CodecError> {
     let image = image.converted(plan.layout, plan.sample);
     let space = match image.layout() {
@@ -230,20 +223,9 @@ pub(crate) fn encode(image: &Image, plan: Plan, opts: &crate::EncodeOptions) -> 
     if opts.embed_metadata {
         // The RGB modular codestream is sRGB. Only its RGB metadata needs
         // colour-space reconciliation; leave grayscale EXIF/XMP untouched.
-        let exif = image.meta.exif.as_deref().map(|b| {
-            if image.layout().is_rgb() {
-                crate::exif_color::srgb_exif_metadata(b)
-            } else {
-                std::borrow::Cow::Borrowed(b)
-            }
-        });
-        let xmp = image.meta.xmp.as_deref().map(|packet| {
-            if image.layout().is_rgb() {
-                srgb_xmp_metadata(packet)
-            } else {
-                std::borrow::Cow::Borrowed(packet)
-            }
-        });
+        let exif =
+            image.meta.exif.as_deref().map(|b| if image.layout().is_rgb() { crate::exif_color::srgb_exif_metadata(b) } else { std::borrow::Cow::Borrowed(b) });
+        let xmp = image.meta.xmp.as_deref().map(|packet| if image.layout().is_rgb() { srgb_xmp_metadata(packet) } else { std::borrow::Cow::Borrowed(packet) });
         jxl_with_metadata(codestream, exif.as_deref(), xmp.as_deref())
     } else {
         Ok(codestream)
@@ -287,11 +269,7 @@ mod tests {
         let mut pos = 32;
         let mut exif_box = vec![0, 0, 0, 0];
         exif_box.extend_from_slice(exif);
-        for (name, expected) in [
-            (b"Exif".as_slice(), exif_box),
-            (b"xml ".as_slice(), xmp.as_bytes().to_vec()),
-            (b"jxlc".as_slice(), stream),
-        ] {
+        for (name, expected) in [(b"Exif".as_slice(), exif_box), (b"xml ".as_slice(), xmp.as_bytes().to_vec()), (b"jxlc".as_slice(), stream)] {
             let len = u32::from_be_bytes(result[pos..pos + 4].try_into().unwrap()) as usize;
             assert!(len >= 8);
             assert_eq!(&result[pos + 4..pos + 8], name);

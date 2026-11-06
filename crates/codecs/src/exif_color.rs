@@ -291,6 +291,23 @@ mod tests {
         }
     }
 
+    /// Broken optional interoperability metadata must not undo a valid ColorSpace edit.
+    #[test]
+    fn srgb_export_keeps_color_space_edit_with_malformed_interoperability() {
+        for big in [false, true] {
+            for truncated in [false, true] {
+                let interop = 26 + 2 + 2 * ENTRY + 4;
+                let mut input = exif(big, &[(TAG_COLOR_SPACE, TYPE_SHORT, 1, 0xffff), (0xA005, TYPE_LONG, 1, interop as u32)]);
+                if truncated {
+                    input.extend(if big { 1u16.to_be_bytes() } else { 1u16.to_le_bytes() });
+                }
+                let mut expected = input.clone();
+                expected[36..38].copy_from_slice(&if big { 1u16.to_be_bytes() } else { 1u16.to_le_bytes() });
+                assert_eq!(srgb_exif_metadata(&input).as_ref(), expected.as_slice());
+            }
+        }
+    }
+
     #[test]
     fn missing_or_malformed_reads_as_no_tag() {
         assert_eq!(exif_color_space(&exif(false, &[(0x9000, 7, 4, 0)])), None, "no ColorSpace entry");
