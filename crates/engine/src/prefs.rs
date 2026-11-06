@@ -100,6 +100,11 @@ choice!(
     /// pointer (Photoshop), or erase with the current brush while dragging (Krita, Paint).
     RightClickPaint { BrushPicker = "brushPicker", Erase = "erase" } default BrushPicker
 );
+choice!(
+    /// Windows: which pen input supplies pressure. Windows Ink is the default; WinTab needs
+    /// Windows Ink turned off in the tablet driver's utility and a restart.
+    TabletInput { WindowsInk = "windowsInk", WinTab = "winTab" } default WindowsInk
+);
 choice!(OtherCursor { Standard = "standard", Precise = "precise" } default Standard);
 choice!(CheckerSize { None = "none", Small = "small", Medium = "medium", Large = "large" } default Medium);
 choice!(CheckerColors { Light = "light", Medium = "medium", Dark = "dark", Red = "red", Orange = "orange", Green = "green", Blue = "blue", Purple = "purple", Custom = "custom" } default Light);
@@ -287,9 +292,6 @@ pub struct Interface {
     /// objects in a large document stay visible (Photoshop's Clip Thumbnails to Layer Bounds; #4281).
     pub clip_thumbnails_to_layer_bounds: bool,
     pub show_tooltips: bool,
-    /// Menus, popups and collapsing sections fade and slide, and scroll areas glide to a new
-    /// position. Off, everything changes at once (a reduced-motion mode; #1218, #3273).
-    pub enable_animations: bool,
     /// A submenu stays open for longer while the pointer heads for it: it waits for a longer stop,
     /// counts any movement as moving, and has no limit on staying on one row.
     pub more_time_to_reach_submenus: bool,
@@ -333,7 +335,6 @@ impl Default for Interface {
             show_menu_colors: true,
             clip_thumbnails_to_layer_bounds: false,
             show_tooltips: true,
-            enable_animations: true,
             more_time_to_reach_submenus: false,
             show_bounding_box_when_dragging_layer: false,
             system_title_bar: false,
@@ -400,6 +401,9 @@ pub struct Tools {
     pub right_click_with_painting_tools: RightClickPaint,
     /// Pen tablets: pressure, tilt and rotation reach the brush (off: a pen paints like a mouse).
     pub use_tablet_pressure: bool,
+    /// Windows: which pen input supplies pressure. Windows Ink is the default; WinTab needs
+    /// Windows Ink turned off in the tablet driver's utility and a restart.
+    pub tablet_input: TabletInput,
     /// Pen pressure response: `[input, output]` control points in 0..1 that the pen's pressure
     /// passes through before it reaches any brush ([`PressureCurve`]). Linear by default.
     pub pressure_curve: Vec<[f32; 2]>,
@@ -427,6 +431,7 @@ impl Default for Tools {
             double_click_layer_mask_launches_select_and_mask: true,
             right_click_with_painting_tools: RightClickPaint::BrushPicker,
             use_tablet_pressure: true,
+            tablet_input: TabletInput::WindowsInk,
             pressure_curve: vec![[0.0, 0.0], [1.0, 1.0]],
             bundle_nudges: true,
             nudge_bundle_pause_ms: 1000,

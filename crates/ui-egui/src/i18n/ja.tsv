@@ -2160,7 +2160,6 @@
 	Show only crosshair while painting	描画中は十字線のみ表示
 	Show slice numbers	スライス番号を表示
 	Show tooltips	ツールチップを表示
-	Enable animations	アニメーションを有効にする
 	More time to reach submenus	サブメニューに移動するまでの時間を長くする
 	Show highlight on rollover	ロールオーバー時にハイライトを表示
 	Show bounding box when dragging layer	レイヤーのドラッグ中にバウンディングボックスを表示
