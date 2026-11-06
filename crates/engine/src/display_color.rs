@@ -1,5 +1,5 @@
 //! Colour-managed canvas display: the document's composite shown through document profile →
-//! monitor profile, on the GPU canvas (folded into the display 3D LUT) and the CPU canvas
+//! monitor profile, on the GPU canvas (matrix/shaper or display 3D LUT) and the CPU canvas
 //! (an 8-bit transform of the composite).
 //!
 //! * The composite is in [`composite_profile`] (the document profile for RGB, its gray curve as
@@ -76,14 +76,15 @@ impl CanvasDisplay {
         if !self.encode_srgb {
             return Cow::Borrowed(buf);
         }
-        let mut b = buf.clone();
-        for p in &mut b.px {
-            for v in &mut p[..3] {
+        let mut px = vec![[0.0f32; 4]; buf.px.len()];
+        par_pixels(&mut px, &buf.px, |out, src| {
+            for (o, p) in out.iter_mut().zip(src) {
                 // Capped at the largest half float; NaN is dropped by the texel conversion.
-                *v = photocraft_color::convert::linear_to_srgb(v.clamp(0.0, 65504.0));
+                let enc = |v: f32| photocraft_color::convert::linear_to_srgb(v.clamp(0.0, 65504.0));
+                *o = [enc(p[0]), enc(p[1]), enc(p[2]), p[3]];
             }
-        }
-        Cow::Owned(b)
+        });
+        Cow::Owned(Buffer { rect: buf.rect, px })
     }
 }
 
@@ -97,10 +98,27 @@ fn encode_rgba8(buf: &Buffer) -> Rgba8Image {
     let t = encode_table();
     let mut img = Rgba8Image::new(buf.rect.width(), buf.rect.height());
     let code = |v: f32| t.get((v.clamp(0.0, 1.0) * 65535.0 + 0.5) as usize).copied().unwrap_or(255);
-    for (o, p) in img.pixels.as_chunks_mut::<4>().0.iter_mut().zip(&buf.px) {
-        *o = [code(p[0]), code(p[1]), code(p[2]), (p[3].clamp(0.0, 1.0) * 255.0 + 0.5) as u8];
-    }
+    par_pixels(img.pixels.as_chunks_mut::<4>().0, &buf.px, |out, src| {
+        for (o, p) in out.iter_mut().zip(src) {
+            *o = [code(p[0]), code(p[1]), code(p[2]), (p[3].clamp(0.0, 1.0) * 255.0 + 0.5) as u8];
+        }
+    });
     img
+}
+
+/// Pixels per piece [`par_pixels`] hands to one thread.
+const PAR_PIXELS: usize = 16 * 1024;
+
+/// `f` over matching pieces of `dst` and `src`, in parallel off wasm. The display encodes run on
+/// every canvas upload and preview, and a 24 MP linear document took 350 ms on one core.
+fn par_pixels<D: Send, S: Sync>(dst: &mut [D], src: &[S], f: impl Fn(&mut [D], &[S]) + Sync) {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use rayon::prelude::*;
+        dst.par_chunks_mut(PAR_PIXELS).zip(src.par_chunks(PAR_PIXELS)).for_each(|(d, s)| f(d, s));
+    }
+    #[cfg(target_arch = "wasm32")]
+    f(dst, src);
 }
 
 /// In-place 8-bit RGBA transform (alpha kept), in blocks so the scratch copy stays small.
@@ -446,5 +464,4 @@ impl ColorState {
 }
 
 #[cfg(test)]
-#[path = "display_color_tests.rs"]
 mod tests;

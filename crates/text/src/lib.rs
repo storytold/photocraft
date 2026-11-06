@@ -1,10 +1,11 @@
-//! Photocraft's type engine.
+//! PhotoCraft's type engine.
 //!
 //! * [`fonts::FontDb`]: bundled fonts (Inter, JetBrains Mono; always available, including on the
 //!   web), optional system fonts from platform directory scans plus Fontconfig's Linux file list,
 //!   user font data, TrueType collections, PostScript-name lookup. Builds made with the optional
 //!   craft-fonts input
-//!   (`CRAFT_FONTS_DIR`, see [`craft_fonts`]) also carry its Japanese fonts as fallbacks.
+//!   (`CRAFT_FONTS_DIR`, see [`craft_fonts`]) also carry its fonts of every script (a single-face
+//!   file under its manifest family name); the ones the fallback lists name are fallbacks.
 //! * [`layout`]: shaping and line layout with [parley] (HarfRust shaping, bidi, line breaking),
 //!   point and paragraph (box) text, per-run styles, Photoshop leading/indent/spacing rules.
 //! * [`render`]: anti-aliased rasterization (exact-area accumulation, f32 coverage) into a
@@ -16,14 +17,18 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod area;
 pub mod cjk;
 pub mod craft_fonts;
+mod embolden;
 pub mod engine_data;
+pub mod font_class;
 pub mod fonts;
 pub mod glyphs;
 pub mod layout;
 pub mod optical;
 pub mod psd;
+mod psd_path;
 pub mod psd_styles;
 pub mod raster;
 pub mod render;
@@ -36,6 +41,7 @@ use photocraft_color::PixelFormat;
 use photocraft_doc::TextLayer;
 
 pub use craft_fonts::{CRAFT_FONTS, CraftFont};
+pub use font_class::{FamilyTraits, FontClass, FontFormat};
 pub use fonts::{FaceInfo, FontDb, ResolvedFont};
 pub use layout::{
     ClusterInfo, LineInfo, PlacedGlyph, TextLayout, byte_index, char_index, hit_char, line_edge, line_index, line_step, text_point_inside, word_boundary,
@@ -92,7 +98,7 @@ impl TextEngine {
             acc += r.len;
             at < acc
         })?;
-        let em = style_run.style.size_pt * if dpi > 0.0 { dpi / 72.0 } else { 1.0 };
+        let em = style_run.style.size_pt * if dpi.is_finite() && dpi > 0.0 { dpi / 72.0 } else { 1.0 };
         if em.is_nan() || em <= 0.0 {
             return None;
         }
@@ -165,6 +171,43 @@ pub fn shared() -> &'static std::sync::Mutex<TextEngine> {
 /// fonts (web, tests) the engine is cheap and this always returns it.
 pub fn try_shared() -> Option<&'static std::sync::Mutex<TextEngine>> {
     SHARED.try_get(new_shared, uses_system_fonts())
+}
+
+/// Preferences › Type › Enable Missing Glyph Protection for [`shared`]: 0 = not set yet,
+/// 1 = off, 2 = on. Read under the engine's lock, so the newest setting always wins.
+static WANT_GLYPH_PROTECTION: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+/// A thread is already waiting for the font scan to apply [`WANT_GLYPH_PROTECTION`].
+static GLYPH_PROTECTION_WAITING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn apply_glyph_protection(engine: &std::sync::Mutex<TextEngine>) {
+    let mut e = engine.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    match WANT_GLYPH_PROTECTION.load(std::sync::atomic::Ordering::SeqCst) {
+        1 => e.fonts.set_missing_glyph_protection(false),
+        2 => e.fonts.set_missing_glyph_protection(true),
+        _ => {}
+    }
+}
+
+/// Sets [`shared`]'s missing-glyph protection without waiting for the system font scan (#4519):
+/// applied now when the engine is built, otherwise by a helper thread once the scan finishes.
+/// Called from the UI thread at launch and on every preferences change, where [`shared`] would
+/// block until the scan is done.
+pub fn set_shared_missing_glyph_protection(on: bool) {
+    WANT_GLYPH_PROTECTION.store(if on { 2 } else { 1 }, std::sync::atomic::Ordering::SeqCst);
+    if let Some(engine) = try_shared() {
+        apply_glyph_protection(engine);
+        return;
+    }
+    if GLYPH_PROTECTION_WAITING.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        // The waiting thread reads the newest setting when it applies it.
+        return;
+    }
+    let spawned = std::thread::Builder::new().name("photocraft-glyph-protection".into()).spawn(|| apply_glyph_protection(shared()));
+    if spawned.is_err() {
+        // No thread: apply it here, as before.
+        GLYPH_PROTECTION_WAITING.store(false, std::sync::atomic::Ordering::SeqCst);
+        apply_glyph_protection(shared());
+    }
 }
 
 /// Starts building [`shared`] (the system font scan) on a background thread, so the Type tool's

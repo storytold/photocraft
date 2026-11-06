@@ -37,7 +37,7 @@ impl Named for ToolPreset {
 pub const MAX_PRESETS: usize = 1000;
 
 /// A preset name: trimmed, 1–[`MAX_NAME`](crate::brush_preset_cmds::MAX_NAME) characters.
-fn checked_name(name: &str, cmd: &str) -> Result<String> {
+pub(crate) fn checked_name(name: &str, cmd: &str) -> Result<String> {
     let name = name.trim();
     if name.is_empty() {
         return Err(bad(cmd, "the preset name is empty"));
@@ -115,6 +115,7 @@ fn new_preset(s: &mut Session, p: &Value) -> Result<Value> {
         "healing",
         "spothealing",
         "historybrush",
+        "arthistorybrush",
         "blur",
         "sharpen",
         "smudge",

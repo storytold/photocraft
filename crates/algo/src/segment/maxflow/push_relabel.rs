@@ -71,7 +71,10 @@ impl Graph {
                     let ai = a as usize;
                     let j = self.head[ai] as usize;
                     work += 1;
-                    if self.r_cap[ai] > EPS && self.dist[i] == self.dist[j].saturating_add(1) {
+                    // `checked_add`: two nodes a global relabel left unreachable (`u32::MAX`) must
+                    // not count as admissible for each other, or float-stranded excess ping-pongs
+                    // between them forever.
+                    if self.r_cap[ai] > EPS && self.dist[j].checked_add(1) == Some(self.dist[i]) {
                         let delta = (excess[i] as f32).min(self.r_cap[ai]);
                         self.r_cap[ai] -= delta;
                         self.r_cap[ai ^ 1] += delta;

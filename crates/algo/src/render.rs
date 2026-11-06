@@ -1,11 +1,11 @@
-//! Render: Fibers, Lens Flare, Lighting Effects.
+//! Render: Clouds, Difference Clouds, Fibers, Lighting Effects (Lens Flare: `lens_flare.rs`).
 
 use photocraft_geom::Rect;
 
 use crate::fxutil::{MAXC, luma, rgba, set_rgba, smoothstep, xy};
 use crate::image::Image;
 use crate::noise::hash01;
-use crate::{Ctx, LensType, Light, LightKind, TextureChannel};
+use crate::{Ctx, Light, LightKind, TextureChannel};
 
 /// Smooth value noise in [0, 1).
 fn value_noise(x: f32, y: f32, seed: u32) -> f32 {
@@ -16,6 +16,57 @@ fn value_noise(x: f32, y: f32, seed: u32) -> f32 {
     let top = h(ix, iy) + (h(ix + 1, iy) - h(ix, iy)) * sx;
     let bot = h(ix, iy + 1) + (h(ix + 1, iy + 1) - h(ix, iy + 1)) * sx;
     top + (bot - top) * sy
+}
+
+fn cloud_hash(x: i32, y: i32, seed: u32) -> f32 {
+    let mut h = (x as u32).wrapping_mul(0x8da6_b343) ^ (y as u32).wrapping_mul(0xd816_3841) ^ seed.wrapping_mul(0xcb1a_b31f);
+    h ^= h >> 13;
+    h = h.wrapping_mul(0x5bd1_e995);
+    h ^= h >> 15;
+    (h & 0x00ff_ffff) as f32 / 0x00ff_ffff as f32
+}
+
+/// Smooth value noise, summed over octaves (fBm), in 0..1.
+fn clouds_value(x: f32, y: f32, base: f32, seed: u32) -> f32 {
+    let (mut sum, mut amp, mut freq, mut norm) = (0.0, 1.0, 1.0 / base, 0.0);
+    for o in 0..8u32 {
+        let (fx, fy) = (x * freq, y * freq);
+        let (ix, iy) = (fx.floor() as i32, fy.floor() as i32);
+        let (tx, ty) = (fx - ix as f32, fy - iy as f32);
+        let (sx, sy) = (tx * tx * (3.0 - 2.0 * tx), ty * ty * (3.0 - 2.0 * ty));
+        let s = seed.wrapping_add(o * 7919);
+        let top = cloud_hash(ix, iy, s) + (cloud_hash(ix + 1, iy, s) - cloud_hash(ix, iy, s)) * sx;
+        let bot = cloud_hash(ix, iy + 1, s) + (cloud_hash(ix + 1, iy + 1, s) - cloud_hash(ix, iy + 1, s)) * sx;
+        sum += (top + (bot - top) * sy) * amp;
+        norm += amp;
+        amp *= 0.5;
+        freq *= 2.0;
+    }
+    // Stretch the bell-shaped sum so the clouds use the full foreground→background range.
+    ((sum / norm - 0.5) * 2.2 + 0.5).clamp(0.0, 1.0)
+}
+
+/// Clouds between the foreground and background colours; Difference Clouds subtracts them from
+/// the pixels (alpha kept). The cloud size is a quarter of the bounds' longer side, and the
+/// pattern is anchored at the bounds' corner (so it moves with a smart object).
+pub(crate) fn clouds(src: &Image, out: Rect, ctx: &Ctx, seed: u32, difference: bool, colours: ([f32; 4], [f32; 4])) -> Vec<f32> {
+    let n = src.ch;
+    let (fg, bg) = colours;
+    let base = (ctx.bounds.width().max(ctx.bounds.height()) as f32 / 4.0).clamp(16.0, 512.0);
+    let mut res = src.crop(out);
+    for (i, px) in res.chunks_exact_mut(n).enumerate() {
+        let (x, y) = xy(out, i);
+        let (x, y) = (x - ctx.bounds.x0, y - ctx.bounds.y0);
+        let t = clouds_value(x as f32, y as f32, base, seed);
+        let c: [f32; 3] = std::array::from_fn(|k| fg[k] + (bg[k] - fg[k]) * t);
+        if difference {
+            let p = rgba(ctx, px);
+            set_rgba(ctx, px, [(p[0] - c[0]).abs(), (p[1] - c[1]).abs(), (p[2] - c[2]).abs(), p[3]]);
+        } else {
+            set_rgba(ctx, px, [c[0], c[1], c[2], 1.0]);
+        }
+    }
+    res
 }
 
 /// Fibers: vertical fibrous streaks between the foreground and background
@@ -32,8 +83,9 @@ pub(crate) fn fibers(src: &Image, out: Rect, ctx: &Ctx, variance: f32, strength:
     let fy = fx / (2.0 + st * 1.5) * (0.5 + var / 32.0);
     let mut res = src.crop(out);
     for (i, px) in res.chunks_exact_mut(n).enumerate() {
+        // Anchored at the bounds' corner, so the fibres move with a smart object.
         let (x, y) = xy(out, i);
-        let (xf, yf) = (x as f32, y as f32);
+        let (xf, yf) = ((x - ctx.bounds.x0) as f32, (y - ctx.bounds.y0) as f32);
         let mut sum = 0.0;
         let mut amp = 1.0;
         let mut norm = 0.0;
@@ -49,106 +101,6 @@ pub(crate) fn fibers(src: &Image, out: Rect, ctx: &Ctx, variance: f32, strength:
         let grain = value_noise(xf * 0.9, yf * fy * 0.25, seed ^ 0x5bd1) - 0.5;
         let t = ((sum / norm - 0.5) * (1.6 + var / 40.0) + 0.5 + grain * 0.25).clamp(0.0, 1.0);
         let c = [fg[0] + (bg[0] - fg[0]) * t, fg[1] + (bg[1] - fg[1]) * t, fg[2] + (bg[2] - fg[2]) * t, 1.0];
-        set_rgba(ctx, px, c);
-    }
-    res
-}
-
-/// One lens-flare ghost: position along the flare→centre axis, radius and tint.
-struct Ghost {
-    t: f32,
-    r: f32,
-    tint: [f32; 3],
-    k: f32,
-}
-
-/// Lens Flare: an additive (screen) glow, rays, halo ring and ghost discs
-/// along the line through the image centre. Lens types vary the elements.
-pub(crate) fn lens_flare(src: &Image, out: Rect, ctx: &Ctx, brightness: f32, centre: (f32, f32), lens: LensType) -> Vec<f32> {
-    let n = src.ch;
-    let b = ctx.bounds;
-    let (bw, bh) = (b.width() as f32, b.height() as f32);
-    let diag = bw.hypot(bh).max(1.0);
-    let (cx, cy) = (b.x0 as f32 + centre.0 * bw, b.y0 as f32 + centre.1 * bh);
-    let (mx, my) = (b.x0 as f32 + bw / 2.0, b.y0 as f32 + bh / 2.0);
-    let bright = brightness.clamp(10.0, 300.0) / 100.0;
-    let s = diag / 1000.0;
-    let (core, glow, ring_r, ring_w, rays, streak) = match lens {
-        LensType::Zoom => (14.0, 90.0, 0.0, 0.0, 0.5, 0.0),
-        LensType::Prime35 => (12.0, 70.0, 90.0, 6.0, 0.3, 0.0),
-        LensType::Prime105 => (22.0, 130.0, 0.0, 0.0, 0.8, 0.0),
-        LensType::MoviePrime => (10.0, 60.0, 0.0, 0.0, 0.2, 1.0),
-    };
-    let ghosts: Vec<Ghost> = match lens {
-        LensType::Zoom => vec![
-            Ghost { t: 0.35, r: 10.0, tint: [0.6, 0.8, 1.0], k: 0.18 },
-            Ghost { t: 0.6, r: 26.0, tint: [0.5, 1.0, 0.6], k: 0.10 },
-            Ghost { t: 0.85, r: 6.0, tint: [1.0, 0.7, 0.4], k: 0.25 },
-            Ghost { t: 1.25, r: 40.0, tint: [0.7, 0.5, 1.0], k: 0.08 },
-            Ghost { t: 1.5, r: 16.0, tint: [1.0, 0.6, 0.5], k: 0.15 },
-            Ghost { t: 1.9, r: 70.0, tint: [0.5, 0.7, 1.0], k: 0.06 },
-        ],
-        LensType::Prime35 => vec![Ghost { t: 0.7, r: 18.0, tint: [0.6, 1.0, 0.7], k: 0.12 }, Ghost { t: 1.4, r: 30.0, tint: [1.0, 0.7, 0.5], k: 0.09 }],
-        LensType::Prime105 => vec![Ghost { t: 0.5, r: 14.0, tint: [1.0, 0.8, 0.5], k: 0.12 }, Ghost { t: 1.6, r: 50.0, tint: [0.6, 0.7, 1.0], k: 0.07 }],
-        LensType::MoviePrime => vec![
-            Ghost { t: 0.4, r: 8.0, tint: [0.5, 0.7, 1.0], k: 0.2 },
-            Ghost { t: 1.0, r: 20.0, tint: [0.4, 0.6, 1.0], k: 0.12 },
-            Ghost { t: 1.6, r: 12.0, tint: [0.5, 0.8, 1.0], k: 0.16 },
-        ],
-    };
-    let mut res = src.crop(out);
-    for (i, px) in res.chunks_exact_mut(n).enumerate() {
-        let (x, y) = xy(out, i);
-        let (fx, fy) = (x as f32 + 0.5, y as f32 + 0.5);
-        let (dx, dy) = (fx - cx, fy - cy);
-        let d = (dx * dx + dy * dy).sqrt();
-        let mut f = [0.0f32; 3];
-        // Hot core and wide glow (warm white).
-        let g = (-(d / (core * s)).powi(2)).exp() + 0.35 * (-d / (glow * s)).exp();
-        for (k, w) in [1.0, 0.95, 0.85].iter().enumerate() {
-            f[k] += g * w;
-        }
-        // Rays: angular modulation decaying with distance.
-        if rays > 0.0 {
-            let th = dy.atan2(dx);
-            let m = ((th * 12.0).sin() * 0.5 + 0.5).powi(8) + ((th * 7.0 + 1.3).sin() * 0.5 + 0.5).powi(12) * 0.6;
-            let rr = rays * m * (-d / (glow * 1.6 * s)).exp();
-            for v in f.iter_mut() {
-                *v += rr * 0.6;
-            }
-        }
-        // Anamorphic horizontal streak (movie prime).
-        if streak > 0.0 {
-            let st = (-(dy.abs() / (2.5 * s))).exp() * (-(dx.abs() / (450.0 * s))).exp();
-            f[0] += st * 0.5;
-            f[1] += st * 0.7;
-            f[2] += st;
-        }
-        // Halo ring with a slight chromatic spread.
-        if ring_r > 0.0 {
-            for (k, off) in [1.04f32, 1.0, 0.96].iter().enumerate() {
-                let rd = (d - ring_r * s * off) / (ring_w * s);
-                f[k] += 0.18 * (-rd * rd).exp();
-            }
-        }
-        // Ghosts along the axis through the centre.
-        for gh in &ghosts {
-            let (gx, gy) = (cx + (mx - cx) * gh.t * 2.0, cy + (my - cy) * gh.t * 2.0);
-            let gd = ((fx - gx).powi(2) + (fy - gy).powi(2)).sqrt() / (gh.r * s);
-            if gd < 1.2 {
-                // Soft-edged disc, slightly brighter at the rim.
-                let e = smoothstep(1.0, 0.85, gd) * (0.6 + 0.4 * gd);
-                for (fk, t) in f.iter_mut().zip(gh.tint) {
-                    *fk += e * gh.k * t;
-                }
-            }
-        }
-        let mut c = rgba(ctx, px);
-        for k in 0..3 {
-            let a = (f[k] * bright).max(0.0);
-            // Screen keeps highlights below white for display-referred values.
-            c[k] = 1.0 - (1.0 - c[k]) * (1.0 - a.min(1.0));
-        }
         set_rgba(ctx, px, c);
     }
     res

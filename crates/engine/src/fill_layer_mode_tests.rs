@@ -122,6 +122,9 @@ fn rgb_documents_keep_rgb_fill_colours() {
 #[test]
 fn gray_fill_converts_with_the_document() {
     let mut s = session("gray", 16);
+    // Tagged sGray, where a gray value reads the same as RGB, so the before/after pixels compare
+    // directly (an untagged gray document takes the Dot Gain 20 %-compatible default).
+    s.execute("edit.assignProfile", json!({"profile": "sgray"})).unwrap();
     s.execute("layer.newFillLayer.solidColor", json!({"color": "#0000ff"})).unwrap();
     let before = pixel(&mut s, 10, 10);
     s.execute("image.mode.rgb", json!({})).unwrap();
