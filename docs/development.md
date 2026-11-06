@@ -975,7 +975,7 @@ revision does not establish where a supplied binary was built; use a binary buil
 that revision and preserve the CI run's provenance. Missing fonts and other warnings
 are recorded. The runner never overwrites or opens its input PSDs beyond hashing them.
 
-Recipes are versioned JSON (`version` must be `1`; any other value is rejected). Unknown keys anywhere in a recipe are an error, so a typo never passes as "nothing to check". A case has a unique `id`, a relative `base` PSD path,
+Recipes are versioned JSON (`version` must be `1`; any other value is rejected). Unknown keys anywhere in a recipe are an error, so a typo never passes as "nothing to check". A case has an `id` that is unique ignoring letter case (it names the case's output directory), a relative `base` PSD path,
 its `base_sha256`, a `target` with layer `kind` and optional `name`, and `checks`.
 An optional list of `commands` contains a `command` id and `params`; the runner
 supplies the resolved `layer` id. Targets that match zero or multiple layers fail.

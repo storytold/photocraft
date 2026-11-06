@@ -91,7 +91,8 @@ fn validate(recipes: &Recipes) -> Result<(), String> {
     }
     let mut seen = HashSet::new();
     for case in &recipes.cases {
-        if !valid_id(&case.id) || !seen.insert(&case.id) {
+        // An id names the case's output directory, and `A` and `a` are one directory on a case-insensitive filesystem.
+        if !valid_id(&case.id) || !seen.insert(case.id.to_ascii_lowercase()) {
             return Err(format!("invalid or duplicate case id: {}", case.id));
         }
         let path = Path::new(&case.base);
@@ -162,15 +163,24 @@ fn target<'a>(doc: &'a Value, wanted: &Target) -> Result<&'a Value, String> {
     found.into_iter().next().ok_or_else(|| "missing target".into())
 }
 
-/// Compare JSON by value: numbers are equal when their `f64` values are (exactly, no tolerance), so
-/// `17` equals `17.0`; arrays and objects compare element-wise. Recursion is bounded because
-/// serde_json's parser already limits nesting depth.
+/// Compare two JSON numbers by exact value, with no tolerance: `17` equals `17.0`, and integers too
+/// large for `f64` stay distinct.
+fn numbers_equal(a: &serde_json::Number, b: &serde_json::Number) -> bool {
+    let int = |n: &serde_json::Number| n.as_i64().map(i128::from).or_else(|| n.as_u64().map(i128::from));
+    let whole_float_is = |float: &serde_json::Number, i: i128| float.as_f64().is_some_and(|f| f.fract() == 0.0 && f as i128 == i);
+    match (int(a), int(b)) {
+        (Some(x), Some(y)) => x == y,
+        (Some(i), None) => whole_float_is(b, i),
+        (None, Some(i)) => whole_float_is(a, i),
+        (None, None) => a.as_f64() == b.as_f64(),
+    }
+}
+
+/// Compare JSON by value: numbers as in `numbers_equal`; arrays and objects element-wise. Recursion is
+/// bounded because serde_json's parser already limits nesting depth.
 fn values_equal(a: &Value, b: &Value) -> bool {
     match (a, b) {
-        (Value::Number(x), Value::Number(y)) => match (x.as_f64(), y.as_f64()) {
-            (Some(x), Some(y)) => x == y,
-            _ => a == b,
-        },
+        (Value::Number(x), Value::Number(y)) => numbers_equal(x, y),
         (Value::Array(x), Value::Array(y)) => x.len() == y.len() && x.iter().zip(y).all(|(x, y)| values_equal(x, y)),
         (Value::Object(x), Value::Object(y)) => x.len() == y.len() && x.iter().all(|(k, v)| y.get(k).is_some_and(|w| values_equal(v, w))),
         _ => a == b,
@@ -446,6 +456,8 @@ mod tests {
         assert!(validate(&parsed).is_err());
         let duplicate = json!({"version":1,"corpus_revision":"pin","cases":[{"id":"x","base":"x.psd","base_sha256":"a".repeat(64),"target":{"kind":"Text"},"checks":[{"op":"unchanged","path":"/name"}]},{"id":"x","base":"x.psd","base_sha256":"a".repeat(64),"target":{"kind":"Text"},"checks":[{"op":"unchanged","path":"/name"}]}]});
         assert!(validate(&serde_json::from_value(duplicate).unwrap()).is_err());
+        let case_only = json!({"version":1,"corpus_revision":"pin","cases":[{"id":"A","base":"x.psd","base_sha256":"a".repeat(64),"target":{"kind":"Text"},"checks":[{"op":"unchanged","path":"/name"}]},{"id":"a","base":"x.psd","base_sha256":"a".repeat(64),"target":{"kind":"Text"},"checks":[{"op":"unchanged","path":"/name"}]}]});
+        assert!(validate(&serde_json::from_value(case_only).unwrap()).unwrap_err().contains("duplicate"));
         let edit = json!({"version":1,"corpus_revision":"pin","cases":[{"id":"x","base":"x.psd","base_sha256":"a".repeat(64),"target":{"kind":"Text"},"commands":[{"command":"type.setStyle"}],"checks":[{"op":"unchanged","path":"/name"}]}]});
         assert!(validate(&serde_json::from_value(edit).unwrap()).is_err());
     }
@@ -605,6 +617,14 @@ exit 1
     fn numbers_compare_by_value() {
         assert!(values_equal(&json!(17), &json!(17.0)));
         assert!(!values_equal(&json!(17), &json!(18.0)));
+        assert!(!values_equal(&json!(17), &json!(17.5)));
+        assert!(values_equal(&json!(0.5), &json!(0.5)));
+        assert!(values_equal(&json!(-3), &json!(-3.0)));
+        assert!(values_equal(&json!(u64::MAX), &json!(u64::MAX)));
+        assert!(!values_equal(&json!(9_007_199_254_740_993_u64), &json!(9_007_199_254_740_992_u64)));
+        assert!(!values_equal(&json!(9_007_199_254_740_993_u64), &json!(9_007_199_254_740_992.0)));
+        assert!(values_equal(&json!(9_007_199_254_740_992_u64), &json!(9_007_199_254_740_992.0)));
+        assert!(!values_equal(&json!(u64::MAX), &json!(1e300)));
         assert!(values_equal(&json!({"a":[1,2.0,{"b":3}],"c":"x"}), &json!({"c":"x","a":[1.0,2,{"b":3.0}]})));
         assert!(!values_equal(&json!({"a":1}), &json!({"b":1})));
         assert!(!values_equal(&json!({"a":1}), &json!({"a":1,"b":1})));
