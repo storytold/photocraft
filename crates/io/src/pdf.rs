@@ -44,6 +44,8 @@ pub struct PrintPage {
     pub marks: Marks,
     pub description: Option<String>,
     pub label: Option<String>,
+    /// The page's name in the PDF `/PageLabels` tree (Unicode-capable; not drawn on the page).
+    pub page_label: Option<String>,
 }
 
 pub(super) fn pdf_string(s: &str) -> String {
@@ -59,6 +61,16 @@ pub(super) fn pdf_string(s: &str) -> String {
         }
     }
     o.push(')');
+    o
+}
+
+/// A PDF text string with UTF-16BE hex (the Unicode-capable form, byte-order mark included).
+fn pdf_unicode_string(s: &str) -> String {
+    let mut o = String::from("<FEFF");
+    for u in s.encode_utf16() {
+        o.push_str(&format!("{u:04X}"));
+    }
+    o.push('>');
     o
 }
 
@@ -124,12 +136,14 @@ fn print_pdf_pages(pages: &[PrintPage], vectors: &[String], selection_font: &sel
         out.extend_from_slice(b"\nendobj\n");
     };
     let n = pages.len();
+    let selections_on = pages.iter().any(|p| p.page_label.is_some());
     // 1 catalog, 2 pages, then per page: page, contents, image; then the shared font/ICC/selection.
     let font_obj = 3 + n * 3;
     let icc = first.image.icc.as_ref();
     let icc_obj = icc.map(|_| font_obj + 1);
     let selection_base = font_obj + if icc.is_some() { 2 } else { 1 };
-    obj(&mut out, b"<< /Type /Catalog /Pages 2 0 R >>");
+    let labels_obj = selections_on.then_some(selection_base + 1);
+    obj(&mut out, format!("<< /Type /Catalog /Pages 2 0 R{} >>", labels_obj.map(|o| format!(" /PageLabels {o} 0 R")).unwrap_or_default()).as_bytes());
     let kids = (0..n).map(|i| format!("{} 0 R", 3 + i * 3)).collect::<Vec<_>>().join(" ");
     obj(&mut out, format!("<< /Type /Pages /Kids [{kids}] /Count {n} >>").as_bytes());
     for (i, page) in pages.iter().enumerate() {
@@ -201,6 +215,15 @@ fn print_pdf_pages(pages: &[PrintPage], vectors: &[String], selection_font: &sel
     }
     for body in selection_font.objects(selection_base) {
         obj(&mut out, &body);
+    }
+    if labels_obj.is_some() {
+        let nums = pages
+            .iter()
+            .enumerate()
+            .filter_map(|(i, p)| p.page_label.as_deref().filter(|l| !l.is_empty()).map(|l| format!("{i} << /P {} >>", pdf_unicode_string(l))))
+            .collect::<Vec<_>>()
+            .join(" ");
+        obj(&mut out, format!("<< /Nums [{nums}] >>").as_bytes());
     }
     let xref = out.len();
     out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", offsets.len() + 1).as_bytes());
@@ -287,7 +310,8 @@ fn collect_vectors(doc: &Document) -> (Vec<(usize, String)>, selection::Selectio
 /// (pixels ÷ resolution × 72 pt). One page per artboard when the document has artboards, else one
 /// page for the whole document. Layers and transparency are dropped — the warning says so — and
 /// the embedded profile travels with the images.
-pub fn export(doc: &Document) -> std::result::Result<ExportResult, IoError> {
+pub fn export(doc: &Document, ctl: &photocraft_raster::Interrupt) -> std::result::Result<ExportResult, IoError> {
+    ctl.check().map_err(|_| IoError::Cancelled)?;
     let (w, h) = (usize::try_from(doc.size.width).unwrap_or(0), usize::try_from(doc.size.height).unwrap_or(0));
     if w == 0 || h == 0 {
         return Err(IoError::Unsupported("PDF needs a document with non-zero width and height; nothing was written".into()));
@@ -310,6 +334,7 @@ pub fn export(doc: &Document) -> std::result::Result<ExportResult, IoError> {
         let surface = photocraft_compose::flatten_to_surface(doc, PixelFormat::new(fmt.mode, fmt.sample, true), None);
         let mut pages = Vec::with_capacity(artboards.len());
         for (_, name, artboard) in &artboards {
+            ctl.check().map_err(|_| IoError::Cancelled)?;
             let rect = artboard.rect;
             let (aw, ah) = (rect.width(), rect.height());
             if aw == 0 || ah == 0 {
@@ -331,7 +356,8 @@ pub fn export(doc: &Document) -> std::result::Result<ExportResult, IoError> {
                 rect: (0.0, 0.0, pw, ph),
                 marks: Marks::default(),
                 description: None,
-                label: Some((*name).to_string()),
+                label: None,
+                page_label: Some((*name).to_string()),
             });
         }
         if pages.is_empty() {
@@ -339,6 +365,9 @@ pub fn export(doc: &Document) -> std::result::Result<ExportResult, IoError> {
         }
         let mut warnings = vec!["PDF was saved flattened: layers, masks-as-editable and transparency are not preserved (#3401)".into()];
         warnings.push(format!("PDF exported {} artboards as {} pages; vector/text layers on artboards are rasterised", artboards.len(), pages.len()));
+        if !doc.metadata.text.is_empty() {
+            warnings.push("free-form text metadata is not supported by PDF; it will be dropped".into());
+        }
         let vectors = vec![String::new(); pages.len()];
         return Ok(ExportResult { bytes: print_pdf_pages(&pages, &vectors, &selection::SelectionFont::default()), warnings });
     }
@@ -366,7 +395,7 @@ pub fn export(doc: &Document) -> std::result::Result<ExportResult, IoError> {
     }
     let image = PrintImage { width: doc.size.width, height: doc.size.height, channels: device, data, icc: icc.clone() };
     let (pw, ph) = (f64::from(doc.size.width) * 72.0 / dpi, f64::from(doc.size.height) * 72.0 / dpi);
-    let page = PrintPage { paper: (pw, ph), image, rect: (0.0, 0.0, pw, ph), marks: Marks::default(), description: None, label: None };
+    let page = PrintPage { paper: (pw, ph), image, rect: (0.0, 0.0, pw, ph), marks: Marks::default(), description: None, label: None, page_label: None };
     let mut warnings = vec!["PDF was saved flattened: layers, masks-as-editable and transparency are not preserved (#3401)".into()];
     if !doc.metadata.text.is_empty() {
         warnings.push("free-form text metadata is not supported by PDF; it will be dropped".into());

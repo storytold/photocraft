@@ -556,8 +556,9 @@ pub fn import_preflight(name: &str, bytes: &[u8]) -> ImportPreflight {
     if is_psd_input(name, bytes) {
         return ImportPreflight::Psd;
     }
-    // PDF (PDFium, native only); `.ai` files are PDFs but keep their existing path.
-    if has_extension(name, "pdf") || (pdf_import::is_pdf(bytes) && !has_extension(name, "ai")) {
+    // PDF (PDFium, native only). `.ai` files are PDFs but keep their existing path; a recognized
+    // raster signature wins over a misleading `.pdf` suffix.
+    if pdf_import::is_pdf(bytes) || (has_extension(name, "pdf") && !has_extension(name, "ai") && photocraft_codecs::detect(bytes).is_none()) {
         return ImportPreflight::Unbounded;
     }
     if photocraft_codecs::detect(bytes) == Some(photocraft_codecs::Format::Tiff) { ImportPreflight::Tiff } else { ImportPreflight::Flat }
@@ -978,6 +979,7 @@ pub(crate) fn route(name: &str, bytes: &[u8]) -> Route {
     if is_psd_input(name, bytes) {
         return Route::NamedPsd;
     }
+<<<<<<< HEAD
     Route::Flat
 }
 
@@ -990,6 +992,12 @@ fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, o
         || (has_extension(name, "pdf") && !has_extension(name, "ai") && photocraft_codecs::detect(bytes).is_none())
     {
         return pdf_import::import(name, bytes, opts);
+=======
+    // PDF (PDFium, native only). `.ai` files are PDFs but keep their existing path; a recognized
+    // raster signature wins over a misleading `.pdf` suffix.
+    if pdf_import::is_pdf(bytes) || (has_extension(name, "pdf") && !has_extension(name, "ai") && photocraft_codecs::detect(bytes).is_none()) {
+        return pdf_import::import(name, bytes, opts, ctl);
+>>>>>>> 806c53fd2 (PDF: address CodeRabbit review (cancellation, budgets, labels, export edges))
     }
     match route(name, bytes) {
         Route::Pcraft => {
@@ -1170,7 +1178,7 @@ fn export_stages_with_renderer(
         return Ok(res.into());
     }
     if ext == "pdf" {
-        let mut res = pdf::export(doc)?;
+        let mut res = pdf::export(doc, ctl)?;
         if let Some(r) = renderer {
             res.warnings.push("PDF export uses CPU compositor; GPU rendering applies to flat formats".into());
             res.warnings.extend(r.drain_diagnostics());
