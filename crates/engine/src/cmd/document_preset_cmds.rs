@@ -192,7 +192,8 @@ pub struct DocumentPreset {
     pub settings: DocumentSettings,
 }
 
-fn checked_name(name: &str) -> std::result::Result<String, String> {
+/// The trimmed preset name, or an error when it is empty or too long.
+pub(crate) fn checked_name(name: &str) -> std::result::Result<String, String> {
     let name = name.trim();
     if name.is_empty() || name.chars().count() > crate::brush_preset_cmds::MAX_NAME {
         return Err("Preset names must contain 1–255 characters after trimming".into());

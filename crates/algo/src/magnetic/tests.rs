@@ -16,7 +16,7 @@ fn grey(v: u8) -> [u8; 4] {
 
 /// Distance from `p` to the polyline `g`.
 fn off_polyline(p: [f64; 2], g: &[[f64; 2]]) -> f64 {
-    g.windows(2).map(|w| dist2_segment(p, w[0], w[1]).sqrt()).fold(f64::INFINITY, f64::min)
+    g.windows(2).map(|w| seg_dist2(p, w[0], w[1]).sqrt()).fold(f64::INFINITY, f64::min)
 }
 
 #[test]

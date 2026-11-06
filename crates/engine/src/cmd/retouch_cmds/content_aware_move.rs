@@ -65,14 +65,19 @@ pub(super) fn enabled(s: &Session) -> std::result::Result<(), String> {
 }
 
 /// Optional whole-number param in `lo..=hi`; absent or null gives `default`.
-fn level(p: &Value, k: &str, default: u8, lo: u8, hi: u8) -> Result<u8> {
+fn level(cmd: &str, p: &Value, k: &str, default: u8, (lo, hi): (u8, u8)) -> Result<u8> {
     match p.get(k) {
         None | Some(Value::Null) => Ok(default),
         Some(v) => match v.as_f64() {
             Some(x) if x.is_finite() && (f64::from(lo)..=f64::from(hi)).contains(&x) => Ok(x.round() as u8),
-            _ => Err(bad(CMD, format!("`{k}` must be a number {lo}..{hi}"))),
+            _ => Err(bad(cmd, format!("`{k}` must be a number {lo}..{hi}"))),
         },
     }
+}
+
+/// The Structure (1..=7) and Color (0..=10) levels of a content-aware step.
+pub(super) fn structure_and_color(cmd: &str, p: &Value) -> Result<(u8, u8)> {
+    Ok((level(cmd, p, "structure", 4, (1, 7))?, level(cmd, p, "color", 0, (0, 10))?))
 }
 
 /// The pixels a step reads and writes: a layer (or, with `None`, the channel `p` targets), and
@@ -203,14 +208,14 @@ fn landed_mask(cov: &[f32], area: Rect, inv: &Homography, rect: Rect) -> Vec<boo
         .collect()
 }
 
+/// The checked params of a Content-Aware Move or Extend step.
 fn plan(s: &Session, p: &Value, margin: i32) -> Result<Plan> {
     let mode = match string(p, "mode", "move") {
         "move" => Mode::Move,
         "extend" => Mode::Extend,
         o => return Err(bad(CMD, format!("unknown mode `{o}` (move|extend)"))),
     };
-    let structure = level(p, "structure", 4, 1, 7)?;
-    let color = level(p, "color", 0, 0, 10)?;
+    let (structure, color) = structure_and_color(CMD, p)?;
     let (dx, dy) = offset(CMD, p)?;
     let id = target_layer(s, p)?;
     let d = s.active().ok_or(EngineError::NoDocument)?;

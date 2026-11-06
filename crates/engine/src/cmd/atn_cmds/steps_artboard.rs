@@ -1,6 +1,6 @@
 //! Measured Artboard conversion and background-only Properties edits.
 
-use super::descriptors::{desc, get_num, get_obj, get_text, target_ref, text};
+use super::descriptors::{desc, get_num, target_ref, text};
 use super::fields::{Mapped, none, step};
 use super::{D, Descriptor, Value, json};
 
@@ -9,8 +9,8 @@ const EDIT: &str = "layer.artboard.set";
 
 /// Keep recorded colors and ignored guide IDs, including an omitted background type.
 fn settings_from(board: &Descriptor, preset_key: &str) -> Option<Value> {
-    let color = get_obj(board, "Clr ")?;
-    let preset = get_text(board, "artboardPresetName")?;
+    let color = board.get_object("Clr ")?;
+    let preset = board.get_text("artboardPresetName")?;
     let background = match board.get("artboardBackgroundType") {
         None | Some(D::Integer(1)) => "white",
         Some(D::Integer(2)) => "black",
@@ -77,7 +77,7 @@ pub(super) fn artboard_from(d: &Descriptor) -> Mapped {
     if d.items == desc("null").with("null", target_ref("Lyr ")).items {
         return none(FROM_GROUP);
     }
-    let Some(mut p) = get_obj(d, "artboard").and_then(|b| settings_from(b, "preset")) else { return unsupported };
+    let Some(mut p) = d.get_object("artboard").and_then(|b| settings_from(b, "preset")) else { return unsupported };
     match d.get("changeBackground") {
         None => {}
         Some(D::Integer(n)) => p["changeBackground"] = (*n).into(),
@@ -119,8 +119,8 @@ pub(super) fn artboard_to(_: &str, p: &Value) -> Option<Descriptor> {
 /// Background-only edits retain recorded geometry as metadata, never as native resize parameters.
 pub(super) fn artboard_edit_from(d: &Descriptor) -> Mapped {
     let unsupported = Mapped::Unsupported { harmless: false };
-    let Some(board) = get_obj(d, "artboard") else { return unsupported };
-    let Some(rect) = get_obj(board, "artboardRect") else { return unsupported };
+    let Some(board) = d.get_object("artboard") else { return unsupported };
+    let Some(rect) = board.get_object("artboardRect") else { return unsupported };
     let Some(mut p) = settings_from(board, "recordedPreset") else { return unsupported };
     let Some(edges) = ["Top ", "Left", "Btom", "Rght"].iter().map(|key| get_num(rect, key)).collect::<Option<Vec<_>>>() else { return unsupported };
     p["recordedRect"] = json!(edges);

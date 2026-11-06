@@ -3,7 +3,7 @@
 //! the keys, limits and defaults Photoshop measures (`docs/atn.md`, Group A); a stack of several
 //! effects stays a Photoshop step.
 
-use super::descriptors::{color_desc, color_hex, desc, enm, get_bool, get_enum, get_num, get_obj, jstr, trimmed};
+use super::descriptors::{color_desc, color_hex, desc, enm, get_enum, get_num, jstr, trimmed};
 use super::events::pixel_target;
 use super::fields::{Mapped, step};
 use super::tables::{lookup, lookup_back};
@@ -662,10 +662,10 @@ fn effect_step(d: &Descriptor) -> Option<Mapped> {
                 Value::from(if present { get_num(d, key)?.round().clamp(f64::from(*min), f64::from(*max)) as i32 } else { *default })
             }
             G::Enum(key, _, table, default) => Value::from(lookup(table, &if present { get_enum(d, key)? } else { (*default).to_string() })?),
-            G::Bool(key, _, default) => Value::from(if present { get_bool(d, key)? } else { *default }),
+            G::Bool(key, _, default) => Value::from(if present { d.get_bool(key)? } else { *default }),
             G::Color(key, _, default) => {
                 if present {
-                    Value::from(color_hex(get_obj(d, key)?)?)
+                    Value::from(color_hex(d.get_object(key)?)?)
                 } else {
                     Value::from(*default)
                 }

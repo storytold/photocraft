@@ -47,6 +47,7 @@ pub use open::{
 };
 use open::{Target, non_defaults};
 use proxy::{ProxyFrame, ProxyJob};
+pub(crate) use sidecar::report_file_error;
 pub use sidecar::sidecar_path;
 #[cfg(test)]
 use sidecar::{existing_sidecar_is_ours, read_bounded};

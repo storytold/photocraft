@@ -1,7 +1,7 @@
 use super::build::engine_antialias;
 use super::{
     Affine, AntiAlias, Caps, CharStyle, Color, ColorMode, D, Descriptor, E, FontBaseline, Kerning, Orientation, ParagraphRun, ParagraphStyle, Point, TextAlign,
-    TextLayer, TextRun, TextShape, TextWarp, TySh, dnum, ed, engine_data, enum_value, guess_from_postscript, parse_tysh,
+    TextLayer, TextRun, TextShape, TextWarp, TySh, dnum, ed, engine_data, guess_from_postscript, parse_tysh,
 };
 
 /// Parses the document's `Txt2` block (Photoshop's text engine data for all type layers).
@@ -261,8 +261,8 @@ pub fn text_layer_from_tysh(data: &[u8], dpi: f32) -> Option<TextLayer> {
         Some(D::Text(s)) => Some(s.to_string_lossy().trim_end_matches('\0').to_string()),
         _ => None,
     };
-    layer.orientation = if enum_value(&t.text, "Ornt").as_deref() == Some("Vrtc") { Orientation::Vertical } else { Orientation::Horizontal };
-    layer.antialias = match enum_value(&t.text, "AntA").as_deref() {
+    layer.orientation = if t.text.get_enum("Ornt").as_deref() == Some("Vrtc") { Orientation::Vertical } else { Orientation::Horizontal };
+    layer.antialias = match t.text.get_enum("AntA").as_deref() {
         Some("Anno" | "antiAliasNone") => AntiAlias::None,
         Some("antiAliasSharp" | "AnSh") => AntiAlias::Sharp,
         Some("AnCr" | "antiAliasCrisp") => AntiAlias::Crisp,
@@ -276,7 +276,7 @@ pub fn text_layer_from_tysh(data: &[u8], dpi: f32) -> Option<TextLayer> {
         }
     };
     if let Some(w) = &t.warp {
-        let style = enum_value(w, "warpStyle").unwrap_or_else(|| "warpNone".into());
+        let style = w.get_enum("warpStyle").unwrap_or_else(|| "warpNone".into());
         if style != "warpNone" {
             // Bend and distortion are percentages in -100..100 (as `type.warpText` clamps them);
             // clamping before the cast keeps a value beyond f32 from becoming inf.
@@ -286,14 +286,14 @@ pub fn text_layer_from_tysh(data: &[u8], dpi: f32) -> Option<TextLayer> {
                 value: pct("warpValue"),
                 horizontal_distortion: pct("warpPerspective"),
                 vertical_distortion: pct("warpPerspectiveOther"),
-                horizontal: enum_value(w, "warpRotate").as_deref() != Some("Vrtc"),
+                horizontal: w.get_enum("warpRotate").as_deref() != Some("Vrtc"),
             });
         }
     }
     let k = 72.0 / if dpi.is_finite() && dpi > 0.0 { dpi } else { 72.0 };
     if let Some(e) = engine_data(&t.text) {
         // Without an `Ornt` key, the engine data's writing direction says it (2 = vertical).
-        if enum_value(&t.text, "Ornt").is_none() && e.path(&["EngineDict", "Rendered", "Shapes", "WritingDirection"]).and_then(E::as_f64) == Some(2.0) {
+        if t.text.get_enum("Ornt").is_none() && e.path(&["EngineDict", "Rendered", "Shapes", "WritingDirection"]).and_then(E::as_f64) == Some(2.0) {
             layer.orientation = Orientation::Vertical;
         }
         apply_engine_data(&mut layer, &e, txt.as_deref(), k);

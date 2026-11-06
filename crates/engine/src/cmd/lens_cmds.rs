@@ -17,7 +17,7 @@ use photocraft_geom::Rect;
 use photocraft_raster::{Surface, from_rgba_into};
 use serde_json::{Value, json};
 
-use crate::commands::CommandSpec;
+use crate::commands::{CommandSpec, layer_param};
 use crate::photo_cmds::Stopwatch;
 use crate::{EngineError, Result, Session};
 
@@ -253,10 +253,7 @@ pub fn apply_to_surface(id: &str, params: &Value, surf: &Surface, canvas: Rect) 
 
 // ---------- commands ----------
 
-fn target(s: &Session, p: &Value) -> Result<LayerId> {
-    crate::commands::layer_param(s, p)
-}
-
+/// The camera and lens the document's EXIF names.
 fn camera_info(doc: &Document) -> Option<exif::CameraInfo> {
     doc.metadata.exif.as_ref().map(|e| exif::read(e))
 }
@@ -285,7 +282,7 @@ fn raw_enabled(s: &Session) -> std::result::Result<(), String> {
 fn run_filter(s: &mut Session, cmd: &str, label: &str, p: &Value, stored: Value, float_bg: bool, f: &dyn Fn(&Surface, Rect) -> Surface) -> Result<LayerId> {
     let state = s.active().ok_or(EngineError::NoDocument)?;
     let _working = photocraft_raster::memory::try_reserve_operation(state.doc.size.area().saturating_mul(64)).map_err(EngineError::Other)?;
-    let id = target(s, p)?;
+    let id = layer_param(s, p)?;
     let colors = crate::color_channels::target(s, p)?.is_some();
     let mut stored = stored;
     if let Value::Object(m) = &mut stored {
@@ -390,6 +387,7 @@ pub fn encoding_gamma(doc: &Document) -> f32 {
         .map_or(0.0, |(_, g)| g)
 }
 
+/// Applies Camera Raw settings to the target layer, with the document's encoding gamma.
 fn camera_raw_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     // The document's transfer curve goes with the settings, so a Smart Filter keeps it.
     let mut p = p.clone();
@@ -407,7 +405,7 @@ fn camera_raw_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     // 65536×65536 canvas is 2^32 pixels, which overflowed the u32 size arithmetic (#962).
     if !cr.is_identity() {
         let d = s.active().ok_or(EngineError::NoDocument)?;
-        let id = target(s, p)?;
+        let id = layer_param(s, p)?;
         let area = d.doc.layer(id).and_then(Layer::surface).map_or(d.doc.bounds(), |sf| d.doc.bounds().union(&sf.content_bounds()));
         if raw_pixels(area).is_none() {
             return Err(bad(

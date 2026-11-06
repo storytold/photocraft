@@ -1,6 +1,6 @@
 //! Calculations records Make Channel with a `Clcl` object, not a Calculations event.
 
-use super::descriptors::{class, code, desc, enm, get_obj, get_ref, trimmed};
+use super::descriptors::{class, code, desc, enm, get_ref, trimmed};
 use super::fields::{Mapped, step};
 use super::steps_image::CALC_BLEND;
 use super::tables::{CHANNELS, channel_of, lookup, lookup_back};
@@ -68,7 +68,7 @@ fn source_to(source: &Value) -> Option<D> {
 
 /// Only the measured Make form is claimed here; other Make Channel forms reach the mask mapper.
 pub(super) fn from_descriptor(d: &Descriptor) -> Option<Mapped> {
-    let using = get_obj(d, "Usng")?;
+    let using = d.get_object("Usng")?;
     if !using.class_id.is("Clcl") {
         return None;
     }

@@ -1,7 +1,7 @@
 use super::convert::clip_name;
 use super::descriptors::{
-    PT, PX, Target, ang, class, code, color_desc, color_hex, desc, enm, get_bool, get_enum, get_num, get_obj, get_ref, get_text, jbool, jnum, jstr, layer_ref,
-    layer_target, long, name_ref, pct, px, recorded_layer_ref, recorded_layer_target, ref_class, target, target_ref, text, trimmed,
+    PT, PX, Target, ang, class, code, color_desc, color_hex, desc, enm, get_enum, get_num, get_ref, jbool, jnum, jstr, layer_ref, layer_target, long, name_ref,
+    pct, px, recorded_layer_ref, recorded_layer_target, ref_class, target, target_ref, text, trimmed,
 };
 use super::events::pixel_target;
 use super::fields::{F, Kind, Mapped, fields_to, none, step, steps};
@@ -261,7 +261,7 @@ pub(super) fn move_from(d: &Descriptor) -> Mapped {
     let Some(r) = get_ref(d, "null") else { return Mapped::Unsupported { harmless: false } };
     // The selection outline nudged.
     if ref_class(r).as_deref() == Some("Chnl") && matches!(target(r), Target::Property(p) if p == "fsel") {
-        return match get_obj(d, "T   ") {
+        return match d.get_object("T   ") {
             Some(t) if matches!(t.get("Hrzn"), Some(D::UnitFloat { unit: PX, .. })) => match (get_num(t, "Hrzn"), get_num(t, "Vrtc")) {
                 (Some(dx), Some(dy)) => step("select.transformSelection", json!({"dx": dx.round(), "dy": dy.round()})),
                 _ => Mapped::Unsupported { harmless: false },
@@ -350,6 +350,7 @@ pub(super) fn move_to(id: &str, p: &Value) -> Option<Descriptor> {
     Some(desc("null").with("null", recorded_layer_ref(p)?).with("T   ", t))
 }
 
+/// The command a recorded Duplicate step replays as.
 pub(super) fn duplicate_from(d: &Descriptor) -> Mapped {
     let Some(r) = get_ref(d, "null") else { return Mapped::Unsupported { harmless: false } };
     match ref_class(r).as_deref() {
@@ -360,17 +361,17 @@ pub(super) fn duplicate_from(d: &Descriptor) -> Mapped {
                 return Mapped::Unsupported { harmless: false };
             }
             let Some(mut p) = layer_target(r) else { return Mapped::Unsupported { harmless: false } };
-            if let Some(n) = get_text(d, "Nm  ") {
+            if let Some(n) = d.get_text("Nm  ") {
                 p.insert("name".into(), n.into());
             }
             step("layer.duplicate", Value::Object(p))
         }
         Some("Dcmn") => {
             let mut p = Map::new();
-            if let Some(n) = get_text(d, "Nm  ") {
+            if let Some(n) = d.get_text("Nm  ") {
                 p.insert("name".into(), n.into());
             }
-            if let Some(m) = get_bool(d, "Mrgd") {
+            if let Some(m) = d.get_bool("Mrgd") {
                 p.insert("mergedOnly".into(), m.into());
             }
             step("image.duplicate", Value::Object(p))
@@ -453,6 +454,7 @@ pub(super) fn apply_comp_to(_: &str, p: &Value) -> Option<Descriptor> {
     Some(desc("null").with("null", reference))
 }
 
+/// The Play Action command a recorded Play step replays as.
 pub(super) fn play_from(d: &Descriptor) -> Mapped {
     match get_ref(d, "null").map(target) {
         Some(Target::Name(n)) => step("actions.play", json!({"action": clip_name(&n)})),
@@ -460,6 +462,7 @@ pub(super) fn play_from(d: &Descriptor) -> Mapped {
     }
 }
 
+/// The recorded Play step for a play action command.
 pub(super) fn play_to(_: &str, p: &Value) -> Option<Descriptor> {
     let name = jstr(p, "action")?;
     // The Play Action descriptor written here carries no starting step, so a call from a later step is not a whole call.
@@ -475,7 +478,7 @@ pub(super) fn play_to(_: &str, p: &Value) -> Option<Descriptor> {
 
 /// Import Fill or Paint Bucket, keeping Content-Aware choices the engine cannot replay.
 pub(super) fn fill_from(d: &Descriptor) -> Mapped {
-    if let Some(from) = get_obj(d, "From") {
+    if let Some(from) = d.get_object("From") {
         // The Paint Bucket tool's click: its point is in pixels, or in percent of the canvas
         // (not replayable without the document size).
         let in_px = |k: &str| matches!(from.get(k), Some(D::UnitFloat { unit: PX, .. }));
@@ -487,7 +490,7 @@ pub(super) fn fill_from(d: &Descriptor) -> Mapped {
         match get_enum(d, "Usng").as_deref() {
             Some("FrgC") | None => {}
             Some("Pttn") => p["contents"] = json!("pattern"),
-            Some("Clr") => match get_obj(d, "Clr ").and_then(color_hex) {
+            Some("Clr") => match d.get_object("Clr ").and_then(color_hex) {
                 Some(c) => p["color"] = json!(c),
                 None => return Mapped::Unsupported { harmless: false },
             },
@@ -496,13 +499,13 @@ pub(super) fn fill_from(d: &Descriptor) -> Mapped {
         if let Some(t) = get_num(d, "Tlrn") {
             p["tolerance"] = json!(t);
         }
-        if let Some(c) = get_bool(d, "Cntg") {
+        if let Some(c) = d.get_bool("Cntg") {
             p["contiguous"] = json!(c);
         }
-        if let Some(a) = get_bool(d, "AntA") {
+        if let Some(a) = d.get_bool("AntA") {
             p["antiAlias"] = json!(a);
         }
-        if let Some(m) = get_bool(d, "Mrgd") {
+        if let Some(m) = d.get_bool("Mrgd") {
             p["sampleAllLayers"] = json!(m);
         }
         if let Some(o) = get_num(d, "Opct") {
@@ -530,7 +533,7 @@ pub(super) fn fill_from(d: &Descriptor) -> Mapped {
         }
     }
     if contents == "color" {
-        match get_obj(d, "Clr ").and_then(color_hex) {
+        match d.get_object("Clr ").and_then(color_hex) {
             Some(c) => p["color"] = json!(c),
             None => return Mapped::Unsupported { harmless: false },
         }
@@ -544,7 +547,7 @@ pub(super) fn fill_from(d: &Descriptor) -> Mapped {
             None => return Mapped::Unsupported { harmless: false },
         }
     }
-    if let Some(t) = get_bool(d, "PrsT") {
+    if let Some(t) = d.get_bool("PrsT") {
         p["preserveTransparency"] = json!(t);
     }
     step("edit.fill", p)

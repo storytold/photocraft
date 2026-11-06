@@ -17,7 +17,7 @@ use photocraft_color::BlendMode;
 use photocraft_compose::adjust::{self, Transfer};
 use photocraft_compose::effects::has_effects;
 use photocraft_doc::adjust::{ToneSpace, lut3d_len};
-use photocraft_doc::{Adjustment, Document, Effect, Fill, FxPaint, GlobalLight, Glow, Gradient, Layer, LayerContent, LayerId, Pattern, StrokePosition};
+use photocraft_doc::{Adjustment, Document, Effect, Fill, FxPaint, GlobalLight, Glow, Gradient, Layer, LayerContent, LayerId, Pattern};
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;
 
@@ -29,7 +29,8 @@ mod types;
 
 #[cfg(test)]
 use lower::check_gradient_stops;
-pub use lower::{adjustment_on_gpu, adjustment_program, mode_index, stroke_widths};
+pub use lower::{adjustment_on_gpu, adjustment_program, mode_index};
+pub use photocraft_compose::effects::stroke_widths;
 use planner::Planner;
 #[cfg(test)]
 use planner::blend_if_params;

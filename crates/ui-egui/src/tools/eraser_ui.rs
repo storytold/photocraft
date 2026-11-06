@@ -8,7 +8,8 @@ use crate::state::Tool;
 use crate::theme::Tokens;
 use crate::{icons, widgets};
 
-fn report(app: &mut PhotocraftApp, r: Result<Value, String>) {
+/// Shows a failed command's error in the status bar.
+pub(crate) fn report(app: &mut PhotocraftApp, r: Result<Value, String>) {
     if let Err(e) = r {
         app.ui.status = e;
         app.ui.status_error = true;
