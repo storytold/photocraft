@@ -73,6 +73,7 @@ impl Ex<'_> {
         }
     }
 
+    /// Gather required planes in fixed-height bands and append each channel's encoded parts.
     fn banded_pass(&self, s: &Surface, r: photocraft_geom::Rect, compression: Compression, include_alpha: bool) -> photocraft_psd::Result<Vec<ChannelData>> {
         let (w, h) = (r.width() as usize, r.height() as usize);
         let bpp = s.format().bytes_per_pixel();

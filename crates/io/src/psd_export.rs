@@ -185,6 +185,7 @@ impl Ex<'_> {
         if self.fmt.sample == SampleType::F32 { Compression::ZipPrediction } else { Compression::Rle }
     }
 
+    /// Encode an owned layer or mask plane, optionally moving its result to scratch storage.
     fn encode(&self, id: i16, plane: Vec<u8>, w: usize, h: usize) -> ChannelData {
         let depth = psd_depth(self.fmt.sample);
         // Photoshop writes empty layer/mask channels as just the raw compression code.
@@ -200,10 +201,12 @@ impl Ex<'_> {
         }
     }
 
+    /// Build empty raw colour and transparency channels for an empty layer.
     fn empty_channels(&self) -> Vec<ChannelData> {
         (-1..self.cc as i16).map(|id| self.encode(id, Vec::new(), 0, 0)).collect()
     }
 
+    /// Gather and encode a raster layer, omitting transparency when it is unused.
     fn pixel_channels(&self, s: &Surface, name: &str, include_alpha: bool) -> (PsdRect, Vec<ChannelData>, Vec<String>) {
         let mut warnings = Vec::new();
         let s = if s.format() != self.fmt {
@@ -237,6 +240,7 @@ impl Ex<'_> {
         (to_psd_rect(r), ch, warnings)
     }
 
+    /// Encode a mask at document depth, retaining extraction errors for serialization to report.
     fn mask(&self, m: &LayerMask, vector: Option<(f32, f32)>) -> (MaskData, Option<ChannelData>) {
         let s = if m.surface.format() != self.mask_fmt { m.surface.convert(self.mask_fmt) } else { m.surface.clone() };
         let default = s.default_pixel().first().copied().unwrap_or(0.0);
@@ -286,6 +290,7 @@ impl Ex<'_> {
         }
     }
 
+    /// Build one layer record with its pixels, masks and additional information blocks.
     fn record(&mut self, l: &Layer, extra: Vec<TaggedBlock>, pixels: Option<&Surface>) -> LayerRecord {
         let id = self.layer_id(l);
         let (rect, mut channels, warnings) = match pixels {
@@ -1107,9 +1112,11 @@ fn failed_mask_channel(error: photocraft_psd::PsdError) -> ChannelData {
     use photocraft_psd::source::{ReadAt, Source, Stored};
     struct Failed(photocraft_psd::PsdError);
     impl ReadAt for Failed {
+        /// Advertise a nonempty failed channel so serialization attempts to read its error.
         fn len(&self) -> u64 {
             1
         }
+        /// Return the original mask extraction error without erasing its variant.
         fn read_at(&self, _offset: u64, _buf: &mut [u8]) -> photocraft_psd::Result<()> {
             Err(self.0.clone())
         }

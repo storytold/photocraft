@@ -262,6 +262,7 @@ mod import_allocation_tests {
 mod export_tests {
     use super::*;
 
+    /// Compare direct and converted saved-channel planes with float staging at every depth.
     #[test]
     fn direct_and_converted_channels_match_float_staging() {
         for depth in SampleType::ALL {

@@ -17,6 +17,7 @@ fn pat(depth: u16, alpha: bool) -> PsdPattern {
     }
 }
 
+/// Compare direct pattern serialization with staged bytes at supported depths.
 #[test]
 fn direct_writes_match_staged_bytes() {
     for depth in [1, 8, 16, 32] {
@@ -48,6 +49,7 @@ fn direct_writes_match_staged_bytes() {
     }
 }
 
+/// Verify borrowed raw pattern planes retain layout and length validation.
 #[test]
 fn raw_pattern_writes_still_validate_layout_and_plane_length() {
     for depth in [1, 16, 32, 7] {
@@ -57,6 +59,7 @@ fn raw_pattern_writes_still_validate_layout_and_plane_length() {
     }
 }
 
+/// Verify matching plane lengths cannot bypass unsupported pattern-depth checks.
 #[test]
 fn writers_reject_unsupported_depth_with_matching_plane_lengths() {
     let p = PsdPattern { depth: 7, channels: vec![vec![0; 15]; 3], alpha: Some(vec![0; 15]), ..pat(8, false) };
@@ -398,6 +401,7 @@ fn zero_size_pattern_rectangles_are_rejected() {
     assert!(parse_pattern_block(&block).is_err());
 }
 
+/// Serialize a pattern with the previous staged writer as a byte oracle.
 fn staged_pattern(p: &PsdPattern, out: &mut Vec<u8>) -> Result<()> {
     if p.width > MAX_EDGE || p.height > MAX_EDGE || p.width > i16::MAX as u32 || p.height > i16::MAX as u32 {
         return Err(PsdError::LimitExceeded("pattern size"));

@@ -265,6 +265,7 @@ pub fn feid_item(placed: &str, unfiltered: &Surface, mask: Option<&LayerMask>, b
     Some(item)
 }
 
+/// Build an encoded filter-mask item from its surface or a fully revealing default.
 fn filter_mask_item(placed: &str, mask: Option<&LayerMask>, bounds: GeomRect, sample: SampleType) -> FilterEffectsItem {
     let fmt = PixelFormat::new(ColorMode::Grayscale, sample, false);
     let area = match mask {

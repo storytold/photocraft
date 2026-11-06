@@ -390,6 +390,7 @@ pub fn composite_gamma(mode: BlendMode, backdrop: [f32; 4], source: [f32; 4], op
 #[cfg(test)]
 mod tests {
 
+    /// Compare specialized blends with generic evaluation in both colour scopes.
     #[test]
     fn common_blends_match_generic_in_both_scopes() {
         let values = [

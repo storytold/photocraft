@@ -4,6 +4,7 @@ fn document(width: u32, height: u32) -> Document {
     Document::new("size estimate", photocraft_geom::Size::new(width, height), ColorMode::Rgb, SampleType::U8)
 }
 
+/// Compare fill-channel bytes with the allocating pixel conversion at every depth.
 #[test]
 fn fill_channels_match_allocating_pixel_conversion() {
     for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Lab] {
@@ -36,6 +37,7 @@ fn fill_channels_match_allocating_pixel_conversion() {
     }
 }
 
+/// Verify buffered and streamed saves preserve mask extraction error variants.
 #[test]
 fn failed_mask_channels_preserve_original_errors() {
     use photocraft_psd::PsdError;
@@ -59,6 +61,7 @@ fn failed_mask_channels_preserve_original_errors() {
     }
 }
 
+/// Verify an unrepresentable sparse mask fails before allocating its dense rectangle.
 #[test]
 fn oversized_sparse_mask_fails_export_without_allocating_its_dense_rectangle() {
     let mut doc = document(1, 1);
@@ -74,6 +77,7 @@ fn oversized_sparse_mask_fails_export_without_allocating_its_dense_rectangle() {
     assert!(crate::export(&doc, "psd", &Default::default()).is_err());
 }
 
+/// Compare stored-precision opacity checks with decoded alpha across depths.
 #[test]
 fn opacity_scan_matches_decoded_alpha() {
     for sample in SampleType::ALL {
@@ -89,6 +93,7 @@ fn opacity_scan_matches_decoded_alpha() {
     }
 }
 
+/// Verify concurrent exports retain identical bytes in single and multiple worker pools.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn concurrent_exports_keep_bytes_in_single_and_multi_worker_pools() {
@@ -133,6 +138,7 @@ fn concurrent_exports_keep_bytes_in_single_and_multi_worker_pools() {
     }
 }
 
+/// Compare owned layer compression with borrowed encoding across formats and depths.
 #[test]
 fn owned_layer_planes_keep_the_borrowed_encoders_bytes() {
     for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab] {
@@ -191,6 +197,7 @@ fn a_background_is_written_without_a_transparency_channel() {
     assert!(document_to_psd(&unlocked).layer_info.unwrap().layers[0].channels.iter().any(|c| c.id == -1));
 }
 
+/// Verify Background alpha omission preserves every colour channel's encoded bytes.
 #[test]
 fn background_colour_channels_match_an_unlocked_layer_at_every_depth() {
     for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab] {

@@ -219,6 +219,7 @@ mod tests {
         assert!(b.process_ceiling_bytes < u64::MAX);
         assert_eq!(b.tile_bytes, MIB);
     }
+    /// Verify a reservation that fits alone waits for concurrent memory to be released.
     #[test]
     fn an_operation_that_fits_alone_waits_for_a_concurrent_one() {
         let _guard = RESERVATION_TESTS.lock().unwrap_or_else(PoisonError::into_inner);
@@ -233,6 +234,7 @@ mod tests {
         assert!(second.is_ok(), "overlapping work is serialized, not refused");
         assert!(try_reserve_operation(u64::MAX).is_err(), "work that can never fit is refused at once");
     }
+    /// Verify reservation limits and release while isolating the shared test counter.
     #[test]
     fn reservations_are_bounded_and_returned() {
         let _guard = RESERVATION_TESTS.lock().unwrap_or_else(PoisonError::into_inner);

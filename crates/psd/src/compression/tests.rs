@@ -25,6 +25,7 @@ fn layout(planes: usize, width: usize, height: usize, depth: u16, version: Versi
     PlaneLayout { planes, width, height, depth, version }
 }
 
+/// Verify PackBits round trips empty, literal and repeated-byte inputs.
 fn pb_roundtrip(src: &[u8]) -> Vec<u8> {
     let enc = packbits::encode_vec(src);
     assert_eq!(packbits::encoded_len(src), enc.len());
@@ -33,8 +34,10 @@ fn pb_roundtrip(src: &[u8]) -> Vec<u8> {
     enc
 }
 
+/// Compare block scanning with scalar packet boundaries over varied runs and literals.
 #[test]
 fn packbits_block_scan_preserves_scalar_packets() {
+    /// Encode PackBits with the previous scalar packet scan as a byte oracle.
     fn scalar(src: &[u8]) -> Vec<u8> {
         let mut out = Vec::new();
         let mut i = 0;
@@ -408,6 +411,7 @@ fn prediction_32bit_floats_roundtrip() {
     assert_eq!(decode_planes(Compression::ZipPrediction, &enc, &l).unwrap(), v);
 }
 
+/// Compare fused float prediction with explicit byte-plane shuffling and delta coding.
 #[test]
 fn fused_prediction_matches_shuffled_byte_deltas() {
     for w in [1, 2, 3, 31, 256, 257] {
@@ -437,6 +441,7 @@ fn zip_garbage_errors() {
     assert!(zip_decompress(&[1, 2, 3, 4], 4).is_err());
 }
 
+/// Compare bounded ZIP output with the original growing writer over varied inputs.
 #[test]
 fn zip_output_matches_the_growing_writer() {
     let mut seed = 0x12345678u32;
@@ -458,6 +463,7 @@ fn zip_output_matches_the_growing_writer() {
     }
 }
 
+/// Verify multiple writes retain their bytes and respect ZIP output block bounds.
 #[test]
 #[cfg(not(target_arch = "wasm32"))]
 fn zip_output_blocks_stay_bounded_across_writes() {
@@ -473,6 +479,7 @@ fn zip_output_blocks_stay_bounded_across_writes() {
     assert_eq!(packed.capacity(), packed.len());
 }
 
+/// Verify compressible ZIP output retains capacity proportional to encoded size.
 #[test]
 fn compressible_zip_does_not_retain_a_raw_sized_allocation() {
     let raw = vec![0; 1 << 20];
@@ -482,6 +489,7 @@ fn compressible_zip_does_not_retain_a_raw_sized_allocation() {
     assert_eq!(zip_decompress(&packed, raw.len()).unwrap(), raw);
 }
 
+/// Verify failed RLE allocation hints fall back to incremental growth with identical bytes.
 #[test]
 fn rle_failed_hint_and_incremental_growth_preserve_bytes() {
     for version in [Version::Psd, Version::Psb] {
@@ -498,6 +506,7 @@ fn rle_failed_hint_and_incremental_growth_preserve_bytes() {
     }
 }
 
+/// Verify measured packet lengths match encoding over mixed runs and literals.
 #[test]
 fn counted_packbits_matches_mixed_runs_and_literals() {
     for n in 0..520 {
@@ -506,6 +515,7 @@ fn counted_packbits_matches_mixed_runs_and_literals() {
     }
 }
 
+/// Compare parallel prediction with independent serial rows at each supported depth.
 #[test]
 fn prediction_matches_independent_serial_rows() {
     for depth in [1, 8, 16, 32] {
@@ -546,6 +556,7 @@ fn prediction_matches_independent_serial_rows() {
     }
 }
 
+/// Verify RLE chunks use the caller's pool and propagate worker panics as errors.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn rle_chunks_use_the_callers_pool_and_report_panics() {

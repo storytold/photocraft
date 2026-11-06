@@ -10,6 +10,7 @@ use super::*;
 const CMYKA8: PixelFormat = PixelFormat { mode: ColorMode::Cmyk, sample: SampleType::U8, alpha: true };
 const CMYK8: PixelFormat = PixelFormat { mode: ColorMode::Cmyk, sample: SampleType::U8, alpha: false };
 
+/// Verify native CMYK reads preserve stored samples, defaults and cleanup.
 #[test]
 fn native_layer_reads_preserve_sample_bits() {
     let rect = Rect::new(-2, -1, 260, 2);

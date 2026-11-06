@@ -121,6 +121,7 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
+    /// Verify unique global payloads move while shared imported payloads detach.
     #[test]
     fn global_blocks_move_unique_bytes_and_detach_shared_bytes() {
         for len in 1..=4 {

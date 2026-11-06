@@ -229,6 +229,7 @@ impl FilterEffects {
 mod tests {
     use super::*;
 
+    /// Serialize filter-effect sections through staging buffers as a byte oracle.
     fn staged_bytes(fx: &FilterEffects) -> Vec<u8> {
         let mut out = Vec::new();
         out.put_u32(fx.version);
@@ -279,6 +280,7 @@ mod tests {
         FilterEffectsItem { id: id.into(), version: 1, rect, depth: 8, max_channels: 24, slots, mask: mask.then(|| (rect, plane(128))) }
     }
 
+    /// Compare direct filter-effect serialization with staged bytes and section lengths.
     #[test]
     fn direct_sections_match_staged_bytes() {
         for version in [1, 2, 3] {

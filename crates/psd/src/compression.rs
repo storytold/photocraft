@@ -96,6 +96,7 @@ pub mod packbits {
         len
     }
 
+    /// Visit PackBits run and literal packets in their deterministic encoding order.
     fn packets(src: &[u8], mut emit: impl FnMut(u8, &[u8])) {
         let n = src.len();
         let mut i = 0;
@@ -422,6 +423,7 @@ fn decode_rle(data: &[u8], layout: &PlaneLayout, total: usize) -> Result<Vec<u8>
     Ok(out)
 }
 
+/// Encode independent row chunks and join their count tables and payloads in order.
 fn encode_rle(decoded: &[u8], layout: &PlaneLayout) -> Result<Vec<u8>> {
     let rows = layout.rows()?;
     if rows == 0 {
@@ -531,6 +533,7 @@ struct ZipOutput {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl std::io::Write for ZipOutput {
+    /// Accept all input bytes into bounded output blocks without reserving raw image size.
     fn write(&mut self, mut bytes: &[u8]) -> std::io::Result<usize> {
         let len = bytes.len();
         while !bytes.is_empty() {
@@ -548,6 +551,7 @@ impl std::io::Write for ZipOutput {
         Ok(len)
     }
 
+    /// Complete a no-op flush because every write is already retained in memory.
     fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
     }
@@ -555,6 +559,7 @@ impl std::io::Write for ZipOutput {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl ZipOutput {
+    /// Join encoded ZIP blocks into one vector sized to the compressed payload.
     fn into_vec(mut self) -> Vec<u8> {
         self.blocks.push(self.current);
         if self.blocks.len() == 1 {
@@ -622,6 +627,7 @@ pub fn predict(buf: &mut [u8], layout: &PlaneLayout) -> Result<()> {
     predict_rows(buf, layout)
 }
 
+/// Apply per-row prediction, reusing scratch for float byte-plane shuffling.
 fn predict_rows(buf: &mut [u8], layout: &PlaneLayout) -> Result<()> {
     let rb = layout.row_bytes();
     let w = layout.width;

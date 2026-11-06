@@ -270,6 +270,7 @@ impl Tile {
         Some(Tile { w, h, texels, finite })
     }
 
+    /// Read premultiplied RGBA at integer coordinates, wrapping both tile axes.
     #[inline]
     fn at(&self, x: i64, y: i64) -> [f32; 4] {
         let xi = x.rem_euclid(self.w as i64) as usize;
@@ -277,6 +278,7 @@ impl Tile {
         self.at_index(yi * self.w + xi)
     }
 
+    /// Decode one premultiplied texel at an already wrapped row-major index.
     #[inline]
     fn at_index(&self, i: usize) -> [f32; 4] {
         match &self.texels {
@@ -355,6 +357,7 @@ impl Tile {
         }
         acc
     }
+    /// Keep scalar bilinear evaluation for non-finite texels or extreme coordinates.
     fn sample_premul_scalar(&self, u: f64, v: f64) -> [f32; 4] {
         let (u, v) = (u - 0.5, v - 0.5);
         let (x0, y0) = (u.floor(), v.floor());
@@ -498,6 +501,7 @@ mod tests {
     use super::*;
     use photocraft_doc::{PixelFormat, Surface};
 
+    /// Evaluate the original scalar bilinear taps as an independent arithmetic oracle.
     fn original_sample(tile: &Tile, u: f64, v: f64) -> [f32; 4] {
         let (u, v) = (u - 0.5, v - 0.5);
         let (x0, y0) = (u.floor(), v.floor());
@@ -522,6 +526,7 @@ mod tests {
         acc
     }
 
+    /// Compare sampling and rendered pixels with the scalar arithmetic across depths and transforms.
     #[test]
     fn sampling_and_rendering_match_scalar() {
         // Rust arithmetic may select any NaN operand's payload; all other bits stay exact.

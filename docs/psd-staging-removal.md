@@ -1,6 +1,7 @@
 # PSD export throughput and byte equivalence
 
-In-memory layer, mask, pattern, filter and saved-channel planes gather directly from tiles.
+Layer, mask, pattern, filter and saved-channel planes gather directly from tiles, including
+large layers exported in bands.
 Background layers omit unused transparency. Raw merged output owns its completed planes,
 reserves saved-channel capacity and encodes native CMYK into final slices. Native rendering
 uses the full compositor band budget; wasm keeps smaller bands. Imports retain main's decoder
@@ -21,8 +22,9 @@ share initialized scratch. Row resets, plane-boundary predecessors, deflate back
 and input bytes stay unchanged.
 
 Owned float planes predict in place and return to scratch after encoding; codec errors keep
-unmodified raw bytes. Surface/fill conversion reuses sample storage, filter-cache whitening
-runs during gathering, and opacity checks compare stored precision. Native CMYK reads five
+unmodified raw bytes. Surface/fill conversion reuses sample storage. Filter-cache whitening
+runs during gathering and borrows rows that need no colour replacement. Opacity checks
+compare stored precision. Native CMYK reads five
 samples into compositor storage, preserving defaults, non-finite cleanup and masks. Workers
 restore document colour-profile scopes and never enter pool work while holding tile guards.
 
@@ -35,7 +37,8 @@ an error through the existing channel source, preserving the public model API.
 
 ## Pattern sampling and blending
 
-Finite integer placements use wrapped rows; bilinear taps reuse indices. Unit-alpha samples
+Finite integer placements evaluate at most one tile period, then copy repeated output pixels
+and rows bit for bit; bilinear taps reuse indices. Unit-alpha samples
 avoid divisions by one after the scalar signed-zero adjustment. Rotation, minification and
 fractional-alpha arithmetic stay unchanged. Immutable finite metadata preserves scalar
 fallbacks for non-finite texels and coordinates. Normal and finite Multiply/Screen avoid
@@ -44,8 +47,10 @@ repeated dispatch; non-finite evaluation, alpha, Fill, gamma and Lab behavior st
 ## Rebased fixed-main release comparison
 
 The table measures source `1eb800645369d3da187e0363180968f1dc6e2845` rebased onto
-`e55e2f3577ad08cb5ff84779a4eee1b8003bf98f`. The later mask-error preservation fix
-was verified with regression tests without repeating benchmarks; successful encoding is unchanged.
+`e55e2f3577ad08cb5ff84779a4eee1b8003bf98f`. Later changes preserve mask errors, reuse periodic
+pattern output, gather banded planes directly, skip discarded Background alpha and borrow
+unchanged filter-cache rows. They were verified without new benchmarks; their timing effects
+are unmeasured. Banded ZIP retains its original input boundaries and encoded bytes.
 Fixed main remains `292ce6ab55a3c18636fe599cfbddc20ebc32cea9`; its saved measurements were not rerun or changed.
 No intermediate branch or individual commit was timed.
 
@@ -103,12 +108,21 @@ checks, not a race detector.
 The measured source passed PSD/I/O release/corpus suites,
 including staged/banded output, fallback and cancellation. Strict all-target Clippy,
 formatting, layering, wasm and affected performance smoke pass. Unchanged smoke reports are
-explicitly reused. The same two known release SVG failures remain excluded. The unchanged
-raster and compositor source retains its previously passed checks, including the test-only
-reservation mutex fix; fresh compositor hashes also match main.
+explicitly reused. The same two known release SVG failures remain excluded. The raster
+source retains its previously passed checks, including the test-only reservation mutex fix;
+the measured source's compositor hashes also match main.
 The later failure-path fix preserves `LimitExceeded`, `OutOfMemory` and `Invalid` through
 buffered and streaming PSD/PSB writes at 8/16/32-bit depth. Focused export and PSD unit
 tests, strict I/O Clippy and an affected-crate wasm check pass; no benchmarks were rerun.
+
+The later hot-path changes pass 124 focused export, pixel, pattern and smart-object tests.
+The banded ZIP oracle compares exact encoded bytes against the old interleaved input sequence
+for RGB/CMYK/Lab float layers and Backgrounds in PSD and PSB. Existing tests cover staged
+and RLE banding, cancellation, signed-zero pattern arithmetic and concurrent exports.
+Whitening tests compare exact sample bytes and verify unchanged rows borrow their source
+without allocating scratch. Strict I/O/compositor Clippy, wasm, formatting and layering pass.
+All 110 functions identified by the local changed-function audit have Rust documentation;
+the review service's 80% coverage gate still requires its own rerun.
 
 The SVG exclusions are:
 
