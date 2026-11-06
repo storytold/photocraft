@@ -20,6 +20,7 @@
 //! - [`trn`]: plural-aware (`{n}` is filled in). [`fmt`]: fill `{name}` placeholders after [`tr`];
 //!   translators may reorder placeholders freely.
 
+mod casing;
 mod catalog;
 mod system;
 
@@ -42,7 +43,7 @@ pub struct LangInfo {
     /// [`LangInfo::text`].
     pub source: &'static [u8],
     /// Plural form index for a count (English: 0 = one, 1 = other; Japanese, Chinese and Hungarian: always 0;
-    /// Czech: 0 = one, 1 = few (2–4), 2 = other; French: 0 = one (0 and 1), 1 = other). A catalog's `@plural` entries list one form per
+    /// Czech: 0 = one, 1 = few (2–4), 2 = other; Russian, Ukrainian and Bosnian: 0 = one (1, 21 …), 1 = few (2–4, 22–24 …), 2 = other; French: 0 = one (0 and 1), 1 = other). A catalog's `@plural` entries list one form per
     /// index.
     pub plural: fn(u64) -> usize,
     /// Does the catalog cover every menu string? (`cargo xtask i18n-coverage` lists what it lacks)
@@ -102,6 +103,20 @@ fn plural_fr(n: u64) -> usize {
 /// Portuguese: 0 and 1 take the singular, everything else the plural.
 fn plural_pt(n: u64) -> usize {
     usize::from(n > 1)
+}
+
+/// Romanian (CLDR): 1 → one; 0, or n % 100 in 1–19 → few (these take the bare plural noun, e.g.
+/// "2 straturi", "0 straturi", "119 straturi"); everything else (20, 100, 121, ...) → other (these
+/// take "de" plus the plural noun, e.g. "20 de straturi", "121 de straturi"), which matches
+/// Romanian's grammatical rule for when counted nouns need "de" inserted before them.
+fn plural_romanian(n: u64) -> usize {
+    if n == 1 {
+        0
+    } else if n == 0 || (1..=19).contains(&(n % 100)) {
+        1
+    } else {
+        2
+    }
 }
 
 /// Polish: 1 → one; 2–4, except 12–14 → few; everything else → many.
@@ -201,7 +216,7 @@ fn expand(packed: &str, keys: &[&str]) -> Result<String, String> {
 }
 
 /// The registry. English first: it is the fallback and the source language.
-pub static LANGUAGES: [LangInfo; 27] = [
+pub static LANGUAGES: [LangInfo; 34] = [
     LangInfo { code: "en", name: "English", source: b"", plural: plural_one_other, complete_menus: false, catalog: OnceLock::new() },
     LangInfo { code: "ja", name: "日本語", source: catalog!("ja"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
     LangInfo { code: "zh-hans", name: "简体中文", source: catalog!("zh-hans"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
@@ -216,6 +231,10 @@ pub static LANGUAGES: [LangInfo; 27] = [
     // `sr-Latn-*` and `sr_RS@latin` resolve here; so do Cyrillic `sr` locales, which read Latin
     // rather than English.
     LangInfo { code: "sr", name: "Srpski", source: catalog!("sr"), plural: plural_russian, complete_menus: true, catalog: OnceLock::new() },
+    // Bosnian (Latin script, Ijekavian), the same one/few/other rule for integer counts. `bs-BA`,
+    // `bs-Latn-*` and `bs_BA.UTF-8` resolve here; so do Cyrillic `bs` locales, which read Latin
+    // rather than English.
+    LangInfo { code: "bs", name: "Bosanski", source: catalog!("bs"), plural: plural_russian, complete_menus: true, catalog: OnceLock::new() },
     LangInfo { code: "cs", name: "Čeština", source: catalog!("cs"), plural: plural_cs, complete_menus: true, catalog: OnceLock::new() },
     LangInfo { code: "fr", name: "Français", source: catalog!("fr"), plural: plural_fr, complete_menus: true, catalog: OnceLock::new() },
     LangInfo { code: "id", name: "Bahasa Indonesia", source: catalog!("id"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
@@ -232,8 +251,13 @@ pub static LANGUAGES: [LangInfo; 27] = [
     LangInfo { code: "hu", name: "Magyar", source: catalog!("hu"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
     // Turkish; `tr`, `tr-TR` and `tr_TR` locales resolve here.
     LangInfo { code: "tr", name: "Türkçe", source: catalog!("tr"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
+    // Azerbaijani (Latin script); regional and explicit Latin-script tags resolve here.
+    LangInfo { code: "az", name: "Azərbaycanca", source: catalog!("az"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
     // Vietnamese; `vi-VN` resolves here.
     LangInfo { code: "vi", name: "Tiếng Việt", source: catalog!("vi"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
+    // Thai; `th`, `th-TH` and `th_TH.UTF-8` locales resolve here. Thai has no plural inflection,
+    // so counts use one form.
+    LangInfo { code: "th", name: "ไทย", source: catalog!("th"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
     // Hindi; `hi`, `hi-IN` locales resolve here.
     LangInfo { code: "hi", name: "हिन्दी", source: catalog!("hi"), plural: plural_one_other, complete_menus: false, catalog: OnceLock::new() },
     // Arabic (Modern Standard); `ar-SA`, `ar-EG` and the other regional locales resolve here. The
@@ -249,6 +273,17 @@ pub static LANGUAGES: [LangInfo; 27] = [
     // Norwegian Bokmål; `nb-NO`, and the macrolanguage `no` and Nynorsk `nn` from POSIX locales,
     // resolve here (see `candidates`).
     LangInfo { code: "nb", name: "Norsk bokmål", source: catalog!("nb"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
+    // Hebrew; `he-il` and `he_IL` resolve here. The chrome mirrors right to left (`dir_for_code`),
+    // like Arabic. Modern Hebrew software UI collapses CLDR's one/two/many/other
+    // into a plain one|other, so this uses `plural_one_other`.
+    LangInfo { code: "he", name: "עברית", source: catalog!("he"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
+    // Urdu; written right to left like Arabic (`dir_for_code`). CLDR plural: one|other.
+    LangInfo { code: "ur", name: "اردو", source: catalog!("ur"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
+    // Romanian; `ro-RO` and `ro-MD` resolve here. Standard left-to-right; see `plural_romanian`
+    // for the one/few/other rule.
+    LangInfo { code: "ro", name: "Română", source: catalog!("ro"), plural: plural_romanian, complete_menus: true, catalog: OnceLock::new() },
+    // Tamil; `ta-IN`, `ta-LK` and `ta_IN.UTF-8` resolve here. CLDR plural: one|other.
+    LangInfo { code: "ta", name: "தமிழ்", source: catalog!("ta"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
 ];
 
 impl LangInfo {

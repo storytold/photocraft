@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex, Weak};
 
 use photocraft_cms::{Builtin, ColorSpace, GamutCheck, Intent, Lut3d, Profile, SampleKind, Transform};
 use photocraft_color::{Color, ColorMode, PixelFormat, SampleType};
-use photocraft_doc::{DocId, Document, Duotone, Effect, Fill, FxPaint, Layer, LayerContent};
+use photocraft_doc::{DocId, Document, Duotone, Effect, Fill, FxPaint, Layer, LayerContent, TextStyles};
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
 
@@ -397,16 +397,16 @@ impl ColorState {
     pub fn display_transform_for(&self, doc: &Document, display: Option<u32>) -> Result<Arc<Transform>> {
         let src = self.canvas_display_for(doc, display)?.source.clone();
         let dst = self.monitor_for(display);
-        let pv = self.proof(doc.id);
-        let proof = pv.enabled.then(|| (pv.setup.profile.content_hash(), pv.setup.intent, pv.setup.bpc, pv.setup.simulate_paper));
+        // Borrowed: the canvas asks per frame, and the default proof state allocates a profile.
+        let pv = self.proof_ref(doc.id).filter(|pv| pv.enabled);
+        let proof = pv.map(|pv| (pv.setup.profile.content_hash(), pv.setup.intent, pv.setup.bpc, pv.setup.simulate_paper));
         let key = (src.content_hash(), dst.content_hash(), proof);
         if let Some(t) = self.display_cache.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
             return Ok(t.clone());
         }
-        let t = if pv.enabled {
-            Transform::proof(&src, &pv.setup.profile, &dst, pv.setup.intent, pv.setup.bpc, pv.setup.simulate_paper)
-        } else {
-            Transform::new(&src, &dst, crate::display_color::DISPLAY_INTENT, crate::display_color::DISPLAY_BPC)
+        let t = match pv {
+            Some(pv) => Transform::proof(&src, &pv.setup.profile, &dst, pv.setup.intent, pv.setup.bpc, pv.setup.simulate_paper),
+            None => Transform::new(&src, &dst, crate::display_color::DISPLAY_INTENT, crate::display_color::DISPLAY_BPC),
         }
         .map_err(cms_err)?;
         let t = Arc::new(t);
@@ -659,24 +659,29 @@ pub fn convert_surface(s: &Surface, from: ColorMode, to: PixelFormat, t: &Transf
         .collect();
     let tile_px = (photocraft_geom::TILE_SIZE * photocraft_geom::TILE_SIZE) as usize;
     let dst_len = tile_px * to.bytes_per_pixel();
-    let mut staging = vec![0u8; dst_len * distinct.len()];
-    let jobs: Vec<(&[u8], &mut [u8])> = distinct.iter().map(|t| t.bytes()).zip(staging.chunks_mut(dst_len.max(1))).collect();
     let kind = match sf.sample {
         SampleType::U8 => SampleKind::U8,
         SampleType::U16 => SampleKind::U16,
         SampleType::F32 => SampleKind::F32,
     };
-    t.convert_bytes_many(kind, jobs, ss, ds, true);
-    let mut converted: Vec<Option<std::sync::Arc<photocraft_raster::Tile>>> = vec![None; distinct.len()];
-    for (c, i) in tiles {
-        if let Some(Some(tile)) = converted.get(i) {
-            out.put_tiles([(c, tile.clone())]);
-            continue;
+    let mut converted = Vec::with_capacity(distinct.len());
+    for batch in distinct.chunks(32) {
+        let mut staging = vec![0u8; dst_len * batch.len()];
+        {
+            let sources: Vec<_> = batch.iter().map(|tile| tile.bytes()).collect();
+            let jobs: Vec<(&[u8], &mut [u8])> = sources.iter().map(|bytes| &**bytes).zip(staging.chunks_mut(dst_len.max(1))).collect();
+            t.convert_bytes_many(kind, jobs, ss, ds, true);
         }
-        let Some(bytes) = staging.chunks(dst_len.max(1)).nth(i) else { continue };
-        out.tile_mut(c).bytes_mut().copy_from_slice(bytes);
-        if let Some(slot) = converted.get_mut(i) {
-            *slot = out.tile(c).cloned();
+        for bytes in staging.chunks(dst_len.max(1)) {
+            let coord = photocraft_geom::TileCoord::new(0, 0);
+            let mut surface = Surface::new(to);
+            surface.tile_mut(coord).bytes_mut().copy_from_slice(bytes);
+            converted.push(surface.tile(coord).cloned());
+        }
+    }
+    for (coord, index) in tiles {
+        if let Some(Some(tile)) = converted.get(index) {
+            out.put_tiles([(coord, tile.clone())]);
         }
     }
     out
@@ -758,6 +763,26 @@ fn convert_layer_colors(l: &mut Layer, cc: &mut dyn FnMut(&mut Color)) {
     }
 }
 
+/// Applies `cc` to every colour a type style sets (character styles, paragraph styles and Basic
+/// Paragraph), so type converted with its document still matches its styles instead of showing
+/// a local override.
+fn convert_style_colors(st: &mut TextStyles, cc: &mut dyn FnMut(&mut Color)) {
+    let sets = st
+        .character
+        .iter_mut()
+        .map(|c| &mut c.attrs)
+        .chain(st.paragraph.iter_mut().chain([&mut st.basic]).flat_map(|p| [&mut p.para_attrs, &mut p.char_attrs]));
+    for attrs in sets {
+        for v in attrs.values_mut().filter(|v| v.is_object()) {
+            let Ok(mut c) = serde_json::from_value::<Color>(v.clone()) else { continue };
+            cc(&mut c);
+            if let Ok(n) = serde_json::to_value(c) {
+                *v = n;
+            }
+        }
+    }
+}
+
 fn paint_colors(p: &mut FxPaint, cc: &mut dyn FnMut(&mut Color)) {
     match p {
         FxPaint::Color(c) => cc(c),
@@ -788,6 +813,7 @@ pub fn convert_document(doc: &mut Document, dst: &Profile, intent: Intent, bpc: 
         convert_layer_colors(l, &mut |c| convert_color(c, from_mode, to_mode, &t));
         // Preserved PSD blocks describing colours in the old mode no longer apply.
     }
+    convert_style_colors(&mut doc.text_styles, &mut |c| convert_color(c, from_mode, to_mode, &t));
     doc.mode = to_mode;
     doc.icc_profile = Some(dst.to_bytes());
     // Leaving Indexed / Duotone: the palette and inks no longer apply.
@@ -814,6 +840,12 @@ fn ink_duotone(doc: &mut Document) {
             }
         });
     }
+    convert_style_colors(&mut doc.text_styles, &mut |c| {
+        if matches!(c.mode, ColorMode::Grayscale | ColorMode::Duotone) {
+            let [r, g, b] = d.render(c.c[0]);
+            *c = Color::rgba(r, g, b, c.alpha);
+        }
+    });
     doc.mode = ColorMode::Rgb;
     doc.icc_profile = Some(Builtin::Srgb.profile().to_bytes());
 }
@@ -847,7 +879,7 @@ fn ink_surface(s: &Surface, d: &Duotone) -> Surface {
             let (mut px, mut o) = ([0.0f32; 2], [0.0f32; 4]);
             for i in 0..n {
                 for (k, v) in px.iter_mut().enumerate().take(ss) {
-                    *v = photocraft_color::read_sample(src, sf.sample, i * ss + k);
+                    *v = photocraft_color::read_sample(&src, sf.sample, i * ss + k);
                 }
                 ink(&px[..ss], &mut o[..ds]);
                 for (k, v) in o.iter().enumerate().take(ds) {
@@ -858,7 +890,7 @@ fn ink_surface(s: &Surface, d: &Duotone) -> Surface {
         })
         .collect();
     for ((c, _), bytes) in tiles.iter().zip(inked) {
-        let tile = out.tile_mut(*c).bytes_mut();
+        let mut tile = out.tile_mut(*c).bytes_mut();
         if tile.len() == bytes.len() {
             tile.copy_from_slice(&bytes);
         }

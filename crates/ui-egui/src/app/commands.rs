@@ -63,7 +63,16 @@ impl PhotocraftApp {
             self.session.precheck(id, &params).map_err(|e| e.to_string())?;
             transform_tool::commit(self);
             if transform_tool::committing(self).is_some() {
-                return Err(tl!("Free Transform is still being applied; try again when it has finished.").into());
+                // A click stays a click: it runs when the commit lands (#9974). Only a click in the
+                // committing document, one at a time: a script, a control request or an action step
+                // needs its answer now, and a click in another tab wasn't meant for this one.
+                let committing_here = self.transform_preview.as_ref().is_some_and(|pv| self.session.active().is_some_and(|st| st.doc.id == pv.doc.id));
+                let click = !self.automation_input && self.session.authorize.is_none() && self.run_depth == 1;
+                if !click || !committing_here || self.after_transform_commit.is_some() {
+                    return Err(tl!("Free Transform is still being applied; try again when it has finished.").into());
+                }
+                self.after_transform_commit = Some((id.to_string(), params));
+                return Ok(Value::Null);
             }
             if self.ui.transform.is_some() {
                 return Err(if self.ui.status.is_empty() { tl!("The transform couldn't be applied.").into() } else { self.ui.status.clone() });
@@ -304,6 +313,8 @@ impl PhotocraftApp {
             self.ui.selected_path = None;
         }
         self.path_document = document;
+        // A shape box handle drag belongs to its document, revision and tool.
+        crate::shape_bounds_box::cancel_stale(self);
         vector_ui::cancel_stale_pen(self);
         crate::direct_select::cancel_stale(self);
         canvas::cancel_stale_vector_drag(self);
@@ -346,6 +357,9 @@ impl PhotocraftApp {
         }
         self.canvases.retain(|(doc, _), _| ids.contains(doc));
         self.navigator_textures.retain(|doc, _| ids.contains(doc));
+        self.snapshot_thumbs.retain(|(doc, _), _| ids.contains(doc));
+        // Closing a document cancels its page work; its GPU pages go with `retain_gpu_documents`.
+        self.streams.retain(|doc, _| ids.contains(doc));
         self.view_docs = ids;
         self.prune_thumbs();
         self.sync_mask_targets();

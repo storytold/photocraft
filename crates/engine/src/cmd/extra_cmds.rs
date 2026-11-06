@@ -440,7 +440,7 @@ fn visible_bounds(s: &photocraft_raster::Surface, canvas: Rect) -> Rect {
         }
         out
     };
-    tiles.par_iter().map(|(c, t)| tile_bounds(c.rect(), t.bytes())).reduce(|| Rect::EMPTY, |a, b| a.union(&b))
+    tiles.par_iter().map(|(c, t)| tile_bounds(c.rect(), &t.bytes())).reduce(|| Rect::EMPTY, |a, b| a.union(&b))
 }
 
 // ---------- layers ----------
@@ -556,6 +556,10 @@ fn is_empty_layer(l: &Layer) -> bool {
     }
 }
 
+/// Layer › Ungroup Layers: replace the selected group with its children in place, the topmost
+/// child becoming active. Ungrouping an empty group next to other layers simply removes it;
+/// when it is the only root layer the edit is refused, as `layer.delete` refuses to drop the
+/// last layer (#11118).
 fn ungroup(s: &mut Session, p: &Value) -> Result<Value> {
     let id = layer_param(s, p)?;
     s.edit("Ungroup Layers", |doc, active| {
@@ -566,6 +570,12 @@ fn ungroup(s: &mut Session, p: &Value) -> Result<Value> {
         };
         let children = group.children.clone();
         let (&idx, parent) = path.split_last().ok_or(EngineError::NoLayer(id))?;
+        // Ungrouping the only root layer when it is an empty group would leave the document
+        // with no layers at all; `layer.delete` refuses to drop the last layer, so refuse here
+        // too instead (#11118).
+        if parent.is_empty() && children.is_empty() && doc.layers.len() == 1 {
+            return Err(EngineError::Other("a document must keep at least one layer".into()));
+        }
         let sib = if parent.is_empty() { &mut doc.layers } else { doc.layer_at_mut(parent).and_then(Layer::children_mut).ok_or(EngineError::NoLayer(id))? };
         sib.remove(idx);
         let top = children.last().map(|l| l.id);
@@ -752,6 +762,8 @@ fn rasterize_content(s: &mut Session, id: LayerId, only: Option<&str>, key: &str
                 let px = content_pixels(doc, &snap);
                 let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
                 l.content = LayerContent::Raster(px);
+                l.frame = None;
+                l.psd_blocks.retain(|(k, _)| k != b"pcFr");
                 l.fill_cache = None;
                 // The PSD fill or placed-layer blocks no longer describe the layer: kept, they
                 // would reopen it as a fill layer or smart object and drop these pixels.
@@ -877,9 +889,15 @@ pub fn specs() -> Vec<CommandSpec> {
             if all == d.doc.bounds() {
                 return Ok(json!({"changed": false}));
             }
-            // One History step named as in Photoshop, not the crop's "Crop".
+            // One History step named as in Photoshop, not the crop's "Crop". The Background stays a
+            // Background, unlike a Crop tool crop with Delete Cropped Pixels off (#10867).
             let p = json!({"x": all.x0, "y": all.y0, "width": all.width(), "height": all.height(), "deleteCroppedPixels": false});
-            crate::analysis_cmds::compound(s, "Reveal All", |s| s.execute("image.crop", p))?;
+            // The crop runs without `Session::execute`, so it passes the session's gate here, as a
+            // command run on Reveal All's behalf would.
+            if let Some(gate) = s.authorize {
+                gate("image.crop", &p)?;
+            }
+            crate::analysis_cmds::compound(s, "Reveal All", |s| crate::image_cmds::crop_keeping_background(s, &p))?;
             Ok(json!({"changed": true}))
         }),
         spec!(
