@@ -1169,10 +1169,19 @@ fn open_documents_as_tabs_preference_controls_floating_windows() {
     app.open_bytes("a.psd", b"x").unwrap();
     assert_eq!(app.ui.windows.len(), 1);
     assert_eq!(app.ui.windows[0].document, 0);
+    // A floating window of its own, as Float in Window makes: no tab, no second view.
+    assert!(app.ui.windows[0].floating, "the document floats in its window instead of keeping a tab");
+    assert!(crate::view_cmds::document_is_floating(&app, 0));
 
     app.run("file.new", json!({"width": 100, "height": 100})).unwrap();
     assert_eq!(app.ui.windows.len(), 2);
     assert_eq!(app.ui.windows[1].document, 1);
+    assert!(app.ui.windows[1].floating);
+
+    // Float in Window (or tearing the tab off) finds that window: still one window per document.
+    app.session.set_active(0);
+    crate::menus::invoke(&mut app, &egui::Context::default(), "window.arrange.floatInWindow", json!({})).unwrap();
+    assert_eq!(app.ui.windows.iter().filter(|w| w.document == 0).count(), 1, "one window for the document, not a duplicate");
 
     // Opening with preference true docks into tabs, creating no new floating window
     app.session.edit_prefs(|p| p.workspace.open_documents_as_tabs = true);
