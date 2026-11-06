@@ -96,7 +96,7 @@ pub fn right_button_service() -> Option<photocraft_ui_egui::RightButtonDownFn> {
 /// Eraser (#2285). Elsewhere the end arrives with the samples in the stylus feed.
 #[cfg(target_os = "windows")]
 pub fn pen_end_service() -> Option<photocraft_ui_egui::PenEndFn> {
-    Some(Box::new(photocraft_tablet::windows::pen_end))
+    Some(Box::new(photocraft_tablet::windows::take_pen_end))
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -441,7 +441,9 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn windows_eraser_end_switches_to_the_eraser_and_back() {
-        use photocraft_tablet::windows::{PEN_FLAG_ERASER, PEN_FLAG_INVERTED, WM_POINTERLEAVE, WM_POINTERUPDATE, handle_pointer_message};
+        use photocraft_tablet::windows::{
+            PEN_FLAG_ERASER, PEN_FLAG_INVERTED, WM_POINTERDOWN, WM_POINTERLEAVE, WM_POINTERUP, WM_POINTERUPDATE, handle_pointer_message,
+        };
         use photocraft_ui_egui::stylus::Stylus;
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
         app.services.pen_end = pen_end_service();
@@ -460,5 +462,13 @@ mod tests {
         hover(0);
         assert!(Stylus::sync_eraser_tool(&mut app));
         assert_eq!(app.ui.tool, Tool::Brush, "the tip restores the Brush");
+        // An eraser-end tap and the pen leaving, all before the next frame: the frame that
+        // handles the queued click still selects the Eraser.
+        handle_pointer_message(WM_POINTERDOWN, 1, |_| Some(PEN_FLAG_INVERTED | PEN_FLAG_ERASER));
+        handle_pointer_message(WM_POINTERUP, 1, |_| None);
+        handle_pointer_message(WM_POINTERLEAVE, 1, |_| None);
+        assert!(Stylus::sync_eraser_tool(&mut app));
+        assert_eq!(app.ui.tool, Tool::Eraser);
+        assert!(!Stylus::sync_eraser_tool(&mut app), "out of range");
     }
 }
