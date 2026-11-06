@@ -153,6 +153,10 @@ pub struct ToolOptions {
     pub move_target: String,
     #[serde(default)]
     pub move_show_transform: bool,
+    /// Move tool and Properties › Align To: Canvas aligns the selected layers to the canvas;
+    /// off (Selection) to their own bounds, or an active selection's (#10337).
+    #[serde(default)]
+    pub move_align_to_canvas: bool,
     /// Transform options bar: Toggle Reference Point. Off by default, as in Photoshop: the point
     /// isn't drawn and isn't a handle, so a drag from the middle of the box moves the content;
     /// transforms still turn and scale about it (#11098).
@@ -358,6 +362,8 @@ pub struct SampleAllLayers {
     pub smudge: bool,
 }
 
+/// Sample All Layers is per tool (#218), so each tool has its own flag and the lookups below
+/// turn a [`Tool`] into the one that belongs to it.
 impl SampleAllLayers {
     /// `tool`'s setting; false for a tool without the option.
     pub fn get(mut self, tool: Tool) -> bool {
@@ -463,6 +469,7 @@ impl Default for ToolOptions {
             move_auto_select: true,
             move_target: default_move_target(),
             move_show_transform: false,
+            move_align_to_canvas: false,
             transform_reference_point: false,
             transform_interpolation: None,
             crop_ratio: String::new(),
