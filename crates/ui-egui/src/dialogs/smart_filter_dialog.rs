@@ -134,7 +134,11 @@ pub(crate) fn edit_command(app: &PhotocraftApp, fields: &Map<String, Value>) -> 
         }
         Ok((COMMAND.into(), params))
     } else {
-        Ok(("layer.smartFilter.setParams".into(), json!({"layer": layer.0, "index": index, "params": crate::filter_dialog::params_of(fields)})))
+        let mut params = crate::filter_dialog::params_of(fields);
+        if fields.get("__adjust").and_then(Value::as_str) == Some("selectiveColor") {
+            crate::adjust_editors::clear_folded_params(&mut params);
+        }
+        Ok(("layer.smartFilter.setParams".into(), json!({"layer": layer.0, "index": index, "params": params})))
     }
 }
 
