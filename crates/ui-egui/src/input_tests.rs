@@ -1060,6 +1060,10 @@ fn paint_bucket_shows_a_bucket_cursor() {
 
 #[test]
 fn move_alt_copy_cursor_follows_the_latched_duplication_drag() {
+    fn area_visible(h: &Harness<'static, PhotocraftApp>, id: &str) -> bool {
+        let layer = egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique(id));
+        h.ctx.memory(|memory| memory.areas().visible_layer_ids().contains(&layer))
+    }
     let mut h = harness();
     h.state_mut().run("shape.create", json!({"kind": "rect", "rect": [150, 100, 100, 100], "fill": "#ff0000"})).unwrap();
     h.state_mut().ui.tool = crate::state::Tool::Move;
@@ -1071,7 +1075,8 @@ fn move_alt_copy_cursor_follows_the_latched_duplication_drag() {
     assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Default);
     h.event(egui::Event::ModifiersChanged(Modifiers::ALT));
     h.run_steps(2);
-    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Copy);
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::None, "⌥ hover draws Photoshop's duplicate pair");
+    assert!(area_visible(&h, "pc-cursor-copy-pointer"), "the white-and-black pair is on screen");
     assert_eq!(h.state().session.active().unwrap().doc.layers.len(), before, "hovering never duplicates");
     h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::ALT });
     h.run_steps(1);
@@ -1080,7 +1085,8 @@ fn move_alt_copy_cursor_follows_the_latched_duplication_drag() {
     h.run_steps(2);
     h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
     h.run_steps(2);
-    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Copy, "releasing Alt does not undo an active copy");
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::None, "releasing Alt does not undo an active copy");
+    assert!(area_visible(&h, "pc-cursor-copy-pointer"), "the pair holds for the latched duplication");
     h.event(egui::Event::PointerButton { pos: end, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
     h.run_steps(2);
     assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Default);
