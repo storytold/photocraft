@@ -533,6 +533,7 @@ if [ EXPORT_FAILS = 1 ]; then
     exit 1
 fi
 input="$2"
+cp "$input" "$input.received"
 echo tamper >> "$input"
 while [ "$#" -gt 0 ]; do
     if [ "$1" = --out ]; then cp "$input" "$2"; exit 0; fi
@@ -604,6 +605,7 @@ exit 1
         assert_eq!(fs::read(corpus.join("base.psd")).unwrap(), b"base");
         let pinned = out.join("pin/base.psd");
         assert!(pinned.exists());
+        assert_eq!(fs::read(out.join("pin/base.psd.received")).unwrap(), b"base");
         let log = fs::read_to_string(log).unwrap();
         let corpus_path = corpus.join("base.psd").display().to_string();
         assert!(!log.contains(&corpus_path));
