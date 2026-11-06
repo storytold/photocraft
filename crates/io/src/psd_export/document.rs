@@ -74,6 +74,7 @@ fn export_supported_document(
         read_linked_files: opts.read_linked_files,
         text_styles: doc.text_styles.clone(),
         text_index: Default::default(),
+        regen_text: false,
         mask_fmt: PixelFormat::new(ColorMode::Grayscale, sample, false),
         cc,
         cmyk: fmt.mode == ColorMode::Cmyk,
@@ -171,18 +172,18 @@ fn export_supported_document(
             _ => None,
         })
         .collect();
-    let previous = (!text_layers.is_empty()).then(|| preserved.iter().find(|(_, key, _)| key == b"Txt2").map(|(_, _, data)| data.to_vec())).flatten();
-    // A fresh document of ordinary (Metrics) text with no Txt2-only OpenType settings has nothing
-    // to put in `Txt2`, and Photoshop never writes its empty `<< /0 << >> >>` stub — readers such
-    // as Photopea reject it (#3514). Keep the block when the file had one (round-trip its pen
-    // positions/extras), a layer is Optical (#1348), or a layer carries stylistic sets / other
-    // Txt2-only features (#10308).
-    let txt2 = (previous.is_some() || photocraft_text::psd::needs_txt2(&text_layers))
-        .then(|| photocraft_text::psd::build_txt2_at(&text_layers, previous.as_deref(), ex.dpi));
+    let previous =
+        (!text_layers.is_empty() && !ex.regen_text).then(|| preserved.iter().find(|(_, key, _)| key == b"Txt2").map(|(_, _, data)| data.to_vec())).flatten();
+    // A fresh document of ordinary (Metrics) text has nothing to put in `Txt2`, and Photoshop never
+    // writes its empty `<< /0 << >> >>` stub — readers such as Photopea reject it (#3514). Keep the
+    // file's block when its type is unchanged (round-trip its pen positions and extras); otherwise
+    // write a native one when a layer needs it: Optical kerning, the one mode EngineData can't
+    // carry (#1348), Txt2-only OpenType settings (#10308), or type on a path (#7962).
+    let txt2 = saved_txt2(&text_layers, previous.as_deref(), &mut ex);
     for (sig, key, data) in preserved {
         // With no type layers left the opened file's `Txt2` describes text that is gone (fonts and
         // layout caches, often most of the file): Photoshop drops it, and so does the save (#9563).
-        if key == *b"Txt2" && (txt2.is_some() || text_layers.is_empty()) {
+        if key == *b"Txt2" && (txt2.is_some() || text_layers.is_empty() || ex.regen_text) {
             continue;
         }
         // A kept layer block (one the import could not read, #2700) describes layers the
@@ -397,6 +398,16 @@ fn merged_image(doc: &Document, opts: &PsdExportOptions, ctl: &Interrupt, fmt: &
     (planes, has_alpha)
 }
 
+/// The `Txt2` block to write: the file's own, when it is kept (see `index_layer_ids_and_text`);
+/// else a PhotoCraft-native one when a layer needs it (Optical kerning, Txt2-only OpenType
+/// settings, type on a path); else none.
+fn saved_txt2(text_layers: &[(i32, &photocraft_doc::TextLayer)], previous: Option<&[u8]>, ex: &mut Ex<'_>) -> Option<Vec<u8>> {
+    match previous {
+        Some(prev) => Some(photocraft_text::psd::build_txt2_at(text_layers, Some(prev), ex.dpi)),
+        None => photocraft_text::psd::needs_txt2(text_layers).then(|| photocraft_text::psd::build_txt2_at(text_layers, None, ex.dpi)),
+    }
+}
+
 fn index_layer_ids_and_text(doc: &Document, ex: &mut Ex<'_>) {
     // Assign layer ids up front (stable across round trips): keep unique
     // `psd_id`s, number the rest after them; dividers come after all.
@@ -454,6 +465,42 @@ fn index_layer_ids_and_text(doc: &Document, ex: &mut Ex<'_>) {
             }
             used_txt.insert(next_txt);
             ex.text_index.insert(id, next_txt);
+        }
+        // An unedited save writes the file's `Txt2` back as it was (#2374). Once the type layers
+        // no longer match it, a merged block beside regenerated `TySh` data makes Photoshop fail
+        // to open the file ("program error", REQUIRE 903 per type layer), so the text is written
+        // the way a new document's is: generated `TySh` for every type layer, no inherited `Txt2`.
+        // A file an older PhotoCraft saved that way is mixed already: a type layer it made from
+        // scratch is exactly what the builder writes, without the superscript sizes Photoshop
+        // needs (see `made_here_without_document_sizes`). A Photoshop type layer never matches,
+        // so an unedited Photoshop file keeps its `Txt2` even if it lacks those keys.
+        if let Some((_, _, prev)) = doc.metadata.psd_global_blocks.iter().find(|(_, key, _)| key == b"Txt2") {
+            let text_layers: Vec<(i32, &photocraft_doc::TextLayer)> = walk
+                .iter()
+                .filter_map(|(_, _, l)| match &l.content {
+                    LayerContent::Text(t) => Some((ex.text_index.get(&l.id).copied().unwrap_or(0), t)),
+                    _ => None,
+                })
+                .collect();
+            let mixed =
+                text_layers.iter().any(|(_, t)| t.psd_raw.as_deref().is_some_and(|d| photocraft_text::psd::made_here_without_document_sizes(d, ex.dpi)));
+            ex.regen_text = !text_layers.is_empty() && (mixed || photocraft_text::psd::build_txt2_at(&text_layers, Some(prev), ex.dpi) != prev[..]);
+            // Every type layer is rewritten, the untouched ones too: numbered afresh for the native
+            // block written in place of the file's (no empty slots for objects that are gone), and
+            // the export says what that costs.
+            if ex.regen_text {
+                let mut next = 0;
+                for (_, _, l) in &walk {
+                    if matches!(l.content, LayerContent::Text(_)) {
+                        ex.text_index.insert(l.id, next);
+                        next += 1;
+                    }
+                }
+                ex.warnings.push(format!(
+                    "all {} type layers, unedited ones included, are written without the file's Txt2 block (Photoshop can't open the file with it): what only that block held, such as Photoshop's glyph positions, is not kept",
+                    text_layers.len()
+                ));
+            }
         }
     }
 }

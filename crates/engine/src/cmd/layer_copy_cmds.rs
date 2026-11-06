@@ -199,6 +199,10 @@ fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
         }
         l.name = name.to_string();
     }
+    // A smart object from a PSD names its file in the source's linked-file blocks: bring those
+    // records along, or the destination saves a smart object with no file Photoshop can save.
+    crate::edit_cmds::copy_linked_sources(&sdoc, &mut copies)?;
+    let linked = crate::edit_cmds::missing_linked_records(&copies, &ddoc, "copy")?;
     // Measure in source space: destination refresh may clip a shape before it is moved.
     // Missing caches must participate too, including shapes nested inside groups.
     prepare_shapes(&mut copies.layers, &sdoc, false);
@@ -223,6 +227,7 @@ fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
     let label = if ids.len() == 1 { "Duplicate Layer" } else { "Duplicate Layers" };
     let edited = s.edit(label, |doc, active| {
         doc.patterns.extend(patterns);
+        doc.metadata.psd_global_blocks.extend(linked);
         let mut above = *active;
         let mut new = Vec::with_capacity(copies.layers.len());
         // The first copy goes where a new layer would; the rest stack above it.
@@ -293,6 +298,8 @@ pub(crate) fn duplicate_to_new_document(s: &mut Session, p: &Value) -> Result<Va
         }
         nd.layers.push(l);
     }
+    // The copies' PSD-embedded files come along (see `copy_to_document`).
+    crate::edit_cmds::copy_linked_sources(&sdoc, &mut nd)?;
     // Contents ids belong to a document: fresh ones keep the copies independent of the
     // source while preserving sharing within the batch (as `adapt_copies` does).
     let mut contents = HashMap::new();

@@ -197,7 +197,8 @@ fn layer_block_follows_a_kept_merged_transparency_marker() {
 }
 
 /// #9563: a `Txt2` kept from the opened file is dropped once no type layer is left (Photoshop
-/// drops it too); with a type layer the block is still written.
+/// drops it too). A type layer the kept block does not describe drops it as well: Photoshop
+/// fails to open a file whose own `Txt2` sits beside `TySh` data written here.
 #[test]
 fn a_kept_txt2_goes_with_the_last_type_layer() {
     let mut doc = Document::new("t", photocraft_geom::Size::new(8, 6), ColorMode::Rgb, SampleType::U8);
@@ -208,7 +209,21 @@ fn a_kept_txt2_goes_with_the_last_type_layer() {
 
     doc.layers.push(Layer::new("T", LayerContent::Text(photocraft_doc::TextLayer::default())));
     let file = document_to_psd(&doc);
-    assert!(file.global_blocks.iter().any(|b| b.key == *b"Txt2"), "a type layer keeps its Txt2");
+    assert!(!file.global_blocks.iter().any(|b| b.key == *b"Txt2"), "a type layer the stale Txt2 doesn't describe: no Txt2");
+    let records = file.layer_info.as_ref().map(|i| i.layers.as_slice()).unwrap_or(&[]);
+    assert!(records.iter().any(|l| l.blocks.iter().any(|b| b.key == *b"TySh")), "the type layer is still live text");
+}
+
+/// Superscript and subscript runs need the document's superscript/subscript sizes in the
+/// EngineData: without them Photoshop hangs opening the file.
+#[test]
+fn generated_type_carries_superscript_sizes() {
+    let t = photocraft_doc::TextLayer { text: "A1".into(), ..Default::default() };
+    let tysh = photocraft_text::psd::build_tysh(&t, 72.0, None);
+    let text = String::from_utf8_lossy(&tysh);
+    for key in ["SuperscriptSize", "SuperscriptPosition", "SubscriptSize", "SubscriptPosition", "SmallCapSize"] {
+        assert!(text.contains(key), "{key} missing from the generated EngineData");
+    }
 }
 
 /// A merged-transparency marker kept from the opened file describes that file's composite.

@@ -590,12 +590,15 @@ fn txt2_only_opentype(style: &CharStyle) -> bool {
 
 /// Whether the document `Txt2` block is needed for `objects`: a non-Metrics auto-kern mode
 /// (`Optical`) is exclusive to `Txt2` — EngineData's `AutoKerning` cannot distinguish Metrics from
-/// Optical — and so are Stylistic Sets and the other [`TXT2_FEATURES`] flags (#10308). A fresh
+/// Optical — and so are Stylistic Sets and the other [`TXT2_FEATURES`] flags (#10308), and type
+/// on a path, whose path lives only in the block's frame (#7962). A fresh
 /// document of ordinary Metrics text with no such OpenType settings has nothing to put in the
 /// block. Writing Photoshop's empty `<< /0 << >> >>` stub anyway makes some readers (Photopea)
 /// fail (#3514); the export omits the block for such a document.
 pub fn needs_txt2(objects: &[(i32, &TextLayer)]) -> bool {
-    objects.iter().any(|(_, l)| l.char_runs().iter().any(|r| r.style.kerning == Kerning::Optical || txt2_only_opentype(&r.style)))
+    objects.iter().any(|(_, l)| {
+        matches!(l.shape, TextShape::Path { .. }) || l.char_runs().iter().any(|r| r.style.kerning == Kerning::Optical || txt2_only_opentype(&r.style))
+    })
 }
 
 /// A `/53` SimplePaint dictionary (`<< /99 /SimplePaint /0 << >> >>`) for a fresh style run.
@@ -615,6 +618,14 @@ fn minimal_txt2_style_run() -> E {
 /// A point-text object with a view naming frame `frame` and empty style runs, for a layer the
 /// file's block has no object for and no template to copy (#10308, #7698). Style runs are filled
 /// by [`txt2_style_runs`] next.
+/// A paragraph run's style as Photoshop reads it: `<< /0 << /0 () /5 << >> /6 1 >> >>`, the
+/// style's (empty) name, its properties and its sheet. Photoshop refuses a block whose paragraph
+/// runs hold an empty dictionary instead ("general Photoshop error").
+fn paragraph_run_style() -> E {
+    let data = E::Dict(vec![("0".into(), E::String(String::new())), ("5".into(), E::dict()), ("6".into(), E::Int(1))]);
+    E::Dict(vec![("0".into(), data)])
+}
+
 fn fresh_point_text_object(frame: usize, text: &str) -> E {
     let frame = i64::try_from(frame).unwrap_or(0);
     let view = E::Dict(vec![("0".into(), E::Array(vec![E::Dict(vec![("0".into(), E::Int(frame))])]))]);
@@ -622,7 +633,7 @@ fn fresh_point_text_object(frame: usize, text: &str) -> E {
     // `edited_object` refits them.
     let paragraphs = text
         .split_inclusive('\r')
-        .map(|p| E::Dict(vec![("0".into(), E::dict()), ("1".into(), E::Int(i64::try_from(p.encode_utf16().count()).unwrap_or(i64::MAX)))]))
+        .map(|p| E::Dict(vec![("0".into(), paragraph_run_style()), ("1".into(), E::Int(i64::try_from(p.encode_utf16().count()).unwrap_or(i64::MAX)))]))
         .collect();
     let model = E::Dict(vec![
         ("0".into(), E::String(text.to_string())),
@@ -827,10 +838,24 @@ pub fn build_txt2_at(objects: &[(i32, &TextLayer)], previous: Option<&[u8]>, dpi
     // `/1` whatever it holds beside the text objects. A PhotoCraft-native block gets a frame list
     // (`/0 /8 /0`) so each object's view can name a frame (#10308, #7698); a file's block is never
     // given a `/0` or a frame list it didn't have (#2374).
+    // Photoshop also needs, in a native block, a paragraph style sheet (`/0 /6`) and the document
+    // settings' `/1 /0 /2` (without either it refuses the file: "general Photoshop error"), and a
+    // character style sheet (`/0 /5`): without it the file opens, but the text can't be drawn, so
+    // exporting or flattening it fails.
     let mut outer = prev.clone().unwrap_or_else(|| {
+        let sheet = E::Dict(vec![("0".into(), E::Dict(vec![("0".into(), E::String("Normal RGB".into())), ("5".into(), E::dict())]))]);
+        let char_sheet = E::Dict(vec![("0".into(), E::Dict(vec![("0".into(), E::String("Normal RGB".into())), ("6".into(), E::dict())]))]);
         E::Dict(vec![
             ("98".into(), E::Dict(vec![("0".into(), E::Int(14))])),
-            ("0".into(), E::Dict(vec![("8".into(), E::Dict(vec![("0".into(), E::Array(vec![]))]))])),
+            (
+                "0".into(),
+                E::Dict(vec![
+                    ("8".into(), E::Dict(vec![("0".into(), E::Array(vec![]))])),
+                    ("5".into(), E::Dict(vec![("0".into(), E::Array(vec![char_sheet]))])),
+                    ("6".into(), E::Dict(vec![("0".into(), E::Array(vec![sheet]))])),
+                ]),
+            ),
+            ("1".into(), E::Dict(vec![("0".into(), E::Dict(vec![("2".into(), E::Int(0))]))])),
         ])
     });
     pad_frames(&mut outer, slots.len().max(frames_needed));
@@ -1063,9 +1088,20 @@ pub fn build_engine_data(layer: &TextLayer, template: Option<E>, dpi: f32) -> E 
                 rd.set(k2, E::Int(v));
             }
         }
+        // Photoshop hangs laying out a superscript or subscript run when these document
+        // settings are missing; it writes them in every type layer (its defaults).
+        for (k2, v) in DOCUMENT_SIZES {
+            if rd.get(k2).is_none() {
+                rd.set(k2, E::Real(v));
+            }
+        }
     }
     e
 }
+
+/// Superscript, subscript and small-caps size and position, as fractions of the font size.
+pub(super) const DOCUMENT_SIZES: [(&str, f64); 5] =
+    [("SuperscriptSize", 0.583), ("SuperscriptPosition", 0.333), ("SubscriptSize", 0.583), ("SubscriptPosition", 0.333), ("SmallCapSize", 0.7)];
 
 /// The anti-aliasing mode for EngineData's `AntiAlias` number, as Photoshop writes it: 0 None,
 /// 1 Crisp, 2 Strong, 3 Smooth, 4 Sharp. Other numbers (platform modes) are left to `AntA`.
@@ -1078,6 +1114,52 @@ pub(super) fn engine_antialias(n: f64) -> Option<AntiAlias> {
         4 => AntiAlias::Sharp,
         _ => return None,
     })
+}
+
+/// The EngineData resource dictionaries (`ResourceDict`, `DocumentResources`) without the
+/// [`DOCUMENT_SIZES`] keys.
+fn without_document_sizes(mut e: E) -> E {
+    for key in ["ResourceDict", "DocumentResources"] {
+        if let Some(E::Dict(items)) = e.get_mut(key) {
+            items.retain(|(k, _)| !DOCUMENT_SIZES.iter().any(|(size, _)| k == size));
+        }
+    }
+    e
+}
+
+/// Whether `tysh` is a type layer an older PhotoCraft made from scratch (Photoshop can't open
+/// such a layer beside a `Txt2` block): its EngineData lacks every [`DOCUMENT_SIZES`] key and is
+/// exactly what this builder writes for the layer read back from it, less those keys. A type
+/// layer Photoshop wrote never matches (Photoshop writes more than this builder does), so an
+/// unedited Photoshop file is never taken for one, even from a version that left the keys out.
+pub fn made_here_without_document_sizes(tysh: &[u8], dpi: f32) -> bool {
+    let Some(file) = parse_tysh(tysh).and_then(|t| engine_data(&t.text)) else { return false };
+    let has_size =
+        |e: &E| ["ResourceDict", "DocumentResources"].iter().any(|k| e.get(k).is_some_and(|rd| DOCUMENT_SIZES.iter().any(|(s, _)| rd.get(s).is_some())));
+    if has_size(&file) {
+        return false;
+    }
+    let Some(mut layer) = super::text_layer_from_tysh(tysh, dpi) else { return false };
+    layer.psd_raw = None;
+    same_engine_data(&without_document_sizes(build_engine_data(&layer, None, dpi)), &file)
+}
+
+/// EngineData trees equal key for key, in the same order, numbers within float rounding (a layer
+/// read back holds its sizes as `f32`).
+fn same_engine_data(a: &E, b: &E) -> bool {
+    let num = |v: &E| match v {
+        E::Real(x) => Some(*x),
+        E::Int(i) => Some(*i as f64),
+        _ => None,
+    };
+    match (a, b) {
+        (E::Dict(x), E::Dict(y)) => x.len() == y.len() && x.iter().zip(y).all(|((k, v), (k2, w))| k == k2 && same_engine_data(v, w)),
+        (E::Array(x), E::Array(y)) => x.len() == y.len() && x.iter().zip(y).all(|(v, w)| same_engine_data(v, w)),
+        _ => match (num(a), num(b)) {
+            (Some(x), Some(y)) => (x - y).abs() <= 1e-5 * x.abs().max(y.abs()).max(1.0),
+            _ => a == b,
+        },
+    }
 }
 
 /// Builds the `TySh` block for `layer`, patching its current `psd_raw` when present.
