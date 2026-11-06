@@ -63,6 +63,9 @@ pub(super) fn humanize(key: &str) -> String {
     if key == "doNotAppendCopy" {
         return "Do not append \"copy\" to filename when saving a copy".into();
     }
+    if key == "pcraftFullComposite" {
+        return "Save Full-Size Composite in .pcraft Files".into();
+    }
     // Plug-ins: Photoshop's wording (#9392).
     if key == "generatorEnabled" {
         return "Enable Generator".into();
@@ -71,6 +74,10 @@ pub(super) fn humanize(key: &str) -> String {
         return "Low-Latency Drawing (vsync off, applies at next launch)".into();
     }
     // Performance: the canvas compositor's GPU memory, 0 for the automatic budget (L3).
+    // Scratch Disks: how large the scratch file may grow; the free-space reserve always applies.
+    if key == "sizeLimitMb" {
+        return "Scratch Size Limit (MB, 0 = No Limit)".into();
+    }
     if key == "gpuMemoryMb" {
         return "GPU Memory (MB, 0 = Automatic)".into();
     }
@@ -94,8 +101,11 @@ pub(super) fn humanize(key: &str) -> String {
         .replace("Lut ", "LUT ")
 }
 
+/// The visible label of a stored choice value (`windowsInk` -> "Windows Ink (default)").
 pub(super) fn choice_label(v: &str) -> String {
     match v {
+        "windowsInk" => "Windows Ink (default)".into(),
+        "winTab" => "WinTab".into(),
         "exr" => "EXR".into(),
         "cm" => "Centimeters".into(),
         "mm" => "Millimeters".into(),
@@ -141,7 +151,11 @@ pub(super) fn color_of(s: &str) -> Color32 {
 /// Search the same visible, editable preference labels used in the dialog.
 pub(super) fn preference_matches(section: &str, key: &str, query: &str) -> bool {
     let label = humanize(key);
-    format!("{section}.{key}").to_lowercase().contains(query) || label.to_lowercase().contains(query) || tl!(&label).to_lowercase().contains(query)
+    format!("{section}.{key}").to_lowercase().contains(query)
+        || label.to_lowercase().contains(query)
+        || tl!(&label).to_lowercase().contains(query)
+        // The Tablet input row and its Pen Tablet note are the visible terms, not just the key.
+        || (cfg!(target_os = "windows") && section == "tools" && key == "tabletInput" && "windows ink pen tablet wintab tablet input".contains(query))
 }
 
 pub(super) fn preference_sections(values: &Value, search: &str) -> Vec<(&'static str, &'static str)> {
@@ -291,8 +305,13 @@ pub(super) fn export_field_visible(obj: &Map<String, Value>, key: &str) -> bool 
 }
 
 /// The pause that bundles arrow-key nudges means nothing with Bundle Arrow-Key Nudges off (#2259).
+/// WinTab is a Windows-only opt-in.
 pub(super) fn tools_field_visible(obj: &Map<String, Value>, key: &str) -> bool {
-    key != "nudgeBundlePauseMs" || obj.get("bundleNudges").and_then(Value::as_bool) != Some(false)
+    match key {
+        "tabletInput" => cfg!(target_os = "windows"),
+        "nudgeBundlePauseMs" => obj.get("bundleNudges").and_then(Value::as_bool) != Some(false),
+        _ => true,
+    }
 }
 
 /// A titled, outlined group of settings (Photoshop's Interface page has Appearance,
@@ -367,11 +386,11 @@ pub(super) fn field_visible(section: &str, obj: &Map<String, Value>, k: &str, qu
         // The browser presents frames itself: Low-Latency Drawing does nothing there.
         || (cfg!(target_arch = "wasm32") && path == "performance.lowLatencyDrawing")
         || (section == "export" && !export_field_visible(obj, k))
-        || (section == "tools" && !tools_field_visible(obj, k));
+        || (section == "tools" && (!tools_field_visible(obj, k) || k == "tabletInput"));
     (query.is_empty() || preference_matches(section, k, query))
         && !drawn_elsewhere
         && !prefs::is_hidden(&path)
-        && obj.get(k).is_some_and(|v| !matches!(v, Value::Null | Value::Object(_)))
+        && obj.get(k).is_some_and(|v| (path == "performance.memoryUsagePercent" && v.is_null()) || !matches!(v, Value::Null | Value::Object(_)))
 }
 
 /// Generic editor for a section's fields: checkboxes, dropdowns for choices, colour swatches,
@@ -398,6 +417,29 @@ pub(super) fn section_fields(
     if section == "performance" && (query.is_empty() || preference_matches(section, "memoryUsageMb", &query)) {
         memory_usage_row(ui, obj);
     }
+    // WinTab is an explicit Windows choice; Windows Ink stays the default everywhere else.
+    if section == "tools"
+        && cfg!(target_os = "windows")
+        && (query.is_empty() || preference_matches(section, "tabletInput", &query))
+        && obj.contains_key("tabletInput")
+    {
+        let t = Tokens::get(ui.ctx());
+        pref_group(ui, "Pen Tablet", |ui| {
+            egui::Grid::new("prefs-grid-pen-tablet").num_columns(2).spacing([14.0, 7.0]).show(ui, |ui| {
+                field_rows(ui, section, obj, vec!["tabletInput".to_string()], lang);
+            });
+            ui.add(
+                egui::Label::new(
+                    RichText::new(tl!(
+                        "WinTab reads pressure, tilt, rotation and the eraser end from the tablet driver. Turn off Windows Ink in your tablet's software utility (for example Wacom Center) before using it."
+                    ))
+                    .small()
+                    .color(t.text_dim),
+                )
+                .wrap(),
+            );
+        });
+    }
     keys.retain(|k| field_visible(section, obj, k, &query));
     egui::Grid::new(("prefs-grid", section)).num_columns(2).spacing([14.0, 7.0]).show(ui, |ui| field_rows(ui, section, obj, keys, lang));
 }
@@ -410,6 +452,18 @@ fn field_rows(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>, ke
         let v = obj.get(&k).cloned().unwrap_or(Value::Null);
         let human = humanize(&k);
         let label = tl!(&human).to_string();
+        if path == "performance.memoryUsagePercent" {
+            ui.label(RichText::new(&label).color(t.text_dim));
+            let mut enabled = v.is_number();
+            let mut percent = v.as_u64().and_then(|p| u32::try_from(p).ok()).unwrap_or(70);
+            ui.horizontal(|ui| {
+                crate::widgets::checkbox(ui, &mut enabled, "");
+                ui.add_enabled(enabled, egui::DragValue::new(&mut percent).range(1..=95).suffix("%"));
+            });
+            obj.insert(k, if enabled { json!(percent) } else { Value::Null });
+            ui.end_row();
+            continue;
+        }
         match &v {
             Value::Bool(b) => {
                 ui.label("");
@@ -438,7 +492,12 @@ fn field_rows(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>, ke
                 let labels: Vec<String> = opts.iter().map(|o| choice_label(o)).collect();
                 let pairs: Vec<(String, &str)> = opts.iter().map(|o| o.to_string()).zip(labels.iter().map(String::as_str)).collect();
                 let mut cur = s.clone();
-                crate::widgets::dropdown(ui, &format!("pref-{path}"), tl!(&label), &mut cur, &pairs, 220.0);
+                ui.vertical(|ui| {
+                    crate::widgets::dropdown(ui, &format!("pref-{path}"), tl!(&label), &mut cur, &pairs, 220.0);
+                    if read_at_launch(&path) {
+                        ui.label(RichText::new(tl!("Applies at next launch.")).color(t.text_dim));
+                    }
+                });
                 obj.insert(k, json!(cur));
             }
             Value::String(s) if prefs::is_color(&path) => {
@@ -503,6 +562,15 @@ fn field_rows(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>, ke
                     if ui.small_button(tl!("Add disk")).clicked() {
                         items.push(json!({"enabled": true, "path": ""}));
                     }
+                    let scratch = photocraft_raster::spill::stats();
+                    if scratch.free_space_unmeasured {
+                        let dir = scratch.dir.as_deref().map(|p| p.display().to_string()).unwrap_or_else(|| tl!("Unknown").into());
+                        let warning = crate::i18n::fmt(
+                            tl!("The current scratch directory ({path}) doesn't report its free space, so PhotoCraft can't stop before it fills up, and large files get no extra room from it without a Scratch Size Limit. This warning applies to the current configuration; changes above take effect on Apply or OK. Set a limit or use a local disk."),
+                            &[("path", &dir)],
+                        );
+                        ui.add(egui::Label::new(RichText::new(warning).color(t.warning)).wrap());
+                    }
                 });
                 obj.insert(k, Value::Array(items));
             }
@@ -516,5 +584,21 @@ fn field_rows(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>, ke
             _ => continue,
         }
         ui.end_row();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::preference_matches;
+
+    /// The Tablet input row matches its visible search terms.
+    #[test]
+    fn wintab_row_matches_its_visible_terms() {
+        if cfg!(target_os = "windows") {
+            for query in ["windows ink", "pen tablet", "wintab", "tablet input"] {
+                assert!(preference_matches("tools", "tabletInput", query), "{query}");
+            }
+        }
+        assert!(preference_matches("tools", "useTabletPressure", "tablet pressure"));
     }
 }

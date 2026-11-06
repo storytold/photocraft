@@ -173,6 +173,7 @@
 	Right	Rechts
 	Open Recent	Zuletzt geöffnete Dateien
 	Clear Recent Files	Zuletzt geöffnete Dateien leeren
+	Clear Recent File List	Zuletzt geöffnete Dateien leeren
 	Remove from Recent	Aus zuletzt geöffneten Dateien entfernen
 	Remove {name} from Recent	{name} aus zuletzt geöffneten Dateien entfernen
 	Close	Schließen
@@ -181,6 +182,10 @@
 	Restore	Wiederherstellen
 	Close All	Alle schließen
 	Close Others	Andere schließen
+	New Document…	Neues Dokument…
+	Open Document…	Öffnen…
+	Consolidate All to Here	Alle hier zusammenfassen
+	Move to New Window	In neues Fenster verschieben
 	Save	Speichern
 	Save As…	Speichern unter…
 	Save a Copy…	Kopie speichern…
@@ -233,6 +238,7 @@
 	Create Smart Object after Loading Layers	Nach dem Laden der Ebenen Smart-Objekt erstellen
 	Reveal in Finder	Im Finder anzeigen
 	Show in Explorer	Im Explorer anzeigen
+	Reveal in Explorer	Im Explorer anzeigen
 	Show in Folder	Im Ordner anzeigen
 	File Info…	Dateiinformationen…
 	Print…	Drucken…
@@ -321,6 +327,7 @@
 	Units & Rulers…	Einheiten & Lineale…
 	Guides, Grid & Slices…	Hilfslinien, Raster & Slices…
 	Plug-ins…	Plug-ins…
+	Plugins…	Plug-ins…
 	Type…	Text…
 	Enhanced Controls…	Erweiterte Bedienelemente…
 	Camera Raw…	Camera Raw…
@@ -478,6 +485,8 @@
 	Smart Object	Smart-Objekt
 	Convert to Smart Object	In Smart-Objekt konvertieren
 	Convert to Embedded	In eingebettetes Smart-Objekt konvertieren
+	Embed Linked	Verknüpftes einbetten
+	Embed All Linked	Alle verknüpften einbetten
 	Convert to Layers	In Ebenen konvertieren
 	Convert to Linked…	In verknüpftes Smart-Objekt konvertieren…
 	Edit Contents	Inhalt bearbeiten
@@ -551,7 +560,9 @@
 	Unite Shapes	Formen vereinigen
 	Subtract Front Shape	Vordere Form subtrahieren
 	Intersect Shape Areas	Schnittmenge der Formen
+	Unite Shapes at Overlap	Schnittmenge der Formen
 	Exclude Overlapping Shapes	Überlappende Formen ausschließen
+	Subtract Shapes at Overlap	Überlappende Formen ausschließen
 	Merge Shape Components	Formkomponenten zusammenfügen
 	Path operations	Pfadvorgänge
 	Align	Ausrichten
@@ -735,6 +746,7 @@
 	Minimum…	Minimum…
 	Offset…	Versatz…
 	Plug-ins	Plug-ins
+	Plugins	Plug-ins
 	Proof Setup	Proof-Setup
 	Proof Colors	Proof-Farben
 	Gamut Warning	Farbumfang-Warnung
@@ -743,9 +755,9 @@
 	Working Magenta Plate	Arbeits-Magenta-Druckplatte
 	Working Yellow Plate	Arbeits-Gelb-Druckplatte
 	Working Black Plate	Arbeits-Schwarz-Druckplatte
-	Working CMY Plate	Arbeits-CMY-Druckplatte
-	Legacy Macintosh RGB	Legacy-Macintosh-RGB
-	Internet Standard RGB	Internet-Standard-RGB
+	Working CMY Plates	Arbeits-CMY-Druckplatte
+	Legacy Macintosh RGB (Gamma 1.8)	Legacy-Macintosh-RGB (Gamma 1.8)
+	Internet Standard RGB (sRGB)	Internet-Standard-RGB (sRGB)
 	Monitor RGB	Monitor-RGB
 	Color Blindness — Protanopia-type	Farbenblindheit — Protanopie-Typ
 	Color Blindness — Deuteranopia-type	Farbenblindheit — Deuteranopie-Typ
@@ -827,7 +839,7 @@
 	Consolidate All to Tabs	Alle in Registerkarten zusammenfassen
 	Float in Window	In Fenster schweben lassen
 	Float All in Windows	Alle in Fenstern schweben lassen
-	New Window for Document	Neues Fenster für Dokument
+	New Window	Neues Fenster für Dokument
 	Workspace	Arbeitsbereich
 	Essentials	Essentials
 	Graphic and Web	Grafik und Web
@@ -1923,6 +1935,7 @@
 	Soften	Erweichen
 	Source	Quelle
 	Source: set	Quelle: gesetzt
+	Source: {name}	Quelle: {name}
 	Sponge Tool	Schwamm-Werkzeug
 	Spot Healing Brush Tool	Punktkorrektur-Pinsel-Werkzeug
 	Spread	Spreizung
@@ -1999,6 +2012,11 @@
 	Show canvas dots	Punkte der Zeichenfläche anzeigen
 	Clip thumbnails to layer bounds	Miniaturbilder auf Ebenenbegrenzung beschneiden
 	Clip Thumbnails to Layer Bounds	Miniaturbilder auf Ebenenbegrenzung beschneiden
+	No Thumbnails	Keine Miniaturbilder
+	Small Thumbnails	Kleine Miniaturbilder
+	Medium Thumbnails	Mittlere Miniaturbilder
+	Large Thumbnails	Große Miniaturbilder
+	Clip Thumbnails to Document Bounds	Miniaturbilder auf Dokumentbegrenzung beschneiden
 	Canvas color	Zeichenflächenfarbe
 	Canvas custom color	Benutzerdefinierte Zeichenflächenfarbe
 	Color picker	Farbwähler
@@ -2116,7 +2134,6 @@
 	Show only crosshair while painting	Beim Malen nur Fadenkreuz zeigen
 	Show slice numbers	Slice-Nummern anzeigen
 	Show tooltips	Tooltips anzeigen
-	Enable animations	Animationen aktivieren
 	Show highlight on rollover	Hervorhebung bei Rollover anzeigen
 	Show bounding box when dragging layer	Begrenzungsrahmen beim Ziehen einer Ebene anzeigen
 	System title bar	System-Titelleiste
@@ -3282,6 +3299,9 @@ curves	Smooth	Glätten
 @plural	{n} step has no PhotoCraft equivalent yet|{n} steps have no PhotoCraft equivalent yet	{n} Schritt hat noch keine Entsprechung in PhotoCraft|{n} Schritte haben noch keine Entsprechung in PhotoCraft
 @plural	Saved {n} action to {file}|Saved {n} actions to {file}	{n} Aktion in {file} gespeichert|{n} Aktionen in {file} gespeichert
 @plural	{n} step with no Photoshop equivalent left out|{n} steps with no Photoshop equivalent left out	{n} Schritt ohne Photoshop-Entsprechung ausgelassen|{n} Schritte ohne Photoshop-Entsprechung ausgelassen
+@plural	{n} action file loaded|{n} action files loaded	{n} Aktionsdatei geladen|{n} Aktionsdateien geladen
+	{set} from {file} replaced the one from {earlier}	Satz {set} aus {file} hat den aus {earlier} ersetzt
+@plural	{n} file could not be loaded: {errors}|{n} files could not be loaded: {errors}	{n} Datei konnte nicht geladen werden: {errors}|{n} Dateien konnten nicht geladen werden: {errors}
 	File Naming	Dateibenennung
 	Starting serial	Startnummer
 	Insert Stop…	Stopp einfügen…
@@ -3294,6 +3314,8 @@ curves	Smooth	Glätten
 	Step {step} is waiting for its dialog	Schritt {step} wartet auf seinen Dialog
 @plural	{n} action|{n} actions	{n} Aktion|{n} Aktionen
 	Background (Default)	Hintergrund (Standard)
+	Background (default)	Hintergrund (Standard)
+	Transparent (default)	Transparent (Standard)
 	Content-Aware Fill	Inhaltsbasiert füllen
 	Include All Subfolders	Alle Unterordner einschließen
 	Auto Add/Delete	Autom. hinzuf./löschen
@@ -3303,6 +3325,10 @@ curves	Smooth	Glätten
 	Sent to {printer}	An {printer} gesendet
 	set in Print Settings…	in den Druckeinstellungen festlegen…
 	ICO is limited to 256 × 256 pixels	ICO ist auf 256 × 256 Pixel begrenzt
+	Automatically Create First Snapshot	Ersten Snapshot automatisch erstellen
+	Automatically Create New Snapshot When Saving	Beim Speichern automatisch neuen Snapshot erstellen
+	Show New Snapshot Dialog by Default	Dialogfeld „Neuer Snapshot“ standardmäßig anzeigen
+	Memory usage percent	Speichernutzung (%)
 	Show Favorite Fonts	Favorisierte Schriften anzeigen
 	No favorite fonts yet: click the star beside a font to add it.	Noch keine favorisierten Schriften: Klicken Sie auf den Stern neben einer Schrift, um sie hinzuzufügen.
 	Favorite fonts	Favorisierte Schriften
@@ -3346,6 +3372,7 @@ curves	Smooth	Glätten
 	Automatically Check for Updates	Automatisch nach Updates suchen
 	Paints from the History panel's source state	Malt aus dem Quellzustand des Protokollbedienfelds
 	Sets the source for the history brush	Legt die Quelle für den Protokollpinsel fest
+	The History Brush source was deleted: set a new source in the History panel	Die Quelle des Protokollpinsels wurde gelöscht: Legen Sie eine neue Quelle im Protokollbedienfeld fest
 	Highlight Mode	Lichtermodus
 	Highlight Color	Lichterfarbe
 	Highlight Opacity	Lichterdeckkraft
@@ -3365,6 +3392,7 @@ curves	Smooth	Glätten
 	Chisel Soft	Meißeln weich
 	Open color-less EXR as ACEScg	Farbangabenloses EXR als ACEScg öffnen
 	Do not append "copy" to filename when saving a copy	Beim Speichern einer Kopie „copy“ nicht an den Dateinamen anhängen
+	Save Full-Size Composite in .pcraft Files	Kompositbild in voller Größe in .pcraft-Dateien speichern
 	Color Profile	Farbprofil
 	EXIF	EXIF
 	Edit Selected Guides	Ausgewählte Hilfslinien bearbeiten
@@ -3409,6 +3437,7 @@ curves	Smooth	Glätten
 	{shortcut} is reserved by the system and can't be assigned.	{shortcut} ist vom System reserviert und kann nicht zugewiesen werden.
 	Low-Latency Drawing (vsync off, applies at next launch)	Zeichnen mit geringer Latenz (ohne VSync, gilt ab dem nächsten Start)
 	Reference point location	Position des Referenzpunkts
+	Toggle reference point	Referenzpunkt ein-/ausblenden
 	Free Transform is still being applied; try again when it has finished.	Frei transformieren wird noch angewendet; versuchen Sie es erneut, wenn es fertig ist.
 	The transform couldn't be applied.	Die Transformation konnte nicht angewendet werden.
 	Its layers need {needed} of GPU memory; the budget leaves them {budget}.	Die Ebenen brauchen {needed} GPU-Speicher; das Budget lässt ihnen {budget}.
@@ -3420,6 +3449,7 @@ curves	Smooth	Glätten
 	This document's layers: {needed} of {budget} for layers	Ebenen dieses Dokuments: {needed} von {budget} für Ebenen
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Die Ebenen dieses Dokuments brauchen {needed}, dürfen aber {budget} belegen: Das ganze Dokument wird auf der CPU neu gezeichnet
 	GPU Memory (MB, 0 = Automatic)	GPU-Speicher (MB, 0 = Automatisch)
+	Scratch Size Limit (MB, 0 = No Limit)	Größenlimit für Arbeitsvolume (MB, 0 = kein Limit)
 	{path}: the path is not valid Unicode; save under another name.	{path}: Der Dateipfad enthält ungültige Zeichen. Speichere unter einem anderen Namen.
 	{name} was changed by another app after it was opened or saved here.	{name} wurde von einer anderen App geändert, nachdem es hier geöffnet oder gespeichert wurde.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Ersetze die Datei durch dieses Dokument oder brich ab und nutze Datei › Speichern unter, um beide zu behalten.
@@ -3518,6 +3548,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Font size presets	Schriftgrößen-Vorgaben
 	Leading presets	Zeilenabstand-Vorgaben
 	Tracking presets	Laufweiten-Vorgaben
+
+	The GPU compositor is still being prepared	The GPU compositor is still being prepared
 	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	Ungültige Zahleneingabe. Es ist eine ganze Zahl zwischen {min}% und {max}% erforderlich. Der vorherige Wert wurde eingesetzt.
 	Clear Selection	Auswahl löschen
 	Color Aware	Farbbezogen
@@ -3545,3 +3577,59 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Solid Color	Volltonfarbe
 	Tint Color	Tönungsfarbe
 	Edit Brush…	Pinsel bearbeiten…
+
+# Action Stop message (#8386)
+	Message	Meldung
+# Playback Options (#5212)
+	Playback Options…	Wiedergabeoptionen…
+	Playback Options	Wiedergabeoptionen
+	Accelerated	Beschleunigt
+	Step by Step	Schrittweise
+	Pause For:	Pause für:
+	Pause For	Pause für
+	seconds	Sekunden
+	Create a single history state	Einen einzigen Protokollobjekt-Status erstellen
+	Generator enabled	Generator aktiviert
+	This Layer:	Diese Ebene:
+	Move Up	Nach oben
+	Move Down	Nach unten
+	On your computer	Auf Ihrem Computer
+	New file	Neue Datei
+	Learn	Lernen
+	No recent files	Keine zuletzt verwendeten Dateien
+	Website	Website
+
+# Frame Tool and other branch translations.
+	A frame supports affine transforms; select its image for perspective transforms	Ein Rahmen unterstützt affine Transformationen; für perspektivische Transformationen sein Bild auswählen
+	A frame supports affine transforms; select its image to warp it	Ein Rahmen unterstützt affine Transformationen; zum Verformen sein Bild auswählen
+	Convert to Frame…	In Rahmen konvertieren…
+	Create a new custom frame	Neuen benutzerdefinierten Rahmen erstellen
+	Create a new polygonal frame	Neuen polygonalen Rahmen erstellen
+	Create a new triangular frame	Neuen dreieckigen Rahmen erstellen
+	Fit Content to Frame	Inhalt an Rahmen anpassen
+	Fit Frame to Content	Rahmen an Inhalt anpassen
+	Frame coordinates must be finite and within 600000 pixels	Rahmenkoordinaten müssen endlich sein und innerhalb von 600000 Pixeln liegen
+	Import Image…	Bild importieren…
+	Invalid frame transform	Ungültige Rahmentransformation
+	Invalid nested file drop	Ungültiges verschachteltes Ablegen einer Datei
+	New Frame	Neuer Rahmen
+	Replace Image…	Bild ersetzen…
+	The frame is locked	Der Rahmen ist gesperrt
+	The frame is unavailable	Der Rahmen ist nicht verfügbar
+	X	X
+	Y	Y
+
+# Channels panel menu (#11451)
+	New Channel…	Neuer Kanal…
+	Duplicate Channel	Kanal duplizieren
+	Delete Channel	Kanal löschen
+	New Spot Channel…	Neuer Schmuckfarbenkanal…
+	Merge Spot Channel	Schmuckfarbenkanal zusammenfügen
+	Channel Options…	Kanaloptionen…
+	Split Channels	Kanäle teilen
+	Merge Channels…	Kanäle zusammenfügen…
+	Specify Channels:	Kanäle angeben:
+	Not enough grayscale documents for this mode.	Nicht genug Graustufen-Dokumente für diesen Modus.
+	Pick a different document for each channel.	Wählen Sie für jeden Kanal ein anderes Dokument.
+	A picked document is no longer open.	Ein ausgewähltes Dokument ist nicht mehr geöffnet.
+	A picked document is no longer a grayscale document of the same size.	Ein ausgewähltes Dokument ist kein Graustufen-Dokument derselben Größe mehr.

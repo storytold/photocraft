@@ -336,6 +336,8 @@ impl Stylus {
             Some(true) if app.ui.tool != Tool::Eraser => {
                 app.stylus.tool_before_eraser = Some(app.ui.tool);
                 app.ui.tool = Tool::Eraser;
+                // A tool switch like any other: Add New Artboard's placing mode ends (#11386).
+                crate::tool_memory::ended_by_tool(app);
                 true
             }
             Some(false) => match app.stylus.tool_before_eraser.take() {

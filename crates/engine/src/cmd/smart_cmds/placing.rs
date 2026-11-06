@@ -198,8 +198,8 @@ pub fn layers_to_smart(doc: &Document, name: &str, layers: Vec<Layer>) -> Result
 }
 
 pub(super) fn convert(s: &mut Session, p: &Value) -> Result<Value> {
-    let ids = match p.get("layer").and_then(Value::as_u64) {
-        Some(id) => vec![LayerId(id)],
+    let ids = match crate::commands::explicit_layer(s, p)? {
+        Some(id) => vec![id],
         None => crate::layer_multi_cmds::selected(s),
     };
     {
