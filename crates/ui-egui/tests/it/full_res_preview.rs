@@ -418,7 +418,7 @@ mod issue_11560_absolute {
         let display = engine.color.canvas_display_for(doc, engine.color.main_display).unwrap();
         let rgba = display.to_rgba8(&composite);
         assert_eq!((rgba.width, rgba.height), (WIDTH as u32, HEIGHT as u32));
-        rgba.pixels.chunks_exact(4).map(|p| [p[0], p[1], p[2], p[3]]).collect()
+        rgba.pixels.as_chunks::<4>().0.to_vec()
     }
 
     fn collect_meshes(shape: &egui::Shape, clip: egui::Rect, out: &mut Vec<egui::epaint::Mesh>) {
