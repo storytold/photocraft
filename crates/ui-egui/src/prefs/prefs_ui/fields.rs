@@ -15,7 +15,13 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
             f.insert("__gpuInfo".into(), json!(info));
             f.insert("__gpuAdapters".into(), json!(app.perf.gpu_info.adapters));
             let system = system_theme(app, ui.ctx());
+            // Plug-ins come only with the app: no folder to load others from. Its settings are
+            // kept, out of view.
+            let folder = if app.services.bundled_plugins_only { take_plugin_folder(f) } else { Vec::new() };
             prefs_body(ui, f, system);
+            if let Some(plug_ins) = f.get_mut("values").and_then(|v| v.get_mut("plugIns")).and_then(Value::as_object_mut) {
+                plug_ins.extend(folder);
+            }
         }
         "shortcuts" => shortcuts_body(app, ui, f),
         "presets" => presets_body(app, ui, f),
@@ -23,6 +29,12 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
         "mismatch" => mismatch_body(ui, f),
         _ => {}
     }
+}
+
+/// The Plug-ins page's folder settings, taken out of the dialog's values.
+fn take_plugin_folder(f: &mut Map<String, Value>) -> Vec<(String, Value)> {
+    let Some(plug_ins) = f.get_mut("values").and_then(|v| v.get_mut("plugIns")).and_then(Value::as_object_mut) else { return Vec::new() };
+    ["useAdditionalPluginsFolder", "additionalPluginsFolder"].into_iter().filter_map(|k| plug_ins.remove(k).map(|v| (k.to_string(), v))).collect()
 }
 
 /// The label a preference key shows in the dialog: a few keys have their own wording, the rest
