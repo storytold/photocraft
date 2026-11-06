@@ -212,7 +212,8 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
     let whole_path = single.filter(|_| dir.is_none() && (all.len() == 1 || mode.is_none()));
     // `folder` without `path` or `dir` writes the whole image under the document's name (#5305).
     let folder = p.get("folder").and_then(Value::as_str).filter(|_| single.is_none() && dir.is_none());
-    let numbers = if whole_path.is_none() && (single.is_some() || dir.is_some()) {
+    // A path can write the sole resolved slice directly, but still must honor the filter.
+    let numbers = if single.is_some() || dir.is_some() {
         if pick == "selected" && filter.is_none() {
             return Err(bad(cmd, "Select one or more slices"));
         }

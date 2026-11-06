@@ -319,6 +319,42 @@ fn invalid_slice_mode_and_whole_image_destination_refuse_before_writing() {
     assert_eq!(decode(&path).dimensions(), (64, 48));
 }
 
+/// A direct path can export the sole slice, but an invalid filter must never write that file.
+#[test]
+fn single_slice_path_validates_numbered_filters_without_changing_the_destination() {
+    let mut s = session(8);
+    let dir = tmp("web-single-slice-filter");
+    let path = format!("{dir}/exact.png");
+    assert_eq!(photocraft_doc::slices::resolve(&s.active().unwrap().doc).len(), 1);
+
+    for mut p in [json!({"numbers": [999]}), json!({"numbers": [1, "2"]}), json!({"slices": "selected"}), json!({"slices": "selected", "numbers": []})] {
+        p["path"] = json!(path);
+        let platform = save_for_web_with_writer(&mut s, &p, &mut |_, _| panic!("invalid filter must not write"));
+        assert!(matches!(platform, Err(EngineError::BadParams { .. })), "{p}: {platform:?}");
+        let native = s.execute("file.export.saveForWebLegacy", p.clone());
+        assert!(matches!(native, Err(EngineError::BadParams { .. })), "{p}: {native:?}");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+        assert!(s.file_menu.last_web.is_none());
+    }
+    let estimate = s.execute("file.export.saveForWebLegacy", json!({"slices": "selected"})).unwrap();
+    assert_eq!((estimate["width"].as_u64(), estimate["height"].as_u64()), (Some(64), Some(48)));
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+
+    let p = json!({"path": path, "slices": "selected", "numbers": [1]});
+    let mut writes = 0;
+    let platform = save_for_web_with_writer(&mut s, &p, &mut |out, _| {
+        assert_eq!(out, path);
+        writes += 1;
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(writes, 1);
+    assert_eq!(platform["files"], json!([path]));
+    let native = s.execute("file.export.saveForWebLegacy", p).unwrap();
+    assert_eq!(native["files"], json!([path]));
+    assert_eq!(decode(&path).dimensions(), (64, 48));
+}
+
 /// Check every chosen image before writing, preserving codec boundaries and unchosen slices.
 #[test]
 fn selected_slice_format_limits_are_checked_before_any_write() {
