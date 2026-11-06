@@ -47,12 +47,9 @@ pub fn dock_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if drag.is_some() {
         crate::panel_docking::set_end_dock_total(app, (panel_w - rw).clamp(min_dock, max_dock));
     }
-    crate::direction::end_panel("dock-column")
-        .resizable(false)
-        .show_separator_line(false)
-        .exact_size(panel_w)
-        .frame(egui::Frame::NONE.fill(t.card))
-        .show(ui, |ui| {
+    crate::direction::end_panel("dock-column").resizable(false).show_separator_line(false).exact_size(panel_w).frame(egui::Frame::NONE.fill(t.card)).show(
+        ui,
+        |ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
             let height = ui.available_height();
             let mut dock_rect = ui.max_rect();
@@ -85,8 +82,7 @@ pub fn dock_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             let dock_edge = if crate::direction::is_rtl() { dock_rect.right() } else { dock_rect.left() };
             let cover = egui::Rect::from_min_max(egui::pos2(dock_edge - 2.0, dock_rect.top()), egui::pos2(dock_edge + 2.0, dock_rect.bottom()));
             let _ = ui.interact(cover, egui::Id::unique("dock-content-edge"), egui::Sense::click_and_drag());
-            let handle =
-                egui::Rect::from_min_max(egui::pos2(panel_edge - 4.0, panel_rect.top()), egui::pos2(panel_edge + 4.0, panel_rect.bottom()));
+            let handle = egui::Rect::from_min_max(egui::pos2(panel_edge - 4.0, panel_rect.top()), egui::pos2(panel_edge + 4.0, panel_rect.bottom()));
             let response = ui.interact(handle, egui::Id::unique("dock-edge-handle"), egui::Sense::drag());
             // The bar is always visible, on the foreground layer so no panel, rail or dock
             // content can hide it; it brightens under the pointer.
@@ -109,7 +105,8 @@ pub fn dock_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             if response.drag_stopped() {
                 ui.ctx().data_mut(|d| d.remove::<(f32, f32)>(drag_id));
             }
-        });
+        },
+    );
     crate::dock::persist(app, ui.ctx());
     crate::color_panel_ui::persist(app);
 }

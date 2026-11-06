@@ -306,7 +306,10 @@ impl PhotocraftApp {
         // The compact layout stacks the dock, rail and toolbar on the dock's physical edge.
         let dock_right = !crate::direction::is_rtl();
         let toolbar_at_dock_edge = toolbar_right == dock_right;
-        if toolbar_shown && docking && toolbar_at_dock_edge {
+        // The dock-edge layout drops the canvas from craft-ui's split, which is only safe while
+        // nothing else is docked beside it; otherwise keep the standard layout so those panels
+        // stay visible and dockable.
+        if toolbar_shown && docking && toolbar_at_dock_edge && crate::panel_docking::canvas_alone(self) {
             // Dock outermost, then its rail, then the toolbox, then the canvas: the toolbox sits
             // between the canvas and the dock, not outside the dock at the window edge.
             panels::dock_panel(self, ui);

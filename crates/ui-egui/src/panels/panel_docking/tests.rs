@@ -931,3 +931,54 @@ fn the_native_dock_width_sizes_the_default_column() {
     assert_eq!(columns[0].width, 380.0);
     assert!(h.ctx.data_mut(|data| data.get_persisted::<egui::PanelState>(key)).is_none(), "taken once");
 }
+
+#[test]
+fn the_dock_edge_layout_only_applies_with_the_canvas_alone() {
+    let tabs = |panel: &str| Node::Tabs { panels: vec![panel.to_owned()], active: 0 };
+    let aside = |first: Node<String>| Node::Split {
+        axis: SplitAxis::Horizontal,
+        size: SplitSize::FixedSecond(280.0),
+        first: Box::new(first),
+        second: Box::new(tabs("color")),
+    };
+
+    let alone = Layout { root: Some(aside(tabs(CANVAS))), floating: Vec::new() };
+    assert!(canvas_alone_layout(&alone), "{alone:?}");
+
+    // A panel docked beside the canvas splits the canvas side: not alone any more.
+    let beside =
+        Node::Split { axis: SplitAxis::Horizontal, size: SplitSize::FixedFirst(400.0), first: Box::new(tabs("layers")), second: Box::new(tabs(CANVAS)) };
+    let layout = Layout { root: Some(aside(beside)), floating: Vec::new() };
+    assert!(!canvas_alone_layout(&layout), "{layout:?}");
+}
+
+#[test]
+fn the_toolbar_side_toggle_works_in_every_interface_theme() {
+    use crate::state::ToolbarSide;
+
+    let mut ready = false;
+    let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        move |ui, app: &mut PhotocraftApp| {
+            if !ready {
+                PhotocraftApp::setup_context(ui.ctx(), crate::theme::ThemeKind::ProMedium);
+                ready = true;
+                return;
+            }
+            crate::panels::toolbar(app, ui);
+        },
+        app(),
+    );
+    for kind in crate::theme::ThemeKind::ALL {
+        crate::theme::apply(&h.ctx, kind);
+        for side in [ToolbarSide::Left, ToolbarSide::Right] {
+            h.state_mut().ui.panels.toolbar_side = side;
+            h.run_steps(2);
+            // The header's chevron carries the toolbar's label; its screen X is the panel's side.
+            let chevron = h.get_by_label("Toolbar").rect();
+            match side {
+                ToolbarSide::Right => assert!(chevron.center().x > 640.0, "{kind:?}: right toolbar at {chevron:?}"),
+                _ => assert!(chevron.center().x < 640.0, "{kind:?}: left toolbar at {chevron:?}"),
+            }
+        }
+    }
+}

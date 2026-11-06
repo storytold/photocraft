@@ -103,13 +103,9 @@ fn end_dock_node(node: &Node<String>) -> Option<&Node<String>> {
 /// The end dock's stored width (all its columns), or the native default when the layout is
 /// built from the native dock.
 pub(crate) fn dock_width(app: &PhotocraftApp) -> f32 {
-    let width = app.ui.docking.as_ref().and_then(|workspace| {
-        match workspace.layout.root.as_ref().and_then(end_dock_node) {
-            Some(Node::Dock { columns, .. }) if !columns.is_empty() => {
-                Some(columns.iter().map(|column| column.width).sum::<f32>())
-            }
-            _ => None,
-        }
+    let width = app.ui.docking.as_ref().and_then(|workspace| match workspace.layout.root.as_ref().and_then(end_dock_node) {
+        Some(Node::Dock { columns, .. }) if !columns.is_empty() => Some(columns.iter().map(|column| column.width).sum::<f32>()),
+        _ => None,
     });
     width.unwrap_or_else(|| default_width(app.ui.theme.is_pro()))
 }
@@ -569,6 +565,27 @@ fn without_canvas(layout: Layout<String>) -> Layout<String> {
     }
 }
 
+/// True when the layout's canvas side holds nothing but the canvas.
+///
+/// The dock-edge toolbox layout presents the dock column without its canvas so the toolbox can sit
+/// between them. That presentation drops the canvas side of the root split, so it is only safe
+/// while the canvas is alone there: a panel docked beside the canvas keeps the standard layout,
+/// where craft-ui draws it and accepts drops beside it.
+pub(crate) fn canvas_alone(app: &PhotocraftApp) -> bool {
+    let layout = match &app.ui.docking {
+        Some(workspace) => workspace.layout.clone(),
+        None => legacy(app),
+    };
+    canvas_alone_layout(&layout)
+}
+
+fn canvas_alone_layout(layout: &Layout<String>) -> bool {
+    match &layout.root {
+        Some(Node::Split { first, .. }) => matches!(first.as_ref(), Node::Tabs { panels, .. } if panels.len() == 1 && panels[0] == CANVAS),
+        _ => false,
+    }
+}
+
 /// Draw the layout, the canvas included, in the space `ui` has left: the customized workspace,
 /// else the native dock's arrangement.
 pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
@@ -797,13 +814,12 @@ fn pin_group_heights(ctx: &egui::Context, layout: &Layout<String>, actions: &mut
 /// `ui.set {dockWidth}`: the width of the end dock, keeping its other columns' widths.
 /// An empty end dock has no column to store the width in; the request is a no-op until the
 /// dock gets a column.
-pub(crate) fn set_dock_width(app: &mut PhotocraftApp, width: f32) {    let Ok(mut workspace) = workspace_of(app) else { return };
+pub(crate) fn set_dock_width(app: &mut PhotocraftApp, width: f32) {
+    let Ok(mut workspace) = workspace_of(app) else { return };
     let outer = match workspace.layout.root.as_ref().and_then(end_dock_node) {
         Some(Node::Dock { columns, .. }) => {
             let total: f32 = columns.iter().map(|column| column.width).sum();
-            columns.first().map(|column| {
-                (column.width, total, column.groups.iter().flat_map(|g| g.panels.first()).next().cloned())
-            })
+            columns.first().map(|column| (column.width, total, column.groups.iter().flat_map(|g| g.panels.first()).next().cloned()))
         }
         _ => None,
     };
