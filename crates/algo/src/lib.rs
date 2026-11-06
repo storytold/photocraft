@@ -1227,6 +1227,19 @@ pub fn apply_tiled_with(
     apply_tiled_with_impl(surface, params, area, bounds, selection, tile, extent, ctl, true)
 }
 
+/// Map native coverage filters once so the tiled dispatcher only handles their execution.
+fn coverage_operation(params: &FilterParams) -> Option<coverage::Operation<'_>> {
+    match params {
+        FilterParams::AlphaToColor => Some(coverage::Operation::AlphaToColor),
+        FilterParams::AlphaCurve { values } => Some(coverage::Operation::AlphaCurve(values)),
+        FilterParams::SetAlpha { value } => Some(coverage::Operation::SetAlpha(*value)),
+        FilterParams::ClampAlpha { low, high } => Some(coverage::Operation::ClampAlpha { low: *low, high: *high }),
+        FilterParams::ThresholdAlpha { value } => Some(coverage::Operation::ThresholdAlpha(*value)),
+        FilterParams::FillHoles { connectivity, alpha_only } => Some(coverage::Operation::FillHoles { connectivity: *connectivity, alpha_only: *alpha_only }),
+        _ => None,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 /// Dispatch checked whole-domain filters or bounded native tiles, publishing a result only after successful processing
 /// and cancellation checks.
@@ -1269,16 +1282,7 @@ fn apply_tiled_with_impl(
     if matches!(params, FilterParams::Average) {
         return average::apply_with(surface, area, bounds, selection, ctl).ok();
     }
-    let coverage_operation = match params {
-        FilterParams::AlphaToColor => Some(coverage::Operation::AlphaToColor),
-        FilterParams::AlphaCurve { values } => Some(coverage::Operation::AlphaCurve(values)),
-        FilterParams::SetAlpha { value } => Some(coverage::Operation::SetAlpha(*value)),
-        FilterParams::ClampAlpha { low, high } => Some(coverage::Operation::ClampAlpha { low: *low, high: *high }),
-        FilterParams::ThresholdAlpha { value } => Some(coverage::Operation::ThresholdAlpha(*value)),
-        FilterParams::FillHoles { connectivity, alpha_only } => Some(coverage::Operation::FillHoles { connectivity: *connectivity, alpha_only: *alpha_only }),
-        _ => None,
-    };
-    if let Some(operation) = coverage_operation {
+    if let Some(operation) = coverage_operation(params) {
         return coverage::apply_with(surface, operation, area, extent.unwrap_or(bounds), selection, ctl).ok();
     }
     let mut out = surface.clone();
