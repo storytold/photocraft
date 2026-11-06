@@ -376,6 +376,8 @@ pub(crate) fn duplicate_to_new_document(s: &mut Session, p: &Value) -> Result<Va
     }
     // The new document gets the styles its type uses.
     adopt_text_styles(&mut nd, &TextStyles::default())?;
+    // Its own Basic Paragraph is the source's: type that inherits from it must not gain overrides.
+    nd.text_styles.basic.clone_from(&sdoc.text_styles.basic);
     let new_ids: Vec<LayerId> = nd.layers.iter().map(|l| l.id).collect();
     let index = s.add_document(nd, None);
     if let (Some(name), [id]) = (typed, new_ids.as_slice()) {
