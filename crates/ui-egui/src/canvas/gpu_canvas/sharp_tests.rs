@@ -7,11 +7,18 @@ use photocraft_compose::Buffer;
 use photocraft_doc::SampleType;
 use photocraft_geom::Rect;
 
-/// An 8 × 4 texture, black left of column `edge` and white from it.
-fn edge_texture(edge: usize) -> Buffer {
-    let mut buf = Buffer::filled(Rect::from_xywh(0, 0, 8, 4), [0.0, 0.0, 0.0, 1.0]);
+/// Texels per side of the test texture.
+const TEXELS: usize = 4;
+/// Side of each drawn rect, in device pixels; its centre is the view centre.
+const CELL: usize = 80;
+
+/// A 4 × 4 texture, black before texel `edge` and white from it, across columns (`vertical`) or
+/// rows.
+fn edge_texture(edge: usize, vertical: bool) -> Buffer {
+    let mut buf = Buffer::filled(Rect::from_xywh(0, 0, TEXELS as u32, TEXELS as u32), [0.0, 0.0, 0.0, 1.0]);
     for (i, px) in buf.px.iter_mut().enumerate() {
-        if i % 8 >= edge {
+        let at = if vertical { i % TEXELS } else { i / TEXELS };
+        if at >= edge {
             *px = [1.0, 1.0, 1.0, 1.0];
         }
     }
@@ -36,6 +43,22 @@ fn view(doc: u64, doc_size: [u32; 2], zoom: f32) -> ViewParams {
     }
 }
 
+/// One comparison: the same texels as a page reduced by `factor` and at full resolution, both
+/// drawn at `per_texel` device pixels per stored texel.
+struct Case {
+    factor: u32,
+    vertical: bool,
+    per_texel: f32,
+    edge: usize,
+}
+
+impl Case {
+    /// Where the black-to-white edge falls along the scanned axis, in cell pixels.
+    fn edge_at(&self) -> f32 {
+        CELL as f32 / 2.0 - (TEXELS as f32 / 2.0 - self.edge as f32) * self.per_texel
+    }
+}
+
 #[test]
 fn sharp_edges_match_at_every_page_reduction() {
     let _gpu = photocraft_testkit::gpu_lock();
@@ -45,43 +68,77 @@ fn sharp_edges_match_at_every_page_reduction() {
         return;
     };
     let gpu = GpuCanvas::new(&rs);
-    // The same stored texels as a page reduced by 2 (a 16 × 8 document) and at full resolution
-    // (an 8 × 4 document), drawn at the same origin (the view centre) and texel size. Aligned:
-    // the edge after column 4 at 4 device px per texel lands on a pixel boundary. Fractional:
-    // the edge after column 3 at 4.5 px per texel lands at x = 6 + 13.5, inside a pixel, where
-    // the one-device-pixel ramp must show (nearest sampling would not).
-    let (half, full, half_frac, full_frac) = (1, 2, 3, 4);
-    for (key, size, factor, edge) in [(half, [16, 8], 2, 4), (full, [8, 4], 1, 4), (half_frac, [16, 8], 2, 3), (full_frac, [8, 4], 1, 3)] {
-        let core = Rect::new(0, 0, size[0] as i32, size[1] as i32);
-        let tex = edge_texture(edge);
-        assert!(gpu.upload_page(PageUpload { key, page: 1, size, depth: SampleType::U8, factor, core, buf: &tex }), "page {key}");
+    // Every reduction a viewport page uses up to 8, for an edge across columns and across rows.
+    // The document scale is 2 (aligned) or 2 + 0.5 / factor (fractional), so both draws take the
+    // sharp path (`filter_mode`). Aligned: the edge at texel 2 lands on the cell centre, a pixel
+    // boundary. Fractional: 2 × factor + 0.5 px per texel puts the edge at texel 1 inside a pixel,
+    // where exactly one pixel shows the ramp (nearest sampling would show none).
+    let mut cases = Vec::new();
+    for factor in [2u32, 4, 8] {
+        for vertical in [true, false] {
+            cases.push(Case { factor, vertical, per_texel: 2.0 * factor as f32, edge: 2 });
+            cases.push(Case { factor, vertical, per_texel: 2.0 * factor as f32 + 0.5, edge: 1 });
+        }
+    }
+    let side = TEXELS as u32;
+    let mut draws = Vec::new();
+    for (i, c) in cases.iter().enumerate() {
+        let tex = edge_texture(c.edge, c.vertical);
+        let (reduced, full) = (2 * i as u64 + 1, 2 * i as u64 + 2);
+        let reduced_size = [side * c.factor, side * c.factor];
+        for (key, size, factor) in [(reduced, reduced_size, c.factor), (full, [side, side], 1)] {
+            let core = Rect::new(0, 0, size[0] as i32, size[1] as i32);
+            assert!(gpu.upload_page(PageUpload { key, page: 1, size, depth: SampleType::U8, factor, core, buf: &tex }), "page {key}");
+        }
+        draws.push((view(reduced, reduced_size, c.per_texel / c.factor as f32), view(full, [side, side], c.per_texel)));
     }
     let renderer = egui_kittest::wgpu::WgpuTestRenderer::from_render_state(rs);
-    // Side by side: the reduced page in the left 48 × 32 rect, the full one in the right; the
-    // aligned pair on top, the fractional pair below.
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(96.0, 64.0)).with_pixels_per_point(1.0).renderer(renderer).build_ui(move |ui| {
-        let r = ui.ctx().content_rect();
-        let (top, bottom) = r.split_top_bottom_at_y(r.min.y + 32.0);
-        let (left, right) = top.split_left_right_at_x(r.min.x + 48.0);
-        GpuCanvas::paint(ui.painter(), left, view(half, [16, 8], 2.0));
-        GpuCanvas::paint(ui.painter(), right, view(full, [8, 4], 4.0));
-        let (left, right) = bottom.split_left_right_at_x(r.min.x + 48.0);
-        GpuCanvas::paint(ui.painter(), left, view(half_frac, [16, 8], 2.25));
-        GpuCanvas::paint(ui.painter(), right, view(full_frac, [8, 4], 4.5));
-    });
+    // One row per case: the reduced page in the left cell, the full one in the right.
+    let cell = CELL as f32;
+    let mut h =
+        egui_kittest::Harness::builder().with_size(egui::vec2(2.0 * cell, cell * cases.len() as f32)).with_pixels_per_point(1.0).renderer(renderer).build_ui(
+            move |ui| {
+                let o = ui.ctx().content_rect().min;
+                for (i, (reduced, full)) in draws.iter().enumerate() {
+                    let at = |col: f32| egui::Rect::from_min_size(o + egui::vec2(col * cell, i as f32 * cell), egui::vec2(cell, cell));
+                    GpuCanvas::paint(ui.painter(), at(0.0), *reduced);
+                    GpuCanvas::paint(ui.painter(), at(1.0), *full);
+                }
+            },
+        );
     h.run_steps(2);
     let img = h.render().expect("render");
     assert!(gpu.health.is_ok(), "{:?}", gpu.fault());
-    // In each rect the 32 × 16 px image sits at x 8..40; the edge between texel columns 3 and 4
-    // is at x = 8 + 4 × 4 = 24.
-    let row = 16;
-    let (a, b): (Vec<u8>, Vec<u8>) = (16..32).map(|x| (img.get_pixel(x, row)[0], img.get_pixel(48 + x, row)[0])).unzip();
-    assert!(b.first().is_some_and(|&v| v < 16) && b.last().is_some_and(|&v| v > 239), "the edge is drawn: {b:?}");
-    assert_eq!(a, b, "the same texels at the same place and size filter the same at either reduction");
-    // Fractional: the image spans x 6..42 and y 39..57 in each lower rect; the edge is at 19.5.
-    let row = 48;
-    let (a, b): (Vec<u8>, Vec<u8>) = (10..30).map(|x| (img.get_pixel(x, row)[0], img.get_pixel(48 + x, row)[0])).unzip();
-    assert!(b.first().is_some_and(|&v| v < 16) && b.last().is_some_and(|&v| v > 239), "the edge is drawn: {b:?}");
-    assert!(b.iter().any(|&v| (16..240).contains(&v)), "a fractional edge shows the one-pixel ramp: {b:?}");
-    assert_eq!(a, b, "the fractional edge filters the same at either reduction");
+    for (i, c) in cases.iter().enumerate() {
+        let what = format!("factor {}, {} edge, {} px per texel", c.factor, if c.vertical { "vertical" } else { "horizontal" }, c.per_texel);
+        // The image spans the cell centre ± 2 texels; scan across the edge inside it, on lines
+        // through and either side of the centre.
+        let half = (TEXELS as f32 / 2.0 * c.per_texel) as usize;
+        let (lo, hi) = (CELL / 2 - half + 1, CELL / 2 + half - 1);
+        let edge = c.edge_at();
+        for line in [CELL / 2 - 6, CELL / 2, CELL / 2 + 5] {
+            let px = |col: usize, along: usize| {
+                let (x, y) = if c.vertical { (along, line) } else { (line, along) };
+                img.get_pixel((col * CELL + x) as u32, (i * CELL + y) as u32).0
+            };
+            for along in lo..hi {
+                let (reduced, full) = (px(0, along), px(1, along));
+                for ch in 0..3 {
+                    // Identical texels at an identical place and size: equal up to rounding.
+                    assert!(reduced[ch].abs_diff(full[ch]) <= 1, "{what}, line {line}, at {along}: reduced {reduced:?}, full {full:?}");
+                }
+                // Exactly one device pixel of ramp, where the edge falls: none when it lands on
+                // a pixel boundary, the pixel it crosses when it lands inside one.
+                let centre = along as f32 + 0.5;
+                let v = full[0];
+                if centre < edge {
+                    assert!(v < 16, "{what}, line {line}: dark before the edge at {edge}, {along} is {v}");
+                } else if centre > edge {
+                    assert!(v > 239, "{what}, line {line}: light after the edge at {edge}, {along} is {v}");
+                } else {
+                    assert!((16..240).contains(&v), "{what}, line {line}: the pixel the edge crosses at {edge} shows the ramp, {v}");
+                }
+            }
+        }
+    }
 }
