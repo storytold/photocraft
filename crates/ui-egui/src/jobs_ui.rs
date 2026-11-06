@@ -414,10 +414,14 @@ fn warnings_of(v: &Value) -> Vec<String> {
 fn finish_save(app: &mut PhotocraftApp, ctx: &egui::Context, save: SaveJob, label: &str, outcome: JobOutcome) {
     match outcome {
         JobOutcome::Done(v) => {
+            // A writer that can't confirm the bytes were stored leaves the document unsaved, as
+            // an inline save does (#4962).
+            let previous = app.session.documents().iter().find(|st| st.doc.id == save.doc).map_or(save.revision, |st| st.saved_revision);
+            let revision = crate::services::saved_revision_after_write(!app.services.write_unconfirmed, save.revision, previous);
             if save.automation {
-                app.saved_automation(save.doc, save.revision, &save.path, &warnings_of(&v), save.copy);
+                app.saved_automation(save.doc, revision, &save.path, &warnings_of(&v), save.copy);
             } else {
-                app.saved(save.doc, save.revision, &save.path, &warnings_of(&v), save.copy);
+                app.saved(save.doc, revision, &save.path, &warnings_of(&v), save.copy);
             }
             if !save.copy {
                 crate::discard_ui::saved_document(app, ctx, save.doc);
