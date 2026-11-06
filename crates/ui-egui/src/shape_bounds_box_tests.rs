@@ -298,3 +298,20 @@ fn with_background_jobs_the_scale_step_is_named_and_the_one_before_is_kept() {
     assert_eq!(after[..before.len()], before[..], "the earlier steps keep their names");
     assert_eq!(after.last().map(String::as_str), Some("Transform Path"));
 }
+
+/// A switch to another tool during a handle drag ends the drag, also when the new tool shows the
+/// box too; the release scales nothing and is still the box's (it doesn't reach the new tool).
+#[test]
+fn a_tool_switch_during_a_drag_ends_it_and_takes_its_release() {
+    let (mut app, a, b) = app_with_two_shapes(Tool::Rectangle);
+    let steps = app.session.active().unwrap().history.past_len();
+    let (ba, bb) = (bounds(&app, a), bounds(&app, b));
+    tool_event(&mut app, ToolEvent::Down { x: 723.0, y: 451.0, pressure: 1.0 }, NONE);
+    tool_event(&mut app, ToolEvent::Move { x: 623.0, y: 391.0, pressure: 1.0 }, NONE);
+    assert!(app.ui.shape_box.is_some());
+    app.ui.tool = Tool::PathSelection;
+    assert!(crate::shape_bounds_box::pointer(&mut app, ToolEvent::Up { x: 623.0, y: 391.0 }, NONE), "the release is the box's");
+    assert!(app.ui.shape_box.is_none());
+    assert_eq!(app.session.active().unwrap().history.past_len(), steps);
+    assert_eq!((bounds(&app, a), bounds(&app, b)), (ba, bb));
+}

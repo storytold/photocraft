@@ -157,3 +157,21 @@ fn an_alt_arrow_nudge_keeps_duplicate_plus_move() {
     assert_eq!(history(&app), h0 + 1);
     assert_eq!(newest(&app).as_deref(), Some("Duplicate + Move"));
 }
+
+/// A zero offset moves nothing: the step on top (here the paint) keeps its name.
+#[test]
+fn a_zero_nudge_renames_no_earlier_step() {
+    let mut app = app();
+    for bundle in [false, true] {
+        app.session.edit_prefs(|p| p.tools.bundle_nudges = bundle);
+        let before: Vec<String> = app.session.active().unwrap().history.entries().to_vec();
+        crate::move_mods::nudge(&mut app, 0.0, 0.0, false);
+        let after: Vec<String> = app.session.active().unwrap().history.entries().to_vec();
+        if after.len() == before.len() {
+            assert_eq!(after, before, "bundle {bundle}");
+        } else {
+            assert_eq!(after.last().map(String::as_str), Some("Nudge"), "bundle {bundle}");
+            assert_eq!(after[..before.len()], before[..], "bundle {bundle}");
+        }
+    }
+}

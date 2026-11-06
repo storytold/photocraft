@@ -31,6 +31,8 @@ pub struct Drag {
     /// document nor an edit under it (Undo, say).
     doc: photocraft_doc::DocId,
     revision: u64,
+    /// The tool it started with: a switch to another tool ends it, even one that shows the box.
+    tool: Tool,
     /// The selected shape layers, as at the press.
     layers: Vec<u64>,
     /// Their union box `[x0, y0, x1, y1]` at the press.
@@ -170,7 +172,7 @@ pub fn cancel(app: &mut PhotocraftApp) {
 pub fn cancel_stale(app: &mut PhotocraftApp) {
     let Some(d) = app.ui.shape_box.as_ref() else { return };
     let current = app.session.active().is_some_and(|st| st.doc.id == d.doc && st.revision == d.revision);
-    if !current || !shows(app) {
+    if !current || app.ui.tool != d.tool || !shows(app) {
         cancel(app);
     }
 }
@@ -185,7 +187,7 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool 
             let Some(handle) = hit(app, [x, y]) else { return false };
             let Some((layers, rect)) = selection(app) else { return false };
             let Some((doc, revision)) = app.session.active().map(|st| (st.doc.id, st.revision)) else { return false };
-            app.ui.shape_box = Some(Drag { doc, revision, layers, rect, handle, start: [x, y], scale: [1.0, 1.0] });
+            app.ui.shape_box = Some(Drag { doc, revision, tool: app.ui.tool, layers, rect, handle, start: [x, y], scale: [1.0, 1.0] });
             // The press may have started the Move tool's snapping, which a box drag has none of.
             app.prefs_rt.snap = None;
             app.prefs_rt.snap_lines.clear();
@@ -198,9 +200,12 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool 
             true
         }
         ToolEvent::Up { x, y } => {
+            let had = app.ui.shape_box.is_some();
             cancel_stale(app);
             if app.ui.shape_box.is_none() {
-                return false;
+                // The release of a drag that was just dropped is still the box's: it must not
+                // reach the tool that is active now.
+                return had;
             }
             pointer(app, ToolEvent::Move { x, y, pressure: 1.0 }, mods);
             let Some(d) = app.ui.shape_box.take() else { return true };

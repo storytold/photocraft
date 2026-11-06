@@ -273,6 +273,7 @@ pub fn nudge(app: &mut PhotocraftApp, dx: f64, dy: f64, duplicate_first: bool) {
         return;
     }
     let from = if duplicate_first { duplicate(app) } else { None };
+    let revision = app.session.active().map(|st| st.revision);
     let moved = if duplicate_first {
         // A copy is a state of its own, folded with its move below.
         app.nudge_bundle.reset();
@@ -282,8 +283,10 @@ pub fn nudge(app: &mut PhotocraftApp, dx: f64, dy: f64, duplicate_first: bool) {
     };
     match moved {
         // The reference names an arrow-key move "Nudge"; a bundled run is one step with that name.
+        // Only a move that changed the document: a zero offset records nothing, and the state
+        // on top is then another edit's.
         Ok(_) if from.is_none() => {
-            if let Some(st) = app.session.active_mut() {
+            if let Some(st) = app.session.active_mut().filter(|st| Some(st.revision) != revision) {
                 st.history.set_current_label(tl!("Nudge"));
             }
         }
