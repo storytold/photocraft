@@ -47,22 +47,6 @@ fn bounded_selection(doc: &Document, sel: &[LayerId]) -> Vec<(LayerId, Rect)> {
     top_level(doc, sel).into_iter().filter_map(|id| Some((id, align_bounds(doc.layer(id)?, doc.bounds(), doc.pixel_format().sample)?))).collect()
 }
 
-/// `layer.align.<kind>`: move every selected top-level layer so that `kind`'s edge or centre
-/// meets the same line. `"to"` says which line, and all of it happens in one undoable step:
-///
-/// - `"selection"`: the active selection's content bounds. It needs one, and says so when there
-///   is none rather than falling back to something else.
-/// - `"canvas"`: the canvas, whatever is selected in the image and however many layers are
-///   selected. PhotoCraft's own target; Photoshop has no separate menu item for it (#10337).
-/// - `"artboard"`: the artboard all the layers sit on, so they stay on their board; the canvas
-///   when they are on none or spread over several. This is what Photoshop's Align To › Canvas
-///   does with artboards, and what an imported .atn's `alignToCanvas` flag means.
-/// - `"auto"` (the default) follows Photoshop's own behaviour: the selection when there is one,
-///   else, for a single layer, its artboard or the canvas (aligning it to itself would do
-///   nothing), else the selected layers' own union.
-/// - `"layers"`: always that union.
-///
-/// Linked layers travel with the layer they are linked to. Returns how many layers moved.
 pub(super) fn align(s: &mut Session, p: &Value, kind: &str) -> Result<Value> {
     let cmd = format!("layer.align.{kind}");
     let edge = Edge::parse(kind).ok_or_else(|| bad(&cmd, "unknown edge"))?;
@@ -76,18 +60,6 @@ pub(super) fn align(s: &mut Session, p: &Value, kind: &str) -> Result<Value> {
         }
         let target = match to.as_str() {
             "canvas" => doc.bounds(),
-            // Align To: Canvas with artboards, as in Photoshop: the artboard the layers share, so
-            // they stay on their board; the canvas when they are on none or on several (#10337).
-            "artboard" => {
-                // The same board for every layer, by identity: two boards can hold the same
-                // rectangle, and layers on either of them belong to neither alone.
-                let mut boards = items.iter().map(|(id, _)| board_of(doc, *id));
-                let first = boards.next().flatten();
-                match first.filter(|_| boards.all(|b| b == first)) {
-                    Some(board) => board_rect(doc, board).unwrap_or_else(|| doc.bounds()),
-                    None => doc.bounds(),
-                }
-            }
             "selection" => doc.selection.as_ref().map(|m| m.content_bounds()).ok_or_else(|| EngineError::Other("there is no selection to align to".into()))?,
             "auto" | "layers" => match (&doc.selection, sel.len()) {
                 // Photoshop: with an active selection, the layers align to its bounds (Layer › Align
@@ -98,7 +70,7 @@ pub(super) fn align(s: &mut Session, p: &Value, kind: &str) -> Result<Value> {
                 (None, 1) if to == "auto" => items.first().map_or_else(|| doc.bounds(), |(id, _)| board_or_canvas(doc, *id)),
                 _ => items.iter().fold(Rect::EMPTY, |a, (_, b)| a.union(b)),
             },
-            other => return Err(bad(&cmd, format!("`to` must be auto|layers|selection|canvas|artboard, not `{other}`"))),
+            other => return Err(bad(&cmd, format!("`to` must be auto|layers|selection|canvas, not `{other}`"))),
         };
         if target.is_empty() {
             return Err(EngineError::Other("nothing to align to".into()));
@@ -120,20 +92,10 @@ pub(super) fn align(s: &mut Session, p: &Value, kind: &str) -> Result<Value> {
     Ok(json!({"moved": moved}))
 }
 
-/// The artboard holding `id`, if any. An artboard is not held by itself.
-fn board_of(doc: &Document, id: LayerId) -> Option<LayerId> {
-    doc.artboard_of(id).filter(|board| *board != id)
-}
-
-/// An artboard layer's rectangle.
-fn board_rect(doc: &Document, board: LayerId) -> Option<Rect> {
-    doc.layer(board)?.artboard().map(|a| a.rect)
-}
-
 /// The bounds a lone layer aligns to: the artboard holding it, else the canvas. An artboard
 /// itself aligns to the canvas.
 fn board_or_canvas(doc: &Document, id: LayerId) -> Rect {
-    board_of(doc, id).and_then(|board| board_rect(doc, board)).unwrap_or_else(|| doc.bounds())
+    doc.artboard_of(id).filter(|board| *board != id).and_then(|board| doc.layer(board)?.artboard().map(|a| a.rect)).unwrap_or_else(|| doc.bounds())
 }
 
 /// One move per layer (first wins), skipping layers nested in another moved layer.
