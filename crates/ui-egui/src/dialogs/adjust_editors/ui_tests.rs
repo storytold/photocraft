@@ -1004,9 +1004,9 @@ fn selective_color_properties_switch_colour_without_committing() {
     let (_, before) = layer(&h);
     let steps = h.state().session.active().unwrap().history.past_len();
     let nudge = |h: &mut Harness<'static, PhotocraftApp>| {
-        let r = label_rect(h, "Cyan").expect("Cyan label");
-        let y = r.bottom() + 14.0;
-        drag(h, Pos2::new(r.left() + 40.0, y), Pos2::new(r.left() + 120.0, y));
+        let r =
+            h.query_all_by_role(egui::accesskit::Role::Slider).rfind(|n| n.accesskit_node().label().as_deref() == Some("Cyan")).expect("Cyan slider").rect();
+        drag(h, r.center(), Pos2::new(r.right() + 40.0, r.center().y));
     };
     nudge(&mut h);
     let (_, reds) = layer(&h);
@@ -1046,4 +1046,24 @@ fn selective_color_properties_switch_colour_without_committing() {
     assert_eq!(now[0], first[0], "Reds untouched by editing Blues");
     assert_ne!(now[4], [0.0; 4], "Blues edited");
     assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 2);
+}
+
+/// The Method radios in Properties commit through the real controls; the current one is a no-op.
+#[test]
+fn selective_color_properties_method_radios_commit() {
+    let mut h = app_harness("selectiveColor", "rgb", 8);
+    let steps = |h: &Harness<'_, PhotocraftApp>| h.state().session.active().unwrap().history.past_len();
+    let start = steps(&h);
+    let radio = |h: &mut Harness<'static, PhotocraftApp>, text: &str| {
+        let at = h.query_all_by_role_and_label(egui::accesskit::Role::RadioButton, text).last().expect("method radio").rect().center();
+        click(h, at);
+    };
+    radio(&mut h, "Absolute");
+    assert!(matches!(layer(&h).1, Adjustment::SelectiveColor { relative: false, .. }));
+    assert_eq!(steps(&h), start + 1);
+    radio(&mut h, "Absolute");
+    assert_eq!(steps(&h), start + 1, "the current method is no step");
+    radio(&mut h, "Relative");
+    assert!(matches!(layer(&h).1, Adjustment::SelectiveColor { relative: true, .. }));
+    assert_eq!(steps(&h), start + 2);
 }

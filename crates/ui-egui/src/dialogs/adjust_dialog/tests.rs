@@ -1134,13 +1134,97 @@ fn selective_color_reset_zeroes_every_colour_and_returns_to_reds() {
     set_field(&mut h, id, "method", json!("absolute"));
     set_field(&mut h, id, "colors", json!("blues"));
     h.run_steps(2);
-    let mut fields = h.state().ui.dialogs.last().unwrap().fields.clone();
-    reset(h.state(), &h.ctx, &mut fields);
-    assert!(!fields.contains_key("colors"), "back to Reds");
+    // Alt turns Cancel into Reset; click the real button.
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::ALT));
+    h.run_steps(2);
+    let reset = h.get_by_label("Reset").rect();
+    let click = |pressed| egui::Event::PointerButton { pos: reset.center(), button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::ALT };
+    input(&mut h, egui::Modifiers::ALT, &[egui::Event::PointerMoved(reset.center()), click(true), click(false)]);
+    assert!(h.state().ui.dialogs.iter().any(|d| d.id == id), "Reset keeps the dialog open");
+    assert_eq!(field(&h, id, "colors"), Value::Null, "back to Reds");
     for key in photocraft_engine::adjust_cmds::RANGES {
-        assert!(row_is_zero(&fields[key]), "{key}: {}", fields[key]);
+        assert!(row_is_zero(&field(&h, id, key)), "{key}: {}", field(&h, id, key));
     }
-    assert_eq!(fields["method"], json!("relative"));
+    assert_eq!(field(&h, id, "method"), json!("relative"));
+    assert_eq!(slider_values(&h), [0.0; 4]);
+}
+
+#[test]
+fn selective_color_ok_on_malformed_params_reports_and_commits_nothing() {
+    let cases = [
+        json!({"reds": "oops"}),
+        json!({"blues": [1, "x", 0, 0]}),
+        json!({"colors": "blues", "cyan": "not a number"}),
+        json!({"colors": "purples"}),
+        json!({"method": "sideways"}),
+    ];
+    for case in cases {
+        let (mut h, id) = selective_dialog();
+        let doc = h.state().session.active().unwrap().doc.clone();
+        let steps = h.state().session.active().unwrap().history.past_len();
+        let journal = h.state().session.journal.len();
+        for (k, v) in case.as_object().unwrap() {
+            set_field(&mut h, id, k, v.clone());
+        }
+        h.run_steps(3);
+        assert!(crate::dialogs::confirm(h.state_mut(), id).is_err(), "{case}: OK reports an error");
+        let app = h.state();
+        assert_eq!(app.session.active().unwrap().history.past_len(), steps, "{case}: no history step");
+        assert_eq!(app.session.journal.len(), journal, "{case}: nothing journaled");
+        assert!(std::sync::Arc::ptr_eq(&doc, &app.session.active().unwrap().doc), "{case}: document untouched");
+    }
+}
+
+fn click_radio(h: &mut Harness<'static, PhotocraftApp>, label: &str) {
+    h.get_by_role_and_label(egui::accesskit::Role::RadioButton, label).click();
+    h.run_steps(3);
+}
+
+#[test]
+fn selective_color_method_radios_set_the_method() {
+    let (mut h, id) = selective_dialog();
+    let steps = h.state().session.active().unwrap().history.past_len();
+    click_radio(&mut h, "Absolute");
+    assert_eq!(field(&h, id, "method"), json!("absolute"));
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), steps, "nothing is committed before OK");
+    click_radio(&mut h, "Relative");
+    assert_eq!(field(&h, id, "method"), json!("relative"));
+    click_radio(&mut h, "Absolute");
+    crate::dialogs::confirm(h.state_mut(), id).unwrap();
+    let app = h.state();
+    assert_eq!(app.session.active().unwrap().history.past_len(), steps + 1);
+    let (_, params) = app.session.journal.last().unwrap();
+    assert_eq!(params["method"], json!("absolute"));
+}
+
+/// The layer preview shows every colour's row (not just the one the sliders show) until the
+/// dialog closes, and never touches the committed document.
+#[test]
+fn selective_color_preview_shows_every_colour_until_cancel() {
+    let (mut h, id) = selective_dialog();
+    let doc = h.state().session.active().unwrap().doc.clone();
+    let steps = h.state().session.active().unwrap().history.past_len();
+    let (before_red, before_blue) = (pixel(h.state(), 8, 8), pixel(h.state(), 56, 8));
+    set_field(&mut h, id, "method", json!("absolute"));
+    set_field(&mut h, id, "reds", json!([0.0, 0.0, 0.0, 60.0]));
+    set_field(&mut h, id, "blues", json!([0.0, 0.0, 0.0, 60.0]));
+    set_field(&mut h, id, "colors", json!("blues"));
+    h.run_steps(3);
+    let app = h.state_mut();
+    assert!(crate::adjust_preview::on_layer(app, 0), "previews through the layer");
+    let (shown, _) = crate::adjust_preview::display_doc(app, 0).expect("a preview document");
+    let shown = photocraft_compose::render(&shown, shown.bounds());
+    assert_ne!(shown.px[8 * 64 + 8], before_red, "Reds shown");
+    assert_ne!(shown.px[8 * 64 + 56], before_blue, "Blues shown");
+    assert_eq!(pixel(app, 8, 8), before_red, "the committed document is unchanged");
+    assert_eq!(pixel(app, 56, 8), before_blue);
+    assert!(std::sync::Arc::ptr_eq(&doc, &app.session.active().unwrap().doc));
+    h.state_mut().ui.close_dialog(id);
+    h.run_steps(2);
+    let app = h.state_mut();
+    assert!(crate::adjust_preview::display_doc(app, 0).is_none(), "closing the dialog drops the preview");
+    assert!(std::sync::Arc::ptr_eq(&doc, &app.session.active().unwrap().doc));
+    assert_eq!(app.session.active().unwrap().history.past_len(), steps);
 }
 
 #[test]
