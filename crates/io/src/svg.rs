@@ -122,7 +122,8 @@ const TURBULENCE_OCTAVE_COST: u64 = 16;
 /// a few thousand deep (70 KB of `<g>`) overflows a 2 MB thread stack, an abort no guard can
 /// catch; real drawings stay under a hundred levels.
 pub const MAX_XML_DEPTH: usize = 512;
-/// Shallow parsing stays on the caller; deeper accepted markup must not consume its small platform stack.
+/// Without a native worker stack, reject shared XML recursion beyond the inline allowance.
+#[cfg(target_arch = "wasm32")]
 const INLINE_XML_DEPTH: usize = 128;
 /// A constant native parsing allowance, independent of source size and bounded by `MAX_XML_DEPTH`.
 #[cfg(not(target_arch = "wasm32"))]
@@ -393,34 +394,38 @@ fn on_svg_stack<T: Send>(operation: impl FnOnce() -> Result<T, IoError> + Send) 
     operation()
 }
 
-/// Private parsing probes keep the same depth guard; public operations already own an isolated stack.
-fn parse_at_depth<T: Send>(depth: usize, isolated: bool, parse: impl FnOnce(bool) -> Result<T, IoError> + Send) -> Result<T, IoError> {
-    #[cfg(not(target_arch = "wasm32"))]
-    if SVG_WORKER.with(std::cell::Cell::get) {
-        return parse(true);
+/// Isolation failures must fail even a non-strict import; ordinary malformed images may be omitted.
+#[derive(Debug)]
+enum ParseFailure {
+    Isolation(IoError),
+    Decode(IoError),
+}
+
+impl From<ParseFailure> for IoError {
+    fn from(error: ParseFailure) -> Self {
+        match error {
+            ParseFailure::Isolation(error) | ParseFailure::Decode(error) => error,
+        }
     }
-    if isolated || depth <= INLINE_XML_DEPTH {
-        return parse(isolated);
-    }
+}
+
+/// Native parsing always reuses the complete-operation worker, including private probes.
+/// WASM has no worker stack, so shared outer/embedded XML depth is guarded inline.
+fn parse_at_depth<T: Send>(depth: usize, isolated: bool, parse: impl FnOnce(bool) -> Result<T, IoError> + Send) -> Result<T, ParseFailure> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        std::thread::scope(|scope| {
-            let worker = std::thread::Builder::new()
-                .name("photocraft-svg-parse".into())
-                .stack_size(PARSER_STACK_BYTES)
-                .spawn_scoped(scope, move || {
-                    SVG_WORKER.with(|active| active.set(true));
-                    parse(true)
-                })
-                .map_err(|error| IoError::Svg(format!("could not start the bounded SVG parser worker: {error}")))?;
-            worker.join().map_err(|_| IoError::Svg("the bounded SVG parser worker failed; the drawing was not opened".into()))?
-        })
+        let _ = (depth, isolated);
+        // The nested Result distinguishes a worker failure from a normal parser error.
+        on_svg_stack(|| Ok(parse(true))).map_err(ParseFailure::Isolation)?.map_err(ParseFailure::Decode)
     }
     #[cfg(target_arch = "wasm32")]
     {
-        Err(IoError::Svg(format!(
+        if isolated || depth <= INLINE_XML_DEPTH {
+            return parse(isolated).map_err(ParseFailure::Decode);
+        }
+        Err(ParseFailure::Isolation(IoError::Svg(format!(
             "SVG parsing deeper than {INLINE_XML_DEPTH} levels requires the native app's isolated parser; simplify the drawing or open it in PhotoCraft desktop"
-        )))
+        ))))
     }
 }
 
@@ -480,7 +485,7 @@ fn options_with_isolation(
                 Err(error) => {
                     let mut failure = parser_error.lock().unwrap_or_else(PoisonError::into_inner);
                     if failure.is_none() {
-                        *failure = Some(error);
+                        *failure = Some(error.into());
                     }
                     None
                 }
@@ -539,6 +544,7 @@ fn parse_with(bytes: &[u8], fonts: fn() -> Arc<usvg::fontdb::Database>) -> Resul
         let tree = tree.ok_or_else(|| IoError::Svg("the SVG parser failed on this drawing".into()))?.map_err(|error| IoError::Svg(error.to_string()))?;
         Ok(Parsed { tree, fontless_text })
     })
+    .map_err(IoError::from)
 }
 
 /// `f` under `catch_unwind`, `None` when it panics: usvg, resvg and tiny-skia panic on some
@@ -820,6 +826,15 @@ fn parse_image_bounded_with(
         counter.repeatable_raster |= raster;
         counter.repeatable_svg |= svg;
         Ok(tree)
+    })
+    .map_err(|failure| match failure {
+        ParseFailure::Isolation(error) => {
+            // A missing isolated parse must never silently remove embedded artwork,
+            // even when ordinary invalid images are allowed to be omitted.
+            image_error(&budget, error.to_string());
+            error
+        }
+        ParseFailure::Decode(error) => error,
     })
 }
 
