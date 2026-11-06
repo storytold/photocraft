@@ -147,6 +147,9 @@ fn try_blob_item(b: &Blob, uuid: &str) -> Result<Option<(String, String, u64, u6
     Ok(None)
 }
 
+/// An embedded file's name and bytes (borrowed, or read from the opened file).
+pub type NamedPayload<'a> = (String, std::borrow::Cow<'a, [u8]>);
+
 /// The payload of embedded file `uuid` among `globals`, as `(file name, bytes)`: borrowed from a
 /// block in memory, read (that file only) from one left in the opened file when it is at most
 /// `max` bytes. `Ok(None)` when it is not there or too large to read; `Err` when reading the
@@ -155,7 +158,7 @@ pub fn embedded_payload_in_globals<'a>(
     globals: &'a [photocraft_doc::PsdGlobalBlock],
     uuid: &str,
     max: u64,
-) -> Result<Option<(String, std::borrow::Cow<'a, [u8]>)>, photocraft_doc::BlobError> {
+) -> Result<Option<NamedPayload<'a>>, photocraft_doc::BlobError> {
     let in_memory = globals.iter().filter(|(_, _, d)| d.is_in_memory());
     if let Some((name, bytes)) = embedded_payload_in_blocks(in_memory.map(|(_, key, data)| (key, data.resident())), uuid) {
         return Ok(Some((name, std::borrow::Cow::Borrowed(bytes))));
