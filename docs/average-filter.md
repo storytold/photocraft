@@ -84,7 +84,9 @@ of tile scheduling.
 At five channels, the reduction's pixel and coverage buffers total at most
 96 KiB. The output groups hold at most 10 MiB of decoded pixel results, plus
 up to 8 KiB of coverage rows. Source, output and history tiles are separate
-from those scratch bounds and still scale with the image. Empty source tiles
+from those scratch bounds and still scale with the image. Engine memory admission
+uses the same reduction/group limits, so it does not reserve a full-image float
+buffer merely because Average needs a global mean. Empty source tiles
 participate: their default RGB affects the mean, and changing invisible RGB can
 require output tiles even where alpha is zero.
 

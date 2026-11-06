@@ -1049,6 +1049,9 @@ pub fn working_bytes(params: &FilterParams, area: Rect, bounds: Rect, channels: 
     if area.is_empty() {
         return 0;
     }
+    if matches!(params, FilterParams::Average) {
+        return average::working_bytes(channels);
+    }
     #[cfg(not(target_arch = "wasm32"))]
     let threads = rayon::current_num_threads().max(1) as u64;
     #[cfg(target_arch = "wasm32")]

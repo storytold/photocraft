@@ -168,3 +168,23 @@ fn soft_selection_weights_the_mean_and_output_mix() {
         }
     }
 }
+
+#[test]
+fn large_average_admission_fits_a_bounded_transient_budget() {
+    // A 128 MiB configured process budget gives a 16 MiB transient allowance.
+    // Generic Halo::Bounds admission demanded over 3 GiB for this 196 MP image,
+    // rejecting it before the bounded implementation could start or cancel.
+    let budget = photocraft_raster::memory::budgets(
+        photocraft_raster::memory::Policy { percent: None, absolute_bytes: 128 << 20 },
+        photocraft_raster::memory::Snapshot::default(),
+        0,
+    );
+    let small = Rect::new(0, 0, 6000, 4000);
+    let large = Rect::new(0, 0, 14000, 14000);
+    for channels in 1..=5 {
+        let required = crate::working_bytes(&crate::FilterParams::Average, large, large, channels);
+        assert!(required > 0 && required <= budget.transient_bytes, "{channels} channels require {required} bytes");
+        assert_eq!(required, crate::working_bytes(&crate::FilterParams::Average, small, small, channels));
+    }
+    assert_eq!(crate::working_bytes(&crate::FilterParams::Average, Rect::new(0, 0, 0, 0), large, 4), 0);
+}

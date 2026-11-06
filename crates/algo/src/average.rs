@@ -52,6 +52,17 @@ const REDUCE_PIXELS: i32 = 4096;
 // At most eight native 256x256 tiles (10 MiB at five channels) are live as float results.
 const OUTPUT_GROUP: usize = 8;
 
+/// Match admission to the two bounded phases, rather than the generic full-bounds halo.
+/// Surface/history tile storage is accounted for separately by the raster store.
+pub(crate) fn working_bytes(channels: usize) -> u64 {
+    let floats = std::mem::size_of::<f32>() as u64;
+    let channels = channels as u64;
+    let side = photocraft_geom::TILE_SIZE as u64;
+    let reduce = (REDUCE_PIXELS as u64).saturating_mul(channels.saturating_add(1)).saturating_mul(floats);
+    let output = (OUTPUT_GROUP as u64).saturating_mul(side.saturating_mul(side).saturating_mul(channels).saturating_add(side)).saturating_mul(floats);
+    reduce.max(output)
+}
+
 fn coverage_buffer(selection: Option<&Surface>, width: usize) -> Option<Vec<f32>> {
     let count = if selection.is_some() { width } else { 0 };
     let mut buffer = Vec::new();
