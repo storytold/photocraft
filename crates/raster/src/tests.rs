@@ -41,7 +41,7 @@ fn previous_read_region(surface: &Surface, r: Rect) -> Vec<f32> {
                     Some(t) => {
                         let base = (((y - tc.ty * TILE_SIZE) as usize) * TILE_SIZE as usize + (x - tc.tx * TILE_SIZE) as usize) * n;
                         for i in 0..n {
-                            out[o + i] = read_sample(&t.data, surface.format.sample, base + i);
+                            out[o + i] = read_sample(&t.bytes(), surface.format.sample, base + i);
                         }
                     }
                     None => out[o..o + n].copy_from_slice(&dp),
@@ -137,7 +137,7 @@ fn write_region_reference(surface: &mut Surface, r: Rect, data: &[f32]) {
                 let o = (((y - r.y0) as usize) * w + (x - r.x0) as usize) * n;
                 let base = (((y - tc.ty * TILE_SIZE) as usize) * TILE_SIZE as usize + (x - tc.tx * TILE_SIZE) as usize) * n;
                 for i in 0..n {
-                    write_sample(&mut t.data, sample, base + i, data[o + i]);
+                    write_sample(&mut t.bytes_mut(), sample, base + i, data[o + i]);
                 }
             }
         }
@@ -481,6 +481,49 @@ fn a_clear_pixels_colour_is_not_content() {
 }
 
 #[test]
+fn alpha_is_clear_never_panics_on_a_short_slice_or_a_late_offset() {
+    // A public predicate over a pixel slice it did not measure: a short slice, a sample that
+    // straddles the end and an offset near `usize::MAX` are all "not clear", never an index panic.
+    for sample in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        assert!(!alpha_is_clear(&[], 0, sample), "{sample:?}: empty pixel");
+        assert!(!alpha_is_clear(&[0], 1, sample), "{sample:?}: offset past the end");
+        assert!(!alpha_is_clear(&[0, 0], usize::MAX, sample), "{sample:?}: offset near usize::MAX");
+    }
+    // A sample that straddles the end of a short pixel is not clear, and does not panic.
+    assert!(!alpha_is_clear(&[0, 0], 1, SampleType::U16));
+    assert!(!alpha_is_clear(&[0, 0, 0], 1, SampleType::F32));
+    assert!(alpha_is_clear(&[0, 7, 8, 9], 0, SampleType::U8));
+    assert!(alpha_is_clear(&[0, 0], 0, SampleType::U16));
+    assert!(alpha_is_clear(&0f32.to_ne_bytes(), 0, SampleType::F32));
+    // `-0.0` is zero, and its bytes are not: the one predicate the surface and the cached path
+    // share has to call it clear (#9824).
+    assert!(alpha_is_clear(&(-0.0f32).to_ne_bytes(), 0, SampleType::F32));
+    assert!(!alpha_is_clear(&f32::MIN_POSITIVE.to_ne_bytes(), 0, SampleType::F32));
+}
+
+#[test]
+fn a_move_keeps_the_colour_under_the_clear_pixels() {
+    // `Surface::translated` drops the pixels outside the rect it is handed, so a move must be
+    // given everything the surface stores: the white under a clear pixel is invisible, but it is
+    // stored data and a drag must not erase it (#9824).
+    let mut s = Surface::new(PixelFormat::RGBA8);
+    s.fill_rect(Rect::new(0, 0, 40, 40), &[1.0, 1.0, 1.0, 0.0]);
+    s.fill_rect(Rect::new(10, 10, 20, 20), &[0.0, 0.0, 0.0, 1.0]);
+    assert_eq!(s.content_bounds(), Rect::new(10, 10, 20, 20), "the artwork's box");
+    assert_eq!(s.stored_bounds(), Rect::new(0, 0, 40, 40), "the white is stored");
+
+    let moved = s.translated(5, 0, s.stored_bounds());
+    assert_eq!(moved.pixel(5, 0), vec![1.0, 1.0, 1.0, 0.0], "the colour under the clear pixels moved too");
+    assert_eq!(moved.pixel(15, 10), vec![0.0, 0.0, 0.0, 1.0], "the artwork moved by the same offset");
+    assert_eq!(moved.content_bounds(), Rect::new(15, 10, 25, 20));
+
+    // Moving by the visible box alone is what dropped that colour; pinned so a later caller
+    // cannot quietly narrow it back.
+    let narrowed = s.translated(5, 0, s.content_bounds());
+    assert_eq!(narrowed.pixel(5, 0), vec![0.0, 0.0, 0.0, 0.0], "the visible box drops the stored white");
+}
+
+#[test]
 fn interleaved_roundtrip_crossing_tiles() {
     let r = Rect::new(-20, 250, 280, 262);
     let bpp = PixelFormat::RGBA16.bytes_per_pixel();
@@ -603,13 +646,13 @@ fn tile_content_bounds_match_a_per_pixel_scan() {
                 for &s in &spots {
                     data[s - s % bpp + byte] ^= 0x5a;
                 }
-                let t = Tile { data: data.into_boxed_slice() };
+                let t = Tile::from_vec(data);
                 assert_eq!(t.content_bounds(&dp), per_pixel(&t, &dp), "bpp {bpp}, spots {spots:?}, byte {byte}");
             }
         }
         let mut data = dp.repeat(TILE_SIZE as usize * TILE_SIZE as usize);
         data[row * 3 + 9 * bpp..row * 3 + 10 * bpp].iter_mut().for_each(|b| *b = !*b);
-        let t = Tile { data: data.into_boxed_slice() };
+        let t = Tile::from_vec(data);
         assert_eq!(t.content_bounds(&dp), Some((9, 3, 10, 4)), "bpp {bpp}");
     }
 }
@@ -884,4 +927,125 @@ fn fallible_interleaved_writes_match_encoded_pixels_and_reject_bad_lengths() {
         assert_eq!(surface.to_interleaved(rect), bytes);
         assert_eq!(shared.to_interleaved(rect), replacement);
     }
+}
+
+/// The byte a row-callback test writes at pixel (x, y).
+fn row_byte(x: i32, y: i32) -> u8 {
+    (x.wrapping_mul(7).wrapping_add(y.wrapping_mul(13)) & 0xff) as u8
+}
+
+fn fill_row_bytes(y: i32, x0: i32, dst: &mut [u8]) {
+    for (i, b) in dst.iter_mut().enumerate() {
+        *b = row_byte(x0 + i as i32, y);
+    }
+}
+
+#[test]
+fn write_rows_empty_rect_writes_nothing() {
+    let mut s = Surface::new(PixelFormat::GRAY8);
+    let called = std::sync::atomic::AtomicBool::new(false);
+    for r in [Rect::new(5, 5, 5, 9), Rect::new(0, 0, 10, 0), Rect::new(10, 10, 2, 2), Rect::EMPTY] {
+        s.try_write_rows_with(r, |_, _, _| called.store(true, std::sync::atomic::Ordering::Relaxed)).expect("empty is fine");
+    }
+    assert!(!called.load(std::sync::atomic::Ordering::Relaxed), "no rows in an empty rect");
+    assert_eq!(s.tile_count(), 0);
+}
+
+#[test]
+fn write_rows_overflowing_rect_is_an_error_not_a_panic() {
+    let mut s = Surface::new(PixelFormat::GRAY8);
+    let r = Rect::new(0, 0, 1, 1);
+    s.try_write_rows_with(r, |_, _, dst| dst.fill(42)).unwrap();
+    let before = s.clone();
+    let huge = Rect::new(i32::MIN, i32::MIN, i32::MAX, i32::MAX);
+    assert!(s.try_write_rows_with(huge, |_, _, _| {}).is_err());
+    assert_eq!(s.tile_count(), 1);
+    assert_eq!(s.to_interleaved(r), vec![42]);
+    assert!(std::sync::Arc::ptr_eq(s.tiles.values().next().unwrap(), before.tiles.values().next().unwrap()));
+}
+
+#[test]
+fn write_rows_negative_origin_and_unaligned_rect() {
+    let mut s = Surface::with_default(PixelFormat::GRAY8, &[0.5]);
+    let r = Rect::new(-300, -5, 270, 260);
+    s.try_write_rows_with(r, fill_row_bytes).expect("memory");
+    let got = s.to_interleaved(Rect::new(-320, -10, 300, 270));
+    let w = 620;
+    for (i, &b) in got.iter().enumerate() {
+        let (x, y) = (-320 + (i % w) as i32, -10 + (i / w) as i32);
+        let want = if x >= r.x0 && x < r.x1 && y >= r.y0 && y < r.y1 { row_byte(x, y) } else { 128 };
+        assert_eq!(b, want, "({x}, {y})");
+    }
+}
+
+#[test]
+fn write_rows_matches_write_interleaved_at_every_depth() {
+    for fmt in [PixelFormat::RGBA8, PixelFormat::RGBA16, PixelFormat::RGBA32F, PixelFormat::GRAY8] {
+        let bpp = fmt.bytes_per_pixel();
+        let r = Rect::new(3, 2, 520, 300);
+        let w = r.width() as usize;
+        let bytes: Vec<u8> = (0..w * r.height() as usize * bpp).map(|i| (i % 251) as u8).collect();
+        let mut a = Surface::new(fmt);
+        a.write_interleaved(r, &bytes);
+        let mut b = Surface::new(fmt);
+        b.try_write_rows_with(r, |y, x0, dst| {
+            let o = (((y - r.y0) as usize) * w + (x0 - r.x0) as usize) * bpp;
+            dst.copy_from_slice(&bytes[o..o + dst.len()]);
+        })
+        .expect("memory");
+        assert_eq!(a.tile_count(), b.tile_count());
+        for (c, t) in a.tiles() {
+            assert!(b.tiles().any(|(c2, t2)| c2 == c && t2 == t), "{fmt:?}: tile {c:?} differs");
+        }
+    }
+}
+
+#[test]
+fn write_rows_copies_tiles_a_clone_still_shares() {
+    let mut s = Surface::new(PixelFormat::GRAY8);
+    s.try_write_rows_with(Rect::new(0, 0, 300, 300), |_, _, dst| dst.fill(9)).expect("memory");
+    let before = s.clone();
+    let snapshot = before.to_interleaved(Rect::new(0, 0, 300, 300));
+    s.try_write_rows_with(Rect::new(100, 100, 280, 290), fill_row_bytes).expect("memory");
+    assert_eq!(before.to_interleaved(Rect::new(0, 0, 300, 300)), snapshot, "the clone is unchanged");
+    assert_eq!(s.to_interleaved(Rect::new(150, 150, 151, 151)), vec![row_byte(150, 150)]);
+    assert_eq!(s.to_interleaved(Rect::new(10, 10, 11, 11)), vec![9], "pixels outside the rect keep their value");
+}
+
+#[test]
+fn failed_row_preparation_preserves_existing_tiles() {
+    let mut surface = Surface::new(PixelFormat::GRAY8);
+    let r = Rect::new(0, 0, 300, 1);
+    surface.try_write_rows_with(Rect::new(0, 0, 1, 1), |_, _, dst| dst.fill(42)).unwrap();
+    let before = surface.clone();
+    let result = surface.try_prepare_rows(r, |tiles, _, _| {
+        fill_tile(&mut tiles[0], r, &PixelFormat::GRAY8, &[0], &|_, _, dst: &mut [u8]| dst.fill(7), &|| Ok::<(), AllocationError>(()))?;
+        Err(AllocationError::NotEnoughMemory { bytes: 1 })
+    });
+    assert!(matches!(result, Err(AllocationError::NotEnoughMemory { .. })));
+    assert_eq!(surface.tile_count(), 1);
+    assert_eq!(surface.to_interleaved(Rect::new(0, 0, 1, 1)), vec![42]);
+    assert!(std::sync::Arc::ptr_eq(surface.tiles.values().next().unwrap(), before.tiles.values().next().unwrap()));
+}
+
+#[test]
+fn cancelled_row_write_stops_during_tile_and_preserves_surface() {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    let mut surface = Surface::new(PixelFormat::GRAY8);
+    let r = Rect::new(0, 0, 1, 100);
+    surface.try_write_rows_with(r, |_, _, dst| dst.fill(42)).unwrap();
+    let before = surface.clone();
+    let cancelled = AtomicBool::new(false);
+    let rows = AtomicUsize::new(0);
+    let check = || cancelled.load(Ordering::SeqCst);
+    let result = surface.try_write_rows_with_interrupt(r, &Interrupt::cancel_only(&check), |_, _, dst| {
+        dst.fill(7);
+        rows.fetch_add(1, Ordering::SeqCst);
+        cancelled.store(true, Ordering::SeqCst);
+    });
+    assert_eq!(result, Err(RowWriteError::Cancelled(Cancelled)));
+    assert_eq!(rows.load(Ordering::SeqCst), 1);
+    assert_eq!(surface.to_interleaved(r), before.to_interleaved(r));
+    assert!(std::sync::Arc::ptr_eq(surface.tiles.values().next().unwrap(), before.tiles.values().next().unwrap()));
 }

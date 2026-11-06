@@ -34,6 +34,12 @@ fn cache() -> &'static Mutex<Cache> {
     C.get_or_init(|| Mutex::new(Cache { entries: HashMap::new(), sweep_at: MIN_SWEEP }))
 }
 
+pub(crate) fn purge() {
+    let mut cache = cache().lock().unwrap_or_else(|e| e.into_inner());
+    cache.entries.clear();
+    cache.sweep_at = MIN_SWEEP;
+}
+
 /// `Surface::content_bounds`, cached per tile.
 pub fn content_bounds(s: &Surface) -> Rect {
     if s.tile_count() == 0 {
@@ -62,8 +68,11 @@ pub fn content_bounds(s: &Surface) -> Rect {
         let b = match hit {
             Some(b) => b,
             None => {
+                let generation = photocraft_raster::spill::read_error_generation();
                 let b = if by_alpha { t.alpha_bounds(alpha_at, bpp, sample) } else { t.content_bounds(&dp) };
-                c.entries.insert(key, Entry { tile: Arc::downgrade(t), default: dp.clone().into_boxed_slice(), bounds: b });
+                if photocraft_raster::spill::check_since(generation).is_ok() && t.scratch_health().is_ok() {
+                    c.entries.insert(key, Entry { tile: Arc::downgrade(t), default: dp.clone().into_boxed_slice(), bounds: b });
+                }
                 b
             }
         };

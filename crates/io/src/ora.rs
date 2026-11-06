@@ -627,9 +627,11 @@ impl Writer<'_> {
         let canvas = self.doc.bounds();
         let (rect, mut buf) = match &layer.content {
             LayerContent::Raster(s) => {
-                let r = s.content_bounds();
+                // An ORA layer rect is its own pixels, as a PSD layer record is: everything that
+                // differs from the default, clear pixels included (#9824).
+                let r = s.stored_bounds();
                 admit_layer(r)?;
-                (r, photocraft_compose::surface_to_buffer(s, r).px)
+                (r, photocraft_compose::surface_to_buffer(s, r).into_px())
             }
             _ => {
                 // Rendered as it shows on its own, before the layer's blending options.
@@ -643,7 +645,7 @@ impl Writer<'_> {
                 solo.effects = Default::default();
                 let r = photocraft_compose::composite_bounds(&solo, canvas).unwrap_or(canvas).intersect(&canvas);
                 admit_layer(r)?;
-                (r, photocraft_compose::render_layer(&solo, r).px)
+                (r, photocraft_compose::render_layer(&solo, r).into_px())
             }
         };
         if let Some(mask) = layer.mask.as_ref().filter(|m| m.enabled) {

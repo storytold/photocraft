@@ -67,7 +67,7 @@ fn a_clear_pixels_colour_is_not_the_layers_bounds() {
     // document at the file's size but bounds the layer by the pixels whose alpha is not zero;
     // measuring whole pixels instead made the layer span the canvas and Free Transform report
     // the canvas instead of the artwork.
-    use photocraft_codecs::{ChannelLayout, EncodeOptions, Format, Image, SampleType as CS};
+    use photocraft_codecs::{ChannelLayout, EncodeOptions, Format, Image};
     let (w, h) = (8u32, 6u32);
     let mut px = Vec::new();
     for y in 0..h {
@@ -375,7 +375,7 @@ fn layered_to_png_warns_flatten() {
     assert!(r.warnings.iter().any(|w| w.contains("flattened")), "{:?}", r.warnings);
     let back = import("out.png", &r.bytes).unwrap().document;
     // Composite equals our flatten.
-    let flat = photocraft_compose::flatten(&d).px;
+    let flat = photocraft_compose::flatten(&d).into_px();
     let s = back.layers[0].surface().unwrap();
     let px: Vec<[f32; 4]> = s.read_region(back.bounds()).as_chunks::<4>().0.iter().map(|p| [p[0], p[1], p[2], p[3]]).collect();
     assert!(max_diff(&px, &flat) <= 1.0 / 255.0 + 1e-4);

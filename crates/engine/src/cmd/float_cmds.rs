@@ -69,7 +69,7 @@ impl CutParts {
         let mut outline: Option<Surface> = None;
         let fill = !copy && (mask || doc.is_background(layer));
         // A mask's untouched pixels (its default, e.g. white) move too, so take the whole canvas.
-        let b = sel.content_bounds().intersect(&if mask { doc.bounds() } else { base.content_bounds() });
+        let b = sel.content_bounds().intersect(&if mask { doc.bounds() } else { base.stored_bounds() });
         if !b.is_empty() {
             piece = cut_piece(&base, sel, b, with_alpha)?;
             // The moved pixels' selection is what they took with them: the alpha the piece
@@ -123,7 +123,9 @@ impl CutParts {
             return Ok(());
         }
         let mut out = self.rest.clone();
-        let piece = self.piece.translated(dx, dy, self.piece_bounds);
+        // Every stored tile moves, not only the visible box: the colour under the piece's clear
+        // pixels is part of what was cut (#9824).
+        let piece = self.piece.translated(dx, dy, self.piece.tile_bounds());
         if self.mask {
             crate::fill_cmds::composite_over(&mut out, &piece, self.piece_bounds.translate(dx, dy), None)?;
         } else {
@@ -174,9 +176,10 @@ fn cut_piece(base: &Surface, sel: &Surface, b: photocraft_geom::Rect, with_alpha
             {
                 return Ok(Some((tc, t.clone())));
             }
-            let src_bytes = src_tile.map_or(base.default_bytes(), |t| t.bytes());
+            let src_guard = src_tile.map(|t| t.bytes());
+            let src_bytes: &[u8] = src_guard.as_deref().unwrap_or(base.default_bytes());
             let mut out = piece.try_default_tile().map_err(oom)?;
-            let out_bytes = out.bytes_mut();
+            let mut out_bytes = out.bytes_mut();
             let mut px = [0.0f32; 8];
             let mut has_content = false;
             for y in tr.y0..tr.y1 {
@@ -224,6 +227,7 @@ fn cut_piece(base: &Surface, sel: &Surface, b: photocraft_geom::Rect, with_alpha
                     has_content |= non_zero;
                 }
             }
+            drop(out_bytes);
             Ok(has_content.then(|| (tc, Arc::new(out))))
         })
         .collect::<Result<Vec<_>>>()?;
