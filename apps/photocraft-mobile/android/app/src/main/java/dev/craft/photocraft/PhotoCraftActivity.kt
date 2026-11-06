@@ -5,11 +5,9 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import dev.craft.kit.CraftAction
 import dev.craft.kit.CraftHost
 import dev.craft.kit.CraftScaffold
 import dev.craft.kit.CraftTheme
-import dev.craft.kit.ToolbarButton
 
 /** PhotoCraft on Android: craftkit's shell around the Rust app, plus a New button. */
 class PhotoCraftActivity : ComponentActivity() {
@@ -23,9 +21,8 @@ class PhotoCraftActivity : ComponentActivity() {
         if (savedInstanceState == null) host.openIntent(intent)
         setContent {
             CraftTheme {
-                CraftScaffold(host, appName = "PhotoCraft") {
-                    ToolbarButton(dev.craft.kit.R.drawable.craft_ic_new, "New") { host.perform(CraftAction.Command("file.new")) }
-                }
+                // PhotoCraft draws its own menus and panels: no native chrome on top.
+                CraftScaffold(host, appName = "PhotoCraft")
             }
         }
     }
