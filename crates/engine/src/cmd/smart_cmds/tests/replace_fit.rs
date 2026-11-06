@@ -19,6 +19,7 @@ fn png_file(dir: &std::path::Path, name: &str, w: u32, h: u32, rgb: [f32; 3]) ->
     path.to_str().unwrap().to_string()
 }
 
+/// A scratch directory for test `tag`, created if missing.
 fn tmp_dir(tag: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("pcraft-fit-{tag}-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -48,11 +49,13 @@ fn set_placement(s: &mut Session, id: LayerId, f: impl FnOnce(&mut SmartObject))
     .unwrap();
 }
 
+/// The rendered pixels (cache) of smart object `id`.
 fn rendered(s: &Session, id: LayerId) -> Surface {
     let doc = &s.active().unwrap().doc;
     smart(doc, id).unwrap().cache.clone().unwrap()
 }
 
+/// Runs `layer.smartObjects.replaceContents` on `id` from `path`, with `fit` when given.
 fn replace(s: &mut Session, id: LayerId, path: &str, fit: Option<&str>) {
     let mut p = json!({"layer": id.0, "path": path});
     if let Some(f) = fit {
@@ -74,6 +77,7 @@ fn alpha_diff(a: &Surface, b: &Surface) -> f32 {
     sum / n.max(1.0)
 }
 
+/// Whether each edge of `a` is within `tol` pixels of `b`'s.
 fn near(a: Rect, b: Rect, tol: i32) -> bool {
     (a.x0 - b.x0).abs() <= tol && (a.y0 - b.y0).abs() <= tol && (a.x1 - b.x1).abs() <= tol && (a.y1 - b.y1).abs() <= tol
 }
@@ -175,6 +179,7 @@ fn stretch_under_a_perspective_keeps_the_transform_in_step() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// A session gate that refuses every path Replace Contents asks to read.
 fn deny_replace_paths(cmd: &str, p: &Value) -> Result<()> {
     if cmd == "layer.smartObjects.replaceContents" && p.get("path").is_some() {
         return Err(other(format!("source path refused: {}", p["path"])));

@@ -118,6 +118,7 @@ impl Fit {
     }
 }
 
+/// The `fit` of command params `p`; anything [`Fit::from_param`] doesn't take is a bad parameter.
 fn fit_param(p: &Value) -> Result<Fit> {
     Fit::from_param(p.get("fit"))
         .ok_or_else(|| bad("layer.smartObjects.replaceContents", format!("`fit` must be \"keep\", \"stretch\" or \"contain\", not {}", p["fit"])))
