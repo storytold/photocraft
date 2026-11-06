@@ -665,6 +665,32 @@ fn displace_admits_a_layer_pixel_far_past_the_canvas_on_both_axes() {
     assert_eq!(displaced(1_000_000), displaced(48 + 100));
 }
 
+/// CodeRabbit on #10462: Displace restricted to some colour channels frames the canvas and the
+/// layer's pixels past it, as on all of them: its red is the red of an all-channel run, wrapping
+/// around the layer's far side and stretching the map over the layer, and its green is untouched.
+#[test]
+fn displace_in_a_colour_channel_frames_the_layers_pixels_past_the_canvas() {
+    let run = |target: Option<Value>, fit: &str, undefined: &str| {
+        let mut s = Session::new();
+        displace_map_document(&mut s, (8, 8), 4, 96.0, 160.0);
+        coded_layer_document(&mut s, (256, 256), 8, photocraft_geom::Rect::new(0, 0, 256, 256));
+        s.execute("image.canvasSize", json!({"width": 128, "height": 128, "anchor": "topLeft"})).unwrap();
+        let mut p = json!({"horizontal": 50, "vertical": 0, "fit": fit, "undefinedAreas": undefined, "mapDocument": 0});
+        if let Some(t) = target {
+            p["target"] = t;
+        }
+        s.execute("filter.distort.displace", p).unwrap();
+        (0..128).map(|x| sampled_from(&s, x, 64)).collect::<Vec<_>>()
+    };
+    for (fit, undefined) in [("stretch", "wrap"), ("stretch", "repeat"), ("tile", "wrap")] {
+        let all = run(None, fit, undefined);
+        let red = run(Some(json!({"colors": [0]})), fit, undefined);
+        for (x, (a, r)) in all.iter().zip(&red).enumerate() {
+            assert_eq!((r.0, r.1), (a.0, 64), "{fit}, {undefined}: x {x}, red from {} on all channels", a.0);
+        }
+    }
+}
+
 /// Adds a document whose Background is `level` (8-bit) in red and green, split at `split` in x: the
 /// map's left part is `left`, the rest `level`.
 fn displace_map_document(s: &mut Session, (w, h): (i32, i32), split: i32, left: f32, level: f32) {

@@ -389,7 +389,9 @@ pub(crate) fn run_filter(s: &mut Session, id: &str, p: &Value) -> Result<Value> 
                 // Keep the full native input context: filters can read transparency as a depth
                 // or texture map, and colour-valued settings belong to the source colour model.
                 let before = surf.clone();
-                *surf = filter(surf, &fp, area, bounds, selection.as_ref(), extent)?;
+                // Displace frames the layer's pixels past the canvas here too, as on all channels.
+                let frame = distort_frame(&id, bounds, content, sel_bounds.is_some_and(|b| !b.is_empty()));
+                *surf = filter(surf, &fp, area, frame, selection.as_ref(), extent)?;
                 crate::color_channels::restrict_surface_in(&before, surf, colors, extent)?;
                 return Ok(fp);
             }
